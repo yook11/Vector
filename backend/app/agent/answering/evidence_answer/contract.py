@@ -24,15 +24,15 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class EvidenceAnswerInput:
-    """Evidence Answer Agentの1 attempt input。"""
+    """この工程が受け取り、Agent に渡す入力。"""
 
     request: AnsweringRequest
     evidence: tuple[AnswerInputEvidence, ...]
     target_time_window: TargetTimeWindow | None
+    review_missing: tuple[str, ...]
     # 前attemptが失敗した場合のみ、どこで何が失敗したかが入る(初回attemptはNone)。
     repair_context: str | None = None
     previous_output_truncated: bool = False
-    review_missing: tuple[str, ...] = ()
 
 
 class EvidenceAnswerDraft(BaseModel):
@@ -61,14 +61,7 @@ EvidenceAnswerOutcome = EvidenceAnswerDraft | EvidenceAnswerUnavailable
 class EvidenceAnswerer(Protocol):
     """本文とcited refsが整合するdraft、または生成不能を返す。"""
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[AnswerInputEvidence],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...],
-    ) -> EvidenceAnswerOutcome: ...
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome: ...
 
 
 class EvidenceAnswerDraftInvalidError(Exception):

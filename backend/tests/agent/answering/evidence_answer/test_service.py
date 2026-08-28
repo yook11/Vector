@@ -16,6 +16,7 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
+    EvidenceAnswerInput,
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
@@ -266,10 +267,12 @@ async def _answer(
     if recorder is not None:
         service_kwargs["recorder"] = recorder
     return await EvidenceAnswerService(**service_kwargs).answer(
-        request=_request() if request is None else request,
-        evidence=[_evidence()] if evidence is None else evidence,
-        target_time_window=TargetTimeWindow(kind="today"),
-        review_missing=(),
+        EvidenceAnswerInput(
+            request=_request() if request is None else request,
+            evidence=tuple([_evidence()] if evidence is None else evidence),
+            target_time_window=TargetTimeWindow(kind="today"),
+            review_missing=(),
+        )
     )
 
 
@@ -576,10 +579,12 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
 
     with pytest.raises(RuntimeError) as exc_info:
         await service.answer(
-            request=_request(),
-            evidence=[_evidence()],
-            target_time_window=TargetTimeWindow(kind="today"),
-            review_missing=(),
+            EvidenceAnswerInput(
+                request=_request(),
+                evidence=(_evidence(),),
+                target_time_window=TargetTimeWindow(kind="today"),
+                review_missing=(),
+            )
         )
 
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
@@ -629,10 +634,12 @@ async def test_runtime_scope_exit_failure_discards_selected_outcome(
 
     with pytest.raises(RuntimeError) as exc_info:
         await service.answer(
-            request=_request(),
-            evidence=[_evidence()],
-            target_time_window=TargetTimeWindow(kind="today"),
-            review_missing=(),
+            EvidenceAnswerInput(
+                request=_request(),
+                evidence=(_evidence(),),
+                target_time_window=TargetTimeWindow(kind="today"),
+                review_missing=(),
+            )
         )
 
     assert exc_info.value is close_error

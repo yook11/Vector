@@ -14,10 +14,13 @@ from uuid import UUID
 
 import pytest
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
+    EvidenceAnswerInput,
     EvidenceAnswerOutcome,
 )
 from app.agent.contract import AnswerGenerationStopped
@@ -96,50 +99,26 @@ class _Planner:
 
 
 class _DirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        del request, previous_answer
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
+        del input
         return DirectAnswerDraft(answer="直接回答")
 
 
 class _UnreachableDirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        raise AssertionError(
-            f"direct answerer must not run: {request!r} {previous_answer!r}"
-        )
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
+        raise AssertionError(f"direct answerer must not run: {input!r}")
 
 
 class _UnreachableEvidenceAnswerer:
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[object],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
-        raise AssertionError(
-            f"evidence answerer must not run: {request!r} {evidence!r} "
-            f"{target_time_window!r} {review_missing!r}"
-        )
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+        raise AssertionError(f"evidence answerer must not run: {input!r}")
 
 
 class _EvidenceAnswerer:
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[object],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
-        del request, target_time_window, review_missing
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
         return EvidenceAnswerDraft(
             answer="根拠に基づく回答です。",
-            cited_refs=[item.source.source_ref for item in evidence],  # type: ignore[attr-defined]
+            cited_refs=[item.source.source_ref for item in input.evidence],
         )
 
 
@@ -358,8 +337,8 @@ async def test_builder_exception_yields_none_handoff_and_continues_answering(
 class _StoppingEvidenceAnswerer:
     """streamingの途中で停止する回答工程。並行taskへ一度制御を渡してから止まる。"""
 
-    async def answer(self, **kwargs: object) -> EvidenceAnswerOutcome:
-        del kwargs
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+        del input
         await asyncio.sleep(0)
         raise AnswerGenerationStopped()
 

@@ -7,8 +7,12 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
 from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerInput,
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
@@ -25,7 +29,6 @@ from app.agent.planning.contract import (
     QuestionPlan,
     ResearchTask,
     SearchPlan,
-    TargetTimeWindow,
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from tests.agent.running._harness import (
@@ -102,42 +105,23 @@ class _DirectAnswerer:
         self._timeline = timeline
         self.calls: list[tuple[AnsweringRequest, str]] = []
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-    ) -> DirectAnswerDraft:
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
         self._timeline.append("direct_answerer")
-        self.calls.append((request, previous_answer))
+        self.calls.append((input.request, input.previous_answer))
         return DirectAnswerDraft(answer="直接回答")
 
 
 class _EvidenceAnswerer:
     def __init__(self, timeline: list[str]) -> None:
         self._timeline = timeline
-        self.calls: list[dict[str, object]] = []
+        self.calls: list[EvidenceAnswerInput] = []
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[object],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
         # S5: review_missingの受け渡し検証はtests/agent/running/
         # test_retrieval_dispatch.pyが正本(条件7)。このfakeはworkflowの
         # 呼び出し順序を見るためのものであり、既存契約だけを追跡する。
-        del review_missing
         self._timeline.append("evidence_answerer")
-        self.calls.append(
-            {
-                "request": request,
-                "evidence": evidence,
-                "target_time_window": target_time_window,
-            }
-        )
+        self.calls.append(input)
         # evidenceの内容を問わず「回答を作れなかった」を演じる。
         return EvidenceAnswerUnavailable(failure_code="fake_evidence_unavailable")
 
@@ -244,6 +228,6 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
     ]
     assert planner.calls[0].question == "元の質問"
     assert internal_search.calls == [InternalSearchQueries(queries=("検索語",))]
-    assert evidence_answerer.calls[0]["request"].question == "元の質問"
+    assert evidence_answerer.calls[0].request.question == "元の質問"
     assert direct_answerer.calls == []
     assert result.final_output.status == "insufficient"

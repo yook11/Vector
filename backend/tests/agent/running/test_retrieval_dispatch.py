@@ -13,9 +13,12 @@ from uuid import UUID
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
 from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerInput,
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
@@ -431,18 +434,10 @@ class _EvidenceAnswerer:
         self.calls: list[list[Any]] = []
         self.review_missing_calls: list[tuple[str, ...]] = []
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[object],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
-        del request, target_time_window
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
         self._timeline.append("answerer.start")
-        self.calls.append(list(evidence))
-        self.review_missing_calls.append(review_missing)
+        self.calls.append(list(input.evidence))
+        self.review_missing_calls.append(input.review_missing)
         if self._error is not None:
             raise self._error
         # このfakeはevidenceの内容を問わず「回答を作れなかった」を演じる
@@ -487,12 +482,8 @@ def _internal_search_events(events: list[Any]) -> list[Any]:
 
 
 class _UnreachableDirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        raise AssertionError(
-            f"direct answer must not run: {request!r} {previous_answer!r}"
-        )
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
+        raise AssertionError(f"direct answer must not run: {input!r}")
 
 
 def _runtime(

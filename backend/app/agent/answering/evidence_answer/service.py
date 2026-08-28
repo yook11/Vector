@@ -1,11 +1,12 @@
-"""Validated evidence-grounded answer service."""
+"""渡された根拠だけを引用する回答を生成する工程。"""
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
-from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
@@ -13,7 +14,6 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
@@ -32,7 +32,6 @@ from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
 )
-from app.agent.planning.contract import TargetTimeWindow
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecorder,
@@ -64,7 +63,7 @@ _EVIDENCE_ANSWER_CLASSIFIED_ERRORS = (
 
 
 class EvidenceAnswerService:
-    """Create strict evidence answer drafts from plain text LLM output."""
+    """LLMのstream出力を、渡された根拠だけを引用するdraftへ変換する。"""
 
     def __init__(
         self,
@@ -81,37 +80,22 @@ class EvidenceAnswerService:
         self._continuation = continuation
         self._recorder = recorder
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[AnswerInputEvidence],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...],
-    ) -> EvidenceAnswerOutcome:
-        """Return a valid draft or an unavailable outcome.
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+        """接地したdraftを返す。試行を使い切った場合は生成不能を返す。
 
-        Retries classified response-boundary failures within the attempt budget.
+        再試行可能な失敗は、直前の失敗内容を修復コンテキストに添えてagentを再実行する。
+        分類対象外の失敗は呼び出し元へ伝播する。
         """
 
-        repair_context: str | None = None
-        previous_output_truncated = False
-        completed_outcome: EvidenceAnswerOutcome | None = None
-        attempt_count = 0
+        attempt_input = input
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             async with self._runtime_scope_factory() as runtime:
                 for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                    attempt_count = attempt_number
                     try:
-                        completed_outcome = await self._generate_strict_draft(
+                        draft = await self._generate_strict_draft(
                             runtime=runtime,
-                            request=request,
-                            evidence=evidence,
-                            target_time_window=target_time_window,
-                            repair_context=repair_context,
-                            previous_output_truncated=previous_output_truncated,
-                            review_missing=review_missing,
+                            input=attempt_input,
                             attempt_number=attempt_number,
                         )
                     except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
@@ -122,45 +106,39 @@ class EvidenceAnswerService:
                             and attempt_number < _MAX_ATTEMPTS
                         )
                         if not retriable:
-                            completed_outcome = await self._fallback(
+                            unavailable = await self._fallback(
                                 generation=attempt_number + 1,
                                 failure=failure,
                             )
-                            break
+                            recording.set_outcome(
+                                EvidenceAnswerFailed(
+                                    failure_code=unavailable.failure_code,
+                                    attempt_count=attempt_number,
+                                )
+                            )
+                            return unavailable
                         await self._start_revision(generation=attempt_number + 1)
-                        repair_context = str(exc)
-                        previous_output_truncated = isinstance(
-                            exc, AIProviderOutputTruncatedError
+                        attempt_input = replace(
+                            input,
+                            repair_context=str(exc),
+                            previous_output_truncated=isinstance(
+                                exc, AIProviderOutputTruncatedError
+                            ),
                         )
                         continue
-                    break
-
-            if isinstance(completed_outcome, EvidenceAnswerDraft):
-                recording.set_outcome(
-                    EvidenceAnswerSucceeded(attempt_count=attempt_count)
-                )
-                return completed_outcome
-            if isinstance(completed_outcome, EvidenceAnswerUnavailable):
-                recording.set_outcome(
-                    EvidenceAnswerFailed(
-                        failure_code=completed_outcome.failure_code,
-                        attempt_count=attempt_count,
+                    recording.set_outcome(
+                        EvidenceAnswerSucceeded(attempt_count=attempt_number)
                     )
-                )
-                return completed_outcome
+                    return draft
 
-            raise AssertionError("unreachable: answer loop must return or raise")
+            # range()を試行回数の構造的上限として残すため、到達しない終端を閉じる。
+            raise AssertionError("unreachable: attempt budget must settle an outcome")
 
     async def _generate_strict_draft(
         self,
         *,
         runtime: StreamingAgentRuntime,
-        request: AnsweringRequest,
-        evidence: list[AnswerInputEvidence],
-        target_time_window: TargetTimeWindow | None,
-        repair_context: str | None,
-        previous_output_truncated: bool,
-        review_missing: tuple[str, ...],
+        input: EvidenceAnswerInput,
         attempt_number: int,
     ) -> EvidenceAnswerDraft:
         stream: AgentTextStream | None = None
@@ -174,14 +152,7 @@ class EvidenceAnswerService:
 
                 stream = runtime.stream_text(
                     self._agent,
-                    EvidenceAnswerInput(
-                        request=request,
-                        evidence=tuple(evidence),
-                        target_time_window=target_time_window,
-                        repair_context=repair_context,
-                        previous_output_truncated=previous_output_truncated,
-                        review_missing=review_missing,
-                    ),
+                    input,
                     attempt_number=attempt_number,
                 )
                 async for fragment in stream:
@@ -191,7 +162,9 @@ class EvidenceAnswerService:
 
                 await ensure_answer_generation_continues(self._continuation)
                 answer = "".join(raw_fragments)
-                draft = finalize_evidence_answer_draft(answer, evidence=evidence)
+                draft = finalize_evidence_answer_draft(
+                    answer, evidence=list(input.evidence)
+                )
 
                 await live_draft.commit()
                 return draft

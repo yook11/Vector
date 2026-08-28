@@ -29,8 +29,10 @@ from typing import Any
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerOutcome
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerInput,
+    EvidenceAnswerOutcome,
+)
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
@@ -204,21 +206,9 @@ class _ReviewMissingCapturingAnswerer(_EvidenceAnswerer):
         super().__init__()
         self.review_missing_calls: list[tuple[str, ...]] = []
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[Any],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
-        self.review_missing_calls.append(review_missing)
-        return await super().answer(
-            request=request,
-            evidence=evidence,
-            target_time_window=target_time_window,
-            review_missing=review_missing,
-        )
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+        self.review_missing_calls.append(input.review_missing)
+        return await super().answer(input)
 
 
 # --- A. 精査の呼び出し単位 -------------------------------------------------

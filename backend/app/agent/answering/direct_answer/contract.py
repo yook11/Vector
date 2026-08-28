@@ -39,7 +39,7 @@ class DirectAnswerDraft(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class DirectAnswerInput:
-    """Direct Answer Agentへ渡す1 attempt分の入力。"""
+    """この工程が受け取り、Agent に渡す入力。"""
 
     request: AnsweringRequest
     previous_answer: str
@@ -54,9 +54,4 @@ class DirectAnswerer(Protocol):
     分類済み工程失敗のDirectAnswerErrorまたはroutine stop signalを伝播する。
     """
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-    ) -> DirectAnswerDraft: ...
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft: ...

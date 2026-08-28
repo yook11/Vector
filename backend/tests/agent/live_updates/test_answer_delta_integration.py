@@ -14,10 +14,16 @@ import redis.asyncio as aioredis
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
 from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerInput,
+)
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.contract import (
@@ -119,7 +125,10 @@ async def _answer(
         runtime_scope_factory=generator.activate,
         delta_reporter=reporter,
     ).answer(
-        request=_answering_request("実Redisへのdelta配信を確認する"),
+        DirectAnswerInput(
+            request=_answering_request("実Redisへのdelta配信を確認する"),
+            previous_answer="",
+        )
     )
 
 
@@ -134,24 +143,26 @@ async def _evidence_answer(
         runtime_scope_factory=generator.activate,
         delta_reporter=reporter,
     ).answer(
-        request=(
-            _answering_request("実RedisへのEvidence revision配信を確認する")
-            if request is None
-            else request
-        ),
-        evidence=[
-            AnswerInputEvidence(
-                source=ExternalUrlSource(
-                    source_ref="1",
-                    url="https://example.com/evidence-1",
-                    title="Evidence source",
-                    evidence_claim="根拠を確認しました。",
+        EvidenceAnswerInput(
+            request=(
+                _answering_request("実RedisへのEvidence revision配信を確認する")
+                if request is None
+                else request
+            ),
+            evidence=(
+                AnswerInputEvidence(
+                    source=ExternalUrlSource(
+                        source_ref="1",
+                        url="https://example.com/evidence-1",
+                        title="Evidence source",
+                        evidence_claim="根拠を確認しました。",
+                    ),
+                    text="根拠を確認しました。",
                 ),
-                text="根拠を確認しました。",
-            )
-        ],
-        target_time_window=TargetTimeWindow(kind="today"),
-        review_missing=(),
+            ),
+            target_time_window=TargetTimeWindow(kind="today"),
+            review_missing=(),
+        )
     )
 
 

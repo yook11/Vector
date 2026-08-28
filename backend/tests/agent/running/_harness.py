@@ -16,10 +16,13 @@ from uuid import UUID
 
 import pytest
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
+    EvidenceAnswerInput,
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
@@ -151,12 +154,8 @@ class Planner:
 
 
 class UnreachableDirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        raise AssertionError(
-            f"direct answer must not run: {request!r} {previous_answer!r}"
-        )
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
+        raise AssertionError(f"direct answer must not run: {input!r}")
 
 
 class PassThroughOrganizer:
@@ -174,16 +173,9 @@ class EvidenceAnswerer:
     def __init__(self) -> None:
         self.calls: list[list[Any]] = []
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[Any],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
-        del request, target_time_window, review_missing
-        self.calls.append(list(evidence))
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+        evidence = list(input.evidence)
+        self.calls.append(evidence)
         if evidence:
             return EvidenceAnswerDraft(
                 answer="根拠に基づく回答です。",

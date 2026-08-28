@@ -12,8 +12,14 @@ from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerInput,
+)
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_review import EvidenceReviewer
@@ -21,7 +27,6 @@ from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningRequest,
     QuestionPlan,
-    TargetTimeWindow,
 )
 from app.agent.running import (
     AnsweringPhases,
@@ -106,18 +111,8 @@ class _UnreachableExternalSearchScope:
 
 
 class _UnreachableEvidenceAnswerer:
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[object],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerDraft:
-        raise AssertionError(
-            f"evidence answerer must not be called: {request!r} {evidence!r} "
-            f"{target_time_window!r} {review_missing!r}"
-        )
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
+        raise AssertionError(f"evidence answerer must not be called: {input!r}")
 
 
 class _FakeDirectAnswerer:
@@ -133,16 +128,11 @@ class _FakeDirectAnswerer:
         self._span_probe = span_probe
         self.calls: list[tuple[AnsweringRequest, str]] = []
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-    ) -> DirectAnswerDraft:
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
         if self._span_probe:
             with logfire.span("answering_runner_direct_answer_probe"):
-                return self._answer(request, previous_answer)
-        return self._answer(request, previous_answer)
+                return self._answer(input.request, input.previous_answer)
+        return self._answer(input.request, input.previous_answer)
 
     def _answer(
         self,
