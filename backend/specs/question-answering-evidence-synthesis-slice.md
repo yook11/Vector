@@ -87,10 +87,11 @@ direct 経路 (`DirectAnswerer`) の実装は Slice B-2 の責務とする。
    evidence を受け取るので ref 実在性まで工程内で検証し、valid な draft
    だけを返す。use case 側の `AnswerDraftInvalidError` 照合は防御的
    backstop として残す (実 LLM 経路では到達しない)。
-6. **audit / metrics は planner 鏡写し**。attempt failure / final event
-   (synthesized / fallback) / defect 補完の記録。retry_used・status を
-   次元に持つ outcome counter。文言・語彙の詳細は実装時に audit 基盤の
-   流儀 (`planning/audit.py`) に合わせる。
+6. **工程の観測は EvidenceAnswer Recorder が所有する**。`answer()` 1回を
+   answering spanで囲み、全provider attemptの親にする。工程が返す結論は
+   `succeeded / failed`、実行回数は`attempt_count`として記録する。
+   分類済み生成不能は`EvidenceAnswerUnavailable`として返すため、durationは
+   `completed / failed`となる。未分類例外と停止には工程結論を付けない。
 7. **direct 経路の LLM 全滅は typed error 伝播** (B-2 で実装)。evidence
    経路と違い偽の answered を作らない。本 slice では扱わない。
 
@@ -115,7 +116,12 @@ backend/app/agent/answering/ai/
   gemini_spec.py     # model="gemini-3.1-flash-lite" + gen_config
                      #   + response schema + rate limit + call signature
 backend/app/agent/answering/audit.py       # attempt failure / final event
-backend/app/agent/answering/metrics.py     # outcome counter
+backend/app/agent/answering/metrics.py
+  # vector.agent.evidence_answer.outcome counter
+  # 次元: result ("succeeded" | "failed"), attempt_count, failure_code
+backend/app/agent/recording/evidence_answer.py
+  # vector.agent.evidence_answer.duration histogram
+  # 次元: status ("completed" | "failed" | "stopped"), outcome
 ```
 
 - `RawAnswerDraft` は lenient な中間形 (LLM 応答の形をそのまま受ける)。
@@ -194,8 +200,9 @@ fake generator で `AnswerSynthesisService` の二層構造を検証する。
    保証所在 = 工程内照合、の正本テスト)。
 8. AIProvider 例外の分類: retry 不能な失敗は即 fallback。
 9. **想定外例外 (分類外の Exception) は fallback にならず伝播する**。
-10. metrics: synthesized / fallback / defect の outcome が次元付きで
-    記録される (capfire)。
+10. metrics: succeeded / failed、attempt_count、failure_codeが新しい
+    `vector.agent.evidence_answer.*` seriesへ記録され、旧
+    `vector.agent.answer_synthesis.*` seriesは出ない (capfire)。
 11. service.py 前提変更: evidence 空でも synthesizer が呼ばれる (既存
     テストの置き換え)。
 

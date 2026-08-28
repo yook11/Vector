@@ -10,7 +10,11 @@ from app.agent.recording.direct_answer import (
     logfire_direct_answer_recorder,
 )
 from app.agent.recording.evidence_answer import (
+    EvidenceAnswerFailed,
     EvidenceAnswerRecorder,
+    EvidenceAnswerRecording,
+    EvidenceAnswerRecordingOutcome,
+    EvidenceAnswerSucceeded,
     LogfireEvidenceAnswerRecorder,
     logfire_evidence_answer_recorder,
 )
@@ -68,7 +72,11 @@ __all__ = [
     "DirectAnswerRecorder",
     "DirectAnswerRecording",
     "DirectAnswerSucceeded",
+    "EvidenceAnswerFailed",
     "EvidenceAnswerRecorder",
+    "EvidenceAnswerRecording",
+    "EvidenceAnswerRecordingOutcome",
+    "EvidenceAnswerSucceeded",
     "EvidenceReviewRecorder",
     "ExternalSearchRecorder",
     "InternalSearchRecorder",

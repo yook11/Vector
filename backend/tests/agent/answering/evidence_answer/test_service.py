@@ -23,6 +23,11 @@ from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.contract import AnswerGenerationStopped, ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
+from app.agent.recording.evidence_answer import (
+    EvidenceAnswerFailed,
+    EvidenceAnswerRecordingOutcome,
+    EvidenceAnswerSucceeded,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
     AIProviderError,
@@ -42,7 +47,10 @@ from tests.logfire._span_helpers import (
     one_span_named,
 )
 
-_SYNTHESIS_OUTCOME_METRIC = "vector.agent.answer_synthesis.outcome"
+_EVIDENCE_ANSWER_OUTCOME_METRIC = "vector.agent.evidence_answer.outcome"
+_EVIDENCE_ANSWER_DURATION_METRIC = "vector.agent.evidence_answer.duration"
+_OLD_SYNTHESIS_OUTCOME_METRIC = "vector.agent.answer_synthesis.outcome"
+_OLD_SYNTHESIS_DURATION_METRIC = "vector.agent.answer_synthesis.duration"
 _PHASE_SPAN_NAME = "agent_phase"
 
 
@@ -280,21 +288,14 @@ def _metric_attributes(
 def _assert_recorded(
     recorder: RecordingEvidenceAnswerRecorder,
     *,
-    outcome: str | None,
-    stopped: bool = False,
-    retry_used: bool = False,
-    fallback_used: bool = False,
-    failure_code: str | None = None,
+    outcome: EvidenceAnswerRecordingOutcome | None,
+    error: BaseException | None = None,
 ) -> None:
-    assert len(recorder.starts) == 1
-    assert len(recorder.ends) == 1
-    recorded = recorder.ends[0]
-    assert recorded.call is recorder.starts[0]
-    assert recorded.outcome == outcome
-    assert recorded.stopped is stopped
-    assert recorded.retry_used is retry_used
-    assert recorded.fallback_used is fallback_used
-    assert recorded.failure_code == failure_code
+    assert len(recorder.records) == 1
+    recorded = recorder.records[0]
+    assert recorded.agent_name == EVIDENCE_ANSWER_AGENT.name
+    assert recorded.outcomes == ([] if outcome is None else [outcome])
+    assert recorded.error is error
 
 
 @pytest.mark.asyncio
@@ -398,11 +399,10 @@ async def test_unknown_citation_ref_retries_then_falls_back_to_unavailable(
     assert isinstance(outcome, EvidenceAnswerUnavailable)
     assert outcome.failure_code == "answer_synthesis_draft_invalid"
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
         {
-            "result": "fallback",
-            "retry_used": True,
-            "fallback_used": True,
+            "result": "failed",
+            "attempt_count": 2,
             "failure_code": "answer_synthesis_draft_invalid",
         }
     ]
@@ -500,14 +500,22 @@ async def test_provider_error_falls_back_without_retry(
     assert outcome.failure_code == "ai_error_network"
     assert len(generator.calls) == 1
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
         {
-            "result": "fallback",
-            "retry_used": False,
-            "fallback_used": True,
+            "result": "failed",
+            "attempt_count": 1,
             "failure_code": "ai_error_network",
         }
     ]
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_DURATION_METRIC) == [
+        {
+            "status": "completed",
+            "outcome": "failed",
+        }
+    ]
+    phase = one_span_named(capfire, _PHASE_SPAN_NAME)
+    assert exception_event(phase) is None
+    assert phase.get("status", {}).get("description") in (None, "")
 
 
 @pytest.mark.asyncio
@@ -525,11 +533,10 @@ async def test_blank_response_retries_once_with_repair_context(
     assert [call["repair_context"] for call in generator.calls][0] is None
     assert generator.calls[1]["repair_context"] is not None
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
         {
-            "result": "synthesized",
-            "retry_used": True,
-            "fallback_used": False,
+            "result": "succeeded",
+            "attempt_count": 2,
             "failure_code": "none",
         }
     ]
@@ -546,7 +553,7 @@ async def test_unexpected_exception_propagates_without_fallback(
 
     assert len(generator.calls) == 1
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
 
 
 @pytest.mark.asyncio
@@ -578,15 +585,69 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
     assert exc_info.value is failure
     assert reporter.operations == []
-    assert (
-        _metric_attributes(collected_metrics(capfire), _SYNTHESIS_OUTCOME_METRIC) == []
-    )
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
+    assert _metric_attributes(
+        metrics,
+        _EVIDENCE_ANSWER_DURATION_METRIC,
+    ) == [
+        {
+            "status": "failed",
+            "outcome": "none",
+        }
+    ]
     assert exception_event(phase) is not None
     assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
 
 
 @pytest.mark.asyncio
-async def test_outcome_metric_records_synthesized_once(
+@pytest.mark.parametrize(
+    "stream_outcome",
+    [
+        pytest.param("根拠から確認できます。[[1]]", id="draft"),
+        pytest.param(AIProviderNetworkError(), id="unavailable"),
+    ],
+)
+async def test_runtime_scope_exit_failure_discards_selected_outcome(
+    stream_outcome: StreamOutcome,
+    capfire: CaptureLogfire,
+) -> None:
+    close_error = RuntimeError("runtime scope exit failed")
+    generator = FakeGenerator([stream_outcome])
+
+    @asynccontextmanager
+    async def broken_scope() -> AsyncIterator[FakeGenerator]:
+        try:
+            yield generator
+        finally:
+            raise close_error
+
+    service = EvidenceAnswerService(
+        agent=EVIDENCE_ANSWER_AGENT,
+        runtime_scope_factory=broken_scope,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await service.answer(
+            request=_request(),
+            evidence=[_evidence()],
+            target_time_window=TargetTimeWindow(kind="today"),
+            review_missing=(),
+        )
+
+    assert exc_info.value is close_error
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_DURATION_METRIC) == [
+        {
+            "status": "failed",
+            "outcome": "none",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_outcome_metric_records_succeeded_once(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeGenerator(["根拠から確認できます。[[1]]"])
@@ -595,16 +656,16 @@ async def test_outcome_metric_records_synthesized_once(
 
     metrics = collected_metrics(capfire)
     assert (
-        sum_counter_for_result(metrics, _SYNTHESIS_OUTCOME_METRIC, "synthesized") == 1
+        sum_counter_for_result(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC, "succeeded")
+        == 1
     )
-    attrs = _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC)
+    attrs = _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)
     dumped = json.dumps(metrics, ensure_ascii=False, default=str)
     assert "NVIDIA の直近発表" not in dumped
     assert attrs == [
         {
-            "result": "synthesized",
-            "retry_used": False,
-            "fallback_used": False,
+            "result": "succeeded",
+            "attempt_count": 1,
             "failure_code": "none",
         }
     ]
@@ -617,20 +678,23 @@ async def test_outcome_metric_records_synthesized_once(
         ["根拠から確認できます。[[1]]"],
         [AIProviderNetworkError()],
     ],
-    ids=["synthesized", "fallback"],
+    ids=["succeeded", "failed"],
 )
-async def test_synthesis_outcome_metric_key_set_excludes_status(
+async def test_evidence_answer_outcome_metric_has_fixed_attribute_set(
     outcomes: Sequence[StreamOutcome],
     capfire: CaptureLogfire,
 ) -> None:
-    """statusラベルを廃止し、成功時・生成不能時ともkey集合が固定4つになる。"""
+    """成功時・生成不能時とも低cardinalityの固定key集合になる。"""
     generator = FakeGenerator(outcomes)
 
     await _answer(generator)
 
     metrics = collected_metrics(capfire)
-    key_sets = counter_attribute_key_sets(metrics, _SYNTHESIS_OUTCOME_METRIC)
-    assert key_sets == [{"result", "retry_used", "fallback_used", "failure_code"}]
+    key_sets = counter_attribute_key_sets(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)
+    assert key_sets == [{"result", "attempt_count", "failure_code"}]
+    metric_names = {metric["name"] for metric in metrics}
+    assert _OLD_SYNTHESIS_OUTCOME_METRIC not in metric_names
+    assert _OLD_SYNTHESIS_DURATION_METRIC not in metric_names
 
 
 @pytest.mark.asyncio
@@ -679,7 +743,9 @@ async def test_two_retryable_failures_reset_to_generation_three_fallback(
     assert operations.index(("abort", 1)) < operations.index(("reset", 2))
     assert operations.index(("abort", 2)) < operations.index(("reset", 3))
     metrics = collected_metrics(capfire)
-    assert sum_counter_for_result(metrics, _SYNTHESIS_OUTCOME_METRIC, "fallback") == 1
+    assert (
+        sum_counter_for_result(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC, "failed") == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -761,7 +827,7 @@ async def test_continuation_false_before_provider_start_is_routine_stop(
     assert reporter.appended == []
     assert reporter.finished == []
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
     assert exception_event(phase) is None
     assert phase.get("status", {}).get("description") in (None, "")
@@ -788,7 +854,7 @@ async def test_continuation_false_mid_stream_closes_and_aborts(
     assert reporter.finished == []
     assert generator.streams[0].closed is True
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
 
 
 @pytest.mark.asyncio
@@ -811,7 +877,7 @@ async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
     assert reporter.reset_generations == []
     assert generator.streams[0].closed is True
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
 
 
 @pytest.mark.asyncio
@@ -834,7 +900,7 @@ async def test_continuation_false_after_provider_error_stops_before_fallback(
     assert reporter.appended == []
     assert reporter.finished == []
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
 
 
 @pytest.mark.asyncio
@@ -854,11 +920,10 @@ async def test_truncated_first_attempt_retries_with_trusted_truncation_notice(
         cited_refs=["1"],
     )
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
         {
-            "result": "synthesized",
-            "retry_used": True,
-            "fallback_used": False,
+            "result": "succeeded",
+            "attempt_count": 2,
             "failure_code": "none",
         }
     ]
@@ -890,10 +955,10 @@ async def test_second_truncation_falls_back_with_truncated_failure_code(
 
     assert len(generator.calls) == 2
     metrics = collected_metrics(capfire)
-    attrs = _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC)
+    attrs = _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)
     assert len(attrs) == 1
-    assert attrs[0]["retry_used"] is True
-    assert attrs[0]["result"] == "fallback"
+    assert attrs[0]["attempt_count"] == 2
+    assert attrs[0]["result"] == "failed"
     assert attrs[0]["failure_code"] == "ai_error_output_truncated"
 
 
@@ -930,20 +995,20 @@ async def test_truncation_mid_stream_aborts_live_draft_and_resets_generation_two
 
 
 @pytest.mark.asyncio
-async def test_successful_answer_records_synthesized_outcome() -> None:
-    """完成 draft は recorder へ synthesized を1回渡す。"""
+async def test_successful_answer_records_succeeded_outcome() -> None:
+    """完成draftはRecorderへ成功結論を1回渡す。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator(["根拠から確認できます。[[1]]"])
 
     await _answer(generator, recorder=recorder)
 
-    _assert_recorded(recorder, outcome="synthesized")
+    _assert_recorded(recorder, outcome=EvidenceAnswerSucceeded(attempt_count=1))
 
 
 @pytest.mark.asyncio
-async def test_classified_failure_records_fallback_outcome() -> None:
-    """分類済み失敗は recorder へ fallback を1回渡す。"""
+async def test_classified_failure_records_failed_outcome() -> None:
+    """分類済み生成失敗はRecorderへ失敗結論を1回渡す。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator([AIProviderNetworkError()])
@@ -953,9 +1018,37 @@ async def test_classified_failure_records_fallback_outcome() -> None:
     assert isinstance(outcome, EvidenceAnswerUnavailable)
     _assert_recorded(
         recorder,
-        outcome="fallback",
-        fallback_used=True,
-        failure_code="ai_error_network",
+        outcome=EvidenceAnswerFailed(
+            failure_code="ai_error_network",
+            attempt_count=1,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_success_records_second_attempt() -> None:
+    recorder = RecordingEvidenceAnswerRecorder()
+    generator = FakeGenerator(["引用がありません。", "根拠があります。[[1]]"])
+
+    await _answer(generator, recorder=recorder)
+
+    _assert_recorded(recorder, outcome=EvidenceAnswerSucceeded(attempt_count=2))
+
+
+@pytest.mark.asyncio
+async def test_retry_exhaustion_records_second_attempt_failure() -> None:
+    recorder = RecordingEvidenceAnswerRecorder()
+    generator = FakeGenerator(["引用がありません。", "まだ引用がありません。"])
+
+    outcome = await _answer(generator, recorder=recorder)
+
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
+    _assert_recorded(
+        recorder,
+        outcome=EvidenceAnswerFailed(
+            failure_code="answer_synthesis_draft_invalid",
+            attempt_count=2,
+        ),
     )
 
 
@@ -966,14 +1059,14 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator(["根拠から確認できます。[[1]]"])
 
-    with pytest.raises(AnswerGenerationStopped):
+    with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _answer(
             generator,
             continuation=SequenceContinuation([False]),
             recorder=recorder,
         )
 
-    _assert_recorded(recorder, outcome=None, stopped=True)
+    _assert_recorded(recorder, outcome=None, error=exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -983,14 +1076,14 @@ async def test_stop_after_provider_error_records_stopped_without_fallback() -> N
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator([AIProviderNetworkError()])
 
-    with pytest.raises(AnswerGenerationStopped):
+    with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _answer(
             generator,
             continuation=SequenceContinuation([True, False]),
             recorder=recorder,
         )
 
-    _assert_recorded(recorder, outcome=None, stopped=True)
+    _assert_recorded(recorder, outcome=None, error=exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -999,21 +1092,19 @@ async def test_stop_after_provider_error_records_stopped_without_fallback() -> N
     [
         pytest.param(RuntimeError("bug in generator"), id="unknown"),
         pytest.param(asyncio.CancelledError(), id="cancellation"),
+        pytest.param(GeneratorExit(), id="generator-exit"),
     ],
 )
-async def test_unclassified_failure_and_cancellation_record_without_outcome(
+async def test_unclassified_failure_and_stops_record_without_outcome(
     error: BaseException,
 ) -> None:
-    """未分類と cancel は既存結論を渡さず、cancel だけ stopped にする。"""
+    """未分類例外と停止は結論を渡さず同一インスタンスで伝播する。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator([error])
 
-    with pytest.raises(type(error)):
+    with pytest.raises(type(error)) as exc_info:
         await _answer(generator, recorder=recorder)
 
-    _assert_recorded(
-        recorder,
-        outcome=None,
-        stopped=isinstance(error, asyncio.CancelledError),
-    )
+    assert exc_info.value is error
+    _assert_recorded(recorder, outcome=None, error=error)
