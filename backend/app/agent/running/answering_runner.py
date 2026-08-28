@@ -13,6 +13,8 @@ import logfire
 from logfire import LogfireSpan
 
 from app.agent.answering.contract import AnsweringRequest
+from app.agent.answering.direct_answer.contract import DirectAnswerInput
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.evidence import (
     build_answer_input_evidence,
 )
@@ -35,12 +37,7 @@ from app.agent.evidence_review import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.planning.contract import (
-    DirectAnswerPlan,
-    PlanningRequest,
-    SearchPlan,
-    TargetTimeWindow,
-)
+from app.agent.planning.contract import DirectAnswerPlan, PlanningRequest, SearchPlan
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.running.contract import (
@@ -205,8 +202,7 @@ class AnsweringRunner:
     ) -> AnswerQuestionResult:
         await self._report_progress("answering")
         draft = await phases.direct_answerer.answer(
-            request=request,
-            previous_answer=previous_answer,
+            DirectAnswerInput(request=request, previous_answer=previous_answer)
         )
         return AnswerQuestionResult(
             status="answered",
@@ -259,10 +255,12 @@ class AnsweringRunner:
 
         await self._report_progress("answering")
         answer_outcome = await phases.evidence_answerer.answer(
-            request=request,
-            evidence=evidence,
-            target_time_window=_plan_target_time_window(plan),
-            review_missing=review_missing,
+            EvidenceAnswerInput(
+                request=request,
+                evidence=tuple(evidence),
+                target_time_window=plan.target_time_window,
+                review_missing=review_missing,
+            )
         )
         result = assemble_evidence_result(
             plan=plan,
@@ -378,7 +376,3 @@ def _latest_assistant_answer(
         ),
         "",
     )
-
-
-def _plan_target_time_window(plan: SearchPlan) -> TargetTimeWindow | None:
-    return plan.target_time_window

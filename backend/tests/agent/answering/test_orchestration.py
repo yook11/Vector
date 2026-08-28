@@ -11,10 +11,14 @@ from uuid import UUID
 import pytest
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
+    EvidenceAnswerInput,
 )
 from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
 from app.agent.evidence_collection import EvidenceCollectionService
@@ -495,29 +499,15 @@ class FakeEvidenceAnswerer:
     ) -> None:
         self._draft = draft
         self._timeline = timeline
-        self.calls: list[dict[str, object]] = []
+        self.calls: list[EvidenceAnswerInput] = []
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[object],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerDraft:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         # S5: review_missingの受け渡し検証はtests/agent/running/
         # test_retrieval_dispatch.pyが正本(条件7)。このfakeは既存の
         # request/evidence/target_time_window契約だけを追跡する。
-        del review_missing
         if self._timeline is not None:
             self._timeline.record("evidence_answerer.answer")
-        self.calls.append(
-            {
-                "request": request,
-                "evidence": evidence,
-                "target_time_window": target_time_window,
-            }
-        )
+        self.calls.append(input)
         if isinstance(self._draft, Exception):
             raise self._draft
         return self._draft
@@ -532,22 +522,12 @@ class FakeDirectAnswerer:
     ) -> None:
         self._draft = draft
         self._timeline = timeline
-        self.calls: list[dict[str, object]] = []
+        self.calls: list[DirectAnswerInput] = []
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-    ) -> DirectAnswerDraft:
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
         if self._timeline is not None:
             self._timeline.record("direct_answerer.answer")
-        self.calls.append(
-            {
-                "request": request,
-                "previous_answer": previous_answer,
-            }
-        )
+        self.calls.append(input)
         if isinstance(self._draft, Exception):
             raise self._draft
         return self._draft
@@ -701,8 +681,8 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert result.missing_aspects == []
     assert result.plan_summary.plan_type == "direct_answer"
     assert direct_answerer.calls == [
-        {
-            "request": AnsweringRequest(
+        DirectAnswerInput(
+            request=AnsweringRequest(
                 question=input_.question,
                 history=(
                     ThreadMessageSnapshot(
@@ -712,8 +692,8 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
                 ),
                 as_of=input_.as_of,
             ),
-            "previous_answer": input_.previous_answer,
-        }
+            previous_answer=input_.previous_answer,
+        )
     ]
     assert internal_search.calls == []
     assert evidence_answerer.calls == []
@@ -835,7 +815,7 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
         "evidence_answerer.answer",
     ]
     assert len(evidence_answerer.calls) == 1
-    assert evidence_answerer.calls[0]["evidence"] == []
+    assert evidence_answerer.calls[0].evidence == ()
 
 
 @pytest.mark.asyncio
@@ -987,7 +967,7 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
     assert result.sources == []
     assert result.missing_aspects
     assert len(evidence_answerer.calls) == 1
-    assert evidence_answerer.calls[0]["evidence"] == []
+    assert evidence_answerer.calls[0].evidence == ()
 
 
 @pytest.mark.asyncio
@@ -1082,18 +1062,15 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
         PlanningRequest(question=input_.question, as_of=input_.as_of)
     ]
     assert internal_search.calls == [InternalSearchQueries(queries=("NVIDIA AI GPU",))]
-    assert evidence_answerer.calls[0]["request"] == AnsweringRequest(
+    assert evidence_answerer.calls[0].request == AnsweringRequest(
         question=input_.question,
         as_of=input_.as_of,
     )
-    assert evidence_answerer.calls[0]["target_time_window"] == TargetTimeWindow(
+    assert evidence_answerer.calls[0].target_time_window == TargetTimeWindow(
         kind="last_n_days", days=1
     )
-    assert set(evidence_answerer.calls[0]) == {
-        "request",
-        "evidence",
-        "target_time_window",
-    }
+    assert evidence_answerer.calls[0].review_missing == ()
+    assert evidence_answerer.calls[0].repair_context is None
 
 
 @pytest.mark.asyncio
@@ -1109,7 +1086,7 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
 
     await orchestrator.answer(_input())
 
-    assert evidence_answerer.calls[0]["target_time_window"] is None
+    assert evidence_answerer.calls[0].target_time_window is None
 
 
 @pytest.mark.asyncio

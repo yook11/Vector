@@ -14,6 +14,7 @@ from opentelemetry.trace import StatusCode
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.contract import ExternalUrlSource
@@ -87,10 +88,12 @@ async def test_phase_owns_all_provider_attempts_without_model_text(
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
     ).answer(
-        request=_request(),
-        evidence=[_evidence()],
-        target_time_window=TargetTimeWindow(kind="today"),
-        review_missing=(),
+        EvidenceAnswerInput(
+            request=_request(),
+            evidence=(_evidence(),),
+            target_time_window=TargetTimeWindow(kind="today"),
+            review_missing=(),
+        )
     )
 
     spans = capfire.exporter.exported_spans

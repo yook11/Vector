@@ -68,6 +68,10 @@ def _request() -> AnsweringRequest:
     )
 
 
+def _input() -> DirectAnswerInput:
+    return DirectAnswerInput(request=_request(), previous_answer="")
+
+
 async def test_phase_owns_detached_streaming_attempt_without_model_text(
     capfire: CaptureLogfire,
 ) -> None:
@@ -81,7 +85,7 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
     draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
-    ).answer(request=_request())
+    ).answer(_input())
 
     spans = capfire.exporter.exported_spans
     phase_spans = [
@@ -157,7 +161,7 @@ async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
         await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=runtime_scope,
-        ).answer(request=_request())
+        ).answer(_input())
 
     spans = capfire.exporter.exported_spans
     phase = next(
@@ -207,7 +211,7 @@ async def test_retry_provider_request_adds_only_rendered_repair_context() -> Non
     draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
-    ).answer(request=_request())
+    ).answer(_input())
 
     requests = client.models.generate_content_stream.await_args_list
     first_contents = requests[0].kwargs["contents"]
@@ -241,7 +245,7 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
         await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=runtime_scope,
-        ).answer(request=_request())
+        ).answer(_input())
 
     spans = capfire.exporter.exported_spans
     phase = next(
@@ -291,7 +295,7 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
         continuation=StopImmediately(),
     )
     try:
-        await service.answer(request=_request())
+        await service.answer(_input())
     except AnswerGenerationStopped as error:
         stopped = error
     else:
@@ -347,7 +351,7 @@ async def test_mid_stream_stop_abandons_real_attempt_without_error(
         continuation=cast(AnswerGenerationContinuation, object()),
     )
     with pytest.raises(AnswerGenerationStopped) as exc_info:
-        await service.answer(request=_request())
+        await service.answer(_input())
 
     spans = capfire.exporter.exported_spans
     phase = next(

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
-from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
@@ -13,7 +14,6 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
@@ -32,7 +32,6 @@ from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
 )
-from app.agent.planning.contract import TargetTimeWindow
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecorder,
@@ -81,21 +80,13 @@ class EvidenceAnswerService:
         self._continuation = continuation
         self._recorder = recorder
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[AnswerInputEvidence],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...],
-    ) -> EvidenceAnswerOutcome:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
         """Return a valid draft or an unavailable outcome.
 
         Retries classified response-boundary failures within the attempt budget.
         """
 
-        repair_context: str | None = None
-        previous_output_truncated = False
+        current = input
         completed_outcome: EvidenceAnswerOutcome | None = None
         attempt_count = 0
 
@@ -106,12 +97,7 @@ class EvidenceAnswerService:
                     try:
                         completed_outcome = await self._generate_strict_draft(
                             runtime=runtime,
-                            request=request,
-                            evidence=evidence,
-                            target_time_window=target_time_window,
-                            repair_context=repair_context,
-                            previous_output_truncated=previous_output_truncated,
-                            review_missing=review_missing,
+                            input=current,
                             attempt_number=attempt_number,
                         )
                     except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
@@ -128,9 +114,12 @@ class EvidenceAnswerService:
                             )
                             break
                         await self._start_revision(generation=attempt_number + 1)
-                        repair_context = str(exc)
-                        previous_output_truncated = isinstance(
-                            exc, AIProviderOutputTruncatedError
+                        current = replace(
+                            input,
+                            repair_context=str(exc),
+                            previous_output_truncated=isinstance(
+                                exc, AIProviderOutputTruncatedError
+                            ),
                         )
                         continue
                     break
@@ -155,12 +144,7 @@ class EvidenceAnswerService:
         self,
         *,
         runtime: StreamingAgentRuntime,
-        request: AnsweringRequest,
-        evidence: list[AnswerInputEvidence],
-        target_time_window: TargetTimeWindow | None,
-        repair_context: str | None,
-        previous_output_truncated: bool,
-        review_missing: tuple[str, ...],
+        input: EvidenceAnswerInput,
         attempt_number: int,
     ) -> EvidenceAnswerDraft:
         stream: AgentTextStream | None = None
@@ -174,14 +158,7 @@ class EvidenceAnswerService:
 
                 stream = runtime.stream_text(
                     self._agent,
-                    EvidenceAnswerInput(
-                        request=request,
-                        evidence=tuple(evidence),
-                        target_time_window=target_time_window,
-                        repair_context=repair_context,
-                        previous_output_truncated=previous_output_truncated,
-                        review_missing=review_missing,
-                    ),
+                    input,
                     attempt_number=attempt_number,
                 )
                 async for fragment in stream:
@@ -191,7 +168,9 @@ class EvidenceAnswerService:
 
                 await ensure_answer_generation_continues(self._continuation)
                 answer = "".join(raw_fragments)
-                draft = finalize_evidence_answer_draft(answer, evidence=evidence)
+                draft = finalize_evidence_answer_draft(
+                    answer, evidence=list(input.evidence)
+                )
 
                 await live_draft.commit()
                 return draft

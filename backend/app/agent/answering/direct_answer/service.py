@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from app.agent.agent import Agent
-from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerInput,
@@ -68,16 +69,10 @@ class DirectAnswerService:
         self._continuation = continuation
         self._recorder = recorder
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-    ) -> DirectAnswerDraft:
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
         """Return a valid direct draft, retrying only blank response defects."""
 
-        repair_context: str | None = None
-        previous_output_truncated = False
+        current = input
         completed_draft: DirectAnswerDraft | None = None
         attempt_count = 0
 
@@ -89,10 +84,7 @@ class DirectAnswerService:
                         try:
                             completed_draft = await self._generate_draft(
                                 runtime=runtime,
-                                request=request,
-                                previous_answer=previous_answer,
-                                repair_context=repair_context,
-                                previous_output_truncated=previous_output_truncated,
+                                input=current,
                                 attempt_number=attempt_number,
                             )
                         except _DIRECT_ANSWER_SOURCE_ERRORS as cause:
@@ -103,9 +95,12 @@ class DirectAnswerService:
                                 and attempt_number < _MAX_ATTEMPTS
                             )
                             if retriable:
-                                repair_context = str(cause)
-                                previous_output_truncated = isinstance(
-                                    cause, AIProviderOutputTruncatedError
+                                current = replace(
+                                    input,
+                                    repair_context=str(cause),
+                                    previous_output_truncated=isinstance(
+                                        cause, AIProviderOutputTruncatedError
+                                    ),
                                 )
                                 continue
                             raise DirectAnswerError(code=failure.code) from cause
@@ -131,10 +126,7 @@ class DirectAnswerService:
         self,
         *,
         runtime: StreamingAgentRuntime,
-        request: AnsweringRequest,
-        previous_answer: str,
-        repair_context: str | None,
-        previous_output_truncated: bool,
+        input: DirectAnswerInput,
         attempt_number: int,
     ) -> DirectAnswerDraft:
         stream: AgentTextStream | None = None
@@ -148,12 +140,7 @@ class DirectAnswerService:
 
                 stream = runtime.stream_text(
                     self._agent,
-                    DirectAnswerInput(
-                        request=request,
-                        previous_answer=previous_answer,
-                        repair_context=repair_context,
-                        previous_output_truncated=previous_output_truncated,
-                    ),
+                    input,
                     attempt_number=attempt_number,
                 )
                 async for fragment in stream:

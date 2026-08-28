@@ -15,9 +15,14 @@ from logfire.testing import CaptureLogfire
 from openai import AsyncOpenAI
 from opentelemetry.trace import StatusCode
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerInput,
+)
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
@@ -142,27 +147,15 @@ class _EmptyInternalSearch:
 
 
 class _UnreachableDirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        raise AssertionError(
-            f"direct answer must not run: {request!r} {previous_answer!r}"
-        )
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
+        raise AssertionError(f"direct answer must not run: {input!r}")
 
 
 class _EvidenceAnswerer:
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[Any],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerDraft:
-        del request, target_time_window, review_missing
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         return EvidenceAnswerDraft(
             answer="根拠に基づく回答です。",
-            cited_refs=[item.source.source_ref for item in evidence],
+            cited_refs=[item.source.source_ref for item in input.evidence],
         )
 
 
@@ -480,18 +473,10 @@ class _SelectiveEvidenceAnswerer:
     def __init__(self, select: Callable[[list[Any]], list[str]]) -> None:
         self._select = select
 
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[Any],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerDraft:
-        del request, target_time_window, review_missing
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         return EvidenceAnswerDraft(
             answer="根拠に基づく回答です。",
-            cited_refs=self._select(evidence),
+            cited_refs=self._select(list(input.evidence)),
         )
 
 
@@ -502,25 +487,15 @@ class _DirectPlanner:
 
 
 class _DirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        del request, previous_answer
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
+        del input
         return DirectAnswerDraft(answer="直接回答です。")
 
 
 class _UnreachableEvidenceAnswerer:
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[Any],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerDraft:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         raise AssertionError(
-            f"evidence answerer must not run on direct path: {request!r} "
-            f"{evidence!r} {target_time_window!r} {review_missing!r}"
+            f"evidence answerer must not run on direct path: {input!r}"
         )
 
 

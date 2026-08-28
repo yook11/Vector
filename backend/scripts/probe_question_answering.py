@@ -15,13 +15,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
 from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerInput,
+)
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.composition import (
     activate_evidence_reviewer_runtime,
@@ -98,14 +102,9 @@ class _RecordingAnswerEvents:
 
 
 class _UnreachableDirectAnswerer:
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",  # noqa: ARG002
-    ) -> DirectAnswerDraft:
+    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
         raise AssertionError(
-            f"direct answerer must not be called: {request.question!r}"
+            f"direct answerer must not be called: {input.request.question!r}"
         )
 
 
@@ -125,15 +124,10 @@ class _UnreachableOrganizer:
 
 
 class _UnreachableEvidenceAnswerer:
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[AnswerInputEvidence],
-        target_time_window: TargetTimeWindow | None,  # noqa: ARG002
-    ) -> EvidenceAnswerDraft:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         raise AssertionError(
-            f"evidence answerer must not be called: {request.question!r}, {evidence!r}"
+            f"evidence answerer must not be called: {input.request.question!r}, "
+            f"{input.evidence!r}"
         )
 
 

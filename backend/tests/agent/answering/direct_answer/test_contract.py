@@ -7,7 +7,6 @@ from typing import get_type_hints
 import pytest
 from pydantic import ValidationError
 
-from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerer,
@@ -21,17 +20,17 @@ def _first_input_annotation(method: object) -> object | None:
     return get_type_hints(method).get(parameter_names[1])
 
 
-def test_direct_answer_boundaries_use_typed_attempt_input() -> None:
+def test_direct_answer_boundaries_accept_typed_input() -> None:
     assert (
         tuple(inspect.signature(DirectAnswerer.answer).parameters),
         tuple(inspect.signature(DirectAnswerService.answer).parameters),
         _first_input_annotation(DirectAnswerer.answer),
         _first_input_annotation(DirectAnswerService.answer),
     ) == (
-        ("self", "request", "previous_answer"),
-        ("self", "request", "previous_answer"),
-        AnsweringRequest,
-        AnsweringRequest,
+        ("self", "input"),
+        ("self", "input"),
+        DirectAnswerInput,
+        DirectAnswerInput,
     )
 
 

@@ -77,12 +77,9 @@ def _render(
         "request": _request() if request is None else request,
         "evidence": evidence,
         "target_time_window": target_time_window,
+        "review_missing": () if review_missing is None else review_missing,
         "repair_context": repair_context,
     }
-    # review_missing未指定のtestはS5の新fieldに依存しない既存契約だけを
-    # 検証するため、明示指定時だけkwargへ足す(既存testを巻き込まない)。
-    if review_missing is not None:
-        input_kwargs["review_missing"] = review_missing
     input = EvidenceAnswerInput(**input_kwargs)
     return render_evidence_answer_input(input)
 
@@ -208,6 +205,7 @@ def _input_with_truncation_notice(
         request=_request(),
         evidence=(),
         target_time_window=None,
+        review_missing=(),
         repair_context=None,
         previous_output_truncated=previous_output_truncated,
     )
