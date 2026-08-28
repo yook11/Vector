@@ -1,4 +1,4 @@
-"""Answer synthesis metrics."""
+"""Answer generation metrics."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ from typing import Literal
 
 import logfire
 
-AnswerSynthesisOutcomeResult = Literal["synthesized", "fallback", "failed"]
+EvidenceAnswerOutcomeResult = Literal["succeeded", "failed"]
 DirectAnswerOutcomeResult = Literal["succeeded", "failed"]
 
-_answer_synthesis_outcome_counter = logfire.metric_counter(
-    "vector.agent.answer_synthesis.outcome",
+_evidence_answer_outcome_counter = logfire.metric_counter(
+    "vector.agent.evidence_answer.outcome",
     unit="1",
-    description="Evidence answer synthesis final outcome per request",
+    description="Evidence answer final outcome per request",
 )
 _direct_answer_outcome_counter = logfire.metric_counter(
     "vector.agent.direct_answer.outcome",
@@ -21,24 +21,22 @@ _direct_answer_outcome_counter = logfire.metric_counter(
 )
 
 
-def record_answer_synthesis_outcome(
+def record_evidence_answer_outcome(
     *,
-    result: AnswerSynthesisOutcomeResult,
-    retry_used: bool,
-    fallback_used: bool,
+    result: EvidenceAnswerOutcomeResult,
+    attempt_count: int,
     failure_code: str | None = None,
 ) -> None:
-    """Record one final answer synthesis outcome with low-cardinality labels.
+    """Record one final evidence answer outcome with low-cardinality labels.
 
     failure_code には classifier の code のみを渡す (自由文禁止)。None は成功。
     """
 
-    _answer_synthesis_outcome_counter.add(
+    _evidence_answer_outcome_counter.add(
         1,
         attributes={
             "result": result,
-            "retry_used": retry_used,
-            "fallback_used": fallback_used,
+            "attempt_count": attempt_count,
             "failure_code": failure_code if failure_code is not None else "none",
         },
     )

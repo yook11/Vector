@@ -7,7 +7,6 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from time import perf_counter
 
-from app.agent.answering.metrics import AnswerSynthesisOutcomeResult
 from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
 from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailurePhase,
@@ -15,12 +14,13 @@ from app.agent.evidence_collection.internal_search.contract import (
 )
 from app.agent.evidence_review.metrics import EvidenceReviewOutcome
 from app.agent.recording.direct_answer import DirectAnswerOutcome
+from app.agent.recording.evidence_answer import EvidenceAnswerRecordingOutcome
 from app.agent.recording.planning import PlanningOutcome
 from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
 __all__ = [
     "RecordedDirectAnswer",
-    "RecordedEvidenceAnswerEnd",
+    "RecordedEvidenceAnswer",
     "RecordedEvidenceReviewEnd",
     "RecordedExternalSearchEnd",
     "RecordedInternalSearchEnd",
@@ -225,46 +225,40 @@ class RecordingDirectAnswerRecorder:
             raise
 
 
-@dataclass(frozen=True, slots=True)
-class RecordedEvidenceAnswerEnd:
-    call: PhaseCall
-    outcome: AnswerSynthesisOutcomeResult | None
-    retry_used: bool
-    fallback_used: bool
-    failure_code: str | None
-    stopped: bool
+@dataclass(slots=True)
+class RecordedEvidenceAnswer:
+    agent_name: str
+    outcomes: list[EvidenceAnswerRecordingOutcome] = field(default_factory=list)
+    error: BaseException | None = None
+
+    def set_outcome(self, outcome: EvidenceAnswerRecordingOutcome) -> None:
+        self.outcomes.append(outcome)
 
 
 @dataclass(slots=True)
 class RecordingEvidenceAnswerRecorder:
-    starts: list[PhaseCall] = field(default_factory=list)
-    ends: list[RecordedEvidenceAnswerEnd] = field(default_factory=list)
+    records: list[RecordedEvidenceAnswer] = field(default_factory=list)
 
-    async def start(self) -> PhaseCall:
-        call = PhaseCall(started_at=perf_counter())
-        self.starts.append(call)
-        return call
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: AnswerSynthesisOutcomeResult | None = None,
-        retry_used: bool = False,
-        fallback_used: bool = False,
-        failure_code: str | None = None,
-        stopped: bool = False,
-    ) -> None:
-        self.ends.append(
-            RecordedEvidenceAnswerEnd(
-                call=call,
-                outcome=outcome,
-                retry_used=retry_used,
-                fallback_used=fallback_used,
-                failure_code=failure_code,
-                stopped=stopped,
-            )
-        )
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[RecordedEvidenceAnswer]:
+        return self._record(agent_name=agent_name)
+
+    @asynccontextmanager
+    async def _record(
+        self,
+        *,
+        agent_name: str,
+    ) -> AsyncIterator[RecordedEvidenceAnswer]:
+        recording = RecordedEvidenceAnswer(agent_name=agent_name)
+        self.records.append(recording)
+        try:
+            yield recording
+        except BaseException as error:
+            recording.error = error
+            raise
 
 
 @dataclass(frozen=True, slots=True)

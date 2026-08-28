@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
@@ -30,16 +28,15 @@ from app.agent.answering.live_delivery import (
     ensure_answer_generation_continues,
 )
 from app.agent.answering.live_draft import LiveAnswerDraftSession
-from app.agent.answering.metrics import AnswerSynthesisOutcomeResult
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
-    AnswerGenerationStopped,
 )
-from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.recording.evidence_answer import (
+    EvidenceAnswerFailed,
     EvidenceAnswerRecorder,
+    EvidenceAnswerSucceeded,
     logfire_evidence_answer_recorder,
 )
 from app.agent.runtime.contract import (
@@ -99,72 +96,60 @@ class EvidenceAnswerService:
 
         repair_context: str | None = None
         previous_output_truncated = False
-        retry_used = False
-        fallback_used = False
-        outcome: AnswerSynthesisOutcomeResult | None = None
-        failure_code: str | None = None
-        stopped = False
-        call = await self._recorder.start()
+        completed_outcome: EvidenceAnswerOutcome | None = None
+        attempt_count = 0
 
-        try:
-            with agent_phase(phase="answering", agent_name=self._agent.name):
-                async with self._runtime_scope_factory() as runtime:
-                    for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                        try:
-                            draft = await self._generate_strict_draft(
-                                runtime=runtime,
-                                request=request,
-                                evidence=evidence,
-                                target_time_window=target_time_window,
-                                repair_context=repair_context,
-                                previous_output_truncated=previous_output_truncated,
-                                review_missing=review_missing,
-                                attempt_number=attempt_number,
+        async with self._recorder.record(agent_name=self._agent.name) as recording:
+            async with self._runtime_scope_factory() as runtime:
+                for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                    attempt_count = attempt_number
+                    try:
+                        completed_outcome = await self._generate_strict_draft(
+                            runtime=runtime,
+                            request=request,
+                            evidence=evidence,
+                            target_time_window=target_time_window,
+                            repair_context=repair_context,
+                            previous_output_truncated=previous_output_truncated,
+                            review_missing=review_missing,
+                            attempt_number=attempt_number,
+                        )
+                    except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
+                        failure = classify_answer_synthesis_failure(exc)
+                        retriable = (
+                            failure.request_retry_disposition
+                            is RequestRetryDisposition.RETRY_IN_REQUEST
+                            and attempt_number < _MAX_ATTEMPTS
+                        )
+                        if not retriable:
+                            completed_outcome = await self._fallback(
+                                generation=attempt_number + 1,
+                                failure=failure,
                             )
-                        except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
-                            failure = classify_answer_synthesis_failure(exc)
-                            retriable = (
-                                failure.request_retry_disposition
-                                is RequestRetryDisposition.RETRY_IN_REQUEST
-                                and attempt_number < _MAX_ATTEMPTS
-                            )
-                            if not retriable:
-                                unavailable = await self._fallback(
-                                    generation=attempt_number + 1,
-                                    failure=failure,
-                                )
-                                retry_used = attempt_number > 1
-                                outcome = "fallback"
-                                fallback_used = True
-                                failure_code = failure.code
-                                return unavailable
-                            await self._start_revision(generation=attempt_number + 1)
-                            repair_context = str(exc)
-                            previous_output_truncated = isinstance(
-                                exc, AIProviderOutputTruncatedError
-                            )
-                            retry_used = True
-                            continue
+                            break
+                        await self._start_revision(generation=attempt_number + 1)
+                        repair_context = str(exc)
+                        previous_output_truncated = isinstance(
+                            exc, AIProviderOutputTruncatedError
+                        )
+                        continue
+                    break
 
-                        retry_used = attempt_number > 1
-                        outcome = "synthesized"
-                        return draft
+            if isinstance(completed_outcome, EvidenceAnswerDraft):
+                recording.set_outcome(
+                    EvidenceAnswerSucceeded(attempt_count=attempt_count)
+                )
+                return completed_outcome
+            if isinstance(completed_outcome, EvidenceAnswerUnavailable):
+                recording.set_outcome(
+                    EvidenceAnswerFailed(
+                        failure_code=completed_outcome.failure_code,
+                        attempt_count=attempt_count,
+                    )
+                )
+                return completed_outcome
 
-                raise AssertionError("unreachable: answer loop must return or raise")
-        except (asyncio.CancelledError, GeneratorExit, AnswerGenerationStopped):
-            stopped = True
-            outcome = None
-            failure_code = None
-            raise
-        finally:
-            await self._recorder.end(
-                call,
-                outcome=outcome,
-                retry_used=retry_used,
-                fallback_used=fallback_used,
-                failure_code=failure_code,
-                stopped=stopped,
-            )
+            raise AssertionError("unreachable: answer loop must return or raise")
 
     async def _generate_strict_draft(
         self,
