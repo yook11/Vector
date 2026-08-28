@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+from dataclasses import FrozenInstanceError, fields
 from datetime import date, datetime
 from typing import Any, get_args
 
@@ -17,7 +18,7 @@ from app.agent.planning.contract import (
     RESEARCH_TASK_LIMIT,
     DirectAnswerPlan,
     ExternalResearchTask,
-    PlanningRequest,
+    PlanningInput,
     PlanType,
     QuestionPlan,
     QuestionPlanDraft,
@@ -28,7 +29,6 @@ from app.agent.planning.contract import (
     plan_from_draft,
     render_target_time_window,
 )
-from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
@@ -484,40 +484,29 @@ def test_direct_and_search_plans_are_frozen() -> None:
         search.research_tasks = []
 
 
-def test_planning_request_is_a_frozen_question_and_history_wrapper() -> None:
-    """PlanningRequestは生の質問と履歴、実行時点、調査の申し送りだけを持つ。"""
-    request_type = PlanningRequest
+def test_planning_input_is_frozen_question_history_and_handoff() -> None:
+    """PlanningInputは生の質問と履歴、実行時点、調査の申し送りだけを持つ。"""
     question = "NVIDIA の直近発表は？"
     history = (ThreadMessageSnapshot(role="user", content="前の質問"),)
     as_of = datetime(2026, 7, 10)
-    request = request_type(question=question, history=history, as_of=as_of)
+    planning_input = PlanningInput(question=question, history=history, as_of=as_of)
 
-    with pytest.raises(ValidationError):
-        request.as_of = datetime(2026, 7, 11)
-    with pytest.raises(ValidationError):
-        request_type(question=question, as_of=as_of, telemetry=object())
-    with pytest.raises(ValidationError):
-        request_type(answer_brief=question, as_of=as_of)
-
+    assert [field.name for field in fields(PlanningInput)] == [
+        "question",
+        "as_of",
+        "history",
+        "research_handoff",
+    ]
     assert (
-        set(request_type.model_fields),
-        request_type.model_fields["as_of"].annotation,
-        request_type.model_fields["research_handoff"].annotation,
-        request.question,
-        request.history,
-        request.as_of,
-        request.research_handoff,
-        "prior_research" not in request_type.model_fields,
-    ) == (
-        {"question", "history", "as_of", "research_handoff"},
-        datetime,
-        ResearchHandoff | None,
-        question,
-        history,
-        as_of,
-        None,
-        True,
-    )
+        planning_input.question,
+        planning_input.history,
+        planning_input.as_of,
+        planning_input.research_handoff,
+    ) == (question, history, as_of, None)
+    with pytest.raises(FrozenInstanceError):
+        planning_input.as_of = datetime(2026, 7, 11)  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        PlanningInput(question=question, as_of=as_of, telemetry=object())
 
 
 def test_legacy_planner_draft_boundaries_are_not_exported() -> None:

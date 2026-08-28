@@ -15,7 +15,7 @@ from opentelemetry.trace import StatusCode
 
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.contract import (
-    PlanningRequest,
+    PlanningInput,
     QuestionPlanDraft,
     ResearchTaskDraft,
     TargetTimeWindow,
@@ -41,8 +41,8 @@ from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_res
 _PLANNER_OUTCOME_METRIC = "vector.agent.planner.outcome"
 
 
-def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningRequest:
-    return PlanningRequest(
+def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningInput:
+    return PlanningInput(
         question=question,
         as_of=datetime(2026, 7, 20, tzinfo=UTC),
     )
@@ -228,9 +228,8 @@ async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
     assert (
         call.agent is QUESTION_PLANNER_AGENT,
         call.attempt_number,
-        call.input.request.question,
-        call.input.repair_context,
-    ) == (True, 1, "今日のNVIDIAの発表は？", None)
+        call.input.question,
+    ) == (True, 1, "今日のNVIDIAの発表は？")
     assert (factory.created, factory.entered, len(factory.exits)) == (
         [runtime],
         [runtime],
@@ -263,11 +262,10 @@ async def test_successful_plan_records_succeeded_outcome() -> None:
     )
 
 
-async def test_semantic_response_defect_retries_once_without_leaking_question() -> None:
-    question_sentinel = "RAW_QUESTION_MUST_NOT_REACH_REPAIR_OR_METRIC_8ab4"
+async def test_semantic_response_defect_retries_once() -> None:
     invalid = _draft(
         plan_type="direct_answer",
-        research_tasks=[_task_draft("goal", [question_sentinel])],
+        research_tasks=[_task_draft("goal", ["invalid"])],
     )
     runtime = ScriptedAgentRuntime(
         [
@@ -282,11 +280,11 @@ async def test_semantic_response_defect_retries_once_without_leaking_question() 
     )
     service, _factory = _service(runtime)
 
-    plan = await service.plan(_input(question_sentinel))
+    plan = await service.plan(_input())
 
     assert plan.plan_type == "search"
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert question_sentinel not in (runtime.calls[1].input.repair_context or "")
+    assert runtime.calls[0].input is runtime.calls[1].input
 
 
 async def test_two_response_defects_propagate_second_error_and_record_not_created(
@@ -508,10 +506,7 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
         QUESTION_PLANNER_AGENT,
     ]
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert [call.input.repair_context for call in runtime.calls] == [
-        None,
-        str(first_error),
-    ]
+    assert runtime.calls[0].input is runtime.calls[1].input
 
 
 async def test_close_error_replaces_terminal_response_defect_without_metric(

@@ -25,7 +25,7 @@ from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     DirectAnswerPlan,
-    PlanningRequest,
+    PlanningInput,
     QuestionPlan,
 )
 from app.agent.running import (
@@ -82,16 +82,16 @@ class _FakePlanner:
         self._outcomes = outcomes
         self._events = events
         self._span_probe = span_probe
-        self.calls: list[PlanningRequest] = []
+        self.calls: list[PlanningInput] = []
 
-    async def plan(self, request: PlanningRequest) -> QuestionPlan:
+    async def plan(self, input: PlanningInput) -> QuestionPlan:
         if self._span_probe:
             with logfire.span("answering_runner_planner_probe"):
-                return self._plan(request)
-        return self._plan(request)
+                return self._plan(input)
+        return self._plan(input)
 
-    def _plan(self, request: PlanningRequest) -> QuestionPlan:
-        self.calls.append(request)
+    def _plan(self, input: PlanningInput) -> QuestionPlan:
+        self.calls.append(input)
         if self._events is not None:
             self._events.append("planner")
         outcome = self._outcomes[len(self.calls) - 1]

@@ -25,7 +25,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     DirectAnswerPlan,
-    PlanningRequest,
+    PlanningInput,
     QuestionPlan,
     ResearchTask,
     SearchPlan,
@@ -45,11 +45,11 @@ class _Planner:
     def __init__(self, plan: QuestionPlan, timeline: list[str]) -> None:
         self._plan = plan
         self._timeline = timeline
-        self.calls: list[PlanningRequest] = []
+        self.calls: list[PlanningInput] = []
 
-    async def plan(self, request: PlanningRequest) -> QuestionPlan:
+    async def plan(self, input: PlanningInput) -> QuestionPlan:
         self._timeline.append("planner")
-        self.calls.append(request)
+        self.calls.append(input)
         return self._plan
 
 

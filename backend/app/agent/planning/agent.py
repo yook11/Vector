@@ -4,20 +4,20 @@ from __future__ import annotations
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
 from app.agent.planning.ai.schema_tool import QUESTION_PLANNER_GEMINI_SCHEMA
-from app.agent.planning.contract import PlanningAttemptInput, QuestionPlanDraft
+from app.agent.planning.contract import PlanningInput, QuestionPlanDraft
 from app.agent.planning.prompts import (
     PLANNER_INSTRUCTIONS,
     PLANNER_PROMPT_VERSION,
     render_planning_input,
 )
 
-QUESTION_PLANNER_PROMPT = AgentPrompt[PlanningAttemptInput](
+QUESTION_PLANNER_PROMPT = AgentPrompt[PlanningInput](
     version=PLANNER_PROMPT_VERSION,
     instructions=PLANNER_INSTRUCTIONS,
     input_renderer=render_planning_input,
 )
 
-QUESTION_PLANNER_AGENT: Agent[PlanningAttemptInput, QuestionPlanDraft] = Agent(
+QUESTION_PLANNER_AGENT: Agent[PlanningInput, QuestionPlanDraft] = Agent(
     name="question_planner",
     prompt=QUESTION_PLANNER_PROMPT,
     model=ModelTarget(provider="gemini", name="gemini-2.5-flash-lite"),

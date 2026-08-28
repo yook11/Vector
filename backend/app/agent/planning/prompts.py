@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Final
 
-from app.agent.planning.contract import PlanningAttemptInput
+from app.agent.planning.contract import PlanningInput
 from app.agent.research_handoff.instructions import render_planning_instruction
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-PLANNER_PROMPT_VERSION: Final[str] = "v10"
+PLANNER_PROMPT_VERSION: Final[str] = "v11"
 
 PLANNER_INSTRUCTIONS: Final[str] = """\
 ユーザーの質問に答えるために必要な情報取得計画を作成してください。
@@ -80,35 +80,16 @@ question: {question}
 {history}
 """
 
-# ラベル "previous_error:" はmodel可視のprompt文字列であり、version維持のため据え置く。
-_PLANNER_REPAIR_INPUT_TEMPLATE: Final[str] = """\
 
-# Repair Context
-前回の計画は検証に失敗しました。
-同じ質問に対して、次のエラーを修正してください。
-
-<untrusted_input>
-previous_error: {repair_context}
-</untrusted_input>
-"""
-
-
-def render_planning_input(input: PlanningAttemptInput) -> str:
-    """Planner attempt inputをmodel-visibleなtask dataへ変換する。"""
-    request = input.request
+def render_planning_input(input: PlanningInput) -> str:
+    """Planner inputをmodel-visibleなtask dataへ変換する。"""
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
-    task_input = _PLANNER_INPUT_TEMPLATE.format(
-        question=sanitize_for_untrusted_block(request.question),
-        as_of=request.as_of.isoformat(),
-        history=_render_history(request.history),
-    )
-    task_input += render_planning_instruction(request.research_handoff)
-    if input.repair_context is None:
-        return task_input
-    return task_input + _PLANNER_REPAIR_INPUT_TEMPLATE.format(
-        repair_context=sanitize_for_untrusted_block(input.repair_context)
-    )
+    return _PLANNER_INPUT_TEMPLATE.format(
+        question=sanitize_for_untrusted_block(input.question),
+        as_of=input.as_of.isoformat(),
+        history=_render_history(input.history),
+    ) + render_planning_instruction(input.research_handoff)
 
 
 def _render_history(history: tuple[ThreadMessageSnapshot, ...]) -> str:

@@ -18,7 +18,7 @@ from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.planning.contract import PlanningRequest
+from app.agent.planning.contract import PlanningInput
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.runtime.contract import AgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
@@ -35,8 +35,8 @@ _PHASE_SPAN_NAME = "agent_phase"
 _PROVIDER_SPAN_NAME = "agent_provider_call"
 
 
-def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningRequest:
-    return PlanningRequest(
+def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningInput:
+    return PlanningInput(
         question=question,
         as_of=datetime(2026, 6, 29, tzinfo=UTC),
     )

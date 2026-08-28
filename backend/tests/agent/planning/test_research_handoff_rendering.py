@@ -1,4 +1,4 @@
-"""Research Handoff (planner v10) の renderer / instructions 契約。
+"""Research Handoff (planner v11) の renderer / instructions 契約。
 
 threadが積み上げた台帳と整理をPlannerへ渡すsectionのrender規則を検証する。
 """
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.agent.planning.contract import PlanningAttemptInput, PlanningRequest
+from app.agent.planning.contract import PlanningInput
 from app.agent.planning.prompts import PLANNER_INSTRUCTIONS, render_planning_input
 from app.agent.research_handoff import (
     ResearchHandoff,
@@ -18,8 +18,8 @@ from app.agent.research_handoff import (
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 
 
-def _request(handoff: ResearchHandoff | None = None) -> PlanningRequest:
-    return PlanningRequest(
+def _input(handoff: ResearchHandoff | None = None) -> PlanningInput:
+    return PlanningInput(
         question="NVIDIAの直近の発表は？",
         as_of=_AS_OF,
         research_handoff=handoff,
@@ -57,10 +57,8 @@ def _handoff(
     )
 
 
-def _rendered(handoff: ResearchHandoff | None, **attempt: str) -> str:
-    return render_planning_input(
-        PlanningAttemptInput(request=_request(handoff), **attempt)
-    )
+def _rendered(handoff: ResearchHandoff | None) -> str:
+    return render_planning_input(_input(handoff))
 
 
 def test_a_thread_without_a_handoff_renders_no_section() -> None:
@@ -71,13 +69,12 @@ def test_a_thread_without_a_handoff_renders_no_section() -> None:
     assert "<untrusted_prior_research>" not in rendered
 
 
-def test_handoff_section_appears_between_history_and_repair() -> None:
-    rendered = _rendered(_handoff(), repair_context="research_tasks is required")
+def test_handoff_section_appears_after_history() -> None:
+    rendered = _rendered(_handoff())
 
     history_index = rendered.index("# Prior Thread Messages")
     handoff_index = rendered.index("# Research Handoff")
-    repair_index = rendered.index("# Repair Context")
-    assert history_index < handoff_index < repair_index
+    assert history_index < handoff_index
 
 
 def test_run_records_keep_the_stored_order_without_resorting() -> None:

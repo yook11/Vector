@@ -32,7 +32,7 @@ from app.agent.evidence_collection.internal_search import (
 from app.agent.evidence_review import EvidenceReviewer, EvidenceRunCompleted
 from app.agent.planning.contract import (
     ExternalResearchTask,
-    PlanningRequest,
+    PlanningInput,
     ResearchTask,
     SearchPlan,
     TargetTimeWindow,
@@ -117,10 +117,10 @@ def _plan(
 class _Planner:
     def __init__(self, plan: Any) -> None:
         self.plan_result = plan
-        self.calls: list[PlanningRequest] = []
+        self.calls: list[PlanningInput] = []
 
-    async def plan(self, request: PlanningRequest) -> Any:
-        self.calls.append(request)
+    async def plan(self, input: PlanningInput) -> Any:
+        self.calls.append(input)
         return self.plan_result
 
 

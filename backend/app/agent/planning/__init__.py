@@ -2,7 +2,7 @@
 
 from app.agent.planning.contract import (
     DirectAnswerPlan,
-    PlanningRequest,
+    PlanningInput,
     PlanType,
     QuestionPlanDraft,
     QuestionPlanner,
@@ -14,7 +14,7 @@ __all__ = [
     "QuestionPlanDraft",
     "QuestionPlanningService",
     "QuestionPlanner",
-    "PlanningRequest",
+    "PlanningInput",
     "PlanType",
     "DirectAnswerPlan",
     "SearchPlan",

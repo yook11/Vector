@@ -53,7 +53,7 @@ from app.agent.evidence_collection.internal_search.service import (
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     DirectAnswerPlan,
-    PlanningRequest,
+    PlanningInput,
     ResearchTask,
     SearchPlan,
     TargetTimeWindow,
@@ -81,7 +81,7 @@ class _FixedSearchPlanner:
     def __init__(self, plan: SearchPlan) -> None:
         self._plan = plan
 
-    async def plan(self, request: PlanningRequest) -> SearchPlan:  # noqa: ARG002
+    async def plan(self, input: PlanningInput) -> SearchPlan:  # noqa: ARG002
         return self._plan
 
 
@@ -89,7 +89,7 @@ class _FixedDirectPlanner:
     def __init__(self, plan: DirectAnswerPlan) -> None:
         self._plan = plan
 
-    async def plan(self, request: PlanningRequest) -> DirectAnswerPlan:  # noqa: ARG002
+    async def plan(self, input: PlanningInput) -> DirectAnswerPlan:  # noqa: ARG002
         return self._plan
 
 
