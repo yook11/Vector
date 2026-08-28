@@ -36,7 +36,7 @@ from app.agent.evidence_review import EvidenceReviewer
 from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from app.agent.planning.contract import (
     DirectAnswerPlan,
-    PlanningRequest,
+    PlanningInput,
     QuestionPlan,
     ResearchTask,
     SearchPlan,
@@ -93,8 +93,8 @@ class _Planner:
     def __init__(self, plan: QuestionPlan) -> None:
         self._plan = plan
 
-    async def plan(self, request: PlanningRequest) -> QuestionPlan:
-        del request
+    async def plan(self, input: PlanningInput) -> QuestionPlan:
+        del input
         return self._plan
 
 

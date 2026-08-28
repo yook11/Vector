@@ -46,7 +46,7 @@ from app.agent.evidence_review.deepseek_binding import (
 )
 from app.agent.planning.contract import (
     DirectAnswerPlan,
-    PlanningRequest,
+    PlanningInput,
     ResearchTask,
     SearchPlan,
     TargetTimeWindow,
@@ -123,8 +123,8 @@ def _reviewer_response(*, option_indexes: list[int] | None = None) -> object:
 
 
 class _Planner:
-    async def plan(self, request: PlanningRequest) -> Any:
-        del request
+    async def plan(self, input: PlanningInput) -> Any:
+        del input
         return SearchPlan(
             research_tasks=[
                 ResearchTask(
@@ -481,8 +481,8 @@ class _SelectiveEvidenceAnswerer:
 
 
 class _DirectPlanner:
-    async def plan(self, request: PlanningRequest) -> Any:
-        del request
+    async def plan(self, input: PlanningInput) -> Any:
+        del input
         return DirectAnswerPlan()
 
 
@@ -537,8 +537,8 @@ class _TwoTaskPlanner:
     def __init__(self, plan: SearchPlan) -> None:
         self._plan = plan
 
-    async def plan(self, request: PlanningRequest) -> Any:
-        del request
+    async def plan(self, input: PlanningInput) -> Any:
+        del input
         return self._plan
 
 

@@ -48,7 +48,7 @@ from app.agent.evidence_review import (
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
-    PlanningRequest,
+    PlanningInput,
     QuestionPlan,
     ResearchTask,
     SearchPlan,
@@ -165,8 +165,8 @@ class _Planner:
         self._plan = plan
         self._error = error
 
-    async def plan(self, request: PlanningRequest) -> QuestionPlan:
-        del request
+    async def plan(self, input: PlanningInput) -> QuestionPlan:
+        del input
         if self._error is not None:
             raise self._error
         return self._plan

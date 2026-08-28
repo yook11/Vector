@@ -19,7 +19,6 @@ from app.agent.contract import (
     MAX_ARTICLE_SEARCH_QUERIES,
     RESEARCH_GOAL_MAX_CHARS,
     RESEARCH_TASK_LIMIT,
-    NonBlankText,
     PlanType,
 )
 from app.agent.research_handoff.handoff import ResearchHandoff
@@ -31,8 +30,7 @@ __all__ = [
     "DirectAnswerPlan",
     "MAX_ARTICLE_SEARCH_QUERIES",
     "PlanQuery",
-    "PlanningAttemptInput",
-    "PlanningRequest",
+    "PlanningInput",
     "QuestionPlan",
     "QuestionPlanDraft",
     "QuestionPlanner",
@@ -160,26 +158,16 @@ def render_target_time_window(target_time_window: TargetTimeWindow) -> str:
     assert_never(target_time_window.kind)
 
 
-class PlanningRequest(BaseModel):
-    """Plannerへ渡す質問と会話履歴、実行時点。"""
+@dataclass(frozen=True, slots=True)
+class PlanningInput:
+    """この工程が受け取り、Agent に渡す入力。"""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    question: NonBlankText
+    question: str
+    as_of: datetime
     # 現在の質問より前のthreadメッセージ(古い順)。
     history: tuple[ThreadMessageSnapshot, ...] = ()
-    as_of: datetime
     # 同threadの調査の申し送り。読出し・検証失敗時はNone。
     research_handoff: ResearchHandoff | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PlanningAttemptInput:
-    """Plannerの1 attemptに渡す実行時input。"""
-
-    request: PlanningRequest
-    # 前attemptが失敗した場合のみ、どこで何が失敗したかが入る(初回attemptはNone)。
-    repair_context: str | None = None
 
 
 class ResearchTaskDraft(BaseModel):
@@ -277,7 +265,7 @@ QuestionPlan = DirectAnswerPlan | SearchPlan
 class QuestionPlanner(Protocol):
     """Planner boundary that returns a completed ``QuestionPlan``."""
 
-    async def plan(self, request: PlanningRequest) -> QuestionPlan: ...
+    async def plan(self, input: PlanningInput) -> QuestionPlan: ...
 
 
 def plan_from_draft(

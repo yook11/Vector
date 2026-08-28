@@ -148,8 +148,8 @@ class Planner:
     def __init__(self, plan: SearchPlan) -> None:
         self._plan = plan
 
-    async def plan(self, request: object) -> SearchPlan:
-        del request
+    async def plan(self, input: object) -> SearchPlan:
+        del input
         return self._plan
 
 

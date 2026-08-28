@@ -37,7 +37,7 @@ from app.agent.evidence_review import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.planning.contract import DirectAnswerPlan, PlanningRequest, SearchPlan
+from app.agent.planning.contract import DirectAnswerPlan, PlanningInput, SearchPlan
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.running.contract import (
@@ -79,7 +79,7 @@ class AnsweringRunner:
             phases = self._phases_factory()
 
             await self._report_progress("planning")
-            planning_request = PlanningRequest(
+            planning_input = PlanningInput(
                 question=input.question,
                 history=input.history,
                 as_of=identity.as_of,
@@ -90,7 +90,7 @@ class AnsweringRunner:
                 history=input.history,
                 as_of=identity.as_of,
             )
-            plan = await phases.planner.plan(planning_request)
+            plan = await phases.planner.plan(planning_input)
             research_handoff: ResearchHandoff | None
             match plan:
                 case DirectAnswerPlan():

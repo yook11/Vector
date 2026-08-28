@@ -42,7 +42,7 @@ from app.agent.evidence_review import (
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     ExternalResearchTask,
-    PlanningRequest,
+    PlanningInput,
     QuestionPlan,
     ResearchTask,
     SearchPlan,
@@ -264,12 +264,12 @@ class FakePlanner:
     ) -> None:
         self._plan = plan
         self._timeline = timeline
-        self.calls: list[PlanningRequest] = []
+        self.calls: list[PlanningInput] = []
 
-    async def plan(self, request: PlanningRequest) -> QuestionPlan:
+    async def plan(self, input: PlanningInput) -> QuestionPlan:
         if self._timeline is not None:
             self._timeline.record("planner.plan")
-        self.calls.append(request)
+        self.calls.append(input)
         if isinstance(self._plan, Exception):
             raise self._plan
         return self._plan
@@ -1059,7 +1059,7 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     await orchestrator.answer(input_)
 
     assert planner.calls == [
-        PlanningRequest(question=input_.question, as_of=input_.as_of)
+        PlanningInput(question=input_.question, as_of=input_.as_of)
     ]
     assert internal_search.calls == [InternalSearchQueries(queries=("NVIDIA AI GPU",))]
     assert evidence_answerer.calls[0].request == AnsweringRequest(
