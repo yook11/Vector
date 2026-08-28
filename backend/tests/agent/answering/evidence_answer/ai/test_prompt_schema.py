@@ -70,7 +70,6 @@ def _render(
     request: AnsweringRequest | None = None,
     evidence: tuple[AnswerInputEvidence, ...] = (),
     target_time_window: TargetTimeWindow | None = None,
-    repair_context: str | None = None,
     review_missing: tuple[str, ...] | None = None,
 ) -> str:
     input_kwargs: dict[str, object] = {
@@ -78,7 +77,6 @@ def _render(
         "evidence": evidence,
         "target_time_window": target_time_window,
         "review_missing": () if review_missing is None else review_missing,
-        "repair_context": repair_context,
     }
     input = EvidenceAnswerInput(**input_kwargs)
     return render_evidence_answer_input(input)
@@ -96,7 +94,6 @@ def test_renderer_sanitizes_all_untrusted_boundaries() -> None:
         ),
         evidence=(_evidence(),),
         target_time_window=TargetTimeWindow(kind="today"),
-        repair_context=attack,
     )
 
     assert "[/untrusted_input]" in rendered
@@ -148,13 +145,11 @@ def test_renderer_displays_typed_window_and_none_with_the_shared_prompt_value() 
     ) == (True, True)
 
 
-def test_no_evidence_and_repair_paths_remain_model_visible_input() -> None:
-    rendered = _render(repair_context="unknown citation ref: 9")
+def test_no_evidence_path_remains_model_visible_input() -> None:
+    rendered = _render()
 
     assert "引用できる evidence は 0 件です" in rendered
     assert "citation marker を書かない" in rendered
-    assert "前回の出力は回答合成後の検証に失敗しました" in rendered
-    assert "unknown citation ref: 9" in rendered
     assert "JSON object" not in rendered
 
 
@@ -206,7 +201,6 @@ def _input_with_truncation_notice(
         evidence=(),
         target_time_window=None,
         review_missing=(),
-        repair_context=None,
         previous_output_truncated=previous_output_truncated,
     )
 

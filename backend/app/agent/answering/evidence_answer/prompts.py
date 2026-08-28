@@ -11,7 +11,7 @@ from app.agent.planning.contract import render_target_time_window
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v9"
+EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v10"
 
 EVIDENCE_ANSWER_INSTRUCTIONS: Final[str] = """\
 ユーザーの質問に、与えられたevidenceを根拠として日本語で回答してください。
@@ -64,17 +64,6 @@ target_time_window: {target_time_window}
 {evidence}
 """
 
-EVIDENCE_ANSWER_REPAIR_TEMPLATE: Final[str] = """
-
-# Repair Context
-前回の出力は回答合成後の検証に失敗しました。
-同じ質問と evidence に対して、次のエラーを修正してください。
-
-<untrusted_input>
-{repair_context}
-</untrusted_input>
-"""
-
 # runtimeが観測した機械的事実であり、model出力由来ではないためtrusted (sanitize不要)。
 _TRUNCATION_REPAIR_BLOCK: Final[str] = """
 
@@ -120,10 +109,6 @@ def render_evidence_answer_input(input: EvidenceAnswerInput) -> str:
         )
     if input.previous_output_truncated:
         rendered += _TRUNCATION_REPAIR_BLOCK
-    if input.repair_context is not None:
-        rendered += EVIDENCE_ANSWER_REPAIR_TEMPLATE.format(
-            repair_context=sanitize_for_untrusted_block(input.repair_context)
-        )
     return rendered
 
 

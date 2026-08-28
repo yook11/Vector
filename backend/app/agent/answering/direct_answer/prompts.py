@@ -9,7 +9,7 @@ from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-DIRECT_ANSWER_PROMPT_VERSION: Final[str] = "v5"
+DIRECT_ANSWER_PROMPT_VERSION: Final[str] = "v6"
 
 DIRECT_ANSWER_INSTRUCTIONS: Final[str] = """\
 ユーザーの質問に、検索を行わず日本語で回答してください。
@@ -51,20 +51,7 @@ as_of: {as_of}
 </untrusted_input>
 """
 
-DIRECT_ANSWER_REPAIR_TEMPLATE: Final[str] = """
-
-# Repair Context
-前回の direct 回答は空でした。
-同じ質問に対して、空でない日本語の回答本文だけを返してください。
-
-<untrusted_input>
-{repair_context}
-</untrusted_input>
-"""
-
 # runtimeが観測した機械的事実であり、model出力由来ではないためtrusted (sanitize不要)。
-# 空回答用のDIRECT_ANSWER_REPAIR_TEMPLATEとは排他 (打ち切りは空回答ではないため、
-# 「前回の direct 回答は空でした」という事実と異なる記述を出さない)。
 _TRUNCATION_REPAIR_BLOCK: Final[str] = """
 
 # Output Length
@@ -85,11 +72,7 @@ def render_direct_answer_input(input: DirectAnswerInput) -> str:
     )
     if input.previous_output_truncated:
         return rendered + _TRUNCATION_REPAIR_BLOCK
-    if input.repair_context is None:
-        return rendered
-    return rendered + DIRECT_ANSWER_REPAIR_TEMPLATE.format(
-        repair_context=sanitize_for_untrusted_block(input.repair_context)
-    )
+    return rendered
 
 
 def _render_history(history: tuple[ThreadMessageSnapshot, ...]) -> str:

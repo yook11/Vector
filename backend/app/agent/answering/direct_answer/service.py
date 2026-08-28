@@ -72,19 +72,14 @@ class DirectAnswerService:
     async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
         """Return a valid direct draft, retrying only blank response defects."""
 
-        current = input
-        completed_draft: DirectAnswerDraft | None = None
-        attempt_count = 0
-
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             try:
                 async with self._runtime_scope_factory() as runtime:
                     for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                        attempt_count = attempt_number
                         try:
-                            completed_draft = await self._generate_draft(
+                            draft = await self._generate_draft(
                                 runtime=runtime,
-                                input=current,
+                                input=input,
                                 attempt_number=attempt_number,
                             )
                         except _DIRECT_ANSWER_SOURCE_ERRORS as cause:
@@ -95,32 +90,28 @@ class DirectAnswerService:
                                 and attempt_number < _MAX_ATTEMPTS
                             )
                             if retriable:
-                                current = replace(
-                                    input,
-                                    repair_context=str(cause),
-                                    previous_output_truncated=isinstance(
-                                        cause, AIProviderOutputTruncatedError
-                                    ),
-                                )
+                                if isinstance(cause, AIProviderOutputTruncatedError):
+                                    input = replace(
+                                        input, previous_output_truncated=True
+                                    )
                                 continue
                             raise DirectAnswerError(code=failure.code) from cause
                         break
+                    else:
+                        raise AssertionError(
+                            "unreachable: answer loop must return or raise"
+                        )
             except DirectAnswerError as error:
                 recording.set_outcome(
                     DirectAnswerFailed(
                         failure_code=error.code,
-                        attempt_count=attempt_count,
+                        attempt_count=attempt_number,
                     )
                 )
                 raise
 
-            if completed_draft is not None:
-                recording.set_outcome(
-                    DirectAnswerSucceeded(attempt_count=attempt_count)
-                )
-                return completed_draft
-
-            raise AssertionError("unreachable: answer loop must return or raise")
+            recording.set_outcome(DirectAnswerSucceeded(attempt_count=attempt_number))
+            return draft
 
     async def _generate_draft(
         self,
