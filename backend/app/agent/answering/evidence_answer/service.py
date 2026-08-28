@@ -86,59 +86,62 @@ class EvidenceAnswerService:
         Retries classified response-boundary failures within the attempt budget.
         """
 
-        current = input
-        completed_outcome: EvidenceAnswerOutcome | None = None
-        attempt_count = 0
-
         async with self._recorder.record(agent_name=self._agent.name) as recording:
-            async with self._runtime_scope_factory() as runtime:
-                for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                    attempt_count = attempt_number
-                    try:
-                        completed_outcome = await self._generate_strict_draft(
-                            runtime=runtime,
-                            input=current,
-                            attempt_number=attempt_number,
-                        )
-                    except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
-                        failure = classify_answer_synthesis_failure(exc)
-                        retriable = (
-                            failure.request_retry_disposition
-                            is RequestRetryDisposition.RETRY_IN_REQUEST
-                            and attempt_number < _MAX_ATTEMPTS
-                        )
-                        if not retriable:
-                            completed_outcome = await self._fallback(
-                                generation=attempt_number + 1,
-                                failure=failure,
-                            )
-                            break
-                        await self._start_revision(generation=attempt_number + 1)
-                        current = replace(
-                            input,
-                            repair_context=str(exc),
-                            previous_output_truncated=isinstance(
-                                exc, AIProviderOutputTruncatedError
-                            ),
-                        )
-                        continue
-                    break
-
-            if isinstance(completed_outcome, EvidenceAnswerDraft):
+            outcome, attempt_count = await self._settle_outcome(input)
+            if isinstance(outcome, EvidenceAnswerDraft):
                 recording.set_outcome(
                     EvidenceAnswerSucceeded(attempt_count=attempt_count)
                 )
-                return completed_outcome
-            if isinstance(completed_outcome, EvidenceAnswerUnavailable):
+            else:
                 recording.set_outcome(
                     EvidenceAnswerFailed(
-                        failure_code=completed_outcome.failure_code,
+                        failure_code=outcome.failure_code,
                         attempt_count=attempt_count,
                     )
                 )
-                return completed_outcome
+            return outcome
 
-            raise AssertionError("unreachable: answer loop must return or raise")
+    async def _settle_outcome(
+        self, input: EvidenceAnswerInput
+    ) -> tuple[EvidenceAnswerOutcome, int]:
+        """Return the settled outcome with the attempt count it consumed."""
+
+        attempt_input = input
+
+        async with self._runtime_scope_factory() as runtime:
+            for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                try:
+                    draft = await self._generate_strict_draft(
+                        runtime=runtime,
+                        input=attempt_input,
+                        attempt_number=attempt_number,
+                    )
+                except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
+                    failure = classify_answer_synthesis_failure(exc)
+                    retriable = (
+                        failure.request_retry_disposition
+                        is RequestRetryDisposition.RETRY_IN_REQUEST
+                        and attempt_number < _MAX_ATTEMPTS
+                    )
+                    if not retriable:
+                        unavailable = await self._fallback(
+                            generation=attempt_number + 1,
+                            failure=failure,
+                        )
+                        return unavailable, attempt_number
+                    await self._start_revision(generation=attempt_number + 1)
+                    attempt_input = replace(
+                        input,
+                        repair_context=str(exc),
+                        previous_output_truncated=isinstance(
+                            exc, AIProviderOutputTruncatedError
+                        ),
+                    )
+                    continue
+                return draft, attempt_number
+
+        # range()を試行回数の構造的上限として残すため、到達しない終端をここで閉じる。
+        raise AssertionError("unreachable: attempt budget must settle an outcome")
 
     async def _generate_strict_draft(
         self,
