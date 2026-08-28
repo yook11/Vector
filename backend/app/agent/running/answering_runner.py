@@ -333,7 +333,7 @@ def _record_evidence_run_span_attributes(
     )
     span.set_attribute("research_task_count", len(collected_news.tasks))
     if isinstance(evidence_run, EvidenceRunFailed):
-        span.set_attribute("review_failure_reason", evidence_run.failure_reason)
+        span.set_attribute("review_failure_code", evidence_run.failure_code)
 
 
 def _record_citation_span_attributes(

@@ -128,16 +128,16 @@ def _outcome(
     *,
     task_reports: list[ResearchTaskReport],
     review_missing: list[str] | None = None,
-    failure_reason: str | None = None,
+    failure_code: str | None = None,
 ) -> _AssemblyInput:
     evidence_run: EvidenceRunResult
-    if failure_reason is None:
+    if failure_code is None:
         evidence_run = EvidenceRunCompleted(
             answer_evidence=AnswerEvidence(),
             review_missing=tuple(review_missing or []),
         )
     else:
-        evidence_run = EvidenceRunFailed(failure_reason=failure_reason)
+        evidence_run = EvidenceRunFailed(failure_code=failure_code)
     return _AssemblyInput(
         collected_news=_collected_news(task_reports=task_reports),
         evidence_run=evidence_run,
@@ -376,7 +376,7 @@ def test_failed_evidence_run_adds_incomplete_missing_without_leaking_reason() ->
                 internal_hit_count=1,
             )
         ],
-        failure_reason="response_not_json",
+        failure_code="response_not_json",
     )
 
     result = _assemble(

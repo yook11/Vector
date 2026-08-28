@@ -36,7 +36,8 @@
 ### Evidence
 
 - `EvidenceReviewer.review()`は全taskの候補をまとめた`EvidenceReviewPreparation`を受け取り、
-  `EvidenceReviewOutcome`(`answer_evidence` / `missing` / `failure_reason`)を返す。
+  `EvidenceRunResult`(`EvidenceRunCompleted`または`EvidenceRunFailed`)を返す。成功は
+  `answer_evidence` / `review_missing`、失敗は`failure_code`を持つ。
 - `AnsweringRunner._fan_out_tasks()`はtask並列でcollect+reviewを回し、全taskの結果を合流させてから
   内部根拠を`curation_id`、外部根拠をURLで先勝ち重複排除する。重複排除は精査より後にある。
 - `build_review_candidate_projection()`は内部候補を先(index 0..n-1)、外部候補を後(n..)に置いた
@@ -51,7 +52,8 @@
 - 確定根拠は見せた候補の`option_index`を持つ。citation用の`source_ref`文字列は
   `build_answer_input_evidence()`が連番で振る。
 - `EVIDENCE_REVIEWER_AGENT`は`deepseek-v4-flash`、`max_output_tokens=2048`。timeout 30秒、
-  最大2 attempt。失敗したtaskは根拠ゼロで終わり、`failure_reason`がtask reportへ残る。
+  最大2 attempt。2回とも分類済み失敗ならRunは根拠ゼロで終わり、`EvidenceRunFailed`へ
+  `failure_code`が残る。
   候補が内外ともゼロのtaskはLLMを呼ばず`review="skipped_empty"`となる。
 - 1 Runの候補数上限は、task 3件 × (内部5件 + 外部20件) = 75件。内部は`InternalSearchTool`が
   task内で`curation_id`集約するためtask内重複はないが、task間では同じ記事が現れうる。
@@ -151,7 +153,7 @@
 - 精査失敗専用の文言を追加しない。根拠ゼロは既存の`_RETRIEVAL_EMPTY_MISSING`
   (「回答に使える根拠を取得できませんでした」)が`include_retrieval_empty_missing`経由で表明し、
   `status`は`insufficient`になる。文言が収集の失敗にも読める点は受け入れる。どの工程で落ちたかは
-  運用者の関心であり、`failure_reason`とspanで観測する。
+  運用者の関心であり、`failure_code`とspan属性`review_failure_code`で観測する。
 - `status`(`answered` / `insufficient`)は`missing_aspects`から導出される既存規則をそのまま使う。
   個別に設定しない。
 

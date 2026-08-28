@@ -179,7 +179,7 @@ def test_a_failed_review_does_not_assemble_an_input() -> None:
 
     result = _from_run(
         collected_news=collected,
-        evidence_run=EvidenceRunFailed(failure_reason="reviewer_failed"),
+        evidence_run=EvidenceRunFailed(failure_code="reviewer_failed"),
     )
 
     assert result is None

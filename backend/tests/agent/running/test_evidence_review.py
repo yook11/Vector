@@ -944,13 +944,13 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
     assert (
         report.external_collection,
         isinstance(evidence_run, EvidenceRunFailed),
-        evidence_run.failure_reason,
+        evidence_run.failure_code,
         answerer.calls,
     ) == ("succeeded", True, "response_not_json", [[]])
 
 
 @pytest.mark.asyncio
-async def test_failed_evidence_run_keeps_failure_reason_out_of_answerer_and_in_span(
+async def test_failed_evidence_run_keeps_failure_code_out_of_answerer_and_in_span(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -975,8 +975,8 @@ async def test_failed_evidence_run_keeps_failure_reason_out_of_answerer_and_in_s
     assert isinstance(evidence_run, EvidenceRunFailed)
     assert (
         answerer.review_missing_calls,
-        span["attributes"]["review_failure_reason"],
-        evidence_run.failure_reason,
+        span["attributes"]["review_failure_code"],
+        evidence_run.failure_code,
     ) == ([()], "response_not_json", "response_not_json")
 
 
