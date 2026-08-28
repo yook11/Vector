@@ -24,6 +24,11 @@ from app.agent.evidence_review.answer_evidence import (
 from app.agent.evidence_review.preparation import EvidenceReviewInput
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.selection import EvidenceReviewerDraft
+from app.agent.recording.evidence_review import (
+    EvidenceReviewFailed,
+    EvidenceReviewOutcome,
+    EvidenceReviewSucceeded,
+)
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
@@ -75,17 +80,14 @@ async def _review(
 def _assert_recorded(
     recorder: RecordingEvidenceReviewRecorder,
     *,
-    outcome: str | None,
-    stopped: bool = False,
-    retry_used: bool = False,
+    outcome: EvidenceReviewOutcome | None,
+    error: BaseException | None = None,
 ) -> None:
-    assert len(recorder.starts) == 1
-    assert len(recorder.ends) == 1
-    recorded = recorder.ends[0]
-    assert recorded.call is recorder.starts[0]
-    assert recorded.outcome == outcome
-    assert recorded.stopped is stopped
-    assert recorded.retry_used is retry_used
+    assert len(recorder.records) == 1
+    recorded = recorder.records[0]
+    assert recorded.agent_name == EVIDENCE_REVIEWER_AGENT.name
+    assert recorded.outcomes == ([] if outcome is None else [outcome])
+    assert recorded.error is error
 
 
 def _internal_task() -> Any:
@@ -338,6 +340,7 @@ async def test_review_returns_last_failure_code_after_two_exhausted_attempts(
 
 @pytest.mark.asyncio
 async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> None:
+    recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime(
         [
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
@@ -345,11 +348,22 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
         ]
     )
 
-    result = await _review(tasks=[_internal_task()], reviewer_runtime=runtime)
+    result = await _review(
+        tasks=[_internal_task()],
+        reviewer_runtime=runtime,
+        recorder=recorder,
+    )
 
     assert isinstance(result, EvidenceRunFailed)
     assert result.failure_code == "ai_error_network"
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    _assert_recorded(
+        recorder,
+        outcome=EvidenceReviewFailed(
+            failure_code="ai_error_network",
+            attempt_count=2,
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -518,8 +532,8 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
 
 
 @pytest.mark.asyncio
-async def test_successful_review_records_completed_outcome() -> None:
-    """完成結果は recorder へ completed を1回渡す。"""
+async def test_successful_review_records_succeeded_outcome() -> None:
+    """初回の完成結果はattempt_count=1の成功結論を1回渡す。"""
 
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
@@ -531,12 +545,12 @@ async def test_successful_review_records_completed_outcome() -> None:
     )
 
     assert isinstance(result, EvidenceRunCompleted)
-    _assert_recorded(recorder, outcome="completed")
+    _assert_recorded(recorder, outcome=EvidenceReviewSucceeded(attempt_count=1))
 
 
 @pytest.mark.asyncio
-async def test_classified_failure_records_failed_outcome() -> None:
-    """分類済み失敗は recorder へ failed を1回渡す。"""
+async def test_classified_failure_records_failure_code_and_attempt_count() -> None:
+    """retry枯渇は最後のfailure codeと実行回数を1回渡す。"""
 
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime(
@@ -553,12 +567,18 @@ async def test_classified_failure_records_failed_outcome() -> None:
     )
 
     assert isinstance(result, EvidenceRunFailed)
-    _assert_recorded(recorder, outcome="failed", retry_used=True)
+    _assert_recorded(
+        recorder,
+        outcome=EvidenceReviewFailed(
+            failure_code="ai_error_network",
+            attempt_count=2,
+        ),
+    )
 
 
 @pytest.mark.asyncio
-async def test_retry_success_records_completed_with_retry_used() -> None:
-    """retry 成功は recorder へ completed と retry_used を渡す。"""
+async def test_retry_success_records_succeeded_with_attempt_count() -> None:
+    """retry成功はattempt_count=2の成功結論を渡す。"""
 
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime(
@@ -575,7 +595,7 @@ async def test_retry_success_records_completed_with_retry_used() -> None:
     )
 
     assert isinstance(result, EvidenceRunCompleted)
-    _assert_recorded(recorder, outcome="completed", retry_used=True)
+    _assert_recorded(recorder, outcome=EvidenceReviewSucceeded(attempt_count=2))
 
 
 @pytest.mark.asyncio
@@ -591,7 +611,7 @@ async def test_retry_success_records_completed_with_retry_used() -> None:
 async def test_unclassified_failure_and_cancellation_record_without_outcome(
     error: BaseException,
 ) -> None:
-    """未分類と cancel は結論を渡さず、cancel だけ stopped にする。"""
+    """未分類と停止は結論を渡さず、元の例外をrecordingへ残す。"""
 
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime([error])
@@ -604,44 +624,50 @@ async def test_unclassified_failure_and_cancellation_record_without_outcome(
         )
 
     assert raised.value is error
-    _assert_recorded(
-        recorder,
-        outcome=None,
-        stopped=isinstance(error, (asyncio.CancelledError, GeneratorExit)),
-    )
+    _assert_recorded(recorder, outcome=None, error=error)
 
 
 @pytest.mark.asyncio
 async def test_review_propagates_runtime_scope_start_failure_unchanged() -> None:
     error = RuntimeError("scope start failed")
+    recorder = RecordingEvidenceReviewRecorder()
 
     @asynccontextmanager
     async def failing_scope() -> AsyncIterator[ScriptedAgentRuntime]:
         raise error
         yield ScriptedAgentRuntime([])
 
-    reviewer = EvidenceReviewer(runtime_scope_factory=failing_scope)
+    reviewer = EvidenceReviewer(
+        runtime_scope_factory=failing_scope,
+        recorder=recorder,
+    )
 
     with pytest.raises(RuntimeError) as raised:
         await reviewer.review(tasks=[_internal_task()], as_of=AS_OF)
 
     assert raised.value is error
+    _assert_recorded(recorder, outcome=None, error=error)
 
 
 @pytest.mark.asyncio
 async def test_review_propagates_runtime_scope_exit_failure_unchanged() -> None:
     error = RuntimeError("scope exit failed")
     runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
+    recorder = RecordingEvidenceReviewRecorder()
 
     @asynccontextmanager
     async def failing_scope() -> AsyncIterator[ScriptedAgentRuntime]:
         yield runtime
         raise error
 
-    reviewer = EvidenceReviewer(runtime_scope_factory=failing_scope)
+    reviewer = EvidenceReviewer(
+        runtime_scope_factory=failing_scope,
+        recorder=recorder,
+    )
 
     with pytest.raises(RuntimeError) as raised:
         await reviewer.review(tasks=[_internal_task()], as_of=AS_OF)
 
     assert raised.value is error
     assert [call.attempt_number for call in runtime.calls] == [1]
+    _assert_recorded(recorder, outcome=None, error=error)

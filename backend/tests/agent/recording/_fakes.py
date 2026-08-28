@@ -12,16 +12,16 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailurePhase,
     InternalSearchOutcome,
 )
-from app.agent.evidence_review.metrics import EvidenceReviewOutcome
 from app.agent.recording.direct_answer import DirectAnswerOutcome
 from app.agent.recording.evidence_answer import EvidenceAnswerRecordingOutcome
+from app.agent.recording.evidence_review import EvidenceReviewOutcome
 from app.agent.recording.planning import PlanningOutcome
 from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
 __all__ = [
     "RecordedDirectAnswer",
     "RecordedEvidenceAnswer",
-    "RecordedEvidenceReviewEnd",
+    "RecordedEvidenceReview",
     "RecordedExternalSearchEnd",
     "RecordedInternalSearchEnd",
     "RecordedLlmCallEnd",
@@ -261,37 +261,37 @@ class RecordingEvidenceAnswerRecorder:
             raise
 
 
-@dataclass(frozen=True, slots=True)
-class RecordedEvidenceReviewEnd:
-    call: PhaseCall
-    outcome: EvidenceReviewOutcome | None
-    retry_used: bool
-    stopped: bool
+@dataclass(slots=True)
+class RecordedEvidenceReview:
+    agent_name: str
+    outcomes: list[EvidenceReviewOutcome] = field(default_factory=list)
+    error: BaseException | None = None
+
+    def set_outcome(self, outcome: EvidenceReviewOutcome) -> None:
+        self.outcomes.append(outcome)
 
 
 @dataclass(slots=True)
 class RecordingEvidenceReviewRecorder:
-    starts: list[PhaseCall] = field(default_factory=list)
-    ends: list[RecordedEvidenceReviewEnd] = field(default_factory=list)
+    records: list[RecordedEvidenceReview] = field(default_factory=list)
 
-    async def start(self) -> PhaseCall:
-        call = PhaseCall(started_at=perf_counter())
-        self.starts.append(call)
-        return call
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: EvidenceReviewOutcome | None = None,
-        retry_used: bool = False,
-        stopped: bool = False,
-    ) -> None:
-        self.ends.append(
-            RecordedEvidenceReviewEnd(
-                call=call,
-                outcome=outcome,
-                retry_used=retry_used,
-                stopped=stopped,
-            )
-        )
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[RecordedEvidenceReview]:
+        return self._record(agent_name=agent_name)
+
+    @asynccontextmanager
+    async def _record(
+        self,
+        *,
+        agent_name: str,
+    ) -> AsyncIterator[RecordedEvidenceReview]:
+        recording = RecordedEvidenceReview(agent_name=agent_name)
+        self.records.append(recording)
+        try:
+            yield recording
+        except BaseException as error:
+            recording.error = error
+            raise

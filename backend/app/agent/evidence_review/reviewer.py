@@ -25,15 +25,15 @@ from app.agent.evidence_review.failure import (
     EvidenceReviewError,
     evidence_review_error_from,
 )
-from app.agent.evidence_review.metrics import EvidenceReviewOutcome
 from app.agent.evidence_review.preparation import (
     EvidenceReviewInput,
     EvidenceReviewPreparation,
 )
 from app.agent.evidence_review.selection import EvidenceReviewerResponse
-from app.agent.phase_span import agent_phase
 from app.agent.recording.evidence_review import (
+    EvidenceReviewFailed,
     EvidenceReviewRecorder,
+    EvidenceReviewSucceeded,
     logfire_evidence_review_recorder,
 )
 from app.agent.runtime.contract import (
@@ -71,62 +71,58 @@ class EvidenceReviewer:
         tasks: list[CollectedTask],
         as_of: datetime,
     ) -> EvidenceRunResult:
-        retry_used = False
-        outcome: EvidenceReviewOutcome | None = None
-        stopped = False
-        call = await self.recorder.start()
-        try:
+        attempt_count = 0
+        async with self.recorder.record(
+            agent_name=EVIDENCE_REVIEWER_AGENT.name
+        ) as recording:
             preparation = EvidenceReviewPreparation.from_tasks(tasks)
             review_input = EvidenceReviewInput(
                 task_groups=preparation.task_groups,
                 as_of=as_of,
             )
             last_error: EvidenceReviewError | None = None
+            completed_result: EvidenceRunCompleted | None = None
             async with self.runtime_scope_factory() as reviewer_runtime:
-                with agent_phase(
-                    phase="evidence_review",
-                    agent_name=EVIDENCE_REVIEWER_AGENT.name,
-                ):
-                    for attempt_number in range(1, _MAX_REVIEW_ATTEMPTS + 1):
-                        try:
-                            reviewer_response = await _review_attempt(
-                                reviewer_runtime=reviewer_runtime,
-                                review_input=review_input,
-                                attempt_number=attempt_number,
-                            )
-                        except EvidenceReviewError as error:
-                            last_error = error
-                            continue
+                for attempt_number in range(1, _MAX_REVIEW_ATTEMPTS + 1):
+                    attempt_count = attempt_number
+                    try:
+                        reviewer_response = await _review_attempt(
+                            reviewer_runtime=reviewer_runtime,
+                            review_input=review_input,
+                            attempt_number=attempt_number,
+                        )
+                    except EvidenceReviewError as error:
+                        last_error = error
+                        continue
 
-                        answer_evidence = AnswerEvidence.from_reviewer_response(
-                            preparation=preparation,
-                            reviewer_response=reviewer_response,
-                        )
-                        retry_used = attempt_number > 1
-                        outcome = "completed"
-                        return EvidenceRunCompleted(
-                            answer_evidence=answer_evidence,
-                            review_missing=reviewer_response.missing,
-                        )
+                    answer_evidence = AnswerEvidence.from_reviewer_response(
+                        preparation=preparation,
+                        reviewer_response=reviewer_response,
+                    )
+                    completed_result = EvidenceRunCompleted(
+                        answer_evidence=answer_evidence,
+                        review_missing=reviewer_response.missing,
+                    )
+                    break
+
+            if completed_result is not None:
+                recording.set_outcome(
+                    EvidenceReviewSucceeded(attempt_count=attempt_count)
+                )
+                return completed_result
             if last_error is None:
                 # attemptは必ず1回以上回り各経路が理由を書くため、ここに来たら分類漏れ。
                 raise RuntimeError(
                     "review exhausted attempts without a classified error"
                 )
-            retry_used = True
-            outcome = "failed"
-            return EvidenceRunFailed(failure_code=last_error.code)
-        except (asyncio.CancelledError, GeneratorExit):
-            stopped = True
-            outcome = None
-            raise
-        finally:
-            await self.recorder.end(
-                call,
-                outcome=outcome,
-                retry_used=retry_used,
-                stopped=stopped,
+            failed_result = EvidenceRunFailed(failure_code=last_error.code)
+            recording.set_outcome(
+                EvidenceReviewFailed(
+                    failure_code=failed_result.failure_code,
+                    attempt_count=attempt_count,
+                )
             )
+            return failed_result
 
 
 async def _review_attempt(

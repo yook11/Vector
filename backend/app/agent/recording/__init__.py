@@ -19,7 +19,11 @@ from app.agent.recording.evidence_answer import (
     logfire_evidence_answer_recorder,
 )
 from app.agent.recording.evidence_review import (
+    EvidenceReviewFailed,
+    EvidenceReviewOutcome,
     EvidenceReviewRecorder,
+    EvidenceReviewRecording,
+    EvidenceReviewSucceeded,
     LogfireEvidenceReviewRecorder,
     logfire_evidence_review_recorder,
 )
@@ -77,7 +81,11 @@ __all__ = [
     "EvidenceAnswerRecording",
     "EvidenceAnswerRecordingOutcome",
     "EvidenceAnswerSucceeded",
+    "EvidenceReviewFailed",
+    "EvidenceReviewOutcome",
     "EvidenceReviewRecorder",
+    "EvidenceReviewRecording",
+    "EvidenceReviewSucceeded",
     "ExternalSearchRecorder",
     "InternalSearchRecorder",
     "LlmCall",

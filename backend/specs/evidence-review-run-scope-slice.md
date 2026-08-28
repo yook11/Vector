@@ -178,6 +178,10 @@
   (現行のtask単位失敗時と同じ)。frontend の parser と表示は変更を必要としない。
 - `phase="evidence_review"`のAgent phase spanはRunにつき1回になる。このspanは全taskを覆うため
   `task_index`属性を持たない。収集側のspan(`external_query`)は`task_index`属性を維持する。
+- `EvidenceReviewRecorder.record()`がRun 1回のspan・duration・最終outcomeを完結させる。
+  成功と分類済み縮退は`completed`、未分類例外は`failed`、cancelは`stopped`としてdurationへ残す。
+- `vector.agent.evidence_review.outcome`は`result`(`succeeded | failed`)、`attempt_count`、
+  `failure_code`を持つ。成功時の`failure_code`は`none`とし、retry途中の失敗は記録しない。
 - span属性、event、status descriptionに質問本文、履歴、prompt、query text、candidate snippet、
   evidence本文、回答本文を載せない既存制約を維持する。
 - `AnswerProgressStage`(`planning` / `retrieving` / `synthesizing`)の語彙と発火順序を変更しない。

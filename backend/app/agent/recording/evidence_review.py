@@ -1,19 +1,29 @@
-"""精査工程 review() 1回の start/end 記録。"""
+"""精査工程 review() 1回の記録。"""
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    asynccontextmanager,
+)
+from dataclasses import dataclass
 from time import perf_counter
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 import logfire
 
-from app.agent.recording.types import PhaseCall, PhaseStatus
-
-if TYPE_CHECKING:
-    from app.agent.evidence_review.metrics import EvidenceReviewOutcome
+from app.agent.phase_span import agent_phase
+from app.agent.recording.types import PhaseStatus
 
 __all__ = [
+    "EvidenceReviewFailed",
+    "EvidenceReviewOutcome",
     "EvidenceReviewRecorder",
+    "EvidenceReviewRecording",
+    "EvidenceReviewSucceeded",
     "LogfireEvidenceReviewRecorder",
     "logfire_evidence_review_recorder",
 ]
@@ -28,74 +38,196 @@ _duration_histogram = logfire.metric_histogram(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceReviewSucceeded:
+    """完成した精査工程の結論。"""
+
+    attempt_count: int
+
+    def __post_init__(self) -> None:
+        if self.attempt_count < 1:
+            raise ValueError("attempt_count must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReviewFailed:
+    """分類済み失敗を返した精査工程の結論。"""
+
+    failure_code: str
+    attempt_count: int
+
+    def __post_init__(self) -> None:
+        if not self.failure_code:
+            raise ValueError("failure_code must not be empty")
+        if self.attempt_count < 1:
+            raise ValueError("attempt_count must be positive")
+
+
+type EvidenceReviewOutcome = EvidenceReviewSucceeded | EvidenceReviewFailed
+
+
+class EvidenceReviewRecording(Protocol):
+    """review() 1回に結論を関連付ける記録ハンドル。"""
+
+    def set_outcome(self, outcome: EvidenceReviewOutcome) -> None: ...
+
+
 class EvidenceReviewRecorder(Protocol):
-    """start は必ず PhaseCall を返し、記録の例外は本処理へ出さない。"""
+    """review() 1回のspan・duration・分類済みoutcomeを完結させる。"""
 
-    async def start(self) -> PhaseCall: ...
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: EvidenceReviewOutcome | None = None,
-        retry_used: bool = False,
-        stopped: bool = False,
-    ) -> None: ...
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[EvidenceReviewRecording]: ...
 
 
-def _status_from_result(
-    *,
-    stopped: bool,
-    outcome: EvidenceReviewOutcome | None,
-) -> PhaseStatus:
-    """工程の終わり方を記録の status に写す。"""
+@dataclass(slots=True)
+class _EvidenceReviewRecording:
+    outcome: EvidenceReviewOutcome | None = None
 
-    if stopped:
-        return PhaseStatus.STOPPED
-    if outcome == "completed":
-        return PhaseStatus.COMPLETED
-    return PhaseStatus.FAILED
+    def set_outcome(self, outcome: EvidenceReviewOutcome) -> None:
+        self.outcome = outcome
+
+
+@dataclass(frozen=True, slots=True)
+class _EvidenceReviewExit:
+    status: PhaseStatus
+    outcome: EvidenceReviewOutcome | None
+    error: BaseException | None
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        outcome: EvidenceReviewOutcome | None,
+        error: BaseException | None,
+    ) -> _EvidenceReviewExit:
+        if isinstance(error, asyncio.CancelledError | GeneratorExit):
+            return cls(status=PhaseStatus.STOPPED, outcome=None, error=error)
+        if error is None and outcome is not None:
+            return cls(status=PhaseStatus.COMPLETED, outcome=outcome, error=None)
+        return cls(status=PhaseStatus.FAILED, outcome=None, error=error)
 
 
 class LogfireEvidenceReviewRecorder:
-    async def start(self) -> PhaseCall:
-        try:
-            return PhaseCall(started_at=perf_counter())
-        except Exception:
-            return PhaseCall(started_at=0.0)
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: EvidenceReviewOutcome | None = None,
-        retry_used: bool = False,
-        stopped: bool = False,
-    ) -> None:
-        try:
-            status = _status_from_result(stopped=stopped, outcome=outcome)
-            attributes = {
-                "status": status.value,
-                "outcome": (
-                    _MISSING_OUTCOME if stopped or outcome is None else outcome
-                ),
-            }
-            _duration_histogram.record(
-                perf_counter() - call.started_at,
-                attributes=attributes,
-            )
-            if stopped or outcome is None:
-                return
-            from app.agent.evidence_review.metrics import (
-                record_evidence_review_outcome,
-            )
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[EvidenceReviewRecording]:
+        return self._record(agent_name=agent_name)
 
-            record_evidence_review_outcome(
-                result=outcome,
-                retry_used=retry_used,
+    @asynccontextmanager
+    async def _record(
+        self,
+        *,
+        agent_name: str,
+    ) -> AsyncIterator[EvidenceReviewRecording]:
+        recording = _EvidenceReviewRecording()
+        started_at = _started_at()
+        span = _try_open_evidence_review_span(agent_name=agent_name)
+        error: BaseException | None = None
+        try:
+            yield recording
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            evidence_review_exit = _EvidenceReviewExit.resolve(
+                outcome=recording.outcome,
+                error=error,
             )
-        except Exception:
+            _try_close_evidence_review_span(span, error=evidence_review_exit.error)
+            _record_duration(
+                started_at=started_at,
+                evidence_review_exit=evidence_review_exit,
+            )
+            _record_outcome(evidence_review_exit)
+
+
+def _try_open_evidence_review_span(
+    *,
+    agent_name: str,
+) -> AbstractContextManager[None] | None:
+    try:
+        span = agent_phase(phase="evidence_review", agent_name=agent_name)
+        span.__enter__()
+        return span
+    except Exception:
+        return None
+
+
+def _try_close_evidence_review_span(
+    span: AbstractContextManager[None] | None,
+    *,
+    error: BaseException | None,
+) -> None:
+    if span is None:
+        return
+    try:
+        if error is None:
+            span.__exit__(None, None, None)
             return
+        span.__exit__(type(error), error, error.__traceback__)
+    except BaseException:
+        return
+
+
+def _started_at() -> float | None:
+    try:
+        return perf_counter()
+    except Exception:
+        return None
+
+
+def _record_duration(
+    *,
+    started_at: float | None,
+    evidence_review_exit: _EvidenceReviewExit,
+) -> None:
+    if started_at is None:
+        return
+    try:
+        _duration_histogram.record(
+            perf_counter() - started_at,
+            attributes={
+                "status": evidence_review_exit.status.value,
+                "outcome": _outcome_label(evidence_review_exit.outcome),
+            },
+        )
+    except Exception:
+        return
+
+
+def _record_outcome(evidence_review_exit: _EvidenceReviewExit) -> None:
+    outcome = evidence_review_exit.outcome
+    if outcome is None:
+        return
+    try:
+        from app.agent.evidence_review.metrics import record_evidence_review_outcome
+
+        if isinstance(outcome, EvidenceReviewSucceeded):
+            record_evidence_review_outcome(
+                result="succeeded",
+                attempt_count=outcome.attempt_count,
+            )
+            return
+        record_evidence_review_outcome(
+            result="failed",
+            attempt_count=outcome.attempt_count,
+            failure_code=outcome.failure_code,
+        )
+    except Exception:
+        return
+
+
+def _outcome_label(outcome: EvidenceReviewOutcome | None) -> str:
+    if isinstance(outcome, EvidenceReviewSucceeded):
+        return "succeeded"
+    if isinstance(outcome, EvidenceReviewFailed):
+        return "failed"
+    return _MISSING_OUTCOME
 
 
 logfire_evidence_review_recorder = LogfireEvidenceReviewRecorder()

@@ -90,7 +90,7 @@ from tests.agent.running._harness import (
     review_draft as _draft,
 )
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
-from tests.logfire._span_helpers import one_span_named
+from tests.logfire._span_helpers import exception_event, one_span_named, spans_named
 
 _EMPTY_DRAFT = EvidenceReviewerDraft.model_validate({"selections": [], "missing": []})
 
@@ -972,12 +972,21 @@ async def test_failed_evidence_run_keeps_failure_code_out_of_answerer_and_in_spa
 
     evidence_run = captured[0].evidence_run
     span = one_span_named(capfire, "agent_answering_run")
+    review_spans = [
+        phase
+        for phase in spans_named(capfire, "agent_phase")
+        if phase["attributes"].get("phase") == "evidence_review"
+    ]
     assert isinstance(evidence_run, EvidenceRunFailed)
     assert (
         answerer.review_missing_calls,
         span["attributes"]["review_failure_code"],
         evidence_run.failure_code,
     ) == ([()], "response_not_json", "response_not_json")
+    assert len(review_spans) == 1
+    assert exception_event(review_spans[0]) is None
+    assert review_spans[0]["attributes"]["agent_name"] == EVIDENCE_REVIEWER_AGENT.name
+    assert "task_index" not in review_spans[0]["attributes"]
 
 
 # --- F. 進捗event ------------------------------------------------------------
