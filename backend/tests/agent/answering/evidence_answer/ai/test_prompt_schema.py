@@ -315,7 +315,7 @@ def test_review_missing_at_the_upstream_cap_is_not_further_truncated() -> None:
 def test_rendered_input_does_not_leak_operator_facing_collection_diagnostics() -> None:
     """条件3(代表値による否定): research_goal、ResearchTaskReportの収集診断、
 
-    reviewの状態値、review_failure_reasonはEvidenceAnswerInputに経路が無く、
+    reviewの状態値、review_failure_codeはEvidenceAnswerInputに経路が無く、
     review_missing(str)だけが渡る。以下のsentinelはEvidenceAnswerInputの
     どのfieldにも対応しないため、rendered inputに現れないことを確認する
     (EvidenceAnswerInputが受け取れるfieldの網羅ではなく、運用者向け語彙の

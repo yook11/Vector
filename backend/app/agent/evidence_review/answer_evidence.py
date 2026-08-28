@@ -245,7 +245,7 @@ class EvidenceRunFailed(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    failure_reason: str = Field(min_length=1)
+    failure_code: str = Field(min_length=1, pattern=r"\S")
 
 
 EvidenceRunResult = EvidenceRunCompleted | EvidenceRunFailed

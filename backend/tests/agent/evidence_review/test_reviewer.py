@@ -8,6 +8,8 @@ reviewerはRun内の全taskの選択肢を1回の入力で受け取り、Run全�
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -278,7 +280,7 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("failure", "expected_reason"),
+    ("failure", "expected_code"),
     [
         pytest.param(
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
@@ -299,9 +301,9 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
         pytest.param(TimeoutError(), "reviewer_timeout", id="timeout"),
     ],
 )
-async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
+async def test_review_returns_last_failure_code_after_two_exhausted_attempts(
     failure: BaseException,
-    expected_reason: str,
+    expected_code: str,
 ) -> None:
     """S1(精査の失敗)。2 attempt尽きるとRun全体が失敗結果で終わり例外を投げない。
 
@@ -331,13 +333,28 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
 
     assert isinstance(result, EvidenceRunFailed)
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert result.failure_reason == expected_reason
+    assert result.failure_code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> None:
+    runtime = ScriptedAgentRuntime(
+        [
+            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            AIProviderNetworkError(),
+        ]
+    )
+
+    result = await _review(tasks=[_internal_task()], reviewer_runtime=runtime)
+
+    assert isinstance(result, EvidenceRunFailed)
+    assert result.failure_code == "ai_error_network"
+    assert [call.attempt_number for call in runtime.calls] == [1, 2]
 
 
 @pytest.mark.asyncio
 async def test_review_propagates_unclassified_provider_error() -> None:
-    """回復クラスを宣言しない裸のprovider errorは失敗理由に変換せず伝播する。"""
-    runtime = ScriptedAgentRuntime([AIProviderError()])
+    """回復クラスを宣言しない裸のprovider errorは工程codeに変換しない。"""
     tasks = [
         collected_task(
             task_index=0,
@@ -352,9 +369,13 @@ async def test_review_propagates_unclassified_provider_error() -> None:
         )
     ]
 
-    with pytest.raises(AIProviderError):
+    error = AIProviderError()
+    runtime = ScriptedAgentRuntime([error])
+
+    with pytest.raises(AIProviderError) as raised:
         await _review(tasks=tasks, reviewer_runtime=runtime)
 
+    assert raised.value is error
     assert [call.attempt_number for call in runtime.calls] == [1]
 
 
@@ -492,7 +513,7 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
     assert isinstance(result, EvidenceRunFailed)
     assert runtime.cancelled is True
     assert runtime.attempt_numbers == [1, 2]
-    assert result.failure_reason == "reviewer_timeout"
+    assert result.failure_code == "reviewer_timeout"
     assert observed_timeouts.count(30) == 2
 
 
@@ -563,6 +584,7 @@ async def test_retry_success_records_completed_with_retry_used() -> None:
     [
         pytest.param(RuntimeError("unclassified reviewer error"), id="unknown"),
         pytest.param(asyncio.CancelledError(), id="cancellation"),
+        pytest.param(GeneratorExit(), id="generator-exit"),
         pytest.param(AIProviderError(), id="unclassified-provider"),
     ],
 )
@@ -574,15 +596,52 @@ async def test_unclassified_failure_and_cancellation_record_without_outcome(
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime([error])
 
-    with pytest.raises(type(error)):
+    with pytest.raises(type(error)) as raised:
         await _review(
             tasks=[_internal_task()],
             reviewer_runtime=runtime,
             recorder=recorder,
         )
 
+    assert raised.value is error
     _assert_recorded(
         recorder,
         outcome=None,
-        stopped=isinstance(error, asyncio.CancelledError),
+        stopped=isinstance(error, (asyncio.CancelledError, GeneratorExit)),
     )
+
+
+@pytest.mark.asyncio
+async def test_review_propagates_runtime_scope_start_failure_unchanged() -> None:
+    error = RuntimeError("scope start failed")
+
+    @asynccontextmanager
+    async def failing_scope() -> AsyncIterator[ScriptedAgentRuntime]:
+        raise error
+        yield ScriptedAgentRuntime([])
+
+    reviewer = EvidenceReviewer(runtime_scope_factory=failing_scope)
+
+    with pytest.raises(RuntimeError) as raised:
+        await reviewer.review(tasks=[_internal_task()], as_of=AS_OF)
+
+    assert raised.value is error
+
+
+@pytest.mark.asyncio
+async def test_review_propagates_runtime_scope_exit_failure_unchanged() -> None:
+    error = RuntimeError("scope exit failed")
+    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
+
+    @asynccontextmanager
+    async def failing_scope() -> AsyncIterator[ScriptedAgentRuntime]:
+        yield runtime
+        raise error
+
+    reviewer = EvidenceReviewer(runtime_scope_factory=failing_scope)
+
+    with pytest.raises(RuntimeError) as raised:
+        await reviewer.review(tasks=[_internal_task()], as_of=AS_OF)
+
+    assert raised.value is error
+    assert [call.attempt_number for call in runtime.calls] == [1]

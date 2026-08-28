@@ -166,7 +166,7 @@ def test_report_has_no_review_related_or_legacy_fields() -> None:
 
     for legacy_field in (
         "review",
-        "review_failure_reason",
+        "review_failure_code",
         "internal_evidence_count",
         "external_evidence_count",
         "dropped_selection_count",

@@ -544,8 +544,8 @@ def test_completed_accepts_empty_evidence_and_empty_reviewer_missing() -> None:
             id="completed",
         ),
         pytest.param(
-            EvidenceRunFailed(failure_reason="reviewer_timeout"),
-            "failure_reason",
+            EvidenceRunFailed(failure_code="reviewer_timeout"),
+            "failure_code",
             "changed",
             id="failed",
         ),
@@ -574,7 +574,7 @@ def test_run_result_variants_are_frozen(
         ),
         pytest.param(
             EvidenceRunFailed,
-            {"failure_reason": "reviewer_timeout", "unexpected": "value"},
+            {"failure_code": "reviewer_timeout", "unexpected": "value"},
             id="failed",
         ),
     ],
@@ -591,10 +591,11 @@ def test_run_result_variants_reject_unknown_fields(
     "payload",
     [
         pytest.param({}, id="missing"),
-        pytest.param({"failure_reason": ""}, id="empty"),
+        pytest.param({"failure_code": ""}, id="empty"),
+        pytest.param({"failure_code": "   "}, id="blank"),
     ],
 )
-def test_failed_requires_a_non_empty_failure_reason(
+def test_failed_requires_a_non_empty_failure_code(
     payload: dict[str, object],
 ) -> None:
     with pytest.raises(ValidationError):
@@ -605,7 +606,7 @@ def test_failed_rejects_answer_evidence() -> None:
     with pytest.raises(ValidationError):
         EvidenceRunFailed.model_validate(
             {
-                "failure_reason": "reviewer_timeout",
+                "failure_code": "reviewer_timeout",
                 "answer_evidence": AnswerEvidence(),
             }
         )
