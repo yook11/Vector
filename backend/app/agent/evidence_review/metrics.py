@@ -6,7 +6,7 @@ from typing import Literal
 
 import logfire
 
-EvidenceReviewOutcome = Literal["completed", "failed"]
+EvidenceReviewOutcomeResult = Literal["succeeded", "failed"]
 
 _evidence_review_outcome_counter = logfire.metric_counter(
     "vector.agent.evidence_review.outcome",
@@ -17,15 +17,20 @@ _evidence_review_outcome_counter = logfire.metric_counter(
 
 def record_evidence_review_outcome(
     *,
-    result: EvidenceReviewOutcome,
-    retry_used: bool,
+    result: EvidenceReviewOutcomeResult,
+    attempt_count: int,
+    failure_code: str | None = None,
 ) -> None:
-    """Record one final evidence review outcome with low-cardinality labels."""
+    """Record one final evidence review outcome with low-cardinality labels.
+
+    failure_codeには工程で分類したcodeだけを渡す。Noneは成功を表す。
+    """
 
     _evidence_review_outcome_counter.add(
         1,
         attributes={
             "result": result,
-            "retry_used": retry_used,
+            "attempt_count": attempt_count,
+            "failure_code": failure_code if failure_code is not None else "none",
         },
     )

@@ -1,78 +1,98 @@
-"""LogfireEvidenceReviewRecorder の契約。"""
+"""LogfireEvidenceReviewRecorderの契約。"""
 
 from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from types import TracebackType
 
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.recording.evidence_review import LogfireEvidenceReviewRecorder
-from app.agent.recording.types import PhaseCall
-from tests.logfire._metric_helpers import attributes_of, collected_metrics
+from app.agent.recording.evidence_review import (
+    EvidenceReviewFailed,
+    EvidenceReviewOutcome,
+    EvidenceReviewSucceeded,
+    LogfireEvidenceReviewRecorder,
+)
+from tests.logfire._metric_helpers import (
+    attributes_of,
+    collected_metrics,
+    sum_counter_for_result,
+)
 
 _OUTCOME_METRIC = "vector.agent.evidence_review.outcome"
 _DURATION_METRIC = "vector.agent.evidence_review.duration"
 
 
-async def test_logfire_recorder_emits_duration_and_existing_outcome(
+async def test_success_emits_completed_duration_and_outcome(
     capfire: CaptureLogfire,
 ) -> None:
-    """完了時は duration と結論カウンターを1回ずつ残す。"""
-
-    recorder = LogfireEvidenceReviewRecorder()
-    call = await recorder.start()
-    await recorder.end(
-        call,
-        outcome="completed",
-        retry_used=True,
-    )
+    async with LogfireEvidenceReviewRecorder().record(
+        agent_name="evidence_reviewer"
+    ) as recording:
+        recording.set_outcome(EvidenceReviewSucceeded(attempt_count=2))
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
         "status": "completed",
-        "outcome": "completed",
+        "outcome": "succeeded",
     }
     duration = next(item for item in metrics if item["name"] == _DURATION_METRIC)
     assert duration["data"]["data_points"][0]["count"] == 1
     assert duration["data"]["data_points"][0]["sum"] >= 0
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
-        "result": "completed",
-        "retry_used": True,
+        "result": "succeeded",
+        "attempt_count": 2,
+        "failure_code": "none",
     }
+    assert sum_counter_for_result(metrics, _OUTCOME_METRIC, "succeeded") == 1
 
 
-async def test_failed_records_failed_status_and_outcome(
+async def test_classified_failure_emits_completed_duration_and_failed_outcome(
     capfire: CaptureLogfire,
 ) -> None:
-    """分類済み失敗は status=failed、結論カウンターは result=failed。"""
-
-    recorder = LogfireEvidenceReviewRecorder()
-    call = await recorder.start()
-    await recorder.end(
-        call,
-        outcome="failed",
-        retry_used=True,
-    )
+    async with LogfireEvidenceReviewRecorder().record(
+        agent_name="evidence_reviewer"
+    ) as recording:
+        recording.set_outcome(
+            EvidenceReviewFailed(
+                failure_code="ai_error_network",
+                attempt_count=2,
+            )
+        )
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
-        "status": "failed",
+        "status": "completed",
         "outcome": "failed",
     }
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
         "result": "failed",
-        "retry_used": True,
+        "attempt_count": 2,
+        "failure_code": "ai_error_network",
     }
+    assert sum_counter_for_result(metrics, _OUTCOME_METRIC, "failed") == 1
 
 
-async def test_stopped_does_not_emit_existing_outcome_counter(
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+        pytest.param(GeneratorExit(), id="generator-exit"),
+    ],
+)
+async def test_stop_emits_stopped_duration_without_outcome(
+    error: BaseException,
     capfire: CaptureLogfire,
 ) -> None:
-    """途中停止では結論カウンターを打たない。"""
+    with pytest.raises(type(error)) as raised:
+        async with LogfireEvidenceReviewRecorder().record(
+            agent_name="evidence_reviewer"
+        ):
+            raise error
 
-    recorder = LogfireEvidenceReviewRecorder()
-    call = await recorder.start()
-    await recorder.end(call, stopped=True)
-
+    assert raised.value is error
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
         "status": "stopped",
@@ -81,14 +101,70 @@ async def test_stopped_does_not_emit_existing_outcome_counter(
     assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
 
 
-async def test_end_without_outcome_records_failed_status(
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+        pytest.param(GeneratorExit(), id="generator-exit"),
+    ],
+)
+async def test_stop_after_outcome_discards_outcome(
+    error: BaseException,
     capfire: CaptureLogfire,
 ) -> None:
-    """未分類の終わりは status=failed とし、結論カウンターは打たない。"""
+    with pytest.raises(type(error)) as raised:
+        async with LogfireEvidenceReviewRecorder().record(
+            agent_name="evidence_reviewer"
+        ) as recording:
+            recording.set_outcome(EvidenceReviewSucceeded(attempt_count=1))
+            raise error
 
-    recorder = LogfireEvidenceReviewRecorder()
-    call = await recorder.start()
-    await recorder.end(call)
+    assert raised.value is error
+    metrics = collected_metrics(capfire)
+    assert attributes_of(metrics, _DURATION_METRIC) == {
+        "status": "stopped",
+        "outcome": "none",
+    }
+    assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        pytest.param(EvidenceReviewSucceeded(attempt_count=1), id="success"),
+        pytest.param(
+            EvidenceReviewFailed(failure_code="known", attempt_count=1),
+            id="classified-failure",
+        ),
+    ],
+)
+async def test_error_after_outcome_discards_outcome(
+    outcome: EvidenceReviewOutcome,
+    capfire: CaptureLogfire,
+) -> None:
+    error = RuntimeError("failed after outcome was selected")
+
+    with pytest.raises(RuntimeError) as raised:
+        async with LogfireEvidenceReviewRecorder().record(
+            agent_name="evidence_reviewer"
+        ) as recording:
+            recording.set_outcome(outcome)
+            raise error
+
+    assert raised.value is error
+    metrics = collected_metrics(capfire)
+    assert attributes_of(metrics, _DURATION_METRIC) == {
+        "status": "failed",
+        "outcome": "none",
+    }
+    assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
+
+
+async def test_missing_outcome_emits_failed_duration_only(
+    capfire: CaptureLogfire,
+) -> None:
+    async with LogfireEvidenceReviewRecorder().record(agent_name="evidence_reviewer"):
+        pass
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
@@ -98,31 +174,154 @@ async def test_end_without_outcome_records_failed_status(
     assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
 
 
-async def test_start_returns_phase_call_when_clock_fails(
+async def test_clock_failure_skips_duration_but_preserves_outcome(
     monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
 ) -> None:
-    """start は失敗しても PhaseCall を返す。"""
-
     def _boom() -> float:
         raise RuntimeError("clock failed")
 
     monkeypatch.setattr("app.agent.recording.evidence_review.perf_counter", _boom)
-    call = await LogfireEvidenceReviewRecorder().start()
-    assert isinstance(call, PhaseCall)
+    async with LogfireEvidenceReviewRecorder().record(
+        agent_name="evidence_reviewer"
+    ) as recording:
+        recording.set_outcome(EvidenceReviewSucceeded(attempt_count=1))
+
+    metrics = collected_metrics(capfire)
+    assert all(item["name"] != _DURATION_METRIC for item in metrics)
+    assert attributes_of(metrics, _OUTCOME_METRIC)["result"] == "succeeded"
 
 
-async def test_end_does_not_propagate_metric_errors(
+async def test_duration_failure_does_not_block_outcome(
     monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
 ) -> None:
-    """metric 記録の失敗を呼び出し元へ出さない。"""
-
     def _boom(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("metric failed")
+        raise RuntimeError("duration failed")
 
     monkeypatch.setattr(
         "app.agent.recording.evidence_review._duration_histogram.record",
         _boom,
     )
-    recorder = LogfireEvidenceReviewRecorder()
-    call = await recorder.start()
-    await recorder.end(call, outcome="completed")
+    async with LogfireEvidenceReviewRecorder().record(
+        agent_name="evidence_reviewer"
+    ) as recording:
+        recording.set_outcome(EvidenceReviewSucceeded(attempt_count=1))
+
+    assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC)["result"] == (
+        "succeeded"
+    )
+
+
+async def test_outcome_failure_does_not_block_duration(
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("outcome failed")
+
+    monkeypatch.setattr(
+        "app.agent.evidence_review.metrics.record_evidence_review_outcome",
+        _boom,
+    )
+    async with LogfireEvidenceReviewRecorder().record(
+        agent_name="evidence_reviewer"
+    ) as recording:
+        recording.set_outcome(EvidenceReviewSucceeded(attempt_count=1))
+
+    assert attributes_of(collected_metrics(capfire), _DURATION_METRIC) == {
+        "status": "completed",
+        "outcome": "succeeded",
+    }
+
+
+@pytest.mark.parametrize("failure_point", ["create", "enter", "exit"])
+async def test_span_failure_does_not_change_business_result(
+    failure_point: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    class FailingSpan:
+        def __enter__(self) -> None:
+            if failure_point == "enter":
+                raise RuntimeError("span enter failed")
+
+        def __exit__(
+            self,
+            _exc_type: type[BaseException] | None,
+            _exc: BaseException | None,
+            _traceback: TracebackType | None,
+        ) -> bool:
+            if failure_point == "exit":
+                raise RuntimeError("span exit failed")
+            return False
+
+    def _phase(**_kwargs: object) -> FailingSpan:
+        if failure_point == "create":
+            raise RuntimeError("span creation failed")
+        return FailingSpan()
+
+    monkeypatch.setattr("app.agent.recording.evidence_review.agent_phase", _phase)
+    async with LogfireEvidenceReviewRecorder().record(
+        agent_name="evidence_reviewer"
+    ) as recording:
+        recording.set_outcome(EvidenceReviewSucceeded(attempt_count=1))
+
+    assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC)["result"] == (
+        "succeeded"
+    )
+
+
+async def test_span_exit_failure_does_not_replace_business_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_error = RuntimeError("business failed")
+
+    class FailingSpan:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(
+            self,
+            _exc_type: type[BaseException] | None,
+            _exc: BaseException | None,
+            _traceback: TracebackType | None,
+        ) -> bool:
+            raise RuntimeError("span exit failed")
+
+    monkeypatch.setattr(
+        "app.agent.recording.evidence_review.agent_phase",
+        lambda **_kwargs: FailingSpan(),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        async with LogfireEvidenceReviewRecorder().record(
+            agent_name="evidence_reviewer"
+        ):
+            raise business_error
+
+    assert raised.value is business_error
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        pytest.param(
+            lambda: EvidenceReviewSucceeded(attempt_count=0),
+            id="success-attempt-count",
+        ),
+        pytest.param(
+            lambda: EvidenceReviewFailed(failure_code="", attempt_count=1),
+            id="failure-code",
+        ),
+        pytest.param(
+            lambda: EvidenceReviewFailed(failure_code="known", attempt_count=0),
+            id="failure-attempt-count",
+        ),
+    ],
+)
+def test_outcome_rejects_invalid_recording_values(
+    outcome: Callable[[], EvidenceReviewOutcome],
+) -> None:
+    with pytest.raises(ValueError):
+        outcome()
