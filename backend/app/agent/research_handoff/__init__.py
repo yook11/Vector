@@ -1,32 +1,22 @@
-"""Research handoff package。公開名は package root から import する。"""
+"""Research handoff package。公開名は package root から import する。
 
-from app.agent.contract import (
+確定型は即時に出し、工程の実装は遅延 import する。planning が型だけを
+読む経路で循環しないため。
+"""
+
+from importlib import import_module
+from typing import Any
+
+from app.agent.research_handoff.handoff import (
+    ORGANIZED_TEXT_MAX_CHARS,
     ResearchHandoff,
+    ResearchHandoffDraft,
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
-from app.agent.research_handoff.handoff_input import (
-    ResearchHandoffInput,
-    SearchedTask,
-)
-from app.agent.research_handoff.instructions import render_planning_instruction
-from app.agent.research_handoff.ledger import (
-    append_run_record,
-    build_research_run_record,
-    build_research_run_record_or_none,
-)
-from app.agent.research_handoff.organized import (
-    ResearchHandoffDraft,
-    organized_handoff_from_draft,
-)
-from app.agent.research_handoff.recall import recall_research_handoff
-from app.agent.research_handoff.service import (
-    ResearchHandoffOrganizer,
-    ResearchHandoffService,
-)
 
 __all__ = [
+    "ORGANIZED_TEXT_MAX_CHARS",
     "RESEARCH_HANDOFF_AGENT",
     "ResearchHandoff",
     "ResearchHandoffDraft",
@@ -36,10 +26,42 @@ __all__ = [
     "ResearchRunRecord",
     "ResearchTaskRecord",
     "SearchedTask",
-    "append_run_record",
-    "build_research_run_record",
-    "build_research_run_record_or_none",
-    "organized_handoff_from_draft",
     "recall_research_handoff",
     "render_planning_instruction",
 ]
+
+_LAZY_ATTRS: dict[str, tuple[str, str]] = {
+    "RESEARCH_HANDOFF_AGENT": (
+        "app.agent.research_handoff.agent",
+        "RESEARCH_HANDOFF_AGENT",
+    ),
+    "ResearchHandoffInput": (
+        "app.agent.research_handoff.handoff_input",
+        "ResearchHandoffInput",
+    ),
+    "ResearchHandoffOrganizer": (
+        "app.agent.research_handoff.service",
+        "ResearchHandoffOrganizer",
+    ),
+    "ResearchHandoffService": (
+        "app.agent.research_handoff.service",
+        "ResearchHandoffService",
+    ),
+    "SearchedTask": ("app.agent.research_handoff.handoff_input", "SearchedTask"),
+    "recall_research_handoff": (
+        "app.agent.research_handoff.recall",
+        "recall_research_handoff",
+    ),
+    "render_planning_instruction": (
+        "app.agent.research_handoff.instructions",
+        "render_planning_instruction",
+    ),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY_ATTRS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr = target
+    return getattr(import_module(module_name), attr)

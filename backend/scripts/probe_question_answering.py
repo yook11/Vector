@@ -35,7 +35,6 @@ from app.agent.contract import (
     EvidenceReviewSelectedEvent,
     ExternalSearchHitsFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
-    ResearchHandoff,
 )
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.internal_search.ai.gemini import (
@@ -56,6 +55,7 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
+from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput

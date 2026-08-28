@@ -9,18 +9,14 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.agent.agent import Agent
-from app.agent.contract import ResearchHandoff
 from app.agent.recording.research_handoff import (
     ResearchHandoffFailed,
     ResearchHandoffRecorder,
     ResearchHandoffSucceeded,
     logfire_research_handoff_recorder,
 )
+from app.agent.research_handoff.handoff import ResearchHandoff, ResearchHandoffDraft
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
-from app.agent.research_handoff.organized import (
-    ResearchHandoffDraft,
-    organized_handoff_from_draft,
-)
 from app.agent.runtime.contract import (
     AgentResponseInvalidError,
     AgentRuntimeScopeFactory,
@@ -63,12 +59,8 @@ class ResearchHandoffService:
                 )
                 return input.handoff
 
-            organized = organized_handoff_from_draft(
-                handoff=input.handoff,
-                draft=draft,
-            )
             recording.set_outcome(ResearchHandoffSucceeded())
-            return organized
+            return input.handoff.from_draft(draft)
 
 
 def _failure_code(cause: Exception) -> str:

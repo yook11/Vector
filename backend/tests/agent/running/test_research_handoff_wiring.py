@@ -333,7 +333,7 @@ async def test_builder_exception_yields_none_handoff_and_continues_answering(
         raise RuntimeError("run record build boom")
 
     monkeypatch.setattr(
-        "app.agent.research_handoff.ledger.build_research_run_record",
+        "app.agent.research_handoff.handoff_input._build_research_run_record",
         _raise_build_failure,
     )
     gateway = _FakeExternalSearchGateway(

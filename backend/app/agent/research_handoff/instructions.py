@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from app.agent.contract import ResearchHandoff, ResearchRunRecord
+from app.agent.research_handoff.handoff import ResearchHandoff, ResearchRunRecord
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 __all__ = ["render_planning_instruction"]

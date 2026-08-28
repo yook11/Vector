@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 
-from app.agent.contract import ORGANIZED_TEXT_MAX_CHARS
 from app.agent.research_handoff import (
     ResearchHandoff,
     ResearchHandoffDraft,
@@ -22,6 +21,7 @@ from app.agent.research_handoff import (
     SearchedTask,
 )
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
+from app.agent.research_handoff.handoff import ORGANIZED_TEXT_MAX_CHARS
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderConfigurationError

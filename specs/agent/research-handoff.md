@@ -228,9 +228,10 @@ def render_planning_instruction(handoff: ResearchHandoff | None) -> str:
 3. 完了。整理(`collected_overview` / `unresolved_points` / `next_search_guidance`)を
    `ResearchHandoffOrganizer` が書き直すようにし、台帳から `adopted_claims` と
    `unresolved_after_search`、claim 合計の validator、`ResearchRunRecord.schema_version` を
-   落とした。`app/agent/research_handoff/` は概念ごとに分け、`handoff_input.py`
-   (上流の成果物から整理へ見せる分だけを投影する `ResearchHandoffInput.from_run()`)、
-   `organized.py`(LLM の draft と整理 3 本への正規化)、`ledger.py`(台帳の組み立て)、
+   落とした。`app/agent/research_handoff/` は概念ごとに分け、`handoff.py`
+   (確定した `ResearchHandoff`。`from_draft` と台帳追記 `with_run`)、
+   `handoff_input.py`
+   (今回の成果物から整理入力を組み立てる `ResearchHandoffInput.from_run()`)、
    `service.py`(工程と Protocol)を置く。記録は
    `app/agent/recording/research_handoff.py`。answering と並行起動し、Run 末尾で
    `HANDOFF_ORGANIZE_TIMEOUT_SECONDS` を上限に待ち合わせる。

@@ -41,12 +41,8 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.research_handoff import (
-    ResearchHandoff,
-    ResearchHandoffInput,
-    append_run_record,
-    build_research_run_record_or_none,
-)
+from app.agent.research_handoff.handoff import ResearchHandoff
+from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.running.contract import (
     AnsweringPhases,
     AnsweringPhasesFactory,
@@ -123,19 +119,12 @@ class AnsweringRunner:
                         collected_news=collected_news,
                         evidence_run=evidence_run,
                     )
-                    run_record = build_research_run_record_or_none(
-                        plan=plan,
+                    handoff_input = ResearchHandoffInput.from_run(
+                        previous=input.research_handoff,
+                        question=answering_request.question,
                         collected_news=collected_news,
                         evidence_run=evidence_run,
                         as_of=answering_request.as_of,
-                    )
-                    recorded_handoff = (
-                        append_run_record(
-                            previous=input.research_handoff,
-                            record=run_record,
-                        )
-                        if run_record is not None
-                        else None
                     )
                     answer, research_handoff = await self._answer_while_organizing(
                         phases=phases,
@@ -144,7 +133,7 @@ class AnsweringRunner:
                         collected_news=collected_news,
                         evidence_run=evidence_run,
                         run_span=run_span,
-                        recorded_handoff=recorded_handoff,
+                        handoff_input=handoff_input,
                     )
                 case _ as unreachable:
                     assert_never(unreachable)
@@ -162,14 +151,14 @@ class AnsweringRunner:
         collected_news: CollectedNews,
         evidence_run: EvidenceRunResult,
         run_span: LogfireSpan,
-        recorded_handoff: ResearchHandoff | None,
+        handoff_input: ResearchHandoffInput | None,
     ) -> tuple[AnswerQuestionResult, ResearchHandoff | None]:
-        """回答のストリーミングと並行して申し送りを整理し、Run末尾で待ち合わせる。
+        """回答のストリーミングと並行して、次のリサーチで必要な情報を整理する
 
         整理が間に合わない・失敗した場合は台帳だけを残す。停止と例外では
         並行taskをcancelして合流してから、元の例外をそのまま送出する。
         """
-        if recorded_handoff is None:
+        if handoff_input is None:
             answer = await self._answer_from_evidence(
                 phases=phases,
                 request=request,
@@ -180,17 +169,7 @@ class AnsweringRunner:
             )
             return answer, None
 
-        organizing = asyncio.ensure_future(
-            phases.organizer.organize(
-                ResearchHandoffInput.from_run(
-                    handoff=recorded_handoff,
-                    question=request.question,
-                    collected_news=collected_news,
-                    evidence_run=evidence_run,
-                    as_of=request.as_of,
-                )
-            )
-        )
+        organizing = asyncio.ensure_future(phases.organizer.organize(handoff_input))
         try:
             answer = await self._answer_from_evidence(
                 phases=phases,
@@ -212,7 +191,7 @@ class AnsweringRunner:
             )
         except Exception:
             # 回答は確定済み。整理を諦めて台帳だけ残す(CancelledErrorは貫通する)。
-            research_handoff = recorded_handoff
+            research_handoff = handoff_input.handoff
         finally:
             await _cancel_and_join(organizing)
         return answer, research_handoff

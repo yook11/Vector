@@ -1,8 +1,9 @@
-"""申し送りを書き直す前に要る情報を、上流工程の成果物から投影する。
+"""今回のRunから、整理工程の入力を組み立てる。
 
 収集・精査の成果物は記事本文やURLまで持つが、整理に要るのは「何を狙い、何を
-叩き、何が集まり、何を採ったか」だけである。投影先をこの型に限ることで、
-整理工程へ渡る範囲を型で閉じる。
+叩き、何が集まり、何を採ったか」だけである。台帳の追記は
+`ResearchHandoff.with_run` に任せ、投影先をこの型に限ることで整理工程へ渡る
+範囲を型で閉じる。
 """
 
 from __future__ import annotations
@@ -10,13 +11,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.agent.contract import ResearchHandoff
+import logfire
+
 from app.agent.evidence_collection.contract import (
     CollectedNews,
     CollectedTask,
     TaskExternalCollectionStatus,
 )
-from app.agent.evidence_review import EvidenceRunCompleted, EvidenceRunResult
+from app.agent.evidence_review import (
+    EvidenceRunCompleted,
+    EvidenceRunFailed,
+    EvidenceRunResult,
+)
+from app.agent.research_handoff.handoff import (
+    ResearchHandoff,
+    ResearchRunRecord,
+    ResearchTaskRecord,
+)
 
 __all__ = ["ResearchHandoffInput", "SearchedTask"]
 
@@ -49,16 +60,31 @@ class ResearchHandoffInput:
     def from_run(
         cls,
         *,
-        handoff: ResearchHandoff,
+        previous: ResearchHandoff | None,
         question: str,
         collected_news: CollectedNews,
         evidence_run: EvidenceRunResult,
         as_of: datetime,
-    ) -> ResearchHandoffInput:
-        """精査が失敗したRunでも、何を叩いて何が集まったかは残るため投影する。"""
+    ) -> ResearchHandoffInput | None:
+        """前回の申し送りと今回の成果物から入力を組み立てる。作れなければNone。"""
+        if isinstance(evidence_run, EvidenceRunFailed):
+            return None
+        try:
+            record = _build_research_run_record(
+                collected_news=collected_news,
+                as_of=as_of,
+            )
+        except Exception:
+            logfire.warning(
+                "research_handoff_build_failed",
+                failure_code="build_failed",
+            )
+            return None
+        if record is None:
+            return None
         adopted_by_task = _adopted_by_task(evidence_run)
         return cls(
-            handoff=handoff,
+            handoff=ResearchHandoff.with_run(previous=previous, record=record),
             question=question,
             as_of=as_of,
             tasks=tuple(
@@ -69,14 +95,33 @@ class ResearchHandoffInput:
                     hit_headlines=_hit_headlines(collected),
                     adopted=adopted_by_task.get(collected.task_index, ()),
                 )
-                for collected in collected_news.tasks
+                for collected in _tasks_in_index_order(collected_news)
             ),
-            review_missing=(
-                evidence_run.review_missing
-                if isinstance(evidence_run, EvidenceRunCompleted)
-                else ()
-            ),
+            review_missing=evidence_run.review_missing,
         )
+
+
+def _build_research_run_record(
+    *,
+    collected_news: CollectedNews,
+    as_of: datetime,
+) -> ResearchRunRecord | None:
+    """外部検索を実行できたtaskだけを記録する。記録可能taskが0件ならNone。"""
+    tasks = tuple(
+        ResearchTaskRecord(
+            research_goal=collected.research_goal,
+            executed_queries=collected.executed_queries,
+        )
+        for collected in _tasks_in_index_order(collected_news)
+        if collected.executed_queries
+    )
+    if not tasks:
+        return None
+    return ResearchRunRecord(as_of=as_of, tasks=tasks)
+
+
+def _tasks_in_index_order(collected_news: CollectedNews) -> tuple[CollectedTask, ...]:
+    return tuple(sorted(collected_news.tasks, key=lambda task: task.task_index))
 
 
 def _adopted_by_task(

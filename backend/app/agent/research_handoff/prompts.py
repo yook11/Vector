@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from app.agent.contract import ResearchHandoff
+from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput, SearchedTask
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 

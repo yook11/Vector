@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import Annotated, Final, Literal, Protocol, Self
 
 from pydantic import (
-    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -44,13 +43,9 @@ __all__ = [
     "MAX_ARTICLE_SEARCH_QUERIES",
     "MISSING_ITEM_MAX_CHARS",
     "NonBlankText",
-    "ORGANIZED_TEXT_MAX_CHARS",
     "PlanType",
     "RESEARCH_GOAL_MAX_CHARS",
     "RESEARCH_TASK_LIMIT",
-    "ResearchHandoff",
-    "ResearchRunRecord",
-    "ResearchTaskRecord",
 ]
 
 PlanType = Literal["direct_answer", "search"]
@@ -226,9 +221,7 @@ class AnswerEventReporter(Protocol):
     async def event_occurred(self, event: AnswerProgressEvent) -> None: ...
 
 
-# 工程を跨いで共有される予算・上限の正本。ResearchHandoffがplanner input
-# projectionとしてこのleafへ集約されたため、参照される側の定数も合わせてここへ
-# 集約する。
+# 工程を跨いで共有される予算・上限の正本。
 RESEARCH_TASK_LIMIT = 3
 MAX_ARTICLE_SEARCH_QUERIES = 3
 RESEARCH_GOAL_MAX_CHARS: Final[int] = 200
@@ -242,63 +235,3 @@ MISSING_ITEM_MAX_CHARS = 200
 
 # Run 単位で reviewer が報告できる missing 件数の上限。
 EVIDENCE_REVIEW_MISSING_LIMIT: Final[int] = 8
-
-# 整理1本あたりの上限。thread全体を1本へ畳んだ結果であり、Run数によらず一定に保つ。
-ORGANIZED_TEXT_MAX_CHARS: Final[int] = 600
-
-_ExecutedQuery = Annotated[
-    str,
-    StringConstraints(min_length=1, max_length=EXTERNAL_QUERY_MAX_CHARS),
-]
-_OrganizedText = Annotated[
-    str,
-    StringConstraints(max_length=ORGANIZED_TEXT_MAX_CHARS),
-]
-
-
-class ResearchTaskRecord(BaseModel):
-    """1 research taskの調査台帳。executed_queriesが空になるtaskは記録しない。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    research_goal: str = Field(min_length=1, max_length=RESEARCH_GOAL_MAX_CHARS)
-    # provider呼び出しに成功した外部queryのみ。min 1件を型で強制する。
-    executed_queries: tuple[_ExecutedQuery, ...] = Field(
-        min_length=1,
-        max_length=EXTERNAL_TASK_QUERY_LIMIT,
-    )
-
-
-class ResearchRunRecord(BaseModel):
-    """1 Runが何を狙って何を叩いたかの台帳。
-
-    plannerの「実行済みqueryを繰り返さない」規則がこの2つを文字列として読むため、
-    LLMに畳ませず決定的に積む。何が得られたかはResearchHandoffの整理側が持つ。
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    as_of: AwareDatetime
-    # min 1件。0件になるRunは記録しない(builderがNoneを返す)。
-    tasks: tuple[ResearchTaskRecord, ...] = Field(
-        min_length=1,
-        max_length=RESEARCH_TASK_LIMIT,
-    )
-
-
-class ResearchHandoff(BaseModel):
-    """threadが積み上げた、次のRunへの調査の申し送り。
-
-    台帳(runs)には上限を置かず、search Runごとに追記する。整理の3本は
-    Runごとに積まず、research_handoff工程が毎回1本へ書き直す。
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: Literal[1] = 1
-    updated_at: AwareDatetime
-    # 古い順。1件目はhandoffを最初に書いたRun。
-    runs: tuple[ResearchRunRecord, ...] = Field(min_length=1)
-    collected_overview: _OrganizedText = ""
-    unresolved_points: _OrganizedText = ""
-    next_search_guidance: _OrganizedText = ""

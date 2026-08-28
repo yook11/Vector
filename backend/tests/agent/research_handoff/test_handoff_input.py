@@ -1,14 +1,13 @@
-"""ResearchHandoffInput.from_run() の投影契約。
+"""ResearchHandoffInput.from_run() の組み立て契約。
 
 整理へ渡してよい範囲をこの型が決める。記事本文・URL・内部IDが漏れないこと、
-「情報が無かった」と「検索できなかった」が区別できることを検証する。
+台帳の追記規則、作れないRunではNoneになることを検証する。
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.agent.contract import ResearchHandoff, ResearchRunRecord, ResearchTaskRecord
 from app.agent.evidence_collection.contract import (
     CollectedNews,
     CollectedTask,
@@ -22,22 +21,14 @@ from app.agent.evidence_review.answer_evidence import (
     ExternalSearchEvidence,
 )
 from app.agent.research_handoff import ResearchHandoffInput
+from app.agent.research_handoff.handoff import (
+    ResearchHandoff,
+    ResearchRunRecord,
+    ResearchTaskRecord,
+)
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
-
-
-def _handoff() -> ResearchHandoff:
-    return ResearchHandoff(
-        updated_at=_AS_OF,
-        runs=(
-            ResearchRunRecord(
-                as_of=_AS_OF,
-                tasks=(
-                    ResearchTaskRecord(research_goal="goal", executed_queries=("q",)),
-                ),
-            ),
-        ),
-    )
+_QUESTION = "NVIDIAの供給は？"
 
 
 def _collected(
@@ -95,14 +86,33 @@ def _from_run(
     *,
     collected_news: CollectedNews,
     evidence_run: EvidenceRunCompleted | EvidenceRunFailed,
-) -> ResearchHandoffInput:
+    previous: ResearchHandoff | None = None,
+    as_of: datetime = _AS_OF,
+) -> ResearchHandoffInput | None:
     return ResearchHandoffInput.from_run(
-        handoff=_handoff(),
-        question="NVIDIAの供給は？",
+        previous=previous,
+        question=_QUESTION,
         collected_news=collected_news,
         evidence_run=evidence_run,
-        as_of=_AS_OF,
+        as_of=as_of,
     )
+
+
+def _assembled(
+    *,
+    collected_news: CollectedNews,
+    evidence_run: EvidenceRunCompleted | None = None,
+    previous: ResearchHandoff | None = None,
+    as_of: datetime = _AS_OF,
+) -> ResearchHandoffInput:
+    result = _from_run(
+        collected_news=collected_news,
+        evidence_run=evidence_run if evidence_run is not None else _completed(),
+        previous=previous,
+        as_of=as_of,
+    )
+    assert result is not None
+    return result
 
 
 def test_headlines_carry_titles_without_article_bodies_or_urls() -> None:
@@ -110,7 +120,7 @@ def test_headlines_carry_titles_without_article_bodies_or_urls() -> None:
     hits = [_hit("https://example.com/a", title="供給網の記事")]
     collected = CollectedNews(tasks=[_collected(external_hits=hits)])
 
-    result = _from_run(collected_news=collected, evidence_run=_completed())
+    result = _assembled(collected_news=collected)
 
     assert result.tasks[0].hit_headlines == ("供給網の記事",)
 
@@ -124,7 +134,7 @@ def test_headlines_include_articles_that_were_not_adopted() -> None:
     collected = CollectedNews(tasks=[_collected(external_hits=hits)])
     evidence_run = _completed(_evidence(task_index=0, claim="claim", why="why"))
 
-    result = _from_run(collected_news=collected, evidence_run=evidence_run)
+    result = _assembled(collected_news=collected, evidence_run=evidence_run)
 
     assert result.tasks[0].hit_headlines == ("採用された記事", "採用されなかった記事")
 
@@ -136,7 +146,7 @@ def test_adopted_pairs_each_claim_with_the_reason_it_was_selected() -> None:
         _evidence(task_index=0, claim="供給は逼迫", why="一次情報のため")
     )
 
-    result = _from_run(collected_news=collected, evidence_run=evidence_run)
+    result = _assembled(collected_news=collected, evidence_run=evidence_run)
 
     assert result.tasks[0].adopted == (("供給は逼迫", "一次情報のため"),)
 
@@ -154,7 +164,7 @@ def test_a_failed_search_is_distinguishable_from_one_that_found_nothing() -> Non
         ]
     )
 
-    result = _from_run(collected_news=collected, evidence_run=_completed())
+    result = _assembled(collected_news=collected)
 
     assert [task.external_collection for task in result.tasks] == [
         "succeeded",
@@ -162,8 +172,8 @@ def test_a_failed_search_is_distinguishable_from_one_that_found_nothing() -> Non
     ]
 
 
-def test_a_failed_review_still_projects_what_was_searched() -> None:
-    """精査が失敗しても、何を叩いて何が集まったかは整理へ渡す。"""
+def test_a_failed_review_does_not_assemble_an_input() -> None:
+    """精査に失敗したRunは申し送りを触らない。"""
     hits = [_hit("https://example.com/a", title="集まった記事")]
     collected = CollectedNews(tasks=[_collected(external_hits=hits)])
 
@@ -172,6 +182,148 @@ def test_a_failed_review_still_projects_what_was_searched() -> None:
         evidence_run=EvidenceRunFailed(failure_reason="reviewer_failed"),
     )
 
-    assert result.tasks[0].hit_headlines == ("集まった記事",)
-    assert result.tasks[0].adopted == ()
-    assert result.review_missing == ()
+    assert result is None
+
+
+def test_tasks_are_recorded_in_task_index_order_with_verbatim_queries() -> None:
+    """次の調査はquery文字列そのものを読むため、加工せず順序ごと残す。"""
+    collected = CollectedNews(
+        tasks=[
+            _collected(
+                task_index=1,
+                research_goal="goal-B",
+                executed_queries=("q-b1", "q-b2"),
+            ),
+            _collected(
+                task_index=0,
+                research_goal="goal-A",
+                executed_queries=("q-a1",),
+            ),
+        ]
+    )
+
+    result = _assembled(collected_news=collected)
+
+    assert [
+        (task.research_goal, task.executed_queries)
+        for task in result.handoff.runs[0].tasks
+    ] == [
+        ("goal-A", ("q-a1",)),
+        ("goal-B", ("q-b1", "q-b2")),
+    ]
+
+
+def test_task_with_empty_executed_queries_is_not_recorded() -> None:
+    """外部検索へ到達しなかったtaskは、叩いたqueryが無いので台帳に残さない。"""
+    collected = CollectedNews(
+        tasks=[
+            _collected(
+                task_index=0,
+                research_goal="goal-A",
+                executed_queries=(),
+            ),
+            _collected(
+                task_index=1,
+                research_goal="goal-B",
+                executed_queries=("q-b1",),
+            ),
+        ]
+    )
+
+    result = _assembled(collected_news=collected)
+
+    assert [task.research_goal for task in result.handoff.runs[0].tasks] == ["goal-B"]
+
+
+def test_zero_recordable_tasks_returns_none() -> None:
+    """1本もqueryを叩けなかったRunは申し送りを触らない。"""
+    collected = CollectedNews(
+        tasks=[_collected(research_goal="goal-A", executed_queries=())]
+    )
+
+    assert _from_run(collected_news=collected, evidence_run=_completed()) is None
+
+
+def test_as_of_is_carried_through_unchanged() -> None:
+    """調査時点は鮮度の再確認かどうかの判断に使うため、丸めずに残す。"""
+    as_of = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    collected = CollectedNews(tasks=[_collected(research_goal="goal-A")])
+
+    result = _assembled(collected_news=collected, as_of=as_of)
+
+    assert result.handoff.runs[0].as_of == as_of
+
+
+def test_first_record_starts_a_handoff_with_nothing_organized_yet() -> None:
+    """最初のRunでは整理する対象が無く、整理3本は空のまま台帳だけが立つ。"""
+    collected = CollectedNews(tasks=[_collected(research_goal="goal-1")])
+
+    result = _assembled(collected_news=collected)
+
+    assert (
+        [task.research_goal for task in result.handoff.runs[0].tasks],
+        result.handoff.updated_at,
+        result.handoff.collected_overview,
+        result.handoff.unresolved_points,
+        result.handoff.next_search_guidance,
+    ) == (["goal-1"], _AS_OF, "", "", "")
+
+
+def test_later_records_are_appended_in_execution_order_without_dropping() -> None:
+    """上限が無いため、古い記録は Run を重ねても落ちない。"""
+    handoff: ResearchHandoff | None = None
+    for day in (1, 2, 3, 4):
+        as_of = datetime(2026, 8, day, tzinfo=UTC)
+        result = _assembled(
+            collected_news=CollectedNews(
+                tasks=[_collected(research_goal=f"goal-{day}")]
+            ),
+            previous=handoff,
+            as_of=as_of,
+        )
+        handoff = result.handoff
+
+    assert handoff is not None
+    assert (
+        [run.tasks[0].research_goal for run in handoff.runs],
+        handoff.updated_at,
+    ) == (
+        ["goal-1", "goal-2", "goal-3", "goal-4"],
+        datetime(2026, 8, 4, tzinfo=UTC),
+    )
+
+
+def test_appending_carries_the_previous_organized_text_forward() -> None:
+    """台帳を積む時点では整理を書き直さない。整理工程が失敗しても前回値が残る。"""
+    previous = ResearchHandoff(
+        updated_at=datetime(2026, 8, 1, tzinfo=UTC),
+        runs=(
+            ResearchRunRecord(
+                as_of=datetime(2026, 8, 1, tzinfo=UTC),
+                tasks=(
+                    ResearchTaskRecord(
+                        research_goal="goal-1",
+                        executed_queries=("q",),
+                    ),
+                ),
+            ),
+        ),
+        collected_overview="Blackwell の供給記事が集まっている",
+        unresolved_points="在庫水準は確認できていない",
+        next_search_guidance="一次情報を優先する",
+    )
+
+    result = _assembled(
+        collected_news=CollectedNews(tasks=[_collected(research_goal="goal-2")]),
+        previous=previous,
+    )
+
+    assert (
+        result.handoff.collected_overview,
+        result.handoff.unresolved_points,
+        result.handoff.next_search_guidance,
+    ) == (
+        previous.collected_overview,
+        previous.unresolved_points,
+        previous.next_search_guidance,
+    )

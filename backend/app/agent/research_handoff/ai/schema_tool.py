@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Final
 
-from app.agent.contract import ORGANIZED_TEXT_MAX_CHARS
+from app.agent.research_handoff.handoff import ORGANIZED_TEXT_MAX_CHARS
 
 __all__ = ["RESEARCH_HANDOFF_GEMINI_SCHEMA"]
 
