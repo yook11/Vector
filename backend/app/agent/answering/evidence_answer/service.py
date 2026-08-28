@@ -1,4 +1,4 @@
-"""Validated evidence-grounded answer service."""
+"""渡された根拠だけを引用する回答を生成する工程。"""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ _EVIDENCE_ANSWER_CLASSIFIED_ERRORS = (
 
 
 class EvidenceAnswerService:
-    """Create strict evidence answer drafts from plain text LLM output."""
+    """LLMのstream出力を、渡された根拠だけを引用するdraftへ変換する。"""
 
     def __init__(
         self,
@@ -81,67 +81,58 @@ class EvidenceAnswerService:
         self._recorder = recorder
 
     async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
-        """Return a valid draft or an unavailable outcome.
+        """接地したdraftを返す。試行を使い切った場合は生成不能を返す。
 
-        Retries classified response-boundary failures within the attempt budget.
+        再試行可能な失敗は、直前の失敗内容を修復コンテキストに添えてagentを再実行する。
+        分類対象外の失敗は呼び出し元へ伝播する。
         """
-
-        async with self._recorder.record(agent_name=self._agent.name) as recording:
-            outcome, attempt_count = await self._settle_outcome(input)
-            if isinstance(outcome, EvidenceAnswerDraft):
-                recording.set_outcome(
-                    EvidenceAnswerSucceeded(attempt_count=attempt_count)
-                )
-            else:
-                recording.set_outcome(
-                    EvidenceAnswerFailed(
-                        failure_code=outcome.failure_code,
-                        attempt_count=attempt_count,
-                    )
-                )
-            return outcome
-
-    async def _settle_outcome(
-        self, input: EvidenceAnswerInput
-    ) -> tuple[EvidenceAnswerOutcome, int]:
-        """Return the settled outcome with the attempt count it consumed."""
 
         attempt_input = input
 
-        async with self._runtime_scope_factory() as runtime:
-            for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                try:
-                    draft = await self._generate_strict_draft(
-                        runtime=runtime,
-                        input=attempt_input,
-                        attempt_number=attempt_number,
-                    )
-                except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
-                    failure = classify_answer_synthesis_failure(exc)
-                    retriable = (
-                        failure.request_retry_disposition
-                        is RequestRetryDisposition.RETRY_IN_REQUEST
-                        and attempt_number < _MAX_ATTEMPTS
-                    )
-                    if not retriable:
-                        unavailable = await self._fallback(
-                            generation=attempt_number + 1,
-                            failure=failure,
+        async with self._recorder.record(agent_name=self._agent.name) as recording:
+            async with self._runtime_scope_factory() as runtime:
+                for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                    try:
+                        draft = await self._generate_strict_draft(
+                            runtime=runtime,
+                            input=attempt_input,
+                            attempt_number=attempt_number,
                         )
-                        return unavailable, attempt_number
-                    await self._start_revision(generation=attempt_number + 1)
-                    attempt_input = replace(
-                        input,
-                        repair_context=str(exc),
-                        previous_output_truncated=isinstance(
-                            exc, AIProviderOutputTruncatedError
-                        ),
+                    except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
+                        failure = classify_answer_synthesis_failure(exc)
+                        retriable = (
+                            failure.request_retry_disposition
+                            is RequestRetryDisposition.RETRY_IN_REQUEST
+                            and attempt_number < _MAX_ATTEMPTS
+                        )
+                        if not retriable:
+                            unavailable = await self._fallback(
+                                generation=attempt_number + 1,
+                                failure=failure,
+                            )
+                            recording.set_outcome(
+                                EvidenceAnswerFailed(
+                                    failure_code=unavailable.failure_code,
+                                    attempt_count=attempt_number,
+                                )
+                            )
+                            return unavailable
+                        await self._start_revision(generation=attempt_number + 1)
+                        attempt_input = replace(
+                            input,
+                            repair_context=str(exc),
+                            previous_output_truncated=isinstance(
+                                exc, AIProviderOutputTruncatedError
+                            ),
+                        )
+                        continue
+                    recording.set_outcome(
+                        EvidenceAnswerSucceeded(attempt_count=attempt_number)
                     )
-                    continue
-                return draft, attempt_number
+                    return draft
 
-        # range()を試行回数の構造的上限として残すため、到達しない終端をここで閉じる。
-        raise AssertionError("unreachable: attempt budget must settle an outcome")
+            # range()を試行回数の構造的上限として残すため、到達しない終端を閉じる。
+            raise AssertionError("unreachable: attempt budget must settle an outcome")
 
     async def _generate_strict_draft(
         self,
