@@ -10,13 +10,13 @@ import pytest
 
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
+    ExternalSearchFailureCode,
     ExternalSearchHit,
     ExternalSearchProviderError,
 )
 from app.agent.evidence_collection.external_search.service import ExternalSearchService
 from app.agent.recording.external_search import (
-    ExternalSearchProviderFailed,
-    ExternalSearchQueryGenerationFailed,
+    ExternalSearchFailed,
     ExternalSearchSucceeded,
 )
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
@@ -135,7 +135,11 @@ async def test_search_records_completed_when_query_generation_fails() -> None:
 
     assert execution.generated_queries == ()
     recorded = recorder.records[0]
-    assert recorded.outcomes == [ExternalSearchQueryGenerationFailed()]
+    assert recorded.outcomes == [
+        ExternalSearchFailed(
+            failure_code=ExternalSearchFailureCode.QUERY_GENERATION_FAILED
+        )
+    ]
     assert recorded.error is None
 
 
@@ -155,7 +159,9 @@ async def test_search_records_completed_when_every_provider_call_fails() -> None
 
     assert execution.hits == []
     recorded = recorder.records[0]
-    assert recorded.outcomes == [ExternalSearchProviderFailed()]
+    assert recorded.outcomes == [
+        ExternalSearchFailed(failure_code=ExternalSearchFailureCode.SEARCH_FAILED)
+    ]
     assert recorded.error is None
 
 

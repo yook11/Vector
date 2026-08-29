@@ -13,6 +13,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryGenerationInput,
     ExternalSearchDateFilter,
     ExternalSearchExecution,
+    ExternalSearchFailureCode,
     ExternalSearchGateway,
     ExternalSearchHit,
     ExternalSearchProviderError,
@@ -33,9 +34,8 @@ from app.agent.evidence_collection.external_search.time_filter import (
 )
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.recording.external_search import (
+    ExternalSearchFailed,
     ExternalSearchOutcome,
-    ExternalSearchProviderFailed,
-    ExternalSearchQueryGenerationFailed,
     ExternalSearchRecorder,
     ExternalSearchSucceeded,
     logfire_external_search_recorder,
@@ -205,7 +205,11 @@ def _recording_outcome_from_execution(
     execution: ExternalSearchExecution,
 ) -> ExternalSearchOutcome:
     if not execution.generated_queries:
-        return ExternalSearchQueryGenerationFailed()
+        return ExternalSearchFailed(
+            failure_code=ExternalSearchFailureCode.QUERY_GENERATION_FAILED
+        )
     if execution.provider_failed_query_count == len(execution.generated_queries):
-        return ExternalSearchProviderFailed()
+        return ExternalSearchFailed(
+            failure_code=ExternalSearchFailureCode.SEARCH_FAILED
+        )
     return ExternalSearchSucceeded()

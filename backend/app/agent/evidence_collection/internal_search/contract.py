@@ -28,7 +28,7 @@ type InternalSearchOutcome = Literal["succeeded", "empty", "failed"]
 class InternalSearchFailureCode(StrEnum):
     """内部検索が安全に分類できる失敗理由。"""
 
-    EMBEDDING_PROVIDER_FAILED = "embedding_provider_failed"
+    QUERY_EMBEDDING_FAILED = "query_embedding_failed"
     ARTICLE_SEARCH_FAILED = "article_search_failed"
 
 

@@ -97,7 +97,7 @@ class InternalSearchService:
                 )
             except AIProviderError as exc:
                 raise InternalSearchError(
-                    code=InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
+                    code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
                 ) from exc
 
         await self._store_new_query_embeddings(new_embeddings)

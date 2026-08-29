@@ -359,7 +359,7 @@ class TestInternalSearchService:
             await service.search(_queries("SECRET raw user question"))
 
         assert (
-            captured.value.code is InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
+            captured.value.code is InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
         )
         assert captured.value.__cause__ is provider_error
         attributes = _metric_attributes(collected_metrics(capfire), _METRIC)
@@ -367,7 +367,7 @@ class TestInternalSearchService:
             {
                 "result": "failed",
                 "query_count": 1,
-                "failure_code": "embedding_provider_failed",
+                "failure_code": "query_embedding_failed",
             }
         ]
         assert "SECRET raw user question" not in json.dumps(
@@ -375,7 +375,7 @@ class TestInternalSearchService:
         )
         warning.assert_called_once_with(
             "internal_search_failed",
-            failure_code="embedding_provider_failed",
+            failure_code="query_embedding_failed",
             query_count=1,
         )
         assert "SECRET" not in repr(warning.call_args)

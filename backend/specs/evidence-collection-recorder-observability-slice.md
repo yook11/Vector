@@ -73,7 +73,7 @@ agent_phase: phase=evidence_collection
 `vector.agent.internal_retrieval.outcome`の既存属性契約は維持する。
 `empty`は独立した工程結論ではなく、成功型の`hit_count == 0`をmetricへ変換するときだけ使う。
 `hit_count`自体はmetric属性へ載せない。
-分類済み失敗は`embedding_provider_failed | article_search_failed`の閉じたcodeへ写し、
+分類済み失敗は`query_embedding_failed | article_search_failed`の閉じたcodeへ写し、
 既存counterには`failure_code`属性として載せる。例外自由文や旧属性は記録しない。
 
 ```text
@@ -90,19 +90,21 @@ vector.agent.internal_search.duration
 記録結論は次の閉じた型だけを受け取る。
 
 - `ExternalSearchSucceeded`
-- `ExternalSearchQueryGenerationFailed`
-- `ExternalSearchProviderFailed`
+- `ExternalSearchFailed(failure_code)`
+
+`failure_code`は`query_generation_failed` | `search_failed`。metricへ出すときは成功を
+`succeeded`、分類済み縮退を`failure_code`の値にする。
 
 ```text
 vector.agent.external_search.outcome
-  result: succeeded | query_generation_failed | provider_failed
+  result: succeeded | query_generation_failed | search_failed
 
 vector.agent.external_search.duration
   status: completed | failed | stopped
-  outcome: succeeded | query_generation_failed | provider_failed | none
+  outcome: succeeded | query_generation_failed | search_failed | none
 ```
 
-query生成失敗と全provider失敗は、工程が分類して戻り値を返すため`completed`とする。未分類例外は
+query生成失敗と全queryの検索失敗は、工程が分類して戻り値を返すため`completed`とする。未分類例外は
 `failed/none`、キャンセルは`stopped/none`とする。outcome counterは分類済み結論がある場合だけ
 一回記録する。
 

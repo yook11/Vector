@@ -548,7 +548,7 @@ async def test_internal_failure_reports_started_only_with_task_index() -> None:
     service = _service(
         internal_search=_FakeInternalSearch(
             error=InternalSearchError(
-                code=InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
+                code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
             )
         ),
         events=events,

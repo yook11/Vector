@@ -34,9 +34,8 @@ from app.agent.recording.evidence_review import (
     logfire_evidence_review_recorder,
 )
 from app.agent.recording.external_search import (
+    ExternalSearchFailed,
     ExternalSearchOutcome,
-    ExternalSearchProviderFailed,
-    ExternalSearchQueryGenerationFailed,
     ExternalSearchRecorder,
     ExternalSearchRecording,
     ExternalSearchSucceeded,
@@ -103,9 +102,8 @@ __all__ = [
     "EvidenceReviewRecorder",
     "EvidenceReviewRecording",
     "EvidenceReviewSucceeded",
+    "ExternalSearchFailed",
     "ExternalSearchOutcome",
-    "ExternalSearchProviderFailed",
-    "ExternalSearchQueryGenerationFailed",
     "ExternalSearchRecorder",
     "ExternalSearchRecording",
     "ExternalSearchSucceeded",

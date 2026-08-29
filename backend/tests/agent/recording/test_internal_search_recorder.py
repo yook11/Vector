@@ -65,14 +65,14 @@ async def test_classified_failure_emits_failed_duration_and_failure_code(
     capfire: CaptureLogfire,
 ) -> None:
     error = InternalSearchError(
-        code=InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
+        code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
     )
 
     with pytest.raises(InternalSearchError) as raised:
         async with LogfireInternalSearchRecorder().record(query_count=1) as recording:
             recording.report_outcome(
                 InternalSearchFailed(
-                    failure_code=InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
+                    failure_code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
                 )
             )
             raise error
@@ -86,7 +86,7 @@ async def test_classified_failure_emits_failed_duration_and_failure_code(
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
         "result": "failed",
         "query_count": 1,
-        "failure_code": "embedding_provider_failed",
+        "failure_code": "query_embedding_failed",
     }
 
 
