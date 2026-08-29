@@ -14,6 +14,8 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 
 __all__ = [
+    "INTERNAL_SEARCH_HIT_POOL_LIMIT",
+    "INTERNAL_SEARCH_HITS_PER_QUERY",
     "InternalArticleContent",
     "InternalArticleSearchHit",
     "InternalSearch",
@@ -23,6 +25,9 @@ __all__ = [
 ]
 
 type InternalSearchOutcome = Literal["succeeded", "empty", "failed"]
+
+INTERNAL_SEARCH_HITS_PER_QUERY = 5
+INTERNAL_SEARCH_HIT_POOL_LIMIT = 5
 
 
 class InternalSearchFailureCode(StrEnum):
