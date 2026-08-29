@@ -4,6 +4,8 @@ from app.agent.evidence_collection.internal_search.article_repository import (
     PgVectorArticleSearchRepository,
 )
 from app.agent.evidence_collection.internal_search.contract import (
+    INTERNAL_SEARCH_HIT_POOL_LIMIT,
+    INTERNAL_SEARCH_HITS_PER_QUERY,
     InternalArticleContent,
     InternalArticleSearchHit,
     InternalSearch,
@@ -26,6 +28,8 @@ from app.agent.evidence_collection.internal_search.service import (
 )
 
 __all__ = [
+    "INTERNAL_SEARCH_HIT_POOL_LIMIT",
+    "INTERNAL_SEARCH_HITS_PER_QUERY",
     "InternalArticleContent",
     "InternalArticleSearchHit",
     "MAX_ARTICLE_SEARCH_QUERIES",

@@ -162,7 +162,7 @@ async def test_internal_failure_marks_only_internal_search_error_and_degrades(
     capfire: CaptureLogfire,
 ) -> None:
     error = InternalSearchError(
-        code=InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
+        code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
     )
 
     collected = await _service(error=error).collect(

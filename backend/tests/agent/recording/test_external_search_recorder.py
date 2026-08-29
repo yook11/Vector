@@ -8,9 +8,11 @@ from types import TracebackType
 import pytest
 from logfire.testing import CaptureLogfire
 
+from app.agent.evidence_collection.external_search.contract import (
+    ExternalSearchFailureCode,
+)
 from app.agent.recording.external_search import (
-    ExternalSearchProviderFailed,
-    ExternalSearchQueryGenerationFailed,
+    ExternalSearchFailed,
     ExternalSearchSucceeded,
     LogfireExternalSearchRecorder,
 )
@@ -50,34 +52,31 @@ async def test_success_emits_search_and_query_spans_duration_and_outcome(
 
 
 @pytest.mark.parametrize(
-    ("outcome", "label"),
+    "failure_code",
     [
         pytest.param(
-            ExternalSearchQueryGenerationFailed(),
-            "query_generation_failed",
+            ExternalSearchFailureCode.QUERY_GENERATION_FAILED,
             id="query-generation",
         ),
         pytest.param(
-            ExternalSearchProviderFailed(),
-            "provider_failed",
-            id="provider",
+            ExternalSearchFailureCode.SEARCH_FAILED,
+            id="search",
         ),
     ],
 )
 async def test_classified_failure_is_completed_with_failed_conclusion(
-    outcome: ExternalSearchQueryGenerationFailed | ExternalSearchProviderFailed,
-    label: str,
+    failure_code: ExternalSearchFailureCode,
     capfire: CaptureLogfire,
 ) -> None:
     async with LogfireExternalSearchRecorder().record() as recording:
-        recording.report_outcome(outcome)
+        recording.report_outcome(ExternalSearchFailed(failure_code=failure_code))
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
         "status": "completed",
-        "outcome": label,
+        "outcome": failure_code.value,
     }
-    assert attributes_of(metrics, _OUTCOME_METRIC) == {"result": label}
+    assert attributes_of(metrics, _OUTCOME_METRIC) == {"result": failure_code.value}
 
 
 @pytest.mark.parametrize(

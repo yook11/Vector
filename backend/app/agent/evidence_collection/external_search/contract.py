@@ -40,6 +40,7 @@ __all__ = [
     "ExternalSearchProviderError",
     "ExternalSearch",
     "ExternalSearchExecution",
+    "ExternalSearchFailureCode",
     "ExternalSearchFailureReason",
     "ExternalSearchGateway",
     "ExternalSearchRequest",
@@ -207,6 +208,13 @@ class ExternalSearchExecution:
     hits: list[ExternalSearchHit]
     provider_failed_query_count: int
     executed_queries: tuple[str, ...]
+
+
+class ExternalSearchFailureCode(StrEnum):
+    """外部検索が安全に分類できる失敗理由。"""
+
+    QUERY_GENERATION_FAILED = "query_generation_failed"
+    SEARCH_FAILED = "search_failed"
 
 
 class ExternalSearch(Protocol):

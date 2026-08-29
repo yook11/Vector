@@ -13,6 +13,8 @@ from logfire.testing import CaptureLogfire
 
 import app.agent.evidence_collection.internal_search.service as service_module
 from app.agent.evidence_collection.internal_search import (
+    INTERNAL_SEARCH_HIT_POOL_LIMIT,
+    INTERNAL_SEARCH_HITS_PER_QUERY,
     InternalArticleContent,
     InternalArticleSearchHit,
 )
@@ -178,118 +180,174 @@ def _metric_attributes(
 
 
 class TestInternalSearchService:
-    async def test_embed_queries_embeds_normalized_queries(
+    async def test_search_embeds_queries_in_order(
         self,
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
-        service = InternalSearchService(embedder=embedder)
+        search_repo = FakeArticleVectorSearchRepository({})
+        service = InternalSearchService(
+            embedder=embedder,
+            article_search_repository=search_repo,
+        )
 
-        embeddings = await service.embed_queries(_queries("NVIDIA", "OpenAI", "Apple"))
+        hits = await service.search(_queries("NVIDIA", "OpenAI", "Apple"))
 
-        assert [embedding.query for embedding in embeddings] == [
+        assert hits == []
+        assert [call.queries for call in embedder.calls] == [
+            ("NVIDIA", "OpenAI", "Apple")
+        ]
+        assert [call.query for call, _limit in search_repo.calls] == [
             "NVIDIA",
             "OpenAI",
             "Apple",
         ]
-        assert [call.queries for call in embedder.calls] == [
-            ("NVIDIA", "OpenAI", "Apple")
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
+            {"result": "empty", "query_count": 3}
         ]
-        # outcome metric の所有者は search 境界。embed_queries 単体では
-        # どのラベルでも emit しない (二重計上防止)。
-        assert _metric_attributes(collected_metrics(capfire), _METRIC) == []
 
-    async def test_empty_embedder_result_does_not_emit_outcome_metric(
+    async def test_empty_embedder_result_records_overall_empty_metric(
         self,
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder(empty_result=True)
-        service = InternalSearchService(embedder=embedder)
+        search_repo = FakeArticleVectorSearchRepository({})
+        service = InternalSearchService(
+            embedder=embedder,
+            article_search_repository=search_repo,
+        )
 
-        embeddings = await service.embed_queries(_queries("NVIDIA"))
+        hits = await service.search(_queries("NVIDIA"))
 
-        assert embeddings == []
-        assert _metric_attributes(collected_metrics(capfire), _METRIC) == []
+        assert hits == []
+        assert [call.queries for call in embedder.calls] == [("NVIDIA",)]
+        assert search_repo.calls == []
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
+            {"result": "empty", "query_count": 1}
+        ]
 
-    async def test_embedder_failure_does_not_emit_outcome_metric_or_leak_query(
+    async def test_unclassified_embedder_failure_skips_outcome_and_does_not_leak_query(
         self,
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder(error=RuntimeError("embedder down"))
-        service = InternalSearchService(embedder=embedder)
+        service = InternalSearchService(
+            embedder=embedder,
+            article_search_repository=FakeArticleVectorSearchRepository({}),
+        )
 
         with pytest.raises(RuntimeError, match="embedder down"):
-            await service.embed_queries(_queries("NVIDIA secret query"))
+            await service.search(_queries("NVIDIA secret query"))
 
         metrics = collected_metrics(capfire)
         assert _metric_attributes(metrics, _METRIC) == []
         dumped = json.dumps(metrics, default=str, ensure_ascii=False)
         assert "NVIDIA secret query" not in dumped
 
-    async def test_embed_queries_uses_cache_hit_without_embedder(self) -> None:
+    async def test_search_uses_cache_hit_without_embedder(self) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(cached={"NVIDIA": _vector(0.8)})
+        search_repo = FakeArticleVectorSearchRepository(
+            {
+                "NVIDIA": [
+                    _article_hit(curation_id=1, title="NVIDIA記事", distance=0.1)
+                ],
+            }
+        )
         service = InternalSearchService(
             embedder=embedder,
+            article_search_repository=search_repo,
             query_embedding_cache=cache,
         )
 
-        embeddings = await service.embed_queries(_queries("NVIDIA"))
+        hits = await service.search(_queries("NVIDIA"))
 
-        assert [embedding.query for embedding in embeddings] == ["NVIDIA"]
-        assert embeddings[0].vector.to_list()[0] == pytest.approx(0.8)
+        assert [hit.article.title for hit in hits] == ["NVIDIA記事"]
         assert embedder.calls == []
         assert [call.queries for call in cache.fetch_calls] == [("NVIDIA",)]
         assert cache.store_calls == []
+        embedding, limit = search_repo.calls[0]
+        assert embedding.vector.to_list()[0] == pytest.approx(0.8)
+        assert limit == INTERNAL_SEARCH_HITS_PER_QUERY
 
-    async def test_embed_queries_embeds_only_cache_misses_and_stores_them(
-        self,
-    ) -> None:
+    async def test_search_embeds_only_cache_misses_and_stores_them(self) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(cached={"NVIDIA": _vector(0.8)})
+        search_repo = FakeArticleVectorSearchRepository(
+            {
+                "NVIDIA": [
+                    _article_hit(curation_id=1, title="NVIDIA記事", distance=0.1)
+                ],
+                "OpenAI": [
+                    _article_hit(curation_id=2, title="OpenAI記事", distance=0.2)
+                ],
+            }
+        )
         service = InternalSearchService(
             embedder=embedder,
+            article_search_repository=search_repo,
             query_embedding_cache=cache,
         )
 
-        embeddings = await service.embed_queries(_queries("NVIDIA", "OpenAI"))
+        hits = await service.search(_queries("NVIDIA", "OpenAI"))
 
-        assert [embedding.query for embedding in embeddings] == ["NVIDIA", "OpenAI"]
+        assert [hit.article.title for hit in hits] == ["NVIDIA記事", "OpenAI記事"]
         assert [call.queries for call in embedder.calls] == [("OpenAI",)]
         assert [stored.query for stored in cache.store_calls] == ["OpenAI"]
+        assert [call.query for call, _limit in search_repo.calls] == [
+            "NVIDIA",
+            "OpenAI",
+        ]
+        assert search_repo.calls[0][0].vector.to_list()[0] == pytest.approx(0.8)
 
-    async def test_cache_lookup_failure_does_not_stop_embedding(
+    async def test_cache_lookup_failure_does_not_stop_search(
         self,
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(fetch_error=RuntimeError("db down"))
+        search_repo = FakeArticleVectorSearchRepository(
+            {
+                "NVIDIA": [
+                    _article_hit(curation_id=1, title="NVIDIA記事", distance=0.1)
+                ],
+            }
+        )
         service = InternalSearchService(
             embedder=embedder,
+            article_search_repository=search_repo,
             query_embedding_cache=cache,
         )
 
-        embeddings = await service.embed_queries(_queries("NVIDIA"))
+        hits = await service.search(_queries("NVIDIA"))
 
-        assert [embedding.query for embedding in embeddings] == ["NVIDIA"]
+        assert [hit.article.title for hit in hits] == ["NVIDIA記事"]
         assert [call.queries for call in embedder.calls] == [("NVIDIA",)]
         metrics = collected_metrics(capfire)
         assert sum_counter_for_result(metrics, _CACHE_METRIC, "lookup_failed") == 1
 
-    async def test_cache_save_failure_does_not_drop_embedding(
+    async def test_cache_save_failure_does_not_drop_search_hits(
         self,
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(store_error=RuntimeError("db down"))
+        search_repo = FakeArticleVectorSearchRepository(
+            {
+                "NVIDIA": [
+                    _article_hit(curation_id=1, title="NVIDIA記事", distance=0.1)
+                ],
+            }
+        )
         service = InternalSearchService(
             embedder=embedder,
+            article_search_repository=search_repo,
             query_embedding_cache=cache,
         )
 
-        embeddings = await service.embed_queries(_queries("NVIDIA"))
+        hits = await service.search(_queries("NVIDIA"))
 
-        assert [embedding.query for embedding in embeddings] == ["NVIDIA"]
+        assert [hit.article.title for hit in hits] == ["NVIDIA記事"]
         assert [stored.query for stored in cache.store_calls] == ["NVIDIA"]
         metrics = collected_metrics(capfire)
         assert sum_counter_for_result(metrics, _CACHE_METRIC, "save_failed") == 1
@@ -317,10 +375,9 @@ class TestInternalSearchService:
         hits = await service.search(_queries("NVIDIA", "OpenAI"))
 
         assert [hit.article.title for hit in hits] == ["NVIDIA記事", "OpenAI記事"]
-        # search()は既定のper_query_limit(5)を使う。
         assert [(call.query, limit) for call, limit in search_repo.calls] == [
-            ("NVIDIA", 5),
-            ("OpenAI", 5),
+            ("NVIDIA", INTERNAL_SEARCH_HITS_PER_QUERY),
+            ("OpenAI", INTERNAL_SEARCH_HITS_PER_QUERY),
         ]
         assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
             {"result": "succeeded", "query_count": 2}
@@ -358,16 +415,14 @@ class TestInternalSearchService:
         with pytest.raises(InternalSearchError) as captured:
             await service.search(_queries("SECRET raw user question"))
 
-        assert (
-            captured.value.code is InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
-        )
+        assert captured.value.code is InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
         assert captured.value.__cause__ is provider_error
         attributes = _metric_attributes(collected_metrics(capfire), _METRIC)
         assert attributes == [
             {
                 "result": "failed",
                 "query_count": 1,
-                "failure_code": "embedding_provider_failed",
+                "failure_code": "query_embedding_failed",
             }
         ]
         assert "SECRET raw user question" not in json.dumps(
@@ -375,7 +430,7 @@ class TestInternalSearchService:
         )
         warning.assert_called_once_with(
             "internal_search_failed",
-            failure_code="embedding_provider_failed",
+            failure_code="query_embedding_failed",
             query_count=1,
         )
         assert "SECRET" not in repr(warning.call_args)
@@ -449,23 +504,6 @@ class TestInternalSearchService:
 
         assert [hit.article.title for hit in hits] == ["NVIDIA記事"]
 
-    @pytest.mark.parametrize("kwargs", [{"limit": 0}, {"per_query_limit": 0}])
-    async def test_search_articles_limit_guard_returns_empty_without_calling_repository(
-        self,
-        kwargs: dict[str, int],
-    ) -> None:
-        """limit/per_query_limitはsearch()から到達不能な実装policyのため直接検証する。"""
-        search_repo = FakeArticleVectorSearchRepository({})
-        service = InternalSearchService(
-            embedder=FakeInternalQueryEmbedder(),
-            article_search_repository=search_repo,
-        )
-
-        hits = await service._search_articles(_queries("NVIDIA"), **kwargs)
-
-        assert hits == []
-        assert search_repo.calls == []
-
     async def test_search_articles_returns_empty_hits_when_embeddings_are_empty(
         self,
     ) -> None:
@@ -506,7 +544,6 @@ class TestInternalSearchService:
             article_search_repository=search_repo,
         )
 
-        # dedup後は2件のみのため既定limit(5)に収まり、search()経由で検証できる。
         hits = await service.search(_queries("NVIDIA", "OpenAI"))
 
         assert [(hit.article.curation_id, hit.article.title) for hit in hits] == [
@@ -514,6 +551,30 @@ class TestInternalSearchService:
             (2, "別記事"),
         ]
         assert [hit.distance for hit in hits] == [0.1, 0.2]
+
+    async def test_search_caps_hit_pool_to_limit(self) -> None:
+        search_repo = FakeArticleVectorSearchRepository(
+            {
+                "NVIDIA": [
+                    _article_hit(
+                        curation_id=index,
+                        title=f"記事{index}",
+                        distance=0.1 * index,
+                    )
+                    for index in range(1, INTERNAL_SEARCH_HIT_POOL_LIMIT + 2)
+                ],
+            }
+        )
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(),
+            article_search_repository=search_repo,
+        )
+
+        hits = await service.search(_queries("NVIDIA"))
+
+        assert [hit.article.curation_id for hit in hits] == list(
+            range(1, INTERNAL_SEARCH_HIT_POOL_LIMIT + 1)
+        )
 
     async def test_search_records_completed_succeeded_for_hits(self) -> None:
         recorder = RecordingInternalSearchRecorder()

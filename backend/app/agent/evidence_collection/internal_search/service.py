@@ -8,6 +8,8 @@ from typing import Protocol
 import structlog
 
 from app.agent.evidence_collection.internal_search.contract import (
+    INTERNAL_SEARCH_HIT_POOL_LIMIT,
+    INTERNAL_SEARCH_HITS_PER_QUERY,
     InternalArticleSearchHit,
     InternalSearchError,
     InternalSearchFailureCode,
@@ -71,87 +73,79 @@ class InternalSearchService:
         query_count = len(queries.queries)
         async with self.recorder.record(query_count=query_count) as recording:
             try:
-                hits = await self._search_articles(queries)
+                cache_lookup = await self._fetch_cached_query_vectors(queries)
+
+                hits_by_query: dict[str, InternalQueryEmbedding] = {}
+                cache_misses: list[str] = []
+                for query in queries.queries:
+                    cache_hit = cache_lookup.get(query)
+                    if cache_hit is None:
+                        cache_misses.append(query)
+                        continue
+                    hits_by_query[query] = InternalQueryEmbedding(
+                        query=query,
+                        vector=cache_hit,
+                    )
+
+                new_embeddings = await self._embed_queries(tuple(cache_misses))
+                await self._store_new_query_embeddings(new_embeddings)
+                hits_by_query.update(
+                    {embedding.query: embedding for embedding in new_embeddings}
+                )
+                embeddings = [
+                    hits_by_query[query]
+                    for query in queries.queries
+                    if query in hits_by_query
+                ]
+                hits = await self._search_articles(embeddings)
             except InternalSearchError as exc:
+                logger.warning(
+                    "internal_search_failed",
+                    failure_code=exc.code.value,
+                    query_count=query_count,
+                )
                 recording.report_outcome(InternalSearchFailed(failure_code=exc.code))
                 raise
             recording.report_outcome(InternalSearchSucceeded(hit_count=len(hits)))
             return hits
 
-    async def embed_queries(
+    async def _embed_queries(
         self,
-        queries: InternalSearchQueries,
+        uncached_queries: tuple[str, ...],
     ) -> list[InternalQueryEmbedding]:
-        if not queries.queries:
+        if not uncached_queries:
             return []
-
-        cached_vectors = await self._fetch_cached_query_vectors(queries)
-        missing_queries = tuple(
-            query for query in queries.queries if query not in cached_vectors
-        )
-        new_embeddings: list[InternalQueryEmbedding] = []
-        if missing_queries:
-            try:
-                new_embeddings = await self.embedder.embed_queries(
-                    InternalSearchQueries(queries=missing_queries)
-                )
-            except AIProviderError as exc:
-                raise InternalSearchError(
-                    code=InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
-                ) from exc
-
-        await self._store_new_query_embeddings(new_embeddings)
-        embeddings_by_query = {
-            query: InternalQueryEmbedding(query=query, vector=vector)
-            for query, vector in cached_vectors.items()
-        }
-        embeddings_by_query.update(
-            {embedding.query: embedding for embedding in new_embeddings}
-        )
-        embeddings = [
-            embeddings_by_query[query]
-            for query in queries.queries
-            if query in embeddings_by_query
-        ]
-        return embeddings
+        try:
+            return await self.embedder.embed_queries(
+                InternalSearchQueries(queries=uncached_queries)
+            )
+        except AIProviderError as exc:
+            raise InternalSearchError(
+                code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
+            ) from exc
 
     async def _search_articles(
         self,
-        queries: InternalSearchQueries,
-        *,
-        per_query_limit: int = 5,
-        limit: int = 5,
+        embeddings: list[InternalQueryEmbedding],
     ) -> list[InternalArticleSearchHit]:
-        if limit <= 0 or per_query_limit <= 0:
-            return []
         if self.article_search_repository is None:
             raise RuntimeError("article_search_repository is required")
 
-        try:
-            embeddings = await self.embed_queries(queries)
-            best_by_curation_id: dict[int, InternalArticleSearchHit] = {}
-            for embedding in embeddings:
-                hits = await self.article_search_repository.search_by_embedding(
-                    embedding,
-                    limit=per_query_limit,
-                )
-                for hit in hits:
-                    current = best_by_curation_id.get(hit.article.curation_id)
-                    if current is None or hit.distance < current.distance:
-                        best_by_curation_id[hit.article.curation_id] = hit
-
-            hits = sorted(
-                best_by_curation_id.values(),
-                key=lambda hit: hit.distance,
-            )[:limit]
-        except InternalSearchError as exc:
-            logger.warning(
-                "internal_search_failed",
-                failure_code=exc.code.value,
-                query_count=len(queries.queries),
+        best_by_curation_id: dict[int, InternalArticleSearchHit] = {}
+        for embedding in embeddings:
+            hits = await self.article_search_repository.search_by_embedding(
+                embedding,
+                limit=INTERNAL_SEARCH_HITS_PER_QUERY,
             )
-            raise
-        return hits
+            for hit in hits:
+                current = best_by_curation_id.get(hit.article.curation_id)
+                if current is None or hit.distance < current.distance:
+                    best_by_curation_id[hit.article.curation_id] = hit
+
+        return sorted(
+            best_by_curation_id.values(),
+            key=lambda hit: hit.distance,
+        )[:INTERNAL_SEARCH_HIT_POOL_LIMIT]
 
     async def _fetch_cached_query_vectors(
         self,

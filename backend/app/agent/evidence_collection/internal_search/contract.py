@@ -14,6 +14,8 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 
 __all__ = [
+    "INTERNAL_SEARCH_HIT_POOL_LIMIT",
+    "INTERNAL_SEARCH_HITS_PER_QUERY",
     "InternalArticleContent",
     "InternalArticleSearchHit",
     "InternalSearch",
@@ -24,11 +26,14 @@ __all__ = [
 
 type InternalSearchOutcome = Literal["succeeded", "empty", "failed"]
 
+INTERNAL_SEARCH_HITS_PER_QUERY = 5
+INTERNAL_SEARCH_HIT_POOL_LIMIT = 5
+
 
 class InternalSearchFailureCode(StrEnum):
     """内部検索が安全に分類できる失敗理由。"""
 
-    EMBEDDING_PROVIDER_FAILED = "embedding_provider_failed"
+    QUERY_EMBEDDING_FAILED = "query_embedding_failed"
     ARTICLE_SEARCH_FAILED = "article_search_failed"
 
 

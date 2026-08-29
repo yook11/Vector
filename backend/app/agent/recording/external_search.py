@@ -11,17 +11,21 @@ from contextlib import (
 )
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import logfire
 
 from app.agent.phase_span import agent_phase
 from app.agent.recording.types import PhaseStatus
 
+if TYPE_CHECKING:
+    from app.agent.evidence_collection.external_search.contract import (
+        ExternalSearchFailureCode,
+    )
+
 __all__ = [
+    "ExternalSearchFailed",
     "ExternalSearchOutcome",
-    "ExternalSearchProviderFailed",
-    "ExternalSearchQueryGenerationFailed",
     "ExternalSearchRecorder",
     "ExternalSearchRecording",
     "ExternalSearchSucceeded",
@@ -52,20 +56,13 @@ class ExternalSearchSucceeded:
 
 
 @dataclass(frozen=True, slots=True)
-class ExternalSearchQueryGenerationFailed:
-    """queryを生成できず空の実行結果を返した結論。"""
+class ExternalSearchFailed:
+    """分類済みの縮退で戻り値を返した結論。"""
+
+    failure_code: ExternalSearchFailureCode
 
 
-@dataclass(frozen=True, slots=True)
-class ExternalSearchProviderFailed:
-    """全queryのprovider実行が失敗した結論。"""
-
-
-type ExternalSearchOutcome = (
-    ExternalSearchSucceeded
-    | ExternalSearchQueryGenerationFailed
-    | ExternalSearchProviderFailed
-)
+type ExternalSearchOutcome = ExternalSearchSucceeded | ExternalSearchFailed
 
 
 class ExternalSearchRecording(Protocol):
@@ -253,10 +250,8 @@ def _record_outcome(search_exit: _ExternalSearchExit) -> None:
 def _outcome_label(outcome: ExternalSearchOutcome | None) -> str:
     if isinstance(outcome, ExternalSearchSucceeded):
         return "succeeded"
-    if isinstance(outcome, ExternalSearchQueryGenerationFailed):
-        return "query_generation_failed"
-    if isinstance(outcome, ExternalSearchProviderFailed):
-        return "provider_failed"
+    if isinstance(outcome, ExternalSearchFailed):
+        return outcome.failure_code.value
     return _MISSING_OUTCOME
 
 
