@@ -14,6 +14,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
     InternalSearchError,
+    InternalSearchFailureCode,
 )
 from app.agent.evidence_collection.internal_search.metrics import (
     InternalHitDropReason,
@@ -86,11 +87,15 @@ class PgVectorArticleSearchRepository:
                 async with session.begin():
                     rows = (await session.execute(stmt)).all()
         except (SQLAlchemyTimeoutError, OperationalError) as exc:
-            raise InternalSearchError(phase="article_search") from exc
+            raise InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            ) from exc
         except InterfaceError as exc:
             if not exc.connection_invalidated:
                 raise
-            raise InternalSearchError(phase="article_search") from exc
+            raise InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            ) from exc
 
         hits: list[InternalArticleSearchHit] = []
         for row in rows:

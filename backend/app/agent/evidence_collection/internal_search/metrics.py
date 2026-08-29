@@ -6,14 +6,12 @@ from typing import Literal
 
 import logfire
 
-from app.agent.evidence_collection.internal_search.contract import InternalSearchOutcome
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalSearchFailureCode,
+    InternalSearchOutcome,
+)
 
 InternalRetrievalResult = InternalSearchOutcome
-InternalRetrievalFailurePhase = Literal[
-    "query_embedding",
-    "article_search",
-    "unknown",
-]
 QueryEmbeddingCacheResult = Literal["lookup_failed", "save_failed"]
 InternalHitDropReason = Literal[
     "summary_too_long",
@@ -51,7 +49,7 @@ def record_internal_retrieval_outcome(
     *,
     result: InternalRetrievalResult,
     query_count: int,
-    failure_phase: InternalRetrievalFailurePhase | None = None,
+    failure_code: InternalSearchFailureCode | None = None,
 ) -> None:
     """Record the internal retrieval boundary outcome."""
 
@@ -59,8 +57,8 @@ def record_internal_retrieval_outcome(
         "result": result,
         "query_count": query_count,
     }
-    if failure_phase is not None:
-        attributes["failure_phase"] = failure_phase
+    if failure_code is not None:
+        attributes["failure_code"] = failure_code.value
     _internal_retrieval_outcome_counter.add(
         1,
         attributes=attributes,

@@ -1,5 +1,11 @@
 # Internal search failure continuation slice
 
+> [!NOTE]
+> `InternalSearchFailurePhase`とmetricの`failure_phase`は、後続の
+> `evidence-collection-recorder-observability-slice.md`により
+> `InternalSearchFailureCode` / `failure_code`へ置き換えられた。
+> 以下は実装当時の履歴として残す。
+
 ## Problem
 
 内部検索の運用障害が例外伝播し、外部根拠を取得できた mixed plan でも回答全体が失敗する。

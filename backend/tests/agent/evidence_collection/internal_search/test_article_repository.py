@@ -28,7 +28,10 @@ from app.agent.evidence_collection.internal_search.article_repository import (
     PgVectorArticleSearchRepository,
     _hit_from_search_row,
 )
-from app.agent.evidence_collection.internal_search.contract import InternalSearchError
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalSearchError,
+    InternalSearchFailureCode,
+)
 from app.agent.evidence_collection.internal_search.metrics import InternalHitDropReason
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
@@ -223,7 +226,7 @@ class TestPgVectorArticleSearchRepository:
         with pytest.raises(InternalSearchError) as captured:
             await repo.search_by_embedding(_query_embedding(), limit=5)
 
-        assert captured.value.phase == "article_search"
+        assert captured.value.code is InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
         assert captured.value.__cause__ is error
 
     async def test_search_does_not_wrap_valid_interface_error(self) -> None:

@@ -38,6 +38,12 @@ from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
     InternalSearchError,
+    InternalSearchFailureCode,
+    InternalSearchService,
+)
+from app.agent.evidence_collection.internal_search.query_embedding import (
+    InternalQueryEmbedding,
+    InternalSearchQueries,
 )
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
@@ -75,6 +81,9 @@ from tests.logfire._span_helpers import (
 _PHASE_SPAN_NAME = "agent_phase"
 _PROVIDER_SPAN_NAME = "agent_provider_call"
 _RUN_SPAN_NAME = "agent_answering_run"
+_TASK_SPAN_NAME = "evidence_collection_task"
+_INTERNAL_SEARCH_SPAN_NAME = "internal_search"
+_EXTERNAL_SEARCH_SPAN_NAME = "external_search"
 _QUERY_OUTPUT_SENTINEL = "GENERATED_QUERY_SENTINEL_1f24"
 _SELECTION_CLAIM_SENTINEL = "SELECTION_CLAIM_SENTINEL_98ab"
 _SELECTION_WHY_SENTINEL = "SELECTION_WHY_SENTINEL_7c31"
@@ -140,10 +149,30 @@ class _Planner:
         )
 
 
-class _EmptyInternalSearch:
-    async def search(self, queries: object) -> list[object]:
+class _EmptyInternalQueryEmbedder:
+    async def embed_queries(
+        self,
+        queries: InternalSearchQueries,
+    ) -> list[InternalQueryEmbedding]:
         del queries
         return []
+
+
+class _UnreachableArticleRepository:
+    async def search_by_embedding(
+        self,
+        embedding: InternalQueryEmbedding,
+        *,
+        limit: int,
+    ) -> list[InternalArticleSearchHit]:
+        raise AssertionError(f"article search must not run: {embedding!r}, {limit}")
+
+
+def _empty_internal_search() -> InternalSearchService:
+    return InternalSearchService(
+        embedder=_EmptyInternalQueryEmbedder(),
+        article_search_repository=_UnreachableArticleRepository(),
+    )
 
 
 class _UnreachableDirectAnswerer:
@@ -230,7 +259,7 @@ def _runner(
     phases = AnsweringPhases(
         planner=_Planner(),
         collector=EvidenceCollectionService(
-            internal_search=internal_search or _EmptyInternalSearch(),
+            internal_search=internal_search or _empty_internal_search(),
             external_search_scope_factory=factory,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
@@ -281,16 +310,15 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
 
     phases = spans_named(capfire, _PHASE_SPAN_NAME)
     providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
-    # phase spanはAgent所有2本(external_query / evidence_reviewer、agent_name属性あり)
-    # + 機構所有1本(内部検索、agent_nameを持たない)。内部検索spanの属性契約自体の
-    # 正本は tests/agent/evidence_collection/test_researcher_tracing.py が持つため、
-    # ここでは「同じevidence_collection系統のspanとしてtrace上に並ぶ」ことだけを見る。
+    task_span = one_span_named(capfire, _TASK_SPAN_NAME)
+    internal_search_span = one_span_named(capfire, _INTERNAL_SEARCH_SPAN_NAME)
+    external_search_span = one_span_named(capfire, _EXTERNAL_SEARCH_SPAN_NAME)
     agent_phases = [
         phase
         for phase in phases
         if "agent_name" in domain_attr_keys(phase["attributes"])
     ]
-    internal_search_phases = [
+    collection_phases = [
         phase
         for phase in phases
         if "agent_name" not in domain_attr_keys(phase["attributes"])
@@ -304,29 +332,23 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
     assert query_client.chat.completions.create.await_count == 1
     assert reviewer_client.chat.completions.create.await_count == 2
     assert [input.query for input in tool.inputs] == [_QUERY_OUTPUT_SENTINEL]
-    assert len(phases) == 3
     assert len(providers) == 3
     assert set(phase_by_agent) == {
         EXTERNAL_QUERY_AGENT.name,
         EVIDENCE_REVIEWER_AGENT.name,
     }
-    assert len(internal_search_phases) == 1
-    assert domain_attr_keys(internal_search_phases[0]["attributes"]) == {
-        "phase",
-        "task_index",
-    }
-    assert internal_search_phases[0]["attributes"]["phase"] == "evidence_collection"
-    # S1: evidence_review のphase spanはRun全体を覆うため task_index を持たない
-    # (仕様「観測と失敗分類」)。task単位のexternal_query phaseは維持する。
+    assert len(collection_phases) == 1
+    collection_span = collection_phases[0]
+    assert domain_attr_keys(collection_span["attributes"]) == {"phase"}
+    assert collection_span["attributes"]["phase"] == "evidence_collection"
+    assert domain_attr_keys(task_span["attributes"]) == {"task_index"}
+    assert task_span["attributes"]["task_index"] == 0
     assert domain_attr_keys(
         phase_by_agent[EXTERNAL_QUERY_AGENT.name]["attributes"]
-    ) == {"phase", "agent_name", "task_index"}
-    assert phase_by_agent[EXTERNAL_QUERY_AGENT.name]["attributes"]["task_index"] == 0
+    ) == {"phase", "agent_name"}
     assert domain_attr_keys(
         phase_by_agent[EVIDENCE_REVIEWER_AGENT.name]["attributes"]
     ) == {"phase", "agent_name"}
-    # 外部クエリ生成とevidence reviewは同じevidence_collection/evidence_review系統内で
-    # 工程名が別れる (specs/agent-phase-span-vocabulary-slice.md 工程とspanの対応)。
     assert (
         phase_by_agent[EXTERNAL_QUERY_AGENT.name]["attributes"]["phase"]
         == "evidence_collection"
@@ -355,7 +377,17 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
         == phase_by_agent[EVIDENCE_REVIEWER_AGENT.name]["context"]["span_id"]
         for provider in providers[1:]
     )
+    assert task_span["parent"]["span_id"] == collection_span["context"]["span_id"]
+    assert internal_search_span["parent"]["span_id"] == task_span["context"]["span_id"]
+    assert external_search_span["parent"]["span_id"] == task_span["context"]["span_id"]
+    assert (
+        phase_by_agent[EXTERNAL_QUERY_AGENT.name]["parent"]["span_id"]
+        == external_search_span["context"]["span_id"]
+    )
     assert all(exception_event(phase) is None for phase in phases)
+    assert exception_event(task_span) is None
+    assert exception_event(internal_search_span) is None
+    assert exception_event(external_search_span) is None
     for unsafe in (
         "GOAL_SENTINEL_3cc7",
         "1998年2月",
@@ -389,44 +421,47 @@ async def test_unclassified_query_error_is_redacted_and_only_error_phase(
 
     phases = spans_named(capfire, _PHASE_SPAN_NAME)
     providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
-    # 内部検索は外部クエリ生成と並行実行され、外部クエリの未分類エラーとは無関係に
-    # 成功で完走する(_gather_two_branchesが両枝をsettleさせてから
-    # 例外を再送出するため)。「エラーになるphaseはひとつだけ」の意図を保つため、
-    # phaseをexception eventの有無で分けて検証する。
-    error_phases = [phase for phase in phases if exception_event(phase) is not None]
-    healthy_phases = [phase for phase in phases if exception_event(phase) is None]
+    task_span = one_span_named(capfire, _TASK_SPAN_NAME)
+    internal_search_span = one_span_named(capfire, _INTERNAL_SEARCH_SPAN_NAME)
+    external_search_span = one_span_named(capfire, _EXTERNAL_SEARCH_SPAN_NAME)
+    error_spans = [*phases, task_span, external_search_span, *providers]
     raw_spans_by_id = {
         span.context.span_id: span
         for span in capfire.exporter.exported_spans
-        if span.name in {_PHASE_SPAN_NAME, _PROVIDER_SPAN_NAME}
+        if span.name
+        in {
+            _PHASE_SPAN_NAME,
+            _TASK_SPAN_NAME,
+            _INTERNAL_SEARCH_SPAN_NAME,
+            _EXTERNAL_SEARCH_SPAN_NAME,
+            _PROVIDER_SPAN_NAME,
+        }
         and (span.attributes or {}).get("logfire.span_type") == "span"
     }
     trace_dump = json.dumps(
         capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
     )
     assert raised.value is error
-    assert len(phases) == 2
     assert len(providers) == 1
-    assert len(error_phases) == 1
-    assert len(healthy_phases) == 1
-    assert "agent_name" not in domain_attr_keys(healthy_phases[0]["attributes"])
-    assert providers[0]["parent"]["span_id"] == error_phases[0]["context"]["span_id"]
+    query_span = next(phase for phase in phases if "agent_name" in phase["attributes"])
+    collection_span = next(
+        phase for phase in phases if "agent_name" not in phase["attributes"]
+    )
+    assert providers[0]["parent"]["span_id"] == query_span["context"]["span_id"]
+    assert query_span["parent"]["span_id"] == external_search_span["context"]["span_id"]
+    assert external_search_span["parent"]["span_id"] == task_span["context"]["span_id"]
+    assert task_span["parent"]["span_id"] == collection_span["context"]["span_id"]
+    assert internal_search_span["parent"]["span_id"] == task_span["context"]["span_id"]
     assert reviewer_client.chat.completions.create.await_count == 0
     error_raw_spans = [
-        raw_spans_by_id[phase["context"]["span_id"]] for phase in error_phases
-    ] + [raw_spans_by_id[provider["context"]["span_id"]] for provider in providers]
-    healthy_raw_spans = [
-        raw_spans_by_id[phase["context"]["span_id"]] for phase in healthy_phases
+        raw_spans_by_id[span["context"]["span_id"]] for span in error_spans
     ]
-    assert all(
-        exception_event(span) is not None for span in [*error_phases, *providers]
-    )
-    assert all(exception_event(span) is None for span in healthy_phases)
+    healthy_raw_span = raw_spans_by_id[internal_search_span["context"]["span_id"]]
+    assert all(exception_event(span) is not None for span in error_spans)
+    assert exception_event(internal_search_span) is None
     assert all(span.status.status_code is StatusCode.ERROR for span in error_raw_spans)
     assert all(span.status.description == "[redacted]" for span in error_raw_spans)
-    assert all(
-        span.status.status_code is StatusCode.UNSET for span in healthy_raw_spans
-    )
+    assert healthy_raw_span.status.status_code is StatusCode.UNSET
     assert error_sentinel not in trace_dump
 
 
@@ -527,7 +562,9 @@ class _PerQueryFailableInternalSearch:
     async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
         query = queries.queries[0]
         if query in self._failing_queries:
-            raise InternalSearchError(phase="article_search")
+            raise InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            )
         hit = _internal_hit(assessment_id=self._next_assessment_id, title=query)
         self._next_assessment_id += 1
         return [hit]
@@ -648,7 +685,7 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
     phases = AnsweringPhases(
         planner=_DirectPlanner(),
         collector=EvidenceCollectionService(
-            internal_search=_EmptyInternalSearch(),
+            internal_search=_empty_internal_search(),
             external_search_scope_factory=_UnreachableExternalScope(),
         ),
         direct_answerer=_DirectAnswerer(),

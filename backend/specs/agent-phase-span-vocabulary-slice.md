@@ -4,6 +4,12 @@
 
 実装状況: Implemented — 2026-08-01
 
+> [!NOTE]
+> `evidence_collection` の span 階層と InternalSearch / ExternalSearch の観測契約は、
+> 後続の `evidence-collection-recorder-observability-slice.md` により置き換えられた。
+> 本文中の「工程全体を包む親 span は作らない」という記述は、他工程に関する当時の判断を
+> 記録するものであり、現在の EvidenceCollection には適用しない。
+
 ## 位置付け
 
 `agent-progress-stage-vocabulary-slice.md`(#88)がstage語彙を実工程6値へ、

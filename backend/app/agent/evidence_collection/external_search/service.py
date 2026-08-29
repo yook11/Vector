@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from app.agent.concurrency import gather_cancel_on_error
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
@@ -32,17 +31,17 @@ from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
 )
-from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.recording.external_search import (
+    ExternalSearchOutcome,
+    ExternalSearchProviderFailed,
+    ExternalSearchQueryGenerationFailed,
     ExternalSearchRecorder,
+    ExternalSearchSucceeded,
     logfire_external_search_recorder,
 )
 from app.agent.runtime.contract import AgentResponseInvalidError, AgentRuntime
 from app.analysis.ai_provider_errors import AIProviderError
-
-if TYPE_CHECKING:
-    from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
 
 __all__ = ["ExternalSearchService"]
 
@@ -73,16 +72,13 @@ class ExternalSearchService:
         target_time_window: TargetTimeWindow | None,
         task_index: int,
     ) -> ExternalSearchExecution:
-        call = await self.recorder.start()
-        try:
+        async with self.recorder.record() as recording:
             date_filter = await self._publication_filter(
                 target_time_window=target_time_window,
                 as_of=as_of,
             )
-            with agent_phase(
-                phase="evidence_collection",
+            async with recording.record_query_generation(
                 agent_name=EXTERNAL_QUERY_AGENT.name,
-                task_index=task_index,
             ):
                 queries = await self._generate_queries(
                     research_goal=research_goal,
@@ -98,17 +94,8 @@ class ExternalSearchService:
                 )
             else:
                 execution = await self._search_queries(queries, date_filter=date_filter)
-            await self.recorder.end(
-                call,
-                outcome=_outcome_from_execution(execution),
-            )
+            recording.report_outcome(_recording_outcome_from_execution(execution))
             return execution
-        except (asyncio.CancelledError, GeneratorExit):
-            await self.recorder.end(call, stopped=True)
-            raise
-        except Exception:
-            await self.recorder.end(call)
-            raise
 
     async def _publication_filter(
         self,
@@ -214,11 +201,11 @@ class ExternalSearchService:
         return hits[:EXTERNAL_SEARCH_HITS_PER_QUERY], False
 
 
-def _outcome_from_execution(
+def _recording_outcome_from_execution(
     execution: ExternalSearchExecution,
-) -> TaskExternalCollectionStatus:
+) -> ExternalSearchOutcome:
     if not execution.generated_queries:
-        return "query_generation_failed"
+        return ExternalSearchQueryGenerationFailed()
     if execution.provider_failed_query_count == len(execution.generated_queries):
-        return "provider_failed"
-    return "succeeded"
+        return ExternalSearchProviderFailed()
+    return ExternalSearchSucceeded()

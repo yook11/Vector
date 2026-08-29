@@ -74,7 +74,7 @@ class QuestionPlanningService:
                             "unreachable: planning loop must return or raise"
                         )
             except PlanningError as error:
-                recording.set_outcome(
+                recording.report_outcome(
                     PlanningFailed(
                         failure_code=error.code,
                         attempt_count=attempt_number,
@@ -82,7 +82,7 @@ class QuestionPlanningService:
                 )
                 raise
 
-            recording.set_outcome(
+            recording.report_outcome(
                 PlanningSucceeded(
                     plan_type=plan.plan_type,
                     attempt_count=attempt_number,

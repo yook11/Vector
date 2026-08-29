@@ -69,9 +69,9 @@ type PlanningOutcome = PlanningSucceeded | PlanningFailed
 
 
 class PlanningRecording(Protocol):
-    """plan() 1回に結論を関連付ける記録ハンドル。"""
+    """工程が確定したplan()の結論をRecorderへ伝える実行中の記録ハンドル。"""
 
-    def set_outcome(self, outcome: PlanningOutcome) -> None: ...
+    def report_outcome(self, outcome: PlanningOutcome) -> None: ...
 
 
 class PlanningRecorder(Protocol):
@@ -88,7 +88,7 @@ class PlanningRecorder(Protocol):
 class _PlanningRecording:
     outcome: PlanningOutcome | None = None
 
-    def set_outcome(self, outcome: PlanningOutcome) -> None:
+    def report_outcome(self, outcome: PlanningOutcome) -> None:
         self.outcome = outcome
 
 

@@ -22,9 +22,14 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchProviderError,
     ExternalSearchRequest,
 )
+from app.agent.recording.external_search import (
+    ExternalSearchSucceeded,
+    LogfireExternalSearchRecorder,
+)
 from tests.logfire._span_helpers import domain_attr_keys, one_span_named
 
 _SPAN_NAME = "external_search_call"
+_EXTERNAL_SEARCH_SPAN_NAME = "external_search"
 _ANSWERING_SPAN_NAME = "agent_answering_run"
 
 
@@ -201,6 +206,38 @@ async def test_successful_call_has_one_safe_client_span_in_answer_trace(
     assert http_spans[0].parent.span_id == span.context.span_id
     assert all(sentinel not in _span_text(span) for sentinel in sentinels.values())
     assert all(sentinel not in trace_dump for sentinel in sentinels.values())
+
+
+@pytest.mark.asyncio
+async def test_gateway_span_is_child_of_external_search_span(
+    capfire: CaptureLogfire,
+) -> None:
+    gateway = _tavily_gateway(
+        FakeTavilyHttpClient(
+            [
+                httpx.Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "url": "https://example.com/a",
+                                "title": "a",
+                                "content": "content",
+                            }
+                        ]
+                    },
+                )
+            ]
+        )
+    )
+
+    async with LogfireExternalSearchRecorder().record() as recording:
+        await gateway.search(_search_request(query="query", limit=1))
+        recording.report_outcome(ExternalSearchSucceeded())
+
+    search_span = one_span_named(capfire, _EXTERNAL_SEARCH_SPAN_NAME)
+    gateway_span = one_span_named(capfire, _SPAN_NAME)
+    assert gateway_span["parent"]["span_id"] == search_span["context"]["span_id"]
 
 
 @pytest.mark.asyncio

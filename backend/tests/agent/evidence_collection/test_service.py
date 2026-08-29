@@ -22,6 +22,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
     InternalSearchError,
+    InternalSearchFailureCode,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
@@ -30,6 +31,7 @@ from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWind
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.recording._fakes import RecordingEvidenceCollectionRecorder
 from tests.agent.running._harness import fixed_scope
 from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
@@ -200,13 +202,18 @@ def _service(
     internal_search: Any,
     external: ExternalSearch | None = None,
     events: _Events | None = None,
+    recorder: RecordingEvidenceCollectionRecorder | None = None,
 ) -> EvidenceCollectionService:
+    kwargs: dict[str, Any] = {}
+    if recorder is not None:
+        kwargs["recorder"] = recorder
     return EvidenceCollectionService(
         internal_search=internal_search,
         events=events,
         external_search_scope_factory=fixed_scope(
             external if external is not None else _IdleExternalSearch()
         ),
+        **kwargs,
     )
 
 
@@ -223,6 +230,28 @@ async def _collect_tasks(
 
 
 @pytest.mark.asyncio
+async def test_collect_records_one_scope_with_each_research_task() -> None:
+    recorder = RecordingEvidenceCollectionRecorder()
+    service = _service(
+        internal_search=_FakeInternalSearch(),
+        recorder=recorder,
+    )
+
+    collected = await _collect_tasks(
+        service,
+        _task("first", "q1"),
+        _task("second", "q2"),
+    )
+
+    assert len(collected) == 2
+    assert len(recorder.records) == 1
+    recording = recorder.records[0]
+    assert {task.task_index for task in recording.tasks} == {0, 1}
+    assert all(task.error is None for task in recording.tasks)
+    assert recording.error is None
+
+
+@pytest.mark.asyncio
 async def test_internal_failure_still_collects_external_hits() -> None:
     """保証するテスト条件 1。internal_failed=Trueかつcompleted eventが立たない。"""
     events = _Events()
@@ -232,7 +261,9 @@ async def test_internal_failure_still_collects_external_hits() -> None:
     query_runtime = ScriptedAgentRuntime([_query_draft(["nvidia supply"])])
     service = _service(
         internal_search=_FakeInternalSearch(
-            error=InternalSearchError(phase="article_search")
+            error=InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            )
         ),
         external=_external_search(query_runtime, gateway=gateway),
         events=events,
@@ -416,7 +447,9 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
         async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
             query = queries.queries[0]
             if query == "bad":
-                raise InternalSearchError(phase="article_search")
+                raise InternalSearchError(
+                    code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+                )
             return [_hit(assessment_id=1001, title="sibling-hit")]
 
     class _KeyedExternalSearchGateway:
@@ -514,7 +547,9 @@ async def test_internal_failure_reports_started_only_with_task_index() -> None:
     events = _Events()
     service = _service(
         internal_search=_FakeInternalSearch(
-            error=InternalSearchError(phase="query_embedding")
+            error=InternalSearchError(
+                code=InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
+            )
         ),
         events=events,
     )

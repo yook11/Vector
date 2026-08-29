@@ -36,6 +36,7 @@ from app.agent.evidence_collection.external_search import (
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
+    InternalSearchFailureCode,
 )
 from app.agent.evidence_collection.internal_search.contract import InternalSearchError
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -1057,7 +1058,11 @@ async def test_search_converts_internal_search_error_to_failed_report_value(
     captured = _capture_external_outcome(monkeypatch)
     runner = _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
-        internal=_InternalSearch(error=InternalSearchError(phase="article_search")),
+        internal=_InternalSearch(
+            error=InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            )
+        ),
         factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
         timeline=timeline,
     )
@@ -1079,7 +1084,11 @@ async def test_search_classified_internal_failure_keeps_external_outcome(
     query = ScriptedAgentRuntime([_query_draft()])
     runner = _runner(
         plan=_search_plan(),
-        internal=_InternalSearch(error=InternalSearchError(phase="article_search")),
+        internal=_InternalSearch(
+            error=InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            )
+        ),
         factory=_Factory([_runtime(query)], timeline),
         timeline=timeline,
     )
@@ -1205,7 +1214,11 @@ async def test_internal_search_failure_reports_started_without_completed() -> No
     events = _Events()
     runner = _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
-        internal=_InternalSearch(error=InternalSearchError(phase="article_search")),
+        internal=_InternalSearch(
+            error=InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            )
+        ),
         factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
         timeline=timeline,
         events=events,
@@ -1577,7 +1590,9 @@ class _KeyedFailingInternalSearch:
         self.calls.append(queries)
         query = queries.queries[0]
         if query in self._failing_queries:
-            raise InternalSearchError(phase="article_search")
+            raise InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            )
         return list(self._hits_by_query.get(query, []))
 
 
@@ -1600,7 +1615,9 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
         planner=_Planner(_plan_with_tasks(("goal0", ["NVIDIA"]))),
         collector=EvidenceCollectionService(
             internal_search=_InternalSearch(
-                error=InternalSearchError(phase="article_search")
+                error=InternalSearchError(
+                    code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+                )
             ),
             events=events,
             external_search_scope_factory=factory,

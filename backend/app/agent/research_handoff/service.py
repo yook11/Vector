@@ -54,12 +54,12 @@ class ResearchHandoffService:
                 async with self._runtime_scope_factory() as runtime:
                     draft = await runtime.call(self._agent, input, attempt_number=1)
             except _CLASSIFIED_FAILURES as cause:
-                recording.set_outcome(
+                recording.report_outcome(
                     ResearchHandoffFailed(failure_code=_failure_code(cause))
                 )
                 return input.handoff
 
-            recording.set_outcome(ResearchHandoffSucceeded())
+            recording.report_outcome(ResearchHandoffSucceeded())
             return input.handoff.from_draft(draft)
 
 

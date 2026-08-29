@@ -7,27 +7,29 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from time import perf_counter
 
-from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
-from app.agent.evidence_collection.internal_search.contract import (
-    InternalSearchFailurePhase,
-    InternalSearchOutcome,
-)
 from app.agent.recording.direct_answer import DirectAnswerOutcome
 from app.agent.recording.evidence_answer import EvidenceAnswerRecordingOutcome
+from app.agent.recording.evidence_collection import EvidenceCollectionRecording
 from app.agent.recording.evidence_review import EvidenceReviewOutcome
+from app.agent.recording.external_search import ExternalSearchOutcome
+from app.agent.recording.internal_search import InternalSearchRecordingOutcome
 from app.agent.recording.planning import PlanningOutcome
-from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
+from app.agent.recording.types import LlmCall, LlmCallResult, Usage
 
 __all__ = [
     "RecordedDirectAnswer",
     "RecordedEvidenceAnswer",
+    "RecordedEvidenceCollection",
+    "RecordedEvidenceCollectionTask",
     "RecordedEvidenceReview",
-    "RecordedExternalSearchEnd",
-    "RecordedInternalSearchEnd",
+    "RecordedExternalSearch",
+    "RecordedExternalSearchQueryGeneration",
+    "RecordedInternalSearch",
     "RecordedLlmCallEnd",
     "RecordedPlanning",
     "RecordingDirectAnswerRecorder",
     "RecordingEvidenceAnswerRecorder",
+    "RecordingEvidenceCollectionRecorder",
     "RecordingEvidenceReviewRecorder",
     "RecordingExternalSearchRecorder",
     "RecordingInternalSearchRecorder",
@@ -85,76 +87,140 @@ class RecordingLlmCallRecorder:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class RecordedInternalSearchEnd:
-    call: PhaseCall
-    outcome: InternalSearchOutcome | None
+@dataclass(slots=True)
+class RecordedInternalSearch:
     query_count: int
-    failure_phase: InternalSearchFailurePhase | None
-    stopped: bool
+    outcomes: list[InternalSearchRecordingOutcome] = field(default_factory=list)
+    error: BaseException | None = None
+
+    def report_outcome(self, outcome: InternalSearchRecordingOutcome) -> None:
+        self.outcomes.append(outcome)
 
 
 @dataclass(slots=True)
 class RecordingInternalSearchRecorder:
-    starts: list[PhaseCall] = field(default_factory=list)
-    ends: list[RecordedInternalSearchEnd] = field(default_factory=list)
+    records: list[RecordedInternalSearch] = field(default_factory=list)
 
-    async def start(self) -> PhaseCall:
-        call = PhaseCall(started_at=perf_counter())
-        self.starts.append(call)
-        return call
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
         query_count: int,
-        outcome: InternalSearchOutcome | None = None,
-        failure_phase: InternalSearchFailurePhase | None = None,
-        stopped: bool = False,
-    ) -> None:
-        self.ends.append(
-            RecordedInternalSearchEnd(
-                call=call,
-                outcome=outcome,
-                query_count=query_count,
-                failure_phase=failure_phase,
-                stopped=stopped,
-            )
-        )
+    ) -> AbstractAsyncContextManager[RecordedInternalSearch]:
+        return self._record(query_count=query_count)
+
+    @asynccontextmanager
+    async def _record(
+        self,
+        *,
+        query_count: int,
+    ) -> AsyncIterator[RecordedInternalSearch]:
+        recording = RecordedInternalSearch(query_count=query_count)
+        self.records.append(recording)
+        try:
+            yield recording
+        except BaseException as error:
+            recording.error = error
+            raise
 
 
-@dataclass(frozen=True, slots=True)
-class RecordedExternalSearchEnd:
-    call: PhaseCall
-    outcome: TaskExternalCollectionStatus | None
-    stopped: bool
+@dataclass(slots=True)
+class RecordedExternalSearchQueryGeneration:
+    agent_name: str
+    error: BaseException | None = None
+
+
+@dataclass(slots=True)
+class RecordedExternalSearch:
+    outcomes: list[ExternalSearchOutcome] = field(default_factory=list)
+    query_generations: list[RecordedExternalSearchQueryGeneration] = field(
+        default_factory=list
+    )
+    error: BaseException | None = None
+
+    def report_outcome(self, outcome: ExternalSearchOutcome) -> None:
+        self.outcomes.append(outcome)
+
+    def record_query_generation(
+        self,
+        *,
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[None]:
+        return self._record_query_generation(agent_name=agent_name)
+
+    @asynccontextmanager
+    async def _record_query_generation(self, *, agent_name: str) -> AsyncIterator[None]:
+        recording = RecordedExternalSearchQueryGeneration(agent_name=agent_name)
+        self.query_generations.append(recording)
+        try:
+            yield
+        except BaseException as error:
+            recording.error = error
+            raise
 
 
 @dataclass(slots=True)
 class RecordingExternalSearchRecorder:
-    starts: list[PhaseCall] = field(default_factory=list)
-    ends: list[RecordedExternalSearchEnd] = field(default_factory=list)
+    records: list[RecordedExternalSearch] = field(default_factory=list)
 
-    async def start(self) -> PhaseCall:
-        call = PhaseCall(started_at=perf_counter())
-        self.starts.append(call)
-        return call
+    def record(self) -> AbstractAsyncContextManager[RecordedExternalSearch]:
+        return self._record()
 
-    async def end(
+    @asynccontextmanager
+    async def _record(self) -> AsyncIterator[RecordedExternalSearch]:
+        recording = RecordedExternalSearch()
+        self.records.append(recording)
+        try:
+            yield recording
+        except BaseException as error:
+            recording.error = error
+            raise
+
+
+@dataclass(slots=True)
+class RecordedEvidenceCollectionTask:
+    task_index: int
+    error: BaseException | None = None
+
+
+@dataclass(slots=True)
+class RecordedEvidenceCollection(EvidenceCollectionRecording):
+    tasks: list[RecordedEvidenceCollectionTask] = field(default_factory=list)
+    error: BaseException | None = None
+
+    def record_task(
         self,
-        call: PhaseCall,
         *,
-        outcome: TaskExternalCollectionStatus | None = None,
-        stopped: bool = False,
-    ) -> None:
-        self.ends.append(
-            RecordedExternalSearchEnd(
-                call=call,
-                outcome=outcome,
-                stopped=stopped,
-            )
-        )
+        task_index: int,
+    ) -> AbstractAsyncContextManager[None]:
+        return self._record_task(task_index=task_index)
+
+    @asynccontextmanager
+    async def _record_task(self, *, task_index: int) -> AsyncIterator[None]:
+        task = RecordedEvidenceCollectionTask(task_index=task_index)
+        self.tasks.append(task)
+        try:
+            yield
+        except BaseException as error:
+            task.error = error
+            raise
+
+
+@dataclass(slots=True)
+class RecordingEvidenceCollectionRecorder:
+    records: list[RecordedEvidenceCollection] = field(default_factory=list)
+
+    def record(self) -> AbstractAsyncContextManager[RecordedEvidenceCollection]:
+        return self._record()
+
+    @asynccontextmanager
+    async def _record(self) -> AsyncIterator[RecordedEvidenceCollection]:
+        recording = RecordedEvidenceCollection()
+        self.records.append(recording)
+        try:
+            yield recording
+        except BaseException as error:
+            recording.error = error
+            raise
 
 
 @dataclass(slots=True)
@@ -163,7 +229,7 @@ class RecordedPlanning:
     outcomes: list[PlanningOutcome] = field(default_factory=list)
     error: BaseException | None = None
 
-    def set_outcome(self, outcome: PlanningOutcome) -> None:
+    def report_outcome(self, outcome: PlanningOutcome) -> None:
         self.outcomes.append(outcome)
 
 
@@ -195,7 +261,7 @@ class RecordedDirectAnswer:
     outcomes: list[DirectAnswerOutcome] = field(default_factory=list)
     error: BaseException | None = None
 
-    def set_outcome(self, outcome: DirectAnswerOutcome) -> None:
+    def report_outcome(self, outcome: DirectAnswerOutcome) -> None:
         self.outcomes.append(outcome)
 
 
@@ -231,7 +297,7 @@ class RecordedEvidenceAnswer:
     outcomes: list[EvidenceAnswerRecordingOutcome] = field(default_factory=list)
     error: BaseException | None = None
 
-    def set_outcome(self, outcome: EvidenceAnswerRecordingOutcome) -> None:
+    def report_outcome(self, outcome: EvidenceAnswerRecordingOutcome) -> None:
         self.outcomes.append(outcome)
 
 
@@ -267,7 +333,7 @@ class RecordedEvidenceReview:
     outcomes: list[EvidenceReviewOutcome] = field(default_factory=list)
     error: BaseException | None = None
 
-    def set_outcome(self, outcome: EvidenceReviewOutcome) -> None:
+    def report_outcome(self, outcome: EvidenceReviewOutcome) -> None:
         self.outcomes.append(outcome)
 
 
