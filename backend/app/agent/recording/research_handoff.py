@@ -59,9 +59,9 @@ type ResearchHandoffOutcome = ResearchHandoffSucceeded | ResearchHandoffFailed
 
 
 class ResearchHandoffRecording(Protocol):
-    """organize() 1回に結論を関連付ける記録ハンドル。"""
+    """工程が確定したorganize()の結論をRecorderへ伝える実行中の記録ハンドル。"""
 
-    def set_outcome(self, outcome: ResearchHandoffOutcome) -> None: ...
+    def report_outcome(self, outcome: ResearchHandoffOutcome) -> None: ...
 
 
 class ResearchHandoffRecorder(Protocol):
@@ -78,7 +78,7 @@ class ResearchHandoffRecorder(Protocol):
 class _ResearchHandoffRecording:
     outcome: ResearchHandoffOutcome | None = None
 
-    def set_outcome(self, outcome: ResearchHandoffOutcome) -> None:
+    def report_outcome(self, outcome: ResearchHandoffOutcome) -> None:
         self.outcome = outcome
 
 

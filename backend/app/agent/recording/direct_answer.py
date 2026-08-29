@@ -68,9 +68,9 @@ type DirectAnswerOutcome = DirectAnswerSucceeded | DirectAnswerFailed
 
 
 class DirectAnswerRecording(Protocol):
-    """answer() 1回に結論を関連付ける記録ハンドル。"""
+    """工程が確定したanswer()の結論をRecorderへ伝える実行中の記録ハンドル。"""
 
-    def set_outcome(self, outcome: DirectAnswerOutcome) -> None: ...
+    def report_outcome(self, outcome: DirectAnswerOutcome) -> None: ...
 
 
 class DirectAnswerRecorder(Protocol):
@@ -87,7 +87,7 @@ class DirectAnswerRecorder(Protocol):
 class _DirectAnswerRecording:
     outcome: DirectAnswerOutcome | None = None
 
-    def set_outcome(self, outcome: DirectAnswerOutcome) -> None:
+    def report_outcome(self, outcome: DirectAnswerOutcome) -> None:
         self.outcome = outcome
 
 

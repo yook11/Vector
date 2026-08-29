@@ -67,9 +67,9 @@ type EvidenceReviewOutcome = EvidenceReviewSucceeded | EvidenceReviewFailed
 
 
 class EvidenceReviewRecording(Protocol):
-    """review() 1回に結論を関連付ける記録ハンドル。"""
+    """工程が確定したreview()の結論をRecorderへ伝える実行中の記録ハンドル。"""
 
-    def set_outcome(self, outcome: EvidenceReviewOutcome) -> None: ...
+    def report_outcome(self, outcome: EvidenceReviewOutcome) -> None: ...
 
 
 class EvidenceReviewRecorder(Protocol):
@@ -86,7 +86,7 @@ class EvidenceReviewRecorder(Protocol):
 class _EvidenceReviewRecording:
     outcome: EvidenceReviewOutcome | None = None
 
-    def set_outcome(self, outcome: EvidenceReviewOutcome) -> None:
+    def report_outcome(self, outcome: EvidenceReviewOutcome) -> None:
         self.outcome = outcome
 
 

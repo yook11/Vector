@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,20 +18,28 @@ __all__ = [
     "InternalArticleSearchHit",
     "InternalSearch",
     "InternalSearchError",
-    "InternalSearchFailurePhase",
+    "InternalSearchFailureCode",
     "InternalSearchOutcome",
 ]
 
-type InternalSearchFailurePhase = Literal["query_embedding", "article_search"]
 type InternalSearchOutcome = Literal["succeeded", "empty", "failed"]
+
+
+class InternalSearchFailureCode(StrEnum):
+    """内部検索が安全に分類できる失敗理由。"""
+
+    EMBEDDING_PROVIDER_FAILED = "embedding_provider_failed"
+    ARTICLE_SEARCH_FAILED = "article_search_failed"
 
 
 class InternalSearchError(Exception):
     """回答継続可能と分類された内部検索の運用失敗。"""
 
-    def __init__(self, *, phase: InternalSearchFailurePhase) -> None:
-        super().__init__()
-        self.phase = phase
+    def __init__(self, *, code: InternalSearchFailureCode) -> None:
+        if not isinstance(code, InternalSearchFailureCode):
+            raise TypeError("code must be an InternalSearchFailureCode")
+        self.code = code
+        super().__init__(code.value)
 
 
 class InternalArticleContent(BaseModel):

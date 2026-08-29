@@ -106,7 +106,7 @@ class EvidenceReviewer:
                     break
 
             if completed_result is not None:
-                recording.set_outcome(
+                recording.report_outcome(
                     EvidenceReviewSucceeded(attempt_count=attempt_count)
                 )
                 return completed_result
@@ -116,7 +116,7 @@ class EvidenceReviewer:
                     "review exhausted attempts without a classified error"
                 )
             failed_result = EvidenceRunFailed(failure_code=last_error.code)
-            recording.set_outcome(
+            recording.report_outcome(
                 EvidenceReviewFailed(
                     failure_code=failed_result.failure_code,
                     attempt_count=attempt_count,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -11,6 +10,7 @@ import structlog
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
     InternalSearchError,
+    InternalSearchFailureCode,
 )
 from app.agent.evidence_collection.internal_search.metrics import (
     record_query_embedding_cache_outcome,
@@ -21,7 +21,9 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.recording.internal_search import (
+    InternalSearchFailed,
     InternalSearchRecorder,
+    InternalSearchSucceeded,
     logfire_internal_search_recorder,
 )
 from app.analysis.ai_provider_errors import AIProviderError
@@ -66,34 +68,15 @@ class InternalSearchService:
         self,
         queries: InternalSearchQueries,
     ) -> list[InternalArticleSearchHit]:
-        call = await self.recorder.start()
         query_count = len(queries.queries)
-        try:
-            hits = await self._search_articles(queries)
-            await self.recorder.end(
-                call,
-                outcome="succeeded" if hits else "empty",
-                query_count=query_count,
-            )
+        async with self.recorder.record(query_count=query_count) as recording:
+            try:
+                hits = await self._search_articles(queries)
+            except InternalSearchError as exc:
+                recording.report_outcome(InternalSearchFailed(failure_code=exc.code))
+                raise
+            recording.report_outcome(InternalSearchSucceeded(hit_count=len(hits)))
             return hits
-        except InternalSearchError as exc:
-            await self.recorder.end(
-                call,
-                outcome="failed",
-                query_count=query_count,
-                failure_phase=exc.phase,
-            )
-            raise
-        except (asyncio.CancelledError, GeneratorExit):
-            await self.recorder.end(
-                call,
-                query_count=query_count,
-                stopped=True,
-            )
-            raise
-        except Exception:
-            await self.recorder.end(call, query_count=query_count)
-            raise
 
     async def embed_queries(
         self,
@@ -113,7 +96,9 @@ class InternalSearchService:
                     InternalSearchQueries(queries=missing_queries)
                 )
             except AIProviderError as exc:
-                raise InternalSearchError(phase="query_embedding") from exc
+                raise InternalSearchError(
+                    code=InternalSearchFailureCode.EMBEDDING_PROVIDER_FAILED
+                ) from exc
 
         await self._store_new_query_embeddings(new_embeddings)
         embeddings_by_query = {
@@ -162,7 +147,7 @@ class InternalSearchService:
         except InternalSearchError as exc:
             logger.warning(
                 "internal_search_failed",
-                failure_phase=exc.phase,
+                failure_code=exc.code.value,
                 query_count=len(queries.queries),
             )
             raise

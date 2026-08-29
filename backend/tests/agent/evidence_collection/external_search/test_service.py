@@ -14,6 +14,11 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchProviderError,
 )
 from app.agent.evidence_collection.external_search.service import ExternalSearchService
+from app.agent.recording.external_search import (
+    ExternalSearchProviderFailed,
+    ExternalSearchQueryGenerationFailed,
+    ExternalSearchSucceeded,
+)
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.recording._fakes import RecordingExternalSearchRecorder
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
@@ -80,11 +85,11 @@ async def test_search_records_completed_succeeded_when_hits_return() -> None:
     execution = await _search(service)
 
     assert [str(hit.url) for hit in execution.hits] == ["https://example.com/a"]
-    assert len(recorder.starts) == 1
-    recorded = recorder.ends[0]
-    assert recorded.call is recorder.starts[0]
-    assert recorded.outcome == "succeeded"
-    assert recorded.stopped is False
+    assert len(recorder.records) == 1
+    recorded = recorder.records[0]
+    assert recorded.outcomes == [ExternalSearchSucceeded()]
+    assert recorded.error is None
+    assert len(recorded.query_generations) == 1
 
 
 async def test_search_records_completed_succeeded_for_zero_hits() -> None:
@@ -93,9 +98,9 @@ async def test_search_records_completed_succeeded_for_zero_hits() -> None:
     execution = await _search(service)
 
     assert execution.hits == []
-    recorded = recorder.ends[0]
-    assert recorded.outcome == "succeeded"
-    assert recorded.stopped is False
+    recorded = recorder.records[0]
+    assert recorded.outcomes == [ExternalSearchSucceeded()]
+    assert recorded.error is None
 
 
 async def test_search_records_completed_on_partial_provider_failure() -> None:
@@ -114,12 +119,12 @@ async def test_search_records_completed_on_partial_provider_failure() -> None:
 
     assert execution.provider_failed_query_count == 1
     assert [str(hit.url) for hit in execution.hits] == ["https://example.com/ok"]
-    recorded = recorder.ends[0]
-    assert recorded.outcome == "succeeded"
-    assert recorded.stopped is False
+    recorded = recorder.records[0]
+    assert recorded.outcomes == [ExternalSearchSucceeded()]
+    assert recorded.error is None
 
 
-async def test_search_records_failed_when_query_generation_fails() -> None:
+async def test_search_records_completed_when_query_generation_fails() -> None:
     service, recorder = _service(
         ScriptedAgentRuntime(
             [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
@@ -129,12 +134,12 @@ async def test_search_records_failed_when_query_generation_fails() -> None:
     execution = await _search(service)
 
     assert execution.generated_queries == ()
-    recorded = recorder.ends[0]
-    assert recorded.outcome == "query_generation_failed"
-    assert recorded.stopped is False
+    recorded = recorder.records[0]
+    assert recorded.outcomes == [ExternalSearchQueryGenerationFailed()]
+    assert recorded.error is None
 
 
-async def test_search_records_failed_when_every_provider_call_fails() -> None:
+async def test_search_records_completed_when_every_provider_call_fails() -> None:
     gateway = _FakeGateway(
         errors_by_query={
             "q1": ExternalSearchProviderError(reason="external_search_http_error"),
@@ -149,9 +154,9 @@ async def test_search_records_failed_when_every_provider_call_fails() -> None:
     execution = await _search(service)
 
     assert execution.hits == []
-    recorded = recorder.ends[0]
-    assert recorded.outcome == "provider_failed"
-    assert recorded.stopped is False
+    recorded = recorder.records[0]
+    assert recorded.outcomes == [ExternalSearchProviderFailed()]
+    assert recorded.error is None
 
 
 async def test_search_records_stopped_on_cancel() -> None:
@@ -160,9 +165,9 @@ async def test_search_records_stopped_on_cancel() -> None:
     with pytest.raises(asyncio.CancelledError):
         await _search(service)
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome is None
-    assert recorded.stopped is True
+    recorded = recorder.records[0]
+    assert recorded.outcomes == []
+    assert isinstance(recorded.error, asyncio.CancelledError)
 
 
 async def test_search_records_failed_without_outcome_for_unclassified_error() -> None:
@@ -175,6 +180,6 @@ async def test_search_records_failed_without_outcome_for_unclassified_error() ->
     with pytest.raises(RuntimeError, match="gateway bug"):
         await _search(service)
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome is None
-    assert recorded.stopped is False
+    recorded = recorder.records[0]
+    assert recorded.outcomes == []
+    assert isinstance(recorded.error, RuntimeError)

@@ -108,7 +108,7 @@ class EvidenceAnswerService:
                                 generation=attempt_number + 1,
                                 failure=failure,
                             )
-                            recording.set_outcome(
+                            recording.report_outcome(
                                 EvidenceAnswerFailed(
                                     failure_code=unavailable.failure_code,
                                     attempt_count=attempt_number,
@@ -119,7 +119,7 @@ class EvidenceAnswerService:
                         if isinstance(exc, AIProviderOutputTruncatedError):
                             input = replace(input, previous_output_truncated=True)
                         continue
-                    recording.set_outcome(
+                    recording.report_outcome(
                         EvidenceAnswerSucceeded(attempt_count=attempt_number)
                     )
                     return draft

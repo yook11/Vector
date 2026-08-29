@@ -27,7 +27,7 @@ async def test_success_emits_duration_and_outcome(
     recorder = LogfirePlanningRecorder()
 
     async with recorder.record(agent_name="question_planner") as recording:
-        recording.set_outcome(PlanningSucceeded(plan_type="search", attempt_count=2))
+        recording.report_outcome(PlanningSucceeded(plan_type="search", attempt_count=2))
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
@@ -53,7 +53,7 @@ async def test_classified_failure_emits_failed_duration_and_outcome(
 
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(agent_name="question_planner") as recording:
-            recording.set_outcome(
+            recording.report_outcome(
                 PlanningFailed(
                     failure_code="ai_error_network",
                     attempt_count=1,
@@ -102,7 +102,7 @@ async def test_error_after_success_discards_success_outcome(
 
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(agent_name="question_planner") as recording:
-            recording.set_outcome(
+            recording.report_outcome(
                 PlanningSucceeded(plan_type="direct_answer", attempt_count=1)
             )
             raise error
@@ -116,7 +116,7 @@ async def test_error_after_success_discards_success_outcome(
     assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
 
 
-async def test_cancellation_discards_set_outcome(
+async def test_cancellation_discards_reported_outcome(
     capfire: CaptureLogfire,
 ) -> None:
     recorder = LogfirePlanningRecorder()
@@ -124,7 +124,7 @@ async def test_cancellation_discards_set_outcome(
 
     with pytest.raises(asyncio.CancelledError) as raised:
         async with recorder.record(agent_name="question_planner") as recording:
-            recording.set_outcome(
+            recording.report_outcome(
                 PlanningSucceeded(plan_type="direct_answer", attempt_count=1)
             )
             raise error
@@ -175,7 +175,7 @@ async def test_clock_failure_skips_duration_but_preserves_outcome(
     async with LogfirePlanningRecorder().record(
         agent_name="question_planner"
     ) as recording:
-        recording.set_outcome(
+        recording.report_outcome(
             PlanningSucceeded(plan_type="direct_answer", attempt_count=1)
         )
 
@@ -199,7 +199,7 @@ async def test_duration_failure_does_not_block_outcome(
     async with LogfirePlanningRecorder().record(
         agent_name="question_planner"
     ) as recording:
-        recording.set_outcome(
+        recording.report_outcome(
             PlanningSucceeded(plan_type="direct_answer", attempt_count=1)
         )
 
@@ -223,7 +223,7 @@ async def test_outcome_failure_does_not_change_business_result(
     async with LogfirePlanningRecorder().record(
         agent_name="question_planner"
     ) as recording:
-        recording.set_outcome(
+        recording.report_outcome(
             PlanningSucceeded(plan_type="direct_answer", attempt_count=1)
         )
 
@@ -264,7 +264,7 @@ async def test_span_failure_does_not_change_business_result(
     async with LogfirePlanningRecorder().record(
         agent_name="question_planner"
     ) as recording:
-        recording.set_outcome(
+        recording.report_outcome(
             PlanningSucceeded(plan_type="direct_answer", attempt_count=1)
         )
 

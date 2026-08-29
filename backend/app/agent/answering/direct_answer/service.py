@@ -102,7 +102,7 @@ class DirectAnswerService:
                             "unreachable: answer loop must return or raise"
                         )
             except DirectAnswerError as error:
-                recording.set_outcome(
+                recording.report_outcome(
                     DirectAnswerFailed(
                         failure_code=error.code,
                         attempt_count=attempt_number,
@@ -110,7 +110,9 @@ class DirectAnswerService:
                 )
                 raise
 
-            recording.set_outcome(DirectAnswerSucceeded(attempt_count=attempt_number))
+            recording.report_outcome(
+                DirectAnswerSucceeded(attempt_count=attempt_number)
+            )
             return draft
 
     async def _generate_draft(

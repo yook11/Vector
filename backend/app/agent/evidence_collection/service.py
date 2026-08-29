@@ -36,8 +36,11 @@ from app.agent.evidence_collection.internal_search.contract import (
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
-from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
+from app.agent.recording.evidence_collection import (
+    EvidenceCollectionRecorder,
+    logfire_evidence_collection_recorder,
+)
 
 __all__ = ["EvidenceCollectionService"]
 
@@ -53,6 +56,7 @@ class EvidenceCollectionService:
     internal_search: InternalSearch
     external_search_scope_factory: ExternalSearchScopeFactory
     events: AnswerEventReporter | None = None
+    recorder: EvidenceCollectionRecorder = logfire_evidence_collection_recorder
 
     async def collect(
         self,
@@ -61,22 +65,29 @@ class EvidenceCollectionService:
         as_of: datetime,
     ) -> CollectedNews:
         tasks = plan.research_tasks
+        async with self.recorder.record() as recording:
+            async with self.external_search_scope_factory() as external_search:
 
-        async with self.external_search_scope_factory() as external_search:
+                async def run_task(
+                    task_index: int,
+                    task: ResearchTask,
+                ) -> CollectedTask:
+                    async with recording.record_task(task_index=task_index):
+                        return await self._collect_for_goal(
+                            task_index=task_index,
+                            task=task,
+                            external_search=external_search,
+                            target_time_window=plan.target_time_window,
+                            as_of=as_of,
+                        )
 
-            async def run_task(task_index: int, task: ResearchTask) -> CollectedTask:
-                return await self._collect_for_goal(
-                    task_index=task_index,
-                    task=task,
-                    external_search=external_search,
-                    target_time_window=plan.target_time_window,
-                    as_of=as_of,
+                collected_tasks = await gather_cancel_on_error(
+                    *[
+                        run_task(task_index, task)
+                        for task_index, task in enumerate(tasks)
+                    ]
                 )
-
-            collected_tasks = await gather_cancel_on_error(
-                *[run_task(task_index, task) for task_index, task in enumerate(tasks)]
-            )
-        return CollectedNews(tasks=collected_tasks)
+            return CollectedNews(tasks=collected_tasks)
 
     async def _collect_for_goal(
         self,
@@ -141,9 +152,7 @@ class EvidenceCollectionService:
             )
         )
         try:
-            # 失敗はspanを貫通させてtraceに残し、外側で縮退へ変える。
-            with agent_phase(phase="evidence_collection", task_index=task_index):
-                hits = await self.internal_search.search(queries)
+            hits = await self.internal_search.search(queries)
         except InternalSearchError:
             return [], True
         await self._report_event(

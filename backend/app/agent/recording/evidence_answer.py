@@ -68,9 +68,9 @@ type EvidenceAnswerRecordingOutcome = EvidenceAnswerSucceeded | EvidenceAnswerFa
 
 
 class EvidenceAnswerRecording(Protocol):
-    """answer() 1回に結論を関連付ける記録ハンドル。"""
+    """工程が確定したanswer()の結論をRecorderへ伝える実行中の記録ハンドル。"""
 
-    def set_outcome(self, outcome: EvidenceAnswerRecordingOutcome) -> None: ...
+    def report_outcome(self, outcome: EvidenceAnswerRecordingOutcome) -> None: ...
 
 
 class EvidenceAnswerRecorder(Protocol):
@@ -87,7 +87,7 @@ class EvidenceAnswerRecorder(Protocol):
 class _EvidenceAnswerRecording:
     outcome: EvidenceAnswerRecordingOutcome | None = None
 
-    def set_outcome(self, outcome: EvidenceAnswerRecordingOutcome) -> None:
+    def report_outcome(self, outcome: EvidenceAnswerRecordingOutcome) -> None:
         self.outcome = outcome
 
 

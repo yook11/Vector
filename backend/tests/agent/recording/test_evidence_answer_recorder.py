@@ -28,7 +28,7 @@ async def test_success_emits_completed_duration_and_outcome(
     async with LogfireEvidenceAnswerRecorder().record(
         agent_name="evidence_answer"
     ) as recording:
-        recording.set_outcome(EvidenceAnswerSucceeded(attempt_count=2))
+        recording.report_outcome(EvidenceAnswerSucceeded(attempt_count=2))
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
@@ -48,7 +48,7 @@ async def test_classified_failure_emits_completed_duration_and_failed_outcome(
     async with LogfireEvidenceAnswerRecorder().record(
         agent_name="evidence_answer"
     ) as recording:
-        recording.set_outcome(
+        recording.report_outcome(
             EvidenceAnswerFailed(
                 failure_code="ai_error_network",
                 attempt_count=1,
@@ -101,7 +101,7 @@ async def test_stop_after_outcome_discards_outcome(
         async with LogfireEvidenceAnswerRecorder().record(
             agent_name="evidence_answer"
         ) as recording:
-            recording.set_outcome(EvidenceAnswerSucceeded(attempt_count=1))
+            recording.report_outcome(EvidenceAnswerSucceeded(attempt_count=1))
             raise error
 
     assert raised.value is error
@@ -133,7 +133,7 @@ async def test_error_after_outcome_discards_outcome(
         async with LogfireEvidenceAnswerRecorder().record(
             agent_name="evidence_answer"
         ) as recording:
-            recording.set_outcome(outcome)
+            recording.report_outcome(outcome)
             raise error
 
     assert raised.value is error
@@ -174,7 +174,7 @@ async def test_clock_failure_skips_duration_but_preserves_outcome(
     async with LogfireEvidenceAnswerRecorder().record(
         agent_name="evidence_answer"
     ) as recording:
-        recording.set_outcome(EvidenceAnswerSucceeded(attempt_count=1))
+        recording.report_outcome(EvidenceAnswerSucceeded(attempt_count=1))
 
     metrics = collected_metrics(capfire)
     assert all(item["name"] != _DURATION_METRIC for item in metrics)
@@ -195,7 +195,7 @@ async def test_duration_failure_does_not_block_outcome(
     async with LogfireEvidenceAnswerRecorder().record(
         agent_name="evidence_answer"
     ) as recording:
-        recording.set_outcome(EvidenceAnswerSucceeded(attempt_count=1))
+        recording.report_outcome(EvidenceAnswerSucceeded(attempt_count=1))
 
     assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC)["result"] == (
         "succeeded"
@@ -216,7 +216,7 @@ async def test_outcome_failure_does_not_block_duration(
     async with LogfireEvidenceAnswerRecorder().record(
         agent_name="evidence_answer"
     ) as recording:
-        recording.set_outcome(EvidenceAnswerSucceeded(attempt_count=1))
+        recording.report_outcome(EvidenceAnswerSucceeded(attempt_count=1))
 
     assert attributes_of(collected_metrics(capfire), _DURATION_METRIC) == {
         "status": "completed",
@@ -254,7 +254,7 @@ async def test_span_failure_does_not_change_business_result(
     async with LogfireEvidenceAnswerRecorder().record(
         agent_name="evidence_answer"
     ) as recording:
-        recording.set_outcome(EvidenceAnswerSucceeded(attempt_count=1))
+        recording.report_outcome(EvidenceAnswerSucceeded(attempt_count=1))
 
     assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC)["result"] == (
         "succeeded"

@@ -28,7 +28,7 @@ async def test_success_emits_duration_and_outcome(
     recorder = LogfireDirectAnswerRecorder()
 
     async with recorder.record(agent_name="direct_answer") as recording:
-        recording.set_outcome(DirectAnswerSucceeded(attempt_count=2))
+        recording.report_outcome(DirectAnswerSucceeded(attempt_count=2))
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
@@ -53,7 +53,7 @@ async def test_classified_failure_emits_failed_duration_and_outcome(
 
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(agent_name="direct_answer") as recording:
-            recording.set_outcome(
+            recording.report_outcome(
                 DirectAnswerFailed(
                     failure_code="ai_error_network",
                     attempt_count=1,
@@ -109,7 +109,7 @@ async def test_error_after_success_discards_success_outcome(
 
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(agent_name="direct_answer") as recording:
-            recording.set_outcome(DirectAnswerSucceeded(attempt_count=1))
+            recording.report_outcome(DirectAnswerSucceeded(attempt_count=1))
             raise error
 
     assert raised.value is error
@@ -129,7 +129,7 @@ async def test_error_after_success_discards_success_outcome(
         pytest.param(AnswerGenerationStopped(), id="generation-stopped"),
     ],
 )
-async def test_stop_discards_set_outcome(
+async def test_stop_discards_reported_outcome(
     error: BaseException,
     capfire: CaptureLogfire,
 ) -> None:
@@ -137,7 +137,7 @@ async def test_stop_discards_set_outcome(
 
     with pytest.raises(type(error)) as raised:
         async with recorder.record(agent_name="direct_answer") as recording:
-            recording.set_outcome(DirectAnswerSucceeded(attempt_count=1))
+            recording.report_outcome(DirectAnswerSucceeded(attempt_count=1))
             raise error
 
     assert raised.value is error
@@ -186,7 +186,7 @@ async def test_clock_failure_skips_duration_but_preserves_outcome(
     async with LogfireDirectAnswerRecorder().record(
         agent_name="direct_answer"
     ) as recording:
-        recording.set_outcome(DirectAnswerSucceeded(attempt_count=1))
+        recording.report_outcome(DirectAnswerSucceeded(attempt_count=1))
 
     metrics = collected_metrics(capfire)
     assert all(item["name"] != _DURATION_METRIC for item in metrics)
@@ -208,7 +208,7 @@ async def test_duration_failure_does_not_block_outcome(
     async with LogfireDirectAnswerRecorder().record(
         agent_name="direct_answer"
     ) as recording:
-        recording.set_outcome(DirectAnswerSucceeded(attempt_count=1))
+        recording.report_outcome(DirectAnswerSucceeded(attempt_count=1))
 
     assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC)["result"] == (
         "succeeded"
@@ -230,7 +230,7 @@ async def test_outcome_failure_does_not_change_business_result(
     async with LogfireDirectAnswerRecorder().record(
         agent_name="direct_answer"
     ) as recording:
-        recording.set_outcome(DirectAnswerSucceeded(attempt_count=1))
+        recording.report_outcome(DirectAnswerSucceeded(attempt_count=1))
 
     assert attributes_of(collected_metrics(capfire), _DURATION_METRIC) == {
         "status": "completed",
@@ -269,7 +269,7 @@ async def test_span_failure_does_not_change_business_result(
     async with LogfireDirectAnswerRecorder().record(
         agent_name="direct_answer"
     ) as recording:
-        recording.set_outcome(DirectAnswerSucceeded(attempt_count=1))
+        recording.report_outcome(DirectAnswerSucceeded(attempt_count=1))
 
     assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC)["result"] == (
         "succeeded"

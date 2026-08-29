@@ -8,7 +8,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
     InternalSearch,
     InternalSearchError,
-    InternalSearchFailurePhase,
+    InternalSearchFailureCode,
     InternalSearchOutcome,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -33,7 +33,7 @@ __all__ = [
     "InternalQueryEmbedding",
     "InternalSearch",
     "InternalSearchError",
-    "InternalSearchFailurePhase",
+    "InternalSearchFailureCode",
     "InternalSearchOutcome",
     "InternalSearchQueries",
     "InternalSearchService",

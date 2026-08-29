@@ -39,6 +39,7 @@ from app.agent.evidence_collection.external_search.contract import ExternalSearc
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
     InternalSearchError,
+    InternalSearchFailureCode,
 )
 from app.agent.evidence_review import (
     EvidenceReviewer,
@@ -350,7 +351,11 @@ async def test_review_still_runs_using_the_hits_that_survive_a_failed_task() -> 
                 _internal_hit(assessment_id=1003, curation_id=3, title="C-hit")
             ],
         },
-        errors_by_query={"query-b": InternalSearchError(phase="article_search")},
+        errors_by_query={
+            "query-b": InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            )
+        },
     )
     # task-Bの収集が失敗しヒットゼロになる分、統合index空間から外れる
     # (仮定: task昇順で結合。task-A→0、task-C→1)。
@@ -421,7 +426,11 @@ async def test_task_with_only_external_hits_still_reaches_review() -> None:
             {"q": [_external_hit("https://example.com/only")]}
         ),
         internal_search=_FakeInternalSearch(
-            errors_by_query={"query-a": InternalSearchError(phase="article_search")}
+            errors_by_query={
+                "query-a": InternalSearchError(
+                    code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+                )
+            }
         ),
     )
 
@@ -830,7 +839,11 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
                 _internal_hit(assessment_id=1002, curation_id=2, title="B-hit")
             ],
         },
-        errors_by_query={"query-c": InternalSearchError(phase="article_search")},
+        errors_by_query={
+            "query-c": InternalSearchError(
+                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+            )
+        },
     )
     # task-Cは収集失敗でヒットゼロのため統合index空間から外れる(task-A→0、task-B→1)。
     reviewer_runtime = ScriptedAgentRuntime(
