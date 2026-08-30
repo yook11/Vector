@@ -225,6 +225,9 @@ resource "aws_iam_role_policy" "apply" {
           "sns:*",
           "cloudwatch:*",
           "events:*",
+          # agent の外部検索が使う AgentCore Gateway と web-search connector
+          # (agentcore.tf)。Gateway / GatewayTarget の CRUD が要る。
+          "bedrock-agentcore:*",
           "ssm:DescribeParameters",
           "secretsmanager:DescribeSecret",
           "kms:DescribeKey",
@@ -345,7 +348,8 @@ resource "aws_iam_role_policy" "apply" {
         Resource = local.ci_scope_arns
       },
       # 5. 意図したサービス以外への PassRole を拒否する。
-      #    許すのは ECS (task / execution role) と Chatbot (Slack 通知の channel role) だけ。
+      #    許すのは ECS (task / execution role)、Chatbot (Slack 通知の channel role)、
+      #    AgentCore (Gateway の service role) だけ。
       #
       # IamWithinManagedPath の `iam:*` が PassRole を含むため、条件付き Allow を
       # 書くだけでは絞れない (Allow は和集合)。explicit Deny が唯一の手段。
@@ -360,7 +364,29 @@ resource "aws_iam_role_policy" "apply" {
             "iam:PassedToService" = [
               "ecs-tasks.amazonaws.com",
               "chatbot.amazonaws.com",
+              "bedrock-agentcore.amazonaws.com",
             ]
+          }
+        }
+      },
+      # 5b. AgentCore へ渡せるのは gateway service role 1 本だけ。
+      #
+      # ECS のように「/vector/ 配下なら何でも」にはしない。CI は
+      # IamWithinManagedPath で /vector/ 配下のロールを作成・変更できるため、
+      # prefix 一致にすると「CI が強い権限のロールを作って AgentCore へ渡す」
+      # 経路が開く。名前を 1 本に固定して、その経路を塞ぐ。
+      #
+      # ロール名は本体スタックの aws_iam_role.agentcore_gateway と対応する。
+      # bootstrap から本体の local は参照できないので二重管理になる。名前を
+      # 変えるときは両方直す (片方だけだと apply が PassRole で落ちて気づく)。
+      {
+        Sid         = "DenyPassRoleToAgentCoreExceptGateway"
+        Effect      = "Deny"
+        Action      = "iam:PassRole"
+        NotResource = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-agentcore-gateway"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "bedrock-agentcore.amazonaws.com"
           }
         }
       },
