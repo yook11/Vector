@@ -3,22 +3,17 @@ output "state_bucket_name" {
   value       = aws_s3_bucket.tfstate.id
 }
 
-output "permissions_boundary_arn" {
+output "role_boundaries" {
   description = <<-EOT
-    本体スタックの ECS 系ロール (task / execution / proxy) と chatbot ロールに付ける boundary。
-    本体側は data source ではなく variable で受け取る
-    (apply に /vector-ci/ への iam:Get* を要求しないため)。
+    ロール名 -> その天井。本体スタックは ARN を名前から組み立てるので
+    (iam.tf の boundary_arns)、この output は値を渡すためのものではなく、
+    apply 後に AWS の実態 (iam get-role の PermissionsBoundary) と
+    突き合わせるための期待値として使う。
   EOT
-  value       = aws_iam_policy.boundary.arn
-}
-
-output "agentcore_gateway_boundary_arn" {
-  description = <<-EOT
-    AgentCore Gateway の service role に付ける boundary。
-    本体スタックは新しい変数を増やさず、この名前から ARN を組み立てる
-    (locals.tf の agentcore_gateway_boundary_arn)。名前を変えるときは両方直す。
-  EOT
-  value       = aws_iam_policy.agentcore_gateway_boundary.arn
+  value = {
+    for key, group in local.role_boundary_groups :
+    key => { boundary = group.boundary, role_names = group.role_names }
+  }
 }
 
 output "ci_role_arns" {

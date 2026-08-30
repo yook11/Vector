@@ -337,8 +337,8 @@ resource "aws_iam_role_policy" "apply" {
       # 1. 想定した boundary 以外でのロール作成を拒否する。
       #
       # boundary を用途別に分けたので、ここは許可リストになる。リストに
-      # 載せた時点で「CI はこの中から選べる」という意味になり、一番広い
-      # boundary を選ばれると実効的な天井は和集合まで戻る。それを防ぐのが 1b + 1c。
+      # 載せた時点で「CI はこの中から選べる」という意味になり、用途の違う天井
+      # (task role に execution の天井など) を選べてしまう。それを防ぐのが 1b + 1c。
       #
       # 1b / 1c があれば CreateRole については冗長だが、iam:CreateUser を
       # 押さえているのと、対応表を間違えても「boundary 無しは通さない」を
@@ -353,10 +353,7 @@ resource "aws_iam_role_policy" "apply" {
         Resource = "*"
         Condition = {
           StringNotEquals = {
-            "iam:PermissionsBoundary" = concat(
-              [aws_iam_policy.boundary.arn],
-              [for group in local.role_boundary_groups : group.boundary],
-            )
+            "iam:PermissionsBoundary" = [for group in local.role_boundary_groups : group.boundary]
           }
         }
       },

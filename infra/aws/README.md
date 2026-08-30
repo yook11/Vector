@@ -132,9 +132,10 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
 具体的なコマンド列は private runbook 側に置く。ここに書くのは境界だけ。
 
 - **admin 専用なのは設計であって権限不足ではない。** 踏み台の role は Session
-  Manager を使うため permissions boundary を付けられず (boundary が
+  Manager を使うため permissions boundary を付けられず (task 系の boundary が
   `ssmmessages:*` を Deny)、boundary 無しの role 作成は `terraform-apply` 側の
-  `DenyRoleCreationWithoutBoundary` が拒否する。`ssm:StartSession` も
+  `DenyRoleCreationWithoutBoundary` が拒否する。名前も boundary の対応表に無いので
+  `DenyRoleCreationOutsideKnownRoles` でも拒否される。`ssm:StartSession` も
   `terraform-apply` は持たない。**CI 用の経路でこれが通らないのは fail-closed が
   効いた結果**で、穴を開けて通すものではない (bastion.tf の注記と対)。
 - **トンネル越しに `verify-full` を保つ方法が client で違う。** libpq (psql) は
