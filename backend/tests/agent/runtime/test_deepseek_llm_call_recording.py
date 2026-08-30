@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.recording.llm import LlmAttemptFailed, LlmAttemptSucceeded
 from app.agent.recording.types import Usage
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
+from app.agent.runtime.llm_failure import LlmAttemptFailed
 from app.analysis.ai_provider_errors import AIProviderNetworkError
-from tests.agent.recording._fakes import RecordedLlmCallEnd, RecordingLlmCallRecorder
+from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._deepseek_helpers import (
     FakeDeepSeekClient,
     function_response,
@@ -42,8 +42,8 @@ def _runtime(
     )
 
 
-async def test_successful_call_records_completed_succeeded_usage() -> None:
-    """成功 attempt は completed / succeeded と token を残す。"""
+async def test_successful_call_records_usage_without_failure() -> None:
+    """成功 attempt は結果を返し、失敗型を報告しない。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime([success_response(usage=_usage())], recorder)
@@ -51,24 +51,23 @@ async def test_successful_call_records_completed_succeeded_usage() -> None:
 
     await runtime.call(agent, object(), attempt_number=1)
 
-    assert len(recorder.starts) == 1
-    started = recorder.starts[0]
-    assert started.agent_name == agent.name
-    assert started.provider == "deepseek"
-    assert started.model == agent.model.name
-    assert recorder.ends == [
-        RecordedLlmCallEnd(
-            call=started,
-            outcome=LlmAttemptSucceeded(),
-            usage=Usage(
-                input_tokens=4,
-                output_tokens=6,
-                cache_read_input_tokens=1,
-                reasoning_output_tokens=2,
-            ),
-            stopped=False,
-        )
-    ]
+    assert len(recorder.records) == 1
+    recorded = recorder.records[0]
+    assert recorded.agent_name == agent.name
+    assert recorded.provider == "deepseek"
+    assert recorded.model == agent.model.name
+    assert recorded.mode == "call"
+    assert recorded.prompt_version == agent.prompt.version
+    assert recorded.operation_name == "chat"
+    assert recorded.gen_ai_provider == "deepseek"
+    assert recorded.failure is None
+    assert recorded.error is None
+    assert recorded.usage == Usage(
+        input_tokens=4,
+        output_tokens=6,
+        cache_read_input_tokens=1,
+        reasoning_output_tokens=2,
+    )
 
 
 async def test_invalid_response_records_failed_with_defect() -> None:
@@ -80,11 +79,11 @@ async def test_invalid_response_records_failed_with_defect() -> None:
     with pytest.raises(AgentResponseInvalidError):
         await runtime.call(make_agent(), object(), attempt_number=1)
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome == LlmAttemptFailed(
+    recorded = recorder.records[0]
+    assert recorded.failure == LlmAttemptFailed(
         failure_code=AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
     )
-    assert recorded.stopped is False
+    assert recorded.span_result == "invalid_response"
 
 
 async def test_translated_provider_error_records_failed_with_code() -> None:
@@ -96,15 +95,15 @@ async def test_translated_provider_error_records_failed_with_code() -> None:
     with pytest.raises(AIProviderNetworkError):
         await runtime.call(make_agent(), object(), attempt_number=1)
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome == LlmAttemptFailed(
+    recorded = recorder.records[0]
+    assert recorded.failure == LlmAttemptFailed(
         failure_code=AIProviderNetworkError.CODE
     )
-    assert recorded.stopped is False
+    assert recorded.span_result == "provider_error"
 
 
-async def test_unclassified_exception_records_failed_without_outcome() -> None:
-    """未分類例外は結論型なしで閉じる。"""
+async def test_unclassified_exception_records_without_failure() -> None:
+    """未分類例外は失敗型なしで閉じる。"""
 
     error = RuntimeError("UNCLASSIFIED_DEEPSEEK")
     recorder = RecordingLlmCallRecorder()
@@ -114,10 +113,10 @@ async def test_unclassified_exception_records_failed_without_outcome() -> None:
         await runtime.call(make_agent(), object(), attempt_number=1)
 
     assert exc_info.value is error
-    recorded = recorder.ends[0]
-    assert recorded.outcome is None
-    assert recorded.stopped is False
-    assert len(recorder.ends) == 1
+    recorded = recorder.records[0]
+    assert recorded.failure is None
+    assert recorded.error is error
+    assert len(recorder.records) == 1
 
 
 async def test_request_build_failure_does_not_start_recording() -> None:
@@ -140,5 +139,4 @@ async def test_request_build_failure_does_not_start_recording() -> None:
         await runtime.call(agent, object(), attempt_number=1)
 
     assert exc_info.value is error
-    assert recorder.starts == []
-    assert recorder.ends == []
+    assert recorder.records == []

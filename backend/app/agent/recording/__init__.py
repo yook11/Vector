@@ -52,10 +52,8 @@ from app.agent.recording.internal_search import (
     logfire_internal_search_recorder,
 )
 from app.agent.recording.llm import (
-    LlmAttemptFailed,
-    LlmAttemptOutcome,
-    LlmAttemptSucceeded,
     LlmCallRecorder,
+    LlmCallRecording,
     LogfireLlmCallRecorder,
     logfire_llm_call_recorder,
 )
@@ -78,8 +76,6 @@ from app.agent.recording.research_handoff import (
     logfire_research_handoff_recorder,
 )
 from app.agent.recording.types import (
-    LlmCall,
-    LlmCallResult,
     PhaseCall,
     PhaseStatus,
     ToolCall,
@@ -114,12 +110,8 @@ __all__ = [
     "InternalSearchRecording",
     "InternalSearchRecordingOutcome",
     "InternalSearchSucceeded",
-    "LlmAttemptFailed",
-    "LlmAttemptOutcome",
-    "LlmAttemptSucceeded",
-    "LlmCall",
     "LlmCallRecorder",
-    "LlmCallResult",
+    "LlmCallRecording",
     "LogfireDirectAnswerRecorder",
     "LogfireEvidenceAnswerRecorder",
     "LogfireEvidenceCollectionRecorder",

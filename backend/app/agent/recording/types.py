@@ -1,4 +1,4 @@
-"""記録の共通語彙と start ハンドル。"""
+"""記録の共通語彙。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 __all__ = [
-    "LlmCall",
-    "LlmCallResult",
     "PhaseCall",
     "PhaseStatus",
     "ToolCall",
@@ -21,15 +19,6 @@ class PhaseStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     STOPPED = "stopped"
-
-
-class LlmCallResult(StrEnum):
-    """1 provider attempt の結論。span の result 文字列と一致させる。"""
-
-    SUCCEEDED = "succeeded"
-    BLOCKED = "blocked"
-    INVALID_RESPONSE = "invalid_response"
-    PROVIDER_ERROR = "provider_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,15 +60,6 @@ def _usage_from_optional_counts(
     ):
         return None
     return present
-
-
-@dataclass(frozen=True, slots=True)
-class LlmCall:
-    agent_name: str
-    provider: str
-    model: str
-    attempt_number: int
-    started_at: float
 
 
 @dataclass(frozen=True, slots=True)
