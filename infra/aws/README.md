@@ -231,6 +231,12 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
 ## Terraform の外にあるもの
 
 - SSM parameter の値 — CLI
+- **AgentCore Gateway の web-search target** — `scripts/create-websearch-target.sh`。
+  provider 6.62 の `aws_bedrockagentcore_gateway_target` は connector を持たず
+  (target 種別は api_gateway / lambda / mcp_server / open_api_schema / smithy_model)、
+  awscc にも `gateway_target` 資源が無いため Cloud Control 経由でも書けない。
+  API 側にだけ connector があるので CLI で作る。**apply の後に 1 回実行する。**
+  provider が対応したら `terraform import` で畳む
 - app 側の変更 (backend / frontend 両方の IAM トークン生成 / ガードの接尾辞 /
   proxy の明示注入 / pool 縮小)。node-redis は password が無いと AUTH を省略して
   default user で繋ぐため、frontend の実装が入るまで rate limit は fail-open で

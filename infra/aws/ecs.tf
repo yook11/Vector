@@ -59,6 +59,10 @@ locals {
       "169.254.169.254",
       "169.254.170.2",
       ".${var.internal_namespace}",
+      # AgentCore Gateway は PrivateLink 経由の内部宛先。proxy は private 宛先を
+      # 拒否するので、除外しないと外部検索が静かに失敗する。host は gateway_url
+      # から取り、suffix を推測しない。
+      local.agentcore_gateway_host,
     ])
     # SDK 経路 (DeepSeek / Gemini / Logfire) はこの env var を拾う。
     # `make_safe_async_client` を通る経路 (Tavily / RSS) は明示 transport を
@@ -141,6 +145,10 @@ locals {
     agent = {
       DATABASE_URL = local.backend_db_url["vector_app"]
       REDIS_URL    = local.broker_redis_url["agent"]
+      # 外部検索の MCP 入口 (agentcore.tf)。外部検索を持つのは agent 段だけなので
+      # common へは置かない。宛先は PrivateLink 経由の内部 host で、下の NO_PROXY が
+      # proxy を迂回させる。
+      AGENTCORE_GATEWAY_URL = aws_bedrockagentcore_gateway.web_search.gateway_url
     }
   }
 }

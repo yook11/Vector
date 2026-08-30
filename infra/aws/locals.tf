@@ -143,4 +143,11 @@ locals {
   proxy_url             = "http://proxy.${var.internal_namespace}:${var.proxy_port}"
   internal_api_url      = "http://api.${var.internal_namespace}:8000/api/v1"
   internal_frontend_url = "http://frontend.${var.internal_namespace}:3000"
+
+  # NO_PROXY へ入れる AgentCore Gateway の host。gateway_url は
+  # https://<host>/<path> 形式で apply 時に確定する。suffix を literal で書くと
+  # 命名規則が変わったときに proxy へ迂回して静かに失敗するため、URL から取る。
+  agentcore_gateway_host = regex(
+    "^https?://([^/]+)", aws_bedrockagentcore_gateway.web_search.gateway_url
+  )[0]
 }
