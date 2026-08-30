@@ -23,7 +23,11 @@ from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
-from app.agent.runtime.llm_failure import llm_attempt_failed_from
+from app.agent.runtime.llm_failure import (
+    UNCLASSIFIED_FAILURE_CODE,
+    LlmAttemptFailed,
+    llm_attempt_failed_from,
+)
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.deepseek_error_translator import translate_deepseek_error
 
@@ -90,6 +94,7 @@ class DeepSeekAgentRuntime:
             except Exception as exc:
                 translated_error = translate_deepseek_error(exc)
                 if translated_error is exc:
+                    _report_unclassified(recording)
                     raise
                 classified_error = translated_error
             else:
@@ -106,15 +111,9 @@ class DeepSeekAgentRuntime:
                     classified_error = exc
 
             if classified_error is not None:
-                span_result = (
-                    "invalid_response"
-                    if isinstance(classified_error, AgentResponseInvalidError)
-                    else "provider_error"
-                )
                 _report_classified(
                     recording,
                     classified_error,
-                    span_result=span_result,
                     provider=agent.model.provider,
                 )
                 raise classified_error
@@ -124,11 +123,14 @@ def _report_classified(
     recording: LlmCallRecording,
     error: Exception,
     *,
-    span_result: str,
     provider: str,
 ) -> None:
-    recording.report_outcome(llm_attempt_failed_from(error), span_result=span_result)
+    recording.report_outcome(llm_attempt_failed_from(error))
     record_ai_provider_exhausted(error, provider=provider)
+
+
+def _report_unclassified(recording: LlmCallRecording) -> None:
+    recording.report_outcome(LlmAttemptFailed(failure_code=UNCLASSIFIED_FAILURE_CODE))
 
 
 def _build_request[InputT, OutputT](

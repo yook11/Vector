@@ -256,7 +256,8 @@ async def test_first_iteration_opens_one_stream_and_yields_fragments_unchanged(
     assert client.models.generate_content_stream.await_count == 1
     assert sdk_stream.close_calls == 1
     assert tracer.spans[0].end_calls == 1
-    assert tracer.spans[0].attributes["result"] == "succeeded"
+    assert tracer.spans[0].attributes["status"] == "completed"
+    assert "result" not in tracer.spans[0].attributes
     kwargs = client.models.generate_content_stream.await_args.kwargs
     assert kwargs["contents"] == "TASK_CONTENTS_SENTINEL_8a43"
     assert kwargs["config"].system_instruction == "SYSTEM_INSTRUCTIONS_SENTINEL_5f21"
@@ -306,7 +307,8 @@ async def test_real_sdk_response_types_expose_the_streamed_attribute_surface(
 
     assert fragments == ["実型断片", "終端断片"]
     span = tracer.spans[0]
-    assert span.attributes["result"] == "succeeded"
+    assert span.attributes["status"] == "completed"
+    assert "result" not in span.attributes
     assert span.attributes["gen_ai.usage.input_tokens"] == 11
     assert span.attributes["gen_ai.usage.output_tokens"] == 7
 
@@ -450,8 +452,9 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
 
     assert exc_info.value.rejection_kind is AIProviderContentRejectionKind.SAFETY
     span = tracer.spans[0]
-    assert span.attributes["result"] == "provider_error"
-    assert span.attributes["gen_ai.usage.input_tokens"] == 11
+    assert span.attributes["status"] == "failed"
+    assert "result" not in span.attributes
+    assert span.attributes["error.type"] == AIProviderInputRejectedError.CODE
     assert span.attributes["gen_ai.usage.output_tokens"] == 7
     assert span.status_code is StatusCode.ERROR
     assert span.status_description is None
@@ -503,7 +506,9 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
         expected_kind_name,
     )
     span = tracer.spans[0]
-    assert span.attributes["result"] == "blocked"
+    assert span.attributes["status"] == "failed"
+    assert "result" not in span.attributes
+    assert span.attributes["error.type"] == AIProviderOutputBlockedError.CODE
     assert span.status_code is StatusCode.ERROR
     assert span.exception_events == []
     assert sdk_stream.close_calls == 1
@@ -554,7 +559,9 @@ async def test_max_tokens_finish_reason_raises_classified_truncation_error(
     assert error.reason.value == "output_token_limit_reached"
 
     span = tracer.spans[0]
-    assert span.attributes["result"] == "provider_error"
+    assert span.attributes["status"] == "failed"
+    assert "result" not in span.attributes
+    assert span.attributes["error.type"] == "ai_error_output_truncated"
     assert span.status_code is StatusCode.ERROR
     assert sdk_stream.close_calls == 1
     assert span.end_calls == 1
@@ -594,7 +601,9 @@ async def test_max_tokens_after_partial_fragment_yield_still_raises_classified_e
     assert error.reason.value == "output_token_limit_reached"
 
     span = tracer.spans[0]
-    assert span.attributes["result"] == "provider_error"
+    assert span.attributes["status"] == "failed"
+    assert "result" not in span.attributes
+    assert span.attributes["error.type"] == "ai_error_output_truncated"
     assert sdk_stream.close_calls == 1
     assert span.end_calls == 1
 
@@ -621,7 +630,9 @@ async def test_stream_without_terminal_reason_is_truncated_and_closed_once(
 
     assert exc_info.value.reason is GeminiStateReason.STREAM_TRUNCATED
     span = tracer.spans[0]
-    assert span.attributes["result"] == "provider_error"
+    assert span.attributes["status"] == "failed"
+    assert "result" not in span.attributes
+    assert span.attributes["error.type"] == AIProviderNetworkError.CODE
     assert span.status_code is StatusCode.ERROR
     assert sdk_stream.close_calls == 1
     assert span.end_calls == 1
@@ -645,7 +656,9 @@ async def test_translated_provider_error_preserves_cause_after_cleanup(
 
     span = tracer.spans[0]
     assert exc_info.value.__cause__ is source_error
-    assert span.attributes["result"] == "provider_error"
+    assert span.attributes["status"] == "failed"
+    assert "result" not in span.attributes
+    assert span.attributes["error.type"] == AIProviderNetworkError.CODE
     assert span.exception_events == []
     assert span.end_calls == 1
 
@@ -672,6 +685,8 @@ async def test_unclassified_provider_error_records_one_event_then_closes_once(
     span = tracer.spans[0]
     assert exc_info.value is error
     assert "result" not in span.attributes
+    assert span.attributes["status"] == "failed"
+    assert span.attributes["error.type"] == "unclassified"
     assert span.status_code is StatusCode.ERROR
     assert span.exception_events == [error]
     assert sdk_stream.close_calls == 1
@@ -699,6 +714,7 @@ async def test_consumer_aclose_is_abandonment_without_error_outcome_and_ends_onc
     await stream.aclose()
 
     span = tracer.spans[0]
+    assert span.attributes["status"] == "stopped"
     assert "result" not in span.attributes
     assert "error.type" not in span.attributes
     assert span.status_code is StatusCode.UNSET
@@ -734,6 +750,7 @@ async def test_usage_before_fragment_yield_survives_consumer_abandonment(
 
     assert span.attributes["gen_ai.usage.input_tokens"] == 11
     assert span.attributes["gen_ai.usage.output_tokens"] == 7
+    assert span.attributes["status"] == "stopped"
     assert "result" not in span.attributes
     assert "error.type" not in span.attributes
     assert span.status_code is StatusCode.UNSET
@@ -764,6 +781,7 @@ async def test_cancellation_during_provider_next_closes_span_once_without_outcom
         await next_task
 
     span = tracer.spans[0]
+    assert span.attributes["status"] == "stopped"
     assert "result" not in span.attributes
     assert "error.type" not in span.attributes
     assert span.status_code is StatusCode.UNSET
@@ -805,6 +823,7 @@ async def test_cancellation_while_consumer_handles_fragment_closes_once_without_
         await consumer_task
 
     span = tracer.spans[0]
+    assert span.attributes["status"] == "stopped"
     assert "result" not in span.attributes
     assert "error.type" not in span.attributes
     assert span.status_code is StatusCode.UNSET
@@ -837,7 +856,8 @@ async def test_sdk_close_error_is_best_effort_but_span_ends_once(
 
     span = tracer.spans[0]
     assert fragments == ["fragment"]
-    assert span.attributes["result"] == "succeeded"
+    assert span.attributes["status"] == "completed"
+    assert "result" not in span.attributes
     assert sdk_stream.close_calls == 1
     assert span.end_calls == 1
 
@@ -866,6 +886,7 @@ async def test_cancelled_sdk_close_preserves_usage_and_ends_span_once(
 
     span = tracer.spans[0]
     assert span.attributes["gen_ai.usage.input_tokens"] == 11
+    assert span.attributes["status"] == "stopped"
     assert "result" not in span.attributes
     assert span.status_code is StatusCode.UNSET
     assert sdk_stream.close_calls == 1

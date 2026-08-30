@@ -11,7 +11,7 @@ import pytest
 from app.agent.recording.types import Usage
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.agent.runtime.llm_failure import LlmAttemptFailed
+from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.analysis.ai_provider_errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
@@ -93,7 +93,6 @@ async def test_blocked_call_records_failed_with_code() -> None:
     assert recorded.failure == LlmAttemptFailed(
         failure_code=AIProviderOutputBlockedError.CODE
     )
-    assert recorded.span_result == "blocked"
     assert isinstance(recorded.error, AIProviderOutputBlockedError)
     assert recorded.usage == Usage(
         input_tokens=11,
@@ -116,7 +115,6 @@ async def test_invalid_response_records_failed_with_defect() -> None:
     assert recorded.failure == LlmAttemptFailed(
         failure_code=AgentResponseDefect.RESPONSE_NOT_JSON
     )
-    assert recorded.span_result == "invalid_response"
 
 
 async def test_translated_provider_error_records_failed_with_code() -> None:
@@ -132,12 +130,11 @@ async def test_translated_provider_error_records_failed_with_code() -> None:
     assert recorded.failure == LlmAttemptFailed(
         failure_code=AIProviderNetworkError.CODE
     )
-    assert recorded.span_result == "provider_error"
     assert recorded.usage is None
 
 
-async def test_unclassified_exception_records_without_failure() -> None:
-    """未分類例外は失敗型なしで閉じる。"""
+async def test_unclassified_exception_records_unclassified_failure() -> None:
+    """未分類例外は unclassified として報告し、同じ例外を raise する。"""
 
     error = RuntimeError("UNCLASSIFIED_EXCEPTION_SENTINEL")
     recorder = RecordingLlmCallRecorder()
@@ -148,7 +145,7 @@ async def test_unclassified_exception_records_without_failure() -> None:
 
     assert exc_info.value is error
     recorded = recorder.records[0]
-    assert recorded.failure is None
+    assert recorded.failure == LlmAttemptFailed(failure_code=UNCLASSIFIED_FAILURE_CODE)
     assert recorded.error is error
 
 

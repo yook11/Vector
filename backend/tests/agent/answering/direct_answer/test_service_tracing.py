@@ -115,7 +115,8 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
     assert attempt.parent is not None
     assert attempt.parent.span_id == phase.context.span_id
     assert attempt.status.status_code is StatusCode.UNSET
-    assert (attempt.attributes or {})["result"] == "succeeded"
+    assert (attempt.attributes or {})["status"] == "completed"
+    assert "result" not in (attempt.attributes or {})
     assert sdk_stream.close_calls == 1
     assert provider_config.system_instruction == DIRECT_ANSWER_AGENT.prompt.instructions
     assert provider_request["contents"] == DIRECT_ANSWER_AGENT.prompt.input_renderer(
@@ -185,7 +186,9 @@ async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
         "agent_name",
         "attempt_number",
         "prompt_version",
+        "status",
     }
+    assert attempt_attributes["status"] == "failed"
     assert "result" not in attempt_attributes
     for span in (phase, attempt):
         events = exception_events(span)
@@ -374,5 +377,6 @@ async def test_mid_stream_stop_abandons_real_attempt_without_error(
     assert phase.events == ()
     assert attempt.status.status_code is StatusCode.UNSET
     assert attempt.events == ()
+    assert attempt_attributes["status"] == "stopped"
     assert "result" not in attempt_attributes
     assert "error.type" not in attempt_attributes

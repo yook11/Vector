@@ -12,7 +12,13 @@ from opentelemetry.trace import StatusCode
 
 from app.agent.recording.llm import LogfireLlmCallRecorder
 from app.agent.recording.types import Usage
-from app.agent.runtime.llm_failure import LlmAttemptFailed
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.agent.runtime.llm_failure import (
+    UNCLASSIFIED_FAILURE_CODE,
+    LlmAttemptFailed,
+    llm_attempt_failed_from,
+)
+from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.agent.runtime._tracing_helpers import (
     exception_events,
     one_provider_attempt_span,
@@ -36,10 +42,28 @@ _RECORD_KWARGS = {
 
 
 def test_failed_outcome_rejects_empty_failure_code() -> None:
-    """分類済み失敗は空の failure_code を拒否する。"""
+    """失敗型は空の failure_code を拒否する。"""
 
     with pytest.raises(ValueError):
         LlmAttemptFailed(failure_code="")
+
+
+def test_llm_attempt_failed_from_uses_code_or_defect() -> None:
+    """分類済み失敗は CODE / defect を failure_code にする。"""
+
+    assert llm_attempt_failed_from(AIProviderNetworkError()) == LlmAttemptFailed(
+        failure_code=AIProviderNetworkError.CODE
+    )
+    assert llm_attempt_failed_from(
+        AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
+    ) == LlmAttemptFailed(failure_code=AgentResponseDefect.RESPONSE_NOT_JSON)
+
+
+def test_llm_attempt_failed_from_rejects_class_name() -> None:
+    """例外クラス名は failure_code にしない。"""
+
+    with pytest.raises(ValueError):
+        llm_attempt_failed_from(RuntimeError("not a classified failure"))
 
 
 async def test_success_emits_outcome_duration_and_present_tokens(
@@ -58,7 +82,6 @@ async def test_success_emits_outcome_duration_and_present_tokens(
         "model": "gemini-test-model",
         "attempt_number": 1,
         "status": "completed",
-        "result": "succeeded",
     }
     assert attributes_of(metrics, _OUTCOME_METRIC) == expected
     duration = next(item for item in metrics if item["name"] == _DURATION_METRIC)
@@ -77,23 +100,23 @@ async def test_success_emits_outcome_duration_and_present_tokens(
         {**expected, "direction": "output"},
     ]
     span = one_provider_attempt_span(capfire)
-    assert dict(span.attributes or {})["result"] == "succeeded"
+    attributes = dict(span.attributes or {})
+    assert attributes["status"] == "completed"
+    assert "result" not in attributes
+    assert "error.type" not in attributes
     assert exception_events(span) == []
 
 
-async def test_classified_failure_records_failed_result_and_failure_code(
+async def test_classified_failure_records_status_and_failure_code(
     capfire: CaptureLogfire,
 ) -> None:
-    """分類済み失敗の outcome だけに result=failed と failure_code を付ける。"""
+    """分類済み失敗の outcome だけに failure_code を付ける。"""
 
     recorder = LogfireLlmCallRecorder()
     error = RuntimeError("classified by runtime")
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(**_RECORD_KWARGS) as recording:
-            recording.report_outcome(
-                LlmAttemptFailed(failure_code="ai_error_network"),
-                span_result="provider_error",
-            )
+            recording.report_outcome(LlmAttemptFailed(failure_code="ai_error_network"))
             recording.report_usage(Usage(input_tokens=11, output_tokens=7))
             raise error
 
@@ -105,7 +128,6 @@ async def test_classified_failure_records_failed_result_and_failure_code(
         "model": "gemini-test-model",
         "attempt_number": 1,
         "status": "failed",
-        "result": "failed",
     }
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
         **expected,
@@ -125,7 +147,8 @@ async def test_classified_failure_records_failed_result_and_failure_code(
     ]
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    assert attributes["result"] == "provider_error"
+    assert "result" not in attributes
+    assert attributes["status"] == "failed"
     assert attributes["error.type"] == "ai_error_network"
     assert span.status.status_code is StatusCode.ERROR
     assert exception_events(span) == []
@@ -134,7 +157,7 @@ async def test_classified_failure_records_failed_result_and_failure_code(
 async def test_stopped_attempt_records_duration_without_outcome(
     capfire: CaptureLogfire,
 ) -> None:
-    """途中停止は duration だけを result=none で残し、outcome は打たない。"""
+    """途中停止は duration だけを残し、outcome は打たない。"""
 
     recorder = LogfireLlmCallRecorder()
     error = asyncio.CancelledError()
@@ -152,12 +175,14 @@ async def test_stopped_attempt_records_duration_without_outcome(
         "model": "gemini-test-model",
         "attempt_number": 2,
         "status": "stopped",
-        "result": "none",
     }
     assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
     assert all(item["name"] != _TOKENS_METRIC for item in metrics)
     span = one_provider_attempt_span(capfire)
-    assert "result" not in dict(span.attributes or {})
+    attributes = dict(span.attributes or {})
+    assert attributes["status"] == "stopped"
+    assert "result" not in attributes
+    assert "error.type" not in attributes
     assert exception_events(span) == []
     assert span.status.status_code is not StatusCode.ERROR
 
@@ -170,21 +195,18 @@ async def test_stopped_attempt_discards_reported_failure(
     recorder = LogfireLlmCallRecorder()
     with pytest.raises(asyncio.CancelledError):
         async with recorder.record(**_RECORD_KWARGS) as recording:
-            recording.report_outcome(
-                LlmAttemptFailed(failure_code="ai_error_network"),
-                span_result="provider_error",
-            )
+            recording.report_outcome(LlmAttemptFailed(failure_code="ai_error_network"))
             raise asyncio.CancelledError()
 
     metrics = collected_metrics(capfire)
-    assert attributes_of(metrics, _DURATION_METRIC)["result"] == "none"
+    assert attributes_of(metrics, _DURATION_METRIC)["status"] == "stopped"
     assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
 
 
-async def test_unclassified_error_records_duration_without_outcome(
+async def test_unreported_error_records_duration_without_outcome(
     capfire: CaptureLogfire,
 ) -> None:
-    """未分類の終わりは duration だけを result=none で残す。"""
+    """報告のない例外は outcome を捏造しない。"""
 
     recorder = LogfireLlmCallRecorder()
     error = RuntimeError("unclassified")
@@ -200,11 +222,50 @@ async def test_unclassified_error_records_duration_without_outcome(
         "model": "gemini-test-model",
         "attempt_number": 1,
         "status": "failed",
-        "result": "none",
     }
     assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
     span = one_provider_attempt_span(capfire)
-    assert "result" not in dict(span.attributes or {})
+    attributes = dict(span.attributes or {})
+    assert attributes["status"] == "failed"
+    assert "result" not in attributes
+    assert "error.type" not in attributes
+    assert exception_events(span)
+
+
+async def test_reported_unclassified_records_outcome_and_error_type(
+    capfire: CaptureLogfire,
+) -> None:
+    """報告済み unclassified は status と error.type を残し、result は付けない。"""
+
+    recorder = LogfireLlmCallRecorder()
+    error = RuntimeError("unclassified by runtime")
+    with pytest.raises(RuntimeError) as raised:
+        async with recorder.record(**_RECORD_KWARGS) as recording:
+            recording.report_outcome(
+                LlmAttemptFailed(failure_code=UNCLASSIFIED_FAILURE_CODE)
+            )
+            raise error
+
+    assert raised.value is error
+    metrics = collected_metrics(capfire)
+    expected = {
+        "agent_name": "question_planner",
+        "provider": "gemini",
+        "model": "gemini-test-model",
+        "attempt_number": 1,
+        "status": "failed",
+    }
+    assert attributes_of(metrics, _OUTCOME_METRIC) == {
+        **expected,
+        "failure_code": UNCLASSIFIED_FAILURE_CODE,
+    }
+    assert attributes_of(metrics, _DURATION_METRIC) == expected
+    span = one_provider_attempt_span(capfire)
+    attributes = dict(span.attributes or {})
+    assert attributes["status"] == "failed"
+    assert "result" not in attributes
+    assert attributes["error.type"] == UNCLASSIFIED_FAILURE_CODE
+    assert span.status.status_code is StatusCode.ERROR
     assert exception_events(span)
 
 
@@ -223,7 +284,7 @@ async def test_clock_failure_skips_duration(
 
     metrics = collected_metrics(capfire)
     assert all(item["name"] != _DURATION_METRIC for item in metrics)
-    assert attributes_of(metrics, _OUTCOME_METRIC)["result"] == "succeeded"
+    assert attributes_of(metrics, _OUTCOME_METRIC)["status"] == "completed"
 
 
 async def test_outcome_failure_does_not_change_business_result(
@@ -268,6 +329,9 @@ async def test_span_failure_does_not_change_business_result(
         def set_status(self, *_args: object, **_kwargs: object) -> None:
             return None
 
+        def record_exception(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
     def _span(*_args: object, **_kwargs: object) -> FailingSpan:
         if failure_point == "create":
             raise RuntimeError("span create failed")
@@ -294,8 +358,8 @@ async def test_duration_failure_does_not_block_outcome(
     async with LogfireLlmCallRecorder().record(**_RECORD_KWARGS):
         pass
 
-    assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC)["result"] == (
-        "succeeded"
+    assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC)["status"] == (
+        "completed"
     )
 
 
@@ -320,6 +384,9 @@ async def test_span_exit_failure_does_not_replace_business_error(
         def set_status(self, *_args: object, **_kwargs: object) -> None:
             return None
 
+        def record_exception(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
     monkeypatch.setattr(
         "app.agent.recording.llm.logfire.span",
         lambda *_args, **_kwargs: FailingSpan(),
@@ -331,17 +398,6 @@ async def test_span_exit_failure_does_not_replace_business_error(
             raise business_error
 
     assert raised.value is business_error
-
-
-async def test_report_outcome_rejects_unknown_span_result() -> None:
-    """span_result は provider-attempt の失敗桶だけを受け付ける。"""
-
-    with pytest.raises(ValueError):
-        async with LogfireLlmCallRecorder().record(**_RECORD_KWARGS) as recording:
-            recording.report_outcome(
-                LlmAttemptFailed(failure_code="ai_error_network"),
-                span_result="succeeded",
-            )
 
 
 async def test_call_mode_does_not_open_detached_span(
@@ -371,7 +427,9 @@ async def test_stream_mode_opens_detached_span_with_parent_context(
     assert tracer.start_contexts == [parent]
     span = tracer.spans[0]
     assert span.end_calls == 1
-    assert span.attributes["result"] == "succeeded"
+    assert span.attributes["status"] == "completed"
+    assert "result" not in span.attributes
+    assert "error.type" not in span.attributes
     assert span.attributes["gen_ai.usage.input_tokens"] == 11
     assert span.exception_events == []
 
@@ -387,22 +445,20 @@ async def test_stream_classified_failure_has_no_exception_event(
         async with LogfireLlmCallRecorder().record(
             **{**_RECORD_KWARGS, "mode": "stream"}
         ) as recording:
-            recording.report_outcome(
-                LlmAttemptFailed(failure_code="ai_error_network"),
-                span_result="blocked",
-            )
+            recording.report_outcome(LlmAttemptFailed(failure_code="ai_error_network"))
             raise error
 
     assert raised.value is error
     span = tracer.spans[0]
-    assert span.attributes["result"] == "blocked"
+    assert "result" not in span.attributes
+    assert span.attributes["status"] == "failed"
     assert span.attributes["error.type"] == "ai_error_network"
     assert span.status_code is StatusCode.ERROR
     assert span.exception_events == []
     assert span.end_calls == 1
 
 
-async def test_stream_unclassified_error_records_exception_without_result(
+async def test_stream_unreported_error_records_exception_without_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = _FakeTracer()
@@ -417,7 +473,35 @@ async def test_stream_unclassified_error_records_exception_without_result(
 
     assert raised.value is error
     span = tracer.spans[0]
+    assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
+    assert "error.type" not in span.attributes
+    assert span.status_code is StatusCode.ERROR
+    assert span.exception_events == [error]
+    assert span.end_calls == 1
+
+
+async def test_stream_reported_unclassified_records_error_type_and_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracer = _FakeTracer()
+    monkeypatch.setattr("app.agent.recording.llm._TRACER", tracer)
+    error = RuntimeError("unclassified stream")
+
+    with pytest.raises(RuntimeError) as raised:
+        async with LogfireLlmCallRecorder().record(
+            **{**_RECORD_KWARGS, "mode": "stream"}
+        ) as recording:
+            recording.report_outcome(
+                LlmAttemptFailed(failure_code=UNCLASSIFIED_FAILURE_CODE)
+            )
+            raise error
+
+    assert raised.value is error
+    span = tracer.spans[0]
+    assert span.attributes["status"] == "failed"
+    assert "result" not in span.attributes
+    assert span.attributes["error.type"] == UNCLASSIFIED_FAILURE_CODE
     assert span.status_code is StatusCode.ERROR
     assert span.exception_events == [error]
     assert span.end_calls == 1

@@ -14,7 +14,7 @@ from logfire.testing import CaptureLogfire
 from openai import AsyncOpenAI
 from opentelemetry.trace import SpanKind, StatusCode
 
-from app.agent.runtime.contract import AgentResponseInvalidError
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from app.logfire.redaction import install_exception_redaction
@@ -75,11 +75,12 @@ async def test_success_span_has_only_allowlisted_agent_attributes_and_no_text(
         "agent_name",
         "attempt_number",
         "prompt_version",
-        "result",
+        "status",
     }
     assert attributes["agent_name"] == "deepseek_trace_agent"
     assert attributes["attempt_number"] == 2
-    assert attributes["result"] == "succeeded"
+    assert attributes["status"] == "completed"
+    assert "result" not in attributes
     assert attributes["gen_ai.operation.name"] == "chat"
     assert attributes["gen_ai.provider.name"] == "deepseek"
     assert attributes["gen_ai.request.model"] == "deepseek-v4-flash"
@@ -131,8 +132,9 @@ async def test_invalid_response_records_usage_before_safe_classification(
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    assert attributes["result"] == "invalid_response"
-    assert isinstance(attributes["error.type"], str)
+    assert "result" not in attributes
+    assert attributes["status"] == "failed"
+    assert attributes["error.type"] == AgentResponseDefect.RESPONSE_NOT_JSON
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
@@ -182,7 +184,8 @@ async def test_classified_provider_error_records_safe_span_without_exception_eve
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    assert attributes["result"] == "provider_error"
+    assert "result" not in attributes
+    assert attributes["status"] == "failed"
     assert attributes["error.type"] == AIProviderNetworkError.CODE
     assert not any(key.startswith("gen_ai.usage.") for key in attributes)
     assert span.status.status_code is StatusCode.ERROR
@@ -209,6 +212,8 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     events = exception_events(span)
     assert raised.value is error
     assert "result" not in attributes
+    assert attributes["status"] == "failed"
+    assert attributes["error.type"] == "unclassified"
     assert len(events) == 1
     assert events[0].attributes["exception.message"] == "[redacted]"
     assert events[0].attributes["exception.stacktrace"] == "[redacted]"

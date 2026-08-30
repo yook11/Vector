@@ -24,7 +24,7 @@ from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import SpanKind, StatusCode
 
 from app.agent.recording.types import PhaseStatus, Usage
-from app.agent.runtime.llm_failure import LlmAttemptFailed
+from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 
 __all__ = [
     "LlmCallMode",
@@ -38,11 +38,7 @@ _SPAN_NAME = "agent_provider_call"
 _OUTCOME_METRIC = "vector.agent.llm_call.outcome"
 _DURATION_METRIC = "vector.agent.llm_call.duration"
 _TOKENS_METRIC = "vector.agent.llm_call.tokens"
-_MISSING_RESULT = "none"
-_FAILED_RESULT = "failed"
-_SUCCEEDED_RESULT = "succeeded"
 _GEN_AI_REASONING_OUTPUT_TOKENS = "gen_ai.usage.reasoning.output_tokens"
-_SPAN_FAILURE_RESULTS = frozenset({"blocked", "invalid_response", "provider_error"})
 _TRACER = trace.get_tracer(__name__)
 
 _outcome_counter = logfire.metric_counter(
@@ -65,20 +61,15 @@ type LlmCallMode = Literal["call", "stream"]
 
 
 class LlmCallRecording(Protocol):
-    """実行中の provider attempt へ usage と分類済み失敗を伝える。"""
+    """実行中の provider attempt へ usage と失敗を伝える。"""
 
     def report_usage(self, usage: Usage) -> None: ...
 
-    def report_outcome(
-        self,
-        failure: LlmAttemptFailed,
-        *,
-        span_result: str,
-    ) -> None: ...
+    def report_outcome(self, failure: LlmAttemptFailed) -> None: ...
 
 
 class LlmCallRecorder(Protocol):
-    """provider attempt 1回の span・duration・分類済み outcome を完結させる。"""
+    """provider attempt 1回の span・duration・outcome を完結させる。"""
 
     def record(
         self,
@@ -100,30 +91,19 @@ class _LlmCallRecording:
     span: _SpanHandle | None
     usage: Usage | None = None
     failure: LlmAttemptFailed | None = None
-    span_result: str | None = None
 
     def report_usage(self, usage: Usage) -> None:
         self.usage = usage
         _try_write_usage(self.span, usage)
 
-    def report_outcome(
-        self,
-        failure: LlmAttemptFailed,
-        *,
-        span_result: str,
-    ) -> None:
-        if span_result not in _SPAN_FAILURE_RESULTS:
-            raise ValueError("span_result must be a provider-attempt failure bucket")
+    def report_outcome(self, failure: LlmAttemptFailed) -> None:
         self.failure = failure
-        self.span_result = span_result
 
 
 @dataclass(frozen=True, slots=True)
 class _LlmCallExit:
     status: PhaseStatus
-    result: str
     failure: LlmAttemptFailed | None
-    span_result: str | None
     error: BaseException | None
 
     @classmethod
@@ -131,40 +111,15 @@ class _LlmCallExit:
         cls,
         *,
         failure: LlmAttemptFailed | None,
-        span_result: str | None,
         error: BaseException | None,
     ) -> _LlmCallExit:
         if isinstance(error, asyncio.CancelledError | GeneratorExit):
-            return cls(
-                status=PhaseStatus.STOPPED,
-                result=_MISSING_RESULT,
-                failure=None,
-                span_result=None,
-                error=error,
-            )
+            return cls(status=PhaseStatus.STOPPED, failure=None, error=error)
         if failure is not None:
-            return cls(
-                status=PhaseStatus.FAILED,
-                result=_FAILED_RESULT,
-                failure=failure,
-                span_result=span_result,
-                error=error,
-            )
+            return cls(status=PhaseStatus.FAILED, failure=failure, error=error)
         if error is None:
-            return cls(
-                status=PhaseStatus.COMPLETED,
-                result=_SUCCEEDED_RESULT,
-                failure=None,
-                span_result=None,
-                error=None,
-            )
-        return cls(
-            status=PhaseStatus.FAILED,
-            result=_MISSING_RESULT,
-            failure=None,
-            span_result=None,
-            error=error,
-        )
+            return cls(status=PhaseStatus.COMPLETED, failure=None, error=None)
+        return cls(status=PhaseStatus.FAILED, failure=None, error=error)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,7 +192,6 @@ class LogfireLlmCallRecorder:
         finally:
             llm_exit = _LlmCallExit.resolve(
                 failure=recording.failure,
-                span_result=recording.span_result,
                 error=error,
             )
             _try_close_span(span, llm_exit=llm_exit)
@@ -338,16 +292,20 @@ def _try_close_span(span: _SpanHandle | None, *, llm_exit: _LlmCallExit) -> None
 
 def _try_apply_span_conclusion(writer: object, *, llm_exit: _LlmCallExit) -> None:
     try:
+        writer.set_attribute("status", llm_exit.status.value)
         if llm_exit.status is PhaseStatus.STOPPED:
             return
         if llm_exit.failure is not None:
-            if llm_exit.span_result is not None:
-                writer.set_attribute("result", llm_exit.span_result)
-            writer.set_attribute(ERROR_TYPE, llm_exit.failure.failure_code)
-            writer.set_status(StatusCode.ERROR)
-            return
-        if llm_exit.error is None:
-            writer.set_attribute("result", _SUCCEEDED_RESULT)
+            if (
+                llm_exit.failure.failure_code == UNCLASSIFIED_FAILURE_CODE
+                and llm_exit.error is not None
+            ):
+                writer.record_exception(llm_exit.error)
+                writer.set_attribute(ERROR_TYPE, llm_exit.failure.failure_code)
+                writer.set_status(StatusCode.ERROR, str(llm_exit.error))
+            else:
+                writer.set_attribute(ERROR_TYPE, llm_exit.failure.failure_code)
+                writer.set_status(StatusCode.ERROR)
     except Exception:
         return
 
@@ -390,8 +348,11 @@ def _metric_attributes(
     return {
         **identity,
         "status": llm_exit.status.value,
-        "result": llm_exit.result,
     }
+
+
+def _should_record_outcome(llm_exit: _LlmCallExit) -> bool:
+    return llm_exit.status is PhaseStatus.COMPLETED or llm_exit.failure is not None
 
 
 def _record_outcome(
@@ -399,7 +360,7 @@ def _record_outcome(
     identity: dict[str, object],
     llm_exit: _LlmCallExit,
 ) -> None:
-    if llm_exit.result == _MISSING_RESULT:
+    if not _should_record_outcome(llm_exit):
         return
     try:
         attributes = _metric_attributes(identity=identity, llm_exit=llm_exit)
