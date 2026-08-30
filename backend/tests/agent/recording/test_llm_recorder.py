@@ -8,8 +8,6 @@ from logfire.testing import CaptureLogfire
 from app.agent.recording.llm import (
     LogfireLlmCallRecorder,
     outcome_from_span_result,
-    usage_from_deepseek_usage,
-    usage_from_gemini_metadata,
 )
 from app.agent.recording.types import LlmCall, LlmCallResult, Usage
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
@@ -42,38 +40,6 @@ def test_unknown_span_result_is_rejected() -> None:
 
     with pytest.raises(ValueError):
         outcome_from_span_result("unknown")
-
-
-def test_gemini_usage_keeps_missing_fields_unset() -> None:
-    """欠損 token を 0 で埋めない。"""
-
-    usage = usage_from_gemini_metadata(type("Usage", (), {"prompt_token_count": 11})())
-
-    assert usage == Usage(input_tokens=11)
-
-
-def test_deepseek_usage_reads_nested_cache_and_reasoning_tokens() -> None:
-    """DeepSeek の入れ子 usage を optional な token 集合へ写す。"""
-
-    usage = usage_from_deepseek_usage(
-        type(
-            "Usage",
-            (),
-            {
-                "prompt_tokens": 4,
-                "completion_tokens": 6,
-                "prompt_tokens_details": type("D", (), {"cached_tokens": 1})(),
-                "completion_tokens_details": type("D", (), {"reasoning_tokens": 2})(),
-            },
-        )()
-    )
-
-    assert usage == Usage(
-        input_tokens=4,
-        output_tokens=6,
-        cache_read_input_tokens=1,
-        reasoning_output_tokens=2,
-    )
 
 
 async def test_logfire_recorder_emits_outcome_duration_and_present_tokens(

@@ -14,8 +14,6 @@ __all__ = [
     "LogfireLlmCallRecorder",
     "logfire_llm_call_recorder",
     "outcome_from_span_result",
-    "usage_from_deepseek_usage",
-    "usage_from_gemini_metadata",
 ]
 
 _OUTCOME_METRIC = "vector.agent.llm_call.outcome"
@@ -82,34 +80,6 @@ def _status_from_result(
     return PhaseStatus.FAILED
 
 
-def usage_from_gemini_metadata(usage: object | None) -> Usage | None:
-    return _usage_if_present(
-        input_tokens=_optional_token(getattr(usage, "prompt_token_count", None)),
-        output_tokens=_optional_token(getattr(usage, "candidates_token_count", None)),
-        cache_read_input_tokens=_optional_token(
-            getattr(usage, "cached_content_token_count", None)
-        ),
-        reasoning_output_tokens=_optional_token(
-            getattr(usage, "thoughts_token_count", None)
-        ),
-    )
-
-
-def usage_from_deepseek_usage(usage: object | None) -> Usage | None:
-    prompt_details = getattr(usage, "prompt_tokens_details", None)
-    completion_details = getattr(usage, "completion_tokens_details", None)
-    return _usage_if_present(
-        input_tokens=_optional_token(getattr(usage, "prompt_tokens", None)),
-        output_tokens=_optional_token(getattr(usage, "completion_tokens", None)),
-        cache_read_input_tokens=_optional_token(
-            getattr(prompt_details, "cached_tokens", None)
-        ),
-        reasoning_output_tokens=_optional_token(
-            getattr(completion_details, "reasoning_tokens", None)
-        ),
-    )
-
-
 class LogfireLlmCallRecorder:
     def start(
         self,
@@ -173,34 +143,6 @@ class LogfireLlmCallRecorder:
                     )
         except Exception:
             return
-
-
-def _optional_token(value: object) -> int | None:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    return None
-
-
-def _usage_if_present(
-    *,
-    input_tokens: int | None,
-    output_tokens: int | None,
-    cache_read_input_tokens: int | None,
-    reasoning_output_tokens: int | None,
-) -> Usage | None:
-    if (
-        input_tokens is None
-        and output_tokens is None
-        and cache_read_input_tokens is None
-        and reasoning_output_tokens is None
-    ):
-        return None
-    return Usage(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cache_read_input_tokens=cache_read_input_tokens,
-        reasoning_output_tokens=reasoning_output_tokens,
-    )
 
 
 logfire_llm_call_recorder = LogfireLlmCallRecorder()

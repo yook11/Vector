@@ -13,6 +13,7 @@ from app.agent.recording.types import (
     PhaseStatus,
     ToolCall,
     Usage,
+    _usage_from_optional_counts,
 )
 
 
@@ -59,3 +60,21 @@ def test_start_handles_are_frozen() -> None:
         phase_call.started_at = 2.0  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         usage.input_tokens = 0  # type: ignore[misc]
+
+
+def test_usage_from_optional_counts_skips_all_missing_fields() -> None:
+    """4欄すべて欠損なら Usage を作らない。"""
+
+    assert _usage_from_optional_counts() is None
+
+
+def test_usage_from_optional_counts_rejects_bool_as_token() -> None:
+    """bool は token として採用しない。"""
+
+    assert _usage_from_optional_counts(input_tokens=True) is None
+
+
+def test_usage_from_optional_counts_keeps_integer_tokens() -> None:
+    """整数の token だけを残す。"""
+
+    assert _usage_from_optional_counts(input_tokens=11) == Usage(input_tokens=11)
