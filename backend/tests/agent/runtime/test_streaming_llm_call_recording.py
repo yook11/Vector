@@ -8,9 +8,9 @@ from typing import cast
 import pytest
 from google.genai.client import AsyncClient
 
-from app.agent.recording.llm import LlmAttemptFailed, LlmAttemptSucceeded
 from app.agent.recording.types import Usage
 from app.agent.runtime.gemini import GeminiAgentRuntime
+from app.agent.runtime.llm_failure import LlmAttemptFailed
 from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent
@@ -34,8 +34,8 @@ def _runtime(
     )
 
 
-async def test_normal_stream_eof_records_completed_succeeded() -> None:
-    """正常終端の stream は completed / succeeded で閉じる。"""
+async def test_normal_stream_eof_records_usage_without_failure() -> None:
+    """正常終端の stream は失敗型なしで閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime(
@@ -59,10 +59,12 @@ async def test_normal_stream_eof_records_completed_succeeded() -> None:
     fragments = [fragment async for fragment in stream]
 
     assert fragments == ["fragment"]
-    assert len(recorder.starts) == 1
-    recorded = recorder.ends[0]
-    assert recorded.outcome == LlmAttemptSucceeded()
-    assert recorded.stopped is False
+    assert len(recorder.records) == 1
+    recorded = recorder.records[0]
+    assert recorded.mode == "stream"
+    assert recorded.parent_context is not None
+    assert recorded.failure is None
+    assert recorded.error is None
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -88,11 +90,11 @@ async def test_blocked_stream_records_failed_with_code() -> None:
     with pytest.raises(AIProviderOutputBlockedError):
         _ = [fragment async for fragment in stream]
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome == LlmAttemptFailed(
+    recorded = recorder.records[0]
+    assert recorded.failure == LlmAttemptFailed(
         failure_code=AIProviderOutputBlockedError.CODE
     )
-    assert recorded.stopped is False
+    assert recorded.span_result == "blocked"
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -101,8 +103,8 @@ async def test_blocked_stream_records_failed_with_code() -> None:
     )
 
 
-async def test_unclassified_stream_records_without_outcome() -> None:
-    """未分類例外の stream は結論型なしで閉じる。"""
+async def test_unclassified_stream_records_without_failure() -> None:
+    """未分類例外の stream は失敗型なしで閉じる。"""
 
     error = RuntimeError("UNCLASSIFIED_STREAM")
     recorder = RecordingLlmCallRecorder()
@@ -117,13 +119,13 @@ async def test_unclassified_stream_records_without_outcome() -> None:
         await stream.__anext__()
 
     assert exc_info.value is error
-    recorded = recorder.ends[0]
-    assert recorded.outcome is None
-    assert recorded.stopped is False
+    recorded = recorder.records[0]
+    assert recorded.failure is None
+    assert recorded.error is error
 
 
 async def test_consumer_aclose_records_stopped_and_keeps_usage() -> None:
-    """途中 aclose は stopped にし、既に見た usage は残す。"""
+    """途中 aclose は停止にし、既に見た usage は残す。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime(
@@ -140,11 +142,10 @@ async def test_consumer_aclose_records_stopped_and_keeps_usage() -> None:
     await stream.aclose()
     await stream.aclose()
 
-    assert len(recorder.starts) == 1
-    assert len(recorder.ends) == 1
-    recorded = recorder.ends[0]
-    assert recorded.outcome is None
-    assert recorded.stopped is True
+    assert len(recorder.records) == 1
+    recorded = recorder.records[0]
+    assert recorded.failure is None
+    assert isinstance(recorded.error, GeneratorExit)
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -153,8 +154,8 @@ async def test_consumer_aclose_records_stopped_and_keeps_usage() -> None:
     )
 
 
-async def test_cancellation_records_stopped_without_outcome() -> None:
-    """stream 中の cancel は stopped、結論型なし。"""
+async def test_cancellation_records_stopped_without_failure() -> None:
+    """stream 中の cancel は停止、失敗型なし。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime(
@@ -170,8 +171,8 @@ async def test_cancellation_records_stopped_without_outcome() -> None:
     with pytest.raises(asyncio.CancelledError):
         await stream.__anext__()
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome is None
-    assert recorded.stopped is True
+    recorded = recorder.records[0]
+    assert recorded.failure is None
+    assert isinstance(recorded.error, asyncio.CancelledError)
     assert recorded.usage is None
-    assert len(recorder.ends) == 1
+    assert len(recorder.records) == 1

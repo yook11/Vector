@@ -28,7 +28,7 @@ from opentelemetry.trace import (
     TraceState,
 )
 
-import app.agent.runtime.gemini as gemini_runtime_module
+import app.agent.recording.llm as llm_recording_module
 import app.analysis.gemini_error_translator as gemini_error_translator_module
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
@@ -222,7 +222,7 @@ async def test_unstarted_stream_close_does_not_open_provider_stream_or_span(
     client = FakeGeminiClient([], streams=[sdk_stream])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
     stream = runtime.stream_text(
         make_agent(response_schema=None),
@@ -243,7 +243,7 @@ async def test_first_iteration_opens_one_stream_and_yields_fragments_unchanged(
     client = FakeGeminiClient([], streams=[sdk_stream])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
     stream = runtime.stream_text(
         make_agent(response_schema=None),
@@ -295,7 +295,7 @@ async def test_real_sdk_response_types_expose_the_streamed_attribute_surface(
     client = FakeGeminiClient([], streams=[sdk_stream])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
     stream = runtime.stream_text(
         make_agent(response_schema=None),
@@ -315,7 +315,7 @@ async def test_structured_stream_request_keeps_declared_response_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_terminal_chunk()])
     client = FakeGeminiClient([], streams=[sdk_stream])
 
@@ -336,7 +336,7 @@ async def test_stream_text_captures_creation_phase_parent_without_becoming_ambie
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_terminal_chunk("MODEL_FRAGMENT_SENTINEL")])
     runtime = GeminiAgentRuntime(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
@@ -381,7 +381,7 @@ async def test_stream_text_rejects_renderer_failure_before_iterator_span_and_pro
     )
     client = FakeGeminiClient([])
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
     with pytest.raises(RuntimeError) as exc_info:
         GeminiAgentRuntime(client=cast(AsyncClient, client)).stream_text(
@@ -407,7 +407,7 @@ async def test_stream_text_rejects_config_failure_before_iterator_span_and_provi
     )
     client = FakeGeminiClient([])
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
     with pytest.raises((TypeError, ValueError)):
         GeminiAgentRuntime(client=cast(AsyncClient, client)).stream_text(
@@ -424,7 +424,7 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream(
         [
             _stream_chunk(
@@ -481,7 +481,7 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
     expected_reason: GeminiContentRejectionReason,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(finish_reason=finish_reason)])
     runtime = GeminiAgentRuntime(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
@@ -530,7 +530,7 @@ async def test_max_tokens_finish_reason_raises_classified_truncation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(finish_reason="MAX_TOKENS")])
     runtime = GeminiAgentRuntime(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
@@ -565,7 +565,7 @@ async def test_max_tokens_after_partial_fragment_yield_still_raises_classified_e
 ) -> None:
     """途中まで fragment を受け取った後でも打ち切りは分類済み error になる。"""
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream(
         [
             _stream_chunk(text="partial answer"),
@@ -603,7 +603,7 @@ async def test_stream_without_terminal_reason_is_truncated_and_closed_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(text="first fragment")])
     runtime = GeminiAgentRuntime(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
@@ -631,7 +631,7 @@ async def test_translated_provider_error_preserves_cause_after_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     source_error = TimeoutError("PROVIDER_TIMEOUT_SENTINEL")
     client = FakeGeminiClient([], streams=[source_error])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
@@ -655,7 +655,7 @@ async def test_unclassified_provider_error_records_one_event_then_closes_once(
 ) -> None:
     lifecycle_events: list[str] = []
     tracer = FakeTracer(lifecycle_events=lifecycle_events)
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     error = RuntimeError("UNCLASSIFIED_PROVIDER_SENTINEL")
     sdk_stream = FakeSdkStream([error], lifecycle_events=lifecycle_events)
     runtime = GeminiAgentRuntime(
@@ -683,7 +683,7 @@ async def test_consumer_aclose_is_abandonment_without_error_outcome_and_ends_onc
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(text="fragment")])
     runtime = GeminiAgentRuntime(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
@@ -711,7 +711,7 @@ async def test_usage_before_fragment_yield_survives_consumer_abandonment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream(
         [_stream_chunk(text="fragment", usage_metadata=_usage())]
     )
@@ -746,7 +746,7 @@ async def test_cancellation_during_provider_next_closes_span_once_without_outcom
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = BlockingSdkStream()
     runtime = GeminiAgentRuntime(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
@@ -776,7 +776,7 @@ async def test_cancellation_while_consumer_handles_fragment_closes_once_without_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(text="fragment")])
     runtime = GeminiAgentRuntime(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
@@ -817,7 +817,7 @@ async def test_sdk_close_error_is_best_effort_but_span_ends_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream(
         [_terminal_chunk()],
         close_error=RuntimeError("SDK_CLOSE_FAILURE"),
@@ -846,7 +846,7 @@ async def test_cancelled_sdk_close_preserves_usage_and_ends_span_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream(
         [_stream_chunk(finish_reason="STOP", usage_metadata=_usage())],
         close_error=asyncio.CancelledError(),
@@ -942,7 +942,7 @@ async def test_stream_text_quota_exhausted_sdk_error_emits_ai_provider_exhausted
 ) -> None:
     """quota 超過で中断した stream は provider=gemini で 1 打点 emit する。"""
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     client = FakeGeminiClient([], streams=[_quota_exhausted_sdk_error()])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
 
@@ -965,7 +965,7 @@ async def test_stream_text_plain_rate_limited_sdk_error_does_not_emit(
 ) -> None:
     """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
     tracer = FakeTracer()
-    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     client = FakeGeminiClient([], streams=[_rate_limited_sdk_error()])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
 

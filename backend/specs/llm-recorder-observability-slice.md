@@ -3,7 +3,10 @@
 更新日: 2026-08-30
 
 実装状況: Usage 所有権の移動済み。outcome の失敗 `result` 畳みと
-`failure_code` 済み。Recorder の span 移行は未着手
+`failure_code` 済み。Recorder は context manager。span は Recorder が開く。
+成功は context の正常終了。`LlmAttemptFailed` は Runtime が所有する。
+`LlmAttemptSucceeded` と `LlmCall` / `start`/`end` は削除済み。
+`PhaseCall` / `ToolCall` は工程 Recorder とは別判断で残す。
 
 ## 位置付け
 
@@ -11,9 +14,9 @@
 EvidenceReview / DirectAnswer / EvidenceAnswer）は、Service が型付き結論を
 `report_outcome()` し、Recorder が span・duration・outcome を完結させる形へ揃えた。
 
-LLM だけが例外で、`agent_provider_call` span の開閉と usage 属性の書き込みが
-`GeminiAgentRuntime` / `DeepSeekAgentRuntime` に埋め込まれ、Recorder は metric の
-`start` / `end` だけを担っている。本 slice はその境界を工程 Recorder と同じ形へ移す。
+LLM 呼び出しの観測は工程 Recorder と同じ形になった。Runtime は結論と
+`Usage` だけを渡し、`LogfireLlmCallRecorder` が `agent_provider_call` の開閉と
+metric を完結させる。
 
 ExternalSearch の詳細な `failure_code` 追加は別 slice とする。複数 query が異なる理由で
 失敗しうるため、単一 code への集約規則が先に必要だからである。
@@ -27,28 +30,25 @@ provider attempt の観測が Runtime 実装に複製されており、provider 
 span lifecycle・result 写像・usage 属性書き込みもコピーする必要がある。逆に記録契約を
 変えるときも、Gemini と DeepSeek の両方を同時に直す必要がある。
 
-加えて Recorder モジュールが SDK usage 形を知っていた問題は、各 Runtime へ写像を
-移すことで解消した。残る混在は span 開閉と `_record_usage` の span 書き込みである。
+本 slice は SDK usage 写像を Runtime へ、span 開閉と metric を Recorder の
+context manager へ分け、成功型をたたんでこの混在を解消する。
 
 ### Evidence
 
 - 呼び出し境界は既に分かれている。公開 `AgentRuntime` / `StreamingAgentRuntime` は
   provider 中立で、具象は `GeminiAgentRuntime` と `DeepSeekAgentRuntime`。
   例外翻訳も `translate_gemini_error` / `translate_deepseek_error` に分離済み。
-- 観測は分かれていない。両 Runtime が `agent_provider_call` を自分で開き、
-  `_record_classified_error` と `_record_usage` を複製し、`LlmCallRecorder.start` /
-  `end` を `try/finally` で呼ぶ（`runtime/gemini.py` / `runtime/deepseek.py`）。
-- Gemini stream はさらに別 lifecycle を持つ。`logfire.span` ではなく
-  `_TRACER.start_span(..., context=parent_context)` の detached span で、途中停止時も
-  見た usage を残す（`gemini.py` の `_stream_fragments`、
-  `tests/agent/runtime/test_streaming_llm_call_recording.py`）。
-- Recorder は metric 専用。`LogfireLlmCallRecorder.end` が outcome / duration / tokens
-  を同一 `try` で記録し、span は持たない（`recording/llm.py`）。SDK usage 欄名の写像は
-  各 Runtime が `Usage` へ行い、Recorder は `Usage` だけを受け取る。
-- Recorder へ渡す結論の正本は `LlmAttemptSucceeded` / `LlmAttemptFailed`。
-  span の `result` 桶（`succeeded` / `blocked` / `invalid_response` /
-  `provider_error`）は Runtime が直接書く。
-- `LlmCall.attempt_number` は保持されているが、metric 属性には出ていない。
+- 両 Runtime は `async with LlmCallRecorder.record(...)` で attempt を囲む。
+  描画・request 構築の失敗では record しない。span は Recorder が `mode` で開く。
+- Gemini stream は `mode="stream"`。Recorder が
+  `_TRACER.start_span(..., context=parent_context)` の detached span を開き、
+  途中停止時も見た usage を残す。
+- Recorder は `Usage` と分類済み失敗だけを受け取る。SDK usage 欄名の写像は各 Runtime。
+- 分類済み失敗の正本は Runtime の `LlmAttemptFailed(failure_code)`。
+  成功型は持たない。成功は context の例外なし終了（結果を返したこと）。
+  span の `result` 桶（`blocked` / `invalid_response` / `provider_error`）は
+  Runtime が `report_outcome(..., span_result=)` で渡す観測語彙であり、失敗型には載せない。
+- `attempt_number` は LLM metric 属性に載せる。
 - `PhaseCall` / `ToolCall` は `recording/types.py` と export / 型テスト以外に利用者がいない。
 - `record_ai_provider_exhausted` は両 Runtime が分類済み枯渇を直接 emit しており、
   本 slice では動かさない。
@@ -85,6 +85,7 @@ span lifecycle・result 写像・usage 属性書き込みもコピーする必�
 - Live events、structured logs、非同期 export、Logfire の `gen_ai.response.model`
   自動補完の変更。
 - Tavily HTTP span、工程 Recorder、embedding 呼び出しの移管。
+- 工程の `PlanningSucceeded` など、空ではない成功型を同じ PR でたたむこと。
 
 ### Done
 
@@ -93,11 +94,9 @@ span lifecycle・result 写像・usage 属性書き込みもコピーする必�
 - Recorder は provider SDK の usage 形を知らない。
 - 既存の provider-attempt span 契約、streaming detached span、途中停止時 usage、
   例外同一性、情報非露出がテストで確認される。
-- 移行後に不要な `LlmCall` / `PhaseCall` / `ToolCall` / `start`/`end` API を削除する。
+- `LlmCall` と `start`/`end` API を削除する。`PhaseCall` / `ToolCall` は残す。
 
 ## 現状の境界
-
-### 既に差し替えできるもの
 
 LLM 呼び出し本体は Runtime 単位で分かれている。
 
@@ -107,49 +106,23 @@ LLM 呼び出し本体は Runtime 単位で分かれている。
 | Gemini I/O・block・finish_reason | `GeminiAgentRuntime` |
 | DeepSeek I/O・function calling | `DeepSeekAgentRuntime` |
 | SDK 例外翻訳 | `translate_gemini_error` / `translate_deepseek_error` |
+| 分類済み失敗型 | Runtime の `LlmAttemptFailed` |
 | 枯渇 EMF | 各 Runtime 内の `record_ai_provider_exhausted` |
-
-新しい provider を足すとき、**呼び出すこと自体**は新しい Runtime を実装すれば足りる。
-
-### 差し替えできないもの
-
-記録手順が各 Runtime に埋まっている。
+| span・duration・outcome・tokens | `LogfireLlmCallRecorder` |
 
 ```text
-現状（Gemini / DeepSeek でほぼ同型）
-
 Runtime.call / _stream_fragments
   ├─ provider 固有: request, SDK call, 例外翻訳, 結論分類, SDK usage → Usage
-  ├─ 複製された観測: logfire.span or detached start_span
-  ├─ 複製された観測: _record_classified_error / _record_usage（span の gen_ai.usage.*）
-  └─ start/end: LlmCallRecorder（metric のみ。Usage と結論型を受け取る）
-```
-
-そのため次が同時に起きる。
-
-1. 記録契約を変えると Gemini と DeepSeek の両方を直す。
-2. provider を足すと、観測用 try/finally と span result 写像もコピーする。
-
-metric 結論は `LlmAttemptSucceeded` / `LlmAttemptFailed` が正本である。span の
-`result` 桶は Runtime が別途書く。
-
-## 目標の境界
-
-```text
-移行後
-
-Runtime
-  ├─ provider 固有: request, SDK call, 例外翻訳, 結論と failure_code
-  ├─ provider 固有: SDK usage → Usage
-  └─ provider 固有: GenAI identity（operation / provider.name）を Recorder へ渡す
+  ├─ provider 固有: GenAI identity と span_result を Recorder へ渡す
+  └─ async with record(...) / report_usage / report_outcome(失敗だけ)
 
 LlmCallRecorder
   ├─ mode=call: 現行 context の子として agent_provider_call を開く
   ├─ mode=stream: 渡された parent_context から detached span を開く
-  └─ 結論 → span result / error.type / duration / outcome / tokens
+  └─ 抜け方 → span result / error.type / duration / outcome / tokens
 ```
 
-Runtime は「何が起きたか」だけを型で渡し、Recorder は「どう残すか」だけを知る。
+成功は結果を返すことなので、Recorder は例外なしで抜けたことを成功とみなす。
 新しい provider は Runtime を足す。記録契約の変更は Recorder だけを直す。
 
 ## Recorder contract
@@ -157,30 +130,31 @@ Runtime は「何が起きたか」だけを型で渡し、Recorder は「どう
 ### 記録結論
 
 ```text
-LlmAttemptSucceeded
-LlmAttemptFailed(failure_code)
+（成功型はない。例外なしで context を抜けたことが成功）
+LlmAttemptFailed(failure_code)   # Runtime が所有する
 ```
 
 - 失敗したことは型で表し、metric の失敗 `result` は `failed` に畳む。
   span の `result` 桶（`blocked` / `invalid_response` / `provider_error`）は
-  Runtime が維持し、結論型には載せない。
+  Runtime が `span_result` として渡し、結論型には載せない。
 - `failure_code` は既存の `span_error_type` と同じ写像。provider error は `CODE`、
   `AgentResponseInvalidError` は `defect.value`。空文字は拒否する。
   成功・停止・未分類にはキーも `"none"` も付けない。duration / tokens にも付けない。
 - 未分類例外と停止は結論型を作らない。Recorder が例外から status を決める。
+- `report_outcome` は分類済み失敗だけを受ける。成功型は作らない。
 
 ### Recording handle
 
 ```text
 LlmCallRecording
   report_usage(usage)
-  report_outcome(outcome)
+  report_outcome(failure, *, span_result)
 ```
 
 - `report_usage` は何回呼んでもよい。stream は chunk ごとに上書きし、最後に存在した
   `Usage` を採用する。欠損欄は `None` のままにし、0 で埋めない。
 - 途中停止でも、それまでに報告した usage は残す。
-- `report_outcome` は分類できたときだけ呼ぶ。
+- `report_outcome` は分類できた失敗のときだけ呼ぶ。成功は呼ばない。
 
 ### Recorder Protocol
 
@@ -216,8 +190,8 @@ OTel 値である。Recorder は `"gemini"` から `"gcp.gemini"` を推測し�
 
 | 終わり方 | status | outcome counter | duration | span |
 |---|---|---|---|---|
-| `LlmAttemptSucceeded` | completed | `result=succeeded` | 記録する | `result=succeeded` |
-| `LlmAttemptFailed` | failed | `result=failed` + `failure_code` | `result=failed`（failure_code なし） | 既存の `result` 桶 + `error.type`、ERROR、exception event なし |
+| 例外なし（結果を返した） | completed | `result=succeeded` | 記録する | `result=succeeded` |
+| `LlmAttemptFailed` を報告して raise | failed | `result=failed` + `failure_code` | `result=failed`（failure_code なし） | `span_result` 桶 + `error.type`、ERROR、exception event なし |
 | 未分類例外 | failed | 打たない | `result=none` で記録 | `result` なし、exception event あり |
 | 停止（cancel / GeneratorExit / stream aclose） | stopped | 打たない | `result=none` で記録 | `result` なし、ERROR にしない |
 
@@ -268,7 +242,7 @@ GenAI 標準属性は Runtime が渡した identity と、報告された `Usage
 2. 入力描画と request 構築を記録開始前に終える。
 3. Recorder を `mode` 付きで開き、SDK を呼ぶ。
 4. SDK usage を `Usage` へ写して `report_usage` する。
-5. 結論を分類し、分類できれば `report_outcome` してから同じ例外を raise する。
+5. 分類できれば `report_outcome(LlmAttemptFailed, span_result=...)` してから同じ例外を raise する。
 6. 枯渇系だけ `record_ai_provider_exhausted` を呼ぶ。
 
 Gemini 固有の finish_reason / prompt block / stream 切断、DeepSeek 固有の
@@ -280,31 +254,29 @@ SDK usage 欄名の写像は各 Runtime が行い、Recorder は `Usage` だけ�
 
 ## 削除対象
 
-利用が型定義とテストだけであることを確認したうえで削除する。
+削除済み。
 
 - `LlmCall`（start ハンドル。context manager に置換）
-- `PhaseCall` / `ToolCall`（本番利用なし）
+- `LlmAttemptSucceeded`
+- `LlmCallResult`（span の result 語彙。attempt の集計は `PhaseStatus`）
 - `LlmCallRecorder.start` / `end`
 - 両 Runtime の `_record_classified_error` / `_record_usage` と直接の
   `logfire.span` / `_TRACER.start_span`
 
-`LlmCallResult` と `Usage` と `PhaseStatus` は残す。
+`Usage` と `PhaseStatus` は残す。`PhaseCall` / `ToolCall` は
+工程 Recorder の成功型たたみとは別判断のため、本 slice では残す。
 
 ## 実装順
 
 1. SDK usage 欄名の写像を各 Runtime へ移し、Recorder は `Usage` だけを受け取る。
-2. outcome を `LlmAttemptSucceeded` / `LlmAttemptFailed` にし、分類済み失敗の
-   metric `result` を `failed` へ畳み、outcome にだけ `failure_code` を付ける。
-   `end(result=)` と `outcome_from_span_result` を削除する。span の `result` 桶は
-   Runtime が維持する。
-3. Recorder の型・Protocol・Logfire 実装と recorder 単体テスト。span / clock /
-   各 metric の独立障害、classified-only outcome、duration の全 attempt、
-   `attempt_number`、`mode` による span lifecycle をここで固定する。
-4. Gemini `call` を Recorder へ移し、既存 tracing / recording テストを通す。
-5. Gemini `stream_text` を同じ Protocol の `mode="stream"` へ移し、detached span と
-   途中停止 usage を通す。
-6. DeepSeek `call` を移す。
-7. 死んだ API と型を削除する。
+2. outcome を分類済み失敗の metric `result=failed` へ畳み、outcome にだけ
+   `failure_code` を付ける。`end(result=)` と `outcome_from_span_result` を削除する。
+3. `LlmAttemptFailed` を Runtime へ移す。
+4. Recorder を context manager にし、正常終了を成功とみなして `LlmAttemptSucceeded`
+   を削除する。span / clock / 各 metric の独立障害、classified-only outcome、
+   duration の全 attempt、`attempt_number`、`mode` による span lifecycle を固定する。
+5. Gemini `call` / `stream_text` と DeepSeek `call` を同じ Protocol へ移す。
+6. 死んだ `LlmCall` と `start`/`end` を削除する。
 
 ## Verification policy
 

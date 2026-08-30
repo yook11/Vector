@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
-from time import perf_counter
 
 from app.agent.recording.direct_answer import DirectAnswerOutcome
 from app.agent.recording.evidence_answer import EvidenceAnswerRecordingOutcome
@@ -13,9 +12,10 @@ from app.agent.recording.evidence_collection import EvidenceCollectionRecording
 from app.agent.recording.evidence_review import EvidenceReviewOutcome
 from app.agent.recording.external_search import ExternalSearchOutcome
 from app.agent.recording.internal_search import InternalSearchRecordingOutcome
-from app.agent.recording.llm import LlmAttemptOutcome
+from app.agent.recording.llm import LlmCallMode
 from app.agent.recording.planning import PlanningOutcome
-from app.agent.recording.types import LlmCall, Usage
+from app.agent.recording.types import Usage
+from app.agent.runtime.llm_failure import LlmAttemptFailed
 
 __all__ = [
     "RecordedDirectAnswer",
@@ -26,7 +26,7 @@ __all__ = [
     "RecordedExternalSearch",
     "RecordedExternalSearchQueryGeneration",
     "RecordedInternalSearch",
-    "RecordedLlmCallEnd",
+    "RecordedLlmCall",
     "RecordedPlanning",
     "RecordingDirectAnswerRecorder",
     "RecordingEvidenceAnswerRecorder",
@@ -39,53 +39,95 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True, slots=True)
-class RecordedLlmCallEnd:
-    call: LlmCall
-    outcome: LlmAttemptOutcome | None
-    usage: Usage | None
-    stopped: bool
+@dataclass(slots=True)
+class RecordedLlmCall:
+    agent_name: str
+    provider: str
+    model: str
+    attempt_number: int
+    prompt_version: str
+    operation_name: str
+    gen_ai_provider: str
+    mode: LlmCallMode
+    parent_context: object | None = None
+    usage: Usage | None = None
+    failure: LlmAttemptFailed | None = None
+    span_result: str | None = None
+    error: BaseException | None = None
+
+    def report_usage(self, usage: Usage) -> None:
+        self.usage = usage
+
+    def report_outcome(
+        self,
+        failure: LlmAttemptFailed,
+        *,
+        span_result: str,
+    ) -> None:
+        self.failure = failure
+        self.span_result = span_result
 
 
 @dataclass(slots=True)
 class RecordingLlmCallRecorder:
-    starts: list[LlmCall] = field(default_factory=list)
-    ends: list[RecordedLlmCallEnd] = field(default_factory=list)
+    records: list[RecordedLlmCall] = field(default_factory=list)
 
-    def start(
+    def record(
         self,
         *,
         agent_name: str,
         provider: str,
         model: str,
         attempt_number: int,
-    ) -> LlmCall:
-        call = LlmCall(
+        prompt_version: str,
+        operation_name: str,
+        gen_ai_provider: str,
+        mode: LlmCallMode,
+        parent_context: object | None = None,
+    ) -> AbstractAsyncContextManager[RecordedLlmCall]:
+        return self._record(
             agent_name=agent_name,
             provider=provider,
             model=model,
             attempt_number=attempt_number,
-            started_at=perf_counter(),
+            prompt_version=prompt_version,
+            operation_name=operation_name,
+            gen_ai_provider=gen_ai_provider,
+            mode=mode,
+            parent_context=parent_context,
         )
-        self.starts.append(call)
-        return call
 
-    def end(
+    @asynccontextmanager
+    async def _record(
         self,
-        call: LlmCall,
         *,
-        outcome: LlmAttemptOutcome | None = None,
-        usage: Usage | None = None,
-        stopped: bool = False,
-    ) -> None:
-        self.ends.append(
-            RecordedLlmCallEnd(
-                call=call,
-                outcome=outcome,
-                usage=usage,
-                stopped=stopped,
-            )
+        agent_name: str,
+        provider: str,
+        model: str,
+        attempt_number: int,
+        prompt_version: str,
+        operation_name: str,
+        gen_ai_provider: str,
+        mode: LlmCallMode,
+        parent_context: object | None,
+    ) -> AsyncIterator[RecordedLlmCall]:
+        recording = RecordedLlmCall(
+            agent_name=agent_name,
+            provider=provider,
+            model=model,
+            attempt_number=attempt_number,
+            prompt_version=prompt_version,
+            operation_name=operation_name,
+            gen_ai_provider=gen_ai_provider,
+            mode=mode,
+            parent_context=parent_context,
         )
+        self.records.append(recording)
+        try:
+            yield recording
+        except BaseException as error:
+            recording.error = error
+            raise
 
 
 @dataclass(slots=True)

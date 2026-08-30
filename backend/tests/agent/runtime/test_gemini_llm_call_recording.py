@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.recording.llm import LlmAttemptFailed, LlmAttemptSucceeded
 from app.agent.recording.types import Usage
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
+from app.agent.runtime.llm_failure import LlmAttemptFailed
 from app.analysis.ai_provider_errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
@@ -45,8 +45,8 @@ def _runtime(
     )
 
 
-async def test_successful_call_records_completed_succeeded_usage() -> None:
-    """成功 attempt は completed / succeeded と token を残す。"""
+async def test_successful_call_records_usage_without_failure() -> None:
+    """成功 attempt は結果を返し、失敗型を報告しない。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime(
@@ -57,16 +57,18 @@ async def test_successful_call_records_completed_succeeded_usage() -> None:
 
     await runtime.call(agent, "typed input", attempt_number=1)
 
-    assert len(recorder.starts) == 1
-    assert len(recorder.ends) == 1
-    recorded = recorder.ends[0]
-    assert recorded.call is recorder.starts[0]
-    assert recorded.call.agent_name == agent.name
-    assert recorded.call.provider == "gemini"
-    assert recorded.call.model == agent.model.name
-    assert recorded.call.attempt_number == 1
-    assert recorded.outcome == LlmAttemptSucceeded()
-    assert recorded.stopped is False
+    assert len(recorder.records) == 1
+    recorded = recorder.records[0]
+    assert recorded.agent_name == agent.name
+    assert recorded.provider == "gemini"
+    assert recorded.model == agent.model.name
+    assert recorded.attempt_number == 1
+    assert recorded.mode == "call"
+    assert recorded.prompt_version == agent.prompt.version
+    assert recorded.operation_name == "generate_content"
+    assert recorded.gen_ai_provider == "gcp.gemini"
+    assert recorded.failure is None
+    assert recorded.error is None
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -87,11 +89,12 @@ async def test_blocked_call_records_failed_with_code() -> None:
     with pytest.raises(AIProviderOutputBlockedError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome == LlmAttemptFailed(
+    recorded = recorder.records[0]
+    assert recorded.failure == LlmAttemptFailed(
         failure_code=AIProviderOutputBlockedError.CODE
     )
-    assert recorded.stopped is False
+    assert recorded.span_result == "blocked"
+    assert isinstance(recorded.error, AIProviderOutputBlockedError)
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -109,11 +112,11 @@ async def test_invalid_response_records_failed_with_defect() -> None:
     with pytest.raises(AgentResponseInvalidError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome == LlmAttemptFailed(
+    recorded = recorder.records[0]
+    assert recorded.failure == LlmAttemptFailed(
         failure_code=AgentResponseDefect.RESPONSE_NOT_JSON
     )
-    assert recorded.stopped is False
+    assert recorded.span_result == "invalid_response"
 
 
 async def test_translated_provider_error_records_failed_with_code() -> None:
@@ -125,16 +128,16 @@ async def test_translated_provider_error_records_failed_with_code() -> None:
     with pytest.raises(AIProviderNetworkError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome == LlmAttemptFailed(
+    recorded = recorder.records[0]
+    assert recorded.failure == LlmAttemptFailed(
         failure_code=AIProviderNetworkError.CODE
     )
-    assert recorded.stopped is False
+    assert recorded.span_result == "provider_error"
     assert recorded.usage is None
 
 
-async def test_unclassified_exception_records_failed_without_outcome() -> None:
-    """未分類例外は結論型なしで閉じる。"""
+async def test_unclassified_exception_records_without_failure() -> None:
+    """未分類例外は失敗型なしで閉じる。"""
 
     error = RuntimeError("UNCLASSIFIED_EXCEPTION_SENTINEL")
     recorder = RecordingLlmCallRecorder()
@@ -144,13 +147,13 @@ async def test_unclassified_exception_records_failed_without_outcome() -> None:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value is error
-    recorded = recorder.ends[0]
-    assert recorded.outcome is None
-    assert recorded.stopped is False
+    recorded = recorder.records[0]
+    assert recorded.failure is None
+    assert recorded.error is error
 
 
 async def test_cancelled_call_records_stopped() -> None:
-    """呼び出し中の cancel は stopped で閉じる。"""
+    """呼び出し中の cancel は停止として閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime([asyncio.CancelledError()], recorder)
@@ -158,11 +161,10 @@ async def test_cancelled_call_records_stopped() -> None:
     with pytest.raises(asyncio.CancelledError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    recorded = recorder.ends[0]
-    assert recorded.outcome is None
-    assert recorded.stopped is True
-    assert len(recorder.starts) == 1
-    assert len(recorder.ends) == 1
+    recorded = recorder.records[0]
+    assert recorded.failure is None
+    assert isinstance(recorded.error, asyncio.CancelledError)
+    assert len(recorder.records) == 1
 
 
 async def test_renderer_failure_does_not_start_recording() -> None:
@@ -185,5 +187,4 @@ async def test_renderer_failure_does_not_start_recording() -> None:
         await runtime.call(agent, "typed input", attempt_number=1)
 
     assert exc_info.value is error
-    assert recorder.starts == []
-    assert recorder.ends == []
+    assert recorder.records == []
