@@ -46,14 +46,18 @@ if [ -n "$existing" ] && [ "$existing" != "None" ]; then
   exit 0
 fi
 
-# configurations は置かない。target 単位の domain 固定リストを持たせると
-# 呼び出し側からは見えない絞り込みになるため、まずは request 単位の
-# フィルタだけで運用して、必要になってから足す。
+# parameterValues は空にする。target 単位の domain 固定リストは呼び出し側から
+# 見えない絞り込みになるため、まずは request 単位のフィルタだけで運用して、
+# 必要になってから足す (足す口はここ)。
+#
+# connector target は GATEWAY_IAM_ROLE 以外の credential provider を受け付けない。
+# 省略すると作成に失敗するので明示する。
 aws bedrock-agentcore-control create-gateway-target \
   --region "$REGION" \
   --gateway-identifier "$gateway_id" \
   --name "$TARGET_NAME" \
   --description "Managed web-search connector for the agent stage." \
+  --credential-provider-configurations '[{"credentialProviderType": "GATEWAY_IAM_ROLE"}]' \
   --target-configuration "$(
     cat <<JSON
 {
@@ -62,7 +66,13 @@ aws bedrock-agentcore-control create-gateway-target \
       "source": {
         "connectorId": "web-search",
         "version": "${CONNECTOR_VERSION}"
-      }
+      },
+      "configurations": [
+        {
+          "name": "WebSearch",
+          "parameterValues": {}
+        }
+      ]
     }
   }
 }
