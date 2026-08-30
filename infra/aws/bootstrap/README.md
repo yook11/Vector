@@ -23,16 +23,23 @@
 
 | 塞ぐもの | どこで |
 |---|---|
-| boundary 無しのロール作成 | `DenyRoleCreationWithoutBoundary` |
+| 想定外の boundary でのロール作成 | `DenyRoleCreationWithoutBoundary` |
+| 用途別ロールへの広い boundary の付け替え | `DenyWideBoundaryOnAgentCoreRoles` |
 | boundary の剥奪・差し替え | `DenyBoundaryTampering` |
 | **boundary policy 自体の書き換え** | `DenyTouchingCiScope` |
 | **CI ロールと OIDC provider の改変** | `DenyTouchingCiScope` |
 | `iam:PassRole` の乱用 | `PassRoleToEcsOnly` |
 
-3 番目が最も見落としやすい。boundary は managed policy なので、
-`iam:CreatePolicyVersion` を許すと **「boundary は必ず付くが、その中身が
-Administrator」** が通る。4 番目が抜けると「自分の Deny を自分で消す」が通り、
-Deny 全体が運用の約束に退化する。
+boundary policy 自体の書き換えが最も見落としやすい。boundary は managed policy
+なので、`iam:CreatePolicyVersion` を許すと **「boundary は必ず付くが、その中身が
+Administrator」** が通る。CI ロール自体の改変が抜けると「自分の Deny を自分で
+消す」が通り、Deny 全体が運用の約束に退化する。
+
+boundary は用途ごとに分ける。天井は「そのロールの policy が壊れたときどこまで
+届くか」を決めるものなので、1 本に統合すると天井が全用途の和集合まで広がる。
+ただし許可リストにした時点で「CI はこの中から選べる」という意味になるため、
+**分割だけでは制御にならない**。ロール名と boundary を対で縛って初めて、
+分割が天井の縮小として効く。
 
 **path で Allow 側からも成立させている。** 本体が作るロールは `/vector/`、
 CI ロールと boundary は `/vector-ci/`。apply の `iam:*` は `/vector/` にしか

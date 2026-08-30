@@ -5,11 +5,20 @@ output "state_bucket_name" {
 
 output "permissions_boundary_arn" {
   description = <<-EOT
-    本体スタックが作る全ロールに付ける boundary。
+    本体スタックの ECS 系ロール (task / execution / proxy) と chatbot ロールに付ける boundary。
     本体側は data source ではなく variable で受け取る
     (apply に /vector-ci/ への iam:Get* を要求しないため)。
   EOT
   value       = aws_iam_policy.boundary.arn
+}
+
+output "agentcore_gateway_boundary_arn" {
+  description = <<-EOT
+    AgentCore Gateway の service role に付ける boundary。
+    本体スタックは新しい変数を増やさず、この名前から ARN を組み立てる
+    (locals.tf の agentcore_gateway_boundary_arn)。名前を変えるときは両方直す。
+  EOT
+  value       = aws_iam_policy.agentcore_gateway_boundary.arn
 }
 
 output "ci_role_arns" {
