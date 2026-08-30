@@ -52,10 +52,12 @@ from app.agent.recording.internal_search import (
     logfire_internal_search_recorder,
 )
 from app.agent.recording.llm import (
+    LlmAttemptFailed,
+    LlmAttemptOutcome,
+    LlmAttemptSucceeded,
     LlmCallRecorder,
     LogfireLlmCallRecorder,
     logfire_llm_call_recorder,
-    outcome_from_span_result,
 )
 from app.agent.recording.planning import (
     LogfirePlanningRecorder,
@@ -112,6 +114,9 @@ __all__ = [
     "InternalSearchRecording",
     "InternalSearchRecordingOutcome",
     "InternalSearchSucceeded",
+    "LlmAttemptFailed",
+    "LlmAttemptOutcome",
+    "LlmAttemptSucceeded",
     "LlmCall",
     "LlmCallRecorder",
     "LlmCallResult",
@@ -147,5 +152,4 @@ __all__ = [
     "logfire_llm_call_recorder",
     "logfire_planning_recorder",
     "logfire_research_handoff_recorder",
-    "outcome_from_span_result",
 ]

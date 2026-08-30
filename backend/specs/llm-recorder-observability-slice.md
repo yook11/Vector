@@ -2,7 +2,8 @@
 
 更新日: 2026-08-30
 
-実装状況: Usage 所有権の移動済み。Recorder 移行は未着手
+実装状況: Usage 所有権の移動済み。outcome の失敗 `result` 畳みと
+`failure_code` 済み。Recorder の span 移行は未着手
 
 ## 位置付け
 
@@ -44,8 +45,9 @@ span lifecycle・result 写像・usage 属性書き込みもコピーする必�
 - Recorder は metric 専用。`LogfireLlmCallRecorder.end` が outcome / duration / tokens
   を同一 `try` で記録し、span は持たない（`recording/llm.py`）。SDK usage 欄名の写像は
   各 Runtime が `Usage` へ行い、Recorder は `Usage` だけを受け取る。
-- `outcome_from_span_result(span_result: str)` により、結論の正本が span の
-  `result` 文字列になっている。工程 Recorder は型付き結論が正本である。
+- Recorder へ渡す結論の正本は `LlmAttemptSucceeded` / `LlmAttemptFailed`。
+  span の `result` 桶（`succeeded` / `blocked` / `invalid_response` /
+  `provider_error`）は Runtime が直接書く。
 - `LlmCall.attempt_number` は保持されているが、metric 属性には出ていない。
 - `PhaseCall` / `ToolCall` は `recording/types.py` と export / 型テスト以外に利用者がいない。
 - `record_ai_provider_exhausted` は両 Runtime が分類済み枯渇を直接 emit しており、
@@ -67,8 +69,9 @@ span lifecycle・result 写像・usage 属性書き込みもコピーする必�
 - duration は未分類例外・停止を含む全 attempt を記録する。
 - 分類済み失敗には `failure_code` を付け、span では `error.type` へ写す。
 - `attempt_number` を LLM metric へ追加する。
-- metric 名（`vector.agent.llm_call.outcome` / `.duration` / `.tokens`）と
-  `result` 語彙（`succeeded` / `blocked` / `invalid_response` / `provider_error`）は維持する。
+- metric 名（`vector.agent.llm_call.outcome` / `.duration` / `.tokens`）は維持する。
+  分類済み失敗の outcome は `result=failed` と `failure_code`。span の `result`
+  語彙（`succeeded` / `blocked` / `invalid_response` / `provider_error`）は維持する。
 - span・clock・outcome / duration / tokens の各 metric 障害は独立して止め、本処理へ出さない。
 - prompt、入力、応答本文、例外自由文を span・metric に載せない。
 - 分類済み失敗の span に exception event を付けない。未分類例外は既存どおり exception event
@@ -90,8 +93,7 @@ span lifecycle・result 写像・usage 属性書き込みもコピーする必�
 - Recorder は provider SDK の usage 形を知らない。
 - 既存の provider-attempt span 契約、streaming detached span、途中停止時 usage、
   例外同一性、情報非露出がテストで確認される。
-- 移行後に不要な `LlmCall` / `PhaseCall` / `ToolCall` / `start`/`end` API /
-  `outcome_from_span_result` を削除する。
+- 移行後に不要な `LlmCall` / `PhaseCall` / `ToolCall` / `start`/`end` API を削除する。
 
 ## 現状の境界
 
@@ -120,16 +122,16 @@ Runtime.call / _stream_fragments
   ├─ provider 固有: request, SDK call, 例外翻訳, 結論分類, SDK usage → Usage
   ├─ 複製された観測: logfire.span or detached start_span
   ├─ 複製された観測: _record_classified_error / _record_usage（span の gen_ai.usage.*）
-  └─ start/end: LlmCallRecorder（metric のみ。Usage を受け取る）
+  └─ start/end: LlmCallRecorder（metric のみ。Usage と結論型を受け取る）
 ```
 
 そのため次が同時に起きる。
 
 1. 記録契約を変えると Gemini と DeepSeek の両方を直す。
-2. provider を足すと、観測用 try/finally と result 写像もコピーする。
+2. provider を足すと、観測用 try/finally と span result 写像もコピーする。
 
-結論の向きも工程 Recorder と逆である。Runtime が先に span の `result` 文字列を決め、
-`outcome_from_span_result` で metric 結論へ写している。
+metric 結論は `LlmAttemptSucceeded` / `LlmAttemptFailed` が正本である。span の
+`result` 桶は Runtime が別途書く。
 
 ## 目標の境界
 
@@ -155,14 +157,16 @@ Runtime は「何が起きたか」だけを型で渡し、Recorder は「どう
 ### 記録結論
 
 ```text
-LlmCallSucceeded
-LlmCallFailed(result, failure_code)
+LlmAttemptSucceeded
+LlmAttemptFailed(failure_code)
 ```
 
-- `result` は既存語彙 `blocked | invalid_response | provider_error`。
-  成功は型で表し、`succeeded` を失敗型へ入れない。
+- 失敗したことは型で表し、metric の失敗 `result` は `failed` に畳む。
+  span の `result` 桶（`blocked` / `invalid_response` / `provider_error`）は
+  Runtime が維持し、結論型には載せない。
 - `failure_code` は既存の `span_error_type` と同じ写像。provider error は `CODE`、
   `AgentResponseInvalidError` は `defect.value`。空文字は拒否する。
+  成功・停止・未分類にはキーも `"none"` も付けない。duration / tokens にも付けない。
 - 未分類例外と停止は結論型を作らない。Recorder が例外から status を決める。
 
 ### Recording handle
@@ -212,8 +216,8 @@ OTel 値である。Recorder は `"gemini"` から `"gcp.gemini"` を推測し�
 
 | 終わり方 | status | outcome counter | duration | span |
 |---|---|---|---|---|
-| `LlmCallSucceeded` | completed | `result=succeeded` | 記録する | `result=succeeded` |
-| `LlmCallFailed` | failed | `result` + `failure_code` | 記録する | `result` + `error.type`、ERROR、exception event なし |
+| `LlmAttemptSucceeded` | completed | `result=succeeded` | 記録する | `result=succeeded` |
+| `LlmAttemptFailed` | failed | `result=failed` + `failure_code` | `result=failed`（failure_code なし） | 既存の `result` 桶 + `error.type`、ERROR、exception event なし |
 | 未分類例外 | failed | 打たない | `result=none` で記録 | `result` なし、exception event あり |
 | 停止（cancel / GeneratorExit / stream aclose） | stopped | 打たない | `result=none` で記録 | `result` なし、ERROR にしない |
 
@@ -228,10 +232,11 @@ token metric を打たない。
 vector.agent.llm_call.outcome
   agent_name, provider, model, attempt_number, status, result
   分類済み失敗のみ failure_code
+  result: succeeded | failed | none
 
 vector.agent.llm_call.duration
   agent_name, provider, model, attempt_number, status,
-  result: succeeded | blocked | invalid_response | provider_error | none
+  result: succeeded | failed | none
 
 vector.agent.llm_call.tokens
   上記 + direction: input | output | cache_read_input | reasoning_output
@@ -280,7 +285,6 @@ SDK usage 欄名の写像は各 Runtime が行い、Recorder は `Usage` だけ�
 - `LlmCall`（start ハンドル。context manager に置換）
 - `PhaseCall` / `ToolCall`（本番利用なし）
 - `LlmCallRecorder.start` / `end`
-- `outcome_from_span_result`
 - 両 Runtime の `_record_classified_error` / `_record_usage` と直接の
   `logfire.span` / `_TRACER.start_span`
 
@@ -289,14 +293,18 @@ SDK usage 欄名の写像は各 Runtime が行い、Recorder は `Usage` だけ�
 ## 実装順
 
 1. SDK usage 欄名の写像を各 Runtime へ移し、Recorder は `Usage` だけを受け取る。
-2. Recorder の型・Protocol・Logfire 実装と recorder 単体テスト。span / clock /
+2. outcome を `LlmAttemptSucceeded` / `LlmAttemptFailed` にし、分類済み失敗の
+   metric `result` を `failed` へ畳み、outcome にだけ `failure_code` を付ける。
+   `end(result=)` と `outcome_from_span_result` を削除する。span の `result` 桶は
+   Runtime が維持する。
+3. Recorder の型・Protocol・Logfire 実装と recorder 単体テスト。span / clock /
    各 metric の独立障害、classified-only outcome、duration の全 attempt、
    `attempt_number`、`mode` による span lifecycle をここで固定する。
-3. Gemini `call` を Recorder へ移し、既存 tracing / recording テストを通す。
-4. Gemini `stream_text` を同じ Protocol の `mode="stream"` へ移し、detached span と
+4. Gemini `call` を Recorder へ移し、既存 tracing / recording テストを通す。
+5. Gemini `stream_text` を同じ Protocol の `mode="stream"` へ移し、detached span と
    途中停止 usage を通す。
-5. DeepSeek `call` を移す。
-6. 死んだ API と型を削除する。
+6. DeepSeek `call` を移す。
+7. 死んだ API と型を削除する。
 
 ## Verification policy
 

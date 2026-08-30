@@ -25,17 +25,19 @@ from opentelemetry.trace import SpanKind, StatusCode
 from app.agent.agent import Agent
 from app.agent.error_type import span_error_type
 from app.agent.recording.llm import (
+    LlmAttemptOutcome,
+    LlmAttemptSucceeded,
     LlmCallRecorder,
     logfire_llm_call_recorder,
-    outcome_from_span_result,
 )
-from app.agent.recording.types import LlmCallResult, Usage, _usage_from_optional_counts
+from app.agent.recording.types import Usage, _usage_from_optional_counts
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
     validate_output,
 )
 from app.agent.runtime.contract import AgentResponseInvalidError, AgentTextStream
+from app.agent.runtime.llm_failure import llm_attempt_failed_from
 from app.analysis.ai_provider_errors import (
     AIProviderContentRejectionKind,
     AIProviderError,
@@ -95,7 +97,7 @@ class GeminiAgentRuntime:
         config = _build_config(agent, structured=True)
         classified_error: Exception | None = None
         output: OutputT | object = _MISSING_OUTPUT
-        result: LlmCallResult | None = None
+        outcome: LlmAttemptOutcome | None = None
         usage: Usage | None = None
         stopped = False
         llm_call = self._llm_calls.start(
@@ -138,7 +140,7 @@ class GeminiAgentRuntime:
                     record_ai_provider_exhausted(
                         translated_error, provider=agent.model.provider
                     )
-                    result = outcome_from_span_result("provider_error")
+                    outcome = llm_attempt_failed_from(classified_error)
                 else:
                     usage = _record_usage(
                         span, getattr(response, "usage_metadata", None)
@@ -154,7 +156,7 @@ class GeminiAgentRuntime:
                             result="blocked",
                             error_type=span_error_type(classified_error),
                         )
-                        result = outcome_from_span_result("blocked")
+                        outcome = llm_attempt_failed_from(classified_error)
                     else:
                         finish_reason = _finish_reason_name(response)
                     if (
@@ -174,7 +176,7 @@ class GeminiAgentRuntime:
                             result="blocked",
                             error_type=span_error_type(classified_error),
                         )
-                        result = outcome_from_span_result("blocked")
+                        outcome = llm_attempt_failed_from(classified_error)
                     elif classified_error is None and finish_reason == "MAX_TOKENS":
                         classified_error = AIProviderOutputTruncatedError(
                             reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
@@ -184,7 +186,7 @@ class GeminiAgentRuntime:
                             result="provider_error",
                             error_type=span_error_type(classified_error),
                         )
-                        result = outcome_from_span_result("provider_error")
+                        outcome = llm_attempt_failed_from(classified_error)
                     elif classified_error is None:
                         try:
                             output = _parse_output(agent, response)
@@ -195,10 +197,10 @@ class GeminiAgentRuntime:
                                 result="invalid_response",
                                 error_type=span_error_type(exc),
                             )
-                            result = outcome_from_span_result("invalid_response")
+                            outcome = llm_attempt_failed_from(classified_error)
                         else:
                             span.set_attribute("result", "succeeded")
-                            result = outcome_from_span_result("succeeded")
+                            outcome = LlmAttemptSucceeded()
 
             if classified_error is not None:
                 raise classified_error
@@ -207,12 +209,12 @@ class GeminiAgentRuntime:
             return cast(OutputT, output)
         except (asyncio.CancelledError, GeneratorExit):
             stopped = True
-            result = None
+            outcome = None
             raise
         finally:
             self._llm_calls.end(
                 llm_call,
-                result=result,
+                outcome=outcome,
                 usage=usage,
                 stopped=stopped,
             )
@@ -285,7 +287,7 @@ class GeminiAgentRuntime:
         unknown_error: Exception | None = None
         terminal_reason_seen = False
         normal_eof = False
-        result: LlmCallResult | None = None
+        outcome: LlmAttemptOutcome | None = None
         usage: Usage | None = None
         stopped = True
         try:
@@ -364,7 +366,7 @@ class GeminiAgentRuntime:
             if normal_eof:
                 span.set_attribute("result", "succeeded")
                 stopped = False
-                result = outcome_from_span_result("succeeded")
+                outcome = LlmAttemptSucceeded()
             elif classified_error is not None:
                 span_result = (
                     "blocked"
@@ -380,17 +382,17 @@ class GeminiAgentRuntime:
                     classified_error, provider=agent.model.provider
                 )
                 stopped = False
-                result = outcome_from_span_result(span_result)
+                outcome = llm_attempt_failed_from(classified_error)
             elif unknown_error is not None:
                 span.record_exception(unknown_error)
                 span.set_status(StatusCode.ERROR, str(unknown_error))
                 stopped = False
-                result = None
+                outcome = None
         finally:
             span.end()
             self._llm_calls.end(
                 llm_call,
-                result=result,
+                outcome=outcome,
                 usage=usage,
                 stopped=stopped,
             )

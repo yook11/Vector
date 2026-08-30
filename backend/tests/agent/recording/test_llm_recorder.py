@@ -1,4 +1,4 @@
-"""LogfireLlmCallRecorder と span result 写像の契約。"""
+"""LogfireLlmCallRecorder の契約。"""
 
 from __future__ import annotations
 
@@ -6,10 +6,11 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.agent.recording.llm import (
+    LlmAttemptFailed,
+    LlmAttemptSucceeded,
     LogfireLlmCallRecorder,
-    outcome_from_span_result,
 )
-from app.agent.recording.types import LlmCall, LlmCallResult, Usage
+from app.agent.recording.types import LlmCall, Usage
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
 
 _OUTCOME_METRIC = "vector.agent.llm_call.outcome"
@@ -17,29 +18,11 @@ _DURATION_METRIC = "vector.agent.llm_call.duration"
 _TOKENS_METRIC = "vector.agent.llm_call.tokens"
 
 
-@pytest.mark.parametrize(
-    ("span_result", "result"),
-    [
-        ("succeeded", LlmCallResult.SUCCEEDED),
-        ("blocked", LlmCallResult.BLOCKED),
-        ("invalid_response", LlmCallResult.INVALID_RESPONSE),
-        ("provider_error", LlmCallResult.PROVIDER_ERROR),
-    ],
-)
-def test_span_result_maps_to_llm_result(
-    span_result: str,
-    result: LlmCallResult,
-) -> None:
-    """span の result から LLM 結論だけを決める。"""
-
-    assert outcome_from_span_result(span_result) is result
-
-
-def test_unknown_span_result_is_rejected() -> None:
-    """未知の span result を結論へ勝手に足さない。"""
+def test_failed_outcome_rejects_empty_failure_code() -> None:
+    """分類済み失敗は空の failure_code を拒否する。"""
 
     with pytest.raises(ValueError):
-        outcome_from_span_result("unknown")
+        LlmAttemptFailed(failure_code="")
 
 
 async def test_logfire_recorder_emits_outcome_duration_and_present_tokens(
@@ -56,7 +39,7 @@ async def test_logfire_recorder_emits_outcome_duration_and_present_tokens(
     )
     recorder.end(
         call,
-        result=LlmCallResult.SUCCEEDED,
+        outcome=LlmAttemptSucceeded(),
         usage=Usage(input_tokens=11, output_tokens=7),
     )
 
@@ -86,21 +69,10 @@ async def test_logfire_recorder_emits_outcome_duration_and_present_tokens(
     ]
 
 
-@pytest.mark.parametrize(
-    ("result", "status_label", "result_label"),
-    [
-        (LlmCallResult.BLOCKED, "failed", "blocked"),
-        (LlmCallResult.INVALID_RESPONSE, "failed", "invalid_response"),
-        (LlmCallResult.PROVIDER_ERROR, "failed", "provider_error"),
-    ],
-)
-async def test_failed_results_record_failed_status(
+async def test_classified_failure_records_failed_result_and_failure_code(
     capfire: CaptureLogfire,
-    result: LlmCallResult,
-    status_label: str,
-    result_label: str,
 ) -> None:
-    """失敗結論は status=failed と result ラベルへ写す。"""
+    """分類済み失敗の outcome だけに result=failed と failure_code を付ける。"""
 
     recorder = LogfireLlmCallRecorder()
     call = recorder.start(
@@ -109,15 +81,36 @@ async def test_failed_results_record_failed_status(
         model="gemini-test-model",
         attempt_number=1,
     )
-    recorder.end(call, result=result)
+    recorder.end(
+        call,
+        outcome=LlmAttemptFailed(failure_code="ai_error_network"),
+        usage=Usage(input_tokens=11, output_tokens=7),
+    )
 
-    assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC) == {
+    metrics = collected_metrics(capfire)
+    expected = {
         "agent_name": "question_planner",
         "provider": "gemini",
         "model": "gemini-test-model",
-        "status": status_label,
-        "result": result_label,
+        "status": "failed",
+        "result": "failed",
     }
+    assert attributes_of(metrics, _OUTCOME_METRIC) == {
+        **expected,
+        "failure_code": "ai_error_network",
+    }
+    duration = next(item for item in metrics if item["name"] == _DURATION_METRIC)
+    assert duration["data"]["data_points"][0]["attributes"] == expected
+    token_attrs = [
+        dp["attributes"]
+        for dp in next(item for item in metrics if item["name"] == _TOKENS_METRIC)[
+            "data"
+        ]["data_points"]
+    ]
+    assert token_attrs == [
+        {**expected, "direction": "input"},
+        {**expected, "direction": "output"},
+    ]
 
 
 async def test_stopped_attempt_records_result_none(
@@ -145,7 +138,34 @@ async def test_stopped_attempt_records_result_none(
     assert all(item["name"] != _TOKENS_METRIC for item in metrics)
 
 
-async def test_end_without_result_records_failed_status(
+async def test_stopped_attempt_ignores_outcome(
+    capfire: CaptureLogfire,
+) -> None:
+    """途中停止では渡された結論型を記録しない。"""
+
+    recorder = LogfireLlmCallRecorder()
+    call = recorder.start(
+        agent_name="direct_answer",
+        provider="gemini",
+        model="gemini-test-model",
+        attempt_number=2,
+    )
+    recorder.end(
+        call,
+        outcome=LlmAttemptFailed(failure_code="ai_error_network"),
+        stopped=True,
+    )
+
+    assert attributes_of(collected_metrics(capfire), _OUTCOME_METRIC) == {
+        "agent_name": "direct_answer",
+        "provider": "gemini",
+        "model": "gemini-test-model",
+        "status": "stopped",
+        "result": "none",
+    }
+
+
+async def test_end_without_outcome_records_failed_status(
     capfire: CaptureLogfire,
 ) -> None:
     """未分類の終わりは status=failed、result=none にする。"""
@@ -205,4 +225,4 @@ def test_end_does_not_propagate_metric_errors(
         model="gemini-test-model",
         attempt_number=1,
     )
-    recorder.end(call, result=LlmCallResult.SUCCEEDED)
+    recorder.end(call, outcome=LlmAttemptSucceeded())

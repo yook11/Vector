@@ -13,8 +13,9 @@ from app.agent.recording.evidence_collection import EvidenceCollectionRecording
 from app.agent.recording.evidence_review import EvidenceReviewOutcome
 from app.agent.recording.external_search import ExternalSearchOutcome
 from app.agent.recording.internal_search import InternalSearchRecordingOutcome
+from app.agent.recording.llm import LlmAttemptOutcome
 from app.agent.recording.planning import PlanningOutcome
-from app.agent.recording.types import LlmCall, LlmCallResult, Usage
+from app.agent.recording.types import LlmCall, Usage
 
 __all__ = [
     "RecordedDirectAnswer",
@@ -41,7 +42,7 @@ __all__ = [
 @dataclass(frozen=True, slots=True)
 class RecordedLlmCallEnd:
     call: LlmCall
-    result: LlmCallResult | None
+    outcome: LlmAttemptOutcome | None
     usage: Usage | None
     stopped: bool
 
@@ -73,14 +74,14 @@ class RecordingLlmCallRecorder:
         self,
         call: LlmCall,
         *,
-        result: LlmCallResult | None = None,
+        outcome: LlmAttemptOutcome | None = None,
         usage: Usage | None = None,
         stopped: bool = False,
     ) -> None:
         self.ends.append(
             RecordedLlmCallEnd(
                 call=call,
-                result=result,
+                outcome=outcome,
                 usage=usage,
                 stopped=stopped,
             )

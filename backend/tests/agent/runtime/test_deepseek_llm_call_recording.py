@@ -7,8 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.recording.types import LlmCallResult, Usage
-from app.agent.runtime.contract import AgentResponseInvalidError
+from app.agent.recording.llm import LlmAttemptFailed, LlmAttemptSucceeded
+from app.agent.recording.types import Usage
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.agent.recording._fakes import RecordedLlmCallEnd, RecordingLlmCallRecorder
@@ -58,7 +59,7 @@ async def test_successful_call_records_completed_succeeded_usage() -> None:
     assert recorder.ends == [
         RecordedLlmCallEnd(
             call=started,
-            result=LlmCallResult.SUCCEEDED,
+            outcome=LlmAttemptSucceeded(),
             usage=Usage(
                 input_tokens=4,
                 output_tokens=6,
@@ -70,8 +71,8 @@ async def test_successful_call_records_completed_succeeded_usage() -> None:
     ]
 
 
-async def test_invalid_response_records_failed_invalid_response() -> None:
-    """不正な function 出力は failed / invalid_response で閉じる。"""
+async def test_invalid_response_records_failed_with_defect() -> None:
+    """不正な function 出力は分類済み失敗と defect で閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime([function_response(no_tool_calls=True)], recorder)
@@ -80,12 +81,14 @@ async def test_invalid_response_records_failed_invalid_response() -> None:
         await runtime.call(make_agent(), object(), attempt_number=1)
 
     recorded = recorder.ends[0]
-    assert recorded.result is LlmCallResult.INVALID_RESPONSE
+    assert recorded.outcome == LlmAttemptFailed(
+        failure_code=AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+    )
     assert recorded.stopped is False
 
 
-async def test_translated_provider_error_records_failed_provider_error() -> None:
-    """翻訳済み障害は failed / provider_error で閉じる。"""
+async def test_translated_provider_error_records_failed_with_code() -> None:
+    """翻訳済み障害は分類済み失敗と CODE で閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime([TimeoutError("timeout")], recorder)
@@ -94,12 +97,14 @@ async def test_translated_provider_error_records_failed_provider_error() -> None
         await runtime.call(make_agent(), object(), attempt_number=1)
 
     recorded = recorder.ends[0]
-    assert recorded.result is LlmCallResult.PROVIDER_ERROR
+    assert recorded.outcome == LlmAttemptFailed(
+        failure_code=AIProviderNetworkError.CODE
+    )
     assert recorded.stopped is False
 
 
-async def test_unclassified_exception_records_failed_without_result() -> None:
-    """未分類例外は failed、result なしで閉じる。"""
+async def test_unclassified_exception_records_failed_without_outcome() -> None:
+    """未分類例外は結論型なしで閉じる。"""
 
     error = RuntimeError("UNCLASSIFIED_DEEPSEEK")
     recorder = RecordingLlmCallRecorder()
@@ -110,7 +115,7 @@ async def test_unclassified_exception_records_failed_without_result() -> None:
 
     assert exc_info.value is error
     recorded = recorder.ends[0]
-    assert recorded.result is None
+    assert recorded.outcome is None
     assert recorded.stopped is False
     assert len(recorder.ends) == 1
 
