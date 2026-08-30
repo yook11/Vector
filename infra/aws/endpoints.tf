@@ -35,7 +35,7 @@ resource "aws_vpc_endpoint" "s3" {
 # interface endpoint は 1 AZ につき 1 subnet にしか ENI を置けない。
 # 7 つの app subnet 全部に置く必要はなく、api の subnet に集約して
 # 他の subnet からは VPC の local ルートで届かせる (到達制御は SG が行う)。
-# これで課金は「4 endpoint × 1 AZ」に収まる。
+# これで課金は「5 endpoint × 1 AZ」に収まる。
 #
 # ssm = Parameter Store からの secret 注入 (execution role が実行する)。
 #
@@ -44,8 +44,12 @@ resource "aws_vpc_endpoint" "s3" {
 # ECS Exec を使うと決めた場合は ssmmessages の endpoint がここに 1 本増える
 # (task role の ssmmessages:* とセット)。課金根拠の「4 本」もそこで変わる。
 # DB 踏み台 (bastion.tf) は同じ endpoint を toggle の中で条件付きに持つ。
+#
+# bedrock-agentcore.gateway = agent 段の外部検索 (agentcore.tf)。app subnet は
+# VPC の外へ出られないため、PrivateLink を張らないと gateway へ到達できない。
+# gateway 専用の service name で、bedrock-agentcore 本体とは別の endpoint。
 resource "aws_vpc_endpoint" "interface" {
-  for_each = toset(["ecr.api", "ecr.dkr", "ssm", "logs"])
+  for_each = toset(["ecr.api", "ecr.dkr", "ssm", "logs", "bedrock-agentcore.gateway"])
 
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.${each.value}"
