@@ -116,7 +116,6 @@ jobs:
         name: Terraform plan
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}
-          TF_VAR_permissions_boundary_arn: ${{ secrets.TF_VAR_PERMISSIONS_BOUNDARY_ARN }}
           TF_VAR_root_domain: ${{ secrets.TF_VAR_ROOT_DOMAIN }}
           TF_VAR_frontend_domain: ${{ secrets.TF_VAR_FRONTEND_DOMAIN }}
           TF_VAR_crossref_contact_email: ${{ secrets.TF_VAR_CROSSREF_CONTACT_EMAIL }}
@@ -257,7 +256,6 @@ jobs:
       - name: Terraform plan and apply
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}
-          TF_VAR_permissions_boundary_arn: ${{ secrets.TF_VAR_PERMISSIONS_BOUNDARY_ARN }}
           TF_VAR_root_domain: ${{ secrets.TF_VAR_ROOT_DOMAIN }}
           TF_VAR_frontend_domain: ${{ secrets.TF_VAR_FRONTEND_DOMAIN }}
           TF_VAR_crossref_contact_email: ${{ secrets.TF_VAR_CROSSREF_CONTACT_EMAIL }}

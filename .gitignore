@@ -156,6 +156,8 @@ frontend/tsconfig.tsbuildinfo
 # state は secret を平文で含むため絶対に commit しない。
 *.tfstate
 *.tfstate.*
+# 保存済み plan も state 由来の値を平文で持つ。
+*.tfplan
 .terraform/
 *.tfvars
 !*.tfvars.example

@@ -9,6 +9,16 @@ data "aws_caller_identity" "current" {}
 locals {
   account_id = data.aws_caller_identity.current.account_id
 
+  # bootstrap の aws_iam_policy.*_boundary。variable にすると GitHub secret が
+  # 5 本になり、1 本でも設定を忘れると plan と apply の両方が即死する
+  # (image_tag と同じ詰み方)。ARN は名前から決まるので data source も要らず、
+  # 「apply ロールに /vector-ci/ への iam:Get* を要求しない」既存の設計意図も保てる。
+  # 名前を変えるときは bootstrap 側と両方直す (不一致なら apply が NoSuchEntity で落ちる)。
+  boundary_arns = {
+    for kind in ["task", "agent-task", "execution", "chatbot", "agentcore-gateway"] :
+    kind => "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${var.name_prefix}-${kind}-boundary"
+  }
+
   # 段 -> その段が Connect してよい [cache ARN, user ARN]。
   # broker に繋ぐ段は自分の user のみ、frontend は rate-limit ノードのみ。
   valkey_connect_arns = merge(
@@ -69,10 +79,13 @@ data "aws_iam_policy_document" "ecs_tasks_trust" {
 resource "aws_iam_role" "task" {
   for_each = local.stages
 
-  name                 = "${var.name_prefix}-${each.key}-task"
-  path                 = "/${var.name_prefix}/"
-  assume_role_policy   = data.aws_iam_policy_document.ecs_tasks_trust.json
-  permissions_boundary = var.permissions_boundary_arn
+  name               = "${var.name_prefix}-${each.key}-task"
+  path               = "/${var.name_prefix}/"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_trust.json
+
+  # agent 段だけ天井が違う。この task role だけが web search の gateway を呼ぶ
+  # (agentcore.tf の aws_iam_role_policy.agentcore_gateway_invoke)。
+  permissions_boundary = local.boundary_arns[each.key == "agent" ? "agent-task" : "task"]
 }
 
 # scheduler には DB の policy を付けない。cron を発火するだけで DB engine を
@@ -134,7 +147,7 @@ resource "aws_iam_role" "execution" {
   name                 = "${var.name_prefix}-${each.key}-exec"
   path                 = "/${var.name_prefix}/"
   assume_role_policy   = data.aws_iam_policy_document.ecs_tasks_trust.json
-  permissions_boundary = var.permissions_boundary_arn
+  permissions_boundary = local.boundary_arns["execution"]
 }
 
 resource "aws_iam_role_policy" "execution" {

@@ -118,7 +118,7 @@ locals {
 # (RCE / SSRF) なので、天井が最も狭くあるべきものになる。
 resource "aws_iam_policy" "task_boundary" {
   name        = "${var.name_prefix}-task-boundary"
-  path        = "/vector-ci/"
+  path        = "/${var.name_prefix}-ci/"
   description = "Ceiling for ECS task roles (the credential reachable from inside the container)."
 
   policy = jsonencode({
@@ -136,7 +136,7 @@ resource "aws_iam_policy" "task_boundary" {
 # 上げる理由が無い。
 resource "aws_iam_policy" "agent_task_boundary" {
   name        = "${var.name_prefix}-agent-task-boundary"
-  path        = "/vector-ci/"
+  path        = "/${var.name_prefix}-ci/"
   description = "Ceiling for the agent stage task role (task boundary plus the web-search gateway)."
 
   policy = jsonencode({
@@ -163,7 +163,7 @@ resource "aws_iam_policy" "agent_task_boundary" {
 # アプリの侵害ではない。task boundary と分ける理由がここにある。
 resource "aws_iam_policy" "execution_boundary" {
   name        = "${var.name_prefix}-execution-boundary"
-  path        = "/vector-ci/"
+  path        = "/${var.name_prefix}-ci/"
   description = "Ceiling for ECS execution roles (image pull and secret injection)."
 
   policy = jsonencode({
@@ -225,7 +225,7 @@ resource "aws_iam_policy" "execution_boundary" {
 # Slack 通知の channel role の天井。alarm グラフ描画に使う読み取りだけ。
 resource "aws_iam_policy" "chatbot_boundary" {
   name        = "${var.name_prefix}-chatbot-boundary"
-  path        = "/vector-ci/"
+  path        = "/${var.name_prefix}-ci/"
   description = "Ceiling for the AWS Chatbot channel role."
 
   policy = jsonencode({
@@ -253,7 +253,7 @@ resource "aws_iam_policy" "chatbot_boundary" {
 # 将来 policy を広げるときに、boundary 側も明示的に広げる判断を要求する形になる。
 resource "aws_iam_policy" "agentcore_gateway_boundary" {
   name        = "${var.name_prefix}-agentcore-gateway-boundary"
-  path        = "/vector-ci/"
+  path        = "/${var.name_prefix}-ci/"
   description = "Ceiling for the AgentCore Gateway service role."
 
   policy = jsonencode({
@@ -287,7 +287,7 @@ resource "aws_iam_policy" "agentcore_gateway_boundary" {
 # **再作成** (= 17 ロールに attach 中の policy を destroy) に倒す。
 resource "aws_iam_policy" "boundary" {
   name        = "${var.name_prefix}-permissions-boundary"
-  path        = "/vector-ci/"
+  path        = "/${var.name_prefix}-ci/"
   description = "Ceiling for every role created by the main Terraform stack."
 
   policy = jsonencode({

@@ -31,15 +31,6 @@ variable "name_prefix" {
   default     = "vector"
 }
 
-variable "permissions_boundary_arn" {
-  description = <<-EOT
-    このスタックが作る全ロールに付ける permissions boundary。
-    bootstrap スタックの出力を渡す。data source ではなく variable で受けるのは、
-    apply ロールに /vector-ci/ への iam:Get* を要求しないため。
-  EOT
-  type        = string
-}
-
 variable "postgres_major_version" {
   description = <<-EOT
     メジャーバージョンのみ指定し、minor は auto_minor_version_upgrade に任せる
