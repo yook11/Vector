@@ -1,3 +1,23 @@
+# 用途の違うロールには別の boundary を付ける。天井は「そのロールの policy が
+# 壊れたときどこまで届くか」を決めるものなので、全ロールで 1 本にすると天井が
+# 全用途の和集合まで広がる。
+#
+# 分割した boundary はこの Deny を必ず共有する。片方から抜けると、その boundary
+# を付けたロールだけ権限昇格に届く。文面を 1 箇所に置いて drift を防ぐ。
+locals {
+  boundary_no_escalation_statement = {
+    Sid    = "NoPrivilegeEscalation"
+    Effect = "Deny"
+    Action = [
+      "iam:*",
+      "sts:AssumeRole",
+      "organizations:*",
+      "account:*",
+    ]
+    Resource = "*"
+  }
+}
+
 # permissions boundary。本体スタックが作る全ロールの権限の天井。
 #
 # boundary は「作れる権限の上限」なので、これに書いていない権限は、
@@ -100,17 +120,7 @@ resource "aws_iam_policy" "boundary" {
       # --- 天井として明示的に落とすもの ---
       # task role は AWS の API をほぼ呼ばないので、IAM も STS も要らない。
       # ここで落としておけば、段の policy を書き間違えても権限昇格に届かない。
-      {
-        Sid    = "NoPrivilegeEscalation"
-        Effect = "Deny"
-        Action = [
-          "iam:*",
-          "sts:AssumeRole",
-          "organizations:*",
-          "account:*",
-        ]
-        Resource = "*"
-      },
+      local.boundary_no_escalation_statement,
       # ECS Exec を使わない決定を構造で担保する。段の policy に
       # ssmmessages:* を足しても、boundary で落ちるので有効にならない。
       # 使うと決めたときは、この Deny を外す判断が明示的に必要になる。
@@ -120,6 +130,43 @@ resource "aws_iam_policy" "boundary" {
         Action   = "ssmmessages:*"
         Resource = "*"
       },
+    ]
+  })
+}
+
+# AgentCore Gateway の service role 専用の天井。
+#
+# ECS 用の boundary を流用しない。bedrock-agentcore を上の boundary に足すと、
+# それを呼ぶ理由の無い task / execution role 16 本の天井まで一緒に上がる。
+# 逆にこのロールから見ても、rds-db:connect や ssm:GetParameter が天井に載る
+# 理由が無い。信頼元 (bedrock-agentcore.amazonaws.com) も侵害の入口も別なので、
+# 天井も分ける。
+#
+# 中身は本体スタックの aws_iam_role_policy.agentcore_gateway と同じ 2 アクション。
+# boundary と policy が同一なのは、このロールの権限が既に必要最小だから。
+# 将来 policy を広げるときに、boundary 側も明示的に広げる判断を要求する形になる。
+resource "aws_iam_policy" "agentcore_gateway_boundary" {
+  name        = "${var.name_prefix}-agentcore-gateway-boundary"
+  path        = "/vector-ci/"
+  description = "Ceiling for the AgentCore Gateway service role."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "InvokeGateway"
+        Effect   = "Allow"
+        Action   = "bedrock-agentcore:InvokeGateway"
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:gateway/*"
+      },
+      # web-search.v1 は AWS 所有の tool なので、ARN の account 部が `aws` になる。
+      {
+        Sid      = "InvokeWebSearch"
+        Effect   = "Allow"
+        Action   = "bedrock-agentcore:InvokeWebSearch"
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:aws:tool/web-search.v1"
+      },
+      local.boundary_no_escalation_statement,
     ]
   })
 }

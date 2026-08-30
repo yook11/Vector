@@ -305,9 +305,13 @@ resource "aws_iam_role_policy" "apply" {
         }
       },
 
-      # --- ここから Deny。boundary はこの 4 点が揃って初めて構造になる ---
+      # --- ここから Deny。boundary はこの 5 点が揃って初めて構造になる ---
 
-      # 1. boundary 無しのロール作成を拒否する。
+      # 1. 想定した boundary 以外でのロール作成を拒否する。
+      #
+      # boundary を用途別に分けたので、ここは許可リストになる。リストに
+      # 載せた時点で「CI はこの中から選べる」という意味になり、一番広い
+      # boundary を選ばれると実効的な天井は和集合まで戻る。それを防ぐのが 1b。
       {
         Sid    = "DenyRoleCreationWithoutBoundary"
         Effect = "Deny"
@@ -318,7 +322,33 @@ resource "aws_iam_role_policy" "apply" {
         Resource = "*"
         Condition = {
           StringNotEquals = {
-            "iam:PermissionsBoundary" = aws_iam_policy.boundary.arn
+            "iam:PermissionsBoundary" = [
+              aws_iam_policy.boundary.arn,
+              aws_iam_policy.agentcore_gateway_boundary.arn,
+            ]
+          }
+        }
+      },
+      # 1b. 用途別のロールには、その用途の boundary 以外を付けさせない。
+      #
+      # 縛るのは「専用ロールに広い boundary を付ける」向きだけ。逆向き
+      # (ECS のロールに狭い boundary が付く) は天井が下がるだけで、
+      # そのロールが動かなくなって気づくので Deny は要らない。
+      #
+      # 名前で対応させる。CI は /vector/ 配下に好きな名前のロールを作れるが、
+      # ここでは別名を付けても天井が今より広くなることはない (既定の
+      # boundary に落ちるだけ) ので、名前一致で足りる。
+      #
+      # prefix にしているのは、将来 vector-agentcore-* が増えたときに、
+      # 黙って ECS 用の天井へ落ちるのを防ぐため。
+      {
+        Sid      = "DenyWideBoundaryOnAgentCoreRoles"
+        Effect   = "Deny"
+        Action   = "iam:CreateRole"
+        Resource = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-agentcore-*"
+        Condition = {
+          StringNotEquals = {
+            "iam:PermissionsBoundary" = aws_iam_policy.agentcore_gateway_boundary.arn
           }
         }
       },
