@@ -23,6 +23,10 @@ resource "aws_bedrockagentcore_gateway" "web_search" {
 # 空の role として作る (role_arn は必須項目で、省略できない)。
 resource "aws_iam_role" "agentcore_gateway" {
   name = "${var.name_prefix}-agentcore-gateway"
+  # CI の apply ロールは iam:* を /vector/ path の中にしか持たない
+  # (bootstrap/oidc.tf の IamWithinManagedPath)。path を省くと `/` に落ちて
+  # ARN が managed_role_path_arn から外れ、CreateRole が 403 で拒否される。
+  path = "/${var.name_prefix}/"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
