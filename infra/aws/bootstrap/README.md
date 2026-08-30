@@ -24,7 +24,8 @@
 | 塞ぐもの | どこで |
 |---|---|
 | 想定外の boundary でのロール作成 | `DenyRoleCreationWithoutBoundary` |
-| 用途別ロールへの広い boundary の付け替え | `DenyWideBoundaryOnAgentCoreRoles` |
+| **対応表に無い名前のロールの作成** | `DenyRoleCreationOutsideKnownRoles` |
+| 用途別ロールへの広い boundary の付け替え | `DenyWideBoundaryOn*Roles` |
 | boundary の剥奪・差し替え | `DenyBoundaryTampering` |
 | **boundary policy 自体の書き換え** | `DenyTouchingCiScope` |
 | **CI ロールと OIDC provider の改変** | `DenyTouchingCiScope` |
@@ -35,11 +36,34 @@ boundary policy 自体の書き換えが最も見落としやすい。boundary �
 Administrator」** が通る。CI ロール自体の改変が抜けると「自分の Deny を自分で
 消す」が通り、Deny 全体が運用の約束に退化する。
 
-boundary は用途ごとに分ける。天井は「そのロールの policy が壊れたときどこまで
-届くか」を決めるものなので、1 本に統合すると天井が全用途の和集合まで広がる。
-ただし許可リストにした時点で「CI はこの中から選べる」という意味になるため、
-**分割だけでは制御にならない**。ロール名と boundary を対で縛って初めて、
-分割が天井の縮小として効く。
+## boundary を用途ごとに分ける
+
+天井は「そのロールの policy が壊れたときどこまで届くか」を決めるものなので、
+1 本に統合すると天井が全用途の和集合まで広がる。統合していた頃は、task role の
+天井に全段の secret を読める `ssm:GetParameter` が載っていた。task role は
+コンテナの中から読み出せる唯一の資格情報なのに、である。
+
+| boundary | 対象ロール | 中身 |
+|---|---|---|
+| `vector-task-boundary` | `*-task` のうち agent 以外 | rds + elasticache |
+| `vector-agent-task-boundary` | `vector-agent-task` | 上 + web search gateway |
+| `vector-execution-boundary` | `*-exec` | ecr / logs / ssm / kms |
+| `vector-chatbot-boundary` | `vector-chatbot` | cloudwatch 読み取り |
+| `vector-agentcore-gateway-boundary` | `vector-agentcore-gateway` | gateway + web search |
+
+**分割だけでは制御にならない。** `DenyRoleCreationWithoutBoundary` は許可リストに
+なるので、そのままでは CI が一番広い boundary を選べる。加えて、対応表に無い名前の
+ロールを作れると、別名を作って用途別 boundary をすり抜けられる。
+**名前の許可リストと、名前 ↔ boundary の対応の両方**が揃って初めて、分割が
+天井の縮小として効く。
+
+対応表は `boundary.tf` の `local.role_boundary_groups` にあり、Deny はそこから
+生成する。wildcard ではなく完全列挙なのは、`vector-agent-task` が `vector-*-task`
+にも当たって 2 つの Deny を踏むのと、pattern では「表に無い名前を拒否」を
+表現できないため。
+
+段を増やすときは、この表を apply してから本体を apply する。順序を守らないと
+`CreateRole` が Deny で落ちる。天井を決めずに段が増えないようにするための順序。
 
 **path で Allow 側からも成立させている。** 本体が作るロールは `/vector/`、
 CI ロールと boundary は `/vector-ci/`。apply の `iam:*` は `/vector/` にしか

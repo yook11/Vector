@@ -37,6 +37,33 @@ locals {
     "iam:RemoveClientIDFromOpenIDConnectProvider",
   ]
 
+  # 対応表 (boundary.tf) に載っているロールの ARN。ここに無い名前は作れない。
+  managed_role_arns = flatten([
+    for group in local.role_boundary_groups : [
+      for name in group.role_names :
+      "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${name}"
+    ]
+  ])
+
+  # 用途別のロールに、その用途以外の boundary を付けさせない。対応表 1 行につき
+  # Deny 1 本。ロール名は完全一致なので、1 つのロールが 2 つの Deny に当たることはない。
+  boundary_pairing_statements = [
+    for key, group in local.role_boundary_groups : {
+      Sid    = "DenyWideBoundaryOn${key}Roles"
+      Effect = "Deny"
+      Action = "iam:CreateRole"
+      Resource = [
+        for name in group.role_names :
+        "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${name}"
+      ]
+      Condition = {
+        StringNotEquals = {
+          "iam:PermissionsBoundary" = group.boundary
+        }
+      }
+    }
+  ]
+
   # CI が assume できるロール。name は「何をするロールか」で付ける
   # (deploy は Terraform を触らないので terraform-* にしない)。
   ci_roles = {
@@ -305,13 +332,17 @@ resource "aws_iam_role_policy" "apply" {
         }
       },
 
-      # --- ここから Deny。boundary はこの 5 点が揃って初めて構造になる ---
+      # --- ここから Deny。boundary はこの 6 点が揃って初めて構造になる ---
 
       # 1. 想定した boundary 以外でのロール作成を拒否する。
       #
       # boundary を用途別に分けたので、ここは許可リストになる。リストに
       # 載せた時点で「CI はこの中から選べる」という意味になり、一番広い
-      # boundary を選ばれると実効的な天井は和集合まで戻る。それを防ぐのが 1b。
+      # boundary を選ばれると実効的な天井は和集合まで戻る。それを防ぐのが 1b + 1c。
+      #
+      # 1b / 1c があれば CreateRole については冗長だが、iam:CreateUser を
+      # 押さえているのと、対応表を間違えても「boundary 無しは通さない」を
+      # 独立に保証するので残す。
       {
         Sid    = "DenyRoleCreationWithoutBoundary"
         Effect = "Deny"
@@ -322,35 +353,26 @@ resource "aws_iam_role_policy" "apply" {
         Resource = "*"
         Condition = {
           StringNotEquals = {
-            "iam:PermissionsBoundary" = [
-              aws_iam_policy.boundary.arn,
-              aws_iam_policy.agentcore_gateway_boundary.arn,
-            ]
+            "iam:PermissionsBoundary" = concat(
+              [aws_iam_policy.boundary.arn],
+              [for group in local.role_boundary_groups : group.boundary],
+            )
           }
         }
       },
-      # 1b. 用途別のロールには、その用途の boundary 以外を付けさせない。
+      # 1b. 対応表に無い名前のロールを作らせない。
       #
-      # 縛るのは「専用ロールに広い boundary を付ける」向きだけ。逆向き
-      # (ECS のロールに狭い boundary が付く) は天井が下がるだけで、
-      # そのロールが動かなくなって気づくので Deny は要らない。
+      # これが無いと、別名のロールを作って用途別 boundary をすり抜けられる。
+      # 1c は「このロールにはこの天井」を縛るだけなので、表に載っていない名前は
+      # どの Deny にも当たらず素通りしてしまう。
       #
-      # 名前で対応させる。CI は /vector/ 配下に好きな名前のロールを作れるが、
-      # ここでは別名を付けても天井が今より広くなることはない (既定の
-      # boundary に落ちるだけ) ので、名前一致で足りる。
-      #
-      # prefix にしているのは、将来 vector-agentcore-* が増えたときに、
-      # 黙って ECS 用の天井へ落ちるのを防ぐため。
+      # 段を増やすときは boundary.tf の対応表を先に apply する。忘れると
+      # ここで CreateRole が落ちる (天井を決めずに段が増えないための順序)。
       {
-        Sid      = "DenyWideBoundaryOnAgentCoreRoles"
-        Effect   = "Deny"
-        Action   = "iam:CreateRole"
-        Resource = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-agentcore-*"
-        Condition = {
-          StringNotEquals = {
-            "iam:PermissionsBoundary" = aws_iam_policy.agentcore_gateway_boundary.arn
-          }
-        }
+        Sid         = "DenyRoleCreationOutsideKnownRoles"
+        Effect      = "Deny"
+        Action      = "iam:CreateRole"
+        NotResource = local.managed_role_arns
       },
       # 2. 作った後で boundary を外す / 差し替えるのを拒否する。
       {
@@ -426,7 +448,10 @@ resource "aws_iam_role_policy" "apply" {
       # computed なので、ignore_changes を付けても refresh で state に載る)。
       # 「値を読まない」を Deny にすることで、data source をうっかり足しても
       # apply が失敗して気づく。
-    ], local.secret_read_statements)
+      #
+      # 1c は用途別のロールに、その用途以外の boundary を付けさせない Deny。
+      # boundary.tf の local.role_boundary_groups から 1 行につき 1 本生成する。
+    ], local.boundary_pairing_statements, local.secret_read_statements)
   })
 }
 
