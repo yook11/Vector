@@ -28,9 +28,8 @@ from app.agent.recording.llm import (
     LlmCallRecorder,
     logfire_llm_call_recorder,
     outcome_from_span_result,
-    usage_from_gemini_metadata,
 )
-from app.agent.recording.types import LlmCallResult, Usage
+from app.agent.recording.types import LlmCallResult, Usage, _usage_from_optional_counts
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
@@ -489,8 +488,17 @@ def _parse_output[InputT, OutputT](
     return validate_output(agent, parse_json_object(text))
 
 
+def _usage_from_metadata(usage: object | None) -> Usage | None:
+    return _usage_from_optional_counts(
+        input_tokens=getattr(usage, "prompt_token_count", None),
+        output_tokens=getattr(usage, "candidates_token_count", None),
+        cache_read_input_tokens=getattr(usage, "cached_content_token_count", None),
+        reasoning_output_tokens=getattr(usage, "thoughts_token_count", None),
+    )
+
+
 def _record_usage(span: Any, usage: object | None) -> Usage | None:
-    extracted = usage_from_gemini_metadata(usage)
+    extracted = _usage_from_metadata(usage)
     if extracted is None:
         return None
     if extracted.input_tokens is not None:

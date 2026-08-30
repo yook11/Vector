@@ -25,9 +25,8 @@ from app.agent.recording.llm import (
     LlmCallRecorder,
     logfire_llm_call_recorder,
     outcome_from_span_result,
-    usage_from_deepseek_usage,
 )
-from app.agent.recording.types import LlmCallResult, Usage
+from app.agent.recording.types import LlmCallResult, Usage, _usage_from_optional_counts
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
@@ -241,8 +240,19 @@ def _missing_declared_output() -> AgentResponseInvalidError:
     )
 
 
+def _usage_from_response(usage: object | None) -> Usage | None:
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    return _usage_from_optional_counts(
+        input_tokens=getattr(usage, "prompt_tokens", None),
+        output_tokens=getattr(usage, "completion_tokens", None),
+        cache_read_input_tokens=getattr(prompt_details, "cached_tokens", None),
+        reasoning_output_tokens=getattr(completion_details, "reasoning_tokens", None),
+    )
+
+
 def _record_usage(span: Any, usage: object | None) -> Usage | None:
-    extracted = usage_from_deepseek_usage(usage)
+    extracted = _usage_from_response(usage)
     if extracted is None:
         return None
     if extracted.input_tokens is not None:
