@@ -80,7 +80,7 @@ resource "aws_iam_role" "chatbot" {
   name                 = "${var.name_prefix}-chatbot"
   path                 = "/${var.name_prefix}/"
   assume_role_policy   = data.aws_iam_policy_document.chatbot_trust.json
-  permissions_boundary = var.permissions_boundary_arn
+  permissions_boundary = local.boundary_arns["chatbot"]
 }
 
 resource "aws_iam_role_policy" "chatbot" {

@@ -1,11 +1,3 @@
-locals {
-  # bootstrap の aws_iam_policy.agentcore_gateway_boundary。variable を増やすと
-  # GitHub secret も増え、設定漏れで plan / apply の両方が止まるので、
-  # 名前から組み立てる。名前を変えるときは bootstrap 側と両方直す
-  # (片方だけだと apply が boundary 不一致で落ちて気づく)。
-  agentcore_gateway_boundary_arn = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${var.name_prefix}-agentcore-gateway-boundary"
-}
-
 # AgentCore Gateway。agent の外部検索が MCP tool として web search を呼ぶ入口。
 #
 # inbound は IAM (SigV4)。呼び出し元は同一 account の ECS task role だけなので、
@@ -59,11 +51,9 @@ resource "aws_iam_role" "agentcore_gateway" {
     ]
   })
 
-  # ECS 系と天井を分ける。var.permissions_boundary_arn (ECS / chatbot 用) には
-  # bedrock-agentcore が無く、足すと task / execution role 16 本の天井まで
-  # 上がってしまう。専用 boundary は bootstrap の
-  # aws_iam_policy.agentcore_gateway_boundary。
-  permissions_boundary = local.agentcore_gateway_boundary_arn
+  # ECS 系と天井を分ける。task / execution の boundary に bedrock-agentcore を
+  # 足すと、gateway を呼ぶ理由の無いロールの天井まで上がってしまう。
+  permissions_boundary = local.boundary_arns["agentcore-gateway"]
 }
 
 # service role の権限。ARN と action は AWS の web-search connector 節の
