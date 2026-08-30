@@ -8,8 +8,10 @@ from typing import cast
 import pytest
 from google.genai.client import AsyncClient
 
-from app.agent.recording.types import LlmCallResult, Usage
+from app.agent.recording.llm import LlmAttemptFailed, LlmAttemptSucceeded
+from app.agent.recording.types import Usage
 from app.agent.runtime.gemini import GeminiAgentRuntime
+from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent
 from tests.agent.runtime.test_streaming_contract import (
@@ -59,7 +61,7 @@ async def test_normal_stream_eof_records_completed_succeeded() -> None:
     assert fragments == ["fragment"]
     assert len(recorder.starts) == 1
     recorded = recorder.ends[0]
-    assert recorded.result is LlmCallResult.SUCCEEDED
+    assert recorded.outcome == LlmAttemptSucceeded()
     assert recorded.stopped is False
     assert recorded.usage == Usage(
         input_tokens=11,
@@ -67,6 +69,57 @@ async def test_normal_stream_eof_records_completed_succeeded() -> None:
         cache_read_input_tokens=3,
         reasoning_output_tokens=2,
     )
+
+
+async def test_blocked_stream_records_failed_with_code() -> None:
+    """出力 block の stream は分類済み失敗と CODE で閉じる。"""
+
+    recorder = RecordingLlmCallRecorder()
+    runtime = _runtime(
+        FakeSdkStream([_stream_chunk(finish_reason="SAFETY", usage_metadata=_usage())]),
+        recorder,
+    )
+    stream = runtime.stream_text(
+        make_agent(response_schema=None),
+        "typed input",
+        attempt_number=1,
+    )
+
+    with pytest.raises(AIProviderOutputBlockedError):
+        _ = [fragment async for fragment in stream]
+
+    recorded = recorder.ends[0]
+    assert recorded.outcome == LlmAttemptFailed(
+        failure_code=AIProviderOutputBlockedError.CODE
+    )
+    assert recorded.stopped is False
+    assert recorded.usage == Usage(
+        input_tokens=11,
+        output_tokens=7,
+        cache_read_input_tokens=3,
+        reasoning_output_tokens=2,
+    )
+
+
+async def test_unclassified_stream_records_without_outcome() -> None:
+    """未分類例外の stream は結論型なしで閉じる。"""
+
+    error = RuntimeError("UNCLASSIFIED_STREAM")
+    recorder = RecordingLlmCallRecorder()
+    runtime = _runtime(FakeSdkStream([error]), recorder)
+    stream = runtime.stream_text(
+        make_agent(response_schema=None),
+        "typed input",
+        attempt_number=1,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await stream.__anext__()
+
+    assert exc_info.value is error
+    recorded = recorder.ends[0]
+    assert recorded.outcome is None
+    assert recorded.stopped is False
 
 
 async def test_consumer_aclose_records_stopped_and_keeps_usage() -> None:
@@ -90,7 +143,7 @@ async def test_consumer_aclose_records_stopped_and_keeps_usage() -> None:
     assert len(recorder.starts) == 1
     assert len(recorder.ends) == 1
     recorded = recorder.ends[0]
-    assert recorded.result is None
+    assert recorded.outcome is None
     assert recorded.stopped is True
     assert recorded.usage == Usage(
         input_tokens=11,
@@ -100,8 +153,8 @@ async def test_consumer_aclose_records_stopped_and_keeps_usage() -> None:
     )
 
 
-async def test_cancellation_records_stopped_without_result() -> None:
-    """stream 中の cancel は stopped、result なし。"""
+async def test_cancellation_records_stopped_without_outcome() -> None:
+    """stream 中の cancel は stopped、結論型なし。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime(
@@ -118,7 +171,7 @@ async def test_cancellation_records_stopped_without_result() -> None:
         await stream.__anext__()
 
     recorded = recorder.ends[0]
-    assert recorded.result is None
+    assert recorded.outcome is None
     assert recorded.stopped is True
     assert recorded.usage is None
     assert len(recorder.ends) == 1

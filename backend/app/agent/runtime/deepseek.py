@@ -22,11 +22,12 @@ from opentelemetry.trace import SpanKind, StatusCode
 from app.agent.agent import Agent
 from app.agent.error_type import span_error_type
 from app.agent.recording.llm import (
+    LlmAttemptOutcome,
+    LlmAttemptSucceeded,
     LlmCallRecorder,
     logfire_llm_call_recorder,
-    outcome_from_span_result,
 )
-from app.agent.recording.types import LlmCallResult, Usage, _usage_from_optional_counts
+from app.agent.recording.types import Usage, _usage_from_optional_counts
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
@@ -36,6 +37,7 @@ from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
+from app.agent.runtime.llm_failure import llm_attempt_failed_from
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.deepseek_error_translator import translate_deepseek_error
 
@@ -92,7 +94,7 @@ class DeepSeekAgentRuntime:
         request = _build_request(agent, input, binding=self._binding)
         classified_error: Exception | None = None
         output: OutputT | object = _MISSING_OUTPUT
-        result: LlmCallResult | None = None
+        outcome: LlmAttemptOutcome | None = None
         usage: Usage | None = None
         stopped = False
         llm_call = self._llm_calls.start(
@@ -131,7 +133,7 @@ class DeepSeekAgentRuntime:
                     record_ai_provider_exhausted(
                         translated_error, provider=agent.model.provider
                     )
-                    result = outcome_from_span_result("provider_error")
+                    outcome = llm_attempt_failed_from(classified_error)
                 else:
                     usage = _record_usage(span, getattr(response, "usage", None))
                     try:
@@ -147,10 +149,10 @@ class DeepSeekAgentRuntime:
                             result="invalid_response",
                             error_type=span_error_type(exc),
                         )
-                        result = outcome_from_span_result("invalid_response")
+                        outcome = llm_attempt_failed_from(classified_error)
                     else:
                         span.set_attribute("result", "succeeded")
-                        result = outcome_from_span_result("succeeded")
+                        outcome = LlmAttemptSucceeded()
 
             if classified_error is not None:
                 raise classified_error
@@ -159,12 +161,12 @@ class DeepSeekAgentRuntime:
             return cast(OutputT, output)
         except (asyncio.CancelledError, GeneratorExit):
             stopped = True
-            result = None
+            outcome = None
             raise
         finally:
             self._llm_calls.end(
                 llm_call,
-                result=result,
+                outcome=outcome,
                 usage=usage,
                 stopped=stopped,
             )
