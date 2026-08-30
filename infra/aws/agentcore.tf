@@ -18,11 +18,18 @@ resource "aws_bedrockagentcore_gateway" "web_search" {
   tags = { Name = "${var.name_prefix}-web-search" }
 }
 
-# Gateway が target を呼ぶときに assume する role。web-search は AWS 運用の
-# managed connector なので、こちらが渡す権限は無い。trust policy だけを持つ
-# 空の role として作る (role_arn は必須項目で、省略できない)。
+# Gateway が web-search connector を呼ぶときに assume する role。
+#
+# managed connector は「外部 API の契約と鍵の管理が要らない」という意味で、
+# IAM が要らないという意味ではない。AWS の web-search 節が service role に
+# InvokeGateway と InvokeWebSearch を要求している。空 role でも CreateGateway
+# は通るが、実際の tools/call で AccessDenied になる。
 resource "aws_iam_role" "agentcore_gateway" {
   name = "${var.name_prefix}-agentcore-gateway"
+  # CI の apply ロールは iam:* を /vector/ path の中にしか持たない
+  # (bootstrap/oidc.tf の IamWithinManagedPath)。path を省くと `/` に落ちて
+  # ARN が managed_role_path_arn から外れ、CreateRole が 403 で拒否される。
+  path = "/${var.name_prefix}/"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -45,6 +52,37 @@ resource "aws_iam_role" "agentcore_gateway" {
   })
 
   permissions_boundary = var.permissions_boundary_arn
+}
+
+# service role の権限。ARN と action は AWS の web-search connector 節の
+# ポリシー例に対応する。web-search.v1 は AWS 所有の service ARN で、
+# account 部が `aws` になる (自 account ではない)。
+#
+# InvokeGateway を service role に持たせるのは web-search 節の指示による。
+# knowledge-bases 節は「InvokeGateway は caller の権限であって execution role
+# ではない」と書いており AWS の docs 内で食い違うが、使う connector 側の
+# 記載に従う。
+resource "aws_iam_role_policy" "agentcore_gateway" {
+  name = "web-search-invoke"
+  role = aws_iam_role.agentcore_gateway.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "InvokeGateway"
+        Effect   = "Allow"
+        Action   = "bedrock-agentcore:InvokeGateway"
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:gateway/*"
+      },
+      {
+        Sid      = "InvokeWebSearch"
+        Effect   = "Allow"
+        Action   = "bedrock-agentcore:InvokeWebSearch"
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:aws:tool/web-search.v1"
+      },
+    ]
+  })
 }
 
 # agent 段だけが gateway を呼ぶ。他段は外部検索を持たない。
