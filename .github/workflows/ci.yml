@@ -18,8 +18,8 @@ permissions:
 
 # 同一 branch / PR の古い run を新しい push で cancel する。force push / 連打時の
 # 計算資源消費を抑制。Schemathesisの手動workflowは別のconcurrency設定を持つ。
-# ただし main (= 自動 deploy が走る) では cancel しない: deploy 進行中に後続 push が
-# 来ても release を中断させない (中途半端な deploy を防ぐ)。
+# main は各 commit の検証と release 判定を順に完了させるため cancel しない。
+# release 自体は別 workflow へ dispatch するので、production 承認待ちはこの列を塞がない。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -44,15 +44,16 @@ jobs:
       pull-requests: read
     outputs:
       e2e: ${{ steps.filter.outputs.e2e }}
-      # deploy-production の per-area gate と PR テスト job の skip 判定に共用。
-      # backend/frontend のどちらが変わったかで release step を出し分け、
-      # migrations 変更は自動 deploy を block する。
+      # AWS release 判定と PR テスト job の skip 判定に共用する。
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       migrations: ${{ steps.filter.outputs.migrations }}
       migration_files: ${{ steps.filter.outputs.migrations_files }}
+      # Terraform apply と app rollout の直列化は未配線なので、AWS infra 変更を
+      # app の自動 release から分離して手動運用へ送る。
+      aws_infra: ${{ steps.filter.outputs.aws_infra }}
       # workflow 定義の変更は backend/frontend 両テスト job を強制実行する。
-      # deploy の per-area gate には影響させないため backend/frontend filter とは
+      # release の変更分類には影響させないため backend/frontend filter とは
       # 分離する。
       ci: ${{ steps.filter.outputs.ci }}
     steps:
@@ -72,9 +73,12 @@ jobs:
               - 'frontend/**'
             ci:
               - '.github/workflows/**'
-            # 自動 deploy を止める判定 (本 slice は migration を手動運用)。
+            # 自動 release を止める判定 (本 slice は migration を手動運用)。
             migrations:
               - 'backend/alembic/versions/**'
+            aws_infra:
+              - 'infra/aws/**'
+              - '.github/workflows/aws-terraform-apply.yml'
             e2e:
               # frontend auth コア
               - 'frontend/src/lib/auth/**'
@@ -105,7 +109,7 @@ jobs:
     name: Backend (unit + lint)
     runs-on: ubuntu-latest
     needs: changes
-    # main push は deploy に直結するため path-filter で skip せず常時フル実行する。
+    # main push は release 判定に直結するため path-filter で skip せず常時フル実行する。
     if: >-
       github.event_name == 'push'
       || needs.changes.outputs.backend == 'true'
@@ -159,7 +163,7 @@ jobs:
     name: Backend (integration)
     runs-on: ubuntu-latest
     needs: changes
-    # main push は deploy に直結するため path-filter で skip せず常時フル実行する。
+    # main push は release 判定に直結するため path-filter で skip せず常時フル実行する。
     if: >-
       github.event_name == 'push'
       || needs.changes.outputs.backend == 'true'
@@ -247,7 +251,7 @@ jobs:
     name: Frontend (lint + type check)
     runs-on: ubuntu-latest
     needs: changes
-    # main push は deploy に直結するため path-filter で skip せず常時フル実行する。
+    # main push は release 判定に直結するため path-filter で skip せず常時フル実行する。
     if: >-
       github.event_name == 'push'
       || needs.changes.outputs.frontend == 'true'
@@ -479,7 +483,7 @@ jobs:
 
       - name: Seed E2E test users (CI only — red-team C2 防御で migration から分離)
         # PR4 で i4_seed_e2e_users migration を削除し、E2E seed を本 script に
-        # 分離。production deploy で alembic upgrade head が走っても seed user は
+        # 分離。本番で alembic upgrade head を実行しても seed user は
         # 作られない。auth.user / auth.account は Better Auth CLI が先に生成済。
         env:
           E2E_SEED_USER_EMAIL: e2e@example.com
@@ -742,8 +746,8 @@ jobs:
         working-directory: backend
 
   # ---- CI gate (全必須チェックの集約) ----
-  # deploy-production が個別テスト job で先走らないよう、全テスト job を 1 つに
-  # 集約する単一ゲート。deploy は本 job の success だけを待てばよい。
+  # release 判定が個別テスト job より先に走らないよう、全テスト job を 1 つに
+  # 集約する単一ゲート。dispatch は本 job の success だけを判定すればよい。
   # path-filter 対象 job (backend-unit / backend-integration / frontend /
   # frontend-e2e-smoke / migration-check) は PR で skip されうるため
   # success|skipped を許容する (main push は各 job の if で常時実行)。
@@ -788,268 +792,88 @@ jobs:
           done
           exit $fail
 
-  migrate-production:
-    name: Migrate production
+  # ---- AWS 本番 release の非同期 dispatch -------------------------------
+  # release workflow を reusable workflow として呼ぶと production 承認待ちの間、
+  # main CI の concurrency を占有する。workflow_dispatch だけを発火して本 job は終え、
+  # image build / production 承認 / rollout は別 run の直列 queue に委ねる。
+  dispatch-aws-release:
+    name: Dispatch AWS production release
     needs: [ci-gate, changes]
-    # 公開準備中は既定で停止し、2つのリポジトリ変数で明示解除した場合だけ本番DBを変更する。
-    if: ${{ vars.ENABLE_PRODUCTION_DEPLOY == 'true'
-            && vars.PUBLICATION_FREEZE == 'false'
-            && github.event_name == 'push' && github.ref == 'refs/heads/main'
-            && needs.ci-gate.result == 'success'
-            && needs.changes.outputs.migrations == 'true' }}
+    if: ${{ !cancelled()
+            && github.event_name == 'push'
+            && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: production
     permissions:
+      actions: write
       contents: read
-    env:
-      ENV: production
-      # production Environment secret。owner role / TLS sslmode 付き URL を登録する。
-      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      BFF_JWT_SIGNING_SECRET: ci4444444444444444444444444444444444444444444444444444444444444444
-      REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
-      CROSSREF_CONTACT_EMAIL: ${{ secrets.CROSSREF_CONTACT_EMAIL }}
-      # production Environment secrets. App-specific URLs are masked even though
-      # they are not credentials.
-      FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
-      INTERNAL_FRONTEND_BASE_URL: ${{ secrets.INTERNAL_FRONTEND_BASE_URL }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
-        with:
-          python-version: "3.13"
-
-      - name: Verify production environment secrets
+      - id: decision
+        name: Decide and summarize AWS release
+        env:
+          CI_GATE_RESULT: ${{ needs.ci-gate.result }}
+          BACKEND_CHANGED: ${{ needs.changes.outputs.backend }}
+          FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
+          MIGRATIONS_CHANGED: ${{ needs.changes.outputs.migrations }}
+          AWS_INFRA_CHANGED: ${{ needs.changes.outputs.aws_infra }}
+          PUBLICATION_FREEZE: ${{ vars.PUBLICATION_FREEZE }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
-          missing=0
-          for name in FRONTEND_URL INTERNAL_FRONTEND_BASE_URL CROSSREF_CONTACT_EMAIL; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error::$name is not configured in the production environment"
-              missing=1
-            fi
-          done
-          exit "$missing"
+          set -euo pipefail
+          eligible=true
+          reasons=()
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
+          if [ "$CI_GATE_RESULT" != "success" ]; then
+            eligible=false
+            reasons+=("CI gate が success ではない")
+          fi
+          if [ "$BACKEND_CHANGED" != "true" ] && [ "$FRONTEND_CHANGED" != "true" ]; then
+            eligible=false
+            reasons+=("backend / frontend の変更がない")
+          fi
+          if [ "$MIGRATIONS_CHANGED" = "true" ]; then
+            eligible=false
+            reasons+=("migration を含むため手動 release が必要")
+          fi
+          if [ "$AWS_INFRA_CHANGED" = "true" ]; then
+            eligible=false
+            reasons+=("AWS infra 変更を含むため Terraform apply 後の手動 release が必要")
+          fi
+          if [ "$PUBLICATION_FREEZE" != "false" ]; then
+            eligible=false
+            reasons+=("PUBLICATION_FREEZE が明示的に false ではない")
+          fi
 
-      - name: Install backend dependencies
-        run: uv sync --frozen
-        working-directory: backend
-
-      - name: Gate pending production migration range
-        run: |
-          set +e
-          uv run python scripts/migration_gate.py --pending | tee "${RUNNER_TEMP}/migration-gate.txt"
-          status="${PIPESTATUS[0]}"
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
           {
-            echo "## Production migration gate"
+            echo "## AWS production release decision"
             echo ""
-            echo '```'
-            cat "${RUNNER_TEMP}/migration-gate.txt"
-            echo '```'
-            if [ "$status" != "0" ]; then
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| sha | \`$RELEASE_SHA\` |"
+            echo "| CI gate | $CI_GATE_RESULT |"
+            echo "| backend | $BACKEND_CHANGED |"
+            echo "| frontend | $FRONTEND_CHANGED |"
+            echo "| migrations | $MIGRATIONS_CHANGED |"
+            echo "| AWS infra | $AWS_INFRA_CHANGED |"
+            echo "| publication freeze | ${PUBLICATION_FREEZE:-unset} |"
+            echo "| dispatch | $([ "$eligible" = "true" ] && echo yes || echo no) |"
+            if [ "$eligible" != "true" ]; then
               echo ""
-              echo "Contract or unknown pending migration detected. Apply it manually with the production owner URL, then rerun deploy."
+              echo "停止理由:"
+              for reason in "${reasons[@]}"; do
+                echo "- $reason"
+              done
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          exit "$status"
-        working-directory: backend
 
-      - name: Apply production migrations
-        run: |
-          before="$(uv run alembic current || true)"
-          uv run alembic upgrade head
-          after="$(uv run alembic current || true)"
-          {
-            echo "## Production migration apply"
-            echo ""
-            echo "| field | value |"
-            echo "| --- | --- |"
-            echo "| before | \`${before//$'\n'/; }\` |"
-            echo "| after | \`${after//$'\n'/; }\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-        working-directory: backend
-
-  # ---- 本番デプロイ (main merge → git SHA tag で build once → core/collect/frontend) ----
-  # source identity はgit SHA、artifact identityはregistry digestとし、build後に
-  # digestで確定した同一artifactだけをreleaseする。
-  # 1 job で step を順序実行し backend (core→collect 同一 image) → frontend の順に release。
-  # ci-gate の success だけを gate にするので個別テスト結果には依存しない。
-  deploy-production:
-    name: Deploy production (backend -> frontend)
-    needs: [ci-gate, changes, migrate-production]
-    # main への push かつ ci-gate 成功、かつ backend/frontend のいずれかが変わったときのみ。
-    # migrate-production は migration 変更なしでは skip されるため、!cancelled() で
-    # skipped needs を評価対象にし、migration 変更時だけ success を要求する。
-    # 公開準備中は既定で停止し、2つのリポジトリ変数で明示解除した場合だけ本番アプリを更新する。
-    if: ${{ vars.ENABLE_PRODUCTION_DEPLOY == 'true'
-            && vars.PUBLICATION_FREEZE == 'false'
-            && !cancelled()
-            && github.event_name == 'push' && github.ref == 'refs/heads/main'
-            && needs.ci-gate.result == 'success'
-            && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true')
-            && (needs.changes.outputs.migrations != 'true' || needs.migrate-production.result == 'success') }}
-    runs-on: ubuntu-latest
-    environment: production
-    # Fly の health check 待ち等で release が stuck したとき、main は直列化されるため
-    # 後続 deploy が無限に待たされる。45 分で打ち切り (前 run を手動 cancel 不要に)。
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    # deploy 同士は直列化する (並行 release で image race を避ける)。CI 全体の
-    # concurrency とは別 group にし、進行中の deploy は cancel しない。
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    env:
-      # org-scoped token (collect が core の registry image を cross-app pull するため
-      # 必須)。app 名と URL も public Actions log で mask するため secrets として渡す。
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      FLY_CORE_APP: ${{ secrets.FLY_CORE_APP }}
-      FLY_COLLECT_APP: ${{ secrets.FLY_COLLECT_APP }}
-      FLY_FRONTEND_APP: ${{ secrets.FLY_FRONTEND_APP }}
-      FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
-      INTERNAL_FRONTEND_BASE_URL: ${{ secrets.INTERNAL_FRONTEND_BASE_URL }}
-      INTERNAL_API_URL: ${{ secrets.INTERNAL_API_URL }}
-      BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-    steps:
-      # deploy 判定を Step Summary に焼く: paths-filter の結果と SHA を可視化し、
-      # 「deploy したつもりが skip されていた」を run 概要から追えるようにする。
-      - name: Summarize deploy decision
-        run: |
-          {
-            echo "## Deploy decision"
-            echo ""
-            echo "| field | value |"
-            echo "| --- | --- |"
-            echo "| sha | \`${{ github.sha }}\` |"
-            echo "| backend | ${{ needs.changes.outputs.backend }} |"
-            echo "| frontend | ${{ needs.changes.outputs.frontend }} |"
-            echo "| migrations | ${{ needs.changes.outputs.migrations }} |"
-            echo "| migrate-production | ${{ needs.migrate-production.result }} |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1  # v1.6
-        with:
-          version: 0.4.70
-
-      # ---- backend を先に: build once → core / collect を同一 image で release ----
-      - name: Verify production deploy secrets
-        run: |
-          missing=0
-          for name in FLY_API_TOKEN FLY_CORE_APP FLY_COLLECT_APP FLY_FRONTEND_APP FRONTEND_URL INTERNAL_FRONTEND_BASE_URL INTERNAL_API_URL BETTER_AUTH_URL; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error::$name is not configured in the production environment"
-              missing=1
-            fi
-          done
-          exit "$missing"
-
-      # --build-only --push で build + registry push のみ (release しない)。git SHA tagを
-      # registryからdigestへ解決し、releaseはimmutable refだけを受け取る。
-      - name: Build & push backend image once (label = SHA)
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        working-directory: backend
-        run: |
-          flyctl deploy -c fly.core.toml -a "$FLY_CORE_APP" \
-            --remote-only --build-only --push --image-label "${{ github.sha }}"
-
-      - name: Resolve backend image digest
-        id: resolve-backend-image
-        if: ${{ needs.changes.outputs.backend == 'true' }}
+      - name: Dispatch AWS app images
+        if: ${{ steps.decision.outputs.eligible == 'true' }}
         env:
-          IMAGE_TAG: registry.fly.io/${{ secrets.FLY_CORE_APP }}:${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
-          flyctl auth docker
-          digest=""
-          platform=""
-          for attempt in {1..12}; do
-            manifest="$(docker manifest inspect --verbose "$IMAGE_TAG" 2>/dev/null || true)"
-            digest="$(jq -r '.Descriptor.digest // empty' <<< "$manifest")"
-            platform="$(jq -r '.Descriptor.platform | "\(.os)/\(.architecture)"' <<< "$manifest")"
-            if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ && "$platform" == "linux/amd64" ]]; then
-              break
-            fi
-            echo "Waiting for backend image manifest ($attempt/12)"
-            sleep 5
-          done
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ || "$platform" != "linux/amd64" ]]; then
-            echo "::error::backend image digest or platform could not be verified"
-            exit 1
-          fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "- backend image: \`$digest\` ($platform)" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Release vector-core (prebuilt image)
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        working-directory: backend
-        run: |
-          flyctl deploy -c fly.core.toml -a "$FLY_CORE_APP" \
-            --image "registry.fly.io/${FLY_CORE_APP}@${{ steps.resolve-backend-image.outputs.digest }}" \
-            --env FRONTEND_URL="$FRONTEND_URL" \
-            --env INTERNAL_FRONTEND_BASE_URL="$INTERNAL_FRONTEND_BASE_URL"
-
-      - name: Release vector-collect (same image as core)
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        working-directory: backend
-        run: |
-          flyctl deploy -c fly.collect.toml -a "$FLY_COLLECT_APP" \
-            --image "registry.fly.io/${FLY_CORE_APP}@${{ steps.resolve-backend-image.outputs.digest }}" \
-            --env FRONTEND_URL="$FRONTEND_URL" \
-            --env INTERNAL_FRONTEND_BASE_URL="$INTERNAL_FRONTEND_BASE_URL"
-
-      # ---- frontend を後に: build → digest解決 → release ----
-      - name: Build & push frontend image (label = SHA)
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        working-directory: frontend
-        run: |
-          flyctl deploy -c fly.toml -a "$FLY_FRONTEND_APP" \
-            --remote-only --build-only --push --image-label "${{ github.sha }}" \
-            --build-arg INTERNAL_API_URL="$INTERNAL_API_URL" \
-            --build-arg BETTER_AUTH_URL="$BETTER_AUTH_URL"
-
-      - name: Resolve frontend image digest
-        id: resolve-frontend-image
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        env:
-          IMAGE_TAG: registry.fly.io/${{ secrets.FLY_FRONTEND_APP }}:${{ github.sha }}
-        run: |
-          flyctl auth docker
-          digest=""
-          platform=""
-          for attempt in {1..12}; do
-            manifest="$(docker manifest inspect --verbose "$IMAGE_TAG" 2>/dev/null || true)"
-            digest="$(jq -r '.Descriptor.digest // empty' <<< "$manifest")"
-            platform="$(jq -r '.Descriptor.platform | "\(.os)/\(.architecture)"' <<< "$manifest")"
-            if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ && "$platform" == "linux/amd64" ]]; then
-              break
-            fi
-            echo "Waiting for frontend image manifest ($attempt/12)"
-            sleep 5
-          done
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ || "$platform" != "linux/amd64" ]]; then
-            echo "::error::frontend image digest or platform could not be verified"
-            exit 1
-          fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "- frontend image: \`$digest\` ($platform)" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Release frontend (prebuilt image)
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        working-directory: frontend
-        run: |
-          flyctl deploy -c fly.toml -a "$FLY_FRONTEND_APP" \
-            --image "registry.fly.io/${FLY_FRONTEND_APP}@${{ steps.resolve-frontend-image.outputs.digest }}" \
-            --env INTERNAL_API_URL="$INTERNAL_API_URL" \
-            --env BETTER_AUTH_URL="$BETTER_AUTH_URL"
+          set -euo pipefail
+          gh workflow run aws-app-images.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            --raw-field release_sha="$RELEASE_SHA"
