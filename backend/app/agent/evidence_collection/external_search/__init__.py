@@ -1,5 +1,14 @@
 """External search package。公開名は package root から import する。"""
 
+from app.agent.evidence_collection.external_search.agentcore import (
+    AgentCoreWebSearchGateway,
+)
+from app.agent.evidence_collection.external_search.agentcore_spec import (
+    AGENTCORE_WEB_SEARCH_SPEC,
+    AgentCoreWebSearchSpec,
+    build_tool_arguments,
+    build_tool_call_payload,
+)
 from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
@@ -44,6 +53,9 @@ from app.agent.evidence_collection.external_search.time_filter import (
 )
 
 __all__ = [
+    "AGENTCORE_WEB_SEARCH_SPEC",
+    "AgentCoreWebSearchGateway",
+    "AgentCoreWebSearchSpec",
     "EVIDENCE_CLAIM_MAX_CHARS",
     "EVIDENCE_WHY_SELECTED_MAX_CHARS",
     "EXTERNAL_CONTENT_MAX_CHARS",
@@ -73,5 +85,7 @@ __all__ = [
     "TimeFilterFailureReason",
     "ExternalSearchDateFilterResolutionError",
     "build_search_body",
+    "build_tool_arguments",
+    "build_tool_call_payload",
     "resolve_external_search_date_filter",
 ]

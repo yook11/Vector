@@ -98,7 +98,11 @@ class FakeCancelStreamPublisher:
 @pytest.fixture(autouse=True)
 def _configured_generation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "deepseek_api_key", SecretStr("deepseek-test-key"))
-    monkeypatch.setattr(settings, "tavily_api_key", SecretStr("tvly-test-key"))
+    monkeypatch.setattr(
+        settings,
+        "agentcore_gateway_url",
+        "https://gw-test.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
+    )
 
 
 @pytest.fixture
@@ -597,16 +601,23 @@ class TestCreateResearchResponse:
         assert run.error_code is None
         assert "SHOULD_NOT_LEAK" not in response.text
 
-    @pytest.mark.parametrize("missing_key", ["deepseek_api_key", "tavily_api_key"])
+    @pytest.mark.parametrize(
+        ("missing_key", "empty_value"),
+        [
+            ("deepseek_api_key", SecretStr("")),
+            ("agentcore_gateway_url", None),
+        ],
+    )
     async def test_key_missing_fails_fast_without_persisting_run(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
         missing_key: str,
+        empty_value: object,
     ) -> None:
         client, fake_enqueue = research_client
-        monkeypatch.setattr(settings, missing_key, SecretStr(""))
+        monkeypatch.setattr(settings, missing_key, empty_value)
 
         response = await client.post(_RESPONSES_URL, json={"question": "NVIDIA は？"})
 

@@ -196,7 +196,7 @@ async def _probe_search(
     goals: Sequence[str],
     target_time_window: TargetTimeWindow | None,
 ) -> None:
-    _require_secret("TAVILY_API_KEY", settings.tavily_api_key.get_secret_value())
+    _require_secret("AGENTCORE_GATEWAY_URL", settings.agentcore_gateway_url or "")
     _require_secret("DEEPSEEK_API_KEY", settings.deepseek_api_key.get_secret_value())
     _require_secret("GEMINI_API_KEY", settings.gemini_api_key.get_secret_value())
 

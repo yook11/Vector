@@ -550,6 +550,67 @@ def test_postgres_collect_password_loaded_as_secretstr(
     assert s.postgres_collect_password.get_secret_value() == "test-collect-password"
 
 
+# 外部検索の宛先。内部宛 client は SSRF 検証を通さないため、宛先が正しいことの
+# 根拠はこの validator にしかない。内部 namespace の suffix は使えない: gateway の
+# host は *.gateway.bedrock-agentcore.<region>.amazonaws.com で、AWS 所有の
+# 公開ドメインに属する。
+
+_VALID_AGENTCORE_GATEWAY_URLS = [
+    # Terraform が注入する実値の形 (aws_bedrockagentcore_gateway.gateway_url)。
+    "https://vector-web-search-abc123.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
+    "https://gw.gateway.bedrock-agentcore.us-east-1.amazonaws.com",
+]
+
+
+def test_agentcore_gateway_url_defaults_to_none() -> None:
+    """未設定なら None。外部検索を持たない段では未設定が正しい状態。"""
+    assert Settings().agentcore_gateway_url is None
+
+
+@pytest.mark.parametrize("gateway_url", _VALID_AGENTCORE_GATEWAY_URLS)
+def test_agentcore_gateway_url_accepts_aws_owned_https_host(gateway_url: str) -> None:
+    s = Settings(agentcore_gateway_url=gateway_url, aws_region="ap-northeast-1")
+    assert s.agentcore_gateway_url == gateway_url
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "https://attacker.example.com/mcp",
+        "https://amazonaws.com.attacker.example/mcp",  # 末尾でない
+        "https://evilamazonaws.com/mcp",  # suffix の前に dot が無い
+        "https://169.254.170.2/mcp",  # IP リテラル
+        "https:///mcp",  # host が無い
+    ],
+)
+def test_agentcore_gateway_url_rejects_non_aws_host(bad_url: str) -> None:
+    with pytest.raises(ValidationError, match="AGENTCORE_GATEWAY_URL"):
+        Settings(agentcore_gateway_url=bad_url, aws_region="ap-northeast-1")
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://gw.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
+        "file:///etc/passwd",
+    ],
+)
+def test_agentcore_gateway_url_rejects_non_https_scheme(bad_url: str) -> None:
+    """SigV4 署名済みリクエストを平文で流させない。"""
+    with pytest.raises(ValidationError, match="AGENTCORE_GATEWAY_URL"):
+        Settings(agentcore_gateway_url=bad_url, aws_region="ap-northeast-1")
+
+
+def test_agentcore_gateway_url_requires_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    """region 無しに gateway へのリクエストは署名できない。
+
+    欠けたまま進むと検索のたびに失敗するため、起動時に要求する。
+    """
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    with pytest.raises(ValidationError, match="AWS_REGION"):
+        Settings(agentcore_gateway_url=_VALID_AGENTCORE_GATEWAY_URLS[0])
+
+
 def test_tavily_api_key_defaults_to_empty_secretstr() -> None:
     """TAVILY_API_KEY 未設定なら空 SecretStr。provider 側が fail-fast する。"""
     s = Settings()

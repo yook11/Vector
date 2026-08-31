@@ -31,7 +31,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
 )
 from app.config import settings
-from app.shared.http.external import make_external_async_client
+from app.shared.http.internal import make_internal_async_client
 
 if TYPE_CHECKING:
     from app.agent.runtime.gemini import GeminiAgentRuntime
@@ -39,8 +39,7 @@ if TYPE_CHECKING:
 
 def ensure_external_search_configured() -> None:
     if not (
-        settings.deepseek_api_key.get_secret_value()
-        and settings.tavily_api_key.get_secret_value()
+        settings.deepseek_api_key.get_secret_value() and settings.agentcore_gateway_url
     ):
         raise AIProviderConfigurationError()
 
@@ -156,14 +155,17 @@ def build_answering_runner(
 async def activate_external_search() -> AsyncIterator[ExternalSearch]:
     from openai import AsyncOpenAI
 
+    from app.agent.evidence_collection.external_search.agentcore import (
+        AgentCoreWebSearchGateway,
+    )
+    from app.agent.evidence_collection.external_search.agentcore_spec import (
+        AGENTCORE_WEB_SEARCH_SPEC,
+    )
     from app.agent.evidence_collection.external_search.deepseek_binding import (
         EXTERNAL_QUERY_DEEPSEEK_BINDING,
     )
     from app.agent.evidence_collection.external_search.service import (
         ExternalSearchService,
-    )
-    from app.agent.evidence_collection.external_search.tavily import (
-        TavilyExternalSearchGateway,
     )
     from app.agent.runtime.deepseek import (
         DEEPSEEK_BASE_URL,
@@ -180,12 +182,18 @@ async def activate_external_search() -> AsyncIterator[ExternalSearch]:
             client=deepseek_client,
             binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
         )
-        async with make_external_async_client() as tavily_client:
+        # gateway は自 AWS アカウントの resource なので内部宛 client を使う。
+        # 外部宛 factory は egress proxy を強制注入するため、署名済みリクエストが
+        # proxy へ迂回して失敗する。
+        async with make_internal_async_client(
+            timeout=AGENTCORE_WEB_SEARCH_SPEC.request_timeout_seconds
+        ) as search_client:
             yield ExternalSearchService(
                 query_runtime=query_runtime,
-                search_gateway=TavilyExternalSearchGateway(
-                    api_key=settings.tavily_api_key,
-                    client=tavily_client,
+                search_gateway=AgentCoreWebSearchGateway(
+                    gateway_url=settings.agentcore_gateway_url or "",
+                    region=settings.aws_region or "",
+                    client=search_client,
                 ),
             )
 

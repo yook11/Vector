@@ -375,7 +375,7 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     assert "activate_external_search" not in names
     assert "build_external_search_service" not in names
     assert "DEEPSEEK_API_KEY" not in text
-    assert "TAVILY_API_KEY" not in text
+    assert "AGENTCORE_GATEWAY_URL" not in text
     assert "planned_mode" not in text
     assert "result.retrieval" not in text
     assert "result.plan_summary" in result_printer

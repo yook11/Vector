@@ -52,8 +52,9 @@ __all__ = [
 EXTERNAL_SEARCH_HITS_PER_QUERY = 10
 EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK = 20
 EVIDENCE_WHY_SELECTED_MAX_CHARS = 300
-# 収集した外部記事の異常値を拒否するための閾値。Tavilyの通常上限(500字×3chunk)の
-# 十分上に置き、provider契約の変化だけを捕まえる。Reviewer表示の予算とは別。
+# hit 1件が運ぶ本文の上限。超過分は provider adapter が切り詰める (落とさない)。
+# Reviewer に見せるのは先頭500字だけだが、採用後のAnswererには全文が渡るため、
+# ここがAnswerer入力の予算を決める。Reviewer表示の予算とは別。
 EXTERNAL_CONTENT_MAX_CHARS = 4000
 
 TimeFilterFailureReason = Literal[
@@ -74,6 +75,11 @@ class ExternalSearchFailureReason(StrEnum):
     # egress proxy 段で失敗した (provider 障害ではない)。AWS では allowlist の設定ミスが
     # ここに来る。実際の status と拒否された宛先は proxy の access log 側にある。
     PROXY_ERROR = "external_search_proxy_error"
+    # MCP が HTTP 200 のまま失敗を返した (JSON-RPC の error、または result.isError)。
+    # 中身は provider の自由文なので reason には載せない。
+    MCP_ERROR = "external_search_mcp_error"
+    # AWS 資格情報を解決できず署名に到達しなかった。provider 障害ではなく実行環境側。
+    CREDENTIALS_UNAVAILABLE = "external_search_credentials_unavailable"
 
 
 class ExternalSearchProviderError(Exception):
