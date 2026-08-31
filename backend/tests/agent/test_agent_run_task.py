@@ -31,7 +31,10 @@ from app.agent.contract import (
     ExternalUrlSource,
     InternalArticleSource,
 )
-from app.agent.live_updates.reporters import AgentRunLiveActivityReporter
+from app.agent.live_updates.reporters import (
+    AgentRunLiveActivityReporter,
+    AgentRunLiveStageReporter,
+)
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamAnswerDeltaEvent,
     AgentRunLiveStreamAnswerResetEvent,
@@ -336,24 +339,6 @@ class CapturingExecutionProbe:
         self.run_id = run_id
         self.attempt_epoch = attempt_epoch
         CapturingExecutionProbe.instances.append(self)
-
-
-class CapturingProgressWriter:
-    instances: list[CapturingProgressWriter] = []
-
-    def __init__(
-        self,
-        session_factory: object,
-        run_id: UUID,
-        attempt_epoch: int,
-    ) -> None:
-        self.session_factory = session_factory
-        self.run_id = run_id
-        self.attempt_epoch = attempt_epoch
-        CapturingProgressWriter.instances.append(self)
-
-    async def stage_changed(self, _stage: object) -> None:
-        return None
 
 
 class ForbiddenConstruction:
@@ -1109,7 +1094,7 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
         completed = await session.get(AgentRun, run.id)
         assert completed is not None
         assert completed.status == "completed"
-        assert completed.progress_stage == "answering"
+        assert completed.progress_stage is None
     stream = FakeLiveStreamPublisher.instances[0]
     stages = [
         event
@@ -1213,7 +1198,6 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
     FakeLiveStreamPublisher.instances = []
     CapturingDeltaReporter.instances = []
     CapturingExecutionProbe.instances = []
-    CapturingProgressWriter.instances = []
 
     def build_agent(**kwargs: object) -> FakeAgent:
         captured_kwargs.update(kwargs)
@@ -1243,12 +1227,6 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
         CapturingExecutionProbe,
         raising=False,
     )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunProgressWriter",
-        CapturingProgressWriter,
-        raising=False,
-    )
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -1257,20 +1235,16 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
 
     assert len(CapturingDeltaReporter.instances) == 1
     assert len(CapturingExecutionProbe.instances) == 1
-    assert len(CapturingProgressWriter.instances) == 1
     stream = FakeLiveStreamPublisher.instances[0]
     delta_reporter = CapturingDeltaReporter.instances[0]
     probe = CapturingExecutionProbe.instances[0]
-    progress_writer = CapturingProgressWriter.instances[0]
     assert delta_reporter.publisher is stream
     assert delta_reporter.run_id == run.id
     assert delta_reporter.attempt_epoch == 1
     assert probe.session_factory is session_factory
     assert probe.run_id == run.id
     assert probe.attempt_epoch == 1
-    assert progress_writer.session_factory is session_factory
-    assert progress_writer.run_id == run.id
-    assert progress_writer.attempt_epoch == 1
+    assert isinstance(captured_kwargs["progress"], AgentRunLiveStageReporter)
     assert captured_kwargs["delta_reporter"] is delta_reporter
     assert captured_kwargs["continuation"] is probe
 
@@ -2723,7 +2697,7 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
         assert failed is not None
         assert failed.status == "failed"
         assert failed.error_code == "generation_unavailable"
-        assert failed.progress_stage == "evidence_collection"
+        assert failed.progress_stage is None
 
 
 @pytest.mark.asyncio

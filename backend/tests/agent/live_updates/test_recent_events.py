@@ -6,7 +6,6 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -205,7 +204,7 @@ async def test_live_reporters_dual_write_and_project_activity_at_sse_boundary() 
     try:
         list_publisher = AgentRunLiveEventPublisher(redis, run_id)
         stream_publisher = AgentRunLiveStreamPublisher(redis, run_id, epoch)
-        stage_reporter = AgentRunLiveStageReporter(AsyncMock(), stream_publisher)
+        stage_reporter = AgentRunLiveStageReporter(stream_publisher)
         activity_reporter = AgentRunLiveActivityReporter(
             list_publisher,
             stream_publisher,

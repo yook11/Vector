@@ -1,5 +1,10 @@
 # Agent run progress_stage 表示 slice 仕様 (Slice 4)
 
+> 後続契約更新: `agent-run-progress-stage-write-removal-slice.md` は工程の DB UPDATE を止める。
+> 表示正本は Redis Stream（SSE）である。`start_run` の `progress_stage=None` リセットは残し、
+> 列と API の `progressStage` は後続の掃除まで残す。本文中の「報告ごとに DB を UPDATE する」
+> 記述は無効である。
+
 ## 位置付け
 
 親仕様: `specs/agent/conversation-history-async-runs.md`。前提 slice: Slice 1〜3 +
