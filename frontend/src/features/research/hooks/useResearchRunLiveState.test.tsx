@@ -53,8 +53,7 @@ function liveStateInput(runId: string, createdAt = CREATED_AT_ONE) {
     runId,
     createdAt,
     initialStatus: "running" as const,
-    initialStage: null,
-  } as unknown as Parameters<typeof useResearchRunLiveState>[0];
+  };
 }
 
 function strictMode({ children }: { children: ReactNode }) {

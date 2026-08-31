@@ -95,7 +95,6 @@ function ResearchTurn({
       runId={userMessage.run.runId}
       createdAt={userMessage.createdAt}
       initialStatus={activeStatus}
-      initialStage={userMessage.run.progressStage}
     >
       <div
         key="turn-presentation"

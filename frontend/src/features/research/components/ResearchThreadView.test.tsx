@@ -459,7 +459,7 @@ describe("ResearchThreadView live integration", () => {
     expect(screen.getByText("回答を生成中…")).toBeInTheDocument();
   });
 
-  it("shows the planning stage without a rewritten-question activity", async () => {
+  it("shows generating until SSE reports planning, ignoring poll progress", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -480,15 +480,27 @@ describe("ResearchThreadView live integration", () => {
 
     render(<ResearchThreadView thread={activeThread()} />);
 
-    expect(await screen.findByText("計画中")).toBeInTheDocument();
+    expect(await screen.findByText("生成中")).toBeInTheDocument();
+    expect(screen.queryByText("計画中")).not.toBeInTheDocument();
     expect(screen.queryByText("discarded")).not.toBeInTheDocument();
+
+    act(() => {
+      currentSource().emit(
+        "stage",
+        { attemptEpoch: 1, stage: "planning" },
+        "1-0",
+      );
+    });
+
+    expect(screen.getByText("計画中")).toBeInTheDocument();
+    expect(screen.queryByText("生成中")).not.toBeInTheDocument();
   });
 
   it("places the status rail after the question-only bubble and before the temporary draft", () => {
     render(<ResearchThreadView thread={activeThread()} />);
     const userText = screen.getByText("このニュースの影響は？");
     const userArticle = userText.closest("article");
-    const stage = screen.getByText("計画中");
+    const stage = screen.getByText("生成中");
 
     expect(userArticle).not.toBeNull();
     if (userArticle === null || userArticle.parentElement === null) {

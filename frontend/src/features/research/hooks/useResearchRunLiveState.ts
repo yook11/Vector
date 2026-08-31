@@ -14,13 +14,11 @@ import {
   type ResearchRunLiveSnapshot,
   type ResearchRunLiveStatus,
 } from "../live/controller";
-import type { ResearchLiveStage } from "../live/events";
 
 interface UseResearchRunLiveStateInput {
   runId: string;
   createdAt: string;
   initialStatus: Extract<ResearchRunLiveStatus, "queued" | "running">;
-  initialStage: ResearchLiveStage | null;
 }
 
 interface ControllerEntry {
@@ -40,7 +38,6 @@ export function useResearchRunLiveState({
   runId,
   createdAt,
   initialStatus,
-  initialStage,
 }: UseResearchRunLiveStateInput): ResearchRunLiveSnapshot {
   const router = useRouter();
   const routerRef = useRef(router);
@@ -89,7 +86,6 @@ export function useResearchRunLiveState({
       runId,
       createdAt,
       initialStatus,
-      initialStage,
       requestRefresh,
     });
     let cachedSnapshot = controller.getSnapshot();
