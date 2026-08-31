@@ -152,6 +152,11 @@ class Settings(BaseSettings):
     deepseek_api_key: SecretStr = SecretStr("")
     tavily_api_key: SecretStr = SecretStr("")
 
+    # 外部検索の入口。AgentCore Gateway の MCP endpoint で、gateway ID は apply 時に
+    # 確定するため URL からしか知れない。値を持つのは agent 段 (実呼び出し) と
+    # api 段 (research 開始 API の設定プリフライト) だけ。
+    agentcore_gateway_url: str | None = None
+
     # ニュース取得
     max_articles_per_fetch: int = 50
     max_analysis_per_run: int = 200
@@ -301,6 +306,36 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"EGRESS_PROXY_URL host {host!r} is not an internal namespace host "
                 f"({_INTERNAL_NAMESPACE_GLOBS})"
+            )
+        return v
+
+    @field_validator("agentcore_gateway_url")
+    @classmethod
+    def _validate_agentcore_gateway_url(cls, v: str | None) -> str | None:
+        """外部検索の宛先を AWS 所有のホストに限定する (起動時 fail-fast)。
+
+        内部宛 client (``make_internal_async_client``) は SSRF 検証を通さないため、
+        宛先が正しいことの根拠はここにしかない。ただし
+        ``_ALLOWED_INTERNAL_HOST_SUFFIXES`` は使えない: gateway の host は
+        ``*.gateway.bedrock-agentcore.<region>.amazonaws.com`` で内部 namespace には
+        属さない。``gateway.bedrock-agentcore`` まで literal で縛らないのは、
+        AWS の命名規則が変わったときに静かに壊れないようにするため
+        (infra 側も同じ理由で suffix を推測せず gateway_url から host を取っている)。
+        """
+        if v is None:
+            return v
+        scheme = urlparse(v).scheme
+        if scheme != "https":
+            raise ValueError(
+                f"AGENTCORE_GATEWAY_URL must use https scheme, got {scheme!r}"
+            )
+        host = _internal_host(v)
+        if host is None:
+            raise ValueError("AGENTCORE_GATEWAY_URL must include a host")
+        if not host.endswith(".amazonaws.com"):
+            raise ValueError(
+                f"AGENTCORE_GATEWAY_URL host {host!r} is not an AWS-owned host "
+                "(*.amazonaws.com)"
             )
         return v
 
@@ -472,6 +507,21 @@ class Settings(BaseSettings):
             raise ValueError(
                 "REDIS_IAM_AUTH is enabled but REDIS_IAM_CACHE_NAME is not set; "
                 "the token is signed against the cache name, not the endpoint"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_region_when_agentcore_gateway(self) -> Self:
+        """外部検索の SigV4 署名には region が要る (起動時 fail-fast)。
+
+        署名は region ごとに作るため、欠けたまま進むと検索のたびに失敗する。
+        """
+        if self.agentcore_gateway_url is None:
+            return self
+        if self.aws_region is None:
+            raise ValueError(
+                "AGENTCORE_GATEWAY_URL is set but AWS_REGION is not; "
+                "the gateway request is signed per region"
             )
         return self
 

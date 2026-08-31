@@ -117,6 +117,9 @@ locals {
     api = {
       DATABASE_URL = local.backend_db_url["vector_app"]
       REDIS_URL    = local.broker_redis_url["api"]
+      # research 開始 API の設定プリフライトが presence を見るだけ。実呼び出しは
+      # agent 段が担うので、api には IAM 権限も PrivateLink も与えない。
+      AGENTCORE_GATEWAY_URL = aws_bedrockagentcore_gateway.web_search.gateway_url
     }
     # scheduler は engine を作らないが、config.py の `database_url: str` が
     # 必須設定なので値が無いと Settings の構築で落ちる。
@@ -145,9 +148,8 @@ locals {
     agent = {
       DATABASE_URL = local.backend_db_url["vector_app"]
       REDIS_URL    = local.broker_redis_url["agent"]
-      # 外部検索の MCP 入口 (agentcore.tf)。外部検索を持つのは agent 段だけなので
-      # common へは置かない。宛先は PrivateLink 経由の内部 host で、下の NO_PROXY が
-      # proxy を迂回させる。
+      # 外部検索の MCP 入口 (agentcore.tf)。宛先は PrivateLink 経由の内部 host で、
+      # backend は make_internal_async_client で叩く (env の proxy 設定を読まない)。
       AGENTCORE_GATEWAY_URL = aws_bedrockagentcore_gateway.web_search.gateway_url
     }
   }

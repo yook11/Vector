@@ -63,7 +63,7 @@ class _TrackedDeepSeekClientFactory:
         return client
 
 
-class _TrackedTavilyClient:
+class _TrackedSearchClient:
     def __init__(self, *, close_error: BaseException | None = None) -> None:
         self._close_error = close_error
         self.close_count = 0
@@ -74,18 +74,18 @@ class _TrackedTavilyClient:
             raise self._close_error
 
 
-class _TrackedTavilyContext:
+class _TrackedSearchClientContext:
     def __init__(
         self,
         *,
-        client: _TrackedTavilyClient,
+        client: _TrackedSearchClient,
         entry_error: BaseException | None = None,
     ) -> None:
         self._client = client
         self._entry_error = entry_error
         self.enter_count = 0
 
-    async def __aenter__(self) -> _TrackedTavilyClient:
+    async def __aenter__(self) -> _TrackedSearchClient:
         self.enter_count += 1
         if self._entry_error is not None:
             raise self._entry_error
@@ -101,7 +101,7 @@ class _TrackedTavilyContext:
         return False
 
 
-class _TrackedTavilyClientFactory:
+class _TrackedSearchClientFactory:
     def __init__(
         self,
         *,
@@ -110,12 +110,12 @@ class _TrackedTavilyClientFactory:
     ) -> None:
         self._entry_error = entry_error
         self._close_error = close_error
-        self.clients: list[_TrackedTavilyClient] = []
-        self.contexts: list[_TrackedTavilyContext] = []
+        self.clients: list[_TrackedSearchClient] = []
+        self.contexts: list[_TrackedSearchClientContext] = []
 
-    def __call__(self) -> _TrackedTavilyContext:
-        client = _TrackedTavilyClient(close_error=self._close_error)
-        context = _TrackedTavilyContext(
+    def __call__(self, **kwargs: object) -> _TrackedSearchClientContext:
+        client = _TrackedSearchClient(close_error=self._close_error)
+        context = _TrackedSearchClientContext(
             client=client,
             entry_error=self._entry_error,
         )
@@ -143,8 +143,9 @@ class _RuntimeSpyFactory:
 
 
 class _GatewaySpy:
-    def __init__(self, *, api_key: SecretStr, client: object) -> None:
-        self.api_key = api_key
+    def __init__(self, *, gateway_url: str, region: str, client: object) -> None:
+        self.gateway_url = gateway_url
+        self.region = region
         self.client = client
 
 
@@ -164,28 +165,30 @@ def _install_factory_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     *,
     deepseek: _TrackedDeepSeekClientFactory | None = None,
-    tavily: _TrackedTavilyClientFactory | None = None,
+    search_http: _TrackedSearchClientFactory | None = None,
     runtime: _RuntimeSpyFactory | None = None,
     gateway: _GatewaySpyFactory | None = None,
 ) -> tuple[
     _TrackedDeepSeekClientFactory,
-    _TrackedTavilyClientFactory,
+    _TrackedSearchClientFactory,
     _RuntimeSpyFactory,
     _GatewaySpyFactory,
 ]:
     import openai
 
-    from app.agent.evidence_collection.external_search import tavily as tavily_module
+    from app.agent.evidence_collection.external_search import (
+        agentcore as agentcore_module,
+    )
     from app.agent.runtime import deepseek as deepseek_module
 
     deepseek = deepseek or _TrackedDeepSeekClientFactory()
-    tavily = tavily or _TrackedTavilyClientFactory()
+    search_http = search_http or _TrackedSearchClientFactory()
     runtime = runtime or _RuntimeSpyFactory()
     gateway = gateway or _GatewaySpyFactory()
     monkeypatch.setattr(openai, "AsyncOpenAI", deepseek)
-    monkeypatch.setattr(composition, "make_external_async_client", tavily)
+    monkeypatch.setattr(composition, "make_internal_async_client", search_http)
     monkeypatch.setattr(deepseek_module, "DeepSeekAgentRuntime", runtime)
-    monkeypatch.setattr(tavily_module, "TavilyExternalSearchGateway", gateway)
+    monkeypatch.setattr(agentcore_module, "AgentCoreWebSearchGateway", gateway)
     monkeypatch.setattr(
         composition.settings,
         "deepseek_api_key",
@@ -193,10 +196,11 @@ def _install_factory_dependencies(
     )
     monkeypatch.setattr(
         composition.settings,
-        "tavily_api_key",
-        SecretStr("tavily-api-key-sentinel"),
+        "agentcore_gateway_url",
+        "https://gw-sentinel.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
     )
-    return deepseek, tavily, runtime, gateway
+    monkeypatch.setattr(composition.settings, "aws_region", "ap-northeast-1")
+    return deepseek, search_http, runtime, gateway
 
 
 @pytest.mark.asyncio
@@ -211,10 +215,10 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
         DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
     )
 
-    deepseek, tavily, runtime, gateway = _install_factory_dependencies(monkeypatch)
+    deepseek, search_http, runtime, gateway = _install_factory_dependencies(monkeypatch)
     scope = activate_external_search()
 
-    assert (deepseek.clients, tavily.clients, runtime.calls, gateway.calls) == (
+    assert (deepseek.clients, search_http.clients, runtime.calls, gateway.calls) == (
         [],
         [],
         [],
@@ -224,11 +228,11 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
     async with scope as external_search:
         assert (
             len(deepseek.clients),
-            len(tavily.clients),
+            len(search_http.clients),
             deepseek.clients[0].kwargs,
             external_search.query_runtime.client is deepseek.clients[0],
             external_search.query_runtime.binding is EXTERNAL_QUERY_DEEPSEEK_BINDING,
-            external_search.search_gateway.client is tavily.clients[0],
+            external_search.search_gateway.client is search_http.clients[0],
         ) == (
             1,
             1,
@@ -242,7 +246,10 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
             True,
         )
 
-    assert (deepseek.clients[0].close_count, tavily.clients[0].close_count) == (1, 1)
+    assert (deepseek.clients[0].close_count, search_http.clients[0].close_count) == (
+        1,
+        1,
+    )
 
 
 @pytest.mark.asyncio
@@ -255,7 +262,9 @@ async def test_evidence_reviewer_scope_is_lazy_and_closes_its_client_once(
         DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
     )
 
-    deepseek, tavily, runtime, _gateway = _install_factory_dependencies(monkeypatch)
+    deepseek, search_http, runtime, _gateway = _install_factory_dependencies(
+        monkeypatch
+    )
     scope = activate_evidence_reviewer_runtime()
 
     assert (deepseek.clients, runtime.calls) == ([], [])
@@ -263,7 +272,7 @@ async def test_evidence_reviewer_scope_is_lazy_and_closes_its_client_once(
     async with scope as reviewer_runtime:
         assert (
             len(deepseek.clients),
-            tavily.clients,
+            search_http.clients,
             deepseek.clients[0].kwargs,
             reviewer_runtime.client is deepseek.clients[0],
             reviewer_runtime.binding is EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
@@ -299,7 +308,9 @@ async def test_external_search_scope_closes_acquired_clients_for_every_exit(
     monkeypatch: pytest.MonkeyPatch,
     body_error: BaseException | None,
 ) -> None:
-    deepseek, tavily, _runtime, _gateway = _install_factory_dependencies(monkeypatch)
+    deepseek, search_http, _runtime, _gateway = _install_factory_dependencies(
+        monkeypatch
+    )
 
     if body_error is None:
         async with activate_external_search():
@@ -310,15 +321,18 @@ async def test_external_search_scope_closes_acquired_clients_for_every_exit(
                 raise body_error
         assert raised.value is body_error
 
-    assert (deepseek.clients[0].close_count, tavily.clients[0].close_count) == (1, 1)
+    assert (deepseek.clients[0].close_count, search_http.clients[0].close_count) == (
+        1,
+        1,
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stage", "expected_deepseek_closes", "expected_tavily_closes"),
+    ("stage", "expected_deepseek_closes", "expected_search_closes"),
     [
         pytest.param("query-runtime", 1, 0, id="query-runtime"),
-        pytest.param("tavily-entry", 1, 0, id="tavily-entry"),
+        pytest.param("search-http-entry", 1, 0, id="search-http-entry"),
         pytest.param("gateway", 1, 1, id="gateway"),
     ],
 )
@@ -326,22 +340,22 @@ async def test_external_search_scope_closes_only_acquired_clients_on_failure(
     monkeypatch: pytest.MonkeyPatch,
     stage: str,
     expected_deepseek_closes: int,
-    expected_tavily_closes: int,
+    expected_search_closes: int,
 ) -> None:
     runtime = _RuntimeSpyFactory(
         fail_on_construction=1 if stage == "query-runtime" else None
     )
-    tavily = _TrackedTavilyClientFactory(
-        entry_error=RuntimeError("tavily entry failed")
-        if stage == "tavily-entry"
+    search_http = _TrackedSearchClientFactory(
+        entry_error=RuntimeError("search http entry failed")
+        if stage == "search-http-entry"
         else None
     )
     gateway_error = (
         RuntimeError("gateway construction failed") if stage == "gateway" else None
     )
-    deepseek, tavily, _runtime, _gateway = _install_factory_dependencies(
+    deepseek, search_http, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
-        tavily=tavily,
+        search_http=search_http,
         runtime=runtime,
         gateway=_GatewaySpyFactory(construction_error=gateway_error),
     )
@@ -352,19 +366,19 @@ async def test_external_search_scope_closes_only_acquired_clients_on_failure(
 
     assert (
         deepseek.clients[0].close_count,
-        sum(client.close_count for client in tavily.clients),
-    ) == (expected_deepseek_closes, expected_tavily_closes)
+        sum(client.close_count for client in search_http.clients),
+    ) == (expected_deepseek_closes, expected_search_closes)
 
 
 @pytest.mark.asyncio
-async def test_external_search_scope_attempts_deepseek_close_when_tavily_close_fails(
+async def test_external_search_scope_attempts_deepseek_close_when_http_close_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    close_error = RuntimeError("tavily close failure")
-    tavily = _TrackedTavilyClientFactory(close_error=close_error)
-    deepseek, tavily, _runtime, _gateway = _install_factory_dependencies(
+    close_error = RuntimeError("search http close failure")
+    search_http = _TrackedSearchClientFactory(close_error=close_error)
+    deepseek, search_http, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
-        tavily=tavily,
+        search_http=search_http,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -374,7 +388,7 @@ async def test_external_search_scope_attempts_deepseek_close_when_tavily_close_f
     assert (
         raised.value is close_error,
         deepseek.clients[0].close_count,
-        tavily.clients[0].close_count,
+        search_http.clients[0].close_count,
     ) == (True, 1, 1)
 
 
@@ -383,11 +397,11 @@ async def test_external_search_scope_allows_close_failure_to_replace_body_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     body_error = RuntimeError("body failure")
-    close_error = RuntimeError("tavily close failure")
-    tavily = _TrackedTavilyClientFactory(close_error=close_error)
+    close_error = RuntimeError("search http close failure")
+    search_http = _TrackedSearchClientFactory(close_error=close_error)
     _deepseek, _tavily, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
-        tavily=tavily,
+        search_http=search_http,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -404,7 +418,9 @@ async def test_external_search_scope_allows_close_failure_to_replace_body_error(
 async def test_external_search_scope_creates_fresh_clients_for_each_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deepseek, tavily, _runtime, _gateway = _install_factory_dependencies(monkeypatch)
+    deepseek, search_http, _runtime, _gateway = _install_factory_dependencies(
+        monkeypatch
+    )
 
     async with activate_external_search() as first:
         pass
@@ -415,5 +431,5 @@ async def test_external_search_scope_creates_fresh_clients_for_each_activation(
         first.query_runtime.client is not second.query_runtime.client,
         first.search_gateway.client is not second.search_gateway.client,
         [client.close_count for client in deepseek.clients],
-        [client.close_count for client in tavily.clients],
+        [client.close_count for client in search_http.clients],
     ) == (True, True, [1, 1], [1, 1])

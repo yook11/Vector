@@ -1,4 +1,8 @@
-"""External search gateway の公開契約とTavily adapter境界のテスト。"""
+"""External search gateway の公開契約と adapter 境界のテスト。
+
+対象は「いま配線されている gateway」= AgentCore adapter。Tavily は PR で
+外されるまで test_tavily.py が wire format を持つ。
+"""
 
 from __future__ import annotations
 
@@ -12,10 +16,10 @@ import pytest
 from logfire.testing import CaptureLogfire
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
-from pydantic import SecretStr
 
+import app.agent.evidence_collection.external_search.agentcore as agentcore_module
 from app.agent.evidence_collection.external_search import (
-    TavilyExternalSearchGateway,
+    AgentCoreWebSearchGateway,
 )
 from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchFailureReason,
@@ -28,6 +32,11 @@ from app.agent.recording.external_search import (
 )
 from tests.logfire._span_helpers import domain_attr_keys, one_span_named
 
+GATEWAY_URL = "https://gw-test.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com"
+# 署名に実際に載る値。Authorization ヘッダの Credential= に現れるので、
+# trace へ漏れないことの検証対象になる。
+_ACCESS_KEY_SENTINEL = "TOOLACCESSKEYSENTINELD5E1"
+_SECRET_KEY_SENTINEL = "TOOL_SECRET_SENTINEL_d5e1"
 _SPAN_NAME = "external_search_call"
 _EXTERNAL_SEARCH_SPAN_NAME = "external_search"
 _ANSWERING_SPAN_NAME = "agent_answering_run"
@@ -43,27 +52,26 @@ def _search_request(
     )
 
 
-class FakeTavilyHttpClient:
+class FakeGatewayHttpClient:
     def __init__(self, outcomes: Sequence[httpx.Response | BaseException]) -> None:
         self._outcomes = list(outcomes)
-        self.calls: list[tuple[str, object, object, float]] = []
+        self.calls: list[tuple[str, object, bytes]] = []
 
     async def post(
         self,
         url: str,
         *,
         headers: object,
-        json: object,
-        timeout: float,
+        content: bytes,
     ) -> httpx.Response:
-        self.calls.append((url, headers, json, timeout))
+        self.calls.append((url, headers, content))
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
 
 
-class BlockingTavilyHttpClient:
+class BlockingGatewayHttpClient:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.cancelled = False
@@ -73,8 +81,7 @@ class BlockingTavilyHttpClient:
         url: str,
         *,
         headers: object,
-        json: object,
-        timeout: float,
+        content: bytes,
     ) -> httpx.Response:
         self.started.set()
         try:
@@ -93,13 +100,39 @@ class StaticAsyncByteStream(httpx.AsyncByteStream):
         yield self._content
 
 
-def _tavily_gateway(
-    client: object, *, api_key: str = "TOOL_SECRET_SENTINEL_d5e1"
-) -> TavilyExternalSearchGateway:
-    return TavilyExternalSearchGateway(
-        api_key=SecretStr(api_key),
+def _gateway(client: object) -> AgentCoreWebSearchGateway:
+    return AgentCoreWebSearchGateway(
+        gateway_url=GATEWAY_URL,
+        region="ap-northeast-1",
         client=client,
     )
+
+
+def _mcp_response(results: list[object]) -> httpx.Response:
+    """MCP の二重 JSON 応答。tool 出力は content[0].text に JSON 文字列で載る。"""
+    return httpx.Response(
+        200,
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "isError": False,
+                "content": [{"type": "text", "text": json.dumps({"results": results})}],
+            },
+        },
+    )
+
+
+@pytest.fixture(autouse=True)
+def _static_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """署名は本物を通し、資格情報だけ固定値にする (実 AWS へ出ない)。"""
+    from botocore.credentials import Credentials
+
+    class _Session:
+        def get_credentials(self) -> Credentials:
+            return Credentials(_ACCESS_KEY_SENTINEL, _SECRET_KEY_SENTINEL)
+
+    monkeypatch.setattr(agentcore_module, "_botocore_session", _Session)
 
 
 def _gateway_spans(capfire: CaptureLogfire) -> list[ReadableSpan]:
@@ -139,9 +172,10 @@ async def test_successful_call_has_one_safe_client_span_in_answer_trace(
         "title": "TOOL_TITLE_SENTINEL_690a",
         "content": "TOOL_CONTENT_SENTINEL_62d8",
         "source": "source-name-sentinel-tool-5c8f.example",
-        "published": "2026-07-19T12:34:56+00:00",
+        "published": "12:34PM, Sunday, July 19 2026, PDT",
         "provider_response": "PROVIDER_RESPONSE_SENTINEL_TOOL_c54a",
-        "secret": "TOOL_SECRET_SENTINEL_d5e1",
+        "access_key": _ACCESS_KEY_SENTINEL,
+        "secret": _SECRET_KEY_SENTINEL,
     }
     requests: list[httpx.Request] = []
 
@@ -153,15 +187,33 @@ async def test_successful_call_has_one_safe_client_span_in_answer_trace(
             stream=StaticAsyncByteStream(
                 json.dumps(
                     {
-                        "provider_internal": sentinels["provider_response"],
-                        "results": [
-                            {
-                                "url": sentinels["url"],
-                                "title": sentinels["title"],
-                                "content": sentinels["content"],
-                                "published_date": sentinels["published"],
-                            }
-                        ],
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "isError": False,
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "provider_internal": sentinels[
+                                                "provider_response"
+                                            ],
+                                            "results": [
+                                                {
+                                                    "url": sentinels["url"],
+                                                    "title": sentinels["title"],
+                                                    "text": sentinels["content"],
+                                                    "publishedDate": sentinels[
+                                                        "published"
+                                                    ],
+                                                }
+                                            ],
+                                        }
+                                    ),
+                                }
+                            ],
+                        },
                     }
                 ).encode()
             ),
@@ -176,7 +228,7 @@ async def test_successful_call_has_one_safe_client_span_in_answer_trace(
             capture_request_body=False,
             capture_response_body=False,
         )
-        gateway = _tavily_gateway(client, api_key=sentinels["secret"])
+        gateway = _gateway(client)
         with logfire.span(_ANSWERING_SPAN_NAME):
             hits = await gateway.search(
                 _search_request(query=sentinels["query"], limit=1)
@@ -212,20 +264,11 @@ async def test_successful_call_has_one_safe_client_span_in_answer_trace(
 async def test_gateway_span_is_child_of_external_search_span(
     capfire: CaptureLogfire,
 ) -> None:
-    gateway = _tavily_gateway(
-        FakeTavilyHttpClient(
+    gateway = _gateway(
+        FakeGatewayHttpClient(
             [
-                httpx.Response(
-                    200,
-                    json={
-                        "results": [
-                            {
-                                "url": "https://example.com/a",
-                                "title": "a",
-                                "content": "content",
-                            }
-                        ]
-                    },
+                _mcp_response(
+                    [{"url": "https://example.com/a", "title": "a", "text": "body"}]
                 )
             ]
         )
@@ -247,13 +290,13 @@ async def test_classified_failure_uses_closed_reason_without_exception_event(
     sentinels = {
         "query": "TOOL_QUERY_SENTINEL_FAILURE_b23d",
         "response": "RESPONSE_BODY_SENTINEL_TOOL_96b2",
-        "secret": "TOOL_SECRET_SENTINEL_FAILURE_3ec0",
+        "access_key": _ACCESS_KEY_SENTINEL,
+        "secret": _SECRET_KEY_SENTINEL,
     }
-    gateway = _tavily_gateway(
-        FakeTavilyHttpClient(
+    gateway = _gateway(
+        FakeGatewayHttpClient(
             [httpx.Response(429, json={"error": sentinels["response"]})]
-        ),
-        api_key=sentinels["secret"],
+        )
     )
 
     with pytest.raises(ExternalSearchProviderError) as raised:
@@ -306,8 +349,8 @@ def test_classified_error_rejects_arbitrary_reason_values() -> None:
 async def test_timeout_cancels_search_without_fabricating_span_values(
     capfire: CaptureLogfire,
 ) -> None:
-    client = BlockingTavilyHttpClient()
-    gateway = _tavily_gateway(client)
+    client = BlockingGatewayHttpClient()
+    gateway = _gateway(client)
     invocation = asyncio.create_task(
         gateway.search(
             _search_request(query="TOOL_QUERY_SENTINEL_CANCEL_651e", limit=1)
