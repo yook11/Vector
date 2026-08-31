@@ -6,7 +6,6 @@ from typing import Literal
 
 from app.agent.runs.types import (
     AgentRunErrorCode,
-    AgentRunProgressStage,
     AgentRunStatus,
 )
 from app.models.agent_run import AgentRun
@@ -26,14 +25,6 @@ ResearchRunErrorCodeValue = Literal[
     "stale",
     "cancelled",
 ]
-ResearchProgressStageValue = Literal[
-    "safety_check",
-    "context_resolution",
-    "planning",
-    "evidence_collection",
-    "evidence_review",
-    "answering",
-]
 
 
 def build_research_run_response(*, run: AgentRun) -> ResearchRunResponse:
@@ -42,7 +33,6 @@ def build_research_run_response(*, run: AgentRun) -> ResearchRunResponse:
         thread_id=run.thread_id,
         status=_run_status_value(run.status),
         error_code=_run_error_code_value(run.error_code),
-        progress_stage=_run_progress_stage_value(run.progress_stage),
         attempt_epoch=run.attempt_epoch,
     )
 
@@ -52,7 +42,6 @@ def build_research_message_run(*, run: AgentRun) -> ResearchMessageRun:
         run_id=run.id,
         status=_run_status_value(run.status),
         error_code=_run_error_code_value(run.error_code),
-        progress_stage=_run_progress_stage_value(run.progress_stage),
     )
 
 
@@ -84,21 +73,3 @@ def _run_error_code_value(value: str | None) -> ResearchRunErrorCodeValue | None
             return "stale"
         case AgentRunErrorCode.CANCELLED:
             return "cancelled"
-
-
-def _run_progress_stage_value(value: str | None) -> ResearchProgressStageValue | None:
-    if value is None:
-        return None
-    match AgentRunProgressStage(value):
-        case AgentRunProgressStage.SAFETY_CHECK:
-            return "safety_check"
-        case AgentRunProgressStage.CONTEXT_RESOLUTION:
-            return "context_resolution"
-        case AgentRunProgressStage.PLANNING:
-            return "planning"
-        case AgentRunProgressStage.EVIDENCE_COLLECTION:
-            return "evidence_collection"
-        case AgentRunProgressStage.EVIDENCE_REVIEW:
-            return "evidence_review"
-        case AgentRunProgressStage.ANSWERING:
-            return "answering"

@@ -100,7 +100,6 @@ async def _seed_running_run(
             thread_id=thread.id,
             user_message_id=current_question.id,
             status="running",
-            progress_stage="evidence_collection",
             started_at=_NOW - timedelta(minutes=21),
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,
@@ -148,9 +147,8 @@ async def test_mark_policy_blocked_updates_only_the_current_running_attempt(
         run.status,
         run.assistant_message_id,
         run.error_code,
-        run.progress_stage,
         run.completed_at,
-    ) == ("policy_blocked", None, None, None, _NOW)
+    ) == ("policy_blocked", None, None, _NOW)
     assert thread is not None and thread.updated_at == _THREAD_UPDATED_AT
     assert messages == [("user", 1), ("assistant", 2), ("user", 3)]
     assert source_count == 1

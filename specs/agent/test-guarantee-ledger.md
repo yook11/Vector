@@ -381,8 +381,6 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 | PROBE-03 | DB/session障害をfail-openで短期cacheし、safe log/metricだけを出す | `runs/test_execution_probe.py` | 維持 |
 | PROBE-04 | runningかつ同epochだけtrue、cancel/reacquire後の旧probeはfalse | `runs/test_execution_probe.py`＋実DB | 統合維持 |
 | RP-EXEC-01 | existence queryはSELECT 1と必要条件だけでcommitしない | probe test内 | Repository query testへ移設 |
-| PROG-01 | 同一epochのrunningだけstageを更新しterminal/newer attemptを変えない | `runs/test_progress.py` | 維持 |
-| PROG-02 | progress更新失敗は回答を落とさずPII-free warningへ変換する | `runs/test_progress.py` | 維持 |
 | CITE-01 | citation marker/source差分を双方向・重複除去後に報告する | `runs/test_citation_integrity.py` | 維持 |
 
 ## Worker Task
@@ -525,7 +523,6 @@ glob単位で全62 test moduleを台帳IDへ対応づける。個別PRでは、�
 | `running/test_retrieval_dispatch.py` | EC-01/02, EX-RES-01, IS-08 | `AnsweringRunner` dispatch / failure / resource scope正本 |
 | `threads/test_repository.py` | TH-HIST-* | 実DB owner維持、worker重複を吸収 |
 | `runs/test_execution_probe.py` | PROBE-*, RP-EXEC-01 | probe policy維持、repository queryを移設候補 |
-| `runs/test_progress.py` | PROG-* | 維持 |
 | `runs/test_citation_integrity.py` | CITE-01 | 維持 |
 | `test_contract.py` | CT-* | result contract移設、AnswerQuestionInputはPR5置換 |
 | `test_agent_run_task.py` | WK-*, RP-*, TH-HIST, RP-MAP, TH-PROJ | worker4責任＋repository/projectionへ分解 |

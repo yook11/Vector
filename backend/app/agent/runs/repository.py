@@ -191,7 +191,6 @@ class AgentRunRepository:
                 status=AgentRunStatus.POLICY_BLOCKED.value,
                 assistant_message_id=None,
                 error_code=None,
-                progress_stage=None,
                 completed_at=now,
             )
             .execution_options(synchronize_session=False)
@@ -282,7 +281,6 @@ class AgentRunRepository:
                 status=AgentRunStatus.RUNNING.value,
                 started_at=now,
                 attempt_epoch=AgentRun.attempt_epoch + 1,
-                progress_stage=None,
             )
             .returning(AgentRun.attempt_epoch)
             .execution_options(synchronize_session=False)

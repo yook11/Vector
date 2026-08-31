@@ -43,8 +43,6 @@ function threadWithRun(
           runId,
           status,
           errorCode: status === "failed" ? "enqueue_failed" : null,
-          progressStage:
-            status === "queued" || status === "running" ? "answering" : null,
         },
       },
     ],

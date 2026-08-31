@@ -258,7 +258,6 @@ export async function installResearchContinuityBrowserHarness(
       threadId: fixture.threadId,
       status: "running",
       errorCode: null,
-      progressStage: "answering",
       attemptEpoch: 1,
       recentEvents: [],
     } satisfies ResearchRunResponse;

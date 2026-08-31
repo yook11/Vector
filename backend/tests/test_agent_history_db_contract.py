@@ -137,7 +137,6 @@ async def _insert_run(
     user_message_id: uuid.UUID,
     assistant_message_id: uuid.UUID | None = None,
     status: str = "queued",
-    progress_stage: str | None = None,
     error_code: str | None = None,
 ) -> uuid.UUID:
     result = await session.execute(
@@ -147,7 +146,6 @@ async def _insert_run(
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
             status=status,
-            progress_stage=progress_stage,
             error_code=error_code,
         )
         .returning(AGENT_RUNS.c.id)
@@ -1170,7 +1168,7 @@ async def test_source_with_empty_title_violates_title_not_empty_check(
 
 
 # ---------------------------------------------------------------------------
-# Test 16: check 系範囲外 (role / status / progress_stage / kind)
+# Test 16: check 系範囲外 (role / status / kind)
 # ---------------------------------------------------------------------------
 
 
@@ -1206,28 +1204,6 @@ async def test_run_with_invalid_status_violates_status_check(
         ),
         sqlstate=CHECK_VIOLATION,
         constraint_name="ck_agent_runs_status",
-    )
-
-
-@pytest.mark.asyncio
-async def test_run_with_invalid_progress_stage_violates_progress_stage_check(
-    db_session: AsyncSession,
-) -> None:
-    thread_id = await _insert_thread(db_session)
-    user_message_id = await _insert_message(
-        db_session, thread_id=thread_id, seq=1, role="user", content="q"
-    )
-
-    await _assert_integrity_violation(
-        db_session,
-        insert(AGENT_RUNS).values(
-            thread_id=thread_id,
-            user_message_id=user_message_id,
-            status="running",
-            progress_stage="drafting",
-        ),
-        sqlstate=CHECK_VIOLATION,
-        constraint_name="ck_agent_runs_progress_stage",
     )
 
 

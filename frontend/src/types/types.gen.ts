@@ -720,10 +720,6 @@ export type ResearchMessageRun = {
      * Errorcode
      */
     errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled' | null;
-    /**
-     * Progressstage
-     */
-    progressStage: 'safety_check' | 'context_resolution' | 'planning' | 'evidence_collection' | 'evidence_review' | 'answering' | null;
 };
 
 /**
@@ -866,10 +862,6 @@ export type ResearchRunResponse = {
      * Errorcode
      */
     errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled' | null;
-    /**
-     * Progressstage
-     */
-    progressStage: 'safety_check' | 'context_resolution' | 'planning' | 'evidence_collection' | 'evidence_review' | 'answering' | null;
     /**
      * Attemptepoch
      */

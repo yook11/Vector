@@ -64,13 +64,6 @@ class AgentRun(Base):
             name="ck_agent_runs_status",
         ),
         CheckConstraint(
-            "progress_stage IN ("
-            "'safety_check', 'context_resolution', 'planning', "
-            "'evidence_collection', 'evidence_review', 'answering'"
-            ")",
-            name="ck_agent_runs_progress_stage",
-        ),
-        CheckConstraint(
             "attempt_epoch >= 0",
             name="ck_agent_runs_attempt_epoch_nonnegative",
         ),
@@ -110,7 +103,6 @@ class AgentRun(Base):
         PgUUID(as_uuid=True), nullable=True
     )
     status: Mapped[str] = mapped_column(String(32))
-    progress_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     error_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

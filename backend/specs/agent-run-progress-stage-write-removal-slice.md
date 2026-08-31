@@ -9,7 +9,7 @@ Status: Implemented — 2026-08-31
 
 工程の表示正本は Redis Stream（SSE）である。本 slice は worker が
 `agent_runs.progress_stage` を都度 UPDATE するのを止める。
-列と API の `progressStage` は残し、drop は後続の掃除とする。
+列と API の `progressStage` は残し、drop は `agent-run-progress-stage-drop-slice.md` が行う。
 
 ## Work Definition
 

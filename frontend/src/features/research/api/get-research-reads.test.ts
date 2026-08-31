@@ -76,7 +76,6 @@ describe("Research read cache contract", () => {
       threadId: THREAD_ID,
       status: "running",
       errorCode: null,
-      progressStage: "answering",
       attemptEpoch: 1,
       recentEvents: [],
     } satisfies ResearchRunResponse;
