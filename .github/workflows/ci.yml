@@ -73,6 +73,7 @@ jobs:
               - 'frontend/**'
             ci:
               - '.github/workflows/**'
+              - '.github/scripts/**'
             # 自動 release を止める判定 (本 slice は migration を手動運用)。
             migrations:
               - 'backend/alembic/versions/**'
