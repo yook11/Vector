@@ -79,58 +79,41 @@ class RecordingRedis:
         "answering",
     ],
 )
-async def test_stage_reporter_fans_out_each_stage_without_mutation(
+async def test_stage_reporter_publishes_each_stage_without_mutation(
     stage: AnswerProgressStage,
 ) -> None:
-    progress_writer = AsyncMock()
     stream_publisher = AsyncMock()
     stream_publisher.publish.return_value = None
-    reporter = reporters.AgentRunLiveStageReporter(progress_writer, stream_publisher)
+    reporter = reporters.AgentRunLiveStageReporter(stream_publisher)
 
     await reporter.stage_changed(stage)
 
-    progress_writer.stage_changed.assert_awaited_once_with(stage)
     stream_publisher.publish.assert_awaited_once_with(
         AgentRunLiveStreamStageEvent(stage=stage)
     )
 
 
 @pytest.mark.asyncio
-async def test_stage_reporter_attempts_stream_when_progress_writer_raises() -> None:
-    progress_writer = AsyncMock()
-    progress_writer.stage_changed.side_effect = RuntimeError("database unavailable")
+async def test_stage_reporter_does_not_raise_when_stream_publish_fails() -> None:
     stream_publisher = AsyncMock()
-    reporter = reporters.AgentRunLiveStageReporter(progress_writer, stream_publisher)
+    stream_publisher.publish.side_effect = RuntimeError("stream unavailable")
+    reporter = reporters.AgentRunLiveStageReporter(stream_publisher)
 
-    await reporter.stage_changed("planning")
+    await reporter.stage_changed("evidence_collection")
 
     stream_publisher.publish.assert_awaited_once_with(
-        AgentRunLiveStreamStageEvent(stage="planning")
+        AgentRunLiveStreamStageEvent(stage="evidence_collection")
     )
 
 
 @pytest.mark.asyncio
-async def test_stage_reporter_attempts_progress_writer_when_stream_raises() -> None:
-    progress_writer = AsyncMock()
+async def test_stage_reporter_does_not_raise_on_invalid_stage() -> None:
     stream_publisher = AsyncMock()
-    stream_publisher.publish.side_effect = RuntimeError("stream unavailable")
-    reporter = reporters.AgentRunLiveStageReporter(progress_writer, stream_publisher)
-
-    await reporter.stage_changed("evidence_collection")
-
-    progress_writer.stage_changed.assert_awaited_once_with("evidence_collection")
-
-
-@pytest.mark.asyncio
-async def test_stage_projection_failure_still_attempts_progress_writer() -> None:
-    progress_writer = AsyncMock()
-    stream_publisher = AsyncMock()
-    reporter = reporters.AgentRunLiveStageReporter(progress_writer, stream_publisher)
+    reporter = reporters.AgentRunLiveStageReporter(stream_publisher)
     invalid_stage = cast(AnswerProgressStage, "invalid")
 
     await reporter.stage_changed(invalid_stage)
 
-    progress_writer.stage_changed.assert_awaited_once_with(invalid_stage)
     stream_publisher.publish.assert_not_awaited()
 
 
@@ -142,7 +125,7 @@ async def test_stage_reporter_uses_stream_publishers_attempt_epoch() -> None:
         RUN_ID,
         ATTEMPT_EPOCH,
     )
-    reporter = reporters.AgentRunLiveStageReporter(AsyncMock(), stream_publisher)
+    reporter = reporters.AgentRunLiveStageReporter(stream_publisher)
 
     await reporter.stage_changed("answering")
 

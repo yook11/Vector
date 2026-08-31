@@ -42,7 +42,6 @@ from app.agent.runs.contracts import (
 )
 from app.agent.runs.daily_quota import observability as daily_quota_observability
 from app.agent.runs.execution_probe import AgentRunExecutionProbe
-from app.agent.runs.progress import AgentRunProgressWriter
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.agent.runtime.contract import AgentResponseInvalidError
@@ -179,14 +178,7 @@ async def run_agent_answer(
             try:
                 await events.reset()
                 activity_reporter = AgentRunLiveActivityReporter(events, stream_events)
-                progress_reporter = AgentRunLiveStageReporter(
-                    AgentRunProgressWriter(
-                        session_factory,
-                        run_id,
-                        attempt_epoch,
-                    ),
-                    stream_events,
-                )
+                progress_reporter = AgentRunLiveStageReporter(stream_events)
                 as_of = datetime.now(UTC)
                 history = await _read_history(
                     session_factory,

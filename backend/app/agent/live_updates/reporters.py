@@ -8,7 +8,6 @@ from collections.abc import Awaitable
 from app.agent.contract import (
     AnswerEventReporter,
     AnswerProgressEvent,
-    AnswerProgressReporter,
     AnswerProgressStage,
 )
 from app.agent.live_updates.stream import (
@@ -21,19 +20,11 @@ __all__ = ["AgentRunLiveActivityReporter", "AgentRunLiveStageReporter"]
 
 
 class AgentRunLiveStageReporter:
-    def __init__(
-        self,
-        progress_writer: AnswerProgressReporter,
-        stream_publisher: AgentRunLiveStreamPublisher,
-    ) -> None:
-        self._progress_writer = progress_writer
+    def __init__(self, stream_publisher: AgentRunLiveStreamPublisher) -> None:
         self._stream_publisher = stream_publisher
 
     async def stage_changed(self, stage: AnswerProgressStage) -> None:
-        await _fan_out(
-            self._progress_writer.stage_changed(stage),
-            self._publish_stream(stage),
-        )
+        await _fan_out(self._publish_stream(stage))
 
     async def _publish_stream(self, stage: AnswerProgressStage) -> None:
         await self._stream_publisher.publish(AgentRunLiveStreamStageEvent(stage=stage))
