@@ -186,6 +186,15 @@ jobs:
           ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
+      # rollout roleでartifact側のcodeを実行しないため、検証器はworkflow自身の
+      # revisionから分離して取得する。古いrelease SHAにscriptが無くても検証できる。
+      - name: Check out rollout verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .rollout-control
+          persist-credentials: false
+
       - id: tf
         name: Read values from Terraform variables
         run: |
@@ -209,7 +218,8 @@ jobs:
           aws-region: ${{ steps.tf.outputs.region }}
           mask-aws-account-id: true
 
-      - name: Roll out services
+      - id: rollout
+        name: Roll out services
         env:
           CLUSTER: ${{ steps.tf.outputs.name_prefix }}
           IMAGE_TAG: ${{ env.RELEASE_SHA }}
@@ -231,6 +241,7 @@ jobs:
 
           # 1 パス目: 全段の revision を登録するだけ。ここで落ちても本番は無傷。
           registered=""
+          expected_task_definitions='{}'
           for svc in $services; do
             # family の最新 ACTIVE revision を土台にする。service が今指している
             # revision ではなく family を見るのは、Terraform 由来の env / secrets の
@@ -259,10 +270,19 @@ jobs:
                 --query 'taskDefinition.taskDefinitionArn' --output text
             )
             registered+="$svc $arn"$'\n'
+            expected_task_definitions=$(
+              jq --arg service "$svc" --arg arn "$arn" \
+                '. + {($service): $arn}' <<<"$expected_task_definitions"
+            )
           done
 
           # 2 パス目: 実際に本番を入れ替える。1 パス目で全段が揃っているので、
           # 途中で落ちても「一部だけ新 revision」で終わる窓が短い。
+          expected_file="$RUNNER_TEMP/expected-task-definitions.json"
+          printf '%s\n' "$expected_task_definitions" > "$expected_file"
+          rollout_started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          echo "expected-file=$expected_file" >> "$GITHUB_OUTPUT"
+          echo "rollout-started-at=$rollout_started_at" >> "$GITHUB_OUTPUT"
           while read -r svc arn; do
             [ -n "$svc" ] || continue
             aws ecs update-service \
@@ -270,12 +290,22 @@ jobs:
             echo "- \`$svc\` -> \`${arn##*/}\`" >> "$GITHUB_STEP_SUMMARY"
           done <<<"$registered"
 
-          # waiter の上限は 15 秒 x 40 回 = 10 分 (botocore 側の固定値で、job の
-          # timeout-minutes より先に効く)。7 段同時の rolling は超えうるので 1 回だけ
-          # 待ち直す。それでも安定しなければ失敗させる。
-          # shellcheck disable=SC2086
-          if ! aws ecs wait services-stable --cluster "$CLUSTER" --services $services; then
-            echo "::warning::10 分で安定しなかった。もう 1 度だけ待つ"
-            # shellcheck disable=SC2086
-            aws ecs wait services-stable --cluster "$CLUSTER" --services $services
-          fi
+      - name: Verify rollout completion
+        if: >-
+          ${{ always() && steps.rollout.outputs.expected-file != '' &&
+              steps.rollout.outputs.rollout-started-at != '' }}
+        env:
+          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
+          IMAGE_TAG: ${{ env.RELEASE_SHA }}
+          EXPECTED_TASK_DEFINITIONS: ${{ steps.rollout.outputs.expected-file }}
+          ROLLOUT_STARTED_AT: ${{ steps.rollout.outputs.rollout-started-at }}
+        run: |
+          set -euo pipefail
+          python3 .rollout-control/.github/scripts/verify_ecs_rollout.py \
+            --cluster "$CLUSTER" \
+            --image-tag "$IMAGE_TAG" \
+            --expected-task-definitions "$EXPECTED_TASK_DEFINITIONS" \
+            --rollout-started-at "$ROLLOUT_STARTED_AT" \
+            --poll-seconds 15 \
+            --timeout-seconds 1200 \
+            --summary-file "$GITHUB_STEP_SUMMARY"

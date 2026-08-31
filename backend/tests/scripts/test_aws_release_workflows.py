@@ -13,6 +13,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CI_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _RELEASE_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "aws-app-images.yml"
 
+pytestmark = pytest.mark.unit
+
 
 class _WorkflowLoader(yaml.SafeLoader):
     """GitHub Actionsの`on`を真偽値へ変換せず安全に読むloader。"""
@@ -136,6 +138,7 @@ def test_ci_dispatch_job_has_only_repository_workflow_permission() -> None:
     assert (
         changes["outputs"]["aws_infra"],  # type: ignore[index]
         "infra/aws/**" in changes["steps"][1]["with"]["filters"],  # type: ignore[index]
+        ".github/scripts/**" in changes["steps"][1]["with"]["filters"],  # type: ignore[index]
         ".github/workflows/aws-terraform-apply.yml"
         in changes["steps"][1]["with"]["filters"],  # type: ignore[index]
         job["permissions"],  # type: ignore[index]
@@ -152,6 +155,7 @@ def test_ci_dispatch_job_has_only_repository_workflow_permission() -> None:
         "AWS_ROLLOUT_ROLE_ARN" not in workflow_text,
     ) == (
         "${{ steps.filter.outputs.aws_infra }}",
+        True,
         True,
         True,
         {"actions": "write", "contents": "read"},
@@ -176,6 +180,20 @@ def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
         "release_sha"
     ]
     jobs = workflow["jobs"]  # type: ignore[index]
+    rollout_steps = jobs["rollout"]["steps"]  # type: ignore[index]
+    rollout_step = next(
+        step for step in rollout_steps if step.get("name") == "Roll out services"
+    )
+    verifier_checkout = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Check out rollout verifier"
+    )
+    verifier = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Verify rollout completion"
+    )
 
     assert (
         release_input,
@@ -187,6 +205,20 @@ def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
         "IMAGE_TAG: ${{ env.RELEASE_SHA }}" in workflow_text,
         "${{ github.sha }}" not in workflow_text,
         "workflow_call" not in workflow["on"],  # type: ignore[operator]
+        "aws ecs wait services-stable" not in workflow_text,
+        "python3 .rollout-control/.github/scripts/verify_ecs_rollout.py"
+        in verifier["run"],
+        "--poll-seconds 15" in verifier["run"],
+        "--timeout-seconds 1200" in verifier["run"],
+        verifier["env"]["EXPECTED_TASK_DEFINITIONS"],
+        "grep -vx 'proxy'" in rollout_step["run"],
+        "expected_task_definitions" in rollout_step["run"],
+        'echo "expected-file=$expected_file"' in rollout_step["run"],
+        'echo "rollout-started-at=$rollout_started_at"' in rollout_step["run"],
+        rollout_step["run"].index('echo "expected-file=$expected_file"')
+        < rollout_step["run"].index("while read -r svc arn"),
+        "always()" in verifier["if"],
+        verifier_checkout["with"],
     ) == (
         {
             "description": "空なら選択した ref の commit SHA を使う。",
@@ -201,4 +233,20 @@ def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
         True,
         True,
         True,
+        True,
+        True,
+        True,
+        True,
+        "${{ steps.rollout.outputs.expected-file }}",
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        {
+            "ref": "${{ github.workflow_sha }}",
+            "path": ".rollout-control",
+            "persist-credentials": "false",
+        },
     )
