@@ -363,10 +363,15 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
         1,
         2,
     ]
-    assert [provider["attributes"]["result"] for provider in providers] == [
-        "succeeded",
-        "invalid_response",
-        "succeeded",
+    assert [provider["attributes"]["status"] for provider in providers] == [
+        "completed",
+        "failed",
+        "completed",
+    ]
+    assert [provider["attributes"].get("error.type") for provider in providers] == [
+        None,
+        "response_not_json",
+        None,
     ]
     assert (
         providers[0]["parent"]["span_id"]

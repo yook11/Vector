@@ -103,12 +103,13 @@ async def test_success_span_is_client_with_allowlisted_attributes_and_no_text(
         "agent_name",
         "attempt_number",
         "prompt_version",
-        "result",
+        "status",
     }
     assert attributes["agent_name"] == "trace_agent"
     assert attributes["attempt_number"] == 2
     assert attributes["prompt_version"] == "prompt-version-sentinel-v1"
-    assert attributes["result"] == "succeeded"
+    assert attributes["status"] == "completed"
+    assert "result" not in attributes
     assert attributes["gen_ai.operation.name"] == "generate_content"
     assert attributes["gen_ai.provider.name"] == "gcp.gemini"
     assert attributes["gen_ai.request.model"] == "gemini-trace-model"
@@ -184,7 +185,9 @@ async def test_blocked_response_records_usage_and_classified_error_span(
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    assert attributes["result"] == "blocked"
+    assert attributes["status"] == "failed"
+    assert "result" not in attributes
+    assert attributes["error.type"] == AIProviderOutputBlockedError.CODE
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
@@ -197,7 +200,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
         "agent_name",
         "attempt_number",
         "prompt_version",
-        "result",
+        "status",
     }
     _assert_no_model_visible_text(span, "MODEL_OUTPUT_SENTINEL_BLOCKED_31d9")
 
@@ -205,13 +208,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
 async def test_truncated_response_records_usage_and_is_not_succeeded(
     capfire: CaptureLogfire,
 ) -> None:
-    """R1条件5: MAX_TOKENSはsucceededにならず、他の分類済みerrorと同じ扱いになる。
-
-    stream経路(_stream_fragments)ではAIProviderOutputTruncatedErrorは
-    isinstance(..., AIProviderOutputBlockedError)がFalseのため"provider_error"に
-    分類される(app/agent/runtime/gemini.py L298-303)。non-stream側もこの対称を
-    保つ前提で"provider_error"を期待値にする。
-    """
+    """MAX_TOKENS は分類済み失敗として error.type で名乗る。"""
     client = FakeGeminiClient(
         [finished_response("MAX_TOKENS", usage_metadata=_full_usage())]
     )
@@ -225,8 +222,9 @@ async def test_truncated_response_records_usage_and_is_not_succeeded(
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    assert attributes["result"] != "succeeded"
-    assert attributes["result"] == "provider_error"
+    assert "result" not in attributes
+    assert attributes["status"] == "failed"
+    assert attributes["error.type"] == AIProviderOutputTruncatedError.CODE
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
@@ -239,7 +237,7 @@ async def test_truncated_response_records_usage_and_is_not_succeeded(
         "agent_name",
         "attempt_number",
         "prompt_version",
-        "result",
+        "status",
     }
 
 
@@ -265,12 +263,9 @@ async def test_invalid_response_records_usage_before_classification(
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    assert attributes["result"] == "invalid_response"
-    assert attributes["gen_ai.usage.input_tokens"] == 11
-    assert attributes["gen_ai.usage.output_tokens"] == 7
-    assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
-    assert attributes["gen_ai.usage.reasoning.output_tokens"] == 2
-    assert isinstance(attributes["error.type"], str)
+    assert "result" not in attributes
+    assert attributes["status"] == "failed"
+    assert attributes["error.type"] == AgentResponseDefect.RESPONSE_NOT_JSON
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
     assert exception_events(span) == []
@@ -278,7 +273,7 @@ async def test_invalid_response_records_usage_before_classification(
         "agent_name",
         "attempt_number",
         "prompt_version",
-        "result",
+        "status",
     }
     _assert_no_model_visible_text(span, "MODEL_OUTPUT_SENTINEL_INVALID_JSON_041b")
 
@@ -313,8 +308,9 @@ async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
     attributes = dict(span.attributes or {})
     observed_span_text = span_text(span)
     assert exc_info.value.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    assert attributes["result"] == "invalid_response"
-    assert isinstance(attributes["error.type"], str)
+    assert "result" not in attributes
+    assert attributes["status"] == "failed"
+    assert attributes["error.type"] == AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
@@ -326,7 +322,7 @@ async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
         "agent_name",
         "attempt_number",
         "prompt_version",
-        "result",
+        "status",
     }
     _assert_no_model_visible_text(
         span,
@@ -352,8 +348,9 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    assert attributes["result"] == "provider_error"
-    assert isinstance(attributes["error.type"], str)
+    assert "result" not in attributes
+    assert attributes["status"] == "failed"
+    assert attributes["error.type"] == AIProviderNetworkError.CODE
     assert not any(key.startswith("gen_ai.usage.") for key in attributes)
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
@@ -362,7 +359,7 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
         "agent_name",
         "attempt_number",
         "prompt_version",
-        "result",
+        "status",
     }
     _assert_no_model_visible_text(span, "PROVIDER_ERROR_SENTINEL_267e")
 
@@ -387,6 +384,8 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     events = exception_events(span)
     assert exc_info.value is error
     assert "result" not in attributes
+    assert attributes["status"] == "failed"
+    assert attributes["error.type"] == "unclassified"
     assert len(events) == 1
     assert str(events[0].attributes["exception.type"]).endswith("RuntimeError")
     assert events[0].attributes["exception.message"] == "[redacted]"
@@ -397,6 +396,7 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
         "agent_name",
         "attempt_number",
         "prompt_version",
+        "status",
     }
     _assert_no_model_visible_text(span, "UNCLASSIFIED_EXCEPTION_SENTINEL_a17f")
 

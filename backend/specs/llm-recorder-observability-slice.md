@@ -2,8 +2,10 @@
 
 更新日: 2026-08-30
 
-実装状況: Usage 所有権の移動済み。outcome の失敗 `result` 畳みと
-`failure_code` 済み。Recorder は context manager。span は Recorder が開く。
+実装状況: Usage 所有権の移動済み。metric の `result` を外し、終わり方は
+`status`、失敗の中身は `failure_code`（想定外は閉じた `unclassified`）。
+provider span の `result` 桶も外し、終わり方は span 属性 `status`、失敗の中身は
+`error.type`（= `failure_code`）。Recorder は context manager。span は Recorder が開く。
 成功は context の正常終了。`LlmAttemptFailed` は Runtime が所有する。
 `LlmAttemptSucceeded` と `LlmCall` / `start`/`end` は削除済み。
 `PhaseCall` / `ToolCall` は工程 Recorder とは別判断で残す。
@@ -43,11 +45,13 @@ context manager へ分け、成功型をたたんでこの混在を解消する�
 - Gemini stream は `mode="stream"`。Recorder が
   `_TRACER.start_span(..., context=parent_context)` の detached span を開き、
   途中停止時も見た usage を残す。
-- Recorder は `Usage` と分類済み失敗だけを受け取る。SDK usage 欄名の写像は各 Runtime。
-- 分類済み失敗の正本は Runtime の `LlmAttemptFailed(failure_code)`。
+- Recorder は `Usage` と失敗（分類済みまたは `unclassified`）だけを受け取る。
+  SDK usage 欄名の写像は各 Runtime。
+- 失敗の正本は Runtime の `LlmAttemptFailed(failure_code)`。想定できる失敗は
+  `CODE` / `defect`、想定外だが provider 呼び出し中の失敗は `unclassified`。
   成功型は持たない。成功は context の例外なし終了（結果を返したこと）。
-  span の `result` 桶（`blocked` / `invalid_response` / `provider_error`）は
-  Runtime が `report_outcome(..., span_result=)` で渡す観測語彙であり、失敗型には載せない。
+  span に `result` 桶は付けない。終わり方は `status`（`PhaseStatus`）、失敗の中身は
+  `error.type`（= `failure_code`）。`report_outcome` は失敗型だけを受ける。
 - `attempt_number` は LLM metric 属性に載せる。
 - `PhaseCall` / `ToolCall` は `recording/types.py` と export / 型テスト以外に利用者がいない。
 - `record_ai_provider_exhausted` は両 Runtime が分類済み枯渇を直接 emit しており、
@@ -65,17 +69,21 @@ context manager へ分け、成功型をたたんでこの混在を解消する�
 - Recorder は非同期 context manager。通常 call と streaming を同じ Protocol で扱い、
   `mode` で span lifecycle だけを分ける。
 - streaming の detached span と、途中停止時の usage 保持を維持する。
-- 分類済み成功・失敗だけを outcome counter へ記録する。
-- duration は未分類例外・停止を含む全 attempt を記録する。
-- 分類済み失敗には `failure_code` を付け、span では `error.type` へ写す。
+- 成功と報告済み失敗（分類済み / `unclassified`）を outcome counter へ記録する。
+  停止と、Runtime が報告していない例外は打たない。
+- duration は未分類・停止・報告なし例外を含む全 attempt を記録する。
+- 失敗には `failure_code` を付け、span では `error.type` へ写す。例外クラス名は
+  `failure_code` にしない。
 - `attempt_number` を LLM metric へ追加する。
 - metric 名（`vector.agent.llm_call.outcome` / `.duration` / `.tokens`）は維持する。
-  分類済み失敗の outcome は `result=failed` と `failure_code`。span の `result`
-  語彙（`succeeded` / `blocked` / `invalid_response` / `provider_error`）は維持する。
+  metric 属性に `result` は付けない。終わり方は `status`、失敗の中身は `failure_code`。
+  span にも `result` は付けない。終わり方は span 属性 `status`、失敗の中身は
+  `error.type`。
 - span・clock・outcome / duration / tokens の各 metric 障害は独立して止め、本処理へ出さない。
 - prompt、入力、応答本文、例外自由文を span・metric に載せない。
-- 分類済み失敗の span に exception event を付けない。未分類例外は既存どおり exception event
-  を残し、`result` を捏造しない。
+- 分類済み失敗の span に exception event を付けない。`unclassified` は exception event
+  を残し、`error.type=unclassified` にする。報告のない例外は Recorder が
+  `unclassified` を捏造せず、`error.type` も付けない。
 
 ### Non-goals
 
@@ -94,6 +102,7 @@ context manager へ分け、成功型をたたんでこの混在を解消する�
 - Recorder は provider SDK の usage 形を知らない。
 - 既存の provider-attempt span 契約、streaming detached span、途中停止時 usage、
   例外同一性、情報非露出がテストで確認される。
+- provider span に `result` は無い。終わり方は `status`、失敗の中身は `error.type`。
 - `LlmCall` と `start`/`end` API を削除する。`PhaseCall` / `ToolCall` は残す。
 
 ## 現状の境界
@@ -113,13 +122,13 @@ LLM 呼び出し本体は Runtime 単位で分かれている。
 ```text
 Runtime.call / _stream_fragments
   ├─ provider 固有: request, SDK call, 例外翻訳, 結論分類, SDK usage → Usage
-  ├─ provider 固有: GenAI identity と span_result を Recorder へ渡す
-  └─ async with record(...) / report_usage / report_outcome(失敗だけ)
+  ├─ provider 固有: GenAI identity を Recorder へ渡す
+  └─ async with record(...) / report_usage / report_outcome(失敗)
 
 LlmCallRecorder
   ├─ mode=call: 現行 context の子として agent_provider_call を開く
   ├─ mode=stream: 渡された parent_context から detached span を開く
-  └─ 抜け方 → span result / error.type / duration / outcome / tokens
+  └─ 抜け方 → span status / error.type / duration / outcome / tokens
 ```
 
 成功は結果を返すことなので、Recorder は例外なしで抜けたことを成功とみなす。
@@ -134,27 +143,27 @@ LlmCallRecorder
 LlmAttemptFailed(failure_code)   # Runtime が所有する
 ```
 
-- 失敗したことは型で表し、metric の失敗 `result` は `failed` に畳む。
-  span の `result` 桶（`blocked` / `invalid_response` / `provider_error`）は
-  Runtime が `span_result` として渡し、結論型には載せない。
-- `failure_code` は既存の `span_error_type` と同じ写像。provider error は `CODE`、
-  `AgentResponseInvalidError` は `defect.value`。空文字は拒否する。
-  成功・停止・未分類にはキーも `"none"` も付けない。duration / tokens にも付けない。
-- 未分類例外と停止は結論型を作らない。Recorder が例外から status を決める。
-- `report_outcome` は分類済み失敗だけを受ける。成功型は作らない。
+- 想定できる失敗は `CODE` / `defect`。想定外だが provider 呼び出し中の失敗は
+  閉じた `unclassified`。例外クラス名は `failure_code` にしない。
+- span に `result` は付けない。終わり方は `status`、失敗の中身は `error.type`。
+- `failure_code` は空文字を拒否する。成功・停止にはキーも `"none"` も付けない。
+  duration / tokens にも付けない。
+- 停止は結論型を作らない。Recorder が cancel / GeneratorExit から status を決める。
+- Runtime が報告していない例外は欠陥経路とし、Recorder は `unclassified` を捏造しない。
+- `report_outcome` は失敗だけを受ける。成功型は作らない。
 
 ### Recording handle
 
 ```text
 LlmCallRecording
   report_usage(usage)
-  report_outcome(failure, *, span_result)
+  report_outcome(failure)
 ```
 
 - `report_usage` は何回呼んでもよい。stream は chunk ごとに上書きし、最後に存在した
   `Usage` を採用する。欠損欄は `None` のままにし、0 で埋めない。
 - 途中停止でも、それまでに報告した usage は残す。
-- `report_outcome` は分類できた失敗のときだけ呼ぶ。成功は呼ばない。
+- `report_outcome` は失敗のとき呼ぶ。成功は呼ばない。失敗型だけを受ける。
 
 ### Recorder Protocol
 
@@ -188,12 +197,13 @@ OTel 値である。Recorder は `"gemini"` から `"gcp.gemini"` を推測し�
 
 ### 終了分類
 
-| 終わり方 | status | outcome counter | duration | span |
-|---|---|---|---|---|
-| 例外なし（結果を返した） | completed | `result=succeeded` | 記録する | `result=succeeded` |
-| `LlmAttemptFailed` を報告して raise | failed | `result=failed` + `failure_code` | `result=failed`（failure_code なし） | `span_result` 桶 + `error.type`、ERROR、exception event なし |
-| 未分類例外 | failed | 打たない | `result=none` で記録 | `result` なし、exception event あり |
-| 停止（cancel / GeneratorExit / stream aclose） | stopped | 打たない | `result=none` で記録 | `result` なし、ERROR にしない |
+| 終わり方 | status | outcome counter | duration | span `status` | `error.type` | OTel | exception event |
+|---|---|---|---|---|---|---|---|
+| 例外なし（結果を返した） | completed | 打つ | 記録する | completed | 付けない | UNSET | なし |
+| 分類できた失敗を報告して raise | failed | `failure_code` 付き | 記録する（failure_code なし） | failed | CODE / defect | ERROR | なし |
+| `unclassified` を報告して raise | failed | `failure_code=unclassified` | 記録する（failure_code なし） | failed | unclassified | ERROR | あり（秘匿） |
+| 停止（cancel / GeneratorExit / stream aclose） | stopped | 打たない | 記録する | stopped | 付けない | UNSET | なし |
+| 報告なしの例外（欠陥経路） | failed | 打たない | 記録する | failed | 付けない | ERROR | あり。`unclassified` を捏造しない |
 
 clock が取れなかった attempt は duration を打たない。usage が無い attempt は
 token metric を打たない。
@@ -204,25 +214,23 @@ token metric を打たない。
 
 ```text
 vector.agent.llm_call.outcome
-  agent_name, provider, model, attempt_number, status, result
-  分類済み失敗のみ failure_code
-  result: succeeded | failed | none
+  agent_name, provider, model, attempt_number, status
+  失敗のみ failure_code（CODE / defect / unclassified）
 
 vector.agent.llm_call.duration
-  agent_name, provider, model, attempt_number, status,
-  result: succeeded | failed | none
+  agent_name, provider, model, attempt_number, status
 
 vector.agent.llm_call.tokens
   上記 + direction: input | output | cache_read_input | reasoning_output
 ```
 
-`attempt_number` は今回追加する。outcome counter から未分類・停止を外すのは
-意図した変更であり、`result=none` の outcome 点は duration 側だけに残る。
+`attempt_number` は今回追加する。metric の `result`（`succeeded` / `failed` /
+`none`）は付けない。終わり方は `status`、失敗の中身は outcome の `failure_code`。
 
 ### span 属性
 
-独自 allowlist は既存どおり `agent_name` / `attempt_number` / `prompt_version` /
-条件付き `result`。
+独自 allowlist は `agent_name` / `attempt_number` / `prompt_version` / `status`。
+`error.type` は標準キー。`result` は付けない。
 
 GenAI 標準属性は Runtime が渡した identity と、報告された `Usage` から Recorder が書く。
 
@@ -242,13 +250,13 @@ GenAI 標準属性は Runtime が渡した identity と、報告された `Usage
 2. 入力描画と request 構築を記録開始前に終える。
 3. Recorder を `mode` 付きで開き、SDK を呼ぶ。
 4. SDK usage を `Usage` へ写して `report_usage` する。
-5. 分類できれば `report_outcome(LlmAttemptFailed, span_result=...)` してから同じ例外を raise する。
-6. 枯渇系だけ `record_ai_provider_exhausted` を呼ぶ。
+5. 失敗なら `report_outcome(LlmAttemptFailed)` してから同じ例外を raise する。
+   想定外は `failure_code=unclassified`。
+6. 枯渇系だけ `record_ai_provider_exhausted` を呼ぶ（`unclassified` では呼ばない）。
 
 Gemini 固有の finish_reason / prompt block / stream 切断、DeepSeek 固有の
-declared function 欠落は、これまでどおり各 Runtime が結論へ写す。写像結果
-（`blocked` vs `provider_error` など）を本 slice で揃えない。call と stream の
-既存非対称も維持し、別 slice の対象にする。
+declared function 欠落は、これまでどおり各 Runtime が結論へ写す。span の桶へ
+畳まない。call と stream の結論分類そのものは本 slice で変えない。
 
 SDK usage 欄名の写像は各 Runtime が行い、Recorder は `Usage` だけを受け取る。
 
@@ -277,6 +285,10 @@ SDK usage 欄名の写像は各 Runtime が行い、Recorder は `Usage` だけ�
    duration の全 attempt、`attempt_number`、`mode` による span lifecycle を固定する。
 5. Gemini `call` / `stream_text` と DeepSeek `call` を同じ Protocol へ移す。
 6. 死んだ `LlmCall` と `start`/`end` を削除する。
+7. metric の `result` を外し、想定外の provider 呼び出し失敗は Runtime が
+   `unclassified` を報告する。Recorder は報告のない例外を捏造しない。
+8. span の `result` 桶を外す。終わり方は span 属性 `status`、失敗の中身は
+   `error.type`。`report_outcome` は失敗型だけを受ける。
 
 ## Verification policy
 

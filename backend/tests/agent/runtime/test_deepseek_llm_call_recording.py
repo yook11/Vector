@@ -10,7 +10,7 @@ import pytest
 from app.agent.recording.types import Usage
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
-from app.agent.runtime.llm_failure import LlmAttemptFailed
+from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._deepseek_helpers import (
@@ -83,7 +83,6 @@ async def test_invalid_response_records_failed_with_defect() -> None:
     assert recorded.failure == LlmAttemptFailed(
         failure_code=AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
     )
-    assert recorded.span_result == "invalid_response"
 
 
 async def test_translated_provider_error_records_failed_with_code() -> None:
@@ -99,11 +98,10 @@ async def test_translated_provider_error_records_failed_with_code() -> None:
     assert recorded.failure == LlmAttemptFailed(
         failure_code=AIProviderNetworkError.CODE
     )
-    assert recorded.span_result == "provider_error"
 
 
-async def test_unclassified_exception_records_without_failure() -> None:
-    """未分類例外は失敗型なしで閉じる。"""
+async def test_unclassified_exception_records_unclassified_failure() -> None:
+    """未分類例外は unclassified として報告し、同じ例外を raise する。"""
 
     error = RuntimeError("UNCLASSIFIED_DEEPSEEK")
     recorder = RecordingLlmCallRecorder()
@@ -114,7 +112,7 @@ async def test_unclassified_exception_records_without_failure() -> None:
 
     assert exc_info.value is error
     recorded = recorder.records[0]
-    assert recorded.failure is None
+    assert recorded.failure == LlmAttemptFailed(failure_code=UNCLASSIFIED_FAILURE_CODE)
     assert recorded.error is error
     assert len(recorder.records) == 1
 

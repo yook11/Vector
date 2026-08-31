@@ -1,17 +1,23 @@
-"""分類済み LLM 失敗。起こった側が持ち、code で何が起きたかを名乗る。"""
+"""LLM 失敗。想定できる失敗は CODE / defect、想定外は unclassified。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.agent.error_type import span_error_type
+from app.agent.runtime.contract import AgentResponseInvalidError
 
-__all__ = ["LlmAttemptFailed", "llm_attempt_failed_from"]
+__all__ = [
+    "UNCLASSIFIED_FAILURE_CODE",
+    "LlmAttemptFailed",
+    "llm_attempt_failed_from",
+]
+
+UNCLASSIFIED_FAILURE_CODE = "unclassified"
 
 
 @dataclass(frozen=True, slots=True)
 class LlmAttemptFailed:
-    """分類済み失敗で終了した provider attempt。"""
+    """失敗で終了した provider attempt。"""
 
     failure_code: str
 
@@ -21,6 +27,11 @@ class LlmAttemptFailed:
 
 
 def llm_attempt_failed_from(error: BaseException) -> LlmAttemptFailed:
-    """span の error.type と同じ語彙で failure_code を決める。"""
+    """CODE / defect から failure_code を決める。クラス名へは落とさない。"""
 
-    return LlmAttemptFailed(failure_code=span_error_type(error))
+    if isinstance(error, AgentResponseInvalidError):
+        return LlmAttemptFailed(failure_code=error.defect.value)
+    code = getattr(error, "CODE", None)
+    if isinstance(code, str) and code:
+        return LlmAttemptFailed(failure_code=code)
+    raise ValueError("classified failure requires CODE or defect")

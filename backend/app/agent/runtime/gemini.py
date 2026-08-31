@@ -23,7 +23,11 @@ from app.agent.runtime._structured_output import (
     validate_output,
 )
 from app.agent.runtime.contract import AgentResponseInvalidError, AgentTextStream
-from app.agent.runtime.llm_failure import llm_attempt_failed_from
+from app.agent.runtime.llm_failure import (
+    UNCLASSIFIED_FAILURE_CODE,
+    LlmAttemptFailed,
+    llm_attempt_failed_from,
+)
 from app.analysis.ai_provider_errors import (
     AIProviderContentRejectionKind,
     AIProviderError,
@@ -96,6 +100,7 @@ class GeminiAgentRuntime:
             except Exception as exc:
                 translated_error = translate_gemini_error(exc)
                 if translated_error is exc:
+                    _report_unclassified(recording)
                     raise
                 classified_error = translated_error
             else:
@@ -130,19 +135,9 @@ class GeminiAgentRuntime:
                             classified_error = exc
 
             if classified_error is not None:
-                if isinstance(
-                    classified_error,
-                    AIProviderInputRejectedError | AIProviderOutputBlockedError,
-                ):
-                    span_result = "blocked"
-                elif isinstance(classified_error, AgentResponseInvalidError):
-                    span_result = "invalid_response"
-                else:
-                    span_result = "provider_error"
                 _report_classified(
                     recording,
                     classified_error,
-                    span_result=span_result,
                     provider=agent.model.provider,
                 )
                 raise classified_error
@@ -275,21 +270,16 @@ class GeminiAgentRuntime:
                 await _close_sdk_stream(sdk_stream)
 
             if classified_error is not None:
-                span_result = (
-                    "blocked"
-                    if isinstance(classified_error, AIProviderOutputBlockedError)
-                    else "provider_error"
-                )
                 _report_classified(
                     recording,
                     classified_error,
-                    span_result=span_result,
                     provider=agent.model.provider,
                 )
                 if translated_cause is not None:
                     raise classified_error from translated_cause
                 raise classified_error
             if unknown_error is not None:
+                _report_unclassified(recording)
                 raise unknown_error
 
 
@@ -297,11 +287,14 @@ def _report_classified(
     recording: LlmCallRecording,
     error: Exception,
     *,
-    span_result: str,
     provider: str,
 ) -> None:
-    recording.report_outcome(llm_attempt_failed_from(error), span_result=span_result)
+    recording.report_outcome(llm_attempt_failed_from(error))
     record_ai_provider_exhausted(error, provider=provider)
+
+
+def _report_unclassified(recording: LlmCallRecording) -> None:
+    recording.report_outcome(LlmAttemptFailed(failure_code=UNCLASSIFIED_FAILURE_CODE))
 
 
 def _report_usage(recording: LlmCallRecording, usage: Usage | None) -> None:

@@ -10,7 +10,7 @@ from google.genai.client import AsyncClient
 
 from app.agent.recording.types import Usage
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.agent.runtime.llm_failure import LlmAttemptFailed
+from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent
@@ -94,7 +94,6 @@ async def test_blocked_stream_records_failed_with_code() -> None:
     assert recorded.failure == LlmAttemptFailed(
         failure_code=AIProviderOutputBlockedError.CODE
     )
-    assert recorded.span_result == "blocked"
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -103,8 +102,8 @@ async def test_blocked_stream_records_failed_with_code() -> None:
     )
 
 
-async def test_unclassified_stream_records_without_failure() -> None:
-    """未分類例外の stream は失敗型なしで閉じる。"""
+async def test_unclassified_stream_records_unclassified_failure() -> None:
+    """未分類例外の stream は unclassified として報告し、同じ例外を raise する。"""
 
     error = RuntimeError("UNCLASSIFIED_STREAM")
     recorder = RecordingLlmCallRecorder()
@@ -120,7 +119,7 @@ async def test_unclassified_stream_records_without_failure() -> None:
 
     assert exc_info.value is error
     recorded = recorder.records[0]
-    assert recorded.failure is None
+    assert recorded.failure == LlmAttemptFailed(failure_code=UNCLASSIFIED_FAILURE_CODE)
     assert recorded.error is error
 
 

@@ -52,20 +52,13 @@ class RecordedLlmCall:
     parent_context: object | None = None
     usage: Usage | None = None
     failure: LlmAttemptFailed | None = None
-    span_result: str | None = None
     error: BaseException | None = None
 
     def report_usage(self, usage: Usage) -> None:
         self.usage = usage
 
-    def report_outcome(
-        self,
-        failure: LlmAttemptFailed,
-        *,
-        span_result: str,
-    ) -> None:
+    def report_outcome(self, failure: LlmAttemptFailed) -> None:
         self.failure = failure
-        self.span_result = span_result
 
 
 @dataclass(slots=True)

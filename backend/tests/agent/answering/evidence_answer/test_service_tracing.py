@@ -121,7 +121,8 @@ async def test_phase_owns_all_provider_attempts_without_model_text(
         assert attempt.parent is not None
         assert attempt.parent.span_id == phase.context.span_id
         assert attempt.status.status_code is StatusCode.UNSET
-        assert (attempt.attributes or {})["result"] == "succeeded"
+        assert (attempt.attributes or {})["status"] == "completed"
+        assert "result" not in (attempt.attributes or {})
     assert [stream.close_calls for stream in (first_stream, second_stream)] == [1, 1]
 
     observed = "\n".join(span_text(span) for span in [phase, *attempt_spans])

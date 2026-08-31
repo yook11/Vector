@@ -93,7 +93,8 @@ async def test_success_records_one_production_provider_attempt_without_phase_usa
     assert phase["attributes"]["phase"] == "planning"
     assert phase["attributes"]["agent_name"] == QUESTION_PLANNER_AGENT.name
     assert provider["attributes"]["attempt_number"] == 1
-    assert provider["attributes"]["result"] == "succeeded"
+    assert provider["attributes"]["status"] == "completed"
+    assert "result" not in provider["attributes"]
     assert provider["attributes"]["gen_ai.usage.input_tokens"] == 11
     assert provider["parent"]["span_id"] == phase["context"]["span_id"]
     assert provider["context"]["trace_id"] == phase["context"]["trace_id"]
@@ -121,9 +122,13 @@ async def test_invalid_json_then_success_records_two_production_provider_attempt
         1,
         2,
     ]
-    assert [provider["attributes"]["result"] for provider in providers] == [
-        "invalid_response",
-        "succeeded",
+    assert [provider["attributes"]["status"] for provider in providers] == [
+        "failed",
+        "completed",
+    ]
+    assert [provider["attributes"].get("error.type") for provider in providers] == [
+        "response_not_json",
+        None,
     ]
     assert all(
         provider["parent"]["span_id"] == phase["context"]["span_id"]
@@ -171,6 +176,8 @@ async def test_unknown_error_is_redacted_in_production_phase_and_provider_spans(
     assert raw_phases[0].status.status_code is StatusCode.ERROR
     assert raw_phases[0].status.description == "[redacted]"
     assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
+    assert provider["attributes"]["status"] == "failed"
+    assert provider["attributes"]["error.type"] == "unclassified"
     assert "result" not in provider["attributes"]
     span_dump = json.dumps([phase, provider], default=str, ensure_ascii=False)
     assert error_sentinel not in span_dump
