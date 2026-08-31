@@ -9,10 +9,18 @@ name: AWS app images
 # 実際に走る場所なので、そこに本番差し替えの権限を持たせない。焼いた image が本番に
 # 載るには、承認を通る rollout job を必ず経由する。
 #
-# workflow_dispatch のみ。main の push で自動に走らせない。
+# main CI からの dispatch と手動 dispatch のみ。main の push では直接起動しない。
 
 on:
   workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "空なら選択した ref の commit SHA を使う。"
+        required: false
+        type: string
+
+env:
+  RELEASE_SHA: ${{ inputs.release_sha || github.sha }}
 
 # **job に environment: を付けると OIDC の sub claim が environment:<name> に変わる。**
 # push job (sub = ref:refs/heads/main) と rollout job (sub = environment:production) で
@@ -24,7 +32,7 @@ permissions:
 # 二重 dispatch で rollout が並走すると、service が互いの revision を追い越しうる。
 # 走行中の run は殺さない (本番の入れ替え途中で止めるほうが危険)。
 concurrency:
-  group: ${{ github.workflow }}
+  group: aws-app-images
   cancel-in-progress: false
 
 jobs:
@@ -46,8 +54,19 @@ jobs:
             context: frontend
 
     steps:
+      # 任意 input は AWS 権限を得る前に拒否し、checkout と image tag の参照元を
+      # 同じ 40 桁 SHA に限定する。
+      - name: Validate release SHA
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::release_sha は40桁の小文字16進commit SHAで指定してください"
+            exit 1
+          fi
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
       # region / repository 名の正本は Terraform 側。ここで持つと 2 箇所目になる。
@@ -103,7 +122,7 @@ jobs:
         name: Check whether the tag is already pushed
         env:
           REPOSITORY: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
           set -euo pipefail
           count=$(
@@ -122,10 +141,10 @@ jobs:
         # IMAGE が registry (= account id) を含んでログに出せないため。
         env:
           IMAGE: >-
-            ${{ steps.ecr.outputs.registry }}/${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ github.sha }}
-          IMAGE_REF: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ env.RELEASE_SHA }}
+          IMAGE_REF: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ env.RELEASE_SHA }}
           BUILD_CONTEXT: ${{ matrix.context }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
           set -euo pipefail
           # provenance を切る。attestation manifest は untagged image として ECR に増え、
@@ -141,7 +160,7 @@ jobs:
       - name: Note the reused image
         if: steps.existing.outputs.found == 'true'
         env:
-          IMAGE_REF: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ github.sha }}
+          IMAGE_REF: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ env.RELEASE_SHA }}
         run: echo "reused \`$IMAGE_REF\` (同じ tag が既に ECR にある)" >> "$GITHUB_STEP_SUMMARY"
 
   rollout:
@@ -154,8 +173,17 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Validate release SHA
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::release_sha は40桁の小文字16進commit SHAで指定してください"
+            exit 1
+          fi
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
       - id: tf
@@ -184,7 +212,7 @@ jobs:
       - name: Roll out services
         env:
           CLUSTER: ${{ steps.tf.outputs.name_prefix }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
           set -euo pipefail
 
