@@ -16,7 +16,7 @@ from app.agent.evidence_collection.external_search import (
     build_search_body,
 )
 from app.config import settings
-from app.shared.security.safe_http import make_safe_async_client
+from app.shared.http.external import make_external_async_client
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -43,7 +43,7 @@ async def _probe(query: str, max_results: int) -> None:
         limit=max_results,
         date_filter=None,
     )
-    async with make_safe_async_client() as client:
+    async with make_external_async_client() as client:
         response = await client.post(
             TAVILY_NEWS_SEARCH_SPEC.search_url,
             headers={"Authorization": f"Bearer {api_key}"},

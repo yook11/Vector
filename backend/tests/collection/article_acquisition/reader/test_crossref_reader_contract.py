@@ -69,7 +69,7 @@ async def _reader_entries() -> list[CrossrefEntry]:
         client.get = AsyncMock(return_value=response)
         yield client
 
-    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         return await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
@@ -101,7 +101,7 @@ async def _raise_through(status_code: int) -> None:
         client.get = AsyncMock(return_value=response)
         yield client
 
-    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
@@ -132,7 +132,7 @@ async def _fetch_body(content: bytes) -> list[CrossrefEntry]:
         client.get = AsyncMock(return_value=response)
         yield client
 
-    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         return await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
@@ -217,7 +217,7 @@ async def test_reader_tools_injects_contact_without_real_network(
         client.get = AsyncMock(return_value=response)
         yield client
 
-    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         await ReaderTools().crossref.fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",

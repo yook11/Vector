@@ -4,7 +4,7 @@
 **実在の feed を一度手で録画した固定バイト列**に対して確かめる。
 
 契約は **Reader の公開メソッド ``RssReader.fetch`` を通して**確かめる。
-差し替えるのは HTTP transport (``make_safe_async_client``) **のみ**で、
+差し替えるのは HTTP transport (``make_external_async_client``) **のみ**で、
 parse / decode / Entry 抽出は Reader 内部で本物が動く。spec 上 feedparser や
 ``normalize_entry`` は「Reader が持つもの (parse/decode/Entry 抽出)」=
 **Reader の内臓**であり、本テストはそれを一切 import しない。テストが知るのは
@@ -76,7 +76,7 @@ _SHAPE_FIXTURES = ["nist_rss.xml", "the_register_atom.xml", "mic_rdf.xml"]
 async def _reader_entries(fixture: str) -> list[RssEntry]:
     """本物の ``RssReader().fetch`` を録画実バイトで走らせる。
 
-    差し替えるのは HTTP transport (``make_safe_async_client``) のみ。
+    差し替えるのは HTTP transport (``make_external_async_client``) のみ。
     feedparser / decode / Entry 抽出は Reader 内部で本物が動く。
     """
     raw = (_FIXTURES_DIR / fixture).read_bytes()
@@ -92,7 +92,7 @@ async def _reader_entries(fixture: str) -> list[RssEntry]:
         client.get = AsyncMock(return_value=response)
         yield client
 
-    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         # parse_mode="bytes": feedparser に encoding sniff を委ね Shift_JIS も通す
         return await RssReader().fetch(
             endpoint_url="https://example.com/feed",

@@ -180,7 +180,7 @@ async def ensure_host_is_public(host: str) -> tuple[PublicIpAddress, ...]:
 
     Note:
         本関数単独では DNS rebinding (本関数の解決結果と httpx 側の解決結果が
-        ずれる TOCTOU) を防げない。``app/shared/security/safe_http.py`` の
+        ずれる TOCTOU) を防げない。``app/shared/http/external.py`` の
         ``_PinnedDnsTransport`` がここで返した最初の IP に TCP 接続を pin し、
         TOCTOU を構造的に閉塞する。本関数は IP allowlist の判定だけを担う。
     """

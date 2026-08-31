@@ -1429,7 +1429,7 @@ async def test_run_agent_answer_passes_answering_runner_identity_and_history(
 
     for legacy_name in (
         "build_question_context_generator",
-        "make_safe_async_client",
+        "make_external_async_client",
     ):
         monkeypatch.setattr(
             agent_run_tasks,

@@ -55,11 +55,14 @@ line-length = 88
 select = ["E", "F", "I", "UP", "S", "FAST", "TID"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"httpx.AsyncClient".msg = "Use app.shared.security.safe_http.make_safe_async_client instead. Direct httpx.AsyncClient bypasses SSRF defense."
+"httpx.AsyncClient".msg = "Pick a client by destination: app.shared.http.external.make_external_async_client for third-party destinations, app.shared.http.internal.make_internal_async_client for resources we own. Direct httpx.AsyncClient declares neither."
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S311", "TID251"]
-"app/shared/security/safe_http.py" = ["TID251"]
+# 宛先を宣言する正規の構築口はこの 2 つだけ。glob で免除すると、後から
+# app/shared/http/ に置かれたファイルまで黙って抜け道になる。
+"app/shared/http/external.py" = ["TID251"]
+"app/shared/http/internal.py" = ["TID251"]
 # fetcher は呼び出し側 (Service) から AsyncClient を受け取って使う側なので、
 # 型ヒントとしての参照のみ。本ファイル群で AsyncClient を直接構築することはない。
 "app/collection/fetchers/**" = ["TID251"]

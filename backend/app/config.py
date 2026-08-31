@@ -183,10 +183,11 @@ class Settings(BaseSettings):
     frontend_url: str
     internal_frontend_base_url: str
 
-    # 外向き通信の経路。設定されていれば ``make_safe_async_client`` が全 client に
+    # 外向き通信の経路。設定されていれば ``make_external_async_client`` が全 client に
     # proxy として差し込む。未設定なら直接接続 (Fly / compose の既定)。
     # httpx は transport を明示すると env の proxy を読まないため、HTTPS_PROXY だけでは
-    # この経路に効かない。SDK 経路 (env を読む) と渡し方が 2 系統に分かれる。
+    # この経路に効かない。env を読む SDK 経路、この settings 経路、proxy を経由しない
+    # 内部宛経路の 3 通りに分かれる。
     egress_proxy_url: str | None = None
 
     # タスクキュー

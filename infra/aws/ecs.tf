@@ -52,35 +52,35 @@ locals {
     REDIS_IAM_CACHE_NAME       = aws_elasticache_replication_group.broker.replication_group_id
     INTERNAL_FRONTEND_BASE_URL = local.internal_frontend_url
     # proxy を通さない宛先。ECS の credential endpoint を入れないと SDK の
-    # 資格情報取得が proxy に迂回して死ぬ。内部 DNS を入れないと revalidate と
-    # BFF が proxy の private 宛先拒否で静かに失敗する。
+    # 資格情報取得が proxy に迂回して死ぬ。内部 DNS と gateway host は env を読む
+    # client のための保険で、backend の内部宛 client (make_internal_async_client)
+    # は env を読まないので依存しない。
     # RDS は 5432 の TCP で HTTP クライアントを通らないので入れない。
     NO_PROXY = join(",", [
       "169.254.169.254",
       "169.254.170.2",
       ".${var.internal_namespace}",
-      # AgentCore Gateway は PrivateLink 経由の内部宛先。proxy は private 宛先を
-      # 拒否するので、除外しないと外部検索が静かに失敗する。host は gateway_url
+      # AgentCore Gateway は PrivateLink 経由の内部宛先。host は gateway_url
       # から取り、suffix を推測しない。
       local.agentcore_gateway_host,
     ])
-    # SDK 経路 (DeepSeek / Gemini / Logfire) はこの env var を拾う。
-    # `make_safe_async_client` を通る経路 (Tavily / RSS) は明示 transport を
-    # 渡すため httpx が env proxy を無視するので、settings 経由で proxy= に
-    # 注入する必要がある。**渡し方が 2 系統ある。**
+    # SDK 経路 (DeepSeek / Gemini / Logfire) はこの env var を拾う。backend の
+    # HTTP client は拾わない: 第三者宛の `make_external_async_client` は明示
+    # transport を渡すため httpx が env proxy を無視し (settings 経由で注入する)、
+    # 内部宛の `make_internal_async_client` はそもそも env を読まない。
+    # **経路の決まり方が 3 通りある。**
     #
     # common なので frontend にも入るが、frontend は proxy への SG egress を持たない。
     # Node は既定でこの env を読まないため現状は不活性で、読むライブラリが入ると
     # frontend だけ到達不能で詰まる。その時は stage_environment 側へ移す。
     HTTPS_PROXY = local.proxy_url
     HTTP_PROXY  = local.proxy_url
-    # 2 系統のうち settings 側。config.py の egress_proxy_url がこれを受け、
-    # make_safe_async_client が全 client に proxy として差し込む。
+    # 3 通りのうち settings 側。config.py の egress_proxy_url がこれを受け、
+    # make_external_async_client が第三者宛の全 client に proxy として差し込む。
     #
-    # 上の NO_PROXY はこちらには効かない (env を読まない経路なので)。factory の
-    # 呼び出し先が RSS / スクレイプ / Tavily と全て外部宛先で、内部宛先を叩く
-    # revalidate は raw httpx 側に居るから成立している。内部宛先を factory 経由で
-    # 呼ぶ経路を作ると、proxy の private 宛先拒否で静かに失敗する。
+    # 上の NO_PROXY はこちらには効かない (env を読まない経路なので)。内部宛先は
+    # make_internal_async_client 側に分かれていて proxy を経由しないため、宛先の
+    # 分類さえ守れば private 宛先拒否を踏まない。
     #
     # common に置くので frontend にも入るが、frontend は Node の image で
     # この値を読まない (Python の Settings field)。

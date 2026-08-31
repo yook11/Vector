@@ -12,14 +12,13 @@
 - 「降格」であって「握り潰し」ではない (warn ログで運用に見える)
 
 通信先は compose 内部 DNS (``http://frontend:3000``) や実行基盤の内部 namespace
-(``*.flycast`` / ``*.vector.internal``) を想定するため、SSRF guard 入りの
-``make_safe_async_client`` (private IP を弾く) は使わず、``httpx.AsyncClient`` を
-直接構築する。internal 通信専用。
+(``*.flycast`` / ``*.vector.internal``) で、自分たちの deployment のコンテナ宛。
+よって ``make_internal_async_client`` を使う。
 
 宛先 host は config 層の ``internal_frontend_base_url`` validator
 (``app/config.py``) で allowlist 制約済 = ここに渡る時点で宛先は定義上 internal。
-よって raw httpx でも REVALIDATE_BEARER_SECRET が攻撃者ホストに送られる経路は
-構造的に閉じている。
+SSRF 検証を通さずに REVALIDATE_BEARER_SECRET を Bearer 送信できるのは、この
+起動時検証が根拠であって client 側の保証ではない。
 """
 
 from __future__ import annotations
@@ -27,8 +26,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol
 
-import httpx  # noqa: TID251 (internal 通信専用、SSRF guard は不要)
 import structlog
+
+from app.shared.http.internal import make_internal_async_client
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -59,7 +59,7 @@ class FrontendRevalidateNotifier:
 
     async def notify(self, *, tags: Sequence[str]) -> None:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:  # noqa: TID251
+            async with make_internal_async_client(timeout=5.0) as client:
                 resp = await client.post(
                     self._url,
                     json={"tags": list(tags)},
