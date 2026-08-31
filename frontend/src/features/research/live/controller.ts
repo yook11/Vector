@@ -1,12 +1,7 @@
-import {
-  parseResearchLiveActivity,
-  parseResearchLiveEvent,
-  type ResearchLiveActivity,
-  type ResearchLiveErrorCode,
-} from "./events";
+import { parseResearchLiveEvent, type ResearchLiveErrorCode } from "./events";
 import {
   createInitialResearchLiveState,
-  mergeResearchLivePollProgress,
+  mergeResearchLivePollAttempt,
   type ResearchLiveState,
   type ResearchLiveTerminal,
   reduceResearchLiveEvent,
@@ -50,9 +45,7 @@ export type ResearchRunLivePollResult =
       kind: "run";
       run: {
         status: ResearchRunLiveStatus;
-        progressStage: ResearchLiveState["progressStage"];
         attemptEpoch: number | null;
-        recentEvents: readonly unknown[];
         errorCode: ResearchLiveErrorCode | null;
       };
     }
@@ -75,7 +68,6 @@ export interface CreateResearchRunLiveControllerOptions {
   runId: string;
   createdAt: string;
   initialStatus: "queued" | "running";
-  initialStage: ResearchLiveState["progressStage"];
   pollRun?: (
     runId: string,
     signal: AbortSignal,
@@ -94,7 +86,6 @@ export function createResearchRunLiveController({
   runId,
   createdAt,
   initialStatus,
-  initialStage,
   pollRun = pollResearchRun,
   createEventSource = (url) => new EventSource(url),
   requestRefresh,
@@ -109,10 +100,7 @@ export function createResearchRunLiveController({
   let snapshot: ResearchRunLiveSnapshot = {
     runStatus: initialStatus,
     connectionMode: "connecting",
-    liveState: {
-      ...createInitialResearchLiveState(),
-      progressStage: initialStage,
-    },
+    liveState: createInitialResearchLiveState(),
     isRecoveryPending: initialRecoveryRemainingMs === 0,
   };
   const listeners = new Set<() => void>();
@@ -343,26 +331,10 @@ export function createResearchRunLiveController({
     );
     let liveState = snapshot.liveState;
     if (isUsableAttemptEpoch(result.run.attemptEpoch)) {
-      const progressMerge = mergeResearchLivePollProgress(
+      liveState = mergeResearchLivePollAttempt(
         liveState,
         result.run.attemptEpoch,
-        result.run.progressStage,
-      );
-      liveState = progressMerge.state;
-      if (
-        (progressMerge.kind === "initial" &&
-          shouldApplyInitialPollingActivity()) ||
-        (progressMerge.kind === "equal" &&
-          snapshot.connectionMode === "polling-only")
-      ) {
-        liveState = {
-          ...liveState,
-          currentActivity: latestRelevantPollingActivity(
-            liveState.progressStage,
-            result.run.recentEvents,
-          ),
-        };
-      }
+      ).state;
     }
     if (runStatus !== snapshot.runStatus || liveState !== snapshot.liveState) {
       updateSnapshot({
@@ -372,14 +344,6 @@ export function createResearchRunLiveController({
       });
     }
     schedulePoll(POLLING_SUCCESS_DELAY_MS, version);
-  }
-
-  function shouldApplyInitialPollingActivity(): boolean {
-    return (
-      snapshot.connectionMode === "polling-only" ||
-      (snapshot.connectionMode === "connecting" &&
-        !snapshot.liveState.hasAcceptedSseEvent)
-    );
   }
 
   function scheduleFailedPoll(version: number): void {
@@ -619,44 +583,15 @@ function parsePollRun(
   value: unknown,
 ): Extract<ResearchRunLivePollResult, { kind: "run" }>["run"] | null {
   if (!isRecord(value) || !isRunStatus(value.status)) return null;
-  const progressStage = isProgressStage(value.progressStage)
-    ? value.progressStage
-    : null;
   const errorCode = isErrorCode(value.errorCode) ? value.errorCode : null;
-  const recentEvents = Array.isArray(value.recentEvents)
-    ? value.recentEvents.flatMap((event) => {
-        const activity = parseResearchLiveActivity(event);
-        return activity === null ? [] : [activity];
-      })
-    : [];
   const attemptEpoch = isUsableAttemptEpoch(value.attemptEpoch)
     ? value.attemptEpoch
     : null;
   return {
     status: value.status,
-    progressStage,
     attemptEpoch,
-    recentEvents,
     errorCode,
   };
-}
-
-function latestRelevantPollingActivity(
-  progressStage: ResearchLiveState["progressStage"],
-  recentEvents: readonly unknown[],
-): ResearchLiveActivity | null {
-  // 根拠の選別は精査工程で発火するため、収集と精査を同じ表示区間として扱う。
-  if (
-    progressStage !== "evidence_collection" &&
-    progressStage !== "evidence_review"
-  ) {
-    return null;
-  }
-  for (let index = recentEvents.length - 1; index >= 0; index -= 1) {
-    const activity = parseResearchLiveActivity(recentEvents[index]);
-    if (activity !== null) return activity;
-  }
-  return null;
 }
 
 function isRunStatus(value: unknown): value is ResearchRunLiveStatus {
@@ -666,19 +601,6 @@ function isRunStatus(value: unknown): value is ResearchRunLiveStatus {
     value === "completed" ||
     value === "policy_blocked" ||
     value === "failed"
-  );
-}
-
-function isProgressStage(
-  value: unknown,
-): value is NonNullable<ResearchLiveState["progressStage"]> {
-  return (
-    value === "safety_check" ||
-    value === "context_resolution" ||
-    value === "planning" ||
-    value === "evidence_collection" ||
-    value === "evidence_review" ||
-    value === "answering"
   );
 }
 

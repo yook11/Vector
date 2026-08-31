@@ -99,7 +99,6 @@ interface ResearchActiveRunBoundaryProps {
     ResearchMessageRun["status"],
     "queued" | "running"
   > | null;
-  initialStage: ResearchMessageRun["progressStage"];
   children: ReactNode;
 }
 
@@ -107,7 +106,6 @@ interface ResearchActiveRunControllerProps {
   runId: string;
   createdAt: string;
   initialStatus: Extract<ResearchMessageRun["status"], "queued" | "running">;
-  initialStage: ResearchMessageRun["progressStage"];
   onSnapshot: (snapshot: ResearchRunLiveSnapshot) => void;
 }
 
@@ -115,14 +113,12 @@ function ResearchActiveRunController({
   runId,
   createdAt,
   initialStatus,
-  initialStage,
   onSnapshot,
 }: ResearchActiveRunControllerProps) {
   const snapshot = useResearchRunLiveState({
     runId,
     createdAt,
     initialStatus,
-    initialStage,
   });
 
   useEffect(() => {
@@ -136,7 +132,6 @@ export function ResearchActiveRunBoundary({
   runId,
   createdAt,
   initialStatus,
-  initialStage,
   children,
 }: ResearchActiveRunBoundaryProps) {
   const [snapshot, setSnapshot] = useState<ResearchRunLiveSnapshot | null>(
@@ -146,10 +141,7 @@ export function ResearchActiveRunBoundary({
         : {
             runStatus: initialStatus,
             connectionMode: "connecting",
-            liveState: {
-              ...createInitialResearchLiveState(),
-              progressStage: initialStage,
-            },
+            liveState: createInitialResearchLiveState(),
             isRecoveryPending:
               Date.now() >=
               Date.parse(createdAt) + RESEARCH_UI_DEADLINE_SECONDS * 1_000,
@@ -213,7 +205,6 @@ export function ResearchActiveRunBoundary({
           runId={runId}
           createdAt={createdAt}
           initialStatus={initialStatus}
-          initialStage={initialStage}
           onSnapshot={updateSnapshot}
         />
       )}

@@ -6,6 +6,11 @@
 > 後続契約更新: `backend/specs/agent-progress-stage-vocabulary-slice.md` はstage語彙を
 > `planning` / `retrieving` / `synthesizing`の3値から実工程6値へ置き換える。本文中の
 > stage state、rank、activity表示条件、SSE parser契約の3値記述はすべて新語彙が正本となる。
+>
+> 後続契約更新: `agent-research-live-stream-progress-read-slice.md` は工程・activity・
+> 下書きの表示正本を Redis Stream（SSE）だけにする。polling は status / attemptEpoch /
+> 終状態の保険に限り、DB `progressStage` と List `recentEvents` を進捗 fallback に使わない。
+> 本文中の「polling を live 継続不能時の progress fallback とする」記述は無効である。
 
 Status: Implemented — 2026-07-13
 

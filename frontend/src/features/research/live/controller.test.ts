@@ -23,9 +23,7 @@ type PollRunResult =
       kind: "run";
       run: {
         status: "queued" | "running" | "completed" | "failed";
-        progressStage: ResearchLiveStage | null;
         attemptEpoch: unknown;
-        recentEvents: readonly unknown[];
         errorCode:
           | "generation_unavailable"
           | "internal_error"
@@ -45,9 +43,7 @@ type PolicyBlockedPollRunResult = {
   kind: "run";
   run: {
     status: "policy_blocked";
-    progressStage: null;
     attemptEpoch: number | null;
-    recentEvents: readonly unknown[];
     errorCode: null;
   };
 };
@@ -63,14 +59,14 @@ type PollErrorCode = Exclude<
 
 function runResult(
   status: "queued" | "running" | "completed" | "failed" = "running",
-  progressStage: ResearchLiveStage | null = null,
+  _progressStage: ResearchLiveStage | null = null,
   errorCode: PollErrorCode = null,
-  recentEvents: readonly unknown[] = [],
+  _recentEvents: readonly unknown[] = [],
   attemptEpoch: unknown = 1,
 ): PollRunResult {
   return {
     kind: "run",
-    run: { status, progressStage, attemptEpoch, errorCode, recentEvents },
+    run: { status, attemptEpoch, errorCode },
   };
 }
 
@@ -81,9 +77,7 @@ function policyBlockedRunResult(
     kind: "run",
     run: {
       status: "policy_blocked",
-      progressStage: null,
       attemptEpoch,
-      recentEvents: [],
       errorCode: null,
     },
   };
@@ -202,7 +196,6 @@ function createHarness(
     runId: RUN_ID,
     createdAt,
     initialStatus,
-    initialStage: null,
     ...(useRuntimePoll ? {} : { pollRun: actualPollRun }),
     createEventSource,
     requestRefresh: actualRequestRefresh,
@@ -625,7 +618,7 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("uses the latest valid camelCase polling activity while connecting", async () => {
+    it("does not adopt polling List activity while connecting", async () => {
       const pollRun = vi.fn<PollRun>().mockResolvedValue(
         runResult("running", "evidence_collection", null, [
           {
@@ -647,16 +640,15 @@ describe("createResearchRunLiveController", () => {
       await flushPromises();
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
-      ).toEqual({
-        type: "evidence_collection.external_search_hits_fetched",
-        taskIndex: 0,
-        hitCount: 8,
-      });
+      ).toBeNull();
+      expect(
+        harness.controller.getSnapshot().liveState.progressStage,
+      ).toBeNull();
 
       harness.unsubscribe();
     });
 
-    it("replaces stale SSE activity with the latest valid polling-only activity", async () => {
+    it("keeps SSE activity after polling-only instead of replacing it with List activity", async () => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
@@ -691,8 +683,8 @@ describe("createResearchRunLiveController", () => {
         harness.controller.getSnapshot().liveState.currentActivity,
       ).toEqual({
         type: "evidence_collection.external_search_hits_fetched",
-        taskIndex: 1,
-        hitCount: 12,
+        taskIndex: 0,
+        hitCount: 1,
       });
 
       harness.unsubscribe();
@@ -708,7 +700,7 @@ describe("createResearchRunLiveController", () => {
         taskIndex: 0,
         queries: ["NVIDIA AI"],
       },
-    ])("selects the $type search-family activity while evidence_collection", async (searchActivity) => {
+    ])("does not select the $type search-family activity from polling while connecting", async (searchActivity) => {
       const pollRun = vi
         .fn<PollRun>()
         .mockResolvedValue(
@@ -721,12 +713,12 @@ describe("createResearchRunLiveController", () => {
       await flushPromises();
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
-      ).toEqual(searchActivity);
+      ).toBeNull();
 
       harness.unsubscribe();
     });
 
-    it("selects evidence_review.selected while evidence_review (regression guard for the 根拠N件を選別 display)", async () => {
+    it("does not select evidence_review.selected from polling while connecting", async () => {
       const pollRun = vi.fn<PollRun>().mockResolvedValue(
         runResult("running", "evidence_review", null, [
           {
@@ -741,24 +733,21 @@ describe("createResearchRunLiveController", () => {
       await flushPromises();
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
-      ).toEqual({
-        type: "evidence_review.selected",
-        evidenceCount: 4,
-      });
+      ).toBeNull();
 
       harness.unsubscribe();
     });
 
-    it("applies polling progress while connecting before the first SSE event", async () => {
+    it("does not apply polling progress while connecting before the first SSE event", async () => {
       const pollRun = vi
         .fn<PollRun>()
         .mockResolvedValue(runResult("running", "evidence_collection"));
       const harness = createHarness(pollRun);
 
       await flushPromises();
-      expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
-        "evidence_collection",
-      );
+      expect(
+        harness.controller.getSnapshot().liveState.progressStage,
+      ).toBeNull();
 
       harness.unsubscribe();
     });
@@ -766,7 +755,7 @@ describe("createResearchRunLiveController", () => {
     it.each([
       "live",
       "reconnecting",
-    ] as const)("applies a same-attempt forward poll while %s", async (mode) => {
+    ] as const)("does not apply a same-attempt forward poll while %s", async (mode) => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
@@ -806,7 +795,7 @@ describe("createResearchRunLiveController", () => {
       await flushPromises();
 
       expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
-        "evidence_collection",
+        "planning",
       );
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
@@ -851,13 +840,16 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("keeps polling answering after a delayed same-attempt SSE evidence_collection event", async () => {
+    it("applies delayed same-attempt SSE evidence_collection even when polling claimed answering", async () => {
       const pollRun = vi
         .fn<PollRun>()
         .mockResolvedValue(runResult("running", "answering", null, [], 1));
       const harness = createHarness(pollRun);
 
       await flushPromises();
+      expect(
+        harness.controller.getSnapshot().liveState.progressStage,
+      ).toBeNull();
       harness.source.emit(
         "stage",
         { attemptEpoch: 1, stage: "evidence_collection" },
@@ -865,7 +857,7 @@ describe("createResearchRunLiveController", () => {
       );
 
       expect(harness.controller.getSnapshot().liveState).toMatchObject({
-        progressStage: "answering",
+        progressStage: "evidence_collection",
         lastProcessedEventId: {
           raw: "1-0",
           milliseconds: 1n,
@@ -888,7 +880,7 @@ describe("createResearchRunLiveController", () => {
 
       expect(harness.controller.getSnapshot().liveState).toMatchObject({
         currentAttemptEpoch: 2,
-        progressStage: "evidence_collection",
+        progressStage: null,
       });
 
       harness.unsubscribe();
@@ -945,7 +937,7 @@ describe("createResearchRunLiveController", () => {
       expect(harness.controller.getSnapshot().liveState).toMatchObject({
         currentAttemptEpoch: 2,
         currentGeneration: null,
-        progressStage: "planning",
+        progressStage: null,
         currentActivity: null,
         draftText: "",
         draftMode: "empty",
@@ -1114,7 +1106,7 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("recovers stage from polling after a new attempt begins with an activity event", async () => {
+    it("does not recover stage from polling after a new attempt begins with an activity event", async () => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
@@ -1143,14 +1135,14 @@ describe("createResearchRunLiveController", () => {
       pending.resolve(runResult("running", "evidence_collection", null, [], 2));
       await flushPromises();
 
-      expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
-        "evidence_collection",
-      );
+      expect(
+        harness.controller.getSnapshot().liveState.progressStage,
+      ).toBeNull();
 
       harness.unsubscribe();
     });
 
-    it("applies polling progress in polling-only mode", async () => {
+    it("does not apply polling progress in polling-only mode", async () => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
@@ -1158,9 +1150,9 @@ describe("createResearchRunLiveController", () => {
 
       pending.resolve(runResult("running", "evidence_collection"));
       await flushPromises();
-      expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
-        "evidence_collection",
-      );
+      expect(
+        harness.controller.getSnapshot().liveState.progressStage,
+      ).toBeNull();
 
       harness.unsubscribe();
     });
@@ -1211,16 +1203,16 @@ describe("createResearchRunLiveController", () => {
       "evidence_collection",
       "evidence_review",
       "answering",
-    ] as const)("merges a polling report of the %s stage", async (stageValue) => {
+    ] as const)("does not apply a polling report of the %s stage", async (stageValue) => {
       const pollRun = vi
         .fn<PollRun>()
         .mockResolvedValue(runResult("running", stageValue));
       const harness = createHarness(pollRun);
 
       await flushPromises();
-      expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
-        stageValue,
-      );
+      expect(
+        harness.controller.getSnapshot().liveState.progressStage,
+      ).toBeNull();
 
       harness.unsubscribe();
     });
@@ -1533,9 +1525,9 @@ describe("createResearchRunLiveController", () => {
       expect(pollRun.mock.calls[1]?.[0]).toBe(RUN_ID);
       expect(pollRun.mock.calls[1]?.[1]).not.toBe(hiddenRequestSignal);
       await flushPromises();
-      expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
-        "planning",
-      );
+      expect(
+        harness.controller.getSnapshot().liveState.progressStage,
+      ).toBeNull();
 
       harness.unsubscribe();
     });

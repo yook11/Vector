@@ -8,6 +8,7 @@ import type {
 import {
   advanceResearchLiveStage,
   createInitialResearchLiveState,
+  mergeResearchLivePollAttempt,
   reduceResearchLiveEvent,
   suppressResearchLiveDraft,
 } from "./reducer";
@@ -605,6 +606,55 @@ describe("research live reducer", () => {
       expect(transition.state.draftText).toBe("");
       expect(transition.state.draftMode).toBe("suppressed");
       expect(transition.acceptedTerminal).toEqual({ status: "completed" });
+    });
+  });
+
+  describe("poll attempt fencing", () => {
+    it("adopts an unseen epoch without copying a poll stage", () => {
+      const merge = mergeResearchLivePollAttempt(
+        createInitialResearchLiveState(),
+        2,
+      );
+
+      expect(merge.kind).toBe("initial");
+      expect(merge.state).toMatchObject({
+        currentAttemptEpoch: 2,
+        progressStage: null,
+        currentActivity: null,
+        draftText: "",
+        draftMode: "empty",
+      });
+    });
+
+    it("resets attempt-local fields on a higher epoch without applying a poll stage", () => {
+      const merge = mergeResearchLivePollAttempt(populatedAttemptOne(), 3);
+
+      expect(merge.kind).toBe("higher");
+      expect(merge.state).toMatchObject({
+        currentAttemptEpoch: 3,
+        currentGeneration: null,
+        progressStage: null,
+        currentActivity: null,
+        draftText: "",
+        draftMode: "empty",
+        terminal: null,
+      });
+      expect(merge.state.lastProcessedEventId).toEqual(
+        populatedAttemptOne().lastProcessedEventId,
+      );
+    });
+
+    it("leaves equal and lower epochs unchanged", () => {
+      const current = populatedAttemptOne();
+
+      expect(mergeResearchLivePollAttempt(current, 1)).toEqual({
+        state: current,
+        kind: "equal",
+      });
+      expect(mergeResearchLivePollAttempt(current, 0)).toEqual({
+        state: current,
+        kind: "lower",
+      });
     });
   });
 });

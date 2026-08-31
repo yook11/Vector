@@ -30,15 +30,15 @@ export interface ResearchLiveTransition {
   acceptedTerminal: ResearchLiveTerminal | null;
 }
 
-export type ResearchLivePollProgressMergeKind =
+export type ResearchLivePollAttemptMergeKind =
   | "initial"
   | "equal"
   | "higher"
   | "lower";
 
-export interface ResearchLivePollProgressMerge {
+export interface ResearchLivePollAttemptMerge {
   state: ResearchLiveState;
-  kind: ResearchLivePollProgressMergeKind;
+  kind: ResearchLivePollAttemptMergeKind;
 }
 
 export function createInitialResearchLiveState(): ResearchLiveState {
@@ -119,17 +119,13 @@ export function reduceResearchLiveEvent(
   }
 }
 
-export function mergeResearchLivePollProgress(
+export function mergeResearchLivePollAttempt(
   state: ResearchLiveState,
   attemptEpoch: number,
-  progressStage: ResearchLiveState["progressStage"],
-): ResearchLivePollProgressMerge {
+): ResearchLivePollAttemptMerge {
   if (state.currentAttemptEpoch === null) {
     return {
-      state: applyProgressStage(
-        resetForAttempt(state, attemptEpoch),
-        progressStage,
-      ),
+      state: resetForAttempt(state, attemptEpoch),
       kind: "initial",
     };
   }
@@ -138,14 +134,11 @@ export function mergeResearchLivePollProgress(
   }
   if (attemptEpoch > state.currentAttemptEpoch) {
     return {
-      state: applyProgressStage(
-        resetForAttempt(state, attemptEpoch),
-        progressStage,
-      ),
+      state: resetForAttempt(state, attemptEpoch),
       kind: "higher",
     };
   }
-  return { state: applyProgressStage(state, progressStage), kind: "equal" };
+  return { state, kind: "equal" };
 }
 
 export function advanceResearchLiveStage(
@@ -179,19 +172,6 @@ function resetForAttempt(
     hasAcceptedSseEvent: state.hasAcceptedSseEvent,
     terminal: null,
   };
-}
-
-function applyProgressStage(
-  state: ResearchLiveState,
-  progressStage: ResearchLiveState["progressStage"],
-): ResearchLiveState {
-  const nextProgressStage = advanceResearchLiveStage(
-    state.progressStage,
-    progressStage,
-  );
-  return nextProgressStage === state.progressStage
-    ? state
-    : { ...state, progressStage: nextProgressStage };
 }
 
 function stageRank(stage: ResearchLiveState["progressStage"]): number {
