@@ -41,7 +41,7 @@ class _Mechanism:
     """1 機構分の fixture、patch 対象 module、Reader 呼び出し。"""
 
     name: str
-    module: str  # make_safe_async_client を import している = patch 対象
+    module: str  # make_external_async_client を import している = patch 対象
     fixture: str  # 録画した実 transport バイト列
     invoke: Callable[[], Awaitable[object]]
 
@@ -125,7 +125,7 @@ def _params() -> list[Any]:
 async def _run(m: _Mechanism) -> object:
     """録画実 transport を当該機構の Reader 候補 entrypoint に流す。
 
-    差し替えるのは ``make_safe_async_client`` のみ。HTTP status / json /
+    差し替えるのは ``make_external_async_client`` のみ。HTTP status / json /
     bytes 取り出し / parse は機構実装の本物が動く。
     """
     raw = (_FIXTURES_DIR / m.fixture).read_bytes()
@@ -141,7 +141,7 @@ async def _run(m: _Mechanism) -> object:
         client.get = AsyncMock(return_value=response)
         yield client
 
-    with patch(f"{m.module}.make_safe_async_client", _fake_safe_client):
+    with patch(f"{m.module}.make_external_async_client", _fake_safe_client):
         return await m.invoke()
 
 

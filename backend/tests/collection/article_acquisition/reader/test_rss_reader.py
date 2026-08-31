@@ -98,7 +98,7 @@ def _mock_response(
 
 
 def _patch_safe_client(response_or_exc: httpx.Response | Exception) -> Any:
-    """``make_safe_async_client`` を fake ``async with`` context に差し替える。"""
+    """``make_external_async_client`` を fake ``async with`` context に差し替える。"""
 
     @asynccontextmanager
     async def _fake_safe_client(**_kwargs: Any) -> Any:
@@ -109,7 +109,7 @@ def _patch_safe_client(response_or_exc: httpx.Response | Exception) -> Any:
             client.get = AsyncMock(return_value=response_or_exc)
         yield client
 
-    return patch(f"{_MOD}.make_safe_async_client", _fake_safe_client)
+    return patch(f"{_MOD}.make_external_async_client", _fake_safe_client)
 
 
 class TestNormalizeEntry:

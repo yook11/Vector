@@ -278,7 +278,7 @@ class TestEgressProxyDenyContract:
     """app が IP pin を手放す根拠が proxy 側に実在することを固定する。
 
     proxy を経由する構成では DNS rebind 防御の最終責任が Squid の
-    ``http_access deny to_private`` に移る (``safe_http`` の module docstring)。
+    ``http_access deny to_private`` に移る (``http.external`` の module docstring)。
     レンジ定義の一致は ``TestNonPublicRangeParity`` が見るが、**拒否そのものが
     conf に書かれているか** は誰も見ていなかった。この行を消してもレンジは一致する。
     """

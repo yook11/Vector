@@ -183,7 +183,7 @@ def _install_factory_dependencies(
     runtime = runtime or _RuntimeSpyFactory()
     gateway = gateway or _GatewaySpyFactory()
     monkeypatch.setattr(openai, "AsyncOpenAI", deepseek)
-    monkeypatch.setattr(composition, "make_safe_async_client", tavily)
+    monkeypatch.setattr(composition, "make_external_async_client", tavily)
     monkeypatch.setattr(deepseek_module, "DeepSeekAgentRuntime", runtime)
     monkeypatch.setattr(tavily_module, "TavilyExternalSearchGateway", gateway)
     monkeypatch.setattr(

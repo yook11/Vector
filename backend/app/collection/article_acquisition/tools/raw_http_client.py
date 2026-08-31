@@ -9,7 +9,7 @@ import httpx
 from app.collection.external_fetch_error_mapping import (
     external_fetch_error_from_exception,
 )
-from app.shared.security.safe_http import make_safe_async_client
+from app.shared.http.external import make_external_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 _DEFAULT_USER_AGENT = (
@@ -40,7 +40,7 @@ class RawHttpClient:
         Raises:
             ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
-        async with make_safe_async_client(
+        async with make_external_async_client(
             headers={"User-Agent": self._user_agent, "Accept": self._accept},
             verify=True,
             timeout=self._timeout,

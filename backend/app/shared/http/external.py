@@ -1,13 +1,15 @@
-# ruff: noqa: TID251
-"""SSRF 検証付き ``httpx.AsyncClient`` のファクトリ。
+"""第三者宛の ``httpx.AsyncClient`` のファクトリ。
 
-外部 URL を fetch する経路は、すべてここを通すこと。``httpx.AsyncClient`` を
-直接構築する経路は ``flake8-tidy-imports`` の ``TID251`` で禁止する
-(``pyproject.toml`` 参照)。これにより:
+宛先が自分たちの管理下に無い経路 — 第三者のサービスと、記事本文のようにデータ由来の
+URL — はすべてここを通す。宛先を信用できないことから、以下が要求として導かれる:
 
 - 「呼び出し側で ``ensure_host_is_public`` を呼び忘れる」運用ミスを構造的に排除
 - リダイレクト経由 SSRF を default で遮断 (``follow_redirects=False``)
 - DNS rebind / TOCTOU を Custom Transport の IP pin で構造的に閉塞
+
+自分たちの resource 宛には ``app.shared.http.internal`` を使う。どちらでもない経路を
+作らないため、``httpx.AsyncClient`` の直接構築は ``flake8-tidy-imports`` の ``TID251``
+で禁止する (``pyproject.toml`` 参照)。
 
 DNS pin は ``_PinnedDnsTransport`` が送信直前に host を resolve し、全 IP を public
 検証したうえで最初の IP へ TCP 接続先を固定する。Host header と TLS SNI は元 host
@@ -42,7 +44,7 @@ from app.shared.security.ssrf_guard import (
     ensure_host_is_public,
 )
 
-# AsyncHTTPTransport の constructor 引数のうち make_safe_async_client が
+# AsyncHTTPTransport の constructor 引数のうち make_external_async_client が
 # kwargs から取り分けて transport に渡す key 群。
 _TRANSPORT_KEYS: tuple[str, ...] = (
     "verify",
@@ -123,8 +125,8 @@ class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
         return await super().handle_async_request(request)
 
 
-def make_safe_async_client(**kwargs: Any) -> httpx.AsyncClient:
-    """SSRF 検証 + DNS rebind 防御入りの ``httpx.AsyncClient`` を返す。
+def make_external_async_client(**kwargs: Any) -> httpx.AsyncClient:
+    """第三者宛の ``httpx.AsyncClient`` を返す (SSRF 検証 + DNS rebind 防御入り)。
 
     - DNS resolution と IP pin を ``_PinnedDnsTransport`` に統合 (TOCTOU 不成立)
     - ``follow_redirects`` は明示指定がなければ ``False`` を default 適用

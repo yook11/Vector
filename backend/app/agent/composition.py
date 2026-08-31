@@ -31,7 +31,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
 )
 from app.config import settings
-from app.shared.security.safe_http import make_safe_async_client
+from app.shared.http.external import make_external_async_client
 
 if TYPE_CHECKING:
     from app.agent.runtime.gemini import GeminiAgentRuntime
@@ -180,7 +180,7 @@ async def activate_external_search() -> AsyncIterator[ExternalSearch]:
             client=deepseek_client,
             binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
         )
-        async with make_safe_async_client() as tavily_client:
+        async with make_external_async_client() as tavily_client:
             yield ExternalSearchService(
                 query_runtime=query_runtime,
                 search_gateway=TavilyExternalSearchGateway(

@@ -1,4 +1,4 @@
-"""``make_safe_async_client`` のユニットテスト。
+"""``make_external_async_client`` のユニットテスト。
 
 SSRF 検証 + DNS rebind 防御を担う ``_PinnedDnsTransport`` の挙動、
 ``follow_redirects`` の default、transport-level kwargs の振分を検証する。
@@ -14,9 +14,9 @@ import httpx
 import pytest
 
 from app.config import settings
-from app.shared.security.safe_http import (
+from app.shared.http.external import (
     _PinnedDnsTransport,
-    make_safe_async_client,
+    make_external_async_client,
 )
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
@@ -67,7 +67,7 @@ class TestSsrfValidation:
         self, captured_requests: list[httpx.Request]
     ) -> None:
         with _patch_resolver("10.0.0.1"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 with pytest.raises(HostBlockedError):
                     await client.get("http://internal.example/")
         assert captured_requests == []
@@ -77,7 +77,7 @@ class TestSsrfValidation:
         self, captured_requests: list[httpx.Request]
     ) -> None:
         with _patch_resolver("127.0.0.1"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 with pytest.raises(HostBlockedError):
                     await client.get("http://localhost-alias.example.com/")
         assert captured_requests == []
@@ -87,7 +87,7 @@ class TestSsrfValidation:
         self, captured_requests: list[httpx.Request]
     ) -> None:
         with _patch_resolver("8.8.8.8"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 resp = await client.get("https://example.com/")
         assert resp.status_code == 200
         assert len(captured_requests) == 1
@@ -99,7 +99,7 @@ class TestSsrfValidation:
         import socket
 
         with _patch_resolver(socket.gaierror("name unknown")):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 with pytest.raises(HostResolutionError):
                     await client.get("https://nonexistent.invalid/")
         assert captured_requests == []
@@ -110,7 +110,7 @@ class TestSsrfValidation:
     ) -> None:
         """private IP literal を直接渡された場合も transport が拒否する
         (defense-in-depth: SafeUrl で弾く前提だが二重保証)。"""
-        async with make_safe_async_client() as client:
+        async with make_external_async_client() as client:
             with pytest.raises(HostBlockedError):
                 await client.get("http://10.0.0.1/")
         assert captured_requests == []
@@ -124,7 +124,7 @@ class TestSsrfValidation:
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(side_effect=AssertionError("must not resolve")),
         ):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 resp = await client.get("https://8.8.8.8/")
         assert resp.status_code == 200
         assert str(captured_requests[0].url) == "https://8.8.8.8/"
@@ -154,7 +154,7 @@ class TestDnsRebindResistance:
         with patch(
             "app.shared.security.ssrf_guard._resolve_host", side_effect=fake_resolve
         ):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 await client.get("https://rebind.example/feed.xml")
 
         assert len(captured_requests) == 1
@@ -171,7 +171,7 @@ class TestDnsRebindResistance:
     ) -> None:
         """Host header は元 host を維持 (HTTP virtual host routing 用)。"""
         with _patch_resolver("8.8.8.8"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 await client.get("https://example.com/path")
         assert captured_requests[0].headers["Host"] == "example.com"
 
@@ -182,7 +182,7 @@ class TestDnsRebindResistance:
         """``extensions["sni_hostname"]`` に元 host を設定し、TLS server_hostname
         が IP に書換わらないことを保証 (cert verify pass 担保)。"""
         with _patch_resolver("8.8.8.8"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 await client.get("https://example.com/")
         assert captured_requests[0].extensions.get("sni_hostname") == "example.com"
 
@@ -192,7 +192,7 @@ class TestDnsRebindResistance:
     ) -> None:
         """IPv6 host も pin される (httpx が ``[ip]`` 形式に自動 bracket)。"""
         with _patch_resolver("2001:4860:4860::8888"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 await client.get("https://example.com/")
         assert captured_requests[0].url.host == "2001:4860:4860::8888"
         assert captured_requests[0].headers["Host"] == "example.com"
@@ -203,7 +203,7 @@ class TestDnsRebindResistance:
     ) -> None:
         """URL host を IP に書換えても path / query / port は維持する。"""
         with _patch_resolver("8.8.8.8"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 await client.get("https://example.com:8443/api/v1?x=1&y=2")
         url = captured_requests[0].url
         assert url.host == "8.8.8.8"
@@ -233,7 +233,7 @@ class TestEgressProxyRouting:
         self, egress_proxy: str, captured_requests: list[httpx.Request]
     ) -> None:
         with _patch_resolver("8.8.8.8"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 await client.get("https://example.com/path?x=1")
         url = captured_requests[0].url
         assert url.host == "example.com"
@@ -246,7 +246,7 @@ class TestEgressProxyRouting:
     ) -> None:
         """host を書き換えないので SNI の上書きも不要 (CONNECT で無視される)。"""
         with _patch_resolver("8.8.8.8"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 await client.get("https://example.com/")
         assert "sni_hostname" not in captured_requests[0].extensions
 
@@ -256,7 +256,7 @@ class TestEgressProxyRouting:
     ) -> None:
         """公開性の検証は proxy 構成でも通る (proxy の deny に到達する前に落とす)。"""
         with _patch_resolver("10.0.0.1"):
-            async with make_safe_async_client() as client:
+            async with make_external_async_client() as client:
                 with pytest.raises(HostBlockedError):
                     await client.get("http://internal.example/")
         assert captured_requests == []
@@ -265,7 +265,7 @@ class TestEgressProxyRouting:
     async def test_still_blocks_private_ip_literal_when_routed_through_proxy(
         self, egress_proxy: str, captured_requests: list[httpx.Request]
     ) -> None:
-        async with make_safe_async_client() as client:
+        async with make_external_async_client() as client:
             with pytest.raises(HostBlockedError):
                 await client.get("http://10.0.0.1/")
         assert captured_requests == []
@@ -279,7 +279,7 @@ class TestEgressProxyRouting:
         settings 未設定なら直接接続のままなので、host は検証済 IP に pin される。
         """
         with _patch_resolver("8.8.8.8"):
-            async with make_safe_async_client(
+            async with make_external_async_client(
                 proxy="http://attacker.example.com:3128"
             ) as client:
                 await client.get("https://example.com/")
@@ -290,12 +290,12 @@ class TestEgressProxyRouting:
 class TestFollowRedirectsDefault:
     @pytest.mark.asyncio
     async def test_default_is_false(self) -> None:
-        async with make_safe_async_client() as client:
+        async with make_external_async_client() as client:
             assert client.follow_redirects is False
 
     @pytest.mark.asyncio
     async def test_explicit_true_is_respected(self) -> None:
-        async with make_safe_async_client(follow_redirects=True) as client:
+        async with make_external_async_client(follow_redirects=True) as client:
             assert client.follow_redirects is True
 
 
@@ -303,9 +303,9 @@ class TestFollowRedirectsDefault:
 class TestTransportStructure:
     @pytest.mark.asyncio
     async def test_uses_pinned_dns_transport(self) -> None:
-        """make_safe_async_client が返す client は ``_PinnedDnsTransport`` を
+        """make_external_async_client が返す client は ``_PinnedDnsTransport`` を
         必ず装着する (event_hook ではなく transport 層で防御する構造保証)。"""
-        async with make_safe_async_client() as client:
+        async with make_external_async_client() as client:
             assert isinstance(client._transport, _PinnedDnsTransport)
 
     @pytest.mark.asyncio
@@ -316,5 +316,5 @@ class TestTransportStructure:
         # 内部 _pool が h2 enabled で初期化される。client は transport=... の
         # 際は他の transport-level kwargs を受け付けない (= ValueError 出ず
         # に成功) ことで、振分が正しいことが分かる。
-        async with make_safe_async_client(verify=True, http1=True) as client:
+        async with make_external_async_client(verify=True, http1=True) as client:
             assert isinstance(client._transport, _PinnedDnsTransport)

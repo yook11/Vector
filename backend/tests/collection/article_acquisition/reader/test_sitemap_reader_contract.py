@@ -74,7 +74,7 @@ async def _reader_entries(content: bytes) -> list[SitemapEntry]:
         client.get = AsyncMock(return_value=response)
         yield client
 
-    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         return await SitemapReader().fetch(
             url=_URL, source_name="sitemap-reader-contract"
         )
@@ -130,7 +130,7 @@ async def _raise_through(status_code: int) -> None:
         client.get = AsyncMock(return_value=response)
         yield client
 
-    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         await SitemapReader().fetch(url=_URL, source_name="sitemap-reader-contract")
 
 

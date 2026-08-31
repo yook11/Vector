@@ -102,9 +102,9 @@ def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock
 
 
 def _patch_client(client: AsyncMock):
-    """``make_safe_async_client`` を patch して scrape() がモックを使うようにする。"""
+    """``make_external_async_client`` を patch して scrape() にモックを使わせる。"""
     return patch(
-        "app.collection.article_completion.scraper.make_safe_async_client",
+        "app.collection.article_completion.scraper.make_external_async_client",
         return_value=_as_async_cm(client),
     )
 
