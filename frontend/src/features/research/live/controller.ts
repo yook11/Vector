@@ -177,7 +177,7 @@ export function createResearchRunLiveController({
     const errorListener: EventListener = () => {
       if (!isCurrentSource(version, source) || finalizationStarted) return;
       if (source.readyState === EVENT_SOURCE_CLOSED) {
-        degradeToPollingOnly();
+        degradeToPollingOnly(version);
         return;
       }
       updateSnapshot({ ...snapshot, connectionMode: "reconnecting" });
@@ -201,7 +201,7 @@ export function createResearchRunLiveController({
         });
         if (result.kind === "event-local-invalid") return;
         if (result.kind === "protocol-integrity-failure") {
-          degradeToPollingOnly();
+          degradeToPollingOnly(version);
           return;
         }
 
@@ -251,7 +251,7 @@ export function createResearchRunLiveController({
     eventSource = null;
   }
 
-  function degradeToPollingOnly(): void {
+  function degradeToPollingOnly(version: number): void {
     if (finalizationStarted || snapshot.connectionMode === "polling-only") {
       return;
     }
@@ -261,11 +261,13 @@ export function createResearchRunLiveController({
       connectionMode: "polling-only",
       liveState: suppressResearchLiveDraft(snapshot.liveState),
     });
+    startPoll(version);
   }
 
   function startPoll(version: number): void {
     if (
       !isCurrent(version) ||
+      snapshot.connectionMode !== "polling-only" ||
       finalizationStarted ||
       visibility.isHidden() ||
       pollingRequest !== null

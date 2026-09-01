@@ -2,6 +2,10 @@
 
 Status: Implemented — 2026-08-31
 
+> 後続契約更新: `agent-research-sse-connected-no-poll-slice.md` は
+> `connecting` / `live` / `reconnecting` 中の `GET /runs` を止める。
+> `polling-only` の 2秒 poll は残す。本文中の「subscribe 開始から poll する」記述は無効である。
+
 親仕様: `agent-research-live-ui-slice.md`
 
 ## 位置付け
