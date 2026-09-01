@@ -136,4 +136,4 @@ primary_region = 'nrt'
 
 # release_command は撤去する。Neon には schema migration を適用済みで、migration の
 # owner URL (MIGRATION_DATABASE_URL) を Fly runtime secret に置かない方針のため。
-# 今後の migration は CI / 手元から owner URL + full Settings env で実行する。
+# AWS本番のmigrationは専用ECS taskがIAM認証で実行し、Fly runtimeでは実行しない。

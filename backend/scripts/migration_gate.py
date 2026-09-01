@@ -22,8 +22,10 @@ from typing import Literal
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from alembic.script.revision import RevisionError
 
 MigrationKind = Literal["expand", "contract", "unknown"]
+MigrationDecision = Literal["none", "expand", "manual", "invalid"]
 
 _DESTRUCTIVE_SQL_RE = re.compile(
     r"\b(DROP|TRUNCATE|DELETE|UPDATE|ALTER)\b|\bINSERT\b[\s\S]*\bSELECT\b",
@@ -31,12 +33,49 @@ _DESTRUCTIVE_SQL_RE = re.compile(
 )
 _ALLOWLISTED_SQL_RE = re.compile(r"^\s*(SET|COMMENT)\b", re.IGNORECASE)
 _MULTI_STATEMENT_SQL_RE = re.compile(r";\s*\S")
+_CLI_REVISION_PATH_RE = re.compile(r"^(?:backend/)?alembic/versions/[A-Za-z0-9_]+\.py$")
 _DROP_OP_PREFIX = "drop_"
 _BLOCKED_CONSTRAINT_OPS = frozenset(
     {
         "create_unique_constraint",
         "create_foreign_key",
         "create_check_constraint",
+    }
+)
+_ALLOWED_OPS = frozenset({"create_table"})
+_ALLOWED_TYPE_CONSTRUCTORS = frozenset({"HALFVEC", "JSONB", "PgUUID"})
+_ALLOWED_SERVER_DEFAULT_CALLS = frozenset(
+    {"sa.false", "sa.func.now", "sa.text", "sa.true"}
+)
+_ALLOWED_SA_CONSTRUCTORS = frozenset(
+    {
+        "sa.BigInteger",
+        "sa.Boolean",
+        "sa.CheckConstraint",
+        "sa.Column",
+        "sa.Date",
+        "sa.DateTime",
+        "sa.Enum",
+        "sa.Float",
+        "sa.ForeignKey",
+        "sa.ForeignKeyConstraint",
+        "sa.Identity",
+        "sa.Index",
+        "sa.Integer",
+        "sa.JSON",
+        "sa.LargeBinary",
+        "sa.Numeric",
+        "sa.PrimaryKeyConstraint",
+        "sa.SmallInteger",
+        "sa.String",
+        "sa.Text",
+        "sa.Time",
+        "sa.UniqueConstraint",
+        "sa.Uuid",
+        "sa.false",
+        "sa.func.now",
+        "sa.text",
+        "sa.true",
     }
 )
 
@@ -55,6 +94,28 @@ class Classification:
     def auto_allowed(self) -> bool:
         """本番自動適用してよい expand revision か。"""
         return self.kind == "expand" and not self.reasons
+
+
+@dataclass(frozen=True, slots=True)
+class ChangedMigrationDecision:
+    """changed/pending revision集合をrelease判断へ渡す機械可読結果。"""
+
+    decision: MigrationDecision
+    revisions: tuple[Classification, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "decision": self.decision,
+            "revisions": [
+                {
+                    "path": str(result.path),
+                    "kind": result.kind,
+                    "declared_kind": result.declared_kind,
+                    "reasons": list(result.reasons),
+                }
+                for result in self.revisions
+            ],
+        }
 
 
 class MigrationGateError(RuntimeError):
@@ -131,6 +192,25 @@ def classify(path: str | Path) -> Classification:
     )
 
 
+def decide_changed_migrations(
+    paths: Sequence[str | Path],
+) -> ChangedMigrationDecision:
+    """revision集合をnone/expand/manual/invalidへ分類する。"""
+    classifications = tuple(classify(path) for path in paths)
+    if not classifications:
+        decision: MigrationDecision = "none"
+    elif any(
+        result.kind == "unknown" or result.mislabelled_expand
+        for result in classifications
+    ):
+        decision = "invalid"
+    elif all(result.auto_allowed for result in classifications):
+        decision = "expand"
+    else:
+        decision = "manual"
+    return ChangedMigrationDecision(decision=decision, revisions=classifications)
+
+
 def _read_declared_kind(tree: ast.Module) -> tuple[str | None, str | None]:
     """module-level MIGRATION_KIND 宣言を読む。"""
     for node in tree.body:
@@ -149,7 +229,7 @@ def _declaration_reason(value: ast.AST | None) -> str | None:
         return None
     if declared is None:
         return "MIGRATION_KIND must be literal 'expand' or 'contract'"
-    return f"MIGRATION_KIND has invalid value: {declared!r}"
+    return "MIGRATION_KIND has an invalid literal value"
 
 
 def _find_function(
@@ -184,8 +264,10 @@ def _classify_call(call: ast.Call) -> list[str]:
         return reasons
 
     if isinstance(call.func, ast.Attribute) and call.func.attr == "execute":
-        reasons.append("data migration via bind/connection.execute is not auto-allowed")
-    return reasons
+        return ["data migration via bind/connection.execute is not auto-allowed"]
+    if _is_allowlisted_schema_constructor(call.func):
+        return []
+    return ["non-allowlisted helper call is manual-only"]
 
 
 def _classify_op_call(op_name: str, call: ast.Call) -> list[str]:
@@ -205,25 +287,94 @@ def _classify_op_call(op_name: str, call: ast.Call) -> list[str]:
         return ["op.get_bind indicates a data migration and is manual-only"]
     if op_name == "execute":
         return _classify_op_execute(call)
-    return []
+    if op_name in _ALLOWED_OPS:
+        return []
+    return ["non-allowlisted Alembic operation is manual-only"]
+
+
+def _is_allowlisted_schema_constructor(node: ast.AST) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in _ALLOWED_TYPE_CONSTRUCTORS
+    qualified_name = _qualified_name(node)
+    return qualified_name in _ALLOWED_SA_CONSTRUCTORS
+
+
+def _qualified_name(node: ast.AST) -> str | None:
+    parts: list[str] = []
+    current = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    parts.append(current.id)
+    return ".".join(reversed(parts))
 
 
 def _classify_alter_column(call: ast.Call) -> list[str]:
-    reasons: list[str] = []
-    for blocked_kw in ("type_", "new_column_name"):
-        if _has_keyword(call, blocked_kw):
-            reasons.append(f"op.alter_column({blocked_kw}=...) is contract-only")
+    if len(call.args) != 2 or not all(
+        _literal_string(argument) is not None for argument in call.args
+    ):
+        return ["op.alter_column target must be two literal names"]
+
+    allowed_keywords = {
+        "existing_nullable",
+        "existing_server_default",
+        "existing_type",
+        "nullable",
+        "schema",
+    }
+    unsupported = sorted(
+        keyword.arg or "**kwargs"
+        for keyword in call.keywords
+        if keyword.arg not in allowed_keywords
+    )
+    if unsupported:
+        return [
+            "op.alter_column unsupported change keywords are manual-only: "
+            + ", ".join(unsupported)
+        ]
+
     nullable_kw = _keyword(call, "nullable")
-    if nullable_kw is not None:
-        nullable_value = _literal_bool(nullable_kw.value)
-        if nullable_value is False:
-            reasons.append("op.alter_column(nullable=False) sets NOT NULL")
-        elif nullable_value is None:
-            reasons.append("op.alter_column(nullable=...) is dynamic and manual-only")
-    return reasons
+    if nullable_kw is None:
+        return ["op.alter_column only nullable=True is auto-allowed"]
+    nullable_value = _literal_bool(nullable_kw.value)
+    if nullable_value is False:
+        return ["op.alter_column(nullable=False) sets NOT NULL"]
+    if nullable_value is None:
+        return ["op.alter_column(nullable=...) is dynamic and manual-only"]
+    return []
 
 
 def _classify_create_index(call: ast.Call) -> list[str]:
+    if len(call.args) != 3 or not all(
+        _literal_string(argument) is not None for argument in call.args[:2]
+    ):
+        return ["op.create_index requires literal index and table names"]
+    columns = call.args[2]
+    if not isinstance(columns, (ast.List, ast.Tuple)) or not columns.elts:
+        return ["op.create_index columns must be a non-empty literal list"]
+    if any(_literal_string(column) is None for column in columns.elts):
+        return ["op.create_index expression columns are manual-only"]
+
+    allowed_keywords = {"postgresql_concurrently", "schema", "unique"}
+    unsupported = sorted(
+        keyword.arg or "**kwargs"
+        for keyword in call.keywords
+        if keyword.arg not in allowed_keywords
+    )
+    if unsupported:
+        return [
+            "op.create_index unsupported options are manual-only: "
+            + ", ".join(unsupported)
+        ]
+
+    unique_kw = _keyword(call, "unique")
+    if unique_kw is not None and _literal_bool(unique_kw.value) is not False:
+        return ["op.create_index unique=True or dynamic is manual-only"]
+    schema_kw = _keyword(call, "schema")
+    if schema_kw is not None and _literal_string(schema_kw.value) is None:
+        return ["op.create_index schema must be a literal name"]
     concurrently_kw = _keyword(call, "postgresql_concurrently")
     if concurrently_kw is not None and _literal_bool(concurrently_kw.value) is True:
         return []
@@ -231,19 +382,57 @@ def _classify_create_index(call: ast.Call) -> list[str]:
 
 
 def _classify_add_column(call: ast.Call) -> list[str]:
-    if len(call.args) < 2:
-        return ["op.add_column column argument is missing"]
+    if len(call.args) != 2 or _literal_string(call.args[0]) is None:
+        return ["op.add_column requires a literal table and one column"]
+    if call.keywords:
+        return ["op.add_column operation keywords are manual-only"]
     column = call.args[1]
-    if not isinstance(column, ast.Call):
+    if not isinstance(column, ast.Call) or _qualified_name(column.func) != "sa.Column":
         return ["op.add_column column argument is dynamic and manual-only"]
+    if len(column.args) != 2 or _literal_string(column.args[0]) is None:
+        return [
+            "op.add_column constraints or dynamic column definitions are manual-only"
+        ]
+
+    allowed_column_keywords = {"nullable", "server_default"}
+    unsupported = sorted(
+        keyword.arg or "**kwargs"
+        for keyword in column.keywords
+        if keyword.arg not in allowed_column_keywords
+    )
+    if unsupported:
+        return [
+            "op.add_column constraint-bearing or unsupported keywords are manual-only: "
+            + ", ".join(unsupported)
+        ]
 
     nullable_kw = _keyword(column, "nullable")
     nullable = True if nullable_kw is None else _literal_bool(nullable_kw.value)
     if nullable is None:
         return ["op.add_column(nullable=...) is dynamic and manual-only"]
-    if nullable is False and not _has_keyword(column, "server_default"):
+    server_default_kw = _keyword(column, "server_default")
+    if server_default_kw is not None and not _is_static_server_default(
+        server_default_kw.value
+    ):
+        return ["op.add_column server_default must be a non-null static value"]
+    if nullable is False and server_default_kw is None:
         return ["op.add_column(nullable=False) without server_default is manual-only"]
     return []
+
+
+def _is_static_server_default(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant):
+        return node.value is not None and isinstance(
+            node.value, (str, int, float, bool)
+        )
+    if not isinstance(node, ast.Call):
+        return False
+    qualified_name = _qualified_name(node.func)
+    if qualified_name not in _ALLOWED_SERVER_DEFAULT_CALLS or node.keywords:
+        return False
+    if qualified_name in {"sa.false", "sa.func.now", "sa.true"}:
+        return not node.args
+    return len(node.args) == 1 and _literal_string(node.args[0]) is not None
 
 
 def _classify_op_execute(call: ast.Call) -> list[str]:
@@ -292,10 +481,6 @@ def _keyword(call: ast.Call, name: str) -> ast.keyword | None:
     return None
 
 
-def _has_keyword(call: ast.Call, name: str) -> bool:
-    return _keyword(call, name) is not None
-
-
 def _literal_string(node: ast.AST | None) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -314,13 +499,22 @@ def _is_name(node: ast.AST, name: str) -> bool:
 
 def _resolve_cli_path(raw_path: str) -> Path:
     """repo root / backend working-directory の両方から path を解決する。"""
+    if _CLI_REVISION_PATH_RE.fullmatch(raw_path) is None:
+        raise ValueError("migration path is outside the allowed revision path format")
     path = Path(raw_path)
-    if path.exists():
-        return path
-    if raw_path.startswith("backend/"):
+    if not path.exists() and raw_path.startswith("backend/"):
         backend_relative = Path(raw_path.removeprefix("backend/"))
         if backend_relative.exists():
-            return backend_relative
+            path = backend_relative
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("migration path must name a regular revision file")
+    resolved = path.resolve()
+    allowed_directories = {
+        (Path.cwd() / "alembic" / "versions").resolve(),
+        (Path.cwd() / "backend" / "alembic" / "versions").resolve(),
+    }
+    if resolved.parent not in allowed_directories:
+        raise ValueError("migration path resolves outside the revision directory")
     return path
 
 
@@ -341,7 +535,12 @@ def _print_classifications(classifications: Sequence[Classification]) -> None:
         return
     for result in classifications:
         auto = "yes" if result.auto_allowed else "no"
-        declared = result.declared_kind if result.declared_kind is not None else "-"
+        if result.declared_kind in {"expand", "contract"}:
+            declared = result.declared_kind
+        elif result.declared_kind is None:
+            declared = "-"
+        else:
+            declared = "<invalid>"
         print(
             f"{result.path}: kind={result.kind} declared={declared} auto_allowed={auto}"
         )
@@ -349,15 +548,16 @@ def _print_classifications(classifications: Sequence[Classification]) -> None:
             print(f"  - {reason}")
 
 
-def _files_gate(paths: Sequence[str]) -> int:
-    classifications = [classify(_resolve_cli_path(path)) for path in paths]
-    _print_classifications(classifications)
-    failed = [
-        result
-        for result in classifications
-        if result.kind == "unknown" or result.mislabelled_expand
-    ]
-    if failed:
+def _files_gate(paths: Sequence[str], *, decision_output: str | None = None) -> int:
+    resolved = [_resolve_cli_path(path) for path in paths]
+    decision = decide_changed_migrations(resolved)
+    _print_classifications(decision.revisions)
+    if decision_output is not None:
+        Path(decision_output).write_text(
+            json.dumps(decision.as_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if decision.decision == "invalid":
         print(
             "Migration file gate failed: undeclared/unknown or mislabelled "
             "expand revision."
@@ -383,10 +583,18 @@ async def _pending_gate() -> int:
 
 async def _pending_revision_paths() -> list[Path]:
     script = _script_directory()
+    current_heads = await _current_db_heads()
+    return pending_revision_paths(script, current_heads)
+
+
+def pending_revision_paths(
+    script: ScriptDirectory,
+    current_heads: Sequence[str],
+) -> list[Path]:
+    """DB currentからsingle script headまでのrevision fileを順番に返す。"""
     script_heads = script.get_heads()
     if len(script_heads) != 1:
         raise MigrationGateError(f"expected single Alembic head, got {script_heads!r}")
-    current_heads = await _current_db_heads()
     if len(current_heads) > 1:
         raise MigrationGateError(
             f"expected single DB current head, got {current_heads!r}"
@@ -398,7 +606,12 @@ async def _pending_revision_paths() -> list[Path]:
         print(f"DB current={lower}; script head={upper}; pending=0")
         return []
 
-    revisions = list(script.iterate_revisions(upper, lower))
+    try:
+        revisions = list(script.iterate_revisions(upper, lower))
+    except RevisionError as exc:
+        raise MigrationGateError(
+            "DB current revision is not resolvable from the script head"
+        ) from exc
     paths: list[Path] = []
     for revision in reversed(revisions):
         if revision.path is None:
@@ -419,11 +632,10 @@ def _script_directory() -> ScriptDirectory:
 
 
 async def _current_db_heads() -> tuple[str, ...]:
-    from app.config import settings
-    from app.db_ssl import create_app_engine
+    from app.migration_config import load_migration_settings
+    from app.migration_db import create_migration_engine
 
-    url = settings.migration_database_url or settings.database_url
-    engine = create_app_engine(url, application_name="vector-cli-migration-gate")
+    engine = create_migration_engine(load_migration_settings())
     try:
         async with engine.connect() as connection:
             return await connection.run_sync(_current_heads_from_sync_connection)
@@ -446,6 +658,10 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Classify DB pending range",
     )
+    parser.add_argument(
+        "--decision-output",
+        help="Write the machine-readable migration decision JSON to this path.",
+    )
     return parser.parse_args(argv)
 
 
@@ -453,9 +669,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     try:
         if args.files is not None:
-            return _files_gate(args.files)
+            return _files_gate(args.files, decision_output=args.decision_output)
         if args.files_json is not None:
-            return _files_gate(_load_files_json(args.files_json))
+            return _files_gate(
+                _load_files_json(args.files_json),
+                decision_output=args.decision_output,
+            )
+        if args.decision_output is not None:
+            raise ValueError(
+                "--decision-output is only valid with --files/--files-json"
+            )
         return asyncio.run(_pending_gate())
     except (MigrationGateError, ValueError, json.JSONDecodeError) as exc:
         print(f"Migration gate failed: {exc}", file=sys.stderr)

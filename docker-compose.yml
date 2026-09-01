@@ -179,13 +179,8 @@ services:
     depends_on:
       db-init-revoke-create:
         condition: service_completed_successfully
-    # backend Settings (Pydantic) は migration 経路でも全 env を validate する
-    # ため .env を読み込む。backend service と同一構成。
-    env_file:
-      - .env
     environment:
-      # vector (table owner) で接続。alembic は public.* DDL を伴うため
-      # vector_app では権限不足になる。
+      # migration専用設定だけを渡し、BFF/API secretをmigration containerへ入れない。
       MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
       # 過去の destructive migrations (4d16d9b326a0 等) は env guard 付き。
       # init service にのみ渡し backend runtime には渡さないことで accidental
@@ -214,7 +209,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
     # Dockerfile CMD は uvicorn のみ (PR4 / red-team C2 防御)。migration は
     # db-init-alembic service が責務を持ち、backend は uvicorn 起動だけを行う。
-    # 本番 (Fly.io) は fly.toml [deploy].release_command で migration を別経路実行。
+    # 本番は AWS の一時 migration ECS task で migration を別経路実行する。
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
       - ./backend/app:/app/app

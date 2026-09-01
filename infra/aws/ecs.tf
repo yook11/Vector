@@ -24,6 +24,7 @@ locals {
     for user in toset(["vector_app", "vector_collect", "vector_auth"]) :
     user => "postgresql+asyncpg://${user}@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
   }
+  migration_db_url = "postgresql+asyncpg://vector@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
 
   broker_endpoint     = "${aws_elasticache_replication_group.broker.primary_endpoint_address}:${aws_elasticache_replication_group.broker.port}"
   rate_limit_endpoint = "${aws_elasticache_replication_group.rate_limit.primary_endpoint_address}:${aws_elasticache_replication_group.rate_limit.port}"
@@ -215,6 +216,49 @@ resource "aws_ecs_task_definition" "this" {
       },
     )
   ])
+}
+
+resource "aws_ecs_task_definition" "migration" {
+  family                   = "${var.name_prefix}-migration"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+
+  runtime_platform {
+    cpu_architecture        = "ARM64"
+    operating_system_family = "LINUX"
+  }
+
+  task_role_arn      = aws_iam_role.migration_task.arn
+  execution_role_arn = aws_iam_role.migration_execution.arn
+
+  container_definitions = jsonencode([
+    {
+      name       = "migration"
+      image      = "${aws_ecr_repository.this["backend"].repository_url}:${var.image_tag}"
+      essential  = true
+      privileged = false
+      command    = ["python", "-m", "scripts.run_production_migration"]
+      environment = [
+        { name = "ENV", value = "production" },
+        { name = "AWS_REGION", value = var.region },
+        { name = "DB_IAM_AUTH", value = "true" },
+        { name = "MIGRATION_DATABASE_URL", value = local.migration_db_url },
+      ]
+      secrets = []
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.migration.name
+          "awslogs-region"        = var.region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    }
+  ])
+
+  tags = { Name = "${var.name_prefix}-migration" }
 }
 
 resource "aws_ecs_service" "this" {

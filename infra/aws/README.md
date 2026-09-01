@@ -159,12 +159,13 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
   **CLI を alembic より先に**流す必要がある (逆だと watchlist_entries の FK 作成で
   落ちる)。統合テストは `create_all` で schema を焼くため、**この順序依存は
   migration 経路でしか現れない** — テストが緑でも初期構築は落ちうる。
-- **app role は password を持たない。** `vector_app` / `vector_auth` /
-  `vector_collect` は IAM 認証 (`GRANT rds_iam`) で、`db-provision.sql` に秘密が
-  登場しないのはこのため。password 認証を続けるのは migration owner の `vector`
-  だけで、その値はどこにも保存していない (`db_iam_auth.py` の射程の注記と対)。
-- **contract migration は新コードの後に当てる。** expand は先でよい。判定は各
-  migration の `MIGRATION_KIND` 宣言と `scripts/migration_gate.py` が持つ。
+- **DB role は password を持たない。** `vector_app` / `vector_auth` /
+  `vector_collect` とmigration ownerの`vector`はIAM認証 (`GRANT rds_iam`) を使い、
+  `db-provision.sql`にもCIにも秘密を置かない。password認証はbreak-glassの
+  `vector_master`だけに残す。
+- **自動適用はexpand-only。** pending rangeにcontract / mixedがあればreleaseを
+  dispatchせず、適用前に停止する。判定は各migrationの`MIGRATION_KIND`宣言と
+  `scripts/migration_gate.py`が持つ。
 - **初回構築は destructive gate を明示的に通す。** b1 の legacy テーブル削除が
   要求する。空 DB では失うものが無いので通してよい、という判断がその都度要る。
 

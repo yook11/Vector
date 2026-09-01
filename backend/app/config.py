@@ -115,8 +115,8 @@ class Settings(BaseSettings):
     database_url: str
 
     # RDS IAM 認証。有効時は URL に password を持たせず、接続ごとに IAM の auth token
-    # を作って認証する (``app/db_iam_auth.py``)。**射程は app runtime の接続だけ**で、
-    # migration は migrator role の password 認証を続ける。
+    # を作って認証する (``app/db_iam_auth.py``)。この設定は app runtime 用で、
+    # migration は専用の ``MigrationSettings`` で認証境界を検証する。
     db_iam_auth: bool = False
 
     # token 署名に使う AWS region。botocore が region に読む env は AWS_DEFAULT_REGION
@@ -434,8 +434,8 @@ class Settings(BaseSettings):
 
         provider が ``connect_args`` で password を上書きするため、URL 側の password は
         黙って無視される。「IAM のつもりで password 認証している」と疑えない状態を
-        作らないために弾く。``migration_database_url`` は射程外
-        (migrator role は password 認証を続ける)。
+        作らないために弾く。``migration_database_url`` は射程外で、production
+        migration の IAM-only 条件は専用の ``MigrationSettings`` が検証する。
         """
         if not self.db_iam_auth:
             return self

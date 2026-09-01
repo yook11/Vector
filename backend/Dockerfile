@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # --- Builder stage: install dependencies via uv ---
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca AS builder
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv
@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 # --- Runtime stage: slim Debian bookworm with copied venv ---
-FROM python:3.13-slim-bookworm AS runtime
+FROM python:3.13-slim-bookworm@sha256:c45a22ea000adfd9cda29364bbe7edd23001ce5cc2ad15857cfbf7766943b9ca AS runtime
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -34,8 +34,8 @@ COPY --chown=backend:backend . .
 USER backend
 
 # Migration 経路と app 起動経路を構造的に分離する (PR4 / red-team C2 防御):
-# - dev (docker-compose) は compose.yml の `command:` で migration → uvicorn を override
-# - 本番 (Fly.io) は fly.toml の [deploy].release_command で alembic upgrade head を実行
+# - dev は docker-compose の db-init-alembic service が先にmigrationを実行
+# - AWS本番はproduction承認後の一時ECS taskがrollout前にmigrationを実行
 # Dockerfile の CMD は uvicorn のみ。migration を起動経路に同居させない。
 
 # docker-compose の healthcheck (line 96-101) と同一 pattern。Dockerfile に

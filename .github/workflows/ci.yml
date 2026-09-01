@@ -74,7 +74,7 @@ jobs:
             ci:
               - '.github/workflows/**'
               - '.github/scripts/**'
-            # 自動 release を止める判定 (本 slice は migration を手動運用)。
+            # migration-check が expand / manual を分類し、自動 release 可否を決める。
             migrations:
               - 'backend/alembic/versions/**'
             aws_infra:
@@ -636,6 +636,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.migrations == 'true'
+    outputs:
+      decision: ${{ steps.classify.outputs.decision }}
 
     services:
       postgres:
@@ -653,15 +655,10 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
       MIGRATION_DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
-      BFF_JWT_SIGNING_SECRET: ci4444444444444444444444444444444444444444444444444444444444444444
-      REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
       POSTGRES_AUTH_PASSWORD: ci2222222222222222222222222222222222222222222222222222222222222222
       POSTGRES_APP_PASSWORD: ci3333333333333333333333333333333333333333333333333333333333333333
       POSTGRES_COLLECT_PASSWORD: ci6666666666666666666666666666666666666666666666666666666666666666
-      FRONTEND_URL: http://localhost:3000
-      INTERNAL_FRONTEND_BASE_URL: http://frontend:3000
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -721,29 +718,34 @@ jobs:
         run: uv run alembic upgrade head
         working-directory: backend
 
-      # ref作成pushは比較元がなく全migrationが追加扱いになるため、分類だけ除外する。
-      - name: Classify changed migration revisions
-        if: ${{ github.event_name != 'push' || github.event.created != true }}
+      # invalid は CI 自体を失敗させ、contract / mixed は manual として green のまま
+      # release dispatch だけを止める。
+      - id: classify
+        name: Classify changed migration revisions
         env:
           MIGRATION_GATE_FILES_JSON: ${{ needs.changes.outputs.migration_files }}
         run: |
-          set -o pipefail
+          set -euo pipefail
+          decision_file="$RUNNER_TEMP/migration-decision.json"
           {
             echo "## Migration classification"
-            echo ""
-            echo "Changed migration files:"
-            echo ""
-            echo '```json'
-            printf '%s\n' "$MIGRATION_GATE_FILES_JSON"
-            echo '```'
             echo ""
             echo "Gate output:"
             echo ""
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           uv run python scripts/migration_gate.py --files-json "$MIGRATION_GATE_FILES_JSON" \
+            --decision-output "$decision_file" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          decision=$(python -c \
+            'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["decision"])' \
+            "$decision_file")
+          case "$decision" in
+            expand|manual) ;;
+            *) echo "::error::unexpected migration decision: $decision"; exit 1 ;;
+          esac
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
         working-directory: backend
 
   # ---- CI gate (全必須チェックの集約) ----
@@ -768,6 +770,8 @@ jobs:
     # 失敗 needs があっても下の script で明示判定して exit 1 する。
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    outputs:
+      migration_decision: ${{ steps.migration-decision.outputs.value }}
     steps:
       - name: Require all checks (path-filter 対象 job は skip 許容)
         run: |
@@ -793,6 +797,24 @@ jobs:
           done
           exit $fail
 
+      - id: migration-decision
+        name: Publish migration release decision
+        env:
+          MIGRATIONS_CHANGED: ${{ needs.changes.outputs.migrations }}
+          CLASSIFIER_DECISION: ${{ needs.migration-check.outputs.decision }}
+        run: |
+          set -euo pipefail
+          if [ "$MIGRATIONS_CHANGED" != "true" ]; then
+            decision=none
+          else
+            decision="$CLASSIFIER_DECISION"
+          fi
+          case "$decision" in
+            none|expand|manual) ;;
+            *) echo "::error::migration decision is missing or invalid"; exit 1 ;;
+          esac
+          echo "value=$decision" >> "$GITHUB_OUTPUT"
+
   # ---- AWS 本番 release の非同期 dispatch -------------------------------
   # release workflow を reusable workflow として呼ぶと production 承認待ちの間、
   # main CI の concurrency を占有する。workflow_dispatch だけを発火して本 job は終え、
@@ -814,7 +836,7 @@ jobs:
           CI_GATE_RESULT: ${{ needs.ci-gate.result }}
           BACKEND_CHANGED: ${{ needs.changes.outputs.backend }}
           FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
-          MIGRATIONS_CHANGED: ${{ needs.changes.outputs.migrations }}
+          MIGRATION_DECISION: ${{ needs.ci-gate.outputs.migration_decision }}
           AWS_INFRA_CHANGED: ${{ needs.changes.outputs.aws_infra }}
           PUBLICATION_FREEZE: ${{ vars.PUBLICATION_FREEZE }}
           RELEASE_SHA: ${{ github.sha }}
@@ -831,10 +853,17 @@ jobs:
             eligible=false
             reasons+=("backend / frontend の変更がない")
           fi
-          if [ "$MIGRATIONS_CHANGED" = "true" ]; then
-            eligible=false
-            reasons+=("migration を含むため手動 release が必要")
-          fi
+          case "$MIGRATION_DECISION" in
+            none|expand) ;;
+            manual)
+              eligible=false
+              reasons+=("contract または mixed migration のため手動 release が必要")
+              ;;
+            *)
+              eligible=false
+              reasons+=("migration 判定が不明なため release できない")
+              ;;
+          esac
           if [ "$AWS_INFRA_CHANGED" = "true" ]; then
             eligible=false
             reasons+=("AWS infra 変更を含むため Terraform apply 後の手動 release が必要")
@@ -854,7 +883,7 @@ jobs:
             echo "| CI gate | $CI_GATE_RESULT |"
             echo "| backend | $BACKEND_CHANGED |"
             echo "| frontend | $FRONTEND_CHANGED |"
-            echo "| migrations | $MIGRATIONS_CHANGED |"
+            echo "| migration decision | ${MIGRATION_DECISION:-unknown} |"
             echo "| AWS infra | $AWS_INFRA_CHANGED |"
             echo "| publication freeze | ${PUBLICATION_FREEZE:-unset} |"
             echo "| dispatch | $([ "$eligible" = "true" ] && echo yes || echo no) |"

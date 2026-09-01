@@ -46,6 +46,22 @@ resource "aws_security_group" "endpoints" {
   vpc_id      = aws_vpc.main.id
 }
 
+resource "aws_security_group" "migration_endpoints" {
+  name        = "${var.name_prefix}-migration-vpce"
+  description = "ECR and CloudWatch Logs endpoints used by migration tasks."
+  vpc_id      = aws_vpc.main.id
+
+  tags = { Name = "${var.name_prefix}-migration-vpce" }
+}
+
+resource "aws_security_group" "migration" {
+  name        = "${var.name_prefix}-migration"
+  description = "One-off production database migration task."
+  vpc_id      = aws_vpc.main.id
+
+  tags = { Name = "${var.name_prefix}-migration" }
+}
+
 # --- 入口 -----------------------------------------------------------------
 
 resource "aws_vpc_security_group_ingress_rule" "alb_from_internet" {
@@ -137,6 +153,24 @@ resource "aws_vpc_security_group_egress_rule" "app_to_rds" {
   for_each = local.db_stages
 
   security_group_id            = aws_security_group.app[each.value].id
+  description                  = "RDS PostgreSQL"
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  referenced_security_group_id = aws_security_group.rds.id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_migration" {
+  security_group_id            = aws_security_group.rds.id
+  description                  = "production migration"
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  referenced_security_group_id = aws_security_group.migration.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "migration_to_rds" {
+  security_group_id            = aws_security_group.migration.id
   description                  = "RDS PostgreSQL"
   ip_protocol                  = "tcp"
   from_port                    = 5432
@@ -254,6 +288,15 @@ resource "aws_vpc_security_group_ingress_rule" "endpoints_from_proxy" {
   referenced_security_group_id = aws_security_group.proxy.id
 }
 
+resource "aws_vpc_security_group_ingress_rule" "endpoints_from_migration" {
+  security_group_id            = aws_security_group.migration_endpoints.id
+  description                  = "migration"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.migration.id
+}
+
 resource "aws_vpc_security_group_egress_rule" "app_to_endpoints" {
   for_each = local.all_stages
 
@@ -263,6 +306,15 @@ resource "aws_vpc_security_group_egress_rule" "app_to_endpoints" {
   from_port                    = 443
   to_port                      = 443
   referenced_security_group_id = aws_security_group.endpoints.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "migration_to_endpoints" {
+  security_group_id            = aws_security_group.migration.id
+  description                  = "ECR / CloudWatch Logs endpoints"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.migration_endpoints.id
 }
 
 # ECR のレイヤー実体は S3 にあり、Fargate は task ENI から S3 へ直接取りに行く。
@@ -276,6 +328,15 @@ resource "aws_vpc_security_group_egress_rule" "app_to_s3" {
   for_each = local.all_stages
 
   security_group_id = aws_security_group.app[each.value].id
+  description       = "ECR image layers via S3 Gateway endpoint"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  prefix_list_id    = aws_vpc_endpoint.s3.prefix_list_id
+}
+
+resource "aws_vpc_security_group_egress_rule" "migration_to_s3" {
+  security_group_id = aws_security_group.migration.id
   description       = "ECR image layers via S3 Gateway endpoint"
   ip_protocol       = "tcp"
   from_port         = 443

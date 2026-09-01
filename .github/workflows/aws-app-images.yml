@@ -69,6 +69,11 @@ jobs:
           ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
+      # v1導入前のSHAには本番migration runnerが無いため、この自動経路では
+      # rollback対象として扱わない。production承認待ちへ入る前に拒否する。
+      - name: Require the production migration runtime
+        run: test -f backend/scripts/run_production_migration.py
+
       # region / repository 名の正本は Terraform 側。ここで持つと 2 箇所目になる。
       - id: tf
         name: Read values from Terraform variables
@@ -150,6 +155,10 @@ jobs:
           # provenance を切る。attestation manifest は untagged image として ECR に増え、
           # lifecycle policy が tagStatus: any で数えるので保持世代を食う。
           docker build --provenance=false -t "$IMAGE" "$BUILD_CONTEXT"
+          if [ "$BUILD_CONTEXT" = "backend" ]; then
+            docker run --rm --entrypoint python "$IMAGE" \
+              -c 'import scripts.run_production_migration'
+          fi
           docker push "$IMAGE"
           {
             echo "pushed \`$IMAGE_REF\`"
@@ -170,7 +179,7 @@ jobs:
     # そもそも存在しないので、ゲートは運用の約束ではなく経路の不在になる。
     environment: production
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 55
 
     steps:
       - name: Validate release SHA
@@ -212,11 +221,52 @@ jobs:
             echo "$name=$value" >> "$GITHUB_OUTPUT"
           done
 
+      - id: migration-context
+        name: Prepare migration task identity
+        run: |
+          set -euo pipefail
+          {
+            echo "started-by=vector-migration-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "run-id=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "state-file=$RUNNER_TEMP/migration-task-state.json"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS migration credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_MIGRATION_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - name: Run production migration
+        timeout-minutes: 25
+        env:
+          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
+          RELEASE_SHA: ${{ env.RELEASE_SHA }}
+          STARTED_BY: ${{ steps.migration-context.outputs.started-by }}
+          GITHUB_RUN_TAG: ${{ steps.migration-context.outputs.run-id }}
+          MIGRATION_STATE_FILE: ${{ steps.migration-context.outputs.state-file }}
+        run: |
+          set -euo pipefail
+          python3 .rollout-control/.github/scripts/run_ecs_migration.py \
+            --cluster "$CLUSTER" \
+            --release-sha "$RELEASE_SHA" \
+            --started-by "$STARTED_BY" \
+            --github-run-id "$GITHUB_RUN_TAG" \
+            --state-file "$MIGRATION_STATE_FILE" \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            --poll-seconds 15 \
+            --timeout-seconds 1200 \
+            --cleanup-timeout-seconds 180
+
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        name: Configure AWS rollout credentials
         with:
           role-to-assume: ${{ secrets.AWS_ROLLOUT_ROLE_ARN }}
           aws-region: ${{ steps.tf.outputs.region }}
           mask-aws-account-id: true
+          unset-current-credentials: true
 
       - id: rollout
         name: Roll out services
@@ -309,3 +359,40 @@ jobs:
             --poll-seconds 15 \
             --timeout-seconds 1200 \
             --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # step timeout後にもcleanup用のOIDC sessionを取り直す。停止対象はstateに保存した
+      # exact ARNだけで、state欠落時も同じstartedByのtask 1件に限定する。
+      - id: cleanup-credentials
+        name: Configure AWS migration credentials for cleanup
+        if: ${{ failure() || cancelled() }}
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_MIGRATION_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - name: Stop the exact migration task after failure
+        if: >-
+          ${{ (failure() || cancelled()) &&
+              steps.cleanup-credentials.outcome == 'success' }}
+        timeout-minutes: 3
+        env:
+          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
+          RELEASE_SHA: ${{ env.RELEASE_SHA }}
+          STARTED_BY: ${{ steps.migration-context.outputs.started-by }}
+          GITHUB_RUN_TAG: ${{ steps.migration-context.outputs.run-id }}
+          MIGRATION_STATE_FILE: ${{ steps.migration-context.outputs.state-file }}
+        run: |
+          set -euo pipefail
+          python3 .rollout-control/.github/scripts/run_ecs_migration.py \
+            --cleanup \
+            --cluster "$CLUSTER" \
+            --release-sha "$RELEASE_SHA" \
+            --started-by "$STARTED_BY" \
+            --github-run-id "$GITHUB_RUN_TAG" \
+            --state-file "$MIGRATION_STATE_FILE" \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            --poll-seconds 15 \
+            --timeout-seconds 1200 \
+            --cleanup-timeout-seconds 150

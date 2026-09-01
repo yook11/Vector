@@ -60,6 +60,7 @@ jobs:
       # GRANT を流すため、Better Auth schema 生成 + role 作成 + ALEMBIC_ALLOW_DESTRUCTIVE
       # が ci.yml frontend-e2e-smoke job (lines 271-339) と同じく必要になる。
       DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
       REDIS_URL: redis://localhost:6379/0
       # Better Auth CLI が config load 時に require する env (frontend/src/lib/env.ts)。
       # ci.yml frontend-e2e-smoke job と同値の non-secret CI dummy。
