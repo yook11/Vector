@@ -94,12 +94,20 @@ locals {
       boundary   = aws_iam_policy.agent_task_boundary.arn
       role_names = ["${var.name_prefix}-agent-task"]
     }
+    MigrationTask = {
+      boundary   = aws_iam_policy.migration_task_boundary.arn
+      role_names = ["${var.name_prefix}-migration-task"]
+    }
     Execution = {
       boundary = aws_iam_policy.execution_boundary.arn
       role_names = [
         for s in ["frontend", "api", "scheduler", "fetch", "analysis", "insights", "agent", "proxy"] :
         "${var.name_prefix}-${s}-exec"
       ]
+    }
+    MigrationExecution = {
+      boundary   = aws_iam_policy.migration_execution_boundary.arn
+      role_names = ["${var.name_prefix}-migration-exec"]
     }
     Chatbot = {
       boundary   = aws_iam_policy.chatbot_boundary.arn
@@ -153,6 +161,26 @@ resource "aws_iam_policy" "agent_task_boundary" {
       local.boundary_no_escalation_statement,
       local.boundary_no_ecs_exec_statement,
     ])
+  })
+}
+
+resource "aws_iam_policy" "migration_task_boundary" {
+  name        = "${var.name_prefix}-migration-task-boundary"
+  path        = "/${var.name_prefix}-ci/"
+  description = "Ceiling for the passwordless production migration task role."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "RdsIamAuthAsOwner"
+        Effect   = "Allow"
+        Action   = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:*/vector"
+      },
+      local.boundary_no_escalation_statement,
+      local.boundary_no_ecs_exec_statement,
+    ]
   })
 }
 
@@ -216,6 +244,47 @@ resource "aws_iam_policy" "execution_boundary" {
             "kms:ViaService" = "ssm.${var.region}.amazonaws.com"
           }
         }
+      },
+      local.boundary_no_escalation_statement,
+    ]
+  })
+}
+
+resource "aws_iam_policy" "migration_execution_boundary" {
+  name        = "${var.name_prefix}-migration-execution-boundary"
+  path        = "/${var.name_prefix}-ci/"
+  description = "Ceiling for the migration image pull and CloudWatch log writer."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPullBackendOnly"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${var.name_prefix}/backend"
+      },
+      {
+        Sid    = "CloudWatchMigrationLogsOnly"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+        ]
+        Resource = [
+          "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.name_prefix}/migration",
+          "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.name_prefix}/migration:*",
+        ]
       },
       local.boundary_no_escalation_statement,
     ]

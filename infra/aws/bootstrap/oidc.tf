@@ -87,6 +87,10 @@ locals {
       name = "app-rollout"
       subs = ["repo:${local.repo}:environment:${var.deploy_environment}"]
     }
+    migrate = {
+      name = "db-migrate"
+      subs = ["repo:${local.repo}:environment:${var.deploy_environment}"]
+    }
   }
 
   # IAM Identity Center が permission set ごとに member アカウントへ作るロール。
@@ -528,6 +532,141 @@ resource "aws_iam_role_policy" "rollout" {
         Condition = {
           StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
         }
+      },
+    ], local.secret_read_statements)
+  })
+}
+
+# --- db-migrate -----------------------------------------------------------
+
+resource "aws_iam_role_policy" "migrate" {
+  name = "db-migrate"
+  role = aws_iam_role.ci["migrate"].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat([
+      {
+        Sid      = "RegisterMigrationTaskDefinition"
+        Effect   = "Allow"
+        Action   = "ecs:RegisterTaskDefinition"
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestTag/VectorPurpose" = "migration"
+            "ecs:compute-compatibility"    = "FARGATE"
+          }
+          Bool = {
+            "ecs:privileged" = "false"
+          }
+          NumericEquals = {
+            "ecs:task-cpu"    = 256
+            "ecs:task-memory" = 512
+          }
+          Null = {
+            "aws:RequestTag/ReleaseSha"  = "false"
+            "aws:RequestTag/GitHubRunId" = "false"
+          }
+          "ForAllValues:StringEquals" = {
+            "aws:TagKeys" = ["VectorPurpose", "ReleaseSha", "GitHubRunId"]
+          }
+        }
+      },
+      {
+        Sid      = "RunMigrationTask"
+        Effect   = "Allow"
+        Action   = "ecs:RunTask"
+        Resource = "arn:aws:ecs:${var.region}:${local.account_id}:task-definition/${var.name_prefix}-migration:*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestTag/VectorPurpose" = "migration"
+            "ecs:cluster"                  = "arn:aws:ecs:${var.region}:${local.account_id}:cluster/${var.name_prefix}"
+          }
+          Bool = {
+            "ecs:enable-execute-command" = "false"
+          }
+          Null = {
+            "aws:RequestTag/ReleaseSha"  = "false"
+            "aws:RequestTag/GitHubRunId" = "false"
+          }
+          "ForAllValues:StringEquals" = {
+            "aws:TagKeys" = ["VectorPurpose", "ReleaseSha", "GitHubRunId"]
+          }
+        }
+      },
+      {
+        Sid    = "TagMigrationResourcesOnlyAtCreation"
+        Effect = "Allow"
+        Action = "ecs:TagResource"
+        Resource = [
+          "arn:aws:ecs:${var.region}:${local.account_id}:task-definition/${var.name_prefix}-migration:*",
+          "arn:aws:ecs:${var.region}:${local.account_id}:task/${var.name_prefix}/*",
+        ]
+        Condition = {
+          StringEquals = {
+            "aws:RequestTag/VectorPurpose" = "migration"
+            "ecs:CreateAction" = [
+              "RegisterTaskDefinition",
+              "RunTask",
+            ]
+          }
+          "ForAllValues:StringEquals" = {
+            "aws:TagKeys" = ["VectorPurpose", "ReleaseSha", "GitHubRunId"]
+          }
+        }
+      },
+      {
+        Sid      = "StopTaggedMigrationTask"
+        Effect   = "Allow"
+        Action   = "ecs:StopTask"
+        Resource = "arn:aws:ecs:${var.region}:${local.account_id}:task/${var.name_prefix}/*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/VectorPurpose" = "migration"
+            "ecs:cluster"                   = "arn:aws:ecs:${var.region}:${local.account_id}:cluster/${var.name_prefix}"
+          }
+        }
+      },
+      {
+        Sid    = "InspectMigrationTasks"
+        Effect = "Allow"
+        Action = [
+          "ecs:DescribeTasks",
+          "ecs:ListTasks",
+          "ecs:DescribeTaskDefinition",
+          "ecs:ListTagsForResource",
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = { "aws:RequestedRegion" = var.region }
+        }
+      },
+      {
+        Sid      = "DiscoverMigrationNetwork"
+        Effect   = "Allow"
+        Action   = ["ec2:DescribeSecurityGroups", "ec2:DescribeSubnets"]
+        Resource = "*"
+        Condition = {
+          StringEquals = { "aws:RequestedRegion" = var.region }
+        }
+      },
+      {
+        Sid    = "PassMigrationRolesToEcsOnly"
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = [
+          "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-migration-task",
+          "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-migration-exec",
+        ]
+        Condition = {
+          StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
+        }
+      },
+      {
+        Sid      = "HumanIamConnectionAsOwner"
+        Effect   = "Allow"
+        Action   = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector"
       },
     ], local.secret_read_statements)
   })
