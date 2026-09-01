@@ -25,6 +25,18 @@ output "proxy_subnet_id" {
   value = aws_subnet.proxy.id
 }
 
+output "migration_subnet_id" {
+  value = aws_subnet.migration.id
+}
+
+output "migration_security_group_id" {
+  value = aws_security_group.migration.id
+}
+
+output "migration_task_definition_arn" {
+  value = aws_ecs_task_definition.migration.arn
+}
+
 output "egress_public_ip" {
   description = "外向き通信の送信元 IP。外部ベンダーの allowlist 登録に使う。"
   value       = aws_eip.nat.public_ip
@@ -38,6 +50,13 @@ output "task_role_arns" {
 output "execution_role_arns" {
   description = "段名 -> execution role ARN。ECS task definition の executionRoleArn。"
   value       = { for name, role in aws_iam_role.execution : name => role.arn }
+}
+
+output "migration_role_arns" {
+  value = {
+    task      = aws_iam_role.migration_task.arn
+    execution = aws_iam_role.migration_execution.arn
+  }
 }
 
 output "ecr_repository_urls" {

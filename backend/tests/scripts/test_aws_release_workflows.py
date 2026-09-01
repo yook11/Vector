@@ -12,6 +12,9 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CI_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _RELEASE_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "aws-app-images.yml"
+_SCHEMATHESIS_WORKFLOW = (
+    _REPO_ROOT / ".github" / "workflows" / "schemathesis-nightly.yml"
+)
 
 pytestmark = pytest.mark.unit
 
@@ -54,7 +57,7 @@ def _run_release_decision(
     ci_gate: str = "success",
     backend: str = "false",
     frontend: str = "false",
-    migrations: str = "false",
+    migration_decision: str = "none",
     aws_infra: str = "false",
     publication_freeze: str = "false",
 ) -> tuple[str, str]:
@@ -66,7 +69,7 @@ def _run_release_decision(
         "CI_GATE_RESULT": ci_gate,
         "BACKEND_CHANGED": backend,
         "FRONTEND_CHANGED": frontend,
-        "MIGRATIONS_CHANGED": migrations,
+        "MIGRATION_DECISION": migration_decision,
         "AWS_INFRA_CHANGED": aws_infra,
         "PUBLICATION_FREEZE": publication_freeze,
         "RELEASE_SHA": "a" * 40,
@@ -83,18 +86,24 @@ def _run_release_decision(
 
 
 @pytest.mark.parametrize(
-    ("backend", "frontend"),
-    [("true", "false"), ("false", "true")],
+    ("backend", "frontend", "migration_decision"),
+    [
+        ("true", "false", "none"),
+        ("false", "true", "none"),
+        ("true", "false", "expand"),
+    ],
 )
 def test_release_decision_allows_app_change_after_green_ci(
     tmp_path: Path,
     backend: str,
     frontend: str,
+    migration_decision: str,
 ) -> None:
     output, summary = _run_release_decision(
         tmp_path,
         backend=backend,
         frontend=frontend,
+        migration_decision=migration_decision,
     )
 
     assert (output, "dispatch | yes" in summary) == ("eligible=true\n", True)
@@ -104,7 +113,10 @@ def test_release_decision_allows_app_change_after_green_ci(
     ("overrides", "reason"),
     [
         ({}, "backend / frontend の変更がない"),
-        ({"backend": "true", "migrations": "true"}, "migration を含む"),
+        (
+            {"backend": "true", "migration_decision": "manual"},
+            "contract または mixed migration",
+        ),
         ({"backend": "true", "aws_infra": "true"}, "AWS infra 変更を含む"),
         ({"backend": "true", "publication_freeze": ""}, "明示的に false ではない"),
         (
@@ -134,6 +146,9 @@ def test_ci_dispatch_job_has_only_repository_workflow_permission() -> None:
         if step.get("name") == "Dispatch AWS app images"
     )
     workflow_text = _CI_WORKFLOW.read_text(encoding="utf-8")
+    migration_job = workflow["jobs"]["migration-check"]  # type: ignore[index]
+    migration_environment = migration_job["env"]  # type: ignore[index]
+    gate = workflow["jobs"]["ci-gate"]  # type: ignore[index]
 
     assert (
         changes["outputs"]["aws_infra"],  # type: ignore[index]
@@ -153,6 +168,13 @@ def test_ci_dispatch_job_has_only_repository_workflow_permission() -> None:
         "flyctl" not in workflow_text,
         "AWS_PUSH_ROLE_ARN" not in workflow_text,
         "AWS_ROLLOUT_ROLE_ARN" not in workflow_text,
+        migration_job["outputs"]["decision"],  # type: ignore[index]
+        "MIGRATION_DATABASE_URL" in migration_environment,
+        "DATABASE_URL" not in migration_environment,
+        "BFF_JWT_SIGNING_SECRET" not in migration_environment,
+        "REVALIDATE_BEARER_SECRET" not in migration_environment,
+        gate["outputs"]["migration_decision"],  # type: ignore[index]
+        "--decision-output" in workflow_text,
     ) == (
         "${{ steps.filter.outputs.aws_infra }}",
         True,
@@ -170,7 +192,30 @@ def test_ci_dispatch_job_has_only_repository_workflow_permission() -> None:
         True,
         True,
         True,
+        "${{ steps.classify.outputs.decision }}",
+        True,
+        True,
+        True,
+        True,
+        "${{ steps.migration-decision.outputs.value }}",
+        True,
     )
+
+
+@pytest.mark.parametrize("path", [_CI_WORKFLOW, _SCHEMATHESIS_WORKFLOW])
+def test_every_workflow_alembic_invocation_has_explicit_migration_url(
+    path: Path,
+) -> None:
+    workflow = _load_workflow(path)
+    for job_name, job in workflow["jobs"].items():  # type: ignore[union-attr]
+        job_environment = job.get("env", {})
+        for step in job.get("steps", []):
+            if "uv run alembic " not in str(step.get("run", "")):
+                continue
+            environment = {**job_environment, **step.get("env", {})}
+            assert environment.get("MIGRATION_DATABASE_URL"), (
+                f"{path.name}:{job_name} must set MIGRATION_DATABASE_URL"
+            )
 
 
 def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
@@ -180,7 +225,26 @@ def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
         "release_sha"
     ]
     jobs = workflow["jobs"]  # type: ignore[index]
+    push_steps = jobs["push"]["steps"]  # type: ignore[index]
     rollout_steps = jobs["rollout"]["steps"]  # type: ignore[index]
+    migration = next(
+        step for step in rollout_steps if step.get("name") == "Run production migration"
+    )
+    migration_credentials = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Configure AWS migration credentials"
+    )
+    rollout_credentials = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Configure AWS rollout credentials"
+    )
+    cleanup = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Stop the exact migration task after failure"
+    )
     rollout_step = next(
         step for step in rollout_steps if step.get("name") == "Roll out services"
     )
@@ -219,6 +283,31 @@ def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
         < rollout_step["run"].index("while read -r svc arn"),
         "always()" in verifier["if"],
         verifier_checkout["with"],
+        jobs["rollout"]["timeout-minutes"],  # type: ignore[index]
+        sum(job.get("environment") == "production" for job in jobs.values()),
+        migration_credentials["with"]["role-to-assume"],
+        rollout_credentials["with"]["role-to-assume"],
+        rollout_steps.index(migration_credentials)
+        < rollout_steps.index(migration)
+        < rollout_steps.index(rollout_credentials)
+        < rollout_steps.index(rollout_step),
+        "if" not in rollout_credentials,
+        "if" not in rollout_step,
+        migration["timeout-minutes"],
+        "run_ecs_migration.py" in migration["run"],
+        "--poll-seconds 15" in migration["run"],
+        "--timeout-seconds 1200" in migration["run"],
+        "--cleanup" in cleanup["run"],
+        cleanup["timeout-minutes"],
+        "failure() || cancelled()" in cleanup["if"],
+        any(
+            step.get("name") == "Require the production migration runtime"
+            for step in push_steps
+        ),
+        "import scripts.run_production_migration"
+        in next(step for step in push_steps if step.get("name") == "Build and push")[
+            "run"
+        ],
     ) == (
         {
             "description": "空なら選択した ref の commit SHA を使う。",
@@ -249,4 +338,20 @@ def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
             "path": ".rollout-control",
             "persist-credentials": "false",
         },
+        55,
+        1,
+        "${{ secrets.AWS_MIGRATION_ROLE_ARN }}",
+        "${{ secrets.AWS_ROLLOUT_ROLE_ARN }}",
+        True,
+        True,
+        True,
+        25,
+        True,
+        True,
+        True,
+        True,
+        3,
+        True,
+        True,
+        True,
     )

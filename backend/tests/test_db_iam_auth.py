@@ -82,6 +82,15 @@ class TestBuildIamPasswordProvider:
         )
         assert (await provide()).startswith(_ENDPOINT)
 
+    @pytest.mark.asyncio
+    async def test_token_port_can_differ_from_connection_port(self) -> None:
+        provide = build_iam_password_provider(
+            _RDS_URL.replace(":5432/", ":15432/"),
+            region=_REGION,
+            token_port=5432,
+        )
+        assert (await provide()).startswith(_ENDPOINT)
+
     def test_url_without_user_is_rejected(self) -> None:
         """token は user 単位で署名するので、誰として繋ぐか不明なら作れない。"""
         with pytest.raises(ValueError, match="user"):

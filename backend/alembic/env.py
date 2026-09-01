@@ -2,8 +2,10 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from app.config import settings
-from app.db_ssl import clean_db_url, create_app_engine
+from app.db_ssl import clean_db_url
+from app.migration_config import load_migration_settings
+from app.migration_db import create_migration_engine
+from app.migration_lock import migration_advisory_lock
 from app.models import *  # noqa: F401, F403  — register all models
 from app.models.base import Base
 
@@ -31,8 +33,8 @@ def include_object(obj, name, type_, reflected, compare_to) -> bool:  # noqa: AN
 
 
 def _migration_url() -> str:
-    """alembic は migration_database_url (vector role) を優先、なければ database_url。"""
-    return settings.migration_database_url or settings.database_url
+    """DATABASE_URLへfallbackせずmigration専用URLだけを返す。"""
+    return load_migration_settings().migration_database_url
 
 
 def run_migrations_offline() -> None:
@@ -51,7 +53,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
+def _run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -62,11 +64,15 @@ def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
         context.run_migrations()
 
 
+def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
+    """全online実行をadvisory lockで直列化する。"""
+    with migration_advisory_lock(connection):
+        _run_migrations(connection)
+
+
 async def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    connectable = create_app_engine(
-        _migration_url(), application_name="vector-migration"
-    )
+    connectable = create_migration_engine(load_migration_settings())
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
@@ -74,5 +80,7 @@ async def run_migrations_online() -> None:
 
 if context.is_offline_mode():
     run_migrations_offline()
+elif config.attributes.get("connection") is not None:
+    do_run_migrations(config.attributes["connection"])
 else:
     asyncio.run(run_migrations_online())

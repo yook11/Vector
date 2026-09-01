@@ -17,70 +17,21 @@ region は settings から明示的に渡す。**botocore が region に読む e
 任せると本番の全 task が engine 生成で ``NoRegionError`` になる。credential は
 解決規則のまま (ECS では task role)。
 
-**射程は app runtime の接続だけ。** migration と運用スクリプトは ``create_app_engine``
-を直接使い、migrator role の password 認証を続ける。
+本moduleはapp runtimeの設定adapterだけを持つ。migrationは設定非依存の
+``app.rds_iam_auth``を同じく利用する。
 """
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable
-from functools import lru_cache
 from typing import Any
 
-import botocore.session
-from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.config import settings
 from app.db_ssl import create_app_engine
+from app.rds_iam_auth import _rds_client, build_iam_password_provider
 
-# token は host:port ごとに署名するため、URL に port が無い場合の既定が要る。
-_DEFAULT_POSTGRES_PORT = 5432
-
-
-@lru_cache(maxsize=1)
-def _rds_client(region: str) -> Any:
-    """プロセス内で 1 つだけ持つ rds client。
-
-    ``get_session()`` は毎回新しい Session を返すため、engine ごとに作ると service
-    model の読み込みが重複する (実測: 1 本目 +18.5MB、新 session で 3 本 +34.0MB)。
-    engine を 4 本持つ worker-analysis では 50MB 超になり、実測で詰めたサイズ表の
-    余裕を無視できない幅で食う。credential も session ごとに独立に取得・更新する。
-
-    生成は初回の token 要求まで遅れるので、「engine は fork 後に作る」方針も崩さない。
-    """
-    return botocore.session.get_session().create_client("rds", region_name=region)
-
-
-def build_iam_password_provider(
-    url: str, *, region: str
-) -> Callable[[], Awaitable[str]]:
-    """接続文字列の endpoint / user に対する auth token を返す provider を作る。
-
-    error message に URL を載せない (password が混じる経路を作らない)。
-    """
-    parsed = make_url(url)
-    host = parsed.host
-    if host is None:
-        raise ValueError("an RDS auth token requires a host in the connection string")
-    user = parsed.username
-    if user is None:
-        raise ValueError(
-            "an RDS auth token requires a user in the connection string "
-            "(the token is signed per database user)"
-        )
-    port = parsed.port or _DEFAULT_POSTGRES_PORT
-
-    def generate() -> str:
-        return _rds_client(region).generate_db_auth_token(
-            DBHostname=host, Port=port, DBUsername=user
-        )
-
-    async def provide() -> str:
-        return await asyncio.to_thread(generate)
-
-    return provide
+__all__ = ["_rds_client", "build_iam_password_provider", "create_runtime_engine"]
 
 
 def create_runtime_engine(url: str, **engine_kwargs: Any) -> AsyncEngine:

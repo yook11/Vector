@@ -90,16 +90,15 @@ migrate-safe:  ## ORM/migration 変更を安全に反映
 	@sleep 10
 	@$(MAKE) --no-print-directory pipeline-status
 
-# 本番 Neon 用。docker を介さず host/CI から流し、owner URL (MIGRATION_DATABASE_URL)
-# は runtime secret に置かない方針のため実行時に渡す (dev は migrate-safe)。
-# 他の必須 Settings は .env から、DATABASE_URL は同 URL で満たす (接続は使わない)。
-migrate-prod:  ## 本番 Neon に migration 適用（MIGRATION_DATABASE_URL を実行時に渡す）
+# 本番RDSへの人手接続用。SSM port forward時はRDS_IAM_AUTH_TOKEN_PORT=5432も渡す。
+migrate-prod:  ## 本番RDSにIAM認証でmigration適用（接続URLとregionを実行時に渡す）
 	@test -n "$$MIGRATION_DATABASE_URL" \
-	  || { echo "MIGRATION_DATABASE_URL is required (Neon owner role, append ?sslmode=require)"; exit 1; }
+	  || { echo "MIGRATION_DATABASE_URL is required (passwordless vector URL, append ?sslmode=require)"; exit 1; }
+	@test -n "$$AWS_REGION" \
+	  || { echo "AWS_REGION is required for RDS IAM token signing"; exit 1; }
 	cd backend && \
-	  export DATABASE_URL="$$MIGRATION_DATABASE_URL" MIGRATION_DATABASE_URL="$$MIGRATION_DATABASE_URL" && \
-	  uv run alembic upgrade head && \
-	  uv run alembic current
+	  ENV=production DB_IAM_AUTH=true uv run alembic upgrade head && \
+	  ENV=production DB_IAM_AUTH=true uv run alembic current
 
 # -------------------------------------------
 # 設定検証

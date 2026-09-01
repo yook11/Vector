@@ -79,6 +79,14 @@ resource "aws_subnet" "app" {
   tags = { Name = "${var.name_prefix}-app-${each.key}" }
 }
 
+resource "aws_subnet" "migration" {
+  vpc_id            = aws_vpc.main.id
+  availability_zone = var.az_primary
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 27)
+
+  tags = { Name = "${var.name_prefix}-migration" }
+}
+
 # --- route table ----------------------------------------------------------
 #
 # ルートテーブルが決めるのは「VPC の外に出られるか」の 1 点だけ。
@@ -146,6 +154,11 @@ resource "aws_route_table_association" "app" {
   for_each = aws_subnet.app
 
   subnet_id      = each.value.id
+  route_table_id = aws_route_table.app.id
+}
+
+resource "aws_route_table_association" "migration" {
+  subnet_id      = aws_subnet.migration.id
   route_table_id = aws_route_table.app.id
 }
 

@@ -51,11 +51,15 @@ resource "aws_vpc_endpoint" "s3" {
 resource "aws_vpc_endpoint" "interface" {
   for_each = toset(["ecr.api", "ecr.dkr", "ssm", "logs", "bedrock-agentcore.gateway"])
 
-  vpc_id              = aws_vpc.main.id
-  service_name        = "com.amazonaws.${var.region}.${each.value}"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = [aws_subnet.app["api"].id]
-  security_group_ids  = [aws_security_group.endpoints.id]
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.region}.${each.value}"
+  vpc_endpoint_type = "Interface"
+  subnet_ids        = [aws_subnet.app["api"].id]
+  security_group_ids = concat(
+    [aws_security_group.endpoints.id],
+    contains(["ecr.api", "ecr.dkr", "logs"], each.value) ?
+    [aws_security_group.migration_endpoints.id] : [],
+  )
   private_dns_enabled = true
 
   tags = { Name = "${var.name_prefix}-vpce-${replace(each.value, ".", "-")}" }

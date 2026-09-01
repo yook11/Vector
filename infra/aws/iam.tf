@@ -15,7 +15,15 @@ locals {
   # 「apply ロールに /vector-ci/ への iam:Get* を要求しない」既存の設計意図も保てる。
   # 名前を変えるときは bootstrap 側と両方直す (不一致なら apply が NoSuchEntity で落ちる)。
   boundary_arns = {
-    for kind in ["task", "agent-task", "execution", "chatbot", "agentcore-gateway"] :
+    for kind in [
+      "task",
+      "agent-task",
+      "execution",
+      "migration-task",
+      "migration-execution",
+      "chatbot",
+      "agentcore-gateway",
+    ] :
     kind => "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${var.name_prefix}-${kind}-boundary"
   }
 
@@ -117,6 +125,30 @@ resource "aws_iam_role_policy" "task" {
   })
 }
 
+resource "aws_iam_role" "migration_task" {
+  name                 = "${var.name_prefix}-migration-task"
+  path                 = "/${var.name_prefix}/"
+  assume_role_policy   = data.aws_iam_policy_document.ecs_tasks_trust.json
+  permissions_boundary = local.boundary_arns["migration-task"]
+}
+
+resource "aws_iam_role_policy" "migration_task" {
+  name = "rds-iam-auth-as-owner"
+  role = aws_iam_role.migration_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "RdsIamAuthAsOwner"
+        Effect   = "Allow"
+        Action   = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector"
+      },
+    ]
+  })
+}
+
 # rds-db:connect と同型の入口権限。Connect は接続先 cache と接続 user の
 # **両方の ARN** に対して評価されるため、片方だけでは認証が通らない。
 # 入った後に何ができるかは valkey.tf の access_string が全部決める。
@@ -207,6 +239,52 @@ resource "aws_iam_role_policy" "execution" {
           "ssm:GetParameters",
         ]
         Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/${each.key}/*"
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role" "migration_execution" {
+  name                 = "${var.name_prefix}-migration-exec"
+  path                 = "/${var.name_prefix}/"
+  assume_role_policy   = data.aws_iam_policy_document.ecs_tasks_trust.json
+  permissions_boundary = local.boundary_arns["migration-execution"]
+}
+
+resource "aws_iam_role_policy" "migration_execution" {
+  name = "ecs-task-execution"
+  role = aws_iam_role.migration_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPullBackendOnly"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = aws_ecr_repository.this["backend"].arn
+      },
+      {
+        Sid    = "CloudWatchMigrationLogsOnly"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+        ]
+        Resource = [
+          aws_cloudwatch_log_group.migration.arn,
+          "${aws_cloudwatch_log_group.migration.arn}:*",
+        ]
       },
     ]
   })
