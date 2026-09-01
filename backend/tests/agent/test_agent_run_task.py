@@ -529,7 +529,6 @@ async def _create_thread_message_run(
     created_at: datetime | None = None,
     started_at: datetime | None = None,
     attempt_epoch: int | None = None,
-    progress_stage: str | None = None,
     error_code: str | None = None,
     user_id: str = TEST_USER_ID,
     quota_usage_date: date | None = None,
@@ -568,7 +567,6 @@ async def _create_thread_message_run(
         user_message_id=message.id,
         status=status,
         started_at=started_at,
-        progress_stage=progress_stage,
         error_code=error_code,
         quota_usage_date=quota_usage_date,
     )
@@ -1094,7 +1092,6 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
         completed = await session.get(AgentRun, run.id)
         assert completed is not None
         assert completed.status == "completed"
-        assert completed.progress_stage is None
     stream = FakeLiveStreamPublisher.instances[0]
     stages = [
         event
@@ -2697,7 +2694,6 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
         assert failed is not None
         assert failed.status == "failed"
         assert failed.error_code == "generation_unavailable"
-        assert failed.progress_stage is None
 
 
 @pytest.mark.asyncio
@@ -2726,7 +2722,6 @@ async def test_answering_runner_failure_does_not_execute_answering_workflow(
         assert failed is not None
         assert failed.status == "failed"
         assert failed.error_code == "generation_unavailable"
-        assert failed.progress_stage is None
     assert len(answering_runner.calls) == 1
     assert fake_agent.calls == []
 
@@ -2969,7 +2964,6 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
             status="running",
             started_at=now - timedelta(minutes=11),
             attempt_epoch=1,
-            progress_stage="answering",
         )
         _terminal_thread, _terminal_message, failed = await _create_thread_message_run(
             setup_session,
@@ -3005,8 +2999,7 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
             restarted.status,
             restarted.started_at,
             restarted.attempt_epoch,
-            restarted.progress_stage,
-        ) == ("running", now, 2, None)
+        ) == ("running", now, 2)
         assert terminal.status == "failed"
         assert terminal.error_code == "internal_error"
         assert terminal.attempt_epoch == 0

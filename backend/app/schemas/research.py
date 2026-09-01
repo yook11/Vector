@@ -73,14 +73,6 @@ ResearchRunErrorCode = Literal[
     "stale",
     "cancelled",
 ]
-ResearchProgressStage = Literal[
-    "safety_check",
-    "context_resolution",
-    "planning",
-    "evidence_collection",
-    "evidence_review",
-    "answering",
-]
 
 
 class ResearchRunInternalSearchStartedEvent(_CamelBase):
@@ -132,7 +124,6 @@ class ResearchRunResponse(_CamelBase):
     thread_id: UUID
     status: ResearchRunStatus
     error_code: ResearchRunErrorCode | None
-    progress_stage: ResearchProgressStage | None
     attempt_epoch: int = Field(ge=0)
     recent_events: list[ResearchRunEvent] = Field(default_factory=list)
 
@@ -176,7 +167,6 @@ class ResearchMessageRun(_CamelBase):
     run_id: UUID
     status: ResearchRunStatus
     error_code: ResearchRunErrorCode | None
-    progress_stage: ResearchProgressStage | None
 
 
 class ResearchUserMessage(_CamelBase):

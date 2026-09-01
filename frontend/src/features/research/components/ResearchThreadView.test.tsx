@@ -155,7 +155,6 @@ function run(
     runId,
     status,
     errorCode,
-    progressStage: status === "running" ? "planning" : null,
   };
 }
 
@@ -164,7 +163,6 @@ function policyBlockedRun(runId = RUN_ONE): ResearchMessageRun {
     runId,
     status: "policy_blocked",
     errorCode: null,
-    progressStage: null,
   } as unknown as ResearchMessageRun;
 }
 
@@ -429,7 +427,6 @@ describe("ResearchThreadView live integration", () => {
             threadId: THREAD_ONE,
             status: "queued",
             errorCode: null,
-            progressStage: null,
             attemptEpoch: 0,
             recentEvents: [],
           }),
@@ -469,7 +466,6 @@ describe("ResearchThreadView live integration", () => {
             threadId: THREAD_ONE,
             status: "running",
             errorCode: null,
-            progressStage: "planning",
             attemptEpoch: 1,
             recentEvents: [{ type: "future.event", payload: "discarded" }],
           }),
@@ -1128,7 +1124,6 @@ describe("ResearchThreadView live integration", () => {
         new Response(
           JSON.stringify({
             status: "failed",
-            progressStage: "answering",
             attemptEpoch: 1,
             recentEvents: [],
             errorCode: "stale",
@@ -1211,7 +1206,6 @@ describe("ResearchThreadView live integration", () => {
             threadId: THREAD_ONE,
             status: "completed",
             errorCode: null,
-            progressStage: null,
             attemptEpoch: 1,
             recentEvents: [],
           }),

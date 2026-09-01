@@ -231,7 +231,6 @@ async def _create_run(
     status: str = "queued",
     assistant_message_id: UUID | None = None,
     error_code: str | None = None,
-    progress_stage: str | None = None,
     attempt_epoch: int | None = None,
 ) -> AgentRun:
     run = AgentRun(
@@ -240,7 +239,6 @@ async def _create_run(
         assistant_message_id=assistant_message_id,
         status=status,
         error_code=error_code,
-        progress_stage=progress_stage,
     )
     if attempt_epoch is not None:
         run.attempt_epoch = attempt_epoch
@@ -1584,7 +1582,6 @@ class TestGetResearchThread:
             thread_id=thread.id,
             user_message_id=active_user.id,
             status="queued",
-            progress_stage=None,
         )
         answered_user = await _create_message(
             db_session,
@@ -1632,7 +1629,6 @@ class TestGetResearchThread:
             user_message_id=answered_user.id,
             assistant_message_id=assistant_message.id,
             status="completed",
-            progress_stage="answering",
         )
         cancelled_user = await _create_message(
             db_session,
@@ -1666,13 +1662,11 @@ class TestGetResearchThread:
             "runId": str(active_run.id),
             "status": "queued",
             "errorCode": None,
-            "progressStage": None,
         }
         assert data["messages"][1]["run"] == {
             "runId": str(completed_run.id),
             "status": "completed",
             "errorCode": None,
-            "progressStage": "answering",
         }
         assert data["messages"][2]["content"] == "回答です。[[1]][[2]]"
         assert data["messages"][2]["missingAspects"] == ["未確認の観点"]
@@ -1698,7 +1692,6 @@ class TestGetResearchThread:
             "runId": str(cancelled_run.id),
             "status": "failed",
             "errorCode": "cancelled",
-            "progressStage": None,
         }
         assert all("createdAt" in message for message in data["messages"])
 
@@ -2181,7 +2174,6 @@ class TestGetResearchRun:
             thread_id=running_thread.id,
             user_message_id=running_user.id,
             status="running",
-            progress_stage="evidence_collection",
             attempt_epoch=3,
         )
         failed_thread = await _create_thread(db_session)
@@ -2198,7 +2190,6 @@ class TestGetResearchRun:
             user_message_id=failed_user.id,
             status="failed",
             error_code="generation_unavailable",
-            progress_stage="answering",
             attempt_epoch=2,
         )
         completed_thread = await _create_thread(db_session)
@@ -2226,15 +2217,14 @@ class TestGetResearchRun:
         )
 
         expected = {
-            queued_run.id: ("queued", None, None, 0),
-            running_run.id: ("running", None, "evidence_collection", 3),
-            failed_run.id: ("failed", "generation_unavailable", "answering", 2),
-            completed_run.id: ("completed", None, None, 2),
+            queued_run.id: ("queued", None, 0),
+            running_run.id: ("running", None, 3),
+            failed_run.id: ("failed", "generation_unavailable", 2),
+            completed_run.id: ("completed", None, 2),
         }
         for run_id, (
             status_value,
             error_code,
-            progress_stage,
             attempt_epoch,
         ) in expected.items():
             response = await client.get(f"/api/v1/research/runs/{run_id}")
@@ -2244,7 +2234,6 @@ class TestGetResearchRun:
                 "threadId": str((await _fetch_run(db_session, run_id)).thread_id),
                 "status": status_value,
                 "errorCode": error_code,
-                "progressStage": progress_stage,
                 "attemptEpoch": attempt_epoch,
                 "recentEvents": [],
             }
@@ -2283,7 +2272,6 @@ class TestGetResearchRun:
             "threadId": str(thread.id),
             "status": "policy_blocked",
             "errorCode": None,
-            "progressStage": None,
             "attemptEpoch": 2,
             "recentEvents": [],
         }
@@ -2295,7 +2283,6 @@ class TestGetResearchRun:
             "runId": str(run.id),
             "status": "policy_blocked",
             "errorCode": None,
-            "progressStage": None,
         }
 
     async def test_policy_blocked_run_does_not_read_residual_live_events(
@@ -2363,7 +2350,6 @@ class TestGetResearchRun:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status="running",
-            progress_stage="evidence_collection",
         )
         redis = FakeRunEventsRedis(
             [
@@ -2407,7 +2393,6 @@ class TestGetResearchRun:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status="running",
-            progress_stage="evidence_collection",
         )
         redis = FakeRunEventsRedis(exc=RedisConnectionError("redis down"))
         app.dependency_overrides[get_redis_client] = lambda: redis
@@ -2557,7 +2542,6 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
         "threadId",
         "status",
         "errorCode",
-        "progressStage",
         "attemptEpoch",
         "recentEvents",
     }
@@ -2566,14 +2550,13 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
     assert "result" not in run_schema["properties"]
     assert "policy_blocked" in str(run_schema["properties"]["status"])
     assert "cancelled" in str(run_schema["properties"]["errorCode"])
-    assert "planning" in str(run_schema["properties"]["progressStage"])
+    assert "progressStage" not in run_schema["properties"]
 
     message_run_schema = schema["components"]["schemas"]["ResearchMessageRun"]
     assert set(message_run_schema["properties"]) == {
         "runId",
         "status",
         "errorCode",
-        "progressStage",
     }
     assert "attemptEpoch" not in message_run_schema["required"]
     assert "policy_blocked" in str(message_run_schema["properties"]["status"])

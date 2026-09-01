@@ -191,7 +191,6 @@ function run(
     runId,
     status,
     errorCode: status === "failed" ? "internal_error" : null,
-    progressStage: status === "running" ? "answering" : null,
   };
 }
 
