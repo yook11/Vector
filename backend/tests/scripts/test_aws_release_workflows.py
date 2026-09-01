@@ -12,6 +12,7 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CI_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _RELEASE_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "aws-app-images.yml"
+_APPLY_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "aws-terraform-apply.yml"
 _SCHEMATHESIS_WORKFLOW = (
     _REPO_ROOT / ".github" / "workflows" / "schemathesis-nightly.yml"
 )
@@ -199,6 +200,73 @@ def test_ci_dispatch_job_has_only_repository_workflow_permission() -> None:
         True,
         "${{ steps.migration-decision.outputs.value }}",
         True,
+    )
+
+
+def test_app_test_jobs_run_only_on_pull_request() -> None:
+    jobs = _load_workflow(_CI_WORKFLOW)["jobs"]  # type: ignore[index]
+    backend_unit = jobs["backend-unit"]["if"]  # type: ignore[index]
+    backend_integration = jobs["backend-integration"]["if"]  # type: ignore[index]
+    frontend = jobs["frontend"]["if"]  # type: ignore[index]
+    e2e = jobs["frontend-e2e-smoke"]["if"]  # type: ignore[index]
+    dispatch = jobs["dispatch-aws-release"]["if"]  # type: ignore[index]
+
+    assert (
+        "github.event_name == 'pull_request'" in backend_unit,
+        "github.event_name == 'push'" not in backend_unit,
+        "needs.changes.outputs.backend == 'true'" in backend_unit,
+        "needs.changes.outputs.ci == 'true'" in backend_unit,
+        "github.event_name == 'pull_request'" in backend_integration,
+        "github.event_name == 'push'" not in backend_integration,
+        "needs.changes.outputs.backend == 'true'" in backend_integration,
+        "github.event_name == 'pull_request'" in frontend,
+        "github.event_name == 'push'" not in frontend,
+        "needs.changes.outputs.frontend == 'true'" in frontend,
+        "github.event_name == 'pull_request'" in e2e,
+        "github.event_name == 'push'" not in e2e,
+        "needs.changes.outputs.e2e == 'true'" in e2e,
+        "github.event_name == 'push'" in dispatch,
+    ) == (True,) * 14
+
+
+def test_terraform_apply_runs_plan_and_apply_after_production_approval() -> None:
+    workflow = _load_workflow(_APPLY_WORKFLOW)
+    workflow_text = _APPLY_WORKFLOW.read_text(encoding="utf-8")
+    jobs = workflow["jobs"]  # type: ignore[index]
+    apply = jobs["apply"]  # type: ignore[index]
+    credentials = next(
+        step
+        for step in apply["steps"]  # type: ignore[index]
+        if step.get("uses", "").startswith("aws-actions/configure-aws-credentials@")
+    )
+    plan_apply = next(
+        step
+        for step in apply["steps"]  # type: ignore[index]
+        if step.get("name") == "Terraform plan and apply"
+    )
+
+    assert (
+        list(jobs),
+        apply.get("environment"),
+        apply.get("needs"),
+        apply.get("if"),
+        credentials["with"]["role-to-assume"],
+        "AWS_PLAN_ROLE_ARN" not in workflow_text,
+        "terraform plan" in plan_apply["run"],
+        "terraform apply" in plan_apply["run"],
+        "-out=tfplan" in plan_apply["run"],
+        apply["concurrency"],
+    ) == (
+        ["apply"],
+        "production",
+        None,
+        None,
+        "${{ secrets.AWS_APPLY_ROLE_ARN }}",
+        True,
+        True,
+        True,
+        True,
+        {"group": "aws-terraform-apply", "cancel-in-progress": "false"},
     )
 
 
