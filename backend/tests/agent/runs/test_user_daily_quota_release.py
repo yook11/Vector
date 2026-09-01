@@ -1,4 +1,4 @@
-"""queued cancel による日次quota返却契約。"""
+"""日次quotaの返却契約。"""
 
 from __future__ import annotations
 
@@ -40,6 +40,7 @@ _USAGE_DATE = date(2026, 7, 19)
 _CURRENT_DATE = date(2026, 7, 20)
 _USAGE_CLOCK = datetime(2026, 7, 19, 3, 0, tzinfo=UTC)
 _NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+_FENCE_DEADLINE_AT = _NOW + timedelta(seconds=60)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,7 @@ async def _seed_run(
     counter_usage_date: date | None = None,
     attempt_epoch: int = 0,
     created_at: datetime | None = None,
+    deadline_at: datetime | None = None,
 ) -> _SeededRun:
     counter_date = counter_usage_date or quota_usage_date
     if counter_count is not None:
@@ -113,6 +115,9 @@ async def _seed_run(
         )
         if created_at is not None:
             run.created_at = created_at
+        # production model実装前もtest collectionを通し、deadline契約でredにする。
+        if deadline_at is not None:
+            setattr(run, "deadline_at", deadline_at)
         session.add(run)
         await session.commit()
         seeded = _SeededRun(
@@ -389,6 +394,62 @@ async def test_running_quota_cancel_is_not_eligible_and_returns_execution_epoch(
         release_outcome="NOT_ELIGIBLE",
         was_running=True,
         running_attempt_epoch=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_quota_queued_deadline_exceeded_releases_to_zero(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seeded = await _seed_run(
+        session_factory,
+        created_at=_NOW,
+        deadline_at=_FENCE_DEADLINE_AT,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await AgentRunRepository(session).start_run(
+                seeded.run_id,
+                now=_FENCE_DEADLINE_AT,
+            )
+
+    assert (
+        await _read_counter(
+            session_factory,
+            user_id=_USER_ID,
+            usage_date=_USAGE_DATE,
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_quota_running_deadline_exceeded_keeps_reservation(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seeded = await _seed_run(
+        session_factory,
+        status="running",
+        attempt_epoch=4,
+        created_at=_NOW,
+        deadline_at=_FENCE_DEADLINE_AT,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await AgentRunRepository(session).start_run(
+                seeded.run_id,
+                now=_FENCE_DEADLINE_AT,
+            )
+
+    assert (
+        await _read_counter(
+            session_factory,
+            user_id=_USER_ID,
+            usage_date=_USAGE_DATE,
+        )
+        == 1
     )
 
 
