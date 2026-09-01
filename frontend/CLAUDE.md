@@ -36,7 +36,6 @@ Server Components + URL searchParams で管理。グローバル状態管理ラ�
   - `publicClient`: user session は読まないが BFF 経由証明 (user-less JWT) を付ける。`"use cache"` 内 user 非依存 endpoint で `{ client: publicClient }` を per-call 渡す (cookies/headers 読取を踏まないため。backend の require_bff_request が検証)
 - mutation はすべて Server Action 化済み。Client Component からの直接 fetch は不要
 - 利用側は Public API (`@/features/<name>`) からのみ import (deep path 禁止)
-- モック → 本番の切り替えは `NEXT_PUBLIC_API_URL` のみで完結させる
 
 ## features 構造ルール
 

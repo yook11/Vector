@@ -36,7 +36,6 @@ Server Components + URL searchParams で管理。グローバル状態管理ラ�
   - `publicClient`: error interceptor のみ。`"use cache"` 内 anon endpoint で `{ client: publicClient }` を per-call 渡す (cookies/headers 読取を踏まないため)
 - mutation はすべて Server Action 化済み。Client Component からの直接 fetch は不要
 - 利用側は Public API (`@/features/<name>`) からのみ import (deep path 禁止)
-- モック → 本番の切り替えは `NEXT_PUBLIC_API_URL` のみで完結させる
 
 ## features 構造ルール
 

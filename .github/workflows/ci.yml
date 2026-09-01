@@ -346,7 +346,6 @@ jobs:
       E2E_ALLOW_AUTH_DB_MUTATION: "true"
       BETTER_AUTH_URL: http://localhost:3000
       INTERNAL_API_URL: http://localhost:8000/api/v1
-      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
       # CI 専用のダミー値。本番値とは無関係で、Settings の長さ要件 (>=32) を
       # 満たすために 64 桁の hex を直書きする (秘密ではない)。2 分割した secret は
       # 互いに別値で投入する。frontend (next dev) と backend (uvicorn) は

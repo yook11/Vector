@@ -1,6 +1,6 @@
 # 統合テスト専用 Postgres / Redis (`make test-integration` 経由でのみ起動)。
 #
-# 本体 `db` (本番想定 / host 非露出) とは network/volume 完全分離。
+# 本体 `db` / Redis（開発用の記事・pipeline 状態）とは network/volume 完全分離。
 # project 名は Makefile が worktree ごとに `vector-test-<slug>-<hash>` を算出し
 # `-p` で注入する (TEST_COMPOSE 変数)。dev compose の project 名 (= worktree
 # ディレクトリ basename) と衝突しないよう `vector-test-` prefix を必須とし、

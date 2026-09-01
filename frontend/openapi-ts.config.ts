@@ -3,9 +3,9 @@ import { defineConfig } from "@hey-api/openapi-ts";
 /**
  * @hey-api/openapi-ts 設定。`npm run generate-types` で実行される。
  *
- * input: backend が起動している前提で `/openapi.json` を直接取りに行く。
- *   オフライン or backend port 未公開時は `/tmp/vector-openapi.json` 等の
- *   ファイルパスに切り替えて使う (gen-types skill で手順を案内)。
+ * input: backend が `http://localhost:8000` で起動している前提で
+ *   `/openapi.json` を直接取りに行く。backend 未起動時は
+ *   `OPENAPI_INPUT` でファイルパスに切り替える (gen-types skill 参照)。
  *
  * output:
  *   - clean: false — `src/types/index.ts` (手書き narrowing 集約) と旧

@@ -1,8 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // Phase 3 PR-5: ローカル only の E2E。CI には乗せず、developer は事前に
-// `docker compose up -d` + `npm run dev` で backend + frontend を起動済みの
-// 前提で `npm run test:e2e` を実行する。
+// stack を起動済みの前提で `npm run test:e2e` を実行する。
+// - compose の frontend を使う: `docker compose up -d` だけでよい
+//   (`INTERNAL_API_URL=http://backend:8000/api/v1`)。
+// - ホストの `npm run dev` を使う: backend は compose の :8000 を使い、
+//   `INTERNAL_API_URL=http://localhost:8000/api/v1` が必要。
 //
 // programmatic auth: `auth.setup.ts` が Better Auth `/api/auth/sign-in/email`
 // に POST して session cookie を取得し、`e2e/.auth/{user,admin}.json` に
