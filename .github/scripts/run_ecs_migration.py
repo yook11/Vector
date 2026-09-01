@@ -329,7 +329,7 @@ class AwsCliMigrationClient:
             str(kwargs["started_by"]),
             "--client-token",
             str(kwargs["client_token"]),
-            "--no-enable-execute-command",
+            "--disable-execute-command",
             "--tags",
             *tag_arguments,
         )

@@ -425,6 +425,37 @@ def test_aws_cli_stderr_is_reduced_to_safe_error_metadata(
     assert "vector-db.internal" not in rendered
 
 
+def test_run_task_explicitly_disables_execute_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+
+    def fake_run(arguments: list[str], **_kwargs: object) -> CompletedProcess[str]:
+        captured.extend(arguments)
+        return CompletedProcess(
+            arguments,
+            0,
+            stdout=json.dumps({"tasks": [{"taskArn": _TASK_ARN}], "failures": []}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(migration.subprocess, "run", fake_run)
+    client = migration.AwsCliMigrationClient("/usr/bin/aws")
+
+    client.run_task(
+        cluster="vector",
+        task_definition=_EXPECTED_TD,
+        subnet_id="subnet-migration",
+        security_group_id="sg-migration",
+        started_by="vector-migration-987-2",
+        client_token="migration-987-2-token",
+        tags={"VectorPurpose": "migration"},
+    )
+
+    assert "--disable-execute-command" in captured
+    assert "--no-enable-execute-command" not in captured
+
+
 def test_security_group_discovery_uses_ec2_describe_security_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
