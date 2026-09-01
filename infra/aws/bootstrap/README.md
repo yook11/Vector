@@ -8,7 +8,7 @@
 |---|---|
 | state bucket | 本体の backend。自分の置き場は自分では作れない (鶏卵) |
 | GitHub OIDC provider | CI が AWS に入る唯一の入口 |
-| **CI ロール 3 つ** | apply が自分自身を書き換えられないようにするため |
+| **CI ロール 5 つ** | plan / apply / image push / DB migration / rolloutを分離するため |
 | **permissions boundary** | 同上。apply が天井を書き換えられないようにするため |
 
 ## なぜ CI ロールと boundary が「本体」ではなくここなのか
@@ -48,6 +48,8 @@ Administrator」** が通る。CI ロール自体の改変が抜けると「自�
 | `vector-task-boundary` | `*-task` のうち agent 以外 | rds + elasticache |
 | `vector-agent-task-boundary` | `vector-agent-task` | 上 + web search gateway |
 | `vector-execution-boundary` | `*-exec` | ecr / logs / ssm / kms |
+| `vector-migration-task-boundary` | `vector-migration-task` | `vector`としてのRDS IAM接続だけ |
+| `vector-migration-execution-boundary` | `vector-migration-exec` | backend ECR pull + migration logだけ |
 | `vector-chatbot-boundary` | `vector-chatbot` | cloudwatch 読み取り |
 | `vector-agentcore-gateway-boundary` | `vector-agentcore-gateway` | gateway + web search |
 
@@ -89,7 +91,7 @@ admin が 1 回で作る側に寄せた (`service_linked_roles.tf`)。
 
 ## secret を CI に読ませない
 
-`plan` / `apply` / `deploy` の 3 ロールすべてに、`ssm:GetParameter*` /
+`plan` / `apply` / `push` / `migrate` / `rollout` の全ロールに、`ssm:GetParameter*` /
 `secretsmanager:GetSecretValue` / `kms:Decrypt` の Deny を入れてある。
 
 **SSM parameter は Terraform で管理しない。** `aws_ssm_parameter` の `value` は
@@ -119,6 +121,16 @@ GitHub の設定を信頼チェーンに組み込んだ。
 
 **`deploy_environment` に required reviewer を設定しないと、この主張は成立しない。**
 
+`environment:<name>`のOIDC subjectにはbranch名が入らない。手動releaseで選択refを
+使える契約を維持するため、migration/rollout roleのtrustもbranchまでは固定しない。
+したがってrequired reviewerは、対象SHA/refを含めて承認する境界でもある。
+
+またECS `RunTask`にはsubnet・security group・public IPを固定できるIAM condition keyが
+無い。migration CI roleはfamily・cluster・PassRole・tag・ECS ExecをIAMで制限するが、
+専用networkの選択は`github.workflow_sha`由来のcontrollerが担う。このrole自体を
+untrusted principalへ渡さない。network選択までAWS側で強制する要件が生じた場合は、
+固定networkを所有するlauncherをAWS側へ置き、GitHub roleをその呼び出しだけに縮める。
+
 ## public repo の性質
 
 fork からの `pull_request` は `id-token: write` を取れないため、**外部 PR が
@@ -140,5 +152,9 @@ apply 後、出力された `state_bucket_name` を `../versions.tf` の backend
 `name_prefix` から組み立てる (`iam.tf` の `boundary_arns`)。variable にすると
 GitHub secret が boundary の数だけ増え、1 本の設定漏れで plan と apply の
 両方が止まるため。
+
+`ci_role_arns.migrate`はGitHubの`production` Environment secret
+`AWS_MIGRATION_ROLE_ARN`へ登録する。`migrate`と`rollout`は同じ承認済みjobから
+順番にassumeするが、DB taskの起動権限とservice更新権限は混ぜない。
 
 `terraform.tfstate` は `.gitignore` 済み。secret の実体は入らないが account ID は入る。
