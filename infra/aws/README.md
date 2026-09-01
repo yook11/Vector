@@ -138,6 +138,10 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
   `DenyRoleCreationOutsideKnownRoles` でも拒否される。`ssm:StartSession` も
   `terraform-apply` は持たない。**CI 用の経路でこれが通らないのは fail-closed が
   効いた結果**で、穴を開けて通すものではない (bastion.tf の注記と対)。
+- **踏み台の plan / apply / SSM / 撤去は最初から最後まで admin profile だけを使う。**
+  各操作の前に `infra/aws/scripts/verify-aws-profile.sh vector-admin` で実 caller を
+  検証する。migration は別ターミナルから `vector-migrate` を検証して実行し、同じ
+  shell で資格情報を切り替えない。
 - **トンネル越しに `verify-full` を保つ方法が client で違う。** libpq (psql) は
   `host` と `hostaddr` を分離指定できるが、**asyncpg / pg にこの分離は無い**。
   後者は名前解決の側で解く。証明書の検証を落として解決しない — `db_ssl.py` は
