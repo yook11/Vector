@@ -555,9 +555,7 @@ resource "aws_iam_role_policy" "migrate" {
           StringEquals = {
             "aws:RequestTag/VectorPurpose" = "migration"
             "ecs:compute-compatibility"    = "FARGATE"
-          }
-          Bool = {
-            "ecs:privileged" = "false"
+            "ecs:privileged"               = "false"
           }
           NumericEquals = {
             "ecs:task-cpu"    = 256
@@ -581,9 +579,7 @@ resource "aws_iam_role_policy" "migrate" {
           StringEquals = {
             "aws:RequestTag/VectorPurpose" = "migration"
             "ecs:cluster"                  = "arn:aws:ecs:${var.region}:${local.account_id}:cluster/${var.name_prefix}"
-          }
-          Bool = {
-            "ecs:enable-execute-command" = "false"
+            "ecs:enable-execute-command"   = "false"
           }
           Null = {
             "aws:RequestTag/ReleaseSha"  = "false"

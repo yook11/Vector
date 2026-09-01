@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -37,9 +38,9 @@ def test_migration_ci_role_cannot_retag_existing_tasks_or_pass_app_roles() -> No
     assert 'Resource = "*"' in migrate
     assert 'Action   = "ecs:RunTask"' in migrate
     assert "task-definition/${var.name_prefix}-migration:*" in migrate
-    assert migrate.count("Bool = {") == 2
-    assert '"ecs:privileged" = "false"' in migrate
-    assert '"ecs:enable-execute-command" = "false"' in migrate
+    assert migrate.count("Bool = {") == 0
+    assert re.search(r'"ecs:privileged"\s*=\s*"false"', migrate)
+    assert re.search(r'"ecs:enable-execute-command"\s*=\s*"false"', migrate)
     assert '"ecs:CreateAction" = [' in migrate
     assert '"RegisterTaskDefinition"' in migrate
     assert '"RunTask"' in migrate
