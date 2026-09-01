@@ -259,7 +259,6 @@ export async function installResearchContinuityBrowserHarness(
       status: "running",
       errorCode: null,
       attemptEpoch: 1,
-      recentEvents: [],
     } satisfies ResearchRunResponse;
     targetPollResponses += 1;
     targetPollStatuses.push(response.status);

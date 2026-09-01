@@ -33,7 +33,7 @@ locals {
       "on ~pipeline:dispatch ~pipeline:acquisition ~agent resetchannels -@all +xadd",
       "+multi +exec",
       local.valkey_common_acl,
-      "(~agent:run:* resetchannels -@all +xadd +xrange +xread +exists +expire +lrange)",
+      "(~agent:run:* resetchannels -@all +xadd +xrange +xread +exists +expire)",
     ])
     scheduler = join(" ", [
       "on ~pipeline:dispatch ~pipeline:maintenance ~trend_discovery ~briefing ~agent -@all",
@@ -77,7 +77,7 @@ locals {
       "+xgroup|create +xreadgroup +xack +xautoclaim",
       "+multi +exec +script|exists +script|load",
       local.valkey_common_acl,
-      "(~agent:run:* resetchannels -@all +xadd +expire +lpush +ltrim +del)",
+      "(~agent:run:* resetchannels -@all +xadd +expire)",
       "(~autoclaim:taskiq:agent resetchannels -@all +set +get +del +evalsha)",
       "(~taskiq:* resetchannels -@all +set)",
     ])

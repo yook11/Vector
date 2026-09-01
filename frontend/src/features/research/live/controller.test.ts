@@ -652,36 +652,6 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("does not adopt polling List activity while connecting", async () => {
-      const pollRun = vi.fn<PollRun>().mockResolvedValue(
-        runResult("running", "evidence_collection", null, [
-          {
-            type: "evidence_collection.external_search_hits_fetched",
-            ts: "2026-07-13T00:00:00Z",
-            taskIndex: 0,
-            hitCount: 8,
-          },
-          { type: "unknown.event", answerText: "do not project" },
-          {
-            type: "evidence_collection.external_search_hits_fetched",
-            task_index: 0,
-            hit_count: 99,
-          },
-        ]),
-      );
-      const harness = createHarness(pollRun);
-
-      await flushPromises();
-      expect(
-        harness.controller.getSnapshot().liveState.currentActivity,
-      ).toBeNull();
-      expect(
-        harness.controller.getSnapshot().liveState.progressStage,
-      ).toBeNull();
-
-      harness.unsubscribe();
-    });
-
     it("keeps SSE activity after polling-only instead of replacing it with List activity", async () => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
@@ -720,54 +690,6 @@ describe("createResearchRunLiveController", () => {
         taskIndex: 0,
         hitCount: 1,
       });
-
-      harness.unsubscribe();
-    });
-
-    it.each([
-      {
-        type: "evidence_collection.internal_search_started" as const,
-        queryCount: 2,
-      },
-      {
-        type: "evidence_collection.external_search_queries_generated" as const,
-        taskIndex: 0,
-        queries: ["NVIDIA AI"],
-      },
-    ])("does not select the $type search-family activity from polling while connecting", async (searchActivity) => {
-      const pollRun = vi
-        .fn<PollRun>()
-        .mockResolvedValue(
-          runResult("running", "evidence_collection", null, [
-            { ...searchActivity, ts: "2026-07-13T00:00:00Z" },
-          ]),
-        );
-      const harness = createHarness(pollRun);
-
-      await flushPromises();
-      expect(
-        harness.controller.getSnapshot().liveState.currentActivity,
-      ).toBeNull();
-
-      harness.unsubscribe();
-    });
-
-    it("does not select evidence_review.selected from polling while connecting", async () => {
-      const pollRun = vi.fn<PollRun>().mockResolvedValue(
-        runResult("running", "evidence_review", null, [
-          {
-            type: "evidence_review.selected",
-            ts: "2026-07-13T00:00:00Z",
-            evidenceCount: 4,
-          },
-        ]),
-      );
-      const harness = createHarness(pollRun);
-
-      await flushPromises();
-      expect(
-        harness.controller.getSnapshot().liveState.currentActivity,
-      ).toBeNull();
 
       harness.unsubscribe();
     });
@@ -1066,13 +988,6 @@ describe("createResearchRunLiveController", () => {
             status: "running",
             progressStage: "answering",
             errorCode: null,
-            recentEvents: [
-              {
-                type: "evidence_review.selected",
-                ts: "2026-07-13T00:00:00Z",
-                evidenceCount: 4,
-              },
-            ],
             ...epochField,
           }),
           { status: 200 },
@@ -1122,7 +1037,6 @@ describe("createResearchRunLiveController", () => {
             progressStage: "answering",
             errorCode: null,
             attemptEpoch: 0,
-            recentEvents: [],
           }),
           { status: 200 },
         ),
@@ -1266,7 +1180,6 @@ describe("createResearchRunLiveController", () => {
             progressStage: retiredStageValue,
             errorCode: null,
             attemptEpoch: 1,
-            recentEvents: [],
           }),
           { status: 200 },
         ),

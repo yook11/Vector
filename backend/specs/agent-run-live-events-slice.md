@@ -1,5 +1,9 @@
 # Agent run Redis ライブイベント slice 仕様 (Slice 5)
 
+> 後続契約更新: `agent-run-recent-events-drop-slice.md` は
+> Redis List と `GET /runs` の `recentEvents` を落とす。
+> activity の表示正本は Redis Stream（SSE）である。本文中の List 配信記述は無効である。
+
 ## 位置付け
 
 親仕様: `specs/agent/conversation-history-async-runs.md`。前提 slice: Slice 1〜4

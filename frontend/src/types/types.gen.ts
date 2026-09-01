@@ -737,112 +737,6 @@ export type ResearchQuestionRequest = {
 };
 
 /**
- * ResearchRunEvidenceReviewSelectedEvent
- */
-export type ResearchRunEvidenceReviewSelectedEvent = {
-    /**
-     * Type
-     */
-    type: 'evidence_review.selected';
-    /**
-     * Ts
-     */
-    ts: string;
-    /**
-     * Evidencecount
-     */
-    evidenceCount: number;
-};
-
-/**
- * ResearchRunExternalSearchHitsFetchedEvent
- */
-export type ResearchRunExternalSearchHitsFetchedEvent = {
-    /**
-     * Type
-     */
-    type: 'evidence_collection.external_search_hits_fetched';
-    /**
-     * Ts
-     */
-    ts: string;
-    /**
-     * Taskindex
-     */
-    taskIndex: number;
-    /**
-     * Hitcount
-     */
-    hitCount: number;
-};
-
-/**
- * ResearchRunExternalSearchQueriesGeneratedEvent
- */
-export type ResearchRunExternalSearchQueriesGeneratedEvent = {
-    /**
-     * Type
-     */
-    type: 'evidence_collection.external_search_queries_generated';
-    /**
-     * Ts
-     */
-    ts: string;
-    /**
-     * Taskindex
-     */
-    taskIndex: number;
-    /**
-     * Queries
-     */
-    queries: Array<string>;
-};
-
-/**
- * ResearchRunInternalSearchCompletedEvent
- */
-export type ResearchRunInternalSearchCompletedEvent = {
-    /**
-     * Type
-     */
-    type: 'evidence_collection.internal_search_completed';
-    /**
-     * Ts
-     */
-    ts: string;
-    /**
-     * Taskindex
-     */
-    taskIndex: number;
-    /**
-     * Hitcount
-     */
-    hitCount: number;
-};
-
-/**
- * ResearchRunInternalSearchStartedEvent
- */
-export type ResearchRunInternalSearchStartedEvent = {
-    /**
-     * Type
-     */
-    type: 'evidence_collection.internal_search_started';
-    /**
-     * Ts
-     */
-    ts: string;
-    /**
-     * Taskindex
-     */
-    taskIndex: number;
-    /**
-     * Querycount
-     */
-    queryCount: number;
-};
-
-/**
  * ResearchRunResponse
  */
 export type ResearchRunResponse = {
@@ -866,10 +760,6 @@ export type ResearchRunResponse = {
      * Attemptepoch
      */
     attemptEpoch: number;
-    /**
-     * Recentevents
-     */
-    recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchHitsFetchedEvent | ResearchRunEvidenceReviewSelectedEvent>;
 };
 
 /**

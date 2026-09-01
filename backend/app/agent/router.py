@@ -27,7 +27,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.composition import ensure_external_search_configured
-from app.agent.live_updates.recent_events import AgentRunLiveEventReader
 from app.agent.live_updates.sse import (
     AgentRunQueuedSseConnection,
     AgentRunSseCapacity,
@@ -499,16 +498,12 @@ async def get_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
-    redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
 ) -> ResearchRunResponse:
     repo = AgentRunRepository(session)
     response = await repo.read_run_for_user(run_id=run_id, user_id=user.id)
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if response.status == AgentRunStatus.POLICY_BLOCKED:
-        return response
-    recent_events = await AgentRunLiveEventReader(redis).recent_events(run_id)
-    return response.model_copy(update={"recent_events": recent_events})
+    return response
 
 
 def _generation_unavailable() -> HTTPException:

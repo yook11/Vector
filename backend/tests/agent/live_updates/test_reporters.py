@@ -153,29 +153,12 @@ KNOWN_ACTIVITIES = [
     KNOWN_ACTIVITIES,
     ids=lambda activity: activity.type,
 )
-async def test_activity_reporter_fans_out_each_known_event(
+async def test_activity_reporter_publishes_each_known_event(
     activity: AnswerProgressEvent,
 ) -> None:
-    list_publisher = AsyncMock()
     stream_publisher = AsyncMock()
     stream_publisher.publish.return_value = None
-    reporter = reporters.AgentRunLiveActivityReporter(list_publisher, stream_publisher)
-
-    await reporter.event_occurred(activity)
-
-    list_publisher.event_occurred.assert_awaited_once_with(activity)
-    stream_publisher.publish.assert_awaited_once_with(
-        AgentRunLiveStreamActivityEvent(activity=activity)
-    )
-
-
-@pytest.mark.asyncio
-async def test_activity_reporter_attempts_stream_when_list_publisher_raises() -> None:
-    activity = InternalSearchStartedEvent(task_index=0, query_count=2)
-    list_publisher = AsyncMock()
-    list_publisher.event_occurred.side_effect = RuntimeError("list unavailable")
-    stream_publisher = AsyncMock()
-    reporter = reporters.AgentRunLiveActivityReporter(list_publisher, stream_publisher)
+    reporter = reporters.AgentRunLiveActivityReporter(stream_publisher)
 
     await reporter.event_occurred(activity)
 
@@ -185,31 +168,27 @@ async def test_activity_reporter_attempts_stream_when_list_publisher_raises() ->
 
 
 @pytest.mark.asyncio
-async def test_activity_reporter_attempts_list_when_stream_publisher_raises() -> None:
+async def test_activity_reporter_does_not_raise_when_stream_publish_fails() -> None:
     activity = InternalSearchCompletedEvent(task_index=0, hit_count=3)
-    list_publisher = AsyncMock()
     stream_publisher = AsyncMock()
     stream_publisher.publish.side_effect = RuntimeError("stream unavailable")
-    reporter = reporters.AgentRunLiveActivityReporter(list_publisher, stream_publisher)
+    reporter = reporters.AgentRunLiveActivityReporter(stream_publisher)
 
     await reporter.event_occurred(activity)
 
-    list_publisher.event_occurred.assert_awaited_once_with(activity)
+    stream_publisher.publish.assert_awaited_once_with(
+        AgentRunLiveStreamActivityEvent(activity=activity)
+    )
 
 
 @pytest.mark.asyncio
-async def test_activity_projection_failure_still_attempts_list_publisher() -> None:
+async def test_activity_reporter_does_not_publish_invalid_activity() -> None:
     invalid_activity = cast(AnswerProgressEvent, object())
-    list_publisher = AsyncMock()
     stream_publisher = AsyncMock()
-    reporter = reporters.AgentRunLiveActivityReporter(
-        list_publisher,
-        stream_publisher,
-    )
+    reporter = reporters.AgentRunLiveActivityReporter(stream_publisher)
 
     await reporter.event_occurred(invalid_activity)
 
-    list_publisher.event_occurred.assert_awaited_once_with(invalid_activity)
     stream_publisher.publish.assert_not_awaited()
 
 
@@ -220,7 +199,7 @@ async def test_activity_reporter_preserves_nested_domain_shape() -> None:
         hit_count=5,
     )
     stream_publisher = AsyncMock()
-    reporter = reporters.AgentRunLiveActivityReporter(AsyncMock(), stream_publisher)
+    reporter = reporters.AgentRunLiveActivityReporter(stream_publisher)
 
     await reporter.event_occurred(activity)
 
@@ -241,11 +220,9 @@ async def test_activity_reporter_does_not_log_payload_or_exception_text() -> Non
         task_index=0,
         queries=[SECRET_PAYLOAD],
     )
-    list_publisher = AsyncMock()
-    list_publisher.event_occurred.side_effect = RuntimeError(SECRET_EXCEPTION)
     stream_publisher = AsyncMock()
     stream_publisher.publish.side_effect = RuntimeError(SECRET_EXCEPTION)
-    reporter = reporters.AgentRunLiveActivityReporter(list_publisher, stream_publisher)
+    reporter = reporters.AgentRunLiveActivityReporter(stream_publisher)
 
     with capture_logs() as logs:
         await reporter.event_occurred(activity)

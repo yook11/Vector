@@ -77,7 +77,6 @@ describe("Research read cache contract", () => {
       status: "running",
       errorCode: null,
       attemptEpoch: 1,
-      recentEvents: [],
     } satisfies ResearchRunResponse;
     const fetcher = vi.fn().mockResolvedValue({ data });
 

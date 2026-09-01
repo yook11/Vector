@@ -31,11 +31,6 @@ from app.agent.contract import (
     ExternalUrlSource,
 )
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
-from app.agent.live_updates.recent_events import (
-    AgentRunLiveEventPublisher,
-    AgentRunLiveEventReader,
-    agent_run_live_events_key,
-)
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamActivityEvent,
     AgentRunLiveStreamAnswerDeltaEvent,
@@ -525,12 +520,11 @@ async def test_evidence_higher_generation_delta_survives_reset_loss() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() -> None:
+async def test_delta_breaker_does_not_damage_other_stream_producers() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     run_id = uuid4()
     attempt_epoch = 8
     stream_key = agent_run_live_stream_key(run_id)
-    list_key = agent_run_live_events_key(run_id)
     try:
         stream_publisher = AgentRunLiveStreamPublisher(
             redis,
@@ -559,7 +553,6 @@ async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() ->
         await stream_publisher.publish(
             AgentRunLiveStreamActivityEvent(activity=activity)
         )
-        await AgentRunLiveEventPublisher(redis, run_id).event_occurred(activity)
         await stream_publisher.publish(
             AgentRunLiveStreamTerminalEvent(status="completed")
         )
@@ -569,7 +562,6 @@ async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() ->
             attempt_epoch,
             None,
         )
-        recent_events = await AgentRunLiveEventReader(redis).recent_events(run_id)
 
         assert len(failing_delta_publisher.calls) == 3
         assert stream_result.status is AgentRunLiveStreamReadStatus.EVENTS
@@ -586,12 +578,6 @@ async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() ->
         assert isinstance(stream_events[2], AgentRunLiveStreamActivityEvent)
         assert stream_events[2].activity == activity
         assert stream_events[3] == AgentRunLiveStreamTerminalEvent(status="completed")
-        assert len(recent_events) == 1
-        assert (
-            recent_events[0].type == "evidence_collection.external_search_hits_fetched"
-        )
-        assert recent_events[0].task_index == 2
-        assert recent_events[0].hit_count == 5
     finally:
-        await redis.delete(stream_key, list_key)
+        await redis.delete(stream_key)
         await redis.aclose()

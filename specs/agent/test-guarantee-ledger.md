@@ -152,7 +152,7 @@ target module名は責任を示す案であり、実装PRで最終確定する�
 | OBS-METRIC-PL-01 | question, repair hint | Planner outcome metric / planned・failed | result/retry/plan type/fixed failure code | model-visible text | `planning/test_planner.py` / metric assertを1つへ統合 |
 | OBS-METRIC-IS-01 | internal query | Internal Search metric・warning / success・empty・classified failure | result/phase/count | query本文 | `internal_search/test_service.py` / success logはgap候補 |
 | OBS-WK-LOG-01 | generation error, unexpected error | worker log / classified・unknown | run ID/error type | exception・question・answer本文 | worker logging test / unknownは維持、classifiedはassert不足のgap |
-| OBS-REDIS-LOG-01 | event/delta payload, Redis error | List/Stream/delta publisher log / timeout・exception・breaker open | run/epoch/generation/fixed reason | payload・Redis例外本文 | `live_updates/test_recent_events.py`, `test_stream.py`, `test_answer_delta.py` / 維持 |
+| OBS-REDIS-LOG-01 | event/delta payload, Redis error | Stream/delta publisher log / timeout・exception・breaker open | run/epoch/generation/fixed reason | payload・Redis例外本文 | `live_updates/test_stream.py`, `test_answer_delta.py` / 維持 |
 | PUBLIC-DELTA-01 | Direct answer | Redis `answer.delta` / success・blank retry | filter済みanswer本文、generation | citation marker/raw provider text | `test_answer_delta_integration.py` / 維持 |
 | PUBLIC-DELTA-02〜03 | Evidence answer＋internal JSON metadata | Redis `answer.delta` / success・retry・reset loss | root answer本文、generation/reset | assessment/sufficiency/citations metadata/raw JSON | `test_answer_delta_integration.py` / 維持、producer unitとの重複度は保留 |
 | SSE-PUBLIC-01 | typed known live event | SSE serializer / known event | 6種eventの公開schema | raw transport shape | `live_updates/test_sse.py` / 維持 |
@@ -429,15 +429,13 @@ worker testはproduction repositoryとtest DBを使い、Recording Runnerと外�
 | PUBLIC-DELTA-01 | Direct delta連結がfilter済みfinal answerと一致し、blank retryはgeneration 2のみでresetしない | Direct Flow→Redis integration | Fake stream generator | 維持 |
 | PUBLIC-DELTA-02 | Evidence deltaはroot answerだけを含みassessment/sufficiency/ref/missing/raw JSONを含めない | Evidence Flow/extractor→Redis integration | Fake stream generator | 維持。unitとの重複度は保留 |
 | PUBLIC-DELTA-03 | Evidence retryはreset→new generation delta、reset喪失時もhigher generationを独立配信する | Evidence Flow→Redis integration | fault wrapper | 維持 |
-| PUBLIC-DELTA-04 | delta breakerがstage/activity/terminal/List producerを壊さない | real Redis integration | delta専用failing wrapper | 維持 |
+| PUBLIC-DELTA-04 | delta breakerがstage/activity/terminal producerを壊さない | real Redis integration | delta専用failing wrapper | 維持 |
 
 ## Redis List / Stream / Delta Reporter
 
 | ID | 保証条件 | 現production / test owner | 差し替え境界 | 判定 |
 |---|---|---|---|---|
-| LIVE-LIST-01 | recent eventsのcap/TTL、latest Nをoldest-first、bad entry skip、resetはListだけ削除 | `recent_events.py` / `test_recent_events.py` | Redis double＋real Redis | 維持 |
-| LIVE-LIST-02 | publish/read/reset timeout・exceptionをbest effort化しpayload/error本文をlogへ出さない | `recent_events.py` / `test_recent_events.py` | Raising/Hanging Redis | 維持 |
-| LIVE-FANOUT-01 | stageはDB＋Stream、activityはList＋Streamへ独立試行し、一方のfailureで他方を省略しない | `reporters.py` / `test_reporters.py` | Recording/raising sinks | 維持 |
+| LIVE-FANOUT-01 | stageとactivityはStreamへbest-effort publishし、failureでcallerを落とさない | `reporters.py` / `test_reporters.py` | Recording/raising sinks | 維持 |
 | LIVE-FANOUT-02 | nested activity shapeを保持し、adapter自身がpayload/exception本文をlogしない | `reporters.py` / `test_reporters.py` | throwing sinks | 維持。sink別warningの正本はpublisher側 |
 | LIVE-STREAM-01 | typed 6 event、正attempt epoch、bounded TTL/MAXLEN/page/timeout、nested activity envelope | `stream.py` / `test_stream.py` | memory＋real Redis | 維持 |
 | LIVE-STREAM-02 | payload decode前にepochを分類し、old skip/current return/new boundary非消費を守る | `stream.py` / `test_stream.py` | memory Redis | 維持 |
@@ -530,7 +528,6 @@ glob単位で全62 test moduleを台帳IDへ対応づける。個別PRでは、�
 | `test_router_research.py` | API-* | responses/threads/runs/OpenAPIへ分割 |
 | `live_updates/test_answer_delta.py` | LIVE-DELTA-* | 維持 |
 | `live_updates/test_answer_delta_integration.py` | PUBLIC-DELTA-* | behavior integration維持、重複度はPR7で判断 |
-| `live_updates/test_recent_events.py` | LIVE-LIST-* | 維持 |
 | `live_updates/test_reporters.py` | LIVE-FANOUT-* | 維持、sink非漏洩正本を分離 |
 | `live_updates/test_stream.py` | LIVE-STREAM-* | unit＋real Redis owner維持 |
 | `live_updates/test_sse.py` | SSE-PUBLIC/CAPACITY/REPIN/DEGRADE/LIFECYCLE/QUEUED | 維持 |
