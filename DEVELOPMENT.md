@@ -35,6 +35,20 @@ cd frontend && npm audit --omit=dev --audit-level=high                          
 pip install semgrep && semgrep --config=p/owasp-top-ten --config=p/security-audit .  # Semgrep
 ```
 
+## Local stack (host から届く口)
+
+`docker compose up` 後、サービスは loopback だけに出る (LAN には出さない)。
+
+| 先 | 用途 |
+|---|---|
+| `http://127.0.0.1:3000` | frontend (ブラウザ / Playwright) |
+| `http://127.0.0.1:8000` | backend (`/api/v1/health`, `/openapi.json`) |
+| `127.0.0.1:5432` | 開発用 Postgres (`vector` DB。記事・pipeline 状態) |
+| `127.0.0.1:6379` | 開発用 Redis (taskiq) |
+| `127.0.0.1:6380` | frontend rate-limit Redis |
+
+compose 内の frontend は `INTERNAL_API_URL=http://backend:8000/api/v1` のまま。ホストで `npm run dev` するときは `INTERNAL_API_URL=http://localhost:8000/api/v1` が必要。
+
 ## Test / lint
 
 Backend:
@@ -55,7 +69,7 @@ docker compose exec frontend npm test
 
 ## Integration tests
 
-`-m integration` のテストは host から専用 `db-test` (`127.0.0.1` の random port, project 名 `vector-test-<worktree>`) を立てて回す。Makefile が `DATABASE_URL` / `MIGRATION_DATABASE_URL` / role password を OS env で注入するため `.env` は不要。worktree 直下からも `.env` symlink なしで動き、project 名・ポートが worktree ごとに分離されるため複数 worktree で並列実行できる。
+`-m integration` のテストは、開発用 `db` / Redis を汚さないため専用 `db-test` / `redis-test` (`127.0.0.1` の random port, project 名 `vector-test-<worktree>`) を立てて回す。本体の `vector` DB（記事・pipeline）は触らない。Makefile が `DATABASE_URL` / `MIGRATION_DATABASE_URL` / role password を OS env で注入するため `.env` は不要。worktree 直下からも `.env` symlink なしで動き、project 名・ポートが worktree ごとに分離されるため複数 worktree で並列実行できる。
 
 ```bash
 # 全 integration テスト
@@ -100,9 +114,10 @@ docker compose logs --since 5m worker-agent
 
 ## Type generation
 
-Backend の Pydantic schemas が API contract の正本。変更後は frontend 型を再生成する。
+Backend の Pydantic schemas が API contract の正本。変更後は frontend 型を再生成する。compose の backend が `http://localhost:8000` で起動している前提。
 
 ```bash
-# Backend 起動中に実行
 cd frontend && npm run generate-types
 ```
+
+backend が止まっているときは、OpenAPI をファイルに出して `npm run generate-types:file` でも生成できる。

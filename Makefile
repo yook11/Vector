@@ -115,9 +115,10 @@ verify-config:  ## docker-compose.yml の env 補間を検証（$${VAR} の未�
 # -------------------------------------------
 # 統合テスト経路（host pytest ↔ db-test / redis-test ephemeral infra）
 # -------------------------------------------
-# 本体 `db` / Redis は host 非露出 (red-team 対策) のため、host から実 infra を叩く
-# 統合テストは別 compose の `db-test` / `redis-test` を立てて回す。終了時は `trap` で
+# 本体 `db` / Redis は開発用（記事・pipeline 状態）のため、統合テストは別
+# compose の `db-test` / `redis-test` を立てて回す。終了時は `trap` で
 # 必ず `down -v` し、tmpfs と合わせて毎回 fresh を保証する。
+# `down -v --remove-orphans` を本体 compose に向けると pgdata ごと消える。
 #
 # 環境変数は Makefile が export するため、開発者の .env (dev DB 向け) を
 # 一切汚染しない (pydantic-settings priority: OS env > .env)。

@@ -36,7 +36,7 @@ services:
       dockerfile: Dockerfile
       target: development
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - INTERNAL_API_URL=http://backend:8000/api/v1
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
@@ -133,8 +133,8 @@ services:
     working_dir: /app
     user: root
     # frontend dev image の build 段階で /opt/ba-cli に Better Auth CLI を
-    # 焼き込んでいるため (frontend/Dockerfile dev stage)、internal network
-    # (外部 egress 不可) のまま binary を呼べる。auth.cli.ts は
+    # 焼き込んでいるため (frontend/Dockerfile dev stage)、runtime で npm
+    # install せず binary を呼べる。auth.cli.ts は
     # requireEnv("AUTH_DATABASE_URL") のみ参照するため BETTER_AUTH_SECRET 等
     # は不要 (CLI は schema 生成のみ)。
     entrypoint: ["sh", "-c"]
@@ -194,7 +194,7 @@ services:
       - internal
     restart: "no"
 
-  # --- Backend (internal only — no ports exposed to host) ---
+  # --- Backend (loopback 公開。LAN には出さない) ---
   backend:
     build:
       context: ./backend
@@ -222,6 +222,8 @@ services:
         condition: service_completed_successfully
       db:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
@@ -232,12 +234,9 @@ services:
       - internal
 
   # --- Database ---
-  # red-team AUTH-C1 (db host expose 経由の admin 乗っ取り) を構造的に遮断:
-  # - networks は internal 限定 (Docker の internal: true で外部 ingress/egress 遮断)
-  # - ports は宣言なし (internal network では host port forward も無効化されるため)
-  # dev で psql を使うときは `docker compose exec db psql -U vector vector` で
-  # container 内 psql を使う。host から直接 db に接続する経路は完全に閉じる
-  # (host port 宣言なし。統合テストは別 compose の `db-test` を loopback 限定で立てる)。
+  # 開発用 Postgres。ホストには loopback だけ公開し LAN には出さない。
+  # 統合テストは別 compose の `db-test` を使い、この volume の記事・pipeline
+  # 状態を TRUNCATE しない。
   db:
     image: pgvector/pgvector:0.8.2-pg18-bookworm
     environment:
@@ -258,6 +257,8 @@ services:
       # 初回 db 起動時に application role を作成する init script を mount。
       # 既存 dev volume では実行されないため、PR 本文の手動手順を参照すること。
       - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vector} -d ${POSTGRES_DB:-vector}"]
       interval: 5s
@@ -283,6 +284,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
     networks:
@@ -291,8 +294,8 @@ services:
   # --- Redis (Frontend Rate Limit, ephemeral) ---
   # red-team C9 対策: proxy.ts rate-limit (rl:ip:* ZSET) 専用 instance。本体 redis
   # と物理分離して OOM 道連れを防ぐ。volume なし = restart で 60 秒 sliding window
-  # の履歴が消えるが、運用上は許容 (1 分以内に新 bucket が作られる)。internal
-  # network 限定で host port expose なし。
+  # の履歴が消えるが、運用上は許容 (1 分以内に新 bucket が作られる)。
+  # ホストには loopback だけ公開し LAN には出さない。
   #
   # Better Auth のログイン limiter は DB-backed (storage:"database") へ移行済みで
   # ここには載らない (ADR-007)。本 instance のキーは proxy IP limiter のみで全て
@@ -307,6 +310,8 @@ services:
       --maxmemory-policy volatile-ttl
       --save ""
       --appendonly no
+    ports:
+      - "127.0.0.1:6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -357,7 +362,6 @@ services:
 networks:
   public:
   internal:
-    internal: true
 
 volumes:
   pgdata:
