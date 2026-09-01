@@ -554,7 +554,6 @@ resource "aws_iam_role_policy" "migrate" {
         Condition = {
           StringEquals = {
             "aws:RequestTag/VectorPurpose" = "migration"
-            "ecs:compute-compatibility"    = "FARGATE"
             "ecs:privileged"               = "false"
           }
           NumericEquals = {
@@ -564,9 +563,11 @@ resource "aws_iam_role_policy" "migrate" {
           Null = {
             "aws:RequestTag/ReleaseSha"  = "false"
             "aws:RequestTag/GitHubRunId" = "false"
+            "ecs:compute-compatibility"  = "false"
           }
           "ForAllValues:StringEquals" = {
-            "aws:TagKeys" = ["VectorPurpose", "ReleaseSha", "GitHubRunId"]
+            "aws:TagKeys"               = ["VectorPurpose", "ReleaseSha", "GitHubRunId"]
+            "ecs:compute-compatibility" = ["FARGATE"]
           }
         }
       },
@@ -578,8 +579,10 @@ resource "aws_iam_role_policy" "migrate" {
         Condition = {
           StringEquals = {
             "aws:RequestTag/VectorPurpose" = "migration"
-            "ecs:cluster"                  = "arn:aws:ecs:${var.region}:${local.account_id}:cluster/${var.name_prefix}"
             "ecs:enable-execute-command"   = "false"
+          }
+          ArnEquals = {
+            "ecs:cluster" = "arn:aws:ecs:${var.region}:${local.account_id}:cluster/${var.name_prefix}"
           }
           Null = {
             "aws:RequestTag/ReleaseSha"  = "false"
@@ -619,7 +622,9 @@ resource "aws_iam_role_policy" "migrate" {
         Condition = {
           StringEquals = {
             "aws:ResourceTag/VectorPurpose" = "migration"
-            "ecs:cluster"                   = "arn:aws:ecs:${var.region}:${local.account_id}:cluster/${var.name_prefix}"
+          }
+          ArnEquals = {
+            "ecs:cluster" = "arn:aws:ecs:${var.region}:${local.account_id}:cluster/${var.name_prefix}"
           }
         }
       },
