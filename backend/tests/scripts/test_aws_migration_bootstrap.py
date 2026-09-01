@@ -33,14 +33,45 @@ def test_bootstrap_pairs_dedicated_roles_with_narrow_boundaries() -> None:
 def test_migration_ci_role_cannot_retag_existing_tasks_or_pass_app_roles() -> None:
     oidc = _text("infra/aws/bootstrap/oidc.tf")
     migrate = oidc.split("# --- db-migrate", maxsplit=1)[1]
+    register = migrate.split(
+        'Sid      = "RegisterMigrationTaskDefinition"', maxsplit=1
+    )[1].split('Sid      = "RunMigrationTask"', maxsplit=1)[0]
+    run = migrate.split('Sid      = "RunMigrationTask"', maxsplit=1)[1].split(
+        'Sid      = "TagMigrationResourcesOnlyAtCreation"', maxsplit=1
+    )[0]
+    stop = migrate.split('Sid      = "StopTaggedMigrationTask"', maxsplit=1)[1].split(
+        'Sid    = "InspectMigrationTasks"', maxsplit=1
+    )[0]
 
     assert 'Action   = "ecs:RegisterTaskDefinition"' in migrate
     assert 'Resource = "*"' in migrate
     assert 'Action   = "ecs:RunTask"' in migrate
     assert "task-definition/${var.name_prefix}-migration:*" in migrate
     assert migrate.count("Bool = {") == 0
-    assert re.search(r'"ecs:privileged"\s*=\s*"false"', migrate)
-    assert re.search(r'"ecs:enable-execute-command"\s*=\s*"false"', migrate)
+    assert re.search(r'"ecs:privileged"\s*=\s*"false"', register)
+    assert re.search(r'"ecs:enable-execute-command"\s*=\s*"false"', run)
+    assert re.search(
+        r'"ForAllValues:StringEquals"\s*=\s*\{[^}]*'
+        r'"aws:TagKeys"\s*=\s*\["VectorPurpose", "ReleaseSha", "GitHubRunId"\]'
+        r'[^}]*"ecs:compute-compatibility"\s*=\s*\["FARGATE"\]',
+        register,
+        re.DOTALL,
+    )
+    assert re.search(
+        r'Null\s*=\s*\{[^}]*"ecs:compute-compatibility"\s*=\s*"false"',
+        register,
+        re.DOTALL,
+    )
+    assert not re.search(
+        r'StringEquals\s*=\s*\{[^}]*"ecs:compute-compatibility"',
+        register,
+        re.DOTALL,
+    )
+    for statement in (run, stop):
+        assert re.search(r'ArnEquals\s*=\s*\{[^}]*"ecs:cluster"', statement, re.DOTALL)
+        assert not re.search(
+            r'StringEquals\s*=\s*\{[^}]*"ecs:cluster"', statement, re.DOTALL
+        )
     assert '"ecs:CreateAction" = [' in migrate
     assert '"RegisterTaskDefinition"' in migrate
     assert '"RunTask"' in migrate
