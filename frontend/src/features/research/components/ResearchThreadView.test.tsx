@@ -789,7 +789,7 @@ describe("ResearchThreadView live integration", () => {
 
     expect(screen.getByText("下書き")).toBeInTheDocument();
     expect(FakeEventSource.instances).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(fetchMock).not.toHaveBeenCalledWith(
       `/api/research/runs/${RUN_ONE}`,
       expect.objectContaining({ cache: "no-store" }),
     );
@@ -1133,6 +1133,7 @@ describe("ResearchThreadView live integration", () => {
       ),
     );
     const view = render(<ResearchThreadView thread={activeThread()} />);
+    act(() => currentSource().closed());
     const questionArticle = screen
       .getByText("このニュースの影響は？")
       .closest("article");

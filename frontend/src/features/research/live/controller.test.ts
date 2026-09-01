@@ -258,7 +258,7 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("enters recovery-pending exactly at the createdAt-based deadline and keeps polling", async () => {
+    it("enters recovery-pending exactly at the createdAt-based deadline and keeps polling after polling-only", async () => {
       vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
       const harness = createHarness(
         undefined,
@@ -276,7 +276,13 @@ describe("createResearchRunLiveController", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(isRecoveryPending(harness.controller.getSnapshot())).toBe(true);
       expect(harness.controller.getSnapshot().runStatus).toBe("running");
-      expect(harness.pollRun.mock.calls.length).toBeGreaterThan(1);
+      expect(harness.pollRun).not.toHaveBeenCalled();
+
+      harness.source.closed();
+      await flushPromises();
+      expect(harness.pollRun).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(harness.pollRun).toHaveBeenCalledTimes(2);
 
       harness.unsubscribe();
     });
@@ -392,8 +398,31 @@ describe("createResearchRunLiveController", () => {
   });
 
   describe("polling lifecycle", () => {
-    it("polls immediately and schedules success responses every two seconds", async () => {
+    it("does not poll while connecting, live, or reconnecting", async () => {
       const harness = createHarness();
+
+      expect(harness.pollRun).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.pollRun).not.toHaveBeenCalled();
+
+      harness.source.open();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.pollRun).not.toHaveBeenCalled();
+      expect(harness.controller.getSnapshot().connectionMode).toBe("live");
+
+      harness.source.reconnecting();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.pollRun).not.toHaveBeenCalled();
+      expect(harness.controller.getSnapshot().connectionMode).toBe(
+        "reconnecting",
+      );
+
+      harness.unsubscribe();
+    });
+
+    it("polls after EventSource CLOSED and schedules success responses every two seconds", async () => {
+      const harness = createHarness();
+      harness.source.closed();
 
       expect(harness.pollRun).toHaveBeenCalledTimes(1);
       expect(harness.pollRun).toHaveBeenCalledWith(
@@ -414,6 +443,7 @@ describe("createResearchRunLiveController", () => {
         .fn<PollRun>()
         .mockResolvedValue({ kind: "unavailable" });
       const harness = createHarness(pollRun);
+      harness.source.closed();
 
       await flushPromises();
       await vi.advanceTimersByTimeAsync(3999);
@@ -434,6 +464,7 @@ describe("createResearchRunLiveController", () => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
+      harness.source.closed();
       const signal = pollRun.mock.calls[0]?.[1];
 
       await vi.advanceTimersByTimeAsync(30000);
@@ -458,6 +489,7 @@ describe("createResearchRunLiveController", () => {
         { attemptEpoch: 1, generation: 1, text: "draft" },
         "1-0",
       );
+      harness.source.closed();
 
       pending.resolve({ kind: "http-error", status });
       await flushPromises();
@@ -571,6 +603,7 @@ describe("createResearchRunLiveController", () => {
         connectionMode: "polling-only",
         liveState: { draftText: "", draftMode: "suppressed" },
       });
+      expect(harness.pollRun).toHaveBeenCalledTimes(1);
       expect(harness.createEventSource).toHaveBeenCalledTimes(1);
 
       harness.unsubscribe();
@@ -590,6 +623,7 @@ describe("createResearchRunLiveController", () => {
         connectionMode: "polling-only",
         liveState: { draftText: "", draftMode: "suppressed" },
       });
+      expect(harness.pollRun).toHaveBeenCalledTimes(1);
       expect(harness.createEventSource).toHaveBeenCalledTimes(1);
 
       harness.unsubscribe();
@@ -794,6 +828,7 @@ describe("createResearchRunLiveController", () => {
       );
       await flushPromises();
 
+      expect(pollRun).not.toHaveBeenCalled();
       expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
         "planning",
       );
@@ -875,6 +910,7 @@ describe("createResearchRunLiveController", () => {
           runResult("running", "evidence_collection", null, [], 2),
         );
       const harness = createHarness(pollRun);
+      harness.source.closed();
 
       await flushPromises();
 
@@ -886,7 +922,7 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("resets for a higher polling epoch without applying its List activity and rejects old SSE", async () => {
+    it("resets for a higher polling epoch without applying its List activity", async () => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
@@ -911,6 +947,7 @@ describe("createResearchRunLiveController", () => {
         { attemptEpoch: 1, generation: 2, text: "old draft" },
         "3-0",
       );
+      harness.source.closed();
 
       pending.resolve(
         runResult(
@@ -928,11 +965,6 @@ describe("createResearchRunLiveController", () => {
         ),
       );
       await flushPromises();
-      harness.source.emit(
-        "stage",
-        { attemptEpoch: 1, stage: "answering" },
-        "4-0",
-      );
 
       expect(harness.controller.getSnapshot().liveState).toMatchObject({
         currentAttemptEpoch: 2,
@@ -942,8 +974,8 @@ describe("createResearchRunLiveController", () => {
         draftText: "",
         draftMode: "empty",
         lastProcessedEventId: {
-          raw: "4-0",
-          milliseconds: 4n,
+          raw: "3-0",
+          milliseconds: 3n,
           sequence: 0n,
         },
       });
@@ -970,6 +1002,7 @@ describe("createResearchRunLiveController", () => {
         { attemptEpoch: 2, activity: currentActivity },
         "2-0",
       );
+      harness.source.closed();
 
       pending.resolve(
         runResult(
@@ -1003,6 +1036,7 @@ describe("createResearchRunLiveController", () => {
         .mockResolvedValueOnce(runResult("running", "answering", null, [], 0))
         .mockResolvedValueOnce(runResult("queued", "planning", null, [], 0));
       const harness = createHarness(pollRun, "queued");
+      harness.source.closed();
 
       await flushPromises();
       await vi.advanceTimersByTimeAsync(2_000);
@@ -1060,6 +1094,7 @@ describe("createResearchRunLiveController", () => {
         { attemptEpoch: 1, activity: currentActivity },
         "2-0",
       );
+      harness.source.closed();
 
       await flushPromises();
 
@@ -1094,6 +1129,7 @@ describe("createResearchRunLiveController", () => {
       );
       vi.stubGlobal("fetch", fetchMock);
       const harness = createHarness(undefined, "queued", undefined, true);
+      harness.source.closed();
 
       await vi.waitFor(() => {
         expect(harness.controller.getSnapshot()).toMatchObject({
@@ -1132,6 +1168,7 @@ describe("createResearchRunLiveController", () => {
         progressStage: null,
       });
 
+      harness.source.closed();
       pending.resolve(runResult("running", "evidence_collection", null, [], 2));
       await flushPromises();
 
@@ -1162,6 +1199,7 @@ describe("createResearchRunLiveController", () => {
         .fn<PollRun>()
         .mockResolvedValue(runResult("completed"));
       const harness = createHarness(pollRun);
+      harness.source.closed();
 
       await flushPromises();
       expect(harness.controller.getSnapshot()).toMatchObject({
@@ -1235,6 +1273,7 @@ describe("createResearchRunLiveController", () => {
       );
       vi.stubGlobal("fetch", fetchMock);
       const harness = createHarness(undefined, "queued", undefined, true);
+      harness.source.closed();
 
       await vi.waitFor(() => {
         expect(harness.controller.getSnapshot().runStatus).toBe("running");
@@ -1303,6 +1342,7 @@ describe("createResearchRunLiveController", () => {
         { attemptEpoch: 1, generation: 1, text: "poll前の下書き" },
         "1-0",
       );
+      harness.source.closed();
 
       pending.resolve(policyBlockedRunResult());
       await flushPromises();
@@ -1330,6 +1370,7 @@ describe("createResearchRunLiveController", () => {
         .fn<PollRun>()
         .mockResolvedValue(runResult(status, null, errorCode));
       const pollingHarness = createHarness(pollRun);
+      pollingHarness.source.closed();
       await flushPromises();
 
       const sseHarness = createHarness();
@@ -1500,13 +1541,14 @@ describe("createResearchRunLiveController", () => {
   });
 
   describe("visibility and cleanup", () => {
-    it("aborts an in-flight poll while hidden, ignores its response, and polls immediately when visible", async () => {
+    it("aborts an in-flight polling-only request while hidden, ignores its response, and polls immediately when visible", async () => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi
         .fn<PollRun>()
         .mockReturnValueOnce(pending.promise)
         .mockResolvedValue(runResult("running", "planning"));
       const harness = createHarness(pollRun);
+      harness.source.closed();
       const hiddenRequestSignal = pollRun.mock.calls[0]?.[1];
 
       harness.visibility.setHidden(true);
@@ -1518,7 +1560,6 @@ describe("createResearchRunLiveController", () => {
         harness.controller.getSnapshot().liveState.progressStage,
       ).toBeNull();
       expect(pollRun).toHaveBeenCalledTimes(1);
-      expect(harness.source.closeCount).toBe(0);
 
       harness.visibility.setHidden(false);
       expect(pollRun).toHaveBeenCalledTimes(2);
@@ -1532,14 +1573,32 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("pauses polling while hidden, keeps EventSource, and polls immediately when visible", async () => {
+    it("does not poll on hide or show while live, and keeps EventSource", async () => {
       const harness = createHarness();
+      harness.source.open();
+      harness.visibility.setHidden(true);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(harness.pollRun).not.toHaveBeenCalled();
+      expect(harness.source.closeCount).toBe(0);
+      expect(harness.createEventSource).toHaveBeenCalledTimes(1);
+
+      harness.visibility.setHidden(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.pollRun).not.toHaveBeenCalled();
+      expect(harness.source.closeCount).toBe(0);
+
+      harness.unsubscribe();
+    });
+
+    it("pauses polling-only while hidden and polls immediately when visible", async () => {
+      const harness = createHarness();
+      harness.source.closed();
       await flushPromises();
       harness.visibility.setHidden(true);
       await vi.advanceTimersByTimeAsync(10000);
 
       expect(harness.pollRun).toHaveBeenCalledTimes(1);
-      expect(harness.source.closeCount).toBe(0);
       expect(harness.createEventSource).toHaveBeenCalledTimes(1);
 
       harness.visibility.setHidden(false);
@@ -1580,6 +1639,7 @@ describe("createResearchRunLiveController", () => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
+      harness.source.closed();
       const before = harness.controller.getSnapshot();
 
       harness.unsubscribe();
