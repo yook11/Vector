@@ -18,7 +18,7 @@ permissions:
 
 # 同一 branch / PR の古い run を新しい push で cancel する。force push / 連打時の
 # 計算資源消費を抑制。Schemathesisの手動workflowは別のconcurrency設定を持つ。
-# main は各 commit の検証と release 判定を順に完了させるため cancel しない。
+# main は release 判定を順に完了させるため cancel しない。
 # release 自体は別 workflow へ dispatch するので、production 承認待ちはこの列を塞がない。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,11 +26,10 @@ concurrency:
 
 jobs:
   # E2E smoke / backend / frontend の各テスト job を path-filter で関連変更 PR
-  # のみに走らせるため、changed file 判定を 1 ジョブに切り出す。Vector は
-  # GitHub Free / private repo で branch protection / required checks が
-  # 使えないため、skip しても merge をブロックしない。無関係な PR (例:
-  # frontend-only 変更での backend テスト) では該当 job 全体が skip され
-  # CI wallclock が縮む。
+  # のみに走らせるため、changed file 判定を 1 ジョブに切り出す。無関係な PR
+  # (例: frontend-only 変更での backend テスト) では該当 job 全体が skip され
+  # CI wallclock が縮む。main は ruleset で直接 push 禁止のため、アプリテストは
+  # PR で完了し、ここは release 判定にも同じ path を使う。
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
@@ -110,11 +109,11 @@ jobs:
     name: Backend (unit + lint)
     runs-on: ubuntu-latest
     needs: changes
-    # main push は release 判定に直結するため path-filter で skip せず常時フル実行する。
+    # アプリテストは PR で確認する。main は ruleset で直接 push 禁止のため再実行しない。
     if: >-
-      github.event_name == 'push'
-      || needs.changes.outputs.backend == 'true'
-      || needs.changes.outputs.ci == 'true'
+      github.event_name == 'pull_request'
+      && (needs.changes.outputs.backend == 'true'
+          || needs.changes.outputs.ci == 'true')
 
     env:
       # unit テストは実際には接続しないが、conftest が settings.database_url を
@@ -164,11 +163,11 @@ jobs:
     name: Backend (integration)
     runs-on: ubuntu-latest
     needs: changes
-    # main push は release 判定に直結するため path-filter で skip せず常時フル実行する。
+    # アプリテストは PR で確認する。main は ruleset で直接 push 禁止のため再実行しない。
     if: >-
-      github.event_name == 'push'
-      || needs.changes.outputs.backend == 'true'
-      || needs.changes.outputs.ci == 'true'
+      github.event_name == 'pull_request'
+      && (needs.changes.outputs.backend == 'true'
+          || needs.changes.outputs.ci == 'true')
 
     services:
       postgres:
@@ -252,11 +251,11 @@ jobs:
     name: Frontend (lint + type check)
     runs-on: ubuntu-latest
     needs: changes
-    # main push は release 判定に直結するため path-filter で skip せず常時フル実行する。
+    # アプリテストは PR で確認する。main は ruleset で直接 push 禁止のため再実行しない。
     if: >-
-      github.event_name == 'push'
-      || needs.changes.outputs.frontend == 'true'
-      || needs.changes.outputs.ci == 'true'
+      github.event_name == 'pull_request'
+      && (needs.changes.outputs.frontend == 'true'
+          || needs.changes.outputs.ci == 'true')
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -297,7 +296,10 @@ jobs:
     name: Frontend (E2E smoke)
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.e2e == 'true'
+    # アプリテストは PR で確認する。main は ruleset で直接 push 禁止のため再実行しない。
+    if: >-
+      github.event_name == 'pull_request'
+      && needs.changes.outputs.e2e == 'true'
     # smoke スコープは anon project の login / register と、admin project の
     # source-admin / admin-user-provisioning。CI DB の seed 済み一般・admin
     # ユーザーと、各 spec による原状回復 cleanup を前提とする。
@@ -752,8 +754,8 @@ jobs:
   # release 判定が個別テスト job より先に走らないよう、全テスト job を 1 つに
   # 集約する単一ゲート。dispatch は本 job の success だけを判定すればよい。
   # path-filter 対象 job (backend-unit / backend-integration / frontend /
-  # frontend-e2e-smoke / migration-check) は PR で skip されうるため
-  # success|skipped を許容する (main push は各 job の if で常時実行)。
+  # frontend-e2e-smoke / migration-check) は skip されうるため
+  # success|skipped を許容する。アプリテストは PR のみ、main では skip が正常。
   # changes 自体が失敗すると全テスト job が skip され gate が素通りするため、
   # changes / pre-commit は success 必須とする。
   ci-gate:
