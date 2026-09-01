@@ -1,9 +1,9 @@
 # Agent run progress_stage 表示 slice 仕様 (Slice 4)
 
 > 後続契約更新: `agent-run-progress-stage-write-removal-slice.md` は工程の DB UPDATE を止め、
-> `agent-run-progress-stage-drop-slice.md` は列・CHECK・API の `progressStage` を落とす。
-> 表示正本は Redis Stream（SSE）である。本文中の「報告ごとに DB を UPDATE する」および
-> 「列と API を残す」記述は無効である。
+> `agent-run-progress-stage-drop-slice.md` は先にアプリ・APIの参照を外す。列とCHECKは
+> 全ECS taskのrollout完了後にcontract migrationで落とす。表示正本は Redis Stream（SSE）
+> であり、本文中の「報告ごとに DB を UPDATE する」記述は無効である。
 
 ## 位置付け
 
