@@ -18,6 +18,11 @@ on:
         description: "空なら選択した ref の commit SHA を使う。"
         required: false
         type: string
+      force_migration:
+        description: "true なら alembic 差分が無くても migration task を起動する。"
+        required: false
+        type: boolean
+        default: false
 
 env:
   RELEASE_SHA: ${{ inputs.release_sha || github.sha }}
@@ -180,6 +185,10 @@ jobs:
     environment: production
     runs-on: ubuntu-24.04
     timeout-minutes: 55
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
 
     steps:
       - name: Validate release SHA
@@ -190,9 +199,11 @@ jobs:
             exit 1
           fi
 
+      # last-migrated SHA との git diff のため、この ref から辿れる履歴が要る。
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
           persist-credentials: false
 
       # rollout roleでartifact側のcodeを実行しないため、検証器はworkflow自身の
@@ -221,6 +232,21 @@ jobs:
             echo "$name=$value" >> "$GITHUB_OUTPUT"
           done
 
+      - id: decision
+        name: Decide whether to run production migration
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ env.RELEASE_SHA }}
+          FORCE_MIGRATION: ${{ inputs.force_migration }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .rollout-control/.github/scripts/decide_ecs_migration.py decide \
+            --release-sha "$RELEASE_SHA" \
+            --force "${FORCE_MIGRATION:-false}" \
+            --github-repo "$GITHUB_REPOSITORY" \
+            --output "$GITHUB_OUTPUT"
+
       - id: migration-context
         name: Prepare migration task identity
         run: |
@@ -232,6 +258,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS migration credentials
+        if: ${{ steps.decision.outputs.run == 'true' }}
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         with:
           role-to-assume: ${{ secrets.AWS_MIGRATION_ROLE_ARN }}
@@ -239,7 +266,9 @@ jobs:
           mask-aws-account-id: true
           unset-current-credentials: true
 
-      - name: Run production migration
+      - id: migration
+        name: Run production migration
+        if: ${{ steps.decision.outputs.run == 'true' }}
         timeout-minutes: 25
         env:
           CLUSTER: ${{ steps.tf.outputs.name_prefix }}
@@ -259,6 +288,19 @@ jobs:
             --poll-seconds 15 \
             --timeout-seconds 1200 \
             --cleanup-timeout-seconds 180
+
+      # 作成または success status の書き込み失敗ではここで落ち、rollout に進まない。
+      - name: Record successful db-migration
+        if: ${{ steps.decision.outputs.run == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ env.RELEASE_SHA }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .rollout-control/.github/scripts/decide_ecs_migration.py record \
+            --release-sha "$RELEASE_SHA" \
+            --github-repo "$GITHUB_REPOSITORY"
 
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         name: Configure AWS rollout credentials
@@ -364,7 +406,11 @@ jobs:
       # exact ARNだけで、state欠落時も同じstartedByのtask 1件に限定する。
       - id: cleanup-credentials
         name: Configure AWS migration credentials for cleanup
-        if: ${{ failure() || cancelled() }}
+        if: >-
+          ${{ (failure() || cancelled()) &&
+              steps.decision.outputs.run == 'true' &&
+              (steps.migration.outcome == 'failure' ||
+               steps.migration.outcome == 'cancelled') }}
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         with:
           role-to-assume: ${{ secrets.AWS_MIGRATION_ROLE_ARN }}
@@ -375,6 +421,9 @@ jobs:
       - name: Stop the exact migration task after failure
         if: >-
           ${{ (failure() || cancelled()) &&
+              steps.decision.outputs.run == 'true' &&
+              (steps.migration.outcome == 'failure' ||
+               steps.migration.outcome == 'cancelled') &&
               steps.cleanup-credentials.outcome == 'success' }}
         timeout-minutes: 3
         env:

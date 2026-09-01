@@ -367,6 +367,9 @@ def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
         "--timeout-seconds 1200" in migration["run"],
         "--cleanup" in cleanup["run"],
         cleanup["timeout-minutes"],
+        "steps.decision.outputs.run == 'true'" in cleanup["if"],
+        "steps.migration.outcome == 'failure'" in cleanup["if"],
+        "steps.migration.outcome == 'cancelled'" in cleanup["if"],
         "failure() || cancelled()" in cleanup["if"],
         any(
             step.get("name") == "Require the production migration runtime"
@@ -419,6 +422,114 @@ def test_aws_release_workflow_pins_sha_and_keeps_approval_boundary() -> None:
         True,
         True,
         3,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+    )
+
+
+def test_rollout_skips_noop_migration_fargate() -> None:
+    workflow = _load_workflow(_RELEASE_WORKFLOW)
+    workflow_text = _RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    jobs = workflow["jobs"]  # type: ignore[index]
+    rollout = jobs["rollout"]  # type: ignore[index]
+    rollout_steps = rollout["steps"]  # type: ignore[index]
+    names = [step.get("name") or "" for step in rollout_steps]
+    release_checkout = next(
+        step
+        for step in rollout_steps
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+        and step.get("with", {}).get("path") != ".rollout-control"
+    )
+    decision = next(step for step in rollout_steps if step.get("id") == "decision")
+    migration_credentials = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Configure AWS migration credentials"
+    )
+    migration = next(
+        step for step in rollout_steps if step.get("name") == "Run production migration"
+    )
+    record = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Record successful db-migration"
+    )
+    cleanup_credentials = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Configure AWS migration credentials for cleanup"
+    )
+    cleanup = next(
+        step
+        for step in rollout_steps
+        if step.get("name") == "Stop the exact migration task after failure"
+    )
+    script = (_REPO_ROOT / ".github" / "scripts" / "decide_ecs_migration.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        workflow["permissions"],
+        jobs["push"].get("permissions"),
+        rollout["permissions"],
+        "deployments:" not in workflow_text.split("jobs:", 1)[0],
+        release_checkout["with"]["fetch-depth"],
+        "python3 .rollout-control/.github/scripts/decide_ecs_migration.py decide"
+        in decision["run"],
+        "python3 .rollout-control/.github/scripts/decide_ecs_migration.py record"
+        in record["run"],
+        names.index("Check out rollout verifier")
+        < names.index("Decide whether to run production migration")
+        < names.index("Configure AWS migration credentials"),
+        migration_credentials["if"],
+        migration["if"],
+        record["if"],
+        workflow["on"]["workflow_dispatch"]["inputs"]["force_migration"],  # type: ignore[index]
+        '"auto_merge": False' in script,
+        '"required_contexts": []' in script,
+        '"production_environment": False' in script,
+        "steps.decision.outputs.run == 'true'" in cleanup_credentials["if"],
+        "steps.migration.outcome == 'failure'" in cleanup_credentials["if"],
+        "steps.migration.outcome == 'cancelled'" in cleanup_credentials["if"],
+        "failure() || cancelled()" in cleanup_credentials["if"],
+        "steps.decision.outputs.run == 'true'" in cleanup["if"],
+        "steps.migration.outcome == 'failure'" in cleanup["if"],
+        "steps.migration.outcome == 'cancelled'" in cleanup["if"],
+        "failure() || cancelled()" in cleanup["if"],
+    ) == (
+        {"id-token": "write", "contents": "read"},
+        None,
+        {
+            "contents": "read",
+            "id-token": "write",
+            "deployments": "write",
+        },
+        True,
+        0,
+        True,
+        True,
+        True,
+        "${{ steps.decision.outputs.run == 'true' }}",
+        "${{ steps.decision.outputs.run == 'true' }}",
+        "${{ steps.decision.outputs.run == 'true' }}",
+        {
+            "description": "true なら alembic 差分が無くても migration task を起動する。",
+            "required": "false",
+            "type": "boolean",
+            "default": "false",
+        },
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
         True,
         True,
         True,
