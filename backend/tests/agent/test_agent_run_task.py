@@ -211,23 +211,6 @@ class FakeAnsweringRunner:
         )
 
 
-class FakeLiveEventPublisher:
-    instances: list[FakeLiveEventPublisher] = []
-
-    def __init__(self, redis: object, run_id: UUID) -> None:
-        self.redis = redis
-        self.run_id = run_id
-        self.reset_calls = 0
-        self.events: list[object] = []
-        FakeLiveEventPublisher.instances.append(self)
-
-    async def reset(self) -> None:
-        self.reset_calls += 1
-
-    async def event_occurred(self, event: object) -> None:
-        self.events.append(event)
-
-
 class FakeLiveStreamPublisher:
     instances: list[FakeLiveStreamPublisher] = []
     raise_on_begin = False
@@ -391,15 +374,9 @@ def _patch_delta_worker(
     *,
     stream_publisher: type[FakeLiveStreamPublisher] = FakeLiveStreamPublisher,
 ) -> None:
-    FakeLiveEventPublisher.instances = []
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
     _patch_worker_execution(monkeypatch, builder)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -1074,11 +1051,6 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(
         agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -1102,7 +1074,7 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_resets_live_events_and_injects_reporter(
+async def test_run_agent_answer_injects_activity_reporter(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1110,7 +1082,6 @@ async def test_run_agent_answer_resets_live_events_and_injects_reporter(
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(_direct_result())
     captured_kwargs: dict[str, object] = {}
-    FakeLiveEventPublisher.instances = []
 
     def build_agent(**kwargs: object) -> FakeAgent:
         captured_kwargs.update(kwargs)
@@ -1119,22 +1090,11 @@ async def test_run_agent_answer_resets_live_events_and_injects_reporter(
     redis = object()
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
         ctx=_ctx(session_factory),
     )
 
-    assert len(FakeLiveEventPublisher.instances) == 1
-    publisher = FakeLiveEventPublisher.instances[0]
-    assert publisher.redis is redis
-    assert publisher.run_id == run.id
-    assert publisher.reset_calls == 1
     assert isinstance(captured_kwargs["events"], AgentRunLiveActivityReporter)
 
 
@@ -1157,11 +1117,6 @@ async def test_run_agent_answer_starts_stream_attempt_only_after_start(
 
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -1202,11 +1157,6 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
 
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -1259,11 +1209,6 @@ async def test_run_agent_answer_continues_when_stream_begin_attempt_raises(
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
         raising=False,
@@ -1311,11 +1256,6 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
         agent_run_tasks,
         "get_redis",
         forbidden_builder,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        ForbiddenConstruction,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -1384,7 +1324,6 @@ async def test_run_agent_answer_passes_answering_runner_identity_and_history(
             cls.calls += 1
             return datetime(2026, 7, 16, 9, 30, tzinfo=UTC)
 
-    FakeLiveEventPublisher.instances = []
     FakeLiveStreamPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
@@ -1409,11 +1348,6 @@ async def test_run_agent_answer_passes_answering_runner_identity_and_history(
             raising=False,
         )
     monkeypatch.setattr(agent_run_tasks, "datetime", FixedDateTime)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -1483,11 +1417,6 @@ async def test_run_agent_answer_publishes_completed_terminal_after_commit(
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         CommitCheckingPublisher,
     )
@@ -1526,11 +1455,6 @@ async def test_run_agent_answer_publishes_failed_terminal_after_commit(
             await super().publish(event)
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -2093,11 +2017,6 @@ async def test_completion_failure_uses_failed_terminal_choke_point(
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2154,11 +2073,6 @@ async def test_completion_transition_loser_does_not_publish_terminal(
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2203,11 +2117,6 @@ async def test_completion_skip_does_not_publish_terminal(
         return False
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -2255,11 +2164,6 @@ async def test_failed_transition_loser_does_not_publish_terminal(
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2296,11 +2200,6 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(
         agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2333,18 +2232,11 @@ async def test_initial_question_does_not_publish_resolved_event(
         )
     fake_agent = FakeAgent(_direct_result())
     answering_runner = FakeAnsweringRunner()
-    FakeLiveEventPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
         lambda **_kwargs: fake_agent,
         answering_runner=answering_runner,
     )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
         ctx=_ctx(session_factory),
@@ -2353,7 +2245,6 @@ async def test_initial_question_does_not_publish_resolved_event(
     assert len(answering_runner.calls) == 1
     assert answering_runner.calls[0].input == RunInput(question=question, history=())
     assert len(fake_agent.calls) == 1
-    assert FakeLiveEventPublisher.instances[0].events == []
 
 
 @pytest.mark.asyncio
@@ -2372,18 +2263,11 @@ async def test_answering_runner_setup_error_marks_generation_unavailable(
         )
     fake_agent = FakeAgent(_direct_result())
     answering_runner = FakeAnsweringRunner(exc=exc)
-    FakeLiveEventPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
         lambda **_kwargs: fake_agent,
         answering_runner=answering_runner,
     )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
         ctx=_ctx(session_factory),
@@ -2736,11 +2620,6 @@ async def test_run_agent_answer_unexpected_error_marks_internal_error(
     fake_agent = FakeAgent(exc=RuntimeError("SHOULD_NOT_LEAK"))
     FakeLiveStreamPublisher.instances = []
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -3854,13 +3733,7 @@ async def test_start_commit_failure_raises_sanitized_task_boundary_error(
     def failing_session_factory() -> AsyncSession:
         return failing_session
 
-    FakeLiveEventPublisher.instances = []
     FakeLiveStreamPublisher.instances = []
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -3886,7 +3759,6 @@ async def test_start_commit_failure_raises_sanitized_task_boundary_error(
         expected_message="agent run start failed",
     )
     _assert_sensitive_task_context_not_logged(logs)
-    assert FakeLiveEventPublisher.instances == []
     assert FakeLiveStreamPublisher.instances == []
     async with session_factory() as verification:
         persisted = await verification.get(AgentRun, run.id)
@@ -3929,12 +3801,6 @@ async def test_application_deadline_scope_covers_start_live_history_runner_and_r
         seen_steps.append("history")
         return await original_history(*args, **kwargs)  # type: ignore[arg-type]
 
-    class ScopeCheckingEvents(FakeLiveEventPublisher):
-        async def reset(self) -> None:
-            assert scopes[0].active
-            seen_steps.append("reset")
-            await super().reset()
-
     class ScopeCheckingStream(FakeLiveStreamPublisher):
         async def begin_attempt(self) -> str | None:
             assert scopes[0].active
@@ -3971,9 +3837,6 @@ async def test_application_deadline_scope_covers_start_live_history_runner_and_r
     monkeypatch.setattr(agent_run_tasks, "_read_history", history_within_deadline)
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveEventPublisher", ScopeCheckingEvents
-    )
-    monkeypatch.setattr(
         agent_run_tasks, "AgentRunLiveStreamPublisher", ScopeCheckingStream
     )
     monkeypatch.setattr(agent_run_tasks, "build_answering_runner", build_runner)
@@ -3987,7 +3850,6 @@ async def test_application_deadline_scope_covers_start_live_history_runner_and_r
     assert seen_steps == [
         "start",
         "begin_attempt",
-        "reset",
         "history",
         "build",
         "runner",
@@ -4044,12 +3906,6 @@ async def test_start_after_application_deadline_skips_execution_and_terminalizes
     monkeypatch.setattr(agent_run_tasks, "_start_run", start_then_expire)
     monkeypatch.setattr(AgentRunRepository, "mark_failed", cleanup_outside_deadline)
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    FakeLiveEventPublisher.instances = []
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -4074,9 +3930,6 @@ async def test_start_after_application_deadline_skips_execution_and_terminalizes
             errorCode="generation_unavailable",
         )
     ]
-    assert all(
-        publisher.reset_calls == 0 for publisher in FakeLiveEventPublisher.instances
-    )
 
 
 @pytest.mark.integration
@@ -4135,9 +3988,6 @@ async def test_application_timeout_commits_current_attempt_before_terminal_publi
     monkeypatch.setattr(AgentRunRepository, "mark_failed", cleanup_outside_deadline)
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
-    )
-    monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         CommitCheckingPublisher,
@@ -4192,9 +4042,6 @@ async def test_application_timeout_publish_failure_keeps_committed_failed_run(
     )
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
-    )
-    monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
@@ -4245,9 +4092,6 @@ async def test_timed_out_old_attempt_cannot_terminalize_newer_attempt_or_publish
         lambda **_kwargs: EpochAdvancingThenCancelledAgent(),
     )
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -4314,9 +4158,6 @@ async def test_application_timeout_cleanup_commit_failure_propagates_without_ter
     )
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
-    )
-    monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
@@ -4369,9 +4210,6 @@ async def test_lower_timeout_error_follows_existing_unexpected_error_path(
         lambda **_kwargs: FakeAgent(exc=TimeoutError("provider timeout")),
     )
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
-    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",

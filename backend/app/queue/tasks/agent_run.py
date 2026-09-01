@@ -16,7 +16,6 @@ from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
-from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
 from app.agent.live_updates.reporters import (
     AgentRunLiveActivityReporter,
     AgentRunLiveStageReporter,
@@ -151,7 +150,6 @@ async def run_agent_answer(
             user_id, thread_id, question = question_row
 
             redis = get_redis()
-            events = AgentRunLiveEventPublisher(redis, run_id)
             stream_events = AgentRunLiveStreamPublisher(
                 redis,
                 run_id,
@@ -176,8 +174,7 @@ async def run_agent_answer(
                 )
 
             try:
-                await events.reset()
-                activity_reporter = AgentRunLiveActivityReporter(events, stream_events)
+                activity_reporter = AgentRunLiveActivityReporter(stream_events)
                 progress_reporter = AgentRunLiveStageReporter(stream_events)
                 as_of = datetime.now(UTC)
                 history = await _read_history(

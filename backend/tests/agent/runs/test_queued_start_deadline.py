@@ -540,11 +540,6 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
     monkeypatch.setattr(agent_run_tasks, "get_redis", forbidden("redis"))
     monkeypatch.setattr(
         agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        forbidden("live event publisher"),
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         forbidden("live stream attempt"),
     )

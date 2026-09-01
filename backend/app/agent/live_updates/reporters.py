@@ -1,4 +1,4 @@
-"""Agent run live updateのfan-out adapter。"""
+"""Agent run live updateのStream adapter。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Awaitable
 
 from app.agent.contract import (
-    AnswerEventReporter,
     AnswerProgressEvent,
     AnswerProgressStage,
 )
@@ -24,26 +23,18 @@ class AgentRunLiveStageReporter:
         self._stream_publisher = stream_publisher
 
     async def stage_changed(self, stage: AnswerProgressStage) -> None:
-        await _fan_out(self._publish_stream(stage))
+        await _publish(self._publish_stream(stage))
 
     async def _publish_stream(self, stage: AnswerProgressStage) -> None:
         await self._stream_publisher.publish(AgentRunLiveStreamStageEvent(stage=stage))
 
 
 class AgentRunLiveActivityReporter:
-    def __init__(
-        self,
-        list_publisher: AnswerEventReporter,
-        stream_publisher: AgentRunLiveStreamPublisher,
-    ) -> None:
-        self._list_publisher = list_publisher
+    def __init__(self, stream_publisher: AgentRunLiveStreamPublisher) -> None:
         self._stream_publisher = stream_publisher
 
     async def event_occurred(self, event: AnswerProgressEvent) -> None:
-        await _fan_out(
-            self._list_publisher.event_occurred(event),
-            self._publish_stream(event),
-        )
+        await _publish(self._publish_stream(event))
 
     async def _publish_stream(self, event: AnswerProgressEvent) -> None:
         await self._stream_publisher.publish(
@@ -51,5 +42,5 @@ class AgentRunLiveActivityReporter:
         )
 
 
-async def _fan_out(*operations: Awaitable[object]) -> None:
+async def _publish(*operations: Awaitable[object]) -> None:
     await asyncio.gather(*operations, return_exceptions=True)

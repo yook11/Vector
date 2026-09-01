@@ -51,7 +51,6 @@ describe("GET /api/research/runs/[runId]", () => {
       status: "running",
       errorCode: null,
       attemptEpoch: 3,
-      recentEvents: [],
     };
     mocks.getResearchRun.mockResolvedValue(data);
 

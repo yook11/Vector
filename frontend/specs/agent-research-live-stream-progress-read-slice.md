@@ -5,6 +5,10 @@ Status: Implemented — 2026-08-31
 > 後続契約更新: `agent-research-sse-connected-no-poll-slice.md` は
 > `connecting` / `live` / `reconnecting` 中の `GET /runs` を止める。
 > `polling-only` の 2秒 poll は残す。本文中の「subscribe 開始から poll する」記述は無効である。
+>
+> 後続契約更新: `backend/specs/agent-run-recent-events-drop-slice.md` は
+> Redis List publisher と `GET /runs` の `recentEvents` を落とす。
+> 本文中の List / `recentEvents` 参照と Non-goals の「Redis List publisher 廃止」は無効である。
 
 親仕様: `agent-research-live-ui-slice.md`
 
@@ -44,7 +48,7 @@ DB 工程を表示に使うと、次段で工程の DB 書き込みを止めた�
 - worker の `progress_stage` UPDATE 停止、列 drop、API から `progressStage` 削除
 - 2秒 polling の廃止、CLOSED 時の EventSource 再作成
 - 失敗時の再実行、Stream 欠落時の新 attempt
-- Redis List publisher 廃止、execution probe 変更
+- execution probe 変更
 
 ### Done
 

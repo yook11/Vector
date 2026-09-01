@@ -75,57 +75,12 @@ ResearchRunErrorCode = Literal[
 ]
 
 
-class ResearchRunInternalSearchStartedEvent(_CamelBase):
-    type: Literal["evidence_collection.internal_search_started"]
-    ts: datetime
-    task_index: int = Field(ge=0)
-    query_count: int = Field(ge=0)
-
-
-class ResearchRunInternalSearchCompletedEvent(_CamelBase):
-    type: Literal["evidence_collection.internal_search_completed"]
-    ts: datetime
-    task_index: int = Field(ge=0)
-    hit_count: int = Field(ge=0)
-
-
-class ResearchRunExternalSearchQueriesGeneratedEvent(_CamelBase):
-    type: Literal["evidence_collection.external_search_queries_generated"]
-    ts: datetime
-    task_index: int = Field(ge=0)
-    queries: list[str]
-
-
-class ResearchRunExternalSearchHitsFetchedEvent(_CamelBase):
-    type: Literal["evidence_collection.external_search_hits_fetched"]
-    ts: datetime
-    task_index: int = Field(ge=0)
-    hit_count: int = Field(ge=0)
-
-
-class ResearchRunEvidenceReviewSelectedEvent(_CamelBase):
-    type: Literal["evidence_review.selected"]
-    ts: datetime
-    evidence_count: int = Field(ge=0)
-
-
-ResearchRunEvent = Annotated[
-    ResearchRunInternalSearchStartedEvent
-    | ResearchRunInternalSearchCompletedEvent
-    | ResearchRunExternalSearchQueriesGeneratedEvent
-    | ResearchRunExternalSearchHitsFetchedEvent
-    | ResearchRunEvidenceReviewSelectedEvent,
-    Field(discriminator="type"),
-]
-
-
 class ResearchRunResponse(_CamelBase):
     run_id: UUID
     thread_id: UUID
     status: ResearchRunStatus
     error_code: ResearchRunErrorCode | None
     attempt_epoch: int = Field(ge=0)
-    recent_events: list[ResearchRunEvent] = Field(default_factory=list)
 
 
 class ResearchThreadListParams(PaginationParams):
