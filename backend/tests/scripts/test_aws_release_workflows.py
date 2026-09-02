@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,70 @@ def test_terraform_apply_runs_plan_and_apply_after_production_approval() -> None
             "cancel-in-progress": "false",
             "queue": "max",
         },
+    )
+
+
+@pytest.mark.parametrize(
+    ("plan_code", "apply_code", "expected_exit", "expect_apply"),
+    [
+        (0, 0, 0, True),
+        (2, 0, 0, True),
+        (1, 0, 1, False),
+        (130, 0, 1, False),
+        (0, 1, 1, True),
+    ],
+)
+def test_terraform_applies_successful_saved_plans_including_no_changes(
+    tmp_path: Path,
+    plan_code: int,
+    apply_code: int,
+    expected_exit: int,
+    expect_apply: bool,
+) -> None:
+    workflow = _load_workflow(_APPLY_WORKFLOW)
+    script = next(
+        step["run"]
+        for step in workflow["jobs"]["apply"]["steps"]
+        if "terraform plan " in step.get("run", "")
+        and "terraform apply " in step.get("run", "")
+    )
+    fake_terraform = """
+terraform() {
+  printf '%s\\n' "$*" >> terraform.calls
+  case "$1" in
+    plan)
+      printf '%s\\n' 'saved-plan' > tfplan
+      return "$PLAN_EXIT_CODE"
+      ;;
+    apply)
+      [ "$(< tfplan)" = saved-plan ] || return 99
+      printf '%s\\n' 'Apply complete!'
+      return "$APPLY_EXIT_CODE"
+      ;;
+    *) return 99 ;;
+  esac
+}
+"""
+    result = subprocess.run(  # noqa: S603
+        ["/bin/bash", "-c", fake_terraform + script],
+        cwd=tmp_path,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+            "PLAN_EXIT_CODE": str(plan_code),
+            "APPLY_EXIT_CODE": str(apply_code),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    calls = (tmp_path / "terraform.calls").read_text().splitlines()
+    expected_calls = ["plan -input=false -no-color -detailed-exitcode -out=tfplan"]
+    if expect_apply:
+        expected_calls.append("apply -input=false -no-color tfplan")
+    assert (result.returncode, calls) == (expected_exit, expected_calls), (
+        result.stdout,
+        result.stderr,
     )
 
 
