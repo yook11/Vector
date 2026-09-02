@@ -89,7 +89,15 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
   `trust_env` 既定 True の httpx なので `HTTPS_PROXY` を拾う。proxy は private 宛先を
   拒否する設計なので、除外しないと内部通信が静かに失敗する。
 
-## apply の前にやること
+## 通常のinfra変更
+
+PRのplanを確認し、mainへmergeした後、`AWS terraform apply`を`production`で承認する。
+infra変更のmain pushでは自動起動し、同じ内容の再実行はmainからの手動起動を使う。
+ローカルの通常CI roleはplan / pushだけに限定し、apply / migration / rolloutは使わない。
+管理者操作はbootstrap・初期構築・非常時復旧に分離し、通常の承認失敗を迂回しない。
+切り替えと既発行sessionの扱いは[導入・運用手順](MIGRATION_WORKFLOW.md)を参照する。
+
+## 初回構築のapply前にやること
 
 1. **`bootstrap/` を apply する** (state bucket / OIDC / CI ロール / boundary /
    service-linked role / hosted zone)。
@@ -102,7 +110,8 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 ## 運用の帰結
 
 - **初回 apply 直後は全 service が起動失敗ループになる。** このスタックが ECR repo を
-  作るので、その時点では image が無い。正常系は **apply → push → 安定**。
+  作るので、その時点ではimageが無い。新規DBの初期構築は別作業で完了させ、
+  **apply → image作成 → verify承認によるledger作成 → app反映承認** の順に進める。
 - **`ignore_changes = [task_definition]` の代償。** rollout が revision を進め、
   Terraform はそれを巻き戻さない。帰結として **Terraform 側で env / secrets /
   サイズを変えても service は旧 revision のまま**動く (新 revision は作られるが
@@ -124,7 +133,7 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 
 ## DB 踏み台 (enable_db_bastion)
 
-RDS への人手作業 (移行・保守) 用の一時経路。**平常時は存在せず、素の apply が
+RDSの初期構築・管理者保守用の一時経路で、通常migrationには使用しない。**平常時は存在せず、素の apply が
 撤去を兼ねる**。SSM Session Manager の port forwarding で、踏み台は public IP も
 SSH ポートも ingress 規則も持たない。踏み台という言葉が普通に指す「開いている
 入口」は、ここには無い。
@@ -140,8 +149,8 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
   効いた結果**で、穴を開けて通すものではない (bastion.tf の注記と対)。
 - **踏み台の plan / apply / SSM / 撤去は最初から最後まで admin profile だけを使う。**
   各操作の前に `infra/aws/scripts/verify-aws-profile.sh vector-admin` で実 caller を
-  検証する。migration は別ターミナルから `vector-migrate` を検証して実行し、同じ
-  shell で資格情報を切り替えない。
+  検証する。通常migrationは専用workflowの承認後jobで実行し、踏み台やローカルprofile
+  へ切り替える代替経路は用意しない。
 - **トンネル越しに `verify-full` を保つ方法が client で違う。** libpq (psql) は
   `host` と `hostaddr` を分離指定できるが、**asyncpg / pg にこの分離は無い**。
   後者は名前解決の側で解く。証明書の検証を落として解決しない — `db_ssl.py` は
@@ -155,8 +164,11 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
 
 ## DB の構築と migration が持つ制約
 
-空の RDS を建てる手順と、本番へ migration を当てる手順は private runbook 側に
-置く。ここに書くのは、手順の順番や道具立てを決めている制約のほう。
+独立承認するmigration・アプリ反映の契約と本番有効化条件は
+[Migrationとアプリ反映の導入・運用](MIGRATION_WORKFLOW.md) を参照する。
+
+空のRDSの初期構築は通常migrationとは別作業であり、今回の切り替えでは実施しない。
+private runbookには初期構築の前提を残し、通常migrationのローカル実行手順は置かない。
 
 - **schema の作成主体が 2 つに割れている。** alembic の chain は `auth."user"`
   への FK を持つが、auth のテーブルは Better Auth CLI の管轄で alembic は作らない。
@@ -167,9 +179,9 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
   `vector_collect` とmigration ownerの`vector`はIAM認証 (`GRANT rds_iam`) を使い、
   `db-provision.sql`にもCIにも秘密を置かない。password認証はbreak-glassの
   `vector_master`だけに残す。
-- **自動適用はexpand-only。** pending rangeにcontract / mixedがあればreleaseを
-  dispatchせず、適用前に停止する。判定は各migrationの`MIGRATION_KIND`宣言と
-  `scripts/migration_gate.py`が持つ。
+- **migrationとアプリ反映はそれぞれ手動起動・独立承認。** migrationはexpand / contract /
+  verifyを明示し、mixedはCIとrunnerで拒否する。アプリ反映は最新mainのみを対象に、
+  最新ledgerのrevisionとmigration treeが一致した場合だけ進む。自動dispatchやfreezeは無い。
 - **初回構築は destructive gate を明示的に通す。** b1 の legacy テーブル削除が
   要求する。空 DB では失うものが無いので通してよい、という判断がその都度要る。
 

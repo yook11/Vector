@@ -1,0 +1,360 @@
+name: AWS DB migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Migrationを含むmain履歴上の40桁commit SHA。"
+        required: true
+        type: string
+      mode:
+        description: "verifyは変更せず到達済みschemaだけを記録する。"
+        required: true
+        type: choice
+        options: [expand, contract, verify]
+
+permissions: {}
+
+env:
+  RELEASE_SHA: ${{ inputs.release_sha }}
+  MIGRATION_MODE: ${{ inputs.mode }}
+
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    outputs:
+      result: ${{ steps.prepare.outputs.result }}
+      artifact-id: ${{ steps.prepared-artifact.outputs.artifact-id }}
+    steps:
+      - name: Validate dispatch input
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          case "$MIGRATION_MODE" in expand|contract|verify) ;; *) exit 2 ;; esac
+
+      - name: Check out release data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ inputs.release_sha }}
+          path: release
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out trusted migration control
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .migration-control
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: false
+
+      - name: Install trusted control dependencies
+        run: uv sync --frozen --no-dev --python 3.13 --project .migration-control/backend
+
+      - id: prepare
+        name: Prepare expected migration range without DB access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          .migration-control/backend/.venv/bin/python .migration-control/.github/scripts/migration_prepare.py \
+            --repo-root "$GITHUB_WORKSPACE/release" \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-sha "$RELEASE_SHA" --mode "$MIGRATION_MODE" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/migration-prepared.json" \
+            --summary-file "$GITHUB_STEP_SUMMARY" --github-output "$GITHUB_OUTPUT"
+
+      - id: prepared-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: migration-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/migration-prepared.json
+          if-no-files-found: error
+          retention-days: 30
+
+  build:
+    needs: prepare
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      needs.prepare.outputs.result == 'ready'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      artifact-id: ${{ steps.image-artifact.outputs.artifact-id }}
+    steps:
+      - name: Validate dispatch input
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          case "$MIGRATION_MODE" in expand|contract|verify) ;; *) exit 2 ;; esac
+
+      - name: Check out release data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ inputs.release_sha }}
+          path: release
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out trusted migration control
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .migration-control
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact-id }}
+          path: ${{ runner.temp }}/migration-input
+          digest-mismatch: error
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: false
+
+      - name: Install trusted control dependencies
+        run: uv sync --frozen --no-dev --python 3.13 --project .migration-control/backend
+
+      - name: Validate prepared input before AWS credentials
+        run: |
+          set -euo pipefail
+          .migration-control/backend/.venv/bin/python .migration-control/.github/scripts/migration_prepare.py validate \
+            --prepared "$RUNNER_TEMP/migration-input/migration-prepared.json" \
+            --repo-root "$GITHUB_WORKSPACE/release" \
+            --release-sha "$RELEASE_SHA" --mode "$MIGRATION_MODE" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - id: tf
+        name: Read trusted Terraform defaults
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" .migration-control/infra/aws/variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region name_prefix; do
+            value=$(read_default "$name")
+            [[ "$value" =~ ^[a-z][a-z0-9-]+$ ]] || exit 2
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Configure image push credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_PUSH_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - id: ecr
+        name: Log in to ECR
+        env:
+          AWS_REGION: ${{ steps.tf.outputs.region }}
+        run: |
+          set -euo pipefail
+          account=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$account"
+          registry="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$registry"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+
+      - id: existing
+        name: Check immutable backend tag
+        env:
+          REPOSITORY: ${{ steps.tf.outputs.name_prefix }}/backend
+        run: |
+          set -euo pipefail
+          count=$(aws ecr batch-get-image --repository-name "$REPOSITORY" \
+            --image-ids "imageTag=$RELEASE_SHA" --query 'length(images)' --output text)
+          case "$count" in
+            0) echo 'found=false' >> "$GITHUB_OUTPUT" ;;
+            1) echo 'found=true' >> "$GITHUB_OUTPUT" ;;
+            *) exit 2 ;;
+          esac
+
+      - name: Build and push backend
+        if: steps.existing.outputs.found == 'false'
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ steps.tf.outputs.name_prefix }}/backend:${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          docker build --platform linux/arm64 --provenance=false -t "$IMAGE" release/backend
+          docker push "$IMAGE"
+
+      - name: Verify actual image protocol and migration tree
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ${{ steps.tf.outputs.name_prefix }}/backend
+        run: |
+          set -euo pipefail
+          digest=$(aws ecr batch-get-image --repository-name "$REPOSITORY" \
+            --image-ids "imageTag=$RELEASE_SHA" --query 'images[0].imageId.imageDigest' --output text)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 2
+          image="$REGISTRY/$REPOSITORY@$digest"
+          docker pull "$image"
+          .migration-control/backend/.venv/bin/python .migration-control/.github/scripts/migration_image.py \
+            --repo-root "$GITHUB_WORKSPACE/release" \
+            --prepared "$RUNNER_TEMP/migration-input/migration-prepared.json" \
+            --image "$image" --output "$RUNNER_TEMP/migration-image.json"
+
+      - id: image-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: migration-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/migration-image.json
+          if-no-files-found: error
+          retention-days: 30
+
+  migrate:
+    needs: [prepare, build]
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      needs.prepare.outputs.result == 'ready'
+    environment: production-migration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+      id-token: write
+    concurrency:
+      group: vector-production-change
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Validate dispatch input
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          case "$MIGRATION_MODE" in expand|contract|verify) ;; *) exit 2 ;; esac
+
+      - name: Check out release data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ inputs.release_sha }}
+          path: release
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out trusted migration control
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .migration-control
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact-id }}
+          path: ${{ runner.temp }}/migration-input
+          digest-mismatch: error
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/migration-input
+          digest-mismatch: error
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: false
+
+      - name: Install trusted control dependencies
+        run: uv sync --frozen --no-dev --python 3.13 --project .migration-control/backend
+
+      - name: Validate prepared input before AWS credentials
+        run: |
+          set -euo pipefail
+          .migration-control/backend/.venv/bin/python .migration-control/.github/scripts/migration_prepare.py validate \
+            --prepared "$RUNNER_TEMP/migration-input/migration-prepared.json" \
+            --repo-root "$GITHUB_WORKSPACE/release" \
+            --release-sha "$RELEASE_SHA" --mode "$MIGRATION_MODE" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - id: tf
+        name: Read trusted Terraform defaults
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" .migration-control/infra/aws/variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region name_prefix; do
+            value=$(read_default "$name")
+            [[ "$value" =~ ^[a-z][a-z0-9-]+$ ]] || exit 2
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Configure migration credentials after approval
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_MIGRATION_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - id: migration
+        name: Run approved migration without app rollout
+        timeout-minutes: 25
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
+        run: |
+          set -euo pipefail
+          .migration-control/backend/.venv/bin/python .migration-control/.github/scripts/migration_controller.py run \
+            --prepared "$RUNNER_TEMP/migration-input/migration-prepared.json" \
+            --image-evidence "$RUNNER_TEMP/migration-input/migration-image.json" \
+            --repo-root "$GITHUB_WORKSPACE/release" --repo "$GITHUB_REPOSITORY" \
+            --github-run-id "$GITHUB_RUN_ID" --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --cluster "$CLUSTER" --state-file "$RUNNER_TEMP/migration-task-state.json" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - id: cleanup-credentials
+        name: Refresh migration credentials for cleanup
+        if: >-
+          ${{ always() && (steps.migration.outcome == 'failure' ||
+          steps.migration.outcome == 'cancelled') }}
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_MIGRATION_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - name: Stop only the task owned by this attempt
+        if: >-
+          ${{ always() && (steps.migration.outcome == 'failure' ||
+          steps.migration.outcome == 'cancelled') &&
+          steps.cleanup-credentials.outcome == 'success' }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
+        run: |
+          set -euo pipefail
+          .migration-control/backend/.venv/bin/python .migration-control/.github/scripts/migration_controller.py cleanup \
+            --prepared "$RUNNER_TEMP/migration-input/migration-prepared.json" \
+            --image-evidence "$RUNNER_TEMP/migration-input/migration-image.json" \
+            --repo-root "$GITHUB_WORKSPACE/release" --repo "$GITHUB_REPOSITORY" \
+            --github-run-id "$GITHUB_RUN_ID" --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --cluster "$CLUSTER" --state-file "$RUNNER_TEMP/migration-task-state.json" \
+            --summary-file "$GITHUB_STEP_SUMMARY"

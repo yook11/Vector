@@ -33,6 +33,7 @@ permissions:
 
 jobs:
   apply:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: production
@@ -40,8 +41,9 @@ jobs:
     # apply は直列。走行中の apply を新しい run が殺すと state が壊れるので
     # cancel はしない。承認追い越しは下の stale guard が受け止める。
     concurrency:
-      group: aws-terraform-apply
+      group: vector-production-change
       cancel-in-progress: false
+      queue: max
 
     defaults:
       run:

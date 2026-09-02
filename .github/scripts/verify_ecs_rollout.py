@@ -274,6 +274,72 @@ def verify_rollout(
     return exit_code
 
 
+def completed_service_issues(
+    cluster: str,
+    image_tag: str,
+    service_names: Sequence[str],
+    client: EcsClient,
+) -> tuple[str, ...]:
+    """待機せず、rolloutと同じ完了条件にtask definitionのimage確認を加える。"""
+    if not service_names or len(set(service_names)) != len(service_names):
+        return ("service_set_invalid",)
+    if not _IMAGE_TAG_RE.fullmatch(image_tag):
+        return ("image_tag_invalid",)
+    response = client.describe_services(cluster, service_names)
+    services = _mapping_items(response.get("services"))
+    if response.get("failures") or {
+        item.get("serviceName") for item in services
+    } != set(service_names):
+        return ("service_response_incomplete",)
+    expected: dict[str, str] = {}
+    for service in services:
+        name = str(service["serviceName"])
+        definition_arn = service.get("taskDefinition")
+        if not isinstance(definition_arn, str) or not definition_arn:
+            return ("service_definition_missing",)
+        if any(
+            type(service.get(field)) is not int or service[field] < 0
+            for field in ("desiredCount", "runningCount", "pendingCount")
+        ):
+            return ("service_counts_invalid",)
+        expected[name] = definition_arn
+    config = VerificationConfig(
+        cluster=cluster,
+        image_tag=image_tag,
+        expected_task_definitions=expected,
+        rollout_started_at=datetime.now(UTC),
+        timeout_seconds=0,
+        poll_seconds=1,
+        summary_file=Path("unused"),
+    )
+    observations = _observe_services(config, client)
+    if any(
+        item.rollout_state != "COMPLETED" or item.problems or item.contract_errors
+        for item in observations
+    ):
+        return ("service_rollout_incomplete",)
+    _observe_running_tasks(config, client, observations, validate=True)
+    if any(item.problems or item.contract_errors for item in observations):
+        return ("service_runtime_mismatch",)
+    for name, definition_arn in expected.items():
+        response = client.describe_task_definition(definition_arn)
+        definition = response.get("taskDefinition")
+        if not isinstance(definition, Mapping):
+            return ("service_definition_missing",)
+        containers = [
+            item
+            for item in _mapping_items(definition.get("containerDefinitions"))
+            if item.get("name") == name
+        ]
+        if (
+            definition.get("taskDefinitionArn") != definition_arn
+            or len(containers) != 1
+            or _image_tag(str(containers[0].get("image", ""))) != image_tag
+        ):
+            return ("service_definition_image_mismatch",)
+    return ()
+
+
 def _observe_services(
     config: VerificationConfig, client: EcsClient
 ) -> list[ServiceObservation]:
