@@ -77,12 +77,15 @@ async def _seed_running_run(
                 evidence_claim="Previous answer evidence.",
             )
         )
+        previous_created_at = _THREAD_UPDATED_AT - timedelta(seconds=1)
         session.add(
             AgentRun(
                 thread_id=thread.id,
                 user_message_id=previous_question.id,
                 assistant_message_id=previous_answer.id,
                 status="completed",
+                created_at=previous_created_at,
+                deadline_at=previous_created_at + timedelta(seconds=60),
                 completed_at=_THREAD_UPDATED_AT,
                 attempt_epoch=1,
             )
@@ -96,10 +99,13 @@ async def _seed_running_run(
         )
         session.add(current_question)
         await session.flush()
+        created_at = _NOW - timedelta(seconds=1)
         run = AgentRun(
             thread_id=thread.id,
             user_message_id=current_question.id,
             status="running",
+            created_at=created_at,
+            deadline_at=created_at + timedelta(seconds=60),
             started_at=_NOW - timedelta(minutes=21),
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,

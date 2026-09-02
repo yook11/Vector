@@ -715,7 +715,7 @@ export type ResearchMessageRun = {
     /**
      * Status
      */
-    status: 'queued' | 'running' | 'completed' | 'policy_blocked' | 'failed';
+    status: 'queued' | 'running' | 'completed' | 'policy_blocked' | 'deadline_exceeded' | 'failed';
     /**
      * Errorcode
      */
@@ -751,7 +751,7 @@ export type ResearchRunResponse = {
     /**
      * Status
      */
-    status: 'queued' | 'running' | 'completed' | 'policy_blocked' | 'failed';
+    status: 'queued' | 'running' | 'completed' | 'policy_blocked' | 'deadline_exceeded' | 'failed';
     /**
      * Errorcode
      */

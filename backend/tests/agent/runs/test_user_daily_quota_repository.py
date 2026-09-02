@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import DateTime, func, literal, select, text
@@ -152,11 +152,14 @@ async def _seed_active_thread(
             )
             session.add(message)
             await session.flush()
+            created_at = datetime.now(UTC)
             session.add(
                 AgentRun(
                     thread_id=thread.id,
                     user_message_id=message.id,
                     status="queued",
+                    created_at=created_at,
+                    deadline_at=created_at + timedelta(seconds=60),
                 )
             )
         return thread.id

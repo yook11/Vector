@@ -63,6 +63,7 @@ async def _seed_run(
         assistant_message_id=assistant_message_id,
         status=status,
         created_at=created_at,
+        deadline_at=created_at + timedelta(seconds=60),
         started_at=started_at,
         attempt_epoch=attempt_epoch,
         error_code="internal_error" if status == "failed" else None,

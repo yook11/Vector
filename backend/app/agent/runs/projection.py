@@ -16,6 +16,7 @@ ResearchRunStatusValue = Literal[
     "running",
     "completed",
     "policy_blocked",
+    "deadline_exceeded",
     "failed",
 ]
 ResearchRunErrorCodeValue = Literal[
@@ -55,6 +56,8 @@ def _run_status_value(value: str) -> ResearchRunStatusValue:
             return "completed"
         case AgentRunStatus.POLICY_BLOCKED:
             return "policy_blocked"
+        case AgentRunStatus.DEADLINE_EXCEEDED:
+            return "deadline_exceeded"
         case AgentRunStatus.FAILED:
             return "failed"
 

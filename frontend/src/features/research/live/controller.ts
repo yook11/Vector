@@ -38,6 +38,7 @@ export type ResearchRunLiveStatus =
   | "running"
   | "completed"
   | "policy_blocked"
+  | "deadline_exceeded"
   | "failed";
 
 export type ResearchRunLivePollResult =
@@ -221,8 +222,11 @@ export function createResearchRunLiveController({
           });
         }
         if (transition.acceptedTerminal !== null) {
-          if (transition.acceptedTerminal.status === "policy_blocked") {
-            beginPolicyBlocked(transition.acceptedTerminal, version);
+          if (
+            transition.acceptedTerminal.status === "policy_blocked" ||
+            transition.acceptedTerminal.status === "deadline_exceeded"
+          ) {
+            beginNonAnswerTerminal(transition.acceptedTerminal, version);
           } else {
             beginFinalization(transition.acceptedTerminal, version);
           }
@@ -308,6 +312,7 @@ export function createResearchRunLiveController({
     if (
       result.run.status === "completed" ||
       result.run.status === "policy_blocked" ||
+      result.run.status === "deadline_exceeded" ||
       result.run.status === "failed"
     ) {
       const terminal: ResearchLiveTerminal =
@@ -315,12 +320,17 @@ export function createResearchRunLiveController({
           ? { status: "completed" }
           : result.run.status === "policy_blocked"
             ? { status: "policy_blocked" }
-            : {
-                status: "failed",
-                errorCode: result.run.errorCode ?? "internal_error",
-              };
-      if (terminal.status === "policy_blocked") {
-        beginPolicyBlocked(terminal, version);
+            : result.run.status === "deadline_exceeded"
+              ? { status: "deadline_exceeded" }
+              : {
+                  status: "failed",
+                  errorCode: result.run.errorCode ?? "internal_error",
+                };
+      if (
+        terminal.status === "policy_blocked" ||
+        terminal.status === "deadline_exceeded"
+      ) {
+        beginNonAnswerTerminal(terminal, version);
       } else {
         beginFinalization(terminal, version);
       }
@@ -418,8 +428,11 @@ export function createResearchRunLiveController({
     startFinalizationRefresh(version);
   }
 
-  function beginPolicyBlocked(
-    terminal: Extract<ResearchLiveTerminal, { status: "policy_blocked" }>,
+  function beginNonAnswerTerminal(
+    terminal: Extract<
+      ResearchLiveTerminal,
+      { status: "policy_blocked" | "deadline_exceeded" }
+    >,
     version: number,
   ): void {
     if (!isCurrent(version) || finalizationStarted) return;
@@ -602,6 +615,7 @@ function isRunStatus(value: unknown): value is ResearchRunLiveStatus {
     value === "running" ||
     value === "completed" ||
     value === "policy_blocked" ||
+    value === "deadline_exceeded" ||
     value === "failed"
   );
 }
@@ -628,6 +642,7 @@ function mergeActiveRunStatus(
   if (
     current === "completed" ||
     current === "policy_blocked" ||
+    current === "deadline_exceeded" ||
     current === "failed"
   ) {
     return current;

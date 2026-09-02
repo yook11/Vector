@@ -1,9 +1,9 @@
 """1 user message に対する 1 回の非同期実行状態 (ORM)。
 
-run は状態機械 (queued → running → completed/policy_blocked/failed)。
-policy_blockedは回答を持たない確定終端である。thread / message との同一thread整合を
-composite FK で焼く (設計判断 11)。ORM relationship は
-消費側 slice で追加する。
+run は状態機械 (queued → running → terminal)。
+policy_blockedとdeadline_exceededは回答を持たない確定終端である。
+thread / message との同一thread整合をcomposite FK で焼く (設計判断 11)。
+ORM relationship は消費側 slice で追加する。
 """
 
 from __future__ import annotations
@@ -60,7 +60,8 @@ class AgentRun(Base):
             "assistant_message_id", name="uq_agent_runs_assistant_message"
         ),
         CheckConstraint(
-            "status IN ('queued', 'running', 'completed', 'policy_blocked', 'failed')",
+            "status IN ('queued', 'running', 'completed', 'policy_blocked', "
+            "'deadline_exceeded', 'failed')",
             name="ck_agent_runs_status",
         ),
         CheckConstraint(
@@ -106,6 +107,9 @@ class AgentRun(Base):
     error_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+    deadline_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

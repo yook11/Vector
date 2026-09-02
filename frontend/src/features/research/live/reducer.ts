@@ -11,6 +11,7 @@ export type ResearchLiveDraftMode = "empty" | "visible" | "suppressed";
 export type ResearchLiveTerminal =
   | { status: "completed" }
   | { status: "policy_blocked" }
+  | { status: "deadline_exceeded" }
   | { status: "failed"; errorCode: ResearchLiveErrorCode };
 
 export interface ResearchLiveState {
@@ -104,7 +105,9 @@ export function reduceResearchLiveEvent(
           ? { status: "completed" }
           : event.status === "policy_blocked"
             ? { status: "policy_blocked" }
-            : { status: "failed", errorCode: event.errorCode };
+            : event.status === "deadline_exceeded"
+              ? { status: "deadline_exceeded" }
+              : { status: "failed", errorCode: event.errorCode };
       const terminalState =
         event.status === "completed"
           ? { ...nextState, terminal }

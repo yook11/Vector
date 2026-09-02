@@ -87,6 +87,10 @@ export type ResearchLiveEvent =
     })
   | (ResearchLiveEventBase & {
       type: "terminal";
+      status: "deadline_exceeded";
+    })
+  | (ResearchLiveEventBase & {
+      type: "terminal";
       status: "failed";
       errorCode: ResearchLiveErrorCode;
     });
@@ -206,6 +210,17 @@ export function parseResearchLiveEvent({
             type: "terminal",
             attemptEpoch,
             status: "policy_blocked",
+            streamId,
+          },
+        };
+      }
+      if (payload.status === "deadline_exceeded") {
+        return {
+          kind: "event",
+          event: {
+            type: "terminal",
+            attemptEpoch,
+            status: "deadline_exceeded",
             streamId,
           },
         };

@@ -24,7 +24,7 @@ from app.agent.runs.contracts import (
 )
 from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.runs.repository import (
-    RESEARCH_QUEUED_START_DEADLINE_SECONDS,
+    RUN_DEADLINE_SECONDS,
     AgentRunRepository,
 )
 from app.models.agent_message import AgentMessage
@@ -107,6 +107,7 @@ async def _seed_queued_run(
             user_message_id=message.id,
             status=status,
             created_at=created_at,
+            deadline_at=created_at + timedelta(seconds=RUN_DEADLINE_SECONDS),
             started_at=_DB_NOW if status == "running" else None,
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,
@@ -143,9 +144,9 @@ async def _read_counter(
         )
 
 
-def _queued_start_deadline_seconds() -> int:
-    value = RESEARCH_QUEUED_START_DEADLINE_SECONDS
-    assert value == 180
+def _run_deadline_seconds() -> int:
+    value = RUN_DEADLINE_SECONDS
+    assert value == 60
     return value
 
 
@@ -234,7 +235,7 @@ async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
 async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomically(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    deadline_seconds = _queued_start_deadline_seconds()
+    deadline_seconds = _run_deadline_seconds()
     seeded = await _seed_queued_run(
         session_factory,
         created_at=_DB_NOW
@@ -253,61 +254,66 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
 
     _assert_start_result(
         result,
-        outcome="QUEUED_START_DEADLINE_EXPIRED",
+        outcome="DEADLINE_EXCEEDED",
         started=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
     )
     run = await _read_run(session_factory, seeded.run_id)
-    assert (run.status, run.error_code, run.attempt_epoch) == ("failed", "stale", 0)
+    assert (run.status, run.error_code, run.attempt_epoch) == (
+        "deadline_exceeded",
+        None,
+        0,
+    )
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 0
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_queued_start_deadline_keeps_exact_boundary_and_expires_immediately_after(
+async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    deadline_seconds = _queued_start_deadline_seconds()
+    deadline_seconds = _run_deadline_seconds()
+    just_before = await _seed_queued_run(
+        session_factory,
+        created_at=_DB_NOW
+        - timedelta(seconds=deadline_seconds)
+        + timedelta(microseconds=1),
+    )
     exact = await _seed_queued_run(
         session_factory,
         created_at=_DB_NOW - timedelta(seconds=deadline_seconds),
-    )
-    just_after = await _seed_queued_run(
-        session_factory,
-        created_at=_DB_NOW
-        - timedelta(
-            seconds=deadline_seconds,
-            microseconds=1,
-        ),
         quota_usage_date=date(2026, 7, 21),
     )
 
     async with session_factory() as session:
         async with session.begin():
+            before_result = await AgentRunRepository(session).start_run(
+                just_before.run_id,
+                now=_DB_NOW,
+            )
             exact_result = await AgentRunRepository(session).start_run(
                 exact.run_id,
                 now=_DB_NOW,
             )
-            expired_result = await AgentRunRepository(session).start_run(
-                just_after.run_id,
-                now=_DB_NOW,
-            )
 
     _assert_start_result(
-        exact_result,
+        before_result,
         outcome="STARTED",
         started=True,
         quota_release_outcome=None,
     )
     _assert_start_result(
-        expired_result,
-        outcome="QUEUED_START_DEADLINE_EXPIRED",
+        exact_result,
+        outcome="DEADLINE_EXCEEDED",
         started=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
     )
+    before_run = await _read_run(session_factory, just_before.run_id)
     exact_run = await _read_run(session_factory, exact.run_id)
-    expired_run = await _read_run(session_factory, just_after.run_id)
-    assert (exact_run.status, expired_run.status) == ("running", "failed")
+    assert (before_run.status, exact_run.status) == (
+        "running",
+        "deadline_exceeded",
+    )
 
 
 @pytest.mark.integration
@@ -317,7 +323,7 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
 ) -> None:
     seeded = await _seed_queued_run(
         session_factory,
-        created_at=_DB_NOW - timedelta(seconds=181),
+        created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
         quota_usage_date=None,
         counter_count=None,
     )
@@ -331,12 +337,12 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
 
     _assert_start_result(
         result,
-        outcome="QUEUED_START_DEADLINE_EXPIRED",
+        outcome="DEADLINE_EXCEEDED",
         started=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
     )
     run = await _read_run(session_factory, seeded.run_id)
-    assert (run.status, run.error_code) == ("failed", "stale")
+    assert (run.status, run.error_code) == ("deadline_exceeded", None)
 
 
 @pytest.mark.integration
@@ -348,7 +354,7 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
 ) -> None:
     seeded = await _seed_queued_run(
         session_factory,
-        created_at=_DB_NOW - timedelta(seconds=181),
+        created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
         counter_count=counter_count,
     )
 
@@ -361,12 +367,12 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
 
     _assert_start_result(
         result,
-        outcome="QUEUED_START_DEADLINE_EXPIRED",
+        outcome="DEADLINE_EXCEEDED",
         started=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
     )
     run = await _read_run(session_factory, seeded.run_id)
-    assert run.status == "failed"
+    assert run.status == "deadline_exceeded"
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == counter_count
 
 
@@ -377,7 +383,7 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
 ) -> None:
     seeded = await _seed_queued_run(
         session_factory,
-        created_at=_DB_NOW - timedelta(seconds=181),
+        created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
     )
     session = session_factory()
 
@@ -424,7 +430,7 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
 ) -> None:
     seeded = await _seed_queued_run(
         session_factory,
-        created_at=_DB_NOW - timedelta(seconds=181),
+        created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
     )
 
     async with (
@@ -486,7 +492,7 @@ async def test_timely_start_and_running_redelivery_never_release_quota(
 ) -> None:
     seeded = await _seed_queued_run(
         session_factory,
-        created_at=_DB_NOW - timedelta(seconds=180),
+        created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS - 2),
     )
 
     async with session_factory() as session:
@@ -526,7 +532,7 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
 ) -> None:
     seeded = await _seed_queued_run(
         session_factory,
-        created_at=datetime.now(UTC) - timedelta(seconds=181),
+        created_at=datetime.now(UTC) - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
     )
     forbidden_calls: list[str] = []
 
@@ -567,16 +573,20 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
 
     assert forbidden_calls == []
     run = await _read_run(session_factory, seeded.run_id)
-    assert (run.status, run.error_code, run.attempt_epoch) == ("failed", "stale", 0)
+    assert (run.status, run.error_code, run.attempt_epoch) == (
+        "deadline_exceeded",
+        None,
+        0,
+    )
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 0
     assert [
         entry
         for entry in logs
-        if entry.get("event") == "agent_run_queued_start_deadline_expired"
+        if entry.get("event") == "agent_run_start_deadline_exceeded"
     ] == [
         {
             "quota_release_result": "released",
-            "event": "agent_run_queued_start_deadline_expired",
+            "event": "agent_run_start_deadline_exceeded",
             "log_level": "info",
         }
     ]
@@ -595,7 +605,7 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
 ) -> None:
     seeded = await _seed_queued_run(
         session_factory,
-        created_at=datetime.now(UTC) - timedelta(seconds=181),
+        created_at=datetime.now(UTC) - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
     )
     failing_session = session_factory()
 
@@ -650,7 +660,7 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
     assert not [
         entry
         for entry in logs
-        if entry.get("event") == "agent_run_queued_start_deadline_expired"
+        if entry.get("event") == "agent_run_start_deadline_exceeded"
     ]
     assert _quota_release_metric_points(capfire) == []
     run = await _read_run(session_factory, seeded.run_id)

@@ -19,7 +19,7 @@ work バッファリングを避け、1 insert = 1 SQL 文で境界を壊した 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import (
@@ -33,6 +33,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.dml import Insert
 
 import app.models as _models  # noqa: F401  # populate Base.metadata
 from app.models.base import Base
@@ -130,6 +131,15 @@ async def _insert_message(
     return result.scalar_one()
 
 
+def _agent_run_insert(**values: object) -> Insert:
+    created_at = datetime.now(UTC)
+    return insert(AGENT_RUNS).values(
+        created_at=created_at,
+        deadline_at=created_at + timedelta(seconds=60),
+        **values,
+    )
+
+
 async def _insert_run(
     session: AsyncSession,
     *,
@@ -140,15 +150,13 @@ async def _insert_run(
     error_code: str | None = None,
 ) -> uuid.UUID:
     result = await session.execute(
-        insert(AGENT_RUNS)
-        .values(
+        _agent_run_insert(
             thread_id=thread_id,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
             status=status,
             error_code=error_code,
-        )
-        .returning(AGENT_RUNS.c.id)
+        ).returning(AGENT_RUNS.c.id)
     )
     return result.scalar_one()
 
@@ -496,7 +504,7 @@ async def test_second_active_run_in_thread_violates_thread_active_unique(
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id, user_message_id=user_message_2, status="running"
         ),
         sqlstate=UNIQUE_VIOLATION,
@@ -563,7 +571,7 @@ async def test_second_run_reusing_user_message_violates_user_message_unique(
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id, user_message_id=user_message_id, status="queued"
         ),
         sqlstate=UNIQUE_VIOLATION,
@@ -587,7 +595,7 @@ async def test_completed_run_without_assistant_message_violates_completed_answer
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id, user_message_id=user_message_id, status="completed"
         ),
         sqlstate=CHECK_VIOLATION,
@@ -609,7 +617,7 @@ async def test_running_run_with_assistant_message_violates_completed_answer_chec
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
@@ -649,7 +657,7 @@ async def test_second_run_reusing_assistant_message_violates_assistant_message_u
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id,
             user_message_id=user_message_2,
             assistant_message_id=assistant_message_id,
@@ -676,7 +684,7 @@ async def test_failed_run_without_error_code_violates_failed_error_check(
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id, user_message_id=user_message_id, status="failed"
         ),
         sqlstate=CHECK_VIOLATION,
@@ -698,7 +706,7 @@ async def test_completed_run_with_error_code_violates_failed_error_check(
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
@@ -727,7 +735,7 @@ async def test_run_user_message_from_different_thread_violates_composite_fk(
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_a, user_message_id=other_thread_message_id, status="queued"
         ),
         sqlstate=FOREIGN_KEY_VIOLATION,
@@ -750,7 +758,7 @@ async def test_run_assistant_message_from_different_thread_violates_composite_fk
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_a,
             user_message_id=user_message_id,
             assistant_message_id=other_thread_assistant_message_id,
@@ -1199,7 +1207,7 @@ async def test_run_with_invalid_status_violates_status_check(
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id, user_message_id=user_message_id, status="cancelled"
         ),
         sqlstate=CHECK_VIOLATION,
@@ -1397,7 +1405,7 @@ async def test_run_with_negative_attempt_epoch_violates_check(
 
     await _assert_integrity_violation(
         db_session,
-        insert(AGENT_RUNS).values(
+        _agent_run_insert(
             thread_id=thread_id,
             user_message_id=user_message_id,
             status="queued",

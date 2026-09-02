@@ -10,6 +10,7 @@ class AgentRunStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     POLICY_BLOCKED = "policy_blocked"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
     FAILED = "failed"
 
 
