@@ -20,8 +20,6 @@ workerが終了処理に到達しなくても、期限切れのactive runをDB�
 |---|---|
 | `created_at` | run受付時刻。作成時に`deadline_at`を決める材料 |
 | `deadline_at` | このrunの結果を受理できる最終時刻 |
-| `started_at` | attemptの実行開始を記録する時刻。期限判定には使わない |
-| `completed_at` | 成功・失敗・期限切れを含む、終端を確定した時刻。受理期限ではない |
 | `now` | その場でPostgresから取得する現在時刻。DB列でも新しいドメイン概念でもない |
 
 - `deadline_at = created_at + RUN_DEADLINE_SECONDS`を作成時に固定する。現在は60秒。
@@ -29,21 +27,22 @@ workerが終了処理に到達しなくても、期限切れのactive runをDB�
 - `RUN_DEADLINE_SECONDS`を参照するのは作成処理だけ。sweeperは秒数を持たず、保存済みの期限を読む。
 - start / complete / sweepの現在時刻は`now`と呼ぶ。
   テストの`now=`は同じ現在時刻の差し込みである。
-- terminal更新の判断にはlock取得後のDB時刻を使い、期限判定と`completed_at`の記録には同じ`now`を使う。
+- terminal更新の判断にはlock取得後のDB時刻`now`を使う。
   候補取得もDB時刻で絞るが、lock待機前の時刻を終端更新へ使い回さない。
+- 開始・終端時刻は記録しない。`started_at`・`completed_at`の旧列を残す期間も
+  アプリから読み書きしない（[段階的廃止の仕様](agent-run-time-column-retirement-slice.md)）。
 
 ## Invariants — sweeperの契約
 
 ```text
 now <  deadline_at → 期限内。変更しない
 now >= deadline_at → queued / runningだけをdeadline_exceededへ更新する
-                     completed_at = now
 ```
 
 - 境界時刻ちょうども期限切れ。`created_at`や`started_at`から期限を再計算しない。
 - `deadline_exceeded`は回答・`error_code`を持たない。epochを進めず、回答・source・handoffを生成・保存しない。
 - complete・start・cancel・別sweepと競合しても、terminal遷移は一方だけが勝つ。
-  既存terminalを上書きせず、繰り返し実行しても終端時刻を更新しない。
+  既存terminalを上書きせず、繰り返し実行しても確定結果を更新しない。
 - queuedから期限切れを確定した場合だけ、同じtransactionで既存のquota予約を最大1回返す。
   runningの予約は保持し、quota不整合時の既存の扱いも変えない。
 - 現行のrunning向けterminal通知はDB commit後に`deadline_exceeded`をbest-effortで送る。
@@ -66,7 +65,7 @@ sweepの起動間隔と受理期限は別物。60秒ちょうどのDB終端化�
 今回追加するRepositoryの振る舞いテストは次の2つだけとし、未実装の契約によるredを確認してから実装する。
 
 1. `now < deadline_at`なら何もしない。
-2. `now >= deadline_at`なら`deadline_exceeded`にし、`completed_at = now`を保存する。
+2. `now >= deadline_at`なら`deadline_exceeded`にする。
 
 どちらもqueued / runningで確認し、期限切れ側は境界ちょうどと超過を含める。
 quota・既存terminalの保護・競合・Task通知は既存テストで回帰確認し、新しい独立テスト群は追加しない。

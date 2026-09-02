@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -160,7 +160,6 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
         _thread, _message, run = await _create_thread_message_run(
             session,
             status="running",
-            started_at=datetime.now(UTC),
         )
     result = AnswerQuestionResult(
         status="answered",
@@ -225,7 +224,6 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
         thread, _message, run = await _create_thread_message_run(
             session,
             status="running",
-            started_at=datetime.now(UTC),
         )
         thread_id = thread.id
     handoff = _handoff()
@@ -263,7 +261,6 @@ async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
         thread, _message, run = await _create_thread_message_run(
             session,
             status="running",
-            started_at=datetime.now(UTC),
         )
         thread_id = thread.id
         thread.research_handoff = stored
@@ -503,7 +500,6 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
         _thread, _message, running = await _create_thread_message_run(
             setup_session,
             status="running",
-            started_at=now - timedelta(minutes=11),
             attempt_epoch=1,
         )
         _terminal_thread, _terminal_message, failed = await _create_thread_message_run(
@@ -536,11 +532,8 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
         terminal = await session.get(AgentRun, failed.id)
         assert restarted is not None
         assert terminal is not None
-        assert (
-            restarted.status,
-            restarted.started_at,
-            restarted.attempt_epoch,
-        ) == ("running", now, 2)
+        assert restarted.status == "running"
+        assert restarted.attempt_epoch == 2
         assert terminal.status == "failed"
         assert terminal.error_code == "internal_error"
         assert terminal.attempt_epoch == 0
@@ -674,7 +667,6 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
 async def test_mark_enqueue_failed_remains_epoch_independent(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
     async with session_factory() as setup_session:
         _thread, _message, run = await _create_thread_message_run(
             setup_session,
@@ -685,16 +677,12 @@ async def test_mark_enqueue_failed_remains_epoch_independent(
         async with session.begin():
             transitioned = await AgentRunRepository(session).mark_enqueue_failed(
                 run.id,
-                now=now,
             )
 
     assert transitioned is True
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
         assert failed is not None
-        assert (
-            failed.status,
-            failed.error_code,
-            failed.attempt_epoch,
-            failed.completed_at,
-        ) == ("failed", "enqueue_failed", 7, now)
+        assert failed.status == "failed"
+        assert failed.error_code == "enqueue_failed"
+        assert failed.attempt_epoch == 7

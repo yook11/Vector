@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import structlog
@@ -133,9 +133,7 @@ class AgentRunRepository:
         *,
         expected_attempt_epoch: int,
         error_code: AgentRunErrorCode,
-        now: datetime | None = None,
     ) -> bool:
-        now = now or datetime.now(UTC)
         result = await self._session.execute(
             update(AgentRun)
             .where(
@@ -146,7 +144,6 @@ class AgentRunRepository:
             .values(
                 status=AgentRunStatus.FAILED.value,
                 error_code=error_code.value,
-                completed_at=now,
             )
             .execution_options(synchronize_session=False)
         )
@@ -155,10 +152,7 @@ class AgentRunRepository:
     async def mark_enqueue_failed(
         self,
         run_id: uuid_mod.UUID,
-        *,
-        now: datetime | None = None,
     ) -> bool:
-        now = now or datetime.now(UTC)
         result = await self._session.execute(
             update(AgentRun)
             .where(
@@ -168,7 +162,6 @@ class AgentRunRepository:
             .values(
                 status=AgentRunStatus.FAILED.value,
                 error_code=AgentRunErrorCode.ENQUEUE_FAILED.value,
-                completed_at=now,
             )
             .execution_options(synchronize_session=False)
         )
@@ -179,9 +172,7 @@ class AgentRunRepository:
         run_id: uuid_mod.UUID,
         *,
         expected_attempt_epoch: int,
-        now: datetime | None = None,
     ) -> bool:
-        now = now or datetime.now(UTC)
         result = await self._session.execute(
             update(AgentRun)
             .where(
@@ -193,7 +184,6 @@ class AgentRunRepository:
                 status=AgentRunStatus.POLICY_BLOCKED.value,
                 assistant_message_id=None,
                 error_code=None,
-                completed_at=now,
             )
             .execution_options(synchronize_session=False)
         )
@@ -252,7 +242,6 @@ class AgentRunRepository:
                     status=AgentRunStatus.DEADLINE_EXCEEDED.value,
                     assistant_message_id=None,
                     error_code=None,
-                    completed_at=now,
                 )
                 .returning(AgentRun.quota_usage_date)
                 .execution_options(synchronize_session=False)
@@ -287,7 +276,6 @@ class AgentRunRepository:
             )
             .values(
                 status=AgentRunStatus.RUNNING.value,
-                started_at=now,
                 attempt_epoch=AgentRun.attempt_epoch + 1,
             )
             .returning(AgentRun.attempt_epoch)
@@ -389,7 +377,6 @@ class AgentRunRepository:
                     status=AgentRunStatus.DEADLINE_EXCEEDED.value,
                     assistant_message_id=None,
                     error_code=None,
-                    completed_at=now,
                 )
                 .execution_options(synchronize_session=False)
             )
@@ -424,7 +411,6 @@ class AgentRunRepository:
             .values(
                 status=AgentRunStatus.COMPLETED.value,
                 assistant_message_id=assistant_message.id,
-                completed_at=now,
             )
             .execution_options(synchronize_session=False)
         )
@@ -492,9 +478,7 @@ class AgentRunRepository:
         *,
         run_id: uuid_mod.UUID,
         user_id: uuid_mod.UUID,
-        now: datetime | None = None,
     ) -> CancelRunCommandOutcome | None:
-        now = now or datetime.now(UTC)
         owned_thread_ids = select(AgentThread.id).where(AgentThread.user_id == user_id)
         queued_result = await self._session.execute(
             update(AgentRun)
@@ -506,7 +490,6 @@ class AgentRunRepository:
             .values(
                 status=AgentRunStatus.FAILED.value,
                 error_code=AgentRunErrorCode.CANCELLED.value,
-                completed_at=now,
             )
             .returning(AgentRun.quota_usage_date)
             .execution_options(synchronize_session=False)
@@ -533,7 +516,6 @@ class AgentRunRepository:
             .values(
                 status=AgentRunStatus.FAILED.value,
                 error_code=AgentRunErrorCode.CANCELLED.value,
-                completed_at=now,
             )
             .returning(AgentRun.attempt_epoch)
             .execution_options(synchronize_session=False)
@@ -590,7 +572,6 @@ class AgentRunRepository:
                         AgentRun.attempt_epoch,
                         AgentRun.quota_usage_date,
                         AgentThread.user_id,
-                        AgentRun.started_at,
                     )
                     .join(AgentThread, AgentRun.thread_id == AgentThread.id)
                     .where(
@@ -615,10 +596,9 @@ class AgentRunRepository:
                 queued_quota_inconsistent_count=0,
                 running_terminal_runs=(),
                 running_quota_reservation_count=0,
-                running_without_started_at_count=0,
             )
 
-        # lock待機後の同じDB時刻で期限と終端時刻を確定する。
+        # lock待機中に期限を越えるため、更新判断には取得後のDB時刻を使う。
         now = await self._database_now(now)
         candidate_ids = [row[0] for row in candidate_rows]
         candidate_by_id = {row[0]: row for row in candidate_rows}
@@ -635,7 +615,6 @@ class AgentRunRepository:
                         status=AgentRunStatus.DEADLINE_EXCEEDED.value,
                         assistant_message_id=None,
                         error_code=None,
-                        completed_at=now,
                     )
                     .returning(
                         AgentRun.id,
@@ -738,10 +717,6 @@ class AgentRunRepository:
             running_quota_reservation_count=sum(
                 quota_usage_date is not None
                 for _run_id, _status, _attempt_epoch, quota_usage_date in running_rows
-            ),
-            running_without_started_at_count=sum(
-                candidate_by_id[run_id][5] is None
-                for run_id, _status, _attempt_epoch, _quota_usage_date in running_rows
             ),
         )
 

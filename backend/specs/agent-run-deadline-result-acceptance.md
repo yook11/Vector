@@ -23,6 +23,8 @@ Status: Draft
 - 判定はPostgresの時刻で行う。workerやfrontendのwall clockは正本にしない。
 - `now < deadline_at`の場合だけdeadline内とし、境界時刻ちょうどは期限切れとする。
   `now`はその場で取得するDB時刻であり、永続化する列ではない。
+- runの開始・終端時刻は記録しない。`started_at`・`completed_at`はアプリから読み書きせず、
+  DB上の旧列の削除は[別段階で行う](agent-run-time-column-retirement-slice.md)。
 - deadlineの長さは60秒とする。現行の150 / 180秒とは別のdomain policyである。
 
 ### 2. 結果はDB transitionが勝ったときだけ確定する

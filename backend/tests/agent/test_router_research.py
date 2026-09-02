@@ -525,10 +525,8 @@ class TestCreateResearchResponse:
         async def update_then_fail(
             repository: AgentRunRepository,
             run_id: UUID,
-            *,
-            now: datetime | None = None,
         ) -> bool:
-            assert await original_mark_enqueue_failed(repository, run_id, now=now)
+            assert await original_mark_enqueue_failed(repository, run_id)
             raise RuntimeError("mark failed transaction aborted")
 
         monkeypatch.setattr(
@@ -2253,8 +2251,7 @@ class TestGetResearchRun:
             role="user",
             content="blocked request",
         )
-        completed_at = datetime(2026, 7, 20, 12, tzinfo=UTC)
-        created_at = completed_at - timedelta(seconds=1)
+        created_at = datetime(2026, 7, 20, 12, tzinfo=UTC) - timedelta(seconds=1)
         run = AgentRun(
             thread_id=thread.id,
             user_message_id=user_message.id,
@@ -2262,7 +2259,6 @@ class TestGetResearchRun:
             attempt_epoch=2,
             created_at=created_at,
             deadline_at=created_at + timedelta(seconds=60),
-            completed_at=completed_at,
         )
         db_session.add(run)
         await db_session.commit()

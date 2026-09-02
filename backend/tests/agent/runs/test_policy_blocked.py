@@ -86,7 +86,6 @@ async def _seed_running_run(
                 status="completed",
                 created_at=previous_created_at,
                 deadline_at=previous_created_at + timedelta(seconds=60),
-                completed_at=_THREAD_UPDATED_AT,
                 attempt_epoch=1,
             )
         )
@@ -106,7 +105,6 @@ async def _seed_running_run(
             status="running",
             created_at=created_at,
             deadline_at=created_at + timedelta(seconds=60),
-            started_at=_NOW - timedelta(minutes=21),
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,
         )
@@ -130,7 +128,6 @@ async def test_mark_policy_blocked_updates_only_the_current_running_attempt(
             changed = await AgentRunRepository(session).mark_policy_blocked(
                 seeded.run_id,
                 expected_attempt_epoch=seeded.attempt_epoch,
-                now=_NOW,
             )
 
     async with session_factory() as session:
@@ -149,12 +146,9 @@ async def test_mark_policy_blocked_updates_only_the_current_running_attempt(
 
     assert changed is True
     assert run is not None
-    assert (
-        run.status,
-        run.assistant_message_id,
-        run.error_code,
-        run.completed_at,
-    ) == ("policy_blocked", None, None, _NOW)
+    assert run.status == "policy_blocked"
+    assert run.assistant_message_id is None
+    assert run.error_code is None
     assert thread is not None and thread.updated_at == _THREAD_UPDATED_AT
     assert messages == [("user", 1), ("assistant", 2), ("user", 3)]
     assert source_count == 1
@@ -172,17 +166,14 @@ async def test_mark_policy_blocked_is_fenced_from_stale_and_terminal_attempts(
             stale_changed = await repository.mark_policy_blocked(
                 seeded.run_id,
                 expected_attempt_epoch=seeded.attempt_epoch - 1,
-                now=_NOW,
             )
             current_changed = await repository.mark_policy_blocked(
                 seeded.run_id,
                 expected_attempt_epoch=seeded.attempt_epoch,
-                now=_NOW,
             )
             terminal_changed = await repository.mark_policy_blocked(
                 seeded.run_id,
                 expected_attempt_epoch=seeded.attempt_epoch,
-                now=_NOW + timedelta(seconds=1),
             )
 
     assert (stale_changed, current_changed, terminal_changed) == (False, True, False)
@@ -202,14 +193,12 @@ async def test_mark_policy_blocked_does_not_overwrite_a_cancelled_attempt(
                     seeded.run_id,
                     expected_attempt_epoch=seeded.attempt_epoch,
                     error_code=AgentRunErrorCode.CANCELLED,
-                    now=_NOW,
                 )
                 is True
             )
             changed = await repository.mark_policy_blocked(
                 seeded.run_id,
                 expected_attempt_epoch=seeded.attempt_epoch,
-                now=_NOW,
             )
 
     assert changed is False
@@ -228,7 +217,6 @@ async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
                 await repository.mark_policy_blocked(
                     seeded.run_id,
                     expected_attempt_epoch=seeded.attempt_epoch,
-                    now=_NOW,
                 )
                 is True
             )
@@ -249,7 +237,6 @@ async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
     assert swept.queued_quota_inconsistent_count == 0
     assert swept.running_terminal_runs == ()
     assert swept.running_quota_reservation_count == 0
-    assert swept.running_without_started_at_count == 0
 
 
 @pytest.mark.asyncio
@@ -277,14 +264,12 @@ async def test_policy_blocked_cancel_is_already_terminal_without_quota_release(
                 await repository.mark_policy_blocked(
                     seeded.run_id,
                     expected_attempt_epoch=seeded.attempt_epoch,
-                    now=_NOW,
                 )
                 is True
             )
             outcome = await repository.cancel_run_for_user(
                 run_id=seeded.run_id,
                 user_id=_USER_ID,
-                now=_NOW,
             )
 
     async with session_factory() as session:

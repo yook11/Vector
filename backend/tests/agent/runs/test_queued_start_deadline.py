@@ -108,7 +108,6 @@ async def _seed_queued_run(
             status=status,
             created_at=created_at,
             deadline_at=created_at + timedelta(seconds=RUN_DEADLINE_SECONDS),
-            started_at=_DB_NOW if status == "running" else None,
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,
         )
@@ -444,7 +443,6 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
             cancelled = await AgentRunRepository(cancel_session).cancel_run_for_user(
                 run_id=seeded.run_id,
                 user_id=seeded.user_id,
-                now=_DB_NOW,
             )
 
             await start_session.begin()

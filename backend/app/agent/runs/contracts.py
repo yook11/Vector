@@ -133,7 +133,6 @@ class DeadlineRunSweepResult:
     queued_quota_inconsistent_count: int
     running_terminal_runs: tuple[DeadlineExceededRunningRun, ...]
     running_quota_reservation_count: int
-    running_without_started_at_count: int
 
     def __post_init__(self) -> None:
         counts = (
@@ -142,7 +141,6 @@ class DeadlineRunSweepResult:
             self.queued_quota_not_eligible_count,
             self.queued_quota_inconsistent_count,
             self.running_quota_reservation_count,
-            self.running_without_started_at_count,
         )
         if any(
             not isinstance(count, int) or isinstance(count, bool) or count < 0

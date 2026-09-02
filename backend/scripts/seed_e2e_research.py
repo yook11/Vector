@@ -482,13 +482,10 @@ async def _seed(connection: AsyncConnection) -> None:
                 "status": "completed",
                 "error_code": None,
                 "created_at": thread.updated_at,
-                "started_at": thread.updated_at,
-                "completed_at": thread.updated_at,
             }
             for thread in FIXTURE_THREADS
         ],
     )
-    active_started_at = dt.datetime.now(dt.UTC)
     await connection.execute(
         insert(AgentRun),
         [
@@ -503,9 +500,7 @@ async def _seed(connection: AsyncConnection) -> None:
                     "status": "completed",
                     "error_code": None,
                     "created_at": fixture.updated_at,
-                    "started_at": fixture.updated_at,
                     "attempt_epoch": 1,
-                    "completed_at": fixture.updated_at,
                 },
                 {
                     "id": fixture.active_run_id,
@@ -515,9 +510,7 @@ async def _seed(connection: AsyncConnection) -> None:
                     "status": "running",
                     "error_code": None,
                     "created_at": fixture.updated_at,
-                    "started_at": active_started_at,
                     "attempt_epoch": 1,
-                    "completed_at": None,
                 },
             )
         ],
@@ -534,7 +527,6 @@ def _continuity_fixture(variant: str) -> ContinuityFixture:
 async def _reset_continuity_run(
     connection: AsyncConnection,
     variant: str,
-    now: dt.datetime,
 ) -> None:
     fixture = _continuity_fixture(variant)
     result = await connection.execute(
@@ -549,9 +541,7 @@ async def _reset_continuity_run(
             status="running",
             error_code=None,
             assistant_message_id=None,
-            completed_at=None,
             attempt_epoch=1,
-            started_at=now,
         )
         .execution_options(synchronize_session=False)
     )
@@ -578,7 +568,6 @@ async def _reset_continuity_run(
 async def _fail_continuity_run(
     connection: AsyncConnection,
     variant: str,
-    now: dt.datetime,
 ) -> None:
     fixture = _continuity_fixture(variant)
     result = await connection.execute(
@@ -592,7 +581,6 @@ async def _fail_continuity_run(
         .values(
             status="failed",
             error_code="internal_error",
-            completed_at=now,
         )
         .execution_options(synchronize_session=False)
     )
@@ -605,7 +593,6 @@ async def _fail_continuity_run(
 async def _fail_e2e_submission(
     connection: AsyncConnection,
     run_id: uuid.UUID,
-    now: dt.datetime,
 ) -> None:
     result = await connection.execute(
         update(AgentRun)
@@ -619,7 +606,6 @@ async def _fail_e2e_submission(
         .values(
             status="failed",
             error_code="enqueue_failed",
-            completed_at=now,
         )
         .execution_options(synchronize_session=False)
     )
@@ -679,7 +665,6 @@ async def _complete_continuity_run(
             status="completed",
             error_code=None,
             assistant_message_id=fixture.active_assistant_message_id,
-            completed_at=now,
         )
         .execution_options(synchronize_session=False)
     )
@@ -723,19 +708,16 @@ async def run(command: str, variant: str | None = None) -> None:
                     await _reset_continuity_run(
                         connection,
                         variant,
-                        dt.datetime.now(dt.UTC),
                     )
                 case "fail" if variant is not None:
                     await _fail_continuity_run(
                         connection,
                         variant,
-                        dt.datetime.now(dt.UTC),
                     )
                 case "fail-submission" if variant is not None:
                     await _fail_e2e_submission(
                         connection,
                         uuid.UUID(variant),
-                        dt.datetime.now(dt.UTC),
                     )
                 case "complete" if variant is not None:
                     await _complete_continuity_run(

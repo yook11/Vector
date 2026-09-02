@@ -412,12 +412,6 @@ async def sweep_deadline_exceeded_agent_runs(ctx: Context = TaskiqDepends()) -> 
                 "running_deadline_exceeded_swept",
                 count=len(result.running_terminal_runs),
             )
-    if result.running_without_started_at_count > 0:
-        with suppress(Exception):
-            logger.warning(
-                "running_without_started_at",
-                count=result.running_without_started_at_count,
-            )
     for running_run in result.running_terminal_runs:
         try:
             redis = get_redis()

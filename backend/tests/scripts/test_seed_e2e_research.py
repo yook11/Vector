@@ -207,7 +207,6 @@ async def test_seed_inserts_completed_and_running_continuity_turns() -> None:
         assert active_run["assistant_message_id"] is None
         assert active_run["status"] == "running"
         assert active_run["error_code"] is None
-        assert active_run["completed_at"] is None
         assert active_run["attempt_epoch"] == 1
 
         source_rows = [row for row in rows if row.get("message_id") == assistant_id]
@@ -421,12 +420,9 @@ def _compiled_statement(
 async def test_reset_restores_only_the_variant_active_run(
     variant: str,
 ) -> None:
-    reset_at = dt.datetime(2026, 7, 16, 12, 34, 56, tzinfo=dt.UTC)
     execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
 
-    await seed_script._reset_continuity_run(
-        SimpleNamespace(execute=execute), variant, reset_at
-    )
+    await seed_script._reset_continuity_run(SimpleNamespace(execute=execute), variant)
 
     sql, params = _compiled_statement(execute, operation="UPDATE agent_runs")
     assert "UPDATE agent_runs" in sql
@@ -441,9 +437,7 @@ async def test_reset_restores_only_the_variant_active_run(
         "status": "running",
         "error_code": None,
         "assistant_message_id": None,
-        "completed_at": None,
         "attempt_epoch": 1,
-        "started_at": reset_at,
     }.items() <= params.items()
 
     source_sql, source_params = _compiled_statement(
@@ -472,12 +466,9 @@ async def test_reset_restores_only_the_variant_active_run(
 async def test_fail_transitions_only_a_running_variant_active_run(
     variant: str,
 ) -> None:
-    failed_at = dt.datetime(2026, 7, 16, 12, 45, tzinfo=dt.UTC)
     execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
 
-    await seed_script._fail_continuity_run(
-        SimpleNamespace(execute=execute), variant, failed_at
-    )
+    await seed_script._fail_continuity_run(SimpleNamespace(execute=execute), variant)
 
     sql, params = _compiled_statement(execute, operation="UPDATE agent_runs")
     assert "UPDATE agent_runs" in sql
@@ -488,19 +479,16 @@ async def test_fail_transitions_only_a_running_variant_active_run(
     assert {
         "status": "failed",
         "error_code": "internal_error",
-        "completed_at": failed_at,
     }.items() <= params.items()
 
 
 @pytest.mark.asyncio
 async def test_fail_submission_targets_one_run_owned_by_the_e2e_user() -> None:
-    failed_at = dt.datetime(2026, 7, 24, 3, 45, tzinfo=dt.UTC)
     execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
 
     await seed_script._fail_e2e_submission(
         SimpleNamespace(execute=execute),
         _SUBMISSION_RUN_ID,
-        failed_at,
     )
 
     sql, params = _compiled_statement(execute, operation="UPDATE agent_runs")
@@ -518,7 +506,6 @@ async def test_fail_submission_targets_one_run_owned_by_the_e2e_user() -> None:
     assert {
         "status": "failed",
         "error_code": "enqueue_failed",
-        "completed_at": failed_at,
     }.items() <= params.items()
 
 
@@ -530,7 +517,6 @@ async def test_fail_submission_requires_exactly_one_owned_pending_run() -> None:
         await seed_script._fail_e2e_submission(
             SimpleNamespace(execute=execute),
             _SUBMISSION_RUN_ID,
-            dt.datetime.now(dt.UTC),
         )
 
 
@@ -539,11 +525,11 @@ async def test_fail_submission_requires_exactly_one_owned_pending_run() -> None:
 async def test_complete_inserts_the_fixed_final_answer_then_completes_only_active_run(
     variant: str,
 ) -> None:
-    completed_at = dt.datetime(2026, 7, 16, 12, 56, 7, tzinfo=dt.UTC)
+    now = dt.datetime(2026, 7, 16, 12, 56, 7, tzinfo=dt.UTC)
     execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
 
     await seed_script._complete_continuity_run(
-        SimpleNamespace(execute=execute), variant, completed_at
+        SimpleNamespace(execute=execute), variant, now
     )
 
     fixture = _continuity_fixtures()[variant]
@@ -577,7 +563,6 @@ async def test_complete_inserts_the_fixed_final_answer_then_completes_only_activ
     assert {
         "status": "completed",
         "error_code": None,
-        "completed_at": completed_at,
     }.items() <= run_params.items()
 
 
@@ -602,8 +587,13 @@ async def test_continuity_mutations_require_exactly_one_updated_row(
     operation = getattr(seed_script, operation_name)
 
     with pytest.raises(RuntimeError):
+        kwargs = (
+            {"now": dt.datetime.now(dt.UTC)}
+            if operation_name == "_complete_continuity_run"
+            else {}
+        )
         await operation(
             SimpleNamespace(execute=execute),
             variant,
-            dt.datetime.now(dt.UTC),
+            **kwargs,
         )
