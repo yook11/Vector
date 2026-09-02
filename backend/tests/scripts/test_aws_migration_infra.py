@@ -17,13 +17,11 @@ def _text(path: str) -> str:
 
 def test_migration_task_is_passwordless_and_has_no_application_secrets() -> None:
     ecs = _text("infra/aws/ecs.tf")
-    migration = ecs.split('resource "aws_ecs_task_definition" "migration"', maxsplit=1)[
-        1
-    ].split('resource "aws_ecs_service"', maxsplit=1)[0]
+    migration = ecs.split(
+        'resource "aws_ecs_task_definition" "migration_base"', maxsplit=1
+    )[1].split('resource "aws_ecs_service"', maxsplit=1)[0]
 
-    assert (
-        'command    = ["python", "-m", "scripts.run_production_migration"]' in migration
-    )
+    assert 'command    = ["python", "-m", "scripts.migration_runner"]' in migration
     assert '{ name = "ENV", value = "production" }' in migration
     assert '{ name = "DB_IAM_AUTH", value = "true" }' in migration
     assert "MIGRATION_DATABASE_URL" in migration

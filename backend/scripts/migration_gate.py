@@ -204,6 +204,8 @@ def decide_changed_migrations(
         for result in classifications
     ):
         decision = "invalid"
+    elif {result.kind for result in classifications} == {"expand", "contract"}:
+        decision = "invalid"
     elif all(result.auto_allowed for result in classifications):
         decision = "expand"
     else:
@@ -560,7 +562,7 @@ def _files_gate(paths: Sequence[str], *, decision_output: str | None = None) -> 
     if decision.decision == "invalid":
         print(
             "Migration file gate failed: undeclared/unknown or mislabelled "
-            "expand revision."
+            "expand revision, or mixed expand/contract range."
         )
         return 1
     return 0

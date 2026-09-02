@@ -46,6 +46,7 @@ def _install_fake_aws(tmp_path: Path) -> Path:
     aws.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
+printf 'called\\n' >> "$FAKE_AWS_CALLS"
 if [ "${1-}" = configure ] && [ "${2-}" = list-profiles ]; then
   printf '%s\\n' "$FAKE_AWS_PROFILES"
   exit 0
@@ -96,6 +97,7 @@ def _run(
             "FAKE_AWS_ARN": arn,
             "FAKE_AWS_PROFILES": _PROFILES,
             "FAKE_AWS_STATUS": str(aws_status),
+            "FAKE_AWS_CALLS": str(tmp_path / "aws-calls"),
             "FAKE_AWS_ERROR": aws_error,
             "FAKE_AWS_CONFIG_ACCOUNT": config_account,
             "FAKE_AWS_CALLER_ACCOUNT": caller_account,
@@ -126,10 +128,7 @@ def _run(
             "AWSReservedSSO_VectorDeploy_<SUFFIX>",
         ),
         ("vector-plan", "vector-ci-terraform-plan", "vector-ci-terraform-plan"),
-        ("vector-apply", "vector-ci-terraform-apply", "vector-ci-terraform-apply"),
         ("vector-push", "vector-ci-app-push", "vector-ci-app-push"),
-        ("vector-rollout", "vector-ci-app-rollout", "vector-ci-app-rollout"),
-        ("vector-migrate", "vector-ci-db-migrate", "vector-ci-db-migrate"),
         (
             "vector-admin",
             "AWSReservedSSO_WorkloadAdministrator_abc123",
@@ -153,7 +152,7 @@ def test_accepts_only_the_expected_caller_role(
 def test_rejects_an_unexpected_role_without_echoing_the_arn(tmp_path: Path) -> None:
     arn = f"arn:aws:sts::{_ACCOUNT_ID}:assumed-role/AdministratorAccess/test-session"
 
-    result = _run(tmp_path, "vector-migrate", arn=arn)
+    result = _run(tmp_path, "vector-plan", arn=arn)
 
     assert result.returncode == 1
     assert "caller roleが期待値と一致しません" in result.stderr
@@ -163,12 +162,12 @@ def test_rejects_an_unexpected_role_without_echoing_the_arn(tmp_path: Path) -> N
 
 
 def test_rejects_the_expected_role_from_a_different_account(tmp_path: Path) -> None:
-    role = "vector-ci-db-migrate"
+    role = "vector-ci-terraform-plan"
     arn = f"arn:aws:sts::{_ACCOUNT_ID}:assumed-role/{role}/test-session"
 
     result = _run(
         tmp_path,
-        "vector-migrate",
+        "vector-plan",
         arn=arn,
         config_account="999900001111",
     )
@@ -182,7 +181,7 @@ def test_rejects_the_expected_role_from_a_different_account(tmp_path: Path) -> N
 
 @pytest.mark.parametrize(
     ("profile", "login_profile"),
-    (("vector-migrate", "vector-deploy"), ("vector-admin", "vector-admin")),
+    (("vector-plan", "vector-deploy"), ("vector-admin", "vector-admin")),
 )
 def test_auth_failure_reports_only_the_explicit_login_command(
     tmp_path: Path, profile: str, login_profile: str
@@ -208,7 +207,7 @@ def test_rejects_ambient_credential_environment_variables(
 ) -> None:
     result = _run(
         tmp_path,
-        "vector-migrate",
+        "vector-plan",
         arn="unused",
         extra_env={name: "sensitive-value"},
     )
@@ -224,7 +223,7 @@ def test_rejects_a_conflicting_profile_environment_variable(
 ) -> None:
     result = _run(
         tmp_path,
-        "vector-migrate",
+        "vector-plan",
         arn="unused",
         extra_env={name: "vector-admin"},
     )
@@ -235,14 +234,14 @@ def test_rejects_a_conflicting_profile_environment_variable(
 
 
 def test_allows_a_matching_profile_environment_variable(tmp_path: Path) -> None:
-    role = "vector-ci-db-migrate"
+    role = "vector-ci-terraform-plan"
     arn = f"arn:aws:sts::{_ACCOUNT_ID}:assumed-role/{role}/test-session"
 
     result = _run(
         tmp_path,
-        "vector-migrate",
+        "vector-plan",
         arn=arn,
-        extra_env={"AWS_PROFILE": "vector-migrate"},
+        extra_env={"AWS_PROFILE": "vector-plan"},
     )
 
     assert result.returncode == 0
@@ -254,3 +253,16 @@ def test_usage_errors_return_ex_usage(tmp_path: Path, args: tuple[str, ...]) -> 
 
     assert result.returncode == 64
     assert "usage:" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "profile", ["vector-apply", "vector-migrate", "vector-rollout"]
+)
+def test_retired_profiles_are_rejected_before_any_aws_command(
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    result = _run(tmp_path, profile, arn="must-not-be-used")
+    assert (result.returncode, result.stdout) == (64, "")
+    assert not (tmp_path / "aws-calls").exists()
+    assert "専用GitHub Actions" in result.stderr

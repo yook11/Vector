@@ -674,13 +674,14 @@ def upgrade() -> None:
     assert decide_changed_migrations([path]).decision == "manual"
 
 
-def test_changed_migration_decision_is_manual_for_mixed_range(
+def test_changed_migration_decision_and_cli_reject_mixed_range(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (tmp_path / "expand").mkdir()
-    (tmp_path / "contract").mkdir()
+    versions = tmp_path / "backend" / "alembic" / "versions"
+    versions.mkdir(parents=True)
     expand = _revision(
-        tmp_path / "expand",
+        versions,
         """
 MIGRATION_KIND = "expand"
 
@@ -688,8 +689,9 @@ def upgrade() -> None:
     op.create_table("new_table", sa.Column("id", sa.Integer(), primary_key=True))
 """,
     )
+    expand = expand.rename(versions / "expand_revision.py")
     contract = _revision(
-        tmp_path / "contract",
+        versions,
         """
 MIGRATION_KIND = "contract"
 
@@ -697,7 +699,12 @@ def upgrade() -> None:
     op.drop_table("legacy")
 """,
     )
-    assert decide_changed_migrations([expand, contract]).decision == "manual"
+    monkeypatch.chdir(tmp_path)
+    cli_paths = [str(path.relative_to(tmp_path)) for path in (expand, contract)]
+    assert (
+        decide_changed_migrations([expand, contract]).decision,
+        main(["--files-json", json.dumps(cli_paths)]),
+    ) == ("invalid", 1)
 
 
 def test_changed_migration_decision_is_invalid_for_unknown(

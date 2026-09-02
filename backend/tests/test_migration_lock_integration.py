@@ -5,14 +5,11 @@ from __future__ import annotations
 from contextlib import AbstractContextManager
 
 import pytest
-from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
-from alembic import command
 from app.migration_lock import _MIGRATION_LOCK_KEY, migration_advisory_lock
-from scripts.run_production_migration import EXIT_SUCCESS, _run_on_connection
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -102,26 +99,5 @@ async def test_nested_migration_lock_remains_held_until_outer_release(
                 {"key": _MIGRATION_LOCK_KEY},
             )
             await contender.commit()
-    finally:
-        await engine.dispose()
-
-
-async def test_production_noop_uses_alembic_env_on_the_outer_locked_session(
-    test_database_url: str,
-) -> None:
-    engine = create_async_engine(test_database_url, poolclass=NullPool)
-    try:
-        async with engine.connect() as connection:
-
-            def stamp_and_run(sync_connection: object) -> int:
-                config = Config("alembic.ini")
-                config.attributes["connection"] = sync_connection
-                command.stamp(config, "head")
-                return _run_on_connection(sync_connection)
-
-            result = await connection.run_sync(stamp_and_run)
-            assert result == EXIT_SUCCESS
-            await connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
-            await connection.commit()
     finally:
         await engine.dispose()

@@ -15,7 +15,7 @@ from types import ModuleType
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_SCRIPT = _REPO_ROOT / ".github" / "scripts" / "run_ecs_migration.py"
+_SCRIPT = _REPO_ROOT / ".github" / "scripts" / "migration_ecs.py"
 _SHA = "a" * 40
 _ACCOUNT = "123456789012"
 _BASE_TD = f"arn:aws:ecs:ap-northeast-1:{_ACCOUNT}:task-definition/vector-migration:4"
@@ -28,7 +28,7 @@ pytestmark = pytest.mark.unit
 
 
 def _load_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("run_ecs_migration", _SCRIPT)
+    spec = importlib.util.spec_from_file_location("migration_ecs", _SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -89,7 +89,7 @@ def _base_definition() -> dict[str, object]:
                     "command": [
                         "python",
                         "-m",
-                        "scripts.run_production_migration",
+                        "scripts.migration_runner",
                     ],
                     "environment": [
                         {"name": "ENV", "value": "production"},
@@ -130,10 +130,14 @@ def test_base_definition_rejects_non_ssl_database_query(
     )
     database_url["value"] = f"{database_url['value']}&{extra_query}"
 
-    assert "base_database_query_mismatch" in migration._base_definition_issues(
-        _config(tmp_path),
-        definition,
-    )
+    with pytest.raises(
+        migration.MigrationInputError, match="base_database_query_mismatch"
+    ):
+        migration.prepare_task_definition(
+            _config(tmp_path),
+            {"taskDefinition": definition},
+            command=["python", "-m", "scripts.migration_runner"],
+        )
 
 
 def _task(
@@ -267,35 +271,10 @@ def test_pending_running_stopped_succeeds(tmp_path: Path) -> None:
             _task("STOPPED"),
         ]
     )
-    result = migration.run_migration(
-        _config(tmp_path), client, monotonic=clock.monotonic, sleep=clock.sleep
-    )
-    assert (result, clock.sleeps) == (migration.SUCCESS, [15, 15, 15])
-
-
-def test_nonzero_exit_blocks_release(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    client = FakeClient(snapshots=[_task("STOPPED", exit_code=7)])
-    result = migration.run_migration(config, client)
-    assert result == migration.MIGRATION_FAILURE
-    summary = config.summary_file.read_text(encoding="utf-8")
-    assert "/ecs/vector/migration" in summary
-    assert "ecs/migration/task&#45;123" in summary
-
-
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda task: task.update(taskDefinitionArn=_BASE_TD),
-        lambda task: task["containers"][0].update(image="repo/vector/backend:wrong"),
-        lambda task: task["containers"][0].update(name="api"),
-    ],
-)
-def test_runtime_identity_mismatch_fails(tmp_path: Path, mutate: object) -> None:
-    task = _task("STOPPED")
-    mutate(task)  # type: ignore[operator]
-    result = migration.run_migration(_config(tmp_path), FakeClient(snapshots=[task]))
-    assert result == migration.MIGRATION_FAILURE
+    control = migration.MigrationTaskControl(_config(tmp_path), client)
+    state = control.start(_EXPECTED_TD, "subnet-migration", "sg-migration")
+    result = control.wait(state, monotonic=clock.monotonic, sleep=clock.sleep)
+    assert (result["lastStatus"], clock.sleeps) == ("STOPPED", [15, 15, 15])
 
 
 @pytest.mark.parametrize(
@@ -316,38 +295,14 @@ def test_base_log_configuration_drift_is_rejected(
     tmp_path: Path,
     mutate: object,
 ) -> None:
-    client = FakeClient()
     definition = _base_definition()
     mutate(definition["taskDefinition"])  # type: ignore[operator,index]
-    client.describe_task_definition = lambda _family: definition  # type: ignore[method-assign]
-    result = migration.run_migration(_config(tmp_path), client)
-    assert result == migration.CONTRACT_FAILURE
-
-
-def test_existing_migration_task_prevents_run_task(tmp_path: Path) -> None:
-    client = FakeClient(existing=[_TASK_ARN])
-    result = migration.run_migration(_config(tmp_path), client)
-    assert (result, client.run_calls) == (migration.MIGRATION_FAILURE, 0)
-
-
-def test_aws_api_failure_is_a_control_plane_contract_failure(tmp_path: Path) -> None:
-    client = FakeClient(run_error=migration.AwsCliError("RunTask unavailable"))
-    result = migration.run_migration(_config(tmp_path), client)
-    assert (result, client.stop_calls) == (migration.CONTRACT_FAILURE, [])
-
-
-def test_timeout_stops_only_started_task_and_waits_for_stopped(tmp_path: Path) -> None:
-    clock = FakeClock()
-    client = FakeClient(
-        snapshots=[_task("RUNNING"), _task("RUNNING"), _task("STOPPED")]
-    )
-    result = migration.run_migration(
-        _config(tmp_path, timeout=0),
-        client,
-        monotonic=clock.monotonic,
-        sleep=clock.sleep,
-    )
-    assert (result, client.stop_calls) == (migration.MIGRATION_FAILURE, [_TASK_ARN])
+    with pytest.raises(migration.MigrationInputError):
+        migration.prepare_task_definition(
+            _config(tmp_path),
+            definition,
+            command=["python", "-m", "scripts.migration_runner"],
+        )
 
 
 def test_cleanup_recovers_task_by_started_by_when_state_is_missing(
@@ -370,7 +325,9 @@ def test_cleanup_refuses_task_with_different_started_by(tmp_path: Path) -> None:
 
 def test_state_file_is_written_immediately_after_run_task(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    migration.run_migration(config, FakeClient())
+    migration.MigrationTaskControl(config, FakeClient()).start(
+        _EXPECTED_TD, "subnet-migration", "sg-migration"
+    )
     state = json.loads(config.state_file.read_text(encoding="utf-8"))
     assert state["task_arn"] == _TASK_ARN
 
@@ -384,7 +341,9 @@ def test_summary_redacts_arn_account_ip_env_and_log_body(tmp_path: Path) -> None
     task["environment"] = [{"name": "RAW_ENV_SENTINEL", "value": "must-not-leak"}]
     task["logBody"] = "LOG_BODY_SENTINEL"
     config = _config(tmp_path)
-    migration.run_migration(config, FakeClient(snapshots=[task]))
+    migration.cleanup_migration(
+        config, FakeClient(recovered=[_TASK_ARN], snapshots=[task])
+    )
     summary = config.summary_file.read_text(encoding="utf-8")
     assert not any(
         value in summary

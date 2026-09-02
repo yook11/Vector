@@ -26,7 +26,7 @@ variable "deploy_environment" {
 
 variable "deploy_permission_set" {
   description = <<-EOT
-    人間が CI ロールを assume するときに通る IAM Identity Center の permission set 名。
+    人間が plan / push ロールを assume するときに通る IAM Identity Center の permission set 名。
     この permission set 自体は sts:AssumeRole しか持たず、実効権限は assume 先の
     CI ロールが全部決める。
   EOT

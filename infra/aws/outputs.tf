@@ -33,8 +33,8 @@ output "migration_security_group_id" {
   value = aws_security_group.migration.id
 }
 
-output "migration_task_definition_arn" {
-  value = aws_ecs_task_definition.migration.arn
+output "migration_base_task_definition_arn" {
+  value = aws_ecs_task_definition.migration_base.arn
 }
 
 output "egress_public_ip" {

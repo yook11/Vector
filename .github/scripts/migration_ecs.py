@@ -1,15 +1,12 @@
-"""release SHA固定のone-off ECS migration taskを実行・検証・停止する。"""
+"""migration taskの定義検証・登録・監視と所有taskの停止を担う。"""
 
 from __future__ import annotations
 
-import argparse
 import html
 import ipaddress
 import json
 import re
-import shutil
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,7 +15,6 @@ from typing import Protocol
 from urllib.parse import parse_qs, urlsplit
 
 SUCCESS = 0
-MIGRATION_FAILURE = 1
 CONTRACT_FAILURE = 2
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -347,106 +343,6 @@ class AwsCliMigrationClient:
         )
 
 
-def run_migration(
-    config: MigrationConfig,
-    client: MigrationClient,
-    *,
-    monotonic: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
-) -> int:
-    """残存taskを拒否し、新規taskのSTOPPED後条件まで検証する。"""
-    task_arn: str | None = None
-    task_definition_arn = ""
-    log_group = ""
-    log_prefix = "ecs"
-    try:
-        _validate_config(config)
-        existing = list(client.list_active_tasks(config.cluster, config.family))
-        if existing:
-            task_ids = ", ".join(_resource_suffix(value) for value in existing)
-            raise MigrationTaskFailed(f"active migration task remains: {task_ids}")
-
-        subnet_id = _one(client.find_subnet_ids(config.network_name), "subnet")
-        security_group_id = _one(
-            client.find_security_group_ids(config.network_name),
-            "security group",
-        )
-        source = client.describe_task_definition(config.family)
-        definition, log_group, log_prefix = _registration_for_release(config, source)
-        tags = _task_tags(config)
-        registered = client.register_task_definition(definition, tags)
-        task_definition_arn = _registered_task_definition_arn(registered, config)
-        response = client.run_task(
-            cluster=config.cluster,
-            task_definition=task_definition_arn,
-            subnet_id=subnet_id,
-            security_group_id=security_group_id,
-            started_by=config.started_by,
-            client_token=_client_token(config),
-            tags=tags,
-        )
-        task_arn = _started_task_arn(response)
-        _write_state(
-            config.state_file,
-            MigrationState(task_arn, task_definition_arn, config.started_by),
-        )
-        task = _wait_for_stopped(
-            config,
-            client,
-            task_arn,
-            timeout_seconds=config.timeout_seconds,
-            monotonic=monotonic,
-            sleep=sleep,
-        )
-        issues = _runtime_issues(config, task_definition_arn, task)
-        if issues:
-            raise MigrationTaskFailed(", ".join(issues))
-        _write_summary(
-            config,
-            result="success",
-            task=task,
-            task_definition_arn=task_definition_arn,
-            log_group=log_group,
-            log_prefix=log_prefix,
-        )
-        return SUCCESS
-    except (MigrationInputError, AwsCliError) as exc:
-        code = CONTRACT_FAILURE
-        reason = str(exc)
-    except MigrationTaskFailed as exc:
-        code = MIGRATION_FAILURE
-        reason = str(exc)
-    except Exception as exc:
-        code = CONTRACT_FAILURE
-        reason = f"unexpected controller failure: {type(exc).__name__}"
-
-    cleanup_reason = ""
-    task: Mapping[str, object] = {}
-    if task_arn is not None:
-        try:
-            task = _stop_and_wait(
-                config,
-                client,
-                task_arn,
-                monotonic=monotonic,
-                sleep=sleep,
-            )
-        except Exception as exc:
-            cleanup_reason = f"cleanup failed: {type(exc).__name__}"
-            code = CONTRACT_FAILURE
-    _write_summary(
-        config,
-        result="failure",
-        reason=", ".join(value for value in (reason, cleanup_reason) if value),
-        task=task,
-        task_definition_arn=task_definition_arn,
-        log_group=log_group,
-        log_prefix=log_prefix,
-    )
-    print(f"::error::{_sanitize(reason)}")
-    return code
-
-
 def cleanup_migration(
     config: MigrationConfig,
     client: MigrationClient,
@@ -511,21 +407,21 @@ def _validate_config(config: MigrationConfig) -> None:
         raise MigrationInputError("poll/timeout values are invalid")
 
 
-def _registration_for_release(
+def prepare_task_definition(
     config: MigrationConfig,
     response: Mapping[str, object],
+    *,
+    command: Sequence[str],
 ) -> tuple[dict[str, object], str, str]:
     raw = response.get("taskDefinition")
     if not isinstance(raw, Mapping):
         raise MigrationInputError("describe-task-definition omitted taskDefinition")
     definition = dict(raw)
-    issues = _base_definition_issues(config, definition)
+    issues = _base_definition_issues(config, definition, command=command)
     if issues:
         raise MigrationInputError(", ".join(issues))
     containers = _mapping_items(definition.get("containerDefinitions"))
     container = dict(containers[0])
-    repository, _, _ = str(container["image"]).rpartition(":")
-    container["image"] = f"{repository}:{config.release_sha}"
     definition["containerDefinitions"] = [container]
     for field in _READ_ONLY_TASK_DEFINITION_FIELDS:
         definition.pop(field, None)
@@ -543,6 +439,8 @@ def _registration_for_release(
 def _base_definition_issues(
     config: MigrationConfig,
     definition: Mapping[str, object],
+    *,
+    command: Sequence[str],
 ) -> list[str]:
     issues: list[str] = []
     expected = {
@@ -578,11 +476,7 @@ def _base_definition_issues(
         or container.get("privileged") is not False
     ):
         issues.append("base_container_hardening_mismatch")
-    if container.get("command") != [
-        "python",
-        "-m",
-        "scripts.run_production_migration",
-    ]:
+    if container.get("command") != list(command):
         issues.append("base_command_mismatch")
     if _list_value(container.get("secrets")):
         issues.append("base_secrets_must_be_empty")
@@ -608,6 +502,103 @@ def _base_definition_issues(
     if log_options.get("awslogs-region") != environment.get("AWS_REGION"):
         issues.append("base_log_region_mismatch")
     return issues
+
+
+def _registered_environment(container: Mapping[str, object]) -> dict[str, str]:
+    values = container.get("environment")
+    if not isinstance(values, list):
+        raise MigrationInputError("registered environment missing")
+    result: dict[str, str] = {}
+    for item in values:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"name", "value"}
+            or not isinstance(item["name"], str)
+            or not isinstance(item["value"], str)
+            or item["name"] in result
+        ):
+            raise MigrationInputError("registered environment invalid")
+        result[item["name"]] = item["value"]
+    return result
+
+
+class MigrationTaskControl:
+    """controllerからtaskの登録・起動・所有権確認を分離する。"""
+
+    def __init__(self, config: MigrationConfig, client: MigrationClient) -> None:
+        _validate_config(config)
+        self.config = config
+        self.client = client
+
+    def register(self, definition: Mapping[str, object]) -> str:
+        registered = self.client.register_task_definition(
+            definition, _task_tags(self.config)
+        )
+        actual = _mapping_value(registered.get("taskDefinition"), "registered task")
+        for key, value in definition.items():
+            if key != "containerDefinitions" and actual.get(key) != value:
+                raise MigrationInputError(
+                    "registered task definition differs from request"
+                )
+        actual_containers = _mapping_items(actual.get("containerDefinitions"))
+        expected_containers = _mapping_items(definition.get("containerDefinitions"))
+        if (
+            len(actual_containers) != 1
+            or len(expected_containers) != 1
+            or _registered_environment(actual_containers[0])
+            != _registered_environment(expected_containers[0])
+            or any(
+                (
+                    actual_containers[0].get(key) not in (None, [])
+                    if key
+                    in {"secrets", "mountPoints", "volumesFrom", "environmentFiles"}
+                    and value == []
+                    else actual_containers[0].get(key) != value
+                )
+                for key, value in expected_containers[0].items()
+                if key != "environment"
+            )
+        ):
+            raise MigrationInputError(
+                "registered migration container differs from request"
+            )
+        return _registered_task_definition_arn(registered, self.config)
+
+    def start(
+        self, definition_arn: str, subnet_id: str, security_group_id: str
+    ) -> MigrationState:
+        response = self.client.run_task(
+            cluster=self.config.cluster,
+            task_definition=definition_arn,
+            subnet_id=subnet_id,
+            security_group_id=security_group_id,
+            started_by=self.config.started_by,
+            client_token=_client_token(self.config),
+            tags=_task_tags(self.config),
+        )
+        state = MigrationState(
+            _started_task_arn(response), definition_arn, self.config.started_by
+        )
+        _write_state(self.config.state_file, state)
+        return state
+
+    def wait(
+        self,
+        state: MigrationState,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> Mapping[str, object]:
+        task = _wait_for_stopped(
+            self.config,
+            self.client,
+            state.task_arn,
+            timeout_seconds=self.config.timeout_seconds,
+            monotonic=monotonic,
+            sleep=sleep,
+        )
+        _validate_cleanup_target(self.config, state.task_arn, task)
+        return task
 
 
 def _environment_issues(container: Mapping[str, object]) -> list[str]:
@@ -733,31 +724,6 @@ def _describe_one_task(
     if len(tasks) != 1 or str(tasks[0].get("taskArn", "")) != task_arn:
         raise MigrationInputError("DescribeTasks did not return the exact task")
     return tasks[0]
-
-
-def _runtime_issues(
-    config: MigrationConfig,
-    expected_task_definition: str,
-    task: Mapping[str, object],
-) -> list[str]:
-    issues: list[str] = []
-    if str(task.get("taskDefinitionArn", "")) != expected_task_definition:
-        issues.append("task_definition_mismatch")
-    if str(task.get("lastStatus", "")) != "STOPPED":
-        issues.append("task_not_stopped")
-    containers = [
-        item
-        for item in _mapping_items(task.get("containers"))
-        if item.get("name") == config.container_name
-    ]
-    if len(containers) != 1:
-        return [*issues, "migration_container_mismatch"]
-    container = containers[0]
-    if container.get("exitCode") != 0:
-        issues.append(f"container_exit_code={container.get('exitCode', 'missing')}")
-    if _image_tag(str(container.get("image", ""))) != config.release_sha:
-        issues.append("container_image_tag_mismatch")
-    return issues
 
 
 def _validate_cleanup_target(
@@ -964,51 +930,3 @@ def _markdown(value: object) -> str:
         else html.escape(character, quote=True)
         for character in rendered
     )
-
-
-def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cleanup", action="store_true")
-    parser.add_argument("--cluster", required=True)
-    parser.add_argument("--release-sha", required=True)
-    parser.add_argument("--family", default="vector-migration")
-    parser.add_argument("--container-name", default="migration")
-    parser.add_argument("--network-name", default="vector-migration")
-    parser.add_argument("--started-by", required=True)
-    parser.add_argument("--github-run-id", required=True)
-    parser.add_argument("--state-file", type=Path, required=True)
-    parser.add_argument("--summary-file", type=Path, required=True)
-    parser.add_argument("--poll-seconds", type=float, default=15)
-    parser.add_argument("--timeout-seconds", type=float, default=1200)
-    parser.add_argument("--cleanup-timeout-seconds", type=float, default=180)
-    return parser.parse_args(argv)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parse_args(sys.argv[1:] if argv is None else argv)
-    aws_path = shutil.which("aws")
-    if aws_path is None:
-        print("::error::AWS CLI executable was not found")
-        return CONTRACT_FAILURE
-    config = MigrationConfig(
-        cluster=args.cluster,
-        release_sha=args.release_sha,
-        family=args.family,
-        container_name=args.container_name,
-        network_name=args.network_name,
-        started_by=args.started_by,
-        github_run_id=args.github_run_id,
-        state_file=args.state_file,
-        summary_file=args.summary_file,
-        poll_seconds=args.poll_seconds,
-        timeout_seconds=args.timeout_seconds,
-        cleanup_timeout_seconds=args.cleanup_timeout_seconds,
-    )
-    client = AwsCliMigrationClient(aws_path)
-    if args.cleanup:
-        return cleanup_migration(config, client)
-    return run_migration(config, client)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
