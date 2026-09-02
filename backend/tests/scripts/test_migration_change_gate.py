@@ -197,9 +197,41 @@ def test_ci_uses_the_complete_event_diff_and_propagates_rejection(
     assert result.returncode == (0 if change == "contract_only" else 1), result.stderr
 
 
-@pytest.mark.parametrize(
-    "unobservable", ["missing_commit", "deleted", "renamed", "symlink"]
-)
+@pytest.mark.parametrize("runtime", [False, True])
+def test_deleted_revision_is_classified_from_base(
+    repository: tuple[Path, str], runtime: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, base = repository
+    files: dict[str, str | None] = {f"{_VERSIONS}old.py": None}
+    if runtime:
+        files["backend/app/feature.py"] = "runtime\n"
+    head = _commit(root, files)
+    code = gate.main(["--repo-root", str(root), "--base-sha", base, "--head-sha", head])
+    output = json.loads(capsys.readouterr().out)
+    assert (code, output["decision"], output["allowed"]) == (
+        1 if runtime else 0,
+        "manual",
+        not runtime,
+    )
+
+
+def test_renamed_revision_is_classified_from_both_sides(
+    repository: tuple[Path, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, base = repository
+    head = _commit(
+        root,
+        {
+            f"{_VERSIONS}old.py": None,
+            f"{_VERSIONS}renamed.py": _revision("contract"),
+        },
+    )
+    code = gate.main(["--repo-root", str(root), "--base-sha", base, "--head-sha", head])
+    output = json.loads(capsys.readouterr().out)
+    assert (code, output["decision"], output["allowed"]) == (0, "manual", True)
+
+
+@pytest.mark.parametrize("unobservable", ["missing_commit", "symlink"])
 def test_unobservable_or_non_regular_migrations_fail_closed(
     repository: tuple[Path, str], unobservable: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -207,15 +239,10 @@ def test_unobservable_or_non_regular_migrations_fail_closed(
     if unobservable == "missing_commit":
         head = "f" * 40
     else:
-        files: dict[str, str | None] = {f"{_VERSIONS}old.py": None}
-        if unobservable == "renamed":
-            files[f"{_VERSIONS}renamed.py"] = _revision("contract")
-        if unobservable == "symlink":
-            files = {}
-            path = root / f"{_VERSIONS}old.py"
-            path.unlink()
-            path.symlink_to("../../../backend/app/obsolete.py")
-        head = _commit(root, files)
+        path = root / f"{_VERSIONS}old.py"
+        path.unlink()
+        path.symlink_to("../../../backend/app/obsolete.py")
+        head = _commit(root, {})
 
     code = gate.main(["--repo-root", str(root), "--base-sha", base, "--head-sha", head])
 

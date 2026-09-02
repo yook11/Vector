@@ -89,7 +89,10 @@ def check_changes(
             for path in revisions:
                 if not _REVISION_PATH.fullmatch(path):
                     raise MigrationChangeError("invalid_revision_path")
+                # 削除はHEADに無い。baseの内容で分類し、欠落を黙ってスキップしない。
                 entry = read_git("ls-tree", "-z", head_sha, "--", path)
+                if not entry:
+                    entry = read_git("ls-tree", "-z", base_sha, "--", path)
                 if not entry:
                     raise MigrationChangeError("missing_changed_revision")
                 metadata, _ = entry.rstrip(b"\0").split(b"\t", 1)
