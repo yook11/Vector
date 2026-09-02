@@ -218,8 +218,8 @@ resource "aws_ecs_task_definition" "this" {
   ])
 }
 
-resource "aws_ecs_task_definition" "migration" {
-  family                   = "${var.name_prefix}-migration"
+resource "aws_ecs_task_definition" "migration_base" {
+  family                   = "${var.name_prefix}-migration-base"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = 256
@@ -239,7 +239,7 @@ resource "aws_ecs_task_definition" "migration" {
       image      = "${aws_ecr_repository.this["backend"].repository_url}:${var.image_tag}"
       essential  = true
       privileged = false
-      command    = ["python", "-m", "scripts.run_production_migration"]
+      command    = ["python", "-m", "scripts.migration_runner"]
       environment = [
         { name = "ENV", value = "production" },
         { name = "AWS_REGION", value = var.region },
@@ -258,7 +258,7 @@ resource "aws_ecs_task_definition" "migration" {
     }
   ])
 
-  tags = { Name = "${var.name_prefix}-migration" }
+  tags = { Name = "${var.name_prefix}-migration-base" }
 }
 
 resource "aws_ecs_service" "this" {

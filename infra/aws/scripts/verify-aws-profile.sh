@@ -32,25 +32,14 @@ case "$profile" in
     display_role="$expected_role"
     login_profile='vector-deploy'
     ;;
-  vector-apply)
-    expected_role='vector-ci-terraform-apply'
-    display_role="$expected_role"
-    login_profile='vector-deploy'
-    ;;
   vector-push)
     expected_role='vector-ci-app-push'
     display_role="$expected_role"
     login_profile='vector-deploy'
     ;;
-  vector-rollout)
-    expected_role='vector-ci-app-rollout'
-    display_role="$expected_role"
-    login_profile='vector-deploy'
-    ;;
-  vector-migrate)
-    expected_role='vector-ci-db-migrate'
-    display_role="$expected_role"
-    login_profile='vector-deploy'
+  vector-apply | vector-rollout | vector-migrate)
+    echo "本番apply・migration・rolloutは専用GitHub Actionsの承認後jobからのみ実行できます。" >&2
+    exit 64
     ;;
   vector-admin)
     expected_regex='^AWSReservedSSO_WorkloadAdministrator_[[:xdigit:]]+$'

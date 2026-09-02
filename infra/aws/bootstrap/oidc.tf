@@ -45,6 +45,15 @@ locals {
     ]
   ])
 
+  # アプリ反映ではproxy・migration・管理用ロールを渡さない。
+  app_role_arns = flatten([
+    for group in ["Task", "AgentTask", "Execution"] : [
+      for name in local.role_boundary_groups[group].role_names :
+      "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${name}"
+      if !contains(["${var.name_prefix}-proxy-task", "${var.name_prefix}-proxy-exec"], name)
+    ]
+  ])
+
   # 用途別のロールに、その用途以外の boundary を付けさせない。対応表 1 行につき
   # Deny 1 本。ロール名は完全一致なので、1 つのロールが 2 つの Deny に当たることはない。
   boundary_pairing_statements = [
@@ -85,11 +94,11 @@ locals {
     # 発行されなくなる。承認ゲートが運用の約束ではなく経路の不在になる。
     rollout = {
       name = "app-rollout"
-      subs = ["repo:${local.repo}:environment:${var.deploy_environment}"]
+      subs = ["repo:${local.repo}:environment:production-rollout"]
     }
     migrate = {
       name = "db-migrate"
-      subs = ["repo:${local.repo}:environment:${var.deploy_environment}"]
+      subs = ["repo:${local.repo}:environment:production-migration"]
     }
   }
 
@@ -142,9 +151,7 @@ resource "aws_iam_openid_connect_provider" "github" {
   thumbprint_list = null
 }
 
-# CI ロールの受け入れ名簿。GitHub Actions と、人間が通る permission set の 2 経路。
-# **どちらの経路も同じ CI ロールになる**ので、デプロイで何ができるかの定義は
-# 下の policy 群 1 箇所に留まる。
+# apply・migration・rolloutは承認を通るGitHub Actionsだけを受け入れる。
 data "aws_iam_policy_document" "ci_role_trust" {
   for_each = local.ci_roles
 
@@ -176,20 +183,24 @@ data "aws_iam_policy_document" "ci_role_trust" {
   # principals に ARN のワイルドカードは書けないため、入口はアカウントにして
   # 実際の絞り込みを condition で行う (AWS が案内している permission set の書き方)。
   # 両者は AND なので、実効的に通るのは deploy permission set のロールだけ。
-  statement {
-    sid     = "DeployPermissionSet"
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
+  dynamic "statement" {
+    for_each = contains(["plan", "push"], each.key) ? [1] : []
 
-    principals {
-      type        = "AWS"
-      identifiers = [local.account_id]
-    }
+    content {
+      sid     = "DeployPermissionSet"
+      effect  = "Allow"
+      actions = ["sts:AssumeRole"]
 
-    condition {
-      test     = "ArnLike"
-      variable = "aws:PrincipalArn"
-      values   = [local.sso_deploy_role_pattern]
+      principals {
+        type        = "AWS"
+        identifiers = [local.account_id]
+      }
+
+      condition {
+        test     = "ArnLike"
+        variable = "aws:PrincipalArn"
+        values   = [local.sso_deploy_role_pattern]
+      }
     }
   }
 }
@@ -528,7 +539,7 @@ resource "aws_iam_role_policy" "rollout" {
         Sid      = "PassRoleToEcsOnly"
         Effect   = "Allow"
         Action   = "iam:PassRole"
-        Resource = local.managed_role_path_arn
+        Resource = local.app_role_arns
         Condition = {
           StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
         }
@@ -636,6 +647,8 @@ resource "aws_iam_role_policy" "migrate" {
           "ecs:ListTasks",
           "ecs:DescribeTaskDefinition",
           "ecs:ListTagsForResource",
+          "ecs:ListServices",
+          "ecs:DescribeServices",
         ]
         Resource = "*"
         Condition = {
@@ -662,12 +675,6 @@ resource "aws_iam_role_policy" "migrate" {
         Condition = {
           StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
         }
-      },
-      {
-        Sid      = "HumanIamConnectionAsOwner"
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector"
       },
     ], local.secret_read_statements)
   })

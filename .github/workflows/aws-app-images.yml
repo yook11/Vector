@@ -1,47 +1,21 @@
 name: AWS app images
 
-# backend / frontend の image を ECR に push する。
-#
-# tag は commit SHA。repository が IMMUTABLE なので latest の上書きができず、deploy は
-# 毎回一意な tag になる (infra/aws/registry.tf の注記)。
-#
-# push と rollout で role を分けている。build は Dockerfile と依存パッケージのコードが
-# 実際に走る場所なので、そこに本番差し替えの権限を持たせない。焼いた image が本番に
-# 載るには、承認を通る rollout job を必ず経由する。
-#
-# main CI からの dispatch と手動 dispatch のみ。main の push では直接起動しない。
-
+# 最新mainのimageを作成し、独立承認と適用済みschemaの照合後にだけアプリを反映する。
 on:
   workflow_dispatch:
-    inputs:
-      release_sha:
-        description: "空なら選択した ref の commit SHA を使う。"
-        required: false
-        type: string
-      force_migration:
-        description: "true なら alembic 差分が無くても migration task を起動する。"
-        required: false
-        type: boolean
-        default: false
+
+permissions: {}
 
 env:
-  RELEASE_SHA: ${{ inputs.release_sha || github.sha }}
-
-# **job に environment: を付けると OIDC の sub claim が environment:<name> に変わる。**
-# push job (sub = ref:refs/heads/main) と rollout job (sub = environment:production) で
-# assume できる role が違うのはこのため (infra/aws/bootstrap/oidc.tf)。
-permissions:
-  id-token: write
-  contents: read
-
-# 二重 dispatch で rollout が並走すると、service が互いの revision を追い越しうる。
-# 走行中の run は殺さない (本番の入れ替え途中で止めるほうが危険)。
-concurrency:
-  group: aws-app-images
-  cancel-in-progress: false
+  RELEASE_SHA: ${{ github.sha }}
 
 jobs:
   push:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     # task definition が ARM64 なので native arm64 runner で焼く (public repo は無料)。
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -59,25 +33,44 @@ jobs:
             context: frontend
 
     steps:
-      # 任意 input は AWS 権限を得る前に拒否し、checkout と image tag の参照元を
-      # 同じ 40 桁 SHA に限定する。
+      # checkoutとimage tagをdispatch時点の同じcommitへ固定する。
       - name: Validate release SHA
         run: |
           set -euo pipefail
           if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::release_sha は40桁の小文字16進commit SHAで指定してください"
+            echo "::error::dispatch commit SHA is invalid"
             exit 1
           fi
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ env.RELEASE_SHA }}
+          path: release
+          fetch-depth: 0
           persist-credentials: false
 
-      # v1導入前のSHAには本番migration runnerが無いため、この自動経路では
-      # rollback対象として扱わない。production承認待ちへ入る前に拒否する。
-      - name: Require the production migration runtime
-        run: test -f backend/scripts/run_production_migration.py
+      - name: Check out trusted release control
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .rollout-control
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: false
+
+      - name: Install trusted control dependencies
+        run: uv sync --frozen --no-dev --python 3.13 --project .rollout-control/backend
+
+      - name: Require current main and successful checks before build credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          .rollout-control/backend/.venv/bin/python .rollout-control/.github/scripts/check_app_release.py source \
+            --repo-root "$GITHUB_WORKSPACE/release" --repo "$GITHUB_REPOSITORY" \
+            --release-sha "$RELEASE_SHA" --summary-file "$GITHUB_STEP_SUMMARY"
 
       # region / repository 名の正本は Terraform 側。ここで持つと 2 箇所目になる。
       - id: tf
@@ -85,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           read_default() {
-            awk "/variable \"$1\"/,/^}/" infra/aws/variables.tf \
+            awk "/variable \"$1\"/,/^}/" .rollout-control/infra/aws/variables.tf \
               | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
           }
           for name in region name_prefix; do
@@ -153,17 +146,13 @@ jobs:
           IMAGE: >-
             ${{ steps.ecr.outputs.registry }}/${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ env.RELEASE_SHA }}
           IMAGE_REF: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ env.RELEASE_SHA }}
-          BUILD_CONTEXT: ${{ matrix.context }}
+          BUILD_CONTEXT: release/${{ matrix.context }}
           IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
           set -euo pipefail
           # provenance を切る。attestation manifest は untagged image として ECR に増え、
           # lifecycle policy が tagStatus: any で数えるので保持世代を食う。
           docker build --provenance=false -t "$IMAGE" "$BUILD_CONTEXT"
-          if [ "$BUILD_CONTEXT" = "backend" ]; then
-            docker run --rm --entrypoint python "$IMAGE" \
-              -c 'import scripts.run_production_migration'
-          fi
           docker push "$IMAGE"
           {
             echo "pushed \`$IMAGE_REF\`"
@@ -179,35 +168,41 @@ jobs:
 
   rollout:
     needs: push
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     # 承認ゲートはここ。required reviewer が付いている限り、承認されるまで job が
     # 起動せず、OIDC token が発行されない。app-rollout を assume する材料が
     # そもそも存在しないので、ゲートは運用の約束ではなく経路の不在になる。
-    environment: production
+    environment: production-rollout
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 30
+    concurrency:
+      group: vector-production-change
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       id-token: write
-      deployments: write
+      actions: read
+      deployments: read
 
     steps:
       - name: Validate release SHA
         run: |
           set -euo pipefail
           if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::release_sha は40桁の小文字16進commit SHAで指定してください"
+            echo "::error::dispatch commit SHA is invalid"
             exit 1
           fi
 
-      # last-migrated SHA との git diff のため、この ref から辿れる履歴が要る。
+      # 対象SHAのschemaはGitから読み、migrationコードを実行しない。
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: ${{ env.RELEASE_SHA }}
+          path: release
           fetch-depth: 0
           persist-credentials: false
 
-      # rollout roleでartifact側のcodeを実行しないため、検証器はworkflow自身の
-      # revisionから分離して取得する。古いrelease SHAにscriptが無くても検証できる。
+      # rollout権限では対象コードを実行せず、検証器をworkflow自身のrevisionから取得する。
       - name: Check out rollout verifier
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -220,7 +215,7 @@ jobs:
         run: |
           set -euo pipefail
           read_default() {
-            awk "/variable \"$1\"/,/^}/" infra/aws/variables.tf \
+            awk "/variable \"$1\"/,/^}/" .rollout-control/infra/aws/variables.tf \
               | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
           }
           for name in region name_prefix; do
@@ -232,75 +227,21 @@ jobs:
             echo "$name=$value" >> "$GITHUB_OUTPUT"
           done
 
-      - id: decision
-        name: Decide whether to run production migration
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ env.RELEASE_SHA }}
-          FORCE_MIGRATION: ${{ inputs.force_migration }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          python3 .rollout-control/.github/scripts/decide_ecs_migration.py decide \
-            --release-sha "$RELEASE_SHA" \
-            --force "${FORCE_MIGRATION:-false}" \
-            --github-repo "$GITHUB_REPOSITORY" \
-            --output "$GITHUB_OUTPUT"
-
-      - id: migration-context
-        name: Prepare migration task identity
-        run: |
-          set -euo pipefail
-          {
-            echo "started-by=vector-migration-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            echo "run-id=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            echo "state-file=$RUNNER_TEMP/migration-task-state.json"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Configure AWS migration credentials
-        if: ${{ steps.decision.outputs.run == 'true' }}
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          role-to-assume: ${{ secrets.AWS_MIGRATION_ROLE_ARN }}
-          aws-region: ${{ steps.tf.outputs.region }}
-          mask-aws-account-id: true
-          unset-current-credentials: true
+          enable-cache: false
 
-      - id: migration
-        name: Run production migration
-        if: ${{ steps.decision.outputs.run == 'true' }}
-        timeout-minutes: 25
-        env:
-          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
-          RELEASE_SHA: ${{ env.RELEASE_SHA }}
-          STARTED_BY: ${{ steps.migration-context.outputs.started-by }}
-          GITHUB_RUN_TAG: ${{ steps.migration-context.outputs.run-id }}
-          MIGRATION_STATE_FILE: ${{ steps.migration-context.outputs.state-file }}
-        run: |
-          set -euo pipefail
-          python3 .rollout-control/.github/scripts/run_ecs_migration.py \
-            --cluster "$CLUSTER" \
-            --release-sha "$RELEASE_SHA" \
-            --started-by "$STARTED_BY" \
-            --github-run-id "$GITHUB_RUN_TAG" \
-            --state-file "$MIGRATION_STATE_FILE" \
-            --summary-file "$GITHUB_STEP_SUMMARY" \
-            --poll-seconds 15 \
-            --timeout-seconds 1200 \
-            --cleanup-timeout-seconds 180
+      - name: Install trusted control dependencies
+        run: uv sync --frozen --no-dev --python 3.13 --project .rollout-control/backend
 
-      # 作成または success status の書き込み失敗ではここで落ち、rollout に進まない。
-      - name: Record successful db-migration
-        if: ${{ steps.decision.outputs.run == 'true' }}
+      - name: Check approved release before rollout credentials
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ env.RELEASE_SHA }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          python3 .rollout-control/.github/scripts/decide_ecs_migration.py record \
-            --release-sha "$RELEASE_SHA" \
-            --github-repo "$GITHUB_REPOSITORY"
+          .rollout-control/backend/.venv/bin/python .rollout-control/.github/scripts/check_app_release.py rollout \
+            --repo-root "$GITHUB_WORKSPACE/release" --repo "$GITHUB_REPOSITORY" \
+            --release-sha "$RELEASE_SHA" --summary-file "$GITHUB_STEP_SUMMARY"
 
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         name: Configure AWS rollout credentials
@@ -313,6 +254,7 @@ jobs:
       - id: rollout
         name: Roll out services
         env:
+          GH_TOKEN: ${{ github.token }}
           CLUSTER: ${{ steps.tf.outputs.name_prefix }}
           IMAGE_TAG: ${{ env.RELEASE_SHA }}
         run: |
@@ -368,6 +310,11 @@ jobs:
             )
           done
 
+          # 全登録が済んでも前提は変わりうるため、最初のservice更新直前に再確認する。
+          .rollout-control/backend/.venv/bin/python .rollout-control/.github/scripts/check_app_release.py rollout \
+            --repo-root "$GITHUB_WORKSPACE/release" --repo "$GITHUB_REPOSITORY" \
+            --release-sha "$RELEASE_SHA"
+
           # 2 パス目: 実際に本番を入れ替える。1 パス目で全段が揃っているので、
           # 途中で落ちても「一部だけ新 revision」で終わる窓が短い。
           expected_file="$RUNNER_TEMP/expected-task-definitions.json"
@@ -401,47 +348,3 @@ jobs:
             --poll-seconds 15 \
             --timeout-seconds 1200 \
             --summary-file "$GITHUB_STEP_SUMMARY"
-
-      # step timeout後にもcleanup用のOIDC sessionを取り直す。停止対象はstateに保存した
-      # exact ARNだけで、state欠落時も同じstartedByのtask 1件に限定する。
-      - id: cleanup-credentials
-        name: Configure AWS migration credentials for cleanup
-        if: >-
-          ${{ (failure() || cancelled()) &&
-              steps.decision.outputs.run == 'true' &&
-              (steps.migration.outcome == 'failure' ||
-               steps.migration.outcome == 'cancelled') }}
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
-        with:
-          role-to-assume: ${{ secrets.AWS_MIGRATION_ROLE_ARN }}
-          aws-region: ${{ steps.tf.outputs.region }}
-          mask-aws-account-id: true
-          unset-current-credentials: true
-
-      - name: Stop the exact migration task after failure
-        if: >-
-          ${{ (failure() || cancelled()) &&
-              steps.decision.outputs.run == 'true' &&
-              (steps.migration.outcome == 'failure' ||
-               steps.migration.outcome == 'cancelled') &&
-              steps.cleanup-credentials.outcome == 'success' }}
-        timeout-minutes: 3
-        env:
-          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
-          RELEASE_SHA: ${{ env.RELEASE_SHA }}
-          STARTED_BY: ${{ steps.migration-context.outputs.started-by }}
-          GITHUB_RUN_TAG: ${{ steps.migration-context.outputs.run-id }}
-          MIGRATION_STATE_FILE: ${{ steps.migration-context.outputs.state-file }}
-        run: |
-          set -euo pipefail
-          python3 .rollout-control/.github/scripts/run_ecs_migration.py \
-            --cleanup \
-            --cluster "$CLUSTER" \
-            --release-sha "$RELEASE_SHA" \
-            --started-by "$STARTED_BY" \
-            --github-run-id "$GITHUB_RUN_TAG" \
-            --state-file "$MIGRATION_STATE_FILE" \
-            --summary-file "$GITHUB_STEP_SUMMARY" \
-            --poll-seconds 15 \
-            --timeout-seconds 1200 \
-            --cleanup-timeout-seconds 150

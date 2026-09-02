@@ -83,3 +83,45 @@ def test_migration_ci_role_cannot_retag_existing_tasks_or_pass_app_roles() -> No
     assert "ssm:GetParameter" in oidc
     assert "secretsmanager:GetSecretValue" in oidc
     assert "kms:Decrypt" in oidc
+
+
+def test_approved_roles_have_separate_trust_and_no_cross_role_db_entry() -> None:
+    oidc = _text("infra/aws/bootstrap/oidc.tf")
+    rollout = oidc.split('resource "aws_iam_role_policy" "rollout"', 1)[1].split(
+        'resource "aws_iam_role_policy" "migrate"', 1
+    )[0]
+    migrate = oidc.split('resource "aws_iam_role_policy" "migrate"', 1)[1]
+    trust = oidc.split('data "aws_iam_policy_document" "ci_role_trust"', 1)[1].split(
+        'resource "aws_iam_role"', 1
+    )[0]
+    app_roles = oidc.split("app_role_arns =", 1)[1].split("\n  ])", 1)[0]
+    assert (
+        "environment:${var.deploy_environment}"
+        in oidc.split("    apply = {", 1)[1].split("\n    }", 1)[0]
+    )
+    assert (
+        "environment:production-rollout"
+        in oidc.split("rollout =", 1)[1].split("migrate =", 1)[0]
+    )
+    assert (
+        "environment:production-migration"
+        in oidc.split("migrate =", 1)[1].split("sso_deploy_role_pattern", 1)[0]
+    )
+    assert 'contains(["plan", "push"], each.key) ? [1] : []' in trust
+    assert "Resource = local.app_role_arns" in rollout
+    assert "local.managed_role_path_arn" not in rollout
+    assert 'for group in ["Task", "AgentTask", "Execution"]' in app_roles
+    assert "local.role_boundary_groups[group].role_names" in app_roles
+    assert (
+        'if !contains(["${var.name_prefix}-proxy-task", '
+        '"${var.name_prefix}-proxy-exec"], name)' in app_roles
+    )
+    assert all(
+        action not in rollout for action in ('"ecs:RunTask"', '"rds-db:connect"')
+    )
+    assert all(
+        action not in migrate for action in ('"ecs:UpdateService"', '"rds-db:connect"')
+    )
+    assert all(
+        action in migrate for action in ('"ecs:ListServices"', '"ecs:DescribeServices"')
+    )

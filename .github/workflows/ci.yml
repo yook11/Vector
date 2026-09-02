@@ -18,8 +18,7 @@ permissions:
 
 # 同一 branch / PR の古い run を新しい push で cancel する。force push / 連打時の
 # 計算資源消費を抑制。Schemathesisの手動workflowは別のconcurrency設定を持つ。
-# main は release 判定を順に完了させるため cancel しない。
-# release 自体は別 workflow へ dispatch するので、production 承認待ちはこの列を塞がない。
+# mainの検証は継続し、アプリ反映は独立した手動workflowで行う。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -29,7 +28,7 @@ jobs:
   # のみに走らせるため、changed file 判定を 1 ジョブに切り出す。無関係な PR
   # (例: frontend-only 変更での backend テスト) では該当 job 全体が skip され
   # CI wallclock が縮む。main は ruleset で直接 push 禁止のため、アプリテストは
-  # PR で完了し、ここは release 判定にも同じ path を使う。
+  # PRで完了するため、main pushのworkflow成功はPR専用テストのskipを含む。
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
@@ -43,17 +42,12 @@ jobs:
       pull-requests: read
     outputs:
       e2e: ${{ steps.filter.outputs.e2e }}
-      # AWS release 判定と PR テスト job の skip 判定に共用する。
+      # PRテストjobのskip判定に使う。
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       migrations: ${{ steps.filter.outputs.migrations }}
-      migration_files: ${{ steps.filter.outputs.migrations_files }}
-      # Terraform apply と app rollout の直列化は未配線なので、AWS infra 変更を
-      # app の自動 release から分離して手動運用へ送る。
-      aws_infra: ${{ steps.filter.outputs.aws_infra }}
       # workflow 定義の変更は backend/frontend 両テスト job を強制実行する。
-      # release の変更分類には影響させないため backend/frontend filter とは
-      # 分離する。
+      # アプリ変更のfilterとは分離する。
       ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -64,7 +58,6 @@ jobs:
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
         id: filter
         with:
-          list-files: json
           filters: |
             backend:
               - 'backend/**'
@@ -73,12 +66,9 @@ jobs:
             ci:
               - '.github/workflows/**'
               - '.github/scripts/**'
-            # migration-check が expand / manual を分類し、自動 release 可否を決める。
+            # migration-checkが分類とcontractの変更範囲を検証する。
             migrations:
               - 'backend/alembic/versions/**'
-            aws_infra:
-              - 'infra/aws/**'
-              - '.github/workflows/aws-terraform-apply.yml'
             e2e:
               # frontend auth コア
               - 'frontend/src/lib/auth/**'
@@ -637,8 +627,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.migrations == 'true'
-    outputs:
-      decision: ${{ steps.classify.outputs.decision }}
 
     services:
       postgres:
@@ -664,6 +652,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
@@ -678,6 +667,25 @@ jobs:
 
       - name: Install backend dependencies
         run: uv sync --frozen
+        working-directory: backend
+
+      - name: Check migration classification and contract changes
+        env:
+          MIGRATION_EVENT: ${{ github.event_name }}
+          MIGRATION_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          MIGRATION_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$MIGRATION_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$MIGRATION_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [ "$MIGRATION_EVENT" = "pull_request" ]; then
+            MIGRATION_BASE_SHA="$(git merge-base "$MIGRATION_BASE_SHA" "$MIGRATION_HEAD_SHA")"
+          fi
+          echo '## Migration classification and contract changes' >> "$GITHUB_STEP_SUMMARY"
+          uv run python -m scripts.migration_change_gate \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --base-sha "$MIGRATION_BASE_SHA" --head-sha "$MIGRATION_HEAD_SHA" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
         working-directory: backend
 
       - name: Create auth schema and application roles
@@ -719,39 +727,8 @@ jobs:
         run: uv run alembic upgrade head
         working-directory: backend
 
-      # invalid は CI 自体を失敗させ、contract / mixed は manual として green のまま
-      # release dispatch だけを止める。
-      - id: classify
-        name: Classify changed migration revisions
-        env:
-          MIGRATION_GATE_FILES_JSON: ${{ needs.changes.outputs.migration_files }}
-        run: |
-          set -euo pipefail
-          decision_file="$RUNNER_TEMP/migration-decision.json"
-          {
-            echo "## Migration classification"
-            echo ""
-            echo "Gate output:"
-            echo ""
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          uv run python scripts/migration_gate.py --files-json "$MIGRATION_GATE_FILES_JSON" \
-            --decision-output "$decision_file" \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          decision=$(python -c \
-            'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["decision"])' \
-            "$decision_file")
-          case "$decision" in
-            expand|manual) ;;
-            *) echo "::error::unexpected migration decision: $decision"; exit 1 ;;
-          esac
-          echo "decision=$decision" >> "$GITHUB_OUTPUT"
-        working-directory: backend
-
   # ---- CI gate (全必須チェックの集約) ----
-  # release 判定が個別テスト job より先に走らないよう、全テスト job を 1 つに
-  # 集約する単一ゲート。dispatch は本 job の success だけを判定すればよい。
+  # 全必須テストjobの成否を集約する。
   # path-filter 対象 job (backend-unit / backend-integration / frontend /
   # frontend-e2e-smoke / migration-check) は skip されうるため
   # success|skipped を許容する。アプリテストは PR のみ、main では skip が正常。
@@ -771,8 +748,6 @@ jobs:
     # 失敗 needs があっても下の script で明示判定して exit 1 する。
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    outputs:
-      migration_decision: ${{ steps.migration-decision.outputs.value }}
     steps:
       - name: Require all checks (path-filter 対象 job は skip 許容)
         run: |
@@ -797,114 +772,3 @@ jobs:
             esac
           done
           exit $fail
-
-      - id: migration-decision
-        name: Publish migration release decision
-        env:
-          MIGRATIONS_CHANGED: ${{ needs.changes.outputs.migrations }}
-          CLASSIFIER_DECISION: ${{ needs.migration-check.outputs.decision }}
-        run: |
-          set -euo pipefail
-          if [ "$MIGRATIONS_CHANGED" != "true" ]; then
-            decision=none
-          else
-            decision="$CLASSIFIER_DECISION"
-          fi
-          case "$decision" in
-            none|expand|manual) ;;
-            *) echo "::error::migration decision is missing or invalid"; exit 1 ;;
-          esac
-          echo "value=$decision" >> "$GITHUB_OUTPUT"
-
-  # ---- AWS 本番 release の非同期 dispatch -------------------------------
-  # release workflow を reusable workflow として呼ぶと production 承認待ちの間、
-  # main CI の concurrency を占有する。workflow_dispatch だけを発火して本 job は終え、
-  # image build / production 承認 / rollout は別 run の直列 queue に委ねる。
-  dispatch-aws-release:
-    name: Dispatch AWS production release
-    needs: [ci-gate, changes]
-    if: ${{ !cancelled()
-            && github.event_name == 'push'
-            && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - id: decision
-        name: Decide and summarize AWS release
-        env:
-          CI_GATE_RESULT: ${{ needs.ci-gate.result }}
-          BACKEND_CHANGED: ${{ needs.changes.outputs.backend }}
-          FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
-          MIGRATION_DECISION: ${{ needs.ci-gate.outputs.migration_decision }}
-          AWS_INFRA_CHANGED: ${{ needs.changes.outputs.aws_infra }}
-          PUBLICATION_FREEZE: ${{ vars.PUBLICATION_FREEZE }}
-          RELEASE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          eligible=true
-          reasons=()
-
-          if [ "$CI_GATE_RESULT" != "success" ]; then
-            eligible=false
-            reasons+=("CI gate が success ではない")
-          fi
-          if [ "$BACKEND_CHANGED" != "true" ] && [ "$FRONTEND_CHANGED" != "true" ]; then
-            eligible=false
-            reasons+=("backend / frontend の変更がない")
-          fi
-          case "$MIGRATION_DECISION" in
-            none|expand) ;;
-            manual)
-              eligible=false
-              reasons+=("contract または mixed migration のため手動 release が必要")
-              ;;
-            *)
-              eligible=false
-              reasons+=("migration 判定が不明なため release できない")
-              ;;
-          esac
-          if [ "$AWS_INFRA_CHANGED" = "true" ]; then
-            eligible=false
-            reasons+=("AWS infra 変更を含むため Terraform apply 後の手動 release が必要")
-          fi
-          if [ "$PUBLICATION_FREEZE" != "false" ]; then
-            eligible=false
-            reasons+=("PUBLICATION_FREEZE が明示的に false ではない")
-          fi
-
-          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
-          {
-            echo "## AWS production release decision"
-            echo ""
-            echo "| field | value |"
-            echo "| --- | --- |"
-            echo "| sha | \`$RELEASE_SHA\` |"
-            echo "| CI gate | $CI_GATE_RESULT |"
-            echo "| backend | $BACKEND_CHANGED |"
-            echo "| frontend | $FRONTEND_CHANGED |"
-            echo "| migration decision | ${MIGRATION_DECISION:-unknown} |"
-            echo "| AWS infra | $AWS_INFRA_CHANGED |"
-            echo "| publication freeze | ${PUBLICATION_FREEZE:-unset} |"
-            echo "| dispatch | $([ "$eligible" = "true" ] && echo yes || echo no) |"
-            if [ "$eligible" != "true" ]; then
-              echo ""
-              echo "停止理由:"
-              for reason in "${reasons[@]}"; do
-                echo "- $reason"
-              done
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Dispatch AWS app images
-        if: ${{ steps.decision.outputs.eligible == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          gh workflow run aws-app-images.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            --raw-field release_sha="$RELEASE_SHA"

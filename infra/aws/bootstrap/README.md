@@ -83,6 +83,7 @@ root アカウントは MFA を有効にし、アクセスキーを作らない�
 外部アカウントを信頼する形も書ける。boundary が実効権限の上限を切るので実害は
 小さいが、**blast radius の定義は boundary の中身そのもの**であって、
 「apply は何も悪いことができない」ではない。
+通常のSSO入口は閉じるが、管理者や承認済みインフラ変更の能力を完全に封じるものではない。
 
 **service-linked role は bootstrap が作る。** ECS / ALB / RDS / ElastiCache は
 初回作成時に `iam:CreateServiceLinkedRole` を暗黙に呼ぶ。`/aws-service-role/` path
@@ -119,11 +120,26 @@ sub claim を要求する。ただし **IAM が検証するのは「その claim
 必要で、それは監査ログに残る**」。enforcement point を IAM に移したのではなく、
 GitHub の設定を信頼チェーンに組み込んだ。
 
-**`deploy_environment` に required reviewer を設定しないと、この主張は成立しない。**
+applyは `deploy_environment`（既定 `production`）、migrationは
+`production-migration`、rolloutは `production-rollout` をそれぞれ要求する。
+**各Environmentにrequired reviewerを設定しないと、承認の主張は成立しない。**
+3つともreviewerを `yook11`、self-review許可、admin bypass禁止とする。
 
-`environment:<name>`のOIDC subjectにはbranch名が入らない。手動releaseで選択refを
-使える契約を維持するため、migration/rollout roleのtrustもbranchまでは固定しない。
-したがってrequired reviewerは、対象SHA/refを含めて承認する境界でもある。
+`environment:<name>`のOIDC subjectにはbranch名が入らないため、workflowのmain限定と
+EnvironmentのDeployment branches=mainを両方必要条件にする。
+アプリ反映はdispatch時の最新mainに固定し、更新開始直前に最新mainを再確認する。
+
+`DeployPermissionSet` によるSSO assumeはplan / pushだけに残す。
+apply / migration / rolloutは各Environmentの承認後のOIDCだけを受け入れ、
+ローカルprofileからは実行しない。applyのTerraform管理権限・boundaryは維持し、
+今回閉じるのは承認なしでその権限を取得する入口である。
+rolloutの `iam:PassRole` は対応表のアプリtask / execution roleに限り、proxy、
+migration、管理用roleは渡せない。rolloutに `RunTask` や直接DB接続権限は無い。
+DB ownerのIAM接続権限はmigration task roleだけに残し、CIのmigrate roleからは除く。
+
+通常のinfra変更はPRのplan確認 → mainへmerge → `AWS terraform apply`の承認とする。
+infra変更のmain pushによる自動起動と、mainからの手動再実行は維持する。
+bootstrap・初期構築・非常時復旧は管理者の別手順とし、承認失敗時の代替経路にしない。
 
 またECS `RunTask`にはsubnet・security group・public IPを固定できるIAM condition keyが
 無い。migration CI roleはfamily・cluster・PassRole・tag・ECS ExecをIAMで制限するが、
@@ -153,8 +169,10 @@ apply 後、出力された `state_bucket_name` を `../versions.tf` の backend
 GitHub secret が boundary の数だけ増え、1 本の設定漏れで plan と apply の
 両方が止まるため。
 
-`ci_role_arns.migrate`はGitHubの`production` Environment secret
-`AWS_MIGRATION_ROLE_ARN`へ登録する。`migrate`と`rollout`は同じ承認済みjobから
-順番にassumeするが、DB taskの起動権限とservice更新権限は混ぜない。
+`ci_role_arns.migrate`は `production-migration` の `AWS_MIGRATION_ROLE_ARN`、
+`ci_role_arns.rollout`は `production-rollout` の `AWS_ROLLOUT_ROLE_ARN` に登録する。
+push用roleはbuild専用repository secretのままにする。migration / rolloutを同じjobから
+順番にassumeする経路は無い。切り替え順序は
+[Migrationとアプリ反映の導入・運用](../MIGRATION_WORKFLOW.md) を参照する。
 
 `terraform.tfstate` は `.gitignore` 済み。secret の実体は入らないが account ID は入る。
