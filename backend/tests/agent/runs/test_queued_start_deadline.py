@@ -18,15 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
+from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
+from app.agent.run_deadline.policy import RUN_DEADLINE_SECONDS
 from app.agent.runs.contracts import (
     StartRunCommandOutcome,
     StartRunOutcome,
 )
-from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
-from app.agent.runs.repository import (
-    RUN_DEADLINE_SECONDS,
-    AgentRunRepository,
-)
+from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread

@@ -1,5 +1,7 @@
 # Agent run deadline sweeper
 
+> 現行の処理・契約の配置は [Run周辺の概念境界](agent-run-concept-boundaries.md) を参照する。
+
 Status: 実装済み
 
 ## Problem / Evidence

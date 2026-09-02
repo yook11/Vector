@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.runs.repository import AgentRunRepository
+from app.agent.run_deadline.persistence import sweep_deadline_exceeded_runs
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -105,7 +105,7 @@ async def test_sweep_leaves_run_unchanged_before_deadline(
         )
         await session.commit()
 
-        await AgentRunRepository(session).sweep_deadline_exceeded_runs(now=now)
+        await sweep_deadline_exceeded_runs(session, now=now)
         await session.commit()
 
     async with session_factory() as observer:
@@ -145,7 +145,7 @@ async def test_sweep_marks_run_deadline_exceeded_at_or_after_deadline(
         )
         await session.commit()
 
-        await AgentRunRepository(session).sweep_deadline_exceeded_runs(now=now)
+        await sweep_deadline_exceeded_runs(session, now=now)
         await session.commit()
 
     async with session_factory() as observer:
@@ -194,9 +194,7 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunRepository(session).sweep_deadline_exceeded_runs(
-                now=now
-            )
+            result = await sweep_deadline_exceeded_runs(session, now=now)
 
     assert result.queued_quota_released_count == len(queued_runs)
     assert result.running_quota_reservation_count == 1
@@ -208,8 +206,8 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
 
     async with session_factory() as session:
         async with session.begin():
-            repeated = await AgentRunRepository(session).sweep_deadline_exceeded_runs(
-                now=now + timedelta(seconds=1)
+            repeated = await sweep_deadline_exceeded_runs(
+                session, now=now + timedelta(seconds=1)
             )
 
     assert repeated.total_count == 0
@@ -268,7 +266,7 @@ async def test_sweep_terminalizes_when_queued_quota_is_ineligible_or_inconsisten
             deadline_at=deadline_at,
         )
 
-        result = await AgentRunRepository(session).sweep_deadline_exceeded_runs(now=now)
+        result = await sweep_deadline_exceeded_runs(session, now=now)
         await session.commit()
 
     assert result.queued_quota_released_count == 0
@@ -311,7 +309,7 @@ async def test_sweep_preserves_existing_terminal_runs(
         assistant_message_id = original.assistant_message_id
         await session.commit()
 
-        result = await AgentRunRepository(session).sweep_deadline_exceeded_runs(now=now)
+        result = await sweep_deadline_exceeded_runs(session, now=now)
         await session.commit()
 
     persisted = await _persisted_run(session_factory, original.id)

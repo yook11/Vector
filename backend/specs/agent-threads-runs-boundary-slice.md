@@ -1,5 +1,7 @@
 # Agent threads / runs 境界分離 slice 仕様
 
+> 現行の配置は [Run周辺の概念境界](agent-run-concept-boundaries.md) を参照する。
+
 > 後続契約更新: `agent-input-safety-gate-slice.md` はrun terminal statusへ `policy_blocked`を追加する。
 > `completed ⇔ assistant_message_id` invariantは維持し、policy blockedではassistant messageを作らない。
 

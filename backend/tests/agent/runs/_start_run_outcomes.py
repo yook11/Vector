@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.runs.contracts import (
     StartRunCommandOutcome,
     StartRunOutcome,
 )
-from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
 
 
 def started_attempt_epoch(result: object) -> int:

@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
-import structlog
-from sqlalchemy import Integer, column, func, literal, select, update, values
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.contract import AnswerQuestionResult
-from app.agent.runs.citation_integrity import assess_citation_integrity
+from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
+from app.agent.daily_quota.persistence import (
+    release_daily_quota,
+    reserve_daily_quota,
+)
+from app.agent.run_deadline.persistence import database_now, expire_run
+from app.agent.run_deadline.policy import deadline_for_run
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
     CancelRunCommandOutcome,
     CancelRunOutcome,
     CompleteRunOutcome,
     CreatedAgentRun,
-    DeadlineExceededRunningRun,
-    DeadlineRunSweepResult,
     OwnedAgentRunLiveContext,
     RunTransitionLostError,
     StartRunCommandOutcome,
@@ -27,21 +30,16 @@ from app.agent.runs.contracts import (
     ThreadNotFoundError,
     UserQuestionMessage,
 )
-from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
-from app.agent.runs.daily_quota.persistence import (
-    release_daily_quota,
-    reserve_daily_quota,
-)
 from app.agent.runs.projection import build_research_run_response
-from app.agent.runs.result_mapper import (
+from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.threads.citation_integrity import warn_on_citation_source_mismatch
+from app.agent.threads.result_mapper import (
     build_assistant_message_for_result,
     build_source_rows_for_message,
 )
-from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
-from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.schemas.research import ResearchRunResponse
 
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
@@ -51,8 +49,6 @@ _TERMINAL_STATUSES = (
     AgentRunStatus.DEADLINE_EXCEEDED.value,
     AgentRunStatus.FAILED.value,
 )
-RUN_DEADLINE_SECONDS = 60
-logger = structlog.get_logger(__name__)
 
 
 class AgentRunRepository:
@@ -96,8 +92,8 @@ class AgentRunRepository:
             self._session,
             user_id=user_id,
         )
-        created_at = await self._database_now(now)
-        deadline_at = created_at + timedelta(seconds=RUN_DEADLINE_SECONDS)
+        created_at = await database_now(self._session, now)
+        deadline_at = deadline_for_run(created_at)
         thread.updated_at = created_at
 
         user_message = AgentMessage(
@@ -228,32 +224,22 @@ class AgentRunRepository:
                 quota_release_outcome=None,
             )
 
-        now = await self._database_now(now)
+        now = await database_now(self._session, now)
         if now >= run.deadline_at:
-            deadline_result = await self._session.execute(
-                update(AgentRun)
-                .where(
-                    AgentRun.id == run_id,
-                    AgentRun.status == run.status,
-                    AgentRun.attempt_epoch == run.attempt_epoch,
-                    AgentRun.deadline_at <= now,
-                )
-                .values(
-                    status=AgentRunStatus.DEADLINE_EXCEEDED.value,
-                    assistant_message_id=None,
-                    error_code=None,
-                )
-                .returning(AgentRun.quota_usage_date)
-                .execution_options(synchronize_session=False)
+            expired = await expire_run(
+                self._session,
+                run_id=run_id,
+                expected_status=AgentRunStatus(run.status),
+                expected_attempt_epoch=run.attempt_epoch,
+                now=now,
             )
-            deadline_row = deadline_result.one_or_none()
-            if deadline_row is None:
+            if not expired:
                 return StartRunCommandOutcome(
                     start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
                     attempt_epoch=None,
                     quota_release_outcome=None,
                 )
-            quota_usage_date = deadline_row.quota_usage_date
+            quota_usage_date = run.quota_usage_date
             quota_release_outcome = None
             if run.status == AgentRunStatus.QUEUED.value:
                 quota_release_outcome = await release_daily_quota(
@@ -363,24 +349,16 @@ class AgentRunRepository:
         ):
             return CompleteRunOutcome.TRANSITION_LOST
 
-        now = await self._database_now(now)
+        now = await database_now(self._session, now)
         if now >= run.deadline_at:
-            deadline_result = await self._session.execute(
-                update(AgentRun)
-                .where(
-                    AgentRun.id == run_id,
-                    AgentRun.status == AgentRunStatus.RUNNING.value,
-                    AgentRun.attempt_epoch == expected_attempt_epoch,
-                    AgentRun.deadline_at <= now,
-                )
-                .values(
-                    status=AgentRunStatus.DEADLINE_EXCEEDED.value,
-                    assistant_message_id=None,
-                    error_code=None,
-                )
-                .execution_options(synchronize_session=False)
+            expired = await expire_run(
+                self._session,
+                run_id=run_id,
+                expected_status=AgentRunStatus.RUNNING,
+                expected_attempt_epoch=expected_attempt_epoch,
+                now=now,
             )
-            if (deadline_result.rowcount or 0) != 1:
+            if not expired:
                 return CompleteRunOutcome.TRANSITION_LOST
             return CompleteRunOutcome.DEADLINE_EXCEEDED
 
@@ -392,7 +370,7 @@ class AgentRunRepository:
         self._session.add(assistant_message)
         await self._session.flush()
         source_rows = build_source_rows_for_message(assistant_message, result)
-        _warn_on_citation_source_mismatch(
+        warn_on_citation_source_mismatch(
             run_id=run_id,
             answer=result.answer,
             source_refs=[row.source_ref for row in source_rows],
@@ -549,177 +527,6 @@ class AgentRunRepository:
             return CancelRunCommandOutcome(CancelRunOutcome.ALREADY_DEADLINE_EXCEEDED)
         return None
 
-    async def _database_now(self, injected: datetime | None) -> datetime:
-        expression = (
-            literal(injected) if injected is not None else func.clock_timestamp()
-        )
-        value = await self._session.scalar(select(expression))
-        if not isinstance(value, datetime):
-            raise RuntimeError("database clock did not return a datetime")
-        return value
-
-    async def sweep_deadline_exceeded_runs(
-        self,
-        *,
-        now: datetime | None = None,
-    ) -> DeadlineRunSweepResult:
-        candidate_rows = (
-            (
-                await self._session.execute(
-                    select(
-                        AgentRun.id,
-                        AgentRun.status,
-                        AgentRun.attempt_epoch,
-                        AgentRun.quota_usage_date,
-                        AgentThread.user_id,
-                    )
-                    .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-                    .where(
-                        AgentRun.status.in_(_ACTIVE_STATUSES),
-                        AgentRun.deadline_at
-                        <= (
-                            literal(now) if now is not None else func.clock_timestamp()
-                        ),
-                    )
-                    .order_by(AgentRun.id)
-                    .with_for_update()
-                )
-            )
-            .tuples()
-            .all()
-        )
-        if not candidate_rows:
-            return DeadlineRunSweepResult(
-                queued_terminal_count=0,
-                queued_quota_released_count=0,
-                queued_quota_not_eligible_count=0,
-                queued_quota_inconsistent_count=0,
-                running_terminal_runs=(),
-                running_quota_reservation_count=0,
-            )
-
-        # lock待機中に期限を越えるため、更新判断には取得後のDB時刻を使う。
-        now = await self._database_now(now)
-        candidate_ids = [row[0] for row in candidate_rows]
-        candidate_by_id = {row[0]: row for row in candidate_rows}
-        updated_rows = (
-            (
-                await self._session.execute(
-                    update(AgentRun)
-                    .where(
-                        AgentRun.id.in_(candidate_ids),
-                        AgentRun.status.in_(_ACTIVE_STATUSES),
-                        AgentRun.deadline_at <= now,
-                    )
-                    .values(
-                        status=AgentRunStatus.DEADLINE_EXCEEDED.value,
-                        assistant_message_id=None,
-                        error_code=None,
-                    )
-                    .returning(
-                        AgentRun.id,
-                        AgentRun.status,
-                        AgentRun.attempt_epoch,
-                        AgentRun.quota_usage_date,
-                    )
-                    .execution_options(synchronize_session=False)
-                )
-            )
-            .tuples()
-            .all()
-        )
-        updated_ids = {row[0] for row in updated_rows}
-        if updated_ids != set(candidate_ids):
-            raise RuntimeError("deadline run sweep lost a locked candidate")
-
-        queued_rows = [
-            row
-            for row in updated_rows
-            if candidate_by_id[row[0]][1] == AgentRunStatus.QUEUED.value
-        ]
-        queued_release_groups: dict[tuple[uuid_mod.UUID, object], int] = {}
-        for run_id, _status, _attempt_epoch, quota_usage_date in queued_rows:
-            if quota_usage_date is None:
-                continue
-            user_id = candidate_by_id[run_id][4]
-            group = (user_id, quota_usage_date)
-            queued_release_groups[group] = queued_release_groups.get(group, 0) + 1
-
-        released_groups: set[tuple[uuid_mod.UUID, object]] = set()
-        if queued_release_groups:
-            quota_releases = values(
-                column("user_id", AgentUserDailyQuota.user_id.type),
-                column("usage_date", AgentUserDailyQuota.usage_date.type),
-                column("release_count", Integer),
-                name="queued_deadline_quota_releases",
-            ).data(
-                [
-                    (user_id, usage_date, count)
-                    for (user_id, usage_date), count in queued_release_groups.items()
-                ]
-            )
-            released_groups = set(
-                (
-                    await self._session.execute(
-                        update(AgentUserDailyQuota)
-                        .where(
-                            AgentUserDailyQuota.user_id == quota_releases.c.user_id,
-                            AgentUserDailyQuota.usage_date
-                            == quota_releases.c.usage_date,
-                            AgentUserDailyQuota.used_count
-                            >= quota_releases.c.release_count,
-                        )
-                        .values(
-                            used_count=(
-                                AgentUserDailyQuota.used_count
-                                - quota_releases.c.release_count
-                            )
-                        )
-                        .returning(
-                            AgentUserDailyQuota.user_id,
-                            AgentUserDailyQuota.usage_date,
-                        )
-                        .execution_options(synchronize_session=False)
-                    )
-                )
-                .tuples()
-                .all()
-            )
-
-        queued_quota_released_count = sum(
-            count
-            for group, count in queued_release_groups.items()
-            if group in released_groups
-        )
-        queued_quota_inconsistent_count = sum(
-            count
-            for group, count in queued_release_groups.items()
-            if group not in released_groups
-        )
-        running_rows = [
-            row
-            for row in updated_rows
-            if candidate_by_id[row[0]][1] == AgentRunStatus.RUNNING.value
-        ]
-        return DeadlineRunSweepResult(
-            queued_terminal_count=len(queued_rows),
-            queued_quota_released_count=queued_quota_released_count,
-            queued_quota_not_eligible_count=sum(
-                quota_usage_date is None
-                for _run_id, _status, _attempt_epoch, quota_usage_date in queued_rows
-            ),
-            queued_quota_inconsistent_count=queued_quota_inconsistent_count,
-            running_terminal_runs=tuple(
-                DeadlineExceededRunningRun(run_id=run_id, attempt_epoch=attempt_epoch)
-                for run_id, _status, attempt_epoch, _quota_usage_date in running_rows
-                if attempt_epoch > 0
-            ),
-            running_quota_reservation_count=sum(
-                quota_usage_date is not None
-                for _run_id, _status, _attempt_epoch, quota_usage_date in running_rows
-            ),
-        )
-
     async def _has_active_run(self, thread_id: uuid_mod.UUID) -> bool:
         return (
             await self._session.execute(
@@ -741,20 +548,3 @@ class AgentRunRepository:
             )
         ).scalar_one()
         return int(value)
-
-
-def _warn_on_citation_source_mismatch(
-    *,
-    run_id: uuid_mod.UUID,
-    answer: str,
-    source_refs: list[str],
-) -> None:
-    report = assess_citation_integrity(answer=answer, source_refs=source_refs)
-    if not report.has_mismatch:
-        return
-    logger.warning(
-        "agent_citation_source_mismatch",
-        run_id=str(run_id),
-        marker_without_source_refs=list(report.marker_without_source_refs),
-        source_without_marker_refs=list(report.source_without_marker_refs),
-    )

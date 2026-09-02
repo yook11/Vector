@@ -1,5 +1,7 @@
 # Agent run deadline fence slice
 
+> 現行の処理・契約の配置は [Run周辺の概念境界](agent-run-concept-boundaries.md) を参照する。
+
 Status: Draft
 
 このスライスは、run作成時に60秒のdeadlineを固定し、`start_run()`と`complete_run()`を

@@ -11,23 +11,25 @@ from sqlalchemy import (
     Select,
     bindparam,
     cast,
+    column,
     func,
     literal,
     select,
     true,
     update,
+    values,
 )
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.agent.runs.daily_quota.contracts import (
+from app.agent.daily_quota.contracts import (
     DailyQuotaReleaseOutcome,
     DailyQuotaReservation,
     DailyRequestLimitExceededError,
 )
-from app.agent.runs.daily_quota.policy import (
+from app.agent.daily_quota.policy import (
     DAILY_QUOTA_TIMEZONE_NAME,
     DAILY_REQUEST_LIMIT,
 )
@@ -141,3 +143,48 @@ async def release_daily_quota(
     if released_user_id is None:
         return DailyQuotaReleaseOutcome.INCONSISTENT
     return DailyQuotaReleaseOutcome.RELEASED
+
+
+async def release_daily_quotas(
+    session: AsyncSession,
+    *,
+    reservations: dict[tuple[uuid.UUID, date], int],
+) -> set[tuple[uuid.UUID, date]]:
+    if not reservations:
+        return set()
+
+    quota_releases = values(
+        column("user_id", AgentUserDailyQuota.user_id.type),
+        column("usage_date", AgentUserDailyQuota.usage_date.type),
+        column("release_count", Integer),
+        name="daily_quota_releases",
+    ).data(
+        [
+            (user_id, usage_date, count)
+            for (user_id, usage_date), count in reservations.items()
+        ]
+    )
+    return set(
+        (
+            await session.execute(
+                update(AgentUserDailyQuota)
+                .where(
+                    AgentUserDailyQuota.user_id == quota_releases.c.user_id,
+                    AgentUserDailyQuota.usage_date == quota_releases.c.usage_date,
+                    AgentUserDailyQuota.used_count >= quota_releases.c.release_count,
+                )
+                .values(
+                    used_count=(
+                        AgentUserDailyQuota.used_count - quota_releases.c.release_count
+                    )
+                )
+                .returning(
+                    AgentUserDailyQuota.user_id,
+                    AgentUserDailyQuota.usage_date,
+                )
+                .execution_options(synchronize_session=False)
+            )
+        )
+        .tuples()
+        .all()
+    )
