@@ -679,13 +679,14 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
 
 @pytest.mark.parametrize("terminalizer", ["cancel", "expired_start"])
 @pytest.mark.asyncio
-async def test_waiting_stale_sweep_does_not_overwrite_cancel_or_expired_start(
+async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start(
     session_factory: async_sessionmaker[AsyncSession],
     terminalizer: str,
 ) -> None:
     seeded = await _seed_run(
         session_factory,
-        created_at=_NOW - timedelta(minutes=21),
+        created_at=_NOW - timedelta(seconds=61),
+        deadline_at=_NOW - timedelta(seconds=1),
     )
 
     async with (
@@ -724,7 +725,7 @@ async def test_waiting_stale_sweep_does_not_overwrite_cancel_or_expired_start(
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                AgentRunRepository(sweep_session).sweep_stale_runs(now=_NOW)
+                AgentRunRepository(sweep_session).sweep_deadline_exceeded_runs(now=_NOW)
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -811,7 +812,7 @@ async def test_mark_failed_never_refunds(
     ("transition", "status", "attempt_epoch", "expected_outcome"),
     [
         ("enqueue_failed", "queued", 0, CancelRunOutcome.ALREADY_FAILED),
-        ("stale", "queued", 0, CancelRunOutcome.ALREADY_FAILED),
+        ("deadline_sweep", "queued", 0, CancelRunOutcome.ALREADY_DEADLINE_EXCEEDED),
         ("complete", "running", 1, CancelRunOutcome.ALREADY_COMPLETED),
     ],
 )
@@ -827,7 +828,12 @@ async def test_competing_terminal_transition_wins_without_refund(
         session_factory,
         status=status,
         attempt_epoch=attempt_epoch,
-        created_at=_NOW - timedelta(minutes=21) if transition == "stale" else None,
+        created_at=(
+            _NOW - timedelta(seconds=61) if transition == "deadline_sweep" else None
+        ),
+        deadline_at=(
+            _NOW - timedelta(seconds=1) if transition == "deadline_sweep" else None
+        ),
     )
 
     async with (
@@ -858,15 +864,15 @@ async def test_competing_terminal_transition_wins_without_refund(
                     seeded.run_id,
                     now=_NOW,
                 )
-            elif transition == "stale":
-                stale_result = await repository.sweep_stale_runs(now=_NOW)
-                assert stale_result.queued_terminal_count == 1
-                assert stale_result.queued_quota_released_count == 1
-                assert stale_result.queued_quota_not_eligible_count == 0
-                assert stale_result.queued_quota_inconsistent_count == 0
-                assert stale_result.running_terminal_runs == ()
-                assert stale_result.running_quota_reservation_count == 0
-                assert stale_result.running_without_started_at_count == 0
+            elif transition == "deadline_sweep":
+                sweep_result = await repository.sweep_deadline_exceeded_runs(now=_NOW)
+                assert sweep_result.queued_terminal_count == 1
+                assert sweep_result.queued_quota_released_count == 1
+                assert sweep_result.queued_quota_not_eligible_count == 0
+                assert sweep_result.queued_quota_inconsistent_count == 0
+                assert sweep_result.running_terminal_runs == ()
+                assert sweep_result.running_quota_reservation_count == 0
+                assert sweep_result.running_without_started_at_count == 0
             else:
                 assert (
                     await repository.complete_run(
@@ -890,7 +896,7 @@ async def test_competing_terminal_transition_wins_without_refund(
                 if session.in_transaction():
                     await session.rollback()
 
-    expected_counter = 0 if transition == "stale" else 1
+    expected_counter = 0 if transition == "deadline_sweep" else 1
     assert (
         await _read_counter(
             session_factory,

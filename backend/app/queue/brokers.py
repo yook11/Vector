@@ -7,7 +7,7 @@ broker:
   - broker_embedding: ベクトル埋め込み生成
   - broker_trend_discovery: rolling 7d Trend Discovery 実行 (cron 駆動)
   - broker_briefing:  週次カテゴリ別 LLM ブリーフィング生成 (cron 駆動、別 queue)
-  - broker_agent:     user-facing research agent 非同期 run + stale sweeper
+  - broker_agent:     user-facing research agent 非同期 run + deadline sweeper
   - broker_maintenance: back-fill 救済 + retention purge + queue-health 観測の
     core 系保守 cron (cron 駆動、collect から分離するため別 queue)
 
