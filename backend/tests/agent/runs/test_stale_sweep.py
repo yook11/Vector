@@ -15,6 +15,9 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
+from tests.agent.runs._seed import (
+    create_thread_message_run as _create_thread_message_run,
+)
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -319,3 +322,126 @@ async def test_sweep_terminalizes_when_queued_quota_is_ineligible_or_inconsisten
     assert counter == 1
     for run in (*underflow_runs, missing_counter, legacy):
         assert await _status(session_factory, run.id) == ("failed", "stale")
+
+
+@pytest.mark.asyncio
+async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+    async with session_factory() as session:
+        _t1, _m1, old_queued = await _create_thread_message_run(
+            session,
+            created_at=now - timedelta(minutes=21),
+            quota_usage_date=date(2026, 7, 9),
+        )
+        _t2, _m2, old_running = await _create_thread_message_run(
+            session,
+            status="running",
+            created_at=now - timedelta(minutes=30),
+            started_at=now - timedelta(minutes=21),
+            attempt_epoch=7,
+            quota_usage_date=date(2026, 7, 9),
+        )
+        _t3, _m3, old_legacy = await _create_thread_message_run(
+            session,
+            created_at=now - timedelta(minutes=22),
+        )
+        _t4, _m4, fresh = await _create_thread_message_run(
+            session, created_at=now - timedelta(minutes=4)
+        )
+        _t5, _m5, terminal = await _create_thread_message_run(
+            session,
+            status="failed",
+            created_at=now - timedelta(minutes=30),
+            error_code="internal_error",
+        )
+        result = await AgentRunRepository(session).sweep_stale_runs(now=now)
+        await session.commit()
+        assert result.queued_terminal_count == 2
+        assert result.queued_quota_released_count == 0
+        assert result.queued_quota_not_eligible_count == 1
+        assert result.queued_quota_inconsistent_count == 1
+        running_attempts = [
+            (item.run_id, item.attempt_epoch) for item in result.running_terminal_runs
+        ]
+        assert running_attempts == [(old_running.id, 7)]
+        assert result.running_quota_reservation_count == 1
+        assert result.running_without_started_at_count == 0
+
+    async with session_factory() as session:
+        swept_queued = await session.get(AgentRun, old_queued.id)
+        swept_running = await session.get(AgentRun, old_running.id)
+        swept_legacy = await session.get(AgentRun, old_legacy.id)
+        untouched_fresh = await session.get(AgentRun, fresh.id)
+        untouched_terminal = await session.get(AgentRun, terminal.id)
+        assert swept_queued is not None
+        assert swept_running is not None
+        assert swept_legacy is not None
+        assert untouched_fresh is not None
+        assert untouched_terminal is not None
+        assert swept_queued.status == "failed"
+        assert (swept_running.attempt_epoch, swept_running.error_code) == (7, "stale")
+        assert swept_legacy.status == "failed"
+        assert untouched_fresh.status == "queued"
+        assert untouched_terminal.error_code == "internal_error"
+
+
+@pytest.mark.asyncio
+async def test_ten_quota_queued_stale_runs_release_counter_with_one_batch_update(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+    usage_date = date(2026, 7, 20)
+    async with session_factory() as setup_session:
+        setup_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=usage_date,
+                used_count=10,
+            )
+        )
+        await setup_session.commit()
+        runs = [
+            (
+                await _create_thread_message_run(
+                    setup_session,
+                    question=f"stale quota question {index}",
+                    created_at=now - timedelta(minutes=21),
+                    quota_usage_date=usage_date,
+                )
+            )[2]
+            for index in range(10)
+        ]
+
+    async with session_factory() as sweep_session:
+        async with sweep_session.begin():
+            result = await AgentRunRepository(sweep_session).sweep_stale_runs(now=now)
+
+    assert result.queued_terminal_count == 10
+    assert result.queued_quota_released_count == 10
+    assert result.queued_quota_not_eligible_count == 0
+    assert result.queued_quota_inconsistent_count == 0
+    assert result.running_terminal_runs == ()
+    assert result.running_quota_reservation_count == 0
+    assert result.running_without_started_at_count == 0
+    async with session_factory() as verification:
+        counter = await verification.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == usage_date,
+            )
+        )
+        persisted_statuses = (
+            (
+                await verification.execute(
+                    select(AgentRun.status)
+                    .where(AgentRun.id.in_([run.id for run in runs]))
+                    .order_by(AgentRun.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert counter == 0
+    assert persisted_statuses == ["failed"] * 10

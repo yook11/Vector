@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.threads.repository import AgentThreadRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_thread import AgentThread
+from tests.agent.runs._seed import (
+    create_thread_message_run as _create_thread_message_run,
+)
 from tests.conftest import TEST_USER_ID
 
 
@@ -93,4 +96,31 @@ async def test_read_recent_messages_projects_missing_aspects_in_bounded_sequence
         ("assistant", "included assistant", ("first", "second", "first")),
         ("user", "included user", ()),
         ("assistant", "latest assistant", ("third",)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_read_recent_messages_before_returns_bounded_oldest_first_thread_window(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        thread, message, _run = await _create_thread_message_run(
+            session,
+            history=[
+                ("user", "old user"),
+                ("assistant", "old assistant"),
+                ("user", "latest prior user"),
+            ],
+        )
+
+    async with session_factory() as session:
+        messages = await AgentThreadRepository(session).read_recent_messages_before(
+            thread_id=thread.id,
+            before_seq=message.seq,
+            limit=2,
+        )
+
+    assert [(item.role, item.content) for item in messages] == [
+        ("assistant", "old assistant"),
+        ("user", "latest prior user"),
     ]
