@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from types import TracebackType
+from typing import cast
 
 import pytest
 from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent import composition
 from app.agent.composition import (
@@ -429,3 +431,84 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
             "continuation": continuation,
         }
     ]
+
+
+def test_composition_injects_same_live_controls_into_both_answer_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.agent.answering.direct_answer.service as direct_service_module
+    import app.agent.answering.evidence_answer.service as evidence_service_module
+    import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
+    import app.agent.planning.service as planning_service_module
+    from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
+    from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
+    from app.agent.evidence_collection.internal_search import (
+        article_repository as article_repository_module,
+    )
+    from app.agent.evidence_collection.internal_search import (
+        service as internal_search_module,
+    )
+
+    captured: dict[str, dict[str, object]] = {}
+    internal_search = object()
+
+    def capture_direct(**kwargs: object) -> object:
+        captured["direct"] = kwargs
+        return object()
+
+    def capture_evidence(**kwargs: object) -> object:
+        captured["evidence"] = kwargs
+        return object()
+
+    monkeypatch.setattr(
+        composition,
+        "ensure_external_search_configured",
+        lambda: None,
+    )
+    monkeypatch.setattr(direct_service_module, "DirectAnswerService", capture_direct)
+    monkeypatch.setattr(
+        evidence_service_module, "EvidenceAnswerService", capture_evidence
+    )
+    monkeypatch.setattr(embedder_module, "GeminiQueryEmbedder", lambda: object())
+    monkeypatch.setattr(
+        article_repository_module,
+        "PgVectorArticleSearchRepository",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        internal_search_module,
+        "InternalSearchService",
+        lambda **_kwargs: internal_search,
+    )
+    monkeypatch.setattr(
+        planning_service_module,
+        "QuestionPlanningService",
+        lambda **_kwargs: object(),
+    )
+    delta_reporter = object()
+    continuation = object()
+
+    phases = composition._build_answering_phases(
+        session_factory=cast(async_sessionmaker[AsyncSession], object()),
+        delta_reporter=delta_reporter,
+        continuation=continuation,
+    )
+
+    assert captured["direct"]["delta_reporter"] is delta_reporter
+    assert captured["direct"]["continuation"] is continuation
+    assert captured["direct"]["agent"] is DIRECT_ANSWER_AGENT
+    assert (
+        captured["direct"]["runtime_scope_factory"]
+        is composition.activate_gemini_agent_runtime
+    )
+    assert captured["evidence"]["delta_reporter"] is delta_reporter
+    assert captured["evidence"]["continuation"] is continuation
+    assert captured["evidence"]["agent"] is EVIDENCE_ANSWER_AGENT
+    assert (
+        captured["evidence"]["runtime_scope_factory"]
+        is composition.activate_gemini_agent_runtime
+    )
+    assert isinstance(phases, AnsweringPhases)
+    assert phases.collector.internal_search is internal_search
+    assert phases.direct_answerer is not None
+    assert phases.evidence_answerer is not None
