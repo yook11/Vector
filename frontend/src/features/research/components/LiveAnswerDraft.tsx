@@ -34,10 +34,6 @@ interface LiveAnswerDraftProps {
   errorCode: ResearchRunResponse["errorCode"];
 }
 
-interface LiveAnswerDraftContentProps extends LiveAnswerDraftProps {
-  isRecoveryPending: boolean;
-}
-
 export function failureText(
   errorCode: ResearchRunResponse["errorCode"],
 ): string {
@@ -55,7 +51,7 @@ export function failureText(
 
 function FailureContent({
   errorCode,
-}: Pick<LiveAnswerDraftContentProps, "errorCode">) {
+}: Pick<LiveAnswerDraftProps, "errorCode">) {
   return (
     <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-[var(--vector-ink-muted)]">
       <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
@@ -70,18 +66,10 @@ function DraftContent({
   status,
   draftMode,
   draftText,
-  isRecoveryPending,
-}: Pick<
-  LiveAnswerDraftContentProps,
-  "status" | "draftMode" | "draftText" | "isRecoveryPending"
->) {
+}: Pick<LiveAnswerDraftProps, "status" | "draftMode" | "draftText">) {
   const isFinalizing = status === "completed";
   const showsDraft = draftMode === "visible" && draftText.length > 0;
-  const statusText = isFinalizing
-    ? "回答を確定しています…"
-    : isRecoveryPending
-      ? "回答の状態を確認しています…"
-      : "回答を生成中…";
+  const statusText = isFinalizing ? "回答を生成しています" : "回答を生成中…";
   const { remarkPlugins, remarkRehypeOptions, components } =
     useAnswerMarkdownConfig();
 
@@ -114,8 +102,7 @@ export function LiveAnswerSlotContent({
   draftMode,
   draftText,
   errorCode,
-  isRecoveryPending,
-}: LiveAnswerDraftContentProps) {
+}: LiveAnswerDraftProps) {
   if (status === "failed") {
     return <FailureContent errorCode={errorCode} />;
   }
@@ -125,20 +112,19 @@ export function LiveAnswerSlotContent({
         status={status}
         draftMode={draftMode}
         draftText={draftText}
-        isRecoveryPending={isRecoveryPending}
       />
     );
   }
   if (status === "completed") {
     return (
       <p className="text-sm leading-6 text-[var(--vector-ink-muted)]">
-        回答を確定しています…
+        回答を生成しています
       </p>
     );
   }
   return (
     <p className="text-sm leading-6 text-[var(--vector-ink-muted)]">
-      {draftMode === "suppressed" || isRecoveryPending
+      {draftMode === "suppressed"
         ? "回答の状態を確認しています…"
         : "回答を準備しています…"}
     </p>
@@ -182,7 +168,6 @@ export function LiveAnswerDraft({
           status={status}
           draftMode={draftMode}
           draftText={draftText}
-          isRecoveryPending={false}
         />
       </div>
     </article>

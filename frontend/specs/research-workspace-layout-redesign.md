@@ -384,7 +384,7 @@ live draft から DB 確定回答への収束は、別画面への遷移では�
    run status rail、answer slot、answer先頭anchorのDOM上の所有者を、`running`から`completed`への
    state変更だけを理由に一括で破棄しない。
 2. 通常のcompleted経路では、DB確定済みassistant messageを描画できるまで、現在見えているdraftを
-   同じslot内に保持し、`回答を確定しています…`相当のstatusをslot外のstatus railで表示する。
+   同じslot内に保持し、`回答を生成しています`相当のstatusをslot外のstatus railで表示する。
 3. DB確定回答の到着時は、保持中のdraftを同じslot内のfinal answerへ1回のcommitで置換する。
    draftとfinal answerを同時に見せず、両方が存在しないpaint frameも作らない。
 4. EventSourceがterminal event前に`CLOSED`となりpollingへfallbackする経路では、未完了draftを

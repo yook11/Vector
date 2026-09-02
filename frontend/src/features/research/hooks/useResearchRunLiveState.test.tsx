@@ -12,12 +12,9 @@ import { useResearchRunLiveState } from "./useResearchRunLiveState";
 
 const RUN_ONE = "00000000-0000-4000-a000-000000000010";
 const RUN_TWO = "00000000-0000-4000-a000-000000000020";
-const CREATED_AT_ONE = "2026-07-22T12:00:00.000Z";
-const CREATED_AT_TWO = "2026-07-22T12:00:01.000Z";
 
 interface ControllerOptions {
   runId: string;
-  createdAt?: string;
   requestRefresh?: () => Promise<void>;
   refresh?: () => void;
 }
@@ -48,10 +45,9 @@ function snapshot() {
   };
 }
 
-function liveStateInput(runId: string, createdAt = CREATED_AT_ONE) {
+function liveStateInput(runId: string) {
   return {
     runId,
-    createdAt,
     initialStatus: "running" as const,
   };
 }
@@ -104,13 +100,13 @@ describe("useResearchRunLiveState", () => {
     expect(activeSubscriptions).toBe(0);
   });
 
-  it("uses runId and persisted createdAt as controller identity", () => {
+  it("uses runId as controller identity", () => {
     let activeSubscriptions = 0;
     let maximumActiveSubscriptions = 0;
-    const createdIdentities: string[] = [];
+    const createdRunIds: string[] = [];
     mocks.createController.mockImplementation(
       (options: ControllerOptions): MockController => {
-        createdIdentities.push(`${options.runId}:${options.createdAt}`);
+        createdRunIds.push(options.runId);
         return {
           getSnapshot: snapshot,
           subscribe: () => {
@@ -128,27 +124,16 @@ describe("useResearchRunLiveState", () => {
     );
 
     const { rerender, unmount } = renderHook(
-      ({ runId, createdAt }) =>
-        useResearchRunLiveState(liveStateInput(runId, createdAt)),
-      { initialProps: { runId: RUN_ONE, createdAt: CREATED_AT_ONE } },
+      ({ runId }) => useResearchRunLiveState(liveStateInput(runId)),
+      { initialProps: { runId: RUN_ONE } },
     );
 
-    rerender({ runId: RUN_ONE, createdAt: CREATED_AT_ONE });
-    expect(createdIdentities).toEqual([`${RUN_ONE}:${CREATED_AT_ONE}`]);
-
-    rerender({ runId: RUN_ONE, createdAt: CREATED_AT_TWO });
-    expect(createdIdentities).toEqual([
-      `${RUN_ONE}:${CREATED_AT_ONE}`,
-      `${RUN_ONE}:${CREATED_AT_TWO}`,
-    ]);
+    rerender({ runId: RUN_ONE });
+    expect(createdRunIds).toEqual([RUN_ONE]);
     expect(activeSubscriptions).toBe(1);
 
-    rerender({ runId: RUN_TWO, createdAt: CREATED_AT_TWO });
-    expect(createdIdentities).toEqual([
-      `${RUN_ONE}:${CREATED_AT_ONE}`,
-      `${RUN_ONE}:${CREATED_AT_TWO}`,
-      `${RUN_TWO}:${CREATED_AT_TWO}`,
-    ]);
+    rerender({ runId: RUN_TWO });
+    expect(createdRunIds).toEqual([RUN_ONE, RUN_TWO]);
     expect(maximumActiveSubscriptions).toBe(1);
     expect(activeSubscriptions).toBe(1);
 
