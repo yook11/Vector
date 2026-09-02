@@ -19,9 +19,8 @@
 ## Tests / Done
 
 - 既存テストから旧列のfixture・期待値のみを除き、deadline sweepの2本・6ケースと回帰保証を維持する。
-- 移行互換テスト1本を旧列あり／なしで実行する。どちらも作成→start→complete→取得が成功し、
-  列ありでは2列がNULLのままであることを確認する。
-- 互換テストの実装前redを確認してからproduction codeを変更し、lint・format・unit・integrationを通す。
+- 列の有無を切り替える移行互換テストは持たない。物理削除後のライフサイクルはDROP側の既存テストが担う。
+- lint・format・unit・integrationを通す。
 
 ## Non-goals / Release
 
