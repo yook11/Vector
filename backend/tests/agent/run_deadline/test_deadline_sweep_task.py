@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
+from app.agent.daily_quota import observability as daily_quota_observability
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
-from app.agent.runs.daily_quota import observability as daily_quota_observability
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.tasks.agent_run import AgentRunTaskBoundaryError

@@ -13,11 +13,11 @@ from app.agent.contract import (
     ExternalUrlSource,
     InternalArticleSource,
 )
-from app.agent.runs.result_mapper import (
+from app.agent.threads.projection import build_research_assistant_message
+from app.agent.threads.result_mapper import (
     build_assistant_message_for_result,
     build_source_rows_for_message,
 )
-from app.agent.threads.projection import build_research_assistant_message
 from app.models.agent_message import AgentMessage
 from app.shared.security.safe_url import SafeUrl
 

@@ -6,7 +6,7 @@ from typing import Any
 
 from logfire.testing import CaptureLogfire
 
-from app.agent.runs.daily_quota.observability import (
+from app.agent.daily_quota.observability import (
     record_daily_quota_admission,
     record_daily_quota_release,
     record_daily_quota_stale_reservation,

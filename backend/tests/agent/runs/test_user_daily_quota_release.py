@@ -14,16 +14,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.agent.runs.contracts as run_contracts
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
+from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
+from app.agent.daily_quota.persistence import (
+    _build_daily_quota_reservation_statement,
+)
+from app.agent.run_deadline.persistence import sweep_deadline_exceeded_runs
+from app.agent.run_deadline.policy import RUN_DEADLINE_SECONDS
 from app.agent.runs.contracts import (
     CancelRunCommandOutcome,
     CancelRunOutcome,
     CompleteRunOutcome,
 )
-from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
-from app.agent.runs.daily_quota.persistence import (
-    _build_daily_quota_reservation_statement,
-)
-from app.agent.runs.repository import RUN_DEADLINE_SECONDS, AgentRunRepository
+from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
@@ -719,7 +721,7 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                AgentRunRepository(sweep_session).sweep_deadline_exceeded_runs(now=_NOW)
+                sweep_deadline_exceeded_runs(sweep_session, now=_NOW)
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -855,7 +857,7 @@ async def test_competing_terminal_transition_wins_without_refund(
                     seeded.run_id,
                 )
             elif transition == "deadline_sweep":
-                sweep_result = await repository.sweep_deadline_exceeded_runs(now=_NOW)
+                sweep_result = await sweep_deadline_exceeded_runs(locker, now=_NOW)
                 assert sweep_result.queued_terminal_count == 1
                 assert sweep_result.queued_quota_released_count == 1
                 assert sweep_result.queued_quota_not_eligible_count == 0

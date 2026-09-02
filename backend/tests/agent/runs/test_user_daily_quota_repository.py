@@ -12,13 +12,13 @@ from sqlalchemy import DateTime, func, literal, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import app.agent.runs.daily_quota.persistence as daily_quota_persistence_module
+import app.agent.daily_quota.persistence as daily_quota_persistence_module
+from app.agent.daily_quota.contracts import DailyRequestLimitExceededError
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
     CreatedAgentRun,
     ThreadNotFoundError,
 )
-from app.agent.runs.daily_quota.contracts import DailyRequestLimitExceededError
 from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun

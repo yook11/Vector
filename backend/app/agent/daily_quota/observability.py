@@ -10,8 +10,8 @@ from uuid import UUID
 import logfire
 import structlog
 
-from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
-from app.agent.runs.daily_quota.policy import DAILY_REQUEST_LIMIT
+from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
+from app.agent.daily_quota.policy import DAILY_REQUEST_LIMIT
 
 DailyQuotaAdmissionResult = Literal["accepted", "rejected"]
 DailyQuotaReleaseResult = Literal["released", "not_eligible", "inconsistent"]

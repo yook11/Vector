@@ -15,6 +15,7 @@ from taskiq import Context, TaskiqDepends
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
+from app.agent.daily_quota import observability as daily_quota_observability
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.reporters import (
     AgentRunLiveActivityReporter,
@@ -29,6 +30,7 @@ from app.agent.research_handoff import (
     ResearchHandoff,
     recall_research_handoff,
 )
+from app.agent.run_deadline.persistence import sweep_deadline_exceeded_runs
 from app.agent.running import (
     RunIdentity,
     RunInput,
@@ -40,7 +42,6 @@ from app.agent.runs.contracts import (
     StartRunOutcome,
     UserQuestionMessage,
 )
-from app.agent.runs.daily_quota import observability as daily_quota_observability
 from app.agent.runs.execution_probe import AgentRunExecutionProbe
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -367,9 +368,7 @@ async def sweep_deadline_exceeded_agent_runs(ctx: Context = TaskiqDepends()) -> 
     try:
         async with session_factory() as session:
             async with session.begin():
-                result = await AgentRunRepository(
-                    session
-                ).sweep_deadline_exceeded_runs()
+                result = await sweep_deadline_exceeded_runs(session)
     except Exception as exc:
         logger.error(
             "agent_run_deadline_sweep_failed",

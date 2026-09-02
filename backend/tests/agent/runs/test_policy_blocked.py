@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.run_deadline.persistence import sweep_deadline_exceeded_runs
 from app.agent.runs.contracts import CancelRunOutcome
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -228,7 +229,7 @@ async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
                 seeded.run_id,
                 now=_NOW,
             )
-            swept = await repository.sweep_deadline_exceeded_runs(now=_NOW)
+            swept = await sweep_deadline_exceeded_runs(session, now=_NOW)
 
     assert_idempotent_skip(restart_result)
     assert swept.queued_terminal_count == 0
