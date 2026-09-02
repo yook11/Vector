@@ -93,7 +93,6 @@ function ResearchTurn({
   return (
     <ResearchActiveRunBoundary
       runId={userMessage.run.runId}
-      createdAt={userMessage.createdAt}
       initialStatus={activeStatus}
     >
       <div

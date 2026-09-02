@@ -154,7 +154,7 @@ ReactのTransition / Suspenseも、すでにrevealされた内容を不用意に
   destructive actionとしてspinnerと`削除中…`の両方を持つ。
 - Researchの新規質問送信では、送信受付から遷移先threadのcommitまで現在workspaceと明示的な受付statusを
   保持し、full-page blank、無関係なroute fallback、操作受付が不明な状態を発生させない。
-- Researchの通常completed経路では、`回答を確定しています…`と表示中draftを維持したままRSC再取得を行い、
+- Researchの通常completed経路では、`回答を生成しています`と表示中draftを維持したままRSC再取得を行い、
   shell / composer / scroller / answer slotを消さずにDB確定回答へ置き換える。
 - SSE draft更新でMarkdown subtreeを設定identityの変化により再mountせず、確定回答置換を含むDOM連続性を
   component testと認証済みE2Eで固定する。
@@ -172,7 +172,7 @@ ReactのTransition / Suspenseも、すでにrevealされた内容を不用意に
 | `content_pending(scope)` | 現在route内のdata / search params更新 | 対象contentの解決またはerror | 画面形状に合うskeleton |
 | `mutation_pending(action)` | server action / mutation受付 | success redirect / resultまたはerror | button内spinner + pending動詞 |
 | `research_submission_pending` | Research composerが有効な質問をsubmit | 遷移先threadまたは同threadのactive run表示がcommit、もしくはinline error | 現在workspace + `質問を送信しています…` status |
-| `research_finalization_pending` | accepted completed terminalまたはpolling completed | 同じrunのDB確定assistant messageが同じanswer slotへcommit、または終端errorへ収束 | 表示中draft + `回答を確定しています…` |
+| `research_finalization_pending` | accepted completed terminalまたはpolling completed | 同じrunのDB確定assistant messageが同じanswer slotへcommit、または終端errorへ収束 | 表示中draft + `回答を生成しています` |
 
 表示の基本シーケンスは次とする。
 
@@ -202,7 +202,7 @@ Research新規質問
       -> live draft
 
 Research回答確定
-  同じanswer slotのdraft +「回答を確定しています…」
+  同じanswer slotのdraft +「回答を生成しています」
     -> RSC merge
       -> 同じanswer slotのDB確定回答
 ```
@@ -317,7 +317,7 @@ Researchの質問送信と回答確定は、button横の小さいspinnerやRSC m
   `/research/[threadId]`へpersistent submission boundaryから`router.replace()`し、既存threadは
   `router.refresh()`する。どちらも`no-store`のpage modelでDB正本へ収束する。
 - completed検知後は既存の`finalizing` stateを唯一のsourceとし、表示中draftと
-  `回答を確定しています…`を同じanswer slotに残す。global page bandやroute skeletonを追加表示しない。
+  `回答を生成しています`を同じanswer slotに残す。global page bandやroute skeletonを追加表示しない。
 - RSC payloadのcommit時は、同じrunのdraft / finalizing表示とDB確定answerを同じanswer slot内で原子的に
   入れ替える。draftとfinalを同時表示せず、その間にzero-height / blank frameを挟まない。
 - `PaperSurface`、`ShellMasthead`、workspace frame、composerは新規thread navigationとfinalization refreshの
@@ -438,7 +438,7 @@ awaitだけを対象boundary内のasync childへ遅らせる。共有する結�
 | `/research*`への進入 | `Researchを読み込み中…` | `ResearchWorkspaceSkeleton` | private情報なしでworkspaceのmasthead / sidebar / composer / detail railを表す |
 | Research内thread / new / more | global表示なし | 既存の旧本文 + overlay | 既存Research仕様をそのまま維持する |
 | Research質問送信 | global表示なし | 現在workspace + `質問を送信しています…` | composerだけでなく主content内にも受付を表示し、新規thread navigationをpersistent shell内でcommitする |
-| Research回答確定 | global表示なし | 同じanswer slotのdraft + `回答を確定しています…` | `router.refresh()`の前後でslotを保持し、DB確定answerへ原子的に置換する |
+| Research回答確定 | global表示なし | 同じanswer slotのdraft + `回答を生成しています` | `router.refresh()`の前後でslotを保持し、DB確定answerへ原子的に置換する |
 | `/settings` / `/admin/*` | target固有の上記文言 | 各page内のadmin skeleton | route loadingを削除し、in-page skeletonへ一本化する |
 | auth login mutation | 使わない | button内`ログイン中…` | 現行契約を維持する |
 
@@ -683,7 +683,7 @@ providerへfeature dataやskeleton構造を持ち込まない。Slice 4のstate�
     error時もstatus、disabled、`aria-busy`を残さず、global page navigation statusへ登録しない。
 19. 同じ設定で`draftText`だけを更新したとき、Markdown mappingのcomponent typeと未変更blockのDOM node
     identityを維持する。parse結果の文字列一致だけで代替しない。
-20. completed検知後のrefresh開始では同じanswer slot内にdraftと`回答を確定しています…`を維持し、
+20. completed検知後のrefresh開始では同じanswer slot内にdraftと`回答を生成しています`を維持し、
     DB確定answer反映時にslot wrapperを維持したままdraftだけを置換する。
 21. finalization rerenderでdraftとfinal answerを同時表示せず、focus、scroll mode、
     `ResearchLiveAnnouncer`の1回通知契約を維持する。
@@ -756,7 +756,7 @@ feature data probeではdata非依存shellを返した後、各manual boundary�
 | `/research`で新規質問submit、accepted Action responseを保留 | 同じResearch shellとworkspace、`質問を送信しています…`、pending composerを維持し、route / workspace skeletonと空白を表示しない |
 | 新規質問の最初のthread modelがfailed | exact対象runのcommitでsubmission statusとlockを解除し、別runでは解除しない |
 | 既存threadで質問submit、active run反映を保留 | 既存message、workspace status、pending composerを維持し、global statusを表示しない |
-| 通常run completed、確定thread detail反映を保留 | 同じanswer slotのdraftと`回答を確定しています…`を維持し、route skeletonと空白を表示しない |
+| 通常run completed、確定thread detail反映を保留 | 同じanswer slotのdraftと`回答を生成しています`を維持し、route skeletonと空白を表示しない |
 | 確定thread detailを解放 | 同じshell / composer / scroller / answer slotのままDB確定answerだけへ置換し、draftとfinalを同時表示しない |
 | Research delete | dialog actionに`削除中…`、二重操作不可 |
 
@@ -807,7 +807,7 @@ response保留からcommit完了まで`requestAnimationFrame`ごとに次を記�
       主content内に`質問を送信しています…`が見える。
 - [x] Research submissionは対象runがactive / terminalのどのstatusで最初にcommitされてもexact identityで終了し、
       submissionと内部navigation / deleteのfirst-winsが維持される。
-- [x] Research通常completedで、draft / `回答を確定しています…` / DB確定answerが同じstable answer slot内で
+- [x] Research通常completedで、draft / `回答を生成しています` / DB確定answerが同じstable answer slot内で
       空frameを挟まず置換される。
 - [x] Researchのshell / composerはnew-thread replaceとRSC refresh、既存scrollerはsubmit / refresh、answer slotは
       finalization refreshをまたいでDOM identityがcomponent testとanimation-frame E2Eにより固定される。

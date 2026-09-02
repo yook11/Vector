@@ -25,8 +25,6 @@ const RUN_ONE = "00000000-0000-4000-a000-000000000010";
 const RUN_TWO = "00000000-0000-4000-a000-000000000020";
 const POLICY_BLOCKED_NOTICE =
   "この依頼は安全上のポリシーにより処理されませんでした。";
-const RECOVERY_PENDING_NOTICE =
-  "回答に通常より時間がかかっています。現在の実行状態を確認しています。";
 
 const GENERATED_POLICY_BLOCKED_STATUSES: [
   Extract<ResearchMessageRun["status"], "policy_blocked">,
@@ -585,7 +583,7 @@ describe("ResearchThreadView live integration", () => {
       screen.queryByTestId("research-answer-slot"),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("回答を生成中…")).not.toBeInTheDocument();
-    expect(screen.queryByText("回答を確定しています…")).not.toBeInTheDocument();
+    expect(screen.queryByText("回答を生成しています")).not.toBeInTheDocument();
     expect(
       screen.queryByText("回答を生成できませんでした"),
     ).not.toBeInTheDocument();
@@ -734,7 +732,7 @@ describe("ResearchThreadView live integration", () => {
       );
     });
     expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
-    expect(announcer).toHaveTextContent("回答を確定しています…");
+    expect(announcer).toHaveTextContent("回答を生成しています");
 
     view.rerender(
       <ResearchThreadView
@@ -795,13 +793,13 @@ describe("ResearchThreadView live integration", () => {
     act(() => {
       source.emit("terminal", { attemptEpoch: 1, status: "completed" }, "2-0");
     });
-    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
+    expect(screen.getByText("回答を生成しています")).toBeInTheDocument();
     expect(screen.getByText("下書き")).toBeInTheDocument();
     expect(source.closeCount).toBe(1);
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("uses persisted user createdAt to present recovery without retrying or completing a partial draft", async () => {
+  it("keeps the active draft and its ordinary presentation after 180 seconds", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
     const view = render(
@@ -830,25 +828,18 @@ describe("ResearchThreadView live integration", () => {
       await vi.advanceTimersByTimeAsync(180_000);
     });
 
-    expect(screen.getByText(RECOVERY_PENDING_NOTICE)).toBeInTheDocument();
-    expect(screen.queryByText("回答を生成中…")).toBeNull();
-    expect(screen.queryByText("回答を準備しています…")).toBeNull();
+    expect(screen.getByText("回答を生成中…")).toBeInTheDocument();
+    expect(screen.queryByText("回答の状態を確認しています…")).toBeNull();
     expect(screen.getByTestId("composer-run-id")).toHaveTextContent(RUN_ONE);
     expect(screen.queryByText("回答を生成できませんでした")).toBeNull();
     expect(screen.queryByRole("button", { name: "再試行" })).toBeNull();
     expect(screen.getByText("期限後も下書き")).toBeInTheDocument();
     expect(screen.queryByText("DBで確定した回答")).toBeNull();
 
-    act(() => {
-      source.emit("terminal", { attemptEpoch: 1, status: "completed" }, "2-0");
-    });
-    expect(screen.queryByText(RECOVERY_PENDING_NOTICE)).toBeNull();
-    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
-
     view.unmount();
   });
 
-  it("removes the ordinary preparation copy from a recovery-pending run without a draft", async () => {
+  it("keeps the ordinary active presentation when an older user message is first displayed", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
     const view = render(
@@ -857,27 +848,14 @@ describe("ResearchThreadView live integration", () => {
           userMessage(
             run(RUN_ONE),
             "このニュースの影響は？",
-            "2026-07-22T12:00:00.000Z",
+            "2026-07-22T11:56:00.000Z",
           ),
         ])}
       />,
     );
-    const source = currentSource();
+
     expect(screen.getByText("回答を準備しています…")).toBeInTheDocument();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(180_000);
-    });
-
-    expect(screen.getByText(RECOVERY_PENDING_NOTICE)).toBeInTheDocument();
-    expect(screen.queryByText("回答を生成中…")).toBeNull();
-    expect(screen.queryByText("回答を準備しています…")).toBeNull();
-
-    act(() => {
-      source.emit("terminal", { attemptEpoch: 1, status: "completed" }, "1-0");
-    });
-    expect(screen.queryByText(RECOVERY_PENDING_NOTICE)).toBeNull();
-    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
+    expect(screen.queryByText("回答の状態を確認しています…")).toBeNull();
 
     view.unmount();
   });
@@ -971,7 +949,7 @@ describe("ResearchThreadView live integration", () => {
       screen.getAllByRole("status", { name: POLICY_BLOCKED_NOTICE }),
     ).toHaveLength(1);
     expect(screen.queryByText("回答を生成中…")).not.toBeInTheDocument();
-    expect(screen.queryByText("回答を確定しています…")).not.toBeInTheDocument();
+    expect(screen.queryByText("回答を生成しています")).not.toBeInTheDocument();
     expect(
       screen.queryByText("回答を生成できませんでした"),
     ).not.toBeInTheDocument();
@@ -1191,7 +1169,7 @@ describe("ResearchThreadView live integration", () => {
     expect(screen.queryByText("不完全な下書き")).not.toBeInTheDocument();
     expect(within(slot).queryByText("DBで確定した回答")).toBeNull();
     expect(slot.textContent?.trim().length).toBeGreaterThan(0);
-    expect(slot).not.toHaveTextContent("回答を確定しています…");
+    expect(slot).not.toHaveTextContent("回答を生成しています");
     expect(slot).not.toHaveTextContent("回答が完了しました");
     expect(focusTarget).toHaveFocus();
     expect(FakeEventSource.instances).toHaveLength(1);
@@ -1214,7 +1192,7 @@ describe("ResearchThreadView live integration", () => {
     });
 
     expect(answerSlot()).toBe(slot);
-    expect(screen.getAllByText("回答を確定しています…").length).toBeGreaterThan(
+    expect(screen.getAllByText("回答を生成しています").length).toBeGreaterThan(
       0,
     );
     expect(screen.queryByText("不完全な下書き")).not.toBeInTheDocument();
@@ -1264,7 +1242,7 @@ describe("ResearchThreadView live integration", () => {
 
     expect(answerSlot()).toBe(slot);
     expectExclusiveAnswer(slot, "draft");
-    expect(screen.getAllByText("回答を確定しています…").length).toBeGreaterThan(
+    expect(screen.getAllByText("回答を生成しています").length).toBeGreaterThan(
       0,
     );
     expect(focusTarget).toHaveFocus();
@@ -1284,7 +1262,7 @@ describe("ResearchThreadView live integration", () => {
     expect(screen.getByText("DBで確定した回答")).toBeInTheDocument();
     expect(screen.getByText("回答が完了しました")).toBeInTheDocument();
     expect(screen.queryByText("回答を生成中…")).not.toBeInTheDocument();
-    expect(screen.queryByText("回答を確定しています…")).not.toBeInTheDocument();
+    expect(screen.queryByText("回答を生成しています")).not.toBeInTheDocument();
     expect(focusTarget).toHaveFocus();
   });
 

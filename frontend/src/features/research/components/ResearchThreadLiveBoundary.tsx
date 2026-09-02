@@ -16,10 +16,7 @@ import type {
   ResearchMessageRun,
 } from "@/types/types.gen";
 import { useResearchRunLiveState } from "../hooks/useResearchRunLiveState";
-import {
-  RESEARCH_UI_DEADLINE_SECONDS,
-  type ResearchRunLiveSnapshot,
-} from "../live/controller";
+import type { ResearchRunLiveSnapshot } from "../live/controller";
 import { createInitialResearchLiveState } from "../live/reducer";
 import { ActiveRunStatus, activeRunText } from "./ActiveRunStatus";
 import { failureText, LiveAnswerSlotContent } from "./LiveAnswerDraft";
@@ -36,9 +33,8 @@ const ActiveRunSnapshotContext = createContext<ResearchRunLiveSnapshot | null>(
 );
 const POLICY_BLOCKED_NOTICE =
   "この依頼は安全上のポリシーにより処理されませんでした。";
-const DEADLINE_EXCEEDED_NOTICE = "時間切れになりました";
-const RECOVERY_PENDING_NOTICE =
-  "回答に通常より時間がかかっています。現在の実行状態を確認しています。";
+const DEADLINE_EXCEEDED_NOTICE =
+  "回答の生成に時間がかかり、完了できませんでした。少し時間をおいて、もう一度お試しください。";
 
 interface ResearchLiveScrollRegionProps {
   finalContentKey: string;
@@ -95,7 +91,6 @@ export function ResearchLiveScrollRegion({
 
 interface ResearchActiveRunBoundaryProps {
   runId: string;
-  createdAt: string;
   initialStatus: Extract<
     ResearchMessageRun["status"],
     "queued" | "running"
@@ -105,20 +100,17 @@ interface ResearchActiveRunBoundaryProps {
 
 interface ResearchActiveRunControllerProps {
   runId: string;
-  createdAt: string;
   initialStatus: Extract<ResearchMessageRun["status"], "queued" | "running">;
   onSnapshot: (snapshot: ResearchRunLiveSnapshot) => void;
 }
 
 function ResearchActiveRunController({
   runId,
-  createdAt,
   initialStatus,
   onSnapshot,
 }: ResearchActiveRunControllerProps) {
   const snapshot = useResearchRunLiveState({
     runId,
-    createdAt,
     initialStatus,
   });
 
@@ -131,7 +123,6 @@ function ResearchActiveRunController({
 
 export function ResearchActiveRunBoundary({
   runId,
-  createdAt,
   initialStatus,
   children,
 }: ResearchActiveRunBoundaryProps) {
@@ -143,9 +134,6 @@ export function ResearchActiveRunBoundary({
             runStatus: initialStatus,
             connectionMode: "connecting",
             liveState: createInitialResearchLiveState(),
-            isRecoveryPending:
-              Date.now() >=
-              Date.parse(createdAt) + RESEARCH_UI_DEADLINE_SECONDS * 1_000,
           },
   );
   const markAnswerContentChanged = useContext(AnswerContentRevisionContext);
@@ -183,9 +171,7 @@ export function ResearchActiveRunBoundary({
     } else if (snapshot.runStatus === "deadline_exceeded") {
       announcement = DEADLINE_EXCEEDED_NOTICE;
     } else if (snapshot.runStatus === "completed") {
-      announcement = "回答を確定しています…";
-    } else if (snapshot.isRecoveryPending) {
-      announcement = RECOVERY_PENDING_NOTICE;
+      announcement = "回答を生成しています";
     } else if (
       snapshot.liveState.draftMode === "visible" &&
       snapshot.liveState.draftText.length > 0
@@ -206,7 +192,6 @@ export function ResearchActiveRunBoundary({
         <ResearchActiveRunController
           key="live-controller"
           runId={runId}
-          createdAt={createdAt}
           initialStatus={initialStatus}
           onSnapshot={updateSnapshot}
         />
@@ -291,16 +276,6 @@ export function ResearchRunStatusRail({
   ) {
     return null;
   }
-  if (snapshot.isRecoveryPending) {
-    return (
-      <div className="mt-2 flex min-w-0 items-start gap-1.5 text-xs leading-5 text-[var(--vector-ink-muted)]">
-        <Clock3 aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-        <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-          {RECOVERY_PENDING_NOTICE}
-        </span>
-      </div>
-    );
-  }
   return (
     <ActiveRunStatus
       status={snapshot.runStatus}
@@ -346,7 +321,6 @@ export function ResearchRunAnswerSlot({
         draftMode={snapshot.liveState.draftMode}
         draftText={snapshot.liveState.draftText}
         errorCode={terminal?.status === "failed" ? terminal.errorCode : null}
-        isRecoveryPending={snapshot.isRecoveryPending}
       />
     </ResearchAnswerSlot>
   );

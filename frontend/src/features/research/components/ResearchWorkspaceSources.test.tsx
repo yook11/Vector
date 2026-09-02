@@ -1033,7 +1033,7 @@ describe("Research workspace model-commit continuity", () => {
     });
     expect(latestAnswerSlot()).toBe(slot);
     expect(slot).toHaveTextContent("外側commit前の下書き");
-    expect(slot).toHaveTextContent("回答を確定しています…");
+    expect(slot).toHaveTextContent("回答を生成しています");
     expect(within(slot).queryByText("回答本文2")).toBeNull();
 
     view.rerender(workspaceElement(threadWithFinalRun(SUBMITTED_RUN)));
@@ -1042,7 +1042,7 @@ describe("Research workspace model-commit continuity", () => {
     expect(latestAnswerSlot()).toBe(slot);
     expect(within(slot).queryByText("外側commit前の下書き")).toBeNull();
     expect(within(slot).getByText(/回答本文2/)).toBeInTheDocument();
-    expect(slot).not.toHaveTextContent("回答を確定しています…");
+    expect(slot).not.toHaveTextContent("回答を生成しています");
     expect(slot.textContent?.trim().length).toBeGreaterThan(0);
   });
 });

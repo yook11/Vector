@@ -1270,7 +1270,7 @@ test("completed terminalはRSC gate中もdraftとworkspaceを維持しfinalへ�
     await expect(
       turn.getByText("E2E continuity live draft marker 1", { exact: false }),
     ).toBeVisible();
-    await expect(turn.getByText("回答を確定しています…")).toBeVisible();
+    await expect(turn.getByText("回答を生成しています")).toBeVisible();
     await expect(page.getByRole("main")).toBeVisible();
     await expect(composer(page)).toBeVisible();
     await expect(answerPanel(page)).toBeVisible();

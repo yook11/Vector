@@ -64,7 +64,7 @@ describe("LiveAnswerDraft", () => {
       />,
     );
 
-    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
+    expect(screen.getByText("回答を生成しています")).toBeInTheDocument();
     expect(screen.getByText("確定待ちの下書き")).toBeInTheDocument();
   });
 
@@ -78,7 +78,7 @@ describe("LiveAnswerDraft", () => {
       />,
     );
 
-    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
+    expect(screen.getByText("回答を生成しています")).toBeInTheDocument();
     expect(screen.queryByText("復活させない本文")).not.toBeInTheDocument();
   });
 

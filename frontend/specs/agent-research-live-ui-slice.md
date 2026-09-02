@@ -123,7 +123,7 @@ backendは`stage`、`activity`、`answer.delta`、`answer.reset`、`terminal`を
 16. 200 streamの終了後に同じEventSourceが`CONNECTING`となる通常・一時的な再接続ではdraftを消さない。
     `CLOSED`となるlive継続不能とは区別し、接続障害をrun失敗とは扱わない。
 17. 正常terminal後は、DBの確定回答を再取得する間は現在表示中のdraftを維持し、ラベルを正確に
-    `回答を確定しています…`へ変更する。取得後に確定assistant messageへ置き換え、draft自体を確定回答へ
+    `回答を生成しています`へ変更する。取得後に確定assistant messageへ置き換え、draft自体を確定回答へ
     昇格させない。
 18. failed / cancelled terminalを検知した時点で`draftText`を空にし`draftMode = suppressed`としてDOMから
     非表示にし、確定回答として残さずDBのrun状態へ収束させる。
@@ -197,9 +197,9 @@ backendは`stage`、`activity`、`answer.delta`、`answer.reset`、`terminal`を
 45. terminalはDB commit後の終端通知であり、確定回答本文そのものではない。SSE draft、terminal payload、
     polling responseから確定assistant message、sources、missing aspectsを合成しない。
 46. completed terminalまたはpolling completedを検知したら、表示中のdraftを維持して`finalizing`へ遷移し、
-    ラベルを`回答を確定しています…`へ変更してthread detailを再取得する。
+    ラベルを`回答を生成しています`へ変更してthread detailを再取得する。
 47. `polling-only`移行時に不完全として非表示にしたdraftは、後からpolling completedを検知しても再表示しない。
-    draft本文がない状態で`回答を確定しています…`だけを表示し、DB結果を待つ。
+    draft本文がない状態で`回答を生成しています`だけを表示し、DB結果を待つ。
 48. thread detail再取得が失敗または反映されない間もdraftを確定回答へ昇格させず、citation、sources、
     missing aspectsを表示しない。
 49. completed後のthread detail再取得は2秒から開始し、4秒、8秒、最大10秒のbackoffで、active run componentが
@@ -276,7 +276,7 @@ backendは`stage`、`activity`、`answer.delta`、`answer.reset`、`terminal`を
 #### Accessibility and scroll ownership
 
 79. draft本文を`aria-live` regionに入れず、deltaごとに本文全体をscreen readerへ再通知しない。
-80. `回答を生成中…`、`回答を確定しています…`、安全な失敗・キャンセル文言だけを各表示境界の
+80. `回答を生成中…`、`回答を生成しています`、安全な失敗・キャンセル文言だけを各表示境界の
     `role="status"`または`aria-live="polite"`で大きな状態変化ごとに1回通知する。`回答が完了しました`は
     active componentのunmountをまたいで残る専用`ResearchLiveAnnouncer`だけが所有する。
 81. `ResearchLiveAnnouncer`は同じclient sessionでactiveだったrunがDB確定表示へ遷移した場合だけ完了を1回通知し、
@@ -347,7 +347,7 @@ backendは`stage`、`activity`、`answer.delta`、`answer.reset`、`terminal`を
 - `CLOSED` / invalid Stream IDではdraftTextを消去してdraftModeをsuppressedにし、DOMから本文を除き、
   completed後にも復活させない。
 - terminalとpollingの終端検知が競合してもfinalizationを1回だけ実行し、DBの確定結果へ置き換わる。
-- completed後は`回答を確定しています…`を表示し、再取得失敗中もdraftを確定回答へ昇格させない。
+- completed後は`回答を生成しています`を表示し、再取得失敗中もdraftを確定回答へ昇格させない。
 - failed / cancelled検知時はdraftを即座に非表示にし、安全な固定文言だけを表示する。
 - thread detailが反映されない間は2秒から最大10秒のbackoffでrefreshを再試行し、unmount時にtimerを残さない。
 - failed / cancelled runのdraftが確定回答として残らない。
@@ -615,8 +615,8 @@ terminal payloadは確定回答を運ばず、draftも確定結果の正本で�
 
 | 検知した状態 | draft | 再取得中の表示 | 再取得成功後 |
 |---|---|---|---|
-| completed | 現在表示中なら維持 | `回答を確定しています…` | DBの確定assistant messageへ置換 |
-| completed after polling-only | 非表示のdraftを復活させない | `回答を確定しています…` | DBの確定assistant messageを表示 |
+| completed | 現在表示中なら維持 | `回答を生成しています` | DBの確定assistant messageへ置換 |
+| completed after polling-only | 非表示のdraftを復活させない | `回答を生成しています` | DBの確定assistant messageを表示 |
 | failed | 即座に非表示 | error codeの安全な固定文言 | DBのfailed run表示へ置換 |
 | failed + cancelled | 即座に非表示 | `キャンセルしました` | DBのcancelled表示へ置換 |
 
@@ -833,7 +833,7 @@ screen readerへ通知するlive regionと、視覚的に増分更新するdraft
 通知文言は次に固定する。
 
 - generation中: `回答を生成中…`
-- completed後のDB再取得中: `回答を確定しています…`
+- completed後のDB再取得中: `回答を生成しています`
 - DB確定結果反映時: `回答が完了しました`
 - failed: 既存error codeの安全な固定文言
 - cancelled: `キャンセルしました`
@@ -931,7 +931,7 @@ auto-follow停止中にdraft、reset後の新本文、確定回答等の新し�
 
 - first delta前は空draftを表示せず、到着後にuser message直後のassistant側へ表示する。
 - marker / resetなしのgeneration 2 deltaから安全に一時draftを開始する。
-- generation中は`回答を生成中…`、completed再取得中は`回答を確定しています…`を表示する。
+- generation中は`回答を生成中…`、completed再取得中は`回答を生成しています`を表示する。
 - raw JSON、envelope、内部field、sources、missing aspectsをdraftへ表示しない。frontend component testで
   citation marker filterのbackend責任を重複実装しない。
 - suffix draftを確定回答として扱わず、terminal後にDB回答へ完全置換する。
