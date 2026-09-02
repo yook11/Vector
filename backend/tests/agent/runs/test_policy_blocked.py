@@ -216,7 +216,7 @@ async def test_mark_policy_blocked_does_not_overwrite_a_cancelled_attempt(
 
 
 @pytest.mark.asyncio
-async def test_policy_blocked_is_excluded_from_restart_and_stale_sweep(
+async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     seeded = await _seed_running_run(session_factory)
@@ -240,7 +240,7 @@ async def test_policy_blocked_is_excluded_from_restart_and_stale_sweep(
                 seeded.run_id,
                 now=_NOW,
             )
-            swept = await repository.sweep_stale_runs(now=_NOW)
+            swept = await repository.sweep_deadline_exceeded_runs(now=_NOW)
 
     assert_idempotent_skip(restart_result)
     assert swept.queued_terminal_count == 0

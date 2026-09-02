@@ -3,7 +3,7 @@
   - scheduler_dispatch:        収集 dispatch 用 cron
   - scheduler_trend_discovery: Trend Discovery 用 cron
   - scheduler_briefing:        週次 briefing 用 cron
-  - scheduler_agent:           agent run stale sweeper 用 cron
+  - scheduler_agent:           agent run deadline sweeper 用 cron
   - scheduler_maintenance:     back-fill 救済 + retention purge 用 cron
 
 5 つは ``app.queue.scheduler_entrypoint`` が 1 プロセスで並行実行する

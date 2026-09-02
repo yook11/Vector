@@ -51,7 +51,7 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
         },
     ),
     ("trend_discovery", scheduler_trend_discovery, {"run_trend_discovery"}),
-    ("agent", scheduler_agent, {"sweep_stale_agent_runs"}),
+    ("agent", scheduler_agent, {"sweep_deadline_exceeded_agent_runs"}),
     ("briefing", scheduler_briefing, {"dispatch_weekly_briefings"}),
     (
         "maintenance",

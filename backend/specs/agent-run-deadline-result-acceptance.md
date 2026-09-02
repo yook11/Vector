@@ -21,7 +21,8 @@ Status: Draft
 - 起点は受付時刻`created_at`とし、run作成時に1度だけ`deadline_at`を固定する。
 - queue待機も予算に含める。retry、再配送、worker開始、SSE再接続で延長しない。
 - 判定はPostgresの時刻で行う。workerやfrontendのwall clockは正本にしない。
-- `decision_at < deadline_at`の場合だけdeadline内とし、境界時刻ちょうどは期限切れとする。
+- `now < deadline_at`の場合だけdeadline内とし、境界時刻ちょうどは期限切れとする。
+  `now`はその場で取得するDB時刻であり、永続化する列ではない。
 - deadlineの長さは60秒とする。現行の150 / 180秒とは別のdomain policyである。
 
 ### 2. 結果はDB transitionが勝ったときだけ確定する

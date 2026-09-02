@@ -18,10 +18,10 @@ from app.agent.runs.contracts import (
     CancelRunOutcome,
     CompleteRunOutcome,
     CreatedAgentRun,
+    DeadlineExceededRunningRun,
+    DeadlineRunSweepResult,
     OwnedAgentRunLiveContext,
     RunTransitionLostError,
-    StaleRunningRun,
-    StaleRunSweepResult,
     StartRunCommandOutcome,
     StartRunOutcome,
     ThreadNotFoundError,
@@ -52,8 +52,6 @@ _TERMINAL_STATUSES = (
     AgentRunStatus.FAILED.value,
 )
 RUN_DEADLINE_SECONDS = 60
-RESEARCH_RUNNING_STALE_AFTER_SECONDS = 180
-RESEARCH_QUEUED_STALE_AFTER_SECONDS = 300
 logger = structlog.get_logger(__name__)
 
 
@@ -240,21 +238,21 @@ class AgentRunRepository:
                 quota_release_outcome=None,
             )
 
-        decision_at = await self._database_now(now)
-        if decision_at >= run.deadline_at:
+        now = await self._database_now(now)
+        if now >= run.deadline_at:
             deadline_result = await self._session.execute(
                 update(AgentRun)
                 .where(
                     AgentRun.id == run_id,
                     AgentRun.status == run.status,
                     AgentRun.attempt_epoch == run.attempt_epoch,
-                    AgentRun.deadline_at <= decision_at,
+                    AgentRun.deadline_at <= now,
                 )
                 .values(
                     status=AgentRunStatus.DEADLINE_EXCEEDED.value,
                     assistant_message_id=None,
                     error_code=None,
-                    completed_at=decision_at,
+                    completed_at=now,
                 )
                 .returning(AgentRun.quota_usage_date)
                 .execution_options(synchronize_session=False)
@@ -285,11 +283,11 @@ class AgentRunRepository:
             .where(
                 AgentRun.id == run_id,
                 AgentRun.status.in_(_ACTIVE_STATUSES),
-                AgentRun.deadline_at > decision_at,
+                AgentRun.deadline_at > now,
             )
             .values(
                 status=AgentRunStatus.RUNNING.value,
-                started_at=decision_at,
+                started_at=now,
                 attempt_epoch=AgentRun.attempt_epoch + 1,
             )
             .returning(AgentRun.attempt_epoch)
@@ -377,21 +375,21 @@ class AgentRunRepository:
         ):
             return CompleteRunOutcome.TRANSITION_LOST
 
-        decision_at = await self._database_now(now)
-        if decision_at >= run.deadline_at:
+        now = await self._database_now(now)
+        if now >= run.deadline_at:
             deadline_result = await self._session.execute(
                 update(AgentRun)
                 .where(
                     AgentRun.id == run_id,
                     AgentRun.status == AgentRunStatus.RUNNING.value,
                     AgentRun.attempt_epoch == expected_attempt_epoch,
-                    AgentRun.deadline_at <= decision_at,
+                    AgentRun.deadline_at <= now,
                 )
                 .values(
                     status=AgentRunStatus.DEADLINE_EXCEEDED.value,
                     assistant_message_id=None,
                     error_code=None,
-                    completed_at=decision_at,
+                    completed_at=now,
                 )
                 .execution_options(synchronize_session=False)
             )
@@ -421,18 +419,18 @@ class AgentRunRepository:
                 AgentRun.id == run_id,
                 AgentRun.status == AgentRunStatus.RUNNING.value,
                 AgentRun.attempt_epoch == expected_attempt_epoch,
-                AgentRun.deadline_at > decision_at,
+                AgentRun.deadline_at > now,
             )
             .values(
                 status=AgentRunStatus.COMPLETED.value,
                 assistant_message_id=assistant_message.id,
-                completed_at=decision_at,
+                completed_at=now,
             )
             .execution_options(synchronize_session=False)
         )
         if (update_result.rowcount or 0) != 1:
             raise RunTransitionLostError()
-        thread.updated_at = decision_at
+        thread.updated_at = now
         # Noneは「記録を追加しなかったRun」であり、既存handoffを消さない。
         if research_handoff is not None:
             thread.research_handoff = research_handoff
@@ -578,14 +576,11 @@ class AgentRunRepository:
             raise RuntimeError("database clock did not return a datetime")
         return value
 
-    async def sweep_stale_runs(
+    async def sweep_deadline_exceeded_runs(
         self,
         *,
         now: datetime | None = None,
-    ) -> StaleRunSweepResult:
-        transaction_now_expression = (
-            literal(now) if now is not None else func.statement_timestamp()
-        ).label("transaction_now")
+    ) -> DeadlineRunSweepResult:
         candidate_rows = (
             (
                 await self._session.execute(
@@ -596,30 +591,13 @@ class AgentRunRepository:
                         AgentRun.quota_usage_date,
                         AgentThread.user_id,
                         AgentRun.started_at,
-                        transaction_now_expression,
                     )
                     .join(AgentThread, AgentRun.thread_id == AgentThread.id)
                     .where(
-                        (
-                            (AgentRun.status == AgentRunStatus.QUEUED.value)
-                            & (
-                                AgentRun.created_at
-                                < transaction_now_expression
-                                - timedelta(seconds=RESEARCH_QUEUED_STALE_AFTER_SECONDS)
-                            )
-                        )
-                        | (
-                            (AgentRun.status == AgentRunStatus.RUNNING.value)
-                            & (
-                                func.coalesce(
-                                    AgentRun.started_at,
-                                    AgentRun.created_at,
-                                )
-                                < transaction_now_expression
-                                - timedelta(
-                                    seconds=RESEARCH_RUNNING_STALE_AFTER_SECONDS
-                                )
-                            )
+                        AgentRun.status.in_(_ACTIVE_STATUSES),
+                        AgentRun.deadline_at
+                        <= (
+                            literal(now) if now is not None else func.clock_timestamp()
                         ),
                     )
                     .order_by(AgentRun.id)
@@ -630,7 +608,7 @@ class AgentRunRepository:
             .all()
         )
         if not candidate_rows:
-            return StaleRunSweepResult(
+            return DeadlineRunSweepResult(
                 queued_terminal_count=0,
                 queued_quota_released_count=0,
                 queued_quota_not_eligible_count=0,
@@ -640,7 +618,8 @@ class AgentRunRepository:
                 running_without_started_at_count=0,
             )
 
-        transaction_now = candidate_rows[0][-1]
+        # lock待機後の同じDB時刻で期限と終端時刻を確定する。
+        now = await self._database_now(now)
         candidate_ids = [row[0] for row in candidate_rows]
         candidate_by_id = {row[0]: row for row in candidate_rows}
         updated_rows = (
@@ -650,11 +629,13 @@ class AgentRunRepository:
                     .where(
                         AgentRun.id.in_(candidate_ids),
                         AgentRun.status.in_(_ACTIVE_STATUSES),
+                        AgentRun.deadline_at <= now,
                     )
                     .values(
-                        status=AgentRunStatus.FAILED.value,
-                        error_code=AgentRunErrorCode.STALE.value,
-                        completed_at=transaction_now,
+                        status=AgentRunStatus.DEADLINE_EXCEEDED.value,
+                        assistant_message_id=None,
+                        error_code=None,
+                        completed_at=now,
                     )
                     .returning(
                         AgentRun.id,
@@ -670,7 +651,7 @@ class AgentRunRepository:
         )
         updated_ids = {row[0] for row in updated_rows}
         if updated_ids != set(candidate_ids):
-            raise RuntimeError("stale run sweep lost a locked candidate")
+            raise RuntimeError("deadline run sweep lost a locked candidate")
 
         queued_rows = [
             row
@@ -691,7 +672,7 @@ class AgentRunRepository:
                 column("user_id", AgentUserDailyQuota.user_id.type),
                 column("usage_date", AgentUserDailyQuota.usage_date.type),
                 column("release_count", Integer),
-                name="queued_stale_quota_releases",
+                name="queued_deadline_quota_releases",
             ).data(
                 [
                     (user_id, usage_date, count)
@@ -741,7 +722,7 @@ class AgentRunRepository:
             for row in updated_rows
             if candidate_by_id[row[0]][1] == AgentRunStatus.RUNNING.value
         ]
-        return StaleRunSweepResult(
+        return DeadlineRunSweepResult(
             queued_terminal_count=len(queued_rows),
             queued_quota_released_count=queued_quota_released_count,
             queued_quota_not_eligible_count=sum(
@@ -750,7 +731,7 @@ class AgentRunRepository:
             ),
             queued_quota_inconsistent_count=queued_quota_inconsistent_count,
             running_terminal_runs=tuple(
-                StaleRunningRun(run_id=run_id, attempt_epoch=attempt_epoch)
+                DeadlineExceededRunningRun(run_id=run_id, attempt_epoch=attempt_epoch)
                 for run_id, _status, attempt_epoch, _quota_usage_date in running_rows
                 if attempt_epoch > 0
             ),

@@ -355,34 +355,36 @@ async def run_agent_answer(
 
 
 @broker_agent.task(
-    task_name="sweep_stale_agent_runs",
+    task_name="sweep_deadline_exceeded_agent_runs",
     timeout=60,
     max_retries=0,
     retry_on_error=False,
     schedule=[{"cron": CRON_AGENT_RUN_SWEEP}],
 )
-async def sweep_stale_agent_runs(ctx: Context = TaskiqDepends()) -> None:
+async def sweep_deadline_exceeded_agent_runs(ctx: Context = TaskiqDepends()) -> None:
     session_factory = ctx.state.session_factory
     sweep_error: AgentRunTaskBoundaryError | None = None
     try:
         async with session_factory() as session:
             async with session.begin():
-                result = await AgentRunRepository(session).sweep_stale_runs()
+                result = await AgentRunRepository(
+                    session
+                ).sweep_deadline_exceeded_runs()
     except Exception as exc:
         logger.error(
-            "agent_run_stale_sweep_failed",
+            "agent_run_deadline_sweep_failed",
             error_type=exc.__class__.__name__,
         )
-        sweep_error = AgentRunTaskBoundaryError("agent run stale sweep failed")
+        sweep_error = AgentRunTaskBoundaryError("agent run deadline sweep failed")
     if sweep_error is not None:
         sweep_error.__suppress_context__ = True
         raise sweep_error
     with suppress(Exception):
-        logger.info("agent_runs_stale_swept", count=result.total_count)
+        logger.info("agent_runs_deadline_swept", count=result.total_count)
     if result.queued_terminal_count > 0:
         with suppress(Exception):
             logger.info(
-                "agent_runs_queued_stale_swept",
+                "agent_runs_queued_deadline_swept",
                 run_count=result.queued_terminal_count,
                 quota_released_count=result.queued_quota_released_count,
                 quota_not_eligible_count=result.queued_quota_not_eligible_count,
@@ -407,7 +409,7 @@ async def sweep_stale_agent_runs(ctx: Context = TaskiqDepends()) -> None:
     if result.running_terminal_runs:
         with suppress(Exception):
             logger.info(
-                "running_timeout_swept",
+                "running_deadline_exceeded_swept",
                 count=len(result.running_terminal_runs),
             )
     if result.running_without_started_at_count > 0:
@@ -428,15 +430,14 @@ async def sweep_stale_agent_runs(ctx: Context = TaskiqDepends()) -> None:
                 stream_events,
                 running_run.run_id,
                 AgentRunLiveStreamTerminalEvent(
-                    status="failed",
-                    errorCode=AgentRunErrorCode.STALE,
+                    status="deadline_exceeded",
                 ),
             )
         except Exception:
             logger.warning(
                 "agent_run_live_stream_terminal_publish_failed",
                 run_id=str(running_run.run_id),
-                terminal_status="failed",
+                terminal_status="deadline_exceeded",
             )
 
 
