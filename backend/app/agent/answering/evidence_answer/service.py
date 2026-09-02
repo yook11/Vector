@@ -28,16 +28,14 @@ from app.agent.answering.live_delivery import (
     ensure_answer_generation_continues,
 )
 from app.agent.answering.live_draft import LiveAnswerDraftSession
-from app.agent.contract import (
-    AnswerDeltaReporter,
-    AnswerGenerationContinuation,
-)
+from app.agent.contract import AnswerDeltaReporter
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecorder,
     EvidenceAnswerSucceeded,
     logfire_evidence_answer_recorder,
 )
+from app.agent.runs.execution import RunExecutionContinuation
 from app.agent.runtime.contract import (
     AgentTextStream,
     StreamingAgentRuntime,
@@ -71,7 +69,7 @@ class EvidenceAnswerService:
         agent: Agent[EvidenceAnswerInput, EvidenceAnswerDraft],
         runtime_scope_factory: StreamingAgentRuntimeScopeFactory,
         delta_reporter: AnswerDeltaReporter | None = None,
-        continuation: AnswerGenerationContinuation | None = None,
+        continuation: RunExecutionContinuation | None = None,
         recorder: EvidenceAnswerRecorder = logfire_evidence_answer_recorder,
     ) -> None:
         self._agent = agent

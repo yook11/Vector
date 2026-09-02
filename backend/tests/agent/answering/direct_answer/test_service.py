@@ -29,6 +29,7 @@ from app.agent.recording.direct_answer import (
     DirectAnswerOutcome,
     DirectAnswerSucceeded,
 )
+from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
     AIProviderError,
@@ -183,14 +184,14 @@ class RecordingDeltaReporter:
 
 
 class SequenceContinuation:
-    def __init__(self, results: Sequence[bool]) -> None:
+    def __init__(self, results: Sequence[Continue | Stop]) -> None:
         self._results = list(results)
         self.calls = 0
 
-    async def should_continue(self) -> bool:
+    async def should_continue(self) -> Continue | Stop:
         self.calls += 1
         if not self._results:
-            return True
+            return Continue()
         return self._results.pop(0)
 
 
@@ -663,7 +664,7 @@ async def test_continuation_false_before_provider_start_is_routine_stop() -> Non
         await _service(
             runtime,
             delta_reporter=reporter,
-            continuation=SequenceContinuation([False]),
+            continuation=SequenceContinuation([Stop(StopReason.NOT_CURRENT)]),
         ).answer(_input())
 
     assert runtime.calls == []
@@ -679,7 +680,9 @@ async def test_continuation_false_mid_stream_aborts_iterator_and_pending_report(
 ):
     runtime = ScriptedStreamingRuntime([["表示済み", "見せない本文"]])
     reporter = RecordingDeltaReporter()
-    continuation = SequenceContinuation([True, True, False])
+    continuation = SequenceContinuation(
+        [Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
+    )
 
     with pytest.raises(AnswerGenerationStopped):
         await _service(
@@ -701,7 +704,9 @@ async def test_continuation_false_at_normal_stream_end_aborts_before_finish(
 ) -> None:
     runtime = ScriptedStreamingRuntime([["表示済み本文"]])
     reporter = RecordingDeltaReporter()
-    continuation = SequenceContinuation([True, True, False])
+    continuation = SequenceContinuation(
+        [Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
+    )
 
     with pytest.raises(AnswerGenerationStopped):
         await _service(
@@ -793,7 +798,7 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _service(
             runtime,
-            continuation=SequenceContinuation([False]),
+            continuation=SequenceContinuation([Stop(StopReason.NOT_CURRENT)]),
             recorder=recorder,
         ).answer(_input())
 

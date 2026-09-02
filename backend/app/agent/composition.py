@@ -17,7 +17,6 @@ from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerEventReporter,
-    AnswerGenerationContinuation,
     AnswerProgressReporter,
 )
 from app.agent.evidence_collection import EvidenceCollectionService
@@ -26,6 +25,7 @@ from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.running import AnsweringPhases, AnsweringRunner
+from app.agent.runs.execution import RunExecutionContinuation
 from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -66,7 +66,7 @@ def _build_answering_phases(
     session_factory: async_sessionmaker[AsyncSession],
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
-    continuation: AnswerGenerationContinuation | None = None,
+    continuation: RunExecutionContinuation | None = None,
 ) -> AnsweringPhases:
     ensure_external_search_configured()
 
@@ -137,7 +137,7 @@ def build_answering_runner(
     progress: AnswerProgressReporter | None = None,
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
-    continuation: AnswerGenerationContinuation | None = None,
+    continuation: RunExecutionContinuation | None = None,
 ) -> AnsweringRunner:
     return AnsweringRunner(
         phases_factory=lambda: _build_answering_phases(

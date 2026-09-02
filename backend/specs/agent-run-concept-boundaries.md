@@ -25,6 +25,7 @@
 | `app/agent/threads/result_mapper.py` | 回答結果から会話のメッセージ・出典への変換 |
 | `app/agent/threads/citation_integrity.py` | 保存する回答と出典の引用整合性検査・警告 |
 | `app/agent/runs/` | Runの受付・開始・完了・キャンセル、有効なattemptの確認、状態の取得・公開 |
+| `app/agent/runs/execution.py` | 1回のRun実行を続けてよいか。`Continue` / `Stop` |
 
 `AgentRunRepository` の受付・完了は、各概念の処理を同じsessionで組み合わせる。
 期限切れ回収はworkerから `sweep_deadline_exceeded_runs(session)` を直接呼ぶ。

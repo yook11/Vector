@@ -19,7 +19,13 @@ from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.service import DirectAnswerService
-from app.agent.contract import AnswerGenerationContinuation, AnswerGenerationStopped
+from app.agent.contract import AnswerGenerationStopped
+from app.agent.runs.execution import (
+    Continue,
+    RunExecutionContinuation,
+    Stop,
+    StopReason,
+)
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction
@@ -280,8 +286,8 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
     capfire: CaptureLogfire,
 ) -> None:
     class StopImmediately:
-        async def should_continue(self) -> bool:
-            return False
+        async def should_continue(self) -> Continue | Stop:
+            return Stop(StopReason.NOT_CURRENT)
 
     class UnusedRuntime:
         def stream_text(self, *_args: object, **_kwargs: object) -> object:
@@ -350,7 +356,7 @@ async def test_mid_stream_stop_abandons_real_attempt_without_error(
     service = DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
-        continuation=cast(AnswerGenerationContinuation, object()),
+        continuation=cast(RunExecutionContinuation, object()),
     )
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await service.answer(_input())

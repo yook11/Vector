@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import traceback
 from dataclasses import dataclass
@@ -50,6 +49,7 @@ from app.agent.running import (
     RunResult,
 )
 from app.agent.runs.contracts import CompleteRunOutcome, RunTransitionLostError
+from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
@@ -310,6 +310,9 @@ class CapturingExecutionProbe:
         self.run_id = run_id
         self.attempt_epoch = attempt_epoch
         CapturingExecutionProbe.instances.append(self)
+
+    async def should_continue(self) -> Continue | Stop:
+        return Continue()
 
 
 class ForbiddenConstruction:
@@ -1373,7 +1376,7 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
 
         async def answer(self) -> AnswerQuestionResult:
             assert self.continuation is not None
-            assert await self.continuation.should_continue() is True  # type: ignore[attr-defined]
+            assert await self.continuation.should_continue() == Continue()  # type: ignore[attr-defined]
             async with session_factory() as restart_session:
                 async with restart_session.begin():
                     attempt_epoch = started_attempt_epoch(
@@ -1381,7 +1384,9 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
                     )
             assert attempt_epoch == 2
             clock.now = 2.0
-            assert await self.continuation.should_continue() is False  # type: ignore[attr-defined]
+            assert await self.continuation.should_continue() == Stop(  # type: ignore[attr-defined]
+                StopReason.NOT_CURRENT
+            )
             raise AnswerGenerationStopped
 
     fake_agent = EpochAdvancingAgent()
@@ -1459,6 +1464,114 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
             .all()
         )
         assert [message.role for message in messages] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_deadline_stop_publishes_terminal_without_mark_failed(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usage_date = date(2026, 9, 2)
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            quota_usage_date=usage_date,
+        )
+        session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=usage_date,
+                used_count=1,
+            )
+        )
+        await session.commit()
+
+    class ManualClock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = ManualClock()
+    production_probe_type = agent_run_tasks.AgentRunExecutionProbe
+    mark_failed_calls: list[tuple[UUID, int]] = []
+
+    def build_probe(
+        bound_session_factory: object,
+        run_id: UUID,
+        attempt_epoch: int,
+    ) -> object:
+        return production_probe_type(
+            bound_session_factory,
+            run_id,
+            attempt_epoch,
+            clock=clock,
+        )
+
+    class DeadlineExpiringAgent:
+        def __init__(self) -> None:
+            self.continuation: object | None = None
+
+        async def answer(self) -> AnswerQuestionResult:
+            assert self.continuation is not None
+            async with session_factory() as expire_session:
+                async with expire_session.begin():
+                    persisted = await expire_session.get(AgentRun, run.id)
+                    assert persisted is not None
+                    persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
+            clock.now = 2.0
+            decision = await self.continuation.should_continue()  # type: ignore[attr-defined]
+            assert decision == Stop(StopReason.DEADLINE_EXCEEDED)
+            raise AnswerGenerationStopped(decision.reason)
+
+    fake_agent = DeadlineExpiringAgent()
+
+    def build_agent(**kwargs: object) -> DeadlineExpiringAgent:
+        fake_agent.continuation = kwargs["continuation"]
+        return fake_agent
+
+    async def observe_mark_failed(
+        _repository: AgentRunRepository,
+        run_id: UUID,
+        *,
+        error_code: agent_run_tasks.AgentRunErrorCode,
+        expected_attempt_epoch: int,
+    ) -> bool:
+        mark_failed_calls.append((run_id, expected_attempt_epoch))
+        return False
+
+    _patch_delta_worker(monkeypatch, build_agent)
+    monkeypatch.setattr(agent_run_tasks, "AgentRunExecutionProbe", build_probe)
+    monkeypatch.setattr(AgentRunRepository, "mark_failed", observe_mark_failed)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert mark_failed_calls == []
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [
+        AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
+    ]
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        used_count = await session.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == usage_date,
+            )
+        )
+    assert persisted is not None
+    assert persisted.status == "deadline_exceeded"
+    assert persisted.attempt_epoch == 1
+    assert persisted.error_code is None
+    assert used_count == 1
 
 
 @pytest.mark.asyncio
@@ -2235,83 +2348,7 @@ async def test_run_agent_answer_unexpected_error_marks_internal_error(
     ]
 
 
-@dataclass
-class _ControlledMonotonicClock:
-    now: float
-
-    def __call__(self) -> float:
-        return self.now
-
-
-class _ControlledApplicationDeadline:
-    def __init__(
-        self,
-        *,
-        deadline: float,
-        clock: _ControlledMonotonicClock,
-        expire_on_cancel: bool,
-    ) -> None:
-        self.deadline = deadline
-        self._clock = clock
-        self._expire_on_cancel = expire_on_cancel
-        self._cancel_converted = False
-        self.active = False
-
-    async def __aenter__(self) -> _ControlledApplicationDeadline:
-        self.active = True
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        _exc: BaseException | None,
-        _traceback: object | None,
-    ) -> bool:
-        self.active = False
-        if self._expire_on_cancel and exc_type is asyncio.CancelledError:
-            self._cancel_converted = True
-            raise TimeoutError
-        return False
-
-    def expired(self) -> bool:
-        return self._cancel_converted
-
-
-def _install_application_deadline_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-    clock: _ControlledMonotonicClock,
-    *,
-    expire_on_cancel: bool = False,
-) -> list[_ControlledApplicationDeadline]:
-    task_asyncio = getattr(agent_run_tasks, "asyncio", None)
-    assert task_asyncio is not None, "task must import asyncio for its deadline"
-    task_time = getattr(agent_run_tasks, "time", None)
-    assert task_time is not None, "task must use a monotonic application clock"
-    timeout_at = getattr(task_asyncio, "timeout_at", None)
-    assert callable(timeout_at), "task must own its deadline with asyncio.timeout_at"
-    scopes: list[_ControlledApplicationDeadline] = []
-
-    def controlled_timeout_at(deadline: float) -> _ControlledApplicationDeadline:
-        scope = _ControlledApplicationDeadline(
-            deadline=deadline,
-            clock=clock,
-            expire_on_cancel=expire_on_cancel,
-        )
-        scopes.append(scope)
-        return scope
-
-    monkeypatch.setattr(task_time, "monotonic", clock)
-    monkeypatch.setattr(task_asyncio, "timeout_at", controlled_timeout_at)
-    return scopes
-
-
-def test_run_agent_answer_declares_fixed_application_and_taskiq_deadlines() -> None:
-    """application deadline が taskiq timeout より先に切れることで、
-
-    graceful な失敗処理 (terminal 化・cleanup) が taskiq の強制 kill より
-    先に走る。retry は attempt_epoch で run 側が管理するため taskiq の
-    自動 retry は常に無効。
-    """
+def test_run_agent_answer_declares_taskiq_timeout_without_application_timeout() -> None:
     task = agent_run_tasks.run_agent_answer
 
     assert task.task_name == "run_agent_answer"
@@ -2320,10 +2357,8 @@ def test_run_agent_answer_declares_fixed_application_and_taskiq_deadlines() -> N
         "max_retries": 0,
         "retry_on_error": False,
     }
-    assert (
-        agent_run_tasks.RESEARCH_APPLICATION_TIMEOUT_SECONDS
-        < agent_run_tasks.RESEARCH_TASKIQ_TIMEOUT_SECONDS
-    )
+    assert agent_run_tasks.RESEARCH_TASKIQ_TIMEOUT_SECONDS == 180
+    assert not hasattr(agent_run_tasks, "RESEARCH_APPLICATION_TIMEOUT_SECONDS")
 
 
 @pytest.mark.asyncio
@@ -2454,432 +2489,12 @@ async def test_start_commit_failure_raises_sanitized_task_boundary_error(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_application_deadline_scope_covers_start_live_history_runner_and_result(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    application_timeout = agent_run_tasks.RESEARCH_APPLICATION_TIMEOUT_SECONDS
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(session)
-    clock = _ControlledMonotonicClock(now=100.0)
-    scopes = _install_application_deadline_boundary(monkeypatch, clock)
-    seen_steps: list[str] = []
-    original_start = agent_run_tasks._start_run
-    original_history = agent_run_tasks._read_history
-
-    async def start_within_deadline(*args: object, **kwargs: object) -> object:
-        assert len(scopes) == 1 and scopes[0].active
-        seen_steps.append("start")
-        return await original_start(*args, **kwargs)  # type: ignore[arg-type]
-
-    async def history_within_deadline(*args: object, **kwargs: object) -> object:
-        assert scopes[0].active
-        seen_steps.append("history")
-        return await original_history(*args, **kwargs)  # type: ignore[arg-type]
-
-    class ScopeCheckingStream(FakeLiveStreamPublisher):
-        async def begin_attempt(self) -> str | None:
-            assert scopes[0].active
-            seen_steps.append("begin_attempt")
-            return await super().begin_attempt()
-
-    class ScopeCheckingAgent(FakeAgent):
-        async def answer(self) -> AnswerQuestionResult:
-            assert scopes[0].active
-            seen_steps.append("result")
-            return await super().answer()
-
-    class ScopeCheckingRunner(FakeAnsweringRunner):
-        async def run(
-            self,
-            input: RunInput,
-            *,
-            identity: RunIdentity,
-        ) -> RunResult:
-            assert scopes[0].active
-            seen_steps.append("runner")
-            return await super().run(input, identity=identity)
-
-    agent = ScopeCheckingAgent(_direct_result())
-    runner = ScopeCheckingRunner()
-
-    def build_runner(**kwargs: object) -> ScopeCheckingRunner:
-        assert scopes[0].active
-        seen_steps.append("build")
-        runner.execution = agent
-        return runner
-
-    monkeypatch.setattr(agent_run_tasks, "_start_run", start_within_deadline)
-    monkeypatch.setattr(agent_run_tasks, "_read_history", history_within_deadline)
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveStreamPublisher", ScopeCheckingStream
-    )
-    monkeypatch.setattr(agent_run_tasks, "build_answering_runner", build_runner)
-
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
-
-    assert [scope.deadline for scope in scopes] == [100.0 + application_timeout]
-    assert seen_steps == [
-        "start",
-        "begin_attempt",
-        "history",
-        "build",
-        "runner",
-        "result",
-    ]
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_start_after_application_deadline_skips_execution_and_terminalizes(
+async def test_provider_timeout_error_follows_existing_unexpected_error_path(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    application_timeout = agent_run_tasks.RESEARCH_APPLICATION_TIMEOUT_SECONDS
-    clock = _ControlledMonotonicClock(now=100.0)
-    scopes = _install_application_deadline_boundary(monkeypatch, clock)
-    original_start = agent_run_tasks._start_run
-    original_mark_failed = AgentRunRepository.mark_failed
-    FakeLiveStreamPublisher.instances = []
-
-    async def start_then_expire(*args: object, **kwargs: object) -> object:
-        assert scopes[0].active
-        result = await original_start(*args, **kwargs)  # type: ignore[arg-type]
-        clock.now = 100.0 + application_timeout + 1
-        assert scopes[0].expired() is False
-        return result
-
-    async def cleanup_outside_deadline(
-        repository: AgentRunRepository,
-        *args: object,
-        **kwargs: object,
-    ) -> bool:
-        assert scopes[0].active is False
-        return await original_mark_failed(repository, *args, **kwargs)  # type: ignore[arg-type]
-
-    class CommitCheckingPublisher(FakeLiveStreamPublisher):
-        async def publish(self, event: object) -> str | None:
-            if isinstance(event, AgentRunLiveStreamTerminalEvent):
-                async with session_factory() as verification:
-                    persisted = await verification.get(AgentRun, run.id)
-                    assert persisted is not None
-                    assert (
-                        persisted.status,
-                        persisted.error_code,
-                        persisted.attempt_epoch,
-                    ) == ("failed", "generation_unavailable", 1)
-            return await super().publish(event)
-
-    def forbidden_runner(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("start後にdeadline超過したrunはrunnerを開始してはいけません")
-
-    monkeypatch.setattr(agent_run_tasks, "_start_run", start_then_expire)
-    monkeypatch.setattr(AgentRunRepository, "mark_failed", cleanup_outside_deadline)
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveStreamPublisher",
-        CommitCheckingPublisher,
-    )
-    monkeypatch.setattr(agent_run_tasks, "build_answering_runner", forbidden_runner)
-    monkeypatch.setattr(agent_run_tasks, "_read_history", forbidden_runner)
-
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
-
-    terminal = [
-        event
-        for event in FakeLiveStreamPublisher.instances[0].published
-        if isinstance(event, AgentRunLiveStreamTerminalEvent)
-    ]
-    assert terminal == [
-        AgentRunLiveStreamTerminalEvent(
-            status="failed",
-            errorCode="generation_unavailable",
-        )
-    ]
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_application_timeout_commits_current_attempt_before_terminal_publish(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    usage_date = date(2026, 7, 22)
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(
-            session,
-            quota_usage_date=usage_date,
-        )
-        session.add(
-            AgentUserDailyQuota(
-                user_id=UUID(TEST_USER_ID),
-                usage_date=usage_date,
-                used_count=1,
-            )
-        )
-        await session.commit()
-    clock = _ControlledMonotonicClock(now=100.0)
-    scopes = _install_application_deadline_boundary(
-        monkeypatch,
-        clock,
-        expire_on_cancel=True,
-    )
-    original_mark_failed = AgentRunRepository.mark_failed
-    FakeLiveStreamPublisher.instances = []
-
-    async def cleanup_outside_deadline(
-        repository: AgentRunRepository,
-        *args: object,
-        **kwargs: object,
-    ) -> bool:
-        assert scopes[0].active is False
-        return await original_mark_failed(repository, *args, **kwargs)  # type: ignore[arg-type]
-
-    class CommitCheckingPublisher(FakeLiveStreamPublisher):
-        async def publish(self, event: object) -> str | None:
-            if isinstance(event, AgentRunLiveStreamTerminalEvent):
-                async with session_factory() as verification:
-                    persisted = await verification.get(AgentRun, run.id)
-                    assert persisted is not None
-                    assert (persisted.status, persisted.error_code) == (
-                        "failed",
-                        "generation_unavailable",
-                    )
-            return await super().publish(event)
-
-    _patch_worker_execution(
-        monkeypatch,
-        lambda **_kwargs: FakeAgent(exc=asyncio.CancelledError()),
-    )
-    monkeypatch.setattr(AgentRunRepository, "mark_failed", cleanup_outside_deadline)
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveStreamPublisher",
-        CommitCheckingPublisher,
-    )
-
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
-
-    assert scopes[0].expired() is True
-    terminal = [
-        event
-        for event in FakeLiveStreamPublisher.instances[0].published
-        if isinstance(event, AgentRunLiveStreamTerminalEvent)
-    ]
-    assert terminal == [
-        AgentRunLiveStreamTerminalEvent(
-            status="failed",
-            errorCode="generation_unavailable",
-        )
-    ]
-    async with session_factory() as verification:
-        counter = await verification.scalar(
-            select(AgentUserDailyQuota.used_count).where(
-                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
-                AgentUserDailyQuota.usage_date == usage_date,
-            )
-        )
-    assert counter == 1
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_application_timeout_publish_failure_keeps_committed_failed_run(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(session)
-    clock = _ControlledMonotonicClock(now=100.0)
-    _install_application_deadline_boundary(
-        monkeypatch,
-        clock,
-        expire_on_cancel=True,
-    )
-    FakeLiveStreamPublisher.instances = []
-    monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_publish", True)
-    _patch_worker_execution(
-        monkeypatch,
-        lambda **_kwargs: FakeAgent(exc=asyncio.CancelledError()),
-    )
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveStreamPublisher",
-        FakeLiveStreamPublisher,
-    )
-
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
-
-    async with session_factory() as verification:
-        persisted = await verification.get(AgentRun, run.id)
-    assert persisted is not None
-    assert (persisted.status, persisted.error_code) == (
-        "failed",
-        "generation_unavailable",
-    )
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_timed_out_old_attempt_cannot_terminalize_newer_attempt_or_publish(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(session)
-    clock = _ControlledMonotonicClock(now=100.0)
-    _install_application_deadline_boundary(
-        monkeypatch,
-        clock,
-        expire_on_cancel=True,
-    )
-    FakeLiveStreamPublisher.instances = []
-
-    class EpochAdvancingThenCancelledAgent:
-        async def answer(self) -> AnswerQuestionResult:
-            async with session_factory() as session:
-                async with session.begin():
-                    newer = started_attempt_epoch(
-                        await AgentRunRepository(session).start_run(run.id)
-                    )
-            assert newer == 2
-            raise asyncio.CancelledError
-
-    _patch_worker_execution(
-        monkeypatch,
-        lambda **_kwargs: EpochAdvancingThenCancelledAgent(),
-    )
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveStreamPublisher",
-        FakeLiveStreamPublisher,
-    )
-
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
-
-    terminal = [
-        event
-        for event in FakeLiveStreamPublisher.instances[0].published
-        if isinstance(event, AgentRunLiveStreamTerminalEvent)
-    ]
-    assert terminal == []
-    async with session_factory() as verification:
-        persisted = await verification.get(AgentRun, run.id)
-    assert persisted is not None
-    assert (persisted.status, persisted.error_code, persisted.attempt_epoch) == (
-        "running",
-        None,
-        2,
-    )
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_application_timeout_cleanup_commit_failure_propagates_without_terminal(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with session_factory() as setup_session:
-        _thread, _message, run = await _create_thread_message_run(setup_session)
-    clock = _ControlledMonotonicClock(now=100.0)
-    _install_application_deadline_boundary(
-        monkeypatch,
-        clock,
-        expire_on_cancel=True,
-    )
-    FakeLiveStreamPublisher.instances = []
-    start_session = session_factory()
-    history_session = session_factory()
-    cleanup_session = session_factory()
-
-    def fail_cleanup_commit(_session: object) -> None:
-        raise SensitivePersistenceFailure
-
-    sa_event.listen(
-        cleanup_session.sync_session,
-        "before_commit",
-        fail_cleanup_commit,
-        once=True,
-    )
-    sessions = iter([start_session, history_session, cleanup_session])
-
-    def controlled_session_factory() -> AsyncSession:
-        return next(sessions)
-
-    _patch_worker_execution(
-        monkeypatch,
-        lambda **_kwargs: FakeAgent(exc=asyncio.CancelledError()),
-    )
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveStreamPublisher",
-        FakeLiveStreamPublisher,
-    )
-    try:
-        with capture_logs() as logs, pytest.raises(Exception) as exc_info:
-            await agent_run_tasks.run_agent_answer(
-                trigger=AgentRunTrigger(run_id=run.id),
-                ctx=_ctx(
-                    cast(
-                        async_sessionmaker[AsyncSession],
-                        controlled_session_factory,
-                    )
-                ),
-            )
-    finally:
-        await start_session.close()
-        await history_session.close()
-        await cleanup_session.close()
-
-    _assert_safe_task_boundary_error(
-        exc_info.value,
-        expected_message="agent run timeout terminalization failed",
-    )
-    _assert_sensitive_task_context_not_logged(logs)
-    assert FakeLiveStreamPublisher.instances[0].published == []
-    async with session_factory() as verification:
-        persisted = await verification.get(AgentRun, run.id)
-    assert persisted is not None
-    assert (persisted.status, persisted.error_code, persisted.attempt_epoch) == (
-        "running",
-        None,
-        1,
-    )
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_lower_timeout_error_follows_existing_unexpected_error_path(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(session)
-    clock = _ControlledMonotonicClock(now=100.0)
-    scopes = _install_application_deadline_boundary(monkeypatch, clock)
     FakeLiveStreamPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
@@ -2909,4 +2524,3 @@ async def test_lower_timeout_error_follows_existing_unexpected_error_path(
     assert terminal == [
         AgentRunLiveStreamTerminalEvent(status="failed", errorCode="internal_error")
     ]
-    assert scopes[0].expired() is False

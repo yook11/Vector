@@ -29,6 +29,7 @@ from app.agent.recording.evidence_answer import (
     EvidenceAnswerRecordingOutcome,
     EvidenceAnswerSucceeded,
 )
+from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
     AIProviderError,
@@ -235,14 +236,14 @@ class RecordingDeltaReporter:
 
 
 class SequenceContinuation:
-    def __init__(self, results: Sequence[bool]) -> None:
+    def __init__(self, results: Sequence[Continue | Stop]) -> None:
         self._results = list(results)
         self.calls = 0
 
-    async def should_continue(self) -> bool:
+    async def should_continue(self) -> Continue | Stop:
         self.calls += 1
         if not self._results:
-            return True
+            return Continue()
         return self._results.pop(0)
 
 
@@ -823,7 +824,7 @@ async def test_continuation_false_before_provider_start_is_routine_stop(
         await _answer(
             generator,
             delta_reporter=reporter,
-            continuation=SequenceContinuation([False]),
+            continuation=SequenceContinuation([Stop(StopReason.NOT_CURRENT)]),
         )
 
     assert generator.calls == []
@@ -845,7 +846,9 @@ async def test_continuation_false_mid_stream_closes_and_aborts(
 ) -> None:
     generator = FakeGenerator([["表示済み本文と", "非表示本文。[[1]]"]])
     reporter = RecordingDeltaReporter()
-    continuation = SequenceContinuation([True, True, False])
+    continuation = SequenceContinuation(
+        [Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
+    )
 
     with pytest.raises(AnswerGenerationStopped):
         await _answer(
@@ -868,7 +871,9 @@ async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
 ) -> None:
     generator = FakeGenerator(["根拠から確認できます。[[1]]"])
     reporter = RecordingDeltaReporter()
-    continuation = SequenceContinuation([True, True, False])
+    continuation = SequenceContinuation(
+        [Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
+    )
 
     with pytest.raises(AnswerGenerationStopped):
         await _answer(
@@ -896,7 +901,9 @@ async def test_continuation_false_after_provider_error_stops_before_fallback(
         await _answer(
             generator,
             delta_reporter=reporter,
-            continuation=SequenceContinuation([True, False]),
+            continuation=SequenceContinuation(
+                [Continue(), Stop(StopReason.NOT_CURRENT)]
+            ),
         )
 
     assert generator.streams[0].closed is True
@@ -1068,7 +1075,7 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _answer(
             generator,
-            continuation=SequenceContinuation([False]),
+            continuation=SequenceContinuation([Stop(StopReason.NOT_CURRENT)]),
             recorder=recorder,
         )
 
@@ -1085,7 +1092,9 @@ async def test_stop_after_provider_error_records_stopped_without_fallback() -> N
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _answer(
             generator,
-            continuation=SequenceContinuation([True, False]),
+            continuation=SequenceContinuation(
+                [Continue(), Stop(StopReason.NOT_CURRENT)]
+            ),
             recorder=recorder,
         )
 
