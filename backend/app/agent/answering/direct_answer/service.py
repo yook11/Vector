@@ -22,16 +22,14 @@ from app.agent.answering.live_delivery import (
 )
 from app.agent.answering.live_draft import LiveAnswerDraftSession
 from app.agent.citation_markers import strip_citation_markers
-from app.agent.contract import (
-    AnswerDeltaReporter,
-    AnswerGenerationContinuation,
-)
+from app.agent.contract import AnswerDeltaReporter
 from app.agent.recording.direct_answer import (
     DirectAnswerFailed,
     DirectAnswerRecorder,
     DirectAnswerSucceeded,
     logfire_direct_answer_recorder,
 )
+from app.agent.runs.execution import RunExecutionContinuation
 from app.agent.runtime.contract import (
     AgentTextStream,
     StreamingAgentRuntime,
@@ -60,7 +58,7 @@ class DirectAnswerService:
         agent: Agent[DirectAnswerInput, DirectAnswerDraft],
         runtime_scope_factory: StreamingAgentRuntimeScopeFactory,
         delta_reporter: AnswerDeltaReporter | None = None,
-        continuation: AnswerGenerationContinuation | None = None,
+        continuation: RunExecutionContinuation | None = None,
         recorder: DirectAnswerRecorder = logfire_direct_answer_recorder,
     ) -> None:
         self._agent = agent

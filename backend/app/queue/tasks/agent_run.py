@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from uuid import UUID
@@ -13,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.agent.answering.direct_answer.failure import DirectAnswerError
+from app.agent.answering.live_delivery import ensure_answer_generation_continues
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
 from app.agent.daily_quota import observability as daily_quota_observability
@@ -42,6 +41,7 @@ from app.agent.runs.contracts import (
     StartRunOutcome,
     UserQuestionMessage,
 )
+from app.agent.runs.execution import StopReason
 from app.agent.runs.execution_probe import AgentRunExecutionProbe
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -60,7 +60,6 @@ from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
-RESEARCH_APPLICATION_TIMEOUT_SECONDS = 150
 RESEARCH_TASKIQ_TIMEOUT_SECONDS = 180
 
 
@@ -84,226 +83,171 @@ async def run_agent_answer(
     stream_events: AgentRunLiveStreamPublisher | None = None
     result: AnswerQuestionResult | None = None
     research_handoff: ResearchHandoff | None = None
-    application_deadline_at = time.monotonic() + RESEARCH_APPLICATION_TIMEOUT_SECONDS
-    application_deadline = asyncio.timeout_at(application_deadline_at)
-    application_deadline_reached_after_start = False
-    timeout_terminalization_error: AgentRunTaskBoundaryError | None = None
+    start_error: AgentRunTaskBoundaryError | None = None
     try:
-        async with application_deadline:
-            start_error: AgentRunTaskBoundaryError | None = None
-            try:
-                start_result = await _start_run(session_factory, trigger)
-            except Exception as exc:
-                logger.error(
-                    "agent_run_start_failed",
-                    error_type=exc.__class__.__name__,
-                )
-                start_error = AgentRunTaskBoundaryError("agent run start failed")
-            if start_error is not None:
-                start_error.__suppress_context__ = True
-                raise start_error
-            if start_result.start_outcome is StartRunOutcome.DEADLINE_EXCEEDED:
-                quota_release_outcome = start_result.quota_release_outcome
-                logger.info(
-                    "agent_run_start_deadline_exceeded",
-                    quota_release_result=(
-                        quota_release_outcome.value
-                        if quota_release_outcome is not None
-                        else None
-                    ),
-                )
-                if quota_release_outcome is not None:
-                    with suppress(Exception):
-                        daily_quota_observability.observe_release(
-                            run_id=run_id,
-                            outcome=quota_release_outcome,
-                        )
-                return
-            if start_result.start_outcome is StartRunOutcome.IDEMPOTENT_SKIP:
-                logger.info("agent_run_idempotent_skip", run_id=str(run_id))
-                return
-            attempt_epoch = start_result.attempt_epoch
-            if attempt_epoch is None:
-                raise RuntimeError("started run is missing its attempt epoch")
-            if time.monotonic() >= application_deadline_at:
-                application_deadline_reached_after_start = True
-                raise TimeoutError
-
-            question_row = None
-            try:
-                question_row = await _read_user_question(session_factory, run_id)
-            except Exception as exc:
-                logger.error(
-                    "agent_run_user_question_read_failed",
-                    run_id=str(run_id),
-                    error_type=exc.__class__.__name__,
-                )
-            if question_row is None:
-                await _mark_failed(
-                    session_factory,
-                    run_id,
-                    attempt_epoch,
-                    AgentRunErrorCode.INTERNAL_ERROR,
-                    None,
-                )
-                return
-            user_id, thread_id, question = question_row
-
-            redis = get_redis()
-            stream_events = AgentRunLiveStreamPublisher(
-                redis,
-                run_id,
-                attempt_epoch,
-            )
-            delta_reporter = AgentRunLiveAnswerDeltaReporter(
-                stream_events,
-                run_id=run_id,
-                attempt_epoch=attempt_epoch,
-            )
-            continuation = AgentRunExecutionProbe(
-                session_factory,
-                run_id,
-                attempt_epoch,
-            )
-            try:
-                await stream_events.begin_attempt()
-            except Exception:
-                logger.warning(
-                    "agent_run_live_stream_begin_attempt_failed",
-                    run_id=str(run_id),
-                )
-
-            try:
-                activity_reporter = AgentRunLiveActivityReporter(stream_events)
-                progress_reporter = AgentRunLiveStageReporter(stream_events)
-                as_of = datetime.now(UTC)
-                history = await _read_history(
-                    session_factory,
-                    thread_id=thread_id,
-                    before_seq=question.seq,
-                )
-                research_handoff = await _read_research_handoff(
-                    session_factory,
-                    thread_id=thread_id,
-                    user_id=user_id,
+        start_result = await _start_run(session_factory, trigger)
+    except Exception as exc:
+        logger.error(
+            "agent_run_start_failed",
+            error_type=exc.__class__.__name__,
+        )
+        start_error = AgentRunTaskBoundaryError("agent run start failed")
+    if start_error is not None:
+        start_error.__suppress_context__ = True
+        raise start_error
+    if start_result.start_outcome is StartRunOutcome.DEADLINE_EXCEEDED:
+        quota_release_outcome = start_result.quota_release_outcome
+        logger.info(
+            "agent_run_start_deadline_exceeded",
+            quota_release_result=(
+                quota_release_outcome.value
+                if quota_release_outcome is not None
+                else None
+            ),
+        )
+        if quota_release_outcome is not None:
+            with suppress(Exception):
+                daily_quota_observability.observe_release(
                     run_id=run_id,
+                    outcome=quota_release_outcome,
                 )
-                answering_runner = build_answering_runner(
-                    session_factory=session_factory,
-                    progress=progress_reporter,
-                    events=activity_reporter,
-                    delta_reporter=delta_reporter,
-                    continuation=continuation,
-                )
-                run_result = await answering_runner.run(
-                    RunInput(
-                        question=question.content,
-                        history=tuple(history),
-                        research_handoff=research_handoff,
-                    ),
-                    identity=RunIdentity(
-                        user_id=user_id,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        as_of=as_of,
-                    ),
-                )
-                result = run_result.final_output
-                research_handoff = run_result.research_handoff
-            except AnswerGenerationStopped:
-                logger.info(
-                    "agent_run_generation_stopped",
-                    run_id=str(run_id),
-                )
-                return
-            except (
-                AIProviderConfigurationError,
-                AIProviderError,
-                AgentResponseInvalidError,
-                DirectAnswerError,
-                PlanningError,
-            ) as exc:
-                logger.info(
-                    "agent_run_generation_unavailable",
-                    run_id=str(run_id),
-                    error_type=exc.__class__.__name__,
-                )
-                await _mark_failed(
-                    session_factory,
-                    run_id,
-                    attempt_epoch,
-                    AgentRunErrorCode.GENERATION_UNAVAILABLE,
-                    stream_events,
-                )
-                return
-            except Exception as exc:
-                logger.error(
-                    "agent_run_unexpected_error",
-                    run_id=str(run_id),
-                    error_type=exc.__class__.__name__,
-                )
-                await _mark_failed(
-                    session_factory,
-                    run_id,
-                    attempt_epoch,
-                    AgentRunErrorCode.INTERNAL_ERROR,
-                    stream_events,
-                )
-                return
-    except TimeoutError:
-        if not (
-            application_deadline_reached_after_start or application_deadline.expired()
-        ):
-            raise
-        if attempt_epoch is None:
-            logger.info("application_timeout_without_attempt")
-            return
-        if stream_events is None:
-            try:
-                redis = get_redis()
-                stream_events = AgentRunLiveStreamPublisher(
-                    redis,
-                    run_id,
-                    attempt_epoch,
-                )
-            except Exception:
-                logger.warning(
-                    "agent_run_live_stream_timeout_publisher_init_failed",
-                    run_id=str(run_id),
-                )
-        try:
-            transitioned = await _mark_failed(
-                session_factory,
-                run_id,
-                attempt_epoch,
-                AgentRunErrorCode.GENERATION_UNAVAILABLE,
-                stream_events,
-            )
-        except Exception as exc:
-            logger.error(
-                "application_timeout_terminalize_failed",
-                error_type=exc.__class__.__name__,
-            )
-            timeout_terminalization_error = AgentRunTaskBoundaryError(
-                "agent run timeout terminalization failed"
-            )
-        if timeout_terminalization_error is None:
-            if transitioned:
-                logger.info(
-                    "application_timeout_terminalized",
-                    error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE.value,
-                    attempt_outcome="terminalized",
-                )
-            else:
-                logger.info(
-                    "application_timeout_lost_race",
-                    attempt_outcome="lost_race",
-                )
-            return
+        return
+    if start_result.start_outcome is StartRunOutcome.IDEMPOTENT_SKIP:
+        logger.info("agent_run_idempotent_skip", run_id=str(run_id))
+        return
+    attempt_epoch = start_result.attempt_epoch
+    if attempt_epoch is None:
+        raise RuntimeError("started run is missing its attempt epoch")
 
-    if timeout_terminalization_error is not None:
-        timeout_terminalization_error.__suppress_context__ = True
-        raise timeout_terminalization_error
+    question_row = None
+    try:
+        question_row = await _read_user_question(session_factory, run_id)
+    except Exception as exc:
+        logger.error(
+            "agent_run_user_question_read_failed",
+            run_id=str(run_id),
+            error_type=exc.__class__.__name__,
+        )
+    if question_row is None:
+        await _mark_failed(
+            session_factory,
+            run_id,
+            attempt_epoch,
+            AgentRunErrorCode.INTERNAL_ERROR,
+            None,
+        )
+        return
+    user_id, thread_id, question = question_row
+
+    redis = get_redis()
+    stream_events = AgentRunLiveStreamPublisher(
+        redis,
+        run_id,
+        attempt_epoch,
+    )
+    delta_reporter = AgentRunLiveAnswerDeltaReporter(
+        stream_events,
+        run_id=run_id,
+        attempt_epoch=attempt_epoch,
+    )
+    continuation = AgentRunExecutionProbe(
+        session_factory,
+        run_id,
+        attempt_epoch,
+    )
+    try:
+        await stream_events.begin_attempt()
+    except Exception:
+        logger.warning(
+            "agent_run_live_stream_begin_attempt_failed",
+            run_id=str(run_id),
+        )
+
+    try:
+        activity_reporter = AgentRunLiveActivityReporter(stream_events)
+        progress_reporter = AgentRunLiveStageReporter(stream_events)
+        as_of = datetime.now(UTC)
+        history = await _read_history(
+            session_factory,
+            thread_id=thread_id,
+            before_seq=question.seq,
+        )
+        research_handoff = await _read_research_handoff(
+            session_factory,
+            thread_id=thread_id,
+            user_id=user_id,
+            run_id=run_id,
+        )
+        answering_runner = build_answering_runner(
+            session_factory=session_factory,
+            progress=progress_reporter,
+            events=activity_reporter,
+            delta_reporter=delta_reporter,
+            continuation=continuation,
+        )
+        await ensure_answer_generation_continues(continuation)
+        run_result = await answering_runner.run(
+            RunInput(
+                question=question.content,
+                history=tuple(history),
+                research_handoff=research_handoff,
+            ),
+            identity=RunIdentity(
+                user_id=user_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                as_of=as_of,
+            ),
+        )
+        result = run_result.final_output
+        research_handoff = run_result.research_handoff
+    except AnswerGenerationStopped as stopped:
+        logger.info(
+            "agent_run_generation_stopped",
+            run_id=str(run_id),
+            reason=stopped.reason.value,
+        )
+        if stopped.reason is StopReason.DEADLINE_EXCEEDED:
+            await _publish_terminal(
+                stream_events,
+                run_id,
+                AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
+            )
+        return
+    except (
+        AIProviderConfigurationError,
+        AIProviderError,
+        AgentResponseInvalidError,
+        DirectAnswerError,
+        PlanningError,
+    ) as exc:
+        logger.info(
+            "agent_run_generation_unavailable",
+            run_id=str(run_id),
+            error_type=exc.__class__.__name__,
+        )
+        await _mark_failed(
+            session_factory,
+            run_id,
+            attempt_epoch,
+            AgentRunErrorCode.GENERATION_UNAVAILABLE,
+            stream_events,
+        )
+        return
+    except Exception as exc:
+        logger.error(
+            "agent_run_unexpected_error",
+            run_id=str(run_id),
+            error_type=exc.__class__.__name__,
+        )
+        await _mark_failed(
+            session_factory,
+            run_id,
+            attempt_epoch,
+            AgentRunErrorCode.INTERNAL_ERROR,
+            stream_events,
+        )
+        return
 
     if attempt_epoch is None or stream_events is None or result is None:
         raise RuntimeError("completed run is missing its execution context")

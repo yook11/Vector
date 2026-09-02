@@ -30,6 +30,7 @@ from app.agent.runs.contracts import (
     ThreadNotFoundError,
     UserQuestionMessage,
 )
+from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.runs.projection import build_research_run_response
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.citation_integrity import warn_on_citation_source_mismatch
@@ -302,25 +303,38 @@ class AgentRunRepository:
         user_id, thread_id, content, seq = row
         return user_id, thread_id, UserQuestionMessage(content=content, seq=seq)
 
-    async def is_execution_current(
+    async def decide_execution_continuation(
         self,
         *,
         run_id: uuid_mod.UUID,
         attempt_epoch: int,
-    ) -> bool:
-        value = (
+        now: datetime | None = None,
+    ) -> Continue | Stop:
+        now = await database_now(self._session, now)
+        deadline_at = (
             await self._session.execute(
-                select(1)
-                .select_from(AgentRun)
-                .where(
+                select(AgentRun.deadline_at).where(
                     AgentRun.id == run_id,
                     AgentRun.status == AgentRunStatus.RUNNING.value,
                     AgentRun.attempt_epoch == attempt_epoch,
                 )
-                .limit(1)
             )
         ).scalar_one_or_none()
-        return value is not None
+        if deadline_at is None:
+            return Stop(StopReason.NOT_CURRENT)
+        if now < deadline_at:
+            return Continue()
+
+        expired = await expire_run(
+            self._session,
+            run_id=run_id,
+            expected_status=AgentRunStatus.RUNNING,
+            expected_attempt_epoch=attempt_epoch,
+            now=now,
+        )
+        if not expired:
+            return Stop(StopReason.NOT_CURRENT)
+        return Stop(StopReason.DEADLINE_EXCEEDED)
 
     async def complete_run(
         self,

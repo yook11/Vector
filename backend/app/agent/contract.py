@@ -16,11 +16,11 @@ from pydantic import (
     model_validator,
 )
 
+from app.agent.runs.execution import StopReason
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
     "AnswerDeltaReporter",
-    "AnswerGenerationContinuation",
     "AnswerGenerationStopped",
     "AnswerProgressReporter",
     "AnswerProgressEvent",
@@ -190,6 +190,13 @@ class AnswerQuestionResult(BaseModel):
 class AnswerGenerationStopped(Exception):
     """現在のrun attemptが回答生成を継続できなくなった。"""
 
+    def __init__(
+        self,
+        reason: StopReason = StopReason.NOT_CURRENT,
+    ) -> None:
+        super().__init__(reason.value)
+        self.reason = reason
+
 
 class AnswerDeltaReporter(Protocol):
     """表示可能な回答断片をgeneration単位で通知するsink。"""
@@ -201,12 +208,6 @@ class AnswerDeltaReporter(Protocol):
     async def finish(self, *, generation: int) -> None: ...
 
     async def abort(self, *, generation: int) -> None: ...
-
-
-class AnswerGenerationContinuation(Protocol):
-    """現在の回答生成を継続できるか判定する。"""
-
-    async def should_continue(self) -> bool: ...
 
 
 class AnswerProgressReporter(Protocol):
