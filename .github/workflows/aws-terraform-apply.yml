@@ -11,8 +11,8 @@ name: AWS terraform apply
 #   apply は承認後に同じ commit を自分で plan し直してから適用する。
 #   tfplan を artifact で渡さないのは、公開 repo の artifact は誰でも取得でき、
 #   変数の実値が漏れるため。
-# - infra path の merge は Terraform 差分ゼロでも承認を求める。承認後の plan が
-#   空なら apply しない。
+# - infra path の merge は Terraform 差分ゼロでも承認を求め、refresh の結果を
+#   state に保存するため、変更ゼロの plan も apply する。
 # - apply role は state bucket に書けるので lock は通常どおり取る。
 # - image_tag は state が最後に apply された値に固定する (aws-terraform-plan.yml と
 #   同じ理由)。image の前進は rollout (aws-app-images.yml) の仕事で、この workflow は
@@ -156,13 +156,9 @@ jobs:
           set -e
           sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out > plan.masked
           cat plan.masked
-          if [ "$code" -eq 1 ]; then
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
             echo "::error::terraform plan が失敗した"
             exit 1
-          fi
-          if [ "$code" -eq 0 ]; then
-            echo "No changes." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
           fi
           set +e
           terraform apply -input=false -no-color tfplan > apply.out 2>&1
