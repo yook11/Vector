@@ -30,13 +30,13 @@ def assert_idempotent_skip(result: object) -> None:
     assert result.quota_release_outcome is None
 
 
-def assert_queued_start_deadline_expired(
+def assert_start_deadline_exceeded(
     result: object,
     *,
     quota_release_outcome: DailyQuotaReleaseOutcome,
 ) -> None:
     """期限超過queued runが実行せずterminal化されたことを確認する。"""
     assert isinstance(result, StartRunCommandOutcome)
-    assert result.start_outcome is StartRunOutcome.QUEUED_START_DEADLINE_EXPIRED
+    assert result.start_outcome is StartRunOutcome.DEADLINE_EXCEEDED
     assert result.attempt_epoch is None
     assert result.quota_release_outcome is quota_release_outcome

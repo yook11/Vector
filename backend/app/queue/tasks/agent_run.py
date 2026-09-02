@@ -34,6 +34,7 @@ from app.agent.running import (
     RunInput,
 )
 from app.agent.runs.contracts import (
+    CompleteRunOutcome,
     RunTransitionLostError,
     StartRunCommandOutcome,
     StartRunOutcome,
@@ -100,24 +101,22 @@ async def run_agent_answer(
             if start_error is not None:
                 start_error.__suppress_context__ = True
                 raise start_error
-            if (
-                start_result.start_outcome
-                is StartRunOutcome.QUEUED_START_DEADLINE_EXPIRED
-            ):
+            if start_result.start_outcome is StartRunOutcome.DEADLINE_EXCEEDED:
                 quota_release_outcome = start_result.quota_release_outcome
-                if quota_release_outcome is None:
-                    raise RuntimeError(
-                        "queued expiry is missing its quota release outcome"
-                    )
                 logger.info(
-                    "agent_run_queued_start_deadline_expired",
-                    quota_release_result=quota_release_outcome.value,
+                    "agent_run_start_deadline_exceeded",
+                    quota_release_result=(
+                        quota_release_outcome.value
+                        if quota_release_outcome is not None
+                        else None
+                    ),
                 )
-                with suppress(Exception):
-                    daily_quota_observability.observe_release(
-                        run_id=run_id,
-                        outcome=quota_release_outcome,
-                    )
+                if quota_release_outcome is not None:
+                    with suppress(Exception):
+                        daily_quota_observability.observe_release(
+                            run_id=run_id,
+                            outcome=quota_release_outcome,
+                        )
                 return
             if start_result.start_outcome is StartRunOutcome.IDEMPOTENT_SKIP:
                 logger.info("agent_run_idempotent_skip", run_id=str(run_id))
@@ -315,22 +314,28 @@ async def run_agent_answer(
     try:
         async with session_factory() as session:
             async with session.begin():
-                completed = await AgentRunRepository(session).complete_run(
+                completion_outcome = await AgentRunRepository(session).complete_run(
                     run_id=run_id,
                     result=result,
                     expected_attempt_epoch=attempt_epoch,
                     research_handoff=serialized_research_handoff,
                 )
-                if not completed:
+                if completion_outcome is CompleteRunOutcome.TRANSITION_LOST:
                     logger.info(
-                        "agent_run_completion_skipped",
+                        "agent_run_completion_lost_race",
                         run_id=str(run_id),
                     )
-        if completed:
+        if completion_outcome is CompleteRunOutcome.COMPLETED:
             await _publish_terminal(
                 stream_events,
                 run_id,
                 AgentRunLiveStreamTerminalEvent(status="completed"),
+            )
+        elif completion_outcome is CompleteRunOutcome.DEADLINE_EXCEEDED:
+            await _publish_terminal(
+                stream_events,
+                run_id,
+                AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
             )
     except RunTransitionLostError:
         logger.info("agent_run_completion_lost_race", run_id=str(run_id))

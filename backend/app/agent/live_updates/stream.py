@@ -64,7 +64,12 @@ class AgentRunLiveStreamAnswerResetEvent(_StreamEventBase):
 
 class AgentRunLiveStreamTerminalEvent(_StreamEventBase):
     type: Literal["terminal"] = "terminal"
-    status: Literal["completed", "policy_blocked", "failed"]
+    status: Literal[
+        "completed",
+        "policy_blocked",
+        "deadline_exceeded",
+        "failed",
+    ]
     error_code: AgentRunErrorCode | None = Field(default=None, alias="errorCode")
 
     @model_validator(mode="after")

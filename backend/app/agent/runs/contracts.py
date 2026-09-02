@@ -25,7 +25,7 @@ class RunTransitionLostError(Exception):
 
 class StartRunOutcome(StrEnum):
     STARTED = "started"
-    QUEUED_START_DEADLINE_EXPIRED = "queued_start_deadline_expired"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
     IDEMPOTENT_SKIP = "idempotent_skip"
 
 
@@ -47,14 +47,24 @@ class StartRunCommandOutcome:
             ):
                 raise ValueError("started run requires only a positive attempt epoch")
             return
-        if self.start_outcome is StartRunOutcome.QUEUED_START_DEADLINE_EXPIRED:
-            if self.attempt_epoch is not None or not isinstance(
-                self.quota_release_outcome, DailyQuotaReleaseOutcome
+        if self.start_outcome is StartRunOutcome.DEADLINE_EXCEEDED:
+            if self.attempt_epoch is not None or (
+                self.quota_release_outcome is not None
+                and not isinstance(
+                    self.quota_release_outcome,
+                    DailyQuotaReleaseOutcome,
+                )
             ):
-                raise ValueError("expired queued run requires only a quota outcome")
+                raise ValueError("deadline exceeded run cannot contain an attempt")
             return
         if self.attempt_epoch is not None or self.quota_release_outcome is not None:
             raise ValueError("idempotent skip cannot contain start details")
+
+
+class CompleteRunOutcome(StrEnum):
+    COMPLETED = "completed"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
+    TRANSITION_LOST = "transition_lost"
 
 
 class CancelRunOutcome(StrEnum):
@@ -62,6 +72,7 @@ class CancelRunOutcome(StrEnum):
     ALREADY_FAILED = "already_failed"
     ALREADY_COMPLETED = "already_completed"
     ALREADY_POLICY_BLOCKED = "already_policy_blocked"
+    ALREADY_DEADLINE_EXCEEDED = "already_deadline_exceeded"
 
 
 @dataclass(frozen=True, slots=True)

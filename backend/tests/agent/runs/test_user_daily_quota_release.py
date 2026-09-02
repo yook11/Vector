@@ -1,4 +1,4 @@
-"""queued cancel による日次quota返却契約。"""
+"""日次quotaの返却契約。"""
 
 from __future__ import annotations
 
@@ -14,12 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.agent.runs.contracts as run_contracts
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
-from app.agent.runs.contracts import CancelRunCommandOutcome, CancelRunOutcome
+from app.agent.runs.contracts import (
+    CancelRunCommandOutcome,
+    CancelRunOutcome,
+    CompleteRunOutcome,
+)
 from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.runs.daily_quota.persistence import (
     _build_daily_quota_reservation_statement,
 )
-from app.agent.runs.repository import AgentRunRepository
+from app.agent.runs.repository import RUN_DEADLINE_SECONDS, AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
@@ -27,7 +31,7 @@ from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.runs._start_run_outcomes import (
     assert_idempotent_skip,
-    assert_queued_start_deadline_expired,
+    assert_start_deadline_exceeded,
     started_attempt_epoch,
 )
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
@@ -40,6 +44,7 @@ _USAGE_DATE = date(2026, 7, 19)
 _CURRENT_DATE = date(2026, 7, 20)
 _USAGE_CLOCK = datetime(2026, 7, 19, 3, 0, tzinfo=UTC)
 _NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+_FENCE_DEADLINE_AT = _NOW + timedelta(seconds=60)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +65,7 @@ async def _seed_run(
     counter_usage_date: date | None = None,
     attempt_epoch: int = 0,
     created_at: datetime | None = None,
+    deadline_at: datetime | None = None,
 ) -> _SeededRun:
     counter_date = counter_usage_date or quota_usage_date
     if counter_count is not None:
@@ -100,19 +106,24 @@ async def _seed_run(
             await session.flush()
             assistant_message_id = assistant_message.id
 
+        effective_created_at = created_at or datetime.now(UTC)
         run = AgentRun(
             thread_id=thread.id,
             user_message_id=user_message.id,
             assistant_message_id=assistant_message_id,
             status=status,
             error_code="internal_error" if status == "failed" else None,
+            created_at=effective_created_at,
+            deadline_at=(
+                deadline_at
+                if deadline_at is not None
+                else effective_created_at + timedelta(seconds=RUN_DEADLINE_SECONDS)
+            ),
             started_at=_NOW if status == "running" else None,
             completed_at=_NOW if status in {"completed", "failed"} else None,
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,
         )
-        if created_at is not None:
-            run.created_at = created_at
         session.add(run)
         await session.commit()
         seeded = _SeededRun(
@@ -393,6 +404,62 @@ async def test_running_quota_cancel_is_not_eligible_and_returns_execution_epoch(
 
 
 @pytest.mark.asyncio
+async def test_quota_queued_deadline_exceeded_releases_to_zero(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seeded = await _seed_run(
+        session_factory,
+        created_at=_NOW,
+        deadline_at=_FENCE_DEADLINE_AT,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await AgentRunRepository(session).start_run(
+                seeded.run_id,
+                now=_FENCE_DEADLINE_AT,
+            )
+
+    assert (
+        await _read_counter(
+            session_factory,
+            user_id=_USER_ID,
+            usage_date=_USAGE_DATE,
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_quota_running_deadline_exceeded_keeps_reservation(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seeded = await _seed_run(
+        session_factory,
+        status="running",
+        attempt_epoch=4,
+        created_at=_NOW,
+        deadline_at=_FENCE_DEADLINE_AT,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await AgentRunRepository(session).start_run(
+                seeded.run_id,
+                now=_FENCE_DEADLINE_AT,
+            )
+
+    assert (
+        await _read_counter(
+            session_factory,
+            user_id=_USER_ID,
+            usage_date=_USAGE_DATE,
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_legacy_queued_cancel_is_not_eligible_without_counter(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -648,7 +715,7 @@ async def test_waiting_stale_sweep_does_not_overwrite_cancel_or_expired_start(
                     seeded.run_id,
                     now=_NOW,
                 )
-                assert_queued_start_deadline_expired(
+                assert_start_deadline_exceeded(
                     expiry_result,
                     quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
                 )
@@ -692,8 +759,8 @@ async def test_waiting_stale_sweep_does_not_overwrite_cancel_or_expired_start(
             expected_counter = 0
         else:
             assert (run.status, run.error_code, run.attempt_epoch) == (
-                "failed",
-                "stale",
+                "deadline_exceeded",
+                None,
                 0,
             )
             expected_counter = 0
@@ -801,11 +868,14 @@ async def test_competing_terminal_transition_wins_without_refund(
                 assert stale_result.running_quota_reservation_count == 0
                 assert stale_result.running_without_started_at_count == 0
             else:
-                assert await repository.complete_run(
-                    run_id=seeded.run_id,
-                    result=_completed_result(),
-                    expected_attempt_epoch=1,
-                    now=_NOW,
+                assert (
+                    await repository.complete_run(
+                        run_id=seeded.run_id,
+                        result=_completed_result(),
+                        expected_attempt_epoch=1,
+                        now=_NOW,
+                    )
+                    is CompleteRunOutcome.COMPLETED
                 )
             await locker.commit()
 

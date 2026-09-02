@@ -318,6 +318,7 @@ class AgentRunQueuedSseConnection:
                 if context is None or context.status in (
                     AgentRunStatus.COMPLETED,
                     AgentRunStatus.POLICY_BLOCKED,
+                    AgentRunStatus.DEADLINE_EXCEEDED,
                     AgentRunStatus.FAILED,
                 ):
                     self._lease.mark_close_reason("queued_terminal")

@@ -36,6 +36,7 @@ const ActiveRunSnapshotContext = createContext<ResearchRunLiveSnapshot | null>(
 );
 const POLICY_BLOCKED_NOTICE =
   "この依頼は安全上のポリシーにより処理されませんでした。";
+const DEADLINE_EXCEEDED_NOTICE = "時間切れになりました";
 const RECOVERY_PENDING_NOTICE =
   "回答に通常より時間がかかっています。現在の実行状態を確認しています。";
 
@@ -179,6 +180,8 @@ export function ResearchActiveRunBoundary({
       );
     } else if (snapshot.runStatus === "policy_blocked") {
       announcement = "";
+    } else if (snapshot.runStatus === "deadline_exceeded") {
+      announcement = DEADLINE_EXCEEDED_NOTICE;
     } else if (snapshot.runStatus === "completed") {
       announcement = "回答を確定しています…";
     } else if (snapshot.isRecoveryPending) {
@@ -235,6 +238,10 @@ export function ResearchRunStatusRail({
     run.status === "policy_blocked" ||
     snapshot?.runStatus === "policy_blocked" ||
     snapshot?.liveState.terminal?.status === "policy_blocked";
+  const isDeadlineExceeded =
+    run.status === "deadline_exceeded" ||
+    snapshot?.runStatus === "deadline_exceeded" ||
+    snapshot?.liveState.terminal?.status === "deadline_exceeded";
   const isFailed = run.status === "failed" || liveFailure !== null;
   const previousIsFailed = useRef(isFailed);
 
@@ -253,6 +260,14 @@ export function ResearchRunStatusRail({
         className="mt-2 min-w-0 text-xs text-[var(--vector-ink-muted)]"
       >
         {POLICY_BLOCKED_NOTICE}
+      </div>
+    );
+  }
+  if (isDeadlineExceeded) {
+    return (
+      <div className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-[var(--vector-ink-muted)]">
+        <Clock3 aria-hidden="true" className="size-3.5 shrink-0" />
+        <span>{DEADLINE_EXCEEDED_NOTICE}</span>
       </div>
     );
   }
@@ -309,8 +324,13 @@ export function ResearchRunAnswerSlot({
     run.status === "policy_blocked" ||
     snapshot?.runStatus === "policy_blocked" ||
     snapshot?.liveState.terminal?.status === "policy_blocked";
+  const isDeadlineExceeded =
+    run.status === "deadline_exceeded" ||
+    snapshot?.runStatus === "deadline_exceeded" ||
+    snapshot?.liveState.terminal?.status === "deadline_exceeded";
   const isFailed = run.status === "failed" || snapshot?.runStatus === "failed";
   if (isPolicyBlocked) return null;
+  if (isDeadlineExceeded) return null;
   if (isFailed) return null;
 
   if (finalAnswer !== null) {

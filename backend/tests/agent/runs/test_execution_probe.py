@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -339,6 +339,7 @@ async def _create_run(
         session.add(assistant_message)
         await session.flush()
         assistant_message_id = assistant_message.id
+    created_at = datetime.now(UTC)
     run = AgentRun(
         thread_id=thread.id,
         user_message_id=user_message.id,
@@ -346,6 +347,8 @@ async def _create_run(
         status=status,
         error_code="internal_error" if status == "failed" else None,
         attempt_epoch=attempt_epoch,
+        created_at=created_at,
+        deadline_at=created_at + timedelta(seconds=60),
     )
     session.add(run)
     await session.commit()

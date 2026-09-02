@@ -411,6 +411,7 @@ async def stream_research_run_events(
         if context.status in (
             AgentRunStatus.COMPLETED,
             AgentRunStatus.POLICY_BLOCKED,
+            AgentRunStatus.DEADLINE_EXCEEDED,
             AgentRunStatus.FAILED,
         ):
             await lease.release()

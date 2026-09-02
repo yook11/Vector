@@ -21,6 +21,7 @@ from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.runs.contracts import (
     CancelRunCommandOutcome,
     CancelRunOutcome,
+    CompleteRunOutcome,
 )
 from app.agent.runs.daily_quota import observability as daily_quota_observability
 from app.agent.runs.daily_quota.contracts import (
@@ -231,12 +232,15 @@ async def _create_run(
     error_code: str | None = None,
     attempt_epoch: int | None = None,
 ) -> AgentRun:
+    created_at = datetime.now(UTC)
     run = AgentRun(
         thread_id=thread_id,
         user_message_id=user_message_id,
         assistant_message_id=assistant_message_id,
         status=status,
         error_code=error_code,
+        created_at=created_at,
+        deadline_at=created_at + timedelta(seconds=60),
     )
     if attempt_epoch is not None:
         run.attempt_epoch = attempt_epoch
@@ -1799,7 +1803,7 @@ class TestDeleteResearchThread:
                 result=_direct_result(),
                 expected_attempt_epoch=expected_attempt_epoch,
             )
-        assert completed is False
+        assert completed is CompleteRunOutcome.TRANSITION_LOST
         assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
         assert (
             await db_session.scalar(select(func.count()).select_from(AgentMessage)) == 0
@@ -2123,7 +2127,7 @@ class TestCancelResearchRun:
             )
         refreshed_run = await db_session.get(AgentRun, run_id)
         assert refreshed_run is not None
-        assert completed is False
+        assert completed is CompleteRunOutcome.TRANSITION_LOST
         assert refreshed_run.status == "failed"
         assert refreshed_run.error_code == "cancelled"
         messages = (
@@ -2249,12 +2253,16 @@ class TestGetResearchRun:
             role="user",
             content="blocked request",
         )
+        completed_at = datetime(2026, 7, 20, 12, tzinfo=UTC)
+        created_at = completed_at - timedelta(seconds=1)
         run = AgentRun(
             thread_id=thread.id,
             user_message_id=user_message.id,
             status="policy_blocked",
             attempt_epoch=2,
-            completed_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
+            created_at=created_at,
+            deadline_at=created_at + timedelta(seconds=60),
+            completed_at=completed_at,
         )
         db_session.add(run)
         await db_session.commit()

@@ -64,6 +64,7 @@ ResearchRunStatus = Literal[
     "running",
     "completed",
     "policy_blocked",
+    "deadline_exceeded",
     "failed",
 ]
 ResearchRunErrorCode = Literal[

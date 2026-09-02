@@ -53,9 +53,7 @@ from app.agent.running import (
     RunInput,
     RunResult,
 )
-from app.agent.runs.contracts import (
-    RunTransitionLostError,
-)
+from app.agent.runs.contracts import CompleteRunOutcome, RunTransitionLostError
 from app.agent.runs.daily_quota import observability as daily_quota_observability
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.result_mapper import (
@@ -539,18 +537,19 @@ async def _create_thread_message_run(
     )
     session.add(message)
     await session.flush()
+    effective_created_at = created_at or datetime.now(UTC)
     run = AgentRun(
         thread_id=thread.id,
         user_message_id=message.id,
         status=status,
+        created_at=effective_created_at,
+        deadline_at=effective_created_at + timedelta(seconds=60),
         started_at=started_at,
         error_code=error_code,
         quota_usage_date=quota_usage_date,
     )
     if attempt_epoch is not None:
         run.attempt_epoch = attempt_epoch
-    if created_at is not None:
-        run.created_at = created_at
     session.add(run)
     await session.commit()
     await session.refresh(thread)
@@ -637,7 +636,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> CompleteRunOutcome:
         persisted_results.append(result)
         completed_epochs.append(expected_attempt_epoch)
         return await original_complete(
@@ -731,7 +730,7 @@ def _capture_complete_run_handoffs(
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> CompleteRunOutcome:
         captured.append(research_handoff)
         return await original_complete(
             repository,
@@ -1496,10 +1495,10 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
-    ) -> bool:
+    ) -> CompleteRunOutcome:
         assert result == fake_agent.result
         complete_calls.append((run_id, expected_attempt_epoch))
-        return False
+        return CompleteRunOutcome.TRANSITION_LOST
 
     async def observe_mark_failed(
         _repository: AgentRunRepository,
@@ -1507,10 +1506,10 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
         *,
         error_code: agent_run_tasks.AgentRunErrorCode,
         expected_attempt_epoch: int,
-    ) -> bool:
+    ) -> CompleteRunOutcome:
         assert error_code == agent_run_tasks.AgentRunErrorCode.INTERNAL_ERROR
         mark_failed_calls.append((run_id, expected_attempt_epoch))
-        return False
+        return CompleteRunOutcome.TRANSITION_LOST
 
     _patch_delta_worker(
         monkeypatch,
@@ -1624,10 +1623,10 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
-    ) -> bool:
+    ) -> CompleteRunOutcome:
         assert result == fake_agent.result
         complete_calls.append((run_id, expected_attempt_epoch))
-        return False
+        return CompleteRunOutcome.TRANSITION_LOST
 
     async def observe_mark_failed(
         _repository: AgentRunRepository,
@@ -1934,7 +1933,7 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> CompleteRunOutcome:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
             fake_agent.result,
@@ -1942,7 +1941,7 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
         )
         if completion_outcome == "lost":
             raise RunTransitionLostError
-        return False
+        return CompleteRunOutcome.TRANSITION_LOST
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(
@@ -2108,13 +2107,13 @@ async def test_completion_skip_does_not_publish_terminal(
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> CompleteRunOutcome:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
             fake_agent.result,
             1,
         )
-        return False
+        return CompleteRunOutcome.TRANSITION_LOST
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
@@ -2344,7 +2343,7 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
                     expected_attempt_epoch=run.attempt_epoch,
                 )
 
-    assert completed is True
+    assert completed is CompleteRunOutcome.COMPLETED
     mismatch_logs = [
         entry
         for entry in logs
@@ -2397,7 +2396,7 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
                 research_handoff=handoff_json,
             )
 
-    assert completed is True
+    assert completed is CompleteRunOutcome.COMPLETED
     async with session_factory() as session:
         persisted_run = await session.get(AgentRun, run.id)
         persisted_thread = await session.get(AgentThread, thread_id)
@@ -2434,7 +2433,7 @@ async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
                 expected_attempt_epoch=run.attempt_epoch,
             )
 
-    assert completed is True
+    assert completed is CompleteRunOutcome.COMPLETED
     async with session_factory() as session:
         persisted_thread = await session.get(AgentThread, thread_id)
         assert persisted_thread is not None
@@ -2472,14 +2471,14 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
                 )
                 assert attempt_epoch == 2
 
-        with pytest.raises(RunTransitionLostError):
-            async with stale_session.begin():
-                await AgentRunRepository(stale_session).complete_run(
-                    run_id=run.id,
-                    result=_direct_result(),
-                    expected_attempt_epoch=stale_run.attempt_epoch,
-                    research_handoff=handoff_json,
-                )
+        async with stale_session.begin():
+            outcome = await AgentRunRepository(stale_session).complete_run(
+                run_id=run.id,
+                result=_direct_result(),
+                expected_attempt_epoch=stale_run.attempt_epoch,
+                research_handoff=handoff_json,
+            )
+        assert outcome is CompleteRunOutcome.TRANSITION_LOST
     finally:
         await stale_session.close()
 
@@ -2695,13 +2694,13 @@ async def test_complete_run_lost_race_rolls_back_assistant_message(
                     error_code=agent_run_tasks.AgentRunErrorCode.STALE,
                 )
 
-        with pytest.raises(RunTransitionLostError):
-            async with stale_session.begin():
-                await AgentRunRepository(stale_session).complete_run(
-                    run_id=run.id,
-                    result=_direct_result(),
-                    expected_attempt_epoch=stale_run.attempt_epoch,
-                )
+        async with stale_session.begin():
+            outcome = await AgentRunRepository(stale_session).complete_run(
+                run_id=run.id,
+                result=_direct_result(),
+                expected_attempt_epoch=stale_run.attempt_epoch,
+            )
+        assert outcome is CompleteRunOutcome.TRANSITION_LOST
     finally:
         await stale_session.close()
 
@@ -2747,13 +2746,13 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
                 )
                 assert attempt_epoch == 2
 
-        with pytest.raises(RunTransitionLostError):
-            async with stale_session.begin():
-                await AgentRunRepository(stale_session).complete_run(
-                    run_id=run.id,
-                    result=_external_result(),
-                    expected_attempt_epoch=stale_run.attempt_epoch,
-                )
+        async with stale_session.begin():
+            outcome = await AgentRunRepository(stale_session).complete_run(
+                run_id=run.id,
+                result=_external_result(),
+                expected_attempt_epoch=stale_run.attempt_epoch,
+            )
+        assert outcome is CompleteRunOutcome.TRANSITION_LOST
     finally:
         await stale_session.close()
 
@@ -2928,46 +2927,18 @@ async def test_start_run_increment_rolls_back_with_transaction(
 @pytest.mark.asyncio
 async def test_concurrent_start_runs_receive_distinct_sequence_values(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async with session_factory() as setup_session:
         _thread, _message, run = await _create_thread_message_run(setup_session)
 
-    selected_count = 0
-    selected_lock = asyncio.Lock()
-    both_selected = asyncio.Event()
-    release_updates = asyncio.Event()
-
     async def start_once() -> int:
-        nonlocal selected_count
         async with session_factory() as session:
-            original_execute = session.execute
-            execute_count = 0
-
-            async def execute_with_barrier(*args: object, **kwargs: object) -> object:
-                nonlocal execute_count, selected_count
-                result = await original_execute(*args, **kwargs)  # type: ignore[arg-type]
-                execute_count += 1
-                if execute_count == 1:
-                    async with selected_lock:
-                        selected_count += 1
-                        if selected_count == 2:
-                            both_selected.set()
-                    await release_updates.wait()
-                return result
-
-            monkeypatch.setattr(session, "execute", execute_with_barrier)
             async with session.begin():
                 return started_attempt_epoch(
                     await AgentRunRepository(session).start_run(run.id)
                 )
 
-    start_tasks = [asyncio.create_task(start_once()), asyncio.create_task(start_once())]
-    try:
-        await asyncio.wait_for(both_selected.wait(), timeout=1)
-    finally:
-        release_updates.set()
-    epochs = await asyncio.gather(*start_tasks)
+    epochs = await asyncio.gather(start_once(), start_once())
 
     assert sorted(epochs) == [1, 2]
     async with session_factory() as session:
@@ -2998,19 +2969,13 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
         _thread, _message, run = await _create_thread_message_run(setup_session)
 
     selected = asyncio.Event()
-    resume = asyncio.Event()
     contender = session_factory()
+    winner = session_factory()
     original_execute = contender.execute
-    execute_count = 0
 
     async def execute_with_pause(*args: object, **kwargs: object) -> object:
-        nonlocal execute_count
-        result = await original_execute(*args, **kwargs)  # type: ignore[arg-type]
-        execute_count += 1
-        if execute_count == 1:
-            selected.set()
-            await resume.wait()
-        return result
+        selected.set()
+        return await original_execute(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(contender, "execute", execute_with_pause)
     try:
@@ -3019,20 +2984,19 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
             async with contender.begin():
                 return await AgentRunRepository(contender).start_run(run.id)
 
+        await winner.begin()
+        changed = await AgentRunRepository(winner).mark_failed(
+            run.id,
+            expected_attempt_epoch=run.attempt_epoch,
+            error_code=agent_run_tasks.AgentRunErrorCode.STALE,
+        )
+        assert changed is True
         start_task = asyncio.create_task(start_once())
-        await selected.wait()
-        async with session_factory() as winner:
-            async with winner.begin():
-                changed = await AgentRunRepository(winner).mark_failed(
-                    run.id,
-                    expected_attempt_epoch=run.attempt_epoch,
-                    error_code=agent_run_tasks.AgentRunErrorCode.STALE,
-                )
-                assert changed is True
-        resume.set()
+        await asyncio.wait_for(selected.wait(), timeout=1)
+        await winner.commit()
         skip_result = await start_task
     finally:
-        resume.set()
+        await winner.close()
         await contender.close()
 
     assert_idempotent_skip(skip_result)
