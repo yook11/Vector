@@ -119,8 +119,6 @@ async def _seed_run(
                 if deadline_at is not None
                 else effective_created_at + timedelta(seconds=RUN_DEADLINE_SECONDS)
             ),
-            started_at=_NOW if status == "running" else None,
-            completed_at=_NOW if status in {"completed", "failed"} else None,
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,
         )
@@ -189,7 +187,6 @@ async def _cancel(
             return await AgentRunRepository(session).cancel_run_for_user(
                 run_id=seeded.run_id,
                 user_id=user_id or seeded.user_id,
-                now=_NOW,
             )
 
 
@@ -567,7 +564,6 @@ async def test_cancel_winner_refunds_before_waiting_start_loses(
             ).cancel_run_for_user(
                 run_id=seeded.run_id,
                 user_id=_USER_ID,
-                now=_NOW,
             )
 
             await start_session.begin()
@@ -630,7 +626,6 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
                 AgentRunRepository(contender).cancel_run_for_user(
                     run_id=seeded.run_id,
                     user_id=_USER_ID,
-                    now=_NOW,
                 )
             )
 
@@ -703,7 +698,6 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
                 ).cancel_run_for_user(
                     run_id=seeded.run_id,
                     user_id=_USER_ID,
-                    now=_NOW,
                 )
                 _assert_cancelled_release(
                     cancel_result,
@@ -747,7 +741,6 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
     assert sweep_result.queued_quota_inconsistent_count == 0
     assert sweep_result.running_terminal_runs == ()
     assert sweep_result.running_quota_reservation_count == 0
-    assert sweep_result.running_without_started_at_count == 0
     async with session_factory() as verification:
         run = await verification.get(AgentRun, seeded.run_id)
         assert run is not None
@@ -791,7 +784,6 @@ async def test_mark_failed_never_refunds(
                 seeded.run_id,
                 expected_attempt_epoch=3,
                 error_code=AgentRunErrorCode.INTERNAL_ERROR,
-                now=_NOW,
             )
             assert changed is True
 
@@ -853,7 +845,6 @@ async def test_competing_terminal_transition_wins_without_refund(
                 AgentRunRepository(cancel_session).cancel_run_for_user(
                     run_id=seeded.run_id,
                     user_id=_USER_ID,
-                    now=_NOW,
                 )
             )
             await _wait_until_blocked(observer, cancel_pid)
@@ -862,7 +853,6 @@ async def test_competing_terminal_transition_wins_without_refund(
             if transition == "enqueue_failed":
                 assert await repository.mark_enqueue_failed(
                     seeded.run_id,
-                    now=_NOW,
                 )
             elif transition == "deadline_sweep":
                 sweep_result = await repository.sweep_deadline_exceeded_runs(now=_NOW)
@@ -872,7 +862,6 @@ async def test_competing_terminal_transition_wins_without_refund(
                 assert sweep_result.queued_quota_inconsistent_count == 0
                 assert sweep_result.running_terminal_runs == ()
                 assert sweep_result.running_quota_reservation_count == 0
-                assert sweep_result.running_without_started_at_count == 0
             else:
                 assert (
                     await repository.complete_run(
@@ -956,7 +945,6 @@ async def test_release_and_reserve_linearize_in_quota_row_lock_order(
                 release_result = await AgentRunRepository(winner).cancel_run_for_user(
                     run_id=seeded.run_id,
                     user_id=_USER_ID,
-                    now=_NOW,
                 )
 
                 await contender.begin()
@@ -991,7 +979,6 @@ async def test_release_and_reserve_linearize_in_quota_row_lock_order(
                     AgentRunRepository(contender).cancel_run_for_user(
                         run_id=seeded.run_id,
                         user_id=_USER_ID,
-                        now=_NOW,
                     )
                 )
                 await _wait_until_blocked(observer, contender_pid)

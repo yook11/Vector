@@ -111,16 +111,10 @@ class AgentRun(Base):
     deadline_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
     attempt_epoch: Mapped[int] = mapped_column(
         BigInteger(), nullable=False, server_default=text("0")
     )
     quota_usage_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
     # 旧: Run単位の調査記録。正本はagent_threads.research_handoffへ移り、
     # この列はもう読み書きされない(別PRでdropする)。
     research_checkpoint: Mapped[dict[str, Any] | None] = mapped_column(

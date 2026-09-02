@@ -168,7 +168,6 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
             status="running",
             created_at=deadline_at - timedelta(seconds=60),
             deadline_at=deadline_at,
-            started_at=deadline_at - timedelta(seconds=1),
             attempt_epoch=2,
             quota_usage_date=usage_date,
         )
@@ -416,7 +415,6 @@ async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other
             status="running",
             created_at=deadline_at - timedelta(seconds=60),
             deadline_at=deadline_at,
-            started_at=deadline_at - timedelta(seconds=1),
             quota_usage_date=usage_date,
         )
     attempts: list[str] = []
@@ -595,15 +593,14 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
                 question="sensitive normal running",
                 created_at=deadline_at - timedelta(seconds=60),
                 deadline_at=deadline_at,
-                started_at=deadline_at - timedelta(seconds=1),
                 attempt_epoch=2,
             )
         )[2]
-        missing_started = (
+        another_running = (
             await _create_thread_message_run(
                 session,
                 status="running",
-                question="sensitive missing started",
+                question="sensitive another running",
                 created_at=deadline_at - timedelta(seconds=60),
                 deadline_at=deadline_at,
                 attempt_epoch=3,
@@ -636,7 +633,7 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
     assert {
         (publisher.run_id, publisher.attempt_epoch)
         for publisher in FakeLiveStreamPublisher.instances
-    } == {(normal.id, 2), (missing_started.id, 3)}
+    } == {(normal.id, 2), (another_running.id, 3)}
     assert [
         event
         for publisher in FakeLiveStreamPublisher.instances
@@ -650,9 +647,6 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
         for entry in logs
         if entry.get("event") == "running_deadline_exceeded_swept"
     ] == [{"count": 2, "event": "running_deadline_exceeded_swept", "log_level": "info"}]
-    assert [
-        entry for entry in logs if entry.get("event") == "running_without_started_at"
-    ] == [{"count": 1, "event": "running_without_started_at", "log_level": "warning"}]
     assert (
         len(
             [
@@ -664,7 +658,7 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
         == 1
     )
     assert "sensitive" not in str(logs)
-    for original in (normal, missing_started):
+    for original in (normal, another_running):
         persisted = await _persisted_run_for_sweep_test(session_factory, original.id)
         assert persisted.status == "deadline_exceeded"
         assert persisted.error_code is None
@@ -757,7 +751,6 @@ async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back
         in {
             "agent_runs_queued_deadline_swept",
             "running_deadline_exceeded_swept",
-            "running_without_started_at",
         }
     ]
     persisted = await _persisted_run_for_sweep_test(session_factory, run.id)

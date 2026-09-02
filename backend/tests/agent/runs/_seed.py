@@ -21,7 +21,6 @@ async def create_thread_message_run(
     history: list[tuple[str, str] | tuple[str, str, list[object]]] | None = None,
     created_at: datetime | None = None,
     deadline_at: datetime | None = None,
-    started_at: datetime | None = None,
     attempt_epoch: int | None = None,
     error_code: str | None = None,
     user_id: str = TEST_USER_ID,
@@ -67,7 +66,6 @@ async def create_thread_message_run(
             if deadline_at is not None
             else effective_created_at + timedelta(seconds=60)
         ),
-        started_at=started_at,
         error_code=error_code,
         quota_usage_date=quota_usage_date,
     )

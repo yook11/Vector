@@ -47,7 +47,6 @@ class _PersistedStart:
     status: str
     attempt_epoch: int
     error_code: str | None
-    completed_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +55,6 @@ class _PersistedComplete:
     attempt_epoch: int
     has_assistant_message: bool
     error_code: str | None
-    completed_at: datetime | None
     message_count: int
     source_count: int
     research_handoff: dict[str, Any]
@@ -98,9 +96,6 @@ async def _seed_run(
             user_message_id=user_message.id,
             status=status,
             created_at=_CREATED_AT,
-            started_at=(
-                _CREATED_AT + timedelta(seconds=1) if status == "running" else None
-            ),
             attempt_epoch=attempt_epoch,
             quota_usage_date=_USAGE_DATE,
         )
@@ -140,7 +135,6 @@ async def _load_start_persisted(
             status=run.status,
             attempt_epoch=run.attempt_epoch,
             error_code=run.error_code,
-            completed_at=run.completed_at,
         )
 
 
@@ -172,7 +166,6 @@ async def _load_complete_persisted(
             attempt_epoch=run.attempt_epoch,
             has_assistant_message=run.assistant_message_id is not None,
             error_code=run.error_code,
-            completed_at=run.completed_at,
             message_count=message_count,
             source_count=source_count,
             research_handoff=research_handoff,
@@ -209,13 +202,11 @@ async def test_start_run_starts_only_before_fixed_deadline(
             status="running",
             attempt_epoch=1,
             error_code=None,
-            completed_at=None,
         ),
         _PersistedStart(
             status="deadline_exceeded",
             attempt_epoch=0,
             error_code=None,
-            completed_at=_DEADLINE_AT,
         ),
     )
 
@@ -262,7 +253,6 @@ async def test_complete_run_persists_result_only_before_fixed_deadline(
             attempt_epoch=3,
             has_assistant_message=True,
             error_code=None,
-            completed_at=_BEFORE_DEADLINE,
             message_count=2,
             source_count=1,
             research_handoff=_CANDIDATE_HANDOFF,
@@ -272,7 +262,6 @@ async def test_complete_run_persists_result_only_before_fixed_deadline(
             attempt_epoch=3,
             has_assistant_message=False,
             error_code=None,
-            completed_at=_DEADLINE_AT,
             message_count=1,
             source_count=0,
             research_handoff=_ORIGINAL_HANDOFF,

@@ -27,7 +27,6 @@ async def _seed_run(
     status: str,
     created_at: datetime,
     deadline_at: datetime | None = None,
-    started_at: datetime | None = None,
     attempt_epoch: int = 0,
     quota_usage_date: date | None = None,
 ) -> AgentRun:
@@ -68,12 +67,8 @@ async def _seed_run(
             if deadline_at is not None
             else created_at + timedelta(seconds=60)
         ),
-        started_at=started_at,
         attempt_epoch=attempt_epoch,
         error_code="internal_error" if status == "failed" else None,
-        completed_at=created_at
-        if status in {"completed", "failed", "policy_blocked", "deadline_exceeded"}
-        else None,
         quota_usage_date=quota_usage_date,
     )
     session.add(run)
@@ -96,7 +91,7 @@ async def test_sweep_leaves_run_unchanged_before_deadline(
     session_factory: async_sessionmaker[AsyncSession],
     initial_status: str,
 ) -> None:
-    """期限直前はqueued/runningのまま維持し、終端時刻を記録しない。"""
+    """期限直前はqueued/runningの状態を変更しない。"""
     created_at = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
     deadline_at = datetime(2026, 9, 2, 12, 1, tzinfo=UTC)
     now = deadline_at - timedelta(microseconds=1)
@@ -105,11 +100,7 @@ async def test_sweep_leaves_run_unchanged_before_deadline(
             session,
             status=initial_status,
             created_at=created_at,
-            started_at=(
-                deadline_at - timedelta(seconds=1)
-                if initial_status == "running"
-                else None
-            ),
+            deadline_at=deadline_at,
             attempt_epoch=1 if initial_status == "running" else 0,
         )
         await session.commit()
@@ -119,15 +110,10 @@ async def test_sweep_leaves_run_unchanged_before_deadline(
 
     async with session_factory() as observer:
         persisted = (
-            await observer.execute(
-                select(AgentRun.status, AgentRun.completed_at).where(
-                    AgentRun.id == run.id
-                )
-            )
+            await observer.execute(select(AgentRun.status).where(AgentRun.id == run.id))
         ).one()
 
     assert persisted.status == initial_status
-    assert persisted.completed_at is None
 
 
 @pytest.mark.asyncio
@@ -146,7 +132,7 @@ async def test_sweep_marks_run_deadline_exceeded_at_or_after_deadline(
     initial_status: str,
     now: datetime,
 ) -> None:
-    """期限ちょうど・超過ではqueued/runningを時間切れにし、現在時刻を終端時刻として保存する。"""
+    """期限ちょうど・超過ではqueued/runningを時間切れにする。"""
     created_at = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
     deadline_at = datetime(2026, 9, 2, 12, 1, tzinfo=UTC)
     async with session_factory() as session:
@@ -154,11 +140,7 @@ async def test_sweep_marks_run_deadline_exceeded_at_or_after_deadline(
             session,
             status=initial_status,
             created_at=created_at,
-            started_at=(
-                deadline_at - timedelta(seconds=1)
-                if initial_status == "running"
-                else None
-            ),
+            deadline_at=deadline_at,
             attempt_epoch=1 if initial_status == "running" else 0,
         )
         await session.commit()
@@ -168,15 +150,10 @@ async def test_sweep_marks_run_deadline_exceeded_at_or_after_deadline(
 
     async with session_factory() as observer:
         persisted = (
-            await observer.execute(
-                select(AgentRun.status, AgentRun.completed_at).where(
-                    AgentRun.id == run.id
-                )
-            )
+            await observer.execute(select(AgentRun.status).where(AgentRun.id == run.id))
         ).one()
 
     assert persisted.status == "deadline_exceeded"
-    assert persisted.completed_at == now
 
 
 @pytest.mark.asyncio
@@ -210,7 +187,6 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
             status="running",
             created_at=deadline_at - timedelta(seconds=60),
             deadline_at=deadline_at,
-            started_at=deadline_at - timedelta(seconds=1),
             attempt_epoch=4,
             quota_usage_date=usage_date,
         )
@@ -228,7 +204,6 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
         persisted = await _persisted_run(session_factory, original.id)
         assert persisted.status == "deadline_exceeded"
         assert persisted.error_code is None
-        assert persisted.completed_at == now
         assert persisted.attempt_epoch == original.attempt_epoch
 
     async with session_factory() as session:
@@ -248,7 +223,8 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
     assert counter == 1
     for original in (*queued_runs, running):
         persisted = await _persisted_run(session_factory, original.id)
-        assert persisted.completed_at == now
+        assert persisted.status == "deadline_exceeded"
+        assert persisted.attempt_epoch == original.attempt_epoch
 
 
 @pytest.mark.asyncio
@@ -320,15 +296,15 @@ async def test_sweep_preserves_existing_terminal_runs(
     session_factory: async_sessionmaker[AsyncSession],
     status: str,
 ) -> None:
-    """期限を超えても、既に確定した終端状態・回答参照・終端時刻は上書きしない。"""
+    """期限を超えても、既に確定した終端状態・回答参照・epochは上書きしない。"""
     now = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
     deadline_at = now - timedelta(microseconds=1)
-    completed_at = deadline_at - timedelta(seconds=60)
+    created_at = deadline_at - timedelta(seconds=60)
     async with session_factory() as session:
         original = await _seed_run(
             session,
             status=status,
-            created_at=completed_at,
+            created_at=created_at,
             deadline_at=deadline_at,
             attempt_epoch=3,
         )
@@ -341,7 +317,6 @@ async def test_sweep_preserves_existing_terminal_runs(
     persisted = await _persisted_run(session_factory, original.id)
     assert result.total_count == 0
     assert persisted.status == status
-    assert persisted.completed_at == completed_at
     assert persisted.assistant_message_id == assistant_message_id
     assert persisted.error_code == ("internal_error" if status == "failed" else None)
     assert persisted.attempt_epoch == 3

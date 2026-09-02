@@ -52,8 +52,9 @@ run共通のdeadlineを確認しない。そのため、runの受付から60秒�
 - `agent_runs.deadline_at`を`TIMESTAMPTZ NOT NULL`で追加する。
 - 新規runの`created_at`と`deadline_at`は同じDB clockを基準に決める。
 - 既存rowは`created_at + 60 seconds`でbackfillし、statusはmigration中に変更しない。
-- terminal statusに`deadline_exceeded`を追加する。`completed_at`にDBのdecision timeを記録し、
-  回答と`error_code`は持たない。
+- terminal statusに`deadline_exceeded`を追加する。回答と`error_code`は持たない。
+- 開始・終端時刻は記録しない。`started_at`・`completed_at`への依存は
+  [時刻列の段階的廃止](agent-run-time-column-retirement-slice.md)で除去する。
 - 新しいdeadline超過に`failed / stale`は使わない。
 - APIのrun statusに`deadline_exceeded`を追加するが、`deadline_at`自体はpublic responseに追加しない。
 
