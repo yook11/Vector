@@ -1,7 +1,8 @@
 """Run内の全taskの選択肢を1回で精査し、Run全体の根拠と不足を見極める工程。
 
 provider clientの構築は composition が所有する scope factory に閉じ、
-この工程は精査のあいだだけ Runtime を借りる(責任境界: 実装は client の作り方を知らない)。
+この工程は精査のあいだだけ Runtime を借りる。
+実装は client の作り方を知らない。
 """
 
 from __future__ import annotations

@@ -1320,7 +1320,9 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewService(agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=_reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=_reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(

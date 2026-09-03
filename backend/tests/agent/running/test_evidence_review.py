@@ -42,8 +42,8 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailureCode,
 )
 from app.agent.evidence_review import (
-    EvidenceReviewService,
     EvidenceReviewerDraft,
+    EvidenceReviewService,
     EvidenceRunFailed,
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
@@ -190,7 +190,10 @@ def _runner(
             events=events,
             external_search_scope_factory=factory,
         ),
-        reviewer=EvidenceReviewService(agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=fixed_scope(reviewer_runtime)),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT,
+            runtime_scope_factory=fixed_scope(reviewer_runtime),
+        ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         organizer=PassThroughOrganizer(),

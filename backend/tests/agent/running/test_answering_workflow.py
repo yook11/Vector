@@ -163,7 +163,10 @@ def _runner(
             ),
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,
-            reviewer=EvidenceReviewService(agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=fixed_scope(object())),
+            reviewer=EvidenceReviewService(
+                agent=EVIDENCE_REVIEWER_AGENT,
+                runtime_scope_factory=fixed_scope(object()),
+            ),
             organizer=PassThroughOrganizer(),
         )
 

@@ -187,7 +187,8 @@ class _PhasesFactory:
             ),
             direct_answerer=self._direct_answerer,
             evidence_answerer=_UnreachableEvidenceAnswerer(),
-            reviewer=EvidenceReviewService(agent=EVIDENCE_REVIEWER_AGENT,
+            reviewer=EvidenceReviewService(
+                agent=EVIDENCE_REVIEWER_AGENT,
                 runtime_scope_factory=_UnreachableExternalSearchScope(),
             ),
             organizer=PassThroughOrganizer(),
