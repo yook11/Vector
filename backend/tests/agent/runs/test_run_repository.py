@@ -22,7 +22,7 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.runs.contracts import CompleteRunOutcome
+from app.agent.runs.contracts import CompleteRunOutcome, StartRunFailureReason
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -33,7 +33,7 @@ from tests.agent.runs._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
 from tests.agent.runs._start_run_outcomes import (
-    assert_idempotent_skip,
+    assert_start_failure,
     started_attempt_epoch,
 )
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
@@ -526,7 +526,7 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
     assert thread_id == running.thread_id
     assert question.content == "worker question"
     assert question.seq == 1
-    assert_idempotent_skip(skipped)
+    assert_start_failure(skipped, StartRunFailureReason.ALREADY_FINISHED)
     async with session_factory() as session:
         restarted = await session.get(AgentRun, running.id)
         terminal = await session.get(AgentRun, failed.id)
@@ -613,7 +613,7 @@ async def test_start_run_reports_idempotent_skip_for_missing_run(
         async with session.begin():
             skip_result = await AgentRunRepository(session).start_run(missing_run_id)
 
-    assert_idempotent_skip(skip_result)
+    assert_start_failure(skip_result, StartRunFailureReason.RUN_NOT_FOUND)
 
 
 @pytest.mark.asyncio
@@ -655,7 +655,7 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
         await winner.close()
         await contender.close()
 
-    assert_idempotent_skip(skip_result)
+    assert_start_failure(skip_result, StartRunFailureReason.ALREADY_FINISHED)
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
         assert failed is not None

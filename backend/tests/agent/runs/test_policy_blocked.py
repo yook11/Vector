@@ -11,14 +11,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.run_deadline.persistence import sweep_deadline_exceeded_runs
-from app.agent.runs.contracts import CancelRunOutcome
+from app.agent.runs.contracts import CancelRunOutcome, StartRunFailureReason
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from tests.agent.runs._start_run_outcomes import assert_idempotent_skip
+from tests.agent.runs._start_run_outcomes import assert_start_failure
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -231,7 +231,7 @@ async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
             )
             swept = await sweep_deadline_exceeded_runs(session, now=_NOW)
 
-    assert_idempotent_skip(restart_result)
+    assert_start_failure(restart_result, StartRunFailureReason.ALREADY_FINISHED)
     assert swept.queued_terminal_count == 0
     assert swept.queued_quota_released_count == 0
     assert swept.queued_quota_not_eligible_count == 0

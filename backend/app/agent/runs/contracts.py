@@ -23,42 +23,20 @@ class RunTransitionLostError(Exception):
     """Another actor moved the run before this transition could commit."""
 
 
-class StartRunOutcome(StrEnum):
-    STARTED = "started"
+class StartRunFailureReason(StrEnum):
+    RUN_NOT_FOUND = "run_not_found"
+    ALREADY_FINISHED = "already_finished"
     DEADLINE_EXCEEDED = "deadline_exceeded"
-    IDEMPOTENT_SKIP = "idempotent_skip"
+    UNEXPECTED = "unexpected"
 
 
 @dataclass(frozen=True, slots=True)
-class StartRunCommandOutcome:
-    start_outcome: StartRunOutcome
-    attempt_epoch: int | None
-    quota_release_outcome: DailyQuotaReleaseOutcome | None
+class StartRunFailure:
+    reason: StartRunFailureReason
 
     def __post_init__(self) -> None:
-        if not isinstance(self.start_outcome, StartRunOutcome):
-            raise ValueError("invalid start run outcome")
-        if self.start_outcome is StartRunOutcome.STARTED:
-            if (
-                not isinstance(self.attempt_epoch, int)
-                or isinstance(self.attempt_epoch, bool)
-                or self.attempt_epoch < 1
-                or self.quota_release_outcome is not None
-            ):
-                raise ValueError("started run requires only a positive attempt epoch")
-            return
-        if self.start_outcome is StartRunOutcome.DEADLINE_EXCEEDED:
-            if self.attempt_epoch is not None or (
-                self.quota_release_outcome is not None
-                and not isinstance(
-                    self.quota_release_outcome,
-                    DailyQuotaReleaseOutcome,
-                )
-            ):
-                raise ValueError("deadline exceeded run cannot contain an attempt")
-            return
-        if self.attempt_epoch is not None or self.quota_release_outcome is not None:
-            raise ValueError("idempotent skip cannot contain start details")
+        if not isinstance(self.reason, StartRunFailureReason):
+            raise ValueError("invalid start run failure reason")
 
 
 class CompleteRunOutcome(StrEnum):
