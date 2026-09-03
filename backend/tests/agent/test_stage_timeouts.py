@@ -16,7 +16,8 @@ from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
-from app.agent.evidence_review import EvidenceReviewer, EvidenceRunFailed
+from app.agent.evidence_review import EvidenceReviewService, EvidenceRunFailed
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.failure import PlanningError
 from app.agent.planning.service import QuestionPlanningService
@@ -28,7 +29,7 @@ from tests.agent.answering.evidence_answer.test_service import (
     _evidence,
     _request,
 )
-from tests.agent.evidence_review.test_reviewer import (
+from tests.agent.evidence_review.test_service import (
     _ANY_REVIEWER_DRAFT,
     AS_OF,
     _internal_task,
@@ -45,7 +46,7 @@ from tests.agent.recording._fakes import (
 STAGES = ("planning", "review", "direct", "evidence")
 MODULES = {
     "planning": ("app.agent.planning.service", "_PLANNING_TIMEOUT_SECONDS"),
-    "review": ("app.agent.evidence_review.reviewer", "_REVIEW_TIMEOUT_SECONDS"),
+    "review": ("app.agent.evidence_review.service", "_REVIEW_TIMEOUT_SECONDS"),
     "direct": ("app.agent.answering.direct_answer.service", "_ANSWER_TIMEOUT_SECONDS"),
     "evidence": (
         "app.agent.answering.evidence_answer.service",
@@ -132,7 +133,11 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
         state.run = lambda: service.plan(planning_input())
     elif stage == "review":
         state.recorder = RecordingEvidenceReviewRecorder()
-        service = EvidenceReviewer(runtime_scope_factory=scope, recorder=state.recorder)
+        service = EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT,
+            runtime_scope_factory=scope,
+            recorder=state.recorder,
+        )
         state.run = lambda: service.review(tasks=[_internal_task()], as_of=AS_OF)
     elif stage == "direct":
         state.recorder = RecordingDirectAnswerRecorder()

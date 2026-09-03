@@ -35,10 +35,11 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.evidence_review import (
-    EvidenceReviewer,
+    EvidenceReviewService,
     EvidenceReviewerDraft,
     ExternalSearchEvidence,
 )
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     ExternalResearchTask,
@@ -646,7 +647,7 @@ def _orchestrator(
         ),
         direct_answerer=direct_answerer,
         evidence_answerer=evidence_answerer,
-        reviewer=EvidenceReviewer(
+        reviewer=EvidenceReviewService(agent=EVIDENCE_REVIEWER_AGENT,
             runtime_scope_factory=external_scopes.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),

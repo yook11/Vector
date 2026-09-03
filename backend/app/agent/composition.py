@@ -21,7 +21,7 @@ from app.agent.contract import (
 )
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
-from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.running import AnsweringPhases, AnsweringRunner
@@ -88,6 +88,7 @@ def _build_answering_phases(
     from app.agent.evidence_collection.internal_search.service import (
         InternalSearchService,
     )
+    from app.agent.evidence_review import EvidenceReviewService
     from app.agent.planning.service import QuestionPlanningService
     from app.agent.research_handoff.service import ResearchHandoffService
 
@@ -109,7 +110,8 @@ def _build_answering_phases(
             events=events,
             external_search_scope_factory=activate_external_search,
         ),
-        reviewer=EvidenceReviewer(
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT,
             runtime_scope_factory=activate_evidence_reviewer_runtime,
         ),
         direct_answerer=DirectAnswerService(

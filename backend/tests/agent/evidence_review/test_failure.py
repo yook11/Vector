@@ -5,13 +5,14 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.failure import (
     EvidenceReviewError,
     evidence_review_error_from,
 )
 from app.agent.evidence_review.preparation import EvidenceReviewInput
-from app.agent.evidence_review.reviewer import _review_attempt
 from app.agent.evidence_review.selection import EvidenceReviewerResponse
+from app.agent.evidence_review.service import _review_attempt
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
@@ -96,6 +97,7 @@ async def test_review_attempt_preserves_classified_source_as_cause() -> None:
 
     with pytest.raises(EvidenceReviewError) as raised:
         await _review_attempt(
+            agent=EVIDENCE_REVIEWER_AGENT,
             reviewer_runtime=ScriptedAgentRuntime([cause]),
             review_input=EvidenceReviewInput(task_groups=(), as_of=AS_OF),
             attempt_number=1,

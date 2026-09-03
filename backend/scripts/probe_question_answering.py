@@ -50,7 +50,8 @@ from app.agent.evidence_collection.internal_search.article_repository import (
 from app.agent.evidence_collection.internal_search.service import (
     InternalSearchService,
 )
-from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review import EvidenceReviewService
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningInput,
@@ -220,7 +221,8 @@ async def _probe_search(
                 events=events,
                 external_search_scope_factory=activate_external_search,
             ),
-            reviewer=EvidenceReviewer(
+            reviewer=EvidenceReviewService(
+                agent=EVIDENCE_REVIEWER_AGENT,
                 runtime_scope_factory=activate_evidence_reviewer_runtime,
             ),
             evidence_answerer=EvidenceAnswerService(
@@ -263,7 +265,8 @@ async def _probe_direct(*, question: str) -> None:
                 internal_search=_UnreachableInternalSearch(),
                 external_search_scope_factory=_UnreachableExternalSearchScope(),
             ),
-            reviewer=EvidenceReviewer(
+            reviewer=EvidenceReviewService(
+                agent=EVIDENCE_REVIEWER_AGENT,
                 runtime_scope_factory=_UnreachableEvidenceReviewerScope(),
             ),
             evidence_answerer=_UnreachableEvidenceAnswerer(),

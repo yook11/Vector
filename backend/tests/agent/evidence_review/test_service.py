@@ -1,6 +1,6 @@
-"""EvidenceReviewer.review() の単体契約テスト(S1: Run単位1回)。
+"""EvidenceReviewService.review() の単体契約テスト(S1: Run単位1回)。
 
-reviewerはRun内の全taskの選択肢を1回の入力で受け取り、Run全体としての採用と
+serviceはRun内の全taskの選択肢を1回の入力で受け取り、Run全体としての採用と
 不足を1つの出力で返す(仕様「Run単位で精査する」)。attempt/timeout/失敗分類の
 規則は段4時点から変わらないが、適用範囲がtaskからRunへ広がる。
 """
@@ -22,8 +22,8 @@ from app.agent.evidence_review.answer_evidence import (
     EvidenceRunResult,
 )
 from app.agent.evidence_review.preparation import EvidenceReviewInput
-from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.selection import EvidenceReviewerDraft
+from app.agent.evidence_review.service import EvidenceReviewService
 from app.agent.recording.evidence_review import (
     EvidenceReviewFailed,
     EvidenceReviewOutcome,
@@ -65,13 +65,14 @@ async def _review(
     reviewer_runtime: Any,
     recorder: RecordingEvidenceReviewRecorder | None = None,
 ) -> EvidenceRunResult:
-    reviewer_kwargs: dict[str, Any] = {
+    service_kwargs: dict[str, Any] = {
+        "agent": EVIDENCE_REVIEWER_AGENT,
         "runtime_scope_factory": fixed_scope(reviewer_runtime),
     }
     if recorder is not None:
-        reviewer_kwargs["recorder"] = recorder
-    reviewer = EvidenceReviewer(**reviewer_kwargs)
-    return await reviewer.review(
+        service_kwargs["recorder"] = recorder
+    service = EvidenceReviewService(**service_kwargs)
+    return await service.review(
         tasks=tasks,
         as_of=as_of,
     )
@@ -484,7 +485,7 @@ async def test_review_timeout_cancels_the_runtime_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.agent.evidence_review.reviewer._REVIEW_TIMEOUT_SECONDS", 0.02
+        "app.agent.evidence_review.service._REVIEW_TIMEOUT_SECONDS", 0.02
     )
     runtime = _NeverCompletingRuntime()
 
@@ -620,13 +621,14 @@ async def test_review_propagates_runtime_scope_start_failure_unchanged() -> None
         raise error
         yield ScriptedAgentRuntime([])
 
-    reviewer = EvidenceReviewer(
+    service = EvidenceReviewService(
+        agent=EVIDENCE_REVIEWER_AGENT,
         runtime_scope_factory=failing_scope,
         recorder=recorder,
     )
 
     with pytest.raises(RuntimeError) as raised:
-        await reviewer.review(tasks=[_internal_task()], as_of=AS_OF)
+        await service.review(tasks=[_internal_task()], as_of=AS_OF)
 
     assert raised.value is error
     _assert_recorded(recorder, outcome=None, error=error)
@@ -643,13 +645,14 @@ async def test_review_propagates_runtime_scope_exit_failure_unchanged() -> None:
         yield runtime
         raise error
 
-    reviewer = EvidenceReviewer(
+    service = EvidenceReviewService(
+        agent=EVIDENCE_REVIEWER_AGENT,
         runtime_scope_factory=failing_scope,
         recorder=recorder,
     )
 
     with pytest.raises(RuntimeError) as raised:
-        await reviewer.review(tasks=[_internal_task()], as_of=AS_OF)
+        await service.review(tasks=[_internal_task()], as_of=AS_OF)
 
     assert raised.value is error
     assert [call.attempt_number for call in runtime.calls] == [1]

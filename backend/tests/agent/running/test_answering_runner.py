@@ -22,7 +22,8 @@ from app.agent.answering.evidence_answer.contract import (
 )
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.evidence_collection import EvidenceCollectionService
-from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review import EvidenceReviewService
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningInput,
@@ -186,7 +187,7 @@ class _PhasesFactory:
             ),
             direct_answerer=self._direct_answerer,
             evidence_answerer=_UnreachableEvidenceAnswerer(),
-            reviewer=EvidenceReviewer(
+            reviewer=EvidenceReviewService(agent=EVIDENCE_REVIEWER_AGENT,
                 runtime_scope_factory=_UnreachableExternalSearchScope(),
             ),
             organizer=PassThroughOrganizer(),

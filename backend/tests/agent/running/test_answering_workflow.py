@@ -21,7 +21,8 @@ from app.agent.evidence_collection.external_search.contract import ExternalQuery
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
-from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review import EvidenceReviewService
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningInput,
@@ -162,7 +163,7 @@ def _runner(
             ),
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,
-            reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(object())),
+            reviewer=EvidenceReviewService(agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=fixed_scope(object())),
             organizer=PassThroughOrganizer(),
         )
 
