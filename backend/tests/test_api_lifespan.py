@@ -14,7 +14,7 @@ def _stub_lifespan_integrations(
     monkeypatch: pytest.MonkeyPatch, engine: MagicMock
 ) -> None:
     """lifespanのDB所有契約だけを観測できるよう外部計装を止める。"""
-    monkeypatch.setattr("app.main.build_api_engine", lambda: engine)
+    monkeypatch.setattr("app.main.create_api_engine", lambda *_args: engine)
     monkeypatch.setattr("app.main.setup_logfire", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "app.main.logfire.instrument_fastapi", lambda *_args, **_kwargs: None

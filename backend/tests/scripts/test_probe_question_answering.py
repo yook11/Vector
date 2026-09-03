@@ -125,7 +125,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "RunInput",
         "activate_external_search",
         "activate_evidence_reviewer_runtime",
-        "build_cli_engine",
+        "create_cli_engine",
         "caller_managed_session_factory",
         "EvidenceCollectionService",
     } <= imported
@@ -282,7 +282,7 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
             + [keyword.value for keyword in session_factory_calls[0].keywords]
         )
     )
-    assert len(_calls(search, "build_cli_engine")) == 1
+    assert len(_calls(search, "create_cli_engine")) == 1
     assert len(internal_search_calls) == 1
 
     internal_search_call = internal_search_calls[0]

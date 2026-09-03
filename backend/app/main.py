@@ -13,12 +13,13 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from app.admin.router import admin_router
 from app.agent.router import router as research_router
 from app.config import settings
-from app.db.connection import DEFAULT_POOL_RECYCLE, DEFAULT_POOL_TIMEOUT
 from app.db.engine import (
     API_POOL_MAX_OVERFLOW,
     API_POOL_SIZE,
     API_SERVICE_NAME,
-    build_api_engine,
+    DEFAULT_POOL_RECYCLE,
+    DEFAULT_POOL_TIMEOUT,
+    create_api_engine,
 )
 from app.db.session import caller_managed_session_factory
 from app.exception_handlers import (
@@ -108,7 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 1 query = 1 span として bind param と SQL を span attribute に乗せる。
     # asyncpg instrumentor は意図的に入れない (ORM 層 + driver 層で二重 span
     # を出さないため)。
-    engine = build_api_engine()
+    engine = create_api_engine(settings)
     try:
         app.state.engine = engine
         app.state.session_factory = caller_managed_session_factory(engine)

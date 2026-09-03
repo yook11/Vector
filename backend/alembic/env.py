@@ -4,7 +4,7 @@ from logging.config import fileConfig
 from alembic import context
 from app.db.ssl import clean_db_url
 from app.db.migration.settings import load_migration_settings
-from app.db.migration.engine import create_migration_engine
+from app.db.engine import create_migration_engine
 from app.migration_lock import migration_advisory_lock
 from app.models import *  # noqa: F401, F403  — register all models
 from app.models.base import Base

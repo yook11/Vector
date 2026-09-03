@@ -63,7 +63,7 @@ from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
 from app.config import settings
-from app.db.engine import build_cli_engine
+from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
 
 DEFAULT_GOAL = "NVIDIA Blackwell AI GPU latest supply and customer demand evidence"
@@ -207,7 +207,7 @@ async def _probe_search(
         target_time_window=target_time_window,
     )
     events = _RecordingAnswerEvents()
-    engine = build_cli_engine("vector-cli-probe-question-answering")
+    engine = create_cli_engine(settings, "vector-cli-probe-question-answering")
     try:
         session_factory = caller_managed_session_factory(engine)
         internal_search = InternalSearchService(

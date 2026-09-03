@@ -28,7 +28,7 @@ from pydantic import ValidationError
 from sqlalchemy.engine import Connection
 
 from alembic import command
-from app.db.migration.engine import create_migration_engine
+from app.db.engine import create_migration_engine
 from app.db.migration.request import (
     MIGRATION_RUNNER_PROTOCOL_VERSION,
     MigrationRunnerRequest,

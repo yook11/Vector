@@ -36,7 +36,8 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from app.db.engine import build_cli_engine
+from app.config import settings
+from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
@@ -141,7 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = build_cli_engine("vector-cli-generate-briefing")
+        engine = create_cli_engine(settings, "vector-cli-generate-briefing")
         try:
             session_factory = caller_managed_session_factory(engine)
             # CLI は手動運用 / 復旧経路のため、frontend revalidate は飛ばす

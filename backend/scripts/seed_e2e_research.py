@@ -17,7 +17,7 @@ from sqlalchemy import delete, insert, select, update  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncConnection  # noqa: E402
 
 from app.config import settings  # noqa: E402
-from app.db.connection import create_app_engine  # noqa: E402
+from app.db.engine import create_cli_engine  # noqa: E402
 from app.models.agent_message import AgentMessage, AgentMessageSource  # noqa: E402
 from app.models.agent_run import AgentRun  # noqa: E402
 from app.models.agent_thread import AgentThread  # noqa: E402
@@ -691,9 +691,11 @@ async def run(command: str, variant: str | None = None) -> None:
         raise ValueError(f"unknown E2E research command: {command!r}")
 
     database_url = settings.migration_database_url or settings.database_url
-    engine = create_app_engine(
-        database_url,
-        application_name="vector-cli-seed-e2e-research",
+    engine = create_cli_engine(
+        settings,
+        "vector-cli-seed-e2e-research",
+        database_url=database_url,
+        use_configured_auth=False,
     )
     try:
         async with engine.begin() as connection:

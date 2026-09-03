@@ -9,7 +9,8 @@ import pytest
 from opentelemetry.metrics import CallbackOptions
 from structlog.testing import capture_logs
 
-from app.db.engine import WORKER_POOL_SIZING, build_worker_engine
+from app.config import settings
+from app.db.engine import WORKER_POOL_SIZING, create_worker_engine
 from app.logfire.db_pool import (
     log_pool_initialized,
     pool_stats,
@@ -49,7 +50,7 @@ class TestPoolMetrics:
 
     def test_pool_stats_reads_fresh_pool(self) -> None:
         pool_size, _ = WORKER_POOL_SIZING["collection"]
-        engine = build_worker_engine("collection")
+        engine = create_worker_engine(settings, "collection")
         assert pool_stats(engine) == {"checked_out": 0, "overflow": -pool_size}
 
     def test_registers_three_pool_gauges(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,7 +61,7 @@ class TestPoolMetrics:
 
         monkeypatch.setattr(logfire, "metric_gauge_callback", _capture)
         pool_size, max_overflow = WORKER_POOL_SIZING["collection"]
-        engine = build_worker_engine("collection")
+        engine = create_worker_engine(settings, "collection")
         register_pool_metrics(engine, pool_size=pool_size, max_overflow=max_overflow)
         assert set(registered) == {
             "vector.db.pool.checked_out",
@@ -78,7 +79,7 @@ class TestPoolMetrics:
 
         monkeypatch.setattr(logfire, "metric_gauge_callback", _capture)
         pool_size, max_overflow = WORKER_POOL_SIZING["collection"]
-        engine = build_worker_engine("collection")
+        engine = create_worker_engine(settings, "collection")
         register_pool_metrics(engine, pool_size=pool_size, max_overflow=max_overflow)
 
         def _value(name: str) -> int:

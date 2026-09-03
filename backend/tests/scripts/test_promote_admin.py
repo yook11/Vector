@@ -93,7 +93,7 @@ def _patch_dependencies(
         raising=False,
     )
     factory = MagicMock(return_value=engine)
-    monkeypatch.setattr(promote_script, "create_app_engine", factory, raising=False)
+    monkeypatch.setattr(promote_script, "create_cli_engine", factory, raising=False)
     monkeypatch.setattr(
         promote_script,
         "engine",
@@ -134,7 +134,14 @@ async def test_promote_uses_auth_maintenance_url_and_normalizes_email(
 
     await promote_script.promote_or_demote("  ADMIN@EXAMPLE.COM  ")
 
-    assert factory.call_args.args == (_AUTH_DATABASE_URL,)
+    assert factory.call_args.args == (
+        promote_script.settings,
+        "vector-cli-promote-admin",
+    )
+    assert factory.call_args.kwargs == {
+        "database_url": _AUTH_DATABASE_URL,
+        "use_configured_auth": False,
+    }
     assert connection.execute.await_args_list[0].args[1] == {
         "email": "admin@example.com"
     }

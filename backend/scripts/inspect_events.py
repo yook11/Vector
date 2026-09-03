@@ -27,7 +27,8 @@ from app.models.out_of_scope_assessment import OutOfScopeAssessment
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.engine import build_cli_engine
+from app.config import settings
+from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
 
 
@@ -71,7 +72,7 @@ async def _print_out_of_scope(session: AsyncSession, limit: int) -> None:
 
 
 async def main(limit: int, kind: str) -> None:
-    engine = build_cli_engine("vector-cli-inspect-events")
+    engine = create_cli_engine(settings, "vector-cli-inspect-events")
     try:
         session_factory = caller_managed_session_factory(engine)
         async with session_factory() as session:

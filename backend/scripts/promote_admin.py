@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import text
 
 from app.config import settings
-from app.db.connection import create_app_engine
+from app.db.engine import create_cli_engine
 
 
 def _exit_with_error(message: str) -> NoReturn:
@@ -46,7 +46,12 @@ async def promote_or_demote(email: str, *, demote: bool = False) -> None:
     engine = None
 
     try:
-        engine = create_app_engine(auth_database_url)
+        engine = create_cli_engine(
+            settings,
+            "vector-cli-promote-admin",
+            database_url=auth_database_url,
+            use_configured_auth=False,
+        )
         async with engine.connect() as conn:
             result = await conn.execute(
                 text('SELECT id, role FROM auth."user" WHERE email = :email'),

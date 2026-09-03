@@ -41,7 +41,7 @@ from app.audit.stages.trend_discovery import (
     append_trend_discovery_run_event_best_effort,
 )
 from app.config import settings
-from app.db.engine import build_cli_engine
+from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 from app.insights.trend_discovery.domain.window import latest_window_end, now_in_jst
@@ -196,7 +196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = build_cli_engine("vector-cli-run-trend-discovery")
+        engine = create_cli_engine(settings, "vector-cli-run-trend-discovery")
         try:
             session_factory = caller_managed_session_factory(engine)
             service = TrendDiscoveryService(session_factory)

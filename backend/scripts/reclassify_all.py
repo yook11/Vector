@@ -25,7 +25,8 @@ from sqlalchemy import select
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.curation.repository import CurationRepository
-from app.db.engine import build_cli_engine
+from app.config import settings
+from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
 from app.models.article_curation import ArticleCuration
 from app.queue.brokers import broker_analysis
@@ -33,7 +34,7 @@ from app.queue.tasks.assessment import assess_content
 
 
 async def main() -> None:
-    engine = build_cli_engine("vector-cli-reclassify-all")
+    engine = create_cli_engine(settings, "vector-cli-reclassify-all")
     session_factory = caller_managed_session_factory(engine)
     try:
         async with session_factory() as session:

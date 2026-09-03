@@ -15,15 +15,16 @@ import structlog
 from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
-from app.db.connection import DEFAULT_POOL_TIMEOUT
+from app.config import settings
 from app.db.engine import (
     AUTH_RETENTION_MAX_OVERFLOW,
     AUTH_RETENTION_POOL_SIZE,
+    DEFAULT_POOL_TIMEOUT,
     WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
     auth_retention_service_name,
-    build_auth_retention_engine,
-    build_worker_engine,
+    create_auth_retention_engine,
+    create_worker_engine,
     worker_service_name,
 )
 from app.db.session import caller_managed_session_factory
@@ -54,9 +55,9 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         service_name = worker_service_name(label)
         setup_logfire(service_name)
         # pool sizing は WORKER_POOL_SIZING (label 別)、recycle=240 で worker のみ
-        # override。resilience (pre_ping / pool_timeout) は create_app_engine の
+        # override。resilience (pre_ping / pool_timeout) は Engine 共通の
         # 既定 (Neon scale-to-zero 対策)。
-        state.engine = build_worker_engine(label)
+        state.engine = create_worker_engine(settings, label)
         state.session_factory = caller_managed_session_factory(state.engine)
         # worker engine の DB query を 1 query = 1 span として Logfire に乗せる。
         # 各 worker プロセスは自分の broker の on_startup だけが発火するため、
@@ -75,7 +76,7 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         )
         if label == "maintenance":
             try:
-                state.auth_engine = build_auth_retention_engine()
+                state.auth_engine = create_auth_retention_engine(settings)
             except RuntimeError as exc:
                 logger.error(
                     "maintenance_auth_retention_engine_missing",

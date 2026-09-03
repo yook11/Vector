@@ -47,7 +47,8 @@ from app.analysis.assessment.domain.result import (
     ValidCategory,
 )
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.db.engine import build_cli_engine
+from app.config import settings
+from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
 from app.models.article_curation import ArticleCuration
 
@@ -324,7 +325,7 @@ def _render_markdown(
 
 
 async def _run(limit: int, output_path: Path) -> int:
-    engine = build_cli_engine("vector-cli-compare-assessors")
+    engine = create_cli_engine(settings, "vector-cli-compare-assessors")
     try:
         session_factory = caller_managed_session_factory(engine)
         samples = await _load_samples(session_factory, limit)

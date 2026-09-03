@@ -52,7 +52,8 @@ from app.analysis.curation.cli.recuration_service import (
     RecurationService,
     RecurationSummary,
 )
-from app.db.engine import build_cli_engine
+from app.config import settings
+from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -202,7 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = build_cli_engine("vector-cli-re-curate-all")
+        engine = create_cli_engine(settings, "vector-cli-re-curate-all")
         try:
             session_factory = caller_managed_session_factory(engine)
             service = RecurationService(session_factory, max_retries=args.max_retries)

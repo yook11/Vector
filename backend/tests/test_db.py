@@ -8,15 +8,16 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.db.engine as db_engine
+from app.config import settings
 from app.db.engine import (
     API_POOL_MAX_OVERFLOW,
     API_POOL_SIZE,
     API_SERVICE_NAME,
     WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
-    build_api_engine,
-    build_cli_engine,
-    build_worker_engine,
+    create_api_engine,
+    create_cli_engine,
+    create_worker_engine,
     worker_service_name,
 )
 from app.db.session import (
@@ -97,41 +98,52 @@ async def test_open_entry_managed_session_rolls_back_on_error(
     assert session.closed
 
 
-def test_build_api_engine_passes_only_usage_kwargs(
+def test_create_api_engine_passes_only_usage_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spy = MagicMock()
-    monkeypatch.setattr("app.db.engine.create_runtime_engine", spy)
-    build_api_engine()
+    monkeypatch.setattr("app.db.engine._create_engine", spy)
+    create_api_engine(settings)
     spy.assert_called_once_with(
+        settings.database_url,
         application_name=API_SERVICE_NAME,
+        password_provider=None,
+        echo=False,
         pool_size=API_POOL_SIZE,
         max_overflow=API_POOL_MAX_OVERFLOW,
     )
 
 
-def test_build_worker_engine_passes_only_usage_kwargs(
+def test_create_worker_engine_passes_only_usage_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spy = MagicMock()
-    monkeypatch.setattr("app.db.engine.create_runtime_engine", spy)
-    build_worker_engine("collection")
+    monkeypatch.setattr("app.db.engine._create_engine", spy)
+    create_worker_engine(settings, "collection")
     pool_size, max_overflow = WORKER_POOL_SIZING["collection"]
     spy.assert_called_once_with(
+        settings.database_url,
         application_name=worker_service_name("collection"),
+        password_provider=None,
+        echo=False,
         pool_size=pool_size,
         max_overflow=max_overflow,
         pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
     )
 
 
-def test_build_cli_engine_passes_only_application_name(
+def test_create_cli_engine_passes_only_application_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spy = MagicMock()
-    monkeypatch.setattr("app.db.engine.create_runtime_engine", spy)
-    build_cli_engine("vector-cli-generate-briefing")
-    spy.assert_called_once_with(application_name="vector-cli-generate-briefing")
+    monkeypatch.setattr("app.db.engine._create_engine", spy)
+    create_cli_engine(settings, "vector-cli-generate-briefing")
+    spy.assert_called_once_with(
+        settings.database_url,
+        application_name="vector-cli-generate-briefing",
+        password_provider=None,
+        echo=False,
+    )
 
 
 def test_db_module_does_not_publish_engine() -> None:
