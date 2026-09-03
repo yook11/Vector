@@ -31,7 +31,8 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchHit,
     ExternalSearchProviderError,
 )
-from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review import EvidenceReviewService
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from app.agent.planning.contract import (
     DirectAnswerPlan,
@@ -175,7 +176,10 @@ def _search_runner(
                 )
             ),
         ),
-        reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime)),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT,
+            runtime_scope_factory=fixed_scope(reviewer_runtime),
+        ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=evidence_answerer or _EvidenceAnswerer(),  # type: ignore[arg-type]
         organizer=organizer or PassThroughOrganizer(),  # type: ignore[arg-type]
@@ -243,7 +247,9 @@ async def test_direct_answer_plan_leaves_handoff_none() -> None:
             internal_search=_FakeInternalSearch(),
             external_search_scope_factory=_UnreachableScope(),
         ),
-        reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableScope()),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=_UnreachableScope()
+        ),
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
         organizer=PassThroughOrganizer(),

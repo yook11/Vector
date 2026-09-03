@@ -42,10 +42,11 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.evidence_review import (
-    EvidenceReviewer,
+    EvidenceReviewService,
     EvidenceRunCompleted,
     EvidenceRunResult,
 )
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningInput,
@@ -523,7 +524,9 @@ def _runner(
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(error=answer_error, timeline=timeline),
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     return AnsweringRunner(
@@ -819,7 +822,9 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
@@ -864,7 +869,9 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
@@ -1625,7 +1632,9 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
@@ -1674,7 +1683,9 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
@@ -1813,7 +1824,9 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(

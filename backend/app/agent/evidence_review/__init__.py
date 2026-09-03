@@ -16,13 +16,13 @@ from app.agent.evidence_review.preparation import (
     EvidenceReviewPreparation,
     EvidenceReviewTaskGroup,
 )
-from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.selection import (
     EvidenceReviewerDraft,
     EvidenceReviewerResponse,
     EvidenceReviewerSelection,
     EvidenceReviewerSelectionDraft,
 )
+from app.agent.evidence_review.service import EvidenceReviewer, EvidenceReviewService
 
 __all__ = [
     "ANSWER_EVIDENCE_LIMIT",
@@ -36,6 +36,7 @@ __all__ = [
     "EvidenceReviewInput",
     "EvidenceReviewPreparation",
     "EvidenceReviewerResponse",
+    "EvidenceReviewService",
     "EvidenceReviewTaskGroup",
     "EvidenceReviewer",
     "ExternalSearchEvidence",

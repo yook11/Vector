@@ -45,7 +45,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
     InternalSearchQueries,
 )
-from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review import EvidenceReviewService
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.deepseek_binding import (
     EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
@@ -264,7 +264,9 @@ def _runner(
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=evidence_answerer or _EvidenceAnswerer(),
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     return (
@@ -695,7 +697,10 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
         ),
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
-        reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableExternalScope()),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT,
+            runtime_scope_factory=_UnreachableExternalScope(),
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
@@ -775,7 +780,9 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
@@ -821,7 +828,9 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
-        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(

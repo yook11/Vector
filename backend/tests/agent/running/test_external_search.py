@@ -29,7 +29,8 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search import (
     InternalArticleSearchHit,
 )
-from app.agent.evidence_review import EvidenceReviewer, EvidenceRunCompleted
+from app.agent.evidence_review import EvidenceReviewService, EvidenceRunCompleted
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningInput,
@@ -366,7 +367,8 @@ def _runner(
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT,
             runtime_scope_factory=fixed_scope(runtime.reviewer_runtime),
         ),
         organizer=PassThroughOrganizer(),
@@ -1318,7 +1320,9 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(runtime_scope_factory=_reviewer_scope),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=_reviewer_scope
+        ),
         organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
@@ -1416,4 +1420,4 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
 
 
 # reviewerのtimeout backstop attempt/retry契約は
-# tests/agent/evidence_review/test_reviewer.py が正本。
+# tests/agent/evidence_review/test_service.py が正本。

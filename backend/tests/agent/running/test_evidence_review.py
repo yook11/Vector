@@ -42,8 +42,8 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailureCode,
 )
 from app.agent.evidence_review import (
-    EvidenceReviewer,
     EvidenceReviewerDraft,
+    EvidenceReviewService,
     EvidenceRunFailed,
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
@@ -190,7 +190,10 @@ def _runner(
             events=events,
             external_search_scope_factory=factory,
         ),
-        reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime)),
+        reviewer=EvidenceReviewService(
+            agent=EVIDENCE_REVIEWER_AGENT,
+            runtime_scope_factory=fixed_scope(reviewer_runtime),
+        ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         organizer=PassThroughOrganizer(),
@@ -935,7 +938,7 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
     """runnerがreviewer失敗をEvidenceRunFailedへ写す結線を保証する。
 
     attempt/timeout/失敗分類の詳細な組み合わせは
-    tests/agent/evidence_review/test_reviewer.py が正本。
+    tests/agent/evidence_review/test_service.py が正本。
     """
     captured = _capture_external_outcome(monkeypatch)
     failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
