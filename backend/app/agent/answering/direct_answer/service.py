@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 from app.agent.agent import Agent
@@ -44,6 +45,7 @@ __all__ = ["DirectAnswerService"]
 
 _DIRECT_ANSWER_SOURCE_ERRORS = (AIProviderError, DirectAnswerInvalidError)
 _MAX_ATTEMPTS = 2
+_ANSWER_TIMEOUT_SECONDS = 15
 
 
 class DirectAnswerService:
@@ -71,34 +73,46 @@ class DirectAnswerService:
         """Return a valid direct draft, retrying only blank response defects."""
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
+            attempt_number = 0
+            timeout = asyncio.timeout(_ANSWER_TIMEOUT_SECONDS)
             try:
-                async with self._runtime_scope_factory() as runtime:
-                    for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                        try:
-                            draft = await self._generate_draft(
-                                runtime=runtime,
-                                input=input,
-                                attempt_number=attempt_number,
-                            )
-                        except _DIRECT_ANSWER_SOURCE_ERRORS as cause:
-                            failure = classify_direct_answer_failure(cause)
-                            retriable = (
-                                failure.request_retry_disposition
-                                is RequestRetryDisposition.RETRY_IN_REQUEST
-                                and attempt_number < _MAX_ATTEMPTS
-                            )
-                            if retriable:
-                                if isinstance(cause, AIProviderOutputTruncatedError):
-                                    input = replace(
-                                        input, previous_output_truncated=True
+                try:
+                    async with timeout:
+                        async with self._runtime_scope_factory() as runtime:
+                            for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                                try:
+                                    draft = await self._generate_draft(
+                                        runtime=runtime,
+                                        input=input,
+                                        attempt_number=attempt_number,
                                     )
-                                continue
-                            raise DirectAnswerError(code=failure.code) from cause
-                        break
-                    else:
-                        raise AssertionError(
-                            "unreachable: answer loop must return or raise"
-                        )
+                                except _DIRECT_ANSWER_SOURCE_ERRORS as cause:
+                                    failure = classify_direct_answer_failure(cause)
+                                    retriable = (
+                                        failure.request_retry_disposition
+                                        is RequestRetryDisposition.RETRY_IN_REQUEST
+                                        and attempt_number < _MAX_ATTEMPTS
+                                    )
+                                    if retriable:
+                                        if isinstance(
+                                            cause, AIProviderOutputTruncatedError
+                                        ):
+                                            input = replace(
+                                                input, previous_output_truncated=True
+                                            )
+                                        continue
+                                    raise DirectAnswerError(
+                                        code=failure.code
+                                    ) from cause
+                                break
+                            else:
+                                raise AssertionError(
+                                    "unreachable: answer loop must return or raise"
+                                )
+                except TimeoutError as cause:
+                    if not timeout.expired():
+                        raise
+                    raise DirectAnswerError(code="direct_answer_timeout") from cause
             except DirectAnswerError as error:
                 recording.report_outcome(
                     DirectAnswerFailed(

@@ -30,8 +30,8 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
     EvidenceAnswerInput,
-    EvidenceAnswerOutcome,
 )
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
@@ -207,7 +207,7 @@ class _ReviewMissingCapturingAnswerer(_EvidenceAnswerer):
         super().__init__()
         self.review_missing_calls: list[tuple[str, ...]] = []
 
-    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         self.review_missing_calls.append(input.review_missing)
         return await super().answer(input)
 

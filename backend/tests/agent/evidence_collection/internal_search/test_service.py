@@ -652,3 +652,87 @@ class TestInternalSearchService:
         recorded = recorder.records[0]
         assert recorded.outcomes == []
         assert isinstance(recorded.error, asyncio.CancelledError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blocked_at", ["cache_lookup", "embedding", "cache_store", "article_search"]
+)
+async def test_whole_search_timeout_cancels_each_waiting_dependency(
+    blocked_at: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(service_module, "_INTERNAL_SEARCH_TIMEOUT_SECONDS", 0.02)
+    cancelled = asyncio.Event()
+
+    async def wait_forever(*args: Any, **kwargs: Any) -> Any:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    cache = Mock(fetch_cached=AsyncMock(return_value={}), store=AsyncMock())
+    embedder = FakeInternalQueryEmbedder()
+    repository = FakeArticleVectorSearchRepository({})
+    targets = {
+        "cache_lookup": (cache, "fetch_cached"),
+        "embedding": (embedder, "embed_queries"),
+        "cache_store": (cache, "store"),
+        "article_search": (repository, "search_by_embedding"),
+    }
+    target, method = targets[blocked_at]
+    monkeypatch.setattr(target, method, wait_forever)
+    recorder = RecordingInternalSearchRecorder()
+    service = InternalSearchService(
+        embedder=embedder,
+        article_search_repository=repository,
+        query_embedding_cache=cache,
+        recorder=recorder,
+    )
+
+    with pytest.raises(InternalSearchError) as raised:
+        await service.search(_queries("query-a", "query-b"))
+
+    assert raised.value.code is InternalSearchFailureCode.TIMEOUT
+    assert cancelled.is_set()
+    assert recorder.records[0].outcomes == [
+        InternalSearchFailed(failure_code=InternalSearchFailureCode.TIMEOUT)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_internal_search_dependencies_share_one_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(service_module, "_INTERNAL_SEARCH_TIMEOUT_SECONDS", 0.2)
+    reached: list[str] = []
+
+    async def delayed_lookup(*args: Any) -> dict[str, Any]:
+        reached.append("cache")
+        await asyncio.sleep(0.12)
+        return {}
+
+    class DelayedEmbedder(FakeInternalQueryEmbedder):
+        async def embed_queries(
+            self, queries: InternalSearchQueries
+        ) -> list[InternalQueryEmbedding]:
+            reached.append("embedding")
+            await asyncio.sleep(0.12)
+            return await super().embed_queries(queries)
+
+    repository = FakeArticleVectorSearchRepository({})
+    service = InternalSearchService(
+        embedder=DelayedEmbedder(),
+        article_search_repository=repository,
+        query_embedding_cache=Mock(fetch_cached=delayed_lookup, store=AsyncMock()),
+    )
+
+    with pytest.raises(InternalSearchError) as raised:
+        await service.search(_queries("query-a", "query-b"))
+
+    assert raised.value.code is InternalSearchFailureCode.TIMEOUT
+    assert reached == ["cache", "embedding"]
+    assert repository.calls == []

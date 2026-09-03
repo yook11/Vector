@@ -404,7 +404,7 @@ def _record_and_shorten_pipeline_timeouts(
 
     async def wait_for(awaitable: Any, timeout: float) -> Any:
         observed.append(timeout)
-        bounded_timeout = 0.001 if timeout in {15, 30} else timeout
+        bounded_timeout = 0.001 if timeout in {15, 10} else timeout
         return await original_wait_for(awaitable, timeout=bounded_timeout)
 
     monkeypatch.setattr(asyncio, "wait_for", wait_for)
@@ -1379,7 +1379,7 @@ async def test_query_timeout_backstop_cancels_the_runtime_and_reports_failure(
         report.external_collection,
         isinstance(captured[0].evidence_run, EvidenceRunCompleted),
         report.generated_queries,
-        observed_timeouts.count(30),
+        observed_timeouts.count(10),
     ) == (True, "query_generation_failed", True, [], 1)
 
 

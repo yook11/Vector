@@ -21,6 +21,7 @@ from taskiq.receiver import Receiver
 
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.answering.direct_answer.failure import DirectAnswerError
+from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.contract import (
     AnswerGenerationStopped,
     AnswerPlanSummary,
@@ -2180,6 +2181,9 @@ def _direct_answer_error_with_private_cause() -> DirectAnswerError:
         AIProviderConfigurationError(),
         AIProviderError("SHOULD_NOT_LEAK"),
         _direct_answer_error_with_private_cause(),
+        EvidenceAnswerError(code="ai_error_network"),
+        EvidenceAnswerError(code="evidence_answer_timeout"),
+        DirectAnswerError(code="direct_answer_timeout"),
         AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
         PlanningError(code="ai_error_network"),
     ],
@@ -2187,6 +2191,9 @@ def _direct_answer_error_with_private_cause() -> DirectAnswerError:
         "configuration",
         "provider",
         "direct-answer",
+        "evidence-answer",
+        "evidence-answer-timeout",
+        "direct-answer-timeout",
         "invalid-agent-output",
         "planning",
     ),

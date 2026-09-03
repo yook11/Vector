@@ -43,6 +43,8 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.schemas.research import ResearchRunResponse
 
+_ANSWER_SAVE_LOCK_TIMEOUT = "10s"
+
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
 _TERMINAL_STATUSES = (
     AgentRunStatus.COMPLETED.value,
@@ -345,6 +347,9 @@ class AgentRunRepository:
         research_handoff: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> CompleteRunOutcome:
+        await self._session.execute(
+            select(func.set_config("lock_timeout", _ANSWER_SAVE_LOCK_TIMEOUT, True))
+        )
         row = (
             await self._session.execute(
                 select(AgentRun, AgentThread)

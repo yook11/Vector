@@ -15,13 +15,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
     EvidenceAnswerer,
     EvidenceAnswerInput,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
 )
 from app.agent.answering.evidence_answer.evidence import (
     AnswerInputEvidence,
     build_answer_input_evidence,
 )
+from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 
 __all__ = [
@@ -34,12 +33,11 @@ __all__ = [
     "DirectAnswerInput",
     "DirectAnswerInvalidError",
     "DirectAnswerService",
+    "EvidenceAnswerError",
     "EvidenceAnswerDraft",
     "EvidenceAnswerInput",
     "EvidenceAnswerDraftInvalidError",
     "EvidenceAnswerer",
     "EvidenceAnswerService",
-    "EvidenceAnswerOutcome",
-    "EvidenceAnswerUnavailable",
     "build_answer_input_evidence",
 ]

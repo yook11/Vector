@@ -42,7 +42,7 @@ async def test_success_emits_completed_duration_and_outcome(
     }
 
 
-async def test_classified_failure_emits_completed_duration_and_failed_outcome(
+async def test_classified_failure_emits_failed_duration_and_failed_outcome(
     capfire: CaptureLogfire,
 ) -> None:
     async with LogfireEvidenceAnswerRecorder().record(
@@ -57,7 +57,7 @@ async def test_classified_failure_emits_completed_duration_and_failed_outcome(
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
-        "status": "completed",
+        "status": "failed",
         "outcome": "failed",
     }
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
@@ -302,7 +302,7 @@ async def test_span_exit_failure_does_not_replace_business_error(
             id="failure-code",
         ),
         pytest.param(
-            lambda: EvidenceAnswerFailed(failure_code="known", attempt_count=0),
+            lambda: EvidenceAnswerFailed(failure_code="known", attempt_count=-1),
             id="failure-attempt-count",
         ),
     ],

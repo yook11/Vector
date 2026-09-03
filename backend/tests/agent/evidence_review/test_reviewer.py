@@ -479,29 +479,13 @@ class _NeverCompletingRuntime:
             raise
 
 
-def _shorten_review_timeout(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    original_wait_for = asyncio.wait_for
-    observed: list[float] = []
-
-    async def wait_for(awaitable: Any, timeout: float) -> Any:
-        observed.append(timeout)
-        bounded_timeout = 0.001 if timeout == 30 else timeout
-        return await original_wait_for(awaitable, timeout=bounded_timeout)
-
-    monkeypatch.setattr(asyncio, "wait_for", wait_for)
-    return observed
-
-
 @pytest.mark.asyncio
-async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
+async def test_review_timeout_cancels_the_runtime_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """asyncio.wait_for(timeout=30)の実配線を検証する
-
-    (TimeoutErrorを直接注入するだけの分類テストとは別に、実際にcancelされる
-    ことを確かめる)。
-    """
-    observed_timeouts = _shorten_review_timeout(monkeypatch)
+    monkeypatch.setattr(
+        "app.agent.evidence_review.reviewer._REVIEW_TIMEOUT_SECONDS", 0.02
+    )
     runtime = _NeverCompletingRuntime()
 
     result = await asyncio.wait_for(
@@ -526,9 +510,8 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
 
     assert isinstance(result, EvidenceRunFailed)
     assert runtime.cancelled is True
-    assert runtime.attempt_numbers == [1, 2]
+    assert runtime.attempt_numbers == [1]
     assert result.failure_code == "reviewer_timeout"
-    assert observed_timeouts.count(30) == 2
 
 
 @pytest.mark.asyncio

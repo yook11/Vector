@@ -3,7 +3,7 @@
 `EvidenceAnswerDraft`はanswerとcited_refsだけを持つようになり、
 `assemble_evidence_result()`からcontext引数(requirement参照が唯一の用途)が
 消える。missing_aspectsは機構(retrieval empty / incomplete task /
-review_missing)と生成不能の1行だけで組み立てられ、要望由来の文言は無くなる。
+review_missing)から組み立てられ、生成失敗はこの工程に渡らない。
 """
 
 from __future__ import annotations
@@ -15,12 +15,9 @@ import pytest
 
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
-    EvidenceAnswerUnavailable,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.result_assembly import (
-    _UNAVAILABLE_ANSWER,
-    _UNAVAILABLE_MISSING,
     assemble_evidence_result,
 )
 from app.agent.contract import InternalArticleSource
@@ -172,26 +169,6 @@ def _without_incomplete_phrase(missing_aspects: list[str]) -> list[str]:
     return [item for item in missing_aspects if item != _INCOMPLETE_TASK_MISSING]
 
 
-def _unavailable(failure_code: str = "ai_error_network") -> EvidenceAnswerUnavailable:
-    return EvidenceAnswerUnavailable(failure_code=failure_code)
-
-
-def test_unavailable_wording_is_fixed_literal_text() -> None:
-    """R4条件13・14: 生成不能時の定型文言を実値でリテラル固定する。
-
-    他のテストは_UNAVAILABLE_ANSWER/_UNAVAILABLE_MISSING経由でこの定数を
-    期待値として再利用しているため、文言そのものを変更しても緑のまま通って
-    しまい、Invariant「定型本文とmissing_aspectsの文言は現行の値を維持する」の
-    回帰保証にならない。ここでだけ実値をリテラルで固定し、値そのものの
-    変更を検知できるようにする。
-    """
-    assert _UNAVAILABLE_ANSWER == (
-        "回答を生成できませんでした。根拠の不足または応答形式の不備により、"
-        "参考回答を安全に構築できませんでした。"
-    )
-    assert _UNAVAILABLE_MISSING == "回答生成に必要な根拠または応答形式が不足しました"
-
-
 def _draft(*, answer: str, cited_refs: list[str] | None = None) -> EvidenceAnswerDraft:
     """EvidenceAnswerDraftはanswerとcited_refsだけを持つ
 
@@ -205,7 +182,7 @@ def _assemble(
     plan: SearchPlan,
     outcome: _AssemblyInput,
     evidence: list[AnswerInputEvidence],
-    answer_outcome: EvidenceAnswerDraft | EvidenceAnswerUnavailable,
+    answer_outcome: EvidenceAnswerDraft,
 ) -> Any:
     return assemble_evidence_result(
         plan=plan,
@@ -295,14 +272,13 @@ def test_all_tasks_zero_hits_add_incomplete_missing_once() -> None:
         ),
         outcome=outcome,
         evidence=[],
-        answer_outcome=_unavailable(),
+        answer_outcome=_draft(answer="確認できた範囲で回答します。"),
     )
 
     assert result.status == "insufficient"
     assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
-        _UNAVAILABLE_MISSING,
     ]
 
 
@@ -354,14 +330,13 @@ def test_empty_evidence_zero_hits_adds_incomplete_and_retrieval() -> None:
         ),
         outcome=outcome,
         evidence=[],
-        answer_outcome=_unavailable(),
+        answer_outcome=_draft(answer="確認できた範囲で回答します。"),
     )
 
     assert result.status == "insufficient"
     assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
-        _UNAVAILABLE_MISSING,
     ]
 
 
@@ -386,7 +361,7 @@ def test_failed_evidence_run_adds_incomplete_missing_without_leaking_reason() ->
         ),
         outcome=outcome,
         evidence=[],
-        answer_outcome=_unavailable(),
+        answer_outcome=_draft(answer="確認できた範囲で回答します。"),
     )
 
     assert (
@@ -398,7 +373,6 @@ def test_failed_evidence_run_adds_incomplete_missing_without_leaking_reason() ->
         [
             "回答に使える根拠を取得できませんでした",
             _INCOMPLETE_TASK_MISSING,
-            _UNAVAILABLE_MISSING,
         ],
         False,
     )
@@ -431,7 +405,7 @@ def test_assembly_rejects_completed_evidence_for_an_uncollected_task() -> None:
             collected_news=collected_news,
             evidence_run=evidence_run,
             evidence=[],
-            answer_outcome=_unavailable(),
+            answer_outcome=_draft(answer="確認できた範囲で回答します。"),
         )
 
 
@@ -460,7 +434,7 @@ def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
         ),
         outcome=outcome,
         evidence=[],
-        answer_outcome=_unavailable(),
+        answer_outcome=_draft(answer="確認できた範囲で回答します。"),
     )
 
     assert result.status == "insufficient"
@@ -506,7 +480,7 @@ def test_internal_hits_without_external_hits_can_answer() -> None:
 
 
 def test_report_missing_deduplicates_against_review_missing() -> None:
-    """missingはRun単位のreview_missingから1本だけ流れ、生成不能の1行と
+    """missingはRun単位のreview_missingから1本だけ流れ、根拠取得の不足と
 
     重複排除される(この task は provider_failed でヒットゼロだが、外部収集の
     失敗であり internal_hit_count も 0 のため incomplete条件(0/0)にも
@@ -514,7 +488,7 @@ def test_report_missing_deduplicates_against_review_missing() -> None:
     """
     tasks = [_task("既存のexternal task")]
     shared_text = "共有される不足理由"
-    unavailable_missing = _UNAVAILABLE_MISSING
+    retrieval_missing = "回答に使える根拠を取得できませんでした"
     outcome = _outcome(
         task_reports=[
             _report(
@@ -525,7 +499,7 @@ def test_report_missing_deduplicates_against_review_missing() -> None:
                 provider_failed_query_count=1,
             )
         ],
-        review_missing=[shared_text, unavailable_missing],
+        review_missing=[shared_text, retrieval_missing],
     )
 
     result = _assemble(
@@ -535,58 +509,22 @@ def test_report_missing_deduplicates_against_review_missing() -> None:
         ),
         outcome=outcome,
         evidence=[],
-        answer_outcome=_unavailable(),
+        answer_outcome=_draft(answer="確認できた範囲で回答します。"),
     )
 
     assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
         shared_text,
-        unavailable_missing,
     ]
-    assert result.missing_aspects.count(unavailable_missing) == 1
+    assert result.missing_aspects.count(retrieval_missing) == 1
 
 
-def test_unavailable_outcome_with_evidence_builds_insufficient_result() -> None:
-    """生成不能でもevidenceがあるRunでresultが構築でき、sourcesは空、
-
-    文言はresult_assembly側の定数から取られる(文言リテラルは複製しない)。
-    """
-    unavailable_answer = _UNAVAILABLE_ANSWER
-    unavailable_missing = _UNAVAILABLE_MISSING
-    tasks = [_task("直近の外部発表を確認する")]
-    outcome = _outcome(
-        task_reports=[
-            _report(
-                task_index=0,
-                research_goal=tasks[0].research_goal,
-                internal_hit_count=1,
-            )
-        ],
-    )
-
-    result = _assemble(
-        plan=_search_plan(
-            research_tasks=_research_tasks_from(tasks),
-            target_time_window=None,
-        ),
-        outcome=outcome,
-        evidence=[_internal_evidence()],
-        answer_outcome=_unavailable(failure_code="ai_error_network"),
-    )
-
-    assert result.status == "insufficient"
-    assert result.sources == []
-    assert result.answer == unavailable_answer
-    assert unavailable_missing in result.missing_aspects
-
-
-def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
+def test_generated_answer_preserves_missing_information_in_order() -> None:
     """機構由来のmissing_aspects(evidence空/incomplete task/
 
-    review_missing)と生成不能の1行が併存し、現行どおりの順序で並ぶ。
+    review_missing)と根拠取得の不足が併存し、現行どおりの順序で並ぶ。
     """
-    unavailable_missing = _UNAVAILABLE_MISSING
     tasks = [_task("直近の外部発表を確認する")]
     outcome = _outcome(
         task_reports=[
@@ -605,7 +543,7 @@ def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
         ),
         outcome=outcome,
         evidence=[],
-        answer_outcome=_unavailable(failure_code="ai_error_network"),
+        answer_outcome=_draft(answer="確認できた範囲で回答します。"),
     )
 
     assert result.status == "insufficient"
@@ -613,13 +551,12 @@ def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
         "reviewerが申告した不足",
-        unavailable_missing,
     ]
 
 
-def test_unavailable_missing_is_deduplicated_against_mechanism_missing() -> None:
-    """生成不能の1行が機構由来のmissingと偶然一致しても重複排除される。"""
-    unavailable_missing = _UNAVAILABLE_MISSING
+def test_review_missing_is_deduplicated_against_mechanism_missing() -> None:
+    """根拠取得の不足が機構由来のmissingと偶然一致しても重複排除される。"""
+    retrieval_missing = "回答に使える根拠を取得できませんでした"
     tasks = [_task("既存のexternal task")]
     outcome = _outcome(
         task_reports=[
@@ -631,7 +568,7 @@ def test_unavailable_missing_is_deduplicated_against_mechanism_missing() -> None
                 provider_failed_query_count=1,
             )
         ],
-        review_missing=[unavailable_missing],
+        review_missing=[retrieval_missing],
     )
 
     result = _assemble(
@@ -641,7 +578,7 @@ def test_unavailable_missing_is_deduplicated_against_mechanism_missing() -> None
         ),
         outcome=outcome,
         evidence=[],
-        answer_outcome=_unavailable(failure_code="ai_error_network"),
+        answer_outcome=_draft(answer="確認できた範囲で回答します。"),
     )
 
-    assert result.missing_aspects.count(unavailable_missing) == 1
+    assert result.missing_aspects.count(retrieval_missing) == 1

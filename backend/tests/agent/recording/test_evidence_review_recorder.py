@@ -315,7 +315,7 @@ async def test_span_exit_failure_does_not_replace_business_error(
             id="failure-code",
         ),
         pytest.param(
-            lambda: EvidenceReviewFailed(failure_code="known", attempt_count=0),
+            lambda: EvidenceReviewFailed(failure_code="known", attempt_count=-1),
             id="failure-attempt-count",
         ),
     ],
