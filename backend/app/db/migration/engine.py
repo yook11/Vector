@@ -6,9 +6,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.db_ssl import create_app_engine
-from app.migration_config import MigrationSettings
-from app.rds_iam_auth import build_iam_password_provider
+from app.db.connection import create_app_engine
+from app.db.iam import build_iam_password_provider
+from app.db.migration.settings import MigrationSettings
 
 
 def create_migration_engine(

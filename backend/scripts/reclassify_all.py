@@ -21,53 +21,56 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.curation.repository import CurationRepository
-from app.db import engine
+from app.db.engine import build_cli_engine
+from app.db.session import caller_managed_session_factory
 from app.models.article_curation import ArticleCuration
 from app.queue.brokers import broker_analysis
 from app.queue.tasks.assessment import assess_content
 
 
 async def main() -> None:
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with AsyncSession(engine) as session:
-        result = await session.execute(
-            select(ArticleCuration.article_id, ArticleCuration.id)
-        )
-        rows = [(row[0], row[1]) for row in result]
-
-    print(f"evaluating {len(rows)} extractions for reassessment")
-
-    await broker_analysis.startup()
-    enqueued = 0
-    skipped = 0
+    engine = build_cli_engine("vector-cli-reclassify-all")
+    session_factory = caller_managed_session_factory(engine)
     try:
-        for article_id, _curation_id in rows:
-            async with session_factory() as session:
-                extraction_repo = CurationRepository(session)
-                assessment_repo = AssessmentRepository(session)
-                extraction = await extraction_repo.find_by_article_id(article_id)
-                if extraction is None:
+        async with session_factory() as session:
+            result = await session.execute(
+                select(ArticleCuration.article_id, ArticleCuration.id)
+            )
+            rows = [(row[0], row[1]) for row in result]
+
+        print(f"evaluating {len(rows)} extractions for reassessment")
+
+        await broker_analysis.startup()
+        enqueued = 0
+        skipped = 0
+        try:
+            for article_id, _curation_id in rows:
+                async with session_factory() as session:
+                    extraction_repo = CurationRepository(session)
+                    assessment_repo = AssessmentRepository(session)
+                    extraction = await extraction_repo.find_by_article_id(article_id)
+                    if extraction is None:
+                        skipped += 1
+                        continue
+                    ready = await ReadyForAssessment.try_advance_from(
+                        extraction,
+                        repo=assessment_repo,
+                    )
+                if ready is None:
                     skipped += 1
                     continue
-                ready = await ReadyForAssessment.try_advance_from(
-                    extraction,
-                    repo=assessment_repo,
-                )
-            if ready is None:
-                skipped += 1
-                continue
-            await assess_content.kiq(ready)
-            enqueued += 1
-    finally:
-        await broker_analysis.shutdown()
+                await assess_content.kiq(ready)
+                enqueued += 1
+        finally:
+            await broker_analysis.shutdown()
 
-    print(f"done: enqueued={enqueued} skipped={skipped}")
+        print(f"done: enqueued={enqueued} skipped={skipped}")
+    finally:
+        await engine.dispose()
 
 
 if __name__ == "__main__":

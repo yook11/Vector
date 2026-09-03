@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from collections.abc import AsyncGenerator
 from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Annotated
@@ -24,7 +23,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.composition import ensure_external_search_configured
 from app.agent.daily_quota import observability as daily_quota_observability
@@ -56,8 +55,12 @@ from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import AIProviderError
-from app.db import engine
-from app.dependencies import CurrentUser, get_current_user, get_redis_client
+from app.db.fastapi import get_caller_managed_session
+from app.dependencies import (
+    CurrentUser,
+    get_current_user,
+    get_redis_client,
+)
 from app.schemas.research import (
     PaginatedResearchThreadResponse,
     ResearchDailyRequestLimitExceededResponse,
@@ -81,12 +84,6 @@ _SSE_RETRY_AFTER_SECONDS = 5
 _SSE_CAPACITY_STATE_KEY = "agent_run_sse_capacity"
 
 
-async def get_agent_persistence_session() -> AsyncGenerator[AsyncSession]:
-    # get_session の request-wide UoW は commit→kiq→failed 更新の 2 tx 制御と分ける。
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        yield session
-
-
 async def enqueue_agent_run(run_id: UUID) -> None:
     from app.queue.messages.agent_run import AgentRunTrigger
     from app.queue.tasks.agent_run import run_agent_answer
@@ -98,8 +95,9 @@ async def read_agent_run_live_context(
     *,
     run_id: UUID,
     user_id: UUID,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> OwnedAgentRunLiveContext | None:
-    async with AsyncSession(engine, expire_on_commit=False) as session:
+    async with session_factory() as session:
         return await AgentRunRepository(session).read_live_context_for_user(
             run_id=run_id,
             user_id=user_id,
@@ -142,7 +140,8 @@ def get_agent_run_sse_timing() -> AgentRunSseTiming:
 async def create_research_response(
     body: ResearchQuestionRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
+    # commit→kiq→failed の 2 tx を切るため、入口管理の UoW は使わない。
+    session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> ResearchRunStartResponse | JSONResponse:
     try:
         ensure_external_search_configured()
@@ -238,7 +237,7 @@ async def create_research_response(
 async def list_research_threads(
     pagination: Annotated[ResearchThreadListParams, Query()],
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
+    session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> PaginatedResearchThreadResponse:
     repo = AgentThreadRepository(session)
     return await repo.list_threads_for_user(user_id=user.id, pagination=pagination)
@@ -255,7 +254,7 @@ async def list_research_threads(
 async def get_research_thread(
     thread_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
+    session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> ResearchThreadDetail:
     repo = AgentThreadRepository(session)
     response = await repo.read_thread_detail_for_user(
@@ -278,7 +277,7 @@ async def get_research_thread(
 async def delete_research_thread(
     thread_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
+    session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> Response:
     repo = AgentThreadRepository(session)
     async with session.begin():
@@ -303,7 +302,7 @@ async def delete_research_thread(
 async def cancel_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
+    session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
 ) -> Response:
     repo = AgentRunRepository(session)
@@ -398,9 +397,11 @@ async def stream_research_run_events(
     if lease is None:
         return _sse_error_response(status.HTTP_503_SERVICE_UNAVAILABLE)
     try:
+        session_factory = request.app.state.session_factory
         context = await read_agent_run_live_context(
             run_id=parsed_run_id,
             user_id=user.id,
+            session_factory=session_factory,
         )
         if context is None:
             await lease.release()
@@ -440,6 +441,7 @@ async def stream_research_run_events(
                 return await read_agent_run_live_context(
                     run_id=parsed_run_id,
                     user_id=user.id,
+                    session_factory=session_factory,
                 )
 
             connection = AgentRunQueuedSseConnection(
@@ -498,7 +500,7 @@ async def stream_research_run_events(
 async def get_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
+    session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> ResearchRunResponse:
     repo = AgentRunRepository(session)
     response = await repo.read_run_for_user(run_id=run_id, user_id=user.id)

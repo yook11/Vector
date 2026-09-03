@@ -5,7 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_session, require_bff_request
+from app.db.fastapi import get_entry_managed_session
+from app.dependencies import require_bff_request
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     ArticleBrief,
@@ -27,7 +28,7 @@ _ArticleId = Annotated[int, Path(ge=1, le=_INT32_MAX)]
 
 
 def get_article_service(
-    session: Annotated[AsyncSession, Depends(get_session)],
+    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
 ) -> ArticleService:
     return ArticleService(ArticleRepository(session))
 

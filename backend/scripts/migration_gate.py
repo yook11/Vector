@@ -634,8 +634,8 @@ def _script_directory() -> ScriptDirectory:
 
 
 async def _current_db_heads() -> tuple[str, ...]:
-    from app.migration_config import load_migration_settings
-    from app.migration_db import create_migration_engine
+    from app.db.migration.engine import create_migration_engine
+    from app.db.migration.settings import load_migration_settings
 
     engine = create_migration_engine(load_migration_settings())
     try:

@@ -1,6 +1,6 @@
 """全アプリケーションモデル共通の DeclarativeBase。
 
-Alembic / init_db / テストはすべて ``Base.metadata`` を target metadata に
+Alembic / テストはすべて ``Base.metadata`` を target metadata に
 取り、ここに登録されたテーブルを単一メタデータとして参照する。
 """
 

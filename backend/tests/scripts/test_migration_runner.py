@@ -10,7 +10,7 @@ from typing import Literal
 import pytest
 from pydantic import ValidationError
 
-from app.migration_config import (
+from app.db.migration.request import (
     MigrationRunnerRequest,
     load_migration_runner_request,
 )

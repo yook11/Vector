@@ -1,4 +1,4 @@
-"""``app.db_ssl`` の純粋ヘルパー + engine factory の不変条件テスト。
+"""``app.db.ssl`` の純粋ヘルパー + engine factory の不変条件テスト。
 
 frontend の ``frontend/src/lib/auth/pool-ssl.test.ts`` 5 ケースを backend に
 移植し、backend 固有 (verify-full SSLContext / asyncpg 非対応 param 除去 /
@@ -15,12 +15,10 @@ import pytest
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine as _real_create_async_engine
 
-import app.db_ssl as db_ssl
-from app.db_ssl import (
-    create_app_engine,
-    parse_sslmode,
-    split_ssl_from_url,
-)
+import app.db.connection as db_connection
+import app.db.ssl as db_ssl
+from app.db.connection import create_app_engine
+from app.db.ssl import parse_sslmode, split_ssl_from_url
 
 _NEON = "postgresql+asyncpg://vector_app:strongpass@ep-x.ap-southeast-1.aws.neon.tech/neondb"
 _DEV = "postgresql+asyncpg://vector_app:strongpass@db:5432/vector"
@@ -206,7 +204,7 @@ class TestCreateAppEngine:
             captured.update(kw)
             return _real_create_async_engine(clean_url, **kw)
 
-        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        monkeypatch.setattr(db_connection, "create_async_engine", _spy)
         create_app_engine(
             f"{_NEON}?sslmode=require", connect_args={"command_timeout": 30}
         )
@@ -222,7 +220,7 @@ class TestCreateAppEngine:
             captured.update(kw)
             return _real_create_async_engine(clean_url, **kw)
 
-        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        monkeypatch.setattr(db_connection, "create_async_engine", _spy)
         create_app_engine(
             f"{_NEON}?sslmode=require", application_name="vector-worker-collection"
         )
@@ -239,7 +237,7 @@ class TestCreateAppEngine:
             captured.update(kw)
             return _real_create_async_engine(clean_url, **kw)
 
-        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        monkeypatch.setattr(db_connection, "create_async_engine", _spy)
         create_app_engine(f"{_NEON}?sslmode=require")
         assert "server_settings" not in captured["connect_args"]
 
@@ -252,7 +250,7 @@ class TestCreateAppEngine:
             captured.update(kw)
             return _real_create_async_engine(clean_url, **kw)
 
-        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        monkeypatch.setattr(db_connection, "create_async_engine", _spy)
         create_app_engine(
             f"{_NEON}?sslmode=require",
             application_name="vector-worker-collection",
@@ -287,7 +285,7 @@ class TestPasswordProvider:
             captured.update(kw)
             return _real_create_async_engine(clean_url, **kw)
 
-        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        monkeypatch.setattr(db_connection, "create_async_engine", _spy)
         create_app_engine(f"{_NEON}?sslmode=require", **factory_kwargs)
         return captured["connect_args"]
 

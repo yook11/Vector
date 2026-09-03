@@ -13,7 +13,7 @@
     uv run python -m app.insights.trend_discovery.cli \
         --window-end=2026-05-01 --force
 
-CLI は FastAPI DI とは独立した自前の ``async_sessionmaker`` を組み立てて
+CLI は FastAPI DI とは独立した ``caller_managed_session_factory`` を組み立てて
 ``TrendDiscoveryService`` に渡す (Service の DI 形式は同じ)。
 
 戻り値 (exit code):
@@ -41,7 +41,8 @@ from app.audit.stages.trend_discovery import (
     append_trend_discovery_run_event_best_effort,
 )
 from app.config import settings
-from app.db_iam_auth import create_runtime_engine
+from app.db.engine import build_cli_engine
+from app.db.session import caller_managed_session_factory
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 from app.insights.trend_discovery.domain.window import latest_window_end, now_in_jst
 from app.insights.trend_discovery.repository import SnapshotRepository
@@ -195,15 +196,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = create_runtime_engine(
-            settings.database_url,
-            application_name="vector-cli-run-trend-discovery",
-            echo=False,
-        )
+        engine = build_cli_engine("vector-cli-run-trend-discovery")
         try:
-            session_factory = async_sessionmaker(
-                engine, class_=AsyncSession, expire_on_commit=False
-            )
+            session_factory = caller_managed_session_factory(engine)
             service = TrendDiscoveryService(session_factory)
             notifier = FrontendRevalidateNotifier.from_settings(settings)
             return await run(args, service, session_factory, notifier)

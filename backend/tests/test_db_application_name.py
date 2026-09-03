@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
-from app.db_ssl import create_app_engine
-from app.queue.lifecycle import worker_service_name
+from app.db.connection import create_app_engine
+from app.db.engine import worker_service_name
 
 
 @pytest.mark.integration

@@ -28,14 +28,14 @@ from pydantic import ValidationError
 from sqlalchemy.engine import Connection
 
 from alembic import command
-from app.migration_config import (
+from app.db.migration.engine import create_migration_engine
+from app.db.migration.request import (
     MIGRATION_RUNNER_PROTOCOL_VERSION,
     MigrationRunnerRequest,
     load_migration_runner_request,
-    load_migration_settings,
     require_revision_id,
 )
-from app.migration_db import create_migration_engine
+from app.db.migration.settings import load_migration_settings
 from app.migration_lock import MigrationLockUnavailable, migration_advisory_lock
 from scripts.migration_gate import (
     ChangedMigrationDecision,

@@ -8,6 +8,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
+from app.db.settings import DatabaseSettings
 
 _VALID_BFF_SECRET = "b" * 64
 _VALID_REVALIDATE_SECRET = "c" * 64
@@ -155,6 +156,22 @@ def test_auth_retention_validation_error_does_not_expose_database_credentials(
 
     with pytest.raises(ValidationError) as exc_info:
         Settings()
+
+    for rendered in (str(exc_info.value), repr(exc_info.value)):
+        assert raw_url not in rendered
+        assert _DATABASE_PASSWORD_SENTINEL not in rendered
+        assert "input_value" not in rendered
+
+
+def test_database_settings_validation_error_hides_database_url() -> None:
+    """DB設定基底を直接使ってもURL内のcredentialを例外表示へ出さない。"""
+    raw_url = (
+        "postgresql+asyncpg://vector_app:"
+        f"vector_app-{_DATABASE_PASSWORD_SENTINEL}@db:5432/vector"
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        DatabaseSettings(database_url=raw_url)
 
     for rendered in (str(exc_info.value), repr(exc_info.value)):
         assert raw_url not in rendered

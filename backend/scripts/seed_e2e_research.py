@@ -17,7 +17,7 @@ from sqlalchemy import delete, insert, select, update  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncConnection  # noqa: E402
 
 from app.config import settings  # noqa: E402
-from app.db_ssl import create_app_engine  # noqa: E402
+from app.db.connection import create_app_engine  # noqa: E402
 from app.models.agent_message import AgentMessage, AgentMessageSource  # noqa: E402
 from app.models.agent_run import AgentRun  # noqa: E402
 from app.models.agent_thread import AgentThread  # noqa: E402

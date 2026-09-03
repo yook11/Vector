@@ -7,7 +7,7 @@ import re
 import shlex
 from pathlib import Path
 from typing import Any, get_type_hints
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr
@@ -15,9 +15,9 @@ from sqlalchemy.ext.asyncio import create_async_engine as _real_create_async_eng
 from structlog.testing import capture_logs
 from taskiq import TaskiqEvents, TaskiqState
 
-import app.db_ssl as db_ssl
+import app.db.connection as db_connection
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.queue.lifecycle import (
+from app.db.engine import (
     WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
     build_worker_engine,
@@ -477,8 +477,8 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
     with (
         patch("app.queue.lifecycle.setup_logfire") as setup_logfire,
         patch(
-            "app.queue.lifecycle.create_runtime_engine", return_value=engine
-        ) as create_engine,
+            "app.queue.lifecycle.build_worker_engine", return_value=engine
+        ) as build_engine,
         patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
         patch("app.queue.lifecycle.log_pool_initialized") as log_pool_initialized,
         patch("app.queue.lifecycle.register_pool_metrics"),
@@ -490,14 +490,7 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
             await handler(state)
 
     setup_logfire.assert_called_once_with(service_name)
-    create_engine.assert_called_once_with(
-        ANY,
-        application_name=service_name,
-        echo=False,
-        pool_size=5,
-        max_overflow=5,
-        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
-    )
+    build_engine.assert_called_once_with(label)
     log_pool_initialized.assert_called_once()
     assert log_pool_initialized.call_args.kwargs["service_name"] == service_name
     engine.dispose.assert_awaited_once_with()
@@ -662,7 +655,7 @@ class TestWorkerApplicationName:
             captured.update(kw)
             return _real_create_async_engine(clean_url, **kw)
 
-        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        monkeypatch.setattr(db_connection, "create_async_engine", _spy)
         build_worker_engine("collection")
         server_settings = captured["connect_args"]["server_settings"]
         assert server_settings["application_name"] == worker_service_name("collection")

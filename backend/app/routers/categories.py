@@ -3,7 +3,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_session, require_bff_request
+from app.db.fastapi import get_entry_managed_session
+from app.dependencies import require_bff_request
 from app.repositories.category import CategoryRepository
 from app.schemas.category import CategoryDetailList
 from app.services.category import CategoryService
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
 
 def get_category_service(
-    session: Annotated[AsyncSession, Depends(get_session)],
+    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
 ) -> CategoryService:
     return CategoryService(CategoryRepository(session))
 

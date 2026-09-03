@@ -30,6 +30,7 @@ from app.agent.runs.contracts import (
 )
 from app.agent.runs.repository import AgentRunRepository
 from app.config import settings
+from app.db.fastapi import get_caller_managed_session
 from app.dependencies import get_redis_client
 from app.main import app
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -116,7 +117,7 @@ async def research_client(
         yield db_session
 
     fake_enqueue = FakeEnqueue()
-    app.dependency_overrides[research_router_module.get_agent_persistence_session] = (
+    app.dependency_overrides[get_caller_managed_session] = (
         override_history_session
     )
     app.dependency_overrides[get_redis_client] = lambda: FakeRunEventsRedis()
@@ -142,7 +143,7 @@ async def quota_research_client(
         yield db_session
 
     fake_enqueue = FakeEnqueue()
-    app.dependency_overrides[research_router_module.get_agent_persistence_session] = (
+    app.dependency_overrides[get_caller_managed_session] = (
         override_history_session
     )
     monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
@@ -164,7 +165,7 @@ async def anonymous_research_client(
             await db_session.commit()
         yield db_session
 
-    app.dependency_overrides[research_router_module.get_agent_persistence_session] = (
+    app.dependency_overrides[get_caller_managed_session] = (
         override_history_session
     )
     async with AsyncClient(
@@ -492,7 +493,7 @@ class TestCreateResearchResponse:
 
         fake_enqueue = FakeEnqueue(exc=RuntimeError("redis down SHOULD_NOT_LEAK"))
         app.dependency_overrides[
-            research_router_module.get_agent_persistence_session
+            get_caller_managed_session
         ] = override_history_session
         monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
         async with AsyncClient(
@@ -578,7 +579,7 @@ class TestCreateResearchResponse:
             raise RuntimeError("redis uncertain SHOULD_NOT_LEAK")
 
         app.dependency_overrides[
-            research_router_module.get_agent_persistence_session
+            get_caller_managed_session
         ] = override_history_session
         monkeypatch.setattr(
             research_router_module, "enqueue_agent_run", enqueue_then_start_and_fail

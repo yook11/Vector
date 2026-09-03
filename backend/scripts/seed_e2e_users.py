@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import text  # noqa: E402
 
 from app.config import settings  # noqa: E402
-from app.db_ssl import create_app_engine  # noqa: E402
+from app.db.connection import create_app_engine  # noqa: E402
 
 # Better Auth `@better-auth/utils/password.node.mjs` 既定値と一致させる。
 # i4_seed_e2e_users.py から移植 (互換性は実機 signUp との完全一致で検証済み)。

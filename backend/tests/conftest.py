@@ -43,7 +43,7 @@ from sqlalchemy.sql.compiler import DDLCompiler
 from sqlalchemy.sql.ddl import ExecutableDDLElement
 
 from app.config import settings
-from app.dependencies import get_session
+from app.db.fastapi import get_entry_managed_session
 from app.main import app
 from app.models import (  # noqa: F401
     AnalyzableArticleRecord,
@@ -280,13 +280,13 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
     """DI でセッションを差し替えた httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession]:
-        # 本番の get_session と同様に新しいトランザクションを開始する。
+        # 本番の get_entry_managed_session と同様に新しいトランザクションを開始する。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():
             yield db_session
 
-    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_entry_managed_session] = override_session
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -308,13 +308,13 @@ async def authed_client(
     """BFF プロキシ認証ヘッダーを付与済みの httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession]:
-        # 本番の get_session と同様に新しいトランザクションを開始する。
+        # 本番の get_entry_managed_session と同様に新しいトランザクションを開始する。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():
             yield db_session
 
-    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_entry_managed_session] = override_session
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -331,13 +331,13 @@ async def admin_client(
     """管理者用 BFF プロキシ認証ヘッダーを付与済みの httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession]:
-        # 本番の get_session と同様に新しいトランザクションを開始する。
+        # 本番の get_entry_managed_session と同様に新しいトランザクションを開始する。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():
             yield db_session
 
-    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_entry_managed_session] = override_session
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -369,7 +369,7 @@ async def bff_client(
         async with db_session.begin():
             yield db_session
 
-    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_entry_managed_session] = override_session
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",

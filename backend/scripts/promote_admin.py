@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import text
 
 from app.config import settings
-from app.db_ssl import create_app_engine
+from app.db.connection import create_app_engine
 
 
 def _exit_with_error(message: str) -> NoReturn:

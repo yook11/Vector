@@ -9,12 +9,12 @@ import pytest
 from opentelemetry.metrics import CallbackOptions
 from structlog.testing import capture_logs
 
+from app.db.engine import WORKER_POOL_SIZING, build_worker_engine
 from app.logfire.db_pool import (
     log_pool_initialized,
     pool_stats,
     register_pool_metrics,
 )
-from app.queue.lifecycle import WORKER_POOL_SIZING, build_worker_engine
 
 
 class TestLogPoolInitialized:

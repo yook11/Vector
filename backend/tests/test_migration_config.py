@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.migration_config import MigrationSettings
-from app.migration_db import create_migration_engine
+from app.db.migration.engine import create_migration_engine
+from app.db.migration.settings import MigrationSettings
 
 _RDS_URL = (
     "postgresql+asyncpg://vector@"
@@ -121,7 +121,7 @@ def test_local_password_migration_engine_does_not_install_token_provider(
         captured.update(url=url, **kwargs)
         return object()
 
-    monkeypatch.setattr("app.migration_db.create_app_engine", fake_engine)
+    monkeypatch.setattr("app.db.migration.engine.create_app_engine", fake_engine)
     settings = MigrationSettings(
         migration_database_url="postgresql+asyncpg://vector:local@db:5432/vector"
     )
@@ -145,8 +145,10 @@ def test_iam_migration_engine_passes_token_signing_port(
         captured.update(engine_url=url, **kwargs)
         return object()
 
-    monkeypatch.setattr("app.migration_db.build_iam_password_provider", fake_provider)
-    monkeypatch.setattr("app.migration_db.create_app_engine", fake_engine)
+    monkeypatch.setattr(
+        "app.db.migration.engine.build_iam_password_provider", fake_provider
+    )
+    monkeypatch.setattr("app.db.migration.engine.create_app_engine", fake_engine)
     settings = MigrationSettings(
         env="production",
         db_iam_auth=True,

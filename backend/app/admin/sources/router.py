@@ -12,7 +12,7 @@ from app.admin.sources.schemas import (
     NewsSourceDetailList,
 )
 from app.admin.sources.service import NewsSourceService
-from app.dependencies import get_session
+from app.db.fastapi import get_entry_managed_session
 
 # news_sources.id は PostgreSQL INTEGER (int32) のため、上限を path level で
 # 明示して OverflowError 由来の 500 leak を構造的に閉塞する。下限 1 は
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/sources", tags=["admin:sources"])
 
 
 def get_news_source_service(
-    session: Annotated[AsyncSession, Depends(get_session)],
+    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
 ) -> NewsSourceService:
     return NewsSourceService(NewsSourceRepository(session))
 
