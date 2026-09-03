@@ -22,12 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.models.in_scope_assessment import InScopeAssessment
+from app.models.out_of_scope_assessment import OutOfScopeAssessment
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import engine
-from app.models.in_scope_assessment import InScopeAssessment
-from app.models.out_of_scope_assessment import OutOfScopeAssessment
+from app.config import settings
+from app.db.engine import create_cli_engine
+from app.db.session import caller_managed_session_factory
 
 
 async def _print_in_scope(session: AsyncSession, limit: int) -> None:
@@ -70,11 +72,16 @@ async def _print_out_of_scope(session: AsyncSession, limit: int) -> None:
 
 
 async def main(limit: int, kind: str) -> None:
-    async with AsyncSession(engine) as session:
-        if kind in ("in_scope", "both"):
-            await _print_in_scope(session, limit)
-        if kind in ("out_of_scope", "both"):
-            await _print_out_of_scope(session, limit)
+    engine = create_cli_engine(settings, "vector-cli-inspect-events")
+    try:
+        session_factory = caller_managed_session_factory(engine)
+        async with session_factory() as session:
+            if kind in ("in_scope", "both"):
+                await _print_in_scope(session, limit)
+            if kind in ("out_of_scope", "both"):
+                await _print_out_of_scope(session, limit)
+    finally:
+        await engine.dispose()
 
 
 if __name__ == "__main__":

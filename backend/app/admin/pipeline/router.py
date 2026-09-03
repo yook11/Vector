@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin.pipeline.schemas import FetchRequest, FetchResponse
-from app.dependencies import get_session
+from app.db.fastapi import get_entry_managed_session
 from app.models.news_source import NewsSource
 
 router = APIRouter(prefix="/pipeline", tags=["admin:pipeline"])
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/pipeline", tags=["admin:pipeline"])
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def fetch_news(
-    session: Annotated[AsyncSession, Depends(get_session)],
+    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
     body: FetchRequest | None = None,
 ) -> FetchResponse:
     """ニュース取得タスクを best-effort でキュー投入する。

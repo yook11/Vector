@@ -2,9 +2,9 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from app.db_ssl import clean_db_url
-from app.migration_config import load_migration_settings
-from app.migration_db import create_migration_engine
+from app.db.ssl import clean_db_url
+from app.db.migration.settings import load_migration_settings
+from app.db.engine import create_migration_engine
 from app.migration_lock import migration_advisory_lock
 from app.models import *  # noqa: F401, F403  — register all models
 from app.models.base import Base

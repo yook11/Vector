@@ -12,13 +12,10 @@ from typing import Any
 
 import pytest
 
-import app.db_ssl as db_ssl
+import app.db.engine as db_engine
 from app.config import settings
-from app.db_iam_auth import (
-    _rds_client,
-    build_iam_password_provider,
-    create_runtime_engine,
-)
+from app.db.engine import create_api_engine
+from app.db.iam import _rds_client, build_iam_password_provider
 
 _REGION = "ap-northeast-1"
 _RDS_URL = (
@@ -110,20 +107,21 @@ class TestBuildIamPasswordProvider:
         assert _rds_client(_REGION) is _rds_client(_REGION)
 
 
-class TestCreateRuntimeEngine:
+class TestCreateApiEngine:
     """settings を見る入口。無効なら URL の password をそのまま使う。"""
 
     @staticmethod
     def _captured_connect_args(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captured: dict[str, Any] = {}
-        real = db_ssl.create_async_engine
+        real = db_engine.create_async_engine
 
         def _spy(clean_url: str, **kw: Any) -> Any:
             captured.update(kw)
             return real(clean_url, **kw)
 
-        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
-        create_runtime_engine(_RDS_URL)
+        monkeypatch.setattr(db_engine, "create_async_engine", _spy)
+        monkeypatch.setattr(settings, "database_url", _RDS_URL)
+        create_api_engine(settings)
         return captured["connect_args"]
 
     def test_disabled_leaves_password_to_the_url(
@@ -149,5 +147,6 @@ class TestCreateRuntimeEngine:
         """config validator を迂回して到達した場合も黙って password 認証に落ちない。"""
         monkeypatch.setattr(settings, "db_iam_auth", True)
         monkeypatch.setattr(settings, "aws_region", None)
+        monkeypatch.setattr(settings, "database_url", _RDS_URL)
         with pytest.raises(RuntimeError, match="AWS_REGION"):
-            create_runtime_engine(_RDS_URL)
+            create_api_engine(settings)

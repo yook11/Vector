@@ -13,13 +13,15 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from app.admin.router import admin_router
 from app.agent.router import router as research_router
 from app.config import settings
-from app.db import (
+from app.db.engine import (
     API_POOL_MAX_OVERFLOW,
     API_POOL_SIZE,
     API_SERVICE_NAME,
-    engine,
+    DEFAULT_POOL_RECYCLE,
+    DEFAULT_POOL_TIMEOUT,
+    create_api_engine,
 )
-from app.db_ssl import DEFAULT_POOL_RECYCLE, DEFAULT_POOL_TIMEOUT
+from app.db.session import caller_managed_session_factory
 from app.exception_handlers import (
     duplicate_handler,
     invalid_query_handler,
@@ -107,20 +109,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 1 query = 1 span として bind param と SQL を span attribute に乗せる。
     # asyncpg instrumentor は意図的に入れない (ORM 層 + driver 層で二重 span
     # を出さないため)。
-    logfire.instrument_sqlalchemy(engine=engine)
-    log_pool_initialized(
-        service_name=API_SERVICE_NAME,
-        pool_size=API_POOL_SIZE,
-        max_overflow=API_POOL_MAX_OVERFLOW,
-        pool_recycle=DEFAULT_POOL_RECYCLE,
-        pool_timeout=DEFAULT_POOL_TIMEOUT,
-    )
-    register_pool_metrics(
-        engine, pool_size=API_POOL_SIZE, max_overflow=API_POOL_MAX_OVERFLOW
-    )
-    yield
-    # 終了処理
-    await engine.dispose()
+    engine = create_api_engine(settings)
+    try:
+        app.state.engine = engine
+        app.state.session_factory = caller_managed_session_factory(engine)
+        logfire.instrument_sqlalchemy(engine=engine)
+        log_pool_initialized(
+            service_name=API_SERVICE_NAME,
+            pool_size=API_POOL_SIZE,
+            max_overflow=API_POOL_MAX_OVERFLOW,
+            pool_recycle=DEFAULT_POOL_RECYCLE,
+            pool_timeout=DEFAULT_POOL_TIMEOUT,
+        )
+        register_pool_metrics(
+            engine, pool_size=API_POOL_SIZE, max_overflow=API_POOL_MAX_OVERFLOW
+        )
+        yield
+    finally:
+        await engine.dispose()
 
 
 # production では Swagger UI / ReDoc / openapi.json を無効化して攻撃面を削減する。
@@ -197,10 +203,10 @@ app.include_router(admin_router)
 
 
 @app.get("/api/v1/health")
-async def health_check() -> dict:
+async def health_check(request: Request) -> dict:
     db_connected = False
     try:
-        async with engine.connect() as conn:
+        async with request.app.state.engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
             db_connected = True
     except Exception as exc:

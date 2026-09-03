@@ -1,4 +1,3 @@
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
@@ -9,10 +8,8 @@ import redis.asyncio as aioredis
 from fastapi import Depends, Header, HTTPException, status
 from jwt.exceptions import InvalidTokenError
 from opentelemetry import trace
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db import engine
 from app.redis import get_redis as _get_redis_singleton
 
 # BFF (Next.js) と backend (FastAPI) 間の内部 API 認証は HS256 JWT で行う。
@@ -37,23 +34,6 @@ class CurrentUser:
 
     id: UUID
     role: UserRole
-
-
-async def get_session() -> AsyncGenerator[AsyncSession]:
-    """トランザクション開始済みのセッションを yield する。
-
-    正常終了時にコミット、例外発生時（Service が投げるドメイン例外を含む）
-    はロールバックする。Repository はコミットや refresh を呼んではならない。
-    ID の払い出しが必要なときのみ flush してよい。
-
-    既存エンティティへの変更は、Service が明示的に save を呼ばなくても
-    本トランザクションのコミット時に Unit of Work が自動で永続化する。
-    新規作成・削除は Repository.create / Repository.delete 経由で行う。
-    詳細は docs/adr/004_unit_of_work_service_convention.md を参照。
-    """
-    async with AsyncSession(engine) as session:
-        async with session.begin():
-            yield session
 
 
 def _decode_internal_jwt(authorization: str | None) -> dict[str, object] | None:

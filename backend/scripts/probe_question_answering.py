@@ -13,8 +13,6 @@ from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy.ext.asyncio import async_sessionmaker
-
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
@@ -65,7 +63,8 @@ from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
 from app.config import settings
-from app.db import engine
+from app.db.engine import create_cli_engine
+from app.db.session import caller_managed_session_factory
 
 DEFAULT_GOAL = "NVIDIA Blackwell AI GPU latest supply and customer demand evidence"
 DEFAULT_QUESTION = "NVIDIA Blackwell の直近の供給と顧客需要は投資判断に重要？"
@@ -208,41 +207,45 @@ async def _probe_search(
         target_time_window=target_time_window,
     )
     events = _RecordingAnswerEvents()
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    internal_search = InternalSearchService(
-        embedder=GeminiQueryEmbedder(),
-        article_search_repository=PgVectorArticleSearchRepository(session_factory),
-    )
-    runner = AnsweringRunner(
-        phases_factory=lambda: AnsweringPhases(
-            planner=_FixedSearchPlanner(plan),
-            collector=EvidenceCollectionService(
-                internal_search=internal_search,
-                events=events,
-                external_search_scope_factory=activate_external_search,
-            ),
-            reviewer=EvidenceReviewService(
-                agent=EVIDENCE_REVIEWER_AGENT,
-                runtime_scope_factory=activate_evidence_reviewer_runtime,
-            ),
-            evidence_answerer=EvidenceAnswerService(
-                agent=EVIDENCE_ANSWER_AGENT,
-                runtime_scope_factory=activate_gemini_agent_runtime,
-            ),
-            direct_answerer=_UnreachableDirectAnswerer(),
-            organizer=ResearchHandoffService(
-                agent=RESEARCH_HANDOFF_AGENT,
-                runtime_scope_factory=activate_gemini_agent_runtime,
-            ),
-        ),
-        events=events,
-    )
-    result = (
-        await runner.run(
-            RunInput(question=question, history=()),
-            identity=_probe_identity(as_of=as_of),
+    engine = create_cli_engine(settings, "vector-cli-probe-question-answering")
+    try:
+        session_factory = caller_managed_session_factory(engine)
+        internal_search = InternalSearchService(
+            embedder=GeminiQueryEmbedder(),
+            article_search_repository=PgVectorArticleSearchRepository(session_factory),
         )
-    ).final_output
+        runner = AnsweringRunner(
+            phases_factory=lambda: AnsweringPhases(
+                planner=_FixedSearchPlanner(plan),
+                collector=EvidenceCollectionService(
+                    internal_search=internal_search,
+                    events=events,
+                    external_search_scope_factory=activate_external_search,
+                ),
+                reviewer=EvidenceReviewService(
+                    agent=EVIDENCE_REVIEWER_AGENT,
+                    runtime_scope_factory=activate_evidence_reviewer_runtime,
+                ),
+                evidence_answerer=EvidenceAnswerService(
+                    agent=EVIDENCE_ANSWER_AGENT,
+                    runtime_scope_factory=activate_gemini_agent_runtime,
+                ),
+                direct_answerer=_UnreachableDirectAnswerer(),
+                organizer=ResearchHandoffService(
+                    agent=RESEARCH_HANDOFF_AGENT,
+                    runtime_scope_factory=activate_gemini_agent_runtime,
+                ),
+            ),
+            events=events,
+        )
+        result = (
+            await runner.run(
+                RunInput(question=question, history=()),
+                identity=_probe_identity(as_of=as_of),
+            )
+        ).final_output
+    finally:
+        await engine.dispose()
 
     _print_plan_summary(
         as_of=as_of,

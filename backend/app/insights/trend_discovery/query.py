@@ -2,7 +2,7 @@
 
 責務:
 - 既存 snapshot の取り出し (``find_latest`` のみ。Phase 1A は最新週単一表示)
-- ``AsyncSession`` を直接 DI (FastAPI ``Depends(get_session)`` 経由)。
+- ``AsyncSession`` を直接 DI (FastAPI ``Depends(get_entry_managed_session)`` 経由)。
   Read は session_factory による独立トランザクションを必要としないため、
   ``TrendDiscoveryService`` とは異なる DI 形式を取る (CQRS 風分離)
 

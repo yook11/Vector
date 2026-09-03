@@ -6,14 +6,12 @@ from urllib.parse import urlparse
 from pydantic import (
     EmailStr,
     SecretStr,
-    ValidationInfo,
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.exc import ArgumentError
+from pydantic_settings import SettingsConfigDict
 
-from app.db_ssl import parse_sslmode
+from app.db.settings import DatabaseSettings
 
 # backend/app/config.py から 2 階層上がプロジェクトルート
 _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -31,21 +29,6 @@ _KNOWN_WEAK_INTERNAL_SECRETS = frozenset(
     }
 )
 _INTERNAL_API_SECRET_MIN_LENGTH = 32
-
-# DB 接続 URL に含まれていれば起動時拒否する公開済 dev default / placeholder。
-# role 共通の placeholder を対象にし、migration role の dev/CI default は除外する。
-_KNOWN_WEAK_DATABASE_URL_PATTERNS = frozenset(
-    {
-        "vector_app:vector_app",
-        "vector_auth:vector_auth",
-        "<set-strong-password",
-    }
-)
-_DATABASE_URL_ENV_NAMES = {
-    "database_url": "DATABASE_URL",
-    "migration_database_url": "MIGRATION_DATABASE_URL",
-    "auth_retention_database_url": "AUTH_RETENTION_DATABASE_URL",
-}
 
 # revalidate 通知 (internal_frontend_base_url) の宛先ホスト allowlist。
 # notifier (FrontendRevalidateNotifier) は SSRF guard をバイパスして
@@ -65,11 +48,6 @@ _ALLOWED_INTERNAL_HOST_SUFFIXES = (".flycast", ".vector.internal")
 _INTERNAL_NAMESPACE_GLOBS = " / ".join(
     f"*{suffix}" for suffix in _ALLOWED_INTERNAL_HOST_SUFFIXES
 )
-
-# production で DB 接続文字列に要求する TLS sslmode。Neon は public internet
-# 越しのため平文 (disable / allow / prefer / 未指定) を起動時に拒否する。
-# sslmode の解釈と allowlist は db_ssl.parse_sslmode に SSoT 化 (二重定義回避)。
-_PRODUCTION_REQUIRED_SSLMODES = frozenset({"require", "verify-ca", "verify-full"})
 
 # Logfire write token の形式 (pylf_v1_<region 2文字>_<英数字>)。region は us / eu に
 # 限らず将来増えうるため固定列挙せず 2 文字の構造でのみ縛り、別 token の取り違えと
@@ -101,47 +79,16 @@ def _assert_strong_secret(raw: str, name: str) -> None:
         )
 
 
-class Settings(BaseSettings):
+class Settings(DatabaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE), extra="ignore", hide_input_in_errors=True
     )
 
-    # デプロイ環境識別。production では FastAPI 自動 docs を無効化する。
+    # デプロイ環境識別。productionではFastAPI自動docsなどを無効化する。
     env: Literal["development", "production"] = "development"
 
-    # データベース (application 接続)
-    # application runtime は最小権限 role で接続する。env 必須化と弱秘密拒否で
-    # production への dev fallback 混入を防ぐ。
-    database_url: str
-
-    # RDS IAM 認証。有効時は URL に password を持たせず、接続ごとに IAM の auth token
-    # を作って認証する (``app/db_iam_auth.py``)。この設定は app runtime 用で、
-    # migration は専用の ``MigrationSettings`` で認証境界を検証する。
-    db_iam_auth: bool = False
-
-    # token 署名に使う AWS region。botocore が region に読む env は AWS_DEFAULT_REGION
-    # だけで、ECS が注入する AWS_REGION は見ない。解決規則に任せると本番の全 task が
-    # engine 生成で NoRegionError になるため、ここで受けて明示的に渡す。
+    # DB・Redis・AgentCoreの署名で共有するAWS region。
     aws_region: str | None = None
-
-    # データベース (migration role)
-    # alembic / pytest fixture / vector_test 作成など admin 系の作業では
-    # ``vector`` (table owner) で接続する。``database_url`` と分離することで、
-    # application 経路は最小権限 (vector_app) のままにできる。
-    # 未設定時は ``database_url`` にフォールバックし、後方互換を保つ。
-    migration_database_url: str | None = None
-
-    # データベース (auth schema maintenance)
-    # Better Auth が管理する auth."rateLimit" retention など、auth schema 内の
-    # 保守処理だけが使う。通常 application role (vector_app) には auth.* DML を
-    # 広げないため、vector_auth 相当の接続文字列を別設定にする。
-    auth_retention_database_url: str | None = None
-
-    # データベース (application role passwords)。権限境界テスト用に settings 経由で
-    # 取得し、production runtime では password 単体としては読まない。
-    postgres_auth_password: SecretStr | None = None
-    postgres_app_password: SecretStr | None = None
-    postgres_collect_password: SecretStr | None = None
 
     # AI
     # Stage 3 (curation) と Stage 4 (assessment) のアダプター選択は env では
@@ -227,31 +174,6 @@ class Settings(BaseSettings):
     # token 未設定時は Logfire 送信を no-op にする。token は必ず settings 経由で
     # 観測層 bootstrap に渡す。
     logfire_token: SecretStr | None = None
-
-    @field_validator(
-        "database_url", "migration_database_url", "auth_retention_database_url"
-    )
-    @classmethod
-    def _validate_database_url(cls, v: str | None, info: ValidationInfo) -> str | None:
-        """DB 接続文字列に公開済 default / placeholder が残らないことを起動時に強制。
-
-        `.env` 設定漏れで弱秘密が production に滲むのを防ぐ。
-        """
-        if v is None:
-            return v
-        # 型チェッカは property の narrowing をしないため、ローカルに束縛して判定する。
-        field_name = info.field_name
-        if field_name is None:
-            raise ValueError("internal error: missing field name in validator info")
-        env_name = _DATABASE_URL_ENV_NAMES[field_name]
-        for pattern in _KNOWN_WEAK_DATABASE_URL_PATTERNS:
-            if pattern in v:
-                raise ValueError(
-                    f"{env_name} contains a known dev placeholder/weak password "
-                    f"({pattern!r}); use a strong password generated with "
-                    "`openssl rand -hex 32` and configure via .env"
-                )
-        return v
 
     @field_validator("internal_frontend_base_url")
     @classmethod
@@ -429,44 +351,6 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _reject_password_when_iam_auth(self) -> Self:
-        """IAM 認証時に runtime URL の password を拒否する (起動時 fail-fast)。
-
-        provider が ``connect_args`` で password を上書きするため、URL 側の password は
-        黙って無視される。「IAM のつもりで password 認証している」と疑えない状態を
-        作らないために弾く。``migration_database_url`` は射程外で、production
-        migration の IAM-only 条件は専用の ``MigrationSettings`` が検証する。
-        """
-        if not self.db_iam_auth:
-            return self
-        for field_name in ("database_url", "auth_retention_database_url"):
-            raw: str | None = getattr(self, field_name)
-            if raw is None:
-                continue
-            if urlparse(raw).password is not None:
-                env_name = _DATABASE_URL_ENV_NAMES[field_name]
-                raise ValueError(
-                    f"DB_IAM_AUTH is enabled but {env_name} contains a password; "
-                    "remove it (the IAM auth token replaces it)"
-                )
-        return self
-
-    @model_validator(mode="after")
-    def _require_region_when_iam_auth(self) -> Self:
-        """IAM 認証には region が要る (起動時 fail-fast)。
-
-        token は region ごとに署名するため、region が解決できないと botocore が
-        ``NoRegionError`` を投げて engine が作れない。api では ``app/db.py`` の import
-        時点で落ちるので、起動時に理由の読める形で弾く。
-        """
-        if self.db_iam_auth and self.aws_region is None:
-            raise ValueError(
-                "DB_IAM_AUTH is enabled but AWS_REGION is not set; "
-                "the IAM auth token is signed per region"
-            )
-        return self
-
-    @model_validator(mode="after")
     def _reject_password_when_redis_iam_auth(self) -> Self:
         """Redis IAM 認証時に URL の password を拒否し、user を要求する。
 
@@ -540,45 +424,6 @@ class Settings(BaseSettings):
                 "REDIS_IAM_AUTH is enabled but REDIS_URL is not rediss://; "
                 "IAM auth requires TLS (the auth token must not travel in cleartext)"
             )
-        return self
-
-    @model_validator(mode="after")
-    def _require_ssl_in_production(self) -> Self:
-        """production では DB 接続文字列に TLS sslmode を強制する (起動時 fail-fast)。
-
-        Neon は public internet 越しの接続のため平文は不可。``database_url`` と
-        (設定されていれば) ``migration_database_url`` /
-        ``auth_retention_database_url`` の sslmode が
-        require / verify-ca / verify-full のいずれかでなければ起動を拒否する。
-        sslmode の解釈と allowlist は ``db_ssl.parse_sslmode`` に委譲し二重定義を
-        避ける (typo は parse_sslmode が ValueError で弾く)。SSLContext の組み立て
-        自体は接続側 (``db_ssl.create_app_engine``) に一元化し、config は本番の
-        最低ラインだけを強制する。dev (docker 同一 network) は平文で良いため何も
-        しない。
-        """
-        if self.env != "production":
-            return self
-        for name, url in (
-            ("DATABASE_URL", self.database_url),
-            ("MIGRATION_DATABASE_URL", self.migration_database_url),
-            ("AUTH_RETENTION_DATABASE_URL", self.auth_retention_database_url),
-        ):
-            if url is None:
-                continue
-            try:
-                sslmode = parse_sslmode(url)
-            except ArgumentError as exc:
-                # make_url が parse できない URL は ValueError に包んで Pydantic の
-                # ValidationError 経路に乗せる (生の ArgumentError を漏らさない)。
-                # password 漏洩を避けるため URL 自体は message に含めない。
-                raise ValueError(f"{name} is not a parseable connection URL") from exc
-            if sslmode not in _PRODUCTION_REQUIRED_SSLMODES:
-                raise ValueError(
-                    f"in production {name} must use a TLS sslmode "
-                    f"({sorted(_PRODUCTION_REQUIRED_SSLMODES)}), got {sslmode!r}; "
-                    "append `?sslmode=require` (connections to Neon cross the "
-                    "public internet)"
-                )
         return self
 
 

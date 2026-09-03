@@ -17,7 +17,7 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from alembic import command
-from app.migration_config import MigrationRunnerRequest
+from app.db.migration.request import MigrationRunnerRequest
 from app.migration_lock import migration_advisory_lock
 from scripts import migration_runner as runner
 

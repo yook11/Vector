@@ -53,7 +53,8 @@ from app.analysis.curation.cli.recuration_service import (
     RecurationSummary,
 )
 from app.config import settings
-from app.db_iam_auth import create_runtime_engine
+from app.db.engine import create_cli_engine
+from app.db.session import caller_managed_session_factory
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 
@@ -202,15 +203,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = create_runtime_engine(
-            settings.database_url,
-            application_name="vector-cli-re-curate-all",
-            echo=False,
-        )
+        engine = create_cli_engine(settings, "vector-cli-re-curate-all")
         try:
-            session_factory = async_sessionmaker(
-                engine, class_=AsyncSession, expire_on_commit=False
-            )
+            session_factory = caller_managed_session_factory(engine)
             service = RecurationService(session_factory, max_retries=args.max_retries)
             curator = GeminiCurator()
             return await run(args, service, curator, session_factory)

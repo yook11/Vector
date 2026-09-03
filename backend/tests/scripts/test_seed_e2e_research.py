@@ -358,7 +358,7 @@ async def test_run_dispatches_each_fixed_command(
     fail_submission = AsyncMock()
     complete = AsyncMock()
     monkeypatch.setattr(
-        seed_script, "create_app_engine", lambda *_args, **_kwargs: engine
+        seed_script, "create_cli_engine", lambda *_args, **_kwargs: engine
     )
     monkeypatch.setattr(seed_script, "_seed", seed)
     monkeypatch.setattr(seed_script, "_cleanup", cleanup)

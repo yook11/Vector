@@ -7,7 +7,7 @@ import re
 import shlex
 from pathlib import Path
 from typing import Any, get_type_hints
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr
@@ -15,12 +15,13 @@ from sqlalchemy.ext.asyncio import create_async_engine as _real_create_async_eng
 from structlog.testing import capture_logs
 from taskiq import TaskiqEvents, TaskiqState
 
-import app.db_ssl as db_ssl
+import app.db.engine as db_engine
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.queue.lifecycle import (
+from app.config import settings
+from app.db.engine import (
     WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
-    build_worker_engine,
+    create_worker_engine,
     worker_service_name,
 )
 from app.queue.messages.collection import AcquireSourceTaskInput
@@ -477,8 +478,8 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
     with (
         patch("app.queue.lifecycle.setup_logfire") as setup_logfire,
         patch(
-            "app.queue.lifecycle.create_runtime_engine", return_value=engine
-        ) as create_engine,
+            "app.queue.lifecycle.create_worker_engine", return_value=engine
+        ) as build_engine,
         patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
         patch("app.queue.lifecycle.log_pool_initialized") as log_pool_initialized,
         patch("app.queue.lifecycle.register_pool_metrics"),
@@ -490,14 +491,7 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
             await handler(state)
 
     setup_logfire.assert_called_once_with(service_name)
-    create_engine.assert_called_once_with(
-        ANY,
-        application_name=service_name,
-        echo=False,
-        pool_size=5,
-        max_overflow=5,
-        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
-    )
+    build_engine.assert_called_once_with(settings, label)
     log_pool_initialized.assert_called_once()
     assert log_pool_initialized.call_args.kwargs["service_name"] == service_name
     engine.dispose.assert_awaited_once_with()
@@ -636,17 +630,17 @@ class TestWorkerPoolSizing:
 
     def test_common_worker_pool_sizing(self) -> None:
         # 共通 worker は pool_size=5 / max_overflow=5 (cap 10) の均一小型
-        pool = build_worker_engine("collection").sync_engine.pool
+        pool = create_worker_engine(settings, "collection").sync_engine.pool
         assert (pool.size(), pool._max_overflow) == (5, 5)
 
     def test_trend_discovery_pool_sizing(self) -> None:
         # trend_discovery のみ 2/2 に縮小 (日次・fan-out なし・最大 1 connection)
-        pool = build_worker_engine("trend_discovery").sync_engine.pool
+        pool = create_worker_engine(settings, "trend_discovery").sync_engine.pool
         assert (pool.size(), pool._max_overflow) == (2, 2)
 
     def test_worker_recycle_overrides_factory_default(self) -> None:
         # worker は recycle=240 で factory 既定 (3600) を override (autosuspend 手前)
-        pool = build_worker_engine("collection").sync_engine.pool
+        pool = create_worker_engine(settings, "collection").sync_engine.pool
         assert pool._recycle == WORKER_POOL_RECYCLE_SECONDS == 240
 
 
@@ -662,8 +656,8 @@ class TestWorkerApplicationName:
             captured.update(kw)
             return _real_create_async_engine(clean_url, **kw)
 
-        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
-        build_worker_engine("collection")
+        monkeypatch.setattr(db_engine, "create_async_engine", _spy)
+        create_worker_engine(settings, "collection")
         server_settings = captured["connect_args"]["server_settings"]
         assert server_settings["application_name"] == worker_service_name("collection")
 
@@ -703,9 +697,9 @@ async def test_maintenance_startup_logs_auth_engine_failure_without_raising() ->
 
     with (
         patch("app.queue.lifecycle.setup_logfire"),
-        patch("app.queue.lifecycle.build_worker_engine", return_value=MagicMock()),
+        patch("app.queue.lifecycle.create_worker_engine", return_value=MagicMock()),
         patch(
-            "app.queue.lifecycle.build_auth_retention_engine",
+            "app.queue.lifecycle.create_auth_retention_engine",
             side_effect=ValueError("bad AUTH_RETENTION_DATABASE_URL"),
         ),
         patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),

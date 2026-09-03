@@ -1,4 +1,4 @@
-"""接続文字列から SSL 設定を分離する純粋ヘルパー + engine factory。
+"""接続文字列からSSL設定を分離する純粋ヘルパー。
 
 backend (SQLAlchemy + asyncpg) を Neon 等の managed Postgres に verify-full
 (CA + ホスト名検証) で繋ぐための一元化層。frontend の
@@ -21,22 +21,18 @@ backend (SQLAlchemy + asyncpg) を Neon 等の managed Postgres に verify-full
 接続文字列のみで dev (docker, sslmode 無し → SSL 無効) と本番 (Neon,
 ``?sslmode=require`` → verify-full) を切り替えられる。
 
-import は標準ライブラリ + ``certifi`` + ``sqlalchemy`` のみに閉じる
-(``app.config`` も ``app.db`` も import しない)。これにより alembic / scripts が
-factory を import しても設定副作用も循環依存も起きない。
+import は標準ライブラリ + ``certifi`` + ``sqlalchemy`` のみに閉じるため、
+設定読込の副作用や循環依存なしにEngine生成とmigrationから共有できる。
 """
 
 from __future__ import annotations
 
 import ssl
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 import certifi
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlalchemy.pool import NullPool
 
 # RDS の CA は自己署名の private root で certifi に含まれない。sslmode=require でも
 # verify-full に格上げするため、足さないと AWS では接続そのものが成立しない。
@@ -150,82 +146,6 @@ def split_ssl_from_url(raw_url: str) -> tuple[str, dict[str, Any]]:
 def clean_db_url(raw_url: str) -> str:
     """ssl 系 param を剥がした接続文字列を返す (接続しない alembic offline 用)。"""
     return split_ssl_from_url(raw_url)[0]
-
-
-DEFAULT_POOL_RECYCLE = 3600  # 古い接続を proactive 破棄 (Neon autosuspend 対策)
-DEFAULT_POOL_TIMEOUT = 5  # QueuePool 飽和時の fail-fast (SQLAlchemy 既定 30s でなく)
-
-
-def _merge_server_settings(
-    connect_args: dict[str, Any], application_name: str | None
-) -> dict[str, Any]:
-    """``application_name`` を asyncpg の ``server_settings`` に注入する。
-
-    asyncpg は ``application_name`` 専用 kwarg を持たないため
-    ``server_settings`` 経由で渡す。既存の ``server_settings`` は保持し、
-    ``application_name`` kwarg を優先する。
-    """
-    if application_name is None:
-        return connect_args
-    server_settings = {
-        **connect_args.get("server_settings", {}),
-        "application_name": application_name,  # PostgreSQL の上限は 63 バイト
-    }
-    return {**connect_args, "server_settings": server_settings}
-
-
-def create_app_engine(
-    url: str,
-    *,
-    application_name: str | None = None,
-    password_provider: Callable[[], Awaitable[str]] | None = None,
-    **engine_kwargs: Any,
-) -> AsyncEngine:
-    """SSL と application_name を一元注入する唯一の engine 生成入口。
-
-    URL から ssl 系 param を剥がし、SSL 要時は verify-full の ``SSLContext`` を
-    ``connect_args`` に注入して ``create_async_engine`` を呼ぶ。SSL の決定権を
-    構造的に一元化するため、呼び出し側が ``connect_args["ssl"]`` を渡したら
-    ``ValueError`` で fail-fast する (ssl 以外の connect_args はマージ保持)。
-    ``application_name`` は asyncpg の ``server_settings`` に焼く。
-
-    ``password_provider`` を渡すと接続確立ごとにそれが呼ばれる (asyncpg の callable
-    password)。RDS IAM 認証の token は 15 分で失効するため、値ではなく生成器を渡す。
-    未指定なら URL の password が使われる。
-    """
-    clean_url, ssl_connect_args = split_ssl_from_url(url)
-
-    caller_connect_args = dict(engine_kwargs.pop("connect_args", {}))
-    if "ssl" in caller_connect_args:
-        raise ValueError(
-            "connect_args['ssl'] must not be passed to create_app_engine; "
-            "SSL is derived from the connection string's sslmode (single source "
-            "of truth). Use `?sslmode=require` instead."
-        )
-    if "password" in caller_connect_args:
-        raise ValueError(
-            "connect_args['password'] must not be passed to create_app_engine; "
-            "pass password_provider= for IAM auth, or keep the password in the "
-            "connection string."
-        )
-    merged_connect_args = {**caller_connect_args, **ssl_connect_args}
-    merged_connect_args = _merge_server_settings(merged_connect_args, application_name)
-    if password_provider is not None:
-        merged_connect_args["password"] = password_provider
-
-    # Neon scale-to-zero (autosuspend) で idle 接続が切られるため、全 engine に
-    # stale-connection resilience を既定付与する (呼び出し側が明示すれば override)。
-    engine_kwargs.setdefault("pool_pre_ping", True)  # checkout 時 liveness check
-    engine_kwargs.setdefault("pool_recycle", DEFAULT_POOL_RECYCLE)
-    engine_kwargs.setdefault("hide_parameters", True)
-    # pool_timeout は QueuePool 専用。NullPool 移行時は付与しない
-    # (neon-connection-routing.md の pooler 昇格手順)。
-    if engine_kwargs.get("poolclass") is not NullPool:
-        engine_kwargs.setdefault("pool_timeout", DEFAULT_POOL_TIMEOUT)
-
-    return create_async_engine(
-        clean_url, connect_args=merged_connect_args, **engine_kwargs
-    )
 
 
 def _verify_full_context() -> ssl.SSLContext:

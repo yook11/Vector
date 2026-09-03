@@ -1,6 +1,6 @@
 """ElastiCache IAM 認証: Valkey 接続に、接続ごとの auth token を差し込む。
 
-RDS (``app/db_iam_auth.py``) と同型だが、ElastiCache には ``generate_db_auth_token``
+RDS (``app/db/iam.py``) と同型だが、ElastiCache には ``generate_db_auth_token``
 に相当する公式 helper が無く、token は SigV4 presign の自前組み立てになる。
 ``https://<cache名>/?Action=connect&User=<user>`` を service=elasticache で presign
 し、scheme を落とした残り全体を AUTH の password として渡す。**署名の host は
@@ -14,7 +14,7 @@ token は 15 分で失効し、IAM 認証の接続は 12 時間で強制切断�
 窓を作るだけになる。
 
 region は settings から明示的に渡す (botocore が ``AWS_REGION`` を読まない事情は
-``app/db_iam_auth.py`` の注記と同じ)。
+``app/db/iam.py`` の注記と同じ)。
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _request_signer(region: str) -> Any:
     """プロセス内で 1 つだけ持つ signer。
 
     session ごとに credential を独立に取得・更新するため、broker × 8 が provider を
-    持つ worker でも解決を 1 本に共有する (``app/db_iam_auth.py`` の ``_rds_client``
+    持つ worker でも解決を 1 本に共有する (``app/db/iam.py`` の ``_rds_client``
     と同じ判断)。botocore の import と credential 解決 (ECS では HTTP) も初回の
     token 要求まで遅れる。
     """

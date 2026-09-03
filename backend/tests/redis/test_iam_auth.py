@@ -2,7 +2,7 @@
 
 token 生成は SigV4 のローカル署名で完結するため、ここでのテストは AWS に出ない
 (dummy credential で署名だけ行う)。region / cache 名は settings から明示的に渡す
-契約なので、env には置かない (``app/db_iam_auth.py`` のテストと同じ判断)。
+契約なので、env には置かない (``app/db/iam.py`` のテストと同じ判断)。
 """
 
 from __future__ import annotations

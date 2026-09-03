@@ -37,7 +37,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
-from app.db_iam_auth import create_runtime_engine
+from app.db.engine import create_cli_engine
+from app.db.session import caller_managed_session_factory
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.llm import DeepSeekBriefingGenerator
@@ -141,15 +142,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = create_runtime_engine(
-            settings.database_url,
-            application_name="vector-cli-generate-briefing",
-            echo=False,
-        )
+        engine = create_cli_engine(settings, "vector-cli-generate-briefing")
         try:
-            session_factory = async_sessionmaker(
-                engine, class_=AsyncSession, expire_on_commit=False
-            )
+            session_factory = caller_managed_session_factory(engine)
             # CLI は手動運用 / 復旧経路のため、frontend revalidate は飛ばす
             # (本番 cron 経路と異なり 11 連続 POST が即時走るのを避ける)。
             service = WeeklyBriefingService(

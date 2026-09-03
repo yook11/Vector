@@ -123,10 +123,10 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "PgVectorArticleSearchRepository",
         "RunIdentity",
         "RunInput",
-        "async_sessionmaker",
         "activate_external_search",
         "activate_evidence_reviewer_runtime",
-        "engine",
+        "create_cli_engine",
+        "caller_managed_session_factory",
         "EvidenceCollectionService",
     } <= imported
     assert removed.isdisjoint(imported)
@@ -269,7 +269,7 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     None
 ):
     search = _function(_probe_tree(), "_probe_search")
-    session_factory_calls = _calls(search, "async_sessionmaker")
+    session_factory_calls = _calls(search, "caller_managed_session_factory")
     internal_search_calls = _calls(search, "InternalSearchService")
     phase = _phase_call(search)
 
@@ -282,6 +282,7 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
             + [keyword.value for keyword in session_factory_calls[0].keywords]
         )
     )
+    assert len(_calls(search, "create_cli_engine")) == 1
     assert len(internal_search_calls) == 1
 
     internal_search_call = internal_search_calls[0]

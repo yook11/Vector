@@ -7,6 +7,7 @@ from collections import deque
 from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -74,6 +75,7 @@ async def sse_client(
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         AgentRunSseCapacity()
     )
+    app.state.session_factory = MagicMock()
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -81,6 +83,7 @@ async def sse_client(
     ) as client:
         yield client, redis
     app.dependency_overrides.clear()
+    del app.state.session_factory
 
 
 def _context(status: AgentRunStatus, *, epoch: int) -> OwnedAgentRunLiveContext:
@@ -403,6 +406,7 @@ async def test_full_middleware_stack_propagates_disconnect_and_releases_slot(
         return _context(AgentRunStatus.RUNNING, epoch=2)
 
     monkeypatch.setattr(router_module, "read_agent_run_live_context", context)
+    app.state.session_factory = MagicMock()
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         capacity
     )
@@ -448,6 +452,7 @@ async def test_full_middleware_stack_propagates_disconnect_and_releases_slot(
         await asyncio.wait_for(app(scope, receive, send), timeout=2)
     finally:
         app.dependency_overrides.clear()
+        del app.state.session_factory
 
     replacement = await capacity.try_acquire_process()
     assert replacement is not None
@@ -491,6 +496,7 @@ async def test_real_redis_events_flow_through_fastapi_sse_with_cursor(
         )
 
     monkeypatch.setattr(router_module, "read_agent_run_live_context", context)
+    app.state.session_factory = MagicMock()
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         AgentRunSseCapacity()
     )
@@ -527,5 +533,6 @@ async def test_real_redis_events_flow_through_fastapi_sse_with_cursor(
         )
     finally:
         app.dependency_overrides.clear()
+        del app.state.session_factory
         await redis.delete(agent_run_live_stream_key(run_id))
         await redis.aclose()

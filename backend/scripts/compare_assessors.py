@@ -35,7 +35,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.assessment.ai.base import BaseAssessor
@@ -47,7 +47,9 @@ from app.analysis.assessment.domain.result import (
     ValidCategory,
 )
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.db import engine
+from app.config import settings
+from app.db.engine import create_cli_engine
+from app.db.session import caller_managed_session_factory
 from app.models.article_curation import ArticleCuration
 
 
@@ -130,8 +132,11 @@ async def _process_sample(
     return SampleResult(sample=sample, gemini=g_res, deepseek=d_res)
 
 
-async def _load_samples(limit: int) -> list[Sample]:
-    async with AsyncSession(engine) as session:
+async def _load_samples(
+    session_factory: async_sessionmaker[AsyncSession],
+    limit: int,
+) -> list[Sample]:
+    async with session_factory() as session:
         stmt = (
             select(ArticleCuration)
             .order_by(ArticleCuration.extracted_at.desc())
@@ -320,7 +325,12 @@ def _render_markdown(
 
 
 async def _run(limit: int, output_path: Path) -> int:
-    samples = await _load_samples(limit)
+    engine = create_cli_engine(settings, "vector-cli-compare-assessors")
+    try:
+        session_factory = caller_managed_session_factory(engine)
+        samples = await _load_samples(session_factory, limit)
+    finally:
+        await engine.dispose()
     if not samples:
         print("No samples found in article_extractions", file=sys.stderr)
         return 1

@@ -2,7 +2,7 @@
 
 宛先は自 AWS アカウントに作った resource なので、内部宛 client を使い SigV4 で署名する。
 backend で唯一の「ヘッダ署名」実装 (``app/redis/iam_auth.py`` は presigned URL、
-``app/db_iam_auth.py`` は generate_db_auth_token)。
+``app/db/iam.py`` は generate_db_auth_token)。
 """
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ async def _signed_headers(*, url: str, body: bytes, region: str) -> dict[str, st
     """署名を thread へ逃がす。
 
     資格情報の解決は初回に同期 I/O (ECS では container credentials endpoint への
-    HTTP) になるため、event loop を止めない (``app/db_iam_auth.py`` と同じ)。
+    HTTP) になるため、event loop を止めない (``app/db/iam.py`` と同じ)。
     """
     from botocore.exceptions import BotoCoreError
 
