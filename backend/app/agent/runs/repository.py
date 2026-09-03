@@ -6,10 +6,12 @@ import uuid as uuid_mod
 from datetime import datetime
 from typing import Any
 
+import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.contract import AnswerQuestionResult
+from app.agent.daily_quota import observability as daily_quota_observability
 from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.daily_quota.persistence import (
     release_daily_quota,
@@ -25,8 +27,8 @@ from app.agent.runs.contracts import (
     CreatedAgentRun,
     OwnedAgentRunLiveContext,
     RunTransitionLostError,
-    StartRunCommandOutcome,
-    StartRunOutcome,
+    StartRunFailure,
+    StartRunFailureReason,
     ThreadNotFoundError,
     UserQuestionMessage,
 )
@@ -42,6 +44,8 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.schemas.research import ResearchRunResponse
+
+logger = structlog.get_logger(__name__)
 
 _ANSWER_SAVE_LOCK_TIMEOUT = "10s"
 
@@ -193,7 +197,7 @@ class AgentRunRepository:
         run_id: uuid_mod.UUID,
         *,
         now: datetime | None = None,
-    ) -> StartRunCommandOutcome:
+    ) -> int | StartRunFailure:
         row = (
             await self._session.execute(
                 select(
@@ -207,25 +211,18 @@ class AgentRunRepository:
             )
         ).one_or_none()
         if row is None:
-            return StartRunCommandOutcome(
-                start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
-                attempt_epoch=None,
-                quota_release_outcome=None,
-            )
+            return StartRunFailure(StartRunFailureReason.RUN_NOT_FOUND)
         run, user_id = row
         if run.status in _TERMINAL_STATUSES:
-            return StartRunCommandOutcome(
-                start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
-                attempt_epoch=None,
-                quota_release_outcome=None,
-            )
+            return StartRunFailure(StartRunFailureReason.ALREADY_FINISHED)
 
         if run.status not in _ACTIVE_STATUSES:
-            return StartRunCommandOutcome(
-                start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
-                attempt_epoch=None,
-                quota_release_outcome=None,
+            logger.error(
+                "agent_run_start_unexpected",
+                run_id=str(run_id),
+                observed_status=run.status,
             )
+            return StartRunFailure(StartRunFailureReason.UNEXPECTED)
 
         now = await database_now(self._session, now)
         if now >= run.deadline_at:
@@ -237,24 +234,24 @@ class AgentRunRepository:
                 now=now,
             )
             if not expired:
-                return StartRunCommandOutcome(
-                    start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
-                    attempt_epoch=None,
-                    quota_release_outcome=None,
+                logger.error(
+                    "agent_run_start_unexpected",
+                    run_id=str(run_id),
+                    cause="deadline_write",
+                    observed_status=run.status,
                 )
-            quota_usage_date = run.quota_usage_date
-            quota_release_outcome = None
+                return StartRunFailure(StartRunFailureReason.UNEXPECTED)
             if run.status == AgentRunStatus.QUEUED.value:
-                quota_release_outcome = await release_daily_quota(
+                outcome = await release_daily_quota(
                     self._session,
                     user_id=user_id,
-                    usage_date=quota_usage_date,
+                    usage_date=run.quota_usage_date,
                 )
-            return StartRunCommandOutcome(
-                start_outcome=StartRunOutcome.DEADLINE_EXCEEDED,
-                attempt_epoch=None,
-                quota_release_outcome=quota_release_outcome,
-            )
+                daily_quota_observability.observe_release(
+                    run_id=run_id,
+                    outcome=outcome,
+                )
+            return StartRunFailure(StartRunFailureReason.DEADLINE_EXCEEDED)
 
         result = await self._session.execute(
             update(AgentRun)
@@ -272,16 +269,14 @@ class AgentRunRepository:
         )
         attempt_epoch = result.scalar_one_or_none()
         if attempt_epoch is None:
-            return StartRunCommandOutcome(
-                start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
-                attempt_epoch=None,
-                quota_release_outcome=None,
+            logger.error(
+                "agent_run_start_unexpected",
+                run_id=str(run_id),
+                cause="start_write",
+                observed_status=run.status,
             )
-        return StartRunCommandOutcome(
-            start_outcome=StartRunOutcome.STARTED,
-            attempt_epoch=attempt_epoch,
-            quota_release_outcome=None,
-        )
+            return StartRunFailure(StartRunFailureReason.UNEXPECTED)
+        return attempt_epoch
 
     async def read_user_question_for_run(
         self,

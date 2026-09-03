@@ -38,8 +38,8 @@ from app.agent.running import (
 from app.agent.runs.contracts import (
     CompleteRunOutcome,
     RunTransitionLostError,
-    StartRunCommandOutcome,
-    StartRunOutcome,
+    StartRunFailure,
+    StartRunFailureReason,
     UserQuestionMessage,
 )
 from app.agent.runs.execution import StopReason
@@ -96,29 +96,14 @@ async def run_agent_answer(
     if start_error is not None:
         start_error.__suppress_context__ = True
         raise start_error
-    if start_result.start_outcome is StartRunOutcome.DEADLINE_EXCEEDED:
-        quota_release_outcome = start_result.quota_release_outcome
-        logger.info(
-            "agent_run_start_deadline_exceeded",
-            quota_release_result=(
-                quota_release_outcome.value
-                if quota_release_outcome is not None
-                else None
-            ),
-        )
-        if quota_release_outcome is not None:
-            with suppress(Exception):
-                daily_quota_observability.observe_release(
-                    run_id=run_id,
-                    outcome=quota_release_outcome,
-                )
+    if isinstance(start_result, int):
+        attempt_epoch = start_result
+    elif start_result.reason is StartRunFailureReason.DEADLINE_EXCEEDED:
+        logger.info("agent_run_start_deadline_exceeded")
         return
-    if start_result.start_outcome is StartRunOutcome.IDEMPOTENT_SKIP:
-        logger.info("agent_run_idempotent_skip", run_id=str(run_id))
+    else:
+        logger.info("agent_run_not_started", reason=start_result.reason.value)
         return
-    attempt_epoch = start_result.attempt_epoch
-    if attempt_epoch is None:
-        raise RuntimeError("started run is missing its attempt epoch")
 
     question_row = None
     try:
@@ -383,7 +368,7 @@ async def sweep_deadline_exceeded_agent_runs(ctx: Context = TaskiqDepends()) -> 
 async def _start_run(
     session_factory: async_sessionmaker[AsyncSession],
     trigger: AgentRunTrigger,
-) -> StartRunCommandOutcome:
+) -> int | StartRunFailure:
     async with session_factory() as session:
         async with session.begin():
             return await AgentRunRepository(session).start_run(trigger.run_id)

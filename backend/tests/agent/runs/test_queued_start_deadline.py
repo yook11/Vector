@@ -20,16 +20,17 @@ from structlog.testing import capture_logs
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.run_deadline.policy import RUN_DEADLINE_SECONDS
-from app.agent.runs.contracts import (
-    StartRunCommandOutcome,
-    StartRunOutcome,
-)
+from app.agent.runs.contracts import StartRunFailureReason
 from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
+from tests.agent.runs._start_run_outcomes import (
+    assert_start_failure,
+    started_attempt_epoch,
+)
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -147,19 +148,6 @@ def _run_deadline_seconds() -> int:
     return value
 
 
-def _assert_start_result(
-    result: object,
-    *,
-    outcome: str,
-    started: bool,
-    quota_release_outcome: DailyQuotaReleaseOutcome | None,
-) -> None:
-    assert isinstance(result, StartRunCommandOutcome)
-    assert result.start_outcome is getattr(StartRunOutcome, outcome)
-    assert (result.attempt_epoch is not None) is started
-    assert result.quota_release_outcome is quota_release_outcome
-
-
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
 
@@ -249,12 +237,7 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
                 now=_DB_NOW,
             )
 
-    _assert_start_result(
-        result,
-        outcome="DEADLINE_EXCEEDED",
-        started=False,
-        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-    )
+    assert_start_failure(result, StartRunFailureReason.DEADLINE_EXCEEDED)
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code, run.attempt_epoch) == (
         "deadline_exceeded",
@@ -293,18 +276,8 @@ async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
                 now=_DB_NOW,
             )
 
-    _assert_start_result(
-        before_result,
-        outcome="STARTED",
-        started=True,
-        quota_release_outcome=None,
-    )
-    _assert_start_result(
-        exact_result,
-        outcome="DEADLINE_EXCEEDED",
-        started=False,
-        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-    )
+    assert started_attempt_epoch(before_result) == 1
+    assert_start_failure(exact_result, StartRunFailureReason.DEADLINE_EXCEEDED)
     before_run = await _read_run(session_factory, just_before.run_id)
     exact_run = await _read_run(session_factory, exact.run_id)
     assert (before_run.status, exact_run.status) == (
@@ -332,12 +305,7 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
                 now=_DB_NOW,
             )
 
-    _assert_start_result(
-        result,
-        outcome="DEADLINE_EXCEEDED",
-        started=False,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-    )
+    assert_start_failure(result, StartRunFailureReason.DEADLINE_EXCEEDED)
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code) == ("deadline_exceeded", None)
 
@@ -362,12 +330,7 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
                 now=_DB_NOW,
             )
 
-    _assert_start_result(
-        result,
-        outcome="DEADLINE_EXCEEDED",
-        started=False,
-        quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
-    )
+    assert_start_failure(result, StartRunFailureReason.DEADLINE_EXCEEDED)
     run = await _read_run(session_factory, seeded.run_id)
     assert run.status == "deadline_exceeded"
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == counter_count
@@ -470,12 +433,7 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
         getattr(cancelled, "quota_release_outcome", None)
         is DailyQuotaReleaseOutcome.RELEASED
     )
-    _assert_start_result(
-        result,
-        outcome="IDEMPOTENT_SKIP",
-        started=False,
-        quota_release_outcome=None,
-    )
+    assert_start_failure(result, StartRunFailureReason.ALREADY_FINISHED)
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code) == ("failed", "cancelled")
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 0
@@ -502,18 +460,8 @@ async def test_timely_start_and_running_redelivery_never_release_quota(
                 now=_DB_NOW + timedelta(seconds=1),
             )
 
-    _assert_start_result(
-        started,
-        outcome="STARTED",
-        started=True,
-        quota_release_outcome=None,
-    )
-    _assert_start_result(
-        redelivered,
-        outcome="STARTED",
-        started=True,
-        quota_release_outcome=None,
-    )
+    assert started_attempt_epoch(started) == 1
+    assert started_attempt_epoch(redelivered) == 2
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.attempt_epoch, run.error_code) == ("running", 2, None)
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 1
@@ -581,7 +529,6 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
         if entry.get("event") == "agent_run_start_deadline_exceeded"
     ] == [
         {
-            "quota_release_result": "released",
             "event": "agent_run_start_deadline_exceeded",
             "log_level": "info",
         }

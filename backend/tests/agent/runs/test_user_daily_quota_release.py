@@ -24,6 +24,7 @@ from app.agent.runs.contracts import (
     CancelRunCommandOutcome,
     CancelRunOutcome,
     CompleteRunOutcome,
+    StartRunFailureReason,
 )
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -32,8 +33,7 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.runs._start_run_outcomes import (
-    assert_idempotent_skip,
-    assert_start_deadline_exceeded,
+    assert_start_failure,
     started_attempt_epoch,
 )
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
@@ -588,7 +588,7 @@ async def test_cancel_winner_refunds_before_waiting_start_loses(
                 if session.in_transaction():
                     await session.rollback()
 
-    assert_idempotent_skip(start_result)
+    assert_start_failure(start_result, StartRunFailureReason.ALREADY_FINISHED)
     assert (
         await _read_counter(
             session_factory,
@@ -712,9 +712,9 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
                     seeded.run_id,
                     now=_NOW,
                 )
-                assert_start_deadline_exceeded(
+                assert_start_failure(
                     expiry_result,
-                    quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+                    StartRunFailureReason.DEADLINE_EXCEEDED,
                 )
 
             await sweep_session.begin()
