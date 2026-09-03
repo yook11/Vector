@@ -12,9 +12,8 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInput,
 )
 from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
     EvidenceAnswerInput,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
 )
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
@@ -116,14 +115,17 @@ class _EvidenceAnswerer:
         self._timeline = timeline
         self.calls: list[EvidenceAnswerInput] = []
 
-    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         # S5: review_missingの受け渡し検証はtests/agent/running/
         # test_retrieval_dispatch.pyが正本(条件7)。このfakeはworkflowの
         # 呼び出し順序を見るためのものであり、既存契約だけを追跡する。
         self._timeline.append("evidence_answerer")
         self.calls.append(input)
-        # evidenceの内容を問わず「回答を作れなかった」を演じる。
-        return EvidenceAnswerUnavailable(failure_code="fake_evidence_unavailable")
+        return EvidenceAnswerDraft(
+            answer="確認できた範囲で回答します。"
+            + "".join(f"[[{item.source.source_ref}]]" for item in input.evidence),
+            cited_refs=[item.source.source_ref for item in input.evidence],
+        )
 
 
 class _Progress:

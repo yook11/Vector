@@ -49,7 +49,7 @@ from app.analysis.ai_provider_errors import (
 __all__ = ["EvidenceReviewer"]
 
 _MAX_REVIEW_ATTEMPTS = 2
-_REVIEW_ATTEMPT_TIMEOUT_SECONDS = 30
+_REVIEW_TIMEOUT_SECONDS = 15
 _REVIEW_SOURCE_ERRORS = (
     AgentResponseInvalidError,
     AIProviderStateError,
@@ -71,7 +71,6 @@ class EvidenceReviewer:
         tasks: list[CollectedTask],
         as_of: datetime,
     ) -> EvidenceRunResult:
-        attempt_count = 0
         async with self.recorder.record(
             agent_name=EVIDENCE_REVIEWER_AGENT.name
         ) as recording:
@@ -80,49 +79,58 @@ class EvidenceReviewer:
                 task_groups=preparation.task_groups,
                 as_of=as_of,
             )
-            last_error: EvidenceReviewError | None = None
-            completed_result: EvidenceRunCompleted | None = None
-            async with self.runtime_scope_factory() as reviewer_runtime:
-                for attempt_number in range(1, _MAX_REVIEW_ATTEMPTS + 1):
-                    attempt_count = attempt_number
-                    try:
-                        reviewer_response = await _review_attempt(
-                            reviewer_runtime=reviewer_runtime,
-                            review_input=review_input,
-                            attempt_number=attempt_number,
-                        )
-                    except EvidenceReviewError as error:
-                        last_error = error
-                        continue
-
-                    answer_evidence = AnswerEvidence.from_reviewer_response(
-                        preparation=preparation,
-                        reviewer_response=reviewer_response,
-                    )
-                    completed_result = EvidenceRunCompleted(
-                        answer_evidence=answer_evidence,
-                        review_missing=reviewer_response.missing,
-                    )
-                    break
-
-            if completed_result is not None:
+            attempt_number = 0
+            timeout = asyncio.timeout(_REVIEW_TIMEOUT_SECONDS)
+            try:
+                async with timeout:
+                    async with self.runtime_scope_factory() as reviewer_runtime:
+                        for attempt_number in range(1, _MAX_REVIEW_ATTEMPTS + 1):
+                            try:
+                                reviewer_response = await _review_attempt(
+                                    reviewer_runtime=reviewer_runtime,
+                                    review_input=review_input,
+                                    attempt_number=attempt_number,
+                                )
+                                result = EvidenceRunCompleted(
+                                    answer_evidence=AnswerEvidence.from_reviewer_response(
+                                        preparation=preparation,
+                                        reviewer_response=reviewer_response,
+                                    ),
+                                    review_missing=reviewer_response.missing,
+                                )
+                            except EvidenceReviewError:
+                                if attempt_number < _MAX_REVIEW_ATTEMPTS:
+                                    continue
+                                raise
+                            break
+                        else:
+                            raise AssertionError(
+                                "unreachable: review loop must return or raise"
+                            )
+            except TimeoutError as cause:
+                if not timeout.expired():
+                    raise
+                error = evidence_review_error_from(cause)
                 recording.report_outcome(
-                    EvidenceReviewSucceeded(attempt_count=attempt_count)
+                    EvidenceReviewFailed(
+                        failure_code=error.code,
+                        attempt_count=attempt_number,
+                    )
                 )
-                return completed_result
-            if last_error is None:
-                # attemptは必ず1回以上回り各経路が理由を書くため、ここに来たら分類漏れ。
-                raise RuntimeError(
-                    "review exhausted attempts without a classified error"
+                return EvidenceRunFailed(failure_code=error.code)
+            except EvidenceReviewError as error:
+                recording.report_outcome(
+                    EvidenceReviewFailed(
+                        failure_code=error.code,
+                        attempt_count=attempt_number,
+                    )
                 )
-            failed_result = EvidenceRunFailed(failure_code=last_error.code)
+                return EvidenceRunFailed(failure_code=error.code)
+
             recording.report_outcome(
-                EvidenceReviewFailed(
-                    failure_code=failed_result.failure_code,
-                    attempt_count=attempt_count,
-                )
+                EvidenceReviewSucceeded(attempt_count=attempt_number)
             )
-            return failed_result
+            return result
 
 
 async def _review_attempt(
@@ -132,13 +140,10 @@ async def _review_attempt(
     attempt_number: int,
 ) -> EvidenceReviewerResponse:
     try:
-        draft = await asyncio.wait_for(
-            reviewer_runtime.call(
-                EVIDENCE_REVIEWER_AGENT,
-                review_input,
-                attempt_number=attempt_number,
-            ),
-            timeout=_REVIEW_ATTEMPT_TIMEOUT_SECONDS,
+        draft = await reviewer_runtime.call(
+            EVIDENCE_REVIEWER_AGENT,
+            review_input,
+            attempt_number=attempt_number,
         )
     except _REVIEW_SOURCE_ERRORS as cause:
         raise evidence_review_error_from(cause) from cause

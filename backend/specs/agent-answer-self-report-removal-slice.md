@@ -1,5 +1,7 @@
 # 回答生成の自己申告撤去と欠損入力化 slice 仕様
 
+> 更新: 生成不能時の `EvidenceAnswerUnavailable` / 固定文保存は廃止し、[工程の時間上限と生成失敗の契約](agent-stage-timeouts-slice.md)へ置き換える。
+
 更新日: 2026-07-30
 
 実装状況: Draft

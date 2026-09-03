@@ -17,10 +17,9 @@ from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
+from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.contract import AnswerGenerationStopped, ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
@@ -255,7 +254,7 @@ async def _answer(
     continuation: SequenceContinuation | None = None,
     request: AnsweringRequest | None = None,
     recorder: RecordingEvidenceAnswerRecorder | None = None,
-) -> EvidenceAnswerOutcome:
+) -> EvidenceAnswerDraft:
     service_kwargs: dict[str, Any] = {
         "agent": EVIDENCE_ANSWER_AGENT,
         "runtime_scope_factory": generator.activate,
@@ -380,7 +379,7 @@ async def test_derives_cited_refs_from_answer_markers_in_first_use_order() -> No
 
 
 @pytest.mark.asyncio
-async def test_unknown_citation_ref_retries_then_falls_back_to_unavailable(
+async def test_unknown_citation_ref_retries_then_raises_generation_error(
     capfire: CaptureLogfire,
 ) -> None:
     """条件6: evidenceに存在しないrefを本文が参照したdraftは不正として retry され、
@@ -394,12 +393,12 @@ async def test_unknown_citation_ref_retries_then_falls_back_to_unavailable(
         ]
     )
 
-    outcome = await _answer(generator)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator)
 
     assert len(generator.calls) == 2
     assert generator.inputs[0] is generator.inputs[1]
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
-    assert outcome.failure_code == "answer_synthesis_draft_invalid"
+    assert exc_info.value.code == "answer_synthesis_draft_invalid"
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
         {
@@ -411,18 +410,18 @@ async def test_unknown_citation_ref_retries_then_falls_back_to_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_no_marker_with_evidence_retries_then_falls_back_to_unavailable() -> None:
+async def test_no_marker_with_evidence_retries_then_raises_generation_error() -> None:
     """条件7: evidenceが非空でmarkerが無い本文は不正として retry され、
 
-    2回目もmarker無しなら生成不能(EvidenceAnswerUnavailable)へ落ちる。
+    2回目もmarker無しなら生成失敗へ落ちる。
     """
     generator = FakeGenerator(["引用がありません。", "まだ引用がありません。"])
 
-    outcome = await _answer(generator)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator)
 
     assert len(generator.calls) == 2
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
-    assert outcome.failure_code == "answer_synthesis_draft_invalid"
+    assert exc_info.value.code == "answer_synthesis_draft_invalid"
 
 
 @pytest.mark.asyncio
@@ -444,7 +443,7 @@ async def test_empty_evidence_without_marker_is_valid_with_empty_cited_refs() ->
 
 
 @pytest.mark.asyncio
-async def test_empty_evidence_with_marker_falls_back_to_unavailable() -> None:
+async def test_empty_evidence_with_marker_raises_generation_error() -> None:
     """条件9: evidenceが空でmarkerがある本文は不正(回帰ガード)。"""
     generator = FakeGenerator(
         [
@@ -453,53 +452,51 @@ async def test_empty_evidence_with_marker_falls_back_to_unavailable() -> None:
         ]
     )
 
-    outcome = await _answer(generator, evidence=[])
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator, evidence=[])
 
+    assert exc_info.value.code == "answer_synthesis_draft_invalid"
     assert len(generator.calls) == 2
     assert generator.inputs[0] is generator.inputs[1]
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
 
 
 @pytest.mark.asyncio
-async def test_blank_answer_falls_back_with_draft_invalid_not_pydantic_code() -> None:
+async def test_blank_answer_raises_draft_invalid_not_pydantic_code() -> None:
     """条件4: 空白のみの本文はdraft不正として扱われ、failure_codeは
 
     answer_synthesis_pydantic_validation_failedではなくdraft不正側になる。
     """
     generator = FakeGenerator(["   ", "\n\t"])
 
-    outcome = await _answer(generator)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator)
 
     assert len(generator.calls) == 2
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
-    assert outcome.failure_code == "answer_synthesis_draft_invalid"
+    assert exc_info.value.code == "answer_synthesis_draft_invalid"
 
 
 @pytest.mark.asyncio
-async def test_generation_unavailable_is_a_distinct_type_with_only_failure_code() -> (
-    None
-):
+async def test_generation_failure_raises_typed_error_with_code() -> None:
     """生成不能は回答draftと別の型で表し、failure_codeだけを持つ。"""
     generator = FakeGenerator([AIProviderNetworkError()])
 
-    outcome = await _answer(generator)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator)
 
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
-    assert not isinstance(outcome, EvidenceAnswerDraft)
-    assert set(type(outcome).model_fields) == {"failure_code"}
-    assert outcome.failure_code == "ai_error_network"
+    assert isinstance(exc_info.value, Exception)
+    assert exc_info.value.code == "ai_error_network"
 
 
 @pytest.mark.asyncio
-async def test_provider_error_falls_back_without_retry(
+async def test_provider_error_raises_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeGenerator([AIProviderNetworkError()])
 
-    outcome = await _answer(generator)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator)
 
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
-    assert outcome.failure_code == "ai_error_network"
+    assert exc_info.value.code == "ai_error_network"
     assert len(generator.calls) == 1
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
@@ -511,13 +508,12 @@ async def test_provider_error_falls_back_without_retry(
     ]
     assert _metric_attributes(metrics, _EVIDENCE_ANSWER_DURATION_METRIC) == [
         {
-            "status": "completed",
+            "status": "failed",
             "outcome": "failed",
         }
     ]
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
-    assert exception_event(phase) is None
-    assert phase.get("status", {}).get("description") in (None, "")
+    assert exception_event(phase) is not None
 
 
 @pytest.mark.asyncio
@@ -693,7 +689,11 @@ async def test_evidence_answer_outcome_metric_has_fixed_attribute_set(
     """成功時・生成不能時とも低cardinalityの固定key集合になる。"""
     generator = FakeGenerator(outcomes)
 
-    await _answer(generator)
+    if isinstance(outcomes[0], BaseException):
+        with pytest.raises(EvidenceAnswerError):
+            await _answer(generator)
+    else:
+        await _answer(generator)
 
     metrics = collected_metrics(capfire)
     key_sets = counter_attribute_key_sets(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)
@@ -731,23 +731,23 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
 
 
 @pytest.mark.asyncio
-async def test_two_retryable_failures_reset_to_generation_three_fallback(
+async def test_two_retryable_failures_abort_without_starting_another_generation(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeGenerator(["引用がありません。", "まだ引用がありません。"])
     reporter = RecordingDeltaReporter()
 
-    outcome = await _answer(generator, delta_reporter=reporter)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator, delta_reporter=reporter)
 
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
-    assert outcome.failure_code == "answer_synthesis_draft_invalid"
+    assert exc_info.value.code == "answer_synthesis_draft_invalid"
     assert reporter.aborted == [1, 2]
-    assert reporter.reset_generations == [2, 3]
-    assert reporter.finished == [3]
+    assert reporter.reset_generations == [2]
+    assert reporter.finished == []
     assert all(generation != 3 for generation, _ in reporter.appended)
     operations = _operation_names(reporter)
     assert operations.index(("abort", 1)) < operations.index(("reset", 2))
-    assert operations.index(("abort", 2)) < operations.index(("reset", 3))
+    assert operations[-1] == ("abort", 2)
     metrics = collected_metrics(capfire)
     assert (
         sum_counter_for_result(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC, "failed") == 1
@@ -755,20 +755,18 @@ async def test_two_retryable_failures_reset_to_generation_three_fallback(
 
 
 @pytest.mark.asyncio
-async def test_provider_error_resets_once_then_falls_back_without_live_delta() -> None:
-    """生成不能の定型本文はflow側からlive deltaに流れない(定型化はresult_assembly
-    の責務)。resetとcloseは現行どおり発火する。
-    """
+async def test_provider_error_aborts_without_live_fallback() -> None:
+    """生成不能では下書きを中断し、新しいgenerationを開始しない。"""
     generator = FakeGenerator([AIProviderNetworkError()])
     reporter = RecordingDeltaReporter()
 
-    outcome = await _answer(generator, delta_reporter=reporter)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator, delta_reporter=reporter)
 
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
-    assert outcome.failure_code == "ai_error_network"
+    assert exc_info.value.code == "ai_error_network"
     assert reporter.aborted == [1]
-    assert reporter.reset_generations == [2]
-    assert reporter.finished == [2]
+    assert reporter.reset_generations == []
+    assert reporter.finished == []
     assert all(generation != 2 for generation, _ in reporter.appended)
     assert generator.streams[0].closed is True
 
@@ -891,13 +889,13 @@ async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
 
 
 @pytest.mark.asyncio
-async def test_continuation_false_after_provider_error_stops_before_fallback(
+async def test_provider_error_does_not_perform_a_fallback_continuation_check(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeGenerator([AIProviderNetworkError()])
     reporter = RecordingDeltaReporter()
 
-    with pytest.raises(AnswerGenerationStopped):
+    with pytest.raises(EvidenceAnswerError):
         await _answer(
             generator,
             delta_reporter=reporter,
@@ -912,7 +910,10 @@ async def test_continuation_false_after_provider_error_stops_before_fallback(
     assert reporter.appended == []
     assert reporter.finished == []
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
+    assert (
+        _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)[0]["failure_code"]
+        == "ai_error_network"
+    )
 
 
 @pytest.mark.asyncio
@@ -958,14 +959,16 @@ async def test_non_truncation_retry_does_not_carry_truncation_notice() -> None:
 
 
 @pytest.mark.asyncio
-async def test_second_truncation_falls_back_with_truncated_failure_code(
+async def test_second_truncation_raises_with_truncated_failure_code(
     capfire: CaptureLogfire,
 ) -> None:
-    """2回連続のMAX_TOKENSはattempt数2を使い切りfallbackへ落ちる。"""
+    """2回連続のMAX_TOKENSはattempt数2を使い切り生成失敗になる。"""
     generator = FakeGenerator([_truncated_error(), _truncated_error()])
 
-    await _answer(generator)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator)
 
+    assert exc_info.value.code == "ai_error_output_truncated"
     assert len(generator.calls) == 2
     metrics = collected_metrics(capfire)
     attrs = _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)
@@ -1026,11 +1029,12 @@ async def test_classified_failure_records_failed_outcome() -> None:
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator([AIProviderNetworkError()])
 
-    outcome = await _answer(generator, recorder=recorder)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator, recorder=recorder)
 
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
     _assert_recorded(
         recorder,
+        error=exc_info.value,
         outcome=EvidenceAnswerFailed(
             failure_code="ai_error_network",
             attempt_count=1,
@@ -1053,11 +1057,12 @@ async def test_retry_exhaustion_records_second_attempt_failure() -> None:
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator(["引用がありません。", "まだ引用がありません。"])
 
-    outcome = await _answer(generator, recorder=recorder)
+    with pytest.raises(EvidenceAnswerError) as exc_info:
+        await _answer(generator, recorder=recorder)
 
-    assert isinstance(outcome, EvidenceAnswerUnavailable)
     _assert_recorded(
         recorder,
+        error=exc_info.value,
         outcome=EvidenceAnswerFailed(
             failure_code="answer_synthesis_draft_invalid",
             attempt_count=2,
@@ -1083,13 +1088,13 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stop_after_provider_error_records_stopped_without_fallback() -> None:
-    """fallback 前の stop は既存結論を渡さない。"""
+async def test_provider_error_records_failure_without_fallback() -> None:
+    """生成不能後は継続確認を追加せず、生成失敗を通知する。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator([AIProviderNetworkError()])
 
-    with pytest.raises(AnswerGenerationStopped) as exc_info:
+    with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(
             generator,
             continuation=SequenceContinuation(
@@ -1098,7 +1103,11 @@ async def test_stop_after_provider_error_records_stopped_without_fallback() -> N
             recorder=recorder,
         )
 
-    _assert_recorded(recorder, outcome=None, error=exc_info.value)
+    _assert_recorded(
+        recorder,
+        outcome=EvidenceAnswerFailed(failure_code="ai_error_network", attempt_count=1),
+        error=exc_info.value,
+    )
 
 
 @pytest.mark.asyncio

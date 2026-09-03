@@ -686,3 +686,91 @@ async def test_mark_enqueue_failed_remains_epoch_independent(
         assert failed.status == "failed"
         assert failed.error_code == "enqueue_failed"
         assert failed.attempt_epoch == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("locked_model", [AgentRun, AgentThread, AgentMessageSource])
+async def test_answer_save_lock_timeout_rolls_back_without_artifacts(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    locked_model: type[AgentRun] | type[AgentThread] | type[AgentMessageSource],
+) -> None:
+    from sqlalchemy import func, text
+    from sqlalchemy.exc import DBAPIError
+
+    monkeypatch.setattr("app.agent.runs.repository._ANSWER_SAVE_LOCK_TIMEOUT", "30ms")
+    async with session_factory() as session:
+        thread, _, run = await _create_thread_message_run(session, status="running")
+    locked_id = run.id if locked_model is AgentRun else thread.id
+
+    async with session_factory() as blocker, session_factory() as saver:
+        before = await saver.scalar(select(func.current_setting("lock_timeout")))
+        await saver.rollback()
+        async with blocker.begin():
+            if locked_model is AgentMessageSource:
+                await blocker.execute(
+                    text("LOCK TABLE agent_message_sources IN SHARE MODE")
+                )
+            else:
+                await blocker.execute(
+                    select(locked_model)
+                    .where(locked_model.id == locked_id)
+                    .with_for_update()
+                )
+            with pytest.raises(DBAPIError) as raised:
+                async with saver.begin():
+                    await asyncio.wait_for(
+                        AgentRunRepository(saver).complete_run(
+                            run_id=run.id,
+                            result=_external_result(),
+                            expected_attempt_epoch=run.attempt_epoch,
+                            research_handoff=_handoff().model_dump(mode="json"),
+                        ),
+                        timeout=2,
+                    )
+            assert raised.value.orig.sqlstate == "55P03"
+        assert (
+            await saver.scalar(select(func.current_setting("lock_timeout"))) == before
+        )
+        persisted = await saver.get(AgentRun, run.id)
+        assert persisted.status == "running"
+        assert persisted.assistant_message_id is None
+        messages = (
+            await saver.scalars(
+                select(AgentMessage).where(AgentMessage.thread_id == thread.id)
+            )
+        ).all()
+        assert [message.role for message in messages] == ["user"]
+        assert (
+            await saver.scalar(select(func.count()).select_from(AgentMessageSource))
+            == 0
+        )
+        saved_thread = await saver.get(AgentThread, thread.id)
+        assert saved_thread.research_handoff == thread.research_handoff
+
+
+@pytest.mark.asyncio
+async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from sqlalchemy import func
+
+    async with session_factory() as session:
+        _, _, run = await _create_thread_message_run(session, status="running")
+        run_id, epoch = run.id, run.attempt_epoch
+        before = await session.scalar(select(func.current_setting("lock_timeout")))
+        await session.rollback()
+        async with session.begin():
+            outcome = await AgentRunRepository(session).complete_run(
+                run_id=run_id,
+                result=_direct_result(),
+                expected_attempt_epoch=epoch,
+            )
+            assert (
+                await session.scalar(select(func.current_setting("lock_timeout")))
+                == "10s"
+            )
+        assert outcome is CompleteRunOutcome.COMPLETED
+        assert (
+            await session.scalar(select(func.current_setting("lock_timeout"))) == before
+        )

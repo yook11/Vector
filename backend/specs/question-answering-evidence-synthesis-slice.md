@@ -1,5 +1,7 @@
 # Evidence 回答合成 (工程 4E) 実装 slice 仕様 (Slice B-1)
 
+> 更新: 生成不能時の `EvidenceAnswerUnavailable` / 固定文保存は廃止し、[工程の時間上限と生成失敗の契約](agent-stage-timeouts-slice.md)へ置き換える。
+
 ## 位置付け
 
 Slice A rev.2 で port 分離した回答工程のうち、evidence 経路

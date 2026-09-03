@@ -40,7 +40,7 @@ def test_policy_exports_the_public_domain_functions_and_timeout_constants() -> N
         <= set(dir(policy_module)),
         QUERY_GENERATE_TIMEOUT_SECONDS,
         PROVIDER_SEARCH_TIMEOUT_SECONDS,
-    ) == (True, 30, 15)
+    ) == (True, 10, 15)
 
 
 def test_url_deduplication_is_removed_from_policy() -> None:

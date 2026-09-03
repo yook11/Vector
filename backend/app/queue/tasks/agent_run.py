@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.agent.answering.direct_answer.failure import DirectAnswerError
+from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.live_delivery import ensure_answer_generation_continues
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
@@ -219,6 +220,7 @@ async def run_agent_answer(
         AIProviderError,
         AgentResponseInvalidError,
         DirectAnswerError,
+        EvidenceAnswerError,
         PlanningError,
     ) as exc:
         logger.info(

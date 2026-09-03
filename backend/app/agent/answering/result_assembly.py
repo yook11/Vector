@@ -7,8 +7,6 @@ from typing import Literal
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import (
@@ -28,11 +26,6 @@ __all__ = ["assemble_evidence_result"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
 _INCOMPLETE_TASK_MISSING = "完了できなかった調査があります"
-_UNAVAILABLE_ANSWER = (
-    "回答を生成できませんでした。根拠の不足または応答形式の不備により、"
-    "参考回答を安全に構築できませんでした。"
-)
-_UNAVAILABLE_MISSING = "回答生成に必要な根拠または応答形式が不足しました"
 
 
 def assemble_evidence_result(
@@ -41,23 +34,12 @@ def assemble_evidence_result(
     collected_news: CollectedNews,
     evidence_run: EvidenceRunResult,
     evidence: list[AnswerInputEvidence],
-    answer_outcome: EvidenceAnswerOutcome,
+    answer_outcome: EvidenceAnswerDraft,
 ) -> AnswerQuestionResult:
     if isinstance(evidence_run, EvidenceRunCompleted):
         collected_task_indexes = {task.task_index for task in collected_news.tasks}
         if not evidence_run.answer_evidence.task_indexes <= collected_task_indexes:
             raise ValueError("answer evidence must reference a collected task")
-
-    if isinstance(answer_outcome, EvidenceAnswerUnavailable):
-        return _assemble_evidence_result(
-            plan=plan,
-            collected_news=collected_news,
-            evidence_run=evidence_run,
-            answer=_UNAVAILABLE_ANSWER,
-            sources=[],
-            unavailable_missing=[_UNAVAILABLE_MISSING],
-            include_retrieval_empty_missing=(not evidence),
-        )
 
     draft = answer_outcome
     _validate_draft_citations(evidence=evidence, draft=draft)
@@ -68,7 +50,6 @@ def assemble_evidence_result(
         evidence_run=evidence_run,
         answer=draft.answer,
         sources=sources,
-        unavailable_missing=[],
         include_retrieval_empty_missing=(not evidence),
     )
 
@@ -102,13 +83,11 @@ def _assemble_evidence_result(
     evidence_run: EvidenceRunResult,
     answer: str,
     sources: list[AnswerSource],
-    unavailable_missing: list[str],
     include_retrieval_empty_missing: bool,
 ) -> AnswerQuestionResult:
     missing_aspects = _missing_aspects(
         collected_news=collected_news,
         evidence_run=evidence_run,
-        unavailable_missing=unavailable_missing,
         include_retrieval_empty_missing=include_retrieval_empty_missing,
     )
     status = _derive_evidence_status(sources=sources, missing_aspects=missing_aspects)
@@ -138,7 +117,6 @@ def _missing_aspects(
     *,
     collected_news: CollectedNews,
     evidence_run: EvidenceRunResult,
-    unavailable_missing: list[str],
     include_retrieval_empty_missing: bool,
 ) -> list[str]:
     values: list[str] = []
@@ -151,7 +129,6 @@ def _missing_aspects(
         values.append(_INCOMPLETE_TASK_MISSING)
     if isinstance(evidence_run, EvidenceRunCompleted):
         values.extend(evidence_run.review_missing)
-    values.extend(unavailable_missing)
     return _deduplicate(values)
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -57,6 +58,9 @@ class InternalQueryEmbeddingCache(Protocol):
     ) -> None: ...
 
 
+_INTERNAL_SEARCH_TIMEOUT_SECONDS = 15
+
+
 @dataclass(frozen=True, slots=True)
 class InternalSearchService:
     """Internal search port (`InternalSearch`) の実装。"""
@@ -72,32 +76,41 @@ class InternalSearchService:
     ) -> list[InternalArticleSearchHit]:
         query_count = len(queries.queries)
         async with self.recorder.record(query_count=query_count) as recording:
+            timeout = asyncio.timeout(_INTERNAL_SEARCH_TIMEOUT_SECONDS)
             try:
-                cache_lookup = await self._fetch_cached_query_vectors(queries)
+                try:
+                    async with timeout:
+                        cache_lookup = await self._fetch_cached_query_vectors(queries)
 
-                hits_by_query: dict[str, InternalQueryEmbedding] = {}
-                cache_misses: list[str] = []
-                for query in queries.queries:
-                    cache_hit = cache_lookup.get(query)
-                    if cache_hit is None:
-                        cache_misses.append(query)
-                        continue
-                    hits_by_query[query] = InternalQueryEmbedding(
-                        query=query,
-                        vector=cache_hit,
-                    )
+                        hits_by_query: dict[str, InternalQueryEmbedding] = {}
+                        cache_misses: list[str] = []
+                        for query in queries.queries:
+                            cache_hit = cache_lookup.get(query)
+                            if cache_hit is None:
+                                cache_misses.append(query)
+                                continue
+                            hits_by_query[query] = InternalQueryEmbedding(
+                                query=query,
+                                vector=cache_hit,
+                            )
 
-                new_embeddings = await self._embed_queries(tuple(cache_misses))
-                await self._store_new_query_embeddings(new_embeddings)
-                hits_by_query.update(
-                    {embedding.query: embedding for embedding in new_embeddings}
-                )
-                embeddings = [
-                    hits_by_query[query]
-                    for query in queries.queries
-                    if query in hits_by_query
-                ]
-                hits = await self._search_articles(embeddings)
+                        new_embeddings = await self._embed_queries(tuple(cache_misses))
+                        await self._store_new_query_embeddings(new_embeddings)
+                        hits_by_query.update(
+                            {embedding.query: embedding for embedding in new_embeddings}
+                        )
+                        embeddings = [
+                            hits_by_query[query]
+                            for query in queries.queries
+                            if query in hits_by_query
+                        ]
+                        hits = await self._search_articles(embeddings)
+                except TimeoutError as cause:
+                    if not timeout.expired():
+                        raise
+                    raise InternalSearchError(
+                        code=InternalSearchFailureCode.TIMEOUT
+                    ) from cause
             except InternalSearchError as exc:
                 logger.warning(
                     "internal_search_failed",

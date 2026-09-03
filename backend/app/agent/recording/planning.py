@@ -61,8 +61,8 @@ class PlanningFailed:
     def __post_init__(self) -> None:
         if not self.failure_code:
             raise ValueError("failure_code must not be empty")
-        if self.attempt_count < 1:
-            raise ValueError("attempt_count must be positive")
+        if self.attempt_count < 0:
+            raise ValueError("attempt_count must be nonnegative")
 
 
 type PlanningOutcome = PlanningSucceeded | PlanningFailed

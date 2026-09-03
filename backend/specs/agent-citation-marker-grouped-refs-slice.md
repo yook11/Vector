@@ -1,5 +1,7 @@
 # 引用 marker のグループ形受理 slice 仕様
 
+> 更新: 生成不能時の `EvidenceAnswerUnavailable` / 固定文保存は廃止し、[工程の時間上限と生成失敗の契約](agent-stage-timeouts-slice.md)へ置き換える。
+
 ## 位置付け
 
 `question-answering-inline-citation-slice.md` (Slice C-3) で確定した citation marker

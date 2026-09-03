@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 from pydantic import ValidationError
@@ -11,14 +12,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
     EvidenceAnswerInput,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
 )
+from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
 from app.agent.answering.failure import (
-    AnswerSynthesisFailureAttributes,
     RequestRetryDisposition,
     classify_answer_synthesis_failure,
 )
@@ -49,6 +48,7 @@ from app.analysis.ai_provider_errors import (
 __all__ = ["EvidenceAnswerService"]
 
 _MAX_ATTEMPTS = 2
+_ANSWER_TIMEOUT_SECONDS = 15
 # ValidationError(pydantic)は、plain text化後のfinalize_evidence_answer_draft()が
 # 空白判定を先に行うため通常経路では到達しない。classify_answer_synthesis_failure()側の
 # 分類も維持されており、EvidenceAnswerDraftの構築自体が将来pydantic validationで
@@ -78,52 +78,63 @@ class EvidenceAnswerService:
         self._continuation = continuation
         self._recorder = recorder
 
-    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
-        """接地したdraftを返す。試行を使い切った場合は生成不能を返す。
-
-        再試行可能な失敗は同じ入力でもう一度生成する。打ち切りだけは短く書く指示を足す。
-        分類対象外の失敗は呼び出し元へ伝播する。
-        """
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
+        """再試行を含む時間枠内でdraftを完成させ、生成不能は例外で通知する。"""
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
-            async with self._runtime_scope_factory() as runtime:
-                for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                    try:
-                        draft = await self._generate_strict_draft(
-                            runtime=runtime,
-                            input=input,
-                            attempt_number=attempt_number,
-                        )
-                    except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
-                        failure = classify_answer_synthesis_failure(exc)
-                        retriable = (
-                            failure.request_retry_disposition
-                            is RequestRetryDisposition.RETRY_IN_REQUEST
-                            and attempt_number < _MAX_ATTEMPTS
-                        )
-                        if not retriable:
-                            unavailable = await self._fallback(
-                                generation=attempt_number + 1,
-                                failure=failure,
-                            )
-                            recording.report_outcome(
-                                EvidenceAnswerFailed(
-                                    failure_code=unavailable.failure_code,
-                                    attempt_count=attempt_number,
+            attempt_number = 0
+            timeout = asyncio.timeout(_ANSWER_TIMEOUT_SECONDS)
+            try:
+                try:
+                    async with timeout:
+                        async with self._runtime_scope_factory() as runtime:
+                            for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                                try:
+                                    draft = await self._generate_strict_draft(
+                                        runtime=runtime,
+                                        input=input,
+                                        attempt_number=attempt_number,
+                                    )
+                                except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
+                                    failure = classify_answer_synthesis_failure(exc)
+                                    retriable = (
+                                        failure.request_retry_disposition
+                                        is RequestRetryDisposition.RETRY_IN_REQUEST
+                                        and attempt_number < _MAX_ATTEMPTS
+                                    )
+                                    if not retriable:
+                                        raise EvidenceAnswerError(
+                                            code=failure.code
+                                        ) from exc
+                                    await self._start_revision(
+                                        generation=attempt_number + 1
+                                    )
+                                    if isinstance(exc, AIProviderOutputTruncatedError):
+                                        input = replace(
+                                            input, previous_output_truncated=True
+                                        )
+                                    continue
+                                break
+                            else:
+                                raise AssertionError(
+                                    "unreachable: attempt budget must settle an outcome"
                                 )
-                            )
-                            return unavailable
-                        await self._start_revision(generation=attempt_number + 1)
-                        if isinstance(exc, AIProviderOutputTruncatedError):
-                            input = replace(input, previous_output_truncated=True)
-                        continue
-                    recording.report_outcome(
-                        EvidenceAnswerSucceeded(attempt_count=attempt_number)
+                except TimeoutError as cause:
+                    if not timeout.expired():
+                        raise
+                    raise EvidenceAnswerError(code="evidence_answer_timeout") from cause
+            except EvidenceAnswerError as error:
+                recording.report_outcome(
+                    EvidenceAnswerFailed(
+                        failure_code=error.code,
+                        attempt_count=attempt_number,
                     )
-                    return draft
-
-            # range()を試行回数の構造的上限として残すため、到達しない終端を閉じる。
-            raise AssertionError("unreachable: attempt budget must settle an outcome")
+                )
+                raise
+            recording.report_outcome(
+                EvidenceAnswerSucceeded(attempt_count=attempt_number)
+            )
+            return draft
 
     async def _generate_strict_draft(
         self,
@@ -165,13 +176,3 @@ class EvidenceAnswerService:
     async def _start_revision(self, *, generation: int) -> None:
         await ensure_answer_generation_continues(self._continuation)
         await self._delta.reset(generation=generation)
-
-    async def _fallback(
-        self,
-        *,
-        generation: int,
-        failure: AnswerSynthesisFailureAttributes,
-    ) -> EvidenceAnswerUnavailable:
-        await self._start_revision(generation=generation)
-        await self._delta.finish(generation=generation)
-        return EvidenceAnswerUnavailable(failure_code=failure.code)

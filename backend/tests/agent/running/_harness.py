@@ -23,8 +23,6 @@ from app.agent.answering.direct_answer.contract import (
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
 )
 from app.agent.evidence_collection import CollectedNews
 from app.agent.evidence_collection.external_search import ExternalSearchService
@@ -173,7 +171,7 @@ class EvidenceAnswerer:
     def __init__(self) -> None:
         self.calls: list[list[Any]] = []
 
-    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         evidence = list(input.evidence)
         self.calls.append(evidence)
         if evidence:
@@ -181,9 +179,9 @@ class EvidenceAnswerer:
                 answer="根拠に基づく回答です。",
                 cited_refs=[item.source.source_ref for item in evidence],
             )
-        # 自己申告でinsufficientを名乗る形は無くなったため、
-        # evidenceが無く回答を作れなかった場合はunavailableで表す。
-        return EvidenceAnswerUnavailable(failure_code="fake_no_evidence")
+        return EvidenceAnswerDraft(
+            answer="確認できる根拠がありませんでした。", cited_refs=[]
+        )
 
 
 class Events:

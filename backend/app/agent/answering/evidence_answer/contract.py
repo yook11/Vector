@@ -16,9 +16,7 @@ __all__ = [
     "EvidenceAnswerDraft",
     "EvidenceAnswerDraftInvalidError",
     "EvidenceAnswerInput",
-    "EvidenceAnswerOutcome",
     "EvidenceAnswerer",
-    "EvidenceAnswerUnavailable",
 ]
 
 
@@ -42,24 +40,10 @@ class EvidenceAnswerDraft(BaseModel):
     cited_refs: list[str] = Field(default_factory=list)
 
 
-class EvidenceAnswerUnavailable(BaseModel):
-    """生成が尽きた結果。回答draftとは別の型で表す。
-
-    ユーザーへ見せる定型本文とmissing_aspectsの1行はresult_assemblyが所有する。
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    failure_code: NonBlankText
-
-
-EvidenceAnswerOutcome = EvidenceAnswerDraft | EvidenceAnswerUnavailable
-
-
 class EvidenceAnswerer(Protocol):
-    """本文とcited refsが整合するdraft、または生成不能を返す。"""
+    """本文とcited refsが整合するdraftを返し、生成不能は例外で通知する。"""
 
-    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome: ...
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft: ...
 
 
 class EvidenceAnswerDraftInvalidError(Exception):

@@ -18,9 +18,8 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInput,
 )
 from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
     EvidenceAnswerInput,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
 )
 from app.agent.contract import AnswerProgressStage
 from app.agent.evidence_collection import (
@@ -435,15 +434,17 @@ class _EvidenceAnswerer:
         self.calls: list[list[Any]] = []
         self.review_missing_calls: list[tuple[str, ...]] = []
 
-    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         self._timeline.append("answerer.start")
         self.calls.append(list(input.evidence))
         self.review_missing_calls.append(input.review_missing)
         if self._error is not None:
             raise self._error
-        # このfakeはevidenceの内容を問わず「回答を作れなかった」を演じる
-        # (呼び出し側のtestはevidenceがanswererへ届くことだけを検証する)。
-        return EvidenceAnswerUnavailable(failure_code="fake_evidence_unavailable")
+        return EvidenceAnswerDraft(
+            answer="確認できた範囲で回答します。"
+            + "".join(f"[[{item.source.source_ref}]]" for item in input.evidence),
+            cited_refs=[item.source.source_ref for item in input.evidence],
+        )
 
 
 class _Progress:

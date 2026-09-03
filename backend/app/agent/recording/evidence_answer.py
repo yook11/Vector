@@ -52,7 +52,7 @@ class EvidenceAnswerSucceeded:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceAnswerFailed:
-    """分類済み生成失敗を返した根拠回答工程の結論。"""
+    """分類済み生成失敗で終了した根拠回答工程の結論。"""
 
     failure_code: str
     attempt_count: int
@@ -60,8 +60,8 @@ class EvidenceAnswerFailed:
     def __post_init__(self) -> None:
         if not self.failure_code:
             raise ValueError("failure_code must not be empty")
-        if self.attempt_count < 1:
-            raise ValueError("attempt_count must be positive")
+        if self.attempt_count < 0:
+            raise ValueError("attempt_count must be nonnegative")
 
 
 type EvidenceAnswerRecordingOutcome = EvidenceAnswerSucceeded | EvidenceAnswerFailed
@@ -104,13 +104,19 @@ class _EvidenceAnswerExit:
         outcome: EvidenceAnswerRecordingOutcome | None,
         error: BaseException | None,
     ) -> _EvidenceAnswerExit:
+        from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
+
         if isinstance(
             error,
             asyncio.CancelledError | GeneratorExit | AnswerGenerationStopped,
         ):
             return cls(status=PhaseStatus.STOPPED, outcome=None, error=error)
-        if error is None and outcome is not None:
+        if error is None and isinstance(outcome, EvidenceAnswerSucceeded):
             return cls(status=PhaseStatus.COMPLETED, outcome=outcome, error=None)
+        if isinstance(outcome, EvidenceAnswerFailed) and (
+            error is None or isinstance(error, EvidenceAnswerError)
+        ):
+            return cls(status=PhaseStatus.FAILED, outcome=outcome, error=error)
         return cls(status=PhaseStatus.FAILED, outcome=None, error=error)
 
 
