@@ -11,7 +11,7 @@ queue の routing が壊れないことが Option B の前提。本テストは�
   (c) scheduler を持たない broker に schedule 付き task が無い (orphan cron 検出)。
 
 期待集合は仕様 (``app/queue/schedule.py`` の cron 時刻表 + 各 task module の
-``@broker_X.task(schedule=...)`` 帰属) から直書きする。実装出力を期待値にしない。
+broker登録先) から直書きする。実装出力を期待値にしない。
 誤 broker への登録は ``LabelScheduleSource`` の ``task.broker != self.broker`` skip で
 発見集合から落ち、(a)/(b)/(c) のいずれかが赤になる。
 """
@@ -23,6 +23,7 @@ from taskiq import TaskiqScheduler
 from taskiq.schedule_sources import LabelScheduleSource
 
 import app.queue.registry  # noqa: F401  cron 登録の副作用 import (get_all_tasks を満たす)
+from app.insights.trend_discovery.scheduler import create_scheduler
 from app.queue.brokers import (
     broker_analysis,
     broker_collection,
@@ -33,10 +34,11 @@ from app.queue.schedulers import (
     scheduler_briefing,
     scheduler_dispatch,
     scheduler_maintenance,
-    scheduler_trend_discovery,
 )
 
-# 仕様 (schedule.py 時刻表 + task module の `@broker_X.task(schedule=...)` 帰属) から
+scheduler_trend_discovery = create_scheduler()
+
+# 仕様 (schedule.py 時刻表 + task module のbroker登録先) から
 # 直書きした scheduler → 発見されるべき cron task_name 集合。
 _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
     (
@@ -74,16 +76,16 @@ _TOTAL_CRON_COUNT = 14
 
 def test_scheduler_entrypoint_uses_exact_scheduler_set() -> None:
     """統合 entrypoint は final 5 scheduler だけを実行する。"""
-    from app.queue.scheduler_entrypoint import _SCHEDULERS
+    from app.queue.scheduler_entrypoint import _create_schedulers
 
-    assert len(_SCHEDULERS) == 5
-    assert {id(scheduler) for scheduler in _SCHEDULERS} == {
-        id(scheduler_dispatch),
-        id(scheduler_trend_discovery),
-        id(scheduler_agent),
-        id(scheduler_briefing),
-        id(scheduler_maintenance),
-    }
+    schedulers = _create_schedulers()
+
+    assert len(schedulers) == 5
+    assert schedulers[0] is scheduler_dispatch
+    assert schedulers[1].broker.queue_name == "trend_discovery"
+    assert schedulers[2] is scheduler_agent
+    assert schedulers[3] is scheduler_briefing
+    assert schedulers[4] is scheduler_maintenance
 
 
 async def _discovered_cron_task_names(scheduler: TaskiqScheduler) -> set[str]:

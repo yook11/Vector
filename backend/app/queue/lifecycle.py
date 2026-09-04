@@ -1,6 +1,6 @@
 """broker / scheduler の lifecycle event hook を attach する。
 
-本 module を import するだけで broker × 8 + scheduler broker × 5 に対する
+本 module を import するだけで共通catalogのbroker × 7に対する
 WORKER_STARTUP / WORKER_SHUTDOWN / CLIENT_STARTUP / CLIENT_SHUTDOWN hook が
 登録される (副作用)。broker ごとの Redis 用途と AI adapter 配線は
 ``WorkerRuntime`` に集約し、単一 startup が順に実行する。AI provider の具象選択
@@ -45,7 +45,6 @@ from app.queue.brokers import (
     broker_dispatch,
     broker_embedding,
     broker_maintenance,
-    broker_trend_discovery,
 )
 from app.queue.composition import (
     _warm_agent_sdk_imports,
@@ -196,7 +195,7 @@ def _register_client_lifecycle(broker: RedisStreamBroker, label: str) -> None:
     ``broker.startup()`` は ``is_worker_process`` 分岐で WORKER_STARTUP /
     CLIENT_STARTUP を発火する (taskiq.abc.broker)。API と scheduler はどちらも
     worker ではないので CLIENT_* が走る。cron 駆動を持つ broker
-    (broker_dispatch / broker_trend_discovery / broker_briefing / broker_agent /
+    (broker_dispatch / broker_briefing / broker_agent /
     broker_maintenance) のみに本関数を当てる。collection は API が producer
     として startup するが cron が無い。analysis / embedding は scheduler も
     API producer も無い。
@@ -242,7 +241,6 @@ _register_worker_lifecycle(
         compose=_wire_embedding_adapters,
     ),
 )
-_register_worker_lifecycle(broker_trend_discovery, WorkerRuntime("trend_discovery"))
 _register_worker_lifecycle(
     broker_briefing,
     WorkerRuntime("briefing", compose=_wire_briefing_adapter),
@@ -265,13 +263,12 @@ _register_worker_lifecycle(
     ),
 )
 
-# broker_dispatch / broker_trend_discovery / broker_briefing / broker_agent /
+# broker_dispatch / broker_briefing / broker_agent /
 # broker_maintenance は worker と enqueue 側 (API / scheduler) で同じ broker
 # object を共有するため、_register_worker_lifecycle (WORKER_STARTUP) と
 # _register_client_lifecycle (CLIENT_STARTUP) の両方を呼ぶ。
 # プロセスが違うのでイベント発火が衝突することはない。
 _register_client_lifecycle(broker_dispatch, "dispatch")
-_register_client_lifecycle(broker_trend_discovery, "trend_discovery")
 _register_client_lifecycle(broker_briefing, "briefing")
 _register_client_lifecycle(broker_agent, "agent")
 _register_client_lifecycle(broker_maintenance, "maintenance")

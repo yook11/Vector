@@ -1,16 +1,13 @@
-"""TaskiqScheduler 定義 — cron 駆動を持つ broker ごとに 1 つ (計 5)。
+"""共通catalogに残るcron brokerごとのTaskiqScheduler定義。
 
   - scheduler_dispatch:        収集 dispatch 用 cron
-  - scheduler_trend_discovery: Trend Discovery 用 cron
   - scheduler_briefing:        週次 briefing 用 cron
   - scheduler_agent:           agent run deadline sweeper 用 cron
   - scheduler_maintenance:     back-fill 救済 + retention purge 用 cron
 
-5 つは ``app.queue.scheduler_entrypoint`` が 1 プロセスで並行実行する
-(``python -m app.queue.scheduler_entrypoint``)。各 scheduler は自分の broker へ kick
-するため task→queue routing は不変 (Option B、routing 不変条件は
-``tests/test_scheduler_routing.py`` が pin)。cron 表現は ``schedule.py`` の SSoT を、
-cron 駆動 task の副作用 import は ``registry.py`` を参照。
+本moduleの4つとTrend Discovery側の1つは、``app.queue.scheduler_entrypoint`` が
+1プロセスで並行実行する。各schedulerは自分のbrokerへkickするため、task→queue
+routingは不変。共通catalog側のcron task登録は``registry.py``を参照する。
 """
 
 from __future__ import annotations
@@ -23,16 +20,11 @@ from app.queue.brokers import (
     broker_briefing,
     broker_dispatch,
     broker_maintenance,
-    broker_trend_discovery,
 )
 
 scheduler_dispatch = TaskiqScheduler(
     broker=broker_dispatch,
     sources=[LabelScheduleSource(broker_dispatch)],
-)
-scheduler_trend_discovery = TaskiqScheduler(
-    broker=broker_trend_discovery,
-    sources=[LabelScheduleSource(broker_trend_discovery)],
 )
 scheduler_briefing = TaskiqScheduler(
     broker=broker_briefing,

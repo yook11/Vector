@@ -47,8 +47,10 @@ _NON_AI_IMPORT_SURFACES = {
         "import app.queue.brokers, app.queue.tasks.backfill, "
         "app.queue.tasks.retention, app.queue.tasks.queue_health"
     ),
-    # insights.conf (trend program): broker_trend_discovery trend_discovery
-    "trend_discovery": "import app.queue.brokers, app.queue.tasks.trend_discovery",
+    # insights.conf (trend program): process factoryがbrokerとtaskを構築する。
+    "trend_discovery": (
+        "from app.insights.trend_discovery.worker import create_broker; create_broker()"
+    ),
 }
 
 

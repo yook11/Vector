@@ -11,6 +11,7 @@
   feedback_failure_visibility.md)
 
 Pattern A' での Stage F:
+- ``create()`` は最新の対象期間について precondition、生成、監査、通知を完結させる
 - 起動時に ``ReadyForTrendDiscovery`` を受け取り、precondition (既存 snapshot 判定) は
   Ready 側で吸収済み
 - ``execute(ready)`` は集計対象記事の件数を先に確認し、0 件なら保存せず
@@ -29,6 +30,11 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.domain.event import EventType
+from app.audit.stages.trend_discovery import (
+    TrendDiscoveryOutcomeCode,
+    append_trend_discovery_run_event_best_effort,
+)
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 from app.insights.trend_discovery.domain.trend import (
     CategoryTrends,
@@ -38,7 +44,11 @@ from app.insights.trend_discovery.domain.trend import (
     select_fastest_growing,
     select_most_mentioned,
 )
-from app.insights.trend_discovery.domain.window import WEEK_TZ
+from app.insights.trend_discovery.domain.window import (
+    WEEK_TZ,
+    latest_window_end,
+    now_in_jst,
+)
 from app.insights.trend_discovery.repository import (
     SnapshotRepository,
     SnapshotSaveStatus,
@@ -47,6 +57,7 @@ from app.insights.trend_discovery.repository import (
 from app.insights.trend_discovery.schemas import trends_from_snapshot
 from app.models.category import Category
 from app.models.trends_snapshot import TrendsSnapshot
+from app.shared.revalidate import RevalidateNotifier
 
 logger = structlog.get_logger(__name__)
 
@@ -106,13 +117,102 @@ TrendDiscoveryOutcome = (
 
 
 class TrendDiscoveryService:
-    """rolling 7d の分析済み記事から trend snapshot を生成・永続化するユースケース。
+    """rolling 7d の分析済み記事からTrend Discoveryを作成するユースケース。
 
     1 session = 1 トランザクションとして集計と INSERT を atomic に実行する。
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+
+    async def create(self, notifier: RevalidateNotifier) -> None:
+        """最新の完了済み7日間を対象にTrend Discoveryを作成する。"""
+        window_end = latest_window_end(now_in_jst())
+        window_start = window_end - _WEEK
+
+        try:
+            async with self._session_factory() as session:
+                snapshot_repo = SnapshotRepository(session)
+                ready = await ReadyForTrendDiscovery.try_advance_from(
+                    window_end=window_end,
+                    force=False,
+                    snapshot_repo=snapshot_repo,
+                )
+        except Exception as exc:
+            await append_trend_discovery_run_event_best_effort(
+                self._session_factory,
+                event_type=EventType.FAILED,
+                outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
+                window_start=window_start,
+                window_end=window_end,
+                trigger="cron",
+                requested_update=False,
+                exc=exc,
+            )
+            raise
+
+        if ready is None:
+            logger.info(
+                "trend_discovery_task_skipped_already_exists",
+                window_end=window_end.isoformat(),
+            )
+            return
+
+        try:
+            outcome = await self.execute(ready)
+        except Exception as exc:
+            await append_trend_discovery_run_event_best_effort(
+                self._session_factory,
+                event_type=EventType.FAILED,
+                outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
+                window_start=window_start,
+                window_end=window_end,
+                trigger="cron",
+                requested_update=False,
+                exc=exc,
+            )
+            raise
+
+        if isinstance(outcome, SkippedNoTargetArticles):
+            logger.info(
+                "trend_discovery_task_skipped_no_target_articles",
+                window_end=outcome.window_end.isoformat(),
+            )
+            return
+        if isinstance(outcome, TrendDiscoveryConflict):
+            logger.info(
+                "trend_discovery_task_conflict",
+                window_end=outcome.window_end.isoformat(),
+                source_analysis_count=outcome.source_analysis_count,
+                category_count=outcome.completed_category_count,
+            )
+            return
+
+        outcome_code = (
+            TrendDiscoveryOutcomeCode.RUN_UPDATED
+            if isinstance(outcome, TrendDiscoveryCompleted) and outcome.updated
+            else TrendDiscoveryOutcomeCode.RUN_COMPLETED
+        )
+        await append_trend_discovery_run_event_best_effort(
+            self._session_factory,
+            event_type=EventType.SUCCEEDED,
+            outcome_code=outcome_code,
+            window_start=window_start,
+            window_end=outcome.window_end,
+            trigger="cron",
+            requested_update=False,
+            source_analysis_count=outcome.source_analysis_count,
+            completed_category_count=outcome.completed_category_count,
+        )
+
+        logger.info(
+            "trend_discovery_task_completed",
+            window_end=outcome.window_end.isoformat(),
+            source_analysis_count=outcome.source_analysis_count,
+            category_count=outcome.completed_category_count,
+            updated=outcome.updated,
+        )
+        await notifier.notify(tags=TRENDS_REVALIDATE_TAGS)
 
     async def execute(self, ready: ReadyForTrendDiscovery) -> TrendDiscoveryOutcome:
         """``ready`` で指定された window_end の snapshot を集計・永続化する。

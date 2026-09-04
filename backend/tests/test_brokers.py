@@ -73,9 +73,9 @@ def _fetch_worker_commands() -> dict[str, list[str]]:
 def _parse_worker_programs() -> dict[str, int | None]:
     """supervisord ``*.conf`` の worker を ``{label: max_async_tasks}`` に解す。
 
-    ``label`` は ``broker_<label>`` から取り、``--max-async-tasks`` 不在は
-    ``None`` (明示漏れ) を返す。``taskiq scheduler`` / eventlistener は worker でない
-    ため対象外。
+    ``label`` は既存 ``broker_<label>`` またはprocess factory module名から取り、
+    ``--max-async-tasks`` 不在は ``None`` (明示漏れ) を返す。
+    ``taskiq scheduler`` / eventlistener はworkerでないため対象外。
     """
     workers: dict[str, int | None] = {}
     for conf in sorted(_SUPERVISORD_DIR.glob("*.conf")):
@@ -87,7 +87,10 @@ def _parse_worker_programs() -> dict[str, int | None]:
             command = parser[section].get("command", "")
             if "taskiq worker" not in command:
                 continue
-            label_match = re.search(r"broker_(\w+)", command)
+            label_match = re.search(r"broker_(\w+)", command) or re.search(
+                r"app\.insights\.(trend_discovery)\.worker:create_broker",
+                command,
+            )
             assert label_match, f"{section}: broker module not found in command"
             max_match = re.search(r"--max-async-tasks\s+(\d+)", command)
             workers[label_match.group(1)] = (
@@ -415,14 +418,16 @@ def test_collection_workers_keep_two_program_shared_runtime() -> None:
 
 def test_collection_lifecycle_keeps_pool_and_scheduler_boundary() -> None:
     """dispatch/collection poolは各5/5で、schedulerはdispatchだけを使う。"""
+    from app.insights.trend_discovery.scheduler import create_scheduler
     from app.queue.brokers import broker_collection, broker_dispatch
     from app.queue.schedulers import (
         scheduler_agent,
         scheduler_briefing,
         scheduler_dispatch,
         scheduler_maintenance,
-        scheduler_trend_discovery,
     )
+
+    scheduler_trend_discovery = create_scheduler()
 
     scheduler_brokers = tuple(
         scheduler.broker

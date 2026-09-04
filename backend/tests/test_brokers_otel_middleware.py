@@ -22,6 +22,10 @@ from opentelemetry import trace
 from taskiq import InMemoryBroker, SimpleRetryMiddleware, TaskiqEvents
 from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
 
+from app.insights.trend_discovery.scheduler import (
+    create_scheduler as create_trend_scheduler,
+)
+from app.insights.trend_discovery.worker import create_broker as create_trend_broker
 from app.queue.brokers import (
     broker_agent,
     broker_analysis,
@@ -30,24 +34,36 @@ from app.queue.brokers import (
     broker_dispatch,
     broker_embedding,
     broker_maintenance,
-    broker_trend_discovery,
 )
 
 # middleware の identity / 順序 unit テスト
 
+_TREND_WORKER_BROKER = create_trend_broker()
+_TREND_SCHEDULER_BROKER = create_trend_scheduler().broker
 _BROKERS_WITH_SCHEDULER = (
     (broker_dispatch, "dispatch"),
-    (broker_trend_discovery, "trend_discovery"),
+    (_TREND_SCHEDULER_BROKER, "trend_discovery_scheduler"),
     (broker_briefing, "briefing"),
     (broker_agent, "agent"),
     (broker_maintenance, "maintenance"),
 )
-_BROKERS_WITHOUT_SCHEDULER = (
+_BROKERS_WITHOUT_CLIENT_LIFECYCLE = (
     (broker_collection, "collection"),
     (broker_analysis, "analysis"),
     (broker_embedding, "embedding"),
+    (_TREND_WORKER_BROKER, "trend_discovery_worker"),
 )
-_ALL_BROKERS = _BROKERS_WITH_SCHEDULER + _BROKERS_WITHOUT_SCHEDULER
+_WORKER_BROKERS = (
+    (broker_dispatch, "dispatch"),
+    (broker_collection, "collection"),
+    (broker_analysis, "analysis"),
+    (broker_embedding, "embedding"),
+    (_TREND_WORKER_BROKER, "trend_discovery"),
+    (broker_briefing, "briefing"),
+    (broker_agent, "agent"),
+    (broker_maintenance, "maintenance"),
+)
+_ALL_BROKERS = _BROKERS_WITH_SCHEDULER + _BROKERS_WITHOUT_CLIENT_LIFECYCLE
 
 
 def test_all_brokers_have_otel_middleware_first() -> None:
@@ -86,7 +102,7 @@ def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
             f"{label}: missing CLIENT_STARTUP handler (client lifecycle)"
         )
 
-    for broker, label in _BROKERS_WITHOUT_SCHEDULER:
+    for broker, label in _BROKERS_WITHOUT_CLIENT_LIFECYCLE:
         handlers = broker.event_handlers.get(TaskiqEvents.CLIENT_STARTUP, [])
         assert len(handlers) == 0, (
             f"{label}: unexpected CLIENT_STARTUP handler (scheduler-less broker)"
@@ -94,12 +110,12 @@ def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
 
 
 def test_worker_lifecycle_registered_for_all_brokers() -> None:
-    """WORKER_STARTUP は全 8 broker に登録される。
+    """各workerが所有する8 brokerにはWORKER_STARTUPが登録される。
 
-    scheduler broker では WORKER_STARTUP と CLIENT_STARTUP の 2 種の hook が
-    同じ broker object に共存する。
+    Trend Discoveryはworkerとschedulerが別broker instanceを所有するため、
+    scheduler producerにはworker lifecycleを要求しない。
     """
-    for broker, label in _ALL_BROKERS:
+    for broker, label in _WORKER_BROKERS:
         handlers = broker.event_handlers.get(TaskiqEvents.WORKER_STARTUP, [])
         assert len(handlers) >= 1, f"{label}: missing WORKER_STARTUP handler"
 
