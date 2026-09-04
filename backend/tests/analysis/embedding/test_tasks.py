@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 from pydantic import ValidationError
-from sqlalchemy.exc import SQLAlchemyError
 from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
@@ -463,14 +462,15 @@ class TestGenerateEmbeddingProcessingOutcome:
     async def test_ready_build_db_error_emits_infra_error(
         self, capfire: CaptureLogfire
     ) -> None:
-        """ready-build の SQLAlchemyError は infra_error を emit して raise する。"""
+        """ready-build の DatabaseError は infra_error を emit して raise する。"""
+        from app.db.errors import DatabaseUnexpectedError
         from app.queue.tasks.embedding import generate_embedding
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         with (
             patch(
                 "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
-                new=AsyncMock(side_effect=SQLAlchemyError("db down")),
+                new=AsyncMock(side_effect=DatabaseUnexpectedError()),
             ),
             patch(
                 "app.queue.tasks.embedding._append_ready_build_failed_audit",
@@ -478,7 +478,7 @@ class TestGenerateEmbeddingProcessingOutcome:
             ),
             patch("app.queue.tasks.embedding.EmbeddingService"),
         ):
-            with pytest.raises(SQLAlchemyError):
+            with pytest.raises(DatabaseUnexpectedError):
                 await generate_embedding(
                     trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
                 )

@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
-from sqlalchemy.exc import OperationalError
 
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.ready import (
@@ -39,6 +38,10 @@ from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.audit.domain.event import Stage
+from app.db.errors import (
+    DatabaseConnectionError,
+    DatabaseConnectionErrorReason,
+)
 from app.queue.messages.assessment import AssessmentTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
@@ -303,7 +306,12 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
 @pytest.mark.parametrize(
     ("exc", "expected_result"),
     [
-        (OperationalError("SELECT 1", {}, Exception("db down")), "infra_error"),
+        (
+            DatabaseConnectionError(
+                reason=DatabaseConnectionErrorReason.CONNECTION_FAILED
+            ),
+            "infra_error",
+        ),
         (ValueError("boom"), "failed"),
     ],
 )

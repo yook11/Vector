@@ -26,7 +26,6 @@ from unittest.mock import AsyncMock
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import select, update
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -57,6 +56,7 @@ from app.collection.sources.article_completion_policy import (
 )
 from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.source_name import SourceName
+from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
@@ -1002,7 +1002,7 @@ async def test_persist_db_crash_emits_infra_error_not_succeeded(
     """persist の DB 例外 → infra_error、succeeded は emit しない。
 
     succeeded emit が persist commit 境界の後ろにある不変条件の回帰ガード。
-    handle_persist_crashed が SQLAlchemyError を infra に分類する。
+    handle_persist_crashed が DatabaseError を infra に分類する。
     """
     _, _, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/metric-crash"
@@ -1019,7 +1019,7 @@ async def test_persist_db_crash_emits_infra_error_not_succeeded(
     )
 
     async def _boom(self: object, ready: object, advanced: object) -> None:  # noqa: ARG001
-        raise SQLAlchemyError("db connection lost mid-INSERT")
+        raise DatabaseUnexpectedError()
 
     monkeypatch.setattr(
         "app.collection.article_completion.service."
@@ -1027,7 +1027,7 @@ async def test_persist_db_crash_emits_infra_error_not_succeeded(
         _boom,
     )
 
-    with pytest.raises(SQLAlchemyError):
+    with pytest.raises(DatabaseUnexpectedError):
         await ArticleCompletionService(session_factory).execute(ready)
 
     metrics = collected_metrics(capfire)

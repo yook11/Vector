@@ -12,7 +12,6 @@ Stage 3 固有要件 (失敗時に記事削除する Drop 経路) を持つた�
 from __future__ import annotations
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import (
@@ -36,6 +35,7 @@ from app.audit.stages.curation import CurationAuditRepository
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
+from app.db.errors import DatabaseError
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -82,7 +82,7 @@ class CurationFailureHandler:
         """marker dispatch を実行する。
 
         失敗分類を確定する境界として ``processing_outcome`` も emit する。
-        SQLAlchemyError は infra_error (成功率の分母外)、それ以外は failed。
+        DatabaseError は infra_error (成功率の分母外)、それ以外は failed。
         recoverable は retry 有無に依らず試行単位で failed を数える。
 
         Returns:
@@ -119,7 +119,7 @@ class CurationFailureHandler:
                     reraise=not last_attempt,
                     stage_hold_reason=hold_reason,
                 )
-            case SQLAlchemyError():
+            case DatabaseError():
                 record_curation_processing_outcome("infra_error")
                 await self._audit_failure(ready, exc, curator)
                 return FailureHandlingDecision(reraise=False)
@@ -166,7 +166,7 @@ class CurationFailureHandler:
     async def _audit_failure(
         self,
         ready: ReadyForCuration,
-        exc: CurationError | SQLAlchemyError,
+        exc: CurationError | DatabaseError,
         curator: BaseCurator,
     ) -> None:
         """best-effort failure audit (DB 落ち / schema 不整合は log fallback)。

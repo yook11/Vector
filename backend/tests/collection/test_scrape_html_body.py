@@ -29,7 +29,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -48,6 +47,7 @@ from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.source_name import SourceName
+from app.db.errors import DatabaseUnexpectedError
 from app.queue.messages.curation import CurationTrigger
 from app.queue.tasks.completion import scrape_html_body
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
@@ -283,9 +283,9 @@ async def test_ready_build_db_error_emits_infra_error(
     session_factory: async_sessionmaker[AsyncSession],
     capfire: CaptureLogfire,
 ) -> None:
-    """ready-build の DB 障害 (SQLAlchemyError) → infra_error + re-raise。"""
+    """ready-build の DB 障害 (DatabaseError) → infra_error + re-raise。"""
     with (
-        _patch_try_advance_from(SQLAlchemyError("facts load failed")),
+        _patch_try_advance_from(DatabaseUnexpectedError()),
         patch(
             "app.queue.tasks.completion._append_ready_build_error_audit",
             new=AsyncMock(),
@@ -293,7 +293,7 @@ async def test_ready_build_db_error_emits_infra_error(
         patch(_SERVICE_CLS),
         patch(_CURATE_CONTENT_KIQ),
     ):
-        with pytest.raises(SQLAlchemyError):
+        with pytest.raises(DatabaseUnexpectedError):
             await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
 
     metrics = collected_metrics(capfire)

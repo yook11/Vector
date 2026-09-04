@@ -43,6 +43,7 @@ from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
+from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -394,9 +395,9 @@ async def test_rate_limited_recoverable_last_attempt_does_not_set_curation_hold(
         (lambda: _wrap(AIProviderConfigurationError("api key missing")), "failed"),
         (lambda: _wrap(AIProviderNetworkError("conn reset")), "failed"),
         (lambda: ValueError("surprise"), "failed"),
-        (lambda: SQLAlchemyError("db down"), "infra_error"),
+        (lambda: DatabaseUnexpectedError(), "infra_error"),
     ],
-    ids=["drop", "keep", "recoverable", "catch_all", "sqlalchemy"],
+    ids=["drop", "keep", "recoverable", "catch_all", "database"],
 )
 @pytest.mark.asyncio
 async def test_handle_emits_processing_outcome(
@@ -407,9 +408,9 @@ async def test_handle_emits_processing_outcome(
     make_exc,
     expected: str,
 ) -> None:
-    """marker/SQLAlchemy/catch-all を failed/infra_error に分類して emit する。
+    """marker/DatabaseError/catch-all を failed/infra_error に分類して emit する。
 
-    SQLAlchemyError だけが infra_error (成功率の分母外)。それ以外は failed。
+    DatabaseError だけが infra_error (成功率の分母外)。それ以外は failed。
     """
     article = await _make_article(db_session, sample_source)
     ready = _ready_from(article)

@@ -24,7 +24,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -42,6 +41,7 @@ from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import map_provider_to_assessment
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
@@ -382,9 +382,9 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
         (lambda: map_provider_to_assessment(AIProviderConfigurationError()), "failed"),
         (lambda: map_provider_to_assessment(AIProviderNetworkError()), "failed"),
         (lambda: ValueError("surprise"), "failed"),
-        (lambda: SQLAlchemyError("db down"), "infra_error"),
+        (lambda: DatabaseUnexpectedError(), "infra_error"),
     ],
-    ids=["terminal", "recoverable", "catch_all", "sqlalchemy"],
+    ids=["terminal", "recoverable", "catch_all", "database"],
 )
 @pytest.mark.asyncio
 async def test_handle_emits_processing_outcome(
@@ -395,9 +395,9 @@ async def test_handle_emits_processing_outcome(
     make_exc,
     expected: str,
 ) -> None:
-    """marker/SQLAlchemy/catch-all を failed/infra_error に分類して emit する。
+    """marker/DatabaseError/catch-all を failed/infra_error に分類して emit する。
 
-    SQLAlchemyError だけが infra_error (成功率の分母外)。それ以外は failed。
+    DatabaseError だけが infra_error (成功率の分母外)。それ以外は failed。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)

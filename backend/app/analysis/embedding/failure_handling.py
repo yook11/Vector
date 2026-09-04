@@ -12,7 +12,6 @@ skip する設計) ため、Stage 4 と Handler は共有しない (Stage 4 PR #
 from __future__ import annotations
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import (
@@ -32,6 +31,7 @@ from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.embedding import EmbeddingAuditRepository
+from app.db.errors import DatabaseError
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -80,7 +80,7 @@ class EmbeddingFailureHandler:
         時点で確定するため、audit などの副作用より先に emit し、audit drop でも取りこぼ
         さない。provider error 由来の infra/failed 振り分けは ``exc.provider_error`` を
         stage 中立な ``is_infra_provider_error`` に通す (marker 型では決めない)。
-        ``SQLAlchemyError`` は infra_error、想定外は failed。
+        ``DatabaseError`` は infra_error、想定外は failed。
 
         Returns:
             taskiq retry と stage hold の decision。
@@ -129,7 +129,7 @@ class EmbeddingFailureHandler:
                         stage_hold_reason=hold_reason,
                     )
                 return FailureHandlingDecision(reraise=True)
-            case SQLAlchemyError():
+            case DatabaseError():
                 record_embedding_processing_outcome("infra_error")
                 await self._audit_failure(ready, exc, analyzable_article_id)
                 return FailureHandlingDecision(reraise=not last_attempt)
@@ -147,7 +147,7 @@ class EmbeddingFailureHandler:
     async def _audit_failure(
         self,
         ready: ReadyForEmbedding,
-        exc: EmbeddingError | SQLAlchemyError,
+        exc: EmbeddingError | DatabaseError,
         analyzable_article_id: int,
     ) -> None:
         """best-effort failure audit (DB 落ち / schema 不整合は log fallback)。

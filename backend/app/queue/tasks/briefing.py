@@ -23,7 +23,6 @@ from datetime import date
 
 import structlog
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
@@ -35,6 +34,7 @@ from app.audit.stages.briefing import (
     BriefingOutcomeCode,
 )
 from app.config import settings
+from app.db.errors import DatabaseError
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.errors import BriefingError
@@ -283,7 +283,7 @@ async def generate_briefing_for_category(
             async with session_factory() as session:
                 repo = BriefingAuditRepository(session)
                 retry_exhausted = True if is_last_attempt(ctx) else None
-                if isinstance(exc, (BriefingError, SQLAlchemyError)):
+                if isinstance(exc, (BriefingError, DatabaseError)):
                     await repo.append_failure(
                         ready=ready,
                         exc=exc,

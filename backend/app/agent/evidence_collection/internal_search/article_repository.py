@@ -6,8 +6,6 @@ from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy import select
-from sqlalchemy.exc import InterfaceError, OperationalError
-from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.evidence_collection.internal_search.contract import (
@@ -24,6 +22,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
+from app.db.errors import DatabaseConnectionError, DatabaseTimeoutError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -86,13 +85,7 @@ class PgVectorArticleSearchRepository:
             async with self._session_factory() as session:
                 async with session.begin():
                     rows = (await session.execute(stmt)).all()
-        except (SQLAlchemyTimeoutError, OperationalError) as exc:
-            raise InternalSearchError(
-                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
-            ) from exc
-        except InterfaceError as exc:
-            if not exc.connection_invalidated:
-                raise
+        except (DatabaseTimeoutError, DatabaseConnectionError) as exc:
             raise InternalSearchError(
                 code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
             ) from exc

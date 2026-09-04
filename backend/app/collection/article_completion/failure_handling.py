@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.error_fields import exception_fqn
@@ -24,6 +23,7 @@ from app.collection.article_completion.scrape_failure import (
     ScrapeTerminal,
     classify_scrape_failure,
 )
+from app.db.errors import DatabaseError
 
 logger = structlog.get_logger(__name__)
 
@@ -97,7 +97,7 @@ class ArticleCompletionFailureHandler:
         """persist の DB 例外を別 session で best-effort 監査する。"""
         # best-effort audit の前に計上し、audit drop が emit を抑止しないようにする。
         record_completion_processing_outcome(
-            "infra_error" if isinstance(exc, SQLAlchemyError) else "failed"
+            "infra_error" if isinstance(exc, DatabaseError) else "failed"
         )
         try:
             async with self._session_factory() as audit_session:

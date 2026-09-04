@@ -18,7 +18,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
@@ -36,6 +35,7 @@ from app.collection.article_completion.ready import (
 )
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
+from app.db.errors import DatabaseError
 from app.logfire.stage_span import pipeline_stage_span
 from app.queue.brokers import broker_collection, broker_dispatch
 from app.queue.messages.curation import CurationTrigger
@@ -151,7 +151,7 @@ async def scrape_html_body(
                 )
                 # ready-build の DB 障害は infra、VO error 等は failed。
                 record_completion_processing_outcome(
-                    "infra_error" if isinstance(exc, SQLAlchemyError) else "failed"
+                    "infra_error" if isinstance(exc, DatabaseError) else "failed"
                 )
                 raise
 

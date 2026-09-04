@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.database_errors import (
+from app.db.errors import (
     DatabaseConnectionError,
     DatabaseConnectionErrorReason,
     DatabaseConstraintError,

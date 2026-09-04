@@ -5,7 +5,6 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import ClassVar
 
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.embedding.ai.base import BaseEmbedder
@@ -24,6 +23,7 @@ from app.audit.failure_projection import (
 )
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
+from app.db.errors import DatabaseError
 from app.models.backfill_exclusion import BackfillExclusionReason
 
 
@@ -122,7 +122,7 @@ class EmbeddingAuditRepository:
         *,
         analyzed_article_id: int,
         article_id: int,
-        exc: EmbeddingError | SQLAlchemyError,
+        exc: EmbeddingError | DatabaseError,
     ) -> None:
         """embedding 失敗を記録する。"""
         projection = self._projection_of(exc)
