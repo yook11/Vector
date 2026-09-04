@@ -12,19 +12,19 @@ broker:
     core 系保守 cron (cron 駆動、collect から分離するため別 queue)
 
 Workers: broker ごとに 1 つ (docker-compose.yml / supervisord conf を参照)。
-Scheduler / lifecycle / AI composition の attach は本 module の **末尾の副作用
-import** で行う。`from app.queue.brokers import broker_X` 1 行で:
+Scheduler / lifecycle の attach は本 module の **末尾の副作用 import** で行う。
+`from app.queue.brokers import broker_X` 1 行で:
   - broker × 8 の生成
   - 各 broker への WORKER_STARTUP / CLIENT_STARTUP hook attach
-  - analysis / embedding broker への AI adapter wiring attach
   - 5 つの TaskiqScheduler の生成
-が全て完了する。順序は循環 import を避けるため厳守。
+が全て完了する。AI adapter 配線は lifecycle の WorkerRuntime.compose が呼ぶ。
+順序は循環 import を避けるため厳守。
 """
 
 from __future__ import annotations
 
 import structlog
-from taskiq import SimpleRetryMiddleware
+from taskiq import AsyncBroker, SimpleRetryMiddleware
 
 # taskiq 0.12.4: taskiq.middlewares.__init__ には未公開のためサブモジュール直 import
 # が正規 (re-export がない)。version up で公開された場合は `from taskiq.middlewares
@@ -42,6 +42,21 @@ logger = structlog.get_logger(__name__)
 _stream = taskiq_stream_connection(settings)
 
 
+class _RedisStreamBroker(RedisStreamBroker):
+    """consumer group は worker / scheduler だけが宣言する。"""
+
+    async def startup(self) -> None:
+        await AsyncBroker.startup(self)
+        if self.is_worker_process or self.is_scheduler_process:
+            await self._declare_consumer_group()
+
+    async def shutdown(self) -> None:
+        try:
+            await AsyncBroker.shutdown(self)
+        finally:
+            await self.connection_pool.disconnect()
+
+
 def _make_broker(
     queue_name: str,
     *,
@@ -52,7 +67,7 @@ def _make_broker(
     unacknowledged_lock_timeout: float | None = None,
 ) -> RedisStreamBroker:
     return (
-        RedisStreamBroker(
+        _RedisStreamBroker(
             url=_stream.url,
             idle_timeout=600_000,
             maxlen=10_000,
@@ -106,12 +121,11 @@ broker_agent = _make_broker("agent")
 broker_maintenance = _make_broker("pipeline:maintenance")
 
 
-# broker object が出揃ったあとで lifecycle / composition / schedulers を attach
-# する。各 module は import するだけで broker.on_event() に hook を登録する副作用
+# broker object が出揃ったあとで lifecycle / schedulers を attach する。
+# 各 module は import するだけで broker.on_event() に hook を登録する副作用
 # を持つ。本 module の末尾に置くことで:
 #   - broker × 8 が定義済の状態で各 hook 登録が走る
 #   - `from app.queue.brokers import broker_X` 単独で lifecycle 完了が保証される
 #     (test や entrypoint が個別に lifecycle module を import する必要なし)
 import app.queue.lifecycle  # noqa: E402, F401, I001
-import app.queue.composition  # noqa: E402, F401, I001
 import app.queue.schedulers  # noqa: E402, F401, I001

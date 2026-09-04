@@ -9,7 +9,6 @@ from jwt.exceptions import InvalidTokenError
 from opentelemetry import trace
 
 from app.config import settings
-from app.redis.fastapi import get_agent_live_redis as get_agent_live_redis
 
 # BFF (Next.js) と backend (FastAPI) 間の内部 API 認証は HS256 JWT で行う。
 # BFF が Better Auth セッションから user_id / role を取り出して短期 JWT に署名し、

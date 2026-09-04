@@ -22,14 +22,18 @@ _IAM_URL = "redis://vector-app@vector-cache.abc.cache.amazonaws.com:6379/3"
 
 
 class _RedisSettings:
-    def __init__(self, redis_url: str) -> None:
+    def __init__(
+        self,
+        redis_url: str,
+        *,
+        redis_iam_auth: bool = False,
+        aws_region: str | None = None,
+        redis_iam_cache_name: str | None = None,
+    ) -> None:
         self.redis_url = redis_url
-
-
-def _enable_iam(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "redis_iam_auth", True)
-    monkeypatch.setattr(settings, "aws_region", _REGION)
-    monkeypatch.setattr(settings, "redis_iam_cache_name", _CACHE_NAME)
+        self.redis_iam_auth = redis_iam_auth
+        self.aws_region = aws_region
+        self.redis_iam_cache_name = redis_iam_cache_name
 
 
 def test_create_api_agent_live_client_uses_api_pool(
@@ -71,19 +75,29 @@ def test_create_cli_pipeline_control_client_uses_cli_pool(
 def test_create_api_agent_live_client_keeps_iam_credential_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _enable_iam(monkeypatch)
     spy = MagicMock()
     monkeypatch.setattr("app.redis.clients.aioredis.from_url", spy)
-    create_api_agent_live_client(_RedisSettings(_IAM_URL))
+    create_api_agent_live_client(
+        _RedisSettings(
+            _IAM_URL,
+            redis_iam_auth=True,
+            aws_region=_REGION,
+            redis_iam_cache_name=_CACHE_NAME,
+        )
+    )
     provider = spy.call_args.kwargs["credential_provider"]
     assert isinstance(provider, ElastiCacheIAMProvider)
 
 
-def test_taskiq_stream_connection_keeps_iam_credential_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _enable_iam(monkeypatch)
-    connection = taskiq_stream_connection(_RedisSettings(_IAM_URL))
+def test_taskiq_stream_connection_keeps_iam_credential_provider() -> None:
+    connection = taskiq_stream_connection(
+        _RedisSettings(
+            _IAM_URL,
+            redis_iam_auth=True,
+            aws_region=_REGION,
+            redis_iam_cache_name=_CACHE_NAME,
+        )
+    )
     assert isinstance(
         connection.connection_kwargs["credential_provider"],
         ElastiCacheIAMProvider,

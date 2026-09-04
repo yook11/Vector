@@ -511,8 +511,8 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_scheduler_lifecycle_uses_renamed_events() -> None:
-    """dispatch scheduler hook は新 startup/shutdown event だけを記録する。"""
+async def test_dispatch_client_lifecycle_uses_renamed_events() -> None:
+    """dispatch client hook は新 startup/shutdown event だけを記録する。"""
     from app.queue.brokers import broker_dispatch
 
     state = TaskiqState()
@@ -524,8 +524,8 @@ async def test_dispatch_scheduler_lifecycle_uses_renamed_events() -> None:
             await handler(state)
 
     events = {log["event"] for log in logs}
-    assert "dispatch_scheduler_startup" in events
-    assert "dispatch_scheduler_shutdown" in events
+    assert "dispatch_client_startup" in events
+    assert "dispatch_client_shutdown" in events
 
 
 def test_maintenance_worker_imports_queue_health_without_runtime_split() -> None:
@@ -750,6 +750,7 @@ async def _worker_lifecycle_stubs(
     live: MagicMock | None = None,
     control: MagicMock | None = None,
     catalog: bool = False,
+    compose: bool = False,
 ):
     patches = [
         patch("app.queue.lifecycle.setup_logfire"),
@@ -766,6 +767,8 @@ async def _worker_lifecycle_stubs(
             return_value=_session_factory_stub(),
         ),
     ]
+    if not compose:
+        patches.append(patch("app.queue.lifecycle._compose", new_callable=AsyncMock))
     if catalog:
         patches.append(
             patch(
@@ -800,7 +803,10 @@ async def test_agent_worker_owns_only_agent_live_redis() -> None:
     live = _owned_redis()
     state = TaskiqState()
 
-    async with _worker_lifecycle_stubs(engine, live=live) as (create_live, create_control):
+    async with _worker_lifecycle_stubs(engine, live=live) as (
+        create_live,
+        create_control,
+    ):
         await broker_agent.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
         await broker_agent.event_handlers[TaskiqEvents.WORKER_SHUTDOWN][0](state)
 
@@ -846,7 +852,8 @@ async def test_pipeline_workers_own_only_pipeline_control_redis(
 
 
 @pytest.mark.asyncio
-async def test_analysis_attaches_redis_before_composition() -> None:
+async def test_analysis_startup_makes_rate_limit_gate_usable() -> None:
+    from app.analysis.rate_limit import AIModelRateLimitPolicy, ProviderRateLimitGate
     from app.queue.brokers import broker_analysis
 
     engine = MagicMock()
@@ -854,9 +861,87 @@ async def test_analysis_attaches_redis_before_composition() -> None:
     control = _owned_redis()
     state = TaskiqState()
 
-    async with _worker_lifecycle_stubs(engine, control=control, catalog=True):
-        await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
-        assert state.pipeline_control_redis is control
-        assert broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][1].__name__ == (
-            "_wire_analysis_adapters"
-        )
+    async with _worker_lifecycle_stubs(
+        engine, control=control, catalog=True, compose=True
+    ):
+        with (
+            patch("app.analysis.curation.ai.gemini.settings") as mock_es,
+            patch("app.analysis.assessment.ai.deepseek.settings") as mock_cs,
+        ):
+            mock_es.gemini_api_key = SecretStr("test-key")
+            mock_cs.deepseek_api_key = SecretStr("test-key")
+            await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
+
+    assert state.pipeline_control_redis is control
+    assert isinstance(state.provider_rate_limit_gate, ProviderRateLimitGate)
+    assert await state.provider_rate_limit_gate.acquire(
+        AIModelRateLimitPolicy(provider="test", model="test", rules=())
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_shutdown_closes_remaining_resources_after_redis_failure() -> None:
+    from app.queue.brokers import broker_agent
+
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    live = _owned_redis()
+    live.aclose = AsyncMock(side_effect=RuntimeError("redis close failed"))
+    state = TaskiqState()
+
+    async with _worker_lifecycle_stubs(engine, live=live):
+        await broker_agent.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
+        with pytest.raises(RuntimeError, match="redis close failed"):
+            await broker_agent.event_handlers[TaskiqEvents.WORKER_SHUTDOWN][0](state)
+
+    engine.dispose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_broker_shutdown_disconnects_pool_after_hook_error() -> None:
+    from app.queue.brokers import _make_broker
+
+    broker = _make_broker("test-shutdown-disconnect")
+    broker.is_worker_process = True
+    disconnect = AsyncMock()
+    broker.connection_pool.disconnect = disconnect
+
+    @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
+    async def _fail(_state: TaskiqState) -> None:
+        raise RuntimeError("hook failed")
+
+    with pytest.raises(RuntimeError, match="hook failed"):
+        await broker.shutdown()
+
+    disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("is_worker", "is_scheduler", "should_declare"),
+    [
+        (False, False, False),
+        (True, False, True),
+        (False, True, True),
+    ],
+)
+async def test_broker_startup_declares_consumer_group_only_on_worker_or_scheduler(
+    is_worker: bool,
+    is_scheduler: bool,
+    should_declare: bool,
+) -> None:
+    from app.queue.brokers import _make_broker
+
+    broker = _make_broker("test-xgroup-gate")
+    broker.is_worker_process = is_worker
+    broker.is_scheduler_process = is_scheduler
+    declare = AsyncMock()
+    broker._declare_consumer_group = declare
+    try:
+        await broker.startup()
+        if should_declare:
+            declare.assert_awaited_once()
+        else:
+            declare.assert_not_called()
+    finally:
+        await broker.shutdown()

@@ -15,7 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
-import app.agent.router as research_router_module
+import app.agent.live_updates.transport as live_transport_module
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
 from app.agent.daily_quota import observability as daily_quota_observability
 from app.agent.daily_quota.contracts import (
@@ -23,15 +23,19 @@ from app.agent.daily_quota.contracts import (
     DailyRequestLimitExceededError,
 )
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
+from app.agent.live_updates.transport import (
+    AgentLiveTransport,
+    get_agent_live_transport,
+)
 from app.agent.runs.contracts import (
     CancelRunCommandOutcome,
     CancelRunOutcome,
     CompleteRunOutcome,
 )
+from app.agent.runs.enqueuer import get_agent_run_enqueuer
 from app.agent.runs.repository import AgentRunRepository
 from app.config import settings
 from app.db.fastapi import get_caller_managed_session
-from app.dependencies import get_agent_live_redis
 from app.main import app
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -55,7 +59,7 @@ class FakeEnqueue:
         self.exc = exc
         self.calls: list[UUID] = []
 
-    async def __call__(self, run_id: UUID) -> None:
+    async def enqueue(self, run_id: UUID) -> None:
         self.calls.append(run_id)
         if self.exc is not None:
             raise self.exc
@@ -109,7 +113,6 @@ def _configured_generation(monkeypatch: pytest.MonkeyPatch) -> None:
 async def research_client(
     auth_headers: dict[str, str],
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[tuple[AsyncClient, FakeEnqueue]]:
     async def override_history_session() -> AsyncGenerator[AsyncSession]:
         if db_session.in_transaction():
@@ -117,11 +120,11 @@ async def research_client(
         yield db_session
 
     fake_enqueue = FakeEnqueue()
-    app.dependency_overrides[get_caller_managed_session] = (
-        override_history_session
+    app.dependency_overrides[get_caller_managed_session] = override_history_session
+    app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
+        FakeRunEventsRedis()
     )
-    app.dependency_overrides[get_agent_live_redis] = lambda: FakeRunEventsRedis()
-    monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
+    app.dependency_overrides[get_agent_run_enqueuer] = lambda: fake_enqueue
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -135,7 +138,6 @@ async def research_client(
 async def quota_research_client(
     auth_headers: dict[str, str],
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[tuple[AsyncClient, FakeEnqueue]]:
     async def override_history_session() -> AsyncGenerator[AsyncSession]:
         if db_session.in_transaction():
@@ -143,11 +145,11 @@ async def quota_research_client(
         yield db_session
 
     fake_enqueue = FakeEnqueue()
-    app.dependency_overrides[get_caller_managed_session] = (
-        override_history_session
+    app.dependency_overrides[get_caller_managed_session] = override_history_session
+    app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
+        FakeRunEventsRedis()
     )
-    app.dependency_overrides[get_agent_live_redis] = lambda: FakeRunEventsRedis()
-    monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
+    app.dependency_overrides[get_agent_run_enqueuer] = lambda: fake_enqueue
     async with AsyncClient(
         transport=ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
@@ -166,9 +168,7 @@ async def anonymous_research_client(
             await db_session.commit()
         yield db_session
 
-    app.dependency_overrides[get_caller_managed_session] = (
-        override_history_session
-    )
+    app.dependency_overrides[get_caller_managed_session] = override_history_session
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -493,10 +493,8 @@ class TestCreateResearchResponse:
             yield db_session
 
         fake_enqueue = FakeEnqueue(exc=RuntimeError("redis down SHOULD_NOT_LEAK"))
-        app.dependency_overrides[
-            get_caller_managed_session
-        ] = override_history_session
-        monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
+        app.dependency_overrides[get_caller_managed_session] = override_history_session
+        app.dependency_overrides[get_agent_run_enqueuer] = lambda: fake_enqueue
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://test",
@@ -572,18 +570,19 @@ class TestCreateResearchResponse:
                 await db_session.commit()
             yield db_session
 
-        async def enqueue_then_start_and_fail(run_id: UUID) -> None:
-            await db_session.execute(
-                update(AgentRun).where(AgentRun.id == run_id).values(status="running")
-            )
-            await db_session.commit()
-            raise RuntimeError("redis uncertain SHOULD_NOT_LEAK")
+        class _EnqueueThenStartAndFail:
+            async def enqueue(self, run_id: UUID) -> None:
+                await db_session.execute(
+                    update(AgentRun)
+                    .where(AgentRun.id == run_id)
+                    .values(status="running")
+                )
+                await db_session.commit()
+                raise RuntimeError("redis uncertain SHOULD_NOT_LEAK")
 
-        app.dependency_overrides[
-            get_caller_managed_session
-        ] = override_history_session
-        monkeypatch.setattr(
-            research_router_module, "enqueue_agent_run", enqueue_then_start_and_fail
+        app.dependency_overrides[get_caller_managed_session] = override_history_session
+        app.dependency_overrides[get_agent_run_enqueuer] = lambda: (
+            _EnqueueThenStartAndFail()
         )
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -985,11 +984,13 @@ class TestQuotaRouterTelemetry:
             fail_observation,
         )
         monkeypatch.setattr(
-            research_router_module,
+            live_transport_module,
             "AgentRunLiveStreamPublisher",
             FakeCancelStreamPublisher,
         )
-        app.dependency_overrides[get_agent_live_redis] = lambda: FakeRunEventsRedis()
+        app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
+            FakeRunEventsRedis()
+        )
 
         response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
 
@@ -1883,7 +1884,7 @@ class TestCancelResearchRun:
                 await super().publish(event)
 
         monkeypatch.setattr(
-            research_router_module,
+            live_transport_module,
             "AgentRunLiveStreamPublisher",
             CommitCheckingPublisher,
             raising=False,
@@ -1923,7 +1924,7 @@ class TestCancelResearchRun:
         )
         FakeCancelStreamPublisher.instances = []
         monkeypatch.setattr(
-            research_router_module,
+            live_transport_module,
             "AgentRunLiveStreamPublisher",
             FakeCancelStreamPublisher,
             raising=False,
@@ -1955,7 +1956,7 @@ class TestCancelResearchRun:
         FakeCancelStreamPublisher.instances = []
         monkeypatch.setattr(FakeCancelStreamPublisher, "raise_on_publish", True)
         monkeypatch.setattr(
-            research_router_module,
+            live_transport_module,
             "AgentRunLiveStreamPublisher",
             FakeCancelStreamPublisher,
             raising=False,
@@ -1995,7 +1996,7 @@ class TestCancelResearchRun:
         )
         FakeCancelStreamPublisher.instances = []
         monkeypatch.setattr(
-            research_router_module,
+            live_transport_module,
             "AgentRunLiveStreamPublisher",
             FakeCancelStreamPublisher,
             raising=False,
@@ -2030,7 +2031,7 @@ class TestCancelResearchRun:
         )
         FakeCancelStreamPublisher.instances = []
         monkeypatch.setattr(
-            research_router_module,
+            live_transport_module,
             "AgentRunLiveStreamPublisher",
             FakeCancelStreamPublisher,
             raising=False,
@@ -2060,7 +2061,7 @@ class TestCancelResearchRun:
         )
         FakeCancelStreamPublisher.instances = []
         monkeypatch.setattr(
-            research_router_module,
+            live_transport_module,
             "AgentRunLiveStreamPublisher",
             FakeCancelStreamPublisher,
             raising=False,
@@ -2079,7 +2080,7 @@ class TestCancelResearchRun:
         client, _fake_enqueue = research_client
         FakeCancelStreamPublisher.instances = []
         monkeypatch.setattr(
-            research_router_module,
+            live_transport_module,
             "AgentRunLiveStreamPublisher",
             FakeCancelStreamPublisher,
             raising=False,
@@ -2300,13 +2301,9 @@ class TestGetResearchRun:
         run = await _create_run(
             db_session, thread_id=thread.id, user_message_id=user_message.id
         )
-        redis = FakeRunEventsRedis()
-        app.dependency_overrides[get_agent_live_redis] = lambda: redis
-
         response = await client.get(f"/api/v1/research/runs/{run.id}")
 
         assert response.status_code == 404
-        assert redis.calls == []
 
     async def test_unknown_run_is_404(
         self,
