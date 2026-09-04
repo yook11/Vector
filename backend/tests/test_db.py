@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 import app.db.engine as db_engine
 from app.config import settings
@@ -20,16 +20,11 @@ from app.db.engine import (
     create_worker_engine,
     worker_service_name,
 )
+from app.db.errors import DatabaseConstraintError
 from app.db.session import (
     caller_managed_session_factory,
     open_entry_managed_session,
 )
-
-
-def test_caller_managed_session_factory_disables_expire_on_commit() -> None:
-    factory = caller_managed_session_factory(MagicMock())
-    assert factory.class_ is AsyncSession
-    assert factory.kw["expire_on_commit"] is False
 
 
 class _Begin:
@@ -76,6 +71,15 @@ class _FakeSession:
         return _Begin(self)
 
 
+async def test_caller_managed_session_factory_disables_expire_on_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.db.session.AsyncSession", _FakeSession)
+    factory = caller_managed_session_factory(MagicMock())
+    async with factory() as session:
+        assert session.expire_on_commit is False
+
+
 async def test_open_entry_managed_session_begins_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -95,6 +99,32 @@ async def test_open_entry_managed_session_rolls_back_on_error(
         async with open_entry_managed_session(MagicMock()) as session:
             raise RuntimeError("failed")
     assert session.rolled_back
+    assert session.closed
+
+
+async def test_open_entry_managed_session_translates_sqlalchemy_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.db.session.AsyncSession", _FakeSession)
+    cause = IntegrityError("SELECT 1", {}, Exception("orig"))
+    with pytest.raises(DatabaseConstraintError) as captured:
+        async with open_entry_managed_session(MagicMock()) as session:
+            raise cause
+    assert captured.value.__cause__ is cause
+    assert session.rolled_back
+    assert session.closed
+
+
+async def test_caller_managed_session_factory_translates_sqlalchemy_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.db.session.AsyncSession", _FakeSession)
+    factory = caller_managed_session_factory(MagicMock())
+    cause = IntegrityError("SELECT 1", {}, Exception("orig"))
+    with pytest.raises(DatabaseConstraintError) as captured:
+        async with factory() as session:
+            raise cause
+    assert captured.value.__cause__ is cause
     assert session.closed
 
 

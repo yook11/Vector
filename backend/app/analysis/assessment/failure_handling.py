@@ -11,7 +11,6 @@ skip する設計) ため、Stage 3 と Handler は共有しない。
 from __future__ import annotations
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import (
@@ -30,6 +29,7 @@ from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.db.errors import DatabaseError
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -76,7 +76,7 @@ class AssessmentFailureHandler:
 
         失敗分類を確定する境界として ``processing_outcome`` も emit する。分類は match
         時点で確定するため、audit などの副作用より先に emit し、audit drop でも取りこぼ
-        さない。SQLAlchemyError は infra_error (成功率の分母外)、それ以外は failed。
+        さない。DatabaseError は infra_error (成功率の分母外)、それ以外は failed。
 
         Returns:
             taskiq retry と stage hold の decision。
@@ -121,7 +121,7 @@ class AssessmentFailureHandler:
                         stage_hold_reason=hold_reason,
                     )
                 return FailureHandlingDecision(reraise=True)
-            case SQLAlchemyError():
+            case DatabaseError():
                 record_assessment_processing_outcome("infra_error")
                 await self._audit_failure(
                     ready, exc, analyzable_article_id=analyzable_article_id
@@ -143,7 +143,7 @@ class AssessmentFailureHandler:
     async def _audit_failure(
         self,
         ready: ReadyForAssessment,
-        exc: AssessmentError | SQLAlchemyError,
+        exc: AssessmentError | DatabaseError,
         *,
         analyzable_article_id: int,
     ) -> None:

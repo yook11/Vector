@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.error_fields import exception_fqn
@@ -17,6 +16,7 @@ from app.collection.article_acquisition.metrics import (
     AcquisitionEntryOutcome,
     record_acquisition_outcome,
 )
+from app.db.errors import DatabaseError
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -40,7 +40,7 @@ class ArticleAcquisitionFailureHandler:
             case AcquisitionError():
                 await self._audit_failure(source_id, source_name, exc)
                 return False
-            case SQLAlchemyError():
+            case DatabaseError():
                 await self._audit_failure(source_id, source_name, exc)
                 return True
             case _:
@@ -92,7 +92,7 @@ class ArticleAcquisitionFailureHandler:
         self,
         source_id: int | None,
         source_name: str | None,
-        exc: AcquisitionError | SQLAlchemyError,
+        exc: AcquisitionError | DatabaseError,
     ) -> None:
         """best-effort failure audit。失敗時は redacted log に退避する。"""
         try:

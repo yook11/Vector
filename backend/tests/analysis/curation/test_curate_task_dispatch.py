@@ -23,7 +23,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
-from sqlalchemy.exc import OperationalError
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -46,6 +45,10 @@ from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.audit.domain.event import Stage
+from app.db.errors import (
+    DatabaseConnectionError,
+    DatabaseConnectionErrorReason,
+)
 from app.queue.messages.curation import CurationTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
@@ -394,7 +397,12 @@ async def test_ready_build_blocked_emits_rejected_only_for_content_too_large(
 @pytest.mark.parametrize(
     ("exc", "expected_result"),
     [
-        (OperationalError("SELECT 1", {}, Exception("db down")), "infra_error"),
+        (
+            DatabaseConnectionError(
+                reason=DatabaseConnectionErrorReason.CONNECTION_FAILED
+            ),
+            "infra_error",
+        ),
         (ValueError("boom"), "failed"),
     ],
 )

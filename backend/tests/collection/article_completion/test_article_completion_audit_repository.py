@@ -62,6 +62,7 @@ from app.collection.persistence.analyzable_article_repository import (
 )
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.source_name import SourceName
+from app.db.errors import DatabaseUnexpectedError
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 from app.shared.security.safe_url import SafeUrlInvalidReason
@@ -621,7 +622,7 @@ async def test_append_ready_build_error_records_db_error(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
 ) -> None:
-    exc = OperationalError("SELECT 1", {}, Exception("connection dropped"))
+    exc = DatabaseUnexpectedError()
 
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_ready_build_error(

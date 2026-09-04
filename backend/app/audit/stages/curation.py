@@ -7,7 +7,6 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, TypedDict
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
@@ -26,6 +25,7 @@ from app.audit.failure_projection import (
 from app.audit.injection_signal import record_injection_boundary_detected
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
+from app.db.errors import DatabaseError
 
 if TYPE_CHECKING:
     from app.analysis.curation.ai.base import BaseCurator
@@ -222,7 +222,7 @@ class CurationAuditRepository:
         self,
         *,
         ready: ReadyForCuration,
-        exc: CurationError | SQLAlchemyError,
+        exc: CurationError | DatabaseError,
         curator: BaseCurator,
     ) -> None:
         """article を削除しない curation 失敗を記録する。"""

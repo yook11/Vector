@@ -24,6 +24,15 @@ from app.audit.db_errors import (
     DbErrorClassification,
     classify_db_error,
 )
+from app.db.errors import (
+    DatabaseConnectionError,
+    DatabaseConnectionErrorReason,
+    DatabaseConstraintError,
+    DatabaseConstraintErrorReason,
+    DatabaseTimeoutError,
+    DatabaseTimeoutErrorReason,
+    DatabaseUnexpectedError,
+)
 
 
 def _stmt_error(cls: type[Exception]) -> Exception:
@@ -84,3 +93,47 @@ def test_classify_db_error_maps_sqlalchemy_exceptions(
 def test_classify_db_error_returns_none_for_non_db_exceptions(exc: Exception) -> None:
     """非 DB 例外は ``.code`` の有無に関わらず ``None`` (``.code`` 非依存)。"""
     assert classify_db_error(exc) is None
+
+
+def _with_cause(error: Exception, cause: Exception) -> Exception:
+    try:
+        raise error from cause
+    except Exception as wrapped:
+        return wrapped
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (
+            DatabaseConnectionError(
+                reason=DatabaseConnectionErrorReason.CONNECTION_FAILED
+            ),
+            DbErrorClassification("db_runtime_error", DbErrorCause.RUNTIME),
+        ),
+        (
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+            DbErrorClassification("db_runtime_error", DbErrorCause.RUNTIME),
+        ),
+        (
+            DatabaseConstraintError(
+                reason=DatabaseConstraintErrorReason.UNCLASSIFIED_CONSTRAINT
+            ),
+            DbErrorClassification("db_constraint_error", DbErrorCause.CONSTRAINT),
+        ),
+        (
+            DatabaseUnexpectedError(),
+            DbErrorClassification("db_unknown_error", DbErrorCause.UNKNOWN),
+        ),
+        (
+            _with_cause(DatabaseUnexpectedError(), _stmt_error(ProgrammingError)),
+            DbErrorClassification(
+                "db_query_or_schema_error", DbErrorCause.QUERY_OR_SCHEMA
+            ),
+        ),
+    ],
+)
+def test_classify_db_error_maps_database_errors(
+    exc: Exception, expected: DbErrorClassification
+) -> None:
+    assert classify_db_error(exc) == expected

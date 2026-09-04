@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -44,6 +43,7 @@ from app.analysis.embedding.errors import (
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.stages.embedding import EmbeddingAuditRepository
+from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -384,8 +384,7 @@ def _build_outcome_cases() -> list[tuple[BaseException, str]]:
         (to_embedding_error(_input_rejected()), "failed"),
         # Recoverable + provider_error=None (stage 工程由来)。
         (EmbeddingResponseInvalidError(), "failed"),
-        # SQLAlchemyError arm。
-        (SQLAlchemyError("db down"), "infra_error"),
+        (DatabaseUnexpectedError(), "infra_error"),
         # catch-all (marker いずれにも該当しない)。
         (ValueError("surprise"), "failed"),
     ]

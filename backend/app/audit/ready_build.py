@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pydantic import ValidationError
-from sqlalchemy.exc import SQLAlchemyError
+
+from app.db.errors import DatabaseError
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +21,7 @@ def project_ready_build_failure(
     *, stage_prefix: str, exc: Exception
 ) -> ReadyBuildFailureProjection:
     """Ready 構築フェーズ例外を stage 固有 outcome_code に分類する。"""
-    if isinstance(exc, SQLAlchemyError):
+    if isinstance(exc, DatabaseError):
         return ReadyBuildFailureProjection(
             outcome_code=f"{stage_prefix}_ready_build_failed_db_error",
             failure_kind="db_error",

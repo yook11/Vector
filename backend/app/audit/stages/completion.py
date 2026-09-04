@@ -7,7 +7,6 @@ from enum import StrEnum
 from typing import ClassVar, assert_never
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.prompt_safety import screen_untrusted_text
@@ -54,6 +53,7 @@ from app.collection.domain.canonical_article_url import (
 from app.collection.domain.observed_article import ObservedArticleInvalidError
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.errors import SourceNotRegisteredError
+from app.db.errors import DatabaseError
 
 logger = structlog.get_logger(__name__)
 
@@ -414,7 +414,7 @@ def _project_ready_build_error(exc: Exception) -> _ReadyBuildErrorProjection:
             failure_kind="source_not_registered",
             code=CompletionOutcomeCode.READY_BUILD_FAILED_SOURCE_NOT_REGISTERED.value,
         )
-    if isinstance(exc, SQLAlchemyError):
+    if isinstance(exc, DatabaseError):
         return _ReadyBuildErrorProjection(
             failure_kind="db_error",
             code=CompletionOutcomeCode.READY_BUILD_FAILED_DB_ERROR.value,

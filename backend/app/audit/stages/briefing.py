@@ -7,7 +7,6 @@ from enum import StrEnum
 from typing import ClassVar
 
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
@@ -22,6 +21,7 @@ from app.audit.failure_projection import (
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
+from app.db.errors import DatabaseError
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.errors import BriefingError
 from app.models.category import Category
@@ -98,7 +98,7 @@ class BriefingAuditRepository:
         self,
         *,
         ready: ReadyForBriefing,
-        exc: BriefingError | SQLAlchemyError,
+        exc: BriefingError | DatabaseError,
         retry_exhausted: bool | None,
         ai_model: str,
     ) -> None:
@@ -293,7 +293,7 @@ class BriefingAuditRepository:
         return str(slug) if slug is not None else None
 
     @staticmethod
-    def _projection_of(exc: BriefingError | SQLAlchemyError) -> FailureProjection:
+    def _projection_of(exc: BriefingError | DatabaseError) -> FailureProjection:
         """Briefing marker / DB 例外を projection する。"""
         return project_failure(exc)
 

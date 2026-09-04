@@ -247,6 +247,17 @@ def test_project_db_failure_maps_sqlalchemy_exceptions(
     assert project_db_failure(exc) == expected
 
 
+def test_project_db_failure_maps_database_error_without_cause() -> None:
+    from app.db.errors import DatabaseUnexpectedError
+
+    assert project_db_failure(DatabaseUnexpectedError()) == FailureProjection(
+        failure_kind="db_unknown",
+        retryability=Retryability.UNKNOWN,
+        failure_action=None,
+        code="db_unknown_error",
+    )
+
+
 def test_project_failure_returns_unknown_for_catch_all() -> None:
     assert project_failure(RuntimeError("boom")) == FailureProjection(
         failure_kind="unknown",

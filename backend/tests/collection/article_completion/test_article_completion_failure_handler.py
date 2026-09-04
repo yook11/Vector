@@ -51,6 +51,7 @@ from app.collection.external_fetch_errors import (
     FetchOriginServerError,
 )
 from app.collection.sources.source_name import SourceName
+from app.db.errors import DatabaseUnexpectedError
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
@@ -554,11 +555,11 @@ async def test_persist_crashed_sqlalchemy_emits_infra_error(
     tc_source: NewsSource,
     capfire: CaptureLogfire,
 ) -> None:
-    """persist の SQLAlchemyError → infra_error (我々の DB 障害)。"""
+    """persist の DatabaseError → infra_error (我々の DB 障害)。"""
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-crash")
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle_persist_crashed(ready, SQLAlchemyError("db lost"))
+    await handler.handle_persist_crashed(ready, DatabaseUnexpectedError())
 
     _assert_only(collected_metrics(capfire), "infra_error")
 
@@ -656,6 +657,6 @@ async def test_persist_crashed_emits_even_when_audit_drops(
     handler = ArticleCompletionFailureHandler(session_factory)
 
     # audit drop は handle_persist_crashed 内で握られ再 raise しない。
-    await handler.handle_persist_crashed(ready, SQLAlchemyError("persist boom"))
+    await handler.handle_persist_crashed(ready, DatabaseUnexpectedError())
 
     _assert_only(collected_metrics(capfire), "infra_error")

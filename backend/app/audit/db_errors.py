@@ -1,4 +1,4 @@
-"""SQLAlchemy 例外を監査ラベルに分類する pure helper。
+"""DB 例外を監査ラベルに分類する pure helper。
 
 ``error_chain.py`` と同じ「session も I/O も持たない純粋関数」哲学のモジュール。
 分析トリオ 3 stage (curation / assessment / embedding) の audit repository が
@@ -29,6 +29,14 @@ from sqlalchemy.exc import (
     SQLAlchemyError,
 )
 
+from app.db.errors import (
+    DatabaseConnectionError,
+    DatabaseConstraintError,
+    DatabaseError,
+    DatabaseTimeoutError,
+    DatabaseUnexpectedError,
+)
+
 
 class DbErrorCause(StrEnum):
     """DB 例外の性質。failure projection への変換に使う中間表現。"""
@@ -53,12 +61,20 @@ class DbErrorClassification:
 
 
 def classify_db_error(exc: BaseException) -> DbErrorClassification | None:
-    """SQLAlchemy 例外を監査ラベルに分類する。DB 例外でなければ ``None``。
+    """DB 例外を監査ラベルに分類する。DB 例外でなければ ``None``。
 
-    ``OperationalError`` / ``IntegrityError`` / ``ProgrammingError`` / ``DataError``
-    は ``DBAPIError`` の兄弟サブクラスで互いに独立 (順序非依存)。``SQLAlchemyError``
-    は全 DB 例外の基底なので未分類の総括として必ず最後に置く。
+    Session を出た例外は ``DatabaseError``。cause が SQLAlchemy なら既存の
+    SQLAlchemy 分岐で分類し、``ProgrammingError`` の query_or_schema を落とさない。
+    生の SQLAlchemy 分岐は入口の内側と、変換を通らない経路用に残す。
     """
+    if isinstance(exc, DatabaseError) and isinstance(exc.__cause__, SQLAlchemyError):
+        return classify_db_error(exc.__cause__)
+    if isinstance(exc, DatabaseConnectionError | DatabaseTimeoutError):
+        return DbErrorClassification("db_runtime_error", DbErrorCause.RUNTIME)
+    if isinstance(exc, DatabaseConstraintError):
+        return DbErrorClassification("db_constraint_error", DbErrorCause.CONSTRAINT)
+    if isinstance(exc, DatabaseUnexpectedError):
+        return DbErrorClassification("db_unknown_error", DbErrorCause.UNKNOWN)
     if isinstance(exc, OperationalError):
         # 接続断・deadlock・lock timeout・一時障害は再試行で回復しうる。
         return DbErrorClassification("db_runtime_error", DbErrorCause.RUNTIME)

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy.exc import SQLAlchemyError
 
 from app.audit.ready_build import project_ready_build_failure
+from app.db.errors import DatabaseUnexpectedError
 
 
 class _PositiveModel(BaseModel):
@@ -23,7 +23,7 @@ def _validation_error() -> ValidationError:
     ("exc", "expected_code", "expected_kind"),
     [
         (
-            SQLAlchemyError("db exploded"),
+            DatabaseUnexpectedError(),
             "curation_ready_build_failed_db_error",
             "db_error",
         ),

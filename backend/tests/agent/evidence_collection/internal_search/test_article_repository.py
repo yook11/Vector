@@ -9,15 +9,7 @@ from typing import Any, get_args
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import text
-from sqlalchemy.exc import (
-    IntegrityError,
-    InterfaceError,
-    OperationalError,
-    ProgrammingError,
-)
-from sqlalchemy.exc import (
-    TimeoutError as SQLAlchemyTimeoutError,
-)
+from sqlalchemy.exc import IntegrityError, InterfaceError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.evidence_collection.internal_search import (
@@ -41,6 +33,12 @@ from app.analysis.assessment.domain.result import MAX_INVESTOR_TAKE_LEN
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
+)
+from app.db.errors import (
+    DatabaseConnectionError,
+    DatabaseConnectionErrorReason,
+    DatabaseTimeoutError,
+    DatabaseTimeoutErrorReason,
 )
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
@@ -207,13 +205,12 @@ class TestPgVectorArticleSearchRepository:
     @pytest.mark.parametrize(
         "error",
         [
-            SQLAlchemyTimeoutError("SECRET db timeout"),
-            OperationalError("SECRET statement", {}, RuntimeError("db down")),
-            InterfaceError(
-                "SECRET statement",
-                {},
-                RuntimeError("connection lost"),
-                connection_invalidated=True,
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+            DatabaseConnectionError(
+                reason=DatabaseConnectionErrorReason.CONNECTION_FAILED
+            ),
+            DatabaseConnectionError(
+                reason=DatabaseConnectionErrorReason.CONNECTION_LOST
             ),
         ],
     )

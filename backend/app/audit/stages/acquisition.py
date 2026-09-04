@@ -5,7 +5,6 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import ClassVar, TypedDict
 
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
@@ -28,6 +27,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
 from app.collection.external_fetch_errors import ExternalFetchError
+from app.db.errors import DatabaseError
 from app.shared.security.redaction import redact_secrets
 
 
@@ -93,7 +93,7 @@ class SourceAcquisitionAuditRepository:
         *,
         source_id: int | None,
         source_name: str | None,
-        exc: AcquisitionError | SQLAlchemyError,
+        exc: AcquisitionError | DatabaseError,
     ) -> None:
         """source 全体の acquisition 失敗を記録する。"""
         projection = project_failure(exc, fallback_code="unexpected_error")

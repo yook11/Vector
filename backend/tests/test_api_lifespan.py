@@ -38,8 +38,7 @@ async def test_lifespan_holds_engine_and_session_factory_then_disposes(
     app = FastAPI()
     async with lifespan(app):
         assert app.state.engine is engine
-        assert app.state.session_factory.kw["expire_on_commit"] is False
-        assert app.state.session_factory.kw["bind"] is engine
+        assert callable(app.state.session_factory)
 
     engine.dispose.assert_awaited_once()
 
