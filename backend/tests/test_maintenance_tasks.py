@@ -32,6 +32,7 @@ def _ctx_with_session_factory() -> MagicMock:
     """ctx.state.session_factory を持つ Context モックを返す。"""
     ctx = MagicMock()
     ctx.state.session_factory = MagicMock()
+    ctx.state.pipeline_control_redis = MagicMock()
     return ctx
 
 

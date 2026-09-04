@@ -30,25 +30,16 @@ from taskiq import SimpleRetryMiddleware
 # が正規 (re-export がない)。version up で公開された場合は `from taskiq.middlewares
 # import OpenTelemetryMiddleware` に切替可。
 from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
-from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
+from taskiq_redis import RedisStreamBroker
 
 from app.config import settings
-from app.redis.iam_auth import redis_connection_options
+from app.redis.clients import taskiq_stream_connection
 
 logger = structlog.get_logger(__name__)
 
 # IAM 認証時は URL の user が credential_provider へ移る (taskiq-redis は
 # **connection_kwargs を redis-py の ConnectionPool まで素通しする)。
-_redis_url, _redis_iam_kwargs = redis_connection_options(settings.redis_url)
-
-# 守る関係は「xread_block (2s) + event loop 停止の許容幅 < read timeout」。
-# redis-py 8 の既定 5 秒では worker の同期 import 等の停止で listener の blocking
-# read が期限切れになり、retry も無い (retry_on_timeout=False) ため例外が receiver
-# を貫通して worker プロセスごと落ちる。30 秒超の停止では従来どおり落ちる。
-# broker は API の kiq 経路とも共有のため、Redis 無応答時の API 側の失敗検知が
-# 最大 30 秒に伸びるトレードオフを引き受ける (接続確立は 5 秒で fail-fast を保つ)。
-_SOCKET_READ_TIMEOUT_SECONDS = 30
-_SOCKET_CONNECT_TIMEOUT_SECONDS = 5
+_stream = taskiq_stream_connection(settings)
 
 
 def _make_broker(
@@ -62,7 +53,7 @@ def _make_broker(
 ) -> RedisStreamBroker:
     return (
         RedisStreamBroker(
-            url=_redis_url,
+            url=_stream.url,
             idle_timeout=600_000,
             maxlen=10_000,
             queue_name=queue_name,
@@ -71,23 +62,8 @@ def _make_broker(
             consumer_id=consumer_id,
             unacknowledged_batch_size=unacknowledged_batch_size,
             unacknowledged_lock_timeout=unacknowledged_lock_timeout,
-            socket_timeout=_SOCKET_READ_TIMEOUT_SECONDS,
-            socket_connect_timeout=_SOCKET_CONNECT_TIMEOUT_SECONDS,
-            **_redis_iam_kwargs,
-        )
-        .with_result_backend(
-            RedisAsyncResultBackend(
-                redis_url=_redis_url,
-                result_ex_time=3600,
-                socket_timeout=_SOCKET_READ_TIMEOUT_SECONDS,
-                socket_connect_timeout=_SOCKET_CONNECT_TIMEOUT_SECONDS,
-                # result key を taskiq:<task_id> に名前空間化する。prefix_str 無しだと
-                # bare uuid となり Redis ACL で stream key と区別できない。collect の
-                # ~taskiq:* grant を実在させ set_result の NOPERM を防ぐ
-                # (infra/redis/fly.toml の ACL と対)。
-                prefix_str="taskiq",
-                **_redis_iam_kwargs,
-            )
+            max_connection_pool_size=_stream.max_connection_pool_size,
+            **_stream.connection_kwargs,
         )
         # OTel middleware を **最初** に挿す。pre_execute は登録順 (FIFO) ・
         # post_execute / post_save は逆順 (LIFO) のため、これで consumer span が
@@ -136,6 +112,6 @@ broker_maintenance = _make_broker("pipeline:maintenance")
 #   - broker × 8 が定義済の状態で各 hook 登録が走る
 #   - `from app.queue.brokers import broker_X` 単独で lifecycle 完了が保証される
 #     (test や entrypoint が個別に lifecycle module を import する必要なし)
-import app.queue.composition  # noqa: E402, F401
-import app.queue.lifecycle  # noqa: E402, F401
-import app.queue.schedulers  # noqa: E402, F401
+import app.queue.lifecycle  # noqa: E402, F401, I001
+import app.queue.composition  # noqa: E402, F401, I001
+import app.queue.schedulers  # noqa: E402, F401, I001

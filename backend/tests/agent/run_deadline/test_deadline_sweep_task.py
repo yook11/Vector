@@ -122,7 +122,12 @@ class FakeLiveStreamPublisher:
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
-    return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            session_factory=session_factory,
+            agent_live_redis=object(),
+        )
+    )
 
 
 def _quota_stale_metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
@@ -199,7 +204,6 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
         "observe_stale_reservations",
         observe_stale_reservations,
     )
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -522,7 +526,6 @@ async def test_sweep_task_batches_queued_quota_observability_after_commit(
         record_release,
     )
     FakeLiveStreamPublisher.instances = []
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -618,7 +621,6 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
 
     FakeLiveStreamPublisher.instances = []
     CommitCheckingPublisher.publish_outcomes = [RuntimeError("redis unavailable"), None]
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",

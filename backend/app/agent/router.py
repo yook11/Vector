@@ -58,8 +58,8 @@ from app.analysis.ai_provider_errors import AIProviderError
 from app.db.fastapi import get_caller_managed_session
 from app.dependencies import (
     CurrentUser,
+    get_agent_live_redis,
     get_current_user,
-    get_redis_client,
 )
 from app.schemas.research import (
     PaginatedResearchThreadResponse,
@@ -303,7 +303,7 @@ async def cancel_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
-    redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
+    redis: Annotated[aioredis.Redis, Depends(get_agent_live_redis)],
 ) -> Response:
     repo = AgentRunRepository(session)
     async with session.begin():
@@ -386,7 +386,7 @@ async def stream_research_run_events(
         Depends(get_agent_run_sse_request_started_at),
     ],
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
+    redis: Annotated[aioredis.Redis, Depends(get_agent_live_redis)],
     capacity: Annotated[AgentRunSseCapacity, Depends(get_agent_run_sse_capacity)],
     timing: Annotated[AgentRunSseTiming, Depends(get_agent_run_sse_timing)],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,

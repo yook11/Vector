@@ -57,7 +57,6 @@ from app.analysis.ai_provider_errors import (
 from app.queue.brokers import broker_agent
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.schedule import CRON_AGENT_RUN_SWEEP
-from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -125,7 +124,7 @@ async def run_agent_answer(
         return
     user_id, thread_id, question = question_row
 
-    redis = get_redis()
+    redis = ctx.state.agent_live_redis
     stream_events = AgentRunLiveStreamPublisher(
         redis,
         run_id,
@@ -344,7 +343,7 @@ async def sweep_deadline_exceeded_agent_runs(ctx: Context = TaskiqDepends()) -> 
             )
     for running_run in result.running_terminal_runs:
         try:
-            redis = get_redis()
+            redis = ctx.state.agent_live_redis
             stream_events = AgentRunLiveStreamPublisher(
                 redis,
                 running_run.run_id,

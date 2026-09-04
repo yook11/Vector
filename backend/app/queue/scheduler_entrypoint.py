@@ -78,7 +78,7 @@ async def _run_one(scheduler: TaskiqScheduler) -> None:
         for source in scheduler.sources:
             await source.startup()
             started.append(source)
-        # broker.startup: CLIENT_STARTUP(log) + middleware + result_backend を起動。
+        # broker.startup: CLIENT_STARTUP(log) + middleware を起動。
         await scheduler.startup()
         await SchedulerLoop(scheduler).run(
             update_interval=_UPDATE_INTERVAL,

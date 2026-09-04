@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from redis.asyncio import Redis
 
+from app.config import settings
 from app.queue.stream_health import (
     PIPELINE_QUEUE_TARGETS,
     StreamHealthError,
@@ -22,7 +23,7 @@ from app.queue.stream_health import (
     has_idle_pending,
     read_stream_health,
 )
-from app.redis import get_redis
+from app.redis import create_cli_pipeline_control_client
 
 _HEADER = (
     "Stream Retained Lag Pending Oldest_undelivered_enqueue_age "
@@ -112,8 +113,12 @@ async def render_pipeline_queue_status(
 
 
 async def _run(check_idle: bool) -> None:
-    """共有Redis clientでstatusを取得して標準出力へ表示する。"""
-    print(await render_pipeline_queue_status(get_redis(), check_idle=check_idle))
+    """短命の control client で status を取得して標準出力へ表示する。"""
+    redis = create_cli_pipeline_control_client(settings)
+    try:
+        print(await render_pipeline_queue_status(redis, check_idle=check_idle))
+    finally:
+        await redis.aclose()
 
 
 def main(argv: Sequence[str] | None = None) -> None:

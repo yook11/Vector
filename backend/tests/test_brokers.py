@@ -5,6 +5,7 @@ import importlib
 import inspect
 import re
 import shlex
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -483,6 +484,10 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
         patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
         patch("app.queue.lifecycle.log_pool_initialized") as log_pool_initialized,
         patch("app.queue.lifecycle.register_pool_metrics"),
+        patch("app.queue.lifecycle.create_worker_agent_live_client") as create_live,
+        patch(
+            "app.queue.lifecycle.create_worker_pipeline_control_client"
+        ) as create_control,
         capture_logs() as logs,
     ):
         for handler in broker.event_handlers[TaskiqEvents.WORKER_STARTUP]:
@@ -496,6 +501,10 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
     assert log_pool_initialized.call_args.kwargs["service_name"] == service_name
     engine.dispose.assert_awaited_once_with()
     assert state.engine is engine
+    create_live.assert_not_called()
+    create_control.assert_not_called()
+    assert not hasattr(state, "agent_live_redis")
+    assert not hasattr(state, "pipeline_control_redis")
     events = {log["event"] for log in logs}
     assert startup_event in events
     assert shutdown_event in events
@@ -563,6 +572,7 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state() -> None:
     from app.queue.composition import _wire_analysis_adapters
 
     state = TaskiqState()
+    state.pipeline_control_redis = MagicMock()
     with (
         patch("app.analysis.curation.ai.gemini.settings") as mock_es,
         patch("app.analysis.assessment.ai.deepseek.settings") as mock_cs,
@@ -679,12 +689,12 @@ class TestSocketTimeout:
         assert kwargs["socket_timeout"] == 30
         assert kwargs["socket_connect_timeout"] == 5
 
-    def test_result_backend_connection_pool_has_socket_timeout(self) -> None:
+    def test_broker_uses_dummy_result_backend(self) -> None:
+        from taskiq.result_backends.dummy import DummyResultBackend
+
         from app.queue.brokers import broker_dispatch
 
-        kwargs = broker_dispatch.result_backend.redis_pool.connection_kwargs
-        assert kwargs["socket_timeout"] == 30
-        assert kwargs["socket_connect_timeout"] == 5
+        assert isinstance(broker_dispatch.result_backend, DummyResultBackend)
 
 
 @pytest.mark.asyncio
@@ -698,6 +708,7 @@ async def test_maintenance_startup_logs_auth_engine_failure_without_raising() ->
     with (
         patch("app.queue.lifecycle.setup_logfire"),
         patch("app.queue.lifecycle.create_worker_engine", return_value=MagicMock()),
+        patch("app.queue.lifecycle.create_worker_pipeline_control_client"),
         patch(
             "app.queue.lifecycle.create_auth_retention_engine",
             side_effect=ValueError("bad AUTH_RETENTION_DATABASE_URL"),
@@ -717,3 +728,135 @@ async def test_maintenance_startup_logs_auth_engine_failure_without_raising() ->
         for log in logs
     )
     assert any(log["event"] == "maintenance_worker_startup" for log in logs)
+
+
+def _owned_redis() -> MagicMock:
+    redis = MagicMock()
+    redis.aclose = AsyncMock()
+    return redis
+
+
+def _session_factory_stub() -> MagicMock:
+    session = AsyncMock()
+    session.__aenter__.return_value = session
+    session.__aexit__.return_value = False
+    return MagicMock(return_value=session)
+
+
+@asynccontextmanager
+async def _worker_lifecycle_stubs(
+    engine: MagicMock,
+    *,
+    live: MagicMock | None = None,
+    control: MagicMock | None = None,
+    catalog: bool = False,
+):
+    patches = [
+        patch("app.queue.lifecycle.setup_logfire"),
+        patch("app.queue.lifecycle.create_worker_engine", return_value=engine),
+        patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
+        patch("app.queue.lifecycle.log_pool_initialized"),
+        patch("app.queue.lifecycle.register_pool_metrics"),
+        patch(
+            "app.queue.lifecycle.create_auth_retention_engine",
+            side_effect=RuntimeError("unused"),
+        ),
+        patch(
+            "app.queue.lifecycle.caller_managed_session_factory",
+            return_value=_session_factory_stub(),
+        ),
+    ]
+    if catalog:
+        patches.append(
+            patch(
+                "app.analysis.assessment.repository.AssessmentRepository.assert_category_catalog_covers_enum",
+                new_callable=AsyncMock,
+            )
+        )
+    with ExitStack() as stack:
+        for item in patches:
+            stack.enter_context(item)
+        create_live = stack.enter_context(
+            patch(
+                "app.queue.lifecycle.create_worker_agent_live_client",
+                return_value=live if live is not None else MagicMock(),
+            )
+        )
+        create_control = stack.enter_context(
+            patch(
+                "app.queue.lifecycle.create_worker_pipeline_control_client",
+                return_value=control if control is not None else MagicMock(),
+            )
+        )
+        yield create_live, create_control
+
+
+@pytest.mark.asyncio
+async def test_agent_worker_owns_only_agent_live_redis() -> None:
+    from app.queue.brokers import broker_agent
+
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    live = _owned_redis()
+    state = TaskiqState()
+
+    async with _worker_lifecycle_stubs(engine, live=live) as (create_live, create_control):
+        await broker_agent.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
+        await broker_agent.event_handlers[TaskiqEvents.WORKER_SHUTDOWN][0](state)
+
+    create_live.assert_called_once_with(settings)
+    create_control.assert_not_called()
+    assert state.agent_live_redis is live
+    assert not hasattr(state, "pipeline_control_redis")
+    live.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("broker_name", "needs_catalog"),
+    [
+        ("broker_analysis", True),
+        ("broker_embedding", False),
+        ("broker_maintenance", False),
+    ],
+)
+async def test_pipeline_workers_own_only_pipeline_control_redis(
+    broker_name: str,
+    needs_catalog: bool,
+) -> None:
+    from app.queue import brokers
+
+    broker = getattr(brokers, broker_name)
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    control = _owned_redis()
+    state = TaskiqState()
+
+    async with _worker_lifecycle_stubs(
+        engine, control=control, catalog=needs_catalog
+    ) as (create_live, create_control):
+        await broker.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
+        await broker.event_handlers[TaskiqEvents.WORKER_SHUTDOWN][0](state)
+
+    create_live.assert_not_called()
+    create_control.assert_called_once_with(settings)
+    assert state.pipeline_control_redis is control
+    assert not hasattr(state, "agent_live_redis")
+    control.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_analysis_attaches_redis_before_composition() -> None:
+    from app.queue.brokers import broker_analysis
+
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    control = _owned_redis()
+    state = TaskiqState()
+
+    async with _worker_lifecycle_stubs(engine, control=control, catalog=True):
+        await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
+        assert state.pipeline_control_redis is control
+        assert broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][1].__name__ == (
+            "_wire_analysis_adapters"
+        )

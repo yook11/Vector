@@ -42,6 +42,7 @@ def _ctx_with_session_factory() -> MagicMock:
     """taskiq Context モック (session_factory が async context manager を返す)。"""
     ctx = MagicMock()
     ctx.state.session_factory = _make_session_factory()
+    ctx.state.pipeline_control_redis = MagicMock()
     return ctx
 
 

@@ -34,6 +34,7 @@ from app.insights.trend_discovery.router import (
 )
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
+from app.redis import create_api_agent_live_client
 from app.routers import (
     articles,
     categories,
@@ -124,8 +125,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         register_pool_metrics(
             engine, pool_size=API_POOL_SIZE, max_overflow=API_POOL_MAX_OVERFLOW
         )
+        app.state.agent_live_redis = create_api_agent_live_client(settings)
         yield
     finally:
+        live = getattr(app.state, "agent_live_redis", None)
+        if live is not None:
+            await live.aclose()
         await engine.dispose()
 
 

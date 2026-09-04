@@ -149,7 +149,12 @@ def _run_deadline_seconds() -> int:
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
-    return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            session_factory=session_factory,
+            agent_live_redis=object(),
+        )
+    )
 
 
 def _assert_safe_start_error(
@@ -487,7 +492,6 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
 
         return raise_if_called
 
-    monkeypatch.setattr(agent_run_tasks, "get_redis", forbidden("redis"))
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -572,11 +576,6 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
     def failing_session_factory() -> AsyncSession:
         return failing_session
 
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "get_redis",
-        lambda: pytest.fail("rollback path must not start live dependencies"),
-    )
     try:
         with (
             capture_logs() as logs,

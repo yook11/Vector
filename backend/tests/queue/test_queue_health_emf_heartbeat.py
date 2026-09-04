@@ -9,8 +9,9 @@ stage ごとの成否分岐と構造だけを検証する。
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -73,8 +74,11 @@ def _stream_health_error(target: StreamHealthTarget) -> StreamHealthError:
     )
 
 
-def _patch_targets_and_redis(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(module, "get_redis", MagicMock(return_value=object()))
+def _health_ctx(redis: object = object()) -> SimpleNamespace:
+    return SimpleNamespace(state=SimpleNamespace(pipeline_control_redis=redis))
+
+
+def _patch_targets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
 
 
@@ -84,14 +88,14 @@ async def test_all_stages_success_emit_observation_up_one_per_stage(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """全4 stage成功時、stageごとにobservation_up=1のEMF行が1行、計4行出る。"""
-    _patch_targets_and_redis(monkeypatch)
+    _patch_targets(monkeypatch)
     snapshots = [
         _successful_observation_snapshot(target, 1_000.0 + index)
         for index, target in enumerate(_FOUR_TARGETS)
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx())
     records = metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
 
     assert [record["stage"] for record in records] == list(_STAGES)
@@ -110,7 +114,7 @@ async def test_one_stage_failure_emits_zero_and_continues_other_stages(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """特定stageのStreamHealthErrorはそのstageだけobservation_up=0にし、他stageの観測を止めない。"""
-    _patch_targets_and_redis(monkeypatch)
+    _patch_targets(monkeypatch)
     results: list[StreamHealthSnapshot | StreamHealthError] = [
         _stream_health_error(target)
         if target.stage == failing_stage
@@ -119,7 +123,7 @@ async def test_one_stage_failure_emits_zero_and_continues_other_stages(
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=results))
 
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx())
     records = metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
     observation_up_by_stage = {
         record["stage"]: record[_OBSERVATION_UP_METRIC] for record in records
@@ -136,11 +140,11 @@ async def test_all_stages_failure_emit_four_zero_lines(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """全stage失敗時、4行すべてobservation_up=0で出る。"""
-    _patch_targets_and_redis(monkeypatch)
+    _patch_targets(monkeypatch)
     errors = [_stream_health_error(target) for target in _FOUR_TARGETS]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=errors))
 
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx())
     records = metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
 
     assert [record["stage"] for record in records] == list(_STAGES)

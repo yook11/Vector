@@ -321,8 +321,17 @@ class ForbiddenConstruction:
         raise AssertionError("start skip後にlive dependencyを生成してはいけません")
 
 
-def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
-    return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
+def _ctx(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    agent_live_redis: object = object(),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            session_factory=session_factory,
+            agent_live_redis=agent_live_redis,
+        )
+    )
 
 
 def _patch_worker_execution(
@@ -865,10 +874,9 @@ async def test_run_agent_answer_injects_activity_reporter(
 
     redis = object()
     _patch_worker_execution(monkeypatch, build_agent)
-    monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
+        ctx=_ctx(session_factory, agent_live_redis=redis),
     )
 
     assert isinstance(captured_kwargs["events"], AgentRunLiveActivityReporter)
@@ -892,7 +900,6 @@ async def test_run_agent_answer_starts_stream_attempt_only_after_start(
         return fake_agent
 
     _patch_worker_execution(monkeypatch, build_agent)
-    monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -902,7 +909,7 @@ async def test_run_agent_answer_starts_stream_attempt_only_after_start(
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
+        ctx=_ctx(session_factory, agent_live_redis=redis),
     )
 
     assert len(FakeLiveStreamPublisher.instances) == 1
@@ -932,7 +939,6 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
         return fake_agent
 
     _patch_worker_execution(monkeypatch, build_agent)
-    monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
@@ -953,7 +959,7 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
+        ctx=_ctx(session_factory, agent_live_redis=redis),
     )
 
     assert len(CapturingDeltaReporter.instances) == 1
@@ -1027,11 +1033,6 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
         "build_answering_runner",
         forbidden_builder,
         raising=False,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "get_redis",
-        forbidden_builder,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -2507,7 +2508,6 @@ async def test_provider_timeout_error_follows_existing_unexpected_error_path(
         monkeypatch,
         lambda **_kwargs: FakeAgent(exc=TimeoutError("provider timeout")),
     )
-    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
