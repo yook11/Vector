@@ -76,14 +76,14 @@ def test_otel_middleware_singleton_per_broker() -> None:
 def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
     """CLIENT_STARTUP hook が cron 駆動 5 broker のみに登録される。
 
-    scheduler を持たない broker (collection / analysis / embedding) に登録すると、
-    将来「.kiq() の遅延副作用で broker.startup() が走る」変更が入ったときに
-    API process で setup_logfire が二重呼出される事故になりうる。
+    collection は API が producer として startup するが cron が無く、
+    analysis / embedding は enqueue 側 startup 対象外。CLIENT hook の
+    対象集合はこの 5 本のまま。
     """
     for broker, label in _BROKERS_WITH_SCHEDULER:
         handlers = broker.event_handlers.get(TaskiqEvents.CLIENT_STARTUP, [])
         assert len(handlers) >= 1, (
-            f"{label}: missing CLIENT_STARTUP handler (scheduler bootstrap)"
+            f"{label}: missing CLIENT_STARTUP handler (client lifecycle)"
         )
 
     for broker, label in _BROKERS_WITHOUT_SCHEDULER:

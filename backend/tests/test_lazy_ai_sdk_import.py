@@ -3,10 +3,10 @@
 非 AI を実行しない taskiq プロセス (scheduler / collect の dispatch・collection /
 maintenance / trend_discovery) と API プロセスの module import は、起動時に重い
 AI SDK (``openai`` + ``google.genai``、実測 ~133MB) を import してはならない。
-SDK は AI を実行する worker の WORKER_STARTUP hook (broker_analysis /
-broker_embedding / broker_briefing)、または API の request-scoped factory 内でのみ
-ロードされる設計 (``app/queue/composition.py`` と ``app/agent/router.py`` の遅延
-import)。
+SDK は AI を実行する worker の compose 関数本体 (broker_analysis /
+broker_embedding / broker_briefing / broker_agent)、または API の
+request-scoped factory 内でのみロードされる設計 (``app/queue/composition.py``
+と ``app/agent/router.py`` の遅延 import)。
 
 各プロセスの import surface は ``supervisord/{scheduler,fetch,insights,analysis}.conf``
 (maintenance program は analysis.conf) の ``taskiq worker``/``taskiq scheduler`` 起動

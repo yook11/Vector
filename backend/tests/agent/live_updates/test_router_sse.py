@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from starlette.datastructures import State
 from starlette.requests import Request
 
+import app.agent.live_updates.transport as live_transport_module
 import app.agent.router as router_module
 from app.agent.live_updates.sse import AgentRunSseCapacity
 from app.agent.live_updates.stream import (
@@ -27,10 +28,13 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamTerminalEvent,
     agent_run_live_stream_key,
 )
+from app.agent.live_updates.transport import (
+    AgentLiveTransport,
+    get_agent_live_transport,
+)
 from app.agent.runs.contracts import OwnedAgentRunLiveContext
 from app.agent.runs.types import AgentRunStatus
 from app.config import settings
-from app.dependencies import get_agent_live_redis
 from app.main import app
 
 RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
@@ -71,7 +75,9 @@ async def sse_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[tuple[AsyncClient, FakeRedis]]:
     redis = FakeRedis()
-    app.dependency_overrides[get_agent_live_redis] = lambda: redis
+    app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
+        redis
+    )
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         AgentRunSseCapacity()
     )
@@ -275,7 +281,7 @@ async def test_endpoint_maps_preflight_failure_before_starting_sse(
     reader = FakeReader(AgentRunLiveStreamReadResult(status=read_status))
     monkeypatch.setattr(router_module, "read_agent_run_live_context", context)
     monkeypatch.setattr(
-        router_module,
+        live_transport_module,
         "AgentRunLiveStreamReader",
         lambda _redis: reader,
     )
@@ -323,7 +329,7 @@ async def test_endpoint_streams_retry_events_and_terminal_with_safe_headers(
     )
     monkeypatch.setattr(router_module, "read_agent_run_live_context", context)
     monkeypatch.setattr(
-        router_module,
+        live_transport_module,
         "AgentRunLiveStreamReader",
         lambda _redis: reader,
     )
@@ -371,7 +377,9 @@ async def test_endpoint_requires_bff_user_jwt_before_capacity_or_redis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = FakeRedis()
-    app.dependency_overrides[get_agent_live_redis] = lambda: redis
+    app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
+        redis
+    )
     capacity = AgentRunSseCapacity(process_limit=1)
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         capacity
@@ -411,11 +419,13 @@ async def test_full_middleware_stack_propagates_disconnect_and_releases_slot(
         capacity
     )
     monkeypatch.setattr(
-        router_module,
+        live_transport_module,
         "AgentRunLiveStreamReader",
         lambda _redis: reader,
     )
-    app.dependency_overrides[get_agent_live_redis] = lambda: redis
+    app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
+        redis
+    )
     response_started = asyncio.Event()
     request_sent = False
 
@@ -500,7 +510,9 @@ async def test_real_redis_events_flow_through_fastapi_sse_with_cursor(
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         AgentRunSseCapacity()
     )
-    app.dependency_overrides[get_agent_live_redis] = lambda: redis
+    app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
+        redis
+    )
     try:
         publisher = AgentRunLiveStreamPublisher(redis, run_id, 2)
         marker_id = await publisher.begin_attempt()

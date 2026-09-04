@@ -12,7 +12,6 @@ import urllib.parse
 
 import pytest
 
-from app.config import settings
 from app.redis.iam_auth import (
     ElastiCacheIAMProvider,
     _botocore_session,
@@ -111,26 +110,28 @@ class TestElastiCacheIAMProvider:
 
 
 class TestRedisConnectionOptions:
-    """settings を見る入口。無効なら URL をそのまま使う。"""
+    """引数だけで接続指定を組み立てる純 builder。"""
 
-    def test_disabled_leaves_url_and_kwargs_untouched(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_disabled_leaves_url_and_kwargs_untouched(self) -> None:
         """既定は無効。Fly / dev では URL も kwargs も一切変わらない。"""
-        monkeypatch.setattr(settings, "redis_iam_auth", False)
         password_url = "redis://:secret@localhost:6379/0"
-        url, kwargs = redis_connection_options(password_url)
+        url, kwargs = redis_connection_options(
+            password_url,
+            iam_auth=False,
+            region=None,
+            cache_name=None,
+        )
         assert url == password_url
         assert kwargs == {}
 
-    def test_enabled_strips_userinfo_but_keeps_the_rest_of_the_url(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_enabled_strips_userinfo_but_keeps_the_rest_of_the_url(self) -> None:
         """username + credential_provider の併用は redis-py が DataError で拒否する。"""
-        monkeypatch.setattr(settings, "redis_iam_auth", True)
-        monkeypatch.setattr(settings, "aws_region", _REGION)
-        monkeypatch.setattr(settings, "redis_iam_cache_name", _CACHE_NAME)
-        url, _kwargs = redis_connection_options(_IAM_URL)
+        url, _kwargs = redis_connection_options(
+            _IAM_URL,
+            iam_auth=True,
+            region=_REGION,
+            cache_name=_CACHE_NAME,
+        )
         parsed = urllib.parse.urlparse(url)
         assert parsed.username is None
         assert parsed.password is None
@@ -139,46 +140,44 @@ class TestRedisConnectionOptions:
         assert parsed.port == 6379
         assert parsed.path == "/3"
 
-    def test_enabled_provider_is_bound_to_the_url_user(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(settings, "redis_iam_auth", True)
-        monkeypatch.setattr(settings, "aws_region", _REGION)
-        monkeypatch.setattr(settings, "redis_iam_cache_name", _CACHE_NAME)
-        _url, kwargs = redis_connection_options(_IAM_URL)
+    def test_enabled_provider_is_bound_to_the_url_user(self) -> None:
+        _url, kwargs = redis_connection_options(
+            _IAM_URL,
+            iam_auth=True,
+            region=_REGION,
+            cache_name=_CACHE_NAME,
+        )
         provider = kwargs["credential_provider"]
         assert isinstance(provider, ElastiCacheIAMProvider)
         assert provider.user == _USER
         assert provider.cache_name == _CACHE_NAME
         assert provider.region == _REGION
 
-    def test_enabled_without_url_user_fails_loudly(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_enabled_without_url_user_fails_loudly(self) -> None:
         """黙って匿名接続にしない。token は user 単位で署名する。"""
-        monkeypatch.setattr(settings, "redis_iam_auth", True)
-        monkeypatch.setattr(settings, "aws_region", _REGION)
-        monkeypatch.setattr(settings, "redis_iam_cache_name", _CACHE_NAME)
         with pytest.raises(ValueError, match="user"):
             redis_connection_options(
-                "redis://vector-cache.abc.cache.amazonaws.com:6379/0"
+                "redis://vector-cache.abc.cache.amazonaws.com:6379/0",
+                iam_auth=True,
+                region=_REGION,
+                cache_name=_CACHE_NAME,
             )
 
-    def test_enabled_without_region_fails_loudly(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_enabled_without_region_fails_loudly(self) -> None:
         """config validator を迂回して到達した場合も黙って password 認証に落ちない。"""
-        monkeypatch.setattr(settings, "redis_iam_auth", True)
-        monkeypatch.setattr(settings, "aws_region", None)
-        monkeypatch.setattr(settings, "redis_iam_cache_name", _CACHE_NAME)
         with pytest.raises(RuntimeError, match="AWS_REGION"):
-            redis_connection_options(_IAM_URL)
+            redis_connection_options(
+                _IAM_URL,
+                iam_auth=True,
+                region=None,
+                cache_name=_CACHE_NAME,
+            )
 
-    def test_enabled_without_cache_name_fails_loudly(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(settings, "redis_iam_auth", True)
-        monkeypatch.setattr(settings, "aws_region", _REGION)
-        monkeypatch.setattr(settings, "redis_iam_cache_name", None)
+    def test_enabled_without_cache_name_fails_loudly(self) -> None:
         with pytest.raises(RuntimeError, match="REDIS_IAM_CACHE_NAME"):
-            redis_connection_options(_IAM_URL)
+            redis_connection_options(
+                _IAM_URL,
+                iam_auth=True,
+                region=_REGION,
+                cache_name=None,
+            )

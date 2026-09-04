@@ -26,8 +26,6 @@ from urllib.parse import urlencode, urlparse, urlunparse
 
 from redis.credentials import CredentialProvider
 
-from app.config import settings
-
 # AWS 側の token 有効期限が 15 分のため、presign もそれに合わせる。
 _TOKEN_EXPIRES_IN_SECONDS = 900
 
@@ -101,7 +99,13 @@ class ElastiCacheIAMProvider(CredentialProvider):
         return await asyncio.to_thread(self.get_credentials)
 
 
-def redis_connection_options(url: str) -> tuple[str, dict[str, Any]]:
+def redis_connection_options(
+    url: str,
+    *,
+    iam_auth: bool,
+    region: str | None,
+    cache_name: str | None,
+) -> tuple[str, dict[str, Any]]:
     """接続 URL と、そこに足す接続 kwargs を返す。
 
     IAM 認証が有効なら「どの user で繋ぐか」を URL から provider へ写し、userinfo を
@@ -109,10 +113,8 @@ def redis_connection_options(url: str) -> tuple[str, dict[str, Any]]:
     ``DataError`` で拒否するため、URL を単一の情報源にしてここで分離する。
     無効時は URL をそのまま使う (dev / Fly の password 認証)。
     """
-    if not settings.redis_iam_auth:
+    if not iam_auth:
         return url, {}
-    region = settings.aws_region
-    cache_name = settings.redis_iam_cache_name
     if region is None or cache_name is None:
         # config の validator が保証するが、型を絞るために残す。
         raise RuntimeError(

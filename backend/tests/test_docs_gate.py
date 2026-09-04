@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Iterator
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -65,11 +66,26 @@ def reload_app_with_env(
     importlib.reload(main)
 
 
+def _stub_api_producers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """docs 判定だけを見るため、reload 後の producer broker を起動しない。"""
+    from app import main as main_module
+
+    producers = []
+    for _ in range(3):
+        broker = MagicMock()
+        broker.startup = AsyncMock()
+        broker.shutdown = AsyncMock()
+        producers.append(broker)
+    monkeypatch.setattr(main_module, "_API_PRODUCER_BROKERS", tuple(producers))
+
+
 @pytest.mark.unit
 def test_docs_endpoints_enabled_in_development(
     reload_app_with_env: Callable[[str], FastAPI],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = reload_app_with_env("development")
+    _stub_api_producers(monkeypatch)
     with TestClient(app) as client:
         assert client.get("/docs").status_code == 200
         assert client.get("/redoc").status_code == 200
@@ -79,8 +95,10 @@ def test_docs_endpoints_enabled_in_development(
 @pytest.mark.unit
 def test_docs_endpoints_disabled_in_production(
     reload_app_with_env: Callable[[str], FastAPI],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = reload_app_with_env("production")
+    _stub_api_producers(monkeypatch)
     with TestClient(app) as client:
         assert client.get("/docs").status_code == 404
         assert client.get("/redoc").status_code == 404

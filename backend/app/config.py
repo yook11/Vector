@@ -92,7 +92,7 @@ class Settings(DatabaseSettings):
 
     # AI
     # Stage 3 (curation) と Stage 4 (assessment) のアダプター選択は env では
-    # なく brokers.py の composition root (_wire_analysis_adapters) で hardcode する。
+    # なく composition.py の wiring (_wire_analysis_adapters) で hardcode する。
     # 切替はコード変更 + worker restart で行うため、ここに provider 名は持たない。
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")

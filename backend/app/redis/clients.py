@@ -28,6 +28,9 @@ class _RuntimeRedisSettings(Protocol):
     """用途別 client 生成に必要な設定。"""
 
     redis_url: str
+    redis_iam_auth: bool
+    aws_region: str | None
+    redis_iam_cache_name: str | None
 
 
 class TaskiqStreamConnection(NamedTuple):
@@ -36,6 +39,18 @@ class TaskiqStreamConnection(NamedTuple):
     url: str
     max_connection_pool_size: int
     connection_kwargs: dict[str, Any]
+
+
+def _connection_options(
+    settings: _RuntimeRedisSettings,
+) -> tuple[str, dict[str, Any]]:
+    """runtime settings を設定非依存の接続 builder へ展開する。"""
+    return redis_connection_options(
+        settings.redis_url,
+        iam_auth=settings.redis_iam_auth,
+        region=settings.aws_region,
+        cache_name=settings.redis_iam_cache_name,
+    )
 
 
 def _create_client(
@@ -60,7 +75,7 @@ def _create_client(
 def _create_agent_live_client(
     settings: _RuntimeRedisSettings, *, max_connections: int
 ) -> aioredis.Redis:
-    url, iam_kwargs = redis_connection_options(settings.redis_url)
+    url, iam_kwargs = _connection_options(settings)
     return _create_client(
         url,
         iam_kwargs=iam_kwargs,
@@ -73,7 +88,7 @@ def _create_agent_live_client(
 def _create_pipeline_control_client(
     settings: _RuntimeRedisSettings, *, max_connections: int
 ) -> aioredis.Redis:
-    url, iam_kwargs = redis_connection_options(settings.redis_url)
+    url, iam_kwargs = _connection_options(settings)
     return _create_client(
         url,
         iam_kwargs=iam_kwargs,
@@ -122,7 +137,7 @@ def taskiq_stream_connection(
 
     decode_responses は載せない。符号化は Taskiq が持つ。
     """
-    url, iam_kwargs = redis_connection_options(settings.redis_url)
+    url, iam_kwargs = _connection_options(settings)
     return TaskiqStreamConnection(
         url=url,
         max_connection_pool_size=TASKIQ_STREAM_MAX_CONNECTIONS,

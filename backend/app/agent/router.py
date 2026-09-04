@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
-import redis.asyncio as aioredis
 import structlog
 from fastapi import (
     APIRouter,
@@ -40,10 +39,11 @@ from app.agent.live_updates.sse import (
 from app.agent.live_updates.sse_response import AgentRunSseStreamingResponse
 from app.agent.live_updates.stream import (
     AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS,
-    AgentRunLiveStreamPublisher,
-    AgentRunLiveStreamReader,
     AgentRunLiveStreamTerminalEvent,
-    agent_run_live_stream_key,
+)
+from app.agent.live_updates.transport import (
+    AgentLiveTransport,
+    get_agent_live_transport,
 )
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
@@ -51,6 +51,7 @@ from app.agent.runs.contracts import (
     OwnedAgentRunLiveContext,
     ThreadNotFoundError,
 )
+from app.agent.runs.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.repository import AgentThreadRepository
@@ -58,7 +59,6 @@ from app.analysis.ai_provider_errors import AIProviderError
 from app.db.fastapi import get_caller_managed_session
 from app.dependencies import (
     CurrentUser,
-    get_agent_live_redis,
     get_current_user,
 )
 from app.schemas.research import (
@@ -82,13 +82,6 @@ _THREAD_NOT_FOUND_DETAIL = "Research thread not found"
 _RUN_NOT_FOUND_DETAIL = "Research run not found"
 _SSE_RETRY_AFTER_SECONDS = 5
 _SSE_CAPACITY_STATE_KEY = "agent_run_sse_capacity"
-
-
-async def enqueue_agent_run(run_id: UUID) -> None:
-    from app.queue.messages.agent_run import AgentRunTrigger
-    from app.queue.tasks.agent_run import run_agent_answer
-
-    await run_agent_answer.kiq(AgentRunTrigger(run_id=run_id))
 
 
 async def read_agent_run_live_context(
@@ -142,6 +135,7 @@ async def create_research_response(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     # commit→kiq→failed の 2 tx を切るため、入口管理の UoW は使わない。
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
+    enqueuer: Annotated[AgentRunEnqueuer, Depends(get_agent_run_enqueuer)],
 ) -> ResearchRunStartResponse | JSONResponse:
     try:
         ensure_external_search_configured()
@@ -200,7 +194,7 @@ async def create_research_response(
         )
 
     try:
-        await enqueue_agent_run(created.run_id)
+        await enqueuer.enqueue(created.run_id)
     except Exception as exc:
         logger.exception(
             "agent_run_enqueue_failed",
@@ -303,7 +297,7 @@ async def cancel_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
-    redis: Annotated[aioredis.Redis, Depends(get_agent_live_redis)],
+    live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
 ) -> Response:
     repo = AgentRunRepository(session)
     async with session.begin():
@@ -329,7 +323,7 @@ async def cancel_research_run(
         running_attempt_epoch = None
     if outcome.was_running and running_attempt_epoch is not None:
         await _publish_cancel_terminal(
-            redis=redis,
+            live=live,
             run_id=run_id,
             attempt_epoch=running_attempt_epoch,
         )
@@ -338,16 +332,12 @@ async def cancel_research_run(
 
 async def _publish_cancel_terminal(
     *,
-    redis: aioredis.Redis,
+    live: AgentLiveTransport,
     run_id: UUID,
     attempt_epoch: int,
 ) -> None:
     try:
-        await AgentRunLiveStreamPublisher(
-            redis,
-            run_id,
-            attempt_epoch,
-        ).publish(
+        await live.publisher(run_id, attempt_epoch).publish(
             AgentRunLiveStreamTerminalEvent(
                 status="failed",
                 errorCode=AgentRunErrorCode.CANCELLED,
@@ -386,7 +376,7 @@ async def stream_research_run_events(
         Depends(get_agent_run_sse_request_started_at),
     ],
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    redis: Annotated[aioredis.Redis, Depends(get_agent_live_redis)],
+    live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
     capacity: Annotated[AgentRunSseCapacity, Depends(get_agent_run_sse_capacity)],
     timing: Annotated[AgentRunSseTiming, Depends(get_agent_run_sse_timing)],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
@@ -426,11 +416,11 @@ async def stream_research_run_events(
         )
         if rejection is not None:
             return _sse_error_response(status.HTTP_429_TOO_MANY_REQUESTS)
-        reader = AgentRunLiveStreamReader(redis)
+        reader = live.reader()
         if context.status is AgentRunStatus.QUEUED and context.attempt_epoch == 0:
             try:
                 await asyncio.wait_for(
-                    redis.exists(agent_run_live_stream_key(parsed_run_id)),
+                    live.exists(parsed_run_id),
                     timeout=AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS,
                 )
             except Exception:

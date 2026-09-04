@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator, Iterable, Iterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import logfire
@@ -11,7 +11,9 @@ from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.admin.router import admin_router
+from app.agent.live_updates.transport import AgentLiveTransport
 from app.agent.router import router as research_router
+from app.agent.runs.enqueuer import AgentRunEnqueuer
 from app.config import settings
 from app.db.engine import (
     API_POOL_MAX_OVERFLOW,
@@ -34,6 +36,7 @@ from app.insights.trend_discovery.router import (
 )
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
+from app.queue.brokers import broker_agent, broker_collection, broker_dispatch
 from app.redis import create_api_agent_live_client
 from app.routers import (
     articles,
@@ -42,6 +45,8 @@ from app.routers import (
 )
 
 logger = structlog.get_logger(__name__)
+
+_API_PRODUCER_BROKERS = (broker_agent, broker_collection, broker_dispatch)
 
 
 def _sanitize_validation_errors(
@@ -111,6 +116,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # asyncpg instrumentor は意図的に入れない (ORM 層 + driver 層で二重 span
     # を出さないため)。
     engine = create_api_engine(settings)
+    live = None
+    started: list[object] = []
     try:
         app.state.engine = engine
         app.state.session_factory = caller_managed_session_factory(engine)
@@ -125,13 +132,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         register_pool_metrics(
             engine, pool_size=API_POOL_SIZE, max_overflow=API_POOL_MAX_OVERFLOW
         )
-        app.state.agent_live_redis = create_api_agent_live_client(settings)
+        live = create_api_agent_live_client(settings)
+        app.state.agent_live_transport = AgentLiveTransport(live)
+        app.state.agent_run_enqueuer = AgentRunEnqueuer()
+        for broker in _API_PRODUCER_BROKERS:
+            await broker.startup()
+            started.append(broker)
         yield
     finally:
-        live = getattr(app.state, "agent_live_redis", None)
-        if live is not None:
-            await live.aclose()
-        await engine.dispose()
+        async with AsyncExitStack() as stack:
+            stack.push_async_callback(engine.dispose)
+            if live is not None:
+                stack.push_async_callback(live.aclose)
+            for broker in started:
+                stack.push_async_callback(broker.shutdown)
 
 
 # production では Swagger UI / ReDoc / openapi.json を無効化して攻撃面を削減する。
