@@ -4,8 +4,8 @@
 5 プロセス分の full app import を 1 回に畳み scheduler VM を 512mb に下げる。
 
 `taskiq scheduler` CLI (``run_scheduler``) が行う処理のうち必要分だけ再現する:
-①各 broker に ``is_scheduler_process=True``、②``registry`` の副作用 import (cron 登録)、
-③各 ``source.startup()``、④各 ``scheduler.startup()``、
+①各 broker に ``is_scheduler_process=True``、②共通``registry``とTrend Discovery
+factoryによるcron登録、③各 ``source.startup()``、④各 ``scheduler.startup()``、
 ⑤``SchedulerLoop.run`` の無限 loop。CLI arg parse / ``import_object`` 分岐は不要。
 """
 
@@ -22,26 +22,29 @@ from taskiq.abc.schedule_source import ScheduleSource
 from taskiq.cli.scheduler.run import SchedulerLoop
 
 import app.queue.registry  # noqa: F401  cron 登録の副作用 import (get_all_tasks を満たす)
+from app.insights.trend_discovery.scheduler import create_scheduler
 from app.logfire.setup import setup_logfire
 from app.queue.schedulers import (
     scheduler_agent,
     scheduler_briefing,
     scheduler_dispatch,
     scheduler_maintenance,
-    scheduler_trend_discovery,
 )
 
 logger = structlog.get_logger(__name__)
 
 _UPDATE_INTERVAL = timedelta(seconds=60)
 _LOOP_INTERVAL = timedelta(seconds=1)
-_SCHEDULERS: tuple[TaskiqScheduler, ...] = (
-    scheduler_dispatch,
-    scheduler_trend_discovery,
-    scheduler_agent,
-    scheduler_briefing,
-    scheduler_maintenance,
-)
+
+
+def _create_schedulers() -> tuple[TaskiqScheduler, ...]:
+    return (
+        scheduler_dispatch,
+        create_scheduler(),
+        scheduler_agent,
+        scheduler_briefing,
+        scheduler_maintenance,
+    )
 
 
 def _configure_taskiq_logging() -> None:
@@ -95,9 +98,10 @@ async def _main() -> None:
     _configure_taskiq_logging()
     # setup_logfire は process-level に 1 度だけ (API lifespan と同パターン)。
     setup_logfire("vector-scheduler")
+    schedulers = _create_schedulers()
     loops = [
         asyncio.create_task(_run_one(s), name=f"sched_{i}")
-        for i, s in enumerate(_SCHEDULERS)
+        for i, s in enumerate(schedulers)
     ]
     stop = asyncio.Event()
     running = asyncio.get_running_loop()

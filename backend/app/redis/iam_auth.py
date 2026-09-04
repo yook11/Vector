@@ -47,7 +47,7 @@ def _botocore_session() -> Any:
 def _request_signer(region: str) -> Any:
     """プロセス内で 1 つだけ持つ signer。
 
-    session ごとに credential を独立に取得・更新するため、broker × 8 が provider を
+    session ごとに credential を独立に取得・更新するため、複数brokerがproviderを
     持つ worker でも解決を 1 本に共有する (``app/db/iam.py`` の ``_rds_client``
     と同じ判断)。botocore の import と credential 解決 (ECS では HTTP) も初回の
     token 要求まで遅れる。
