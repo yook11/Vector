@@ -3,9 +3,9 @@
 本 module を import するだけで broker × 8 + scheduler broker × 5 に対する
 WORKER_STARTUP / WORKER_SHUTDOWN / CLIENT_STARTUP / CLIENT_SHUTDOWN hook が
 登録される (副作用)。AI adapter wiring (Pure DI composition root) は本 module
-ではなく ``composition.py`` の責務。Engine と Session factory は ``app.db`` の
-目録から載せ、本 module は Logfire bootstrap / SQLAlchemy instrument の
-lifecycle のみ。
+ではなく ``composition.py`` の責務。Engine / Session factory / 用途別 Redis
+client は本 module がプロセス寿命で所有し、Logfire bootstrap と SQLAlchemy
+instrument もここで行う。
 """
 
 from __future__ import annotations
@@ -40,8 +40,32 @@ from app.queue.brokers import (
     broker_maintenance,
     broker_trend_discovery,
 )
+from app.redis import (
+    create_worker_agent_live_client,
+    create_worker_pipeline_control_client,
+)
 
 logger = structlog.get_logger(__name__)
+
+_PIPELINE_CONTROL_WORKER_LABELS = frozenset({"analysis", "embedding", "maintenance"})
+
+
+def _attach_worker_redis(state: TaskiqState, label: str) -> None:
+    """この worker が使う用途の Redis client だけを state に載せる。"""
+    if label == "agent":
+        state.agent_live_redis = create_worker_agent_live_client(settings)
+        return
+    if label in _PIPELINE_CONTROL_WORKER_LABELS:
+        state.pipeline_control_redis = create_worker_pipeline_control_client(settings)
+
+
+async def _aclose_worker_redis(state: TaskiqState) -> None:
+    live = getattr(state, "agent_live_redis", None)
+    if live is not None:
+        await live.aclose()
+    control = getattr(state, "pipeline_control_redis", None)
+    if control is not None:
+        await control.aclose()
 
 
 def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
@@ -74,6 +98,7 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         register_pool_metrics(
             state.engine, pool_size=pool_size, max_overflow=max_overflow
         )
+        _attach_worker_redis(state, label)
         if label == "maintenance":
             try:
                 state.auth_engine = create_auth_retention_engine(settings)
@@ -118,6 +143,7 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
     async def on_shutdown(state: TaskiqState) -> None:
+        await _aclose_worker_redis(state)
         if hasattr(state, "auth_engine"):
             await state.auth_engine.dispose()
         if hasattr(state, "engine"):

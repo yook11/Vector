@@ -55,7 +55,6 @@ from app.queue.schedule import (
 from app.queue.tasks.assessment import assess_content
 from app.queue.tasks.curation import curate_content
 from app.queue.tasks.embedding import generate_embedding
-from app.redis import get_redis
 from app.shared.time import utc_now
 
 logger = structlog.get_logger(__name__)
@@ -445,7 +444,9 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             return
 
         try:
-            curation_held = await is_stage_held(get_redis(), Stage.CURATION)
+            curation_held = await is_stage_held(
+                ctx.state.pipeline_control_redis, Stage.CURATION
+            )
             _record_hold_state("curation", held=curation_held)
             if curation_held:
                 # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
@@ -480,7 +481,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                 return
 
             granted = await consume_daily_budget(
-                get_redis(), "curate", found, CURATIONS_DAILY_MAX
+                ctx.state.pipeline_control_redis, "curate", found, CURATIONS_DAILY_MAX
             )
             if granted == 0:
                 # 予算上限に到達し実対象を先送り = run レベルの棄却。
@@ -583,7 +584,9 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             return
 
         try:
-            assessment_held = await is_stage_held(get_redis(), Stage.ASSESSMENT)
+            assessment_held = await is_stage_held(
+                ctx.state.pipeline_control_redis, Stage.ASSESSMENT
+            )
             _record_hold_state("assessment", held=assessment_held)
             if assessment_held:
                 # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
@@ -620,7 +623,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                 return
 
             granted = await consume_daily_budget(
-                get_redis(), "assess", found, ASSESSMENTS_DAILY_MAX
+                ctx.state.pipeline_control_redis, "assess", found, ASSESSMENTS_DAILY_MAX
             )
             if granted == 0:
                 # 予算上限に到達し実対象を先送り = run レベルの棄却。
@@ -723,7 +726,9 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             return
 
         try:
-            embedding_held = await is_stage_held(get_redis(), Stage.EMBEDDING)
+            embedding_held = await is_stage_held(
+                ctx.state.pipeline_control_redis, Stage.EMBEDDING
+            )
             _record_hold_state("embedding", held=embedding_held)
             if embedding_held:
                 # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
@@ -758,7 +763,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 return
 
             granted = await consume_daily_budget(
-                get_redis(), "embed", found, EMBEDDINGS_DAILY_MAX
+                ctx.state.pipeline_control_redis, "embed", found, EMBEDDINGS_DAILY_MAX
             )
             if granted == 0:
                 # 予算上限に到達し実対象を先送り = run レベルの棄却。

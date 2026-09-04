@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, call
 
@@ -132,6 +132,10 @@ def _all_stage_only_attributes() -> dict[str, set[frozenset[str]]]:
     return {name: {frozenset({"stage"})} for name in _METRIC_NAMES}
 
 
+def _health_ctx(redis: object) -> SimpleNamespace:
+    return SimpleNamespace(state=SimpleNamespace(pipeline_control_redis=redis))
+
+
 def test_queue_health_task_uses_dedicated_cron_and_maintenance_broker() -> None:
     module = _queue_health_module()
     schedule = importlib.import_module("app.queue.schedule")
@@ -163,7 +167,6 @@ async def test_empty_snapshots_record_zero_ages_up_and_redis_timestamp(
 ) -> None:
     module = _queue_health_module()
     redis = object()
-    get_redis = MagicMock(return_value=redis)
     snapshots = [
         _empty_snapshot(target, timestamp)
         for target, timestamp in zip(
@@ -173,20 +176,17 @@ async def test_empty_snapshots_record_zero_ages_up_and_redis_timestamp(
         )
     ]
     read_health = AsyncMock(side_effect=snapshots)
-    monkeypatch.setattr(module, "get_redis", get_redis)
     monkeypatch.setattr(module, "read_stream_health", read_health)
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
 
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
     values, attribute_keys = _queue_metric_values(capfire)
 
     assert (
-        get_redis.call_count,
         read_health.await_args_list,
         values,
         attribute_keys,
     ) == (
-        1,
         [call(redis, target) for target in _FOUR_TARGETS],
         {
             "vector.pipeline.queue.retained_entries": dict.fromkeys(_STAGES, 0),
@@ -262,7 +262,6 @@ async def test_nonempty_snapshots_record_exact_counts_and_enqueue_ages(
             outstanding_age=6.0,
         ),
     ]
-    monkeypatch.setattr(module, "get_redis", MagicMock(return_value=redis))
     monkeypatch.setattr(
         module,
         "read_stream_health",
@@ -270,7 +269,7 @@ async def test_nonempty_snapshots_record_exact_counts_and_enqueue_ages(
     )
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
 
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
     values, attribute_keys = _queue_metric_values(capfire)
 
     assert (values, attribute_keys) == (
@@ -359,12 +358,11 @@ async def test_one_stage_failure_records_only_up_zero_and_continues_other_stage(
         for target in _FOUR_TARGETS
     ]
     read_health = AsyncMock(side_effect=results)
-    monkeypatch.setattr(module, "get_redis", MagicMock(return_value=redis))
     monkeypatch.setattr(module, "read_stream_health", read_health)
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
 
     with capture_logs() as logs:
-        await module.observe_pipeline_queue_health()
+        await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
     values, attribute_keys = _queue_metric_values(capfire)
     failure_logs = [
         log
@@ -450,12 +448,11 @@ async def test_failure_tick_does_not_overwrite_last_successful_data_or_timestamp
             ],
         ]
     )
-    monkeypatch.setattr(module, "get_redis", MagicMock(return_value=redis))
     monkeypatch.setattr(module, "read_stream_health", read_health)
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
 
-    await module.observe_pipeline_queue_health()
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
+    await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
     values, attribute_keys = _queue_metric_values(capfire)
 
     assert (values, attribute_keys) == (

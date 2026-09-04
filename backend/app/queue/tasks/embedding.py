@@ -26,7 +26,6 @@ from app.queue.brokers import broker_embedding
 from app.queue.helpers.stage_hold import set_stage_hold
 from app.queue.messages.embedding import EmbeddingTrigger
 from app.queue.retry import is_last_attempt
-from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -123,7 +122,9 @@ async def generate_embedding(
             )
             if decision.stage_hold_reason is not None:
                 await set_stage_hold(
-                    get_redis(), Stage.EMBEDDING, reason=decision.stage_hold_reason
+                    ctx.state.pipeline_control_redis,
+                    Stage.EMBEDDING,
+                    reason=decision.stage_hold_reason,
                 )
             stage.set_result("failed")
             if decision.reraise:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logfire
 import structlog
+from taskiq import Context, TaskiqDepends
 
 from app.cloudwatch.emf import emit_metric
 from app.queue.brokers import broker_maintenance
@@ -14,7 +15,6 @@ from app.queue.stream_health import (
     StreamHealthSnapshot,
     read_stream_health,
 )
-from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -114,9 +114,11 @@ def _record_success(snapshot: StreamHealthSnapshot) -> None:
     retry_on_error=False,
     schedule=[{"cron": CRON_PIPELINE_QUEUE_HEALTH}],
 )
-async def observe_pipeline_queue_health() -> None:
+async def observe_pipeline_queue_health(
+    ctx: Context = TaskiqDepends(),
+) -> None:
     """固定5stageのsnapshotを独立して取得しLogfireへ記録する。"""
-    redis = get_redis()
+    redis = ctx.state.pipeline_control_redis
     for target in PIPELINE_QUEUE_TARGETS:
         try:
             snapshot = await read_stream_health(redis, target)

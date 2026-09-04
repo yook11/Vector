@@ -64,6 +64,7 @@ def _make_ctx(
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
         provider_rate_limit_gate=gate if gate is not None else _make_gate_fake(),
+        pipeline_control_redis=object(),
     )
     if embedder is not None:
         ctx.state.embedder = embedder

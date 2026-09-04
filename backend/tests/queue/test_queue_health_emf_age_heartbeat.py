@@ -15,8 +15,9 @@ Logfire gauge 記録内容自体の正本は ``test_queue_health_task.py``、
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -69,8 +70,11 @@ def _snapshot_with_age(
     )
 
 
-def _patch_targets_and_redis(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(module, "get_redis", MagicMock(return_value=object()))
+def _health_ctx(redis: object = object()) -> SimpleNamespace:
+    return SimpleNamespace(state=SimpleNamespace(pipeline_control_redis=redis))
+
+
+def _patch_targets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _TARGETS)
 
 
@@ -80,7 +84,7 @@ async def test_success_stages_emit_age_with_snapshot_value_or_zero_for_none(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """成功 stage は snapshot の age を emit し、None の stage は 0.0 になる。"""
-    _patch_targets_and_redis(monkeypatch)
+    _patch_targets(monkeypatch)
     snapshots = [
         _snapshot_with_age(_TARGETS[0], timestamp=1_000.0, outstanding_age=42.5),
         _snapshot_with_age(_TARGETS[1], timestamp=2_000.0, outstanding_age=None),
@@ -88,7 +92,7 @@ async def test_success_stages_emit_age_with_snapshot_value_or_zero_for_none(
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx())
     age_records = metric_records(capsys.readouterr().out, _AGE_METRIC)
 
     assert {record["stage"]: record[_AGE_METRIC] for record in age_records} == {
@@ -104,14 +108,14 @@ async def test_success_age_line_uses_seconds_unit_and_pipeline_namespace(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """age EMF 行の Namespace/Dimensions/Unit を固定する (値の型は test_emf.py 側)。"""
-    _patch_targets_and_redis(monkeypatch)
+    _patch_targets(monkeypatch)
     snapshots = [
         _snapshot_with_age(target, timestamp=1_000.0, outstanding_age=5.0)
         for target in _TARGETS
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx())
     age_records = metric_records(capsys.readouterr().out, _AGE_METRIC)
     metric_def = age_records[0]["_aws"]["CloudWatchMetrics"][0]
 
@@ -129,7 +133,7 @@ async def test_failing_stage_emits_no_age_line_but_other_stages_still_emit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """StreamHealthError の stage は age 行を出さず、他 stage の emit は止めない。"""
-    _patch_targets_and_redis(monkeypatch)
+    _patch_targets(monkeypatch)
     results: list[StreamHealthSnapshot | StreamHealthError] = [
         StreamHealthError(
             stage=target.stage,
@@ -141,7 +145,7 @@ async def test_failing_stage_emits_no_age_line_but_other_stages_still_emit(
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=results))
 
-    await module.observe_pipeline_queue_health()
+    await module.observe_pipeline_queue_health(ctx=_health_ctx())
     age_stages = {
         record["stage"]
         for record in metric_records(capsys.readouterr().out, _AGE_METRIC)

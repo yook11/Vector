@@ -56,6 +56,7 @@ def _make_ctx(
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
         provider_rate_limit_gate=gate,
+        pipeline_control_redis=object(),
     )
     if curator is not None:
         ctx.state.curator = curator

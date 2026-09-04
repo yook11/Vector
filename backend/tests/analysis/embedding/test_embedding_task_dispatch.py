@@ -58,6 +58,7 @@ def _make_ctx(retries: int = 0, max_retries: int = 2) -> MagicMock:
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
         provider_rate_limit_gate=_make_gate_fake(),
+        pipeline_control_redis=object(),
     )
     ctx.state.embedder = _make_embedder_fake()
     # taskiq SimpleRetryMiddleware が書く label は "_retries" (0..max_retries-1)

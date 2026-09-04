@@ -31,7 +31,7 @@ from app.agent.runs.contracts import (
 from app.agent.runs.repository import AgentRunRepository
 from app.config import settings
 from app.db.fastapi import get_caller_managed_session
-from app.dependencies import get_redis_client
+from app.dependencies import get_agent_live_redis
 from app.main import app
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -120,7 +120,7 @@ async def research_client(
     app.dependency_overrides[get_caller_managed_session] = (
         override_history_session
     )
-    app.dependency_overrides[get_redis_client] = lambda: FakeRunEventsRedis()
+    app.dependency_overrides[get_agent_live_redis] = lambda: FakeRunEventsRedis()
     monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -146,6 +146,7 @@ async def quota_research_client(
     app.dependency_overrides[get_caller_managed_session] = (
         override_history_session
     )
+    app.dependency_overrides[get_agent_live_redis] = lambda: FakeRunEventsRedis()
     monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
     async with AsyncClient(
         transport=ASGITransport(app=app, raise_app_exceptions=False),
@@ -988,7 +989,7 @@ class TestQuotaRouterTelemetry:
             "AgentRunLiveStreamPublisher",
             FakeCancelStreamPublisher,
         )
-        app.dependency_overrides[get_redis_client] = lambda: FakeRunEventsRedis()
+        app.dependency_overrides[get_agent_live_redis] = lambda: FakeRunEventsRedis()
 
         response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
 
@@ -2300,7 +2301,7 @@ class TestGetResearchRun:
             db_session, thread_id=thread.id, user_message_id=user_message.id
         )
         redis = FakeRunEventsRedis()
-        app.dependency_overrides[get_redis_client] = lambda: redis
+        app.dependency_overrides[get_agent_live_redis] = lambda: redis
 
         response = await client.get(f"/api/v1/research/runs/{run.id}")
 

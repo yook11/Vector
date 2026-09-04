@@ -7,8 +7,9 @@ Task / Service が limiter / quota 例外を直接知る代わりに、gate に 
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.analysis.rate_limit.policy import AIModelRateLimitPolicy, RateLimitRule
-from app.redis import get_redis
 from app.redis.sliding_window import RateLimitExceededError, SlidingWindowLimiter
 
 
@@ -18,6 +19,7 @@ def _rate_limit_key(policy: AIModelRateLimitPolicy, rule: RateLimitRule) -> str:
 
 
 def _build_limiters(
+    redis: Any,
     policy: AIModelRateLimitPolicy,
 ) -> tuple[SlidingWindowLimiter, ...]:
     """provider × model ごとに独立した rule リミッターを構築する。
@@ -32,7 +34,6 @@ def _build_limiters(
     if not policy.rules:
         return ()
 
-    redis = get_redis()
     return tuple(
         SlidingWindowLimiter(
             redis=redis,
@@ -53,6 +54,9 @@ class ProviderRateLimitGate:
     (3 stage を同じ gate で wiring しても干渉しない)。
     """
 
+    def __init__(self, redis: Any) -> None:
+        self._redis = redis
+
     async def acquire(self, policy: AIModelRateLimitPolicy) -> bool:
         """policy rule 順に acquire。quota 超過なら ``False`` を返す。
 
@@ -60,7 +64,7 @@ class ProviderRateLimitGate:
         - いずれかが quota 超過なら ``RateLimitExceededError`` を catch して
           ``False`` を返す (caller は log + return で skip 動作を選べる)。
         """
-        limiters = _build_limiters(policy)
+        limiters = _build_limiters(self._redis, policy)
         try:
             for limiter in limiters:
                 await limiter.acquire()

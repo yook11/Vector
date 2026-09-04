@@ -30,7 +30,7 @@ from app.agent.live_updates.stream import (
 from app.agent.runs.contracts import OwnedAgentRunLiveContext
 from app.agent.runs.types import AgentRunStatus
 from app.config import settings
-from app.dependencies import get_redis_client
+from app.dependencies import get_agent_live_redis
 from app.main import app
 
 RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
@@ -71,7 +71,7 @@ async def sse_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[tuple[AsyncClient, FakeRedis]]:
     redis = FakeRedis()
-    app.dependency_overrides[get_redis_client] = lambda: redis
+    app.dependency_overrides[get_agent_live_redis] = lambda: redis
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         AgentRunSseCapacity()
     )
@@ -371,7 +371,7 @@ async def test_endpoint_requires_bff_user_jwt_before_capacity_or_redis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = FakeRedis()
-    app.dependency_overrides[get_redis_client] = lambda: redis
+    app.dependency_overrides[get_agent_live_redis] = lambda: redis
     capacity = AgentRunSseCapacity(process_limit=1)
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         capacity
@@ -415,7 +415,7 @@ async def test_full_middleware_stack_propagates_disconnect_and_releases_slot(
         "AgentRunLiveStreamReader",
         lambda _redis: reader,
     )
-    app.dependency_overrides[get_redis_client] = lambda: redis
+    app.dependency_overrides[get_agent_live_redis] = lambda: redis
     response_started = asyncio.Event()
     request_sent = False
 
@@ -500,7 +500,7 @@ async def test_real_redis_events_flow_through_fastapi_sse_with_cursor(
     app.dependency_overrides[router_module.get_agent_run_sse_capacity] = lambda: (
         AgentRunSseCapacity()
     )
-    app.dependency_overrides[get_redis_client] = lambda: redis
+    app.dependency_overrides[get_agent_live_redis] = lambda: redis
     try:
         publisher = AgentRunLiveStreamPublisher(redis, run_id, 2)
         marker_id = await publisher.begin_attempt()

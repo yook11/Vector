@@ -29,7 +29,6 @@ from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 from app.queue.retry import is_last_attempt
 from app.queue.tasks.assessment import assess_content
-from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -126,7 +125,9 @@ async def curate_content(
             )
             if decision.stage_hold_reason is not None:
                 await set_stage_hold(
-                    get_redis(), Stage.CURATION, reason=decision.stage_hold_reason
+                    ctx.state.pipeline_control_redis,
+                    Stage.CURATION,
+                    reason=decision.stage_hold_reason,
                 )
             stage.set_result("failed")
             if decision.reraise:

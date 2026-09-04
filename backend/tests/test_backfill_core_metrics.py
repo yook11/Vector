@@ -76,7 +76,12 @@ CASES = [
 
 def _ctx() -> SimpleNamespace:
     """session_factory だけを持つ taskiq Context test double。"""
-    return SimpleNamespace(state=SimpleNamespace(session_factory=MagicMock()))
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            session_factory=MagicMock(),
+            pipeline_control_redis=MagicMock(),
+        )
+    )
 
 
 def _target(target_id: int) -> BackfillTarget:
