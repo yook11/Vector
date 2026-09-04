@@ -11,7 +11,7 @@ productionでは、永続ジョブを持つbroker Redisと、frontendの短命�
 
 | Redis | 用途 | memory / eviction | persistence |
 |---|---|---|---|
-| `vector-redis` | Taskiq broker / result、backendの一時制御状態 | 256 MB / `noeviction` | volume + AOF |
+| `vector-redis` | Taskiq broker、backendの一時制御状態 | 256 MB / `noeviction` | volume + AOF |
 | `vector-redis-rl` | frontend `rl:ip:*` sliding window | 64 MB / `volatile-ttl` | なし |
 
 broker RedisのSSoTは`infra/redis/fly.toml`である。`noeviction`はtask entryを別keyの都合で
@@ -59,7 +59,6 @@ Redis ACLはapp境界に合わせる。
   - `~autoclaim:taskiq:pipeline:dispatch`
   - `~autoclaim:taskiq:pipeline:acquisition`
   - `~autoclaim:taskiq:pipeline:completion`
-  - `~taskiq:*`
 - `collect`のcommand surfaceは`resetchannels +@connection +@read +@write +@stream
   +@scripting +multi +exec -@dangerous`とする。`multi` / `exec`はTaskiqのautoclaim
   pipelineを囲むためだけに許可し、transaction内のcommandとkey patternは個別ACLで制限する。

@@ -193,7 +193,7 @@ def test_pipeline_status_names_the_full_four_stage_pipeline() -> None:
     )
 
 
-def test_collect_redis_acl_has_only_required_queue_and_taskiq_key_surfaces() -> None:
+def test_collect_redis_acl_has_only_required_queue_and_autoclaim_key_surfaces() -> None:
     key_patterns = {
         token for token in _redis_acl_tokens("collect") if token.startswith("~")
     }
@@ -206,7 +206,6 @@ def test_collect_redis_acl_has_only_required_queue_and_taskiq_key_surfaces() -> 
         "~autoclaim:taskiq:pipeline:dispatch",
         "~autoclaim:taskiq:pipeline:acquisition",
         "~autoclaim:taskiq:pipeline:completion",
-        "~taskiq:*",
     }
 
 
@@ -317,7 +316,6 @@ def test_redis_topology_spec_records_final_collect_acl_boundary() -> None:
         "~autoclaim:taskiq:pipeline:dispatch",
         "~autoclaim:taskiq:pipeline:acquisition",
         "~autoclaim:taskiq:pipeline:completion",
-        "~taskiq:*",
     )
 
     assert (
