@@ -22,7 +22,18 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.runs.contracts import CompleteRunOutcome, StartRunFailureReason
+from app.agent.running.attempt_start import (
+    AgentRunAttemptStartRepository,
+    StartRunFailureReason,
+)
+from app.agent.running.completion import (
+    AgentRunCompletionRepository,
+    RunCompletionFailure,
+    RunCompletionFailureReason,
+    RunCompletionSuccess,
+)
+from app.agent.running.failure_recording import AgentRunFailureRepository
+from app.agent.running.presentation import AgentRunPresentationRepository
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -105,7 +116,7 @@ async def test_read_live_context_for_user_returns_only_owned_internal_fields(
         )
 
     async with session_factory() as session:
-        repo = AgentRunRepository(session)
+        repo = AgentRunPresentationRepository(session)
         owned = await repo.read_live_context_for_user(
             run_id=run.id,
             user_id=UUID(TEST_USER_ID),
@@ -141,7 +152,9 @@ async def test_read_live_context_for_user_preserves_terminal_error_code(
         )
 
     async with session_factory() as session:
-        context = await AgentRunRepository(session).read_live_context_for_user(
+        context = await AgentRunPresentationRepository(
+            session
+        ).read_live_context_for_user(
             run_id=run.id,
             user_id=UUID(TEST_USER_ID),
         )
@@ -181,13 +194,13 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
     with capture_logs() as logs:
         async with session_factory() as session:
             async with session.begin():
-                completed = await AgentRunRepository(session).complete_run(
+                completed = await AgentRunCompletionRepository(session).complete_run(
                     run_id=run.id,
                     result=result,
                     expected_attempt_epoch=run.attempt_epoch,
                 )
 
-    assert completed is CompleteRunOutcome.COMPLETED
+    assert completed == RunCompletionSuccess()
     mismatch_logs = [
         entry
         for entry in logs
@@ -233,14 +246,14 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
 
     async with session_factory() as session:
         async with session.begin():
-            completed = await AgentRunRepository(session).complete_run(
+            completed = await AgentRunCompletionRepository(session).complete_run(
                 run_id=run.id,
                 result=_direct_result(),
                 expected_attempt_epoch=run.attempt_epoch,
                 research_handoff=handoff_json,
             )
 
-    assert completed is CompleteRunOutcome.COMPLETED
+    assert completed == RunCompletionSuccess()
     async with session_factory() as session:
         persisted_run = await session.get(AgentRun, run.id)
         persisted_thread = await session.get(AgentThread, thread_id)
@@ -271,13 +284,13 @@ async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
 
     async with session_factory() as session:
         async with session.begin():
-            completed = await AgentRunRepository(session).complete_run(
+            completed = await AgentRunCompletionRepository(session).complete_run(
                 run_id=run.id,
                 result=_direct_result(),
                 expected_attempt_epoch=run.attempt_epoch,
             )
 
-    assert completed is CompleteRunOutcome.COMPLETED
+    assert completed == RunCompletionSuccess()
     async with session_factory() as session:
         persisted_thread = await session.get(AgentThread, thread_id)
         assert persisted_thread is not None
@@ -312,18 +325,22 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
         async with session_factory() as winner_session:
             async with winner_session.begin():
                 attempt_epoch = started_attempt_epoch(
-                    await AgentRunRepository(winner_session).start_run(run.id)
+                    await AgentRunAttemptStartRepository(winner_session).start_run(
+                        run.id
+                    )
                 )
                 assert attempt_epoch == 2
 
         async with stale_session.begin():
-            outcome = await AgentRunRepository(stale_session).complete_run(
+            outcome = await AgentRunCompletionRepository(stale_session).complete_run(
                 run_id=run.id,
                 result=_direct_result(),
                 expected_attempt_epoch=stale_run.attempt_epoch,
                 research_handoff=handoff_json,
             )
-        assert outcome is CompleteRunOutcome.TRANSITION_LOST
+        assert outcome == RunCompletionFailure(
+            RunCompletionFailureReason.ATTEMPT_MISMATCH
+        )
     finally:
         await stale_session.close()
 
@@ -353,19 +370,19 @@ async def test_complete_run_lost_race_rolls_back_assistant_message(
 
         async with session_factory() as winner_session:
             async with winner_session.begin():
-                await AgentRunRepository(winner_session).mark_failed(
+                await AgentRunFailureRepository(winner_session).mark_failed(
                     run.id,
                     expected_attempt_epoch=run.attempt_epoch,
                     error_code=agent_run_tasks.AgentRunErrorCode.STALE,
                 )
 
         async with stale_session.begin():
-            outcome = await AgentRunRepository(stale_session).complete_run(
+            outcome = await AgentRunCompletionRepository(stale_session).complete_run(
                 run_id=run.id,
                 result=_direct_result(),
                 expected_attempt_epoch=stale_run.attempt_epoch,
             )
-        assert outcome is CompleteRunOutcome.TRANSITION_LOST
+        assert outcome == RunCompletionFailure(RunCompletionFailureReason.NOT_RUNNING)
     finally:
         await stale_session.close()
 
@@ -408,17 +425,21 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
         async with session_factory() as winner_session:
             async with winner_session.begin():
                 attempt_epoch = started_attempt_epoch(
-                    await AgentRunRepository(winner_session).start_run(run.id)
+                    await AgentRunAttemptStartRepository(winner_session).start_run(
+                        run.id
+                    )
                 )
                 assert attempt_epoch == 2
 
         async with stale_session.begin():
-            outcome = await AgentRunRepository(stale_session).complete_run(
+            outcome = await AgentRunCompletionRepository(stale_session).complete_run(
                 run_id=run.id,
                 result=_external_result(),
                 expected_attempt_epoch=stale_run.attempt_epoch,
             )
-        assert outcome is CompleteRunOutcome.TRANSITION_LOST
+        assert outcome == RunCompletionFailure(
+            RunCompletionFailureReason.ATTEMPT_MISMATCH
+        )
     finally:
         await stale_session.close()
 
@@ -478,9 +499,9 @@ async def test_stale_mark_failed_does_not_alter_newer_attempt(
     async with session_factory() as session:
         async with session.begin():
             attempt_epoch = started_attempt_epoch(
-                await AgentRunRepository(session).start_run(run.id)
+                await AgentRunAttemptStartRepository(session).start_run(run.id)
             )
-            transitioned = await AgentRunRepository(session).mark_failed(
+            transitioned = await AgentRunFailureRepository(session).mark_failed(
                 run.id,
                 expected_attempt_epoch=1,
                 error_code=agent_run_tasks.AgentRunErrorCode.STALE,
@@ -516,7 +537,7 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
 
     async with session_factory() as session:
         async with session.begin():
-            repo = AgentRunRepository(session)
+            repo = AgentRunAttemptStartRepository(session)
             attempt_epoch = started_attempt_epoch(
                 await repo.start_run(running.id, now=now)
             )
@@ -555,7 +576,7 @@ async def test_start_run_allocates_first_attempt_epoch(
     async with session_factory() as session:
         async with session.begin():
             attempt_epoch = started_attempt_epoch(
-                await AgentRunRepository(session).start_run(run.id)
+                await AgentRunAttemptStartRepository(session).start_run(run.id)
             )
 
     async with session_factory() as session:
@@ -574,7 +595,7 @@ async def test_start_run_increment_rolls_back_with_transaction(
 
     async with session_factory() as session:
         attempt_epoch = started_attempt_epoch(
-            await AgentRunRepository(session).start_run(run.id)
+            await AgentRunAttemptStartRepository(session).start_run(run.id)
         )
         assert attempt_epoch == 1
         await session.rollback()
@@ -597,7 +618,7 @@ async def test_concurrent_start_runs_receive_distinct_sequence_values(
         async with session_factory() as session:
             async with session.begin():
                 return started_attempt_epoch(
-                    await AgentRunRepository(session).start_run(run.id)
+                    await AgentRunAttemptStartRepository(session).start_run(run.id)
                 )
 
     epochs = await asyncio.gather(start_once(), start_once())
@@ -617,7 +638,9 @@ async def test_start_run_reports_idempotent_skip_for_missing_run(
 
     async with session_factory() as session:
         async with session.begin():
-            skip_result = await AgentRunRepository(session).start_run(missing_run_id)
+            skip_result = await AgentRunAttemptStartRepository(session).start_run(
+                missing_run_id
+            )
 
     assert_start_failure(skip_result, StartRunFailureReason.RUN_NOT_FOUND)
 
@@ -644,10 +667,10 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
 
         async def start_once() -> object:
             async with contender.begin():
-                return await AgentRunRepository(contender).start_run(run.id)
+                return await AgentRunAttemptStartRepository(contender).start_run(run.id)
 
         await winner.begin()
-        changed = await AgentRunRepository(winner).mark_failed(
+        changed = await AgentRunFailureRepository(winner).mark_failed(
             run.id,
             expected_attempt_epoch=run.attempt_epoch,
             error_code=agent_run_tasks.AgentRunErrorCode.STALE,
@@ -681,7 +704,7 @@ async def test_mark_enqueue_failed_remains_epoch_independent(
 
     async with session_factory() as session:
         async with session.begin():
-            transitioned = await AgentRunRepository(session).mark_enqueue_failed(
+            transitioned = await AgentRunFailureRepository(session).mark_enqueue_failed(
                 run.id,
             )
 
@@ -704,7 +727,9 @@ async def test_answer_save_lock_timeout_rolls_back_without_artifacts(
     from sqlalchemy import func, text
     from sqlalchemy.exc import DBAPIError
 
-    monkeypatch.setattr("app.agent.runs.repository._ANSWER_SAVE_LOCK_TIMEOUT", "30ms")
+    monkeypatch.setattr(
+        "app.agent.running.completion._ANSWER_SAVE_LOCK_TIMEOUT", "30ms"
+    )
     async with session_factory() as session:
         thread, _, run = await _create_thread_message_run(
             session,
@@ -730,7 +755,7 @@ async def test_answer_save_lock_timeout_rolls_back_without_artifacts(
             with pytest.raises(DBAPIError) as raised:
                 async with saver.begin():
                     await asyncio.wait_for(
-                        AgentRunRepository(saver).complete_run(
+                        AgentRunCompletionRepository(saver).complete_run(
                             run_id=run.id,
                             result=_external_result(),
                             expected_attempt_epoch=run.attempt_epoch,
@@ -775,7 +800,7 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
         before = await session.scalar(select(func.current_setting("lock_timeout")))
         await session.rollback()
         async with session.begin():
-            outcome = await AgentRunRepository(session).complete_run(
+            outcome = await AgentRunCompletionRepository(session).complete_run(
                 run_id=run_id,
                 result=_direct_result(),
                 expected_attempt_epoch=epoch,
@@ -784,7 +809,71 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
                 await session.scalar(select(func.current_setting("lock_timeout")))
                 == "3s"
             )
-        assert outcome is CompleteRunOutcome.COMPLETED
+        assert outcome == RunCompletionSuccess()
         assert (
             await session.scalar(select(func.current_setting("lock_timeout"))) == before
         )
+
+
+@pytest.mark.parametrize(
+    ("status", "attempt_epoch", "answer_started_at", "reason"),
+    [
+        ("queued", 2, None, RunCompletionFailureReason.NOT_RUNNING),
+        ("running", 2, None, RunCompletionFailureReason.ATTEMPT_MISMATCH),
+        (
+            "running",
+            2,
+            datetime(2026, 1, 1, tzinfo=UTC),
+            RunCompletionFailureReason.ATTEMPT_MISMATCH,
+        ),
+        ("running", 1, None, RunCompletionFailureReason.ANSWER_NOT_STARTED),
+    ],
+)
+@pytest.mark.asyncio
+async def test_completion_failure_reason_precedence_preserves_existing_data(
+    status: str,
+    attempt_epoch: int,
+    answer_started_at: datetime | None,
+    reason: RunCompletionFailureReason,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        thread, _, run = await _create_thread_message_run(
+            session,
+            status=status,
+            attempt_epoch=attempt_epoch,
+            answer_started_at=answer_started_at,
+            history=[("assistant", "既存の回答")],
+        )
+        run_id, thread_id = run.id, thread.id
+        original_updated_at = thread.updated_at
+    async with session_factory() as session:
+        async with session.begin():
+            completion = await AgentRunCompletionRepository(session).complete_run(
+                run_id=run_id,
+                result=_external_result(),
+                expected_attempt_epoch=1,
+                research_handoff=_handoff().model_dump(mode="json"),
+            )
+            assert completion == RunCompletionFailure(reason)
+            # 事前拒否が書き込まないことも確認するため、このテストではcommitする。
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run_id)
+        saved_thread = await session.get(AgentThread, thread_id)
+        assert persisted is not None and saved_thread is not None
+        assert (
+            persisted.status,
+            persisted.attempt_epoch,
+            persisted.answer_started_at,
+        ) == (status, attempt_epoch, answer_started_at)
+        assert persisted.assistant_message_id is None
+        assert saved_thread.research_handoff is None
+        assert saved_thread.updated_at == original_updated_at
+        assert list(
+            await session.execute(
+                select(AgentMessage.role, AgentMessage.content)
+                .where(AgentMessage.thread_id == thread_id)
+                .order_by(AgentMessage.seq)
+            )
+        ) == [("assistant", "既存の回答"), ("user", "worker question")]
+        assert list(await session.scalars(select(AgentMessageSource))) == []

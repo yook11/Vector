@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 
 import app.agent.daily_quota.observability as quota_observability
-from app.agent.run_deadline.contracts import DeadlineExceededRunningRun
+from app.agent.running.deadline.deadline_exceeded import DeadlineExceededRunningRun
 
 
 def test_deadline_sweep_result_rejects_nonpositive_running_attempt_epoch() -> None:

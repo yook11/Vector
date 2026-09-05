@@ -10,9 +10,6 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.agent.answering.answer_generation_repository import (
-    AgentAnswerGenerationRepository,
-)
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.composition import build_answering_runner
@@ -32,20 +29,29 @@ from app.agent.research_handoff import (
     ResearchHandoff,
     recall_research_handoff,
 )
-from app.agent.run_deadline.persistence import sweep_deadline_exceeded_runs
 from app.agent.running import (
     RunIdentity,
     RunInput,
 )
-from app.agent.runs.contracts import (
-    CompleteRunOutcome,
-    RunTransitionLostError,
+from app.agent.running.answer_generation import (
+    AgentAnswerGenerationRepository,
+)
+from app.agent.running.attempt_start import (
+    AgentRunAttemptStartRepository,
     StartRunFailure,
     StartRunFailureReason,
-    UserQuestionMessage,
 )
+from app.agent.running.completion import (
+    AgentRunCompletionRepository,
+    RunCompletionFailure,
+    RunCompletionFailureReason,
+    RunCompletionSuccess,
+)
+from app.agent.running.continuation import AgentRunExecutionProbe
+from app.agent.running.deadline.deadline_exceeded import sweep_deadline_exceeded_runs
+from app.agent.running.failure_recording import AgentRunFailureRepository
+from app.agent.runs.contracts import UserQuestionMessage
 from app.agent.runs.execution import Stop, StopReason
-from app.agent.runs.execution_probe import AgentRunExecutionProbe
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.agent.runtime.contract import AgentResponseInvalidError
@@ -253,31 +259,37 @@ async def run_agent_answer(
     try:
         async with session_factory() as session:
             async with session.begin():
-                completion_outcome = await AgentRunRepository(session).complete_run(
+                completion_result = await AgentRunCompletionRepository(
+                    session
+                ).complete_run(
                     run_id=run_id,
                     result=result,
                     expected_attempt_epoch=attempt_epoch,
                     research_handoff=serialized_research_handoff,
                 )
-                if completion_outcome is CompleteRunOutcome.TRANSITION_LOST:
+                if isinstance(completion_result, RunCompletionFailure):
                     logger.info(
-                        "agent_run_completion_lost_race",
+                        "agent_run_completion_rejected",
                         run_id=str(run_id),
+                        reason=completion_result.reason.value,
                     )
-        if completion_outcome is CompleteRunOutcome.COMPLETED:
+                    if (
+                        completion_result.reason
+                        is not RunCompletionFailureReason.DEADLINE_EXCEEDED
+                    ):
+                        await session.rollback()
+        if isinstance(completion_result, RunCompletionSuccess):
             await _publish_terminal(
                 stream_events,
                 run_id,
                 AgentRunLiveStreamTerminalEvent(status="completed"),
             )
-        elif completion_outcome is CompleteRunOutcome.DEADLINE_EXCEEDED:
+        elif completion_result.reason is RunCompletionFailureReason.DEADLINE_EXCEEDED:
             await _publish_terminal(
                 stream_events,
                 run_id,
                 AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
             )
-    except RunTransitionLostError:
-        logger.info("agent_run_completion_lost_race", run_id=str(run_id))
     except Exception as exc:
         logger.exception(
             "agent_run_completion_failed",
@@ -378,7 +390,9 @@ async def _start_run(
 ) -> int | StartRunFailure:
     async with session_factory() as session:
         async with session.begin():
-            return await AgentRunRepository(session).start_run(trigger.run_id)
+            return await AgentRunAttemptStartRepository(session).start_run(
+                trigger.run_id
+            )
 
 
 def _serialize_research_handoff(
@@ -459,7 +473,7 @@ async def _mark_failed(
 ) -> bool:
     async with session_factory() as session:
         async with session.begin():
-            transitioned = await AgentRunRepository(session).mark_failed(
+            transitioned = await AgentRunFailureRepository(session).mark_failed(
                 run_id,
                 expected_attempt_epoch=expected_attempt_epoch,
                 error_code=error_code,

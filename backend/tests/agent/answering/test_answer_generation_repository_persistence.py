@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.answering.answer_generation_repository import (
+from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
     _check_answer_generation_continuation,
     _start_answer_generation,

@@ -9,9 +9,6 @@ from pydantic import ValidationError
 
 from app.agent.agent import Agent
 from app.agent.answering import timing as answer_timing
-from app.agent.answering.answer_generation_repository import (
-    AnswerGenerationRepository,
-)
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
@@ -40,6 +37,9 @@ from app.agent.recording.evidence_answer import (
     EvidenceAnswerRecorder,
     EvidenceAnswerSucceeded,
     logfire_evidence_answer_recorder,
+)
+from app.agent.running.answer_generation import (
+    AnswerGenerationRepository,
 )
 from app.agent.runs.execution import Stop
 from app.agent.runtime.contract import (

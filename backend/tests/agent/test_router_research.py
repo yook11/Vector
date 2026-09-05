@@ -11,29 +11,37 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import event as sa_event
-from sqlalchemy import func, select, update
+from sqlalchemy import false, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.dml import Update
 from structlog.testing import capture_logs
 
 import app.agent.live_updates.transport as live_transport_module
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
 from app.agent.daily_quota import observability as daily_quota_observability
-from app.agent.daily_quota.contracts import (
+from app.agent.daily_quota.release import (
     DailyQuotaReleaseOutcome,
-    DailyRequestLimitExceededError,
 )
+from app.agent.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.live_updates.transport import (
     AgentLiveTransport,
     get_agent_live_transport,
 )
-from app.agent.runs.contracts import (
-    CancelRunCommandOutcome,
-    CancelRunOutcome,
-    CompleteRunOutcome,
+from app.agent.running.cancellation import (
+    AgentRunCancellationRepository,
+    RunCancellationFailure,
+    RunCancellationFailureReason,
+    RunCancellationSuccess,
 )
+from app.agent.running.completion import (
+    AgentRunCompletionRepository,
+    RunCompletionFailure,
+    RunCompletionFailureReason,
+)
+from app.agent.running.creation import AgentRunCreationRepository
+from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.runs.enqueuer import get_agent_run_enqueuer
-from app.agent.runs.repository import AgentRunRepository
 from app.config import settings
 from app.db.fastapi import get_caller_managed_session
 from app.main import app
@@ -529,17 +537,17 @@ class TestCreateResearchResponse:
     ) -> None:
         client, fake_enqueue = quota_research_client
         fake_enqueue.exc = RuntimeError("queue unavailable")
-        original_mark_enqueue_failed = AgentRunRepository.mark_enqueue_failed
+        original_mark_enqueue_failed = AgentRunFailureRepository.mark_enqueue_failed
 
         async def update_then_fail(
-            repository: AgentRunRepository,
+            repository: AgentRunFailureRepository,
             run_id: UUID,
         ) -> bool:
             assert await original_mark_enqueue_failed(repository, run_id)
             raise RuntimeError("mark failed transaction aborted")
 
         monkeypatch.setattr(
-            AgentRunRepository,
+            AgentRunFailureRepository,
             "mark_enqueue_failed",
             update_then_fail,
         )
@@ -687,7 +695,7 @@ class TestCreateResearchResponse:
         await db_session.commit()
 
         async def reject_with_fixed_clock(
-            _repository: AgentRunRepository,
+            _repository: AgentRunCreationRepository,
             *,
             user_id: UUID,
             question: str,
@@ -718,7 +726,7 @@ class TestCreateResearchResponse:
             )
 
         monkeypatch.setattr(
-            AgentRunRepository,
+            AgentRunCreationRepository,
             "create_user_run",
             reject_with_fixed_clock,
         )
@@ -802,7 +810,7 @@ class TestQuotaRouterTelemetry:
         if request_kind == "rejected":
 
             async def reject_with_fixed_clock(
-                _repository: AgentRunRepository,
+                _repository: AgentRunCreationRepository,
                 **_kwargs: object,
             ) -> object:
                 raise DailyRequestLimitExceededError(
@@ -813,7 +821,7 @@ class TestQuotaRouterTelemetry:
                 )
 
             monkeypatch.setattr(
-                AgentRunRepository,
+                AgentRunCreationRepository,
                 "create_user_run",
                 reject_with_fixed_clock,
             )
@@ -1108,7 +1116,7 @@ class TestQuotaRouterTelemetry:
         sensitive_question = "quota rejection secret question"
 
         async def reject_with_fixed_clock(
-            _repository: AgentRunRepository,
+            _repository: AgentRunCreationRepository,
             **_kwargs: object,
         ) -> object:
             raise DailyRequestLimitExceededError(
@@ -1125,7 +1133,7 @@ class TestQuotaRouterTelemetry:
             original_observer(usage_date=usage_date)
 
         monkeypatch.setattr(
-            AgentRunRepository,
+            AgentRunCreationRepository,
             "create_user_run",
             reject_with_fixed_clock,
         )
@@ -1239,16 +1247,14 @@ class TestQuotaRouterTelemetry:
         client, _fake_enqueue = research_client
         run_id = UUID("00000000-0000-4000-a000-000000000071")
         calls: list[dict[str, object]] = []
-        outcome = CancelRunCommandOutcome(
-            cancel_outcome=CancelRunOutcome.CANCELLED,
-            was_running=False,
+        outcome = RunCancellationSuccess(
             quota_release_outcome=release_outcome,
         )
 
         async def cancel_with_fixed_result(
-            _repository: AgentRunRepository,
+            _repository: AgentRunCancellationRepository,
             **_kwargs: object,
-        ) -> CancelRunCommandOutcome:
+        ) -> RunCancellationSuccess | RunCancellationFailure:
             return outcome
 
         original_observer = daily_quota_observability.observe_release
@@ -1262,7 +1268,7 @@ class TestQuotaRouterTelemetry:
             original_observer(run_id=run_id, outcome=outcome)
 
         monkeypatch.setattr(
-            AgentRunRepository,
+            AgentRunCancellationRepository,
             "cancel_run_for_user",
             cancel_with_fixed_result,
         )
@@ -1391,31 +1397,33 @@ class TestQuotaRouterTelemetry:
     @pytest.mark.parametrize(
         ("outcome", "expected_status"),
         [
-            (CancelRunOutcome.ALREADY_FAILED, 204),
-            (CancelRunOutcome.ALREADY_COMPLETED, 409),
+            (RunCancellationFailureReason.ALREADY_FAILED, 204),
+            (RunCancellationFailureReason.ALREADY_DEADLINE_EXCEEDED, 204),
+            (RunCancellationFailureReason.RUN_NOT_FOUND, 404),
+            (RunCancellationFailureReason.ALREADY_COMPLETED, 409),
         ],
     )
     async def test_cancel_terminal_result_does_not_record_quota_release(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
-        outcome: CancelRunOutcome,
+        outcome: RunCancellationFailureReason,
         expected_status: int,
     ) -> None:
         client, _fake_enqueue = research_client
         calls: list[dict[str, object]] = []
 
         async def cancel_as_terminal(
-            _repository: AgentRunRepository,
+            _repository: AgentRunCancellationRepository,
             **_kwargs: object,
-        ) -> CancelRunCommandOutcome:
-            return CancelRunCommandOutcome(cancel_outcome=outcome)
+        ) -> RunCancellationSuccess | RunCancellationFailure:
+            return RunCancellationFailure(reason=outcome)
 
         def observe_release(**kwargs: object) -> None:
             calls.append(kwargs)
 
         monkeypatch.setattr(
-            AgentRunRepository,
+            AgentRunCancellationRepository,
             "cancel_run_for_user",
             cancel_as_terminal,
         )
@@ -1444,20 +1452,20 @@ class TestQuotaRouterTelemetry:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client, _fake_enqueue = research_client
-        policy_blocked = CancelRunOutcome.ALREADY_POLICY_BLOCKED
+        policy_blocked = RunCancellationFailureReason.ALREADY_POLICY_BLOCKED
         calls: list[dict[str, object]] = []
 
         async def cancel_as_policy_blocked(
-            _repository: AgentRunRepository,
+            _repository: AgentRunCancellationRepository,
             **_kwargs: object,
-        ) -> CancelRunCommandOutcome:
-            return CancelRunCommandOutcome(cancel_outcome=policy_blocked)
+        ) -> RunCancellationSuccess | RunCancellationFailure:
+            return RunCancellationFailure(reason=policy_blocked)
 
         def observe_release(**kwargs: object) -> None:
             calls.append(kwargs)
 
         monkeypatch.setattr(
-            AgentRunRepository,
+            AgentRunCancellationRepository,
             "cancel_run_for_user",
             cancel_as_policy_blocked,
         )
@@ -2085,12 +2093,14 @@ class TestDeleteResearchThread:
             await db_session.commit()
         db_session.expire_all()
         async with db_session.begin():
-            completed = await AgentRunRepository(db_session).complete_run(
+            completed = await AgentRunCompletionRepository(db_session).complete_run(
                 run_id=run_id,
                 result=_direct_result(),
                 expected_attempt_epoch=expected_attempt_epoch,
             )
-        assert completed is CompleteRunOutcome.TRANSITION_LOST
+        assert completed == RunCompletionFailure(
+            RunCompletionFailureReason.RUN_NOT_FOUND
+        )
         assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
         assert (
             await db_session.scalar(select(func.count()).select_from(AgentMessage)) == 0
@@ -2179,6 +2189,8 @@ class TestCancelResearchRun:
         response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
 
         assert response.status_code == 204
+        await db_session.refresh(run)
+        assert run.attempt_epoch == 3
         assert len(FakeCancelStreamPublisher.instances) == 1
         publisher = FakeCancelStreamPublisher.instances[0]
         assert publisher.run_id == run.id
@@ -2219,6 +2231,8 @@ class TestCancelResearchRun:
         response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
 
         assert response.status_code == 204
+        await db_session.refresh(run)
+        assert run.attempt_epoch == 7
         assert FakeCancelStreamPublisher.instances == []
 
     async def test_cancel_terminal_publish_failure_preserves_204(
@@ -2407,14 +2421,14 @@ class TestCancelResearchRun:
             await db_session.commit()
         db_session.expire_all()
         async with db_session.begin():
-            completed = await AgentRunRepository(db_session).complete_run(
+            completed = await AgentRunCompletionRepository(db_session).complete_run(
                 run_id=run_id,
                 result=_direct_result(),
                 expected_attempt_epoch=expected_attempt_epoch,
             )
         refreshed_run = await db_session.get(AgentRun, run_id)
         assert refreshed_run is not None
-        assert completed is CompleteRunOutcome.TRANSITION_LOST
+        assert completed == RunCompletionFailure(RunCompletionFailureReason.NOT_RUNNING)
         assert refreshed_run.status == "failed"
         assert refreshed_run.error_code == "cancelled"
         messages = (
@@ -2754,3 +2768,91 @@ def test_openapi_exposes_variant_specific_source_contract() -> None:
     assert "evidenceClaim" in external_schema["properties"]
     assert "evidenceClaim" in external_schema["required"]
     assert "content" not in external_schema["properties"]
+
+
+@pytest.mark.parametrize("initial_status", ["queued", "running"])
+async def test_cancel_unexpected_active_state_rolls_back_without_notification(
+    initial_status: str,
+    quota_research_client: tuple[AsyncClient, FakeEnqueue],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = quota_research_client
+    thread = await _create_thread(db_session)
+    message = await _create_message(
+        db_session, thread_id=thread.id, seq=1, role="user", content="cancel"
+    )
+    run = await _create_run(
+        db_session,
+        thread_id=thread.id,
+        user_message_id=message.id,
+        status=initial_status,
+        attempt_epoch=1 if initial_status == "running" else 0,
+        quota_usage_date=_QUOTA_USAGE_DATE,
+    )
+    run_id = run.id
+    db_session.add(
+        AgentUserDailyQuota(
+            user_id=UUID(TEST_USER_ID), usage_date=_QUOTA_USAGE_DATE, used_count=1
+        )
+    )
+    await db_session.commit()
+    updates_rejected = 0
+    rolled_back = False
+    observed: list[object] = []
+
+    def reject_cancel_updates(
+        _connection: object,
+        statement: Any,
+        multiparams: Any,
+        params: Any,
+        _options: object,
+    ) -> tuple[Any, Any, Any]:
+        nonlocal updates_rejected
+        if isinstance(statement, Update) and statement.table.name == "agent_runs":
+            updates_rejected += 1
+            return statement.where(false()), multiparams, params
+        return statement, multiparams, params
+
+    def observe_rollback(_session: object) -> None:
+        nonlocal rolled_back
+        rolled_back = True
+
+    monkeypatch.setattr(
+        daily_quota_observability,
+        "observe_release",
+        lambda **kwargs: observed.append(kwargs),
+    )
+    FakeCancelStreamPublisher.instances = []
+    monkeypatch.setattr(
+        live_transport_module, "AgentRunLiveStreamPublisher", FakeCancelStreamPublisher
+    )
+    engine = db_session.bind
+    assert engine is not None
+    sa_event.listen(
+        engine.sync_engine, "before_execute", reject_cancel_updates, retval=True
+    )
+    sa_event.listen(db_session.sync_session, "after_rollback", observe_rollback)
+    try:
+        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+    finally:
+        sa_event.remove(engine.sync_engine, "before_execute", reject_cancel_updates)
+        sa_event.remove(db_session.sync_session, "after_rollback", observe_rollback)
+    assert response.status_code == 500
+    assert updates_rejected == 2
+    assert rolled_back
+    assert observed == []
+    assert FakeCancelStreamPublisher.instances == []
+    db_session.expire_all()
+    persisted = await db_session.get(AgentRun, run_id)
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code) == (initial_status, None)
+    assert (
+        await db_session.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
+            )
+        )
+        == 1
+    )

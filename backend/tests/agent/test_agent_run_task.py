@@ -12,8 +12,9 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import event as sa_event
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import Session
 from structlog.testing import capture_logs
 from taskiq import InMemoryBroker
 from taskiq.message import TaskiqMessage
@@ -50,9 +51,15 @@ from app.agent.running import (
     RunInput,
     RunResult,
 )
-from app.agent.runs.contracts import CompleteRunOutcome, RunTransitionLostError
+from app.agent.running.attempt_start import AgentRunAttemptStartRepository
+from app.agent.running.completion import (
+    AgentRunCompletionRepository,
+    RunCompletionFailure,
+    RunCompletionFailureReason,
+    RunCompletionSuccess,
+)
+from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.runs.execution import Continue, Stop, StopReason
-from app.agent.runs.repository import AgentRunRepository
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
@@ -438,16 +445,16 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
     fake_agent = FakeAgent(_external_result())
     persisted_results: list[AnswerQuestionResult] = []
     completed_epochs: list[int] = []
-    original_complete = AgentRunRepository.complete_run
+    original_complete = AgentRunCompletionRepository.complete_run
 
     async def capture_completed_result(
-        repository: AgentRunRepository,
+        repository: AgentRunCompletionRepository,
         *,
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> CompleteRunOutcome:
+    ) -> RunCompletionSuccess | RunCompletionFailure:
         persisted_results.append(result)
         completed_epochs.append(expected_attempt_epoch)
         return await original_complete(
@@ -463,7 +470,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         lambda **_kwargs: fake_agent,
     )
     monkeypatch.setattr(
-        AgentRunRepository,
+        AgentRunCompletionRepository,
         "complete_run",
         capture_completed_result,
     )
@@ -532,16 +539,16 @@ def _capture_complete_run_handoffs(
 ) -> list[dict[str, Any] | None]:
     """complete_run へ渡る handoff payload を記録しつつ、本物へ委譲する。"""
     captured: list[dict[str, Any] | None] = []
-    original_complete = AgentRunRepository.complete_run
+    original_complete = AgentRunCompletionRepository.complete_run
 
     async def capture(
-        repository: AgentRunRepository,
+        repository: AgentRunCompletionRepository,
         *,
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> CompleteRunOutcome:
+    ) -> RunCompletionSuccess | RunCompletionFailure:
         captured.append(research_handoff)
         return await original_complete(
             repository,
@@ -551,7 +558,7 @@ def _capture_complete_run_handoffs(
             research_handoff=research_handoff,
         )
 
-    monkeypatch.setattr(AgentRunRepository, "complete_run", capture)
+    monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", capture)
     return captured
 
 
@@ -1428,33 +1435,33 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
     mark_failed_calls: list[tuple[UUID, int]] = []
 
     async def observe_complete(
-        _repository: AgentRunRepository,
+        _repository: AgentRunCompletionRepository,
         *,
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
-    ) -> CompleteRunOutcome:
+    ) -> RunCompletionSuccess | RunCompletionFailure:
         assert result == fake_agent.result
         complete_calls.append((run_id, expected_attempt_epoch))
-        return CompleteRunOutcome.TRANSITION_LOST
+        return RunCompletionFailure(RunCompletionFailureReason.TRANSITION_LOST)
 
     async def observe_mark_failed(
-        _repository: AgentRunRepository,
+        _repository: AgentRunFailureRepository,
         run_id: UUID,
         *,
         error_code: agent_run_tasks.AgentRunErrorCode,
         expected_attempt_epoch: int,
-    ) -> CompleteRunOutcome:
+    ) -> bool:
         assert error_code == agent_run_tasks.AgentRunErrorCode.INTERNAL_ERROR
         mark_failed_calls.append((run_id, expected_attempt_epoch))
-        return CompleteRunOutcome.TRANSITION_LOST
+        return False
 
     _patch_delta_worker(
         monkeypatch,
         lambda **_kwargs: fake_agent,
     )
-    monkeypatch.setattr(AgentRunRepository, "complete_run", observe_complete)
-    monkeypatch.setattr(AgentRunRepository, "mark_failed", observe_mark_failed)
+    monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", observe_complete)
+    monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", observe_mark_failed)
 
     with capture_logs() as logs:
         await agent_run_tasks.run_agent_answer(
@@ -1545,7 +1552,9 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
             async with session_factory() as restart_session:
                 async with restart_session.begin():
                     attempt_epoch = started_attempt_epoch(
-                        await AgentRunRepository(restart_session).start_run(run.id)
+                        await AgentRunAttemptStartRepository(restart_session).start_run(
+                            run.id
+                        )
                     )
             assert attempt_epoch == 2
             clock.now = 2.0
@@ -1562,18 +1571,18 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         return fake_agent
 
     async def observe_complete(
-        _repository: AgentRunRepository,
+        _repository: AgentRunCompletionRepository,
         *,
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
-    ) -> CompleteRunOutcome:
+    ) -> RunCompletionSuccess | RunCompletionFailure:
         assert result == fake_agent.result
         complete_calls.append((run_id, expected_attempt_epoch))
-        return CompleteRunOutcome.TRANSITION_LOST
+        return RunCompletionFailure(RunCompletionFailureReason.TRANSITION_LOST)
 
     async def observe_mark_failed(
-        _repository: AgentRunRepository,
+        _repository: AgentRunFailureRepository,
         run_id: UUID,
         *,
         error_code: agent_run_tasks.AgentRunErrorCode,
@@ -1585,8 +1594,8 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(agent_run_tasks, "AgentRunExecutionProbe", build_probe)
-    monkeypatch.setattr(AgentRunRepository, "complete_run", observe_complete)
-    monkeypatch.setattr(AgentRunRepository, "mark_failed", observe_mark_failed)
+    monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", observe_complete)
+    monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", observe_mark_failed)
 
     with capture_logs() as logs:
         await agent_run_tasks.run_agent_answer(
@@ -1702,7 +1711,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
         return fake_agent
 
     async def observe_mark_failed(
-        _repository: AgentRunRepository,
+        _repository: AgentRunFailureRepository,
         run_id: UUID,
         *,
         error_code: agent_run_tasks.AgentRunErrorCode,
@@ -1713,7 +1722,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(agent_run_tasks, "AgentRunExecutionProbe", build_probe)
-    monkeypatch.setattr(AgentRunRepository, "mark_failed", observe_mark_failed)
+    monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", observe_mark_failed)
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -1757,7 +1766,7 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
         fragments=["D" * 512],
         order=order,
     )
-    original_complete = AgentRunRepository.complete_run
+    original_complete = AgentRunCompletionRepository.complete_run
 
     def build_agent(**kwargs: object) -> DeltaReportingAgent:
         fake_agent.delta_reporter = kwargs["delta_reporter"]
@@ -1765,13 +1774,13 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
         return fake_agent
 
     async def observe_complete(
-        repository: AgentRunRepository,
+        repository: AgentRunCompletionRepository,
         *,
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> RunCompletionSuccess | RunCompletionFailure:
         order.append("complete_start")
         assert expected_attempt_epoch == 1
         return await original_complete(
@@ -1783,7 +1792,7 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
         )
 
     _patch_delta_worker(monkeypatch, build_agent)
-    monkeypatch.setattr(AgentRunRepository, "complete_run", observe_complete)
+    monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", observe_complete)
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -1983,25 +1992,28 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
         return fake_agent
 
     async def lose_or_skip_completion(
-        _repository: AgentRunRepository,
+        _repository: AgentRunCompletionRepository,
         *,
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> CompleteRunOutcome:
+    ) -> RunCompletionSuccess | RunCompletionFailure:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
             fake_agent.result,
             1,
         )
-        if completion_outcome == "lost":
-            raise RunTransitionLostError
-        return CompleteRunOutcome.TRANSITION_LOST
+        reason = (
+            RunCompletionFailureReason.TRANSITION_LOST
+            if completion_outcome == "lost"
+            else RunCompletionFailureReason.NOT_RUNNING
+        )
+        return RunCompletionFailure(reason)
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(
-        AgentRunRepository,
+        AgentRunCompletionRepository,
         "complete_run",
         lose_or_skip_completion,
     )
@@ -2055,13 +2067,13 @@ async def test_completion_failure_uses_failed_terminal_choke_point(
     FakeLiveStreamPublisher.instances = []
 
     async def fail_completion(
-        _repo: AgentRunRepository,
+        _repo: AgentRunCompletionRepository,
         *,
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> RunCompletionSuccess | RunCompletionFailure:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
             fake_agent.result,
@@ -2075,7 +2087,7 @@ async def test_completion_failure_uses_failed_terminal_choke_point(
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
-    monkeypatch.setattr(AgentRunRepository, "complete_run", fail_completion)
+    monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", fail_completion)
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -2100,54 +2112,18 @@ async def test_completion_failure_uses_failed_terminal_choke_point(
     ]
 
 
-@pytest.mark.asyncio
-async def test_completion_transition_loser_does_not_publish_terminal(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(_direct_result())
-    FakeLiveStreamPublisher.instances = []
-
-    async def lose_completion(
-        _repo: AgentRunRepository,
-        *,
-        run_id: UUID,
-        result: AnswerQuestionResult,
-        expected_attempt_epoch: int,
-        research_handoff: dict[str, Any] | None = None,
-    ) -> bool:
-        assert (run_id, result, expected_attempt_epoch) == (
-            run.id,
-            fake_agent.result,
-            1,
-        )
-        raise RunTransitionLostError
-
-    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveStreamPublisher",
-        FakeLiveStreamPublisher,
-    )
-    monkeypatch.setattr(AgentRunRepository, "complete_run", lose_completion)
-
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
-
-    terminal = [
-        event
-        for event in FakeLiveStreamPublisher.instances[0].published
-        if isinstance(event, AgentRunLiveStreamTerminalEvent)
-    ]
-    assert terminal == []
-
-
+@pytest.mark.parametrize(
+    "reason",
+    [
+        RunCompletionFailureReason.RUN_NOT_FOUND,
+        RunCompletionFailureReason.NOT_RUNNING,
+        RunCompletionFailureReason.ATTEMPT_MISMATCH,
+        RunCompletionFailureReason.ANSWER_NOT_STARTED,
+    ],
+)
 @pytest.mark.asyncio
 async def test_completion_skip_does_not_publish_terminal(
+    reason: RunCompletionFailureReason,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2157,19 +2133,19 @@ async def test_completion_skip_does_not_publish_terminal(
     FakeLiveStreamPublisher.instances = []
 
     async def skip_completion(
-        _repo: AgentRunRepository,
+        _repo: AgentRunCompletionRepository,
         *,
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
-    ) -> CompleteRunOutcome:
+    ) -> RunCompletionSuccess | RunCompletionFailure:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
             fake_agent.result,
             1,
         )
-        return CompleteRunOutcome.TRANSITION_LOST
+        return RunCompletionFailure(reason)
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
@@ -2177,7 +2153,7 @@ async def test_completion_skip_does_not_publish_terminal(
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
-    monkeypatch.setattr(AgentRunRepository, "complete_run", skip_completion)
+    monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", skip_completion)
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -2203,7 +2179,7 @@ async def test_failed_transition_loser_does_not_publish_terminal(
     FakeLiveStreamPublisher.instances = []
 
     async def lose_transition(
-        _repo: AgentRunRepository,
+        _repo: AgentRunFailureRepository,
         run_id: UUID,
         *,
         error_code: agent_run_tasks.AgentRunErrorCode,
@@ -2222,7 +2198,7 @@ async def test_failed_transition_loser_does_not_publish_terminal(
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
-    monkeypatch.setattr(AgentRunRepository, "mark_failed", lose_transition)
+    monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", lose_transition)
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -2699,3 +2675,99 @@ async def test_provider_timeout_error_follows_existing_unexpected_error_path(
     assert terminal == [
         AgentRunLiveStreamTerminalEvent(status="failed", errorCode="internal_error")
     ]
+
+
+@pytest.mark.parametrize("failure_stage", ["transition", "commit"])
+@pytest.mark.asyncio
+async def test_completion_rolls_back_written_artifacts(
+    failure_stage: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        thread, message, run = await _create_thread_message_run(session)
+        original_handoff = {"existing": "handoff"}
+        thread.research_handoff = original_handoff
+        await session.commit()
+        run_id, thread_id, message_id = run.id, thread.id, message.id
+        original_updated_at = thread.updated_at
+
+    injected = False
+
+    def invalidate_attempt_after_sources(session: Session, _context: object) -> None:
+        nonlocal injected
+        if failure_stage != "transition" or injected:
+            return
+        if not any(isinstance(row, AgentMessageSource) for row in session.new):
+            return
+        # 保存済み出典がある同一トランザクションで世代を変え、実UPDATEを0件にする。
+        session.connection().execute(
+            update(AgentRun).where(AgentRun.id == run_id).values(attempt_epoch=2)
+        )
+        injected = True
+
+    def fail_completed_commit(session: Session) -> None:
+        nonlocal injected
+        if failure_stage != "commit" or injected:
+            return
+        status = session.connection().scalar(
+            select(AgentRun.status).where(AgentRun.id == run_id)
+        )
+        if status == "completed":
+            injected = True
+            raise RuntimeError("completion commit failed")
+
+    fake_agent = FakeAgent(_external_result())
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: fake_agent,
+        answering_runner=FakeAnsweringRunner(research_handoff=_handoff()),
+    )
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
+    )
+    sa_event.listen(Session, "after_flush", invalidate_attempt_after_sources)
+    sa_event.listen(Session, "before_commit", fail_completed_commit)
+    try:
+        with capture_logs() as logs:
+            await agent_run_tasks.run_agent_answer(
+                trigger=AgentRunTrigger(run_id=run_id), ctx=_ctx(session_factory)
+            )
+    finally:
+        sa_event.remove(Session, "after_flush", invalidate_attempt_after_sources)
+        sa_event.remove(Session, "before_commit", fail_completed_commit)
+
+    assert injected
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run_id)
+        saved_thread = await session.get(AgentThread, thread_id)
+        assert persisted is not None and saved_thread is not None
+        assert persisted.status == (
+            "running" if failure_stage == "transition" else "failed"
+        )
+        assert persisted.error_code == (
+            None if failure_stage == "transition" else "internal_error"
+        )
+        assert persisted.attempt_epoch == 1
+        assert persisted.assistant_message_id is None
+        assert saved_thread.research_handoff == original_handoff
+        assert saved_thread.updated_at == original_updated_at
+        assert list(
+            await session.scalars(
+                select(AgentMessage.id).where(AgentMessage.thread_id == thread_id)
+            )
+        ) == [message_id]
+        assert list(await session.scalars(select(AgentMessageSource))) == []
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    if failure_stage == "transition":
+        assert terminal == []
+        assert any(entry.get("reason") == "transition_lost" for entry in logs)
+    else:
+        assert terminal == [
+            AgentRunLiveStreamTerminalEvent(status="failed", errorCode="internal_error")
+        ]

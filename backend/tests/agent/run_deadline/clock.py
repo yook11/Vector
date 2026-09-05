@@ -6,8 +6,10 @@ from uuid import UUID
 from sqlalchemy import literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.run_deadline.contracts import DeadlineRunSweepResult
-from app.agent.run_deadline.persistence import _recover_deadline_exceeded_runs
+from app.agent.running.deadline.deadline_exceeded import (
+    DeadlineRunSweepResult,
+    _recover_deadline_exceeded_runs,
+)
 
 
 async def sweep_deadline_exceeded_runs_at(

@@ -16,10 +16,6 @@ Next.js 16 (App Router) + TypeScript + Tailwind CSS + shadcn/ui + Biome によ�
 - Server Components をデフォルトとし、インタラクションが必要な場合のみ `"use client"`
 - コンポーネントファイル名は PascalCase (例: `NewsCard.tsx`)
 
-## Task Agents
-
-- frontend UI / component / page 実装は、利用可能な場合 frontend-ui-builder agent に分担する。
-
 ## 認証
 
 Better Auth を使用 — 実装時は `/better-auth` スキルを参照。

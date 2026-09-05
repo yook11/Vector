@@ -252,7 +252,7 @@ def test_agreed_runtime_budgets() -> None:
     from app.agent.evidence_collection.internal_search.service import (
         _INTERNAL_SEARCH_TIMEOUT_SECONDS,
     )
-    from app.agent.runs.repository import _ANSWER_SAVE_LOCK_TIMEOUT
+    from app.agent.running.completion import _ANSWER_SAVE_LOCK_TIMEOUT
 
     assert [
         getattr(import_module(module), constant)

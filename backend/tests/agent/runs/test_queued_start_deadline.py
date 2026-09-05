@@ -18,10 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
-from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
-from app.agent.run_deadline.policy import RUN_DEADLINE_SECONDS
-from app.agent.runs.contracts import StartRunFailureReason
-from app.agent.runs.repository import AgentRunRepository
+from app.agent.daily_quota.release import DailyQuotaReleaseOutcome
+from app.agent.running.attempt_start import (
+    AgentRunAttemptStartRepository,
+    StartRunFailureReason,
+)
+from app.agent.running.cancellation import AgentRunCancellationRepository
+from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -237,7 +240,7 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunRepository(session).start_run(
+            result = await AgentRunAttemptStartRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW,
             )
@@ -272,11 +275,11 @@ async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
 
     async with session_factory() as session:
         async with session.begin():
-            before_result = await AgentRunRepository(session).start_run(
+            before_result = await AgentRunAttemptStartRepository(session).start_run(
                 just_before.run_id,
                 now=_DB_NOW,
             )
-            exact_result = await AgentRunRepository(session).start_run(
+            exact_result = await AgentRunAttemptStartRepository(session).start_run(
                 exact.run_id,
                 now=_DB_NOW,
             )
@@ -305,7 +308,7 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunRepository(session).start_run(
+            result = await AgentRunAttemptStartRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW,
             )
@@ -330,7 +333,7 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunRepository(session).start_run(
+            result = await AgentRunAttemptStartRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW,
             )
@@ -371,7 +374,7 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
     try:
         with pytest.raises(RuntimeError, match="queued expiry quota query failed"):
             async with session.begin():
-                await AgentRunRepository(session).start_run(
+                await AgentRunAttemptStartRepository(session).start_run(
                     seeded.run_id,
                     now=_DB_NOW,
                 )
@@ -406,7 +409,9 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
         start_task: asyncio.Task[object] | None = None
         try:
             await cancel_session.begin()
-            cancelled = await AgentRunRepository(cancel_session).cancel_run_for_user(
+            cancelled = await AgentRunCancellationRepository(
+                cancel_session
+            ).cancel_run_for_user(
                 run_id=seeded.run_id,
                 user_id=seeded.user_id,
             )
@@ -415,7 +420,7 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
             start_pid = await start_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(start_pid, int)
             start_task = asyncio.create_task(
-                AgentRunRepository(start_session).start_run(
+                AgentRunAttemptStartRepository(start_session).start_run(
                     seeded.run_id,
                     now=_DB_NOW,
                 )
@@ -456,11 +461,11 @@ async def test_timely_start_and_running_redelivery_never_release_quota(
 
     async with session_factory() as session:
         async with session.begin():
-            started = await AgentRunRepository(session).start_run(
+            started = await AgentRunAttemptStartRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW,
             )
-            redelivered = await AgentRunRepository(session).start_run(
+            redelivered = await AgentRunAttemptStartRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW + timedelta(seconds=1),
             )

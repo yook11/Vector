@@ -7,9 +7,6 @@ from dataclasses import replace
 
 from app.agent.agent import Agent
 from app.agent.answering import timing as answer_timing
-from app.agent.answering.answer_generation_repository import (
-    AnswerGenerationRepository,
-)
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerInput,
@@ -36,6 +33,9 @@ from app.agent.recording.direct_answer import (
     DirectAnswerRecorder,
     DirectAnswerSucceeded,
     logfire_direct_answer_recorder,
+)
+from app.agent.running.answer_generation import (
+    AnswerGenerationRepository,
 )
 from app.agent.runs.execution import Stop
 from app.agent.runtime.contract import (

@@ -11,8 +11,12 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
-from app.agent.runs.contracts import CompleteRunOutcome
-from app.agent.runs.repository import AgentRunRepository
+from app.agent.running.cancellation import AgentRunCancellationRepository
+from app.agent.running.completion import (
+    AgentRunCompletionRepository,
+    RunCompletionSuccess,
+)
+from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
@@ -375,9 +379,10 @@ async def test_sweep_preserves_terminal_transition_that_wins_run_lock(
         sweep_task: asyncio.Task[object] | None = None
         try:
             await terminal_session.begin()
-            repository = AgentRunRepository(terminal_session)
             if terminalizer == "complete":
-                outcome = await repository.complete_run(
+                outcome = await AgentRunCompletionRepository(
+                    terminal_session
+                ).complete_run(
                     run_id=run.id,
                     result=AnswerQuestionResult(
                         status="answered",
@@ -389,16 +394,20 @@ async def test_sweep_preserves_terminal_transition_that_wins_run_lock(
                     expected_attempt_epoch=2,
                     now=sweep_time - timedelta(microseconds=1),
                 )
-                assert outcome is CompleteRunOutcome.COMPLETED
+                assert outcome == RunCompletionSuccess()
             elif terminalizer == "fail":
-                transitioned = await repository.mark_failed(
+                transitioned = await AgentRunFailureRepository(
+                    terminal_session
+                ).mark_failed(
                     run.id,
                     expected_attempt_epoch=2,
                     error_code=AgentRunErrorCode.INTERNAL_ERROR,
                 )
                 assert transitioned is True
             else:
-                await repository.cancel_run_for_user(
+                await AgentRunCancellationRepository(
+                    terminal_session
+                ).cancel_run_for_user(
                     run_id=run.id,
                     user_id=_USER_ID,
                 )

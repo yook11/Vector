@@ -17,8 +17,13 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.runs.contracts import CompleteRunOutcome
-from app.agent.runs.repository import AgentRunRepository
+from app.agent.running.attempt_start import AgentRunAttemptStartRepository
+from app.agent.running.completion import (
+    AgentRunCompletionRepository,
+    RunCompletionFailure,
+    RunCompletionFailureReason,
+    RunCompletionSuccess,
+)
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -213,11 +218,11 @@ async def test_start_run_starts_only_before_fixed_deadline(
 
     async with session_factory() as session:
         async with session.begin():
-            await AgentRunRepository(session).start_run(
+            await AgentRunAttemptStartRepository(session).start_run(
                 before.run_id,
                 now=_BEFORE_DEADLINE,
             )
-            await AgentRunRepository(session).start_run(
+            await AgentRunAttemptStartRepository(session).start_run(
                 at_deadline.run_id,
                 now=_DEADLINE_AT,
             )
@@ -265,7 +270,7 @@ async def test_complete_run_uses_answer_recovery_deadline(
 
     async with session_factory() as session:
         async with session.begin():
-            accepted_after_original_outcome = await AgentRunRepository(
+            accepted_after_original_outcome = await AgentRunCompletionRepository(
                 session
             ).complete_run(
                 run_id=accepted_after_original_deadline.run_id,
@@ -274,7 +279,7 @@ async def test_complete_run_uses_answer_recovery_deadline(
                 research_handoff=_CANDIDATE_HANDOFF,
                 now=_CREATED_AT + timedelta(seconds=67),
             )
-            accepted_before_recovery_outcome = await AgentRunRepository(
+            accepted_before_recovery_outcome = await AgentRunCompletionRepository(
                 session
             ).complete_run(
                 run_id=accepted_before_recovery_deadline.run_id,
@@ -283,7 +288,7 @@ async def test_complete_run_uses_answer_recovery_deadline(
                 research_handoff=_CANDIDATE_HANDOFF,
                 now=_RECOVERY_DEADLINE - timedelta(microseconds=1),
             )
-            rejected_outcome = await AgentRunRepository(session).complete_run(
+            rejected_outcome = await AgentRunCompletionRepository(session).complete_run(
                 run_id=rejected.run_id,
                 result=_answer_result(),
                 expected_attempt_epoch=3,
@@ -291,9 +296,11 @@ async def test_complete_run_uses_answer_recovery_deadline(
                 now=_RECOVERY_DEADLINE,
             )
 
-    assert accepted_after_original_outcome is CompleteRunOutcome.COMPLETED
-    assert accepted_before_recovery_outcome is CompleteRunOutcome.COMPLETED
-    assert rejected_outcome is CompleteRunOutcome.DEADLINE_EXCEEDED
+    assert accepted_after_original_outcome == RunCompletionSuccess()
+    assert accepted_before_recovery_outcome == RunCompletionSuccess()
+    assert rejected_outcome == RunCompletionFailure(
+        RunCompletionFailureReason.DEADLINE_EXCEEDED
+    )
 
     assert (
         await _load_complete_persisted(
@@ -356,7 +363,7 @@ async def test_complete_run_requires_answer_start_without_changing_run(
 
     async with session_factory() as session:
         async with session.begin():
-            outcome = await AgentRunRepository(session).complete_run(
+            outcome = await AgentRunCompletionRepository(session).complete_run(
                 run_id=seeded.run_id,
                 result=_answer_result(),
                 expected_attempt_epoch=3,
@@ -364,7 +371,9 @@ async def test_complete_run_requires_answer_start_without_changing_run(
                 now=_CREATED_AT + timedelta(seconds=10),
             )
 
-    assert outcome is CompleteRunOutcome.TRANSITION_LOST
+    assert outcome == RunCompletionFailure(
+        RunCompletionFailureReason.ANSWER_NOT_STARTED
+    )
     assert await _load_complete_persisted(
         session_factory,
         run_id=seeded.run_id,
@@ -401,7 +410,7 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
 
     async with session_factory() as session:
         async with session.begin():
-            outcome = await AgentRunRepository(session).complete_run(
+            outcome = await AgentRunCompletionRepository(session).complete_run(
                 run_id=seeded.run_id,
                 result=_answer_result(),
                 expected_attempt_epoch=3,
@@ -409,7 +418,7 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
                 now=_CREATED_AT + timedelta(seconds=67),
             )
 
-    assert outcome is CompleteRunOutcome.TRANSITION_LOST
+    assert outcome == RunCompletionFailure(RunCompletionFailureReason.ATTEMPT_MISMATCH)
     assert (
         await _load_complete_persisted(
             session_factory,
@@ -441,7 +450,9 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
         session_factory() as saver,
         session_factory() as observer,
     ):
-        save_task: asyncio.Task[CompleteRunOutcome] | None = None
+        save_task: asyncio.Task[RunCompletionSuccess | RunCompletionFailure] | None = (
+            None
+        )
         try:
             await blocker.begin()
             await blocker.execute(
@@ -452,7 +463,7 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
             saver_pid = await saver.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(saver_pid, int)
             save_task = asyncio.create_task(
-                AgentRunRepository(saver).complete_run(
+                AgentRunCompletionRepository(saver).complete_run(
                     run_id=seeded.run_id,
                     result=_answer_result(),
                     expected_attempt_epoch=3,
@@ -481,7 +492,7 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
                 if session.in_transaction():
                     await session.rollback()
 
-    assert outcome is CompleteRunOutcome.DEADLINE_EXCEEDED
+    assert outcome == RunCompletionFailure(RunCompletionFailureReason.DEADLINE_EXCEEDED)
     persisted = await _load_complete_persisted(
         session_factory,
         run_id=seeded.run_id,

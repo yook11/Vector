@@ -4,21 +4,64 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid as uuid_mod
 from collections.abc import Callable
+from datetime import datetime
 from uuid import UUID
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.live_updates.metrics import (
     record_agent_run_execution_probe_unavailable,
 )
-from app.agent.runs.execution import Continue, Stop
-from app.agent.runs.repository import AgentRunRepository
+from app.agent.running.deadline.deadline_exceeded import database_now, expire_run
+from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.runs.types import AgentRunStatus
+from app.models.agent_run import AgentRun
 
 AGENT_RUN_EXECUTION_PROBE_INTERVAL_SECONDS = 2.0
 
 logger = structlog.get_logger(__name__)
+
+
+class AgentRunContinuationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def decide_execution_continuation(
+        self,
+        *,
+        run_id: uuid_mod.UUID,
+        attempt_epoch: int,
+        now: datetime | None = None,
+    ) -> Continue | Stop:
+        now = await database_now(self._session, now)
+        deadline_at = (
+            await self._session.execute(
+                select(AgentRun.deadline_at).where(
+                    AgentRun.id == run_id,
+                    AgentRun.status == AgentRunStatus.RUNNING.value,
+                    AgentRun.attempt_epoch == attempt_epoch,
+                )
+            )
+        ).scalar_one_or_none()
+        if deadline_at is None:
+            return Stop(StopReason.NOT_CURRENT)
+        if now < deadline_at:
+            return Continue()
+
+        expired = await expire_run(
+            self._session,
+            run_id=run_id,
+            expected_status=AgentRunStatus.RUNNING,
+            expected_attempt_epoch=attempt_epoch,
+            now=now,
+        )
+        if not expired:
+            return Stop(StopReason.NOT_CURRENT)
+        return Stop(StopReason.DEADLINE_EXCEEDED)
 
 
 class AgentRunExecutionProbe:
@@ -56,7 +99,7 @@ class AgentRunExecutionProbe:
             try:
                 async with self._session_factory() as session:
                     async with session.begin():
-                        result = await AgentRunRepository(
+                        result = await AgentRunContinuationRepository(
                             session
                         ).decide_execution_continuation(
                             run_id=self._run_id,
