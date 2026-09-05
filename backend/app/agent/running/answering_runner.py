@@ -200,7 +200,6 @@ class AnsweringRunner:
         request: AnsweringRequest,
         previous_answer: str,
     ) -> AnswerQuestionResult:
-        await self._report_progress("answering")
         draft = await phases.direct_answerer.answer(
             DirectAnswerInput(request=request, previous_answer=previous_answer)
         )
@@ -253,7 +252,6 @@ class AnsweringRunner:
             review_missing = ()
         evidence = build_answer_input_evidence(answer_evidence)
 
-        await self._report_progress("answering")
         answer_outcome = await phases.evidence_answerer.answer(
             EvidenceAnswerInput(
                 request=request,

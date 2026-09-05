@@ -46,6 +46,7 @@ from app.agent.live_updates.stream import (
 )
 from app.agent.planning.contract import TargetTimeWindow
 from app.config import settings
+from tests.agent.running._harness import AllowAnswerGenerationStart
 
 pytestmark = pytest.mark.xdist_group("redis")
 
@@ -118,6 +119,7 @@ async def _answer(
     return await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=generator.activate,
+        repository=AllowAnswerGenerationStart(),
         delta_reporter=reporter,
     ).answer(
         DirectAnswerInput(
@@ -136,6 +138,7 @@ async def _evidence_answer(
     return await EvidenceAnswerService(
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=generator.activate,
+        repository=AllowAnswerGenerationStart(),
         delta_reporter=reporter,
     ).answer(
         EvidenceAnswerInput(

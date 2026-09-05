@@ -703,9 +703,9 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
-    """direct answer経路はplanning→
+    """direct answer経路はplanningのあと回答サービスを呼び、
 
-    answeringの順に報告され、evidence_collectionとevidence_reviewは報告されない。
+    evidence_collectionとevidence_reviewは報告されない。
     """
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
@@ -721,7 +721,6 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
     assert timeline.events == [
         "progress:planning",
         "planner.plan",
-        "progress:answering",
         "direct_answerer.answer",
     ]
 
@@ -730,8 +729,8 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
 async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
     """evidence経路はplanning→
 
-    evidence_collection→evidence_review→answeringの順に報告され、各報告は
-    対応するport呼び出し(prepare/plan/collect/review/answer)の直前になる。
+    evidence_collection→evidence_reviewの順に報告され、各報告は対応する
+    port呼び出しの直前になる。回答生成中の報告は回答サービスが開始確定後に出す。
     """
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
@@ -760,7 +759,6 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
     assert timeline.events[5:] == [
         "progress:evidence_review",
         "reviewer.review",
-        "progress:answering",
         "evidence_answerer.answer",
     ]
 
@@ -813,7 +811,6 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
         "external_search.activate",
     }
     assert timeline.events[5:] == [
-        "progress:answering",
         "evidence_answerer.answer",
     ]
     assert len(evidence_answerer.calls) == 1
@@ -862,7 +859,6 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
         "progress:evidence_review",
         "reviewer.review",
         "reviewer.review",
-        "progress:answering",
         "evidence_answerer.answer",
     ]
 
@@ -1173,9 +1169,8 @@ async def test_answer_step_failure_stops_before_later_progress_or_ports(
         assert "evidence_answerer.answer" not in timeline.events
         return
 
-    answering_index = timeline.events.index("progress:answering")
+    answering_index = timeline.events.index("evidence_answerer.answer")
     assert all(index < answering_index for index in branch_start_indices.values())
-    assert timeline.events.index("evidence_answerer.answer") > answering_index
 
 
 @pytest.mark.asyncio
@@ -1194,6 +1189,5 @@ async def test_answer_direct_failure_stops_before_later_progress_or_ports() -> N
     assert timeline.events == [
         "progress:planning",
         "planner.plan",
-        "progress:answering",
         "direct_answerer.answer",
     ]

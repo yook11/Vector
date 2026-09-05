@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from app.agent.contract import (
     AnswerDeltaReporter,
-    AnswerGenerationStopped,
 )
-from app.agent.runs.execution import RunExecutionContinuation, Stop
 from app.agent.runtime.contract import AgentTextStream
 
 __all__ = [
     "BestEffortAnswerDeltaReporter",
     "close_answer_stream",
-    "ensure_answer_generation_continues",
 ]
 
 
@@ -53,18 +50,6 @@ class BestEffortAnswerDeltaReporter:
             await self._inner.abort(generation=generation)
         except Exception:
             return
-
-
-async def ensure_answer_generation_continues(
-    continuation: RunExecutionContinuation | None,
-) -> None:
-    """Raise AnswerGenerationStopped when the continuation requests a stop."""
-
-    if continuation is None:
-        return
-    result = await continuation.should_continue()
-    if isinstance(result, Stop):
-        raise AnswerGenerationStopped(result.reason)
 
 
 async def close_answer_stream(stream: AgentTextStream | None) -> None:

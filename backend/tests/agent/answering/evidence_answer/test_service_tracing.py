@@ -21,6 +21,7 @@ from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
+from tests.agent.running._harness import AllowAnswerGenerationStart
 from tests.agent.runtime._helpers import FakeGeminiClient
 from tests.agent.runtime._tracing_helpers import span_text
 
@@ -87,6 +88,7 @@ async def test_phase_owns_all_provider_attempts_without_model_text(
     draft = await EvidenceAnswerService(
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
+        repository=AllowAnswerGenerationStart(),
     ).answer(
         EvidenceAnswerInput(
             request=_request(),

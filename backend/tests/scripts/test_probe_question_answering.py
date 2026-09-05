@@ -344,6 +344,12 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     reviewer_scope = _keyword_value(reviewer, "runtime_scope_factory")
     assert isinstance(reviewer_scope, ast.Name)
     assert reviewer_scope.id == "activate_evidence_reviewer_runtime"
+    evidence_answerer = _keyword_value(phase, "evidence_answerer")
+    assert isinstance(evidence_answerer, ast.Call)
+    assert _call_name(evidence_answerer) == "EvidenceAnswerService"
+    evidence_answer_start = _keyword_value(evidence_answerer, "repository")
+    assert isinstance(evidence_answer_start, ast.Call)
+    assert _call_name(evidence_answer_start) == "_ProbeAnswerGenerationStart"
 
 
 def test_search_probe_summary_uses_final_result_plan_summary_and_events_only() -> None:
@@ -406,6 +412,9 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     assert direct_agent.id == "DIRECT_ANSWER_AGENT"
     assert isinstance(direct_runtime_scope_factory, ast.Name)
     assert direct_runtime_scope_factory.id == "activate_gemini_agent_runtime"
+    direct_answer_start = _keyword_value(direct_answerer, "repository")
+    assert isinstance(direct_answer_start, ast.Call)
+    assert _call_name(direct_answer_start) == "_ProbeAnswerGenerationStart"
 
 
 def test_probe_uses_direct_answer_and_search_plans_without_legacy_plan_paths() -> None:

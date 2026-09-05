@@ -34,6 +34,7 @@ def test_answering_runner_builder_rejects_public_client_injection(
     with pytest.raises(TypeError):
         composition.build_answering_runner(
             session_factory=object(),
+            repository=object(),
             **{unexpected_argument: object()},
         )
 
@@ -312,8 +313,10 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         lambda **kwargs: internal_search_calls.append(kwargs) or internal_search,
     )
 
+    answer_start = object()
     phases = composition._build_answering_phases(
         session_factory=object(),
+        repository=answer_start,
         events=events,
     )
 
@@ -336,16 +339,18 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         {
             "agent": DIRECT_ANSWER_AGENT,
             "runtime_scope_factory": activate_gemini_agent_runtime,
+            "repository": answer_start,
             "delta_reporter": None,
-            "continuation": None,
+            "progress": None,
         }
     ]
     assert evidence_calls == [
         {
             "agent": EVIDENCE_ANSWER_AGENT,
             "runtime_scope_factory": activate_gemini_agent_runtime,
+            "repository": answer_start,
             "delta_reporter": None,
-            "continuation": None,
+            "progress": None,
         }
     ]
 
@@ -386,7 +391,10 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
         lambda **kwargs: internal_search_calls.append(kwargs) or object(),
     )
 
-    composition._build_answering_phases(session_factory=session_factory)
+    composition._build_answering_phases(
+        session_factory=session_factory,
+        repository=object(),
+    )
 
     cache = internal_search_calls[0]["query_embedding_cache"]
     # embedderが実際に使うspecとキャッシュ空間が一致しないと、別条件で作った
@@ -404,7 +412,7 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
     progress = object()
     events = object()
     delta_reporter = object()
-    continuation = object()
+    answer_start = object()
 
     monkeypatch.setattr(
         composition,
@@ -415,10 +423,10 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
 
     runner = composition.build_answering_runner(
         session_factory=session_factory,
+        repository=answer_start,
         progress=progress,
         events=events,
         delta_reporter=delta_reporter,
-        continuation=continuation,
     )
 
     assert captured == []
@@ -426,9 +434,10 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
     assert captured == [
         {
             "session_factory": session_factory,
+            "repository": answer_start,
             "events": events,
             "delta_reporter": delta_reporter,
-            "continuation": continuation,
+            "progress": progress,
         }
     ]
 
@@ -486,23 +495,29 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
         lambda **_kwargs: object(),
     )
     delta_reporter = object()
-    continuation = object()
+    answer_start = object()
+    progress = object()
 
     phases = composition._build_answering_phases(
         session_factory=cast(async_sessionmaker[AsyncSession], object()),
+        repository=answer_start,
         delta_reporter=delta_reporter,
-        continuation=continuation,
+        progress=progress,
     )
 
+    assert captured["direct"]["repository"] is answer_start
+    assert captured["direct"]["progress"] is progress
     assert captured["direct"]["delta_reporter"] is delta_reporter
-    assert captured["direct"]["continuation"] is continuation
+    assert "continuation" not in captured["direct"]
     assert captured["direct"]["agent"] is DIRECT_ANSWER_AGENT
     assert (
         captured["direct"]["runtime_scope_factory"]
         is composition.activate_gemini_agent_runtime
     )
+    assert captured["evidence"]["repository"] is answer_start
+    assert captured["evidence"]["progress"] is progress
     assert captured["evidence"]["delta_reporter"] is delta_reporter
-    assert captured["evidence"]["continuation"] is continuation
+    assert "continuation" not in captured["evidence"]
     assert captured["evidence"]["agent"] is EVIDENCE_ANSWER_AGENT
     assert (
         captured["evidence"]["runtime_scope_factory"]

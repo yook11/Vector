@@ -37,6 +37,10 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.gemini_error_translator import GeminiStateReason
 from tests.agent.recording._fakes import RecordingEvidenceAnswerRecorder
+from tests.agent.running._harness import (
+    AllowAnswerGenerationStart,
+    ScriptedAnswerGenerationRepository,
+)
 from tests.logfire._metric_helpers import (
     collected_metrics,
     counter_attribute_key_sets,
@@ -234,35 +238,27 @@ class RecordingDeltaReporter:
             raise RuntimeError("REPORTER_RESET_SECRET")
 
 
-class SequenceContinuation:
-    def __init__(self, results: Sequence[Continue | Stop]) -> None:
-        self._results = list(results)
-        self.calls = 0
-
-    async def should_continue(self) -> Continue | Stop:
-        self.calls += 1
-        if not self._results:
-            return Continue()
-        return self._results.pop(0)
-
-
 async def _answer(
     generator: FakeGenerator,
     *,
     evidence: list[AnswerInputEvidence] | None = None,
+    answer_start: object | None = None,
     delta_reporter: RecordingDeltaReporter | None = None,
-    continuation: SequenceContinuation | None = None,
+    progress: object | None = None,
     request: AnsweringRequest | None = None,
     recorder: RecordingEvidenceAnswerRecorder | None = None,
 ) -> EvidenceAnswerDraft:
     service_kwargs: dict[str, Any] = {
         "agent": EVIDENCE_ANSWER_AGENT,
         "runtime_scope_factory": generator.activate,
+        "repository": (
+            AllowAnswerGenerationStart() if answer_start is None else answer_start
+        ),
     }
     if delta_reporter is not None:
         service_kwargs["delta_reporter"] = delta_reporter
-    if continuation is not None:
-        service_kwargs["continuation"] = continuation
+    if progress is not None:
+        service_kwargs["progress"] = progress
     if recorder is not None:
         service_kwargs["recorder"] = recorder
     return await EvidenceAnswerService(**service_kwargs).answer(
@@ -569,6 +565,7 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
     service = EvidenceAnswerService(
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=failing_scope,
+        repository=AllowAnswerGenerationStart(),
         delta_reporter=reporter,
     )
 
@@ -625,6 +622,7 @@ async def test_runtime_scope_exit_failure_discards_selected_outcome(
     service = EvidenceAnswerService(
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=broken_scope,
+        repository=AllowAnswerGenerationStart(),
     )
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -822,7 +820,9 @@ async def test_continuation_false_before_provider_start_is_routine_stop(
         await _answer(
             generator,
             delta_reporter=reporter,
-            continuation=SequenceContinuation([Stop(StopReason.NOT_CURRENT)]),
+            answer_start=ScriptedAnswerGenerationRepository(
+                checks=[Stop(StopReason.NOT_CURRENT)]
+            ),
         )
 
     assert generator.calls == []
@@ -844,15 +844,15 @@ async def test_continuation_false_mid_stream_closes_and_aborts(
 ) -> None:
     generator = FakeGenerator([["表示済み本文と", "非表示本文。[[1]]"]])
     reporter = RecordingDeltaReporter()
-    continuation = SequenceContinuation(
-        [Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
+    repository = ScriptedAnswerGenerationRepository(
+        checks=[Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
     )
 
     with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,
-            continuation=continuation,
+            answer_start=repository,
         )
 
     assert "".join(text for _, text in reporter.appended) == "表示済み本文と"
@@ -869,15 +869,15 @@ async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
 ) -> None:
     generator = FakeGenerator(["根拠から確認できます。[[1]]"])
     reporter = RecordingDeltaReporter()
-    continuation = SequenceContinuation(
-        [Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
+    repository = ScriptedAnswerGenerationRepository(
+        checks=[Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
     )
 
     with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,
-            continuation=continuation,
+            answer_start=repository,
         )
 
     assert reporter.aborted == [1]
@@ -899,8 +899,8 @@ async def test_provider_error_does_not_perform_a_fallback_continuation_check(
         await _answer(
             generator,
             delta_reporter=reporter,
-            continuation=SequenceContinuation(
-                [Continue(), Stop(StopReason.NOT_CURRENT)]
+            answer_start=ScriptedAnswerGenerationRepository(
+                checks=[Continue(), Stop(StopReason.NOT_CURRENT)]
             ),
         )
 
@@ -1080,7 +1080,9 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _answer(
             generator,
-            continuation=SequenceContinuation([Stop(StopReason.NOT_CURRENT)]),
+            answer_start=ScriptedAnswerGenerationRepository(
+                checks=[Stop(StopReason.NOT_CURRENT)]
+            ),
             recorder=recorder,
         )
 
@@ -1097,8 +1099,8 @@ async def test_provider_error_records_failure_without_fallback() -> None:
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(
             generator,
-            continuation=SequenceContinuation(
-                [Continue(), Stop(StopReason.NOT_CURRENT)]
+            answer_start=ScriptedAnswerGenerationRepository(
+                checks=[Continue(), Stop(StopReason.NOT_CURRENT)]
             ),
             recorder=recorder,
         )
@@ -1132,3 +1134,114 @@ async def test_unclassified_failure_and_stops_record_without_outcome(
 
     assert exc_info.value is error
     _assert_recorded(recorder, outcome=None, error=error)
+
+
+class _RecordingProgress:
+    def __init__(self, timeline: list[str] | None = None) -> None:
+        self.stages: list[str] = []
+        self._timeline = timeline
+
+    async def stage_changed(self, stage: str) -> None:
+        self.stages.append(stage)
+        if self._timeline is not None:
+            self._timeline.append(f"progress:{stage}")
+
+
+@pytest.mark.asyncio
+async def test_start_continue_reports_answering_before_generation() -> None:
+    timeline: list[str] = []
+    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
+    original_stream = generator.stream_text
+
+    def tracked_stream(*args: object, **kwargs: object) -> AsyncIterator[str]:
+        timeline.append("generate")
+        return original_stream(*args, **kwargs)
+
+    generator.stream_text = tracked_stream  # type: ignore[method-assign]
+    start = ScriptedAnswerGenerationRepository(timeline=timeline)
+    progress = _RecordingProgress(timeline)
+
+    draft = await _answer(
+        generator,
+        answer_start=start,
+        progress=progress,
+    )
+
+    assert draft.answer == "根拠から確認できます。[[1]]"
+    assert timeline == ["answer_start", "progress:answering", "generate"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        Stop(StopReason.DEADLINE_EXCEEDED),
+        Stop(StopReason.NOT_CURRENT),
+        RuntimeError("answer start transaction failed"),
+    ],
+)
+async def test_start_rejection_does_not_generate_or_report_answering(
+    outcome: Continue | Stop | BaseException,
+) -> None:
+    generator = FakeGenerator(["呼ばれない"])
+    start = ScriptedAnswerGenerationRepository(start=outcome)
+    progress = _RecordingProgress()
+    recorder = RecordingEvidenceAnswerRecorder()
+
+    expected = AnswerGenerationStopped if isinstance(outcome, Stop) else type(outcome)
+    with pytest.raises(expected) as raised:
+        await _answer(
+            generator,
+            answer_start=start,
+            progress=progress,
+            recorder=recorder,
+        )
+
+    if isinstance(outcome, Stop):
+        assert raised.value.reason is outcome.reason
+    else:
+        assert raised.value is outcome
+    assert start.calls == 1
+    assert generator.scope_enters == 0
+    assert generator.calls == []
+    assert progress.stages == []
+    assert recorder.records == []
+
+
+@pytest.mark.asyncio
+async def test_regeneration_stop_does_not_start_second_generation() -> None:
+    generator = FakeGenerator(["引用がありません。", "呼ばれない[[1]]"])
+    repository = ScriptedAnswerGenerationRepository(
+        authorizes=[Stop(StopReason.DEADLINE_EXCEEDED)]
+    )
+    reporter = RecordingDeltaReporter()
+
+    with pytest.raises(AnswerGenerationStopped) as raised:
+        await _answer(generator, answer_start=repository, delta_reporter=reporter)
+
+    assert raised.value.reason is StopReason.DEADLINE_EXCEEDED
+    assert [call["attempt_number"] for call in generator.calls] == [1]
+    assert repository.authorize_calls == 1
+    assert reporter.reset_generations == []
+
+
+@pytest.mark.asyncio
+async def test_regeneration_keeps_single_answer_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = 0
+    original_timeout = asyncio.timeout
+
+    def counting_timeout(delay: float) -> object:
+        nonlocal created
+        created += 1
+        return original_timeout(delay)
+
+    monkeypatch.setattr(asyncio, "timeout", counting_timeout)
+    generator = FakeGenerator(["引用がありません。", "修正後は引用します。[[1]]"])
+
+    draft = await _answer(generator)
+
+    assert draft.answer == "修正後は引用します。[[1]]"
+    assert created == 1
+    assert [call["attempt_number"] for call in generator.calls] == [1, 2]

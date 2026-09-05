@@ -8,6 +8,9 @@ from dataclasses import replace
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
+from app.agent.answering.answer_generation_repository import (
+    AnswerGenerationRepository,
+)
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
@@ -24,17 +27,20 @@ from app.agent.answering.failure import (
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
     close_answer_stream,
-    ensure_answer_generation_continues,
 )
 from app.agent.answering.live_draft import LiveAnswerDraftSession
-from app.agent.contract import AnswerDeltaReporter
+from app.agent.contract import (
+    AnswerDeltaReporter,
+    AnswerGenerationStopped,
+    AnswerProgressReporter,
+)
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecorder,
     EvidenceAnswerSucceeded,
     logfire_evidence_answer_recorder,
 )
-from app.agent.runs.execution import RunExecutionContinuation
+from app.agent.runs.execution import Stop
 from app.agent.runtime.contract import (
     AgentTextStream,
     StreamingAgentRuntime,
@@ -68,18 +74,24 @@ class EvidenceAnswerService:
         *,
         agent: Agent[EvidenceAnswerInput, EvidenceAnswerDraft],
         runtime_scope_factory: StreamingAgentRuntimeScopeFactory,
+        repository: AnswerGenerationRepository,
         delta_reporter: AnswerDeltaReporter | None = None,
-        continuation: RunExecutionContinuation | None = None,
+        progress: AnswerProgressReporter | None = None,
         recorder: EvidenceAnswerRecorder = logfire_evidence_answer_recorder,
     ) -> None:
         self._agent = agent
         self._runtime_scope_factory = runtime_scope_factory
+        self._repository = repository
         self._delta = BestEffortAnswerDeltaReporter(delta_reporter)
-        self._continuation = continuation
+        self._progress = progress
         self._recorder = recorder
 
     async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         """再試行を含む時間枠内でdraftを完成させ、生成不能は例外で通知する。"""
+
+        result = await self._repository.start_answer_generation()
+        if isinstance(result, Stop):
+            raise AnswerGenerationStopped(result.reason)
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             attempt_number = 0
@@ -87,6 +99,8 @@ class EvidenceAnswerService:
             try:
                 try:
                     async with timeout:
+                        if self._progress is not None:
+                            await self._progress.stage_changed("answering")
                         async with self._runtime_scope_factory() as runtime:
                             for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                                 try:
@@ -150,7 +164,7 @@ class EvidenceAnswerService:
                 generation=attempt_number,
                 delta_reporter=self._delta,
             ) as live_draft:
-                await ensure_answer_generation_continues(self._continuation)
+                await self._continue_generation()
 
                 stream = runtime.stream_text(
                     self._agent,
@@ -158,11 +172,11 @@ class EvidenceAnswerService:
                     attempt_number=attempt_number,
                 )
                 async for fragment in stream:
-                    await ensure_answer_generation_continues(self._continuation)
+                    await self._continue_generation()
                     raw_fragments.append(fragment)
                     await live_draft.append(fragment)
 
-                await ensure_answer_generation_continues(self._continuation)
+                await self._continue_generation()
                 answer = "".join(raw_fragments)
                 draft = finalize_evidence_answer_draft(
                     answer, evidence=list(input.evidence)
@@ -174,5 +188,12 @@ class EvidenceAnswerService:
             await close_answer_stream(stream)
 
     async def _start_revision(self, *, generation: int) -> None:
-        await ensure_answer_generation_continues(self._continuation)
+        result = await self._repository.authorize_answer_regeneration()
+        if isinstance(result, Stop):
+            raise AnswerGenerationStopped(result.reason)
         await self._delta.reset(generation=generation)
+
+    async def _continue_generation(self) -> None:
+        result = await self._repository.check_answer_generation_continuation()
+        if isinstance(result, Stop):
+            raise AnswerGenerationStopped(result.reason)

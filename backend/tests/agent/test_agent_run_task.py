@@ -316,6 +316,24 @@ class CapturingExecutionProbe:
         return Continue()
 
 
+class CapturingAnswerStart:
+    instances: list[CapturingAnswerStart] = []
+
+    def __init__(
+        self,
+        session_factory: object,
+        run_id: UUID,
+        attempt_epoch: int,
+    ) -> None:
+        self.session_factory = session_factory
+        self.run_id = run_id
+        self.attempt_epoch = attempt_epoch
+        CapturingAnswerStart.instances.append(self)
+
+    async def start_answer_generation(self) -> Continue | Stop:
+        return Continue()
+
+
 class ForbiddenConstruction:
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         raise AssertionError("start skip後にlive dependencyを生成してはいけません")
@@ -933,6 +951,7 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
     FakeLiveStreamPublisher.instances = []
     CapturingDeltaReporter.instances = []
     CapturingExecutionProbe.instances = []
+    CapturingAnswerStart.instances = []
 
     def build_agent(**kwargs: object) -> FakeAgent:
         captured_kwargs.update(kwargs)
@@ -956,6 +975,12 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
         CapturingExecutionProbe,
         raising=False,
     )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentAnswerGenerationRepository",
+        CapturingAnswerStart,
+        raising=False,
+    )
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -964,18 +989,89 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
 
     assert len(CapturingDeltaReporter.instances) == 1
     assert len(CapturingExecutionProbe.instances) == 1
+    assert len(CapturingAnswerStart.instances) == 1
     stream = FakeLiveStreamPublisher.instances[0]
     delta_reporter = CapturingDeltaReporter.instances[0]
     probe = CapturingExecutionProbe.instances[0]
+    answer_start = CapturingAnswerStart.instances[0]
     assert delta_reporter.publisher is stream
     assert delta_reporter.run_id == run.id
     assert delta_reporter.attempt_epoch == 1
     assert probe.session_factory is session_factory
     assert probe.run_id == run.id
     assert probe.attempt_epoch == 1
+    assert answer_start.session_factory is session_factory
+    assert answer_start.run_id == run.id
+    assert answer_start.attempt_epoch == 1
     assert isinstance(captured_kwargs["progress"], AgentRunLiveStageReporter)
     assert captured_kwargs["delta_reporter"] is delta_reporter
-    assert captured_kwargs["continuation"] is probe
+    assert "continuation" not in captured_kwargs
+    assert captured_kwargs["repository"] is answer_start
+
+
+@pytest.mark.asyncio
+async def test_answer_start_deadline_publishes_existing_terminal_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    FakeLiveStreamPublisher.instances = []
+
+    class DeadlineAtAnswerStartRunner:
+        def __init__(self, answer_start: object) -> None:
+            self._answer_start = answer_start
+
+        async def run(self, input: RunInput, *, identity: RunIdentity) -> RunResult:
+            del input, identity
+            async with session_factory() as session:
+                async with session.begin():
+                    persisted = await session.get(AgentRun, run.id)
+                    assert persisted is not None
+                    persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
+            decision = await cast(Any, self._answer_start).start_answer_generation()
+            assert decision == Stop(StopReason.DEADLINE_EXCEEDED)
+            raise AnswerGenerationStopped(decision.reason)
+
+    def build_runner(**kwargs: object) -> DeadlineAtAnswerStartRunner:
+        return DeadlineAtAnswerStartRunner(kwargs["repository"])
+
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_answering_runner",
+        build_runner,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunExecutionProbe",
+        CapturingExecutionProbe,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [
+        AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
+    ]
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+    assert persisted is not None
+    assert persisted.status == "deadline_exceeded"
+    assert persisted.answer_started_at is None
 
 
 @pytest.mark.asyncio
@@ -1022,6 +1118,7 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
     FakeLiveStreamPublisher.instances = []
     CapturingDeltaReporter.instances = []
     CapturingExecutionProbe.instances = []
+    CapturingAnswerStart.instances = []
 
     def forbidden_builder(*_args: object, **_kwargs: object) -> None:
         pytest.fail(
@@ -1052,6 +1149,12 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
         ForbiddenConstruction,
         raising=False,
     )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentAnswerGenerationRepository",
+        ForbiddenConstruction,
+        raising=False,
+    )
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -1061,6 +1164,7 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
     assert FakeLiveStreamPublisher.instances == []
     assert CapturingDeltaReporter.instances == []
     assert CapturingExecutionProbe.instances == []
+    assert CapturingAnswerStart.instances == []
 
 
 @pytest.mark.asyncio
@@ -1166,7 +1270,8 @@ async def test_run_agent_answer_passes_answering_runner_identity_and_history(
     assert isinstance(runner_kwargs["events"], AgentRunLiveActivityReporter)
     assert runner_kwargs["progress"] is not None
     assert runner_kwargs["delta_reporter"] is not None
-    assert runner_kwargs["continuation"] is not None
+    assert runner_kwargs["repository"] is not None
+    assert "continuation" not in runner_kwargs
     stream = FakeLiveStreamPublisher.instances[0]
     assert stream.run_id == run.id
     assert stream.attempt_epoch == 5
@@ -1358,6 +1463,7 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
     probe_bindings: list[tuple[object, UUID, int]] = []
     complete_calls: list[tuple[UUID, int]] = []
     mark_failed_calls: list[tuple[UUID, int]] = []
+    probes: list[object] = []
 
     def build_probe(
         bound_session_factory: object,
@@ -1365,12 +1471,14 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         attempt_epoch: int,
     ) -> object:
         probe_bindings.append((bound_session_factory, run_id, attempt_epoch))
-        return production_probe_type(
+        probe = production_probe_type(
             bound_session_factory,
             run_id,
             attempt_epoch,
             clock=clock,
         )
+        probes.append(probe)
+        return probe
 
     class EpochAdvancingAgent:
         def __init__(self) -> None:
@@ -1394,7 +1502,8 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
     fake_agent = EpochAdvancingAgent()
 
     def build_agent(**kwargs: object) -> EpochAdvancingAgent:
-        fake_agent.continuation = kwargs["continuation"]
+        del kwargs
+        fake_agent.continuation = probes[0]
         return fake_agent
 
     async def observe_complete(
@@ -1498,18 +1607,21 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
     clock = ManualClock()
     production_probe_type = agent_run_tasks.AgentRunExecutionProbe
     mark_failed_calls: list[tuple[UUID, int]] = []
+    probes: list[object] = []
 
     def build_probe(
         bound_session_factory: object,
         run_id: UUID,
         attempt_epoch: int,
     ) -> object:
-        return production_probe_type(
+        probe = production_probe_type(
             bound_session_factory,
             run_id,
             attempt_epoch,
             clock=clock,
         )
+        probes.append(probe)
+        return probe
 
     class DeadlineExpiringAgent:
         def __init__(self) -> None:
@@ -1530,7 +1642,8 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
     fake_agent = DeadlineExpiringAgent()
 
     def build_agent(**kwargs: object) -> DeadlineExpiringAgent:
-        fake_agent.continuation = kwargs["continuation"]
+        del kwargs
+        fake_agent.continuation = probes[0]
         return fake_agent
 
     async def observe_mark_failed(
@@ -1593,7 +1706,7 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
 
     def build_agent(**kwargs: object) -> DeltaReportingAgent:
         fake_agent.delta_reporter = kwargs["delta_reporter"]
-        assert kwargs["continuation"] is not None
+        assert kwargs["repository"] is not None
         return fake_agent
 
     async def observe_complete(
@@ -1651,7 +1764,7 @@ async def test_evidence_revision_events_precede_persisted_completed_terminal(
     def build_agent(**kwargs: object) -> RevisionReportingAgent:
         captured_controls.update(kwargs)
         fake_agent.delta_reporter = kwargs["delta_reporter"]
-        fake_agent.continuation = kwargs["continuation"]
+        fake_agent.continuation = kwargs["repository"]
         return fake_agent
 
     class CommitCheckingPublisher(FakeLiveStreamPublisher):
@@ -1692,7 +1805,7 @@ async def test_evidence_revision_events_precede_persisted_completed_terminal(
         AgentRunLiveStreamTerminalEvent(status="completed"),
     ]
     assert captured_controls["delta_reporter"] is fake_agent.delta_reporter
-    assert captured_controls["continuation"] is fake_agent.continuation
+    assert captured_controls["repository"] is fake_agent.continuation
 
 
 @pytest.mark.asyncio

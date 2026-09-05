@@ -14,7 +14,6 @@ from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer import service as direct_answer_service_module
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.answering.direct_answer.failure import DirectAnswerError
@@ -22,13 +21,16 @@ from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.runs.execution import (
     Continue,
-    RunExecutionContinuation,
     Stop,
     StopReason,
 )
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction
+from tests.agent.running._harness import (
+    AllowAnswerGenerationStart,
+    ScriptedAnswerGenerationRepository,
+)
 from tests.agent.runtime._helpers import FakeGeminiClient
 from tests.agent.runtime._tracing_helpers import (
     application_attribute_keys,
@@ -91,6 +93,7 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
     draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
+        repository=AllowAnswerGenerationStart(),
     ).answer(_input())
 
     spans = capfire.exporter.exported_spans
@@ -168,6 +171,7 @@ async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
         await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=runtime_scope,
+            repository=AllowAnswerGenerationStart(),
         ).answer(_input())
 
     spans = capfire.exporter.exported_spans
@@ -220,6 +224,7 @@ async def test_retry_provider_request_does_not_add_repair_context() -> None:
     draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
+        repository=AllowAnswerGenerationStart(),
     ).answer(_input())
 
     requests = client.models.generate_content_stream.await_args_list
@@ -253,6 +258,7 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
         await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=runtime_scope,
+            repository=AllowAnswerGenerationStart(),
         ).answer(_input())
 
     spans = capfire.exporter.exported_spans
@@ -285,10 +291,6 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
 async def test_routine_stop_closes_phase_without_error_or_attempt(
     capfire: CaptureLogfire,
 ) -> None:
-    class StopImmediately:
-        async def should_continue(self) -> Continue | Stop:
-            return Stop(StopReason.NOT_CURRENT)
-
     class UnusedRuntime:
         def stream_text(self, *_args: object, **_kwargs: object) -> object:
             raise AssertionError("stream must not start")
@@ -300,7 +302,9 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
     service = DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
-        continuation=StopImmediately(),
+        repository=ScriptedAnswerGenerationRepository(
+            checks=[Stop(StopReason.NOT_CURRENT)]
+        ),
     )
     try:
         await service.answer(_input())
@@ -330,24 +334,19 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
 
 async def test_mid_stream_stop_abandons_real_attempt_without_error(
     capfire: CaptureLogfire,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sdk_stream = _SdkStream()
     client = FakeGeminiClient([], streams=[sdk_stream])
     stopped = AnswerGenerationStopped()
     continuation_checks = 0
 
-    async def stop_after_stream_starts(_continuation: object) -> None:
-        nonlocal continuation_checks
-        continuation_checks += 1
-        if continuation_checks == 2:
-            raise stopped
-
-    monkeypatch.setattr(
-        direct_answer_service_module,
-        "ensure_answer_generation_continues",
-        stop_after_stream_starts,
-    )
+    class StopAfterFirstFragment(AllowAnswerGenerationStart):
+        async def check_answer_generation_continuation(self) -> Continue | Stop:
+            nonlocal continuation_checks
+            continuation_checks += 1
+            if continuation_checks == 2:
+                raise stopped
+            return Continue()
 
     @asynccontextmanager
     async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
@@ -356,7 +355,7 @@ async def test_mid_stream_stop_abandons_real_attempt_without_error(
     service = DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
-        continuation=cast(RunExecutionContinuation, object()),
+        repository=StopAfterFirstFragment(),
     )
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await service.answer(_input())

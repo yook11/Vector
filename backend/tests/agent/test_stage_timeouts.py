@@ -42,6 +42,7 @@ from tests.agent.recording._fakes import (
     RecordingEvidenceReviewRecorder,
     RecordingPlanningRecorder,
 )
+from tests.agent.running._harness import AllowAnswerGenerationStart
 
 STAGES = ("planning", "review", "direct", "evidence")
 MODULES = {
@@ -144,6 +145,7 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
         service = DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=scope,
+            repository=AllowAnswerGenerationStart(),
             recorder=state.recorder,
             delta_reporter=state.delta,
         )
@@ -153,6 +155,7 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
         service = EvidenceAnswerService(
             agent=EVIDENCE_ANSWER_AGENT,
             runtime_scope_factory=scope,
+            repository=AllowAnswerGenerationStart(),
             recorder=state.recorder,
             delta_reporter=state.delta,
         )
