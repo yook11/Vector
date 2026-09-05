@@ -111,6 +111,9 @@ class AgentRun(Base):
     deadline_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    answer_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     attempt_epoch: Mapped[int] = mapped_column(
         BigInteger(), nullable=False, server_default=text("0")
     )
