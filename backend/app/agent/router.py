@@ -54,6 +54,7 @@ from app.agent.runs.contracts import (
 from app.agent.runs.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import AIProviderError
 from app.db.fastapi import get_caller_managed_session
@@ -249,11 +250,13 @@ async def get_research_thread(
     thread_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
+    live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
 ) -> ResearchThreadDetail:
-    repo = AgentThreadRepository(session)
-    response = await repo.read_thread_detail_for_user(
+    response = await read_owned_thread_detail(
+        session,
         thread_id=thread_id,
         user_id=user.id,
+        live=live,
     )
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)

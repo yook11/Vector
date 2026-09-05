@@ -75,6 +75,7 @@ API契約の正本はFastAPIのPydantic schema、DB変更の正本はAlembic mig
 | Agent | [Question Planner Audit](./agent/question-planner-audit.md) | Implemented |
 | Agent | [Question Planner / Routing](./agent/question-planner-routing.md) | Implemented |
 | Agent | [回答生成の開始期限・回答確定・未完了runの回収](./agent/answer-generation-deadline.md) | Draft |
+| Agent | [スレッド表示時の期限切れrunの回収](./agent/thread-open-deadline-recovery.md) | Implemented |
 | Analysis | [Stage 4 Assessment naming](./analysis/stage4-assessment-rename.md) | Implemented |
 | Audit | [Audit skip escape policy](./audit/audit-skip-escape-policy.md) | Partially implemented |
 | Audit | [Audit scope / dispatch / backfill](./audit/pipeline-events-audit-scope-dispatch-backfill.md) | Implemented |

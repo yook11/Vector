@@ -25,6 +25,8 @@ const RUN_ONE = "00000000-0000-4000-a000-000000000010";
 const RUN_TWO = "00000000-0000-4000-a000-000000000020";
 const POLICY_BLOCKED_NOTICE =
   "この依頼は安全上のポリシーにより処理されませんでした。";
+const DEADLINE_EXCEEDED_NOTICE =
+  "回答の生成に時間がかかり、完了できませんでした。少し時間をおいて、もう一度お試しください。";
 
 const GENERATED_POLICY_BLOCKED_STATUSES: [
   Extract<ResearchMessageRun["status"], "policy_blocked">,
@@ -588,6 +590,38 @@ describe("ResearchThreadView live integration", () => {
       screen.queryByText("回答を生成できませんでした"),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("回答が完了しました")).not.toBeInTheDocument();
+    const announcer = view.container.querySelector<HTMLElement>(
+      ".sr-only[role='status']",
+    );
+    expect(announcer).not.toBeNull();
+    expect(announcer).toBeEmptyDOMElement();
+  });
+
+  it("renders a persisted deadline_exceeded run as the existing notice without a draft", () => {
+    const view = render(
+      <ResearchThreadView
+        thread={thread([userMessage(run(RUN_ONE, "deadline_exceeded"))])}
+      />,
+    );
+    const question = screen.getByText("このニュースの影響は？");
+    const questionArticle = question.closest("article");
+    const notice = onlyVisibleText(DEADLINE_EXCEEDED_NOTICE);
+
+    expect(questionArticle).not.toBeNull();
+    if (questionArticle === null || questionArticle.parentElement === null) {
+      throw new Error("question turn is missing");
+    }
+    const noticeRail = directChildContaining(
+      questionArticle.parentElement,
+      notice,
+    );
+    expect(questionArticle.textContent).toBe("このニュースの影響は？");
+    expect(questionArticle.nextElementSibling).toBe(noticeRail);
+    expect(
+      screen.queryByTestId("research-answer-slot"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("回答を生成中…")).not.toBeInTheDocument();
+    expect(screen.getByTestId("composer-run-id")).toHaveTextContent("none");
     const announcer = view.container.querySelector<HTMLElement>(
       ".sr-only[role='status']",
     );

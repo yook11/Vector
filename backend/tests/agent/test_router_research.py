@@ -233,6 +233,8 @@ async def _create_run(
     assistant_message_id: UUID | None = None,
     error_code: str | None = None,
     attempt_epoch: int | None = None,
+    deadline_at: datetime | None = None,
+    quota_usage_date: date | None = None,
 ) -> AgentRun:
     created_at = datetime.now(UTC)
     run = AgentRun(
@@ -242,7 +244,10 @@ async def _create_run(
         status=status,
         error_code=error_code,
         created_at=created_at,
-        deadline_at=created_at + timedelta(seconds=60),
+        deadline_at=deadline_at
+        if deadline_at is not None
+        else created_at + timedelta(seconds=60),
+        quota_usage_date=quota_usage_date,
     )
     if attempt_epoch is not None:
         run.attempt_epoch = attempt_epoch
@@ -250,6 +255,10 @@ async def _create_run(
     await session.commit()
     await session.refresh(run)
     return run
+
+
+def _past_deadline() -> datetime:
+    return datetime.now(UTC) - timedelta(seconds=1)
 
 
 def _direct_result(answer: str = "worker answer") -> AnswerQuestionResult:
@@ -1709,6 +1718,283 @@ class TestGetResearchThread:
         response = await client.get(f"{_THREADS_URL}/{thread.id}")
 
         assert response.status_code == 404
+
+    async def test_recovers_due_run_on_owned_thread_detail(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(
+            db_session,
+            updated_at=datetime(2026, 7, 1, tzinfo=UTC),
+        )
+        user_message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="期限切れの質問",
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="queued",
+            deadline_at=_past_deadline(),
+        )
+        run_id = run.id
+        updated_at = thread.updated_at
+
+        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["messages"][0]["content"] == "期限切れの質問"
+        assert data["messages"][0]["run"] == {
+            "runId": str(run_id),
+            "status": "deadline_exceeded",
+            "errorCode": None,
+        }
+        persisted = await _fetch_run(db_session, run_id)
+        assert persisted.status == "deadline_exceeded"
+        assert persisted.error_code is None
+        await db_session.refresh(thread)
+        assert thread.updated_at == updated_at
+
+    async def test_does_not_recover_other_owned_thread(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        opened = await _create_thread(db_session, title="開いたスレッド")
+        other = await _create_thread(db_session, title="別スレッド")
+        opened_message = await _create_message(
+            db_session, thread_id=opened.id, seq=1, role="user", content="opened"
+        )
+        other_message = await _create_message(
+            db_session, thread_id=other.id, seq=1, role="user", content="other"
+        )
+        opened_run = await _create_run(
+            db_session,
+            thread_id=opened.id,
+            user_message_id=opened_message.id,
+            status="queued",
+            deadline_at=_past_deadline(),
+        )
+        other_run = await _create_run(
+            db_session,
+            thread_id=other.id,
+            user_message_id=other_message.id,
+            status="queued",
+            deadline_at=_past_deadline(),
+        )
+        opened_run_id = opened_run.id
+        other_run_id = other_run.id
+
+        response = await client.get(f"{_THREADS_URL}/{opened.id}")
+
+        assert response.status_code == 200
+        assert response.json()["messages"][0]["run"]["status"] == "deadline_exceeded"
+        opened_persisted = await _fetch_run(db_session, opened_run_id)
+        other_persisted = await _fetch_run(db_session, other_run_id)
+        assert opened_persisted.status == "deadline_exceeded"
+        assert other_persisted.status == "queued"
+
+    async def test_other_users_due_thread_is_404_without_recovery(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session, user_id=TEST_ADMIN_ID)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="other"
+        )
+        usage_date = date(2026, 7, 20)
+        db_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_ADMIN_ID),
+                usage_date=usage_date,
+                used_count=2,
+            )
+        )
+        await db_session.commit()
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="queued",
+            deadline_at=_past_deadline(),
+            quota_usage_date=usage_date,
+        )
+        run_id = run.id
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(
+            live_transport_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
+
+        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+
+        assert response.status_code == 404
+        assert (await _fetch_run(db_session, run_id)).status == "queued"
+        assert FakeCancelStreamPublisher.instances == []
+        used_count = await db_session.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_ADMIN_ID),
+                AgentUserDailyQuota.usage_date == usage_date,
+            )
+        )
+        assert used_count == 2
+
+    async def test_missing_thread_is_404_without_recovery(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="own"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="queued",
+            deadline_at=_past_deadline(),
+        )
+        run_id = run.id
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(
+            live_transport_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
+
+        response = await client.get(
+            f"{_THREADS_URL}/00000000-0000-4000-a000-000000000099"
+        )
+
+        assert response.status_code == 404
+        assert (await _fetch_run(db_session, run_id)).status == "queued"
+        assert FakeCancelStreamPublisher.instances == []
+
+    async def test_recovers_running_run_and_publishes_terminal(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="running"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+            attempt_epoch=3,
+            deadline_at=_past_deadline(),
+        )
+        run_id = run.id
+        FakeCancelStreamPublisher.instances = []
+
+        class CommitCheckingPublisher(FakeCancelStreamPublisher):
+            async def publish(self, event: object) -> None:
+                assert not db_session.in_transaction()
+                await super().publish(event)
+
+        monkeypatch.setattr(
+            live_transport_module,
+            "AgentRunLiveStreamPublisher",
+            CommitCheckingPublisher,
+            raising=False,
+        )
+
+        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+
+        assert response.status_code == 200
+        assert response.json()["messages"][0]["run"]["status"] == "deadline_exceeded"
+        assert len(FakeCancelStreamPublisher.instances) == 1
+        publisher = FakeCancelStreamPublisher.instances[0]
+        assert publisher.run_id == run_id
+        assert publisher.attempt_epoch == 3
+        assert publisher.published == [
+            AgentRunLiveStreamTerminalEvent(status="deadline_exceeded")
+        ]
+
+    async def test_running_terminal_publish_failure_keeps_detail_success(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="running"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+            attempt_epoch=2,
+            deadline_at=_past_deadline(),
+        )
+        run_id = run.id
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(FakeCancelStreamPublisher, "raise_on_publish", True)
+        monkeypatch.setattr(
+            live_transport_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
+
+        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+
+        assert response.status_code == 200
+        assert response.json()["messages"][0]["run"]["status"] == "deadline_exceeded"
+        assert (await _fetch_run(db_session, run_id)).status == "deadline_exceeded"
+
+    async def test_list_and_run_reads_do_not_recover(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="queued"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="queued",
+            deadline_at=_past_deadline(),
+        )
+        run_id = run.id
+
+        list_response = await client.get(_THREADS_URL)
+        run_response = await client.get(f"/api/v1/research/runs/{run_id}")
+
+        assert list_response.status_code == 200
+        assert list_response.json()["items"][0]["hasActiveRun"] is True
+        assert run_response.status_code == 200
+        assert run_response.json()["status"] == "queued"
+        assert (await _fetch_run(db_session, run_id)).status == "queued"
 
 
 @pytest.mark.asyncio
