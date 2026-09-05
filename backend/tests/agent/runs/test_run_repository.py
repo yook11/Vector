@@ -160,6 +160,7 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
         _thread, _message, run = await _create_thread_message_run(
             session,
             status="running",
+            answer_started_at=datetime.now(UTC),
         )
     result = AnswerQuestionResult(
         status="answered",
@@ -224,6 +225,7 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
         thread, _message, run = await _create_thread_message_run(
             session,
             status="running",
+            answer_started_at=datetime.now(UTC),
         )
         thread_id = thread.id
     handoff = _handoff()
@@ -261,6 +263,7 @@ async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
         thread, _message, run = await _create_thread_message_run(
             session,
             status="running",
+            answer_started_at=datetime.now(UTC),
         )
         thread_id = thread.id
         thread.research_handoff = stored
@@ -295,6 +298,7 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
             setup_session,
             status="running",
             attempt_epoch=1,
+            answer_started_at=datetime.now(UTC),
         )
         thread_id = thread.id
     handoff_json = _handoff().model_dump(mode="json")
@@ -339,6 +343,7 @@ async def test_complete_run_lost_race_rolls_back_assistant_message(
         _thread, _message, run = await _create_thread_message_run(
             setup_session,
             status="running",
+            answer_started_at=datetime.now(UTC),
         )
     stale_session = session_factory()
     try:
@@ -391,6 +396,7 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
             setup_session,
             status="running",
             attempt_epoch=1,
+            answer_started_at=datetime.now(UTC),
         )
     stale_session = session_factory()
     try:
@@ -700,7 +706,11 @@ async def test_answer_save_lock_timeout_rolls_back_without_artifacts(
 
     monkeypatch.setattr("app.agent.runs.repository._ANSWER_SAVE_LOCK_TIMEOUT", "30ms")
     async with session_factory() as session:
-        thread, _, run = await _create_thread_message_run(session, status="running")
+        thread, _, run = await _create_thread_message_run(
+            session,
+            status="running",
+            answer_started_at=datetime.now(UTC),
+        )
     locked_id = run.id if locked_model is AgentRun else thread.id
 
     async with session_factory() as blocker, session_factory() as saver:
@@ -756,7 +766,11 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
     from sqlalchemy import func
 
     async with session_factory() as session:
-        _, _, run = await _create_thread_message_run(session, status="running")
+        _, _, run = await _create_thread_message_run(
+            session,
+            status="running",
+            answer_started_at=datetime.now(UTC),
+        )
         run_id, epoch = run.id, run.attempt_epoch
         before = await session.scalar(select(func.current_setting("lock_timeout")))
         await session.rollback()
@@ -768,7 +782,7 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
             )
             assert (
                 await session.scalar(select(func.current_setting("lock_timeout")))
-                == "10s"
+                == "3s"
             )
         assert outcome is CompleteRunOutcome.COMPLETED
         assert (

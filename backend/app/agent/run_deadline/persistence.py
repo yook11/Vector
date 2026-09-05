@@ -5,9 +5,11 @@ from __future__ import annotations
 import uuid as uuid_mod
 from datetime import date, datetime
 
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import and_, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
+from app.agent.answering import timing as answer_timing
 from app.agent.daily_quota.persistence import release_daily_quotas
 from app.agent.run_deadline.contracts import (
     DeadlineExceededRunningRun,
@@ -17,8 +19,6 @@ from app.agent.runs.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
-_ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
-
 
 async def database_now(session: AsyncSession, injected: datetime | None) -> datetime:
     expression = literal(injected) if injected is not None else func.clock_timestamp()
@@ -26,6 +26,27 @@ async def database_now(session: AsyncSession, injected: datetime | None) -> date
     if not isinstance(value, datetime):
         raise RuntimeError("database clock did not return a datetime")
     return value
+
+
+def _is_recovery_due(now: ColumnElement[datetime]) -> ColumnElement[bool]:
+    return or_(
+        and_(
+            AgentRun.status == AgentRunStatus.QUEUED.value,
+            AgentRun.deadline_at <= now,
+        ),
+        and_(
+            AgentRun.status == AgentRunStatus.RUNNING.value,
+            AgentRun.answer_started_at.is_(None),
+            AgentRun.deadline_at <= now,
+        ),
+        and_(
+            AgentRun.status == AgentRunStatus.RUNNING.value,
+            AgentRun.answer_started_at.is_not(None),
+            AgentRun.answer_started_at
+            + answer_timing.answer_generation_recovery_window()
+            <= now,
+        ),
+    )
 
 
 async def expire_run(
@@ -60,6 +81,7 @@ async def sweep_deadline_exceeded_runs(
     *,
     now: datetime | None = None,
 ) -> DeadlineRunSweepResult:
+    candidate_time = literal(now) if now is not None else func.clock_timestamp()
     candidate_rows = (
         (
             await session.execute(
@@ -71,11 +93,7 @@ async def sweep_deadline_exceeded_runs(
                     AgentThread.user_id,
                 )
                 .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-                .where(
-                    AgentRun.status.in_(_ACTIVE_STATUSES),
-                    AgentRun.deadline_at
-                    <= (literal(now) if now is not None else func.clock_timestamp()),
-                )
+                .where(_is_recovery_due(candidate_time))
                 .order_by(AgentRun.id)
                 .with_for_update()
             )
@@ -103,8 +121,7 @@ async def sweep_deadline_exceeded_runs(
                 update(AgentRun)
                 .where(
                     AgentRun.id.in_(candidate_ids),
-                    AgentRun.status.in_(_ACTIVE_STATUSES),
-                    AgentRun.deadline_at <= now,
+                    _is_recovery_due(literal(now)),
                 )
                 .values(
                     status=AgentRunStatus.DEADLINE_EXCEEDED.value,

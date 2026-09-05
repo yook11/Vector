@@ -10,6 +10,7 @@ import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.answering import timing as answer_timing
 from app.agent.contract import AnswerQuestionResult
 from app.agent.daily_quota import observability as daily_quota_observability
 from app.agent.daily_quota.contracts import DailyQuotaReleaseOutcome
@@ -47,7 +48,7 @@ from app.schemas.research import ResearchRunResponse
 
 logger = structlog.get_logger(__name__)
 
-_ANSWER_SAVE_LOCK_TIMEOUT = "10s"
+_ANSWER_SAVE_LOCK_TIMEOUT = "3s"
 
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
 _TERMINAL_STATUSES = (
@@ -360,20 +361,18 @@ class AgentRunRepository:
         if (
             run.status != AgentRunStatus.RUNNING.value
             or run.attempt_epoch != expected_attempt_epoch
+            or run.answer_started_at is None
         ):
             return CompleteRunOutcome.TRANSITION_LOST
 
         now = await database_now(self._session, now)
-        if now >= run.deadline_at:
-            expired = await expire_run(
-                self._session,
-                run_id=run_id,
-                expected_status=AgentRunStatus.RUNNING,
-                expected_attempt_epoch=expected_attempt_epoch,
-                now=now,
-            )
-            if not expired:
-                return CompleteRunOutcome.TRANSITION_LOST
+        recovery_deadline = (
+            run.answer_started_at + answer_timing.answer_generation_recovery_window()
+        )
+        if now >= recovery_deadline:
+            run.status = AgentRunStatus.DEADLINE_EXCEEDED.value
+            run.assistant_message_id = None
+            run.error_code = None
             return CompleteRunOutcome.DEADLINE_EXCEEDED
 
         assistant_message = build_assistant_message_for_result(
@@ -398,7 +397,10 @@ class AgentRunRepository:
                 AgentRun.id == run_id,
                 AgentRun.status == AgentRunStatus.RUNNING.value,
                 AgentRun.attempt_epoch == expected_attempt_epoch,
-                AgentRun.deadline_at > now,
+                AgentRun.answer_started_at.is_not(None),
+                AgentRun.answer_started_at
+                + answer_timing.answer_generation_recovery_window()
+                > now,
             )
             .values(
                 status=AgentRunStatus.COMPLETED.value,

@@ -587,7 +587,8 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deadline_at = datetime.now(UTC) - timedelta(seconds=1)
+    observed_at = datetime.now(UTC)
+    deadline_at = observed_at - timedelta(seconds=1)
     async with session_factory() as session:
         normal = (
             await _create_thread_message_run(
@@ -609,6 +610,19 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
                 attempt_epoch=3,
             )
         )[2]
+        another_running.answer_started_at = observed_at - timedelta(seconds=60)
+        protected_running = (
+            await _create_thread_message_run(
+                session,
+                status="running",
+                question="sensitive protected running",
+                created_at=deadline_at - timedelta(seconds=60),
+                deadline_at=deadline_at,
+                attempt_epoch=4,
+            )
+        )[2]
+        protected_running.answer_started_at = observed_at - timedelta(seconds=30)
+        await session.commit()
 
     class CommitCheckingPublisher(FakeLiveStreamPublisher):
         async def publish(self, event: object) -> str | None:
@@ -664,6 +678,11 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
         persisted = await _persisted_run_for_sweep_test(session_factory, original.id)
         assert persisted.status == "deadline_exceeded"
         assert persisted.error_code is None
+    protected = await _persisted_run_for_sweep_test(
+        session_factory,
+        protected_running.id,
+    )
+    assert protected.status == "running"
 
 
 async def _persisted_run_for_sweep_test(

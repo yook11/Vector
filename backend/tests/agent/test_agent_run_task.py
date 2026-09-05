@@ -20,6 +20,7 @@ from taskiq.message import TaskiqMessage
 from taskiq.receiver import Receiver
 
 import app.queue.tasks.agent_run as agent_run_tasks
+from app.agent.answering import timing as answer_timing
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.contract import (
@@ -176,6 +177,7 @@ class FakeAnsweringRunner:
         self.exc = exc
         self.research_handoff = research_handoff
         self.execution: object | None = None
+        self.repository: object | None = None
         self.calls: list[FakeAnsweringRunnerCall] = []
 
     async def run(
@@ -193,6 +195,10 @@ class FakeAnsweringRunner:
         if self.exc is not None:
             raise self.exc
         assert self.execution is not None
+        assert self.repository is not None
+        start_result = await cast(Any, self.repository).start_answer_generation()
+        if isinstance(start_result, Stop):
+            raise AnswerGenerationStopped(start_result.reason)
         final_output = await cast(Any, self.execution).answer()
         return RunResult(
             final_output=final_output,
@@ -362,6 +368,7 @@ def _patch_worker_execution(
 
     def build_runner(**kwargs: object) -> FakeAnsweringRunner:
         answering_runner.execution = cast(Any, execution_builder)(**kwargs)
+        answering_runner.repository = kwargs["repository"]
         return answering_runner
 
     monkeypatch.setattr(
@@ -1314,6 +1321,54 @@ async def test_run_agent_answer_publishes_completed_terminal_after_commit(
         if isinstance(event, AgentRunLiveStreamTerminalEvent)
     ]
     assert terminal == [AgentRunLiveStreamTerminalEvent(status="completed")]
+
+
+@pytest.mark.asyncio
+async def test_completion_deadline_publishes_after_commit_and_survives_publish_failure(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(answer_timing, "ANSWER_GENERATION_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(answer_timing, "ANSWER_GENERATION_RECOVERY_GRACE_SECONDS", 0)
+    monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_publish", True)
+
+    class CommitCheckingPublisher(FakeLiveStreamPublisher):
+        async def publish(self, event: object) -> str | None:
+            if isinstance(event, AgentRunLiveStreamTerminalEvent):
+                async with session_factory() as session:
+                    persisted = await session.get(AgentRun, run.id)
+                    assert persisted is not None
+                    assert persisted.status == "deadline_exceeded"
+                    assert persisted.assistant_message_id is None
+            return await super().publish(event)
+
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        CommitCheckingPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [AgentRunLiveStreamTerminalEvent(status="deadline_exceeded")]
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "deadline_exceeded"
+        assert persisted.assistant_message_id is None
 
 
 @pytest.mark.asyncio
