@@ -11,7 +11,6 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
-from app.agent.run_deadline.persistence import sweep_deadline_exceeded_runs
 from app.agent.runs.contracts import CompleteRunOutcome
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -19,6 +18,10 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
+from tests.agent.run_deadline.clock import (
+    sweep_deadline_exceeded_runs_at,
+    sweep_deadline_exceeded_runs_for_thread_at,
+)
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -112,7 +115,7 @@ async def test_sweep_leaves_run_unchanged_before_deadline(
         )
         await session.commit()
 
-        await sweep_deadline_exceeded_runs(session, now=now)
+        await sweep_deadline_exceeded_runs_at(session, at=now)
         await session.commit()
 
     async with session_factory() as observer:
@@ -152,7 +155,7 @@ async def test_sweep_marks_run_deadline_exceeded_at_or_after_deadline(
         )
         await session.commit()
 
-        await sweep_deadline_exceeded_runs(session, now=now)
+        await sweep_deadline_exceeded_runs_at(session, at=now)
         await session.commit()
 
     async with session_factory() as observer:
@@ -203,9 +206,8 @@ async def test_started_running_uses_answer_recovery_deadline(
         )
         await session.commit()
 
-        result = await sweep_deadline_exceeded_runs(
-            session,
-            now=answer_started_at + elapsed,
+        result = await sweep_deadline_exceeded_runs_at(
+            session, at=answer_started_at + elapsed
         )
         await session.commit()
 
@@ -243,9 +245,8 @@ async def test_started_running_recovery_does_not_refund_quota(
         await session.commit()
 
         async with session.begin():
-            result = await sweep_deadline_exceeded_runs(
-                session,
-                now=answer_started_at + timedelta(seconds=45),
+            result = await sweep_deadline_exceeded_runs_at(
+                session, at=answer_started_at + timedelta(seconds=45)
             )
 
     async with session_factory() as session:
@@ -317,7 +318,7 @@ async def test_sweep_rechecks_recovery_deadline_after_answer_start_wins_lock(
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                sweep_deadline_exceeded_runs(sweep_session, now=sweep_time)
+                sweep_deadline_exceeded_runs_at(sweep_session, at=sweep_time)
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -406,7 +407,7 @@ async def test_sweep_preserves_terminal_transition_that_wins_run_lock(
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                sweep_deadline_exceeded_runs(sweep_session, now=sweep_time)
+                sweep_deadline_exceeded_runs_at(sweep_session, at=sweep_time)
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -466,7 +467,7 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await sweep_deadline_exceeded_runs(session, now=now)
+            result = await sweep_deadline_exceeded_runs_at(session, at=now)
 
     assert result.queued_quota_released_count == len(queued_runs)
     assert result.running_quota_reservation_count == 1
@@ -478,8 +479,8 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
 
     async with session_factory() as session:
         async with session.begin():
-            repeated = await sweep_deadline_exceeded_runs(
-                session, now=now + timedelta(seconds=1)
+            repeated = await sweep_deadline_exceeded_runs_at(
+                session, at=now + timedelta(seconds=1)
             )
 
     assert repeated.total_count == 0
@@ -538,7 +539,7 @@ async def test_sweep_terminalizes_when_queued_quota_is_ineligible_or_inconsisten
             deadline_at=deadline_at,
         )
 
-        result = await sweep_deadline_exceeded_runs(session, now=now)
+        result = await sweep_deadline_exceeded_runs_at(session, at=now)
         await session.commit()
 
     assert result.queued_quota_released_count == 0
@@ -556,6 +557,42 @@ async def test_sweep_terminalizes_when_queued_quota_is_ineligible_or_inconsisten
         persisted = await _persisted_run(session_factory, original.id)
         assert persisted.status == "deadline_exceeded"
         assert persisted.error_code is None
+
+
+@pytest.mark.asyncio
+async def test_sweep_for_thread_leaves_other_thread_unchanged(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+    deadline_at = now - timedelta(microseconds=1)
+    created_at = deadline_at - timedelta(seconds=60)
+    async with session_factory() as session:
+        target = await _seed_run(
+            session,
+            status="queued",
+            created_at=created_at,
+            deadline_at=deadline_at,
+        )
+        other = await _seed_run(
+            session,
+            status="queued",
+            created_at=created_at,
+            deadline_at=deadline_at,
+        )
+        await session.commit()
+
+        result = await sweep_deadline_exceeded_runs_for_thread_at(
+            session,
+            thread_id=target.thread_id,
+            at=now,
+        )
+        await session.commit()
+
+    assert result.total_count == 1
+    persisted_target = await _persisted_run(session_factory, target.id)
+    persisted_other = await _persisted_run(session_factory, other.id)
+    assert persisted_target.status == "deadline_exceeded"
+    assert persisted_other.status == "queued"
 
 
 @pytest.mark.asyncio
@@ -581,7 +618,7 @@ async def test_sweep_preserves_existing_terminal_runs(
         assistant_message_id = original.assistant_message_id
         await session.commit()
 
-        result = await sweep_deadline_exceeded_runs(session, now=now)
+        result = await sweep_deadline_exceeded_runs_at(session, at=now)
         await session.commit()
 
     persisted = await _persisted_run(session_factory, original.id)

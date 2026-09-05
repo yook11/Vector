@@ -20,15 +20,21 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
 
-async def database_now(session: AsyncSession, injected: datetime | None) -> datetime:
-    expression = literal(injected) if injected is not None else func.clock_timestamp()
+async def _read_database_time(
+    session: AsyncSession, expression: ColumnElement[datetime]
+) -> datetime:
     value = await session.scalar(select(expression))
     if not isinstance(value, datetime):
         raise RuntimeError("database clock did not return a datetime")
     return value
 
 
-def _is_recovery_due(now: ColumnElement[datetime]) -> ColumnElement[bool]:
+async def database_now(session: AsyncSession, injected: datetime | None) -> datetime:
+    expression = literal(injected) if injected is not None else func.clock_timestamp()
+    return await _read_database_time(session, expression)
+
+
+def _has_reached_recovery_deadline(now: ColumnElement[datetime]) -> ColumnElement[bool]:
     return or_(
         and_(
             AgentRun.status == AgentRunStatus.QUEUED.value,
@@ -78,29 +84,48 @@ async def expire_run(
 
 async def sweep_deadline_exceeded_runs(
     session: AsyncSession,
-    *,
-    now: datetime | None = None,
 ) -> DeadlineRunSweepResult:
-    candidate_time = literal(now) if now is not None else func.clock_timestamp()
-    candidate_rows = (
-        (
-            await session.execute(
-                select(
-                    AgentRun.id,
-                    AgentRun.status,
-                    AgentRun.attempt_epoch,
-                    AgentRun.quota_usage_date,
-                    AgentThread.user_id,
-                )
-                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-                .where(_is_recovery_due(candidate_time))
-                .order_by(AgentRun.id)
-                .with_for_update()
-            )
-        )
-        .tuples()
-        .all()
+    return await _recover_deadline_exceeded_runs(
+        session,
+        thread_id=None,
+        clock=func.clock_timestamp(),
     )
+
+
+async def sweep_deadline_exceeded_runs_for_thread(
+    session: AsyncSession,
+    *,
+    thread_id: uuid_mod.UUID,
+) -> DeadlineRunSweepResult:
+    return await _recover_deadline_exceeded_runs(
+        session,
+        thread_id=thread_id,
+        clock=func.clock_timestamp(),
+    )
+
+
+async def _recover_deadline_exceeded_runs(
+    session: AsyncSession,
+    *,
+    thread_id: uuid_mod.UUID | None,
+    clock: ColumnElement[datetime],
+) -> DeadlineRunSweepResult:
+    query = (
+        select(
+            AgentRun.id,
+            AgentRun.status,
+            AgentRun.attempt_epoch,
+            AgentRun.quota_usage_date,
+            AgentThread.user_id,
+        )
+        .join(AgentThread, AgentRun.thread_id == AgentThread.id)
+        .where(_has_reached_recovery_deadline(clock))
+        .order_by(AgentRun.id)
+        .with_for_update()
+    )
+    if thread_id is not None:
+        query = query.where(AgentRun.thread_id == thread_id)
+    candidate_rows = (await session.execute(query)).tuples().all()
     if not candidate_rows:
         return DeadlineRunSweepResult(
             queued_terminal_count=0,
@@ -112,7 +137,7 @@ async def sweep_deadline_exceeded_runs(
         )
 
     # lock待機中に期限を越えるため、更新判断には取得後のDB時刻を使う。
-    now = await database_now(session, now)
+    now = await _read_database_time(session, clock)
     candidate_ids = [row[0] for row in candidate_rows]
     candidate_by_id = {row[0]: row for row in candidate_rows}
     updated_rows = (
@@ -121,7 +146,7 @@ async def sweep_deadline_exceeded_runs(
                 update(AgentRun)
                 .where(
                     AgentRun.id.in_(candidate_ids),
-                    _is_recovery_due(literal(now)),
+                    _has_reached_recovery_deadline(literal(now)),
                 )
                 .values(
                     status=AgentRunStatus.DEADLINE_EXCEEDED.value,
