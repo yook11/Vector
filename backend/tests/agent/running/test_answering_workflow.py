@@ -198,7 +198,6 @@ async def test_direct_workflow_order_and_question_passthrough() -> None:
         "phases_factory",
         "progress:planning",
         "planner",
-        "progress:answering",
         "direct_answerer",
     ]
     assert planner.calls[0].question == "元の質問"
@@ -229,7 +228,6 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
     assert set(timeline[4:6]) == {"internal_search", "external_search_scope"}
     # ヒットが内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
     assert timeline[6:] == [
-        "progress:answering",
         "evidence_answerer",
     ]
     assert planner.calls[0].question == "元の質問"

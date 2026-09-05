@@ -1,8 +1,7 @@
 """Run全体(`AnsweringRunner.run()` 黒箱)テストが共有するharness。
 
 AnsweringRunnerを組んで実行するという同一契約のfake協力者とデータbuilderだけを
-置く。テスト専用の仕掛け(gate・blocking fake・probe・failure注入)は共有せず、
-各テストファイルのそばに残す。
+置く。必須portの成功fakeは共有し、blocking・failure注入は各テストのそばに残す。
 """
 
 from __future__ import annotations
@@ -45,6 +44,7 @@ from app.agent.planning.contract import (
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
 from app.agent.running import AnsweringRunner, RunIdentity, RunInput
 from app.agent.running import answering_runner as answering_runner_module
+from app.agent.runs.execution import Continue, Stop
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
@@ -53,6 +53,73 @@ USER_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
 THREAD_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197651")
 AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 DEFAULT_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
+
+
+class AllowAnswerGenerationStart:
+    def __init__(self, timeline: list[str] | None = None) -> None:
+        self._timeline = timeline
+        self.calls = 0
+        self.start_calls = 0
+        self.check_calls = 0
+        self.authorize_calls = 0
+
+    async def start_answer_generation(self) -> Continue:
+        self.calls += 1
+        self.start_calls += 1
+        if self._timeline is not None:
+            self._timeline.append("answer_start")
+        return Continue()
+
+    async def authorize_answer_regeneration(self) -> Continue:
+        self.authorize_calls += 1
+        return Continue()
+
+    async def check_answer_generation_continuation(self) -> Continue:
+        self.check_calls += 1
+        return Continue()
+
+
+class ScriptedAnswerGenerationRepository:
+    def __init__(
+        self,
+        *,
+        start: Continue | Stop | BaseException = Continue(),
+        checks: list[Continue | Stop] | None = None,
+        authorizes: list[Continue | Stop | BaseException] | None = None,
+        timeline: list[str] | None = None,
+    ) -> None:
+        self.calls = 0
+        self.start_calls = 0
+        self.check_calls = 0
+        self.authorize_calls = 0
+        self._start = start
+        self._checks = list(checks or [])
+        self._authorizes = list(authorizes or [])
+        self._timeline = timeline
+
+    async def start_answer_generation(self) -> Continue | Stop:
+        self.calls += 1
+        self.start_calls += 1
+        if self._timeline is not None:
+            self._timeline.append("answer_start")
+        if isinstance(self._start, BaseException):
+            raise self._start
+        return self._start
+
+    async def authorize_answer_regeneration(self) -> Continue | Stop:
+        self.authorize_calls += 1
+        if not self._authorizes:
+            return Continue()
+        outcome = self._authorizes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    async def check_answer_generation_continuation(self) -> Continue | Stop:
+        self.check_calls += 1
+        if not self._checks:
+            return Continue()
+        return self._checks.pop(0)
 
 
 def review_draft(

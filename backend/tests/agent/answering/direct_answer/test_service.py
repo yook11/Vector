@@ -38,6 +38,10 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.gemini_error_translator import GeminiStateReason
 from tests.agent.recording._fakes import RecordingDirectAnswerRecorder
+from tests.agent.running._harness import (
+    AllowAnswerGenerationStart,
+    ScriptedAnswerGenerationRepository,
+)
 from tests.agent.runtime._fakes import AgentRuntimeCall
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -183,18 +187,6 @@ class RecordingDeltaReporter:
         self.reset_calls += 1
 
 
-class SequenceContinuation:
-    def __init__(self, results: Sequence[Continue | Stop]) -> None:
-        self._results = list(results)
-        self.calls = 0
-
-    async def should_continue(self) -> Continue | Stop:
-        self.calls += 1
-        if not self._results:
-            return Continue()
-        return self._results.pop(0)
-
-
 def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> None:
     assert (
         direct_answer_contract.AnswerGenerationStopped
@@ -205,22 +197,26 @@ def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> N
 def _service(
     runtime: ScriptedStreamingRuntime,
     *,
+    repository: object | None = None,
     delta_reporter: RecordingDeltaReporter | None = None,
-    continuation: SequenceContinuation | None = None,
+    progress: object | None = None,
     recorder: RecordingDirectAnswerRecorder | None = None,
 ) -> DirectAnswerService:
+    start = AllowAnswerGenerationStart() if repository is None else repository
     if recorder is None:
         return DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=_runtime_scope(runtime),
+            repository=start,
             delta_reporter=delta_reporter,
-            continuation=continuation,
+            progress=progress,
         )
     return DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
+        repository=start,
         delta_reporter=delta_reporter,
-        continuation=continuation,
+        progress=progress,
         recorder=recorder,
     )
 
@@ -244,6 +240,7 @@ async def test_valid_text_returns_direct_draft_without_retry() -> None:
     service = DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
+        repository=AllowAnswerGenerationStart(),
     )
 
     draft = await service.answer(_input())
@@ -261,6 +258,7 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
     draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
+        repository=AllowAnswerGenerationStart(),
     ).answer(
         _input(
             AnsweringRequest(
@@ -335,6 +333,7 @@ async def test_blank_then_valid_retries_once_with_same_input(
     draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=counting_scope,
+        repository=AllowAnswerGenerationStart(),
     ).answer(_input())
 
     assert draft.answer == "再試行後の回答です。"
@@ -503,6 +502,7 @@ async def test_runtime_scope_activation_failure_precedes_attempt_and_observation
         await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
+            repository=AllowAnswerGenerationStart(),
             delta_reporter=reporter,
         ).answer(_input())
 
@@ -539,6 +539,7 @@ async def test_runtime_scope_exit_failure_discards_completed_outcome(
         await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
+            repository=AllowAnswerGenerationStart(),
         ).answer(_input())
 
     assert exc_info.value is error
@@ -571,6 +572,7 @@ async def test_runtime_scope_exit_failure_replaces_terminal_failure_without_outc
         await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
+            repository=AllowAnswerGenerationStart(),
         ).answer(_input())
 
     assert exc_info.value is close_error
@@ -664,7 +666,9 @@ async def test_continuation_false_before_provider_start_is_routine_stop() -> Non
         await _service(
             runtime,
             delta_reporter=reporter,
-            continuation=SequenceContinuation([Stop(StopReason.NOT_CURRENT)]),
+            repository=ScriptedAnswerGenerationRepository(
+                checks=[Stop(StopReason.NOT_CURRENT)]
+            ),
         ).answer(_input())
 
     assert runtime.calls == []
@@ -680,18 +684,18 @@ async def test_continuation_false_mid_stream_aborts_iterator_and_pending_report(
 ):
     runtime = ScriptedStreamingRuntime([["表示済み", "見せない本文"]])
     reporter = RecordingDeltaReporter()
-    continuation = SequenceContinuation(
-        [Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
+    repository = ScriptedAnswerGenerationRepository(
+        checks=[Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
     )
 
     with pytest.raises(AnswerGenerationStopped):
         await _service(
             runtime,
             delta_reporter=reporter,
-            continuation=continuation,
+            repository=repository,
         ).answer(_input())
 
-    assert continuation.calls == 3
+    assert repository.check_calls == 3
     assert "".join(text for _, text in reporter.appended) == "表示済み"
     assert reporter.aborted == [1]
     assert reporter.finished == []
@@ -704,18 +708,18 @@ async def test_continuation_false_at_normal_stream_end_aborts_before_finish(
 ) -> None:
     runtime = ScriptedStreamingRuntime([["表示済み本文"]])
     reporter = RecordingDeltaReporter()
-    continuation = SequenceContinuation(
-        [Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
+    repository = ScriptedAnswerGenerationRepository(
+        checks=[Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
     )
 
     with pytest.raises(AnswerGenerationStopped):
         await _service(
             runtime,
             delta_reporter=reporter,
-            continuation=continuation,
+            repository=repository,
         ).answer(_input())
 
-    assert continuation.calls == 3
+    assert repository.check_calls == 3
     assert reporter.appended == [(1, "表示済み本文")]
     assert reporter.aborted == [1]
     assert reporter.finished == []
@@ -798,7 +802,9 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _service(
             runtime,
-            continuation=SequenceContinuation([Stop(StopReason.NOT_CURRENT)]),
+            repository=ScriptedAnswerGenerationRepository(
+                checks=[Stop(StopReason.NOT_CURRENT)]
+            ),
             recorder=recorder,
         ).answer(_input())
 
@@ -826,3 +832,121 @@ async def test_unclassified_failure_and_stops_record_without_outcome(
 
     assert exc_info.value is error
     _assert_recorded(recorder, outcome=None, error=error)
+
+
+class _RecordingProgress:
+    def __init__(self, timeline: list[str] | None = None) -> None:
+        self.stages: list[str] = []
+        self._timeline = timeline
+
+    async def stage_changed(self, stage: str) -> None:
+        self.stages.append(stage)
+        if self._timeline is not None:
+            self._timeline.append(f"progress:{stage}")
+
+
+@pytest.mark.asyncio
+async def test_start_continue_reports_answering_before_generation() -> None:
+    timeline: list[str] = []
+    runtime = ScriptedStreamingRuntime(["開始後の回答"])
+    original_stream = runtime.stream_text
+
+    def tracked_stream(*args: object, **kwargs: object) -> ScriptedAgentTextStream:
+        timeline.append("generate")
+        return original_stream(*args, **kwargs)
+
+    runtime.stream_text = tracked_stream  # type: ignore[method-assign]
+    start = ScriptedAnswerGenerationRepository(timeline=timeline)
+    progress = _RecordingProgress(timeline)
+
+    draft = await _service(
+        runtime,
+        repository=start,
+        progress=progress,
+    ).answer(_input())
+
+    assert draft.answer == "開始後の回答"
+    assert timeline == ["answer_start", "progress:answering", "generate"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        Stop(StopReason.DEADLINE_EXCEEDED),
+        Stop(StopReason.NOT_CURRENT),
+        RuntimeError("answer start transaction failed"),
+    ],
+)
+async def test_start_rejection_does_not_generate_or_report_answering(
+    outcome: Continue | Stop | BaseException,
+) -> None:
+    runtime = ScriptedStreamingRuntime(["呼ばれない"])
+    enters = 0
+
+    @asynccontextmanager
+    async def unused_scope() -> AsyncIterator[ScriptedStreamingRuntime]:
+        nonlocal enters
+        enters += 1
+        yield runtime
+
+    start = ScriptedAnswerGenerationRepository(start=outcome)
+    progress = _RecordingProgress()
+    recorder = RecordingDirectAnswerRecorder()
+
+    expected = AnswerGenerationStopped if isinstance(outcome, Stop) else type(outcome)
+    with pytest.raises(expected) as raised:
+        await DirectAnswerService(
+            agent=DIRECT_ANSWER_AGENT,
+            runtime_scope_factory=unused_scope,
+            repository=start,
+            progress=progress,
+            recorder=recorder,
+        ).answer(_input())
+
+    if isinstance(outcome, Stop):
+        assert raised.value.reason is outcome.reason
+    else:
+        assert raised.value is outcome
+    assert start.calls == 1
+    assert enters == 0
+    assert runtime.calls == []
+    assert progress.stages == []
+    assert recorder.records == []
+
+
+@pytest.mark.asyncio
+async def test_regeneration_stop_does_not_start_second_generation() -> None:
+    runtime = ScriptedStreamingRuntime([" \n\t", "呼ばれない"])
+    repository = ScriptedAnswerGenerationRepository(
+        authorizes=[Stop(StopReason.DEADLINE_EXCEEDED)]
+    )
+
+    with pytest.raises(AnswerGenerationStopped) as raised:
+        await _service(runtime, repository=repository).answer(_input())
+
+    assert raised.value.reason is StopReason.DEADLINE_EXCEEDED
+    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert repository.authorize_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_regeneration_keeps_single_answer_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = 0
+    original_timeout = asyncio.timeout
+
+    def counting_timeout(delay: float) -> object:
+        nonlocal created
+        created += 1
+        return original_timeout(delay)
+
+    monkeypatch.setattr(asyncio, "timeout", counting_timeout)
+    runtime = ScriptedStreamingRuntime([" \n\t", "再試行後の回答です。"])
+
+    draft = await _service(runtime).answer(_input())
+
+    assert draft.answer == "再試行後の回答です。"
+    assert created == 1
+    assert [call.attempt_number for call in runtime.calls] == [1, 2]

@@ -62,6 +62,7 @@ from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
+from app.agent.runs.execution import Continue
 from app.config import settings
 from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
@@ -70,6 +71,17 @@ DEFAULT_GOAL = "NVIDIA Blackwell AI GPU latest supply and customer demand eviden
 DEFAULT_QUESTION = "NVIDIA Blackwell の直近の供給と顧客需要は投資判断に重要？"
 DEFAULT_DIRECT_QUESTION = "Vector の使い方を短く教えて"
 MAX_EXTERNAL_RESEARCH_TASKS = 3
+
+
+class _ProbeAnswerGenerationStart:
+    async def start_answer_generation(self) -> Continue:
+        return Continue()
+
+    async def authorize_answer_regeneration(self) -> Continue:
+        return Continue()
+
+    async def check_answer_generation_continuation(self) -> Continue:
+        return Continue()
 
 
 class _UnreachableInternalSearch:
@@ -229,6 +241,7 @@ async def _probe_search(
                 evidence_answerer=EvidenceAnswerService(
                     agent=EVIDENCE_ANSWER_AGENT,
                     runtime_scope_factory=activate_gemini_agent_runtime,
+                    repository=_ProbeAnswerGenerationStart(),
                 ),
                 direct_answerer=_UnreachableDirectAnswerer(),
                 organizer=ResearchHandoffService(
@@ -276,6 +289,7 @@ async def _probe_direct(*, question: str) -> None:
             direct_answerer=DirectAnswerService(
                 agent=DIRECT_ANSWER_AGENT,
                 runtime_scope_factory=activate_gemini_agent_runtime,
+                repository=_ProbeAnswerGenerationStart(),
             ),
             organizer=_UnreachableOrganizer(),
         ),

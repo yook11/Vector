@@ -5,7 +5,8 @@ Updated: 2026-09-05
 Scope: Direct Answer / Evidence Answerに共通する、回答生成開始から回答確定または終了までの時間・状態契約
 
 本書の振る舞いは合意済みである。回収猶予の具体値を確定するまでDraftとする。
-`answer_started_at`のschema基盤だけを先行実装し、時刻の記録と判定は未実装である。
+`answer_started_at`のschema基盤と、初回の回答生成へ進入する際の開始記録を先行実装した。
+再生成、開始後の継続・保存、定期回収の判定は未実装である。
 
 ## Problem
 
@@ -149,8 +150,9 @@ DBの時刻を、開始可否・開始時刻の記録・保存可否・回収の
 Direct AnswerとEvidence Answerの両方で、生成開始・再生成・工程タイムアウトの条件を検証する。
 時間境界は実時間の60秒待機に依存せず検証し、開始と回収、保存と回収のDB競合も確認する。
 
-検証状況: `answer_started_at`のORM・migration契約を実装済み。時刻の記録と本書全体の
-受け入れ条件は未実装である。実行済みの検証はImplementation節へ記録する。
+検証状況: `answer_started_at`のORM・migration契約と、初回生成の開始記録を実装済み。
+再生成、開始後の継続・保存、定期回収に関する受け入れ条件は未実装である。
+実行済みの検証はImplementation節へ記録する。
 
 ## Evidence
 
@@ -195,11 +197,20 @@ Direct AnswerとEvidence Answerの両方で、生成開始・再生成・工程�
 ## Implementation
 
 - `agent_runs.answer_started_at`を、timezone付き・nullable・defaultなしの列として追加するexpand migrationを実装した。
-- ORMにも同じ列契約を追加した。公開APIへの露出と、列への書き込みは行わない。
+- ORMにも同じ列契約を追加した。公開APIへの露出は行わない。
 - migrationのupgrade・downgrade・再upgradeで、既存runの他の列とデータを維持する契約を検証する。
 - Alembic headは`z20_agent_run_answer_started_at`の1本で、migration gateはexpandとして受理した。
+- 初回生成の開始時にrunをロックし、ロック取得後のDB時刻で`running`、`attempt_epoch`、
+  `answer_started_at IS NULL`、`now < deadline_at`を同じトランザクション内で確認する。
+- 開始条件を満たす場合だけ`answer_started_at`を記録し、開始期限ちょうど以降は回答生成を呼ばず
+  `deadline_exceeded`へ遷移する。終了済み、古い実行世代、開始記録済み、存在しないrunは変更しない。
+- Queue taskはrunと実行世代に固定した短命トランザクションの開始依存を、Direct Answerと
+  Evidence Answerに共通する`AnsweringRunner`へ必須で渡す。commit後だけ回答生成へ進む。
+- Direct AnswerとEvidence Answerの両方で、開始確定、`answering`進捗、answerer呼び出しの順序を検証した。
+- 開始拒否・DB例外時にanswererを呼ばないこと、ロールバックで開始時刻が残らないこと、
+  ロック待機中に期限へ達した場合にロック取得後のDB時刻で拒否することを検証した。
 - backend lint・format: 成功。
-- unit tests: 5,241件成功。
-- DB integration tests: 1,023件成功、22件skip。
+- unit tests: 5,245件成功。
+- DB integration tests: 1,033件成功、22件skip。
 
-開始時刻の記録、生成・再生成の開始判定、継続判定、保存、定期回収は後続実装で対応する。
+再生成の開始判定、開始後の継続判定、保存、定期回収は後続実装で対応する。

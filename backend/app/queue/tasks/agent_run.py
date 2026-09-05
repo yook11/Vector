@@ -10,9 +10,11 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
+from app.agent.answering.answer_generation_repository import (
+    AgentAnswerGenerationRepository,
+)
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
-from app.agent.answering.live_delivery import ensure_answer_generation_continues
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
 from app.agent.daily_quota import observability as daily_quota_observability
@@ -42,7 +44,7 @@ from app.agent.runs.contracts import (
     StartRunFailureReason,
     UserQuestionMessage,
 )
-from app.agent.runs.execution import StopReason
+from app.agent.runs.execution import Stop, StopReason
 from app.agent.runs.execution_probe import AgentRunExecutionProbe
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -165,12 +167,18 @@ async def run_agent_answer(
         )
         answering_runner = build_answering_runner(
             session_factory=session_factory,
+            repository=AgentAnswerGenerationRepository(
+                session_factory,
+                run_id,
+                attempt_epoch,
+            ),
             progress=progress_reporter,
             events=activity_reporter,
             delta_reporter=delta_reporter,
-            continuation=continuation,
         )
-        await ensure_answer_generation_continues(continuation)
+        decision = await continuation.should_continue()
+        if isinstance(decision, Stop):
+            raise AnswerGenerationStopped(decision.reason)
         run_result = await answering_runner.run(
             RunInput(
                 question=question.content,

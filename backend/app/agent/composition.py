@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.answering.answer_generation_repository import (
+    AnswerGenerationRepository,
+)
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.contract import (
@@ -25,7 +28,6 @@ from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.running import AnsweringPhases, AnsweringRunner
-from app.agent.runs.execution import RunExecutionContinuation
 from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -64,9 +66,10 @@ async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
 def _build_answering_phases(
     *,
     session_factory: async_sessionmaker[AsyncSession],
+    repository: AnswerGenerationRepository,
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
-    continuation: RunExecutionContinuation | None = None,
+    progress: AnswerProgressReporter | None = None,
 ) -> AnsweringPhases:
     ensure_external_search_configured()
 
@@ -117,14 +120,16 @@ def _build_answering_phases(
         direct_answerer=DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
+            repository=repository,
             delta_reporter=delta_reporter,
-            continuation=continuation,
+            progress=progress,
         ),
         evidence_answerer=EvidenceAnswerService(
             agent=EVIDENCE_ANSWER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
+            repository=repository,
             delta_reporter=delta_reporter,
-            continuation=continuation,
+            progress=progress,
         ),
         organizer=ResearchHandoffService(
             agent=RESEARCH_HANDOFF_AGENT,
@@ -136,17 +141,18 @@ def _build_answering_phases(
 def build_answering_runner(
     *,
     session_factory: async_sessionmaker[AsyncSession],
+    repository: AnswerGenerationRepository,
     progress: AnswerProgressReporter | None = None,
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
-    continuation: RunExecutionContinuation | None = None,
 ) -> AnsweringRunner:
     return AnsweringRunner(
         phases_factory=lambda: _build_answering_phases(
             session_factory=session_factory,
+            repository=repository,
             events=events,
             delta_reporter=delta_reporter,
-            continuation=continuation,
+            progress=progress,
         ),
         progress=progress,
         events=events,
