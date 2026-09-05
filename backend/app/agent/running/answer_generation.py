@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.run_deadline.persistence import database_now
+from app.agent.running.deadline.deadline_exceeded import database_now
 from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.runs.types import AgentRunStatus
 from app.models.agent_run import AgentRun

@@ -26,8 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.composition import ensure_external_search_configured
 from app.agent.daily_quota import observability as daily_quota_observability
-from app.agent.daily_quota.contracts import DailyRequestLimitExceededError
 from app.agent.daily_quota.policy import DAILY_QUOTA_TIMEZONE
+from app.agent.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.live_updates.sse import (
     AgentRunQueuedSseConnection,
     AgentRunSseCapacity,
@@ -45,14 +45,22 @@ from app.agent.live_updates.transport import (
     AgentLiveTransport,
     get_agent_live_transport,
 )
-from app.agent.runs.contracts import (
+from app.agent.running.cancellation import (
+    AgentRunCancellationRepository,
+    RunCancellationFailure,
+    RunCancellationFailureReason,
+)
+from app.agent.running.creation import (
     ActiveRunConflictError,
-    CancelRunOutcome,
-    OwnedAgentRunLiveContext,
+    AgentRunCreationRepository,
     ThreadNotFoundError,
 )
+from app.agent.running.failure_recording import AgentRunFailureRepository
+from app.agent.running.presentation import (
+    AgentRunPresentationRepository,
+    OwnedAgentRunLiveContext,
+)
 from app.agent.runs.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
-from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
@@ -92,7 +100,7 @@ async def read_agent_run_live_context(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> OwnedAgentRunLiveContext | None:
     async with session_factory() as session:
-        return await AgentRunRepository(session).read_live_context_for_user(
+        return await AgentRunPresentationRepository(session).read_live_context_for_user(
             run_id=run_id,
             user_id=user_id,
         )
@@ -143,7 +151,7 @@ async def create_research_response(
     except AIProviderError as exc:
         raise _generation_unavailable() from exc
 
-    repo = AgentRunRepository(session)
+    repo = AgentRunCreationRepository(session)
     try:
         async with session.begin():
             created = await repo.create_user_run(
@@ -204,7 +212,9 @@ async def create_research_response(
         )
         try:
             async with session.begin():
-                updated = await repo.mark_enqueue_failed(created.run_id)
+                updated = await AgentRunFailureRepository(session).mark_enqueue_failed(
+                    created.run_id
+                )
                 if not updated:
                     logger.info(
                         "agent_run_enqueue_failed_mark_failed_skipped",
@@ -302,29 +312,25 @@ async def cancel_research_run(
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
 ) -> Response:
-    repo = AgentRunRepository(session)
+    repo = AgentRunCancellationRepository(session)
     async with session.begin():
         outcome = await repo.cancel_run_for_user(run_id=run_id, user_id=user.id)
-    if outcome is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if outcome.cancel_outcome is CancelRunOutcome.ALREADY_COMPLETED:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=_RUN_ALREADY_COMPLETED_DETAIL,
+    if isinstance(outcome, RunCancellationFailure):
+        if outcome.reason is RunCancellationFailureReason.RUN_NOT_FOUND:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        if outcome.reason is RunCancellationFailureReason.ALREADY_COMPLETED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_RUN_ALREADY_COMPLETED_DETAIL,
+            )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    with suppress(Exception):
+        daily_quota_observability.observe_release(
+            run_id=run_id,
+            outcome=outcome.quota_release_outcome,
         )
-    if outcome.cancel_outcome is CancelRunOutcome.CANCELLED:
-        if outcome.quota_release_outcome is not None:
-            with suppress(Exception):
-                daily_quota_observability.observe_release(
-                    run_id=run_id,
-                    outcome=outcome.quota_release_outcome,
-                )
-        running_attempt_epoch = outcome.running_attempt_epoch
-        if outcome.was_running and running_attempt_epoch is None:
-            raise RuntimeError("running cancel outcome is missing its attempt epoch")
-    else:
-        running_attempt_epoch = None
-    if outcome.was_running and running_attempt_epoch is not None:
+    running_attempt_epoch = outcome.running_attempt_epoch
+    if running_attempt_epoch is not None:
         await _publish_cancel_terminal(
             live=live,
             run_id=run_id,
@@ -495,7 +501,7 @@ async def get_research_run(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> ResearchRunResponse:
-    repo = AgentRunRepository(session)
+    repo = AgentRunPresentationRepository(session)
     response = await repo.read_run_for_user(run_id=run_id, user_id=user.id)
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)

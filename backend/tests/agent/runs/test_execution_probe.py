@@ -14,9 +14,16 @@ from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from app.agent.running.attempt_start import AgentRunAttemptStartRepository
+from app.agent.running.cancellation import (
+    AgentRunCancellationRepository,
+    RunCancellationSuccess,
+)
+from app.agent.running.continuation import (
+    AgentRunContinuationRepository,
+    AgentRunExecutionProbe,
+)
 from app.agent.runs.execution import Continue, Stop, StopReason
-from app.agent.runs.execution_probe import AgentRunExecutionProbe
-from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -116,7 +123,7 @@ def _patch_decisions(
     pending = deque(outcomes)
 
     async def decide(
-        self: AgentRunRepository,
+        self: AgentRunContinuationRepository,
         **_kwargs: object,
     ) -> Continue | Stop:
         item = pending.popleft()
@@ -124,7 +131,9 @@ def _patch_decisions(
             raise item
         return item
 
-    monkeypatch.setattr(AgentRunRepository, "decide_execution_continuation", decide)
+    monkeypatch.setattr(
+        AgentRunContinuationRepository, "decide_execution_continuation", decide
+    )
 
 
 def _metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
@@ -333,11 +342,13 @@ async def test_actual_cancel_commit_makes_cached_probe_stop_after_two_seconds(
 
     async with session_factory() as cancel_session:
         async with cancel_session.begin():
-            result = await AgentRunRepository(cancel_session).cancel_run_for_user(
+            result = await AgentRunCancellationRepository(
+                cancel_session
+            ).cancel_run_for_user(
                 run_id=run.id,
                 user_id=UUID(TEST_USER_ID),
             )
-    assert result is not None
+    assert isinstance(result, RunCancellationSuccess)
     clock.advance(2.0)
 
     assert await probe.should_continue() == _STOP_NOT_CURRENT
@@ -366,7 +377,7 @@ async def test_actual_restart_makes_old_epoch_probe_stop_after_two_seconds(
     async with session_factory() as start_session:
         async with start_session.begin():
             attempt_epoch = started_attempt_epoch(
-                await AgentRunRepository(start_session).start_run(run.id)
+                await AgentRunAttemptStartRepository(start_session).start_run(run.id)
             )
     assert attempt_epoch == 2
     clock.advance(2.0)

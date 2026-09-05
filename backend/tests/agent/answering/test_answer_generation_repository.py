@@ -8,8 +8,8 @@ from uuid import UUID
 
 import pytest
 
-from app.agent.answering import answer_generation_repository as repository_module
-from app.agent.answering.answer_generation_repository import (
+from app.agent.running import answer_generation as repository_module
+from app.agent.running.answer_generation import (
     ANSWER_GENERATION_CONTINUATION_INTERVAL_SECONDS,
     AgentAnswerGenerationRepository,
 )

@@ -1,8 +1,7 @@
-"""ユーザー日次利用枠の永続化処理。"""
-
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime
 
 from sqlalchemy import (
@@ -11,29 +10,53 @@ from sqlalchemy import (
     Select,
     bindparam,
     cast,
-    column,
     func,
     literal,
     select,
     true,
-    update,
-    values,
 )
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.agent.daily_quota.contracts import (
-    DailyQuotaReleaseOutcome,
-    DailyQuotaReservation,
-    DailyRequestLimitExceededError,
-)
 from app.agent.daily_quota.policy import (
     DAILY_QUOTA_TIMEZONE_NAME,
     DAILY_REQUEST_LIMIT,
 )
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
+
+
+class DailyRequestLimitExceededError(Exception):
+    """ユーザーの日次research request予約枠が上限に達した。"""
+
+    def __init__(
+        self,
+        *,
+        usage_date: date,
+        observed_at: datetime,
+        decided_at: datetime,
+        limit: int,
+    ) -> None:
+        super().__init__("Daily research request limit exceeded")
+        self.usage_date = usage_date
+        self.observed_at = observed_at
+        self.decided_at = decided_at
+        self.limit = limit
+
+
+@dataclass(frozen=True, slots=True)
+class DailyQuotaReservation:
+    usage_date: date
+    used_count: int
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.used_count, int)
+            or isinstance(self.used_count, bool)
+            or self.used_count < 1
+        ):
+            raise ValueError("daily quota reservation requires a positive used count")
 
 
 def _build_daily_quota_reservation_statement(
@@ -115,76 +138,4 @@ async def reserve_daily_quota(
     return DailyQuotaReservation(
         usage_date=row["usage_date"],
         used_count=used_count,
-    )
-
-
-async def release_daily_quota(
-    session: AsyncSession,
-    *,
-    user_id: uuid.UUID,
-    usage_date: date | None,
-) -> DailyQuotaReleaseOutcome:
-    if usage_date is None:
-        return DailyQuotaReleaseOutcome.NOT_ELIGIBLE
-
-    released_user_id = (
-        await session.execute(
-            update(AgentUserDailyQuota)
-            .where(
-                AgentUserDailyQuota.user_id == user_id,
-                AgentUserDailyQuota.usage_date == usage_date,
-                AgentUserDailyQuota.used_count > 0,
-            )
-            .values(used_count=AgentUserDailyQuota.used_count - 1)
-            .returning(AgentUserDailyQuota.user_id)
-            .execution_options(synchronize_session=False)
-        )
-    ).scalar_one_or_none()
-    if released_user_id is None:
-        return DailyQuotaReleaseOutcome.INCONSISTENT
-    return DailyQuotaReleaseOutcome.RELEASED
-
-
-async def release_daily_quotas(
-    session: AsyncSession,
-    *,
-    reservations: dict[tuple[uuid.UUID, date], int],
-) -> set[tuple[uuid.UUID, date]]:
-    if not reservations:
-        return set()
-
-    quota_releases = values(
-        column("user_id", AgentUserDailyQuota.user_id.type),
-        column("usage_date", AgentUserDailyQuota.usage_date.type),
-        column("release_count", Integer),
-        name="daily_quota_releases",
-    ).data(
-        [
-            (user_id, usage_date, count)
-            for (user_id, usage_date), count in reservations.items()
-        ]
-    )
-    return set(
-        (
-            await session.execute(
-                update(AgentUserDailyQuota)
-                .where(
-                    AgentUserDailyQuota.user_id == quota_releases.c.user_id,
-                    AgentUserDailyQuota.usage_date == quota_releases.c.usage_date,
-                    AgentUserDailyQuota.used_count >= quota_releases.c.release_count,
-                )
-                .values(
-                    used_count=(
-                        AgentUserDailyQuota.used_count - quota_releases.c.release_count
-                    )
-                )
-                .returning(
-                    AgentUserDailyQuota.user_id,
-                    AgentUserDailyQuota.usage_date,
-                )
-                .execution_options(synchronize_session=False)
-            )
-        )
-        .tuples()
-        .all()
     )

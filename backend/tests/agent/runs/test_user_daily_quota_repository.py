@@ -1,4 +1,4 @@
-"""AgentRunRepository の日次quota admission契約。"""
+"""AgentRunCreationRepository の日次quota admission契約。"""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ from sqlalchemy import DateTime, func, literal, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import app.agent.daily_quota.persistence as daily_quota_persistence_module
-from app.agent.daily_quota.contracts import DailyRequestLimitExceededError
-from app.agent.runs.contracts import (
+import app.agent.daily_quota.reservation as daily_quota_reservation_module
+from app.agent.daily_quota.reservation import DailyRequestLimitExceededError
+from app.agent.running.creation import (
     ActiveRunConflictError,
+    AgentRunCreationRepository,
     CreatedAgentRun,
     ThreadNotFoundError,
 )
-from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -37,7 +37,7 @@ pytestmark = pytest.mark.integration
 
 def _reservation_statement_builder() -> Callable[..., object]:
     """monkeypatch後の値を拾うため、呼び出しのたびに現在のmodule属性を読む。"""
-    return daily_quota_persistence_module._build_daily_quota_reservation_statement
+    return daily_quota_reservation_module._build_daily_quota_reservation_statement
 
 
 def _fixed_timestamptz_expression(value: datetime) -> object:
@@ -73,7 +73,7 @@ def _patch_reservation_clock(
     )
 
     monkeypatch.setattr(
-        daily_quota_persistence_module,
+        daily_quota_reservation_module,
         "_build_daily_quota_reservation_statement",
         build_with_fixed_clock,
     )
@@ -88,7 +88,7 @@ async def _admit_new_thread(
 ) -> CreatedAgentRun:
     async with session_factory() as session:
         async with session.begin():
-            return await AgentRunRepository(session).create_user_run(
+            return await AgentRunCreationRepository(session).create_user_run(
                 user_id=user_id,
                 question=question,
                 thread_id=None,
@@ -386,14 +386,14 @@ async def test_missing_or_active_existing_thread_does_not_reserve_quota(
     async with session_factory() as session:
         with pytest.raises(ThreadNotFoundError):
             async with session.begin():
-                await AgentRunRepository(session).create_user_run(
+                await AgentRunCreationRepository(session).create_user_run(
                     user_id=user_id,
                     question="not owned",
                     thread_id=foreign_thread_id,
                 )
         with pytest.raises(ActiveRunConflictError):
             async with session.begin():
-                await AgentRunRepository(session).create_user_run(
+                await AgentRunCreationRepository(session).create_user_run(
                     user_id=user_id,
                     question="conflicts",
                     thread_id=active_thread_id,
@@ -421,7 +421,7 @@ async def test_caller_rollback_removes_quota_thread_message_and_run(
     with pytest.raises(RollBackAdmission):
         async with session_factory() as session:
             async with session.begin():
-                created = await AgentRunRepository(session).create_user_run(
+                created = await AgentRunCreationRepository(session).create_user_run(
                     user_id=user_id,
                     question="rollback all writes",
                     thread_id=None,
@@ -448,7 +448,7 @@ async def test_quota_database_error_rolls_back_preflushed_new_thread(
         return select(literal(1) / literal(0))
 
     monkeypatch.setattr(
-        daily_quota_persistence_module,
+        daily_quota_reservation_module,
         "_build_daily_quota_reservation_statement",
         failing_builder,
         raising=False,
@@ -457,7 +457,7 @@ async def test_quota_database_error_rolls_back_preflushed_new_thread(
     with pytest.raises(DBAPIError):
         async with session_factory() as session:
             async with session.begin():
-                await AgentRunRepository(session).create_user_run(
+                await AgentRunCreationRepository(session).create_user_run(
                     user_id=user_id,
                     question="quota database failure",
                     thread_id=None,
@@ -505,7 +505,7 @@ async def test_run_persistence_failure_rolls_back_reservation_and_all_writes(
         with pytest.raises(DBAPIError):
             async with session_factory() as session:
                 async with session.begin():
-                    await AgentRunRepository(session).create_user_run(
+                    await AgentRunCreationRepository(session).create_user_run(
                         user_id=user_id,
                         question="run persistence failure",
                         thread_id=None,
@@ -592,7 +592,7 @@ async def test_eleven_concurrent_admissions_accept_exactly_ten(
         async with session_factory() as session:
             async with session.begin():
                 await barrier.wait()
-                return await AgentRunRepository(session).create_user_run(
+                return await AgentRunCreationRepository(session).create_user_run(
                     user_id=user_id,
                     question=f"concurrent-{index}",
                     thread_id=None,

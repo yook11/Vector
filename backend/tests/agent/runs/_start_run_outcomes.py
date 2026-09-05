@@ -1,8 +1,8 @@
-"""AgentRunRepository start_run の戻り値 assertion。"""
+"""AgentRunAttemptStartRepository start_run の戻り値 assertion。"""
 
 from __future__ import annotations
 
-from app.agent.runs.contracts import StartRunFailure, StartRunFailureReason
+from app.agent.running.attempt_start import StartRunFailure, StartRunFailureReason
 
 
 def started_attempt_epoch(result: object) -> int:

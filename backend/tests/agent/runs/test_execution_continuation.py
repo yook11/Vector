@@ -9,9 +9,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.run_deadline.persistence import expire_run
+from app.agent.running.continuation import AgentRunContinuationRepository
+from app.agent.running.deadline.deadline_exceeded import expire_run
 from app.agent.runs.execution import Continue, Stop, StopReason
-from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
@@ -60,7 +60,9 @@ async def _decide(
 ) -> Continue | Stop:
     async with session_factory() as session:
         async with session.begin():
-            return await AgentRunRepository(session).decide_execution_continuation(
+            return await AgentRunContinuationRepository(
+                session
+            ).decide_execution_continuation(
                 run_id=run_id,
                 attempt_epoch=attempt_epoch,
                 now=now,
@@ -167,7 +169,7 @@ async def test_expire_race_loss_is_not_current(
         return False
 
     monkeypatch.setattr(
-        "app.agent.runs.repository.expire_run",
+        "app.agent.running.continuation.expire_run",
         lose_expire,
     )
     result = await _decide(

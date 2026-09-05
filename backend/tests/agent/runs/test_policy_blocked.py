@@ -10,8 +10,17 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.runs.contracts import CancelRunOutcome, StartRunFailureReason
-from app.agent.runs.repository import AgentRunRepository
+from app.agent.running.attempt_start import (
+    AgentRunAttemptStartRepository,
+    StartRunFailureReason,
+)
+from app.agent.running.cancellation import (
+    AgentRunCancellationRepository,
+    RunCancellationFailure,
+    RunCancellationFailureReason,
+)
+from app.agent.running.failure_recording import AgentRunFailureRepository
+from app.agent.running.policy_block_recording import AgentRunPolicyBlockRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -126,7 +135,7 @@ async def test_mark_policy_blocked_updates_only_the_current_running_attempt(
 
     async with session_factory() as session:
         async with session.begin():
-            changed = await AgentRunRepository(session).mark_policy_blocked(
+            changed = await AgentRunPolicyBlockRepository(session).mark_policy_blocked(
                 seeded.run_id,
                 expected_attempt_epoch=seeded.attempt_epoch,
             )
@@ -163,7 +172,7 @@ async def test_mark_policy_blocked_is_fenced_from_stale_and_terminal_attempts(
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunRepository(session)
+            repository = AgentRunPolicyBlockRepository(session)
             stale_changed = await repository.mark_policy_blocked(
                 seeded.run_id,
                 expected_attempt_epoch=seeded.attempt_epoch - 1,
@@ -188,9 +197,9 @@ async def test_mark_policy_blocked_does_not_overwrite_a_cancelled_attempt(
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunRepository(session)
+            repository = AgentRunPolicyBlockRepository(session)
             assert (
-                await repository.mark_failed(
+                await AgentRunFailureRepository(session).mark_failed(
                     seeded.run_id,
                     expected_attempt_epoch=seeded.attempt_epoch,
                     error_code=AgentRunErrorCode.CANCELLED,
@@ -213,7 +222,7 @@ async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunRepository(session)
+            repository = AgentRunPolicyBlockRepository(session)
             assert (
                 await repository.mark_policy_blocked(
                     seeded.run_id,
@@ -224,7 +233,7 @@ async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunRepository(session)
+            repository = AgentRunAttemptStartRepository(session)
             restart_result = await repository.start_run(
                 seeded.run_id,
                 now=_NOW,
@@ -260,7 +269,7 @@ async def test_policy_blocked_cancel_is_already_terminal_without_quota_release(
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunRepository(session)
+            repository = AgentRunPolicyBlockRepository(session)
             assert (
                 await repository.mark_policy_blocked(
                     seeded.run_id,
@@ -268,7 +277,7 @@ async def test_policy_blocked_cancel_is_already_terminal_without_quota_release(
                 )
                 is True
             )
-            outcome = await repository.cancel_run_for_user(
+            outcome = await AgentRunCancellationRepository(session).cancel_run_for_user(
                 run_id=seeded.run_id,
                 user_id=_USER_ID,
             )
@@ -281,8 +290,7 @@ async def test_policy_blocked_cancel_is_already_terminal_without_quota_release(
             )
         )
 
-    assert (
-        outcome is not None
-        and outcome.cancel_outcome is CancelRunOutcome.ALREADY_POLICY_BLOCKED
+    assert outcome == RunCancellationFailure(
+        RunCancellationFailureReason.ALREADY_POLICY_BLOCKED
     )
     assert used_count == 4
