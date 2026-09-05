@@ -8,6 +8,7 @@ from dataclasses import replace
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
+from app.agent.answering import timing as answer_timing
 from app.agent.answering.answer_generation_repository import (
     AnswerGenerationRepository,
 )
@@ -54,7 +55,6 @@ from app.analysis.ai_provider_errors import (
 __all__ = ["EvidenceAnswerService"]
 
 _MAX_ATTEMPTS = 2
-_ANSWER_TIMEOUT_SECONDS = 15
 # ValidationError(pydantic)は、plain text化後のfinalize_evidence_answer_draft()が
 # 空白判定を先に行うため通常経路では到達しない。classify_answer_synthesis_failure()側の
 # 分類も維持されており、EvidenceAnswerDraftの構築自体が将来pydantic validationで
@@ -95,7 +95,7 @@ class EvidenceAnswerService:
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             attempt_number = 0
-            timeout = asyncio.timeout(_ANSWER_TIMEOUT_SECONDS)
+            timeout = asyncio.timeout(answer_timing.ANSWER_GENERATION_TIMEOUT_SECONDS)
             try:
                 try:
                     async with timeout:

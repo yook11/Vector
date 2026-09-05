@@ -68,6 +68,7 @@ async def _seed_run(
     attempt_epoch: int = 0,
     created_at: datetime | None = None,
     deadline_at: datetime | None = None,
+    answer_started_at: datetime | None = None,
 ) -> _SeededRun:
     counter_date = counter_usage_date or quota_usage_date
     if counter_count is not None:
@@ -121,6 +122,7 @@ async def _seed_run(
                 if deadline_at is not None
                 else effective_created_at + timedelta(seconds=RUN_DEADLINE_SECONDS)
             ),
+            answer_started_at=answer_started_at,
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,
         )
@@ -828,6 +830,7 @@ async def test_competing_terminal_transition_wins_without_refund(
         deadline_at=(
             _NOW - timedelta(seconds=1) if transition == "deadline_sweep" else None
         ),
+        answer_started_at=_NOW if transition == "complete" else None,
     )
 
     async with (

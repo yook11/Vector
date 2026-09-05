@@ -48,10 +48,13 @@ STAGES = ("planning", "review", "direct", "evidence")
 MODULES = {
     "planning": ("app.agent.planning.service", "_PLANNING_TIMEOUT_SECONDS"),
     "review": ("app.agent.evidence_review.service", "_REVIEW_TIMEOUT_SECONDS"),
-    "direct": ("app.agent.answering.direct_answer.service", "_ANSWER_TIMEOUT_SECONDS"),
+    "direct": (
+        "app.agent.answering.timing",
+        "ANSWER_GENERATION_TIMEOUT_SECONDS",
+    ),
     "evidence": (
-        "app.agent.answering.evidence_answer.service",
-        "_ANSWER_TIMEOUT_SECONDS",
+        "app.agent.answering.timing",
+        "ANSWER_GENERATION_TIMEOUT_SECONDS",
     ),
 }
 CODES = {
@@ -260,4 +263,4 @@ def test_agreed_runtime_budgets() -> None:
         QUERY_GENERATE_TIMEOUT_SECONDS,
         PROVIDER_SEARCH_TIMEOUT_SECONDS,
         _ANSWER_SAVE_LOCK_TIMEOUT,
-    ) == (15, 10, 15, "10s")
+    ) == (15, 10, 15, "3s")

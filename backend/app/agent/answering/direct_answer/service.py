@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import replace
 
 from app.agent.agent import Agent
+from app.agent.answering import timing as answer_timing
 from app.agent.answering.answer_generation_repository import (
     AnswerGenerationRepository,
 )
@@ -51,7 +52,6 @@ __all__ = ["DirectAnswerService"]
 
 _DIRECT_ANSWER_SOURCE_ERRORS = (AIProviderError, DirectAnswerInvalidError)
 _MAX_ATTEMPTS = 2
-_ANSWER_TIMEOUT_SECONDS = 15
 
 
 class DirectAnswerService:
@@ -86,7 +86,7 @@ class DirectAnswerService:
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             attempt_number = 0
-            timeout = asyncio.timeout(_ANSWER_TIMEOUT_SECONDS)
+            timeout = asyncio.timeout(answer_timing.ANSWER_GENERATION_TIMEOUT_SECONDS)
             try:
                 try:
                     async with timeout:
