@@ -17,9 +17,8 @@ import pytest
 from redis import asyncio as aioredis
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
-from taskiq import TaskiqResult
 from taskiq.message import TaskiqMessage
-from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
+from taskiq_redis import RedisStreamBroker
 
 from app.config import settings
 
@@ -121,7 +120,7 @@ async def _is_denied(redis: Redis, username: str, *command: str) -> bool:
 async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
     temporary_collect_acl_user: TemporaryCollectUser,
 ) -> None:
-    """DRYRUNだけでproducer/consumer/result key境界を検証し、entryは書かない。"""
+    """DRYRUNだけでproducer/consumer境界を検証し、entryは書かない。"""
     redis = temporary_collect_acl_user.admin
     username = temporary_collect_acl_user.username
     allowed_commands = (
@@ -211,9 +210,6 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
             "60000",
             "NX",
         ),
-        ("SET", "taskiq:temporary-result", "payload", "EX", "60"),
-        ("GET", "taskiq:temporary-result"),
-        ("EXISTS", "taskiq:temporary-result"),
     )
     denied_streams = (
         "pipeline:metadata",
@@ -224,6 +220,11 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
         "pipeline:maintenance",
     )
     denied_locks = tuple(f"autoclaim:taskiq:{stream}" for stream in denied_streams)
+    denied_result_commands = (
+        ("SET", "taskiq:temporary-result", "payload", "EX", "60"),
+        ("GET", "taskiq:temporary-result"),
+        ("EXISTS", "taskiq:temporary-result"),
+    )
 
     allowed = [
         await redis.acl_dryrun(username, *command) for command in allowed_commands
@@ -244,25 +245,29 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
         lock: await _is_denied(redis, username, "SET", lock, "owner")
         for lock in denied_locks
     }
+    denied_result_keys = {
+        command: await _is_denied(redis, username, *command)
+        for command in denied_result_commands
+    }
 
     assert (
         allowed,
         denied,
         denied_lock_writes,
+        denied_result_keys,
     ) == (
         [b"OK"] * len(allowed_commands),
         {stream: True for stream in denied_streams},
         {lock: True for lock in denied_locks},
+        {command: True for command in denied_result_commands},
     )
 
 
-async def test_collect_credentials_run_broker_autoclaim_recovery_and_result_smoke(
+async def test_collect_credentials_run_broker_autoclaim_recovery(
     temporary_collect_acl_user: TemporaryCollectUser,
 ) -> None:
-    """collect AUTHで通常配達後のauto-claim回収/ACKと補助keyを実操作する。"""
+    """collect AUTHで通常配達後のauto-claim回収/ACKとlockを実操作する。"""
     case_id = uuid4().hex
-    result_id = f"acl-smoke-{case_id}"
-    result_key = f"taskiq:{result_id}"
     locks = (
         f"autoclaim:{_GROUP}:{_ACQUISITION_STREAM}",
         f"autoclaim:{_GROUP}:{_COMPLETION_STREAM}",
@@ -271,16 +276,10 @@ async def test_collect_credentials_run_broker_autoclaim_recovery_and_result_smok
         _ACQUISITION_STREAM,
         _COMPLETION_STREAM,
         *locks,
-        result_key,
     )
     admin = temporary_collect_acl_user.admin
     await admin.delete(*cleanup_keys)
 
-    result_backend = RedisAsyncResultBackend(
-        redis_url=temporary_collect_acl_user.redis_url,
-        result_ex_time=60,
-        prefix_str="taskiq",
-    )
     broker = RedisStreamBroker(
         url=temporary_collect_acl_user.redis_url,
         queue_name=_ACQUISITION_STREAM,
@@ -292,7 +291,7 @@ async def test_collect_credentials_run_broker_autoclaim_recovery_and_result_smok
         idle_timeout=50,
         unacknowledged_batch_size=100,
         unacknowledged_lock_timeout=60,
-    ).with_result_backend(result_backend)
+    )
     collect = aioredis.from_url(temporary_collect_acl_user.redis_url)
 
     try:
@@ -357,28 +356,16 @@ async def test_collect_credentials_run_broker_autoclaim_recovery_and_result_smok
             assert await lock.acquire(blocking=False)
             await lock.release()
 
-        expected_result = TaskiqResult(
-            is_err=False,
-            return_value={"credential": "collect"},
-            execution_time=0,
-        )
-        await result_backend.set_result(result_id, expected_result)
-        stored_result = await result_backend.get_result(result_id)
-
         assert (
             received_normal_ids,
             recovered_stale_ids,
             int((await collect.xpending(_ACQUISITION_STREAM, _GROUP))["pending"]),
             int((await collect.xpending(_COMPLETION_STREAM, _GROUP))["pending"]),
-            await result_backend.is_result_ready(result_id),
-            stored_result.return_value,
         ) == (
             expected_normal_ids,
             expected_stale_ids,
             0,
             0,
-            True,
-            {"credential": "collect"},
         )
     finally:
         try:

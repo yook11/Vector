@@ -11,13 +11,12 @@
 #   する際、default user の ACL を再検査するため全 command / key / channel を許可する。
 # - core   = 全 stream / 全 key / 全 command (crown-jewel 側、信頼)。
 # - collect = 自分が触る stream (pipeline:dispatch/acquisition/completion/curation) と
-#   dispatch/acquisition/completion用autoclaim lock / result key のみ。legacy content、
+#   dispatch/acquisition/completion用autoclaim lock のみ。legacy content、
 #   assessment/embedding/maintenance/trend/briefing stream・各拒否Stream用autoclaim lock・
-#   *:hold / backfill:budget:* / ratelimit:* は **不可視**。FLUSHALL/CONFIG/KEYS 等の
-#   @dangerous も拒否。これで collect 侵害時の Redis blast radius を自 stream に限定。
-#   残留リスク: collect は許可された4 StreamへのXADD/EVALを持つため、その範囲のflood/削除と
-#   共有 result key (taskiq:*) の読取は可能。前者は retained historyのmaxlen=10_000 + 各stageのDB
-#   precondition 再検証、後者は result が記事派生データ (秘密無) であることで受容。
+#   *:hold / backfill:budget:* / ratelimit:* / taskiq:* は **不可視**。FLUSHALL/CONFIG/KEYS
+#   等の @dangerous も拒否。これで collect 侵害時の Redis blast radius を自 stream に限定。
+#   残留リスク: collect は許可された4 StreamへのXADD/EVALを持つため、その範囲のflood/削除は
+#   可能。retained historyのmaxlen=10_000 + 各stageのDB precondition 再検証で受容する。
 #
 # 前提 volume (初回のみ):
 #   fly volumes create vector_redis_data -a your-vector-redis-app -r nrt -s 1
@@ -34,10 +33,10 @@
 #   ※app 境界 = secret 境界。各 Fly app に対応 user の URL だけを set する
 #     (brokers.py は settings.redis_url を読むのみ。code 変更不要)。
 #
-# ACL command/key 集合は taskiq RedisStreamBroker + RedisAsyncResultBackend +
-# autoclaim lock の実発行コマンドから導出 (XADD/XREADGROUP/XACK/XAUTOCLAIM/XGROUP
-# = @stream, result SET/GET/EXISTS = @read/@write, lock SET/EVAL = @write/@scripting,
-# AUTH/HELLO = @connection, autoclaim pipeline の MULTI/EXEC = 明示許可)。
+# ACL command/key 集合は taskiq RedisStreamBroker + autoclaim lock の実発行
+# コマンドから導出 (XADD/XREADGROUP/XACK/XAUTOCLAIM/XGROUP = @stream,
+# lock SET/EVAL = @write/@scripting, AUTH/HELLO = @connection,
+# autoclaim pipeline の MULTI/EXEC = 明示許可)。
 # **deploy 前に dev で collect user creds に絞り
 # acquisition→completion→curation の橋渡しが通ることを必ず検証する** (redis-py が接続時に
 # 発行する周辺コマンドの取りこぼしはここで顕在化する)。
@@ -67,7 +66,7 @@ primary_region = 'nrt'
 #   ghost PELとgroup metadataを含むmemoryのhard upper boundではない。
 # - bind :: : 6PN (IPv6) で listen する。
 [processes]
-  redis = "sh -c 'test -n \"$REDIS_CORE_PASSWORD\" && test -n \"$REDIS_COLLECT_PASSWORD\" || { echo \"Redis ACL secrets are required\" >&2; exit 1; }; umask 077; { echo \"user default reset on resetpass ~* &* +@all\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion ~taskiq:* +@connection +@read +@write +@stream +@scripting +multi +exec -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
+  redis = "sh -c 'test -n \"$REDIS_CORE_PASSWORD\" && test -n \"$REDIS_COLLECT_PASSWORD\" || { echo \"Redis ACL secrets are required\" >&2; exit 1; }; umask 077; { echo \"user default reset on resetpass ~* &* +@all\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion +@connection +@read +@write +@stream +@scripting +multi +exec -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
 
 [mounts]
   source = "vector_redis_data"
