@@ -25,10 +25,12 @@ from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import map_provider_to_curation
+from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
 from app.audit.stages.curation import CurationAuditRepository
 from app.logfire.article_stage import set_curation_stage_result
+from app.models.outbox_event import OutboxEvent
 
 logger = structlog.get_logger(__name__)
 
@@ -96,6 +98,17 @@ class CurationService:
                         ready=ready,
                         envelope=envelope,
                         code=_CURATED_SIGNAL_CODE,
+                    )
+                    event = ArticleCuratedSignal(
+                        analyzable_article_id=ready.analyzable_article_id,
+                        curation_id=curation_id,
+                    )
+                    session.add(
+                        OutboxEvent(
+                            event_type=ArticleCuratedSignal.EVENT_TYPE,
+                            schema_version=ArticleCuratedSignal.SCHEMA_VERSION,
+                            payload=event.model_dump(mode="json"),
+                        )
                     )
                     await session.commit()
                     logger.info(

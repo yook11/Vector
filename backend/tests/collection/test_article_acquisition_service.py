@@ -7,11 +7,16 @@ from typing import ClassVar
 
 import pytest
 from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition import service as service_module
 from app.collection.article_acquisition.errors import (
     AcquisitionReadError,
+)
+from app.collection.article_acquisition.events import (
+    ArticleAcquired,
+    IncompleteArticleRecorded,
 )
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.reader.read_errors import (
@@ -36,7 +41,9 @@ from app.collection.sources.source_name import SourceName
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource, SourceType
+from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
+from tests.outbox import RejectOutboxInsert
 
 _PUBLISHED = datetime(2026, 4, 30, tzinfo=UTC)
 
@@ -698,6 +705,18 @@ async def test_redelivered_full_content_writes_single_succeeded(
     rows = await _succeeded_events(db_session)
     assert len(rows) == 1  # 2 度目は ON CONFLICT → 非記録
     assert rows[0].outcome_code == "article_created"
+    outbox_events = (
+        (
+            await db_session.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == ArticleAcquired.EVENT_TYPE
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(outbox_events) == 1
 
 
 @pytest.mark.asyncio
@@ -726,6 +745,10 @@ async def test_known_url_observed_writes_no_succeeded(
     await svc.execute(vb_source.id)
 
     assert await _succeeded_events(db_session) == []  # pre-check skip は非記録
+    outbox_events = (
+        (await db_session.execute(select(OutboxEvent.event_id))).scalars().all()
+    )
+    assert outbox_events == []
 
 
 @pytest.mark.asyncio
@@ -767,3 +790,232 @@ async def test_no_db_checkout_before_source_read(
     assert "checkout" in timeline
     # fetch (read) が最初の checkout より前に完了している。
     assert timeline.index("read") < timeline.index("checkout")
+
+
+@pytest.mark.asyncio
+async def test_analyzable_article_persists_matching_outbox_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """即時獲得した記事と対応する契約バージョンのイベントを同時に確定する。"""
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_ready_fetched("https://venturebeat.com/outbox-ready")]),
+    )
+
+    article_ids = await svc.execute(vb_source.id)
+
+    async with session_factory() as reader:
+        outbox_event = (
+            await reader.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == ArticleAcquired.EVENT_TYPE
+                )
+            )
+        ).scalar_one()
+    assert {
+        "schema_version": outbox_event.schema_version,
+        "payload": outbox_event.payload,
+    } == {
+        "schema_version": ArticleAcquired.SCHEMA_VERSION,
+        "payload": {
+            "source_id": vb_source.id,
+            "analyzable_article_id": article_ids[0],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_incomplete_article_persists_matching_outbox_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """補完待ち記事と対応する契約バージョンのイベントを同時に確定する。"""
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_pending_fetched("https://techcrunch.com/outbox-pending")]),
+    )
+
+    await svc.execute(vb_source.id)
+
+    async with session_factory() as reader:
+        incomplete_article_id = (
+            await reader.execute(select(IncompleteArticleORM.id))
+        ).scalar_one()
+        outbox_event = (
+            await reader.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == IncompleteArticleRecorded.EVENT_TYPE
+                )
+            )
+        ).scalar_one()
+    assert {
+        "schema_version": outbox_event.schema_version,
+        "payload": outbox_event.payload,
+    } == {
+        "schema_version": IncompleteArticleRecorded.SCHEMA_VERSION,
+        "payload": {
+            "source_id": vb_source.id,
+            "incomplete_article_id": incomplete_article_id,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_acquired_outbox_failure_rolls_back_article_and_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+    reject_outbox_insert: RejectOutboxInsert,
+) -> None:
+    """即時獲得イベントの失敗で記事と成功監査も取り消す。"""
+    constraint_name = await reject_outbox_insert(ArticleAcquired.EVENT_TYPE)
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_ready_fetched("https://venturebeat.com/outbox-failure")]),
+    )
+
+    with pytest.raises(IntegrityError, match=constraint_name):
+        await svc.execute(vb_source.id)
+
+    async with session_factory() as reader:
+        articles = (
+            (await reader.execute(select(AnalyzableArticleRecord.id))).scalars().all()
+        )
+        audit_events = (
+            (
+                await reader.execute(
+                    select(PipelineEvent.id).where(
+                        PipelineEvent.stage == "acquisition",
+                        PipelineEvent.event_type == "succeeded",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        outbox_events = (
+            (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+        )
+    assert {
+        "articles": articles,
+        "audit_events": audit_events,
+        "outbox_events": outbox_events,
+    } == {"articles": [], "audit_events": [], "outbox_events": []}
+
+
+@pytest.mark.asyncio
+async def test_incomplete_outbox_failure_rolls_back_pending_and_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+    reject_outbox_insert: RejectOutboxInsert,
+) -> None:
+    """補完待ちイベントの失敗でpendingと成功監査も取り消す。"""
+    constraint_name = await reject_outbox_insert(IncompleteArticleRecorded.EVENT_TYPE)
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_pending_fetched("https://techcrunch.com/outbox-failure")]),
+    )
+
+    with pytest.raises(IntegrityError, match=constraint_name):
+        await svc.execute(vb_source.id)
+
+    async with session_factory() as reader:
+        pending_articles = (
+            (await reader.execute(select(IncompleteArticleORM.id))).scalars().all()
+        )
+        audit_events = (
+            (
+                await reader.execute(
+                    select(PipelineEvent.id).where(
+                        PipelineEvent.stage == "acquisition",
+                        PipelineEvent.event_type == "succeeded",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        outbox_events = (
+            (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+        )
+    assert {
+        "pending_articles": pending_articles,
+        "audit_events": audit_events,
+        "outbox_events": outbox_events,
+    } == {"pending_articles": [], "audit_events": [], "outbox_events": []}
+
+
+@pytest.mark.asyncio
+async def test_source_batch_outbox_failure_keeps_separate_rejection_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+    reject_outbox_insert: RejectOutboxInsert,
+) -> None:
+    """source一括rollbackでも別transactionの変換棄却監査は保持する。"""
+    constraint_name = await reject_outbox_insert(IncompleteArticleRecorded.EVENT_TYPE)
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource(
+            [
+                _ready_fetched("https://venturebeat.com/batch-ready"),
+                _rejection_fetched("https://venturebeat.com/batch-rejected"),
+                _pending_fetched("https://techcrunch.com/batch-pending"),
+            ]
+        ),
+    )
+
+    with pytest.raises(IntegrityError, match=constraint_name):
+        await svc.execute(vb_source.id)
+
+    async with session_factory() as reader:
+        articles = (
+            (await reader.execute(select(AnalyzableArticleRecord.id))).scalars().all()
+        )
+        pending_articles = (
+            (await reader.execute(select(IncompleteArticleORM.id))).scalars().all()
+        )
+        succeeded_audits = (
+            (
+                await reader.execute(
+                    select(PipelineEvent.id).where(
+                        PipelineEvent.stage == "acquisition",
+                        PipelineEvent.event_type == "succeeded",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        rejected_audits = (
+            (
+                await reader.execute(
+                    select(PipelineEvent.id).where(
+                        PipelineEvent.stage == "acquisition",
+                        PipelineEvent.event_type == "rejected",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        outbox_events = (
+            (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+        )
+    assert {
+        "articles": articles,
+        "pending_articles": pending_articles,
+        "succeeded_audits": succeeded_audits,
+        "rejected_audit_count": len(rejected_audits),
+        "outbox_events": outbox_events,
+    } == {
+        "articles": [],
+        "pending_articles": [],
+        "succeeded_audits": [],
+        "rejected_audit_count": 1,
+        "outbox_events": [],
+    }

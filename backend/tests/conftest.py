@@ -58,6 +58,7 @@ from app.models import (  # noqa: F401
     WeeklyBriefing,
 )
 from app.models.base import Base
+from tests.outbox import reject_outbox_insert  # noqa: F401
 
 _XDIST_WORKER_PATTERN = re.compile(r"gw\d+")
 

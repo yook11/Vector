@@ -20,10 +20,12 @@ from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import map_provider_to_assessment
+from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.logfire.article_stage import set_assessment_stage_result
+from app.models.outbox_event import OutboxEvent
 
 logger = structlog.get_logger(__name__)
 
@@ -98,11 +100,22 @@ class AssessmentService:
                         )
                         set_assessment_stage_result("skipped")
                         return None
-                    # 業務 INSERT + audit を同一 tx で commit
+                    # 結果・audit・Outboxを同一トランザクションで確定する。
                     await AssessmentAuditRepository(session).append_in_scope(
                         ready=ready,
                         call=call,
                         article_id=analyzable_article_id,
+                    )
+                    event = ArticleAssessedInScope(
+                        curation_id=curation_id,
+                        analyzed_article_id=analyzed_article_id,
+                    )
+                    session.add(
+                        OutboxEvent(
+                            event_type=ArticleAssessedInScope.EVENT_TYPE,
+                            schema_version=ArticleAssessedInScope.SCHEMA_VERSION,
+                            payload=event.model_dump(mode="json"),
+                        )
                     )
                     await session.commit()
                     logger.info(

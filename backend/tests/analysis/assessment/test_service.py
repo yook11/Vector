@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import (
@@ -43,6 +44,7 @@ from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentTerminalError,
 )
+from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.assessment.service import AssessmentService
 from app.logfire.article_stage import assessment_stage_span
@@ -56,9 +58,11 @@ from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import (
     OutOfScopeArticleRecord as OutOfScopeArticleRecordORM,
 )
+from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
+from tests.outbox import RejectOutboxInsert
 
 _AI_MODEL = "gemini-2.5-flash-lite"
 _PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
@@ -280,7 +284,7 @@ async def test_out_of_scope_success_records_audit(
 
 
 @pytest.mark.asyncio
-async def test_race_lost_does_not_record_audit(
+async def test_race_lost_does_not_record_audit_or_outbox_event(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -321,6 +325,12 @@ async def test_race_lost_does_not_record_audit(
     assert result is None
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
+
+    async with session_factory() as reader:
+        outbox_events = (
+            (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+        )
+    assert outbox_events == []
 
 
 @pytest.mark.asyncio
@@ -643,3 +653,120 @@ async def test_race_loss_does_not_emit_processing_outcome(
     metrics = collected_metrics(capfire)
     for result in ("in_scope", "out_of_scope", "failed", "infra_error"):
         assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_in_scope_persists_result_and_matching_outbox_event(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    article = await _make_article(db_session, sample_source)
+    curation = await _make_extraction(db_session, article)
+    assessor = _make_assessor(return_envelope=_in_scope_call())
+
+    await AssessmentService(session_factory).execute(
+        _ready(curation), assessor, analyzable_article_id=article.id
+    )
+
+    async with session_factory() as reader:
+        saved = (
+            await reader.execute(
+                select(AnalyzedArticleRecordORM).where(
+                    AnalyzedArticleRecordORM.curation_id == curation.id
+                )
+            )
+        ).scalar_one()
+        event = (
+            await reader.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == ArticleAssessedInScope.EVENT_TYPE
+                )
+            )
+        ).scalar_one()
+
+        assert event.payload == {
+            "curation_id": curation.id,
+            "analyzed_article_id": saved.id,
+        }
+        assert event.schema_version == ArticleAssessedInScope.SCHEMA_VERSION
+
+
+@pytest.mark.asyncio
+async def test_outbox_insert_failure_rolls_back_in_scope_result(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+    reject_outbox_insert: RejectOutboxInsert,
+) -> None:
+    article = await _make_article(db_session, sample_source)
+    curation = await _make_extraction(db_session, article)
+    assessor = _make_assessor(return_envelope=_in_scope_call())
+    constraint_name = await reject_outbox_insert(ArticleAssessedInScope.EVENT_TYPE)
+
+    with pytest.raises(IntegrityError, match=constraint_name):
+        await AssessmentService(session_factory).execute(
+            _ready(curation), assessor, analyzable_article_id=article.id
+        )
+
+    async with session_factory() as reader:
+        results = (
+            (
+                await reader.execute(
+                    select(AnalyzedArticleRecordORM.id).where(
+                        AnalyzedArticleRecordORM.curation_id == curation.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        audit_events = (
+            (
+                await reader.execute(
+                    select(PipelineEvent.id).where(
+                        PipelineEvent.article_id == article.id,
+                        PipelineEvent.stage == "assessment",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        outbox_events = (
+            (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+        )
+    assert {
+        "results": results,
+        "audit_events": audit_events,
+        "outbox_events": outbox_events,
+    } == {"results": [], "audit_events": [], "outbox_events": []}
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_writes_no_outbox_event(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    article = await _make_article(db_session, sample_source)
+    curation = await _make_extraction(db_session, article)
+    assessor = _make_assessor(return_envelope=_out_of_scope_call())
+
+    await AssessmentService(session_factory).execute(
+        _ready(curation), assessor, analyzable_article_id=article.id
+    )
+
+    async with session_factory() as reader:
+        saved_curation_id = (
+            await reader.execute(
+                select(OutOfScopeArticleRecordORM.curation_id).where(
+                    OutOfScopeArticleRecordORM.curation_id == curation.id
+                )
+            )
+        ).scalar_one()
+        events = (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+    assert saved_curation_id == curation.id
+    assert events == []

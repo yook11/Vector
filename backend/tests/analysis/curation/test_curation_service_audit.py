@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.curation.ai.base import BaseCurator
@@ -33,13 +34,17 @@ from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
+from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.curation.service import CurationService
 from app.logfire.article_stage import curation_stage_span
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
+from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
+from tests.outbox import RejectOutboxInsert
 
 _PROCESSING_OUTCOME_METRIC = "vector.curation.processing_outcome"
 
@@ -315,3 +320,130 @@ async def test_race_loss_does_not_emit_processing_outcome(
     metrics = collected_metrics(capfire)
     for result in ("signal", "noise", "rejected", "failed", "infra_error"):
         assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_signal_persists_matching_outbox_event(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """Signalの保存結果と対応する契約バージョンのイベントを同時に確定する。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+
+    curation_id = await CurationService(session_factory).execute(
+        ready, _curator(return_envelope=_signal_envelope())
+    )
+
+    async with session_factory() as reader:
+        event = (
+            await reader.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == ArticleCuratedSignal.EVENT_TYPE
+                )
+            )
+        ).scalar_one()
+    assert {
+        "schema_version": event.schema_version,
+        "payload": event.payload,
+    } == {
+        "schema_version": ArticleCuratedSignal.SCHEMA_VERSION,
+        "payload": {
+            "analyzable_article_id": article.id,
+            "curation_id": curation_id,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_noise_writes_no_outbox_event(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """Noiseは後続Assessmentを起動しないためイベントを作らない。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+
+    await CurationService(session_factory).execute(
+        ready, _curator(return_envelope=_noise_envelope())
+    )
+
+    async with session_factory() as reader:
+        event_ids = (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+    assert event_ids == []
+
+
+@pytest.mark.asyncio
+async def test_signal_race_loss_writes_no_outbox_event(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """Signal保存の競合敗北では勝者と重複するイベントを作らない。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+
+    with patch(
+        "app.analysis.curation.repository.CurationRepository.save_signal",
+        new=AsyncMock(return_value=None),
+    ):
+        await CurationService(session_factory).execute(
+            ready, _curator(return_envelope=_signal_envelope())
+        )
+
+    async with session_factory() as reader:
+        event_ids = (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+    assert event_ids == []
+
+
+@pytest.mark.asyncio
+async def test_outbox_insert_failure_rolls_back_signal_and_audit(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    reject_outbox_insert: RejectOutboxInsert,
+) -> None:
+    """Outboxの失敗でSignal結果と成功監査も原子的に取り消す。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    constraint_name = await reject_outbox_insert(ArticleCuratedSignal.EVENT_TYPE)
+
+    with pytest.raises(IntegrityError, match=constraint_name):
+        await CurationService(session_factory).execute(
+            ready, _curator(return_envelope=_signal_envelope())
+        )
+
+    async with session_factory() as reader:
+        curations = (
+            (
+                await reader.execute(
+                    select(ArticleCuration.id).where(
+                        ArticleCuration.analyzable_article_id == article.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        audit_events = (
+            (
+                await reader.execute(
+                    select(PipelineEvent.id).where(
+                        PipelineEvent.article_id == article.id,
+                        PipelineEvent.stage == "curation",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        outbox_events = (
+            (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+        )
+    assert {
+        "curations": curations,
+        "audit_events": audit_events,
+        "outbox_events": outbox_events,
+    } == {"curations": [], "audit_events": [], "outbox_events": []}

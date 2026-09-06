@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -33,6 +34,7 @@ from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_acquisition.strategy import SOURCES
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
+from app.collection.article_completion.events import ArticleCompletedToAnalyzable
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.scrape_failure import ScrapeNotHtml
@@ -60,8 +62,10 @@ from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
+from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+from tests.outbox import RejectOutboxInsert
 
 _METRIC = "vector.completion.processing_outcome"
 _ALL_RESULTS = ("succeeded", "failed", "infra_error")
@@ -779,6 +783,10 @@ async def test_url_conflict_writes_no_audit(
 
     events = await _completion_events(db_session)
     assert events == []
+    outbox_events = (
+        (await db_session.execute(select(OutboxEvent.event_id))).scalars().all()
+    )
+    assert outbox_events == []
     # 監査を外した代わりに race-loss は escape log で観測可能に保つ。
     assert [e for e in logs if e.get("event") == "article_completion_conflict_lost"]
 
@@ -816,6 +824,10 @@ async def test_superseded_writes_no_audit(
 
     events = await _completion_events(db_session)
     assert events == []
+    outbox_events = (
+        (await db_session.execute(select(OutboxEvent.event_id))).scalars().all()
+    )
+    assert outbox_events == []
     # 監査を外した代わりに race-loss は escape log で観測可能に保つ。
     assert [
         e for e in logs if e.get("event") == "article_completion_stale_attempt_ignored"
@@ -1034,3 +1046,119 @@ async def test_persist_db_crash_emits_infra_error_not_succeeded(
     assert sum_counter_for_result(metrics, _METRIC, "infra_error") == 1
     for other in ("succeeded", "failed"):
         assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+
+@pytest.mark.asyncio
+async def test_completion_persists_matching_outbox_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """補完成功の状態遷移と対応する契約バージョンのイベントを確定する。"""
+    _, incomplete_article_id, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/outbox-success"
+    )
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    analyzable_article_id = await ArticleCompletionService(session_factory).execute(
+        ready
+    )
+
+    async with session_factory() as reader:
+        outbox_event = (
+            await reader.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == ArticleCompletedToAnalyzable.EVENT_TYPE
+                )
+            )
+        ).scalar_one()
+    assert {
+        "schema_version": outbox_event.schema_version,
+        "payload": outbox_event.payload,
+    } == {
+        "schema_version": ArticleCompletedToAnalyzable.SCHEMA_VERSION,
+        "payload": {
+            "incomplete_article_id": incomplete_article_id,
+            "analyzable_article_id": analyzable_article_id,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_completion_outbox_failure_rolls_back_transition_and_success_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+    reject_outbox_insert: RejectOutboxInsert,
+) -> None:
+    """Outboxの失敗で記事への昇格と成功監査を取り消す。"""
+    _, incomplete_article_id, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/outbox-failure"
+    )
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+    constraint_name = await reject_outbox_insert(
+        ArticleCompletedToAnalyzable.EVENT_TYPE
+    )
+
+    with pytest.raises(IntegrityError, match=constraint_name):
+        await ArticleCompletionService(session_factory).execute(ready)
+
+    async with session_factory() as reader:
+        pending = (
+            await reader.execute(
+                select(IncompleteArticle).where(
+                    IncompleteArticle.id == incomplete_article_id
+                )
+            )
+        ).scalar_one()
+        articles = (
+            (await reader.execute(select(AnalyzableArticleRecord.id))).scalars().all()
+        )
+        succeeded_audits = (
+            (
+                await reader.execute(
+                    select(PipelineEvent.id).where(
+                        PipelineEvent.stage == "completion",
+                        PipelineEvent.event_type == "succeeded",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        outbox_events = (
+            (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
+        )
+    assert {
+        "pending_status": pending.status,
+        "pending_attempt_count": pending.attempt_count,
+        "articles": articles,
+        "succeeded_audits": succeeded_audits,
+        "outbox_events": outbox_events,
+    } == {
+        "pending_status": "running",
+        "pending_attempt_count": ready.attempt_count,
+        "articles": [],
+        "succeeded_audits": [],
+        "outbox_events": [],
+    }
