@@ -118,9 +118,13 @@ jobs:
       - name: Preserve Outbox relay image from state
         run: |
           set -euo pipefail
+          # Terraformが読み込む設定ファイルは、生成成功後に配置する。
+          relay_vars_tmp=$(mktemp ./outbox-relay-vars.XXXXXX)
+          trap 'rm -f "$relay_vars_tmp"' EXIT
           terraform state pull \
             | python3 scripts/resolve-outbox-relay-image.py \
-            > outbox-relay.auto.tfvars.json
+            > "$relay_vars_tmp"
+          mv "$relay_vars_tmp" outbox-relay.auto.tfvars.json
 
       - name: Terraform plan
         env:

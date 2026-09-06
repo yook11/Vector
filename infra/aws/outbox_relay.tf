@@ -182,6 +182,8 @@ resource "aws_ecr_repository_policy" "outbox_relay" {
   })
 }
 
+# 接続確認段階はCloudWatch Logsと標準メトリクスを使い、X-Rayは採用しない。
+# nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "outbox_relay" {
   count = var.outbox_relay_image_digest == null ? 0 : 1
 
@@ -193,6 +195,10 @@ resource "aws_lambda_function" "outbox_relay" {
   memory_size                   = 512
   timeout                       = 30
   reserved_concurrent_executions = 1
+
+  tracing_config {
+    mode = "PassThrough"
+  }
 
   image_config {
     entry_point       = ["/app/.venv/bin/python", "-m", "awslambdaric"]

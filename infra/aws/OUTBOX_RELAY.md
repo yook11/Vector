@@ -24,6 +24,7 @@ Outboxの確保・更新、SQS送信、consumer Lambda、Taskiqからの処理�
 - Lambda・SchedulerのIAMロールとpermissions boundaryは既存ECSのものから独立させる。
 - AI鍵・Redis・HTTPプロキシ・アプリ認証用秘密はLambdaへ渡さない。
 - CloudWatch Logsは専用グループと既存の保持日数設定を使う。
+- 接続確認段階ではX-Rayを採用せず、tracingは `PassThrough` とする。CloudWatch LogsとLambda標準メトリクスで確認し、この関数だけをSemgrepのActive tracing推奨ルールから除外する。X-Ray送信権限は追加しない。
 
 | キューの接尾辞 | 受け付けるイベント | Lambda環境変数 |
 |---|---|---|
@@ -48,6 +49,8 @@ Outboxの確保・更新、SQS送信、consumer Lambda、Taskiqからの処理�
 ## 更新とロールバック
 
 通常のPR planと自動applyは `resolve-outbox-relay-image.py` で現行Lambdaのdigestをstateから引き継ぐ。初回にLambdaがない場合だけnullを使用し、state取得失敗や不正な参照をnullへ置き換えない。
+
+生成中の空JSONをTerraformが読まないよう、自動読み込み対象外の一時ファイルに出力し、処理成功後に `.auto.tfvars.json` へ移動する。
 
 更新・ロールバックはいずれも `AWS terraform apply` の手動入力に、ECRに存在するbackend digestを明示する。空欄では現状を保持する。Lambdaのコード配布はTerraformが担当し、ECSイメージのpush・rolloutだけではLambdaを更新しない。
 

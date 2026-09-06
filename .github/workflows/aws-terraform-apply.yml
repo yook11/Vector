@@ -147,9 +147,13 @@ jobs:
           REQUESTED_DIGEST: ${{ inputs.outbox_relay_image_digest }}
         run: |
           set -euo pipefail
+          # Terraformが読み込む設定ファイルは、生成成功後に配置する。
+          relay_vars_tmp=$(mktemp ./outbox-relay-vars.XXXXXX)
+          trap 'rm -f "$relay_vars_tmp"' EXIT
           terraform state pull \
             | python3 scripts/resolve-outbox-relay-image.py --digest "$REQUESTED_DIGEST" \
-            > outbox-relay.auto.tfvars.json
+            > "$relay_vars_tmp"
+          mv "$relay_vars_tmp" outbox-relay.auto.tfvars.json
           if [ -n "$REQUESTED_DIGEST" ]; then
             repository=$(terraform output -json ecr_repository_urls | jq -er '.backend | split("/")[1:] | join("/")')
             image=$(aws ecr describe-images --repository-name "$repository" \
