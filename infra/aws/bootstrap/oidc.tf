@@ -3,6 +3,53 @@ locals {
   oidc_host  = "token.actions.githubusercontent.com"
   repo       = "${var.github_owner}/${var.github_repo}"
 
+  outbox_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-outbox-relay"
+  outbox_queue_arns = [
+    for stage in ["completion", "curation", "assessment", "embedding"] :
+    "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-${stage}"
+  ]
+  outbox_lambda_eni_actions = [
+    "ec2:CreateNetworkInterface",
+    "ec2:DescribeNetworkInterfaces",
+    "ec2:DescribeSubnets",
+    "ec2:DeleteNetworkInterface",
+    "ec2:AssignPrivateIpAddresses",
+    "ec2:UnassignPrivateIpAddresses",
+  ]
+  outbox_service_roles = {
+    Lambda = {
+      arn     = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda"
+      service = "lambda.amazonaws.com"
+    }
+    Scheduler = {
+      arn     = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-scheduler"
+      service = "scheduler.amazonaws.com"
+    }
+  }
+  # 新規サービスと専用ロールは双方向に対応を固定する。
+  outbox_pass_role_guards = flatten([
+    for name, role in local.outbox_service_roles : [
+      {
+        Sid         = "DenyPassRoleTo${name}ExceptRelay"
+        Effect      = "Deny"
+        Action      = "iam:PassRole"
+        NotResource = role.arn
+        Condition = {
+          StringEquals = { "iam:PassedToService" = role.service }
+        }
+      },
+      {
+        Sid      = "DenyRelay${name}RoleToOtherServices"
+        Effect   = "Deny"
+        Action   = "iam:PassRole"
+        Resource = role.arn
+        Condition = {
+          StringNotEquals = { "iam:PassedToService" = role.service }
+        }
+      },
+    ]
+  ])
+
   # 本体スタックが作るロールの path。CI ロールの /vector-ci/ と分けることで、
   # 「apply は自分自身に触れない」を Deny ではなく Allow の欠落として成立させる。
   managed_role_path_arn = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/*"
@@ -413,7 +460,7 @@ resource "aws_iam_role_policy" "apply" {
       },
       # 5. 意図したサービス以外への PassRole を拒否する。
       #    許すのは ECS (task / execution role)、Chatbot (Slack 通知の channel role)、
-      #    AgentCore (Gateway の service role) だけ。
+      #    AgentCore、relay 専用の Lambda と Scheduler に限定する。
       #
       # IamWithinManagedPath の `iam:*` が PassRole を含むため、条件付き Allow を
       # 書くだけでは絞れない (Allow は和集合)。explicit Deny が唯一の手段。
@@ -429,6 +476,8 @@ resource "aws_iam_role_policy" "apply" {
               "ecs-tasks.amazonaws.com",
               "chatbot.amazonaws.com",
               "bedrock-agentcore.amazonaws.com",
+              "lambda.amazonaws.com",
+              "scheduler.amazonaws.com",
             ]
           }
         }
@@ -465,6 +514,85 @@ resource "aws_iam_role_policy" "apply" {
       # boundary.tf の local.role_boundary_groups から 1 行につき 1 本生成する。
     ], local.boundary_pairing_statements, local.secret_read_statements)
   })
+}
+
+# 追加分は managed policy に分離し、apply ロールの inline policy 容量を圧迫しない。
+resource "aws_iam_policy" "apply_outbox" {
+  name        = "${var.name_prefix}-ci-apply-outbox"
+  path        = "/${var.name_prefix}-ci/"
+  description = "Outbox infrastructure management and dedicated PassRole guards."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat([
+      {
+        Sid    = "ManageOutboxQueues"
+        Effect = "Allow"
+        Action = [
+          "sqs:CreateQueue",
+          "sqs:DeleteQueue",
+          "sqs:GetQueueAttributes",
+          "sqs:SetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ListQueueTags",
+          "sqs:TagQueue",
+          "sqs:UntagQueue",
+        ]
+        Resource = local.outbox_queue_arns
+      },
+      {
+        Sid    = "ManageOutboxLambda"
+        Effect = "Allow"
+        Action = [
+          "lambda:CreateFunction",
+          "lambda:DeleteFunction",
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:GetFunctionCodeSigningConfig",
+          "lambda:ListVersionsByFunction",
+          "lambda:UpdateFunctionCode",
+          "lambda:UpdateFunctionConfiguration",
+          "lambda:GetFunctionConcurrency",
+          "lambda:PutFunctionConcurrency",
+          "lambda:DeleteFunctionConcurrency",
+          "lambda:GetRuntimeManagementConfig",
+          "lambda:ListTags",
+          "lambda:TagResource",
+          "lambda:UntagResource",
+        ]
+        Resource = local.outbox_lambda_arn
+      },
+      {
+        Sid    = "ManageOutboxSchedule"
+        Effect = "Allow"
+        Action = [
+          "scheduler:CreateSchedule",
+          "scheduler:GetSchedule",
+          "scheduler:UpdateSchedule",
+          "scheduler:DeleteSchedule",
+        ]
+        Resource = "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-outbox-relay/${var.name_prefix}-outbox-relay"
+      },
+      {
+        Sid    = "ManageOutboxScheduleGroup"
+        Effect = "Allow"
+        Action = [
+          "scheduler:CreateScheduleGroup",
+          "scheduler:GetScheduleGroup",
+          "scheduler:DeleteScheduleGroup",
+          "scheduler:ListTagsForResource",
+          "scheduler:TagResource",
+          "scheduler:UntagResource",
+        ]
+        Resource = "arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-outbox-relay"
+      },
+    ], local.outbox_pass_role_guards)
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "apply_outbox" {
+  role       = aws_iam_role.ci["apply"].name
+  policy_arn = aws_iam_policy.apply_outbox.arn
 }
 
 # --- app-push -------------------------------------------------------------

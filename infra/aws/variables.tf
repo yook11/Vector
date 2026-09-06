@@ -183,3 +183,15 @@ variable "slack_channel_id" {
   EOT
   type        = string
 }
+
+variable "outbox_relay_image_digest" {
+  description = "共通backendイメージのdigest（初回基盤構築時のみnull、通常applyでは既存値を引き継ぐ）。"
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.outbox_relay_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.outbox_relay_image_digest))
+    error_message = "outbox_relay_image_digest must be null or a sha256 digest with 64 lowercase hexadecimal characters."
+  }
+}

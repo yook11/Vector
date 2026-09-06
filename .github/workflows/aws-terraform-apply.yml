@@ -17,7 +17,7 @@ name: AWS terraform apply
 # - image_tag は state が最後に apply された値に固定する (aws-terraform-plan.yml と
 #   同じ理由)。image の前進は rollout (aws-app-images.yml) の仕事で、この workflow は
 #   コード差分だけを適用する。
-# - workflow_dispatch は「新しい commit を積まずに同じ内容を再実行する」ための復旧経路。
+# - workflow_dispatch は再適用と、明示digestによるrelayイメージ更新に使う。
 
 on:
   push:
@@ -26,6 +26,11 @@ on:
       - "infra/aws/**"
       - ".github/workflows/aws-terraform-apply.yml"
   workflow_dispatch:
+    inputs:
+      outbox_relay_image_digest:
+        description: "relayの作成・更新・ロールバック先sha256 digest（空欄は現状維持）"
+        required: false
+        type: string
 
 permissions:
   id-token: write
@@ -136,6 +141,30 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Outbox relay image
+        env:
+          REQUESTED_DIGEST: ${{ inputs.outbox_relay_image_digest }}
+        run: |
+          set -euo pipefail
+          # Terraformが読み込む設定ファイルは、生成成功後に配置する。
+          relay_vars_tmp=$(mktemp ./outbox-relay-vars.XXXXXX)
+          trap 'rm -f "$relay_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-outbox-relay-image.py --digest "$REQUESTED_DIGEST" \
+            > "$relay_vars_tmp"
+          mv "$relay_vars_tmp" outbox-relay.auto.tfvars.json
+          if [ -n "$REQUESTED_DIGEST" ]; then
+            repository=$(terraform output -json ecr_repository_urls | jq -er '.backend | split("/")[1:] | join("/")')
+            image=$(aws ecr describe-images --repository-name "$repository" \
+              --image-ids "imageDigest=$REQUESTED_DIGEST" \
+              --query 'imageDetails[0].imageDigest' --output text)
+            if [ "$image" != "$REQUESTED_DIGEST" ]; then
+              echo "::error::backend ECRリポジトリに指定digestが存在しない"
+              exit 1
+            fi
+            echo "Outbox relay image: $REQUESTED_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # plan → apply を 1 step で行い、tfplan を step 間でも持ち回らない。
       # 適用されるのは常にこの step 自身が plan した内容になる。
