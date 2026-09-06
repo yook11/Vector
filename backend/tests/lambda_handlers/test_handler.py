@@ -50,14 +50,22 @@ async def test_repeated_invocations_close_connections_and_preserve_outbox(
 
     async with session_factory() as reader:
         after = (await reader.execute(select(OutboxEvent.__table__))).mappings().all()
-        connections = await reader.scalar(
-            text(
-                "SELECT count(*) FROM pg_stat_activity "
-                "WHERE datname = current_database() "
-                "AND application_name = 'vector-outbox-relay'"
-            )
-        )
     assert after == before
+
+    # DB側の終了反映を待ち、観測ごとにトランザクションを終了する。
+    for attempt in range(6):
+        async with session_factory() as reader:
+            connections = await reader.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() "
+                    "AND application_name = 'vector-outbox-relay'"
+                )
+            )
+        if connections == 0:
+            break
+        if attempt < 5:
+            await asyncio.sleep(0.05)
     assert connections == 0
 
 

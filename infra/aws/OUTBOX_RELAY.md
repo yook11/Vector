@@ -16,7 +16,7 @@ Outboxの確保・更新、SQS送信、consumer Lambda、Taskiqからの処理�
 
 - 同一アカウント・リージョンに工程別のStandardキューを4つ作成する。
 - 全キューをSSE-SQSで暗号化し、メッセージ保持期間を14日とする。
-- Lambdaはx86_64・512MB・タイムアウト30秒・予約済み同時実行数1とする。
+- Lambdaはarm64・512MB・タイムアウト30秒・予約済み同時実行数1とする。
 - EventBridge Schedulerは1分間隔・Flexible Time Windowなしで定義するが、無効のままとする。
 - relay専用SGからRDSの5432とSQS専用Interface VPCエンドポイントの443だけを許可する。
 - LambdaのDB認証は既存 `vector_app` に対するRDS IAM認証とTLSを使い、DBロール・schemaは変更しない。
@@ -39,7 +39,7 @@ Outboxの確保・更新、SQS送信、consumer Lambda、Taskiqからの処理�
 
 1. bootstrapの既存管理手順に従い、専用boundary・作成可能ロール・CI管理権限を先に適用する。通常applyロールではbootstrapを更新できない。
 2. PRをmainへマージし、既存 `AWS terraform apply` のproduction承認を経て本体を適用する。イメージ未指定ではLambdaとscheduleは作成せず、キュー・IAM・SG・エンドポイント・ログ・schedule groupまで作成する。
-3. handlerと `awslambdaric` を含むmainのbackendイメージを、既存 `AWS app images` workflowでECRへ配布する。ECSと同一のイメージ成果物を使う。backendイメージは単一のlinux/amd64でビルドする。
+3. handlerと `awslambdaric` を含むmainのbackendイメージを、既存 `AWS app images` workflowでECRへ配布する。ECSと同一のイメージ成果物を使う。backendイメージは単一のlinux/arm64でビルドする。
 4. ECRのbackendリポジトリで、その成果物の `sha256:...` digestを確認する。
 5. mainの `AWS terraform apply` を手動起動し、入力 `outbox_relay_image_digest` にdigestを指定する。production承認後、ECRでの存在確認とTerraform planを経てLambdaと無効scheduleを作成する。
 6. 検証再開・デプロイ承認後、対象Lambdaへの起動権限を持つ運用者がコンソールから `{}` を入力して手動起動する。上記の接続確認応答と専用ログを確認する。CIのapplyロールには検証のためのInvokeFunction権限を追加しない。

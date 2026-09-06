@@ -191,7 +191,7 @@ resource "aws_lambda_function" "outbox_relay" {
   role                          = aws_iam_role.outbox_relay.arn
   package_type                  = "Image"
   image_uri                     = "${aws_ecr_repository.this["backend"].repository_url}@${var.outbox_relay_image_digest}"
-  architectures                 = ["x86_64"]
+  architectures                 = ["arm64"]
   memory_size                   = 512
   timeout                       = 30
   reserved_concurrent_executions = 1
