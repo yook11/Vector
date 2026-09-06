@@ -163,6 +163,18 @@ def create_cli_engine(
     )
 
 
+def create_lambda_engine(settings: _RuntimeDatabaseSettings) -> AsyncEngine:
+    """呼び出し間でイベントループや接続を共有しないLambda用Engineを作る。"""
+    return _create_engine(
+        settings.database_url,
+        application_name="vector-outbox-relay",
+        password_provider=_runtime_password_provider(settings, settings.database_url),
+        poolclass=NullPool,
+        connect_args={"timeout": 5, "command_timeout": 5},
+        echo=False,
+    )
+
+
 def auth_retention_service_name() -> str:
     """auth schema retention用DB接続のapplication_nameを返す。"""
     return "vector-worker-maintenance-auth"

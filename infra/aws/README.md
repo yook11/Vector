@@ -279,3 +279,7 @@ terraform init -backend-config="bucket=$(cd bootstrap && terraform output -raw s
 
 CI の `plan` は **`-lock=false`** で走らせる (lock オブジェクトの書き込みが
 read-only の plan ロールでは通らない)。
+
+## Outbox relay Lambda
+
+工程別SQS・relay専用Lambdaの初回構築、digest更新、接続確認は [OUTBOX_RELAY.md](OUTBOX_RELAY.md) を参照する。現在のhandlerはDB接続確認のみで、定期送信は無効。

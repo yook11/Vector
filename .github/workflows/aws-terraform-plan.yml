@@ -115,6 +115,13 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: Preserve Outbox relay image from state
+        run: |
+          set -euo pipefail
+          terraform state pull \
+            | python3 scripts/resolve-outbox-relay-image.py \
+            > outbox-relay.auto.tfvars.json
+
       - name: Terraform plan
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}

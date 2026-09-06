@@ -80,3 +80,23 @@ output "parameter_store_paths" {
   EOT
   value       = { for name, _ in local.stages : name => "/${var.name_prefix}/${name}/" }
 }
+
+output "outbox_queue_urls" {
+  description = "工程名から送信先Queue URLへの対応。"
+  value       = { for stage, queue in aws_sqs_queue.outbox : stage => queue.url }
+}
+
+output "outbox_queue_arns" {
+  description = "工程名から送信先Queue ARNへの対応。"
+  value       = { for stage, queue in aws_sqs_queue.outbox : stage => queue.arn }
+}
+
+output "outbox_relay_image_digest" {
+  description = "通常plan/applyが保持するrelayのデプロイ済みイメージdigest。"
+  value       = var.outbox_relay_image_digest
+}
+
+output "outbox_relay_function_name" {
+  description = "イメージ未指定時はnull。"
+  value       = one(aws_lambda_function.outbox_relay[*].function_name)
+}

@@ -152,7 +152,7 @@ jobs:
           set -euo pipefail
           # provenance を切る。attestation manifest は untagged image として ECR に増え、
           # lifecycle policy が tagStatus: any で数えるので保持世代を食う。
-          docker build --provenance=false -t "$IMAGE" "$BUILD_CONTEXT"
+          docker build --platform linux/amd64 --provenance=false -t "$IMAGE" "$BUILD_CONTEXT"
           docker push "$IMAGE"
           {
             echo "pushed \`$IMAGE_REF\`"
