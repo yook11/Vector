@@ -51,7 +51,7 @@ async def test_outbox_migration_round_trip_preserves_existing_data(
     await connection.execute(text("INSERT INTO existing_data VALUES (1, 'preserve')"))
     assert await connection.scalar(text("SELECT to_regclass('outbox_events')")) is None
 
-    path = Path(__file__).parents[1] / "alembic/versions/z21_outbox_events.py"
+    path = Path(__file__).parents[2] / "alembic/versions/z21_outbox_events.py"
     spec = importlib.util.spec_from_file_location("outbox_migration", path)
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
