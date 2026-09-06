@@ -12,6 +12,10 @@ from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.errors import (
     map_origin_to_acquisition,
 )
+from app.collection.article_acquisition.events import (
+    ArticleAcquired,
+    IncompleteArticleRecorded,
+)
 from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
 )
@@ -37,6 +41,7 @@ from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
 from app.collection.sources.article_source import ArticleSource
+from app.models.outbox_event import OutboxEvent
 
 logger = structlog.get_logger(__name__)
 
@@ -88,6 +93,17 @@ class ArticleAcquisitionService:
                                 analyzable_article_id=analyzable_article_id,
                                 canonical_url=str(ready.source_url),
                             )
+                            event = ArticleAcquired(
+                                source_id=source_id,
+                                analyzable_article_id=analyzable_article_id,
+                            )
+                            session.add(
+                                OutboxEvent(
+                                    event_type=ArticleAcquired.EVENT_TYPE,
+                                    schema_version=ArticleAcquired.SCHEMA_VERSION,
+                                    payload=event.model_dump(mode="json"),
+                                )
+                            )
                         case ObservedArticle() as observed:
                             if await article_repo.exists_by_source_url(
                                 observed.source_url
@@ -105,6 +121,19 @@ class ArticleAcquisitionService:
                                 source_id=source_id,
                                 source_name=source_name,
                                 canonical_url=str(observed.source_url),
+                            )
+                            event = IncompleteArticleRecorded(
+                                source_id=source_id,
+                                incomplete_article_id=incomplete_id,
+                            )
+                            session.add(
+                                OutboxEvent(
+                                    event_type=IncompleteArticleRecorded.EVENT_TYPE,
+                                    schema_version=(
+                                        IncompleteArticleRecorded.SCHEMA_VERSION
+                                    ),
+                                    payload=event.model_dump(mode="json"),
+                                )
                             )
                         case AcquisitionConversionRejection() as rej:
                             # rejected の監査+metric は handler が所有する (別 tx commit
