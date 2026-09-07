@@ -1,5 +1,6 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
+import brandIcon from "@/assets/brand/icon.svg";
 import { PendingAwareLink } from "@/components/layout/PageNavigation";
 
 interface SlimMastheadProps {
@@ -27,7 +28,7 @@ export function SlimMasthead({
           className="flex shrink-0 items-center gap-2.5"
         >
           <Image
-            src="/icon.svg"
+            src={brandIcon}
             alt=""
             width={28}
             height={28}

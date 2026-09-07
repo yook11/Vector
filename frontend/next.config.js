@@ -19,6 +19,30 @@ const nextConfig = {
       algorithm: "sha256",
     },
   },
+  async headers() {
+    return [
+      {
+        // manifest は icon hash の参照更新を 1 時間以内に反映し、画像本体は immutable cache に任せる。
+        source: "/manifest.webmanifest",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=3600, must-revalidate",
+          },
+        ],
+      },
+      {
+        // 認証応答は session 失効や権限変更を即時反映するため、ブラウザにも共有 cache にも保存させない。
+        source: "/api/auth/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "private, no-store",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

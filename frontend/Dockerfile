@@ -18,12 +18,10 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# auth.ts / internal-config.ts / revalidate route が module load 時に requireEnv
-# を呼ぶため、build を完走させるためのダミー値を ARG default に埋め込む。これらは
-# bundle に焼かれず、runtime には compose の environment が上書きする。
-# placeholder 文字列は git grep で即発見できるよう警告色を付与している。
+# module load 時に必要なsecretと内部接続先はbuild用placeholderを使い、runtimeで上書きする。
+# BETTER_AUTH_URLだけはmetadataBaseへ焼き込まれるため、canonical public originを既定値にする。
 ARG BETTER_AUTH_SECRET=build-time-placeholder-do-not-use-in-runtime-32bytes
-ARG BETTER_AUTH_URL=http://localhost:3000
+ARG BETTER_AUTH_URL=https://vectorbrief.online
 ARG AUTH_DATABASE_URL=postgresql://build:build@localhost:5432/build
 # INTERNAL_API_URL は production build (builder stage は NODE_ENV=production) 時に
 # internal-config.ts の「production では *.flycast 必須」assertion が module 評価で
