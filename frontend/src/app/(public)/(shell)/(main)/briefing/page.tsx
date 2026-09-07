@@ -6,14 +6,10 @@ import {
   BriefingIndexView,
   getBriefingListViewModel,
 } from "@/features/briefing";
-import { requireSession } from "@/lib/auth/guards";
 
 export const metadata: Metadata = { title: "Briefing | Vector" };
 
 async function BriefingListContent() {
-  // DAL gate: layout の認可は PPR の別 prerender 単位を守らないため、データ
-  // 取得の前にここで認可する。
-  await requireSession();
   // build-time prerender を opt out して runtime fill に倒す。
   await connection();
   const data = await getBriefingListViewModel();

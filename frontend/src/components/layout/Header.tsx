@@ -1,7 +1,7 @@
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavLink } from "@/components/layout/NavLink";
 import { NavPendingDot } from "@/components/layout/NavPendingDot";
-import { getProtectedNavItems, NAV_ICONS } from "@/components/layout/nav-items";
+import { getNavItems, NAV_ICONS } from "@/components/layout/nav-items";
 import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/features/auth";
@@ -11,7 +11,7 @@ import { narrowRole } from "@/lib/auth/role";
 export async function Header() {
   const session = await getCurrentSession();
   const isAdmin = session !== null && narrowRole(session.user.role) === "admin";
-  const navItems = getProtectedNavItems(isAdmin);
+  const navItems = getNavItems(isAdmin);
 
   return (
     <header className="fixed top-0 z-50 w-full bg-background/70 backdrop-blur-xl">

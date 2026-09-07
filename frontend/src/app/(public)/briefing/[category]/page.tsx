@@ -13,7 +13,6 @@ import {
   getBriefingDetailViewModel,
 } from "@/features/briefing";
 import { ApiError } from "@/lib/api/error";
-import { getCurrentSession, requireSession } from "@/lib/auth/guards";
 
 interface BriefingDetailPageProps {
   params: Promise<{ category: string }>;
@@ -23,12 +22,6 @@ export async function generateMetadata({
   params,
 }: BriefingDetailPageProps): Promise<Metadata> {
   const { category } = await params;
-  // 未認証は cached fetch (カテゴリ名) を踏ませず generic title で返す。
-  // generateMetadata 内で redirect() は安定しないため getCurrentSession で判定。
-  const session = await getCurrentSession();
-  if (!session) {
-    return { title: "Briefing | Vector" };
-  }
   try {
     const vm = await getBriefingDetailViewModel(category);
     return { title: `${vm.category.name} Briefing | Vector` };
@@ -53,9 +46,6 @@ function BackLink() {
 }
 
 async function BriefingDetailContent({ slug }: { slug: string }) {
-  // DAL gate: layout の認可は PPR の別 prerender 単位を守らないため、データ
-  // 取得の前にここで認可する。
-  await requireSession();
   await connection();
   let vm: Awaited<ReturnType<typeof getBriefingDetailViewModel>>;
   try {
@@ -137,9 +127,6 @@ export default async function BriefingDetailPage({
   params,
 }: BriefingDetailPageProps) {
   const { category } = await params;
-  // DAL gate (多重防御): データ取得 gate は BriefingDetailContent 側 (Suspense
-  // 単位) でも別途行うが、静的シェル描画前にここでも認可する。
-  await requireSession();
 
   return (
     <PaperSurface>

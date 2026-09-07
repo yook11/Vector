@@ -85,3 +85,24 @@ describe("buildLoginCallbackUrl", () => {
     });
   });
 });
+
+describe("Refererを共通スキーマへ接続する", () => {
+  it.each([
+    "https://example.com/bad%0a/../watchlist",
+    "https://example.com/news\n",
+    "https://example.com/\\watchlist",
+    "ftp://example.com/watchlist",
+    "https://example.com/%252fauth",
+    "https://example.com/%61uth/login",
+  ])("%s は復帰先なし", (input) => {
+    expect(buildLoginCallbackUrl(input)).toBe("/auth/login");
+  });
+  it("正規化・内部クエリ除去・ハッシュ保持後に外側をエンコードする", () => {
+    const result = buildLoginCallbackUrl(
+      "https://example.com/news/../watchlist?_rsc=a&page=2#saved",
+    );
+    expect(
+      new URL(result, "https://example.com").searchParams.get("callbackUrl"),
+    ).toBe("/watchlist?page=2#saved");
+  });
+});

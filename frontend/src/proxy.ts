@@ -1,6 +1,13 @@
 import { getSessionCookie } from "better-auth/cookies";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { parseLoginCallback } from "@/lib/auth/login-callback";
+import {
+  isPersonalPage,
+  isPublicAsset,
+  isPublicPage,
+  REQUEST_PATH_HEADER,
+} from "@/lib/auth/page-access";
 import {
   calculateLimits,
   checkRateLimit,
@@ -8,7 +15,6 @@ import {
   recordRateLimitSignal,
   recordXffChainObservation,
 } from "@/lib/auth/rate-limit";
-import { sanitizeCallbackUrl } from "@/lib/proxy/callback-url";
 import {
   buildCspDirectives,
   buildCspHeader,
@@ -121,6 +127,7 @@ export async function proxy(request: NextRequest) {
   // リクエストヘッダーに nonce を埋め込み、Server Component から読み取れるようにする。
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set(REQUEST_PATH_HEADER, pathname + request.nextUrl.search);
   requestHeaders.set("Content-Security-Policy", cspHeader);
   // 解決済み client IP を下流 (route handler / Better Auth) へ渡す唯一の経路。
   // 外来の同名ヘッダは必ず削除し、偽装値が下流に到達しない不変条件を保つ。
@@ -139,17 +146,26 @@ export async function proxy(request: NextRequest) {
   // Cookie 名は Better Auth の getSessionCookie に任せ、proxy 側で
   // dev/prod の cookie 名をハードコードしない。token は rate-limit で取得済みを再利用。
   // /api/* は redirect せず、各 route handler の認証/認可レスポンスに任せる。
-  if (!sessionToken && !isAuthPage && !isApiRoute && !isDesignLab) {
-    const signInUrl = new URL("/auth/login", request.url);
-    // Open redirect 対策: protocol-relative URL や絶対 URL を callbackUrl に入れない。
-    const callbackUrl = sanitizeCallbackUrl(pathname);
-    if (callbackUrl) {
-      signInUrl.searchParams.set("callbackUrl", callbackUrl);
-    }
-    return NextResponse.redirect(signInUrl);
+  if (isApiRoute) return response;
+
+  if (isPublicAsset(pathname)) return response;
+
+  if (isPublicPage(pathname) || isAuthPage || isDesignLab) {
+    return response;
   }
 
-  return response;
+  // Cookieの有効性と権限は下流のサーバーガードで検証する。
+  if (sessionToken) return response;
+
+  const signInUrl = new URL("/auth/login", request.url);
+  // Open redirect 対策: protocol-relative URL や絶対 URL を callbackUrl に入れない。
+  const callbackUrl = parseLoginCallback(
+    isPersonalPage(pathname) ? pathname + request.nextUrl.search : pathname,
+  );
+  if (callbackUrl) {
+    signInUrl.searchParams.set("callbackUrl", callbackUrl);
+  }
+  return NextResponse.redirect(signInUrl);
 }
 
 export const config = {

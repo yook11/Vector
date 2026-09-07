@@ -207,3 +207,50 @@ describe("requireAdminForAction", () => {
     await expect(requireAdminForAction()).rejects.toThrow("Forbidden");
   });
 });
+
+describe("個人ページのログイン復帰先", () => {
+  it.each([
+    "/research",
+    "/research/thread-1?view=history",
+    "/watchlist?page=2",
+  ])("無効セッションから %s へ復帰できる", async (path) => {
+    getSessionMock.mockResolvedValue(null);
+    headersGetMock.mockImplementation((name) =>
+      name === "x-vector-request-path" ? path : null,
+    );
+    await expect(requireSession()).rejects.toThrow(
+      `REDIRECT:/auth/login?callbackUrl=${encodeURIComponent(path)}`,
+    );
+  });
+  it("管理画面の転送先を変更しない", async () => {
+    getSessionMock.mockResolvedValue(null);
+    headersGetMock.mockReturnValue("/settings");
+    await expect(requireAdmin()).rejects.toThrow("REDIRECT:/auth/login");
+    expect(redirectMock).toHaveBeenCalledWith("/auth/login");
+  });
+});
+
+describe("共通スキーマによる復帰先の正規化", () => {
+  it("内部リクエストヘッダーから_rscを除いて復帰する", async () => {
+    getSessionMock.mockResolvedValue(null);
+    headersGetMock.mockReturnValue("/research/../watchlist?_rsc=a&page=2");
+    await expect(requireSession()).rejects.toThrow(
+      `REDIRECT:/auth/login?callbackUrl=${encodeURIComponent("/watchlist?page=2")}`,
+    );
+  });
+  it("認証画面に到達する復帰先は捨てる", async () => {
+    getSessionMock.mockResolvedValue(null);
+    headersGetMock.mockReturnValue("/research/../auth/login");
+    await expect(requireSession()).rejects.toThrow("REDIRECT:/auth/login");
+    expect(redirectMock).toHaveBeenCalledWith("/auth/login");
+  });
+  it("Server ActionでもRefererの正規化結果を利用する", async () => {
+    getSessionMock.mockResolvedValue(null);
+    headersGetMock.mockReturnValue(
+      "https://example.com/news/../watchlist?_rsc=a&page=2",
+    );
+    await expect(requireSessionForAction()).rejects.toThrow(
+      `REDIRECT:/auth/login?callbackUrl=${encodeURIComponent("/watchlist?page=2")}`,
+    );
+  });
+});

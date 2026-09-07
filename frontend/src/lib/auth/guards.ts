@@ -21,7 +21,9 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 import { auth } from "@/lib/auth/auth";
+import { parseLoginCallback } from "@/lib/auth/login-callback";
 import { buildLoginCallbackUrl } from "@/lib/auth/login-redirect-url";
+import { isPersonalPage, REQUEST_PATH_HEADER } from "@/lib/auth/page-access";
 import { narrowRole } from "@/lib/auth/role";
 import type { Session } from "@/lib/auth/session";
 import { logServerEvent } from "@/lib/observability/server-log";
@@ -64,7 +66,15 @@ export const getCurrentSession = cache(async (): Promise<Session | null> => {
 export async function requireSession(): Promise<Session> {
   const session = await getCurrentSession();
   if (!session) {
-    redirect("/auth/login");
+    const requestPath = (await headers()).get(REQUEST_PATH_HEADER);
+    const pathname = requestPath?.split("?")[0] ?? "";
+    const callback = isPersonalPage(pathname)
+      ? parseLoginCallback(requestPath)
+      : null;
+    const loginUrl = callback
+      ? `/auth/login?callbackUrl=${encodeURIComponent(callback)}`
+      : "/auth/login";
+    redirect(loginUrl);
   }
   return session;
 }

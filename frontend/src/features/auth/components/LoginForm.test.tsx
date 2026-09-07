@@ -217,3 +217,25 @@ describe("LoginForm — pending state", () => {
     resolveSign({ data: null, error: null });
   });
 });
+
+describe("ログイン後の復帰", () => {
+  it.each([
+    ["/watchlist?page=2", "/watchlist?page=2"],
+    ["/news/../watchlist?_rsc=1&page=2#saved", "/watchlist?page=2#saved"],
+    ["/research/thread-1", "/research/thread-1"],
+    ["//evil.test", "/"],
+    ["/auth/login", "/"],
+  ])("%s は %s へ戻る", async (returnTo, expected) => {
+    mocks.signInEmail.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
+    const user = userEvent.setup();
+    render(<LoginForm returnTo={returnTo} />);
+    await fillForm(user, "user@example.com", "secret");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+    await waitFor(() =>
+      expect(mocks.router.push).toHaveBeenCalledWith(expected),
+    );
+  });
+});

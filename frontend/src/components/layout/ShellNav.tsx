@@ -4,15 +4,15 @@ import { usePathname } from "next/navigation";
 import { NavPendingDot } from "@/components/layout/NavPendingDot";
 import { NAV_ICONS } from "@/components/layout/nav-items";
 import { PendingAwareLink } from "@/components/layout/PageNavigation";
-import { useProtectedNavItems } from "@/components/layout/useProtectedNavItems";
+import { useNavItems } from "@/components/layout/useNavItems";
 
 /**
  * 認証済みシェルの desktop nav。active 判定を usePathname で client 側に持つため、
  * 共有 layout から activeHref を渡さずに済む (masthead を永続 layout へ載せる前提)。
- * 項目の出し分けは useProtectedNavItems が担う。
+ * 項目の出し分けは useNavItems が担う。
  */
 export function ShellNav() {
-  const navItems = useProtectedNavItems();
+  const navItems = useNavItems();
   const pathname = usePathname();
 
   return (
