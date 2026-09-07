@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { z } from "zod";
@@ -58,7 +59,17 @@ async function action(
   return { status: "ok" };
 }
 
-export function LoginForm({ returnTo = "/" }: { returnTo?: string }) {
+export function LoginForm({
+  returnTo = "/",
+  requiresLoginReason = false,
+  backHref = "/",
+  backLabel = "ニュースへ戻る",
+}: {
+  returnTo?: string;
+  requiresLoginReason?: boolean;
+  backHref?: string;
+  backLabel?: string;
+}) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -100,6 +111,11 @@ export function LoginForm({ returnTo = "/" }: { returnTo?: string }) {
         <CardDescription>
           登録済みのアカウントでログインしてください
         </CardDescription>
+        {requiresLoginReason ? (
+          <p className="text-sm text-muted-foreground" role="note">
+            この機能の利用にはログインが必要です
+          </p>
+        ) : null}
       </CardHeader>
       <form action={formAction} aria-busy={pending}>
         <CardContent className="flex flex-col gap-4">
@@ -184,6 +200,12 @@ export function LoginForm({ returnTo = "/" }: { returnTo?: string }) {
               "ログイン"
             )}
           </Button>
+          <Link
+            href={backHref}
+            className="text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
+          >
+            {backLabel}
+          </Link>
         </CardFooter>
       </form>
     </Card>
