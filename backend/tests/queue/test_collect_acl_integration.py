@@ -29,7 +29,9 @@ pytestmark = [
 ]
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-_REDIS_FLY_CONFIG = _REPOSITORY_ROOT / "infra" / "redis" / "fly.toml"
+_LEGACY_FLY_REDIS_CONFIG = (
+    _REPOSITORY_ROOT / "docs" / "legacy" / "fly" / "redis-broker.fly.toml"
+)
 _DISPATCH_STREAM = "pipeline:dispatch"
 _ACQUISITION_STREAM = "pipeline:acquisition"
 _COMPLETION_STREAM = "pipeline:completion"
@@ -46,10 +48,12 @@ class TemporaryCollectUser:
 
 
 def _collect_acl_rules() -> list[str]:
-    config = tomllib.loads(_REDIS_FLY_CONFIG.read_text(encoding="utf-8"))
+    config = tomllib.loads(_LEGACY_FLY_REDIS_CONFIG.read_text(encoding="utf-8"))
     redis_command = config["processes"]["redis"]
     match = re.search(r'echo "user collect (?P<rules>[^\"]+)"', redis_command)
-    assert match is not None, "collect ACL is missing from infra/redis/fly.toml"
+    assert match is not None, (
+        "collect ACL is missing from docs/legacy/fly/redis-broker.fly.toml"
+    )
     return [
         token
         for token in shlex.split(match.group("rules"))

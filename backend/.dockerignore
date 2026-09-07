@@ -20,7 +20,3 @@ CLAUDE.md
 # editor
 .vscode
 .idea
-
-# fly.io artifacts
-fly.toml
-.fly

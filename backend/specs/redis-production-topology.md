@@ -14,7 +14,7 @@ productionでは、永続ジョブを持つbroker Redisと、frontendの短命�
 | `vector-redis` | Taskiq broker、backendの一時制御状態 | 256 MB / `noeviction` | volume + AOF |
 | `vector-redis-rl` | frontend `rl:ip:*` sliding window | 64 MB / `volatile-ttl` | なし |
 
-broker RedisのSSoTは`infra/redis/fly.toml`である。`noeviction`はtask entryを別keyの都合で
+broker RedisのSSoTは`docs/legacy/fly/redis-broker.fly.toml`である。`noeviction`はtask entryを別keyの都合で
 追い出さない一方、`maxmemory`到達後はwriteを拒否する。このためmemory capacityは公開前gateとし、
 write rejectionを正常なbackpressureとして扱わない。
 

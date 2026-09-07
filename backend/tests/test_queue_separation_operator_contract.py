@@ -11,12 +11,16 @@ from pathlib import Path
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _MAKEFILE = _REPOSITORY_ROOT / "Makefile"
-_REDIS_FLY_CONFIG = _REPOSITORY_ROOT / "infra" / "redis" / "fly.toml"
+_LEGACY_FLY_REDIS_CONFIG = (
+    _REPOSITORY_ROOT / "docs" / "legacy" / "fly" / "redis-broker.fly.toml"
+)
 _REDIS_TOPOLOGY_SPEC = (
     _REPOSITORY_ROOT / "backend" / "specs" / "redis-production-topology.md"
 )
 _COMPOSE_FILE = _REPOSITORY_ROOT / "docker-compose.yml"
-_FLY_COLLECT_CONFIG = _REPOSITORY_ROOT / "backend" / "fly.collect.toml"
+_LEGACY_FLY_COLLECT_CONFIG = (
+    _REPOSITORY_ROOT / "docs" / "legacy" / "fly" / "backend-collect.fly.toml"
+)
 _FETCH_SUPERVISOR_CONFIG = _REPOSITORY_ROOT / "backend" / "supervisord" / "fetch.conf"
 _BROKERS_MODULE = _REPOSITORY_ROOT / "backend" / "app" / "queue" / "brokers.py"
 
@@ -56,7 +60,7 @@ def _make_target(target: str) -> str:
 
 
 def _redis_acl_tokens(user: str) -> set[str]:
-    config = tomllib.loads(_required_text(_REDIS_FLY_CONFIG))
+    config = tomllib.loads(_required_text(_LEGACY_FLY_REDIS_CONFIG))
     redis_command = config["processes"]["redis"]
     match = re.search(rf'echo "user {re.escape(user)} (?P<rules>[^"]+)"', redis_command)
     assert match is not None, f"Redis ACL for {user} is missing"
@@ -520,7 +524,7 @@ def test_compose_comment_describes_analysis_broker_as_shared_stream_consumer() -
 
 
 def test_fetch_deployment_comments_match_control_and_multistream_roles() -> None:
-    fly_comments = _normalized(_comment_text(_FLY_COLLECT_CONFIG))
+    fly_comments = _normalized(_comment_text(_LEGACY_FLY_COLLECT_CONFIG))
     supervisor_comments = _normalized(_comment_text(_FETCH_SUPERVISOR_CONFIG))
 
     fly_role_terms = (

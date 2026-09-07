@@ -40,8 +40,8 @@
 
 - ポートフォリオの公開 frontend URL は公開導線として commit してよい。
 - それ以外の実 production の Fly app 名、internal hostname、deploy / rollback / restore の具体手順は commit しない。
-- `fly*.toml` は portfolio 用の構成例として公開し、app 名や URL は placeholder にする。
-- 本番 deploy に必要な実値は GitHub Environment secrets / Fly secrets / private runbook 側で管理する。
+- 退役した Fly.io 時代の構成例 (`fly*.toml`) は `docs/legacy/fly/` に記録として置く。現行のデプロイ経路ではなく、app 名や URL は placeholder のまま維持する。
+- 本番 deploy に必要な実値は GitHub Environment secrets / AWS SSM Parameter Store / private runbook 側で管理する。
 - docs では設計意図と境界を説明し、運用者だけが使う詳細手順や復旧コマンドは公開しない。
 
 ## Research
