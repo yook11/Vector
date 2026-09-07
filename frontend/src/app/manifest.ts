@@ -1,4 +1,6 @@
 import type { MetadataRoute } from "next";
+import icon192 from "@/assets/brand/icon-192.png";
+import icon512 from "@/assets/brand/icon-512.png";
 
 // PWA マニフェスト。アイコン背景がティール (#0FA89C) なので splash / theme も合わせる。
 export default function manifest(): MetadataRoute.Manifest {
@@ -12,20 +14,20 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#0FA89C",
     icons: [
       {
-        src: "/icons/icon-192.png",
+        src: icon192.src,
         sizes: "192x192",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/icons/icon-512.png",
+        src: icon512.src,
         sizes: "512x512",
         type: "image/png",
         purpose: "any",
       },
       {
         // フルブリード正方形。中央寄せで safe-zone を満たすため maskable に流用
-        src: "/icons/icon-512.png",
+        src: icon512.src,
         sizes: "512x512",
         type: "image/png",
         purpose: "maskable",

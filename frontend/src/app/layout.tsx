@@ -8,6 +8,11 @@ import {
   Zen_Maru_Gothic,
 } from "next/font/google";
 import { Suspense } from "react";
+import appleIcon from "@/assets/brand/apple-icon.png";
+import favicon from "@/assets/brand/favicon.ico";
+import brandIcon from "@/assets/brand/icon.svg";
+import openGraphImage from "@/assets/brand/opengraph-image.png";
+import twitterImage from "@/assets/brand/twitter-image.png";
 import { AppBootstrapLoading } from "@/components/layout/AppBootstrapLoading";
 import { ClientGlobals } from "@/components/layout/ClientGlobals";
 import { NonceThemeProvider } from "@/components/layout/NonceThemeProvider";
@@ -124,16 +129,39 @@ export const metadata: Metadata = {
   },
   description: "Tech news aggregation & AI analysis dashboard",
   applicationName: "Vector",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: favicon.src, type: "image/x-icon" },
+      { url: brandIcon.src, type: "image/svg+xml" },
+    ],
+    apple: [
+      {
+        url: appleIcon.src,
+        sizes: "180x180",
+        type: "image/png",
+      },
+    ],
+  },
   openGraph: {
     title: "Vector",
     description: "Tech news aggregation & AI analysis dashboard",
     siteName: "Vector",
     type: "website",
+    images: [
+      {
+        url: openGraphImage.src,
+        width: 1200,
+        height: 630,
+        alt: "Vector — Tech News & AI Analysis",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Vector",
     description: "Tech news aggregation & AI analysis dashboard",
+    images: [twitterImage.src],
   },
 };
 

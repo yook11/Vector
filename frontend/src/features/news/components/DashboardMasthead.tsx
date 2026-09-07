@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Fragment, type ReactNode } from "react";
+import brandIcon from "@/assets/brand/icon.svg";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavPendingDot } from "@/components/layout/NavPendingDot";
 import { NAV_ICONS, type NavItem } from "@/components/layout/nav-items";
@@ -111,7 +112,7 @@ export function DashboardMasthead({
           aria-label="Vector ニュースへ"
         >
           <Image
-            src="/icon.svg"
+            src={brandIcon}
             alt=""
             width={64}
             height={64}
