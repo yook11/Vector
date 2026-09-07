@@ -38,8 +38,6 @@ export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const isAuthPage = pathname.startsWith("/auth");
   const isApiRoute = pathname.startsWith("/api/");
-  // /design-lab/* は本番認証導線外の UI モック領域なので auth gate 対象外。
-  const isDesignLab = pathname.startsWith("/design-lab");
 
   // --- Rate limit (DoS 防御の一次関門) ---
   //
@@ -150,7 +148,7 @@ export async function proxy(request: NextRequest) {
 
   if (isPublicAsset(pathname)) return response;
 
-  if (isPublicPage(pathname) || isAuthPage || isDesignLab) {
+  if (isPublicPage(pathname) || isAuthPage) {
     return response;
   }
 
