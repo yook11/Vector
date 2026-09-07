@@ -44,6 +44,7 @@ from app.agent.planning.contract import (
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
 from app.agent.running import AnsweringRunner, RunIdentity, RunInput
 from app.agent.running import answering_runner as answering_runner_module
+from app.agent.running.answer_generation import AnswerGenerationStarted
 from app.agent.runs.execution import Continue, Stop
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
@@ -63,12 +64,12 @@ class AllowAnswerGenerationStart:
         self.check_calls = 0
         self.authorize_calls = 0
 
-    async def start_answer_generation(self) -> Continue:
+    async def start_answer_generation(self) -> AnswerGenerationStarted:
         self.calls += 1
         self.start_calls += 1
         if self._timeline is not None:
             self._timeline.append("answer_start")
-        return Continue()
+        return AnswerGenerationStarted(RUN_ID, AS_OF)
 
     async def authorize_answer_regeneration(self) -> Continue:
         self.authorize_calls += 1
@@ -83,7 +84,9 @@ class ScriptedAnswerGenerationRepository:
     def __init__(
         self,
         *,
-        start: Continue | Stop | BaseException = Continue(),
+        start: AnswerGenerationStarted | Stop | BaseException = AnswerGenerationStarted(
+            RUN_ID, AS_OF
+        ),
         checks: list[Continue | Stop] | None = None,
         authorizes: list[Continue | Stop | BaseException] | None = None,
         timeline: list[str] | None = None,
@@ -97,7 +100,7 @@ class ScriptedAnswerGenerationRepository:
         self._authorizes = list(authorizes or [])
         self._timeline = timeline
 
-    async def start_answer_generation(self) -> Continue | Stop:
+    async def start_answer_generation(self) -> AnswerGenerationStarted | Stop:
         self.calls += 1
         self.start_calls += 1
         if self._timeline is not None:

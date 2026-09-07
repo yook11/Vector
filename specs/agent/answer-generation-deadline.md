@@ -221,3 +221,34 @@ Direct AnswerとEvidence Answerの両方で、生成開始・再生成・工程�
 - backend lint・format: 成功。
 - unit tests: 5,253件成功。
 - DB integration tests: 1,051件成功、22件skip。
+
+
+## 回答生成開始後の回収確認予約
+
+Direct AnswerとEvidence Answerは、初回開始のDBコミット後に
+`AnswerGenerationStarted(run_id, answer_started_at)`を受け取る。
+開始失敗・コミット失敗では予約しない。保存した時刻をそのまま使い、予約のためのDB再問い合わせは行わない。
+
+開始成功後に工程の15秒期限を設定し、タイマー内で同期の`schedule_deadline_check`を呼ぶ。
+これはバックグラウンド予約を起動するだけで、Redis通信をawaitせず生成へ進む。
+予約時刻は`answer_started_at + answer_generation_recovery_window()`をUTCの秒境界へ切り上げる。
+再生成では開始記録・工程タイマーをリセットせず、追加予約もしない。
+
+agent workerが専用sourceと`AgentDeadlineScheduler`を所有し、予約タスクの強い参照を保持する。
+完了したタスクは参照から外し、例外を回収する。回答実行が終了・失敗・キャンセルしても予約は独立して続く。
+予約全体は最大2秒・再試行なしで、通常例外・タイムアウトは安全なログに記録する。
+タイムアウト時に登録済みである可能性も許容し、確認や取消は行わない。
+worker終了時は未完了の予約をキャンセル・回収してからsourceを閉じる。
+
+既存のrun IDだけを持つ期限確認タスクを使い、最新DB状態で共通回収を行う。
+予約漏れや送信漏れは定期回収・スレッド表示時の回収で救済する。
+受付予約、scheduler間隔、生成・保存の期限、quota、handoffの処理は変更しない。
+
+検証結果:
+
+- backend lint・format: 成功。
+- unit: 5,278件成功。
+- `make test-integration`: 1,198件成功、22件skip。
+- 両回答経路の初回だけの予約、再生成時の予約抑止、予約待機中の生成完了、開始拒否・失敗時の予約抑止を確認した。
+- DB開始時刻のcommit後返却、commit失敗時のrollback、55秒開始から元の60秒確認と生成後の回収期限への接続を確認した。
+- 回答側のキャンセルから予約の独立、worker終了時のタスク回収・source終了、agent以外にsourceを作らないことを確認した。

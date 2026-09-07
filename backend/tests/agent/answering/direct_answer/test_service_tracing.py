@@ -91,6 +91,7 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
     draft = await DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         repository=AllowAnswerGenerationStart(),
@@ -169,6 +170,7 @@ async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=runtime_scope,
             repository=AllowAnswerGenerationStart(),
@@ -222,6 +224,7 @@ async def test_retry_provider_request_does_not_add_repair_context() -> None:
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
     draft = await DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         repository=AllowAnswerGenerationStart(),
@@ -256,6 +259,7 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
 
     with pytest.raises(DirectAnswerError) as exc_info:
         await DirectAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=runtime_scope,
             repository=AllowAnswerGenerationStart(),
@@ -300,6 +304,7 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
         yield cast(StreamingAgentRuntime, UnusedRuntime())
 
     service = DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         repository=ScriptedAnswerGenerationRepository(
@@ -353,6 +358,7 @@ async def test_mid_stream_stop_abandons_real_attempt_without_error(
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
     service = DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         repository=StopAfterFirstFragment(),

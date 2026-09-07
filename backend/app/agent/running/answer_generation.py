@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -21,13 +22,20 @@ __all__ = [
     "ANSWER_GENERATION_CONTINUATION_INTERVAL_SECONDS",
     "AgentAnswerGenerationRepository",
     "AnswerGenerationRepository",
+    "AnswerGenerationStarted",
 ]
 
 ANSWER_GENERATION_CONTINUATION_INTERVAL_SECONDS = 2.0
 
 
+@dataclass(frozen=True, slots=True)
+class AnswerGenerationStarted:
+    run_id: UUID
+    answer_started_at: datetime
+
+
 class AnswerGenerationRepository(Protocol):
-    async def start_answer_generation(self) -> Continue | Stop: ...
+    async def start_answer_generation(self) -> AnswerGenerationStarted | Stop: ...
 
     async def authorize_answer_regeneration(self) -> Continue | Stop: ...
 
@@ -53,7 +61,7 @@ class AgentAnswerGenerationRepository:
 
     async def start_answer_generation(
         self, *, now: datetime | None = None
-    ) -> Continue | Stop:
+    ) -> AnswerGenerationStarted | Stop:
         async with self._session_factory() as session:
             async with session.begin():
                 return await _start_answer_generation(
@@ -132,7 +140,7 @@ async def _start_answer_generation(
     run_id: UUID,
     expected_attempt_epoch: int,
     now: datetime | None = None,
-) -> Continue | Stop:
+) -> AnswerGenerationStarted | Stop:
     run = await _lock_run(session, run_id)
     if (
         run is None
@@ -147,7 +155,7 @@ async def _start_answer_generation(
         return _expire_for_deadline(run)
 
     run.answer_started_at = now
-    return Continue()
+    return AnswerGenerationStarted(run_id=run.id, answer_started_at=now)
 
 
 async def _authorize_answer_regeneration(
