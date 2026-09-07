@@ -361,6 +361,9 @@ def _ctx(
         state=SimpleNamespace(
             session_factory=session_factory,
             agent_live_redis=agent_live_redis,
+            agent_deadline_scheduler=SimpleNamespace(
+                reserve_in_background=lambda *_: None
+            ),
         )
     )
 

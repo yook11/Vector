@@ -205,6 +205,7 @@ def _service(
     start = AllowAnswerGenerationStart() if repository is None else repository
     if recorder is None:
         return DirectAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=_runtime_scope(runtime),
             repository=start,
@@ -212,6 +213,7 @@ def _service(
             progress=progress,
         )
     return DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
         repository=start,
@@ -238,6 +240,7 @@ def _assert_recorded(
 async def test_valid_text_returns_direct_draft_without_retry() -> None:
     runtime = ScriptedStreamingRuntime(["検索なしで回答できます。"])
     service = DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
         repository=AllowAnswerGenerationStart(),
@@ -256,6 +259,7 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
     )
 
     draft = await DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
         repository=AllowAnswerGenerationStart(),
@@ -331,6 +335,7 @@ async def test_blank_then_valid_retries_once_with_same_input(
             exits += 1
 
     draft = await DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=counting_scope,
         repository=AllowAnswerGenerationStart(),
@@ -500,6 +505,7 @@ async def test_runtime_scope_activation_failure_precedes_attempt_and_observation
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
             repository=AllowAnswerGenerationStart(),
@@ -537,6 +543,7 @@ async def test_runtime_scope_exit_failure_discards_completed_outcome(
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
             repository=AllowAnswerGenerationStart(),
@@ -570,6 +577,7 @@ async def test_runtime_scope_exit_failure_replaces_terminal_failure_without_outc
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
             repository=AllowAnswerGenerationStart(),
@@ -897,6 +905,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
     expected = AnswerGenerationStopped if isinstance(outcome, Stop) else type(outcome)
     with pytest.raises(expected) as raised:
         await DirectAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=unused_scope,
             repository=start,

@@ -146,6 +146,7 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
     elif stage == "direct":
         state.recorder = RecordingDirectAnswerRecorder()
         service = DirectAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=scope,
             repository=AllowAnswerGenerationStart(),
@@ -156,6 +157,7 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
     else:
         state.recorder = RecordingEvidenceAnswerRecorder()
         service = EvidenceAnswerService(
+            schedule_deadline_check=lambda *_: None,
             agent=EVIDENCE_ANSWER_AGENT,
             runtime_scope_factory=scope,
             repository=AllowAnswerGenerationStart(),

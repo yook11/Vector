@@ -950,3 +950,27 @@ async def test_broker_startup_declares_consumer_group_only_on_worker_or_schedule
             declare.assert_not_called()
     finally:
         await broker.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agent_worker_owns_deadline_schedule_source(monkeypatch):
+    # agentだけが予約sourceを起動・終了する。
+    from app.queue.brokers import broker_agent, broker_collection
+
+    engine = MagicMock(dispose=AsyncMock())
+    source = MagicMock(startup=AsyncMock(), shutdown=AsyncMock())
+    factory = MagicMock(return_value=source)
+    monkeypatch.setattr("app.queue.lifecycle.create_deadline_schedule_source", factory)
+    async with _worker_lifecycle_stubs(
+        engine, live=_owned_redis(), control=_owned_redis()
+    ):
+        for broker in (broker_agent, broker_collection):
+            state = TaskiqState()
+            await broker.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
+            assert hasattr(state, "agent_deadline_scheduler") == (
+                broker is broker_agent
+            )
+            await broker.event_handlers[TaskiqEvents.WORKER_SHUTDOWN][0](state)
+    factory.assert_called_once_with(settings)
+    source.startup.assert_awaited_once()
+    source.shutdown.assert_awaited_once()

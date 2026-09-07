@@ -117,6 +117,7 @@ async def _answer(
     reporter: AgentRunLiveAnswerDeltaReporter,
 ) -> DirectAnswerDraft:
     return await DirectAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=generator.activate,
         repository=AllowAnswerGenerationStart(),
@@ -136,6 +137,7 @@ async def _evidence_answer(
     request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
     return await EvidenceAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=generator.activate,
         repository=AllowAnswerGenerationStart(),

@@ -82,3 +82,63 @@ async def test_cancellation_propagates():
     source = RecordingSource(error=asyncio.CancelledError())
     with pytest.raises(asyncio.CancelledError):
         await AgentDeadlineScheduler(source).reserve(uuid4(), datetime.now(UTC))
+
+
+@pytest.mark.asyncio
+async def test_parent_cancellation_does_not_cancel_reservation():
+    # 回答側のキャンセル後も予約はワーカーが所有する。
+    entered, release = asyncio.Event(), asyncio.Event()
+    source = RecordingSource()
+    original = source.add_schedule
+
+    async def add(schedule):
+        entered.set()
+        await release.wait()
+        await original(schedule)
+
+    source.add_schedule = add
+    scheduler = AgentDeadlineScheduler(source)
+
+    async def answer():
+        scheduler.reserve_in_background(uuid4(), datetime.now(UTC))
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(answer())
+    await entered.wait()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert len(scheduler._pending) == 1
+    release.set()
+    await asyncio.gather(*scheduler._pending)
+    await asyncio.sleep(0)
+    assert len(source.schedules) == 1
+    assert not scheduler._pending
+
+
+@pytest.mark.asyncio
+async def test_worker_cleanup_cancels_reservations_before_closing_source():
+    # 別resourceの終了失敗でも予約を回収してから接続を閉じる。
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.queue.lifecycle import _aclose_worker_resources
+
+    source = RecordingSource(stall=True)
+    scheduler = AgentDeadlineScheduler(source)
+    scheduler.reserve_in_background(uuid4(), datetime.now(UTC))
+    await asyncio.sleep(0)
+
+    async def shutdown():
+        assert not scheduler._pending
+
+    source.shutdown = AsyncMock(side_effect=shutdown)
+    state = SimpleNamespace(
+        agent_deadline_source=source,
+        agent_deadline_scheduler=scheduler,
+        pipeline_control_redis=SimpleNamespace(
+            aclose=AsyncMock(side_effect=RuntimeError("close failed"))
+        ),
+    )
+    with pytest.raises(RuntimeError, match="close failed"):
+        await _aclose_worker_resources(state)
+    source.shutdown.assert_awaited_once()
