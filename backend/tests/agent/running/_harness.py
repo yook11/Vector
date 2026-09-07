@@ -61,7 +61,6 @@ class AllowAnswerGenerationStart:
         self._timeline = timeline
         self.calls = 0
         self.start_calls = 0
-        self.check_calls = 0
         self.authorize_calls = 0
 
     async def start_answer_generation(self) -> AnswerGenerationStarted:
@@ -75,10 +74,6 @@ class AllowAnswerGenerationStart:
         self.authorize_calls += 1
         return Continue()
 
-    async def check_answer_generation_continuation(self) -> Continue:
-        self.check_calls += 1
-        return Continue()
-
 
 class ScriptedAnswerGenerationRepository:
     def __init__(
@@ -87,16 +82,13 @@ class ScriptedAnswerGenerationRepository:
         start: AnswerGenerationStarted | Stop | BaseException = AnswerGenerationStarted(
             RUN_ID, AS_OF
         ),
-        checks: list[Continue | Stop] | None = None,
         authorizes: list[Continue | Stop | BaseException] | None = None,
         timeline: list[str] | None = None,
     ) -> None:
         self.calls = 0
         self.start_calls = 0
-        self.check_calls = 0
         self.authorize_calls = 0
         self._start = start
-        self._checks = list(checks or [])
         self._authorizes = list(authorizes or [])
         self._timeline = timeline
 
@@ -117,12 +109,6 @@ class ScriptedAnswerGenerationRepository:
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
-
-    async def check_answer_generation_continuation(self) -> Continue | Stop:
-        self.check_calls += 1
-        if not self._checks:
-            return Continue()
-        return self._checks.pop(0)
 
 
 def review_draft(

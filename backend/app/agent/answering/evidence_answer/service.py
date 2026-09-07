@@ -174,19 +174,15 @@ class EvidenceAnswerService:
                 generation=attempt_number,
                 delta_reporter=self._delta,
             ) as live_draft:
-                await self._continue_generation()
-
                 stream = runtime.stream_text(
                     self._agent,
                     input,
                     attempt_number=attempt_number,
                 )
                 async for fragment in stream:
-                    await self._continue_generation()
                     raw_fragments.append(fragment)
                     await live_draft.append(fragment)
 
-                await self._continue_generation()
                 answer = "".join(raw_fragments)
                 draft = finalize_evidence_answer_draft(
                     answer, evidence=list(input.evidence)
@@ -202,8 +198,3 @@ class EvidenceAnswerService:
         if isinstance(result, Stop):
             raise AnswerGenerationStopped(result.reason)
         await self._delta.reset(generation=generation)
-
-    async def _continue_generation(self) -> None:
-        result = await self._repository.check_answer_generation_continuation()
-        if isinstance(result, Stop):
-            raise AnswerGenerationStopped(result.reason)

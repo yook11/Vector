@@ -80,9 +80,6 @@ class _ProbeAnswerGenerationStart:
     async def authorize_answer_regeneration(self) -> Continue:
         return Continue()
 
-    async def check_answer_generation_continuation(self) -> Continue:
-        return Continue()
-
 
 class _UnreachableInternalSearch:
     async def search(self, queries: object) -> list[object]:

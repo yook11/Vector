@@ -33,7 +33,7 @@
 | `app/agent/running/continuation.py` | Runの継続可否の判断、短いsessionで確認するprobeとキャッシュ |
 | `app/agent/running/creation.py` | 質問・queuedのRunの作成、利用枠予約、作成結果・例外 |
 | `app/agent/running/attempt_start.py` | Runの開始可否、実行世代の更新、開始結果・不成立理由 |
-| `app/agent/running/answer_generation.py` | 回答生成の開始記録・再生成許可・継続確認 |
+| `app/agent/running/answer_generation.py` | 回答生成の開始記録・再生成許可 |
 | `app/agent/running/completion.py` | 回答・出典・申し送りの保存とRun完了の確定、完了の成功・失敗理由 |
 | `app/agent/runs/execution.py` | 1回のRun実行を続けてよいか。`Continue` / `Stop` |
 
@@ -85,8 +85,9 @@ routerがトランザクションを所有し、利用枠の観測とrunningの�
 `running/answer_generation.py` にまとめる。workerがsession factory・Run ID・実行世代を渡し、
 composition経由で両回答サービスへ注入する。
 回答生成の開始・再生成許可はリポジトリ内部の短いトランザクションで確定し、commit後に生成を許可する。
-生成中の継続確認は状態・世代・開始記録を読むだけとし、元の開始期限では停止しない。
-継続確認の2秒キャッシュと停止結果の保持は同じリポジトリが所有し、開始・再生成許可には使わない。
+生成ストリーム開始直前・各断片受信時・終了後の継続確認と専用の2秒キャッシュは廃止する。
+キャンセルや実行世代変更後も生成終了または15秒タイムアウトまでLLM処理・途中配信が続き得る。
+最終保存時の行ロックと状態・実行世代・回収期限の検証により、終了済みrunや古い実行の回答は保存しない。
 回答生成・再試行方針・15秒タイマーは回答サービスに残し、実行継続probeとは共通化しない。
 表示・配信向けの読み出しは `AgentRunPresentationRepository` と
 `OwnedAgentRunLiveContext` を `running/presentation.py` にまとめる。
@@ -130,14 +131,14 @@ DB時刻取得は同じファイルの関数に残し、時計専用ファイル
 - 所有者の確認、active Runの一意性、古いattemptの排除、終端状態の保護を維持する。
 - 受付では質問・Run・利用枠、完了では回答・出典・Run・調査の申し送りを同時に確定する。
 - 受付・実行開始・完了・失敗記録・キャンセルのトランザクションは既存のrouter / workerが所有する。
-  回答生成の開始・再生成許可・DBでの継続確認は、回答生成リポジトリが短いトランザクションを所有する。
+  回答生成の開始・再生成許可は、回答生成リポジトリが短いトランザクションを所有する。
 - quotaログ・メトリクスと終了通知は既存のcommit後の位置で実行する。
 
 ## Non-goals
 
 - DB schema、API、認証・認可、利用上限・期限・返却条件の変更。
 - 回答生成・ライブ配信・worker timeoutの再設計。
-- Runの作成・実行開始・実行継続確認・回答生成の開始と継続・完了・失敗記録・キャンセル・ポリシーによる終了記録・表示配信向け読み出し以外の実行管理の再編、会話への変換・引用検査の移動、テスト全体の再配置。
+- Runの作成・実行開始・実行継続確認・回答生成の開始と再生成許可・完了・失敗記録・キャンセル・ポリシーによる終了記録・表示配信向け読み出し以外の実行管理の再編、会話への変換・引用検査の移動、テスト全体の再配置。
 - 汎用service、Unit of Work、互換用の再公開の追加。
 
 ## Done

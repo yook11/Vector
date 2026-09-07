@@ -1,5 +1,7 @@
 # Agent Direct answer delta streaming slice 仕様
 
+> 更新: 回答生成中の2秒キャッシュ付き継続確認は廃止した。生成開始・再生成許可・最終保存のチェックと再試行込み15秒タイムアウトを維持する。本文中の生成途中のDB確認・停止検知に関する記述は、[現行の実行境界](agent-run-concept-boundaries.md)で置き換える。回答生成以外の実行継続probeは変更しない。
+
 Status: Implemented — 2026-07-12
 
 `agent-evidence-answer-draft-deltas-slice.md`の実装により、`AnswerVisibleTextFilter`と
