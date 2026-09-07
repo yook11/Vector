@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-import app.agent.daily_quota.observability as quota_observability
+import app.agent.running.daily_quota.observability as quota_observability
 from app.agent.running.deadline.deadline_exceeded import DeadlineExceededRunningRun
 
 

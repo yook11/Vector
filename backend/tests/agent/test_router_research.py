@@ -18,11 +18,6 @@ from structlog.testing import capture_logs
 
 import app.agent.live_updates.transport as live_transport_module
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
-from app.agent.daily_quota import observability as daily_quota_observability
-from app.agent.daily_quota.release import (
-    DailyQuotaReleaseOutcome,
-)
-from app.agent.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.live_updates.transport import (
     AgentLiveTransport,
@@ -40,6 +35,12 @@ from app.agent.running.completion import (
     RunCompletionFailureReason,
 )
 from app.agent.running.creation import AgentRunCreationRepository
+from app.agent.running.daily_quota import observability as daily_quota_observability
+from app.agent.running.daily_quota.release import (
+    DailyQuotaReleaseOutcome,
+)
+from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
+from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.runs.enqueuer import get_agent_run_enqueuer
 from app.config import settings
@@ -60,6 +61,22 @@ _QUOTA_RESET_AT = datetime(
     21,
     tzinfo=timezone(timedelta(hours=9)),
 )
+
+
+class FakeDeadlineScheduler:
+    def __init__(self):
+        self.calls = []
+
+    async def reserve(self, run_id, deadline_at):
+        self.calls.append((run_id, deadline_at))
+
+
+@pytest.fixture(autouse=True)
+def deadline_scheduler():
+    scheduler = FakeDeadlineScheduler()
+    app.dependency_overrides[get_agent_deadline_scheduler] = lambda: scheduler
+    yield scheduler
+    app.dependency_overrides.pop(get_agent_deadline_scheduler, None)
 
 
 class FakeEnqueue:
@@ -1173,6 +1190,7 @@ class TestQuotaRouterTelemetry:
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
+        deadline_scheduler,
     ) -> None:
         client, _fake_enqueue = quota_research_client
         calls: list[dict[str, object]] = []
@@ -1201,6 +1219,8 @@ class TestQuotaRouterTelemetry:
                 json={"question": "transaction failure"},
             )
 
+        assert deadline_scheduler.calls == []
+        assert _fake_enqueue.calls == []
         assert response.status_code == 500
         assert commit_attempted is True
         assert calls == []
@@ -2856,3 +2876,108 @@ async def test_cancel_unexpected_active_state_rolls_back_without_notification(
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_deadline_reservation_follows_http_body_without_blocking_answer(
+    research_client, auth_headers, db_session, deadline_scheduler, monkeypatch
+):
+    """予約待機中でも回答投入とHTTP body送信が完了する。"""
+    import asyncio
+    import json
+
+    _, enqueue = research_client
+    body_sent = asyncio.Event()
+    reservation_entered = asyncio.Event()
+    release_reservation = asyncio.Event()
+    response_body = bytearray()
+    reservations = []
+
+    async def reserve(run_id, deadline_at):
+        assert body_sent.is_set()
+        assert enqueue.calls == [run_id]
+        reservations.append((run_id, deadline_at))
+        reservation_entered.set()
+        await release_reservation.wait()
+
+    monkeypatch.setattr(deadline_scheduler, "reserve", reserve)
+
+    async def observed_app(scope, receive, send):
+        async def observed_send(message):
+            if message["type"] == "http.response.body":
+                response_body.extend(message.get("body", b""))
+                if not message.get("more_body", False):
+                    body_sent.set()
+            await send(message)
+
+        await app(scope, receive, observed_send)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=observed_app),
+        base_url="http://test",
+        headers=auth_headers,
+    ) as client:
+        request = asyncio.create_task(
+            client.post("/api/v1/research/responses", json={"question": "予約の順序"})
+        )
+        try:
+            await asyncio.wait_for(reservation_entered.wait(), 5)
+            assert body_sent.is_set()
+            payload = json.loads(response_body)
+            assert str(reservations[0][0]) == payload["runId"]
+            assert not request.done()
+        finally:
+            release_reservation.set()
+            response = await request
+    assert response.status_code == 202
+    run = await db_session.get(AgentRun, reservations[0][0])
+    assert run.deadline_at == reservations[0][1]
+
+
+@pytest.mark.asyncio
+async def test_rejected_admission_does_not_reserve_deadline(
+    research_client, deadline_scheduler
+):
+    """存在しないスレッドへの受付拒否では予約を追加しない。"""
+    from uuid import uuid4
+
+    client, enqueue = research_client
+    response = await client.post(
+        "/api/v1/research/responses",
+        json={"question": "予約しない", "threadId": str(uuid4())},
+    )
+    assert response.status_code == 404
+    assert enqueue.calls == []
+    assert deadline_scheduler.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stall", [False, True])
+async def test_reservation_failure_keeps_accepted_run_and_quota(
+    quota_research_client, db_session, monkeypatch, stall
+):
+    """予約例外・タイムアウトで受付済みrunとquotaを変更しない。"""
+    import asyncio
+
+    from app.agent.running.deadline import scheduling
+    from tests.agent.run_deadline.test_scheduling import RecordingSource
+
+    client, enqueue = quota_research_client
+    source = RecordingSource(
+        stall=stall, error=None if stall else RuntimeError("private reservation error")
+    )
+    monkeypatch.setattr(scheduling, "DEADLINE_RESERVATION_TIMEOUT_SECONDS", 0.01)
+    app.dependency_overrides[get_agent_deadline_scheduler] = lambda: (
+        scheduling.AgentDeadlineScheduler(source)
+    )
+    response = await asyncio.wait_for(
+        client.post(_RESPONSES_URL, json={"question": "予約失敗の独立性"}), 5
+    )
+    assert response.status_code == 202
+    run_id = UUID(response.json()["runId"])
+    assert enqueue.calls == [run_id]
+    assert len(source.schedules) == 1
+    run = await db_session.get(AgentRun, run_id)
+    assert run.status == "queued"
+    assert run.error_code is None
+    assert await db_session.scalar(select(AgentUserDailyQuota.used_count)) == 1

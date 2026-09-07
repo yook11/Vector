@@ -89,13 +89,15 @@ def test_scheduler_entrypoint_uses_exact_scheduler_set() -> None:
 
 
 async def _discovered_cron_task_names(scheduler: TaskiqScheduler) -> set[str]:
-    """scheduler の全 source を startup し、発見した cron task_name 集合を返す。
+    """scheduler の LabelScheduleSource から cron task_name 集合を返す。
 
     ``LabelScheduleSource.startup`` は ``broker.get_all_tasks()`` のメモリ走査のみで
     Redis 接続を伴わない (``scheduler.startup`` / ``broker.startup`` は呼ばない)。
     """
     names: set[str] = set()
     for source in scheduler.sources:
+        if not isinstance(source, LabelScheduleSource):
+            continue
         await source.startup()
         names |= {task.task_name for task in await source.get_schedules()}
     return names

@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
@@ -16,6 +16,7 @@ from app.agent.running.completion import (
     AgentRunCompletionRepository,
     RunCompletionSuccess,
 )
+from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
@@ -288,8 +289,10 @@ async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("single_run", [False, True])
 async def test_sweep_rechecks_recovery_deadline_after_answer_start_wins_lock(
     session_factory: async_sessionmaker[AsyncSession],
+    single_run: bool,
 ) -> None:
     sweep_time = datetime(2026, 9, 2, 12, 1, tzinfo=UTC)
     answer_started_at = sweep_time - timedelta(seconds=5)
@@ -322,7 +325,12 @@ async def test_sweep_rechecks_recovery_deadline_after_answer_start_wins_lock(
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                sweep_deadline_exceeded_runs_at(sweep_session, at=sweep_time)
+                _recover_deadline_exceeded_runs(
+                    sweep_session,
+                    thread_id=None,
+                    run_id=run.id if single_run else None,
+                    clock=literal(sweep_time),
+                )
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -353,10 +361,12 @@ async def test_sweep_rechecks_recovery_deadline_after_answer_start_wins_lock(
         pytest.param("cancel", "failed", id="cancellation"),
     ],
 )
+@pytest.mark.parametrize("single_run", [False, True])
 async def test_sweep_preserves_terminal_transition_that_wins_run_lock(
     session_factory: async_sessionmaker[AsyncSession],
     terminalizer: str,
     expected_status: str,
+    single_run: bool,
 ) -> None:
     answer_started_at = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
     sweep_time = answer_started_at + timedelta(seconds=45)
@@ -416,7 +426,12 @@ async def test_sweep_preserves_terminal_transition_that_wins_run_lock(
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                sweep_deadline_exceeded_runs_at(sweep_session, at=sweep_time)
+                _recover_deadline_exceeded_runs(
+                    sweep_session,
+                    thread_id=None,
+                    run_id=run.id if single_run else None,
+                    clock=literal(sweep_time),
+                )
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -636,3 +651,42 @@ async def test_sweep_preserves_existing_terminal_runs(
     assert persisted.assistant_message_id == assistant_message_id
     assert persisted.error_code == ("internal_error" if status == "failed" else None)
     assert persisted.attempt_epoch == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "generation_age,expected",
+    [(None, "deadline_exceeded"), (5, "running"), (45, "deadline_exceeded")],
+)
+async def test_single_run_recovery_uses_shared_deadline_and_does_not_touch_neighbors(
+    session_factory, generation_age, expected
+):
+    """単発確認は最新の生成開始時刻で判定し、別runを回収しない。"""
+    from sqlalchemy import literal
+
+    from app.agent.running.deadline.deadline_exceeded import (
+        _recover_deadline_exceeded_runs,
+    )
+
+    at = datetime(2026, 9, 7, 12, tzinfo=UTC)
+    async with session_factory() as session:
+        async with session.begin():
+            target = await _seed_run(
+                session,
+                status="running",
+                attempt_epoch=2,
+                created_at=at - timedelta(seconds=70),
+                answer_started_at=None
+                if generation_age is None
+                else at - timedelta(seconds=generation_age),
+            )
+            neighbor = await _seed_run(
+                session, status="queued", created_at=at - timedelta(seconds=70)
+            )
+        for _ in range(2):
+            async with session.begin():
+                await _recover_deadline_exceeded_runs(
+                    session, thread_id=None, run_id=target.id, clock=literal(at)
+                )
+    assert (await _persisted_run(session_factory, target.id)).status == expected
+    assert (await _persisted_run(session_factory, neighbor.id)).status == "queued"

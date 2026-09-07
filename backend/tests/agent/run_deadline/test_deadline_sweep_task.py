@@ -6,6 +6,7 @@ import traceback
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
@@ -16,10 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
-from app.agent.daily_quota import observability as daily_quota_observability
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
+from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
+from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
 from tests.agent.runs._seed import (
     create_thread_message_run as _create_thread_message_run,
@@ -777,3 +779,144 @@ async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back
     persisted = await _persisted_run_for_sweep_test(session_factory, run.id)
     assert persisted.status == "queued"
     assert persisted.error_code is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expired", [False, True])
+async def test_single_run_task_checks_queued_deadline(session_factory, expired):
+    """queuedは元の期限に到達した場合だけ終了する。"""
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        _, _, run = await _create_thread_message_run(
+            session,
+            created_at=now - timedelta(seconds=60),
+            deadline_at=now + timedelta(seconds=-1 if expired else 60),
+        )
+    await agent_run_tasks.check_agent_run_deadline(
+        AgentRunTrigger(run_id=run.id), ctx=_ctx(session_factory)
+    )
+    persisted = await _persisted_run_for_sweep_test(session_factory, run.id)
+    assert persisted.status == ("deadline_exceeded" if expired else "queued")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expired", [False, True])
+async def test_single_run_task_checks_answering_recovery_deadline(
+    session_factory, monkeypatch, expired
+):
+    """runningの回答生成開始後は元の期限を超えても生成後の回収期限で判定する。"""
+    from app.agent.answering.timing import (
+        ANSWER_GENERATION_RECOVERY_GRACE_SECONDS,
+        ANSWER_GENERATION_TIMEOUT_SECONDS,
+    )
+
+    now = datetime.now(UTC)
+    age = (
+        ANSWER_GENERATION_TIMEOUT_SECONDS + ANSWER_GENERATION_RECOVERY_GRACE_SECONDS + 1
+        if expired
+        else 5
+    )
+    async with session_factory() as session:
+        _, _, run = await _create_thread_message_run(
+            session,
+            status="running",
+            created_at=now - timedelta(seconds=60),
+            deadline_at=now - timedelta(seconds=1),
+            answer_started_at=now - timedelta(seconds=age),
+            attempt_epoch=7,
+        )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        MagicMock(return_value=MagicMock(publish=AsyncMock(return_value="terminal"))),
+    )
+    await agent_run_tasks.check_agent_run_deadline(
+        AgentRunTrigger(run_id=run.id), ctx=_ctx(session_factory)
+    )
+    persisted = await _persisted_run_for_sweep_test(session_factory, run.id)
+    assert persisted.status == ("deadline_exceeded" if expired else "running")
+
+
+@pytest.mark.asyncio
+async def test_single_run_task_notifies_current_epoch_after_commit(
+    session_factory, monkeypatch
+):
+    """DBで終了が確定してから、対象runの現在の実行世代を付けて通知する。"""
+    at = datetime.now(UTC) - timedelta(seconds=1)
+    async with session_factory() as session:
+        _, _, run = await _create_thread_message_run(
+            session,
+            status="running",
+            created_at=at - timedelta(seconds=60),
+            deadline_at=at,
+            attempt_epoch=7,
+        )
+    observed = []
+
+    async def observe_publish(event):
+        persisted = await _persisted_run_for_sweep_test(session_factory, run.id)
+        observed.append((persisted.status, event))
+        return "terminal"
+
+    publisher = MagicMock(publish=AsyncMock(side_effect=observe_publish))
+    factory = MagicMock(return_value=publisher)
+    monkeypatch.setattr(agent_run_tasks, "AgentRunLiveStreamPublisher", factory)
+    ctx = _ctx(session_factory)
+    await agent_run_tasks.check_agent_run_deadline(
+        AgentRunTrigger(run_id=run.id), ctx=ctx
+    )
+    factory.assert_called_once_with(ctx.state.agent_live_redis, run.id, 7)
+    assert observed == [
+        (
+            "deadline_exceeded",
+            AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_single_run_task_does_not_notify_queued_run(session_factory, monkeypatch):
+    """queuedの回収では実行世代への通知を作らない。"""
+    at = datetime.now(UTC) - timedelta(seconds=1)
+    async with session_factory() as session:
+        _, _, run = await _create_thread_message_run(
+            session,
+            created_at=at - timedelta(seconds=60),
+            deadline_at=at,
+        )
+    factory = MagicMock()
+    monkeypatch.setattr(agent_run_tasks, "AgentRunLiveStreamPublisher", factory)
+    await agent_run_tasks.check_agent_run_deadline(
+        AgentRunTrigger(run_id=run.id), ctx=_ctx(session_factory)
+    )
+    factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_repeated_deadline_checks_do_not_repeat_terminal_notification(
+    session_factory, monkeypatch
+):
+    """run単位の確認と定期回収を重ねても、終了通知を再送しない。"""
+    at = datetime.now(UTC) - timedelta(seconds=1)
+    async with session_factory() as session:
+        _, _, run = await _create_thread_message_run(
+            session,
+            status="running",
+            attempt_epoch=7,
+            created_at=at - timedelta(seconds=60),
+            deadline_at=at,
+        )
+    publisher = MagicMock(publish=AsyncMock(return_value="terminal"))
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        MagicMock(return_value=publisher),
+    )
+    for _ in range(2):
+        await agent_run_tasks.check_agent_run_deadline(
+            AgentRunTrigger(run_id=run.id), ctx=_ctx(session_factory)
+        )
+    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
+    publisher.publish.assert_awaited_once_with(
+        AgentRunLiveStreamTerminalEvent(status="deadline_exceeded")
+    )

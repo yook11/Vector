@@ -15,12 +15,14 @@ from __future__ import annotations
 from taskiq import TaskiqScheduler
 from taskiq.schedule_sources import LabelScheduleSource
 
+from app.config import settings
 from app.queue.brokers import (
     broker_agent,
     broker_briefing,
     broker_dispatch,
     broker_maintenance,
 )
+from app.queue.deadline_schedule import create_deadline_schedule_source
 
 scheduler_dispatch = TaskiqScheduler(
     broker=broker_dispatch,
@@ -32,7 +34,10 @@ scheduler_briefing = TaskiqScheduler(
 )
 scheduler_agent = TaskiqScheduler(
     broker=broker_agent,
-    sources=[LabelScheduleSource(broker_agent)],
+    sources=[
+        LabelScheduleSource(broker_agent),
+        create_deadline_schedule_source(settings),
+    ],
 )
 scheduler_maintenance = TaskiqScheduler(
     broker=broker_maintenance,

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from contextlib import AsyncExitStack
 from datetime import timedelta
 
 import structlog
@@ -84,14 +85,19 @@ async def _run_one(scheduler: TaskiqScheduler) -> None:
         # broker.startup: CLIENT_STARTUP(log) + middleware を起動。
         await scheduler.startup()
         await SchedulerLoop(scheduler).run(
-            update_interval=_UPDATE_INTERVAL,
+            update_interval=(
+                timedelta(seconds=1)
+                if scheduler is scheduler_agent
+                else _UPDATE_INTERVAL
+            ),
             loop_interval=_LOOP_INTERVAL,
             skip_first_run=False,  # 現運用 (taskiq scheduler 既定) と等価
         )
     finally:
-        await scheduler.shutdown()
-        for source in started:
-            await source.shutdown()
+        async with AsyncExitStack() as stack:
+            for source in started:
+                stack.push_async_callback(source.shutdown)
+            stack.push_async_callback(scheduler.shutdown)
 
 
 async def _main() -> None:

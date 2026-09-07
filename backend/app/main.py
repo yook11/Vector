@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from app.admin.router import admin_router
 from app.agent.live_updates.transport import AgentLiveTransport
 from app.agent.router import router as research_router
+from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
 from app.agent.runs.enqueuer import AgentRunEnqueuer
 from app.config import settings
 from app.db.engine import (
@@ -37,6 +38,7 @@ from app.insights.trend_discovery.router import (
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
 from app.queue.brokers import broker_agent, broker_collection, broker_dispatch
+from app.queue.deadline_schedule import create_deadline_schedule_source
 from app.redis import create_api_agent_live_client
 from app.routers import (
     articles,
@@ -117,6 +119,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # を出さないため)。
     engine = create_api_engine(settings)
     live = None
+    deadline_source = None
     started: list[object] = []
     try:
         app.state.engine = engine
@@ -135,6 +138,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         live = create_api_agent_live_client(settings)
         app.state.agent_live_transport = AgentLiveTransport(live)
         app.state.agent_run_enqueuer = AgentRunEnqueuer()
+        deadline_source = create_deadline_schedule_source(settings)
+        await deadline_source.startup()
+        app.state.agent_deadline_scheduler = AgentDeadlineScheduler(deadline_source)
         for broker in _API_PRODUCER_BROKERS:
             await broker.startup()
             started.append(broker)
@@ -142,6 +148,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     finally:
         async with AsyncExitStack() as stack:
             stack.push_async_callback(engine.dispose)
+            if deadline_source is not None:
+                stack.push_async_callback(deadline_source.shutdown)
             if live is not None:
                 stack.push_async_callback(live.aclose)
             for broker in started:

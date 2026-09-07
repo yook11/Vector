@@ -14,7 +14,6 @@ from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
-from app.agent.daily_quota import observability as daily_quota_observability
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.reporters import (
     AgentRunLiveActivityReporter,
@@ -48,7 +47,14 @@ from app.agent.running.completion import (
     RunCompletionSuccess,
 )
 from app.agent.running.continuation import AgentRunExecutionProbe
-from app.agent.running.deadline.deadline_exceeded import sweep_deadline_exceeded_runs
+from app.agent.running.daily_quota import observability as daily_quota_observability
+from app.agent.running.deadline.deadline_exceeded import (
+    DeadlineRunSweepResult,
+    sweep_deadline_exceeded_runs,
+)
+from app.agent.running.deadline.deadline_exceeded import (
+    check_agent_run_deadline as recover_agent_run,
+)
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.runs.contracts import UserQuestionMessage
 from app.agent.runs.execution import Stop, StopReason
@@ -328,6 +334,39 @@ async def sweep_deadline_exceeded_agent_runs(ctx: Context = TaskiqDepends()) -> 
     if sweep_error is not None:
         sweep_error.__suppress_context__ = True
         raise sweep_error
+    await _report_deadline_recovery(ctx, result)
+
+
+@broker_agent.task(
+    task_name="check_agent_run_deadline",
+    timeout=60,
+    max_retries=0,
+    retry_on_error=False,
+)
+async def check_agent_run_deadline(
+    trigger: AgentRunTrigger, ctx: Context = TaskiqDepends()
+) -> None:
+    failure = None
+    try:
+        async with ctx.state.session_factory() as session:
+            async with session.begin():
+                result = await recover_agent_run(session, run_id=trigger.run_id)
+    except Exception as exc:
+        logger.error(
+            "agent_run_deadline_check_failed",
+            run_id=str(trigger.run_id),
+            error_type=type(exc).__name__,
+        )
+        failure = AgentRunTaskBoundaryError("agent run deadline check failed")
+    if failure is not None:
+        failure.__suppress_context__ = True
+        raise failure
+    await _report_deadline_recovery(ctx, result)
+
+
+async def _report_deadline_recovery(
+    ctx: Context, result: DeadlineRunSweepResult
+) -> None:
     with suppress(Exception):
         logger.info("agent_runs_deadline_swept", count=result.total_count)
     if result.queued_terminal_count > 0:

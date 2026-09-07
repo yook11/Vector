@@ -11,8 +11,8 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.daily_quota import observability as daily_quota_observability
-from app.agent.daily_quota.release import release_daily_quota
+from app.agent.running.daily_quota import observability as daily_quota_observability
+from app.agent.running.daily_quota.release import release_daily_quota
 from app.agent.running.deadline.deadline_exceeded import database_now, expire_run
 from app.agent.runs.types import AgentRunStatus
 from app.models.agent_run import AgentRun

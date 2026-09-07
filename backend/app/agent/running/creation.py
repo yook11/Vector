@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.daily_quota.reservation import reserve_daily_quota
+from app.agent.running.daily_quota.reservation import reserve_daily_quota
 from app.agent.running.deadline.deadline_exceeded import database_now
 from app.agent.running.deadline.policy import deadline_for_run
 from app.agent.runs.types import AgentRunStatus
@@ -31,6 +31,7 @@ class ActiveRunConflictError(Exception):
 class CreatedAgentRun:
     thread_id: UUID
     run_id: UUID
+    deadline_at: datetime
     usage_date: date
     used_count: int
 
@@ -103,6 +104,7 @@ class AgentRunCreationRepository:
         return CreatedAgentRun(
             thread_id=thread.id,
             run_id=run.id,
+            deadline_at=deadline_at,
             usage_date=quota_reservation.usage_date,
             used_count=quota_reservation.used_count,
         )
