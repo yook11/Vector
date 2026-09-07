@@ -31,7 +31,6 @@ from app.agent.recording.evidence_answer import (
 from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
-    AIProviderError,
     AIProviderNetworkError,
     AIProviderOutputTruncatedError,
 )
@@ -337,8 +336,9 @@ async def test_fragments_flow_unchanged_and_concatenate_into_the_answer() -> Non
     """
     generator = FakeGenerator([["根拠から", "確認できます。", "[[1]]"]])
     reporter = RecordingDeltaReporter()
+    repository = AllowAnswerGenerationStart()
 
-    draft = await _answer(generator, delta_reporter=reporter)
+    draft = await _answer(generator, delta_reporter=reporter, answer_start=repository)
 
     assert draft == _expected_draft(
         answer="根拠から確認できます。[[1]]",
@@ -348,6 +348,9 @@ async def test_fragments_flow_unchanged_and_concatenate_into_the_answer() -> Non
     assert {generation for generation, _ in reporter.appended} == {1}
     assert reporter.finished == [1]
     assert reporter.aborted == []
+
+    assert repository.start_calls == 1
+    assert repository.authorize_calls == 0
 
 
 @pytest.mark.asyncio
@@ -813,87 +816,7 @@ async def test_reporter_is_not_part_of_final_draft_correctness(
 
 
 @pytest.mark.asyncio
-async def test_continuation_false_before_provider_start_is_routine_stop(
-    capfire: CaptureLogfire,
-) -> None:
-    assert not issubclass(AnswerGenerationStopped, AIProviderError)
-    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
-    reporter = RecordingDeltaReporter()
-
-    with pytest.raises(AnswerGenerationStopped):
-        await _answer(
-            generator,
-            delta_reporter=reporter,
-            answer_start=ScriptedAnswerGenerationRepository(
-                checks=[Stop(StopReason.NOT_CURRENT)]
-            ),
-        )
-
-    assert generator.calls == []
-    assert generator.streams == []
-    assert reporter.aborted == [1]
-    assert reporter.appended == []
-    assert reporter.finished == []
-    metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
-    phase = one_span_named(capfire, _PHASE_SPAN_NAME)
-    assert exception_event(phase) is None
-    assert phase.get("status", {}).get("description") in (None, "")
-    assert (generator.scope_enters, generator.scope_exits) == (1, 1)
-
-
-@pytest.mark.asyncio
-async def test_continuation_false_mid_stream_closes_and_aborts(
-    capfire: CaptureLogfire,
-) -> None:
-    generator = FakeGenerator([["表示済み本文と", "非表示本文。[[1]]"]])
-    reporter = RecordingDeltaReporter()
-    repository = ScriptedAnswerGenerationRepository(
-        checks=[Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
-    )
-
-    with pytest.raises(AnswerGenerationStopped):
-        await _answer(
-            generator,
-            delta_reporter=reporter,
-            answer_start=repository,
-        )
-
-    assert "".join(text for _, text in reporter.appended) == "表示済み本文と"
-    assert reporter.aborted == [1]
-    assert reporter.finished == []
-    assert generator.streams[0].closed is True
-    metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
-
-
-@pytest.mark.asyncio
-async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
-    capfire: CaptureLogfire,
-) -> None:
-    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
-    reporter = RecordingDeltaReporter()
-    repository = ScriptedAnswerGenerationRepository(
-        checks=[Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
-    )
-
-    with pytest.raises(AnswerGenerationStopped):
-        await _answer(
-            generator,
-            delta_reporter=reporter,
-            answer_start=repository,
-        )
-
-    assert reporter.aborted == [1]
-    assert reporter.finished == []
-    assert reporter.reset_generations == []
-    assert generator.streams[0].closed is True
-    metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == []
-
-
-@pytest.mark.asyncio
-async def test_provider_error_does_not_perform_a_fallback_continuation_check(
+async def test_provider_error_closes_stream_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeGenerator([AIProviderNetworkError()])
@@ -904,7 +827,7 @@ async def test_provider_error_does_not_perform_a_fallback_continuation_check(
             generator,
             delta_reporter=reporter,
             answer_start=ScriptedAnswerGenerationRepository(
-                checks=[Continue(), Stop(StopReason.NOT_CURRENT)]
+                authorizes=[Stop(StopReason.NOT_CURRENT)]
             ),
         )
 
@@ -1079,13 +1002,13 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
     """AnswerGenerationStopped は stopped とし、既存結論を渡さない。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
-    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
+    generator = FakeGenerator([" "])
 
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _answer(
             generator,
             answer_start=ScriptedAnswerGenerationRepository(
-                checks=[Stop(StopReason.NOT_CURRENT)]
+                authorizes=[Stop(StopReason.NOT_CURRENT)]
             ),
             recorder=recorder,
         )
@@ -1095,7 +1018,7 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_error_records_failure_without_fallback() -> None:
-    """生成不能後は継続確認を追加せず、生成失敗を通知する。"""
+    """生成不能後は再生成せず、生成失敗を通知する。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator([AIProviderNetworkError()])
@@ -1104,7 +1027,7 @@ async def test_provider_error_records_failure_without_fallback() -> None:
         await _answer(
             generator,
             answer_start=ScriptedAnswerGenerationRepository(
-                checks=[Continue(), Stop(StopReason.NOT_CURRENT)]
+                authorizes=[Stop(StopReason.NOT_CURRENT)]
             ),
             recorder=recorder,
         )

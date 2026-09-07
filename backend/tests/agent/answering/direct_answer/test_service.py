@@ -32,7 +32,6 @@ from app.agent.recording.direct_answer import (
 from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
-    AIProviderError,
     AIProviderNetworkError,
     AIProviderOutputTruncatedError,
 )
@@ -603,14 +602,20 @@ async def test_incremental_fragments_reconstruct_existing_final_answer() -> None
         [[" \t回答", "[[1", "]] ", "の続き", "です。\n"]]
     )
     reporter = RecordingDeltaReporter()
+    repository = AllowAnswerGenerationStart()
 
-    draft = await _service(runtime, delta_reporter=reporter).answer(_input())
+    draft = await _service(
+        runtime, delta_reporter=reporter, repository=repository
+    ).answer(_input())
 
     assert draft == DirectAnswerDraft(answer="回答 の続きです。")
     assert "".join(text for _, text in reporter.appended) == draft.answer
     assert {generation for generation, _ in reporter.appended} == {1}
     assert reporter.finished == [1]
     assert reporter.aborted == []
+
+    assert repository.start_calls == 1
+    assert repository.authorize_calls == 0
 
 
 @pytest.mark.asyncio
@@ -661,79 +666,6 @@ async def test_reporter_abort_failure_does_not_mask_provider_error() -> None:
 
     assert exc_info.value.__cause__ is provider_exc
     assert reporter.aborted == [1]
-
-
-@pytest.mark.asyncio
-async def test_continuation_false_before_provider_start_is_routine_stop() -> None:
-    assert not issubclass(AnswerGenerationStopped, AIProviderError)
-    assert not issubclass(AnswerGenerationStopped, DirectAnswerInvalidError)
-    runtime = ScriptedStreamingRuntime(["呼ばれない"])
-    reporter = RecordingDeltaReporter()
-
-    with pytest.raises(AnswerGenerationStopped):
-        await _service(
-            runtime,
-            delta_reporter=reporter,
-            repository=ScriptedAnswerGenerationRepository(
-                checks=[Stop(StopReason.NOT_CURRENT)]
-            ),
-        ).answer(_input())
-
-    assert runtime.calls == []
-    assert runtime.streams == []
-    assert reporter.appended == []
-    assert reporter.aborted == [1]
-    assert reporter.finished == []
-
-
-@pytest.mark.asyncio
-async def test_continuation_false_mid_stream_aborts_iterator_and_pending_report() -> (
-    None
-):
-    runtime = ScriptedStreamingRuntime([["表示済み", "見せない本文"]])
-    reporter = RecordingDeltaReporter()
-    repository = ScriptedAnswerGenerationRepository(
-        checks=[Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
-    )
-
-    with pytest.raises(AnswerGenerationStopped):
-        await _service(
-            runtime,
-            delta_reporter=reporter,
-            repository=repository,
-        ).answer(_input())
-
-    assert repository.check_calls == 3
-    assert "".join(text for _, text in reporter.appended) == "表示済み"
-    assert reporter.aborted == [1]
-    assert reporter.finished == []
-    assert runtime.streams[0].closed is True
-
-
-@pytest.mark.asyncio
-async def test_continuation_false_at_normal_stream_end_aborts_before_finish(
-    capfire: CaptureLogfire,
-) -> None:
-    runtime = ScriptedStreamingRuntime([["表示済み本文"]])
-    reporter = RecordingDeltaReporter()
-    repository = ScriptedAnswerGenerationRepository(
-        checks=[Continue(), Continue(), Stop(StopReason.NOT_CURRENT)]
-    )
-
-    with pytest.raises(AnswerGenerationStopped):
-        await _service(
-            runtime,
-            delta_reporter=reporter,
-            repository=repository,
-        ).answer(_input())
-
-    assert repository.check_calls == 3
-    assert reporter.appended == [(1, "表示済み本文")]
-    assert reporter.aborted == [1]
-    assert reporter.finished == []
-    assert runtime.streams[0].closed is True
-    metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == []
 
 
 async def test_successful_answer_records_succeeded_outcome() -> None:
@@ -805,13 +737,13 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
     """AnswerGenerationStopped は結論を渡さず同一インスタンスで伝播する。"""
 
     recorder = RecordingDirectAnswerRecorder()
-    runtime = ScriptedStreamingRuntime(["呼ばれない"])
+    runtime = ScriptedStreamingRuntime([" "])
 
     with pytest.raises(AnswerGenerationStopped) as exc_info:
         await _service(
             runtime,
             repository=ScriptedAnswerGenerationRepository(
-                checks=[Stop(StopReason.NOT_CURRENT)]
+                authorizes=[Stop(StopReason.NOT_CURRENT)]
             ),
             recorder=recorder,
         ).answer(_input())

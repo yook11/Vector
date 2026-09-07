@@ -1,4 +1,4 @@
-"""回答生成 repository の開始・再生成許可・継続確認のDB契約。"""
+"""回答生成 repository の開始・再生成許可のDB契約。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
     AnswerGenerationStarted,
-    _check_answer_generation_continuation,
     _start_answer_generation,
 )
 from app.agent.runs.execution import Continue, Stop, StopReason
@@ -351,96 +350,6 @@ async def test_authorize_stale_attempt_does_not_change_run(
 
     run = await _load_run(session_factory, run_id)
     assert result == Stop(StopReason.NOT_CURRENT)
-    assert run.status == "running"
-    assert run.answer_started_at == _ANSWER_STARTED_AT
-
-
-@pytest.mark.asyncio
-async def test_check_continues_after_original_deadline(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    async with session_factory() as session:
-        database_time = await session.scalar(text("SELECT clock_timestamp()"))
-    assert isinstance(database_time, datetime)
-    run_id = await _seed_running(
-        session_factory,
-        deadline_at=database_time - timedelta(seconds=1),
-        answer_started_at=database_time - timedelta(seconds=5),
-    )
-
-    result = await _repository(
-        session_factory, run_id
-    ).check_answer_generation_continuation()
-
-    run = await _load_run(session_factory, run_id)
-    assert result == Continue()
-    assert run.status == "running"
-    assert run.answer_started_at == database_time - timedelta(seconds=5)
-
-
-@pytest.mark.asyncio
-async def test_check_stop_does_not_write_for_non_running_or_unstarted(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    missing = await _repository(
-        session_factory, uuid.uuid4()
-    ).check_answer_generation_continuation()
-    assert missing == Stop(StopReason.NOT_CURRENT)
-
-    unstarted_id = await _seed_running(session_factory)
-    unstarted = await _repository(
-        session_factory, unstarted_id
-    ).check_answer_generation_continuation()
-    unstarted_run = await _load_run(session_factory, unstarted_id)
-    assert unstarted == Stop(StopReason.NOT_CURRENT)
-    assert unstarted_run.status == "running"
-    assert unstarted_run.answer_started_at is None
-
-    stale_id = await _seed_running(
-        session_factory,
-        answer_started_at=_ANSWER_STARTED_AT,
-    )
-    stale = await _repository(
-        session_factory, stale_id, attempt_epoch=_ATTEMPT_EPOCH - 1
-    ).check_answer_generation_continuation()
-    stale_run = await _load_run(session_factory, stale_id)
-    assert stale == Stop(StopReason.NOT_CURRENT)
-    assert stale_run.status == "running"
-    assert stale_run.answer_started_at == _ANSWER_STARTED_AT
-
-    failed_id = await _seed_running(
-        session_factory,
-        status="failed",
-        error_code="internal_error",
-        answer_started_at=_ANSWER_STARTED_AT,
-    )
-    failed = await _repository(
-        session_factory, failed_id
-    ).check_answer_generation_continuation()
-    failed_run = await _load_run(session_factory, failed_id)
-    assert failed == Stop(StopReason.NOT_CURRENT)
-    assert failed_run.status == "failed"
-
-
-@pytest.mark.asyncio
-async def test_check_is_read_only_without_row_lock(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    run_id = await _seed_running(
-        session_factory,
-        answer_started_at=_ANSWER_STARTED_AT,
-    )
-
-    async with session_factory() as session:
-        async with session.begin():
-            result = await _check_answer_generation_continuation(
-                session,
-                run_id=run_id,
-                expected_attempt_epoch=_ATTEMPT_EPOCH,
-            )
-
-    run = await _load_run(session_factory, run_id)
-    assert result == Continue()
     assert run.status == "running"
     assert run.answer_started_at == _ANSWER_STARTED_AT
 

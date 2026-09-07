@@ -20,7 +20,6 @@ from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.runs.execution import (
-    Continue,
     Stop,
     StopReason,
 )
@@ -292,7 +291,7 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
     assert all(exception_events(attempt) == [] for attempt in attempts)
 
 
-async def test_routine_stop_closes_phase_without_error_or_attempt(
+async def test_start_rejection_does_not_open_phase_or_attempt(
     capfire: CaptureLogfire,
 ) -> None:
     class UnusedRuntime:
@@ -308,7 +307,7 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         repository=ScriptedAnswerGenerationRepository(
-            checks=[Stop(StopReason.NOT_CURRENT)]
+            start=Stop(StopReason.NOT_CURRENT)
         ),
     )
     try:
@@ -319,75 +318,7 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
         raise AssertionError("routine stop must propagate")
 
     spans = capfire.exporter.exported_spans
-    phase = next(
-        span
-        for span in spans
-        if span.name == "agent_phase"
-        and (span.attributes or {}).get("logfire.span_type") == "span"
-    )
-    attempt_spans = [
-        span
-        for span in spans
-        if span.name == "agent_provider_call"
-        and (span.attributes or {}).get("logfire.span_type") == "span"
-    ]
     assert isinstance(stopped, AnswerGenerationStopped)
-    assert phase.status.status_code is StatusCode.UNSET
-    assert phase.events == ()
-    assert attempt_spans == []
-
-
-async def test_mid_stream_stop_abandons_real_attempt_without_error(
-    capfire: CaptureLogfire,
-) -> None:
-    sdk_stream = _SdkStream()
-    client = FakeGeminiClient([], streams=[sdk_stream])
-    stopped = AnswerGenerationStopped()
-    continuation_checks = 0
-
-    class StopAfterFirstFragment(AllowAnswerGenerationStart):
-        async def check_answer_generation_continuation(self) -> Continue | Stop:
-            nonlocal continuation_checks
-            continuation_checks += 1
-            if continuation_checks == 2:
-                raise stopped
-            return Continue()
-
-    @asynccontextmanager
-    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
-        yield GeminiAgentRuntime(client=cast(AsyncClient, client))
-
-    service = DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
-        agent=DIRECT_ANSWER_AGENT,
-        runtime_scope_factory=runtime_scope,
-        repository=StopAfterFirstFragment(),
+    assert not any(
+        span.name in ("agent_phase", "agent_provider_call") for span in spans
     )
-    with pytest.raises(AnswerGenerationStopped) as exc_info:
-        await service.answer(_input())
-
-    spans = capfire.exporter.exported_spans
-    phase = next(
-        span
-        for span in spans
-        if span.name == "agent_phase"
-        and (span.attributes or {}).get("logfire.span_type") == "span"
-    )
-    attempt = next(
-        span
-        for span in spans
-        if span.name == "agent_provider_call"
-        and (span.attributes or {}).get("logfire.span_type") == "span"
-    )
-    attempt_attributes = attempt.attributes or {}
-
-    assert exc_info.value is stopped
-    assert continuation_checks == 2
-    assert sdk_stream.close_calls == 1
-    assert phase.status.status_code is StatusCode.UNSET
-    assert phase.events == ()
-    assert attempt.status.status_code is StatusCode.UNSET
-    assert attempt.events == ()
-    assert attempt_attributes["status"] == "stopped"
-    assert "result" not in attempt_attributes
-    assert "error.type" not in attempt_attributes

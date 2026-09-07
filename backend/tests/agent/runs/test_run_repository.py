@@ -26,6 +26,7 @@ from app.agent.running.attempt_start import (
     AgentRunAttemptStartRepository,
     StartRunFailureReason,
 )
+from app.agent.running.cancellation import AgentRunCancellationRepository
 from app.agent.running.completion import (
     AgentRunCompletionRepository,
     RunCompletionFailure,
@@ -353,13 +354,16 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
 async def test_complete_run_lost_race_rolls_back_assistant_message(
     session_factory: async_sessionmaker[AsyncSession],
+    cancelled: bool,
 ) -> None:
     async with session_factory() as setup_session:
         _thread, _message, run = await _create_thread_message_run(
             setup_session,
             status="running",
+            attempt_epoch=1,
             answer_started_at=datetime.now(UTC),
         )
     stale_session = session_factory()
@@ -370,11 +374,16 @@ async def test_complete_run_lost_race_rolls_back_assistant_message(
 
         async with session_factory() as winner_session:
             async with winner_session.begin():
-                await AgentRunFailureRepository(winner_session).mark_failed(
-                    run.id,
-                    expected_attempt_epoch=run.attempt_epoch,
-                    error_code=agent_run_tasks.AgentRunErrorCode.STALE,
-                )
+                if cancelled:
+                    await AgentRunCancellationRepository(
+                        winner_session
+                    ).cancel_run_for_user(run_id=run.id, user_id=UUID(TEST_USER_ID))
+                else:
+                    await AgentRunFailureRepository(winner_session).mark_failed(
+                        run.id,
+                        expected_attempt_epoch=run.attempt_epoch,
+                        error_code=agent_run_tasks.AgentRunErrorCode.STALE,
+                    )
 
         async with stale_session.begin():
             outcome = await AgentRunCompletionRepository(stale_session).complete_run(
@@ -390,6 +399,9 @@ async def test_complete_run_lost_race_rolls_back_assistant_message(
         failed = await session.get(AgentRun, run.id)
         assert failed is not None
         assert failed.status == "failed"
+        if cancelled:
+            assert failed.error_code == "cancelled"
+        assert failed.assistant_message_id is None
         messages = (
             (
                 await session.execute(

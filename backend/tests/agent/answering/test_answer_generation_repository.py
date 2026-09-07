@@ -1,33 +1,20 @@
-"""回答生成 repository の継続確認キャッシュ契約。"""
+"""回答生成 repository の開始・再生成許可の呼び出し契約。"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from uuid import UUID
 
 import pytest
 
 from app.agent.running import answer_generation as repository_module
 from app.agent.running.answer_generation import (
-    ANSWER_GENERATION_CONTINUATION_INTERVAL_SECONDS,
     AgentAnswerGenerationRepository,
 )
-from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.runs.execution import Continue
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197652")
 ATTEMPT_EPOCH = 3
-
-
-@dataclass
-class ManualClock:
-    now: float = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 class _NullTransaction:
@@ -54,104 +41,7 @@ def _factory() -> Callable[[], FakeSession]:
 
 
 @pytest.mark.asyncio
-async def test_continuation_check_reuses_continue_within_interval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    async def read_once(*_args: object, **_kwargs: object) -> Continue:
-        nonlocal calls
-        calls += 1
-        return Continue()
-
-    monkeypatch.setattr(
-        repository_module,
-        "_check_answer_generation_continuation",
-        read_once,
-    )
-    clock = ManualClock()
-    repository = AgentAnswerGenerationRepository(
-        _factory(),
-        RUN_ID,
-        ATTEMPT_EPOCH,
-        clock=clock,
-    )
-
-    first = await repository.check_answer_generation_continuation()
-    clock.advance(ANSWER_GENERATION_CONTINUATION_INTERVAL_SECONDS - 0.01)
-    second = await repository.check_answer_generation_continuation()
-
-    assert first == Continue()
-    assert second == Continue()
-    assert calls == 1
-
-
-@pytest.mark.asyncio
-async def test_continuation_check_rereads_after_interval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    async def read_continue(*_args: object, **_kwargs: object) -> Continue:
-        nonlocal calls
-        calls += 1
-        return Continue()
-
-    monkeypatch.setattr(
-        repository_module,
-        "_check_answer_generation_continuation",
-        read_continue,
-    )
-    clock = ManualClock()
-    repository = AgentAnswerGenerationRepository(
-        _factory(),
-        RUN_ID,
-        ATTEMPT_EPOCH,
-        clock=clock,
-    )
-
-    await repository.check_answer_generation_continuation()
-    clock.advance(ANSWER_GENERATION_CONTINUATION_INTERVAL_SECONDS)
-    await repository.check_answer_generation_continuation()
-
-    assert calls == 2
-
-
-@pytest.mark.asyncio
-async def test_continuation_stop_is_cached(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    async def read_stop(*_args: object, **_kwargs: object) -> Stop:
-        nonlocal calls
-        calls += 1
-        return Stop(StopReason.NOT_CURRENT)
-
-    monkeypatch.setattr(
-        repository_module,
-        "_check_answer_generation_continuation",
-        read_stop,
-    )
-    clock = ManualClock()
-    repository = AgentAnswerGenerationRepository(
-        _factory(),
-        RUN_ID,
-        ATTEMPT_EPOCH,
-        clock=clock,
-    )
-
-    first = await repository.check_answer_generation_continuation()
-    clock.advance(ANSWER_GENERATION_CONTINUATION_INTERVAL_SECONDS)
-    second = await repository.check_answer_generation_continuation()
-
-    assert first == Stop(StopReason.NOT_CURRENT)
-    assert second == Stop(StopReason.NOT_CURRENT)
-    assert calls == 1
-
-
-@pytest.mark.asyncio
-async def test_start_and_authorize_do_not_use_continuation_cache(
+async def test_start_and_authorize_each_call_repository(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     start_calls = 0
@@ -175,7 +65,6 @@ async def test_start_and_authorize_do_not_use_continuation_cache(
         _factory(),
         RUN_ID,
         ATTEMPT_EPOCH,
-        clock=ManualClock(),
     )
 
     await repository.start_answer_generation()

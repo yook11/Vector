@@ -173,19 +173,15 @@ class DirectAnswerService:
                 generation=attempt_number,
                 delta_reporter=self._delta,
             ) as live_draft:
-                await self._continue_generation()
-
                 stream = runtime.stream_text(
                     self._agent,
                     input,
                     attempt_number=attempt_number,
                 )
                 async for fragment in stream:
-                    await self._continue_generation()
                     raw_fragments.append(fragment)
                     await live_draft.append(fragment)
 
-                await self._continue_generation()
                 answer = strip_citation_markers("".join(raw_fragments))
                 if not answer.strip():
                     raise DirectAnswerInvalidError()
@@ -195,8 +191,3 @@ class DirectAnswerService:
                 return draft
         finally:
             await close_answer_stream(stream)
-
-    async def _continue_generation(self) -> None:
-        result = await self._repository.check_answer_generation_continuation()
-        if isinstance(result, Stop):
-            raise AnswerGenerationStopped(result.reason)
