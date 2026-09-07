@@ -11,11 +11,11 @@ const mocks = vi.hoisted(() => ({
   getArticles: vi.fn(),
   getCategories: vi.fn(),
   getWatchlistIds: vi.fn(),
-  requireSession: vi.fn(),
+  getCurrentSession: vi.fn(),
 }));
 
 vi.mock("@/components/layout/nav-items", () => ({
-  getProtectedNavItems: () => [{ href: "/", label: "ニュース", icon: "news" }],
+  getNavItems: () => [{ href: "/", label: "ニュース", icon: "news" }],
 }));
 
 vi.mock("@/components/layout/PageNavigation", () => ({
@@ -77,7 +77,7 @@ vi.mock("@/features/watchlist", () => ({
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
-  requireSession: mocks.requireSession,
+  getCurrentSession: mocks.getCurrentSession,
 }));
 
 vi.mock("@/lib/auth/role", () => ({
@@ -104,7 +104,7 @@ async function resolveServerTree(node: ReactNode): Promise<ReactNode> {
 
 describe("Dashboard page navigation outlet", () => {
   it("masthead controlsをbusy overlay外に保ち、result outletだけを内包する", async () => {
-    mocks.requireSession.mockResolvedValue({ user: { role: "user" } });
+    mocks.getCurrentSession.mockResolvedValue({ user: { role: "user" } });
     mocks.getCategories.mockResolvedValue({ items: [] });
     mocks.getArticles.mockResolvedValue({
       items: [],

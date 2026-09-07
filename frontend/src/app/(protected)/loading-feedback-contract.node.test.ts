@@ -64,7 +64,7 @@ describe("application loading feedback contract", () => {
   });
 
   it("keeps dashboard and watchlist controls inside a visible fallback", () => {
-    const dashboard = routeSource("./page.tsx");
+    const dashboard = routeSource("../(public)/page.tsx");
     const watchlist = routeSource("./(shell)/watchlist/page.tsx");
 
     expect(dashboard).not.toContain("fallback={null}");
@@ -75,7 +75,7 @@ describe("application loading feedback contract", () => {
   });
 
   it("renders a primary news-detail fallback before article data and keeps related articles secondary", () => {
-    const source = routeSource("./news/[id]/page.tsx");
+    const source = routeSource("../(public)/news/[id]/page.tsx");
 
     expect(source).toContain("NewsDetailSkeleton");
     expect(source).toContain("<Suspense fallback={<NewsDetailSkeleton />}");
@@ -87,15 +87,15 @@ describe("application loading feedback contract", () => {
 
   it("uses feature-local visible, reduced-motion fallbacks for the remaining first viewports", () => {
     expectLiveVisibleFallback(
-      routeSource("./(shell)/(main)/briefing/page.tsx"),
+      routeSource("../(public)/(shell)/(main)/briefing/page.tsx"),
       "Briefingを読み込み中…",
     );
     expectLiveVisibleFallback(
-      routeSource("./briefing/[category]/page.tsx"),
+      routeSource("../(public)/briefing/[category]/page.tsx"),
       "Briefingを読み込み中…",
     );
     expectLiveVisibleFallback(
-      routeSource("./(shell)/(main)/trends/page.tsx"),
+      routeSource("../(public)/(shell)/(main)/trends/page.tsx"),
       "トレンドを読み込み中…",
     );
     expectLiveVisibleFallback(

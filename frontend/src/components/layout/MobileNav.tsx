@@ -4,10 +4,7 @@ import { Menu } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { NavLink } from "@/components/layout/NavLink";
-import {
-  NAV_ICONS,
-  type ProtectedNavItem,
-} from "@/components/layout/nav-items";
+import { NAV_ICONS, type NavItem } from "@/components/layout/nav-items";
 import { usePageNavigation } from "@/components/layout/PageNavigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +18,7 @@ import {
 import { cn } from "@/lib/utils/cn";
 
 interface MobileNavProps {
-  items: ProtectedNavItem[];
+  items: NavItem[];
   triggerClassName?: string;
 }
 

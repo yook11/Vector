@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   pendingBySource: new Map<number, boolean>(),
   nextLinkSource: 0,
   linkClicks: [] as { defaultPrevented: boolean; href: string }[],
-  requireSession: vi.fn(),
+  getCurrentSession: vi.fn(),
   session: { data: null as { user: { role: string } } | null },
 }));
 
@@ -109,7 +109,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
-  requireSession: () => mocks.requireSession(),
+  getCurrentSession: () => mocks.getCurrentSession(),
 }));
 
 vi.mock("@/lib/auth/auth-client", () => ({
@@ -131,7 +131,7 @@ vi.mock("@/features/auth", () => ({
 import { NavLink } from "@/components/layout/NavLink";
 import { ShellNav } from "@/components/layout/ShellNav";
 import ShellMainLayout from "./(shell)/(main)/layout";
-import ProtectedError from "./error";
+import PublicError from "./error";
 import ProtectedLayout from "./layout";
 import NewsDetailError from "./news/[id]/error";
 import NewsNotFound from "./news/[id]/not-found";
@@ -206,8 +206,8 @@ describe("protected page navigation feedback", () => {
     mocks.pendingBySource.clear();
     mocks.nextLinkSource = 0;
     mocks.linkClicks.length = 0;
-    mocks.requireSession.mockReset();
-    mocks.requireSession.mockResolvedValue({ user: { id: "user-1" } });
+    mocks.getCurrentSession.mockReset();
+    mocks.getCurrentSession.mockResolvedValue({ user: { id: "user-1" } });
     mocks.session = { data: null };
   });
 
@@ -347,7 +347,7 @@ describe("protected page navigation feedback", () => {
 
     view.rerender(
       await protectedRouteTree(
-        <ProtectedError
+        <PublicError
           error={new Error("route failure")}
           reset={() => undefined}
           unstable_retry={() => undefined}

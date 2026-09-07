@@ -3,10 +3,7 @@ import Link from "next/link";
 import { Fragment, type ReactNode } from "react";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavPendingDot } from "@/components/layout/NavPendingDot";
-import {
-  NAV_ICONS,
-  type ProtectedNavItem,
-} from "@/components/layout/nav-items";
+import { NAV_ICONS, type NavItem } from "@/components/layout/nav-items";
 import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import type { ArticleQuery } from "@/types";
 import type { CategoryDetail } from "@/types/types.gen";
@@ -17,7 +14,7 @@ interface DashboardMastheadProps {
   categories: CategoryDetail[];
   currentQuery: ArticleQuery;
   dateSlot: ReactNode;
-  navItems: ProtectedNavItem[];
+  navItems: NavItem[];
   themeSlot: ReactNode;
   userMenuSlot: ReactNode;
 }

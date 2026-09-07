@@ -28,7 +28,7 @@ export const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   settings: Settings,
 };
 
-export type ProtectedNavItem = {
+export type NavItem = {
   href: string;
   label: string;
   icon: NavIconKey;
@@ -40,14 +40,14 @@ const baseNavItems = [
   { href: "/briefing", label: "Briefing", icon: "briefing" },
   { href: "/trends", label: "トレンド", icon: "trend" },
   { href: "/watchlist", label: "ウォッチリスト", icon: "watchlist" },
-] satisfies ProtectedNavItem[];
+] satisfies NavItem[];
 
 const adminNavItem = {
   href: "/settings",
   label: "Settings",
   icon: "settings",
-} satisfies ProtectedNavItem;
+} satisfies NavItem;
 
-export function getProtectedNavItems(isAdmin: boolean): ProtectedNavItem[] {
+export function getNavItems(isAdmin: boolean): NavItem[] {
   return isAdmin ? [...baseNavItems, adminNavItem] : baseNavItems;
 }

@@ -898,3 +898,81 @@ describe("proxy — XFF chain 観測: health check / 内部呼び出しは分母
     });
   });
 });
+
+describe("公開ページと個人ページの入口", () => {
+  it.each([
+    "/",
+    "/?category=ai&page=2",
+    "/news/1",
+    "/briefing",
+    "/briefing/ai",
+    "/trends",
+  ])("未ログインで %s を転送しない", async (path) => {
+    const res = await proxy(mockNextRequest(`http://localhost:3000${path}`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("Content-Security-Policy")).toBeTruthy();
+  });
+  it.each([
+    "/reports",
+    "/news/1/edit",
+    "/briefing/ai/edit",
+  ])("未指定の %s はログイン必須", async (path) => {
+    const res = await proxy(mockNextRequest(`http://localhost:3000${path}`));
+    expect(res.status).toBe(307);
+  });
+  it("個人ページのクエリをログイン後まで保持する", async () => {
+    const res = await proxy(
+      mockNextRequest("http://localhost:3000/watchlist?page=2"),
+    );
+    expect(
+      new URL(res.headers.get("location") ?? "").searchParams.get(
+        "callbackUrl",
+      ),
+    ).toBe("/watchlist?page=2");
+  });
+  it("外来の復帰先ヘッダーを実際のパスで上書きする", async () => {
+    const res = await proxy(
+      mockNextRequest("http://localhost:3000/news/1?view=full", {
+        headers: { "x-vector-request-path": "/research/forged" },
+      }),
+    );
+    expect(res.headers.get("x-middleware-request-x-vector-request-path")).toBe(
+      "/news/1?view=full",
+    );
+  });
+});
+
+it("個人ページの復帰先から内部クエリだけを除去する", async () => {
+  const res = await proxy(
+    mockNextRequest("http://localhost:3000/watchlist?_rsc=1&page=2&_rsc=2"),
+  );
+  const location = new URL(res.headers.get("location") ?? "");
+  expect(location.searchParams.get("callbackUrl")).toBe("/watchlist?page=2");
+});
+
+describe("公開素材の認証境界", () => {
+  it.each([
+    "/icon.svg?v=1",
+    "/apple-icon.png",
+    "/opengraph-image.png",
+    "/twitter-image.png",
+    "/manifest.webmanifest",
+    "/icons/icon-192.png",
+    "/icons/icon-512.png",
+  ])("%s を未ログインでも通す", async (path) => {
+    const res = await proxy(mockNextRequest(`http://localhost:3000${path}`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("Content-Security-Policy")).toBeTruthy();
+  });
+  it.each([
+    "/icons/private.png",
+    "/icon.svg/private",
+    "/private.png",
+    "/manifest.webmanifest/private",
+  ])("未指定の %s は公開しない", async (path) => {
+    const res = await proxy(mockNextRequest(`http://localhost:3000${path}`));
+    expect(res.status).toBe(307);
+  });
+});

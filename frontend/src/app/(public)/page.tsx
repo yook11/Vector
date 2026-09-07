@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { getProtectedNavItems } from "@/components/layout/nav-items";
+import { getNavItems } from "@/components/layout/nav-items";
 import { PageNavigationContent } from "@/components/layout/PageNavigation";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import {
@@ -21,7 +21,7 @@ import {
   parseArticleQuery,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
-import { requireSession } from "@/lib/auth/guards";
+import { getCurrentSession } from "@/lib/auth/guards";
 import { narrowRole } from "@/lib/auth/role";
 import type { SearchParams } from "@/lib/types/route";
 import type { ArticleQuery } from "@/types";
@@ -35,10 +35,9 @@ export default async function DashboardPage({
 }: DashboardPageProps) {
   const raw = await searchParams;
   const { query: filters } = parseArticleQuery(raw);
-  // gate はデータ取得の前に直列で置く。未認証時に cached fetch が走るのを防ぐ。
-  const session = await requireSession();
-  const isAdmin = narrowRole(session.user.role) === "admin";
-  const navItems = getProtectedNavItems(isAdmin);
+  const session = await getCurrentSession();
+  const isAdmin = narrowRole(session?.user.role ?? "user") === "admin";
+  const navItems = getNavItems(isAdmin);
 
   // 独立した request は最初にまとめて開始し、カテゴリ待ちで外枠を止めない。
   const categoriesPromise = getCategories();
@@ -111,7 +110,7 @@ async function DashboardContent({
   articlesPromise: ReturnType<typeof getArticles>;
   categoriesPromise: ReturnType<typeof getCategories>;
   filters: ArticleQuery;
-  navItems: ReturnType<typeof getProtectedNavItems>;
+  navItems: ReturnType<typeof getNavItems>;
   watchedIdsPromise: ReturnType<typeof getWatchlistIds>;
 }) {
   const categoriesData = await categoriesPromise;

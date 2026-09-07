@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { signIn } from "@/lib/auth/auth-client";
+import { parseLoginCallback } from "@/lib/auth/login-callback";
 import { LoginSchema } from "../schemas/auth";
 
 type LoginFieldErrors = Partial<Record<"email" | "password", string>>;
@@ -57,7 +58,7 @@ async function action(
   return { status: "ok" };
 }
 
-export function LoginForm() {
+export function LoginForm({ returnTo = "/" }: { returnTo?: string }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -66,12 +67,12 @@ export function LoginForm() {
 
   useEffect(() => {
     if (state.status === "ok") {
-      router.push("/");
+      router.push(parseLoginCallback(returnTo) ?? "/");
       router.refresh();
     } else if (state.status === "error") {
       emailRef.current?.focus();
     }
-  }, [state, router]);
+  }, [state, router, returnTo]);
 
   const isError = state.status === "error";
   const emailError = isError ? state.fieldErrors.email : undefined;

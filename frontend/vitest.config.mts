@@ -34,7 +34,7 @@ export default defineConfig({
         "src/lib/date.ts",
         "src/lib/duration.ts",
         "src/lib/proxy/csp.ts",
-        "src/lib/proxy/callback-url.ts",
+        "src/lib/auth/login-callback.ts",
         "src/lib/proxy/identifier.ts",
         "src/lib/proxy/rate-limit-plan.ts",
         "src/features/news/search-params.ts",

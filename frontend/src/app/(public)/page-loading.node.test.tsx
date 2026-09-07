@@ -11,11 +11,11 @@ const mocks = vi.hoisted(() => ({
   getCategories: vi.fn(),
   getWatchlistIds: vi.fn(),
   parseArticleQuery: vi.fn(),
-  requireSession: vi.fn(),
+  getCurrentSession: vi.fn(),
 }));
 
 vi.mock("@/components/layout/nav-items", () => ({
-  getProtectedNavItems: vi.fn().mockReturnValue([]),
+  getNavItems: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock("@/components/layout/PageNavigation", () => ({
@@ -54,7 +54,7 @@ vi.mock("@/features/watchlist", () => ({
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
-  requireSession: mocks.requireSession,
+  getCurrentSession: mocks.getCurrentSession,
 }));
 
 vi.mock("@/lib/auth/role", () => ({
@@ -92,7 +92,7 @@ beforeEach(() => {
   mocks.getArticles.mockReset().mockReturnValue(articles.promise);
   mocks.getWatchlistIds.mockReset().mockReturnValue(watchlistIds.promise);
   mocks.parseArticleQuery.mockReset().mockReturnValue({ query: {} });
-  mocks.requireSession
+  mocks.getCurrentSession
     .mockReset()
     .mockResolvedValue({ user: { role: "user" } });
 });
@@ -112,5 +112,19 @@ describe("Dashboard initial loading shell", () => {
     expect.soft(mocks.getCategories).toHaveBeenCalledTimes(1);
     expect.soft(mocks.getArticles).toHaveBeenCalledTimes(1);
     expect.soft(mocks.getWatchlistIds).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("未ログインでもニュース一覧の取得を開始できる", async () => {
+  mocks.getCurrentSession.mockResolvedValue(null);
+  await expect(
+    DashboardPage({
+      searchParams: Promise.resolve({ category: "ai", page: "2" }),
+    }),
+  ).resolves.toBeTruthy();
+  expect(mocks.getArticles).toHaveBeenCalledOnce();
+  expect(mocks.parseArticleQuery).toHaveBeenCalledWith({
+    category: "ai",
+    page: "2",
   });
 });
