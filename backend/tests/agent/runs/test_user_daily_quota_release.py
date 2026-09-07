@@ -13,10 +13,6 @@ from sqlalchemy import DateTime, Select, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
-from app.agent.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.daily_quota.reservation import (
-    _build_daily_quota_reservation_statement,
-)
 from app.agent.running.attempt_start import (
     AgentRunAttemptStartRepository,
     StartRunFailureReason,
@@ -30,6 +26,10 @@ from app.agent.running.cancellation import (
 from app.agent.running.completion import (
     AgentRunCompletionRepository,
     RunCompletionSuccess,
+)
+from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
+from app.agent.running.daily_quota.reservation import (
+    _build_daily_quota_reservation_statement,
 )
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
 from app.agent.running.failure_recording import AgentRunFailureRepository

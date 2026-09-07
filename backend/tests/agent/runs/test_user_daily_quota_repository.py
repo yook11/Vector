@@ -12,14 +12,14 @@ from sqlalchemy import DateTime, func, literal, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import app.agent.daily_quota.reservation as daily_quota_reservation_module
-from app.agent.daily_quota.reservation import DailyRequestLimitExceededError
+import app.agent.running.daily_quota.reservation as daily_quota_reservation_module
 from app.agent.running.creation import (
     ActiveRunConflictError,
     AgentRunCreationRepository,
     CreatedAgentRun,
     ThreadNotFoundError,
 )
+from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread

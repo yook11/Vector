@@ -18,9 +18,9 @@
 
 | 配置 | 責務 |
 |---|---|
-| `app/agent/daily_quota/` | 日次利用枠の方針、利用枠の観測 |
-| `app/agent/daily_quota/release.py` | 単件・一括返却、返却結果 |
-| `app/agent/daily_quota/reservation.py` | 日次利用枠の予約、予約SQL、予約結果、上限超過例外 |
+| `app/agent/running/daily_quota/` | 日次利用枠の方針、利用枠の観測 |
+| `app/agent/running/daily_quota/release.py` | 単件・一括返却、返却結果 |
+| `app/agent/running/daily_quota/reservation.py` | 日次利用枠の予約、予約SQL、予約結果、上限超過例外 |
 | `app/agent/running/deadline/policy.py` | 受付時に固定する期限の計算 |
 | `app/agent/running/deadline/deadline_exceeded.py` | DB時刻取得、期限超過の確定・回収、回収結果 |
 | `app/agent/threads/result_mapper.py` | 回答結果から会話のメッセージ・出典への変換 |
@@ -198,3 +198,13 @@ Successの場合のみcommit後に利用枠の観測とrunningのSSE終了通知
 固定メッセージ `cancel run encountered an unexpected state` のRuntimeErrorを投げる。
 この経路は従来の404からサーバーエラーとなり、DB例外と同様にrouterの
 トランザクションをrollbackする。repository内でcommit / rollbackやSAVEPOINTを追加しない。
+
+### 終了したrunの使用枠返却
+
+期限回収は終了更新後、ロック取得時の状態がqueuedだったrunを返却対象として選ぶ。
+ユーザーIDと予約日だけを`DailyQuotaReleaseReservation`へ変換し、同じsessionで
+`release_daily_quotas()`を呼ぶ。`daily_quota/release.py`がユーザー・日付別の集計、
+予約記録なし・カウンター不足の判定、一括返却と結果集計を担当する。
+runningの非返却と予約残存件数はdeadline側が判断する。
+quota側はrunの状態・期限を扱わず、runの取得・終了更新・commit・通知を行わない。
+キャンセルと実行開始時の既存返却経路は維持する。

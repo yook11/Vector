@@ -12,10 +12,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.agent.answering import timing as answer_timing
-from app.agent.daily_quota.release import release_daily_quotas
+from app.agent.running.daily_quota.release import (
+    DailyQuotaBatchReleaseResult,
+    DailyQuotaReleaseReservation,
+    release_daily_quotas,
+)
 from app.agent.runs.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
+
+
+@dataclass(frozen=True, slots=True)
+class LockedRunForDeadlineRecovery:
+    """期限回収のためにロックした時点のrun情報を保持する。"""
+
+    run_id: UUID
+    status: AgentRunStatus
+    attempt_epoch: int
+    user_id: UUID
+    quota_usage_date: date | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +85,17 @@ class DeadlineRunSweepResult:
             raise ValueError(
                 "running terminal runs must be deadline-exceeded running runs"
             )
+
+    @classmethod
+    def empty(cls) -> DeadlineRunSweepResult:
+        return cls(
+            queued_terminal_count=0,
+            queued_quota_released_count=0,
+            queued_quota_not_eligible_count=0,
+            queued_quota_inconsistent_count=0,
+            running_terminal_runs=(),
+            running_quota_reservation_count=0,
+        )
 
     @property
     def total_count(self) -> int:
@@ -160,12 +186,51 @@ async def sweep_deadline_exceeded_runs_for_thread(
     )
 
 
+async def check_agent_run_deadline(
+    session: AsyncSession, *, run_id: UUID
+) -> DeadlineRunSweepResult:
+    return await _recover_deadline_exceeded_runs(
+        session, thread_id=None, run_id=run_id, clock=func.clock_timestamp()
+    )
+
+
 async def _recover_deadline_exceeded_runs(
     session: AsyncSession,
     *,
     thread_id: uuid_mod.UUID | None,
     clock: ColumnElement[datetime],
+    run_id: UUID | None = None,
 ) -> DeadlineRunSweepResult:
+    locked_runs = await _lock_runs_for_deadline_recovery(
+        session, thread_id=thread_id, run_id=run_id, clock=clock
+    )
+    if not locked_runs:
+        return DeadlineRunSweepResult.empty()
+
+    # lock待機中に期限を越えるため、更新判断には取得後のDB時刻を使う。
+    now = await _read_database_time(session, clock)
+    await _finalize_deadline_exceeded_runs(session, locked_runs=locked_runs, now=now)
+    quota_result = await release_daily_quotas(
+        session,
+        reservations=tuple(
+            DailyQuotaReleaseReservation(
+                user_id=run.user_id,
+                usage_date=run.quota_usage_date,
+            )
+            for run in locked_runs
+            if run.status == AgentRunStatus.QUEUED
+        ),
+    )
+    return _build_deadline_sweep_result(locked_runs, quota_result)
+
+
+async def _lock_runs_for_deadline_recovery(
+    session: AsyncSession,
+    *,
+    thread_id: UUID | None,
+    run_id: UUID | None,
+    clock: ColumnElement[datetime],
+) -> tuple[LockedRunForDeadlineRecovery, ...]:
     query = (
         select(
             AgentRun.id,
@@ -181,27 +246,34 @@ async def _recover_deadline_exceeded_runs(
     )
     if thread_id is not None:
         query = query.where(AgentRun.thread_id == thread_id)
-    candidate_rows = (await session.execute(query)).tuples().all()
-    if not candidate_rows:
-        return DeadlineRunSweepResult(
-            queued_terminal_count=0,
-            queued_quota_released_count=0,
-            queued_quota_not_eligible_count=0,
-            queued_quota_inconsistent_count=0,
-            running_terminal_runs=(),
-            running_quota_reservation_count=0,
+    if run_id is not None:
+        query = query.where(AgentRun.id == run_id)
+    rows = (await session.execute(query)).tuples().all()
+    return tuple(
+        LockedRunForDeadlineRecovery(
+            run_id=run_id,
+            status=AgentRunStatus(status),
+            attempt_epoch=attempt_epoch,
+            user_id=user_id,
+            quota_usage_date=quota_usage_date,
         )
+        for run_id, status, attempt_epoch, quota_usage_date, user_id in rows
+    )
 
-    # lock待機中に期限を越えるため、更新判断には取得後のDB時刻を使う。
-    now = await _read_database_time(session, clock)
-    candidate_ids = [row[0] for row in candidate_rows]
-    candidate_by_id = {row[0]: row for row in candidate_rows}
-    updated_rows = (
+
+async def _finalize_deadline_exceeded_runs(
+    session: AsyncSession,
+    *,
+    locked_runs: tuple[LockedRunForDeadlineRecovery, ...],
+    now: datetime,
+) -> None:
+    run_ids = [run.run_id for run in locked_runs]
+    updated_ids = set(
         (
-            await session.execute(
+            await session.scalars(
                 update(AgentRun)
                 .where(
-                    AgentRun.id.in_(candidate_ids),
+                    AgentRun.id.in_(run_ids),
                     _has_reached_recovery_deadline(literal(now)),
                 )
                 .values(
@@ -209,70 +281,35 @@ async def _recover_deadline_exceeded_runs(
                     assistant_message_id=None,
                     error_code=None,
                 )
-                .returning(
-                    AgentRun.id,
-                    AgentRun.status,
-                    AgentRun.attempt_epoch,
-                    AgentRun.quota_usage_date,
-                )
+                .returning(AgentRun.id)
                 .execution_options(synchronize_session=False)
             )
-        )
-        .tuples()
-        .all()
+        ).all()
     )
-    updated_ids = {row[0] for row in updated_rows}
-    if updated_ids != set(candidate_ids):
+    if updated_ids != set(run_ids):
         raise RuntimeError("deadline run sweep lost a locked candidate")
 
-    queued_rows = [
-        row
-        for row in updated_rows
-        if candidate_by_id[row[0]][1] == AgentRunStatus.QUEUED.value
-    ]
-    queued_release_groups: dict[tuple[uuid_mod.UUID, date], int] = {}
-    for run_id, _status, _attempt_epoch, quota_usage_date in queued_rows:
-        if quota_usage_date is None:
-            continue
-        user_id = candidate_by_id[run_id][4]
-        group = (user_id, quota_usage_date)
-        queued_release_groups[group] = queued_release_groups.get(group, 0) + 1
 
-    released_groups = await release_daily_quotas(
-        session,
-        reservations=queued_release_groups,
-    )
-
-    queued_quota_released_count = sum(
-        count
-        for group, count in queued_release_groups.items()
-        if group in released_groups
-    )
-    queued_quota_inconsistent_count = sum(
-        count
-        for group, count in queued_release_groups.items()
-        if group not in released_groups
-    )
-    running_rows = [
-        row
-        for row in updated_rows
-        if candidate_by_id[row[0]][1] == AgentRunStatus.RUNNING.value
-    ]
+def _build_deadline_sweep_result(
+    locked_runs: tuple[LockedRunForDeadlineRecovery, ...],
+    quota_result: DailyQuotaBatchReleaseResult,
+) -> DeadlineRunSweepResult:
+    running_runs = [run for run in locked_runs if run.status == AgentRunStatus.RUNNING]
     return DeadlineRunSweepResult(
-        queued_terminal_count=len(queued_rows),
-        queued_quota_released_count=queued_quota_released_count,
-        queued_quota_not_eligible_count=sum(
-            quota_usage_date is None
-            for _run_id, _status, _attempt_epoch, quota_usage_date in queued_rows
+        queued_terminal_count=sum(
+            run.status == AgentRunStatus.QUEUED for run in locked_runs
         ),
-        queued_quota_inconsistent_count=queued_quota_inconsistent_count,
+        queued_quota_released_count=quota_result.released_count,
+        queued_quota_not_eligible_count=quota_result.not_eligible_count,
+        queued_quota_inconsistent_count=quota_result.inconsistent_count,
         running_terminal_runs=tuple(
-            DeadlineExceededRunningRun(run_id=run_id, attempt_epoch=attempt_epoch)
-            for run_id, _status, attempt_epoch, _quota_usage_date in running_rows
-            if attempt_epoch > 0
+            DeadlineExceededRunningRun(
+                run_id=run.run_id, attempt_epoch=run.attempt_epoch
+            )
+            for run in running_runs
+            if run.attempt_epoch > 0
         ),
         running_quota_reservation_count=sum(
-            quota_usage_date is not None
-            for _run_id, _status, _attempt_epoch, quota_usage_date in running_rows
+            run.quota_usage_date is not None for run in running_runs
         ),
     )

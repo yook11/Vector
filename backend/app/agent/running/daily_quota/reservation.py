@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.agent.daily_quota.policy import (
+from app.agent.running.daily_quota.policy import (
     DAILY_QUOTA_TIMEZONE_NAME,
     DAILY_REQUEST_LIMIT,
 )

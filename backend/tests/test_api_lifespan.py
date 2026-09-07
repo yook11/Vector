@@ -107,3 +107,19 @@ async def test_lifespan_closes_remaining_resources_after_broker_shutdown_failure
         broker.shutdown.assert_awaited_once()
     live.aclose.assert_awaited_once()
     engine.dispose.assert_awaited_once()
+
+
+async def test_lifespan_owns_deadline_source_even_when_broker_shutdown_fails(
+    monkeypatch,
+):
+    # broker終了失敗でもAPI所有の予約接続を閉じる。
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    _, producers = _stub_lifespan_integrations(monkeypatch, engine)
+    source = MagicMock(startup=AsyncMock(), shutdown=AsyncMock())
+    monkeypatch.setattr("app.main.create_deadline_schedule_source", lambda _: source)
+    producers[0].shutdown.side_effect = RuntimeError("broker down")
+    with pytest.raises(RuntimeError, match="broker down"):
+        async with lifespan(FastAPI()):
+            source.startup.assert_awaited_once()
+    source.shutdown.assert_awaited_once()

@@ -7,7 +7,10 @@ from enum import StrEnum
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.daily_quota.release import DailyQuotaReleaseOutcome, release_daily_quota
+from app.agent.running.daily_quota.release import (
+    DailyQuotaReleaseOutcome,
+    release_daily_quota,
+)
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread

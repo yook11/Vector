@@ -13,6 +13,7 @@ from uuid import UUID
 import structlog
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     Header,
     HTTPException,
@@ -25,9 +26,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.composition import ensure_external_search_configured
-from app.agent.daily_quota import observability as daily_quota_observability
-from app.agent.daily_quota.policy import DAILY_QUOTA_TIMEZONE
-from app.agent.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.live_updates.sse import (
     AgentRunQueuedSseConnection,
     AgentRunSseCapacity,
@@ -54,6 +52,13 @@ from app.agent.running.creation import (
     ActiveRunConflictError,
     AgentRunCreationRepository,
     ThreadNotFoundError,
+)
+from app.agent.running.daily_quota import observability as daily_quota_observability
+from app.agent.running.daily_quota.policy import DAILY_QUOTA_TIMEZONE
+from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
+from app.agent.running.deadline.scheduling import (
+    AgentDeadlineScheduler,
+    get_agent_deadline_scheduler,
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.running.presentation import (
@@ -141,6 +146,10 @@ def get_agent_run_sse_timing() -> AgentRunSseTiming:
 )
 async def create_research_response(
     body: ResearchQuestionRequest,
+    background_tasks: BackgroundTasks,
+    deadline_scheduler: Annotated[
+        AgentDeadlineScheduler, Depends(get_agent_deadline_scheduler)
+    ],
     user: Annotated[CurrentUser, Depends(get_current_user)],
     # commit→kiq→failed の 2 tx を切るため、入口管理の UoW は使わない。
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
@@ -231,6 +240,9 @@ async def create_research_response(
                 detail="Failed to enqueue research run",
             ) from update_exc
 
+    background_tasks.add_task(
+        deadline_scheduler.reserve, created.run_id, created.deadline_at
+    )
     return ResearchRunStartResponse(thread_id=created.thread_id, run_id=created.run_id)
 
 

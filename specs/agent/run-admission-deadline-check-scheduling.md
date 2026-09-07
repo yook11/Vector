@@ -1,11 +1,10 @@
 # run受付時の期限確認タスクの予約
 
-Status: Draft
-Updated: 2026-09-05
+Status: Implemented
+Updated: 2026-09-07
 Scope: run受付のDBコミット後に、元のdeadline_atを基準とした単発の期限確認タスクを予約する
 
-本書の振る舞いは合意済みである。予約基盤への接続方法と予約待機上限の具体値を実装前に確定するため、
-StatusはDraftとする。「受付」は質問とqueued runのDB確定を指し、ワーカー開始や回答生成開始とは区別する。
+本書はrun受付後の補助的な期限確認予約の契約を定める。「受付」は質問とqueued runのDB確定を指し、ワーカー開始や回答生成開始とは区別する。
 
 ## Problem
 
@@ -20,12 +19,12 @@ StatusはDraftとする。「受付」は質問とqueued runのDB確定を指し
 
 1. 既存の認証・所有権・active run・quota条件に従ってrunを作成する。
 2. 質問、run、quota予約をDBにコミットする。
-3. DBに確定した`deadline_at`を用い、対象runの期限確認タスクを予約する。
-4. 予約成功・通常の予約失敗・予約タイムアウトのいずれでも、回答実行タスクの投入へ進む。
-5. 既存の受付レスポンスを返す。
+3. 回答実行タスクを投入する。
+4. FastAPIの`BackgroundTasks`へrun IDと確定済みの`deadline_at`を渡し、既存の受付レスポンスを送信する。
+5. HTTPレスポンス送信後、バックグラウンドで対象runの期限確認タスクを予約する。
 
-予約操作は短い専用の待機上限を持ち、回答実行タスクの投入を無制限に待たせない。
-予約待ちの間は受付のDBトランザクションを保持しない。
+予約操作はバックグラウンド内で最大2秒、再試行なしとする。回答開始・HTTPレスポンス送信は予約を待たない。
+リクエスト用DBセッションやORMオブジェクトは渡さず、予約のためのDB問い合わせ・トランザクションを追加しない。
 受付の拒否・ロールバック・コミット失敗時は、期限確認も回答実行も投入しない。
 
 ## Invariants
@@ -54,7 +53,7 @@ scheduled_at = deadline_atを次の秒境界へ切り上げた時刻
 - 秒境界ちょうどの値はそのまま使う。固定の2秒などを追加しない。
 - 切り上げは分単位ではなく秒単位とし、日付をまたぐ場合も同じ規則を適用する。
 - 実際の回収判定には丸める前のDB上の期限を使う。
-- 予約判断時にDB現在時刻がすでに元の`deadline_at`以上なら、未来の予約にせず確認タスクを即時投入する。
+- 予約時に現在時刻を取得・比較しない。登録が遅れて予定時刻を過ぎても、同じ単発予約経路へ渡す。
 - 予約登録・キュー待機・ワーカー稼働による遅延は許容する。ミリ秒単位や予定時刻ちょうどの実行は保証しない。
 
 ### 3. 予約タスクは対象runの最新状態を確認する
@@ -98,10 +97,10 @@ runを終了させない。このタスクから回答生成後の期限へ再�
 
 | 事象 | 扱い |
 |---|---|
-| 予約登録・即時投入の通常例外やタイムアウト | 記録して回答実行タスクの投入へ進む。runやquotaは変更しない |
-| 予約の応答が不明で、実際には登録されている可能性がある | 受付内で無制限に再試行しない。重複が発生しても回収処理を冪等にする |
-| DB受付commit後、予約前にプロセス停止 | 予約漏れを許容し、定期回収で救済する |
-| 予約成功後、回答実行タスクの投入が失敗 | 既存のenqueue失敗処理に従う。期限確認タスクは実行時に状態を再確認する |
+| 予約登録の通常例外やタイムアウト | 安全なログを記録して終了。run・quota・送信済みレスポンスは変更しない |
+| 予約の応答が不明で、実際には登録されている可能性がある | 予約を再試行しない。重複が発生しても回収処理を冪等にする |
+| DB受付commit後、予約前にプロセス停止 | 予約漏れを許容し、定期回収とスレッド表示時の回収で救済する |
+| 回答実行タスクの投入が失敗 | 既存のenqueue失敗処理に従う。期限確認タスクは実行時に状態を再確認する |
 | 期限確認タスクのDB処理・commitが失敗 | ロールバックしてタスク失敗として記録する。既存の定期回収で救済する |
 | scheduler・worker停止、キュー滞留 | 復旧後は最新状態で確認する。遅延を理由に期限を延長しない |
 
@@ -115,29 +114,28 @@ runを終了させない。このタスクから回答生成後の期限へ再�
 - APIまたは回答ワーカーのメモリ内タイマーだけに依存せず、プロセス停止後も予約が残る方式を使う。
 - 正常完了・キャンセル時の予約取消は必須にしない。残った予約は終了済みrunを確認して終了する。
 - 予約基盤の処理済み単発予約の削除・消費動作を確認し、完了した予約を蓄積し続けない。
-- タスクpayloadに質問・回答・認証情報を含めない。run ID以外の情報は必要性があるものだけに限定する。
+- タスクpayloadに質問・回答・認証情報を含めない。payloadはrun IDのみとする。
 - 定期回収の既存schedule、生成中の継続確認頻度、スレッド表示時の回収契約は変更しない。
 
-## 実装前に確定・検証する点
+## 採用した予約基盤
 
-1. **予約基盤への接続方法**: 現在のagent schedulerは`LabelScheduleSource`を使用している。
-   既存のTaskiq／Redis環境で永続的な単発予約を扱う方法と、API・scheduler・workerそれぞれの接続寿命を確認する。
-   秒単位の指定、過去時刻の扱い、再起動後の期限到達済み予約、重複配送・予約消費の動作を検証する。
-2. **予約待機上限**: 回答実行の投入を長く遅らせない短い専用上限を決め、実装と本書に具体値を記録する。
-   既存brokerのsocket timeoutを、そのまま受付の許容待機時間とはみなさない。
-
-Taskiqには動的な時刻指定予約があるが、本書では特定のschedule sourceを採用済みとは扱わない。
-利用中のバージョンと既存の接続・認証設定に適合することを確認して選択する。
-[Taskiq公式ドキュメント](https://taskiq-python.github.io/guide/scheduling-tasks.html)
+- 既存依存の`ListRedisScheduleSource`を使い、API・agent schedulerで専用prefix `vector-agent-deadline`を共有する。
+- 小さなアダプターで予約本体と時刻索引への登録をRedisの`MULTI/EXEC`へまとめ、接続poolの終了処理を補う。
+- JSON形式で保存し、日時はtimezone付きISO形式とする。
+- 既存のRedis接続・IAM認証設定を継承する。APIとschedulerはプロセスごとに接続を所有し、終了時に解放する。
+- `skip_past_schedules=False`により、登録遅延や再起動後も過去の予約を取得する。送信後の単発予約削除はsourceの既存処理を使う。
+- agent schedulerの予約一覧更新のみ1秒間隔とする。他schedulerの60秒間隔と、毎分のDB定期回収は維持する。
+- バックグラウンド予約全体は2秒で打ち切る。Redis接続・socket・pool待機にも2秒を設定するが、各待機を合計して上限を延ばさない。
+- 予約確認タスクは独自の再試行・再予約を行わない。プロセス停止による予約漏れ・送信漏れは既存の回収経路で救済する。
 
 ## Evidence
 
 - [受付endpoint](../../backend/app/agent/router.py): run作成commit後に回答実行をenqueueする。
-- [run作成repository](../../backend/app/agent/runs/repository.py): DB時刻から`created_at`と`deadline_at`を確定する。
-- [内部作成結果](../../backend/app/agent/runs/contracts.py): 確認時点の`CreatedAgentRun`には`deadline_at`が含まれていない。
+- [run作成repository](../../backend/app/agent/running/creation.py): DB時刻から`created_at`と`deadline_at`を確定する。
+- [内部作成結果](../../backend/app/agent/running/creation.py): `CreatedAgentRun`が保存した`deadline_at`を返す。
 - [回答実行のenqueue](../../backend/app/agent/runs/enqueuer.py): 受付からbroker投入を分離する。
-- [元の期限定義](../../backend/app/agent/run_deadline/policy.py): 受付から60秒の期限を定義する。
-- [共通回収処理](../../backend/app/agent/run_deadline/persistence.py): 開始記録に応じた期限とquotaを扱う。
+- [元の期限定義](../../backend/app/agent/running/deadline/policy.py): 受付から60秒の期限を定義する。
+- [共通回収処理](../../backend/app/agent/running/deadline/deadline_exceeded.py): 開始記録に応じた期限とquotaを扱う。
 - [生成工程の時間定義](../../backend/app/agent/answering/timing.py): 工程制限時間と回収猶予の正本。
 - [既存の回収タスク](../../backend/app/queue/tasks/agent_run.py): 回収commit後の通知・観測を扱う。
 - [scheduler構成](../../backend/app/queue/schedulers.py): agent用schedulerの現在のsource構成。
@@ -145,7 +143,7 @@ Taskiqには動的な時刻指定予約があるが、本書では特定のsched
 - [既存依存](../../backend/pyproject.toml): Taskiqとtaskiq-redisを使用している。
 - [スレッド表示時の回収](./thread-open-deadline-recovery.md): 対象スレッドに限定した回収契約。
 
-確認時点ではスレッド表示時の回収に作業中の差分がある。既存変更を維持して、その完成した共通条件を利用する。
+受付後の[予約処理](../../backend/app/agent/running/deadline/scheduling.py)と[予約source](../../backend/app/queue/deadline_schedule.py)を追加する。
 
 ## Non-goals
 
@@ -160,13 +158,13 @@ Taskiqには動的な時刻指定予約があるが、本書では特定のsched
 
 | ケース | 期待する結果 |
 |---|---|
-| 新規・既存スレッドで受付成功 | commit→期限確認予約→回答実行enqueueの順序 |
+| 新規・既存スレッドで受付成功 | commit→回答実行enqueue→HTTPレスポンス送信→期限確認予約の順序 |
 | 受付拒否・rollback・commit失敗 | 予約と回答実行enqueueなし |
 | 保存した期限と予約へ渡す期限 | 同じ値。受付後の現在時刻から再計算しない |
 | 秒境界・端数・分／日付またぎ | 秒単位の切り上げ規則どおり。DB上の期限は不変 |
-| 予約判断時に元の期限ちょうど・超過 | 確認タスクを即時投入 |
-| 予約例外・タイムアウト | 待機を打ち切って回答実行enqueueへ進み、予約失敗だけでrunを終了させない |
-| 予約成功後の回答enqueue失敗 | 既存失敗処理を維持し、予約タスクは最新状態でno-opまたは適切に回収 |
+| 登録時に元の期限ちょうど・超過 | 現在時刻を問い合わせず同じ予約経路を使い、schedulerが過去の予約を取得 |
+| 予約例外・タイムアウト | 最大2秒で打ち切り、先に実行されたenqueue・HTTP送信・run・quotaへ影響しない |
+| 回答enqueue失敗 | 既存失敗処理を維持し、予約タスクは最新状態でno-opまたは適切に回収 |
 | queuedの期限到達 | 対象runだけ回収し、対象ならquotaを一度返却 |
 | queuedからrunningへ世代が進行 | 受付時の世代に固定せず、現在のrunを判定 |
 | 55秒で生成開始、60秒付近で確認 | 新しい回収期限より前なら維持。追加予約はしない |
@@ -182,7 +180,7 @@ Taskiqには動的な時刻指定予約があるが、本書では特定のsched
 関連する[受付APIテスト](../../backend/tests/agent/test_router_research.py)と
 [回収テスト](../../backend/tests/agent/run_deadline/test_deadline_sweep.py)に加え、予約操作と単発タスクのテストを追加する。
 
-現時点では文書のみ作成。production codeの変更、実装テストの実行は行っていない。
+検証結果は以下のImplementationに記録する。
 
 ## Done
 
@@ -194,5 +192,21 @@ Taskiqには動的な時刻指定予約があるが、本書では特定のsched
 
 ## Implementation
 
-未着手。実装順は予約基盤の確認、run単位の確認操作・タスク、受付からの予約接続、障害・競合の検証とする。
-対応するPR・commit・具体的な予約待機上限・検証結果は実装時に記録する。
+導入はworkerとschedulerを先に更新し、続いてAPI側の予約投入を有効にする。
+新規dependency・DB schema・公開APIの変更はない。
+
+2026-09-07の検証結果:
+
+- `ruff check app/`、`ruff format --check app/`および変更したテストのlint・format確認: PASS。
+- `uv run pytest tests/ -m unit -x -q`: 5,267 passed。
+- `make test-integration`: 1,196 passed / 22 skipped。実Postgres・Redisを起動し、終了後に削除済み。
+- 最初のマーカー指定なしpytestはローカルDB未起動で停止したため、unitを明示して実行し、integrationは上記の専用環境で検証した。
+- ASGI送信イベントで回答enqueue・HTTP body送信が予約待機より先に完了すること、保存した期限がそのまま渡ることを確認した。
+- 予約例外・タイムアウトでrun・quotaが変わらず、再試行しないことと、受付拒否・commit失敗時に予約しないことを確認した。
+- run限定の回収、生成開始・保存・キャンセルとのロック競合、現在の実行世代へのcommit後通知、重複実行・定期回収によるquota二重返却防止を確認した。
+- 実Redisで`MULTI/EXEC`による登録、別source・再起動後・過去時刻の取得、送信後の削除、pool終了を確認した。
+- API・schedulerの接続終了と、agentだけの1秒更新を検証した。
+
+run単位のタスクテストは、queuedの期限判定・回答生成中の期限判定・通知のcommit順序と世代・queuedの通知抑止・通知の重複防止に分離した。quota返却の保証は既存のquota回収テストに置く。
+
+デプロイは未実施。導入時は前述のworker・scheduler→APIの順序に従う。

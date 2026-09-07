@@ -9,9 +9,9 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.daily_quota import observability as daily_quota_observability
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.live_updates.transport import AgentLiveTransport
+from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.agent.running.deadline.deadline_exceeded import (
     DeadlineRunSweepResult,
     sweep_deadline_exceeded_runs_for_thread,
