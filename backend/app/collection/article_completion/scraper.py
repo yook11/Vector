@@ -39,7 +39,7 @@ from app.collection.external_fetch_errors import (
     FetchResponseTooLargeError,
     FetchRobotsDisallowedError,
 )
-from app.shared.http.external import make_external_async_client
+from app.http.external import make_external_async_client
 from app.shared.security.safe_url import SafeUrl
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.shared.http.internal import make_internal_async_client
+from app.http.internal import make_internal_async_client
 
 
 class TestEgressProxyIsNotUsed:
