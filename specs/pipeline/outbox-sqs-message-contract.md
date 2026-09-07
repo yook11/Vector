@@ -174,3 +174,32 @@ DB更新・commit・session終了が失敗した場合は成功結果を返さ�
 
 Non-goals: Slack通知、relay接続、成功処理、停止後の再開、schemaや既存policy・repositoryの変更は含めない。
 Done: 別sessionから予約・停止の確定を確認し、更新不能・再実行・更新障害・commit障害・終了障害の結果を実DBテストで保証する。
+
+## 設定修復が必要な送信失敗の観測（スライス③）
+
+Problem: 人の設定修復が必要な送信停止だけを既存のSlack経路で検知する。
+Evidence: 既存EMF出力とCloudWatch Alarm → SNS → Amazon Q → Slackの通知経路を利用する。
+
+requires_publish_configuration_fixは、configurationのmissing_credentials・incomplete_credentials・missing_regionと、serviceのauthentication_failed・access_denied・destination_not_foundだけを対象にする。
+credentials_retrieval_failed、暗号化関連、通信失敗、イベント不正、未分類・想定外を一律に通知対象にしない。
+NonRetryableReasonだけでは設定修復が必要か判断しない。
+
+record_publish_failure(event, error, result)はDeliveryStoppedのときだけoutbox_delivery_stoppedをinfoレベルで記録する。
+ログ項目はevent_id、attempt_count、stop_reason、error_code、requires_configuration_fixと、該当時のerror_reason・transport_kind・phase・original_exception_type・classification_exception_typeに限定する。
+本文・資格情報・Queue URL・SDKの自由文や生のサービスコード・例外チェーンを出力しない。
+通知対象の停止だけ、Vector/Pipelineのoutbox_publish_configuration_failureへCount=1をEMFで出力する。
+dimensionは空とし、個別イベント・原因ごとの系列を増やさない。
+
+AlarmはOutboxのSQS送信全体で1つ、60秒のSumが1以上、evaluation_periods=1、datapoints_to_alarm=1、欠損はnotBreachingとする。
+既存のalerts SNS topicへALARM遷移だけ通知し、OK・INSUFFICIENT_DATAの通知は設定しない。
+新しい発生がなくなったことは修復完了を意味しない。
+
+Invariants: 呼び出しはhandlerのcommit・session終了に成功した後に行い、RetryScheduled・DeliveryUpdateSkippedでは出力しない。
+ログとメトリクスは独立して試行し、通常の出力失敗を配信処理へ返さない。
+出力失敗は固定メッセージoutbox_failure_observation_failedと例外型だけで記録を試み、その失敗を再帰的に記録しない。
+BaseExceptionは捕捉しない。
+DB確定と観測出力は非原子的であり、間のプロセス終了による欠落は保証対象外とする。
+このメトリクスは厳密なユニーク停止件数ではなく、記録の再呼び出しやEMFの重複を許容する発生検知用とする。
+
+Non-goals: relayへの配線、通知の永続化・再配信、本番apply、Slack到達確認、IAM権限・通知先・依存追加は行わない。
+Done: 全共通reasonの対象判定、EMFとAlarmの契約一致、出力秘匿、sink障害の分離、実DBで停止確定後だけ観測されることを検証する。
