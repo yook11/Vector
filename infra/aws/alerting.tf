@@ -624,3 +624,19 @@ resource "aws_cloudwatch_event_target" "ecs_task_failed_to_start" {
     EOT
   }
 }
+
+# 停止の発生件数であり設定の修復完了は分からないため、復旧通知は送らない。
+resource "aws_cloudwatch_metric_alarm" "outbox_publish_configuration_failure" {
+  alarm_name          = "${var.name_prefix}-outbox-publish-configuration-failure"
+  alarm_description   = "OutboxからSQSへの送信に設定修復が必要。資格情報・IAM権限・region・キュー設定を確認する。原因とevent_idは ${aws_cloudwatch_log_group.outbox_relay.name} の outbox_delivery_stopped を検索する。設定修復後の停止イベント再開は別途判断する。"
+  namespace           = "Vector/Pipeline"
+  metric_name         = "outbox_publish_configuration_failure"
+  statistic           = "Sum"
+  period              = 60
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+}

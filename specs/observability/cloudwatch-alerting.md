@@ -232,3 +232,34 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 - A2 / A4 / A6 の閾値は初期値であり、本番実測 2〜4 週間後に見直す前提でよいか。
 - broker Valkey の maxmemory policy が eviction を許す設定の場合、eviction = queue メッセージの silent loss(実害)なので `Evictions > 0` alarm を 1 本追加する。noeviction なら書き込み失敗として A1 に出るため不要。実装時に policy を確認して判断。
 - `vector.audit.dropped` 急増の扱い: 初期アラートからは除外した(実害が間接的)。dashboard spec 側で扱う想定でよいか。
+
+## OutboxのSQS送信設定不備（スライス③）
+
+通知対象は停止がDBに確定した資格情報なし・不完全、region不足、認証失敗、権限不足、送信先キュー不在に限定する。
+Alarm名は `${name_prefix}-outbox-publish-configuration-failure` とし、全送信先を1つに集約する。
+Vector/Pipeline / outbox_publish_configuration_failure（dimensionなし）のSumを60秒単位で評価し、1件以上でALARMとする。
+evaluation_periodsとdatapoints_to_alarmは1、欠損はnotBreaching、通知は既存SNSへのALARMのみとする。
+一時障害、再試行上限到達、イベント不正、未分類・想定外だけでは発報しない。
+
+### 通知時の対応
+
+1. relayのCloudWatch Logs（Terraformのaws_cloudwatch_log_group.outbox_relay）でoutbox_delivery_stoppedを検索する。
+2. requires_configuration_fix=trueのerror_code・error_reasonとevent_idを確認する。
+3. Lambdaの資格情報、IAMのSQS送信権限、region、送信先キュー設定を確認・修復する。
+4. 対象event_idの停止状態を確認し、別途定義する明示的な再開操作を判断する。
+
+新規発生が途絶えてAlarmがOKに戻っても修復完了ではないため、復旧通知を送らない。
+一度OKへ戻った後の再発は再通知される。
+メトリクスは検知用途であり、厳密なユニーク件数や通知の無欠落を保証しない。
+
+### 検証と適用範囲
+
+アプリの判定・ログ・EMF出力とTerraform定義を実装する。
+relay接続、本番適用、AWSでのEMF抽出・Alarm遷移・Slack到達確認は未実施で、後続の接続・リリース時に確認する。
+新しいSNS権限、Slack送信SDK、Webhook、通知先設定は追加しない。
+
+根拠: [EMF仕様](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format_Specification.html)、[CloudWatch Alarm](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Alarms.html)。
+
+ローカル検証結果（スライス③）: backend lint・format成功、全単体5,616件成功、integration 1,220件成功・22件skip。
+変更したalerting.tfのformat checkと、隔離したTF_DATA_DIRでのinit -backend=false -lockfile=readonly・validateは成功（既存の非推奨警告あり）。
+Terraform全体のformat checkは、変更対象外のoutbox_relay.tfとローカルterraform.tfvarsの未整形で不合格。この2ファイルは変更していない。
