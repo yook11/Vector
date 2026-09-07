@@ -63,7 +63,31 @@ describe("LoginForm — 初期表示", () => {
     expect(
       screen.getByText("現在、一般向けの新規登録は受け付けていません。"),
     ).toBeVisible();
+    expect(
+      screen.queryByText("この機能の利用にはログインが必要です"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "ニュースへ戻る" }),
+    ).toHaveAttribute("href", "/");
     expect(container.querySelector('a[href="/auth/register"]')).toBeNull();
+  });
+
+  it("転送時は理由と元の公開ページへの戻り先を出す", () => {
+    render(
+      <LoginForm
+        backHref="/news/1"
+        backLabel="元のページへ戻る"
+        requiresLoginReason
+        returnTo="/news/1"
+      />,
+    );
+    expect(
+      screen.getByText("この機能の利用にはログインが必要です"),
+    ).toBeVisible();
+    expect(screen.getByText("招待制で運用しています")).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "元のページへ戻る" }),
+    ).toHaveAttribute("href", "/news/1");
   });
 });
 
