@@ -33,6 +33,7 @@ def test_answering_runner_builder_rejects_public_client_injection(
 ) -> None:
     with pytest.raises(TypeError):
         composition.build_answering_runner(
+            schedule_deadline_check=_schedule_deadline_check,
             session_factory=object(),
             repository=object(),
             **{unexpected_argument: object()},
@@ -315,6 +316,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
 
     answer_start = object()
     phases = composition._build_answering_phases(
+        schedule_deadline_check=_schedule_deadline_check,
         session_factory=object(),
         repository=answer_start,
         events=events,
@@ -340,6 +342,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
             "agent": DIRECT_ANSWER_AGENT,
             "runtime_scope_factory": activate_gemini_agent_runtime,
             "repository": answer_start,
+            "schedule_deadline_check": _schedule_deadline_check,
             "delta_reporter": None,
             "progress": None,
         }
@@ -349,6 +352,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
             "agent": EVIDENCE_ANSWER_AGENT,
             "runtime_scope_factory": activate_gemini_agent_runtime,
             "repository": answer_start,
+            "schedule_deadline_check": _schedule_deadline_check,
             "delta_reporter": None,
             "progress": None,
         }
@@ -392,6 +396,7 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
     )
 
     composition._build_answering_phases(
+        schedule_deadline_check=_schedule_deadline_check,
         session_factory=session_factory,
         repository=object(),
     )
@@ -422,6 +427,7 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
     )
 
     runner = composition.build_answering_runner(
+        schedule_deadline_check=_schedule_deadline_check,
         session_factory=session_factory,
         repository=answer_start,
         progress=progress,
@@ -435,6 +441,7 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
         {
             "session_factory": session_factory,
             "repository": answer_start,
+            "schedule_deadline_check": _schedule_deadline_check,
             "events": events,
             "delta_reporter": delta_reporter,
             "progress": progress,
@@ -499,6 +506,7 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
     progress = object()
 
     phases = composition._build_answering_phases(
+        schedule_deadline_check=_schedule_deadline_check,
         session_factory=cast(async_sessionmaker[AsyncSession], object()),
         repository=answer_start,
         delta_reporter=delta_reporter,
@@ -527,3 +535,7 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
     assert phases.collector.internal_search is internal_search
     assert phases.direct_answerer is not None
     assert phases.evidence_answerer is not None
+
+
+def _schedule_deadline_check(*_args):
+    pass

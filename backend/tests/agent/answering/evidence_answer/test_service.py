@@ -261,7 +261,9 @@ async def _answer(
         service_kwargs["progress"] = progress
     if recorder is not None:
         service_kwargs["recorder"] = recorder
-    return await EvidenceAnswerService(**service_kwargs).answer(
+    return await EvidenceAnswerService(
+        schedule_deadline_check=lambda *_: None, **service_kwargs
+    ).answer(
         EvidenceAnswerInput(
             request=_request() if request is None else request,
             evidence=tuple([_evidence()] if evidence is None else evidence),
@@ -563,6 +565,7 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
         yield object()
 
     service = EvidenceAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=failing_scope,
         repository=AllowAnswerGenerationStart(),
@@ -620,6 +623,7 @@ async def test_runtime_scope_exit_failure_discards_selected_outcome(
             raise close_error
 
     service = EvidenceAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=broken_scope,
         repository=AllowAnswerGenerationStart(),

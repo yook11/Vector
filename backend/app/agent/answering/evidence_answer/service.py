@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
+from datetime import datetime
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -75,6 +78,7 @@ class EvidenceAnswerService:
         agent: Agent[EvidenceAnswerInput, EvidenceAnswerDraft],
         runtime_scope_factory: StreamingAgentRuntimeScopeFactory,
         repository: AnswerGenerationRepository,
+        schedule_deadline_check: Callable[[UUID, datetime], None],
         delta_reporter: AnswerDeltaReporter | None = None,
         progress: AnswerProgressReporter | None = None,
         recorder: EvidenceAnswerRecorder = logfire_evidence_answer_recorder,
@@ -82,6 +86,7 @@ class EvidenceAnswerService:
         self._agent = agent
         self._runtime_scope_factory = runtime_scope_factory
         self._repository = repository
+        self._schedule_deadline_check = schedule_deadline_check
         self._delta = BestEffortAnswerDeltaReporter(delta_reporter)
         self._progress = progress
         self._recorder = recorder
@@ -93,12 +98,17 @@ class EvidenceAnswerService:
         if isinstance(result, Stop):
             raise AnswerGenerationStopped(result.reason)
 
+        timeout = asyncio.timeout(answer_timing.ANSWER_GENERATION_TIMEOUT_SECONDS)
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             attempt_number = 0
-            timeout = asyncio.timeout(answer_timing.ANSWER_GENERATION_TIMEOUT_SECONDS)
             try:
                 try:
                     async with timeout:
+                        self._schedule_deadline_check(
+                            result.run_id,
+                            result.answer_started_at
+                            + answer_timing.answer_generation_recovery_window(),
+                        )
                         if self._progress is not None:
                             await self._progress.stage_changed("answering")
                         async with self._runtime_scope_factory() as runtime:

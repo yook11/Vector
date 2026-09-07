@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
+    AnswerGenerationStarted,
     _check_answer_generation_continuation,
     _start_answer_generation,
 )
@@ -100,7 +101,7 @@ async def test_start_current_attempt_before_deadline_records_database_time(
     )
 
     run = await _load_run(session_factory, run_id)
-    assert result == Continue()
+    assert result == AnswerGenerationStarted(run_id, _BEFORE_DEADLINE)
     assert run.status == "running"
     assert run.answer_started_at == _BEFORE_DEADLINE
 
@@ -204,7 +205,7 @@ async def test_rolled_back_start_does_not_persist_generation_right(
         await session.rollback()
 
     run = await _load_run(session_factory, run_id)
-    assert result == Continue()
+    assert result == AnswerGenerationStarted(run_id, _BEFORE_DEADLINE)
     assert run.answer_started_at is None
 
 
@@ -223,7 +224,7 @@ async def test_start_commits_before_returning_success(
     result = await _repository(session_factory, run_id).start_answer_generation()
 
     run = await _load_run(session_factory, run_id)
-    assert result == Continue()
+    assert result == AnswerGenerationStarted(run_id, run.answer_started_at)
     assert run.answer_started_at is not None
 
 
@@ -442,3 +443,53 @@ async def test_check_is_read_only_without_row_lock(
     assert result == Continue()
     assert run.status == "running"
     assert run.answer_started_at == _ANSWER_STARTED_AT
+
+
+@pytest.mark.asyncio
+async def test_start_commit_failure_returns_no_success(session_factory):
+    # commitに失敗した開始記録を予約元へ成功として渡さない。
+    from sqlalchemy import event
+
+    run_id = await _seed_running(session_factory)
+    session = session_factory()
+
+    def reject_commit(_session):
+        raise RuntimeError("commit rejected")
+
+    event.listen(session.sync_session, "before_commit", reject_commit, once=True)
+    repository = AgentAnswerGenerationRepository(
+        lambda: session, run_id, _ATTEMPT_EPOCH
+    )
+    with pytest.raises(RuntimeError, match="commit rejected"):
+        await repository.start_answer_generation(now=_BEFORE_DEADLINE)
+    run = await _load_run(session_factory, run_id)
+    assert run.answer_started_at is None
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_started_time_schedules_recovery_after_original_deadline(session_factory):
+    # 55秒の開始記録から予約し、元の60秒では維持、生成後の期限で回収する。
+    from app.agent.answering.timing import answer_generation_recovery_window
+    from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
+    from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
+    from tests.agent.run_deadline.test_scheduling import RecordingSource
+
+    run_id = await _seed_running(session_factory)
+    started_at = _DEADLINE_AT - timedelta(seconds=5)
+    result = await _repository(session_factory, run_id).start_answer_generation(
+        now=started_at
+    )
+    assert isinstance(result, AnswerGenerationStarted)
+    source = RecordingSource()
+    scheduler = AgentDeadlineScheduler(source)
+    recovery_at = result.answer_started_at + answer_generation_recovery_window()
+    scheduler.reserve_in_background(result.run_id, recovery_at)
+    await asyncio.gather(*scheduler._pending)
+    assert source.schedules[0].time == recovery_at
+    assert source.schedules[0].args == [{"run_id": str(run_id)}]
+    for at, expected in [(_DEADLINE_AT, 0), (recovery_at, 1)]:
+        async with session_factory() as session:
+            async with session.begin():
+                recovered = await sweep_deadline_exceeded_runs_at(session, at=at)
+        assert recovered.total_count == expected

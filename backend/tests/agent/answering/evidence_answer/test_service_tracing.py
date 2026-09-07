@@ -86,6 +86,7 @@ async def test_phase_owns_all_provider_attempts_without_model_text(
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
     draft = await EvidenceAnswerService(
+        schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         repository=AllowAnswerGenerationStart(),

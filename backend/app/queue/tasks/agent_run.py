@@ -178,6 +178,7 @@ async def run_agent_answer(
             run_id=run_id,
         )
         answering_runner = build_answering_runner(
+            schedule_deadline_check=ctx.state.agent_deadline_scheduler.reserve_in_background,
             session_factory=session_factory,
             repository=AgentAnswerGenerationRepository(
                 session_factory,

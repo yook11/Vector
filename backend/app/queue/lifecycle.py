@@ -22,6 +22,7 @@ import structlog
 from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
+from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
 from app.config import settings
 from app.db.engine import (
     AUTH_RETENTION_MAX_OVERFLOW,
@@ -52,6 +53,7 @@ from app.queue.composition import (
     _wire_briefing_adapter,
     _wire_embedding_adapters,
 )
+from app.queue.deadline_schedule import create_deadline_schedule_source
 from app.redis import (
     create_worker_agent_live_client,
     create_worker_pipeline_control_client,
@@ -101,6 +103,12 @@ async def _aclose_worker_resources(state: TaskiqState) -> None:
         live = getattr(state, "agent_live_redis", None)
         if live is not None:
             stack.push_async_callback(live.aclose)
+        deadline_source = getattr(state, "agent_deadline_source", None)
+        if deadline_source is not None:
+            stack.push_async_callback(deadline_source.shutdown)
+        deadline_scheduler = getattr(state, "agent_deadline_scheduler", None)
+        if deadline_scheduler is not None:
+            stack.push_async_callback(deadline_scheduler.cancel_pending_reservations)
         control = getattr(state, "pipeline_control_redis", None)
         if control is not None:
             stack.push_async_callback(control.aclose)
@@ -139,6 +147,12 @@ def _register_worker_lifecycle(
         register_pool_metrics(
             state.engine, pool_size=pool_size, max_overflow=max_overflow
         )
+        if label == "agent":
+            state.agent_deadline_source = create_deadline_schedule_source(settings)
+            await state.agent_deadline_source.startup()
+            state.agent_deadline_scheduler = AgentDeadlineScheduler(
+                state.agent_deadline_source
+            )
         _attach_worker_redis(state, runtime)
         await _compose(runtime, state)
         if label == "maintenance":

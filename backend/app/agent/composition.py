@@ -6,9 +6,11 @@ call the builder when they actually execute an agent run.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -67,6 +69,7 @@ def _build_answering_phases(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     repository: AnswerGenerationRepository,
+    schedule_deadline_check: Callable[[UUID, datetime], None],
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     progress: AnswerProgressReporter | None = None,
@@ -121,6 +124,7 @@ def _build_answering_phases(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
             repository=repository,
+            schedule_deadline_check=schedule_deadline_check,
             delta_reporter=delta_reporter,
             progress=progress,
         ),
@@ -128,6 +132,7 @@ def _build_answering_phases(
             agent=EVIDENCE_ANSWER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
             repository=repository,
+            schedule_deadline_check=schedule_deadline_check,
             delta_reporter=delta_reporter,
             progress=progress,
         ),
@@ -142,6 +147,7 @@ def build_answering_runner(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     repository: AnswerGenerationRepository,
+    schedule_deadline_check: Callable[[UUID, datetime], None],
     progress: AnswerProgressReporter | None = None,
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
@@ -150,6 +156,7 @@ def build_answering_runner(
         phases_factory=lambda: _build_answering_phases(
             session_factory=session_factory,
             repository=repository,
+            schedule_deadline_check=schedule_deadline_check,
             events=events,
             delta_reporter=delta_reporter,
             progress=progress,
