@@ -1,0 +1,150 @@
+"""イベント送信が失敗した原因を表し、再試行や配信停止の判断は持たない。"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import TYPE_CHECKING, ClassVar
+
+from app.logfire.exceptions import VectorDomainError
+
+if TYPE_CHECKING:
+    from app.http.failure import HttpTransportFailure
+
+
+class PublishConfigurationReason(StrEnum):
+    """送信に必要な資格情報または設定が不足している理由。"""
+
+    MISSING_CREDENTIALS = "missing_credentials"
+    INCOMPLETE_CREDENTIALS = "incomplete_credentials"
+    MISSING_REGION = "missing_region"
+    CREDENTIALS_RETRIEVAL_FAILED = "credentials_retrieval_failed"
+
+
+class PublishEventInvalidReason(StrEnum):
+    """イベントを送信内容として扱えない理由。"""
+
+    UNSUPPORTED_EVENT_TYPE = "unsupported_event_type"
+    INVALID_OCCURRED_AT = "invalid_occurred_at"
+    SERIALIZATION_FAILED = "serialization_failed"
+
+
+class PublishServiceReason(StrEnum):
+    """送信先の応答から分かる、実装に依存しない失敗理由。"""
+
+    THROTTLED = "throttled"
+    AUTHENTICATION_FAILED = "authentication_failed"
+    ACCESS_DENIED = "access_denied"
+    DESTINATION_NOT_FOUND = "destination_not_found"
+    REQUEST_REJECTED = "request_rejected"
+    SECURITY_REJECTED = "security_rejected"
+    REQUEST_EXPIRED = "request_expired"
+    ENCRYPTION_ERROR = "encryption_error"
+    SERVICE_UNAVAILABLE = "service_unavailable"
+    UNCLASSIFIED = "unclassified"
+
+
+class PublishPhase(StrEnum):
+    """送信操作の失敗が発生した段階。"""
+
+    INITIALIZE = "initialize"
+    PREPARE_EVENT = "prepare_event"
+    RESOLVE_CREDENTIALS = "resolve_credentials"
+    SEND = "send"
+    CLASSIFY_FAILURE = "classify_failure"
+    CLEANUP = "cleanup"
+
+
+class PublishError(VectorDomainError):
+    """想定外の失敗を含む、イベント送信失敗の共通祖先。"""
+
+    CODE: ClassVar[str] = "publish_error"
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE",)
+
+
+class PublishTransportError(PublishError):
+    """通信失敗の分類結果を保持し、イベント送信の失敗として伝える。"""
+
+    CODE: ClassVar[str] = "publish_transport_error"
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "failure")
+
+    def __init__(self, *, failure: HttpTransportFailure) -> None:
+        super().__init__()
+        self.failure = failure
+
+
+class PublishServiceError(PublishError):
+    """送信先のエラー応答を共通理由と調査用の情報で表す。"""
+
+    CODE: ClassVar[str] = "publish_service_error"
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "status_code")
+
+    def __init__(
+        self,
+        *,
+        reason: PublishServiceReason,
+        service_error_code: str,
+        status_code: int | None,
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__()
+        # 外部由来のコードは判断用に保持するが、自由文字列のため例外文面には出さない。
+        self.reason = reason
+        self.request_id = request_id
+        self.service_error_code = service_error_code
+        self.status_code = status_code
+
+
+class PublishConfigurationError(PublishError):
+    """送信に必要な資格情報または設定が不足している。"""
+
+    CODE: ClassVar[str] = "publish_configuration_error"
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason")
+
+    def __init__(self, *, reason: PublishConfigurationReason) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class PublishEventInvalidError(PublishError):
+    """イベントを送信内容として扱えない。"""
+
+    CODE: ClassVar[str] = "publish_event_invalid"
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason")
+
+    def __init__(self, *, reason: PublishEventInvalidReason) -> None:
+        super().__init__()
+        self.reason = reason
+
+
+class PublishUnexpectedError(PublishError):
+    """分類できない失敗の型と発生段階を保持する。"""
+
+    CODE: ClassVar[str] = "publish_unexpected_error"
+    reason: ClassVar[str] = "unexpected_exception"
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = (
+        "CODE",
+        "reason",
+        "original_exception_type",
+        "phase",
+        "classification_exception_type",
+    )
+
+    def __init__(
+        self,
+        *,
+        original_exception: Exception,
+        phase: PublishPhase,
+        classification_exception: Exception | None = None,
+    ) -> None:
+        super().__init__()
+        self.original_exception_type = (
+            f"{type(original_exception).__module__}."
+            f"{type(original_exception).__qualname__}"
+        )
+        self.phase = phase
+        self.classification_exception_type = (
+            f"{type(classification_exception).__module__}."
+            f"{type(classification_exception).__qualname__}"
+            if classification_exception is not None
+            else None
+        )

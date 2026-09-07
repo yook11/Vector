@@ -64,6 +64,7 @@ API契約の正本はFastAPIのPydantic schema、DB変更の正本はAlembic mig
 
 | Area | Specification | Status |
 |---|---|---|
+| Pipeline | [OutboxからSQSへの送信契約](./pipeline/outbox-sqs-message-contract.md) | Partially implemented |
 | Admin | [ニュースソース状態確認](./admin/admin-source-health.md) | Implemented |
 | Analysis | [Assessment Category Taxonomy](./analysis/assessment-category-taxonomy.md) | Implemented |
 | Analysis | [InScopeAnalyzedArticle](./analysis/in-scope-analyzed-article.md) | Implemented |

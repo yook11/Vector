@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from app.config import settings
-from app.shared.http.external import (
+from app.http.external import (
     _PinnedDnsTransport,
     make_external_async_client,
 )

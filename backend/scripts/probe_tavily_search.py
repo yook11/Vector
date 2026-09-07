@@ -16,7 +16,7 @@ from app.agent.evidence_collection.external_search import (
     build_search_body,
 )
 from app.config import settings
-from app.shared.http.external import make_external_async_client
+from app.http.external import make_external_async_client
 
 
 def _build_parser() -> argparse.ArgumentParser:

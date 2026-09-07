@@ -7,7 +7,7 @@ URL — はすべてここを通す。宛先を信用できないことから、
 - リダイレクト経由 SSRF を default で遮断 (``follow_redirects=False``)
 - DNS rebind / TOCTOU を Custom Transport の IP pin で構造的に閉塞
 
-自分たちの resource 宛には ``app.shared.http.internal`` を使う。どちらでもない経路を
+自分たちの resource 宛には ``app.http.internal`` を使う。どちらでもない経路を
 作らないため、``httpx.AsyncClient`` の直接構築は ``flake8-tidy-imports`` の ``TID251``
 で禁止する (``pyproject.toml`` 参照)。
 

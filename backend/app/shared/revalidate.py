@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
-from app.shared.http.internal import make_internal_async_client
+from app.http.internal import make_internal_async_client
 
 if TYPE_CHECKING:
     from app.config import Settings

@@ -2,7 +2,7 @@
 
 宛先が自 AWS アカウントに作った resource や自 deployment のコンテナである経路 —
 AgentCore Gateway、frontend の revalidate 口など — はここを通す。第三者宛には
-``app.shared.http.external`` を使う。
+``app.http.external`` を使う。
 
 **宛先が internal であることをこの関数は検証しない。** 根拠は設定層の起動時
 バリデータ (``app/config.py`` の ``_validate_internal_frontend_base_url`` と

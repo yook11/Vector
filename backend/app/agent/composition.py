@@ -35,7 +35,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
 )
 from app.config import settings
-from app.shared.http.internal import make_internal_async_client
+from app.http.internal import make_internal_async_client
 
 if TYPE_CHECKING:
     from app.agent.runtime.gemini import GeminiAgentRuntime
