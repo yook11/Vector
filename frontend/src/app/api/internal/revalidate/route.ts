@@ -12,7 +12,7 @@
 import "server-only";
 
 import { timingSafeEqual } from "node:crypto";
-import { updateTag } from "next/cache";
+import { revalidateTag } from "next/cache";
 import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireEnv } from "@/lib/env";
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
   }
 
   for (const tag of parsed.data.tags) {
-    updateTag(tag);
+    revalidateTag(tag, { expire: 0 });
   }
   return NextResponse.json({ ok: true, count: parsed.data.tags.length });
 }

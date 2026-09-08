@@ -1,5 +1,6 @@
-import { cacheLife } from "next/cache";
+import { cacheLife, cacheTag } from "next/cache";
 import { publicClient } from "@/lib/api/hey-api-interceptors";
+import { cacheTags } from "@/lib/cache/tags";
 import type { ArticleQuery } from "@/types";
 import { listArticles } from "@/types/sdk.gen";
 import type { PaginatedArticleResponse } from "@/types/types.gen";
@@ -27,6 +28,7 @@ export async function getArticles(
 ): Promise<PaginatedArticleResponse> {
   "use cache";
   cacheLife("minutes");
+  cacheTag(cacheTags.articlesList);
   const { data } = await listArticles({
     client: publicClient,
     throwOnError: true,

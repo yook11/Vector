@@ -1,5 +1,6 @@
-import { cacheLife } from "next/cache";
+import { cacheLife, cacheTag } from "next/cache";
 import { publicClient } from "@/lib/api/hey-api-interceptors";
+import { cacheTags } from "@/lib/cache/tags";
 import { listCategories } from "@/types/sdk.gen";
 import type { CategoryDetailList } from "@/types/types.gen";
 
@@ -16,6 +17,7 @@ import type { CategoryDetailList } from "@/types/types.gen";
 export async function getCategories(): Promise<CategoryDetailList> {
   "use cache";
   cacheLife("minutes");
+  cacheTag(cacheTags.articleCategories);
   const { data } = await listCategories({
     client: publicClient,
     throwOnError: true,

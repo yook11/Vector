@@ -21,6 +21,7 @@ from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.config import settings
 from app.logfire.article_stage import assessment_stage_span
 from app.queue.brokers import broker_analysis
 from app.queue.helpers.stage_hold import set_stage_hold
@@ -28,6 +29,7 @@ from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
 from app.queue.retry import is_last_attempt
 from app.queue.tasks.embedding import generate_embedding
+from app.shared.revalidate import FrontendRevalidateNotifier
 
 logger = structlog.get_logger(__name__)
 
@@ -139,6 +141,9 @@ async def assess_content(
             return
 
         if result is not None:
+            # コミット済みの一覧を無効化し、後続の投入失敗でも通知を欠落させない。
+            notifier = FrontendRevalidateNotifier.from_settings(settings)
+            await notifier.notify(tags=["articles:list", "articles:categories"])
             await generate_embedding.kiq(
                 EmbeddingTrigger(
                     analyzed_article_id=result,

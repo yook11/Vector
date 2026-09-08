@@ -7,6 +7,8 @@ describe("cacheTags", () => {
     // この test を更新する操作にすることで、invalidation chain 全体の整合を
     // PR 単位で見える化する。
     expect(cacheTags).toEqual({
+      articlesList: "articles:list",
+      articleCategories: "articles:categories",
       watchlistMe: "watchlist:me",
       sources: "sources",
       briefingList: "briefing:list",
