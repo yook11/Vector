@@ -81,6 +81,8 @@ class NonRetryable:
         return NonRetryable(NonRetryableReason.UNEXPECTED_FAILURE)
 
 
+MAX_PUBLISH_ATTEMPTS = 5
+
 _RETRY_DELAYS = (30, 120, 600, 1800)
 _RETRY_TRANSPORT_KINDS = frozenset(
     {
@@ -109,7 +111,7 @@ def _is_retryable_proxy_status(status: int | None) -> bool:
 
 def _retry_delay(*, attempt_count: int, jitter: float) -> Retryable | NonRetryable:
     """再試行対象の失敗に回数上限と待ち時間を適用する。"""
-    if attempt_count >= 5:
+    if attempt_count >= MAX_PUBLISH_ATTEMPTS:
         return NonRetryable(NonRetryableReason.RETRY_EXHAUSTED)
     delay = timedelta(seconds=_RETRY_DELAYS[attempt_count - 1]) * (0.8 + 0.4 * jitter)
     return Retryable(delay)

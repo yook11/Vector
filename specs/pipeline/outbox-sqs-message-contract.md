@@ -58,7 +58,7 @@ Standardキューを使用し、event_typeから送信先を決定する。Queue
 
 ## Non-goals
 
-publisherの失敗分類は下記の契約に従う。バックオフと試行上限は下記の再試行・停止ポリシーに従う。実行間隔、処理件数、lease期間は別途決定する。consumer実装、既存Taskiq処理の移行、AWSリソース変更、Scheduler有効化は含めない。
+publisherの失敗分類は下記の契約に従う。バックオフと試行上限は下記の再試行・停止ポリシーに従う。確保の初期件数は10件、上限到達の停止は100件とする。実行間隔、1起動あたりのバッチ数、lease期間は別途決定する。consumer実装、既存Taskiq処理の移行、AWSリソース変更、Scheduler有効化は含めない。
 
 ## Done
 
@@ -213,6 +213,58 @@ Non-goals: DB schema、relay接続、consumer、通知条件、AWS設定、本�
 Done: 形式検証・ID照合・MD5一致/不一致・固定ログ・秘匿・停止policyと既存送信契約を単体テストで保証し、DB停止確定後だけ記録されることを実DBテストで確認する。
 
 Verification（2026-09-08）: lint・format check、全単体テスト5,790件が成功した。`make test-integration TEST_COMPOSE_PROJECT=vector-test-sqs-integrity-20260908 PYTEST_ARGS="-x -q"`で独立したテスト環境を使用し、実DBテスト1,223件成功・22件skipと終了時の環境削除を確認した。relay接続・本番適用・実際の通知確認は未実施。
+
+## 送信対象の確保と試行上限到達の停止
+
+Problem: 指定したイベントタイプの送信可能行を発生日時の古い順に確保し、確保回数が上限に達した担当不在のイベントは再送せず停止する。
+Evidence: 既存OutboxDeliveryRepository、outbox_eventsの状態・lease制約、pendingインデックス、確保とトランザクションのDBテストに従う。
+
+### 共通の試行上限と対象範囲
+
+- `publish_retry_policy.MAX_PUBLISH_ATTEMPTS = 5`を確保・停止・送信失敗後の再試行判断で共有する。
+- 回数は初回を含む、commitされた配信試行の確保回数であり、実際のネットワーク送信回数ではない。
+- `event_type`は必須の完全一致条件とし、全イベントを対象とする省略値は持たない。後続のrelayは`article.assessed_in_scope`を渡す。
+- 発生日時の下限は設けず、古いイベントも対象に含む。他工程の行は確保・停止の両方から除外する。
+
+### APIと更新条件
+
+`claim_ready_batch(*, event_type: str, lease_duration: timedelta, limit: int = 10) -> list[ClaimedOutboxEvent]`
+
+- 未配信・未停止・再試行時刻到来・leaseなしまたは期限切れ・確保前の試行回数が5回未満をDB側で判定する。
+- `occurred_at ASC`で候補を選び、件数上限と`FOR UPDATE SKIP LOCKED`を適用して、1つのSQLでlease設定と試行回数の加算を行う。
+- 確保前4回は確保後5回となり、確保前5回以上は確保しない。本文・発生日時・再試行予定日時など他の列は変更しない。
+- `RETURNING`の順序に依存せず、取得したoccurred_atで返却結果も整列する。同じ発生日時のイベント同士の選択・返却順は保証せず、ID順も要求しない。next_attempt_atは送信可能時刻の判定だけに使う。
+
+`stop_deliveries_at_attempt_limit(*, event_type: str, limit: int = 100) -> list[UUID]`
+
+- 未配信・未停止・試行回数5回以上・leaseなしまたは期限切れの行を対象とし、next_attempt_atが未来でも停止する。
+- 確保と同じ順序・ロック方式で候補を制限し、1つのSQLで停止日時をDB現在時刻、停止理由を`NonRetryableReason.RETRY_EXHAUSTED.value`にし、leaseの2列をNULLへ戻す。
+- 試行回数、本文、イベント発生日時、再試行予定日時、配信成功日時は変更しない。更新したevent_idを候補と同じ順序で返す。
+- 担当者による`stop_delivery`は、有効なleaseとtoken一致を要求する。上限到達による停止は、leaseなしまたは期限切れを要求する。対象条件は各経路に残し、停止日時・理由・lease解除の更新定義をrepository内で共通化する。
+- 定期実行は呼び出し元の責任とし、この操作は1回につき既定で最大100件を停止する。SQSのバッチ送信とは別の処理であり、PublishErrorを作らず、PublishFailureHandlerやログ・通知には接続しない。
+- 100件を超えて未停止のまま残った行も、確保条件によって6回目の確保には入らない。
+
+### 入力・トランザクションの境界
+
+- event_typeの型違反はTypeError、空・空白のみはValueErrorとし、文字列を自動補正しない。
+- limitはboolを除く整数を要求し、型違反はTypeError、0以下はDB操作なしで空リストを返す。
+- lease_durationはtimedelta以外をTypeError、0以下をValueErrorとし、limitが0以下でも検証する。
+- 件数は初期値であり呼び出し元が変更できる。repositoryにSQSの10件というリクエスト上限は持ち込まない。
+- 時刻判定はstatement_timestamp()を使い、事前SELECTやアプリ時刻による判定を加えない。ロック中の行を避けるため、全体の厳密なFIFOではなく確保可能な行の中で発生日時の古い順となる。
+- repositoryはcommit・rollbackを行わず、返却値は未commitの更新結果である。DB例外は送信失敗に変換せず伝播する。
+- 有効な5回目のleaseやロック中の行を停止処理で上書きしない。停止後は古いtokenによる結果更新を拒否する。
+
+Invariants: 同じ上限を参照し、対象タイプの境界・lease所有権・配信済み／停止済みの保護・短いトランザクションの責務を維持する。
+Non-goals: relay接続、送信、ログ・通知、Lambda変更、DB schema・インデックス・依存の変更、本番適用、重複防止の実装は含めない。
+Done: 範囲・回数・順序・初期件数・更新列・同時操作・commit／rollbackとDB例外の境界をテストで保証する。
+
+テストは発生日時による選択・返却順、同時刻の順序非保証、確保件数上限、停止件数上限、未停止の上限到達行の再確保防止、次回停止への引き継ぎを独立して検証する。停止件数のテストでは102件中100件を停止し、残り2件のDB状態が変更されないことを確認する。
+
+Verification（2026-09-08、テスト再配置・停止更新共通化前）: lint・format check、全単体テスト5,941件が成功した。`uv run pytest tests/ -m "not integration" -x -q`の後、`make test-integration TEST_COMPOSE_PROJECT=vector-test-outbox-occurrence-20260908 PYTEST_ARGS="-x -q"`で実DBテスト1,269件成功・22件skipを確認し、専用テスト環境の終了時削除も完了した。relay接続・本番適用は未実施。
+
+最終変更後の検証: 確保・配信結果更新・上限到達停止・トランザクション・failure handlerの関連単体テスト38件、実DBテスト110件が成功した。lint・format checkも成功した。利用者の指定により全テストの再実行は行っていない。
+
+lease期間、実行間隔、1起動あたりのバッチ数、確保と停止の呼び出し順は後続relayで定める。古いイベントと既存パイプラインの重複防止確認は本番有効化前に行う。
 
 ## 再試行・停止ポリシー（スライス①）
 

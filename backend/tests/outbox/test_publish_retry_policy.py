@@ -294,3 +294,18 @@ def test_response_invalid_stops_without_retry_limit_reclassification(reason, att
     assert decide_publish_retry(
         error, attempt_count=attempt, jitter=0.5
     ) == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
+
+
+def test_retry_delays_cover_every_attempt_before_shared_limit():
+    """確保処理と共有する上限まで、待ち時間と上限到達の判断が整合する。"""
+    from app.outbox.publish_retry_policy import _RETRY_DELAYS, MAX_PUBLISH_ATTEMPTS
+
+    assert MAX_PUBLISH_ATTEMPTS == 5
+    assert len(_RETRY_DELAYS) == MAX_PUBLISH_ATTEMPTS - 1
+    for attempt in range(1, MAX_PUBLISH_ATTEMPTS):
+        assert decide_publish_retry(
+            transport(), attempt_count=attempt, jitter=0.5
+        ) == Retryable(timedelta(seconds=_RETRY_DELAYS[attempt - 1]))
+    assert decide_publish_retry(
+        transport(), attempt_count=MAX_PUBLISH_ATTEMPTS, jitter=0.5
+    ) == NonRetryable(NonRetryableReason.RETRY_EXHAUSTED)
