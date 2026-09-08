@@ -56,3 +56,16 @@ async def read_event(session: AsyncSession, event_id: UUID) -> dict[str, Any]:
         select(OutboxEvent.__table__).where(OutboxEvent.event_id == event_id)
     )
     return dict(result.mappings().one())
+
+
+async def seed_batch_events(session, *, event_type, count, attempt_count):
+    """件数境界を検証するイベント群と、更新前の状態を用意する。"""
+    for _ in range(count):
+        await insert_event(
+            session,
+            next_attempt_at=PAST,
+            event_type=event_type,
+            attempt_count=attempt_count,
+        )
+    rows = await session.execute(select(OutboxEvent.__table__))
+    return {row["event_id"]: dict(row) for row in rows.mappings()}

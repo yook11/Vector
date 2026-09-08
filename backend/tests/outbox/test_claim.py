@@ -7,10 +7,19 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.outbox.publish_retry_policy import MAX_PUBLISH_ATTEMPTS
 from app.outbox.repository import OutboxDeliveryRepository
-from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
+from tests.outbox.helpers import (
+    FUTURE,
+    PAST,
+    insert_event,
+    read_event,
+    seed_batch_events,
+)
 
 pytestmark = pytest.mark.asyncio
+EVENT_TYPE = "article.assessed_in_scope"
+LEASE = timedelta(minutes=5)
 
 
 async def test_claim_ready_batch_skips_published_event(
@@ -27,6 +36,7 @@ async def test_claim_ready_batch_skips_published_event(
         published_at=PAST,
     )
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
+        event_type="test.outbox",
         limit=10,
         lease_duration=timedelta(minutes=5),
     )
@@ -48,6 +58,7 @@ async def test_claim_ready_batch_skips_stopped_event(
         delivery_stop_reason="max_attempts",
     )
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
+        event_type="test.outbox",
         limit=10,
         lease_duration=timedelta(minutes=5),
     )
@@ -67,6 +78,7 @@ async def test_claim_ready_batch_skips_event_waiting_for_retry(
         next_attempt_at=FUTURE,
     )
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
+        event_type="test.outbox",
         limit=10,
         lease_duration=timedelta(minutes=5),
     )
@@ -88,6 +100,7 @@ async def test_claim_ready_batch_skips_event_with_active_lease(
         leased_until=FUTURE,
     )
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
+        event_type="test.outbox",
         limit=10,
         lease_duration=timedelta(minutes=5),
     )
@@ -102,12 +115,34 @@ async def test_claim_respects_limit_without_selecting_specific_ids(
     await insert_event(db_session, next_attempt_at=FUTURE)
 
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        limit=2, lease_duration=timedelta(minutes=5)
+        event_type="test.outbox", limit=2, lease_duration=timedelta(minutes=5)
     )
 
     claimed_ids = {item.event_id for item in claimed}
     assert len(claimed) == len(claimed_ids) == 2
     assert claimed_ids <= ready_ids
+
+
+@pytest.mark.parametrize("attempt", [0, 4, 5, 6])
+async def test_claim_attempt_boundaries(db_session, attempt):
+    """確保前が4回なら5回目を返し、5回以上なら行を変更しない。"""
+    event_id = await insert_event(
+        db_session,
+        next_attempt_at=PAST,
+        event_type="test.outbox",
+        attempt_count=attempt,
+    )
+    before = await read_event(db_session, event_id)
+    result = await OutboxDeliveryRepository(db_session).claim_ready_batch(
+        event_type="test.outbox", lease_duration=timedelta(minutes=5)
+    )
+    if attempt < MAX_PUBLISH_ATTEMPTS:
+        assert len(result) == 1
+        assert result[0].attempt_count == attempt + 1
+        assert result[0].event_id == event_id
+    else:
+        assert result == []
+        assert await read_event(db_session, event_id) == before
 
 
 async def test_claim_returns_empty_when_no_event_is_ready(
@@ -116,7 +151,7 @@ async def test_claim_returns_empty_when_no_event_is_ready(
     """対象外の行しかない場合は空リストを返す。"""
     await insert_event(db_session, next_attempt_at=FUTURE)
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        limit=10, lease_duration=timedelta(minutes=5)
+        event_type="test.outbox", limit=10, lease_duration=timedelta(minutes=5)
     )
     assert claimed == []
 
@@ -135,7 +170,9 @@ async def test_claim_updates_only_lease_and_attempt_count(
     before = await read_event(db_session, event_id)
 
     await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        limit=10, lease_duration=timedelta(minutes=5)
+        event_type="article.assessed_in_scope",
+        limit=10,
+        lease_duration=timedelta(minutes=5),
     )
 
     saved = await read_event(db_session, event_id)
@@ -157,7 +194,7 @@ async def test_claim_sets_lease_expiry_from_database_time(
     started_at = await db_session.scalar(select(func.statement_timestamp()))
 
     await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        limit=10, lease_duration=timedelta(minutes=5)
+        event_type="test.outbox", limit=10, lease_duration=timedelta(minutes=5)
     )
 
     finished_at = await db_session.scalar(select(func.statement_timestamp()))
@@ -183,7 +220,9 @@ async def test_claim_returns_saved_values(
         payload=payload,
     )
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        limit=10, lease_duration=timedelta(minutes=5)
+        event_type="article.assessed_in_scope",
+        limit=10,
+        lease_duration=timedelta(minutes=5),
     )
     saved = await read_event(db_session, event_id)
 
@@ -212,7 +251,7 @@ async def test_reclaim_replaces_expired_token_and_increments_attempt_count(
         attempt_count=4,
     )
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        limit=10, lease_duration=timedelta(minutes=5)
+        event_type="test.outbox", limit=10, lease_duration=timedelta(minutes=5)
     )
 
     assert len(claimed) == 1
@@ -233,7 +272,7 @@ async def test_claim_generates_a_different_token_for_each_event(
     """同じ一括確保でも、各イベントが別のtokenを持つ。"""
     ready_ids = {await insert_event(db_session, next_attempt_at=PAST) for _ in range(2)}
     claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        limit=10, lease_duration=timedelta(minutes=5)
+        event_type="test.outbox", limit=10, lease_duration=timedelta(minutes=5)
     )
     assert {event.event_id for event in claimed} == ready_ids
     assert len({event.lease_token for event in claimed}) == len(ready_ids)
@@ -246,7 +285,7 @@ async def test_nonpositive_limit_returns_empty_without_database_access(
     """DB接続のないsessionでも、非正の上限は空結果を返す。"""
     async with AsyncSession() as session:
         claimed = await OutboxDeliveryRepository(session).claim_ready_batch(
-            limit=limit, lease_duration=timedelta(minutes=5)
+            event_type="test.outbox", limit=limit, lease_duration=timedelta(minutes=5)
         )
     assert claimed == []
 
@@ -261,6 +300,135 @@ async def test_claim_rejects_nonpositive_duration_even_with_zero_limit(
     before = await read_event(db_session, event_id)
     with pytest.raises(ValueError):
         await OutboxDeliveryRepository(db_session).claim_ready_batch(
-            limit=limit, lease_duration=duration
+            event_type="test.outbox", limit=limit, lease_duration=duration
         )
     assert await read_event(db_session, event_id) == before
+
+
+async def test_claim_batches_select_and_return_events_by_occurrence_time(db_session):
+    """再試行予定の順番によらず、発生日時の古いイベントから選んで返す。"""
+    attempt = 0
+    events = {}
+    for age in (2, 0, 1):
+        events[age] = await insert_event(
+            db_session,
+            event_type=EVENT_TYPE,
+            attempt_count=attempt,
+            occurred_at=PAST + timedelta(seconds=age),
+            next_attempt_at=PAST + timedelta(seconds=2 - age),
+        )
+    result = await OutboxDeliveryRepository(db_session).claim_ready_batch(
+        lease_duration=LEASE, event_type=EVENT_TYPE, limit=2
+    )
+    ids = [event.event_id for event in result]
+    assert ids == [events[0], events[1]]
+
+
+async def test_claim_equal_occurrence_times_allow_any_event_order(db_session):
+    """同時刻に発生したイベントは、IDの順序を要求せず上限件数を選べる。"""
+    attempt = 0
+    events = {
+        await insert_event(
+            db_session,
+            event_type=EVENT_TYPE,
+            attempt_count=attempt,
+            occurred_at=PAST,
+            next_attempt_at=PAST,
+        )
+        for _ in range(3)
+    }
+    result = await OutboxDeliveryRepository(db_session).claim_ready_batch(
+        lease_duration=LEASE, event_type=EVENT_TYPE, limit=2
+    )
+    ids = [event.event_id for event in result]
+    assert len(ids) == len(set(ids)) == 2
+    assert set(ids) <= events
+
+
+async def test_claim_event_type_is_exact_and_old_events_are_included(db_session):
+    """発生日時で除外せず、指定タイプに完全一致する行だけを扱う。"""
+    attempt = 0
+    target = await insert_event(
+        db_session,
+        next_attempt_at=PAST,
+        occurred_at=PAST,
+        event_type=EVENT_TYPE,
+        attempt_count=attempt,
+    )
+    other = await insert_event(
+        db_session,
+        next_attempt_at=PAST,
+        event_type="article.acquired",
+        attempt_count=attempt,
+    )
+    before = await read_event(db_session, other)
+    repository = OutboxDeliveryRepository(db_session)
+    assert (
+        await repository.claim_ready_batch(
+            lease_duration=LEASE, event_type=f" {EVENT_TYPE} "
+        )
+        == []
+    )
+    result = await repository.claim_ready_batch(
+        lease_duration=LEASE, event_type=EVENT_TYPE
+    )
+    assert [event.event_id for event in result] == [target]
+    assert await read_event(db_session, other) == before
+
+
+@pytest.mark.parametrize(
+    "fields,exception",
+    [
+        ({"event_type": None}, TypeError),
+        ({"event_type": 1}, TypeError),
+        ({"event_type": ""}, ValueError),
+        ({"event_type": " \t\n"}, ValueError),
+        ({"limit": True}, TypeError),
+        ({"limit": 1.5}, TypeError),
+        ({"limit": "10"}, TypeError),
+        ({"limit": None}, TypeError),
+    ],
+)
+async def test_claim_scope_validation_precedes_database_access(fields, exception):
+    """DB接続のないsessionで入力違反を拒否し、値をSQLへ渡さない。"""
+    async with AsyncSession() as session:
+        with pytest.raises(exception):
+            await OutboxDeliveryRepository(session).claim_ready_batch(
+                lease_duration=LEASE,
+                **{"event_type": EVENT_TYPE, **fields},
+            )
+
+
+@pytest.mark.parametrize("limit,expected_count", [(None, 10), (2, 2), (12, 12)])
+async def test_claim_batch_limit_leaves_excess_events_unchanged(
+    db_session, limit, expected_count
+):
+    """件数上限までを確保し、残り2件にはlease設定も回数加算もしない。"""
+    before = await seed_batch_events(
+        db_session, event_type=EVENT_TYPE, count=expected_count + 2, attempt_count=0
+    )
+    kwargs = {} if limit is None else {"limit": limit}
+    result = await OutboxDeliveryRepository(db_session).claim_ready_batch(
+        event_type=EVENT_TYPE, lease_duration=LEASE, **kwargs
+    )
+    claimed_ids = {event.event_id for event in result}
+    assert len(result) == len(claimed_ids) == expected_count
+    assert claimed_ids <= before.keys()
+    remaining = before.keys() - claimed_ids
+    assert len(remaining) == 2
+    for event_id in remaining:
+        assert await read_event(db_session, event_id) == before[event_id]
+    for event_id in claimed_ids:
+        saved = await read_event(db_session, event_id)
+        assert saved["lease_token"] is not None
+        assert saved["attempt_count"] == 1
+
+
+@pytest.mark.parametrize("duration", [None, 1, True, "5 minutes"])
+async def test_lease_duration_type_is_checked_before_zero_limit(duration):
+    """件数ゼロでもlease期間の型違反を無視しない。"""
+    async with AsyncSession() as session:
+        with pytest.raises(TypeError):
+            await OutboxDeliveryRepository(session).claim_ready_batch(
+                event_type=EVENT_TYPE, lease_duration=duration, limit=0
+            )

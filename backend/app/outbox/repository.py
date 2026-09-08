@@ -9,6 +9,7 @@ from sqlalchemy import DateTime, Interval, Update, func, literal, or_, select, u
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.outbox_event import OutboxEvent
+from app.outbox.publish_retry_policy import MAX_PUBLISH_ATTEMPTS, NonRetryableReason
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,9 +33,12 @@ class OutboxDeliveryRepository:
         self._session = session
 
     async def claim_ready_batch(
-        self, *, limit: int, lease_duration: timedelta
+        self, *, event_type: str, lease_duration: timedelta, limit: int = 10
     ) -> list[ClaimedOutboxEvent]:
         """配信可能なイベントを確保し、更新後の値を返す。"""
+        self._validate_batch_scope(event_type=event_type, limit=limit)
+        if not isinstance(lease_duration, timedelta):
+            raise TypeError("lease_duration must be a timedelta")
         if lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
         if limit <= 0:
@@ -45,11 +49,14 @@ class OutboxDeliveryRepository:
         candidates = (
             select(table.c.event_id)
             .where(
+                table.c.event_type == event_type,
+                table.c.attempt_count < MAX_PUBLISH_ATTEMPTS,
                 table.c.published_at.is_(None),
                 table.c.delivery_stopped_at.is_(None),
                 table.c.next_attempt_at <= now,
                 or_(table.c.leased_until.is_(None), table.c.leased_until <= now),
             )
+            .order_by(table.c.occurred_at)
             .limit(limit)
             .with_for_update(skip_locked=True)
             .cte("delivery_candidates")
@@ -74,7 +81,49 @@ class OutboxDeliveryRepository:
             )
         )
         result = await self._session.execute(statement)
-        return [ClaimedOutboxEvent(**row) for row in result.mappings()]
+        rows = sorted(result.mappings(), key=lambda row: row["occurred_at"])
+        return [ClaimedOutboxEvent(**row) for row in rows]
+
+    async def stop_deliveries_at_attempt_limit(
+        self, *, event_type: str, limit: int = 100
+    ) -> list[UUID]:
+        """試行上限に達し担当が不在のイベントを停止し、未commitの更新結果を返す。"""
+        self._validate_batch_scope(event_type=event_type, limit=limit)
+        if limit <= 0:
+            return []
+
+        table = OutboxEvent.__table__
+        now = func.statement_timestamp(type_=DateTime(timezone=True))
+        candidates = (
+            select(table.c.event_id)
+            .where(
+                table.c.event_type == event_type,
+                table.c.attempt_count >= MAX_PUBLISH_ATTEMPTS,
+                table.c.published_at.is_(None),
+                table.c.delivery_stopped_at.is_(None),
+                or_(table.c.leased_until.is_(None), table.c.leased_until <= now),
+            )
+            .order_by(table.c.occurred_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+            .cte("exhausted_candidates")
+        )
+        statement = self._stop_delivery_update(
+            update(table).where(table.c.event_id == candidates.c.event_id),
+            reason=NonRetryableReason.RETRY_EXHAUSTED.value,
+        ).returning(table.c.event_id, table.c.occurred_at)
+        result = await self._session.execute(statement)
+        rows = sorted(result.mappings(), key=lambda row: row["occurred_at"])
+        return [row["event_id"] for row in rows]
+
+    @staticmethod
+    def _validate_batch_scope(*, event_type: str, limit: int) -> None:
+        if not isinstance(event_type, str):
+            raise TypeError("event_type must be a string")
+        if not event_type.strip():
+            raise ValueError("event_type must not be blank")
+        if type(limit) is not int:
+            raise TypeError("limit must be an integer")
 
     async def mark_published(self, *, event_id: UUID, lease_token: UUID) -> bool:
         """有効な担当者による送信成功を記録し、leaseを解除する。"""
@@ -109,14 +158,22 @@ class OutboxDeliveryRepository:
         if not reason.strip():
             raise ValueError("reason must not be blank")
 
-        statement = self._delivery_update(
-            event_id=event_id, lease_token=lease_token
-        ).values(
-            delivery_stopped_at=func.statement_timestamp(),
-            delivery_stop_reason=reason,
+        statement = self._stop_delivery_update(
+            self._delivery_update(event_id=event_id, lease_token=lease_token),
+            reason=reason,
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    def _stop_delivery_update(statement: Update, *, reason: str) -> Update:
+        """各経路の対象条件を維持し、停止記録とlease解除を同じ更新に載せる。"""
+        return statement.values(
+            delivery_stopped_at=func.statement_timestamp(type_=DateTime(timezone=True)),
+            delivery_stop_reason=reason,
+            lease_token=None,
+            leased_until=None,
+        )
 
     def _delivery_update(self, *, event_id: UUID, lease_token: UUID) -> Update:
         """未確定かつ有効なleaseの所有者だけが配信結果を更新できる。"""
