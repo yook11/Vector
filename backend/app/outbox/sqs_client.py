@@ -3,8 +3,6 @@
 from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import (
-    BotoCoreError,
-    ClientError,
     NoCredentialsError,
     NoRegionError,
     PartialCredentialsError,
@@ -12,13 +10,10 @@ from botocore.exceptions import (
 from botocore.session import Session
 
 from app.outbox.publish_errors import (
-    PublishConfigurationError,
-    PublishConfigurationReason,
     PublishError,
     PublishPhase,
-    PublishUnexpectedError,
 )
-from app.outbox.sqs_error_mapping import configuration_error_from_sdk_exception
+from app.outbox.sqs_error_mapping import publish_error_from_exception
 
 
 def create_sqs_client(*, session: Session, region: str) -> BaseClient:
@@ -46,13 +41,4 @@ def create_sqs_client(*, session: Session, region: str) -> BaseClient:
     except PublishError:
         raise
     except Exception as exc:
-        failure = configuration_error_from_sdk_exception(exc)
-        if failure is not None:
-            raise failure from exc
-        if phase is PublishPhase.RESOLVE_CREDENTIALS and isinstance(
-            exc, (BotoCoreError, ClientError)
-        ):
-            raise PublishConfigurationError(
-                reason=PublishConfigurationReason.CREDENTIALS_RETRIEVAL_FAILED
-            ) from exc
-        raise PublishUnexpectedError(original_exception=exc, phase=phase) from exc
+        raise publish_error_from_exception(exc, phase=phase) from exc

@@ -14,13 +14,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.errors import DatabaseError
 from app.db.session import caller_managed_session_factory
 from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
+from app.outbox import publish_failure_handler as handler_module
 from app.outbox.publish_errors import (
+    PublishCleanupError,
     PublishConfigurationError,
     PublishConfigurationReason,
     PublishError,
-    PublishPhase,
     PublishTransportError,
-    PublishUnexpectedError,
 )
 from app.outbox.publish_failure_handler import (
     DeliveryStopped,
@@ -28,11 +28,19 @@ from app.outbox.publish_failure_handler import (
     PublishFailureHandler,
     RetryScheduled,
 )
-from app.outbox.publish_failure_policy import NonRetryableReason
+from app.outbox.publish_retry_policy import NonRetryableReason
+from app.outbox.publisher import PublishFailed, PublishSucceeded
 from app.outbox.repository import ClaimedOutboxEvent
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def record_stop(monkeypatch):
+    record = Mock()
+    monkeypatch.setattr(handler_module, "record_publish_failure", record)
+    return record
 
 
 def _transport():
@@ -100,6 +108,7 @@ async def test_result_means_committed_update_visible_from_another_session(
     error,
     attempt,
     expected,
+    record_stop,
 ):
     """確定結果とlease解除を別sessionから読み、無関係な列の維持も確認する。"""
     claimed, before = await _seed(session_factory, attempt_count=attempt)
@@ -110,8 +119,20 @@ async def test_result_means_committed_update_visible_from_another_session(
     handler = PublishFailureHandler(
         caller_managed_session_factory(engine), jitter=jitter
     )
-    assert await handler.handle(event=claimed, error=error) == expected
+    assert (
+        await handler.handle(
+            event=claimed, failure=PublishFailed(claimed.event_id, error)
+        )
+        == expected
+    )
     jitter.assert_called_once_with()
+    if isinstance(expected, DeliveryStopped):
+        record_stop.assert_called_once_with(
+            event=claimed, error=error, stop_reason=expected.reason
+        )
+    else:
+        record_stop.assert_not_called()
+    record_stop.reset_mock()
     async with session_factory() as reader:
         saved = await read_event(reader, claimed.event_id)
         end = await reader.scalar(select(func.statement_timestamp()))
@@ -128,7 +149,13 @@ async def test_result_means_committed_update_visible_from_another_session(
             delivery_stop_reason=expected.reason.value,
         )
     assert saved == {**before, **changes}
-    assert await handler.handle(event=claimed, error=error) == DeliveryUpdateSkipped()
+    assert (
+        await handler.handle(
+            event=claimed, failure=PublishFailed(claimed.event_id, error)
+        )
+        == DeliveryUpdateSkipped()
+    )
+    record_stop.assert_not_called()
     async with session_factory() as reader:
         assert await read_event(reader, claimed.event_id) == saved
 
@@ -149,6 +176,7 @@ async def test_invalid_update_conditions_skip_without_modifying_rows(
     session_factory,
     error,
     case,
+    record_stop,
 ):
     """更新不能の原因を推測せず、他の行や既存の配信結果を維持する。"""
     changes = {
@@ -178,9 +206,10 @@ async def test_invalid_update_conditions_skip_without_modifying_rows(
             yield session
 
     result = await PublishFailureHandler(factory, jitter=lambda: 0.5).handle(
-        event=claimed, error=error
+        event=claimed, failure=PublishFailed(claimed.event_id, error)
     )
     assert result == DeliveryUpdateSkipped()
+    record_stop.assert_not_called()
     assert rollbacks == [True]
     assert commits == []
     async with session_factory() as reader:
@@ -193,6 +222,7 @@ async def test_database_failure_propagates_and_uncommitted_update_is_rolled_back
     session_factory,
     error,
     stage,
+    record_stop,
 ):
     """実UPDATE後またはcommit直前の障害を注入し、変更の取り消しを確認する。"""
     claimed, before = await _seed(session_factory)
@@ -217,8 +247,9 @@ async def test_database_failure_propagates_and_uncommitted_update_is_rolled_back
 
     with pytest.raises(DatabaseError) as caught:
         await PublishFailureHandler(factory, jitter=lambda: 0.5).handle(
-            event=claimed, error=error
+            event=claimed, failure=PublishFailed(claimed.event_id, error)
         )
+    record_stop.assert_not_called()
     assert not isinstance(caught.value, PublishError)
     assert caught.value.__cause__ is original
     async with session_factory() as reader:
@@ -227,6 +258,7 @@ async def test_database_failure_propagates_and_uncommitted_update_is_rolled_back
 
 async def test_session_exit_failure_does_not_return_success_or_undo_commit(
     session_factory,
+    record_stop,
 ):
     """commit後の終了失敗では成功結果を返さず、保存済みの停止は維持する。"""
     claimed, _ = await _seed(session_factory)
@@ -240,8 +272,9 @@ async def test_session_exit_failure_does_not_return_success_or_undo_commit(
 
     with pytest.raises(RuntimeError) as caught:
         await PublishFailureHandler(factory, jitter=lambda: 0.5).handle(
-            event=claimed, error=_configuration()
+            event=claimed, failure=PublishFailed(claimed.event_id, _configuration())
         )
+    record_stop.assert_not_called()
     assert caught.value is failure
     async with session_factory() as reader:
         saved = await read_event(reader, claimed.event_id)
@@ -253,12 +286,10 @@ async def test_session_exit_failure_does_not_return_success_or_undo_commit(
     ("error", "attempt", "jitter", "exception_type"),
     [
         (
-            PublishUnexpectedError(
-                original_exception=RuntimeError(), phase=PublishPhase.CLEANUP
-            ),
+            PublishCleanupError(original_exception=RuntimeError()),
             1,
             0.5,
-            ValueError,
+            TypeError,
         ),
         (RuntimeError("db failure"), 1, 0.5, TypeError),
         (_transport(), 0, 0.5, ValueError),
@@ -274,14 +305,17 @@ async def test_invalid_policy_input_never_opens_session(
     attempt,
     jitter,
     exception_type,
+    record_stop,
 ):
     """判断対象外の入力はDBに触れる前に拒否する。"""
     factory = Mock()
     generate = Mock(return_value=jitter)
+    claimed = _claimed(attempt_count=attempt)
     with pytest.raises(exception_type):
         await PublishFailureHandler(factory, jitter=generate).handle(
-            event=_claimed(attempt_count=attempt), error=error
+            event=claimed, failure=PublishFailed(claimed.event_id, error)
         )
+    record_stop.assert_not_called()
     factory.assert_not_called()
     generate.assert_called_once_with()
 
@@ -289,12 +323,37 @@ async def test_invalid_policy_input_never_opens_session(
 @pytest.mark.parametrize(
     "failure", [RuntimeError("random failed"), KeyboardInterrupt()]
 )
-async def test_jitter_generation_failure_is_not_reclassified(failure):
+async def test_jitter_generation_failure_is_not_reclassified(failure, record_stop):
     """乱数生成の失敗やプロセス終了を配信失敗へ変換しない。"""
     factory = Mock()
+    claimed = _claimed()
     with pytest.raises(type(failure)) as caught:
         await PublishFailureHandler(factory, jitter=Mock(side_effect=failure)).handle(
-            event=_claimed(), error=_transport()
+            event=claimed, failure=PublishFailed(claimed.event_id, _transport())
         )
+    record_stop.assert_not_called()
     assert caught.value is failure
     factory.assert_not_called()
+
+
+@pytest.mark.parametrize("case", ["success", "raw_error", "none", "wrong_id"])
+async def test_invalid_failure_is_rejected_before_jitter_session_or_record(
+    case, record_stop
+):
+    """別イベントの失敗や失敗結果以外の入力で副作用を起こさない。"""
+    claimed = _claimed()
+    failure = {
+        "success": PublishSucceeded(claimed.event_id),
+        "raw_error": _configuration(),
+        "none": None,
+        "wrong_id": PublishFailed(uuid4(), _configuration()),
+    }[case]
+    factory = Mock()
+    jitter = Mock(return_value=0.5)
+    with pytest.raises(ValueError if case == "wrong_id" else TypeError):
+        await PublishFailureHandler(factory, jitter=jitter).handle(
+            event=claimed, failure=failure
+        )
+    jitter.assert_not_called()
+    factory.assert_not_called()
+    record_stop.assert_not_called()
