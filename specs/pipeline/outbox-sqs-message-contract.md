@@ -264,7 +264,30 @@ Verification（2026-09-08、テスト再配置・停止更新共通化前）: li
 
 最終変更後の検証: 確保・配信結果更新・上限到達停止・トランザクション・failure handlerの関連単体テスト38件、実DBテスト110件が成功した。lint・format checkも成功した。利用者の指定により全テストの再実行は行っていない。
 
-lease期間、実行間隔、1起動あたりのバッチ数、確保と停止の呼び出し順は後続relayで定める。古いイベントと既存パイプラインの重複防止確認は本番有効化前に行う。
+lease期間・1起動あたりの処理量・確保と停止の呼び出し順は後述のrelay本体の契約に従う。実行間隔の設定とLambda入口への接続、古いイベントと既存パイプラインの重複防止確認は本番有効化前に行う。
+
+## Outbox relay本体（配線スライス①）
+
+Problem: ベクトル生成向けイベントの確保・送信・結果記録を接続し、送信失敗とDB障害を区別して扱う。
+Evidence: EventPublisher、PublishFailureHandler、OutboxDeliveryRepository、caller_managed_session_factoryの既存契約を使用する。
+
+`OutboxRelay(session_factory, publisher, failure_handler).run_once() -> None`は非同期APIとし、handlerには同じDBを使うsession factoryを渡す。
+
+- 対象は`ArticleAssessedInScope.EVENT_TYPE`に固定する。1回の実行は上限到達の停止100件、確保10件、送信最大1回までとし、lease期間は150秒とする。
+- 専用sessionで上限到達を停止してcommit・終了し、別sessionで確保してcommit・終了する。確保0件なら送信せず正常終了する。
+- 確保結果を`EventEnvelope.from_claimed`で送信内容へ変換し、同期publisherを直列に1回だけ呼ぶ。送信中はDB sessionを保持しない。
+- publisherの結果型・件数・入力順のevent_id・失敗値の型を全件確認してから結果を適用する。契約違反は外部の値を含まないTypeErrorまたはValueErrorで伝播する。
+- 成功はイベント単位のsessionでmark_publishedを呼び、Trueならcommit、Falseならrollbackして終了する。失敗は対応する確保情報とPublishFailedを既存handlerへ渡す。更新条件不一致でも後続の結果記録を続ける。
+- handlerによる停止確定後の記録を再度呼ばない。上限到達の整理に架空のPublishErrorや送信失敗通知を追加しない。
+- 更新・commit・session終了の例外は実行全体へ伝播し、後続の結果記録を中断する。既存factoryのDB例外変換を使い、PublishErrorへ変換しない。確定済みの変更を取り消さず、未記録の確保情報はlease期限切れ後の既存処理に委ねる。
+- Envelope構築・publisher呼び出し自体の失敗でも自動分割・その場での再送・合成したイベント別失敗を追加しない。BaseExceptionを包括しない。
+- cleanup_errorはイベントの再試行対象にせず、結果処理のfinallyで`outbox_publish_cleanup_failed`を記録する。ログ項目は`error_code`と`original_exception_type`のみとし、本文・Queue URL・資格情報・SDK自由文・例外チェーンを出さない。通常のログ出力例外は握りつぶし、元のDB障害を上書きしない。追加の通知メトリクスは出さない。
+
+Invariants: 正常終了は今回の処理の終了を意味し、全件送信成功やconsumerの完了を意味しない。受付後にDB記録が失敗した場合の重複送信は既存契約どおり許容する。
+Non-goals: Lambda入口、Terraform、通信timeout、定期起動、本番適用、consumer、既存Taskiqの切り替えは変更しない。Lambda120秒の反映は次のスライスとする。
+Done: 実DBと差し替えpublisherで、確定順序・部分失敗・更新なし・障害時の中断・安全なcleanup記録を検証する。
+
+Verification（2026-09-08）: relay本体とテストのlint・format checkが成功した。テストの責任整理前には、Outboxの関連単体テスト609件と実DBテスト190件が成功した。責任整理後は、`make test-integration TEST_COMPOSE_PROJECT=vector-test-relay-responsibility-20260908 PYTEST_ARGS="tests/outbox/test_relay.py -x -q"`でrelayの実DBテスト36件が成功した。その後の変更はコメントのみで、lint・format checkを確認した。利用者の指定により全テストは再実行していない。Lambda接続・本番適用・AWSへの実送信は未実施。
 
 ## 再試行・停止ポリシー（スライス①）
 
