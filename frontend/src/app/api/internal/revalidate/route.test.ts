@@ -4,12 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const SECRET = "test-secret-32characters-long-xxxx";
 
 const mocks = vi.hoisted(() => ({
-  updateTag: vi.fn(),
+  revalidateTag: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({
-  updateTag: mocks.updateTag,
+  revalidateTag: mocks.revalidateTag,
 }));
 vi.mock("@/lib/env", () => ({
   requireEnv: () => "test-secret-32characters-long-xxxx",
@@ -45,7 +45,7 @@ describe("POST /api/internal/revalidate", () => {
   it("returns 401 when Authorization header is absent", async () => {
     const res = await POST(buildRequest({ body: { tags: ["briefing:list"] } }));
     expect(res.status).toBe(401);
-    expect(mocks.updateTag).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 403 when Bearer token does not match secret", async () => {
@@ -56,7 +56,7 @@ describe("POST /api/internal/revalidate", () => {
       }),
     );
     expect(res.status).toBe(403);
-    expect(mocks.updateTag).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 403 when Authorization is not a Bearer scheme", async () => {
@@ -67,7 +67,7 @@ describe("POST /api/internal/revalidate", () => {
       }),
     );
     expect(res.status).toBe(403);
-    expect(mocks.updateTag).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 400 when body is missing tags", async () => {
@@ -78,7 +78,7 @@ describe("POST /api/internal/revalidate", () => {
       }),
     );
     expect(res.status).toBe(400);
-    expect(mocks.updateTag).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 400 when body is not valid JSON", async () => {
@@ -93,7 +93,7 @@ describe("POST /api/internal/revalidate", () => {
     });
     const res = await POST(req);
     expect(res.status).toBe(400);
-    expect(mocks.updateTag).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 400 when tags array is empty", async () => {
@@ -104,22 +104,26 @@ describe("POST /api/internal/revalidate", () => {
       }),
     );
     expect(res.status).toBe(400);
-    expect(mocks.updateTag).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
-  it("revalidates each tag and returns 200 on success", async () => {
+  it.each([
+    ["briefing:list", "briefing:ai"],
+    ["articles:list", "articles:categories"],
+    ["trends", "briefing:list"],
+  ])("expires %s and %s immediately", async (first, second) => {
     const res = await POST(
       buildRequest({
         authorization: `Bearer ${SECRET}`,
-        body: { tags: ["briefing:list", "briefing:ai"] },
+        body: { tags: [first, second] },
       }),
     );
     expect(res.status).toBe(200);
     const json = (await res.json()) as { ok: boolean; count: number };
     expect(json.ok).toBe(true);
     expect(json.count).toBe(2);
-    expect(mocks.updateTag).toHaveBeenCalledTimes(2);
-    expect(mocks.updateTag).toHaveBeenCalledWith("briefing:list");
-    expect(mocks.updateTag).toHaveBeenCalledWith("briefing:ai");
+    expect(mocks.revalidateTag).toHaveBeenCalledTimes(2);
+    expect(mocks.revalidateTag).toHaveBeenCalledWith(first, { expire: 0 });
+    expect(mocks.revalidateTag).toHaveBeenCalledWith(second, { expire: 0 });
   });
 });

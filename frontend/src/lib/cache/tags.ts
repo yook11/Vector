@@ -24,6 +24,8 @@
  * - "days"     : 週次集約 (cron 月曜 00:05、TTL 揺れ吸収のため日単位)
  */
 export const cacheTags = {
+  articlesList: "articles:list",
+  articleCategories: "articles:categories",
   watchlistMe: "watchlist:me",
   sources: "sources",
   briefingList: "briefing:list",

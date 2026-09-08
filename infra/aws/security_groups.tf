@@ -111,13 +111,11 @@ resource "aws_vpc_security_group_egress_rule" "frontend_to_api" {
   referenced_security_group_id = aws_security_group.app["api"].id
 }
 
-# worker-insights は frontend に到達する唯一の backend (ISR revalidate 通知)。
+# worker-insights と worker-analysis はキャッシュ無効化のため frontend に到達する。
 # ALB からの経路と同じ port に来るので、区別は application 層の
 # REVALIDATE_BEARER_SECRET が担う。
 #
-# 注意: worker-insights は HTTPS_PROXY を持ち、revalidate の送信は
-# trust_env 既定 True の httpx なので env の proxy を拾う。NO_PROXY に
-# 内部 frontend 名を入れないと、proxy の private 宛先拒否で静かに失敗する。
+# 通知は make_internal_async_client を使い、外向け proxy を経由しない。
 resource "aws_vpc_security_group_ingress_rule" "frontend_from_insights" {
   security_group_id            = aws_security_group.app["frontend"].id
   description                  = "worker-insights revalidate notification"
@@ -129,6 +127,24 @@ resource "aws_vpc_security_group_ingress_rule" "frontend_from_insights" {
 
 resource "aws_vpc_security_group_egress_rule" "insights_to_frontend" {
   security_group_id            = aws_security_group.app["insights"].id
+  description                  = "revalidate notification"
+  ip_protocol                  = "tcp"
+  from_port                    = 3000
+  to_port                      = 3000
+  referenced_security_group_id = aws_security_group.app["frontend"].id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "frontend_from_analysis" {
+  security_group_id            = aws_security_group.app["frontend"].id
+  description                  = "worker-analysis revalidate notification"
+  ip_protocol                  = "tcp"
+  from_port                    = 3000
+  to_port                      = 3000
+  referenced_security_group_id = aws_security_group.app["analysis"].id
+}
+
+resource "aws_vpc_security_group_egress_rule" "analysis_to_frontend" {
+  security_group_id            = aws_security_group.app["analysis"].id
   description                  = "revalidate notification"
   ip_protocol                  = "tcp"
   from_port                    = 3000
