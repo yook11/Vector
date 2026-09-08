@@ -1,0 +1,138 @@
+"""送信失敗から再試行・停止を判断し、外部への副作用は持たない。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import timedelta
+from enum import StrEnum
+from math import isfinite
+
+from app.http.failure import HttpTransportFailureKind
+from app.outbox.publish_errors import (
+    PublishConfigurationError,
+    PublishError,
+    PublishEventInvalidError,
+    PublishIntegrityError,
+    PublishResponseInvalidError,
+    PublishServiceError,
+    PublishServiceReason,
+    PublishTransportError,
+)
+
+
+class NonRetryableReason(StrEnum):
+    """失敗原因や回数上限により、自動再試行しない理由を表す。"""
+
+    NON_RETRYABLE_FAILURE = "non_retryable_failure"
+    RETRY_EXHAUSTED = "retry_exhausted"
+    UNCLASSIFIED_FAILURE = "unclassified_failure"
+    UNEXPECTED_FAILURE = "unexpected_failure"
+
+
+@dataclass(frozen=True, slots=True)
+class Retryable:
+    """原因と回数上限を確認し、指定の待ち時間で再試行する判断。"""
+
+    delay: timedelta
+
+    @staticmethod
+    def matches(error: PublishError) -> bool:
+        """回数を見ず、失敗の性質として再試行対象かを返す。"""
+        if isinstance(error, PublishTransportError):
+            if error.failure.kind in _RETRY_TRANSPORT_KINDS:
+                return True
+            if error.failure.kind is HttpTransportFailureKind.PROXY:
+                return _is_retryable_proxy_status(error.failure.proxy_status)
+            return False
+        if isinstance(error, PublishServiceError):
+            return error.reason in _RETRY_SERVICE_REASONS
+        return False
+
+
+@dataclass(frozen=True, slots=True)
+class NonRetryable:
+    """失敗原因または回数上限により自動再試行しない判断。"""
+
+    reason: NonRetryableReason
+
+    @staticmethod
+    def for_error(error: PublishError) -> NonRetryable:
+        """再試行対象でない失敗の性質から、停止理由を決める。"""
+        if isinstance(error, PublishTransportError):
+            if error.failure.kind is HttpTransportFailureKind.TLS:
+                return NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
+            if error.failure.kind is HttpTransportFailureKind.PROXY:
+                return NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
+            return NonRetryable(NonRetryableReason.UNEXPECTED_FAILURE)
+        if isinstance(error, PublishServiceError):
+            if error.reason is PublishServiceReason.UNCLASSIFIED:
+                return NonRetryable(NonRetryableReason.UNCLASSIFIED_FAILURE)
+            return NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
+        if isinstance(
+            error,
+            (
+                PublishConfigurationError
+                | PublishEventInvalidError
+                | PublishIntegrityError
+                | PublishResponseInvalidError
+            ),
+        ):
+            return NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
+        return NonRetryable(NonRetryableReason.UNEXPECTED_FAILURE)
+
+
+_RETRY_DELAYS = (30, 120, 600, 1800)
+_RETRY_TRANSPORT_KINDS = frozenset(
+    {
+        HttpTransportFailureKind.DNS_RESOLUTION,
+        HttpTransportFailureKind.CONNECT,
+        HttpTransportFailureKind.CONNECT_TIMEOUT,
+        HttpTransportFailureKind.POOL_TIMEOUT,
+        HttpTransportFailureKind.WRITE_TIMEOUT,
+        HttpTransportFailureKind.READ_TIMEOUT,
+        HttpTransportFailureKind.NETWORK_IO,
+        HttpTransportFailureKind.REMOTE_PROTOCOL,
+        HttpTransportFailureKind.UNKNOWN,
+    }
+)
+_RETRY_SERVICE_REASONS = frozenset(
+    {
+        PublishServiceReason.THROTTLED,
+        PublishServiceReason.SERVICE_UNAVAILABLE,
+    }
+)
+
+
+def _is_retryable_proxy_status(status: int | None) -> bool:
+    return status is None or status == 429 or 500 <= status <= 599
+
+
+def _retry_delay(*, attempt_count: int, jitter: float) -> Retryable | NonRetryable:
+    """再試行対象の失敗に回数上限と待ち時間を適用する。"""
+    if attempt_count >= 5:
+        return NonRetryable(NonRetryableReason.RETRY_EXHAUSTED)
+    delay = timedelta(seconds=_RETRY_DELAYS[attempt_count - 1]) * (0.8 + 0.4 * jitter)
+    return Retryable(delay)
+
+
+def decide_publish_retry(
+    error: PublishError,
+    *,
+    attempt_count: int,
+    jitter: float,
+) -> Retryable | NonRetryable:
+    """確保後の試行回数と外部で生成したjitterから配信方針を決める。"""
+    if not isinstance(error, PublishError):
+        raise TypeError("error must be a PublishError")
+    if type(attempt_count) is not int:
+        raise TypeError("attempt_count must be an integer")
+    if attempt_count < 1:
+        raise ValueError("attempt_count must be positive")
+    if type(jitter) not in (int, float):
+        raise TypeError("jitter must be a number")
+    if not 0 <= jitter <= 1 or not isfinite(jitter):
+        raise ValueError("jitter must be finite and between zero and one")
+
+    if Retryable.matches(error):
+        return _retry_delay(attempt_count=attempt_count, jitter=jitter)
+    return NonRetryable.for_error(error)

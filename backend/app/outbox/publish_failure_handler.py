@@ -1,4 +1,4 @@
-"""配信失敗の判断をイベント単位でDBに確定し、結果を返す。"""
+"""送信失敗への対応をDBに確定し、停止の記録までを取りまとめる。"""
 
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -8,12 +8,13 @@ from random import random
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.outbox.publish_errors import PublishError
-from app.outbox.publish_failure_policy import (
+from app.outbox.publish_failure_recording import record_publish_failure
+from app.outbox.publish_retry_policy import (
     NonRetryableReason,
-    RetryPublish,
-    decide_publish_failure,
+    Retryable,
+    decide_publish_retry,
 )
+from app.outbox.publisher import PublishFailed
 from app.outbox.repository import ClaimedOutboxEvent, OutboxDeliveryRepository
 
 
@@ -37,7 +38,7 @@ class DeliveryUpdateSkipped:
 
 
 class PublishFailureHandler:
-    """失敗への対応を保存し、sessionの終了後にだけ結果を返す。"""
+    """分類済みの送信失敗を受け取り、状態更新と確定後の記録を行う。"""
 
     def __init__(
         self,
@@ -52,16 +53,20 @@ class PublishFailureHandler:
         self,
         *,
         event: ClaimedOutboxEvent,
-        error: PublishError,
+        failure: PublishFailed,
     ) -> RetryScheduled | DeliveryStopped | DeliveryUpdateSkipped:
         """確保済みイベントの再試行予約または停止を確定する。"""
-        decision = decide_publish_failure(
-            error, attempt_count=event.attempt_count, jitter=self._jitter()
+        if not isinstance(failure, PublishFailed):
+            raise TypeError("failure must be PublishFailed")
+        if failure.event_id != event.event_id:
+            raise ValueError("failure event_id must match the claimed event")
+        decision = decide_publish_retry(
+            failure.error, attempt_count=event.attempt_count, jitter=self._jitter()
         )
         async with self._session_factory() as session:
             repository = OutboxDeliveryRepository(session)
             outcome: RetryScheduled | DeliveryStopped | DeliveryUpdateSkipped
-            if isinstance(decision, RetryPublish):
+            if isinstance(decision, Retryable):
                 updated = await repository.schedule_retry(
                     event_id=event.event_id,
                     lease_token=event.lease_token,
@@ -80,4 +85,8 @@ class PublishFailureHandler:
             else:
                 await session.rollback()
                 outcome = DeliveryUpdateSkipped()
+        if isinstance(outcome, DeliveryStopped):
+            record_publish_failure(
+                event=event, error=failure.error, stop_reason=outcome.reason
+            )
         return outcome

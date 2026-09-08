@@ -127,10 +127,30 @@ def test_real_sdk_does_not_retry_sqs_transport(monkeypatch, exception_type) -> N
     monkeypatch.setattr(client._endpoint.http_session, "send", send)
     try:
         with pytest.raises(exception_type):
-            client.send_message(
+            client.send_message_batch(
                 QueueUrl="https://sqs.ap-northeast-1.amazonaws.com/123456789012/test",
-                MessageBody="body",
+                Entries=[{"Id": "event", "MessageBody": "body"}],
             )
         assert send.call_count == 1
     finally:
         client.close()
+
+
+@pytest.mark.parametrize("operation", ["get_credentials", "create_client"])
+def test_classifier_failure_during_client_creation_retains_original(
+    operation, monkeypatch
+):
+    """生成境界の分類失敗でも元のSDK障害を失わない。"""
+    original = NoRegionError()
+    session = Mock()
+    getattr(session, operation).side_effect = original
+    monkeypatch.setattr(
+        "app.outbox.sqs_error_mapping._configuration_error_from_sdk_exception",
+        Mock(side_effect=ValueError("private")),
+    )
+    with pytest.raises(PublishUnexpectedError) as caught:
+        create_sqs_client(session=session, region="ap-northeast-1")
+    assert caught.value.phase is PublishPhase.CLASSIFY_FAILURE
+    assert caught.value.__cause__ is original
+    assert caught.value.original_exception_type == "botocore.exceptions.NoRegionError"
+    assert caught.value.classification_exception_type == "builtins.ValueError"

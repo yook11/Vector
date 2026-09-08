@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
+
+from app.outbox.publish_errors import PublishCleanupError, PublishError
 
 if TYPE_CHECKING:
     from app.outbox.repository import ClaimedOutboxEvent
@@ -32,7 +35,30 @@ class EventEnvelope:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PublishSucceeded:
+    """送信先がイベントを受け付けた結果で、consumerの完了は保証しない。"""
+
+    event_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class PublishFailed:
+    """イベント単位の送信失敗で、再試行や停止の判断は含めない。"""
+
+    event_id: UUID
+    error: PublishError = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class BatchPublishResult:
+    """入力順の送信結果と、それを上書きしない終了処理の診断情報。"""
+
+    results: tuple[PublishSucceeded | PublishFailed, ...]
+    cleanup_error: PublishCleanupError | None = field(default=None, repr=False)
+
+
 class EventPublisher(Protocol):
-    def publish(self, envelope: EventEnvelope) -> None:
-        """送信先の受付成功時はNone、失敗時はPublishErrorを送出し、consumerの完了は保証しない。"""
+    def publish_batch(self, envelopes: Sequence[EventEnvelope]) -> BatchPublishResult:
+        """各イベントの受付結果を返し、呼び出し契約違反は送信前に拒否する。"""
         ...

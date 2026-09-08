@@ -26,6 +26,40 @@ class PublishEventInvalidReason(StrEnum):
     UNSUPPORTED_EVENT_TYPE = "unsupported_event_type"
     INVALID_OCCURRED_AT = "invalid_occurred_at"
     SERIALIZATION_FAILED = "serialization_failed"
+    MESSAGE_TOO_LARGE = "message_too_large"
+
+
+class PublishIntegrityReason(StrEnum):
+    """送信本文と送信先の受信結果の整合性を確認できない理由。"""
+
+    BODY_CHECKSUM_MISMATCH = "body_checksum_mismatch"
+
+
+class PublishResponseInvalidReason(StrEnum):
+    """応答の形式または送信対象との対応を確認できない理由。"""
+
+    INVALID_TYPE = "invalid_type"
+    MISSING_REQUIRED_FIELD = "missing_required_field"
+    EMPTY_REQUIRED_FIELD = "empty_required_field"
+    INVALID_CHECKSUM_FORMAT = "invalid_checksum_format"
+    UNKNOWN_ENTRY_ID = "unknown_entry_id"
+    DUPLICATE_ENTRY_ID = "duplicate_entry_id"
+    MISSING_ENTRY_ID = "missing_entry_id"
+
+
+class PublishResponseField(StrEnum):
+    """応答の不正箇所を、外部の値を含まない共通の項目名で表す。"""
+
+    RESPONSE = "response"
+    SUCCESSFUL_ENTRIES = "successful_entries"
+    FAILED_ENTRIES = "failed_entries"
+    SUCCESSFUL_ENTRY = "successful_entry"
+    FAILED_ENTRY = "failed_entry"
+    ENTRY_ID = "entry_id"
+    MESSAGE_ID = "message_id"
+    BODY_CHECKSUM = "body_checksum"
+    ERROR_CODE = "error_code"
+    SENDER_FAULT = "sender_fault"
 
 
 class PublishServiceReason(StrEnum):
@@ -51,7 +85,6 @@ class PublishPhase(StrEnum):
     RESOLVE_CREDENTIALS = "resolve_credentials"
     SEND = "send"
     CLASSIFY_FAILURE = "classify_failure"
-    CLEANUP = "cleanup"
 
 
 class PublishError(VectorDomainError):
@@ -116,6 +149,37 @@ class PublishEventInvalidError(PublishError):
         self.reason = reason
 
 
+class PublishIntegrityError(PublishError):
+    """本文の整合性確認失敗で、送信先が未受付とは断定しない。"""
+
+    CODE: ClassVar[str] = "publish_integrity_error"
+    MESSAGE: ClassVar[str] = (
+        "送信本文と、送信先が受け取った本文のチェックサムが一致しません。"
+    )
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "MESSAGE")
+
+    def __init__(
+        self, *, reason: PublishIntegrityReason, request_id: str | None = None
+    ) -> None:
+        super().__init__()
+        self.reason = reason
+        self.request_id = request_id
+
+
+class PublishResponseInvalidError(PublishError):
+    """応答を検証できない失敗で、送信先が未受付とは断定しない。"""
+
+    CODE: ClassVar[str] = "publish_response_invalid"
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "field")
+
+    def __init__(
+        self, *, reason: PublishResponseInvalidReason, field: PublishResponseField
+    ) -> None:
+        super().__init__()
+        self.reason = reason
+        self.field = field
+
+
 class PublishUnexpectedError(PublishError):
     """分類できない失敗の型と発生段階を保持する。"""
 
@@ -147,4 +211,18 @@ class PublishUnexpectedError(PublishError):
             f"{type(classification_exception).__qualname__}"
             if classification_exception is not None
             else None
+        )
+
+
+class PublishCleanupError(VectorDomainError):
+    """送信結果とは独立した、クライアント終了処理の失敗を表す。"""
+
+    CODE: ClassVar[str] = "publish_cleanup_error"
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "original_exception_type")
+
+    def __init__(self, *, original_exception: Exception) -> None:
+        super().__init__()
+        self.original_exception_type = (
+            f"{type(original_exception).__module__}."
+            f"{type(original_exception).__qualname__}"
         )

@@ -4,11 +4,15 @@ import pytest
 
 from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
 from app.outbox.publish_errors import (
+    PublishCleanupError,
     PublishConfigurationError,
     PublishConfigurationReason,
     PublishError,
     PublishEventInvalidError,
     PublishEventInvalidReason,
+    PublishResponseField,
+    PublishResponseInvalidError,
+    PublishResponseInvalidReason,
     PublishServiceError,
     PublishServiceReason,
     PublishTransportError,
@@ -76,32 +80,49 @@ def test_event_invalid_error_does_not_require_event_content(
     assert error.args == ()
 
 
-def test_unexpected_error_keeps_diagnostics_without_message() -> None:
+@pytest.mark.parametrize("cleanup", [False, True])
+def test_error_keeps_diagnostics_without_message(cleanup) -> None:
     from app.outbox.publish_errors import PublishPhase, PublishUnexpectedError
 
-    error = PublishUnexpectedError(
-        original_exception=RuntimeError("private-body-and-credentials"),
-        phase=PublishPhase.SEND,
+    original = RuntimeError("private-body-and-credentials")
+    error = (
+        PublishCleanupError(original_exception=original)
+        if cleanup
+        else PublishUnexpectedError(
+            original_exception=original, phase=PublishPhase.SEND
+        )
     )
-    assert error.reason == "unexpected_exception"
     assert error.original_exception_type == "builtins.RuntimeError"
-    assert error.phase is PublishPhase.SEND
-    assert error.classification_exception_type is None
+    if cleanup:
+        assert not isinstance(error, PublishError)
+        assert error.CODE == "publish_cleanup_error"
+        assert vars(error) == {"original_exception_type": "builtins.RuntimeError"}
+    else:
+        assert error.reason == "unexpected_exception"
+        assert error.phase is PublishPhase.SEND
+        assert error.classification_exception_type is None
     assert "private-body-and-credentials" not in str(error)
     assert "private-body-and-credentials" not in repr(error)
     assert error.args == ()
 
 
-def test_publish_exception_chain_is_redacted_at_logfire_export(capfire) -> None:
+@pytest.mark.parametrize("cleanup", [False, True])
+def test_publish_exception_chain_is_redacted_at_logfire_export(
+    capfire, cleanup
+) -> None:
     import logfire
     from botocore.exceptions import ClientError
 
     from app.logfire.redaction import install_exception_redaction
-    from app.outbox.sqs_error_mapping import publish_error_from_sqs_exception
+    from app.outbox.publish_errors import PublishPhase
+    from app.outbox.sqs_error_mapping import (
+        publish_cleanup_error_from_exception,
+        publish_error_from_exception,
+    )
 
     install_exception_redaction()
     marker = "PRIVATE_PAYLOAD_QUEUE_CREDENTIAL_MARKER"
-    with pytest.raises(PublishServiceError):
+    with pytest.raises(PublishCleanupError if cleanup else PublishServiceError):
         with logfire.span("publish_test"):
             try:
                 raise ClientError(
@@ -112,10 +133,109 @@ def test_publish_exception_chain_is_redacted_at_logfire_export(capfire) -> None:
                             "HTTPStatusCode": 400,
                         },
                     },
-                    "SendMessage",
+                    "SendMessageBatch",
                 )
             except ClientError as exc:
-                raise publish_error_from_sqs_exception(exc) from exc
+                error = (
+                    publish_cleanup_error_from_exception(exc)
+                    if cleanup
+                    else publish_error_from_exception(exc, phase=PublishPhase.SEND)
+                )
+                raise error from exc
+    spans = capfire.exporter.exported_spans
+    assert spans
+    for span in spans:
+        assert marker not in str(span.attributes)
+        assert marker not in str(span.status.description)
+        for event in span.events:
+            assert marker not in str(event.attributes)
+
+
+def test_integrity_error_preserves_reason_and_diagnostics():
+    """本文不一致の識別情報と、保持する調査情報をまとめて確認する。"""
+    from app.outbox.publish_errors import PublishIntegrityError, PublishIntegrityReason
+
+    error = PublishIntegrityError(
+        reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH, request_id="request-id"
+    )
+    assert isinstance(error, PublishError)
+    assert {"code": error.CODE, "reason": error.reason.value} == {
+        "code": "publish_integrity_error",
+        "reason": "body_checksum_mismatch",
+    }
+    assert vars(error) == {
+        "reason": PublishIntegrityReason.BODY_CHECKSUM_MISMATCH,
+        "request_id": "request-id",
+    }
+
+
+def test_integrity_error_displays_fixed_message_without_private_diagnostics():
+    """固定の説明文を表示し、調査情報を例外の通常表示へ露出しない。"""
+    from app.outbox.publish_errors import PublishIntegrityError, PublishIntegrityReason
+
+    marker = "PRIVATE_BODY_QUEUE_CREDENTIAL"
+    error = PublishIntegrityError(
+        reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH, request_id=marker
+    )
+    error.__cause__ = RuntimeError(marker)
+    assert (
+        error.MESSAGE
+        == "送信本文と、送信先が受け取った本文のチェックサムが一致しません。"
+    )
+    assert error.MESSAGE in str(error)
+    assert error.args == ()
+    assert marker not in str(error)
+    assert marker not in repr(error)
+
+
+@pytest.mark.parametrize("field", list(PublishResponseField))
+def test_response_invalid_error_exposes_only_fixed_diagnostics(field):
+    """外部の値や原因文面を表示せず、違反理由と項目だけを公開する。"""
+    error = PublishResponseInvalidError(
+        reason=PublishResponseInvalidReason.INVALID_TYPE, field=field
+    )
+    error.__cause__ = ValueError("PRIVATE_BODY_QUEUE_CREDENTIAL")
+    assert isinstance(error, PublishError)
+    assert error.CODE == "publish_response_invalid"
+    assert vars(error) == {
+        "reason": PublishResponseInvalidReason.INVALID_TYPE,
+        "field": field,
+    }
+    assert error.args == ()
+    assert error.reason.value in str(error)
+    assert field.value in str(error)
+    assert "PRIVATE" not in str(error)
+    assert "PRIVATE" not in repr(error)
+
+
+def test_response_invalid_keeps_reason_without_raw_values_at_logfire_export(capfire):
+    """応答違反を共通例外へ変換した後も、Logfireへ応答の自由文を渡さない。"""
+    import logfire
+
+    from app.logfire.redaction import install_exception_redaction
+    from app.outbox.publish_errors import PublishPhase
+    from app.outbox.sqs_batch_response import decode_sqs_batch_response
+    from app.outbox.sqs_error_mapping import publish_error_from_exception
+    from app.outbox.sqs_response_errors import InvalidSqsBatchResponse
+
+    install_exception_redaction()
+    marker = "PRIVATE_BODY_QUEUE_CREDENTIAL"
+    with pytest.raises(PublishResponseInvalidError) as caught:
+        with logfire.span("publish_response_invalid_test"):
+            try:
+                decode_sqs_batch_response(
+                    {"Successful": [{"MD5OfMessageBody": marker}]}
+                )
+            except InvalidSqsBatchResponse as exc:
+                raise publish_error_from_exception(
+                    exc, phase=PublishPhase.SEND
+                ) from exc
+    assert caught.value.reason is PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT
+    assert caught.value.field is PublishResponseField.BODY_CHECKSUM
+    assert vars(caught.value.__cause__) == {
+        "reason": PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT,
+        "field": PublishResponseField.BODY_CHECKSUM,
+    }
     spans = capfire.exporter.exported_spans
     assert spans
     for span in spans:

@@ -1,4 +1,4 @@
-"""配信停止の診断情報と、設定修復が必要な失敗のメトリクスを記録する。"""
+"""停止確定後に、診断ログと必要なメトリクスを書く。"""
 
 import structlog
 
@@ -9,24 +9,26 @@ from app.outbox.publish_errors import (
     PublishConfigurationReason,
     PublishError,
     PublishEventInvalidError,
+    PublishIntegrityError,
+    PublishResponseInvalidError,
     PublishServiceError,
     PublishServiceReason,
     PublishTransportError,
     PublishUnexpectedError,
 )
-from app.outbox.publish_failure_handler import (
-    DeliveryStopped,
-    DeliveryUpdateSkipped,
-    RetryScheduled,
-)
+from app.outbox.publish_retry_policy import NonRetryableReason
 from app.outbox.repository import ClaimedOutboxEvent
 
 logger = structlog.get_logger(__name__)
 CONFIGURATION_FAILURE_METRIC = "outbox_publish_configuration_failure"
+_SQS_BODY_CHECKSUM_MISMATCH_MESSAGE = (
+    "SQSへ送信した本文と、SQSが受け取った本文のチェックサムが一致しません。"
+    "SQSには受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
+)
 
 
 def requires_publish_configuration_fix(error: PublishError) -> bool:
-    """修復が必要と合意した共通reasonだけを通知対象にする。"""
+    """設定修復が必要な停止だけ、メトリクスも書く。"""
     if isinstance(error, PublishConfigurationError):
         return error.reason in (
             PublishConfigurationReason.MISSING_CREDENTIALS,
@@ -46,7 +48,7 @@ def _record_output_failure(exc: Exception) -> None:
     """出力障害は型だけを記録し、その記録失敗を再試行しない。"""
     try:
         logger.warning(
-            "outbox_failure_observation_failed", error_class=exception_fqn(exc)
+            "outbox_failure_recording_failed", error_class=exception_fqn(exc)
         )
     except Exception:  # noqa: S110 — 出力失敗の記録を再帰させない。
         pass
@@ -56,17 +58,15 @@ def record_publish_failure(
     *,
     event: ClaimedOutboxEvent,
     error: PublishError,
-    result: RetryScheduled | DeliveryStopped | DeliveryUpdateSkipped,
+    stop_reason: NonRetryableReason,
 ) -> None:
-    """停止確定後に呼び、観測の通常失敗を配信処理へ戻さない。"""
-    if not isinstance(result, DeliveryStopped):
-        return
+    """停止確定後に呼び、記録の通常失敗を配信処理へ戻さない。"""
     requires_fix = requires_publish_configuration_fix(error)
     try:
         fields: dict[str, object] = {
             "event_id": str(event.event_id),
             "attempt_count": event.attempt_count,
-            "stop_reason": result.reason.value,
+            "stop_reason": stop_reason.value,
             "error_code": error.CODE,
             "requires_configuration_fix": requires_fix,
         }
@@ -75,6 +75,16 @@ def record_publish_failure(
             PublishConfigurationError | PublishServiceError | PublishEventInvalidError,
         ):
             fields["error_reason"] = error.reason.value
+        elif isinstance(error, PublishResponseInvalidError):
+            fields.update(
+                error_reason=error.reason.value,
+                response_field=error.field.value,
+            )
+        elif isinstance(error, PublishIntegrityError):
+            fields.update(
+                error_reason=error.reason.value,
+                error_message=_SQS_BODY_CHECKSUM_MISMATCH_MESSAGE,
+            )
         elif isinstance(error, PublishTransportError):
             fields["transport_kind"] = error.failure.kind.value
         elif isinstance(error, PublishUnexpectedError):
