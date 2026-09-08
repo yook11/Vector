@@ -19,7 +19,7 @@ Vector は、海外の先端テックニュースを自動収集し、AI で日�
 
 https://github.com/user-attachments/assets/9b2a6caa-37ae-4382-b3c8-47964ee52cfb
 
-エージェント機能の構成や各工程の設計上の工夫、今後の課題は、Zenn の記事にまとめています。
+以下の記事は、初期実装時点の設計と、そこから見えた課題をまとめた開発記録です。当時は小規模な招待制運用を前提に、まず機能を成立させることを優先しており、将来のスケールを支える実行制御や責任分離を十分に設計へ反映できていませんでした。その反省から、現在は工程構成、run の実行制御、外部検索経路、LLM 呼び出し基盤を見直しています。記事中の構成は現行実装とは異なり、現行設計については別の記事で紹介する予定です。
 
 - [PerplexityライクなQ&Aエージェントを個人開発アプリに組み込んだ——6つの工程に分けた設計の工夫](https://zenn.dev/yook/articles/qa-agent-six-stage-design)
 - [PerplexityライクなQ&Aエージェントを個人開発アプリに組み込んだ——スケール時に実行モデルをどう変えるか](https://zenn.dev/yook/articles/qa-agent-scaling-execution-model)
@@ -66,9 +66,10 @@ Vector は、最初から明確な設計思想を持って作り始めたアプ�
 | フロントエンド | Next.js 16 (App Router / BFF)・React 19・TypeScript・Tailwind CSS v4・shadcn/ui |
 | 認証 | Better Auth (frontend BFF で完結) |
 | バックエンド | Python 3.13・FastAPI・Pydantic / SQLModel・Alembic |
-| 非同期処理 | taskiq (worker / scheduler)・ElastiCache Valkey (queue / レート制限) |
+| 非同期処理 | taskiq (worker / scheduler)・ElastiCache Valkey (queue / レート制限)・Transactional Outbox / Amazon SQS / AWS Lambda（段階移行中） |
 | データ | Amazon RDS for PostgreSQL・pgvector (768次元ベクトル検索) |
-| AI | Gemini (翻訳・要約・構造化)・DeepSeek (重要度・投資文脈分析) |
+| AI | Gemini (翻訳・要約・リサーチ計画・回答生成・Embedding)・DeepSeek (重要度・投資文脈分析・検索クエリ生成・根拠精査) |
+| 外部検索 | Amazon Bedrock AgentCore Gateway (Web Search) |
 | 基盤・可観測性 | AWS ECS Fargate (ap-northeast-1)・Terraform・Docker Compose・Logfire (OpenTelemetry)・GitHub Actions |
 
 ## Architecture
@@ -76,7 +77,7 @@ Vector は、最初から明確な設計思想を持って作り始めたアプ�
 Vector は、ブラウザから直接到達できる入口を Next.js BFF に寄せ、backend API と worker 群を内部側に閉じる構成です。
 本番環境は AWS (ap-northeast-1) で動作しています。ALB を唯一の公開入口とし、frontend・API・scheduler・各 worker を ECS Fargate の service として分離、データは RDS PostgreSQL と ElastiCache Valkey に置いています。構成は Terraform (`infra/aws/`) で管理しています。
 
-以前は Fly.io と Neon PostgreSQL で運用しており、現在は停止しています。
+以前は Fly.io と Neon PostgreSQL で運用していましたが、この構成はすでに停止しています。現在の本番インフラの正本は `infra/aws/` の Terraform です。
 
 ```mermaid
 flowchart TB
@@ -132,9 +133,9 @@ flowchart TB
 ```
 
 公開入口、内部 API、外部 HTML 取得 worker、DB 権限を分けることで、外部入力を扱う処理の影響範囲を小さくしています。
-この分割の背景と、非同期パイプライン・セキュリティ境界の設計判断は [docs/architecture.md](docs/architecture.md) にまとめています（インフラ構成の記述は Fly.io 運用時のものです）。
+この分割の背景と、非同期パイプライン・セキュリティ境界の設計判断は [docs/architecture.md](docs/architecture.md) にまとめています。ただし、同文書のインフラ構成は旧 Fly.io / Neon 運用時の記録であり、現在の AWS 構成を説明するものではありません。
 
-AWS の各サービスをどういう基準で選び、どんなトレードオフを受け入れたのかは、Zenn の記事にまとめています。
+以下の記事は、Fly.io / Neon から AWS へ移行した時点の選定理由とトレードオフをまとめた記録です。現在も本番基盤には AWS を利用していますが、個別の構成や運用方式はその後も更新しており、現行構成の正本は `infra/aws/` です。
 
 [個人開発サービスを Fly.io + Neon から AWS に移行した — 選定の理由とトレードオフ](https://zenn.dev/yook/articles/aws-migration-from-flyio-neon-tradeoffs)
 
@@ -143,7 +144,9 @@ AWS の各サービスをどういう基準で選び、どんなトレードオ�
 
 収集した記事は、本文補完、翻訳・要約、重要度・投資文脈の分析、ベクトル生成という複数の非同期ステージを通して処理します。各ステージの実行結果は Pipeline Events に記録し、途中で処理が止まった場合は、backfill が DB の状態から未完了の工程を再発見して通常のキューへ再投入します。
 
-この構成を採用した背景や、Redis Streams による再配送、重複実行から DB の整合性を守る仕組みは、Zenn の記事にまとめています。ぜひご覧ください。
+現在はコスト最適化のため、常時稼働 worker と taskiq / Valkey を中心とした構成から、Transactional Outbox・Amazon SQS・AWS Lambda を利用するイベント駆動構成へ段階的に移行しています。
+
+以下の記事は、移行前の Redis Streams を中心とした非同期パイプラインについて、再配送や重複実行から DB の整合性を守る仕組みをまとめた開発記録です。
 
 [ニュースの収集とAI分析を支える非同期パイプラインの設計](https://zenn.dev/yook/articles/redis-streams-async-pipeline-recovery)
 
