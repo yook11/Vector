@@ -27,7 +27,7 @@ from app.analysis.curation.errors import (
     CurationRecoverableError,
     map_provider_to_curation,
 )
-from app.analysis.embedding.errors import EmbeddingRecoverableError
+from app.analysis.embedding.task_errors import EmbeddingRecoverableError
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.failure_projection import (
     FailureAction,

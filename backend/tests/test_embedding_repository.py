@@ -5,13 +5,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
 )
-from app.analysis.embedding.repository import EmbeddingRepository
+from app.analysis.embedding.repository import EmbeddingRepository, EmbeddingSaveState
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -207,3 +209,72 @@ async def test_save_returns_false_for_unknown_analyzed_article_id(
         analyzed_article_id=999_999,
     )
     assert saved is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("embedded", [False, True])
+async def test_lock_save_state_distinguishes_generation_state(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+    embedded: bool,
+) -> None:
+    """行ロックで未生成と生成済みを区別する。"""
+    analysis = await _build_analysis(
+        db_session,
+        sample_source,
+        sample_categories[0].id,
+        url="https://example.com/lock-state",
+        embedding=_zero_vector() if embedded else None,
+    )
+    assert await EmbeddingRepository(db_session).lock_save_state(analysis.id) is (
+        EmbeddingSaveState.EMBEDDED if embedded else EmbeddingSaveState.UNEMBEDDED
+    )
+
+
+@pytest.mark.asyncio
+async def test_lock_save_state_distinguishes_missing_article(
+    db_session: AsyncSession,
+) -> None:
+    """記事不存在を未生成とは別の状態として返す。"""
+    assert (
+        await EmbeddingRepository(db_session).lock_save_state(999_999)
+        is EmbeddingSaveState.ARTICLE_MISSING
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish", ["commit", "rollback"])
+async def test_row_lock_blocks_delete_until_transaction_ends(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+    finish: str,
+) -> None:
+    """存在確認後の削除は待機し、トランザクション終了で実行可能になる。"""
+    analysis = await _build_analysis(
+        db_session,
+        sample_source,
+        sample_categories[0].id,
+        url="https://example.com/lock-prevents-delete",
+    )
+    analyzed_article_id = analysis.id
+    assert (
+        await EmbeddingRepository(db_session).lock_save_state(analyzed_article_id)
+        is EmbeddingSaveState.UNEMBEDDED
+    )
+    statement = delete(AnalyzedArticleRecord).where(
+        AnalyzedArticleRecord.id == analyzed_article_id
+    )
+    async with session_factory() as other:
+        await other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        with pytest.raises(DBAPIError) as error:
+            await other.execute(statement)
+        assert error.value.orig.sqlstate == "55P03"
+        await other.rollback()
+        await getattr(db_session, finish)()
+        await other.execute(statement)
+        await other.commit()
+    db_session.expire_all()
+    assert await db_session.get(AnalyzedArticleRecord, analyzed_article_id) is None

@@ -263,3 +263,36 @@ def test_ready_build_blocked_code_partitions_idempotent_skip_from_durable() -> N
     durable = {c for c in EmbeddingReadyBuildBlockedCode if not c.is_idempotent_skip}
     assert idempotent == {EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED}
     assert durable == {EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING}
+
+
+class TestFromFacts:
+    def test_builds_same_input_and_preserves_hint(self) -> None:
+        """取得済みの事実でも本文と監査IDの優先順位を維持する。"""
+        ready, article_id = ReadyForEmbedding.from_facts(
+            1,
+            _facts(summary="summary", key_points=[{"content": "point"}]),
+            analyzable_hint=99,
+        )
+        assert ready.text_for_embedding == "summary\n\npoint"
+        assert article_id == 99
+
+    @pytest.mark.parametrize(
+        ("facts", "code"),
+        [
+            (None, EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING),
+            (
+                _facts(has_embedding=True),
+                EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED,
+            ),
+        ],
+    )
+    def test_preserves_blocked_reasons(self, facts, code) -> None:
+        """取得済みの事実でも不存在と生成済みの理由を保持する。"""
+        with pytest.raises(EmbeddingReadyBuildBlockedError) as raised:
+            ReadyForEmbedding.from_facts(1, facts)
+        assert raised.value.code is code
+
+    def test_rejects_invalid_input_without_io(self) -> None:
+        """本文の入力検証を副作用なしで実行する。"""
+        with pytest.raises(ValidationError):
+            ReadyForEmbedding.from_facts(1, _facts(summary=""))

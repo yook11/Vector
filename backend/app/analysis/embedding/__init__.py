@@ -1,16 +1,4 @@
-"""Embedding — Stage 5 埋め込みベクトル生成パッケージ。
-
-Stage 5 は pipeline 終端のため、Service は副作用のみ (永続化) を担い、
-楽観ロックで並行 update に先を越された場合は log + 短絡で抜ける。
-
-エラー taxonomy (Stage 4 Assessment と完全同形、``errors.py`` 参照):
-- Layer 1 marker (``EmbeddingRecoverableError`` / ``EmbeddingTerminalError``):
-  Task 層 marker dispatch + catch-all の軸
-- Layer 2-B (``EmbeddingResponseInvalidError``): ``EmbeddingVector`` VO 構造違反
-  を Recoverable で wrap
-- Layer 2-A ACL (``to_embedding_error``): provider 由来 ``AIProviderError`` を
-  Stage 5 marker に詰め替える Service 境界
-"""
+"""Embeddingの正常完了と失敗理由を提供する。"""
 
 from app.analysis.embedding.domain import (
     EMBEDDING_DIMENSION,
@@ -18,22 +6,24 @@ from app.analysis.embedding.domain import (
 )
 from app.analysis.embedding.errors import (
     EmbeddingError,
-    EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalError,
 )
 from app.analysis.embedding.repository import EmbeddingRepository
-from app.analysis.embedding.service import EmbeddingService
+from app.analysis.embedding.service import (
+    EmbeddingCompletion,
+    EmbeddingCompletionReason,
+    EmbeddingService,
+)
 from app.audit.stages.embedding import EmbeddingAuditRepository
 
 __all__ = [
     "EMBEDDING_DIMENSION",
     "EmbeddingAuditRepository",
+    "EmbeddingCompletion",
+    "EmbeddingCompletionReason",
     "EmbeddingError",
-    "EmbeddingRecoverableError",
     "EmbeddingRepository",
     "EmbeddingResponseInvalidError",
     "EmbeddingService",
-    "EmbeddingTerminalError",
     "EmbeddingVector",
 ]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +11,14 @@ from app.analysis.embedding.domain.ready import EmbeddingReadyBuildFacts
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
+
+
+class EmbeddingSaveState(StrEnum):
+    """保存対象の存在とベクトルの生成状態。"""
+
+    ARTICLE_MISSING = "article_missing"
+    UNEMBEDDED = "unembedded"
+    EMBEDDED = "embedded"
 
 
 class EmbeddingRepository:
@@ -45,6 +55,20 @@ class EmbeddingRepository:
             summary=summary,
             key_points=key_points,
         )
+
+    async def lock_save_state(self, analyzed_article_id: int) -> EmbeddingSaveState:
+        """記事の行をトランザクション終了までロックし、保存前の状態を返す。"""
+        stmt = (
+            select(AnalyzedArticleRecord.embedding.is_not(None))
+            .where(AnalyzedArticleRecord.id == analyzed_article_id)
+            .with_for_update()
+        )
+        row = (await self._session.execute(stmt)).one_or_none()
+        if row is None:
+            return EmbeddingSaveState.ARTICLE_MISSING
+        if row[0]:
+            return EmbeddingSaveState.EMBEDDED
+        return EmbeddingSaveState.UNEMBEDDED
 
     async def save(
         self,

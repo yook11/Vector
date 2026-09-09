@@ -15,6 +15,7 @@ from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
+from app.analysis.embedding.task_errors import to_embedding_task_error
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -94,12 +95,13 @@ async def generate_embedding(
                 ready, embedder, analyzable_article_id=analyzable_article_id
             )
         except Exception as exc:
+            task_exc = to_embedding_task_error(exc)
             # handler / hold が二次例外で落ちても元の業務例外を span に残す
             # (no-override で最初の業務例外を保持)。
-            stage.record_failure(exc)
+            stage.record_failure(task_exc)
             decision = await handler.handle(
                 ready=ready,
-                exc=exc,
+                exc=task_exc,
                 last_attempt=is_last_attempt(ctx),
                 analyzable_article_id=analyzable_article_id,
                 provider=embedder.provider,
@@ -112,7 +114,9 @@ async def generate_embedding(
                 )
             stage.set_result("failed")
             if decision.reraise:
-                raise
+                if task_exc is exc:
+                    raise
+                raise task_exc from exc
             return
 
         # Stage 5 はパイプライン終端、chain firing なし。

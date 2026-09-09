@@ -21,12 +21,13 @@ from app.analysis.ai_provider_errors import (
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.ai_provider_outcome import is_infra_provider_error
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.embedding.errors import (
-    EmbeddingError,
-    EmbeddingRecoverableError,
-    EmbeddingTerminalError,
-)
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
+from app.analysis.embedding.task_errors import (
+    EmbeddingRecoverableError,
+    EmbeddingTaskError,
+    EmbeddingTerminalError,
+    to_embedding_task_error,
+)
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -85,6 +86,7 @@ class EmbeddingFailureHandler:
         Returns:
             taskiq retry と stage hold の decision。
         """
+        exc = to_embedding_task_error(exc)
         match exc:
             case EmbeddingTerminalError():
                 record_embedding_processing_outcome(
@@ -147,7 +149,7 @@ class EmbeddingFailureHandler:
     async def _audit_failure(
         self,
         ready: ReadyForEmbedding,
-        exc: EmbeddingError | DatabaseError,
+        exc: EmbeddingTaskError | DatabaseError,
         analyzable_article_id: int,
     ) -> None:
         """best-effort failure audit (DB 落ち / schema 不整合は log fallback)。

@@ -86,6 +86,19 @@ class ReadyForEmbedding(BaseModel):
         analyzable_article_id は必ず int になる。
         """
         facts = await embedding_repo.load_ready_build_facts(analyzed_article_id)
+        return cls.from_facts(
+            analyzed_article_id, facts, analyzable_hint=analyzable_hint
+        )
+
+    @classmethod
+    def from_facts(
+        cls,
+        analyzed_article_id: int,
+        facts: EmbeddingReadyBuildFacts | None,
+        *,
+        analyzable_hint: int | None = None,
+    ) -> tuple[ReadyForEmbedding, int]:
+        """取得済みの事実から、I/Oなしで開始条件と入力を検証する。"""
         if facts is None:
             raise EmbeddingReadyBuildBlockedError(
                 EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING

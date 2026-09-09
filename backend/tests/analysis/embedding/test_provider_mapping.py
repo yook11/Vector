@@ -1,9 +1,4 @@
-"""Stage 5 ACL — ``to_embedding_error`` の翻訳契約テスト (Stage 4 と同形)。
-
-mapper は provider error を「retry 軸 (Recoverable / Terminal) + 原因軸
-(failure_kind = mode 値 / failure_reason = reason 値)」に翻訳する。leaf → marker /
-failure_kind の写像は plan の disposition 表 (spec) を golden として直書きする。
-"""
+"""Serviceで元のプロバイダー例外を保持し、Taskiq境界で従来の分類に変換する。"""
 
 from __future__ import annotations
 
@@ -24,9 +19,14 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.embedding.errors import (
     EmbeddingError,
-    EmbeddingRecoverableError,
-    EmbeddingTerminalError,
+    EmbeddingFailureReason,
     to_embedding_error,
+)
+from app.analysis.embedding.task_errors import (
+    EmbeddingRecoverableError,
+    EmbeddingTaskError,
+    EmbeddingTerminalError,
+    to_embedding_task_error,
 )
 from app.analysis.gemini_error_translator import (
     GeminiContentRejectionReason,
@@ -37,7 +37,7 @@ _CONTENT_REASON = GeminiContentRejectionReason.SAFETY
 _STATE_REASON = GeminiStateReason.TIMEOUT
 
 # leaf → (期待 marker, 期待 failure_kind)。plan の disposition 表 (spec) が出所。
-_LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[EmbeddingError], str]] = {
+_LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[EmbeddingTaskError], str]] = {
     AIProviderNetworkError: (EmbeddingRecoverableError, "attempt_scoped"),
     AIProviderServiceUnavailableError: (
         EmbeddingRecoverableError,
@@ -70,6 +70,18 @@ def _instantiate(
     return exc_type()
 
 
+def _task_error(provider: AIProviderError) -> EmbeddingTaskError:
+    service_error = to_embedding_error(provider)
+    assert type(service_error) is EmbeddingError
+    assert not hasattr(service_error, "RETRYABILITY")
+    assert service_error.reason is EmbeddingFailureReason.PROVIDER_ERROR
+    assert service_error.provider_error is provider
+    result = to_embedding_task_error(service_error)
+    assert isinstance(result, EmbeddingTaskError)
+    assert result.__cause__ is service_error
+    return result
+
+
 class TestToEmbeddingError:
     """全 provider leaf の翻訳契約 (golden 写像)。"""
 
@@ -79,7 +91,7 @@ class TestToEmbeddingError:
     ) -> None:
         expected_marker, expected_kind = _LEAF_EXPECTATION[exc_type]
 
-        result = to_embedding_error(_instantiate(exc_type))
+        result = _task_error(_instantiate(exc_type))
 
         assert isinstance(result, expected_marker)
         assert result.failure_kind == expected_kind
@@ -90,7 +102,7 @@ class TestToEmbeddingError:
     ) -> None:
         original = _instantiate(exc_type)
 
-        result = to_embedding_error(original)
+        result = _task_error(original)
 
         assert result.provider_error is original  # type: ignore[union-attr]
 
@@ -98,7 +110,7 @@ class TestToEmbeddingError:
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        result = to_embedding_error(_instantiate(exc_type))
+        result = _task_error(_instantiate(exc_type))
 
         assert result.code == exc_type.CODE  # type: ignore[union-attr]
 
@@ -109,7 +121,7 @@ class TestToEmbeddingError:
         original = _instantiate(exc_type)
         expected = original.reason.value  # type: ignore[attr-defined]
 
-        result = to_embedding_error(original)
+        result = _task_error(original)
 
         assert result.failure_reason == expected  # type: ignore[union-attr]
 
@@ -120,7 +132,7 @@ class TestToEmbeddingError:
     def test_state_without_reason_has_none_failure_reason(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        result = to_embedding_error(_instantiate(exc_type, with_state_reason=False))
+        result = _task_error(_instantiate(exc_type, with_state_reason=False))
 
         assert result.failure_reason is None  # type: ignore[union-attr]
 

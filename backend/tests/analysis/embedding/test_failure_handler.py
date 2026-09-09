@@ -37,6 +37,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
+    EmbeddingAnalyzedArticleMissingError,
     EmbeddingResponseInvalidError,
     to_embedding_error,
 )
@@ -541,3 +542,28 @@ async def test_non_exhausted_provider_error_does_not_emit_ai_provider_exhausted(
         )
 
     assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []
+
+
+@pytest.mark.asyncio
+async def test_missing_article_is_audited_as_failure_without_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """保存先不存在をFAILED監査に残し、provider起因のholdを発生させない。"""
+    article = await _make_article(db_session, sample_source)
+    decision = await EmbeddingFailureHandler(session_factory).handle(
+        ready=_ready_for(),
+        exc=EmbeddingAnalyzedArticleMissingError(),
+        last_attempt=False,
+        analyzable_article_id=article.id,
+        provider="gemini",
+    )
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None
+    events = await _fetch_embedding_events(db_session, article.id)
+    assert len(events) == 1
+    assert events[0].event_type == "failed"
+    assert events[0].outcome_code == "embedding_analyzed_article_missing"
+    assert events[0].retryability == "non_retryable"
+    assert events[0].payload["failure_kind"] == "target_missing"

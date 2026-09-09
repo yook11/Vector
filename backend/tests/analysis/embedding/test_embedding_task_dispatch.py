@@ -23,8 +23,10 @@ from logfire.testing import CaptureLogfire
 
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
-    EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
+)
+from app.analysis.embedding.task_errors import (
+    EmbeddingRecoverableError,
     EmbeddingTerminalError,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
@@ -179,8 +181,7 @@ async def test_recoverable_reraise_false_returns() -> None:
 
 @pytest.mark.asyncio
 async def test_response_invalid_dispatches_to_handler() -> None:
-    """``EmbeddingResponseInvalidError`` (Layer 2-B、Recoverable 継承) も
-    Handler 経由で扱われる (kwargs["exc"] は EmbeddingRecoverableError instance)。"""
+    """応答不正をTaskiq用の再試行可能な失敗に変換してhandlerへ渡す。"""
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx()
@@ -202,6 +203,7 @@ async def test_response_invalid_dispatches_to_handler() -> None:
     assert isinstance(
         handler_handle.await_args.kwargs["exc"], EmbeddingRecoverableError
     )
+    assert handler_handle.await_args.kwargs["exc"].__cause__ is exc
 
 
 # catch-all — Layer 1 marker いずれにも該当しない例外も Handler に委譲
@@ -240,9 +242,7 @@ async def test_service_exception_sets_failed_result(
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx()
-    exc = EmbeddingRecoverableError(
-        code="ai_error_network", failure_kind="attempt_scoped"
-    )
+    exc = EmbeddingResponseInvalidError()
     with (
         _patch_ready_construction(),
         patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
@@ -254,8 +254,9 @@ async def test_service_exception_sets_failed_result(
             return_value=FailureHandlingDecision(reraise=reraise)
         )
         if reraise:
-            with pytest.raises(EmbeddingRecoverableError):
+            with pytest.raises(EmbeddingRecoverableError) as raised:
                 await generate_embedding(trigger=_trigger(), ctx=ctx)
+            assert raised.value.__cause__ is exc
         else:
             await generate_embedding(trigger=_trigger(), ctx=ctx)
 

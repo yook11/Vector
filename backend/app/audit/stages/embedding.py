@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildBlockedError
-from app.analysis.embedding.errors import EmbeddingError
+from app.analysis.embedding.task_errors import EmbeddingTaskError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import BasePipelineEventPayload, EmbeddingPayload
 from app.audit.error_chain import extract_error_chain
@@ -122,10 +122,26 @@ class EmbeddingAuditRepository:
         *,
         analyzed_article_id: int,
         article_id: int,
-        exc: EmbeddingError | DatabaseError,
+        exc: EmbeddingTaskError | DatabaseError,
     ) -> None:
         """embedding 失敗を記録する。"""
         projection = self._projection_of(exc)
+        await self._append_failed_event(
+            analyzed_article_id=analyzed_article_id,
+            article_id=article_id,
+            exc=exc,
+            projection=projection,
+        )
+
+    async def append_classified_failure(
+        self,
+        *,
+        analyzed_article_id: int,
+        article_id: int | None,
+        exc: Exception,
+        projection: FailureProjection,
+    ) -> None:
+        """Consumerが確定した分類と元の例外を、そのまま失敗監査へ記録する。"""
         await self._append_failed_event(
             analyzed_article_id=analyzed_article_id,
             article_id=article_id,
@@ -152,7 +168,7 @@ class EmbeddingAuditRepository:
         self,
         *,
         analyzed_article_id: int,
-        article_id: int,
+        article_id: int | None,
         exc: BaseException,
         projection: FailureProjection,
     ) -> None:
