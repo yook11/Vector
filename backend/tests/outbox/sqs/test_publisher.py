@@ -245,14 +245,15 @@ def test_invalid_event_does_not_prevent_other_events(
 
 @pytest.mark.parametrize("event_type", ["article.acquired", "future.event"])
 @pytest.mark.parametrize("include_valid", [False, True])
+@pytest.mark.parametrize("invalid_time", [False, True])
 def test_unsupported_event_is_rejected_before_body_preparation(
-    envelope, event_type, include_valid, monkeypatch
+    envelope, event_type, include_valid, invalid_time, monkeypatch
 ):
-    """対応外の種別を本文不正より先に拒否し、正常分だけを送信する。"""
+    """共有契約の優先順位で不正理由を選び、正常分だけ本文を構築する。"""
     bad = replace(
         envelope,
         event_type=event_type,
-        occurred_at=datetime(2026, 9, 7),
+        occurred_at=datetime(2026, 9, 7) if invalid_time else envelope.occurred_at,
         payload={"bad": object()},
     )
     good = replace(envelope, event_id=UUID(int=2))
@@ -264,9 +265,10 @@ def test_unsupported_event_is_rejected_before_body_preparation(
 
     assert isinstance(result.results[0], PublishFailed)
     assert result.results[0].event_id == bad.event_id
-    assert (
-        result.results[0].error.reason
-        is PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
+    assert result.results[0].error.reason is (
+        PublishEventInvalidReason.INVALID_ENVELOPE
+        if invalid_time
+        else PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
     )
     if include_valid:
         prepare.assert_called_once_with(_event(good))
@@ -332,17 +334,17 @@ def test_input_count_is_checked_before_excluding_invalid_events(envelope, monkey
     factory.assert_not_called()
 
 
-def test_all_invalid_events_do_not_construct_an_empty_batch(envelope, monkeypatch):
-    """送信対象がなければ、空バッチの構築ではなく個別失敗の返却で完了する。"""
-    make_batch = Mock(side_effect=AssertionError("batch must not be created"))
-    monkeypatch.setattr("app.outbox.sqs.publisher.SqsMessageBatch", make_batch)
+def test_all_invalid_events_do_not_send_an_empty_batch(envelope, monkeypatch):
+    """送信対象がなければAWS送信を呼ばず個別失敗を返す。"""
     sender, _, factory = _sender()
+    send_batch = Mock(side_effect=AssertionError("batch must not be sent"))
+    monkeypatch.setattr(sender, "_send_batch", send_batch)
     result = sender.publish_batch([replace(envelope, event_type="unsupported")])
     assert (
         result.results[0].error.reason
         is PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
     )
-    make_batch.assert_not_called()
+    send_batch.assert_not_called()
     factory.assert_not_called()
 
 

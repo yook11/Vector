@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, ClassVar
 from app.logfire.exceptions import VectorDomainError
 
 if TYPE_CHECKING:
+    from app.analysis.assessment.events import AssessedEventValidationIssue
     from app.http.failure import HttpTransportFailure
 
 
@@ -128,11 +129,17 @@ class PublishEventInvalidError(PublishError):
     """イベントを送信内容として扱えない。"""
 
     CODE: ClassVar[str] = "publish_event_invalid"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason")
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "issues")
 
-    def __init__(self, *, reason: PublishEventInvalidReason) -> None:
+    def __init__(
+        self,
+        *,
+        reason: PublishEventInvalidReason,
+        issues: tuple[AssessedEventValidationIssue, ...] = (),
+    ) -> None:
         super().__init__()
         self.reason = reason
+        self.issues = issues
 
 
 class PublishIntegrityError(PublishError):

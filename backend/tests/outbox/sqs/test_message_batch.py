@@ -1,124 +1,127 @@
-"""1回の送信単位としての件数・ID・本文サイズと不変性を検証する。"""
+"""入力保証の継承と送信本文のサイズ境界を検証する。"""
 
+import json
 from dataclasses import FrozenInstanceError, replace
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
 
-from app.outbox.sqs.message import MAX_MESSAGE_BYTES, SqsMessage
+from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.sqs.event_batch import EventBatch
 from app.outbox.sqs.message_batch import SqsMessageBatch
 
 
+def envelope(index=1):
+    return EventEnvelope(
+        event_id=UUID(int=index),
+        event_type="article.assessed_in_scope",
+        schema_version=1,
+        occurred_at=datetime(2026, 9, 7, tzinfo=UTC),
+        payload={"curation_id": 123, "analyzed_article_id": 456},
+    )
+
+
 @pytest.mark.parametrize("count", [1, 10])
-def test_batch_preserves_message_order_and_contents(count):
-    """構築済みの本文とMD5を変更せず、渡された順序で保持する。"""
-    messages = tuple(
-        SqsMessage(event_id=UUID(int=count - index), body=f'{{"value": {index}}}')
-        for index in range(count)
-    )
-    before = [
-        (message.event_id, message.body, message.body_md5) for message in messages
+def test_batch_preserves_input_order_and_contents(count):
+    events = EventBatch([envelope(count - i) for i in range(count)])
+    batch = SqsMessageBatch(events)
+    assert [message.event_id for message in batch.messages] == [
+        event.event_id for event in events.envelopes
     ]
-
-    batch = SqsMessageBatch(messages=messages)
-
-    assert len(batch.messages) == count
     assert all(
-        actual is original
-        for actual, original in zip(batch.messages, messages, strict=True)
+        json.loads(m.body)["payload"] == events.envelopes[0].payload
+        for m in batch.messages
     )
-    assert [
-        (message.event_id, message.body, message.body_md5) for message in batch.messages
-    ] == before
+    assert batch.failures == ()
 
 
 @pytest.mark.parametrize("count", [0, 11])
-def test_batch_rejects_empty_or_too_many_messages(count):
-    """空の送信や1リクエストの件数上限超過を構築時に拒否する。"""
-    messages = tuple(SqsMessage(UUID(int=index), "{}") for index in range(count))
+def test_input_batch_rejects_invalid_count(count):
     with pytest.raises(ValueError):
-        SqsMessageBatch(messages=messages)
+        EventBatch([envelope(i) for i in range(count)])
 
 
-@pytest.mark.parametrize(
-    "messages", [None, [], "private", (object(),), (object(),) * 11]
-)
-def test_batch_rejects_container_and_element_type_before_count(messages):
-    """型の違反を件数違反や想定外の属性アクセスへ変換しない。"""
+@pytest.mark.parametrize("events", [None, "private", b"private", (object(),)])
+def test_input_batch_rejects_invalid_types(events):
     with pytest.raises(TypeError):
-        SqsMessageBatch(messages=messages)
+        EventBatch(events)
 
 
-def test_batch_rejects_mutable_message_list():
-    """後から要素を変更できるリストは内容が正しくても受け入れない。"""
+def test_input_snapshot_prevents_list_mutation():
+    source = [envelope()]
+    events = EventBatch(source)
+    source.append(envelope())
+    assert events.envelopes == (envelope(),)
+    assert len(SqsMessageBatch(events).messages) == 1
+    with pytest.raises(FrozenInstanceError):
+        events.envelopes = ()
+
+
+def test_duplicate_ids_are_rejected_before_event_preparation():
+    with pytest.raises(ValueError, match="unique"):
+        EventBatch([envelope(), replace(envelope(), event_type="private")])
+
+
+@pytest.mark.parametrize("events", [None, [], (envelope(),)])
+def test_message_batch_requires_validated_input(events):
     with pytest.raises(TypeError):
-        SqsMessageBatch(messages=[SqsMessage(UUID(int=1), "{}")])
+        SqsMessageBatch(events)
 
 
-def test_batch_rejects_duplicate_id_even_with_different_bodies():
-    """本文が異なっても結果を一意に対応付けられないIDの重複を拒否する。"""
-    event_id = UUID(int=1)
-    with pytest.raises(ValueError) as caught:
-        SqsMessageBatch(
-            messages=(
-                SqsMessage(event_id, "PRIVATE_BODY_A"),
-                SqsMessage(event_id, "PRIVATE_BODY_B"),
-            )
-        )
-    assert str(event_id) not in str(caught.value)
-    assert "PRIVATE" not in str(caught.value)
+def test_arbitrary_messages_cannot_bypass_input_contract():
+    with pytest.raises(TypeError):
+        SqsMessageBatch(messages=())
 
 
-@pytest.mark.parametrize("count", [1, 2])
-@pytest.mark.parametrize("extra", [0, 1])
-def test_batch_enforces_combined_body_byte_limit(count, extra):
-    """上限ちょうどは許可し、単件でも複数件でも1バイト超過を拒否する。"""
-    messages = tuple(
-        SqsMessage(
-            UUID(int=index + 1),
-            "x" * (MAX_MESSAGE_BYTES // count + (extra if index == 0 else 0)),
-        )
-        for index in range(count)
+def test_invalid_events_leave_ordered_subset_and_individual_failures():
+    events = EventBatch(
+        [
+            envelope(3),
+            replace(envelope(2), event_type="unsupported"),
+            envelope(1),
+        ]
     )
+    batch = SqsMessageBatch(events)
+    assert [m.event_id for m in batch.messages] == [UUID(int=3), UUID(int=1)]
+    assert [f.event_id for f in batch.failures] == [UUID(int=2)]
+
+
+def test_all_invalid_events_only_produce_failures():
+    batch = SqsMessageBatch(EventBatch([replace(envelope(), event_type="unsupported")]))
+    assert batch.messages == ()
+    assert len(batch.failures) == 1
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_combined_serialized_size_boundary(monkeypatch, extra):
+    events = EventBatch([envelope(1), envelope(2)])
+    prepared = SqsMessageBatch(events)
+    size = sum(len(m.body.encode("utf-8")) for m in prepared.messages)
+    monkeypatch.setattr("app.outbox.sqs.message_batch.MAX_MESSAGE_BYTES", size - extra)
     if extra:
-        with pytest.raises(ValueError):
-            SqsMessageBatch(messages=messages)
+        with pytest.raises(ValueError, match="size limit"):
+            SqsMessageBatch(events)
     else:
-        assert SqsMessageBatch(messages=messages).messages == messages
+        assert SqsMessageBatch(events).messages == prepared.messages
 
 
-def test_batch_measures_utf8_bytes_instead_of_characters():
-    """マルチバイト文字も送信されるUTF-8の実サイズで制限する。"""
-    body = "あ" * (MAX_MESSAGE_BYTES // 3 + 1)
-    assert len(body) < MAX_MESSAGE_BYTES
-    assert len(body.encode("utf-8")) > MAX_MESSAGE_BYTES
-    with pytest.raises(ValueError):
-        SqsMessageBatch(messages=(SqsMessage(UUID(int=1), body),))
-
-
-def test_batch_cannot_be_reassigned_appended_or_modified():
-    """構築後の置き換え・追加・削除と要素の書き換えを防ぐ。"""
-    message = SqsMessage(UUID(int=1), "{}")
-    batch = SqsMessageBatch(messages=(message,))
+def test_batch_cannot_be_modified():
+    batch = SqsMessageBatch(EventBatch([envelope()]))
     with pytest.raises(FrozenInstanceError):
         batch.messages = ()
     with pytest.raises(FrozenInstanceError):
-        batch.messages += (SqsMessage(UUID(int=2), "{}"),)
-    with pytest.raises(FrozenInstanceError):
-        del batch.messages
+        batch.failures = ()
     with pytest.raises(TypeError):
-        batch.messages[0] = SqsMessage(UUID(int=2), "{}")
+        batch.messages[0] = batch.messages[0]
     with pytest.raises(FrozenInstanceError):
         batch.messages[0].body = "changed"
-    with pytest.raises(ValueError):
-        replace(batch, messages=())
-    assert batch.messages == (message,)
+    with pytest.raises(TypeError):
+        replace(batch, events=EventBatch([envelope()]), messages=())
 
 
 def test_batch_display_does_not_expose_body_or_checksum():
-    """メッセージを束ねても本文と照合情報を通常表示へ出さない。"""
-    message = SqsMessage(UUID(int=1), "PRIVATE_BODY")
-    batch = SqsMessageBatch(messages=(message,))
+    batch = SqsMessageBatch(EventBatch([envelope()]))
     for display in (str(batch), repr(batch)):
-        assert message.body not in display
-        assert message.body_md5 not in display
+        assert batch.messages[0].body not in display
+        assert batch.messages[0].body_md5 not in display
