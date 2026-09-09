@@ -857,8 +857,7 @@ async def test_pipeline_workers_own_only_pipeline_control_redis(
 
 
 @pytest.mark.asyncio
-async def test_analysis_startup_makes_rate_limit_gate_usable() -> None:
-    from app.analysis.rate_limit import AIModelRateLimitPolicy, ProviderRateLimitGate
+async def test_analysis_startup_wires_ai_providers() -> None:
     from app.queue.brokers import broker_analysis
 
     engine = MagicMock()
@@ -878,10 +877,8 @@ async def test_analysis_startup_makes_rate_limit_gate_usable() -> None:
             await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
 
     assert state.pipeline_control_redis is control
-    assert isinstance(state.provider_rate_limit_gate, ProviderRateLimitGate)
-    assert await state.provider_rate_limit_gate.acquire(
-        AIModelRateLimitPolicy(provider="test", model="test", rules=())
-    )
+    assert state.curator.provider == "gemini"
+    assert state.assessor.provider == "deepseek"
 
 
 @pytest.mark.asyncio

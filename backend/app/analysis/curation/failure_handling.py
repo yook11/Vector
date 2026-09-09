@@ -99,7 +99,7 @@ class CurationFailureHandler:
                 record_curation_processing_outcome("failed")
                 record_ai_provider_exhausted(
                     exc.provider_error,
-                    provider=curator.rate_limit_policy.provider,
+                    provider=curator.provider,
                 )
                 await self._audit_failure(ready, exc, curator)
                 return FailureHandlingDecision(
@@ -111,7 +111,7 @@ class CurationFailureHandler:
                 record_curation_processing_outcome("failed")
                 record_ai_provider_exhausted(
                     recoverable.provider_error,
-                    provider=curator.rate_limit_policy.provider,
+                    provider=curator.provider,
                 )
                 await self._audit_failure(ready, recoverable, curator)
                 hold_reason = _hold_reason(recoverable) if last_attempt else None

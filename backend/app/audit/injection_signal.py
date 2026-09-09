@@ -3,7 +3,7 @@
 監査 payload に焼く外部入力 (completion の body_head / curation の input_content)
 に ``<untrusted_input>`` 境界タグが混じっていた回数を stage 別 counter で記録する。
 個別調査用の structured log は検知 site 側で emit し、本 module は「率」の集計に
-純化する (`app/analysis/rate_limit/metrics.py` と同方針)。attributes は cardinality
+純化する。attributes は cardinality
 爆発を避けるため低 cardinality (stage) のみとし、article_id / URL は載せない。
 """
 

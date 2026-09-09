@@ -28,7 +28,6 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalError,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.audit.domain.event import Stage
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.logfire._span_helpers import stage_attrs
@@ -38,26 +37,15 @@ def _make_embedder_fake() -> MagicMock:
     fake = MagicMock()
     fake.model_name = "gemini-embedding-001"
     fake.dimension = 768
-    fake.rate_limit_policy = AIModelRateLimitPolicy(
-        provider="gemini",
-        model="gemini-embedding-001",
-        rules=(),
-    )
+    fake.provider = "gemini"
     fake.document_prefix = ""
     return fake
-
-
-def _make_gate_fake() -> MagicMock:
-    gate = MagicMock()
-    gate.acquire = AsyncMock(return_value=True)
-    return gate
 
 
 def _make_ctx(retries: int = 0, max_retries: int = 2) -> MagicMock:
     ctx = MagicMock()
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
-        provider_rate_limit_gate=_make_gate_fake(),
         pipeline_control_redis=object(),
     )
     ctx.state.embedder = _make_embedder_fake()

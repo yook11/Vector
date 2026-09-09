@@ -77,7 +77,6 @@ def test_property_contracts_return_spec_values() -> None:
 
     assert embedder.model_name == GEMINI_QUERY_EMBEDDING_SPEC.model
     assert embedder.dimension == GEMINI_QUERY_EMBEDDING_SPEC.dimension
-    assert embedder.rate_limit_policy == GEMINI_QUERY_EMBEDDING_SPEC.rate_limit_policy
 
 
 async def test_embed_queries_uses_retrieval_query_task_type() -> None:

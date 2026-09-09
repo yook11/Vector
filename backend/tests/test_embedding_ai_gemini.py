@@ -50,9 +50,7 @@ def _make_embed_response(vectors: list[list[float]]) -> MagicMock:
 
 
 def _ready(text: str = "hello") -> ReadyForEmbedding:
-    return ReadyForEmbedding(
-        analyzed_article_id=1, text_for_embedding=text
-    )
+    return ReadyForEmbedding(analyzed_article_id=1, text_for_embedding=text)
 
 
 def test_init_raises_configuration_error_when_api_key_missing() -> None:
@@ -80,7 +78,7 @@ def test_property_contracts_return_spec_values() -> None:
     embedder = _make_embedder()
     assert embedder.model_name == GEMINI_EMBEDDING_SPEC.model
     assert embedder.dimension == GEMINI_EMBEDDING_SPEC.dimension
-    assert embedder.rate_limit_policy == GEMINI_EMBEDDING_SPEC.rate_limit_policy
+    assert embedder.provider == GEMINI_EMBEDDING_SPEC.provider
     assert embedder.document_prefix == GEMINI_EMBEDDING_SPEC.document_prefix
 
 

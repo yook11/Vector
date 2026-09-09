@@ -17,14 +17,14 @@ assessment stage (Stage 4) について、Logfire 上で「インフラ障害に
 
 ### Evidence
 
-- `assess_content` task は `ReadyForAssessment.try_advance_from()` で assessment 入力を構築してから、rate limit gate と `AssessmentService.execute()` に進む。
+- `assess_content` task は `ReadyForAssessment.try_advance_from()` で assessment 入力を構築してから、`AssessmentService.execute()` に進む。
 - `AssessmentService.execute()` は AI 判定を `in_scope` / `out_of_scope` に振り分け、業務行と成功 audit を同一 transaction で commit してから、span result を `in_scope` / `out_of_scope` に焼く。楽観ロック敗北 (save が `None`) では audit / commit せず span result を `skipped` にして `None` を返す。
 - assessment は原文を読まず、curation 済みの翻訳 title / summary だけを判定する。したがって curation の `CONTENT_TOO_LARGE` のような「内容を見たうえで拒否する」経路は存在しない。
 - `AssessmentReadyBuildBlockedCode` は `CURATION_MISSING`, `ALREADY_IN_SCOPE`, `ALREADY_OUT_OF_SCOPE` の 3 つで、すべて precondition (上流消失・既処理) 由来の stale / 冪等系である。
 - `AssessmentFailureHandler.handle()` は `AssessmentTerminalError`, `AssessmentRecoverableError`, `SQLAlchemyError`, catch-all を分岐する。curation と異なり内容起因 DELETE (Drop) 経路を持たない (curation を保持して assessment を skip する設計)。各 marker は `_audit_failure` / `_audit_unexpected_failure` (どちらも自前で例外を握る best-effort) を経由する。
 - `AssessmentFailureHandler.handle()` は `assessor` を引数に取らない (`ready`, `exc`, `last_attempt` のみ)。
 - ready-build 中の blocked 以外の例外は、共有 `project_ready_build_failure(stage_prefix="assessment", exc=exc)` で `db_error` / `contract_invalid` / `unexpected_error` に分類できる。
-- `article_stage` span result は `in_scope`, `out_of_scope`, `rate_limited`, `skipped`, `failed` だが、`skipped` と `failed` は処理結果・冪等 skip・インフラ失敗を区別できない。
+- `article_stage` span result は `in_scope`, `out_of_scope`, `skipped`, `failed` だが、`skipped` と `failed` は処理結果・冪等 skip・インフラ失敗を区別できない。
 - taskiq の OTel middleware が `execute/assess_content` span を自動で作るため、task が例外で落ちたかどうかは既存 span から観測できる。
 - `assess_content` は `max_retries=2` で retry され、`SQLAlchemyError`・catch-all も `reraise=not last_attempt` で retry されうる。
 
@@ -34,7 +34,7 @@ assessment stage (Stage 4) について、Logfire 上で「インフラ障害に
 - `in_scope` と `out_of_scope` は assessment 処理成功として扱う (AI が有効な判定に到達した)。
 - `failed` は assessment 処理成功率の分母に含める。
 - `infra_error` は emit するが、assessment 処理成功率の分母には含めない。
-- `rate_limited`, 冪等 skip, race loss, ready-build blocked 全コードは成功率の分母から除外する。
+- 冪等 skip, race loss, ready-build blocked 全コードは成功率の分母から除外する。
 - `infra_error` は全インフラ失敗の総数ではなく、この metric の分類境界で infra と断定できる handled/classified failure だけを表す。
 - metric attribute に `curation_id`, `analyzable_article_id`, `source_id`, source 名, URL, prompt, raw response, error message, model, prompt version は載せない。
 - `vector.assessment.processing_outcome` は span-shadow ではない。分類が判明する task / service / handler 境界で emit する。
@@ -46,7 +46,7 @@ assessment stage (Stage 4) について、Logfire 上で「インフラ障害に
 - provider / model / prompt version 別 breakdown は扱わない。
 - source 別 assessment 成功率は扱わない。
 - `failure_kind` label は追加しない。
-- `rate_limited` 率、skipped 率は初期ダッシュボードで扱わない。
+- skipped 率は初期ダッシュボードで扱わない。
 - `stage_attempt` counter は追加しない。
 - `pipeline_events` schema は変更しない。
 - 共有 `FailureHandlingDecision` (curation / assessment / embedding 共有) は拡張しない。分類は handler が直接 emit する。
@@ -120,7 +120,7 @@ DB error として分類された ready-build failed (ready_build_failed_db_erro
 
 `infra_error` は成功率の分母から外す。ただし count としては可視化し、dashboard から消さない。
 
-Redis / queue / rate limit gate 由来の例外と timeout (CancelledError) は、初期実装では `infra_error` に含めない。これらは handler の分類境界に入らず、task が落ちる場合は `execute/assess_content` span の ERROR で観測する。
+Redis / queue 由来の例外と timeout (CancelledError) は、初期実装では `infra_error` に含めない。これらは handler の分類境界に入らず、task が落ちる場合は `execute/assess_content` span の ERROR で観測する。
 
 ---
 
@@ -129,16 +129,15 @@ Redis / queue / rate limit gate 由来の例外と timeout (CancelledError) は�
 以下は `vector.assessment.processing_outcome` に emit しない。
 
 ```text
-rate_limited
 CURATION_MISSING
 ALREADY_IN_SCOPE
 ALREADY_OUT_OF_SCOPE
 race loss
 ```
 
-### 2.1 rate_limited
+### 2.1 無料枠ゲート撤去
 
-rate limit による停止は処理品質ではなく capacity 制御である。既存の `vector.analysis.rate_limit_gate_skipped{stage=assessment}` でも観測できるため、初期 metric では emit しない。
+無料枠向けの事前ゲートは撤去済みで、専用カウンタとspan resultの`rate_limited`は新規に出力しない。実APIからの429は既存のproviderエラー分類と`infra_error`集計を維持する。
 
 ### 2.2 Ready-build Blocked (全コード)
 
@@ -177,7 +176,7 @@ assessment の処理試行が、インフラ障害を除いて有効な `in_scop
 
 `infra_error` は分母に入れない。インフラ障害は処理品質ではないため成功率を汚さないが、`infra_error_count` として別に見る。
 
-`infra_error_count` は全インフラ失敗の総数ではない。Redis / queue / gate 例外や timeout のように task ごと落ちる失敗は、初期実装では `execute/assess_content` span の ERROR 側で見る。
+`infra_error_count` は全インフラ失敗の総数ではない。Redis / queue 例外や timeout のように task ごと落ちる失敗は、初期実装では `execute/assess_content` span の ERROR 側で見る。
 
 ### 3.3 In-Scope Share Percent
 
@@ -214,7 +213,7 @@ infra_error_count
 
 理由:
 
-- span result `skipped` は ready-build blocked, race loss, rate-limited などを区別できない。
+- span result `skipped` は ready-build blocked, race loss などを区別できない。
 - span result `failed` は AI / parse / provider 失敗、DB エラー、backstop 失敗を区別できない。
 - 今回の指標は span の見た目ではなく、処理成功率の意味論に合わせる必要がある。
 
@@ -257,7 +256,7 @@ ready_build_failed_unexpected_error  -> failed
 
 context manager backstop の `failed` だけでは `processing_outcome` を emit しない。backstop は span 可視性の安全網であり、processing outcome の分類根拠ではない。
 
-これにより、分類境界をすり抜けて backstop だけに到達する失敗 (gate の Redis 例外、180s timeout の CancelledError、その他 BaseException) は `processing_outcome` に計上されない。これらは `execute/assess_content` span の ERROR ステータスで観測する設計境界とする (curation と同じ方針)。
+これにより、分類境界をすり抜けて backstop だけに到達する失敗 (180s timeout の CancelledError、その他 BaseException) は `processing_outcome` に計上されない。これらは `execute/assess_content` span の ERROR ステータスで観測する設計境界とする (curation と同じ方針)。
 
 ---
 
@@ -289,7 +288,7 @@ curation (`tests/analysis/curation/`) と同じハーネス分担に倣う。hel
 
 ### 6.2 Non-emitted Cases
 
-- `rate_limited` は emit されない。
+- 無料枠ゲート専用のspan resultとカウンタは出力しない。
 - `CURATION_MISSING` は emit されない。
 - `ALREADY_IN_SCOPE` は emit されない。
 - `ALREADY_OUT_OF_SCOPE` は emit されない。

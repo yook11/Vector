@@ -5,7 +5,7 @@ Function Calling + ``strict: true`` + inline flat schema で構造化出力を�
 ``$ref``/``$defs`` 経由の制約は AI が enforce しないため使わない。
 
 Prompt 文面は ``DeepSeekAssessmentPrompt`` が SSoT、call config (model /
-gen_config / response_schema / tool_name / base_url / version / rate_limit_policy) は
+gen_config / response_schema / tool_name / base_url / version / provider) は
 ``DEEPSEEK_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。本 class は I/O 駆動
 (SDK 例外翻訳) に責務を絞る。
 """
@@ -37,7 +37,6 @@ from app.analysis.deepseek_error_translator import (
     DeepSeekStateReason,
     translate_deepseek_error,
 )
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -85,8 +84,8 @@ class DeepSeekAssessor(BaseAssessor):
         return self.SPEC.version
 
     @property
-    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
-        return self.SPEC.rate_limit_policy
+    def provider(self) -> str:
+        return self.SPEC.provider
 
     async def assess(
         self,

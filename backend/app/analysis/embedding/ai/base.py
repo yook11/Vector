@@ -5,7 +5,7 @@ Search BC (query 一時) は独立 hierarchy (``app/search/embedding/``) を持�
 向けに揃える。
 
 サブクラスは ``EmbeddingCallSpec`` (``spec.py``) を ``SPEC`` class attr として
-持ち、``model_name`` / ``dimension`` / ``rate_limit_policy`` の各 property 経由で
+持ち、``model_name`` / ``dimension`` / ``provider`` の各 property 経由で
 公開する。
 """
 
@@ -23,7 +23,6 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingResponseInvalidError,
 )
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 logger = structlog.get_logger(__name__)
 
@@ -53,10 +52,10 @@ class BaseEmbedder(abc.ABC):
 
     - ``model_name``: モデル識別子（例: ``"gemini-embedding-001"``）
     - ``dimension``: 出力ベクトルの次元数（例: ``768``）
-    - ``rate_limit_policy``: provider × model 粒度の rate limit policy
+    - ``provider``: AIプロバイダーの識別子
     - ``document_prefix``: 文書埋め込み時の prefix（空ならデフォルト ``""``）
 
-    レート制限とリトライは Task 層の責務。
+    リトライは Task 層の責務。
     """
 
     @property
@@ -71,8 +70,8 @@ class BaseEmbedder(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
-        """provider × model 粒度の rate limit policy。"""
+    def provider(self) -> str:
+        """AIプロバイダーの識別子。"""
 
     @property
     def document_prefix(self) -> str:

@@ -24,7 +24,7 @@ embedding stage (Stage 5) について、Logfire 上で「インフラ障害に�
 
 ### Evidence
 
-- `generate_embedding` task は `ReadyForEmbedding.try_advance_from()` で入力を構築してから、rate limit gate と `EmbeddingService.execute()` に進む。Stage 5 はパイプライン終端で chain firing が無い。
+- `generate_embedding` task は `ReadyForEmbedding.try_advance_from()` で入力を構築してから、`EmbeddingService.execute()` に進む。Stage 5 はパイプライン終端で chain firing が無い。
 - `EmbeddingService.execute()` は `embedder.embed_document()` の結果を条件付き保存し、保存成功時のみ成功 audit を同一 transaction で commit してから span result を `succeeded` に焼く。楽観ロック敗北 (save が `False`) では audit / commit せず span result を `skipped` にして返す。
 - embedding には内容起因 DELETE (Drop) 経路が無い (analysis を保持して embedding を skip する設計)。
 - `EmbeddingReadyBuildBlockedCode` は `ANALYZED_ARTICLE_MISSING`, `ALREADY_EMBEDDED` の 2 つで、いずれも precondition (上流消失・既処理) 由来の stale / 冪等系である。
@@ -34,7 +34,7 @@ embedding stage (Stage 5) について、Logfire 上で「インフラ障害に�
 - `AIProviderFailureMode` の `OPERATOR_ACTION_REQUIRED` は `AIProviderConfigurationError` / `AIProviderInsufficientBalanceError` / `AIProviderRequestInvalidError` の 3 つを束ねるが、これは retry / hold のための括りであり、「環境・課金で直る (infra)」と「こちらのコードが壊れた (stage 失敗)」を区別しない。
 - `EmbeddingResponseInvalidError` は `EmbeddingRecoverableError` の派生で、`provider_error=None` を持つ (provider 応答が embedding schema に合致しない)。
 - ready-build 中の blocked 以外の例外は、共有 `project_ready_build_failure(stage_prefix="embedding", exc=exc)` で `db_error` / `contract_invalid` / `unexpected_error` に分類できる。
-- `article_stage` span result は `succeeded`, `rate_limited`, `skipped`, `failed` だが、`skipped` と `failed` は冪等 skip・race loss・処理失敗・インフラ失敗を区別できない。
+- `article_stage` span result は `succeeded`, `skipped`, `failed` だが、`skipped` と `failed` は冪等 skip・race loss・処理失敗・インフラ失敗を区別できない。
 - taskiq の OTel middleware が `execute/generate_embedding` span を自動で作るため、task が例外で落ちたかどうかは既存 span から観測できる。
 - `generate_embedding` は `max_retries=2` で retry され、`EmbeddingRecoverableError`・`SQLAlchemyError`・catch-all も `reraise=not last_attempt` で retry されうる。
 
@@ -44,7 +44,7 @@ embedding stage (Stage 5) について、Logfire 上で「インフラ障害に�
 - `succeeded` は embedding 処理成功として扱う (ベクトルを生成し永続化した)。
 - `failed` は embedding 処理成功率の分母に含める。
 - `infra_error` は emit するが、embedding 処理成功率の分母には含めない。
-- `rate_limited`, 冪等 skip, race loss, ready-build blocked 全コードは成功率の分母から除外する。
+- 冪等 skip, race loss, ready-build blocked 全コードは成功率の分母から除外する。
 - **失敗の `infra_error` / `failed` 分類は、domain の retry 軸 (`AIProviderFailureMode`) や class 系統 (`AIProviderStateError` / `AIProviderContentError`) を流用しない。metric 専用の health-attribution 軸 (環境・設定・課金・依存先で直るか / stage 自身のコード・対象内容が原因か) で分類する (§2)。**
 - 分類の SSoT は consumer (metric / handler) 側の明示分類とする。ドメインエラー class に集計 bucket を属性・メソッドとして持たせない。
 - provider error の分類規則は stage に依らない (同じ network 障害はどの stage でも infra)。本 spec をその規則の SSoT とし、述語も stage 中立に書く。ただし本 PR で実際に consume するのは embedding のみで、assessment / curation への適用は別 PR とする (Non-goals 参照)。
@@ -61,7 +61,7 @@ embedding stage (Stage 5) について、Logfire 上で「インフラ障害に�
 - provider / model 別 breakdown は扱わない。
 - source 別 embedding 成功率は扱わない。
 - `failure_kind` label は追加しない (分類は `result` の 3 値に畳む)。
-- `rate_limited` 率、skipped 率は初期ダッシュボードで扱わない。
+- skipped 率は初期ダッシュボードで扱わない。
 - `stage_attempt` counter は追加しない。
 - `pipeline_events` schema は変更しない。
 - 共有 `FailureHandlingDecision` (curation / assessment / embedding 共有) は拡張しない。分類は handler が直接 emit する。
@@ -195,17 +195,14 @@ ready_build_failed_unexpected_error   (ready-build 中の上記以外)
 以下は `vector.embedding.processing_outcome` に emit しない。
 
 ```text
-rate_limited (gate skip)
 ANALYZED_ARTICLE_MISSING
 ALREADY_EMBEDDED
 race loss
 ```
 
-### 3.1 rate_limited (gate skip)
+### 3.1 無料枠ゲート撤去
 
-rate limit **gate** による事前 skip は処理品質ではなく capacity 制御である。既存の `vector.analysis.rate_limit_gate_skipped{stage=embedding}` でも観測できるため、初期 metric では emit しない。
-
-これは `AIProviderRateLimitedError` (呼び出し中に provider から返る 429) とは別物である。後者は処理試行が実際に provider へ到達して throttling に当たった infra 失敗であり、`infra_error` に算入する (§2.3)。前者は試行に入る前の skip なので emit しない。
+無料枠向けの事前ゲートは撤去済みで、専用カウンタとspan resultの`rate_limited`は新規に出力しない。実APIからの429は既存のproviderエラー分類と`infra_error`集計を維持する。
 
 ### 3.2 Ready-build Blocked (全コード)
 
@@ -245,7 +242,7 @@ embedding の処理試行が、インフラ・運用障害を除いて有効な�
 
 `infra_error` は分母に入れない。インフラ・運用障害は処理品質ではないため成功率を汚さないが、`infra_error_count` として別に見る。
 
-`infra_error_count` は全インフラ失敗の総数ではない。Redis / queue / gate 例外や timeout のように task ごと落ちる失敗は、初期実装では `execute/generate_embedding` span の ERROR 側で見る。
+`infra_error_count` は全インフラ失敗の総数ではない。Redis / queue 例外や timeout のように task ごと落ちる失敗は、初期実装では `execute/generate_embedding` span の ERROR 側で見る。
 
 ### 4.3 No Funnel Metric
 
@@ -317,7 +314,7 @@ ready_build_failed_unexpected_error  -> failed
 
 context manager backstop の `failed` だけでは `processing_outcome` を emit しない。backstop は span 可視性の安全網であり、processing outcome の分類根拠ではない。
 
-これにより、分類境界をすり抜けて backstop だけに到達する失敗 (gate の Redis 例外、timeout の CancelledError、その他 BaseException) は `processing_outcome` に計上されない。これらは `execute/generate_embedding` span の ERROR ステータスで観測する設計境界とする (curation / assessment と同じ方針)。
+これにより、分類境界をすり抜けて backstop だけに到達する失敗 (timeout の CancelledError、その他 BaseException) は `processing_outcome` に計上されない。これらは `execute/generate_embedding` span の ERROR ステータスで観測する設計境界とする (curation / assessment と同じ方針)。
 
 ---
 
@@ -350,7 +347,7 @@ curation / assessment と同じハーネス分担に倣う。helper は `tests/l
 
 ### 7.2 Non-emitted Cases
 
-- `rate_limited` (gate skip) は emit されない。
+- 無料枠ゲート専用のspan resultとカウンタは出力しない。
 - `ANALYZED_ARTICLE_MISSING` は emit されない。
 - `ALREADY_EMBEDDED` は emit されない。
 - race loss (save が False) は emit されない。

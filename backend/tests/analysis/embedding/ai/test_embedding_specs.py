@@ -20,7 +20,6 @@ from pgvector.sqlalchemy import HALFVEC
 
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 
 
@@ -50,15 +49,6 @@ def test_gemini_task_type_is_retrieval_document() -> None:
 def test_gemini_document_prefix_is_empty() -> None:
     """Gemini embedding は prefix を必要としない。"""
     assert GEMINI_EMBEDDING_SPEC.document_prefix == ""
-
-
-def test_gemini_rate_limit_policy_equals_provider_model_with_no_rules() -> None:
-    """Gemini embedding API の RPM/RPD は tier 依存で確定値なし。"""
-    assert GEMINI_EMBEDDING_SPEC.rate_limit_policy == AIModelRateLimitPolicy(
-        provider="gemini",
-        model="gemini-embedding-001",
-        rules=(),
-    )
 
 
 def test_gemini_spec_is_frozen() -> None:

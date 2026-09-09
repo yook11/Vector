@@ -1,4 +1,4 @@
-"""Stage 5 embedding task。Ready 構築後に quota と Service 実行へ進む。"""
+"""Stage 5 embedding task。Ready 構築後に Service 実行へ進む。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
-from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -87,21 +86,6 @@ async def generate_embedding(
 
         stage.set_article_id(analyzable_article_id)
 
-        # precondition 未充足の stale trigger で AI quota を消費しない。
-        gate = ctx.state.provider_rate_limit_gate
-        if not await gate.acquire(embedder.rate_limit_policy):
-            record_rate_limit_gate_skipped(
-                stage=Stage.EMBEDDING, model=embedder.model_name
-            )
-            logger.info(
-                "embedding_ai_rate_limit_gate_skipped",
-                analyzed_article_id=ready.analyzed_article_id,
-                analyzable_article_id=analyzable_article_id,
-                embedding_model=embedder.model_name,
-            )
-            stage.set_result("rate_limited")
-            return
-
         svc = EmbeddingService(session_factory)
         handler = EmbeddingFailureHandler(session_factory)
 
@@ -118,7 +102,7 @@ async def generate_embedding(
                 exc=exc,
                 last_attempt=is_last_attempt(ctx),
                 analyzable_article_id=analyzable_article_id,
-                provider=embedder.rate_limit_policy.provider,
+                provider=embedder.provider,
             )
             if decision.stage_hold_reason is not None:
                 await set_stage_hold(

@@ -55,13 +55,13 @@ _PROCESSING_OUTCOME_METRIC = "vector.curation.processing_outcome"
 
 def _curator_mock() -> MagicMock:
     """Handler に渡す ``BaseCurator`` mock (model_name / prompt_version /
-    rate_limit_policy)。rate_limit_policy は record_ai_provider_exhausted が
+    provider)。provider は record_ai_provider_exhausted が
     ``.provider`` を EMF dimension 値として JSON へ載せるため、実 spec 値
     (文字列 provider) を使う。"""
     mock = MagicMock(spec=BaseCurator)
     type(mock).model_name = GEMINI_CURATION_SPEC.model
     type(mock).prompt_version = GEMINI_CURATION_SPEC.version
-    type(mock).rate_limit_policy = GEMINI_CURATION_SPEC.rate_limit_policy
+    type(mock).provider = GEMINI_CURATION_SPEC.provider
     return mock
 
 

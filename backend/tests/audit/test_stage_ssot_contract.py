@@ -9,7 +9,6 @@ from typing import get_type_hints
 
 import pytest
 
-from app.analysis.rate_limit.metrics import record_rate_limit_gate_skipped
 from app.audit.domain.event import Stage
 from app.audit.injection_signal import record_injection_boundary_detected
 
@@ -246,7 +245,7 @@ def test_failure_append_path_does_not_read_projection_stage() -> None:
 
 @pytest.mark.parametrize(
     "helper",
-    [record_injection_boundary_detected, record_rate_limit_gate_skipped],
+    [record_injection_boundary_detected],
 )
 def test_observability_stage_helpers_accept_stage_enum(
     helper: Callable[..., object],

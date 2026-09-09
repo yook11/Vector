@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Final
 
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +17,6 @@ class QueryEmbeddingCallSpec:
     dimension: int
     output_dimensionality: int
     task_type: str
-    rate_limit_policy: AIModelRateLimitPolicy
 
 
 _GEMINI_PROVIDER: Final[str] = "gemini"
@@ -30,11 +28,6 @@ GEMINI_QUERY_EMBEDDING_SPEC: Final[QueryEmbeddingCallSpec] = QueryEmbeddingCallS
     dimension=EMBEDDING_DIMENSION,
     output_dimensionality=EMBEDDING_DIMENSION,
     task_type="RETRIEVAL_QUERY",
-    rate_limit_policy=AIModelRateLimitPolicy(
-        provider=_GEMINI_PROVIDER,
-        model=_GEMINI_MODEL,
-        rules=(),
-    ),
 )
 
 _IDENTITY_SEPARATOR: Final[str] = ":"

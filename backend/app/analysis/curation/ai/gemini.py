@@ -37,7 +37,6 @@ from app.analysis.gemini_error_translator import (
     output_blocked_reason,
     translate_gemini_error,
 )
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -99,8 +98,8 @@ class GeminiCurator(BaseCurator):
         return self.SPEC.version
 
     @property
-    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
-        return self.SPEC.rate_limit_policy
+    def provider(self) -> str:
+        return self.SPEC.provider
 
     async def curate(
         self,

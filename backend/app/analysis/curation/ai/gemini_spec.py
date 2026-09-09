@@ -26,7 +26,6 @@ from pydantic import BaseModel
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.prompt_versions import compute_call_signature
-from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
 _MODEL: Final[str] = "gemini-2.5-flash-lite"
 _GEN_CONFIG: Final[Mapping[str, Any]] = MappingProxyType(
@@ -52,7 +51,7 @@ class GeminiCurationSpec:
 
     Prompt 文面 (TEMPLATE) は分離し、本 Spec は ``provider`` / ``model`` /
     ``gen_config`` / ``response_schema`` / ``system_instruction`` /
-    ``version`` / ``rate_limit_policy`` のみを保持する。
+    ``version`` のみを保持する。
     """
 
     provider: str
@@ -61,7 +60,6 @@ class GeminiCurationSpec:
     response_schema: type[BaseModel]
     system_instruction: str | None
     version: str
-    rate_limit_policy: AIModelRateLimitPolicy
 
 
 GEMINI_CURATION_SPEC: Final[GeminiCurationSpec] = GeminiCurationSpec(
@@ -71,14 +69,4 @@ GEMINI_CURATION_SPEC: Final[GeminiCurationSpec] = GeminiCurationSpec(
     response_schema=GeminiCurationResponse,
     system_instruction=_SYSTEM_INSTRUCTION,
     version=_VERSION,
-    rate_limit_policy=AIModelRateLimitPolicy(
-        provider="gemini",
-        model=_MODEL,
-        rules=(
-            RateLimitRule(
-                name="rpd", max_requests=1500, window_seconds=86400, block=False
-            ),
-            RateLimitRule(name="rpm", max_requests=100, window_seconds=60, block=True),
-        ),
-    ),
 )

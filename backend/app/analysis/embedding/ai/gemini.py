@@ -36,7 +36,6 @@ from app.analysis.gemini_error_translator import (
     GeminiStateReason,
     translate_gemini_error,
 )
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -64,8 +63,8 @@ class GeminiEmbedder(BaseEmbedder):
         return self.SPEC.dimension
 
     @property
-    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
-        return self.SPEC.rate_limit_policy
+    def provider(self) -> str:
+        return self.SPEC.provider
 
     @property
     def document_prefix(self) -> str:

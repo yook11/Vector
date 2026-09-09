@@ -29,7 +29,6 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     AssessmentTerminalError,
 )
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 
 class _StubAssessor(BaseAssessor):
@@ -44,8 +43,8 @@ class _StubAssessor(BaseAssessor):
         return "abc12345"
 
     @property
-    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
-        return AIModelRateLimitPolicy(provider="test", model="test-model", rules=())
+    def provider(self) -> str:
+        return "test"
 
     def __init__(self) -> None:
         # client 不要 (mock で _call_api を差し替えるため)

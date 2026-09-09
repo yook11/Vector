@@ -16,7 +16,6 @@ from app.analysis.curation.failure_handling import CurationFailureHandler
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationService
-from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -91,22 +90,6 @@ async def curate_content(
                     "infra_error" if projection.failure_kind == "db_error" else "failed"
                 )
                 raise
-
-        # precondition 未充足の stale trigger で AI quota を消費しない。
-        if not await ctx.state.provider_rate_limit_gate.acquire(
-            curator.rate_limit_policy
-        ):
-            record_rate_limit_gate_skipped(
-                stage=Stage.CURATION, model=curator.model_name
-            )
-            logger.info(
-                "curation_ai_rate_limit_gate_skipped",
-                analyzable_article_id=ready.analyzable_article_id,
-                ai_model=curator.model_name,
-                prompt_version=curator.prompt_version,
-            )
-            stage.set_result("rate_limited")
-            return
 
         svc = CurationService(session_factory)
         handler = CurationFailureHandler(session_factory)
