@@ -1,6 +1,6 @@
 # 宣言的なRSSソースと方式別Fetcherへの移行
 
-Status: スライス1実装・検証完了（スライス2〜4は未実装）
+Status: スライス1・2実装・検証完了（スライス3〜4は未実装）
 作成日: 2026-09-09
 Issue: [#295](https://github.com/yook11/Vector/issues/295)
 
@@ -8,7 +8,7 @@ Issue: [#295](https://github.com/yook11/Vector/issues/295)
 
 ソースクラスに「取得先・取得条件・固有ルール」を宣言し、方式別Fetcherがその宣言を実行する構造に整理する。最初の対象はRSS・Atom・RDFおよび複数フィード。
 
-現状は各ソースの`read()`がReaderを選び、引数を組み立てて通信を呼ぶ。`fetch_articles()`は`read → in_scope → select → map_entry`を実行するだけで、ソースが宣言と取得手続きを兼ねている。通常のソースでもReader呼び出しと記事全体の写像を繰り返す必要がある。
+移行前は各ソースの`read()`がReaderを選び、引数を組み立てて通信を呼ぶ。`fetch_articles()`は`read → in_scope → select → map_entry`を実行するだけで、ソースが宣言と取得手続きを兼ねている。通常のソースでもReader呼び出しと記事全体の写像を繰り返す必要がある。
 
 目指す追加体験は、通常のRSSソースは設定だけで追加でき、特殊な処理が必要なソースだけ、そのソースクラスに純粋関数を定義すること。取得側が決まったタイミングで関数を呼ぶ。
 
@@ -84,18 +84,20 @@ RSS取得先の正本は`feeds`とする。新RSSソースには旧`endpoint_url
 | `LONGEST_CONTENT_OR_SUMMARY` | raw文字列の長い方を採用。同長ならcontent | VentureBeat、Meta AI、Frontiers |
 | `CONTENT_OR_SUMMARY` | contentが非空なら採用し、なければsummary | PLOS ONE |
 
-採用後に既存と同じHTMLタグ除去・entity decode・空白正規化を行い、その後に任意の`transform_body`を適用する。最終的に空文字なら`None`にする。長さ比較を平文化後へ移さない。`DISCARD`では本文後処理を呼ばない。
+採用後に既存と同じ「タグを空白に置換 → entity decode → 空白圧縮 → 前後空白除去」を行い、その後に任意の`transform_body`を適用する。段落改行を残す汎用整形関数には置き換えない。最終的に空文字なら`None`にする。長さ比較を平文化後へ移さない。採用後に空になっても別候補を採り直さず、本文変換があれば空文字も渡す。`DISCARD`では本文後処理を呼ばない。
 
 ### 任意関数
 
-ソースクラスに定義されていれば取得側が呼び、未定義なら標準動作を使う。任意関数は`staticmethod`で表現できる。型安全な検出・呼び出し方法はスライス1・2で確定し、ソース名による分岐は作らない。
+ソースクラスに必要な関数を`staticmethod`として定義し、取得側が`runtime_checkable`なProtocolへの適合を`isinstance`で判定して呼ぶ。未定義なら標準動作を使う。ソースはProtocolを継承しない。特殊ソースのフラグ、ソース名による分岐、関数の登録辞書、独自の署名検証は作らない。
+
+スライス2の契約は`sources/rss_hooks.py`の`RequiresBodyTransform`・`RequiresUrlTransform`・`RequiresPublishedAtResolution`・`RequiresScopeFilter`。`select`の契約・実行はスライス3で追加する。
 
 | 関数 | 入出力 | 未定義時 |
 | --- | --- | --- |
 | `in_scope` | `RssEntry → bool` | 全候補を対象とする |
 | `select` | `list[RssEntry] → list[RssEntry]` | 順番・件数を変えない |
 | `transform_url` | `str → str` | `entry.link`をそのまま使う |
-| `resolve_published_at` | `RssEntry → datetime | None` | `entry.published`を使う |
+| `resolve_published_at` | `RssEntry → datetime \| None` | `entry.published`を使う |
 | `transform_body` | `str → str` | 平文化済み本文をそのまま使う |
 
 `resolve_published_at`は日時の解決全体を担当する。FierceBiotechでは既存の解析済み日時を優先し、欠落時だけraw日時を独自解析する。`None`を返した場合に取得側が別の日時を捏造しない。
@@ -123,6 +125,8 @@ class MicrosoftResearchSource:
 
 ## 実行順序と失敗契約
 
+以下は複数フィード対応後も含む最終契約。スライス2では単一フィードのみを取得し、`select`を実行せず、scope選別 → 候補ごとのURL変換 → 日時解決 → 本文採用・平文化・本文変換の順とする。`RssFetcher.fetch(source: RssSource)`がソースを受け取り、Reader注入と共通入口の宣言検証を維持する。
+
 1. `feeds`を宣言順に取得・解析し、各フィード内の順序を維持して結合する。
 2. `in_scope`で対象候補を選ぶ。
 3. `select`を候補列に適用する。
@@ -134,6 +138,7 @@ class MicrosoftResearchSource:
 - 1フィードでも成功したらその候補を使用する。正常に読めた空フィードも成功に含む。
 - 全フィード失敗時は最初の通信・読取エラーを伝播する。
 - 関数や解析実装の想定外の例外は部分的な通信失敗に変換しない。
+- 固有関数の例外はFetcherで捕捉・再分類せず、元の例外・原因を既存のソース取得失敗処理へ渡す。標準処理へのfallbackや記事単位の握りつぶしは行わない。後続候補で失敗した場合も既存の保存トランザクションを維持し、未commit分をrollbackする。
 - NASA・Cornellの重複除去は非空のraw linkをキーに初出を残す。URL変換より前に実行し、空linkはすべて後段へ渡す。
 
 ## 移行中の契約
@@ -157,6 +162,8 @@ class MicrosoftResearchSource:
 完了条件: ソースに通信・記事全体の写像を書かず取得でき、本文不採用・`text / bytes`・空値・失敗伝達を維持する。非RSSの既存経路が動く。
 
 ### 2. 本文採用と固有関数
+
+詳細: [スライス2実装プラン](../../plans/collection/declarative-rss-acquisition-slice2.md)
 
 - 残る本文採用ルールと任意関数の呼び出しを実装する。
 - VentureBeat・PLOS ONE・Microsoft Research・The Register・FierceBiotech・Meta AIを移行する。
@@ -191,4 +198,11 @@ class MicrosoftResearchSource:
 - [ ] 通常のRSS追加と固有関数を持つRSS追加の手順を記録する。
 - [ ] 検証結果と未実行項目・理由を記録する。
 
-スライス1の実装・検証結果はリンク先の実装プランに記録する。上記Doneは全4スライスの完了条件であり、スライス1だけでは完了としない。非RSSへの展開は別の実装計画とする。
+各スライスの実装・検証結果はリンク先の実装プランに記録する。上記Doneは全4スライスの完了条件であり、スライス2まででは完了としない。非RSSへの展開は別の実装計画とする。
+
+### スライス2の検証結果（2026-09-09）
+
+- 6ソースを宣言と固有関数へ移行し、旧実装と7fixture・17記事の全フィールドが一致した。
+- 本文・関数の契約、VentureBeatの分析可能／補完待ちへの分岐、後続候補失敗時のrollbackと監査への原因伝達を確認した。
+- backend lint・format通過、単体 **6101 passed**、専用DB統合 **1338 passed / 22 skipped**。
+- skipは既存のDB権限境界テストがAlembic適用済み`public.watchlist_entries`を要求するため。専用backend型チェックCLIは未構成のため静的型チェック未実行。詳細はスライス2実装プランに記録した。
