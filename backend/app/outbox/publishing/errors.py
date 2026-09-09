@@ -24,11 +24,9 @@ class PublishEventInvalidReason(StrEnum):
     """イベントを送信内容として扱えない理由。"""
 
     UNSUPPORTED_EVENT_TYPE = "unsupported_event_type"
-    INVALID_OCCURRED_AT = "invalid_occurred_at"
     UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
     INVALID_ENVELOPE = "invalid_envelope"
     INVALID_PAYLOAD = "invalid_payload"
-    SERIALIZATION_FAILED = "serialization_failed"
     MESSAGE_TOO_LARGE = "message_too_large"
 
 

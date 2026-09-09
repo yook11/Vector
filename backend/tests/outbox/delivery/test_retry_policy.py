@@ -151,7 +151,7 @@ def test_retryable_failure_stops_at_fifth_attempt(attempt):
         PublishConfigurationError(
             reason=PublishConfigurationReason.MISSING_CREDENTIALS
         ),
-        PublishEventInvalidError(reason=PublishEventInvalidReason.SERIALIZATION_FAILED),
+        PublishEventInvalidError(reason=PublishEventInvalidReason.INVALID_PAYLOAD),
         PublishServiceError(
             reason=PublishServiceReason.UNCLASSIFIED,
             service_error_code="x",

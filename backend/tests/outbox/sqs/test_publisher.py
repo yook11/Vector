@@ -16,6 +16,7 @@ from botocore.credentials import ReadOnlyCredentials
 from botocore.exceptions import ClientError, HTTPClientError, ReadTimeoutError
 from botocore.stub import Stubber
 
+from app.analysis.assessment.events import ArticleAssessedInScopeEvent
 from app.outbox.delivery.repository import ClaimedOutboxEvent
 from app.outbox.publishing.errors import (
     PublishConfigurationError,
@@ -80,6 +81,16 @@ def _failure(event_id, code="AccessDenied", sender_fault=True):
         "SenderFault": sender_fault,
         "Message": "PRIVATE",
     }
+
+
+def _event(envelope):
+    return ArticleAssessedInScopeEvent(
+        event_id=envelope.event_id,
+        event_type=envelope.event_type,
+        schema_version=envelope.schema_version,
+        occurred_at=envelope.occurred_at,
+        payload=envelope.payload,
+    )
 
 
 def _body(envelope):
@@ -195,7 +206,7 @@ def test_unknown_entry_code_is_unclassified_regardless_of_sender_fault(
         (
             "occurred_at",
             datetime(2026, 9, 7),
-            PublishEventInvalidReason.INVALID_OCCURRED_AT,
+            PublishEventInvalidReason.INVALID_ENVELOPE,
         ),
         ("payload", {"bad": object()}, PublishEventInvalidReason.INVALID_PAYLOAD),
         (
@@ -245,8 +256,8 @@ def test_unsupported_event_is_rejected_before_body_preparation(
         payload={"bad": object()},
     )
     good = replace(envelope, event_id=UUID(int=2))
-    prepare = Mock(wraps=SqsMessage.from_envelope)
-    monkeypatch.setattr(SqsMessage, "from_envelope", prepare)
+    prepare = Mock(wraps=SqsMessage.from_event)
+    monkeypatch.setattr(SqsMessage, "from_event", prepare)
     sender, client, factory = _sender(response={"Successful": [_success(good)]})
 
     result = sender.publish_batch([bad, good] if include_valid else [bad])
@@ -258,7 +269,7 @@ def test_unsupported_event_is_rejected_before_body_preparation(
         is PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
     )
     if include_valid:
-        prepare.assert_called_once_with(good)
+        prepare.assert_called_once_with(_event(good))
         assert result.results[1] == PublishSucceeded(good.event_id)
         client.send_message_batch.assert_called_once_with(
             QueueUrl=QUEUE_URL,
@@ -313,7 +324,7 @@ def test_input_count_is_checked_before_excluding_invalid_events(envelope, monkey
     events = [replace(envelope, event_id=UUID(int=index)) for index in range(11)]
     events[0] = replace(events[0], event_type="unsupported")
     prepare = Mock(side_effect=AssertionError("preparation must not run"))
-    monkeypatch.setattr(SqsMessage, "from_envelope", prepare)
+    monkeypatch.setattr(SqsMessage, "from_event", prepare)
     sender, _, factory = _sender()
     with pytest.raises(ValueError):
         sender.publish_batch(events)
@@ -703,7 +714,7 @@ def test_unexpected_initialization_failure_retains_phase(envelope):
 def test_preparation_unexpected_failure_is_local(envelope, monkeypatch):
     sender, _, factory = _sender()
     exc = RuntimeError("private")
-    monkeypatch.setattr(SqsMessage, "from_envelope", Mock(side_effect=exc))
+    monkeypatch.setattr(SqsMessage, "from_event", Mock(side_effect=exc))
     error = sender.publish_batch([envelope]).results[0].error
     assert error.phase is PublishPhase.PREPARE_EVENT
     assert error.__cause__ is exc
@@ -820,11 +831,11 @@ def test_checksum_uses_exact_transmitted_body(
     )
     prepared = SqsMessage(event_id=envelope.event_id, body=body)
     prepare = Mock(return_value=prepared)
-    monkeypatch.setattr(SqsMessage, "from_envelope", prepare)
+    monkeypatch.setattr(SqsMessage, "from_event", prepare)
     assert sender.publish_batch([envelope]).results == (
         PublishSucceeded(envelope.event_id),
     )
-    prepare.assert_called_once_with(envelope)
+    prepare.assert_called_once_with(_event(envelope))
     assert client.send_message_batch.call_args.kwargs["Entries"] == [
         {"Id": str(envelope.event_id), "MessageBody": body}
     ]

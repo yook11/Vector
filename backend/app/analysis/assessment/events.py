@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import ClassVar
 from uuid import UUID
@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    field_serializer,
     field_validator,
 )
 from pydantic_core import PydanticCustomError
@@ -48,6 +49,12 @@ class ArticleAssessedInScopeEvent(BaseModel):
     @classmethod
     def restore_occurred_at(cls, value: object) -> object:
         return datetime.fromisoformat(value) if isinstance(value, str) else value
+
+    @field_serializer("occurred_at", when_used="json")
+    @classmethod
+    def serialize_occurred_at(cls, value: datetime) -> str:
+        """本文ではUTCのZ表記に揃え、元の小数秒は保つ。"""
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
     @field_validator("event_type")
     @classmethod

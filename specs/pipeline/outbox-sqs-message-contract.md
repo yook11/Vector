@@ -84,7 +84,7 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 - PublishTransportError: HttpTransportFailureで対象サービスへの通信失敗を表す。
 - PublishServiceError: reason・service_error_code・status_code・request_idを保持し、処理分岐は共通reasonを使う。
 - PublishConfigurationError: missing_credentials・incomplete_credentials・missing_region・credentials_retrieval_failedを区別する。
-- PublishEventInvalidError: unsupported_event_type・unsupported_schema_version・invalid_envelope・invalid_payload・invalid_occurred_at・serialization_failed・message_too_largeを区別する。
+- PublishEventInvalidError: unsupported_event_type・unsupported_schema_version・invalid_envelope・invalid_payload・message_too_largeを区別する。タイムゾーンなしのoccurred_atは他の外側項目と同じくinvalid_envelopeとし、個別の理由にしない。
 - PublishResponseInvalidError: 応答の形式・送信対象との対応の違反を共通のreasonで保持し、受付されなかったとは断定しない。
 - PublishUnexpectedError: reason=unexpected_exception、original_exception_type、phase、任意のclassification_exception_typeを保持する。
 - PublishIntegrityError: body_checksum_mismatchで送信本文の整合性確認失敗を表し、任意のrequest_idを調査用に保持する。
@@ -172,20 +172,20 @@ Evidence: [AWS SendMessageBatchResultEntry仕様](https://docs.aws.amazon.com/AW
 ### 送信メッセージの型
 
 Problem: SDK用の辞書と期待MD5を別々に渡すことで、送信内容と照合情報の対応が型から読めない。
-Evidence: SqsMessage.from_envelopeによる送信準備、SqsMessageのMD5確定、SqsMessageBatchの合計サイズ検査と_send_batch・応答変換の受け渡しを対象とする。
+Evidence: SqsMessage.from_eventによる送信準備、SqsMessageのMD5確定、SqsMessageBatchの合計サイズ検査と_send_batch・応答変換の受け渡しを対象とする。
 
-- SQS adapter内のSqsMessage(event_id: UUID, body: str)はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。bodyとbody_md5はreprに含めない。EventEnvelopeはフィールドに持たない。
-- SqsMessage.from_envelope(envelope)は本文の構築と検証を担当し、工程固有のイベント型に依存しない。別工程や未知のevent_typeも本文に保持し、送信先の対応可否は判定しない。成功時はSqsMessageを返し、返値を再検証してSqsMessageかどうかを判定しない。
-- 本文の既知不正はPublishEventInvalidErrorとし、理由はinvalid_occurred_at、serialization_failed、message_too_large（UTF-8が1,048,576 bytes超）とする。unsupported_event_typeはPublisherが本文構築前に検出し、本文不正と重なっても優先する。いずれも既存のイベント単位のprepare_event境界で扱い、正常分の送信は続ける。Message内の想定外例外は包まず、publish_batchのprepare_eventが受け止める。
-- 本文形式は既存の5項目JSONとする。occurred_atはUTCのZ、小数秒は維持する。JSONの再構築や文字列の正規化は行わない。
+- SQS adapter内のSqsMessage(event_id: UUID, body: str)はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。bodyとbody_md5はreprに含めない。EventEnvelopeやイベント型はフィールドに持たない。
+- SqsMessage.from_event(event)は検証済みの`ArticleAssessedInScopeEvent`だけを受け取り、本文の構築とサイズ検証を担当する。EventEnvelopeから直接本文を作らず、未検証の値や別工程のイベントを本文にしない。成功時はSqsMessageを返し、返値を再検証してSqsMessageかどうかを判定しない。
+- 本文の既知不正はPublishEventInvalidErrorとし、理由はmessage_too_large（UTF-8が1,048,576 bytes超）のみとする。型付き契約を通過した値はJSON化に失敗しないため、serialization_failedの理由は持たない。unsupported_event_typeはPublisherが本文構築前に検出し、本文不正と重なっても優先する。いずれも既存のイベント単位のprepare_event境界で扱い、正常分の送信は続ける。Message内の想定外例外は包まず、publish_batchのprepare_eventが受け止める。
+- 本文形式は既存の5項目JSONとする。occurred_atのUTCのZ表記・小数秒の維持は`ArticleAssessedInScopeEvent`のJSON直列化が所有し、SqsMessageは`model_dump(mode="json")`の結果をそのまま`json.dumps`する。JSONの再構築や文字列の正規化は行わない。
 - 1件上限の定数はSqsMessage側が持ち、SqsMessageBatchの本文合計サイズ検査も同じ定数を使う。バッチ件数・重複ID・フィールド型・合計サイズは個別メッセージ準備の外とする。
-- publish_batchはfrom_envelopeの結果を並べ、正常分からSqsMessageBatchを構築して送信する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
+- publish_batchはfrom_eventの結果を並べ、正常分からSqsMessageBatchを構築して送信する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
 - SDK呼び出しの直前にだけ各メッセージをId/MessageBodyの辞書へ変換する。body_md5はSDKへ送信しない。
 - results_from_sqs_batch_responseも同じSqsMessageBatchを受け取り、IDで対応するメッセージを探して照合する。照合対象はEventEnvelopeではなく、送ったSqsMessageとする。
 
 Invariants: 本文・MD5計算・件数/サイズ制限・個別結果・送信回数・資格情報・終了処理の契約を維持する。
 Non-goals: failure handlerの追加、例外処理全体の再設計、DB/relay/通知/インフラの変更は行わない。
-Done: from_envelopeが送信準備であり、既存の送信・応答照合と本文とMD5の対応が維持されることを確認できる。
+Done: from_eventが送信準備であり、既存の送信・応答照合と本文とMD5の対応が維持されることを確認できる。
 
 Verification（2026-09-08）: lint・format check、全単体テスト5,802件が成功した。`make test-integration TEST_COMPOSE_PROJECT=vector-test-sqs-from-envelope-20260908 PYTEST_ARGS="-x -q"`で実DBテスト1,226件成功・22件skipを確認した。
 
@@ -552,9 +552,9 @@ Non-goals: 本番適用、Scheduler有効化、AWSへの実送信、Slack到達�
 
 ## 対象内判定イベントの共有契約
 
-SQS publisherはイベント単位の送信準備で`ArticleAssessedInScopeEvent`を構築し、送受信共通の契約を検証する。発行元のpayload検証・Outbox保存と汎用のEventEnvelopeは維持する。対応版は整数の1、payloadは正の整数のcuration_id・analyzed_article_idだけを持つ既存のArticleAssessedInScopeとする。
+SQS publisherはイベント単位の送信準備で`ArticleAssessedInScopeEvent`を構築し、送受信共通の契約を検証する。発行元のpayload検証・Outbox保存と、relayからpublisherへの境界としての汎用のEventEnvelopeは維持する。対応版は整数の1、payloadは正の整数のcuration_id・analyzed_article_idだけを持つ既存のArticleAssessedInScopeとする。
 
-共通型の検証に成功した値だけをSqsMessageへ渡す。SqsMessage自体は汎用の本文構築・UTC表現・サイズ検証・MD5計算を引き続き担当する。未知版やpayload不正はserialization_failedなどの本文構築エラーより前に拒否する。publisherの呼び出し型・重複IDの違反は既存どおり呼び出し全体の例外、契約違反はイベント単位のPublishFailedとする。
+共通型の検証に成功した`ArticleAssessedInScopeEvent`だけを`SqsMessage.from_event`へ渡し、publisherはEventEnvelopeへ戻さない。本文のUTC表現は共通型のJSON直列化が所有し、SqsMessageはJSON化・サイズ検証・MD5計算を担当する。未知版やpayload不正は本文構築より前に拒否する。publisherの呼び出し型・重複IDの違反は既存どおり呼び出し全体の例外、契約違反はイベント単位のPublishFailedとする。
 
 共通型の違反をPublishEventInvalidErrorへ変換する際は入力値を含む検証例外を原因・contextに保持しない。既存の配信失敗ハンドラーはnon_retryable_failureとして対象Outbox行だけを停止する。正常イベントは送信を継続し、全件不正ならAWSクライアントを生成しない。SQS受信後の再配信とDLQ処理は、この送信前の停止とは独立する。
 

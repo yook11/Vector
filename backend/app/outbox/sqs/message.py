@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC
 from hashlib import md5
 from uuid import UUID
 
+from app.analysis.assessment.events import ArticleAssessedInScopeEvent
 from app.outbox.publishing.errors import (
     PublishEventInvalidError,
     PublishEventInvalidReason,
 )
-from app.outbox.publishing.publisher import EventEnvelope
 
 MAX_MESSAGE_BYTES = 1_048_576
 
@@ -33,28 +32,11 @@ class SqsMessage:
         )
 
     @classmethod
-    def from_envelope(cls, envelope: EventEnvelope) -> SqsMessage:
-        """イベントを送信本文にし、送れなければ失敗を返す。"""
-        if envelope.occurred_at.utcoffset() is None:
-            raise PublishEventInvalidError(
-                reason=PublishEventInvalidReason.INVALID_OCCURRED_AT
-            )
-        occurred_at = envelope.occurred_at.astimezone(UTC).isoformat()
-        body = {
-            "event_id": str(envelope.event_id),
-            "event_type": envelope.event_type,
-            "schema_version": envelope.schema_version,
-            "occurred_at": occurred_at.replace("+00:00", "Z"),
-            "payload": envelope.payload,
-        }
-        try:
-            body = json.dumps(body, allow_nan=False)
-        except (ValueError, TypeError) as exc:
-            raise PublishEventInvalidError(
-                reason=PublishEventInvalidReason.SERIALIZATION_FAILED
-            ) from exc
+    def from_event(cls, event: ArticleAssessedInScopeEvent) -> SqsMessage:
+        """検証済みイベントを送信本文にし、送れなければ失敗を返す。"""
+        body = json.dumps(event.model_dump(mode="json"), allow_nan=False)
         if len(body.encode("utf-8")) > MAX_MESSAGE_BYTES:
             raise PublishEventInvalidError(
                 reason=PublishEventInvalidReason.MESSAGE_TOO_LARGE
             )
-        return cls(event_id=envelope.event_id, body=body)
+        return cls(event_id=event.event_id, body=body)
