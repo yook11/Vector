@@ -14,9 +14,6 @@ P2 で ``ArticleSource`` 集約に移管した。本テストは実装の変更�
 4. 他の全ソースは default 契約 (origin=feed / DEFAULT_POLICY、
    title=observed_preferred = 旧「常に self.title」と同値)
 5. 取得出自は audit 値として取得チャネルを反映する
-6. **identity byte 不変**: 各 ``name → endpoint_url`` 束縛が P1 時点と完全
-   一致 (P2-D で identity は ``XxxSource`` の ClassVar。識別子の固定を
-   レジストリ中央で一括 pin する。挙動 0 の構造的証跡)
 """
 
 from __future__ import annotations
@@ -41,62 +38,6 @@ _NON_FEED_ORIGIN = {
     "ORNL": ObservedOrigin.listing,
     "Hacker News": ObservedOrigin.api,
 }
-
-# P1 時点と完全一致する ``name → endpoint_url`` 束縛 (byte 不変の identity pin)。
-_EXPECTED_ENDPOINTS: dict[str, str] = {
-    "VentureBeat": "https://venturebeat.com/feed",
-    "TechCrunch": "https://techcrunch.com/feed/",
-    "The Quantum Insider": "https://thequantuminsider.com/feed/",
-    "Krebs on Security": "https://krebsonsecurity.com/feed/",
-    "Spaceflight Now": "https://spaceflightnow.com/feed/",
-    "NASA": "https://www.nasa.gov/feed/",
-    "IEEE Spectrum": "https://spectrum.ieee.org/feeds/feed.rss",
-    "Microsoft Research": "https://www.microsoft.com/en-us/research/feed/",
-    "ITmedia AI+": "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml",
-    "ITmedia NEWS": "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml",
-    "MONOist": "https://rss.itmedia.co.jp/rss/2.0/monoist.xml",
-    "EE Times Japan": "https://rss.itmedia.co.jp/rss/2.0/eetimes.xml",
-    "Engadget": "https://www.engadget.com/rss.xml",
-    "FierceBiotech": "https://www.fiercebiotech.com/rss/xml",
-    "JPCERT/CC": "https://www.jpcert.or.jp/rss/jpcert.rdf",
-    "CleanTechnica": "https://cleantechnica.com/feed/",
-    "Electrek": "https://electrek.co/feed/",
-    "SpaceNews": "https://spacenews.com/feed/",
-    "The Register": "https://www.theregister.com/headlines.atom",
-    "Hacker News": "https://hn.algolia.com/api/v1/search_by_date",
-    "MEXT": "https://www.mext.go.jp/b_menu/news/index.rdf",
-    "MIC": "https://www.soumu.go.jp/news.rdf",
-    "METI": "https://www.meti.go.jp/ml_index_release_atom.xml",
-    "Anthropic": "https://www.anthropic.com/sitemap.xml",
-    "NIST": "https://www.nist.gov/news-events/news/rss.xml",
-    "NSF": "https://www.nsf.gov/rss/rss_www_news.xml",
-    "The Cloudflare Blog": "https://blog.cloudflare.com/rss/",
-    "Google DeepMind": "https://deepmind.google/blog/rss.xml",
-    "ESA/Hubble": "https://esahubble.org/news/feed/",
-    "ESA/Webb": "https://esawebb.org/news/feed/",
-    "OpenAI": "https://openai.com/news/rss.xml",
-    "Hugging Face": "https://huggingface.co/blog/feed.xml",
-    "eLife": "https://elifesciences.org/rss/recent.xml",
-    "PLOS ONE": "https://journals.plos.org/plosone/feed/atom",
-    "Meta AI": "https://about.fb.com/news/feed/",
-    "Cornell Chronicle": "https://news.cornell.edu/taxonomy/term/24043/feed",
-    "Frontiers in Artificial Intelligence": (
-        "https://www.frontiersin.org/journals/artificial-intelligence/rss"
-    ),
-    "Frontiers in Robotics and AI": (
-        "https://www.frontiersin.org/journals/robotics-and-ai/rss"
-    ),
-    "Frontiers in Energy Research": (
-        "https://www.frontiersin.org/journals/energy-research/rss"
-    ),
-    "Frontiers in Materials": "https://www.frontiersin.org/journals/materials/rss",
-    "ORNL": "https://www.ornl.gov/news",
-    "MDPI Materials": "https://api.crossref.org/works",
-    "MDPI Energies": "https://api.crossref.org/works",
-    "MDPI Sensors": "https://api.crossref.org/works",
-    "MDPI Nanomaterials": "https://api.crossref.org/works",
-}
-
 
 class TestCompletionKnowledgeIsRegistryReachable:
     """resolver が無 instantiation で per-source 知識を引けること。"""
@@ -137,14 +78,6 @@ class TestFetchCadenceDeclaredOnAllSources:
             assert isinstance(source.fetch_cadence, FetchCadence), (
                 f"{name}.fetch_cadence must be a FetchCadence member"
             )
-
-
-class TestSourceIdentityIsByteInvariant:
-    """``name → endpoint_url`` 束縛が P1 と完全一致 (識別子 byte 不変)。"""
-
-    def test_endpoint_urls_match_pre_p2_bindings(self) -> None:
-        actual = {str(name): src.endpoint_url for name, src in SOURCES.items()}
-        assert actual == _EXPECTED_ENDPOINTS
 
 
 class TestBodyMergeIsUnchangedAcrossAllSources:

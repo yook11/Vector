@@ -42,7 +42,7 @@ from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
-from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.article_source import AcquirableSource
 
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 
@@ -51,7 +51,7 @@ FetchItem = AnalyzableArticle | ObservedArticle | AcquisitionConversionRejection
 
 
 async def drive_source(
-    source: ArticleSource,
+    source: AcquirableSource,
     *,
     tools: ReaderTools,
     source_id: int = 1,

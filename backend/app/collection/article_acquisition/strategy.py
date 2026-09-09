@@ -1,4 +1,4 @@
-"""``ArticleSource`` レジストリ (composition root)。
+"""``AcquirableSource`` レジストリ (composition root)。
 
 ``acquire_source`` task が参照する唯一の dispatch エントリポイント。env を
 読まず hardcode (Pure DI)、判定キーは ``news_sources.name``。
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.article_source import AcquirableSource
 from app.collection.sources.definitions.anthropic import AnthropicSource
 from app.collection.sources.definitions.cleantechnica import CleanTechnicaSource
 from app.collection.sources.definitions.cloudflare import CloudflareBlogSource
@@ -65,7 +65,7 @@ from app.collection.sources.definitions.venturebeat import VentureBeatSource
 from app.collection.sources.source_name import SourceName
 
 # 順序は既存登録順を踏襲 (登録順の安定性を保つ)。
-_SOURCES_LIST: Final[tuple[ArticleSource, ...]] = (
+_SOURCES_LIST: Final[tuple[AcquirableSource, ...]] = (
     VentureBeatSource,
     TechCrunchSource,
     QuantumInsiderSource,
@@ -113,7 +113,7 @@ _SOURCES_LIST: Final[tuple[ArticleSource, ...]] = (
     MDPINanomaterialsSource,
 )
 
-# ``SourceName → ArticleSource`` レジストリ。
-SOURCES: Final[dict[SourceName, ArticleSource]] = {
+# ``SourceName → AcquirableSource`` レジストリ。
+SOURCES: Final[dict[SourceName, AcquirableSource]] = {
     source.name: source for source in _SOURCES_LIST
 }

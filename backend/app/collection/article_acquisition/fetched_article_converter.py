@@ -28,7 +28,7 @@ from app.collection.domain.canonical_article_url import (
 )
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.source_metadata import SourceMetadata
 from app.collection.sources.source_name import SourceName
 
 logger = structlog.get_logger(__name__)
@@ -91,7 +91,7 @@ def _reject(
 def unexpected_rejection(
     fetched: FetchedArticle,
     *,
-    source: ArticleSource,
+    source: SourceMetadata,
     cause: Exception,
 ) -> AcquisitionConversionRejection:
     """想定外 bug を ``UNEXPECTED_ERROR`` の ``AcquisitionConversionRejection`` に
@@ -121,7 +121,7 @@ def unexpected_rejection(
 def convert_fetched_article(
     fetched: FetchedArticle,
     *,
-    source: ArticleSource,
+    source: SourceMetadata,
     source_id: int,
 ) -> AnalyzableArticle | ObservedArticle | AcquisitionConversionRejection:
     """1 ``FetchedArticle`` を「何ができたか」に変換する (想定内に total)。

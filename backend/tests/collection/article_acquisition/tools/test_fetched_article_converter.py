@@ -28,7 +28,6 @@ from app.collection.article_acquisition.fetched_article_converter import (
     convert_fetched_article,
     unexpected_rejection,
 )
-from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MAX_LENGTH,
@@ -45,8 +44,8 @@ from app.collection.sources.article_completion_policy import (
     CompletableField,
     FieldCompletionRule,
 )
-from app.collection.sources.article_source import ArticleSource
-from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
+from app.collection.sources.source_metadata import SourceMetadata
 from app.collection.sources.source_name import SourceName
 
 _PUBLISHED = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
@@ -67,26 +66,14 @@ def _source(
     *,
     origin: ObservedOrigin = ObservedOrigin.feed,
     profile: ArticleCompletionPolicy = DEFAULT_POLICY,
-) -> ArticleSource:
-    """``convert_fetched_article`` が読む 3 属性を持つ fake Source。
+) -> SourceMetadata:
+    """変換に必要なソース情報だけを公開する。"""
 
-    ``read`` / ``map_entry`` は本変換器からは呼ばれないが ``ArticleSource`` を
-    構造的に満たすため no-op を置く (in_scope/select は ``BaseArticleSource``)。
-    """
-
-    class _FakeSource(BaseArticleSource):
+    class _FakeSource:
         name: ClassVar[SourceName] = _SOURCE_NAME
-        endpoint_url: ClassVar[str] = "https://example.test/feed"
         observed_origin: ClassVar[ObservedOrigin] = origin
         completion_policy: ClassVar[ArticleCompletionPolicy] = profile
-
-        @classmethod
-        async def read(cls, tools: ReaderTools) -> list[FetchedArticle]:  # noqa: ARG003
-            return []
-
-        @classmethod
-        def map_entry(cls, entry: FetchedArticle) -> FetchedArticle:
-            return entry
+        fetch_cadence: ClassVar[FetchCadence] = FetchCadence.MEDIUM
 
     return _FakeSource
 
