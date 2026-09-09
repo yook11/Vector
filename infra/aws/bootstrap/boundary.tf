@@ -113,6 +113,10 @@ locals {
       boundary   = aws_iam_policy.outbox_relay_lambda_boundary.arn
       role_names = ["${var.name_prefix}-outbox-relay-lambda"]
     }
+    EmbeddingConsumerLambda = {
+      boundary   = aws_iam_policy.embedding_consumer_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-embedding-consumer-lambda"]
+    }
     OutboxRelayScheduler = {
       boundary   = aws_iam_policy.outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-outbox-relay-scheduler"]

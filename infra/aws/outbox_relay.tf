@@ -13,10 +13,15 @@ locals {
 resource "aws_sqs_queue" "outbox" {
   for_each = local.outbox_queue_stages
 
-  name                      = "${var.name_prefix}-article-${each.key}"
-  fifo_queue                = false
-  sqs_managed_sse_enabled   = true
-  message_retention_seconds = 1209600
+  name                       = "${var.name_prefix}-article-${each.key}"
+  fifo_queue                 = false
+  sqs_managed_sse_enabled    = true
+  message_retention_seconds  = each.key == "embedding" ? 345600 : 1209600
+  visibility_timeout_seconds = each.key == "embedding" ? 720 : 30
+  redrive_policy = each.key == "embedding" ? jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.embedding_dlq.arn
+    maxReceiveCount     = 5
+  }) : null
 }
 
 resource "aws_security_group" "outbox_relay" {
