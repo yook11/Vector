@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,8 +19,18 @@ from app.audit.domain.event import Stage
 from app.collection.article_acquisition.errors import (
     AcquisitionReadError,
 )
+from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
+from app.collection.article_acquisition.repository import IncompleteArticleRepository
+from app.collection.article_acquisition.strategy import SOURCES
 from app.collection.external_fetch_errors import FetchSsrfBlockedError
+from app.collection.persistence.analyzable_article_repository import (
+    AnalyzableArticleRepository,
+)
+from app.collection.sources.definitions.venturebeat import VentureBeatSource
+from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
+from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.tasks import acquisition as collection_tasks
@@ -123,6 +135,104 @@ async def _failed_event(db_session: AsyncSession) -> PipelineEvent:
         .scalars()
         .one()
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", ["Full article body. " * 30, "Short summary."])
+async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
+    body: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """先行候補の実DB保存を取り消し、固有関数の失敗原因だけを監査に残す。"""
+    saved_ids: list[int] = []
+    cause = ValueError("invalid footer")
+    error = RuntimeError("body transform failed")
+    repository = (
+        AnalyzableArticleRepository if len(body) > 100 else IncompleteArticleRepository
+    )
+    original_save = repository.save
+
+    async def save_and_record(self: Any, *args: Any, **kwargs: Any) -> int | None:
+        saved_id = await original_save(self, *args, **kwargs)
+        assert saved_id is not None
+        saved_ids.append(saved_id)
+        return saved_id
+
+    monkeypatch.setattr(repository, "save", save_and_record)
+
+    class FailingSource(VentureBeatSource):
+        @staticmethod
+        def transform_body(value: str) -> str:
+            if value == "fail":
+                assert len(saved_ids) == 1
+                raise error from cause
+            return value
+
+    first = RssEntry(
+        link="https://venturebeat.com/ai/first",
+        title="First article",
+        guid=None,
+        published=datetime(2026, 5, 1, tzinfo=UTC),
+        summary=None,
+        content_encoded=body,
+        tags=(),
+        raw_published=None,
+        raw_updated=None,
+    )
+    reader = AsyncMock(
+        return_value=[
+            first,
+            replace(
+                first, link="https://venturebeat.com/ai/second", content_encoded="fail"
+            ),
+        ]
+    )
+    monkeypatch.setattr(RssReader, "fetch", reader)
+    monkeypatch.setitem(SOURCES, VentureBeatSource.name, FailingSource)
+    enqueue = AsyncMock()
+    monkeypatch.setattr(collection_tasks.curate_content, "kiq", enqueue)
+
+    with pytest.raises(RuntimeError) as caught:
+        await collection_tasks.acquire_source(
+            AcquireSourceTaskInput(id=vb_source.id, name=str(vb_source.name)),
+            ctx=_ctx(session_factory),  # type: ignore[arg-type]
+        )
+
+    assert caught.value is error
+    assert caught.value.__cause__ is cause
+    assert len(saved_ids) == 1
+    for model in (AnalyzableArticleRecord, IncompleteArticle):
+        assert not (
+            await db_session.scalars(
+                select(model.id).where(model.source_id == vb_source.id)
+            )
+        ).all()
+    assert not (
+        await db_session.scalars(
+            select(OutboxEvent.event_id).where(
+                OutboxEvent.payload["source_id"].as_integer() == vb_source.id
+            )
+        )
+    ).all()
+    events = (
+        await db_session.scalars(
+            select(PipelineEvent).where(PipelineEvent.source_id == vb_source.id)
+        )
+    ).all()
+    assert len(events) == 1
+    row = events[0]
+    assert row.event_type == "failed"
+    assert row.outcome_code == "unexpected_error"
+    assert row.error_class == "builtins.RuntimeError"
+    assert row.payload["error_message"] == "body transform failed"
+    assert row.payload["error_chain"] == [
+        "builtins.RuntimeError",
+        "builtins.ValueError",
+    ]
+    enqueue.assert_not_awaited()
 
 
 @pytest.mark.asyncio

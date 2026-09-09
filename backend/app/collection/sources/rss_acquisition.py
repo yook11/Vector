@@ -9,6 +9,9 @@ from app.collection.sources.source_metadata import SourceMetadata
 
 class RssBodyPolicy(StrEnum):
     DISCARD = "discard"
+    CONTENT_ENCODED = "content_encoded"
+    LONGEST_CONTENT_OR_SUMMARY = "longest_content_or_summary"
+    CONTENT_OR_SUMMARY = "content_or_summary"
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,9 +15,7 @@ async def fetch_articles[T](
     if isinstance(source, RssSource):
         if not isinstance(source.acquisition, RssAcquisition):
             raise TypeError("unsupported acquisition declaration")
-        async for article in RssFetcher(tools.rss).fetch(
-            source.acquisition, source_name=str(source.name)
-        ):
+        async for article in RssFetcher(tools.rss).fetch(source):
             yield article
         return
     if hasattr(source, "acquisition"):
