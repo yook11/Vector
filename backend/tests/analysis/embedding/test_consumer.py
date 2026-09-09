@@ -583,3 +583,62 @@ async def test_sqs_processing_continues_after_provider_failure(
         "succeeded",
     ]
     assert embedder.embed_document.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["saved", "api_error", "invalid_vector"])
+async def test_borrowed_gemini_embedder_through_consumer(
+    db_session, session_factory, target, outcome
+):
+    """新しいEmbedderで保存・生成済み・失敗監査まで接続する。"""
+    from google.genai import errors, types
+
+    from app.analysis.embedding.embedder import GeminiEmbedder
+    from app.analysis.embedding.errors import EmbeddingFailureReason
+
+    api = AsyncMock(
+        return_value=types.EmbedContentResponse(
+            embeddings=[types.ContentEmbedding(values=[0.2] * EMBEDDING_DIMENSION)]
+        )
+    )
+    if outcome == "api_error":
+        api.side_effect = errors.ServerError(503, {"error": {"code": 503}})
+    elif outcome == "invalid_vector":
+        api.return_value = types.EmbedContentResponse(
+            embeddings=[types.ContentEmbedding(values=[])]
+        )
+    sdk_client = SimpleNamespace(
+        models=SimpleNamespace(embed_content=api), aclose=AsyncMock()
+    )
+    consumer = EmbeddingConsumer(session_factory, GeminiEmbedder(client=sdk_client))
+    event, article_id = target
+    if outcome == "saved":
+        assert (await consumer.consume(event)).reason is EmbeddingCompletionReason.SAVED
+        assert (
+            await consumer.consume(event)
+        ).reason is EmbeddingCompletionReason.ALREADY_EMBEDDED
+    else:
+        with pytest.raises(EmbeddingError) as caught:
+            await consumer.consume(event)
+        assert caught.value.reason is (
+            EmbeddingFailureReason.PROVIDER_ERROR
+            if outcome == "api_error"
+            else EmbeddingFailureReason.RESPONSE_INVALID
+        )
+    api.assert_awaited_once()
+    sdk_client.aclose.assert_not_called()
+    audits = await _events(db_session)
+    assert len(audits) == 1
+    assert audits[0].article_id == article_id
+    assert audits[0].payload["analyzed_article_id"] == event.analyzed_article_id
+    assert audits[0].event_type == ("succeeded" if outcome == "saved" else "failed")
+    stored = await db_session.get(AnalyzedArticleRecord, event.analyzed_article_id)
+    if outcome == "saved":
+        assert len(stored.embedding) == EMBEDDING_DIMENSION
+        assert list(stored.embedding) == pytest.approx(
+            [0.2] * EMBEDDING_DIMENSION, abs=0.001
+        )
+        assert audits[0].payload["ai_model"] == "gemini-embedding-001"
+        assert audits[0].payload["vector_dimension"] == EMBEDDING_DIMENSION
+    else:
+        assert stored.embedding is None
