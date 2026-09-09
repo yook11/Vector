@@ -8,13 +8,13 @@ from uuid import UUID
 from app.outbox.publish_errors import (
     PublishIntegrityError,
     PublishIntegrityReason,
-    PublishResponseField,
     PublishResponseInvalidReason,
 )
 from app.outbox.publisher import PublishFailed, PublishSucceeded
 from app.outbox.sqs_error_mapping import publish_error_from_sqs_entry
+from app.outbox.sqs_message import SqsMessage
 from app.outbox.sqs_message_batch import SqsMessageBatch
-from app.outbox.sqs_response_errors import InvalidSqsBatchResponse
+from app.outbox.sqs_response_errors import InvalidSqsBatchResponse, SqsResponseField
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +45,7 @@ class SqsBatchResponse:
 
 
 def _required_string(
-    entry: dict[str, object], key: str, *, field: PublishResponseField
+    entry: dict[str, object], key: str, *, field: SqsResponseField
 ) -> str:
     if key not in entry:
         raise InvalidSqsBatchResponse(
@@ -67,20 +67,20 @@ def _decode_successful_entry(entry: object) -> SqsSuccessfulEntry:
     if not isinstance(entry, dict):
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.INVALID_TYPE,
-            field=PublishResponseField.SUCCESSFUL_ENTRY,
+            field=SqsResponseField.SUCCESSFUL_ENTRY,
         )
     body_md5 = _required_string(
-        entry, "MD5OfMessageBody", field=PublishResponseField.BODY_CHECKSUM
+        entry, "MD5OfMessageBody", field=SqsResponseField.BODY_CHECKSUM
     )
     if re.fullmatch(r"[0-9a-fA-F]{32}", body_md5) is None:
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT,
-            field=PublishResponseField.BODY_CHECKSUM,
+            field=SqsResponseField.BODY_CHECKSUM,
         )
     return SqsSuccessfulEntry(
-        id=_required_string(entry, "Id", field=PublishResponseField.ENTRY_ID),
+        id=_required_string(entry, "Id", field=SqsResponseField.ENTRY_ID),
         message_id=_required_string(
-            entry, "MessageId", field=PublishResponseField.MESSAGE_ID
+            entry, "MessageId", field=SqsResponseField.MESSAGE_ID
         ),
         md5_of_message_body=body_md5.lower(),
     )
@@ -90,21 +90,21 @@ def _decode_failed_entry(entry: object) -> SqsFailedEntry:
     if not isinstance(entry, dict):
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.INVALID_TYPE,
-            field=PublishResponseField.FAILED_ENTRY,
+            field=SqsResponseField.FAILED_ENTRY,
         )
     if "SenderFault" not in entry:
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.MISSING_REQUIRED_FIELD,
-            field=PublishResponseField.SENDER_FAULT,
+            field=SqsResponseField.SENDER_FAULT,
         )
     if type(entry["SenderFault"]) is not bool:
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.INVALID_TYPE,
-            field=PublishResponseField.SENDER_FAULT,
+            field=SqsResponseField.SENDER_FAULT,
         )
     return SqsFailedEntry(
-        id=_required_string(entry, "Id", field=PublishResponseField.ENTRY_ID),
-        code=_required_string(entry, "Code", field=PublishResponseField.ERROR_CODE),
+        id=_required_string(entry, "Id", field=SqsResponseField.ENTRY_ID),
+        code=_required_string(entry, "Code", field=SqsResponseField.ERROR_CODE),
         sender_fault=entry["SenderFault"],
     )
 
@@ -114,19 +114,19 @@ def decode_sqs_batch_response(response: object) -> SqsBatchResponse:
     if not isinstance(response, dict):
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.INVALID_TYPE,
-            field=PublishResponseField.RESPONSE,
+            field=SqsResponseField.RESPONSE,
         )
     successful = response.get("Successful", [])
     failed = response.get("Failed", [])
     if not isinstance(successful, list):
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.INVALID_TYPE,
-            field=PublishResponseField.SUCCESSFUL_ENTRIES,
+            field=SqsResponseField.SUCCESSFUL_ENTRIES,
         )
     if not isinstance(failed, list):
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.INVALID_TYPE,
-            field=PublishResponseField.FAILED_ENTRIES,
+            field=SqsResponseField.FAILED_ENTRIES,
         )
     metadata = response.get("ResponseMetadata")
     request_id = metadata.get("RequestId") if isinstance(metadata, dict) else None
@@ -146,19 +146,37 @@ def validate_sqs_batch_event_ids(
         if entry.id not in event_ids:
             raise InvalidSqsBatchResponse(
                 reason=PublishResponseInvalidReason.UNKNOWN_ENTRY_ID,
-                field=PublishResponseField.ENTRY_ID,
+                field=SqsResponseField.ENTRY_ID,
             )
         if entry.id in seen:
             raise InvalidSqsBatchResponse(
                 reason=PublishResponseInvalidReason.DUPLICATE_ENTRY_ID,
-                field=PublishResponseField.ENTRY_ID,
+                field=SqsResponseField.ENTRY_ID,
             )
         seen.add(entry.id)
     if seen != event_ids:
         raise InvalidSqsBatchResponse(
             reason=PublishResponseInvalidReason.MISSING_ENTRY_ID,
-            field=PublishResponseField.ENTRY_ID,
+            field=SqsResponseField.ENTRY_ID,
         )
+
+
+def _verify_sqs_body_checksum(
+    entry: SqsSuccessfulEntry,
+    *,
+    message: SqsMessage,
+    request_id: str | None,
+) -> PublishSucceeded | PublishFailed:
+    """SQSが返した本文のMD5を送信本文と照合し、送信結果を返す。"""
+    if entry.md5_of_message_body == message.body_md5:
+        return PublishSucceeded(message.event_id)
+    return PublishFailed(
+        message.event_id,
+        PublishIntegrityError(
+            reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH,
+            request_id=request_id,
+        ),
+    )
 
 
 def results_from_sqs_batch_response(
@@ -171,17 +189,9 @@ def results_from_sqs_batch_response(
     results: dict[UUID, PublishSucceeded | PublishFailed] = {}
     for entry in decoded.successful:
         message = messages_by_id[entry.id]
-        event_id = message.event_id
-        if entry.md5_of_message_body == message.body_md5:
-            results[event_id] = PublishSucceeded(event_id)
-        else:
-            results[event_id] = PublishFailed(
-                event_id,
-                PublishIntegrityError(
-                    reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH,
-                    request_id=decoded.request_id,
-                ),
-            )
+        results[message.event_id] = _verify_sqs_body_checksum(
+            entry, message=message, request_id=decoded.request_id
+        )
     for entry in decoded.failed:
         event_id = messages_by_id[entry.id].event_id
         error = publish_error_from_sqs_entry(

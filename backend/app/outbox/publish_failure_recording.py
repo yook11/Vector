@@ -21,9 +21,9 @@ from app.outbox.repository import ClaimedOutboxEvent
 
 logger = structlog.get_logger(__name__)
 CONFIGURATION_FAILURE_METRIC = "outbox_publish_configuration_failure"
-_SQS_BODY_CHECKSUM_MISMATCH_MESSAGE = (
-    "SQSへ送信した本文と、SQSが受け取った本文のチェックサムが一致しません。"
-    "SQSには受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
+_BODY_CHECKSUM_MISMATCH_MESSAGE = (
+    "送信した本文と、送信先が受け取った本文のチェックサムが一致しません。"
+    "送信先には受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
 )
 
 
@@ -76,14 +76,11 @@ def record_publish_failure(
         ):
             fields["error_reason"] = error.reason.value
         elif isinstance(error, PublishResponseInvalidError):
-            fields.update(
-                error_reason=error.reason.value,
-                response_field=error.field.value,
-            )
+            fields["error_reason"] = error.reason.value
         elif isinstance(error, PublishIntegrityError):
             fields.update(
                 error_reason=error.reason.value,
-                error_message=_SQS_BODY_CHECKSUM_MISMATCH_MESSAGE,
+                error_message=_BODY_CHECKSUM_MISMATCH_MESSAGE,
             )
         elif isinstance(error, PublishTransportError):
             fields["transport_kind"] = error.failure.kind.value

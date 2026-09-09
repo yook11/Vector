@@ -24,7 +24,6 @@ from app.outbox.publish_errors import (
     PublishConfigurationReason,
     PublishError,
     PublishPhase,
-    PublishResponseField,
     PublishResponseInvalidError,
     PublishResponseInvalidReason,
     PublishServiceError,
@@ -38,6 +37,7 @@ from app.outbox.sqs_error_mapping import (
     publish_error_from_exception,
     publish_error_from_sqs_entry,
 )
+from app.outbox.sqs_response_errors import SqsResponseField
 
 CASES = [
     ("throttled", "RequestThrottled KmsThrottled ThrottlingException"),
@@ -393,17 +393,16 @@ def test_classifier_process_exit_is_not_converted(monkeypatch):
 
 
 @pytest.mark.parametrize("reason", list(PublishResponseInvalidReason))
-def test_response_violation_preserves_reason_field_and_cause(reason):
+def test_response_violation_keeps_sqs_field_only_in_cause(reason):
     """検出済みの応答違反を想定外へ落とさず、共通契約と原因を保持する。"""
     from app.outbox.sqs_response_errors import InvalidSqsBatchResponse
 
-    original = InvalidSqsBatchResponse(
-        reason=reason, field=PublishResponseField.ENTRY_ID
-    )
+    original = InvalidSqsBatchResponse(reason=reason, field=SqsResponseField.ENTRY_ID)
     error = publish_error_from_exception(original, phase=PublishPhase.SEND)
     assert isinstance(error, PublishResponseInvalidError)
     assert error.reason is reason
-    assert error.field is PublishResponseField.ENTRY_ID
+    assert not hasattr(error, "field")
+    assert original.field is SqsResponseField.ENTRY_ID
     assert error.__cause__ is original
     assert publish_error_from_exception(error, phase=PublishPhase.SEND) is error
 
@@ -417,7 +416,7 @@ def test_response_violation_outside_send_remains_unexpected(phase):
 
     original = InvalidSqsBatchResponse(
         reason=PublishResponseInvalidReason.INVALID_TYPE,
-        field=PublishResponseField.RESPONSE,
+        field=SqsResponseField.RESPONSE,
     )
     error = publish_error_from_exception(original, phase=phase)
     assert isinstance(error, PublishUnexpectedError)
@@ -431,7 +430,7 @@ def test_response_violation_mapping_failure_retains_original(monkeypatch):
 
     original = InvalidSqsBatchResponse(
         reason=PublishResponseInvalidReason.INVALID_TYPE,
-        field=PublishResponseField.RESPONSE,
+        field=SqsResponseField.RESPONSE,
     )
     monkeypatch.setattr(
         mapping,

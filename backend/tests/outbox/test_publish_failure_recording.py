@@ -24,7 +24,6 @@ from app.outbox.publish_errors import (
     PublishIntegrityError,
     PublishIntegrityReason,
     PublishPhase,
-    PublishResponseField,
     PublishResponseInvalidError,
     PublishResponseInvalidReason,
     PublishServiceError,
@@ -96,9 +95,7 @@ CASES = [
     ],
     *[
         (
-            PublishResponseInvalidError(
-                reason=reason, field=PublishResponseField.ENTRY_ID
-            ),
+            PublishResponseInvalidError(reason=reason),
             False,
         )
         for reason in PublishResponseInvalidReason
@@ -155,7 +152,7 @@ def test_all_reasons_log_stops_and_only_six_reasons_emit_metric(
         assert log["transport_kind"] == error.failure.kind.value
     elif isinstance(error, PublishResponseInvalidError):
         assert log["error_reason"] == error.reason.value
-        assert log["response_field"] == error.field.value
+        assert "response_field" not in log
         assert "original_exception_type" not in log
     elif isinstance(error, PublishUnexpectedError):
         assert log["phase"] == error.phase.value
@@ -338,7 +335,6 @@ async def test_handler_composition_records_only_committed_stops(
         elif failure_kind == "response_invalid":
             error = PublishResponseInvalidError(
                 reason=PublishResponseInvalidReason.MISSING_ENTRY_ID,
-                field=PublishResponseField.ENTRY_ID,
             )
         else:
             error = CASES[0][0]
@@ -374,7 +370,7 @@ async def test_handler_composition_records_only_committed_stops(
     if failure_kind == "response_invalid" and mode == "committed":
         stop = next(log for log in logs if log["event"] == "outbox_delivery_stopped")
         assert stop["error_reason"] == "missing_entry_id"
-        assert stop["response_field"] == "entry_id"
+        assert "response_field" not in stop
         assert not stop["requires_configuration_fix"]
 
 
@@ -395,8 +391,8 @@ def test_integrity_failure_message_is_fixed_and_private_diagnostics_are_excluded
     assert not recording.requires_publish_configuration_fix(error)
     assert len(logs) == 1
     assert logs[0]["error_message"] == (
-        "SQSへ送信した本文と、SQSが受け取った本文のチェックサムが一致しません。"
-        "SQSには受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
+        "送信した本文と、送信先が受け取った本文のチェックサムが一致しません。"
+        "送信先には受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
     )
     assert logs[0]["error_reason"] == "body_checksum_mismatch"
     assert logs[0]["error_code"] == "publish_integrity_error"

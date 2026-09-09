@@ -4,12 +4,15 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from uuid import UUID
 
+import structlog
 from botocore.client import BaseClient
 from botocore.session import Session
 
+from app.analysis.assessment.events import ArticleAssessedInScope
 from app.outbox.publish_errors import (
-    PublishCleanupError,
     PublishError,
+    PublishEventInvalidError,
+    PublishEventInvalidReason,
     PublishPhase,
 )
 from app.outbox.publisher import (
@@ -26,6 +29,9 @@ from app.outbox.sqs_error_mapping import (
 )
 from app.outbox.sqs_message import SqsMessage
 from app.outbox.sqs_message_batch import MAX_BATCH_MESSAGES, SqsMessageBatch
+from app.outbox.sqs_response_errors import InvalidSqsBatchResponse
+
+logger = structlog.get_logger(__name__)
 
 
 def failed_results(
@@ -73,6 +79,10 @@ class SqsEventPublisher:
         messages: list[SqsMessage] = []
         for envelope in envelopes:
             try:
+                if envelope.event_type != ArticleAssessedInScope.EVENT_TYPE:
+                    raise PublishEventInvalidError(
+                        reason=PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
+                    )
                 message = SqsMessage.from_envelope(envelope)
             except Exception as exc:
                 error = publish_error_from_exception(
@@ -81,14 +91,11 @@ class SqsEventPublisher:
                 results[envelope.event_id] = PublishFailed(envelope.event_id, error)
             else:
                 messages.append(message)
-        cleanup_error = None
         if messages:
             batch = SqsMessageBatch(messages=tuple(messages))
-            sent_results, cleanup_error = self._send_batch(batch)
-            results.update(sent_results)
+            results.update(self._send_batch(batch))
         return BatchPublishResult(
             results=tuple(results[envelope.event_id] for envelope in envelopes),
-            cleanup_error=cleanup_error,
         )
 
     @staticmethod
@@ -112,24 +119,34 @@ class SqsEventPublisher:
 
     def _send_batch(
         self, batch: SqsMessageBatch
-    ) -> tuple[
-        Mapping[UUID, PublishSucceeded | PublishFailed], PublishCleanupError | None
-    ]:
+    ) -> Mapping[UUID, PublishSucceeded | PublishFailed]:
         try:
             client = self._client_factory()
         except Exception as exc:
             error = publish_error_from_exception(exc, phase=PublishPhase.INITIALIZE)
-            return failed_results(batch, error=error), None
+            return failed_results(batch, error=error)
 
-        cleanup_error = None
         try:
             results = self._send_messages(client, batch)
         finally:
             try:
                 client.close()
             except Exception as exc:
-                cleanup_error = publish_cleanup_error_from_exception(exc)
-        return results, cleanup_error
+                self._record_cleanup_error(exc)
+        return results
+
+    @staticmethod
+    def _record_cleanup_error(exc: Exception) -> None:
+        """終了診断の通常失敗が、送信結果や先行例外を上書きしないようにする。"""
+        try:
+            error = publish_cleanup_error_from_exception(exc)
+            logger.warning(
+                "outbox_publish_cleanup_failed",
+                error_code=error.CODE,
+                original_exception_type=error.original_exception_type,
+            )
+        except Exception:  # noqa: S110 — 診断出力を再帰させず元の結果を維持する。
+            pass
 
     def _send_messages(
         self, client: BaseClient, batch: SqsMessageBatch
@@ -150,5 +167,22 @@ class SqsEventPublisher:
         try:
             return results_from_sqs_batch_response(response, batch=batch)
         except Exception as exc:
+            if isinstance(exc, InvalidSqsBatchResponse):
+                self._record_invalid_response(exc, batch=batch)
             error = publish_error_from_exception(exc, phase=PublishPhase.SEND)
             return failed_results(batch, error=error)
+
+    @staticmethod
+    def _record_invalid_response(
+        error: InvalidSqsBatchResponse, *, batch: SqsMessageBatch
+    ) -> None:
+        """送信対象のIDと固定の診断項目だけを記録し、出力障害を配信へ戻さない。"""
+        try:
+            logger.warning(
+                "outbox_sqs_response_invalid",
+                error_reason=error.reason.value,
+                response_field=error.field.value,
+                event_ids=[str(message.event_id) for message in batch.messages],
+            )
+        except Exception:  # noqa: S110 — 診断出力を再帰させず送信結果を維持する。
+            pass

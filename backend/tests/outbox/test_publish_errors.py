@@ -10,7 +10,6 @@ from app.outbox.publish_errors import (
     PublishError,
     PublishEventInvalidError,
     PublishEventInvalidReason,
-    PublishResponseField,
     PublishResponseInvalidError,
     PublishResponseInvalidReason,
     PublishServiceError,
@@ -188,22 +187,16 @@ def test_integrity_error_displays_fixed_message_without_private_diagnostics():
     assert marker not in repr(error)
 
 
-@pytest.mark.parametrize("field", list(PublishResponseField))
-def test_response_invalid_error_exposes_only_fixed_diagnostics(field):
-    """外部の値や原因文面を表示せず、違反理由と項目だけを公開する。"""
-    error = PublishResponseInvalidError(
-        reason=PublishResponseInvalidReason.INVALID_TYPE, field=field
-    )
+@pytest.mark.parametrize("reason", list(PublishResponseInvalidReason))
+def test_response_invalid_error_exposes_only_fixed_diagnostics(reason):
+    """共通の違反理由だけを公開し、SQSの項目や原因文面を表示しない。"""
+    error = PublishResponseInvalidError(reason=reason)
     error.__cause__ = ValueError("PRIVATE_BODY_QUEUE_CREDENTIAL")
     assert isinstance(error, PublishError)
     assert error.CODE == "publish_response_invalid"
-    assert vars(error) == {
-        "reason": PublishResponseInvalidReason.INVALID_TYPE,
-        "field": field,
-    }
+    assert vars(error) == {"reason": reason}
     assert error.args == ()
     assert error.reason.value in str(error)
-    assert field.value in str(error)
     assert "PRIVATE" not in str(error)
     assert "PRIVATE" not in repr(error)
 
@@ -216,7 +209,7 @@ def test_response_invalid_keeps_reason_without_raw_values_at_logfire_export(capf
     from app.outbox.publish_errors import PublishPhase
     from app.outbox.sqs_batch_response import decode_sqs_batch_response
     from app.outbox.sqs_error_mapping import publish_error_from_exception
-    from app.outbox.sqs_response_errors import InvalidSqsBatchResponse
+    from app.outbox.sqs_response_errors import InvalidSqsBatchResponse, SqsResponseField
 
     install_exception_redaction()
     marker = "PRIVATE_BODY_QUEUE_CREDENTIAL"
@@ -231,10 +224,10 @@ def test_response_invalid_keeps_reason_without_raw_values_at_logfire_export(capf
                     exc, phase=PublishPhase.SEND
                 ) from exc
     assert caught.value.reason is PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT
-    assert caught.value.field is PublishResponseField.BODY_CHECKSUM
+    assert not hasattr(caught.value, "field")
     assert vars(caught.value.__cause__) == {
         "reason": PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT,
-        "field": PublishResponseField.BODY_CHECKSUM,
+        "field": SqsResponseField.BODY_CHECKSUM,
     }
     spans = capfire.exporter.exported_spans
     assert spans

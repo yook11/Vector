@@ -1,5 +1,6 @@
 """送信準備と、本文とMD5の対応を SqsMessage の契約として検証する。"""
 
+import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta, timezone
 from hashlib import md5
@@ -90,14 +91,16 @@ def test_from_envelope_keeps_utc_instant_and_fractional_seconds(envelope):
     assert '"occurred_at": "2026-09-07T03:00:00.123456Z"' in message.body
 
 
+@pytest.mark.parametrize("event_type", ["article.acquired", "future.event"])
+def test_from_envelope_preserves_event_type_without_routing(envelope, event_type):
+    """送信先の対応可否に依存せず、イベント種別を本文に保持する。"""
+    message = SqsMessage.from_envelope(replace(envelope, event_type=event_type))
+    assert json.loads(message.body)["event_type"] == event_type
+
+
 @pytest.mark.parametrize(
     "field,value,reason",
     [
-        (
-            "event_type",
-            "article.acquired",
-            PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE,
-        ),
         (
             "occurred_at",
             datetime(2026, 9, 7),
