@@ -505,3 +505,81 @@ async def test_loads_once_and_closes_read_connection_before_ai(
     finally:
         for name, callback in listeners:
             sqlalchemy_event.remove(engine, name, callback)
+
+
+def _sqs_record(message_id, payload):
+    from uuid import UUID
+
+    from app.analysis.assessment.events import ArticleAssessedInScopeEvent
+    from app.outbox.sqs.message import SqsMessage
+
+    event = ArticleAssessedInScopeEvent(
+        event_id=UUID(int=1),
+        event_type=payload.EVENT_TYPE,
+        schema_version=payload.SCHEMA_VERSION,
+        occurred_at=datetime.now(UTC),
+        payload=payload,
+    )
+    return {"messageId": message_id, "body": SqsMessage.from_event(event).body}
+
+
+@pytest.mark.asyncio
+async def test_sqs_processing_saves_once_and_records_only_business_failures(
+    db_session, session_factory, target, embedder, capsys
+):
+    """保存・生成済み・本文不正・記事不存在を実Consumerへ接続し監査を重ねない。"""
+    from app.lambda_handlers.embedding import process_embedding_messages
+
+    payload, article_id = target
+    missing = ArticleAssessedInScope(curation_id=999999, analyzed_article_id=999999)
+    response = await process_embedding_messages(
+        {
+            "Records": [
+                _sqs_record("saved", payload),
+                _sqs_record("already", payload),
+                {"messageId": "invalid", "body": "not-json"},
+                _sqs_record("missing", missing),
+            ]
+        },
+        consumer=EmbeddingConsumer(session_factory, embedder),
+    )
+    assert response == {
+        "batchItemFailures": [
+            {"itemIdentifier": "invalid"},
+            {"itemIdentifier": "missing"},
+        ]
+    }
+    audits = await _events(db_session)
+    assert [audit.event_type for audit in audits] == ["succeeded", "failed"]
+    assert audits[0].article_id == article_id
+    assert audits[1].outcome_code == "embedding_analyzed_article_missing"
+    assert (
+        await db_session.get(AnalyzedArticleRecord, payload.analyzed_article_id)
+    ).embedding is not None
+    embedder.embed_document.assert_awaited_once()
+    outcomes = metric_records(capsys.readouterr().out, "processing_outcome")
+    assert [r["result"] for r in outcomes] == ["succeeded", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_sqs_processing_continues_after_provider_failure(
+    db_session, session_factory, target, embedder
+):
+    """API失敗を応答へ残し、次のメッセージの保存と監査を確定する。"""
+    from app.lambda_handlers.embedding import process_embedding_messages
+
+    payload, _ = target
+    embedder.embed_document.side_effect = [
+        AIProviderNetworkError(),
+        EmbeddingVector(root=(0.2,) * EMBEDDING_DIMENSION),
+    ]
+    response = await process_embedding_messages(
+        {"Records": [_sqs_record("failed", payload), _sqs_record("saved", payload)]},
+        consumer=EmbeddingConsumer(session_factory, embedder),
+    )
+    assert response == {"batchItemFailures": [{"itemIdentifier": "failed"}]}
+    assert [audit.event_type for audit in await _events(db_session)] == [
+        "failed",
+        "succeeded",
+    ]
+    assert embedder.embed_document.await_count == 2

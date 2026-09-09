@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -11,7 +12,11 @@ from app.outbox.publishing.errors import (
     PublishIntegrityReason,
     PublishResponseInvalidReason,
 )
-from app.outbox.publishing.publisher import PublishFailed, PublishSucceeded
+from app.outbox.publishing.publisher import (
+    EventEnvelope,
+    PublishFailed,
+    PublishSucceeded,
+)
 from app.outbox.sqs.batch_response import (
     SqsBatchResponse,
     SqsFailedEntry,
@@ -20,7 +25,7 @@ from app.outbox.sqs.batch_response import (
     results_from_sqs_batch_response,
     validate_sqs_batch_event_ids,
 )
-from app.outbox.sqs.message import SqsMessage
+from app.outbox.sqs.event_batch import EventBatch
 from app.outbox.sqs.message_batch import SqsMessageBatch
 from app.outbox.sqs.response_errors import InvalidSqsBatchResponse, SqsResponseField
 
@@ -28,6 +33,23 @@ EVENT_ID = str(UUID(int=1))
 SECOND_ID = str(UUID(int=2))
 EMPTY_JSON_MD5 = "99914b932bd37a50b983c5e7c90ae93b"
 OTHER_MD5 = "900150983cd24fb0d6963f7d28e17f72"
+
+
+def batch_for(*ids):
+    return SqsMessageBatch(
+        EventBatch(
+            [
+                EventEnvelope(
+                    UUID(id_),
+                    "article.assessed_in_scope",
+                    1,
+                    datetime(2026, 9, 7, tzinfo=UTC),
+                    {"curation_id": 123, "analyzed_article_id": 456},
+                )
+                for id_ in ids
+            ]
+        )
+    )
 
 
 def successful(id_=EVENT_ID, checksum=EMPTY_JSON_MD5):
@@ -137,7 +159,7 @@ def test_invalid_md5_format_is_not_an_integrity_mismatch(value):
     with pytest.raises(InvalidSqsBatchResponse) as caught:
         results_from_sqs_batch_response(
             {"Successful": [successful(checksum=value)]},
-            batch=SqsMessageBatch(messages=(SqsMessage(UUID(EVENT_ID), "{}"),)),
+            batch=batch_for(EVENT_ID),
         )
     assert caught.value.reason is PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT
     assert caught.value.field is SqsResponseField.BODY_CHECKSUM
@@ -208,20 +230,16 @@ def test_id_matching_is_separate_from_valid_response_shape(case):
 
 def test_successes_are_matched_by_id_before_comparing_checksums():
     """応答順が逆でも、本文の異なるイベント同士を取り違えない。"""
+    batch = batch_for(EVENT_ID, SECOND_ID)
+    messages = batch.messages
     response = {
         "Successful": [
-            successful(SECOND_ID, OTHER_MD5),
-            successful(EVENT_ID, EMPTY_JSON_MD5.upper()),
+            successful(SECOND_ID, messages[1].body_md5),
+            successful(EVENT_ID, messages[0].body_md5.upper()),
         ]
     }
-    messages = (
-        SqsMessage(UUID(EVENT_ID), "{}"),
-        SqsMessage(UUID(SECOND_ID), "abc"),
-    )
     before = deepcopy(response)
-    result = results_from_sqs_batch_response(
-        response, batch=SqsMessageBatch(messages=messages)
-    )
+    result = results_from_sqs_batch_response(response, batch=batch)
     assert result == {
         message.event_id: PublishSucceeded(message.event_id) for message in messages
     }
@@ -231,19 +249,18 @@ def test_successes_are_matched_by_id_before_comparing_checksums():
 @pytest.mark.parametrize("request_id", [None, "request-id"])
 def test_checksum_mismatch_only_fails_the_corresponding_event(request_id):
     """正しい形式のMD5不一致だけを専用の失敗にする。"""
+    batch = batch_for(EVENT_ID, SECOND_ID)
     response = {
-        "Successful": [successful(), successful(SECOND_ID, OTHER_MD5)],
+        "Successful": [
+            successful(checksum=batch.messages[0].body_md5),
+            successful(SECOND_ID, OTHER_MD5),
+        ],
     }
     if request_id is not None:
         response["ResponseMetadata"] = {"RequestId": request_id}
     result = results_from_sqs_batch_response(
         response,
-        batch=SqsMessageBatch(
-            messages=(
-                SqsMessage(UUID(EVENT_ID), "{}"),
-                SqsMessage(UUID(SECOND_ID), "{}"),
-            ),
-        ),
+        batch=batch,
     )
     assert result[UUID(EVENT_ID)] == PublishSucceeded(UUID(EVENT_ID))
     failure = result[UUID(SECOND_ID)]

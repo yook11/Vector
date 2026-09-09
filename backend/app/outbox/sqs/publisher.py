@@ -1,23 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
 from uuid import UUID
 
 import structlog
 from botocore.client import BaseClient
 from botocore.session import Session
-from pydantic import ValidationError
 
-from app.analysis.assessment.events import (
-    ArticleAssessedInScope,
-    ArticleAssessedInScopeEvent,
-    assessed_event_invalid_reason,
-)
 from app.outbox.publishing.errors import (
     PublishError,
-    PublishEventInvalidError,
-    PublishEventInvalidReason,
     PublishPhase,
 )
 from app.outbox.publishing.publisher import (
@@ -32,8 +23,8 @@ from app.outbox.sqs.error_mapping import (
     publish_cleanup_error_from_exception,
     publish_error_from_exception,
 )
-from app.outbox.sqs.message import SqsMessage
-from app.outbox.sqs.message_batch import MAX_BATCH_MESSAGES, SqsMessageBatch
+from app.outbox.sqs.event_batch import EventBatch
+from app.outbox.sqs.message_batch import SqsMessageBatch
 from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
 
 logger = structlog.get_logger(__name__)
@@ -78,69 +69,16 @@ class SqsEventPublisher:
         )
 
     def publish_batch(self, envelopes: Sequence[EventEnvelope]) -> BatchPublishResult:
-        self._validate_batch(envelopes)
-        envelopes = tuple(envelopes)
-        results: dict[UUID, PublishSucceeded | PublishFailed] = {}
-        messages: list[SqsMessage] = []
-        for envelope in envelopes:
-            try:
-                if envelope.event_type != ArticleAssessedInScope.EVENT_TYPE:
-                    raise PublishEventInvalidError(
-                        reason=PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
-                    )
-                event = self._validate_assessed_in_scope_event(envelope)
-                message = SqsMessage.from_event(event)
-            except Exception as exc:
-                error = publish_error_from_exception(
-                    exc, phase=PublishPhase.PREPARE_EVENT
-                )
-                results[envelope.event_id] = PublishFailed(envelope.event_id, error)
-            else:
-                messages.append(message)
-        if messages:
-            batch = SqsMessageBatch(messages=tuple(messages))
+        events = EventBatch(envelopes)
+        batch = SqsMessageBatch(events)
+        results: dict[UUID, PublishSucceeded | PublishFailed] = {
+            failure.event_id: failure for failure in batch.failures
+        }
+        if batch.messages:
             results.update(self._send_batch(batch))
         return BatchPublishResult(
-            results=tuple(results[envelope.event_id] for envelope in envelopes),
+            results=tuple(results[envelope.event_id] for envelope in events.envelopes),
         )
-
-    @staticmethod
-    def _validate_assessed_in_scope_event(
-        envelope: EventEnvelope,
-    ) -> ArticleAssessedInScopeEvent:
-        """対象内判定イベントを検証し、型付きpayloadとともに返す。"""
-        try:
-            event = ArticleAssessedInScopeEvent(
-                event_id=envelope.event_id,
-                event_type=envelope.event_type,
-                schema_version=envelope.schema_version,
-                occurred_at=envelope.occurred_at,
-                payload=envelope.payload,
-            )
-        except ValidationError as exc:
-            reason = PublishEventInvalidReason(assessed_event_invalid_reason(exc))
-        else:
-            return event
-        raise PublishEventInvalidError(reason=reason)
-
-    @staticmethod
-    def _validate_batch(envelopes: Sequence[EventEnvelope]) -> None:
-        if not isinstance(envelopes, Sequence) or isinstance(envelopes, (str, bytes)):
-            raise TypeError("envelopes must be a sequence of EventEnvelope")
-        if not 1 <= len(envelopes) <= MAX_BATCH_MESSAGES:
-            raise ValueError("batch must contain between one and ten events")
-        for envelope in envelopes:
-            if (
-                not isinstance(envelope, EventEnvelope)
-                or not isinstance(envelope.event_id, UUID)
-                or not isinstance(envelope.event_type, str)
-                or type(envelope.schema_version) is not int
-                or not isinstance(envelope.occurred_at, datetime)
-                or not isinstance(envelope.payload, dict)
-            ):
-                raise TypeError("invalid EventEnvelope field type")
-        if len({envelope.event_id for envelope in envelopes}) != len(envelopes):
-            raise ValueError("batch event IDs must be unique")
 
     def _send_batch(
         self, batch: SqsMessageBatch

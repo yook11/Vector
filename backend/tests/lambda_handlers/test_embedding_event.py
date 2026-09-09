@@ -187,3 +187,100 @@ def test_error_reason_precedence(data, updates, reason):
     with pytest.raises(EmbeddingEventInvalidError) as caught:
         parse_embedding_event(json.dumps(data))
     assert caught.value.reason.value == reason
+
+
+@pytest.mark.parametrize(
+    "changes,expected",
+    [
+        (
+            {"payload": {}},
+            [
+                ("payload.curation_id", "missing_required_field"),
+                ("payload.analyzed_article_id", "missing_required_field"),
+            ],
+        ),
+        (
+            {"payload": {"curation_id": True, "analyzed_article_id": 0}},
+            [
+                ("payload.curation_id", "invalid_type"),
+                ("payload.analyzed_article_id", "invalid_value"),
+            ],
+        ),
+        ({"occurred_at": "2026-09-07T03:00:00"}, [("occurred_at", "invalid_value")]),
+        ({"schema_version": 2}, [("schema_version", "unsupported_schema_version")]),
+        ({"event_type": "future"}, [("event_type", "unsupported_event_type")]),
+        ({"private-one": 1, "private-two": 2}, [("event", "unknown_field")]),
+        (
+            {
+                "payload": {
+                    "curation_id": 1,
+                    "analyzed_article_id": 2,
+                    "private-one": 1,
+                    "private-two": 2,
+                }
+            },
+            [("payload", "unknown_field")],
+        ),
+    ],
+)
+def test_validation_details_are_safe_and_deduplicated(data, changes, expected):
+    from dataclasses import FrozenInstanceError
+
+    data.update(changes)
+    with pytest.raises(EmbeddingEventInvalidError) as caught:
+        parse_embedding_event(json.dumps(data))
+    error = caught.value
+    assert [(issue.field.value, issue.code.value) for issue in error.issues] == expected
+    assert "private-" not in str(error)
+    assert "private-" not in repr(error.issues)
+    assert error.__cause__ is None and error.__context__ is None
+    with pytest.raises(FrozenInstanceError):
+        error.issues[0].field = "private-field"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"payload": {"curation_id": "private-input", "analyzed_article_id": 2}},
+        {"schema_version": 2},
+        {"event_type": "private-event"},
+        {
+            "event_type": "private-event",
+            "occurred_at": "2026-09-10T00:00:00",
+            "payload": {},
+        },
+    ],
+)
+def test_sender_and_receiver_share_validation_details(data, changes):
+    from unittest.mock import Mock
+
+    from app.outbox.publishing.publisher import EventEnvelope
+    from app.outbox.sqs.publisher import SqsEventPublisher
+
+    data.update(changes)
+    with pytest.raises(EmbeddingEventInvalidError) as received:
+        parse_embedding_event(json.dumps(data))
+    factory = Mock()
+    publisher = SqsEventPublisher(
+        embedding_queue_url="https://sqs.invalid", client_factory=factory
+    )
+    sent = (
+        publisher.publish_batch(
+            [
+                EventEnvelope(
+                    event_id=UUID(data["event_id"]),
+                    event_type=data["event_type"],
+                    schema_version=data["schema_version"],
+                    occurred_at=datetime.fromisoformat(data["occurred_at"]),
+                    payload=data["payload"],
+                )
+            ]
+        )
+        .results[0]
+        .error
+    )
+    assert sent.reason.value == received.value.reason.value
+    assert sent.issues == received.value.issues
+    assert sent.__cause__ is None and sent.__context__ is None
+    assert "private-" not in str(sent)
+    factory.assert_not_called()

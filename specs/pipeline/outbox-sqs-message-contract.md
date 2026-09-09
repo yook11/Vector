@@ -179,7 +179,7 @@ Evidence: SqsMessage.from_eventによる送信準備、SqsMessageのMD5確定、
 - 本文の既知不正はPublishEventInvalidErrorとし、理由はmessage_too_large（UTF-8が1,048,576 bytes超）のみとする。型付き契約を通過した値はJSON化に失敗しないため、serialization_failedの理由は持たない。unsupported_event_typeはPublisherが本文構築前に検出し、本文不正と重なっても優先する。いずれも既存のイベント単位のprepare_event境界で扱い、正常分の送信は続ける。Message内の想定外例外は包まず、publish_batchのprepare_eventが受け止める。
 - 本文形式は既存の5項目JSONとする。occurred_atのUTCのZ表記・小数秒の維持は`ArticleAssessedInScopeEvent`のJSON直列化が所有し、SqsMessageは`model_dump(mode="json")`の結果をそのまま`json.dumps`する。JSONの再構築や文字列の正規化は行わない。
 - 1件上限の定数はSqsMessage側が持ち、SqsMessageBatchの本文合計サイズ検査も同じ定数を使う。バッチ件数・重複ID・フィールド型・合計サイズは個別メッセージ準備の外とする。
-- publish_batchはfrom_eventの結果を並べ、正常分からSqsMessageBatchを構築して送信する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
+- publish_batchはEventBatchからSqsMessageBatchを構築し、準備に成功した本文を送信する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
 - SDK呼び出しの直前にだけ各メッセージをId/MessageBodyの辞書へ変換する。body_md5はSDKへ送信しない。
 - results_from_sqs_batch_responseも同じSqsMessageBatchを受け取り、IDで対応するメッセージを探して照合する。照合対象はEventEnvelopeではなく、送ったSqsMessageとする。
 
@@ -485,13 +485,13 @@ Done: 呼び出し側の個別失敗の変換分岐がなくなり、公開入�
 Problem: 1回で送るまとまりの件数・ID重複・合計サイズの条件を、送信処理から分離して型に定義する。
 Evidence: 既存SqsMessage、publisherの入力検証・本文準備と、送信・失敗結果・応答照合の受け渡しを対象とする。
 
-- sqs/message_batch.pyにfrozen・slotsのSqsMessageBatch(messages: tuple[SqsMessage, ...])を定義し、保持するフィールドはmessagesだけとする。
-- 構築時にtupleと要素型を確認し、次に1〜10件、event_idの重複なし、UTF-8本文合計がMAX_MESSAGE_BYTES以内を順に確認する。型違反はTypeError、件数・重複・サイズ違反はValueErrorとする。
-- 件数上限は同モジュールのMAX_BATCH_MESSAGES=10を使い、publisherの入力件数検証も参照する。本文上限は既存のMAX_MESSAGE_BYTESを使う。
-- メッセージの順序・本文・MD5を維持し、JSON化やMD5計算を追加しない。通常表示に本文・MD5を出さず、検証エラーに本文・イベントIDを埋め込まない。
-- 公開publish_batch(envelopes)は維持する。入力件数・型・重複IDは準備前に検証し、11件の入力を不正イベントの除外によって受け入れない。
-- 準備に成功したメッセージから、個別例外変換の外でバッチを構築する。合計超過は従来どおり呼び出し全体のValueErrorとなり、クライアントを生成しない。
-- 正常なメッセージが0件ならバッチを構築せず、準備失敗の結果だけを返す。
+- `sqs/event_batch.py`の不変な`EventBatch`が入力一覧をtupleへ固定し、1〜10件・EventEnvelopeと各フィールドの型・event_id重複なしを一度だけ検証する。型違反はTypeError、件数・重複違反はValueErrorとする。
+- `SqsMessageBatch(events: EventBatch)`は検証済み入力だけを受け取り、イベント契約の検証と`SqsMessage.from_event`による本文生成を行う。任意のメッセージ一覧を直接渡す構築経路は設けない。
+- イベント内容は`ArticleAssessedInScopeEvent.from_input`、個別のJSON本文サイズは`SqsMessage.from_event`、送信可能な本文のUTF-8合計サイズは`SqsMessageBatch`が検証する。件数とIDの一意性は入力から引き継ぎ、再検証しない。
+- 準備済みの`messages`と個別の`failures`を不変のtupleで保持する。不正イベントを除いた順序を維持し、本文・MD5を通常表示へ出さない。
+- 公開`publish_batch(envelopes)`は維持し、内部で`EventBatch`を構築する。11件の入力を不正イベントの除外によって受け入れない。自動分割やIDの重複除去は行わない。
+- 合計サイズ超過は呼び出し全体のValueErrorとなり、クライアントを生成しない。
+- 正常なメッセージが0件なら準備失敗の結果だけを返し、AWS送信を呼ばない。結果は元の入力順に返す。
 - _send_batch・_send_messages・failed_results・results_from_sqs_batch_responseはSqsMessageBatchを受け取り、batch.messagesを使用する。SDK用Entriesは送信直前に作り、送信先はpublisherが保持する。
 
 Invariants: EventEnvelope・SqsMessage・本文形式を変更せず、単一SDK試行・入力順の結果・部分成功・終了失敗の分離を維持する。
@@ -499,6 +499,9 @@ Non-goals: 自動分割、送信先や公開APIの追加、DB・relay・通知�
 Done: バッチ構築時の不変条件と、既存の送信・応答照合の契約を単体テストとDB integration testで保証する。
 
 SqsMessageBatchのローカル検証（2026-09-08）: lint・format、全単体テスト5,863件が成功。`make test-integration TEST_COMPOSE_PROJECT=vector-test-sqs-message-batch-tryr1ux9 PYTEST_ARGS="-x -q"`でDB integration test 1,226件成功・22件skipを確認した。relay接続・AWS実送信・本番適用は未実施。
+
+入力と送信バッチの検証分離（2026-09-10）: Ruff lint・format check（変更テストを含む）、全単体テスト6,163件が成功。`make test-integration PYTEST_ARGS='-rs'`は1,340件成功・22件skip。skipは既存のDB権限テストが必要とするAlembic適用済み`public.watchlist_entries`が一時DBにないため。11件・重複IDの事前拒否、正常分のみの送信、空の送信を行わないこと、本文合計サイズ、入力順の結果とMD5照合を確認した。AWS実送信・デプロイは実施していない。
+
 
 
 ### 応答不正の理由付き失敗契約
@@ -561,3 +564,10 @@ SQS publisherはイベント単位の送信準備で`ArticleAssessedInScopeEvent
 受信側の純粋な本文解析と検証理由は[EmbeddingConsumer仕様](./embedding-consumer.md#送受信で共有する入力検証)に記載する。実装にはPydanticの[field validators](https://docs.pydantic.dev/latest/concepts/validators/)と[構造化された検証エラー](https://docs.pydantic.dev/latest/errors/errors/)を使用する。Lambdaハンドラー・受信時監査・SQS応答・AWS適用は今回含めない。
 
 共有契約のローカル検証（2026-09-09）: Ruff lint・format check、全単体テスト6,071件、`make test-integration`の1,336件が成功した。既存DB権限テスト22件は必要なAlembic適用済みschemaがないためスキップされた。実DBで不正イベントだけの停止と正常イベントの配信済み記録を確認した。AWSはモックし、デプロイは実施していない。
+
+
+### 共有検証詳細の追加
+
+送信前と受信本文の契約違反はassessed_event_validation_failureで同じ詳細へ変換する。PublishEventInvalidErrorとEmbeddingEventInvalidErrorは既存reasonに加えて不変のissuesを保持する。項目は既知フィールドだけ、コードはmissing_required_field・invalid_type・invalid_value・unknown_field・unsupported_event_type・unsupported_schema_versionとする。未知キーは親のevent／payloadへ集約し、同一項目とコードを重複排除する。元の入力・自由文・ValidationErrorの原因連鎖は保持しない。送信側の停止判断とバッチ契約は変更しない。種別だけを先に判定する分岐は共有契約へ統合し、複数の違反がある場合も外側の構造・種別・バージョン・payloadの順で送受信の分類を揃える。
+
+検証（2026-09-10）: 送受信の詳細と優先順位の一致、既存の個別停止と正常分の送信を確認した。最終状態のRuff lint・format check、全単体テスト6,149件、全統合テスト1,340件が成功。既存DB権限テスト22件は必要なschema不足でスキップした。

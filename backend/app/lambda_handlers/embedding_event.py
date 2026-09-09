@@ -4,11 +4,10 @@ import json
 from enum import StrEnum
 from typing import ClassVar
 
-from pydantic import ValidationError
-
 from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
-    assessed_event_invalid_reason,
+    AssessedEventValidationError,
+    AssessedEventValidationIssue,
 )
 from app.logfire.exceptions import VectorDomainError
 
@@ -24,14 +23,20 @@ class EmbeddingEventInvalidReason(StrEnum):
 
 
 class EmbeddingEventInvalidError(VectorDomainError):
-    """本文や検証詳細を保持せず、入力不正の理由だけを返す。"""
+    """本文を保持せず、入力不正の理由と安全な検証詳細を返す。"""
 
     CODE: ClassVar[str] = "embedding_event_invalid"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason")
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "issues")
 
-    def __init__(self, *, reason: EmbeddingEventInvalidReason) -> None:
+    def __init__(
+        self,
+        *,
+        reason: EmbeddingEventInvalidReason,
+        issues: tuple[AssessedEventValidationIssue, ...] = (),
+    ) -> None:
         super().__init__()
         self.reason = reason
+        self.issues = issues
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -53,6 +58,7 @@ def parse_embedding_event(body: str) -> ArticleAssessedInScopeEvent:
         raise EmbeddingEventInvalidError(
             reason=EmbeddingEventInvalidReason.INVALID_JSON
         )
+    issues: tuple[AssessedEventValidationIssue, ...] = ()
     try:
         data = json.loads(
             body, object_pairs_hook=_unique_object, parse_constant=_reject_constant
@@ -61,8 +67,10 @@ def parse_embedding_event(body: str) -> ArticleAssessedInScopeEvent:
         reason = EmbeddingEventInvalidReason.INVALID_JSON
     else:
         try:
-            return ArticleAssessedInScopeEvent.model_validate(data)
-        except ValidationError as exc:
-            reason = EmbeddingEventInvalidReason(assessed_event_invalid_reason(exc))
+            return ArticleAssessedInScopeEvent.from_input(data)
+        except AssessedEventValidationError as exc:
+            failure = exc.failure
+            reason = EmbeddingEventInvalidReason(failure.reason)
+            issues = failure.issues
     # 検証例外のcontextに入力本文を残さないよう、exceptの外で送出する。
-    raise EmbeddingEventInvalidError(reason=reason)
+    raise EmbeddingEventInvalidError(reason=reason, issues=issues)

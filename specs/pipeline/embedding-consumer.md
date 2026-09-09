@@ -74,11 +74,34 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 受信本文は`app/lambda_handlers/embedding_event.py`の`parse_embedding_event(body: str)`で解析し、同じ共通型を返す。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
 
-不正本文は`EmbeddingEventInvalidError`で伝える。理由はJSON解析の`invalid_json`、外側の構造・項目型の`invalid_envelope`、対象外種別の`unsupported_event_type`、未対応版の`unsupported_schema_version`、payload内部の`invalid_payload`の順で優先する。payload自体の欠落や非オブジェクトは外側の構造不正に含む。本文・検証詳細を例外の属性や原因・contextに保持せず、関数内ではログ・監査・通知を行わない。
+不正本文は`EmbeddingEventInvalidError`で伝える。理由はJSON解析の`invalid_json`、外側の構造・項目型の`invalid_envelope`、対象外種別の`unsupported_event_type`、未対応版の`unsupported_schema_version`、payload内部の`invalid_payload`の順で優先する。payload自体の欠落や非オブジェクトは外側の構造不正に含む。共有のassessed_event_validation_failureは、大分類と重複のない不変の検証詳細を返す。詳細は既知の項目名と固定コードだけとし、未知キーはeventまたはpayloadのunknown_fieldへ置き換える。本文・入力値・検証自由文を属性や原因・contextに保持せず、本文解析関数内ではログ・監査・通知を行わない。JSON解析失敗はinvalid_jsonと空の詳細一覧で返す。
 
-送信前の契約違反は既存の`PublishEventInvalidError`と個別の`PublishFailed`へ変換し、不正イベントだけをOutboxの自動配信停止へ進める。正常な同一バッチのイベントは送信する。これは受信後のSQS再配信やDLQ移動とは別の処理である。既存のpublisher呼び出し契約違反・送信先判定・日時不正の理由は維持する。
+送信前の契約違反は既存の`PublishEventInvalidError`と個別の`PublishFailed`へ変換し、不正イベントだけをOutboxの自動配信停止へ進める。正常な同一バッチのイベントは送信する。これは受信後のSQS再配信やDLQ移動とは別の処理である。既存のpublisher呼び出し契約違反・送信先判定は維持し、日時不正も共有契約のinvalid_envelopeとして扱う。
 
-実装済みは共通型・送信前検証・本文解析まで。SQSのRecords・messageId、Consumer呼び出し、受信時の失敗監査・SQS応答の接続は後続とする。
+実装済みは共通型・送信前検証・本文解析と、次節のSQSメッセージ処理まで。依存を組み立てるLambda起動関数とイベントソースマッピングは後続とする。
+
+### SQSメッセージ処理と部分バッチ応答
+
+`app/lambda_handlers/embedding.py`の`process_embedding_messages(event: object, *, consumer: EmbeddingConsumer)`は、呼び出し元が組み立てたConsumerを使用する。SSM・Engine・AIクライアントの生成やSQSへの直接操作は行わない。
+
+最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はEmbeddingSqsInputErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
+
+有効なmessageIdは加工せず保持し、入力順に1件ずつbodyを検証してConsumerへpayloadを渡す。使用しないSQSフィールドは許容する。bodyの欠落・非文字列・本文不正・Consumerの通常例外・契約外の戻り値は個別失敗として後続処理を続ける。EmbeddingCompletionのSAVED・ALREADY_EMBEDDEDだけを正常完了とする。キャンセル・プロセス終了は伝播する。
+
+戻り値は常にSqsBatchResponseの辞書形式で、失敗IDだけを入力順に含める。全件成功・空のRecordsは`{"batchItemFailures": []}`、失敗時は`{"batchItemFailures": [{"itemIdentifier": "失敗したmessageId"}]}`とする。複数件という理由では拒否せず、内部並列処理は追加しない。
+
+ログは次の固定イベントを用い、通常のログ障害で結果や後続処理を変更しない。
+
+| ログイベント | 記録内容 |
+|---|---|
+| embedding_sqs_input_invalid | reason、field、record_index。個別応答を作れない構造不正 |
+| embedding_message_input_invalid | message_id、reason、issues。body自体の欠落・型不正はinvalid_bodyとbodyの項目コード |
+| embedding_message_completed | message_id、検証済みevent_id、analyzed_article_id、正常完了reason |
+| embedding_message_failed | message_id、例外の完全修飾型名。本文検証済みならevent_id・analyzed_article_idも付与 |
+
+本文・自由文・トレースバックはログに渡さない。入力不正は構造化ログのみとしDB監査は追加しない。Consumerの監査・計測・枯渇通知は入口で重複実行しない。
+
+初期の受信件数は後続のSQSトリガー設定で1件とし、ReportBatchItemFailuresを有効化する。Consumerの60秒制限は維持し、本番の受信件数を増やす際はLambda全体の時間配分を別途検討する。今回の実装ではLambda関数・Terraform・デプロイを変更しない。
 
 ## 成功・失敗の契約
 
@@ -141,11 +164,11 @@ consumerでは両者を区別し、生成済みを確認できた場合だけ対
 
 元記事IDを取得できなかった場合は`article_id=NULL`として分析記事IDをpayloadに残す。開始時の不存在も`embedding_analyzed_article_missing`／`target_missing`のFAILED監査とする。取得済みの記事IDはそのまま使用し、後から親記事が削除されて監査不能になった場合も既存のdrop計測・通知を試み、元の例外を伝播する。
 
-今回は既存Taskiqの入口や配置を移動せず、Consumer専用トレースの配線・イベントenvelopeの検証・Lambda/SQS応答・デプロイは後続に残す。
+今回は既存Taskiqの入口や配置を移動せず、Consumer専用トレースの配線・Lambda起動関数・デプロイは後続に残す。
 
 ### Consumerの失敗分類と後処理
 
-分類関数とConsumer用ハンドラーを実装し、Consumer本体から開始時の取得・Ready構築・Service実行中の失敗を接続する。入力イベントの検証・Lambda/SQS応答は後続とする。
+分類関数とConsumer用ハンドラーを実装し、Consumer本体から開始時の取得・Ready構築・Service実行中の失敗を接続する。入力イベントの検証・SQS応答は入口部品へ接続し、Lambda起動関数の組み立ては後続とする。
 
 - `classify_embedding_failure(exc)`は副作用のない関数で、`EmbeddingFailureClassification`を返す。監査用の`FailureProjection`、監視上の`failed`／`infra_error`、必要な枯渇通知の元例外を持つ。
 - Serviceのreasonと元のprovider例外から直接分類し、Taskiq用のRecoverable／Terminalには変換しない。DB例外は共有のDB分類を使う。想定外例外と通常のTimeoutErrorは`unexpected_error`／`unknown`として失敗に分類する。
@@ -229,7 +252,7 @@ Consumer専用サブネットはprimary AZのCIDR index 28とし、appルート�
 
 DLQ滞留通知は`ApproximateNumberOfMessagesVisible`のMaximum・60秒・1評価期間・1件以上・欠測正常で判定し、ALARM/OK遷移を既存SNSへ送る。自動停止・自動再投入は行わない。障害時は後続のSQSトリガーを手動停止・再開する。
 
-Consumer本体は実装済み、Lambda・SQSトリガーは未実装。スライス2に先行して、共通Serviceの保存時行ロックと記事不存在・生成済みの区別を実装した。Serviceは正常終了時に`EmbeddingCompletion(reason=SAVED)`または`EmbeddingCompletion(reason=ALREADY_EMBEDDED)`を返す。Service実行中の失敗分類関数とConsumer用の後処理ハンドラーも実装済み。開始時の失敗もConsumer用ハンドラーへ接続した。SQS失敗応答は後続で扱う。
+Consumer本体は実装済み、Lambda・SQSトリガーは未実装。スライス2に先行して、共通Serviceの保存時行ロックと記事不存在・生成済みの区別を実装した。Serviceは正常終了時に`EmbeddingCompletion(reason=SAVED)`または`EmbeddingCompletion(reason=ALREADY_EMBEDDED)`を返す。Service実行中の失敗分類関数とConsumer用の後処理ハンドラーも実装済み。開始時の失敗もConsumer用ハンドラーへ接続した。SQSの入力検証・Consumer呼び出し・部分バッチ応答も処理部品として接続済み。依存を組み立てるLambda起動関数は後続で扱う。
 
 ## Verification
 
@@ -294,10 +317,18 @@ Consumer本体の検証（2026-09-09）:
 - 実DBと実publisherを使い、未対応バージョン・不正payloadだけがOutboxの配信停止となり、正常イベントは配信済みになることと、次回relayで再送されないことを確認した。AWSクライアントはモックした。
 - 単体・統合を分けない初回pytestは、未起動のローカルDBへの接続で終了したため、単体の明示選択と隔離DBでの全統合テストに分けて完了した。AWS実送信・Lambda接続・デプロイは今回の対象外。
 
+SQS入力検証・Consumer接続の検証（2026-09-10）:
+
+- 実行コードと変更テストのRuff lint・format check、`git diff --check`が成功した。最終状態の全単体テストは6,149件成功した。
+- `make test-integration PYTEST_ARGS='-rs'`は1,340件成功・22件スキップ。既存DB権限テスト22件は、Alembic適用済みの`public.watchlist_entries`が検証環境にないためスキップされた。
+- 共有の項目・コードと大分類、未知キーの非公開と重複排除、送受信の一致、SQS構造不正の事前拒否、全件成功・一部失敗・全件失敗・空配列、逐次実行、契約外の戻り値、ログ障害、キャンセル伝播を確認した。
+- 実Consumerと実DBで、保存・生成済み・本文不正・記事不存在・API障害を部分バッチ応答へ反映することと、保存・監査・計測を入口で重複しないことを確認した。外部AI・AWSはモックした。
+- 検証条件・DB schema・Consumerの業務契約・Taskiq・AWS設定は変更していない。Lambda起動関数の依存構築、ReportBatchItemFailuresの有効化、AWS実通信・デプロイは後続とする。
+
 ## 実装・有効化前に確定する項目
 
-- SQSのRecords・messageIdの検証、consumerとLambda handlerの接続、失敗応答形式（例外伝播か部分バッチ応答か）。
-- 入力イベント不正など入口で発生する失敗の監査、event_id・SQS messageId・分析記事IDの観測上の関連付け。
+- Lambda起動関数での依存の組み立てと、実装済みprocess_embedding_messagesへの接続。
+- 入力不正は構造化ログに記録する方針で実装済み。AWS上でのログ出力と部分バッチ応答の動作を有効化時に確認する。
 - SDK timeout・内部再試行の設定、Lambda側のDB・AIクライアントの生成・終了方法。
 - Lambdaのメモリ、SSM取得・キャッシュの実装、専用サブネット・SGをLambdaへ接続する配線。基盤の専用権限を利用し、relayの権限は流用しない。
 - 残高不足・設定不備が継続した場合の手動停止・復旧・再投入の具体的な操作手順。DLQ滞留通知は実装済みで、自動停止は行わない。既存holdはSQS起動トリガーを停止しない。
