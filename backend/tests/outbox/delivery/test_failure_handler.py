@@ -18,7 +18,7 @@ from app.outbox.delivery import failure_handler as handler_module
 from app.outbox.delivery.failure_handler import (
     DeliveryStopped,
     DeliveryUpdateSkipped,
-    PublishFailureHandler,
+    OutboxDeliveryFailureHandler,
     RetryScheduled,
 )
 from app.outbox.delivery.repository import ClaimedOutboxEvent
@@ -115,7 +115,7 @@ async def test_result_means_committed_update_visible_from_another_session(
     async with session_factory() as reader:
         start = await reader.scalar(select(func.statement_timestamp()))
         engine = reader.bind
-    handler = PublishFailureHandler(
+    handler = OutboxDeliveryFailureHandler(
         caller_managed_session_factory(engine), jitter=jitter
     )
     assert (
@@ -204,7 +204,7 @@ async def test_invalid_update_conditions_skip_without_modifying_rows(
             )
             yield session
 
-    result = await PublishFailureHandler(factory, jitter=lambda: 0.5).handle(
+    result = await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
         event=claimed, failure=PublishFailed(claimed.event_id, error)
     )
     assert result == DeliveryUpdateSkipped()
@@ -245,7 +245,7 @@ async def test_database_failure_propagates_and_uncommitted_update_is_rolled_back
             yield session
 
     with pytest.raises(DatabaseError) as caught:
-        await PublishFailureHandler(factory, jitter=lambda: 0.5).handle(
+        await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
             event=claimed, failure=PublishFailed(claimed.event_id, error)
         )
     record_stop.assert_not_called()
@@ -270,7 +270,7 @@ async def test_session_exit_failure_does_not_return_success_or_undo_commit(
         raise failure
 
     with pytest.raises(RuntimeError) as caught:
-        await PublishFailureHandler(factory, jitter=lambda: 0.5).handle(
+        await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
             event=claimed, failure=PublishFailed(claimed.event_id, _configuration())
         )
     record_stop.assert_not_called()
@@ -304,7 +304,7 @@ async def test_invalid_policy_input_never_opens_session(
     generate = Mock(return_value=jitter)
     claimed = _claimed(attempt_count=attempt)
     with pytest.raises(exception_type):
-        await PublishFailureHandler(factory, jitter=generate).handle(
+        await OutboxDeliveryFailureHandler(factory, jitter=generate).handle(
             event=claimed, failure=PublishFailed(claimed.event_id, error)
         )
     record_stop.assert_not_called()
@@ -320,9 +320,9 @@ async def test_jitter_generation_failure_is_not_reclassified(failure, record_sto
     factory = Mock()
     claimed = _claimed()
     with pytest.raises(type(failure)) as caught:
-        await PublishFailureHandler(factory, jitter=Mock(side_effect=failure)).handle(
-            event=claimed, failure=PublishFailed(claimed.event_id, _transport())
-        )
+        await OutboxDeliveryFailureHandler(
+            factory, jitter=Mock(side_effect=failure)
+        ).handle(event=claimed, failure=PublishFailed(claimed.event_id, _transport()))
     record_stop.assert_not_called()
     assert caught.value is failure
     factory.assert_not_called()
@@ -343,7 +343,7 @@ async def test_invalid_failure_is_rejected_before_jitter_session_or_record(
     factory = Mock()
     jitter = Mock(return_value=0.5)
     with pytest.raises(ValueError if case == "wrong_id" else TypeError):
-        await PublishFailureHandler(factory, jitter=jitter).handle(
+        await OutboxDeliveryFailureHandler(factory, jitter=jitter).handle(
             event=claimed, failure=failure
         )
     jitter.assert_not_called()

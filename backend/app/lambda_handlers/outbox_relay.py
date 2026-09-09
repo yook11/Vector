@@ -9,7 +9,7 @@ from botocore.session import Session
 from app.db.engine import create_lambda_engine
 from app.db.session import caller_managed_session_factory
 from app.lambda_handlers.settings import OutboxRelaySettings
-from app.outbox.delivery.failure_handler import PublishFailureHandler
+from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.relay import OutboxRelay
 from app.outbox.sqs.publisher import SqsEventPublisher
 
@@ -24,7 +24,7 @@ async def _run_relay(settings: OutboxRelaySettings) -> dict[str, str]:
             region=settings.aws_region,
             embedding_queue_url=settings.sqs_article_embedding_queue_url,
         )
-        failure_handler = PublishFailureHandler(session_factory)
+        failure_handler = OutboxDeliveryFailureHandler(session_factory)
         relay = OutboxRelay(session_factory, publisher, failure_handler)
         await relay.run_once()
         completed = True

@@ -19,6 +19,7 @@ from botocore.stub import Stubber
 from app.analysis.assessment.events import ArticleAssessedInScopeEvent
 from app.outbox.delivery.repository import ClaimedOutboxEvent
 from app.outbox.publishing.errors import (
+    PublishCleanupError,
     PublishConfigurationError,
     PublishConfigurationReason,
     PublishEventInvalidError,
@@ -36,8 +37,10 @@ from app.outbox.publishing.publisher import (
     PublishFailed,
     PublishSucceeded,
 )
+from app.outbox.sqs import failure_handler as failure_handler_module
 from app.outbox.sqs import publisher as publisher_module
 from app.outbox.sqs.error_mapping import SqsBatchEntryError
+from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.message import SqsMessage
 from app.outbox.sqs.publisher import SqsEventPublisher
 from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
@@ -60,7 +63,7 @@ def envelope():
 @pytest.fixture
 def cleanup_log(monkeypatch):
     log = Mock()
-    monkeypatch.setattr(publisher_module.logger, "warning", log)
+    monkeypatch.setattr(failure_handler_module.logger, "warning", log)
     return log
 
 
@@ -115,7 +118,11 @@ def _sender(*, response=None, error=None, close_error=None):
     client.close.side_effect = close_error
     factory = Mock(return_value=client)
     return (
-        SqsEventPublisher(client_factory=factory, embedding_queue_url=QUEUE_URL),
+        SqsEventPublisher(
+            failure_handler=SqsPublishFailureHandler(),
+            client_factory=factory,
+            embedding_queue_url=QUEUE_URL,
+        ),
         client,
         factory,
     )
@@ -133,7 +140,9 @@ def test_batch_success_preserves_body_and_input_order_on_resend(envelope, count)
         aws_secret_access_key="testing",
     )
     sender = SqsEventPublisher(
-        client_factory=lambda: client, embedding_queue_url=QUEUE_URL
+        failure_handler=SqsPublishFailureHandler(),
+        client_factory=lambda: client,
+        embedding_queue_url=QUEUE_URL,
     )
     params = {
         "QueueUrl": QUEUE_URL,
@@ -334,17 +343,15 @@ def test_input_count_is_checked_before_excluding_invalid_events(envelope, monkey
     factory.assert_not_called()
 
 
-def test_all_invalid_events_do_not_send_an_empty_batch(envelope, monkeypatch):
+def test_all_invalid_events_do_not_send_an_empty_batch(envelope):
     """送信対象がなければAWS送信を呼ばず個別失敗を返す。"""
-    sender, _, factory = _sender()
-    send_batch = Mock(side_effect=AssertionError("batch must not be sent"))
-    monkeypatch.setattr(sender, "_send_batch", send_batch)
+    sender, client, factory = _sender()
     result = sender.publish_batch([replace(envelope, event_type="unsupported")])
     assert (
         result.results[0].error.reason
         is PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
     )
-    send_batch.assert_not_called()
+    client.send_message_batch.assert_not_called()
     factory.assert_not_called()
 
 
@@ -1037,4 +1044,61 @@ def test_response_diagnostic_process_exit_is_not_swallowed(envelope, cleanup_log
     with pytest.raises(KeyboardInterrupt) as caught:
         sender.publish_batch([envelope])
     assert caught.value is exit_error
+    client.close.assert_called_once()
+
+
+def test_publisher_passes_diagnostics_to_injected_failure_handler(envelope):
+    """送信対象のIDと分類済み終了障害を、注入されたハンドラーへ渡す。"""
+    handler = Mock(spec=SqsPublishFailureHandler)
+    client = Mock()
+    client.send_message_batch.return_value = None
+    client.close.side_effect = RuntimeError("private cleanup")
+    publisher = SqsEventPublisher(
+        embedding_queue_url=QUEUE_URL,
+        client_factory=lambda: client,
+        failure_handler=handler,
+    )
+    invalid = replace(envelope, event_id=UUID(int=2), event_type="unsupported")
+
+    result = publisher.publish_batch([invalid, envelope])
+
+    assert [outcome.event_id for outcome in result.results] == [
+        invalid.event_id,
+        envelope.event_id,
+    ]
+    assert isinstance(result.results[0].error, PublishEventInvalidError)
+    assert isinstance(result.results[1].error, PublishResponseInvalidError)
+    handler.handle_invalid_response.assert_called_once()
+    diagnostic = handler.handle_invalid_response.call_args.kwargs
+    assert diagnostic["event_ids"] == (envelope.event_id,)
+    assert isinstance(diagnostic["error"], InvalidSqsBatchResponse)
+    handler.handle_cleanup_failure.assert_called_once()
+    cleanup = handler.handle_cleanup_failure.call_args.args[0]
+    assert isinstance(cleanup, PublishCleanupError)
+    assert cleanup.original_exception_type == "builtins.RuntimeError"
+
+
+@pytest.mark.parametrize("primary_error", [None, KeyboardInterrupt()])
+def test_cleanup_classification_failure_preserves_original_outcome(
+    envelope, monkeypatch, primary_error
+):
+    """終了診断の分類障害でも、受付成功と先行するプロセス終了を維持する。"""
+    monkeypatch.setattr(
+        publisher_module,
+        "publish_cleanup_error_from_exception",
+        Mock(side_effect=ValueError("private classification")),
+    )
+    sender, client, _ = _sender(
+        response={"Successful": [_success(envelope)]},
+        error=primary_error,
+        close_error=RuntimeError("private cleanup"),
+    )
+    if primary_error is None:
+        assert sender.publish_batch([envelope]).results == (
+            PublishSucceeded(envelope.event_id),
+        )
+    else:
+        with pytest.raises(KeyboardInterrupt) as caught:
+            sender.publish_batch([envelope])
+        assert caught.value is primary_error
     client.close.assert_called_once()

@@ -255,6 +255,7 @@ def test_sender_and_receiver_share_validation_details(data, changes):
     from unittest.mock import Mock
 
     from app.outbox.publishing.publisher import EventEnvelope
+    from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
     from app.outbox.sqs.publisher import SqsEventPublisher
 
     data.update(changes)
@@ -262,7 +263,9 @@ def test_sender_and_receiver_share_validation_details(data, changes):
         parse_embedding_event(json.dumps(data))
     factory = Mock()
     publisher = SqsEventPublisher(
-        embedding_queue_url="https://sqs.invalid", client_factory=factory
+        failure_handler=SqsPublishFailureHandler(),
+        embedding_queue_url="https://sqs.invalid",
+        client_factory=factory,
     )
     sent = (
         publisher.publish_batch(

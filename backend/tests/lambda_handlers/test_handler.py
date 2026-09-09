@@ -45,7 +45,7 @@ def handler_dependencies(monkeypatch):
         entry, "SqsEventPublisher", Mock(from_session=create_publisher), raising=False
     )
     monkeypatch.setattr(
-        entry, "PublishFailureHandler", create_failure_handler, raising=False
+        entry, "OutboxDeliveryFailureHandler", create_failure_handler, raising=False
     )
     monkeypatch.setattr(entry, "OutboxRelay", create_relay, raising=False)
     return SimpleNamespace(**locals())
