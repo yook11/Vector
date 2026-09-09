@@ -27,7 +27,6 @@ class PublishEventInvalidReason(StrEnum):
     UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
     INVALID_ENVELOPE = "invalid_envelope"
     INVALID_PAYLOAD = "invalid_payload"
-    SERIALIZATION_FAILED = "serialization_failed"
     MESSAGE_TOO_LARGE = "message_too_large"
 
 

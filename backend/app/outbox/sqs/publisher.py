@@ -89,15 +89,7 @@ class SqsEventPublisher:
                         reason=PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
                     )
                 event = self._validate_assessed_in_scope_event(envelope)
-                message = SqsMessage.from_envelope(
-                    EventEnvelope(
-                        event_id=event.event_id,
-                        event_type=event.event_type,
-                        schema_version=event.schema_version,
-                        occurred_at=event.occurred_at,
-                        payload=event.payload.model_dump(mode="json"),
-                    )
-                )
+                message = SqsMessage.from_event(event)
             except Exception as exc:
                 error = publish_error_from_exception(
                     exc, phase=PublishPhase.PREPARE_EVENT

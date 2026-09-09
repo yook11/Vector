@@ -16,7 +16,6 @@ from app.lambda_handlers.embedding_event import (
     EmbeddingEventInvalidError,
     parse_embedding_event,
 )
-from app.outbox.publishing.publisher import EventEnvelope
 from app.outbox.sqs.message import SqsMessage
 
 pytestmark = pytest.mark.unit
@@ -46,8 +45,17 @@ def test_restores_legacy_body_and_typed_payload(data):
         event.payload.curation_id = 9
 
 
+def test_json_dump_normalizes_occurred_at_to_utc_z_with_fraction(data):
+    """送信本文の日時は入力のoffsetに依らずUTCのZ表記にし、小数秒を保つ。"""
+    event = ArticleAssessedInScopeEvent.model_validate(data)
+    dumped = event.model_dump(mode="json")
+    assert dumped["occurred_at"] == "2026-09-07T03:00:00.123456Z"
+    assert dumped["event_id"] == data["event_id"]
+    assert event.model_dump()["occurred_at"] == event.occurred_at
+
+
 def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
-    envelope = EventEnvelope(
+    sent = ArticleAssessedInScopeEvent(
         event_id=UUID(data["event_id"]),
         event_type=data["event_type"],
         schema_version=1,
@@ -56,10 +64,10 @@ def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
         ),
         payload=data["payload"],
     )
-    event = parse_embedding_event(SqsMessage.from_envelope(envelope).body)
-    assert event.event_id == envelope.event_id
-    assert event.occurred_at == envelope.occurred_at
-    assert event.payload.model_dump() == envelope.payload
+    event = parse_embedding_event(SqsMessage.from_event(sent).body)
+    assert event.event_id == sent.event_id
+    assert event.occurred_at == sent.occurred_at
+    assert event.payload == sent.payload
     assert ArticleAssessedInScopeEvent.model_validate(data) == event
 
 
