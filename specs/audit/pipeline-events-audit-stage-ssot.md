@@ -185,7 +185,6 @@ class CurationAuditRepository:
    audit persistence の外側にある helper では、直接 `Stage.X` を参照してよい。
    重要なのは、可能な範囲で raw string stage parameter をなくすこと。
 
-   - `record_rate_limit_gate_skipped(stage: Stage, model: str)`
    - `record_injection_boundary_detected(stage: Stage)`
    - `article_stage` span helper は `stage=Stage.X.value` を設定する。
 

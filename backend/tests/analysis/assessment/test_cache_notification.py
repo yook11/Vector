@@ -42,7 +42,6 @@ def notification_case(monkeypatch: pytest.MonkeyPatch) -> NotificationCase:
     context.state = SimpleNamespace(
         session_factory=MagicMock(),
         assessor=MagicMock(),
-        provider_rate_limit_gate=SimpleNamespace(acquire=AsyncMock(return_value=True)),
     )
     context.message.labels = {"_retries": 0, "max_retries": 2}
     case = NotificationCase(

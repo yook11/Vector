@@ -40,11 +40,9 @@ from app.audit.domain.event import Stage
 from app.logfire.failure_attrs import annotate_span_failure
 
 # stage 別の result 語彙。値だけで「記事がどう抜けたか」が読めるよう自己記述的にする。
-CurationStageResult = Literal["signal", "noise", "rate_limited", "skipped", "failed"]
-AssessmentResult = Literal[
-    "in_scope", "out_of_scope", "rate_limited", "skipped", "failed"
-]
-EmbeddingResult = Literal["succeeded", "rate_limited", "skipped", "failed"]
+CurationStageResult = Literal["signal", "noise", "skipped", "failed"]
+AssessmentResult = Literal["in_scope", "out_of_scope", "skipped", "failed"]
+EmbeddingResult = Literal["succeeded", "skipped", "failed"]
 
 _SPAN_NAME = "article_stage"
 

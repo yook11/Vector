@@ -19,8 +19,6 @@ from app.analysis.assessment.domain.ready import (
     ReadyForAssessment,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
-from app.audit.domain.event import Stage
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
 from app.shared.revalidate import NullRevalidateNotifier
@@ -41,16 +39,7 @@ def _make_provider_fake() -> MagicMock:
     fake = MagicMock()
     fake.model_name = "test-model"
     fake.prompt_version = "abc12345"
-    fake.rate_limit_policy = AIModelRateLimitPolicy(
-        provider="gemini",
-        model="test-model",
-        rules=(
-            RateLimitRule(
-                name="rpd", max_requests=1500, window_seconds=86400, block=False
-            ),
-            RateLimitRule(name="rpm", max_requests=50, window_seconds=60, block=True),
-        ),
-    )
+    fake.provider = "gemini"
     return fake
 
 
@@ -59,14 +48,10 @@ def _make_ctx(
     assessor: MagicMock | None = None,
     retries: int = 0,
     max_retries: int = 0,
-    gate_acquire: bool = True,
 ) -> MagicMock:
     ctx = MagicMock()
-    gate = MagicMock()
-    gate.acquire = AsyncMock(return_value=gate_acquire)
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
-        provider_rate_limit_gate=gate,
         pipeline_control_redis=object(),
     )
     if assessor is not None:
@@ -113,7 +98,7 @@ class TestAssessContent:
     async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:
         """Ready build blocked なら rejected audit + return、Service は呼ばない。
 
-        rate limit acquire も試みない (Ready 構築が gatekeeper)。
+        Ready 構築で処理対象外を判定する。
         """
         from app.queue.tasks.assessment import assess_content
 
@@ -135,8 +120,6 @@ class TestAssessContent:
             curation_id=42,
             exc=exc,
         )
-        # rate limit acquire は試みず、Service も呼ばない
-        ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
@@ -165,7 +148,6 @@ class TestAssessContent:
         rejected = [e for e in cap if e["event"] == "assess_content_rejected"]
         assert len(rejected) == 1
         assert rejected[0]["code"] == exc.code.value
-        ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
@@ -196,7 +178,6 @@ class TestAssessContent:
             curation_id=42,
             exc=exc,
         )
-        ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
@@ -253,38 +234,6 @@ class TestAssessContent:
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
         mock_embed.kiq.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_quota_skip_returns_without_invoking_service(self) -> None:
-        """gate.acquire=False の場合 gate skip の log + metric を出して return する。"""
-        from app.queue.tasks.assessment import assess_content
-
-        mock_ctx = _make_ctx(assessor=_make_provider_fake(), gate_acquire=False)
-        trigger = _make_trigger()
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
-            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
-            patch(
-                "app.queue.tasks.assessment.record_rate_limit_gate_skipped"
-            ) as mock_record,
-            capture_logs() as cap,
-        ):
-            mock_embed.kiq = AsyncMock()
-            await assess_content(trigger=trigger, ctx=mock_ctx)
-
-        mock_svc_cls.assert_not_called()
-        mock_embed.kiq.assert_not_called()
-        mock_record.assert_called_once()
-        assert mock_record.call_args.kwargs["stage"] is Stage.ASSESSMENT
-        assert mock_record.call_args.kwargs["model"] == "test-model"
-        skips = [
-            e for e in cap if e.get("event") == "assessment_ai_rate_limit_gate_skipped"
-        ]
-        assert skips, "gate skip log が emit されていない"
-        assert skips[-1]["analyzable_article_id"] == 7
-        assert skips[-1]["ai_model"] == "test-model"
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
@@ -348,7 +297,7 @@ class TestAssessContentStageSpan:
     """``article_stage`` span の assessment task 配線 (capfire oracle)。
 
     Service は mock するため in_scope / out_of_scope の result は service テストが
-    正本。ここでは task が設定する skipped / rate_limited / failed、kiq 成功後の
+    正本。ここでは task が設定する skipped / failed、kiq 成功後の
     mark、ready 構築後の article_id late-binding を固定する。
     """
 
@@ -445,23 +394,6 @@ class TestAssessContentStageSpan:
                 await assess_content(trigger=_make_trigger(curation_id=42), ctx=ctx)
 
         assert stage_attrs(capfire)["result"] == "failed"
-
-    @pytest.mark.asyncio
-    async def test_gate_skip_sets_rate_limited(self, capfire: CaptureLogfire) -> None:
-        """gate.acquire=False 経路で task が result=rate_limited を焼く。"""
-        from app.queue.tasks.assessment import assess_content
-
-        mock_ctx = _make_ctx(assessor=_make_provider_fake(), gate_acquire=False)
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch("app.queue.tasks.assessment.AssessmentService"),
-            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
-            patch("app.queue.tasks.assessment.record_rate_limit_gate_skipped"),
-        ):
-            mock_embed.kiq = AsyncMock()
-            await assess_content(trigger=_make_trigger(), ctx=mock_ctx)
-
-        assert stage_attrs(capfire)["result"] == "rate_limited"
 
     @pytest.mark.asyncio
     async def test_terminal_sets_failure_attrs_without_drop_article(

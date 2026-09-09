@@ -49,9 +49,7 @@ briefing が `ai_model` を使う一方、embedding だけ `embedding_model` を
 - `backend/app/audit/stages/embedding.py`
   - success audit で `embedding_model=embedder.model_name`
   - `vector_dimension=embedder.dimension`
-- `backend/app/queue/tasks/embedding.py`
-  - structured log `embedding_ai_rate_limit_gate_skipped` は
-    `embedding_model=embedder.model_name` を出す。
+- 無料枠ゲート専用ログは後続の[ゲート撤去](./ai-free-tier-gate-removal.md)で削除した。
 - app 側 reader
   - `pipeline_events.payload` を `EmbeddingPayload` / `PipelineEventPayload` に
     Pydantic で読み戻す production reader は現状ない。
@@ -89,9 +87,7 @@ briefing が `ai_model` を使う一方、embedding だけ `embedding_model` を
    - 将来 reader / dashboard / SQL を追加する場合は、必要に応じて
      `COALESCE(payload->>'ai_model', payload->>'embedding_model')` 相当を検討する。
 
-9. structured log の `embedding_ai_rate_limit_gate_skipped.embedding_model` は今回変えない。
-   - audit payload 契約とは別スキーマであり、意味も伝わる。
-   - ログ field rename は Tier 2 の non-goal とする。
+9. 無料枠ゲート専用ログは後続のゲート撤去で削除済みであり、過去ログは変更しない。
 
 ## Invariants
 
@@ -142,7 +138,6 @@ GEMINI_EMBEDDING_SPEC = EmbeddingCallSpec(
     output_dimensionality=EMBEDDING_DIMENSION,
     task_type="RETRIEVAL_DOCUMENT",
     document_prefix="",
-    rate_limit_policy=AIModelRateLimitPolicy(...),
 )
 ```
 

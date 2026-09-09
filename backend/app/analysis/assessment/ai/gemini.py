@@ -1,9 +1,9 @@
 """Gemini 実装の Assessor — Stage 4。
 
 Prompt 文面は ``GeminiAssessmentPrompt`` が SSoT、call config (model /
-gen_config / response_schema / version / rate_limit_policy) は
+gen_config / response_schema / version / provider) は
 ``GEMINI_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。本 class は I/O 駆動
-(rate limit + SDK 例外翻訳) に責務を絞る。
+(SDK 呼び出しと例外翻訳) に責務を絞る。
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ from app.analysis.gemini_error_translator import (
     output_blocked_reason,
     translate_gemini_error,
 )
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -83,8 +82,8 @@ class GeminiAssessor(BaseAssessor):
         return self.SPEC.version
 
     @property
-    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
-        return self.SPEC.rate_limit_policy
+    def provider(self) -> str:
+        return self.SPEC.provider
 
     async def assess(
         self,

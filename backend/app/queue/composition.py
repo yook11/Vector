@@ -23,8 +23,6 @@ from __future__ import annotations
 import structlog
 from taskiq import TaskiqState
 
-from app.analysis.rate_limit import ProviderRateLimitGate
-
 logger = structlog.get_logger(__name__)
 
 
@@ -36,7 +34,6 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
 
     state.curator = GeminiCurator()
     state.assessor = DeepSeekAssessor()
-    state.provider_rate_limit_gate = ProviderRateLimitGate(state.pipeline_control_redis)
     logger.info(
         "analysis_adapters_wired",
         curator=type(state.curator).__name__,
@@ -52,7 +49,6 @@ async def _wire_embedding_adapters(state: TaskiqState) -> None:
     from app.analysis.embedding.ai.gemini import GeminiEmbedder
 
     state.embedder = GeminiEmbedder()
-    state.provider_rate_limit_gate = ProviderRateLimitGate(state.pipeline_control_redis)
     logger.info(
         "embedding_adapters_wired",
         embedder=type(state.embedder).__name__,

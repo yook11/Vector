@@ -28,7 +28,6 @@ from app.analysis.assessment.ai.schema_tool import (
     ASSESSMENT_TOOL_SCHEMA,
 )
 from app.analysis.prompt_versions import compute_call_signature
-from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +45,6 @@ class AssessmentCallSpec:
     response_schema: Mapping[str, Any]
     system_instruction: str | None
     version: str
-    rate_limit_policy: AIModelRateLimitPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,16 +97,6 @@ GEMINI_ASSESSMENT_SPEC: Final[AssessmentCallSpec] = AssessmentCallSpec(
     response_schema=_GEMINI_RESPONSE_SCHEMA,
     system_instruction=_GEMINI_SYSTEM_INSTRUCTION,
     version=_GEMINI_VERSION,
-    rate_limit_policy=AIModelRateLimitPolicy(
-        provider="gemini",
-        model=_GEMINI_MODEL,
-        rules=(
-            RateLimitRule(
-                name="rpd", max_requests=1500, window_seconds=86400, block=False
-            ),
-            RateLimitRule(name="rpm", max_requests=100, window_seconds=60, block=True),
-        ),
-    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -157,9 +145,6 @@ DEEPSEEK_ASSESSMENT_SPEC: Final[DeepSeekAssessmentSpec] = DeepSeekAssessmentSpec
     response_schema=_DEEPSEEK_RESPONSE_SCHEMA,
     system_instruction=_DEEPSEEK_SYSTEM_INSTRUCTION,
     version=_DEEPSEEK_VERSION,
-    rate_limit_policy=AIModelRateLimitPolicy(
-        provider="deepseek", model=_DEEPSEEK_MODEL, rules=()
-    ),
     tool_name=_DEEPSEEK_TOOL_NAME,
     base_url=_DEEPSEEK_BASE_URL,
 )

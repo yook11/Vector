@@ -43,7 +43,6 @@ from app.analysis.curation.domain.ready import (
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.audit.domain.event import Stage
 from app.db.errors import (
     DatabaseConnectionError,
@@ -60,26 +59,14 @@ def _make_provider_fake() -> MagicMock:
     fake = MagicMock()
     fake.model_name = "test-model"
     fake.prompt_version = "test-prompt-v1"
-    fake.rate_limit_policy = AIModelRateLimitPolicy(
-        provider="gemini",
-        model="test-model",
-        rules=(
-            RateLimitRule(
-                name="rpd", max_requests=1500, window_seconds=86400, block=False
-            ),
-            RateLimitRule(name="rpm", max_requests=50, window_seconds=60, block=True),
-        ),
-    )
+    fake.provider = "gemini"
     return fake
 
 
 def _make_ctx(retries: int = 0, max_retries: int = 2) -> MagicMock:
     ctx = MagicMock()
-    gate = MagicMock()
-    gate.acquire = AsyncMock(return_value=True)
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
-        provider_rate_limit_gate=gate,
         pipeline_control_redis=object(),
     )
     ctx.state.curator = _make_provider_fake()
@@ -437,20 +424,3 @@ async def test_ready_build_failed_emits_classified_outcome(
     )
     other = "failed" if expected_result == "infra_error" else "infra_error"
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, other) == 0
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_gate_skip_does_not_emit_processing_outcome(
-    capfire: CaptureLogfire,
-) -> None:
-    """rate limit gate skip では processing_outcome を emit しない (capacity 制御)。"""
-    from app.queue.tasks.curation import curate_content
-
-    ctx = _make_ctx()
-    ctx.state.provider_rate_limit_gate.acquire = AsyncMock(return_value=False)
-    with _patch_try_advance_from():
-        await curate_content(trigger=_trigger(), ctx=ctx)
-
-    metrics = collected_metrics(capfire)
-    for result in ("signal", "noise", "rejected", "failed", "infra_error"):
-        assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0

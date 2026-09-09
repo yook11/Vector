@@ -3,7 +3,7 @@ golden table テスト。
 
 Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``version`` /
 ``gen_config`` (tuning) / ``structured_output`` (機構) / ``response_schema`` /
-``system_instruction`` / ``rate_limit_policy`` + DeepSeek 固有 ``tool_name`` /
+``system_instruction`` + DeepSeek 固有 ``tool_name`` /
 ``base_url`` が module singleton として SSoT に置かれていることを検証する。
 
 ``version`` は ``compute_call_signature`` で算出される 8 文字 hash。値は実効 call
@@ -32,7 +32,6 @@ from app.analysis.assessment.ai.spec import (
     GEMINI_ASSESSMENT_SPEC,
 )
 from app.analysis.assessment.domain.result import assessment_category_values
-from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
@@ -79,19 +78,6 @@ def test_gemini_structured_output_forces_json_mime_type() -> None:
 def test_gemini_system_instruction_is_none() -> None:
     """将来 prompt rotation で変えやすいよう golden 化。"""
     assert GEMINI_ASSESSMENT_SPEC.system_instruction is None
-
-
-def test_gemini_rate_limit_policy_equals_provider_model_rules() -> None:
-    assert GEMINI_ASSESSMENT_SPEC.rate_limit_policy == AIModelRateLimitPolicy(
-        provider="gemini",
-        model="gemini-2.5-flash-lite",
-        rules=(
-            RateLimitRule(
-                name="rpd", max_requests=1500, window_seconds=86400, block=False
-            ),
-            RateLimitRule(name="rpm", max_requests=100, window_seconds=60, block=True),
-        ),
-    )
 
 
 def test_gemini_spec_is_frozen() -> None:
@@ -156,15 +142,6 @@ def test_deepseek_structured_output_disables_thinking() -> None:
 
 def test_deepseek_system_instruction_is_none() -> None:
     assert DEEPSEEK_ASSESSMENT_SPEC.system_instruction is None
-
-
-def test_deepseek_rate_limit_policy_has_no_rules() -> None:
-    """DeepSeek は公式 RPM/RPD 公開なし、429 は OpenAI SDK retry に任せる方針。"""
-    assert DEEPSEEK_ASSESSMENT_SPEC.rate_limit_policy == AIModelRateLimitPolicy(
-        provider="deepseek",
-        model="deepseek-v4-flash",
-        rules=(),
-    )
 
 
 def test_deepseek_tool_name_is_assess_article() -> None:

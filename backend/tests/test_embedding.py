@@ -23,11 +23,8 @@ from app.analysis.embedding.domain.value_objects import (
 )
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.analysis.rate_limit import AIModelRateLimitPolicy
 
-_STUB_RATE_LIMIT_POLICY = AIModelRateLimitPolicy(
-    provider="stub", model="stub-model", rules=()
-)
+_STUB_PROVIDER = "stub"
 
 
 def _v(value: float = 0.1) -> list[float]:
@@ -37,9 +34,7 @@ def _v(value: float = 0.1) -> list[float]:
 
 def _ready(text: str = "hello") -> ReadyForEmbedding:
     """テスト用 ReadyForEmbedding を生成する。"""
-    return ReadyForEmbedding(
-        analyzed_article_id=1, text_for_embedding=text
-    )
+    return ReadyForEmbedding(analyzed_article_id=1, text_for_embedding=text)
 
 
 class _InvalidInputSDKError(Exception):
@@ -63,8 +58,8 @@ class StubEmbedder(BaseEmbedder):
         return EMBEDDING_DIMENSION
 
     @property
-    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
-        return _STUB_RATE_LIMIT_POLICY
+    def provider(self) -> str:
+        return _STUB_PROVIDER
 
     def __init__(
         self, *, side_effects: list[list[float] | Exception] | None = None
@@ -186,7 +181,7 @@ def test_base_embedder_rejects_subclass_without_required_properties() -> None:
     """必須 abstract property を欠く具象サブクラスは instance 化で TypeError。"""
 
     class BadEmbedder(BaseEmbedder):
-        # model_name / dimension / rate_limit_policy を意図的に未実装
+        # model_name / dimension / provider を意図的に未実装
 
         async def _call_api(self, text: str) -> list[float]:
             return [0.0]

@@ -15,7 +15,6 @@ from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -94,23 +93,6 @@ async def assess_content(
 
         stage.set_article_id(analyzable_article_id)
 
-        # precondition 未充足の stale trigger で AI quota を消費しない。
-        if not await ctx.state.provider_rate_limit_gate.acquire(
-            assessor.rate_limit_policy
-        ):
-            record_rate_limit_gate_skipped(
-                stage=Stage.ASSESSMENT, model=assessor.model_name
-            )
-            logger.info(
-                "assessment_ai_rate_limit_gate_skipped",
-                curation_id=ready.curation_id,
-                analyzable_article_id=analyzable_article_id,
-                ai_model=assessor.model_name,
-                prompt_version=assessor.prompt_version,
-            )
-            stage.set_result("rate_limited")
-            return
-
         svc = AssessmentService(session_factory)
         handler = AssessmentFailureHandler(session_factory)
 
@@ -127,7 +109,7 @@ async def assess_content(
                 exc=exc,
                 last_attempt=is_last_attempt(ctx),
                 analyzable_article_id=analyzable_article_id,
-                provider=assessor.rate_limit_policy.provider,
+                provider=assessor.provider,
             )
             if decision.stage_hold_reason is not None:
                 await set_stage_hold(

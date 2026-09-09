@@ -15,8 +15,6 @@ from app.analysis.embedding.domain.ready import (
     ReadyForEmbedding,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.analysis.rate_limit import AIModelRateLimitPolicy
-from app.audit.domain.event import Stage
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
@@ -38,32 +36,20 @@ def _make_embedder_fake() -> MagicMock:
     fake = MagicMock()
     fake.model_name = "gemini-embedding-001"
     fake.dimension = 768
-    fake.rate_limit_policy = AIModelRateLimitPolicy(
-        provider="gemini",
-        model="gemini-embedding-001",
-        rules=(),
-    )
+    fake.provider = "gemini"
     fake.document_prefix = ""
     return fake
-
-
-def _make_gate_fake(*, acquired: bool = True) -> MagicMock:
-    gate = MagicMock()
-    gate.acquire = AsyncMock(return_value=acquired)
-    return gate
 
 
 def _make_ctx(
     *,
     embedder: MagicMock | None = None,
-    gate: MagicMock | None = None,
     retries: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
     ctx = MagicMock()
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
-        provider_rate_limit_gate=gate if gate is not None else _make_gate_fake(),
         pipeline_control_redis=object(),
     )
     if embedder is not None:
@@ -130,10 +116,6 @@ class TestGenerateEmbedding:
         # 構築された Ready が Service に渡されていること
         call_args = mock_svc_cls.return_value.execute.call_args
         assert call_args[0][0] is ready
-        # gate.acquire は embedder.rate_limit_policy で呼ばれる
-        mock_ctx.state.provider_rate_limit_gate.acquire.assert_awaited_once_with(
-            mock_ctx.state.embedder.rate_limit_policy
-        )
 
     @pytest.mark.asyncio
     async def test_passes_trigger_analyzable_id_as_hint(self) -> None:
@@ -179,12 +161,11 @@ class TestGenerateEmbedding:
     async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:
         """Ready build blocked なら rejected audit + return、Service は呼ばない。
 
-        rate limit acquire も試みない (Ready 構築が gatekeeper)。
+        Ready 構築で処理対象外を判定する。
         """
         from app.queue.tasks.embedding import generate_embedding
 
-        gate = _make_gate_fake()
-        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         trigger = _make_trigger(analyzed_article_id=42)
         exc = EmbeddingReadyBuildBlockedError(
             EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
@@ -202,8 +183,6 @@ class TestGenerateEmbedding:
             analyzed_article_id=42,
             exc=exc,
         )
-        # rate limit acquire は試みず、Service も呼ばない
-        gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
@@ -211,8 +190,7 @@ class TestGenerateEmbedding:
         """ALREADY_EMBEDDED (冪等 skip) は監査行を焼かず log のみに逃がす。"""
         from app.queue.tasks.embedding import generate_embedding
 
-        gate = _make_gate_fake()
-        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         trigger = _make_trigger(analyzed_article_id=42)
         exc = EmbeddingReadyBuildBlockedError(
             EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
@@ -232,7 +210,6 @@ class TestGenerateEmbedding:
         rejected = [e for e in cap if e["event"] == "generate_embedding_rejected"]
         assert len(rejected) == 1
         assert rejected[0]["code"] == exc.code.value
-        gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
@@ -240,8 +217,7 @@ class TestGenerateEmbedding:
         """Ready 判定中の例外は failed audit 後に元例外を raise する。"""
         from app.queue.tasks.embedding import generate_embedding
 
-        gate = _make_gate_fake()
-        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         trigger = _make_trigger(analyzed_article_id=42)
         exc = RuntimeError("ready build exploded")
 
@@ -264,41 +240,7 @@ class TestGenerateEmbedding:
             analyzed_article_id=42,
             exc=exc,
         )
-        gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_skips_when_gate_denies_quota(self) -> None:
-        """gate.acquire が False なら svc を呼ばず gate skip の log + metric を出す。"""
-        from app.queue.tasks.embedding import generate_embedding
-
-        gate = _make_gate_fake(acquired=False)
-        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
-        trigger = _make_trigger(analyzed_article_id=1)
-        ready = _make_ready(analyzed_article_id=1)
-
-        with (
-            _patch_ready_construction(ready),
-            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
-            patch(
-                "app.queue.tasks.embedding.record_rate_limit_gate_skipped"
-            ) as mock_record,
-            capture_logs() as cap,
-        ):
-            await generate_embedding(trigger=trigger, ctx=mock_ctx)
-
-        gate.acquire.assert_awaited_once()
-        mock_svc_cls.assert_not_called()
-        mock_record.assert_called_once()
-        assert mock_record.call_args.kwargs["stage"] is Stage.EMBEDDING
-        assert mock_record.call_args.kwargs["model"] == "gemini-embedding-001"
-        skips = [
-            e for e in cap if e.get("event") == "embedding_ai_rate_limit_gate_skipped"
-        ]
-        assert skips, "gate skip log が emit されていない"
-        assert skips[-1]["analyzed_article_id"] == 1
-        assert skips[-1]["analyzable_article_id"] == 7
-        assert skips[-1]["embedding_model"] == "gemini-embedding-001"
 
 
 class TestGenerateEmbeddingStageSpan:
@@ -306,7 +248,7 @@ class TestGenerateEmbeddingStageSpan:
 
     終端ステージなので next_task 系 attribute は決して出ない。Service は mock する
     ため succeeded の result は service テストが正本。ここでは task が設定する
-    skipped / rate_limited / failed、article_id late-binding、終端性を固定する。
+    skipped / failed、article_id late-binding、終端性を固定する。
     """
 
     @pytest.mark.asyncio
@@ -385,24 +327,6 @@ class TestGenerateEmbeddingStageSpan:
                 )
 
         assert stage_attrs(capfire)["result"] == "failed"
-
-    @pytest.mark.asyncio
-    async def test_gate_skip_sets_rate_limited(self, capfire: CaptureLogfire) -> None:
-        """gate.acquire=False 経路で task が rate_limited を焼く。"""
-        from app.queue.tasks.embedding import generate_embedding
-
-        gate = _make_gate_fake(acquired=False)
-        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
-        with (
-            _patch_ready_construction(_make_ready(analyzed_article_id=1)),
-            patch("app.queue.tasks.embedding.EmbeddingService"),
-            patch("app.queue.tasks.embedding.record_rate_limit_gate_skipped"),
-        ):
-            await generate_embedding(
-                trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
-            )
-
-        assert stage_attrs(capfire)["result"] == "rate_limited"
 
     @pytest.mark.asyncio
     async def test_terminal_sets_failure_attrs_without_drop_article(
@@ -546,28 +470,6 @@ class TestGenerateEmbeddingProcessingOutcome:
         assert sum_counter_for_result(metrics, _METRIC, "failed") == 1
         for other in ("succeeded", "infra_error"):
             assert sum_counter_for_result(metrics, _METRIC, other) == 0
-
-    @pytest.mark.asyncio
-    async def test_gate_skip_does_not_emit_processing_outcome(
-        self, capfire: CaptureLogfire
-    ) -> None:
-        """gate skip (capacity 制御) は処理試行に入らず counter を汚さない。"""
-        from app.queue.tasks.embedding import generate_embedding
-
-        gate = _make_gate_fake(acquired=False)
-        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
-        with (
-            _patch_ready_construction(_make_ready(analyzed_article_id=1)),
-            patch("app.queue.tasks.embedding.EmbeddingService"),
-            patch("app.queue.tasks.embedding.record_rate_limit_gate_skipped"),
-        ):
-            await generate_embedding(
-                trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
-            )
-
-        metrics = collected_metrics(capfire)
-        for result in _ALL_RESULTS:
-            assert sum_counter_for_result(metrics, _METRIC, result) == 0
 
     @pytest.mark.asyncio
     async def test_ready_build_blocked_does_not_emit_processing_outcome(

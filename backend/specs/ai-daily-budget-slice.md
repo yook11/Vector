@@ -1,6 +1,8 @@
 # AI daily budget slice 仕様
 
-Status: Draft(2026-08-14 設計合意ベース。§判断項目に未決あり)
+Status: Superseded（2026-09-09）
+
+[AI無料枠ゲート撤去](../../specs/pipeline/ai-free-tier-gate-removal.md)に置き換えた。rpd・rpmのゲートを撤去し、本DraftのAI日次予算・通知・ACL追加は実装しない。既存backfillの日次予算と実API障害への対応は維持する。以下は過去の設計案として保存する。
 
 ## Problem
 

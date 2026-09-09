@@ -32,7 +32,7 @@ pipeline_events から**逃がす**のは、次のように業務状態を変え
 - 競合に負けただけの処理(楽観ロック敗北 / URL 衝突)
 - stale trigger(claim 失効後の後処理)
 - 運用ゲート(kill switch / hold / no_target)
-- rate limit gate(既に逃がし済み)
+- rate limit gateは撤去済みであり、専用ログ・カウンタ・span resultも新規出力しない。
 - 集計で十分な高頻度イベント
 
 逃がしの機械的 discriminator: **content / ドメイン由来の `reason` を持たず、業務状態を変えないもの**。この基準は既に [completion.py:450 `_project_ready_build_error`](../../backend/app/audit/stages/completion.py) が体現しており(VO 構築失敗 → `FAILED` + `reason_code`、stale/冪等 → `SKIPPED`)、task 側 [completion.py:137](../../backend/app/queue/tasks/completion.py) も「`FAILED` のみ計上 / `SKIPPED` は log して return」とゲート済み。本ポリシーはこの既存の考え方を全 stage に広げるもので、新規の抽象化ではない。

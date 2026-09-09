@@ -19,8 +19,6 @@ from app.analysis.curation.domain.ready import (
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
-from app.audit.domain.event import Stage
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 from tests.logfire._span_helpers import stage_attrs
@@ -30,16 +28,7 @@ def _make_provider_fake() -> MagicMock:
     fake = MagicMock()
     fake.model_name = "test-model"
     fake.prompt_version = "test-prompt-v1"
-    fake.rate_limit_policy = AIModelRateLimitPolicy(
-        provider="gemini",
-        model="test-model",
-        rules=(
-            RateLimitRule(
-                name="rpd", max_requests=1500, window_seconds=86400, block=False
-            ),
-            RateLimitRule(name="rpm", max_requests=50, window_seconds=60, block=True),
-        ),
-    )
+    fake.provider = "gemini"
     return fake
 
 
@@ -48,14 +37,10 @@ def _make_ctx(
     curator: MagicMock | None = None,
     retries: int = 0,
     max_retries: int = 0,
-    gate_acquire: bool = True,
 ) -> MagicMock:
     ctx = MagicMock()
-    gate = MagicMock()
-    gate.acquire = AsyncMock(return_value=gate_acquire)
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
-        provider_rate_limit_gate=gate,
         pipeline_control_redis=object(),
     )
     if curator is not None:
@@ -150,7 +135,7 @@ class TestCurateContent:
 
         案 3: precondition (article 既消滅 / 既処理 / 本文 oversized) の
         判定は Stage 3 task 冒頭で Ready 自構築時に行われ、未充足なら
-        AI quota / Service を消費せず短絡する。
+        AIを呼び出さず短絡する。
         """
         from app.queue.tasks.curation import curate_content
 
@@ -173,9 +158,7 @@ class TestCurateContent:
             target_article_id=1,
             exc=exc,
         )
-        # Service / rate limit gate / chain firing いずれも触らない
         mock_svc_cls.assert_not_called()
-        mock_ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_assess.kiq.assert_not_called()
 
     @pytest.mark.asyncio
@@ -240,39 +223,7 @@ class TestCurateContent:
             exc=exc,
         )
         mock_svc_cls.assert_not_called()
-        mock_ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_assess.kiq.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_quota_skip_returns_without_invoking_service(self) -> None:
-        """gate.acquire=False の場合 gate skip の log + metric を出して return する。"""
-        from app.queue.tasks.curation import curate_content
-
-        mock_ctx = _make_ctx(curator=_make_provider_fake(), gate_acquire=False)
-
-        with (
-            _patch_try_advance_from(_fixed_ready()),
-            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
-            patch(
-                "app.queue.tasks.curation.record_rate_limit_gate_skipped"
-            ) as mock_record,
-            capture_logs() as cap,
-        ):
-            mock_assess.kiq = AsyncMock()
-            await curate_content(trigger=_trigger(), ctx=mock_ctx)
-
-        mock_svc_cls.assert_not_called()
-        mock_assess.kiq.assert_not_called()
-        mock_record.assert_called_once()
-        assert mock_record.call_args.kwargs["stage"] is Stage.CURATION
-        assert mock_record.call_args.kwargs["model"] == "test-model"
-        skips = [
-            e for e in cap if e.get("event") == "curation_ai_rate_limit_gate_skipped"
-        ]
-        assert skips, "gate skip log が emit されていない"
-        assert skips[-1]["ai_model"] == "test-model"
-        assert skips[-1]["prompt_version"] == "test-prompt-v1"
 
     @pytest.mark.asyncio
     async def test_rate_limited_records_audit_and_returns(self) -> None:
@@ -370,7 +321,7 @@ class TestCurateContentStageSpan:
     """``article_stage`` span の curation task 配線 (capfire oracle)。
 
     Service は mock するため signal / noise の result は service テストが正本。
-    ここでは task が設定する skipped / rate_limited / failed と、kiq 成功後の
+    ここでは task が設定する skipped / failed と、kiq 成功後の
     mark、success 経路で task が result を設定しないことを固定する。
     """
 
@@ -468,23 +419,6 @@ class TestCurateContentStageSpan:
                 await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         assert stage_attrs(capfire)["result"] == "failed"
-
-    @pytest.mark.asyncio
-    async def test_gate_skip_sets_rate_limited(self, capfire: CaptureLogfire) -> None:
-        """gate.acquire=False 経路で task が result=rate_limited を焼く。"""
-        from app.queue.tasks.curation import curate_content
-
-        mock_ctx = _make_ctx(curator=_make_provider_fake(), gate_acquire=False)
-        with (
-            _patch_try_advance_from(_fixed_ready()),
-            patch("app.queue.tasks.curation.CurationService"),
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
-            patch("app.queue.tasks.curation.record_rate_limit_gate_skipped"),
-        ):
-            mock_assess.kiq = AsyncMock()
-            await curate_content(trigger=_trigger(), ctx=mock_ctx)
-
-        assert stage_attrs(capfire)["result"] == "rate_limited"
 
     @pytest.mark.asyncio
     async def test_terminal_drop_sets_failure_attrs_with_drop_article(

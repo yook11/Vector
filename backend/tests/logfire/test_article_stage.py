@@ -110,20 +110,17 @@ def test_embedding_stage_span_rejects_legacy_analysis_id_keyword() -> None:
 _CURATION_RESULTS: list[CurationStageResult] = [
     "signal",
     "noise",
-    "rate_limited",
     "skipped",
     "failed",
 ]
 _ASSESSMENT_RESULTS: list[AssessmentResult] = [
     "in_scope",
     "out_of_scope",
-    "rate_limited",
     "skipped",
     "failed",
 ]
 _EMBEDDING_RESULTS: list[EmbeddingResult] = [
     "succeeded",
-    "rate_limited",
     "skipped",
     "failed",
 ]

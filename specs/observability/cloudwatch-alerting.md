@@ -23,7 +23,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - `observe_pipeline_queue_health`(`backend/app/queue/tasks/queue_health.py`)が毎分、acquisition / completion / curation / assessment の 4 stream について `oldest_outstanding_enqueue_age`(最古の未処理 entry の経過秒数)等を stage 属性付き gauge で Logfire に記録している。観測失敗時は `observation_up=0`。**embedding と dispatch の stream は観測対象外**(`PIPELINE_QUEUE_TARGETS` 固定 4 stage)。
 - queue_health は analysis サービス内の maintenance worker(`supervisord/analysis.conf`)で動く。maintenance worker は backfill 救済・retention purge も担う。
 - AI provider エラーは翻訳層で分類済み(`app/analysis/gemini_error_translator.py` / `deepseek_error_translator.py`): 一時的な `AIProviderRateLimitedError` と、利用枠の枯渇である `AIProviderUsageLimitExhaustedError`(Gemini 429 の quota/daily)・`AIProviderInsufficientBalanceError`(DeepSeek 残高切れ)を区別している。
-- 自前の rate limit gate(`app/analysis/rate_limit/`)は provider quota を先回りして AI call を skip し、`vector.analysis.rate_limit_gate_skipped{stage,model}` を Logfire に記録している。
+- 無料枠向けの事前ゲートと専用Logfireカウンタは撤去済み。実APIの429・利用枠枯渇・残高不足の分類と通知は維持する。
 - agent(Q&A)の runtime(`app/agent/runtime/gemini.py` / `deepseek.py`)も同じ翻訳層(`translate_gemini_error` / `translate_deepseek_error`)を再利用しており、枯渇系エラーの語彙は pipeline と共通。
 - 2026-06-08 incident: worker-fetch 停止(SPOF)で dispatch task が実行されず収集が途絶。dispatch が死ぬと下流 stream には何も積まれないため、下流の滞留観測では原理的に検知できない。
 - scheduler は singleton 構成。HTTP を持たず、死活は ALB では観測できない。
