@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy import delete, select
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.analysis.ai_provider_errors import (
     AIProviderInputRejectedError,
@@ -26,11 +28,12 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.errors import (
-    EmbeddingRecoverableError,
+    EmbeddingAnalyzedArticleMissingError,
+    EmbeddingError,
+    EmbeddingFailureReason,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalError,
 )
-from app.analysis.embedding.service import EmbeddingService
+from app.analysis.embedding.service import EmbeddingCompletionReason, EmbeddingService
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
@@ -153,7 +156,7 @@ async def test_execute_persists_embedding_on_success(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """正常系: 埋め込み生成 → 永続化 → 成功 audit 焼き付け → None 返却。"""
+    """ベクトルと成功監査の保存完了後にSAVEDを返す。"""
     article = await _build_article(
         db_session, sample_source, url="https://example.com/embed-ok"
     )
@@ -168,7 +171,7 @@ async def test_execute_persists_embedding_on_success(
     ready = _make_ready(analyzed_article_id=analyzed_article_id)
     result = await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
-    assert result is None
+    assert result.reason is EmbeddingCompletionReason.SAVED
     embedder.embed_document.assert_called_once_with(ready)
 
     db_session.expire_all()
@@ -185,7 +188,7 @@ async def test_execute_persists_embedding_on_success(
     assert ev.payload["vector_dimension"] == EMBEDDING_DIMENSION
 
 
-# 並行 update で先に書かれていた: save が False → log + None で短絡
+# 保存前の行ロックで生成済みを確認した場合は上書きせず短絡する。
 
 
 @pytest.mark.asyncio
@@ -195,10 +198,7 @@ async def test_execute_shortcircuits_when_already_persisted(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """Ready 構築後に他ワーカーが先に書き込んだ場合、save は False を返し
-    Service が log + None で短絡する。DB は先行値のまま上書きされない。
-    audit / commit も呼ばない。
-    """
+    """Ready構築後に保存されたベクトルを上書きせず、成功監査も重複させない。"""
     preexisting_vector = [0.4] * EMBEDDING_DIMENSION
     article = await _build_article(
         db_session, sample_source, url="https://example.com/concurrent"
@@ -223,10 +223,16 @@ async def test_execute_shortcircuits_when_already_persisted(
     ready = _make_ready(analyzed_article_id=analyzed_article_id)
     result = await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
-    assert result is None
+    assert result.reason is EmbeddingCompletionReason.ALREADY_EMBEDDED
     # 先行する write の値のまま、後続の save で上書きされていない
     db_session.expire_all()
-    refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
+    refetched = (
+        await db_session.execute(
+            select(AnalyzedArticleRecord)
+            .where(AnalyzedArticleRecord.id == analyzed_article_id)
+            .with_for_update(nowait=True)
+        )
+    ).scalar_one()
     assert refetched is not None
     raw = refetched.embedding
     values = raw.to_list() if hasattr(raw, "to_list") else list(raw)
@@ -273,15 +279,15 @@ async def test_execute_wraps_target_rejected_provider_error(
     svc = EmbeddingService(session_factory)
     ready = _make_ready(analyzed_article_id=analyzed_article_id)
 
-    with pytest.raises(EmbeddingTerminalError) as exc_info:
+    with pytest.raises(EmbeddingError) as exc_info:
         await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
     # provider_error attr に元 instance が identity 付きで保持される
     assert exc_info.value.provider_error is original
     assert exc_info.value.code == AIProviderInputRejectedError.CODE
     # content 拒否は回復クラス TARGET_REJECTED → failure_kind / failure_reason
-    assert exc_info.value.failure_kind == "target_rejected"
-    assert exc_info.value.failure_reason == "input_blocked"
+    assert exc_info.value.reason is EmbeddingFailureReason.PROVIDER_ERROR
+    assert exc_info.value.provider_error.reason.value == "input_blocked"
     # __cause__ に元 provider error が紐付く (audit error_chain 連鎖)
     assert exc_info.value.__cause__ is original
 
@@ -308,7 +314,7 @@ async def test_execute_wraps_recoverable_provider_errors(
     provider_exc: Exception,
 ) -> None:
     """Rate / Service / Network は Service の ACL で
-    ``EmbeddingRecoverableError`` に詰め替えられて Task 層に伝搬する。
+    ``EmbeddingError`` に元の例外を保持して呼び出し元へ伝搬する。
     """
     article = await _build_article(
         db_session,
@@ -325,7 +331,7 @@ async def test_execute_wraps_recoverable_provider_errors(
     svc = EmbeddingService(session_factory)
     ready = _make_ready(analyzed_article_id=analyzed_article_id)
 
-    with pytest.raises(EmbeddingRecoverableError) as exc_info:
+    with pytest.raises(EmbeddingError) as exc_info:
         await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
     assert exc_info.value.provider_error is provider_exc
@@ -373,3 +379,133 @@ async def test_execute_propagates_response_invalid_from_embedder(
     refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
     assert refetched is not None
     assert refetched.embedding is None
+
+
+@pytest.mark.asyncio
+async def test_execute_fails_when_article_is_deleted_during_ai_call(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """AI待機中の削除を妨げず、保存時の不存在を成功にしない。"""
+    article = await _build_article(
+        db_session, sample_source, url="https://example.com/deleted-during-ai"
+    )
+    extraction = await _build_extraction(db_session, article)
+    analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
+    await db_session.commit()
+    analyzed_article_id, article_id = analysis.id, article.id
+
+    async def delete_while_embedding(_ready: ReadyForEmbedding) -> EmbeddingVector:
+        async with session_factory() as other:
+            await other.execute(
+                delete(AnalyzedArticleRecord).where(
+                    AnalyzedArticleRecord.id == analyzed_article_id
+                )
+            )
+            await other.commit()
+        return EmbeddingVector(root=tuple([0.2] * EMBEDDING_DIMENSION))
+
+    embedder = _mock_embedder()
+    embedder.embed_document.side_effect = delete_while_embedding
+    with pytest.raises(EmbeddingAnalyzedArticleMissingError):
+        async with asyncio.timeout(5):
+            await EmbeddingService(session_factory).execute(
+                _make_ready(analyzed_article_id=analyzed_article_id),
+                embedder,
+                analyzable_article_id=article_id,
+            )
+
+    db_session.expire_all()
+    assert await db_session.get(AnalyzedArticleRecord, analyzed_article_id) is None
+    assert (await db_session.execute(select(PipelineEvent))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_services_commit_only_one_vector_and_success_audit(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """同時にAI処理する2実行でも、保存と成功監査を1回に収める。"""
+    article = await _build_article(
+        db_session, sample_source, url="https://example.com/two-embedding-services"
+    )
+    extraction = await _build_extraction(db_session, article)
+    analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
+    await db_session.commit()
+    analyzed_article_id, article_id = analysis.id, article.id
+    ready = _make_ready(analyzed_article_id=analyzed_article_id)
+    barrier = asyncio.Barrier(2)
+
+    async def embed_together(_ready: ReadyForEmbedding) -> EmbeddingVector:
+        index = await barrier.wait()
+        return EmbeddingVector(root=tuple([0.2 + index * 0.4] * EMBEDDING_DIMENSION))
+
+    embedder = _mock_embedder()
+    embedder.embed_document.side_effect = embed_together
+    async with asyncio.timeout(10):
+        results = await asyncio.gather(
+            *[
+                EmbeddingService(session_factory).execute(
+                    ready, embedder, analyzable_article_id=article_id
+                )
+                for _ in range(2)
+            ]
+        )
+    assert [r.reason for r in results].count(EmbeddingCompletionReason.SAVED) == 1
+    assert [r.reason for r in results].count(
+        EmbeddingCompletionReason.ALREADY_EMBEDDED
+    ) == 1
+    assert embedder.embed_document.await_count == 2
+    db_session.expire_all()
+    stored = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
+    assert stored is not None and stored.embedding is not None
+    values = stored.embedding
+    assert values[0] == pytest.approx(0.2, abs=1e-3) or values[0] == pytest.approx(
+        0.6, abs=1e-3
+    )
+    assert (await _fetch_audit(db_session, article_id)).event_type == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_execute_propagates_lock_timeout_without_success_audit(
+    db_session: AsyncSession,
+    test_database_url: str,
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """行ロックの取得失敗を正常終了させず、ロールバック後には保存できる。"""
+    article = await _build_article(
+        db_session, sample_source, url="https://example.com/embedding-lock-timeout"
+    )
+    extraction = await _build_extraction(db_session, article)
+    analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
+    await db_session.commit()
+    analyzed_article_id, article_id = analysis.id, article.id
+    await db_session.execute(
+        select(AnalyzedArticleRecord.id)
+        .where(AnalyzedArticleRecord.id == analyzed_article_id)
+        .with_for_update()
+    )
+    engine = create_async_engine(
+        test_database_url, connect_args={"server_settings": {"lock_timeout": "100ms"}}
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    ready = _make_ready(analyzed_article_id=analyzed_article_id)
+    try:
+        with pytest.raises(DBAPIError) as error:
+            await EmbeddingService(factory).execute(
+                ready, _mock_embedder(), analyzable_article_id=article_id
+            )
+        assert error.value.orig.sqlstate == "55P03"
+        assert (await db_session.execute(select(PipelineEvent))).scalars().all() == []
+        await db_session.rollback()
+        await EmbeddingService(factory).execute(
+            ready, _mock_embedder(), analyzable_article_id=article_id
+        )
+        assert (await _fetch_audit(db_session, article_id)).event_type == "succeeded"
+    finally:
+        await engine.dispose()

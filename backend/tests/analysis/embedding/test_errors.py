@@ -1,11 +1,4 @@
-"""Stage 5 (Embedding) Layer 1 / Layer 2-B marker の振る舞いテスト。
-
-Layer 1 marker は retry 軸 (``RETRYABILITY``) だけを型で固定し、原因軸
-(``failure_kind`` = 回復クラス / ``failure_reason`` = 詳細) は instance 値で持つ。
-``Recoverable`` / ``Terminal`` はどちらも具象で同形の kwargs-only constructor。
-hold は marker 型ではなく handler が provider mode から導出するため、旧
-``*StageBlocked`` / ``*TargetRejected`` は存在しない (Stage 4 と完全同形)。
-"""
+"""Serviceの失敗理由と既存Taskiqの再試行分類の契約。"""
 
 from __future__ import annotations
 
@@ -16,10 +9,16 @@ from app.analysis.ai_provider_errors import (
     AIProviderRateLimitedError,
 )
 from app.analysis.embedding.errors import (
+    EmbeddingAnalyzedArticleMissingError,
     EmbeddingError,
-    EmbeddingRecoverableError,
+    EmbeddingFailureReason,
     EmbeddingResponseInvalidError,
+)
+from app.analysis.embedding.task_errors import (
+    EmbeddingRecoverableError,
+    EmbeddingTaskError,
     EmbeddingTerminalError,
+    to_embedding_task_error,
 )
 from app.audit.failure_projection import Retryability
 
@@ -105,9 +104,9 @@ class TestStage5MarkerHierarchy:
 
     @pytest.mark.parametrize("marker", _LAYER1_MARKERS)
     def test_layer1_subclasses_embedding_error(
-        self, marker: type[EmbeddingError]
+        self, marker: type[EmbeddingTaskError]
     ) -> None:
-        assert issubclass(marker, EmbeddingError)
+        assert issubclass(marker, EmbeddingTaskError)
 
     def test_recoverable_and_terminal_are_disjoint(self) -> None:
         assert not issubclass(EmbeddingRecoverableError, EmbeddingTerminalError)
@@ -125,23 +124,23 @@ class TestStage5MarkerHierarchy:
 
 
 class TestEmbeddingResponseInvalidError:
-    """Layer 2-B marker: ``EmbeddingResponseInvalidError`` (Recoverable 系)。"""
+    """応答不正はServiceの失敗理由であり、再試行分類を継承しない。"""
 
-    def test_is_recoverable_subclass(self) -> None:
-        assert issubclass(EmbeddingResponseInvalidError, EmbeddingRecoverableError)
+    def test_is_service_error_subclass(self) -> None:
+        assert issubclass(EmbeddingResponseInvalidError, EmbeddingError)
 
     def test_holds_fixed_code(self) -> None:
         exc = EmbeddingResponseInvalidError()
         assert exc.code == "embedding_response_invalid"
 
-    def test_failure_kind_is_ai_response_invalid(self) -> None:
+    def test_reason_is_response_invalid(self) -> None:
         exc = EmbeddingResponseInvalidError()
-        assert exc.failure_kind == "ai_response_invalid"
+        assert exc.reason is EmbeddingFailureReason.RESPONSE_INVALID
 
-    def test_provider_error_and_reason_are_none(self) -> None:
+    def test_has_no_provider_error_or_retry_policy(self) -> None:
         exc = EmbeddingResponseInvalidError()
         assert exc.provider_error is None
-        assert exc.failure_reason is None
+        assert not hasattr(exc, "RETRYABILITY")
 
     def test_str_renders_code_only(self) -> None:
         exc = EmbeddingResponseInvalidError()
@@ -154,3 +153,67 @@ class TestEmbeddingResponseInvalidError:
 
     def test_is_not_terminal(self) -> None:
         assert not issubclass(EmbeddingResponseInvalidError, EmbeddingTerminalError)
+
+
+@pytest.mark.parametrize(
+    ("error_type", "reason", "marker", "kind"),
+    [
+        (
+            EmbeddingAnalyzedArticleMissingError,
+            EmbeddingFailureReason.ARTICLE_MISSING,
+            EmbeddingTerminalError,
+            "target_missing",
+        ),
+        (
+            EmbeddingResponseInvalidError,
+            EmbeddingFailureReason.RESPONSE_INVALID,
+            EmbeddingRecoverableError,
+            "ai_response_invalid",
+        ),
+    ],
+)
+def test_service_reason_is_independent_of_taskiq_policy(
+    error_type, reason, marker, kind
+):
+    """Serviceの理由をTaskiq境界だけで従来の監査・再試行分類に変換する。"""
+    error = error_type()
+    assert error.reason is reason
+    assert not hasattr(error, "RETRYABILITY")
+    assert not isinstance(error, EmbeddingTaskError)
+    converted = to_embedding_task_error(error)
+    assert isinstance(converted, marker)
+    assert converted.code == error.code
+    assert converted.failure_kind == kind
+    assert converted.__cause__ is error
+
+
+@pytest.mark.parametrize("reason", ["article_missing", None])
+def test_failure_reason_rejects_untyped_values(reason):
+    """自由文字列を失敗理由として受け付けない。"""
+    with pytest.raises(TypeError):
+        EmbeddingError(reason=reason)
+
+
+def test_provider_reason_requires_classified_provider_error():
+    """プロバイダー障害には詳細を持つ元の例外を必須とする。"""
+    with pytest.raises(TypeError):
+        EmbeddingError(reason=EmbeddingFailureReason.PROVIDER_ERROR)
+    with pytest.raises(TypeError):
+        EmbeddingError(
+            reason=EmbeddingFailureReason.ARTICLE_MISSING,
+            provider_error=AIProviderRateLimitedError(),
+        )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("unexpected"),
+        EmbeddingRecoverableError(
+            code="embedding_response_invalid", failure_kind="ai_response_invalid"
+        ),
+    ],
+)
+def test_task_adapter_preserves_non_service_errors(error):
+    """想定外例外と変換済みのTaskiq例外は同じインスタンスを維持する。"""
+    assert to_embedding_task_error(error) is error

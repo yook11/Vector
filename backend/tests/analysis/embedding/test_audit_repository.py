@@ -44,9 +44,12 @@ from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildBlockedError,
 )
 from app.analysis.embedding.errors import (
-    EmbeddingRecoverableError,
+    EmbeddingError,
     EmbeddingResponseInvalidError,
     to_embedding_error,
+)
+from app.analysis.embedding.task_errors import (
+    to_embedding_task_error,
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.domain.payloads import EmbeddingPayload
@@ -326,7 +329,7 @@ async def test_append_failure_recoverable_maps_to_retryable(
         await EmbeddingAuditRepository(session).append_failure(
             analyzed_article_id=1,
             article_id=article.id,
-            exc=exc,
+            exc=to_embedding_task_error(exc),
         )
         await session.commit()
 
@@ -353,7 +356,7 @@ async def test_append_failure_terminal_operator_action(
         await EmbeddingAuditRepository(session).append_failure(
             analyzed_article_id=1,
             article_id=article.id,
-            exc=exc,
+            exc=to_embedding_task_error(exc),
         )
         await session.commit()
 
@@ -381,7 +384,7 @@ async def test_append_failure_terminal_target_rejected(
         await EmbeddingAuditRepository(session).append_failure(
             analyzed_article_id=1,
             article_id=article.id,
-            exc=exc,
+            exc=to_embedding_task_error(exc),
         )
         await session.commit()
 
@@ -399,10 +402,7 @@ async def test_append_failure_layer_2b_response_invalid(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Layer 2-B EmbeddingResponseInvalidError は Recoverable 継承で retryable。
-
-    ctor は message のみ、code は内部で hardcode (embedding_response_invalid)。
-    """
+    """応答不正はTaskiq境界で変換し、従来のコードとretryable分類を維持する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = EmbeddingResponseInvalidError()
@@ -411,7 +411,7 @@ async def test_append_failure_layer_2b_response_invalid(
         await EmbeddingAuditRepository(session).append_failure(
             analyzed_article_id=1,
             article_id=article.id,
-            exc=exc,
+            exc=to_embedding_task_error(exc),
         )
         await session.commit()
 
@@ -521,36 +521,30 @@ async def test_append_failure_walks_error_chain_via_cause(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """error_chain は __cause__ を辿り 2 段以上を記録する。
-
-    Service の ``raise to_embedding_error(exc) from exc`` で
-    Layer 1 marker (wrapper) と元 ``AIProvider*Error`` の両方が必要。
-    """
+    """監査にTaskiq分類・Service失敗・元のプロバイダー例外を残す。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     try:
         try:
-            raise RuntimeError("upstream provider error")
-        except RuntimeError as inner:
-            # kwargs-only constructor。原因軸 (failure_kind) も instance 値で持つ。
-            raise EmbeddingRecoverableError(
-                code="ai_error_network", failure_kind="attempt_scoped"
-            ) from inner
-    except EmbeddingRecoverableError as exc:
+            raise AIProviderNetworkError()
+        except AIProviderNetworkError as inner:
+            raise to_embedding_error(inner) from inner
+    except EmbeddingError as exc:
         async with session_factory() as session:
             await EmbeddingAuditRepository(session).append_failure(
                 analyzed_article_id=1,
                 article_id=article.id,
-                exc=exc,
+                exc=to_embedding_task_error(exc),
             )
             await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     chain = ev.payload["error_chain"]
     assert chain is not None
-    assert len(chain) >= 2
+    assert len(chain) == 3
     assert chain[0].endswith(".EmbeddingRecoverableError")
-    assert chain[1].endswith(".RuntimeError")
+    assert chain[1].endswith(".EmbeddingError")
+    assert chain[2].endswith(".AIProviderNetworkError")
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ Status: Draft（2026-09-09、スライス1のTerraform実装済み・AWS未適�
 - [ArticleAssessedInScope](../../backend/app/analysis/assessment/events.py)：イベント種別・バージョン・payload。
 - [既存Taskiqタスク](../../backend/app/queue/tasks/embedding.py)：Ready構築、Service呼び出し、失敗処理。現在のtask timeoutは60秒。
 - [EmbeddingService](../../backend/app/analysis/embedding/service.py)：AI呼び出しと、ベクトル・成功監査の同一トランザクション保存。
+- [EmbeddingConsumer](../../backend/app/analysis/embedding/consumer.py)：検証済みpayloadの受信、開始状態の取得、60秒の業務処理、失敗後処理と例外伝播。
 - [EmbeddingRepository](../../backend/app/analysis/embedding/repository.py)：生成済み判定と、embeddingがNULLの場合だけ更新する保存処理。
 - [worker起動設定](../../backend/supervisord/analysis.conf)：embedding workerの最大同時実行数は1プロセスあたり10。
 - [relay基盤](../../infra/aws/outbox_relay.tf)：Standardキュー、relay Lambda、無効状態のScheduler。consumer・SQS起動トリガーは未実装。
@@ -84,11 +85,65 @@ SQSによるメッセージ削除はLambda連携の成功処理に任せる。co
 
 失敗監査自体がDB障害で保存できない場合も成功にはしない。Lambdaの強制終了ではアプリケーションの失敗記録を実行できない可能性があるため、Lambda側の失敗観測も必要とする。
 
-### 既存実装との差分
+### 保存時の状態確認
 
-現在の`EmbeddingRepository.save()`は更新0件を`False`で返し、Serviceは競合として正常終了する。しかし更新0件には「他の実行が保存済み」と「行が削除された」の両方が含まれ得る。
+共通の`EmbeddingService`はAI処理を終えた後に保存用トランザクションを開始し、記事IDで`SELECT ... FOR UPDATE`して保存対象をロックする。Repositoryの`lock_save_state()`は、存在と生成状態を`EmbeddingSaveState`の3状態として返す。
+
+- `ARTICLE_MISSING`：`EmbeddingAnalyzedArticleMissingError`を送出する。
+- `EMBEDDED`：`EmbeddingCompletion(reason=ALREADY_EMBEDDED)`を返し、成功監査は重複させない。
+- `UNEMBEDDED`：条件付きUPDATEと成功監査を同一トランザクションでコミットした後に`EmbeddingCompletion(reason=SAVED)`を返す。
+
+行ロックはAI待機中には保持せず、保存時からトランザクション終了まで保持する。記事の削除が先に確定した場合は不存在となり、保存側が先にロックした場合は削除が待機する。ロック取得・更新・コミットの失敗は呼び出し元へ伝播する。ロックした未生成行の更新が0件になる矛盾も正常終了させない。
+
+`EmbeddingSaveState`は保存前のDB状態、`EmbeddingCompletion`はServiceの正常終了結果を表す。記事不存在・API障害・DB障害は結果値に変換せず例外で伝える。正常完了のreasonは`EmbeddingCompletionReason`とする。
+
+Serviceの失敗は`EmbeddingError.reason`（`EmbeddingFailureReason`）で表し、再試行方針を持たない。
+
+| reason | 詳細 | 既存Taskiqでの対応 |
+|---|---|---|
+| `ARTICLE_MISSING` | 保存対象の記事が存在しない | `embedding_analyzed_article_missing`／`target_missing`、追加再試行なし |
+| `RESPONSE_INVALID` | 埋め込み応答がベクトルの契約を満たさない | `embedding_response_invalid`／`ai_response_invalid`、既存上限まで再試行 |
+| `PROVIDER_ERROR` | 元のprovider例外に429・通信障害・残高不足などの分類と詳細を保持 | providerの既存FAILURE_MODEから再試行・holdを判断 |
+
+DB障害と想定外例外は`EmbeddingError`に包まず伝播する。`code`はreasonと元のprovider例外から導出し、監査コードを二重管理しない。
+
+`task_errors.py`の変換を既存Taskiq境界で行い、Serviceの例外を`EmbeddingRecoverableError`／`EmbeddingTerminalError`に対応付ける。既存の監査コード・failure_kind・failure_reason・retryability・通知providerは維持する。互換例外のモジュール移動に伴い、新しく記録するerror_classの完全修飾名は変わり、error_chainにはService例外が加わる。過去の監査データは変更しない。
+
+既存Taskiqは正常終了結果を受け取って完了し、再試行・監査・通知の扱いは維持する。
+
+記事不存在の場合は対象行のロックを取得せず、例外でセッションを終了する。生成済みの場合はその場でreturnし、セッション終了時のロールバックで行ロックを解放する。
+
+保存時の記事不存在は`embedding_analyzed_article_missing`／`target_missing`として既存Taskiqの失敗handlerでFAILED監査に記録する。Taskiqでは既存のTerminal処理に従い追加再試行・holdを行わない。開始時のReady構築におけるTaskiqの既存REJECTED処理は今回変更しない。
 
 consumerでは両者を区別し、生成済みを確認できた場合だけ対応完了とする。単なる更新0件、失敗handlerによる例外抑止、試行上限到達を成功の根拠にしない。状態確認自体の失敗もSQSへ失敗を返す。
+
+### Consumer本体の処理
+
+`app/analysis/embedding/consumer.py`の`EmbeddingConsumer(session_factory, embedder)`が、検証済みの`ArticleAssessedInScope`を`consume(event)`で受け取る。TaskiqのContextやLambda/SQS形式には依存しない。
+
+1. `analyzed_article_id`で開始状態を一度取得し、取得できた元記事IDを保持する。イベントの`curation_id`との対応は発行元の保存・Outbox生成契約を信頼し、再照合しない。
+2. 取得用セッションを閉じ、`ReadyForEmbedding.from_facts()`で純粋に開始条件と入力を検証する。Taskiqの既存`try_advance_from()`もこの関数へ委譲し、戻り値・blocked例外・hintの優先順位を維持する。
+3. 開始時に不存在なら`EmbeddingAnalyzedArticleMissingError`へ変換する。生成済みならAI・成功監査・成功計測を行わず`ALREADY_EMBEDDED`で完了する。
+4. 未生成ならServiceを実行して`EmbeddingCompletion`をそのまま返す。保存時の競合・削除・コミット失敗の契約を維持する。
+5. 開始時からService完了までの通常の例外は、分類・後処理を経て再送出する。分類や後処理自体の予期しない二次障害でも元の例外を維持し、安全なログを試みる。外部キャンセルは通常の失敗として処理しない。
+
+元記事IDを取得できなかった場合は`article_id=NULL`として分析記事IDをpayloadに残す。開始時の不存在も`embedding_analyzed_article_missing`／`target_missing`のFAILED監査とする。取得済みの記事IDはそのまま使用し、後から親記事が削除されて監査不能になった場合も既存のdrop計測・通知を試み、元の例外を伝播する。
+
+今回は既存Taskiqの入口や配置を移動せず、Consumer専用トレースの配線・イベントenvelopeの検証・Lambda/SQS応答・デプロイは後続に残す。
+
+### Consumerの失敗分類と後処理
+
+分類関数とConsumer用ハンドラーを実装し、Consumer本体から開始時の取得・Ready構築・Service実行中の失敗を接続する。入力イベントの検証・Lambda/SQS応答は後続とする。
+
+- `classify_embedding_failure(exc)`は副作用のない関数で、`EmbeddingFailureClassification`を返す。監査用の`FailureProjection`、監視上の`failed`／`infra_error`、必要な枯渇通知の元例外を持つ。
+- Serviceのreasonと元のprovider例外から直接分類し、Taskiq用のRecoverable／Terminalには変換しない。DB例外は共有のDB分類を使う。想定外例外と通常のTimeoutErrorは`unexpected_error`／`unknown`として失敗に分類する。
+- 監査上のretryabilityは失敗の性質として維持するが、例外抑止・再配信・holdの判断には使用しない。
+- `EmbeddingConsumerFailureHandler.handle()`は分類結果、元の例外、分析記事ID、記事ID、providerを受け取り、失敗件数の計測・失敗監査・必要な枯渇通知をそれぞれ試みる。戻り値はNoneで、処理全体の成功を示す値ではない。
+- 監査は元の例外のerror_class・error_chainを保持し、既存のpayload組み立てと秘匿処理を再利用する。枯渇通知は既存の`ai_provider_exhausted`打点で、残高不足・利用枠枯渇のみを対象とする。通常の429は枯渇通知の対象外。
+- 後処理の通常の例外は捕捉し、処理名・記事ID・例外クラスだけを二次障害ログに記録する。例外本文やトレースバックは出さない。監査失敗時は既存の監査drop計測も試みる。ログ出力自体の失敗でも残りの後処理を継続する。
+- 元の例外の再送出は後続のConsumerの責務であり、ハンドラー内では再送出も成功への変換も行わない。キャンセルやプロセス終了を通常の二次障害として抑止しない。
+
+既存Taskiqのハンドラーと起動配線は維持する。枯渇通知の対象判定だけを共有の純粋関数へ切り出し、既存通知の条件と出力を維持する。
 
 ## 実行・再配信設定
 
@@ -108,7 +163,7 @@ consumerでは両者を区別し、生成済みを確認できた場合だけ対
 
 1起動1件であり、関数内で複数記事を並列処理しない。必要に応じて最大10起動が並行する上限で、常時10起動する設定ではない。
 
-業務処理の60秒はReady構築・AI呼び出し・保存を対象とし、Lambda全体の120秒との差は初期化・失敗記録・接続終了の余裕とする。終了処理やSDK設定を含む具体的な時間制御は実装前に確定する。
+業務処理の60秒はReady構築・AI呼び出し・保存を対象とし、Lambda全体の120秒との差は初期化・失敗記録・接続終了の余裕とする。Consumerの`asyncio.timeout(60)`は開始状態の取得からService完了までを対象とし、失敗後処理はその外側で実行する。これは協調的キャンセルによる上限であり、Lambdaの強制終了やSDK設定は後続で扱う。
 
 可視性タイムアウト720秒は、Lambda timeoutの6倍とするAWS推奨に従う。受信時点からの不可視期間であり、失敗時点から12分後の実行予約ではない。期限後に再受信可能となるが、再実行時刻を保証しない。Standardキューの重複配信は引き続き許容する。
 
@@ -162,7 +217,7 @@ Consumer専用サブネットはprimary AZのCIDR index 28とし、appルート�
 
 DLQ滞留通知は`ApproximateNumberOfMessagesVisible`のMaximum・60秒・1評価期間・1件以上・欠測正常で判定し、ALARM/OK遷移を既存SNSへ送る。自動停止・自動再投入は行わない。障害時は後続のSQSトリガーを手動停止・再開する。
 
-Consumer本体・Lambda・SQSトリガーは未実装。既存Serviceを再利用する際は、更新0件の結果を区別する契約を先に整える。
+Consumer本体は実装済み、Lambda・SQSトリガーは未実装。スライス2に先行して、共通Serviceの保存時行ロックと記事不存在・生成済みの区別を実装した。Serviceは正常終了時に`EmbeddingCompletion(reason=SAVED)`または`EmbeddingCompletion(reason=ALREADY_EMBEDDED)`を返す。Service実行中の失敗分類関数とConsumer用の後処理ハンドラーも実装済み。開始時の失敗もConsumer用ハンドラーへ接続した。SQS失敗応答は後続で扱う。
 
 ## Verification
 
@@ -187,11 +242,43 @@ Consumer本体・Lambda・SQSトリガーは未実装。既存Serviceを再利�
 - AWS適用・SSMの実値登録・実通信・通知配送・再配信とDLQ移動の実証は未実施。
 - backend・frontendコードを変更していないため、それらの全テストは実施していない。Consumer本体の実装時には`/check`のbackend検証を実施する。
 
+保存時の状態区別の検証（2026-09-09）:
+
+- Ruff lint・format checkは実行コードと変更テストで成功した。
+- 全単体テスト5,975件、状態型の変更後のembedding単体テスト115件が成功した。
+- `make test-integration`は1,300件成功・22件スキップ。既存のDB権限テストにはAlembic・Better Auth schemaを必要とするスキップ条件がある。
+- 実DBで処理中の削除、同時実行時の保存・成功監査の一意性、ロック待機失敗、コミット失敗時のロールバックを確認した。生成済みでreturnした直後の別セッションによるNOWAIT行ロック取得も、追加の統合テストで成功した。
+- 外部AIはモックした。ConsumerとTaskiqの実併用・SQS応答・AWSでの実証は後続スライスに残る。
+
+正常完了・失敗理由の契約変更の検証（2026-09-09）:
+
+- Ruff lint・format checkは実行コードと変更テストで成功した。全単体テスト5,979件、最後に更新したTaskiqの例外伝播テスト7件が成功した。
+- `make test-integration`は1,300件成功・22件スキップ。22件はいずれも既存のDB権限テストで、Alembic適用済みの`public.watchlist_entries`が検証環境にないためスキップされた。
+- 正常保存・生成済み・同時実行時の`EmbeddingCompletion.reason`、記事不存在・応答不正・provider障害の理由と原因保持、既存Taskiqの監査分類・再試行・hold・通知providerを確認した。
+- 監査のerror_chainにTaskiq分類・Service失敗・元のprovider例外が残ることを実DBで確認した。DB障害・想定外例外は既存の伝播を維持する。
+- Consumer本体・SQS失敗応答・デプロイは今回の対象外。外部AIはモックした。
+
+Consumer用の失敗分類・後処理の検証（2026-09-09）:
+
+- Ruff lint・format checkが成功した。全単体テスト5,999件、`make test-integration`の1,311件が成功した。既存のDB権限テスト22件は、Alembic適用済みの`public.watchlist_entries`が検証環境にないためスキップされた。
+- provider全分類、Serviceの理由、DB障害、想定外例外の監査・監視・通知対象を単体テストで確認した。分類関数は副作用を実行せず、例外の原因連鎖を変更しない。
+- 実DBで監査payload・元の例外と原因連鎖・秘匿処理を確認した。監査の外部キー違反後にも通知が実行されること、計測・通知・ログの二次障害が元の例外を置き換えないことを確認した。
+- 既存の枯渇通知とTaskiqの検証も全テストに含めた。AWS通知配送・Consumer本体への接続・SQS応答・デプロイは未実施で後続の対象。
+
+Consumer本体の検証（2026-09-09）:
+
+- Ruff lint・format checkが成功した。全単体テスト6,003件、`make test-integration`の1,334件が成功した。既存のDB権限テスト22件は、Alembic適用済みの`public.watchlist_entries`が検証環境にないためスキップされた。
+- 外部AIをモックし、実DBで正常保存、開始時の生成済み・記事不存在、Ready入力拒否、AI処理中の削除、API障害、ロック待機失敗、コミット失敗を確認した。開始状態の取得が一度だけで、AI実行前にDB接続を返却することも確認した。
+- Consumer同士、およびConsumerと実際の既存Taskiqタスクの並行実行で、ベクトルと成功監査が一度だけ確定することを確認した。
+- 本番の期限が60秒であることを確認し、テストでは短い期限で対象取得中・AI実行中の時間切れを再現した。期限後にも失敗監査を保存し、取得できなかった元記事IDはNULLとして分析記事IDをpayloadに残すことを確認した。
+- 分類・後処理・監査・ログの二次障害で元の例外を置き換えないこと、外部キャンセルを通常の失敗として記録しないことを確認した。
+- Lambda入口・SQS応答・SDK設定・デプロイは今回の対象外。AWS上の実通信・再配信・DLQ移動は後続スライスで検証する。
+
 ## 実装・有効化前に確定する項目
 
 - SQS eventのvalidation、consumerとLambda handlerのinterface、失敗応答形式（例外伝播か部分バッチ応答か）。
-- 記事不存在などの失敗監査の既存分類との対応、event_id・SQS messageId・分析記事IDの観測上の関連付け。
-- 業務処理60秒の制御方法、SDK timeout・内部再試行の設定、DB・AIクライアントの生成・終了方法。
+- 入力イベント不正など入口で発生する失敗の監査、event_id・SQS messageId・分析記事IDの観測上の関連付け。
+- SDK timeout・内部再試行の設定、Lambda側のDB・AIクライアントの生成・終了方法。
 - Lambdaのメモリ、SSM取得・キャッシュの実装、専用サブネット・SGをLambdaへ接続する配線。基盤の専用権限を利用し、relayの権限は流用しない。
 - 残高不足・設定不備が継続した場合の手動停止・復旧・再投入の具体的な操作手順。DLQ滞留通知は実装済みで、自動停止は行わない。既存holdはSQS起動トリガーを停止しない。
 

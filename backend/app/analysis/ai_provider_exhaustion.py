@@ -10,15 +10,24 @@ from __future__ import annotations
 
 from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
-    AIProviderStateError,
     AIProviderUsageLimitExhaustedError,
 )
 from app.cloudwatch.emf import emit_metric
 
-_EXHAUSTED_PROVIDER_ERRORS: tuple[type[AIProviderStateError], ...] = (
-    AIProviderInsufficientBalanceError,
-    AIProviderUsageLimitExhaustedError,
+type ExhaustedProviderError = (
+    AIProviderInsufficientBalanceError | AIProviderUsageLimitExhaustedError
 )
+
+
+def exhausted_provider_error(
+    exc: BaseException | None,
+) -> ExhaustedProviderError | None:
+    """既存の枯渇通知に該当する例外を副作用なく取り出す。"""
+    if isinstance(
+        exc, AIProviderInsufficientBalanceError | AIProviderUsageLimitExhaustedError
+    ):
+        return exc
+    return None
 
 
 def record_ai_provider_exhausted(exc: BaseException | None, *, provider: str) -> None:
@@ -27,11 +36,12 @@ def record_ai_provider_exhausted(exc: BaseException | None, *, provider: str) ->
     枯渇以外 (None 含む) は no-op。エラー分類が確定する境界の所有者
     (failure handler / agent runtime) が呼ぶ。
     """
-    if not isinstance(exc, _EXHAUSTED_PROVIDER_ERRORS):
+    exhausted = exhausted_provider_error(exc)
+    if exhausted is None:
         return
     emit_metric(
         "ai_provider_exhausted",
-        dimensions={"kind": exc.CODE, "provider": provider},
+        dimensions={"kind": exhausted.CODE, "provider": provider},
         value=1,
         unit="Count",
     )

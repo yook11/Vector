@@ -40,8 +40,10 @@ from app.analysis.curation.errors import (
 )
 from app.analysis.embedding.errors import (
     EmbeddingError,
-    EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
+)
+from app.analysis.embedding.task_errors import (
+    EmbeddingRecoverableError,
     EmbeddingTerminalError,
 )
 from app.analysis.gemini_error_translator import (
@@ -240,8 +242,6 @@ def test_curation_layer1_requires_code_kwarg(cls: type[CurationError]) -> None:
 _OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
     AssessmentRecoverableError,
     AssessmentTerminalError,
-    EmbeddingRecoverableError,
-    EmbeddingTerminalError,
 )
 
 
@@ -390,7 +390,7 @@ def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
     """Layer 2-B class は対応する Layer 1 marker を継承する。"""
     assert issubclass(CurationResponseInvalidError, CurationRecoverableError)
     assert issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
-    assert issubclass(EmbeddingResponseInvalidError, EmbeddingRecoverableError)
+    assert issubclass(EmbeddingResponseInvalidError, EmbeddingError)
 
 
 def test_curation_error_is_not_layer1_marker() -> None:

@@ -14,6 +14,10 @@ from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildBlockedError,
     ReadyForEmbedding,
 )
+from app.analysis.embedding.service import (
+    EmbeddingCompletion,
+    EmbeddingCompletionReason,
+)
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
@@ -97,8 +101,13 @@ def _patch_ready_construction(
 
 class TestGenerateEmbedding:
     @pytest.mark.asyncio
-    async def test_task_completes_on_service_success(self) -> None:
-        """Service.execute が None を返したら task は完了する。"""
+    @pytest.mark.parametrize(
+        "result", [EmbeddingCompletion(reason) for reason in EmbeddingCompletionReason]
+    )
+    async def test_task_completes_on_service_success(
+        self, result: EmbeddingCompletion
+    ) -> None:
+        """保存完了・生成済みのどちらもTaskiqの正常終了として扱う。"""
         from app.queue.tasks.embedding import generate_embedding
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
@@ -109,7 +118,7 @@ class TestGenerateEmbedding:
             _patch_ready_construction(ready),
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=result)
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         mock_svc_cls.return_value.execute.assert_called_once()
@@ -132,7 +141,9 @@ class TestGenerateEmbedding:
             ),
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=EmbeddingCompletion(EmbeddingCompletionReason.SAVED)
+            )
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         assert advance.await_args.kwargs["analyzable_hint"] == 99
@@ -152,7 +163,9 @@ class TestGenerateEmbedding:
             ),
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=EmbeddingCompletion(EmbeddingCompletionReason.SAVED)
+            )
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         assert advance.await_args.kwargs["analyzable_hint"] is None
@@ -265,7 +278,9 @@ class TestGenerateEmbeddingStageSpan:
             ),  # article_id=7
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=EmbeddingCompletion(EmbeddingCompletionReason.SAVED)
+            )
             await generate_embedding(
                 trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
             )
@@ -332,17 +347,7 @@ class TestGenerateEmbeddingStageSpan:
     async def test_terminal_sets_failure_attrs_without_drop_article(
         self, capfire: CaptureLogfire
     ) -> None:
-        """Service が terminal marker を raise したとき span に failure 属性が焼かれる。
-
-        期待値の根拠:
-        - AIProviderUsageLimitExhaustedError: CODE="ai_error_usage_limit_exhausted",
-          FAILURE_MODE=CONDITION_BASED_RECOVERY (ai_provider_errors.py)
-        - to_embedding_error: CONDITION_BASED_RECOVERY.retryable=True
-          (ai_provider_errors.py) → EmbeddingRecoverableError,
-          failure_kind="condition_based_recovery", code=exc.CODE (embedding/errors.py)
-        - EmbeddingRecoverableError: RETRYABILITY=RETRYABLE, FAILURE_ACTION=None
-          → failure_action は span に載らない (failure_attrs.py: None なら set しない)
-        """
+        """利用枠枯渇をTaskiq境界で変換し、既存のspan分類を維持する。"""
         from app.analysis.embedding.errors import to_embedding_error
         from app.queue.tasks.embedding import generate_embedding
 
@@ -371,7 +376,7 @@ class TestGenerateEmbeddingStageSpan:
         assert attrs["failure_kind"] == "condition_based_recovery"
         # code: AIProviderUsageLimitExhaustedError.CODE (ai_provider_errors.py)
         assert attrs["code"] == "ai_error_usage_limit_exhausted"
-        # retryability: EmbeddingRecoverableError.RETRYABILITY (embedding/errors.py)
+        # Taskiq境界で従来の再試行分類を付与する。
         # CONDITION_BASED_RECOVERY.retryable=True → EmbeddingRecoverableError
         assert attrs["retryability"] == "retryable"
         # error_class: exception_fqn of the marker instance (EmbeddingRecoverableError)
