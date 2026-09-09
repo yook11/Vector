@@ -8,7 +8,6 @@ from datetime import UTC
 from hashlib import md5
 from uuid import UUID
 
-from app.analysis.assessment.events import ArticleAssessedInScope
 from app.outbox.publish_errors import (
     PublishEventInvalidError,
     PublishEventInvalidReason,
@@ -36,10 +35,6 @@ class SqsMessage:
     @classmethod
     def from_envelope(cls, envelope: EventEnvelope) -> SqsMessage:
         """イベントを送信本文にし、送れなければ失敗を返す。"""
-        if envelope.event_type != ArticleAssessedInScope.EVENT_TYPE:
-            raise PublishEventInvalidError(
-                reason=PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
-            )
         if envelope.occurred_at.utcoffset() is None:
             raise PublishEventInvalidError(
                 reason=PublishEventInvalidReason.INVALID_OCCURRED_AT

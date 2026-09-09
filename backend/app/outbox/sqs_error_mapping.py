@@ -197,7 +197,7 @@ def _classify_exception(exc: Exception, *, phase: PublishPhase) -> PublishError 
         return _configuration_error_from_sdk_exception(exc)
     elif phase is PublishPhase.SEND:
         if isinstance(exc, InvalidSqsBatchResponse):
-            return PublishResponseInvalidError(reason=exc.reason, field=exc.field)
+            return PublishResponseInvalidError(reason=exc.reason)
         return _publish_error_from_sqs_exception(exc)
     return None
 

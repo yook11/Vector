@@ -47,21 +47,6 @@ class PublishResponseInvalidReason(StrEnum):
     MISSING_ENTRY_ID = "missing_entry_id"
 
 
-class PublishResponseField(StrEnum):
-    """応答の不正箇所を、外部の値を含まない共通の項目名で表す。"""
-
-    RESPONSE = "response"
-    SUCCESSFUL_ENTRIES = "successful_entries"
-    FAILED_ENTRIES = "failed_entries"
-    SUCCESSFUL_ENTRY = "successful_entry"
-    FAILED_ENTRY = "failed_entry"
-    ENTRY_ID = "entry_id"
-    MESSAGE_ID = "message_id"
-    BODY_CHECKSUM = "body_checksum"
-    ERROR_CODE = "error_code"
-    SENDER_FAULT = "sender_fault"
-
-
 class PublishServiceReason(StrEnum):
     """送信先の応答から分かる、実装に依存しない失敗理由。"""
 
@@ -170,14 +155,11 @@ class PublishResponseInvalidError(PublishError):
     """応答を検証できない失敗で、送信先が未受付とは断定しない。"""
 
     CODE: ClassVar[str] = "publish_response_invalid"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "field")
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason")
 
-    def __init__(
-        self, *, reason: PublishResponseInvalidReason, field: PublishResponseField
-    ) -> None:
+    def __init__(self, *, reason: PublishResponseInvalidReason) -> None:
         super().__init__()
         self.reason = reason
-        self.field = field
 
 
 class PublishUnexpectedError(PublishError):

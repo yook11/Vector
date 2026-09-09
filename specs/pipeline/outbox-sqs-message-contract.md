@@ -50,7 +50,7 @@ Standardキューを使用し、event_typeから送信先を決定する。Queue
 | `article.curated_signal` | `article-assessment` |
 | `article.assessed_in_scope` | `article-embedding` |
 
-実際のキュー名には既存の`name_prefix`を付ける。未登録のevent_typeは送信せず、代替キューへ流さない。停止・再試行の判断は別途定める。
+実際のキュー名には既存の`name_prefix`を付ける。イベント種別の許可判定と送信先はPublisherが所有し、現在は`ArticleAssessedInScope.EVENT_TYPE`だけを設定された`embedding_queue_url`へ送る。対応外のevent_typeは本文構築前に個別失敗とし、代替キューへ流さない。停止・再試行の判断は別途定める。
 
 ### 再送
 
@@ -85,7 +85,7 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 - PublishServiceError: reason・service_error_code・status_code・request_idを保持し、処理分岐は共通reasonを使う。
 - PublishConfigurationError: missing_credentials・incomplete_credentials・missing_region・credentials_retrieval_failedを区別する。
 - PublishEventInvalidError: unsupported_event_type・invalid_occurred_at・serialization_failed・message_too_largeを区別する。
-- PublishResponseInvalidError: 応答の形式・送信対象との対応の違反をreasonとfieldで保持し、受付されなかったとは断定しない。
+- PublishResponseInvalidError: 応答の形式・送信対象との対応の違反を共通のreasonで保持し、受付されなかったとは断定しない。
 - PublishUnexpectedError: reason=unexpected_exception、original_exception_type、phase、任意のclassification_exception_typeを保持する。
 - PublishIntegrityError: body_checksum_mismatchで送信本文の整合性確認失敗を表し、任意のrequest_idを調査用に保持する。
 
@@ -104,9 +104,9 @@ HttpTransportFailureの到達可能性はその単一通信試行の情報で、
 通常例外は操作境界で受け止め、元例外はcauseに保持するが、SDK自由文・本文・資格情報・送信先URLを例外文面へ出さない。
 phaseはinitialize、prepare_event、resolve_credentials、send、classify_failureを区別し、終了失敗は専用のPublishCleanupErrorで表す。
 分類処理失敗時は元例外と分類失敗の型を保持し、終了処理の失敗は先行する送信失敗を上書きしない。
-cleanupの失敗は送信処理の後に起きるため、未送信の根拠にしてはならない。受付成功・送信失敗の結果を維持し、BatchPublishResult.cleanup_errorに別途保持する。
+cleanupの失敗は送信処理の後に起きるため、未送信の根拠にしてはならない。受付成功・送信失敗の結果を維持し、SQS Publisherがcloseの通常失敗を診断ログへ記録してから結果を返す。BatchPublishResultにはイベントの結果だけを保持する。
 BaseExceptionによるキャンセル・終了は通常失敗へ変換しない。
-Logfireの既存export秘匿処理を維持し、実際の記録・通知とevent_idとの関連付けはrelay実装に残す。
+Logfireの既存export秘匿処理を維持し、イベント単位の停止記録・通知とevent_idとの関連付けは既存の配信失敗処理が担当する。クライアント終了失敗の診断はSQS Publisher内で完結する。
 
 単体検証はAWSコード表、未知・不正metadata、資格情報の取得・更新失敗、SDKの単一試行、例外の診断情報、終了処理、Logfire exportの秘匿を対象とする。
 
@@ -118,9 +118,11 @@ Evidence: 既存EventEnvelope・資格情報確定処理・共通PublishError、
 ### 入力と結果
 
 - 同期EventPublisher.publish_batch(envelopes: Sequence[EventEnvelope]) -> BatchPublishResultへ統一し、単件publishは残さない。
-- 結果はfrozen dataclassのPublishSucceeded(event_id)、PublishFailed(event_id, error)、BatchPublishResult(results, cleanup_error)とする。
+- 結果はfrozen dataclassのPublishSucceeded(event_id)、PublishFailed(event_id, error)、BatchPublishResult(results)とする。
+- 個別結果は構築時にevent_idがUUIDであることを検証し、PublishFailedはerrorがPublishErrorであることも保証する。BatchPublishResultはresultsがtuple、各要素がPublishSucceededまたはPublishFailedであることを構築時に保証する。型違反は外部の値を含まないTypeErrorで拒否し、暗黙変換しない。例外内部のフィールドは追加検証しない。
+- 結果型自身は送信対象との件数・ID・順序の一致を検証しない。結果の空・重複やSQS固有の件数上限も構築条件に追加せず、呼び出し側の対応照合と既存の送信契約で扱う。
 - 正常に戻る場合は入力順のtupleに各イベントの結果を必ず1つ保持する。成功はSQS受付を意味し、DB更新やconsumer完了は意味しない。
-- 結果のreprに例外を展開しない。共通PublishErrorの診断情報は保持するが、ログ・通知は出さない。
+- 結果のreprに例外を展開しない。共通PublishErrorの診断情報は保持するが、結果型自身はログ・通知を出さない。
 - 空・11件以上・重複event_idはValueError、Sequence/EventEnvelopeおよびそのトップレベルフィールドの型違反はTypeErrorで、クライアント生成前に拒否する。
 - schema_versionはboolを除く整数とする。payload内部は既存のJSON化可能性だけを検証し、イベントschemaの追加検証は行わない。
 - イベントごとの既知不正はPublishEventInvalidError、本文準備中の通常の想定外例外はprepare_eventのPublishUnexpectedErrorとして、そのイベントだけを除外する。
@@ -142,10 +144,10 @@ Evidence: 既存EventEnvelope・資格情報確定処理・共通PublishError、
 - BatchEntryIdsNotDistinct・BatchRequestTooLong・EmptyBatchRequest・InvalidBatchEntryId・TooManyEntriesInBatchRequestをrequest_rejectedへ追加する。
 - 対応付けが正常な個別応答の分類処理だけが失敗した場合は、そのイベントをclassify_failureのPublishUnexpectedErrorにする。他の受付成功・失敗は維持する。
 - 個別分類失敗の原因は自由文を含まないSqsBatchEntryErrorとし、Code/request IDを診断用に保持する。元原因型と分類処理例外型を保持し、SDK Messageは取り込まない。
-- closeの通常例外はPublishCleanupErrorとしてcleanup_errorへ格納する。先行する受付結果・失敗やキャンセルを上書きしない。
-- BaseExceptionは包括しない。後続relayはcleanup_errorをイベントの再試行policyへ渡さない。
+- closeの通常例外はSQS Publisher内でPublishCleanupErrorへ変換し、warningのoutbox_publish_cleanup_failedを結果返却前に記録する。ログ項目はerror_codeとoriginal_exception_typeだけとし、本文・Queue URL・資格情報・SDK自由文・例外チェーンを出さない。診断変換・ログ出力の通常例外も先行する受付結果・失敗やキャンセルを上書きしない。closeの再試行や通知メトリクスは追加しない。
+- BaseExceptionは包括しない。Relayはcleanupを受け取らず、イベントの再試行policyへ渡さない。
 
-Invariants: 送信は単一SDK試行であり、内部再送・自動分割・並列送信・DB更新・ログ出力をしない。入力のイベントと既存本文形式を変更しない。
+Invariants: 送信は単一SDK試行であり、内部再送・自動分割・並列送信・DB更新をしない。ログ出力はSQS応答不正とクライアント終了失敗の診断に限定する。入力のイベントと既存本文形式を変更しない。
 Non-goals: 他工程への展開、DB確保・配信状態更新、relay接続、通知、Lambda変更、本番適用は今回含めない。
 Done: 入力境界、全体・個別エラー、不正応答、終了失敗、単一SDK試行と秘匿契約がテストで保証される。
 
@@ -173,8 +175,8 @@ Problem: SDK用の辞書と期待MD5を別々に渡すことで、送信内容�
 Evidence: SqsMessage.from_envelopeによる送信準備、SqsMessageのMD5確定、SqsMessageBatchの合計サイズ検査と_send_batch・応答変換の受け渡しを対象とする。
 
 - SQS adapter内のSqsMessage(event_id: UUID, body: str)はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。bodyとbody_md5はreprに含めない。EventEnvelopeはフィールドに持たない。
-- SqsMessage.from_envelope(envelope)が送信準備である。成功時はSqsMessageを返し、返値を再検証してSqsMessageかどうかを判定しない。
-- 既知不正はPublishEventInvalidErrorとする。理由はunsupported_event_type、invalid_occurred_at、serialization_failed、message_too_large（UTF-8が1,048,576 bytes超）とする。想定外例外は包まず、publish_batchのprepare_eventが受け止める。
+- SqsMessage.from_envelope(envelope)は本文の構築と検証を担当し、工程固有のイベント型に依存しない。別工程や未知のevent_typeも本文に保持し、送信先の対応可否は判定しない。成功時はSqsMessageを返し、返値を再検証してSqsMessageかどうかを判定しない。
+- 本文の既知不正はPublishEventInvalidErrorとし、理由はinvalid_occurred_at、serialization_failed、message_too_large（UTF-8が1,048,576 bytes超）とする。unsupported_event_typeはPublisherが本文構築前に検出し、本文不正と重なっても優先する。いずれも既存のイベント単位のprepare_event境界で扱い、正常分の送信は続ける。Message内の想定外例外は包まず、publish_batchのprepare_eventが受け止める。
 - 本文形式は既存の5項目JSONとする。occurred_atはUTCのZ、小数秒は維持する。JSONの再構築や文字列の正規化は行わない。
 - 1件上限の定数はSqsMessage側が持ち、SqsMessageBatchの本文合計サイズ検査も同じ定数を使う。バッチ件数・重複ID・フィールド型・合計サイズは個別メッセージ準備の外とする。
 - publish_batchはfrom_envelopeの結果を並べ、正常分からSqsMessageBatchを構築して送信する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
@@ -191,8 +193,9 @@ Verification（2026-09-08）: lint・format check、全単体テスト5,802件�
 
 - MessageBodyに渡す文字列を一度構築し、SqsMessageが構築時にそのUTF-8バイト列からhashlib.md5(..., usedforsecurity=False).hexdigest()を計算する。JSONの再構築や文字列の正規化は行わない。
 - event_id・body・body_md5をSqsMessageにまとめて応答変換へ渡し、ID照合を通過した成功エントリのMD5を同じメッセージのbody_md5と比較する。失敗エントリは既存の共通コード分類へ渡す。
+- 応答変換は応答全体の検証・ID照合・結果の集約を担い、SQS側の_verify_sqs_body_checksumが本文照合によるPublishSucceededまたはPublishFailedの判定を担う。任意のrequest_idは診断用であり、照合の成否に影響しない。
 - 計算失敗はそのイベントのprepare_eventのPublishUnexpectedErrorとし、他の正常イベントの送信を妨げない。
-- 正常な形式のMD5が不一致なら、そのイベントだけをPublishFailed(event_id, PublishIntegrityError)にする。他イベントの結果とcleanup_errorは維持する。
+- 正常な形式のMD5が不一致なら、そのイベントだけをPublishFailed(event_id, PublishIntegrityError)にする。他イベントの結果と独立した終了失敗の診断は維持する。
 - PublishIntegrityErrorのCODEはpublish_integrity_error、PublishIntegrityReasonはBODY_CHECKSUM_MISMATCH=body_checksum_mismatchとする。
 - 共通型の固定説明文は「送信本文と、送信先が受け取った本文のチェックサムが一致しません。」とし、AWS依存・再試行方針を含めない。
 - 例外はreasonと任意のrequest_idだけを保持し、本文・期待MD5・受信MD5・生応答を保持しない。request IDは例外文面とreprに含めない。
@@ -202,7 +205,7 @@ Verification（2026-09-08）: lint・format check、全単体テスト5,802件�
 
 handlerはDeliveryStoppedの確定後にrecord_publish_failureへ停止理由を渡し、記録関数はerror_codeとerror_reasonに加え、次の固定文をerror_messageに記録する。
 
-> SQSへ送信した本文と、SQSが受け取った本文のチェックサムが一致しません。SQSには受付済みの可能性があるため、このイベントの自動再試行を停止しました。
+> 送信した本文と、送信先が受け取った本文のチェックサムが一致しません。送信先には受付済みの可能性があるため、このイベントの自動再試行を停止しました。
 
 - SQS固有の説明文は記録処理側に置き、SDK自由文や例外のmessageから取得しない。
 - 本文・チェックサム・request IDはログに出さない。設定修復のメトリクスとSlack通知の対象6理由は変更しない。
@@ -276,16 +279,16 @@ Evidence: EventPublisher、PublishFailureHandler、OutboxDeliveryRepository、ca
 - 対象は`ArticleAssessedInScope.EVENT_TYPE`に固定する。1回の実行は上限到達の停止100件、確保10件、送信最大1回までとし、lease期間は150秒とする。
 - 専用sessionで上限到達を停止してcommit・終了し、別sessionで確保してcommit・終了する。確保0件なら送信せず正常終了する。
 - 確保結果を`EventEnvelope.from_claimed`で送信内容へ変換し、同期publisherを直列に1回だけ呼ぶ。送信中はDB sessionを保持しない。
-- publisherの結果型・件数・入力順のevent_id・失敗値の型を全件確認してから結果を適用する。契約違反は外部の値を含まないTypeErrorまたはValueErrorで伝播する。
+- publisherの戻り値がBatchPublishResultであることを確認し、件数・入力順のevent_idを全件照合してから結果を適用する。結果型が構築時に保証する内部構造は再検証しない。契約違反は外部の値を含まないTypeErrorまたはValueErrorで伝播する。
 - 成功はイベント単位のsessionでmark_publishedを呼び、Trueならcommit、Falseならrollbackして終了する。失敗は対応する確保情報とPublishFailedを既存handlerへ渡す。更新条件不一致でも後続の結果記録を続ける。
 - handlerによる停止確定後の記録を再度呼ばない。上限到達の整理に架空のPublishErrorや送信失敗通知を追加しない。
 - 更新・commit・session終了の例外は実行全体へ伝播し、後続の結果記録を中断する。既存factoryのDB例外変換を使い、PublishErrorへ変換しない。確定済みの変更を取り消さず、未記録の確保情報はlease期限切れ後の既存処理に委ねる。
 - Envelope構築・publisher呼び出し自体の失敗でも自動分割・その場での再送・合成したイベント別失敗を追加しない。BaseExceptionを包括しない。
-- cleanup_errorはイベントの再試行対象にせず、結果処理のfinallyで`outbox_publish_cleanup_failed`を記録する。ログ項目は`error_code`と`original_exception_type`のみとし、本文・Queue URL・資格情報・SDK自由文・例外チェーンを出さない。通常のログ出力例外は握りつぶし、元のDB障害を上書きしない。追加の通知メトリクスは出さない。
+- クライアントの終了と終了失敗の診断はSQS Publisher内で完結し、Relayはイベント結果の照合とDB反映を担当する。cleanupの戻り値・ログ出力・finally処理を持たない。
 
 Invariants: 正常終了は今回の処理の終了を意味し、全件送信成功やconsumerの完了を意味しない。受付後にDB記録が失敗した場合の重複送信は既存契約どおり許容する。
 Non-goals: Lambda入口、Terraform、通信timeout、定期起動、本番適用、consumer、既存Taskiqの切り替えは変更しない。Lambda120秒の反映は次のスライスとする。
-Done: 実DBと差し替えpublisherで、確定順序・部分失敗・更新なし・障害時の中断・安全なcleanup記録を検証する。
+Done: 実DBと差し替えpublisherで、確定順序・部分失敗・更新なし・障害時の中断を検証する。
 
 Verification（2026-09-08）: relay本体とテストのlint・format checkが成功した。テストの責任整理前には、Outboxの関連単体テスト609件と実DBテスト190件が成功した。責任整理後は、`make test-integration TEST_COMPOSE_PROJECT=vector-test-relay-responsibility-20260908 PYTEST_ARGS="tests/outbox/test_relay.py -x -q"`でrelayの実DBテスト36件が成功した。その後の変更はコメントのみで、lint・format checkを確認した。利用者の指定により全テストは再実行していない。Lambda接続・本番適用・AWSへの実送信は未実施。
 
@@ -297,8 +300,8 @@ Evidence: publish_errorsの共通分類と、claim_ready_batchが確保時にatt
 publish_retry_policy.decide_publish_retry(error, attempt_count, jitter)は、副作用のない判断関数とする。
 結果は不変のRetryable(delay)またはNonRetryable(reason)で返す。
 Retryableは原因と回数上限を確認済みの最終判断であり、次回の配信試行までの待ち時間を必ず持つ。
-再試行できる条件はRetryableが持ち、当たれば待ち時間を決める。当たらなければNonRetryableが失敗の性質から停止理由を決める。
-回数上限によるretry_exhaustedは待ち時間の判定が返す。中間分類専用の結果型や、Noneによる再試行可否の表現は使用しない。
+RetryableとNonRetryableは確定した判断だけを保持し、原因の判定メソッドを持たない。decide_publish_retryが入力検証、原因判定、回数上限の確認、待ち時間計算と結果の生成を取りまとめる。
+再試行対象外の原因は原因別の停止理由を優先し、再試行対象でも回数上限に達した場合はretry_exhaustedを返す。それ以外は計算した待ち時間を持つRetryableを返す。原因判定と停止理由の分類はポリシー内の非公開関数が担い、待ち時間の計算関数はtimedeltaだけを返す。中間分類専用の結果型や、Noneによる再試行可否の表現は使用しない。
 再試行しない理由はNonRetryableReasonのnon_retryable_failure、retry_exhausted、unclassified_failure、unexpected_failureとし、元の失敗情報はPublishErrorに保持する。
 
 | 失敗 | 方針 |
@@ -415,7 +418,7 @@ publish_error_from_exception(exc, phase=PublishPhase)をsqs_error_mapping.pyの�
 RESOLVE_CREDENTIALSは設定不足の専用理由を優先し、その他のSDK失敗をcredentials_retrieval_failedにする。
 INITIALIZEは設定不足、SENDは既存SQS例外分類を使い、PREPARE_EVENTなどの未分類例外は発生段階の想定外とする。
 分類処理の通常例外はclassify_failureとし、元の例外型・分類処理例外型・元の原因を維持する。
-Invariants: 終了処理の失敗はcleanup_errorに格納し、イベントの送信結果を上書きしない。
+Invariants: 終了処理の通常失敗はSQS Publisher内で記録し、イベントの送信結果を上書きしない。
 既存PublishErrorの原因チェーン、本文、試行回数、送信対象、応答の個別失敗の扱いを維持し、BaseExceptionを捕捉しない。
 Non-goals: 結果型・再試行policy・failure handler・個別応答分類・relayの変更、新しいファイルや依存の追加は行わない。
 Done: 段階別の分類、既存エラーの維持、分類失敗、終了失敗、診断情報の秘匿をテストで保証する。
@@ -431,7 +434,7 @@ sqs_publisher.pyのfailed_results(batch, error)は指定されたバッチの対
 本文作成失敗は該当イベントだけ、クライアント生成・送信全体・応答全体の検証失敗は準備済み送信対象全件へ反映する。
 個別応答の失敗・本文不一致は既存応答処理が該当イベントだけに反映する。
 クライアント生成、SDK送信、応答処理はそれぞれの境界で例外を共通変換し、その場で結果を作る。
-Invariants: 終了処理はクライアント生成成功後に実行し、通常の終了失敗をcleanup_errorへ分離する。
+Invariants: 終了処理はクライアント生成成功後に実行し、通常の終了失敗をSQS Publisher内の診断ログへ分離する。
 既存の失敗原因・部分成功・入力順・本文・送信回数・BaseExceptionの伝播を維持する。
 Non-goals: 新しいファイル・クラス・テスト、例外分類・再試行policy・failure handler・relayの変更は行わない。
 Done: 既存テストによる振る舞いの検証と、lint・format・全単体テスト・DB integration testが成功する。
@@ -444,7 +447,7 @@ Done: 既存テストによる振る舞いの検証と、lint・format・全単�
 Problem: 終了失敗をPublishUnexpectedErrorのphaseで表すと送信失敗との区別が読み取りにくく、変換関数にoverloadが必要になる。
 Evidence: 終了失敗はイベントの受付結果を上書きせず、再試行policyへ渡さない既存契約を持つ。
 PublishCleanupErrorはVectorDomainErrorを直接継承し、CODE=publish_cleanup_errorとoriginal_exception_typeを安全な診断情報として持つ。
-PublishErrorの継承関係から分離し、BatchPublishResult.cleanup_errorの型をPublishCleanupError | Noneにする。
+PublishErrorの継承関係から分離し、SQS Publisher内の診断に使用する。BatchPublishResultには含めない。
 publish_cleanup_error_from_exceptionは元の例外をcauseとして保持し、送信失敗の分類は行わない。
 PublishPhase.CLEANUPとoverloadを削除し、終了失敗を型で識別する。
 Invariants: 既存の受付成功・個別失敗・原因チェーン・自由文の秘匿とBaseExceptionの伝播を維持する。
@@ -500,15 +503,17 @@ SqsMessageBatchのローカル検証（2026-09-08）: lint・format、全単体�
 Problem: decodeとID照合で検出した違反が同じ想定外エラーになり、何が不正だったかを呼び出し元で確認できなかった。
 Evidence: 既存の応答形式検証・ID照合・本文MD5比較、エラーマッピング、停止policy、停止確定後の記録を対象とする。
 
-- PublishResponseInvalidError(CODE=publish_response_invalid)はPublishErrorを継承し、reasonとfieldを保持する。
+- PublishResponseInvalidError(CODE=publish_response_invalid)はPublishErrorを継承し、共通のreasonだけを保持する。SQS固有のfieldは持たず、SAFE_ATTRSもCODEとreasonだけとする。
 - PublishResponseInvalidReasonはinvalid_type、missing_required_field、empty_required_field、invalid_checksum_format、unknown_entry_id、duplicate_entry_id、missing_entry_idとする。項目が存在してNoneならinvalid_type、キー自体の欠落ならmissing_required_field、必須文字列が空ならempty_required_fieldとする。
-- PublishResponseFieldはresponse、successful_entries、failed_entries、successful_entry、failed_entry、entry_id、message_id、body_checksum、error_code、sender_faultとする。実際のID、本文、チェックサム、SDK自由文、request IDは取り込まない。
-- InvalidSqsBatchResponseをsqs_response_errors.pyに置き、decode・ID照合が共通reasonとfieldを指定して送出する。応答検証とマッピングの循環依存を作らず、違反理由を二重定義しない。
-- publish_error_from_exceptionのsend境界でPublishResponseInvalidErrorへ変換し、reason・fieldと元の例外をcauseとして保持する。その他の段階で発生した場合は既存どおり想定外とする。
+- SQS側のsqs_response_errors.pyに定義するSqsResponseFieldはresponse、successful_entries、failed_entries、successful_entry、failed_entry、entry_id、message_id、body_checksum、error_code、sender_faultとする。実際のID、本文、チェックサム、SDK自由文、request IDは取り込まない。
+- InvalidSqsBatchResponseをsqs_response_errors.pyに置き、decode・ID照合が共有するPublishResponseInvalidReasonとSQS固有のSqsResponseFieldを指定して送出する。旧PublishResponseFieldの互換名は設けない。応答検証とマッピングの循環依存を作らず、違反理由を二重定義しない。
+- publish_error_from_exceptionのsend境界でPublishResponseInvalidErrorへ変換し、共通エラーにはreasonを保持し、SQSの診断詳細は元の例外をcauseとして維持する。共通のポリシーと記録処理はcause内のSQS情報を参照しない。その他の段階で発生した場合は既存どおり想定外とする。
 - 形式・ID対応の違反は送信対象全件を失敗とし、受付されなかったとは断定しない。正常形式のMD5が送信本文と異なる場合は、既存のPublishIntegrityErrorとして該当イベントだけに反映する。
 - 変換処理自体の通常例外は既存のclassify_failureのPublishUnexpectedErrorとし、元原因と分類処理例外型を保持する。
 - 全reasonを自動再試行の対象外とし、停止区分はunexpected_failureからnon_retryable_failureへ変更する。元の違反理由は入力のPublishErrorに保持する。
-- 停止確定後のログにerror_code、error_reason、response_fieldを記録し、元の応答・例外チェーンは出力しない。設定修復アラームの対象6理由は変更しない。
+- SQS Publisherは応答検証のInvalidSqsBatchResponseを捕捉した際、共通エラーへの変換前にoutbox_sqs_response_invalidをwarningで送信バッチにつき1回記録する。error_reasonとresponse_fieldは列挙値、event_idsは実際に送信したバッチのイベントIDを送信順に文字列リストで保持する。送信前に除外したイベントや応答に混入した外部IDは含めない。
+- 診断には本文・チェックサム・Queue URL・資格情報・SDK自由文・例外チェーンを出さない。通常のログ出力失敗は既存の結果・例外変換へ影響させず、再試行や追加メトリクスを発生させない。BaseExceptionは包括しない。正常応答や正常形式のMD5不一致では応答不正の診断を出さない。
+- 共通の停止確定後のログにはerror_codeとerror_reasonを記録し、response_fieldは持たせない。SQSの検出時診断と確定後の停止ログはevent_idで関連付ける。設定修復アラームの対象6理由は変更しない。
 
 Invariants: 応答を受け入れる条件、必須項目の検証順、metadata欠損の扱い、本文・入力順・単一SDK試行・既存の部分成功・終了失敗の分離・BaseExceptionの伝播を維持する。
 Non-goals: DB schema・relay・通知経路・AWS設定・依存の変更、自動再試行の追加は行わない。

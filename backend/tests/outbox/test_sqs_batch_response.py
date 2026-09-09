@@ -9,7 +9,6 @@ import pytest
 from app.outbox.publish_errors import (
     PublishIntegrityError,
     PublishIntegrityReason,
-    PublishResponseField,
     PublishResponseInvalidReason,
 )
 from app.outbox.publisher import PublishFailed, PublishSucceeded
@@ -23,7 +22,7 @@ from app.outbox.sqs_batch_response import (
 )
 from app.outbox.sqs_message import SqsMessage
 from app.outbox.sqs_message_batch import SqsMessageBatch
-from app.outbox.sqs_response_errors import InvalidSqsBatchResponse
+from app.outbox.sqs_response_errors import InvalidSqsBatchResponse, SqsResponseField
 
 EVENT_ID = str(UUID(int=1))
 SECOND_ID = str(UUID(int=2))
@@ -141,7 +140,7 @@ def test_invalid_md5_format_is_not_an_integrity_mismatch(value):
             batch=SqsMessageBatch(messages=(SqsMessage(UUID(EVENT_ID), "{}"),)),
         )
     assert caught.value.reason is PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT
-    assert caught.value.field is PublishResponseField.BODY_CHECKSUM
+    assert caught.value.field is SqsResponseField.BODY_CHECKSUM
 
 
 @pytest.mark.parametrize("value", [None, 0, 1, "false"])
@@ -152,12 +151,12 @@ def test_sender_fault_requires_actual_boolean(value):
     with pytest.raises(InvalidSqsBatchResponse) as caught:
         decode_sqs_batch_response({"Failed": [entry]})
     assert caught.value.reason is PublishResponseInvalidReason.INVALID_TYPE
-    assert caught.value.field is PublishResponseField.SENDER_FAULT
+    assert caught.value.field is SqsResponseField.SENDER_FAULT
     entry.pop("SenderFault")
     with pytest.raises(InvalidSqsBatchResponse) as caught:
         decode_sqs_batch_response({"Failed": [entry]})
     assert caught.value.reason is PublishResponseInvalidReason.MISSING_REQUIRED_FIELD
-    assert caught.value.field is PublishResponseField.SENDER_FAULT
+    assert caught.value.field is SqsResponseField.SENDER_FAULT
 
 
 def test_external_strings_are_not_exposed_or_unnecessarily_retained():
@@ -204,7 +203,7 @@ def test_id_matching_is_separate_from_valid_response_shape(case):
             "overlap": "duplicate_entry_id",
         }[case]
     )
-    assert caught.value.field is PublishResponseField.ENTRY_ID
+    assert caught.value.field is SqsResponseField.ENTRY_ID
 
 
 def test_successes_are_matched_by_id_before_comparing_checksums():
@@ -229,12 +228,14 @@ def test_successes_are_matched_by_id_before_comparing_checksums():
     assert response == before
 
 
-def test_checksum_mismatch_only_fails_the_corresponding_event():
+@pytest.mark.parametrize("request_id", [None, "request-id"])
+def test_checksum_mismatch_only_fails_the_corresponding_event(request_id):
     """正しい形式のMD5不一致だけを専用の失敗にする。"""
     response = {
         "Successful": [successful(), successful(SECOND_ID, OTHER_MD5)],
-        "ResponseMetadata": {"RequestId": "request-id"},
     }
+    if request_id is not None:
+        response["ResponseMetadata"] = {"RequestId": request_id}
     result = results_from_sqs_batch_response(
         response,
         batch=SqsMessageBatch(
@@ -249,8 +250,8 @@ def test_checksum_mismatch_only_fails_the_corresponding_event():
     assert isinstance(failure, PublishFailed)
     assert isinstance(failure.error, PublishIntegrityError)
     assert failure.error.reason is PublishIntegrityReason.BODY_CHECKSUM_MISMATCH
-    assert failure.error.request_id == "request-id"
+    assert failure.error.request_id == request_id
     assert vars(failure.error) == {
         "reason": PublishIntegrityReason.BODY_CHECKSUM_MISMATCH,
-        "request_id": "request-id",
+        "request_id": request_id,
     }

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
-from app.outbox.publish_errors import PublishCleanupError, PublishError
+from app.outbox.publish_errors import PublishError
 
 if TYPE_CHECKING:
     from app.outbox.repository import ClaimedOutboxEvent
@@ -41,6 +41,10 @@ class PublishSucceeded:
 
     event_id: UUID
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.event_id, UUID):
+            raise TypeError("publish result event_id must be a UUID")
+
 
 @dataclass(frozen=True, slots=True)
 class PublishFailed:
@@ -49,13 +53,27 @@ class PublishFailed:
     event_id: UUID
     error: PublishError = field(repr=False)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.event_id, UUID):
+            raise TypeError("publish result event_id must be a UUID")
+        if not isinstance(self.error, PublishError):
+            raise TypeError("publisher failure must contain PublishError")
+
 
 @dataclass(frozen=True, slots=True)
 class BatchPublishResult:
-    """入力順の送信結果と、それを上書きしない終了処理の診断情報。"""
+    """入力順のイベントごとの送信結果。"""
 
     results: tuple[PublishSucceeded | PublishFailed, ...]
-    cleanup_error: PublishCleanupError | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.results, tuple):
+            raise TypeError("publisher results must be a tuple")
+        if any(
+            not isinstance(result, PublishSucceeded | PublishFailed)
+            for result in self.results
+        ):
+            raise TypeError("invalid publisher result type")
 
 
 class EventPublisher(Protocol):

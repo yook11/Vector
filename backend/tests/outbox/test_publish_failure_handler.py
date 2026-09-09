@@ -16,7 +16,6 @@ from app.db.session import caller_managed_session_factory
 from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
 from app.outbox import publish_failure_handler as handler_module
 from app.outbox.publish_errors import (
-    PublishCleanupError,
     PublishConfigurationError,
     PublishConfigurationReason,
     PublishError,
@@ -285,13 +284,6 @@ async def test_session_exit_failure_does_not_return_success_or_undo_commit(
 @pytest.mark.parametrize(
     ("error", "attempt", "jitter", "exception_type"),
     [
-        (
-            PublishCleanupError(original_exception=RuntimeError()),
-            1,
-            0.5,
-            TypeError,
-        ),
-        (RuntimeError("db failure"), 1, 0.5, TypeError),
         (_transport(), 0, 0.5, ValueError),
         (_transport(), True, 0.5, TypeError),
         (_transport(), 1, float("nan"), ValueError),

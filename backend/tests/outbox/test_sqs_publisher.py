@@ -16,8 +16,8 @@ from botocore.credentials import ReadOnlyCredentials
 from botocore.exceptions import ClientError, HTTPClientError, ReadTimeoutError
 from botocore.stub import Stubber
 
+from app.outbox import sqs_publisher as publisher_module
 from app.outbox.publish_errors import (
-    PublishCleanupError,
     PublishConfigurationError,
     PublishConfigurationReason,
     PublishEventInvalidError,
@@ -54,6 +54,13 @@ def envelope():
         occurred_at=datetime(2026, 9, 7, 3, tzinfo=UTC),
         payload={"curation_id": 123, "analyzed_article_id": 456},
     )
+
+
+@pytest.fixture
+def cleanup_log(monkeypatch):
+    log = Mock()
+    monkeypatch.setattr(publisher_module.logger, "warning", log)
+    return log
 
 
 def _success(envelope):
@@ -217,7 +224,44 @@ def test_invalid_event_does_not_prevent_other_events(
         ]
     else:
         factory.assert_not_called()
-    assert result.cleanup_error is None
+
+
+@pytest.mark.parametrize("event_type", ["article.acquired", "future.event"])
+@pytest.mark.parametrize("include_valid", [False, True])
+def test_unsupported_event_is_rejected_before_body_preparation(
+    envelope, event_type, include_valid, monkeypatch
+):
+    """対応外の種別を本文不正より先に拒否し、正常分だけを送信する。"""
+    bad = replace(
+        envelope,
+        event_type=event_type,
+        occurred_at=datetime(2026, 9, 7),
+        payload={"bad": object()},
+    )
+    good = replace(envelope, event_id=UUID(int=2))
+    prepare = Mock(wraps=SqsMessage.from_envelope)
+    monkeypatch.setattr(SqsMessage, "from_envelope", prepare)
+    sender, client, factory = _sender(response={"Successful": [_success(good)]})
+
+    result = sender.publish_batch([bad, good] if include_valid else [bad])
+
+    assert isinstance(result.results[0], PublishFailed)
+    assert result.results[0].event_id == bad.event_id
+    assert (
+        result.results[0].error.reason
+        is PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
+    )
+    if include_valid:
+        prepare.assert_called_once_with(good)
+        assert result.results[1] == PublishSucceeded(good.event_id)
+        client.send_message_batch.assert_called_once_with(
+            QueueUrl=QUEUE_URL,
+            Entries=[{"Id": str(good.event_id), "MessageBody": _body(good)}],
+        )
+    else:
+        prepare.assert_not_called()
+        factory.assert_not_called()
+        client.send_message_batch.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -384,9 +428,10 @@ def test_utc_precision_and_claimed_payload_copy(envelope):
 )
 @pytest.mark.parametrize("close_fails", [False, True])
 def test_whole_request_failure_preserves_local_failure_and_cleanup(
-    envelope, exc, expected, close_fails
+    envelope, exc, expected, close_fails, cleanup_log
 ):
     """全体失敗を送信対象へ反映し、ローカルの不正や先行障害を上書きしない。"""
+    cleanup_log.side_effect = RuntimeError("private log failure")
     good = replace(envelope, event_id=UUID(int=2))
     bad = replace(envelope, event_id=UUID(int=3), event_type="unsupported")
     sender, client, _ = _sender(
@@ -400,9 +445,7 @@ def test_whole_request_failure_preserves_local_failure_and_cleanup(
         result.results[2].error.reason
         is PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
     )
-    assert (result.cleanup_error is not None) is close_fails
-    if close_fails:
-        assert isinstance(result.cleanup_error, PublishCleanupError)
+    assert cleanup_log.call_count == int(close_fails)
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
 
@@ -416,16 +459,22 @@ def test_whole_request_failure_preserves_local_failure_and_cleanup(
         ),
     ],
 )
-def test_cleanup_failure_preserves_success(envelope, close_error):
+@pytest.mark.parametrize("logging_failure", [False, True])
+def test_cleanup_failure_preserves_success(
+    envelope, close_error, logging_failure, cleanup_log
+):
+    """終了失敗を安全に記録し、診断出力が失敗しても受付結果を返す。"""
+    if logging_failure:
+        cleanup_log.side_effect = RuntimeError("private log failure")
     sender, _, _ = _sender(
         response={"Successful": [_success(envelope)]}, close_error=close_error
     )
     result = sender.publish_batch([envelope])
     assert result.results == (PublishSucceeded(envelope.event_id),)
-    assert isinstance(result.cleanup_error, PublishCleanupError)
-    assert result.cleanup_error.__cause__ is close_error
-    assert result.cleanup_error.original_exception_type == (
-        f"{type(close_error).__module__}.{type(close_error).__qualname__}"
+    cleanup_log.assert_called_once_with(
+        "outbox_publish_cleanup_failed",
+        error_code="publish_cleanup_error",
+        original_exception_type=f"{type(close_error).__module__}.{type(close_error).__qualname__}",
     )
 
 
@@ -541,16 +590,20 @@ def test_malformed_response_invalidates_all_sent_results(envelope, case):
             "code": ("invalid_type", "error_code"),
             "sender_fault": ("invalid_type", "sender_fault"),
         }
-        assert (outcome.error.reason.value, outcome.error.field.value) == expected[case]
+        assert (
+            outcome.error.reason.value,
+            outcome.error.__cause__.field.value,
+        ) == expected[case]
         assert isinstance(outcome.error.__cause__, InvalidSqsBatchResponse)
         assert outcome.error.__cause__.reason is outcome.error.reason
-        assert outcome.error.__cause__.field is outcome.error.field
+        assert not hasattr(outcome.error, "field")
         assert outcome.error.__cause__.args == ()
     client.close.assert_called_once()
 
 
 @pytest.mark.parametrize("exc", [KeyboardInterrupt(), SystemExit()])
-def test_process_exit_is_not_wrapped_or_replaced_by_cleanup(envelope, exc):
+def test_process_exit_is_not_wrapped_or_replaced_by_cleanup(envelope, exc, cleanup_log):
+    cleanup_log.side_effect = RuntimeError("private log failure")
     sender, client, _ = _sender(error=exc, close_error=ValueError("cleanup"))
     with pytest.raises(type(exc)) as caught:
         sender.publish_batch([envelope])
@@ -643,7 +696,7 @@ def test_preparation_unexpected_failure_is_local(envelope, monkeypatch):
     factory.assert_not_called()
 
 
-def test_results_are_frozen_and_do_not_expose_diagnostics(envelope):
+def test_results_are_frozen_and_do_not_expose_diagnostics(envelope, cleanup_log):
     marker = "PRIVATE_BODY_CREDENTIAL_QUEUE"
     sender, _, _ = _sender(
         response={
@@ -655,7 +708,7 @@ def test_results_are_frozen_and_do_not_expose_diagnostics(envelope):
     result = sender.publish_batch([replace(envelope, payload={"private": marker})])
     assert marker not in repr(result)
     assert marker not in str(result.results[0].error)
-    assert marker not in str(result.cleanup_error)
+    assert marker not in str(cleanup_log.call_args)
     for obj, attr, value in [
         (result, "results", ()),
         (result.results[0], "event_id", UUID(int=2)),
@@ -788,7 +841,9 @@ def test_checksum_calculation_failure_is_local_before_send(
         factory.assert_not_called()
 
 
-def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(envelope):
+def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(
+    envelope, cleanup_log
+):
     """本文不一致・サービス拒否・終了障害が混在しても成功を上書きしない。"""
     from app.outbox.publish_errors import PublishIntegrityError, PublishIntegrityReason
 
@@ -813,10 +868,10 @@ def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(envelope)
     )
     assert result.results[1].error.request_id == "request-id"
     assert result.results[2].error.reason is PublishServiceReason.THROTTLED
-    assert isinstance(result.cleanup_error, PublishCleanupError)
-    assert result.cleanup_error.__cause__ is close_error
-    assert result.cleanup_error.original_exception_type == (
-        f"{type(close_error).__module__}.{type(close_error).__qualname__}"
+    cleanup_log.assert_called_once_with(
+        "outbox_publish_cleanup_failed",
+        error_code="publish_cleanup_error",
+        original_exception_type=f"{type(close_error).__module__}.{type(close_error).__qualname__}",
     )
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
@@ -824,7 +879,7 @@ def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(envelope)
 
 @pytest.mark.parametrize("case", ["bad_checksum", "unknown_id"])
 def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values(
-    envelope, case
+    envelope, case, cleanup_log
 ):
     """応答違反を全送信対象へ反映し、送信前の不正と終了失敗を上書きしない。"""
     from app.outbox.publish_errors import PublishResponseInvalidReason
@@ -844,9 +899,110 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
         if case == "bad_checksum"
         else PublishResponseInvalidReason.UNKNOWN_ENTRY_ID
     )
-    assert isinstance(result.cleanup_error, PublishCleanupError)
+    assert cleanup_log.call_count == 2
+    diagnostic, cleanup = cleanup_log.call_args_list
+    assert diagnostic.args == ("outbox_sqs_response_invalid",)
+    assert diagnostic.kwargs == {
+        "error_reason": error.reason.value,
+        "response_field": "body_checksum" if case == "bad_checksum" else "entry_id",
+        "event_ids": [str(envelope.event_id)],
+    }
+    assert cleanup.args == ("outbox_publish_cleanup_failed",)
+    assert marker not in str(cleanup_log.call_args_list)
     assert marker not in repr(result)
     assert marker not in str(error)
     assert marker not in str(vars(error.__cause__))
     client.send_message_batch.assert_called_once()
+    client.close.assert_called_once()
+
+
+def test_client_closes_and_records_diagnostic_before_return(envelope, cleanup_log):
+    """送信・終了・診断を完了してから、呼び出し元へ受付結果を返す。"""
+    sender, client, _ = _sender()
+    trace = []
+
+    def send(**kwargs):
+        trace.append("send")
+        return {"Successful": [_success(envelope)]}
+
+    def close():
+        trace.append("close")
+        raise RuntimeError("private body credentials queue-url")
+
+    client.send_message_batch.side_effect = send
+    client.close.side_effect = close
+    cleanup_log.side_effect = lambda *args, **kwargs: trace.append("diagnostic")
+    result = sender.publish_batch([envelope])
+    trace.append("returned")
+
+    assert trace == ["send", "close", "diagnostic", "returned"]
+    assert result == BatchPublishResult((PublishSucceeded(envelope.event_id),))
+    cleanup_log.assert_called_once_with(
+        "outbox_publish_cleanup_failed",
+        error_code="publish_cleanup_error",
+        original_exception_type="builtins.RuntimeError",
+    )
+    client.close.assert_called_once()
+
+
+@pytest.mark.parametrize("logging_failure", [False, True])
+def test_invalid_response_diagnostic_is_once_per_sent_batch(
+    envelope, logging_failure, cleanup_log
+):
+    """応答の外部IDを記録せず、診断出力に失敗しても全送信対象の結果を返す。"""
+    events = [replace(envelope, event_id=UUID(int=i)) for i in (3, 1)]
+    invalid = replace(envelope, event_id=UUID(int=2), event_type="unsupported")
+    marker = "PRIVATE_BODY_QUEUE_CREDENTIAL"
+    entry = _success(events[0])
+    entry["Id"] = marker
+    sender, client, _ = _sender(response={"Successful": [entry, _success(events[1])]})
+    if logging_failure:
+        cleanup_log.side_effect = RuntimeError(marker)
+
+    result = sender.publish_batch([events[0], invalid, events[1]])
+
+    assert [r.event_id for r in result.results] == [
+        events[0].event_id,
+        invalid.event_id,
+        events[1].event_id,
+    ]
+    assert isinstance(result.results[1].error, PublishEventInvalidError)
+    for index in (0, 2):
+        assert isinstance(result.results[index].error, PublishResponseInvalidError)
+        assert result.results[index].error.reason.value == "unknown_entry_id"
+    cleanup_log.assert_called_once_with(
+        "outbox_sqs_response_invalid",
+        error_reason="unknown_entry_id",
+        response_field="entry_id",
+        event_ids=[str(event.event_id) for event in events],
+    )
+    assert marker not in str(cleanup_log.call_args)
+    client.send_message_batch.assert_called_once()
+    client.close.assert_called_once()
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_valid_response_shape_does_not_log_response_violation(
+    envelope, mismatch, cleanup_log
+):
+    """正常形式の応答と本文不一致は、応答形式違反の診断を出さない。"""
+    entry = _success(envelope)
+    if mismatch:
+        entry["MD5OfMessageBody"] = "0" * 32
+    sender, _, _ = _sender(response={"Successful": [entry]})
+    result = sender.publish_batch([envelope])
+    assert isinstance(
+        result.results[0], PublishFailed if mismatch else PublishSucceeded
+    )
+    cleanup_log.assert_not_called()
+
+
+def test_response_diagnostic_process_exit_is_not_swallowed(envelope, cleanup_log):
+    """診断出力でのプロセス終了を通常失敗へ変換せず、クライアントは閉じる。"""
+    exit_error = KeyboardInterrupt()
+    cleanup_log.side_effect = exit_error
+    sender, client, _ = _sender(response=None)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        sender.publish_batch([envelope])
+    assert caught.value is exit_error
     client.close.assert_called_once()

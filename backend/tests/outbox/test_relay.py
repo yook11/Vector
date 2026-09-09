@@ -16,9 +16,7 @@ from app.db.session import caller_managed_session_factory
 from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
 from app.models.outbox_event import OutboxEvent
 from app.outbox import publish_failure_recording
-from app.outbox import relay as relay_module
 from app.outbox.publish_errors import (
-    PublishCleanupError,
     PublishConfigurationError,
     PublishConfigurationReason,
     PublishError,
@@ -142,11 +140,9 @@ async def sessions(session_factory):
 def outputs(monkeypatch):
     stopped = Mock()
     metric = Mock()
-    cleanup = Mock()
     monkeypatch.setattr(publish_failure_recording.logger, "info", stopped)
     monkeypatch.setattr(publish_failure_recording, "emit_metric", metric)
-    monkeypatch.setattr(relay_module.logger, "warning", cleanup)
-    return stopped, metric, cleanup
+    return stopped, metric
 
 
 def _relay(sessions, publisher):
@@ -318,18 +314,14 @@ async def test_database_fault_aborts_without_resending_or_undoing_prior_commits(
     before = await _seed(session_factory, count=3)
     sessions.fail_number = {"stop": 1, "claim": 2, "success": 4, "failure": 4}[step]
     sessions.fail_at = fault
-    cleanup_error = PublishCleanupError(
-        original_exception=RuntimeError("secret cleanup")
-    )
 
     def send(envelopes):
         results = [PublishSucceeded(e.event_id) for e in envelopes]
         if step == "failure":
             results[1] = PublishFailed(envelopes[1].event_id, _configuration())
-        return BatchPublishResult(tuple(results), cleanup_error)
+        return BatchPublishResult(tuple(results))
 
     publisher = Mock(publish_batch=Mock(side_effect=send))
-    outputs[2].side_effect = RuntimeError("logger failed")
     with pytest.raises(SQLAlchemyError if fault == "exit" else DatabaseError) as caught:
         await _relay(sessions, publisher).run_once()
     if fault == "exit":
@@ -347,7 +339,6 @@ async def test_database_fault_aborts_without_resending_or_undoing_prior_commits(
         assert all(row["published_at"] is None for row in saved)
     else:
         publisher.publish_batch.assert_called_once()
-        outputs[2].assert_called_once()
         assert saved[0]["published_at"] is not None
         assert saved[2]["published_at"] is None
         assert saved[2]["delivery_stopped_at"] is None
@@ -357,15 +348,11 @@ async def test_database_fault_aborts_without_resending_or_undoing_prior_commits(
     "case",
     [
         "batch_type",
-        "results_type",
         "missing",
         "extra",
         "wrong_id",
         "reversed",
         "duplicate",
-        "entry_type",
-        "error_type",
-        "cleanup_type",
     ],
 )
 async def test_invalid_publisher_result_never_partially_updates_events(
@@ -378,20 +365,11 @@ async def test_invalid_publisher_result_never_partially_updates_events(
         results = tuple(PublishSucceeded(e.event_id) for e in envelopes)
         options = {
             "batch_type": None,
-            "results_type": BatchPublishResult(list(results)),
             "missing": BatchPublishResult(results[:1]),
             "extra": BatchPublishResult(results + (PublishSucceeded(uuid4()),)),
             "wrong_id": BatchPublishResult((results[0], PublishSucceeded(uuid4()))),
             "reversed": BatchPublishResult(results[::-1]),
             "duplicate": BatchPublishResult((results[0], results[0])),
-            "entry_type": BatchPublishResult((results[0], "private body")),
-            "error_type": BatchPublishResult(
-                (
-                    results[0],
-                    PublishFailed(envelopes[1].event_id, RuntimeError("private body")),
-                )
-            ),
-            "cleanup_type": BatchPublishResult(results, RuntimeError("private body")),
         }
         return options[case]
 
@@ -433,39 +411,3 @@ async def test_call_failure_propagates_without_synthetic_publish_errors(
     assert saved["published_at"] is None and saved["delivery_stopped_at"] is None
     assert publisher.publish_batch.call_count == (1 if stage == "publisher" else 0)
     assert sessions.count == 2
-
-
-@pytest.mark.parametrize("logging_failure", [False, True])
-async def test_cleanup_diagnostic_does_not_change_results_or_expose_private_text(
-    session_factory, sessions, outputs, logging_failure
-):
-    """cleanupの診断は結果確定後に安全な項目だけを出し、出力失敗を伝播しない。"""
-    before = await _seed(session_factory)
-    cleanup = PublishCleanupError(
-        original_exception=RuntimeError("credential body queue-url")
-    )
-
-    def send(envelopes):
-        return BatchPublishResult(
-            tuple(PublishSucceeded(e.event_id) for e in envelopes), cleanup
-        )
-
-    def log(*args, **kwargs):
-        assert sessions.active == 0
-        assert sessions.trace[-2:] == [(3, "commit"), (3, "closed")]
-        if logging_failure:
-            raise RuntimeError("log failure")
-
-    outputs[2].side_effect = log
-    publisher = Mock(publish_batch=Mock(side_effect=send))
-    assert await _relay(sessions, publisher).run_once() is None
-    outputs[2].assert_called_once_with(
-        "outbox_publish_cleanup_failed",
-        error_code="publish_cleanup_error",
-        original_exception_type="builtins.RuntimeError",
-    )
-    assert "credential" not in str(outputs[2].call_args)
-    assert all(
-        row["published_at"] for row in (await _read(session_factory, before)).values()
-    )
-    outputs[1].assert_not_called()
