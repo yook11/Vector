@@ -133,6 +133,12 @@ Evidence: 既存EventEnvelope・資格情報確定処理・共通PublishError、
 
 ### 応答の分類と診断
 
+SqsPublishFailureHandlerはSQS応答不正とクライアント終了失敗の診断ログを担当し、SqsEventPublisherへコンストラクターで注入する。from_sessionは標準のハンドラーを生成して接続する。
+エラー分類は既存のerror_mappingに残し、ハンドラーはDB更新・再試行判断・送信を行わない。
+通常のログ障害はハンドラー内で抑止し、終了診断の分類障害もpublisher側で元の結果を維持する。BaseExceptionは抑止しない。
+Relay側のOutboxDeliveryFailureHandlerは、従来どおり配信の再試行・停止のDB反映と停止確定後の記録を担当する。
+publish_batchは成功・失敗のリストを先に用意し、準備失敗・クライアント生成失敗・送信結果を振り分け、最後に入力順のBatchPublishResultへまとめる。クライアントの生成と終了はpublish_batch内で管理し、SQS送信・応答変換は_send_messagesが担う。
+
 - 全体のSDK例外は既存分類を使って送信対象すべてへ反映し、送信前のイベント不正は上書きしない。
 - 資格情報取得失敗は既存の設定理由へ変換され、資格情報取得先への通信をSQSのtransport失敗として扱わない。
 - Successful/Failedは省略時に空リストとして扱い、存在する場合はリストであることを要求する。
@@ -244,7 +250,7 @@ Evidence: 既存OutboxDeliveryRepository、outbox_eventsの状態・lease制約�
 - 確保と同じ順序・ロック方式で候補を制限し、1つのSQLで停止日時をDB現在時刻、停止理由を`NonRetryableReason.RETRY_EXHAUSTED.value`にし、leaseの2列をNULLへ戻す。
 - 試行回数、本文、イベント発生日時、再試行予定日時、配信成功日時は変更しない。更新したevent_idを候補と同じ順序で返す。
 - 担当者による`stop_delivery`は、有効なleaseとtoken一致を要求する。上限到達による停止は、leaseなしまたは期限切れを要求する。対象条件は各経路に残し、停止日時・理由・lease解除の更新定義をrepository内で共通化する。
-- 定期実行は呼び出し元の責任とし、Relayはこの操作へ最大100件の選択条件を渡す。SQSのバッチ送信とは別の処理であり、PublishErrorを作らず、PublishFailureHandlerやログ・通知には接続しない。
+- 定期実行は呼び出し元の責任とし、Relayはこの操作へ最大100件の選択条件を渡す。SQSのバッチ送信とは別の処理であり、PublishErrorを作らず、OutboxDeliveryFailureHandlerやログ・通知には接続しない。
 - 100件を超えて未停止のまま残った行も、確保条件によって6回目の確保には入らない。
 
 ### 入力・トランザクションの境界
@@ -275,7 +281,7 @@ lease期間・1起動あたりの処理量・確保と停止の呼び出し順�
 ## Outbox relay本体（配線スライス①）
 
 Problem: ベクトル生成向けイベントの確保・送信・結果記録を接続し、送信失敗とDB障害を区別して扱う。
-Evidence: EventPublisher、PublishFailureHandler、OutboxDeliveryRepository、caller_managed_session_factoryの既存契約を使用する。
+Evidence: EventPublisher、OutboxDeliveryFailureHandler、OutboxDeliveryRepository、caller_managed_session_factoryの既存契約を使用する。
 
 `OutboxRelay(session_factory, publisher, failure_handler).run_once() -> None`は非同期APIとし、handlerには同じDBを使うsession factoryを渡す。
 
@@ -340,7 +346,7 @@ Done: 全分類、proxy境界、試行上限、jitter境界、不正入力、判
 Problem: PublishFailedを入口として、policyの判断・DBへの確定・確定後の停止記録を取りまとめる。
 Evidence: OutboxDeliveryRepositoryは更新成否をboolで返し、トランザクションの確定は呼び出し元が担う。
 
-PublishFailureHandler.handle(event=ClaimedOutboxEvent, failure=PublishFailed)は、イベント単位の短いトランザクションと停止確定後の記録を管理する。
+OutboxDeliveryFailureHandler.handle(event=ClaimedOutboxEvent, failure=PublishFailed)は、イベント単位の短いトランザクションと停止確定後の記録を管理する。
 failureがPublishFailed以外ならTypeError、event_idが確保済みイベントと一致しなければValueErrorとして、jitter生成・DB操作・記録の前に拒否する。
 session factoryはcaller_managed_session_factoryと互換のsession開閉専用factoryを注入する。
 jitter生成関数は既定でrandom.randomを使い、テストでは固定値を注入する。

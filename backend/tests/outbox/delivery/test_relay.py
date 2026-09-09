@@ -16,7 +16,7 @@ from app.db.session import caller_managed_session_factory
 from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
 from app.models.outbox_event import OutboxEvent
 from app.outbox.delivery import failure_recording as publish_failure_recording
-from app.outbox.delivery.failure_handler import PublishFailureHandler
+from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.relay import OutboxRelay
 from app.outbox.delivery.repository import OutboxDeliveryRepository
 from app.outbox.delivery.values import DeliveryBatchSelection, LeaseDuration
@@ -148,7 +148,7 @@ def outputs(monkeypatch):
 
 def _relay(sessions, publisher):
     return OutboxRelay(
-        sessions, publisher, PublishFailureHandler(sessions, jitter=lambda: 0.5)
+        sessions, publisher, OutboxDeliveryFailureHandler(sessions, jitter=lambda: 0.5)
     )
 
 
@@ -244,7 +244,7 @@ async def test_mixed_results_route_success_and_failures_without_duplicate_record
             return_value=BatchPublishResult((PublishSucceeded(success_id), retry, stop))
         )
     )
-    handler = PublishFailureHandler(sessions, jitter=lambda: 0.5)
+    handler = OutboxDeliveryFailureHandler(sessions, jitter=lambda: 0.5)
     handle = AsyncMock(wraps=handler.handle)
     monkeypatch.setattr(handler, "handle", handle)
     mark_published = OutboxDeliveryRepository.mark_published
@@ -425,6 +425,7 @@ async def test_shared_contract_stops_only_invalid_event_and_delivers_valid(
     from hashlib import md5
 
     from app.lambda_handlers.embedding_event import parse_embedding_event
+    from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
     from app.outbox.sqs.publisher import SqsEventPublisher
 
     before = await _seed(session_factory, count=2)
@@ -456,6 +457,7 @@ async def test_shared_contract_stops_only_invalid_event_and_delivers_valid(
     client = Mock()
     client.send_message_batch.side_effect = send
     publisher = SqsEventPublisher(
+        failure_handler=SqsPublishFailureHandler(),
         embedding_queue_url="https://sqs.invalid/embedding",
         client_factory=lambda: client,
     )

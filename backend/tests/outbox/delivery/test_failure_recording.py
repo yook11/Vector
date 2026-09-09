@@ -18,7 +18,7 @@ from app.outbox.delivery import failure_recording as recording
 from app.outbox.delivery.failure_handler import (
     DeliveryStopped,
     DeliveryUpdateSkipped,
-    PublishFailureHandler,
+    OutboxDeliveryFailureHandler,
 )
 from app.outbox.delivery.repository import ClaimedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
@@ -338,7 +338,7 @@ async def test_handler_composition_records_only_committed_stops(
             )
         else:
             error = CASES[0][0]
-        result = await PublishFailureHandler(factory, jitter=lambda: 0.5).handle(
+        result = await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
             event=claimed, failure=PublishFailed(claimed.event_id, error)
         )
         async with session_factory() as reader:
@@ -427,7 +427,7 @@ async def test_handler_returns_committed_stop_despite_output_failure(
         metric.side_effect = RuntimeError(PRIVATE)
     monkeypatch.setattr(recording, "logger", logger)
     monkeypatch.setattr(recording, "emit_metric", metric)
-    handler = PublishFailureHandler(session_factory, jitter=lambda: 0.5)
+    handler = OutboxDeliveryFailureHandler(session_factory, jitter=lambda: 0.5)
     failure = PublishFailed(event_id, CASES[0][0])
     assert await handler.handle(event=claimed, failure=failure) == DeliveryStopped(
         STOP_REASON

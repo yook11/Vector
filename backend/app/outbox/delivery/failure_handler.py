@@ -37,7 +37,7 @@ class DeliveryUpdateSkipped:
     """更新条件を満たさず、配信状態を変更しなかった結果。"""
 
 
-class PublishFailureHandler:
+class OutboxDeliveryFailureHandler:
     """分類済みの送信失敗を受け取り、状態更新と確定後の記録を行う。"""
 
     def __init__(

@@ -7,7 +7,7 @@ from datetime import timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.events import ArticleAssessedInScope
-from app.outbox.delivery.failure_handler import PublishFailureHandler
+from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.repository import ClaimedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.delivery.values import DeliveryBatchSelection, LeaseDuration
 from app.outbox.publishing.publisher import (
@@ -25,7 +25,7 @@ class OutboxRelay:
         self,
         session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
         publisher: EventPublisher,
-        failure_handler: PublishFailureHandler,
+        failure_handler: OutboxDeliveryFailureHandler,
     ) -> None:
         self._session_factory = session_factory
         self._publisher = publisher
