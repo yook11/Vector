@@ -69,13 +69,13 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 
 ## Implementation
 
-`backend/app/outbox/publisher.py`にEventEnvelopeと同期EventPublisher Protocol、`sqs_publisher.py`にベクトル生成向けのSQS送信部品を実装した。本番の生成口はSqsEventPublisher.from_sessionで、SDK session・region・Queue URLを呼び出し元から渡す。公開APIはpublish_batchに統一し、各イベントのPublishSucceededまたはPublishFailed(error=PublishError)をBatchPublishResultに格納する。対応外イベントとタイムゾーンのない日時は個別失敗にし、正常なイベントだけを送信する。
+`backend/app/outbox/publishing/publisher.py`にEventEnvelopeと同期EventPublisher Protocol、`sqs/publisher.py`にベクトル生成向けのSQS送信部品を実装した。本番の生成口はSqsEventPublisher.from_sessionで、SDK session・region・Queue URLを呼び出し元から渡す。公開APIはpublish_batchに統一し、各イベントのPublishSucceededまたはPublishFailed(error=PublishError)をBatchPublishResultに格納する。対応外イベントとタイムゾーンのない日時は個別失敗にし、正常なイベントだけを送信する。
 
 他工程への展開、relayループへの接続、AWS上での実行検証は未完了。Lambda handlerは接続確認のままとし、relayループの運用条件は別途仕様化する。
 
 ## Verification
 
-`backend/tests/outbox/test_sqs_publisher.py`にStubberを使用したunit testを追加した。MessageBodyと送信先、再送時の内容維持、UTC変換と小数秒、対応外イベント・タイムゾーンなし日時の非送信、SDK例外の共通分類への変換を対象とする。既存payload定義を固定するだけのテストは追加していない。
+`backend/tests/outbox/sqs/test_publisher.py`にStubberを使用したunit testを追加した。MessageBodyと送信先、再送時の内容維持、UTC変換と小数秒、対応外イベント・タイムゾーンなし日時の非送信、SDK例外の共通分類への変換を対象とする。既存payload定義を固定するだけのテストは追加していない。
 
 スライス②完了時点でlint・format、全単体テスト5,572件、integration test 1,217件（22件skip）が成功した。AWS上での送信確認・デプロイは行っていない。
 
@@ -90,7 +90,7 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 - PublishIntegrityError: body_checksum_mismatchで送信本文の整合性確認失敗を表し、任意のrequest_idを調査用に保持する。
 
 サービス理由はthrottled、authentication_failed、access_denied、destination_not_found、request_rejected、security_rejected、request_expired、encryption_error、service_unavailable、unclassifiedとする。
-AWSコードとの対応はSQS adapterのsqs_error_mappingが所有する。
+AWSコードとの対応はSQS adapterのsqs.error_mappingが所有する。
 既知コードをstatusより優先し、未知コードは5xxだけservice_unavailable、それ以外はunclassifiedとする。
 SendMessageBatch以外のClientErrorをSQS応答として分類しない。
 共通型は再試行可否や配信停止方針を持たない。
@@ -224,35 +224,38 @@ Evidence: 既存OutboxDeliveryRepository、outbox_eventsの状態・lease制約�
 
 ### 共通の試行上限と対象範囲
 
-- `publish_retry_policy.MAX_PUBLISH_ATTEMPTS = 5`を確保・停止・送信失敗後の再試行判断で共有する。
+- `delivery.retry_policy.MAX_PUBLISH_ATTEMPTS = 5`を確保・停止・送信失敗後の再試行判断で共有する。
 - 回数は初回を含む、commitされた配信試行の確保回数であり、実際のネットワーク送信回数ではない。
 - `event_type`は必須の完全一致条件とし、全イベントを対象とする省略値は持たない。後続のrelayは`article.assessed_in_scope`を渡す。
 - 発生日時の下限は設けず、古いイベントも対象に含む。他工程の行は確保・停止の両方から除外する。
 
 ### APIと更新条件
 
-`claim_ready_batch(*, event_type: str, lease_duration: timedelta, limit: int = 10) -> list[ClaimedOutboxEvent]`
+`claim_ready_batch(*, selection: DeliveryBatchSelection, lease_duration: LeaseDuration) -> list[ClaimedOutboxEvent]`
 
 - 未配信・未停止・再試行時刻到来・leaseなしまたは期限切れ・確保前の試行回数が5回未満をDB側で判定する。
 - `occurred_at ASC`で候補を選び、件数上限と`FOR UPDATE SKIP LOCKED`を適用して、1つのSQLでlease設定と試行回数の加算を行う。
 - 確保前4回は確保後5回となり、確保前5回以上は確保しない。本文・発生日時・再試行予定日時など他の列は変更しない。
 - `RETURNING`の順序に依存せず、取得したoccurred_atで返却結果も整列する。同じ発生日時のイベント同士の選択・返却順は保証せず、ID順も要求しない。next_attempt_atは送信可能時刻の判定だけに使う。
 
-`stop_deliveries_at_attempt_limit(*, event_type: str, limit: int = 100) -> list[UUID]`
+`stop_deliveries_at_attempt_limit(*, selection: DeliveryBatchSelection) -> list[UUID]`
 
 - 未配信・未停止・試行回数5回以上・leaseなしまたは期限切れの行を対象とし、next_attempt_atが未来でも停止する。
 - 確保と同じ順序・ロック方式で候補を制限し、1つのSQLで停止日時をDB現在時刻、停止理由を`NonRetryableReason.RETRY_EXHAUSTED.value`にし、leaseの2列をNULLへ戻す。
 - 試行回数、本文、イベント発生日時、再試行予定日時、配信成功日時は変更しない。更新したevent_idを候補と同じ順序で返す。
 - 担当者による`stop_delivery`は、有効なleaseとtoken一致を要求する。上限到達による停止は、leaseなしまたは期限切れを要求する。対象条件は各経路に残し、停止日時・理由・lease解除の更新定義をrepository内で共通化する。
-- 定期実行は呼び出し元の責任とし、この操作は1回につき既定で最大100件を停止する。SQSのバッチ送信とは別の処理であり、PublishErrorを作らず、PublishFailureHandlerやログ・通知には接続しない。
+- 定期実行は呼び出し元の責任とし、Relayはこの操作へ最大100件の選択条件を渡す。SQSのバッチ送信とは別の処理であり、PublishErrorを作らず、PublishFailureHandlerやログ・通知には接続しない。
 - 100件を超えて未停止のまま残った行も、確保条件によって6回目の確保には入らない。
 
 ### 入力・トランザクションの境界
 
-- event_typeの型違反はTypeError、空・空白のみはValueErrorとし、文字列を自動補正しない。
-- limitはboolを除く整数を要求し、型違反はTypeError、0以下はDB操作なしで空リストを返す。
-- lease_durationはtimedelta以外をTypeError、0以下をValueErrorとし、limitが0以下でも検証する。
-- 件数は初期値であり呼び出し元が変更できる。repositoryにSQSの10件というリクエスト上限は持ち込まない。
+- delivery.valuesの不変なDeliveryBatchSelection(event_type, limit)が生成時に入力を検証する。event_typeの型違反はTypeError、空・空白のみはValueErrorとし、文字列を自動補正しない。
+- DeliveryBatchSelectionのlimitはboolを除く整数を要求し、生成時の型違反はTypeErrorとする。0以下も保持でき、Repositoryはその場合DB操作なしで空リストを返す。
+- LeaseDuration(value)は生成時にtimedelta以外をTypeError、0以下をValueErrorとする。件数が0以下でも、不正な期間はRepositoryへ渡す前に拒否する。
+- 選択条件の件数は呼び出し元が明示する。Relayは確保10件・停止100件を指定し、RepositoryにSQSの10件というリクエスト上限は持ち込まない。
+- RetryDelay(value)は生成時にtimedelta以外をTypeError、負の値をValueErrorとし、ゼロを許容する。schedule_retryはRetryDelayを受け取り、DBへ渡すときにvalueを取り出す。
+- stop_deliveryと停止更新の共通処理はNonRetryableReasonを受け取り、DB保存時にのみvalueへ変換する。任意の文字列は入力契約から除外するが、DB列型・制約・既存データの読み取りは変更しない。
+- Repositoryはこれらの入力内容を再検証せず、型の生成時の保証を利用する。lease所有権・期限・配信状態・試行回数の条件は引き続きSQLで判定する。
 - 時刻判定はstatement_timestamp()を使い、事前SELECTやアプリ時刻による判定を加えない。ロック中の行を避けるため、全体の厳密なFIFOではなく確保可能な行の中で発生日時の古い順となる。
 - repositoryはcommit・rollbackを行わず、返却値は未commitの更新結果である。DB例外は送信失敗に変換せず伝播する。
 - 有効な5回目のleaseやロック中の行を停止処理で上書きしない。停止後は古いtokenによる結果更新を拒否する。
@@ -290,16 +293,16 @@ Invariants: 正常終了は今回の処理の終了を意味し、全件送信�
 Non-goals: Lambda入口、Terraform、通信timeout、定期起動、本番適用、consumer、既存Taskiqの切り替えは変更しない。Lambda120秒の反映は次のスライスとする。
 Done: 実DBと差し替えpublisherで、確定順序・部分失敗・更新なし・障害時の中断を検証する。
 
-Verification（2026-09-08）: relay本体とテストのlint・format checkが成功した。テストの責任整理前には、Outboxの関連単体テスト609件と実DBテスト190件が成功した。責任整理後は、`make test-integration TEST_COMPOSE_PROJECT=vector-test-relay-responsibility-20260908 PYTEST_ARGS="tests/outbox/test_relay.py -x -q"`でrelayの実DBテスト36件が成功した。その後の変更はコメントのみで、lint・format checkを確認した。利用者の指定により全テストは再実行していない。Lambda接続・本番適用・AWSへの実送信は未実施。
+Verification（2026-09-08）: relay本体とテストのlint・format checkが成功した。テストの責任整理前には、Outboxの関連単体テスト609件と実DBテスト190件が成功した。責任整理後は、`make test-integration TEST_COMPOSE_PROJECT=vector-test-relay-responsibility-20260908 PYTEST_ARGS="tests/outbox/delivery/test_relay.py -x -q"`でrelayの実DBテスト36件が成功した。その後の変更はコメントのみで、lint・format checkを確認した。利用者の指定により全テストは再実行していない。Lambda接続・本番適用・AWSへの実送信は未実施。
 
 ## 再試行・停止ポリシー（スライス①）
 
 Problem: publisherが返す原因から、再試行・停止を判断する規則を一箇所に定義する。
-Evidence: publish_errorsの共通分類と、claim_ready_batchが確保時にattempt_countを加算する契約に従う。
+Evidence: publishing.errorsの共通分類と、claim_ready_batchが確保時にattempt_countを加算する契約に従う。
 
-publish_retry_policy.decide_publish_retry(error, attempt_count, jitter)は、副作用のない判断関数とする。
+delivery.retry_policy.decide_publish_retry(error, attempt_count, jitter)は、副作用のない判断関数とする。
 結果は不変のRetryable(delay)またはNonRetryable(reason)で返す。
-Retryableは原因と回数上限を確認済みの最終判断であり、次回の配信試行までの待ち時間を必ず持つ。
+Retryableは原因と回数上限を確認済みの最終判断であり、次回の配信試行までの待ち時間をRetryDelayとして必ず持つ。Retryableは生成時にdelayがRetryDelay、NonRetryableはreasonがNonRetryableReasonであることを検証し、それ以外をTypeErrorとする。Handlerはこれらの値を型のままRepositoryへ渡す。RetryScheduledのdelayは従来どおりtimedeltaを返す。
 RetryableとNonRetryableは確定した判断だけを保持し、原因の判定メソッドを持たない。decide_publish_retryが入力検証、原因判定、回数上限の確認、待ち時間計算と結果の生成を取りまとめる。
 再試行対象外の原因は原因別の停止理由を優先し、再試行対象でも回数上限に達した場合はretry_exhaustedを返す。それ以外は計算した待ち時間を持つRetryableを返す。原因判定と停止理由の分類はポリシー内の非公開関数が担い、待ち時間の計算関数はtimedeltaだけを返す。中間分類専用の結果型や、Noneによる再試行可否の表現は使用しない。
 再試行しない理由はNonRetryableReasonのnon_retryable_failure、retry_exhausted、unclassified_failure、unexpected_failureとし、元の失敗情報はPublishErrorに保持する。
@@ -349,7 +352,7 @@ jitter生成関数は既定でrandom.randomを使い、テストでは固定値�
 5. session終了後、DeliveryStoppedに限りrecord_publish_failure(event, error=failure.error, stop_reason=outcome.reason)を1回呼ぶ。
 6. RetryScheduled(delay)、DeliveryStopped(reason)、DeliveryUpdateSkippedのいずれかの不変な結果を返す。
 
-結果型はpublish_failure_handler.pyに置き、recordingは結果型に依存しない。
+結果型はdelivery/failure_handler.pyに置き、recordingは結果型に依存しない。
 
 delivery_stop_reasonにはNonRetryableReason.valueのみ保存し、失敗の自由文や本文を含めない。
 元の原因・診断情報はfailure.errorに残し、停止確定後の記録でevent_idと関連付ける。
@@ -412,8 +415,8 @@ relay接続・AWS上の送信・本番適用・Slack到達確認は未実施。
 ### 発生段階ごとの例外変換の統合
 
 Problem: publisherとクライアント生成処理で重複していた、例外分類・想定外への変換・原因保持を揃える。
-Evidence: sqs_error_mappingの既存AWS分類と、資格情報取得・送信・終了を区別する既存テストを使用する。
-publish_error_from_exception(exc, phase=PublishPhase)をsqs_error_mapping.pyの例外からの変換入口とし、必ずPublishErrorを返す。
+Evidence: sqs.error_mappingの既存AWS分類と、資格情報取得・送信・終了を区別する既存テストを使用する。
+publish_error_from_exception(exc, phase=PublishPhase)をsqs/error_mapping.pyの例外からの変換入口とし、必ずPublishErrorを返す。
 既存PublishErrorはそのまま返す。終了失敗はpublish_cleanup_error_from_exceptionでPublishCleanupErrorへ変換し、既存PublishCleanupErrorはそのまま返す。
 RESOLVE_CREDENTIALSは設定不足の専用理由を優先し、その他のSDK失敗をcredentials_retrieval_failedにする。
 INITIALIZEは設定不足、SENDは既存SQS例外分類を使い、PREPARE_EVENTなどの未分類例外は発生段階の想定外とする。
@@ -430,7 +433,7 @@ Done: 段階別の分類、既存エラーの維持、分類失敗、終了失�
 
 Problem: 変換済み例外をraiseして再捕捉する往復をなくし、失敗した処理が対象イベントを指定する。
 Evidence: 既存の全体失敗・個別失敗・不正応答・終了失敗のテストと、共通例外変換の契約を使用する。
-sqs_publisher.pyのfailed_results(batch, error)は指定されたバッチの対象だけにPublishFailedを作り、分類や再試行判断を行わない。
+sqs/publisher.pyのfailed_results(batch, error)は指定されたバッチの対象だけにPublishFailedを作り、分類や再試行判断を行わない。
 本文作成失敗は該当イベントだけ、クライアント生成・送信全体・応答全体の検証失敗は準備済み送信対象全件へ反映する。
 個別応答の失敗・本文不一致は既存応答処理が該当イベントだけに反映する。
 クライアント生成、SDK送信、応答処理はそれぞれの境界で例外を共通変換し、その場で結果を作る。
@@ -462,12 +465,12 @@ Done: 既存テストを専用型の契約に同期し、結果維持・再試�
 Problem: 個別応答の分類処理失敗を応答処理側が包んでいたため、PublishErrorへの変換責務が分散していた。
 Evidence: 既存のAWSコード対応表、例外の段階別分類、部分成功・分類処理失敗・終了失敗のテストを使用する。
 
-- sqs_error_mapping.pyが変換を所有し、公開入口はpublish_error_from_exception(exc, phase)とpublish_error_from_sqs_entry(code, request_id)とする。
+- sqs/error_mapping.pyが変換を所有し、公開入口はpublish_error_from_exception(exc, phase)とpublish_error_from_sqs_entry(code, request_id)とする。
 - 例外からの入口はSDK例外と処理中の通常例外を受け、既存PublishErrorの同一性・発生段階・元の原因を維持する。
 - 個別失敗の入口は形式検証済みのCode/request IDを受け、既存対応表のPublishServiceErrorまたは分類処理失敗のPublishUnexpectedErrorを返す。status_codeはNone、未知コードはunclassifiedとする。
 - 両入口の通常の戻り値はPublishErrorとし、Noneを返さない。設定・SDK例外・サービスコード別の分類関数は内部関数にし、内部分類のNoneは例外からの入口で想定外へ変換する。
-- 個別分類処理の通常例外はclassify_failureとし、元の個別失敗情報と分類処理例外型を保持する。SqsBatchEntryErrorを変換モジュールへ移し、診断上の完全修飾型名はapp.outbox.sqs_error_mapping.SqsBatchEntryErrorとする。互換用の別名は設けない。
-- sqs_batch_response.pyは形式検証・ID照合・本文比較とイベントへの結果の対応付けを担当し、個別失敗の分類を公開入口へ委譲する。チェックサム不一致を検出した箇所でのPublishIntegrityError生成は維持する。
+- 個別分類処理の通常例外はclassify_failureとし、元の個別失敗情報と分類処理例外型を保持する。SqsBatchEntryErrorを変換モジュールへ移し、診断上の完全修飾型名はapp.outbox.sqs.error_mapping.SqsBatchEntryErrorとする。互換用の別名は設けない。
+- sqs/batch_response.pyは形式検証・ID照合・本文比較とイベントへの結果の対応付けを担当し、個別失敗の分類を公開入口へ委譲する。チェックサム不一致を検出した箇所でのPublishIntegrityError生成は維持する。
 - 終了失敗は別入口publish_cleanup_error_from_exceptionでPublishCleanupErrorへ変換し、送信失敗とは分離する。
 
 Invariants: 分類結果・部分成功・原因情報・自由文の秘匿を維持し、BaseExceptionを捕捉しない。
@@ -482,7 +485,7 @@ Done: 呼び出し側の個別失敗の変換分岐がなくなり、公開入�
 Problem: 1回で送るまとまりの件数・ID重複・合計サイズの条件を、送信処理から分離して型に定義する。
 Evidence: 既存SqsMessage、publisherの入力検証・本文準備と、送信・失敗結果・応答照合の受け渡しを対象とする。
 
-- sqs_message_batch.pyにfrozen・slotsのSqsMessageBatch(messages: tuple[SqsMessage, ...])を定義し、保持するフィールドはmessagesだけとする。
+- sqs/message_batch.pyにfrozen・slotsのSqsMessageBatch(messages: tuple[SqsMessage, ...])を定義し、保持するフィールドはmessagesだけとする。
 - 構築時にtupleと要素型を確認し、次に1〜10件、event_idの重複なし、UTF-8本文合計がMAX_MESSAGE_BYTES以内を順に確認する。型違反はTypeError、件数・重複・サイズ違反はValueErrorとする。
 - 件数上限は同モジュールのMAX_BATCH_MESSAGES=10を使い、publisherの入力件数検証も参照する。本文上限は既存のMAX_MESSAGE_BYTESを使う。
 - メッセージの順序・本文・MD5を維持し、JSON化やMD5計算を追加しない。通常表示に本文・MD5を出さず、検証エラーに本文・イベントIDを埋め込まない。
@@ -505,8 +508,8 @@ Evidence: 既存の応答形式検証・ID照合・本文MD5比較、エラー�
 
 - PublishResponseInvalidError(CODE=publish_response_invalid)はPublishErrorを継承し、共通のreasonだけを保持する。SQS固有のfieldは持たず、SAFE_ATTRSもCODEとreasonだけとする。
 - PublishResponseInvalidReasonはinvalid_type、missing_required_field、empty_required_field、invalid_checksum_format、unknown_entry_id、duplicate_entry_id、missing_entry_idとする。項目が存在してNoneならinvalid_type、キー自体の欠落ならmissing_required_field、必須文字列が空ならempty_required_fieldとする。
-- SQS側のsqs_response_errors.pyに定義するSqsResponseFieldはresponse、successful_entries、failed_entries、successful_entry、failed_entry、entry_id、message_id、body_checksum、error_code、sender_faultとする。実際のID、本文、チェックサム、SDK自由文、request IDは取り込まない。
-- InvalidSqsBatchResponseをsqs_response_errors.pyに置き、decode・ID照合が共有するPublishResponseInvalidReasonとSQS固有のSqsResponseFieldを指定して送出する。旧PublishResponseFieldの互換名は設けない。応答検証とマッピングの循環依存を作らず、違反理由を二重定義しない。
+- SQS側のsqs/response_errors.pyに定義するSqsResponseFieldはresponse、successful_entries、failed_entries、successful_entry、failed_entry、entry_id、message_id、body_checksum、error_code、sender_faultとする。実際のID、本文、チェックサム、SDK自由文、request IDは取り込まない。
+- InvalidSqsBatchResponseをsqs/response_errors.pyに置き、decode・ID照合が共有するPublishResponseInvalidReasonとSQS固有のSqsResponseFieldを指定して送出する。旧PublishResponseFieldの互換名は設けない。応答検証とマッピングの循環依存を作らず、違反理由を二重定義しない。
 - publish_error_from_exceptionのsend境界でPublishResponseInvalidErrorへ変換し、共通エラーにはreasonを保持し、SQSの診断詳細は元の例外をcauseとして維持する。共通のポリシーと記録処理はcause内のSQS情報を参照しない。その他の段階で発生した場合は既存どおり想定外とする。
 - 形式・ID対応の違反は送信対象全件を失敗とし、受付されなかったとは断定しない。正常形式のMD5が送信本文と異なる場合は、既存のPublishIntegrityErrorとして該当イベントだけに反映する。
 - 変換処理自体の通常例外は既存のclassify_failureのPublishUnexpectedErrorとし、元原因と分類処理例外型を保持する。
@@ -520,3 +523,11 @@ Non-goals: DB schema・relay・通知経路・AWS設定・依存の変更、自�
 Done: 全違反理由が共通エラーと停止ログまで保持され、秘匿と既存の結果境界をテストで保証し、lint・format・全単体テスト・DB integration testが成功する。
 
 応答不正の失敗契約のローカル検証（2026-09-08）: lint・format、全単体テスト5,916件が成功。`make test-integration TEST_COMPOSE_PROJECT=vector-test-response-invalid-3z0mnr18 PYTEST_ARGS="-x -q"`でDB integration test 1,229件成功・22件skipを確認した。応答不正による停止のcommit成功後の記録、commit失敗・更新なし時の非記録を実DBで検証済み。AWS実送信・本番適用は未実施。
+
+## Outboxのディレクトリ構成
+
+- `delivery/`は配信の確保・送信実行・結果記録・再試行と停止判断を担当する。
+- `publishing/`はEventEnvelope、EventPublisher Protocol、送信結果型と共通エラーを定義する。
+- `sqs/`はSQS送信、本文・バッチの構築、応答検証、例外変換とクライアント管理を担当する。
+
+配置の整理に伴いimportパスと診断上の完全修飾型名を更新するが、処理と送信契約は維持する。EventEnvelope.from_claimed()とその配信型への参照、publishing/errors.py内のPublishCleanupErrorは維持し、旧モジュールの互換名は設けない。
