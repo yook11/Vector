@@ -100,3 +100,31 @@ output "outbox_relay_function_name" {
   description = "イメージ未指定時はnull。"
   value       = one(aws_lambda_function.outbox_relay[*].function_name)
 }
+
+output "embedding_consumer_subnet_id" {
+  value = aws_subnet.embedding_consumer.id
+}
+
+output "embedding_consumer_security_group_id" {
+  value = aws_security_group.embedding_consumer.id
+}
+
+output "embedding_consumer_role_arn" {
+  value = aws_iam_role.embedding_consumer.arn
+}
+
+output "embedding_consumer_log_group_name" {
+  value = aws_cloudwatch_log_group.embedding_consumer.name
+}
+
+output "embedding_consumer_parameter_path" {
+  value = local.embedding_consumer_parameter_path
+}
+
+output "embedding_dlq_url" {
+  value = aws_sqs_queue.embedding_dlq.url
+}
+
+output "embedding_dlq_arn" {
+  value = aws_sqs_queue.embedding_dlq.arn
+}

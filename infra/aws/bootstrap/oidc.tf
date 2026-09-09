@@ -8,6 +8,10 @@ locals {
     for stage in ["completion", "curation", "assessment", "embedding"] :
     "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-${stage}"
   ]
+  embedding_consumer_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-embedding-consumer"
+  embedding_consumer_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-embedding-consumer-lambda"
+  embedding_dlq_arn             = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-embedding-dlq"
+  managed_pipeline_queue_arns   = concat(local.outbox_queue_arns, [local.embedding_dlq_arn])
   outbox_lambda_eni_actions = [
     "ec2:CreateNetworkInterface",
     "ec2:DescribeNetworkInterfaces",
@@ -18,11 +22,14 @@ locals {
   ]
   outbox_service_roles = {
     Lambda = {
-      arn     = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda"
+      arns = [
+        "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda",
+        local.embedding_consumer_role_arn,
+      ]
       service = "lambda.amazonaws.com"
     }
     Scheduler = {
-      arn     = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-scheduler"
+      arns    = ["arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-scheduler"]
       service = "scheduler.amazonaws.com"
     }
   }
@@ -30,19 +37,19 @@ locals {
   outbox_pass_role_guards = flatten([
     for name, role in local.outbox_service_roles : [
       {
-        Sid         = "DenyPassRoleTo${name}ExceptRelay"
+        Sid         = "DenyPassRoleTo${name}ExceptPipelineRoles"
         Effect      = "Deny"
         Action      = "iam:PassRole"
-        NotResource = role.arn
+        NotResource = role.arns
         Condition = {
           StringEquals = { "iam:PassedToService" = role.service }
         }
       },
       {
-        Sid      = "DenyRelay${name}RoleToOtherServices"
+        Sid      = "DenyPipeline${name}RolesToOtherServices"
         Effect   = "Deny"
         Action   = "iam:PassRole"
-        Resource = role.arn
+        Resource = role.arns
         Condition = {
           StringNotEquals = { "iam:PassedToService" = role.service }
         }
@@ -526,7 +533,7 @@ resource "aws_iam_policy" "apply_outbox" {
     Version = "2012-10-17"
     Statement = concat([
       {
-        Sid    = "ManageOutboxQueues"
+        Sid    = "ManagePipelineQueues"
         Effect = "Allow"
         Action = [
           "sqs:CreateQueue",
@@ -538,7 +545,7 @@ resource "aws_iam_policy" "apply_outbox" {
           "sqs:TagQueue",
           "sqs:UntagQueue",
         ]
-        Resource = local.outbox_queue_arns
+        Resource = local.managed_pipeline_queue_arns
       },
       {
         Sid    = "ManageOutboxLambda"

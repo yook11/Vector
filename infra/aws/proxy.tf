@@ -21,7 +21,7 @@ locals {
     tavily   = ["api.tavily.com"]
   }
 
-  proxy_clients = {
+  proxy_clients = merge({
     for name in local.egress_stages : name => {
       cidr = local.app_subnet_cidrs[name]
       domains = flatten([
@@ -30,7 +30,13 @@ locals {
       ])
       unrestricted = local.stages[name].egress_unrestricted
     }
-  }
+    }, {
+    embedding_consumer = {
+      cidr         = local.embedding_consumer_subnet_cidr
+      domains      = local.egress_vendor_domains.gemini
+      unrestricted = false
+    }
+  })
 
   # 非公開レンジの正本は **app 側のファイル 1 つ**。Squid はレンジの明示列挙しか
   # 書けないので、ここから読んで conf を生成する。
