@@ -7,8 +7,13 @@ from uuid import UUID
 import structlog
 from botocore.client import BaseClient
 from botocore.session import Session
+from pydantic import ValidationError
 
-from app.analysis.assessment.events import ArticleAssessedInScope
+from app.analysis.assessment.events import (
+    ArticleAssessedInScope,
+    ArticleAssessedInScopeEvent,
+    assessed_event_invalid_reason,
+)
 from app.outbox.publishing.errors import (
     PublishError,
     PublishEventInvalidError,
@@ -83,7 +88,16 @@ class SqsEventPublisher:
                     raise PublishEventInvalidError(
                         reason=PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
                     )
-                message = SqsMessage.from_envelope(envelope)
+                event = self._validate_assessed_in_scope_event(envelope)
+                message = SqsMessage.from_envelope(
+                    EventEnvelope(
+                        event_id=event.event_id,
+                        event_type=event.event_type,
+                        schema_version=event.schema_version,
+                        occurred_at=event.occurred_at,
+                        payload=event.payload.model_dump(mode="json"),
+                    )
+                )
             except Exception as exc:
                 error = publish_error_from_exception(
                     exc, phase=PublishPhase.PREPARE_EVENT
@@ -97,6 +111,30 @@ class SqsEventPublisher:
         return BatchPublishResult(
             results=tuple(results[envelope.event_id] for envelope in envelopes),
         )
+
+    @staticmethod
+    def _validate_assessed_in_scope_event(
+        envelope: EventEnvelope,
+    ) -> ArticleAssessedInScopeEvent:
+        """対象内判定イベントを検証し、型付きpayloadとともに返す。"""
+        try:
+            event = ArticleAssessedInScopeEvent(
+                event_id=envelope.event_id,
+                event_type=envelope.event_type,
+                schema_version=envelope.schema_version,
+                occurred_at=envelope.occurred_at,
+                payload=envelope.payload,
+            )
+        except ValidationError as exc:
+            reason = PublishEventInvalidReason(assessed_event_invalid_reason(exc))
+            if reason is PublishEventInvalidReason.INVALID_ENVELOPE and any(
+                detail["loc"] == ("occurred_at",)
+                for detail in exc.errors(include_input=False, include_context=False)
+            ):
+                reason = PublishEventInvalidReason.INVALID_OCCURRED_AT
+        else:
+            return event
+        raise PublishEventInvalidError(reason=reason)
 
     @staticmethod
     def _validate_batch(envelopes: Sequence[EventEnvelope]) -> None:

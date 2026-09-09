@@ -413,3 +413,59 @@ async def test_call_failure_propagates_without_synthetic_publish_errors(
     assert saved["published_at"] is None and saved["delivery_stopped_at"] is None
     assert publisher.publish_batch.call_count == (1 if stage == "publisher" else 0)
     assert sessions.count == 2
+
+
+@pytest.mark.parametrize(
+    "invalid", [{"schema_version": 2}, {"payload": {"curation_id": 1}}]
+)
+async def test_shared_contract_stops_only_invalid_event_and_delivers_valid(
+    session_factory, sessions, invalid
+):
+    """実publisherの契約検証で不正分だけ停止し、正常本文を受信側でも復元できる。"""
+    from hashlib import md5
+
+    from app.lambda_handlers.embedding_event import parse_embedding_event
+    from app.outbox.sqs.publisher import SqsEventPublisher
+
+    before = await _seed(session_factory, count=2)
+    bad_id, good_id = before
+    async with session_factory() as session:
+        await session.execute(
+            update(OutboxEvent).where(OutboxEvent.event_id == bad_id).values(**invalid)
+        )
+        await session.commit()
+
+    def send(**kwargs):
+        entries = kwargs["Entries"]
+        assert len(entries) == 1
+        event = parse_embedding_event(entries[0]["MessageBody"])
+        assert event.event_id == good_id
+        assert event.payload.model_dump() == before[good_id]["payload"]
+        return {
+            "Successful": [
+                {
+                    "Id": str(good_id),
+                    "MessageId": "test-message",
+                    "MD5OfMessageBody": md5(
+                        entries[0]["MessageBody"].encode(), usedforsecurity=False
+                    ).hexdigest(),
+                }
+            ]
+        }
+
+    client = Mock()
+    client.send_message_batch.side_effect = send
+    publisher = SqsEventPublisher(
+        embedding_queue_url="https://sqs.invalid/embedding",
+        client_factory=lambda: client,
+    )
+    await _relay(sessions, publisher).run_once()
+    saved = await _read(session_factory, before)
+    assert saved[bad_id]["published_at"] is None
+    assert saved[bad_id]["delivery_stopped_at"] is not None
+    assert saved[bad_id]["delivery_stop_reason"] == "non_retryable_failure"
+    assert saved[good_id]["published_at"] is not None
+    assert saved[good_id]["delivery_stopped_at"] is None
+    client.send_message_batch.assert_called_once()
+    await _relay(sessions, publisher).run_once()
+    client.send_message_batch.assert_called_once()

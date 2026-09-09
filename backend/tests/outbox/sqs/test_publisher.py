@@ -37,12 +37,12 @@ from app.outbox.publishing.publisher import (
 )
 from app.outbox.sqs import publisher as publisher_module
 from app.outbox.sqs.error_mapping import SqsBatchEntryError
-from app.outbox.sqs.message import MAX_MESSAGE_BYTES, SqsMessage
+from app.outbox.sqs.message import SqsMessage
 from app.outbox.sqs.publisher import SqsEventPublisher
 from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
 
 QUEUE_URL = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/article-embedding"
-LIMIT = MAX_MESSAGE_BYTES
+LIMIT = 512
 
 
 @pytest.fixture
@@ -197,13 +197,19 @@ def test_unknown_entry_code_is_unclassified_regardless_of_sender_fault(
             datetime(2026, 9, 7),
             PublishEventInvalidReason.INVALID_OCCURRED_AT,
         ),
-        ("payload", {"bad": object()}, PublishEventInvalidReason.SERIALIZATION_FAILED),
+        ("payload", {"bad": object()}, PublishEventInvalidReason.INVALID_PAYLOAD),
         (
             "payload",
             {"bad": float("nan")},
-            PublishEventInvalidReason.SERIALIZATION_FAILED,
+            PublishEventInvalidReason.INVALID_PAYLOAD,
         ),
-        ("payload", {"bad": "x" * LIMIT}, PublishEventInvalidReason.MESSAGE_TOO_LARGE),
+        ("payload", {"bad": "x" * LIMIT}, PublishEventInvalidReason.INVALID_PAYLOAD),
+        ("schema_version", 2, PublishEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION),
+        (
+            "payload",
+            {"curation_id": True, "analyzed_article_id": 1},
+            PublishEventInvalidReason.INVALID_PAYLOAD,
+        ),
     ],
 )
 @pytest.mark.parametrize("include_valid", [False, True])
@@ -329,16 +335,24 @@ def test_all_invalid_events_do_not_construct_an_empty_batch(envelope, monkeypatc
     factory.assert_not_called()
 
 
+@pytest.fixture
+def small_message_limit(monkeypatch):
+    """正しいpayloadで個別・合計サイズの境界へ到達できる上限を使う。"""
+    monkeypatch.setattr("app.outbox.sqs.message.MAX_MESSAGE_BYTES", LIMIT)
+    monkeypatch.setattr("app.outbox.sqs.message_batch.MAX_MESSAGE_BYTES", LIMIT)
+
+
 def _sized(envelope, size):
-    empty = replace(envelope, payload={"text": ""})
+    base = replace(envelope, payload={"curation_id": 1, "analyzed_article_id": 456})
+    digits = size - len(_body(base).encode("utf-8")) + 1
     return replace(
-        empty, payload={"text": "x" * (size - len(_body(empty).encode("utf-8")))}
+        base, payload={"curation_id": int("9" * digits), "analyzed_article_id": 456}
     )
 
 
 @pytest.mark.parametrize("count", [1, 2])
 @pytest.mark.parametrize("extra", [0, 1])
-def test_message_and_batch_byte_limits(envelope, count, extra):
+def test_message_and_batch_byte_limits(envelope, count, extra, small_message_limit):
     """個別超過はイベント失敗、正常な本文の合計超過は呼び出し違反とする。"""
     events = [
         _sized(
@@ -369,14 +383,14 @@ def test_message_and_batch_byte_limits(envelope, count, extra):
         client.send_message_batch.assert_called_once()
 
 
-def test_non_ascii_size_uses_serialized_json_bytes(envelope):
-    """文字列の長さではなく既存のASCIIエスケープ後の本文サイズを使う。"""
+def test_non_ascii_payload_is_rejected_before_serialization(envelope):
+    """サイズの大きい文字列でも、payload契約違反を先に拒否する。"""
     event = replace(envelope, payload={"text": "あ" * (LIMIT // 6)})
     assert len(_body(event).encode("utf-8")) > LIMIT
     sender, _, factory = _sender()
     assert (
         sender.publish_batch([event]).results[0].error.reason
-        is PublishEventInvalidReason.MESSAGE_TOO_LARGE
+        is PublishEventInvalidReason.INVALID_PAYLOAD
     )
     factory.assert_not_called()
 
@@ -705,7 +719,7 @@ def test_results_are_frozen_and_do_not_expose_diagnostics(envelope, cleanup_log)
         },
         close_error=RuntimeError(marker),
     )
-    result = sender.publish_batch([replace(envelope, payload={"private": marker})])
+    result = sender.publish_batch([envelope])
     assert marker not in repr(result)
     assert marker not in str(result.results[0].error)
     assert marker not in str(cleanup_log.call_args)
@@ -718,7 +732,9 @@ def test_results_are_frozen_and_do_not_expose_diagnostics(envelope, cleanup_log)
             setattr(obj, attr, value)
 
 
-def test_oversized_event_stops_without_configuration_alarm(envelope):
+def test_oversized_event_stops_without_configuration_alarm(
+    envelope, small_message_limit
+):
     from app.outbox.delivery.failure_recording import (
         requires_publish_configuration_fix,
     )
