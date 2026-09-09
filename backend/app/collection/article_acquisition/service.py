@@ -40,7 +40,7 @@ from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
-from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.article_source import AcquirableSource
 from app.models.outbox_event import OutboxEvent
 
 logger = structlog.get_logger(__name__)
@@ -52,7 +52,7 @@ class ArticleAcquisitionService:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        source: ArticleSource,
+        source: AcquirableSource,
         tools_factory: Callable[[], ReaderTools] = ReaderTools,
     ) -> None:
         self._session_factory = session_factory

@@ -44,7 +44,7 @@ from app.collection.article_acquisition.strategy import SOURCES
 from app.collection.article_acquisition.tools.raw_http_client import RawHttpClient
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.external_fetch_errors import ExternalFetchError
-from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.article_source import AcquirableSource
 from app.collection.sources.definitions.anthropic import (
     AnthropicSource,
     is_collectable_anthropic_url,
@@ -319,7 +319,7 @@ def _multi_feed_rss(payloads_by_endpoint: dict[str, str]) -> CaseFactory:
 
 
 # Source → scope predicate (named-public-contract 一覧)。
-_SCOPE_PREDICATES: dict[ArticleSource, Callable[[Any], bool]] = {
+_SCOPE_PREDICATES: dict[AcquirableSource, Callable[[Any], bool]] = {
     AnthropicSource: is_collectable_anthropic_url,
     ORNLSource: is_collectable_ornl_url,
     MDPIMaterialsSource: is_collectable_mdpi_work,
@@ -331,7 +331,7 @@ _SCOPE_PREDICATES: dict[ArticleSource, Callable[[Any], bool]] = {
 
 
 # 45 source × (fixture, case_factory)。順序は ``SOURCES`` レジストリ登録順を踏襲。
-_ManifestEntry = tuple[ArticleSource, CaseFactory, pytest.MarkDecorator | None]
+_ManifestEntry = tuple[AcquirableSource, CaseFactory, pytest.MarkDecorator | None]
 _MANIFEST: list[_ManifestEntry] = [
     (VentureBeatSource, _rss("venturebeat_rss.xml"), None),
     (TechCrunchSource, _rss("techcrunch_rss.xml"), None),
@@ -426,7 +426,7 @@ _PARAMS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("source", "factory"), _PARAMS)
 async def test_collect_yields_in_scope_count(
-    source: ArticleSource, factory: CaseFactory
+    source: AcquirableSource, factory: CaseFactory
 ) -> None:
     """R7/R8: ``collect`` の yield 件数 == named scope を通った entry 件数。
 

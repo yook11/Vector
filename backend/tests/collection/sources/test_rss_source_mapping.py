@@ -5,7 +5,7 @@ ESA Djangoplicity family の module-level ``esa.to_fetched_article`` を
 手製 ``RssEntry`` で直接叩き、写像が宣言通り写すこと、および写像が **裁かない**
 (品質ゲート / URL 検証 / drop を converter に委ね、生値を素通しする) ことを
 固定する。enumerable な body policy が 2 source 以上で共有されるまで policy
-表テストは作らず、TechCrunch / VentureBeat / The Register の代表 3 写像で契約を
+表テストは作らず、VentureBeat / The Register の未移行の代表写像で契約を
 釘打つ。The Register は source 固有 URL 変換 (redirector→実 host) が
 canonicalize/SSRF でなく純粋 URL 組立に留まること、および空 link を写像で
 drop せず素通すこと (棄却の可視化は converter) を担う。ESA Djangoplicity は
@@ -24,7 +24,6 @@ from app.collection.domain.article_limits import ARTICLE_BODY_MAX_LENGTH
 from app.collection.sources.definitions.esa import (
     to_fetched_article as esa_to_fetched_article,
 )
-from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.definitions.the_register import TheRegisterSource
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
 
@@ -33,7 +32,7 @@ _PUBLISHED = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 # map_entry を持つ代表 source。共通の不変条件を parametrize。
 # The Register の redirector 変換は SSRF/javascript テスト URL の prefix に
 # 一致しないため raw URL 素通し不変条件を侵さない (共通 set に同居可)。
-_SOURCES = [TechCrunchSource, VentureBeatSource, TheRegisterSource]
+_SOURCES = [VentureBeatSource, TheRegisterSource]
 
 
 def make_rss_entry(**overrides: object) -> RssEntry:
@@ -50,24 +49,6 @@ def make_rss_entry(**overrides: object) -> RssEntry:
         "raw_updated": None,
     }
     return RssEntry(**(base | overrides))
-
-
-def test_techcrunch_maps_body_to_none_even_when_feed_carries_content() -> None:
-    """TC は content_encoded / summary が在っても body を採らない。"""
-    entry = make_rss_entry(
-        content_encoded="<p>" + "x" * 500 + "</p>", summary="<p>" + "y" * 500 + "</p>"
-    )
-    assert TechCrunchSource.map_entry(entry).body is None
-
-
-def test_techcrunch_passes_through_title_url_published() -> None:
-    entry = make_rss_entry()
-    result = TechCrunchSource.map_entry(entry)
-    assert (result.title, result.url, result.published_at) == (
-        entry.title,
-        entry.link,
-        entry.published,
-    )
 
 
 def test_venturebeat_picks_longer_content_encoded_as_body() -> None:

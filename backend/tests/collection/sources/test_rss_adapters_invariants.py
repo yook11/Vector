@@ -29,7 +29,7 @@ import pytest
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.article_source import AcquirableSource
 from app.collection.sources.definitions.cleantechnica import CleanTechnicaSource
 from app.collection.sources.definitions.cloudflare import CloudflareBlogSource
 from app.collection.sources.definitions.cornell import CornellChronicleSource
@@ -90,7 +90,7 @@ _H_BODY_DISTRUSTED = {ObservedArticle}
 
 
 # (label, SourceClass, fixture_filename, allowed_types, must_include_types)
-_CASES: list[tuple[str, ArticleSource, str, set[type], set[type]]] = [
+_CASES: list[tuple[str, AcquirableSource, str, set[type], set[type]]] = [
     (
         "VentureBeat-full",
         VentureBeatSource,
@@ -308,13 +308,13 @@ _CASES: list[tuple[str, ArticleSource, str, set[type], set[type]]] = [
 
 
 async def _collect_passports(
-    source: ArticleSource, fixture_filename: str
+    source: AcquirableSource, fixture_filename: str
 ) -> list[Passport]:
     """収集 → 変換の本番経路で fixture を流し passport を集める。
 
     ``ReaderTools`` の ``rss`` を fixture parser に差し替えて Source クラス
     オブジェクトを本番経路 (fetched_article_converter) に通す。profile / origin
-    は Source クラスの ``ClassVar`` を直読みする (旧 synthetic ``ArticleSource``
+    は Source クラスの ``ClassVar`` を直読みする (旧 synthetic ``AcquirableSource``
     ラップを廃止、RSS 群は全て feed + DEFAULT_POLICY)。
     """
     return await drive_source(source, tools=fixture_tools(rss_fixture=fixture_filename))
