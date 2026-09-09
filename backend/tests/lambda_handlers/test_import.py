@@ -33,6 +33,8 @@ def test_handler_loads_with_only_database_and_queue_settings() -> None:
             ),
             "DB_IAM_AUTH": "true",
             "AWS_REGION": "ap-northeast-1",
+            "MIGRATION_DATABASE_URL": "invalid-unused-url",
+            "AUTH_RETENTION_DATABASE_URL": "invalid-unused-url",
             **{
                 f"SQS_ARTICLE_{stage}_QUEUE_URL": f"https://sqs.invalid/{stage}"
                 for stage in ("COMPLETION", "CURATION", "ASSESSMENT", "EMBEDDING")

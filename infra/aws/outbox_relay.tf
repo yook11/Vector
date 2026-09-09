@@ -15,7 +15,7 @@ resource "aws_sqs_queue" "outbox" {
 
   name                      = "${var.name_prefix}-article-${each.key}"
   fifo_queue                = false
-  sqs_managed_sse_enabled    = true
+  sqs_managed_sse_enabled   = true
   message_retention_seconds = 1209600
 }
 
@@ -182,18 +182,18 @@ resource "aws_ecr_repository_policy" "outbox_relay" {
   })
 }
 
-# 接続確認段階はCloudWatch Logsと標準メトリクスを使い、X-Rayは採用しない。
+# relayはCloudWatch Logsと標準メトリクスを使い、X-Rayは採用しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "outbox_relay" {
   count = var.outbox_relay_image_digest == null ? 0 : 1
 
-  function_name                 = local.outbox_relay_name
-  role                          = aws_iam_role.outbox_relay.arn
-  package_type                  = "Image"
-  image_uri                     = "${aws_ecr_repository.this["backend"].repository_url}@${var.outbox_relay_image_digest}"
-  architectures                 = ["arm64"]
-  memory_size                   = 512
-  timeout                       = 30
+  function_name                  = local.outbox_relay_name
+  role                           = aws_iam_role.outbox_relay.arn
+  package_type                   = "Image"
+  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${var.outbox_relay_image_digest}"
+  architectures                  = ["arm64"]
+  memory_size                    = 512
+  timeout                        = 120
   reserved_concurrent_executions = 1
 
   tracing_config {

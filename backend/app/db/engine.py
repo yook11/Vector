@@ -49,6 +49,11 @@ class _RuntimeDatabaseSettings(Protocol):
     database_url: str
     db_iam_auth: bool
     aws_region: str | None
+
+
+class _AuthRetentionDatabaseSettings(_RuntimeDatabaseSettings, Protocol):
+    """認証データ保守のEngineだけが必要とする追加の接続先。"""
+
     auth_retention_database_url: str | None
 
 
@@ -181,7 +186,7 @@ def auth_retention_service_name() -> str:
 
 
 def create_auth_retention_engine(
-    settings: _RuntimeDatabaseSettings,
+    settings: _AuthRetentionDatabaseSettings,
 ) -> AsyncEngine:
     """auth schema retention用Engineを作る。"""
     if settings.auth_retention_database_url is None:
