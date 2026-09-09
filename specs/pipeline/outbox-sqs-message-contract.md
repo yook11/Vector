@@ -71,7 +71,7 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 
 `backend/app/outbox/publishing/publisher.py`にEventEnvelopeと同期EventPublisher Protocol、`sqs/publisher.py`にベクトル生成向けのSQS送信部品を実装した。本番の生成口はSqsEventPublisher.from_sessionで、SDK session・region・Queue URLを呼び出し元から渡す。公開APIはpublish_batchに統一し、各イベントのPublishSucceededまたはPublishFailed(error=PublishError)をBatchPublishResultに格納する。対応外イベントとタイムゾーンのない日時は個別失敗にし、正常なイベントだけを送信する。
 
-他工程への展開、relayループへの接続、AWS上での実行検証は未完了。Lambda handlerは接続確認のままとし、relayループの運用条件は別途仕様化する。
+ベクトル生成向けのrelayとLambda入口を接続済みである。他工程への展開、AWS上での実行検証、本番適用・定期起動の有効化は未実施。
 
 ## Verification
 
@@ -531,3 +531,20 @@ Done: 全違反理由が共通エラーと停止ログまで保持され、秘�
 - `sqs/`はSQS送信、本文・バッチの構築、応答検証、例外変換とクライアント管理を担当する。
 
 配置の整理に伴いimportパスと診断上の完全修飾型名を更新するが、処理と送信契約は維持する。EventEnvelope.from_claimed()とその配信型への参照、publishing/errors.py内のPublishCleanupErrorは維持し、旧モジュールの互換名は設けない。
+
+
+## Lambda入口への接続
+
+Problem: 接続確認だけのLambda入口から、実装済みのrelayを実行できるようにする。
+
+- 起動ごとにOutboxRelaySettings、NullPoolのDB Engine、caller_managed_session_factory、SDK Session、publisher、failure handler、relayを組み立てる。DB用設定をAPI・workerの保守用設定から分離し、4工程のQueue URLは必須のままとする。
+- run_onceを1回呼び、Engineの終了まで成功した場合だけ `{"status": "completed"}` を返す。event・contextから処理条件を上書きしない。
+- 実行失敗時もEngine終了を試み、通常の終了失敗が重なっても先行例外を保持する。入口で送信失敗への再分類・再送・通知を追加しない。
+- SQSの接続timeoutは3秒・応答待ちは5秒、total_max_attemptsは1。資格情報取得先への通信設定は変更しない。Lambda120秒・lease150秒で、停止100件・確保10件・送信1回の既存契約を維持する。
+- SchedulerはDISABLED、予約済み同時実行数は1を維持する。
+
+Done: 入口の接続・終了・例外伝播、実DBでの配信記録と接続解放、SDK timeoutの関連テストとTerraform検証を確認する。全テストは再実行しない。
+
+Non-goals: 本番適用、Scheduler有効化、AWSへの実送信、Slack到達確認、consumer、Taskiq切り替え、IAM・DB schema・依存の変更。
+
+検証結果: 関連単体テスト47件、Lambda入口とrelayの実DBテスト33件が成功した。変更したPythonのlint・format、outbox_relay.tfのformat check、隔離したTF_DATA_DIRでのinit -backend=false・validateも成功した。validateには既存設定の非推奨警告が残る。ディレクトリ全体のformat checkでは今回未変更のterraform.tfvarsに書式差分があり、変更対象だけを整形・検証した。全テスト、本番適用、AWSへの実送信、Slack到達確認は実施していない。

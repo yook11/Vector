@@ -5,10 +5,10 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 
-from app.db.settings import DatabaseSettings
+from app.db.settings import DatabaseConnectionSettings
 
 
-class OutboxRelaySettings(DatabaseSettings):
+class OutboxRelaySettings(DatabaseConnectionSettings):
     """relayに必要な接続設定のみを環境変数から読み込む。"""
 
     model_config = SettingsConfigDict(env_file=None, hide_input_in_errors=True)

@@ -39,6 +39,18 @@ def test_client_uses_frozen_credentials_and_one_attempt() -> None:
     assert kwargs["config"].retries == {"mode": "standard", "total_max_attempts": 1}
 
 
+def test_client_applies_designed_communication_timeouts():
+    """設計で定めた接続・応答待ちtimeoutをSQSクライアントへ反映する。"""
+    session = Mock()
+    session.get_credentials.return_value.get_frozen_credentials.return_value = (
+        ReadOnlyCredentials("testing", "secret", "token")
+    )
+    create_sqs_client(session=session, region="ap-northeast-1")
+    config = session.create_client.call_args.kwargs["config"]
+    assert config.connect_timeout == 3
+    assert config.read_timeout == 5
+
+
 @pytest.mark.parametrize("during_refresh", [False, True])
 @pytest.mark.parametrize(
     ("exc", "reason"),

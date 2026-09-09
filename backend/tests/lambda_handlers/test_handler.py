@@ -1,91 +1,141 @@
-from __future__ import annotations
+"""Lambda入口の組み立て・実行・終了の境界を確認する。"""
 
-import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
-import asyncpg
 import pytest
-from sqlalchemy import select, text
-from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from pydantic import ValidationError
 
-from app.lambda_handlers.outbox_relay import handler
-from app.models.outbox_event import OutboxEvent
+from app.lambda_handlers import outbox_relay as entry
+from app.lambda_handlers.settings import OutboxRelaySettings
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def relay_environment(
-    monkeypatch: pytest.MonkeyPatch, test_database_url: str
-) -> None:
-    monkeypatch.setenv("ENV", "test")
-    monkeypatch.setenv("DATABASE_URL", test_database_url)
-    monkeypatch.setenv("DB_IAM_AUTH", "false")
-    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
-    for stage in ("COMPLETION", "CURATION", "ASSESSMENT", "EMBEDDING"):
-        monkeypatch.setenv(
-            f"SQS_ARTICLE_{stage}_QUEUE_URL", f"https://sqs.invalid/{stage}"
-        )
-
-
-async def test_repeated_invocations_close_connections_and_preserve_outbox(
-    relay_environment: None,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """実DBへ繰り返し接続しても配信状態を変えず、接続を残さない。"""
-    async with session_factory() as writer:
-        event = OutboxEvent(
-            event_type="article.assessed_in_scope",
-            payload={"curation_id": 123, "analyzed_article_id": 456},
-        )
-        writer.add(event)
-        await writer.commit()
-
-    async with session_factory() as reader:
-        before = (await reader.execute(select(OutboxEvent.__table__))).mappings().all()
-
-    for _ in range(2):
-        result = await asyncio.to_thread(handler, {}, None)
-        assert result == {"check": "database_connectivity", "status": "ok"}
-
-    async with session_factory() as reader:
-        after = (await reader.execute(select(OutboxEvent.__table__))).mappings().all()
-    assert after == before
-
-    # DB側の終了反映を待ち、観測ごとにトランザクションを終了する。
-    for attempt in range(6):
-        async with session_factory() as reader:
-            connections = await reader.scalar(
-                text(
-                    "SELECT count(*) FROM pg_stat_activity "
-                    "WHERE datname = current_database() "
-                    "AND application_name = 'vector-outbox-relay'"
-                )
-            )
-        if connections == 0:
-            break
-        if attempt < 5:
-            await asyncio.sleep(0.05)
-    assert connections == 0
-
-
-async def test_database_failure_propagates_and_next_invocation_can_connect(
-    relay_environment: None,
-    monkeypatch: pytest.MonkeyPatch,
-    test_database_url: str,
-) -> None:
-    """接続失敗を成功扱いせず、次の呼び出しで接続し直せる。"""
-    missing_database = make_url(test_database_url).set(
-        database="outbox_relay_test_database_does_not_exist"
+def handler_dependencies(monkeypatch):
+    settings = OutboxRelaySettings(
+        env="test",
+        database_url="postgresql+asyncpg://user@database.invalid/vector",
+        db_iam_auth=False,
+        aws_region="ap-northeast-1",
+        **{
+            f"sqs_article_{stage}_queue_url": f"https://sqs.invalid/{stage}"
+            for stage in ("completion", "curation", "assessment", "embedding")
+        },
     )
-    monkeypatch.setenv(
-        "DATABASE_URL", missing_database.render_as_string(hide_password=False)
+    trace = []
+    engine = Mock(dispose=AsyncMock(side_effect=lambda: trace.append("disposed")))
+    engine.connect.return_value = AsyncMock()
+    create_engine = Mock(return_value=engine)
+    factory = Mock()
+    create_factory = Mock(return_value=factory)
+    publisher = Mock()
+    create_publisher = Mock(return_value=publisher)
+    failure_handler = Mock()
+    create_failure_handler = Mock(return_value=failure_handler)
+    relay = Mock(run_once=AsyncMock(side_effect=lambda: trace.append("run_once")))
+    create_relay = Mock(return_value=relay)
+    monkeypatch.setattr(entry, "OutboxRelaySettings", Mock(return_value=settings))
+    monkeypatch.setattr(entry, "create_lambda_engine", create_engine)
+    monkeypatch.setattr(
+        entry, "caller_managed_session_factory", create_factory, raising=False
     )
-    with pytest.raises(asyncpg.InvalidCatalogNameError):
-        await asyncio.to_thread(handler, {}, None)
+    monkeypatch.setattr(
+        entry, "SqsEventPublisher", Mock(from_session=create_publisher), raising=False
+    )
+    monkeypatch.setattr(
+        entry, "PublishFailureHandler", create_failure_handler, raising=False
+    )
+    monkeypatch.setattr(entry, "OutboxRelay", create_relay, raising=False)
+    return SimpleNamespace(**locals())
 
-    monkeypatch.setenv("DATABASE_URL", test_database_url)
-    assert await asyncio.to_thread(handler, {}, None) == {
-        "check": "database_connectivity",
-        "status": "ok",
-    }
+
+def test_passes_delivery_settings_to_publisher(handler_dependencies):
+    """設定のregionとQueue URLをpublisherの生成へ渡す。"""
+    entry.handler({}, None)
+    handler_dependencies.create_publisher.assert_called_once()
+    kwargs = handler_dependencies.create_publisher.call_args.kwargs
+    assert kwargs["region"] == handler_dependencies.settings.aws_region
+    assert (
+        kwargs["embedding_queue_url"]
+        == handler_dependencies.settings.sqs_article_embedding_queue_url
+    )
+    assert kwargs["session"] is not None
+
+
+def test_shares_configured_database_with_relay_and_failure_handler(
+    handler_dependencies,
+):
+    """DB設定から作ったsession factoryをrelayと失敗処理へ共有する。"""
+    entry.handler({}, None)
+    handler_dependencies.create_engine.assert_called_once_with(
+        handler_dependencies.settings
+    )
+    handler_dependencies.create_factory.assert_called_once_with(
+        handler_dependencies.engine
+    )
+    handler_dependencies.create_failure_handler.assert_called_once()
+    handler_dependencies.create_relay.assert_called_once()
+    # 引数の位置・キーワードの選択に依存せず、接続した部品を確認する。
+    for call in (
+        handler_dependencies.create_failure_handler.call_args,
+        handler_dependencies.create_relay.call_args,
+    ):
+        actual = (*call.args, *call.kwargs.values())
+        assert any(value is handler_dependencies.factory for value in actual)
+
+
+def test_runs_once_and_completes_only_after_disposal(handler_dependencies):
+    """relayを1回実行し、Engineの終了後に完了応答を返す。"""
+    assert entry.handler({}, None) == {"status": "completed"}
+    handler_dependencies.relay.run_once.assert_awaited_once_with()
+    handler_dependencies.engine.dispose.assert_awaited_once_with()
+    assert handler_dependencies.trace == ["run_once", "disposed"]
+
+
+def test_invalid_settings_prevent_engine_creation(handler_dependencies):
+    """設定構築に失敗した起動はDBリソースを作らない。"""
+    error = ValidationError.from_exception_data("OutboxRelaySettings", [])
+    entry.OutboxRelaySettings.side_effect = error
+    with pytest.raises(ValidationError) as caught:
+        entry.handler({}, None)
+    assert caught.value is error
+    handler_dependencies.create_engine.assert_not_called()
+
+
+@pytest.mark.parametrize("phase", ["assembly", "run"])
+def test_failure_propagates_after_engine_disposal(handler_dependencies, phase):
+    """組み立て・実行の失敗を伝播し、生成済みEngineを終了する。"""
+    original = RuntimeError("test failure")
+    operation = (
+        handler_dependencies.create_failure_handler
+        if phase == "assembly"
+        else handler_dependencies.relay.run_once
+    )
+    operation.side_effect = original
+    with pytest.raises(RuntimeError) as caught:
+        entry.handler({}, None)
+    assert caught.value is original
+    handler_dependencies.engine.dispose.assert_awaited_once_with()
+
+
+def test_disposal_failure_prevents_success_response(handler_dependencies):
+    """実行後にEngineを終了できなかった場合は完了を返さない。"""
+    error = RuntimeError("dispose failure")
+    handler_dependencies.engine.dispose.side_effect = error
+    with pytest.raises(RuntimeError) as caught:
+        entry.handler({}, None)
+    assert caught.value is error
+    handler_dependencies.relay.run_once.assert_awaited_once_with()
+
+
+def test_disposal_failure_does_not_replace_run_failure(handler_dependencies):
+    """実行と終了がともに失敗しても、先行する実行の例外を伝える。"""
+    original = RuntimeError("run failure")
+    handler_dependencies.relay.run_once.side_effect = original
+    handler_dependencies.engine.dispose.side_effect = ValueError("dispose failure")
+    with pytest.raises(RuntimeError) as caught:
+        entry.handler({}, None)
+    assert caught.value is original
+    handler_dependencies.engine.dispose.assert_awaited_once_with()

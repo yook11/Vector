@@ -36,7 +36,11 @@ def create_sqs_client(*, session: Session, region: str) -> BaseClient:
             aws_access_key_id=frozen.access_key,
             aws_secret_access_key=frozen.secret_key,
             aws_session_token=frozen.token,
-            config=Config(retries={"mode": "standard", "total_max_attempts": 1}),
+            config=Config(
+                connect_timeout=3,
+                read_timeout=5,
+                retries={"mode": "standard", "total_max_attempts": 1},
+            ),
         )
     except PublishError:
         raise

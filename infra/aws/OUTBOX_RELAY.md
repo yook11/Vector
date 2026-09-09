@@ -4,19 +4,19 @@
 
 relayは既存maintenance workerへ同居させず、専用Lambdaで実行する。共通backendコンテナイメージを利用し、Terraformで起動コマンドだけを切り替える。Dockerfileと既存ECSの起動方法・権限は変更しない。
 
-現在のhandlerは `SELECT 1` によるDB接続確認専用である。正常応答は次の形式とし、イベント配信成功を意味しない。
+handlerは起動ごとに設定・DB Engine・publisher・failure handlerを組み立て、OutboxRelay.run_onceを1回実行してEngineを終了する。正常応答は今回の実行完了を意味し、全件の送信成功やconsumerの処理完了を意味しない。
 
 ```json
-{"check": "database_connectivity", "status": "ok"}
+{"status": "completed"}
 ```
 
-Outboxの確保・更新、SQS送信、consumer Lambda、Taskiqからの処理移行は未実装である。Schedulerは `DISABLED` に固定して作成し、この段階では有効化しない。
+ベクトル生成向けイベントの停止最大100件・確保最大10件・SQSバッチ送信最大1回と、イベントごとの結果記録を接続済みである。consumer Lambda、Taskiqからの処理移行は対象外である。Schedulerは `DISABLED` に固定して作成し、この段階では有効化しない。
 
 ## リソースと境界
 
 - 同一アカウント・リージョンに工程別のStandardキューを4つ作成する。
 - 全キューをSSE-SQSで暗号化し、メッセージ保持期間を14日とする。
-- Lambdaはarm64・512MB・タイムアウト30秒・予約済み同時実行数1とする。
+- Lambdaはarm64・512MB・タイムアウト120秒・予約済み同時実行数1とする。
 - EventBridge Schedulerは1分間隔・Flexible Time Windowなしで定義するが、無効のままとする。
 - relay専用SGからRDSの5432とSQS専用Interface VPCエンドポイントの443だけを許可する。
 - LambdaのDB認証は既存 `vector_app` に対するRDS IAM認証とTLSを使い、DBロール・schemaは変更しない。
@@ -24,7 +24,7 @@ Outboxの確保・更新、SQS送信、consumer Lambda、Taskiqからの処理�
 - Lambda・SchedulerのIAMロールとpermissions boundaryは既存ECSのものから独立させる。
 - AI鍵・Redis・HTTPプロキシ・アプリ認証用秘密はLambdaへ渡さない。
 - CloudWatch Logsは専用グループと既存の保持日数設定を使う。
-- 接続確認段階ではX-Rayを採用せず、tracingは `PassThrough` とする。CloudWatch LogsとLambda標準メトリクスで確認し、この関数だけをSemgrepのActive tracing推奨ルールから除外する。X-Ray送信権限は追加しない。
+- relayではX-Rayを採用せず、tracingは `PassThrough` とする。CloudWatch LogsとLambda標準メトリクスで確認し、この関数だけをSemgrepのActive tracing推奨ルールから除外する。X-Ray送信権限は追加しない。
 
 | キューの接尾辞 | 受け付けるイベント | Lambda環境変数 |
 |---|---|---|
@@ -35,6 +35,14 @@ Outboxの確保・更新、SQS送信、consumer Lambda、Taskiqからの処理�
 
 実名には `name_prefix` を付ける。`AWS_REGION` はLambdaが提供する予約済み環境変数を使用する。DB用環境変数は `DATABASE_URL`、`DB_IAM_AUTH=true`、`ENV=production` とする。
 
+## 実行と終了の契約
+
+- 設定はDB接続・IAM認証方式・環境・region・4工程のQueue URLを使用し、保守用DB設定やAPI全体の設定を読み込まない。
+- leaseは150秒、SQS接続timeoutは3秒、応答待ちは5秒、SDK送信は最大1試行とする。資格情報取得先の通信timeoutとは区別する。
+- DBセッションは既存factoryを使い、relayとfailure handlerが同じEngineを共有する。送信中にDB sessionを保持しない。
+- DB障害・呼び出し失敗はLambdaへ伝播し、入口で再送しない。Engine終了だけの失敗も正常応答にせず、先行する実行失敗があればそちらを維持する。
+- SQSクライアントの終了と診断はpublisherに任せ、入口では通知を重複させない。
+
 ## 初回構築
 
 1. bootstrapの既存管理手順に従い、専用boundary・作成可能ロール・CI管理権限を先に適用する。通常applyロールではbootstrapを更新できない。
@@ -42,7 +50,7 @@ Outboxの確保・更新、SQS送信、consumer Lambda、Taskiqからの処理�
 3. handlerと `awslambdaric` を含むmainのbackendイメージを、既存 `AWS app images` workflowでECRへ配布する。ECSと同一のイメージ成果物を使う。backendイメージは単一のlinux/arm64でビルドする。
 4. ECRのbackendリポジトリで、その成果物の `sha256:...` digestを確認する。
 5. mainの `AWS terraform apply` を手動起動し、入力 `outbox_relay_image_digest` にdigestを指定する。production承認後、ECRでの存在確認とTerraform planを経てLambdaと無効scheduleを作成する。
-6. 検証再開・デプロイ承認後、対象Lambdaへの起動権限を持つ運用者がコンソールから `{}` を入力して手動起動する。上記の接続確認応答と専用ログを確認する。CIのapplyロールには検証のためのInvokeFunction権限を追加しない。
+6. 検証再開・デプロイ承認後、対象Lambdaへの起動権限を持つ運用者がコンソールから `{}` を入力して手動起動する。この起動は実際にOutboxを更新しSQSへ送信するため、事前に古いイベントと既存パイプラインの重複処理対策を確認する。完了応答・配信状態・専用ログを確認する。CIのapplyロールには検証のためのInvokeFunction権限を追加しない。
 
 手順2・5はAWSリソースを作成・変更する操作であり、この実装PRの作成だけでは実行されない。初回作成時にはVPC接続の準備でLambdaがPendingになる場合があるため、Activeを確認してから起動する。
 
@@ -60,10 +68,10 @@ Lambda以外も含む本体スタック全体のplanを行うため、更新時�
 
 ## 検証再開時の確認
 
-現在はユーザー指示により検証を保留している。実行済みと扱わないこと。
+ローカル検証と本番検証は区別する。本番適用・定期起動の有効化・AWSへの実送信・Slack到達確認は未実施である。
 
 - `/check` によるbackend検証と、追加したLambda handlerのunit・実PostgreSQLテストを実行する。
-- 同一プロセスでhandlerを繰り返し呼び出し、DB接続を残さずOutboxの全列が不変であることを確認する。
+- 同一プロセスでhandlerを繰り返し呼び出し、DB接続を残さず配信記録を確定し、配信済みイベントを再送しないことを確認する。
 - 実DBへの接続失敗が例外になり、設定を戻した次の呼び出しが接続できることを確認する。
 - bootstrap・本体のTerraform format check／validate／planを実行し、既存ECSロール・起動方法に変更がないことを確認する。
 - `python3 -m unittest discover -s infra/aws/scripts -p 'test_resolve_outbox_relay_image.py'` で、初回null・通常保持・明示ロールバック・不正stateの拒否を確認する。
@@ -75,9 +83,9 @@ Lambdaの実行ログ・DB接続先・認証情報・Terraform stateを公開PR�
 
 ## 次のタスク
 
-送信契約、送信失敗の分類、再試行と停止判断、処理件数・実行時間・lease期間を個別に定義し、接続確認handlerをrelay本体の呼び出しへ置き換える。
+Lambda入口へのrelay接続は実装済みである。次はイメージ配布・本番適用・有効化前の重複処理対策の確認と、実環境での送信・監視確認を行う。
 
-初回有効化前に蓄積したOutboxイベントを削除・停止・送信のどれで扱うか決定する。1分間隔は到達時間の上限保証ではなく、即時性より費用を優先する選択とする。LambdaとSchedulerの呼び出し回数だけで無料と断定せず、実行時間・VPCエンドポイント・SQS・ログの費用も含める。
+イベント発生日時による除外は設けず、古いイベントも送信対象に含む。1分間隔は到達時間の上限保証ではなく、即時性より費用を優先する選択とする。LambdaとSchedulerの呼び出し回数だけで無料と断定せず、実行時間・VPCエンドポイント・SQS・ログの費用も含める。
 
 ## 仕様参照
 
@@ -85,3 +93,5 @@ Lambdaの実行ログ・DB接続先・認証情報・Terraform stateを公開PR�
 - [LambdaのVPC接続とENI権限](https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html)
 - [SQSのVPCエンドポイント](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-internetwork-traffic-privacy.html)
 - [SQLAlchemyの複数イベントループとNullPool](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-multiple-asyncio-event-loops)
+
+検証結果: 関連単体テスト47件、Lambda入口とrelayの実DBテスト33件が成功した。変更したPythonのlint・format、outbox_relay.tfのformat check、隔離したTF_DATA_DIRでのinit -backend=false・validateも成功した。validateには既存設定の非推奨警告が残る。ディレクトリ全体のformat checkでは今回未変更のterraform.tfvarsに書式差分があり、変更対象だけを整形・検証した。全テスト、本番適用、AWSへの実送信、Slack到達確認は実施していない。
