@@ -55,7 +55,7 @@ Status: Draft（2026-09-09、スライス1のTerraform実装済み・AWS未適�
 }
 ```
 
-イベント形式は送信契約、payloadは既存`ArticleAssessedInScope`を正本とし、consumer追加のために送信形式を変更しない。SQSが付けるmessageIdとOutboxのevent_idは区別する。
+イベント全体は`ArticleAssessedInScopeEvent`、payloadは既存`ArticleAssessedInScope`を正本とし、consumer追加のために送信形式を変更しない。SQSが付けるmessageIdとOutboxのevent_idは区別する。
 
 ```text
 分析結果保存 + Outbox記録
@@ -67,6 +67,18 @@ Status: Draft（2026-09-09、スライス1のTerraform実装済み・AWS未適�
 ```
 
 consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務処理を実行する。既存のReady・AI adapter・Service・Repositoryを再利用し、TaskiqのContext、retry label、brokerの起動処理をSQS入口へ持ち込まない。
+
+### 送受信で共有する入力検証
+
+発行元のpayload検証・Outbox保存を維持し、relayのSQS publisherで保存済みの5項目を`ArticleAssessedInScopeEvent`として検証する。共通型はUUID・タイムゾーン付き日時・対象イベント種別・整数バージョン1・型付きpayloadを保証し、未知項目や数値文字列・真偽値・小数から整数への変換を拒否する。UUIDと日時のJSON文字列は明示的に復元する。記事存在やID同士の対応のDB照合は行わない。
+
+受信本文は`app/lambda_handlers/embedding_event.py`の`parse_embedding_event(body: str)`で解析し、同じ共通型を返す。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
+
+不正本文は`EmbeddingEventInvalidError`で伝える。理由はJSON解析の`invalid_json`、外側の構造・項目型の`invalid_envelope`、対象外種別の`unsupported_event_type`、未対応版の`unsupported_schema_version`、payload内部の`invalid_payload`の順で優先する。payload自体の欠落や非オブジェクトは外側の構造不正に含む。本文・検証詳細を例外の属性や原因・contextに保持せず、関数内ではログ・監査・通知を行わない。
+
+送信前の契約違反は既存の`PublishEventInvalidError`と個別の`PublishFailed`へ変換し、不正イベントだけをOutboxの自動配信停止へ進める。正常な同一バッチのイベントは送信する。これは受信後のSQS再配信やDLQ移動とは別の処理である。既存のpublisher呼び出し契約違反・送信先判定・日時不正の理由は維持する。
+
+実装済みは共通型・送信前検証・本文解析まで。SQSのRecords・messageId、Consumer呼び出し、受信時の失敗監査・SQS応答の接続は後続とする。
 
 ## 成功・失敗の契約
 
@@ -274,9 +286,17 @@ Consumer本体の検証（2026-09-09）:
 - 分類・後処理・監査・ログの二次障害で元の例外を置き換えないこと、外部キャンセルを通常の失敗として記録しないことを確認した。
 - Lambda入口・SQS応答・SDK設定・デプロイは今回の対象外。AWS上の実通信・再配信・DLQ移動は後続スライスで検証する。
 
+共有イベント契約・本文検証の検証（2026-09-09）:
+
+- 実行コードと変更テストのRuff lint・format check、`git diff --check`が成功した。全単体テストは`pytest tests/ -m 'not integration' -x -q`で6,071件成功した。
+- `make test-integration PYTEST_ARGS='-rs'`は1,336件成功・22件スキップ。既存DB権限テスト22件は、Alembic適用済みの`public.watchlist_entries`が検証環境にないためスキップされた。
+- 既存本文の復元、送信本文の往復、厳密な型検証、不正理由の優先順位、重複キー・非標準JSONの拒否、例外文面と原因連鎖への入力非保持を確認した。
+- 実DBと実publisherを使い、未対応バージョン・不正payloadだけがOutboxの配信停止となり、正常イベントは配信済みになることと、次回relayで再送されないことを確認した。AWSクライアントはモックした。
+- 単体・統合を分けない初回pytestは、未起動のローカルDBへの接続で終了したため、単体の明示選択と隔離DBでの全統合テストに分けて完了した。AWS実送信・Lambda接続・デプロイは今回の対象外。
+
 ## 実装・有効化前に確定する項目
 
-- SQS eventのvalidation、consumerとLambda handlerのinterface、失敗応答形式（例外伝播か部分バッチ応答か）。
+- SQSのRecords・messageIdの検証、consumerとLambda handlerの接続、失敗応答形式（例外伝播か部分バッチ応答か）。
 - 入力イベント不正など入口で発生する失敗の監査、event_id・SQS messageId・分析記事IDの観測上の関連付け。
 - SDK timeout・内部再試行の設定、Lambda側のDB・AIクライアントの生成・終了方法。
 - Lambdaのメモリ、SSM取得・キャッシュの実装、専用サブネット・SGをLambdaへ接続する配線。基盤の専用権限を利用し、relayの権限は流用しない。

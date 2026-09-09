@@ -84,7 +84,7 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 - PublishTransportError: HttpTransportFailureで対象サービスへの通信失敗を表す。
 - PublishServiceError: reason・service_error_code・status_code・request_idを保持し、処理分岐は共通reasonを使う。
 - PublishConfigurationError: missing_credentials・incomplete_credentials・missing_region・credentials_retrieval_failedを区別する。
-- PublishEventInvalidError: unsupported_event_type・invalid_occurred_at・serialization_failed・message_too_largeを区別する。
+- PublishEventInvalidError: unsupported_event_type・unsupported_schema_version・invalid_envelope・invalid_payload・invalid_occurred_at・serialization_failed・message_too_largeを区別する。
 - PublishResponseInvalidError: 応答の形式・送信対象との対応の違反を共通のreasonで保持し、受付されなかったとは断定しない。
 - PublishUnexpectedError: reason=unexpected_exception、original_exception_type、phase、任意のclassification_exception_typeを保持する。
 - PublishIntegrityError: body_checksum_mismatchで送信本文の整合性確認失敗を表し、任意のrequest_idを調査用に保持する。
@@ -101,7 +101,7 @@ SendMessageBatch以外のClientErrorをSQS応答として分類しない。
 資格情報取得先への通信失敗はcredentials_retrieval_failedであり、SQSのtransport失敗ではない。
 HttpTransportFailureの到達可能性はその単一通信試行の情報で、過去の送信やconsumerの処理完了を保証しない。
 
-通常例外は操作境界で受け止め、元例外はcauseに保持するが、SDK自由文・本文・資格情報・送信先URLを例外文面へ出さない。
+通常例外は操作境界で受け止め、元例外はcauseに保持するが、SDK自由文・本文・資格情報・送信先URLを例外文面へ出さない。共有イベント契約の検証例外は入力値を含むため、固定の理由へ変換してcause・contextには保持しない。
 phaseはinitialize、prepare_event、resolve_credentials、send、classify_failureを区別し、終了失敗は専用のPublishCleanupErrorで表す。
 分類処理失敗時は元例外と分類失敗の型を保持し、終了処理の失敗は先行する送信失敗を上書きしない。
 cleanupの失敗は送信処理の後に起きるため、未送信の根拠にしてはならない。受付成功・送信失敗の結果を維持し、SQS Publisherがcloseの通常失敗を診断ログへ記録してから結果を返す。BatchPublishResultにはイベントの結果だけを保持する。
@@ -124,7 +124,7 @@ Evidence: 既存EventEnvelope・資格情報確定処理・共通PublishError、
 - 正常に戻る場合は入力順のtupleに各イベントの結果を必ず1つ保持する。成功はSQS受付を意味し、DB更新やconsumer完了は意味しない。
 - 結果のreprに例外を展開しない。共通PublishErrorの診断情報は保持するが、結果型自身はログ・通知を出さない。
 - 空・11件以上・重複event_idはValueError、Sequence/EventEnvelopeおよびそのトップレベルフィールドの型違反はTypeErrorで、クライアント生成前に拒否する。
-- schema_versionはboolを除く整数とする。payload内部は既存のJSON化可能性だけを検証し、イベントschemaの追加検証は行わない。
+- schema_versionはboolを除く整数とする。イベント単位の送信準備ではArticleAssessedInScopeEventの共有契約に従い、対応版1とpayload内部を検証してからJSON化する。
 - イベントごとの既知不正はPublishEventInvalidError、本文準備中の通常の想定外例外はprepare_eventのPublishUnexpectedErrorとして、そのイベントだけを除外する。
 - 既存形式のJSON本文をUTF-8にしたバイト数で計測する。個別本文が1,048,576 bytes超ならmessage_too_largeとし、送信しない。
 - 送信可能な本文の合計が1,048,576 bytes超なら呼び出し全体をValueErrorで拒否し、結果も返さない。自動分割しない。
@@ -548,3 +548,16 @@ Done: 入口の接続・終了・例外伝播、実DBでの配信記録と接続
 Non-goals: 本番適用、Scheduler有効化、AWSへの実送信、Slack到達確認、consumer、Taskiq切り替え、IAM・DB schema・依存の変更。
 
 検証結果: 関連単体テスト47件、Lambda入口とrelayの実DBテスト33件が成功した。変更したPythonのlint・format、outbox_relay.tfのformat check、隔離したTF_DATA_DIRでのinit -backend=false・validateも成功した。validateには既存設定の非推奨警告が残る。ディレクトリ全体のformat checkでは今回未変更のterraform.tfvarsに書式差分があり、変更対象だけを整形・検証した。全テスト、本番適用、AWSへの実送信、Slack到達確認は実施していない。
+
+
+## 対象内判定イベントの共有契約
+
+SQS publisherはイベント単位の送信準備で`ArticleAssessedInScopeEvent`を構築し、送受信共通の契約を検証する。発行元のpayload検証・Outbox保存と汎用のEventEnvelopeは維持する。対応版は整数の1、payloadは正の整数のcuration_id・analyzed_article_idだけを持つ既存のArticleAssessedInScopeとする。
+
+共通型の検証に成功した値だけをSqsMessageへ渡す。SqsMessage自体は汎用の本文構築・UTC表現・サイズ検証・MD5計算を引き続き担当する。未知版やpayload不正はserialization_failedなどの本文構築エラーより前に拒否する。publisherの呼び出し型・重複IDの違反は既存どおり呼び出し全体の例外、契約違反はイベント単位のPublishFailedとする。
+
+共通型の違反をPublishEventInvalidErrorへ変換する際は入力値を含む検証例外を原因・contextに保持しない。既存の配信失敗ハンドラーはnon_retryable_failureとして対象Outbox行だけを停止する。正常イベントは送信を継続し、全件不正ならAWSクライアントを生成しない。SQS受信後の再配信とDLQ処理は、この送信前の停止とは独立する。
+
+受信側の純粋な本文解析と検証理由は[EmbeddingConsumer仕様](./embedding-consumer.md#送受信で共有する入力検証)に記載する。実装にはPydanticの[field validators](https://docs.pydantic.dev/latest/concepts/validators/)と[構造化された検証エラー](https://docs.pydantic.dev/latest/errors/errors/)を使用する。Lambdaハンドラー・受信時監査・SQS応答・AWS適用は今回含めない。
+
+共有契約のローカル検証（2026-09-09）: Ruff lint・format check、全単体テスト6,071件、`make test-integration`の1,336件が成功した。既存DB権限テスト22件は必要なAlembic適用済みschemaがないためスキップされた。実DBで不正イベントだけの停止と正常イベントの配信済み記録を確認した。AWSはモックし、デプロイは実施していない。
