@@ -101,11 +101,6 @@ def test_from_envelope_preserves_event_type_without_routing(envelope, event_type
 @pytest.mark.parametrize(
     "field,value,reason",
     [
-        (
-            "occurred_at",
-            datetime(2026, 9, 7),
-            PublishEventInvalidReason.INVALID_OCCURRED_AT,
-        ),
         ("payload", {"bad": object()}, PublishEventInvalidReason.SERIALIZATION_FAILED),
         (
             "payload",

@@ -127,11 +127,6 @@ class SqsEventPublisher:
             )
         except ValidationError as exc:
             reason = PublishEventInvalidReason(assessed_event_invalid_reason(exc))
-            if reason is PublishEventInvalidReason.INVALID_ENVELOPE and any(
-                detail["loc"] == ("occurred_at",)
-                for detail in exc.errors(include_input=False, include_context=False)
-            ):
-                reason = PublishEventInvalidReason.INVALID_OCCURRED_AT
         else:
             return event
         raise PublishEventInvalidError(reason=reason)

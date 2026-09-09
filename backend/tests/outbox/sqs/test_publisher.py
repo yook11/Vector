@@ -195,7 +195,7 @@ def test_unknown_entry_code_is_unclassified_regardless_of_sender_fault(
         (
             "occurred_at",
             datetime(2026, 9, 7),
-            PublishEventInvalidReason.INVALID_OCCURRED_AT,
+            PublishEventInvalidReason.INVALID_ENVELOPE,
         ),
         ("payload", {"bad": object()}, PublishEventInvalidReason.INVALID_PAYLOAD),
         (

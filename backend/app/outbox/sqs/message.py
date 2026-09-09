@@ -35,10 +35,6 @@ class SqsMessage:
     @classmethod
     def from_envelope(cls, envelope: EventEnvelope) -> SqsMessage:
         """イベントを送信本文にし、送れなければ失敗を返す。"""
-        if envelope.occurred_at.utcoffset() is None:
-            raise PublishEventInvalidError(
-                reason=PublishEventInvalidReason.INVALID_OCCURRED_AT
-            )
         occurred_at = envelope.occurred_at.astimezone(UTC).isoformat()
         body = {
             "event_id": str(envelope.event_id),
