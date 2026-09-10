@@ -15,7 +15,9 @@ from app.aws.ssm import get_secret_parameter
 from app.db.engine import create_embedding_consumer_engine
 from app.db.iam import build_iam_password_provider
 from app.db.session import caller_managed_session_factory
-from app.lambda_handlers.embedding.failure_handler import EmbeddingLambdaFailureHandler
+from app.lambda_handlers.embedding.failure_recorder import (
+    EmbeddingLambdaFailureRecorder,
+)
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 
 logger = structlog.get_logger(__name__)
@@ -33,14 +35,14 @@ def _close_sdk(close: Callable[[], None]) -> None:
     try:
         close()
     except Exception as exc:
-        EmbeddingLambdaFailureHandler(logger).handle_cleanup_failure("rds", exc)
+        EmbeddingLambdaFailureRecorder(logger).record_cleanup_failure("rds", exc)
 
 
 async def _dispose_engine(dispose: Callable[[], Awaitable[None]]) -> None:
     try:
         await dispose()
     except Exception as exc:
-        EmbeddingLambdaFailureHandler(logger).handle_cleanup_failure("engine", exc)
+        EmbeddingLambdaFailureRecorder(logger).record_cleanup_failure("engine", exc)
 
 
 @asynccontextmanager

@@ -14,7 +14,7 @@ from app.analysis.assessment.events import (
 )
 from app.lambda_handlers.embedding.event import (
     EmbeddingEventInvalidError,
-    parse_embedding_event,
+    parse_assessed_in_scope_event,
 )
 from app.outbox.sqs.message import SqsMessage
 
@@ -33,7 +33,7 @@ def data():
 
 
 def test_restores_legacy_body_and_typed_payload(data):
-    event = parse_embedding_event(json.dumps(data))
+    event = parse_assessed_in_scope_event(json.dumps(data))
     assert event.event_id == UUID(int=1)
     assert event.occurred_at == datetime(2026, 9, 7, 3, 0, 0, 123456, tzinfo=UTC)
     assert event.payload == ArticleAssessedInScope(
@@ -64,7 +64,7 @@ def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
         ),
         payload=data["payload"],
     )
-    event = parse_embedding_event(SqsMessage.from_event(sent).body)
+    event = parse_assessed_in_scope_event(SqsMessage.from_event(sent).body)
     assert event.event_id == sent.event_id
     assert event.occurred_at == sent.occurred_at
     assert event.payload == sent.payload
@@ -77,7 +77,7 @@ def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
 def test_missing_envelope_field_is_invalid(data, field):
     del data[field]
     with pytest.raises(EmbeddingEventInvalidError) as caught:
-        parse_embedding_event(json.dumps(data))
+        parse_assessed_in_scope_event(json.dumps(data))
     assert caught.value.reason.value == "invalid_envelope"
 
 
@@ -109,7 +109,7 @@ def test_shared_contract_and_parser_reject_invalid_values(data, field, value, re
     with pytest.raises(ValidationError):
         ArticleAssessedInScopeEvent.model_validate(data)
     with pytest.raises(EmbeddingEventInvalidError) as caught:
-        parse_embedding_event(json.dumps(data))
+        parse_assessed_in_scope_event(json.dumps(data))
     assert caught.value.reason.value == reason
     assert "private-" not in str(caught.value)
     assert "private-" not in "".join(traceback.format_exception(caught.value))
@@ -122,14 +122,14 @@ def test_shared_contract_and_parser_reject_invalid_values(data, field, value, re
 def test_payload_ids_are_strict_positive_integers(data, field, value):
     data["payload"][field] = value
     with pytest.raises(EmbeddingEventInvalidError) as caught:
-        parse_embedding_event(json.dumps(data))
+        parse_assessed_in_scope_event(json.dumps(data))
     assert caught.value.reason.value == "invalid_payload"
 
 
 def test_payload_unknown_field_is_rejected(data):
     data["payload"]["private-field"] = "private-value"
     with pytest.raises(EmbeddingEventInvalidError) as caught:
-        parse_embedding_event(json.dumps(data))
+        parse_assessed_in_scope_event(json.dumps(data))
     assert caught.value.reason.value == "invalid_payload"
     assert "private-" not in str(caught.value)
 
@@ -150,7 +150,7 @@ def test_payload_unknown_field_is_rejected(data):
 )
 def test_rejects_invalid_json_without_retaining_input(body):
     with pytest.raises(EmbeddingEventInvalidError) as caught:
-        parse_embedding_event(body)
+        parse_assessed_in_scope_event(body)
     assert caught.value.reason.value == "invalid_json"
     assert caught.value.__context__ is None
     assert "private" not in str(caught.value)
@@ -159,7 +159,7 @@ def test_rejects_invalid_json_without_retaining_input(body):
 @pytest.mark.parametrize("body", ["null", "[]", "1", "true", '"text"'])
 def test_json_root_must_be_an_object(body):
     with pytest.raises(EmbeddingEventInvalidError) as caught:
-        parse_embedding_event(body)
+        parse_assessed_in_scope_event(body)
     assert caught.value.reason.value == "invalid_envelope"
 
 
@@ -185,7 +185,7 @@ def test_json_root_must_be_an_object(body):
 def test_error_reason_precedence(data, updates, reason):
     data.update(updates)
     with pytest.raises(EmbeddingEventInvalidError) as caught:
-        parse_embedding_event(json.dumps(data))
+        parse_assessed_in_scope_event(json.dumps(data))
     assert caught.value.reason.value == reason
 
 
@@ -228,7 +228,7 @@ def test_validation_details_are_safe_and_deduplicated(data, changes, expected):
 
     data.update(changes)
     with pytest.raises(EmbeddingEventInvalidError) as caught:
-        parse_embedding_event(json.dumps(data))
+        parse_assessed_in_scope_event(json.dumps(data))
     error = caught.value
     assert [(issue.field.value, issue.code.value) for issue in error.issues] == expected
     assert "private-" not in str(error)
@@ -260,7 +260,7 @@ def test_sender_and_receiver_share_validation_details(data, changes):
 
     data.update(changes)
     with pytest.raises(EmbeddingEventInvalidError) as received:
-        parse_embedding_event(json.dumps(data))
+        parse_assessed_in_scope_event(json.dumps(data))
     factory = Mock()
     publisher = SqsEventPublisher(
         failure_handler=SqsPublishFailureHandler(),

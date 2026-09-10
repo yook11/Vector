@@ -424,7 +424,7 @@ async def test_shared_contract_stops_only_invalid_event_and_delivers_valid(
     """実publisherの契約検証で不正分だけ停止し、正常本文を受信側でも復元できる。"""
     from hashlib import md5
 
-    from app.lambda_handlers.embedding.event import parse_embedding_event
+    from app.lambda_handlers.embedding.event import parse_assessed_in_scope_event
     from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
     from app.outbox.sqs.publisher import SqsEventPublisher
 
@@ -439,7 +439,7 @@ async def test_shared_contract_stops_only_invalid_event_and_delivers_valid(
     def send(**kwargs):
         entries = kwargs["Entries"]
         assert len(entries) == 1
-        event = parse_embedding_event(entries[0]["MessageBody"])
+        event = parse_assessed_in_scope_event(entries[0]["MessageBody"])
         assert event.event_id == good_id
         assert event.payload.model_dump() == before[good_id]["payload"]
         return {

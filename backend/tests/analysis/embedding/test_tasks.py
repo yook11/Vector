@@ -16,7 +16,6 @@ from app.analysis.embedding.domain.ready import (
 )
 from app.analysis.embedding.service import (
     EmbeddingCompletion,
-    EmbeddingCompletionReason,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.queue.messages.embedding import EmbeddingTrigger
@@ -101,9 +100,7 @@ def _patch_ready_construction(
 
 class TestGenerateEmbedding:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "result", [EmbeddingCompletion(reason) for reason in EmbeddingCompletionReason]
-    )
+    @pytest.mark.parametrize("result", list(EmbeddingCompletion))
     async def test_task_completes_on_service_success(
         self, result: EmbeddingCompletion
     ) -> None:
@@ -142,7 +139,7 @@ class TestGenerateEmbedding:
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=EmbeddingCompletion(EmbeddingCompletionReason.SAVED)
+                return_value=EmbeddingCompletion.SAVED
             )
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
@@ -164,7 +161,7 @@ class TestGenerateEmbedding:
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=EmbeddingCompletion(EmbeddingCompletionReason.SAVED)
+                return_value=EmbeddingCompletion.SAVED
             )
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
@@ -279,7 +276,7 @@ class TestGenerateEmbeddingStageSpan:
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=EmbeddingCompletion(EmbeddingCompletionReason.SAVED)
+                return_value=EmbeddingCompletion.SAVED
             )
             await generate_embedding(
                 trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx

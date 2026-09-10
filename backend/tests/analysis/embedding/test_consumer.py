@@ -34,7 +34,7 @@ from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
     EmbeddingError,
 )
-from app.analysis.embedding.service import EmbeddingCompletionReason
+from app.analysis.embedding.service import EmbeddingCompletion
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -109,7 +109,7 @@ async def test_saves_once_and_uses_analyzed_id_without_curation_lookup(
     event, article_id = target
     event = event.model_copy(update={"curation_id": 999_999})
     result = await EmbeddingConsumer(session_factory, embedder).consume(event)
-    assert result.reason is EmbeddingCompletionReason.SAVED
+    assert result is EmbeddingCompletion.SAVED
     events = await _events(db_session)
     assert len(events) == 1
     assert events[0].event_type == "succeeded"
@@ -131,7 +131,7 @@ async def test_already_embedded_completes_without_ai_or_audit(
     stored.embedding = [0.4] * EMBEDDING_DIMENSION
     await db_session.commit()
     result = await EmbeddingConsumer(session_factory, embedder).consume(event)
-    assert result.reason is EmbeddingCompletionReason.ALREADY_EMBEDDED
+    assert result is EmbeddingCompletion.ALREADY_EMBEDDED
     embedder.embed_document.assert_not_awaited()
     assert await _events(db_session) == []
     assert metric_records(capsys.readouterr().out, "processing_outcome") == []
@@ -263,14 +263,14 @@ async def test_concurrent_runs_save_and_audit_once(
     async with asyncio.timeout(10):
         results = await asyncio.gather(consumer.consume(event), other)
     if peer == "consumer":
-        assert {result.reason for result in results} == {
-            EmbeddingCompletionReason.SAVED,
-            EmbeddingCompletionReason.ALREADY_EMBEDDED,
+        assert set(results) == {
+            EmbeddingCompletion.SAVED,
+            EmbeddingCompletion.ALREADY_EMBEDDED,
         }
     else:
-        assert results[0].reason in (
-            EmbeddingCompletionReason.SAVED,
-            EmbeddingCompletionReason.ALREADY_EMBEDDED,
+        assert results[0] in (
+            EmbeddingCompletion.SAVED,
+            EmbeddingCompletion.ALREADY_EMBEDDED,
         )
     assert embedder.embed_document.await_count == 2
     events = await _events(db_session)
@@ -505,7 +505,7 @@ async def test_loads_once_and_closes_read_connection_before_ai(
         sqlalchemy_event.listen(engine, name, callback)
     try:
         result = await EmbeddingConsumer(session_factory, embedder).consume(event)
-        assert result.reason is EmbeddingCompletionReason.SAVED
+        assert result is EmbeddingCompletion.SAVED
         assert len(reads) == 1
         assert not active
     finally:
@@ -536,7 +536,7 @@ async def test_sqs_processing_saves_once_and_records_only_business_failures(
     """保存・生成済み・本文不正・記事不存在を実Consumerへ接続し監査を重ねない。"""
     payload, article_id = target
     missing = ArticleAssessedInScope(curation_id=999999, analyzed_article_id=999999)
-    response = await run_embedding(
+    failed_items = await run_embedding(
         {
             "Records": [
                 _sqs_record("saved", payload),
@@ -546,12 +546,10 @@ async def test_sqs_processing_saves_once_and_records_only_business_failures(
             ]
         },
     )
-    assert response == {
-        "batchItemFailures": [
-            {"itemIdentifier": "invalid"},
-            {"itemIdentifier": "missing"},
-        ]
-    }
+    assert failed_items == [
+        {"itemIdentifier": "invalid"},
+        {"itemIdentifier": "missing"},
+    ]
     audits = await _events(db_session)
     assert [audit.event_type for audit in audits] == ["succeeded", "failed"]
     assert audits[0].article_id == article_id
@@ -568,16 +566,16 @@ async def test_sqs_processing_saves_once_and_records_only_business_failures(
 async def test_sqs_processing_continues_after_provider_failure(
     db_session, target, embedder, run_embedding
 ):
-    """API失敗を応答へ残し、次のメッセージの保存と監査を確定する。"""
+    """API失敗のメッセージIDを残し、次のメッセージの保存と監査を確定する。"""
     payload, _ = target
     embedder.embed_document.side_effect = [
         AIProviderNetworkError(),
         EmbeddingVector(root=(0.2,) * EMBEDDING_DIMENSION),
     ]
-    response = await run_embedding(
+    failed_items = await run_embedding(
         {"Records": [_sqs_record("failed", payload), _sqs_record("saved", payload)]},
     )
-    assert response == {"batchItemFailures": [{"itemIdentifier": "failed"}]}
+    assert failed_items == [{"itemIdentifier": "failed"}]
     assert [audit.event_type for audit in await _events(db_session)] == [
         "failed",
         "succeeded",
@@ -613,10 +611,8 @@ async def test_borrowed_gemini_embedder_through_consumer(
     consumer = EmbeddingConsumer(session_factory, GeminiEmbedder(client=sdk_client))
     event, article_id = target
     if outcome == "saved":
-        assert (await consumer.consume(event)).reason is EmbeddingCompletionReason.SAVED
-        assert (
-            await consumer.consume(event)
-        ).reason is EmbeddingCompletionReason.ALREADY_EMBEDDED
+        assert (await consumer.consume(event)) is EmbeddingCompletion.SAVED
+        assert (await consumer.consume(event)) is EmbeddingCompletion.ALREADY_EMBEDDED
     else:
         with pytest.raises(EmbeddingError) as caught:
             await consumer.consume(event)
@@ -695,12 +691,10 @@ async def test_consumer_with_invocation_database_resources(
                     != original_pid
                 )
         else:
+            assert (await consumer.consume(event)) is EmbeddingCompletion.SAVED
             assert (
                 await consumer.consume(event)
-            ).reason is EmbeddingCompletionReason.SAVED
-            assert (
-                await consumer.consume(event)
-            ).reason is EmbeddingCompletionReason.ALREADY_EMBEDDED
+            ) is EmbeddingCompletion.ALREADY_EMBEDDED
         embedder.embed_document.assert_awaited_once()
     events = await _events(db_session)
     assert len(events) == 1
@@ -766,13 +760,14 @@ async def test_lambda_assembly_saves_once_after_individual_failure(
     records = [_sqs_record("saved", payload), _sqs_record("already", payload)]
     if api_fails_first:
         records.insert(0, _sqs_record("failed", payload))
-    response = await _run_embedding({"Records": records}, settings)
-    assert response == {
-        "batchItemFailures": [{"itemIdentifier": "failed"}] if api_fails_first else []
-    }
-    assert await _run_embedding(
-        {"Records": [_sqs_record("next-invocation", payload)]}, settings
-    ) == {"batchItemFailures": []}
+    failed_items = await _run_embedding({"Records": records}, settings)
+    assert failed_items == ([{"itemIdentifier": "failed"}] if api_fails_first else [])
+    assert (
+        await _run_embedding(
+            {"Records": [_sqs_record("next-invocation", payload)]}, settings
+        )
+        == []
+    )
     assert secret.call_count == 2
     assert len(requests) == (2 if api_fails_first else 1)
     assert all(http.is_closed for http in clients)

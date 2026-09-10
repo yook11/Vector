@@ -6,7 +6,6 @@ AI処理後に保存対象を行ロックし、記事不存在・生成済み・
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import StrEnum
 
 import structlog
@@ -27,18 +26,11 @@ from app.logfire.article_stage import set_embedding_stage_result
 logger = structlog.get_logger(__name__)
 
 
-class EmbeddingCompletionReason(StrEnum):
+class EmbeddingCompletion(StrEnum):
     """保存完了または生成済みの確認による正常終了。"""
 
     SAVED = "saved"
     ALREADY_EMBEDDED = "already_embedded"
-
-
-@dataclass(frozen=True, slots=True)
-class EmbeddingCompletion:
-    """正常完了した理由を呼び出し元へ伝える。"""
-
-    reason: EmbeddingCompletionReason
 
 
 class EmbeddingService:
@@ -87,7 +79,7 @@ class EmbeddingService:
                     analyzed_article_id=ready.analyzed_article_id,
                 )
                 set_embedding_stage_result("skipped")
-                return EmbeddingCompletion(EmbeddingCompletionReason.ALREADY_EMBEDDED)
+                return EmbeddingCompletion.ALREADY_EMBEDDED
             saved = await repo.save(
                 vector,
                 analyzed_article_id=ready.analyzed_article_id,
@@ -109,4 +101,4 @@ class EmbeddingService:
         )
         set_embedding_stage_result("succeeded")
         record_embedding_processing_outcome("succeeded")
-        return EmbeddingCompletion(EmbeddingCompletionReason.SAVED)
+        return EmbeddingCompletion.SAVED

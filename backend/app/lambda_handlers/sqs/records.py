@@ -54,19 +54,19 @@ class SqsRecordBatch:
     records: tuple[SqsRecord, ...]
 
     @classmethod
-    def from_input(cls, event: object) -> Self:
+    def from_lambda_event(cls, lambda_event: object) -> Self:
         """一覧の構造とID重複を検証し、本文検証は各レコードの処理に委ねる。"""
-        if not isinstance(event, dict):
+        if not isinstance(lambda_event, dict):
             raise SqsInputError(reason=SqsInputReason.INVALID_TYPE, field="event")
-        if "Records" not in event:
+        if "Records" not in lambda_event:
             raise SqsInputError(
                 reason=SqsInputReason.MISSING_REQUIRED_FIELD, field="Records"
             )
-        if not isinstance(event["Records"], list):
+        if not isinstance(lambda_event["Records"], list):
             raise SqsInputError(reason=SqsInputReason.INVALID_TYPE, field="Records")
         records = []
         seen: set[str] = set()
-        for index, value in enumerate(event["Records"]):
+        for index, value in enumerate(lambda_event["Records"]):
             record = SqsRecord.from_input(value, record_index=index)
             if record.message_id in seen:
                 raise SqsInputError(

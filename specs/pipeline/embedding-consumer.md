@@ -72,7 +72,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 発行元のpayload検証・Outbox保存を維持し、relayのSQS publisherで保存済みの5項目を`ArticleAssessedInScopeEvent`として検証する。共通型はUUID・タイムゾーン付き日時・対象イベント種別・整数バージョン1・型付きpayloadを保証し、未知項目や数値文字列・真偽値・小数から整数への変換を拒否する。UUIDと日時のJSON文字列は明示的に復元する。記事存在やID同士の対応のDB照合は行わない。
 
-受信本文は`app/lambda_handlers/embedding/event.py`の`parse_embedding_event(body: str)`で解析し、同じ共通型を返す。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
+受信本文は`app/lambda_handlers/embedding/event.py`の`parse_assessed_in_scope_event(message_body: str)`で解析し、同じ共通型を返す。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
 
 不正本文は`EmbeddingEventInvalidError`で伝える。理由はJSON解析の`invalid_json`、外側の構造・項目型の`invalid_envelope`、対象外種別の`unsupported_event_type`、未対応版の`unsupported_schema_version`、payload内部の`invalid_payload`の順で優先する。payload自体の欠落や非オブジェクトは外側の構造不正に含む。共有のassessed_event_validation_failureは、大分類と重複のない不変の検証詳細を返す。詳細は既知の項目名と固定コードだけとし、未知キーはeventまたはpayloadのunknown_fieldへ置き換える。本文・入力値・検証自由文を属性や原因・contextに保持せず、本文解析関数内ではログ・監査・通知を行わない。JSON解析失敗はinvalid_jsonと空の詳細一覧で返す。
 
@@ -82,13 +82,13 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 ### SQSメッセージ処理と部分バッチ応答
 
-`app/lambda_handlers/embedding/handler.py`の`_run_embedding(event, settings)`は、資源とConsumerの組み立て、バッチ検証、レコードの逐次処理、失敗IDの集約、資源終了までを進める。`record_handler.py`の`process_embedding_record(record, *, consumer)`へ1件ずつ渡し、本文解析・Consumer呼び出し・結果ログを委ねる。SQSへの直接操作は行わない。
+`app/lambda_handlers/embedding/handler.py`の`_run_embedding(lambda_event, settings)`は、資源とConsumerの組み立て、バッチ検証、レコードの逐次処理、失敗IDの集約、資源終了までを進める。ループ内で本文の取り出し、parse_assessed_in_scope_eventによる業務イベント検証、consumer.consumeの実行と結果記録を順に行う。SQSへの直接操作は行わない。
 
 最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はSqsInputErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
 
-有効なmessageIdは加工せず保持し、入力順に1件ずつbodyを検証してConsumerへpayloadを渡す。使用しないSQSフィールドは許容する。bodyの欠落・非文字列・本文不正・Consumerの通常例外・契約外の戻り値は個別失敗として後続処理を続ける。EmbeddingCompletionのSAVED・ALREADY_EMBEDDEDだけを正常完了とする。キャンセル・プロセス終了は伝播する。
+有効なmessageIdは加工せず保持し、入力順に1件ずつbodyを検証してConsumerへpayloadを渡す。使用しないSQSフィールドは許容する。bodyの欠落・非文字列・本文不正・Consumerの通常例外は個別失敗として後続処理を続ける。ConsumerはEmbeddingCompletionのSAVED・ALREADY_EMBEDDEDのいずれかを正常完了として返し、ハンドラーはその契約に従って結果を記録する。キャンセル・プロセス終了は伝播する。
 
-戻り値は常にSqsBatchResponseの辞書形式で、失敗IDだけを入力順に含める。全件成功・空のRecordsは`{"batchItemFailures": []}`、失敗時は`{"batchItemFailures": [{"itemIdentifier": "失敗したmessageId"}]}`とする。複数件という理由では拒否せず、内部並列処理は追加しない。
+_run_embeddingは失敗したメッセージのIDをSqsBatchItemIdentifierに格納し、入力順のlist[SqsBatchItemIdentifier]として返す。公開handlerはそのfailed_itemsをSqsBatchFailureResponseのbatchItemFailuresに含める。全件成功・空のRecordsは`{"batchItemFailures": []}`、失敗時は`{"batchItemFailures": [{"itemIdentifier": "失敗したmessageId"}]}`とする。複数件という理由では拒否せず、内部並列処理は追加しない。
 
 ログは次の固定イベントを用い、通常のログ障害で結果や後続処理を変更しない。
 
@@ -125,12 +125,12 @@ SQSによるメッセージ削除はLambda連携の成功処理に任せる。co
 共通の`EmbeddingService`はAI処理を終えた後に保存用トランザクションを開始し、記事IDで`SELECT ... FOR UPDATE`して保存対象をロックする。Repositoryの`lock_save_state()`は、存在と生成状態を`EmbeddingSaveState`の3状態として返す。
 
 - `ARTICLE_MISSING`：`EmbeddingAnalyzedArticleMissingError`を送出する。
-- `EMBEDDED`：`EmbeddingCompletion(reason=ALREADY_EMBEDDED)`を返し、成功監査は重複させない。
-- `UNEMBEDDED`：条件付きUPDATEと成功監査を同一トランザクションでコミットした後に`EmbeddingCompletion(reason=SAVED)`を返す。
+- `EMBEDDED`：`EmbeddingCompletion.ALREADY_EMBEDDED`を返し、成功監査は重複させない。
+- `UNEMBEDDED`：条件付きUPDATEと成功監査を同一トランザクションでコミットした後に`EmbeddingCompletion.SAVED`を返す。
 
 行ロックはAI待機中には保持せず、保存時からトランザクション終了まで保持する。記事の削除が先に確定した場合は不存在となり、保存側が先にロックした場合は削除が待機する。ロック取得・更新・コミットの失敗は呼び出し元へ伝播する。ロックした未生成行の更新が0件になる矛盾も正常終了させない。
 
-`EmbeddingSaveState`は保存前のDB状態、`EmbeddingCompletion`はServiceの正常終了結果を表す。記事不存在・API障害・DB障害は結果値に変換せず例外で伝える。正常完了のreasonは`EmbeddingCompletionReason`とする。
+`EmbeddingSaveState`は保存前のDB状態、`EmbeddingCompletion`はServiceの正常終了結果を表す。記事不存在・API障害・DB障害は結果値に変換せず例外で伝える。`EmbeddingCompletion`自体をSAVED・ALREADY_EMBEDDEDの2種類のStrEnumとし、失敗を表す値は含めない。
 
 Serviceの失敗は`EmbeddingError.reason`（`EmbeddingFailureReason`）で表し、再試行方針を持たない。
 
@@ -308,7 +308,7 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 
 ### Lambda入口の配置整理
 
-送信側は`app/lambda_handlers/outbox_relay/`、受信側は`app/lambda_handlers/embedding/`に配置する。各フォルダのhandler.pyが起動・組み立て・終了を担い、settings.pyに専用設定を置く。Embeddingのhandler.pyはバッチ検証・逐次処理と部分バッチ応答までを進め、record_handler.pyは1件の本文検証・Consumer呼び出し・結果ログ、event.pyはJSON解析と共有イベント型への変換、resources.pyはSSM・DB資源の管理を担う。
+送信側は`app/lambda_handlers/outbox_relay/`、受信側は`app/lambda_handlers/embedding/`に配置する。各フォルダのhandler.pyが起動・組み立て・終了を担い、settings.pyに専用設定を置く。Embeddingのhandler.pyはバッチ検証、各レコードの本文検証・Consumer呼び出し・結果記録と部分バッチ応答までを進め、event.pyはJSON解析と共有イベント型への変換、resources.pyはSSM・DB資源の管理を担う。
 
 各パッケージの__init__.pyからhandler関数を公開し、`app.lambda_handlers.outbox_relay.handler`と`app.lambda_handlers.embedding.handler`の起動パスを維持する。Terraformのcommandとイメージ選択処理は変更しない。初期化順序、空Records、ID不正の全体失敗、本文不正の個別失敗、監査・通知・通信設定・業務処理は維持する。
 
@@ -332,7 +332,7 @@ Done: 共通側がEmbeddingに依存せず、共通受信型の単体検証と�
 Problem: 資源の準備とバッチの進行が別モジュールに分かれ、1回の実行手順を入口から通して読めない。
 Evidence: handlerの資源管理、既存のバッチ・レコード処理、初期化・配送・終了障害と実Consumer接続のテストを基準にする。
 
-handler.pyは公開handler、非同期_run_embeddingの順に配置する。同期入口で設定を読み、非同期処理で資源とConsumerを用意した後、SqsRecordBatch.from_inputで全IDを検証する。その場で入力順にprocess_embedding_recordをawaitし、FalseのmessageIdを応答へ集約する。応答型もhandler.pyに置く。旧sqs_batch_handler.pyとprocess_embedding_messagesは廃止し、1件の処理をrecord_handler.pyへ移す。
+handler.pyは公開handler、非同期_run_embeddingの順に配置する。同期入口で設定を読み、非同期処理で資源とConsumerを用意した後、SqsRecordBatch.from_lambda_eventで全IDを検証する。その場で入力順にprocess_embedding_recordをawaitし、FalseのmessageIdを応答へ集約する。応答型もhandler.pyに置く。旧sqs_batch_handler.pyとprocess_embedding_messagesは廃止し、1件の処理をrecord_handler.pyへ移す。
 
 Invariants: 初期化後に全IDを検証し、本文不正は個別失敗とする。Consumer・資源を同じ呼び出し内で共有し、逐次処理と元のIDを維持する。初期化・全体失敗、個別失敗、キャンセルの伝播と、終了処理・安全な診断項目を維持する。
 Non-goals: AWSの公開起動パス、Consumerの業務処理、イベント契約、SQS共通型、インフラ設定は変更しない。
@@ -340,12 +340,63 @@ Done: handler.pyで準備から応答・終了までを追え、既存の配送�
 
 検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,300件、専用一時環境の統合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。旧バッチ関数のテストは資源の生成だけを差し替えて_run_embeddingへ接続し、実際のバッチ検証・逐次処理・応答集約を検証した。1件の処理と完了ログは関数名以外の構文が移動前と一致することも確認した。
 
+### レコード検証と業務実行の順序を入口に明示
+
+Problem: バッチの進行はhandler.pyに集約したが、1件のイベント検証とConsumer呼び出しが別関数に隠れ、検証後に実行する順序を入口から読めない。
+Evidence: record_handler.pyの本文検証・完了判定・診断処理と、既存の配送・資源管理・実Consumer接続テストを基準にする。
+
+_run_embeddingのループ内でrecord.body_text、parse_assessed_in_scope_event、consumer.consumeの順に呼ぶ。本文やイベントの不正は失敗IDを追加して次のレコードへ進み、Consumerを呼ばない。Consumerの通常例外も個別失敗とする。record_handler.pyとprocess_embedding_recordは廃止し、診断項目の詳細はfailure_recorder、検証ルールはSQS共通型とevent.pyに維持する。
+
+Invariants: 資源準備後に全レコードの構造とIDを先に検証し、各本文を検証した後でのみConsumerを呼ぶ。逐次処理、元のmessageId、成功・失敗のログ項目、キャンセルの伝播、資源の終了を維持する。
+Non-goals: 公開起動パス、設定・資源管理、業務イベント契約、ConsumerとSQS共通型の実装、AWS設定は変更しない。
+Done: handler.pyだけで入力検証からConsumer実行・配送結果の集約までを追え、既存の単体・統合検証が通過する。
+
+検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,301件、専用一時環境の統合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。成功したレコードの後に不正本文が来てもConsumerを呼ばず、直前のイベント情報を診断へ流用せずに後続処理を続けることを追加検証した。
+
+### 入力の段階を区別する命名
+
+Lambdaの入力全体をlambda_event、検証済みレコード集合をrecord_batch、取り出した本文をmessage_body、解析済みの対象内判定イベントをassessed_eventとする。SqsRecordBatch.from_lambda_eventはLambda入力全体からレコード集合を復元し、parse_assessed_in_scope_event(message_body)は本文を共有のArticleAssessedInScopeEventへ変換する。SqsRecord.body_textは配送上の本文を取り出す役割として維持する。
+
+変更は命名と参照更新に限定し、検証条件、エラーコードとログの項目名、実行順序、部分バッチ応答は維持する。
+
+検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,301件、専用一時環境の統合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。旧名称の参照が残っていないことと、パーサー・SQS構造検証・失敗診断の処理が命名以外では変わっていないことを確認した。
+
+### 正常完了をEnumへ集約
+
+Problem: 正常完了の型と理由が分かれ、ハンドラーの戻り値検証が処理の流れを読みにくくしている。
+Evidence: ServiceとConsumerは保存完了または生成済みのみを正常結果として返し、失敗は例外として伝える。完了結果には理由以外の情報がなく、既存テストは保存・生成済み・競合・例外・ログ・配送応答を検証している。
+Invariants: 保存・生成済みの区別、例外の伝播、逐次処理、失敗IDの集約、ログのreason値を維持する。
+Non-goals: DB処理、イベント契約、資源管理、AWS設定は変更しない。
+Done: EmbeddingCompletion自体をSAVEDとALREADY_EMBEDDEDのEnumにし、Consumerの正常戻り値をハンドラーが再検証せず記録する。旧型の参照とテストを更新し、単体・結合検証が通過する。
+
+検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,298件、専用一時環境の結合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。旧契約の不正戻り値5ケースを正常完了2種類の応答・ログ検証へ変更し、Service・Consumerの保存・生成済み・競合時のテストはEnum値を直接検証するよう更新した。
+
+### 失敗項目の集約とAWS応答の組み立て
+
+Problem: 内部で失敗項目を集め、入口で応答へまとめるという役割分担と、生成する項目・応答の型が処理箇所から読み取りにくい。
+Evidence: 応答項目が持つのはmessageIdだけで、AWSのbatchItemFailures配列に含めることで失敗を報告する。既存テストは個別失敗・入力順・ID保持・空入力・資源終了を検証している。
+Invariants: AWSのbatchItemFailuresとitemIdentifierの形式、失敗IDの入力順と原文、ログ、例外の伝播、資源終了を維持する。
+Non-goals: Consumer、入力検証、AWS設定は変更せず、処理結果用のクラスは追加しない。
+Done: _run_embeddingはlist[SqsBatchItemIdentifier]型のfailed_itemsを返し、公開handlerはその一覧をSqsBatchFailureResponseのbatchItemFailuresへ格納する。生成箇所でSqsBatchItemIdentifier(...)とSqsBatchFailureResponse(...)を明示する。内側の項目型は識別子を表し、失敗の意味は外側の応答で表す。単体・結合検証が通過する。
+
+検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,301件、専用一時環境の結合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。内部の識別子一覧、公開handlerの全件成功・一部失敗・全件失敗の応答、IDの順序と原文、資源終了を検証した。TypedDictの生成記法を明示した後も、既存の辞書形式の期待値を維持して検証が通過した。
+
+### 失敗診断の記録責務を明示
+
+Problem: FailureHandlerという名前が、ログ記録に加えて失敗一覧の更新や制御フローも担当するように読める。
+Evidence: 対象クラスは診断項目の組み立てとログ出力だけを担当し、handler.pyとresources.pyから呼ばれている。
+Invariants: ログのイベント名と項目、ログ障害の隔離、元の例外、失敗一覧への追加、continueとraiseの位置を維持する。
+Non-goals: 失敗処理の責任移動、ConsumerとOutboxのFailureHandlerの変更は行わない。
+Done: クラス・ファイル・変数・公開メソッドをFailureRecorder、failure_recorder、record_*の命名に揃え、旧参照を残さず単体・結合検証が通過する。
+
+検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,301件、専用一時環境の結合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。旧クラス・モジュールの参照が残っていないことを確認し、ログと配送結果の既存テストを変更せず通過した。
+
 ### スライス3.3：Lambdaハンドラーへの接続
 
 Problem: 作成済みの接続・業務処理部品を、1回のLambda呼び出しとして実行して応答する入口を提供する。
 Evidence: SSM・DBのopen_embedding_resources、Geminiのopen_gemini_client、新しいGeminiEmbedder、Consumerと既存SQS処理の契約を確認した。
 
-`app/lambda_handlers/embedding/handler.py`の同期`handler(event, context)`がEmbeddingConsumerSettingsを生成し、asyncio.runで`_run_embedding(event, settings)`を実行する。contextは使用しない。非同期処理ではDB資源、Geminiクライアント、EmbedderとConsumerの順に初期化し、バッチ検証後にprocess_embedding_recordへ1件ずつ渡して失敗IDを集約する。AsyncExitStackでGemini資源、DB資源の順に終了してからSqsBatchResponseを返す。
+`app/lambda_handlers/embedding/handler.py`の同期`handler(lambda_event, context)`がEmbeddingConsumerSettingsを生成し、asyncio.runで`_run_embedding(lambda_event, settings)`を実行する。contextは使用しない。非同期処理ではDB資源、Geminiクライアント、EmbedderとConsumerの順に初期化し、バッチ検証後に各レコードの本文を検証してConsumerを呼び、失敗IDを集約する。AsyncExitStackでGemini資源、DB資源の順に終了してから失敗項目の識別子一覧を返し、同期handlerでSqsBatchFailureResponseへまとめる。
 
 同一呼び出し内で資源とConsumerを共有し、次の呼び出しには持ち越さない。DBは最初のSQLで接続し、接続確認SQLを追加しない。空Recordsも初期化を行ってから空の失敗一覧を返す。配送構造・本文の検証位置と引数型は変更せず、配送構造不正も初期化後の既存処理で拒否する。
 
@@ -421,7 +472,7 @@ Consumer専用サブネットはprimary AZのCIDR index 28とし、appルート�
 
 DLQ滞留通知は`ApproximateNumberOfMessagesVisible`のMaximum・60秒・1評価期間・1件以上・欠測正常で判定し、ALARM/OK遷移を既存SNSへ送る。自動停止・自動再投入は行わない。障害時は後続のSQSトリガーを手動停止・再開する。
 
-Consumer本体は実装済み、Lambda・SQSトリガーは未実装。スライス2に先行して、共通Serviceの保存時行ロックと記事不存在・生成済みの区別を実装した。Serviceは正常終了時に`EmbeddingCompletion(reason=SAVED)`または`EmbeddingCompletion(reason=ALREADY_EMBEDDED)`を返す。Service実行中の失敗分類関数とConsumer用の後処理ハンドラーも実装済み。開始時の失敗もConsumer用ハンドラーへ接続した。SQSの入力検証・Consumer呼び出し・部分バッチ応答も処理部品として接続済み。依存を組み立てるLambda起動関数は後続で扱う。
+Consumer本体は実装済み、Lambda・SQSトリガーは未実装。スライス2に先行して、共通Serviceの保存時行ロックと記事不存在・生成済みの区別を実装した。Serviceは正常終了時に`EmbeddingCompletion.SAVED`または`EmbeddingCompletion.ALREADY_EMBEDDED`を返す。Service実行中の失敗分類関数とConsumer用の後処理ハンドラーも実装済み。開始時の失敗もConsumer用ハンドラーへ接続した。SQSの入力検証・Consumer呼び出し・部分バッチ応答も処理部品として接続済み。依存を組み立てるLambda起動関数は後続で扱う。
 
 ## Verification
 
@@ -473,7 +524,7 @@ Gemini共通通信設定・クライアント管理（2026-09-10）:
 
 - Ruff lint・format checkは実行コードと変更テストで成功した。全単体テスト5,979件、最後に更新したTaskiqの例外伝播テスト7件が成功した。
 - `make test-integration`は1,300件成功・22件スキップ。22件はいずれも既存のDB権限テストで、Alembic適用済みの`public.watchlist_entries`が検証環境にないためスキップされた。
-- 正常保存・生成済み・同時実行時の`EmbeddingCompletion.reason`、記事不存在・応答不正・provider障害の理由と原因保持、既存Taskiqの監査分類・再試行・hold・通知providerを確認した。
+- 正常保存・生成済み・同時実行時の`EmbeddingCompletion`、記事不存在・応答不正・provider障害の理由と原因保持、既存Taskiqの監査分類・再試行・hold・通知providerを確認した。
 - 監査のerror_chainにTaskiq分類・Service失敗・元のprovider例外が残ることを実DBで確認した。DB障害・想定外例外は既存の伝播を維持する。
 - Consumer本体・SQS失敗応答・デプロイは今回の対象外。外部AIはモックした。
 

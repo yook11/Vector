@@ -15,7 +15,6 @@ from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.embedding.embedder import GeminiEmbedder
 from app.analysis.embedding.service import (
     EmbeddingCompletion,
-    EmbeddingCompletionReason,
 )
 from app.lambda_handlers.embedding import resources as resource_module
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
@@ -86,9 +85,7 @@ def wiring(monkeypatch):
         assert isinstance(embedder, GeminiEmbedder)
         assert embedder._client is sdks[-1].aio
         consumer = SimpleNamespace(
-            consume=AsyncMock(
-                return_value=EmbeddingCompletion(EmbeddingCompletionReason.SAVED)
-            ),
+            consume=AsyncMock(return_value=EmbeddingCompletion.SAVED),
             session_factory=factory,
         )
         consumers.append(consumer)
@@ -139,6 +136,45 @@ def test_handler_recreates_resources_and_closes_before_return(wiring):
         "private-key-0",
         "private-key-1",
     ]
+
+
+@pytest.mark.parametrize(
+    ("failed_article_ids", "expected_ids"),
+    [
+        ([], []),
+        ([1, 3], [" msg-1 ", "msg-3"]),
+        ([1, 2, 3], [" msg-1 ", "msg-2", "msg-3"]),
+    ],
+)
+def test_handler_reports_only_failed_ids_in_aws_format(
+    wiring, failed_article_ids, expected_ids
+):
+    """公開入口が失敗IDの順序と原文を保ち、資源終了後にAWS応答を返す。"""
+    original = wiring.constructor.side_effect
+
+    def create(*args):
+        consumer = original(*args)
+
+        async def consume(payload):
+            if payload.analyzed_article_id in failed_article_ids:
+                raise RuntimeError("processing_failed")
+            return EmbeddingCompletion.SAVED
+
+        consumer.consume.side_effect = consume
+        return consumer
+
+    wiring.constructor.side_effect = create
+    response = module.handler(
+        {"Records": [record(" msg-1 ", 1), record("msg-2", 2), record("msg-3", 3)]},
+        None,
+    )
+    assert response == {
+        "batchItemFailures": [
+            {"itemIdentifier": message_id} for message_id in expected_ids
+        ]
+    }
+    assert wiring.consumers[0].consume.await_count == 3
+    assert wiring.steps[-4:] == ["aio_close", "sdk_close", "http_close", "engine_close"]
 
 
 @pytest.mark.parametrize(
@@ -254,15 +290,13 @@ async def test_cleanup_and_log_failures_preserve_processing_result(
         )
     if processing_failure:
         monkeypatch.setattr(
-            module, "process_embedding_record", AsyncMock(side_effect=failure)
+            module.SqsRecordBatch, "from_lambda_event", Mock(side_effect=failure)
         )
         with pytest.raises(RuntimeError) as caught:
             await module._run_embedding({"Records": [record()]}, wiring.config)
         assert caught.value is failure
     else:
-        assert await module._run_embedding({"Records": []}, wiring.config) == {
-            "batchItemFailures": []
-        }
+        assert await module._run_embedding({"Records": []}, wiring.config) == []
     wiring.engines[0].dispose.assert_awaited_once()
     wiring.http_clients[0].aclose.assert_awaited_once()
     wiring.sdks[0].aio.aclose.assert_awaited_once()
@@ -283,10 +317,10 @@ async def test_mixed_messages_share_consumer_and_continue_in_order(wiring, monke
             await asyncio.sleep(0)
             if payload.analyzed_article_id == 2:
                 raise RuntimeError("private")
-            return EmbeddingCompletion(
-                EmbeddingCompletionReason.SAVED
+            return (
+                EmbeddingCompletion.SAVED
                 if payload.analyzed_article_id == 1
-                else EmbeddingCompletionReason.ALREADY_EMBEDDED
+                else EmbeddingCompletion.ALREADY_EMBEDDED
             )
 
         consumer.consume.side_effect = consume
@@ -296,10 +330,10 @@ async def test_mixed_messages_share_consumer_and_continue_in_order(wiring, monke
     gemini_open = Mock(wraps=module.open_gemini_client)
     monkeypatch.setattr(module, "open_gemini_client", gemini_open)
     with capture_logs() as logs:
-        response = await module._run_embedding(
+        failed_items = await module._run_embedding(
             {"Records": [record(str(i), i) for i in (1, 2, 3)]}, wiring.config
         )
-    assert response == {"batchItemFailures": [{"itemIdentifier": "2"}]}
+    assert failed_items == [{"itemIdentifier": "2"}]
     assert seen == [1, 2, 3]
     wiring.constructor.assert_called_once()
     assert gemini_open.call_args.kwargs["settings"] == GeminiConnectionSettings()

@@ -52,16 +52,18 @@ def _reject_constant(value: str) -> object:
     raise ValueError("nonstandard_json_constant")
 
 
-def parse_embedding_event(body: str) -> ArticleAssessedInScopeEvent:
+def parse_assessed_in_scope_event(message_body: str) -> ArticleAssessedInScopeEvent:
     """JSONの解析と契約検証を行い、失敗時は安全な理由だけを伝える。"""
-    if not isinstance(body, str):
+    if not isinstance(message_body, str):
         raise EmbeddingEventInvalidError(
             reason=EmbeddingEventInvalidReason.INVALID_JSON
         )
     issues: tuple[AssessedEventValidationIssue, ...] = ()
     try:
         data = json.loads(
-            body, object_pairs_hook=_unique_object, parse_constant=_reject_constant
+            message_body,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
         )
     except (ValueError, RecursionError):
         reason = EmbeddingEventInvalidReason.INVALID_JSON

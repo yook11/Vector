@@ -14,27 +14,27 @@ if TYPE_CHECKING:
     from app.lambda_handlers.sqs.errors import SqsInputError
 
 
-class EmbeddingLambdaFailureHandler:
+class EmbeddingLambdaFailureRecorder:
     """安全な診断項目だけを記録し、再配信と例外伝播は呼び出し元に委ねる。"""
 
     def __init__(self, logger: BoundLogger) -> None:
         self._logger = logger
 
-    def handle_initialization_failure(self, stage: str, error: Exception) -> None:
+    def record_initialization_failure(self, stage: str, error: Exception) -> None:
         self._record(
             "embedding_initialization_failed",
             stage=stage,
             error_class=exception_fqn(error),
         )
 
-    def handle_cleanup_failure(self, resource: str, error: Exception) -> None:
+    def record_cleanup_failure(self, resource: str, error: Exception) -> None:
         self._record(
             "embedding_resources_cleanup_failed",
             resource=resource,
             error_class=exception_fqn(error),
         )
 
-    def handle_invalid_sqs_input(self, error: SqsInputError) -> None:
+    def record_invalid_sqs_input(self, error: SqsInputError) -> None:
         self._record(
             "embedding_sqs_input_invalid",
             reason=error.reason.value,
@@ -42,7 +42,7 @@ class EmbeddingLambdaFailureHandler:
             record_index=error.record_index,
         )
 
-    def handle_invalid_body(self, error: SqsInputError, *, message_id: str) -> None:
+    def record_invalid_body(self, error: SqsInputError, *, message_id: str) -> None:
         self._record(
             "embedding_message_input_invalid",
             message_id=message_id,
@@ -50,7 +50,7 @@ class EmbeddingLambdaFailureHandler:
             issues=[{"field": "body", "code": error.reason.value}],
         )
 
-    def handle_invalid_event(
+    def record_invalid_event(
         self, error: EmbeddingEventInvalidError, *, message_id: str
     ) -> None:
         self._record(
@@ -63,18 +63,18 @@ class EmbeddingLambdaFailureHandler:
             ],
         )
 
-    def handle_message_failure(
+    def record_message_failure(
         self,
         error: Exception,
         *,
         message_id: str,
-        received: ArticleAssessedInScopeEvent | None = None,
+        assessed_event: ArticleAssessedInScopeEvent | None = None,
     ) -> None:
         fields: dict[str, object] = {"message_id": message_id}
-        if received is not None:
+        if assessed_event is not None:
             fields.update(
-                event_id=str(received.event_id),
-                analyzed_article_id=received.payload.analyzed_article_id,
+                event_id=str(assessed_event.event_id),
+                analyzed_article_id=assessed_event.payload.analyzed_article_id,
             )
         self._record(
             "embedding_message_failed", **fields, error_class=exception_fqn(error)

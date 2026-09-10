@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize("body", ["", "not-json", '{"event_type":"other.event"}'])
 def test_batch_preserves_body_without_interpreting_business_event(body):
-    batch = SqsRecordBatch.from_input(
+    record_batch = SqsRecordBatch.from_lambda_event(
         {
             "Records": [
                 {"messageId": " second ", "body": body},
@@ -22,8 +22,14 @@ def test_batch_preserves_body_without_interpreting_business_event(body):
             ]
         }
     )
-    assert [record.message_id for record in batch.records] == [" second ", "first"]
-    assert [record.body_text() for record in batch.records] == [body, "another-body"]
+    assert [record.message_id for record in record_batch.records] == [
+        " second ",
+        "first",
+    ]
+    assert [record.body_text() for record in record_batch.records] == [
+        body,
+        "another-body",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -35,7 +41,7 @@ def test_batch_preserves_body_without_interpreting_business_event(body):
     ],
 )
 def test_invalid_body_is_deferred_until_individual_record_is_read(body_fields, reason):
-    batch = SqsRecordBatch.from_input(
+    record_batch = SqsRecordBatch.from_lambda_event(
         {
             "Records": [
                 {"messageId": "bad", **body_fields},
@@ -44,15 +50,15 @@ def test_invalid_body_is_deferred_until_individual_record_is_read(body_fields, r
         }
     )
     with pytest.raises(SqsInputError) as caught:
-        batch.records[0].body_text()
+        record_batch.records[0].body_text()
     assert caught.value.reason is reason
     assert caught.value.field == "body"
-    assert batch.records[1].body_text() == "usable-body"
+    assert record_batch.records[1].body_text() == "usable-body"
 
 
 def test_duplicate_id_precedes_invalid_body_and_error_does_not_expose_input():
     with pytest.raises(SqsInputError) as caught:
-        SqsRecordBatch.from_input(
+        SqsRecordBatch.from_lambda_event(
             {
                 "Records": [
                     {"messageId": "private-id"},
@@ -75,7 +81,7 @@ def test_shared_records_load_without_embedding_or_application_settings():
             "-c",
             "from app.lambda_handlers.sqs.records import SqsRecordBatch; "
             "import sys; "
-            "assert SqsRecordBatch.from_input({'Records': []}).records == (); "
+            "assert SqsRecordBatch.from_lambda_event({'Records': []}).records == (); "
             "assert not any(name.startswith('app.lambda_handlers.embedding') "
             "or name.startswith('app.analysis') for name in sys.modules); "
             "assert 'app.config' not in sys.modules",
