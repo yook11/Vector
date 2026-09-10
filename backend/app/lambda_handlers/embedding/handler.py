@@ -19,6 +19,7 @@ from app.lambda_handlers.embedding.failure_recorder import (
 )
 from app.lambda_handlers.embedding.resources import open_embedding_resources
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
+from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 
@@ -35,6 +36,7 @@ class SqsBatchFailureResponse(TypedDict):
 
 def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:
     """設定を読んで処理を実行し、失敗したメッセージをAWSへ報告する。"""
+    setup_lambda_logging()
     try:
         settings = EmbeddingConsumerSettings()  # type: ignore[call-arg]
     except Exception as exc:
