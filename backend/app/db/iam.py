@@ -24,6 +24,7 @@ def build_iam_password_provider(
     *,
     region: str,
     token_port: int | None = None,
+    generate_token: Callable[..., str] | None = None,
 ) -> Callable[[], Awaitable[str]]:
     """URLのendpoint/userに対する接続時token providerを作る。"""
     parsed = make_url(url)
@@ -43,7 +44,10 @@ def build_iam_password_provider(
         raise ValueError("RDS IAM auth token port must be between 1 and 65535")
 
     def generate() -> str:
-        return _rds_client(region).generate_db_auth_token(
+        signer = generate_token
+        if signer is None:
+            signer = _rds_client(region).generate_db_auth_token
+        return signer(
             DBHostname=host,
             Port=port,
             DBUsername=user,

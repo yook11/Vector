@@ -180,6 +180,26 @@ def create_lambda_engine(settings: _RuntimeDatabaseSettings) -> AsyncEngine:
     )
 
 
+def create_embedding_consumer_engine(
+    settings: _RuntimeDatabaseSettings,
+    *,
+    password_provider: Callable[[], Awaitable[str]] | None = None,
+) -> AsyncEngine:
+    """Consumerの利用範囲内で1接続だけ再利用するEngineを作る。"""
+    if settings.db_iam_auth != (password_provider is not None):
+        raise ValueError("IAM authentication and password provider must match")
+    return _create_engine(
+        settings.database_url,
+        application_name="vector-embedding-consumer",
+        password_provider=password_provider,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+        connect_args={"timeout": 5, "command_timeout": 5},
+        echo=False,
+    )
+
+
 def auth_retention_service_name() -> str:
     """auth schema retention用DB接続のapplication_nameを返す。"""
     return "vector-worker-maintenance-auth"
