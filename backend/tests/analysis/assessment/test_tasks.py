@@ -18,6 +18,10 @@ from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildBlockedError,
     ReadyForAssessment,
 )
+from app.analysis.assessment.service import (
+    AssessmentCompletion,
+    AssessmentCompletionKind,
+)
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
@@ -198,8 +202,12 @@ class TestAssessContent:
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
             patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
         ):
-            # Service は in-scope 成功時 assessment id を返す
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=100)
+            # 対象内保存の正常終了から保存済み記事IDを引き継ぐ。
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=AssessmentCompletion(
+                    AssessmentCompletionKind.IN_SCOPE, 100
+                )
+            )
             mock_embed.kiq = AsyncMock()
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
@@ -213,12 +221,17 @@ class TestAssessContent:
         )
 
     @pytest.mark.asyncio
-    async def test_none_result_does_not_chain(self) -> None:
-        """``execute`` が None (out-of-scope / race lost) → embedding chain しない。
-
-        in-scope 経路だけが embedding chain の対象。out-of-scope はパイプライン終了で、
-        race lost は勝者 task が自身で chain を起動する責務。
-        """
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            AssessmentCompletionKind.OUT_OF_SCOPE,
+            AssessmentCompletionKind.ALREADY_ASSESSED,
+        ],
+    )
+    async def test_non_in_scope_completion_does_not_chain(
+        self, kind: AssessmentCompletionKind
+    ) -> None:
+        """対象外保存と重複スキップでは後続タスクを投入しない。"""
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
@@ -229,7 +242,9 @@ class TestAssessContent:
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
             patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=AssessmentCompletion(kind)
+            )
             mock_embed.kiq = AsyncMock()
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
@@ -315,7 +330,11 @@ class TestAssessContentStageSpan:
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
             patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=100)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=AssessmentCompletion(
+                    AssessmentCompletionKind.IN_SCOPE, 100
+                )
+            )
             mock_embed.kiq = AsyncMock()
             await assess_content(trigger=_make_trigger(curation_id=2), ctx=mock_ctx)
 
@@ -327,10 +346,17 @@ class TestAssessContentStageSpan:
         assert "result" not in attrs
 
     @pytest.mark.asyncio
-    async def test_none_result_does_not_mark_next_task(
-        self, capfire: CaptureLogfire
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            AssessmentCompletionKind.OUT_OF_SCOPE,
+            AssessmentCompletionKind.ALREADY_ASSESSED,
+        ],
+    )
+    async def test_non_in_scope_completion_does_not_mark_next_task(
+        self, capfire: CaptureLogfire, kind: AssessmentCompletionKind
     ) -> None:
-        """Service が None (out_of_scope / race) → mark せず enqueued は False。"""
+        """対象外保存と重複スキップでは後続投入の計測を行わない。"""
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
@@ -339,7 +365,9 @@ class TestAssessContentStageSpan:
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
             patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=AssessmentCompletion(kind)
+            )
             mock_embed.kiq = AsyncMock()
             await assess_content(trigger=_make_trigger(curation_id=2), ctx=mock_ctx)
 

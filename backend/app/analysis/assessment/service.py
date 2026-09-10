@@ -2,12 +2,13 @@
 
 ``ReadyForAssessment`` が precondition を、明示引数 ``analyzable_article_id`` が
 監査主語を保証するため、Service は AI 呼び出し、結果別の保存、audit + commit だけを
-担う。楽観的ロックに敗れた worker は audit / commit せず ``None`` を返し、下流 chain も
-起動しない。
+担う。重複保存を見送った場合は audit / commit せず ``ALREADY_ASSESSED`` を返す。
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import assert_never
 
 import structlog
@@ -30,9 +31,32 @@ from app.models.outbox_event import OutboxEvent
 logger = structlog.get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
+class AssessmentCompletionKind(StrEnum):
+    """保存または処理済み確認による正常終了の種類。"""
+
+    IN_SCOPE = "in_scope"
+    OUT_OF_SCOPE = "out_of_scope"
+    ALREADY_ASSESSED = "already_assessed"
+
+
+@dataclass(frozen=True, slots=True)
+class AssessmentCompletion:
+    """対象内の新規保存時だけ保存済み記事IDを伴う正常終了。"""
+
+    kind: AssessmentCompletionKind
+    analyzed_article_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, AssessmentCompletionKind):
+            raise TypeError("kind must be an AssessmentCompletionKind")
+        if self.kind is AssessmentCompletionKind.IN_SCOPE:
+            if (
+                type(self.analyzed_article_id) is not int
+                or self.analyzed_article_id <= 0
+            ):
+                raise ValueError("in_scope requires a positive integer article ID")
+        elif self.analyzed_article_id is not None:
+            raise ValueError("only in_scope may carry an article ID")
 
 
 class AssessmentService:
@@ -51,24 +75,8 @@ class AssessmentService:
         assessor: BaseAssessor,
         *,
         analyzable_article_id: int,
-    ) -> int | None:
-        """Ready 型を受け取り判定 → 永続化 → 下流 chain 用 id を返す。
-
-        AI 呼び出し中は session を保持しない。楽観的ロック敗北時は ``None`` を返し、
-        勝者だけが audit と commit を行う。
-
-        Returns:
-            in-scope 成功時: 永続化された ``analyzed_articles`` 行の id
-                (Task 層が ``EmbeddingTrigger`` に詰めて kiq に流すキー)
-            out-of-scope 成功時: ``None`` (Stage 5 chain なし)
-            楽観ロック敗北時: ``None`` (Task 層は下流 chain を起動しない、
-                勝者が crash 等で chain に失敗した case の救済は backfill
-                (Stage.BACKFILL_ASSESS) 経路に委ねる)
-
-        Raises:
-            ``AssessmentRecoverableError`` / ``AssessmentTerminalError``
-            (Task 層 retry に委ねる)。
-        """
+    ) -> AssessmentCompletion:
+        """判定結果のcommitまたは重複保存の見送りを正常終了として返す。"""
         try:
             call = await assessor.assess(
                 title_ja=ready.translated_title,
@@ -99,7 +107,9 @@ class AssessmentService:
                             curation_id=curation_id,
                         )
                         set_assessment_stage_result("skipped")
-                        return None
+                        return AssessmentCompletion(
+                            AssessmentCompletionKind.ALREADY_ASSESSED
+                        )
                     # 結果・audit・Outboxを同一トランザクションで確定する。
                     await AssessmentAuditRepository(session).append_in_scope(
                         ready=ready,
@@ -124,7 +134,9 @@ class AssessmentService:
                     )
                     set_assessment_stage_result("in_scope")
                     record_assessment_processing_outcome("in_scope")
-                    return analyzed_article_id
+                    return AssessmentCompletion(
+                        AssessmentCompletionKind.IN_SCOPE, analyzed_article_id
+                    )
 
                 case AssessmentCall(result=OutOfScope()):
                     # `call` は ``AssessmentCall[OutOfScope]`` に narrow される
@@ -138,7 +150,9 @@ class AssessmentService:
                             curation_id=curation_id,
                         )
                         set_assessment_stage_result("skipped")
-                        return None
+                        return AssessmentCompletion(
+                            AssessmentCompletionKind.ALREADY_ASSESSED
+                        )
                     # 業務 INSERT + audit を同一 tx で commit
                     await AssessmentAuditRepository(session).append_out_of_scope(
                         ready=ready,
@@ -153,7 +167,7 @@ class AssessmentService:
                     set_assessment_stage_result("out_of_scope")
                     record_assessment_processing_outcome("out_of_scope")
                     # Stage 5 chain なし
-                    return None
+                    return AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
 
                 case _:
                     assert_never(call)

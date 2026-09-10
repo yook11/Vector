@@ -310,4 +310,157 @@ read-only の plan ロールでは通らない)。
 
 ## Outbox relay Lambda
 
-工程別SQS・relay専用Lambdaの初回構築、digest更新、接続確認は [OUTBOX_RELAY.md](OUTBOX_RELAY.md) を参照する。現在のhandlerはDB接続確認のみで、定期送信は無効。
+工程別SQS・relay専用Lambdaの初回構築、digest更新、接続確認は [OUTBOX_RELAY.md](OUTBOX_RELAY.md) を参照する。現在のhandlerはOutboxRelay.run_onceでembedding向けイベントを1回最大10件送信する。スライス4.2では既存SchedulerをENABLEDへ更新し、送信開始後に実処理を確認する。適用・監視・緊急停止は同手順を参照する。
+
+## EmbeddingConsumer Lambda（スライス3.4）
+
+共通backendイメージをarm64のLambdaとして起動する。Consumerの版は`embedding_consumer_image_digest`で独立指定し、ECSのimage_tagやrelayのdigestとは連動させない。メモリ1024MB、timeout120秒、予約同時実行10、1回1件、最大同時実行10、ReportBatchItemFailuresで固定する。スライス3.4ではSQSトリガーを`enabled=false`で配置した。スライス4.1以降の目標状態は`enabled=true`であり、既存マッピングの更新・今後の新規作成ともに受信を有効にする。relayのSchedulerはスライス4.1では`DISABLED`を維持した。スライス4.2で`ENABLED`へ更新する。
+
+関数は専用サブネット・SG・実行ロール・ロググループを使用する。環境変数はproduction、IAM認証のvector_app用DB URL、専用Gemini SSMパス、EGRESS_PROXY_URLを渡す。AWS_REGIONはLambdaが提供する。APIキーの値はTerraform・イメージ・ログへ置かず、Consumer呼び出し時にSSMから取得する。SSMの準備は有効化前に行い、値の登録と実通信検証は別作業とする。
+
+### 初回構築・更新・切り戻し
+
+1. 管理者経路でbootstrapを先に適用し、`ci-apply-embedding-consumer`ポリシーとapplyロールへの接続、plan/apply向けの限定Lambda復号ポリシーを反映する。[Lambda設定の読戻し確認](bootstrap/README.md#lambda管理設定の読戻し権限)を済ませてから本体planへ進む。今回、実行ロールのboundaryとPassRoleの制約は変更しない。
+2. 既存のAWS app images workflowで対象mainの共通backendイメージを作成・公開し、backend ECRのsha256 digestを取得する。Consumer専用イメージは作らない。既存ECSのrollout承認は別工程であり、Consumerの更新はTerraform経路で行う。
+3. AWS terraform applyをmainで手動実行し、`embedding_consumer_image_digest`へ対象digestを入力する。backendリポジトリ内の存在確認が成功した場合だけplanへ進む。production承認後、既存どおり同じjobでplanを再実行してapplyする。受信状態は現在のTerraform定義に従うため、新規作成も有効になる。SSM登録と受信開始の確認を済ませてから承認する。
+4. outputsの`embedding_consumer_function_name`・`embedding_consumer_function_arn`・`embedding_consumer_image_digest`・`embedding_consumer_event_source_mapping_uuid`を確認する。AWSのGetFunctionConfigurationとGetEventSourceMappingで実行設定とState=Enabled、relayのSchedulerが現在のTerraform定義（スライス4.2以降はENABLED）と一致することを確認する。この確認では関数をinvokeしない。
+5. 通常のinfra適用では入力を空欄にして現在の版を維持する。更新・切り戻しは新しい版・過去の版のdigestを明示する。既にECRから削除された版は指定できないため、切り戻し先の保持状況も確認する。
+6. 配置済みConsumerの受信有効化・停止・再開は以下の手順に従う。relayの定期送信開始は[スライス4.2](OUTBOX_RELAY.md#定期送信の開始と監視スライス42)に従い、実通信・ログ配送・再配信・DLQ移動・Taskiq併用の実証は開始後に記録する。
+
+初回にdigestを指定しない場合、基盤は維持するが関数とトリガーは作成せず、上記outputsはnullとなる。SSOの期限切れやstate解決失敗を初回扱いにしない。
+
+### Consumerの受信有効化・監視・停止・再開（スライス4.1）
+
+以下の開始手順はConsumerだけを先に有効化したスライス4.1の記録であり、relayのDISABLED確認は当時の条件である。現在のrelay開始は[スライス4.2](OUTBOX_RELAY.md#定期送信の開始と監視スライス42)を使う。ユーザーの選択でOutboxの事前件数確認は省略し、開始後に実処理を確認する。以下のConsumer停止・再開手順は引き続き使用する。bootstrap再適用、イメージ再ビルド・公開、digestの変更は不要。
+
+**適用前の確認と受信開始**
+
+管理者のAWS CLIでアカウント・東京リージョンを確認する。既存のSSOログイン後、以下は参照だけを行う。SSMはメタデータだけを取得し、秘密値やLambdaの環境変数値は表示しない。
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+export AWS_PROFILE=vector-admin AWS_REGION=ap-northeast-1 AWS_PAGER=""
+aws sts get-caller-identity --query Account --output text
+aws ssm describe-parameters \
+  --parameter-filters 'Key=Name,Option=Equals,Values=/vector/embedding-consumer/gemini-api-key' \
+  --query 'Parameters[].{Name:Name,Type:Type,Tier:Tier,KeyId:KeyId}' --output json
+aws lambda get-function-configuration --function-name vector-embedding-consumer \
+  --query '{State:State,Update:LastUpdateStatus,Memory:MemorySize,Timeout:Timeout,EnvironmentError:Environment.Error.ErrorCode,ImageConfigError:ImageConfigResponse.Error.ErrorCode}' --output json
+for queue_name in vector-article-embedding vector-article-embedding-dlq; do
+  queue_url=$(aws sqs get-queue-url --queue-name "$queue_name" --query QueueUrl --output text)
+  printf '%s\n' "$queue_name"
+  aws sqs get-queue-attributes --queue-url "$queue_url" \
+    --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible ApproximateNumberOfMessagesDelayed \
+    --query Attributes --output json
+done
+aws scheduler get-schedule --group-name vector-outbox-relay --name vector-outbox-relay \
+  --query '{State:State,Schedule:ScheduleExpression}' --output json
+BASH
+```
+
+SSMが指定名のSecureString・Standard・alias/aws/ssm、LambdaがActive・Successful・1024MB・120秒、設定取得エラーなしであることを確認する。キューにメッセージがあれば有効化により処理が始まるため件数を確認し、relayがDISABLEDであることも確認する。
+
+PR planでは既存のConsumer・relayのdigest保持処理を使い、変更が既存マッピングの`enabled: false → true`だけであることを確認する。関数・キューの再作成や削除、relay変更、環境変数・起動設定の不要差分があれば、そのまま適用しない。マージで起動する最新のAWS terraform applyをproduction承認し、digest入力を追加せず現在の版を保持する。同じ変更の手動runを重複起動しない。
+
+適用後、以下で対象マッピングのEnabled・BatchSize=1・収集待ち0秒・最大同時実行10・ReportBatchItemFailures、予約同時実行10、relayのDISABLEDを確認する。関数と元キューのARNも対象が正しいことを確認する。
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+export AWS_PROFILE=vector-admin AWS_REGION=ap-northeast-1 AWS_PAGER=""
+aws lambda list-event-source-mappings --function-name vector-embedding-consumer \
+  --query 'EventSourceMappings[].{UUID:UUID,Function:FunctionArn,Queue:EventSourceArn,State:State,BatchSize:BatchSize,Window:MaximumBatchingWindowInSeconds,MaximumConcurrency:ScalingConfig.MaximumConcurrency,Responses:FunctionResponseTypes}' --output json
+aws lambda get-function-concurrency --function-name vector-embedding-consumer --output json
+aws scheduler get-schedule --group-name vector-outbox-relay --name vector-outbox-relay \
+  --query '{State:State}' --output json
+BASH
+```
+
+適用後の読み取り専用planでも、以下のdigest保持手順と既存ECS image_tag保持を使って不要な差分がないことを確認する。ローカルplan用SSOが利用できない場合は未実施として残し、実CIロールでの確認機会に実施する。確認のためだけに本体applyを再起動しない。
+
+**監視と判断**
+
+ロググループ`/aws/lambda/vector-embedding-consumer`で`embedding_initialization_failed`、`embedding_message_input_invalid`、`embedding_message_failed`、`embedding_message_completed`と既存の処理結果計測を確認する。LambdaのErrors・Duration・Throttles・ConcurrentExecutions、元キューの可視件数・処理中件数・最古メッセージ経過時間、DLQ件数と既存の滞留アラーム、RDSのCPU・接続数・空きメモリを確認する。新しいメトリクスやアラームは追加しない。
+
+部分バッチ応答の失敗はLambdaのErrorsだけでは判断しない。relay停止中かつキューが空なら実行がないことを異常とせず、受信有効化だけで実処理を検証済みとしない。既存Taskiqは並行稼働を維持する。
+
+SSM・DB・プロキシ・認証の共通障害が複数メッセージで繰り返される場合や、継続する設定不備が判明した場合は手動停止する。個別記事の失敗は既存の再配信・DLQへ任せ、自動停止やDLQからの自動再投入は追加しない。
+
+**緊急停止（このブロックは実際に受信を停止する）**
+
+以下は`vector-admin`で東京の対象関数と元キューに一致するマッピングを特定し、1件だけであることとUUIDを検証して停止する。失敗した場合は対象を推測して続行しない。CLIの停止はポーリングと新規呼び出しを停止する操作であり、実行中の処理を強制終了したり、メッセージを削除したりしない。[AWS CLI仕様](https://docs.aws.amazon.com/cli/latest/reference/lambda/update-event-source-mapping.html)
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+export AWS_PROFILE=vector-admin AWS_REGION=ap-northeast-1 AWS_PAGER=""
+account_id=$(aws sts get-caller-identity --query Account --output text)
+if ! [[ "$account_id" =~ ^[0-9]{12}$ ]]; then
+  printf '%s\n' 'AWSアカウントを確認できないため停止します。' >&2; exit 1
+fi
+function_arn="arn:aws:lambda:${AWS_REGION}:${account_id}:function:vector-embedding-consumer"
+queue_url=$(aws sqs get-queue-url --queue-name vector-article-embedding --query QueueUrl --output text)
+queue_arn=$(aws sqs get-queue-attributes --queue-url "$queue_url" --attribute-names QueueArn --query Attributes.QueueArn --output text)
+if ! [[ "$queue_arn" == "arn:aws:sqs:${AWS_REGION}:${account_id}:vector-article-embedding" ]]; then
+  printf '%s\n' '元キューのARNが一致しないため停止します。' >&2; exit 1
+fi
+mappings=$(aws lambda list-event-source-mappings --function-name "$function_arn" --event-source-arn "$queue_arn" --output json)
+mapping_uuid=$(printf '%s' "$mappings" | jq -er --arg function "$function_arn" --arg queue "$queue_arn" '
+  .EventSourceMappings |
+  if length == 1 and .[0].FunctionArn == $function and .[0].EventSourceArn == $queue
+  then .[0].UUID else error("対象関数・元キューに一致するマッピングを1件に特定できない") end')
+if ! [[ "$mapping_uuid" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]]; then
+  printf '%s\n' 'UUIDが不正なため停止します。' >&2; exit 1
+fi
+aws lambda update-event-source-mapping --uuid "$mapping_uuid" --no-enabled \
+  --query '{UUID:UUID,State:State}' --output json
+for attempt in {1..12}; do
+  state=$(aws lambda get-event-source-mapping --uuid "$mapping_uuid" --query State --output text)
+  case "$state" in
+    Disabled) printf '受信停止を確認: %s\n' "$mapping_uuid"; exit 0 ;;
+    Disabling|Updating|Enabled) sleep 5 ;;
+    *) printf '停止状態を確認できない: %s\n' "$state" >&2; exit 1 ;;
+  esac
+done
+printf '%s\n' '停止完了を確認できないため、AWS上の状態を確認してください。' >&2
+exit 1
+BASH
+```
+
+停止中は受信を再有効化する本体applyを承認しない。AWSだけを無効にすると、Terraformのenabled=trueが次回applyで復元されるため、コードと対応テストもenabled=falseにしてPR・マージ・承認付きapplyで停止状態を反映する。stateの手編集やignore_changesは追加しない。
+
+原因を解消してからenabled=trueと対応テストを戻し、PR plan・マージ・production承認付きapplyで再開する。再開時もdigestを保持し、Enabledの確認と監視を行う。DLQ再投入の具体的操作は別タスクとする。
+
+### ローカルplanでのdigest保持
+
+Terraform変数のdefault=nullだけでは現在の版は保持できない。既存の使い方の`terraform plan`を実行する前に、relayとConsumerの両方について次を実行する。通常のplan/apply workflowはこの処理を実装済み。ローカルの本番applyは実行せず、既存の承認付きCI経路を使用する。
+
+```bash
+# infra/awsで、認証とbackendの初期化後に実行する。
+set -euo pipefail
+relay_vars_tmp=$(mktemp ./outbox-relay-vars.XXXXXX)
+consumer_vars_tmp=$(mktemp ./embedding-consumer-vars.XXXXXX)
+trap 'rm -f "$relay_vars_tmp" "$consumer_vars_tmp"' EXIT
+terraform state pull | python3 scripts/resolve-outbox-relay-image.py > "$relay_vars_tmp"
+terraform state pull | python3 scripts/resolve-embedding-consumer-image.py > "$consumer_vars_tmp"
+mv "$relay_vars_tmp" outbox-relay.auto.tfvars.json
+mv "$consumer_vars_tmp" embedding-consumer.auto.tfvars.json
+```
+
+明示した版をplanする場合はConsumerのスクリプトへ`--digest "$CONSUMER_DIGEST"`を渡し、backend ECR内の存在も別途確認する。生成ファイルやstateをコミット・公開しない。stateの現行イメージが不正、現行インスタンスが複数、state取得失敗の場合は停止し、ファイルを手作業でnullへ変更して続行しない。
+
+### ローカルのイメージ起動検証
+
+リポジトリルートで実行する。AWSや外部AIに到達しないネットワークで、SSM・DB資源をモックし、実Geminiクライアント・Consumer・handlerをRICから呼ぶ。2回の空Recordsで応答と呼び出しごとの資源終了を検証する。業務処理は既存単体・実DB統合テストで検証する。
+
+```bash
+docker build --platform linux/arm64 -t vector-embedding-slice34:local backend
+docker run --rm --platform linux/arm64 --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m --network none \
+  -v "$PWD/infra/aws/scripts/verify-embedding-runtime.py:/verify-runtime.py:ro" \
+  --entrypoint /app/.venv/bin/python \
+  vector-embedding-slice34:local /verify-runtime.py
+```
+
+LambdaのCI管理権限はConsumer関数ARNとFunctionArn条件で限定する。マッピングのConsumerタグは作成時に必須とし、タグ操作も既存のConsumerタグ一致を要求するため、他のマッピングへタグを後付けして管理範囲を拡張できない。Consumerタグの変更・削除は許可しない。タグ付き作成とResourceTag条件の考え方は[AWSのABAC例](https://docs.aws.amazon.com/lambda/latest/dg/attribute-based-access-control-example.html)に合わせ、AWS上での適用確認は後続に残す。

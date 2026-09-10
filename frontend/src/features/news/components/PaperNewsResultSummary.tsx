@@ -1,20 +1,19 @@
-import type { ArticleQuery } from "@/types";
 import type { CategoryDetail } from "@/types/types.gen";
-import { getArticles } from "../api/get-articles";
+import type { getArticles } from "../api/get-articles";
 
 interface PaperNewsResultSummaryProps {
   activeCategory?: string;
   categories: CategoryDetail[];
-  filters: ArticleQuery;
+  articlesPromise: ReturnType<typeof getArticles>;
 }
 
 /** フィルタバー左の結果サマリ「<カテゴリ> · 全 N件」。total は cached getArticles を共用。 */
 export async function PaperNewsResultSummary({
   activeCategory,
+  articlesPromise,
   categories,
-  filters,
 }: PaperNewsResultSummaryProps) {
-  const { total } = await getArticles(filters);
+  const { total } = await articlesPromise;
   // 未知 slug (rename 後の stale URL 等) は内部 slug を露出させず「すべて」に倒す。
   const categoryName =
     activeCategory === undefined

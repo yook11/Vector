@@ -172,7 +172,7 @@ locals {
   # /aws/service/* (最新 AMI の ID など) は **account 部が空の ARN** で、`*` で
   # 巻き込むと bastion の AMI 参照が Deny で落ちる。秘密は全て自アカウントの
   # parameter にあるので、絞っても射程は変わらない。
-  secret_read_statements = [
+  secret_value_read_statements = [
     {
       Sid    = "NoOwnParameterValues"
       Effect = "Deny"
@@ -189,11 +189,16 @@ locals {
       Effect = "Deny"
       Action = [
         "secretsmanager:GetSecretValue",
-        "kms:Decrypt",
       ]
       Resource = "*"
     },
   ]
+  secret_read_statements = concat(local.secret_value_read_statements, [{
+    Sid      = "NoDecrypt"
+    Effect   = "Deny"
+    Action   = ["kms:Decrypt"]
+    Resource = "*"
+  }])
 }
 
 # thumbprint_list は指定しない (provider schema 上 optional + computed)。
@@ -279,18 +284,24 @@ resource "aws_iam_role_policy_attachment" "plan_read_only" {
 }
 
 resource "aws_iam_role_policy" "plan_deny_secret_read" {
+  # 全面Denyを外す前に限定復号ポリシーの明示Denyを取り付ける。
+  depends_on = [aws_iam_role_policy_attachment.lambda_config_readback]
+
   name = "deny-secret-read"
   role = aws_iam_role.ci["plan"].id
 
   policy = jsonencode({
     Version   = "2012-10-17"
-    Statement = local.secret_read_statements
+    Statement = local.secret_value_read_statements
   })
 }
 
 # --- terraform-apply ------------------------------------------------------
 
 resource "aws_iam_role_policy" "apply" {
+  # 全面Denyを外す前に限定復号ポリシーの明示Denyを取り付ける。
+  depends_on = [aws_iam_role_policy_attachment.lambda_config_readback]
+
   name = "terraform-apply"
   role = aws_iam_role.ci["apply"].id
 
@@ -519,7 +530,7 @@ resource "aws_iam_role_policy" "apply" {
       #
       # 1c は用途別のロールに、その用途以外の boundary を付けさせない Deny。
       # boundary.tf の local.role_boundary_groups から 1 行につき 1 本生成する。
-    ], local.boundary_pairing_statements, local.secret_read_statements)
+    ], local.boundary_pairing_statements, local.secret_value_read_statements)
   })
 }
 

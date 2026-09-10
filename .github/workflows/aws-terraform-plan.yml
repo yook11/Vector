@@ -126,6 +126,17 @@ jobs:
             > "$relay_vars_tmp"
           mv "$relay_vars_tmp" outbox-relay.auto.tfvars.json
 
+      - name: Preserve Embedding Consumer image from state
+        run: |
+          set -euo pipefail
+          # Terraformが読み込む設定ファイルは、生成成功後に配置する。
+          consumer_vars_tmp=$(mktemp ./embedding-consumer-vars.XXXXXX)
+          trap 'rm -f "$consumer_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-embedding-consumer-image.py \
+            > "$consumer_vars_tmp"
+          mv "$consumer_vars_tmp" embedding-consumer.auto.tfvars.json
+
       - name: Terraform plan
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}

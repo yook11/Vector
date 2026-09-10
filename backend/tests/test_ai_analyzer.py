@@ -21,7 +21,11 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.service import AssessmentService
+from app.analysis.assessment.service import (
+    AssessmentCompletion,
+    AssessmentCompletionKind,
+    AssessmentService,
+)
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.ai.gemini import GeminiCurator
@@ -484,8 +488,7 @@ async def test_assessment_persists_category(
     result = await svc.execute(
         ready, mock_assessor, analyzable_article_id=extraction.analyzable_article_id
     )
-    # in-scope 成功時 Service は assessment id (int) を返す
-    assert isinstance(result, int) and result > 0
+    assert result.kind is AssessmentCompletionKind.IN_SCOPE
 
     db_session.expire_all()
     analysis = (
@@ -495,7 +498,7 @@ async def test_assessment_persists_category(
             )
         )
     ).scalar_one()
-    assert analysis.id == result
+    assert analysis.id == result.analyzed_article_id
     assert analysis.category_id == expected_category_id
     assert analysis.investor_take == "理由テスト"
 
@@ -531,8 +534,7 @@ async def test_assessment_persists_rejection_when_out_of_scope(
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_assessor, analyzable_article_id=article.id)
-    # out-of-scope は Stage 5 chain しないため Service は None を返す
-    assert result is None
+    assert result == AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
 
     db_session.expire_all()
     rejection = (
