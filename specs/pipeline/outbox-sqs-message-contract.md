@@ -10,7 +10,7 @@ Status: Partially implemented
 
 - イベント本体: `backend/app/models/outbox_event.py`
 - 既存payload定義: `backend/app/collection/{article_acquisition,article_completion}/events.py`、`backend/app/analysis/{curation,assessment}/events.py`
-- キューと設定: `infra/aws/outbox_relay.tf`、`backend/app/lambda_handlers/settings.py`
+- キューと設定: `infra/aws/outbox_relay.tf`、`backend/app/lambda_handlers/outbox_relay/settings.py`
 
 ## Invariants
 

@@ -8,7 +8,7 @@ from botocore.session import Session
 
 from app.db.engine import create_lambda_engine
 from app.db.session import caller_managed_session_factory
-from app.lambda_handlers.settings import OutboxRelaySettings
+from app.lambda_handlers.outbox_relay.settings import OutboxRelaySettings
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.relay import OutboxRelay
 from app.outbox.sqs.publisher import SqsEventPublisher

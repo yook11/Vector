@@ -11,7 +11,6 @@ from app.analysis.embedding.errors import (
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import (
     EmbeddingCompletion,
-    EmbeddingCompletionReason,
     EmbeddingService,
 )
 from app.audit.stages.embedding import EmbeddingAuditRepository
@@ -20,7 +19,6 @@ __all__ = [
     "EMBEDDING_DIMENSION",
     "EmbeddingAuditRepository",
     "EmbeddingCompletion",
-    "EmbeddingCompletionReason",
     "EmbeddingError",
     "EmbeddingRepository",
     "EmbeddingResponseInvalidError",

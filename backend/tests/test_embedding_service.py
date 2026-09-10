@@ -33,7 +33,7 @@ from app.analysis.embedding.errors import (
     EmbeddingFailureReason,
     EmbeddingResponseInvalidError,
 )
-from app.analysis.embedding.service import EmbeddingCompletionReason, EmbeddingService
+from app.analysis.embedding.service import EmbeddingCompletion, EmbeddingService
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
@@ -171,7 +171,7 @@ async def test_execute_persists_embedding_on_success(
     ready = _make_ready(analyzed_article_id=analyzed_article_id)
     result = await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
-    assert result.reason is EmbeddingCompletionReason.SAVED
+    assert result is EmbeddingCompletion.SAVED
     embedder.embed_document.assert_called_once_with(ready)
 
     db_session.expire_all()
@@ -223,7 +223,7 @@ async def test_execute_shortcircuits_when_already_persisted(
     ready = _make_ready(analyzed_article_id=analyzed_article_id)
     result = await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
-    assert result.reason is EmbeddingCompletionReason.ALREADY_EMBEDDED
+    assert result is EmbeddingCompletion.ALREADY_EMBEDDED
     # 先行する write の値のまま、後続の save で上書きされていない
     db_session.expire_all()
     refetched = (
@@ -455,10 +455,8 @@ async def test_concurrent_services_commit_only_one_vector_and_success_audit(
                 for _ in range(2)
             ]
         )
-    assert [r.reason for r in results].count(EmbeddingCompletionReason.SAVED) == 1
-    assert [r.reason for r in results].count(
-        EmbeddingCompletionReason.ALREADY_EMBEDDED
-    ) == 1
+    assert results.count(EmbeddingCompletion.SAVED) == 1
+    assert results.count(EmbeddingCompletion.ALREADY_EMBEDDED) == 1
     assert embedder.embed_document.await_count == 2
     db_session.expire_all()
     stored = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)

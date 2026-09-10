@@ -24,7 +24,6 @@ from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import (
     EmbeddingCompletion,
-    EmbeddingCompletionReason,
     EmbeddingService,
 )
 from app.audit.error_fields import exception_fqn
@@ -63,9 +62,7 @@ class EmbeddingConsumer:
                     )
                 except EmbeddingReadyBuildBlockedError as blocked:
                     if blocked.code is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED:
-                        return EmbeddingCompletion(
-                            EmbeddingCompletionReason.ALREADY_EMBEDDED
-                        )
+                        return EmbeddingCompletion.ALREADY_EMBEDDED
                     if (
                         blocked.code
                         is EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING

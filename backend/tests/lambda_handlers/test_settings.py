@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.lambda_handlers.settings import OutboxRelaySettings
+from app.lambda_handlers.outbox_relay.settings import OutboxRelaySettings
 
 pytestmark = pytest.mark.unit
 
