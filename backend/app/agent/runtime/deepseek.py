@@ -28,8 +28,8 @@ from app.agent.runtime.llm_failure import (
     LlmAttemptFailed,
     llm_attempt_failed_from,
 )
+from app.ai_providers.deepseek.error_translator import translate_deepseek_error
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
-from app.analysis.deepseek_error_translator import translate_deepseek_error
 
 DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com/beta"
 DEEPSEEK_CLIENT_TIMEOUT_SECONDS: Final[int] = 20

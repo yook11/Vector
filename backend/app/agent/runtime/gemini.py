@@ -28,7 +28,7 @@ from app.agent.runtime.llm_failure import (
     LlmAttemptFailed,
     llm_attempt_failed_from,
 )
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderContentRejectionKind,
     AIProviderError,
     AIProviderInputRejectedError,
@@ -36,14 +36,14 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputBlockedError,
     AIProviderOutputTruncatedError,
 )
-from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
-from app.analysis.gemini_error_translator import (
+from app.ai_providers.gemini.error_translator import (
     OUTPUT_BLOCKED_FINISH_REASONS,
     GeminiContentRejectionReason,
     GeminiStateReason,
     output_blocked_reason,
     translate_gemini_error,
 )
+from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 
 
 class GeminiAgentRuntime:

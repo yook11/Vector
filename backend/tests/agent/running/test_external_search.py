@@ -40,8 +40,8 @@ from app.agent.planning.contract import (
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.ai_provider_errors import AIProviderNetworkError
-from app.analysis.deepseek_error_translator import DeepSeekStateReason
+from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
+from app.ai_providers.errors import AIProviderNetworkError
 from tests.agent.running._harness import (
     AS_OF,
     ExternalScopes,

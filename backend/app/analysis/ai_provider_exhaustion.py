@@ -8,7 +8,7 @@ stage hold reason / audit outcome_code と同一語彙で突き合わせられ�
 
 from __future__ import annotations
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderInsufficientBalanceError,
     AIProviderUsageLimitExhaustedError,
 )

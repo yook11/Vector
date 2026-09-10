@@ -10,9 +10,7 @@ import pytest
 from google.genai import errors, types
 from pydantic import SecretStr
 
-from app.ai_providers.gemini import client as client_module
-from app.ai_providers.gemini.settings import GeminiConnectionSettings
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
@@ -20,6 +18,8 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini import client as client_module
+from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.analysis.embedding.embedder import GeminiEmbedder

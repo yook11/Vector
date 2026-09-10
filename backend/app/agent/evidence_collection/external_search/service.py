@@ -41,7 +41,7 @@ from app.agent.recording.external_search import (
     logfire_external_search_recorder,
 )
 from app.agent.runtime.contract import AgentResponseInvalidError, AgentRuntime
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 
 __all__ = ["ExternalSearchService"]
 

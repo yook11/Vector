@@ -20,7 +20,7 @@ from opentelemetry.trace import SpanKind, StatusCode
 import app.agent.runtime.gemini as gemini_runtime_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
     AIProviderOutputTruncatedError,

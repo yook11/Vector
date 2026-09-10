@@ -24,7 +24,7 @@ from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.research_handoff.handoff import ORGANIZED_TEXT_MAX_CHARS
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.ai_provider_errors import AIProviderConfigurationError
+from app.ai_providers.errors import AIProviderConfigurationError
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 

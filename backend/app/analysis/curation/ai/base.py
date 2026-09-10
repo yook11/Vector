@@ -6,7 +6,7 @@ import abc
 
 import structlog
 
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.errors import CurationError

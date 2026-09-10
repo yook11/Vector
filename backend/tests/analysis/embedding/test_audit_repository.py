@@ -33,11 +33,12 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildBlockedCode,
@@ -51,7 +52,6 @@ from app.analysis.embedding.errors import (
 from app.analysis.embedding.task_errors import (
     to_embedding_task_error,
 )
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord

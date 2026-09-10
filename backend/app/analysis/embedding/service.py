@@ -11,7 +11,7 @@ from enum import StrEnum
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (

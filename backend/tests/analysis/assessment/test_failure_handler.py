@@ -27,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,
@@ -37,10 +37,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import map_provider_to_assessment
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration

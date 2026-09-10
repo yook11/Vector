@@ -12,7 +12,7 @@ from google.genai import errors as genai_errors
 
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderContentRejectionKind,
     AIProviderFailureMode,
     AIProviderInputRejectedError,
@@ -22,7 +22,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderRateLimitedError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from tests.agent.runtime._helpers import (
     FakeGeminiClient,
     FakeResponse,

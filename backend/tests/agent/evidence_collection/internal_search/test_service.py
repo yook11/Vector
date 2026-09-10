@@ -33,7 +33,7 @@ from app.agent.recording.internal_search import (
     InternalSearchFailed,
     InternalSearchSucceeded,
 )
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.analysis.embedding.domain.value_objects import (

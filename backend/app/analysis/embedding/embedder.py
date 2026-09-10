@@ -5,13 +5,13 @@ from typing import Final
 from google.genai.client import AsyncClient
 from google.genai.types import EmbedContentConfig
 
-from app.analysis.ai_provider_errors import AIProviderRequestInvalidError
-from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC, EmbeddingCallSpec
-from app.analysis.gemini_error_translator import (
+from app.ai_providers.errors import AIProviderRequestInvalidError
+from app.ai_providers.gemini.error_translator import (
     GeminiStateReason,
     translate_gemini_error,
 )
+from app.analysis.embedding.ai.base import BaseEmbedder
+from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC, EmbeddingCallSpec
 
 
 class GeminiEmbedder(BaseEmbedder):

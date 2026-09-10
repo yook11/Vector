@@ -14,7 +14,7 @@ from openai import RateLimitError as OpenAIRateLimitError
 from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime, DeepSeekOutputBinding
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,

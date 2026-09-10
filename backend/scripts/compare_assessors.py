@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.assessment.ai.gemini import GeminiAssessor

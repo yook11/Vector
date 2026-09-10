@@ -13,7 +13,7 @@ from opentelemetry.trace import StatusCode
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.error_type import span_error_type
 from app.agent.runtime.contract import AgentResponseInvalidError
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 
 __all__ = ["AgentPhase", "agent_phase"]
 

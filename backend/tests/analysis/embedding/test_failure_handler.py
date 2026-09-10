@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,
@@ -35,6 +35,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
@@ -42,7 +43,6 @@ from app.analysis.embedding.errors import (
     to_embedding_error,
 )
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord

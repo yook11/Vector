@@ -8,7 +8,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
@@ -431,7 +431,7 @@ class TestAssessContentStageSpan:
 
         期待値の根拠:
         - AIProviderConfigurationError: CODE="ai_error_configuration",
-          FAILURE_MODE=OPERATOR_ACTION_REQUIRED (ai_provider_errors.py)
+          FAILURE_MODE=OPERATOR_ACTION_REQUIRED (app/ai_providers/errors.py)
         - map_provider_to_assessment: not retryable → AssessmentTerminalError,
           failure_kind=mode.value="operator_action_required", code=exc.CODE
           (assessment/errors.py)
@@ -462,7 +462,7 @@ class TestAssessContentStageSpan:
         assert attrs["result"] == "failed"
         # failure_kind: OPERATOR_ACTION_REQUIRED.value (assessment/errors.py)
         assert attrs["failure_kind"] == "operator_action_required"
-        # code: AIProviderConfigurationError.CODE (ai_provider_errors.py)
+        # code: AIProviderConfigurationError.CODE (app/ai_providers/errors.py)
         assert attrs["code"] == "ai_error_configuration"
         # retryability: AssessmentTerminalError.RETRYABILITY (assessment/errors.py)
         assert attrs["retryability"] == "non_retryable"
@@ -480,7 +480,7 @@ class TestAssessContentStageSpan:
 
         期待値の根拠:
         - AIProviderNetworkError: CODE="ai_error_network",
-          FAILURE_MODE=ATTEMPT_SCOPED (ai_provider_errors.py)
+          FAILURE_MODE=ATTEMPT_SCOPED (app/ai_providers/errors.py)
         - map_provider_to_assessment: retryable → AssessmentRecoverableError,
           failure_kind="attempt_scoped", code="ai_error_network" (assessment/errors.py)
         - AssessmentRecoverableError: RETRYABILITY=RETRYABLE (assessment/errors.py)
@@ -512,7 +512,7 @@ class TestAssessContentStageSpan:
         attrs = stage_attrs(capfire)
         # failure_kind: ATTEMPT_SCOPED.value (assessment/errors.py)
         assert attrs["failure_kind"] == "attempt_scoped"
-        # code: AIProviderNetworkError.CODE (ai_provider_errors.py)
+        # code: AIProviderNetworkError.CODE (app/ai_providers/errors.py)
         assert attrs["code"] == "ai_error_network"
         # retryability: AssessmentRecoverableError.RETRYABILITY (assessment/errors.py)
         assert attrs["retryability"] == "retryable"
@@ -563,7 +563,7 @@ class TestAssessContentStageSpan:
         # error_class は最初の業務例外 (AssessmentRecoverableError) のまま
         # RuntimeError で上書きされていないことを確認 (no-override 保証)
         assert attrs["error_class"].endswith(".AssessmentRecoverableError")
-        # failure_kind も元の marker のまま (attempt_scoped, ai_provider_errors.py)
+        # failure_kind も元の marker のまま (attempt_scoped, app/ai_providers/errors.py)
         assert attrs["failure_kind"] == "attempt_scoped"
 
     @pytest.mark.parametrize("reraise", [True, False])

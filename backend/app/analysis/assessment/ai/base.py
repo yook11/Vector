@@ -6,7 +6,7 @@ import abc
 
 import structlog
 
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentError

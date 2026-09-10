@@ -11,7 +11,7 @@ from google.genai.client import AsyncClient
 from app.agent.recording.types import Usage
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
-from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
+from app.ai_providers.errors import AIProviderOutputBlockedError
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent
 from tests.agent.runtime.test_streaming_contract import (

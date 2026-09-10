@@ -11,8 +11,8 @@ from enum import StrEnum
 
 import pytest
 
-from app.analysis import ai_provider_errors as taxonomy
-from app.analysis.ai_provider_errors import (
+from app.ai_providers import errors as taxonomy
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderContentError,
     AIProviderError,

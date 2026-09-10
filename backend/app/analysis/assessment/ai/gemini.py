@@ -16,9 +16,14 @@ import structlog
 from google import genai
 from google.genai.types import GenerateContentConfig
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderOutputBlockedError,
+)
+from app.ai_providers.gemini.error_translator import (
+    GeminiStateReason,
+    output_blocked_reason,
+    translate_gemini_error,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
@@ -30,11 +35,6 @@ from app.analysis.assessment.ai.spec import (
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.gemini_error_translator import (
-    GeminiStateReason,
-    output_blocked_reason,
-    translate_gemini_error,
-)
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

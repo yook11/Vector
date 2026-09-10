@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderContentError,
     AIProviderError,
     AIProviderFailureMode,

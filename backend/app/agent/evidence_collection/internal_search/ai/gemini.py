@@ -17,17 +17,17 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
     InternalSearchQueries,
 )
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderRequestInvalidError,
 )
-from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
-from app.analysis.embedding.domain.value_objects import EmbeddingVector
-from app.analysis.gemini_error_translator import (
+from app.ai_providers.gemini.error_translator import (
     GeminiStateReason,
     translate_gemini_error,
 )
+from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
+from app.analysis.embedding.domain.value_objects import EmbeddingVector
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

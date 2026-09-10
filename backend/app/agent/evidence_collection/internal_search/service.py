@@ -29,7 +29,7 @@ from app.agent.recording.internal_search import (
     InternalSearchSucceeded,
     logfire_internal_search_recorder,
 )
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
 __all__ = ["InternalSearchService"]

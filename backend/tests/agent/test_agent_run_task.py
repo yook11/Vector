@@ -63,7 +63,7 @@ from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderError,
 )

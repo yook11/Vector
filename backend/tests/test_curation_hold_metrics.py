@@ -21,7 +21,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInsufficientBalanceError,
     AIProviderRequestInvalidError,
@@ -34,7 +34,7 @@ from tests.logfire._metric_helpers import assert_attribute_contract
 # set_stage_hold(reason: str) のシグネチャ自体は closed vocabulary を持たない
 # (curation/assessment/embedding 共有の Redis hold setter で reason は素通し文字列)。
 # 実運用では CurationFailureHandler._hold_reason が provider error の CODE を渡す
-# (app/analysis/ai_provider_errors.py)。stage hold を要する回復クラス
+# (app/ai_providers/errors.py)。stage hold を要する回復クラス
 # (OPERATOR_ACTION_REQUIRED / CONDITION_BASED_RECOVERY) の leaf CODE のみを
 # 許可値域として列挙する (SSoT を持たないための test 側由来コメント付き定数)。
 _ALLOWED_HOLD_REASONS = {

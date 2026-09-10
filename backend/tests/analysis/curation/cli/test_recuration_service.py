@@ -32,11 +32,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.cli.recuration_service import (
@@ -45,7 +46,6 @@ from app.analysis.curation.cli.recuration_service import (
 )
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.repository import CurationRepository
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource

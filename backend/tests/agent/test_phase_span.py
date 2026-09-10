@@ -22,7 +22,7 @@ from app.agent.contract import AnswerGenerationStopped
 from app.agent.phase_span import agent_phase
 from app.agent.planning.failure import PlanningError
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.ai_provider_errors import AIProviderNetworkError
+from app.ai_providers.errors import AIProviderNetworkError
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,

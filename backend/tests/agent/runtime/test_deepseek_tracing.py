@@ -16,7 +16,7 @@ from opentelemetry.trace import SpanKind, StatusCode
 
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
-from app.analysis.ai_provider_errors import AIProviderNetworkError
+from app.ai_providers.errors import AIProviderNetworkError
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.runtime._deepseek_helpers import (
     FakeDeepSeekClient,

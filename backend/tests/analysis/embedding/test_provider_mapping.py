@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderContentError,
     AIProviderError,
@@ -17,6 +17,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
+)
 from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingFailureReason,
@@ -27,10 +31,6 @@ from app.analysis.embedding.task_errors import (
     EmbeddingTaskError,
     EmbeddingTerminalError,
     to_embedding_task_error,
-)
-from app.analysis.gemini_error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
 )
 
 _CONTENT_REASON = GeminiContentRejectionReason.SAFETY

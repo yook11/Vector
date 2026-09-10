@@ -1,4 +1,4 @@
-"""``app.analysis.deepseek_error_translator`` の golden table テスト。
+"""``app.ai_providers.deepseek.error_translator`` の golden table テスト。
 
 DeepSeek (OpenAI SDK) の SDK 例外 / HTTP status → ``AIProvider*Error`` 分類を検証する。
 各分岐は CODE (class) に加え DeepSeek 状態の ``reason`` を自己記述し、catch-all は
@@ -25,17 +25,17 @@ from openai import (
 )
 from openai import RateLimitError as OpenAIRateLimitError
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.deepseek.error_translator import (
+    DeepSeekStateReason,
+    translate_deepseek_error,
+)
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
-)
-from app.analysis.deepseek_error_translator import (
-    DeepSeekStateReason,
-    translate_deepseek_error,
 )
 
 

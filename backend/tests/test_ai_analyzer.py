@@ -8,7 +8,7 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderNetworkError,
     AIProviderServiceUnavailableError,
 )
