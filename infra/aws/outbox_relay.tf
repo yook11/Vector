@@ -275,7 +275,7 @@ resource "aws_scheduler_schedule" "outbox_relay" {
 
   name                = local.outbox_relay_name
   group_name          = aws_scheduler_schedule_group.outbox_relay.name
-  state               = "DISABLED"
+  state               = "ENABLED"
   schedule_expression = "rate(1 minute)"
 
   flexible_time_window {

@@ -284,7 +284,7 @@ relayの120秒timeout、Outboxの150秒lease、最大5回の送信試行、30・
 1. DLQ、元キューの再配信・保持設定、Consumer専用の権限・ネットワーク・ログを整備する。この段階では受信を開始しない。
 2. consumer本体を実装し、成功・失敗・競合・記事不存在の契約をローカルで検証する。
 3. Lambda handler・実行イメージ・関数と無効状態のSQS起動トリガーを整備する。
-4. 配置・SSM設定を確認してConsumerの受信を先に有効化する。次にOutboxの未配信件数・イベント種類を確認してrelayの送信を開始し、実データで通信・実行・再配信・DLQ移動・Taskiqとの併用を確認する。
+4. 配置・SSM設定を確認してConsumerの受信を先に有効化する。次にスライス4.2の方針でrelayの送信を開始し、実データで通信・実行・再配信・DLQ移動・Taskiqとの併用を確認する。
 
 Doneは、正常処理・生成済み・競合でメッセージが対応完了となり、失敗が記録され、再配信上限後にDLQへ移り、Taskiqとの重複でDB結果を壊さないことを検証できた状態とする。ローカル実装完了と、AWS上での有効化・検証完了は区別して記録する。
 
@@ -322,7 +322,7 @@ CloudWatchの初期化・個別失敗ログ、既存計測、処理時間、ス�
 
 共通の接続・認証障害が繰り返される場合や継続する設定不備が判明した場合は、管理者CLIで対象関数・元キュー・一意のUUIDを確認して受信を手動停止する。個別記事の失敗は既存の再配信・DLQへ任せる。停止中の再有効化applyは承認せず、Terraformもenabled=falseへ反映する。原因解消後はTerraformからenabled=trueへ戻し、承認付きapplyで再開する。CLI停止は実行中処理を強制終了せず、キューのメッセージを削除しない。
 
-具体的なコマンドと確認項目は[受信有効化・監視・停止・再開手順](../../infra/aws/README.md#consumerの受信有効化監視停止再開スライス41)を参照する。次のタスクでOutboxの未配信件数・イベント種類を確認し、relayの定期送信を有効化する。実通信・再配信・DLQ移動・Taskiqとの実併用は送信開始後に確認する。
+具体的なコマンドと確認項目は[受信有効化・監視・停止・再開手順](../../infra/aws/README.md#consumerの受信有効化監視停止再開スライス41)を参照する。この時点の次工程はrelayの定期送信有効化とした。開始前の件数確認を省略する後続の決定はスライス4.2を参照する。実通信・再配信・DLQ移動・Taskiqとの実併用は送信開始後に確認する。
 
 検証結果（2026-09-10）:
 
@@ -330,6 +330,28 @@ CloudWatchの初期化・個別失敗ログ、既存計測、処理時間、ス�
 - READMEの3つのコマンドブロックをbash -nで確認した。停止手順はAWSを置き換えた13シナリオで、正常停止・状態遷移待ち・対象なし/複数・関数/キュー不一致・不正UUID/アカウント・取得/更新失敗・異常状態・待機上限を確認し、対象不正では更新を呼ばないことを検証した。実AWSでの停止操作は行っていない。
 - backend/frontendコードとイメージは未変更のため、全アプリテスト・イメージビルド・bootstrap検証は再実行していない。
 - vector-planはGetRoleCredentialsのForbiddenException（No access）で認証できず、ローカルの実環境planは未実施。実CIのPR planはPR作成後に確認し、想定差分以外があれば適用しない。AWSへの有効化apply、適用後の状態・再plan、実データ処理の確認は未実施。
+
+### スライス4.2：relayの定期送信有効化
+
+Problem: 更新済みrelayの定期送信を開始できるようにし、開始後にSQS送信とConsumerの実処理を確認する。
+Evidence: 2026-09-10に本体apply #44によるConsumer受信有効化と、apply #45によるrelayイメージ更新が完了した。relayはActive・LastUpdateStatus=Successful、SchedulerはDISABLED。配置したイメージのhandlerはOutboxRelay.run_onceを実行し、article.assessed_in_scopeだけをembeddingキューへ送信する。
+Invariants: 既存SchedulerだけをENABLEDへ更新する。1分間隔・Flexible Time Windowなし、relayの512MB・120秒・予約同時実行1、1回最大10件の確保、Consumerの有効な受信・実行上限、独立したdigest、他工程・Taskiqを維持する。
+Non-goals: この変更ではAWS適用・手動invoke・イメージ公開・digest更新・秘密値取得・bootstrapやアプリの変更を行わない。件数確認用のDB接続基盤、新しい制御・自動停止・再試行は追加しない。
+Done: 設定・mockテスト・適用後の監視と停止手順が一致する。実CI plan、production承認付きapply、送信・保存の実証は実施時点で別に記録する。
+
+ユーザーの選択により、開始前のOutbox未配信件数の確認は省略し、件数不明のまま開始後の実処理を確認する。従来の「未配信件数を先に確認する」順序をこの方針で置き換える。発生日時による除外はなく、古い未配信イベントも対象になる。対象は既存の未配信・未停止・再試行時刻到来・lease期限・試行上限条件を満たすarticle.assessed_in_scopeであり、他工程のイベントは送信しない。
+
+現在の目標状態はSchedulerのENABLEDであり、将来の新規作成でも有効になる。digest未指定で未作成の場合は従来どおり関数とSchedulerを作成しない。通常workflowではrelay・Consumerの既存digestを維持する。想定planは既存Schedulerのstate: DISABLED → ENABLEDの1更新だけで、Lambda・キューの再作成や不要な設定差分があれば適用前に確認する。
+
+開始後はrelayの起動・送信停止ログ、SQS送受信、Consumerの完了・失敗ログと成功監査・保存結果、DLQ、処理時間・スロットリング・DB負荷を確認する。1回の確保上限10件は、再試行や重複起動を含む1分間の厳密な送信上限ではない。キューが空であることやLambdaの正常終了だけでは保存成功を証明しない。再配信・DLQ移動・Taskiq併用は観測できた範囲を記録し、未確認を成功扱いしない。
+
+共通障害が継続したらSchedulerを手動停止し、必要ならConsumer受信も既存手順で停止する。TerraformもDISABLEDへ戻し、原因解消後に承認付きapplyで再開する。詳細は[relayの運用手順](../../infra/aws/OUTBOX_RELAY.md#定期送信の開始と監視スライス42)を参照する。
+
+検証結果（2026-09-10）:
+
+- 変更したTerraform設定・テストのfmt -check、本体のbackend未接続init・validate・全mock 7件が成功した。SchedulerのENABLED・起動間隔・対象関数、Consumerの有効な受信と各上限、独立digest、初回未指定時の未作成を確認した。既存Service Discoveryのfailure_threshold非推奨警告は残る。
+- git diff --checkが成功した。実行設定の差分はSchedulerのstateだけで、bootstrap・IAM・ネットワーク・workflow・イメージ・アプリコードは変更していない。backend/frontendの全テスト、イメージビルド、未変更bootstrapの検証は対象外として再実行していない。
+- vector-planは先行調査でGetRoleCredentialsのForbiddenException（No access）となっており、ローカル実環境planは未実施。実CIのPR planはPR作成後に確認する。今回のAWS適用、適用後の再plan、定期送信・保存の実証と緊急停止操作は未実施。
 
 ### スライス3.4：Lambdaと無効状態のSQSトリガー
 
