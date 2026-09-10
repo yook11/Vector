@@ -1,4 +1,12 @@
 mock_provider "aws" {
+  mock_resource "aws_subnet" {
+    defaults = { id = "subnet-00000000000000001" }
+  }
+
+  mock_resource "aws_lambda_function" {
+    defaults = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:test", last_modified = "2026-09-10T00:00:00.000+0000" }
+  }
+
   override_during = plan
   mock_data "aws_caller_identity" {
     defaults = { account_id = "123456789012" }
@@ -46,7 +54,7 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:sns:ap-northeast-1:123456789012:test-alerts" }
   }
   mock_resource "aws_ecr_repository" {
-    defaults = { arn = "arn:aws:ecr:ap-northeast-1:123456789012:repository/test" }
+    defaults = { arn = "arn:aws:ecr:ap-northeast-1:123456789012:repository/test", repository_url = "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/test" }
   }
 }
 
@@ -292,4 +300,98 @@ override_resource {
   override_during = plan
   target          = aws_security_group.outbox_sqs_endpoint
   values          = { id = "sg-00000000000000006" }
+}
+
+run "without_digest_no_consumer_or_mapping" {
+  command = plan
+  assert {
+    condition = (
+      length(aws_lambda_function.embedding_consumer) == 0 &&
+      length(aws_lambda_event_source_mapping.embedding_consumer) == 0 &&
+      output.embedding_consumer_function_name == null &&
+      output.embedding_consumer_function_arn == null &&
+      output.embedding_consumer_image_digest == null &&
+      output.embedding_consumer_event_source_mapping_uuid == null
+    )
+    error_message = "初回digest未指定ではConsumerもトリガーも作成しない。"
+  }
+}
+
+run "consumer_image_and_disabled_mapping" {
+  command = plan
+  variables {
+    embedding_consumer_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    outbox_relay_image_digest       = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+  assert {
+    condition = (
+      aws_lambda_function.embedding_consumer[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.embedding_consumer_image_digest}" &&
+      aws_lambda_function.outbox_relay[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.outbox_relay_image_digest}" &&
+      aws_lambda_function.embedding_consumer[0].function_name == "slice-test-embedding-consumer" &&
+      aws_lambda_function.embedding_consumer[0].package_type == "Image" &&
+      aws_lambda_function.embedding_consumer[0].architectures == tolist(["arm64"]) &&
+      aws_lambda_function.embedding_consumer[0].memory_size == 1024 &&
+      aws_lambda_function.embedding_consumer[0].timeout == 120 &&
+      aws_lambda_function.embedding_consumer[0].reserved_concurrent_executions == 10 &&
+      aws_lambda_function.outbox_relay[0].reserved_concurrent_executions == 1 &&
+      aws_scheduler_schedule.outbox_relay[0].state == "DISABLED"
+    )
+    error_message = "Consumerのイメージと実行上限をrelayから独立して設定する。"
+  }
+  assert {
+    condition = (
+      aws_lambda_function.embedding_consumer[0].image_config[0].entry_point == tolist(["/app/.venv/bin/python", "-m", "awslambdaric"]) &&
+      aws_lambda_function.embedding_consumer[0].image_config[0].command == tolist(["app.lambda_handlers.embedding.handler"]) &&
+      aws_lambda_function.embedding_consumer[0].image_config[0].working_directory == "/app" &&
+      aws_lambda_function.embedding_consumer[0].vpc_config[0].subnet_ids == toset([aws_subnet.embedding_consumer.id]) &&
+      aws_lambda_function.embedding_consumer[0].vpc_config[0].security_group_ids == toset([aws_security_group.embedding_consumer.id]) &&
+      aws_lambda_function.embedding_consumer[0].role == aws_iam_role.embedding_consumer.arn &&
+      aws_lambda_function.embedding_consumer[0].logging_config[0].log_group == aws_cloudwatch_log_group.embedding_consumer.name &&
+      aws_lambda_function.embedding_consumer[0].logging_config[0].log_format == "Text" &&
+      aws_lambda_function.embedding_consumer[0].tracing_config[0].mode == "PassThrough"
+    )
+    error_message = "既存入口を専用ネットワーク・権限・ログへ接続する。"
+  }
+  assert {
+    condition = aws_lambda_function.embedding_consumer[0].environment[0].variables == tomap({
+      ENV                           = "production"
+      DATABASE_URL                  = local.backend_db_url["vector_app"]
+      DB_IAM_AUTH                   = "true"
+      GEMINI_API_KEY_PARAMETER_PATH = local.embedding_consumer_parameter_path
+      EGRESS_PROXY_URL              = local.proxy_url
+    })
+    error_message = "秘密値・AWS予約変数を渡さず、IAM・専用SSM・プロキシ設定だけを渡す。"
+  }
+  assert {
+    condition = (
+      aws_lambda_event_source_mapping.embedding_consumer[0].function_name == aws_lambda_function.embedding_consumer[0].arn &&
+      aws_lambda_event_source_mapping.embedding_consumer[0].event_source_arn == aws_sqs_queue.outbox["embedding"].arn &&
+      !aws_lambda_event_source_mapping.embedding_consumer[0].enabled &&
+      aws_lambda_event_source_mapping.embedding_consumer[0].batch_size == 1 &&
+      aws_lambda_event_source_mapping.embedding_consumer[0].maximum_batching_window_in_seconds == 0 &&
+      aws_lambda_event_source_mapping.embedding_consumer[0].scaling_config[0].maximum_concurrency == 10 &&
+      aws_lambda_event_source_mapping.embedding_consumer[0].function_response_types == toset(["ReportBatchItemFailures"]) &&
+      aws_lambda_event_source_mapping.embedding_consumer[0].tags.Consumer == "slice-test-embedding-consumer" &&
+      output.embedding_consumer_image_digest == var.embedding_consumer_image_digest
+    )
+    error_message = "1件ずつの部分バッチ応答を設定するが、受信は開始しない。"
+  }
+  assert {
+    condition = (
+      length(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement) == 1 &&
+      toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.ArnLike["aws:SourceArn"]) == toset([local.outbox_relay_arn, local.embedding_consumer_arn]) &&
+      jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.StringEquals["aws:SourceAccount"] == "123456789012" &&
+      jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Principal.Service == "lambda.amazonaws.com" &&
+      toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Action) == toset(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"])
+    )
+    error_message = "backend ECRからの取得は同一アカウントのrelayとConsumerだけに許可する。"
+  }
+}
+
+run "reject_mutable_image_tag" {
+  command = plan
+  variables {
+    embedding_consumer_image_digest = "latest"
+  }
+  expect_failures = [var.embedding_consumer_image_digest]
 }
