@@ -528,7 +528,9 @@ async def test_sqs_processing_saves_once_and_records_only_business_failures(
     db_session, session_factory, target, embedder, capsys
 ):
     """保存・生成済み・本文不正・記事不存在を実Consumerへ接続し監査を重ねない。"""
-    from app.lambda_handlers.embedding import process_embedding_messages
+    from app.lambda_handlers.embedding.sqs_batch_handler import (
+        process_embedding_messages,
+    )
 
     payload, article_id = target
     missing = ArticleAssessedInScope(curation_id=999999, analyzed_article_id=999999)
@@ -566,7 +568,9 @@ async def test_sqs_processing_continues_after_provider_failure(
     db_session, session_factory, target, embedder
 ):
     """API失敗を応答へ残し、次のメッセージの保存と監査を確定する。"""
-    from app.lambda_handlers.embedding import process_embedding_messages
+    from app.lambda_handlers.embedding.sqs_batch_handler import (
+        process_embedding_messages,
+    )
 
     payload, _ = target
     embedder.embed_document.side_effect = [
@@ -652,8 +656,8 @@ async def test_consumer_with_invocation_database_resources(
     """呼び出し内のプールで保存し、切断後も失敗監査へ再接続する。"""
     from pydantic import SecretStr
 
-    from app.lambda_handlers import embedding_resources as resources_module
-    from app.lambda_handlers.settings import EmbeddingConsumerSettings
+    from app.lambda_handlers.embedding import resources as resources_module
+    from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 
     monkeypatch.setattr(
         resources_module,
@@ -720,9 +724,9 @@ async def test_lambda_assembly_saves_once_after_individual_failure(
     from pydantic import SecretStr
 
     from app.ai_providers.gemini import client as gemini_module
-    from app.lambda_handlers import embedding as handler_module
-    from app.lambda_handlers import embedding_resources as resource_module
-    from app.lambda_handlers.settings import EmbeddingConsumerSettings
+    from app.lambda_handlers.embedding import resources as resource_module
+    from app.lambda_handlers.embedding.handler import _run_embedding
+    from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 
     settings = EmbeddingConsumerSettings(
         env="test",
@@ -766,11 +770,11 @@ async def test_lambda_assembly_saves_once_after_individual_failure(
     records = [_sqs_record("saved", payload), _sqs_record("already", payload)]
     if api_fails_first:
         records.insert(0, _sqs_record("failed", payload))
-    response = await handler_module._run_embedding({"Records": records}, settings)
+    response = await _run_embedding({"Records": records}, settings)
     assert response == {
         "batchItemFailures": [{"itemIdentifier": "failed"}] if api_fails_first else []
     }
-    assert await handler_module._run_embedding(
+    assert await _run_embedding(
         {"Records": [_sqs_record("next-invocation", payload)]}, settings
     ) == {"batchItemFailures": []}
     assert secret.call_count == 2

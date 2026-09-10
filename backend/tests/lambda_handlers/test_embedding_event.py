@@ -12,7 +12,7 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScope,
     ArticleAssessedInScopeEvent,
 )
-from app.lambda_handlers.embedding_event import (
+from app.lambda_handlers.embedding.event import (
     EmbeddingEventInvalidError,
     parse_embedding_event,
 )

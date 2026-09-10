@@ -15,7 +15,8 @@ from app.aws.ssm import get_secret_parameter
 from app.db.engine import create_embedding_consumer_engine
 from app.db.iam import build_iam_password_provider
 from app.db.session import caller_managed_session_factory
-from app.lambda_handlers.settings import EmbeddingConsumerSettings
+from app.lambda_handlers.embedding.failure_handler import EmbeddingLambdaFailureHandler
+from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 
 logger = structlog.get_logger(__name__)
 
@@ -28,30 +29,18 @@ class EmbeddingResources:
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
-def _record_cleanup_failure(resource: str, exc: Exception) -> None:
-    try:
-        logger.warning(
-            "embedding_resources_cleanup_failed",
-            resource=resource,
-            error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
-        )
-    except Exception:  # noqa: S110
-        # 診断障害で利用結果を置き換えない。
-        pass
-
-
 def _close_sdk(close: Callable[[], None]) -> None:
     try:
         close()
     except Exception as exc:
-        _record_cleanup_failure("rds", exc)
+        EmbeddingLambdaFailureHandler(logger).handle_cleanup_failure("rds", exc)
 
 
 async def _dispose_engine(dispose: Callable[[], Awaitable[None]]) -> None:
     try:
         await dispose()
     except Exception as exc:
-        _record_cleanup_failure("engine", exc)
+        EmbeddingLambdaFailureHandler(logger).handle_cleanup_failure("engine", exc)
 
 
 @asynccontextmanager

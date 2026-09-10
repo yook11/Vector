@@ -72,7 +72,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 発行元のpayload検証・Outbox保存を維持し、relayのSQS publisherで保存済みの5項目を`ArticleAssessedInScopeEvent`として検証する。共通型はUUID・タイムゾーン付き日時・対象イベント種別・整数バージョン1・型付きpayloadを保証し、未知項目や数値文字列・真偽値・小数から整数への変換を拒否する。UUIDと日時のJSON文字列は明示的に復元する。記事存在やID同士の対応のDB照合は行わない。
 
-受信本文は`app/lambda_handlers/embedding_event.py`の`parse_embedding_event(body: str)`で解析し、同じ共通型を返す。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
+受信本文は`app/lambda_handlers/embedding/event.py`の`parse_embedding_event(body: str)`で解析し、同じ共通型を返す。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
 
 不正本文は`EmbeddingEventInvalidError`で伝える。理由はJSON解析の`invalid_json`、外側の構造・項目型の`invalid_envelope`、対象外種別の`unsupported_event_type`、未対応版の`unsupported_schema_version`、payload内部の`invalid_payload`の順で優先する。payload自体の欠落や非オブジェクトは外側の構造不正に含む。共有のassessed_event_validation_failureは、大分類と重複のない不変の検証詳細を返す。詳細は既知の項目名と固定コードだけとし、未知キーはeventまたはpayloadのunknown_fieldへ置き換える。本文・入力値・検証自由文を属性や原因・contextに保持せず、本文解析関数内ではログ・監査・通知を行わない。JSON解析失敗はinvalid_jsonと空の詳細一覧で返す。
 
@@ -82,7 +82,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 ### SQSメッセージ処理と部分バッチ応答
 
-`app/lambda_handlers/embedding.py`の`process_embedding_messages(event: object, *, consumer: EmbeddingConsumer)`は、呼び出し元が組み立てたConsumerを使用する。SSM・Engine・AIクライアントの生成やSQSへの直接操作は行わない。
+`app/lambda_handlers/embedding/sqs_batch_handler.py`の`process_embedding_messages(event: object, *, consumer: EmbeddingConsumer)`は、呼び出し元が組み立てたConsumerを使用する。SSM・Engine・AIクライアントの生成やSQSへの直接操作は行わない。
 
 最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はEmbeddingSqsInputErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
 
@@ -306,12 +306,20 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 
 ## Implementation
 
+### Lambda入口の配置整理
+
+送信側は`app/lambda_handlers/outbox_relay/`、受信側は`app/lambda_handlers/embedding/`に配置する。各フォルダのhandler.pyが起動・組み立て・終了を担い、settings.pyに専用設定を置く。Embeddingのsqs_batch_handler.pyはSQSレコード検証と部分バッチ応答、event.pyはJSON解析と共有イベント型への変換、resources.pyはSSM・DB資源の管理を担う。
+
+各パッケージの__init__.pyからhandler関数を公開し、`app.lambda_handlers.outbox_relay.handler`と`app.lambda_handlers.embedding.handler`の起動パスを維持する。Terraformのcommandとイメージ選択処理は変更しない。初期化順序、空Records、ID不正の全体失敗、本文不正の個別失敗、監査・通知・通信設定・業務処理は維持する。
+
+検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,292件、専用一時環境の`make test-integration`で1,351件が成功した。既存DB権限テスト22件はAlembic適用済みの`public.watchlist_entries`が必要なためスキップ。既存起動パスの関数解決と、relayがアプリ全体の設定を読み込まずにimportできることを確認した。ローカルにはLinux向け依存のawslambdaricがないためRuntime Interface Client経由の起動は未実施で、Pythonのモジュール・関数解決を検証した。AWSへの適用・デプロイは行っていない。
+
 ### スライス3.3：Lambdaハンドラーへの接続
 
 Problem: 作成済みの接続・業務処理部品を、1回のLambda呼び出しとして実行して応答する入口を提供する。
 Evidence: SSM・DBのopen_embedding_resources、Geminiのopen_gemini_client、新しいGeminiEmbedder、Consumerと既存SQS処理の契約を確認した。
 
-`app/lambda_handlers/embedding.py`の同期`handler(event, context)`がEmbeddingConsumerSettingsを生成し、asyncio.runで`_run_embedding(event, settings)`を実行する。contextは使用しない。非同期処理ではDB資源、Geminiクライアント、EmbedderとConsumerの順に初期化し、既存のprocess_embedding_messagesへ渡す。AsyncExitStackでGemini資源、DB資源の順に終了してからSqsBatchResponseを返す。
+`app/lambda_handlers/embedding/handler.py`の同期`handler(event, context)`がEmbeddingConsumerSettingsを生成し、asyncio.runで`_run_embedding(event, settings)`を実行する。contextは使用しない。非同期処理ではDB資源、Geminiクライアント、EmbedderとConsumerの順に初期化し、既存のprocess_embedding_messagesへ渡す。AsyncExitStackでGemini資源、DB資源の順に終了してからSqsBatchResponseを返す。
 
 同一呼び出し内で資源とConsumerを共有し、次の呼び出しには持ち越さない。DBは最初のSQLで接続し、接続確認SQLを追加しない。空Recordsも初期化を行ってから空の失敗一覧を返す。配送構造・本文の検証位置と引数型は変更せず、配送構造不正も初期化後の既存処理で拒否する。
 

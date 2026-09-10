@@ -9,8 +9,8 @@ from sqlalchemy import text
 
 from app.db import engine as engine_module
 from app.db.errors import DatabaseError, DatabaseTimeoutError
-from app.lambda_handlers import embedding_resources as module
-from app.lambda_handlers.settings import EmbeddingConsumerSettings
+from app.lambda_handlers.embedding import resources as module
+from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 
 
 @pytest.fixture

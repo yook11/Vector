@@ -1,6 +1,7 @@
 """Lambda入口の資源共有・初期化失敗・終了後の応答を検証する。"""
 
 import asyncio
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -16,10 +17,12 @@ from app.analysis.embedding.service import (
     EmbeddingCompletion,
     EmbeddingCompletionReason,
 )
-from app.lambda_handlers import embedding as module
-from app.lambda_handlers import embedding_resources as resource_module
-from app.lambda_handlers.settings import EmbeddingConsumerSettings
+from app.lambda_handlers.embedding import resources as resource_module
+from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
+from app.lambda_handlers.embedding.sqs_batch_handler import EmbeddingSqsInputError
 from tests.lambda_handlers.test_embedding import record
+
+module = import_module("app.lambda_handlers.embedding.handler")
 
 pytestmark = pytest.mark.unit
 
@@ -147,7 +150,7 @@ def test_empty_or_invalid_input_is_handled_after_initialization(wiring, event):
         if event == {"Records": []}:
             assert module.handler(event, None) == {"batchItemFailures": []}
         else:
-            with pytest.raises(module.EmbeddingSqsInputError):
+            with pytest.raises(EmbeddingSqsInputError):
                 module.handler(event, None)
     wiring.consumers[0].consume.assert_not_awaited()
     assert wiring.steps[-4:] == ["aio_close", "sdk_close", "http_close", "engine_close"]

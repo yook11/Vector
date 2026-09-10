@@ -14,8 +14,8 @@ from app.analysis.embedding.service import (
     EmbeddingCompletion,
     EmbeddingCompletionReason,
 )
-from app.lambda_handlers import embedding as module
-from app.lambda_handlers.embedding import (
+from app.lambda_handlers.embedding import sqs_batch_handler as module
+from app.lambda_handlers.embedding.sqs_batch_handler import (
     EmbeddingSqsInputError,
     process_embedding_messages,
 )
@@ -212,3 +212,39 @@ async def test_input_logging_failure_preserves_original_failure(consumer, monkey
         {"Records": [{"messageId": "bad"}, record()]}, consumer=consumer
     ) == {"batchItemFailures": [{"itemIdentifier": "bad"}]}
     consumer.consume.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("body_fields", "code"),
+    [
+        ({}, "missing_required_field"),
+        ({"body": None}, "invalid_type"),
+        ({"body": 3}, "invalid_type"),
+    ],
+)
+async def test_body_shape_failure_preserves_diagnostic_and_exact_message_id(
+    consumer, body_fields, code
+):
+    """本文不正を個別失敗として扱い、欠落と型不正の診断を維持する。"""
+    with capture_logs() as logs:
+        response = await process_embedding_messages(
+            {"Records": [{"messageId": " bad ", **body_fields}, record("good")]},
+            consumer=consumer,
+        )
+    assert response == {"batchItemFailures": [{"itemIdentifier": " bad "}]}
+    assert logs[0]["reason"] == "invalid_body"
+    assert logs[0]["issues"] == [{"field": "body", "code": code}]
+    consumer.consume.assert_awaited_once()
+
+
+async def test_duplicate_id_precedes_body_validation(consumer):
+    """本文不正が先にあっても、一覧のID不正を全体失敗として先に確定する。"""
+    with capture_logs() as logs, pytest.raises(EmbeddingSqsInputError) as caught:
+        await process_embedding_messages(
+            {"Records": [{"messageId": "duplicate"}, record("duplicate")]},
+            consumer=consumer,
+        )
+    assert caught.value.reason is module.EmbeddingSqsInputReason.DUPLICATE_MESSAGE_ID
+    assert caught.value.record_index == 1
+    assert [log["event"] for log in logs] == ["embedding_sqs_input_invalid"]
+    consumer.consume.assert_not_awaited()

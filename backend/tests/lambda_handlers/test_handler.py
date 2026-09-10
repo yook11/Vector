@@ -1,13 +1,15 @@
 """Lambda入口の組み立て・実行・終了の境界を確認する。"""
 
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pydantic import ValidationError
 
-from app.lambda_handlers import outbox_relay as entry
-from app.lambda_handlers.settings import OutboxRelaySettings
+from app.lambda_handlers.outbox_relay.settings import OutboxRelaySettings
+
+entry = import_module("app.lambda_handlers.outbox_relay.handler")
 
 pytestmark = pytest.mark.unit
 
