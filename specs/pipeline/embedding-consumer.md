@@ -306,6 +306,23 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 
 ## Implementation
 
+### HTTP設定の分離
+
+Problem: Geminiが使う共通HTTP処理のimportでアプリ全体の必須設定を要求される依存を解消する。
+Evidence: 外部HTTPファクトリがapp.config.settingsを参照し、BFF秘密情報やfrontend URLなどの読み込みを伴っていた。
+
+`app/http/settings.py`のHttpSettingsへEGRESS_PROXY_URLのフィールドと検証を移した。全体設定Settingsも同じ型を継承する。EGRESS_PROXY_URLは必須とし、未設定・空文字・Noneを拒否する。内部namespaceの許可値はHTTP設定側の定義を通知先検証でも再利用し、許可範囲を変更しない。プロキシ条件は全環境で共通なので、HttpSettingsには環境区分を追加しない。
+
+make_external_async_clientは生成時にHttpSettingsを作り、環境変数から値を取得する。import時の設定生成・キャッシュ・app.config参照をなくす。HTTP設定自身は.envを読み込まないため、外部実通信を行うすべての環境でEGRESS_PROXY_URLを渡す。既存の全体設定オブジェクトへの代入はHTTPの経路を変更しない。
+
+Invariants: http/httpsと既存内部namespaceの検証、プロキシ必須の通信境界、SSRF・TLS・リダイレクト制御を維持する。設定不足ではtransport生成前に失敗し、直接接続へのフォールバックや呼び出し側proxy引数による迂回を許さない。GeminiのAPIキー取得と通信タイムアウトは既存の責務に残す。
+Non-goals: ログ初期化、Terraform、デプロイ、新しい環境変数・依存パッケージ・通信制御の追加は行わない。
+Done: 必要最小限の環境だけでEmbedding入口のimportとGeminiクライアント生成ができ、全体設定の読み込みが発生しないことと既存検証の互換性を確認する。
+
+検証結果（2026-09-10）: Ruff lint・format checkはapp全体と変更テストで成功。全単体テスト6,316件、全統合テスト1,351件が成功し、既存DB権限テスト22件は必要なAlembic適用済みpublic.watchlist_entriesがないためスキップされた。別プロセスでapp.configのimportを禁止し、最小環境でのGemini生成とプロキシ指定、不正設定をimport時ではなく生成時に拒否することを確認した。外部AI・AWSへの実通信とデプロイは実施していない。
+
+プロキシ必須化の検証（2026-09-10）: 未設定・空文字・Noneを拒否し、呼び出し側のproxy引数でも設定不足を迂回できないことを確認した。Ruff lint・format check、全単体テスト6,319件、全統合テスト1,351件が成功。既存DB権限テスト22件は上記と同じ理由でスキップ。DB・SSM経路、AWS設定・デプロイは変更していない。
+
 ### Lambda入口の配置整理
 
 送信側は`app/lambda_handlers/outbox_relay/`、受信側は`app/lambda_handlers/embedding/`に配置する。各フォルダのhandler.pyが起動・組み立て・終了を担い、settings.pyに専用設定を置く。Embeddingのhandler.pyはバッチ検証、各レコードの本文検証・Consumer呼び出し・結果記録と部分バッチ応答までを進め、event.pyはJSON解析と共有イベント型への変換、resources.pyはSSM・DB資源の管理を担う。

@@ -12,6 +12,9 @@ import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+# 外部通信はモックし、プロキシ必須条件には非機密のテスト専用値を渡す。
+os.environ["EGRESS_PROXY_URL"] = "http://proxy.vector.internal:3128"
+
 _REPO_ROOT_ENV = Path(__file__).resolve().parent.parent.parent / ".env"
 
 if not _REPO_ROOT_ENV.exists():

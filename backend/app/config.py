@@ -12,6 +12,13 @@ from pydantic import (
 from pydantic_settings import SettingsConfigDict
 
 from app.db.settings import DatabaseSettings
+from app.http.settings import (
+    INTERNAL_HOST_SUFFIXES as _ALLOWED_INTERNAL_HOST_SUFFIXES,
+)
+from app.http.settings import (
+    INTERNAL_NAMESPACE_GLOBS as _INTERNAL_NAMESPACE_GLOBS,
+)
+from app.http.settings import HttpSettings
 
 # backend/app/config.py から 2 階層上がプロジェクトルート
 _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -36,19 +43,6 @@ _INTERNAL_API_SECRET_MIN_LENGTH = 32
 # secret 持ち出し経路になる。env 値が攻撃者ホストに向かないことを起動時に構造検証する。
 # global allowlist は全環境共通、本番は内部 namespace に絞る (production narrowing)。
 _ALLOWED_INTERNAL_FRONTEND_HOSTS = frozenset({"localhost", "127.0.0.1", "frontend"})
-# 実行基盤が持つ内部 DNS namespace。先頭 dot が境界なので evilvector.internal は
-# マッチしない。`.internal` は ICANN が private-use 用に予約した TLD で公開 DNS に
-# 委任されないため、AWS 分を足しても外部ホストへの到達手段は増えない
-# (`.flycast` は Fly が内部 resolver で名乗るだけで、予約の裏付けは無い)。
-# 値は Terraform の `internal_namespace` と共有する契約 (infra/aws/variables.tf)。
-# egress_proxy_url も同じ suffix で縛る。proxy は全 task の外向き通信の経路なので、
-# 攻撃者ホストに向いた場合の射程は revalidate 宛先より広い。
-_ALLOWED_INTERNAL_HOST_SUFFIXES = (".flycast", ".vector.internal")
-# error message 用の表示形。suffix を足したときに message だけ古くなるのを防ぐ。
-_INTERNAL_NAMESPACE_GLOBS = " / ".join(
-    f"*{suffix}" for suffix in _ALLOWED_INTERNAL_HOST_SUFFIXES
-)
-
 # Logfire write token の形式 (pylf_v1_<region 2文字>_<英数字>)。region は us / eu に
 # 限らず将来増えうるため固定列挙せず 2 文字の構造でのみ縛り、別 token の取り違えと
 # 端末 paste 由来の制御文字 / 空白混入を起動時に弾く。
@@ -79,7 +73,7 @@ def _assert_strong_secret(raw: str, name: str) -> None:
         )
 
 
-class Settings(DatabaseSettings):
+class Settings(DatabaseSettings, HttpSettings):
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE), extra="ignore", hide_input_in_errors=True
     )
@@ -134,13 +128,6 @@ class Settings(DatabaseSettings):
     # default 値を持たせず、env 入れ忘れは Pydantic の起動時検証で止める。
     frontend_url: str
     internal_frontend_base_url: str
-
-    # 外向き通信の経路。設定されていれば ``make_external_async_client`` が全 client に
-    # proxy として差し込む。未設定なら直接接続 (Fly / compose の既定)。
-    # httpx は transport を明示すると env の proxy を読まないため、HTTPS_PROXY だけでは
-    # この経路に効かない。env を読む SDK 経路、この settings 経路、proxy を経由しない
-    # 内部宛経路の 3 通りに分かれる。
-    egress_proxy_url: str | None = None
 
     # タスクキュー
     redis_url: str = "redis://localhost:6379/0"
@@ -204,32 +191,6 @@ class Settings(DatabaseSettings):
             "destination; expected localhost / 127.0.0.1 / frontend (compose) or an "
             f"internal namespace host ({_INTERNAL_NAMESPACE_GLOBS})"
         )
-
-    @field_validator("egress_proxy_url")
-    @classmethod
-    def _validate_egress_proxy_url(cls, v: str | None) -> str | None:
-        """外向き通信の経路を内部 namespace のホストに限定する (起動時 fail-fast)。
-
-        この値は全 task の全外向き通信が通る経路なので、攻撃者ホストに向いた場合の
-        射程は revalidate 宛先より広い (平文 http の上流では header ごと渡る)。
-        dev host は許さない: proxy が居るのは AWS だけで、他環境では未設定が正しい。
-        """
-        if v is None:
-            return v
-        scheme = urlparse(v).scheme
-        if scheme not in ("http", "https"):
-            raise ValueError(
-                f"EGRESS_PROXY_URL must use http or https scheme, got {scheme!r}"
-            )
-        host = _internal_host(v)
-        if host is None:
-            raise ValueError("EGRESS_PROXY_URL must include a host")
-        if not host.endswith(_ALLOWED_INTERNAL_HOST_SUFFIXES):
-            raise ValueError(
-                f"EGRESS_PROXY_URL host {host!r} is not an internal namespace host "
-                f"({_INTERNAL_NAMESPACE_GLOBS})"
-            )
-        return v
 
     @field_validator("agentcore_gateway_url")
     @classmethod
