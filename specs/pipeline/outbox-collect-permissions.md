@@ -1,0 +1,40 @@
+# 取得ワーカーのOutbox追加権限
+
+Problem: 取得ワーカーのOutbox INSERTが権限不足で失敗し、記事とイベントの保存がロールバックされている。
+Evidence: 2026-09-10のfetchログにoutbox_eventsへのInsufficientPrivilegeErrorがある。fetchのDBユーザーはvector_collectであり、z14は必要な表だけを明示GRANTする。z21で追加したOutboxにはcollect用GRANTがない。
+Invariants: 記事・監査・Outboxの同一トランザクション、collectの限定権限、relayの配信状態更新権限を維持する。collectにはイベント追加とORMのRETURNINGに必要な列参照だけを許可し、payload参照・配信状態更新・削除を許可しない。
+Non-goals: AWS適用、手動GRANT、DBモデルやテーブル構造変更、vector_appへの切り替え、全テーブル権限、Redis権限の無条件拡大は行わない。
+Done: 新しいAlembic revisionで権限を付与し、直前revisionからのupgrade/downgrade/upgrade、実ORM INSERTと拒否すべき操作を実PostgreSQLで確認する。適用は既存の承認付きmigration経路とし、適用後に取得・投資判定・SQS送受信を確認する。
+
+## 修正
+
+z22でoutbox_eventsへのINSERTと、event_id・schema_version・occurred_at・next_attempt_at・attempt_countのSELECTをvector_collectに付与する。これらはORMがserver defaultの取得に使う列である。UUIDはgen_random_uuid()で生成し、sequence権限は不要。payloadや他列のSELECT、UPDATE、DELETE、TRUNCATEは追加しない。default privilegesは変更しない。
+
+PostgreSQLではINSERTに加え、RETURNINGで参照する列のSELECTが必要である。[公式INSERT仕様](https://www.postgresql.org/docs/current/sql-insert.html)
+
+既存revisionを書き換えず、z21から進む新revisionを追加する。downgradeは追加権限だけをREVOKEし、データを削除しない。ただし稼働中の取得ワーカーは再びOutbox保存に失敗するため、運用上の切り戻しは送信元との整合を確認する。lock_timeoutとstatement_timeoutは各5秒とする。
+
+## 適用と確認
+
+既存gateではGRANTを自動expandの許可対象にしていないため、MIGRATION_KINDはcontractとし、gateを変更しない。DBとしては権限の追加だけでデータ削除・列変更はない。既存migration workflowのcontractモードでこのrevisionを含むイメージを用意し、production-migration承認後に適用する。contractの前提である直前mainの互換アプリ反映・ledger確認も省略しない。具体的な入力と順序は[既存migration手順](../../infra/aws/MIGRATION_WORKFLOW.md)に従う。ワーカーのコード変更は不要だが、既存contract gateが要求する互換版の反映条件を満たすかは適用前に確認する。migration用イメージには新revisionを含める。
+
+適用後はfetchの権限エラーが止まり、取得保存件数、本文整形・投資判定の完了、relayの送信、Consumerの完了が進むことを確認する。今回のローカル検証と本番復旧は分けて記録する。
+
+RedisのSCAN拒否は別の境界である。現行Taskiqは期限予約回収でSCANを使うが、SCANへのMATCHは呼び出し側の指定でありACLによるキー名列挙の制限ではない。キー名列挙を許可するか、SCAN不要の設計にするかを確認中。DBの復旧をこの判断と切り離して進める。
+
+## 検証結果（2026-09-10）
+
+- Ruff lint・format checkが成功。全単体テスト6,351件が成功した。
+- make test-integrationで1,352件成功、既存のDBユーザー隔離テスト22件はmigration適用済みpublic.watchlist_entriesを前提とするためスキップ。今回追加した権限テストは実行・成功した。
+- 隔離schemaにz21の表を作り、z22のupgrade・downgrade・upgradeを実行した。vector_collectで実ORMによるイベント保存ができ、payload参照・配信状態参照・UPDATE・DELETE・TRUNCATEは42501で拒否され、downgrade後もイベント2件が保持されることを確認した。
+- 初回の全テストコマンドは統合テストも選択してDB未起動で失敗したため、単体をnot integrationで分離し、その後に使い捨てDBの全統合テストを実行した。また最初のexpand宣言は既存gateで拒否されたため、GRANTを自動許可する変更はせずcontractの手動確認対象へ修正し、全単体テストを再実行した。
+- migration gateはkind=contract・auto_allowed=noを確認。本番へのmigration・GRANT・Redis ACL変更は未実施であり、復旧確認は適用後に行う。
+
+## CIの前提差修正
+
+Problem: CIの統合テストDBにはvector_appだけがあり、ローカルcomposeが作るvector_collectをテストが暗黙に要求していた。
+Evidence: CIでtest_collect_outbox_grant_round_trip_and_orm_contractがUndefinedObjectErrorで失敗した。ci.ymlの統合jobとdocker-compose.test.ymlのrole初期化が異なる。
+Invariants: 本番migrationのrole前提・GRANT範囲は変更しない。テストをskipせず、既存roleは変更しない。contract PRにworkflow変更は混在させない。
+Done: テスト自身のtransaction内で不足時だけNOLOGIN roleを作り、roleの有無の両環境で実DBテストを通す。作成roleはfixtureのtransaction rollbackで除去する。
+
+追加確認: vector_collectを持たない専用の使い捨てDBで新規テスト1件が成功し、終了後にpg_rolesからvector_collectが消えていることを確認した。ローカル既存roleの存在に依存しない。
