@@ -52,7 +52,6 @@ from app.collection.sources.definitions.anthropic import (
 from app.collection.sources.definitions.cleantechnica import CleanTechnicaSource
 from app.collection.sources.definitions.cloudflare import CloudflareBlogSource
 from app.collection.sources.definitions.cornell import (
-    CORNELL_FEEDS,
     CornellChronicleSource,
 )
 from app.collection.sources.definitions.deepmind import DeepMindSource
@@ -96,7 +95,7 @@ from app.collection.sources.definitions.microsoft_research import (
     MicrosoftResearchSource,
 )
 from app.collection.sources.definitions.monoist import MONOistSource
-from app.collection.sources.definitions.nasa import NASA_FEEDS, NASASource
+from app.collection.sources.definitions.nasa import NASASource
 from app.collection.sources.definitions.nist import NISTSource
 from app.collection.sources.definitions.nsf import NSFSource
 from app.collection.sources.definitions.openai import OpenAISource
@@ -342,8 +341,8 @@ _MANIFEST: list[_ManifestEntry] = [
         NASASource,
         _multi_feed_rss(
             {
-                NASA_FEEDS[0]: "nasa_for_oracle_feed_a.xml",
-                NASA_FEEDS[1]: "nasa_for_oracle_feed_b.xml",
+                NASASource.acquisition.feeds[0]: "nasa_for_oracle_feed_a.xml",
+                NASASource.acquisition.feeds[1]: "nasa_for_oracle_feed_b.xml",
             }
         ),
         None,
@@ -381,8 +380,12 @@ _MANIFEST: list[_ManifestEntry] = [
         CornellChronicleSource,
         _multi_feed_rss(
             {
-                CORNELL_FEEDS[0]: "cornell_for_oracle_feed_a.xml",
-                CORNELL_FEEDS[1]: "cornell_for_oracle_feed_b.xml",
+                CornellChronicleSource.acquisition.feeds[
+                    0
+                ]: "cornell_for_oracle_feed_a.xml",
+                CornellChronicleSource.acquisition.feeds[
+                    1
+                ]: "cornell_for_oracle_feed_b.xml",
             }
         ),
         None,

@@ -35,7 +35,7 @@ Issue: [#295](https://github.com/yook11/Vector/issues/295)
 - 既存の収集対象、取得順、選択・重複除去、本文採用、URL・日時変換の結果を維持する。
 - ソース名、取得頻度、観測origin、本文補完方針を維持する。補完方針の参照に通信やReader生成を必要としない。
 - 空title・空URL・日時欠落・短い本文を写像で棄却しない。品質判定、URLの安全性検証・正規化は既存の後段へ渡す。
-- 通信の安全性、通信失敗と読取失敗の分類・伝達、監査への接続を維持する。
+- 通信の安全性と個別の通信・読取失敗の分類を維持する。新RSS経路の全取得失敗は原因一覧として監査へ接続する。
 - 任意関数は同期の純粋関数とし、通信・DBアクセス・保存・キュー投入を行わない。
 - 任意関数の例外を握りつぶさない。空結果への置換や旧取得経路へのfallbackを行わない。
 
@@ -73,7 +73,7 @@ Issue: [#295](https://github.com/yook11/Vector/issues/295)
 | `completion_policy` | 既存値を維持。RSS本文の採用ルールとは別の概念 |
 | `observed_origin` | 既存の`feed`を維持 |
 
-RSS取得先の正本は`feeds`とする。新RSSソースには旧`endpoint_url`を要求しない。旧属性を要求するテストのための互換コードは作らず、実際の取得先URLが維持されることを検証する。既存ソースの取得先とDBは変更しない。
+RSS取得先の正本はソースクラスの`acquisition.feeds`とし、URL一覧を宣言内へ直接記述する。新RSSソースには旧`endpoint_url`を要求しない。旧属性を要求するテストのための互換コードは作らず、実際の取得先URLが維持されることを検証する。既存ソースの取得先とDBは変更しない。
 
 ### 本文採用ルール
 
@@ -136,7 +136,9 @@ class MicrosoftResearchSource:
 - 空の`feeds`は宣言不備として実行前に検出する。
 - 複数フィードは既存どおり逐次取得。一部の通信・読取失敗は記録して続行する。
 - 1フィードでも成功したらその候補を使用する。正常に読めた空フィードも成功に含む。
-- 全フィード失敗時は最初の通信・読取エラーを伝播する。
+- 単一フィードを含め全取得失敗時は、URLと元の例外を持つ`RssFeedFailure`一覧を`RssFeedErrors`で伝播する。型は集約を表し、投げる条件はFetcherが決める。
+- `RssFeedErrors`は取得失敗として扱い、codeは`rss_feed_errors`、failure_kindは`rss_feeds`。原因の一つでも再試行可能なら全体も再試行可能と分類する。実行頻度・再試行回数は変えない。
+- 失敗監査の`feed_failures`に巡回順の全原因を保存する。例外の生メッセージは保存せず、既存の安全なメッセージ抽出とURL秘匿を適用する。DBカラム追加は行わない。
 - 部分失敗の捕捉はReader呼び出しの`ExternalFetchError`・`UnreadableResponseError`のみ。404も含めて続行する。想定外例外では後続フィードを取得せず即時伝播する。固有関数はこの捕捉範囲に含めない。
 - フィード単位の成功・失敗は既存の`source_feed_fetched`・`source_feed_fetch_failed`と記録項目を維持し、単一フィードにも適用する。部分失敗のDB監査は追加しない。
 - 固有関数の例外はFetcherで捕捉・再分類せず、元の例外・原因を既存のソース取得失敗処理へ渡す。標準処理へのfallbackや記事単位の握りつぶしは行わない。後続候補で失敗した場合も既存の保存トランザクションを維持し、未commit分をrollbackする。
@@ -218,3 +220,11 @@ class MicrosoftResearchSource:
 - 巡回順・部分失敗・空成功・初出維持・selectの順序と例外伝達、実DBでの保存・監査・rollbackを確認した。
 - backend lint・format通過、単体 **6306 passed**、専用DB統合 **1354 passed / 22 skipped**。
 - skipは既存のDB権限境界テストがAlembic適用済みschemaを要求するため。専用backend型チェックCLI未構成のため静的型チェック未実行。詳細はスライス3実装プランを参照。
+
+
+### 失敗一覧への変更と宣言の直接記述（2026-09-10）
+
+- フィードURLは各ソースのacquisition.feedsへ直接記述し、別の一覧定数を撤去した。
+- 全取得失敗はRssFeedErrorsで全原因を伝播し、監査feed_failuresに保存する。最初の原因だけを代表とする処理とsuccess_countを撤去した。
+- 再試行可能な原因が一つでもあれば全体をretryableと分類する。既存の再試行実行方針は変更していない。
+- 追加変更のlint・format通過、全単体6314 passed、専用DB統合1355 passed / 22 skipped。OpenAPI一致を確認しfrontend型生成は不要。型チェックCLI未構成と既存DB権限境界テストのskip条件は上記と同じ。

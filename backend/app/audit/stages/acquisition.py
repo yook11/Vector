@@ -8,7 +8,11 @@ from typing import ClassVar, TypedDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import AcquisitionPayload, BasePipelineEventPayload
+from app.audit.domain.payloads import (
+    AcquisitionPayload,
+    BasePipelineEventPayload,
+    RssFeedFailurePayload,
+)
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import exception_fqn, redacted_audit_message
 from app.audit.failure_projection import (
@@ -19,7 +23,11 @@ from app.audit.failure_projection import (
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
-from app.collection.article_acquisition.errors import AcquisitionError
+from app.collection.article_acquisition.errors import (
+    AcquisitionError,
+    AcquisitionReadError,
+    RssFeedErrors,
+)
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
 )
@@ -133,6 +141,7 @@ class SourceAcquisitionAuditRepository:
             source_name=source_name,
             error_message=redacted_audit_message(_error_message(exc)),
             error_chain=extract_error_chain(exc),
+            feed_failures=_feed_failure_payloads(exc),
             **_origin_payload_fields(exc),
         )
         await self._append_event(
@@ -263,3 +272,21 @@ def _error_message(exc: BaseException) -> str:
     if isinstance(origin, ExternalFetchError | UnreadableResponseError):
         return origin._default_message()  # noqa: SLF001 (PII-free 既定の意図的利用)
     return str(exc)
+
+
+def _feed_failure_payloads(exc: BaseException) -> list[RssFeedFailurePayload] | None:
+    """各フィードの元の原因を既存の秘匿規則で監査へ写す。"""
+    if not isinstance(exc, RssFeedErrors):
+        return None
+    return [
+        RssFeedFailurePayload(
+            feed_url=redact_secrets(failure.feed_url),
+            code=failure.error.CODE,
+            error_class=exception_fqn(failure.error),
+            error_message=redacted_audit_message(
+                _error_message(AcquisitionReadError(origin=failure.error))
+            ),
+            error_chain=extract_error_chain(failure.error),
+        )
+        for failure in exc.failures
+    ]

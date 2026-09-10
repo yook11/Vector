@@ -26,7 +26,10 @@ from app.collection.article_acquisition.reader.read_errors import (
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_acquisition.strategy import SOURCES
-from app.collection.external_fetch_errors import FetchSsrfBlockedError
+from app.collection.external_fetch_errors import (
+    FetchOriginServerError,
+    FetchSsrfBlockedError,
+)
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
@@ -444,7 +447,8 @@ async def test_unexpected_error_records_then_reraises(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "scenario", ["partial_success", "all_failed", "selection_failed"]
+    "scenario",
+    ["partial_success", "all_failed", "all_failed_retryable", "selection_failed"],
 )
 async def test_multi_feed_task_preserves_persistence_and_failure_audit(
     scenario: str,
@@ -490,10 +494,16 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
         link="https://venturebeat.com/ai/short",
         content_encoded="Short summary.",
     )
+    all_failed = scenario.startswith("all_failed")
+    second_error = (
+        FetchOriginServerError(status_code=503, reason="unavailable")
+        if scenario == "all_failed_retryable"
+        else FetchSsrfBlockedError("blocked")
+    )
     reader = AsyncMock(
         side_effect=(
-            [read_error, FetchSsrfBlockedError("blocked")]
-            if scenario == "all_failed"
+            [read_error, second_error]
+            if all_failed
             else [[full, short], read_error if scenario == "partial_success" else []]
         )
     )
@@ -554,13 +564,24 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
         row = events[0]
         assert row.event_type == "failed"
         assert row.outcome_code == (
-            "read_malformed_content" if scenario == "all_failed" else "unexpected_error"
+            "rss_feed_errors" if all_failed else "unexpected_error"
         )
-        assert row.payload["error_chain"][-1] == "builtins.ValueError"
-        expected_error = (
-            "UnreadableResponseError" if scenario == "all_failed" else "RuntimeError"
-        )
-        assert any(
-            name.endswith(f".{expected_error}") for name in row.payload["error_chain"]
-        )
+        if all_failed:
+            assert row.error_class.endswith(".RssFeedErrors")
+            assert row.retryability == (
+                "retryable" if scenario == "all_failed_retryable" else "non_retryable"
+            )
+            failures = row.payload["feed_failures"]
+            assert [f["feed_url"] for f in failures] == list(
+                MultiSource.acquisition.feeds
+            )
+            assert [f["code"] for f in failures] == [read_error.CODE, second_error.CODE]
+            assert failures[0]["error_chain"][-1] == "builtins.ValueError"
+            assert failures[0]["error_class"].endswith(".UnreadableResponseError")
+            assert failures[1]["error_class"].endswith(
+                f".{type(second_error).__name__}"
+            )
+        else:
+            assert row.payload["error_chain"][-1] == "builtins.ValueError"
+            assert row.payload["feed_failures"] is None
         enqueue.assert_not_awaited()

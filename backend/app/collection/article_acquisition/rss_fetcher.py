@@ -7,6 +7,7 @@ from typing import assert_never
 
 import structlog
 
+from app.collection.article_acquisition.errors import RssFeedErrors, RssFeedFailure
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
@@ -55,8 +56,7 @@ class RssFetcher:
     async def fetch(self, source: RssSource) -> AsyncIterator[FetchedArticle]:
         acquisition = source.acquisition
         entries: list[RssEntry] = []
-        success_count = 0
-        first_error: ExternalFetchError | UnreadableResponseError | None = None
+        failures: list[RssFeedFailure] = []
         for feed_url in acquisition.feeds:
             try:
                 fetched = await self._reader.fetch(
@@ -72,11 +72,8 @@ class RssFetcher:
                     code=exc.CODE,
                     error=str(exc),
                 )
-                if first_error is None:
-                    first_error = exc
+                failures.append(RssFeedFailure(feed_url=feed_url, error=exc))
                 continue
-            # 正常に読めた空フィードも取得成功に含める。
-            success_count += 1
             logger.info(
                 "source_feed_fetched",
                 source=str(source.name),
@@ -84,8 +81,8 @@ class RssFetcher:
                 entries_count=len(fetched),
             )
             entries.extend(fetched)
-        if success_count == 0 and first_error is not None:
-            raise first_error
+        if len(failures) == len(acquisition.feeds):
+            raise RssFeedErrors(failures)
         if isinstance(source, RequiresScopeFilter):
             entries = [entry for entry in entries if source.in_scope(entry)]
         if isinstance(source, RequiresSelection):

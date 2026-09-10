@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Final
+from typing import ClassVar
 
 from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.domain.observed_article import ObservedOrigin
@@ -15,22 +15,20 @@ from app.collection.sources.rss_acquisition import RssAcquisition, RssBodyPolicy
 from app.collection.sources.rss_dedup import dedup_by_link
 from app.collection.sources.source_name import SourceName
 
-NASA_FEEDS: Final[tuple[str, ...]] = (
-    "https://www.nasa.gov/feed/",
-    "https://www.nasa.gov/news-release/feed/",
-    "https://www.nasa.gov/technology/feed/",
-    "https://www.nasa.gov/aeronautics/feed/",
-    "https://www.nasa.gov/missions/station/feed/",
-    "https://www.nasa.gov/missions/artemis/feed/",
-)
-
 
 class NASASource:
     """NASA news の複数 feed Source。"""
 
     name: ClassVar[SourceName] = SourceName("NASA")
     acquisition: ClassVar[RssAcquisition] = RssAcquisition(
-        feeds=NASA_FEEDS,
+        feeds=(
+            "https://www.nasa.gov/feed/",
+            "https://www.nasa.gov/news-release/feed/",
+            "https://www.nasa.gov/technology/feed/",
+            "https://www.nasa.gov/aeronautics/feed/",
+            "https://www.nasa.gov/missions/station/feed/",
+            "https://www.nasa.gov/missions/artemis/feed/",
+        ),
         parse_mode="text",
         body_policy=RssBodyPolicy.CONTENT_ENCODED,
     )

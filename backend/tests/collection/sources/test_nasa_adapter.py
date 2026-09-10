@@ -10,7 +10,6 @@ from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.sources.definitions.nasa import (
-    NASA_FEEDS,
     NASASource,
 )
 from tests.collection.sources._fixture_tools import fixture_tools
@@ -87,15 +86,15 @@ async def test_empty_link_entry_passes_through_for_audit() -> None:
     items = await _collect(_EmptyLinkParser())
 
     # 6 feed × (空 link 1 + 非空 link 1) = 12 件全部 yield。
-    assert len(items) == len(NASA_FEEDS) * 2
+    assert len(items) == len(NASASource.acquisition.feeds) * 2
     empty_link_count = sum(1 for i in items if i.url == "")
-    assert empty_link_count == len(NASA_FEEDS)
+    assert empty_link_count == len(NASASource.acquisition.feeds)
 
 
 @pytest.mark.asyncio
 async def test_nasa_config_invariants() -> None:
-    assert len(NASA_FEEDS) == 6
-    assert NASA_FEEDS[0] == "https://www.nasa.gov/feed/"
+    assert len(NASASource.acquisition.feeds) == 6
+    assert NASASource.acquisition.feeds[0] == "https://www.nasa.gov/feed/"
     # Pattern R: content_encoded を plain text 化して本文採用
     items = await _collect(_DuplicatingParser())
     body = items[0].body

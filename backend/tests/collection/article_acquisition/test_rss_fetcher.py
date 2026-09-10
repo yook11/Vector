@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import feedparser
 import pytest
 
+from app.collection.article_acquisition.errors import RssFeedErrors
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
@@ -167,11 +168,19 @@ async def test_fetch_failure_propagates_without_legacy_fallback(
 
     reader = AsyncMock(spec=RssReader)
     reader.fetch.side_effect = error
-    with pytest.raises(type(error)) as caught:
+    expected = RuntimeError if isinstance(error, RuntimeError) else RssFeedErrors
+    with pytest.raises(expected) as caught:
         _ = [
             a async for a in fetch_articles(SourceWithOldRead, ReaderTools(rss=reader))
         ]
-    assert caught.value is error
+    if isinstance(caught.value, RssFeedErrors):
+        assert len(caught.value.failures) == 1
+        assert (
+            caught.value.failures[0].feed_url == SourceWithOldRead.acquisition.feeds[0]
+        )
+        assert caught.value.failures[0].error is error
+    else:
+        assert caught.value is error
     reader.fetch.assert_awaited_once()
 
 

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, call
 import pytest
 from structlog.testing import capture_logs
 
+from app.collection.article_acquisition.errors import RssFeedErrors
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.article_acquisition.reader.read_errors import (
@@ -106,22 +107,24 @@ async def test_partial_failure_is_logged_and_other_feeds_continue(
 
 
 @pytest.mark.asyncio
-async def test_all_failures_preserve_first_exception_and_cause() -> None:
+async def test_all_failures_preserve_every_exception_and_cause() -> None:
     reader = AsyncMock(spec=RssReader)
     cause = ValueError("parser cause")
     first = UnreadableResponseError(
         reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
     )
     first.__cause__ = cause
-    reader.fetch.side_effect = [
+    errors = [
         first,
         FetchResourceNotFoundError(status_code=404, reason="not_found"),
         FetchOriginServerError(status_code=503, reason="last_failure"),
     ]
-    with capture_logs() as logs, pytest.raises(UnreadableResponseError) as caught:
+    reader.fetch.side_effect = errors
+    with capture_logs() as logs, pytest.raises(RssFeedErrors) as caught:
         await _collect(reader)
-    assert caught.value is first
-    assert caught.value.__cause__ is cause
+    assert [failure.feed_url for failure in caught.value.failures] == list(_FEEDS)
+    assert [failure.error for failure in caught.value.failures] == errors
+    assert caught.value.failures[0].error.__cause__ is cause
     assert reader.fetch.await_count == 3
     assert len([log for log in logs if log["event"] == "source_feed_fetch_failed"]) == 3
 
