@@ -1,6 +1,6 @@
 # 宣言的なRSSソースと方式別Fetcherへの移行
 
-Status: スライス1・2実装・検証完了（スライス3〜4は未実装）
+Status: スライス1〜3実装・検証完了（スライス4は未実装）
 作成日: 2026-09-09
 Issue: [#295](https://github.com/yook11/Vector/issues/295)
 
@@ -57,7 +57,7 @@ Issue: [#295](https://github.com/yook11/Vector/issues/295)
 | 共通取得入口 | ソースの取得契約に対応する経路へ明示的に委譲する |
 | 既存取り込みサービス | 出口を受け取り、検証・保存・監査・後段処理へ進める |
 
-巡回機構は既存`MultiFeedRssReader`を移行中に再利用できるが、同じ巡回処理を二重実装しない。最終的な配置はRSS Fetcherの責務に合わせて整理する。
+巡回機構はRSS Fetcherに集約する。単一・複数フィードを同じ処理で取得し、旧`MultiFeedRssReader`と`ReaderTools.multi_feed_rss()`はスライス3で撤去する。
 
 ## ソース宣言
 
@@ -90,7 +90,7 @@ RSS取得先の正本は`feeds`とする。新RSSソースには旧`endpoint_url
 
 ソースクラスに必要な関数を`staticmethod`として定義し、取得側が`runtime_checkable`なProtocolへの適合を`isinstance`で判定して呼ぶ。未定義なら標準動作を使う。ソースはProtocolを継承しない。特殊ソースのフラグ、ソース名による分岐、関数の登録辞書、独自の署名検証は作らない。
 
-スライス2の契約は`sources/rss_hooks.py`の`RequiresBodyTransform`・`RequiresUrlTransform`・`RequiresPublishedAtResolution`・`RequiresScopeFilter`。`select`の契約・実行はスライス3で追加する。
+スライス2の契約は`sources/rss_hooks.py`の`RequiresBodyTransform`・`RequiresUrlTransform`・`RequiresPublishedAtResolution`・`RequiresScopeFilter`。スライス3では`RequiresSelection`を追加し、`select(entries: list[RssEntry]) -> list[RssEntry]`を呼ぶ。空列にも一度適用し、返却順序を尊重する。
 
 | 関数 | 入出力 | 未定義時 |
 | --- | --- | --- |
@@ -125,7 +125,7 @@ class MicrosoftResearchSource:
 
 ## 実行順序と失敗契約
 
-以下は複数フィード対応後も含む最終契約。スライス2では単一フィードのみを取得し、`select`を実行せず、scope選別 → 候補ごとのURL変換 → 日時解決 → 本文採用・平文化・本文変換の順とする。`RssFetcher.fetch(source: RssSource)`がソースを受け取り、Reader注入と共通入口の宣言検証を維持する。
+スライス3から単一・複数フィードを同じ巡回処理で取得する。`RssFetcher.fetch(source: RssSource)`がソースを受け取り、Reader注入と共通入口の宣言検証を維持する。
 
 1. `feeds`を宣言順に取得・解析し、各フィード内の順序を維持して結合する。
 2. `in_scope`で対象候補を選ぶ。
@@ -137,7 +137,8 @@ class MicrosoftResearchSource:
 - 複数フィードは既存どおり逐次取得。一部の通信・読取失敗は記録して続行する。
 - 1フィードでも成功したらその候補を使用する。正常に読めた空フィードも成功に含む。
 - 全フィード失敗時は最初の通信・読取エラーを伝播する。
-- 関数や解析実装の想定外の例外は部分的な通信失敗に変換しない。
+- 部分失敗の捕捉はReader呼び出しの`ExternalFetchError`・`UnreadableResponseError`のみ。404も含めて続行する。想定外例外では後続フィードを取得せず即時伝播する。固有関数はこの捕捉範囲に含めない。
+- フィード単位の成功・失敗は既存の`source_feed_fetched`・`source_feed_fetch_failed`と記録項目を維持し、単一フィードにも適用する。部分失敗のDB監査は追加しない。
 - 固有関数の例外はFetcherで捕捉・再分類せず、元の例外・原因を既存のソース取得失敗処理へ渡す。標準処理へのfallbackや記事単位の握りつぶしは行わない。後続候補で失敗した場合も既存の保存トランザクションを維持し、未commit分をrollbackする。
 - NASA・Cornellの重複除去は非空のraw linkをキーに初出を残す。URL変換より前に実行し、空linkはすべて後段へ渡す。
 
@@ -172,6 +173,8 @@ class MicrosoftResearchSource:
 
 ### 3. 複数フィード
 
+詳細: [スライス3実装プラン](../../plans/collection/declarative-rss-acquisition-slice3.md)
+
 - NASA・Cornellを移行する。
 - 巡回・結合・部分失敗・`select`の適用を共通化する。
 
@@ -198,7 +201,7 @@ class MicrosoftResearchSource:
 - [ ] 通常のRSS追加と固有関数を持つRSS追加の手順を記録する。
 - [ ] 検証結果と未実行項目・理由を記録する。
 
-各スライスの実装・検証結果はリンク先の実装プランに記録する。上記Doneは全4スライスの完了条件であり、スライス2まででは完了としない。非RSSへの展開は別の実装計画とする。
+各スライスの実装・検証結果はリンク先の実装プランに記録する。上記Doneは全4スライスの完了条件であり、スライス3まででは完了としない。非RSSへの展開は別の実装計画とする。
 
 ### スライス2の検証結果（2026-09-09）
 
@@ -206,3 +209,12 @@ class MicrosoftResearchSource:
 - 本文・関数の契約、VentureBeatの分析可能／補完待ちへの分岐、後続候補失敗時のrollbackと監査への原因伝達を確認した。
 - backend lint・format通過、単体 **6101 passed**、専用DB統合 **1338 passed / 22 skipped**。
 - skipは既存のDB権限境界テストがAlembic適用済み`public.watchlist_entries`を要求するため。専用backend型チェックCLIは未構成のため静的型チェック未実行。詳細はスライス2実装プランに記録した。
+
+
+### スライス3の検証結果（2026-09-10）
+
+- NASA・Cornellを複数フィードの宣言とselectへ移行し、旧Reader・専用factoryを撤去した。単一・複数フィードが同じ巡回処理を使う。
+- 既存の7fixtureを4組に分けて変更前後で実行し、全FetchedArticleフィールドが一致した。
+- 巡回順・部分失敗・空成功・初出維持・selectの順序と例外伝達、実DBでの保存・監査・rollbackを確認した。
+- backend lint・format通過、単体 **6306 passed**、専用DB統合 **1354 passed / 22 skipped**。
+- skipは既存のDB権限境界テストがAlembic適用済みschemaを要求するため。専用backend型チェックCLI未構成のため静的型チェック未実行。詳細はスライス3実装プランを参照。

@@ -1,20 +1,4 @@
-"""Cornell Chronicle 取得経路 (Source 宣言 + ``MultiFeedRssReader``)。
-
-per-feed 失敗隔離 / 全 feed 失敗 raise / 0-entry 成功は ``MultiFeedRssReader``
-の責務 (``test_multi_feed_rss_reader``)。本テストは Cornell Source 固有の不変条件
-— feed 横断 dedup (``select``) / Pattern H (body=None, ``map_entry``) / 空 link
-素通し (failure-visibility) / Cornell config — を ``fetch_articles`` engine 経由で
-pin する。
-
-固定する不変条件:
-
-- INV-1 dedup: 1 記事が複数 taxonomy feed に出現しても yield URL は一意
-- INV-2 Pattern H: yield 全 item の ``body`` は ``None`` (``map_entry`` 既定)
-- INV-3 failure-visibility: 空 link entry は dedup 対象外で素通し、converter 層の
-  ``acquisition_conversion_url_missing`` 監査経路を維持する
-  (Pattern H なので body も None)
-- INV-4 Cornell config: ``CORNELL_FEEDS`` は 6 taxonomy feed
-"""
+"""Cornellの宣言取得・重複除去・本文不採用を共通入口から検証する。"""
 
 from __future__ import annotations
 
