@@ -15,6 +15,7 @@ import { timingSafeEqual } from "node:crypto";
 import { revalidateTag } from "next/cache";
 import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { renewArticleListRevision } from "@/lib/cache/article-list-revision";
 import { requireEnv } from "@/lib/env";
 
 // backend→frontend revalidate Bearer。BFF JWT 署名鍵とは別 secret に分離
@@ -55,6 +56,9 @@ export async function POST(req: NextRequest) {
 
   for (const tag of parsed.data.tags) {
     revalidateTag(tag, { expire: 0 });
+  }
+  if (parsed.data.tags.includes("articles:list")) {
+    renewArticleListRevision();
   }
   return NextResponse.json({ ok: true, count: parsed.data.tags.length });
 }

@@ -44,6 +44,7 @@ vi.mock("@/features/auth", () => ({
 }));
 
 vi.mock("@/features/news", () => ({
+  ArticleListUpdateNotice: () => <aside>新着確認</aside>,
   DashboardArticleListSkeleton: () => <p>記事を更新中…</p>,
   DashboardMasthead: ({
     themeSlot,
@@ -82,6 +83,10 @@ vi.mock("@/lib/auth/guards", () => ({
 
 vi.mock("@/lib/auth/role", () => ({
   narrowRole: () => "member",
+}));
+
+vi.mock("@/lib/cache/article-list-revision", () => ({
+  getArticleListRevision: () => "revision-a",
 }));
 
 import DashboardPage from "./page";

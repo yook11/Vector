@@ -9,6 +9,7 @@ import {
 } from "@/components/paper";
 import { UserMenu } from "@/features/auth";
 import {
+  ArticleListUpdateNotice,
   DashboardArticleListSkeleton,
   DashboardMasthead,
   DashboardPaperArticleList,
@@ -23,6 +24,7 @@ import {
 import { getWatchlistIds } from "@/features/watchlist";
 import { getCurrentSession } from "@/lib/auth/guards";
 import { narrowRole } from "@/lib/auth/role";
+import { getArticleListRevision } from "@/lib/cache/article-list-revision";
 import type { SearchParams } from "@/lib/types/route";
 import type { ArticleQuery } from "@/types";
 
@@ -38,10 +40,11 @@ export default async function DashboardPage({
   const session = await getCurrentSession();
   const isAdmin = narrowRole(session?.user.role ?? "user") === "admin";
   const navItems = getNavItems(isAdmin);
+  const articleListRevision = getArticleListRevision();
 
   // 独立した request は最初にまとめて開始し、カテゴリ待ちで外枠を止めない。
-  const categoriesPromise = getCategories();
-  const articlesPromise = getArticles(filters);
+  const categoriesPromise = getCategories(articleListRevision);
+  const articlesPromise = getArticles(filters, articleListRevision);
   const watchedIdsPromise = getWatchlistIds();
 
   return (
@@ -51,6 +54,7 @@ export default async function DashboardPage({
         <Suspense fallback={<DashboardInitialSkeleton />}>
           <DashboardContent
             articlesPromise={articlesPromise}
+            articleListRevision={articleListRevision}
             categoriesPromise={categoriesPromise}
             filters={filters}
             navItems={navItems}
@@ -102,12 +106,14 @@ function DashboardInitialSkeleton() {
 
 async function DashboardContent({
   articlesPromise,
+  articleListRevision,
   categoriesPromise,
   filters,
   navItems,
   watchedIdsPromise,
 }: {
   articlesPromise: ReturnType<typeof getArticles>;
+  articleListRevision: string;
   categoriesPromise: ReturnType<typeof getCategories>;
   filters: ArticleQuery;
   navItems: ReturnType<typeof getNavItems>;
@@ -161,13 +167,15 @@ async function DashboardContent({
             }
           >
             <PaperNewsResultSummary
-              filters={filters}
+              articlesPromise={articlesPromise}
               categories={categoriesData.items}
               {...categoryProps}
             />
           </Suspense>
           <PaperNewsControls />
         </section>
+
+        <ArticleListUpdateNotice displayedRevision={articleListRevision} />
 
         <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
           <Suspense

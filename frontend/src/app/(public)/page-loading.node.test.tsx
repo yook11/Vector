@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getWatchlistIds: vi.fn(),
   parseArticleQuery: vi.fn(),
   getCurrentSession: vi.fn(),
+  getArticleListRevision: vi.fn(),
 }));
 
 vi.mock("@/components/layout/nav-items", () => ({
@@ -37,6 +38,7 @@ vi.mock("@/features/auth", () => ({
 }));
 
 vi.mock("@/features/news", () => ({
+  ArticleListUpdateNotice: () => null,
   DashboardArticleListSkeleton: () => null,
   DashboardMasthead: () => null,
   DashboardPaperArticleList: () => null,
@@ -59,6 +61,10 @@ vi.mock("@/lib/auth/guards", () => ({
 
 vi.mock("@/lib/auth/role", () => ({
   narrowRole: vi.fn().mockReturnValue("member"),
+}));
+
+vi.mock("@/lib/cache/article-list-revision", () => ({
+  getArticleListRevision: mocks.getArticleListRevision,
 }));
 
 function createDeferred(): Deferred {
@@ -95,6 +101,7 @@ beforeEach(() => {
   mocks.getCurrentSession
     .mockReset()
     .mockResolvedValue({ user: { role: "user" } });
+  mocks.getArticleListRevision.mockReset().mockReturnValue("revision-a");
 });
 
 afterEach(() => {
@@ -112,6 +119,8 @@ describe("Dashboard initial loading shell", () => {
     expect.soft(mocks.getCategories).toHaveBeenCalledTimes(1);
     expect.soft(mocks.getArticles).toHaveBeenCalledTimes(1);
     expect.soft(mocks.getWatchlistIds).toHaveBeenCalledTimes(1);
+    expect.soft(mocks.getCategories).toHaveBeenCalledWith("revision-a");
+    expect.soft(mocks.getArticles).toHaveBeenCalledWith({}, "revision-a");
   });
 });
 

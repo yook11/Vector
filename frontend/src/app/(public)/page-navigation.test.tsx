@@ -349,8 +349,7 @@ describe("protected page navigation feedback", () => {
       await protectedRouteTree(
         <PublicError
           error={new Error("route failure")}
-          reset={() => undefined}
-          unstable_retry={() => undefined}
+          retry={() => undefined}
         />,
       ),
     );
