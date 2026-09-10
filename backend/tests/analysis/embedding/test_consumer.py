@@ -642,3 +642,67 @@ async def test_borrowed_gemini_embedder_through_consumer(
         assert audits[0].payload["vector_dimension"] == EMBEDDING_DIMENSION
     else:
         assert stored.embedding is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disconnect", [False, True])
+async def test_consumer_with_invocation_database_resources(
+    db_session, test_database_url, target, embedder, monkeypatch, disconnect
+):
+    """呼び出し内のプールで保存し、切断後も失敗監査へ再接続する。"""
+    from pydantic import SecretStr
+
+    from app.lambda_handlers import embedding_resources as resources_module
+    from app.lambda_handlers.settings import EmbeddingConsumerSettings
+
+    monkeypatch.setattr(
+        resources_module,
+        "get_secret_parameter",
+        lambda **kwargs: SecretStr("private"),
+    )
+    config = EmbeddingConsumerSettings(
+        env="test",
+        database_url=test_database_url,
+        db_iam_auth=False,
+        aws_region="ap-northeast-1",
+        gemini_api_key_parameter_path="/key",
+    )
+    event, article_id = target
+    disconnected = asyncio.Event()
+    async with resources_module.open_embedding_resources(config) as resources:
+        async with resources.session_factory() as session:
+            original_pid = await session.scalar(text("select pg_backend_pid()"))
+            connection = await session.connection()
+            raw = await connection.get_raw_connection()
+            raw.driver_connection.add_termination_listener(lambda _: disconnected.set())
+        if disconnect:
+
+            async def interrupt_ai(ready):
+                await db_session.execute(
+                    text("select pg_terminate_backend(:pid)"), {"pid": original_pid}
+                )
+                await asyncio.wait_for(disconnected.wait(), timeout=2)
+                raise AIProviderNetworkError()
+
+            embedder.embed_document.side_effect = interrupt_ai
+        consumer = EmbeddingConsumer(resources.session_factory, embedder)
+        if disconnect:
+            with pytest.raises(EmbeddingError):
+                await consumer.consume(event)
+            async with resources.session_factory() as session:
+                assert (
+                    await session.scalar(text("select pg_backend_pid()"))
+                    != original_pid
+                )
+        else:
+            assert (
+                await consumer.consume(event)
+            ).reason is EmbeddingCompletionReason.SAVED
+            assert (
+                await consumer.consume(event)
+            ).reason is EmbeddingCompletionReason.ALREADY_EMBEDDED
+        embedder.embed_document.assert_awaited_once()
+    events = await _events(db_session)
+    assert len(events) == 1
+    assert events[0].article_id == article_id
+    assert events[0].event_type == ("failed" if disconnect else "succeeded")
