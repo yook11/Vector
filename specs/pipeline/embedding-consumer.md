@@ -298,13 +298,62 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 | 3.1b 新しいEmbedderへの接続 | 共通クライアントを受け取る新しいEmbedderを実装 | 配置・命名、既存の業務仕様と例外翻訳の再利用方法 | モデル・次元・入力・応答・例外の契約を維持し、既存Taskiqを変更せずConsumerに渡せる |
 | 3.2 SSM取得とDB接続の組み立て | 呼び出し単位のAPIキー取得、専用設定からのDB Engine・セッション生成 | SSMのtimeout・試行回数、DBのtimeout・プール方式・application_name、設定型と配置 | 呼び出し間でキー・接続を共有せず、部分的な初期化失敗でも資源を閉じる。SSMはモック、DBのセッション・トランザクション境界は実DBで検証 |
 | 3.3 Lambdaハンドラーへの接続 | 設定・取得・生成・Consumer組み立て、バッチ検証と逐次処理、終了と応答 | 同期handlerからasyncio.run、初期化後に入力検証、空Recordsも初期化、新規全体タイマーなし、初期化ログは工程・例外型だけで確定 | 同一呼び出し内での共有と別呼び出しでの再生成、成功・個別失敗・初期化失敗・終了失敗・キャンセルの契約を検証。終了障害が確定済み応答を変更しない |
-| 3.4 実行イメージと無効状態のトリガー | Lambda用イメージ、関数、SQSイベントソースマッピング、専用基盤の配線、CI権限・適用手順 | メモリ、イメージ構築方法、必要なCI・ECR権限と観測の配線 | BatchSize=1・最大同時実行10・予約済み同時実行10・timeout120秒・ReportBatchItemFailuresを設定し、トリガーは無効。構築・設定を検証して適用手順を揃える |
+| 3.4 実行イメージと無効状態のトリガー | Lambda用イメージ、関数、SQSイベントソースマッピング、専用基盤の配線、CI権限・適用手順 | メモリ1024MB、共通arm64イメージの独立digest指定、専用CI権限・既存ログで確定 | BatchSize=1・最大同時実行10・予約済み同時実行10・timeout120秒・ReportBatchItemFailuresを設定し、トリガーは無効。構築・設定を検証して適用手順を揃える |
 
 3.1〜3.3のbackend変更は`/check`に従い、Ruff lint・format、全単体テスト、`make test-integration`を順に行う。外部AI・AWSをモックし、既存TaskiqとConsumerの契約を保つ。3.4は変更範囲に応じたイメージ・Terraform検証を追加する。実通信・通知配送・再配信・DLQ移動と手動停止・再開・再投入は既存スライス4で実証する。
 
-方針・スライス整理（2026-09-10）: 文書のみを更新。差分と既存の合意値・境界の整合性を確認し、コード変更がないためテストは実行しない。各スライスの実装は未着手。
+方針・スライス整理（2026-09-10）: 文書のみを更新。差分と既存の合意値・境界の整合性を確認し、コード変更がないためテストは実行しない。この記録時点では各スライスは未着手で、以降の実装状況は下記Implementationに記録する。
 
 ## Implementation
+
+### スライス3.4：Lambdaと無効状態のSQSトリガー
+
+Problem: 完成したConsumerを共通backendイメージから配置し、独立した版管理と専用基盤へ接続する。
+Evidence: 既存relayのdigest保持・承認付きTerraform経路、Consumerの専用SG・IAM・ログ、実装済みhandlerを基準にする。
+Invariants: メモリ1024MB、timeout120秒、予約同時実行10、BatchSize=1、収集待ち0秒、最大同時実行10、ReportBatchItemFailures、enabled=false。プロキシ必須、既存のキュー・DLQ・Taskiq・relay・ECS更新経路を維持する。
+Non-goals: AWS適用、イメージ公開、秘密情報登録、受信有効化、新しいアラーム・自動停止・X-Rayは行わない。
+Done: 関数と無効トリガー、独立digestの指定・省略時保持、専用基盤と制限付きCI権限を検証し、初回・更新・切り戻し手順を揃える。
+
+`embedding_consumer_image_digest`はnullまたはsha256 digestとする。初回の未指定時は関数とトリガーを作成しない。通常plan/applyでは専用スクリプトがstate上の現行版を引き継ぎ、明示指定時だけ作成・更新・切り戻しを行う。state取得・検証失敗は停止し、nullへのfallbackをしない。Terraform変数だけでは現行版は保持されない。
+
+起動はarm64の共通backendイメージ内のawslambdaricから`app.lambda_handlers.embedding.handler`を呼ぶ。ENV、IAM認証DB URL、DB_IAM_AUTH、専用SSMパス、EGRESS_PROXY_URLだけを明示し、AWS_REGIONはLambda提供値を使う。専用ロググループにText形式で出力し、アプリJSONとEMFの構造を維持する。承認後のplan再実行・applyの順序は既存CIに従う。
+
+スライス3.4の検証（2026-09-10）:
+
+- 本体・bootstrapのbackend未接続initとvalidateが成功。本体mock 7件・bootstrap mock 4件が成功し、追跡対象のTerraform設定・mockテストのfmt -checkも成功した。ローカルの未変更terraform.tfvarsは整形対象外とした。既存Service Discoveryの非推奨警告は維持している。
+- Ruff lint・format check、全単体6,351件、実DB統合1,351件が成功。既存DB権限テスト22件はAlembic適用済みpublic.watchlist_entriesが必要なためスキップ。単体にはConsumer digestとworkflowの回帰テスト24件を含み、既存relayの独立スクリプトテスト5件も成功した。
+- Linux ARM64の共通イメージをローカルビルドし、network none・read-only root・書き込み可能な/tmpでRICから実handlerへ2回接続した。SSM・DB資源をモックし、実GeminiクライアントとConsumerの生成、空Recordsの部分バッチ応答、呼び出しごとの資源終了を確認した。イメージは公開していない。
+- actionlint 1.7.12は変更前から存在するconcurrency.queueキーに未対応のため、その既知警告1件に限って除外した検査が成功した。queue: maxとproduction承認・直列適用を削除・変更していない。
+- vector-planのSSOトークンが期限切れでrefreshできず、実環境の読み取り専用planは未実施。AWS上のタグ付きマッピング作成、実通信・ログ配送・再配信・DLQ移動も未検証。AWS適用・秘密情報登録・受信有効化は実施していない。
+
+### スライス3.4の未解決事項：CIのKMS設定読戻し（2026-09-10）
+
+Problem: CIによるLambda設定の読戻しを阻害する全面復号Denyを、確認済みの対象・経路だけに限定して解消する。
+Evidence: 実キーのポリシー、CloudTrail、実CIロールの明示Deny、provider v6.62.0の設定取得エラー時の挙動。
+Invariants: 自アカウントSSMとSecrets Managerの秘密値取得拒否、他CIロールの全面復号拒否、対象外キー・関数・直接復号の明示Denyを維持する。
+Non-goals: AWS適用、信頼ポリシー変更、新規キー作成、秘密値取得、受信開始。
+Done: Terraformの権限・適用順・回帰テスト・手順が一致する。実環境の解消判定はbootstrap適用後の実CIロールによる読戻しと再planまで保留する。
+
+既存のkms:Decrypt全面Denyを残したままでは、digest保持だけでLambdaの設定管理は完了しない。以下の調査はAWSへの書き込み・関数起動・秘密値取得を行わず実施した。
+
+- 管理者のGetFunctionとGetFunctionConfigurationは、既存vector-outbox-relayの環境変数とimage_configをエラーなく返した。値は表示・保存せず、項目の存在とエラーコードだけを確認した。Consumer関数は未作成。
+- relayにカスタマー管理キーの指定はなく、alias/aws/lambdaはEnabledのAWS管理キーだった。キーの実ポリシーにはLambda経由の利用条件とaws:lambda:FunctionArnの暗号化コンテキスト条件がある。CloudTrailの管理者による設定読取時のDecryptでも、lambda.amazonaws.com経由とrelayの関数ARNコンテキストを確認した。
+- 実際のplan/applyロールにはNoSecretValuesのkms:Decrypt全面Denyが残る。管理者によるsimulate-principal-policyで両ロールのrelay復号がexplicitDenyであることを確認した。
+- 未適用の候補ポリシーをsimulate-custom-policyで検証した。対象AWS管理キー・対象リージョンのLambda経由・relay/Consumerの関数ARNをすべて満たす復号をallowed、別キー・別関数・直接KMS・SSM経由・関数ARNコンテキスト欠落をexplicitDenyと判定した。追加AllowがあってもSSM GetParameterとSecrets Manager GetSecretValueの明示Denyを維持できた。シミュレーションは指定したコンテキストでの評価であり、候補ポリシーでの実Lambda管理API成功を実証したものではない。
+- vector-adminのSSOログインは成功した。vector-deployはSSOログイン後のGetRoleCredentialsでForbiddenException（No access）となり、vector-planも認証情報を取得できなかった。アカウント設定の一致とVectorDeployロールの存在は確認できたが、利用者への割り当ては未確認。これはLambdaのKMS拒否とは別の認証問題。
+
+修正コードでは、plan/applyの秘密値取得拒否とLambda設定の復号境界を分離した。`lambda_config_readback.tf`は既存の`alias/aws/lambda`の実キーARNを参照し、対象リージョンのLambda経由かつrelay/Consumerの暗号化コンテキストが揃う場合だけ復号を許可する。別キー・別経路・別関数・条件欠落は独立した明示Denyで拒否する。限定ポリシーを取り付けてから従来の全面Denyを外す依存関係を設け、適用途中も復号制限を維持する。
+
+他CIロールの全面復号拒否と、全CIロールのSSM/Secrets Manager値取得拒否は維持する。新規キーは作らず、既存キーがない環境ではデータソース取得を失敗させる。Lambda環境変数には秘密値を置かずSSMパスだけを置く制約を維持する。
+
+bootstrap適用後の実CIロールでの読戻しと再planの不要差分解消まで、実環境の問題は未解決として扱う。IAMシミュレーションは実Lambda APIの成功を保証しない。適用・確認の順序は[bootstrap手順](../../infra/aws/bootstrap/README.md#lambda管理設定の読戻し権限)に記載する。今回、AWSのIAM・キー・関数・トリガー・Terraform stateは変更していない。
+
+KMS修正の検証（2026-09-10）:
+
+- 本体・bootstrap双方でbackend未接続のinit、validate、追跡対象と新規設定のfmt -checkが成功。本体mock 7件・bootstrap mock 6件が成功し、生成される権限範囲、全CIロールの秘密値取得Deny、他CIロールの全面復号Denyを確認した。既存Service Discoveryの非推奨警告は残る。
+- Ruff lint・format checkと、関連スクリプトの27テストが成功。この修正はTerraform・mockテスト・手順に限定されるため、上記で成功済みのbackend全単体・実DB統合・ARM64イメージ検証は再実行していない。
+- Terraform mock planが生成した実際のポリシーJSONをAWS IAM simulate-custom-policyへ渡した。追加Allowのある24ケースで、対象2関数はallowed、別キー・別関数・修飾付き関数ARN・別リージョン・直接KMS・SSM経由・コンテキスト欠落・秘密値取得はexplicitDenyを確認した。追加Allowなしでもplan/applyそれぞれの対象2関数がallowedになる4ケースを確認し、計28ケースが成功した。この検証は架空のリソースARNと指定コンテキストでの評価であり、AWSポリシーの適用や実キーでの復号は行っていない。
+- AWS未適用かつplan用SSOのNo accessが未解消のため、実CIロールのGetFunction/GetFunctionConfigurationによる読戻しと適用後の再planは未実施。
 
 ### LambdaのJSONログ初期化
 
@@ -504,7 +553,7 @@ Consumer専用サブネットはprimary AZのCIDR index 28とし、appルート�
 
 DLQ滞留通知は`ApproximateNumberOfMessagesVisible`のMaximum・60秒・1評価期間・1件以上・欠測正常で判定し、ALARM/OK遷移を既存SNSへ送る。自動停止・自動再投入は行わない。障害時は後続のSQSトリガーを手動停止・再開する。
 
-Consumer本体は実装済み、Lambda・SQSトリガーは未実装。スライス2に先行して、共通Serviceの保存時行ロックと記事不存在・生成済みの区別を実装した。Serviceは正常終了時に`EmbeddingCompletion.SAVED`または`EmbeddingCompletion.ALREADY_EMBEDDED`を返す。Service実行中の失敗分類関数とConsumer用の後処理ハンドラーも実装済み。開始時の失敗もConsumer用ハンドラーへ接続した。SQSの入力検証・Consumer呼び出し・部分バッチ応答も処理部品として接続済み。依存を組み立てるLambda起動関数は後続で扱う。
+Consumer本体とLambda起動関数は実装済み。スライス3.4でLambda関数・無効状態のSQSトリガーのTerraform定義を追加したが、AWSには未適用。スライス2に先行して、共通Serviceの保存時行ロックと記事不存在・生成済みの区別を実装した。Serviceは正常終了時に`EmbeddingCompletion.SAVED`または`EmbeddingCompletion.ALREADY_EMBEDDED`を返す。Service実行中の失敗分類関数とConsumer用の後処理ハンドラーも実装済み。開始時の失敗もConsumer用ハンドラーへ接続した。SQSの入力検証・Consumer呼び出し・部分バッチ応答も処理部品として接続済み。依存を組み立てるLambda起動関数は3.3で接続済み。
 
 ## Verification
 
@@ -596,7 +645,7 @@ SQS入力検証・Consumer接続の検証（2026-09-10）:
 
 - 呼び出し内での資源・APIキー共有、呼び出し間の非共有、初期化後の入力検証、初期化・終了失敗の方針と入口の実装は3.3までに反映した。AWS上の有効化は後続とする。
 - Geminiの通信値と終了方法は3.1で確定した。SSM・DBの通信値とプール方式は3.2で確定した。
-- Lambdaのメモリ、実行イメージ、専用サブネット・SG・権限の配線は3.4で確定する。relayの権限は流用しない。
+- 3.4のLambdaメモリ1024MB、独立digest指定、専用サブネット・SG・権限の定義は実装済み。bootstrap先行適用、イメージ公開、本体適用と無効状態の確認を後続で行う。
 - AWS上での構造化ログ、部分バッチ応答、通信・再配信・DLQ移動とTaskiq併用をスライス4で確認する。
 - 残高不足・設定不備が継続した場合の手動停止・復旧・再投入の具体的な操作手順をスライス4で完成させる。DLQ滞留通知は実装済みで、自動停止は行わない。既存holdはSQS起動トリガーを停止しない。
 

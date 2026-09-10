@@ -93,7 +93,12 @@ admin が 1 回で作る側に寄せた (`service_linked_roles.tf`)。
 ## secret を CI に読ませない
 
 `plan` / `apply` / `push` / `migrate` / `rollout` の全ロールに、`ssm:GetParameter*` /
-`secretsmanager:GetSecretValue` / `kms:Decrypt` の Deny を入れてある。
+`secretsmanager:GetSecretValue` の Deny を入れてある。
+`push` / `migrate` / `rollout` は `kms:Decrypt` も全面Denyとする。
+`plan` / `apply` は既存のAWS管理キー `alias/aws/lambda` について、
+対象リージョンのLambda経由かつrelay/EmbeddingConsumerの関数ARNの暗号化コンテキストを
+持つ復号だけを許可する。別キー・別関数・直接KMS・コンテキスト欠落は明示Denyする。
+Lambdaの環境変数はCIから読めるため、秘密値を置かずSSMパスだけを設定する。
 
 **SSM parameter は Terraform で管理しない。** `aws_ssm_parameter` の `value` は
 provider schema 上 `computed` なので、`ignore_changes = [value]` を付けても
@@ -176,3 +181,39 @@ push用roleはbuild専用repository secretのままにする。migration / rollo
 [Migrationとアプリ反映の導入・運用](../MIGRATION_WORKFLOW.md) を参照する。
 
 `terraform.tfstate` は `.gitignore` 済み。secret の実体は入らないが account ID は入る。
+
+## EmbeddingConsumerのLambda管理権限（スライス3.4）
+
+本体の関数・無効SQSトリガー作成より先に、このbootstrapを管理者経路で適用する。追加される`ci-apply-embedding-consumer`はapplyロール専用のmanaged policyで、Consumer関数とFunctionArn条件付きのマッピング操作だけを許可する。タグ操作は固定Consumerタグに拘束し、別マッピングへの所属タグの後付け・変更・削除を許可しない。既存の実行ロールboundary、PassRole制約、planの読み取り権限と秘密値の読取禁止は維持する。
+
+本体側では単一のbackend ECRポリシーへConsumerの取得許可を追加する。bootstrap適用だけでは関数作成・イメージ更新・受信有効化は行われない。以降のdigest指定と無効状態の確認は[本体手順](../README.md#embeddingconsumer-lambdaスライス34)に従う。
+
+
+## Lambda管理設定の読戻し権限
+
+`lambda_config_readback.tf`は既存の`alias/aws/lambda`をデータソースで参照する。
+キーの作成・変更は行わない。この修正は既存relayのある環境を対象とし、
+キーが未作成の新規アカウントではbootstrapのplanを止めて初回構築手順を確認する。
+別キーや無制限復号へのfallbackは追加しない。
+
+`ci-lambda-config-readback`をplan/applyへ取り付けた後、既存inline policyの全面KMS Denyを外す。
+この順序は`depends_on`で固定しているため、`-target`などで一部だけを適用しない。
+限定ポリシーの3つのDenyは独立しており、どの条件が欠けても追加Allowで広げられない。
+他CIロールにはこのポリシーを取り付けず、SSM/Secrets Managerの拒否を全ロールで維持する。
+
+適用後の検証は次の順で行う。管理者による読戻しやIAMシミュレーションだけでは完了としない。
+
+1. bootstrapを管理者経路で適用する。
+2. 実際のplanロール、production承認付きapplyロールそれぞれで、既存relayの
+   `GetFunction`と`GetFunctionConfiguration`を確認する。Consumer作成後は両関数を確認する。
+   HTTP成功だけで判断せず、`Environment.Error`と`ImageConfigResponse.Error`がなく、
+   `Variables`と`ImageConfig`が存在することを確認する。環境変数値や生のAPI応答はログへ出さない。
+3. 本体手順に従ってrelayとConsumer両方のdigestをstateから保持してplanする。
+   bootstrap修正自体では本体の関数設定を変更しないため、既存relayの
+   `environment`と`image_config`に不要な差分が出ないことを確認する。
+4. Consumer作成・更新後も同じCIロールで再planし、両関数に不要な差分がないことを確認する。
+   確認のためだけの本体applyやトリガー有効化は行わない。
+
+2026-09-10の調査では`vector-deploy`/`vector-plan`のSSO資格情報取得がNo accessだった。
+ローカル確認にはIdentity Centerの割り当てを確認する必要がある。applyは既存のGitHub承認経路を使い、
+このために信頼ポリシーを広げない。現時点ではAWS未適用のため、上記の実CI読戻し・再planは未完了。

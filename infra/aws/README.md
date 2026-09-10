@@ -311,3 +311,53 @@ read-only の plan ロールでは通らない)。
 ## Outbox relay Lambda
 
 工程別SQS・relay専用Lambdaの初回構築、digest更新、接続確認は [OUTBOX_RELAY.md](OUTBOX_RELAY.md) を参照する。現在のhandlerはDB接続確認のみで、定期送信は無効。
+
+## EmbeddingConsumer Lambda（スライス3.4）
+
+共通backendイメージをarm64のLambdaとして起動する。Consumerの版は`embedding_consumer_image_digest`で独立指定し、ECSのimage_tagやrelayのdigestとは連動させない。メモリ1024MB、timeout120秒、予約同時実行10、1回1件、最大同時実行10、ReportBatchItemFailuresで固定し、SQSトリガーは`enabled=false`で作成する。
+
+関数は専用サブネット・SG・実行ロール・ロググループを使用する。環境変数はproduction、IAM認証のvector_app用DB URL、専用Gemini SSMパス、EGRESS_PROXY_URLを渡す。AWS_REGIONはLambdaが提供する。APIキーの値はTerraform・イメージ・ログへ置かず、Consumer呼び出し時にSSMから取得する。SSMの準備は有効化前に行い、値の登録と実通信検証は別作業とする。
+
+### 初回構築・更新・切り戻し
+
+1. 管理者経路でbootstrapを先に適用し、`ci-apply-embedding-consumer`ポリシーとapplyロールへの接続、plan/apply向けの限定Lambda復号ポリシーを反映する。[Lambda設定の読戻し確認](bootstrap/README.md#lambda管理設定の読戻し権限)を済ませてから本体planへ進む。今回、実行ロールのboundaryとPassRoleの制約は変更しない。
+2. 既存のAWS app images workflowで対象mainの共通backendイメージを作成・公開し、backend ECRのsha256 digestを取得する。Consumer専用イメージは作らない。既存ECSのrollout承認は別工程であり、Consumerの更新はTerraform経路で行う。
+3. AWS terraform applyをmainで手動実行し、`embedding_consumer_image_digest`へ対象digestを入力する。backendリポジトリ内の存在確認が成功した場合だけplanへ進む。production承認後、既存どおり同じjobでplanを再実行してapplyする。イメージ更新だけでもConsumerトリガーは無効のまま。
+4. outputsの`embedding_consumer_function_name`・`embedding_consumer_function_arn`・`embedding_consumer_image_digest`・`embedding_consumer_event_source_mapping_uuid`を確認する。AWSのGetFunctionConfigurationとGetEventSourceMappingで実行設定とState=Disabledを確認する。この確認では関数をinvokeしない。
+5. 通常のinfra適用では入力を空欄にして現在の版を維持する。更新・切り戻しは新しい版・過去の版のdigestを明示する。既にECRから削除された版は指定できないため、切り戻し先の保持状況も確認する。
+6. 受信有効化、通信・ログ配送・再配信・DLQ移動・Taskiq併用の実証は後続で行う。今回は有効化スイッチを設けず、初期設定をコードで無効に固定している。
+
+初回にdigestを指定しない場合、基盤は維持するが関数とトリガーは作成せず、上記outputsはnullとなる。SSOの期限切れやstate解決失敗を初回扱いにしない。
+
+### ローカルplanでのdigest保持
+
+Terraform変数のdefault=nullだけでは現在の版は保持できない。既存の使い方の`terraform plan`を実行する前に、relayとConsumerの両方について次を実行する。通常のplan/apply workflowはこの処理を実装済み。ローカルの本番applyは実行せず、既存の承認付きCI経路を使用する。
+
+```bash
+# infra/awsで、認証とbackendの初期化後に実行する。
+set -euo pipefail
+relay_vars_tmp=$(mktemp ./outbox-relay-vars.XXXXXX)
+consumer_vars_tmp=$(mktemp ./embedding-consumer-vars.XXXXXX)
+trap 'rm -f "$relay_vars_tmp" "$consumer_vars_tmp"' EXIT
+terraform state pull | python3 scripts/resolve-outbox-relay-image.py > "$relay_vars_tmp"
+terraform state pull | python3 scripts/resolve-embedding-consumer-image.py > "$consumer_vars_tmp"
+mv "$relay_vars_tmp" outbox-relay.auto.tfvars.json
+mv "$consumer_vars_tmp" embedding-consumer.auto.tfvars.json
+```
+
+明示した版をplanする場合はConsumerのスクリプトへ`--digest "$CONSUMER_DIGEST"`を渡し、backend ECR内の存在も別途確認する。生成ファイルやstateをコミット・公開しない。stateの現行イメージが不正、現行インスタンスが複数、state取得失敗の場合は停止し、ファイルを手作業でnullへ変更して続行しない。
+
+### ローカルのイメージ起動検証
+
+リポジトリルートで実行する。AWSや外部AIに到達しないネットワークで、SSM・DB資源をモックし、実Geminiクライアント・Consumer・handlerをRICから呼ぶ。2回の空Recordsで応答と呼び出しごとの資源終了を検証する。業務処理は既存単体・実DB統合テストで検証する。
+
+```bash
+docker build --platform linux/arm64 -t vector-embedding-slice34:local backend
+docker run --rm --platform linux/arm64 --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m --network none \
+  -v "$PWD/infra/aws/scripts/verify-embedding-runtime.py:/verify-runtime.py:ro" \
+  --entrypoint /app/.venv/bin/python \
+  vector-embedding-slice34:local /verify-runtime.py
+```
+
+LambdaのCI管理権限はConsumer関数ARNとFunctionArn条件で限定する。マッピングのConsumerタグは作成時に必須とし、タグ操作も既存のConsumerタグ一致を要求するため、他のマッピングへタグを後付けして管理範囲を拡張できない。Consumerタグの変更・削除は許可しない。タグ付き作成とResourceTag条件の考え方は[AWSのABAC例](https://docs.aws.amazon.com/lambda/latest/dg/attribute-based-access-control-example.html)に合わせ、AWS上での適用確認は後続に残す。

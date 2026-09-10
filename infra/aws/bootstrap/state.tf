@@ -20,10 +20,7 @@ resource "aws_s3_bucket_versioning" "tfstate" {
   }
 }
 
-# SSE-KMS に上げてはいけない。CI ロール 3 つには kms:Decrypt の Deny が入って
-# おり (oidc.tf の secret_read_actions)、SSE-KMS は AWS 管理キーでも読み出し側に
-# kms:Decrypt を要求するため、state の読み取りごと壊れて plan も apply も落ちる。
-# 「暗号化を強化した」つもりの変更で CI が全滅する結合なので、ここで固定する。
+# Lambda設定以外の復号はCIで拒否するため、stateはSSE-S3を維持する。
 resource "aws_s3_bucket_server_side_encryption_configuration" "tfstate" {
   bucket = aws_s3_bucket.tfstate.id
 

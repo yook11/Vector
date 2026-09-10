@@ -128,3 +128,19 @@ output "embedding_dlq_url" {
 output "embedding_dlq_arn" {
   value = aws_sqs_queue.embedding_dlq.arn
 }
+
+output "embedding_consumer_function_name" {
+  value = try(aws_lambda_function.embedding_consumer[0].function_name, null)
+}
+
+output "embedding_consumer_function_arn" {
+  value = try(aws_lambda_function.embedding_consumer[0].arn, null)
+}
+
+output "embedding_consumer_image_digest" {
+  value = var.embedding_consumer_image_digest
+}
+
+output "embedding_consumer_event_source_mapping_uuid" {
+  value = try(aws_lambda_event_source_mapping.embedding_consumer[0].uuid, null)
+}
