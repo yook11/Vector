@@ -2,6 +2,7 @@ export { getArticleById } from "./api/get-article-by-id";
 export { getArticles } from "./api/get-articles";
 export { getCategories } from "./api/get-categories";
 export { getSimilarArticles } from "./api/get-similar-articles";
+export { ArticleListUpdateNotice } from "./components/ArticleListUpdateNotice";
 export {
   getArticleSourceLabel,
   getLatestArticleDate,

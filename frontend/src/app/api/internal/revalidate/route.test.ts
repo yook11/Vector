@@ -5,11 +5,15 @@ const SECRET = "test-secret-32characters-long-xxxx";
 
 const mocks = vi.hoisted(() => ({
   revalidateTag: vi.fn(),
+  renewArticleListRevision: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({
   revalidateTag: mocks.revalidateTag,
+}));
+vi.mock("@/lib/cache/article-list-revision", () => ({
+  renewArticleListRevision: mocks.renewArticleListRevision,
 }));
 vi.mock("@/lib/env", () => ({
   requireEnv: () => "test-secret-32characters-long-xxxx",
@@ -125,5 +129,24 @@ describe("POST /api/internal/revalidate", () => {
     expect(mocks.revalidateTag).toHaveBeenCalledTimes(2);
     expect(mocks.revalidateTag).toHaveBeenCalledWith(first, { expire: 0 });
     expect(mocks.revalidateTag).toHaveBeenCalledWith(second, { expire: 0 });
+    expect(mocks.renewArticleListRevision).toHaveBeenCalledTimes(
+      first === "articles:list" || second === "articles:list" ? 1 : 0,
+    );
+  });
+
+  it("タグ無効化に失敗した場合は識別子を変更しない", async () => {
+    mocks.revalidateTag.mockImplementationOnce(() => {
+      throw new Error("revalidation failed");
+    });
+
+    await expect(
+      POST(
+        buildRequest({
+          authorization: `Bearer ${SECRET}`,
+          body: { tags: ["articles:list"] },
+        }),
+      ),
+    ).rejects.toThrow("revalidation failed");
+    expect(mocks.renewArticleListRevision).not.toHaveBeenCalled();
   });
 });

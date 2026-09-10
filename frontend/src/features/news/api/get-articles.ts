@@ -17,18 +17,20 @@ import type { PaginatedArticleResponse } from "@/types/types.gen";
  * プロファイル。記事 ingestion 周期 (~30 分) に対し revalidate 1 分は十分
  * 新鮮。expire 1h は long tail traffic 用の上限。
  *
- * cache key は引数 `query` のシリアライズで決まる。`ArticleQuery` の shape
+ * cache key は引数 `query` と表示開始時の `articleListRevision` で決まる。`ArticleQuery` の shape
  * は callsite の `parseArticleQuery` で zod 検証通過後に常に同 shape で
  * 確定するため、`Object.entries` の挿入順序による cache pollution は
  * structural に防がれている。`query ?? {}` で undefined を空 object に
- * 正規化し、cache key 安定化を担保する。
+ * 正規化し、識別子の変更時だけ同じ条件を再取得できるようにする。
  */
 export async function getArticles(
-  query?: ArticleQuery,
+  query: ArticleQuery | undefined,
+  articleListRevision: string,
 ): Promise<PaginatedArticleResponse> {
   "use cache";
   cacheLife("minutes");
   cacheTag(cacheTags.articlesList);
+  void articleListRevision;
   const { data } = await listArticles({
     client: publicClient,
     throwOnError: true,

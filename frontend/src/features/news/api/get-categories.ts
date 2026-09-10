@@ -13,11 +13,15 @@ import type { CategoryDetailList } from "@/types/types.gen";
  * 24h window から漏れる記事に対してサイドバー表示が大幅にずれない粒度に
  * 揃える。`getArticles` と同プロファイル。slug/name 自体は不変なので
  * minutes 粒度で十分。
+ * `articleListRevision` は一覧と同じ表示時点をcache keyへ反映する。
  */
-export async function getCategories(): Promise<CategoryDetailList> {
+export async function getCategories(
+  articleListRevision: string,
+): Promise<CategoryDetailList> {
   "use cache";
   cacheLife("minutes");
   cacheTag(cacheTags.articleCategories);
+  void articleListRevision;
   const { data } = await listCategories({
     client: publicClient,
     throwOnError: true,
