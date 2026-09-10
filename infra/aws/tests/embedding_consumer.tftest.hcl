@@ -317,7 +317,7 @@ run "without_digest_no_consumer_or_mapping" {
   }
 }
 
-run "consumer_image_and_disabled_mapping" {
+run "consumer_image_and_enabled_mapping" {
   command = plan
   variables {
     embedding_consumer_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -366,7 +366,8 @@ run "consumer_image_and_disabled_mapping" {
     condition = (
       aws_lambda_event_source_mapping.embedding_consumer[0].function_name == aws_lambda_function.embedding_consumer[0].arn &&
       aws_lambda_event_source_mapping.embedding_consumer[0].event_source_arn == aws_sqs_queue.outbox["embedding"].arn &&
-      !aws_lambda_event_source_mapping.embedding_consumer[0].enabled &&
+      aws_lambda_event_source_mapping.embedding_consumer[0].enabled &&
+      aws_scheduler_schedule.outbox_relay[0].state == "DISABLED" &&
       aws_lambda_event_source_mapping.embedding_consumer[0].batch_size == 1 &&
       aws_lambda_event_source_mapping.embedding_consumer[0].maximum_batching_window_in_seconds == 0 &&
       aws_lambda_event_source_mapping.embedding_consumer[0].scaling_config[0].maximum_concurrency == 10 &&
@@ -374,7 +375,7 @@ run "consumer_image_and_disabled_mapping" {
       aws_lambda_event_source_mapping.embedding_consumer[0].tags.Consumer == "slice-test-embedding-consumer" &&
       output.embedding_consumer_image_digest == var.embedding_consumer_image_digest
     )
-    error_message = "1件ずつの部分バッチ応答を設定するが、受信は開始しない。"
+    error_message = "Consumerの受信を有効にし、1件ずつの部分バッチ応答とrelayの定期送信停止を維持する。"
   }
   assert {
     condition = (

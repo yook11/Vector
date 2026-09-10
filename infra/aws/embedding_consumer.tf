@@ -257,7 +257,7 @@ resource "aws_lambda_event_source_mapping" "embedding_consumer" {
 
   event_source_arn                   = aws_sqs_queue.outbox["embedding"].arn
   function_name                      = aws_lambda_function.embedding_consumer[0].arn
-  enabled                            = false
+  enabled                            = true
   batch_size                         = 1
   maximum_batching_window_in_seconds = 0
   function_response_types            = ["ReportBatchItemFailures"]
