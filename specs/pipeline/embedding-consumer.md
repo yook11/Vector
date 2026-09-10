@@ -253,7 +253,7 @@ Geminiはスライス3.1、SSMとRDSはスライス3.2で下記の設定を確�
 | SSM（専用に許可されたVPCエンドポイント経由） | 接続3秒・読み取り5秒 | 初回を含め最大2回 | 3.2（確定） |
 | RDS（IAM認証・TLS） | 接続5秒・SQLコマンド5秒・プール取得5秒、1接続・追加接続0 | 独自の再試行なし | 3.2（確定） |
 
-読み取りタイムアウトは通信中の待ち時間を制限するもので、処理全体の経過時間上限とは区別する。SDKの接続・読み取り・書き込み・プール待ちへの適用、単位、初回を含む試行回数の意味を確認する。Consumerの60秒とLambda全体120秒を維持し、初期化・失敗後処理・終了処理の時間配分は3.3で確定する。
+読み取りタイムアウトは通信中の待ち時間を制限するもので、処理全体の経過時間上限とは区別する。Consumerの60秒を維持し、3.3では新しい全体タイマーを追加しない。初期化・失敗後処理・終了処理を含めたLambda全体120秒の設定は3.4で行う。
 
 参考: [AWS Lambdaの接続再利用](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html)、[SSM取得とキャッシュ](https://docs.aws.amazon.com/systems-manager/latest/userguide/ps-integration-lambda-extensions.html)、[SQLAlchemyのイベントループ間共有制約](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-multiple-asyncio-event-loops)、[Google Gen AI SDKのクライアント終了](https://googleapis.github.io/python-genai/#close-a-client)、[HTTPXのタイムアウト](https://www.python-httpx.org/advanced/timeouts/)、[Botocoreの設定](https://docs.aws.amazon.com/botocore/latest/reference/config.html)。
 
@@ -297,7 +297,7 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 | 3.1 Gemini共通通信設定とクライアント管理 | app/ai_providers/geminiで通信設定と生成・終了を実装 | 接続3秒・読み取り10秒・書き込み10秒・プール待ち3秒、SDK再試行なしで確定 | 実SDKとモック通信で実効timeout・単一試行・資源解放を確認。既存Embedder・Taskiqは変更しない |
 | 3.1b 新しいEmbedderへの接続 | 共通クライアントを受け取る新しいEmbedderを実装 | 配置・命名、既存の業務仕様と例外翻訳の再利用方法 | モデル・次元・入力・応答・例外の契約を維持し、既存Taskiqを変更せずConsumerに渡せる |
 | 3.2 SSM取得とDB接続の組み立て | 呼び出し単位のAPIキー取得、専用設定からのDB Engine・セッション生成 | SSMのtimeout・試行回数、DBのtimeout・プール方式・application_name、設定型と配置 | 呼び出し間でキー・接続を共有せず、部分的な初期化失敗でも資源を閉じる。SSMはモック、DBのセッション・トランザクション境界は実DBで検証 |
-| 3.3 Lambdaハンドラーへの接続 | 設定・取得・生成・Consumer組み立て、process_embedding_messages呼び出し、終了と応答 | 非同期実行の入口、空Records・配送構造不正の検証と初期化の順序、時間予算、初期化・終了失敗の安全なログ | 同一呼び出し内での共有と別呼び出しでの再生成、成功・個別失敗・初期化失敗・終了失敗・キャンセルの契約を検証。終了障害が確定済み応答を変更しない |
+| 3.3 Lambdaハンドラーへの接続 | 設定・取得・生成・Consumer組み立て、process_embedding_messages呼び出し、終了と応答 | 同期handlerからasyncio.run、初期化後に入力検証、空Recordsも初期化、新規全体タイマーなし、初期化ログは工程・例外型だけで確定 | 同一呼び出し内での共有と別呼び出しでの再生成、成功・個別失敗・初期化失敗・終了失敗・キャンセルの契約を検証。終了障害が確定済み応答を変更しない |
 | 3.4 実行イメージと無効状態のトリガー | Lambda用イメージ、関数、SQSイベントソースマッピング、専用基盤の配線、CI権限・適用手順 | メモリ、イメージ構築方法、必要なCI・ECR権限と観測の配線 | BatchSize=1・最大同時実行10・予約済み同時実行10・timeout120秒・ReportBatchItemFailuresを設定し、トリガーは無効。構築・設定を検証して適用手順を揃える |
 
 3.1〜3.3のbackend変更は`/check`に従い、Ruff lint・format、全単体テスト、`make test-integration`を順に行う。外部AI・AWSをモックし、既存TaskiqとConsumerの契約を保つ。3.4は変更範囲に応じたイメージ・Terraform検証を追加する。実通信・通知配送・再配信・DLQ移動と手動停止・再開・再投入は既存スライス4で実証する。
@@ -305,6 +305,31 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 方針・スライス整理（2026-09-10）: 文書のみを更新。差分と既存の合意値・境界の整合性を確認し、コード変更がないためテストは実行しない。各スライスの実装は未着手。
 
 ## Implementation
+
+### スライス3.3：Lambdaハンドラーへの接続
+
+Problem: 作成済みの接続・業務処理部品を、1回のLambda呼び出しとして実行して応答する入口を提供する。
+Evidence: SSM・DBのopen_embedding_resources、Geminiのopen_gemini_client、新しいGeminiEmbedder、Consumerと既存SQS処理の契約を確認した。
+
+`app/lambda_handlers/embedding.py`の同期`handler(event, context)`がEmbeddingConsumerSettingsを生成し、asyncio.runで`_run_embedding(event, settings)`を実行する。contextは使用しない。非同期処理ではDB資源、Geminiクライアント、EmbedderとConsumerの順に初期化し、既存のprocess_embedding_messagesへ渡す。AsyncExitStackでGemini資源、DB資源の順に終了してからSqsBatchResponseを返す。
+
+同一呼び出し内で資源とConsumerを共有し、次の呼び出しには持ち越さない。DBは最初のSQLで接続し、接続確認SQLを追加しない。空Recordsも初期化を行ってから空の失敗一覧を返す。配送構造・本文の検証位置と引数型は変更せず、配送構造不正も初期化後の既存処理で拒否する。
+
+初期化の通常例外は固定イベントembedding_initialization_failedへstage（settings・resources・gemini_client・consumer）とerror_classだけを記録し、元の例外を伝播する。SSM・DBはresourcesとして扱い、内部工程を分ける新しい例外や公開インターフェースは設けない。本文・秘密情報・設定値・例外自由文・トレースバックを新設ログに渡さず、ログ障害でも元の例外を維持する。
+
+初期化失敗は空入力でも呼び出し全体の失敗となる。配送構造不正や処理中の例外を初期化失敗として重複記録しない。通常の終了障害は既存の資源管理で記録し、確定済み応答や先行例外を変更しない。キャンセル・プロセス終了は伝播する。個別の業務失敗監査・通知・計測は既存Consumerへ任せる。
+
+Invariants: 既存検証・部分バッチ応答、Consumerの60秒、接続設定、セッション境界と成功監査の非重複を維持する。
+Non-goals: Taskiq・relay・DB schema・依存パッケージ・設定スイッチ・トレース基盤の変更、SQS直接操作、Terraform・実行イメージ・デプロイは行わない。
+Done: 呼び出し単位の初期化と終了、空入力、個別失敗・全体失敗、実DB保存と監査の非重複を検証する。Lambda全体120秒とReportBatchItemFailuresの基盤設定は3.4、AWS実通信検証は後続に残す。
+
+検証結果（2026-09-10）:
+
+- Ruff lint・format checkはapp全体と変更テストで成功した。全単体テストは6,286 passed。
+- `make test-integration PYTEST_ARGS='-rs -x'`は1,351 passed・22 skipped。既存DB権限テスト22件はAlembic適用済みの`public.watchlist_entries`が検証環境にないためスキップされた。
+- 同期入口からの連続呼び出し、資源共有と再生成、空入力・配送構造不正の初期化後の処理、初期化ログの項目制限、終了・ログ障害時の結果維持、キャンセル・プロセス終了の伝播を確認した。
+- 実DB・実SDK・新しいEmbedder・実Consumerを組み立て、API障害後も後続メッセージが保存されること、同一呼び出しと次の呼び出しでの生成済み再処理がAPI・成功監査を重複させないことを確認した。HTTP通信とSSM取得はモックした。
+- AWS実通信、Lambda全体120秒、SQSトリガー、ReportBatchItemFailuresの実環境での動作、デプロイは今回未実施で、後続スライスで扱う。
 
 ### スライス3.2：SSM取得とDB資源の組み立て
 
@@ -452,7 +477,7 @@ SQS入力検証・Consumer接続の検証（2026-09-10）:
 
 ## 実装・有効化前に確定する項目
 
-- 呼び出し内での資源・APIキー共有、呼び出し間の非共有、責務分担、初期化・終了失敗の方針は合意済み。実装詳細はスライス3.1〜3.3の表に従って確定する。
+- 呼び出し内での資源・APIキー共有、呼び出し間の非共有、初期化後の入力検証、初期化・終了失敗の方針と入口の実装は3.3までに反映した。AWS上の有効化は後続とする。
 - Geminiの通信値と終了方法は3.1で確定した。SSM・DBの通信値とプール方式は3.2で確定した。
 - Lambdaのメモリ、実行イメージ、専用サブネット・SG・権限の配線は3.4で確定する。relayの権限は流用しない。
 - AWS上での構造化ログ、部分バッチ応答、通信・再配信・DLQ移動とTaskiq併用をスライス4で確認する。

@@ -1,12 +1,17 @@
 """SQSメッセージをConsumerへ接続し、個別の失敗をAWSへ伝える。"""
 
+import asyncio
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import ClassVar, TypedDict
 
 import structlog
 
+from app.ai_providers.gemini.client import open_gemini_client
+from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.embedding.consumer import EmbeddingConsumer
+from app.analysis.embedding.embedder import GeminiEmbedder
 from app.analysis.embedding.service import (
     EmbeddingCompletion,
     EmbeddingCompletionReason,
@@ -16,6 +21,8 @@ from app.lambda_handlers.embedding_event import (
     EmbeddingEventInvalidError,
     parse_embedding_event,
 )
+from app.lambda_handlers.embedding_resources import open_embedding_resources
+from app.lambda_handlers.settings import EmbeddingConsumerSettings
 from app.logfire.exceptions import VectorDomainError
 
 logger = structlog.get_logger(__name__)
@@ -203,3 +210,50 @@ async def process_embedding_messages(
                 "embedding_message_completed", **fields, reason=completion.reason.value
             )
     return {"batchItemFailures": failures}
+
+
+async def _run_embedding(
+    event: object, settings: EmbeddingConsumerSettings
+) -> SqsBatchResponse:
+    """呼び出し内で資源を共有し、終了してから処理結果を返す。"""
+    async with AsyncExitStack() as stack:
+        stage = "resources"
+        try:
+            resources = await stack.enter_async_context(
+                open_embedding_resources(settings)
+            )
+            stage = "gemini_client"
+            client = await stack.enter_async_context(
+                open_gemini_client(
+                    api_key=resources.gemini_api_key,
+                    settings=GeminiConnectionSettings(),
+                )
+            )
+            stage = "consumer"
+            consumer = EmbeddingConsumer(
+                resources.session_factory, GeminiEmbedder(client=client)
+            )
+        except Exception as exc:
+            _log(
+                "embedding_initialization_failed",
+                failed=True,
+                stage=stage,
+                error_class=exception_fqn(exc),
+            )
+            raise
+        return await process_embedding_messages(event, consumer=consumer)
+
+
+def handler(event: object, context: object) -> SqsBatchResponse:
+    """今回の初期化・メッセージ処理・資源終了をひとつの非同期実行にまとめる。"""
+    try:
+        settings = EmbeddingConsumerSettings()  # type: ignore[call-arg]
+    except Exception as exc:
+        _log(
+            "embedding_initialization_failed",
+            failed=True,
+            stage="settings",
+            error_class=exception_fqn(exc),
+        )
+        raise
+    return asyncio.run(_run_embedding(event, settings))
