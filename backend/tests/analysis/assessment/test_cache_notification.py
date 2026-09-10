@@ -15,6 +15,10 @@ from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildBlockedError,
     ReadyForAssessment,
 )
+from app.analysis.assessment.service import (
+    AssessmentCompletion,
+    AssessmentCompletionKind,
+)
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.config import settings
 from app.queue.messages.assessment import AssessmentTrigger
@@ -57,9 +61,9 @@ def notification_case(monkeypatch: pytest.MonkeyPatch) -> NotificationCase:
         ),
     )
 
-    async def save_successfully(*args, **kwargs) -> int:
+    async def save_successfully(*args, **kwargs) -> AssessmentCompletion:
         case.events.append("saved")
-        return 100
+        return AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 100)
 
     async def receive(request: httpx.Request) -> httpx.Response:
         case.events.append("notification")
@@ -132,12 +136,17 @@ async def test_failed_article_save_does_not_send_invalidation_request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [AssessmentCompletionKind.OUT_OF_SCOPE, AssessmentCompletionKind.ALREADY_ASSESSED],
+)
 async def test_no_published_article_does_not_send_invalidation_request(
     notification_case: NotificationCase,
+    kind: AssessmentCompletionKind,
 ) -> None:
     """対象外判定や競合で新しい公開記事が保存されなければ通知しない。"""
     notification_case.save.side_effect = None
-    notification_case.save.return_value = None
+    notification_case.save.return_value = AssessmentCompletion(kind)
 
     await assess_content(
         trigger=AssessmentTrigger(curation_id=2), ctx=notification_case.context
