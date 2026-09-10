@@ -28,6 +28,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def wiring(monkeypatch):
+    monkeypatch.setattr(module, "setup_lambda_logging", Mock())
     config = EmbeddingConsumerSettings(
         env="test",
         aws_region="ap-northeast-1",

@@ -306,6 +306,21 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 
 ## Implementation
 
+### LambdaのJSONログ初期化
+
+Problem: Lambdaでも初期化失敗からアプリログをJSONで出力し、全体設定やLogfireへの依存を持ち込まずCloudWatchのログ経路に接続する。
+Evidence: 既存のsetup_logfireはAPI・worker向けの全体設定と外部telemetryを初期化するため、Lambdaの最小設定とは責務が異なる。
+
+`app/lambda_handlers/logging.py`のsetup_lambda_loggingをEmbeddingの同期handler先頭で実行する。structlogのINFO以上のイベントを、既存の項目にlevel・UTC timestampを付けた1行JSONとして標準出力へ書き出す。呼び出しごとに同じ設定を適用し、loggerをキャッシュしない。暗黙のcontextvars取り込みは行わず、メッセージ識別情報は既存の明示フィールドを使う。
+
+全体設定・環境変数・Logfireの初期化を読み込まず、外部telemetry通信や標準loggingのハンドラー追加は行わない。EMFは引き続き専用処理が標準出力へ直接書き出し、JSONを二重に包まない。初期化ログの安全な工程・例外型と既存の業務ログ項目を維持する。通常のログ初期化障害は業務結果を変えず、キャンセルは伝播する。
+
+Invariants: 初期化例外と部分バッチ応答、既存EMF形式・監査・通知を維持する。
+Non-goals: API・Taskiq・relayのログ初期化、SDKやLambdaランタイム自身のログ制御、Logfire送信・トレース、Terraform・AWS適用は変更しない。
+Done: 設定検証より前のJSONログ、連続呼び出しでの非重複、EMF形式維持、ログ障害時の結果維持を確認する。実環境のログ配送は後続で検証する。
+
+検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,327件、make test-integrationの1,351件が成功。既存DB権限テスト22件はAlembic適用済みpublic.watchlist_entriesが必要なためスキップされた。単体件数はCIの必須プロキシ設定に関する回帰テスト2件を含む。ログ設定・標準出力の障害でも元の結果を保つこと、キャンセルの伝播、EMFの最上位構造維持を確認した。AWS実通信・配送検証は実施していない。
+
 ### HTTP設定の分離
 
 Problem: Geminiが使う共通HTTP処理のimportでアプリ全体の必須設定を要求される依存を解消する。
