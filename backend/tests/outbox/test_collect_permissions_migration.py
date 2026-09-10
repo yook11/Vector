@@ -36,6 +36,14 @@ async def test_collect_outbox_grant_round_trip_and_orm_contract(
     db_session: AsyncSession,
 ) -> None:
     connection = await db_session.connection()
+    # CIにはcollectがないため、テストtransaction内でNOLOGIN roleを補い終了時に戻す。
+    await connection.execute(
+        text(
+            "DO $$ BEGIN "
+            "IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_collect') "
+            "THEN CREATE ROLE vector_collect NOLOGIN; END IF; END $$"
+        )
+    )
     schema = "collect_outbox_" + uuid4().hex
     await connection.execute(CreateSchema(schema))
     await connection.execute(

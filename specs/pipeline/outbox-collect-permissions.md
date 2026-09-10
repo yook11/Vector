@@ -29,3 +29,12 @@ RedisのSCAN拒否は別の境界である。現行Taskiqは期限予約回収�
 - 隔離schemaにz21の表を作り、z22のupgrade・downgrade・upgradeを実行した。vector_collectで実ORMによるイベント保存ができ、payload参照・配信状態参照・UPDATE・DELETE・TRUNCATEは42501で拒否され、downgrade後もイベント2件が保持されることを確認した。
 - 初回の全テストコマンドは統合テストも選択してDB未起動で失敗したため、単体をnot integrationで分離し、その後に使い捨てDBの全統合テストを実行した。また最初のexpand宣言は既存gateで拒否されたため、GRANTを自動許可する変更はせずcontractの手動確認対象へ修正し、全単体テストを再実行した。
 - migration gateはkind=contract・auto_allowed=noを確認。本番へのmigration・GRANT・Redis ACL変更は未実施であり、復旧確認は適用後に行う。
+
+## CIの前提差修正
+
+Problem: CIの統合テストDBにはvector_appだけがあり、ローカルcomposeが作るvector_collectをテストが暗黙に要求していた。
+Evidence: CIでtest_collect_outbox_grant_round_trip_and_orm_contractがUndefinedObjectErrorで失敗した。ci.ymlの統合jobとdocker-compose.test.ymlのrole初期化が異なる。
+Invariants: 本番migrationのrole前提・GRANT範囲は変更しない。テストをskipせず、既存roleは変更しない。contract PRにworkflow変更は混在させない。
+Done: テスト自身のtransaction内で不足時だけNOLOGIN roleを作り、roleの有無の両環境で実DBテストを通す。作成roleはfixtureのtransaction rollbackで除去する。
+
+追加確認: vector_collectを持たない専用の使い捨てDBで新規テスト1件が成功し、終了後にpg_rolesからvector_collectが消えていることを確認した。ローカル既存roleの存在に依存しない。
