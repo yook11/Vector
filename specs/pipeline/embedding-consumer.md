@@ -84,7 +84,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 `app/lambda_handlers/embedding/sqs_batch_handler.py`の`process_embedding_messages(event: object, *, consumer: EmbeddingConsumer)`は、呼び出し元が組み立てたConsumerを使用する。SSM・Engine・AIクライアントの生成やSQSへの直接操作は行わない。
 
-最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はEmbeddingSqsInputErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
+最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はSqsInputErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
 
 有効なmessageIdは加工せず保持し、入力順に1件ずつbodyを検証してConsumerへpayloadを渡す。使用しないSQSフィールドは許容する。bodyの欠落・非文字列・本文不正・Consumerの通常例外・契約外の戻り値は個別失敗として後続処理を続ける。EmbeddingCompletionのSAVED・ALREADY_EMBEDDEDだけを正常完了とする。キャンセル・プロセス終了は伝播する。
 
@@ -313,6 +313,19 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 各パッケージの__init__.pyからhandler関数を公開し、`app.lambda_handlers.outbox_relay.handler`と`app.lambda_handlers.embedding.handler`の起動パスを維持する。Terraformのcommandとイメージ選択処理は変更しない。初期化順序、空Records、ID不正の全体失敗、本文不正の個別失敗、監査・通知・通信設定・業務処理は維持する。
 
 検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,292件、専用一時環境の`make test-integration`で1,351件が成功した。既存DB権限テスト22件はAlembic適用済みの`public.watchlist_entries`が必要なためスキップ。既存起動パスの関数解決と、relayがアプリ全体の設定を読み込まずにimportできることを確認した。ローカルにはLinux向け依存のawslambdaricがないためRuntime Interface Client経由の起動は未実施で、Pythonのモジュール・関数解決を検証した。AWSへの適用・デプロイは行っていない。
+
+### SQS受信構造の共通化
+
+Problem: SQSレコードの構造検証がEmbedding固有のモジュールにあり、配送形式と記事処理の責務が同居している。
+Evidence: SqsRecord・SqsRecordBatchの検証、SQS入力エラーとEmbeddingの診断処理、既存の全体失敗・個別失敗テストを基準にする。
+
+`app/lambda_handlers/sqs/records.py`にSqsRecord・SqsRecordBatch、`errors.py`にSqsInputError・SqsInputReasonを配置する。共通側はEmbeddingのイベント・Consumer・ログ処理を参照せず、受信構造の検証と本文の取り出しを担う。入力エラーのCODEは`sqs_input_invalid`とし、Embedding側のログイベント名・理由・診断項目は維持する。
+
+Invariants: 全レコードのID検証を本文解析・Consumer呼び出しより先に行い、ID不正は全体失敗、本文の欠落・型不正は個別失敗とする。入力順序と元のmessageIdを保ち、エラーには入力値を保持しない。
+Non-goals: イベント解析、Consumer呼び出し、失敗ID集約と応答型、業務処理、AWS設定は変更しない。
+Done: 共通側がEmbeddingに依存せず、共通受信型の単体検証と既存の配送・ログ契約、バックエンドの単体・統合検証が通過する。
+
+検証結果（2026-09-10）: Ruff lint・format check、Lambda関連の単体テスト193件、全単体テスト6,300件、専用一時環境の統合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。共通受信型がEmbedding・アプリ設定を読み込まないこと、本文不正の個別処理、ID検証の先行と安全なエラーコードを確認した。
 
 ### スライス3.3：Lambdaハンドラーへの接続
 

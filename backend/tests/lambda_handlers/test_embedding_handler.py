@@ -19,7 +19,7 @@ from app.analysis.embedding.service import (
 )
 from app.lambda_handlers.embedding import resources as resource_module
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
-from app.lambda_handlers.embedding.sqs_batch_handler import EmbeddingSqsInputError
+from app.lambda_handlers.sqs.errors import SqsInputError
 from tests.lambda_handlers.test_embedding import record
 
 module = import_module("app.lambda_handlers.embedding.handler")
@@ -150,7 +150,7 @@ def test_empty_or_invalid_input_is_handled_after_initialization(wiring, event):
         if event == {"Records": []}:
             assert module.handler(event, None) == {"batchItemFailures": []}
         else:
-            with pytest.raises(EmbeddingSqsInputError):
+            with pytest.raises(SqsInputError):
                 module.handler(event, None)
     wiring.consumers[0].consume.assert_not_awaited()
     assert wiring.steps[-4:] == ["aio_close", "sdk_close", "http_close", "engine_close"]

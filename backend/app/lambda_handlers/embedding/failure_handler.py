@@ -11,7 +11,7 @@ from app.audit.error_fields import exception_fqn
 if TYPE_CHECKING:
     from app.analysis.assessment.events import ArticleAssessedInScopeEvent
     from app.lambda_handlers.embedding.event import EmbeddingEventInvalidError
-    from app.lambda_handlers.embedding.sqs_batch_handler import EmbeddingSqsInputError
+    from app.lambda_handlers.sqs.errors import SqsInputError
 
 
 class EmbeddingLambdaFailureHandler:
@@ -34,7 +34,7 @@ class EmbeddingLambdaFailureHandler:
             error_class=exception_fqn(error),
         )
 
-    def handle_invalid_sqs_input(self, error: EmbeddingSqsInputError) -> None:
+    def handle_invalid_sqs_input(self, error: SqsInputError) -> None:
         self._record(
             "embedding_sqs_input_invalid",
             reason=error.reason.value,
@@ -42,9 +42,7 @@ class EmbeddingLambdaFailureHandler:
             record_index=error.record_index,
         )
 
-    def handle_invalid_body(
-        self, error: EmbeddingSqsInputError, *, message_id: str
-    ) -> None:
+    def handle_invalid_body(self, error: SqsInputError, *, message_id: str) -> None:
         self._record(
             "embedding_message_input_invalid",
             message_id=message_id,

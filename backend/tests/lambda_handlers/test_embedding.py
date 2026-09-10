@@ -16,9 +16,9 @@ from app.analysis.embedding.service import (
 )
 from app.lambda_handlers.embedding import sqs_batch_handler as module
 from app.lambda_handlers.embedding.sqs_batch_handler import (
-    EmbeddingSqsInputError,
     process_embedding_messages,
 )
+from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -82,7 +82,7 @@ async def test_success_returns_consistent_response_and_preserves_input_order(
     ],
 )
 async def test_invalid_later_record_prevents_all_processing(consumer, bad):
-    with capture_logs() as logs, pytest.raises(EmbeddingSqsInputError) as caught:
+    with capture_logs() as logs, pytest.raises(SqsInputError) as caught:
         await process_embedding_messages(
             {"Records": [record(), bad]}, consumer=consumer
         )
@@ -98,7 +98,7 @@ async def test_invalid_later_record_prevents_all_processing(consumer, bad):
     [None, [], {}, {"Records": None}, {"Records": {}}, {"Records": "private-input"}],
 )
 async def test_invalid_delivery_shape_is_safe(consumer, event):
-    with capture_logs() as logs, pytest.raises(EmbeddingSqsInputError) as caught:
+    with capture_logs() as logs, pytest.raises(SqsInputError) as caught:
         await process_embedding_messages(event, consumer=consumer)
     assert "private-input" not in str(caught.value)
     assert "private-input" not in repr(logs)
@@ -205,7 +205,7 @@ async def test_input_logging_failure_preserves_original_failure(consumer, monkey
     monkeypatch.setattr(
         module.logger, "warning", Mock(side_effect=RuntimeError("private-log"))
     )
-    with pytest.raises(EmbeddingSqsInputError):
+    with pytest.raises(SqsInputError):
         await process_embedding_messages({"Records": [record(), {}]}, consumer=consumer)
     consumer.consume.assert_not_awaited()
     assert await process_embedding_messages(
@@ -239,12 +239,12 @@ async def test_body_shape_failure_preserves_diagnostic_and_exact_message_id(
 
 async def test_duplicate_id_precedes_body_validation(consumer):
     """本文不正が先にあっても、一覧のID不正を全体失敗として先に確定する。"""
-    with capture_logs() as logs, pytest.raises(EmbeddingSqsInputError) as caught:
+    with capture_logs() as logs, pytest.raises(SqsInputError) as caught:
         await process_embedding_messages(
             {"Records": [{"messageId": "duplicate"}, record("duplicate")]},
             consumer=consumer,
         )
-    assert caught.value.reason is module.EmbeddingSqsInputReason.DUPLICATE_MESSAGE_ID
+    assert caught.value.reason is SqsInputReason.DUPLICATE_MESSAGE_ID
     assert caught.value.record_index == 1
     assert [log["event"] for log in logs] == ["embedding_sqs_input_invalid"]
     consumer.consume.assert_not_awaited()
