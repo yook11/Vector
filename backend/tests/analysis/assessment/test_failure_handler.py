@@ -12,7 +12,7 @@
 - audit Repository が raise しても task は落ちず ``assessment_failure_audit_dropped``
   にフォールバックし、secret prefix が log field から redact される。
 
-marker は production と同じく ``map_provider_to_assessment`` で provider error から
+marker は production と同じくServiceエラーからTaskiq境界の変換を通して
 構築する (handler が読む ``provider_error`` mode 配線も込みで検証する)。
 """
 
@@ -39,8 +39,9 @@ from app.ai_providers.errors import (
 )
 from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.assessment.errors import map_provider_to_assessment
+from app.analysis.assessment.errors import to_assessment_error
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
+from app.analysis.assessment.task_errors import to_assessment_task_error
 from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -146,7 +147,7 @@ async def test_hold_reason_derived_from_provider_mode(
     extraction = await _make_extraction(db_session, article)
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
-    exc = map_provider_to_assessment(provider_exc)
+    exc = to_assessment_task_error(to_assessment_error(provider_exc))
 
     decision = await handler.handle(
         ready=ready,
@@ -171,7 +172,7 @@ async def test_recoverable_with_retry_budget_returns_true(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = map_provider_to_assessment(AIProviderNetworkError())
+    exc = to_assessment_task_error(to_assessment_error(AIProviderNetworkError()))
     decision = await handler.handle(
         ready=ready,
         exc=exc,
@@ -196,7 +197,7 @@ async def test_recoverable_last_attempt_returns_false(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = map_provider_to_assessment(AIProviderNetworkError())
+    exc = to_assessment_task_error(to_assessment_error(AIProviderNetworkError()))
     decision = await handler.handle(
         ready=ready,
         exc=exc,
@@ -220,7 +221,7 @@ async def test_terminal_returns_false_without_reraise(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = map_provider_to_assessment(AIProviderConfigurationError())
+    exc = to_assessment_task_error(to_assessment_error(AIProviderConfigurationError()))
     decision = await handler.handle(
         ready=ready,
         exc=exc,
@@ -245,7 +246,7 @@ async def test_terminal_writes_single_failure_audit_row(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = map_provider_to_assessment(_input_rejected())
+    exc = to_assessment_task_error(to_assessment_error(_input_rejected()))
     await handler.handle(
         ready=ready,
         exc=exc,
@@ -337,7 +338,9 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     handler = AssessmentFailureHandler(session_factory)
 
     # business 側の例外は __str__ が code 固定値のみ。
-    business_exc = map_provider_to_assessment(AIProviderConfigurationError())
+    business_exc = to_assessment_task_error(
+        to_assessment_error(AIProviderConfigurationError())
+    )
 
     with (
         patch(
@@ -379,8 +382,18 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
 @pytest.mark.parametrize(
     ("make_exc", "expected"),
     [
-        (lambda: map_provider_to_assessment(AIProviderConfigurationError()), "failed"),
-        (lambda: map_provider_to_assessment(AIProviderNetworkError()), "failed"),
+        (
+            lambda: to_assessment_task_error(
+                to_assessment_error(AIProviderConfigurationError())
+            ),
+            "failed",
+        ),
+        (
+            lambda: to_assessment_task_error(
+                to_assessment_error(AIProviderNetworkError())
+            ),
+            "failed",
+        ),
         (lambda: ValueError("surprise"), "failed"),
         (lambda: DatabaseUnexpectedError(), "infra_error"),
     ],
@@ -438,8 +451,8 @@ async def test_failed_emitted_before_audit_side_effect(
     extraction = await _make_extraction(db_session, article)
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
-    exc = map_provider_to_assessment(
-        AIProviderConfigurationError()
+    exc = to_assessment_task_error(
+        to_assessment_error(AIProviderConfigurationError())
     )  # Terminal -> failed
 
     with patch.object(
@@ -479,7 +492,9 @@ async def test_terminal_with_exhausted_provider_error_emits_ai_provider_exhauste
     extraction = await _make_extraction(db_session, article)
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
-    exc = map_provider_to_assessment(AIProviderInsufficientBalanceError())
+    exc = to_assessment_task_error(
+        to_assessment_error(AIProviderInsufficientBalanceError())
+    )
 
     await handler.handle(
         ready=ready,
@@ -510,7 +525,9 @@ async def test_recoverable_exhausted_provider_error_emits_regardless_of_last_att
     extraction = await _make_extraction(db_session, article)
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
-    exc = map_provider_to_assessment(AIProviderUsageLimitExhaustedError())
+    exc = to_assessment_task_error(
+        to_assessment_error(AIProviderUsageLimitExhaustedError())
+    )
 
     await handler.handle(
         ready=ready,
@@ -529,8 +546,12 @@ async def test_recoverable_exhausted_provider_error_emits_regardless_of_last_att
 @pytest.mark.parametrize(
     "make_exc",
     [
-        lambda: map_provider_to_assessment(AIProviderConfigurationError()),
-        lambda: map_provider_to_assessment(AIProviderRateLimitedError()),
+        lambda: to_assessment_task_error(
+            to_assessment_error(AIProviderConfigurationError())
+        ),
+        lambda: to_assessment_task_error(
+            to_assessment_error(AIProviderRateLimitedError())
+        ),
     ],
     ids=["terminal_non_exhausted", "recoverable_non_exhausted"],
 )

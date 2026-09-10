@@ -19,12 +19,12 @@ from app.ai_providers.errors import (
 )
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.assessment.errors import (
-    AssessmentError,
+from app.analysis.assessment.metrics import record_assessment_processing_outcome
+from app.analysis.assessment.task_errors import (
     AssessmentRecoverableError,
+    AssessmentTaskError,
     AssessmentTerminalError,
 )
-from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -143,7 +143,7 @@ class AssessmentFailureHandler:
     async def _audit_failure(
         self,
         ready: ReadyForAssessment,
-        exc: AssessmentError | DatabaseError,
+        exc: AssessmentTaskError | DatabaseError,
         *,
         analyzable_article_id: int,
     ) -> None:

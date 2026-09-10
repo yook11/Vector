@@ -1,6 +1,6 @@
 # AssessmentConsumer — イベント受信と投資判定
 
-Status: 全体方針合意・正常終了結果のスライス実装・検証済み（2026-09-11）。Consumer・AWS適用は未着手。
+Status: 全体方針合意・正常終了結果と失敗理由の契約を実装・検証済み（2026-09-11）。Consumer・AWS適用は未着手。
 
 ## Problem
 
@@ -82,6 +82,26 @@ Done: 3種類の正常終了の根拠、エラーとの境界、後続イベン�
 - 既存Taskiqは`IN_SCOPE`だけ一覧更新通知、続いて結果型の記事IDによるEmbeddingタスク投入を行う。この接続は既存稼働の維持に限定し、新Consumerの後続配送は引き続きOutbox経由とする。
 - 結果型の不正な組み合わせ、実DBでの重複保存、対象外と重複スキップの非通知・非投入をテストへ反映した。保存行・成功監査・Outboxの一致、重複時のcommit非実行、保存・commit・Outbox失敗時の例外とロールバックも検証した。
 - 検証結果：`ruff check`と`ruff format --check`（app全体・変更したテスト）が成功。`uv run pytest tests/ -m unit -x -q`は6,366件成功。旧戻り値を期待していた統合テスト2件の更新後、該当ファイルの単体テスト14件を再確認した。`make test-integration PYTEST_ARGS='-x -q'`は1,354件成功・22件skipで終了し、テスト用DB・Redisは終了処理で削除した。今回の正常終了結果スライスは完了とする。
+
+### 次のタスク：失敗理由の契約
+
+Problem: AssessmentのServiceエラーを再試行分類から独立させ、Embeddingと同じく失敗理由と原因の詳細を呼び出し元へ伝える。
+
+- `AssessmentFailureReason(StrEnum)`は`PROVIDER_ERROR=provider_error`、`RESPONSE_INVALID=response_invalid`、`CURATION_MISSING=curation_missing`を定義する。
+- `AssessmentError`は`reason`・`provider_error`・`defect`を持つ。プロバイダー失敗だけ分類済みの`AIProviderStateError`または`AIProviderContentError`を必須とし、応答不正だけ`StrEnum`のdefectを必須とする。それ以外の詳細は`None`に限定し、不正な組み合わせは`TypeError`で拒否する。
+- `code`はプロバイダーの`CODE`、応答不正の`defect.value`、不存在の`assessment_curation_missing`とする。`AssessmentResponseInvalidError(defect)`の呼び出し形式と全16種類の詳細コードを維持する。`AssessmentCurationMissingError()`も定義する。
+- Serviceは`to_assessment_error`で元のプロバイダー例外を同一インスタンスとして保持し、`raise ... from exc`で原因チェーンをつなぐ。既存のAssessmentエラー・DB障害・timeout・想定外例外はそのまま伝播する。正常終了・保存内容・トランザクション境界は維持する。
+- `SAFE_ATTRS=("code",)`とし、エラー文字列へ入力本文やSDK例外の自由文を追加しない。
+- 既存Taskiqとの接続は`task_errors.py`の独立した`AssessmentTaskError`階層と`to_assessment_task_error`が担う。プロバイダー失敗は既存の分類属性へ対応付け、応答不正はRecoverable／`ai_response_invalid`、不存在はTerminal／`target_missing`へ変換する。Assessment以外の例外は同一インスタンスを返す。
+- Taskiq入口は変換後の例外をspan・FailureHandlerへ渡し、変換時だけ元例外を原因として再送出する。既存Taskiqの再試行・hold・監査項目・メトリクスを維持する。旧mapper・旧importの互換aliasは残さず、Taskiq例外のモジュール名変更と原因チェーンへのAssessmentエラー追加は意図した変更とする。
+
+Non-goals: 新Consumerや失敗後処理の実装、通信設定、配送切替、追加DB照会・ロック・schema変更は含めない。開始時のReady判定は変更せず、Curation不存在と開始時の判定済みを新Consumerへ接続するのは後続スライスとする。
+
+Done: 原因保持・詳細コード・Taskiq動作の維持を単体・DB統合テストで検証し、Serviceのエラー契約から再試行分類を分離できること。
+
+実装状況（2026-09-11）: エラー型・Service変換・Taskiq境界の接続を実装済み。プロバイダー全10種の原因保持、応答不正の全16コード、不正な構築の拒否、DB・timeout・想定外例外の同一性、既存Taskiqの監査・メトリクス・再試行・holdを検証した。実DBで詳細コードとTaskiq → Assessment → プロバイダーの3段の原因チェーンが監査へ保存されることも確認した。
+
+検証結果: `ruff check`・`ruff format --check`（app全体と変更したテスト）が成功。`uv run pytest tests/ -m unit -x -q`は6,427件成功。`make test-integration PYTEST_ARGS='-x -q'`は1,369件成功・22件skipで完了し、一時DB・Redisは終了処理で削除した。今回の失敗理由スライスは完了とし、新Consumerへの接続は未実装として残す。
 
 ## Invariants
 

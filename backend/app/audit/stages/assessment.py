@@ -13,7 +13,7 @@ from app.analysis.assessment.domain.ready import (
     ReadyForAssessment,
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
-from app.analysis.assessment.errors import AssessmentError
+from app.analysis.assessment.task_errors import AssessmentTaskError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import AssessmentPayload, BasePipelineEventPayload
 from app.audit.error_chain import extract_error_chain
@@ -177,7 +177,7 @@ class AssessmentAuditRepository:
         self,
         *,
         ready: ReadyForAssessment,
-        exc: AssessmentError | DatabaseError,
+        exc: AssessmentTaskError | DatabaseError,
         article_id: int,
     ) -> None:
         """assessment 失敗を記録する。"""

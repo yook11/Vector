@@ -432,18 +432,18 @@ class TestAssessContentStageSpan:
         期待値の根拠:
         - AIProviderConfigurationError: CODE="ai_error_configuration",
           FAILURE_MODE=OPERATOR_ACTION_REQUIRED (app/ai_providers/errors.py)
-        - map_provider_to_assessment: not retryable → AssessmentTerminalError,
+        - Taskiq境界: not retryable → AssessmentTerminalError,
           failure_kind=mode.value="operator_action_required", code=exc.CODE
           (assessment/errors.py)
         - AssessmentTerminalError: RETRYABILITY=NON_RETRYABLE, FAILURE_ACTION=None
           → failure_action は span に載らない (failure_attrs.py: None なら set しない)
         """
-        from app.analysis.assessment.errors import map_provider_to_assessment
+        from app.analysis.assessment.errors import to_assessment_error
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
         raw = AIProviderConfigurationError()
-        marker = map_provider_to_assessment(raw)
+        marker = to_assessment_error(raw)
 
         with (
             _patch_ready_construction(_make_ready()),
@@ -481,19 +481,20 @@ class TestAssessContentStageSpan:
         期待値の根拠:
         - AIProviderNetworkError: CODE="ai_error_network",
           FAILURE_MODE=ATTEMPT_SCOPED (app/ai_providers/errors.py)
-        - map_provider_to_assessment: retryable → AssessmentRecoverableError,
+        - Taskiq境界: retryable → AssessmentRecoverableError,
           failure_kind="attempt_scoped", code="ai_error_network" (assessment/errors.py)
         - AssessmentRecoverableError: RETRYABILITY=RETRYABLE (assessment/errors.py)
         - backstop: reraise=True → task raises → backstop catches → record_failure
           (no-override = no-op) + OTel exception event by logfire.span backstop
         """
-        from app.analysis.assessment.errors import map_provider_to_assessment
+        from app.analysis.assessment.errors import to_assessment_error
+        from app.analysis.assessment.task_errors import AssessmentRecoverableError
         from app.queue.tasks.assessment import assess_content
         from tests.logfire._span_helpers import exception_event
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
         raw = AIProviderNetworkError()
-        marker = map_provider_to_assessment(raw)
+        marker = to_assessment_error(raw)
 
         with (
             _patch_ready_construction(_make_ready()),
@@ -506,9 +507,11 @@ class TestAssessContentStageSpan:
             mock_handler_cls.return_value.handle = AsyncMock(
                 return_value=FailureHandlingDecision(reraise=True)
             )
-            with pytest.raises(type(marker)):
+            with pytest.raises(AssessmentRecoverableError) as raised:
                 await assess_content(trigger=_make_trigger(), ctx=mock_ctx)
 
+        assert raised.value.__cause__ is marker
+        assert raised.value.provider_error is raw
         attrs = stage_attrs(capfire)
         # failure_kind: ATTEMPT_SCOPED.value (assessment/errors.py)
         assert attrs["failure_kind"] == "attempt_scoped"
@@ -537,12 +540,12 @@ class TestAssessContentStageSpan:
         backstop の record_failure(RuntimeError) は _failure_set=True のため no-op。
         span 属性は元の marker クラスで固定される (failure_attrs.py)。
         """
-        from app.analysis.assessment.errors import map_provider_to_assessment
+        from app.analysis.assessment.errors import to_assessment_error
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
         raw = AIProviderNetworkError()
-        original_marker = map_provider_to_assessment(raw)  # AssessmentRecoverableError
+        original_marker = to_assessment_error(raw)  # AssessmentRecoverableError
 
         with (
             _patch_ready_construction(_make_ready()),

@@ -31,8 +31,10 @@ from app.ai_providers.gemini.error_translator import (
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.errors import (
     AssessmentError,
-    AssessmentRecoverableError,
     AssessmentResponseInvalidError,
+)
+from app.analysis.assessment.task_errors import (
+    AssessmentRecoverableError,
     AssessmentTerminalError,
 )
 from app.analysis.curation.errors import (
@@ -389,7 +391,8 @@ def test_stage_base_classes_inherit_vector_domain_error() -> None:
 def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
     """Layer 2-B class は対応する Layer 1 marker を継承する。"""
     assert issubclass(CurationResponseInvalidError, CurationRecoverableError)
-    assert issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
+    assert issubclass(AssessmentResponseInvalidError, AssessmentError)
+    assert not issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingError)
 
 

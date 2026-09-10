@@ -23,7 +23,7 @@ from sqlalchemy.exc import (
 
 from app.ai_providers.errors import AIProviderOutputBlockedError
 from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
-from app.analysis.assessment.errors import AssessmentRecoverableError
+from app.analysis.assessment.task_errors import AssessmentRecoverableError
 from app.analysis.curation.errors import (
     CurationRecoverableError,
     map_provider_to_curation,
