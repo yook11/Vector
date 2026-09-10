@@ -25,9 +25,9 @@ from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import (
-    AssessmentRecoverableError,
+    AssessmentError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalError,
+    to_assessment_error,
 )
 
 
@@ -136,30 +136,28 @@ class TestCallOncePassthrough:
         assert exc_info.value is original
 
     @pytest.mark.asyncio
-    async def test_assessment_recoverable_base_passes_through(self) -> None:
-        original = AssessmentRecoverableError(code="z", failure_kind="attempt_scoped")
+    async def test_assessment_network_error_passes_through(self) -> None:
+        original = to_assessment_error(AIProviderNetworkError())
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
         )
 
-        with pytest.raises(AssessmentRecoverableError) as exc_info:
+        with pytest.raises(AssessmentError) as exc_info:
             await cls._call_once("prompt")
         assert exc_info.value is original
 
     @pytest.mark.asyncio
-    async def test_assessment_terminal_base_passes_through(self) -> None:
-        original = AssessmentTerminalError(
-            code="z", failure_kind="operator_action_required"
-        )
+    async def test_assessment_configuration_error_passes_through(self) -> None:
+        original = to_assessment_error(AIProviderConfigurationError())
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
         )
 
-        with pytest.raises(AssessmentTerminalError) as exc_info:
+        with pytest.raises(AssessmentError) as exc_info:
             await cls._call_once("prompt")
         assert exc_info.value is original
 
