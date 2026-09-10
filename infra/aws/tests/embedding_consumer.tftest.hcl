@@ -308,12 +308,14 @@ run "without_digest_no_consumer_or_mapping" {
     condition = (
       length(aws_lambda_function.embedding_consumer) == 0 &&
       length(aws_lambda_event_source_mapping.embedding_consumer) == 0 &&
+      length(aws_lambda_function.outbox_relay) == 0 &&
+      length(aws_scheduler_schedule.outbox_relay) == 0 &&
       output.embedding_consumer_function_name == null &&
       output.embedding_consumer_function_arn == null &&
       output.embedding_consumer_image_digest == null &&
       output.embedding_consumer_event_source_mapping_uuid == null
     )
-    error_message = "初回digest未指定ではConsumerもトリガーも作成しない。"
+    error_message = "初回digest未指定ではConsumer・relayと各起動トリガーを作成しない。"
   }
 }
 
@@ -333,8 +335,7 @@ run "consumer_image_and_enabled_mapping" {
       aws_lambda_function.embedding_consumer[0].memory_size == 1024 &&
       aws_lambda_function.embedding_consumer[0].timeout == 120 &&
       aws_lambda_function.embedding_consumer[0].reserved_concurrent_executions == 10 &&
-      aws_lambda_function.outbox_relay[0].reserved_concurrent_executions == 1 &&
-      aws_scheduler_schedule.outbox_relay[0].state == "DISABLED"
+      aws_lambda_function.outbox_relay[0].reserved_concurrent_executions == 1
     )
     error_message = "Consumerのイメージと実行上限をrelayから独立して設定する。"
   }
@@ -367,7 +368,6 @@ run "consumer_image_and_enabled_mapping" {
       aws_lambda_event_source_mapping.embedding_consumer[0].function_name == aws_lambda_function.embedding_consumer[0].arn &&
       aws_lambda_event_source_mapping.embedding_consumer[0].event_source_arn == aws_sqs_queue.outbox["embedding"].arn &&
       aws_lambda_event_source_mapping.embedding_consumer[0].enabled &&
-      aws_scheduler_schedule.outbox_relay[0].state == "DISABLED" &&
       aws_lambda_event_source_mapping.embedding_consumer[0].batch_size == 1 &&
       aws_lambda_event_source_mapping.embedding_consumer[0].maximum_batching_window_in_seconds == 0 &&
       aws_lambda_event_source_mapping.embedding_consumer[0].scaling_config[0].maximum_concurrency == 10 &&
@@ -375,7 +375,21 @@ run "consumer_image_and_enabled_mapping" {
       aws_lambda_event_source_mapping.embedding_consumer[0].tags.Consumer == "slice-test-embedding-consumer" &&
       output.embedding_consumer_image_digest == var.embedding_consumer_image_digest
     )
-    error_message = "Consumerの受信を有効にし、1件ずつの部分バッチ応答とrelayの定期送信停止を維持する。"
+    error_message = "Consumerの有効な受信と1件ずつの部分バッチ応答を維持する。"
+  }
+  assert {
+    condition = (
+      aws_scheduler_schedule.outbox_relay[0].state == "ENABLED" &&
+      aws_scheduler_schedule.outbox_relay[0].schedule_expression == "rate(1 minute)" &&
+      aws_scheduler_schedule.outbox_relay[0].flexible_time_window[0].mode == "OFF" &&
+      aws_scheduler_schedule.outbox_relay[0].group_name == aws_scheduler_schedule_group.outbox_relay.name &&
+      aws_scheduler_schedule.outbox_relay[0].target[0].arn == aws_lambda_function.outbox_relay[0].arn &&
+      aws_scheduler_schedule.outbox_relay[0].target[0].role_arn == aws_iam_role.outbox_relay_scheduler.arn &&
+      aws_scheduler_schedule.outbox_relay[0].target[0].input == "{}" &&
+      aws_lambda_function.outbox_relay[0].memory_size == 512 &&
+      aws_lambda_function.outbox_relay[0].timeout == 120
+    )
+    error_message = "relayの既存実行上限と対象関数を維持し、1分間隔の定期送信を有効にする。"
   }
   assert {
     condition = (

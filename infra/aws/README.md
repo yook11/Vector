@@ -310,11 +310,11 @@ read-only の plan ロールでは通らない)。
 
 ## Outbox relay Lambda
 
-工程別SQS・relay専用Lambdaの初回構築、digest更新、接続確認は [OUTBOX_RELAY.md](OUTBOX_RELAY.md) を参照する。現在のhandlerはDB接続確認のみで、定期送信は無効。
+工程別SQS・relay専用Lambdaの初回構築、digest更新、接続確認は [OUTBOX_RELAY.md](OUTBOX_RELAY.md) を参照する。現在のhandlerはOutboxRelay.run_onceでembedding向けイベントを1回最大10件送信する。スライス4.2では既存SchedulerをENABLEDへ更新し、送信開始後に実処理を確認する。適用・監視・緊急停止は同手順を参照する。
 
 ## EmbeddingConsumer Lambda（スライス3.4）
 
-共通backendイメージをarm64のLambdaとして起動する。Consumerの版は`embedding_consumer_image_digest`で独立指定し、ECSのimage_tagやrelayのdigestとは連動させない。メモリ1024MB、timeout120秒、予約同時実行10、1回1件、最大同時実行10、ReportBatchItemFailuresで固定する。スライス3.4ではSQSトリガーを`enabled=false`で配置した。スライス4.1以降の目標状態は`enabled=true`であり、既存マッピングの更新・今後の新規作成ともに受信を有効にする。relayのSchedulerは別途有効化するまで`DISABLED`を維持する。
+共通backendイメージをarm64のLambdaとして起動する。Consumerの版は`embedding_consumer_image_digest`で独立指定し、ECSのimage_tagやrelayのdigestとは連動させない。メモリ1024MB、timeout120秒、予約同時実行10、1回1件、最大同時実行10、ReportBatchItemFailuresで固定する。スライス3.4ではSQSトリガーを`enabled=false`で配置した。スライス4.1以降の目標状態は`enabled=true`であり、既存マッピングの更新・今後の新規作成ともに受信を有効にする。relayのSchedulerはスライス4.1では`DISABLED`を維持した。スライス4.2で`ENABLED`へ更新する。
 
 関数は専用サブネット・SG・実行ロール・ロググループを使用する。環境変数はproduction、IAM認証のvector_app用DB URL、専用Gemini SSMパス、EGRESS_PROXY_URLを渡す。AWS_REGIONはLambdaが提供する。APIキーの値はTerraform・イメージ・ログへ置かず、Consumer呼び出し時にSSMから取得する。SSMの準備は有効化前に行い、値の登録と実通信検証は別作業とする。
 
@@ -323,15 +323,15 @@ read-only の plan ロールでは通らない)。
 1. 管理者経路でbootstrapを先に適用し、`ci-apply-embedding-consumer`ポリシーとapplyロールへの接続、plan/apply向けの限定Lambda復号ポリシーを反映する。[Lambda設定の読戻し確認](bootstrap/README.md#lambda管理設定の読戻し権限)を済ませてから本体planへ進む。今回、実行ロールのboundaryとPassRoleの制約は変更しない。
 2. 既存のAWS app images workflowで対象mainの共通backendイメージを作成・公開し、backend ECRのsha256 digestを取得する。Consumer専用イメージは作らない。既存ECSのrollout承認は別工程であり、Consumerの更新はTerraform経路で行う。
 3. AWS terraform applyをmainで手動実行し、`embedding_consumer_image_digest`へ対象digestを入力する。backendリポジトリ内の存在確認が成功した場合だけplanへ進む。production承認後、既存どおり同じjobでplanを再実行してapplyする。受信状態は現在のTerraform定義に従うため、新規作成も有効になる。SSM登録と受信開始の確認を済ませてから承認する。
-4. outputsの`embedding_consumer_function_name`・`embedding_consumer_function_arn`・`embedding_consumer_image_digest`・`embedding_consumer_event_source_mapping_uuid`を確認する。AWSのGetFunctionConfigurationとGetEventSourceMappingで実行設定とState=Enabled、relayのSchedulerがDISABLEDであることを確認する。この確認では関数をinvokeしない。
+4. outputsの`embedding_consumer_function_name`・`embedding_consumer_function_arn`・`embedding_consumer_image_digest`・`embedding_consumer_event_source_mapping_uuid`を確認する。AWSのGetFunctionConfigurationとGetEventSourceMappingで実行設定とState=Enabled、relayのSchedulerが現在のTerraform定義（スライス4.2以降はENABLED）と一致することを確認する。この確認では関数をinvokeしない。
 5. 通常のinfra適用では入力を空欄にして現在の版を維持する。更新・切り戻しは新しい版・過去の版のdigestを明示する。既にECRから削除された版は指定できないため、切り戻し先の保持状況も確認する。
-6. 配置済みConsumerの受信有効化・停止・再開は以下の手順に従う。relayの定期送信開始と、実通信・ログ配送・再配信・DLQ移動・Taskiq併用の実証は次のタスクで行う。
+6. 配置済みConsumerの受信有効化・停止・再開は以下の手順に従う。relayの定期送信開始は[スライス4.2](OUTBOX_RELAY.md#定期送信の開始と監視スライス42)に従い、実通信・ログ配送・再配信・DLQ移動・Taskiq併用の実証は開始後に記録する。
 
 初回にdigestを指定しない場合、基盤は維持するが関数とトリガーは作成せず、上記outputsはnullとなる。SSOの期限切れやstate解決失敗を初回扱いにしない。
 
 ### Consumerの受信有効化・監視・停止・再開（スライス4.1）
 
-配置済みConsumerのマッピングだけを有効にする。bootstrap再適用、イメージ再ビルド・公開、digestの変更は不要。relayのSchedulerはDISABLEDを維持し、Outboxの未配信件数・イベント種類を確認してから次のタスクで定期送信を開始する。
+以下の開始手順はConsumerだけを先に有効化したスライス4.1の記録であり、relayのDISABLED確認は当時の条件である。現在のrelay開始は[スライス4.2](OUTBOX_RELAY.md#定期送信の開始と監視スライス42)を使う。ユーザーの選択でOutboxの事前件数確認は省略し、開始後に実処理を確認する。以下のConsumer停止・再開手順は引き続き使用する。bootstrap再適用、イメージ再ビルド・公開、digestの変更は不要。
 
 **適用前の確認と受信開始**
 
