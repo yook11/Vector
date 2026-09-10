@@ -9,7 +9,7 @@ PR6 で Service が以下を行うようになったことを固定する:
   ``CategoryEnumDatabaseMismatchError`` (enum↔DB 不整合) を raise する。
 - 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で
   ``AssessmentAuditRepository.append_*`` を呼び、成功 audit を 1 行焼く。
-- race lost (``save()`` が None) の場合は audit を焼かず ``None`` を返す
+- race lost (``save()`` が None) の場合は audit を焼かず ``ALREADY_ASSESSED`` を返す
   (actor SSoT、勝者 task の audit と二重記録しない、再収集は reconcile cron 経路)。
 
 PR5 で merge 済の repository / payload / errors (Layer 2-A ACL) は本 PR では
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import pytest
 from logfire.testing import CaptureLogfire
@@ -46,7 +47,11 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
-from app.analysis.assessment.service import AssessmentService
+from app.analysis.assessment.service import (
+    AssessmentCompletion,
+    AssessmentCompletionKind,
+    AssessmentService,
+)
 from app.logfire.article_stage import assessment_stage_span
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import (
@@ -189,8 +194,9 @@ async def test_in_scope_success_records_audit(
     result = await svc.execute(
         _ready(extraction), assessor, analyzable_article_id=subject_article.id
     )
-    # in-scope 成功時 Service は assessment id (int) を返す
-    assert isinstance(result, int) and result > 0
+    assert result.kind is AssessmentCompletionKind.IN_SCOPE
+    assert result.analyzed_article_id is not None
+    assert result.analyzed_article_id > 0
 
     # 監査主語は明示引数 (subject_article) 側。ready/curation の記事では引けない
     assert await _fetch_assessment_events(db_session, article.id) == []
@@ -228,7 +234,7 @@ async def test_in_scope_success_passes_snapshot_to_repository(
             _ready(extraction), assessor, analyzable_article_id=article.id
         )
 
-    assert result == 777
+    assert result == AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 777)
     saved_article = save_mock.await_args.args[0]
     assert isinstance(saved_article, InScopeAnalyzedArticle)
     assert saved_article.curation_id == extraction.id
@@ -256,8 +262,7 @@ async def test_out_of_scope_success_records_audit(
     result = await svc.execute(
         _ready(extraction), assessor, analyzable_article_id=article.id
     )
-    # out-of-scope は Stage 5 chain しないため Service は None を返す
-    assert result is None
+    assert result == AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
 
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 1
@@ -290,11 +295,7 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """``InScopeRepository.save`` が None (race lost) のとき audit 行は 0。
-
-    敗者は ``None`` を返し audit も焼かない (勝者 task の audit と二重記録しない、
-    救済は reconcile cron に委譲)。
-    """
+    """実DBの重複スキップは処理済みとなり、成功監査とOutboxを追加しない。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     # 勝者 row を先に焼いておく (本 test は敗者経路)
@@ -313,16 +314,11 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
     )
 
     svc = AssessmentService(session_factory)
-    # 敗者経路では save_in_scope() が None → Service も None を返して短絡する
-    with patch(
-        "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await svc.execute(
-            _ready(extraction), assessor, analyzable_article_id=article.id
-        )
+    result = await svc.execute(
+        _ready(extraction), assessor, analyzable_article_id=article.id
+    )
 
-    assert result is None
+    assert result == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
 
@@ -498,15 +494,11 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
 
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
     svc = AssessmentService(session_factory)
-    with patch(
-        "app.analysis.assessment.repository.AssessmentRepository.save_out_of_scope",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await svc.execute(
-            _ready(extraction), assessor, analyzable_article_id=article.id
-        )
+    result = await svc.execute(
+        _ready(extraction), assessor, analyzable_article_id=article.id
+    )
 
-    assert result is None
+    assert result == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
 
@@ -666,7 +658,7 @@ async def test_in_scope_persists_result_and_matching_outbox_event(
     curation = await _make_extraction(db_session, article)
     assessor = _make_assessor(return_envelope=_in_scope_call())
 
-    await AssessmentService(session_factory).execute(
+    completion = await AssessmentService(session_factory).execute(
         _ready(curation), assessor, analyzable_article_id=article.id
     )
 
@@ -686,11 +678,16 @@ async def test_in_scope_persists_result_and_matching_outbox_event(
             )
         ).scalar_one()
 
+        assert completion == AssessmentCompletion(
+            AssessmentCompletionKind.IN_SCOPE, saved.id
+        )
         assert event.payload == {
             "curation_id": curation.id,
             "analyzed_article_id": saved.id,
         }
         assert event.schema_version == ArticleAssessedInScope.SCHEMA_VERSION
+
+    assert len(await _fetch_assessment_events(db_session, article.id)) == 1
 
 
 @pytest.mark.asyncio
@@ -755,7 +752,7 @@ async def test_out_of_scope_writes_no_outbox_event(
     curation = await _make_extraction(db_session, article)
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
 
-    await AssessmentService(session_factory).execute(
+    completion = await AssessmentService(session_factory).execute(
         _ready(curation), assessor, analyzable_article_id=article.id
     )
 
@@ -770,3 +767,53 @@ async def test_out_of_scope_writes_no_outbox_event(
         events = (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
     assert saved_curation_id == curation.id
     assert events == []
+
+    assert completion == AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
+    assert len(await _fetch_assessment_events(db_session, article.id)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_scope", [True, False], ids=["in_scope", "out_of_scope"])
+async def test_repeated_save_preserves_result_audit_and_outbox(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+    in_scope: bool,
+) -> None:
+    """同じReadyからの再実行は実DBで重複スキップとなり、保存済みの各行を維持する。"""
+    article = await _make_article(db_session, sample_source)
+    curation = await _make_extraction(db_session, article)
+    ready = _ready(curation)
+    assessor = _make_assessor(
+        return_envelope=_in_scope_call() if in_scope else _out_of_scope_call()
+    )
+    service = AssessmentService(session_factory)
+    first = await service.execute(ready, assessor, analyzable_article_id=article.id)
+
+    async def saved_ids() -> tuple[list[int], list[int], list[UUID]]:
+        async with session_factory() as reader:
+            model = AnalyzedArticleRecordORM if in_scope else OutOfScopeArticleRecordORM
+            result_ids = list((await reader.scalars(select(model.id))).all())
+            audit_ids = list((await reader.scalars(select(PipelineEvent.id))).all())
+            event_ids = list((await reader.scalars(select(OutboxEvent.event_id))).all())
+            return result_ids, audit_ids, event_ids
+
+    before = await saved_ids()
+    assert len(before[0]) == 1
+    assert len(before[1]) == 1
+    assert len(before[2]) == int(in_scope)
+    assert first == (
+        AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, before[0][0])
+        if in_scope
+        else AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
+    )
+
+    with patch.object(AsyncSession, "commit", new_callable=AsyncMock) as commit:
+        repeated = await service.execute(
+            ready, assessor, analyzable_article_id=article.id
+        )
+        commit.assert_not_awaited()
+
+    assert repeated == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
+    assert await saved_ids() == before

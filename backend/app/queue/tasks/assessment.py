@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
@@ -14,7 +16,7 @@ from app.analysis.assessment.domain.ready import (
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
-from app.analysis.assessment.service import AssessmentService
+from app.analysis.assessment.service import AssessmentCompletionKind, AssessmentService
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -122,13 +124,13 @@ async def assess_content(
                 raise
             return
 
-        if result is not None:
+        if result.kind is AssessmentCompletionKind.IN_SCOPE:
             # コミット済みの一覧を無効化し、後続の投入失敗でも通知を欠落させない。
             notifier = FrontendRevalidateNotifier.from_settings(settings)
             await notifier.notify(tags=["articles:list", "articles:categories"])
             await generate_embedding.kiq(
                 EmbeddingTrigger(
-                    analyzed_article_id=result,
+                    analyzed_article_id=cast(int, result.analyzed_article_id),
                     analyzable_article_id=analyzable_article_id,
                 )
             )
