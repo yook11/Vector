@@ -90,6 +90,15 @@ class ReadyForAssessment(BaseModel):
         を併せて返す。対象外なら blocked 例外を投げる。
         """
         facts = await repo.load_ready_build_facts(curation_id)
+        return cls.from_facts(curation_id, facts)
+
+    @classmethod
+    def from_facts(
+        cls,
+        curation_id: int,
+        facts: AssessmentReadyBuildFacts | None,
+    ) -> tuple[ReadyForAssessment, int]:
+        """取得済みの事実から、I/Oなしで開始条件と入力を検証する。"""
         if facts is None:
             raise AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.CURATION_MISSING
