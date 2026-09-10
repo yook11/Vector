@@ -9,6 +9,8 @@ on:
     branches: [main]
 
 env:
+  # 外部通信を行わないテスト専用の到達不能プロキシで、予期しない通信も拒否する。
+  EGRESS_PROXY_URL: http://egress-disabled.vector.internal:9
   # Crossref通信を行わないCI用dummy。production migrationは専用secretで上書きする。
   CROSSREF_CONTACT_EMAIL: crossref-contact@example.invalid
 

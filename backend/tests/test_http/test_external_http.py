@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.config import settings
 from app.http.external import (
     _PinnedDnsTransport,
     make_external_async_client,
@@ -56,7 +55,7 @@ def captured_requests(
 def egress_proxy(monkeypatch: pytest.MonkeyPatch) -> str:
     """settings 経由で egress proxy を設定する (factory が読む唯一の経路)。"""
     url = "http://proxy.vector.internal:3128"
-    monkeypatch.setattr(settings, "egress_proxy_url", url)
+    monkeypatch.setenv("EGRESS_PROXY_URL", url)
     return url
 
 
@@ -154,7 +153,7 @@ class TestDnsRebindResistance:
         with patch(
             "app.shared.security.ssrf_guard._resolve_host", side_effect=fake_resolve
         ):
-            async with make_external_async_client() as client:
+            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://rebind.example/feed.xml")
 
         assert len(captured_requests) == 1
@@ -171,7 +170,7 @@ class TestDnsRebindResistance:
     ) -> None:
         """Host header は元 host を維持 (HTTP virtual host routing 用)。"""
         with _patch_resolver("8.8.8.8"):
-            async with make_external_async_client() as client:
+            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com/path")
         assert captured_requests[0].headers["Host"] == "example.com"
 
@@ -182,7 +181,7 @@ class TestDnsRebindResistance:
         """``extensions["sni_hostname"]`` に元 host を設定し、TLS server_hostname
         が IP に書換わらないことを保証 (cert verify pass 担保)。"""
         with _patch_resolver("8.8.8.8"):
-            async with make_external_async_client() as client:
+            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com/")
         assert captured_requests[0].extensions.get("sni_hostname") == "example.com"
 
@@ -192,7 +191,7 @@ class TestDnsRebindResistance:
     ) -> None:
         """IPv6 host も pin される (httpx が ``[ip]`` 形式に自動 bracket)。"""
         with _patch_resolver("2001:4860:4860::8888"):
-            async with make_external_async_client() as client:
+            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com/")
         assert captured_requests[0].url.host == "2001:4860:4860::8888"
         assert captured_requests[0].headers["Host"] == "example.com"
@@ -203,7 +202,7 @@ class TestDnsRebindResistance:
     ) -> None:
         """URL host を IP に書換えても path / query / port は維持する。"""
         with _patch_resolver("8.8.8.8"):
-            async with make_external_async_client() as client:
+            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com:8443/api/v1?x=1&y=2")
         url = captured_requests[0].url
         assert url.host == "8.8.8.8"
@@ -276,14 +275,14 @@ class TestEgressProxyRouting:
     ) -> None:
         """呼び出し側の ``proxy=`` は経路を変えない (egress は factory が所有する)。
 
-        settings 未設定なら直接接続のままなので、host は検証済 IP に pin される。
+        環境設定のproxyを維持し、呼び出し側の指定を採用しない。
         """
         with _patch_resolver("8.8.8.8"):
             async with make_external_async_client(
                 proxy="http://attacker.example.com:3128"
             ) as client:
                 await client.get("https://example.com/")
-        assert captured_requests[0].url.host == "8.8.8.8"
+        assert captured_requests[0].url.host == "example.com"
 
 
 # follow_redirects の default 動作

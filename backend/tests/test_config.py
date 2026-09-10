@@ -349,9 +349,11 @@ _VALID_EGRESS_PROXY_URLS = [
 ]
 
 
-def test_egress_proxy_url_defaults_to_none() -> None:
-    """未設定なら None (直接接続のまま = Fly / compose の既定)。"""
-    assert Settings().egress_proxy_url is None
+def test_egress_proxy_url_is_required(monkeypatch) -> None:
+    """プロキシ未設定では全体設定も起動を拒否する。"""
+    monkeypatch.delenv("EGRESS_PROXY_URL", raising=False)
+    with pytest.raises(ValidationError, match="egress_proxy_url"):
+        Settings()
 
 
 @pytest.mark.parametrize("proxy_url", _VALID_EGRESS_PROXY_URLS)
