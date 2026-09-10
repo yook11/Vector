@@ -1,6 +1,6 @@
 # EmbeddingConsumer — SQS受信とベクトル生成
 
-Status: Draft（2026-09-10、Consumer・SQS処理部品実装済み、Lambda起動部分の方針合意済み）
+Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード実装済み・AWS未適用（2026-09-10）
 
 業務上の成功・失敗、再配信設定、Taskiqとの併用方針と、Lambda呼び出し単位の接続・APIキー管理は合意済み。Lambda実行の数値設定と実装詳細は、各スライスの確定項目に分ける。基盤のTerraform実装と実環境での有効化を区別して記録する。
 
@@ -19,12 +19,12 @@ Status: Draft（2026-09-10、Consumer・SQS処理部品実装済み、Lambda起�
 - [EmbeddingConsumer](../../backend/app/analysis/embedding/consumer.py)：検証済みpayloadの受信、開始状態の取得、60秒の業務処理、失敗後処理と例外伝播。
 - [EmbeddingRepository](../../backend/app/analysis/embedding/repository.py)：生成済み判定と、embeddingがNULLの場合だけ更新する保存処理。
 - [worker起動設定](../../backend/supervisord/analysis.conf)：embedding workerの最大同時実行数は1プロセスあたり10。
-- [relay基盤](../../infra/aws/outbox_relay.tf)：Standardキュー、relay Lambda、無効状態のScheduler。consumer・SQS起動トリガーは未実装。
+- [relay基盤](../../infra/aws/outbox_relay.tf)：Standardキュー、relay Lambda、無効状態のScheduler。ConsumerとSQS起動トリガーは配置済み。
 - [Consumer基盤](../../infra/aws/embedding_consumer.tf)：専用サブネット・IAM・SSM経路・DLQ・通知。
 - [適用手順](../../infra/aws/README.md#embeddingconsumer基盤の追加スライス1)：bootstrap先行・滞留確認・秘密情報登録・後続検証。
 - AWS公式：[SQSとLambdaの接続設定](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html)、[同時実行制御](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html)、[DLQ](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)。
 
-現状の記載はリポジトリに基づく。AWS実環境の稼働・適用状況は未確認。
+現状はリポジトリとImplementationの時点付き実環境確認に基づく。受信開始と実データ処理の結果は、配置済みの事実と区別して記録する。
 
 ## Invariants
 
@@ -284,7 +284,7 @@ relayの120秒timeout、Outboxの150秒lease、最大5回の送信試行、30・
 1. DLQ、元キューの再配信・保持設定、Consumer専用の権限・ネットワーク・ログを整備する。この段階では受信を開始しない。
 2. consumer本体を実装し、成功・失敗・競合・記事不存在の契約をローカルで検証する。
 3. Lambda handler・実行イメージ・関数と無効状態のSQS起動トリガーを整備する。
-4. 実環境で接続確認後に受信を有効化し、実行・再配信・DLQ移動を検証してTaskiqとの併用を開始する。
+4. 配置・SSM設定を確認してConsumerの受信を先に有効化する。次にOutboxの未配信件数・イベント種類を確認してrelayの送信を開始し、実データで通信・実行・再配信・DLQ移動・Taskiqとの併用を確認する。
 
 Doneは、正常処理・生成済み・競合でメッセージが対応完了となり、失敗が記録され、再配信上限後にDLQへ移り、Taskiqとの重複でDB結果を壊さないことを検証できた状態とする。ローカル実装完了と、AWS上での有効化・検証完了は区別して記録する。
 
@@ -305,6 +305,31 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 方針・スライス整理（2026-09-10）: 文書のみを更新。差分と既存の合意値・境界の整合性を確認し、コード変更がないためテストは実行しない。この記録時点では各スライスは未着手で、以降の実装状況は下記Implementationに記録する。
 
 ## Implementation
+
+### スライス4.1：ConsumerのSQS受信有効化
+
+Problem: 配置済みConsumerの受信を有効化し、relayの送信開始に先立って監視・停止・再開手順を整える。
+Evidence: 本体apply #43の成功、LambdaのActive・1024MB・120秒、マッピングのDisabled・BatchSize=1・最大同時実行10・ReportBatchItemFailures、専用SSMのSecureString・標準・alias/aws/ssmを読み取り確認した（2026-09-10）。同確認時の元キュー・DLQは各0件、relayのSchedulerはDISABLED。
+Invariants: 有効化以外の実行設定、既存digest、キュー・DLQ、Taskiqの並行稼働を維持する。relayはDISABLEDのままとし、秘密値を取得・記録しない。
+Non-goals: 今回はコード・テスト・仕様・手順まで。AWS適用、relay有効化、イメージ公開、bootstrap・IAM・ネットワーク・アプリ変更、新しい設定スイッチ・ignore_changes・自動停止・独自再試行は含めない。
+Done: 同じマッピングをenabled=trueへ更新する設定とmockテスト、適用・監視・停止・再開手順が一致する。実CI planと適用後の状態確認、実データ処理の確認はそれぞれの実施時点で結果を記録する。
+
+現在の目標状態はConsumerの`enabled=true`であり、将来の新規作成時もdigestを指定すると有効なマッピングを作成する。初回digest未指定なら従来どおり関数・マッピングは作成しない。以下のスライス3.4に記載した無効配置は過去の構築段階の記録として保持する。
+
+適用は既存production承認付きworkflowで行い、relayとConsumer両方のdigestをstateから保持する。PR planの想定差分は既存マッピングの`enabled: false → true`だけで、再作成・削除・relay変更・Lambdaの環境変数や起動設定の不要差分があれば適用前に確認する。適用後はEnabledと設定値、relayのDISABLED、再planに不要な差分がないことを確認する。
+
+CloudWatchの初期化・個別失敗ログ、既存計測、処理時間、スロットリング、キュー滞留、DLQ、DB負荷を確認する。部分バッチ応答の失敗はLambdaのErrorsだけでは判断しない。relay停止中でキューが空の場合の未実行を異常扱いせず、受信設定の有効化を実処理の成功と同一視しない。
+
+共通の接続・認証障害が繰り返される場合や継続する設定不備が判明した場合は、管理者CLIで対象関数・元キュー・一意のUUIDを確認して受信を手動停止する。個別記事の失敗は既存の再配信・DLQへ任せる。停止中の再有効化applyは承認せず、Terraformもenabled=falseへ反映する。原因解消後はTerraformからenabled=trueへ戻し、承認付きapplyで再開する。CLI停止は実行中処理を強制終了せず、キューのメッセージを削除しない。
+
+具体的なコマンドと確認項目は[受信有効化・監視・停止・再開手順](../../infra/aws/README.md#consumerの受信有効化監視停止再開スライス41)を参照する。次のタスクでOutboxの未配信件数・イベント種類を確認し、relayの定期送信を有効化する。実通信・再配信・DLQ移動・Taskiqとの実併用は送信開始後に確認する。
+
+検証結果（2026-09-10）:
+
+- 変更Terraform設定・テストのfmt -check、本体のbackend未接続init・validate・全mock 7件が成功した。既存Service Discoveryのfailure_threshold非推奨警告は残る。
+- READMEの3つのコマンドブロックをbash -nで確認した。停止手順はAWSを置き換えた13シナリオで、正常停止・状態遷移待ち・対象なし/複数・関数/キュー不一致・不正UUID/アカウント・取得/更新失敗・異常状態・待機上限を確認し、対象不正では更新を呼ばないことを検証した。実AWSでの停止操作は行っていない。
+- backend/frontendコードとイメージは未変更のため、全アプリテスト・イメージビルド・bootstrap検証は再実行していない。
+- vector-planはGetRoleCredentialsのForbiddenException（No access）で認証できず、ローカルの実環境planは未実施。実CIのPR planはPR作成後に確認し、想定差分以外があれば適用しない。AWSへの有効化apply、適用後の状態・再plan、実データ処理の確認は未実施。
 
 ### スライス3.4：Lambdaと無効状態のSQSトリガー
 
@@ -645,8 +670,8 @@ SQS入力検証・Consumer接続の検証（2026-09-10）:
 
 - 呼び出し内での資源・APIキー共有、呼び出し間の非共有、初期化後の入力検証、初期化・終了失敗の方針と入口の実装は3.3までに反映した。AWS上の有効化は後続とする。
 - Geminiの通信値と終了方法は3.1で確定した。SSM・DBの通信値とプール方式は3.2で確定した。
-- 3.4のLambdaメモリ1024MB、独立digest指定、専用サブネット・SG・権限の定義は実装済み。bootstrap先行適用、イメージ公開、本体適用と無効状態の確認を後続で行う。
+- 3.4のLambdaメモリ1024MB、独立digest指定、専用サブネット・SG・権限の定義は実装済み。bootstrap先行適用、イメージ公開、本体適用と無効状態の確認を完了した。受信有効化はスライス4.1の対象とする。
 - AWS上での構造化ログ、部分バッチ応答、通信・再配信・DLQ移動とTaskiq併用をスライス4で確認する。
-- 残高不足・設定不備が継続した場合の手動停止・復旧・再投入の具体的な操作手順をスライス4で完成させる。DLQ滞留通知は実装済みで、自動停止は行わない。既存holdはSQS起動トリガーを停止しない。
+- 共通障害・設定不備が継続した場合の手動停止・再開手順はスライス4.1で整備する。復旧後のDLQ再投入手順と実証は後続とする。DLQ滞留通知は実装済みで、自動停止は行わない。既存holdはSQS起動トリガーを停止しない。
 
 未確定の詳細は、合意済みの成功・失敗方針と設定値を変更する理由にはせず、該当部分の実装前に仕様を更新する。
