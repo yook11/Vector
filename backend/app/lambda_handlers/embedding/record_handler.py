@@ -1,6 +1,4 @@
-"""SQSレコードの検証と記事処理の結果を部分バッチ応答へまとめる。"""
-
-from typing import TypedDict
+"""SQSレコード1件を検証し、Embeddingの実行結果を記録する。"""
 
 import structlog
 
@@ -15,17 +13,9 @@ from app.lambda_handlers.embedding.event import (
 )
 from app.lambda_handlers.embedding.failure_handler import EmbeddingLambdaFailureHandler
 from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.records import SqsRecord, SqsRecordBatch
+from app.lambda_handlers.sqs.records import SqsRecord
 
 logger = structlog.get_logger(__name__)
-
-
-class SqsBatchItemFailure(TypedDict):
-    itemIdentifier: str
-
-
-class SqsBatchResponse(TypedDict):
-    batchItemFailures: list[SqsBatchItemFailure]
 
 
 def _log_completion(**fields: object) -> None:
@@ -36,25 +26,9 @@ def _log_completion(**fields: object) -> None:
         pass
 
 
-async def process_embedding_messages(
-    event: object, *, consumer: EmbeddingConsumer
-) -> SqsBatchResponse:
-    """配送構造を先に確定し、入力順に処理して失敗IDだけを返す。"""
-    try:
-        batch = SqsRecordBatch.from_input(event)
-    except SqsInputError as exc:
-        EmbeddingLambdaFailureHandler(logger).handle_invalid_sqs_input(exc)
-        raise
-
-    failures: list[SqsBatchItemFailure] = []
-    for record in batch.records:
-        succeeded = await _process_record(record, consumer=consumer)
-        if not succeeded:
-            failures.append({"itemIdentifier": record.message_id})
-    return {"batchItemFailures": failures}
-
-
-async def _process_record(record: SqsRecord, *, consumer: EmbeddingConsumer) -> bool:
+async def process_embedding_record(
+    record: SqsRecord, *, consumer: EmbeddingConsumer
+) -> bool:
     """1件の本文検証・記事処理・結果ログを行い、正常完了したかを返す。"""
     failure_handler = EmbeddingLambdaFailureHandler(logger)
     try:

@@ -82,7 +82,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 ### SQSメッセージ処理と部分バッチ応答
 
-`app/lambda_handlers/embedding/sqs_batch_handler.py`の`process_embedding_messages(event: object, *, consumer: EmbeddingConsumer)`は、呼び出し元が組み立てたConsumerを使用する。SSM・Engine・AIクライアントの生成やSQSへの直接操作は行わない。
+`app/lambda_handlers/embedding/handler.py`の`_run_embedding(event, settings)`は、資源とConsumerの組み立て、バッチ検証、レコードの逐次処理、失敗IDの集約、資源終了までを進める。`record_handler.py`の`process_embedding_record(record, *, consumer)`へ1件ずつ渡し、本文解析・Consumer呼び出し・結果ログを委ねる。SQSへの直接操作は行わない。
 
 最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はSqsInputErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
 
@@ -216,7 +216,7 @@ maxReceiveCountはSQSの受信回数上限であり、アプリケーション�
 ### Lambda呼び出し単位の接続・APIキー管理（合意済み）
 
 Problem: SQS処理部品へ依存を渡すLambda起動部分について、接続・秘密情報の寿命と設定の責務を明確にする。
-Evidence: 実装済みの`process_embedding_messages`とConsumerの依存注入契約、既存のDB Engine・Gemini SDK利用箇所、および接続再利用・終了に関する公式資料を参照する。既存relayやGeminiEmbedderの構築方法を、そのまま新しい入口の設計条件にはしない。
+Evidence: 実装済みのレコード処理とConsumerの依存注入契約、既存のDB Engine・Gemini SDK利用箇所、および接続再利用・終了に関する公式資料を参照する。既存relayやGeminiEmbedderの構築方法を、そのまま新しい入口の設計条件にはしない。
 
 - 共有範囲は1回のLambda呼び出しとする。ハンドラー側の組み立て処理がDB Engine・AIクライアントを準備し、その呼び出しに含まれるメッセージで共有して、処理と失敗後処理が終了したら閉じる。次の呼び出しへは持ち越さない。
 - 現在はBatchSize=1のため1件ごとに準備・終了する。将来複数件を受信する場合も、同じ呼び出し内で逐次処理する間だけ共有する。受信件数や全体の時間配分は、その変更時に別途検討する。
@@ -297,7 +297,7 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 | 3.1 Gemini共通通信設定とクライアント管理 | app/ai_providers/geminiで通信設定と生成・終了を実装 | 接続3秒・読み取り10秒・書き込み10秒・プール待ち3秒、SDK再試行なしで確定 | 実SDKとモック通信で実効timeout・単一試行・資源解放を確認。既存Embedder・Taskiqは変更しない |
 | 3.1b 新しいEmbedderへの接続 | 共通クライアントを受け取る新しいEmbedderを実装 | 配置・命名、既存の業務仕様と例外翻訳の再利用方法 | モデル・次元・入力・応答・例外の契約を維持し、既存Taskiqを変更せずConsumerに渡せる |
 | 3.2 SSM取得とDB接続の組み立て | 呼び出し単位のAPIキー取得、専用設定からのDB Engine・セッション生成 | SSMのtimeout・試行回数、DBのtimeout・プール方式・application_name、設定型と配置 | 呼び出し間でキー・接続を共有せず、部分的な初期化失敗でも資源を閉じる。SSMはモック、DBのセッション・トランザクション境界は実DBで検証 |
-| 3.3 Lambdaハンドラーへの接続 | 設定・取得・生成・Consumer組み立て、process_embedding_messages呼び出し、終了と応答 | 同期handlerからasyncio.run、初期化後に入力検証、空Recordsも初期化、新規全体タイマーなし、初期化ログは工程・例外型だけで確定 | 同一呼び出し内での共有と別呼び出しでの再生成、成功・個別失敗・初期化失敗・終了失敗・キャンセルの契約を検証。終了障害が確定済み応答を変更しない |
+| 3.3 Lambdaハンドラーへの接続 | 設定・取得・生成・Consumer組み立て、バッチ検証と逐次処理、終了と応答 | 同期handlerからasyncio.run、初期化後に入力検証、空Recordsも初期化、新規全体タイマーなし、初期化ログは工程・例外型だけで確定 | 同一呼び出し内での共有と別呼び出しでの再生成、成功・個別失敗・初期化失敗・終了失敗・キャンセルの契約を検証。終了障害が確定済み応答を変更しない |
 | 3.4 実行イメージと無効状態のトリガー | Lambda用イメージ、関数、SQSイベントソースマッピング、専用基盤の配線、CI権限・適用手順 | メモリ、イメージ構築方法、必要なCI・ECR権限と観測の配線 | BatchSize=1・最大同時実行10・予約済み同時実行10・timeout120秒・ReportBatchItemFailuresを設定し、トリガーは無効。構築・設定を検証して適用手順を揃える |
 
 3.1〜3.3のbackend変更は`/check`に従い、Ruff lint・format、全単体テスト、`make test-integration`を順に行う。外部AI・AWSをモックし、既存TaskiqとConsumerの契約を保つ。3.4は変更範囲に応じたイメージ・Terraform検証を追加する。実通信・通知配送・再配信・DLQ移動と手動停止・再開・再投入は既存スライス4で実証する。
@@ -308,7 +308,7 @@ Doneは、正常処理・生成済み・競合でメッセージが対応完了�
 
 ### Lambda入口の配置整理
 
-送信側は`app/lambda_handlers/outbox_relay/`、受信側は`app/lambda_handlers/embedding/`に配置する。各フォルダのhandler.pyが起動・組み立て・終了を担い、settings.pyに専用設定を置く。Embeddingのsqs_batch_handler.pyはSQSレコード検証と部分バッチ応答、event.pyはJSON解析と共有イベント型への変換、resources.pyはSSM・DB資源の管理を担う。
+送信側は`app/lambda_handlers/outbox_relay/`、受信側は`app/lambda_handlers/embedding/`に配置する。各フォルダのhandler.pyが起動・組み立て・終了を担い、settings.pyに専用設定を置く。Embeddingのhandler.pyはバッチ検証・逐次処理と部分バッチ応答までを進め、record_handler.pyは1件の本文検証・Consumer呼び出し・結果ログ、event.pyはJSON解析と共有イベント型への変換、resources.pyはSSM・DB資源の管理を担う。
 
 各パッケージの__init__.pyからhandler関数を公開し、`app.lambda_handlers.outbox_relay.handler`と`app.lambda_handlers.embedding.handler`の起動パスを維持する。Terraformのcommandとイメージ選択処理は変更しない。初期化順序、空Records、ID不正の全体失敗、本文不正の個別失敗、監査・通知・通信設定・業務処理は維持する。
 
@@ -327,12 +327,25 @@ Done: 共通側がEmbeddingに依存せず、共通受信型の単体検証と�
 
 検証結果（2026-09-10）: Ruff lint・format check、Lambda関連の単体テスト193件、全単体テスト6,300件、専用一時環境の統合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。共通受信型がEmbedding・アプリ設定を読み込まないこと、本文不正の個別処理、ID検証の先行と安全なエラーコードを確認した。
 
+### Lambda実行手順の集約
+
+Problem: 資源の準備とバッチの進行が別モジュールに分かれ、1回の実行手順を入口から通して読めない。
+Evidence: handlerの資源管理、既存のバッチ・レコード処理、初期化・配送・終了障害と実Consumer接続のテストを基準にする。
+
+handler.pyは公開handler、非同期_run_embeddingの順に配置する。同期入口で設定を読み、非同期処理で資源とConsumerを用意した後、SqsRecordBatch.from_inputで全IDを検証する。その場で入力順にprocess_embedding_recordをawaitし、FalseのmessageIdを応答へ集約する。応答型もhandler.pyに置く。旧sqs_batch_handler.pyとprocess_embedding_messagesは廃止し、1件の処理をrecord_handler.pyへ移す。
+
+Invariants: 初期化後に全IDを検証し、本文不正は個別失敗とする。Consumer・資源を同じ呼び出し内で共有し、逐次処理と元のIDを維持する。初期化・全体失敗、個別失敗、キャンセルの伝播と、終了処理・安全な診断項目を維持する。
+Non-goals: AWSの公開起動パス、Consumerの業務処理、イベント契約、SQS共通型、インフラ設定は変更しない。
+Done: handler.pyで準備から応答・終了までを追え、既存の配送・資源管理テストを新しい入口へ接続して単体・統合検証が通過する。
+
+検証結果（2026-09-10）: Ruff lint・format check、全単体テスト6,300件、専用一時環境の統合テスト1,351件が成功した。既存DB権限テスト22件は前提のDBスキーマ不足によりスキップ。旧バッチ関数のテストは資源の生成だけを差し替えて_run_embeddingへ接続し、実際のバッチ検証・逐次処理・応答集約を検証した。1件の処理と完了ログは関数名以外の構文が移動前と一致することも確認した。
+
 ### スライス3.3：Lambdaハンドラーへの接続
 
 Problem: 作成済みの接続・業務処理部品を、1回のLambda呼び出しとして実行して応答する入口を提供する。
 Evidence: SSM・DBのopen_embedding_resources、Geminiのopen_gemini_client、新しいGeminiEmbedder、Consumerと既存SQS処理の契約を確認した。
 
-`app/lambda_handlers/embedding/handler.py`の同期`handler(event, context)`がEmbeddingConsumerSettingsを生成し、asyncio.runで`_run_embedding(event, settings)`を実行する。contextは使用しない。非同期処理ではDB資源、Geminiクライアント、EmbedderとConsumerの順に初期化し、既存のprocess_embedding_messagesへ渡す。AsyncExitStackでGemini資源、DB資源の順に終了してからSqsBatchResponseを返す。
+`app/lambda_handlers/embedding/handler.py`の同期`handler(event, context)`がEmbeddingConsumerSettingsを生成し、asyncio.runで`_run_embedding(event, settings)`を実行する。contextは使用しない。非同期処理ではDB資源、Geminiクライアント、EmbedderとConsumerの順に初期化し、バッチ検証後にprocess_embedding_recordへ1件ずつ渡して失敗IDを集約する。AsyncExitStackでGemini資源、DB資源の順に終了してからSqsBatchResponseを返す。
 
 同一呼び出し内で資源とConsumerを共有し、次の呼び出しには持ち越さない。DBは最初のSQLで接続し、接続確認SQLを追加しない。空Recordsも初期化を行ってから空の失敗一覧を返す。配送構造・本文の検証位置と引数型は変更せず、配送構造不正も初期化後の既存処理で拒否する。
 

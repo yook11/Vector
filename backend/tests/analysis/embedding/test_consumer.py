@@ -41,8 +41,14 @@ from app.models.article_curation import ArticleCuration
 from app.models.pipeline_event import PipelineEvent
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.cloudwatch.records import metric_records
+from tests.lambda_handlers.embedding_fixtures import run_embedding as run_embedding
 
 _MODULE = "app.analysis.embedding.consumer"
+
+
+@pytest.fixture
+def consumer(session_factory, embedder):
+    return EmbeddingConsumer(session_factory, embedder)
 
 
 @pytest.fixture
@@ -525,16 +531,12 @@ def _sqs_record(message_id, payload):
 
 @pytest.mark.asyncio
 async def test_sqs_processing_saves_once_and_records_only_business_failures(
-    db_session, session_factory, target, embedder, capsys
+    db_session, target, embedder, capsys, run_embedding
 ):
     """保存・生成済み・本文不正・記事不存在を実Consumerへ接続し監査を重ねない。"""
-    from app.lambda_handlers.embedding.sqs_batch_handler import (
-        process_embedding_messages,
-    )
-
     payload, article_id = target
     missing = ArticleAssessedInScope(curation_id=999999, analyzed_article_id=999999)
-    response = await process_embedding_messages(
+    response = await run_embedding(
         {
             "Records": [
                 _sqs_record("saved", payload),
@@ -543,7 +545,6 @@ async def test_sqs_processing_saves_once_and_records_only_business_failures(
                 _sqs_record("missing", missing),
             ]
         },
-        consumer=EmbeddingConsumer(session_factory, embedder),
     )
     assert response == {
         "batchItemFailures": [
@@ -565,21 +566,16 @@ async def test_sqs_processing_saves_once_and_records_only_business_failures(
 
 @pytest.mark.asyncio
 async def test_sqs_processing_continues_after_provider_failure(
-    db_session, session_factory, target, embedder
+    db_session, target, embedder, run_embedding
 ):
     """API失敗を応答へ残し、次のメッセージの保存と監査を確定する。"""
-    from app.lambda_handlers.embedding.sqs_batch_handler import (
-        process_embedding_messages,
-    )
-
     payload, _ = target
     embedder.embed_document.side_effect = [
         AIProviderNetworkError(),
         EmbeddingVector(root=(0.2,) * EMBEDDING_DIMENSION),
     ]
-    response = await process_embedding_messages(
+    response = await run_embedding(
         {"Records": [_sqs_record("failed", payload), _sqs_record("saved", payload)]},
-        consumer=EmbeddingConsumer(session_factory, embedder),
     )
     assert response == {"batchItemFailures": [{"itemIdentifier": "failed"}]}
     assert [audit.event_type for audit in await _events(db_session)] == [

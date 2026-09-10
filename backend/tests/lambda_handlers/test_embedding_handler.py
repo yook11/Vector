@@ -254,10 +254,10 @@ async def test_cleanup_and_log_failures_preserve_processing_result(
         )
     if processing_failure:
         monkeypatch.setattr(
-            module, "process_embedding_messages", AsyncMock(side_effect=failure)
+            module, "process_embedding_record", AsyncMock(side_effect=failure)
         )
         with pytest.raises(RuntimeError) as caught:
-            await module._run_embedding({"Records": []}, wiring.config)
+            await module._run_embedding({"Records": [record()]}, wiring.config)
         assert caught.value is failure
     else:
         assert await module._run_embedding({"Records": []}, wiring.config) == {

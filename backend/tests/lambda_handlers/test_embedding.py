@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from importlib import import_module
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
@@ -14,11 +15,11 @@ from app.analysis.embedding.service import (
     EmbeddingCompletion,
     EmbeddingCompletionReason,
 )
-from app.lambda_handlers.embedding import sqs_batch_handler as module
-from app.lambda_handlers.embedding.sqs_batch_handler import (
-    process_embedding_messages,
-)
+from app.lambda_handlers.embedding import record_handler as record_module
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
+from tests.lambda_handlers.embedding_fixtures import run_embedding as run_embedding
+
+module = import_module("app.lambda_handlers.embedding.handler")
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -54,12 +55,10 @@ def consumer():
     "records", [[], [record()], [record("msg-1", 1), record("msg-2", 2)]]
 )
 async def test_success_returns_consistent_response_and_preserves_input_order(
-    consumer, records
+    run_embedding, consumer, records
 ):
     with capture_logs() as logs:
-        response = await process_embedding_messages(
-            {"Records": records, "unused": "ignored"}, consumer=consumer
-        )
+        response = await run_embedding({"Records": records, "unused": "ignored"})
     assert response == {"batchItemFailures": []}
     assert [call.args[0] for call in consumer.consume.await_args_list] == [
         ArticleAssessedInScope(curation_id=i, analyzed_article_id=i)
@@ -81,11 +80,11 @@ async def test_success_returns_consistent_response_and_preserves_input_order(
         record(),
     ],
 )
-async def test_invalid_later_record_prevents_all_processing(consumer, bad):
+async def test_invalid_later_record_prevents_all_processing(
+    run_embedding, consumer, bad
+):
     with capture_logs() as logs, pytest.raises(SqsInputError) as caught:
-        await process_embedding_messages(
-            {"Records": [record(), bad]}, consumer=consumer
-        )
+        await run_embedding({"Records": [record(), bad]})
     consumer.consume.assert_not_awaited()
     assert caught.value.record_index == 1
     assert len(logs) == 1
@@ -97,9 +96,9 @@ async def test_invalid_later_record_prevents_all_processing(consumer, bad):
     "event",
     [None, [], {}, {"Records": None}, {"Records": {}}, {"Records": "private-input"}],
 )
-async def test_invalid_delivery_shape_is_safe(consumer, event):
+async def test_invalid_delivery_shape_is_safe(run_embedding, consumer, event):
     with capture_logs() as logs, pytest.raises(SqsInputError) as caught:
-        await process_embedding_messages(event, consumer=consumer)
+        await run_embedding(event)
     assert "private-input" not in str(caught.value)
     assert "private-input" not in repr(logs)
     consumer.consume.assert_not_awaited()
@@ -115,11 +114,10 @@ async def test_invalid_delivery_shape_is_safe(consumer, event):
         {"body": '{"private-field":"private-value"}'},
     ],
 )
-async def test_invalid_body_fails_only_its_message(consumer, bad):
+async def test_invalid_body_fails_only_its_message(run_embedding, consumer, bad):
     with capture_logs() as logs:
-        response = await process_embedding_messages(
+        response = await run_embedding(
             {"Records": [{"messageId": "bad", **bad}, record("good")]},
-            consumer=consumer,
         )
     assert response == {"batchItemFailures": [{"itemIdentifier": "bad"}]}
     consumer.consume.assert_awaited_once()
@@ -130,7 +128,7 @@ async def test_invalid_body_fails_only_its_message(consumer, bad):
 
 @pytest.mark.parametrize("log_failure", [False, True])
 async def test_mixed_results_continue_sequentially_and_ignore_log_failure(
-    consumer, log_failure, monkeypatch
+    run_embedding, consumer, log_failure, monkeypatch
 ):
     seen = []
     active = False
@@ -149,14 +147,16 @@ async def test_mixed_results_continue_sequentially_and_ignore_log_failure(
     consumer.consume.side_effect = consume
     if log_failure:
         monkeypatch.setattr(
-            module.logger, "info", Mock(side_effect=RuntimeError("private-log"))
+            record_module.logger, "info", Mock(side_effect=RuntimeError("private-log"))
         )
         monkeypatch.setattr(
-            module.logger, "warning", Mock(side_effect=RuntimeError("private-log"))
+            record_module.logger,
+            "warning",
+            Mock(side_effect=RuntimeError("private-log")),
         )
     with capture_logs() as logs:
-        response = await process_embedding_messages(
-            {"Records": [record(f"msg-{i}", i) for i in (1, 2, 3)]}, consumer=consumer
+        response = await run_embedding(
+            {"Records": [record(f"msg-{i}", i) for i in (1, 2, 3)]}
         )
     assert seen == [1, 2, 3]
     assert response == {
@@ -173,44 +173,47 @@ async def test_mixed_results_continue_sequentially_and_ignore_log_failure(
     "completion",
     [None, True, "saved", EmbeddingCompletion("saved"), EmbeddingCompletion("future")],
 )
-async def test_contract_violation_is_not_success(consumer, completion):
+async def test_contract_violation_is_not_success(run_embedding, consumer, completion):
     consumer.consume.return_value = completion
-    assert await process_embedding_messages(
-        {"Records": [record()]}, consumer=consumer
-    ) == {"batchItemFailures": [{"itemIdentifier": "msg-1"}]}
+    assert await run_embedding({"Records": [record()]}) == {
+        "batchItemFailures": [{"itemIdentifier": "msg-1"}]
+    }
 
 
-async def test_all_failed_ids_are_preserved_without_normalizing(consumer):
+async def test_all_failed_ids_are_preserved_without_normalizing(
+    run_embedding, consumer
+):
     consumer.consume.side_effect = TimeoutError()
     ids = [" msg-1 ", "msg-2"]
-    assert await process_embedding_messages(
-        {"Records": [record(i) for i in ids]}, consumer=consumer
-    ) == {"batchItemFailures": [{"itemIdentifier": i} for i in ids]}
+    assert await run_embedding({"Records": [record(i) for i in ids]}) == {
+        "batchItemFailures": [{"itemIdentifier": i} for i in ids]
+    }
 
 
 @pytest.mark.parametrize(
     "exc", [asyncio.CancelledError(), KeyboardInterrupt(), SystemExit()]
 )
-async def test_cancellation_and_process_exit_propagate(consumer, exc):
+async def test_cancellation_and_process_exit_propagate(run_embedding, consumer, exc):
     consumer.consume.side_effect = exc
     with pytest.raises(type(exc)) as caught:
-        await process_embedding_messages(
-            {"Records": [record(), record("msg-2", 2)]}, consumer=consumer
-        )
+        await run_embedding({"Records": [record(), record("msg-2", 2)]})
     assert caught.value is exc
     consumer.consume.assert_awaited_once()
 
 
-async def test_input_logging_failure_preserves_original_failure(consumer, monkeypatch):
-    monkeypatch.setattr(
-        module.logger, "warning", Mock(side_effect=RuntimeError("private-log"))
-    )
+async def test_input_logging_failure_preserves_original_failure(
+    run_embedding, consumer, monkeypatch
+):
+    for logger in (module.logger, record_module.logger):
+        monkeypatch.setattr(
+            logger, "warning", Mock(side_effect=RuntimeError("private-log"))
+        )
     with pytest.raises(SqsInputError):
-        await process_embedding_messages({"Records": [record(), {}]}, consumer=consumer)
+        await run_embedding({"Records": [record(), {}]})
     consumer.consume.assert_not_awaited()
-    assert await process_embedding_messages(
-        {"Records": [{"messageId": "bad"}, record()]}, consumer=consumer
-    ) == {"batchItemFailures": [{"itemIdentifier": "bad"}]}
+    assert await run_embedding({"Records": [{"messageId": "bad"}, record()]}) == {
+        "batchItemFailures": [{"itemIdentifier": "bad"}]
+    }
     consumer.consume.assert_awaited_once()
 
 
@@ -223,13 +226,12 @@ async def test_input_logging_failure_preserves_original_failure(consumer, monkey
     ],
 )
 async def test_body_shape_failure_preserves_diagnostic_and_exact_message_id(
-    consumer, body_fields, code
+    run_embedding, consumer, body_fields, code
 ):
     """本文不正を個別失敗として扱い、欠落と型不正の診断を維持する。"""
     with capture_logs() as logs:
-        response = await process_embedding_messages(
+        response = await run_embedding(
             {"Records": [{"messageId": " bad ", **body_fields}, record("good")]},
-            consumer=consumer,
         )
     assert response == {"batchItemFailures": [{"itemIdentifier": " bad "}]}
     assert logs[0]["reason"] == "invalid_body"
@@ -237,12 +239,11 @@ async def test_body_shape_failure_preserves_diagnostic_and_exact_message_id(
     consumer.consume.assert_awaited_once()
 
 
-async def test_duplicate_id_precedes_body_validation(consumer):
+async def test_duplicate_id_precedes_body_validation(run_embedding, consumer):
     """本文不正が先にあっても、一覧のID不正を全体失敗として先に確定する。"""
     with capture_logs() as logs, pytest.raises(SqsInputError) as caught:
-        await process_embedding_messages(
+        await run_embedding(
             {"Records": [{"messageId": "duplicate"}, record("duplicate")]},
-            consumer=consumer,
         )
     assert caught.value.reason is SqsInputReason.DUPLICATE_MESSAGE_ID
     assert caught.value.record_index == 1
