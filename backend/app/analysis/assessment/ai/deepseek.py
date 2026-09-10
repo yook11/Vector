@@ -19,7 +19,11 @@ from typing import Final
 import structlog
 from openai import AsyncOpenAI
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.deepseek.error_translator import (
+    DeepSeekStateReason,
+    translate_deepseek_error,
+)
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderOutputTruncatedError,
 )
@@ -33,10 +37,6 @@ from app.analysis.assessment.ai.spec import (
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.deepseek_error_translator import (
-    DeepSeekStateReason,
-    translate_deepseek_error,
-)
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

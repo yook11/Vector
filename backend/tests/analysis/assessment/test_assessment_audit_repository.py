@@ -39,11 +39,12 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
@@ -62,7 +63,6 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     map_provider_to_assessment,
 )
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import (

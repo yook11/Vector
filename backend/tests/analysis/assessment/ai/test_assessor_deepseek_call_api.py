@@ -24,7 +24,8 @@ import pytest
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import AIProviderOutputTruncatedError
+from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
+from app.ai_providers.errors import AIProviderOutputTruncatedError
 from app.analysis.assessment.ai.deepseek import (
     DeepSeekAssessor,
     DeepSeekResponseDefect,
@@ -34,7 +35,6 @@ from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.deepseek_error_translator import DeepSeekStateReason
 from app.config import settings
 
 

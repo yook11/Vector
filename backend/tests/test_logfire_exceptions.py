@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 
 import pytest
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,
@@ -23,6 +23,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
+)
+from app.ai_providers.gemini.error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
 )
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.errors import (
@@ -45,10 +49,6 @@ from app.analysis.embedding.errors import (
 from app.analysis.embedding.task_errors import (
     EmbeddingRecoverableError,
     EmbeddingTerminalError,
-)
-from app.analysis.gemini_error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
 )
 from app.logfire.exceptions import VectorDomainError
 

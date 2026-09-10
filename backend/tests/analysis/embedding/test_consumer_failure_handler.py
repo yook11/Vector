@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,

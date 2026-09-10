@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderContentError,
     AIProviderError,
@@ -25,16 +25,16 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
+)
 from app.analysis.curation.errors import (
     CurationError,
     CurationRecoverableError,
     CurationTerminalDropError,
     CurationTerminalKeepError,
     map_provider_to_curation,
-)
-from app.analysis.gemini_error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
 )
 
 # 代表 reason (mapper は値そのものを failure_reason に運ぶ。種別は不問)。

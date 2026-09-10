@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.errors import EmbeddingError, EmbeddingFailureReason
 from app.audit.failure_projection import FailureAction, Retryability
 from app.logfire.exceptions import VectorDomainError

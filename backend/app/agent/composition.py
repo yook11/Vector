@@ -31,7 +31,7 @@ from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )
 from app.agent.runtime.contract import AgentRuntime
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
 )
 from app.config import settings
@@ -52,7 +52,7 @@ def ensure_external_search_configured() -> None:
 async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
     api_key = settings.gemini_api_key.get_secret_value()
     if not api_key:
-        from app.analysis.gemini_error_translator import GeminiStateReason
+        from app.ai_providers.gemini.error_translator import GeminiStateReason
 
         raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
 

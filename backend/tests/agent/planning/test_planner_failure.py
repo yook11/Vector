@@ -9,7 +9,7 @@ from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
-from app.analysis.ai_provider_errors import AIProviderNetworkError
+from app.ai_providers.errors import AIProviderNetworkError
 
 
 def test_planning_error_from_maps_provider_code() -> None:

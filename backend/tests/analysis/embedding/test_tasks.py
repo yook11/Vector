@@ -8,7 +8,7 @@ from logfire.testing import CaptureLogfire
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
+from app.ai_providers.errors import AIProviderUsageLimitExhaustedError
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildBlockedCode,
     EmbeddingReadyBuildBlockedError,
@@ -371,7 +371,7 @@ class TestGenerateEmbeddingStageSpan:
         assert attrs["result"] == "failed"
         # failure_kind: CONDITION_BASED_RECOVERY.value (embedding/errors.py)
         assert attrs["failure_kind"] == "condition_based_recovery"
-        # code: AIProviderUsageLimitExhaustedError.CODE (ai_provider_errors.py)
+        # code: AIProviderUsageLimitExhaustedError.CODE (app/ai_providers/errors.py)
         assert attrs["code"] == "ai_error_usage_limit_exhausted"
         # Taskiq境界で従来の再試行分類を付与する。
         # CONDITION_BASED_RECOVERY.retryable=True → EmbeddingRecoverableError

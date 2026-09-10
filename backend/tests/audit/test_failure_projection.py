@@ -21,14 +21,14 @@ from sqlalchemy.exc import (
     OperationalError,
 )
 
-from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
+from app.ai_providers.errors import AIProviderOutputBlockedError
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.assessment.errors import AssessmentRecoverableError
 from app.analysis.curation.errors import (
     CurationRecoverableError,
     map_provider_to_curation,
 )
 from app.analysis.embedding.task_errors import EmbeddingRecoverableError
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.failure_projection import (
     FailureAction,
     FailureProjection,

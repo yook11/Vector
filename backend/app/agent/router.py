@@ -69,7 +69,7 @@ from app.agent.runs.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.db.fastapi import get_caller_managed_session
 from app.dependencies import (
     CurrentUser,

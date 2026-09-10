@@ -1,7 +1,8 @@
 """``GeminiAssessor._translate_error`` の smoke テスト。
 
 Stage 4 の ``_translate_error`` は PR3 で共通 translator への 1 行 delegation に
-縮退した。分類の網羅は ``tests/analysis/test_gemini_error_translator.py`` に集約。
+縮退した。分類の網羅は
+``tests/ai_providers/gemini/test_gemini_error_translator.py`` に集約。
 本ファイルは delegation が経路として繋がっていることを確認するだけ。
 """
 
@@ -12,7 +13,7 @@ import pytest
 from google.genai import errors as genai_errors
 from pydantic import SecretStr
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderServiceUnavailableError,

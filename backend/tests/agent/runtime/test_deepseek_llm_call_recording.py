@@ -11,7 +11,7 @@ from app.agent.recording.types import Usage
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
-from app.analysis.ai_provider_errors import AIProviderNetworkError
+from app.ai_providers.errors import AIProviderNetworkError
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._deepseek_helpers import (
     FakeDeepSeekClient,

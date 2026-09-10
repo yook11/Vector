@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderInputRejectedError,
     AIProviderRateLimitedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.errors import (
     CurationError,
     CurationRecoverableError,
@@ -22,7 +23,6 @@ from app.analysis.curation.errors import (
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.failure_projection import FailureAction, Retryability
 
 # Layer 1 の 3 marker は同形 (retry / DROP 軸だけ classvar、原因軸は instance 値)。

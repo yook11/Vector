@@ -16,7 +16,7 @@ import abc
 import structlog
 from pydantic import ValidationError
 
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 from app.analysis.embedding.errors import (

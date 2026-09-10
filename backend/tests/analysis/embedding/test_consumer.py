@@ -15,7 +15,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,

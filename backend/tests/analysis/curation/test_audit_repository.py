@@ -34,12 +34,13 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
@@ -54,7 +55,6 @@ from app.analysis.curation.errors import (
     CurationResponseInvalidError,
     map_provider_to_curation,
 )
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.audit.stages.curation import CurationAuditRepository
 from app.collection.persistence.analyzable_article_repository import (

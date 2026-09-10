@@ -14,7 +14,7 @@ from enum import StrEnum
 
 import pytest
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderRateLimitedError,
 )

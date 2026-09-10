@@ -22,7 +22,7 @@ from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.failure import PlanningError
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.ai_provider_errors import AIProviderOutputTruncatedError
+from app.ai_providers.errors import AIProviderOutputTruncatedError
 from tests.agent.answering.direct_answer.test_service import _input as direct_input
 from tests.agent.answering.evidence_answer.test_service import (
     RecordingDeltaReporter,

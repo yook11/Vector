@@ -1,7 +1,8 @@
 """``DeepSeekAssessor._translate_error`` の smoke テスト。
 
 Stage 4 の ``_translate_error`` は共通 translator への 1 行 delegation に縮退した。
-分類の網羅は ``tests/analysis/test_deepseek_error_translator.py`` に集約。本ファイルは
+分類の網羅は ``tests/ai_providers/deepseek/test_deepseek_error_translator.py`` に集約。
+本ファイルは
 delegation が経路として繋がっていることを確認するだけ (Gemini adapter と対称)。
 
 OpenAI SDK の status 系例外は ``response=httpx.Response(..., request=...)`` が必須。
@@ -15,7 +16,7 @@ from openai import APITimeoutError, AuthenticationError
 from openai import RateLimitError as OpenAIRateLimitError
 from pydantic import SecretStr
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,

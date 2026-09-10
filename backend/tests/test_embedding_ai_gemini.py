@@ -18,17 +18,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from google.genai import errors as genai_errors
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
 )
+from app.ai_providers.gemini.error_translator import GeminiStateReason
 from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
-from app.analysis.gemini_error_translator import GeminiStateReason
 
 
 def _make_embedder() -> GeminiEmbedder:
@@ -125,7 +125,7 @@ async def test_embed_document_raises_request_invalid_when_values_missing() -> No
     assert ei.value.reason is GeminiStateReason.MISSING_VALUES
 
 
-# 分類の網羅は tests/analysis/test_gemini_error_translator.py に集約。
+# 分類の網羅は tests/ai_providers/gemini/test_gemini_error_translator.py に集約。
 # ここでは delegation が経路として効いていることを最小ケースで確認する。
 
 

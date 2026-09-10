@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -17,6 +17,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
+)
 from app.analysis.embedding.consumer_failure_classification import (
     classify_embedding_failure,
 )
@@ -24,10 +28,6 @@ from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
     EmbeddingResponseInvalidError,
     to_embedding_error,
-)
-from app.analysis.gemini_error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
 )
 from app.audit.failure_projection import Retryability
 from app.db.errors import (

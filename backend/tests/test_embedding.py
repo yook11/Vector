@@ -11,10 +11,11 @@ import math
 
 import pytest
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderInputRejectedError,
     AIProviderRequestInvalidError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
@@ -22,7 +23,6 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 
 _STUB_PROVIDER = "stub"
 

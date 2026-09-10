@@ -64,7 +64,7 @@ from app.agent.runtime.contract import AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
 from app.agent.threads.repository import AgentThreadRepository
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderError,
 )

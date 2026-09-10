@@ -12,7 +12,7 @@ from app.agent.recording.types import Usage
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )

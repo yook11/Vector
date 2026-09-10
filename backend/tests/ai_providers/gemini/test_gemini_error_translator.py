@@ -1,4 +1,4 @@
-"""``app.analysis.gemini_error_translator`` の golden table テスト。
+"""``app.ai_providers.gemini.error_translator`` の golden table テスト。
 
 analysis pipeline 内で共有される SDK 例外 → ``AIProvider*Error`` 分類を検証する。
 ValidationError / response shape / finish_reason など stage 固有の判定は対象外。
@@ -14,8 +14,8 @@ import httpx
 import pytest
 from google.genai import errors as genai_errors
 
-import app.analysis.ai_provider_errors as ai_provider_errors
-from app.analysis.ai_provider_errors import (
+import app.ai_providers.errors as ai_provider_errors
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -24,7 +24,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.analysis.gemini_error_translator import (
+from app.ai_providers.gemini.error_translator import (
     GeminiContentRejectionReason,
     GeminiStateReason,
     is_context_length_error,

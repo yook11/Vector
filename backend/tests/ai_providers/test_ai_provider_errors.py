@@ -18,8 +18,8 @@ from enum import StrEnum
 
 import pytest
 
-import app.analysis.ai_provider_errors as ai_provider_errors
-from app.analysis.ai_provider_errors import (
+import app.ai_providers.errors as ai_provider_errors
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderContentError,
     AIProviderError,
@@ -34,7 +34,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderStateError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.analysis.gemini_error_translator import (
+from app.ai_providers.gemini.error_translator import (
     GeminiContentRejectionReason,
     GeminiStateReason,
 )

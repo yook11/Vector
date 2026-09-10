@@ -23,18 +23,18 @@ import structlog
 from google import genai
 from google.genai.types import EmbedContentConfig
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderRequestInvalidError,
+)
+from app.ai_providers.gemini.error_translator import (
+    GeminiStateReason,
+    translate_gemini_error,
 )
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.ai.spec import (
     GEMINI_EMBEDDING_SPEC,
     EmbeddingCallSpec,
-)
-from app.analysis.gemini_error_translator import (
-    GeminiStateReason,
-    translate_gemini_error,
 )
 from app.config import settings
 

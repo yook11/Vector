@@ -430,7 +430,7 @@ Direct Answer Agentは既に`response_schema=None`のplain text streamで本文�
 
 ## 影響範囲
 
-- `app/analysis/ai_provider_errors.py` / `app/analysis/gemini_error_translator.py` — 打ち切りの
+- `app/ai_providers/errors.py` / `app/ai_providers/gemini/error_translator.py` — 打ち切りの
   error leafとreason追加
 - `app/agent/runtime/gemini.py` — finish reasonの分類、blocked-setの整合
 - `app/agent/answering/failure.py` — 打ち切りのretry分類(両flow)
