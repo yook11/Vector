@@ -1,6 +1,6 @@
 # AssessmentConsumer — イベント受信と投資判定
 
-Status: 正常終了・失敗理由の契約とConsumer・失敗後処理を実装・検証済み（2026-09-11）。Lambda・SQS・relayへの接続とAWS適用は未着手。
+Status: 正常終了・失敗理由の契約、Consumer・失敗後処理、資源準備に加え、SQS本文解析と共有イベント契約を実装・検証済み（2026-09-12）。Lambda handler・Consumer呼び出し・Assessment配送への接続とAWS適用は未着手。
 
 ## Problem
 
@@ -195,3 +195,35 @@ Done: 設定の読み取り範囲、Engine設定、資源の生成・終了順�
 - 3種類の正常終了、各エラーの失敗応答、処理中の削除、対象内／対象外を含む並行実行、commit失敗、timeout、後処理の二次障害を検証する。
 - 対象内結果・成功監査・Outboxの原子性と重複防止を検証する。
 - 有効化前に数値設定・移行・一覧更新通知の扱いを確定し、実装済みとAWS適用済みを分けて記録する。
+
+
+## SQS本文解析と共有イベント契約（2026-09-12）
+
+Problem: 既存のArticleCuratedSignalはpayloadだけを定義していたため、SQS本文からイベント全体を安全に復元する入口を追加する。
+Evidence: Curationの既存payload、EmbeddingのArticleAssessedInScopeEvent・本文解析、AssessmentConsumerのconsume契約を参照した。
+
+### 共有契約
+
+- `app/analysis/curation/events.py`の`ArticleCuratedSignalEvent`は、event_id・event_type・schema_version・occurred_at・payloadを持つfrozen・strict・extra禁止の型。既存ArticleCuratedSignalとConsumerの入力契約は変更しない。
+- 種別は`article.curated_signal`、版は厳密な整数の1。payloadは既存型の正整数curation_id・analyzable_article_idだけとする。
+- `from_input(data: object)`でUUID文字列・タイムゾーン付き日時文字列を復元する。JSON出力時の日時はUTCのZ表記とし、小数秒と保存済みID・payloadを保持する。
+- 共有検証失敗は`CuratedEventValidationError`のfailureへ保持する。理由はinvalid_envelope・unsupported_event_type・unsupported_schema_version・invalid_payloadの順で優先し、詳細は失わない。payload自体の欠落・型不正は外側の構造不正、payload内部の違反はinvalid_payloadとする。
+- `CuratedEventValidationIssue`と`CuratedEventValidationFailure`はfrozen・slots付き。項目は既知フィールドだけとし、未知キーはevent／payloadへ集約する。コードはmissing_required_field・invalid_type・invalid_value・unknown_field・unsupported_event_type・unsupported_schema_version。同じ項目・コードは重複排除する。
+- エラーには入力値や検証ライブラリの自由文を収集せず、元のValidationErrorをcause・contextへ残さない。
+
+### Assessmentの受信本文
+
+- `app/lambda_handlers/assessment/event.py`の`parse_curated_signal_event(message_body: str) -> ArticleCuratedSignalEvent`はJSON解析後に共有契約へ委譲する。イベント内容を別実装で検証しない。
+- 非文字列、壊れたJSON、重複キー、NaN・Infinityなどの非標準定数、解析時のRecursionErrorはinvalid_jsonとする。JSONとして正常な配列などは共有契約のinvalid_envelopeとなる。
+- `AssessmentEventInvalidError`はCODE=assessment_event_invalid、reason、tupleのissuesを保持する。reasonは共有の4理由にinvalid_jsonを加えたAssessmentEventInvalidReason。SAFE_ATTRSはCODE・reason・issuesのみとし、共有の詳細値をそのまま引き継ぐ。
+- エラー変換はexceptの外で送出し、本文や元の検証例外を原因チェーンへ残さない。想定外例外・プロセス終了を入力不正に変換しない。
+- 戻り値はイベント全体。後続handlerがevent.payloadを既存Consumerへ渡す予定だが、このスライスでは接続しない。
+
+### テストの責任と範囲
+
+共有イベント契約の単体テストは、文字列／Python値からの正常復元、代表的な欠落・日時・種別・版・payloadの拒否、理由の優先順位、詳細の集約・安全性を11件で確認する。型や値の細かな組合せを網羅せず、重要な契約の代表例に絞る。JSON解析の単体テストは、実際の不正JSONと重複キー・非標準定数・深いネスト、正常な本文からの復元、代表的な共有違反の変換、想定外例外の同一性を担当する。詳細な項目不正の組合せは解析側へ重複して追加しない。
+
+Non-goals: Records構造・messageId検証、Lambda handler、Consumer実行、部分バッチ応答、失敗監査・メトリクス、Assessment配送・relay接続は未実装。Embedding・DB schema・依存パッケージ・キュー設定・インフラは変更せず、local_testsの追加・実AWSスモーク・デプロイは行わない。
+Done: 正常復元・安全な拒否・既存契約の維持と必要な回帰検証が成功すること。
+
+検証結果: 追加単体テスト30件、app全体・追加テストのRuff lint／format確認が成功。`uv run pytest tests/ -m unit -x -q`は6,612件成功、`make test-integration PYTEST_ARGS="-x -q"`は1,400件成功（skipなし）。既存の非推奨・Logfire関連の警告は残る。DB・Redisの一時環境は終了済み。local_tests・実AWSスモーク・デプロイは今回の範囲外として実行していない。
