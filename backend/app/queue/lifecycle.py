@@ -109,6 +109,9 @@ async def _aclose_worker_resources(state: TaskiqState) -> None:
         deadline_scheduler = getattr(state, "agent_deadline_scheduler", None)
         if deadline_scheduler is not None:
             stack.push_async_callback(deadline_scheduler.cancel_pending_reservations)
+        assessment_clients = getattr(state, "assessment_client_resources", None)
+        if assessment_clients is not None:
+            stack.push_async_callback(assessment_clients.aclose)
         control = getattr(state, "pipeline_control_redis", None)
         if control is not None:
             stack.push_async_callback(control.aclose)
@@ -154,48 +157,54 @@ def _register_worker_lifecycle(
                 state.agent_deadline_source
             )
         _attach_worker_redis(state, runtime)
-        await _compose(runtime, state)
-        if label == "maintenance":
-            try:
-                state.auth_engine = create_auth_retention_engine(settings)
-            except RuntimeError as exc:
-                logger.error(
-                    "maintenance_auth_retention_engine_missing",
-                    error_type=exc.__class__.__name__,
-                )
-            except Exception as exc:
-                logger.error(
-                    "maintenance_auth_retention_engine_failed",
-                    error_type=exc.__class__.__name__,
-                )
-            else:
-                state.auth_session_factory = caller_managed_session_factory(
-                    state.auth_engine
-                )
-                logfire.instrument_sqlalchemy(engine=state.auth_engine)
-                log_pool_initialized(
-                    service_name=auth_retention_service_name(),
-                    pool_size=AUTH_RETENTION_POOL_SIZE,
-                    max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
-                    pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
-                    pool_timeout=DEFAULT_POOL_TIMEOUT,
-                )
-                register_pool_metrics(
-                    state.auth_engine,
-                    pool_size=AUTH_RETENTION_POOL_SIZE,
-                    max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
-                )
-        logger.info(f"{label}_worker_startup")
+        try:
+            await _compose(runtime, state)
+            if label == "maintenance":
+                try:
+                    state.auth_engine = create_auth_retention_engine(settings)
+                except RuntimeError as exc:
+                    logger.error(
+                        "maintenance_auth_retention_engine_missing",
+                        error_type=exc.__class__.__name__,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "maintenance_auth_retention_engine_failed",
+                        error_type=exc.__class__.__name__,
+                    )
+                else:
+                    state.auth_session_factory = caller_managed_session_factory(
+                        state.auth_engine
+                    )
+                    logfire.instrument_sqlalchemy(engine=state.auth_engine)
+                    log_pool_initialized(
+                        service_name=auth_retention_service_name(),
+                        pool_size=AUTH_RETENTION_POOL_SIZE,
+                        max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
+                        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
+                        pool_timeout=DEFAULT_POOL_TIMEOUT,
+                    )
+                    register_pool_metrics(
+                        state.auth_engine,
+                        pool_size=AUTH_RETENTION_POOL_SIZE,
+                        max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
+                    )
+            logger.info(f"{label}_worker_startup")
 
-        if label == "analysis":
-            # enum↔categories seed のドリフトを起動時に fail-fast 検出する
-            # (lazy import で broker wiring の import 順序に影響させない)。
-            from app.analysis.assessment.repository import AssessmentRepository
+            if label == "analysis":
+                # enum↔categories seed のドリフトを起動時に fail-fast 検出する
+                # (lazy import で broker wiring の import 順序に影響させない)。
+                from app.analysis.assessment.repository import AssessmentRepository
 
-            async with state.session_factory() as session:
-                await AssessmentRepository(
-                    session
-                ).assert_category_catalog_covers_enum()
+                async with state.session_factory() as session:
+                    await AssessmentRepository(
+                        session
+                    ).assert_category_catalog_covers_enum()
+        except BaseException:
+            assessment_clients = getattr(state, "assessment_client_resources", None)
+            if assessment_clients is not None:
+                await assessment_clients.aclose()
+            raise
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
     async def on_shutdown(state: TaskiqState) -> None:

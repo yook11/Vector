@@ -37,10 +37,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai_providers.deepseek.client import open_deepseek_client
+from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.ai_providers.errors import AIProviderError
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.assessment.ai.gemini import GeminiAssessor
+from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import (
     InScope,
     OutOfScope,
@@ -338,23 +341,30 @@ async def _run(limit: int, output_path: Path) -> int:
     print(f"Loaded {len(samples)} samples")
 
     gemini = GeminiAssessor()
-    deepseek = DeepSeekAssessor()
+    async with open_deepseek_client(
+        api_key=settings.deepseek_api_key,
+        base_url=DEEPSEEK_ASSESSMENT_SPEC.base_url,
+        settings=DeepSeekConnectionSettings(),
+    ) as client:
+        deepseek = DeepSeekAssessor(client)
 
-    results: list[SampleResult] = []
-    for i, sample in enumerate(samples, 1):
-        print(
-            f"[{i}/{len(samples)}] curation_id={sample.curation_id}",
-            end=" ",
-            flush=True,
-        )
-        result = await _process_sample(sample, gemini, deepseek)
-        g_label = result.gemini.category_value or f"ERR({result.gemini.error_class})"
-        d_label = (
-            result.deepseek.category_value or f"ERR({result.deepseek.error_class})"
-        )
-        match = "match" if g_label == d_label else "diff"
-        print(f"G={g_label} D={d_label} {match}")
-        results.append(result)
+        results: list[SampleResult] = []
+        for i, sample in enumerate(samples, 1):
+            print(
+                f"[{i}/{len(samples)}] curation_id={sample.curation_id}",
+                end=" ",
+                flush=True,
+            )
+            result = await _process_sample(sample, gemini, deepseek)
+            g_label = (
+                result.gemini.category_value or f"ERR({result.gemini.error_class})"
+            )
+            d_label = (
+                result.deepseek.category_value or f"ERR({result.deepseek.error_class})"
+            )
+            match = "match" if g_label == d_label else "diff"
+            print(f"G={g_label} D={d_label} {match}")
+            results.append(result)
 
     stats = _aggregate(results)
     markdown = _render_markdown(results, stats, gemini.model_name, deepseek.model_name)

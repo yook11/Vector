@@ -577,10 +577,10 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state() -> None:
     from app.queue.composition import _wire_analysis_adapters
 
     state = TaskiqState()
-    state.pipeline_control_redis = MagicMock()
+    state.pipeline_control_redis = MagicMock(aclose=AsyncMock())
     with (
         patch("app.analysis.curation.ai.gemini.settings") as mock_es,
-        patch("app.analysis.assessment.ai.deepseek.settings") as mock_cs,
+        patch("app.config.settings") as mock_cs,
     ):
         mock_es.gemini_api_key = SecretStr("test-key")
         mock_cs.deepseek_api_key = SecretStr("test-key")
@@ -588,6 +588,11 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state() -> None:
 
     assert isinstance(state.curator, GeminiCurator)
     assert isinstance(state.assessor, DeepSeekAssessor)
+    assert not state.assessor._client.is_closed()
+    from app.queue.lifecycle import _aclose_worker_resources
+
+    await _aclose_worker_resources(state)
+    assert state.assessor._client.is_closed()
 
 
 @pytest.mark.asyncio
@@ -870,7 +875,7 @@ async def test_analysis_startup_wires_ai_providers() -> None:
     ):
         with (
             patch("app.analysis.curation.ai.gemini.settings") as mock_es,
-            patch("app.analysis.assessment.ai.deepseek.settings") as mock_cs,
+            patch("app.config.settings") as mock_cs,
         ):
             mock_es.gemini_api_key = SecretStr("test-key")
             mock_cs.deepseek_api_key = SecretStr("test-key")
@@ -971,3 +976,66 @@ async def test_agent_worker_owns_deadline_schedule_source(monkeypatch):
     factory.assert_called_once_with(settings)
     source.startup.assert_awaited_once()
     source.shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_analysis_composition_failure_closes_prepared_client():
+    """ワーカーへの配線中に失敗しても、準備済みのDeepSeekクライアントを閉じる。"""
+    from app.queue.composition import _wire_analysis_adapters
+
+    state = TaskiqState()
+    failure = RuntimeError("wiring log failed")
+    with (
+        patch("app.config.settings") as config,
+        patch("app.analysis.curation.ai.gemini.GeminiCurator"),
+        patch("app.queue.composition.logger.info", side_effect=failure),
+    ):
+        config.deepseek_api_key = SecretStr("test-key")
+        with pytest.raises(RuntimeError) as caught:
+            await _wire_analysis_adapters(state)
+    assert caught.value is failure
+    assert state.assessor._client.is_closed()
+
+
+@pytest.mark.asyncio
+async def test_analysis_startup_failure_closes_client():
+    """配線後のワーカー起動処理が失敗した場合、DeepSeekクライアントを閉じて元の例外を返す。"""
+    from app.queue.brokers import broker_analysis
+
+    engine = MagicMock(dispose=AsyncMock())
+    state = TaskiqState()
+    failure = RuntimeError("startup log failed")
+    async with _worker_lifecycle_stubs(engine, compose=True):
+        with (
+            patch("app.config.settings") as config,
+            patch("app.analysis.curation.ai.gemini.GeminiCurator"),
+            patch("app.queue.lifecycle.logger.info", side_effect=failure),
+        ):
+            config.deepseek_api_key = SecretStr("test-key")
+            with pytest.raises(RuntimeError) as caught:
+                await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](
+                    state
+                )
+    assert caught.value is failure
+    assert state.assessor._client.is_closed()
+
+
+@pytest.mark.asyncio
+async def test_analysis_client_closes_even_if_redis_shutdown_fails():
+    """Redisの終了失敗でDeepSeekの解放を妨げず、元のRedis例外を呼び出し元へ返す。"""
+    from app.queue.composition import _wire_analysis_adapters
+    from app.queue.lifecycle import _aclose_worker_resources
+
+    state = TaskiqState()
+    failure = RuntimeError("redis close failed")
+    state.pipeline_control_redis = MagicMock(aclose=AsyncMock(side_effect=failure))
+    with (
+        patch("app.config.settings") as config,
+        patch("app.analysis.curation.ai.gemini.GeminiCurator"),
+    ):
+        config.deepseek_api_key = SecretStr("test-key")
+        await _wire_analysis_adapters(state)
+    with pytest.raises(RuntimeError) as caught:
+        await _aclose_worker_resources(state)
+    assert caught.value is failure
+    assert state.assessor._client.is_closed()

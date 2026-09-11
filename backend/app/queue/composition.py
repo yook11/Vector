@@ -20,6 +20,8 @@ broker_embedding / broker_briefing / broker_agent) でのみロードされる�
 
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
+
 import structlog
 from taskiq import TaskiqState
 
@@ -29,18 +31,31 @@ logger = structlog.get_logger(__name__)
 async def _wire_analysis_adapters(state: TaskiqState) -> None:
     """Stage 3 / Stage 4 の AI アダプターを worker 起動時に構築する。"""
     # 具象 SDK の import を関数本体に遅延 (module docstring 参照)。
+    from app.ai_providers.deepseek.client import open_deepseek_client
+    from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
     from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
+    from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
     from app.analysis.curation.ai.gemini import GeminiCurator
+    from app.config import settings
 
     state.curator = GeminiCurator()
-    state.assessor = DeepSeekAssessor()
-    logger.info(
-        "analysis_adapters_wired",
-        curator=type(state.curator).__name__,
-        curator_model=state.curator.model_name,
-        assessor=type(state.assessor).__name__,
-        assessor_model=state.assessor.model_name,
-    )
+    async with AsyncExitStack() as resources:
+        client = await resources.enter_async_context(
+            open_deepseek_client(
+                api_key=settings.deepseek_api_key,
+                base_url=DEEPSEEK_ASSESSMENT_SPEC.base_url,
+                settings=DeepSeekConnectionSettings(),
+            )
+        )
+        state.assessor = DeepSeekAssessor(client)
+        logger.info(
+            "analysis_adapters_wired",
+            curator=type(state.curator).__name__,
+            curator_model=state.curator.model_name,
+            assessor=type(state.assessor).__name__,
+            assessor_model=state.assessor.model_name,
+        )
+        state.assessment_client_resources = resources.pop_all()
 
 
 async def _wire_embedding_adapters(state: TaskiqState) -> None:
