@@ -147,12 +147,22 @@ run "tags_paths_logs_and_cleanup" {
       [for resource in aws_vpc_security_group_egress_rule.private : resource.tags],
       [for resource in aws_vpc_security_group_egress_rule.proxy_internet : resource.tags],
       [for resource in aws_instance.runtime : resource.tags],
-      [for resource in aws_instance.runtime : resource.root_block_device[0].tags],
       [for resource in aws_iam_role.runtime : resource.tags],
       [for resource in aws_iam_instance_profile.runtime : resource.tags],
       [for resource in aws_cloudwatch_log_group.runtime : resource.tags]
     ) : tags.Project == "vector-test" && tags.Lifecycle == "smoke" && tags.RunId == var.run_id])
     error_message = "作成・管理権限と削除確認に必要なProject/Lifecycle/RunIdを全設備へ付与します。"
+  }
+  assert {
+    condition = (
+      can(regex("default_tags\\s*\\{\\s*tags\\s*=\\s*local\\.tags\\s*\\}", file("${path.module}/versions.tf"))) &&
+      local.tags.Project == "vector-test" && local.tags.Lifecycle == "smoke" && local.tags.RunId == var.run_id &&
+      alltrue([for kind, instance in aws_instance.runtime :
+        length(instance.root_block_device[0].tags) == 1 &&
+        instance.root_block_device[0].tags["Name"] == "vector-test-${var.run_id}-${kind}"
+      ])
+    )
+    error_message = "EBSの必須タグはdefault_tagsから起動時に付与し、起動後のタグ更新はNameだけに限定します。"
   }
   assert {
     condition = (
@@ -167,7 +177,7 @@ run "tags_paths_logs_and_cleanup" {
   }
   assert {
     condition = alltrue([for kind, policy in module.runtime_policy.policies :
-      one([for statement in jsondecode(policy).Statement : statement if statement.Sid == "Logs"]).Resource == "${aws_cloudwatch_log_group.runtime[kind].name}:*" &&
+      one([for statement in jsondecode(policy).Statement : statement if statement.Sid == "Logs"]).Resource == "arn:aws:logs:ap-northeast-1:${var.expected_account_id}:log-group:${aws_cloudwatch_log_group.runtime[kind].name}:*" &&
       aws_cloudwatch_log_group.runtime[kind].name == "/vector-test/vector-test-${var.run_id}/${kind}"
     ])
     error_message = "実際のロググループ名と実行ロールの書込先ARNを一致させます。"

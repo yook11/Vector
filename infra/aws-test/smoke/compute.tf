@@ -65,7 +65,8 @@ resource "aws_instance" "runtime" {
     volume_type           = "gp3"
     encrypted             = true
     delete_on_termination = true
-    tags                  = merge(local.tags, { Name = "${local.prefix}-${each.key}" })
+    # 必須タグは起動時に付くため、起動後の更新には変更可能なタグだけを渡す。
+    tags = { Name = "${local.prefix}-${each.key}" }
   }
   tags = merge(local.tags, { Name = "${local.prefix}-${each.key}" })
   depends_on = [
