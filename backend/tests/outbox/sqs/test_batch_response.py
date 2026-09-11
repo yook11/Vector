@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
-from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -13,10 +12,10 @@ from app.outbox.publishing.errors import (
     PublishResponseInvalidReason,
 )
 from app.outbox.publishing.publisher import (
-    EventEnvelope,
     PublishFailed,
     PublishSucceeded,
 )
+from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs.batch_response import (
     SqsBatchResponse,
     SqsFailedEntry,
@@ -25,7 +24,6 @@ from app.outbox.sqs.batch_response import (
     results_from_sqs_batch_response,
     validate_sqs_batch_event_ids,
 )
-from app.outbox.sqs.event_batch import EventBatch
 from app.outbox.sqs.message_batch import SqsMessageBatch
 from app.outbox.sqs.response_errors import InvalidSqsBatchResponse, SqsResponseField
 
@@ -36,20 +34,7 @@ OTHER_MD5 = "900150983cd24fb0d6963f7d28e17f72"
 
 
 def batch_for(*ids):
-    return SqsMessageBatch(
-        EventBatch(
-            [
-                EventEnvelope(
-                    UUID(id_),
-                    "article.assessed_in_scope",
-                    1,
-                    datetime(2026, 9, 7, tzinfo=UTC),
-                    {"curation_id": 123, "analyzed_article_id": 456},
-                )
-                for id_ in ids
-            ]
-        )
-    )
+    return SqsMessageBatch([EventMessage(UUID(id_), "{}") for id_ in ids])
 
 
 def successful(id_=EVENT_ID, checksum=EMPTY_JSON_MD5):

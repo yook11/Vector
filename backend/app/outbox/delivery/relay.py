@@ -6,7 +6,6 @@ from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.assessment.events import ArticleAssessedInScope
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.repository import ClaimedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.delivery.values import DeliveryBatchSelection, LeaseDuration
@@ -26,7 +25,12 @@ class OutboxRelay:
         session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
         publisher: EventPublisher,
         failure_handler: OutboxDeliveryFailureHandler,
+        *,
+        event_type: str,
     ) -> None:
+        if not isinstance(event_type, str) or not event_type.strip():
+            raise ValueError("event type must not be blank")
+        self._event_type = event_type
         self._session_factory = session_factory
         self._publisher = publisher
         self._failure_handler = failure_handler
@@ -34,17 +38,13 @@ class OutboxRelay:
     async def run_once(self) -> None:
         async with self._session_factory() as session:
             await OutboxDeliveryRepository(session).stop_deliveries_at_attempt_limit(
-                selection=DeliveryBatchSelection(
-                    event_type=ArticleAssessedInScope.EVENT_TYPE, limit=100
-                )
+                selection=DeliveryBatchSelection(event_type=self._event_type, limit=100)
             )
             await session.commit()
 
         async with self._session_factory() as session:
             events = await OutboxDeliveryRepository(session).claim_ready_batch(
-                selection=DeliveryBatchSelection(
-                    event_type=ArticleAssessedInScope.EVENT_TYPE, limit=10
-                ),
+                selection=DeliveryBatchSelection(event_type=self._event_type, limit=10),
                 lease_duration=LeaseDuration(timedelta(seconds=150)),
             )
             await session.commit()

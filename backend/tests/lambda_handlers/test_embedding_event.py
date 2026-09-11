@@ -16,7 +16,8 @@ from app.lambda_handlers.embedding.event import (
     EmbeddingEventInvalidError,
     parse_assessed_in_scope_event,
 )
-from app.outbox.sqs.message import SqsMessage
+from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.publishing.publisher import EventEnvelope
 
 pytestmark = pytest.mark.unit
 
@@ -55,6 +56,7 @@ def test_json_dump_normalizes_occurred_at_to_utc_z_with_fraction(data):
 
 
 def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
+    """実本文生成から受信検証まで接続し、ID・時刻・payloadの一致を確認する。"""
     sent = ArticleAssessedInScopeEvent(
         event_id=UUID(data["event_id"]),
         event_type=data["event_type"],
@@ -64,7 +66,17 @@ def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
         ),
         payload=data["payload"],
     )
-    event = parse_assessed_in_scope_event(SqsMessage.from_event(sent).body)
+    event = parse_assessed_in_scope_event(
+        build_assessed_in_scope_message(
+            EventEnvelope(
+                sent.event_id,
+                sent.event_type,
+                sent.schema_version,
+                sent.occurred_at,
+                sent.payload.model_dump(),
+            )
+        ).body
+    )
     assert event.event_id == sent.event_id
     assert event.occurred_at == sent.occurred_at
     assert event.payload == sent.payload
@@ -252,38 +264,24 @@ def test_validation_details_are_safe_and_deduplicated(data, changes, expected):
     ],
 )
 def test_sender_and_receiver_share_validation_details(data, changes):
-    from unittest.mock import Mock
-
-    from app.outbox.publishing.publisher import EventEnvelope
-    from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
-    from app.outbox.sqs.publisher import SqsEventPublisher
+    """本文生成と受信検証が同じ理由・詳細を返し、入力の原因連鎖を保持しない。"""
+    from app.outbox.publishing.errors import PublishEventInvalidError
 
     data.update(changes)
     with pytest.raises(EmbeddingEventInvalidError) as received:
         parse_assessed_in_scope_event(json.dumps(data))
-    factory = Mock()
-    publisher = SqsEventPublisher(
-        failure_handler=SqsPublishFailureHandler(),
-        embedding_queue_url="https://sqs.invalid",
-        client_factory=factory,
-    )
-    sent = (
-        publisher.publish_batch(
-            [
-                EventEnvelope(
-                    event_id=UUID(data["event_id"]),
-                    event_type=data["event_type"],
-                    schema_version=data["schema_version"],
-                    occurred_at=datetime.fromisoformat(data["occurred_at"]),
-                    payload=data["payload"],
-                )
-            ]
+    with pytest.raises(PublishEventInvalidError) as caught:
+        build_assessed_in_scope_message(
+            EventEnvelope(
+                event_id=UUID(data["event_id"]),
+                event_type=data["event_type"],
+                schema_version=data["schema_version"],
+                occurred_at=datetime.fromisoformat(data["occurred_at"]),
+                payload=data["payload"],
+            )
         )
-        .results[0]
-        .error
-    )
+    sent = caught.value
     assert sent.reason.value == received.value.reason.value
     assert sent.issues == received.value.issues
     assert sent.__cause__ is None and sent.__context__ is None
     assert "private-" not in str(sent)
-    factory.assert_not_called()

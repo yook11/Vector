@@ -9,7 +9,8 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScope,
     ArticleAssessedInScopeEvent,
 )
-from app.outbox.sqs.message import SqsMessage
+from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.publishing.publisher import EventEnvelope
 
 _handler_module = import_module("app.lambda_handlers.embedding.handler")
 
@@ -69,7 +70,15 @@ def build_sqs_record(payload):
     )
     return {
         "messageId": str(payload.analyzed_article_id),
-        "body": SqsMessage.from_event(event).body,
+        "body": build_assessed_in_scope_message(
+            EventEnvelope(
+                event.event_id,
+                event.event_type,
+                event.schema_version,
+                event.occurred_at,
+                event.payload.model_dump(),
+            )
+        ).body,
     }
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from importlib import import_module
 from unittest.mock import Mock
 
 import asyncpg
@@ -12,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.lambda_handlers.outbox_relay import handler
 from app.models.outbox_event import OutboxEvent
 from app.outbox.publishing.publisher import BatchPublishResult, PublishSucceeded
-from app.outbox.sqs.publisher import SqsEventPublisher
 from tests.iam_fixtures import inject_test_db_signer
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -38,7 +38,11 @@ def publisher(monkeypatch):
     publisher.publish_batch.side_effect = lambda envelopes: BatchPublishResult(
         results=tuple(PublishSucceeded(e.event_id) for e in envelopes)
     )
-    monkeypatch.setattr(SqsEventPublisher, "from_session", Mock(return_value=publisher))
+    monkeypatch.setattr(
+        import_module("app.lambda_handlers.outbox_relay.handler"),
+        "RoutedEventPublisher",
+        Mock(return_value=publisher),
+    )
     return publisher
 
 
