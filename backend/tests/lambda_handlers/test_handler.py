@@ -44,7 +44,7 @@ def handler_dependencies(monkeypatch):
         entry, "caller_managed_session_factory", create_factory, raising=False
     )
     monkeypatch.setattr(
-        entry, "SqsEventPublisher", Mock(from_session=create_publisher), raising=False
+        entry, "SqsSender", Mock(from_session=create_publisher), raising=False
     )
     monkeypatch.setattr(
         entry, "OutboxDeliveryFailureHandler", create_failure_handler, raising=False
@@ -59,10 +59,19 @@ def test_passes_delivery_settings_to_publisher(handler_dependencies):
     handler_dependencies.create_publisher.assert_called_once()
     kwargs = handler_dependencies.create_publisher.call_args.kwargs
     assert kwargs["region"] == handler_dependencies.settings.aws_region
+    relay_call = handler_dependencies.create_relay.call_args
+    publisher = relay_call.args[1]
     assert (
-        kwargs["embedding_queue_url"]
+        publisher._route.queue_url
         == handler_dependencies.settings.sqs_article_embedding_queue_url
     )
+    assert (
+        relay_call.kwargs["event_type"]
+        == publisher._route.event_type
+        == "article.assessed_in_scope"
+    )
+    assert publisher._route.build_message is entry.build_assessed_in_scope_message
+    assert publisher._sender is handler_dependencies.publisher
     assert kwargs["session"] is not None
 
 

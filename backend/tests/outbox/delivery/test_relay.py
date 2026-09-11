@@ -148,7 +148,10 @@ def outputs(monkeypatch):
 
 def _relay(sessions, publisher):
     return OutboxRelay(
-        sessions, publisher, OutboxDeliveryFailureHandler(sessions, jitter=lambda: 0.5)
+        sessions,
+        publisher,
+        OutboxDeliveryFailureHandler(sessions, jitter=lambda: 0.5),
+        event_type="article.assessed_in_scope",
     )
 
 
@@ -201,7 +204,7 @@ async def test_empty_claim_finishes_without_sending(sessions):
     assert sessions.count == 2
 
 
-async def test_preparation_passes_embedding_scope_and_processing_limits(
+async def test_preparation_passes_injected_event_type_and_processing_limits(
     sessions, monkeypatch
 ):
     """対象タイプ・停止100件・確保10件・lease150秒をrepositoryへ渡す。"""
@@ -221,11 +224,18 @@ async def test_preparation_passes_embedding_scope_and_processing_limits(
         OutboxDeliveryRepository, "stop_deliveries_at_attempt_limit", observe_stop
     )
     monkeypatch.setattr(OutboxDeliveryRepository, "claim_ready_batch", observe_claim)
-    await _relay(sessions, Mock()).run_once()
+    await OutboxRelay(
+        sessions,
+        Mock(),
+        OutboxDeliveryFailureHandler(sessions),
+        event_type="test.delivery",
+    ).run_once()
     assert calls.mock_calls == [
-        call.stop(selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=100)),
+        call.stop(
+            selection=DeliveryBatchSelection(event_type="test.delivery", limit=100)
+        ),
         call.claim(
-            selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=10),
+            selection=DeliveryBatchSelection(event_type="test.delivery", limit=10),
             lease_duration=LeaseDuration(timedelta(seconds=150)),
         ),
     ]
@@ -255,7 +265,9 @@ async def test_mixed_results_route_success_and_failures_without_duplicate_record
         return await mark_published(repository, **kwargs)
 
     monkeypatch.setattr(OutboxDeliveryRepository, "mark_published", observe_success)
-    await OutboxRelay(sessions, publisher, handler).run_once()
+    await OutboxRelay(
+        sessions, publisher, handler, event_type="article.assessed_in_scope"
+    ).run_once()
 
     success_calls.assert_called_once()
     assert success_calls.call_args.kwargs["event_id"] == success_id
@@ -426,7 +438,9 @@ async def test_shared_contract_stops_only_invalid_event_and_delivers_valid(
 
     from app.lambda_handlers.embedding.event import parse_assessed_in_scope_event
     from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
-    from app.outbox.sqs.publisher import SqsEventPublisher
+    from tests.outbox.routing_support import (
+        make_embedding_publisher,
+    )
 
     before = await _seed(session_factory, count=2)
     bad_id, good_id = before
@@ -456,7 +470,7 @@ async def test_shared_contract_stops_only_invalid_event_and_delivers_valid(
 
     client = Mock()
     client.send_message_batch.side_effect = send
-    publisher = SqsEventPublisher(
+    publisher = make_embedding_publisher(
         failure_handler=SqsPublishFailureHandler(),
         embedding_queue_url="https://sqs.invalid/embedding",
         client_factory=lambda: client,

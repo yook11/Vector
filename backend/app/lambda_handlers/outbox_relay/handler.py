@@ -6,12 +6,16 @@ import asyncio
 
 from botocore.session import Session
 
+from app.analysis.assessment.events import ArticleAssessedInScope
 from app.db.engine import create_lambda_engine
 from app.db.session import caller_managed_session_factory
 from app.lambda_handlers.outbox_relay.settings import OutboxRelaySettings
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.relay import OutboxRelay
-from app.outbox.sqs.publisher import SqsEventPublisher
+from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.publishing.route import EventDeliveryRoute
+from app.outbox.publishing.routed_publisher import RoutedEventPublisher
+from app.outbox.sqs.publisher import SqsSender
 
 
 async def _run_relay(settings: OutboxRelaySettings) -> dict[str, str]:
@@ -19,13 +23,20 @@ async def _run_relay(settings: OutboxRelaySettings) -> dict[str, str]:
     completed = False
     try:
         session_factory = caller_managed_session_factory(engine)
-        publisher = SqsEventPublisher.from_session(
+        route = EventDeliveryRoute(
+            event_type=ArticleAssessedInScope.EVENT_TYPE,
+            queue_url=settings.sqs_article_embedding_queue_url,
+            build_message=build_assessed_in_scope_message,
+        )
+        sender = SqsSender.from_session(
             session=Session(),
             region=settings.aws_region,
-            embedding_queue_url=settings.sqs_article_embedding_queue_url,
         )
+        publisher = RoutedEventPublisher(route, sender)
         failure_handler = OutboxDeliveryFailureHandler(session_factory)
-        relay = OutboxRelay(session_factory, publisher, failure_handler)
+        relay = OutboxRelay(
+            session_factory, publisher, failure_handler, event_type=route.event_type
+        )
         await relay.run_once()
         completed = True
     finally:

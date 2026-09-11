@@ -496,7 +496,8 @@ def _sqs_record(message_id, payload):
     from uuid import UUID
 
     from app.analysis.assessment.events import ArticleAssessedInScopeEvent
-    from app.outbox.sqs.message import SqsMessage
+    from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
+    from app.outbox.publishing.publisher import EventEnvelope
 
     event = ArticleAssessedInScopeEvent(
         event_id=UUID(int=1),
@@ -505,7 +506,18 @@ def _sqs_record(message_id, payload):
         occurred_at=datetime.now(UTC),
         payload=payload,
     )
-    return {"messageId": message_id, "body": SqsMessage.from_event(event).body}
+    return {
+        "messageId": message_id,
+        "body": build_assessed_in_scope_message(
+            EventEnvelope(
+                event.event_id,
+                event.event_type,
+                event.schema_version,
+                event.occurred_at,
+                event.payload.model_dump(),
+            )
+        ).body,
+    }
 
 
 @pytest.mark.asyncio

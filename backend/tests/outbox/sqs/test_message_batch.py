@@ -1,127 +1,72 @@
-"""入力保証の継承と送信本文のサイズ境界を検証する。"""
+"""工程に依存しない本文の入力・サイズ・不変性を検証する。"""
 
-import json
-from dataclasses import FrozenInstanceError, replace
-from datetime import UTC, datetime
+from dataclasses import FrozenInstanceError
 from uuid import UUID
 
 import pytest
 
-from app.outbox.publishing.publisher import EventEnvelope
-from app.outbox.sqs.event_batch import EventBatch
+from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs.message_batch import SqsMessageBatch
 
 
-def envelope(index=1):
-    return EventEnvelope(
-        event_id=UUID(int=index),
-        event_type="article.assessed_in_scope",
-        schema_version=1,
-        occurred_at=datetime(2026, 9, 7, tzinfo=UTC),
-        payload={"curation_id": 123, "analyzed_article_id": 456},
-    )
+def message(index=1, body="{}"):
+    return EventMessage(UUID(int=index), body)
 
 
 @pytest.mark.parametrize("count", [1, 10])
 def test_batch_preserves_input_order_and_contents(count):
-    events = EventBatch([envelope(count - i) for i in range(count)])
-    batch = SqsMessageBatch(events)
-    assert [message.event_id for message in batch.messages] == [
-        event.event_id for event in events.envelopes
+    """生成済み本文を変更せず、送信可能な件数と入力順を維持する。"""
+    source = [message(count - i) for i in range(count)]
+    batch = SqsMessageBatch(source)
+    assert [(m.event_id, m.body) for m in batch.messages] == [
+        (m.event_id, m.body) for m in source
     ]
-    assert all(
-        json.loads(m.body)["payload"] == events.envelopes[0].payload
-        for m in batch.messages
-    )
+    source.clear()
+    assert len(batch.inputs) == count
     assert batch.failures == ()
 
 
-@pytest.mark.parametrize("count", [0, 11])
-def test_input_batch_rejects_invalid_count(count):
-    with pytest.raises(ValueError):
-        EventBatch([envelope(i) for i in range(count)])
-
-
-@pytest.mark.parametrize("events", [None, "private", b"private", (object(),)])
-def test_input_batch_rejects_invalid_types(events):
-    with pytest.raises(TypeError):
-        EventBatch(events)
-
-
-def test_input_snapshot_prevents_list_mutation():
-    source = [envelope()]
-    events = EventBatch(source)
-    source.append(envelope())
-    assert events.envelopes == (envelope(),)
-    assert len(SqsMessageBatch(events).messages) == 1
-    with pytest.raises(FrozenInstanceError):
-        events.envelopes = ()
-
-
-def test_duplicate_ids_are_rejected_before_event_preparation():
-    with pytest.raises(ValueError, match="unique"):
-        EventBatch([envelope(), replace(envelope(), event_type="private")])
-
-
-@pytest.mark.parametrize("events", [None, [], (envelope(),)])
-def test_message_batch_requires_validated_input(events):
-    with pytest.raises(TypeError):
-        SqsMessageBatch(events)
-
-
-def test_arbitrary_messages_cannot_bypass_input_contract():
-    with pytest.raises(TypeError):
-        SqsMessageBatch(messages=())
-
-
-def test_invalid_events_leave_ordered_subset_and_individual_failures():
-    events = EventBatch(
-        [
-            envelope(3),
-            replace(envelope(2), event_type="unsupported"),
-            envelope(1),
-        ]
-    )
-    batch = SqsMessageBatch(events)
-    assert [m.event_id for m in batch.messages] == [UUID(int=3), UUID(int=1)]
-    assert [f.event_id for f in batch.failures] == [UUID(int=2)]
-
-
-def test_all_invalid_events_only_produce_failures():
-    batch = SqsMessageBatch(EventBatch([replace(envelope(), event_type="unsupported")]))
-    assert batch.messages == ()
-    assert len(batch.failures) == 1
+@pytest.mark.parametrize(
+    "source,error",
+    [
+        (None, TypeError),
+        ("private", TypeError),
+        ([object()], TypeError),
+        ([], ValueError),
+        ([message()] * 2, ValueError),
+        ([message(i) for i in range(11)], ValueError),
+    ],
+)
+def test_input_contract_is_checked_before_preparation(source, error):
+    """型・件数・ID重複の契約違反を本文の送信準備前に拒否する。"""
+    with pytest.raises(error):
+        SqsMessageBatch(source)
 
 
 @pytest.mark.parametrize("extra", [0, 1])
 def test_combined_serialized_size_boundary(monkeypatch, extra):
-    events = EventBatch([envelope(1), envelope(2)])
-    prepared = SqsMessageBatch(events)
-    size = sum(len(m.body.encode("utf-8")) for m in prepared.messages)
-    monkeypatch.setattr("app.outbox.sqs.message_batch.MAX_MESSAGE_BYTES", size - extra)
+    """送信できる本文合計の上限をUTF-8バイト数で確認する。"""
+    source = [message(1), message(2)]
+    monkeypatch.setattr("app.outbox.sqs.message_batch.MAX_MESSAGE_BYTES", 4 - extra)
     if extra:
         with pytest.raises(ValueError, match="size limit"):
-            SqsMessageBatch(events)
+            SqsMessageBatch(source)
     else:
-        assert SqsMessageBatch(events).messages == prepared.messages
+        assert len(SqsMessageBatch(source).messages) == 2
 
 
-def test_batch_cannot_be_modified():
-    batch = SqsMessageBatch(EventBatch([envelope()]))
+def test_oversized_message_is_excluded_without_losing_valid_message(monkeypatch):
+    """個別サイズ超過だけを失敗にし、送信可能な本文を残す。"""
+    monkeypatch.setattr("app.outbox.sqs.message.MAX_MESSAGE_BYTES", 2)
+    batch = SqsMessageBatch([message(1, "long"), message(2)])
+    assert [m.event_id for m in batch.messages] == [UUID(int=2)]
+    assert [f.event_id for f in batch.failures] == [UUID(int=1)]
+
+
+def test_batch_is_immutable_and_hides_body():
+    """本文を表示に漏らさず、構築後のバッチを書き換えられない。"""
+    batch = SqsMessageBatch([message(body="PRIVATE")])
+    assert "PRIVATE" not in repr(batch)
+    assert batch.messages[0].body_md5 not in repr(batch)
     with pytest.raises(FrozenInstanceError):
         batch.messages = ()
-    with pytest.raises(FrozenInstanceError):
-        batch.failures = ()
-    with pytest.raises(TypeError):
-        batch.messages[0] = batch.messages[0]
-    with pytest.raises(FrozenInstanceError):
-        batch.messages[0].body = "changed"
-    with pytest.raises(TypeError):
-        replace(batch, events=EventBatch([envelope()]), messages=())
-
-
-def test_batch_display_does_not_expose_body_or_checksum():
-    batch = SqsMessageBatch(EventBatch([envelope()]))
-    for display in (str(batch), repr(batch)):
-        assert batch.messages[0].body not in display
-        assert batch.messages[0].body_md5 not in display

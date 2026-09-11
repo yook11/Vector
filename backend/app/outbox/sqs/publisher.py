@@ -12,17 +12,16 @@ from app.outbox.publishing.errors import (
 )
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
-    EventEnvelope,
     PublishFailed,
     PublishSucceeded,
 )
+from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs.batch_response import results_from_sqs_batch_response
 from app.outbox.sqs.client import create_sqs_client
 from app.outbox.sqs.error_mapping import (
     publish_cleanup_error_from_exception,
     publish_error_from_exception,
 )
-from app.outbox.sqs.event_batch import EventBatch
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.message_batch import SqsMessageBatch
 from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
@@ -40,18 +39,16 @@ def failed_results(
     }
 
 
-class SqsEventPublisher:
-    """ベクトル生成向けイベントを、資格情報を確定した単一試行で送信する。"""
+class SqsSender:
+    """生成済みメッセージを、資格情報を確定した単一試行で送信する。"""
 
     def __init__(
         self,
         *,
-        embedding_queue_url: str,
         client_factory: Callable[[], BaseClient],
         failure_handler: SqsPublishFailureHandler,
     ) -> None:
         self._client_factory = client_factory
-        self._embedding_queue_url = embedding_queue_url
         self._failure_handler = failure_handler
 
     @classmethod
@@ -60,20 +57,21 @@ class SqsEventPublisher:
         *,
         session: Session,
         region: str,
-        embedding_queue_url: str,
-    ) -> SqsEventPublisher:
+    ) -> SqsSender:
         """設定層のregionとSDKの資格情報providerを送信処理に接続する。"""
         return cls(
-            embedding_queue_url=embedding_queue_url,
             client_factory=lambda: create_sqs_client(session=session, region=region),
             failure_handler=SqsPublishFailureHandler(),
         )
 
-    def publish_batch(self, envelopes: Sequence[EventEnvelope]) -> BatchPublishResult:
+    def send_batch(
+        self, *, queue_url: str, messages: Sequence[EventMessage]
+    ) -> BatchPublishResult:
         successes: list[PublishSucceeded] = []
         failures: list[PublishFailed] = []
-        events = EventBatch(envelopes)
-        batch = SqsMessageBatch(events)
+        if not isinstance(queue_url, str) or not queue_url.strip():
+            raise ValueError("queue URL must not be blank")
+        batch = SqsMessageBatch(messages)
         failures.extend(batch.failures)
         if batch.messages:
             try:
@@ -83,7 +81,7 @@ class SqsEventPublisher:
                 failures.extend(failed_results(batch, error=error).values())
             else:
                 try:
-                    sent_results = self._send_messages(client, batch)
+                    sent_results = self._send_messages(client, batch, queue_url)
                 finally:
                     try:
                         client.close()
@@ -103,17 +101,17 @@ class SqsEventPublisher:
         }
         return BatchPublishResult(
             results=tuple(
-                results_by_event_id[envelope.event_id] for envelope in events.envelopes
+                results_by_event_id[envelope.event_id] for envelope in batch.inputs
             ),
         )
 
     def _send_messages(
-        self, client: BaseClient, batch: SqsMessageBatch
+        self, client: BaseClient, batch: SqsMessageBatch, queue_url: str
     ) -> Mapping[UUID, PublishSucceeded | PublishFailed]:
         """送信全体の失敗と応答内の個別結果を、それぞれの対象に反映する。"""
         try:
             response = client.send_message_batch(
-                QueueUrl=self._embedding_queue_url,
+                QueueUrl=queue_url,
                 Entries=[
                     {"Id": str(message.event_id), "MessageBody": message.body}
                     for message in batch.messages

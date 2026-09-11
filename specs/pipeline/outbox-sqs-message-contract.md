@@ -4,7 +4,7 @@ Status: Partially implemented
 
 ## Problem
 
-保存済みOutboxイベントをSQSへ送るため、メッセージ形式と送信先を固定する。今回の実装はベクトル生成向けのバッチ送信に限定し、イベントごとの受付成功・送信失敗を呼び出し元へ返す。
+保存済みOutboxイベントの検証・本文生成・配送先を配送定義で結び付け、共通SQS送信から工程固有の依存を分離する。有効な配送はベクトル生成向けだけとし、イベントごとの受付成功・送信失敗を呼び出し元へ返す。
 
 ## Evidence
 
@@ -50,7 +50,7 @@ Standardキューを使用し、event_typeから送信先を決定する。Queue
 | `article.curated_signal` | `article-assessment` |
 | `article.assessed_in_scope` | `article-embedding` |
 
-実際のキュー名には既存の`name_prefix`を付ける。イベント種別の許可判定と送信先はPublisherが所有し、現在は`ArticleAssessedInScope.EVENT_TYPE`だけを設定された`embedding_queue_url`へ送る。対応外のevent_typeは本文構築前に個別失敗とし、代替キューへ流さない。停止・再試行の判断は別途定める。
+実際のキュー名には既存の`name_prefix`を付ける。relayの組み立てが`EventDeliveryRoute`を所有し、`ArticleAssessedInScope.EVENT_TYPE`・`settings.sqs_article_embedding_queue_url`・`build_assessed_in_scope_message`の対応を1か所で定義する。同じ定義をPublisherとrelayの取得条件に渡す。未登録種別の取得や複数配送先の巡回は行わない。停止・再試行の判断は別途定める。
 
 ### 再送
 
@@ -69,13 +69,21 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 
 ## Implementation
 
-`backend/app/outbox/publishing/publisher.py`にEventEnvelopeと同期EventPublisher Protocol、`sqs/publisher.py`にベクトル生成向けのSQS送信部品を実装した。本番の生成口はSqsEventPublisher.from_sessionで、SDK session・region・Queue URLを呼び出し元から渡す。公開APIはpublish_batchに統一し、各イベントのPublishSucceededまたはPublishFailed(error=PublishError)をBatchPublishResultに格納する。対応外イベントとタイムゾーンのない日時は個別失敗にし、正常なイベントだけを送信する。
+`publishing/publisher.py`のEventEnvelope・EventPublisher・BatchPublishResultを維持し、`publishing/route.py`にfrozen・slots付きの`EventMessage(event_id, body)`と`EventDeliveryRoute(event_type, queue_url, build_message)`を定義する。本文はreprへ出さず、配送定義の種別・キューは空白を拒否し、本文生成処理を必須とする。
+
+`RoutedEventPublisher.publish_batch`が入力件数・型・ID重複を確認し、配送定義の本文生成処理を呼ぶ。生成失敗は個別のPREPARE_EVENT失敗とし、生成したメッセージの型・ID・入力種別と配送種別の一致を確認する。成功分だけを送信し、送信結果の件数・ID・入力順の対応を確認した後、生成失敗と統合して全入力順で返す。全件生成失敗ではSenderを呼ばない。
+
+`SqsSender.from_session(session, region)`が共通送信部品を構築し、`send_batch(queue_url=..., messages=...)`で生成済みのEventMessageを受け取る。EventEnvelopeや各工程のイベント型・キュー対応を参照しない。`SqsMessage.from_message`は本文を変更せず、サイズ検証とMD5計算だけを担当する。SqsMessageBatchは1〜10件・型・ID重複・個別と合計サイズを検証する。個別サイズ超過は除外して正常分を送り、合計超過などのバッチ違反は送信前に拒否する。旧SqsEventPublisherと旧from_eventの互換名は設けない。
 
 ベクトル生成向けのrelayとLambda入口を接続済みである。他工程への展開、AWS上での実行検証、本番適用・定期起動の有効化は未実施。
 
 ## Verification
 
-`backend/tests/outbox/sqs/test_publisher.py`にStubberを使用したunit testを追加した。MessageBodyと送信先、再送時の内容維持、UTC変換と小数秒、対応外イベント・タイムゾーンなし日時の非送信、SDK例外の共通分類への変換を対象とする。既存payload定義を固定するだけのテストは追加していない。
+- `tests/outbox/publishing/`: 配送定義、実Embedding契約による非送信、生成失敗と送信結果の統合、メッセージ対応、既存JSONの保持を確認する。工程に依存しないイベントと本文でも配送できることを保証する。
+- `tests/outbox/sqs/`: 生成済み本文と指定キューを直接入力し、サイズ・件数・MD5・AWS応答・通信障害・終了処理の既存保証を確認する。
+- イベントの詳細検証は既存のイベント契約テストが担当し、送受信のreason・issues一致は本文生成と受信解析を直接呼んで確認する。Publisher側で不正項目の全組合せを再検証しない。
+- relayの既存DBテストは注入したイベント種別の利用を確認する。新しいDB網羅テストや`local_tests/`の全体シナリオは追加しない。既存のlocal_tests本文fixtureだけを新しい生成入口へ接続する。
+- DBの保存・ロック・接続解放は既存DBテスト、AWS権限と実配送は実AWSスモークの責任とする。今回実AWSスモークは実行しない。
 
 スライス②完了時点でlint・format、全単体テスト5,572件、integration test 1,217件（22件skip）が成功した。AWS上での送信確認・デプロイは行っていない。
 
@@ -133,7 +141,7 @@ Evidence: 既存EventEnvelope・資格情報確定処理・共通PublishError、
 
 ### 応答の分類と診断
 
-SqsPublishFailureHandlerはSQS応答不正とクライアント終了失敗の診断ログを担当し、SqsEventPublisherへコンストラクターで注入する。from_sessionは標準のハンドラーを生成して接続する。
+SqsPublishFailureHandlerはSQS応答不正とクライアント終了失敗の診断ログを担当し、SqsSenderへコンストラクターで注入する。from_sessionは標準のハンドラーを生成して接続する。
 エラー分類は既存のerror_mappingに残し、ハンドラーはDB更新・再試行判断・送信を行わない。
 通常のログ障害はハンドラー内で抑止し、終了診断の分類障害もpublisher側で元の結果を維持する。BaseExceptionは抑止しない。
 Relay側のOutboxDeliveryFailureHandlerは、従来どおり配信の再試行・停止のDB反映と停止確定後の記録を担当する。
@@ -178,20 +186,20 @@ Evidence: [AWS SendMessageBatchResultEntry仕様](https://docs.aws.amazon.com/AW
 ### 送信メッセージの型
 
 Problem: SDK用の辞書と期待MD5を別々に渡すことで、送信内容と照合情報の対応が型から読めない。
-Evidence: SqsMessage.from_eventによる送信準備、SqsMessageのMD5確定、SqsMessageBatchの合計サイズ検査と_send_batch・応答変換の受け渡しを対象とする。
+Evidence: SqsMessage.from_messageによる送信準備、SqsMessageのMD5確定、SqsMessageBatchの合計サイズ検査と_send_batch・応答変換の受け渡しを対象とする。
 
 - SQS adapter内のSqsMessage(event_id: UUID, body: str)はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。bodyとbody_md5はreprに含めない。EventEnvelopeやイベント型はフィールドに持たない。
-- SqsMessage.from_event(event)は検証済みの`ArticleAssessedInScopeEvent`だけを受け取り、本文の構築とサイズ検証を担当する。EventEnvelopeから直接本文を作らず、未検証の値や別工程のイベントを本文にしない。成功時はSqsMessageを返し、返値を再検証してSqsMessageかどうかを判定しない。
-- 本文の既知不正はPublishEventInvalidErrorとし、理由はmessage_too_large（UTF-8が1,048,576 bytes超）のみとする。型付き契約を通過した値はJSON化に失敗しないため、serialization_failedの理由は持たない。unsupported_event_typeはPublisherが本文構築前に検出し、本文不正と重なっても優先する。いずれも既存のイベント単位のprepare_event境界で扱い、正常分の送信は続ける。Message内の想定外例外は包まず、publish_batchのprepare_eventが受け止める。
-- 本文形式は既存の5項目JSONとする。occurred_atのUTCのZ表記・小数秒の維持は`ArticleAssessedInScopeEvent`のJSON直列化が所有し、SqsMessageは`model_dump(mode="json")`の結果をそのまま`json.dumps`する。JSONの再構築や文字列の正規化は行わない。
+- SqsMessage.from_message(message)は生成済みのEventMessageを受け取り、サイズ検証とMD5確定を担当する。本文を加工せずSqsMessageを返す。イベントの検証とJSON生成は配送定義の本文生成処理が所有する。
+- SQS本文の既知不正はPublishEventInvalidError(reason=message_too_large)で表す。イベント検証はRoutedEventPublisherの本文生成境界、サイズ・MD5の準備失敗はSqsMessageBatchのPREPARE_EVENT境界で個別失敗にする。想定外例外も既存の変換で保持し、正常分の送信を続ける。
+- Embedding本文は既存の5項目JSONとする。UTCのZ表記・小数秒はArticleAssessedInScopeEventのJSON直列化が所有し、build_assessed_in_scope_messageがmodel_dump(mode="json")の結果をjson.dumps(..., allow_nan=False)する。SqsSenderはJSONを解釈・再構築しない。
 - 1件上限の定数はSqsMessage側が持ち、SqsMessageBatchの本文合計サイズ検査も同じ定数を使う。バッチ件数・重複ID・フィールド型・合計サイズは個別メッセージ準備の外とする。
-- publish_batchはEventBatchからSqsMessageBatchを構築し、準備に成功した本文を送信する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
+- RoutedEventPublisherはEventBatchからEventMessageを生成し、SqsSenderへ渡す。SqsSenderはSqsMessageBatchを構築する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
 - SDK呼び出しの直前にだけ各メッセージをId/MessageBodyの辞書へ変換する。body_md5はSDKへ送信しない。
 - results_from_sqs_batch_responseも同じSqsMessageBatchを受け取り、IDで対応するメッセージを探して照合する。照合対象はEventEnvelopeではなく、送ったSqsMessageとする。
 
 Invariants: 本文・MD5計算・件数/サイズ制限・個別結果・送信回数・資格情報・終了処理の契約を維持する。
 Non-goals: failure handlerの追加、例外処理全体の再設計、DB/relay/通知/インフラの変更は行わない。
-Done: from_eventが送信準備であり、既存の送信・応答照合と本文とMD5の対応が維持されることを確認できる。
+Done: from_messageによる送信準備で、既存の送信・応答照合と本文・MD5の対応が維持されることを確認できる。
 
 Verification（2026-09-08）: lint・format check、全単体テスト5,802件が成功した。`make test-integration TEST_COMPOSE_PROJECT=vector-test-sqs-from-envelope-20260908 PYTEST_ARGS="-x -q"`で実DBテスト1,226件成功・22件skipを確認した。
 
@@ -491,9 +499,9 @@ Done: 呼び出し側の個別失敗の変換分岐がなくなり、公開入�
 Problem: 1回で送るまとまりの件数・ID重複・合計サイズの条件を、送信処理から分離して型に定義する。
 Evidence: 既存SqsMessage、publisherの入力検証・本文準備と、送信・失敗結果・応答照合の受け渡しを対象とする。
 
-- `sqs/event_batch.py`の不変な`EventBatch`が入力一覧をtupleへ固定し、1〜10件・EventEnvelopeと各フィールドの型・event_id重複なしを一度だけ検証する。型違反はTypeError、件数・重複違反はValueErrorとする。
-- `SqsMessageBatch(events: EventBatch)`は検証済み入力だけを受け取り、イベント契約の検証と`SqsMessage.from_event`による本文生成を行う。任意のメッセージ一覧を直接渡す構築経路は設けない。
-- イベント内容は`ArticleAssessedInScopeEvent.from_input`、個別のJSON本文サイズは`SqsMessage.from_event`、送信可能な本文のUTF-8合計サイズは`SqsMessageBatch`が検証する。件数とIDの一意性は入力から引き継ぎ、再検証しない。
+- `publishing/event_batch.py`の不変な`EventBatch`が入力一覧をtupleへ固定し、1〜10件・EventEnvelopeと各フィールドの型・event_id重複なしを検証する。型違反はTypeError、件数・重複違反はValueErrorとする。
+- `SqsMessageBatch(messages: Sequence[EventMessage])`は工程固有のイベントを受け取らず、生成済み本文の件数・型・ID重複と送信サイズを検証する。入力はtupleで保持する。
+- イベント内容は本文生成処理の`ArticleAssessedInScopeEvent.from_input`、個別のUTF-8本文サイズは`SqsMessage.from_message`、送信可能な本文の合計サイズは`SqsMessageBatch`が検証する。RoutedEventPublisherとSqsSenderはそれぞれの公開入力の件数・型・ID一意性を保証する。
 - 準備済みの`messages`と個別の`failures`を不変のtupleで保持する。不正イベントを除いた順序を維持し、本文・MD5を通常表示へ出さない。
 - 公開`publish_batch(envelopes)`は維持し、内部で`EventBatch`を構築する。11件の入力を不正イベントの除外によって受け入れない。自動分割やIDの重複除去は行わない。
 - 合計サイズ超過は呼び出し全体のValueErrorとなり、クライアントを生成しない。
@@ -536,8 +544,8 @@ Done: 全違反理由が共通エラーと停止ログまで保持され、秘�
 ## Outboxのディレクトリ構成
 
 - `delivery/`は配信の確保・送信実行・結果記録・再試行と停止判断を担当する。
-- `publishing/`はEventEnvelope、EventPublisher Protocol、送信結果型と共通エラーを定義する。
-- `sqs/`はSQS送信、本文・バッチの構築、応答検証、例外変換とクライアント管理を担当する。
+- `publishing/`はイベント入力、本文生成、配送定義、RoutedEventPublisher、送信結果型と共通エラーを定義する。
+- `sqs/`は生成済み本文のSQS制約・MD5、送信、応答検証、例外変換とクライアント管理を担当する。
 
 配置の整理に伴いimportパスと診断上の完全修飾型名を更新するが、処理と送信契約は維持する。EventEnvelope.from_claimed()とその配信型への参照、publishing/errors.py内のPublishCleanupErrorは維持し、旧モジュールの互換名は設けない。
 
@@ -561,9 +569,9 @@ Non-goals: 本番適用、Scheduler有効化、AWSへの実送信、Slack到達�
 
 ## 対象内判定イベントの共有契約
 
-SQS publisherはイベント単位の送信準備で`ArticleAssessedInScopeEvent`を構築し、送受信共通の契約を検証する。発行元のpayload検証・Outbox保存と、relayからpublisherへの境界としての汎用のEventEnvelopeは維持する。対応版は整数の1、payloadは正の整数のcuration_id・analyzed_article_idだけを持つ既存のArticleAssessedInScopeとする。
+Embedding用の`build_assessed_in_scope_message`はイベント単位の本文生成で`ArticleAssessedInScopeEvent.from_input`を呼び、送受信共通の契約を検証する。発行元のpayload検証・Outbox保存と、relayからpublisherへの境界としての汎用のEventEnvelopeは維持する。対応版は整数の1、payloadは正の整数のcuration_id・analyzed_article_idだけを持つ既存のArticleAssessedInScopeとする。
 
-共通型の検証に成功した`ArticleAssessedInScopeEvent`だけを`SqsMessage.from_event`へ渡し、publisherはEventEnvelopeへ戻さない。本文のUTC表現は共通型のJSON直列化が所有し、SqsMessageはJSON化・サイズ検証・MD5計算を担当する。未知版やpayload不正は本文構築より前に拒否する。publisherの呼び出し型・重複IDの違反は既存どおり呼び出し全体の例外、契約違反はイベント単位のPublishFailedとする。
+共通型の検証に成功したイベントは`model_dump(mode="json")`と`json.dumps(..., allow_nan=False)`で既存形式の本文へ変換し、EventMessageへ保持する。本文のUTC表現は共通型のJSON直列化が所有し、SqsMessageは生成済み本文のサイズ検証・MD5計算を担当する。未知版やpayload不正は本文構築より前に拒否する。publisherの呼び出し型・重複IDの違反は既存どおり呼び出し全体の例外、契約違反はイベント単位のPublishFailedとする。
 
 共通型の違反をPublishEventInvalidErrorへ変換する際は入力値を含む検証例外を原因・contextに保持しない。既存の配信失敗ハンドラーはnon_retryable_failureとして対象Outbox行だけを停止する。正常イベントは送信を継続し、全件不正ならAWSクライアントを生成しない。SQS受信後の再配信とDLQ処理は、この送信前の停止とは独立する。
 
@@ -577,3 +585,14 @@ SQS publisherはイベント単位の送信準備で`ArticleAssessedInScopeEvent
 送信前と受信本文の契約違反はassessed_event_validation_failureで同じ詳細へ変換する。PublishEventInvalidErrorとEmbeddingEventInvalidErrorは既存reasonに加えて不変のissuesを保持する。項目は既知フィールドだけ、コードはmissing_required_field・invalid_type・invalid_value・unknown_field・unsupported_event_type・unsupported_schema_versionとする。未知キーは親のevent／payloadへ集約し、同一項目とコードを重複排除する。元の入力・自由文・ValidationErrorの原因連鎖は保持しない。送信側の停止判断とバッチ契約は変更しない。種別だけを先に判定する分岐は共有契約へ統合し、複数の違反がある場合も外側の構造・種別・バージョン・payloadの順で送受信の分類を揃える。
 
 検証（2026-09-10）: 送受信の詳細と優先順位の一致、既存の個別停止と正常分の送信を確認した。最終状態のRuff lint・format check、全単体テスト6,149件、全統合テスト1,340件が成功。既存DB権限テスト22件は必要なschema不足でスキップした。
+
+
+## 配送定義と共通送信の分離（2026-09-11）
+
+実装済み: EventDeliveryRoute・EventMessage・RoutedEventPublisher・SqsSenderを接続し、relayのEmbedding依存を組み立てへ移した。PublishEventInvalidErrorのissuesは固定enumのfield・codeを読み取り専用Protocolで受け取り、工程固有の詳細型に依存しない。詳細の値と入力を残さない変換は維持する。
+
+有効な配送はEmbeddingのみ。Assessmentのイベント検証・配送・Consumer接続、複数ルートの巡回・自動登録、AWS設定とデプロイは未実施。DB schema・SQL・リース・再試行・停止方針・トランザクション境界・キュー設定・依存パッケージは変更していない。
+
+検証結果: app全体と変更テスト（既存local_testsの本文fixtureを含む）のRuff lint・format確認が成功。`uv run pytest tests/ -m unit -x -q`は6,563件成功し、送信結果対応のテスト調整後もpublishingの単体テスト80件が成功した。`make test-integration PYTEST_ARGS="-x -q"`は1,400件成功（skipなし）。既存の非推奨・Logfire設定に関する警告は残る。`local_tests/`全体・実AWSスモーク・デプロイは今回の範囲外として実行していない。
+
+PR作成時の再検証（2026-09-12）: mainの`53fdfa234`を基準に今回の変更を競合なく反映した。app全体・変更テストのRuff lint／format確認、全単体テスト6,552件、`make test-integration PYTEST_ARGS="-x -q"`の統合テスト1,400件が成功した。別タスクのAWS関連作業は含めていない。
