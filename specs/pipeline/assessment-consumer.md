@@ -1,6 +1,6 @@
 # AssessmentConsumer — イベント受信と投資判定
 
-Status: 全体方針合意・正常終了結果と失敗理由の契約を実装・検証済み（2026-09-11）。Consumer・AWS適用は未着手。
+Status: 正常終了・失敗理由の契約とConsumer・失敗後処理を実装・検証済み（2026-09-11）。Lambda・SQS・relayへの接続とAWS適用は未着手。
 
 ## Problem
 
@@ -68,7 +68,7 @@ Problem: 現在のServiceの`int / None`では、対象外の保存成功と処�
 | AI判定後に保存・監査・Outbox記録・commitが失敗 | 例外、正常終了なし |
 | RepositoryがDB障害などの例外を送出 | 例外を伝播し、`ALREADY_ASSESSED`へ変換しない |
 
-開始時の判定済みによる`ALREADY_ASSESSED`は、後続のConsumer実装で同じ正常終了契約に接続する。
+開始時の判定済みによる`ALREADY_ASSESSED`は、以下のConsumerスライスで同じ正常終了契約へ接続済み。
 
 Non-goals: このタスクでは、エラーの詳細分類、排他制御の追加・変更、DeepSeek通信設定、Lambda・SQS実装、Taskiqの切替を行わない。既存のRecoverable／Terminalや後続タスク用IDの戻し方から正常終了契約を導かない。
 
@@ -101,7 +101,28 @@ Done: 原因保持・詳細コード・Taskiq動作の維持を単体・DB統合
 
 実装状況（2026-09-11）: エラー型・Service変換・Taskiq境界の接続を実装済み。プロバイダー全10種の原因保持、応答不正の全16コード、不正な構築の拒否、DB・timeout・想定外例外の同一性、既存Taskiqの監査・メトリクス・再試行・holdを検証した。実DBで詳細コードとTaskiq → Assessment → プロバイダーの3段の原因チェーンが監査へ保存されることも確認した。
 
-検証結果: `ruff check`・`ruff format --check`（app全体と変更したテスト）が成功。`uv run pytest tests/ -m unit -x -q`は6,427件成功。`make test-integration PYTEST_ARGS='-x -q'`は1,369件成功・22件skipで完了し、一時DB・Redisは終了処理で削除した。今回の失敗理由スライスは完了とし、新Consumerへの接続は未実装として残す。
+検証結果: `ruff check`・`ruff format --check`（app全体と変更したテスト）が成功。`uv run pytest tests/ -m unit -x -q`は6,427件成功。`make test-integration PYTEST_ARGS='-x -q'`は1,369件成功・22件skipで完了し、一時DB・Redisは終了処理で削除した。失敗理由スライスは完了とし、Consumerへの接続は以下のスライスで実施した。
+
+### Consumerと失敗後処理の実装
+
+Problem: 正常終了・失敗理由の契約を、Taskiqに依存しないイベント受信側へ接続する。
+
+- `AssessmentConsumer(session_factory, assessor)`は借用したAssessorを使い、`consume(ArticleCuratedSignal) -> AssessmentCompletion`を提供する。クライアントの生成・終了は担当しない。
+- 業務処理の上限は60秒とする。既存の`curation_id`照会を1回だけ行い、取得したDB由来の記事IDを保持して読み取りセッションを閉じ、`ReadyForAssessment.from_facts`とServiceへ進む。イベントの記事IDは補完・照合に使わない。
+- 開始時の対象内／対象外判定済みは`ALREADY_ASSESSED`を返し、AI・保存・成功監査・Outbox・成功メトリクスを追加しない。Curation不存在は原因付きの`AssessmentCurationMissingError`とする。Ready検証失敗でも取得済みのDB由来IDを失敗監査へ渡し、未取得なら`article_id=None`とする。
+- `AssessmentFailureClassification`は監査用`FailureProjection`と任意の枯渇通知対象を持ち、`outcome`は持たない。プロバイダーのCODE・FAILURE_MODE・reasonを保持し、枯渇判定は共通関数を使う。応答不正は詳細codeと`ai_response_invalid`、不存在は`assessment_curation_missing`と`target_missing`、DBは共通DB投影、timeout・その他はunknown投影とする。
+- 新AssessmentConsumerではDB・プロバイダー・その他の失敗を一律`processing_outcome{result=failed}`として計測し、`infra_error`区分を使わない。失敗率には原因を問わず処理失敗を含め、詳細は監査の型・コードで識別する。既存TaskiqやEmbeddingの計測契約は変更しない。
+- 監査のretryabilityは観測情報だけに使い、失敗はすべて元例外のまま呼び出し元へ返す。ConsumerにTaskiq分類、hold、独自再試行は持ち込まない。
+- 失敗後処理は60秒の外で、処理メトリクス・別セッションでの失敗監査commit・必要なプロバイダー枯渇通知を順番に独立して試みる。監査失敗時はaudit droppedを計測する。通常の二次例外や診断ログ障害で元例外を置き換えず、後続の処理を継続する。外部キャンセルは抑止しない。
+- `AssessmentAuditRepository.append_classified_failure`はReadyを要求せず、分類を再計算せずに`FAILED`を記録する。既存の制限・マスキングを通したメッセージと原因チェーンを保存し、入力本文・AI生応答は収集しない。旧Taskiq用監査は維持する。
+
+Non-goals: Lambda・SQS・relay接続、DeepSeek通信設定とクライアント管理、一覧更新通知、Taskiq停止、デプロイは含めない。SQL・保存契約・schema・ロックは変更しない。対象内／対象外の同時保存の排他制御と保存時不存在の専用エラー化は後続スライスとする。
+
+Done: 正常終了、開始時判定、60秒制限、分類・監査・計測・通知、元例外の伝播が接続され、単体・実DB統合テストが成功すること。
+
+実装状況（2026-09-11）: Consumer・失敗分類・後処理・監査入口を実装済み。既存の非同期Ready入口は`from_facts`へ委譲し、Taskiqの開始判定は維持した。正常保存と開始時／保存時の重複、IDの根拠、1回の照会とAI前の接続返却、全10種のプロバイダー分類と全16種類の応答不正コード、取得・AI・保存のtimeout、キャンセル、保存・成功監査・Outbox・commitの失敗とロールバック、後処理の二次障害を検証した。
+
+検証結果: app全体と変更したテストの`ruff check`・`ruff format --check`が成功。監査drop記録箇所の追加に合わせた網羅性テスト更新後、`uv run pytest tests/ -m unit -x -q`は6,470件成功。統合テストの期待引数・DB制約と例外分類の前提・一時DDLの終了順序を修正後、`make test-integration PYTEST_ARGS='-q'`は1,422件成功・22件skipで完了し、一時DB・Redisも正常終了した。このConsumerスライスは完了とする。
 
 ## Invariants
 
@@ -117,11 +138,11 @@ Done: 原因保持・詳細コード・Taskiq動作の維持を単体・DB統合
 
 ## 詳細化・有効化までに決めること
 
-1. **実行・配送の数値**：業務・Lambda・DeepSeek通信のtimeout、SDK内部再試行、同時実行数、受信件数、SQS可視性timeout・保持期間・DLQ上限。Embeddingの値を参照し、Assessmentへの適用値を確定する。
+1. **実行・配送の数値**：業務処理の上限は60秒で確定済み。残りはLambda・DeepSeek通信のtimeout、SDK内部再試行、同時実行数、受信件数、SQS可視性timeout・保持期間・DLQ上限。Embeddingの値を参照し、Assessmentへの適用値を確定する。
 2. **移行・再処理**：既存Taskiqとの併用期間と停止順序、既存backfillの扱い、蓄積済みOutboxの配信範囲、DLQの停止・調査・再投入手順。新Consumerのエラー契約とは分けて決める。
 3. **一覧更新通知**：既存Taskiq入口にある保存後通知を新経路のどこで実行するか、通知失敗時の復旧をどうするか。[一覧の新着検知仕様](../news/article-list-update-notification.md)と整合させる。
 
-具体的なエラー型・監査コード・監視分類、イベントのIDとDB由来IDの扱い、保存時の排他方法は、上記方針に沿って実装前に詳細化する。
+エラー型・監査コード・監視分類とConsumer内のIDの扱いは実装済み。Lambdaでの入力検証・資源管理と保存時の排他方法は、上記方針に沿って後続スライスで詳細化する。
 
 ## Non-goals
 
