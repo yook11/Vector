@@ -1,0 +1,58 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+install -d -m 700 /var/lib/vector-test /etc/vector-test
+printf '%s\n' '{"status":"starting"}' > /var/lib/vector-test/bootstrap-status.json
+trap 'printf "%s\n" "{\"status\":\"failed\"}" > /var/lib/vector-test/bootstrap-status.json' ERR
+
+cat > /etc/vector-test/proxy.env <<'CONFIG'
+http_proxy=${proxy_url}
+https_proxy=${proxy_url}
+HTTP_PROXY=${proxy_url}
+HTTPS_PROXY=${proxy_url}
+no_proxy=${no_proxy}
+NO_PROXY=${no_proxy}
+AWS_REGION=${region}
+AWS_DEFAULT_REGION=${region}
+AWS_PAGER=
+CONFIG
+set -a
+source /etc/vector-test/proxy.env
+set +a
+
+# SSMの管理チャネルを先に用意し、後続の準備失敗も確認できるようにする。
+install -d /etc/systemd/system/amazon-ssm-agent.service.d
+cat > /etc/systemd/system/amazon-ssm-agent.service.d/proxy.conf <<'UNIT'
+[Service]
+EnvironmentFile=/etc/vector-test/proxy.env
+UNIT
+systemctl daemon-reload
+systemctl restart amazon-ssm-agent
+
+# プロキシの起動待ちとパッケージ取得の再試行を有限にする。
+retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if timeout 300 "$@"; then return 0; fi
+    sleep 10
+  done
+  return 1
+}
+wait_for_proxy() {
+  local attempt
+  for attempt in $(seq 1 60); do
+    if timeout 5 bash -c 'exec 3<>/dev/tcp/10.80.0.10/3128'; then return 0; fi
+    sleep 10
+  done
+  return 1
+}
+wait_for_proxy
+retry dnf install -y docker
+install -d /etc/systemd/system/docker.service.d
+cat > /etc/systemd/system/docker.service.d/proxy.conf <<'UNIT'
+[Service]
+EnvironmentFile=/etc/vector-test/proxy.env
+UNIT
+systemctl daemon-reload
+systemctl enable --now docker
+printf '%s\n' '{"status":"ready"}' > /var/lib/vector-test/bootstrap-status.json
