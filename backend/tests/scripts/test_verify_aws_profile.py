@@ -17,6 +17,8 @@ _PROFILES = "\n".join(
     (
         "default",
         "vector-deploy",
+        "vector-bootstrap",
+        "vector-bootstrap-apply",
         "vector-plan",
         "vector-apply",
         "vector-push",
@@ -130,6 +132,16 @@ def _run(
         ("vector-plan", "vector-ci-terraform-plan", "vector-ci-terraform-plan"),
         ("vector-push", "vector-ci-app-push", "vector-ci-app-push"),
         (
+            "vector-bootstrap",
+            "AWSReservedSSO_VectorBootstrap_abc123",
+            "AWSReservedSSO_VectorBootstrap_<SUFFIX>",
+        ),
+        (
+            "vector-bootstrap-apply",
+            "vector-bootstrap-apply",
+            "vector-bootstrap-apply",
+        ),
+        (
             "vector-admin",
             "AWSReservedSSO_WorkloadAdministrator_abc123",
             "AWSReservedSSO_WorkloadAdministrator_<SUFFIX>",
@@ -149,25 +161,52 @@ def test_accepts_only_the_expected_caller_role(
     assert "arn:aws" not in result.stdout
 
 
-def test_rejects_an_unexpected_role_without_echoing_the_arn(tmp_path: Path) -> None:
-    arn = f"arn:aws:sts::{_ACCOUNT_ID}:assumed-role/AdministratorAccess/test-session"
+@pytest.mark.parametrize(
+    ("profile", "role", "login_profile"),
+    [
+        ("vector-plan", "AdministratorAccess", "vector-deploy"),
+        *[
+            (profile, role, "vector-bootstrap")
+            for profile in ("vector-bootstrap", "vector-bootstrap-apply")
+            for role in (
+                "AWSReservedSSO_WorkloadAdministrator_abc123",
+                "AWSReservedSSO_VectorDeploy_abc123",
+                "AWSReservedSSO_VectorTestManager_abc123",
+                "AWSReservedSSO_VectorBootstrapExtra_abc123",
+            )
+        ],
+    ],
+)
+def test_rejects_an_unexpected_role_without_echoing_the_arn(
+    tmp_path: Path, profile: str, role: str, login_profile: str
+) -> None:
+    arn = f"arn:aws:sts::{_ACCOUNT_ID}:assumed-role/{role}/test-session"
 
-    result = _run(tmp_path, "vector-plan", arn=arn)
+    result = _run(tmp_path, profile, arn=arn)
 
     assert result.returncode == 1
     assert "caller roleが期待値と一致しません" in result.stderr
-    assert "aws sso login --profile vector-deploy" in result.stderr
+    assert f"aws sso login --profile {login_profile}" in result.stderr
     assert _ACCOUNT_ID not in result.stderr
     assert arn not in result.stderr
 
 
-def test_rejects_the_expected_role_from_a_different_account(tmp_path: Path) -> None:
-    role = "vector-ci-terraform-plan"
+@pytest.mark.parametrize(
+    ("profile", "role"),
+    [
+        ("vector-plan", "vector-ci-terraform-plan"),
+        ("vector-bootstrap", "AWSReservedSSO_VectorBootstrap_abc123"),
+        ("vector-bootstrap-apply", "vector-bootstrap-apply"),
+    ],
+)
+def test_rejects_the_expected_role_from_a_different_account(
+    tmp_path: Path, profile: str, role: str
+) -> None:
     arn = f"arn:aws:sts::{_ACCOUNT_ID}:assumed-role/{role}/test-session"
 
     result = _run(
         tmp_path,
-        "vector-plan",
+        profile,
         arn=arn,
         config_account="999900001111",
     )
@@ -181,7 +220,12 @@ def test_rejects_the_expected_role_from_a_different_account(tmp_path: Path) -> N
 
 @pytest.mark.parametrize(
     ("profile", "login_profile"),
-    (("vector-plan", "vector-deploy"), ("vector-admin", "vector-admin")),
+    (
+        ("vector-plan", "vector-deploy"),
+        ("vector-admin", "vector-admin"),
+        ("vector-bootstrap", "vector-bootstrap"),
+        ("vector-bootstrap-apply", "vector-bootstrap"),
+    ),
 )
 def test_auth_failure_reports_only_the_explicit_login_command(
     tmp_path: Path, profile: str, login_profile: str
