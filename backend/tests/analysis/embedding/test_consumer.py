@@ -650,6 +650,7 @@ async def test_consumer_with_invocation_database_resources(
 
     from app.lambda_handlers.embedding import resources as resources_module
     from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
+    from tests.lambda_handlers.iam_fixtures import inject_test_db_signer
 
     monkeypatch.setattr(
         resources_module,
@@ -658,8 +659,10 @@ async def test_consumer_with_invocation_database_resources(
     )
     config = EmbeddingConsumerSettings(
         env="test",
-        database_url=test_database_url,
-        db_iam_auth=False,
+        database_url=inject_test_db_signer(
+            monkeypatch, resources_module, test_database_url
+        ),
+        db_iam_auth=True,
         aws_region="ap-northeast-1",
         gemini_api_key_parameter_path="/key",
     )
@@ -717,12 +720,15 @@ async def test_lambda_assembly_saves_once_after_individual_failure(
     from app.lambda_handlers.embedding import resources as resource_module
     from app.lambda_handlers.embedding.handler import _run_embedding
     from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
+    from tests.lambda_handlers.iam_fixtures import inject_test_db_signer
 
     settings = EmbeddingConsumerSettings(
         env="test",
         aws_region="ap-northeast-1",
-        database_url=test_database_url,
-        db_iam_auth=False,
+        database_url=inject_test_db_signer(
+            monkeypatch, resource_module, test_database_url
+        ),
+        db_iam_auth=True,
         gemini_api_key_parameter_path="/test/gemini-key",
     )
     secret = Mock(return_value=SecretStr("test-private-key"))

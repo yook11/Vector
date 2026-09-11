@@ -18,8 +18,8 @@ def run_embedding(consumer, monkeypatch):
     settings = EmbeddingConsumerSettings(
         env="test",
         aws_region="ap-northeast-1",
-        database_url="postgresql+asyncpg://test:test@db.invalid/vector",
-        db_iam_auth=False,
+        database_url="postgresql+asyncpg://test@db.invalid/vector",
+        db_iam_auth=True,
         gemini_api_key_parameter_path="/test/gemini-key",
     )
 

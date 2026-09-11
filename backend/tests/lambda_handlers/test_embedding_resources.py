@@ -32,6 +32,8 @@ def settings(**overrides):
     "overrides",
     [
         {"db_iam_auth": False},
+        {"env": "test", "db_iam_auth": False},
+        {"env": "development", "db_iam_auth": False},
         {"database_url": "postgresql+asyncpg://vector_app@db.invalid/vector"},
         {
             "database_url": "postgresql+asyncpg://vector_app:private@db.invalid/vector?sslmode=require"
@@ -41,15 +43,18 @@ def settings(**overrides):
     ],
 )
 def test_invalid_production_settings(overrides):
+    """IAM無効化は環境を問わず拒否し、本番のTLSと設定項目も検証する。"""
     with pytest.raises(ValidationError):
         settings(**overrides)
 
 
 def test_settings_hide_url_and_do_not_load_dotenv():
+    """dotenvを読まず接続情報を表示せず、テスト環境でもIAMを必須にする。"""
     config = settings()
     assert config.model_config["env_file"] is None
     assert "db.invalid" not in repr(config)
-    assert settings(env="test", db_iam_auth=False)
+    with pytest.raises(ValidationError):
+        settings(env="test", db_iam_auth=False)
 
 
 @pytest.fixture
@@ -177,6 +182,7 @@ async def test_cleanup_cancellation_propagates(mocks):
 
 
 def test_engine_configuration_preserves_iam_tls(monkeypatch):
+    """IAM署名器の必須性と、Engineへ渡す接続数・待機上限・TLS設定を確認する。"""
     create = Mock()
     monkeypatch.setattr(engine_module, "create_async_engine", create)
     provider = AsyncMock(return_value="token")
@@ -202,8 +208,12 @@ def test_engine_configuration_preserves_iam_tls(monkeypatch):
         == "vector-embedding-consumer"
     )
     assert "sslmode" not in create.call_args.args[0]
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         engine_module.create_embedding_consumer_engine(settings())
+    with pytest.raises(TypeError):
+        engine_module.create_embedding_consumer_engine(
+            settings(), password_provider=None
+        )
 
 
 @pytest.mark.asyncio

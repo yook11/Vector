@@ -12,22 +12,22 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.aws.ssm import get_secret_parameter
-from app.db.engine import create_embedding_consumer_engine
+from app.db.engine import create_assessment_consumer_engine
 from app.db.iam import build_iam_password_provider
 from app.db.session import caller_managed_session_factory
-from app.lambda_handlers.embedding.failure_recorder import (
-    EmbeddingLambdaFailureRecorder,
+from app.lambda_handlers.assessment.failure_recorder import (
+    AssessmentLambdaFailureRecorder,
 )
-from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
+from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
 
 logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class EmbeddingResources:
+class AssessmentResources:
     """呼び出しの終了まで借用できる秘密情報とセッション生成器。"""
 
-    gemini_api_key: SecretStr = field(repr=False)
+    deepseek_api_key: SecretStr = field(repr=False)
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
@@ -35,25 +35,25 @@ def _close_sdk(close: Callable[[], None]) -> None:
     try:
         close()
     except Exception as exc:
-        EmbeddingLambdaFailureRecorder(logger).record_cleanup_failure("rds", exc)
+        AssessmentLambdaFailureRecorder(logger).record_cleanup_failure("rds", exc)
 
 
 async def _dispose_engine(dispose: Callable[[], Awaitable[None]]) -> None:
     try:
         await dispose()
     except Exception as exc:
-        EmbeddingLambdaFailureRecorder(logger).record_cleanup_failure("engine", exc)
+        AssessmentLambdaFailureRecorder(logger).record_cleanup_failure("engine", exc)
 
 
 @asynccontextmanager
-async def open_embedding_resources(
-    settings: EmbeddingConsumerSettings,
-) -> AsyncIterator[EmbeddingResources]:
+async def open_assessment_resources(
+    settings: AssessmentConsumerSettings,
+) -> AsyncIterator[AssessmentResources]:
     """各記事のセッション終了後、利用範囲を抜けると全資源を閉じる。"""
     api_key = await asyncio.to_thread(
         get_secret_parameter,
         region=settings.aws_region,
-        path=settings.gemini_api_key_parameter_path,
+        path=settings.deepseek_api_key_parameter_path,
     )
     async with AsyncExitStack() as stack:
         rds = Session().create_client(
@@ -67,11 +67,11 @@ async def open_embedding_resources(
             region=settings.aws_region,
             generate_token=rds.generate_db_auth_token,
         )
-        engine = create_embedding_consumer_engine(
+        engine = create_assessment_consumer_engine(
             settings, password_provider=password_provider
         )
         stack.push_async_callback(_dispose_engine, engine.dispose)
-        yield EmbeddingResources(
-            gemini_api_key=api_key,
+        yield AssessmentResources(
+            deepseek_api_key=api_key,
             session_factory=caller_managed_session_factory(engine),
         )

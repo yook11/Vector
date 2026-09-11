@@ -183,14 +183,38 @@ def create_lambda_engine(settings: _RuntimeDatabaseSettings) -> AsyncEngine:
 def create_embedding_consumer_engine(
     settings: _RuntimeDatabaseSettings,
     *,
-    password_provider: Callable[[], Awaitable[str]] | None = None,
+    password_provider: Callable[[], Awaitable[str]],
 ) -> AsyncEngine:
     """Consumerの利用範囲内で1接続だけ再利用するEngineを作る。"""
-    if settings.db_iam_auth != (password_provider is not None):
-        raise ValueError("IAM authentication and password provider must match")
+    if not settings.db_iam_auth:
+        raise ValueError("Consumer requires RDS IAM authentication")
+    if not callable(password_provider):
+        raise TypeError("Consumer requires an IAM password provider")
     return _create_engine(
         settings.database_url,
         application_name="vector-embedding-consumer",
+        password_provider=password_provider,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+        connect_args={"timeout": 5, "command_timeout": 5},
+        echo=False,
+    )
+
+
+def create_assessment_consumer_engine(
+    settings: _RuntimeDatabaseSettings,
+    *,
+    password_provider: Callable[[], Awaitable[str]],
+) -> AsyncEngine:
+    """Consumerの利用範囲内で1接続だけ再利用するEngineを作る。"""
+    if not settings.db_iam_auth:
+        raise ValueError("Consumer requires RDS IAM authentication")
+    if not callable(password_provider):
+        raise TypeError("Consumer requires an IAM password provider")
+    return _create_engine(
+        settings.database_url,
+        application_name="vector-assessment-consumer",
         password_provider=password_provider,
         pool_size=1,
         max_overflow=0,

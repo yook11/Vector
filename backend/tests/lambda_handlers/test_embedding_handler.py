@@ -32,10 +32,12 @@ def wiring(monkeypatch):
     config = EmbeddingConsumerSettings(
         env="test",
         aws_region="ap-northeast-1",
-        database_url="postgresql+asyncpg://test:test@db.invalid/vector",
-        db_iam_auth=False,
+        database_url="postgresql+asyncpg://test@db.invalid/vector",
+        db_iam_auth=True,
         gemini_api_key_parameter_path="/test/gemini-key",
     )
+    rds_session = Mock()
+    monkeypatch.setattr(resource_module, "Session", Mock(return_value=rds_session))
     steps = []
     engines, sdks, http_clients, consumers = [], [], [], []
     secret = Mock(side_effect=lambda **_: SecretStr(f"private-key-{len(engines)}"))
