@@ -65,12 +65,6 @@ locals {
         ]
       },
       {
-        Sid      = "ReadPlanManagedPolicy"
-        Effect   = "Allow"
-        Action   = ["iam:GetPolicy", "iam:GetPolicyVersion"]
-        Resource = "arn:aws:iam::aws:policy/ReadOnlyAccess"
-      },
-      {
         Sid      = "ManageGitHubOidcProvider"
         Effect   = "Allow"
         Resource = local.oidc_arn
@@ -112,7 +106,7 @@ locals {
       {
         Sid      = "MaintainExistingHostedZone"
         Effect   = "Allow"
-        Action   = ["route53:GetHostedZone", "route53:ListResourceRecordSets", "route53:ListTagsForResource", "route53:ChangeTagsForResource", "route53:UpdateHostedZoneComment"]
+        Action   = ["route53:GetHostedZone", "route53:ListTagsForResource", "route53:ChangeTagsForResource", "route53:UpdateHostedZoneComment"]
         Resource = local.hosted_zone_arn
       },
       {

@@ -91,11 +91,17 @@ run "destructive_operations_and_secret_reads_are_excluded" {
       length(setintersection(toset(flatten([s.Action])), toset([
         "sts:AssumeRole", "iam:PassRole", "iam:CreateUser", "iam:PutRolePermissionsBoundary",
         "s3:GetObject", "s3:PutObject", "s3:DeleteBucket", "route53:DeleteHostedZone",
-        "route53:CreateHostedZone", "route53:ChangeResourceRecordSets", "iam:DeleteServiceLinkedRole",
+        "route53:CreateHostedZone", "route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets", "iam:DeleteServiceLinkedRole",
         "kms:Decrypt", "ssm:GetParameter", "secretsmanager:GetSecretValue",
       ]))) == 0
     ])
     error_message = "基盤の破棄・本体state操作・秘密値参照・追加role利用はbootstrap更新に付与しない。"
+  }
+  assert {
+    condition = alltrue([for s in local.bootstrap_policy.Statement : s.Effect != "Allow" ? true :
+      !contains(flatten([s.Resource]), "arn:aws:iam::aws:policy/ReadOnlyAccess")
+    ])
+    error_message = "ARN直接指定のattachmentに管理ポリシー内容の読取権限を追加しない。"
   }
   assert {
     condition = alltrue([for s in local.bootstrap_policy.Statement : s.Sid != "ReadLambdaConfigurationKeyMetadata" ? true :

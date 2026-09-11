@@ -147,7 +147,7 @@ terraform -chdir=infra/aws/bootstrap-access fmt -check -recursive
 terraform -chdir=infra/aws/bootstrap-access init -backend=false -input=false -lockfile=readonly
 terraform -chdir=infra/aws/bootstrap-access validate
 terraform -chdir=infra/aws/bootstrap-access test
-python3 -m unittest discover -s infra/aws/bootstrap-access/tests -p 'test_*.py'
+(cd backend && uv run pytest tests/scripts/test_verify_aws_profile.py -m unit -q)
 shellcheck infra/aws/scripts/verify-aws-profile.sh
 ```
 
