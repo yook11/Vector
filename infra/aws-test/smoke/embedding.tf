@@ -29,6 +29,8 @@ resource "aws_sqs_queue_policy" "tls" {
     }]
   })
 }
+# 試験は実行ログとDBの保存結果で確認し、X-Rayによる分散追跡は使用しない。
+# nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "embedding" {
   function_name = "${local.prefix}-embedding"
   role          = aws_iam_role.runtime["lambda"].arn
@@ -37,6 +39,9 @@ resource "aws_lambda_function" "embedding" {
   architectures = ["arm64"]
   memory_size   = 1024
   timeout       = 120
+  tracing_config {
+    mode = "PassThrough"
+  }
   image_config {
     entry_point       = ["/app/.venv/bin/python", "-m", "awslambdaric"]
     command           = ["app.lambda_handlers.embedding.handler"]

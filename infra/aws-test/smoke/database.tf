@@ -12,6 +12,13 @@ resource "aws_db_parameter_group" "smoke" {
   }
   tags = local.tags
 }
+resource "aws_cloudwatch_log_group" "database" {
+  name              = "/aws/rds/instance/${local.prefix}/postgresql"
+  retention_in_days = 7
+  tags              = local.tags
+}
+# 試験データは再生成でき、環境削除後の復旧を目的としないためバックアップを保持しない。
+# nosemgrep: terraform.aws.security.aws-rds-backup-no-retention.aws-rds-backup-no-retention
 resource "aws_db_instance" "smoke" {
   identifier                          = local.prefix
   engine                              = "postgres"
@@ -38,5 +45,8 @@ resource "aws_db_instance" "smoke" {
   apply_immediately                   = true
   performance_insights_enabled        = false
   monitoring_interval                 = 0
+  enabled_cloudwatch_logs_exports     = ["postgresql"]
   tags                                = local.tags
+  # RDSによる自動作成を防ぎ、削除時はロググループをRDSより後まで保持する。
+  depends_on = [aws_cloudwatch_log_group.database]
 }

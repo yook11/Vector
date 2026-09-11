@@ -137,7 +137,7 @@ run "tags_paths_logs_and_cleanup" {
   command = plan
   assert {
     condition = alltrue([for tags in concat(
-      [aws_vpc.smoke.tags, aws_internet_gateway.proxy.tags, aws_vpc_endpoint.ssm.tags,
+      [aws_vpc.smoke.tags, aws_internet_gateway.proxy.tags, aws_vpc_endpoint.ssm.tags, aws_cloudwatch_log_group.database.tags,
         aws_db_instance.smoke.tags, aws_db_subnet_group.smoke.tags, aws_db_parameter_group.smoke.tags,
       aws_sqs_queue.embedding.tags, aws_lambda_function.embedding.tags, aws_lambda_event_source_mapping.embedding.tags],
       [for resource in aws_subnet.smoke : resource.tags],
@@ -193,5 +193,29 @@ run "tags_paths_logs_and_cleanup" {
       !strcontains(file("${path.module}/cleanup.tf"), "on_failure")
     )
     error_message = "ENI待機は対象ネットワークを参照し、失敗時にはIAM権限の削除を止めます。"
+  }
+}
+
+run "database_log_export_and_observation" {
+  command = plan
+  assert {
+    condition = (
+      aws_db_instance.smoke.enabled_cloudwatch_logs_exports == toset(["postgresql"]) &&
+      aws_cloudwatch_log_group.database.name == "/aws/rds/instance/vector-test-${var.run_id}/postgresql" &&
+      aws_cloudwatch_log_group.database.retention_in_days == 7 &&
+      !aws_cloudwatch_log_group.database.skip_destroy &&
+      strcontains(file("${path.module}/database.tf"), "depends_on = [aws_cloudwatch_log_group.database]") &&
+      output.execution.log_groups.database == aws_cloudwatch_log_group.database.name &&
+      output.resources.log_groups.database == aws_cloudwatch_log_group.database.name
+    )
+    error_message = "RDSログは7日保持の試験用ロググループへ転送し、回収・削除対象に含めてRDS削除後に削除します。"
+  }
+  assert {
+    condition = (
+      aws_db_instance.smoke.backup_retention_period == 0 &&
+      aws_db_instance.smoke.skip_final_snapshot &&
+      aws_lambda_function.embedding.tracing_config[0].mode == "PassThrough"
+    )
+    error_message = "再生成できる試験DBのバックアップは保持せず、LambdaはX-RayのActive tracingを使用しません。"
   }
 }

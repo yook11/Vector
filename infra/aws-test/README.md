@@ -97,6 +97,20 @@ backendとproxyは、対象revisionのARM64イメージをテストECRの`vector
 進行中の試験が参照するdigestを保持数から押し出さないよう、試験中に大量のイメージを登録しない。
 ソースrevisionとdigestの対応・ARM64イメージの実行可否は成果物配布工程で確認する。TerraformはECR内のdigest存在を参照するが、ソースとの一致を証明しない。
 
+## 試験ログとセキュリティ検査の例外
+
+試験用RDSのPostgreSQLログは、同じテストアカウントの`/aws/rds/instance/vector-test-<run_id>/postgresql`へ転送する。
+ロググループはsmokeのTerraformで先に作成し、7日保持・必須タグを設定する。RDSの削除後にロググループも削除し、本番のログ設定は変更しない。
+構築ロールの追加権限は試験RDSのロググループ管理だけとし、LambdaやEC2の書込権限は追加しない。
+`execution.log_groups`と`resources.log_groups`の`database`に回収・削除確認用の名前を出力する。
+削除後も必要なログは次工程の回収処理で削除前に保存するため、回収処理の実装までは環境を起動しない。
+転送先の命名は[AWSのPostgreSQLログ転送仕様](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_LogAccess.Concepts.PostgreSQL.html)に従う。
+
+Semgrepはテスト環境にも適用し、次の2件だけ対象リソースのコメントでルールを限定して除外する。
+
+- RDSのバックアップ保持推奨：試験データは再生成し、削除後の復旧を目的としないため保持0日・最終スナップショットなしを維持する。
+- LambdaのX-Ray Active tracing推奨：実行ログとDBの保存結果で試験を確認し、`PassThrough`を明示する。X-Rayの送信権限は追加しない。
+
 ## 今回行う静的検証
 
 以下はAWSバックエンドへ接続せず、設備も作らない。Terraform `>= 1.11`、AWS provider `~> 6.0`を使用する。

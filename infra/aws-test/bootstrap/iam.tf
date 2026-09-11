@@ -226,8 +226,13 @@ resource "aws_iam_policy" "services" {
         Resource = "arn:aws:sqs:${local.region}:${local.account_id}:vector-test-*-embedding"
       },
       {
-        Effect   = "Allow", Action = ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:DeleteRetentionPolicy", "logs:ListTagsForResource", "logs:TagResource", "logs:UntagResource", "logs:ListTagsLogGroup", "logs:TagLogGroup", "logs:UntagLogGroup"]
-        Resource = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/vector-test/*"
+        Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:DeleteRetentionPolicy", "logs:ListTagsForResource", "logs:TagResource", "logs:UntagResource", "logs:ListTagsLogGroup", "logs:TagLogGroup", "logs:UntagLogGroup"]
+        Sid    = "ManageSmokeLogGroups"
+        Resource = [
+          "arn:aws:logs:${local.region}:${local.account_id}:log-group:/vector-test/*",
+          "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/rds/instance/vector-test-*/postgresql",
+          "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/rds/instance/vector-test-*/postgresql:*",
+        ]
       },
       { Effect = "Allow", Action = "logs:DescribeLogGroups", Resource = "*" },
       {

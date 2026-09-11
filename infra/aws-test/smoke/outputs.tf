@@ -24,7 +24,7 @@ output "execution" {
     queue_url                 = aws_sqs_queue.embedding.url, queue_arn = aws_sqs_queue.embedding.arn
     lambda_name               = aws_lambda_function.embedding.function_name
     event_source_mapping_uuid = aws_lambda_event_source_mapping.embedding.uuid
-    log_groups                = { for k, v in aws_cloudwatch_log_group.runtime : k => v.name }
+    log_groups                = merge({ for k, v in aws_cloudwatch_log_group.runtime : k => v.name }, { database = aws_cloudwatch_log_group.database.name })
     bootstrap_status_path     = "/var/lib/vector-test/bootstrap-status.json"
   }
 }
@@ -49,6 +49,6 @@ output "resources" {
     event_source_mapping = aws_lambda_event_source_mapping.embedding.uuid
     roles                = { for k, v in aws_iam_role.runtime : k => v.name }
     instance_profiles    = { for k, v in aws_iam_instance_profile.runtime : k => v.name }
-    log_groups           = { for k, v in aws_cloudwatch_log_group.runtime : k => v.name }
+    log_groups           = merge({ for k, v in aws_cloudwatch_log_group.runtime : k => v.name }, { database = aws_cloudwatch_log_group.database.name })
   }
 }

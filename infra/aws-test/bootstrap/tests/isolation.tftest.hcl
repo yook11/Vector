@@ -114,3 +114,15 @@ run "security_group_creation_conditions" {
     error_message = "引受は1時間とし、実行ロールと常設権限境界のIAMパスを限定します。"
   }
 }
+
+run "smoke_log_management_scope" {
+  command = plan
+  assert {
+    condition = toset(one([for statement in jsondecode(aws_iam_policy.services.policy).Statement : statement if try(statement.Sid, "") == "ManageSmokeLogGroups"]).Resource) == toset([
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/vector-test/*",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/rds/instance/vector-test-*/postgresql",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/rds/instance/vector-test-*/postgresql:*",
+    ])
+    error_message = "ログ管理権限はテストアカウントの実行ログと試験RDSのPostgreSQLログだけに限定します。"
+  }
+}
