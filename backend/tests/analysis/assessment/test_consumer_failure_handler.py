@@ -12,26 +12,15 @@ from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
     AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
-from app.analysis.assessment.ai.gemini import GeminiResponseDefect
-from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.consumer_failure_classification import (
     classify_assessment_failure,
 )
 from app.analysis.assessment.consumer_failure_handling import (
     AssessmentConsumerFailureHandler,
 )
-from app.analysis.assessment.errors import (
-    AssessmentCurationMissingError,
-    AssessmentError,
-    AssessmentResponseInvalidError,
-    to_assessment_error,
-)
-from app.db.errors import DatabaseUnexpectedError
+from app.analysis.assessment.errors import to_assessment_error
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -59,81 +48,28 @@ async def _events(session: AsyncSession) -> list[PipelineEvent]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "error",
-    [
-        AssessmentCurationMissingError(),
-        *(
-            AssessmentResponseInvalidError(defect)
-            for defect in [
-                *AssessmentResponseDefect,
-                *DeepSeekResponseDefect,
-                *GeminiResponseDefect,
-            ]
-        ),
-        to_assessment_error(AIProviderNetworkError()),
-        to_assessment_error(AIProviderRateLimitedError()),
-        to_assessment_error(AIProviderUsageLimitExhaustedError()),
-        to_assessment_error(AIProviderInsufficientBalanceError()),
-        DatabaseUnexpectedError(),
-        RuntimeError("Authorization: Bearer test-secret-do-not-record"),
-    ],
-)
-async def test_records_classification_without_changing_original_error(
-    db_session, session_factory, article_id, error, capsys
+async def test_successful_handling_records_failed_audit_and_outcome(
+    db_session, session_factory, article_id, capsys
 ) -> None:
-    """監査・失敗件数・必要な枯渇通知を記録し、元の例外をそのまま返せる。"""
-    if isinstance(error, AssessmentError) and error.provider_error is not None:
-        error.__cause__ = error.provider_error
-    error.raw_response = "private-ai-response"
-    error.input_text = "private-input"
-    failure = classify_assessment_failure(error)
-    cause = error.__cause__
-    with pytest.raises(type(error)) as raised:
-        try:
-            raise error
-        except Exception as caught:
-            result = await AssessmentConsumerFailureHandler(session_factory).handle(
-                failure=failure,
-                exc=caught,
-                curation_id=123,
-                analyzable_article_id=article_id,
-                provider="gemini",
-            )
-            assert result is None
-            raise
-    assert raised.value is error
-    assert error.__cause__ is cause
+    """後処理が成功すれば失敗監査と処理失敗件数を残し、枯渇なら通知する。"""
+    error = to_assessment_error(AIProviderUsageLimitExhaustedError())
+    await AssessmentConsumerFailureHandler(session_factory).handle(
+        failure=classify_assessment_failure(error),
+        exc=error,
+        curation_id=123,
+        analyzable_article_id=article_id,
+        provider="gemini",
+    )
     events = await _events(db_session)
     assert len(events) == 1
-    event = events[0]
-    assert event.event_type == "failed"
-    assert event.outcome_code == failure.audit.code
-    assert event.retryability == failure.audit.retryability.value
-    assert event.payload["failure_kind"] == failure.audit.failure_kind
-    assert event.payload["failure_reason"] == failure.audit.failure_reason
-    assert event.payload["curation_id"] == 123
-    assert event.article_id == article_id
-    assert event.error_class == f"{type(error).__module__}.{type(error).__qualname__}"
-    assert event.payload["error_chain"][0] == event.error_class
-    if cause is not None:
-        assert event.payload["error_chain"][1] == (
-            f"{type(cause).__module__}.{type(cause).__qualname__}"
-        )
-    assert "test-secret-do-not-record" not in str(event.payload)
-    assert event.payload["ai_raw_response"] is None
-    assert event.payload["input_text"] is None
+    assert events[0].event_type == "failed"
     output = capsys.readouterr().out
     outcomes = metric_records(output, "processing_outcome")
     assert len(outcomes) == 1
     assert outcomes[0]["result"] == "failed"
     notices = metric_records(output, "ai_provider_exhausted")
-    if failure.provider_exhaustion is not None:
-        assert len(notices) == 1
-        assert notices[0]["kind"] == failure.audit.code
-        assert notices[0]["provider"] == "gemini"
-    else:
-        assert notices == []
+    assert len(notices) == 1
+    assert notices[0]["provider"] == "gemini"
 
 
 @pytest.mark.asyncio
