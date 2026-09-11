@@ -1,0 +1,5 @@
+{
+  "expected_account_id": "123456789012",
+  "aws_profile": "aws-test-admin",
+  "trusted_admin_role_arn_pattern": "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/ap-northeast-1/AWSReservedSSO_TestAdministrator_*"
+}
