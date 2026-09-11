@@ -24,7 +24,6 @@ from app.ai_providers.deepseek.error_translator import (
     translate_deepseek_error,
 )
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
     AIProviderOutputTruncatedError,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
@@ -37,7 +36,6 @@ from app.analysis.assessment.ai.spec import (
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -63,15 +61,8 @@ class DeepSeekAssessor(BaseAssessor):
 
     SPEC: Final[DeepSeekAssessmentSpec] = DEEPSEEK_ASSESSMENT_SPEC
 
-    def __init__(self) -> None:
-        api_key = settings.deepseek_api_key.get_secret_value()
-        if not api_key:
-            # provider error detail に secret や provider message を含めない。
-            # reason で「未設定」を他の configuration 原因と区別する。
-            raise AIProviderConfigurationError(
-                reason=DeepSeekStateReason.NOT_CONFIGURED
-            )
-        self._client = AsyncOpenAI(api_key=api_key, base_url=self.SPEC.base_url)
+    def __init__(self, client: AsyncOpenAI) -> None:
+        self._client = client
 
     # -- BaseAssessor property 契約 --
 

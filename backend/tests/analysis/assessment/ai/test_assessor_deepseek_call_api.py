@@ -21,7 +21,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import SecretStr
 from structlog.testing import capture_logs
 
 from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
@@ -35,12 +34,6 @@ from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.config import settings
-
-
-@pytest.fixture(autouse=True)
-def _set_deepseek_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr("test-key"))
 
 
 def _stub_response(
@@ -83,7 +76,6 @@ def _stub_response(
 
 def _patch_assessor_call(assessor: DeepSeekAssessor, response: MagicMock) -> AsyncMock:
     mock_call = AsyncMock(return_value=response)
-    assessor._client = MagicMock()
     assessor._client.chat.completions.create = mock_call
     return mock_call
 
@@ -91,7 +83,8 @@ def _patch_assessor_call(assessor: DeepSeekAssessor, response: MagicMock) -> Asy
 class TestDeepSeekCallApiSuccess:
     @pytest.mark.asyncio
     async def test_in_scope_round_trip(self) -> None:
-        assessor = DeepSeekAssessor()
+        """対象内のSDK応答から判定結果と監査用の応答・モデル情報を復元する。"""
+        assessor = DeepSeekAssessor(MagicMock())
         args = json.dumps(
             {
                 "category": "ai",
@@ -113,7 +106,8 @@ class TestDeepSeekCallApiSuccess:
 
     @pytest.mark.asyncio
     async def test_out_of_scope_round_trip(self) -> None:
-        assessor = DeepSeekAssessor()
+        """対象外のSDK応答を正常な対象外結果として返す。"""
+        assessor = DeepSeekAssessor(MagicMock())
         args = json.dumps(
             {
                 "category": "out_of_scope",
@@ -133,7 +127,7 @@ class TestDeepSeekCallApiSuccess:
     async def test_structured_output_mechanism_reaches_sdk(self) -> None:
         """機構 (forced tool_choice + thinking 無効) を structured_output に分離後も
         tuning (max_tokens) と共に create kwargs に届くこと。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         args = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         mock_call = _patch_assessor_call(assessor, _stub_response(arguments=args))
 
@@ -166,7 +160,7 @@ class TestDeepSeekToolCallStructure:
         spec は tool_choice で呼び出しを強制しているため、欠落は provider が機構
         契約を破った状態 = code (語彙) で可視化する (retryability は recoverable 維持)。
         """
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(
             assessor,
             _stub_response(arguments=None, no_tool_calls=True, finish_reason="stop"),
@@ -179,7 +173,8 @@ class TestDeepSeekToolCallStructure:
 
     @pytest.mark.asyncio
     async def test_wrong_tool_name_raises_deepseek_wrong_tool_name(self) -> None:
-        assessor = DeepSeekAssessor()
+        """要求したものと異なるツール名を専用の応答不正コードで拒否する。"""
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(
             assessor,
             _stub_response(arguments="{}", tool_name="some_other_tool"),
@@ -200,7 +195,7 @@ class TestDeepSeekInvalidArguments:
         self,
     ) -> None:
         """arguments が非 JSON → adapter 所有 ``ARGUMENTS_NOT_JSON`` defect。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_response(arguments="not json at all"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
@@ -212,7 +207,8 @@ class TestDeepSeekInvalidArguments:
     async def test_non_object_arguments_raises_deepseek_arguments_not_dict(
         self,
     ) -> None:
-        assessor = DeepSeekAssessor()
+        """JSONでもオブジェクトでないツール引数は応答不正として拒否する。"""
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_response(arguments="[1, 2, 3]"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
@@ -223,7 +219,7 @@ class TestDeepSeekInvalidArguments:
     @pytest.mark.asyncio
     async def test_missing_key_arguments_surfaces_parse_defect(self) -> None:
         """parse の内容違反 (key 欠落) が adapter を素通りして焼かれる。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         args = json.dumps({"category": "ai"})  # investor_take 欠落
         _patch_assessor_call(assessor, _stub_response(arguments=args))
 
@@ -235,7 +231,7 @@ class TestDeepSeekInvalidArguments:
     @pytest.mark.asyncio
     async def test_empty_arguments_raises_deepseek_arguments_not_json(self) -> None:
         """arguments が空文字 → JSON parse 失敗 → ``ARGUMENTS_NOT_JSON``。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_response(arguments=""))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
@@ -266,7 +262,7 @@ class TestDeepSeekTruncatedFinishReason:
     async def test_truncated_raises_output_truncated_error(self) -> None:
         """arguments が壊れた JSON でも
         ``AssessmentResponseInvalidError`` にはならない。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_truncated_response())
 
         with pytest.raises(AIProviderOutputTruncatedError) as exc_info:
@@ -277,7 +273,7 @@ class TestDeepSeekTruncatedFinishReason:
     @pytest.mark.asyncio
     async def test_truncated_with_valid_json_arguments_still_raises(self) -> None:
         """arguments が偶然 valid JSON でも finish_reason 判定が parse より先に効く。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         args = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         _patch_assessor_call(
             assessor,
@@ -302,7 +298,7 @@ class TestDeepSeekTruncationObservabilityLog:
     @pytest.mark.asyncio
     async def test_truncated_emits_output_truncated_warning_event(self) -> None:
         """truncated 経路で output_truncated イベントが 1 件 emit される。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_truncated_response())
 
         with capture_logs() as logs:
@@ -321,7 +317,7 @@ class TestDeepSeekTruncationObservabilityLog:
         MagicMock のままだと等価比較が通ってしまうため、stub で必ず整数値を設定する。
         production が捕捉をやめたら assert が落ちる非空虚な検証。
         """
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_truncated_response(completion_tokens=1500))
 
         with capture_logs() as logs:
@@ -336,7 +332,7 @@ class TestDeepSeekTruncationObservabilityLog:
     @pytest.mark.asyncio
     async def test_truncated_log_carries_max_tokens_from_spec(self) -> None:
         """観測ログの max_tokens が spec 由来の値であること。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_truncated_response())
 
         with capture_logs() as logs:
@@ -351,7 +347,7 @@ class TestDeepSeekTruncationObservabilityLog:
     @pytest.mark.asyncio
     async def test_truncated_does_not_emit_defect_log(self) -> None:
         """truncated 経路は tool_call 検査に入らず response_defect ログを出さない。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_truncated_response())
 
         with capture_logs() as logs:
@@ -366,7 +362,7 @@ class TestDeepSeekTruncationObservabilityLog:
     @pytest.mark.asyncio
     async def test_success_does_not_emit_output_truncated_log(self) -> None:
         """正常系では ``assessment_deepseek_output_truncated`` が emit されないこと。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         args = json.dumps(
             {"category": "ai", "investor_take": "Positive signal.", "key_points": []}
         )
@@ -390,7 +386,7 @@ class TestDeepSeekTruncationObservabilityLog:
     @pytest.mark.asyncio
     async def test_success_does_not_emit_defect_log(self) -> None:
         """正常系では ``assessment_deepseek_response_defect`` が emit されないこと。"""
-        assessor = DeepSeekAssessor()
+        assessor = DeepSeekAssessor(MagicMock())
         args = json.dumps(
             {"category": "ai", "investor_take": "Positive signal.", "key_points": []}
         )
@@ -410,3 +406,32 @@ class TestDeepSeekTruncationObservabilityLog:
             e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
         ]
         assert defect_logs == []
+
+
+@pytest.mark.asyncio
+async def test_assessor_borrows_client_without_reading_secret_or_closing(monkeypatch):
+    """Assessorは秘密情報が未設定でも注入されたクライアントで判定し、そのクライアントを閉じない。"""
+    from pydantic import SecretStr
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr(""))
+    client = MagicMock()
+    client.close = AsyncMock()
+    assessor = DeepSeekAssessor(client)
+    _patch_assessor_call(
+        assessor,
+        _stub_response(
+            arguments=json.dumps(
+                {
+                    "category": "out_of_scope",
+                    "investor_take": "Outside",
+                    "key_points": [],
+                }
+            )
+        ),
+    )
+    await assessor.assess("title", "summary")
+    assert assessor._client is client
+    client.chat.completions.create.assert_awaited_once()
+    client.close.assert_not_awaited()
