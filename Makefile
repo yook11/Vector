@@ -8,6 +8,11 @@
 # ===========================================
 
 .DEFAULT_GOAL := help
+.PHONY: test-local
+
+test-local:  ## migration適用済みDBでローカルテスト一式を実行
+	cd backend && uv run pytest local_tests/ -x -q
+
 .PHONY: help \
         pipeline-up pipeline-down pipeline-restart pipeline-status pipeline-logs \
         migrate-safe migrate-prod verify-env verify-config \

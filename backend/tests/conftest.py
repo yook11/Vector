@@ -90,7 +90,7 @@ def _test_database_name_for_worker(worker_id: str | None) -> str:
 
 
 # テスト DB 初期化は table owner 権限が必要なため migration role で接続する。
-# application role の権限境界は tests/test_db_user_isolation.py が所有する。
+# application role の権限境界は local_tests/test_database_permissions.py が所有する。
 _ADMIN_DB_URL = settings.migration_database_url or settings.database_url
 TEST_DATABASE_NAME = _test_database_name_for_worker(
     os.environ.get("PYTEST_XDIST_WORKER")
@@ -170,12 +170,6 @@ _INTEGRATION_FIXTURES = frozenset(
         "sample_source",
         "sample_hn_source",
         "sample_av_source",
-        # test_db_user_isolation.py が直接 asyncpg.connect する権限境界テスト
-        # 用 fixture。実 Postgres + vector_auth / vector_app / vector_collect role
-        # を要求するため必ず integration 側に分類する。
-        "auth_conn",
-        "app_conn",
-        "collect_conn",
     }
 )
 
