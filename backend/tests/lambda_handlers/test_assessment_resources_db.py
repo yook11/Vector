@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from app.lambda_handlers.assessment import resources as module
 from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
-from tests.lambda_handlers.iam_fixtures import inject_test_db_signer
+from tests.iam_fixtures import inject_test_db_signer
 
 
 @pytest.fixture
@@ -19,7 +19,9 @@ def resource_settings(test_database_url, monkeypatch):
     )
     return AssessmentConsumerSettings(
         env="test",
-        database_url=inject_test_db_signer(monkeypatch, module, test_database_url),
+        database_url=inject_test_db_signer(
+            monkeypatch, test_database_url, resources_module=module
+        ),
         db_iam_auth=True,
         aws_region="ap-northeast-1",
         deepseek_api_key_parameter_path="/key",
