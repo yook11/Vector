@@ -22,15 +22,16 @@ state用S3とその保護設定、ECRと保持設定、構築ロール・管理�
 
 ## 使う権限
 
-bootstrapはローカル設定のSSOプロファイルを使用する。
-smokeは同プロファイルから`/vector-test/bootstrap/vector-test-terraform`ロールを引き受ける。
+bootstrapは既存の`WorkloadAdministrator`のSSOプロファイルを使用する。
+smokeの作成・変更・削除は`VectorTestManager`のプロファイルから`/vector-test/bootstrap/vector-test-terraform`ロールを引き受ける。
+試験投入・結果取得には`VectorTestRunner`を使う。割当方針・インラインポリシー・利用開始前の設定は[アクセス権限](ACCESS.md)を参照する。bootstrapの権限細分化は別途扱う。
 信頼先はローカル設定で指定した同一アカウントのSSO権限セット1つに限定する。構築ロールの最大セッション時間、providerとbackendの引受時間を1時間に合わせる。
 SSOログイン元の認証が有効な間はSDKが引受認証情報を更新するため、環境全体の処理時間を1時間で打ち切る設定ではない。
 
 構築ロールの書込先は試験用の名前・IAMパス・タグ・state領域へ限定する。構築ロール自身、権限境界、ECR、S3設定を変更する権限は持たせない。
 実行ロールの作成時には種類ごとの権限境界が必須で、`PassRole`は試験用のLambda/EC2ロールと対応サービスに限定する。
 AWS APIによってリソース指定できないDescribe系やENI管理等には`Resource: "*"`が残る。
-試験を投入するSSM Run Commandやログの回収は、次工程の実行元がローカル設定のテスト管理者プロファイルで行う想定で、Terraform構築ロールへ実行権限を混ぜない。
+試験を投入するSSM Run Commandやログの回収は、次工程の実行元がRunnerプロファイルで行う。Terraform構築ロールへ実行権限を混ぜない。
 
 | 実行主体 | 許可 |
 |---|---|
@@ -41,7 +42,7 @@ AWS APIによってリソース指定できないDescribe系やENI管理等に�
 **構築ロールは、テストアカウントの設備を管理する信頼された運用者として扱う。RunIdごとの権限隔離ではない。**
 通常作成するrunnerのポリシーは対象DB・管理secretだけを許可するが、構築ロールはruntimeポリシーを変更し、EC2へ渡せる。
 その上限は同じアカウント・東京リージョン内の全DB IDに対する`vector`/`vector_app`接続と、`rds!db-*`の管理secret読取まで含む。ネットワーク・DB側の許可は別途必要だが、「その実行のDB以外には到達不能」とは扱わない。
-本番や他用途のDB・秘密値を置かない専用アカウントの管理者向けにこの範囲を維持する。将来、第三者への権限委譲や試験ごとの隔離が必要になったら、利用前に権限境界を再設計する。
+本番や他用途のDB・秘密値を置かない専用アカウントの信頼された運用者向けにこの範囲を維持する。将来、第三者への権限委譲や試験ごとの隔離が必要になったら、利用前に権限境界を再設計する。
 
 Lambdaの関数コードからのENI操作は明示的に拒否する。Lambdaに管理シークレットや準備用DBロールへの権限は渡さない。
 プロキシにはAIキー・DBへの権限を付与しない。
@@ -129,7 +130,9 @@ provider/backendのアカウント制限や実際のIAM評価、プロキシ疎�
 
 ## ローカルのアカウント設定
 
-実アカウントID、SSOプロファイル、引受元のSSOロールはGit管理外の`.local/account.json`だけで編集する。
+実アカウントID、bootstrap用の管理者プロファイル、構築ロールの引受元はGit管理外の`.local/account.json`で編集する。
+`aws_profile`はbootstrap用管理者、`trusted_admin_role_arn_pattern`はManagerのSSOロールを指定する。サンプルの信頼先名は採用した権限セット名へ置き換える。
+Manager／RunnerのプロファイルはAWS CLIへ別途登録し、smoke操作には以下のコマンドでManagerを明示する。
 公開するサンプル・構成テストには架空のIDとプロファイルを使い、認証情報そのものはAWS CLIのSSO管理に任せる。
 
 ```sh
@@ -152,15 +155,17 @@ python3 infra/aws-test/scripts/configure-local.py
 | `.local/smoke.tfbackend` | S3バケット、引受ロール、プロファイル、許可アカウント |
 
 `.local/`全体をGit管理から除外する。生成ファイルは直接編集せず、`account.json`を修正して再生成する。
+現行スクリプトは全生成物へ同じ`aws_profile`を出力するため、smokeではbackendとproviderの両方にManagerプロファイルを明示的に上書きする。
 providerは`allowed_account_ids = [var.expected_account_id]`を維持する。backendは未設定時に実在しないIDだけを許可し、生成ファイルを渡し忘れた接続を拒否する。
 実行中の環境がある間は接続設定を変更しない。将来の別アカウント移行は、全試験の削除とbootstrap stateの扱いを別途決めてから行う。
 
 ## 後で構築plan・削除planを確認する手順
 
 以下は常設基盤の作成とイメージ配布、自動削除・結果回収を実装した後の操作手順。**この工程ではapplyを実行しない。**
-リポジトリルートから実行する。
+リポジトリルートから実行する。各SSOプロファイルを準備し、smokeのplan前に構築ロールのManagerへの信頼先更新を完了する。
 
 ```sh
+unset TF_DATA_DIR
 export AWS_PROFILE="$(python3 -c 'import json; print(json.load(open("infra/aws-test/.local/account.json"))["aws_profile"])')"
 aws sso login --profile "$AWS_PROFILE"
 aws sts get-caller-identity --profile "$AWS_PROFILE"
@@ -189,15 +194,25 @@ gemini_parameter_path = "/vector-test/embedding-consumer/gemini-api-key"
 ```
 
 実行IDを入力・stateキー・作業データで一致させる。生成したbackend設定を必ず渡し、workspaceは`default`固定とする。
+`vector-test-manager`はローカルで登録したManagerプロファイル名に置き換え、ログイン結果のAccountとArnがテストアカウントの`VectorTestManager`であることを確認する。
+
+```sh
+export TEST_MANAGER_PROFILE=vector-test-manager
+export AWS_PROFILE="$TEST_MANAGER_PROFILE"
+aws sso login --profile "$TEST_MANAGER_PROFILE"
+aws sts get-caller-identity --profile "$TEST_MANAGER_PROFILE"
+```
 
 ```sh
 export TF_DATA_DIR="$PWD/infra/aws-test/smoke/.terraform/20260911-01"
 terraform -chdir=infra/aws-test/smoke init -reconfigure -input=false \
   -backend-config=../.local/smoke.tfbackend \
+  -backend-config="profile=$TEST_MANAGER_PROFILE" \
   -backend-config='key=smoke/20260911-01/terraform.tfstate'
 terraform -chdir=infra/aws-test/smoke plan \
   -var-file=../.local/smoke.tfvars.json \
-  -var-file=../.local/20260911-01.tfvars -out=smoke.tfplan
+  -var-file=../.local/20260911-01.tfvars \
+  -var="aws_profile=$TEST_MANAGER_PROFILE" -out=smoke.tfplan
 terraform -chdir=infra/aws-test/smoke show smoke.tfplan
 ```
 
@@ -211,28 +226,32 @@ bootstrap未作成・digest未登録の段階ではsmokeの実planは完了で�
 terraform -chdir=infra/aws-test/smoke output -json > infra/aws-test/.local/20260911-01-outputs.json
 terraform -chdir=infra/aws-test/smoke plan -destroy \
   -var-file=../.local/smoke.tfvars.json \
-  -var-file=../.local/20260911-01.tfvars -out=destroy.tfplan
+  -var-file=../.local/20260911-01.tfvars \
+  -var="aws_profile=$TEST_MANAGER_PROFILE" -out=destroy.tfplan
 terraform -chdir=infra/aws-test/smoke show destroy.tfplan
 ```
 
 上記は削除候補を確認するだけで、削除は実行しない。stateキー・入力・出力の実行IDが一致することを確認する。
 実際のdestroyはENI待機スクリプトを使うため、実行元にPython3とAWS CLI v2、および有効なSSO認証が必要。
+ENI待機はstateに保存した`aws_profile`でAWS CLIを直接呼ぶため、新しい環境の作成時からManagerを指定する。既存の環境に対してプロファイルだけを切り替えず、保存済みの接続設定と削除方法を先に確認する。
 
 ## イメージのビルド・配布担当
 
-初回の担当は、ローカル設定の**テスト管理者**。構築ロールにはECR push権限を追加しない。
+配布担当は**VectorTestManager**。構築ロールにはECR push権限を追加しない。
 本番向けGitHub Actionsは本番用ロール・ECRに接続するため、この試験用配布には使用しない。将来CI化する場合はテストアカウント専用の配布権限を用意する。
 以下は配布担当が後で実行する手順であり、この変更ではbuild・pushを行わない。
 
 1. 対象commitのクリーンなcheckoutを用意する。ローカルテストの合否と対応revisionを記録する。
 2. そのcheckoutから、既存DockerfileでARM64イメージを作る。テスト向けにコードを書き換えず、本番へ出す候補成果物として扱う。
-3. テスト管理者でログインし、bootstrapのECRへ一意なタグでpushする。イメージを後から本番へ配布するときも、同じ成果物をコピーする。
+3. Managerプロファイルでログインし、bootstrapのECRへ一意なタグでpushする。イメージを後から本番へ配布するときも、同じ成果物をコピーする。
 4. ECRからdigestを取得し、対応するcommit SHAと一緒に試験入力へ保存する。
 
-上記のテスト管理者ログイン・アカウント照合後、クリーンなcheckoutのルートで実行する。
+クリーンなcheckoutのルートで、Managerプロファイルを明示して実行する。プロファイル名はローカルの登録名に置き換える。
 
 ```sh
 set -euo pipefail
+export AWS_PROFILE=vector-test-manager
+aws sso login --profile "$AWS_PROFILE"
 export AWS_REGION=ap-northeast-1
 EXPECTED_TEST_ACCOUNT_ID="$(python3 -c 'import json; print(json.load(open("infra/aws-test/.local/account.json"))["expected_account_id"])')"
 TEST_ACCOUNT_ID="$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query Account --output text)"
@@ -277,6 +296,7 @@ EC2の自動割当公開IPはEIPではなく、インスタンス終了で解放
 削除が失敗したらstateと入力を保持し、同じ実行IDで再試行する。Terraformのdestroy成功だけで残存確認済みとは扱わない。
 
 以下は**次工程で実装するコマンド**であり、現時点ではMakefileへ追加していない。
+構築・削除・設備の残存確認はManagerから構築ロールを引き受け、試験投入・結果取得はRunnerを使う。ENI削除待機の照会はManagerで直接行う。各工程のプロファイルを明示し、Runnerへ設備管理権限を追加してまとめない。
 
 | コマンド | 次工程で実装する責務 |
 |---|---|
