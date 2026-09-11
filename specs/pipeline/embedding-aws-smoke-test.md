@@ -1,14 +1,21 @@
 # Embedding AWSスモークテスト
 
-Status: Terraform・EC2起動設定を実装済み（AWS未適用、試験・自動削除・結果回収は未実装）
+Status: Terraform・EC2起動設定を実装済み（試験・自動削除・結果回収は未実装、実AWSでの試験検証は未完了）
 
 
 ## 今回実装した範囲
 
 `infra/aws-test/bootstrap/`に常設基盤、`infra/aws-test/smoke/`に試験用設備を分離した。
 対象はローカル設定に登録したテスト専用アカウント、東京リージョン。通信・IAM・秘密値登録・plan・削除候補の確認手順は[テストAWS環境のREADME](../../infra/aws-test/README.md)を参照する。
-今回の完了条件はTerraformの初期化・構文参照検証・書式確認までとし、AWSへの適用・DB準備・試験・300秒後の終了処理・結果回収は次工程とする。
+今回の完了条件はTerraformの初期化・構文参照検証・書式確認までとし、smokeのAWSへの適用・DB準備・試験・300秒後の終了処理・結果回収は次工程とする。
 自動削除と結果回収が完成するまでは、この試験環境を実際に起動しない。構成テストは用意するが、ユーザー指示により実行しない。
+
+## 運用者のアクセス権限
+
+テスト用ユーザーへ`VectorTestManager`と`VectorTestRunner`を割り当て、設備管理と試験実行でセッションを使い分ける。
+Managerは既存のTerraform構築ロールを引き受けて設備を作成・削除し、テストECRへの配布とENI削除待機の照会も担当する。RunnerはSSMでrunner EC2へ試験を投入し、終了状態とテストログを取得する。
+bootstrapは既存管理者の`WorkloadAdministrator`で運用し、その権限の細分化は別途扱う。テストアカウントに`VectorDeploy`や独立したReadOnlyの割当は追加しない。
+インラインポリシーと利用開始前の信頼先・プロファイル設定は[アクセス権限](../../infra/aws-test/ACCESS.md)を正本とする。ユーザーの割当だけでsmokeの実行準備が完了したとは扱わない。
 
 ## Problem
 
