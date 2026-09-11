@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -34,12 +34,12 @@ from app.analysis.ai_provider_errors import (
     AIProviderRateLimitedError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import map_provider_to_curation
 from app.analysis.curation.failure_handling import CurationFailureHandler
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )

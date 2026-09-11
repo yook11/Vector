@@ -7,18 +7,18 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderOutputBlockedError,
     AIProviderRateLimitedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.domain.ready import (
     CurationReadyBuildBlockedCode,
     CurationReadyBuildBlockedError,
     ReadyForCuration,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 from tests.logfire._span_helpers import stage_attrs
@@ -429,7 +429,7 @@ class TestCurateContentStageSpan:
         期待値の根拠:
         - AIProviderOutputBlockedError: CODE="ai_error_output_blocked",
           FAILURE_MODE=TARGET_REJECTED (AIProviderContentError 固定)
-          → app/analysis/ai_provider_errors.py
+          → app/ai_providers/errors.py
         - map_provider_to_curation: TARGET_REJECTED → CurationTerminalDropError,
           failure_kind=mode.value="target_rejected", code=exc.CODE
           → app/analysis/curation/errors.py
@@ -464,7 +464,7 @@ class TestCurateContentStageSpan:
         assert attrs["result"] == "failed"
         # failure_kind: TARGET_REJECTED.value (curation/errors.py)
         assert attrs["failure_kind"] == "target_rejected"
-        # code: AIProviderOutputBlockedError.CODE (ai_provider_errors.py)
+        # code: AIProviderOutputBlockedError.CODE (app/ai_providers/errors.py)
         assert attrs["code"] == "ai_error_output_blocked"
         # retryability: CurationTerminalDropError.RETRYABILITY (curation/errors.py)
         assert attrs["retryability"] == "non_retryable"

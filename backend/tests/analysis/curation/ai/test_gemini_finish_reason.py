@@ -24,14 +24,14 @@ from google.genai.types import (
     Part,
 )
 
-from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
+from app.ai_providers.errors import AIProviderOutputBlockedError
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.curation.domain import Signal
 from app.analysis.curation.errors import CurationResponseInvalidError
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 
 
 def _make_response(

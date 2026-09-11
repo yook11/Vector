@@ -1,16 +1,10 @@
-"""Stage 4 ACL — ``map_provider_to_assessment`` の翻訳契約テスト。
-
-mapper は provider error を「retry 軸 (Recoverable / Terminal) + 原因軸
-(failure_kind = mode 値 / failure_reason = reason 値)」に翻訳する。leaf → marker /
-failure_kind の写像は plan の disposition 表 (spec) を golden として直書きする
-(provider 自身の ``FAILURE_MODE`` golden は ``test_ai_provider_errors.py`` が所有)。
-"""
+"""プロバイダー例外のServiceでの原因保持とTaskiq境界での分類を検証する。"""
 
 from __future__ import annotations
 
 import pytest
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderContentError,
     AIProviderError,
@@ -24,16 +18,24 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.analysis.assessment.errors import (
-    AssessmentError,
-    AssessmentRecoverableError,
-    AssessmentTerminalError,
-    map_provider_to_assessment,
-)
-from app.analysis.gemini_error_translator import (
+from app.ai_providers.gemini.error_translator import (
     GeminiContentRejectionReason,
     GeminiStateReason,
 )
+from app.analysis.assessment.ai.parse import AssessmentResponseDefect
+from app.analysis.assessment.errors import (
+    AssessmentError,
+    AssessmentFailureReason,
+    AssessmentResponseInvalidError,
+    to_assessment_error,
+)
+from app.analysis.assessment.task_errors import (
+    AssessmentRecoverableError,
+    AssessmentTaskError,
+    AssessmentTerminalError,
+    to_assessment_task_error,
+)
+from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
 
 # 代表 reason (mapper は値そのものを failure_reason に運ぶ。種別は不問)。
 _CONTENT_REASON = GeminiContentRejectionReason.SAFETY
@@ -42,7 +44,9 @@ _STATE_REASON = GeminiStateReason.TIMEOUT
 # leaf → (期待 marker, 期待 failure_kind)。plan の disposition 表 (spec) が出所。
 # retryable な回復クラス (attempt_scoped / time_based / condition_based) は
 # Recoverable、非 retryable (operator_action / target_rejected) は Terminal。
-_LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[AssessmentError], str]] = {
+_LEAF_EXPECTATION: dict[
+    type[AIProviderError], tuple[type[AssessmentTaskError], str]
+] = {
     AIProviderNetworkError: (AssessmentRecoverableError, "attempt_scoped"),
     AIProviderOutputTruncatedError: (AssessmentRecoverableError, "attempt_scoped"),
     AIProviderServiceUnavailableError: (
@@ -79,7 +83,7 @@ def _instantiate(
     return exc_type()
 
 
-class TestMapProviderToAssessment:
+class TestProviderToAssessmentTaskError:
     """全 provider leaf の翻訳契約 (golden 写像)。"""
 
     @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
@@ -88,7 +92,7 @@ class TestMapProviderToAssessment:
     ) -> None:
         expected_marker, expected_kind = _LEAF_EXPECTATION[exc_type]
 
-        result = map_provider_to_assessment(_instantiate(exc_type))
+        result = to_assessment_task_error(to_assessment_error(_instantiate(exc_type)))
 
         assert isinstance(result, expected_marker)
         assert result.failure_kind == expected_kind
@@ -99,7 +103,7 @@ class TestMapProviderToAssessment:
     ) -> None:
         original = _instantiate(exc_type)
 
-        result = map_provider_to_assessment(original)
+        result = to_assessment_task_error(to_assessment_error(original))
 
         assert result.provider_error is original  # type: ignore[union-attr]
 
@@ -107,7 +111,7 @@ class TestMapProviderToAssessment:
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        result = map_provider_to_assessment(_instantiate(exc_type))
+        result = to_assessment_task_error(to_assessment_error(_instantiate(exc_type)))
 
         assert result.code == exc_type.CODE  # type: ignore[union-attr]
 
@@ -118,7 +122,7 @@ class TestMapProviderToAssessment:
         original = _instantiate(exc_type)
         expected = original.reason.value  # type: ignore[attr-defined]
 
-        result = map_provider_to_assessment(original)
+        result = to_assessment_task_error(to_assessment_error(original))
 
         assert result.failure_reason == expected  # type: ignore[union-attr]
 
@@ -130,8 +134,8 @@ class TestMapProviderToAssessment:
         self, exc_type: type[AIProviderError]
     ) -> None:
         # state reason は任意。未指定なら failure_reason は焼かれない。
-        result = map_provider_to_assessment(
-            _instantiate(exc_type, with_state_reason=False)
+        result = to_assessment_task_error(
+            to_assessment_error(_instantiate(exc_type, with_state_reason=False))
         )
 
         assert result.failure_reason is None  # type: ignore[union-attr]
@@ -162,11 +166,87 @@ class TestMapProviderToAssessmentUnregistered:
         bare = AIProviderError("bare base")
 
         with pytest.raises(TypeError, match="unmapped provider error"):
-            map_provider_to_assessment(bare)
+            to_assessment_task_error(to_assessment_error(bare))
 
     def test_direct_ai_provider_error_subclass_raises(self) -> None:
         class _NeitherStateNorContent(AIProviderError):
             CODE = "ai_error_neither_for_test"
 
         with pytest.raises(TypeError, match="unmapped provider error"):
-            map_provider_to_assessment(_NeitherStateNorContent())
+            to_assessment_task_error(to_assessment_error(_NeitherStateNorContent()))
+
+
+@pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+def test_service_contract_retains_provider_details_without_retry_classification(
+    exc_type,
+):
+    original = _instantiate(exc_type)
+    result = to_assessment_error(original)
+    assert type(result) is AssessmentError
+    assert result.reason is AssessmentFailureReason.PROVIDER_ERROR
+    assert result.provider_error is original
+    assert result.provider_error.reason is original.reason
+    assert result.code == original.CODE
+    assert result.defect is None
+    assert not hasattr(result, "RETRYABILITY")
+    task_error = to_assessment_task_error(result)
+    assert task_error.__cause__ is result
+    assert task_error.provider_error is original
+
+
+@pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+@pytest.mark.asyncio
+async def test_service_wraps_provider_error_before_opening_db(exc_type):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.analysis.assessment.domain.ready import ReadyForAssessment
+    from app.analysis.assessment.service import AssessmentService
+
+    def no_session():
+        raise AssertionError("AI失敗時はDBを開かない")
+
+    original = _instantiate(exc_type)
+    assessor = SimpleNamespace(assess=AsyncMock(side_effect=original))
+    service = AssessmentService(no_session)
+    ready = ReadyForAssessment(
+        curation_id=1, translated_title="title", summary="summary"
+    )
+    with pytest.raises(AssessmentError) as raised:
+        await service.execute(ready, assessor, analyzable_article_id=1)
+    assert raised.value.reason is AssessmentFailureReason.PROVIDER_ERROR
+    assert raised.value.provider_error is original
+    assert raised.value.__cause__ is original
+    assert raised.value.code == original.CODE
+
+
+@pytest.mark.parametrize(
+    "original",
+    [
+        AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
+        DatabaseConnectionError(reason=DatabaseConnectionErrorReason.CONNECTION_FAILED),
+        TimeoutError("timeout"),
+        RuntimeError("unexpected"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_service_preserves_non_provider_exception_identity(original):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.analysis.assessment.domain.ready import ReadyForAssessment
+    from app.analysis.assessment.service import AssessmentService
+
+    def no_session():
+        raise AssertionError("AI失敗時はDBを開かない")
+
+    ready = ReadyForAssessment(
+        curation_id=1, translated_title="title", summary="summary"
+    )
+    assessor = SimpleNamespace(assess=AsyncMock(side_effect=original))
+    with pytest.raises(type(original)) as raised:
+        await AssessmentService(no_session).execute(
+            ready, assessor, analyzable_article_id=1
+        )
+    assert raised.value is original
+    assert original.__cause__ is None

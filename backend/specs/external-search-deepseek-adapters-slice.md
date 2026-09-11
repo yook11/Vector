@@ -54,7 +54,7 @@ fake しかない 2 つの LLM port に実装を与えるにあたり、次を�
   - `deepseek.py`: adapter は SDK I/O と例外翻訳のみに責務を絞る。
     envelope 契約違反は `DeepSeekResponseDefect`(自己記述 StrEnum)で分類。
     空 key は `AIProviderConfigurationError` で `__init__` fail-fast。
-- `backend/app/analysis/deepseek_error_translator.py`
+- `backend/app/ai_providers/deepseek/error_translator.py`
   - `translate_deepseek_error(exc)`: OpenAI SDK 例外を `AIProvider*Error`
     階層へ翻訳。マップ不能は素通し(caller が bare re-raise)。
 - `backend/app/analysis/prompt_safety.py`

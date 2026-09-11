@@ -18,7 +18,7 @@ from app.agent.runtime.llm_failure import (
     LlmAttemptFailed,
     llm_attempt_failed_from,
 )
-from app.analysis.ai_provider_errors import AIProviderNetworkError
+from app.ai_providers.errors import AIProviderNetworkError
 from tests.agent.runtime._tracing_helpers import (
     exception_events,
     one_provider_attempt_span,

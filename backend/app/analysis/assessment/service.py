@@ -14,13 +14,13 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import AIProviderError
+from app.ai_providers.errors import AIProviderError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import InScope, OutOfScope
-from app.analysis.assessment.errors import map_provider_to_assessment
+from app.analysis.assessment.errors import to_assessment_error
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
@@ -83,9 +83,8 @@ class AssessmentService:
                 summary_ja=ready.summary,
             )
         except AIProviderError as exc:
-            # Stage marker に詰め替え、audit で元 provider error まで辿れるよう
-            # ``__cause__`` を保持する。
-            raise map_provider_to_assessment(exc) from exc
+            # 元のプロバイダー例外を原因チェーンにも保持する。
+            raise to_assessment_error(exc) from exc
 
         curation_id = ready.curation_id
 

@@ -17,12 +17,12 @@ from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
+from app.ai_providers.errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )
-from app.analysis.deepseek_error_translator import DeepSeekStateReason
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from tests.agent.evidence_review._builders import AS_OF
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 

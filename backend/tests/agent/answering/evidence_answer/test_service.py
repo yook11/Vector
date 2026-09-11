@@ -30,11 +30,11 @@ from app.agent.recording.evidence_answer import (
 )
 from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderNetworkError,
     AIProviderOutputTruncatedError,
 )
-from app.analysis.gemini_error_translator import GeminiStateReason
+from app.ai_providers.gemini.error_translator import GeminiStateReason
 from tests.agent.recording._fakes import RecordingEvidenceAnswerRecorder
 from tests.agent.running._harness import (
     AllowAnswerGenerationStart,

@@ -29,10 +29,10 @@ from opentelemetry.trace import (
 )
 
 import app.agent.recording.llm as llm_recording_module
-import app.analysis.gemini_error_translator as gemini_error_translator_module
+import app.ai_providers.gemini.error_translator as gemini_error_translator_module
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderContentRejectionKind,
     AIProviderFailureMode,
     AIProviderInputRejectedError,
@@ -42,7 +42,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderStateError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.analysis.gemini_error_translator import (
+from app.ai_providers.gemini.error_translator import (
     OUTPUT_BLOCKED_FINISH_REASONS,
     GeminiContentRejectionReason,
     GeminiStateReason,

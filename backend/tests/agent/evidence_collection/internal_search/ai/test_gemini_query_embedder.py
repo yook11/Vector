@@ -15,18 +15,18 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
     InternalSearchQueries,
 )
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiStateReason
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
 )
-from app.analysis.gemini_error_translator import GeminiStateReason
 from tests.cloudwatch.records import metric_records
 
 

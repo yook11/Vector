@@ -51,7 +51,7 @@ Q&A エージェントのコア工程は実装済みだが router 未配線で�
   から error 型 `QuestionPlannerResponseInvalidError` を import している。
   answering 側は SDK-free base error (`AnswerDraftGenerationInvalidError`
   in `synthesis.py`) を adapter が継承する構造でこれを回避済み (鏡写しの
-  正本)。`app/analysis/ai_provider_errors.py` は SDK-free (実機確認済み、
+  正本)。`app/ai_providers/errors.py` は SDK-free (実機確認済み、
   endpoint から安全に import できる)。
 - **タイムアウト**: frontend 内部 fetch timeout 15s
   (`frontend/src/lib/api/hey-api.config.ts:26`)、Fly proxy 明示設定なし

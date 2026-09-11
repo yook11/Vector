@@ -542,7 +542,7 @@ backend/app/agent/answering/direct_answer/flow.py
   # raw全文集約、generation、filter、reporter lifecycle、continuation消費
 
 backend/app/agent/answering/direct_answer/ai/gemini.py
-backend/app/analysis/gemini_error_translator.py
+backend/app/ai_providers/gemini/error_translator.py
   # generate_content_stream、全chunk metadata、stream truncated分類
 
 backend/app/agent/live_updates/answer_delta.py (new)

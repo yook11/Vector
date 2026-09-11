@@ -17,6 +17,7 @@ from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentCompletionKind, AssessmentService
+from app.analysis.assessment.task_errors import to_assessment_task_error
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -105,10 +106,11 @@ async def assess_content(
         except Exception as exc:
             # handler / hold が二次例外で落ちても元の業務例外を span に残す
             # (no-override で最初の業務例外を保持)。
-            stage.record_failure(exc)
+            task_exc = to_assessment_task_error(exc)
+            stage.record_failure(task_exc)
             decision = await handler.handle(
                 ready=ready,
-                exc=exc,
+                exc=task_exc,
                 last_attempt=is_last_attempt(ctx),
                 analyzable_article_id=analyzable_article_id,
                 provider=assessor.provider,
@@ -121,7 +123,9 @@ async def assess_content(
                 )
             stage.set_result("failed")
             if decision.reraise:
-                raise
+                if task_exc is exc:
+                    raise
+                raise task_exc from exc
             return
 
         if result.kind is AssessmentCompletionKind.IN_SCOPE:

@@ -30,7 +30,7 @@ embedding stage (Stage 5) について、Logfire 上で「インフラ障害に�
 - `EmbeddingReadyBuildBlockedCode` は `ANALYZED_ARTICLE_MISSING`, `ALREADY_EMBEDDED` の 2 つで、いずれも precondition (上流消失・既処理) 由来の stale / 冪等系である。
 - `EmbeddingFailureHandler.handle()` は `EmbeddingTerminalError`, `EmbeddingRecoverableError`, `SQLAlchemyError`, catch-all を分岐する。各 marker は `_audit_failure` / `_audit_unexpected_failure` (どちらも自前で例外を握る best-effort) を経由する。handler は `embedder` を引数に取らない (`ready`, `exc`, `last_attempt` のみ)。
 - `EmbeddingService.execute()` の boundary で `to_embedding_error()` が `AIProviderError` を Stage 5 marker に詰め替える。retry 軸 (Recoverable / Terminal) は provider の `FAILURE_MODE.retryable` が一意に決める。marker は元の provider error を `provider_error` 属性に保持する。
-- AI provider error は stage 中立な `app/analysis/ai_provider_errors.py` に定義され、2 系統に分かれる。`AIProviderStateError` (network / 5xx / quota / config 等、provider・環境の状態) と `AIProviderContentError` (safety / recitation / length 等、入出力の内容)。
+- AI provider error は stage 中立な `app/ai_providers/errors.py` に定義され、2 系統に分かれる。`AIProviderStateError` (network / 5xx / quota / config 等、provider・環境の状態) と `AIProviderContentError` (safety / recitation / length 等、入出力の内容)。
 - `AIProviderFailureMode` の `OPERATOR_ACTION_REQUIRED` は `AIProviderConfigurationError` / `AIProviderInsufficientBalanceError` / `AIProviderRequestInvalidError` の 3 つを束ねるが、これは retry / hold のための括りであり、「環境・課金で直る (infra)」と「こちらのコードが壊れた (stage 失敗)」を区別しない。
 - `EmbeddingResponseInvalidError` は `EmbeddingRecoverableError` の派生で、`provider_error=None` を持つ (provider 応答が embedding schema に合致しない)。
 - ready-build 中の blocked 以外の例外は、共有 `project_ready_build_failure(stage_prefix="embedding", exc=exc)` で `db_error` / `contract_invalid` / `unexpected_error` に分類できる。

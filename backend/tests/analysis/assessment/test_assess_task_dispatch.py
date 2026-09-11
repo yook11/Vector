@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 
+from app.ai_providers.errors import AIProviderConfigurationError, AIProviderNetworkError
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildBlockedCode,
@@ -30,11 +31,14 @@ from app.analysis.assessment.domain.ready import (
     ReadyForAssessment,
 )
 from app.analysis.assessment.errors import (
-    AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalError,
+    to_assessment_error,
 )
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
+from app.analysis.assessment.task_errors import (
+    AssessmentRecoverableError,
+    AssessmentTerminalError,
+)
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.domain.event import Stage
 from app.db.errors import (
@@ -102,9 +106,7 @@ async def test_terminal_delegates_to_handler() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
-    exc = AssessmentTerminalError(
-        code="ai_error_configuration", failure_kind="operator_action_required"
-    )
+    exc = to_assessment_error(AIProviderConfigurationError())
 
     with (
         _patch_ready_construction(),
@@ -128,7 +130,9 @@ async def test_terminal_delegates_to_handler() -> None:
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
     kwargs = handler_handle.await_args.kwargs
-    assert kwargs["exc"] is exc
+    assert isinstance(kwargs["exc"], AssessmentTerminalError)
+    assert kwargs["exc"].__cause__ is exc
+    assert kwargs["exc"].provider_error is exc.provider_error
     assert kwargs["last_attempt"] is False
     # 監査主語 (元記事 id) が handler にも明示引数で届く
     assert kwargs["analyzable_article_id"] == 7
@@ -175,9 +179,7 @@ async def test_recoverable_reraise_true_raises() -> None:
     ctx = _make_ctx(
         retries=0, max_retries=2
     )  # retry 余地あり: _retries=0 < max_retries-1
-    exc = AssessmentRecoverableError(
-        code="ai_error_network", failure_kind="attempt_scoped"
-    )
+    exc = to_assessment_error(AIProviderNetworkError())
 
     with (
         _patch_ready_construction(),
@@ -190,10 +192,13 @@ async def test_recoverable_reraise_true_raises() -> None:
         mock_handler_cls.return_value.handle = AsyncMock(
             return_value=FailureHandlingDecision(reraise=True)
         )
-        with pytest.raises(AssessmentRecoverableError):
+        with pytest.raises(AssessmentRecoverableError) as raised:
             await assess_content(trigger=_trigger(), ctx=ctx)
 
     mock_handler_cls.return_value.handle.assert_awaited_once()
+    assert raised.value is mock_handler_cls.return_value.handle.await_args.kwargs["exc"]
+    assert raised.value.__cause__ is exc
+    assert raised.value.provider_error is exc.provider_error
 
 
 @pytest.mark.asyncio
@@ -208,9 +213,7 @@ async def test_recoverable_reraise_false_returns() -> None:
 
     # 最終試行: _retries=max_retries-1=1 (旧 retry_count=2 は production が書かない値)
     ctx = _make_ctx(retries=1, max_retries=2)
-    exc = AssessmentRecoverableError(
-        code="ai_error_network", failure_kind="attempt_scoped"
-    )
+    exc = to_assessment_error(AIProviderNetworkError())
 
     with (
         _patch_ready_construction(),
@@ -232,8 +235,7 @@ async def test_recoverable_reraise_false_returns() -> None:
 
 @pytest.mark.asyncio
 async def test_response_invalid_dispatches_to_handler() -> None:
-    """``AssessmentResponseInvalidError`` (Layer 2-B、Recoverable 継承) も
-    Handler 経由で扱われる (kwargs["exc"] は AssessmentRecoverableError instance)。"""
+    """応答不正をTaskiq分類へ変換し、詳細コードと原因を保持する。"""
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
@@ -257,6 +259,8 @@ async def test_response_invalid_dispatches_to_handler() -> None:
     assert isinstance(
         handler_handle.await_args.kwargs["exc"], AssessmentRecoverableError
     )
+    assert handler_handle.await_args.kwargs["exc"].code == exc.code
+    assert handler_handle.await_args.kwargs["exc"].__cause__ is exc
 
 
 # catch-all — Layer 1 marker いずれにも該当しない例外も Handler に委譲
@@ -368,3 +372,31 @@ async def test_ready_build_blocked_emits_nothing(
     metrics = collected_metrics(capfire)
     for result in ("in_scope", "out_of_scope", "failed", "infra_error"):
         assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0
+
+
+@pytest.mark.parametrize(
+    "original",
+    [
+        DatabaseConnectionError(reason=DatabaseConnectionErrorReason.CONNECTION_FAILED),
+        TimeoutError("timeout"),
+        RuntimeError("unexpected"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_task_reraises_unconverted_exception_identity(original):
+    from app.queue.tasks.assessment import assess_content
+
+    with (
+        _patch_ready_construction(),
+        patch("app.queue.tasks.assessment.AssessmentService") as service,
+        patch("app.queue.tasks.assessment.AssessmentFailureHandler") as handler,
+    ):
+        service.return_value.execute = AsyncMock(side_effect=original)
+        handler.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=True)
+        )
+        with pytest.raises(type(original)) as raised:
+            await assess_content(trigger=_trigger(), ctx=_make_ctx())
+    assert raised.value is original
+    assert handler.return_value.handle.await_args.kwargs["exc"] is original
+    assert original.__cause__ is None

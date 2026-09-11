@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import ValidationError
 
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderContentError,
     AIProviderStateError,
 )

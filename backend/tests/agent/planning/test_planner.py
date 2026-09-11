@@ -28,12 +28,12 @@ from app.agent.recording.planning import (
     PlanningSucceeded,
 )
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from tests.agent.recording._fakes import RecordingPlanningRecorder
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result

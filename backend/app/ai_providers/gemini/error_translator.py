@@ -29,7 +29,7 @@ from enum import StrEnum
 import httpx
 from google.genai import errors as genai_errors
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderContentRejectionKind,
     AIProviderInputRejectedError,

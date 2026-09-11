@@ -19,7 +19,7 @@ from app.agent.answering.failure import (
     classify_answer_synthesis_failure,
     classify_direct_answer_failure,
 )
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
@@ -27,7 +27,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderRateLimitedError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.analysis.gemini_error_translator import (
+from app.ai_providers.gemini.error_translator import (
     GeminiContentRejectionReason,
     GeminiStateReason,
 )

@@ -1,20 +1,4 @@
-"""``AssessmentService`` の PR6 改修 test (audit wire-in + ACL boundary)。
-
-PR6 で Service が以下を行うようになったことを固定する:
-
-- ``assessor.assess`` の ``AIProviderError`` を ``map_provider_to_assessment``
-  で Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalError``)
-  に詰め替え、``__cause__`` に元 ``AIProvider*Error`` を紐付ける (ACL boundary)。
-- ``_handle_in_scope`` で category 解決失敗 (``category_id is None``) のとき
-  ``CategoryEnumDatabaseMismatchError`` (enum↔DB 不整合) を raise する。
-- 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で
-  ``AssessmentAuditRepository.append_*`` を呼び、成功 audit を 1 行焼く。
-- race lost (``save()`` が None) の場合は audit を焼かず ``ALREADY_ASSESSED`` を返す
-  (actor SSoT、勝者 task の audit と二重記録しない、再収集は reconcile cron 経路)。
-
-PR5 で merge 済の repository / payload / errors (Layer 2-A ACL) は本 PR では
-touch しない (test では結果として焼かれた pipeline_events 行を assert するに留める)。
-"""
+"""AssessmentServiceの正常終了・原因保持・保存と成功監査の原子性を検証する。"""
 
 from __future__ import annotations
 
@@ -28,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
 )
@@ -41,10 +25,7 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.errors import (
-    AssessmentRecoverableError,
-    AssessmentTerminalError,
-)
+from app.analysis.assessment.errors import AssessmentError, AssessmentFailureReason
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.assessment.service import (
@@ -330,10 +311,10 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
 
 
 @pytest.mark.asyncio
-async def test_provider_network_error_is_wrapped_to_recoverable_marker(
+async def test_provider_network_error_preserves_provider_cause(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """``AIProviderNetworkError`` → ``AssessmentRecoverableError`` で wrap。
+    """``AIProviderNetworkError`` → ``AssessmentError`` で wrap。
 
     ``__cause__`` に元 ``AIProvider*Error`` が紐付くこと (PR5 の
     ``extract_error_chain`` が 2 段以上を error_chain 列に記録できる前提)。
@@ -348,17 +329,18 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
     )
     svc = AssessmentService(session_factory)
 
-    with pytest.raises(AssessmentRecoverableError) as excinfo:
+    with pytest.raises(AssessmentError) as excinfo:
         await svc.execute(ready, assessor, analyzable_article_id=1)
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
+    assert excinfo.value.code == provider_exc.CODE
 
 
 @pytest.mark.asyncio
-async def test_provider_configuration_error_is_wrapped_to_terminal_marker(
+async def test_provider_configuration_error_preserves_provider_cause(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """``AIProviderConfigurationError`` (OPERATOR_ACTION) は Terminal に詰め替わる。"""
+    """設定エラーも再試行分類を付けずに保持する。"""
     provider_exc = AIProviderConfigurationError("bad api key")
     assessor = _make_assessor(side_effect=provider_exc)
 
@@ -369,11 +351,12 @@ async def test_provider_configuration_error_is_wrapped_to_terminal_marker(
     )
     svc = AssessmentService(session_factory)
 
-    with pytest.raises(AssessmentTerminalError) as excinfo:
+    with pytest.raises(AssessmentError) as excinfo:
         await svc.execute(ready, assessor, analyzable_article_id=1)
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
-    assert excinfo.value.failure_kind == "operator_action_required"
+    assert excinfo.value.code == provider_exc.CODE
+    assert excinfo.value.reason is AssessmentFailureReason.PROVIDER_ERROR
 
 
 @pytest.mark.asyncio

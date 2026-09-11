@@ -30,8 +30,8 @@ from app.agent.recording.evidence_review import (
     EvidenceReviewSucceeded,
 )
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
-from app.analysis.deepseek_error_translator import DeepSeekStateReason
+from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
+from app.ai_providers.errors import AIProviderError, AIProviderNetworkError
 from tests.agent.evidence_review._builders import (
     AS_OF,
     collected_task,

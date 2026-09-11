@@ -13,7 +13,7 @@ from app.analysis.assessment.domain.ready import (
     ReadyForAssessment,
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
-from app.analysis.assessment.errors import AssessmentError
+from app.analysis.assessment.task_errors import AssessmentTaskError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import AssessmentPayload, BasePipelineEventPayload
 from app.audit.error_chain import extract_error_chain
@@ -177,13 +177,39 @@ class AssessmentAuditRepository:
         self,
         *,
         ready: ReadyForAssessment,
-        exc: AssessmentError | DatabaseError,
+        exc: AssessmentTaskError | DatabaseError,
         article_id: int,
     ) -> None:
         """assessment 失敗を記録する。"""
         projection = self._projection_of(exc)
         await self._append_failed_event(
             ready=ready, exc=exc, projection=projection, article_id=article_id
+        )
+
+    async def append_classified_failure(
+        self,
+        *,
+        curation_id: int,
+        article_id: int | None,
+        exc: Exception,
+        projection: FailureProjection,
+    ) -> None:
+        """Consumerの分類と元例外を、ReadyやAI生応答を要求せず記録する。"""
+        payload = AssessmentPayload(
+            failure_kind=projection.failure_kind,
+            failure_action=failure_action_value(projection),
+            failure_reason=projection.failure_reason,
+            curation_id=curation_id,
+            error_message=error_message_of(exc),
+            error_chain=extract_error_chain(exc),
+        )
+        await self._append_event(
+            event_type=EventType.FAILED,
+            outcome_code=projection.code,
+            payload=payload,
+            article_id=article_id,
+            error_class=exception_fqn(exc),
+            retryability=projection.retryability,
         )
 
     async def append_unexpected_failure(

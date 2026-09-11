@@ -44,7 +44,7 @@ from app.agent.runtime.contract import (
     AgentRuntime,
     AgentRuntimeScopeFactory,
 )
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderContentError,
     AIProviderStateError,
 )

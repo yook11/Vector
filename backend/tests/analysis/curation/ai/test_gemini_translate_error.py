@@ -6,7 +6,8 @@ Stage 3 が translator delegation 前に挟む独自分岐:
 - context-length 超過の ``INVALID_ARGUMENT`` → ``AIProviderInputRejectedError``
   (Stage 4/5 の RequestInvalid と違う「入力が長すぎる」semantics)
 
-SDK 例外分類の網羅は ``tests/analysis/test_gemini_error_translator.py`` に集約。
+SDK 例外分類の網羅は
+``tests/ai_providers/gemini/test_gemini_error_translator.py`` に集約。
 本ファイルでは translator delegation が経路として効いていることを smoke で確認する。
 """
 
@@ -15,14 +16,14 @@ from __future__ import annotations
 import pytest
 from google.genai.errors import APIError
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderServiceUnavailableError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.curation.errors import CurationResponseInvalidError
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 
 
 def _api_error(status: str, message: str, code: int = 400) -> APIError:

@@ -15,12 +15,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderServiceUnavailableError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
@@ -34,7 +35,6 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
 )
 from app.analysis.embedding.service import EmbeddingCompletion, EmbeddingService
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration

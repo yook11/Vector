@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 
 import pytest
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,
@@ -24,11 +24,17 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
+)
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.errors import (
     AssessmentError,
-    AssessmentRecoverableError,
     AssessmentResponseInvalidError,
+)
+from app.analysis.assessment.task_errors import (
+    AssessmentRecoverableError,
     AssessmentTerminalError,
 )
 from app.analysis.curation.errors import (
@@ -45,10 +51,6 @@ from app.analysis.embedding.errors import (
 from app.analysis.embedding.task_errors import (
     EmbeddingRecoverableError,
     EmbeddingTerminalError,
-)
-from app.analysis.gemini_error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
 )
 from app.logfire.exceptions import VectorDomainError
 
@@ -389,7 +391,8 @@ def test_stage_base_classes_inherit_vector_domain_error() -> None:
 def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
     """Layer 2-B class は対応する Layer 1 marker を継承する。"""
     assert issubclass(CurationResponseInvalidError, CurationRecoverableError)
-    assert issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
+    assert issubclass(AssessmentResponseInvalidError, AssessmentError)
+    assert not issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingError)
 
 

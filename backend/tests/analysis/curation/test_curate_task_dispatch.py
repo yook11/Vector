@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -35,6 +35,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.domain.ready import (
     CurationReadyBuildBlockedCode,
     CurationReadyBuildBlockedError,
@@ -42,7 +43,6 @@ from app.analysis.curation.domain.ready import (
 )
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.domain.event import Stage
 from app.db.errors import (
     DatabaseConnectionError,

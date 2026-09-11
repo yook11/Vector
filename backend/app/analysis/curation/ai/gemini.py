@@ -14,10 +14,17 @@ from google import genai
 from google.genai.types import GenerateContentConfig, GenerateContentResponse
 from pydantic import ValidationError
 
-from app.analysis.ai_provider_errors import (
+from app.ai_providers.errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
+)
+from app.ai_providers.gemini.error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
+    is_context_length_error,
+    output_blocked_reason,
+    translate_gemini_error,
 )
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
@@ -30,13 +37,6 @@ from app.analysis.curation.ai.parse import parse_curation
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.errors import CurationResponseInvalidError
-from app.analysis.gemini_error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
-    is_context_length_error,
-    output_blocked_reason,
-    translate_gemini_error,
-)
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
