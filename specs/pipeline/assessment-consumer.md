@@ -144,6 +144,27 @@ Done: 借用・通信上限・内部再試行なし・生成失敗時の解放�
 
 実装状況（2026-09-11）: 設定・生成終了・借用・既存呼び出し元への接続を実装済み。app全体・変更テスト・比較スクリプトのruff lint・format確認が成功。全単体テストは6,518件成功、`make test-integration PYTEST_ARGS='-q'`は1,400件成功・22件skipで完了し、一時DB・Redisの終了も確認した。実APIは呼び出さず、通信はモックした。
 
+## Consumerの設定・資源準備・組み立てスライス
+
+Problem: AssessmentConsumerとDeepSeekクライアントを、Lambda用の秘密情報・DB接続へ接続する。
+
+Evidence: Embeddingの設定・資源管理・組み立てと、共通SSM取得・DB Engine生成・資源管理テストを参照した。
+
+- `AssessmentConsumerSettings`はDB共通設定を継承し、`env`（既定production）、`aws_region`、`database_url`、`db_iam_auth`（既定true）、`deepseek_api_key_parameter_path`を扱う。dotenvは読み込まず、全環境でIAM必須、本番でTLS必須とする。接続情報の非表示を維持する。
+- `open_assessment_resources(settings)`は利用範囲ごとにSSMからAPIキーを取得し、専用RDS署名器・Engine・session factoryを準備する。秘密情報はrepr対象外のSecretStrで保持する。
+- `create_assessment_consumer_engine`は1接続・追加接続なし、プール待ち・接続・SQL実行の上限を各5秒にする。application_nameは`vector-assessment-consumer`。IAM署名器は必須引数とし、省略・Noneを拒否する。非IAM用の分岐を設けず、共通のTLS・pre-pingとDB例外変換を利用する。
+- `app/lambda_handlers/assessment/composition.py`の`open_assessment_consumer(settings)`はasync context manager。資源、DeepSeekクライアント、Assessor、Consumerの順に準備し、借用Consumerを返す。公開handlerやSQSの入力形式には依存しない。
+- 終了はDeepSeek、Engine、RDSの順。初期化失敗時も作成済み資源を解放し、同じ例外を返す。初期化の診断段階はresources・deepseek_client・consumerとし、yield後の業務例外は初期化失敗として記録しない。
+- 初期化・終了の診断には段階／資源名と例外クラスだけを記録する。通常の終了・診断障害で結果を上書きせず、キャンセル・プロセス終了は抑止しない。準備・終了へ新しい時間制限は追加しない。
+
+型の補足: 計画ではsession factoryを`async_sessionmaker`と記載したが、共通`caller_managed_session_factory`の実際の契約は`Callable[[], AbstractAsyncContextManager[AsyncSession]]`。DB例外変換を維持するため、AssessmentResourcesにもこの実際の型を使用した。
+
+Non-goals: SQS・イベント検証、部分バッチ応答、Lambda公開handler、Terraform・IAM権限・Parameter Store作成、relay接続、Taskiq変更、デプロイは含めない。DB schema・依存パッケージも変更しない。
+
+Done: 設定の読み取り範囲、Engine設定、資源の生成・終了順序と途中失敗時の解放、セッション終了時のロールバックを検証する。Consumerの保存・監査、共通DBのtimeout・再接続、共通SSM通信の詳細は既存テストへ任せ、このスライスでは重複追加しない。
+
+実装状況（2026-09-11）: 設定・資源準備・Consumer組み立てを追加済み。テストは設定・Engine配線・資源の生成終了・実DBでのセッション終了へ絞った。IAM必須化後、app全体と変更テストのruff lint・format確認、全単体6,565件が成功。既存Embeddingテストの非IAM設定も署名器差し替えへ更新し、全統合1,402件成功・22件skip、一時DB・Redisの終了を確認した。SQSからの呼び出しは未接続。Embedding側も同じIAM必須契約へ統一し、実DBテストではAWS署名器のみをテスト用へ差し替える。
+
 ## Invariants
 
 - 対象外判定は正常終了であり、処理失敗によって対象外の判定結果を作らない。
