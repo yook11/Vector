@@ -8,11 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
 import pytest
-from pydantic import SecretStr
 
-from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.assessment.events import ArticleAssessedInScope
-from app.analysis.embedding.embedder import GeminiEmbedder
 from app.analysis.embedding.service import EmbeddingCompletion
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
 
@@ -45,33 +42,17 @@ def wiring(monkeypatch):
         ),
         log=Mock(),
     )
-    state.resources = SimpleNamespace(
-        session_factory=Mock(), gemini_api_key=SecretStr("test-key")
-    )
-    state.client = Mock()
 
     @asynccontextmanager
-    async def open_resources(settings):
-        state.order.append("resources_open")
+    async def open_consumer(settings):
+        state.order.append("open")
         try:
-            yield state.resources
+            yield state.consumer
         finally:
-            state.order.append("resources_close")
+            state.order.append("close")
 
-    @asynccontextmanager
-    async def open_client(**kwargs):
-        state.order.append("client_open")
-        try:
-            yield state.client
-        finally:
-            state.order.append("client_close")
-
-    state.open_resources = Mock(side_effect=open_resources)
-    state.open_client = Mock(side_effect=open_client)
-    state.constructor = Mock(return_value=state.consumer)
-    monkeypatch.setattr(module, "open_embedding_resources", state.open_resources)
-    monkeypatch.setattr(module, "open_gemini_client", state.open_client)
-    monkeypatch.setattr(module, "EmbeddingConsumer", state.constructor)
+    state.open = Mock(side_effect=open_consumer)
+    monkeypatch.setattr(module, "open_embedding_consumer", state.open)
     state.settings_factory = Mock(return_value=state.settings)
     monkeypatch.setattr(module, "EmbeddingConsumerSettings", state.settings_factory)
     monkeypatch.setattr(module, "logger", state.log)
@@ -121,39 +102,11 @@ def test_each_payload_is_passed_to_the_shared_consumer(wiring):
 
     module.handler({"Records": messages}, None)
 
-    wiring.constructor.assert_called_once()
+    wiring.open.assert_called_once_with(wiring.settings)
     assert wiring.consumer.consume.await_args_list == [
         call(ArticleAssessedInScope(curation_id=11, analyzed_article_id=101)),
         call(ArticleAssessedInScope(curation_id=22, analyzed_article_id=202)),
     ]
-
-
-@pytest.mark.asyncio
-async def test_messages_finish_sequentially_in_input_order(wiring):
-    """先行メッセージの完了を待ってから、次のメッセージを処理する。"""
-    messages = [
-        {
-            "messageId": "first",
-            "body": valid_body(curation_id=11, analyzed_article_id=101),
-        },
-        {
-            "messageId": "second",
-            "body": valid_body(curation_id=22, analyzed_article_id=202),
-        },
-    ]
-    steps = []
-
-    async def consume(payload):
-        steps.append(("start", payload.curation_id))
-        await asyncio.sleep(0)
-        steps.append(("end", payload.curation_id))
-        return EmbeddingCompletion.SAVED
-
-    wiring.consumer.consume.side_effect = consume
-
-    await module._run_embedding({"Records": messages}, wiring.settings)
-
-    assert steps == [("start", 11), ("end", 11), ("start", 22), ("end", 22)]
 
 
 def test_empty_batch_completes_without_consumption(wiring):
@@ -162,7 +115,7 @@ def test_empty_batch_completes_without_consumption(wiring):
 
     assert response == {"batchItemFailures": []}
     wiring.consumer.consume.assert_not_awaited()
-    wiring.constructor.assert_called_once()
+    wiring.open.assert_called_once_with(wiring.settings)
 
 
 def test_invalid_message_id_rejects_batch_before_consumption(wiring):
@@ -174,7 +127,7 @@ def test_invalid_message_id_rejects_batch_before_consumption(wiring):
         module.handler({"Records": messages}, None)
 
     wiring.consumer.consume.assert_not_awaited()
-    wiring.constructor.assert_called_once()
+    wiring.open.assert_called_once_with(wiring.settings)
     wiring.log.warning.assert_called_once_with(
         "embedding_sqs_input_invalid",
         reason="missing_required_field",
@@ -204,31 +157,6 @@ def test_invalid_message_does_not_prevent_following_message(wiring, invalid_mess
     wiring.consumer.consume.assert_awaited_once_with(
         ArticleAssessedInScope(curation_id=11, analyzed_article_id=101)
     )
-
-
-def test_duplicate_id_is_rejected_before_reading_bodies(wiring):
-    """本文欠落を個別処理する前に、重複IDをバッチ全体の失敗にする。"""
-    messages = [
-        {"messageId": "duplicate"},
-        {"messageId": "duplicate", "body": valid_body()},
-    ]
-
-    with pytest.raises(SqsInputError) as caught:
-        module.handler({"Records": messages}, None)
-
-    assert caught.value.reason is SqsInputReason.DUPLICATE_MESSAGE_ID
-    wiring.consumer.consume.assert_not_awaited()
-
-
-def test_failed_message_id_is_not_trimmed(wiring):
-    """失敗IDの前後の空白を除去せず、そのまま返す。"""
-    wiring.consumer.consume.side_effect = RuntimeError("processing-failed")
-
-    response = module.handler(
-        {"Records": [{"messageId": " failed ", "body": valid_body()}]}, None
-    )
-
-    assert response == {"batchItemFailures": [{"itemIdentifier": " failed "}]}
 
 
 @pytest.mark.parametrize(
@@ -343,6 +271,117 @@ def test_processing_failure_log_uses_only_verified_identifiers(wiring):
     )
 
 
+def test_initialization_log_failure_preserves_original_exception(wiring):
+    """初期化失敗の診断が壊れても、元の例外を置き換えない。"""
+    original = RuntimeError("settings-failed")
+    wiring.settings_factory.side_effect = original
+    wiring.log.warning.side_effect = RuntimeError("log-failed")
+
+    with pytest.raises(RuntimeError) as caught:
+        module.handler({"Records": []}, None)
+
+    assert caught.value is original
+
+
+@pytest.mark.asyncio
+async def test_processing_cancellation_leaves_borrowed_scopes(wiring):
+    """処理中キャンセルでも、準備した資源の利用範囲を閉じて伝播する。"""
+    wiring.consumer.consume.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await module._run_embedding(
+            {"Records": [{"messageId": "cancelled", "body": valid_body()}]},
+            wiring.settings,
+        )
+
+    assert wiring.order == ["open", "close"]
+
+
+def test_settings_failure_aborts_entire_batch(wiring):
+    """設定失敗は個別応答にせず、settings段階を記録して元の例外を伝える。"""
+    original = RuntimeError("private-settings")
+    wiring.settings_factory.side_effect = original
+
+    with pytest.raises(RuntimeError) as caught:
+        module.handler(
+            {"Records": [{"messageId": "unprocessed", "body": valid_body()}]}, None
+        )
+
+    assert caught.value is original
+    wiring.open.assert_not_called()
+    wiring.log.warning.assert_called_once_with(
+        "embedding_initialization_failed",
+        stage="settings",
+        error_class="builtins.RuntimeError",
+    )
+
+
+def test_composition_failure_is_not_recorded_again(wiring):
+    """compositionが担当する初期化失敗を、入口で二重記録せず伝播する。"""
+    original = RuntimeError("composition-failed")
+    wiring.open.side_effect = original
+
+    with pytest.raises(RuntimeError) as caught:
+        module.handler({"Records": []}, None)
+
+    assert caught.value is original
+    wiring.consumer.consume.assert_not_awaited()
+    wiring.log.warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_messages_finish_sequentially_in_input_order(wiring):
+    """先行メッセージの完了を待ってから、次のメッセージを処理する。"""
+    messages = [
+        {
+            "messageId": "first",
+            "body": valid_body(curation_id=11, analyzed_article_id=101),
+        },
+        {
+            "messageId": "second",
+            "body": valid_body(curation_id=22, analyzed_article_id=202),
+        },
+    ]
+    steps = []
+
+    async def consume(payload):
+        steps.append(("start", payload.curation_id))
+        await asyncio.sleep(0)
+        steps.append(("end", payload.curation_id))
+        return EmbeddingCompletion.SAVED
+
+    wiring.consumer.consume.side_effect = consume
+
+    await module._run_embedding({"Records": messages}, wiring.settings)
+
+    assert steps == [("start", 11), ("end", 11), ("start", 22), ("end", 22)]
+
+
+def test_duplicate_id_is_rejected_before_reading_bodies(wiring):
+    """本文欠落を個別処理する前に、重複IDをバッチ全体の失敗にする。"""
+    messages = [
+        {"messageId": "duplicate"},
+        {"messageId": "duplicate", "body": valid_body()},
+    ]
+
+    with pytest.raises(SqsInputError) as caught:
+        module.handler({"Records": messages}, None)
+
+    assert caught.value.reason is SqsInputReason.DUPLICATE_MESSAGE_ID
+    wiring.consumer.consume.assert_not_awaited()
+
+
+def test_failed_message_id_is_not_trimmed(wiring):
+    """失敗IDの前後の空白を除去せず、そのまま返す。"""
+    wiring.consumer.consume.side_effect = RuntimeError("processing-failed")
+
+    response = module.handler(
+        {"Records": [{"messageId": " failed ", "body": valid_body()}]}, None
+    )
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": " failed "}]}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "interruption", [asyncio.CancelledError(), KeyboardInterrupt(), SystemExit()]
@@ -362,100 +401,3 @@ async def test_control_exception_stops_batch(wiring, interruption):
     assert caught.value is interruption
     wiring.consumer.consume.assert_awaited_once()
     wiring.log.warning.assert_not_called()
-
-
-def test_handler_wires_borrowed_resources_to_consumer(wiring):
-    """準備したDB資源とGeminiクライアントをConsumerへ接続する。"""
-    module.handler({"Records": []}, None)
-
-    wiring.open_resources.assert_called_once_with(wiring.settings)
-    wiring.open_client.assert_called_once_with(
-        api_key=wiring.resources.gemini_api_key, settings=GeminiConnectionSettings()
-    )
-    factory, embedder = wiring.constructor.call_args.args
-    assert factory is wiring.resources.session_factory
-    assert isinstance(embedder, GeminiEmbedder)
-    assert embedder._client is wiring.client
-
-
-@pytest.mark.parametrize(
-    "dependency,stage",
-    [
-        ("settings_factory", "settings"),
-        ("open_resources", "resources"),
-        ("open_client", "gemini_client"),
-        ("constructor", "consumer"),
-    ],
-)
-def test_initialization_failure_aborts_entire_batch(wiring, dependency, stage):
-    """初期化失敗は個別応答にせず、発生段階を記録して元の例外を伝える。"""
-    original = RuntimeError("private-initialization")
-    getattr(wiring, dependency).side_effect = original
-
-    with pytest.raises(RuntimeError) as caught:
-        module.handler(
-            {"Records": [{"messageId": "unprocessed", "body": valid_body()}]}, None
-        )
-
-    assert caught.value is original
-    wiring.consumer.consume.assert_not_awaited()
-    wiring.log.warning.assert_called_once_with(
-        "embedding_initialization_failed",
-        stage=stage,
-        error_class="builtins.RuntimeError",
-    )
-
-
-def test_initialization_log_failure_preserves_original_exception(wiring):
-    """初期化失敗の診断が壊れても、元の例外を置き換えない。"""
-    original = RuntimeError("settings-failed")
-    wiring.settings_factory.side_effect = original
-    wiring.log.warning.side_effect = RuntimeError("log-failed")
-
-    with pytest.raises(RuntimeError) as caught:
-        module.handler({"Records": []}, None)
-
-    assert caught.value is original
-
-
-def test_consumer_initialization_failure_leaves_opened_scopes(wiring):
-    """Consumerを作れなかった場合も、すでに開いた利用範囲を逆順に閉じる。"""
-    wiring.constructor.side_effect = RuntimeError("consumer-failed")
-
-    with pytest.raises(RuntimeError):
-        module.handler({"Records": []}, None)
-
-    assert wiring.order == [
-        "resources_open",
-        "client_open",
-        "client_close",
-        "resources_close",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_initialization_cancellation_is_not_a_business_failure(wiring):
-    """初期化中のキャンセルは通常の失敗診断へ変換せず伝播する。"""
-    original = asyncio.CancelledError()
-    wiring.open_client.side_effect = original
-
-    with pytest.raises(asyncio.CancelledError) as caught:
-        await module._run_embedding({"Records": []}, wiring.settings)
-
-    assert caught.value is original
-    wiring.log.warning.assert_not_called()
-    assert wiring.order == ["resources_open", "resources_close"]
-
-
-@pytest.mark.asyncio
-async def test_processing_cancellation_leaves_borrowed_scopes(wiring):
-    """処理中キャンセルでも、準備した資源の利用範囲を閉じて伝播する。"""
-    wiring.consumer.consume.side_effect = asyncio.CancelledError()
-
-    with pytest.raises(asyncio.CancelledError):
-        await module._run_embedding(
-            {"Records": [{"messageId": "cancelled", "body": valid_body()}]},
-            wiring.settings,
-        )
-
-    assert wiring.order[-2:] == ["client_close", "resources_close"]

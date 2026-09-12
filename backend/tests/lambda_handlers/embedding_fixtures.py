@@ -15,6 +15,7 @@ from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 @pytest.fixture
 def run_embedding(consumer, monkeypatch):
     module = import_module("app.lambda_handlers.embedding.handler")
+    composition = import_module("app.lambda_handlers.embedding.composition")
     settings = EmbeddingConsumerSettings(
         env="test",
         aws_region="ap-northeast-1",
@@ -33,7 +34,7 @@ def run_embedding(consumer, monkeypatch):
     async def open_client(**_kwargs):
         yield Mock()
 
-    monkeypatch.setattr(module, "open_embedding_resources", open_resources)
-    monkeypatch.setattr(module, "open_gemini_client", open_client)
-    monkeypatch.setattr(module, "EmbeddingConsumer", lambda *_args: consumer)
+    monkeypatch.setattr(composition, "open_embedding_resources", open_resources)
+    monkeypatch.setattr(composition, "open_gemini_client", open_client)
+    monkeypatch.setattr(composition, "EmbeddingConsumer", lambda *_args: consumer)
     return partial(module._run_embedding, settings=settings)
