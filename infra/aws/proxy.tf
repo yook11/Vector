@@ -31,6 +31,11 @@ locals {
       unrestricted = local.stages[name].egress_unrestricted
     }
     }, {
+    assessment_consumer = {
+      cidr         = local.assessment_consumer_subnet_cidr
+      domains      = local.egress_vendor_domains.deepseek
+      unrestricted = false
+    }
     embedding_consumer = {
       cidr         = local.embedding_consumer_subnet_cidr
       domains      = local.egress_vendor_domains.gemini
