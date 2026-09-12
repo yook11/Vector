@@ -3,7 +3,7 @@
 import asyncio
 import json
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -21,10 +21,12 @@ async def connect(settings, role):
     host = settings["database"]["address"]
     url = f"postgresql+asyncpg://{role}@{host}:5432/vector?sslmode=require"
     _, tls = split_ssl_from_url(url)
-    with Session().create_client(
-        "rds",
-        region_name="ap-northeast-1",
-        config=Config(proxies={}, ignore_configured_endpoint_urls=True),
+    with closing(
+        Session().create_client(
+            "rds",
+            region_name="ap-northeast-1",
+            config=Config(proxies={}, ignore_configured_endpoint_urls=True),
+        )
     ) as client:
         password = build_iam_password_provider(
             url, region="ap-northeast-1", generate_token=client.generate_db_auth_token
@@ -123,15 +125,17 @@ async def run(settings):
                 raise RuntimeError("target_article_missing")
             return {"embedding": row["embedding"]}
     if operation == "send":
-        with Session().create_client(
-            "sqs",
-            region_name="ap-northeast-1",
-            config=Config(
-                connect_timeout=5,
-                read_timeout=10,
-                retries={"total_max_attempts": 1},
-                ignore_configured_endpoint_urls=True,
-            ),
+        with closing(
+            Session().create_client(
+                "sqs",
+                region_name="ap-northeast-1",
+                config=Config(
+                    connect_timeout=5,
+                    read_timeout=10,
+                    retries={"total_max_attempts": 1},
+                    ignore_configured_endpoint_urls=True,
+                ),
+            )
         ) as sqs:
             result = sqs.send_message(
                 QueueUrl=settings["queue_url"], MessageBody=settings["body"]

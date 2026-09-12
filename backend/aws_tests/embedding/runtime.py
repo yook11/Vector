@@ -5,7 +5,7 @@ import json
 import re
 import shlex
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 from botocore.config import Config
@@ -61,8 +61,10 @@ class EmbeddingRuntime:
             ignore_configured_endpoint_urls=True,
         )
         try:
-            with session.create_client(
-                "sts", region_name="ap-northeast-1", config=config
+            with closing(
+                session.create_client(
+                    "sts", region_name="ap-northeast-1", config=config
+                )
             ) as sts:
                 identity = sts.get_caller_identity()
             if (
@@ -72,13 +74,17 @@ class EmbeddingRuntime:
             ):
                 raise ValueError("test_runner_identity_required")
             self.ssm = self.stack.enter_context(
-                session.create_client(
-                    "ssm", region_name="ap-northeast-1", config=config
+                closing(
+                    session.create_client(
+                        "ssm", region_name="ap-northeast-1", config=config
+                    )
                 )
             )
             self.logs = self.stack.enter_context(
-                session.create_client(
-                    "logs", region_name="ap-northeast-1", config=config
+                closing(
+                    session.create_client(
+                        "logs", region_name="ap-northeast-1", config=config
+                    )
                 )
             )
         except Exception:
