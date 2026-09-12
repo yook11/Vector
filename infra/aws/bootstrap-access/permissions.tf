@@ -10,7 +10,10 @@ locals {
     "vector-chatbot-boundary", "vector-agentcore-gateway-boundary",
     "vector-outbox-relay-lambda-boundary", "vector-outbox-relay-scheduler-boundary",
     "vector-embedding-consumer-lambda-boundary",
+    "vector-assessment-consumer-lambda-boundary",
+    "vector-assessment-outbox-relay-lambda-boundary", "vector-assessment-outbox-relay-scheduler-boundary",
     "vector-ci-apply-outbox", "vector-ci-apply-embedding-consumer", "vector-ci-lambda-config-readback",
+    "vector-ci-apply-assessment-consumer",
   ]
   ci_policy_arns = [for name in local.ci_policy_names : "arn:aws:iam::${local.account_id}:policy/vector-ci/${name}"]
   attachments = {
@@ -23,7 +26,7 @@ locals {
     }
     apply = {
       role = local.ci_role_arns["terraform-apply"]
-      policies = [for name in ["apply-outbox", "apply-embedding-consumer", "lambda-config-readback"] :
+      policies = [for name in ["apply-outbox", "apply-embedding-consumer", "apply-assessment-consumer", "lambda-config-readback"] :
       "arn:aws:iam::${local.account_id}:policy/vector-ci/vector-ci-${name}"]
     }
   }

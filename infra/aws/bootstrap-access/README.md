@@ -17,7 +17,7 @@ bootstrap専用ユーザーが`VectorBootstrap`から引き受けて既存`../bo
 | 対象 | 専用ロールに許す操作 |
 |---|---|
 | `/vector-ci/`の既存CIロール5つ | 作成・更新・削除、trust・inline policy・タグ管理 |
-| bootstrapのmanaged policy 13個 | 内容・バージョン・タグ管理 |
+| bootstrapのmanaged policy 17個 | 内容・バージョン・タグ管理 |
 | managed policyの取り付け | plan/applyそれぞれの既存対応表に限定 |
 | GitHub OIDC provider | `token.actions.githubusercontent.com`の管理 |
 | state bucket | `vector-tfstate-<ACCOUNT_ID>`の設定読取・タグ・versioning・暗号化・public access block・bucket policy更新 |
@@ -120,6 +120,14 @@ preflightはアカウントとロールを検査するが、同じPermission Set
 
 ## 既存bootstrapの更新
 
+Assessmentの追加時は、管理者が既存のbootstrap-accessのstate・tfvarsを使い、
+この構成を先にplan・applyする。追加対象はboundary 3個と
+`vector-ci-apply-assessment-consumer`の管理許可、および後者を
+`vector-ci-terraform-apply`へ取り付ける許可である。
+管理者用の`vector-admin`プロファイルで上記の[初回導入](#初回導入)のplan・applyコマンドを使い、
+既存ロールのinline policy更新であることを確認する。
+その後、以下の専用ロールでbootstrapを更新し、最後に本体のTerraformを適用する。
+
 既存`infra/aws/bootstrap/terraform.tfstate`とtfvarsを保持して、専用ロールで新しいplanを作る。
 別端末へ移るときも、新しい空stateから適用せず、正しい既存stateを引き継ぐ。
 
@@ -141,6 +149,9 @@ AWS_PROFILE=vector-bootstrap-apply terraform -chdir=infra/aws/bootstrap apply bo
 テスト側の最新plan→管理者apply→Manager接続確認を独立して行う。
 
 ## 検証
+
+`../bootstrap`のmanaged policyを追加・変更した場合も、この構成の検証を実行する。
+bootstrap側のmockテストに加え、管理対象一覧・取り付け先・実行ロールのpolicy容量を確認する。
 
 ```bash
 terraform -chdir=infra/aws/bootstrap-access fmt -check -recursive

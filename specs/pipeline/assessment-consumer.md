@@ -345,10 +345,13 @@ plan/applyのCIは`resolve-assessment-images.py`で2つのdigestを独立して�
 
 bootstrapには専用実行ロール・Schedulerロールの権限境界、CIの管理許可・PassRole制約・Lambda設定の限定復号対象を追加した。CI inline policyの容量を超えるため、Outbox relayとAssessmentのboundary固定Denyを`apply_outbox` managed policyへ移した。移設先を適用してからinlineを更新し、全ロールの元のDenyが1件ずつ残ることをモックplanで照合する。容量は実際の形式・長さのARNで検証する。
 
+適用順は管理者によるbootstrap-accessの許可一覧更新、専用ロールによるbootstrap更新、本体の適用とする。追加したmanaged policy 4個の管理許可と、Assessment管理ポリシーをCIのapplyロールへ取り付ける許可が必要である。具体的な手順は[bootstrap-accessの更新手順](../../infra/aws/bootstrap-access/README.md#既存bootstrapの更新)を参照する。
+
 検証の責任は次のとおりとする。
 
 - Terraform本体: Assessmentの入口・キュー/DLQ・通信経路・権限・未起動条件を6件で確認し、既存Embeddingの7件も維持する。
 - bootstrap: Assessmentの権限境界・CI管理範囲と容量・Deny移設の完全性を3件で確認し、既存6件も維持する。
+- bootstrap-access: 管理対象一覧・取り付け先・policy容量と既存の権限制約を9件で確認する。
 - スクリプトとCI: 2つのdigestの独立保持・片側更新・不正stateによる出力停止、実CI shellのstate失敗と両イメージのECR存在確認を11件で確認する。
 - 実AWSの認証・IAM評価・配送・proxy到達・DLQ移動は今回実行していない。アプリの保存・DB接続管理は既存local_testsに任せ、Terraformテストへ複製しない。
 

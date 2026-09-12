@@ -84,6 +84,29 @@ run "bootstrap_inventory_matches_current_resources" {
   }
 }
 
+run "assessment_management_policy_attaches_only_to_apply" {
+  command = plan
+  assert {
+    condition = [for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement :
+      s.Resource if s.Effect == "Allow" &&
+      contains(flatten([s.Action]), "iam:AttachRolePolicy") &&
+      try(contains(s.Condition.ArnEquals["iam:PolicyARN"], "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-apply-assessment-consumer"), false)
+    ] == ["arn:aws:iam::123456789012:role/vector-ci/vector-ci-terraform-apply"]
+    error_message = "Assessment管理ポリシーの取り付けはterraform-applyロールだけに許可する。"
+  }
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement :
+      s.Effect != "Allow" || !contains(flatten([s.Action]), "iam:AttachRolePolicy") ? true :
+      length(setintersection(toset(s.Condition.ArnEquals["iam:PolicyARN"]), toset([
+        "arn:aws:iam::123456789012:policy/vector-ci/vector-assessment-consumer-lambda-boundary",
+        "arn:aws:iam::123456789012:policy/vector-ci/vector-assessment-outbox-relay-lambda-boundary",
+        "arn:aws:iam::123456789012:policy/vector-ci/vector-assessment-outbox-relay-scheduler-boundary",
+      ]))) == 0
+    ])
+    error_message = "Assessmentの実行ロール用boundaryをCIロールの権限として取り付けない。"
+  }
+}
+
 run "destructive_operations_and_secret_reads_are_excluded" {
   command = plan
   assert {
