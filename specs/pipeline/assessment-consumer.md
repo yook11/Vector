@@ -1,6 +1,6 @@
 # AssessmentConsumer — イベント受信と投資判定
 
-Status: 正常終了・失敗理由の契約、Consumer・失敗後処理、資源準備に加え、SQS本文解析と共有イベント契約を実装・検証済み（2026-09-12）。Lambda handler・Consumer呼び出し・Assessment配送への接続とAWS適用は未着手。
+Status: Consumer・資源準備・共有イベント契約・本文解析に加え、Assessment Lambda入口とSQS部分バッチ応答を実装・検証済み（2026-09-12）。Assessment配送とAWSイベントソースへの接続・適用は未着手。
 
 ## Problem
 
@@ -227,3 +227,44 @@ Non-goals: Records構造・messageId検証、Lambda handler、Consumer実行、�
 Done: 正常復元・安全な拒否・既存契約の維持と必要な回帰検証が成功すること。
 
 検証結果: 追加単体テスト30件、app全体・追加テストのRuff lint／format確認が成功。`uv run pytest tests/ -m unit -x -q`は6,612件成功、`make test-integration PYTEST_ARGS="-x -q"`は1,400件成功（skipなし）。既存の非推奨・Logfire関連の警告は残る。DB・Redisの一時環境は終了済み。local_tests・実AWSスモーク・デプロイは今回の範囲外として実行していない。
+
+
+## Lambda入口とSQS部分バッチ応答（2026-09-12）
+
+Problem: 検証済み本文と準備済みConsumerを接続し、SQS受信から実行・応答までを進める。
+Evidence: Embedding handler・FailureRecorder、共通SqsRecordBatch、Assessment compositionと既存の資源管理・入力検証テストを参照した。
+
+### 公開入口と処理順序
+
+- `app/lambda_handlers/assessment/handler.py`の同期`handler(lambda_event, context)`をパッケージからも公開する。返値は`{"batchItemFailures": [{"itemIdentifier": message_id}]}`形式のTypedDict。
+- 共通ログ設定 → AssessmentConsumerSettings → asyncio.run → open_assessment_consumer → SqsRecordBatch検証 → 各本文の取得・解析 → consumer.consume(event.payload) → 利用範囲終了 → 応答の順に進む。
+- Consumerと資源はバッチにつき1回準備し、レコードを入力順に逐次処理する。空バッチ・構造不正でも準備を先に行い、空バッチでは空の失敗一覧を返す。
+- 各Consumer処理の既存60秒制限を維持する。入口に時間制限・再試行・Taskiq投入・通知を追加しない。
+
+### 応答と診断
+
+| 結末 | 入口の扱い |
+|---|---|
+| 設定失敗 | settings段階の初期化診断後、同じ例外を再送出 |
+| compositionの初期化失敗 | 既存診断へ任せ、入口で二重記録せず伝播 |
+| Records構造・messageIdの不正 | バッチ診断後に例外を再送出し、Consumerを呼ばない |
+| 個別本文・イベントの不正 | そのmessageIdを失敗一覧へ追加し、次へ進む |
+| 解析の想定外例外・Consumerの通常例外 | そのmessageIdを失敗一覧へ追加し、次へ進む |
+| IN_SCOPE・OUT_OF_SCOPE・ALREADY_ASSESSED | すべて成功ログを記録し、失敗一覧へ含めない |
+
+- 部分応答には入力順のmessageIdを加工せず載せる。初期化・構造不正では全件の失敗応答を合成しない。キャンセル・プロセス終了は個別失敗へ変換しない。
+- `AssessmentLambdaFailureRecorder`がassessment_sqs_input_invalid、assessment_message_input_invalid、assessment_message_failedを記録する。構造不正はreason・field・record_index、個別入力不正はmessage_id・reason・安全なissues、処理失敗はmessage_id・error_classを持つ。本文取得失敗のreasonはinvalid_body。
+- 検証済みイベントがある処理失敗にはevent_id・curation_id・analyzable_article_idを付ける。正常ログassessment_message_completedは同じ識別情報とreason=completion.kind.valueを持つ。
+- イベント由来IDは配送診断に限定し、DB監査の主語へ補完しない。本文・例外の自由文をログへ出さず、通常のログ障害で結果・例外を変えない。
+- 成功・失敗監査、メトリクス、Outboxは既存Consumer／Serviceへ任せる。クライアント・DBなどの終了も既存compositionの責任とし、入口から重複実行しない。
+
+### 検証の責任と未接続部分
+
+新規単体テストは7ケース。4件の正常な入力を成功・失敗・成功・失敗として処理し、失敗した2件のmessageIdだけを返すこと、同じConsumerへのpayloadの受け渡し、借用範囲終了後の応答、空バッチと代表的なID不正、設定とcompositionの失敗境界、安全な診断とログ障害、解析の想定外例外、処理中キャンセルを確認する。入力の細かな組合せ・初期化の全段階・個別資源の終了順序・DB保存と監査は既存テストへ任せる。
+
+Non-goals: Assessment送信ルート、AWSイベントソース・ReportBatchItemFailuresの設定、IAM・デプロイ、Taskiq停止、一覧通知の移設は未実施。DB schema・依存・既存Consumerと資源管理の契約は変更しない。新規DBテスト・local_testsのシナリオは追加しない。
+Done: 正常終了・個別失敗・バッチ失敗を適切に応答／伝播し、必要な接続テストと回帰検証が成功すること。
+
+検証結果: 実装時点では新規8ケースを含む関連単体テスト72件が成功。app全体・追加テストのRuff lint／format確認、`uv run pytest tests/ -m unit -x -q`の6,620件、`make test-integration PYTEST_ARGS="-x -q"`の1,400件が成功した。既存の非推奨・Logfire関連の警告は残る。一時DB・Redisは終了済み。local_tests・実AWSスモーク・デプロイは今回の範囲外として実行していない。
+
+PR作成前に混在バッチのテストを整理した。messageIdをテスト内に明示し、Consumerが4回処理されたことと失敗した2件だけの応答を確認する。修正後の対象テスト1件とRuff lint／format確認は成功。製品コードは変更せず、全体の成功済み検証は再実行していない。

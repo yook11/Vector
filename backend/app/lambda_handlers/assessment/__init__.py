@@ -1,1 +1,3 @@
-"""Assessment実行に必要なLambda側の資源を準備する。"""
+"""Assessmentを実行するLambdaの公開入口。"""
+
+from .handler import handler as handler
