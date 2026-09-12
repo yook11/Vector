@@ -1,370 +1,461 @@
-"""Lambda入口の資源共有・初期化失敗・終了後の応答を検証する。"""
+"""Embedding入口の入力の受け渡し・失敗範囲・処理順を確認する。"""
 
 import asyncio
+import json
+from contextlib import asynccontextmanager
 from importlib import import_module
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
-import httpx
 import pytest
 from pydantic import SecretStr
-from structlog.testing import capture_logs
 
-from app.ai_providers.gemini import client as gemini_module
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
+from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.embedding.embedder import GeminiEmbedder
-from app.analysis.embedding.service import (
-    EmbeddingCompletion,
-)
-from app.lambda_handlers.embedding import resources as resource_module
-from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
-from app.lambda_handlers.sqs.errors import SqsInputError
-from tests.lambda_handlers.test_embedding import record
+from app.analysis.embedding.service import EmbeddingCompletion
+from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
 
 module = import_module("app.lambda_handlers.embedding.handler")
-
 pytestmark = pytest.mark.unit
+
+
+def valid_body(*, curation_id=11, analyzed_article_id=101):
+    return json.dumps(
+        {
+            "event_id": "00000000-0000-0000-0000-000000000001",
+            "event_type": "article.assessed_in_scope",
+            "schema_version": 1,
+            "occurred_at": "2026-09-12T00:00:00Z",
+            "payload": {
+                "curation_id": curation_id,
+                "analyzed_article_id": analyzed_article_id,
+            },
+        }
+    )
 
 
 @pytest.fixture
 def wiring(monkeypatch):
+    state = SimpleNamespace(
+        order=[],
+        settings=object(),
+        consumer=SimpleNamespace(
+            consume=AsyncMock(return_value=EmbeddingCompletion.SAVED)
+        ),
+        log=Mock(),
+    )
+    state.resources = SimpleNamespace(
+        session_factory=Mock(), gemini_api_key=SecretStr("test-key")
+    )
+    state.client = Mock()
+
+    @asynccontextmanager
+    async def open_resources(settings):
+        state.order.append("resources_open")
+        try:
+            yield state.resources
+        finally:
+            state.order.append("resources_close")
+
+    @asynccontextmanager
+    async def open_client(**kwargs):
+        state.order.append("client_open")
+        try:
+            yield state.client
+        finally:
+            state.order.append("client_close")
+
+    state.open_resources = Mock(side_effect=open_resources)
+    state.open_client = Mock(side_effect=open_client)
+    state.constructor = Mock(return_value=state.consumer)
+    monkeypatch.setattr(module, "open_embedding_resources", state.open_resources)
+    monkeypatch.setattr(module, "open_gemini_client", state.open_client)
+    monkeypatch.setattr(module, "EmbeddingConsumer", state.constructor)
+    state.settings_factory = Mock(return_value=state.settings)
+    monkeypatch.setattr(module, "EmbeddingConsumerSettings", state.settings_factory)
+    monkeypatch.setattr(module, "logger", state.log)
     monkeypatch.setattr(module, "setup_lambda_logging", Mock())
-    config = EmbeddingConsumerSettings(
-        env="test",
-        aws_region="ap-northeast-1",
-        database_url="postgresql+asyncpg://test@db.invalid/vector",
-        db_iam_auth=True,
-        gemini_api_key_parameter_path="/test/gemini-key",
-    )
-    rds_session = Mock()
-    monkeypatch.setattr(resource_module, "Session", Mock(return_value=rds_session))
-    steps = []
-    engines, sdks, http_clients, consumers = [], [], [], []
-    secret = Mock(side_effect=lambda **_: SecretStr(f"private-key-{len(engines)}"))
-    monkeypatch.setattr(resource_module, "get_secret_parameter", secret)
-
-    def create_engine(*args, **kwargs):
-        steps.append("engine_open")
-        engine = SimpleNamespace(
-            dispose=AsyncMock(side_effect=lambda: steps.append("engine_close"))
-        )
-        engines.append(engine)
-        return engine
-
-    engine_factory = Mock(side_effect=create_engine)
-    monkeypatch.setattr(
-        resource_module, "create_embedding_consumer_engine", engine_factory
-    )
-    monkeypatch.setattr(
-        resource_module, "caller_managed_session_factory", lambda _: Mock()
-    )
-
-    def create_http(**kwargs):
-        steps.append("http_open")
-        http = Mock(
-            spec=httpx.AsyncClient,
-            aclose=AsyncMock(side_effect=lambda: steps.append("http_close")),
-        )
-        http_clients.append(http)
-        return http
-
-    monkeypatch.setattr(gemini_module, "make_external_async_client", create_http)
-
-    def create_sdk(**kwargs):
-        steps.append("sdk_open")
-        sdk = SimpleNamespace(
-            aio=SimpleNamespace(
-                aclose=AsyncMock(side_effect=lambda: steps.append("aio_close"))
-            ),
-            close=Mock(side_effect=lambda: steps.append("sdk_close")),
-        )
-        sdks.append(sdk)
-        return sdk
-
-    sdk_factory = Mock(side_effect=create_sdk)
-    monkeypatch.setattr(gemini_module.genai, "Client", sdk_factory)
-
-    def create_consumer(factory, embedder):
-        assert isinstance(embedder, GeminiEmbedder)
-        assert embedder._client is sdks[-1].aio
-        consumer = SimpleNamespace(
-            consume=AsyncMock(return_value=EmbeddingCompletion.SAVED),
-            session_factory=factory,
-        )
-        consumers.append(consumer)
-        return consumer
-
-    constructor = Mock(side_effect=create_consumer)
-    monkeypatch.setattr(module, "EmbeddingConsumer", constructor)
-    settings_factory = Mock(return_value=config)
-    monkeypatch.setattr(module, "EmbeddingConsumerSettings", settings_factory)
-    return SimpleNamespace(
-        config=config,
-        steps=steps,
-        engines=engines,
-        sdks=sdks,
-        http_clients=http_clients,
-        consumers=consumers,
-        secret=secret,
-        engine_factory=engine_factory,
-        sdk_factory=sdk_factory,
-        constructor=constructor,
-        settings_factory=settings_factory,
-    )
+    return state
 
 
-def test_handler_recreates_resources_and_closes_before_return(wiring):
-    """同期入口の連続呼び出しが別の資源を所有する。"""
-    for i in range(2):
-        assert module.handler({"Records": [record(), record("second")]}, object()) == {
-            "batchItemFailures": []
-        }
-        assert wiring.steps[i * 7 :] == [
-            "engine_open",
-            "http_open",
-            "sdk_open",
-            "aio_close",
-            "sdk_close",
-            "http_close",
-            "engine_close",
+def test_batch_reports_only_failed_message_ids(wiring):
+    """成功したメッセージを含めず、失敗したIDだけを入力順で返す。"""
+    body = valid_body()
+    messages = [
+        {"messageId": "saved-before", "body": body},
+        {"messageId": "failed-first", "body": body},
+        {"messageId": "saved-after", "body": body},
+        {"messageId": "failed-last", "body": body},
+    ]
+    wiring.consumer.consume.side_effect = [
+        EmbeddingCompletion.SAVED,
+        RuntimeError("first-failure"),
+        EmbeddingCompletion.SAVED,
+        RuntimeError("last-failure"),
+    ]
+
+    response = module.handler({"Records": messages}, None)
+
+    assert wiring.consumer.consume.await_count == 4
+    assert response == {
+        "batchItemFailures": [
+            {"itemIdentifier": "failed-first"},
+            {"itemIdentifier": "failed-last"},
         ]
-        assert wiring.consumers[i].consume.await_count == 2
-    assert wiring.secret.call_count == wiring.settings_factory.call_count == 2
-    assert wiring.engines[0] is not wiring.engines[1]
-    assert wiring.sdks[0].aio is not wiring.sdks[1].aio
-    assert (
-        wiring.consumers[0].session_factory is not wiring.consumers[1].session_factory
-    )
-    assert [c.kwargs["api_key"] for c in wiring.sdk_factory.call_args_list] == [
-        "private-key-0",
-        "private-key-1",
+    }
+
+
+def test_each_payload_is_passed_to_the_shared_consumer(wiring):
+    """異なる入力のpayloadを、バッチで共有するConsumerへそのまま渡す。"""
+    messages = [
+        {
+            "messageId": "first",
+            "body": valid_body(curation_id=11, analyzed_article_id=101),
+        },
+        {
+            "messageId": "second",
+            "body": valid_body(curation_id=22, analyzed_article_id=202),
+        },
+    ]
+
+    module.handler({"Records": messages}, None)
+
+    wiring.constructor.assert_called_once()
+    assert wiring.consumer.consume.await_args_list == [
+        call(ArticleAssessedInScope(curation_id=11, analyzed_article_id=101)),
+        call(ArticleAssessedInScope(curation_id=22, analyzed_article_id=202)),
     ]
 
 
+@pytest.mark.asyncio
+async def test_messages_finish_sequentially_in_input_order(wiring):
+    """先行メッセージの完了を待ってから、次のメッセージを処理する。"""
+    messages = [
+        {
+            "messageId": "first",
+            "body": valid_body(curation_id=11, analyzed_article_id=101),
+        },
+        {
+            "messageId": "second",
+            "body": valid_body(curation_id=22, analyzed_article_id=202),
+        },
+    ]
+    steps = []
+
+    async def consume(payload):
+        steps.append(("start", payload.curation_id))
+        await asyncio.sleep(0)
+        steps.append(("end", payload.curation_id))
+        return EmbeddingCompletion.SAVED
+
+    wiring.consumer.consume.side_effect = consume
+
+    await module._run_embedding({"Records": messages}, wiring.settings)
+
+    assert steps == [("start", 11), ("end", 11), ("start", 22), ("end", 22)]
+
+
+def test_empty_batch_completes_without_consumption(wiring):
+    """空バッチはConsumerを実行せず、空の失敗一覧を返す。"""
+    response = module.handler({"Records": []}, None)
+
+    assert response == {"batchItemFailures": []}
+    wiring.consumer.consume.assert_not_awaited()
+    wiring.constructor.assert_called_once()
+
+
+def test_invalid_message_id_rejects_batch_before_consumption(wiring):
+    """後続のIDが欠けていたら、先行分も処理せずバッチ全体を失敗にする。"""
+    body = valid_body()
+    messages = [{"messageId": "valid", "body": body}, {"body": body}]
+
+    with pytest.raises(SqsInputError):
+        module.handler({"Records": messages}, None)
+
+    wiring.consumer.consume.assert_not_awaited()
+    wiring.constructor.assert_called_once()
+    wiring.log.warning.assert_called_once_with(
+        "embedding_sqs_input_invalid",
+        reason="missing_required_field",
+        field="messageId",
+        record_index=1,
+    )
+
+
 @pytest.mark.parametrize(
-    ("failed_article_ids", "expected_ids"),
+    "invalid_message",
     [
-        ([], []),
-        ([1, 3], [" msg-1 ", "msg-3"]),
-        ([1, 2, 3], [" msg-1 ", "msg-2", "msg-3"]),
+        pytest.param({"messageId": "invalid"}, id="missing-body"),
+        pytest.param({"messageId": "invalid", "body": "not-json"}, id="invalid-json"),
+        pytest.param(
+            {"messageId": "invalid", "body": valid_body(curation_id=0)},
+            id="invalid-event",
+        ),
     ],
 )
-def test_handler_reports_only_failed_ids_in_aws_format(
-    wiring, failed_article_ids, expected_ids
-):
-    """公開入口が失敗IDの順序と原文を保ち、資源終了後にAWS応答を返す。"""
-    original = wiring.constructor.side_effect
+def test_invalid_message_does_not_prevent_following_message(wiring, invalid_message):
+    """本文・イベント不正はそのメッセージだけの失敗とし、後続を処理する。"""
+    messages = [invalid_message, {"messageId": "following", "body": valid_body()}]
 
-    def create(*args):
-        consumer = original(*args)
+    response = module.handler({"Records": messages}, None)
 
-        async def consume(payload):
-            if payload.analyzed_article_id in failed_article_ids:
-                raise RuntimeError("processing_failed")
-            return EmbeddingCompletion.SAVED
-
-        consumer.consume.side_effect = consume
-        return consumer
-
-    wiring.constructor.side_effect = create
-    response = module.handler(
-        {"Records": [record(" msg-1 ", 1), record("msg-2", 2), record("msg-3", 3)]},
-        None,
+    assert response == {"batchItemFailures": [{"itemIdentifier": "invalid"}]}
+    wiring.consumer.consume.assert_awaited_once_with(
+        ArticleAssessedInScope(curation_id=11, analyzed_article_id=101)
     )
-    assert response == {
-        "batchItemFailures": [
-            {"itemIdentifier": message_id} for message_id in expected_ids
-        ]
-    }
-    assert wiring.consumers[0].consume.await_count == 3
-    assert wiring.steps[-4:] == ["aio_close", "sdk_close", "http_close", "engine_close"]
+
+
+def test_duplicate_id_is_rejected_before_reading_bodies(wiring):
+    """本文欠落を個別処理する前に、重複IDをバッチ全体の失敗にする。"""
+    messages = [
+        {"messageId": "duplicate"},
+        {"messageId": "duplicate", "body": valid_body()},
+    ]
+
+    with pytest.raises(SqsInputError) as caught:
+        module.handler({"Records": messages}, None)
+
+    assert caught.value.reason is SqsInputReason.DUPLICATE_MESSAGE_ID
+    wiring.consumer.consume.assert_not_awaited()
+
+
+def test_failed_message_id_is_not_trimmed(wiring):
+    """失敗IDの前後の空白を除去せず、そのまま返す。"""
+    wiring.consumer.consume.side_effect = RuntimeError("processing-failed")
+
+    response = module.handler(
+        {"Records": [{"messageId": " failed ", "body": valid_body()}]}, None
+    )
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": " failed "}]}
 
 
 @pytest.mark.parametrize(
-    "event", [{"Records": []}, {}, {"Records": [record(), record()]}]
+    "completion,reason",
+    [
+        (EmbeddingCompletion.SAVED, "saved"),
+        (EmbeddingCompletion.ALREADY_EMBEDDED, "already_embedded"),
+    ],
 )
-def test_empty_or_invalid_input_is_handled_after_initialization(wiring, event):
-    """空入力も配送構造不正も初期化を先に完了する。"""
-    with capture_logs() as logs:
-        if event == {"Records": []}:
-            assert module.handler(event, None) == {"batchItemFailures": []}
-        else:
-            with pytest.raises(SqsInputError):
-                module.handler(event, None)
-    wiring.consumers[0].consume.assert_not_awaited()
-    assert wiring.steps[-4:] == ["aio_close", "sdk_close", "http_close", "engine_close"]
-    assert not any(log["event"] == "embedding_initialization_failed" for log in logs)
+def test_completion_is_successful_with_its_reason(wiring, completion, reason):
+    """Consumerの正常完了は失敗一覧に入れず、完了理由を記録する。"""
+    wiring.consumer.consume.return_value = completion
+
+    response = module.handler(
+        {"Records": [{"messageId": "completed", "body": valid_body()}]}, None
+    )
+
+    assert response == {"batchItemFailures": []}
+    wiring.log.info.assert_called_once_with(
+        "embedding_message_completed",
+        message_id="completed",
+        event_id="00000000-0000-0000-0000-000000000001",
+        analyzed_article_id=101,
+        reason=reason,
+    )
+
+
+def test_message_logging_failure_does_not_change_batch_result(wiring):
+    """成功・失敗の診断が壊れても、各メッセージの処理結果を変えない。"""
+    body = valid_body()
+    messages = [
+        {"messageId": "failed", "body": body},
+        {"messageId": "following", "body": body},
+    ]
+    wiring.consumer.consume.side_effect = [
+        RuntimeError("processing-failed"),
+        EmbeddingCompletion.SAVED,
+    ]
+    wiring.log.warning.side_effect = RuntimeError("warning-failed")
+    wiring.log.info.side_effect = RuntimeError("info-failed")
+
+    response = module.handler({"Records": messages}, None)
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "failed"}]}
+    assert wiring.consumer.consume.await_count == 2
+
+
+def test_input_logging_failure_does_not_replace_batch_error(wiring):
+    """入力不正の診断が壊れても、バッチ検証の失敗をそのまま伝える。"""
+    wiring.log.warning.side_effect = RuntimeError("logging-failed")
+
+    with pytest.raises(SqsInputError):
+        module.handler({"Records": [{"body": valid_body()}]}, None)
+
+    wiring.consumer.consume.assert_not_awaited()
+
+
+def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
+    """想定外の解析障害も、そのメッセージだけの失敗として後続を処理する。"""
+    body = valid_body()
+    parsed = module.parse_assessed_in_scope_event(body)
+    monkeypatch.setattr(
+        module,
+        "parse_assessed_in_scope_event",
+        Mock(side_effect=[RuntimeError("private-parser"), parsed]),
+    )
+    messages = [
+        {"messageId": "parse-failed", "body": body},
+        {"messageId": "following", "body": body},
+    ]
+
+    response = module.handler({"Records": messages}, None)
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "parse-failed"}]}
+    wiring.consumer.consume.assert_awaited_once_with(parsed.payload)
+    wiring.log.warning.assert_called_once_with(
+        "embedding_message_failed",
+        message_id="parse-failed",
+        error_class="builtins.RuntimeError",
+    )
+
+
+def test_invalid_event_does_not_reuse_previous_event_in_diagnostics(wiring):
+    """解析できないメッセージの診断に、直前のイベント情報や本文を混入させない。"""
+    messages = [
+        {"messageId": "saved", "body": valid_body()},
+        {"messageId": "invalid", "body": "private-invalid-json"},
+    ]
+
+    module.handler({"Records": messages}, None)
+
+    wiring.log.warning.assert_called_once_with(
+        "embedding_message_input_invalid",
+        message_id="invalid",
+        reason="invalid_json",
+        issues=[],
+    )
+
+
+def test_processing_failure_log_uses_only_verified_identifiers(wiring):
+    """処理失敗の診断には検証済みの識別子を載せ、例外の自由文を残さない。"""
+    wiring.consumer.consume.side_effect = RuntimeError("private-exception")
+
+    module.handler({"Records": [{"messageId": "failed", "body": valid_body()}]}, None)
+
+    wiring.log.warning.assert_called_once_with(
+        "embedding_message_failed",
+        message_id="failed",
+        event_id="00000000-0000-0000-0000-000000000001",
+        analyzed_article_id=101,
+        error_class="builtins.RuntimeError",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "interruption", [asyncio.CancelledError(), KeyboardInterrupt(), SystemExit()]
+)
+async def test_control_exception_stops_batch(wiring, interruption):
+    """キャンセル・終了要求は個別失敗に変換せず、後続処理を止めて伝播する。"""
+    wiring.consumer.consume.side_effect = interruption
+    body = valid_body()
+    messages = [
+        {"messageId": "interrupted", "body": body},
+        {"messageId": "unprocessed", "body": body},
+    ]
+
+    with pytest.raises(type(interruption)) as caught:
+        await module._run_embedding({"Records": messages}, wiring.settings)
+
+    assert caught.value is interruption
+    wiring.consumer.consume.assert_awaited_once()
+    wiring.log.warning.assert_not_called()
+
+
+def test_handler_wires_borrowed_resources_to_consumer(wiring):
+    """準備したDB資源とGeminiクライアントをConsumerへ接続する。"""
+    module.handler({"Records": []}, None)
+
+    wiring.open_resources.assert_called_once_with(wiring.settings)
+    wiring.open_client.assert_called_once_with(
+        api_key=wiring.resources.gemini_api_key, settings=GeminiConnectionSettings()
+    )
+    factory, embedder = wiring.constructor.call_args.args
+    assert factory is wiring.resources.session_factory
+    assert isinstance(embedder, GeminiEmbedder)
+    assert embedder._client is wiring.client
 
 
 @pytest.mark.parametrize(
-    "stage", ["settings", "resources", "gemini_client", "consumer"]
+    "dependency,stage",
+    [
+        ("settings_factory", "settings"),
+        ("open_resources", "resources"),
+        ("open_client", "gemini_client"),
+        ("constructor", "consumer"),
+    ],
 )
-@pytest.mark.parametrize("log_fails", [False, True])
-def test_initialization_failure_propagates_and_closes_created_resources(
-    wiring, monkeypatch, stage, log_fails
-):
-    """初期化障害は入力が空でも失敗とし、ログ障害で元の例外を変えない。"""
-    failure = RuntimeError("private-key private-url private-event")
-    {
-        "settings": wiring.settings_factory,
-        "resources": wiring.secret,
-        "gemini_client": wiring.sdk_factory,
-        "consumer": wiring.constructor,
-    }[stage].side_effect = failure
-    log = Mock(side_effect=RuntimeError("private-log") if log_fails else None)
-    monkeypatch.setattr(module.logger, "warning", log)
+def test_initialization_failure_aborts_entire_batch(wiring, dependency, stage):
+    """初期化失敗は個別応答にせず、発生段階を記録して元の例外を伝える。"""
+    original = RuntimeError("private-initialization")
+    getattr(wiring, dependency).side_effect = original
+
     with pytest.raises(RuntimeError) as caught:
-        module.handler({"Records": []}, None)
-    assert caught.value is failure
-    log.assert_called_once_with(
+        module.handler(
+            {"Records": [{"messageId": "unprocessed", "body": valid_body()}]}, None
+        )
+
+    assert caught.value is original
+    wiring.consumer.consume.assert_not_awaited()
+    wiring.log.warning.assert_called_once_with(
         "embedding_initialization_failed",
         stage=stage,
         error_class="builtins.RuntimeError",
     )
-    assert "private-" not in repr(log.call_args_list)
-    if stage in ("settings", "resources"):
-        assert not wiring.engines
-    else:
-        wiring.engines[0].dispose.assert_awaited_once()
-        wiring.http_clients[0].aclose.assert_awaited_once()
-    if stage == "consumer":
-        wiring.sdks[0].aio.aclose.assert_awaited_once()
-        wiring.sdks[0].close.assert_called_once()
-    assert not wiring.consumers
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("cancel_at", ["resources", "consumer", "processing"])
-async def test_cancellation_propagates_without_initialization_failure_log(
-    wiring, cancel_at
-):
-    """キャンセルを通常の失敗へ変換せず、開いた資源を閉じる。"""
-    cancellation = asyncio.CancelledError()
-    if cancel_at == "resources":
-        wiring.secret.side_effect = cancellation
-    elif cancel_at == "consumer":
-        wiring.constructor.side_effect = cancellation
-    else:
-        original = wiring.constructor.side_effect
+def test_initialization_log_failure_preserves_original_exception(wiring):
+    """初期化失敗の診断が壊れても、元の例外を置き換えない。"""
+    original = RuntimeError("settings-failed")
+    wiring.settings_factory.side_effect = original
+    wiring.log.warning.side_effect = RuntimeError("log-failed")
 
-        def create(*args):
-            consumer = original(*args)
-            consumer.consume.side_effect = cancellation
-            return consumer
+    with pytest.raises(RuntimeError) as caught:
+        module.handler({"Records": []}, None)
 
-        wiring.constructor.side_effect = create
-    with capture_logs() as logs, pytest.raises(asyncio.CancelledError) as caught:
-        await module._run_embedding({"Records": [record()]}, wiring.config)
-    assert caught.value is cancellation
-    assert logs == []
-    if wiring.engines:
-        assert wiring.steps[-4:] == [
-            "aio_close",
-            "sdk_close",
-            "http_close",
-            "engine_close",
-        ]
+    assert caught.value is original
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("processing_failure", [False, True])
-async def test_cleanup_and_log_failures_preserve_processing_result(
-    wiring, monkeypatch, processing_failure
-):
-    """実資源管理の終了障害を通して応答と先行例外を維持する。"""
-    original = wiring.constructor.side_effect
-    failure = RuntimeError("private-processing")
+def test_consumer_initialization_failure_leaves_opened_scopes(wiring):
+    """Consumerを作れなかった場合も、すでに開いた利用範囲を逆順に閉じる。"""
+    wiring.constructor.side_effect = RuntimeError("consumer-failed")
 
-    def create(*args):
-        consumer = original(*args)
-        for close in (
-            wiring.engines[-1].dispose,
-            wiring.http_clients[-1].aclose,
-            wiring.sdks[-1].aio.aclose,
-            wiring.sdks[-1].close,
-        ):
-            close.side_effect = RuntimeError("private-cleanup")
-        return consumer
+    with pytest.raises(RuntimeError):
+        module.handler({"Records": []}, None)
 
-    wiring.constructor.side_effect = create
-    for logger in (module.logger, resource_module.logger, gemini_module.logger):
-        monkeypatch.setattr(
-            logger, "warning", Mock(side_effect=RuntimeError("private-log"))
-        )
-    if processing_failure:
-        monkeypatch.setattr(
-            module.SqsRecordBatch, "from_lambda_event", Mock(side_effect=failure)
-        )
-        with pytest.raises(RuntimeError) as caught:
-            await module._run_embedding({"Records": [record()]}, wiring.config)
-        assert caught.value is failure
-    else:
-        assert await module._run_embedding({"Records": []}, wiring.config) == []
-    wiring.engines[0].dispose.assert_awaited_once()
-    wiring.http_clients[0].aclose.assert_awaited_once()
-    wiring.sdks[0].aio.aclose.assert_awaited_once()
-    wiring.sdks[0].close.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_mixed_messages_share_consumer_and_continue_in_order(wiring, monkeypatch):
-    """個別失敗の後も同じConsumerで入力順に処理する。"""
-    original = wiring.constructor.side_effect
-    seen = []
-
-    def create(*args):
-        consumer = original(*args)
-
-        async def consume(payload):
-            seen.append(payload.analyzed_article_id)
-            await asyncio.sleep(0)
-            if payload.analyzed_article_id == 2:
-                raise RuntimeError("private")
-            return (
-                EmbeddingCompletion.SAVED
-                if payload.analyzed_article_id == 1
-                else EmbeddingCompletion.ALREADY_EMBEDDED
-            )
-
-        consumer.consume.side_effect = consume
-        return consumer
-
-    wiring.constructor.side_effect = create
-    gemini_open = Mock(wraps=module.open_gemini_client)
-    monkeypatch.setattr(module, "open_gemini_client", gemini_open)
-    with capture_logs() as logs:
-        failed_items = await module._run_embedding(
-            {"Records": [record(str(i), i) for i in (1, 2, 3)]}, wiring.config
-        )
-    assert failed_items == [{"itemIdentifier": "2"}]
-    assert seen == [1, 2, 3]
-    wiring.constructor.assert_called_once()
-    assert gemini_open.call_args.kwargs["settings"] == GeminiConnectionSettings()
-    assert [log["event"] for log in logs] == [
-        "embedding_message_completed",
-        "embedding_message_failed",
-        "embedding_message_completed",
+    assert wiring.order == [
+        "resources_open",
+        "client_open",
+        "client_close",
+        "resources_close",
     ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [asyncio.CancelledError(), SystemExit(1)])
-async def test_shutdown_control_exceptions_propagate_and_close_remaining_resources(
-    wiring, failure
-):
-    """終了中のキャンセル・プロセス終了も伝播し、残りの資源終了を試みる。"""
-    original = wiring.constructor.side_effect
+async def test_initialization_cancellation_is_not_a_business_failure(wiring):
+    """初期化中のキャンセルは通常の失敗診断へ変換せず伝播する。"""
+    original = asyncio.CancelledError()
+    wiring.open_client.side_effect = original
 
-    def create(*args):
-        consumer = original(*args)
-        wiring.sdks[-1].aio.aclose.side_effect = failure
-        return consumer
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await module._run_embedding({"Records": []}, wiring.settings)
 
-    wiring.constructor.side_effect = create
-    with capture_logs() as logs, pytest.raises(type(failure)) as caught:
-        await module._run_embedding({"Records": []}, wiring.config)
-    assert caught.value is failure
-    assert logs == []
-    wiring.sdks[0].close.assert_called_once()
-    wiring.http_clients[0].aclose.assert_awaited_once()
-    wiring.engines[0].dispose.assert_awaited_once()
+    assert caught.value is original
+    wiring.log.warning.assert_not_called()
+    assert wiring.order == ["resources_open", "resources_close"]
+
+
+@pytest.mark.asyncio
+async def test_processing_cancellation_leaves_borrowed_scopes(wiring):
+    """処理中キャンセルでも、準備した資源の利用範囲を閉じて伝播する。"""
+    wiring.consumer.consume.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await module._run_embedding(
+            {"Records": [{"messageId": "cancelled", "body": valid_body()}]},
+            wiring.settings,
+        )
+
+    assert wiring.order[-2:] == ["client_close", "resources_close"]

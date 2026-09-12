@@ -92,3 +92,36 @@ def test_shared_records_load_without_embedding_or_application_settings():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "event",
+    [None, [], {}, {"Records": None}, {"Records": {}}, {"Records": "private-input"}],
+)
+def test_invalid_delivery_structure_is_rejected(event):
+    """配送構造が不正なら、入力値を保持しない検証例外として拒否する。"""
+    with pytest.raises(SqsInputError) as caught:
+        SqsRecordBatch.from_lambda_event(event)
+
+    assert "private-input" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "invalid_record",
+    [
+        None,
+        {},
+        {"messageId": None},
+        {"messageId": 3},
+        {"messageId": " "},
+        {"messageId": ""},
+    ],
+)
+def test_invalid_message_id_reports_record_position(invalid_record):
+    """不正なレコードの位置を示し、バッチとして受け付けない。"""
+    messages = [{"messageId": "valid", "body": "body"}, invalid_record]
+
+    with pytest.raises(SqsInputError) as caught:
+        SqsRecordBatch.from_lambda_event({"Records": messages})
+
+    assert caught.value.record_index == 1

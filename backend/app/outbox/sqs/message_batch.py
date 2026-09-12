@@ -3,10 +3,9 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.outbox.publishing.errors import PublishPhase
+from app.outbox.publishing.error_mapping import publish_preparation_error_from_exception
 from app.outbox.publishing.publisher import PublishFailed
 from app.outbox.publishing.route import EventMessage
-from app.outbox.sqs.error_mapping import publish_error_from_exception
 from app.outbox.sqs.message import MAX_MESSAGE_BYTES, SqsMessage
 
 
@@ -37,9 +36,7 @@ class SqsMessageBatch:
                 failures.append(
                     PublishFailed(
                         message.event_id,
-                        publish_error_from_exception(
-                            exc, phase=PublishPhase.PREPARE_EVENT
-                        ),
+                        publish_preparation_error_from_exception(exc),
                     )
                 )
         if (

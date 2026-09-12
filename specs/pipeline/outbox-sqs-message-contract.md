@@ -4,7 +4,7 @@ Status: Partially implemented
 
 ## Problem
 
-保存済みOutboxイベントの検証・本文生成・配送先を配送定義で結び付け、共通SQS送信から工程固有の依存を分離する。有効な配送はベクトル生成向けだけとし、イベントごとの受付成功・送信失敗を呼び出し元へ返す。
+保存済みOutboxイベントの検証・本文生成・配送先を配送定義で結び付け、共通SQS送信から工程固有の依存を分離する。Assessment向けとEmbedding向けに別々のLambda入口を用意し、イベントごとの受付成功・送信失敗を呼び出し元へ返す。
 
 ## Evidence
 
@@ -40,7 +40,7 @@ MessageBodyは次の5項目を持つJSONオブジェクトとする。
 
 ### 送信先
 
-Standardキューを使用し、event_typeから送信先を決定する。Queue URLは設定層から取得し、payloadには含めない。以下は工程全体の送信先対応であり、実装済みは`article.assessed_in_scope`から`article-embedding`への送信だけである。
+Standardキューを使用し、event_typeから送信先を決定する。Queue URLは設定層から取得し、payloadには含めない。以下は工程全体の送信先対応であり、コード上の配送入口は`article.curated_signal`から`article-assessment`、`article.assessed_in_scope`から`article-embedding`への2種類を実装している。Assessment向けの別Lambdaと定期起動はAWSへ未接続。
 
 | event_type | キューの接尾辞 |
 |---|---|
@@ -50,7 +50,7 @@ Standardキューを使用し、event_typeから送信先を決定する。Queue
 | `article.curated_signal` | `article-assessment` |
 | `article.assessed_in_scope` | `article-embedding` |
 
-実際のキュー名には既存の`name_prefix`を付ける。relayの組み立てが`EventDeliveryRoute`を所有し、`ArticleAssessedInScope.EVENT_TYPE`・`settings.sqs_article_embedding_queue_url`・`build_assessed_in_scope_message`の対応を1か所で定義する。同じ定義をPublisherとrelayの取得条件に渡す。未登録種別の取得や複数配送先の巡回は行わない。停止・再試行の判断は別途定める。
+実際のキュー名には既存の`name_prefix`を付ける。用途別のLambda入口が`EventDeliveryRoute`を所有し、イベント種別・自分のキューURL・本文生成処理の対応を各入口で1か所に定義する。同じ定義をPublisherとrelayの取得条件に渡す。未登録種別の取得や複数配送先の巡回は行わない。停止・再試行の判断は別途定める。
 
 ### 再送
 
@@ -62,7 +62,7 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 
 ## Done
 
-- ベクトル生成向け1〜10イベントを最大1回のSQSリクエストで送り、入力順に個別結果を返す。
+- 各入口の配送先へ1〜10イベントを最大1回のSQSリクエストで送り、入力順に個別結果を返す。
 - 保存済みイベントが指定形式のMessageBodyと正しいQueue URLに変換される。
 - 再送でイベント内容が変わらず、未知のevent_typeでは送信しない。
 - 部分失敗・不正応答・終了失敗の境界と、件数・サイズ上限をテストで保証する。
@@ -591,8 +591,38 @@ Embedding用の`build_assessed_in_scope_message`はイベント単位の本文�
 
 実装済み: EventDeliveryRoute・EventMessage・RoutedEventPublisher・SqsSenderを接続し、relayのEmbedding依存を組み立てへ移した。PublishEventInvalidErrorのissuesは固定enumのfield・codeを読み取り専用Protocolで受け取り、工程固有の詳細型に依存しない。詳細の値と入力を残さない変換は維持する。
 
-有効な配送はEmbeddingのみ。Assessmentのイベント検証・配送・Consumer接続、複数ルートの巡回・自動登録、AWS設定とデプロイは未実施。DB schema・SQL・リース・再試行・停止方針・トランザクション境界・キュー設定・依存パッケージは変更していない。
+このスライス時点の配送はEmbeddingのみ。Assessmentのイベント検証・配送・Consumer接続、複数ルートの巡回・自動登録、AWS設定とデプロイは未実施。DB schema・SQL・リース・再試行・停止方針・トランザクション境界・キュー設定・依存パッケージは変更していない。
 
 検証結果: app全体と変更テスト（既存local_testsの本文fixtureを含む）のRuff lint・format確認が成功。`uv run pytest tests/ -m unit -x -q`は6,563件成功し、送信結果対応のテスト調整後もpublishingの単体テスト80件が成功した。`make test-integration PYTEST_ARGS="-x -q"`は1,400件成功（skipなし）。既存の非推奨・Logfire設定に関する警告は残る。`local_tests/`全体・実AWSスモーク・デプロイは今回の範囲外として実行していない。
 
 PR作成時の再検証（2026-09-12）: mainの`53fdfa234`を基準に今回の変更を競合なく反映した。app全体・変更テストのRuff lint／format確認、全単体テスト6,552件、`make test-integration PYTEST_ARGS="-x -q"`の統合テスト1,400件が成功した。別タスクのAWS関連作業は含めていない。
+
+## Assessment配送と用途別Lambda入口（2026-09-12）
+
+Problem: Embeddingに固定された入口を分け、配送に不要な他工程のキュー設定を要求しない。
+
+| 公開入口 | イベント種別 | 設定クラス・必須キュー | 本文生成 |
+|---|---|---|---|
+| `app.lambda_handlers.outbox_relay.handler`（既存） | `article.assessed_in_scope` | `EmbeddingOutboxRelaySettings`・`sqs_article_embedding_queue_url` | `build_assessed_in_scope_message` |
+| `app.lambda_handlers.outbox_relay.assessment_handler` | `article.curated_signal` | `AssessmentOutboxRelaySettings`・`sqs_article_assessment_queue_url` | `build_curated_signal_message` |
+
+- 設定は`OutboxRelayConnectionSettings`を共有する。env（既定production）・aws_region・DB接続設定、db_iam_authの既定False、既存TLS/IAM検証、.env非読込と設定エラーの入力非表示を維持する。環境変数名は変更せず、各用途は自分のキューURLだけを要求する。
+- 各入口の配送定義を`outbox_relay.execution.run_relay(settings, route)`へ渡す。共通実行はEngine・session factory・SDK Session・Sender・Publisher・FailureHandler・relayを組み立て、`route.event_type`を取得条件へ渡す。工程固有のキュー・イベントを判断しない。
+- 1起動1配送先・1バッチ、取得上限10件、停止処理上限100件、リース150秒を維持する。SQL・トランザクション境界・再試行・停止方針は変更しない。
+- 作成済みEngineは組み立て・実行失敗でも終了する。成功後の終了失敗は送出し、先行する例外がある場合は通常の終了例外で上書きしない。外部キャンセル・プロセス終了を通常例外として抑止しない。正常応答は`{"status": "completed"}`。
+- Assessment本文は`ArticleCuratedSignalEvent.from_input`で検証し、`model_dump(mode="json")`と`json.dumps(..., allow_nan=False)`で作る。ID・日時・版・payloadを再生成しない。検証失敗はreason・issuesを維持して`PublishEventInvalidError`へ変換し、元の検証例外をcause・contextへ残さない。
+- EventMessage以降のRoutedEventPublisher・共通SQS送信は変更しない。Lambda入力による配送先選択、複数ルートの巡回・自動登録は追加しない。
+
+テストの責任: 本文生成から実際のAssessment本文解析への往復、代表的な検証失敗の安全な変換、2入口の配送定義、用途別設定を単体テストで確認する。既存の実行・資源解放テストは共通実行側へ移し、終了失敗時の外部キャンセル保持も確認する。既存handler統合テストは参照先を更新する。共有イベント詳細・Publisher結果統合・SQS通信・DBリースの網羅テストは複製しない。
+
+Non-goals: AWS上のAssessment relay Lambda・Scheduler・IAM・キュー・イベントソース設定、デプロイ、Taskiq停止は未実施。DB schema・依存・Consumerは変更しない。local_testsシナリオ追加と実AWSスモークも対象外。
+
+検証結果: app全体と今回変更したテストのRuff lint・format確認が成功。`uv run pytest tests/ -m unit -x -q`は6,629件、続く`make test-integration PYTEST_ARGS="-x -q"`は1,400件が成功した。既存の非推奨・Logfire関連の警告は残る。一時DB・Redisは終了・削除済み。local_tests・実AWSスモーク・デプロイは対象外として未実施。
+
+入口の配置・命名整理: `outbox_relay/handler.py`へ`embedding_handler`と`assessment_handler`を集約した。`__init__.py`は前者を`handler`として公開し、既存AWSの起動パスとインフラ設定を維持する。用途別パッケージは追加せず、共通実行・配送動作は変更していない。
+
+配置・命名整理後の検証: app全体と変更テストのRuff lint・format、単体テスト6,629件、統合テスト1,400件が成功した。既存テストの参照先だけを更新し、ケースの追加は行っていない。一時DB・Redisは終了・削除済み。
+
+設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。本文準備の失敗は`publishing.error_mapping.publish_preparation_error_from_exception`で扱い、分類済みPublishErrorの同一性、想定外例外のPREPARE_EVENTと原因チェーンを維持する。RoutedEventPublisherとSqsMessageBatchがこの処理を共有し、SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
+
+PR作成時の最終検証: 設定名・本文準備エラーの責務整理と、既存のイベント／受信handlerテスト整理を含め、app全体・変更テストのRuff lint・format、単体テスト6,628件が成功した。統合テスト1,400件も同一の製品コードで成功し、一時DB・Redisは削除済み。統合検証後の追加対象は単体テストと文書のみ。テストガイドへ保証の所有先・1テスト1不変条件の方針を反映した。AWS設定・デプロイは未実施。
