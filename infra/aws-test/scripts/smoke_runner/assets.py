@@ -73,9 +73,21 @@ def prepare_assets(directory, revision):
             env=env,
             log=directory / "auth-db.log",
         )
+        # 初期化用の一時サーバを成功と判定しないよう、TCP受付を待つ。
         for attempt in range(60):
             ready = subprocess.run(  # noqa: S603,S607
-                ["docker", "exec", name, "pg_isready", "-U", "vector"],  # noqa: S607
+                [  # noqa: S607
+                    "docker",
+                    "exec",
+                    name,
+                    "pg_isready",
+                    "-h",
+                    "127.0.0.1",
+                    "-U",
+                    "vector",
+                    "-d",
+                    "vector",
+                ],
                 capture_output=True,
                 timeout=10,
             )
