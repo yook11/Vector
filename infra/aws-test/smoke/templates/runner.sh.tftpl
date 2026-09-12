@@ -20,11 +20,11 @@ set -a
 source /etc/vector-test/proxy.env
 set +a
 
-# SSMの管理チャネルを先に用意し、後続の準備失敗も確認できるようにする。
+# SSMの管理通信は専用エンドポイントを使い、プロキシ故障時も診断可能にする。
 install -d /etc/systemd/system/amazon-ssm-agent.service.d
-cat > /etc/systemd/system/amazon-ssm-agent.service.d/proxy.conf <<'UNIT'
+cat > /etc/systemd/system/amazon-ssm-agent.service.d/direct.conf <<'UNIT'
 [Service]
-EnvironmentFile=/etc/vector-test/proxy.env
+UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 UNIT
 systemctl daemon-reload
 systemctl restart amazon-ssm-agent

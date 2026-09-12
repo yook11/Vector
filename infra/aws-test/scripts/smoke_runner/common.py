@@ -34,7 +34,7 @@ def save(path, value):
     temporary.replace(path)
 
 
-def execute(args, *, cwd, log, timeout=300, env=None):
+def execute(args, *, cwd, log, timeout=300, env=None, progress=False):
     with Path(log).open("w") as output:
         process = subprocess.Popen(  # noqa: S603
             args,
@@ -45,7 +45,22 @@ def execute(args, *, cwd, log, timeout=300, env=None):
             start_new_session=True,
         )
         try:
-            code = process.wait(timeout=timeout)
+            started = time.monotonic()
+            deadline = started + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(args, timeout)
+                try:
+                    code = process.wait(timeout=min(30, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    if progress:
+                        print(
+                            f"{Path(log).name}: 待機中 "
+                            f"{int(time.monotonic() - started)}秒",
+                            flush=True,
+                        )
         except BaseException:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGINT)
@@ -91,9 +106,11 @@ def identity(aws, account, role):
         raise RuntimeError("aws_identity_mismatch")
 
 
-def wait_command(aws, instance, command_id, deadline):
+def wait_command(aws, instance, command_id, deadline, progress=None):
     with client(aws, "ssm") as ssm:
         while time.monotonic() < deadline:
+            if progress:
+                progress()
             try:
                 result = ssm.get_command_invocation(
                     CommandId=command_id, InstanceId=instance
@@ -106,12 +123,24 @@ def wait_command(aws, instance, command_id, deadline):
                 raise RuntimeError(
                     f"ssm_command_failed:{command_id}:{result['Status']}"
                 )
-            time.sleep(2)
+            time.sleep(min(2, max(0, deadline - time.monotonic())))
     raise TimeoutError(f"ssm_command_timeout:{command_id}")
 
 
-def send_command(aws, outputs, command, timeout, journal):
+def send_command(
+    aws,
+    outputs,
+    command,
+    timeout,
+    journal,
+    *,
+    cloudwatch=True,
+    deadline=None,
+    progress=None,
+):
     execution = outputs["execution"]
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("readiness_timeout")
     with client(aws, "ssm") as ssm:
         result = ssm.send_command(
             InstanceIds=[execution["instance_ids"]["runner"]],
@@ -119,7 +148,7 @@ def send_command(aws, outputs, command, timeout, journal):
             TimeoutSeconds=60,
             Parameters={"commands": [command], "executionTimeout": [str(timeout)]},
             CloudWatchOutputConfig={
-                "CloudWatchOutputEnabled": True,
+                "CloudWatchOutputEnabled": cloudwatch,
                 "CloudWatchLogGroupName": execution["log_groups"]["runner"],
             },
         )
@@ -129,5 +158,8 @@ def send_command(aws, outputs, command, timeout, journal):
         aws,
         execution["instance_ids"]["runner"],
         command_id,
-        time.monotonic() + timeout + 90,
+        min(deadline, time.monotonic() + timeout + 90)
+        if deadline is not None
+        else time.monotonic() + timeout + 90,
+        progress=progress,
     )

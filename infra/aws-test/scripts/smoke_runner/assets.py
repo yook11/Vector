@@ -1,14 +1,61 @@
 """対象revisionの正本から、空のローカルDBで認証schemaだけを生成する。"""
 
+import hashlib
+import json
 import os
 import secrets
 import subprocess
 import time
+from uuid import uuid4
 
-from .common import ROOT, execute
+from .common import ROOT, execute, save
+
+ASSET_FILES = ("auth.sql", "source/infra/aws/db-provision.sql")
 
 
 def prepare_assets(directory, revision):
+    destination = directory / "prepared-assets"
+    if destination.exists():
+        manifest = json.loads((destination / "manifest.json").read_text())
+        if manifest != {
+            "revision": revision,
+            "files": asset_hashes(destination),
+        }:
+            raise RuntimeError("prepared_assets_changed")
+        return
+    work = directory / "assets-work"
+    if work.exists():
+        work.rename(directory / ("assets-failed-" + uuid4().hex))
+    work.mkdir()
+    try:
+        _generate_assets(work, revision, "vector-smoke-auth-" + directory.name)
+        save(
+            work / "manifest.json", {"revision": revision, "files": asset_hashes(work)}
+        )
+        work.rename(destination)
+    except BaseException:
+        if work.exists():
+            work.rename(directory / ("assets-failed-" + uuid4().hex))
+        raise
+
+
+def asset_hashes(directory):
+    hashes = {}
+    for name in ASSET_FILES:
+        content = (directory / name).read_bytes()
+        if not content.strip():
+            raise RuntimeError("prepared_asset_empty")
+        hashes[name] = hashlib.sha256(content).hexdigest()
+    return hashes
+
+
+def _generate_assets(directory, revision, name):
+    # 中断した同じRUN_IDの一時コンテナだけを回収してから再生成する。
+    for args in (
+        ["docker", "rm", "-fv", name + "-cli", name],
+        ["docker", "network", "rm", name],
+    ):
+        subprocess.run(args, capture_output=True, timeout=30)  # noqa: S603
     source = directory / "source"
     source.mkdir()
     archive = directory / "source.tar"
@@ -25,7 +72,6 @@ def prepare_assets(directory, revision):
         cwd=ROOT,
         log=directory / "source.log",
     )
-    name = "vector-smoke-auth-" + directory.name
     image = name + ":local"
     env = {**os.environ, "POSTGRES_PASSWORD": secrets.token_urlsafe(32)}
     # ローカルの一時DBも公開せず、CLIとDBだけのネットワークでschemaを生成する。
