@@ -436,7 +436,7 @@ Done: 必要最小限の環境だけでEmbedding入口のimportとGeminiクラ�
 
 ### Lambda入口の配置整理
 
-送信側は`app/lambda_handlers/outbox_relay/`、受信側は`app/lambda_handlers/embedding/`に配置する。各フォルダのhandler.pyが起動・組み立て・終了を担い、settings.pyに専用設定を置く。Embeddingのhandler.pyはバッチ検証、各レコードの本文検証・Consumer呼び出し・結果記録と部分バッチ応答までを進め、event.pyはJSON解析と共有イベント型への変換、resources.pyはSSM・DB資源の管理を担う。
+送信側は`app/lambda_handlers/outbox_relay/`、受信側は`app/lambda_handlers/embedding/`に配置する。各フォルダのhandler.pyが起動・組み立て・終了を担い、settings.pyに専用設定を置く。Embeddingのhandler.pyはバッチ検証、各レコードの本文検証・Consumer呼び出し・結果記録と部分バッチ応答までを進め、event.pyはJSON解析と共有イベント型への変換、composition.pyは工程別の依存配線を担う。SSM・DB・AIクライアントの準備と終了順序は共通の`app/lambda_handlers/article_analysis_lifecycle.py`が管理する。
 
 各パッケージの__init__.pyからhandler関数を公開し、`app.lambda_handlers.outbox_relay.handler`と`app.lambda_handlers.embedding.handler`の起動パスを維持する。Terraformのcommandとイメージ選択処理は変更しない。初期化順序、空Records、ID不正の全体失敗、本文不正の個別失敗、監査・通知・通信設定・業務処理は維持する。
 
@@ -522,7 +522,7 @@ Done: クラス・ファイル・変数・公開メソッドをFailureRecorder�
 ### スライス3.3：Lambdaハンドラーへの接続
 
 Problem: 作成済みの接続・業務処理部品を、1回のLambda呼び出しとして実行して応答する入口を提供する。
-Evidence: SSM・DBのopen_embedding_resources、Geminiのopen_gemini_client、新しいGeminiEmbedder、Consumerと既存SQS処理の契約を確認した。
+Evidence: 共通のopen_article_analysis_consumer、Geminiのopen_gemini_client、新しいGeminiEmbedder、Consumerと既存SQS処理の契約を確認した。
 
 `app/lambda_handlers/embedding/handler.py`の同期`handler(lambda_event, context)`がEmbeddingConsumerSettingsを生成し、asyncio.runで`_run_embedding(lambda_event, settings)`を実行する。contextは使用しない。非同期処理ではDB資源、Geminiクライアント、EmbedderとConsumerの順に初期化し、バッチ検証後に各レコードの本文を検証してConsumerを呼び、失敗IDを集約する。AsyncExitStackでGemini資源、DB資源の順に終了してから失敗項目の識別子一覧を返し、同期handlerでSqsBatchFailureResponseへまとめる。
 
@@ -555,7 +555,7 @@ Evidence: 既存DB設定・TLS変換・IAM provider・セッション生成器�
 
 `create_embedding_consumer_engine`は既存TLS・パラメーター非表示・pre_pingを維持し、1接続・追加接続0・取得待ち5秒・接続5秒・コマンド5秒でEngineを生成する。application_nameはvector-embedding-consumerとし、SQLを実行するまで接続しない。IAM署名関数を注入できるよう既存providerの引数を追加し、新しい経路だけが呼び出し内で所有するRDS SDKクライアントを使う。従来のprovider呼び出しは変更しない。
 
-`open_embedding_resources(settings)`はSSM取得をスレッドへ委譲した後にDB資源を組み立て、APIキーとsession_factoryを不変のEmbeddingResourcesとして提供する。同期SSM要求中のキャンセルは通信自体を中断しないが、スレッド内でSSMクライアントを閉じる。呼び出し元は全セッションを閉じてから利用範囲を終了し、EngineのdisposeとRDSクライアントのcloseが行われる。
+`open_embedding_consumer(settings)`は、設定を捕捉する型付きの名前付き関数でEngine・Geminiクライアント・Consumerの生成を指定し、共通の`open_article_analysis_consumer`が返すasync context managerを利用する。共通側はSSM取得をスレッドへ委譲した後、RDS署名器・Engine・session factory・AIクライアント・Consumerの順に準備する。同期SSM要求中のキャンセルは通信自体を中断しないが、スレッド内でSSMクライアントを閉じる。各処理でセッションを閉じてから利用範囲を終了し、AIクライアント、Engine、RDSの順に解放する。SDK内部の生成・解放は`open_gemini_client`が所有する。共通入口はクライアント型とConsumer型をジェネリクスでつなぎ、工程別入口の戻り型は`AbstractAsyncContextManager[EmbeddingConsumer]`とする。Recorderは初期化・終了の2メソッドだけを要求するProtocolで受け取り、既存実装を維持する。
 
 初期化途中でも生成済み資源を閉じる。通常の終了失敗は固定イベント名・資源種別・例外型だけを記録し、元の結果や例外を置き換えず他の資源の終了を試みる。キャンセル・プロセス終了は伝播する。初期化失敗にConsumerの監査・通知・SQS応答を流用しない。
 
@@ -698,6 +698,10 @@ SQS入力検証・Consumer接続の検証（2026-09-10）:
 
 未確定の詳細は、合意済みの成功・失敗方針と設定値を変更する理由にはせず、該当部分の実装前に仕様を更新する。
 
+
+## 共通ライフサイクルの初期化診断
+
+初期化の診断段階は共通側で`resources`・`ai_client`・`consumer`に固定し、工程側から指定しない。工程別のログ名は既存のRecorderが引き続き担当する。
 
 ## Consumer資源準備のIAM契約（2026-09-11）
 

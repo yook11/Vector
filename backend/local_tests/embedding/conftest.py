@@ -18,7 +18,7 @@ from app.analysis.embedding.consumer import EmbeddingConsumer
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingCompletion
-from app.lambda_handlers.embedding import resources as resource_module
+from app.lambda_handlers import article_analysis_lifecycle as resource_module
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from tests.iam_fixtures import inject_test_db_signer

@@ -1,14 +1,19 @@
 """実handlerが指定記事の判定結果を原子的に確定することを確認する。"""
 
+import asyncio
 import json
+from threading import Event
 
+import httpx
 import pytest
 
+from app.analysis.assessment import consumer as consumer_module
 from local_tests.assessment.support import (
     deepseek_reply,
     fetch_stored_assessment,
     invoke_event,
     seed_curation,
+    wait_for_blocked_connection,
 )
 
 
@@ -147,3 +152,88 @@ async def test_database_failure_rolls_back_result_audit_and_outbox(
     assert len(saved.audits) == 1
     assert saved.audits[0]["event_type"] == "failed"
     assert saved.audits[0]["article_id"] == target.analyzable_article_id
+
+
+@pytest.mark.asyncio
+async def test_http_failure_records_failure_and_next_article_succeeds(
+    system_database, assessment_runtime, deepseek_response
+):
+    """SDK通信失敗を失敗監査・応答へ反映し、次の記事を正常に処理できる。"""
+    target = await seed_curation(system_database, "https://example.com/http-error")
+    deepseek_response.side_effect = httpx.ConnectError("test connection failure")
+
+    response = await invoke_event(target)
+
+    assert response == {
+        "batchItemFailures": [{"itemIdentifier": str(target.curation_id)}]
+    }
+    stored = await fetch_stored_assessment(system_database, target.curation_id)
+    assert [audit["event_type"] for audit in stored.audits] == ["failed"]
+
+    deepseek_response.side_effect = None
+    next_target = await seed_curation(
+        system_database, "https://example.com/after-http-error"
+    )
+    assert await invoke_event(next_target) == {"batchItemFailures": []}
+
+
+@pytest.mark.asyncio
+async def test_database_wait_timeout_rolls_back_and_allows_retry(
+    system_database, assessment_runtime, monkeypatch
+):
+    """実INSERTのロック待ちで業務期限が切れたら保存を取り消し、同じ記事を再処理できる。"""
+    target = await seed_curation(system_database, "https://example.com/db-timeout")
+    timeout_ready = Event()
+    deadlines = []
+    create_timeout = consumer_module.timeout
+
+    def observe_timeout(delay):
+        deadline = create_timeout(delay)
+        deadlines.append((asyncio.get_running_loop(), deadline))
+        timeout_ready.set()
+        return deadline
+
+    with monkeypatch.context() as deadline_patch:
+        deadline_patch.setattr(consumer_module, "timeout", observe_timeout)
+        async with system_database.connect("vector") as blocker:
+            transaction = blocker.transaction()
+            await transaction.start()
+            invocation = None
+            try:
+                await blocker.execute("LOCK TABLE analyzed_articles IN SHARE MODE")
+                blocker_pid = await blocker.fetchval("SELECT pg_backend_pid()")
+                invocation = asyncio.create_task(invoke_event(target))
+                assert await asyncio.to_thread(timeout_ready.wait, 5), (
+                    "Consumerの期限が作られなかった"
+                )
+                assert len(deadlines) == 1
+                loop, deadline = deadlines.pop()
+                await wait_for_blocked_connection(
+                    system_database, blocker_pid, [invocation]
+                )
+                # 実際のDB待機を確認してから、既存の業務期限だけを到来させる。
+                loop.call_soon_threadsafe(deadline.reschedule, loop.time())
+                response = await asyncio.wait_for(asyncio.shield(invocation), 15)
+                assert deadline.expired()
+                assert response == {
+                    "batchItemFailures": [{"itemIdentifier": str(target.curation_id)}]
+                }
+                stored = await fetch_stored_assessment(
+                    system_database, target.curation_id
+                )
+                assert (
+                    not stored.in_scope
+                    and not stored.out_of_scope
+                    and not stored.outbox
+                )
+                assert [audit["event_type"] for audit in stored.audits] == ["failed"]
+            finally:
+                try:
+                    await transaction.rollback()
+                finally:
+                    if invocation is not None:
+                        await asyncio.wait_for(asyncio.shield(invocation), 15)
+
+    assert await invoke_event(target) == {"batchItemFailures": []}
+    stored = await fetch_stored_assessment(system_database, target.curation_id)
+    assert len(stored.in_scope) == 1

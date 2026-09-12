@@ -1,50 +1,59 @@
-"""呼び出しの利用範囲に合わせてAssessmentConsumerを組み立てる。"""
+"""記事単位AI分析のライフサイクルへAssessmentの依存を配線する。"""
 
-from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager
 
 import structlog
+from openai import AsyncOpenAI
+from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.ai_providers.deepseek.client import open_deepseek_client
 from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.consumer import AssessmentConsumer
+from app.db.engine import create_assessment_consumer_engine
+from app.lambda_handlers.article_analysis_lifecycle import (
+    IamPasswordProvider,
+    SessionFactory,
+    open_article_analysis_consumer,
+)
 from app.lambda_handlers.assessment.failure_recorder import (
     AssessmentLambdaFailureRecorder,
 )
-from app.lambda_handlers.assessment.resources import open_assessment_resources
 from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
 
 logger = structlog.get_logger(__name__)
 
 
-@asynccontextmanager
-async def open_assessment_consumer(
+def open_assessment_consumer(
     settings: AssessmentConsumerSettings,
-) -> AsyncIterator[AssessmentConsumer]:
-    """準備済みConsumerを借用させ、利用終了後に所有資源を解放する。"""
-    async with AsyncExitStack() as stack:
-        stage = "resources"
-        try:
-            resources = await stack.enter_async_context(
-                open_assessment_resources(settings)
-            )
-            stage = "deepseek_client"
-            client = await stack.enter_async_context(
-                open_deepseek_client(
-                    api_key=resources.deepseek_api_key,
-                    base_url=DEEPSEEK_ASSESSMENT_SPEC.base_url,
-                    settings=DeepSeekConnectionSettings(),
-                )
-            )
-            stage = "consumer"
-            consumer = AssessmentConsumer(
-                resources.session_factory, DeepSeekAssessor(client)
-            )
-        except Exception as exc:
-            AssessmentLambdaFailureRecorder(logger).record_initialization_failure(
-                stage, exc
-            )
-            raise
-        yield consumer
+) -> AbstractAsyncContextManager[AssessmentConsumer]:
+    """工程別の生成関数を渡し、資源の準備・終了順序を共通側へ委ねる。"""
+
+    def create_engine(*, password_provider: IamPasswordProvider) -> AsyncEngine:
+        return create_assessment_consumer_engine(
+            settings, password_provider=password_provider
+        )
+
+    def open_client(*, api_key: SecretStr) -> AbstractAsyncContextManager[AsyncOpenAI]:
+        return open_deepseek_client(
+            api_key=api_key,
+            base_url=DEEPSEEK_ASSESSMENT_SPEC.base_url,
+            settings=DeepSeekConnectionSettings(),
+        )
+
+    def build_consumer(
+        *, session_factory: SessionFactory, client: AsyncOpenAI
+    ) -> AssessmentConsumer:
+        return AssessmentConsumer(session_factory, DeepSeekAssessor(client))
+
+    return open_article_analysis_consumer(
+        aws_region=settings.aws_region,
+        database_url=settings.database_url,
+        api_key_parameter_path=settings.deepseek_api_key_parameter_path,
+        create_engine=create_engine,
+        open_client=open_client,
+        build_consumer=build_consumer,
+        failure_recorder=AssessmentLambdaFailureRecorder(logger),
+    )

@@ -5,6 +5,24 @@ import pytest
 from local_tests.database import isolated_database, migrated_database
 
 
+@pytest.fixture
+def analysis_engines(monkeypatch):
+    """実ConsumerがAIを待つ間のセッション返却を観測する。"""
+    from app.lambda_handlers import article_analysis_lifecycle
+
+    engines = []
+    create = article_analysis_lifecycle.caller_managed_session_factory
+
+    def observe(engine):
+        engines.append(engine)
+        return create(engine)
+
+    monkeypatch.setattr(
+        article_analysis_lifecycle, "caller_managed_session_factory", observe
+    )
+    return engines
+
+
 @pytest.fixture(scope="session")
 def system_database_template():
     with migrated_database() as database:

@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy.engine import make_url
 
 from app.db import iam
-from app.lambda_handlers.embedding import resources
+from app.lambda_handlers import article_analysis_lifecycle as resources
 from tests.iam_fixtures import inject_test_db_signer
 
 DATABASE_URL = (

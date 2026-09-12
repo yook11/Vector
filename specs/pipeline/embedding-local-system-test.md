@@ -1,4 +1,14 @@
-# Embedding呼び出しのDBリソース管理テスト
+# 記事単位AI分析の資源管理とEmbeddingのセッション境界
+
+## 現在の保証配置（2026-09-13）
+
+- 共通資源は`backend/local_tests/test_article_analysis_lifecycle.py`で`open_article_analysis_consumer`を直接検証する。工程別handlerやSDKを切り替えず、実Engine・実DBと開閉観測用のAI context managerを使う。
+- 準備順・所有期間・逆順解放・接続回収・呼び出し間の分離を一箇所で検証し、旧工程別`test_invocation_resources.py`は削除した。
+- AI待機前の接続返却はConsumerの責任として`embedding/test_session_boundaries.py`へ残す。
+- HTTP失敗とDB待機期限切れの保存・再処理は`embedding/test_event_processing.py`へ移し、資源解放のassertは共通テストへ集約した。
+- プール再利用・ロールバック・タイムアウト・切断後の回復を共通ローカルテストへ移し、通常のDB部品テストに重複させない。SDK内部の終了方法と終了処理自体の障害は各部品の単体テストが担当する。
+
+以下は共通化前の実装・検証記録であり、現在の配置は上記を正本とする。
 
 ## Problem
 
@@ -8,7 +18,7 @@
 
 - `backend/app/lambda_handlers/embedding/handler.py`: 呼び出し終了まで資源を管理する入口。
 - `backend/app/lambda_handlers/embedding/resources.py`: Engineのdisposeを終了スタックへ登録する。
-- `backend/tests/lambda_handlers/test_embedding_resources_db.py`: プール再利用・ロールバック・切断を部品単位で保証する。
+- 旧DB部品テスト: プール再利用・ロールバック・切断を確認していた保証は、上記の共通ローカルテストへ移した。
 - `backend/local_tests/database.py`: migrationと実ロールを適用した独立DBを用意する。
 
 ## Invariants

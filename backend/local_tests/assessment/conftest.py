@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai_providers.deepseek import client as deepseek_module
 from app.analysis.assessment.consumer import AssessmentConsumer
 from app.analysis.assessment.repository import AssessmentRepository
-from app.lambda_handlers.assessment import resources as resource_module
+from app.lambda_handlers import article_analysis_lifecycle as resource_module
 from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
 from app.models.outbox_event import OutboxEvent
 from local_tests.assessment.support import deepseek_reply, handler_module

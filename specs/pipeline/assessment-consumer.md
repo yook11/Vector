@@ -151,13 +151,13 @@ Problem: AssessmentConsumerとDeepSeekクライアントを、Lambda用の秘密
 Evidence: Embeddingの設定・資源管理・組み立てと、共通SSM取得・DB Engine生成・資源管理テストを参照した。
 
 - `AssessmentConsumerSettings`はDB共通設定を継承し、`env`（既定production）、`aws_region`、`database_url`、`db_iam_auth`（既定true）、`deepseek_api_key_parameter_path`を扱う。dotenvは読み込まず、全環境でIAM必須、本番でTLS必須とする。接続情報の非表示を維持する。
-- `open_assessment_resources(settings)`は利用範囲ごとにSSMからAPIキーを取得し、専用RDS署名器・Engine・session factoryを準備する。秘密情報はrepr対象外のSecretStrで保持する。
+- 共通の`app/lambda_handlers/article_analysis_lifecycle.py`にある`open_article_analysis_consumer`が、利用範囲ごとにSSMからAPIキーを取得し、専用RDS署名器・Engine・session factory・AIクライアントを準備する。秘密情報は`SecretStr`で扱い、資源を保持するDTOは公開しない。
 - `create_assessment_consumer_engine`は1接続・追加接続なし、プール待ち・接続・SQL実行の上限を各5秒にする。application_nameは`vector-assessment-consumer`。IAM署名器は必須引数とし、省略・Noneを拒否する。非IAM用の分岐を設けず、共通のTLS・pre-pingとDB例外変換を利用する。
-- `app/lambda_handlers/assessment/composition.py`の`open_assessment_consumer(settings)`はasync context manager。資源、DeepSeekクライアント、Assessor、Consumerの順に準備し、借用Consumerを返す。公開handlerやSQSの入力形式には依存しない。
-- 終了はDeepSeek、Engine、RDSの順。初期化失敗時も作成済み資源を解放し、同じ例外を返す。初期化の診断段階はresources・deepseek_client・consumerとし、yield後の業務例外は初期化失敗として記録しない。
+- `app/lambda_handlers/assessment/composition.py`の`open_assessment_consumer(settings)`は、設定を捕捉する型付きの名前付き関数でEngine・DeepSeekクライアント・AssessorとConsumerの生成を指定し、共通のasync context managerを返す。共通側が準備・終了順序を所有し、SDK内部の生成・解放は`open_deepseek_client`が所有する。公開handlerやSQSの入力形式には依存しない。
+- 終了はDeepSeek、Engine、RDSの順。初期化失敗時も作成済み資源を解放し、同じ例外を返す。初期化の診断段階は共通側でresources・ai_client・consumerに固定し、yield後の業務例外は初期化失敗として記録しない。
 - 初期化・終了の診断には段階／資源名と例外クラスだけを記録する。通常の終了・診断障害で結果を上書きせず、キャンセル・プロセス終了は抑止しない。準備・終了へ新しい時間制限は追加しない。
 
-型の補足: 計画ではsession factoryを`async_sessionmaker`と記載したが、共通`caller_managed_session_factory`の実際の契約は`Callable[[], AbstractAsyncContextManager[AsyncSession]]`。DB例外変換を維持するため、AssessmentResourcesにもこの実際の型を使用した。
+型の補足: session factoryは共通`caller_managed_session_factory`の実際の契約である`Callable[[], AbstractAsyncContextManager[AsyncSession]]`を維持する。共通入口はクライアント型とConsumer型をジェネリクスでつなぎ、工程別入口の戻り型は`AbstractAsyncContextManager[AssessmentConsumer]`とする。Recorderは初期化・終了の2メソッドだけを要求するProtocolで受け取り、既存Recorderの実装をそのまま利用する。
 
 Non-goals: SQS・イベント検証、部分バッチ応答、Lambda公開handler、Terraform・IAM権限・Parameter Store作成、relay接続、Taskiq変更、デプロイは含めない。DB schema・依存パッケージも変更しない。
 
@@ -298,17 +298,19 @@ Invariants: migration適用済みDBへ製品Engineから`vector_app`で接続す
 Non-goals: AWS IAMの実認証、本番TLS、SQS実配送、AI実通信、デプロイ、対象内と対象外の同時保存に対する排他制御。
 Done: 実呼び出しの確定保存・失敗時の原子性・同じ区分での重複抑止・資源解放を検証し、移した保証を既存テストに重複して残さない。
 
-`backend/local_tests/assessment/`の12ケースで、実handler → 実DeepSeek SDK・Assessor → Consumer → Repository → 製品Engineを接続する。外部境界のSSM・IAM署名・HTTP応答を差し替え、DB操作は実物を使う。
+`backend/local_tests/assessment/`の10ケースで、実handler → 実DeepSeek SDK・Assessor → Consumer → Repository → 製品Engineを接続する。外部境界のSSM・IAM署名・HTTP応答を差し替え、DB操作は実物を使う。
 
 | 所有するテスト | 保証 |
 | --- | --- |
-| `test_event_processing.py`（3件） | 指定記事の入力と対象内結果・成功監査・対応Outboxの確定、対象外結果・成功監査だけの確定、3種類の実INSERT後のSQL障害による全ロールバックと別トランザクションの失敗監査 |
+| `test_event_processing.py`（5件） | 指定記事の入力と対象内結果・成功監査・対応Outboxの確定、対象外結果・成功監査だけの確定、3種類の実INSERT後のSQL障害による全ロールバックと別トランザクションの失敗監査、HTTP失敗時の失敗応答・監査と次の記事の正常応答、DB待機期限切れ後の未保存と再処理 |
 | `test_duplicate_processing.py`（4件） | 再配送時の保存済み内容維持、同じ判定区分の同時保存で一意制約の実ロック待ちを経た後続の`ALREADY_ASSESSED`と先行内容の維持。対象内・対象外を各々検証 |
-| `test_invocation_resources.py`（5件） | 連続呼び出しの1接続再利用と終了、AI待機中の接続返却・トランザクション終了、HTTP失敗・実DB障害・実DB待機中の業務期限切れ後の接続解放 |
+| `test_session_boundaries.py`（1件） | AI待機中の接続返却・トランザクション終了 |
+
+共通資源の生成・解放順序と実DB接続の回収は`backend/local_tests/test_article_analysis_lifecycle.py`が共通入口を直接検証する。工程ごとの資源解放テストは置かない。
 
 保存結果はhandlerの応答後、別の`vector_app`接続から確認する。同時処理は異なるAI判定内容を返し、実INSERTの後に先行commitだけを停止して後続のDB待機を観測する。期限切れはDB待機を確認して既存の60秒timeoutをrescheduleする。製品のプール・通信設定をテスト用に緩和せず、テスト失敗時も待機を解除して呼び出し終了を待つ。
 
-通常のConsumerテストから同時保存・接続返却の保証を移し、照会1回・DB由来ID・AIと成功メトリクスの非実行は残す。Serviceの重複テストは`ALREADY_ASSESSED`とcommit非実行に絞り、Resourcesの旧DBテスト2件は実呼び出しの接続管理へ置き換える。部品ごとの保存・成功監査・Outbox・commit失敗の伝播、元例外保持、設定、資源の生成終了順と二次障害は通常の`tests/`に残す。
+通常のConsumerテストから同時保存・接続返却の保証を移し、照会1回・DB由来ID・AIと成功メトリクスの非実行は残す。Serviceの重複テストは`ALREADY_ASSESSED`とcommit非実行に絞り、Resourcesの旧DBテストは共通ライフサイクルのローカルテストへ集約する。部品ごとの保存・成功監査・Outbox・commit失敗の伝播、元例外保持、工程別設定・配線、終了処理の二次障害は通常の`tests/`に残す。
 
 AWS上の別relay Lambda・定期実行・Consumerのイベントソース接続は引き続き未実施。
 
