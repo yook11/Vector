@@ -181,3 +181,15 @@ test-integration-up: test-integration-guard  ## test infra を fresh 状態で�
 
 test-integration-down: test-integration-guard  ## db-test を停止して volume / orphan も含めて削除
 	$(TEST_COMPOSE) down -v --remove-orphans
+
+.PHONY: aws-smoke aws-smoke-destroy aws-smoke-status
+export RUN_ID
+
+aws-smoke:  ## 試験AWSを構築しDB準備・試験・結果回収・削除確認まで実行
+	backend/.venv/bin/python infra/aws-test/scripts/aws-smoke.py run
+
+aws-smoke-destroy:  ## RUN_IDの保存済み設定で試験AWSを削除して残存確認
+	backend/.venv/bin/python infra/aws-test/scripts/aws-smoke.py destroy
+
+aws-smoke-status:  ## RUN_IDの保存済み結果とAWS上の残存リソースを確認
+	backend/.venv/bin/python infra/aws-test/scripts/aws-smoke.py status
