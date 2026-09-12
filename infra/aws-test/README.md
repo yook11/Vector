@@ -1,8 +1,8 @@
 # テスト専用AWS環境
 
 EmbeddingのAWSスモーク試験に必要な設備を、本番と別のアカウントへ作成するTerraform構成。
-対象は **ローカル設定に登録したテスト専用アカウント / ap-northeast-1**。今回実装するのは設備の定義とEC2起動設定まで。
-**自動削除・結果回収の実装が完了するまでは、試験環境をapplyしない。** Terraformだけでは5分後の削除は行われない。
+対象は **ローカル設定に登録したテスト専用アカウント / ap-northeast-1**。Terraform定義と、DB準備・試験・結果回収・自動削除を行う実行コマンドを用意する。
+実行コマンドは静的検証までで、実AWSでの構築・疎通・削除は未検証。初回は端末を起動したまま全工程と削除結果を確認する。Terraform単体では自動削除されない。
 
 全体の試験契約は [Embedding AWSスモークテスト仕様](../../specs/pipeline/embedding-aws-smoke-test.md) を参照。
 
@@ -31,7 +31,7 @@ SSOログイン元の認証が有効な間はSDKが引受認証情報を更新�
 構築ロールの書込先は試験用の名前・IAMパス・タグ・state領域へ限定する。構築ロール自身、権限境界、ECR、S3設定を変更する権限は持たせない。
 実行ロールの作成時には種類ごとの権限境界が必須で、`PassRole`は試験用のLambda/EC2ロールと対応サービスに限定する。
 AWS APIによってリソース指定できないDescribe系やENI管理等には`Resource: "*"`が残る。
-試験を投入するSSM Run Commandやログの回収は、次工程の実行元がRunnerプロファイルで行う。Terraform構築ロールへ実行権限を混ぜない。
+試験を投入するSSM Run Commandやログの回収は、実行コマンドがRunnerプロファイルで行う。Terraform構築ロールへ実行権限を混ぜない。
 
 | 実行主体 | 許可 |
 |---|---|
@@ -76,7 +76,7 @@ SQSはStandard、暗号化、保持4日、可視性720秒、バッチ1件、待�
 アカウント全体の同時実行枠10を踏まえ、Lambdaの予約同時実行は設定しない。
 キューは空で作成し、DB準備が終わるまではイベントを投入しない。
 
-## 秘密値とイメージの準備（次工程の前提）
+## 秘密値とイメージの準備
 
 AIキーはテストアカウントのParameter Storeで、以下の設定で別途登録する。コンソールの値入力欄へ直接入力し、チャット・シェル引数・Terraform変数へ貼らない。
 
@@ -91,7 +91,7 @@ AIキーはテストアカウントのParameter Storeで、以下の設定で別
 
 TerraformはAIキーのパラメーター自体も値も作成・取得しない。名前と取得権限だけを定義する。
 RDS管理者のパスワードはRDS管理のSecrets Managerへ保存し、TerraformはARNのみ参照する。秘密値のデータソースや出力は置かない。
-次工程の準備処理は秘密値をメモリー内で扱い、コマンド出力・ログ・レポートへ残さない。
+準備処理は秘密値をメモリー内で扱い、コマンド出力・ログ・レポートへ残さない。
 
 backendとproxyは、対象revisionのARM64イメージをテストECRの`vector-test/backend`と`vector-test/proxy`へ格納してからdigestを指定する。
 既存成果物と同じ内容をコピーし、テスト実行中は本番ECRを参照しない。タグは変更不可、タグなしは1日、タグ付きは最新3イメージを保持する。
@@ -104,7 +104,7 @@ backendとproxyは、対象revisionのARM64イメージをテストECRの`vector
 ロググループはsmokeのTerraformで先に作成し、7日保持・必須タグを設定する。RDSの削除後にロググループも削除し、本番のログ設定は変更しない。
 構築ロールの追加権限は試験RDSのロググループ管理だけとし、LambdaやEC2の書込権限は追加しない。
 `execution.log_groups`と`resources.log_groups`の`database`に回収・削除確認用の名前を出力する。
-削除後も必要なログは次工程の回収処理で削除前に保存するため、回収処理の実装までは環境を起動しない。
+実行コマンドが削除前に4つのロググループを手元へ回収し、取得失敗はグループごとに記録する。
 転送先の命名は[AWSのPostgreSQLログ転送仕様](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_LogAccess.Concepts.PostgreSQL.html)に従う。
 
 Semgrepはテスト環境にも適用し、次の2件だけ対象リソースのコメントでルールを限定して除外する。
@@ -131,7 +131,7 @@ provider/backendのアカウント制限や実際のIAM評価、プロキシ疎�
 ## ローカルのアカウント設定
 
 実アカウントID、bootstrap用の管理者プロファイル、構築ロールの引受元はGit管理外の`.local/account.json`で編集する。
-`aws_profile`はbootstrap用管理者、`trusted_admin_role_arn_pattern`はManagerのSSOロールを指定する。サンプルの信頼先名は採用した権限セット名へ置き換える。
+`aws_profile`はbootstrap用管理者、`smoke_aws_profile`はManagerプロファイル、`trusted_admin_role_arn_pattern`はManagerのSSOロールを指定する。サンプルの信頼先名は採用した権限セット名へ置き換える。
 Manager／RunnerのプロファイルはAWS CLIへ別途登録し、smoke操作には以下のコマンドでManagerを明示する。
 公開するサンプル・構成テストには架空のIDとプロファイルを使い、認証情報そのものはAWS CLIのSSO管理に任せる。
 
@@ -141,7 +141,7 @@ mkdir -p infra/aws-test/.local
 cp -n infra/aws-test/account.example.json infra/aws-test/.local/account.json
 ```
 
-サンプルの3項目を、確認済みの値へ変更する。信頼先ARNの末尾`*`はSSO割当のsuffixだけを表し、別アカウントや任意の権限セットを許可するワイルドカードにはできない。
+サンプルの4項目を、確認済みの値へ変更する。信頼先ARNの末尾`*`はSSO割当のsuffixだけを表し、別アカウントや任意の権限セットを許可するワイルドカードにはできない。
 次のコマンドはAWSに接続せず、同じ設定元から3ファイルを生成する。
 
 ```sh
@@ -155,7 +155,7 @@ python3 infra/aws-test/scripts/configure-local.py
 | `.local/smoke.tfbackend` | S3バケット、引受ロール、プロファイル、許可アカウント |
 
 `.local/`全体をGit管理から除外する。生成ファイルは直接編集せず、`account.json`を修正して再生成する。
-現行スクリプトは全生成物へ同じ`aws_profile`を出力するため、smokeではbackendとproviderの両方にManagerプロファイルを明示的に上書きする。
+生成スクリプトはbootstrapへ`aws_profile`、smokeのproviderとbackendへ`smoke_aws_profile`を出力する。既存の3項目の設定には`smoke_aws_profile`を追加してから再生成する。
 providerは`allowed_account_ids = [var.expected_account_id]`を維持する。backendは未設定時に実在しないIDだけを許可し、生成ファイルを渡し忘れた接続を拒否する。
 実行中の環境がある間は接続設定を変更しない。将来の別アカウント移行は、全試験の削除とbootstrap stateの扱いを別途決めてから行う。
 
@@ -194,10 +194,10 @@ gemini_parameter_path = "/vector-test/embedding-consumer/gemini-api-key"
 ```
 
 実行IDを入力・stateキー・作業データで一致させる。生成したbackend設定を必ず渡し、workspaceは`default`固定とする。
-`vector-test-manager`はローカルで登録したManagerプロファイル名に置き換え、ログイン結果のAccountとArnがテストアカウントの`VectorTestManager`であることを確認する。
+ローカル設定からManagerプロファイル名を読み取り、ログイン結果のAccountとArnがテストアカウントの`VectorTestManager`であることを確認する。
 
 ```sh
-export TEST_MANAGER_PROFILE=vector-test-manager
+export TEST_MANAGER_PROFILE="$(python3 -c 'import json; print(json.load(open("infra/aws-test/.local/account.json"))["smoke_aws_profile"])')"
 export AWS_PROFILE="$TEST_MANAGER_PROFILE"
 aws sso login --profile "$TEST_MANAGER_PROFILE"
 aws sts get-caller-identity --profile "$TEST_MANAGER_PROFILE"
@@ -207,12 +207,11 @@ aws sts get-caller-identity --profile "$TEST_MANAGER_PROFILE"
 export TF_DATA_DIR="$PWD/infra/aws-test/smoke/.terraform/20260911-01"
 terraform -chdir=infra/aws-test/smoke init -reconfigure -input=false \
   -backend-config=../.local/smoke.tfbackend \
-  -backend-config="profile=$TEST_MANAGER_PROFILE" \
   -backend-config='key=smoke/20260911-01/terraform.tfstate'
 terraform -chdir=infra/aws-test/smoke plan \
   -var-file=../.local/smoke.tfvars.json \
   -var-file=../.local/20260911-01.tfvars \
-  -var="aws_profile=$TEST_MANAGER_PROFILE" -out=smoke.tfplan
+  -out=smoke.tfplan
 terraform -chdir=infra/aws-test/smoke show smoke.tfplan
 ```
 
@@ -227,7 +226,7 @@ terraform -chdir=infra/aws-test/smoke output -json > infra/aws-test/.local/20260
 terraform -chdir=infra/aws-test/smoke plan -destroy \
   -var-file=../.local/smoke.tfvars.json \
   -var-file=../.local/20260911-01.tfvars \
-  -var="aws_profile=$TEST_MANAGER_PROFILE" -out=destroy.tfplan
+  -out=destroy.tfplan
 terraform -chdir=infra/aws-test/smoke show destroy.tfplan
 ```
 
@@ -295,10 +294,10 @@ AWSが生成するENIには試験タグが付かない場合があるため、�
 EC2の自動割当公開IPはEIPではなく、インスタンス終了で解放される。EBSは出力のボリュームIDも使って確認する。
 削除が失敗したらstateと入力を保持し、同じ実行IDで再試行する。Terraformのdestroy成功だけで残存確認済みとは扱わない。
 
-以下は**次工程で実装するコマンド**であり、現時点ではMakefileへ追加していない。
+以下のコマンドをMakefileと`scripts/aws-smoke.py`に実装している。
 構築・削除・設備の残存確認はManagerから構築ロールを引き受け、試験投入・結果取得はRunnerを使う。ENI削除待機の照会はManagerで直接行う。各工程のプロファイルを明示し、Runnerへ設備管理権限を追加してまとめない。
 
-| コマンド | 次工程で実装する責務 |
+| コマンド | 責務 |
 |---|---|
 | `make aws-smoke` | 構築→DB準備→上限300秒の試験→結果回収→削除→残存確認 |
 | `make aws-smoke-destroy RUN_ID=...` | 対象実行だけの削除・再試行・残存確認 |
@@ -306,6 +305,61 @@ EC2の自動割当公開IPはEIPではなく、インスタンス終了で解放
 
 試験の300秒は**構築・DB準備完了後**に起算する。構築・準備・回収・削除には別の有限期限を設ける。
 試験成功と削除成功を別々に記録し、未実行・確認不能を成功にしない。実行元の電源断等に備える独立したAWS側の削除監視は、今回の範囲には含めない。
+
+## 実行コマンドの使い方
+
+実装対象の問題は、構築・DB準備・試験・回収・削除を手作業でつなぐと、失敗途中の設備や結果を取りこぼすこと。既存Terraform出力、`infra/aws/db-provision.sql`、対象revisionのBetter Auth CLI、backendイメージ内のAlembic、`backend/aws_tests`の2ケースを正本として使う。
+実行ID・接続アカウント・イメージ・stateを固定し、試験の成否と削除の成否を分けて残す。本番設定・migration・IAMの変更、新しい試験ケース、AWS側の独立した期限監視は今回の対象に含めない。
+静的検証と操作手順の整備を今回の完了条件とし、実AWSの合格・削除成功は初回実行後に判断する。
+
+リポジトリルートで、次の準備を完了する。
+
+- Terraform、AWS CLI、Docker、既存の`backend/.venv`（botocore・pytestを含む）を用意する。
+- `.local/account.json`の`smoke_aws_profile`をManagerへ設定し、Managerと`vector-test-runner`でSSOログインする。`aws_profile`はbootstrap管理者のままにする。
+- `.local/images.tfvars.json`に登録済みの`source_revision`・`backend_image_digest`・`proxy_image_digest`を保存し、対象commitをローカルGitで参照できるようにする。
+- テスト専用SSMキーを登録する。コマンドはキーを作成・上書きしない。
+
+```sh
+make aws-smoke
+# 実行IDを指定する場合（使用済みIDは再利用しない）
+make aws-smoke RUN_ID=20260912-01
+
+# 中断・失敗後の再試行
+make aws-smoke-destroy RUN_ID=20260912-01
+make aws-smoke-status RUN_ID=20260912-01
+```
+
+上の最初の2行は代替の実行方法であり、続けて実行する必要はない。`aws-smoke`は実際にAWS設備を作成し、Gemini通信を行う。Runnerのプロファイル名を変える場合は`backend/.venv/bin/python infra/aws-test/scripts/aws-smoke.py run --runner-profile <名前>`を使う。
+
+1. 接続先・SSOロール・ECR digestを確認し、専用S3の`smoke/<run_id>/owner.json`を条件付きで作成する。同じIDを別の端末から同時に使うことも拒否する。この所有記録はstateとともに残す。
+2. 対象revisionのfrontendを既存Dockerfileのdevelopment stageでビルドする。ポートを公開しない内部ネットワーク上の一時PostgreSQL 17でBetter Auth CLIを実行し、auth schemaのDDLを生成する。一時コンテナ・匿名ボリューム・ネットワークは終了時に削除し、ローカルのビルドキャッシュは保持する。
+3. 実行専用ディレクトリへ固定したTerraform定義・入力でcreate planを保存し、既存managed resourceを含まないことを確認して適用する。
+4. runnerのSSMとbootstrap完了を待ち、Lambdaと同じbackend digestをpullする。準備用ファイルを一時マウントして、既存のRDS初期化SQL、生成済みauth schema、イメージ内のAlembic `upgrade head`を適用する。管理シークレットはrunner内のメモリーだけで扱い、schema適用以降は`vector`のIAM認証と証明書・ホスト名検証を使う。
+5. DB準備後の300秒以内に、初回保存と同一イベント再配送の2ケースを実行する。成功・失敗が確定すれば早めに終了する。
+6. JUnit・工程結果・CloudWatchログを保存し、固定入力による全体destroyを行う。stateが空であることと、VPC内ENI・EC2/EBS・RDS/バックアップ/管理シークレット・SQS・Lambda/トリガー・IAM実行ロール・ログ等の残存を照合する。
+
+作成開始以降の失敗・通常のCtrl-C・SIGTERMでも回収後に削除を試みる。回収失敗でも削除は進め、失敗を結果へ残す。構築applyは45分、SSM稼働待ちは15分、bootstrap待ちは10分、イメージpullは5分、DB準備コマンドは11分、ログ回収は約2分、destroy applyは90分、残存の再照会は3分を上限とする。通信・プロセス終了の待機時間は別途加わり得る。削除の90分には既存のENI消滅待機（最大50分）を含む。
+
+電源断・ネットワーク断・強制終了・SSO期限切れでは自動削除が完了しない場合がある。端末を復旧し、必要なら同じSSOセッションへ再ログインして`aws-smoke-destroy`を実行する。削除中の二度目の中断でも完了は保証しない。stateロックの強制解除や`-target`による部分削除は行わない。
+
+## 削除後に確認するファイル
+
+`.local/runs/<run_id>/`へ、所有者のみ読み書きできる権限で保存する。Gitへ追加しない。
+
+| ファイル | 確認できる内容 |
+|---|---|
+| `result.json` / `summary.txt` | 工程ごとの未実行・実行中・合否、時刻、失敗種別、試験結果、SSM Command ID |
+| `test-results.json` / `junit.xml` / `pytest.log` | 各ケースの結果、記事・イベント・SQSメッセージの識別情報 |
+| `logs-*/` | Lambda・runner・proxy・RDSのJSON Linesと、グループごとの回収状況 |
+| `inventory.json` / `remaining.json` | 削除前の識別情報と、最新の残存照会結果 |
+| `outputs.json` / `inputs.tfvars.json` | 接続先・イメージdigest・source revision等の固定入力と出力（秘密値なし） |
+| `workspace/` / `manifest.json` / `aws.config` | 削除に再利用する定義、ハッシュ、SSOメタデータ（トークンなし） |
+| `create*.log` / `destroy*.log` | Terraformの構築・削除結果 |
+
+ケース別JSONはpytestのsetup・call・teardownの報告ごとに更新する。中断して完了していないケースは`running`のまま残り、成功にはしない。
+保存済み定義や入力のハッシュが変わっていれば削除を止める。`.local/runs/<run_id>`は削除確認が終わるまで移動・編集・削除しない。`status`は最初に保存済みサマリーを表示してからAWSを照会するため、認証できなくても前回の結果は読める。照会不能は「残存なし」にしない。
+
+`aws-smoke`は試験・回収・削除・照会のどれかが失敗すると終了コード1を返す。手動の`destroy`と`status`は、それぞれ削除確認・最新の残存確認の成否を終了コードで返し、過去の試験結果は変更しない。CloudWatchへまだ到着していない診断ログまで全量回収できた保証ではなく、試験の合否は対応する完了記録とDB結果で判定する。
 
 ## 費用の目安
 
