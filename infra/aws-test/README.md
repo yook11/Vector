@@ -2,7 +2,7 @@
 
 EmbeddingのAWSスモーク試験に必要な設備を、本番と別のアカウントへ作成するTerraform構成。
 対象は **ローカル設定に登録したテスト専用アカウント / ap-northeast-1**。Terraform定義と、DB準備・試験・結果回収・自動削除を行う実行コマンドを用意する。
-実行コマンドは静的検証までで、実AWSでの構築・疎通・削除は未検証。初回は端末を起動したまま全工程と削除結果を確認する。Terraform単体では自動削除されない。
+旧構成では実AWSの構築と削除・残存確認を実施済みだが、起動準備で失敗しEmbedding試験は未実行。新しい`aws-smoke-up`・`aws-smoke-prepare`、small化、SSM専用経路の実AWS検証は未実施。`up`・`prepare`とTerraform単体では環境を自動削除しない。
 
 全体の試験契約は [Embedding AWSスモークテスト仕様](../../specs/pipeline/embedding-aws-smoke-test.md) を参照。
 
@@ -52,20 +52,20 @@ Lambdaの関数コードからのENI操作は明示的に拒否する。Lambda�
 | 送信元 | 直接接続 | HTTPプロキシ経由 |
 |---|---|---|
 | Lambda（非公開） | RDS:5432、SSM Interface endpoint:443 | Geminiのみ |
-| 準備・確認EC2（非公開） | RDS:5432、SSM Interface endpoint:443、IMDS | SSM管理チャネル、ECR、ECRレイヤー用S3、Secrets Manager、SQS、CloudWatch Logs、AL2023パッケージ |
+| 準備・確認EC2（非公開） | RDS:5432、SSM/ssmmessages Interface endpoint:443、IMDS | ECR、ECRレイヤー用S3、Secrets Manager、SQS、CloudWatch Logs、AL2023パッケージ |
 | プロキシEC2（公開IPあり） | SSM endpoint、インターネット:80/443、IMDS | 使用しない |
 
 VPCは`10.80.0.0/16`。Lambda・EC2の用途別にサブネットを分け、DB用には1a/1cの2サブネットを用意する。
 公開ルートはプロキシ用だけ。NAT Gateway、IP転送、SSH受信口は作らず、プロキシの3128番はLambdaと実行用EC2からのみ受け入れる。
-SSM endpointは主AZに1つでPrivate DNSを有効にする。`ssmmessages`はrunnerのプロキシ許可先に含める。
+SSMとssmmessagesのInterface endpointを主AZに各1つ設け、Private DNSを有効にする。SSM Agentはプロキシを経由せず、Dockerやパッケージ取得の成否に依存しない管理通信を使う。
 Lambdaとrunnerの許可先は、送信元サブネット別のSquid ACLで分離する。runner用のAWS許可先をLambdaへ流用しない。
 プロキシのアクセスログには時刻・HTTPメソッド・ステータスだけを残し、URL・ヘッダーを記録しない。
 
 - AMIはAWS公開パラメーターからAL2023 ARM64を取得し、実際に使ったIDを出力する。
-- 両EC2はIMDSv2必須、CPUクレジットStandard、ルートディスク暗号化・終了時削除。プロキシは`t4g.nano`/8GB、runnerは`t4g.small`/20GB。
+- 両EC2はIMDSv2必須、CPUクレジットStandard、ルートディスク暗号化・終了時削除。両EC2は`t4g.small`、ルートディスクはプロキシ8GB・runner20GB。
 - プロキシはDockerを入れ、指定digestの既存Squidイメージを取得し、systemdで起動する。ECR認証情報は取得中のみ一時ディレクトリに保持する。
-- runnerはSSM AgentとDocker daemonのプロキシ設定を用意する。ホスト上の後続コマンドは`/etc/vector-test/proxy.env`を`set -a`で読み込む。ここには接続先だけが入り、秘密値は含めない。
-- `no_proxy`には通常のSSMホスト名、RDSホスト名、localhost、IMDSを指定する。LambdaのSSMクライアントは本番同様の直接接続を使う。
+- runnerはSSM Agentのプロキシ環境変数を解除し、Docker daemonだけにプロキシ設定を用意する。ホスト上の後続コマンドは`/etc/vector-test/proxy.env`を`set -a`で読み込む。ここには接続先だけが入り、秘密値は含めない。
+- `no_proxy`には通常のSSM/ssmmessagesホスト名、RDSホスト名、localhost、IMDSを指定する。LambdaのSSMクライアントは本番同様の直接接続を使う。
 - Docker内へ環境変数は自動伝播しない。後続の準備コンテナには必要な接続設定を明示し、IMDSv2のhop limit=1を保つため`--network host`で実行する。認証を無効にして回避しない。
 - 起動時の外部コマンドは1回300秒・最大5回で打ち切る。runnerのプロキシ待ちは最大60回（1回5秒＋10秒間隔）。Squidのサービス再起動にも回数制限を設ける。
 - `/var/lib/vector-test/bootstrap-status.json`の`starting`/`ready`/`failed`で起動設定の結果を残す。`ready`はDB準備完了やAWS接続の合格を意味しない。
@@ -124,7 +124,12 @@ terraform -chdir=infra/aws-test/smoke validate
 terraform fmt -check -recursive infra/aws-test
 ```
 
-`tests/*.tftest.hcl`にはモックAWS providerを使うplanテストを用意する。今回はユーザー指示により**実行しない**。
+`smoke/tests/*.tftest.hcl`のモックAWS providerを使うplanテストと、起動コマンドの単体テストで、AWSへの変更なしに検証する。
+
+```sh
+terraform -chdir=infra/aws-test/smoke test
+backend/.venv/bin/python -m unittest discover -s infra/aws-test/scripts/tests -v
+```
 検証対象はアカウント入力とSSO信頼先の整合、state保護、SGの既存／作成時IAM条件、全設備の必須タグ、IAMパス・権限境界、ログ名と許可ARN、ENI待機の依存関係、通信・SQS・保持設定。
 provider/backendのアカウント制限や実際のIAM評価、プロキシ疎通、EC2起動成功はモックの合格だけでは保証できない。
 
@@ -299,6 +304,8 @@ EC2の自動割当公開IPはEIPではなく、インスタンス終了で解放
 
 | コマンド | 責務 |
 |---|---|
+| `make aws-smoke-up RUN_ID=...` | 環境作成→EC2・SSM・プロキシ確認。成功・失敗時とも環境を保持 |
+| `make aws-smoke-prepare RUN_ID=...` | 起動済み環境の準備ファイル生成→イメージ取得→DB準備・確認。環境を保持 |
 | `make aws-smoke` | 構築→DB準備→上限300秒の試験→結果回収→削除→残存確認 |
 | `make aws-smoke-destroy RUN_ID=...` | 対象実行だけの削除・再試行・残存確認 |
 | `make aws-smoke-status RUN_ID=...` | 保存済み結果と最新の残存状況の確認 |
@@ -306,11 +313,82 @@ EC2の自動割当公開IPはEIPではなく、インスタンス終了で解放
 試験の300秒は**構築・DB準備完了後**に起算する。構築・準備・回収・削除には別の有限期限を設ける。
 試験成功と削除成功を別々に記録し、未実行・確認不能を成功にしない。実行元の電源断等に備える独立したAWS側の削除監視は、今回の範囲には含めない。
 
+## 起動確認だけを実行する
+
+`aws-smoke-up`は既存smoke構成全体（RDS・Lambda・SQSを含む）を作成するが、認証schema生成・DB初期化・イベント投入・AI呼出を行わない。Terraform、AWS CLI、botocoreを含む`backend/.venv`、Manager/RunnerのSSO認証、既存のアカウント設定とECR digestを用意する。手元のDockerは`up`には不要で、`prepare`と一括試験の認証schema生成で使用する。
+
+```sh
+make aws-smoke-up RUN_ID=20260912-up01
+# 作成完了済みの環境は再applyせず、同じIDで起動・疎通を再確認する。
+make aws-smoke-up RUN_ID=20260912-up01
+# 確認後は明示的に削除し、残存も確認する。
+make aws-smoke-destroy RUN_ID=20260912-up01
+make aws-smoke-status RUN_ID=20260912-up01
+```
+
+`RUN_ID`を省略すると毎回新しいIDを生成する。既存環境の再確認には表示されたIDを指定する。Runnerプロファイルを変更する初回操作は`aws-smoke.py up --runner-profile <名前>`を使い、再確認は保存済みプロファイルを使用する。
+
+成功条件は、固定した入力と実リソース・Lambda digestの整合、両EC2のステータスチェック、両SSM AgentのOnline、runnerへの今回固有の短い応答、runnerのbootstrap readyとDocker稼働、プロキシ3128番への接続、プロキシ経由のECR BatchGetImageで指定proxy digestを取得できること。ECRの空結果・失敗応答も不合格とし、GeminiやDBの正常動作まで確認したとは扱わない。
+
+起動確認のSSMコマンドはCloudWatch転送を無効にし、短い結果をRun Commandから直接取得する。プロキシ障害時も管理通信の成否を確認できる。構築後の起動確認は全項目で900秒を共有し、各SSMコマンドは実行30秒・配信60秒、AWS通信にも短い期限を設定する。待機中は30秒間隔で工程・経過時間を表示する。処理中のAPI通信とプロセス終了の時間が上限に加わる場合がある。
+
+| 再実行時の状態 | 動作 |
+|---|---|
+| AWS構築前の失敗 | 保存済み入力・所有者を照合して再試行 |
+| Terraform apply完了、後続の確認が失敗または成功 | 再applyせず、実リソースと起動・疎通を確認 |
+| apply途中の失敗・中断、完了が不明 | 自動再applyせず、削除後に新しいIDで作り直すよう案内 |
+| 削除開始済み・削除済み | 起動を拒否し、新しいIDを案内 |
+| 入力改変・所有者不一致・同じIDの並行操作 | 拒否 |
+
+最新結果は`result.json`と`summary.txt`、各回の結果は`up-attempts/<連番>/result.json`に残す。失敗時はログ回収も期限付きで試み、回収失敗によって起動失敗の原因を隠さない。DB準備・試験は`not_run`のままにし、`up`の合格判定へ含めない。
+
+**`up`は失敗・Ctrl-C・SIGTERMでも環境を自動削除しない。** 表示された削除コマンドで後片付けする。`aws-smoke`は新しいIDで始める一括試験のままで、`up`の続きからDB準備へ進むには`aws-smoke-prepare`を使う。`test`の個別コマンドは未実装。現行`status`は残存確認用で、稼働中の設備があると非0で終了し、同じIDの操作中はロックで拒否する。
+
+## 起動済み環境のDB準備を実行する
+
+`aws-smoke-prepare`は構築と`up`の成功が記録された既存RUN_IDを必須とする。保存済み設定・実行主体・所有者・実リソースを照合し、現在の起動・SSM・プロキシ疎通を再確認してから準備へ進む。手元のDockerと、保存されたsource revisionを参照できるGit checkoutも必要。
+
+```sh
+make aws-smoke-up RUN_ID=20260912-prepare01
+make aws-smoke-prepare RUN_ID=20260912-prepare01
+# 準備済みならDDLを再適用せず、現在のDB状態を確認する。
+make aws-smoke-prepare RUN_ID=20260912-prepare01
+make aws-smoke-destroy RUN_ID=20260912-prepare01
+make aws-smoke-status RUN_ID=20260912-prepare01
+```
+
+準備は`auth_schema`（ファイル生成）、`image`（固定backend digest取得）、`database`（DB準備・確認）の工程に分ける。完成したDDL・初期設定SQLは`prepared-assets/`へ保存し、`manifest.json`のrevision・ハッシュ一致時だけ再利用する。失敗途中の作業は`assets-failed-*/`へ残し、そのRUN_ID専用の一時コンテナを回収して再生成する。取得済みの同じイメージも再利用する。
+
+空のDBには既存の初期設定SQL、認証DDL、イメージ内のAlembicを順に適用する。DB内の実revisionとイメージのheadが一致し、pgvector、認証テーブル、カテゴリ・ニュースソース初期データが存在し、`vector_app`のIAM認証・TLS接続でEmbedding対象テーブルを読み取れることを成功条件とする。記事作成・SQS投入・AI呼出は行わない。
+
+| 再実行時のDB状態 | 動作 |
+|---|---|
+| 空、または初期ロール・拡張の準備だけ完了 | 正本から初期化する |
+| 同じmigration headで必要な状態を確認できる | DDLを再適用せず、既存データを保持して成功 |
+| 認証DDLだけ存在・revision不一致・必要なテーブルやデータが不足 | 失敗理由を記録し、削除後に新しいRUN_IDでの再作成を案内 |
+| 別のDB準備が継続中 | 専用の非待機advisory lockで拒否し、処理終了後に再試行 |
+
+準備ロックはDB準備全体に保持し、既存migrationロックとは異なるキーを使う。[PostgreSQLのsession advisory lock](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS)により、手元の操作が中断してもDB側で継続する準備との重複を防ぐ。通常のRUN_ID単位のローカル操作ロックも維持する。
+
+**`prepare`は成功・失敗・Ctrl-C・SIGTERMとも環境を保持する。** Terraform applyは行わず、削除開始済み環境や未成功の`up`からは進めない。最新の工程結果・安全な失敗理由・SSM Command IDは`result.json`へ、各回の結果は`prepare-attempts/<連番>/result.json`へ保存する。再実行時に前回のDB成功結果を引き継いで合格にはしない。後片付けには表示された`aws-smoke-destroy`を使う。
+
+この変更のローカル検証は次だけに限定する。DB fixtureは実行専用コンテナ・DBを作成し、終了時に削除する。
+
+```sh
+backend/.venv/bin/python -m unittest discover -s infra/aws-test/scripts/tests -p test_smoke_prepare.py -v
+(cd backend && .venv/bin/python -m pytest local_tests/test_aws_smoke_prepare_database.py -q)
+(cd infra/aws-test/scripts/tests && ../../../../backend/.venv/bin/python -m unittest \
+  test_smoke_up.RunTests.test_up_only_provisions_and_checks \
+  test_smoke_up.RunTests.test_one_shot_keeps_schema_before_apply_and_cleanup_after_database -v)
+```
+
+これに変更したPythonファイルのRuff・format確認と`git diff --check`を加える。無関係なテスト一式やTerraformテストは回さない。ローカルDBは既存fixtureのPostgreSQL 18とパスワード認証を使うため、RDS PostgreSQL 17上のIAM認証・TLS・SSM経路は後続の実AWS確認が必要。
+
 ## 実行コマンドの使い方
 
 実装対象の問題は、構築・DB準備・試験・回収・削除を手作業でつなぐと、失敗途中の設備や結果を取りこぼすこと。既存Terraform出力、`infra/aws/db-provision.sql`、対象revisionのBetter Auth CLI、backendイメージ内のAlembic、`backend/aws_tests`の2ケースを正本として使う。
 実行ID・接続アカウント・イメージ・stateを固定し、試験の成否と削除の成否を分けて残す。本番設定・migration・IAMの変更、新しい試験ケース、AWS側の独立した期限監視は今回の対象に含めない。
-静的検証と操作手順の整備を今回の完了条件とし、実AWSの合格・削除成功は初回実行後に判断する。
+新しい起動経路は静的検証・モックテストで確認し、実AWSでの起動・再確認・削除は別の受入確認で判断する。
 
 リポジトリルートで、次の準備を完了する。
 
@@ -338,7 +416,7 @@ make aws-smoke-status RUN_ID=20260912-01
 5. DB準備後の300秒以内に、初回保存と同一イベント再配送の2ケースを実行する。成功・失敗が確定すれば早めに終了する。
 6. JUnit・工程結果・CloudWatchログを保存し、固定入力による全体destroyを行う。stateが空であることと、VPC内ENI・EC2/EBS・RDS/バックアップ/管理シークレット・SQS・Lambda/トリガー・IAM実行ロール・ログ等の残存を照合する。
 
-作成開始以降の失敗・通常のCtrl-C・SIGTERMでも回収後に削除を試みる。回収失敗でも削除は進め、失敗を結果へ残す。構築applyは45分、SSM稼働待ちは15分、bootstrap待ちは10分、イメージpullは5分、DB準備コマンドは11分、ログ回収は約2分、destroy applyは90分、残存の再照会は3分を上限とする。通信・プロセス終了の待機時間は別途加わり得る。削除の90分には既存のENI消滅待機（最大50分）を含む。
+一括実行`aws-smoke`は作成開始以降の失敗・通常のCtrl-C・SIGTERMでも回収後に削除を試みる。回収失敗でも削除は進め、失敗を結果へ残す。構築applyは45分、起動・SSM・プロキシ確認は合計15分、イメージpullは5分、DB準備コマンドは11分、ログ回収は約2分、destroy applyは90分、残存の再照会は3分を上限とする。通信・プロセス終了の待機時間は別途加わり得る。削除の90分には既存のENI消滅待機（最大50分）を含む。
 
 電源断・ネットワーク断・強制終了・SSO期限切れでは自動削除が完了しない場合がある。端末を復旧し、必要なら同じSSOセッションへ再ログインして`aws-smoke-destroy`を実行する。削除中の二度目の中断でも完了は保証しない。stateロックの強制解除や`-target`による部分削除は行わない。
 
@@ -363,14 +441,14 @@ make aws-smoke-status RUN_ID=20260912-01
 
 ## 費用の目安
 
-事前に取得した東京リージョンのオンデマンド単価に基づく。請求額の保証ではなく、利用開始時に再確認する。
+事前に取得した東京リージョンのオンデマンド単価に基づき、small 2台として再計算した。請求額の保証ではなく、利用開始時に再確認する。
 
 | 計算リソース | 時間単価（USD） |
 |---|---:|
 | RDS PostgreSQL `db.t4g.micro` | 0.0250 |
-| proxy EC2 `t4g.nano` | 0.0054 |
+| proxy EC2 `t4g.small` | 0.0216 |
 | runner EC2 `t4g.small` | 0.0216 |
-| **計算料金の合計** | **約0.052/時** |
+| **計算料金の合計** | **約0.068/時** |
 
 これとは別に、RDS/EBSストレージ、公開IPv4、SSM Interface endpointの稼働・通信、Secrets Manager、Lambda/SQS/CloudWatch、外向きデータ転送、AI APIの料金がかかる。
 RDS・EC2等の最低課金時間や作成・準備・削除待ちがあるため、**試験5分を設備全体の課金時間としない**。

@@ -1,10 +1,11 @@
-"""試験設備の構築から結果回収・削除確認までを一度の実行で管理する。"""
+"""試験設備の起動確認と、一括試験・結果回収・削除確認を管理する。"""
 
 import argparse
 import fcntl
 import json
 import os
 import re
+import shutil
 import signal
 import sys
 import time
@@ -13,7 +14,7 @@ from datetime import UTC, datetime
 
 from botocore.exceptions import ClientError
 
-from . import assets, cleanup, remote, snapshot
+from . import assets, cleanup, readiness, remote, snapshot
 from .common import LOCAL, ROOT, client, execute, identity, save, session
 
 
@@ -75,6 +76,8 @@ class Run:
 
     @contextmanager
     def phase(self, name):
+        previous_phase = getattr(self, "current_phase", None)
+        self.current_phase = name
         self.result["phases"][name] = {"status": "running", "started_at": now()}
         self.persist()
         print(f"{self.directory.name}: {name}", flush=True)
@@ -84,7 +87,7 @@ class Run:
             self.result["phases"][name].update(
                 status="failed", error_type=type(error).__name__
             )
-            if isinstance(error, RuntimeError):
+            if isinstance(error, (RuntimeError, TimeoutError)):
                 self.result["phases"][name]["reason"] = str(error)
             if isinstance(error, ClientError):
                 self.result["phases"][name]["aws_error_code"] = error.response["Error"][
@@ -96,6 +99,7 @@ class Run:
         finally:
             self.result["phases"][name]["finished_at"] = now()
             self.persist()
+            self.current_phase = previous_phase
 
     def tf(self, args, log, timeout=300):
         execute(
@@ -104,6 +108,7 @@ class Run:
             log=self.directory / log,
             timeout=timeout,
             env=snapshot.environment(self.directory),
+            progress=True,
         )
 
     def authenticate(self):
@@ -113,18 +118,21 @@ class Run:
         key = f"smoke/{self.directory.name}/owner.json"
         with client(self.aws, "s3") as s3:
             if create:
-                s3.put_object(
-                    Bucket=self.backend["bucket"],
-                    Key=key,
-                    Body=self.manifest["owner_id"].encode(),
-                    IfNoneMatch="*",
-                )
-            else:
-                response = s3.get_object(Bucket=self.backend["bucket"], Key=key)
-                with response["Body"] as body:
-                    owner = body.read(100).decode()
-                if owner != self.manifest["owner_id"]:
-                    raise RuntimeError("run_owner_mismatch")
+                try:
+                    s3.put_object(
+                        Bucket=self.backend["bucket"],
+                        Key=key,
+                        Body=self.manifest["owner_id"].encode(),
+                        IfNoneMatch="*",
+                    )
+                except ClientError as error:
+                    if error.response["Error"]["Code"] != "PreconditionFailed":
+                        raise
+            response = s3.get_object(Bucket=self.backend["bucket"], Key=key)
+            with response["Body"] as body:
+                owner = body.read(100).decode()
+            if owner != self.manifest["owner_id"]:
+                raise RuntimeError("run_owner_mismatch")
 
     def initialize(self):
         self.tf(
@@ -140,6 +148,11 @@ class Run:
 
     def command(self, command_id):
         self.result["command_ids"].append(command_id)
+        if getattr(self, "current_phase", None):
+            self.result["phases"][self.current_phase].setdefault(
+                "command_ids",
+                [],
+            ).append(command_id)
         self.persist()
 
     def outputs(self):
@@ -230,86 +243,298 @@ class Run:
             if self.result["phases"]["inventory"]["status"] != "passed":
                 raise RuntimeError("pre_destroy_inventory_unconfirmed")
 
+    def preflight(self, *, resume=False):
+        with self.phase("preflight"):
+            self.authenticate()
+            identity(
+                self.runner,
+                self.inputs["expected_account_id"],
+                "AWSReservedSSO_VectorTestRunner_",
+            )
+            with client(self.aws, "ecr") as ecr:
+                for kind in ["backend", "proxy"]:
+                    ecr.describe_images(
+                        repositoryName=f"vector-test/{kind}",
+                        imageIds=[{"imageDigest": self.inputs[f"{kind}_image_digest"]}],
+                    )
+            if not resume:
+                self.ensure_new_state()
+            self.claim(create=not resume)
+            self.initialize()
+
+    def ensure_new_state(self):
+        with client(self.aws, "s3") as s3:
+            matches = s3.list_objects_v2(
+                Bucket=self.backend["bucket"], Prefix=self.backend["key"]
+            ).get("Contents", [])
+            if any(item["Key"] == self.backend["key"] for item in matches):
+                raise RuntimeError("run_state_already_exists")
+
+    def provision(self):
+        with self.phase("provision"):
+            self.tf(
+                [
+                    "plan",
+                    "-input=false",
+                    "-lock-timeout=60s",
+                    "-var-file=" + str(self.directory / "inputs.tfvars.json"),
+                    "-out=" + str(self.directory / "create.tfplan"),
+                ],
+                "create-plan.log",
+                600,
+            )
+            self.tf(
+                ["show", "-json", str(self.directory / "create.tfplan")],
+                "create-plan.json",
+            )
+            plan = snapshot.load(self.directory / "create-plan.json")
+            if any(
+                change["mode"] == "managed"
+                and change["change"]["actions"] != ["create"]
+                for change in plan.get("resource_changes", [])
+            ):
+                raise RuntimeError("new_run_plan_contains_existing_resources")
+            self.result["apply_attempted"] = True
+            self.persist()
+            self.tf(
+                [
+                    "apply",
+                    "-input=false",
+                    "-lock-timeout=60s",
+                    str(self.directory / "create.tfplan"),
+                ],
+                "create.log",
+                2700,
+            )
+            self.result["apply_completed"] = True
+            self.persist()
+
+    def verify_resources(self):
+        with self.phase("resources"):
+            outputs = self.outputs()
+            expected = {
+                "account_id": self.inputs["expected_account_id"],
+                "region": "ap-northeast-1",
+                "run_id": self.directory.name,
+                "state_bucket": self.backend["bucket"],
+                "state_key": self.backend["key"],
+                **{
+                    key: self.inputs[key]
+                    for key in (
+                        "backend_image_digest",
+                        "proxy_image_digest",
+                        "source_revision",
+                    )
+                },
+            }
+            if any(outputs["run"].get(k) != v for k, v in expected.items()):
+                raise RuntimeError("saved_output_scope_mismatch")
+            previous = self.directory / "inventory.json"
+            known = snapshot.load(previous) if previous.exists() else {}
+            self.tf(["show", "-json"], "state-after-create.json")
+            known = cleanup.remember_state(
+                snapshot.load(self.directory / "state-after-create.json"),
+                known,
+            )
+            save(previous, known)
+            actual = cleanup.inventory(self.aws, self.directory.name, known)
+            save(previous, actual)
+            resources = outputs["resources"]
+            required = {
+                "Vpcs": ("VpcId", [resources["vpc"]]),
+                "Subnets": ("SubnetId", resources["subnets"].values()),
+                "RouteTables": ("RouteTableId", resources["route_tables"].values()),
+                "InternetGateways": (
+                    "InternetGatewayId",
+                    [resources["internet_gateway"]],
+                ),
+                "SecurityGroups": ("GroupId", resources["security_groups"].values()),
+                "VpcEndpoints": (
+                    "VpcEndpointId",
+                    [
+                        resources[k]
+                        for k in (
+                            "ssm_endpoint",
+                            "ssmmessages_endpoint",
+                        )
+                        if k in resources
+                    ],
+                ),
+                "Instances": ("InstanceId", resources["instances"].values()),
+                "Volumes": ("VolumeId", resources["root_volumes"].values()),
+                "DBInstances": ("DBInstanceIdentifier", [resources["rds"]]),
+                "EventSourceMappings": (None, [resources["event_source_mapping"]]),
+                "Roles": (None, resources["roles"].keys()),
+                "Profiles": (None, resources["instance_profiles"].keys()),
+                "Logs": (None, resources["log_groups"].values()),
+                "Secrets": (None, [resources["master_secret_arn"]]),
+                "Queue": (None, ["vector-test-" + self.directory.name]),
+            }
+            for kind, (field, ids) in required.items():
+                present = {i[field] if field else i for i in actual[kind]}
+                if not set(ids) <= present:
+                    raise RuntimeError(f"runtime_resources_missing:{kind}")
+            with client(self.aws, "lambda") as api:
+                function = api.get_function(
+                    FunctionName=outputs["execution"]["lambda_name"],
+                )
+            if function["Code"]["ResolvedImageUri"] != outputs["run"]["backend_image"]:
+                raise RuntimeError("lambda_image_digest_mismatch")
+            return outputs
+
+    def up(self):
+        attempts = self.result.setdefault("up_attempts", [])
+        attempt = {"number": len(attempts) + 1, "started_at": now()}
+        attempts.append(attempt)
+        for name in ("preflight", "resources", *readiness.PHASES):
+            self.result["phases"][name] = {"status": "not_run"}
+        access_confirmed = False
+        try:
+            with self.phase("up"):
+                if any(
+                    self.result["phases"].get(name, {}).get("status", "not_run")
+                    != "not_run"
+                    for name in ("cleanup_access", "destroy", "verification")
+                ):
+                    raise RuntimeError("deletion_started_use_new_run_id")
+                # 旧レポートでも、構築工程の合格が記録されていれば確認だけを許可する。
+                completed = self.result.get("apply_completed", False) or (
+                    self.result["phases"]["provision"]["status"] == "passed"
+                )
+                if self.result["apply_attempted"] and not completed:
+                    raise RuntimeError(
+                        "provision_unconfirmed_destroy_then_use_new_run_id"
+                    )
+                self.preflight(resume=completed)
+                access_confirmed = True
+                if not completed:
+                    self.provision()
+                outputs = self.verify_resources()
+                readiness.check(
+                    self.aws, self.runner, outputs, self.phase, self.command
+                )
+        except BaseException:
+            if access_confirmed and self.result["apply_attempted"]:
+                try:
+                    self.collect()
+                except Exception:
+                    print(
+                        "ログ回収が不完全です。起動失敗の記録と環境を保持します。",
+                        flush=True,
+                    )
+            raise
+        finally:
+            attempt.update(
+                finished_at=now(),
+                status=self.result["phases"]["up"]["status"],
+            )
+            self.persist()
+            save(
+                self.directory / "up-attempts" / str(attempt["number"]) / "result.json",
+                self.result,
+            )
+            print(
+                f"RunId: {self.directory.name}\n結果保存先: {self.directory}\n"
+                "upは環境を自動削除しません。作成済み設備は保持されます。\n"
+                f"削除: make aws-smoke-destroy RUN_ID={self.directory.name}",
+                flush=True,
+            )
+
+    def prepare_database(self, outputs):
+        with self.phase("image"):
+            self.result["image"] = remote.ensure_image(
+                self.runner, outputs, self.command
+            )
+        with self.phase("database"):
+            self.result["database"] = remote.prepare(
+                self.runner, outputs, self.directory, self.command
+            )
+
+    def prepare(self):
+        attempts = self.result.setdefault("prepare_attempts", [])
+        attempt = {"number": len(attempts) + 1, "started_at": now()}
+        attempts.append(attempt)
+        for name in (
+            "preflight",
+            "resources",
+            *readiness.PHASES,
+            "auth_schema",
+            "image",
+            "database",
+        ):
+            self.result["phases"][name] = {"status": "not_run"}
+        for name in ("database", "image"):
+            self.result.pop(name, None)
+        access_confirmed = False
+        try:
+            with self.phase("prepare"):
+                if any(
+                    self.result["phases"].get(name, {}).get("status", "not_run")
+                    != "not_run"
+                    for name in ("cleanup_access", "destroy", "verification")
+                ):
+                    raise RuntimeError("deletion_started_use_new_run_id")
+                if not self.result.get("apply_completed") or (
+                    self.result["phases"].get("up", {}).get("status") != "passed"
+                ):
+                    raise RuntimeError("up_must_pass_before_prepare")
+                self.preflight(resume=True)
+                access_confirmed = True
+                outputs = self.verify_resources()
+                readiness.check(
+                    self.aws, self.runner, outputs, self.phase, self.command
+                )
+                with self.phase("auth_schema"):
+                    assets.prepare_assets(
+                        self.directory, self.inputs["source_revision"]
+                    )
+                self.prepare_database(outputs)
+        except BaseException:
+            if access_confirmed:
+                try:
+                    self.collect()
+                except Exception:
+                    print(
+                        "ログ回収が不完全です。準備失敗の記録と環境を保持します。",
+                        flush=True,
+                    )
+            raise
+        finally:
+            attempt.update(
+                finished_at=now(), status=self.result["phases"]["prepare"]["status"]
+            )
+            self.persist()
+            save(
+                self.directory
+                / "prepare-attempts"
+                / str(attempt["number"])
+                / "result.json",
+                self.result,
+            )
+            failed = [
+                name
+                for name, value in self.result["phases"].items()
+                if value["status"] == "failed"
+            ]
+            print(
+                f"RunId: {self.directory.name}\n結果保存先: {self.directory}\n"
+                f"prepare: {attempt['status']}\n"
+                f"失敗工程: {', '.join(failed) or 'なし'}\n"
+                "prepareは環境を自動削除しません。\n"
+                f"再実行: make aws-smoke-prepare RUN_ID={self.directory.name}\n"
+                f"削除: make aws-smoke-destroy RUN_ID={self.directory.name}",
+                flush=True,
+            )
+
     def run(self):
         try:
-            with self.phase("preflight"):
-                self.authenticate()
-                identity(
-                    self.runner,
-                    self.inputs["expected_account_id"],
-                    "AWSReservedSSO_VectorTestRunner_",
-                )
-                with client(self.aws, "ecr") as ecr:
-                    for kind in ["backend", "proxy"]:
-                        ecr.describe_images(
-                            repositoryName=f"vector-test/{kind}",
-                            imageIds=[
-                                {"imageDigest": self.inputs[f"{kind}_image_digest"]}
-                            ],
-                        )
-                with client(self.aws, "s3") as s3:
-                    matches = s3.list_objects_v2(
-                        Bucket=self.backend["bucket"], Prefix=self.backend["key"]
-                    ).get("Contents", [])
-                    if any(item["Key"] == self.backend["key"] for item in matches):
-                        raise RuntimeError("run_state_already_exists")
-                self.claim(create=True)
-                self.initialize()
+            self.preflight()
             with self.phase("auth_schema"):
                 assets.prepare_assets(self.directory, self.inputs["source_revision"])
-            with self.phase("provision"):
-                self.tf(
-                    [
-                        "plan",
-                        "-input=false",
-                        "-lock-timeout=60s",
-                        "-var-file=" + str(self.directory / "inputs.tfvars.json"),
-                        "-out=" + str(self.directory / "create.tfplan"),
-                    ],
-                    "create-plan.log",
-                    600,
-                )
-                self.tf(
-                    ["show", "-json", str(self.directory / "create.tfplan")],
-                    "create-plan.json",
-                )
-                plan = snapshot.load(self.directory / "create-plan.json")
-                if any(
-                    change["mode"] == "managed"
-                    and change["change"]["actions"] != ["create"]
-                    for change in plan.get("resource_changes", [])
-                ):
-                    raise RuntimeError("new_run_plan_contains_existing_resources")
-                self.result["apply_attempted"] = True
-                self.persist()
-                self.tf(
-                    [
-                        "apply",
-                        "-input=false",
-                        "-lock-timeout=60s",
-                        str(self.directory / "create.tfplan"),
-                    ],
-                    "create.log",
-                    2700,
-                )
-                outputs = self.outputs()
-                save(
-                    self.directory / "inventory.json",
-                    cleanup.inventory(self.aws, self.directory.name),
-                )
-                with client(self.aws, "lambda") as api:
-                    actual = api.get_function(
-                        FunctionName=outputs["execution"]["lambda_name"]
-                    )
-                if (
-                    actual["Code"]["ResolvedImageUri"]
-                    != outputs["run"]["backend_image"]
-                ):
-                    raise RuntimeError("lambda_image_digest_mismatch")
-            with self.phase("database"):
-                self.result["database"] = remote.prepare(
-                    self.runner, outputs, self.directory, self.command
-                )
+            self.provision()
+            outputs = self.verify_resources()
+            readiness.check(self.aws, self.runner, outputs, self.phase, self.command)
+            self.prepare_database(outputs)
             with self.phase("test"):
                 self.result["test_deadline"] = time.time() + 300
                 self.persist()
@@ -382,20 +607,27 @@ def main():
     parser = argparse.ArgumentParser(
         description="試験AWSの構築・DB準備・試験・回収・削除確認"
     )
-    parser.add_argument("action", choices=["run", "destroy", "status"])
+    parser.add_argument("action", choices=["up", "prepare", "run", "destroy", "status"])
     parser.add_argument("--run-id", default=os.environ.get("RUN_ID"))
     parser.add_argument("--runner-profile", default="vector-test-runner")
     args = parser.parse_args()
     run_id = args.run_id or (
-        datetime.now(UTC).strftime("%Y%m%d-%H%M%S") if args.action == "run" else ""
+        datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        if args.action in {"up", "run"}
+        else ""
     )
     if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", run_id) or len(run_id) > 24:
         parser.error("有効なRUN_ID（英小文字・数字・ハイフン、24文字以内）が必要です。")
     os.umask(0o077)
     directory = LOCAL / "runs" / run_id
-    if args.action == "run":
-        directory.mkdir(parents=True, exist_ok=False)
-        snapshot.create(directory, run_id, args.runner_profile)
+    created = False
+    if args.action in {"up", "run"}:
+        try:
+            directory.mkdir(parents=True, exist_ok=False)
+            created = True
+        except FileExistsError:
+            if args.action != "up":
+                raise
     if not directory.is_dir():
         parser.error("保存済みの実行ディレクトリがありません。")
     print(f"結果保存先: {directory}", flush=True)
@@ -404,12 +636,25 @@ def main():
     # 同じ実行への並行操作は拒否し、別の削除プロセスを上書きしない。
     with (directory / "operation.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if created:
+            try:
+                snapshot.create(directory, run_id, args.runner_profile)
+            except BaseException:
+                # AWS操作前の失敗なので、この呼出が作成した不完全な入力だけを除去する。
+                shutil.rmtree(directory)
+                raise
         run = Run(directory)
-        if args.action == "run":
+        if args.action == "up":
+            run.up()
+        elif args.action == "prepare":
+            run.prepare()
+        elif args.action == "run":
             run.run()
         elif args.action == "destroy":
             try:
-                if run.result["phases"].get("collection", {}).get("status") != "passed":
+                if run.result.get("up_attempts") or (
+                    run.result["phases"].get("collection", {}).get("status") != "passed"
+                ):
                     run.collect()
             except Exception:
                 print("結果回収が不完全です。記録を残して削除へ進みます。", flush=True)

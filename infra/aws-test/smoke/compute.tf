@@ -2,10 +2,9 @@ data "aws_ssm_parameter" "amazon_linux" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
 }
 locals {
-  no_proxy          = join(",", ["localhost", "127.0.0.1", "169.254.169.254", "ssm.${local.region}.amazonaws.com", aws_db_instance.smoke.address])
+  no_proxy          = join(",", ["localhost", "127.0.0.1", "169.254.169.254", "ssm.${local.region}.amazonaws.com", "ssmmessages.${local.region}.amazonaws.com", aws_db_instance.smoke.address])
   non_public_ranges = jsondecode(file("${path.module}/../../../backend/app/shared/security/non_public_ranges.json"))
   runner_domains = [
-    "ssmmessages.${local.region}.amazonaws.com",
     "api.ecr.${local.region}.amazonaws.com",
     local.registry,
     "prod-${local.region}-starport-layer-bucket.s3.${local.region}.amazonaws.com",
@@ -44,7 +43,7 @@ locals {
 resource "aws_instance" "runtime" {
   for_each                    = toset(["proxy", "runner"])
   ami                         = nonsensitive(data.aws_ssm_parameter.amazon_linux.value)
-  instance_type               = each.key == "proxy" ? "t4g.nano" : "t4g.small"
+  instance_type               = "t4g.small"
   subnet_id                   = aws_subnet.smoke[each.key].id
   private_ip                  = each.key == "proxy" ? local.proxy_ip : null
   associate_public_ip_address = each.key == "proxy"
@@ -77,6 +76,7 @@ resource "aws_instance" "runtime" {
     aws_vpc_security_group_egress_rule.private,
     aws_vpc_security_group_egress_rule.proxy_internet,
     aws_vpc_endpoint.ssm,
+    aws_vpc_endpoint.ssmmessages,
     data.aws_ecr_image.proxy,
   ]
 }
