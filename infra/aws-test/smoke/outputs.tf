@@ -37,6 +37,7 @@ output "resources" {
     internet_gateway     = aws_internet_gateway.proxy.id
     security_groups      = { for k, v in aws_security_group.smoke : k => v.id }
     ssm_endpoint         = aws_vpc_endpoint.ssm.id
+    ssmmessages_endpoint = aws_vpc_endpoint.ssmmessages.id
     instances            = { for k, v in aws_instance.runtime : k => v.id }
     root_volumes         = { for k, v in aws_instance.runtime : k => v.root_block_device[0].volume_id }
     proxy_public_ip      = aws_instance.runtime["proxy"].public_ip

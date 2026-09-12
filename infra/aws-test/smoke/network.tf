@@ -100,3 +100,13 @@ resource "aws_vpc_endpoint" "ssm" {
   security_group_ids  = [aws_security_group.smoke["ssm"].id]
   tags                = merge(local.tags, { Name = "${local.prefix}-ssm" })
 }
+
+resource "aws_vpc_endpoint" "ssmmessages" {
+  vpc_id              = aws_vpc.smoke.id
+  service_name        = "com.amazonaws.${local.region}.ssmmessages"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = [aws_subnet.smoke["lambda"].id]
+  security_group_ids  = [aws_security_group.smoke["ssm"].id]
+  tags                = merge(local.tags, { Name = "${local.prefix}-ssmmessages" })
+}

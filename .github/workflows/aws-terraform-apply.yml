@@ -27,6 +27,14 @@ on:
       - ".github/workflows/aws-terraform-apply.yml"
   workflow_dispatch:
     inputs:
+      assessment_consumer_image_digest:
+        description: "Assessment Consumerのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      assessment_outbox_relay_image_digest:
+        description: "Assessment relayのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
       embedding_consumer_image_digest:
         description: "Consumerの作成・更新・切り戻し先sha256 digest（空欄は現状維持）"
         required: false
@@ -193,6 +201,35 @@ jobs:
             fi
             echo "Embedding Consumer image: $REQUESTED_DIGEST" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Resolve Assessment images
+        env:
+          REQUESTED_CONSUMER_DIGEST: ${{ inputs.assessment_consumer_image_digest }}
+          REQUESTED_RELAY_DIGEST: ${{ inputs.assessment_outbox_relay_image_digest }}
+        run: |
+          set -euo pipefail
+          # 両方のdigestが正常に解決された場合だけ設定を配置する。
+          assessment_vars_tmp=$(mktemp ./assessment-vars.XXXXXX)
+          trap 'rm -f "$assessment_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-assessment-images.py \
+                --consumer-digest "$REQUESTED_CONSUMER_DIGEST" \
+                --relay-digest "$REQUESTED_RELAY_DIGEST" \
+            > "$assessment_vars_tmp"
+          mv "$assessment_vars_tmp" assessment.auto.tfvars.json
+          for requested_digest in "$REQUESTED_CONSUMER_DIGEST" "$REQUESTED_RELAY_DIGEST"; do
+            if [ -n "$requested_digest" ]; then
+              repository=$(terraform output -json ecr_repository_urls | jq -er '.backend | split("/")[1:] | join("/")')
+              image=$(aws ecr describe-images --repository-name "$repository" \
+                --image-ids "imageDigest=$requested_digest" \
+                --query 'imageDetails[0].imageDigest' --output text)
+              if [ "$image" != "$requested_digest" ]; then
+                echo "::error::backend ECRリポジトリに指定digestが存在しない"
+                exit 1
+              fi
+              echo "Assessment image: $requested_digest" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
       # plan → apply を 1 step で行い、tfplan を step 間でも持ち回らない。
       # 適用されるのは常にこの step 自身が plan した内容になる。

@@ -161,7 +161,7 @@ SSMの稼働状態・結果取得は東京リージョン内の`Resource: "*"`�
 
 ## Runnerを使う後続スクリプトの契約
 
-試験スクリプト・自動削除・結果回収は未実装。[スモークテスト仕様](../../specs/pipeline/embedding-aws-smoke-test.md)に従って実装する。
+試験スクリプト・自動削除・結果回収は実装済みで、実AWSでは未検証。[操作手順](README.md#実行コマンドの使い方)と[スモークテスト仕様](../../specs/pipeline/embedding-aws-smoke-test.md)を参照する。
 このポリシーはCLI・スクリプトに必要なAPIを対象とし、AWSコンソール全画面の閲覧を保証しない。
 
 1. Managerが取得したTerraform出力の`execution.instance_ids.runner`と`execution.log_groups`を受け取る。Runnerにはstateバケットの読取権限を追加しない。
@@ -176,7 +176,7 @@ SSMの稼働状態・結果取得は東京リージョン内の`Resource: "*"`�
 
 - **構築ロールの信頼先を更新する。** 管理者が既存のbootstrap運用で、`trusted_admin_role_arn_pattern`を同一テストアカウントの`AWSReservedSSO_VectorTestManager_*`に変更する。名称に`admin`が残る既存の設定キーを使い、任意のSSOロールを許可するパターンへ広げない。Identity Centerのリージョンに対応した実ロールのパスを確認する。Manager側の`sts:AssumeRole`許可だけでは引受は成立しない。
 - **SSOプロファイルを分ける。** 管理者・Manager・RunnerのプロファイルをAWS CLIに登録する。Manager／Runnerはテスト用ユーザーで認証し、それぞれ同名の権限セットを選ぶ。bootstrap用の`.local/account.json`の`aws_profile`は管理者のまま維持する。
-- **smokeの接続元を明示する。** 現行の設定生成スクリプトは同じプロファイルを全生成物に出力するため、[READMEの手順](README.md#後で構築plan削除planを確認する手順)でbackendの`profile`とproviderの`aws_profile`をManagerへ上書きする。`AWS_PROFILE`の切替だけで代用しない。生成ファイルに独自の設定キーを追加しない。
+- **smokeの接続元を明示する。** `.local/account.json`の`smoke_aws_profile`にManagerを指定し、[READMEの手順](README.md#ローカルのアカウント設定)で再生成する。backendの`profile`とproviderの`aws_profile`の両方へ反映される。`AWS_PROFILE`の切替だけで代用しない。生成ファイルに独自の設定キーを追加しない。
 - **実環境で確認する。** 各プロファイルのアカウントとSSOロール、Managerの構築ロール引受・ECR操作、Runnerの対象限定・ログ取得を確認する。自動削除と結果回収の完成まではsmokeをapplyしない。将来の試験では削除時のENI待機も確認する。
 
 この文書更新では、AWSの信頼ポリシー・アクセス許可セット・ローカルプロファイルを変更しない。

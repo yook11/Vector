@@ -3,28 +3,23 @@ locals {
     for name in ["terraform-plan", "terraform-apply", "app-push", "db-migrate", "app-rollout"] :
     name => "arn:aws:iam::${local.account_id}:role/vector-ci/vector-ci-${name}"
   }
-  # bootstrapの管理対象を増やすときは管理者がこの許可リストを先に更新する。
-  ci_policy_names = [
-    "vector-task-boundary", "vector-agent-task-boundary", "vector-execution-boundary",
-    "vector-migration-task-boundary", "vector-migration-execution-boundary",
-    "vector-chatbot-boundary", "vector-agentcore-gateway-boundary",
-    "vector-outbox-relay-lambda-boundary", "vector-outbox-relay-scheduler-boundary",
-    "vector-embedding-consumer-lambda-boundary",
-    "vector-ci-apply-outbox", "vector-ci-apply-embedding-consumer", "vector-ci-lambda-config-readback",
-  ]
-  ci_policy_arns = [for name in local.ci_policy_names : "arn:aws:iam::${local.account_id}:policy/vector-ci/${name}"]
+  # 専用path内の追加はbootstrap担当へ委譲し、取り付け先は用途別に制限する。
+  ci_policy_arn_pattern = "arn:aws:iam::${local.account_id}:policy/vector-ci/*"
   attachments = {
     plan = {
       role = local.ci_role_arns["terraform-plan"]
       policies = [
         "arn:aws:iam::aws:policy/ReadOnlyAccess",
+        "arn:aws:iam::${local.account_id}:policy/vector-ci/vector-ci-plan-*",
         "arn:aws:iam::${local.account_id}:policy/vector-ci/vector-ci-lambda-config-readback",
       ]
     }
     apply = {
       role = local.ci_role_arns["terraform-apply"]
-      policies = [for name in ["apply-outbox", "apply-embedding-consumer", "lambda-config-readback"] :
-      "arn:aws:iam::${local.account_id}:policy/vector-ci/vector-ci-${name}"]
+      policies = [
+        "arn:aws:iam::${local.account_id}:policy/vector-ci/vector-ci-apply-*",
+        "arn:aws:iam::${local.account_id}:policy/vector-ci/vector-ci-lambda-config-readback",
+      ]
     }
   }
   service_linked_roles = {
@@ -55,9 +50,9 @@ locals {
         ]
       },
       {
-        Sid      = "ManageKnownCiPolicies"
+        Sid      = "ManageCiPolicyPath"
         Effect   = "Allow"
-        Resource = local.ci_policy_arns
+        Resource = local.ci_policy_arn_pattern
         Action = [
           "iam:CreatePolicy", "iam:DeletePolicy", "iam:GetPolicy", "iam:GetPolicyVersion",
           "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:SetDefaultPolicyVersion",
@@ -141,7 +136,7 @@ locals {
         Effect    = "Allow"
         Action    = ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
         Resource  = attachment.role
-        Condition = { ArnEquals = { "iam:PolicyARN" = attachment.policies } }
+        Condition = { ArnLike = { "iam:PolicyARN" = attachment.policies } }
     }])
   }
 }

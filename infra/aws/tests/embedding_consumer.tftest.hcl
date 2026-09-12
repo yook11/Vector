@@ -109,7 +109,7 @@ run "queue_redrive_and_sender_isolation" {
     error_message = "DLQはembeddingだけからredriveを受け付け、非TLSを拒否する。"
   }
   assert {
-    condition = alltrue([for stage in ["completion", "curation", "assessment"] :
+    condition = alltrue([for stage in ["completion", "curation"] :
       aws_sqs_queue.outbox[stage].message_retention_seconds == 1209600 &&
       aws_sqs_queue.outbox[stage].visibility_timeout_seconds == 30 &&
       aws_sqs_queue.outbox[stage].redrive_policy == ""
@@ -394,7 +394,7 @@ run "consumer_image_and_enabled_mapping" {
   assert {
     condition = (
       length(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement) == 1 &&
-      toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.ArnLike["aws:SourceArn"]) == toset([local.outbox_relay_arn, local.embedding_consumer_arn]) &&
+      toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.ArnLike["aws:SourceArn"]) == toset([local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn]) &&
       jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.StringEquals["aws:SourceAccount"] == "123456789012" &&
       jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Principal.Service == "lambda.amazonaws.com" &&
       toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Action) == toset(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"])

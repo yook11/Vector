@@ -57,30 +57,88 @@ run "dedicated_sso_entry_and_immutable_executor" {
   }
 }
 
-run "bootstrap_inventory_matches_current_resources" {
+run "policy_management_is_delegated_within_ci_path" {
   command = plan
   assert {
     condition = (
-      length(regexall("resource \"aws_iam_policy\"", join("\n", [for path in fileset("../bootstrap", "*.tf") : file("../bootstrap/${path}")]))) == length(local.ci_policy_names) &&
-      alltrue([for name in local.ci_policy_names : length(regexall(
-        "name\\s*=\\s*\"\\$\\{var.name_prefix\\}${trimprefix(name, "vector")}\"",
-        join("\n", [for path in fileset("../bootstrap", "*.tf") : file("../bootstrap/${path}")])
-      )) == 1])
+      [for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement : s.Resource
+        if s.Sid == "ManageCiPolicyPath" && s.Effect == "Allow"
+      ] == ["arn:aws:iam::123456789012:policy/vector-ci/*"] &&
+      alltrue([for resource in [
+        { arn = "arn:aws:iam::123456789012:policy/vector-ci/vector-new-consumer-boundary", allowed = true },
+        { arn = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-apply-new-consumer", allowed = true },
+        { arn = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-plan-new-service", allowed = true },
+        { arn = "arn:aws:iam::123456789012:policy/vector-ci/nested/new-policy", allowed = true },
+        { arn = "arn:aws:iam::111111111111:policy/vector-ci/vector-new-consumer-boundary", allowed = false },
+        { arn = "arn:aws:iam::123456789012:policy/vector-ci-other/new-policy", allowed = false },
+        { arn = "arn:aws:iam::123456789012:policy/vector/new-policy", allowed = false },
+        { arn = "arn:aws:iam::123456789012:policy/vector-test/bootstrap/new-policy", allowed = false },
+        { arn = "arn:aws:iam::aws:policy/AdministratorAccess", allowed = false },
+        { arn = "arn:aws:iam::123456789012:role/vector-bootstrap-apply", allowed = false },
+        ] : alltrue([for action in ["iam:CreatePolicy", "iam:CreatePolicyVersion", "iam:DeletePolicy"] :
+          anytrue([for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement :
+            s.Effect == "Allow" && contains(flatten([s.Action]), action) &&
+            anytrue([for pattern in flatten([s.Resource]) : can(regex("^${replace(pattern, "*", ".*")}$", resource.arn))])
+          ]) == resource.allowed
+      ])])
     )
-    error_message = "bootstrapのmanaged policy追加・改名時には管理者の許可リストも更新する。"
+    error_message = "新しいpolicyとboundaryの管理は同一アカウントの/vector-ci/配下だけに委譲する。"
   }
   assert {
     condition = alltrue([for s in local.bootstrap_policy.Statement : s.Effect != "Allow" ? true :
       alltrue([for action in flatten([s.Action]) : !strcontains(action, "*")]) &&
-      alltrue([for arn in flatten([s.Resource]) : !strcontains(arn, "*") || s.Sid == "ReadLambdaConfigurationKeyMetadata"])
+      alltrue([for arn in flatten([s.Resource]) : !strcontains(arn, "*") || contains(["ReadLambdaConfigurationKeyMetadata", "ManageCiPolicyPath"], s.Sid)])
     ])
-    error_message = "Allowの操作と対象を列挙し、KMS alias条件付きmetadata参照以外はARNを固定する。"
+    error_message = "Allowの操作は列挙し、対象ARNのwildcardはCI policy pathとKMS metadataだけに限定する。"
   }
   assert {
-    condition = alltrue([for s in local.bootstrap_policy.Statement : !startswith(s.Sid, "AttachKnownPolicies") ? true :
-      s.Effect == "Allow" && !contains(s.Condition.ArnEquals["iam:PolicyARN"], "arn:aws:iam::aws:policy/AdministratorAccess")
+    condition = toset(flatten([for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement : s.Resource
+      if s.Effect == "Allow" && contains(flatten([s.Action]), "iam:CreateRole")
+      ])) == toset([for name in ["terraform-plan", "terraform-apply", "app-push", "db-migrate", "app-rollout"] :
+    "arn:aws:iam::123456789012:role/vector-ci/vector-ci-${name}"])
+    error_message = "管理できるCIロール5つは固定し、新規ロールへ委譲を広げない。"
+  }
+}
+
+run "policy_attachments_preserve_role_purposes" {
+  command = plan
+  assert {
+    condition = alltrue([for attachment in [
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-apply-new-consumer", roles = ["terraform-apply"] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-plan-new-service", roles = ["terraform-plan"] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-apply-assessment-consumer", roles = ["terraform-apply"] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-apply-embedding-consumer", roles = ["terraform-apply"] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-apply-outbox", roles = ["terraform-apply"] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-lambda-config-readback", roles = ["terraform-plan", "terraform-apply"] },
+      { policy = "arn:aws:iam::aws:policy/ReadOnlyAccess", roles = ["terraform-plan"] },
+      { policy = "arn:aws:iam::aws:policy/AdministratorAccess", roles = [] },
+      { policy = "arn:aws:iam::111111111111:policy/vector-ci/vector-ci-apply-new-consumer", roles = [] },
+      { policy = "arn:aws:iam::123456789012:policy/vector/vector-ci-apply-new-consumer", roles = [] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci-other/vector-ci-apply-new-consumer", roles = [] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-ci-lambda-config-readback-other", roles = [] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-new-consumer-boundary", roles = [] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-assessment-consumer-lambda-boundary", roles = [] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-assessment-outbox-relay-lambda-boundary", roles = [] },
+      { policy = "arn:aws:iam::123456789012:policy/vector-ci/vector-assessment-outbox-relay-scheduler-boundary", roles = [] },
+      ] : alltrue([for role in ["terraform-plan", "terraform-apply", "app-push", "db-migrate", "app-rollout", "new-role"] :
+        alltrue([for action in ["iam:AttachRolePolicy", "iam:DetachRolePolicy"] :
+          anytrue([for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement :
+            s.Effect == "Allow" && contains(flatten([s.Action]), action) &&
+            contains(flatten([s.Resource]), "arn:aws:iam::123456789012:role/vector-ci/vector-ci-${role}") &&
+            try(anytrue([for pattern in s.Condition.ArnLike["iam:PolicyARN"] : can(regex("^${replace(pattern, "*", ".*")}$", attachment.policy))]), false)
+          ]) == contains(attachment.roles, role)
+        ])
+    ])])
+    error_message = "既存・新規のpolicy取り付けと取り外しを用途別に限定し、別account・path・boundaryを許可しない。"
+  }
+  assert {
+    condition = toset([for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement : s.Resource
+      if s.Effect == "Allow" && contains(flatten([s.Action]), "iam:AttachRolePolicy")
+      ]) == toset([
+      "arn:aws:iam::123456789012:role/vector-ci/vector-ci-terraform-plan",
+      "arn:aws:iam::123456789012:role/vector-ci/vector-ci-terraform-apply",
     ])
-    error_message = "CIへのmanaged policy付与を既存の対応表に限定する。"
+    error_message = "policyの取り付け先を既存plan/applyに固定する。"
   }
 }
 

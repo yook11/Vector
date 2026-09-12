@@ -21,7 +21,12 @@ local_tests/
 ├── embedding/support.py          記事準備・実ハンドラー呼び出し
 ├── embedding/test_invocation_resources.py  呼び出し単位のDB接続管理（5件）
 ├── embedding/test_event_processing.py  対象記事の保存成功・保存失敗（2件）
-└── embedding/test_duplicate_processing.py  重複配送・同時処理での保存結果の維持（2件）
+├── embedding/test_duplicate_processing.py  重複配送・同時処理での保存結果の維持（2件）
+├── assessment/conftest.py        接続設定・HTTP境界・実DB障害と待機の制御
+├── assessment/support.py         記事準備・実ハンドラー呼び出し・別接続からの確認
+├── assessment/test_event_processing.py  対象内・対象外の確定保存と原子性（3件）
+├── assessment/test_duplicate_processing.py  再配送・同じ判定区分の同時保存（4件）
+└── assessment/test_invocation_resources.py  呼び出し単位のDB接続管理（5件）
 ```
 
 - `database.py`: Alembic headへの到達、必要なAuthテーブルとカテゴリ初期データの存在を準備時に確認し、不成立ならテストを開始しない。DB構造全体や既存データの移行を網羅するテストではない。
@@ -55,8 +60,21 @@ AI待機中のケースはHTTPリクエスト到達の合図で応答を停止�
 Engineとdisposeは実物を使用し、接続IDと終了時の状態だけを観測する。DB側の切断反映は最大2秒待つ。
 外部境界のIAM署名・SSM取得・Gemini HTTP応答とテスト用Settingsを差し替える。DB待機テストでは元のConsumer timeoutを保持して期限の到来だけを制御する。
 
-監査・重複抑止・エラー分類・部分失敗応答・SDK終了順の詳細はこのテストの責務に含めない。
-従来の全体動作テストをそのまま複製せず、正常終了時の保存と接続管理に絞った。
+監査の詳細項目・エラー分類・混在バッチの部分失敗応答・SDK終了順は通常の部品テストで確認する。
+
+Assessmentも実handler → 実DeepSeek SDK・Assessor → Consumer・Repository → 製品Engineを通す。
+DBは共通のmigration適用済み環境へ`vector_app`で接続し、IAM署名・SSM取得・AI HTTP応答だけを外部境界で差し替える。
+本番と同じ1接続・追加接続なし・各DB timeout 5秒を使う。AWS IAMの実認証・本番TLS・AIへの実通信は確認しない。
+
+- `assessment/test_event_processing.py`: 対象記事の入力・対象内結果と成功監査・対応Outbox、対象外結果と成功監査だけの保存を確認する。障害ケースでは同一トランザクション内に結果・成功監査・Outboxが実INSERT済みであることを観測し、実SQLエラーを起こす。応答後の別接続から全件のロールバックと別トランザクションの失敗監査を確認する。
+- `assessment/test_duplicate_processing.py`: 再配送で異なるAI応答を用意しても保存済み内容が変わらないことを確認する。同時処理では両方をAIまで進め、先行側の実INSERT後に確定を停止する。後続のINSERTが一意制約のロック待ちになったことをDBで観測してから再開し、先行側の内容だけが残り、後続が`ALREADY_ASSESSED`になることを確認する。対象内同士・対象外同士の2種類を扱い、対象内と対象外が競合するケースは保証しない。
+- `assessment/test_invocation_resources.py`: 連続呼び出しでの1接続再利用と終了、AI応答待ちでの接続返却とトランザクション終了、HTTP失敗・実DB障害・DB待機中の業務期限切れ後の接続解放を確認する。期限切れは実INSERTのロック待ちを観測してから既存timeoutをrescheduleし、失敗監査後の接続終了と同じ記事の再処理を確認する。設定値をテスト用の短時間へ変えず、60秒も待たない。
+
+Assessmentの既存Consumerテストから同時保存と接続返却の保証を移し、通常のResources実DBテストは上記の実呼び出しへ置き換えた。
+通常のConsumerテストには照会回数・DB由来の監査ID・判定済み時のAIとメトリクスの非実行を残し、Serviceの重複テストは`ALREADY_ASSESSED`とcommit非実行に絞る。
+成功監査・Outbox・commit各境界の失敗伝播、元例外保持、設定や資源の生成・終了順と二次障害は、引き続き通常の`tests/`が担当する。
+製品コードをテスト用に変更せず、実Engineと処理は保持したまま観測・DB障害・競合の順序だけを制御する。
+詳細は[Assessment仕様](../../specs/pipeline/assessment-consumer.md)を参照する。
 
 DB不要の単体テストは`../tests/test_local_database.py`（接続URL・準備処理の後片付け、5件）と
 `../tests/test_iam_fixtures.py`（共通IAM署名差し替え、11件）にある。
@@ -67,6 +85,7 @@ DB不要の単体テストは`../tests/test_local_database.py`（接続URL・準
 
 ```sh
 uv run pytest local_tests/embedding/ -x -q
+uv run pytest local_tests/assessment/ -x -q
 uv run pytest local_tests/test_database_permissions.py -x -q
 uv run pytest local_tests/test_database_isolation.py -x -q
 uv run pytest tests/test_local_database.py tests/test_iam_fixtures.py -x -q
@@ -96,7 +115,7 @@ DBレベルの独自ACLはcloneされないため、検出時は初期化を失�
 `.env`は使わず、DB接続値は専用Composeの定義から取得する。
 DBロールとテーブル権限は既存の初期化／migrationを正本とし、テストを通すためのGRANTを追加しない。
 
-ローカルのDB契約・Embeddingシステムテストであり、AWS IAMの実認証・SQSの実配信・AIへの実通信・同一アプリイメージでの実行は保証しない。
+ローカルのDB契約・Embedding／Assessmentシステムテストであり、AWS IAMの実認証・SQSの実配信・AIへの実通信・同一アプリイメージでの実行は保証しない。
 詳細は[共通DB仕様](../../specs/pipeline/system-test-database.md)を参照する。
 
 既存の`tests/test_db_user_isolation.py`の権限20件は許可一覧の照合と実操作に再編した。独自の接続先解決と環境不足によるskipは廃止し、Authの構造契約2件も共通DBで実行する。Outbox個別migrationのupgrade/downgrade試験は`tests/outbox/test_collect_permissions_migration.py`に残す。

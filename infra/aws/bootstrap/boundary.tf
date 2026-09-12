@@ -121,6 +121,18 @@ locals {
       boundary   = aws_iam_policy.outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-outbox-relay-scheduler"]
     }
+    AssessmentConsumerLambda = {
+      boundary   = aws_iam_policy.assessment_consumer_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-assessment-consumer-lambda"]
+    }
+    AssessmentOutboxRelayLambda = {
+      boundary   = aws_iam_policy.assessment_outbox_relay_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-assessment-outbox-relay-lambda"]
+    }
+    AssessmentOutboxRelayScheduler = {
+      boundary   = aws_iam_policy.assessment_outbox_relay_scheduler_boundary.arn
+      role_names = ["${var.name_prefix}-assessment-outbox-relay-scheduler"]
+    }
     Chatbot = {
       boundary   = aws_iam_policy.chatbot_boundary.arn
       role_names = ["${var.name_prefix}-chatbot"]

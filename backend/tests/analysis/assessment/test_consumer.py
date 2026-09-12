@@ -101,10 +101,10 @@ async def _rows(session, model):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("in_scope", [True, False])
-async def test_save_then_duplicate_uses_db_identity_without_extra_effects(
+async def test_uses_db_identity_and_skips_ai_and_metrics_when_assessed(
     db_session, session_factory, target, assessor, capsys, in_scope
 ):
-    """DB由来IDで保存し、開始時の判定済みは追加の副作用を持たない。"""
+    """監査はDB由来IDを使い、開始時の判定済みではAIと成功メトリクスを追加しない。"""
     assessor.assess.return_value = _call(in_scope)
     event = target.model_copy(update={"analyzable_article_id": 999_999})
     consumer = AssessmentConsumer(session_factory, assessor)
@@ -122,13 +122,6 @@ async def test_save_then_duplicate_uses_db_identity_without_extra_effects(
     events = await _events(db_session)
     assert len(events) == 1 and events[0].event_type == "succeeded"
     assert events[0].article_id == target.analyzable_article_id
-    outbox = await _rows(db_session, OutboxEvent)
-    assert len(outbox) == int(in_scope)
-    if in_scope:
-        assert outbox[0].payload == {
-            "curation_id": target.curation_id,
-            "analyzed_article_id": rows[0].id,
-        }
     assert [
         r["result"]
         for r in metric_records(capsys.readouterr().out, "processing_outcome")
@@ -136,10 +129,6 @@ async def test_save_then_duplicate_uses_db_identity_without_extra_effects(
     again = await consumer.consume(event)
     assert again == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
     assessor.assess.assert_awaited_once_with(title_ja="title", summary_ja="summary")
-    assert [r.id for r in await _events(db_session)] == [events[0].id]
-    assert [r.event_id for r in await _rows(db_session, OutboxEvent)] == [
-        r.event_id for r in outbox
-    ]
     assert metric_records(capsys.readouterr().out, "processing_outcome") == []
 
 
@@ -226,47 +215,6 @@ async def test_stage_failure_keeps_original_instance(
         await AssessmentConsumer(session_factory, assessor).consume(target)
     assert raised.value is original
     assert len(await _events(db_session)) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("in_scope", [True, False])
-async def test_same_result_race_saves_once(
-    db_session, session_factory, target, assessor, in_scope, capsys
-):
-    """同じ判定結果の並行保存では一方が保存時の重複スキップになる。"""
-    barrier = asyncio.Barrier(2)
-
-    async def together(**kwargs):
-        await barrier.wait()
-        return _call(in_scope)
-
-    assessor.assess.side_effect = together
-    async with asyncio.timeout(10):
-        results = await asyncio.gather(
-            *(
-                AssessmentConsumer(session_factory, assessor).consume(target)
-                for _ in range(2)
-            )
-        )
-    assert {r.kind for r in results} == {
-        AssessmentCompletionKind.IN_SCOPE
-        if in_scope
-        else AssessmentCompletionKind.OUT_OF_SCOPE,
-        AssessmentCompletionKind.ALREADY_ASSESSED,
-    }
-    assert assessor.assess.await_count == 2
-    assert len(await _events(db_session)) == 1
-    assert (
-        len(
-            await _rows(
-                db_session,
-                AnalyzedArticleRecord if in_scope else OutOfScopeArticleRecord,
-            )
-        )
-        == 1
-    )
-    assert len(await _rows(db_session, OutboxEvent)) == int(in_scope)
-    assert len(metric_records(capsys.readouterr().out, "processing_outcome")) == 1
 
 
 @pytest.mark.asyncio
@@ -391,50 +339,21 @@ async def test_cancellation_bypasses_failure_handling(
 
 
 @pytest.mark.asyncio
-async def test_one_read_and_connection_returned_before_ready_and_ai(
-    session_factory, target, assessor
-):
-    """開始条件は1回だけ読み、Ready構築とAIの前に接続を返却する。"""
+async def test_loads_ready_facts_once(session_factory, target, assessor):
+    """開始条件の事実取得は追加照会をせず1回だけ実行する。"""
     engine = session_factory.kw["bind"].sync_engine
-    active, reads = set(), []
-
-    def checkout(connection, record, proxy):
-        active.add(id(connection))
-
-    def checkin(connection, record):
-        active.discard(id(connection))
+    reads = []
 
     def before_execute(conn, cursor, statement, parameters, context, executemany):
         if "from article_curations" in statement.lower():
             reads.append(statement)
 
-    async def verify_ai(**kwargs):
-        assert not active
-        return _call()
-
-    original = ReadyForAssessment.from_facts
-
-    def verify_ready(*args):
-        assert not active
-        return original(*args)
-
-    assessor.assess.side_effect = verify_ai
-    listeners = [
-        ("checkout", checkout),
-        ("checkin", checkin),
-        ("before_cursor_execute", before_execute),
-    ]
-    for name, callback in listeners:
-        sqlalchemy_event.listen(engine, name, callback)
+    sqlalchemy_event.listen(engine, "before_cursor_execute", before_execute)
     try:
-        with patch.object(ReadyForAssessment, "from_facts", side_effect=verify_ready):
-            result = await AssessmentConsumer(session_factory, assessor).consume(target)
-        assert result.kind is AssessmentCompletionKind.IN_SCOPE
+        await AssessmentConsumer(session_factory, assessor).consume(target)
         assert len(reads) == 1
-        assert not active
     finally:
-        for name, callback in listeners:
-            sqlalchemy_event.remove(engine, name, callback)
+        sqlalchemy_event.remove(engine, "before_cursor_execute", before_execute)
 
 
 async def _assert_rolled_back_with_failure(db_session):

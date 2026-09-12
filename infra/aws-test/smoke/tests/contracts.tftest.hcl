@@ -1,5 +1,14 @@
 mock_provider "aws" {
   override_during = plan
+  mock_resource "aws_vpc" { override_during = plan }
+  mock_resource "aws_subnet" { override_during = plan }
+  mock_resource "aws_security_group" { override_during = plan }
+  mock_resource "aws_internet_gateway" { override_during = plan }
+  mock_resource "aws_vpc_endpoint" { override_during = plan }
+  mock_resource "aws_route_table" {
+    override_during = plan
+    defaults        = { route = [] }
+  }
   mock_data "aws_ssm_parameter" {
     defaults = { value = "ami-0123456789abcdef0" }
   }
@@ -57,6 +66,7 @@ run "network_and_runtime_contract" {
   assert {
     condition = (
       aws_instance.runtime["proxy"].associate_public_ip_address &&
+      alltrue([for instance in aws_instance.runtime : instance.instance_type == "t4g.small"]) &&
       !aws_instance.runtime["runner"].associate_public_ip_address &&
       !aws_db_instance.smoke.publicly_accessible &&
       aws_instance.runtime["proxy"].source_dest_check &&
@@ -73,6 +83,16 @@ run "network_and_runtime_contract" {
       aws_vpc_endpoint.ssm.vpc_endpoint_type == "Interface" &&
       length(aws_vpc_endpoint.ssm.subnet_ids) == 1 &&
       aws_vpc_endpoint.ssm.service_name == "com.amazonaws.ap-northeast-1.ssm" &&
+      aws_vpc_endpoint.ssmmessages.service_name == "com.amazonaws.ap-northeast-1.ssmmessages" &&
+      aws_vpc_endpoint.ssmmessages.private_dns_enabled &&
+      aws_vpc_endpoint.ssmmessages.vpc_endpoint_type == "Interface" &&
+      aws_vpc_endpoint.ssmmessages.subnet_ids == aws_vpc_endpoint.ssm.subnet_ids &&
+      aws_vpc_endpoint.ssmmessages.security_group_ids == aws_vpc_endpoint.ssm.security_group_ids &&
+      output.resources.ssmmessages_endpoint == aws_vpc_endpoint.ssmmessages.id &&
+      strcontains(local.no_proxy, "ssmmessages.ap-northeast-1.amazonaws.com") &&
+      !contains(local.runner_domains, "ssmmessages.ap-northeast-1.amazonaws.com") &&
+      strcontains(local.startup.runner, "UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy") &&
+      !strcontains(local.startup.runner, "amazon-ssm-agent.service.d/proxy.conf") &&
       strcontains(local.no_proxy, "ssm.ap-northeast-1.amazonaws.com") &&
       strcontains(local.no_proxy, "169.254.169.254") &&
       strcontains(local.squid_config, "http_access allow src_embedding dst_embedding") &&
@@ -137,7 +157,7 @@ run "tags_paths_logs_and_cleanup" {
   command = plan
   assert {
     condition = alltrue([for tags in concat(
-      [aws_vpc.smoke.tags, aws_internet_gateway.proxy.tags, aws_vpc_endpoint.ssm.tags, aws_cloudwatch_log_group.database.tags,
+      [aws_vpc.smoke.tags, aws_internet_gateway.proxy.tags, aws_vpc_endpoint.ssm.tags, aws_vpc_endpoint.ssmmessages.tags, aws_cloudwatch_log_group.database.tags,
         aws_db_instance.smoke.tags, aws_db_subnet_group.smoke.tags, aws_db_parameter_group.smoke.tags,
       aws_sqs_queue.embedding.tags, aws_lambda_function.embedding.tags, aws_lambda_event_source_mapping.embedding.tags],
       [for resource in aws_subnet.smoke : resource.tags],
@@ -203,7 +223,7 @@ run "database_log_export_and_observation" {
       aws_db_instance.smoke.enabled_cloudwatch_logs_exports == toset(["postgresql"]) &&
       aws_cloudwatch_log_group.database.name == "/aws/rds/instance/vector-test-${var.run_id}/postgresql" &&
       aws_cloudwatch_log_group.database.retention_in_days == 7 &&
-      !aws_cloudwatch_log_group.database.skip_destroy &&
+      aws_cloudwatch_log_group.database.skip_destroy != true &&
       strcontains(file("${path.module}/database.tf"), "depends_on = [aws_cloudwatch_log_group.database]") &&
       output.execution.log_groups.database == aws_cloudwatch_log_group.database.name &&
       output.resources.log_groups.database == aws_cloudwatch_log_group.database.name
