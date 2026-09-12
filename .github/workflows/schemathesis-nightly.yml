@@ -137,13 +137,20 @@ jobs:
       # `setup-node` の `~/.npm` cache は package-lock 全体ハッシュ key で、CLI の
       # _npx tarball が永続化されないため、CLI バージョン直接 key の専用 cache を
       # 別建てする (ci.yml と同形)。
+      - name: Get Better Auth CLI version
+        id: better-auth-cli
+        run: |
+          version=$(awk -F= '/^ARG BETTER_AUTH_CLI_VERSION=/ {print $2}' frontend/Dockerfile)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Cache Better Auth CLI (npx tarball + extracted)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.npm/_npx
             ~/.npm/_cacache
-          key: better-auth-cli-${{ runner.os }}-1.4.21
+          key: better-auth-cli-${{ runner.os }}-${{ steps.better-auth-cli.outputs.version }}
 
       - name: Apply Better Auth schema
         # `auth.ts` は `import "server-only"` を持つため CLI が load できない。
@@ -152,7 +159,7 @@ jobs:
         # 実行するため table owner (vector) で接続する必要 (red-team AUTH-N4)。
         env:
           AUTH_DATABASE_URL: postgresql://vector:vector@localhost:5432/vector?search_path=auth
-        run: npx --yes @better-auth/cli@1.4.21 migrate --config src/lib/auth/auth.cli.ts -y
+        run: npx --yes "@better-auth/cli@${{ steps.better-auth-cli.outputs.version }}" migrate --config src/lib/auth/auth.cli.ts -y
         working-directory: frontend
 
       - name: Seed Schemathesis auth user (CI only)

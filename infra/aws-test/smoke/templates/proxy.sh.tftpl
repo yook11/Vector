@@ -1,0 +1,65 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+install -d -m 700 /var/lib/vector-test /etc/vector-test
+printf '%s\n' '{"status":"starting"}' > /var/lib/vector-test/bootstrap-status.json
+trap 'printf "%s\n" "{\"status\":\"failed\"}" > /var/lib/vector-test/bootstrap-status.json' ERR
+
+# IAM反映やパッケージ配信の一時的な失敗に限り、上限を設けて待つ。
+retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if timeout 300 "$@"; then return 0; fi
+    sleep 10
+  done
+  return 1
+}
+export AWS_DEFAULT_REGION='${region}' AWS_REGION='${region}' AWS_PAGER=''
+retry dnf install -y docker
+systemctl enable --now docker
+printf '%s' '${squid_config_base64}' | base64 --decode > /etc/vector-test/squid.conf
+
+# ECR認証情報はイメージ取得の間だけ一時ディレクトリに置く。
+export DOCKER_CONFIG
+DOCKER_CONFIG=$(mktemp -d)
+trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+retry bash -o pipefail -c 'aws ecr get-login-password --region "${region}" | docker login --username AWS --password-stdin "${registry}"'
+retry docker pull '${image}'
+docker logout '${registry}'
+rm -rf "$DOCKER_CONFIG"
+unset DOCKER_CONFIG
+trap - EXIT
+
+cat > /etc/vector-test/start-proxy <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+export SQUID_CONF
+SQUID_CONF=$(cat /etc/vector-test/squid.conf)
+exec /usr/bin/docker run --rm --name vector-test-proxy --network host \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --log-driver awslogs --log-opt awslogs-region=${region} \
+  --log-opt awslogs-group=${log_group} --log-opt awslogs-stream=squid \
+  --env SQUID_CONF '${image}'
+SCRIPT
+chmod 700 /etc/vector-test/start-proxy
+cat > /etc/systemd/system/vector-test-proxy.service <<'UNIT'
+[Unit]
+Description=Embedding smoke outbound proxy
+Requires=docker.service
+After=docker.service network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f vector-test-proxy
+ExecStart=/etc/vector-test/start-proxy
+ExecStop=/usr/bin/docker stop -t 10 vector-test-proxy
+Restart=on-failure
+RestartSec=10
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now vector-test-proxy
+retry bash -c 'exec 3<>/dev/tcp/10.80.0.10/3128'
+printf '%s\n' '{"status":"ready"}' > /var/lib/vector-test/bootstrap-status.json

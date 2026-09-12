@@ -10,14 +10,23 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("name", ["outbox_relay", "embedding"])
-def test_existing_handler_path_resolves_after_loading_implementation(name):
-    """実装モジュールの読み込み後も既存の起動パスが関数を指す。"""
-    module_name, function_name = f"app.lambda_handlers.{name}.handler".rsplit(".", 1)
+@pytest.mark.parametrize(
+    ("name", "public_name", "implementation_name"),
+    [
+        ("outbox_relay", "handler", "embedding_handler"),
+        ("outbox_relay", "assessment_handler", "assessment_handler"),
+        ("embedding", "handler", "handler"),
+    ],
+)
+def test_existing_handler_path_resolves_after_loading_implementation(
+    name, public_name, implementation_name
+):
+    """実装の改名後も、公開した起動パスが用途別の関数を指す。"""
+    module_name = f"app.lambda_handlers.{name}"
     implementation = import_module(f"{module_name}.handler")
-    entry = getattr(import_module(module_name), function_name)
+    entry = getattr(import_module(module_name), public_name)
     assert callable(entry)
-    assert entry is implementation.handler
+    assert entry is getattr(implementation, implementation_name)
 
 
 def test_handler_loads_with_only_database_and_queue_settings() -> None:
@@ -29,14 +38,14 @@ def test_handler_loads_with_only_database_and_queue_settings() -> None:
             "-c",
             "from app.lambda_handlers.outbox_relay import handler; "
             "from app.lambda_handlers.outbox_relay.settings "
-            "import OutboxRelaySettings; "
+            "import EmbeddingOutboxRelaySettings; "
             "from importlib import import_module; "
             "assert callable(handler); "
             "module, name = 'app.lambda_handlers.outbox_relay.handler'.rsplit('.', 1); "
             "assert getattr(import_module(module), name) is handler; "
-            "assert import_module(module + '.handler').handler is handler; "
+            "assert import_module(module + '.handler').embedding_handler is handler; "
             "import sys; "
-            "OutboxRelaySettings(); "
+            "EmbeddingOutboxRelaySettings(); "
             "assert 'app.config' not in sys.modules; "
             "assert 'app.main' not in sys.modules; "
             "assert not any(m.startswith('app.queue') for m in sys.modules)",
@@ -52,10 +61,7 @@ def test_handler_loads_with_only_database_and_queue_settings() -> None:
             "AWS_REGION": "ap-northeast-1",
             "MIGRATION_DATABASE_URL": "invalid-unused-url",
             "AUTH_RETENTION_DATABASE_URL": "invalid-unused-url",
-            **{
-                f"SQS_ARTICLE_{stage}_QUEUE_URL": f"https://sqs.invalid/{stage}"
-                for stage in ("COMPLETION", "CURATION", "ASSESSMENT", "EMBEDDING")
-            },
+            "SQS_ARTICLE_EMBEDDING_QUEUE_URL": "https://sqs.invalid/EMBEDDING",
         },
         capture_output=True,
         text=True,

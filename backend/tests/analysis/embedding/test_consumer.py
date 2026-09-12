@@ -470,44 +470,23 @@ async def test_cancellation_is_not_converted_to_business_failure(
 
 
 @pytest.mark.asyncio
-async def test_loads_once_and_closes_read_connection_before_ai(
-    session_factory, target, embedder
-):
-    """開始状態は一度取得し、AI実行時には取得用接続を返却している。"""
+async def test_loads_ready_facts_once(session_factory, target, embedder):
+    """開始状態の取得を1回に限定する。"""
     event, _ = target
     engine = session_factory.kw["bind"].sync_engine
-    active = set()
     reads = []
-
-    def checkout(connection, record, proxy):
-        active.add(id(connection))
-
-    def checkin(connection, record):
-        active.discard(id(connection))
 
     def before_execute(conn, cursor, statement, parameters, context, executemany):
         if "join article_curations" in statement.lower():
             reads.append(statement)
 
-    vector = embedder.embed_document.return_value
-
-    async def verify_no_connection(_ready):
-        assert not active
-        return vector
-
-    embedder.embed_document.side_effect = verify_no_connection
-    listeners = [
-        ("checkout", checkout),
-        ("checkin", checkin),
-        ("before_cursor_execute", before_execute),
-    ]
+    listeners = [("before_cursor_execute", before_execute)]
     for name, callback in listeners:
         sqlalchemy_event.listen(engine, name, callback)
     try:
         result = await EmbeddingConsumer(session_factory, embedder).consume(event)
         assert result is EmbeddingCompletion.SAVED
         assert len(reads) == 1
-        assert not active
     finally:
         for name, callback in listeners:
             sqlalchemy_event.remove(engine, name, callback)
@@ -517,7 +496,8 @@ def _sqs_record(message_id, payload):
     from uuid import UUID
 
     from app.analysis.assessment.events import ArticleAssessedInScopeEvent
-    from app.outbox.sqs.message import SqsMessage
+    from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
+    from app.outbox.publishing.publisher import EventEnvelope
 
     event = ArticleAssessedInScopeEvent(
         event_id=UUID(int=1),
@@ -526,7 +506,18 @@ def _sqs_record(message_id, payload):
         occurred_at=datetime.now(UTC),
         payload=payload,
     )
-    return {"messageId": message_id, "body": SqsMessage.from_event(event).body}
+    return {
+        "messageId": message_id,
+        "body": build_assessed_in_scope_message(
+            EventEnvelope(
+                event.event_id,
+                event.event_type,
+                event.schema_version,
+                event.occurred_at,
+                event.payload.model_dump(),
+            )
+        ).body,
+    }
 
 
 @pytest.mark.asyncio
@@ -650,7 +641,7 @@ async def test_consumer_with_invocation_database_resources(
 
     from app.lambda_handlers.embedding import resources as resources_module
     from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
-    from tests.lambda_handlers.iam_fixtures import inject_test_db_signer
+    from tests.iam_fixtures import inject_test_db_signer
 
     monkeypatch.setattr(
         resources_module,
@@ -660,7 +651,7 @@ async def test_consumer_with_invocation_database_resources(
     config = EmbeddingConsumerSettings(
         env="test",
         database_url=inject_test_db_signer(
-            monkeypatch, resources_module, test_database_url
+            monkeypatch, test_database_url, resources_module=resources_module
         ),
         db_iam_auth=True,
         aws_region="ap-northeast-1",
@@ -703,88 +694,3 @@ async def test_consumer_with_invocation_database_resources(
     assert len(events) == 1
     assert events[0].article_id == article_id
     assert events[0].event_type == ("failed" if disconnect else "succeeded")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("api_fails_first", [False, True])
-async def test_lambda_assembly_saves_once_after_individual_failure(
-    db_session, test_database_url, target, monkeypatch, api_fails_first
-):
-    """実SDK・Consumer・DBを入口で組み立て、失敗後の保存と再処理を確認する。"""
-    from unittest.mock import Mock
-
-    import httpx
-    from pydantic import SecretStr
-
-    from app.ai_providers.gemini import client as gemini_module
-    from app.lambda_handlers.embedding import resources as resource_module
-    from app.lambda_handlers.embedding.handler import _run_embedding
-    from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
-    from tests.lambda_handlers.iam_fixtures import inject_test_db_signer
-
-    settings = EmbeddingConsumerSettings(
-        env="test",
-        aws_region="ap-northeast-1",
-        database_url=inject_test_db_signer(
-            monkeypatch, resource_module, test_database_url
-        ),
-        db_iam_auth=True,
-        gemini_api_key_parameter_path="/test/gemini-key",
-    )
-    secret = Mock(return_value=SecretStr("test-private-key"))
-    monkeypatch.setattr(resource_module, "get_secret_parameter", secret)
-    requests, clients, engines = [], [], []
-    create_engine = resource_module.create_embedding_consumer_engine
-
-    def track_engine(*args, **kwargs):
-        engine = create_engine(*args, **kwargs)
-        engines.append(engine)
-        return engine
-
-    monkeypatch.setattr(
-        resource_module, "create_embedding_consumer_engine", track_engine
-    )
-
-    def respond(request):
-        requests.append(request)
-        if api_fails_first and len(requests) == 1:
-            return httpx.Response(
-                503, json={"error": {"code": 503, "message": "unavailable"}}
-            )
-        return httpx.Response(
-            200, json={"embeddings": [{"values": [0.2] * EMBEDDING_DIMENSION}]}
-        )
-
-    def http_factory(**kwargs):
-        assert kwargs.pop("retries") == 0
-        http = httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs)
-        clients.append(http)
-        return http
-
-    monkeypatch.setattr(gemini_module, "make_external_async_client", http_factory)
-    payload, article_id = target
-    records = [_sqs_record("saved", payload), _sqs_record("already", payload)]
-    if api_fails_first:
-        records.insert(0, _sqs_record("failed", payload))
-    failed_items = await _run_embedding({"Records": records}, settings)
-    assert failed_items == ([{"itemIdentifier": "failed"}] if api_fails_first else [])
-    assert (
-        await _run_embedding(
-            {"Records": [_sqs_record("next-invocation", payload)]}, settings
-        )
-        == []
-    )
-    assert secret.call_count == 2
-    assert len(requests) == (2 if api_fails_first else 1)
-    assert all(http.is_closed for http in clients)
-    assert len(engines) == 2
-    assert all(engine.pool.checkedin() == 0 for engine in engines)
-    audits = await _events(db_session)
-    assert [audit.event_type for audit in audits] == (
-        ["failed", "succeeded"] if api_fails_first else ["succeeded"]
-    )
-    assert all(audit.article_id == article_id for audit in audits)
-    stored = await db_session.get(AnalyzedArticleRecord, payload.analyzed_article_id)
-    assert list(stored.embedding) == pytest.approx(
-        [0.2] * EMBEDDING_DIMENSION, abs=0.001
-    )

@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from app.logfire.exceptions import VectorDomainError
 
 if TYPE_CHECKING:
-    from app.analysis.assessment.events import AssessedEventValidationIssue
     from app.http.failure import HttpTransportFailure
+
+
+class EventValidationIssue(Protocol):
+    """イベント固有の検証詳細を固定の項目・理由として受け取る。"""
+
+    @property
+    def field(self) -> StrEnum: ...
+
+    @property
+    def code(self) -> StrEnum: ...
 
 
 class PublishConfigurationReason(StrEnum):
@@ -135,7 +144,7 @@ class PublishEventInvalidError(PublishError):
         self,
         *,
         reason: PublishEventInvalidReason,
-        issues: tuple[AssessedEventValidationIssue, ...] = (),
+        issues: tuple[EventValidationIssue, ...] = (),
     ) -> None:
         super().__init__()
         self.reason = reason

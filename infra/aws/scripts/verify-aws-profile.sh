@@ -27,6 +27,16 @@ case "$profile" in
     display_role='AWSReservedSSO_VectorDeploy_<SUFFIX>'
     login_profile='vector-deploy'
     ;;
+  vector-bootstrap)
+    expected_regex='^AWSReservedSSO_VectorBootstrap_[[:xdigit:]]+$'
+    display_role='AWSReservedSSO_VectorBootstrap_<SUFFIX>'
+    login_profile='vector-bootstrap'
+    ;;
+  vector-bootstrap-apply)
+    expected_role='vector-bootstrap-apply'
+    display_role="$expected_role"
+    login_profile='vector-bootstrap'
+    ;;
   vector-plan)
     expected_role='vector-ci-terraform-plan'
     display_role="$expected_role"
@@ -95,7 +105,7 @@ if ! grep -Fxq "$profile" <<<"$profiles"; then
 fi
 
 case "$profile" in
-  default | vector-deploy | vector-admin)
+  default | vector-deploy | vector-admin | vector-bootstrap)
     expected_account="$(
       "$aws_cli" configure get sso_account_id --profile "$profile" 2>/dev/null || true
     )"

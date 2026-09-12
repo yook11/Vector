@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from hashlib import md5
 from uuid import UUID
 
-from app.analysis.assessment.events import ArticleAssessedInScopeEvent
 from app.outbox.publishing.errors import (
     PublishEventInvalidError,
     PublishEventInvalidReason,
 )
+from app.outbox.publishing.route import EventMessage
 
 MAX_MESSAGE_BYTES = 1_048_576
 
@@ -32,11 +31,11 @@ class SqsMessage:
         )
 
     @classmethod
-    def from_event(cls, event: ArticleAssessedInScopeEvent) -> SqsMessage:
-        """検証済みイベントを送信本文にし、送れなければ失敗を返す。"""
-        body = json.dumps(event.model_dump(mode="json"), allow_nan=False)
+    def from_message(cls, message: EventMessage) -> SqsMessage:
+        """生成済み本文のサイズを確認し、本文を変えず照合情報を付与する。"""
+        body = message.body
         if len(body.encode("utf-8")) > MAX_MESSAGE_BYTES:
             raise PublishEventInvalidError(
                 reason=PublishEventInvalidReason.MESSAGE_TOO_LARGE
             )
-        return cls(event_id=event.event_id, body=body)
+        return cls(event_id=message.event_id, body=body)

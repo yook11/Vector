@@ -1,6 +1,6 @@
 # AssessmentConsumer — イベント受信と投資判定
 
-Status: 正常終了・失敗理由の契約とConsumer・失敗後処理を実装・検証済み（2026-09-11）。Lambda・SQS・relayへの接続とAWS適用は未着手。
+Status: Consumer・資源準備・共有イベント契約・本文解析に加え、Assessment Lambda入口とSQS部分バッチ応答を実装・検証済み（2026-09-12）。Assessment向けOutbox配送と別relay入口を実装。AWS上の別relay Lambda・定期起動・イベントソースへの接続と適用は未実施。
 
 ## Problem
 
@@ -12,7 +12,7 @@ Curationの完了イベントからAssessmentを実行し、対象内の判定�
 - [Embedding Lambda入口](../../backend/app/lambda_handlers/embedding/handler.py)：初期化、入力検証、部分バッチ応答、資源の終了。
 - [Gemini通信設定](../../backend/app/ai_providers/gemini/settings.py)と[クライアント管理](../../backend/app/ai_providers/gemini/client.py)：DeepSeekの責務分担の参照元。
 - [Curationイベント](../../backend/app/analysis/curation/events.py)、[Assessment保存処理](../../backend/app/analysis/assessment/service.py)、[Outbox送信契約](./outbox-sqs-message-contract.md)：既存のpayloadと保存・配送境界。
-- [relay](../../backend/app/outbox/delivery/relay.py)と[Scheduler定義](../../infra/aws/outbox_relay.tf)：現在のコードはEmbedding向け配送と1分間隔の起動を定義している。Assessment向け配送は追加対象。AWSの稼働状態は本仕様では確認していない。
+- [relay](../../backend/app/outbox/delivery/relay.py)と[Scheduler定義](../../infra/aws/outbox_relay.tf)：コード上の配送入口はEmbedding向けとAssessment向けに分離済み。既存Scheduler定義はEmbedding向けの1分間隔起動だけで、Assessment向けのAWS設定は未追加。AWSの稼働状態は本仕様では確認していない。
 
 ## 全体フローと責務
 
@@ -195,3 +195,96 @@ Done: 設定の読み取り範囲、Engine設定、資源の生成・終了順�
 - 3種類の正常終了、各エラーの失敗応答、処理中の削除、対象内／対象外を含む並行実行、commit失敗、timeout、後処理の二次障害を検証する。
 - 対象内結果・成功監査・Outboxの原子性と重複防止を検証する。
 - 有効化前に数値設定・移行・一覧更新通知の扱いを確定し、実装済みとAWS適用済みを分けて記録する。
+
+
+## SQS本文解析と共有イベント契約（2026-09-12）
+
+Problem: 既存のArticleCuratedSignalはpayloadだけを定義していたため、SQS本文からイベント全体を安全に復元する入口を追加する。
+Evidence: Curationの既存payload、EmbeddingのArticleAssessedInScopeEvent・本文解析、AssessmentConsumerのconsume契約を参照した。
+
+### 共有契約
+
+- `app/analysis/curation/events.py`の`ArticleCuratedSignalEvent`は、event_id・event_type・schema_version・occurred_at・payloadを持つfrozen・strict・extra禁止の型。既存ArticleCuratedSignalとConsumerの入力契約は変更しない。
+- 種別は`article.curated_signal`、版は厳密な整数の1。payloadは既存型の正整数curation_id・analyzable_article_idだけとする。
+- `from_input(data: object)`でUUID文字列・タイムゾーン付き日時文字列を復元する。JSON出力時の日時はUTCのZ表記とし、小数秒と保存済みID・payloadを保持する。
+- 共有検証失敗は`CuratedEventValidationError`のfailureへ保持する。理由はinvalid_envelope・unsupported_event_type・unsupported_schema_version・invalid_payloadの順で優先し、詳細は失わない。payload自体の欠落・型不正は外側の構造不正、payload内部の違反はinvalid_payloadとする。
+- `CuratedEventValidationIssue`と`CuratedEventValidationFailure`はfrozen・slots付き。項目は既知フィールドだけとし、未知キーはevent／payloadへ集約する。コードはmissing_required_field・invalid_type・invalid_value・unknown_field・unsupported_event_type・unsupported_schema_version。同じ項目・コードは重複排除する。
+- エラーには入力値や検証ライブラリの自由文を収集せず、元のValidationErrorをcause・contextへ残さない。
+
+### Assessmentの受信本文
+
+- `app/lambda_handlers/assessment/event.py`の`parse_curated_signal_event(message_body: str) -> ArticleCuratedSignalEvent`はJSON解析後に共有契約へ委譲する。イベント内容を別実装で検証しない。
+- 非文字列、壊れたJSON、重複キー、NaN・Infinityなどの非標準定数、解析時のRecursionErrorはinvalid_jsonとする。JSONとして正常な配列などは共有契約のinvalid_envelopeとなる。
+- `AssessmentEventInvalidError`はCODE=assessment_event_invalid、reason、tupleのissuesを保持する。reasonは共有の4理由にinvalid_jsonを加えたAssessmentEventInvalidReason。SAFE_ATTRSはCODE・reason・issuesのみとし、共有の詳細値をそのまま引き継ぐ。
+- エラー変換はexceptの外で送出し、本文や元の検証例外を原因チェーンへ残さない。想定外例外・プロセス終了を入力不正に変換しない。
+- 戻り値はイベント全体。後続handlerがevent.payloadを既存Consumerへ渡す予定だが、このスライスでは接続しない。
+
+### テストの責任と範囲
+
+共有イベント契約の単体テストは、文字列／Python値からの正常復元、代表的な欠落・日時・種別・版・payloadの拒否、理由の優先順位、詳細の集約・安全性を11件で確認する。型や値の細かな組合せを網羅せず、重要な契約の代表例に絞る。JSON解析の単体テストは、実際の不正JSONと重複キー・非標準定数・深いネスト、正常な本文からの復元、代表的な共有違反の変換、想定外例外の同一性を担当する。詳細な項目不正の組合せは解析側へ重複して追加しない。
+
+Non-goals: Records構造・messageId検証、Lambda handler、Consumer実行、部分バッチ応答、失敗監査・メトリクス、Assessment配送・relay接続は未実装。Embedding・DB schema・依存パッケージ・キュー設定・インフラは変更せず、local_testsの追加・実AWSスモーク・デプロイは行わない。
+Done: 正常復元・安全な拒否・既存契約の維持と必要な回帰検証が成功すること。
+
+検証結果: 追加単体テスト30件、app全体・追加テストのRuff lint／format確認が成功。`uv run pytest tests/ -m unit -x -q`は6,612件成功、`make test-integration PYTEST_ARGS="-x -q"`は1,400件成功（skipなし）。既存の非推奨・Logfire関連の警告は残る。DB・Redisの一時環境は終了済み。local_tests・実AWSスモーク・デプロイは今回の範囲外として実行していない。
+
+
+## Lambda入口とSQS部分バッチ応答（2026-09-12）
+
+Problem: 検証済み本文と準備済みConsumerを接続し、SQS受信から実行・応答までを進める。
+Evidence: Embedding handler・FailureRecorder、共通SqsRecordBatch、Assessment compositionと既存の資源管理・入力検証テストを参照した。
+
+### 公開入口と処理順序
+
+- `app/lambda_handlers/assessment/handler.py`の同期`handler(lambda_event, context)`をパッケージからも公開する。返値は`{"batchItemFailures": [{"itemIdentifier": message_id}]}`形式のTypedDict。
+- 共通ログ設定 → AssessmentConsumerSettings → asyncio.run → open_assessment_consumer → SqsRecordBatch検証 → 各本文の取得・解析 → consumer.consume(event.payload) → 利用範囲終了 → 応答の順に進む。
+- Consumerと資源はバッチにつき1回準備し、レコードを入力順に逐次処理する。空バッチ・構造不正でも準備を先に行い、空バッチでは空の失敗一覧を返す。
+- 各Consumer処理の既存60秒制限を維持する。入口に時間制限・再試行・Taskiq投入・通知を追加しない。
+
+### 応答と診断
+
+| 結末 | 入口の扱い |
+|---|---|
+| 設定失敗 | settings段階の初期化診断後、同じ例外を再送出 |
+| compositionの初期化失敗 | 既存診断へ任せ、入口で二重記録せず伝播 |
+| Records構造・messageIdの不正 | バッチ診断後に例外を再送出し、Consumerを呼ばない |
+| 個別本文・イベントの不正 | そのmessageIdを失敗一覧へ追加し、次へ進む |
+| 解析の想定外例外・Consumerの通常例外 | そのmessageIdを失敗一覧へ追加し、次へ進む |
+| IN_SCOPE・OUT_OF_SCOPE・ALREADY_ASSESSED | すべて成功ログを記録し、失敗一覧へ含めない |
+
+- 部分応答には入力順のmessageIdを加工せず載せる。初期化・構造不正では全件の失敗応答を合成しない。キャンセル・プロセス終了は個別失敗へ変換しない。
+- `AssessmentLambdaFailureRecorder`がassessment_sqs_input_invalid、assessment_message_input_invalid、assessment_message_failedを記録する。構造不正はreason・field・record_index、個別入力不正はmessage_id・reason・安全なissues、処理失敗はmessage_id・error_classを持つ。本文取得失敗のreasonはinvalid_body。
+- 検証済みイベントがある処理失敗にはevent_id・curation_id・analyzable_article_idを付ける。正常ログassessment_message_completedは同じ識別情報とreason=completion.kind.valueを持つ。
+- イベント由来IDは配送診断に限定し、DB監査の主語へ補完しない。本文・例外の自由文をログへ出さず、通常のログ障害で結果・例外を変えない。
+- 成功・失敗監査、メトリクス、Outboxは既存Consumer／Serviceへ任せる。クライアント・DBなどの終了も既存compositionの責任とし、入口から重複実行しない。
+
+### 検証の責任と未接続部分
+
+新規単体テストは7ケース。4件の正常な入力を成功・失敗・成功・失敗として処理し、失敗した2件のmessageIdだけを返すこと、同じConsumerへのpayloadの受け渡し、借用範囲終了後の応答、空バッチと代表的なID不正、設定とcompositionの失敗境界、安全な診断とログ障害、解析の想定外例外、処理中キャンセルを確認する。入力の細かな組合せ・初期化の全段階・個別資源の終了順序・DB保存と監査は既存テストへ任せる。
+
+Non-goals: Assessment送信ルート、AWSイベントソース・ReportBatchItemFailuresの設定、IAM・デプロイ、Taskiq停止、一覧通知の移設は未実施。DB schema・依存・既存Consumerと資源管理の契約は変更しない。新規DBテスト・local_testsのシナリオは追加しない。
+Done: 正常終了・個別失敗・バッチ失敗を適切に応答／伝播し、必要な接続テストと回帰検証が成功すること。
+
+検証結果: 実装時点では新規8ケースを含む関連単体テスト72件が成功。app全体・追加テストのRuff lint／format確認、`uv run pytest tests/ -m unit -x -q`の6,620件、`make test-integration PYTEST_ARGS="-x -q"`の1,400件が成功した。既存の非推奨・Logfire関連の警告は残る。一時DB・Redisは終了済み。local_tests・実AWSスモーク・デプロイは今回の範囲外として実行していない。
+
+PR作成前に混在バッチのテストを整理した。messageIdをテスト内に明示し、Consumerが4回処理されたことと失敗した2件だけの応答を確認する。修正後の対象テスト1件とRuff lint／format確認は成功。製品コードは変更せず、全体の成功済み検証は再実行していない。
+
+## Assessment向けOutbox配送（2026-09-12）
+
+- `app.lambda_handlers.outbox_relay.assessment_handler`を追加し、`article.curated_signal`だけをAssessmentキューへ送る。既存Embedding入口は維持し、2つの入口を別々のLambdaとして起動する設計とする。
+- `AssessmentOutboxRelaySettings`は共通DB・region設定と`sqs_article_assessment_queue_url`を要求する。Embedding・Curation・CompletionキューのURLは不要。共通設定の既定値とTLS/IAM条件を維持する。
+- 入口が種別・キュー・`build_curated_signal_message`を配送定義に結び付け、共通`run_relay(settings, route)`へ渡す。DB準備・1回のrelay実行・Engine終了を共有し、元例外と終了失敗の扱いは既存どおりとする。
+- 本文生成は共有`ArticleCuratedSignalEvent`で検証し、保存済みイベントの全項目を維持する。送信エラーへの変換でも安全なreason・issuesを保持する。Consumer・受信handlerの契約は変更しない。
+- 単体テストは本文の往復・代表的なエラー変換・用途別配線と設定を担当し、終了処理の既存テストは共通実行側へ移す。DB・通信・イベント詳細の保証は既存テストへ任せ、local_testsに重複シナリオを追加しない。
+
+AWS上のAssessment relay Lambda、Scheduler、IAM、SQSイベントソースとReportBatchItemFailuresの設定は未接続。送受信のコードが揃った段階であり、定期配送を有効化した状態ではない。詳細は[Outbox送信契約](./outbox-sqs-message-contract.md)を参照。
+
+検証結果: app全体と今回変更したテストのRuff lint・format確認が成功。`uv run pytest tests/ -m unit -x -q`は6,629件、続く`make test-integration PYTEST_ARGS="-x -q"`は1,400件が成功した。既存の非推奨・Logfire関連の警告は残る。一時DB・Redisは終了・削除済み。local_tests・実AWSスモーク・デプロイは対象外として未実施。
+
+入口の配置・命名整理: `outbox_relay/handler.py`へ`embedding_handler`と`assessment_handler`を集約した。`__init__.py`は前者を`handler`として公開し、既存AWSの起動パスとインフラ設定を維持する。用途別パッケージは追加せず、共通実行・配送動作は変更していない。
+
+配置・命名整理後の検証: app全体と変更テストのRuff lint・format、単体テスト6,629件、統合テスト1,400件が成功した。既存テストの参照先だけを更新し、ケースの追加は行っていない。一時DB・Redisは終了・削除済み。
+
+設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。本文準備の失敗は`publishing.error_mapping.publish_preparation_error_from_exception`で扱い、分類済みPublishErrorの同一性、想定外例外のPREPARE_EVENTと原因チェーンを維持する。RoutedEventPublisherとSqsMessageBatchがこの処理を共有し、SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
+
+PR作成時の最終検証: 設定名・本文準備エラーの責務整理と、既存のイベント／受信handlerテスト整理を含め、app全体・変更テストのRuff lint・format、単体テスト6,628件が成功した。統合テスト1,400件も同一の製品コードで成功し、一時DB・Redisは削除済み。統合検証後の追加対象は単体テストと文書のみ。テストガイドへ保証の所有先・1テスト1不変条件の方針を反映した。AWS設定・デプロイは未実施。

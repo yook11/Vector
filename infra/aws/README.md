@@ -94,7 +94,7 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 PRのplanを確認し、mainへmergeした後、`AWS terraform apply`を`production`で承認する。
 infra変更のmain pushでは自動起動し、同じ内容の再実行はmainからの手動起動を使う。
 ローカルの通常CI roleはplan / pushだけに限定し、apply / migration / rolloutは使わない。
-管理者操作はbootstrap・初期構築・非常時復旧に分離し、通常の承認失敗を迂回しない。
+bootstrapの継続更新は[専用ロールの手動手順](bootstrap-access/README.md)、初期構築・実行権限の変更・非常時復旧は管理者操作とし、通常の承認失敗を迂回しない。
 切り替えと既発行sessionの扱いは[導入・運用手順](MIGRATION_WORKFLOW.md)を参照する。
 
 ## 初回構築のapply前にやること

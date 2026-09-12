@@ -1,6 +1,8 @@
 # infra/aws/bootstrap — 統制の土台
 
-**admin が手元から 1 回だけ apply する。以後ほぼ触らない。** local state。
+**初期構築は管理者、継続更新は専用ロールで手動applyする。** local state。
+専用ロールの導入・ログイン・更新手順は[bootstrap-access](../bootstrap-access/README.md)を参照する。
+導入前は既存の管理者経路を維持し、導入後は`VectorBootstrap`から`vector-bootstrap-apply`を引き受ける。
 
 本体スタック (`../`) が CI から回るために先に存在している必要があるものだけを置く。
 
@@ -144,7 +146,7 @@ DB ownerのIAM接続権限はmigration task roleだけに残し、CIのmigrate r
 
 通常のinfra変更はPRのplan確認 → mainへmerge → `AWS terraform apply`の承認とする。
 infra変更のmain pushによる自動起動と、mainからの手動再実行は維持する。
-bootstrap・初期構築・非常時復旧は管理者の別手順とし、承認失敗時の代替経路にしない。
+bootstrapの継続更新は専用ロールの手動手順、初期構築・実行権限の変更・非常時復旧は管理者の別手順とし、承認失敗時の代替経路にしない。
 
 またECS `RunTask`にはsubnet・security group・public IPを固定できるIAM condition keyが
 無い。migration CI roleはfamily・cluster・PassRole・tag・ECS ExecをIAMで制限するが、
@@ -161,6 +163,9 @@ plan ロールを assume する経路は最初から存在しない**。
 これをやると外部 PR に credential が渡る。
 
 ## 使い方
+
+以下は管理者による初回構築用。既存環境の継続更新ではstate・tfvarsを保持し、
+[専用ロールの更新手順](../bootstrap-access/README.md#既存bootstrapの更新)を使う。
 
 ```
 cp terraform.tfvars.example terraform.tfvars   # owner / repo を埋める

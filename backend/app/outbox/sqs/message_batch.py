@@ -1,72 +1,49 @@
-"""検証済みの入力から、送信可能な本文と個別の準備失敗を確定する。"""
+"""生成済み本文の入力契約とSQS送信サイズを検証する。"""
 
-from dataclasses import InitVar, dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 
-from app.analysis.assessment.events import (
-    ArticleAssessedInScopeEvent,
-    AssessedEventValidationError,
-)
-from app.outbox.publishing.errors import (
-    PublishEventInvalidError,
-    PublishEventInvalidReason,
-    PublishPhase,
-)
-from app.outbox.publishing.publisher import EventEnvelope, PublishFailed
-from app.outbox.sqs.error_mapping import publish_error_from_exception
-from app.outbox.sqs.event_batch import EventBatch
+from app.outbox.publishing.error_mapping import publish_preparation_error_from_exception
+from app.outbox.publishing.publisher import PublishFailed
+from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs.message import MAX_MESSAGE_BYTES, SqsMessage
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class SqsMessageBatch:
-    """入力の件数・ID保証を引き継ぎ、本文合計サイズを検証する。"""
+    """サイズ超過の個別失敗と、送信できる本文を保持する。"""
 
-    events: InitVar[EventBatch]
-    messages: tuple[SqsMessage, ...] = field(init=False)
-    failures: tuple[PublishFailed, ...] = field(init=False)
+    inputs: tuple[EventMessage, ...]
+    messages: tuple[SqsMessage, ...]
+    failures: tuple[PublishFailed, ...]
 
-    def __post_init__(self, events: EventBatch) -> None:
-        if not isinstance(events, EventBatch):
-            raise TypeError("events must be an EventBatch")
-        messages: list[SqsMessage] = []
-        failures: list[PublishFailed] = []
-        for envelope in events.envelopes:
+    def __init__(self, messages: Sequence[EventMessage]) -> None:
+        if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
+            raise TypeError("messages must be a sequence of EventMessage")
+        inputs = tuple(messages)
+        if not 1 <= len(inputs) <= 10:
+            raise ValueError("batch must contain between one and ten messages")
+        if any(not isinstance(message, EventMessage) for message in inputs):
+            raise TypeError("invalid EventMessage")
+        if len({message.event_id for message in inputs}) != len(inputs):
+            raise ValueError("batch message IDs must be unique")
+        prepared = []
+        failures = []
+        for message in inputs:
             try:
-                event = _assessed_in_scope_event_from_envelope(envelope)
-                message = SqsMessage.from_event(event)
+                prepared.append(SqsMessage.from_message(message))
             except Exception as exc:
-                error = publish_error_from_exception(
-                    exc, phase=PublishPhase.PREPARE_EVENT
+                failures.append(
+                    PublishFailed(
+                        message.event_id,
+                        publish_preparation_error_from_exception(exc),
+                    )
                 )
-                failures.append(PublishFailed(envelope.event_id, error))
-            else:
-                messages.append(message)
         if (
-            sum(len(message.body.encode("utf-8")) for message in messages)
+            sum(len(message.body.encode("utf-8")) for message in prepared)
             > MAX_MESSAGE_BYTES
         ):
             raise ValueError("batch message bodies exceed the size limit")
-        object.__setattr__(self, "messages", tuple(messages))
+        object.__setattr__(self, "inputs", inputs)
+        object.__setattr__(self, "messages", tuple(prepared))
         object.__setattr__(self, "failures", tuple(failures))
-
-
-def _assessed_in_scope_event_from_envelope(
-    envelope: EventEnvelope,
-) -> ArticleAssessedInScopeEvent:
-    """対象内判定イベントを検証し、型付きpayloadとともに返す。"""
-    try:
-        event = ArticleAssessedInScopeEvent.from_input(
-            {
-                "event_id": envelope.event_id,
-                "event_type": envelope.event_type,
-                "schema_version": envelope.schema_version,
-                "occurred_at": envelope.occurred_at,
-                "payload": envelope.payload,
-            }
-        )
-    except AssessedEventValidationError as exc:
-        failure = exc.failure
-        reason = PublishEventInvalidReason(failure.reason)
-    else:
-        return event
-    raise PublishEventInvalidError(reason=reason, issues=failure.issues)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -63,6 +65,64 @@ def test_app_test_jobs_run_only_on_pull_request() -> None:
         "github.event_name == 'push'" not in e2e,
         "needs.changes.outputs.e2e == 'true'" in e2e,
     ) == (True,) * 13
+
+
+def test_bootstrap_access_ci_runs_mock_tests_without_aws_credentials() -> None:
+    jobs = _load_workflow(_CI_WORKFLOW)["jobs"]
+    filter_step = next(
+        step for step in jobs["changes"]["steps"] if step.get("id") == "filter"
+    )
+    filters = yaml.safe_load(filter_step["with"]["filters"])
+    job = jobs["terraform-bootstrap-access"]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+
+    assert all(
+        any(fnmatchcase(path, pattern) for pattern in filters["bootstrap_access"])
+        for path in (
+            "infra/aws/bootstrap-access/permissions.tf",
+            "infra/aws/bootstrap-access/tests/access.tftest.hcl",
+            "infra/aws/bootstrap/oidc.tf",
+        )
+    )
+    assert (
+        jobs["changes"]["outputs"]["bootstrap_access"]
+        == "${{ steps.filter.outputs.bootstrap_access }}"
+    )
+    assert "needs.changes.outputs.bootstrap_access == 'true'" in job["if"]
+    assert "needs.changes.outputs.ci == 'true'" in job["if"]
+    assert "github.event_name == 'pull_request'" in job["if"]
+    assert job["defaults"]["run"]["working-directory"] == "infra/aws/bootstrap-access"
+    assert job["permissions"] == {"contents": "read"}
+    assert "configure-aws-credentials" not in str(job)
+    assert "secrets." not in str(job)
+    assert "terraform init -backend=false -input=false -lockfile=readonly" in commands
+    assert "terraform validate" in commands
+    assert "terraform test -no-color" in commands
+    assert job.get("continue-on-error", "false") == "false"
+
+
+@pytest.mark.parametrize(
+    ("terraform_result", "expected_exit"),
+    [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)],
+)
+def test_ci_gate_rejects_failed_bootstrap_access_tests(
+    terraform_result: str, expected_exit: int
+) -> None:
+    gate = _load_workflow(_CI_WORKFLOW)["jobs"]["ci-gate"]
+    assert "terraform-bootstrap-access" in gate["needs"]
+    script = next(step["run"] for step in gate["steps"] if "run" in step)
+    rendered = re.sub(
+        r"\$\{\{ needs\.([a-z0-9_-]+)\.result \}\}",
+        lambda match: (
+            terraform_result if match[1] == "terraform-bootstrap-access" else "success"
+        ),
+        script,
+    )
+    assert "${{" not in rendered
+    result = subprocess.run(  # noqa: S603
+        ["/bin/bash", "-e", "-c", rendered], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == expected_exit, (result.stdout, result.stderr)
 
 
 def test_terraform_apply_runs_plan_and_apply_after_production_approval() -> None:
@@ -311,7 +371,7 @@ def test_old_release_routes_are_absent_but_migration_ci_remains() -> None:
         )
     )
     assert {key: filters[key] for key in ("backend", "frontend", "migrations")} == {
-        "backend": ["backend/**"],
+        "backend": ["backend/**", "infra/aws/scripts/**"],
         "frontend": ["frontend/**"],
         "migrations": ["backend/alembic/versions/**"],
     }
