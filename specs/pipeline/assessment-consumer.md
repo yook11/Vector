@@ -345,7 +345,7 @@ plan/applyのCIは`resolve-assessment-images.py`で2つのdigestを独立して�
 
 bootstrapには専用実行ロール・Schedulerロールの権限境界、CIの管理許可・PassRole制約・Lambda設定の限定復号対象を追加した。CI inline policyの容量を超えるため、Outbox relayとAssessmentのboundary固定Denyを`apply_outbox` managed policyへ移した。移設先を適用してからinlineを更新し、全ロールの元のDenyが1件ずつ残ることをモックplanで照合する。容量は実際の形式・長さのARNで検証する。
 
-適用順は管理者によるbootstrap-accessの許可一覧更新、専用ロールによるbootstrap更新、本体の適用とする。追加したmanaged policy 4個の管理許可と、Assessment管理ポリシーをCIのapplyロールへ取り付ける許可が必要である。具体的な手順は[bootstrap-accessの更新手順](../../infra/aws/bootstrap-access/README.md#既存bootstrapの更新)を参照する。
+bootstrap-accessのpath単位の委譲を導入済みなら、専用ロールによるbootstrap更新、本体の適用の順とする。追加したmanaged policy 4個は`/vector-ci/`配下、Assessment管理ポリシーは`vector-ci-apply-*`に含まれるため、管理者による個別の許可一覧更新は不要。委譲未導入なら、管理者が先に[委譲の導入手順](../../infra/aws/bootstrap-access/README.md#既存環境へのpath単位の委譲の導入)を実施する。その後は[bootstrapの更新手順](../../infra/aws/bootstrap-access/README.md#既存bootstrapの更新)に従う。
 
 検証の責任は次のとおりとする。
 
