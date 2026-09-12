@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID
 
 import pytest
 from logfire.testing import CaptureLogfire
@@ -757,14 +756,14 @@ async def test_out_of_scope_writes_no_outbox_event(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("in_scope", [True, False], ids=["in_scope", "out_of_scope"])
-async def test_repeated_save_preserves_result_audit_and_outbox(
+async def test_duplicate_save_returns_already_assessed_without_commit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
     in_scope: bool,
 ) -> None:
-    """同じReadyからの再実行は実DBで重複スキップとなり、保存済みの各行を維持する。"""
+    """Repositoryが実DBで重複を検出すると、Serviceはcommitせず判定済みを返す。"""
     article = await _make_article(db_session, sample_source)
     curation = await _make_extraction(db_session, article)
     ready = _ready(curation)
@@ -774,22 +773,10 @@ async def test_repeated_save_preserves_result_audit_and_outbox(
     service = AssessmentService(session_factory)
     first = await service.execute(ready, assessor, analyzable_article_id=article.id)
 
-    async def saved_ids() -> tuple[list[int], list[int], list[UUID]]:
-        async with session_factory() as reader:
-            model = AnalyzedArticleRecordORM if in_scope else OutOfScopeArticleRecordORM
-            result_ids = list((await reader.scalars(select(model.id))).all())
-            audit_ids = list((await reader.scalars(select(PipelineEvent.id))).all())
-            event_ids = list((await reader.scalars(select(OutboxEvent.event_id))).all())
-            return result_ids, audit_ids, event_ids
-
-    before = await saved_ids()
-    assert len(before[0]) == 1
-    assert len(before[1]) == 1
-    assert len(before[2]) == int(in_scope)
-    assert first == (
-        AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, before[0][0])
+    assert first.kind is (
+        AssessmentCompletionKind.IN_SCOPE
         if in_scope
-        else AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
+        else AssessmentCompletionKind.OUT_OF_SCOPE
     )
 
     with patch.object(AsyncSession, "commit", new_callable=AsyncMock) as commit:
@@ -799,4 +786,3 @@ async def test_repeated_save_preserves_result_audit_and_outbox(
         commit.assert_not_awaited()
 
     assert repeated == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
-    assert await saved_ids() == before

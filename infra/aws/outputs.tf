@@ -144,3 +144,55 @@ output "embedding_consumer_image_digest" {
 output "embedding_consumer_event_source_mapping_uuid" {
   value = try(aws_lambda_event_source_mapping.embedding_consumer[0].uuid, null)
 }
+
+output "assessment_consumer_subnet_id" {
+  value = aws_subnet.assessment_consumer.id
+}
+
+output "assessment_consumer_security_group_id" {
+  value = aws_security_group.assessment_consumer.id
+}
+
+output "assessment_consumer_role_arn" {
+  value = aws_iam_role.assessment_consumer.arn
+}
+
+output "assessment_consumer_log_group_name" {
+  value = aws_cloudwatch_log_group.assessment_consumer.name
+}
+
+output "assessment_consumer_parameter_path" {
+  value = local.assessment_consumer_parameter_path
+}
+
+output "assessment_dlq_url" {
+  value = aws_sqs_queue.assessment_dlq.url
+}
+
+output "assessment_dlq_arn" {
+  value = aws_sqs_queue.assessment_dlq.arn
+}
+
+output "assessment_consumer_function_name" {
+  value = try(aws_lambda_function.assessment_consumer[0].function_name, null)
+}
+
+output "assessment_consumer_function_arn" {
+  value = try(aws_lambda_function.assessment_consumer[0].arn, null)
+}
+
+output "assessment_consumer_image_digest" {
+  value = var.assessment_consumer_image_digest
+}
+
+output "assessment_consumer_event_source_mapping_uuid" {
+  value = try(aws_lambda_event_source_mapping.assessment_consumer[0].uuid, null)
+}
+
+output "assessment_outbox_relay_function_name" {
+  value = one(aws_lambda_function.assessment_outbox_relay[*].function_name)
+}
+
+output "assessment_outbox_relay_image_digest" {
+  value = var.assessment_outbox_relay_image_digest
+}

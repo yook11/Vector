@@ -3,7 +3,12 @@ locals {
   oidc_host  = "token.actions.githubusercontent.com"
   repo       = "${var.github_owner}/${var.github_repo}"
 
-  outbox_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-outbox-relay"
+  assessment_consumer_lambda_arn     = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-assessment-consumer"
+  assessment_consumer_role_arn       = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-assessment-consumer-lambda"
+  assessment_outbox_relay_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-assessment-outbox-relay"
+  assessment_outbox_relay_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-assessment-outbox-relay-lambda"
+  assessment_dlq_arn                 = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-assessment-dlq"
+  outbox_lambda_arn                  = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-outbox-relay"
   outbox_queue_arns = [
     for stage in ["completion", "curation", "assessment", "embedding"] :
     "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-${stage}"
@@ -11,7 +16,7 @@ locals {
   embedding_consumer_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-embedding-consumer"
   embedding_consumer_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-embedding-consumer-lambda"
   embedding_dlq_arn             = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-embedding-dlq"
-  managed_pipeline_queue_arns   = concat(local.outbox_queue_arns, [local.embedding_dlq_arn])
+  managed_pipeline_queue_arns   = concat(local.outbox_queue_arns, [local.embedding_dlq_arn, local.assessment_dlq_arn])
   outbox_lambda_eni_actions = [
     "ec2:CreateNetworkInterface",
     "ec2:DescribeNetworkInterfaces",
@@ -25,11 +30,13 @@ locals {
       arns = [
         "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda",
         local.embedding_consumer_role_arn,
+        local.assessment_consumer_role_arn,
+        local.assessment_outbox_relay_role_arn,
       ]
       service = "lambda.amazonaws.com"
     }
     Scheduler = {
-      arns    = ["arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-scheduler"]
+      arns    = [for name in ["outbox-relay", "assessment-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"]
       service = "scheduler.amazonaws.com"
     }
   }
@@ -110,8 +117,8 @@ locals {
 
   # 用途別のロールに、その用途以外の boundary を付けさせない。対応表 1 行につき
   # Deny 1 本。ロール名は完全一致なので、1 つのロールが 2 つの Deny に当たることはない。
-  boundary_pairing_statements = [
-    for key, group in local.role_boundary_groups : {
+  boundary_pairing_statements_by_group = {
+    for key, group in local.role_boundary_groups : key => {
       Sid    = "DenyWideBoundaryOn${key}Roles"
       Effect = "Deny"
       Action = "iam:CreateRole"
@@ -125,6 +132,20 @@ locals {
         }
       }
     }
+  }
+  boundary_pairing_statements = values(local.boundary_pairing_statements_by_group)
+  # pipelineの作成制約はmanaged policyへ置き、inline容量と拒否条件を両立する。
+  outbox_boundary_groups = toset([
+    "OutboxRelayLambda", "OutboxRelayScheduler", "AssessmentConsumerLambda",
+    "AssessmentOutboxRelayLambda", "AssessmentOutboxRelayScheduler",
+  ])
+  outbox_boundary_pairing_statements = [
+    for key, statement in local.boundary_pairing_statements_by_group : statement
+    if contains(local.outbox_boundary_groups, key)
+  ]
+  inline_boundary_pairing_statements = [
+    for key, statement in local.boundary_pairing_statements_by_group : statement
+    if !contains(local.outbox_boundary_groups, key)
   ]
 
   # CI が assume できるロール。name は「何をするロールか」で付ける
@@ -299,8 +320,8 @@ resource "aws_iam_role_policy" "plan_deny_secret_read" {
 # --- terraform-apply ------------------------------------------------------
 
 resource "aws_iam_role_policy" "apply" {
-  # 全面Denyを外す前に限定復号ポリシーの明示Denyを取り付ける。
-  depends_on = [aws_iam_role_policy_attachment.lambda_config_readback]
+  # inlineから拒否条件を外す前に、限定復号とロール制約の移設先を取り付ける。
+  depends_on = [aws_iam_role_policy_attachment.lambda_config_readback, aws_iam_role_policy_attachment.apply_outbox]
 
   name = "terraform-apply"
   role = aws_iam_role.ci["apply"].id
@@ -530,7 +551,7 @@ resource "aws_iam_role_policy" "apply" {
       #
       # 1c は用途別のロールに、その用途以外の boundary を付けさせない Deny。
       # boundary.tf の local.role_boundary_groups から 1 行につき 1 本生成する。
-    ], local.boundary_pairing_statements, local.secret_value_read_statements)
+    ], local.inline_boundary_pairing_statements, local.secret_value_read_statements)
   })
 }
 
@@ -578,7 +599,7 @@ resource "aws_iam_policy" "apply_outbox" {
           "lambda:TagResource",
           "lambda:UntagResource",
         ]
-        Resource = local.outbox_lambda_arn
+        Resource = [local.outbox_lambda_arn, local.assessment_outbox_relay_lambda_arn]
       },
       {
         Sid    = "ManageOutboxSchedule"
@@ -589,7 +610,7 @@ resource "aws_iam_policy" "apply_outbox" {
           "scheduler:UpdateSchedule",
           "scheduler:DeleteSchedule",
         ]
-        Resource = "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-outbox-relay/${var.name_prefix}-outbox-relay"
+        Resource = [for name in ["outbox-relay", "assessment-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${name}/${var.name_prefix}-${name}"]
       },
       {
         Sid    = "ManageOutboxScheduleGroup"
@@ -602,9 +623,9 @@ resource "aws_iam_policy" "apply_outbox" {
           "scheduler:TagResource",
           "scheduler:UntagResource",
         ]
-        Resource = "arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-outbox-relay"
+        Resource = [for name in ["outbox-relay", "assessment-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-${name}"]
       },
-    ], local.outbox_pass_role_guards)
+    ], local.outbox_pass_role_guards, local.outbox_boundary_pairing_statements)
   })
 }
 

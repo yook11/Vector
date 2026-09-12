@@ -1,6 +1,6 @@
 # AssessmentConsumer — イベント受信と投資判定
 
-Status: Consumer・資源準備・共有イベント契約・本文解析に加え、Assessment Lambda入口とSQS部分バッチ応答を実装・検証済み（2026-09-12）。Assessment向けOutbox配送と別relay入口を実装。AWS上の別relay Lambda・定期起動・イベントソースへの接続と適用は未実施。
+Status: Consumer・資源準備・共有イベント契約・本文解析に加え、Assessment Lambda入口とSQS部分バッチ応答を実装・検証済み（2026-09-12）。Assessment向けOutbox配送と別relay入口、Consumer・relayのTerraform定義を実装。AWSへの適用と稼働開始は未実施。
 
 ## Problem
 
@@ -288,3 +288,72 @@ AWS上のAssessment relay Lambda、Scheduler、IAM、SQSイベントソースと
 設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。本文準備の失敗は`publishing.error_mapping.publish_preparation_error_from_exception`で扱い、分類済みPublishErrorの同一性、想定外例外のPREPARE_EVENTと原因チェーンを維持する。RoutedEventPublisherとSqsMessageBatchがこの処理を共有し、SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
 
 PR作成時の最終検証: 設定名・本文準備エラーの責務整理と、既存のイベント／受信handlerテスト整理を含め、app全体・変更テストのRuff lint・format、単体テスト6,628件が成功した。統合テスト1,400件も同一の製品コードで成功し、一時DB・Redisは削除済み。統合検証後の追加対象は単体テストと文書のみ。テストガイドへ保証の所有先・1テスト1不変条件の方針を反映した。AWS設定・デプロイは未実施。
+
+
+## migration適用済みDBでの実呼び出し検証（2026-09-12）
+
+Problem: 従来の部品テスト用DB・Assessor差し替えだけでは確認できない、製品Engine・実SDK・handlerを含めた保存と接続管理を保証する。
+Evidence: `local_tests/embedding/`、共通DB構築、AssessmentのConsumer・Service・Resourcesと既存テストを基準とする。
+Invariants: migration適用済みDBへ製品Engineから`vector_app`で接続する。製品コード・DB schema・権限は変更しない。既存の設定・エラー・監査・メトリクスの契約を維持する。
+Non-goals: AWS IAMの実認証、本番TLS、SQS実配送、AI実通信、デプロイ、対象内と対象外の同時保存に対する排他制御。
+Done: 実呼び出しの確定保存・失敗時の原子性・同じ区分での重複抑止・資源解放を検証し、移した保証を既存テストに重複して残さない。
+
+`backend/local_tests/assessment/`の12ケースで、実handler → 実DeepSeek SDK・Assessor → Consumer → Repository → 製品Engineを接続する。外部境界のSSM・IAM署名・HTTP応答を差し替え、DB操作は実物を使う。
+
+| 所有するテスト | 保証 |
+| --- | --- |
+| `test_event_processing.py`（3件） | 指定記事の入力と対象内結果・成功監査・対応Outboxの確定、対象外結果・成功監査だけの確定、3種類の実INSERT後のSQL障害による全ロールバックと別トランザクションの失敗監査 |
+| `test_duplicate_processing.py`（4件） | 再配送時の保存済み内容維持、同じ判定区分の同時保存で一意制約の実ロック待ちを経た後続の`ALREADY_ASSESSED`と先行内容の維持。対象内・対象外を各々検証 |
+| `test_invocation_resources.py`（5件） | 連続呼び出しの1接続再利用と終了、AI待機中の接続返却・トランザクション終了、HTTP失敗・実DB障害・実DB待機中の業務期限切れ後の接続解放 |
+
+保存結果はhandlerの応答後、別の`vector_app`接続から確認する。同時処理は異なるAI判定内容を返し、実INSERTの後に先行commitだけを停止して後続のDB待機を観測する。期限切れはDB待機を確認して既存の60秒timeoutをrescheduleする。製品のプール・通信設定をテスト用に緩和せず、テスト失敗時も待機を解除して呼び出し終了を待つ。
+
+通常のConsumerテストから同時保存・接続返却の保証を移し、照会1回・DB由来ID・AIと成功メトリクスの非実行は残す。Serviceの重複テストは`ALREADY_ASSESSED`とcommit非実行に絞り、Resourcesの旧DBテスト2件は実呼び出しの接続管理へ置き換える。部品ごとの保存・成功監査・Outbox・commit失敗の伝播、元例外保持、設定、資源の生成終了順と二次障害は通常の`tests/`に残す。
+
+AWS上の別relay Lambda・定期実行・Consumerのイベントソース接続は引き続き未実施。
+
+検証結果: app全体・変更した通常テスト・追加したlocal_testsのRuff lint／format確認が成功。Assessment単独12件と、`make test-local`による共通DB・Embeddingを含む全65件が成功した。`uv run pytest tests/ -m unit -x -q`は6,634件、続く`make test-integration PYTEST_ARGS="-x -q"`は1,396件が成功（skipなし）。既存の非推奨・Logfire関連の警告は残る。一時DB・Redisは終了・削除済み。別作業中のEmbedding変更は編集対象に含めていない。
+
+
+## AssessmentのTerraform定義と検証
+
+Problem: 実装済みAssessmentの受信入口とOutbox配送をAWS資源へ接続できる定義を用意する。
+Evidence: Embedding Consumer、既存Outbox relay、bootstrapのIAM境界、CIのdigest保持とTerraformテストを基準とする。
+Invariants: 既存Embeddingの資源アドレスと入口を維持する。Assessmentは専用Consumer・専用relayとし、配送先・秘密情報・通信先を限定する。通常plan/applyでは各イメージdigestを保持する。
+Non-goals: AWSへのapply、秘密値の登録、実AWSスモーク、Taskiq停止、DB schema・権限の変更。
+Done: Consumer・relay・SQS/DLQ・IAM・ネットワーク・CIの定義が接続され、fmt・validate・モックproviderのplanテストと関連スクリプトの検証が通ること。
+
+設定はEmbeddingを基準とする。Consumerはarm64・1,024MB・120秒・予約同時実行10、SQS受信は1件・待機窓0秒・最大同時実行10・ReportBatchItemFailuresを使う。業務上限60秒は変更しない。元キューは保持4日・可視性720秒・5回で専用DLQへ移動し、DLQは14日保持・既存SNSへの滞留通知を使う。専用relayは512MB・120秒・予約同時実行1・1分間隔とする。
+
+DeepSeekキーの参照先は`/<prefix>/assessment-consumer/deepseek-api-key`とし、Terraformは秘密値を作成・保持しない。Consumer用private subnetは既存と重複しないindex 29を使い、RDS・SSM・DeepSeek専用proxy経路へ接続する。relayは既存relayのDB・SQS向けネットワークを共有し、専用実行ロールとSchedulerロールを持つ。
+
+Consumerとrelayのdigestはそれぞれ独立させ、未指定かつ既存資源なしならLambdaと起動トリガーを作らない。digest指定時の有効化は既存Embedding方式に揃える。適用前にbootstrapの権限境界更新、秘密情報の登録、イメージ準備、既存キュー滞留とTaskiqとの稼働切替を確認する。
+
+
+Terraformの公開設定・接続先:
+
+| 項目 | 定義 |
+| --- | --- |
+| Consumerのイメージ | `assessment_consumer_image_digest` |
+| relayのイメージ | `assessment_outbox_relay_image_digest` |
+| Consumer入口 | `app.lambda_handlers.assessment.handler.handler` |
+| relay入口 | `app.lambda_handlers.outbox_relay.assessment_handler` |
+| キュー | 既存`aws_sqs_queue.outbox["assessment"]`を更新し、同名キューを再作成しない |
+| 秘密情報 | output `assessment_consumer_parameter_path`のSecureStringを別途登録する |
+
+plan/applyのCIは`resolve-assessment-images.py`で2つのdigestを独立して保持する。明示指定したdigestはbackend ECRに存在することを確認してからplanへ進む。state取得・解決・ECR確認が失敗した場合は処理を停止する。既存Embeddingのdigest・Lambda入口・資源アドレスは維持した。
+
+bootstrapには専用実行ロール・Schedulerロールの権限境界、CIの管理許可・PassRole制約・Lambda設定の限定復号対象を追加した。CI inline policyの容量を超えるため、Outbox relayとAssessmentのboundary固定Denyを`apply_outbox` managed policyへ移した。移設先を適用してからinlineを更新し、全ロールの元のDenyが1件ずつ残ることをモックplanで照合する。容量は実際の形式・長さのARNで検証する。
+
+検証の責任は次のとおりとする。
+
+- Terraform本体: Assessmentの入口・キュー/DLQ・通信経路・権限・未起動条件を6件で確認し、既存Embeddingの7件も維持する。
+- bootstrap: Assessmentの権限境界・CI管理範囲と容量・Deny移設の完全性を3件で確認し、既存6件も維持する。
+- スクリプトとCI: 2つのdigestの独立保持・片側更新・不正stateによる出力停止、実CI shellのstate失敗と両イメージのECR存在確認を11件で確認する。
+- 実AWSの認証・IAM評価・配送・proxy到達・DLQ移動は今回実行していない。アプリの保存・DB接続管理は既存local_testsに任せ、Terraformテストへ複製しない。
+
+Terraform検証はtfvars・state・ローカルbackend設定を除いた一時コピーで、`init -backend=false -input=false -lockfile=readonly`、`validate`、`test`を実行する。テストは[公式のmock provider](https://developer.hashicorp.com/terraform/language/tests/mocking)を使うplanだけとし、AWS資源は作成しない。SQS可視性720秒・Lambda上限120秒は[公式のSQS連携設定](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html)の推奨関係を満たす既存Embedding値を引き継いだ。
+
+検証結果（2026-09-12）: 変更Terraformの`fmt -check`、本体とbootstrapの`validate`、mock providerによる本体13件・bootstrap9件のplanテストが成功した。既存ロックファイルのAWS provider（本体6.62.0・bootstrap6.56.0）をローカルキャッシュから利用した。Ruff lint／format（app全体・追加スクリプト・追加テスト）が成功し、追加スクリプトテスト11件を含む全単体6,645件、続くDB統合1,396件が成功した。DB・Redisの一時環境は削除済み。actionlintは変更前からある`concurrency.queue: max`への未対応診断1件を確認し、その診断だけを除外した検査は成功した。既存のTerraform非推奨・Logfire関連の警告は残る。
+
+AWS向けplan/apply・実AWSスモーク・秘密値登録は実行していない。TerraformテストはAWS接続を伴わない一時コピーで実行し、既存のlocal_testsの再実行はアプリ変更がないため行っていない。

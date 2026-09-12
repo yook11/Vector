@@ -59,7 +59,7 @@ resource "aws_vpc_endpoint" "interface" {
     [aws_security_group.endpoints.id],
     contains(["ecr.api", "ecr.dkr", "logs"], each.value) ?
     [aws_security_group.migration_endpoints.id] : [],
-    each.value == "ssm" ? [aws_security_group.embedding_consumer_ssm.id] : [],
+    each.value == "ssm" ? [aws_security_group.embedding_consumer_ssm.id, aws_security_group.assessment_consumer_ssm.id] : [],
   )
   private_dns_enabled = true
 
