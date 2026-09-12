@@ -255,7 +255,6 @@ def test_entry_classifier_exit_is_not_converted(exit_error, monkeypatch):
         ),
         (PublishPhase.SEND, PublishTransportError, None),
         (PublishPhase.INITIALIZE, PublishUnexpectedError, None),
-        (PublishPhase.PREPARE_EVENT, PublishUnexpectedError, None),
         (None, PublishCleanupError, None),
     ],
 )
@@ -279,7 +278,10 @@ def test_same_timeout_is_classified_by_operation(phase, expected_type, reason):
         assert error.failure.kind is HttpTransportFailureKind.READ_TIMEOUT
 
 
-@pytest.mark.parametrize("phase", list(PublishPhase))
+@pytest.mark.parametrize(
+    "phase",
+    [phase for phase in PublishPhase if phase is not PublishPhase.PREPARE_EVENT],
+)
 def test_unclassified_exception_retains_phase_and_private_cause(phase):
     """分類不能でも元の段階と原因を保ち、自由文を公開しない。"""
     original = ValueError("PRIVATE_BODY_QUEUE_CREDENTIAL")
@@ -295,7 +297,11 @@ def test_unclassified_exception_retains_phase_and_private_cause(phase):
     assert "PRIVATE" not in repr(error)
 
 
-@pytest.mark.parametrize("phase", [*PublishPhase, None])
+@pytest.mark.parametrize(
+    "phase",
+    [phase for phase in PublishPhase if phase is not PublishPhase.PREPARE_EVENT]
+    + [None],
+)
 def test_existing_publish_error_keeps_identity_except_during_cleanup(phase):
     """確定済みの原因を保持し、終了時だけ送信結果から分離する。"""
     original = PublishConfigurationError(

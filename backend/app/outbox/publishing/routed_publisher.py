@@ -3,10 +3,10 @@
 from collections.abc import Sequence
 from typing import Protocol
 
+from app.outbox.publishing.error_mapping import publish_preparation_error_from_exception
 from app.outbox.publishing.errors import (
     PublishEventInvalidError,
     PublishEventInvalidReason,
-    PublishPhase,
 )
 from app.outbox.publishing.event_batch import EventBatch
 from app.outbox.publishing.publisher import (
@@ -15,7 +15,6 @@ from app.outbox.publishing.publisher import (
     PublishFailed,
 )
 from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
-from app.outbox.sqs.error_mapping import publish_error_from_exception
 
 
 class MessageSender(Protocol):
@@ -50,7 +49,7 @@ class RoutedEventPublisher:
             except Exception as exc:
                 results[envelope.event_id] = PublishFailed(
                     envelope.event_id,
-                    publish_error_from_exception(exc, phase=PublishPhase.PREPARE_EVENT),
+                    publish_preparation_error_from_exception(exc),
                 )
             else:
                 messages.append(message)

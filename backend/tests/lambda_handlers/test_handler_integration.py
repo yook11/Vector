@@ -25,10 +25,9 @@ def relay_environment(monkeypatch: pytest.MonkeyPatch, test_database_url: str) -
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("DB_IAM_AUTH", "true")
     monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
-    for stage in ("COMPLETION", "CURATION", "ASSESSMENT", "EMBEDDING"):
-        monkeypatch.setenv(
-            f"SQS_ARTICLE_{stage}_QUEUE_URL", f"https://sqs.invalid/{stage}"
-        )
+    monkeypatch.setenv(
+        "SQS_ARTICLE_EMBEDDING_QUEUE_URL", "https://sqs.invalid/EMBEDDING"
+    )
     return database_url
 
 
@@ -39,7 +38,7 @@ def publisher(monkeypatch):
         results=tuple(PublishSucceeded(e.event_id) for e in envelopes)
     )
     monkeypatch.setattr(
-        import_module("app.lambda_handlers.outbox_relay.handler"),
+        import_module("app.lambda_handlers.outbox_relay.execution"),
         "RoutedEventPublisher",
         Mock(return_value=publisher),
     )

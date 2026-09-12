@@ -1,6 +1,6 @@
 # AssessmentConsumer — イベント受信と投資判定
 
-Status: Consumer・資源準備・共有イベント契約・本文解析に加え、Assessment Lambda入口とSQS部分バッチ応答を実装・検証済み（2026-09-12）。Assessment配送とAWSイベントソースへの接続・適用は未着手。
+Status: Consumer・資源準備・共有イベント契約・本文解析に加え、Assessment Lambda入口とSQS部分バッチ応答を実装・検証済み（2026-09-12）。Assessment向けOutbox配送と別relay入口を実装。AWS上の別relay Lambda・定期起動・イベントソースへの接続と適用は未実施。
 
 ## Problem
 
@@ -12,7 +12,7 @@ Curationの完了イベントからAssessmentを実行し、対象内の判定�
 - [Embedding Lambda入口](../../backend/app/lambda_handlers/embedding/handler.py)：初期化、入力検証、部分バッチ応答、資源の終了。
 - [Gemini通信設定](../../backend/app/ai_providers/gemini/settings.py)と[クライアント管理](../../backend/app/ai_providers/gemini/client.py)：DeepSeekの責務分担の参照元。
 - [Curationイベント](../../backend/app/analysis/curation/events.py)、[Assessment保存処理](../../backend/app/analysis/assessment/service.py)、[Outbox送信契約](./outbox-sqs-message-contract.md)：既存のpayloadと保存・配送境界。
-- [relay](../../backend/app/outbox/delivery/relay.py)と[Scheduler定義](../../infra/aws/outbox_relay.tf)：現在のコードはEmbedding向け配送と1分間隔の起動を定義している。Assessment向け配送は追加対象。AWSの稼働状態は本仕様では確認していない。
+- [relay](../../backend/app/outbox/delivery/relay.py)と[Scheduler定義](../../infra/aws/outbox_relay.tf)：コード上の配送入口はEmbedding向けとAssessment向けに分離済み。既存Scheduler定義はEmbedding向けの1分間隔起動だけで、Assessment向けのAWS設定は未追加。AWSの稼働状態は本仕様では確認していない。
 
 ## 全体フローと責務
 
@@ -268,3 +268,23 @@ Done: 正常終了・個別失敗・バッチ失敗を適切に応答／伝播�
 検証結果: 実装時点では新規8ケースを含む関連単体テスト72件が成功。app全体・追加テストのRuff lint／format確認、`uv run pytest tests/ -m unit -x -q`の6,620件、`make test-integration PYTEST_ARGS="-x -q"`の1,400件が成功した。既存の非推奨・Logfire関連の警告は残る。一時DB・Redisは終了済み。local_tests・実AWSスモーク・デプロイは今回の範囲外として実行していない。
 
 PR作成前に混在バッチのテストを整理した。messageIdをテスト内に明示し、Consumerが4回処理されたことと失敗した2件だけの応答を確認する。修正後の対象テスト1件とRuff lint／format確認は成功。製品コードは変更せず、全体の成功済み検証は再実行していない。
+
+## Assessment向けOutbox配送（2026-09-12）
+
+- `app.lambda_handlers.outbox_relay.assessment_handler`を追加し、`article.curated_signal`だけをAssessmentキューへ送る。既存Embedding入口は維持し、2つの入口を別々のLambdaとして起動する設計とする。
+- `AssessmentOutboxRelaySettings`は共通DB・region設定と`sqs_article_assessment_queue_url`を要求する。Embedding・Curation・CompletionキューのURLは不要。共通設定の既定値とTLS/IAM条件を維持する。
+- 入口が種別・キュー・`build_curated_signal_message`を配送定義に結び付け、共通`run_relay(settings, route)`へ渡す。DB準備・1回のrelay実行・Engine終了を共有し、元例外と終了失敗の扱いは既存どおりとする。
+- 本文生成は共有`ArticleCuratedSignalEvent`で検証し、保存済みイベントの全項目を維持する。送信エラーへの変換でも安全なreason・issuesを保持する。Consumer・受信handlerの契約は変更しない。
+- 単体テストは本文の往復・代表的なエラー変換・用途別配線と設定を担当し、終了処理の既存テストは共通実行側へ移す。DB・通信・イベント詳細の保証は既存テストへ任せ、local_testsに重複シナリオを追加しない。
+
+AWS上のAssessment relay Lambda、Scheduler、IAM、SQSイベントソースとReportBatchItemFailuresの設定は未接続。送受信のコードが揃った段階であり、定期配送を有効化した状態ではない。詳細は[Outbox送信契約](./outbox-sqs-message-contract.md)を参照。
+
+検証結果: app全体と今回変更したテストのRuff lint・format確認が成功。`uv run pytest tests/ -m unit -x -q`は6,629件、続く`make test-integration PYTEST_ARGS="-x -q"`は1,400件が成功した。既存の非推奨・Logfire関連の警告は残る。一時DB・Redisは終了・削除済み。local_tests・実AWSスモーク・デプロイは対象外として未実施。
+
+入口の配置・命名整理: `outbox_relay/handler.py`へ`embedding_handler`と`assessment_handler`を集約した。`__init__.py`は前者を`handler`として公開し、既存AWSの起動パスとインフラ設定を維持する。用途別パッケージは追加せず、共通実行・配送動作は変更していない。
+
+配置・命名整理後の検証: app全体と変更テストのRuff lint・format、単体テスト6,629件、統合テスト1,400件が成功した。既存テストの参照先だけを更新し、ケースの追加は行っていない。一時DB・Redisは終了・削除済み。
+
+設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。本文準備の失敗は`publishing.error_mapping.publish_preparation_error_from_exception`で扱い、分類済みPublishErrorの同一性、想定外例外のPREPARE_EVENTと原因チェーンを維持する。RoutedEventPublisherとSqsMessageBatchがこの処理を共有し、SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
+
+PR作成時の最終検証: 設定名・本文準備エラーの責務整理と、既存のイベント／受信handlerテスト整理を含め、app全体・変更テストのRuff lint・format、単体テスト6,628件が成功した。統合テスト1,400件も同一の製品コードで成功し、一時DB・Redisは削除済み。統合検証後の追加対象は単体テストと文書のみ。テストガイドへ保証の所有先・1テスト1不変条件の方針を反映した。AWS設定・デプロイは未実施。
