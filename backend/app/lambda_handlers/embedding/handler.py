@@ -1,15 +1,11 @@
 """Embedding Lambdaの初期化・バッチ検証・逐次処理・応答と終了を進める。"""
 
 import asyncio
-from contextlib import AsyncExitStack
 from typing import TypedDict
 
 import structlog
 
-from app.ai_providers.gemini.client import open_gemini_client
-from app.ai_providers.gemini.settings import GeminiConnectionSettings
-from app.analysis.embedding.consumer import EmbeddingConsumer
-from app.analysis.embedding.embedder import GeminiEmbedder
+from app.lambda_handlers.embedding.composition import open_embedding_consumer
 from app.lambda_handlers.embedding.event import (
     EmbeddingEventInvalidError,
     parse_assessed_in_scope_event,
@@ -17,7 +13,6 @@ from app.lambda_handlers.embedding.event import (
 from app.lambda_handlers.embedding.failure_recorder import (
     EmbeddingLambdaFailureRecorder,
 )
-from app.lambda_handlers.embedding.resources import open_embedding_resources
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError
@@ -53,27 +48,7 @@ async def _run_embedding(
 ) -> list[SqsBatchItemIdentifier]:
     """資源を管理して各レコードを処理し、失敗した項目の識別子を返す。"""
     failure_recorder = EmbeddingLambdaFailureRecorder(logger)
-    async with AsyncExitStack() as stack:
-        stage = "resources"
-        try:
-            resources = await stack.enter_async_context(
-                open_embedding_resources(settings)
-            )
-            stage = "gemini_client"
-            client = await stack.enter_async_context(
-                open_gemini_client(
-                    api_key=resources.gemini_api_key,
-                    settings=GeminiConnectionSettings(),
-                )
-            )
-            stage = "consumer"
-            consumer = EmbeddingConsumer(
-                resources.session_factory, GeminiEmbedder(client=client)
-            )
-        except Exception as exc:
-            failure_recorder.record_initialization_failure(stage, exc)
-            raise
-
+    async with open_embedding_consumer(settings) as consumer:
         try:
             record_batch = SqsRecordBatch.from_lambda_event(lambda_event)
         except SqsInputError as exc:
