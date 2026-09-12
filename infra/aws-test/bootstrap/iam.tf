@@ -66,6 +66,15 @@ resource "aws_iam_policy" "runtime_iam" {
     Version = "2012-10-17"
     Statement = concat([
       { Effect = "Allow", Action = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole"], Resource = local.runtime_roles },
+      # 削除後は元のIAMパスを解決できないため、同じ試験名の不存在確認を許可する。
+      {
+        Sid      = "ReadDeletedRuntimeRoles", Effect = "Allow", Action = ["iam:GetRole"]
+        Resource = [for kind in ["lambda", "runner", "proxy"] : "arn:aws:iam::${local.account_id}:role/vector-test-*-${kind}"]
+      },
+      {
+        Sid      = "ReadDeletedRuntimeProfiles", Effect = "Allow", Action = ["iam:GetInstanceProfile"]
+        Resource = [for kind in ["runner", "proxy"] : "arn:aws:iam::${local.account_id}:instance-profile/vector-test-*-${kind}"]
+      },
       {
         Effect   = "Allow"
         Action   = ["iam:DeleteRole", "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:TagRole", "iam:UntagRole"]
@@ -217,9 +226,14 @@ resource "aws_iam_policy" "services" {
         }
       },
       {
-        Effect    = "Allow", Action = ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping", "lambda:DeleteEventSourceMapping", "lambda:ListTags", "lambda:TagResource", "lambda:UntagResource"]
+        Effect    = "Allow", Action = ["lambda:UpdateEventSourceMapping", "lambda:DeleteEventSourceMapping", "lambda:ListTags", "lambda:TagResource", "lambda:UntagResource"]
         Resource  = "arn:aws:lambda:${local.region}:${local.account_id}:event-source-mapping:*"
         Condition = { StringEquals = local.smoke_tags }
+      },
+      # 削除後のトリガー照会はResourceが*になるため、読取だけをリージョンで制限する。
+      {
+        Sid       = "ReadEventSourceMappings", Effect = "Allow", Action = "lambda:GetEventSourceMapping", Resource = "*"
+        Condition = { StringEquals = { "aws:RequestedRegion" = local.region } }
       },
       {
         Effect   = "Allow", Action = ["sqs:CreateQueue", "sqs:DeleteQueue", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:ListQueueTags", "sqs:TagQueue", "sqs:UntagQueue"]

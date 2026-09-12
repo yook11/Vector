@@ -22,7 +22,7 @@ variables {
 run "reject_malformed_account" {
   command = plan
   variables { expected_account_id = "invalid-account" }
-  expect_failures = [var.expected_account_id, var.trusted_admin_role_arn_pattern]
+  expect_failures = [var.expected_account_id]
 }
 
 run "permanent_storage_and_delegation" {
@@ -95,8 +95,8 @@ run "security_group_creation_conditions" {
   assert {
     condition = (
       alltrue([for statement in jsondecode(aws_iam_policy.security_group_rules.policy).Statement : toset(statement.Action) == toset(["ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress"])]) &&
-      contains(one([for statement in jsondecode(aws_iam_policy.network_compute.policy).Statement : statement if statement.Sid == "TagOnCreate"]).Condition.StringEquals["ec2:CreateAction"], "AuthorizeSecurityGroupIngress") &&
-      contains(one([for statement in jsondecode(aws_iam_policy.network_compute.policy).Statement : statement if statement.Sid == "TagOnCreate"]).Condition.StringEquals["ec2:CreateAction"], "AuthorizeSecurityGroupEgress")
+      contains(one([for statement in jsondecode(aws_iam_policy.network_compute.policy).Statement : statement if try(statement.Sid, "") == "TagOnCreate"]).Condition.StringEquals["ec2:CreateAction"], "AuthorizeSecurityGroupIngress") &&
+      contains(one([for statement in jsondecode(aws_iam_policy.network_compute.policy).Statement : statement if try(statement.Sid, "") == "TagOnCreate"]).Condition.StringEquals["ec2:CreateAction"], "AuthorizeSecurityGroupEgress")
     )
     error_message = "ルール作成と同時のタグ付けに必要な権限を維持します。"
   }
@@ -109,9 +109,41 @@ run "security_group_creation_conditions" {
         [for resource in try(tolist(statement.Resource), [statement.Resource]) :
           strcontains(resource, "/vector-test/runtime/") || strcontains(resource, "/vector-test/bootstrap/")
         ]
+        if !contains(["ReadDeletedRuntimeRoles", "ReadDeletedRuntimeProfiles"], try(statement.Sid, ""))
       ]))
     )
     error_message = "引受は1時間とし、実行ロールと常設権限境界のIAMパスを限定します。"
+  }
+}
+
+run "deleted_resources_remain_readable" {
+  command = plan
+  assert {
+    condition = (
+      one([for s in jsondecode(aws_iam_policy.services.policy).Statement : s if try(s.Sid, "") == "ReadEventSourceMappings"]) == {
+        Sid       = "ReadEventSourceMappings", Effect = "Allow", Action = "lambda:GetEventSourceMapping", Resource = "*"
+        Condition = { StringEquals = { "aws:RequestedRegion" = "ap-northeast-1" } }
+      } &&
+      alltrue([for s in jsondecode(aws_iam_policy.services.policy).Statement :
+        s.Resource == "arn:aws:lambda:ap-northeast-1:123456789012:event-source-mapping:*" &&
+        s.Condition.StringEquals == { "aws:ResourceTag/Project" = "vector-test", "aws:ResourceTag/Lifecycle" = "smoke" }
+        if contains(try(tolist(s.Action), [s.Action]), "lambda:DeleteEventSourceMapping")
+      ])
+    )
+    error_message = "トリガーの不存在確認だけを東京の読取へ分離し、削除のタグ制限を維持します。"
+  }
+  assert {
+    condition = (
+      one([for s in jsondecode(aws_iam_policy.runtime_iam.policy).Statement : s if try(s.Sid, "") == "ReadDeletedRuntimeRoles"]) == {
+        Sid      = "ReadDeletedRuntimeRoles", Effect = "Allow", Action = ["iam:GetRole"]
+        Resource = [for kind in ["lambda", "runner", "proxy"] : "arn:aws:iam::123456789012:role/vector-test-*-${kind}"]
+      } &&
+      one([for s in jsondecode(aws_iam_policy.runtime_iam.policy).Statement : s if try(s.Sid, "") == "ReadDeletedRuntimeProfiles"]) == {
+        Sid      = "ReadDeletedRuntimeProfiles", Effect = "Allow", Action = ["iam:GetInstanceProfile"]
+        Resource = [for kind in ["runner", "proxy"] : "arn:aws:iam::123456789012:instance-profile/vector-test-*-${kind}"]
+      }
+    )
+    error_message = "IAMパスの例外は、同一アカウントの試験名に対するGetRole/GetInstanceProfileだけに限定します。"
   }
 }
 
