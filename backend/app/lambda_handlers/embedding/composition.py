@@ -1,48 +1,57 @@
-"""呼び出しの利用範囲に合わせてEmbeddingConsumerを組み立てる。"""
+"""記事単位AI分析のライフサイクルへEmbeddingの依存を配線する。"""
 
-from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager
 
 import structlog
+from google.genai.client import AsyncClient
+from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.ai_providers.gemini.client import open_gemini_client
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.embedding.consumer import EmbeddingConsumer
 from app.analysis.embedding.embedder import GeminiEmbedder
+from app.db.engine import create_embedding_consumer_engine
+from app.lambda_handlers.article_analysis_lifecycle import (
+    IamPasswordProvider,
+    SessionFactory,
+    open_article_analysis_consumer,
+)
 from app.lambda_handlers.embedding.failure_recorder import (
     EmbeddingLambdaFailureRecorder,
 )
-from app.lambda_handlers.embedding.resources import open_embedding_resources
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 
 logger = structlog.get_logger(__name__)
 
 
-@asynccontextmanager
-async def open_embedding_consumer(
+def open_embedding_consumer(
     settings: EmbeddingConsumerSettings,
-) -> AsyncIterator[EmbeddingConsumer]:
-    """準備済みConsumerを借用させ、利用終了後に所有資源を解放する。"""
-    async with AsyncExitStack() as stack:
-        stage = "resources"
-        try:
-            resources = await stack.enter_async_context(
-                open_embedding_resources(settings)
-            )
-            stage = "gemini_client"
-            client = await stack.enter_async_context(
-                open_gemini_client(
-                    api_key=resources.gemini_api_key,
-                    settings=GeminiConnectionSettings(),
-                )
-            )
-            stage = "consumer"
-            consumer = EmbeddingConsumer(
-                resources.session_factory, GeminiEmbedder(client=client)
-            )
-        except Exception as exc:
-            EmbeddingLambdaFailureRecorder(logger).record_initialization_failure(
-                stage, exc
-            )
-            raise
-        yield consumer
+) -> AbstractAsyncContextManager[EmbeddingConsumer]:
+    """工程別の生成関数を渡し、資源の準備・終了順序を共通側へ委ねる。"""
+
+    def create_engine(*, password_provider: IamPasswordProvider) -> AsyncEngine:
+        return create_embedding_consumer_engine(
+            settings, password_provider=password_provider
+        )
+
+    def open_client(*, api_key: SecretStr) -> AbstractAsyncContextManager[AsyncClient]:
+        return open_gemini_client(
+            api_key=api_key,
+            settings=GeminiConnectionSettings(),
+        )
+
+    def build_consumer(
+        *, session_factory: SessionFactory, client: AsyncClient
+    ) -> EmbeddingConsumer:
+        return EmbeddingConsumer(session_factory, GeminiEmbedder(client=client))
+
+    return open_article_analysis_consumer(
+        aws_region=settings.aws_region,
+        database_url=settings.database_url,
+        api_key_parameter_path=settings.gemini_api_key_parameter_path,
+        create_engine=create_engine,
+        open_client=open_client,
+        build_consumer=build_consumer,
+        failure_recorder=EmbeddingLambdaFailureRecorder(logger),
+    )

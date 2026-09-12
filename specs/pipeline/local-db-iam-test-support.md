@@ -12,7 +12,7 @@ AWS向けEngineをローカルの実Postgresで検証するため、トークン
 
 - `backend/app/db/iam.py`: 共通の`build_iam_password_provider`とSDK clientの取得口。
 - `backend/app/db/engine.py`: 接続時のpassword providerと各用途のEngine設定。
-- `backend/app/lambda_handlers/{embedding,assessment}/resources.py`: 呼び出しごとのSDK clientから署名器を渡す経路。
+- `backend/app/lambda_handlers/article_analysis_lifecycle.py`: 呼び出しごとのSDK clientから署名器を渡す経路。
 - `backend/tests/lambda_handlers/iam_fixtures.py`: 移動前の共通ヘルパー。
 - `backend/tests/lambda_handlers/test_handler_integration.py`: IAMを無効にしていたRelayの実DBテスト。
 
@@ -31,10 +31,12 @@ AWS向けEngineをローカルの実Postgresで検証するため、トークン
 配置先は`backend/tests/iam_fixtures.py`、名前は既存の`inject_test_db_signer`を維持する。
 
 ```python
+from app.lambda_handlers import article_analysis_lifecycle
+
 database_url = inject_test_db_signer(
     monkeypatch,
     test_database_url,
-    resources_module=resources_module,
+    resources_module=article_analysis_lifecycle,
 )
 ```
 

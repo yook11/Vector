@@ -14,19 +14,20 @@ DB不要の接続URL・準備処理の単体テストは通常の`tests/`に置�
 local_tests/
 ├── database.py                   共通DBの構築・分離
 ├── conftest.py                   共通fixture
+├── test_article_analysis_lifecycle.py  共通ライフサイクルと実DB資源管理（11件）
 ├── test_database_permissions.py  3ロールの許可一覧・実操作（40件）
 ├── test_auth_provisioning_schema.py  既存のAuthデータ契約（2件）
 ├── test_database_isolation.py    実DBのケース分離・失敗時の回収（2件）
 ├── embedding/conftest.py         共通の接続設定・HTTP境界fixture
 ├── embedding/support.py          記事準備・実ハンドラー呼び出し
-├── embedding/test_invocation_resources.py  呼び出し単位のDB接続管理（5件）
-├── embedding/test_event_processing.py  対象記事の保存成功・保存失敗（2件）
+├── embedding/test_session_boundaries.py  AI待機前のセッション返却（1件）
+├── embedding/test_event_processing.py  対象記事の保存成功・保存失敗・通信失敗・DB待機期限切れ（4件）
 ├── embedding/test_duplicate_processing.py  重複配送・同時処理での保存結果の維持（2件）
 ├── assessment/conftest.py        接続設定・HTTP境界・実DB障害と待機の制御
 ├── assessment/support.py         記事準備・実ハンドラー呼び出し・別接続からの確認
-├── assessment/test_event_processing.py  対象内・対象外の確定保存と原子性（3件）
+├── assessment/test_event_processing.py  対象内・対象外の確定保存・原子性・通信失敗・DB待機期限切れ（5件）
 ├── assessment/test_duplicate_processing.py  再配送・同じ判定区分の同時保存（4件）
-└── assessment/test_invocation_resources.py  呼び出し単位のDB接続管理（5件）
+└── assessment/test_session_boundaries.py  AI待機前のセッション返却（1件）
 ```
 
 - `database.py`: Alembic headへの到達、必要なAuthテーブルとカテゴリ初期データの存在を準備時に確認し、不成立ならテストを開始しない。DB構造全体や既存データの移行を網羅するテストではない。
@@ -48,17 +49,19 @@ HTTP境界で実SDKの送信本文を記録し、対象記事の本文を含み�
 実Consumerの結果が保存成功1件・生成済みによるスキップ1件であり、両ハンドラーが正常終了し、別接続から先行側のベクトルを確認できることを検証する。
 スキップするのは保存処理で、両方ともAI生成は行う；待機は期限を設け、確認途中で失敗しても一時停止を解除して呼び出しの終了を待つ。
 
-`embedding/test_invocation_resources.py`は実際のLambda handlerからSDK・Consumer・Repository・実DBを通し、呼び出し単位のDB接続管理を確認する。
-各呼び出しの観測結果を1件だけ取り出し、Engine終了直前の貸出数が0、終了処理の完了、別接続からの保存結果、DB側で使用した接続IDが消えていることを確認する。
-異なる記事を順番に処理し、2回目の呼び出しでも保存と解放が成立することを確認する。
-通信失敗のケースはHTTP境界でConnectErrorを発生させ、失敗応答後の未保存・貸出返却・実接続終了と、次の呼び出しの保存・解放を確認する。エラー番号や分類は網羅しない。
-DB操作中の期限切れは、別接続で対象行をロックし、pg_blocking_pidsで保存処理の待機を確認してからConsumerの実timeoutをrescheduleする。ロック保持中に未保存・接続解放を確認し、ロック解除と期限操作の差し替え解除後に同じ記事を正常保存する。
-AI待機中のケースはHTTPリクエスト到達の合図で応答を停止し、貸出接続0件と、実DB接続がidleかつxact_startなしであることを確認する。確認失敗時もfinallyで応答を再開して呼び出しの終了を待つ。
-既存Consumerテストから接続返却の保証を移し、読み取り回数1回の保証は`test_loads_ready_facts_once`に残す。
-正常終了時のDB接続解放と連続呼び出し時のDB資源管理はここで保証し、`tests/lambda_handlers/test_embedding_handler.py`ではモックによる同じ確認を重ねない。
-ハンドラー側には、準備したConsumerへの接続と初期化失敗・キャンセル時の利用範囲の終了を残す。SDK・HTTP・DBそれぞれの終了順や終了処理自体の障害は、クライアントと資源管理部品のテストで確認する。
-Engineとdisposeは実物を使用し、接続IDと終了時の状態だけを観測する。DB側の切断反映は最大2秒待つ。
-外部境界のIAM署名・SSM取得・Gemini HTTP応答とテスト用Settingsを差し替える。DB待機テストでは元のConsumer timeoutを保持して期限の到来だけを制御する。
+`test_article_analysis_lifecycle.py`は`open_article_analysis_consumer`を直接呼び、記事単位AI分析に共通する資源管理を一箇所で確認する。工程別handler・composition・SDKは使用せず、工程名によるparametrizeもしない。
+AIには開閉を観測するテスト用context managerを渡し、SSM取得とRDS署名を外部境界で差し替える。DBは製品のEngine生成処理・IAM password provider・session factoryを通して、migration適用済み環境へ接続する。
+準備順序、借用中の生存期間、AI→Engine→RDSの解放順序、呼び出し内の接続再利用と呼び出し間の資源分離を確認する。
+例外・キャンセル・初期化失敗・実SQL障害・プール飽和・コマンド期限切れ・切断後の回復でも実接続を使い、dispose完了と使用した接続IDの消滅を別接続から確認する。切断反映の待機上限は2秒とする。
+通常の部品テストから移した、借用セッション間のロールバックもここで確認する。SDK内部の終了方法は各SDKの部品テストが担当する。
+
+`embedding/test_session_boundaries.py`と`assessment/test_session_boundaries.py`は各Consumerの読み取りセッション境界を確認する。
+HTTP応答を到達合図で停止し、貸出接続0件、実DB接続がidleかつxact_startなしであることを確認する。共通ライフサイクルは記事処理内のセッション境界を決めないため、この保証は各工程に残す。
+確認途中で失敗してもfinallyでHTTP応答を再開し、呼び出しの終了を待つ。
+
+`embedding/test_event_processing.py`の通信失敗ケースは未保存・失敗応答と次の記事の保存を確認する。
+DB待機期限切れのケースは対象行をロックし、pg_blocking_pidsで実際の待機を確認してからConsumerの実timeoutをrescheduleする。未保存・失敗応答を確認し、ロックと期限操作の差し替えを解除して同じ記事を正常保存する。
+資源解放のassertを工程ごとに繰り返さず、保存と応答を検証する。
 
 監査の詳細項目・エラー分類・混在バッチの部分失敗応答・SDK終了順は通常の部品テストで確認する。
 
@@ -68,11 +71,12 @@ DBは共通のmigration適用済み環境へ`vector_app`で接続し、IAM署名
 
 - `assessment/test_event_processing.py`: 対象記事の入力・対象内結果と成功監査・対応Outbox、対象外結果と成功監査だけの保存を確認する。障害ケースでは同一トランザクション内に結果・成功監査・Outboxが実INSERT済みであることを観測し、実SQLエラーを起こす。応答後の別接続から全件のロールバックと別トランザクションの失敗監査を確認する。
 - `assessment/test_duplicate_processing.py`: 再配送で異なるAI応答を用意しても保存済み内容が変わらないことを確認する。同時処理では両方をAIまで進め、先行側の実INSERT後に確定を停止する。後続のINSERTが一意制約のロック待ちになったことをDBで観測してから再開し、先行側の内容だけが残り、後続が`ALREADY_ASSESSED`になることを確認する。対象内同士・対象外同士の2種類を扱い、対象内と対象外が競合するケースは保証しない。
-- `assessment/test_invocation_resources.py`: 連続呼び出しでの1接続再利用と終了、AI応答待ちでの接続返却とトランザクション終了、HTTP失敗・実DB障害・DB待機中の業務期限切れ後の接続解放を確認する。期限切れは実INSERTのロック待ちを観測してから既存timeoutをrescheduleし、失敗監査後の接続終了と同じ記事の再処理を確認する。設定値をテスト用の短時間へ変えず、60秒も待たない。
+- `assessment/test_session_boundaries.py`: AI応答待ちでの接続返却とトランザクション終了を確認する。
+- `assessment/test_event_processing.py`の失敗ケース: HTTP失敗時の失敗応答・監査と次の記事の正常応答、実INSERT待機での業務期限切れ後のロールバックと同じ記事の再処理を確認する。期限切れは実ロック待ちを観測してから既存timeoutをrescheduleし、設定の60秒を待たない。
 
-Assessmentの既存Consumerテストから同時保存と接続返却の保証を移し、通常のResources実DBテストは上記の実呼び出しへ置き換えた。
+Assessmentの既存Consumerテストから同時保存と接続返却の保証を移し、共通資源の実DBテストは`test_article_analysis_lifecycle.py`へ集約した。
 通常のConsumerテストには照会回数・DB由来の監査ID・判定済み時のAIとメトリクスの非実行を残し、Serviceの重複テストは`ALREADY_ASSESSED`とcommit非実行に絞る。
-成功監査・Outbox・commit各境界の失敗伝播、元例外保持、設定や資源の生成・終了順と二次障害は、引き続き通常の`tests/`が担当する。
+成功監査・Outbox・commit各境界の失敗伝播、元例外保持、工程別設定・配線、終了処理自体の二次障害は、引き続き通常の`tests/`が担当する。
 製品コードをテスト用に変更せず、実Engineと処理は保持したまま観測・DB障害・競合の順序だけを制御する。
 詳細は[Assessment仕様](../../specs/pipeline/assessment-consumer.md)を参照する。
 
@@ -84,6 +88,7 @@ DB不要の単体テストは`../tests/test_local_database.py`（接続URL・準
 目的別に実行する場合はbackendで次を使う。
 
 ```sh
+uv run pytest local_tests/test_article_analysis_lifecycle.py -x -q
 uv run pytest local_tests/embedding/ -x -q
 uv run pytest local_tests/assessment/ -x -q
 uv run pytest local_tests/test_database_permissions.py -x -q
@@ -119,3 +124,5 @@ DBロールとテーブル権限は既存の初期化／migrationを正本とし
 詳細は[共通DB仕様](../../specs/pipeline/system-test-database.md)を参照する。
 
 既存の`tests/test_db_user_isolation.py`の権限20件は許可一覧の照合と実操作に再編した。独自の接続先解決と環境不足によるskipは廃止し、Authの構造契約2件も共通DBで実行する。Outbox個別migrationのupgrade/downgrade試験は`tests/outbox/test_collect_permissions_migration.py`に残す。
+
+記事単位AI分析の資源管理は`app.lambda_handlers.article_analysis_lifecycle`を通す。共通テストはこの入口を直接検証する。工程別のセッション境界テストでは、共通`analysis_engines` fixtureで借用先Engineを観測し、実SDK・Consumer・DBを通す。

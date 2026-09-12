@@ -11,6 +11,7 @@
 - なんのテストをしているのかわかるように簡潔にコメントを書くこと
 - 1テストで保証する不変条件を1つに絞り、docstringにもその条件を書く。同じ保証を裏付ける複数のassertはまとめ、応答・処理順・資源解放などの独立した契約を混在させない。
 - 入力と期待結果がテスト本文から読める形にし、通し番号や真偽値のフラグでシナリオを隠さない。同じ不変条件の境界値はparametrizeで列挙してよい。
+- 共通化した資源管理は共通入口を直接テストし、同じ保証を工程別handlerのparametrizeで繰り返さない。工程固有のセッション境界・保存結果は各工程で検証する。
 - 整理前に保証の所有先を確認する。共有契約の項目検証は共有契約側に置き、local_testsが同じ条件を実物でより強く確認している場合は下位側の重複確認を外す。
 
 ### フィクスチャ (conftest.py)
@@ -36,7 +37,7 @@
 ### IAM接続を使う実DBテスト
 
 - `tests.iam_fixtures.inject_test_db_signer(monkeypatch, test_database_url)`で共通SDK client取得口を差し替え、返されたパスワードなしURLをSettingsへ渡す。
-- 呼び出し単位でSDK clientを作るConsumerは`resources_module=対象のresourcesモジュール`を指定する。
+- 呼び出し単位でSDK clientを作るConsumerは`resources_module=article_analysis_lifecycle`（`app.lambda_handlers`の共通モジュール）を指定する。
 - IAM設定を有効にし、製品のtoken provider・Engine・Sessionを使う；共有ヘルパーは署名結果だけをテストDBのパスワードへ置き換える。
 - 通常のパスワード認証や署名自体を検証する単体テストには一律適用しない。
 - IAM認証の実環境での成立はAWS試験で確認する；保証範囲は`specs/pipeline/local-db-iam-test-support.md`を参照する。

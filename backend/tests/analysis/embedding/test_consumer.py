@@ -637,9 +637,13 @@ async def test_consumer_with_invocation_database_resources(
     db_session, test_database_url, target, embedder, monkeypatch, disconnect
 ):
     """呼び出し内のプールで保存し、切断後も失敗監査へ再接続する。"""
+    from contextlib import asynccontextmanager
+    from unittest.mock import Mock
+
     from pydantic import SecretStr
 
-    from app.lambda_handlers.embedding import resources as resources_module
+    from app.db.engine import create_embedding_consumer_engine
+    from app.lambda_handlers import article_analysis_lifecycle as resources_module
     from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
     from tests.iam_fixtures import inject_test_db_signer
 
@@ -659,8 +663,29 @@ async def test_consumer_with_invocation_database_resources(
     )
     event, article_id = target
     disconnected = asyncio.Event()
-    async with resources_module.open_embedding_resources(config) as resources:
-        async with resources.session_factory() as session:
+
+    def create_engine(*, password_provider):
+        return create_embedding_consumer_engine(
+            config, password_provider=password_provider
+        )
+
+    @asynccontextmanager
+    async def open_client(*, api_key):
+        yield embedder
+
+    def build_consumer(*, session_factory, client):
+        return EmbeddingConsumer(session_factory, client), session_factory
+
+    async with resources_module.open_article_analysis_consumer(
+        aws_region=config.aws_region,
+        database_url=config.database_url,
+        api_key_parameter_path=config.gemini_api_key_parameter_path,
+        create_engine=create_engine,
+        open_client=open_client,
+        build_consumer=build_consumer,
+        failure_recorder=Mock(),
+    ) as (consumer, session_factory):
+        async with session_factory() as session:
             original_pid = await session.scalar(text("select pg_backend_pid()"))
             connection = await session.connection()
             raw = await connection.get_raw_connection()
@@ -675,11 +700,10 @@ async def test_consumer_with_invocation_database_resources(
                 raise AIProviderNetworkError()
 
             embedder.embed_document.side_effect = interrupt_ai
-        consumer = EmbeddingConsumer(resources.session_factory, embedder)
         if disconnect:
             with pytest.raises(EmbeddingError):
                 await consumer.consume(event)
-            async with resources.session_factory() as session:
+            async with session_factory() as session:
                 assert (
                     await session.scalar(text("select pg_backend_pid()"))
                     != original_pid
