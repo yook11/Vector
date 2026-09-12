@@ -5,15 +5,25 @@ import re
 from collections.abc import AsyncIterator
 from typing import assert_never
 
+import structlog
+
+from app.collection.article_acquisition.errors import RssFeedErrors, RssFeedFailure
 from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+)
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
+from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.rss_acquisition import RssBodyPolicy, RssSource
 from app.collection.sources.rss_hooks import (
     RequiresBodyTransform,
     RequiresPublishedAtResolution,
     RequiresScopeFilter,
+    RequiresSelection,
     RequiresUrlTransform,
 )
+
+logger = structlog.get_logger(__name__)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -45,16 +55,38 @@ class RssFetcher:
 
     async def fetch(self, source: RssSource) -> AsyncIterator[FetchedArticle]:
         acquisition = source.acquisition
-        # 複数フィードは部分失敗の契約を実装するスライス3まで拒否する。
-        if len(acquisition.feeds) != 1:
-            raise ValueError("multiple RSS feeds are not supported yet")
-        entries = await self._reader.fetch(
-            endpoint_url=acquisition.feeds[0],
-            source_name=str(source.name),
-            parse_mode=acquisition.parse_mode,
-        )
+        entries: list[RssEntry] = []
+        failures: list[RssFeedFailure] = []
+        for feed_url in acquisition.feeds:
+            try:
+                fetched = await self._reader.fetch(
+                    endpoint_url=feed_url,
+                    source_name=str(source.name),
+                    parse_mode=acquisition.parse_mode,
+                )
+            except (ExternalFetchError, UnreadableResponseError) as exc:
+                logger.warning(
+                    "source_feed_fetch_failed",
+                    source=str(source.name),
+                    feed=feed_url,
+                    code=exc.CODE,
+                    error=str(exc),
+                )
+                failures.append(RssFeedFailure(feed_url=feed_url, error=exc))
+                continue
+            logger.info(
+                "source_feed_fetched",
+                source=str(source.name),
+                feed=feed_url,
+                entries_count=len(fetched),
+            )
+            entries.extend(fetched)
+        if len(failures) == len(acquisition.feeds):
+            raise RssFeedErrors(failures)
         if isinstance(source, RequiresScopeFilter):
             entries = [entry for entry in entries if source.in_scope(entry)]
+        if isinstance(source, RequiresSelection):
+            entries = source.select(entries)
         for entry in entries:
             url = (
                 source.transform_url(entry.link)

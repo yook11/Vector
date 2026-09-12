@@ -3,12 +3,12 @@
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar
 from unittest.mock import AsyncMock
 
 import feedparser
 import pytest
 
+from app.collection.article_acquisition.errors import RssFeedErrors
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
@@ -30,8 +30,6 @@ from app.collection.external_fetch_errors import FetchOriginServerError
 from app.collection.sources.definitions.openai import OpenAISource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.rss_acquisition import (
-    RssAcquisition,
-    RssBodyPolicy,
     RssSource,
 )
 
@@ -170,27 +168,20 @@ async def test_fetch_failure_propagates_without_legacy_fallback(
 
     reader = AsyncMock(spec=RssReader)
     reader.fetch.side_effect = error
-    with pytest.raises(type(error)) as caught:
+    expected = RuntimeError if isinstance(error, RuntimeError) else RssFeedErrors
+    with pytest.raises(expected) as caught:
         _ = [
             a async for a in fetch_articles(SourceWithOldRead, ReaderTools(rss=reader))
         ]
-    assert caught.value is error
-    reader.fetch.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_multiple_feeds_are_rejected_before_io_until_slice3() -> None:
-    class MultipleFeeds(TechCrunchSource):
-        acquisition: ClassVar[RssAcquisition] = RssAcquisition(
-            feeds=("https://example.com/a", "https://example.com/b"),
-            parse_mode="text",
-            body_policy=RssBodyPolicy.DISCARD,
+    if isinstance(caught.value, RssFeedErrors):
+        assert len(caught.value.failures) == 1
+        assert (
+            caught.value.failures[0].feed_url == SourceWithOldRead.acquisition.feeds[0]
         )
-
-    reader = AsyncMock(spec=RssReader)
-    with pytest.raises(ValueError, match="multiple RSS feeds"):
-        _ = [a async for a in fetch_articles(MultipleFeeds, ReaderTools(rss=reader))]
-    reader.fetch.assert_not_called()
+        assert caught.value.failures[0].error is error
+    else:
+        assert caught.value is error
+    reader.fetch.assert_awaited_once()
 
 
 @pytest.mark.asyncio

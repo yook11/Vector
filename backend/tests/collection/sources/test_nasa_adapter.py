@@ -1,33 +1,16 @@
-"""NASA 取得経路 (Source 宣言 + ``MultiFeedRssReader``) の不変条件テスト。
-
-per-feed 失敗隔離 / 全 feed 失敗 raise / 0-entry 成功は ``MultiFeedRssReader``
-の責務 (``test_multi_feed_rss_reader``)。本テストは NASA Source 固有の不変条件
-— feed 横断 dedup (``select``) / 空 link 素通し (failure-visibility) / NASA config
-— を ``fetch_articles`` engine 経由で pin する (``fixture_tools(rss=...)`` で
-per-feed parser を注入)。
-
-固定する不変条件:
-
-- INV-1 dedup: 同一 URL が複数 feed に出現しても yield URL は一意
-  (``select`` の feed 横断 dedup)
-- INV-2 failure-visibility: 空 link entry は dedup 対象外で全 feed 分が素通し、
-  converter 層の ``acquisition_conversion_url_missing`` 監査経路
-  (``AcquisitionConversionRejection``) を維持する
-- INV-3 NASA config: ``NASA_FEEDS`` は 6 feed、``nasa_build_body`` は
-  ``content_encoded`` を plain text 化 (Pattern R)
-"""
+"""NASAの宣言取得・重複除去・本文採用を共通入口から検証する。"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.sources.definitions.nasa import (
-    NASA_FEEDS,
     NASASource,
-    nasa_build_body,
 )
 from tests.collection.sources._fixture_tools import fixture_tools
 
@@ -103,17 +86,18 @@ async def test_empty_link_entry_passes_through_for_audit() -> None:
     items = await _collect(_EmptyLinkParser())
 
     # 6 feed × (空 link 1 + 非空 link 1) = 12 件全部 yield。
-    assert len(items) == len(NASA_FEEDS) * 2
+    assert len(items) == len(NASASource.acquisition.feeds) * 2
     empty_link_count = sum(1 for i in items if i.url == "")
-    assert empty_link_count == len(NASA_FEEDS)
+    assert empty_link_count == len(NASASource.acquisition.feeds)
 
 
-def test_nasa_config_invariants() -> None:
-    assert len(NASA_FEEDS) == 6
-    assert NASA_FEEDS[0] == "https://www.nasa.gov/feed/"
+@pytest.mark.asyncio
+async def test_nasa_config_invariants() -> None:
+    assert len(NASASource.acquisition.feeds) == 6
+    assert NASASource.acquisition.feeds[0] == "https://www.nasa.gov/feed/"
     # Pattern R: content_encoded を plain text 化して本文採用
-    entry = _entry("https://www.nasa.gov/x")
-    body = nasa_build_body(entry)
+    items = await _collect(_DuplicatingParser())
+    body = items[0].body
     assert body is not None
     assert "<p>" not in body
     assert "body" in body

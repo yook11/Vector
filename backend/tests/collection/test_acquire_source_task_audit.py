@@ -19,10 +19,17 @@ from app.audit.domain.event import Stage
 from app.collection.article_acquisition.errors import (
     AcquisitionReadError,
 )
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_acquisition.strategy import SOURCES
-from app.collection.external_fetch_errors import FetchSsrfBlockedError
+from app.collection.external_fetch_errors import (
+    FetchOriginServerError,
+    FetchSsrfBlockedError,
+)
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
@@ -164,6 +171,11 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
     monkeypatch.setattr(repository, "save", save_and_record)
 
     class FailingSource(VentureBeatSource):
+        acquisition = replace(
+            VentureBeatSource.acquisition,
+            feeds=("https://venturebeat.com/a/feed", "https://venturebeat.com/b/feed"),
+        )
+
         @staticmethod
         def transform_body(value: str) -> str:
             if value == "fail":
@@ -183,11 +195,15 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
         raw_updated=None,
     )
     reader = AsyncMock(
-        return_value=[
-            first,
-            replace(
-                first, link="https://venturebeat.com/ai/second", content_encoded="fail"
-            ),
+        side_effect=[
+            [first],
+            [
+                replace(
+                    first,
+                    link="https://venturebeat.com/ai/second",
+                    content_encoded="fail",
+                )
+            ],
         ]
     )
     monkeypatch.setattr(RssReader, "fetch", reader)
@@ -427,3 +443,145 @@ async def test_unexpected_error_records_then_reraises(
     assert row.error_class.endswith(".RuntimeError")  # type: ignore[union-attr]
     assert row.payload["failure_kind"] == "unknown"
     assert row.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    ["partial_success", "all_failed", "all_failed_retryable", "selection_failed"],
+)
+async def test_multi_feed_task_preserves_persistence_and_failure_audit(
+    scenario: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """部分成功は保存し、取得・選択の全体失敗は未保存のまま原因を監査する。"""
+    cause = ValueError("parse cause")
+    read_error = UnreadableResponseError(
+        reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
+    )
+    read_error.__cause__ = cause
+    selection_error = RuntimeError("selection failed")
+
+    class MultiSource(VentureBeatSource):
+        acquisition = replace(
+            VentureBeatSource.acquisition,
+            feeds=("https://venturebeat.com/a/feed", "https://venturebeat.com/b/feed"),
+        )
+
+        @staticmethod
+        def select(entries: list[RssEntry]) -> list[RssEntry]:
+            if scenario == "selection_failed":
+                raise selection_error from cause
+            return entries
+
+    full = RssEntry(
+        title="Full article",
+        link="https://venturebeat.com/ai/full",
+        guid=None,
+        published=datetime(2026, 5, 1, tzinfo=UTC),
+        summary=None,
+        content_encoded="Full article body. " * 30,
+        tags=(),
+        raw_published=None,
+        raw_updated=None,
+    )
+    short = replace(
+        full,
+        title="Short article",
+        link="https://venturebeat.com/ai/short",
+        content_encoded="Short summary.",
+    )
+    all_failed = scenario.startswith("all_failed")
+    second_error = (
+        FetchOriginServerError(status_code=503, reason="unavailable")
+        if scenario == "all_failed_retryable"
+        else FetchSsrfBlockedError("blocked")
+    )
+    reader = AsyncMock(
+        side_effect=(
+            [read_error, second_error]
+            if all_failed
+            else [[full, short], read_error if scenario == "partial_success" else []]
+        )
+    )
+    monkeypatch.setattr(RssReader, "fetch", reader)
+    monkeypatch.setitem(SOURCES, VentureBeatSource.name, MultiSource)
+    enqueue = AsyncMock()
+    monkeypatch.setattr(collection_tasks.curate_content, "kiq", enqueue)
+    arg = AcquireSourceTaskInput(id=vb_source.id, name=str(vb_source.name))
+    if scenario == "selection_failed":
+        with pytest.raises(RuntimeError) as caught:
+            await collection_tasks.acquire_source(arg, ctx=_ctx(session_factory))  # type: ignore[arg-type]
+        assert caught.value is selection_error
+        assert caught.value.__cause__ is cause
+    else:
+        result = await collection_tasks.acquire_source(arg, ctx=_ctx(session_factory))  # type: ignore[arg-type]
+        assert result["status"] == (
+            "success" if scenario == "partial_success" else "error"
+        )
+    assert reader.await_count == 2
+
+    article_ids = (
+        await db_session.scalars(
+            select(AnalyzableArticleRecord.id).where(
+                AnalyzableArticleRecord.source_id == vb_source.id
+            )
+        )
+    ).all()
+    incomplete_ids = (
+        await db_session.scalars(
+            select(IncompleteArticle.id).where(
+                IncompleteArticle.source_id == vb_source.id
+            )
+        )
+    ).all()
+    outbox = (
+        await db_session.scalars(
+            select(OutboxEvent.event_type).where(
+                OutboxEvent.payload["source_id"].as_integer() == vb_source.id
+            )
+        )
+    ).all()
+    events = (
+        await db_session.scalars(
+            select(PipelineEvent).where(PipelineEvent.source_id == vb_source.id)
+        )
+    ).all()
+    if scenario == "partial_success":
+        assert len(article_ids) == len(incomplete_ids) == 1
+        assert sorted(outbox) == ["article.acquired", "article.incomplete_recorded"]
+        assert sorted(row.outcome_code for row in events) == [
+            "article_created",
+            "incomplete_article_created",
+        ]
+        enqueue.assert_awaited_once()
+    else:
+        assert not article_ids and not incomplete_ids and not outbox
+        assert len(events) == 1
+        row = events[0]
+        assert row.event_type == "failed"
+        assert row.outcome_code == (
+            "rss_feed_errors" if all_failed else "unexpected_error"
+        )
+        if all_failed:
+            assert row.error_class.endswith(".RssFeedErrors")
+            assert row.retryability == (
+                "retryable" if scenario == "all_failed_retryable" else "non_retryable"
+            )
+            failures = row.payload["feed_failures"]
+            assert [f["feed_url"] for f in failures] == list(
+                MultiSource.acquisition.feeds
+            )
+            assert [f["code"] for f in failures] == [read_error.CODE, second_error.CODE]
+            assert failures[0]["error_chain"][-1] == "builtins.ValueError"
+            assert failures[0]["error_class"].endswith(".UnreadableResponseError")
+            assert failures[1]["error_class"].endswith(
+                f".{type(second_error).__name__}"
+            )
+        else:
+            assert row.payload["error_chain"][-1] == "builtins.ValueError"
+            assert row.payload["feed_failures"] is None
+        enqueue.assert_not_awaited()

@@ -10,9 +10,6 @@ from app.collection.article_acquisition.reader.crossref_reader import CrossrefRe
 from app.collection.article_acquisition.reader.html_listing_reader import (
     HtmlListingReader,
 )
-from app.collection.article_acquisition.reader.multi_feed_rss_reader import (
-    MultiFeedRssReader,
-)
 from app.collection.article_acquisition.reader.rss_reader import RssReader
 from app.collection.article_acquisition.reader.sitemap_reader import SitemapReader
 from app.collection.article_acquisition.tools.raw_http_client import RawHttpClient
@@ -51,7 +48,3 @@ class ReaderTools:
     def html_listing(self) -> HtmlListingReader:
         """HTML listing Reader (transport は ``raw_http`` を wrap)。"""
         return HtmlListingReader(http=self.raw_http(accept="text/html"))
-
-    def multi_feed_rss(self) -> MultiFeedRssReader:
-        """複数 feed fan-out Reader (共有 ``rss`` を per-feed に駆動)。"""
-        return MultiFeedRssReader(rss=self.rss)

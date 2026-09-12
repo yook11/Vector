@@ -39,10 +39,23 @@ class BackfillPayload(BasePipelineEventPayload):
     daily_max: int | None = None
 
 
+class RssFeedFailurePayload(BaseModel):
+    """元の例外を安全な監査情報へ写したフィード単位の失敗。"""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    feed_url: str
+    code: str
+    error_class: str
+    error_message: str | None = None
+    error_chain: list[str]
+
+
 class AcquisitionPayload(BasePipelineEventPayload):
     """Stage 1 acquisition payload。"""
 
     kind: Literal["acquisition"] = "acquisition"
+    feed_failures: list[RssFeedFailurePayload] | None = None
     failure_kind: str | None = None
     failure_action: str | None = None
 

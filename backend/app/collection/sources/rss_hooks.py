@@ -24,3 +24,8 @@ class RequiresPublishedAtResolution(Protocol):
 @runtime_checkable
 class RequiresScopeFilter(Protocol):
     def in_scope(self, entry: RssEntry) -> bool: ...
+
+
+@runtime_checkable
+class RequiresSelection(Protocol):
+    def select(self, entries: list[RssEntry]) -> list[RssEntry]: ...

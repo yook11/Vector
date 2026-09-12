@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import ClassVar
 
@@ -81,6 +82,40 @@ class AcquisitionReadError(AcquisitionError):
         else:
             self.FAILURE_KIND = "unreadable_response"
             self.RETRYABILITY = Retryability.NON_RETRYABLE
+
+
+@dataclass(frozen=True, slots=True)
+class RssFeedFailure:
+    """取得に失敗したフィードと元の例外を保持する。"""
+
+    feed_url: str
+    error: ExternalFetchError | UnreadableResponseError
+
+
+class RssFeedErrors(AcquisitionError):
+    """フィードごとの取得失敗をまとめ、投げる条件は取得側に任せる。"""
+
+    CODE: ClassVar[str] = "rss_feed_errors"
+    FAILURE_KIND: ClassVar[str] = "rss_feeds"
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("failure_count",)
+    RETRYABILITY: Retryability
+
+    def __init__(self, failures: list[RssFeedFailure]) -> None:
+        super().__init__()
+        if not failures:
+            raise ValueError("RSS feed failures must not be empty")
+        self.failures = tuple(failures)
+        self.failure_count = len(self.failures)
+        self.RETRYABILITY = (
+            Retryability.RETRYABLE
+            if any(
+                AcquisitionReadError(origin=failure.error).RETRYABILITY
+                is Retryability.RETRYABLE
+                for failure in self.failures
+            )
+            else Retryability.NON_RETRYABLE
+        )
 
 
 def map_origin_to_acquisition(
