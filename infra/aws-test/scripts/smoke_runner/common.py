@@ -5,7 +5,7 @@ import os
 import signal
 import subprocess
 import time
-from contextlib import suppress
+from contextlib import closing, suppress
 from datetime import datetime
 from pathlib import Path
 
@@ -69,15 +69,18 @@ def session(profile, config_path=None):
 
 
 def client(aws, service):
-    return aws.create_client(
-        service,
-        region_name=REGION,
-        config=Config(
-            connect_timeout=5,
-            read_timeout=10,
-            retries={"total_max_attempts": 2},
-            ignore_configured_endpoint_urls=True,
-        ),
+    """withに対応しないbotocoreクライアントにも終了時のcloseを保証する。"""
+    return closing(
+        aws.create_client(
+            service,
+            region_name=REGION,
+            config=Config(
+                connect_timeout=5,
+                read_timeout=10,
+                retries={"total_max_attempts": 2},
+                ignore_configured_endpoint_urls=True,
+            ),
+        )
     )
 
 

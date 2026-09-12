@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import asyncpg
@@ -22,12 +23,14 @@ async def prepare(settings):
     url = f"postgresql+asyncpg://vector@{host}:5432/vector?sslmode=require"
     _, tls = split_ssl_from_url(url)
     sdk = Session()
-    with sdk.create_client(
-        "secretsmanager",
-        region_name="ap-northeast-1",
-        config=Config(
-            connect_timeout=5, read_timeout=10, ignore_configured_endpoint_urls=True
-        ),
+    with closing(
+        sdk.create_client(
+            "secretsmanager",
+            region_name="ap-northeast-1",
+            config=Config(
+                connect_timeout=5, read_timeout=10, ignore_configured_endpoint_urls=True
+            ),
+        )
     ) as client:
         secret = json.loads(
             client.get_secret_value(SecretId=settings["master_secret_arn"])[
@@ -70,10 +73,12 @@ async def prepare(settings):
         await master.execute(chunks[-1])
     finally:
         await master.close(timeout=5)
-    with sdk.create_client(
-        "rds",
-        region_name="ap-northeast-1",
-        config=Config(proxies={}, ignore_configured_endpoint_urls=True),
+    with closing(
+        sdk.create_client(
+            "rds",
+            region_name="ap-northeast-1",
+            config=Config(proxies={}, ignore_configured_endpoint_urls=True),
+        )
     ) as rds:
         provider = build_iam_password_provider(
             url, region="ap-northeast-1", generate_token=rds.generate_db_auth_token
