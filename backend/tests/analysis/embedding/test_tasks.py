@@ -10,8 +10,8 @@ from structlog.testing import capture_logs
 
 from app.ai_providers.errors import AIProviderUsageLimitExhaustedError
 from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlockedCode,
-    EmbeddingReadyBuildBlockedError,
+    EmbeddingReadyBuildRejected,
+    EmbeddingReadyBuildRejectionReason,
     ReadyForEmbedding,
 )
 from app.analysis.embedding.service import (
@@ -82,14 +82,14 @@ def _make_ready(analyzed_article_id: int = 1) -> ReadyForEmbedding:
 
 
 def _patch_ready_construction(
-    result: ReadyForEmbedding | EmbeddingReadyBuildBlockedError,
+    result: ReadyForEmbedding | EmbeddingReadyBuildRejected,
     *,
     analyzable_article_id: int = 7,
 ):
     # try_advance_from は (ready, analyzable_article_id) を返す。
     mock = (
-        AsyncMock(side_effect=result)
-        if isinstance(result, EmbeddingReadyBuildBlockedError)
+        AsyncMock(return_value=result)
+        if isinstance(result, EmbeddingReadyBuildRejected)
         else AsyncMock(return_value=(result, analyzable_article_id))
     )
     return patch(
@@ -177,8 +177,8 @@ class TestGenerateEmbedding:
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         trigger = _make_trigger(analyzed_article_id=42)
-        exc = EmbeddingReadyBuildBlockedError(
-            EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
+        exc = EmbeddingReadyBuildRejected(
+            EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
         )
 
         with (
@@ -186,12 +186,12 @@ class TestGenerateEmbedding:
             patch("app.queue.tasks.embedding.EmbeddingAuditRepository") as mock_audit,
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
-        mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
+        mock_audit.return_value.append_ready_build_rejected.assert_awaited_once_with(
             analyzed_article_id=42,
-            exc=exc,
+            rejected=exc,
         )
         mock_svc_cls.assert_not_called()
 
@@ -202,8 +202,8 @@ class TestGenerateEmbedding:
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         trigger = _make_trigger(analyzed_article_id=42)
-        exc = EmbeddingReadyBuildBlockedError(
-            EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
+        exc = EmbeddingReadyBuildRejected(
+            EmbeddingReadyBuildRejectionReason.ALREADY_EMBEDDED
         )
 
         with (
@@ -212,14 +212,14 @@ class TestGenerateEmbedding:
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
             capture_logs() as cap,
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         # 冪等 skip は repository を触らず pipeline_events 行を焼かない
         mock_audit.assert_not_called()
         rejected = [e for e in cap if e["event"] == "generate_embedding_rejected"]
         assert len(rejected) == 1
-        assert rejected[0]["code"] == exc.code.value
+        assert rejected[0]["code"] == exc.reason.value
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
@@ -297,15 +297,15 @@ class TestGenerateEmbeddingStageSpan:
         from app.queue.tasks.embedding import generate_embedding
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
-        exc = EmbeddingReadyBuildBlockedError(
-            EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
+        exc = EmbeddingReadyBuildRejected(
+            EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
         )
         with (
             _patch_ready_construction(exc),
             patch("app.queue.tasks.embedding.EmbeddingAuditRepository") as mock_audit,
             patch("app.queue.tasks.embedding.EmbeddingService"),
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             await generate_embedding(
                 trigger=_make_trigger(analyzed_article_id=42), ctx=mock_ctx
             )
@@ -481,15 +481,15 @@ class TestGenerateEmbeddingProcessingOutcome:
         from app.queue.tasks.embedding import generate_embedding
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
-        exc = EmbeddingReadyBuildBlockedError(
-            EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
+        exc = EmbeddingReadyBuildRejected(
+            EmbeddingReadyBuildRejectionReason.ALREADY_EMBEDDED
         )
         with (
             _patch_ready_construction(exc),
             patch("app.queue.tasks.embedding.EmbeddingAuditRepository") as mock_audit,
             patch("app.queue.tasks.embedding.EmbeddingService"),
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             await generate_embedding(
                 trigger=_make_trigger(analyzed_article_id=42), ctx=mock_ctx
             )

@@ -6,21 +6,22 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 __all__ = [
     "AssessmentPreconditionProtocol",
-    "AssessmentReadyBuildBlockedCode",
-    "AssessmentReadyBuildBlockedError",
+    "AssessmentReadyBuildRejectionReason",
+    "AssessmentReadyBuildRejected",
     "AssessmentReadyBuildFacts",
     "ReadyForAssessment",
 ]
 
 
-class AssessmentReadyBuildBlockedCode(StrEnum):
-    """Stage 4 Ready 構築 blocked の監査 outcome_code。"""
+class AssessmentReadyBuildRejectionReason(StrEnum):
+    """Ready構築を拒否する理由と既存の監査コード。"""
 
     CURATION_MISSING = "assessment_ready_build_blocked_curation_missing"
+    INPUT_INVALID = "assessment_ready_build_blocked_input_invalid"
     ALREADY_IN_SCOPE = "assessment_ready_build_blocked_already_in_scope"
     ALREADY_OUT_OF_SCOPE = "assessment_ready_build_blocked_already_out_of_scope"
 
@@ -28,8 +29,8 @@ class AssessmentReadyBuildBlockedCode(StrEnum):
     def is_idempotent_skip(self) -> bool:
         """別 worker が先に処理済みで no-op になった冪等 skip か (勝者の行と冗長)。"""
         return self in {
-            AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-            AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+            AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE,
+            AssessmentReadyBuildRejectionReason.ALREADY_OUT_OF_SCOPE,
         }
 
 
@@ -45,18 +46,16 @@ class AssessmentReadyBuildFacts:
     has_out_of_scope_article: bool
 
 
-class AssessmentReadyBuildBlockedError(Exception):
-    """Stage 4 入力として採用できなかった場合に投げる例外。"""
+@dataclass(frozen=True, slots=True)
+class AssessmentReadyBuildRejected:
+    """Readyを構築できない理由とDBで確認した記事IDを表す。"""
 
-    def __init__(
-        self,
-        code: AssessmentReadyBuildBlockedCode,
-        *,
-        analyzable_article_id: int | None = None,
-    ) -> None:
-        self.code = code
-        self.analyzable_article_id = analyzable_article_id
-        super().__init__(code.value)
+    reason: AssessmentReadyBuildRejectionReason
+    analyzable_article_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason, AssessmentReadyBuildRejectionReason):
+            raise TypeError("reason must be AssessmentReadyBuildRejectionReason")
 
 
 class AssessmentPreconditionProtocol(Protocol):
@@ -85,9 +84,9 @@ class ReadyForAssessment(BaseModel):
         *,
         curation_id: int,
         repo: AssessmentPreconditionProtocol,
-    ) -> tuple[ReadyForAssessment, int]:
+    ) -> tuple[ReadyForAssessment, int] | AssessmentReadyBuildRejected:
         """DB 事実から Ready を構築し、facts 由来の authoritative な監査主語 (元記事 id)
-        を併せて返す。対象外なら blocked 例外を投げる。
+        を併せて返す。構築できない場合は理由付きの拒否結果を返す。
         """
         facts = await repo.load_ready_build_facts(curation_id)
         return cls.from_facts(curation_id, facts)
@@ -97,28 +96,34 @@ class ReadyForAssessment(BaseModel):
         cls,
         curation_id: int,
         facts: AssessmentReadyBuildFacts | None,
-    ) -> tuple[ReadyForAssessment, int]:
+    ) -> tuple[ReadyForAssessment, int] | AssessmentReadyBuildRejected:
         """取得済みの事実から、I/Oなしで開始条件と入力を検証する。"""
         if facts is None:
-            raise AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlockedCode.CURATION_MISSING
+            return AssessmentReadyBuildRejected(
+                AssessmentReadyBuildRejectionReason.CURATION_MISSING
             )
 
         if facts.has_analyzed_article:
-            raise AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+            return AssessmentReadyBuildRejected(
+                AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE,
                 analyzable_article_id=facts.analyzable_article_id,
             )
 
         if facts.has_out_of_scope_article:
-            raise AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+            return AssessmentReadyBuildRejected(
+                AssessmentReadyBuildRejectionReason.ALREADY_OUT_OF_SCOPE,
                 analyzable_article_id=facts.analyzable_article_id,
             )
 
-        ready = cls(
-            curation_id=facts.curation_id,
-            translated_title=facts.translated_title,
-            summary=facts.summary,
-        )
+        try:
+            ready = cls(
+                curation_id=facts.curation_id,
+                translated_title=facts.translated_title,
+                summary=facts.summary,
+            )
+        except ValidationError:
+            return AssessmentReadyBuildRejected(
+                AssessmentReadyBuildRejectionReason.INPUT_INVALID,
+                analyzable_article_id=facts.analyzable_article_id,
+            )
         return ready, facts.analyzable_article_id

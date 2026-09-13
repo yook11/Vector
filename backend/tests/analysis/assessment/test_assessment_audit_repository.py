@@ -51,8 +51,8 @@ from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.gemini import GeminiResponseDefect
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedCode,
-    AssessmentReadyBuildBlockedError,
+    AssessmentReadyBuildRejected,
+    AssessmentReadyBuildRejectionReason,
     ReadyForAssessment,
 )
 from app.analysis.assessment.domain.result import (
@@ -237,25 +237,25 @@ async def _fetch_by_outcome(
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_blocked_records_missing_curation_rejected(
+async def test_append_ready_build_rejected_records_missing_curation_rejected(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Ready build blocked は rejected として curation_id を payload に残す。"""
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_ready_build_blocked(
+        await AssessmentAuditRepository(session).append_ready_build_rejected(
             curation_id=999,
-            exc=AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlockedCode.CURATION_MISSING
+            rejected=AssessmentReadyBuildRejected(
+                AssessmentReadyBuildRejectionReason.CURATION_MISSING
             ),
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, AssessmentReadyBuildBlockedCode.CURATION_MISSING.value
+        db_session, AssessmentReadyBuildRejectionReason.CURATION_MISSING.value
     )
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == AssessmentReadyBuildBlockedCode.CURATION_MISSING.value
+    assert ev.outcome_code == AssessmentReadyBuildRejectionReason.CURATION_MISSING.value
     # CURATION_MISSING は対象 curation 不在で article_id が無く source_id も空
     assert ev.article_id is None
     assert ev.source_id is None

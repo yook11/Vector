@@ -8,7 +8,7 @@ from typing import ClassVar
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.domain.ready import EmbeddingReadyBuildBlockedError
+from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
 from app.analysis.embedding.task_errors import EmbeddingTaskError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import BasePipelineEventPayload, EmbeddingPayload
@@ -81,19 +81,17 @@ class EmbeddingAuditRepository:
             article_id=analyzable_article_id,
         )
 
-    # --- Ready 構築 blocked / failed ---------------------------------------
+    # --- Ready 構築 rejected / failed ---------------------------------------
 
-    async def append_ready_build_blocked(
-        self, *, analyzed_article_id: int, exc: EmbeddingReadyBuildBlockedError
+    async def append_ready_build_rejected(
+        self, *, analyzed_article_id: int, rejected: EmbeddingReadyBuildRejected
     ) -> None:
-        """Ready 構築が domain precondition により進めなかった事実を記録する。
-
-        Domain が reason code で説明できた停止なので rejected として焼く。
-        """
+        """Ready側の拒否理由と確認済み記事IDをそのまま記録する。"""
         await self._append_event(
             event_type=EventType.REJECTED,
-            outcome_code=exc.code.value,
+            outcome_code=rejected.reason.value,
             payload=EmbeddingPayload(analyzed_article_id=analyzed_article_id),
+            article_id=rejected.analyzable_article_id,
         )
 
     async def append_ready_build_failed(

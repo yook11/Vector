@@ -10,6 +10,10 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from app.analysis.assessment.events import ArticleAssessedInScope
+from app.analysis.embedding.domain.ready import (
+    EmbeddingReadyBuildRejected,
+    EmbeddingReadyBuildRejectionReason,
+)
 from app.analysis.embedding.service import EmbeddingCompletion
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
 
@@ -66,19 +70,25 @@ def test_batch_reports_only_failed_message_ids(wiring):
     messages = [
         {"messageId": "saved-before", "body": body},
         {"messageId": "failed-first", "body": body},
+        {"messageId": "already", "body": body},
+        {"messageId": "rejected", "body": body},
         {"messageId": "saved-after", "body": body},
         {"messageId": "failed-last", "body": body},
     ]
     wiring.consumer.consume.side_effect = [
         EmbeddingCompletion.SAVED,
         RuntimeError("first-failure"),
+        EmbeddingCompletion.ALREADY_EMBEDDED,
+        EmbeddingReadyBuildRejected(
+            EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
+        ),
         EmbeddingCompletion.SAVED,
         RuntimeError("last-failure"),
     ]
 
     response = module.handler({"Records": messages}, None)
 
-    assert wiring.consumer.consume.await_count == 4
+    assert wiring.consumer.consume.await_count == 6
     assert response == {
         "batchItemFailures": [
             {"itemIdentifier": "failed-first"},
@@ -401,3 +411,22 @@ async def test_control_exception_stops_batch(wiring, interruption):
     assert caught.value is interruption
     wiring.consumer.consume.assert_awaited_once()
     wiring.log.warning.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING,
+        EmbeddingReadyBuildRejectionReason.INPUT_INVALID,
+    ],
+)
+def test_ready_build_rejection_logs_only_its_reason(wiring, reason):
+    """拒否結果は分析成功と区別して、安全な理由コードを記録する。"""
+    wiring.consumer.consume.return_value = EmbeddingReadyBuildRejected(reason)
+    response = module.handler(
+        {"Records": [{"messageId": "rejected", "body": valid_body()}]}, None
+    )
+    assert response == {"batchItemFailures": []}
+    fields = wiring.log.info.call_args.kwargs
+    assert fields["reason"] == "ready_build_rejected"
+    assert fields["rejection_code"] == reason.value

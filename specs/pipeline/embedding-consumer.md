@@ -31,7 +31,7 @@ Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード�
 - 保存完了とは、ベクトルと成功監査のトランザクションをコミットできたことを指す。
 - 「例外なくreturnした」ことだけを根拠にSQSへ成功を返さない。
 - 開始時に生成済み、または別の実行が先に保存したことを確認できた場合は対応完了とする。
-- 対象記事不存在は失敗とし、処理不要による成功にはしない。
+- 開始時の対象欠損・Ready入力制約違反は、理由付き拒否として受信完了にする。Ready成立後の実行・保存時の不存在は失敗とする。
 - 初期実装では、想定内か想定外かを問わず処理失敗をSQSへ返す。失敗記録だけでメッセージを処理済みにしない。
 - consumer内部で再配信待ちのsleep、独自の段階的バックオフ、DLQへの直接送信をしない。
 - 冪等性の業務上の判定対象は`analyzed_article_id`であり、SQSメッセージIDやevent_idだけでTaskiqとの重複を判定しない。
@@ -86,7 +86,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はSqsInputErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
 
-有効なmessageIdは加工せず保持し、入力順に1件ずつbodyを検証してConsumerへpayloadを渡す。使用しないSQSフィールドは許容する。bodyの欠落・非文字列・本文不正・Consumerの通常例外は個別失敗として後続処理を続ける。ConsumerはEmbeddingCompletionのSAVED・ALREADY_EMBEDDEDのいずれかを正常完了として返し、ハンドラーはその契約に従って結果を記録する。キャンセル・プロセス終了は伝播する。
+有効なmessageIdは加工せず保持し、入力順に1件ずつbodyを検証してConsumerへpayloadを渡す。使用しないSQSフィールドは許容する。bodyの欠落・非文字列・本文不正・Consumerの通常例外は個別失敗として後続処理を続ける。ConsumerはEmbeddingCompletionのSAVED・ALREADY_EMBEDDED、またはReady側のEmbeddingReadyBuildRejectedを返し、ハンドラーはその契約に従って結果を記録する。キャンセル・プロセス終了は伝播する。
 
 _run_embeddingは失敗したメッセージのIDをSqsBatchItemIdentifierに格納し、入力順のlist[SqsBatchItemIdentifier]として返す。公開handlerはそのfailed_itemsをSqsBatchFailureResponseのbatchItemFailuresに含める。全件成功・空のRecordsは`{"batchItemFailures": []}`、失敗時は`{"batchItemFailures": [{"itemIdentifier": "失敗したmessageId"}]}`とする。複数件という理由では拒否せず、内部並列処理は追加しない。
 
@@ -110,7 +110,7 @@ _run_embeddingは失敗したメッセージのIDをSqsBatchItemIdentifierに格
 | ベクトルと成功監査のコミット完了 | 成功 | 対応完了として削除対象 |
 | 開始時点ですでに生成済み | 想定内の終了 | 対応完了として削除対象 |
 | 他の実行が先に保存し、自分の更新が不要 | 生成済みを確認して想定内の終了 | 対応完了として削除対象 |
-| 開始時に対象記事が存在しない | 対象記事不存在の失敗を記録 | SQSへ失敗を返す |
+| 開始時に対象記事が存在しない、またはReady入力制約違反 | Ready構築拒否の理由を記録 | 受信完了、失敗一覧へ含めない |
 | AI処理中に対象記事が削除され、保存できない | 対象記事不存在の失敗を記録 | SQSへ失敗を返す |
 | 入力不正・未対応のイベント、実APIの拒否・429・通信障害・5xx | 失敗を記録 | SQSへ失敗を返す |
 | 利用枠枯渇・残高不足・設定不備 | 失敗を記録し、既存の該当する通知を維持 | SQSへ失敗を返す |
@@ -157,14 +157,28 @@ consumerでは両者を区別し、生成済みを確認できた場合だけ対
 `app/analysis/embedding/consumer.py`の`EmbeddingConsumer(session_factory, embedder)`が、検証済みの`ArticleAssessedInScope`を`consume(event)`で受け取る。TaskiqのContextやLambda/SQS形式には依存しない。
 
 1. `analyzed_article_id`で開始状態を一度取得し、取得できた元記事IDを保持する。イベントの`curation_id`との対応は発行元の保存・Outbox生成契約を信頼し、再照合しない。
-2. 取得用セッションを閉じ、`ReadyForEmbedding.from_facts()`で純粋に開始条件と入力を検証する。Taskiqの既存`try_advance_from()`もこの関数へ委譲し、戻り値・blocked例外・hintの優先順位を維持する。
-3. 開始時に不存在なら`EmbeddingAnalyzedArticleMissingError`へ変換する。生成済みならAI・成功監査・成功計測を行わず`ALREADY_EMBEDDED`で完了する。
+2. 取得用セッションを閉じ、`ReadyForEmbedding.from_facts()`で純粋に開始条件と入力を検証する。Taskiqの既存`try_advance_from()`もこの関数へ委譲し、成功時のtupleとhintの優先順位を維持する。拒否は例外にせず、Ready側の不変な`EmbeddingReadyBuildRejected`で返す。
+3. 開始時の不存在・入力不正では、同じ拒否値を監査へ渡して受信完了結果として返す。生成済みの拒否理由ならAI・成功監査・成功計測を行わず`ALREADY_EMBEDDED`で完了する。
 4. 未生成ならServiceを実行して`EmbeddingCompletion`をそのまま返す。保存時の競合・削除・コミット失敗の契約を維持する。
 5. 開始時からService完了までの通常の例外は、分類・後処理を経て再送出する。分類や後処理自体の予期しない二次障害でも元の例外を維持し、安全なログを試みる。外部キャンセルは通常の失敗として処理しない。
 
-元記事IDを取得できなかった場合は`article_id=NULL`として分析記事IDをpayloadに残す。開始時の不存在も`embedding_analyzed_article_missing`／`target_missing`のFAILED監査とする。取得済みの記事IDはそのまま使用し、後から親記事が削除されて監査不能になった場合も既存のdrop計測・通知を試み、元の例外を伝播する。
+元記事IDを取得できなかった場合は`article_id=NULL`として分析記事IDをpayloadに残す。開始時の不存在は`embedding_ready_build_blocked_analyzed_article_missing`のREJECTED監査とする。Ready入力不正はDB由来記事IDを使用し、イベントやhintで補完しない。実行失敗では取得済みの記事IDを使用し、監査不能でも既存のdrop計測・通知を試みて元の例外を伝播する。
 
 今回は既存Taskiqの入口や配置を移動せず、Consumer専用トレースの配線・Lambda起動関数・デプロイは後続に残す。
+
+### Ready拒否の受信完了（2026-09-13）
+
+実装・検証済み。全単体6,655件・全DB統合1,402件が成功し、拒否監査の後処理側への移動後にも関連単体745件・両工程のDB統合219件を再確認した。Ruffも成功し、AWS適用は行っていない。
+
+本節は開始時の不存在・Ready入力検証に関する過去のスライス記録を更新する。
+
+- `domain/ready.py`の`EmbeddingReadyBuildRejected`が`EmbeddingReadyBuildRejectionReason`と任意のDB由来記事IDを持つ。`EmbeddingReadyBuildBlockedError`を廃止し、Ready・Consumer・監査・旧Taskiqで同じ値を用いる。
+- Readyモデル生成時の入力検証エラーだけを`INPUT_INVALID`へ対応付ける。テキスト生成ルール・入力制約を維持し、DB取得障害や想定外例外を拒否へ変換しない。
+- Consumerの戻り値は`EmbeddingCompletion | EmbeddingReadyBuildRejected`とする。ServiceのCompletionは変更せず、欠損・入力不正ではService・AI・成功監査・後続Outbox・成功／実行失敗メトリクスを呼ばない。記事は保持する。
+- `append_ready_build_rejected`へReady側の値を渡し、`REJECTED`と理由コードを記録する。本文・入力値・検証例外を保存せず、既存の`embedding_ready_build_blocked_*`文字列は維持する。通常の監査障害は安全なログとaudit-dropped計測へ退避し、受信完了を維持する。
+- 拒否監査は業務処理の60秒制限を抜けた後に、`EmbeddingConsumerFailureHandler.handle_ready_build_rejected`が行う。実行失敗の分類・計測・通知は通さない。
+- Lambdaは拒否のmessageIdを`batchItemFailures`へ含めず、`reason=ready_build_rejected`と`rejection_code`を記録する。SQS削除APIは呼ばない。Ready成立後の実行失敗とキャンセルの契約は維持する。
+- DB schema・イベントpayload・資源ライフサイクルを変更しない。旧Taskiqの共有Ready呼び出し元は値による分岐へ更新し、救済を存続させる。
 
 ### Consumerの失敗分類と後処理
 

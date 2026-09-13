@@ -15,11 +15,9 @@ from app.analysis.assessment.consumer_failure_handling import (
     AssessmentConsumerFailureHandler,
 )
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedCode,
-    AssessmentReadyBuildBlockedError,
+    AssessmentReadyBuildRejected,
     ReadyForAssessment,
 )
-from app.analysis.assessment.errors import AssessmentCurationMissingError
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import (
     AssessmentCompletion,
@@ -45,7 +43,9 @@ class AssessmentConsumer:
         self._service = AssessmentService(session_factory)
         self._failure_handler = AssessmentConsumerFailureHandler(session_factory)
 
-    async def consume(self, event: ArticleCuratedSignal) -> AssessmentCompletion:
+    async def consume(
+        self, event: ArticleCuratedSignal
+    ) -> AssessmentCompletion | AssessmentReadyBuildRejected:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
         analyzable_article_id: int | None = None
         try:
@@ -57,24 +57,20 @@ class AssessmentConsumer:
                     if facts is not None:
                         analyzable_article_id = facts.analyzable_article_id
 
-                try:
-                    ready, analyzable_article_id = ReadyForAssessment.from_facts(
-                        event.curation_id, facts
-                    )
-                except AssessmentReadyBuildBlockedError as blocked:
-                    if blocked.code.is_idempotent_skip:
+                build_result = ReadyForAssessment.from_facts(event.curation_id, facts)
+                if isinstance(build_result, AssessmentReadyBuildRejected):
+                    if build_result.reason.is_idempotent_skip:
                         return AssessmentCompletion(
                             AssessmentCompletionKind.ALREADY_ASSESSED
                         )
-                    if blocked.code is AssessmentReadyBuildBlockedCode.CURATION_MISSING:
-                        raise AssessmentCurationMissingError() from blocked
-                    raise
-
-                return await self._service.execute(
-                    ready,
-                    self._assessor,
-                    analyzable_article_id=analyzable_article_id,
-                )
+                    rejected = build_result
+                else:
+                    ready, analyzable_article_id = build_result
+                    return await self._service.execute(
+                        ready,
+                        self._assessor,
+                        analyzable_article_id=analyzable_article_id,
+                    )
         except Exception as exc:
             try:
                 failure = classify_assessment_failure(exc)
@@ -97,3 +93,8 @@ class AssessmentConsumer:
                     # 後処理とログが失敗しても元の処理例外を維持する。
                     pass
             raise
+
+        await self._failure_handler.handle_ready_build_rejected(
+            curation_id=event.curation_id, rejected=rejected
+        )
+        return rejected

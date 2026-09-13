@@ -5,6 +5,7 @@ from typing import TypedDict
 
 import structlog
 
+from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
 from app.lambda_handlers.embedding.composition import open_embedding_consumer
 from app.lambda_handlers.embedding.event import (
     EmbeddingEventInvalidError,
@@ -93,11 +94,21 @@ async def _run_embedding(
                     SqsBatchItemIdentifier(itemIdentifier=record.message_id)
                 )
             else:
+                rejection_fields = (
+                    {"rejection_code": completion.reason.value}
+                    if isinstance(completion, EmbeddingReadyBuildRejected)
+                    else {}
+                )
                 _log_completion(
                     message_id=record.message_id,
                     event_id=str(assessed_event.event_id),
                     analyzed_article_id=assessed_event.payload.analyzed_article_id,
-                    reason=completion.value,
+                    reason=(
+                        "ready_build_rejected"
+                        if isinstance(completion, EmbeddingReadyBuildRejected)
+                        else completion.value
+                    ),
+                    **rejection_fields,
                 )
         return failed_items
 

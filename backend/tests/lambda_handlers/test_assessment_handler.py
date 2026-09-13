@@ -9,6 +9,10 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
+from app.analysis.assessment.domain.ready import (
+    AssessmentReadyBuildRejected,
+    AssessmentReadyBuildRejectionReason,
+)
 from app.analysis.assessment.service import (
     AssessmentCompletion,
     AssessmentCompletionKind,
@@ -73,19 +77,25 @@ def test_batch_reports_only_failed_message_ids(wiring):
     messages = [
         {"messageId": "saved-before", "body": body},
         {"messageId": "failed-first", "body": body},
+        {"messageId": "already", "body": body},
+        {"messageId": "rejected", "body": body},
         {"messageId": "saved-after", "body": body},
         {"messageId": "failed-last", "body": body},
     ]
     wiring.consumer.consume.side_effect = [
         AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 901),
         RuntimeError("first-failure"),
+        AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED),
+        AssessmentReadyBuildRejected(
+            AssessmentReadyBuildRejectionReason.CURATION_MISSING
+        ),
         AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 901),
         RuntimeError("last-failure"),
     ]
 
     response = module.handler({"Records": messages}, None)
 
-    assert wiring.consumer.consume.await_count == 4
+    assert wiring.consumer.consume.await_count == 6
     assert response == {
         "batchItemFailures": [
             {"itemIdentifier": "failed-first"},
@@ -416,3 +426,22 @@ async def test_processing_cancellation_leaves_borrowed_scope(wiring):
         )
 
     assert wiring.order == ["open", "close"]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        AssessmentReadyBuildRejectionReason.CURATION_MISSING,
+        AssessmentReadyBuildRejectionReason.INPUT_INVALID,
+    ],
+)
+def test_ready_build_rejection_logs_only_its_reason(wiring, reason):
+    """拒否結果は分析成功と区別して、安全な理由コードを記録する。"""
+    wiring.consumer.consume.return_value = AssessmentReadyBuildRejected(reason)
+    response = module.handler(
+        {"Records": [{"messageId": "rejected", "body": valid_body()}]}, None
+    )
+    assert response == {"batchItemFailures": []}
+    fields = wiring.log.info.call_args.kwargs
+    assert fields["reason"] == "ready_build_rejected"
+    assert fields["rejection_code"] == reason.value

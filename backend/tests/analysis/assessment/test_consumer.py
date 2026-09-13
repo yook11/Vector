@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import ValidationError
 from sqlalchemy import delete, select, text
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.exc import IntegrityError
@@ -23,10 +23,13 @@ from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.consumer import AssessmentConsumer
-from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.ready import (
+    AssessmentReadyBuildRejected,
+    AssessmentReadyBuildRejectionReason,
+    ReadyForAssessment,
+)
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import (
-    AssessmentCurationMissingError,
     AssessmentError,
     AssessmentResponseInvalidError,
 )
@@ -136,41 +139,58 @@ async def test_uses_db_identity_and_skips_ai_and_metrics_when_assessed(
 async def test_missing_curation_keeps_only_event_curation_id(
     db_session, session_factory, target, assessor
 ):
-    """Curation不存在はイベントの記事IDで補完せず失敗する。"""
+    """対象欠損をイベントの記事IDで補完せず拒否として記録する。"""
     event = target.model_copy(update={"curation_id": 999_999})
-    with pytest.raises(AssessmentCurationMissingError) as raised:
-        await AssessmentConsumer(session_factory, assessor).consume(event)
-    assert raised.value.__cause__ is not None
+    result = await AssessmentConsumer(session_factory, assessor).consume(event)
+    assert result == AssessmentReadyBuildRejected(
+        AssessmentReadyBuildRejectionReason.CURATION_MISSING
+    )
     assessor.assess.assert_not_awaited()
     events = await _events(db_session)
     assert len(events) == 1
+    assert events[0].event_type == "rejected"
     assert events[0].article_id is None
-    assert events[0].outcome_code == "assessment_curation_missing"
+    assert events[0].outcome_code == "assessment_ready_build_blocked_curation_missing"
     assert events[0].payload["curation_id"] == 999_999
-    assert events[0].payload["failure_kind"] == "target_missing"
 
 
 @pytest.mark.asyncio
 async def test_invalid_ready_preserves_known_db_article_id(
-    db_session, session_factory, target, assessor
+    db_session, session_factory, target, assessor, capsys
 ):
-    """Ready構築に失敗しても取得済みのDB由来IDを監査に残す。"""
-    with pytest.raises(ValidationError) as invalid:
-        ReadyForAssessment(
-            curation_id=target.curation_id, translated_title="title", summary=""
-        )
-    with (
-        patch.object(ReadyForAssessment, "from_facts", side_effect=invalid.value),
-        pytest.raises(ValidationError) as raised,
-    ):
-        await AssessmentConsumer(session_factory, assessor).consume(
+    """入力不正はDB由来IDで拒否記録し、記事保持のまま受信完了する。"""
+    from_facts = ReadyForAssessment.from_facts
+    rejected_results = []
+
+    def invalid_from_facts(curation_id, facts):
+        rejected = from_facts(curation_id, replace(facts, summary=""))
+        rejected_results.append(rejected)
+        return rejected
+
+    with patch.object(ReadyForAssessment, "from_facts", side_effect=invalid_from_facts):
+        result = await AssessmentConsumer(session_factory, assessor).consume(
             target.model_copy(update={"analyzable_article_id": 999_999})
         )
-    assert raised.value is invalid.value
+    assert result is rejected_results[0]
+    assert result == AssessmentReadyBuildRejected(
+        AssessmentReadyBuildRejectionReason.INPUT_INVALID, target.analyzable_article_id
+    )
     assessor.assess.assert_not_awaited()
     events = await _events(db_session)
     assert len(events) == 1 and events[0].article_id == target.analyzable_article_id
-    assert events[0].outcome_code == "unexpected_error"
+    assert events[0].event_type == "rejected"
+    assert events[0].outcome_code == "assessment_ready_build_blocked_input_invalid"
+    assert events[0].payload.get("input_text") is None
+    assert events[0].payload.get("error_chain") is None
+    assert (
+        await db_session.get(AnalyzableArticleRecord, target.analyzable_article_id)
+        is not None
+    )
+    assert await db_session.get(ArticleCuration, target.curation_id) is not None
+    assert await _rows(db_session, AnalyzedArticleRecord) == []
+    assert await _rows(db_session, OutOfScopeArticleRecord) == []
+    assert await _rows(db_session, OutboxEvent) == []
+    assert metric_records(capsys.readouterr().out, "processing_outcome") == []
 
 
 @pytest.mark.asyncio
@@ -479,3 +499,75 @@ async def test_ready_read_db_failure_keeps_article_unlinked(
     finally:
         await db_session.rollback()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("secondary_failure", ["none", "log", "metric"])
+async def test_rejection_audit_failure_preserves_receipt_completion(
+    db_session, session_factory, target, assessor, secondary_failure
+):
+    """拒否監査の保存と診断に失敗しても、確定した受信完了を維持する。"""
+    from app.audit.stages.assessment import AssessmentAuditRepository
+
+    event = target.model_copy(update={"curation_id": 999_999})
+    append = AssessmentAuditRepository.append_ready_build_rejected
+
+    async def append_then_fail(repo, **kwargs):
+        await append(repo, **kwargs)
+        raise RuntimeError("private-audit-details")
+
+    with (
+        patch.object(
+            AssessmentAuditRepository,
+            "append_ready_build_rejected",
+            new=append_then_fail,
+        ),
+        patch(f"{_MODULE}_failure_handling.logger") as log,
+        patch(f"{_MODULE}_failure_handling.record_audit_dropped") as dropped,
+    ):
+        if secondary_failure == "log":
+            log.warning.side_effect = RuntimeError("private-log-details")
+        if secondary_failure == "metric":
+            dropped.side_effect = RuntimeError("private-metric-details")
+        result = await AssessmentConsumer(session_factory, assessor).consume(event)
+
+    assert result == AssessmentReadyBuildRejected(
+        AssessmentReadyBuildRejectionReason.CURATION_MISSING
+    )
+    assert await _events(db_session) == []
+    assessor.assess.assert_not_awaited()
+    dropped.assert_called_once()
+    assert "private" not in str(log.warning.call_args)
+
+
+@pytest.mark.asyncio
+async def test_rejection_handling_runs_after_business_timeout(
+    session_factory, assessor
+):
+    """拒否確定後の監査は業務タイマーを解除してから実行する。"""
+    consumer = AssessmentConsumer(session_factory, assessor)
+    event = ArticleCuratedSignal(curation_id=999_999, analyzable_article_id=999_999)
+    business_timeout = asyncio.timeout(60)
+    handle_rejected = consumer._failure_handler.handle_ready_build_rejected
+
+    async def handle_after_deadline(**kwargs):
+        with pytest.raises(RuntimeError, match="finished"):
+            business_timeout.reschedule(asyncio.get_running_loop().time())
+        await asyncio.sleep(0)
+        await handle_rejected(**kwargs)
+
+    with (
+        patch(f"{_MODULE}.timeout", return_value=business_timeout),
+        patch.object(
+            consumer._failure_handler,
+            "handle_ready_build_rejected",
+            side_effect=handle_after_deadline,
+        ) as rejection_handler,
+        patch.object(consumer._failure_handler, "handle") as failure_handler,
+    ):
+        result = await consumer.consume(event)
+
+    assert isinstance(result, AssessmentReadyBuildRejected)
+    rejection_handler.assert_awaited_once()
+    failure_handler.assert_not_called()
+    assessor.assess.assert_not_awaited()
