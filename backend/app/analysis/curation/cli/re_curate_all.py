@@ -46,6 +46,8 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from app.ai_providers.gemini.client import open_gemini_client
+from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.curation.cli.recuration_service import (
@@ -207,8 +209,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             session_factory = caller_managed_session_factory(engine)
             service = RecurationService(session_factory, max_retries=args.max_retries)
-            curator = GeminiCurator()
-            return await run(args, service, curator, session_factory)
+            async with open_gemini_client(
+                api_key=settings.gemini_api_key,
+                settings=GeminiConnectionSettings(),
+            ) as client:
+                curator = GeminiCurator(client=client)
+                return await run(args, service, curator, session_factory)
         finally:
             await engine.dispose()
 

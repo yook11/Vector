@@ -16,6 +16,7 @@ pytestmark = pytest.mark.unit
         ("outbox_relay", "handler", "embedding_handler"),
         ("outbox_relay", "assessment_handler", "assessment_handler"),
         ("embedding", "handler", "handler"),
+        ("curation", "handler", "handler"),
     ],
 )
 def test_existing_handler_path_resolves_after_loading_implementation(
@@ -71,7 +72,10 @@ def test_handler_loads_with_only_database_and_queue_settings() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_embedding_loads_and_creates_gemini_without_application_settings() -> None:
+@pytest.mark.parametrize("stage", ["embedding", "curation"])
+def test_gemini_stage_loads_and_creates_client_without_application_settings(
+    stage,
+) -> None:
     """専用環境だけでimportとGemini生成を行い、全体設定の読み込みを禁止する。"""
     code = """
 import asyncio
@@ -107,6 +111,7 @@ assert "app.config" not in sys.modules
 assert "app.main" not in sys.modules
 assert not any(m.startswith("app.queue") for m in sys.modules)
 """
+    code = code.replace("embedding", stage).replace("Embedding", stage.title())
     result = subprocess.run(  # noqa: S603 — 固定したテストコードのみを実行する。
         [sys.executable, "-c", code],
         cwd=Path(__file__).resolve().parents[2],
@@ -115,7 +120,7 @@ assert not any(m.startswith("app.queue") for m in sys.modules)
             "DATABASE_URL": "postgresql+asyncpg://vector_app@database.invalid/vector?sslmode=verify-full",
             "DB_IAM_AUTH": "true",
             "AWS_REGION": "ap-northeast-1",
-            "GEMINI_API_KEY_PARAMETER_PATH": "/test/embedding/gemini-key",
+            "GEMINI_API_KEY_PARAMETER_PATH": f"/test/{stage}/gemini-key",
             "EGRESS_PROXY_URL": "http://proxy.vector.internal:3128",
         },
         capture_output=True,
@@ -126,13 +131,14 @@ assert not any(m.startswith("app.queue") for m in sys.modules)
     assert result.returncode == 0, result.stderr
 
 
-def test_embedding_import_does_not_validate_http_settings() -> None:
+@pytest.mark.parametrize("stage", ["embedding", "curation"])
+def test_gemini_stage_import_does_not_validate_http_settings(stage) -> None:
     """不正なプロキシ設定もimport時には読まず、クライアント生成時に拒否する。"""
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 — 工程名は固定のテスト引数のみ。
         [
             sys.executable,
             "-c",
-            "from app.lambda_handlers.embedding import handler; "
+            f"from app.lambda_handlers.{stage} import handler; "
             "from app.http.external import make_external_async_client; "
             "from pydantic import ValidationError; "
             "import sys; "

@@ -1,23 +1,32 @@
 """``generate_embedding`` task の分岐テスト。"""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
 from pydantic import ValidationError
+from sqlalchemy import select
 from structlog.testing import capture_logs
 
 from app.ai_providers.errors import AIProviderUsageLimitExhaustedError
+from app.analysis.embedding.consumer import EmbeddingConsumer
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildRejected,
     EmbeddingReadyBuildRejectionReason,
     ReadyForEmbedding,
 )
+from app.analysis.embedding.domain.value_objects import (
+    EMBEDDING_DIMENSION,
+    EmbeddingVector,
+)
 from app.analysis.embedding.service import (
     EmbeddingCompletion,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
+from app.models.analyzed_article_record import AnalyzedArticleRecord
+from app.models.pipeline_event import PipelineEvent
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
@@ -497,3 +506,42 @@ class TestGenerateEmbeddingProcessingOutcome:
         metrics = collected_metrics(capfire)
         for result in _ALL_RESULTS:
             assert sum_counter_for_result(metrics, _METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_consumer_and_taskiq_compete_without_duplicate_audit(
+    db_session, session_factory, embedding_target
+):
+    """Consumerと旧Taskiqが同時実行されても保存と成功監査を一度に収める。"""
+    from app.queue.tasks.embedding import generate_embedding
+
+    event, article_id = embedding_target
+    barrier = asyncio.Barrier(2)
+    embedder = _make_embedder_fake()
+
+    async def together(_ready):
+        index = await barrier.wait()
+        return EmbeddingVector(root=(0.2 + index * 0.4,) * EMBEDDING_DIMENSION)
+
+    embedder.embed_document = AsyncMock(side_effect=together)
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(session_factory=session_factory, embedder=embedder)
+    )
+    async with asyncio.timeout(10):
+        result, _ = await asyncio.gather(
+            EmbeddingConsumer(session_factory, embedder).consume(event),
+            generate_embedding(
+                trigger=EmbeddingTrigger(
+                    analyzed_article_id=event.analyzed_article_id,
+                    analyzable_article_id=article_id,
+                ),
+                ctx=ctx,
+            ),
+        )
+
+    assert result in (EmbeddingCompletion.SAVED, EmbeddingCompletion.ALREADY_EMBEDDED)
+    assert embedder.embed_document.await_count == 2
+    audits = list((await db_session.scalars(select(PipelineEvent))).all())
+    assert len(audits) == 1 and audits[0].event_type == "succeeded"
+    stored = await db_session.get(AnalyzedArticleRecord, event.analyzed_article_id)
+    assert stored.embedding is not None

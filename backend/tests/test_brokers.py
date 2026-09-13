@@ -567,7 +567,9 @@ class TestCadenceCronMapping:
 
 
 @pytest.mark.asyncio
-async def test_wire_analysis_adapters_attaches_adapters_to_state() -> None:
+async def test_wire_analysis_adapters_attaches_adapters_to_state(
+    gemini_http_clients,
+) -> None:
     """broker_analysis の WORKER_STARTUP で adapter が state に attach される。
 
     Provider 選択を hardcode する設計 (Pure DI) を構造的に保証する。
@@ -579,10 +581,9 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state() -> None:
     state = TaskiqState()
     state.pipeline_control_redis = MagicMock(aclose=AsyncMock())
     with (
-        patch("app.analysis.curation.ai.gemini.settings") as mock_es,
         patch("app.config.settings") as mock_cs,
     ):
-        mock_es.gemini_api_key = SecretStr("test-key")
+        mock_cs.gemini_api_key = SecretStr("test-key")
         mock_cs.deepseek_api_key = SecretStr("test-key")
         await _wire_analysis_adapters(state)
 
@@ -593,6 +594,8 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state() -> None:
 
     await _aclose_worker_resources(state)
     assert state.assessor._client.is_closed()
+    assert len(gemini_http_clients) == 1
+    assert gemini_http_clients[0].is_closed
 
 
 @pytest.mark.asyncio
@@ -874,10 +877,9 @@ async def test_analysis_startup_wires_ai_providers() -> None:
         engine, control=control, catalog=True, compose=True
     ):
         with (
-            patch("app.analysis.curation.ai.gemini.settings") as mock_es,
             patch("app.config.settings") as mock_cs,
         ):
-            mock_es.gemini_api_key = SecretStr("test-key")
+            mock_cs.gemini_api_key = SecretStr("test-key")
             mock_cs.deepseek_api_key = SecretStr("test-key")
             await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
 
@@ -979,7 +981,7 @@ async def test_agent_worker_owns_deadline_schedule_source(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_analysis_composition_failure_closes_prepared_client():
+async def test_analysis_composition_failure_closes_prepared_client(gemini_http_clients):
     """ワーカーへの配線中に失敗しても、準備済みのDeepSeekクライアントを閉じる。"""
     from app.queue.composition import _wire_analysis_adapters
 
@@ -991,14 +993,17 @@ async def test_analysis_composition_failure_closes_prepared_client():
         patch("app.queue.composition.logger.info", side_effect=failure),
     ):
         config.deepseek_api_key = SecretStr("test-key")
+        config.gemini_api_key = SecretStr("test-key")
         with pytest.raises(RuntimeError) as caught:
             await _wire_analysis_adapters(state)
     assert caught.value is failure
     assert state.assessor._client.is_closed()
+    assert len(gemini_http_clients) == 1
+    assert gemini_http_clients[0].is_closed
 
 
 @pytest.mark.asyncio
-async def test_analysis_startup_failure_closes_client():
+async def test_analysis_startup_failure_closes_client(gemini_http_clients):
     """配線後のワーカー起動処理が失敗した場合、DeepSeekクライアントを閉じて元の例外を返す。"""
     from app.queue.brokers import broker_analysis
 
@@ -1012,16 +1017,19 @@ async def test_analysis_startup_failure_closes_client():
             patch("app.queue.lifecycle.logger.info", side_effect=failure),
         ):
             config.deepseek_api_key = SecretStr("test-key")
+            config.gemini_api_key = SecretStr("test-key")
             with pytest.raises(RuntimeError) as caught:
                 await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](
                     state
                 )
     assert caught.value is failure
     assert state.assessor._client.is_closed()
+    assert len(gemini_http_clients) == 1
+    assert gemini_http_clients[0].is_closed
 
 
 @pytest.mark.asyncio
-async def test_analysis_client_closes_even_if_redis_shutdown_fails():
+async def test_analysis_client_closes_even_if_redis_shutdown_fails(gemini_http_clients):
     """Redisの終了失敗でDeepSeekの解放を妨げず、元のRedis例外を呼び出し元へ返す。"""
     from app.queue.composition import _wire_analysis_adapters
     from app.queue.lifecycle import _aclose_worker_resources
@@ -1034,8 +1042,50 @@ async def test_analysis_client_closes_even_if_redis_shutdown_fails():
         patch("app.analysis.curation.ai.gemini.GeminiCurator"),
     ):
         config.deepseek_api_key = SecretStr("test-key")
+        config.gemini_api_key = SecretStr("test-key")
         await _wire_analysis_adapters(state)
     with pytest.raises(RuntimeError) as caught:
         await _aclose_worker_resources(state)
     assert caught.value is failure
     assert state.assessor._client.is_closed()
+    assert len(gemini_http_clients) == 1
+    assert gemini_http_clients[0].is_closed
+
+
+@pytest.fixture
+def gemini_http_clients(monkeypatch):
+    """Workerが所有する実Gemini HTTPクライアントの終了を観測する。"""
+    from app.ai_providers.gemini import client as module
+
+    clients = []
+    create = module.make_external_async_client
+
+    def track(**kwargs):
+        client = create(**kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(module, "make_external_async_client", track)
+    return clients
+
+
+@pytest.mark.asyncio
+async def test_analysis_second_provider_failure_closes_gemini(gemini_http_clients):
+    """後から作るDeepSeekの初期化失敗でも先に作ったGeminiを解放する。"""
+    from app.queue.composition import _wire_analysis_adapters
+
+    original = RuntimeError("deepseek initialization failed")
+    with (
+        patch("app.config.settings") as config,
+        patch(
+            "app.ai_providers.deepseek.client.open_deepseek_client",
+            side_effect=original,
+        ),
+    ):
+        config.gemini_api_key = SecretStr("test-key")
+        config.deepseek_api_key = SecretStr("test-key")
+        with pytest.raises(RuntimeError) as caught:
+            await _wire_analysis_adapters(TaskiqState())
+    assert caught.value is original
+    assert len(gemini_http_clients) == 1
+    assert gemini_http_clients[0].is_closed

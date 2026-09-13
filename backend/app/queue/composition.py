@@ -33,13 +33,21 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
     # 具象 SDK の import を関数本体に遅延 (module docstring 参照)。
     from app.ai_providers.deepseek.client import open_deepseek_client
     from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
+    from app.ai_providers.gemini.client import open_gemini_client
+    from app.ai_providers.gemini.settings import GeminiConnectionSettings
     from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
     from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
     from app.analysis.curation.ai.gemini import GeminiCurator
     from app.config import settings
 
-    state.curator = GeminiCurator()
     async with AsyncExitStack() as resources:
+        gemini_client = await resources.enter_async_context(
+            open_gemini_client(
+                api_key=settings.gemini_api_key,
+                settings=GeminiConnectionSettings(),
+            )
+        )
+        state.curator = GeminiCurator(client=gemini_client)
         client = await resources.enter_async_context(
             open_deepseek_client(
                 api_key=settings.deepseek_api_key,
@@ -55,7 +63,7 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
             assessor=type(state.assessor).__name__,
             assessor_model=state.assessor.model_name,
         )
-        state.assessment_client_resources = resources.pop_all()
+        state.analysis_client_resources = resources.pop_all()
 
 
 async def _wire_embedding_adapters(state: TaskiqState) -> None:

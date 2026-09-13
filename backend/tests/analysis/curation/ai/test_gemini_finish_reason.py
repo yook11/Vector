@@ -62,10 +62,10 @@ def _ok_gemini_response() -> GeminiCurationResponse:
 def _make_curator(
     response: GenerateContentResponse,
 ) -> GeminiCurator:
-    """API key check を bypass し、SDK 呼び出しを mock した extractor を返す。"""
-    curator = GeminiCurator.__new__(GeminiCurator)
-    curator._client = MagicMock()  # type: ignore[attr-defined]
-    curator._client.aio.models.generate_content = AsyncMock(return_value=response)
+    """SDK呼び出しをモックしたクライアントをCuratorへ渡す。"""
+    client = MagicMock()
+    client.models.generate_content = AsyncMock(return_value=response)
+    curator = GeminiCurator(client=client)
     return curator
 
 

@@ -109,9 +109,9 @@ async def _aclose_worker_resources(state: TaskiqState) -> None:
         deadline_scheduler = getattr(state, "agent_deadline_scheduler", None)
         if deadline_scheduler is not None:
             stack.push_async_callback(deadline_scheduler.cancel_pending_reservations)
-        assessment_clients = getattr(state, "assessment_client_resources", None)
-        if assessment_clients is not None:
-            stack.push_async_callback(assessment_clients.aclose)
+        analysis_clients = getattr(state, "analysis_client_resources", None)
+        if analysis_clients is not None:
+            stack.push_async_callback(analysis_clients.aclose)
         control = getattr(state, "pipeline_control_redis", None)
         if control is not None:
             stack.push_async_callback(control.aclose)
@@ -201,9 +201,9 @@ def _register_worker_lifecycle(
                         session
                     ).assert_category_catalog_covers_enum()
         except BaseException:
-            assessment_clients = getattr(state, "assessment_client_resources", None)
-            if assessment_clients is not None:
-                await assessment_clients.aclose()
+            analysis_clients = getattr(state, "analysis_client_resources", None)
+            if analysis_clients is not None:
+                await analysis_clients.aclose()
             raise
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)

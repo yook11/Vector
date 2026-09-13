@@ -1,10 +1,10 @@
 """AI curation / assessment domain と Service 統合のテスト。"""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -109,10 +109,8 @@ def _make_assessment_call(
 
 
 def _create_curator() -> GeminiCurator:
-    """settings をモックして GeminiCurator を生成する。"""
-    with patch("app.analysis.curation.ai.gemini.settings") as mock_gs:
-        mock_gs.gemini_api_key = SecretStr("test-key")
-        return GeminiCurator()
+    """テスト所有のクライアントをCuratorへ渡す。"""
+    return GeminiCurator(client=MagicMock())
 
 
 async def _create_article_with_extraction(
