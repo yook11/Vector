@@ -1,6 +1,6 @@
 # ArticleCompletionConsumer — 未完成記事の補完をイベント駆動へ移行する
 
-Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マージ済み（2026-09-13）。共通HTTPの変換、新経路用HTML抽出と記事の統合・構築処理を実装済み。正常終了型・ハンドラー・Consumer・AWS接続は未実装。個別の再試行分類とRetry-Afterの解釈は後続で具体化する。
+Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マージ済み（2026-09-13）。共通HTTPの変換、新経路用HTTP取得・HTML抽出・記事の統合と構築を実装済み。正常終了型・ハンドラー・Consumer・AWS接続は未実装。個別の再試行分類とRetry-Afterの解釈は後続で具体化する。
 
 ## Problem
 
@@ -242,6 +242,20 @@ SQSはHTTPの`Retry-After`を解釈しない。アプリが待機時間を決め
 - `UNMAPPED_VALIDATION_ERROR`は分類できなかった検証結果として保持し、処理中の想定外例外と混同しない。構築結果は例外ではないため、原因例外や疑似的な例外チェーンを生成しない。
 - 統合・構築で投げられたその他の例外は捕捉せず伝播する。新関数と新エラーは再試行判断・ログ出力を追加しない。既存の構築処理内にある未分類検証のログは維持する。
 - 旧`completer.py`の処理は呼ばず、旧Taskiqの戻り値・接続は維持する。HTTP・DB・SQS操作、監査・保存・再試行判断と新経路への接続は後続タスクとする。
+
+## 新経路のHTTP取得契約
+
+`article_fetch.py`の`fetch_article_response(url: SafeUrl) -> RawResponse`は、robots確認後に記事を非同期で取得する。呼び出しごとに既存の外部HTTPクライアントを生成し、両通信で共有して終了時に閉じる。既存User-Agent・プロキシ・宛先保護を使用し、内部リトライ・リダイレクト追従・robotsキャッシュを追加しない。旧Taskiqの取得処理と新経路の接続は変更しない。
+
+- robots URLは記事と同じscheme・host・portの`/robots.txt`とする。2xxは既存`RobotFileParser`で解析し、空本文は空のルールとして扱う。404は本文を読まず記事取得へ進む。それ以外の非成功応答・通信失敗・取得期限超過では記事を取得しない。
+- robotsの明示的な禁止は`RobotsDisallowedError`で伝える。robotsの403等はルールによる禁止と区別し、記事の非成功応答と同じく共通`HttpResponseError`で伝える。
+- robots・記事とも10MiBを上限とし、上限ちょうどは受け入れる。ステータス判定後、解釈できる非負整数のContent-Lengthが超過していれば本文を読まず拒否する。欠如・不正値・過小申告時も、64KiB単位で渡される圧縮展開後の本文を累積確認し、超過チャンクを保持せず受信を中断する。
+- サイズ超過は`ResponseSizeLimitExceededError`が、`resource`（`ROBOTS_TXT` / `ARTICLE_PAGE`）・上限・確認したサイズ・`size_basis`（`DECLARED_CONTENT_LENGTH` / `RECEIVED_DECODED_BODY`）を保持する。`resource`は原因ではなく取得していたもの、`size_basis`は申告値か受信・展開後の実測値かという判定の根拠を表す。中断時のサイズを最終的な全体サイズとは扱わず、本文上限をSDKの一時展開を含むプロセス全体の厳密なメモリ上限とはしない。
+- 通信待ち時間と取得全体の期限は、robotsが10秒、記事が30秒とする。記事の期限はrobots確認後に開始する。`asyncio.timeout()`で接続準備・応答待ち・本文受信を囲み、自身の期限切れだけを`FetchDeadlineExceededError`（取得していた`resource`・制限秒数）へ変換する。期限で受信を中断して資源を解放するが、後始末を含む厳密な実時間上限とはしない。ルール解析・HTML抽出・記事構築・DB保存は取得期限に含めない。
+- HTTPXの通信失敗は既存変換を使って`HttpTransportError`へ渡し、元例外をチェーンする。ヘッダー受信直後・ステータス検証前にUTC時刻を記録し、HTTP応答のstatus・生のRetry-Afterを保持する。HostBlockedError・対象外例外・外部キャンセルはそのまま伝播する。
+- 受信成功時は元のContent-TypeとHTTP charset指定、圧縮展開済みの本文を保持し、HTTPXが選んだ文字コードと置換処理でデコードする。HTML内charsetとContent-Typeの受け入れ判定は、既存のHTML抽出処理が担当する。
+
+取得エラーは`CODE`と発生事実だけを持ち、再試行判断・ログ出力・本文断片を持たない。抽出・構築との接続、工程判断、監査・DB・SQS・Consumerへの接続は後続タスクとする。
 
 ## Non-goals
 
