@@ -1,6 +1,6 @@
 # CurationConsumer — 分析可能な記事の完成イベントによる本文整形
 
-Status: スライス1・2に加え、スライス3の共通記事完成イベント型とCuration Consumerを実装・検証済み（2026-09-13）。Curationの通常経路移行と3工程すべての統一は後続スライスとし、AWSへの適用は未実施。
+Status: スライス1〜4を実装・検証済み（2026-09-13）。3工程のReady拒否をLambdaの受信完了へ統一した。記事完成イベントの発行・配送とCuration通常経路の切替は後続スライスとし、AWSへの適用は未実施。
 
 ## Problem
 
@@ -119,7 +119,7 @@ Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類�
 
 - Curatorは準備済みGeminiクライアントを借用する。モデル・プロンプト・結果schemaの変更は目的に含めない。
 - SSMからの秘密情報取得、RDS IAM・TLS接続、Engine・session factory、AIクライアントの生成終了をLambda呼び出し単位で管理する。AI応答待ちにDB接続・トランザクション・ロックを保持しない。
-- Geminiのクライアント管理・通信設定は既存のprovider共通部品を使う。具体的な準備・終了の共通化は、実装開始時に存在するAssessment／Embeddingの構成に合わせる。別作業中のライフサイクル共通化の完了を必須条件にしない。
+- Geminiのクライアント管理は`open_gemini_client`、Lambdaの資源管理は既存`open_article_analysis_consumer`を使う。通信タイムアウトは全工程でconnect 3秒・read 10秒・write 10秒・pool 3秒とし、Gemini SDKの試行回数1、HTTP transportの再試行0を維持する。Curation専用の時間設定は追加しない。
 - 初期設定案は既存Consumerに揃え、業務処理60秒、Lambda120秒、SQS可視性720秒、受信バッチ1件、最大同時実行10、5回受信後に専用DLQへ移動とする。業務期限の外で失敗後処理を行う。
 - Curation専用Consumer・relay・実行権限・必要な通信経路・秘密情報の参照先・DLQを定義する。既存Curationキューの資源を利用し、relayの起動は既存と同じ1分間隔を初期案とする。
 - インフラ実装時に公式ドキュメントと既存設定を確認し、時間・同時実行・権限の整合性を検証する。新しい依存パッケージやDB schema変更は前提にしない。
@@ -230,6 +230,30 @@ Doneは、共通イベント型からConsumerを実行でき、4種類の結末�
 
 実装・検証結果（2026-09-13）: スライス3は完了。Ruffのlint・format、全単体6,715件、`make test-integration`の全DB統合1,458件が成功した。Consumerと後処理の実DBテスト41件で、Signal／Noise・処理済み・Ready拒否・実行失敗、保存競合、取得接続の返却、保存・監査・Outbox・commitの原子性、記事削除との競合、後処理の二次障害とキャンセルを確認した。テスト用PostgreSQL・Redisは終了処理で削除済み。基点はPR #352を含む最新main（`1bd0497586146516815ad1457a92254510fa2c98`）、作業ブランチは`codex/curation-consumer`。イベント発行・配送・Lambda・AWS設定は未変更。
 
+### スライス4の確定契約（2026-09-13）
+
+このスライスのProblemは、検証済み記事完成イベントをSQSからCuration Consumerへ渡し、保存完了・処理済み・Ready拒否を受信完了、入力不正・実行失敗を再配信対象として返すこと。スライス3のConsumer契約と既存Assessment／EmbeddingのLambda・資源管理・テストをEvidenceとし、保存の原子性・拒否時の記事保持・例外伝播・資源所有をInvariantsとする。
+
+`collection/events.py`の`AnalyzableArticleCreatedEvent`は、既存payloadと`event_id`・`event_type`・`schema_version`・`occurred_at`を持つ不変・strict・余剰項目禁止の共通Envelopeとする。UUIDとタイムゾーン付き時刻を復元し、JSON出力では時刻を小数秒を保ったUTCのZ表記へ正規化する。新種別`article.analyzable_created`と版1だけを受理する。`from_input`は入力値・元の検証例外を保持せず、構造不正、未対応種別、未対応版、payload不正の順に安全な理由と定義済み項目・コードを返す。未知の項目名は親項目に集約する。
+
+公開入口は`app.lambda_handlers.curation.handler`。JSON解析で重複キー・非標準数値を拒否し、SQS全体の構造とmessageIdを先に検証してからレコードを逐次処理する。`SIGNAL`・`NOISE`・`ALREADY_CURATED`・Ready拒否のmessageIdは`batchItemFailures`へ含めず、本文／イベント不正と実行例外のIDだけを入力順で返す。設定・資源初期化・バッチ構造不正は呼び出し全体の失敗、キャンセル・プロセス終了は伝播とする。SQS削除APIは追加しない。
+
+完了ログの`reason`は`signal`・`noise`・`already_curated`・`ready_build_rejected`を使い、拒否時は`rejection_code`を追加する。診断にはmessageIdと検証済み識別子、安全な理由／例外クラスだけを渡し、本文・AI生応答・検証入力値を出力しない。通常の診断・終了障害で各メッセージの結果を変更しない。
+
+`CurationConsumerSettings`は`.env`や`app.config`を読まず、環境・AWSリージョン・DB接続設定・GeminiキーのSSM参照先だけを読む。IAM認証を全環境で必須とし、本番のTLS検証も既存工程と揃える。`create_curation_consumer_engine`はapplication name `vector-curation-consumer`、pool size 1、max overflow 0、pool／接続／commandの待機上限5秒とする。
+
+`GeminiCurator(*, client: AsyncClient)`は準備済みクライアントだけを借用し、生成・終了・アプリ全体の設定取得を所有しない。モデル・プロンプト・応答schema・分類は維持する。Lambdaは共通ライフサイクルでSSM、呼び出し単位のRDS署名器、Engine、Geminiクライアント、Consumerを準備し、利用後は逆順に解放する。AI実行前のDB接続返却と呼び出し間の資源独立性を維持する。
+
+旧WorkerはGeminiとDeepSeekを同じ`analysis_client_resources`で管理し、起動途中の失敗と終了時に解放する。SDKの遅延importと旧Taskiqの再試行・hold・削除方針を維持する。CLIの廃止・整理は別タスクとし、このスライスではクライアントを生成して渡し終了する起動部分だけを変更する。CLIの再試行回数・集計・dry-run・既存Signal更新は変更しない。
+
+Non-goalsはイベント発行・relay・通常経路切替、インフラ・AWS適用、救済移行、hold・日次上限撤去、CLI廃止、DB schema・API・依存パッケージ変更。Doneは実handlerからの混在バッチ応答とDB保存・監査・Outbox、拒否時の非実行・記事保持、旧呼び出し元の接続、資源解放を単体・実DBで検証できることとする。SQS上の実配送・削除・DLQ移動はこのスライスのDoneに含めない。
+
+実装・検証結果（2026-09-13）: スライス4は完了。Ruffのlint・format、全単体6,781件、`make test-integration`の全DB統合1,463件が成功した。実handler・共通資源管理・Gemini SDKを実DBへ接続し、SSM・RDS署名・AI通信だけをテスト用に置き換えた。混在バッチの部分応答、Signal／Noise保存、拒否監査と記事保持、AI前の接続返却、Outbox障害時の原子性、キャンセル、通常の終了障害、複数呼び出しの独立性を確認した。旧Workerの初期化・終了とCLIの借用接続も検証した。障害注入テストの読み取りトランザクションは制約削除前に解放し、テスト終了処理まで確認した。テスト用DB・Redisは削除済み。基点はPR #353を含むmain（`6904baa6d`）、作業ブランチは`codex/curation-lambda`。スライス4単独の検証では、元のConsumerテストの未コミット変更を取り込まなかった。実AWSの配送・稼働切替は未検証。
+
+PR化時のテスト整理（2026-09-13）: ローカルのAssessment／Curation／Embedding Consumerテスト整理と、拒否監査・Embedding旧Taskiq競合の接続テストを取り込んだ。ConsumerテストはDB事実取得、Ready判定、Service／後処理への委譲、期限、元例外・キャンセルの伝播を対象とする。保存の原子性はServiceの既存テスト、Curation Lambdaからの一連の処理は実handlerの統合テストで確認する。拒否監査の通常障害とロールバックは各工程のFailureHandlerテストへ置き、EmbeddingのConsumer／Taskiq競合テストは共通記事fixtureを用いてTaskテストへ配置する。
+
+テスト整理を含むPR候補の検証結果: Ruffのlint・format、全単体6,781件、`make test-integration`の全DB統合1,434件が成功した。Curationの拒否監査障害テストもFailureHandlerへ移し、通常の監査・ログ・計測障害時の保証を維持した。テスト用DB・Redisは削除済み。
+
 Ready拒否の検証は、各工程のConsumerで理由と副作用の不在を確認し、Lambda入口でReady拒否・処理済み・実行失敗の混在時に実行失敗のmessageIdだけが失敗一覧に載ることを確認する。既存の対象欠損を再配信する期待値は置き換える。SQSの削除動作そのものを模した重複テストは作らない。
 
 未接続の部品実装と実際の切替を区別する。新Consumer・配送先が利用可能になる前に、稼働中の通常経路だけを停止しない。切替時に旧イベント対応を追加することは、本仕様では要求しない。
@@ -245,4 +269,4 @@ Ready拒否の検証は、各工程のConsumerで理由と副作用の不在を�
 - relay・Consumer・SQS・DLQ・Scheduler・必要な権限の定義が接続され、通常経路のTaskiq直接投入を切り替えられる。
 - 既存Taskiqの救済は存続でき、その移行や旧イベント整理を待たずに本工程を完了できる。
 
-コード・定義の実装完了とAWSでの稼働切替完了は分けて報告する。実AWS上で確認していない状態を「移行済み」としない。本仕様書の作成段階では実装・デプロイを行わない。
+コード・定義の実装完了とAWSでの稼働切替完了は分けて報告する。実AWS上で確認していない状態を「移行済み」としない。実装済みの範囲と各スライスの検証結果は上記の実装記録に従う。

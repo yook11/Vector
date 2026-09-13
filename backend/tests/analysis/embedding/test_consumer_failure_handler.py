@@ -22,12 +22,17 @@ from app.analysis.embedding.consumer_failure_classification import (
 from app.analysis.embedding.consumer_failure_handling import (
     EmbeddingConsumerFailureHandler,
 )
+from app.analysis.embedding.domain.ready import (
+    EmbeddingReadyBuildRejected,
+    EmbeddingReadyBuildRejectionReason,
+)
 from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
     EmbeddingError,
     EmbeddingResponseInvalidError,
     to_embedding_error,
 )
+from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.db.errors import DatabaseUnexpectedError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
@@ -206,3 +211,40 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
     assert raised.value is error
     assert await _events(db_session) == []
     assert len(metric_records(capsys.readouterr().out, "ai_provider_exhausted")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("secondary_failure", ["none", "log", "metric"])
+async def test_rejection_audit_failure_does_not_escape_handler(
+    db_session, session_factory, secondary_failure
+):
+    """拒否監査と診断の通常障害を抑止し、未確定の監査を残さない。"""
+    rejected = EmbeddingReadyBuildRejected(
+        EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
+    )
+    append = EmbeddingAuditRepository.append_ready_build_rejected
+
+    async def append_then_fail(repo, **kwargs):
+        await append(repo, **kwargs)
+        raise RuntimeError("private-audit-details")
+
+    with (
+        patch.object(
+            EmbeddingAuditRepository,
+            "append_ready_build_rejected",
+            new=append_then_fail,
+        ),
+        patch(f"{_HANDLER}.logger") as log,
+        patch(f"{_HANDLER}.record_audit_dropped") as dropped,
+    ):
+        if secondary_failure == "log":
+            log.warning.side_effect = RuntimeError("private-log-details")
+        if secondary_failure == "metric":
+            dropped.side_effect = RuntimeError("private-metric-details")
+        await EmbeddingConsumerFailureHandler(
+            session_factory
+        ).handle_ready_build_rejected(analyzed_article_id=999_999, rejected=rejected)
+
+    assert await _events(db_session) == []
+    dropped.assert_called_once()
+    assert "private" not in str(log.warning.call_args)

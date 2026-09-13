@@ -20,7 +20,12 @@ from app.analysis.curation.consumer_failure_classification import (
 from app.analysis.curation.consumer_failure_handling import (
     CurationConsumerFailureHandler,
 )
+from app.analysis.curation.domain.ready import (
+    CurationReadyBuildRejected,
+    CurationReadyBuildRejectionReason,
+)
 from app.analysis.curation.errors import to_curation_error
+from app.audit.stages.curation import CurationAuditRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -193,3 +198,40 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
     point = metric["data"]["data_points"][0]
     assert point["value"] == 1
     assert point["attributes"] == {"stage": "curation"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("secondary_failure", ["none", "log", "metric"])
+async def test_rejection_audit_failure_does_not_escape_handler(
+    db_session, session_factory, secondary_failure
+):
+    """拒否監査と診断の通常障害を抑止し、未確定の監査を残さない。"""
+    rejected = CurationReadyBuildRejected(
+        CurationReadyBuildRejectionReason.ARTICLE_MISSING
+    )
+    append = CurationAuditRepository.append_ready_build_rejected
+
+    async def append_then_fail(repo, **kwargs):
+        await append(repo, **kwargs)
+        raise RuntimeError("private-audit-details")
+
+    with (
+        patch.object(
+            CurationAuditRepository,
+            "append_ready_build_rejected",
+            new=append_then_fail,
+        ),
+        patch(f"{_HANDLER}.logger") as log,
+        patch(f"{_HANDLER}.record_audit_dropped") as dropped,
+    ):
+        if secondary_failure == "log":
+            log.warning.side_effect = RuntimeError("private-log-details")
+        if secondary_failure == "metric":
+            dropped.side_effect = RuntimeError("private-metric-details")
+        await CurationConsumerFailureHandler(
+            session_factory
+        ).handle_ready_build_rejected(target_article_id=999_999, rejected=rejected)
+
+    assert await _events(db_session) == []
+    dropped.assert_called_once()
+    assert "private" not in str(log.warning.call_args)

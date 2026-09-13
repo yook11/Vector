@@ -10,18 +10,16 @@ from __future__ import annotations
 from typing import Final
 
 import structlog
-from google import genai
+from google.genai.client import AsyncClient
 from google.genai.types import GenerateContentConfig, GenerateContentResponse
 from pydantic import ValidationError
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
 )
 from app.ai_providers.gemini.error_translator import (
     GeminiContentRejectionReason,
-    GeminiStateReason,
     is_context_length_error,
     output_blocked_reason,
     translate_gemini_error,
@@ -37,14 +35,10 @@ from app.analysis.curation.ai.parse import parse_curation
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.errors import CurationResponseInvalidError
-from app.config import settings
 
 logger = structlog.get_logger(__name__)
 
-# Gemini が応答を返さなかった理由のうち、**入力内容そのもの** がプロバイダー
-# ポリシーに抵触したケース。再試行 / 別モデルでも通らないため記事 DELETE 対象
-# (AIProviderOutputBlockedError → Stage 3 boundary で CurationTerminalDropError
-# に詰め替えられる)。
+# プロバイダーの出力拒否を分類し、処理方針は呼び出し元へ委ねる。
 _POLICY_BLOCKED_FINISH_REASONS: frozenset[str] = frozenset(
     {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}
 )
@@ -77,15 +71,8 @@ class GeminiCurator(BaseCurator):
 
     SPEC: Final[GeminiCurationSpec] = GEMINI_CURATION_SPEC
 
-    def __init__(self) -> None:
-        api_key = settings.gemini_api_key.get_secret_value()
-        if not api_key:
-            # Phase 4: 引数 message は SAFE_ATTRS 外 (str(exc) には出ない)。診断は
-            # AIProviderConfigurationError.CODE (= "ai_error_configuration") + 起動
-            # ログ ("GEMINI_API_KEY is not configured" を logger.error 等で別経路で
-            # 残す) で行う。本 raise 時点では空 instance で十分。
-            raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
-        self._client = genai.Client(api_key=api_key)
+    def __init__(self, *, client: AsyncClient) -> None:
+        self._client = client
 
     # -- BaseCurator property 契約 --
 
@@ -114,7 +101,7 @@ class GeminiCurator(BaseCurator):
         self, prompt: str
     ) -> CurationCall[Signal] | CurationCall[Noise]:
         """Gemini の generate_content API を呼び出し envelope を組み立てる。"""
-        response = await self._client.aio.models.generate_content(
+        response = await self._client.models.generate_content(
             model=self.SPEC.model,
             contents=prompt,
             config=GenerateContentConfig(
@@ -123,9 +110,6 @@ class GeminiCurator(BaseCurator):
             ),
         )
 
-        # finish_reason が policy block 系なら Layer 2-A の OutputBlocked を raise
-        # (Stage 3 boundary で CurationTerminalDropError に詰め替えられ、記事
-        # DELETE 対象になる)
         finish_reason = _detect_finish_reason(response)
         if (
             finish_reason is not None

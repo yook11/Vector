@@ -13,7 +13,7 @@ from app.lambda_handlers import article_analysis_lifecycle as lifecycle
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(params=["assessment", "embedding"])
+@pytest.fixture(params=["assessment", "embedding", "curation"])
 def wiring(request, monkeypatch):
     stage = request.param
     provider = "deepseek" if stage == "assessment" else "gemini"
@@ -98,7 +98,14 @@ async def test_builds_real_consumer_with_borrowed_dependencies(wiring):
             consumer, getattr(wiring.module, f"{wiring.stage.title()}Consumer")
         )
         assert consumer._session_factory is wiring.factory
-        ai = consumer._assessor if wiring.stage == "assessment" else consumer._embedder
+        ai = getattr(
+            consumer,
+            {
+                "assessment": "_assessor",
+                "embedding": "_embedder",
+                "curation": "_curator",
+            }[wiring.stage],
+        )
         assert ai._client is wiring.sdk_client
 
 
@@ -122,9 +129,11 @@ async def test_initialization_diagnostics_preserve_stage_identity(
         getattr(wiring, dependency).side_effect = original
     else:
         name = {
-            "ai": "DeepSeekAssessor"
-            if wiring.stage == "assessment"
-            else "GeminiEmbedder",
+            "ai": {
+                "assessment": "DeepSeekAssessor",
+                "embedding": "GeminiEmbedder",
+                "curation": "GeminiCurator",
+            }[wiring.stage],
             "consumer": f"{wiring.stage.title()}Consumer",
             "client_settings": f"{wiring.provider_title}ConnectionSettings",
         }[dependency]
