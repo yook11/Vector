@@ -1,6 +1,6 @@
 # ArticleCompletionConsumer — 未完成記事の補完をイベント駆動へ移行する
 
-Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マージ済み（2026-09-13）。共通HTTPの変換と新経路用HTML抽出を実装済み。記事構築拒否の変換・正常終了型・ハンドラー・Consumer・AWS接続は未実装。個別の再試行分類とRetry-Afterの解釈は後続で具体化する。
+Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マージ済み（2026-09-13）。共通HTTPの変換、新経路用HTML抽出と記事の統合・構築処理を実装済み。正常終了型・ハンドラー・Consumer・AWS接続は未実装。個別の再試行分類とRetry-Afterの解釈は後続で具体化する。
 
 ## Problem
 
@@ -231,7 +231,17 @@ SQSはHTTPの`Retry-After`を解釈しない。アプリが待機時間を決め
 - タイトル必須・本文50文字以上等は素材の生成時に判定しない。ソース別の採用方針で観測値と統合した後、既存の`AnalyzableArticle.build_or_reject()`で完成条件を判定する。`ArticleContentQualityError`はこの抽出処理では使わない。
 - 共有素材の変更に伴い、旧スクレイパーも短い本文・タイトル欠落で品質不足の早期終了をせず、統合・構築へ進む。旧経路の失敗記録も抽出品質不足から構築拒否へ移り得る。旧エラー型・ハンドラーは残し、新しい抽出エラーを旧経路へ接続しない。
 
-ソース別にHTML補完を通す必要があるか、JSON/APIで補完すべきかの整理はイベント駆動化後に行う。記事構築拒否の新エラーへの変換と工程側の判断・接続は後続タスクとする。
+ソース別にHTML補完を通す必要があるか、JSON/APIで補完すべきかの整理はイベント駆動化後に行う。工程側の判断とService・Consumerへの接続は後続タスクとする。
+
+## 記事の統合・構築の契約
+
+`html_completion.py`の同期関数`complete_with_html(observed, completion_policy, html, *, source_id, source_url)`は、既存の観測値と`ScrapedContent`を受け取り、完成した`AnalyzableArticle`を返す。DBの状態や試行回数を持つ`ReadyForArticleCompletion`には依存しない。対象行の存在・非closedの確認は後続の呼び出し側が担当する。
+
+- 既存の`ArticleCompletionPolicy.resolve()`で値を統合し、`AnalyzableArticle.build_or_reject()`で構築する。値の優先順位・欠如時の扱い・完成条件をこの関数で再定義しない。
+- `QualityTooLow`だけを`ArticleCompletionRejectedError`へ変換して投げる。`defects`と`unmapped`の順序・内容・重複をそのまま保持する。`unmapped`の既定値は空tupleとする。
+- `UNMAPPED_VALIDATION_ERROR`は分類できなかった検証結果として保持し、処理中の想定外例外と混同しない。構築結果は例外ではないため、原因例外や疑似的な例外チェーンを生成しない。
+- 統合・構築で投げられたその他の例外は捕捉せず伝播する。新関数と新エラーは再試行判断・ログ出力を追加しない。既存の構築処理内にある未分類検証のログは維持する。
+- 旧`completer.py`の処理は呼ばず、旧Taskiqの戻り値・接続は維持する。HTTP・DB・SQS操作、監査・保存・再試行判断と新経路への接続は後続タスクとする。
 
 ## Non-goals
 

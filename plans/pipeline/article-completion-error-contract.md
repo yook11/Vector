@@ -1,6 +1,6 @@
 # 共通HTTPエラーと本文補完エラーの実装プラン
 
-Status: タスク1・2の定義はPR #356で実装・マージ済み（2026-09-13）。タスク3のHTTP変換と新経路用HTML抽出を実装済み。記事構築拒否の変換・工程側ハンドラー・新経路への接続は後続タスクとする。
+Status: タスク1・2の定義はPR #356で実装・マージ済み（2026-09-13）。タスク3のHTTP変換、新経路用HTML抽出と記事の統合・構築処理を実装済み。工程側ハンドラー・新経路への接続は後続タスクとする。
 
 ## Problem
 
@@ -159,3 +159,26 @@ HTTP取得・SQS・再試行判断・DB保存・ソース別補完方式の見�
 ### 検証結果
 
 Ruff lint・format（アプリと変更テスト）成功、対象55件成功、単体6,870件成功、`make test-integration PYTEST_ARGS='-x -q'`でDB統合1,434件成功。一時DB・Redis・networkの削除を確認した。`pytest tests/ -x -q`は未起動DBへ接続して停止したため、単体は`-m 'not integration'`で分離し、DB統合は上記の専用起動経路で全件実行した。新エラーの参照元は追加した抽出モジュールのみで、旧Taskiqへの接続はない。
+
+## タスク3の続き: 記事の統合・構築（2026-09-14）
+
+### Problem / Evidence
+
+観測値とHTML素材から完成記事を構築する新経路を、旧Taskiqの実行状態から独立させる。既存の`complete_with_html()`、ソース別ポリシー、`build_or_reject()`と構築テストを確認した。構築結果の`QualityTooLow`が持つ`unmapped`を新エラーでも保持し、変換で理由の詳細を落とさない。
+
+### 実装内容とInvariants
+
+- `html_completion.py`に同期関数`complete_with_html(observed, completion_policy, html, *, source_id, source_url) -> AnalyzableArticle`を追加した。`ReadyForArticleCompletion`や旧`completer.py`の実行処理は利用しない。
+- 既存`ArticleCompletionPolicy.resolve()`へ観測値と素材を渡し、統合結果を`AnalyzableArticle.build_or_reject()`で構築する。値の採用規則・完成条件を複製しない。
+- 完成記事はそのまま返し、`QualityTooLow`だけを`ArticleCompletionRejectedError`へ変換して投げる。エラーに`unmapped: tuple[str, ...] = ()`を追加し、`defects`とともに順序・内容・重複を保持する。
+- 未分類の検証結果と想定外例外を区別する。その他の例外は捕捉せず、構築結果から疑似的な原因例外を作らない。新関数・エラーに再試行判断やログ出力を追加しない。既存構築処理内の未分類検証ログは変更しない。
+
+### テストとNon-goals / Done
+
+実ポリシー・構築処理による完成の代表2例（HTMLタイトル欠如・HTML優先）、既知の構築拒否、複数defectと未分類詳細の保持、統合・構築の想定外例外の伝播を検証する。完成条件やポリシーの網羅テストを重複させず、旧経路の独立した保証は残す。
+
+DB状態の確認・HTTP取得・SQS・再試行・closed化・監査・保存・Consumerへの接続は行わない。ローカルmainで既存の未コミット変更を保持し、仕様更新と旧Taskiqへの新エラー未接続を確認したうえで、Ruff lint・format、単体（`-m 'not integration'`）、`make test-integration`が成功したら完了とする。
+
+### 検証結果
+
+Ruff lint・format成功、新経路6ケースと旧Completerの2ケースが成功。単体6,882件成功（`pytest tests/ -m 'not integration' -x -q`）、DB統合1,434件成功（`make test-integration PYTEST_ARGS='-x -q'`）。一時DB・Redis・networkの削除を確認した。旧Completer・Service・Readyには差分がなく、新しい構築拒否エラーの利用は新関数に限定されている。
