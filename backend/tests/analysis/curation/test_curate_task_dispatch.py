@@ -37,11 +37,12 @@ from app.ai_providers.errors import (
 )
 from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.domain.ready import (
-    CurationReadyBuildBlockedCode,
-    CurationReadyBuildBlockedError,
+    CurationReadyBuildRejected,
+    CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
-from app.analysis.curation.errors import CurationResponseInvalidError
+from app.analysis.curation.errors import CurationResponseInvalidError, to_curation_error
+from app.analysis.curation.task_errors import CurationRecoverableError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.domain.event import Stage
 from app.db.errors import (
@@ -185,8 +186,8 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
         # Phase 4: Layer 2-B (CurationResponseInvalidError) は no-arg constructor
         # 必須、AIProvider*Error は accept-and-discard。factory で正常に
         # 構築できる呼び方を class ごとに分離する。
-        AIProviderNetworkError,
-        AIProviderServiceUnavailableError,
+        lambda: to_curation_error(AIProviderNetworkError()),
+        lambda: to_curation_error(AIProviderServiceUnavailableError()),
         CurationResponseInvalidError,
     ],
 )
@@ -200,18 +201,20 @@ async def test_retryable_reraise_true_raises(
     # retry 余地あり: max_retries=1 では非最終試行が存在しないため max_retries=2 を使う
     # (_retries=0 < max_retries-1=1 で非最終)
     ctx = _make_ctx(retries=0, max_retries=2)
+    original = exc_factory()
 
     with (
         _patch_try_advance_from(),
         patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
         patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
-        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_factory())
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=original)
         mock_handler_cls.return_value.handle = AsyncMock(
             return_value=FailureHandlingDecision(reraise=True)
         )
-        with pytest.raises(exc_factory):
+        with pytest.raises(CurationRecoverableError) as raised:
             await curate_content(trigger=_trigger(), ctx=ctx)
+        assert raised.value.__cause__ is original
 
     mock_handler_cls.return_value.handle.assert_awaited_once()
 
@@ -343,16 +346,16 @@ async def test_service_exception_sets_failed_result(
 @pytest.mark.parametrize(
     ("code", "expected_rejected"),
     [
-        (CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE, 1),
-        (CurationReadyBuildBlockedCode.ALREADY_CURATED, 0),
-        (CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE, 0),
-        (CurationReadyBuildBlockedCode.ARTICLE_MISSING, 0),
+        (CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE, 1),
+        (CurationReadyBuildRejectionReason.ALREADY_CURATED, 0),
+        (CurationReadyBuildRejectionReason.ALREADY_REJECTED_AS_NOISE, 0),
+        (CurationReadyBuildRejectionReason.ARTICLE_MISSING, 0),
     ],
 )
 @pytest.mark.asyncio
 async def test_ready_build_blocked_emits_rejected_only_for_content_too_large(
     capfire: CaptureLogfire,
-    code: CurationReadyBuildBlockedCode,
+    code: CurationReadyBuildRejectionReason,
     expected_rejected: int,
 ) -> None:
     """内容を読んで拒否した CONTENT_TOO_LARGE だけ rejected を emit する。
@@ -365,14 +368,14 @@ async def test_ready_build_blocked_emits_rejected_only_for_content_too_large(
     # blocked except 経路は session.commit() を await するため AsyncMock を差す。
     session = ctx.state.session_factory.return_value.__aenter__.return_value
     session.commit = AsyncMock()
-    blocked = CurationReadyBuildBlockedError(code, analyzable_article_id=42)
+    blocked = CurationReadyBuildRejected(code, analyzable_article_id=42)
     with (
         patch.object(
-            ReadyForCuration, "try_advance_from", new=AsyncMock(side_effect=blocked)
+            ReadyForCuration, "try_advance_from", new=AsyncMock(return_value=blocked)
         ),
         patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit_cls,
     ):
-        mock_audit_cls.return_value.append_ready_build_blocked = AsyncMock()
+        mock_audit_cls.return_value.append_ready_build_rejected = AsyncMock()
         await curate_content(trigger=_trigger(), ctx=ctx)
 
     metrics = collected_metrics(capfire)

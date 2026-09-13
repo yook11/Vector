@@ -39,13 +39,14 @@ from app.ai_providers.errors import AIProviderError
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
-from app.analysis.curation.errors import (
+from app.analysis.curation.errors import CurationError, to_curation_error
+from app.analysis.curation.repository import CurationRepository
+from app.analysis.curation.task_errors import (
     CurationRecoverableError,
     CurationTerminalDropError,
     CurationTerminalKeepError,
-    map_provider_to_curation,
+    to_curation_task_error,
 )
-from app.analysis.curation.repository import CurationRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 
 logger = structlog.get_logger(__name__)
@@ -235,15 +236,15 @@ class RecurationService:
         title: str,
         content: str,
     ) -> CurationCall[Signal] | CurationCall[Noise]:
-        """curator を 1 回呼び、provider error を Stage 3 marker に詰め替える。
-
-        同じ try 内で詰め替えと catch を行うと、再 raise した例外は同レベルの
-        sibling except に流れないため、boundary をこの helper に分離する。
-        """
+        """AIの失敗をServiceの理由と旧経路の分類へ変換し、原因を保持する。"""
         try:
             return await curator.curate(title=title, content=content)
         except AIProviderError as exc:
-            raise map_provider_to_curation(exc) from exc
+            business_exc = to_curation_error(exc)
+            business_exc.__cause__ = exc
+            raise to_curation_task_error(business_exc) from business_exc
+        except CurationError as exc:
+            raise to_curation_task_error(exc) from exc
 
     async def _curate_with_retry(
         self,

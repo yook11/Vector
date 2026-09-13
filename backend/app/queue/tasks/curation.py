@@ -8,14 +8,15 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.domain.ready import (
-    CurationReadyBuildBlockedCode,
-    CurationReadyBuildBlockedError,
+    CurationReadyBuildRejected,
+    CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
 from app.analysis.curation.failure_handling import CurationFailureHandler
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
-from app.analysis.curation.service import CurationService
+from app.analysis.curation.service import CurationCompletionKind, CurationService
+from app.analysis.curation.task_errors import to_curation_task_error
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -50,31 +51,10 @@ async def curate_content(
     with curation_stage_span(article_id=trigger.analyzable_article_id) as stage:
         async with session_factory() as session:
             try:
-                ready = await ReadyForCuration.try_advance_from(
+                ready_build = await ReadyForCuration.try_advance_from(
                     analyzable_article_id=trigger.analyzable_article_id,
                     repo=CurationRepository(session),
                 )
-            except CurationReadyBuildBlockedError as exc:
-                # 冪等 skip (ALREADY_*) は勝者の行と冗長。監査に残さず log のみ。
-                # 恒久的な突き返し/欠損 (CONTENT_TOO_LARGE / ARTICLE_MISSING) は残す。
-                if not exc.code.is_idempotent_skip:
-                    await CurationAuditRepository(session).append_ready_build_blocked(
-                        target_article_id=trigger.analyzable_article_id,
-                        exc=exc,
-                    )
-                    await session.commit()
-                logger.info(
-                    "curate_content_rejected",
-                    analyzable_article_id=trigger.analyzable_article_id,
-                    reason="ready_build_blocked",
-                    code=exc.code.value,
-                )
-                # 内容を読んで拒否した CONTENT_TOO_LARGE だけ処理結果に数える
-                # (ALREADY_* / ARTICLE_MISSING は冪等 skip / stale で分母外)。
-                if exc.code is CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE:
-                    record_curation_processing_outcome("rejected")
-                stage.set_result("skipped")
-                return
             except Exception as exc:
                 await _append_ready_build_failed_audit(
                     session_factory,
@@ -91,6 +71,32 @@ async def curate_content(
                 )
                 raise
 
+            if isinstance(ready_build, CurationReadyBuildRejected):
+                # 処理済みの拒否は勝者の監査と重複するためログだけに残す。
+                if not ready_build.reason.is_idempotent_skip:
+                    await CurationAuditRepository(session).append_ready_build_rejected(
+                        target_article_id=trigger.analyzable_article_id,
+                        rejected=ready_build,
+                    )
+                    await session.commit()
+                logger.info(
+                    "curate_content_rejected",
+                    analyzable_article_id=trigger.analyzable_article_id,
+                    reason="ready_build_rejected",
+                    code=ready_build.reason.value,
+                )
+                # 内容を読んで拒否した CONTENT_TOO_LARGE だけ処理結果に数える
+                # (ALREADY_* / ARTICLE_MISSING は冪等 skip / stale で分母外)。
+                if (
+                    ready_build.reason
+                    is CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE
+                ):
+                    record_curation_processing_outcome("rejected")
+                stage.set_result("skipped")
+                return
+
+            ready = ready_build
+
         svc = CurationService(session_factory)
         handler = CurationFailureHandler(session_factory)
 
@@ -99,10 +105,11 @@ async def curate_content(
         except Exception as exc:
             # handler / hold が二次例外で落ちても元の業務例外を span に残す
             # (no-override で最初の業務例外を保持)。
-            stage.record_failure(exc)
+            task_exc = to_curation_task_error(exc)
+            stage.record_failure(task_exc)
             decision = await handler.handle(
                 ready=ready,
-                exc=exc,
+                exc=task_exc,
                 curator=curator,
                 last_attempt=is_last_attempt(ctx),
             )
@@ -114,11 +121,13 @@ async def curate_content(
                 )
             stage.set_result("failed")
             if decision.reraise:
+                if task_exc is not exc:
+                    raise task_exc from exc
                 raise
             return
 
-        if result is not None:
-            await assess_content.kiq(AssessmentTrigger(curation_id=result))
+        if result.kind is CurationCompletionKind.SIGNAL:
+            await assess_content.kiq(AssessmentTrigger(curation_id=result.curation_id))
             stage.mark_next_task_enqueued()
 
 

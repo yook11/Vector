@@ -39,8 +39,11 @@ from app.analysis.assessment.task_errors import (
 )
 from app.analysis.curation.errors import (
     CurationError,
-    CurationRecoverableError,
+    CurationFailureReason,
     CurationResponseInvalidError,
+)
+from app.analysis.curation.task_errors import (
+    CurationRecoverableError,
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
@@ -390,7 +393,8 @@ def test_stage_base_classes_inherit_vector_domain_error() -> None:
 
 def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
     """Layer 2-B class は対応する Layer 1 marker を継承する。"""
-    assert issubclass(CurationResponseInvalidError, CurationRecoverableError)
+    assert issubclass(CurationResponseInvalidError, CurationError)
+    assert not issubclass(CurationResponseInvalidError, CurationRecoverableError)
     assert issubclass(AssessmentResponseInvalidError, AssessmentError)
     assert not issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingError)
@@ -398,7 +402,7 @@ def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
 
 def test_curation_error_is_not_layer1_marker() -> None:
     """``CurationError`` 自体は Layer 1 marker の subclass ではない。"""
-    sample: Any = CurationError()
+    sample: Any = CurationError(reason=CurationFailureReason.RESPONSE_INVALID)
     assert not isinstance(sample, CurationRecoverableError)
     assert not isinstance(sample, CurationTerminalKeepError)
     assert not isinstance(sample, CurationTerminalDropError)

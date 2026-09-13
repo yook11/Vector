@@ -13,8 +13,8 @@ from app.analysis.curation.domain import (
     Signal,
 )
 from app.analysis.curation.domain.ready import (
-    CurationReadyBuildBlockedCode,
-    CurationReadyBuildBlockedError,
+    CurationReadyBuildRejected,
+    CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
 from app.analysis.curation.repository import CurationRepository
@@ -22,8 +22,8 @@ from app.analysis.curation.service import CurationService
 
 __all__ = [
     "CurationRepository",
-    "CurationReadyBuildBlockedCode",
-    "CurationReadyBuildBlockedError",
+    "CurationReadyBuildRejectionReason",
+    "CurationReadyBuildRejected",
     "CurationResult",
     "CurationService",
     "Noise",

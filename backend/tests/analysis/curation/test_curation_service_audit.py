@@ -1,21 +1,4 @@
-"""``CurationService`` の成功経路で audit が焼付けられる integration test。
-
-PR1-c で Outcome を廃止し戻り値を ``int | None`` 一本化したため、本 file は
-Outcome 型 assertion を「signal 勝者 → ``int``、noise 勝者 → ``None``」に
-書き換えている。
-
-検証する性質:
-- signal 勝者 → ``outcome_code='curated_signal'`` (SUCCEEDED)、Service は
-  ``curation_id`` (``int``) を返す
-- noise 勝者 → ``outcome_code='curated_noise'`` (SUCCEEDED)、Service は ``None`` を返す
-  (Stage 4 chain しない、Task 層は ``if result is None: return`` で短絡)
-- ``CurationResponseInvalidError`` (Layer 2-B) は Service が catch せず
-  そのまま raise される (audit は task 層が焼く責務)
-- 各 audit row に ``ai_model`` / ``prompt_version`` / ``input_content_*``
-  が payload に焼かれている
-- 成功系では ``ai_raw_response`` も焼かれる
-- ``article_id`` / ``source_id`` (auto-resolve) が両方埋まる
-"""
+"""Curationの完了結果と、結果・成功監査・Outboxの原子性を実DBで検証する。"""
 
 from __future__ import annotations
 
@@ -24,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -35,10 +18,15 @@ from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.curation.events import ArticleCuratedSignal
-from app.analysis.curation.service import CurationService
+from app.analysis.curation.service import (
+    CurationCompletion,
+    CurationCompletionKind,
+    CurationService,
+)
 from app.logfire.article_stage import curation_stage_span
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
+from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
@@ -137,8 +125,8 @@ async def test_signal_outcome_writes_curated_signal_audit_with_outcome_code(
     result = await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
 
     # signal 勝者 → Service は新規 article_extractions.id を返す
-    assert isinstance(result, int)
-    assert result > 0
+    assert result.kind is CurationCompletionKind.SIGNAL
+    assert result.curation_id > 0
     events = await _fetch_curation_events(db_session, article.id)
     assert len(events) == 1
     ev = events[0]
@@ -169,7 +157,7 @@ async def test_noise_outcome_writes_curated_noise_audit(
     result = await svc.execute(ready, _curator(return_envelope=_noise_envelope()))
 
     # noise 勝者 → Service は None (Stage 4 chain しない、Task 層 short return 対象)
-    assert result is None
+    assert result == CurationCompletion(CurationCompletionKind.NOISE)
     events = await _fetch_curation_events(db_session, article.id)
     assert len(events) == 1
     ev = events[0]
@@ -332,7 +320,7 @@ async def test_signal_persists_matching_outbox_event(
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
 
-    curation_id = await CurationService(session_factory).execute(
+    completion = await CurationService(session_factory).execute(
         ready, _curator(return_envelope=_signal_envelope())
     )
 
@@ -351,7 +339,7 @@ async def test_signal_persists_matching_outbox_event(
         "schema_version": ArticleCuratedSignal.SCHEMA_VERSION,
         "payload": {
             "analyzable_article_id": article.id,
-            "curation_id": curation_id,
+            "curation_id": completion.curation_id,
         },
     }
 
@@ -447,3 +435,166 @@ async def test_outbox_insert_failure_rolls_back_signal_and_audit(
         "audit_events": audit_events,
         "outbox_events": outbox_events,
     } == {"curations": [], "audit_events": [], "outbox_events": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope_factory", [_signal_envelope, _noise_envelope])
+async def test_existing_save_returns_already_curated_without_duplicate_effects(
+    db_session, session_factory, sample_source, envelope_factory
+):
+    """保存済み行との競合は処理済み完了となり、監査とOutboxを重複させない。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    service = CurationService(session_factory)
+    first = await service.execute(ready, _curator(return_envelope=envelope_factory()))
+    second = await service.execute(ready, _curator(return_envelope=envelope_factory()))
+
+    async with session_factory() as reader:
+        audits = await _fetch_curation_events(reader, article.id)
+        outbox = (await reader.scalars(select(OutboxEvent))).all()
+        signals = (await reader.scalars(select(ArticleCuration))).all()
+        noises = (await reader.scalars(select(CurationNoise))).all()
+    assert second == CurationCompletion(CurationCompletionKind.ALREADY_CURATED)
+    assert len(audits) == 1
+    if first.kind is CurationCompletionKind.SIGNAL:
+        assert (len(signals), len(noises), len(outbox)) == (1, 0, 1)
+        assert signals[0].id == first.curation_id == outbox[0].payload["curation_id"]
+    else:
+        assert (len(signals), len(noises), len(outbox)) == (0, 1, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope_factory", [_signal_envelope, _noise_envelope])
+@pytest.mark.parametrize("failure_at", ["save", "audit", "commit"])
+async def test_persistence_failures_propagate_and_roll_back_all_results(
+    db_session, session_factory, sample_source, envelope_factory, failure_at
+):
+    """保存・監査・commitの失敗は完了値に変換せず、同一取引の全書き込みを戻す。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    failure = RuntimeError("injected persistence failure")
+
+    def fail(*args):
+        raise failure
+
+    target = None
+    event_name = None
+    if failure_at == "save":
+        ready = ready.model_copy(update={"analyzable_article_id": article.id + 1000})
+    elif failure_at == "audit":
+        target, event_name = PipelineEvent, "before_insert"
+    else:
+        target, event_name = db_session.bind.sync_engine, "commit"
+    if target is not None:
+        event.listen(target, event_name, fail)
+    try:
+        with pytest.raises(
+            IntegrityError if failure_at == "save" else RuntimeError
+        ) as raised:
+            await CurationService(session_factory).execute(
+                ready, _curator(return_envelope=envelope_factory())
+            )
+        if failure_at != "save":
+            assert raised.value is failure
+    finally:
+        if target is not None:
+            event.remove(target, event_name, fail)
+
+    async with session_factory() as reader:
+        remaining = {
+            model.__tablename__: (await reader.scalars(select(model))).all()
+            for model in (ArticleCuration, CurationNoise, PipelineEvent, OutboxEvent)
+        }
+    assert remaining == {name: [] for name in remaining}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content, reason_suffix, expected_length",
+    [
+        pytest.param("", "input_invalid", None, id="empty-content"),
+        pytest.param("秘" * 200_001, "content_too_large", 200_001, id="too-large"),
+    ],
+)
+async def test_task_ready_rejection_keeps_article_without_ai_or_followup(
+    db_session, session_factory, sample_source, content, reason_suffix, expected_length
+):
+    """DB事実からの入力拒否は安全な拒否監査だけを残し、記事と後続経路を保つ。"""
+    from types import SimpleNamespace
+
+    from app.queue.messages.curation import CurationTrigger
+    from app.queue.tasks.curation import curate_content
+
+    article = await _make_article(db_session, sample_source)
+    article.original_content = content
+    await db_session.commit()
+    curator = _curator()
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(session_factory=session_factory, curator=curator)
+    )
+
+    with patch(
+        "app.queue.tasks.curation.assess_content.kiq", new_callable=AsyncMock
+    ) as enqueue:
+        await curate_content(CurationTrigger(analyzable_article_id=article.id), ctx)
+    curator.curate.assert_not_awaited()
+    enqueue.assert_not_awaited()
+    async with session_factory() as reader:
+        assert await reader.get(AnalyzableArticleRecord, article.id) is not None
+        (audit,) = await _fetch_curation_events(reader, article.id)
+        assert audit.event_type == "rejected"
+        assert audit.outcome_code == "curation_ready_build_blocked_" + reason_suffix
+        assert audit.source_id == sample_source.id
+        assert audit.payload["input_content_length"] == expected_length
+        assert audit.payload["max_content_length"] == (
+            200_000 if expected_length else None
+        )
+        assert all(
+            audit.payload.get(key) is None
+            for key in ("input_content_head", "error_message", "error_chain")
+        )
+        assert "秘" not in repr(audit.payload)
+        for model in (ArticleCuration, CurationNoise, OutboxEvent):
+            assert (await reader.scalars(select(model))).all() == []
+
+
+@pytest.mark.asyncio
+async def test_task_provider_failure_preserves_service_cause_through_real_audit(
+    db_session, session_factory, sample_source
+):
+    """実Serviceのプロバイダー障害を旧Taskiq分類へ接続し、監査まで原因を保持する。"""
+    from types import SimpleNamespace
+
+    from app.ai_providers.errors import AIProviderNetworkError
+    from app.analysis.curation.errors import CurationError
+    from app.analysis.curation.task_errors import CurationRecoverableError
+    from app.queue.messages.curation import CurationTrigger
+    from app.queue.tasks.curation import curate_content
+
+    article = await _make_article(db_session, sample_source)
+    provider = AIProviderNetworkError()
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(
+            session_factory=session_factory, curator=_curator(side_effect=provider)
+        ),
+        message=SimpleNamespace(labels={"_retries": 0, "max_retries": 2}),
+    )
+    with pytest.raises(CurationRecoverableError) as raised:
+        await curate_content(CurationTrigger(analyzable_article_id=article.id), ctx)
+    business = raised.value.__cause__
+    assert isinstance(business, CurationError)
+    assert business.__cause__ is provider
+    assert raised.value.provider_error is business.provider_error is provider
+    async with session_factory() as reader:
+        (audit,) = await _fetch_curation_events(reader, article.id)
+        assert audit.outcome_code == provider.CODE
+        assert audit.event_type == "failed"
+        chain = repr(audit.payload["error_chain"])
+        assert all(
+            name in chain
+            for name in (
+                "CurationRecoverableError",
+                "CurationError",
+                "AIProviderNetworkError",
+            )
+        )

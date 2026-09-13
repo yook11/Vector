@@ -16,7 +16,7 @@ curation stage について、Logfire 上で「インフラ障害に汚されな
 ### Evidence
 
 - `curate_content` task は `ReadyForCuration.try_advance_from()` で curation 入力を構築してから、`CurationService.execute()` に進む。
-- `CurationReadyBuildBlockedCode` は `ARTICLE_MISSING`, `ALREADY_CURATED`, `ALREADY_REJECTED_AS_NOISE`, `CONTENT_TOO_LARGE` を区別する。
+- `CurationReadyBuildRejectionReason` は `ARTICLE_MISSING`, `ALREADY_CURATED`, `ALREADY_REJECTED_AS_NOISE`, `CONTENT_TOO_LARGE`, `INPUT_INVALID` を区別する。
 - `CurationFailureHandler.handle()` は `CurationTerminalDropError`, `CurationTerminalKeepError`, `CurationRecoverableError`, `SQLAlchemyError`, catch-all を分岐している。
 - `article_stage` span result は `signal`, `noise`, `skipped`, `failed` だが、`skipped` と `failed` は処理結果・冪等 skip・インフラ失敗を区別できない。
 - taskiq の OTel middleware が `execute/curate_content` span を自動で作るため、task が例外で落ちたかどうかは既存 span から観測できる。
@@ -232,17 +232,19 @@ infra_error_count
 
 `CurationService.execute()` が `signal` / `noise` を保存し、成功 audit と同一 transaction を commit した後に emit する。
 
-race loss で `None` を返す場合は emit しない。
+race loss で `CurationCompletion(ALREADY_CURATED)` を返す場合は emit しない。
 
 #### rejected
 
-`CurationReadyBuildBlockedError` のうち、処理対象として明示拒否したものだけ emit する。
+`CurationReadyBuildRejected` のうち、処理対象として明示拒否したものだけ emit する。
 
 初期対象:
 
 ```text
 CONTENT_TOO_LARGE -> rejected
 ```
+
+スライス2で追加した`INPUT_INVALID`はReady拒否として監査し、この旧メトリクスには追加計上しない。旧Taskiqの既存メトリクスは本スライスで再設計しない。
 
 #### failed / infra_error
 

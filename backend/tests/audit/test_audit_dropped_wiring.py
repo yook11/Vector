@@ -20,8 +20,8 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.analysis.curation.domain.ready import ReadyForCuration
-from app.analysis.curation.errors import CurationRecoverableError
 from app.analysis.curation.failure_handling import CurationFailureHandler
+from app.analysis.curation.task_errors import CurationRecoverableError
 from app.audit.domain.event import EventType
 from app.audit.stages.backfill import BackfillOutcomeCode
 from app.audit.stages.dispatch import DispatchOutcomeCode
