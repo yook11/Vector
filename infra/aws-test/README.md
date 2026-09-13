@@ -455,6 +455,51 @@ make aws-smoke-status RUN_ID=20260912-01
 
 電源断・ネットワーク断・強制終了・SSO期限切れでは自動削除が完了しない場合がある。端末を復旧し、必要なら同じSSOセッションへ再ログインして`aws-smoke-destroy`を実行する。削除中の二度目の中断でも完了は保証しない。stateロックの強制解除や`-target`による部分削除は行わない。
 
+## 試験環境を片付ける
+
+```sh
+make aws-smoke-destroy RUN_ID=20260912-up01
+# 途中失敗・Ctrl-C・SIGTERMの後も同じコマンドで再試行する。
+make aws-smoke-destroy RUN_ID=20260912-up01
+```
+
+構築applyを開始した既存RUN_IDを指定する。構築途中・DB準備失敗・試験失敗でも削除でき、`up`や`prepare`の成功は要求しない。構築未開始の場合は`this_command_has_not_started_provisioning`で拒否し、削除完了とは記録しない。
+
+保存済み定義・入力のハッシュ、アカウントとManagerの実行主体、所有記録、試験専用bucketと`smoke/<RUN_ID>/terraform.tfstate`を確認してから処理を開始する。不一致と同じRUN_IDへの並行操作を拒否する。起動時に保存したTerraform定義・入力で全体destroyを行い、常設IAM・ECR・state基盤・SSM設定は保持する。ローカルの固定設定、コード、試験結果、過去の削除履歴も削除しない。
+
+Runnerの実行主体を確認して最新のCloudWatchログを回収する。Runner認証・回収が失敗してもManagerによる削除を続け、`deletion_status=passed`と`status=failed`を分けて記録して非0終了する。不存在のロググループは`absent`と記録し、権限不足・通信失敗・期限切れと区別する。
+
+| 状態 | 動作 |
+|---|---|
+| stateに対象設備がある | 削除plan・apply後にstateとAWS残存を確認 |
+| stateが空、AWS残存もなし | destroy applyを再実行せず削除確認を完了 |
+| stateが空、AWS残存あり | 期限付きで再照会。残存すれば非0終了し、state外の設備を直接削除しない |
+| 削除前後の照会が確認不能 | 削除完了にしない。削除前照会の失敗でも対象確認済みのdestroyは試みる |
+
+**削除完了は、stateが空で、既知IDと試験タグ等によるAWS照会でも残存なしを確認できた場合だけ記録する。** 過去に記録したVPC・EC2/EBS・管理シークレット・Lambdaトリガー等のIDは、空の照会結果で失わないように保持する。削除済み環境の再確認では過去の回収失敗を引き継がず、今回のログ回収・削除確認結果で終了コードを決める。
+
+各回を`destroy-attempts/<連番>/`へ記録し、工程の状態・時刻・安全な失敗理由、ログ回収、Terraformログ・plan、削除前後の照会結果を保持する。最新結果と参照先を`result.json`・`summary.txt`へ反映し、試験合否と過去の各回のファイルは変更しない。旧形式の実行記録からも削除できる。
+
+ログ回収120秒、destroy apply90分、残存再照会180秒など既存の期限を維持する。工程と経過時間、取得できる残存件数を表示し、通信・プロセス終了待ちの時間が追加される場合がある。中断時は途中結果と同じ再実行コマンドを残す。ローカル中断でAWS側の削除や投入済みSSM・Lambdaが即時停止したとは扱わない。
+
+一括実行もこの削除処理を使う。同じ一括実行内で回収したログは`test-attempts`側の場所を削除履歴に関連付け、重複回収しない。準備・試験・回収の失敗後も削除を試み、いずれかの失敗を終了コード0で隠さない。
+
+削除処理の変更時は、次の専用テストと影響する既存ケース、変更PythonのRuff・format確認、`git diff --check`に検証を限定する。
+
+```sh
+backend/.venv/bin/python -m unittest discover -s infra/aws-test/scripts/tests -p test_smoke_destroy.py -v
+(cd infra/aws-test/scripts/tests && ../../../../backend/.venv/bin/python -m unittest \
+  test_smoke_up.RunTests.test_old_report_can_still_be_destroyed \
+  test_smoke_up.RunTests.test_destroy_collects_new_logs_after_up \
+  test_smoke_up.RunTests.test_one_shot_keeps_schema_before_apply_and_cleanup_after_database \
+  test_smoke_up.RunTests.test_resources_are_read_back_and_mapping_is_known_before_inventory \
+  test_smoke_up.RunTests.test_missing_message_endpoint_and_changed_lambda_image_fail \
+  test_smoke_test.ControlTests.test_one_shot_selection_failure_never_starts_aws_and_runtime_failure_cleans_up \
+  test_smoke_test.ControlTests.test_log_collection_failure_is_separate_and_keeps_environment -v)
+```
+
+実AWS・実AI・DB・Terraform・backend/frontend全体のテストは実行しない。実際の削除時間、IAM権限、ENI解放、AWS残存確認は後続のAWS実行で確認する。
+
 ## 削除後に確認するファイル
 
 `.local/runs/<run_id>/`へ、所有者のみ読み書きできる権限で保存する。Gitへ追加しない。
@@ -468,15 +513,19 @@ make aws-smoke-status RUN_ID=20260912-01
 | `test-attempts/<連番>/collection*.json` / `collection.log` / `execution-collection.json` | 事前収集と本実行の収集結果・pytest終了コード |
 | `test-attempts/<連番>/logs/` | 各回に関連付けたCloudWatchログと回収状況 |
 | `logs-*/` | Lambda・runner・proxy・RDSのJSON Linesと、グループごとの回収状況 |
-| `inventory.json` / `remaining.json` | 削除前の識別情報と、最新の残存照会結果 |
+| `inventory.json` / `remaining.json` | 累積した既知の識別情報と、最新の残存照会結果 |
+| `destroy-attempts/<連番>/result.json` | 削除完了とコマンド全体の合否、工程・時刻・失敗理由、回収先 |
+| `destroy-attempts/<連番>/logs/` | 手動削除前のCloudWatchログと回収状況（一括実行は試験側ログを参照） |
+| `destroy-attempts/<連番>/known-resources.json` / `inventory.json` / `remaining.json` | 各回の既知ID、削除前と削除後の照会結果 |
+| `destroy-attempts/<連番>/*.log` / `destroy.tfplan` / `state-*.json` / `state-*.txt` | 各回のTerraformログ・削除plan・stateの確認結果 |
 | `outputs.json` / `inputs.tfvars.json` | 接続先・イメージdigest・source revision等の固定入力と出力（秘密値なし） |
 | `workspace/` / `manifest.json` / `aws.config` | 削除に再利用する定義、ハッシュ、SSOメタデータ（トークンなし） |
-| `create*.log` / `destroy*.log` | Terraformの構築・削除結果 |
+| `create*.log` / `destroy*.log` | Terraformの構築結果と旧形式の削除結果 |
 
 ケース別JSONはpytestのsetup・call・teardownの報告ごとに更新する。未開始は`not_run`、実行中は`running`、完了後は`passed`・`failed`・`skipped`等を記録する。中断して完了していないケースは成功にしない。最新結果は既存サマリーへ反映し、過去の`test-attempts`は上書きしない。
 保存済み定義や入力のハッシュが変わっていれば削除を止める。`.local/runs/<run_id>`は削除確認が終わるまで移動・編集・削除しない。`status`は最初に保存済みサマリーを表示してからAWSを照会するため、認証できなくても前回の結果は読める。照会不能は「残存なし」にしない。
 
-`aws-smoke`は試験・回収・削除・照会のどれかが失敗すると終了コード1を返す。手動の`destroy`と`status`は、それぞれ削除確認・最新の残存確認の成否を終了コードで返し、過去の試験結果は変更しない。CloudWatchへまだ到着していない診断ログまで全量回収できた保証ではなく、試験の合否は対応する完了記録とDB結果で判定する。
+`aws-smoke`は試験・回収・削除・照会のどれかが失敗すると終了コード1を返す。手動の`destroy`は今回のログ回収と削除確認、`status`は最新の残存確認の成否を終了コードで返し、過去の試験結果は変更しない。CloudWatchへまだ到着していない診断ログまで全量回収できた保証ではなく、試験の合否は対応する完了記録とDB結果で判定する。
 
 ## 費用の目安
 
