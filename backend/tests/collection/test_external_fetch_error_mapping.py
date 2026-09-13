@@ -39,7 +39,8 @@ from app.collection.external_fetch_errors import (
     FetchUnexpectedClientStatusError,
     FetchUnexpectedServerStatusError,
 )
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 
 
 @pytest.mark.parametrize(

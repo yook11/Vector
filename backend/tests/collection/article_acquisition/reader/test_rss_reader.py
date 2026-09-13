@@ -32,7 +32,8 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
     FetchSsrfBlockedError,
 )
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 
 _MOD = "app.collection.article_acquisition.reader.rss_reader"
 

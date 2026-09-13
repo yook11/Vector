@@ -40,8 +40,7 @@ acl Safe_ports port 80
 acl Safe_ports port 443
 acl CONNECT method CONNECT
 
-# app/shared/security/ssrf_guard.py の PublicIpAddress と同じ集合の写し。
-# **SSoT が 2 箇所になる。** 変更時は必ず両方を見る (テストで一致を固定する)。
+# 非公開レンジはapp/http/non_public_ranges.jsonを正本とし、アプリはPythonのIP判定も加える。
 acl to_private dst ${join(" ", private_v4_ranges)}
 acl to_private dst ${join(" ", private_v6_ranges)}
 

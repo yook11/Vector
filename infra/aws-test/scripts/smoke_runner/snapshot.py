@@ -63,7 +63,7 @@ def create(directory, run_id, runner_profile):
     for relative in [
         "infra/aws-test/scripts/wait-lambda-eni-deletion.py",
         "infra/aws/templates/squid.conf.tftpl",
-        "backend/app/shared/security/non_public_ranges.json",
+        "backend/app/http/non_public_ranges.json",
     ]:
         target = workspace / relative
         target.parent.mkdir(parents=True, exist_ok=True)

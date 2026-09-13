@@ -39,9 +39,10 @@ from app.collection.external_fetch_errors import (
     FetchResponseTooLargeError,
     FetchRobotsDisallowedError,
 )
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 from app.http.external import make_external_async_client
 from app.shared.security.safe_url import SafeUrl
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 logger = structlog.get_logger(__name__)
 
@@ -282,7 +283,7 @@ class ArticleScraper:
         """HTTP 取得を行い、失敗は ``ExternalFetchError`` として raise する。"""
         url_str = str(url)
 
-        # SSRF defense は make_external_async_client の event_hook で行う。
+        # 宛先検証は外部HTTPクライアントの標準transportが送信時に適用する。
         async with make_external_async_client(
             headers=HEADERS, timeout=HTTP_TIMEOUT
         ) as client:

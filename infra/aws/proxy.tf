@@ -48,12 +48,9 @@ locals {
     }
   })
 
-  # 非公開レンジの正本は **app 側のファイル 1 つ**。Squid はレンジの明示列挙しか
-  # 書けないので、ここから読んで conf を生成する。
-  # 一致は backend の TestNonPublicRangeParity が固定する
-  # (不変条件: proxy が拒否するものは app も必ず拒否する)。
+  # 非公開レンジの正本を共有し、TestNonPublicRangeParityでアプリも同じIPを拒否すると確認する。
   non_public_ranges = jsondecode(
-    file("${path.module}/../../backend/app/shared/security/non_public_ranges.json")
+    file("${path.module}/../../backend/app/http/non_public_ranges.json")
   )
 
   squid_conf = templatefile("${path.module}/templates/squid.conf.tftpl", {

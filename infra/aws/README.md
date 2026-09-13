@@ -133,7 +133,7 @@ bootstrapの継続更新は[専用ロールの手動手順](bootstrap-access/REA
 
 本体と`bootstrap/`それぞれで`terraform fmt -check`、`terraform init -backend=false -input=false -lockfile=readonly`、`terraform validate`、`terraform test`を実行する。モックテストはAWS providerを置き換え、架空のアカウント・ドメインを使用する。
 
-既存のbackend初期化情報・tfvars・stateと混ぜないよう、検証にはTerraformソース・lockfile・templates・testsのみを一時ディレクトリへコピーする。proxyが参照する`backend/app/shared/security/non_public_ranges.json`は相対配置を保つ。実環境のplanは既存のread-only経路で`-lock=false`を使い、SSMの値を取得しない。
+既存のbackend初期化情報・tfvars・stateと混ぜないよう、検証にはTerraformソース・lockfile・templates・testsのみを一時ディレクトリへコピーする。proxyが参照する`backend/app/http/non_public_ranges.json`は相対配置を保つ。実環境のplanは既存のread-only経路で`-lock=false`を使い、SSMの値を取得しない。
 
 ## 運用の帰結
 
@@ -221,12 +221,12 @@ private runbookには初期構築の前提を残し、通常migrationのロー�
   `src` ACL + 末尾の `deny all` は、その内側に残る自前設定 2 枚。
 - **外向きの送信元 IP は EIP で固定される。** `terraform output egress_public_ip`。
   proxy を再デプロイしても変わらないので、外部ベンダー側の allowlist に登録できる。
-- **非公開レンジの正本は app 側の 1 ファイル** (`backend/app/shared/security/
-  non_public_ranges.json`)。Terraform は `jsondecode(file(...))` で読んで
+- **非公開レンジの正本は app 側の 1 ファイル** (`backend/app/http/non_public_ranges.json`)。Terraform は `jsondecode(file(...))` で読んで
   squid.conf を生成し、app は実行時の判定に使う。**ポリシーの持ち主はアプリで、
-  Squid は写し**。一致は `TestNonPublicRangeParity` が固定する。
-  不変条件は等価ではなく **proxy の deny ⊆ app の deny**
-  (app が先に落とせば `ProxyError` への誤分類が起きない)。
+  Squid は写し**。アプリはPythonのIP判定も加え、`TestNonPublicRangeParity`は
+  同じIPについて **proxyの非公開レンジ拒否 ⊆ appの拒否** を確認する。
+  DNS解決結果の一致や、ドメイン・ポートを含む全拒否条件の一致は保証しない。
+  責任分担と通常のプロキシ経路は[HTTPの宛先方針](../../backend/app/http/README.md)を参照する。
 - **proxy が落ちると全 egress が止まり、Logfire も止まる。** 障害の観測は
   CloudWatch 側 (コンテナログは interface endpoint 経由で proxy を通らない) に
   置く。Logfire に寄せると循環する。

@@ -13,7 +13,7 @@ from enum import StrEnum
 import httpx
 from botocore import exceptions as botocore_errors
 
-from app.shared.security.ssrf_guard import HostResolutionError
+from app.http.destination_resolution import HostResolutionError
 
 
 class HttpTransportStage(StrEnum):

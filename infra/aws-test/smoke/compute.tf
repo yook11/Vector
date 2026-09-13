@@ -3,7 +3,7 @@ data "aws_ssm_parameter" "amazon_linux" {
 }
 locals {
   no_proxy          = join(",", ["localhost", "127.0.0.1", "169.254.169.254", "ssm.${local.region}.amazonaws.com", "ssmmessages.${local.region}.amazonaws.com", aws_db_instance.smoke.address])
-  non_public_ranges = jsondecode(file("${path.module}/../../../backend/app/shared/security/non_public_ranges.json"))
+  non_public_ranges = jsondecode(file("${path.module}/../../../backend/app/http/non_public_ranges.json"))
   runner_domains = [
     "api.ecr.${local.region}.amazonaws.com",
     local.registry,
