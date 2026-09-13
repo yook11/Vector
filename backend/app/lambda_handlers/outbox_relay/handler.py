@@ -4,11 +4,14 @@ import asyncio
 
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.curation.events import ArticleCuratedSignal
+from app.collection.events import AnalyzableArticleCreated
 from app.lambda_handlers.outbox_relay.execution import run_relay
 from app.lambda_handlers.outbox_relay.settings import (
     AssessmentOutboxRelaySettings,
+    CurationOutboxRelaySettings,
     EmbeddingOutboxRelaySettings,
 )
+from app.outbox.publishing.analyzable_created import build_analyzable_created_message
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.curated_signal import build_curated_signal_message
 from app.outbox.publishing.route import EventDeliveryRoute
@@ -32,5 +35,16 @@ def assessment_handler(event: object, context: object) -> dict[str, str]:
         event_type=ArticleCuratedSignal.EVENT_TYPE,
         queue_url=settings.sqs_article_assessment_queue_url,
         build_message=build_curated_signal_message,
+    )
+    return asyncio.run(run_relay(settings, route))
+
+
+def curation_handler(event: object, context: object) -> dict[str, str]:
+    """共通記事完成イベントをCurationキューへ配送する。"""
+    settings = CurationOutboxRelaySettings()  # type: ignore[call-arg]
+    route = EventDeliveryRoute(
+        event_type=AnalyzableArticleCreated.EVENT_TYPE,
+        queue_url=settings.sqs_article_curation_queue_url,
+        build_message=build_analyzable_created_message,
     )
     return asyncio.run(run_relay(settings, route))

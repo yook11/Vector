@@ -1,15 +1,15 @@
 # OutboxからSQSへの送信契約
 
-Status: Partially implemented
+Status: Curation・Assessment・Embeddingの配送入口を実装済み（Curationスライス5、2026-09-13）。AWS適用・通常経路切替は別工程。
 
 ## Problem
 
-保存済みOutboxイベントの検証・本文生成・配送先を配送定義で結び付け、共通SQS送信から工程固有の依存を分離する。Assessment向けとEmbedding向けに別々のLambda入口を用意し、イベントごとの受付成功・送信失敗を呼び出し元へ返す。
+保存済みOutboxイベントの検証・本文生成・配送先を配送定義で結び付け、共通SQS送信から工程固有の依存を分離する。Curation・Assessment・Embedding向けに別々のLambda入口を用意し、イベントごとの受付成功・送信失敗を呼び出し元へ返す。
 
 ## Evidence
 
 - イベント本体: `backend/app/models/outbox_event.py`
-- 既存payload定義: `backend/app/collection/{article_acquisition,article_completion}/events.py`、`backend/app/analysis/{curation,assessment}/events.py`
+- 既存payload定義: `backend/app/collection/events.py`、`backend/app/collection/article_acquisition/events.py`、`backend/app/analysis/{curation,assessment}/events.py`
 - キューと設定: `infra/aws/outbox_relay.tf`、`backend/app/lambda_handlers/outbox_relay/settings.py`
 
 ## Invariants
@@ -40,15 +40,16 @@ MessageBodyは次の5項目を持つJSONオブジェクトとする。
 
 ### 送信先
 
-Standardキューを使用し、event_typeから送信先を決定する。Queue URLは設定層から取得し、payloadには含めない。以下は工程全体の送信先対応であり、コード上の配送入口は`article.curated_signal`から`article-assessment`、`article.assessed_in_scope`から`article-embedding`への2種類を実装している。Assessment向けの別Lambdaと定期起動はAWSへ未接続。
+Standardキューを使用し、event_typeから送信先を決定する。Queue URLは設定層から取得し、payloadには含めない。以下は工程全体の送信先対応であり、コード上の配送入口はCuration・Assessment・Embeddingの3種類を実装している。CurationのAWS接続・定期起動と通常経路切替は後続スライスで行う。
 
 | event_type | キューの接尾辞 |
 |---|---|
 | `article.incomplete_recorded` | `article-completion` |
-| `article.acquired` | `article-curation` |
-| `article.completed_to_analyzable` | `article-curation` |
+| `article.analyzable_created` | `article-curation` |
 | `article.curated_signal` | `article-assessment` |
 | `article.assessed_in_scope` | `article-embedding` |
+
+`article.analyzable_created`は取得・本文補完の共通イベントで、version 1、payloadは`analyzable_article_id`だけとする。旧`article.acquired`・`article.completed_to_analyzable`はCuration relayの配送対象に含めず、保存済み行を変更しない。
 
 実際のキュー名には既存の`name_prefix`を付ける。用途別のLambda入口が`EventDeliveryRoute`を所有し、イベント種別・自分のキューURL・本文生成処理の対応を各入口で1か所に定義する。同じ定義をPublisherとrelayの取得条件に渡す。未登録種別の取得や複数配送先の巡回は行わない。停止・再試行の判断は別途定める。
 
@@ -75,14 +76,15 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 
 `SqsSender.from_session(session, region)`が共通送信部品を構築し、`send_batch(queue_url=..., messages=...)`で生成済みのEventMessageを受け取る。EventEnvelopeや各工程のイベント型・キュー対応を参照しない。`SqsMessage.from_message`は本文を変更せず、サイズ検証とMD5計算だけを担当する。SqsMessageBatchは1〜10件・型・ID重複・個別と合計サイズを検証する。個別サイズ超過は除外して正常分を送り、合計超過などのバッチ違反は送信前に拒否する。旧SqsEventPublisherと旧from_eventの互換名は設けない。
 
-ベクトル生成向けのrelayとLambda入口を接続済みである。他工程への展開、AWS上での実行検証、本番適用・定期起動の有効化は未実施。
+3工程のrelayとLambda入口をコード上で接続済みである。`curation_handler`は`CurationOutboxRelaySettings.sqs_article_curation_queue_url`を使い、`build_analyzable_created_message`が共通Envelopeによる検証と本文生成を担う。CurationのAWS上での実行検証、本番適用・定期起動の有効化は未実施。
 
 ## Verification
 
 - `tests/outbox/publishing/`: 配送定義、実Embedding契約による非送信、生成失敗と送信結果の統合、メッセージ対応、既存JSONの保持を確認する。工程に依存しないイベントと本文でも配送できることを保証する。
 - `tests/outbox/sqs/`: 生成済み本文と指定キューを直接入力し、サイズ・件数・MD5・AWS応答・通信障害・終了処理の既存保証を確認する。
 - イベントの詳細検証は既存のイベント契約テストが担当し、送受信のreason・issues一致は本文生成と受信解析を直接呼んで確認する。Publisher側で不正項目の全組合せを再検証しない。
-- relayの既存DBテストは注入したイベント種別の利用を確認する。新しいDB網羅テストや`local_tests/`の全体シナリオは追加しない。既存のlocal_tests本文fixtureだけを新しい生成入口へ接続する。
+- relayの既存DBテストは共通の確保・保存・再試行を確認する。Curationの追加統合テストは正常・不正・旧種別の選択と代表的通信失敗への接続を確認し、共通規則を再度網羅しない。
+- `local_tests/curation/test_delivery.py`で取得・本文補完から実relay、送信本文、Curation Lambda、結果保存までを接続する。正常時のイベント本文・ID・時刻・配送先の保証はここに集約し、同じ正常系の部品テストを追加しない。
 - DBの保存・ロック・接続解放は既存DBテスト、AWS権限と実配送は実AWSスモークの責任とする。今回実AWSスモークは実行しない。
 
 スライス②完了時点でlint・format、全単体テスト5,572件、integration test 1,217件（22件skip）が成功した。AWS上での送信確認・デプロイは行っていない。

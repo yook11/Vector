@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.lambda_handlers.outbox_relay.settings import (
     AssessmentOutboxRelaySettings,
+    CurationOutboxRelaySettings,
     EmbeddingOutboxRelaySettings,
 )
 
@@ -43,6 +44,7 @@ def relay_environment(monkeypatch):
     [
         (EmbeddingOutboxRelaySettings, "sqs_article_embedding_queue_url"),
         (AssessmentOutboxRelaySettings, "sqs_article_assessment_queue_url"),
+        (CurationOutboxRelaySettings, "sqs_article_curation_queue_url"),
     ],
 )
 def test_requires_only_its_destination(

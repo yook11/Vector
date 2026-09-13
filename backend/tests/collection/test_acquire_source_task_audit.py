@@ -538,13 +538,7 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
             )
         )
     ).all()
-    outbox = (
-        await db_session.scalars(
-            select(OutboxEvent.event_type).where(
-                OutboxEvent.payload["source_id"].as_integer() == vb_source.id
-            )
-        )
-    ).all()
+    outbox = (await db_session.scalars(select(OutboxEvent.event_type))).all()
     events = (
         await db_session.scalars(
             select(PipelineEvent).where(PipelineEvent.source_id == vb_source.id)
@@ -552,7 +546,10 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
     ).all()
     if scenario == "partial_success":
         assert len(article_ids) == len(incomplete_ids) == 1
-        assert sorted(outbox) == ["article.acquired", "article.incomplete_recorded"]
+        assert sorted(outbox) == [
+            "article.analyzable_created",
+            "article.incomplete_recorded",
+        ]
         assert sorted(row.outcome_code for row in events) == [
             "article_created",
             "incomplete_article_created",

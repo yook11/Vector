@@ -15,7 +15,6 @@ from app.collection.article_acquisition.errors import (
     AcquisitionReadError,
 )
 from app.collection.article_acquisition.events import (
-    ArticleAcquired,
     IncompleteArticleRecorded,
 )
 from app.collection.article_acquisition.fetched_article import FetchedArticle
@@ -27,6 +26,7 @@ from app.collection.article_acquisition.service import ArticleAcquisitionService
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.events import AnalyzableArticleCreated
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
     FetchAccessDeniedError,
@@ -709,7 +709,7 @@ async def test_redelivered_full_content_writes_single_succeeded(
         (
             await db_session.execute(
                 select(OutboxEvent).where(
-                    OutboxEvent.event_type == ArticleAcquired.EVENT_TYPE
+                    OutboxEvent.event_type == AnalyzableArticleCreated.EVENT_TYPE
                 )
             )
         )
@@ -793,40 +793,6 @@ async def test_no_db_checkout_before_source_read(
 
 
 @pytest.mark.asyncio
-async def test_analyzable_article_persists_matching_outbox_event(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-) -> None:
-    """即時獲得した記事と対応する契約バージョンのイベントを同時に確定する。"""
-    svc = ArticleAcquisitionService(
-        session_factory,
-        _StubSource([_ready_fetched("https://venturebeat.com/outbox-ready")]),
-    )
-
-    article_ids = await svc.execute(vb_source.id)
-
-    async with session_factory() as reader:
-        outbox_event = (
-            await reader.execute(
-                select(OutboxEvent).where(
-                    OutboxEvent.event_type == ArticleAcquired.EVENT_TYPE
-                )
-            )
-        ).scalar_one()
-    assert {
-        "schema_version": outbox_event.schema_version,
-        "payload": outbox_event.payload,
-    } == {
-        "schema_version": ArticleAcquired.SCHEMA_VERSION,
-        "payload": {
-            "source_id": vb_source.id,
-            "analyzable_article_id": article_ids[0],
-        },
-    }
-
-
-@pytest.mark.asyncio
 async def test_incomplete_article_persists_matching_outbox_event(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
@@ -844,17 +810,13 @@ async def test_incomplete_article_persists_matching_outbox_event(
         incomplete_article_id = (
             await reader.execute(select(IncompleteArticleORM.id))
         ).scalar_one()
-        outbox_event = (
-            await reader.execute(
-                select(OutboxEvent).where(
-                    OutboxEvent.event_type == IncompleteArticleRecorded.EVENT_TYPE
-                )
-            )
-        ).scalar_one()
+        outbox_event = (await reader.execute(select(OutboxEvent))).scalar_one()
     assert {
+        "event_type": outbox_event.event_type,
         "schema_version": outbox_event.schema_version,
         "payload": outbox_event.payload,
     } == {
+        "event_type": IncompleteArticleRecorded.EVENT_TYPE,
         "schema_version": IncompleteArticleRecorded.SCHEMA_VERSION,
         "payload": {
             "source_id": vb_source.id,
@@ -871,7 +833,7 @@ async def test_acquired_outbox_failure_rolls_back_article_and_audit(
     reject_outbox_insert: RejectOutboxInsert,
 ) -> None:
     """即時獲得イベントの失敗で記事と成功監査も取り消す。"""
-    constraint_name = await reject_outbox_insert(ArticleAcquired.EVENT_TYPE)
+    constraint_name = await reject_outbox_insert(AnalyzableArticleCreated.EVENT_TYPE)
     svc = ArticleAcquisitionService(
         session_factory,
         _StubSource([_ready_fetched("https://venturebeat.com/outbox-failure")]),

@@ -13,7 +13,6 @@ from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.completion_failure import (
     CompletionRejection,
 )
-from app.collection.article_completion.events import ArticleCompletedToAnalyzable
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
 )
@@ -32,6 +31,7 @@ from app.collection.article_completion.scraper import (
     ScrapedContent,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.events import AnalyzableArticleCreated
 from app.models.outbox_event import OutboxEvent
 
 logger = structlog.get_logger(__name__)
@@ -88,16 +88,13 @@ class ArticleCompletionService:
                     ready=ready, outcome=outcome, advanced=article
                 )
                 if isinstance(outcome, CompletionSucceeded):
-                    event = ArticleCompletedToAnalyzable(
-                        incomplete_article_id=ready.incomplete_article_id,
+                    event = AnalyzableArticleCreated(
                         analyzable_article_id=outcome.analyzable_article_id,
                     )
                     session.add(
                         OutboxEvent(
-                            event_type=ArticleCompletedToAnalyzable.EVENT_TYPE,
-                            schema_version=(
-                                ArticleCompletedToAnalyzable.SCHEMA_VERSION
-                            ),
+                            event_type=AnalyzableArticleCreated.EVENT_TYPE,
+                            schema_version=AnalyzableArticleCreated.SCHEMA_VERSION,
                             payload=event.model_dump(mode="json"),
                         )
                     )

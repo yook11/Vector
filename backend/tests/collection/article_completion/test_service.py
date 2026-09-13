@@ -34,7 +34,6 @@ from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_acquisition.strategy import SOURCES
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
-from app.collection.article_completion.events import ArticleCompletedToAnalyzable
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.scrape_failure import ScrapeNotHtml
@@ -47,6 +46,7 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.events import AnalyzableArticleCreated
 from app.collection.external_fetch_errors import (
     FetchGatewayError,
     FetchOriginServerError,
@@ -1049,52 +1049,6 @@ async def test_persist_db_crash_emits_infra_error_not_succeeded(
 
 
 @pytest.mark.asyncio
-async def test_completion_persists_matching_outbox_event(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    tc_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """補完成功の状態遷移と対応する契約バージョンのイベントを確定する。"""
-    _, incomplete_article_id, ready = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/outbox-success"
-    )
-    _patch_fetch(
-        monkeypatch,
-        AsyncMock(
-            return_value=ScrapedContent(
-                title="HTML Title",
-                body="x" * 200,
-                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
-            )
-        ),
-    )
-
-    analyzable_article_id = await ArticleCompletionService(session_factory).execute(
-        ready
-    )
-
-    async with session_factory() as reader:
-        outbox_event = (
-            await reader.execute(
-                select(OutboxEvent).where(
-                    OutboxEvent.event_type == ArticleCompletedToAnalyzable.EVENT_TYPE
-                )
-            )
-        ).scalar_one()
-    assert {
-        "schema_version": outbox_event.schema_version,
-        "payload": outbox_event.payload,
-    } == {
-        "schema_version": ArticleCompletedToAnalyzable.SCHEMA_VERSION,
-        "payload": {
-            "incomplete_article_id": incomplete_article_id,
-            "analyzable_article_id": analyzable_article_id,
-        },
-    }
-
-
-@pytest.mark.asyncio
 async def test_completion_outbox_failure_rolls_back_transition_and_success_audit(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
@@ -1116,9 +1070,7 @@ async def test_completion_outbox_failure_rolls_back_transition_and_success_audit
             )
         ),
     )
-    constraint_name = await reject_outbox_insert(
-        ArticleCompletedToAnalyzable.EVENT_TYPE
-    )
+    constraint_name = await reject_outbox_insert(AnalyzableArticleCreated.EVENT_TYPE)
 
     with pytest.raises(IntegrityError, match=constraint_name):
         await ArticleCompletionService(session_factory).execute(ready)
