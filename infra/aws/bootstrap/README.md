@@ -222,3 +222,21 @@ push用roleはbuild専用repository secretのままにする。migration / rollo
 2026-09-10の調査では`vector-deploy`/`vector-plan`のSSO資格情報取得がNo accessだった。
 ローカル確認にはIdentity Centerの割り当てを確認する必要がある。applyは既存のGitHub承認経路を使い、
 このために信頼ポリシーを広げない。現時点ではAWS未適用のため、上記の実CI読戻し・再planは未完了。
+
+## Curationの権限追加（スライス6前半）
+
+Curation Consumer・relay・Schedulerの3ロールに専用boundaryを追加する。Consumerは専用SQS受信・Gemini SSM参照・`vector_app`のRDS IAM認証、relayはCurationキュー送信・同DB認証、Schedulerは専用relayの呼び出しに限定する。権限昇格拒否と関数コードからのENI操作拒否は維持する。
+
+既存CIの管理対象、PassRole、SQS/DLQ・Scheduler、Lambda設定読戻しの対象ARN一覧へCurationだけを追加する。`ci-apply-curation-consumer`をapplyロールへ取り付け、関数ARN・Consumerタグでmapping管理を限定する。production承認と秘密情報の値の読取禁止は変更しない。
+
+inline 10,240文字／managed 6,144文字の上限を守るため、boundary固定Denyを以下へ配置する。拒否の内容は変えず、mock planで全ロール分が1件ずつ残ることを検証する。
+
+| 固定対象 | 配置先 |
+|---|---|
+| 共通Outbox relay／Scheduler | `ci-apply-outbox` |
+| Embedding Consumer | `ci-apply-embedding-consumer` |
+| Assessment Consumer／relay／Scheduler | `ci-apply-assessment-consumer` |
+| Curation Consumer／relay／Scheduler | `ci-apply-curation-consumer` |
+| その他の既存ロール | 既存apply inline policy |
+
+移動先managed policyの更新・取り付けを移動元の更新より先に行う`depends_on`を持つため、`-target`による部分適用は行わない。本体より先にbootstrap全体を既存管理者経路で適用し、その後[本体の適用手順](../README.md#curationの配置スライス6前半)へ進む。今回、AWSへの適用・SecureStringの登録・Consumer／relayの有効化は未実施。

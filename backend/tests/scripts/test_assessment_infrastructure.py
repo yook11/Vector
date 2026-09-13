@@ -1,4 +1,4 @@
-"""Assessmentの2つのイメージを独立して保持し、CIが解決失敗時に停止することを確認する。"""
+"""Assessmentのdigest契約と、Assessment／CurationのCI接続を確認する。"""
 
 import json
 import os
@@ -84,20 +84,24 @@ def test_invalid_relay_state_does_not_emit_partial_configuration():
     assert result.stdout == ""
 
 
+@pytest.mark.parametrize("stage", ["assessment", "curation"])
 @pytest.mark.parametrize(
     "workflow", ["aws-terraform-plan.yml", "aws-terraform-apply.yml"]
 )
 @pytest.mark.parametrize("state_fails", [False, True])
 def test_ci_preserves_both_images_or_stops_before_writing_settings(
-    tmp_path, workflow, state_fails
+    tmp_path, workflow, state_fails, stage
 ):
     """実CIのshellが両版を保持し、state取得失敗時は設定を配置せず停止する。"""
     doc = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
     job = doc["jobs"]["plan" if "plan" in workflow else "apply"]
-    step = next(s for s in job["steps"] if "Assessment images" in s.get("name", ""))
+    step = next(
+        s for s in job["steps"] if f"{stage.title()} images" in s.get("name", "")
+    )
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    (scripts / SCRIPT.name).write_text(SCRIPT.read_text())
+    script = SCRIPT.with_name(f"resolve-{stage}-images.py")
+    (scripts / script.name).write_text(script.read_text())
     binaries = tmp_path / "bin"
     binaries.mkdir()
     (binaries / "python3").symlink_to(sys.executable)
@@ -105,7 +109,9 @@ def test_ci_preserves_both_images_or_stops_before_writing_settings(
     terraform.write_text(
         "#!/bin/sh\nexit 42\n"
         if state_fails
-        else "#!/bin/sh\ncat <<'JSON'\n" + json.dumps(deployed_state()) + "\nJSON\n"
+        else "#!/bin/sh\ncat <<'JSON'\n"
+        + json.dumps(deployed_state()).replace("assessment", stage)
+        + "\nJSON\n"
     )
     terraform.chmod(0o755)
     result = subprocess.run(  # noqa: S603
@@ -120,22 +126,23 @@ def test_ci_preserves_both_images_or_stops_before_writing_settings(
         text=True,
         timeout=10,
     )
-    settings = tmp_path / "assessment.auto.tfvars.json"
+    settings = tmp_path / f"{stage}.auto.tfvars.json"
     if state_fails:
         assert result.returncode != 0
         assert not settings.exists()
     else:
         assert result.returncode == 0, result.stderr
         assert json.loads(settings.read_text()) == {
-            "assessment_consumer_image_digest": CONSUMER,
-            "assessment_outbox_relay_image_digest": RELAY,
+            f"{stage}_consumer_image_digest": CONSUMER,
+            f"{stage}_outbox_relay_image_digest": RELAY,
         }
-    assert not list(tmp_path.glob("assessment-vars.*"))
+    assert not list(tmp_path.glob(f"{stage}-vars.*"))
 
 
+@pytest.mark.parametrize("stage", ["assessment", "curation"])
 @pytest.mark.parametrize("relay_image_exists", [True, False])
 def test_apply_requires_both_requested_images_in_backend_ecr(
-    tmp_path, relay_image_exists
+    tmp_path, relay_image_exists, stage
 ):
     """Consumerのイメージが存在しても、指定したrelayイメージがなければ適用前に停止する。"""
     doc = yaml.safe_load(
@@ -144,15 +151,18 @@ def test_apply_requires_both_requested_images_in_backend_ecr(
     step = next(
         s
         for s in doc["jobs"]["apply"]["steps"]
-        if s.get("name") == "Resolve Assessment images"
+        if s.get("name") == f"Resolve {stage.title()} images"
     )
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    (scripts / SCRIPT.name).write_text(SCRIPT.read_text())
+    script = SCRIPT.with_name(f"resolve-{stage}-images.py")
+    (scripts / script.name).write_text(script.read_text())
     binaries = tmp_path / "bin"
     binaries.mkdir()
     (binaries / "python3").symlink_to(sys.executable)
-    (tmp_path / "state.json").write_text(json.dumps(deployed_state()))
+    (tmp_path / "state.json").write_text(
+        json.dumps(deployed_state()).replace("assessment", stage)
+    )
     terraform = binaries / "terraform"
     terraform.write_text(
         '#!/bin/sh\nif [ "$1" = state ]; then\ncat state.json\nelse\n'
@@ -186,7 +196,7 @@ def test_apply_requires_both_requested_images_in_backend_ecr(
     )
     assert (result.returncode == 0) is relay_image_exists, result.stderr
     if relay_image_exists:
-        assert json.loads((tmp_path / "assessment.auto.tfvars.json").read_text()) == {
-            "assessment_consumer_image_digest": NEXT,
-            "assessment_outbox_relay_image_digest": RELAY,
+        assert json.loads((tmp_path / f"{stage}.auto.tfvars.json").read_text()) == {
+            f"{stage}_consumer_image_digest": NEXT,
+            f"{stage}_outbox_relay_image_digest": RELAY,
         }

@@ -62,7 +62,7 @@ resource "aws_iam_policy" "apply_embedding_consumer" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid    = "ManageEmbeddingFunction"
         Effect = "Allow"
@@ -125,7 +125,7 @@ resource "aws_iam_policy" "apply_embedding_consumer" {
           "ForAllValues:StringEquals" = { "aws:TagKeys" = ["Project", "ManagedBy"] }
         }
       },
-    ]
+    ], [local.boundary_pairing_statements_by_group.EmbeddingConsumerLambda])
   })
 }
 

@@ -1,6 +1,6 @@
 # CurationConsumer — 分析可能な記事の完成イベントによる本文整形
 
-Status: スライス1〜5を実装・検証済み（2026-09-13）。記事完成イベントの発行・配送まで接続した。Curation通常経路の切替はスライス6とし、AWSへの適用は未実施。
+Status: スライス1〜5とスライス6前半（Terraform・bootstrap・CI定義）を実装・ローカル検証済み。AWSへの適用・キー登録・Consumer／relayの有効化・通常経路切替は未実施（2026-09-13）。
 
 ## Problem
 
@@ -120,8 +120,8 @@ Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類�
 - Curatorは準備済みGeminiクライアントを借用する。モデル・プロンプト・結果schemaの変更は目的に含めない。
 - SSMからの秘密情報取得、RDS IAM・TLS接続、Engine・session factory、AIクライアントの生成終了をLambda呼び出し単位で管理する。AI応答待ちにDB接続・トランザクション・ロックを保持しない。
 - Geminiのクライアント管理は`open_gemini_client`、Lambdaの資源管理は既存`open_article_analysis_consumer`を使う。通信タイムアウトは全工程でconnect 3秒・read 10秒・write 10秒・pool 3秒とし、Gemini SDKの試行回数1、HTTP transportの再試行0を維持する。Curation専用の時間設定は追加しない。
-- 初期設定案は既存Consumerに揃え、業務処理60秒、Lambda120秒、SQS可視性720秒、受信バッチ1件、最大同時実行10、5回受信後に専用DLQへ移動とする。業務期限の外で失敗後処理を行う。
-- Curation専用Consumer・relay・実行権限・必要な通信経路・秘密情報の参照先・DLQを定義する。既存Curationキューの資源を利用し、relayの起動は既存と同じ1分間隔を初期案とする。
+- 設定は既存Consumerに揃え、業務処理60秒、Lambda120秒、SQS可視性720秒、受信バッチ1件、最大同時実行10、5回受信後に専用DLQへ移動とする。業務期限の外で失敗後処理を行う。
+- Curation専用Consumer・relay・実行権限・必要な通信経路・秘密情報の参照先・DLQを定義する。既存Curationキューの資源を利用し、relayの起動は既存と同じ1分間隔とする。
 - インフラ実装時に公式ドキュメントと既存設定を確認し、時間・同時実行・権限の整合性を検証する。新しい依存パッケージやDB schema変更は前提にしない。
 
 ## 旧Taskiqとの境界
@@ -160,7 +160,8 @@ Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類�
 | 3. Curation Consumer | 共通記事完成イベント型、DB事実取得、Ready構築、Service、Ready拒否の理由記録、失敗後処理 | AI前の接続返却、Ready拒否・処理済みのAI非実行、記事削除・hold・予算なし、元例外保持 |
 | 4. Curation Lambda受信 | Geminiの借用、設定・資源管理、SQS・イベント検証、部分バッチ応答 | Ready拒否のmessageIdを失敗一覧へ含めないこと、資源終了、複数呼び出しでの独立性 |
 | 5. 記事完成イベントの発行と配送 | スライス3の共通型による上流2箇所の発行、Curation relay | 両発行元の同一契約、記事とOutboxの原子性、旧種別の非受信、保存済みID・時刻の維持 |
-| 6. インフラ・通常経路の切替 | Consumer／relay／SQS／DLQ／Scheduler／IAM、上流kiqの終了 | 定義の接続、旧救済の存続、新経路からTaskiqを呼ばないこと |
+| 6前半. インフラ定義と適用経路 | Terraform／bootstrap／既存plan・apply workflow、digest保持 | AWSを変更せず配置・通信・権限・有効化条件をmock planとCLIで検証 |
+| 6後半. AWS適用と通常経路切替 | 基盤・キー準備、Consumer／relay有効化、上流kiqの終了 | 実CI権限・配送・DLQ・通知、旧救済の存続、新経路からTaskiqを呼ばないこと |
 
 スライス1はCurationだけの変更として済ませず、既存Assessment／Embeddingの受信完了まで変更・検証する。スライス3・4でCurationを同じ契約へ接続し、3工程すべての適合を今回のDoneとする。
 
@@ -292,3 +293,40 @@ Invariantsは、両発行元の同一契約、保存の原子性、保存済み�
 Doneは、両発行元からCuration保存までの接続、原子性、対象種別の限定、失敗時の共通契約への接続を重複を抑えたテストで保証すること。実装開始時に最新`main`（`5bf4a5b7b607cd90684318a70e4705f9b505ad91`）から`codex/curation-delivery`へ分離し、他作業のローカル変更は取り込まない。
 
 実装・検証結果（2026-09-13）: スライス5は完了。Ruffのlint・format、全単体6,784件、`make test-integration`の全DB統合1,434件、`make test-local`のmigration適用済みDBテスト81件が成功した。最終assert補強後にCurationの経路テストと未完成記事の非発行テストを再確認した。各専用DB・Redis・ネットワークは終了処理で削除済み。AWSへの適用と通常経路の切替は未実施。
+
+## スライス6前半: CurationのTerraform・bootstrap・CI定義（2026-09-13）
+
+Problemは、実装済みのCuration Consumerとrelayを既存GitHub ActionsのTerraform plan／applyから配置できるようにすること。EvidenceはAssessment／Embeddingの本体・bootstrap定義、Curationのhandler／Settings、既存digest保持スクリプトとworkflow。
+
+### 配置と不変条件
+
+| 資源 | 契約 |
+|---|---|
+| Consumer | `${name_prefix}-curation-consumer`、arm64、1,024MB、120秒、予約同時実行10、`app.lambda_handlers.curation.handler.handler` |
+| relay | `${name_prefix}-curation-outbox-relay`、arm64、512MB、120秒、予約同時実行1、`app.lambda_handlers.outbox_relay.curation_handler` |
+| 元キュー | 既存`outbox["curation"]`を維持、保持4日、可視性720秒、maxReceiveCount=5 |
+| DLQ | `${name_prefix}-article-curation-dlq`、保持14日、元キューだけのredriveを許可、可視メッセージ1件以上で既存SNSへ通知 |
+| 受信 | バッチ1、待機0秒、最大同時実行10、`ReportBatchItemFailures` |
+| Scheduler | 専用グループ・実行ロール、1分間隔 |
+
+Consumerはprimary AZの`cidrsubnet(var.vpc_cidr, 8, 32)`から既存appルートテーブルを使用する。SGの送信先はRDS:5432、既存proxy、SSM endpoint:443だけとし、proxyはGeminiの既存許可ドメインだけを通す。relayは既存APIサブネット・Outbox SG・SQS endpointを使用し、実行ロールとendpoint policyの両方でCurationキューへの送信に限定する。両LambdaはIAM認証の`vector_app`と既存TLS、backend ECRのdigestイメージを使用する。キューの暗号化・TLS強制・送信元endpoint制限を維持する。
+
+Geminiキーは`/${name_prefix}/curation-consumer/gemini-api-key`を参照する。実値をTerraformで作成・読取・管理せず、state・変数・ログへ入れない。各実行ロールに専用boundaryを付け、既存の権限昇格拒否・関数コードからのENI操作拒否を維持する。
+
+### 有効化と既存CI
+
+`curation_consumer_image_digest`と`curation_outbox_relay_image_digest`は既定nullで、指定時は小文字16進64桁のSHA-256 digestのみ受理する。Consumer指定時は関数と有効なSQS mapping、relay指定時は関数と有効なscheduleを作成する。追加の有効化フラグは設けず、基盤・ロール・ログ・キューはdigest未指定でも作成する。
+
+`resolve-curation-images.py`が「明示指定 → stateの現行digest → 初回のnull」の順に両変数を解決する。どちらかが不正なら設定JSONを一切出力しない。planは現行値を保持し、applyは2つの任意入力を受け付け、明示digestのbackend ECR内存在も確認する。生成成功後に一時ファイルを配置し、入力省略による稼働中Lambdaの削除を防ぐ。production承認を含む既存GitHub Actions経路を維持する。
+
+CI権限は関数・キュー・Scheduler・ロールを完全列挙し、mappingは関数ARNとConsumerタグで拘束する。容量上限のため、既存Embeddingのboundary固定DenyをEmbedding管理policyへ、Assessmentの3ロール分をAssessment管理policyへ移し、Curationの3ロール分はCuration管理policyへ置く。拒否条件を移動先へ反映・取り付けてから移動元を更新し、全Denyが1件ずつ残ることとinline／managed policy容量を検証する。
+
+### 検証と完了条件
+
+本体のmock planでdigest未指定・Consumerのみ・両方指定、配送対象・時間設定・通信・SSM参照を検証する。bootstrapでは専用boundary、CIの対象範囲、既存Denyの保持、policy容量を検証する。CLIテストでは初回・現行保持・片側更新・切り戻し・不正入力時の出力非生成を確認する。Assessment／Embeddingの既存テストは追加資源の許可一覧だけを更新し、元の制約を維持する。
+
+検証は実state・tfvarsを含まない一時ディレクトリで本体／bootstrapのfmt・init（backend無効、lockfile変更なし）・validate・testを実行し、Pythonのlint・format・スクリプトテストとworkflow構文も確認する。業務処理の保存・拒否・再配信応答・資源管理はスライス1〜5のテストへ任せ、今回backend業務テストを重複実行しない。
+
+Doneは、AWSを変更せず配置・通信・権限・digest保持・有効化の定義と適用手順を検証できること。Non-goalsはAWS適用、秘密情報登録、通常経路有効化、上流Taskiq終了、救済・hold・日次上限・CLI整理、DB schema・API・依存パッケージ変更。後続の適用順序は[運用手順](../../infra/aws/README.md#curationの配置スライス6前半)に従う。
+
+検証結果（2026-09-13、Terraform 1.15.8）: 本体19件・bootstrap11件のmock plan、digestスクリプト11件、既存のAssessment／EmbeddingとCurationのCI接続を含むインフラテスト41件が成功。変更PythonのRuff lint・format、本体／bootstrapと変更テストのTerraform fmt、backend無効init・validateを実施した。actionlintは既存`queue: max`の未対応警告だけを除外して成功し、当該設定をGitHub公式仕様と照合した。本体validateには既存Cloud Mapの`failure_threshold`非推奨警告が残る。実AWS・実state・実tfvarsは使用せず、DB業務テストは今回の範囲外として未実行。
