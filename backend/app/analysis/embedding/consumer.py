@@ -59,9 +59,12 @@ class EmbeddingConsumer:
                 build_result = ReadyForEmbedding.from_facts(
                     event.analyzed_article_id, facts
                 )
-                if not isinstance(build_result, EmbeddingReadyBuildRejected):
+                if isinstance(build_result, EmbeddingReadyBuildRejected):
+                    if build_result.reason.is_idempotent_skip:
+                        return EmbeddingCompletion.ALREADY_EMBEDDED
+                    rejected = build_result
+                else:
                     ready, analyzable_article_id = build_result
-
                     return await self._service.execute(
                         ready,
                         self._embedder,
@@ -89,10 +92,6 @@ class EmbeddingConsumer:
                     # 後処理とログが失敗しても元の処理例外を維持する。
                     pass
             raise
-
-        rejected = build_result
-        if rejected.reason.is_idempotent_skip:
-            return EmbeddingCompletion.ALREADY_EMBEDDED
 
         await self._failure_handler.handle_ready_build_rejected(
             analyzed_article_id=event.analyzed_article_id, rejected=rejected

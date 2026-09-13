@@ -58,9 +58,14 @@ class AssessmentConsumer:
                         analyzable_article_id = facts.analyzable_article_id
 
                 build_result = ReadyForAssessment.from_facts(event.curation_id, facts)
-                if not isinstance(build_result, AssessmentReadyBuildRejected):
+                if isinstance(build_result, AssessmentReadyBuildRejected):
+                    if build_result.reason.is_idempotent_skip:
+                        return AssessmentCompletion(
+                            AssessmentCompletionKind.ALREADY_ASSESSED
+                        )
+                    rejected = build_result
+                else:
                     ready, analyzable_article_id = build_result
-
                     return await self._service.execute(
                         ready,
                         self._assessor,
@@ -88,10 +93,6 @@ class AssessmentConsumer:
                     # 後処理とログが失敗しても元の処理例外を維持する。
                     pass
             raise
-
-        rejected = build_result
-        if rejected.reason.is_idempotent_skip:
-            return AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
 
         await self._failure_handler.handle_ready_build_rejected(
             curation_id=event.curation_id, rejected=rejected
