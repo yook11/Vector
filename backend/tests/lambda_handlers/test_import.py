@@ -15,6 +15,7 @@ pytestmark = pytest.mark.unit
     [
         ("outbox_relay", "handler", "embedding_handler"),
         ("outbox_relay", "assessment_handler", "assessment_handler"),
+        ("outbox_relay", "curation_handler", "curation_handler"),
         ("embedding", "handler", "handler"),
         ("curation", "handler", "handler"),
     ],
@@ -39,14 +40,14 @@ def test_handler_loads_with_only_database_and_queue_settings() -> None:
             "-c",
             "from app.lambda_handlers.outbox_relay import handler; "
             "from app.lambda_handlers.outbox_relay.settings "
-            "import EmbeddingOutboxRelaySettings; "
+            "import EmbeddingOutboxRelaySettings, CurationOutboxRelaySettings; "
             "from importlib import import_module; "
             "assert callable(handler); "
             "module, name = 'app.lambda_handlers.outbox_relay.handler'.rsplit('.', 1); "
             "assert getattr(import_module(module), name) is handler; "
             "assert import_module(module + '.handler').embedding_handler is handler; "
             "import sys; "
-            "EmbeddingOutboxRelaySettings(); "
+            "EmbeddingOutboxRelaySettings(); CurationOutboxRelaySettings(); "
             "assert 'app.config' not in sys.modules; "
             "assert 'app.main' not in sys.modules; "
             "assert not any(m.startswith('app.queue') for m in sys.modules)",
@@ -63,6 +64,7 @@ def test_handler_loads_with_only_database_and_queue_settings() -> None:
             "MIGRATION_DATABASE_URL": "invalid-unused-url",
             "AUTH_RETENTION_DATABASE_URL": "invalid-unused-url",
             "SQS_ARTICLE_EMBEDDING_QUEUE_URL": "https://sqs.invalid/EMBEDDING",
+            "SQS_ARTICLE_CURATION_QUEUE_URL": "https://sqs.invalid/CURATION",
         },
         capture_output=True,
         text=True,

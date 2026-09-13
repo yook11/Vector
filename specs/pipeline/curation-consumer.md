@@ -1,6 +1,6 @@
 # CurationConsumer — 分析可能な記事の完成イベントによる本文整形
 
-Status: スライス1〜4を実装・検証済み（2026-09-13）。3工程のReady拒否をLambdaの受信完了へ統一した。記事完成イベントの発行・配送とCuration通常経路の切替は後続スライスとし、AWSへの適用は未実施。
+Status: スライス1〜5を実装・検証済み（2026-09-13）。記事完成イベントの発行・配送まで接続した。Curation通常経路の切替はスライス6とし、AWSへの適用は未実施。
 
 ## Problem
 
@@ -12,7 +12,7 @@ Status: スライス1〜4を実装・検証済み（2026-09-13）。3工程のRe
 
 ## Evidence
 
-- [取得サービス](../../backend/app/collection/article_acquisition/service.py)と[本文補完サービス](../../backend/app/collection/article_completion/service.py): 記事の保存とOutbox記録を同じトランザクションで確定する。現在のイベント種別は発行元ごとに分かれている。
+- [取得サービス](../../backend/app/collection/article_acquisition/service.py)と[本文補完サービス](../../backend/app/collection/article_completion/service.py): 記事の保存とOutbox記録を同じトランザクションで確定する。スライス5で両発行元を共通の`AnalyzableArticleCreated`へ接続した。
 - [ReadyForCuration](../../backend/app/analysis/curation/domain/ready.py): DB上の記事の存在、Signal／Noiseの保存済み状態、タイトル・本文の制約を判定する。本文の上限は200,000文字。
 - [CurationService](../../backend/app/analysis/curation/service.py)と[Repository](../../backend/app/analysis/curation/repository.py): Signal／Noiseの保存、成功監査、Signal時のOutbox記録を所有する。Serviceは`CurationCompletion`で保存完了と保存競合を区別する（スライス2）。
 - [Assessment仕様](./assessment-consumer.md)と[Embedding仕様](./embedding-consumer.md): 正常終了と失敗伝播、借用するAIクライアント、呼び出し単位の資源管理、SQS部分バッチ応答の参照元。
@@ -270,3 +270,25 @@ Ready拒否の検証は、各工程のConsumerで理由と副作用の不在を�
 - 既存Taskiqの救済は存続でき、その移行や旧イベント整理を待たずに本工程を完了できる。
 
 コード・定義の実装完了とAWSでの稼働切替完了は分けて報告する。実AWS上で確認していない状態を「移行済み」としない。実装済みの範囲と各スライスの検証結果は上記の実装記録に従う。
+
+
+### スライス5の確定契約（2026-09-13）
+
+Problemは、取得・本文補完の新規記事保存を共通イベントでCurationへ届けること。両Serviceは`AnalyzableArticleCreated`（`article.analyzable_created`、version 1、正の`analyzable_article_id`だけ）を記録する。既存の業務行・成功監査・Outboxの同一トランザクションを維持し、不完全記事・競合・保存失敗では記事完成イベントを確定しない。本文補完待ちの`IncompleteArticleRecorded`は維持する。
+
+`outbox_relay.curation_handler`は`CurationOutboxRelaySettings`から`sqs_article_curation_queue_url`を読み、共通`run_relay`へ専用の`EventDeliveryRoute`を渡す。`build_analyzable_created_message`は既存`AnalyzableArticleCreatedEvent`で検証・シリアライズし、保存済みID・時刻を維持する。検証失敗は安全なreason・issuesだけの`PublishEventInvalidError`へ変換し、入力値や元検証例外を保持しない。配送・停止・再試行・資源解放は既存の共通契約に従う。
+
+Invariantsは、両発行元の同一契約、保存の原子性、保存済みイベントID・発生時刻の保持、新種別だけの配送とする。旧イベントとの二重発行や保存済み旧イベントの変更・互換配送はしない。旧型定義は残す。Non-goalsはインフラ・AWS適用、上流Taskiq投入の終了、救済・hold・日次上限・CLI整理、DB schema・外部API・依存の変更。
+
+保証の所有先を次のように分担する。
+
+- `local_tests/curation/test_delivery.py`: migration適用済みDBで、実RSS取得・変換・記事保存、本文補完・保存、実relayと送信本文、実Curation Lambda・SDK・Consumer・Serviceから結果・監査・後続Outboxの確定までを接続する。発行元の記事に対応する別々のAI結果を確認し、正常時のイベント内容だけを確認していた2つのServiceテストをここへ集約する。
+- 既存取得・本文補完Serviceテスト: 未完成・保存競合・補完済み競合での非発行と、Outbox障害時の記事・成功監査・補完状態のロールバックを所有する。旧Taskiq経路の期待値も新種別へ接続し、既存投入は維持する。
+- `tests/lambda_handlers/test_curation_relay_integration.py`: 新イベントの正常分・不正分・旧2種別を混在させて、正常配送・不正分停止・旧行の全列保持を確認する。通信障害1ケースで再試行予約への接続を確認し、共通relayのbackoff・上限・SDKエラー網羅は複製しない。
+- `tests/outbox/publishing/test_analyzable_message.py`: 新しいエラー変換が安全な理由・項目だけを保持することを確認する。Envelopeの項目別制約は共有契約の既存テストを使う。
+
+ローカル経路テストの取得・補完は`vector_collect`、relay・Curationは`vector_app`で接続し、管理権限や追加GRANTを使用しない。RSS HTTP、記事スクレイピング、SQS送信、SSM・RDS署名、Gemini HTTPをテスト境界で置換する。SQSで捕捉したMessageBodyは変更せずCurationへ渡す。AWS IAMの実認証・SQSの実配送・本番有効化は保証範囲外とする。
+
+Doneは、両発行元からCuration保存までの接続、原子性、対象種別の限定、失敗時の共通契約への接続を重複を抑えたテストで保証すること。実装開始時に最新`main`（`5bf4a5b7b607cd90684318a70e4705f9b505ad91`）から`codex/curation-delivery`へ分離し、他作業のローカル変更は取り込まない。
+
+実装・検証結果（2026-09-13）: スライス5は完了。Ruffのlint・format、全単体6,784件、`make test-integration`の全DB統合1,434件、`make test-local`のmigration適用済みDBテスト81件が成功した。最終assert補強後にCurationの経路テストと未完成記事の非発行テストを再確認した。各専用DB・Redis・ネットワークは終了処理で削除済み。AWSへの適用と通常経路の切替は未実施。

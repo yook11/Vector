@@ -27,3 +27,9 @@ class AssessmentOutboxRelaySettings(OutboxRelayConnectionSettings):
     """Assessment配送に必要なキューだけを要求する。"""
 
     sqs_article_assessment_queue_url: str = Field(min_length=1)
+
+
+class CurationOutboxRelaySettings(OutboxRelayConnectionSettings):
+    """Curation配送に必要なキューだけを要求する。"""
+
+    sqs_article_curation_queue_url: str = Field(min_length=1)

@@ -126,3 +126,12 @@ DBロールとテーブル権限は既存の初期化／migrationを正本とし
 既存の`tests/test_db_user_isolation.py`の権限20件は許可一覧の照合と実操作に再編した。独自の接続先解決と環境不足によるskipは廃止し、Authの構造契約2件も共通DBで実行する。Outbox個別migrationのupgrade/downgrade試験は`tests/outbox/test_collect_permissions_migration.py`に残す。
 
 記事単位AI分析の資源管理は`app.lambda_handlers.article_analysis_lifecycle`を通す。共通テストはこの入口を直接検証する。工程別のセッション境界テストでは、共通`analysis_engines` fixtureで借用先Engineを観測し、実SDK・Consumer・DBを通す。
+
+
+## Curationの記事完成イベント配送
+
+`curation/test_delivery.py`は取得・本文補完の両方から実Serviceで記事を保存し、実Curation relayが送信したMessageBodyを変更せず実Curation Lambdaへ渡す。共通記事完成イベントの一種類への統一、記事ID・イベントID・発生時刻・配送先の維持、対応するSignal・成功監査・Assessment向けOutboxの確定を確認する。発行元で異なる本文に異なるAI応答を返し、対象記事への保存まで照合する。
+
+取得・補完は`vector_collect`、relay・Consumerは`vector_app`を使う。旧取得サービスの全体設定へはfixtureで非機密の値を渡し、製品のDB処理は差し替えない。RSS HTTP、記事スクレイピング、SQS通信、SSM・RDS署名、Gemini HTTPだけを外部境界で置き換える。AWSの実配送・実IAM認証は確認しない。
+
+正常な記事完成イベントを確認する2つのServiceテストはこの経路へ集約した。非発行・ロールバックは既存Serviceテスト、配送の拒否・通信失敗はrelay統合テスト、Curation結果別の応答・入力制約・共通資源管理は既存テストが担当する。同じケースを発行元と結果の全組合せで繰り返さない。

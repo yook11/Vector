@@ -13,7 +13,6 @@ from app.collection.article_acquisition.errors import (
     map_origin_to_acquisition,
 )
 from app.collection.article_acquisition.events import (
-    ArticleAcquired,
     IncompleteArticleRecorded,
 )
 from app.collection.article_acquisition.failure_handling import (
@@ -36,6 +35,7 @@ from app.collection.article_acquisition.repository import IncompleteArticleRepos
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
+from app.collection.events import AnalyzableArticleCreated
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
@@ -93,14 +93,13 @@ class ArticleAcquisitionService:
                                 analyzable_article_id=analyzable_article_id,
                                 canonical_url=str(ready.source_url),
                             )
-                            event = ArticleAcquired(
-                                source_id=source_id,
+                            event = AnalyzableArticleCreated(
                                 analyzable_article_id=analyzable_article_id,
                             )
                             session.add(
                                 OutboxEvent(
-                                    event_type=ArticleAcquired.EVENT_TYPE,
-                                    schema_version=ArticleAcquired.SCHEMA_VERSION,
+                                    event_type=AnalyzableArticleCreated.EVENT_TYPE,
+                                    schema_version=AnalyzableArticleCreated.SCHEMA_VERSION,
                                     payload=event.model_dump(mode="json"),
                                 )
                             )
