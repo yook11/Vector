@@ -155,7 +155,7 @@ S3は初回の結果保存先として必須にしない。
 
 `up`は既存Terraform構成全体を作成する。DB準備・認証schema生成・イベント投入・AI呼出は行わない。両EC2は`t4g.small`、SSM Agentの通信はssm/ssmmessagesのInterface endpointを使用し、runnerのプロキシ依存から分離する。RunnerのSSMコマンド実行権限はrunner EC2だけに維持する。
 
-構築完了を保存してから実リソース・digestの照合と起動確認へ進む。両EC2のステータスチェックとSSM Online、runnerへの固有の応答、bootstrap ready・Docker稼働、プロキシTCP接続、プロキシ経由ECRでの指定digest取得を必須とする。起動確認は合計900秒を上限にし、API通信にも期限を設ける。管理確認のSSM出力はCloudWatchへ転送せず直接取得する。
+構築完了を保存してから実リソース・digestの照合と起動確認へ進む。両EC2のステータスチェックとSSM Online、runnerへの固有の応答、bootstrap ready・Docker稼働、プロキシTCP接続、プロキシ経由ECRでの指定digest取得を必須とする。起動確認は合計900秒を上限にし、API通信にも期限を設ける。管理確認のSSM出力はCloudWatchへ転送せず直接取得する。プロキシ確認後に今回固有の文字列を出すSSMコマンドだけ転送を有効にし、runnerのCloudWatchログへの到着を同じ900秒の期限内に確認する。SSM Agentは`no_proxy`で管理通信を直接接続に保ち、ログ転送だけ既存プロキシを使う。
 
 同じIDの再実行では、構築前失敗は再試行、構築完了済みは再applyなしで再確認する。構築途中の完了不明や削除開始済みの環境を自動再構築しない。入力・所有者不一致、並行操作は拒否する。最新の合否と各回の状態・Command IDを保存し、過去の成功を今回の合格として扱わない。
 

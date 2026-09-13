@@ -91,7 +91,8 @@ run "network_and_runtime_contract" {
       output.resources.ssmmessages_endpoint == aws_vpc_endpoint.ssmmessages.id &&
       strcontains(local.no_proxy, "ssmmessages.ap-northeast-1.amazonaws.com") &&
       !contains(local.runner_domains, "ssmmessages.ap-northeast-1.amazonaws.com") &&
-      strcontains(local.startup.runner, "UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy") &&
+      strcontains(local.startup.runner, "[Service]\nEnvironmentFile=/etc/vector-test/proxy.env") &&
+      !strcontains(local.startup.runner, "UnsetEnvironment=") &&
       !strcontains(local.startup.runner, "amazon-ssm-agent.service.d/proxy.conf") &&
       strcontains(local.no_proxy, "ssm.ap-northeast-1.amazonaws.com") &&
       strcontains(local.no_proxy, "169.254.169.254") &&
