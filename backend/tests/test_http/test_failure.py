@@ -14,92 +14,42 @@ from urllib3 import exceptions as urllib3_errors
 
 from app.http.failure import (
     HttpTransportFailure,
-    HttpTransportFailureKind,
+    HttpTransportFailureReason,
+    HttpTransportStage,
     classify_botocore,
     classify_httpx,
 )
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
+S = HttpTransportStage
+R = HttpTransportFailureReason
+
 
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
-        (
-            httpx.ConnectTimeout("timeout"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.CONNECT_TIMEOUT,
-                request_may_have_reached_server=False,
-            ),
-        ),
-        (
-            httpx.PoolTimeout("timeout"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.POOL_TIMEOUT,
-                request_may_have_reached_server=False,
-            ),
-        ),
-        (
-            httpx.WriteTimeout("timeout"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.WRITE_TIMEOUT,
-                request_may_have_reached_server=True,
-            ),
-        ),
-        (
-            httpx.ReadTimeout("timeout"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.READ_TIMEOUT,
-                request_may_have_reached_server=True,
-            ),
-        ),
-        (
-            httpx.ConnectError("failed"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.CONNECT,
-                request_may_have_reached_server=False,
-            ),
-        ),
+        (httpx.PoolTimeout("timeout"), HttpTransportFailure(S.PREPARATION, R.TIMEOUT)),
         (
             HostResolutionError("failed"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.DNS_RESOLUTION,
-                request_may_have_reached_server=False,
-            ),
+            HttpTransportFailure(S.PREPARATION, R.DNS_RESOLUTION),
         ),
+        (httpx.ConnectTimeout("timeout"), HttpTransportFailure(S.CONNECT, R.TIMEOUT)),
+        (httpx.ConnectError("failed"), HttpTransportFailure(S.CONNECT, R.NETWORK_IO)),
+        (httpx.WriteTimeout("timeout"), HttpTransportFailure(S.SEND, R.TIMEOUT)),
+        (httpx.WriteError("failed"), HttpTransportFailure(S.SEND, R.NETWORK_IO)),
+        (httpx.ReadTimeout("timeout"), HttpTransportFailure(S.RECEIVE, R.TIMEOUT)),
+        (httpx.ReadError("failed"), HttpTransportFailure(S.RECEIVE, R.NETWORK_IO)),
         (
             httpx.RemoteProtocolError("failed"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.REMOTE_PROTOCOL,
-                request_may_have_reached_server=True,
-            ),
+            HttpTransportFailure(S.RECEIVE, R.PROTOCOL_VIOLATION),
         ),
-        (
-            httpx.ReadError("failed"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.NETWORK_IO,
-                request_may_have_reached_server=True,
-            ),
-        ),
-        (
-            httpx.WriteError("failed"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.NETWORK_IO,
-                request_may_have_reached_server=True,
-            ),
-        ),
-        (
-            httpx.CloseError("failed"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.NETWORK_IO,
-                request_may_have_reached_server=True,
-            ),
-        ),
+        (httpx.CloseError("failed"), HttpTransportFailure(S.UNKNOWN, R.NETWORK_IO)),
     ],
 )
 def test_httpx_transport_failures(
     exc: Exception, expected: HttpTransportFailure
 ) -> None:
-    """失敗の種類と未達を保証できる範囲を対応表で固定する。"""
+    """例外型から段階と理由を対応表で固定し、段階が読めない型は不明にする。"""
     assert classify_httpx(exc) == expected
 
 
@@ -113,11 +63,29 @@ def test_httpx_transport_failures(
     ],
 )
 def test_httpx_parent_transport_errors_are_unknown(exc: Exception) -> None:
-    """具体型に落ちない通信失敗は unknown とし、未達は断定しない。"""
-    assert classify_httpx(exc) == HttpTransportFailure(
-        HttpTransportFailureKind.UNKNOWN,
-        request_may_have_reached_server=True,
-    )
+    """具体型に落ちない通信失敗は段階も理由も unknown とする。"""
+    assert classify_httpx(exc) == HttpTransportFailure(S.UNKNOWN, R.UNKNOWN)
+
+
+@pytest.mark.parametrize(
+    ("stage", "reached"),
+    [
+        (S.PREPARATION, False),
+        (S.CONNECT, False),
+        (S.SEND, True),
+        (S.RECEIVE, True),
+        (S.UNKNOWN, True),
+    ],
+)
+def test_reachability_is_derived_from_stage_only(
+    stage: HttpTransportStage, reached: bool
+) -> None:
+    """接続確立前だけ未達と断定し、理由や段階不明では到達を否定しない。"""
+    for reason in R:
+        assert (
+            HttpTransportFailure(stage, reason).request_may_have_reached_server
+            is reached
+        )
 
 
 @pytest.mark.parametrize(
@@ -136,11 +104,9 @@ def test_httpx_parent_transport_errors_are_unknown(exc: Exception) -> None:
 def test_httpx_proxy_status_is_metadata_only(
     message: str, proxy_status: int | None
 ) -> None:
-    """proxyのstatusによって失敗種別や到達可能性を変えない。"""
+    """proxyのstatusによって段階や理由を変えない。"""
     assert classify_httpx(httpx.ProxyError(message)) == HttpTransportFailure(
-        HttpTransportFailureKind.PROXY,
-        request_may_have_reached_server=False,
-        proxy_status=proxy_status,
+        S.CONNECT, R.PROXY, proxy_status=proxy_status
     )
 
 
@@ -190,8 +156,7 @@ async def test_httpx_real_transport_classifies_dns_failure(
                 httpx.Request("GET", "https://example.invalid")
             )
     assert classify_httpx(caught.value) == HttpTransportFailure(
-        HttpTransportFailureKind.DNS_RESOLUTION,
-        request_may_have_reached_server=False,
+        S.CONNECT, R.DNS_RESOLUTION
     )
 
 
@@ -209,10 +174,7 @@ async def test_httpx_real_transport_classifies_tls_failure(
             await transport.handle_async_request(
                 httpx.Request("GET", "https://example.invalid")
             )
-    assert classify_httpx(caught.value) == HttpTransportFailure(
-        HttpTransportFailureKind.TLS,
-        request_may_have_reached_server=False,
-    )
+    assert classify_httpx(caught.value) == HttpTransportFailure(S.CONNECT, R.TLS)
 
 
 def test_connection_cause_takes_precedence_over_unrelated_context() -> None:
@@ -220,10 +182,7 @@ def test_connection_cause_takes_precedence_over_unrelated_context() -> None:
     exc = httpx.ConnectError("failed")
     exc.__cause__ = ConnectionRefusedError("refused")
     exc.__context__ = socket.gaierror("unrelated DNS")
-    assert classify_httpx(exc) == HttpTransportFailure(
-        HttpTransportFailureKind.CONNECT,
-        request_may_have_reached_server=False,
-    )
+    assert classify_httpx(exc) == HttpTransportFailure(S.CONNECT, R.NETWORK_IO)
 
 
 def test_connection_cause_cycle_terminates_without_mutating_exception() -> None:
@@ -232,10 +191,7 @@ def test_connection_cause_cycle_terminates_without_mutating_exception() -> None:
     inner = OSError("failed")
     exc.__cause__ = inner
     inner.__context__ = exc
-    assert classify_httpx(exc) == HttpTransportFailure(
-        HttpTransportFailureKind.CONNECT,
-        request_may_have_reached_server=False,
-    )
+    assert classify_httpx(exc) == HttpTransportFailure(S.CONNECT, R.NETWORK_IO)
     assert exc.__cause__ is inner
     assert inner.__context__ is exc
 
@@ -245,52 +201,34 @@ def test_connection_cause_cycle_terminates_without_mutating_exception() -> None:
     [
         (
             botocore_errors.ConnectTimeoutError(endpoint_url="url"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.CONNECT_TIMEOUT,
-                request_may_have_reached_server=False,
-            ),
-        ),
-        (
-            botocore_errors.ReadTimeoutError(endpoint_url="url"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.READ_TIMEOUT,
-                request_may_have_reached_server=True,
-            ),
+            HttpTransportFailure(S.CONNECT, R.TIMEOUT),
         ),
         (
             botocore_errors.EndpointConnectionError(endpoint_url="url"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.CONNECT,
-                request_may_have_reached_server=False,
-            ),
-        ),
-        (
-            botocore_errors.SSLError(endpoint_url="url", error="TLS"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.TLS,
-                request_may_have_reached_server=True,
-            ),
+            HttpTransportFailure(S.CONNECT, R.NETWORK_IO),
         ),
         (
             botocore_errors.ProxyConnectionError(proxy_url="url"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.PROXY,
-                request_may_have_reached_server=False,
-            ),
+            HttpTransportFailure(S.CONNECT, R.PROXY),
+        ),
+        (
+            botocore_errors.ReadTimeoutError(endpoint_url="url"),
+            HttpTransportFailure(S.RECEIVE, R.TIMEOUT),
+        ),
+        (
+            botocore_errors.SSLError(endpoint_url="url", error="TLS"),
+            HttpTransportFailure(S.UNKNOWN, R.TLS),
         ),
         (
             botocore_errors.ConnectionClosedError(endpoint_url="url"),
-            HttpTransportFailure(
-                HttpTransportFailureKind.NETWORK_IO,
-                request_may_have_reached_server=True,
-            ),
+            HttpTransportFailure(S.UNKNOWN, R.NETWORK_IO),
         ),
     ],
 )
 def test_botocore_transport_failures(
     exc: Exception, expected: HttpTransportFailure
 ) -> None:
-    """botocoreの具体型を親型より優先し、SSLでは未達を断定しない。"""
+    """具体型を親型より優先し、送受信どちらでも包まれる型は段階を断定しない。"""
     assert classify_botocore(exc) == expected
 
 
@@ -302,11 +240,8 @@ def test_botocore_transport_failures(
     ],
 )
 def test_botocore_parent_transport_errors_are_unknown(exc: Exception) -> None:
-    """具体型に落ちない通信失敗は unknown とし、未達は断定しない。"""
-    assert classify_botocore(exc) == HttpTransportFailure(
-        HttpTransportFailureKind.UNKNOWN,
-        request_may_have_reached_server=True,
-    )
+    """具体型に落ちない通信失敗は段階も理由も unknown とする。"""
+    assert classify_botocore(exc) == HttpTransportFailure(S.UNKNOWN, R.UNKNOWN)
 
 
 @pytest.mark.parametrize(
@@ -359,10 +294,9 @@ def test_botocore_ssl_failure_while_reading_response_is_potentially_delivered(
         with pytest.raises(botocore_errors.SSLError) as caught:
             session.send(request)
     response.stream.assert_called_once()
-    assert classify_botocore(caught.value) == HttpTransportFailure(
-        HttpTransportFailureKind.TLS,
-        request_may_have_reached_server=True,
-    )
+    failure = classify_botocore(caught.value)
+    assert failure == HttpTransportFailure(S.UNKNOWN, R.TLS)
+    assert failure.request_may_have_reached_server is True
 
 
 def test_transport_value_does_not_carry_sdk_message_or_url() -> None:
@@ -371,8 +305,5 @@ def test_transport_value_does_not_carry_sdk_message_or_url() -> None:
         proxy_url="https://user:private-password@example.invalid"
     )
     failure = classify_botocore(exc)
-    assert failure == HttpTransportFailure(
-        HttpTransportFailureKind.PROXY,
-        request_may_have_reached_server=False,
-    )
+    assert failure == HttpTransportFailure(S.CONNECT, R.PROXY)
     assert "private-password" not in repr(failure)

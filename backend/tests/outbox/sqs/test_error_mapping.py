@@ -16,7 +16,7 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
-from app.http.failure import HttpTransportFailureKind
+from app.http.failure import HttpTransportFailureReason, HttpTransportStage
 from app.outbox.publishing.errors import (
     PublishCleanupError,
     PublishConfigurationError,
@@ -154,27 +154,35 @@ def test_non_sqs_and_non_transport_exceptions_are_not_guessed(exc: Exception) ->
 
 
 @pytest.mark.parametrize(
-    ("exc", "kind", "reached"),
+    ("exc", "stage", "reason", "reached"),
     [
         (
             ConnectTimeoutError(endpoint_url="https://example.com"),
-            HttpTransportFailureKind.CONNECT_TIMEOUT,
+            HttpTransportStage.CONNECT,
+            HttpTransportFailureReason.TIMEOUT,
             False,
         ),
         (
             ReadTimeoutError(endpoint_url="https://example.com"),
-            HttpTransportFailureKind.READ_TIMEOUT,
+            HttpTransportStage.RECEIVE,
+            HttpTransportFailureReason.TIMEOUT,
             True,
         ),
-        (HTTPClientError(error="private"), HttpTransportFailureKind.UNKNOWN, True),
+        (
+            HTTPClientError(error="private"),
+            HttpTransportStage.UNKNOWN,
+            HttpTransportFailureReason.UNKNOWN,
+            True,
+        ),
     ],
 )
 def test_transport_classification_preserves_delivery_uncertainty(
-    exc, kind, reached
+    exc, stage, reason, reached
 ) -> None:
     failure = publish_error_from_exception(exc, phase=PublishPhase.SEND)
     assert isinstance(failure, PublishTransportError)
-    assert failure.failure.kind is kind
+    assert failure.failure.stage is stage
+    assert failure.failure.reason is reason
     assert failure.failure.request_may_have_reached_server is reached
 
 
@@ -275,7 +283,8 @@ def test_same_timeout_is_classified_by_operation(phase, expected_type, reason):
     elif isinstance(error, PublishCleanupError):
         assert not isinstance(error, PublishError)
     else:
-        assert error.failure.kind is HttpTransportFailureKind.READ_TIMEOUT
+        assert error.failure.stage is HttpTransportStage.RECEIVE
+        assert error.failure.reason is HttpTransportFailureReason.TIMEOUT
 
 
 @pytest.mark.parametrize(

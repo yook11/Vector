@@ -83,7 +83,10 @@ def record_publish_failure(
                 error_message=_BODY_CHECKSUM_MISMATCH_MESSAGE,
             )
         elif isinstance(error, PublishTransportError):
-            fields["transport_kind"] = error.failure.kind.value
+            fields.update(
+                transport_stage=error.failure.stage.value,
+                transport_reason=error.failure.reason.value,
+            )
         elif isinstance(error, PublishUnexpectedError):
             fields.update(
                 error_reason=error.reason,

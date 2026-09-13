@@ -10,7 +10,7 @@ SQS publisher は現在、SDK例外をそのまま伝播している。
 
 ## Evidence
 
-- `backend/app/http/failure.py`: `HttpTransportFailure` / `HttpTransportFailureKind` と通信例外の分類関数は実装済み。
+- `backend/app/http/failure.py`: `HttpTransportFailure`（`HttpTransportStage` / `HttpTransportFailureReason`）と通信例外の分類関数は実装済み。
 - `backend/app/outbox/publish_errors.py`: 通信・サービス応答・設定・イベント不正の4種類は定義済みで、サービス理由と想定外例外は未実装。
 - `backend/app/outbox/sqs_publisher.py`: ベクトル生成向けSendMessageのみ実装済みで、例外変換とSDK再試行設定は未実装。
 - `backend/app/outbox/publisher.py`: `EventPublisher` は成功時None、失敗時例外という契約のみ。

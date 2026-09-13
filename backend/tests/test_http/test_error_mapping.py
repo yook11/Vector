@@ -9,7 +9,11 @@ from app.http.error_mapping import (
     http_response_error_from_exception,
     http_transport_error_from_exception,
 )
-from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 
@@ -18,20 +22,29 @@ from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
     [
         (
             httpx.ConnectError("connection failed"),
-            HttpTransportFailure(HttpTransportFailureKind.CONNECT, False),
+            HttpTransportFailure(
+                HttpTransportStage.CONNECT, HttpTransportFailureReason.NETWORK_IO
+            ),
         ),
         (
             httpx.ReadTimeout("response timed out"),
-            HttpTransportFailure(HttpTransportFailureKind.READ_TIMEOUT, True),
+            HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            ),
         ),
         (
             HostResolutionError("DNS failed"),
-            HttpTransportFailure(HttpTransportFailureKind.DNS_RESOLUTION, False),
+            HttpTransportFailure(
+                HttpTransportStage.PREPARATION,
+                HttpTransportFailureReason.DNS_RESOLUTION,
+            ),
         ),
         (
             httpx.ProxyError("403 Forbidden"),
             HttpTransportFailure(
-                HttpTransportFailureKind.PROXY, False, proxy_status=403
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.PROXY,
+                proxy_status=403,
             ),
         ),
     ],
@@ -39,7 +52,7 @@ from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 def test_transport_conversion_preserves_failure_facts(
     exc: Exception, expected: HttpTransportFailure
 ) -> None:
-    """通信失敗の種類・到達可能性・proxy情報を失わず伝える。"""
+    """通信失敗の段階・理由・proxy情報を失わず伝える。"""
     result = http_transport_error_from_exception(exc)
 
     assert result is not None
@@ -47,12 +60,12 @@ def test_transport_conversion_preserves_failure_facts(
 
 
 def test_unspecified_transport_failure_remains_unknown() -> None:
-    """通信失敗と分かるが詳細不明な例外では未達を断定しない。"""
+    """通信失敗と分かるが詳細不明な例外では段階も理由も断定しない。"""
     result = http_transport_error_from_exception(httpx.TransportError("unspecified"))
 
     assert result is not None
     assert result.failure == HttpTransportFailure(
-        HttpTransportFailureKind.UNKNOWN, True
+        HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
     )
 
 

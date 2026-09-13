@@ -13,7 +13,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.errors import DatabaseError
 from app.db.session import caller_managed_session_factory
-from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.outbox.delivery import failure_handler as handler_module
 from app.outbox.delivery.failure_handler import (
     DeliveryStopped,
@@ -44,7 +48,9 @@ def record_stop(monkeypatch):
 
 def _transport():
     return PublishTransportError(
-        failure=HttpTransportFailure(HttpTransportFailureKind.READ_TIMEOUT, True)
+        failure=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
     )
 
 

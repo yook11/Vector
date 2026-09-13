@@ -12,7 +12,11 @@ from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.exc import SQLAlchemyError
 from structlog.testing import capture_logs
 
-from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.outbox.delivery import failure_handler as handler_module
 from app.outbox.delivery import failure_recording as recording
 from app.outbox.delivery.failure_handler import (
@@ -79,8 +83,13 @@ CASES = [
         for reason in PublishEventInvalidReason
     ],
     *[
-        (PublishTransportError(failure=HttpTransportFailure(kind, True)), False)
-        for kind in HttpTransportFailureKind
+        (
+            PublishTransportError(
+                failure=HttpTransportFailure(HttpTransportStage.UNKNOWN, reason)
+            ),
+            False,
+        )
+        for reason in HttpTransportFailureReason
     ],
     *[
         (
@@ -149,7 +158,8 @@ def test_all_reasons_log_stops_and_only_six_reasons_emit_metric(
     assert log["error_code"] == error.CODE
     assert log["requires_configuration_fix"] is expected
     if isinstance(error, PublishTransportError):
-        assert log["transport_kind"] == error.failure.kind.value
+        assert log["transport_stage"] == error.failure.stage.value
+        assert log["transport_reason"] == error.failure.reason.value
     elif isinstance(error, PublishResponseInvalidError):
         assert log["error_reason"] == error.reason.value
         assert "response_field" not in log
@@ -190,7 +200,7 @@ def test_retry_exhaustion_alone_is_not_alarm_target(claimed, capsys):
             event=claimed,
             error=PublishTransportError(
                 failure=HttpTransportFailure(
-                    HttpTransportFailureKind.READ_TIMEOUT, True
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
                 )
             ),
             stop_reason=NonRetryableReason.RETRY_EXHAUSTED,

@@ -5,7 +5,11 @@ from datetime import timedelta
 
 import pytest
 
-from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.outbox.delivery.retry_policy import (
     NonRetryable,
     NonRetryableReason,
@@ -30,18 +34,22 @@ from app.outbox.publishing.errors import (
 )
 
 
-def transport(kind=HttpTransportFailureKind.CONNECT, reached=False, status=None):
+def transport(
+    reason=HttpTransportFailureReason.NETWORK_IO,
+    stage=HttpTransportStage.CONNECT,
+    status=None,
+):
     return PublishTransportError(
-        failure=HttpTransportFailure(kind, reached, proxy_status=status)
+        failure=HttpTransportFailure(stage, reason, proxy_status=status)
     )
 
 
-@pytest.mark.parametrize("kind", list(HttpTransportFailureKind))
-@pytest.mark.parametrize("reached", [False, True])
-def test_all_transport_kinds_and_delivery_uncertainty(kind, reached):
-    """到達可能性は重複許容の配信方針を変えない。"""
-    result = decide_publish_retry(transport(kind, reached), attempt_count=1, jitter=0.5)
-    if kind is HttpTransportFailureKind.TLS:
+@pytest.mark.parametrize("reason", list(HttpTransportFailureReason))
+@pytest.mark.parametrize("stage", list(HttpTransportStage))
+def test_all_transport_reasons_and_delivery_uncertainty(reason, stage):
+    """発生段階と到達可能性は重複許容の配信方針を変えない。"""
+    result = decide_publish_retry(transport(reason, stage), attempt_count=1, jitter=0.5)
+    if reason is HttpTransportFailureReason.TLS:
         assert result == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
     else:
         assert result == Retryable(RetryDelay(timedelta(seconds=30)))
@@ -114,7 +122,7 @@ def test_unexpected_phases_stop_delivery(phase):
 def test_proxy_status_boundaries(status, retry):
     """proxy拒否と一時的なproxy障害を区別する。"""
     result = decide_publish_retry(
-        transport(HttpTransportFailureKind.PROXY, status=status),
+        transport(HttpTransportFailureReason.PROXY, status=status),
         attempt_count=1,
         jitter=0.5,
     )
@@ -147,7 +155,7 @@ def test_retryable_failure_stops_at_fifth_attempt(attempt):
 @pytest.mark.parametrize(
     "error",
     [
-        transport(HttpTransportFailureKind.TLS),
+        transport(HttpTransportFailureReason.TLS),
         PublishConfigurationError(
             reason=PublishConfigurationReason.MISSING_CREDENTIALS
         ),

@@ -2,7 +2,11 @@
 
 import pytest
 
-from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.outbox.publishing.errors import (
     PublishCleanupError,
     PublishConfigurationError,
@@ -19,18 +23,18 @@ from app.outbox.publishing.errors import (
 
 
 @pytest.mark.parametrize(
-    ("kind", "may_have_reached"),
+    ("stage", "reason"),
     [
-        (HttpTransportFailureKind.CONNECT_TIMEOUT, False),
-        (HttpTransportFailureKind.READ_TIMEOUT, True),
-        (HttpTransportFailureKind.UNKNOWN, True),
+        (HttpTransportStage.CONNECT, HttpTransportFailureReason.TIMEOUT),
+        (HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT),
+        (HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN),
     ],
 )
 def test_publish_transport_error_preserves_classification(
-    kind: HttpTransportFailureKind, may_have_reached: bool
+    stage: HttpTransportStage, reason: HttpTransportFailureReason
 ) -> None:
     """文脈を送信失敗に変えても通信の分類情報を変更しない。"""
-    failure = HttpTransportFailure(kind, may_have_reached)
+    failure = HttpTransportFailure(stage, reason)
     with pytest.raises(PublishError) as caught:
         raise PublishTransportError(failure=failure)
     assert caught.value.failure is failure
