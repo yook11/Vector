@@ -1,6 +1,6 @@
 # CurationConsumer — 分析可能な記事の完成イベントによる本文整形
 
-Status: スライス1のAssessment／EmbeddingにおけるReady拒否の受信完了と、スライス2のCuration契約整理を実装・検証済み（2026-09-13）。Curationの通常経路移行と3工程すべての統一は後続スライスとし、AWSへの適用は未実施。
+Status: スライス1・2に加え、スライス3の共通記事完成イベント型とCuration Consumerを実装・検証済み（2026-09-13）。Curationの通常経路移行と3工程すべての統一は後続スライスとし、AWSへの適用は未実施。
 
 ## Problem
 
@@ -52,8 +52,8 @@ Schedulerはrelayを起動する。記事完成イベントの発行はDB保存�
 
 ## 記事完成イベント
 
-- 名前の案は`AnalyzableArticleCreated`、event_typeは`article.analyzable_created`、schema_versionは1とする。「分析可能な記事の作成が確定した」という事実を表す。
-- 共通契約はcollection配下に置き、取得側・本文補完側の両方が参照する。一方の工程専用イベントをもう一方が借用する構造にはしない。
+- 名前は`AnalyzableArticleCreated`、event_typeは`article.analyzable_created`、schema_versionは1とする。「分析可能な記事の作成が確定した」という事実を表す。
+- 共通契約は`backend/app/collection/events.py`に置き、取得側・本文補完側の両方が参照する。一方の工程専用イベントをもう一方が借用する構造にはしない。
 - payloadは正の整数の`analyzable_article_id`だけとする。本文・タイトル・発行経路ごとのIDは載せず、ConsumerがDBから必要な事実を取得する。
 - 外側のevent_id・event_type・schema_version・occurred_at・payloadは既存のOutbox送信形式に従う。送信時にID・時刻を再生成しない。
 - 取得段階で分析可能な記事を新規保存した場合、または本文補完によってその保存に成功した場合に、同じイベントを記録する。業務行・成功監査・Outboxを同じトランザクションで確定する。
@@ -157,9 +157,9 @@ Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類�
 |---|---|---|
 | 1. Ready拒否の契約と既存2工程の統一 | 理由付き受信完了、Assessment／EmbeddingのReady・Consumer・Lambda応答・関連仕様の変更 | 対象欠損・Ready入力制約違反が理由記録後に受信完了となること、AI・記事削除・後続イベントなし |
 | 2. Curationの処理完了・失敗の契約 | Completion、共通ルールに従うReady拒否、原因を保持するServiceエラー、旧Taskiqとの接続 | Signal／Noise／処理済みとReady拒否の区別、保存失敗の原子性 |
-| 3. Curation Consumer | DB事実取得、Ready構築、Service、Ready拒否の理由記録、失敗後処理 | AI前の接続返却、Ready拒否・処理済みのAI非実行、記事削除・hold・予算なし、元例外保持 |
+| 3. Curation Consumer | 共通記事完成イベント型、DB事実取得、Ready構築、Service、Ready拒否の理由記録、失敗後処理 | AI前の接続返却、Ready拒否・処理済みのAI非実行、記事削除・hold・予算なし、元例外保持 |
 | 4. Curation Lambda受信 | Geminiの借用、設定・資源管理、SQS・イベント検証、部分バッチ応答 | Ready拒否のmessageIdを失敗一覧へ含めないこと、資源終了、複数呼び出しでの独立性 |
-| 5. 記事完成イベントと配送 | 共通イベント、上流2箇所の発行、Curation relay | 両発行元の同一契約、記事とOutboxの原子性、旧種別の非受信、保存済みID・時刻の維持 |
+| 5. 記事完成イベントの発行と配送 | スライス3の共通型による上流2箇所の発行、Curation relay | 両発行元の同一契約、記事とOutboxの原子性、旧種別の非受信、保存済みID・時刻の維持 |
 | 6. インフラ・通常経路の切替 | Consumer／relay／SQS／DLQ／Scheduler／IAM、上流kiqの終了 | 定義の接続、旧救済の存続、新経路からTaskiqを呼ばないこと |
 
 スライス1はCurationだけの変更として済ませず、既存Assessment／Embeddingの受信完了まで変更・検証する。スライス3・4でCurationを同じ契約へ接続し、3工程すべての適合を今回のDoneとする。
@@ -207,6 +207,28 @@ Repositoryの保存ID／競合時`None`／例外の契約とトランザクシ�
 Doneは、4種類の結末を型と理由で説明でき、Readyの境界値と判定優先順位、Serviceの保存原子性、旧経路の接続が単体・実DBテストで確認できること。開始時にPR #351のマージを確認し、最新`main`（`d1e0e9c802a6c80938adcaf3a05aba4947b44711`）から作業を分離した。Assessment／Embedding Consumerの未コミット変更は取り込まない。
 
 実装・検証結果（2026-09-13）: スライス2は完了。Ruffのlint・format、全単体6,656件と`make test-integration`の全DB統合1,417件が成功した。実DBでSignal／Noiseの完了値と成功監査・Outboxの一致、保存競合の処理済み結果、保存・監査・Outbox・commit失敗時のロールバック、本文不正の拒否監査と記事保持・AI／後続非実行、Taskエラーから元プロバイダー例外までの原因チェーンを確認した。CLIの応答不正も既定の再試行・成功／失敗集約へ接続済み。テスト用PostgreSQL・Redisは終了処理で削除済み。Consumer・Lambda・配送・AWSは未変更。
+
+### スライス3の確定契約（2026-09-13）
+
+Problemは、検証済みの記事完成イベントからCurationの実行と後処理を完結させ、保存完了・処理済み・Ready拒否・実行失敗を呼び出し元へ伝えること。イベント型の定義をスライス5から前倒しし、発行・配送は後続に残す。
+
+共通の`AnalyzableArticleCreated`は、`event_type=article.analyzable_created`、`schema_version=1`、payloadは正の整数の`analyzable_article_id`だけとする。Pydanticの`frozen=True`・`extra="forbid"`・`strict=True`で検証する。旧2種類のイベントや既存発行処理は変更しない。
+
+`CurationConsumer(session_factory, curator)`は準備済み依存を借用し、`consume(event)`から`CurationCompletion | CurationReadyBuildRejected`を返す。DB事実取得・Ready構築・Service実行を60秒に制限する。DB事実は一度取得し、取得セッションを閉じてからReadyを構築する。Signal／Noise保存済みは追加の監査・AI・成功計測なしで`ALREADY_CURATED`へ対応付け、その他の拒否は期限外の理由記録後に同じ拒否値を返す。成立時はServiceのCompletionをそのまま返す。
+
+`CurationFailureClassification`と`classify_curation_failure`は副作用を持たず、Serviceエラーを監査情報とプロバイダー枯渇通知対象へ投影する。プロバイダーは元例外の分類を保持し、応答不正は`extraction_response_invalid`／`ai_response_invalid`を使用する。DBは既存の`project_db_failure`、timeout・想定外例外はunknown分類を使用する。全分類で記事削除の`failure_action`を持たせず、retryabilityから再配信の制御を導出しない。
+
+`CurationConsumerFailureHandler`の実行失敗後処理は期限外で行う。Assessmentと同じ`failed`計測、別セッションでの失敗監査、該当時の既存プロバイダー枯渇通知を独立して試みる。通常の分類・後処理・診断障害でもConsumerは元の実行例外を同一インスタンス・原因チェーンのまま再送出する。キャンセル・プロセス終了は通常の失敗として抑止しない。
+
+`append_classified_failure`は探索ID、任意のDB由来記事ID、元例外、`FailureProjection`を受け取り、既存payloadと安全なエラー投影で`FAILED`を記録する。Ready・本文・AI生応答は要求しない。取得前のDB障害では探索IDをpayloadだけに保持し、監査のarticle_id・source_idを補完しない。AI実行中に記事が削除され、失敗監査のFKまで成立しない場合もbest-effortのdrop処理へ退避し、元の保存エラーを維持する。
+
+拒否後処理は`append_ready_build_rejected`へ同じ拒否値を渡して別セッションでcommitする。通常の監査障害は安全な理由コード・例外クラスのログとaudit-dropped計測へ退避し、ログ・計測が失敗しても拒否結果を維持する。拒否では成功／実行失敗計測・枯渇通知を実行しない。
+
+Invariantsは、AI前の取得接続返却、一度だけの事実取得、Serviceの原子的保存、処理済み・拒否時のAI非実行、Consumerによる記事保持、元例外の伝播とする。Non-goalsはイベント発行・配送、Lambda・SQS応答、Geminiクライアント借用、共通資源管理への接続、旧Taskiq／CLI・救済・hold／日次上限、DB schema・外部API・依存・AWS設定の変更。ConsumerからTaskiq投入や追加Outboxを行わない。
+
+Doneは、共通イベント型からConsumerを実行でき、4種類の結末とその副作用・監査・例外伝播を単体・実DBテストで検証できること。共通資源管理とGeminiクライアント借用はスライス4、共通イベントの発行・配送はスライス5で接続する。
+
+実装・検証結果（2026-09-13）: スライス3は完了。Ruffのlint・format、全単体6,715件、`make test-integration`の全DB統合1,458件が成功した。Consumerと後処理の実DBテスト41件で、Signal／Noise・処理済み・Ready拒否・実行失敗、保存競合、取得接続の返却、保存・監査・Outbox・commitの原子性、記事削除との競合、後処理の二次障害とキャンセルを確認した。テスト用PostgreSQL・Redisは終了処理で削除済み。基点はPR #352を含む最新main（`1bd0497586146516815ad1457a92254510fa2c98`）、作業ブランチは`codex/curation-consumer`。イベント発行・配送・Lambda・AWS設定は未変更。
 
 Ready拒否の検証は、各工程のConsumerで理由と副作用の不在を確認し、Lambda入口でReady拒否・処理済み・実行失敗の混在時に実行失敗のmessageIdだけが失敗一覧に載ることを確認する。既存の対象欠損を再配信する期待値は置き換える。SQSの削除動作そのものを模した重複テストは作らない。
 

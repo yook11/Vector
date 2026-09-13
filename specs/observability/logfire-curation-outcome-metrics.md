@@ -3,6 +3,8 @@
 作成: 2026-06-15
 Status: Implemented (PR #814)
 
+スライス3追記（2026-09-13）: 新Curation Consumerの実行失敗はAssessmentと同じ`failed`で計上する。Ready拒否・処理済みは本メトリクスへ計上しない。旧Taskiqの`CONTENT_TOO_LARGE -> rejected`や既存の失敗分類は維持し、以下の旧経路向け分類を新Consumerへ適用しない。
+
 ---
 
 ## Work Definition

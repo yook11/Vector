@@ -232,6 +232,32 @@ class CurationAuditRepository:
             projection=projection,
         )
 
+    async def append_classified_failure(
+        self,
+        *,
+        target_article_id: int,
+        article_id: int | None,
+        exc: Exception,
+        projection: FailureProjection,
+    ) -> None:
+        """Readyや本文を要求せず、Consumerの分類と元例外を記録する。"""
+        payload = CurationPayload(
+            target_article_id=target_article_id,
+            failure_kind=projection.failure_kind,
+            failure_action=failure_action_value(projection),
+            failure_reason=projection.failure_reason,
+            error_message=error_message_of(exc),
+            error_chain=extract_error_chain(exc),
+        )
+        await self._append_event(
+            event_type=EventType.FAILED,
+            outcome_code=projection.code,
+            payload=payload,
+            article_id=article_id,
+            error_class=exception_fqn(exc),
+            retryability=projection.retryability,
+        )
+
     async def append_unexpected_failure(
         self,
         *,
