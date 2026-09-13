@@ -6,14 +6,12 @@ from enum import StrEnum
 from typing import ClassVar
 
 from app.collection.domain.analyzable_article import AnalyzableArticleDefect
-from app.logfire.exceptions import VectorDomainError
 
 
-class ArticleCompletionError(VectorDomainError):
+class ArticleCompletionError(Exception):
     """補完固有の発生事実を表し、再試行や終了は判断しない。"""
 
     CODE: ClassVar[str] = "article_completion_error"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE",)
 
 
 class ArticleContentTypeError(ArticleCompletionError):

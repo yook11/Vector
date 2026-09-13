@@ -6,14 +6,12 @@ from datetime import datetime
 from typing import ClassVar
 
 from app.http.failure import HttpTransportFailure
-from app.logfire.exceptions import VectorDomainError
 
 
-class HttpError(VectorDomainError):
+class HttpError(Exception):
     """HTTPの失敗を表し、工程ごとの対処は持たない。"""
 
     CODE: ClassVar[str] = "http_error"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE",)
 
 
 class HttpTransportError(HttpError):
