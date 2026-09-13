@@ -48,7 +48,7 @@ def _stub_dns_resolver():
     個別 patch を重ねて override する。
     """
     with patch(
-        "app.shared.security.ssrf_guard._resolve_host",
+        "app.http.destination_resolution._resolve_host",
         new=AsyncMock(return_value=["8.8.8.8"]),
     ):
         yield
@@ -316,7 +316,7 @@ class TestArticleScraper:
         """ホスト名の DNS 解決結果が private IP なら fetch せず SSRF block。"""
         scraper = ArticleScraper()
         with patch(
-            "app.shared.security.ssrf_guard._resolve_host",
+            "app.http.destination_resolution._resolve_host",
             new=AsyncMock(return_value=["172.18.0.5"]),
         ):
             result = await scraper.scrape(
@@ -332,7 +332,7 @@ class TestArticleScraper:
         """A レコードがクラウドメタデータ (169.254.169.254) を指しているケース。"""
         scraper = ArticleScraper()
         with patch(
-            "app.shared.security.ssrf_guard._resolve_host",
+            "app.http.destination_resolution._resolve_host",
             new=AsyncMock(return_value=["169.254.169.254"]),
         ):
             result = await scraper.scrape(
@@ -348,7 +348,7 @@ class TestArticleScraper:
         """DNS 解決失敗は network origin error (disposition で retryable)。"""
         scraper = ArticleScraper()
         with patch(
-            "app.shared.security.ssrf_guard._resolve_host",
+            "app.http.destination_resolution._resolve_host",
             new=AsyncMock(side_effect=socket.gaierror("nope")),
         ):
             result = await scraper.scrape(SafeUrl("https://nonexistent.invalid/"))

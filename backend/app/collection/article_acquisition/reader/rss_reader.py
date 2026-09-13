@@ -29,8 +29,9 @@ from app.collection.article_acquisition.reader.read_errors import (
 from app.collection.external_fetch_error_mapping import (
     external_fetch_error_from_exception,
 )
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 from app.http.external import make_external_async_client
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 logger = structlog.get_logger(__name__)
 

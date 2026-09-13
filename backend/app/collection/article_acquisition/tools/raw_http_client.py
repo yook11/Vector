@@ -9,8 +9,9 @@ import httpx
 from app.collection.external_fetch_error_mapping import (
     external_fetch_error_from_exception,
 )
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 from app.http.external import make_external_async_client
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"

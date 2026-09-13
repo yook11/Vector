@@ -8,7 +8,7 @@ SafeUrl は URL が安全なスキーム (http または https) を使い、
 加えて、ホストが IP リテラルである場合は ``PublicIpAddress`` 経由で
 public IP に該当することを保証し、private/loopback 等を構造的に拒否
 する (SSRF defense-in-depth)。DNS 名のリゾルブはここでは行わない:
-それは実フェッチ層 (``ssrf_guard.ensure_host_is_public``) の責務。
+それはHTTP層 (``destination_resolution.ensure_host_is_public``) の責務。
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from pydantic import (
     field_validator,
 )
 
-from app.shared.security.ssrf_guard import (
+from app.http.destination_policy import (
     NotAnIpAddressError,
     NotAPublicIpError,
     PublicIpAddress,

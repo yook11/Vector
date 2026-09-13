@@ -1,24 +1,14 @@
-"""ssrf_guard モジュールのユニットテスト。
-
-PublicIpAddress (構造的検証) と ensure_host_is_public (DNS 解決検証) の
-ポリシーを直接検証する。
-"""
+"""外部通信の公開IP方針と非公開レンジ正本を検証する。"""
 
 import ipaddress
-import socket
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.shared.security.ssrf_guard import (
+from app.http.destination_policy import (
     NON_PUBLIC_RANGES,
-    HostBlockedError,
-    HostResolutionError,
     NotAnIpAddressError,
     NotAPublicIpError,
     PublicIpAddress,
-    ensure_host_is_public,
 )
 
 
@@ -128,79 +118,15 @@ class TestPublicIpAddressIdentity:
             addr._value = "1.1.1.1"  # type: ignore[misc]
 
 
-# ensure_host_is_public — DNS Resolution Tests
-def _patch_resolver(*addrs: str | Exception):
-    """``_resolve_host`` を patch し、指定の戻り値/例外を返すようにする。"""
-    if len(addrs) == 1 and isinstance(addrs[0], Exception):
-        return patch(
-            "app.shared.security.ssrf_guard._resolve_host",
-            new=AsyncMock(side_effect=addrs[0]),
-        )
-    return patch(
-        "app.shared.security.ssrf_guard._resolve_host",
-        new=AsyncMock(return_value=list(addrs)),
-    )
-
-
-class TestEnsureHostIsPublic:
-    @pytest.mark.asyncio
-    async def test_accepts_host_resolving_to_public_ipv4(self) -> None:
-        with _patch_resolver("8.8.8.8"):
-            addrs = await ensure_host_is_public("dns.google")
-        assert len(addrs) == 1
-        assert str(addrs[0]) == "8.8.8.8"
-
-    @pytest.mark.asyncio
-    async def test_accepts_host_resolving_to_public_ipv6(self) -> None:
-        with _patch_resolver("2001:4860:4860::8888"):
-            addrs = await ensure_host_is_public("dns.google")
-        assert len(addrs) == 1
-        assert str(addrs[0]) == "2001:4860:4860::8888"
-
-    @pytest.mark.asyncio
-    async def test_rejects_host_resolving_to_private(self) -> None:
-        # docker compose の `backend` のようなサービス名のシナリオ
-        with _patch_resolver("172.18.0.5"):
-            with pytest.raises(HostBlockedError, match="172.18.0.5"):
-                await ensure_host_is_public("backend")
-
-    @pytest.mark.asyncio
-    async def test_rejects_host_resolving_to_link_local(self) -> None:
-        # クラウドメタデータエンドポイントのシナリオ (169.254.169.254 への A レコード)
-        with _patch_resolver("169.254.169.254"):
-            with pytest.raises(HostBlockedError, match="169.254.169.254"):
-                await ensure_host_is_public("metadata-attack.example.com")
-
-    @pytest.mark.asyncio
-    async def test_rejects_host_resolving_to_loopback(self) -> None:
-        with _patch_resolver("127.0.0.1"):
-            with pytest.raises(HostBlockedError, match="127.0.0.1"):
-                await ensure_host_is_public("localhost-alias.example.com")
-
-    @pytest.mark.asyncio
-    async def test_rejects_when_any_resolved_address_is_private(self) -> None:
-        # マルチホーム: public + private が混在 → 全件 public でないと NG
-        with _patch_resolver("8.8.8.8", "10.0.0.1"):
-            with pytest.raises(HostBlockedError, match="10.0.0.1"):
-                await ensure_host_is_public("multihomed.example.com")
-
-    @pytest.mark.asyncio
-    async def test_raises_resolution_error_on_dns_failure(self) -> None:
-        with _patch_resolver(socket.gaierror("Name or service not known")):
-            with pytest.raises(HostResolutionError, match="DNS resolution failed"):
-                await ensure_host_is_public("nonexistent.invalid")
-
-
 class TestNonPublicRangeParity:
-    """レンジ正本と ``PublicIpAddress`` の判定が一致することを固定する。
+    """レンジ正本に含まれる宛先をアプリも拒否することを固定する。
 
     同じ「公開ではない宛先」の定義が app (本 VO) と egress proxy (Squid の
     ``acl to_private``) の 2 箇所で使われる。Squid はレンジの明示列挙しか
     書けないため、正本を ``non_public_ranges.json`` に置いて双方が読む。
 
-    ここで守る不変条件は **proxy が拒否するものは app も必ず拒否する** こと。
-    逆向き (app の方が厳しい) は許す: app が先に落とすので外へ出ず、
-    proxy の 403 が ``ProxyError`` として通信障害に誤分類される事故が起きない。
+    ここで守る条件は、同じIPに対して **proxyの非公開レンジ拒否 ⊆ appの拒否**
+    となることで、両者のDNS解決結果の一致やドメイン・ポート制限は保証しない。
     """
 
     @staticmethod
@@ -257,51 +183,3 @@ class TestNonPublicRangeParity:
         """レンジを足しすぎて正当な宛先を塞いでいないこと。"""
         for addr in ("8.8.8.8", "1.1.1.1", "93.184.215.14", "2606:4700:4700::1111"):
             assert str(PublicIpAddress(addr)) == str(ipaddress.ip_address(addr))
-
-
-_SQUID_CONF_TEMPLATE = (
-    Path(__file__).parents[3] / "infra" / "aws" / "templates" / "squid.conf.tftpl"
-)
-_DENY_NON_PUBLIC = "http_access deny to_private"
-
-
-def _squid_directives() -> list[str]:
-    """コメントと Terraform の制御行を落とした Squid ディレクティブ列 (評価順)。"""
-    return [
-        stripped
-        for line in _SQUID_CONF_TEMPLATE.read_text(encoding="utf-8").splitlines()
-        if (stripped := line.strip()) and not stripped.startswith(("#", "%{"))
-    ]
-
-
-class TestEgressProxyDenyContract:
-    """app が IP pin を手放す根拠が proxy 側に実在することを固定する。
-
-    proxy を経由する構成では DNS rebind 防御の最終責任が Squid の
-    ``http_access deny to_private`` に移る (``http.external`` の module docstring)。
-    レンジ定義の一致は ``TestNonPublicRangeParity`` が見るが、**拒否そのものが
-    conf に書かれているか** は誰も見ていなかった。この行を消してもレンジは一致する。
-    """
-
-    def test_template_is_readable(self) -> None:
-        """正本の場所がずれたら黙って緑にならず、ここで落ちる。"""
-        assert _SQUID_CONF_TEMPLATE.is_file()
-
-    def test_denies_non_public_destinations(self) -> None:
-        assert _DENY_NON_PUBLIC in _squid_directives()
-
-    @pytest.mark.parametrize("variable", ["private_v4_ranges", "private_v6_ranges"])
-    def test_deny_covers_range_source(self, variable: str) -> None:
-        """acl が正本の v4 / v6 双方を参照する (片方の列挙漏れは穴になる)。"""
-        acl = " ".join(
-            d for d in _squid_directives() if d.startswith("acl to_private ")
-        )
-        assert variable in acl
-
-    def test_deny_precedes_every_allow(self) -> None:
-        """Squid は上から評価するので、allow より後ろに置いた deny は死ぬ。"""
-        directives = _squid_directives()
-        first_allow = next(
-            i for i, d in enumerate(directives) if d.startswith("http_access allow")
-        )
-        assert directives.index(_DENY_NON_PUBLIC) < first_allow

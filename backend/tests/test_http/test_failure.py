@@ -12,6 +12,8 @@ from botocore.awsrequest import AWSPreparedRequest
 from botocore.httpsession import URLLib3Session
 from urllib3 import exceptions as urllib3_errors
 
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -19,7 +21,6 @@ from app.http.failure import (
     classify_botocore,
     classify_httpx,
 )
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 S = HttpTransportStage
 R = HttpTransportFailureReason

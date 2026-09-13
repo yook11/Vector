@@ -8,26 +8,28 @@ short-circuit して、実 HTTP は出さずに pin された Request を観察�
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 from app.http.external import (
     _PinnedDnsTransport,
     make_external_async_client,
 )
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 
 def _patch_resolver(*addrs: str | Exception):
     if len(addrs) == 1 and isinstance(addrs[0], Exception):
         return patch(
-            "app.shared.security.ssrf_guard._resolve_host",
+            "app.http.destination_resolution._resolve_host",
             new=AsyncMock(side_effect=addrs[0]),
         )
     return patch(
-        "app.shared.security.ssrf_guard._resolve_host",
+        "app.http.destination_resolution._resolve_host",
         new=AsyncMock(return_value=list(addrs)),
     )
 
@@ -57,6 +59,25 @@ def egress_proxy(monkeypatch: pytest.MonkeyPatch) -> str:
     url = "http://proxy.vector.internal:3128"
     monkeypatch.setenv("EGRESS_PROXY_URL", url)
     return url
+
+
+@pytest.fixture
+def redirect_requests(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """宛先検証後の送信を捕捉し、最初の応答で別ホストへリダイレクトする。"""
+    sent: list[str] = []
+
+    async def respond(
+        self: httpx.AsyncHTTPTransport, request: httpx.Request
+    ) -> httpx.Response:
+        sent.append(str(request.url))
+        if len(sent) == 1:
+            return httpx.Response(
+                302, headers={"Location": "https://next.example/article"}
+            )
+        return httpx.Response(200, content=b"article")
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
+    return sent
 
 
 # Transport ベースの SSRF 検証
@@ -120,7 +141,7 @@ class TestSsrfValidation:
     ) -> None:
         """public IP literal は DNS resolve せず通過。"""
         with patch(
-            "app.shared.security.ssrf_guard._resolve_host",
+            "app.http.destination_resolution._resolve_host",
             new=AsyncMock(side_effect=AssertionError("must not resolve")),
         ):
             async with make_external_async_client() as client:
@@ -151,7 +172,7 @@ class TestDnsRebindResistance:
             return ["172.20.0.5"]  # 2nd resolve で internal を返す rebind 攻撃
 
         with patch(
-            "app.shared.security.ssrf_guard._resolve_host", side_effect=fake_resolve
+            "app.http.destination_resolution._resolve_host", side_effect=fake_resolve
         ):
             async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://rebind.example/feed.xml")
@@ -298,6 +319,51 @@ class TestFollowRedirectsDefault:
             assert client.follow_redirects is True
 
 
+class TestRedirectDestinationValidation:
+    @pytest.mark.asyncio
+    async def test_default_does_not_send_redirect_target(
+        self, redirect_requests: list[str], egress_proxy: str
+    ) -> None:
+        """既定ではリダイレクト先への送信を行わない。"""
+        with _patch_resolver("8.8.8.8"):
+            async with make_external_async_client() as client:
+                response = await client.get("https://start.example/article")
+        assert response.status_code == 302
+        assert redirect_requests == ["https://start.example/article"]
+
+    @pytest.mark.asyncio
+    async def test_explicit_follow_validates_each_public_destination(
+        self, redirect_requests: list[str], egress_proxy: str
+    ) -> None:
+        """追従を許可した場合も送信先ごとにDNS解決結果を検証する。"""
+        with _patch_resolver("8.8.8.8") as resolve:
+            async with make_external_async_client(follow_redirects=True) as client:
+                response = await client.get("https://start.example/article")
+        assert response.status_code == 200
+        assert redirect_requests == [
+            "https://start.example/article",
+            "https://next.example/article",
+        ]
+        assert [call.args[0] for call in resolve.await_args_list] == [
+            "start.example",
+            "next.example",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_explicit_follow_rejects_non_public_target_before_send(
+        self, redirect_requests: list[str], egress_proxy: str
+    ) -> None:
+        """リダイレクト先が非公開IPへ解決された場合は送信前に拒否する。"""
+        with patch(
+            "app.http.destination_resolution._resolve_host",
+            new=AsyncMock(side_effect=[["8.8.8.8"], ["10.0.0.1"]]),
+        ):
+            async with make_external_async_client(follow_redirects=True) as client:
+                with pytest.raises(HostBlockedError):
+                    await client.get("https://start.example/article")
+        assert redirect_requests == ["https://start.example/article"]
+
+
 # transport の構造的保証
 class TestTransportStructure:
     @pytest.mark.asyncio
@@ -317,3 +383,51 @@ class TestTransportStructure:
         # に成功) ことで、振分が正しいことが分かる。
         async with make_external_async_client(verify=True, http1=True) as client:
             assert isinstance(client._transport, _PinnedDnsTransport)
+
+
+_SQUID_CONF_TEMPLATE = (
+    Path(__file__).parents[3] / "infra" / "aws" / "templates" / "squid.conf.tftpl"
+)
+_DENY_NON_PUBLIC = "http_access deny to_private"
+
+
+def _squid_directives() -> list[str]:
+    """コメントと Terraform の制御行を落とした Squid ディレクティブ列 (評価順)。"""
+    return [
+        stripped
+        for line in _SQUID_CONF_TEMPLATE.read_text(encoding="utf-8").splitlines()
+        if (stripped := line.strip()) and not stripped.startswith(("#", "%{"))
+    ]
+
+
+class TestEgressProxyDenyContract:
+    """app が IP pin を手放す根拠が proxy 側に実在することを固定する。
+
+    proxy を経由する構成では DNS rebind 防御の最終責任が Squid の
+    ``http_access deny to_private`` に移る (``http.external`` の module docstring)。
+    レンジ定義の一致は ``TestNonPublicRangeParity`` が見るが、**拒否そのものが
+    conf に書かれているか** は誰も見ていなかった。この行を消してもレンジは一致する。
+    """
+
+    def test_template_is_readable(self) -> None:
+        """正本の場所がずれたら黙って緑にならず、ここで落ちる。"""
+        assert _SQUID_CONF_TEMPLATE.is_file()
+
+    def test_denies_non_public_destinations(self) -> None:
+        assert _DENY_NON_PUBLIC in _squid_directives()
+
+    @pytest.mark.parametrize("variable", ["private_v4_ranges", "private_v6_ranges"])
+    def test_deny_covers_range_source(self, variable: str) -> None:
+        """acl が正本の v4 / v6 双方を参照する (片方の列挙漏れは穴になる)。"""
+        acl = " ".join(
+            d for d in _squid_directives() if d.startswith("acl to_private ")
+        )
+        assert variable in acl
+
+    def test_deny_precedes_every_allow(self) -> None:
+        """Squid は上から評価するので、allow より後ろに置いた deny は死ぬ。"""
+        directives = _squid_directives()
+        first_allow = next(
+            i for i, d in enumerate(directives) if d.startswith("http_access allow")
+        )
+        assert directives.index(_DENY_NON_PUBLIC) < first_allow

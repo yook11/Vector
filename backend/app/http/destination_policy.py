@@ -1,27 +1,14 @@
-"""SSRF 防御の SSoT。
+"""外部通信の最終宛先に許可するIPの共通方針。
 
-「どの IP 範囲を public とみなすか」「ホスト名を実フェッチして良いか」の
-アクセスポリシーを 1 箇所に集約する。レンジの正本は
-``non_public_ranges.json`` で、egress proxy (Squid の ``acl to_private``) も
-同じファイルから生成される。fetch 機構 (httpx クライアントの
-リトライ可否など) は知らない: 政策専用例外を出し、呼び出し側が文脈に
-応じて翻訳する。
-
-検証ロジックは ``PublicIpAddress`` の constructor に押し込み、
-「型が存在する = 検証済み」を構造的に保証する。``is_blocked_ip`` の
-ような直接判定関数は public API として公開しない (VO 構築が SSoT)。
-
-政策例外 (``HostBlockedError`` / ``HostResolutionError``) の現役の翻訳先は
-``collection/external_fetch_error_mapping.py`` の
-``external_fetch_error_from_exception`` が持つ。
+非公開レンジの正本は同階層の ``non_public_ranges.json`` に置き、プロキシも参照する。
+アプリは正本とPythonのIP判定のいずれかで非公開となるIPを拒否する。
+DNS解決は ``destination_resolution``、送信時の適用は ``external`` が担当する。
 """
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import json
-import socket
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -77,11 +64,7 @@ class NotAPublicIpError(Exception):
 
 
 class HostBlockedError(Exception):
-    """ホスト名の DNS 解決結果がアクセスポリシー上拒否された。"""
-
-
-class HostResolutionError(Exception):
-    """ホスト名の DNS 解決自体に失敗した。"""
+    """IP直書きまたはDNS解決結果が外部通信の宛先方針で拒否された。"""
 
 
 class PublicIpAddress:
@@ -98,7 +81,7 @@ class PublicIpAddress:
     ``is_private`` も ``is_global`` も ``is_reserved`` も False、廃止された
     6to4 リレー ``192.88.99.0/24`` は ``is_global`` が True になる
     (Python 3.13.11 実測)。egress proxy 側は明示レンジで拒否しているので、
-    正本を共有して両者を一致させる。
+    正本を共有し、proxyの非公開レンジをアプリも拒否する。
 
     ``str(addr)`` で標準化された IP 表記が得られる
     (例: ``2001:db8::0001`` → ``2001:db8::1``)。
@@ -153,51 +136,3 @@ class PublicIpAddress:
 
     def __hash__(self) -> int:
         return hash(self._value)
-
-
-async def _resolve_host(host: str) -> list[str]:
-    """ホスト名を DNS 解決し、IP 文字列のリストを返す。
-
-    テスト時は本関数を patch することで DNS をモックできる。
-    """
-    loop = asyncio.get_running_loop()
-    infos = await loop.getaddrinfo(host, None)
-    return [info[4][0] for info in infos]
-
-
-async def ensure_host_is_public(host: str) -> tuple[PublicIpAddress, ...]:
-    """ホスト名を DNS 解決し、全アドレスが ``PublicIpAddress`` であることを保証する。
-
-    docker compose のサービス名 (``backend``, ``db``, ...) や、A レコードが
-    プライベート IP に向いている悪意あるドメインを実フェッチ前に弾く。
-
-    Returns:
-        検証済みアドレスのタプル (1 件以上)。
-
-    Raises:
-        HostBlockedError: いずれかの解決結果が public でない。
-        HostResolutionError: DNS 解決に失敗した。
-
-    Note:
-        本関数単独では DNS rebinding (本関数の解決結果と httpx 側の解決結果が
-        ずれる TOCTOU) を防げない。``app/http/external.py`` の
-        ``_PinnedDnsTransport`` がここで返した最初の IP に TCP 接続を pin し、
-        TOCTOU を構造的に閉塞する。本関数は IP allowlist の判定だけを担う。
-    """
-    try:
-        resolved = await _resolve_host(host)
-    except socket.gaierror as e:
-        msg = f"DNS resolution failed for host: {host}: {e}"
-        raise HostResolutionError(msg) from e
-
-    addrs: list[PublicIpAddress] = []
-    for addr in resolved:
-        try:
-            addrs.append(PublicIpAddress(addr))
-        except NotAPublicIpError as e:
-            msg = f"host resolves to non-public address: {host} -> {addr}"
-            raise HostBlockedError(msg) from e
-        except NotAnIpAddressError:
-            # getaddrinfo は IP を返すので通常ここには来ないが defense-in-depth
-            continue
-    return tuple(addrs)

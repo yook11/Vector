@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 from app.http.error_mapping import (
     http_response_error_from_exception,
     http_transport_error_from_exception,
@@ -14,7 +16,6 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 
 @pytest.mark.parametrize(

@@ -1,32 +1,16 @@
-"""第三者宛の ``httpx.AsyncClient`` のファクトリ。
+"""第三者宛の標準transportに、送信時の宛先検証とプロキシ経路を組み込む。
 
-宛先が自分たちの管理下に無い経路 — 第三者のサービスと、記事本文のようにデータ由来の
-URL — はすべてここを通す。宛先を信用できないことから、以下が要求として導かれる:
+IP直書きは ``destination_policy``、DNS名は ``destination_resolution`` で検証する。
+通常のファクトリ経路は ``HttpSettings.egress_proxy_url`` が必須で、元のホスト名を
+プロキシへ渡すため、実際の接続先の非公開IP拒否はプロキシ自身が担当する。
+httpcoreのCONNECTトンネルは ``sni_hostname`` を引き継がないため、IPに書き換えない。
 
-- 「呼び出し側で ``ensure_host_is_public`` を呼び忘れる」運用ミスを構造的に排除
-- リダイレクト経由 SSRF を default で遮断 (``follow_redirects=False``)
-- DNS rebind / TOCTOU を Custom Transport の IP pin で構造的に閉塞
+既存transportを直接接続で使う場合は、検証した最初のIPへ接続先を固定し、
+HostとTLS SNIは元のホスト名を保持するが、ファクトリには直接接続へのfallbackはない。
+標準transportではリダイレクト先も検証し、追従の既定値はFalseとする。
 
-自分たちの resource 宛には ``app.http.internal`` を使う。どちらでもない経路を
-作らないため、``httpx.AsyncClient`` の直接構築は ``flake8-tidy-imports`` の ``TID251``
-で禁止する (``pyproject.toml`` 参照)。
-
-DNS pin は ``_PinnedDnsTransport`` が送信直前に host を resolve し、全 IP を public
-検証したうえで最初の IP へ TCP 接続先を固定する。Host header と TLS SNI は元 host
-を保持するため、validate と connect の間で DNS 応答が変わっても TOCTOU が成立しない。
-
-egress proxy を経由する構成 (``HttpSettings.egress_proxy_url``) では接続先を書き換えず、
-host 名のまま proxy へ渡す。httpcore が CONNECT トンネルに ``sni_hostname`` を渡さない
-ため、書き換えると証明書の hostname 検証が壊れるからで、その構成では rebind 防御を
-proxy 側の非公開宛先 deny が担う。public 検証は経路によらず必ず通すので、この移譲で
-緩むのは pin だけ。
-
-経路は settings だけが決め、呼び出し側の ``proxy`` は受け付けない。httpx は transport を
-明示すると env の proxy を読まない (``allow_env_proxies = trust_env and transport is
-None``) ため、``HTTPS_PROXY`` を置くだけではこの経路に効かない点にも注意。
-
-transport の ``HostBlockedError`` / ``HostResolutionError`` は httpx に wrap されず
-呼び出し側へ伝播する。
+``HostBlockedError`` と ``HostResolutionError`` は元のまま利用機能へ伝播する。
+``mounts`` 等による別transportの選択を含む保証の限界は、このパッケージのREADME参照。
 """
 
 from __future__ import annotations
@@ -35,14 +19,14 @@ from typing import Any
 
 import httpx
 
-from app.http.settings import HttpSettings
-from app.shared.security.ssrf_guard import (
+from app.http.destination_policy import (
     HostBlockedError,
     NotAnIpAddressError,
     NotAPublicIpError,
     PublicIpAddress,
-    ensure_host_is_public,
 )
+from app.http.destination_resolution import ensure_host_is_public
+from app.http.settings import HttpSettings
 
 # AsyncHTTPTransport の constructor 引数のうち make_external_async_client が
 # kwargs から取り分けて transport に渡す key 群。
@@ -83,14 +67,7 @@ def _pin_connection_to_address(
 
 
 class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
-    """ssrf_guard で validate した IP に TCP 接続を pin する Transport。
-
-    送信直前に DNS を解決して全 IP が public であることを検証し、TCP 接続先だけを
-    検証済 IP に差し替える。Host header と TLS SNI は元 host に固定する。
-
-    proxy 経由の構成では書き換えを行わない (module docstring 参照)。検証は経路に
-    よらず必ず通す。
-    """
+    """送信直前に宛先方針を適用し、直接接続の場合だけ検証済みIPへ固定する。"""
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -103,9 +80,7 @@ class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
         if not original_host:
             return await super().handle_async_request(request)
 
-        # IP literal の場合: SafeUrl 構築時に PublicIpAddress で public 検証済の
-        # 想定だが defense-in-depth でここでも判定する。private IP literal が
-        # 直接渡されたら HostBlockedError で拒否。
+        # 呼び出し側がSafeUrlを使うかに依存せず、送信時にIP直書きも検証する。
         try:
             PublicIpAddress(original_host)
         except NotAnIpAddressError:
@@ -126,23 +101,14 @@ class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
 
 
 def make_external_async_client(**kwargs: Any) -> httpx.AsyncClient:
-    """第三者宛の ``httpx.AsyncClient`` を返す (SSRF 検証 + DNS rebind 防御入り)。
+    """宛先検証を持つ標準transportと、設定で確定したプロキシを使用する。
 
-    - DNS resolution と IP pin を ``_PinnedDnsTransport`` に統合 (TOCTOU 不成立)
-    - ``follow_redirects`` は明示指定がなければ ``False`` を default 適用
-      (Location 先で再度 DNS 検証を行わないため、信頼境界を超えない方針)
-    - transport-level kwargs (``verify`` / ``cert`` / ``http1`` / ``http2`` /
-      ``limits`` / ``trust_env`` / ``proxy`` / ``uds`` / ``local_address`` /
-      ``retries`` / ``socket_options``) は transport コンストラクタに振分
-    - 残りの kwargs (``headers`` / ``timeout`` / ``follow_redirects`` 等) は
-      ``httpx.AsyncClient`` にそのまま委譲する
-    - egress 経路は ``HttpSettings.egress_proxy_url`` だけが決める (``proxy`` は
-      呼び出し側から受け取らない)
+    リダイレクト追従は既定でFalseとし、明示的なTrueは維持する。
+    transport用の引数を取り分け、残りの引数はHTTPXへ委譲する。
+    標準transportの経路は設定が決め、呼び出し側のproxy引数は上書きする。
     """
     kwargs.setdefault("follow_redirects", False)
-    # 出口をどこに置くかは呼び出し側ではなく実行環境が決めるので、ここで一括して
-    # 差し込む。呼び出し側の指定を尊重しないのは、経路の穴を 1 箇所も作らないため。
-    # 未設定や不正な設定はtransport生成前に拒否する。
+    # 標準transportの出口は実行環境が決め、設定不備はtransport生成前に拒否する。
     kwargs["proxy"] = HttpSettings().egress_proxy_url  # type: ignore[call-arg]
 
     transport_kwargs = {k: kwargs.pop(k) for k in _TRANSPORT_KEYS if k in kwargs}

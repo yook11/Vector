@@ -25,7 +25,8 @@ from app.collection.external_fetch_errors import (
     FetchUnexpectedClientStatusError,
     FetchUnexpectedServerStatusError,
 )
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 
 # httpcore は CONNECT の非 2xx を "<status> <reason>" 形式で ProxyError に載せる
 # (``_async/http_proxy.py`` の ``"%d %s" % (status, reason)``)。構造化された
