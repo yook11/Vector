@@ -7,7 +7,7 @@ from datetime import timedelta
 from enum import StrEnum
 from math import isfinite
 
-from app.http.failure import HttpTransportFailureKind
+from app.http.failure import HttpTransportFailureReason
 from app.outbox.delivery.values import RetryDelay
 from app.outbox.publishing.errors import (
     PublishConfigurationError,
@@ -55,17 +55,13 @@ class NonRetryable:
 MAX_PUBLISH_ATTEMPTS = 5
 
 _RETRY_DELAYS = (30, 120, 600, 1800)
-_RETRY_TRANSPORT_KINDS = frozenset(
+_RETRY_TRANSPORT_REASONS = frozenset(
     {
-        HttpTransportFailureKind.DNS_RESOLUTION,
-        HttpTransportFailureKind.CONNECT,
-        HttpTransportFailureKind.CONNECT_TIMEOUT,
-        HttpTransportFailureKind.POOL_TIMEOUT,
-        HttpTransportFailureKind.WRITE_TIMEOUT,
-        HttpTransportFailureKind.READ_TIMEOUT,
-        HttpTransportFailureKind.NETWORK_IO,
-        HttpTransportFailureKind.REMOTE_PROTOCOL,
-        HttpTransportFailureKind.UNKNOWN,
+        HttpTransportFailureReason.TIMEOUT,
+        HttpTransportFailureReason.DNS_RESOLUTION,
+        HttpTransportFailureReason.NETWORK_IO,
+        HttpTransportFailureReason.PROTOCOL_VIOLATION,
+        HttpTransportFailureReason.UNKNOWN,
     }
 )
 _RETRY_SERVICE_REASONS = frozenset(
@@ -79,9 +75,9 @@ _RETRY_SERVICE_REASONS = frozenset(
 def _is_retry_candidate(error: PublishError) -> bool:
     """回数を見ず、失敗の性質として再試行対象かを返す。"""
     if isinstance(error, PublishTransportError):
-        if error.failure.kind in _RETRY_TRANSPORT_KINDS:
+        if error.failure.reason in _RETRY_TRANSPORT_REASONS:
             return True
-        if error.failure.kind is HttpTransportFailureKind.PROXY:
+        if error.failure.reason is HttpTransportFailureReason.PROXY:
             return _is_retryable_proxy_status(error.failure.proxy_status)
         return False
     if isinstance(error, PublishServiceError):
@@ -92,9 +88,9 @@ def _is_retry_candidate(error: PublishError) -> bool:
 def _non_retryable_reason(error: PublishError) -> NonRetryableReason:
     """再試行対象でない失敗の性質から、停止理由を決める。"""
     if isinstance(error, PublishTransportError):
-        if error.failure.kind is HttpTransportFailureKind.TLS:
+        if error.failure.reason is HttpTransportFailureReason.TLS:
             return NonRetryableReason.NON_RETRYABLE_FAILURE
-        if error.failure.kind is HttpTransportFailureKind.PROXY:
+        if error.failure.reason is HttpTransportFailureReason.PROXY:
             return NonRetryableReason.NON_RETRYABLE_FAILURE
         return NonRetryableReason.UNEXPECTED_FAILURE
     if isinstance(error, PublishServiceError):

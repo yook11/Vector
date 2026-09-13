@@ -13,7 +13,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.db.errors import DatabaseError
 from app.db.session import caller_managed_session_factory
-from app.http.failure import HttpTransportFailure, HttpTransportFailureKind
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.outbox_event import OutboxEvent
 from app.outbox.delivery import failure_recording as publish_failure_recording
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
@@ -46,7 +50,9 @@ def _configuration():
 
 def _transport():
     return PublishTransportError(
-        failure=HttpTransportFailure(HttpTransportFailureKind.READ_TIMEOUT, True)
+        failure=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
     )
 
 

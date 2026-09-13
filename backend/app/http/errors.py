@@ -15,7 +15,7 @@ class HttpError(Exception):
 
 
 class HttpTransportError(HttpError):
-    """通信失敗の種類と到達可能性を共通の値で保持する。"""
+    """応答の受信を完了できなかった通信失敗を、段階と理由の共通の値で保持する。"""
 
     CODE: ClassVar[str] = "http_transport_error"
 
@@ -25,7 +25,7 @@ class HttpTransportError(HttpError):
 
 
 class HttpResponseError(HttpError):
-    """相手の応答情報を保持し、Retry-Afterの採用や解釈は行わない。"""
+    """応答は受け取ったが成功でなかった事実を保持し、Retry-Afterの採用や解釈は行わない。"""
 
     CODE: ClassVar[str] = "http_response_error"
 

@@ -9,7 +9,7 @@ Status: タスク1・2の定義はPR #356で実装・マージ済み（2026-09-1
 ## Evidence
 
 - [本文補完Consumer仕様](../../specs/pipeline/article-completion-consumer.md): 正常終了・失敗の区別、先勝ちの確定、非closed行の救済と受信条件、DBとSQSの責務を定義している。
-- [共通HTTP failure](../../backend/app/http/failure.py): `HttpTransportFailure`が通信失敗の種類・到達可能性・proxy statusを持つ。HTTPエラー応答は現在の対象外で、再試行方針を持たない。
+- [共通HTTP failure](../../backend/app/http/failure.py): `HttpTransportFailure`が通信失敗の段階・理由・proxy statusを持ち、到達可能性は段階から導く。HTTPエラー応答は現在の対象外で、再試行方針を持たない。
 - [HTTPクライアント](../../backend/app/http/external.py): 共通の外部通信と既存の保護を提供する。今回の定義タスクでは変更しない。
 - [現在の外部取得エラー](../../backend/app/collection/external_fetch_errors.py)と[変換](../../backend/app/collection/external_fetch_error_mapping.py): 旧経路の接続を把握する証拠。`retryable`属性や旧分類を新設計の前提にしない。
 - [既存の抽出失敗](../../backend/app/collection/article_completion/scrape_failure.py)と[補完拒否](../../backend/app/collection/article_completion/completion_failure.py): 抽出結果なし、抽出器の異常、品質不足、構築defect等の発生事実を確認する材料。
@@ -42,7 +42,7 @@ HTTPエラー応答と通信失敗は区別する。取得先が返す403とprox
 ### 対象と実施内容
 
 - 新規ファイル案は`backend/app/http/errors.py`。共通基底`HttpError`、通信失敗を保持する`HttpTransportError`、HTTPエラー応答を保持する`HttpResponseError`を定義する。名称は実装開始時に既存語彙との衝突を確認する。
-- 通信エラーは既存の`HttpTransportFailure`をそのまま保持する。種類・到達可能性・proxy statusを新しいenum等に写し直さない。
+- 通信エラーは既存の`HttpTransportFailure`をそのまま保持する。段階・理由・proxy statusを新しいenum等に写し直さない。
 - HTTP応答エラーは取得先のstatus、任意のRetry-After、必要な応答受信時刻を持つ。statusだけから再試行判断や補完工程の意味を生成しない。
 - Retry-Afterは対象ヘッダーの値を応答事実として保持する案とする。秒数・日時の解釈、待機期限の算出はこの定義タスクに含めない。
 - 元の原因例外は後続の呼び出し側が例外チェーンで保持する。本文・ヘッダー全体・秘密情報を保持する汎用payloadは追加しない。出力側が必要な項目を選択し、全フィールドや文字列表現をそのまま送信する前提にしない。
