@@ -57,14 +57,14 @@ Lambdaの関数コードからのENI操作は明示的に拒否する。Lambda�
 
 VPCは`10.80.0.0/16`。Lambda・EC2の用途別にサブネットを分け、DB用には1a/1cの2サブネットを用意する。
 公開ルートはプロキシ用だけ。NAT Gateway、IP転送、SSH受信口は作らず、プロキシの3128番はLambdaと実行用EC2からのみ受け入れる。
-SSMとssmmessagesのInterface endpointを主AZに各1つ設け、Private DNSを有効にする。SSM Agentはプロキシを経由せず、Dockerやパッケージ取得の成否に依存しない管理通信を使う。
+SSMとssmmessagesのInterface endpointを主AZに各1つ設け、Private DNSを有効にする。SSM Agentの管理通信は`no_proxy`で直接接続し、Dockerやパッケージ取得の成否に依存しない。CloudWatch Logsへの転送には既存プロキシを使う。
 Lambdaとrunnerの許可先は、送信元サブネット別のSquid ACLで分離する。runner用のAWS許可先をLambdaへ流用しない。
 プロキシのアクセスログには時刻・HTTPメソッド・ステータスだけを残し、URL・ヘッダーを記録しない。
 
 - AMIはAWS公開パラメーターからAL2023 ARM64を取得し、実際に使ったIDを出力する。
 - 両EC2はIMDSv2必須、CPUクレジットStandard、ルートディスク暗号化・終了時削除。両EC2は`t4g.small`、ルートディスクはプロキシ8GB・runner20GB。
 - プロキシはDockerを入れ、指定digestの既存Squidイメージを取得し、systemdで起動する。ECR認証情報は取得中のみ一時ディレクトリに保持する。
-- runnerはSSM Agentのプロキシ環境変数を解除し、Docker daemonだけにプロキシ設定を用意する。ホスト上の後続コマンドは`/etc/vector-test/proxy.env`を`set -a`で読み込む。ここには接続先だけが入り、秘密値は含めない。
+- runnerはSSM AgentとDocker daemonに`/etc/vector-test/proxy.env`を設定し、SSM/ssmmessages・IMDSは`no_proxy`で直接接続する。ホスト上の後続コマンドは`/etc/vector-test/proxy.env`を`set -a`で読み込む。ここには接続先だけが入り、秘密値は含めない。
 - `no_proxy`には通常のSSM/ssmmessagesホスト名、RDSホスト名、localhost、IMDSを指定する。LambdaのSSMクライアントは本番同様の直接接続を使う。
 - Docker内へ環境変数は自動伝播しない。後続の準備コンテナには必要な接続設定を明示し、IMDSv2のhop limit=1を保つため`--network host`で実行する。認証を無効にして回避しない。
 - 起動時の外部コマンドは1回300秒・最大5回で打ち切る。runnerのプロキシ待ちは最大60回（1回5秒＋10秒間隔）。Squidのサービス再起動にも回数制限を設ける。
@@ -131,6 +131,8 @@ terraform -chdir=infra/aws-test/smoke test
 backend/.venv/bin/python -m unittest discover -s infra/aws-test/scripts/tests -v
 ```
 検証対象はアカウント入力とSSO信頼先の整合、state保護、SGの既存／作成時IAM条件、全設備の必須タグ、IAMパス・権限境界、ログ名と許可ARN、ENI待機の依存関係、通信・SQS・保持設定。
+CIの`AWS smoke (unit + Terraform mock)`は関連変更時に専用Pythonテスト・Ruff・Terraformモックテストを実行し、CI gateへ集約する。
+
 provider/backendのアカウント制限や実際のIAM評価、プロキシ疎通、EC2起動成功はモックの合格だけでは保証できない。
 
 ## ローカルのアカウント設定
@@ -329,9 +331,9 @@ make aws-smoke-status RUN_ID=20260912-up01
 
 `RUN_ID`を省略すると毎回新しいIDを生成する。既存環境の再確認には表示されたIDを指定する。Runnerプロファイルを変更する初回操作は`aws-smoke.py up --runner-profile <名前>`を使い、再確認は保存済みプロファイルを使用する。
 
-成功条件は、固定した入力と実リソース・Lambda digestの整合、両EC2のステータスチェック、両SSM AgentのOnline、runnerへの今回固有の短い応答、runnerのbootstrap readyとDocker稼働、プロキシ3128番への接続、プロキシ経由のECR BatchGetImageで指定proxy digestを取得できること。ECRの空結果・失敗応答も不合格とし、GeminiやDBの正常動作まで確認したとは扱わない。
+成功条件は、固定した入力と実リソース・Lambda digestの整合、両EC2のステータスチェック、両SSM AgentのOnline、runnerへの今回固有の短い応答、runnerのbootstrap readyとDocker稼働、プロキシ3128番への接続、プロキシ経由のECR BatchGetImageで指定proxy digestを取得できること、今回固有の確認文字列がrunnerのCloudWatchログへ到着すること。ECRの空結果・失敗応答も不合格とし、GeminiやDBの正常動作まで確認したとは扱わない。
 
-起動確認のSSMコマンドはCloudWatch転送を無効にし、短い結果をRun Commandから直接取得する。プロキシ障害時も管理通信の成否を確認できる。構築後の起動確認は全項目で900秒を共有し、各SSMコマンドは実行30秒・配信60秒、AWS通信にも短い期限を設定する。待機中は30秒間隔で工程・経過時間を表示する。処理中のAPI通信とプロセス終了の時間が上限に加わる場合がある。
+管理疎通確認のSSMコマンドはCloudWatch転送を無効にし、短い結果をRun Commandから直接取得する。プロキシ確認後の`runner_logs`工程だけは転送を有効にし、今回の確認文字列をCloudWatchから読み戻す。空のログ・過去の確認文字列では合格にしない。プロキシ障害時も管理通信の成否を確認できる。構築後の起動確認は全項目で900秒を共有し、各SSMコマンドは実行30秒・配信60秒、AWS通信にも短い期限を設定する。待機中は30秒間隔で工程・経過時間を表示する。処理中のAPI通信とプロセス終了の時間が上限に加わる場合がある。
 
 | 再実行時の状態 | 動作 |
 |---|---|
@@ -344,6 +346,10 @@ make aws-smoke-status RUN_ID=20260912-up01
 最新結果は`result.json`と`summary.txt`、各回の結果は`up-attempts/<連番>/result.json`に残す。失敗時はログ回収も期限付きで試み、回収失敗によって起動失敗の原因を隠さない。DB準備・試験は`not_run`のままにし、`up`の合格判定へ含めない。
 
 **`up`は失敗・Ctrl-C・SIGTERMでも環境を自動削除しない。** 表示された削除コマンドで後片付けする。`aws-smoke`は新しいIDで始める一括試験のままで、`up`の続きからDB準備へ進むには`aws-smoke-prepare`を使う。準備後は`aws-smoke-test`で対象を指定して試験する。現行`status`は残存確認用で、稼働中の設備があると非0で終了し、同じIDの操作中はロックで拒否する。
+
+### ログ転送修正前の環境について
+
+保存済みTerraform定義は変更せず、新しいSSM Agent設定は新規RUN_IDの環境に適用する。旧環境は`aws-smoke-destroy`で削除してから新規RUN_IDで構築する。新規スナップショットには起動・削除に必要な定義だけを保存し、テストコードは各`test-attempts`のコピーに集約する。
 
 ## 起動済み環境のDB準備を実行する
 

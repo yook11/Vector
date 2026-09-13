@@ -20,11 +20,11 @@ set -a
 source /etc/vector-test/proxy.env
 set +a
 
-# SSMの管理通信は専用エンドポイントを使い、プロキシ故障時も診断可能にする。
+# no_proxyで管理通信を直接接続に保ち、CloudWatchへのログ転送はプロキシを使う。
 install -d /etc/systemd/system/amazon-ssm-agent.service.d
 cat > /etc/systemd/system/amazon-ssm-agent.service.d/direct.conf <<'UNIT'
 [Service]
-UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+EnvironmentFile=/etc/vector-test/proxy.env
 UNIT
 systemctl daemon-reload
 systemctl restart amazon-ssm-agent

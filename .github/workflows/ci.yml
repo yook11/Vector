@@ -47,6 +47,7 @@ jobs:
       # PRテストjobのskip判定に使う。
       backend: ${{ steps.filter.outputs.backend }}
       bootstrap_access: ${{ steps.filter.outputs.bootstrap_access }}
+      aws_smoke: ${{ steps.filter.outputs.aws_smoke }}
       frontend: ${{ steps.filter.outputs.frontend }}
       migrations: ${{ steps.filter.outputs.migrations }}
       # workflow 定義の変更は backend/frontend 両テスト job を強制実行する。
@@ -65,6 +66,13 @@ jobs:
             backend:
               - 'backend/**'
               - 'infra/aws/scripts/**'
+            aws_smoke:
+              - 'infra/aws-test/**'
+              - 'infra/aws/templates/squid.conf.tftpl'
+              - 'backend/app/http/non_public_ranges.json'
+              - 'backend/aws_tests/**'
+              - 'backend/pyproject.toml'
+              - 'backend/uv.lock'
             bootstrap_access:
               - 'infra/aws/bootstrap-access/**'
               - 'infra/aws/bootstrap/**'
@@ -139,6 +147,63 @@ jobs:
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
           terraform test -no-color
+
+  aws-smoke:
+    name: AWS smoke (unit + Terraform mock)
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request'
+      && (needs.changes.outputs.aws_smoke == 'true'
+          || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen
+        working-directory: backend
+
+      - name: Check smoke scripts and run offline unit tests
+        run: |
+          backend/.venv/bin/ruff check infra/aws-test/scripts
+          backend/.venv/bin/ruff format --check infra/aws-test/scripts
+          backend/.venv/bin/python -m unittest discover -s infra/aws-test/scripts/tests -v
+
+      - name: Install Terraform
+        env:
+          TF_VERSION: "1.15.8"
+          TF_SHA256: "d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/terraform.zip" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+          echo "${TF_SHA256}  $RUNNER_TEMP/terraform.zip" | sha256sum -c -
+          unzip -o -q "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/tf"
+          echo "$RUNNER_TEMP/tf" >> "$GITHUB_PATH"
+
+      - name: Validate and test smoke infrastructure without AWS credentials
+        run: |
+          set -euo pipefail
+          terraform fmt -check -recursive infra/aws-test
+          for module in bootstrap smoke; do
+            terraform -chdir="infra/aws-test/$module" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="infra/aws-test/$module" validate
+            terraform -chdir="infra/aws-test/$module" test -no-color
+          done
 
   backend-unit:
     name: Backend (unit + lint)
@@ -843,7 +908,7 @@ jobs:
   # ---- CI gate (全必須チェックの集約) ----
   # 全必須テストjobの成否を集約する。
   # path-filter 対象 job (backend-unit / backend-integration /
-  # backend-local / frontend / frontend-e2e-smoke / migration-check / terraform-bootstrap-access) は
+  # backend-local / frontend / frontend-e2e-smoke / migration-check / terraform-bootstrap-access / aws-smoke) は
   # skip されうるため success|skipped を許容する。アプリテストは PR のみ、
   # main では skip が正常。
   # changes 自体が失敗すると全テスト job が skip され gate が素通りするため、
@@ -854,6 +919,7 @@ jobs:
       - changes
       - backend-unit
       - terraform-bootstrap-access
+      - aws-smoke
       - backend-integration
       - backend-local
       - frontend
@@ -879,6 +945,7 @@ jobs:
           for r in \
             "backend-unit=${{ needs.backend-unit.result }}" \
             "terraform-bootstrap-access=${{ needs.terraform-bootstrap-access.result }}" \
+            "aws-smoke=${{ needs.aws-smoke.result }}" \
             "backend-integration=${{ needs.backend-integration.result }}" \
             "backend-local=${{ needs.backend-local.result }}" \
             "frontend=${{ needs.frontend.result }}" \

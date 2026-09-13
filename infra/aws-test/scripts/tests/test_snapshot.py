@@ -49,13 +49,22 @@ class SnapshotDestinationPolicyTests(unittest.TestCase):
                 "sso_region = ap-northeast-1\n"
             )
             run = directory / "runs" / "sample"
+            original_copytree = snapshot.shutil.copytree
+
+            def copy_infra(source, destination, *args, **kwargs):
+                if Path(source) == snapshot.ROOT / "backend/aws_tests":
+                    raise AssertionError("up must not read test files or fixtures")
+                return original_copytree(source, destination, *args, **kwargs)
+
             with (
                 patch.object(snapshot, "LOCAL", local),
                 patch.object(Path, "home", return_value=home_directory),
+                patch.object(snapshot.shutil, "copytree", side_effect=copy_infra),
             ):
                 snapshot.create(run, "sample", "runner")
 
             workspace = run / "workspace"
+            self.assertFalse((workspace / "backend/aws_tests").exists())
             terraform = workspace / "infra/aws-test/smoke/compute.tf"
             references = re.findall(
                 r'file\("\$\{path.module\}([^"\n]+/non_public_ranges\.json)"\)',
