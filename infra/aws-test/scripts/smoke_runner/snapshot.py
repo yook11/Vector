@@ -43,7 +43,6 @@ def create(directory, run_id, runner_profile):
     for relative in [
         "infra/aws-test/smoke",
         "infra/aws-test/modules",
-        "backend/aws_tests",
     ]:
         shutil.copytree(
             ROOT / relative,

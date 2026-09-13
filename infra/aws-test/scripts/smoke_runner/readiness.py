@@ -7,7 +7,15 @@ from uuid import uuid4
 
 from .common import REGION, client, send_command
 
-PHASES = ("ec2", "ssm", "ssm_command", "bootstrap", "proxy_tcp", "proxy_ecr")
+PHASES = (
+    "ec2",
+    "ssm",
+    "ssm_command",
+    "bootstrap",
+    "proxy_tcp",
+    "proxy_ecr",
+    "runner_logs",
+)
 
 
 def check(manager, runner, outputs, phase, journal):
@@ -34,7 +42,7 @@ def check(manager, runner, outputs, phase, journal):
                 return
             time.sleep(min(5, max(0, deadline - time.monotonic())))
 
-    def command(script):
+    def command(script, *, cloudwatch=False):
         progress()
         result = send_command(
             runner,
@@ -42,7 +50,7 @@ def check(manager, runner, outputs, phase, journal):
             "bash -c " + shlex.quote(script),
             30,
             journal,
-            cloudwatch=False,
+            cloudwatch=cloudwatch,
             deadline=deadline,
             progress=progress,
         )
@@ -169,3 +177,21 @@ printf '%s\n' proxy_connected
         )
         if result != {"images": [run["proxy_image_digest"]], "failures": []}:
             raise RuntimeError("proxy_ecr_digest_unconfirmed")
+
+    step = "runner_logs"
+    with phase(step), client(runner, "logs") as logs:
+        token = "vector-smoke-logs-" + uuid4().hex
+        if command("printf '%s\\n' " + shlex.quote(token), cloudwatch=True) != token:
+            raise RuntimeError("runner_log_response_mismatch")
+
+        def log_received():
+            for page in logs.get_paginator("filter_log_events").paginate(
+                logGroupName=outputs["execution"]["log_groups"]["runner"],
+                filterPattern=json.dumps(token),
+            ):
+                progress()
+                if any(event["message"].strip() == token for event in page["events"]):
+                    return True
+            return False
+
+        wait(log_received)

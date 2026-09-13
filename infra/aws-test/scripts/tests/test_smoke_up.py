@@ -572,7 +572,8 @@ class ReadinessTests(unittest.TestCase):
         self.ids = ["i-proxy", "i-runner"]
         self.outputs = {
             "execution": {
-                "instance_ids": dict(zip(("proxy", "runner"), self.ids, strict=True))
+                "instance_ids": dict(zip(("proxy", "runner"), self.ids, strict=True)),
+                "log_groups": {"runner": "/test/runner"},
             },
             "run": {
                 "account_id": "123456789012",
@@ -607,7 +608,7 @@ class ReadinessTests(unittest.TestCase):
         self.journal = Mock()
 
     def respond(self, aws, outputs, cmd, timeout, journal, **kwargs):
-        self.assertFalse(kwargs["cloudwatch"])
+        self.assertEqual(kwargs["cloudwatch"], "vector-smoke-logs-" in cmd)
         self.assertEqual(kwargs["deadline"], 900)
         self.assertEqual(timeout, 30)
         inner = shlex.split(cmd)[2]
@@ -619,6 +620,12 @@ class ReadinessTests(unittest.TestCase):
             capture_output=True,
         )
         journal("command-" + str(self.send.call_count))
+        if kwargs["cloudwatch"]:
+            token = shlex.split(inner)[-1]
+            self.api.get_paginator.return_value.paginate.return_value = [
+                {"events": [{"message": token + "\n"}]}
+            ]
+            return token
         if "systemctl is-active" in inner:
             return self.overrides.get("bootstrap", '{"status":"ready"}\nactive')
         if "proxy_connected" in inner:
@@ -653,7 +660,39 @@ class ReadinessTests(unittest.TestCase):
     def test_all_checks_pass_and_command_ids_are_journaled(self):
         self.check()
         self.assertEqual(self.states, dict.fromkeys(readiness.PHASES, "passed"))
-        self.assertEqual(self.journal.call_count, 4)
+        self.assertEqual(self.journal.call_count, 5)
+
+    def test_logs_wait_for_current_token_across_pages(self):
+        def pages(**kwargs):
+            self.assertEqual(kwargs["logGroupName"], "/test/runner")
+            token = json.loads(kwargs["filterPattern"])
+            return [
+                {"events": [{"message": "previous-run-token"}]},
+                {"events": [] if self.clock.value == 0 else [{"message": token}]},
+            ]
+
+        self.api.get_paginator.return_value.paginate.side_effect = pages
+        self.check()
+        self.assertEqual(self.clock.value, 5)
+        self.assertEqual(self.states["runner_logs"], "passed")
+
+    def test_missing_or_old_logs_never_pass(self):
+        self.api.get_paginator.return_value.paginate.side_effect = lambda **kwargs: [
+            {"events": [{"message": "previous-run-token"}]}
+        ]
+        with self.assertRaisesRegex(TimeoutError, "readiness_timeout:runner_logs"):
+            self.check()
+        self.assertEqual(self.clock.value, 900)
+        self.assertEqual(self.states["runner_logs"], "failed")
+
+    def test_log_access_failure_is_not_hidden(self):
+        self.api.get_paginator.return_value.paginate.side_effect = ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+            "FilterLogEvents",
+        )
+        with self.assertRaises(ClientError):
+            self.check()
+        self.assertEqual(self.states["runner_logs"], "failed")
 
     def test_offline_ssm_times_out_without_sending_commands(self):
         self.api.describe_instance_information.return_value = {
