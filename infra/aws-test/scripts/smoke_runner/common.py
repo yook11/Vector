@@ -34,7 +34,7 @@ def save(path, value):
     temporary.replace(path)
 
 
-def execute(args, *, cwd, log, timeout=300, env=None, progress=False):
+def execute(args, *, cwd, log, timeout=300, env=None, progress=False, on_exit=None):
     with Path(log).open("w") as output:
         process = subprocess.Popen(  # noqa: S603
             args,
@@ -71,6 +71,9 @@ def execute(args, *, cwd, log, timeout=300, env=None, progress=False):
                     os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
             raise
+        finally:
+            if on_exit:
+                on_exit(process.returncode)
     if code:
         raise RuntimeError(f"command_failed:{Path(log).name}:{code}")
 
