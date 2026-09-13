@@ -133,6 +133,15 @@ backend/.venv/bin/python -m unittest discover -s infra/aws-test/scripts/tests -v
 検証対象はアカウント入力とSSO信頼先の整合、state保護、SGの既存／作成時IAM条件、全設備の必須タグ、IAMパス・権限境界、ログ名と許可ARN、ENI待機の依存関係、通信・SQS・保持設定。
 CIの`AWS smoke (unit + Terraform mock)`は関連変更時に専用Pythonテスト・Ruff・Terraformモックテストを実行し、CI gateへ集約する。
 
+providerのlockを更新するときは、CIのLinux AMD64と開発用macOS ARM64のハッシュを公式レジストリから取得して保存する。
+
+```sh
+terraform -chdir=infra/aws-test/bootstrap providers lock -platform=linux_amd64 -platform=darwin_arm64
+terraform -chdir=infra/aws-test/smoke providers lock -platform=linux_amd64 -platform=darwin_arm64
+```
+
+署名の確認とlock差分のコミット後、CIの`init -lockfile=readonly`・`validate`・モックテストまで確認する。既存のmacOSキャッシュでの合格だけではLinuxの展開済みproviderの検証を保証できない。
+
 provider/backendのアカウント制限や実際のIAM評価、プロキシ疎通、EC2起動成功はモックの合格だけでは保証できない。
 
 ## ローカルのアカウント設定
