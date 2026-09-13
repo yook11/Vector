@@ -1,7 +1,6 @@
 """HTML scrape 層 (scraper) のテスト。"""
 
 import socket
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -9,8 +8,10 @@ import pytest
 from structlog.testing import capture_logs
 from trafilatura.settings import Document as TrafilaturaDocument
 
+from app.collection.article_completion.html_extraction import (
+    _decode_html_response as decode_new_html_response,
+)
 from app.collection.article_completion.scrape_failure import (
-    ScrapeContentQualityTooLow,
     ScrapeNotHtml,
     ScrapeParseCrashed,
     ScrapeParserGaveUp,
@@ -21,11 +22,6 @@ from app.collection.article_completion.scraper import (
     ScrapedContent,
     _decode_html_response,
 )
-from app.collection.domain.article_limits import (
-    ARTICLE_BODY_MIN_LENGTH,
-    ARTICLE_TITLE_MAX_LENGTH,
-)
-from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
     FetchAccessDeniedError,
@@ -265,8 +261,8 @@ class TestArticleScraper:
         assert result.content_type == "application/pdf"
 
     @pytest.mark.asyncio
-    async def test_returns_empty_for_minimal_content(self) -> None:
-        """品質ゲートにより短すぎるコンテンツは failure variant になる。"""
+    async def test_returns_parser_gave_up_when_extraction_is_empty(self) -> None:
+        """抽出結果なしを旧経路の失敗値として呼び出し元へ返す。"""
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -281,15 +277,16 @@ class TestArticleScraper:
         client = _mock_async_client([robots_resp, html_resp])
 
         scraper = ArticleScraper()
-        with _patch_client(client):
+        with (
+            _patch_client(client),
+            patch(
+                "app.collection.article_completion.scraper.trafilatura.bare_extraction",
+                return_value=None,
+            ),
+        ):
             result = await scraper.scrape(SafeUrl("https://example.com/short"))
 
-        # trafilatura が None を返す (ScrapeParserGaveUp) または品質ゲート未達
-        # (ScrapeContentQualityTooLow) のどちらか。
-        # decode/parse 例外は本テストでは想定しない。
-        assert isinstance(result, ScrapeParserGaveUp | ScrapeContentQualityTooLow)
-        if isinstance(result, ScrapeContentQualityTooLow):
-            assert result.body_length < 50
+        assert isinstance(result, ScrapeParserGaveUp)
 
     @pytest.mark.asyncio
     async def test_robots_blocked_returns_fetch_failed(self) -> None:
@@ -474,149 +471,11 @@ class TestArticleScraper:
         assert len(robots_calls_2) == 0
 
 
-class TestScrapedContentInvariant:
-    """ScrapedContent のコンストラクタ invariant。"""
-
-    def test_rejects_empty_title(self) -> None:
-        with pytest.raises(ValueError, match="title"):
-            ScrapedContent(title="", body="x" * 60, published_at=None)
-
-    def test_rejects_title_over_limit(self) -> None:
-        with pytest.raises(ValueError, match="title"):
-            ScrapedContent(title="x" * 501, body="x" * 60, published_at=None)
-
-    def test_rejects_short_body(self) -> None:
-        with pytest.raises(ValueError, match="body"):
-            ScrapedContent(title="t", body="x" * 10, published_at=None)
-
-    def test_accepts_valid_fields(self) -> None:
-        content = ScrapedContent(
-            title="t",
-            body="x" * 60,
-            published_at=PublishedAt(datetime(2026, 4, 1, tzinfo=UTC)),
-        )
-        assert content.title == "t"
-        assert content.published_at is not None
-
-
-class TestScrapedContentTryCreate:
-    """ScrapedContent.try_create: 品質ゲート判定の所有テスト。
-
-    閾値は ``article_limits`` SSoT を import して導出する (literal 直書きしない)。
-    成功時は ``ScrapedContent``、未達時は証拠付き ``ScrapeContentQualityTooLow``
-    を値で返す契約を確かめる。
-    """
-
-    def test_valid_material_returns_scraped_content(self) -> None:
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title="Title", stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapedContent)
-
-    def test_short_body_returns_quality_failure_with_body_length(self) -> None:
-        body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
-        outcome = ScrapedContent.try_create(
-            raw_title="Title", stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapeContentQualityTooLow)
-        assert outcome.body_length == len(body)
-
-    def test_short_body_keeps_title_present_true(self) -> None:
-        body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
-        outcome = ScrapedContent.try_create(
-            raw_title="Title", stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapeContentQualityTooLow)
-        assert outcome.title_present is True
-
-    def test_short_body_keeps_body_sample(self) -> None:
-        body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
-        outcome = ScrapedContent.try_create(
-            raw_title="Title", stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapeContentQualityTooLow)
-        assert outcome.body_sample == body
-
-    def test_empty_title_returns_quality_failure(self) -> None:
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title="", stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapeContentQualityTooLow)
-        assert outcome.title_present is False
-
-    def test_none_title_returns_quality_failure(self) -> None:
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title=None, stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapeContentQualityTooLow)
-        assert outcome.title_present is False
-
-    def test_title_present_but_body_at_least_min_drops_body_sample(self) -> None:
-        # body は閾値以上で title 欠落により落ちる → 冒頭断片は残さない。
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title=None, stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapeContentQualityTooLow)
-        assert outcome.body_sample is None
-
-    def test_empty_body_drops_body_sample(self) -> None:
-        outcome = ScrapedContent.try_create(
-            raw_title="Title", stripped_body="", raw_date=None
-        )
-        assert isinstance(outcome, ScrapeContentQualityTooLow)
-        assert outcome.body_sample is None
-
-    def test_html_tags_stripped_from_title(self) -> None:
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title="<b>Bold Title</b>", stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapedContent)
-        assert outcome.title == "Bold Title"
-
-    def test_title_over_limit_is_truncated(self) -> None:
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title="t" * (ARTICLE_TITLE_MAX_LENGTH + 10),
-            stripped_body=body,
-            raw_date=None,
-        )
-        assert isinstance(outcome, ScrapedContent)
-        assert len(outcome.title) == ARTICLE_TITLE_MAX_LENGTH
-
-    def test_parseable_date_populates_published_at(self) -> None:
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title="Title", stripped_body=body, raw_date="2026-03-15T10:30:00"
-        )
-        assert isinstance(outcome, ScrapedContent)
-        assert outcome.published_at is not None
-
-    def test_unparseable_date_leaves_published_at_none(self) -> None:
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title="Title", stripped_body=body, raw_date="not-a-date"
-        )
-        assert isinstance(outcome, ScrapedContent)
-        assert outcome.published_at is None
-
-    def test_none_date_leaves_published_at_none(self) -> None:
-        body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = ScrapedContent.try_create(
-            raw_title="Title", stripped_body=body, raw_date=None
-        )
-        assert isinstance(outcome, ScrapedContent)
-        assert outcome.published_at is None
-
-
+@pytest.mark.parametrize("decode", [_decode_html_response, decode_new_html_response])
 class TestDecodeHtmlResponse:
     """_decode_html_response のエンコーディング検出テスト。"""
 
-    def test_uses_response_text_when_charset_in_content_type(self) -> None:
+    def test_uses_response_text_when_charset_in_content_type(self, decode) -> None:
         """Content-Type に charset があれば httpx のデコード結果をそのまま使う。"""
         resp = httpx.Response(
             200,
@@ -624,10 +483,10 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html; charset=utf-8"},
             request=httpx.Request("GET", "https://example.com/article"),
         )
-        decoded = _decode_html_response(_raw_from_httpx(resp))
+        decoded = decode(_raw_from_httpx(resp))
         assert decoded == "<html><body>テスト</body></html>"
 
-    def test_decodes_shift_jis_from_meta_charset(self) -> None:
+    def test_decodes_shift_jis_from_meta_charset(self, decode) -> None:
         """Content-Type に charset がなく meta charset="Shift_JIS" の場合、
         バイト列から Shift_JIS でデコードする。"""
         html_text = (
@@ -642,10 +501,10 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://www.itmedia.co.jp/article"),
         )
-        decoded = _decode_html_response(_raw_from_httpx(resp))
+        decoded = decode(_raw_from_httpx(resp))
         assert "日本語テスト記事" in decoded
 
-    def test_decodes_from_http_equiv_charset(self) -> None:
+    def test_decodes_from_http_equiv_charset(self, decode) -> None:
         """meta http-equiv の charset 指定からもデコードできる。"""
         html_text = (
             "<html><head>"
@@ -660,10 +519,10 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://www.itmedia.co.jp/article"),
         )
-        decoded = _decode_html_response(_raw_from_httpx(resp))
+        decoded = decode(_raw_from_httpx(resp))
         assert "テスト本文" in decoded
 
-    def test_falls_back_to_response_text_when_no_charset(self) -> None:
+    def test_falls_back_to_response_text_when_no_charset(self, decode) -> None:
         """meta charset もなければ httpx デフォルト（UTF-8）にフォールバックする。"""
         resp = httpx.Response(
             200,
@@ -671,9 +530,9 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://example.com/article"),
         )
-        assert "plain text" in _decode_html_response(_raw_from_httpx(resp))
+        assert "plain text" in decode(_raw_from_httpx(resp))
 
-    def test_falls_back_on_invalid_charset(self) -> None:
+    def test_falls_back_on_invalid_charset(self, decode) -> None:
         """meta charset が不正なエンコーディング名でもクラッシュしない。"""
         html_bytes = (
             b'<html><head><meta charset="not-a-real-encoding">'
@@ -685,8 +544,12 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://example.com/article"),
         )
-        result = _decode_html_response(_raw_from_httpx(resp))
-        assert isinstance(result, str)
+        result = decode(_raw_from_httpx(resp))
+        assert result == resp.text
+
+
+class TestScraperEncoding:
+    """旧スクレイパーの文字コード処理の接続。"""
 
     @pytest.mark.asyncio
     async def test_scraper_handles_shift_jis_html(self) -> None:
@@ -771,21 +634,21 @@ class TestExtract:
         assert result.title
         assert len(result.body) > 50
 
-    def test_minimal_html_returns_quality_failure(self) -> None:
-        """品質ゲート未達は ScrapeParserGaveUp か
-        ScrapeContentQualityTooLow のどちらか。"""
-        minimal_html = "<html><body><p>Short</p></body></html>"
+    def test_partial_material_reaches_completion(self) -> None:
+        """旧経路でも項目不足を抽出失敗にせず素材として渡す。"""
         raw = RawResponse(
             url="https://example.com/short",
             content_type="text/html",
             charset_from_header=None,
-            content=minimal_html.encode("utf-8"),
-            decoded_text=minimal_html,
+            content=b"<html></html>",
+            decoded_text="<html></html>",
         )
-        result = ArticleScraper()._extract_content_from_response(raw)
-        assert isinstance(result, ScrapeParserGaveUp | ScrapeContentQualityTooLow)
-        if isinstance(result, ScrapeContentQualityTooLow):
-            assert result.body_length < 50
+        with patch(
+            "app.collection.article_completion.scraper.trafilatura.bare_extraction",
+            return_value=TrafilaturaDocument(title=None, text=" Short ", date=None),
+        ):
+            result = ArticleScraper()._extract_content_from_response(raw)
+        assert result == ScrapedContent(title=None, body="Short", published_at=None)
 
     def test_parse_crash_folds_into_parse_crashed(self) -> None:
         """trafilatura 段の例外を漏らさず ``ScrapeParseCrashed`` に畳む。"""
