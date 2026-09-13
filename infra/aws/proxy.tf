@@ -41,6 +41,11 @@ locals {
       domains      = local.egress_vendor_domains.gemini
       unrestricted = false
     }
+    curation_consumer = {
+      cidr         = local.curation_consumer_subnet_cidr
+      domains      = local.egress_vendor_domains.gemini
+      unrestricted = false
+    }
   })
 
   # 非公開レンジの正本は **app 側のファイル 1 つ**。Squid はレンジの明示列挙しか

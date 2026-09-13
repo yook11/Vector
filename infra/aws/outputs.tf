@@ -196,3 +196,75 @@ output "assessment_outbox_relay_function_name" {
 output "assessment_outbox_relay_image_digest" {
   value = var.assessment_outbox_relay_image_digest
 }
+
+output "curation_consumer_subnet_id" {
+  value = aws_subnet.curation_consumer.id
+}
+
+output "curation_consumer_security_group_id" {
+  value = aws_security_group.curation_consumer.id
+}
+
+output "curation_consumer_role_arn" {
+  value = aws_iam_role.curation_consumer.arn
+}
+
+output "curation_consumer_log_group_name" {
+  value = aws_cloudwatch_log_group.curation_consumer.name
+}
+
+output "curation_consumer_parameter_path" {
+  value = local.curation_consumer_parameter_path
+}
+
+output "curation_dlq_url" {
+  value = aws_sqs_queue.curation_dlq.url
+}
+
+output "curation_dlq_arn" {
+  value = aws_sqs_queue.curation_dlq.arn
+}
+
+output "curation_consumer_function_name" {
+  value = try(aws_lambda_function.curation_consumer[0].function_name, null)
+}
+
+output "curation_consumer_function_arn" {
+  value = try(aws_lambda_function.curation_consumer[0].arn, null)
+}
+
+output "curation_consumer_image_digest" {
+  value = var.curation_consumer_image_digest
+}
+
+output "curation_consumer_event_source_mapping_uuid" {
+  value = try(aws_lambda_event_source_mapping.curation_consumer[0].uuid, null)
+}
+
+output "curation_outbox_relay_function_name" {
+  value = one(aws_lambda_function.curation_outbox_relay[*].function_name)
+}
+
+output "curation_outbox_relay_image_digest" {
+  value = var.curation_outbox_relay_image_digest
+}
+
+output "curation_outbox_relay_function_arn" {
+  value = one(aws_lambda_function.curation_outbox_relay[*].arn)
+}
+
+output "curation_outbox_relay_role_arn" {
+  value = aws_iam_role.curation_outbox_relay.arn
+}
+
+output "curation_outbox_relay_log_group_name" {
+  value = aws_cloudwatch_log_group.curation_outbox_relay.name
+}
+
+output "curation_outbox_relay_scheduler_role_arn" {
+  value = aws_iam_role.curation_outbox_relay_scheduler.arn
+}
+
+output "curation_outbox_relay_schedule_group_name" {
+  value = aws_scheduler_schedule_group.curation_outbox_relay.name
+}

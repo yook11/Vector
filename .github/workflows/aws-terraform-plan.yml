@@ -148,6 +148,17 @@ jobs:
             > "$assessment_vars_tmp"
           mv "$assessment_vars_tmp" assessment.auto.tfvars.json
 
+      - name: Preserve Curation images from state
+        run: |
+          set -euo pipefail
+          # 両方のdigestが正常に解決された場合だけ設定を配置する。
+          curation_vars_tmp=$(mktemp ./curation-vars.XXXXXX)
+          trap 'rm -f "$curation_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-curation-images.py \
+            > "$curation_vars_tmp"
+          mv "$curation_vars_tmp" curation.auto.tfvars.json
+
       - name: Terraform plan
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}

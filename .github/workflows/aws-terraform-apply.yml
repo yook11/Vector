@@ -35,6 +35,14 @@ on:
         description: "Assessment relayのsha256 digest（空欄は現状維持）"
         required: false
         type: string
+      curation_consumer_image_digest:
+        description: "Curation Consumerのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      curation_outbox_relay_image_digest:
+        description: "Curation relayのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
       embedding_consumer_image_digest:
         description: "Consumerの作成・更新・切り戻し先sha256 digest（空欄は現状維持）"
         required: false
@@ -228,6 +236,35 @@ jobs:
                 exit 1
               fi
               echo "Assessment image: $requested_digest" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Resolve Curation images
+        env:
+          REQUESTED_CONSUMER_DIGEST: ${{ inputs.curation_consumer_image_digest }}
+          REQUESTED_RELAY_DIGEST: ${{ inputs.curation_outbox_relay_image_digest }}
+        run: |
+          set -euo pipefail
+          # 両方のdigestが正常に解決された場合だけ設定を配置する。
+          curation_vars_tmp=$(mktemp ./curation-vars.XXXXXX)
+          trap 'rm -f "$curation_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-curation-images.py \
+                --consumer-digest "$REQUESTED_CONSUMER_DIGEST" \
+                --relay-digest "$REQUESTED_RELAY_DIGEST" \
+            > "$curation_vars_tmp"
+          mv "$curation_vars_tmp" curation.auto.tfvars.json
+          for requested_digest in "$REQUESTED_CONSUMER_DIGEST" "$REQUESTED_RELAY_DIGEST"; do
+            if [ -n "$requested_digest" ]; then
+              repository=$(terraform output -json ecr_repository_urls | jq -er '.backend | split("/")[1:] | join("/")')
+              image=$(aws ecr describe-images --repository-name "$repository" \
+                --image-ids "imageDigest=$requested_digest" \
+                --query 'imageDetails[0].imageDigest' --output text)
+              if [ "$image" != "$requested_digest" ]; then
+                echo "::error::backend ECRリポジトリに指定digestが存在しない"
+                exit 1
+              fi
+              echo "Curation image: $requested_digest" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
 
