@@ -161,16 +161,26 @@ SQSのMessageIdとLambdaの実行IDを業務上の取得依頼IDには使わな�
 
 実装範囲は入力検証、共通ID生成、既存の対象選定から取得依頼への変換までとする。送信・再試行・Lambda入口・AWS適用・Consumerの処理済み管理には接続していない。
 
-- [取得依頼の契約](../../backend/app/collection/sources/acquisition_request.py)の`SourceDispatchInput`は`cadence`と`scheduled_at`を受け取り、予定時刻をUTCへ正規化する。タイムゾーンなし・非ゼロの秒未満を拒否し、マイクロ秒未満の文字列表現も解析前に拒否する。
-- `build_acquisition_request_id`がID生成を所有する。`SourceAcquisitionRequest`は不変の依頼型で、`request_id`は共通関数を呼ぶ計算項目とする。呼び出し元が別のIDを渡す構築口を作らず、`model_dump(mode="json")`で合意した4項目を返す。
+- [取得依頼の契約](../../backend/app/collection/sources/acquisition_request.py)の`SourceAcquisitionSchedule`は`cadence`と`scheduled_at`を受け取り、予定時刻をUTCへ正規化する。タイムゾーンなし・非ゼロの秒未満を拒否し、マイクロ秒未満の文字列表現も解析前に拒否する。
+- `build_acquisition_request_id`がID生成を所有する。`SourceAcquisitionRequest`は予定回の`schedule`と`source_id`を持つ不変の依頼型で、`request_id`は生成時に共通関数で計算してフィールドへ保存する。呼び出し元が別のIDを渡す構築口を作らず、`to_message()`で予定回を展開して合意した4項目を返す。
 - `SourceDispatchService.select(cadence)`がDBと取得定義を照合する。選定対象と対象外の理由はこの既存の確認結果に属し、DB照会の失敗は例外として伝える。
-- `build_acquisition_requests(schedule, sources)`は確認済みの`SourceDispatchTarget`のtupleを受け取り、`SourceAcquisitionRequest`のtupleだけを返す純粋な関数とする。依頼一覧に選定診断を混ぜた結果型や、そのためだけの中継クラスを設けない。
+- `SourceAcquisitionSchedule`は繰り返し設定全体ではなく1回分の予定を表し、`schedule.create_request(source_id)`でソース1件の取得依頼を生成する。呼び出し側は確認済みの対象ソースにこの振る舞いを適用して依頼一覧を作る。依頼一覧に選定診断を混ぜた結果型や、そのためだけの中継クラスを設けない。
 - 呼び出し側が毎回対象を確認し、その対象から依頼一覧を作る。対象外の理由は確認結果から別途扱うため失われない。対象が空なら依頼一覧も空になる。監査書き込み・送信成功記録・進捗保存は行わず、既存SQL・Taskiq経路は変更していない。
 
 検証の所有先:
 
 - [単体テスト](../../backend/tests/collection/sources/test_acquisition_request.py): IDの同一性と識別、補完・丸めが必要な時刻の拒否。DB照会は新しい関数の責務に含めず、中継クラスの例外伝播だけを確認していたテストは削除した。既存の選定障害の検証は維持する。
-- [ローカルテスト](../../backend/local_tests/test_source_acquisition_requests.py): migration適用済みDBと実際の選定・生成関数を接続し、DBの現状態に対応する取得依頼一覧を検証する。対象外の理由は既存の確認結果側で確認する。同じ選定シナリオのモック単体テスト・別DB統合テストは追加しない。
+- [ローカルテスト](../../backend/local_tests/test_source_acquisition_requests.py): migration適用済みDBと実際の選定・依頼生成を接続し、DBの現状態に対応する取得依頼一覧を検証する。対象外の理由は既存の確認結果側で確認する。同じ選定シナリオのモック単体テスト・別DB統合テストは追加しない。
 - 後続の送信・Lambda接続はこのローカル経路を拡張し、正常経路を別テストへ複製しない。AWS実配送はこのステップの検証対象外とする。
 
 検証結果（2026-09-13）: 取得依頼一覧と選定診断を分離した実装で、Ruff lint・format check、全単体6,866件、DB統合1,434件、ローカル82件が成功した。新規追加は単体6ケースと実DBのローカル1シナリオ。ステップ1は完了とし、SQS送信・AWS実行は未実装・未検証。
+
+追加修正（2026-09-14）: 予定回を取得依頼が保持する形へ変更した。IDは依頼生成時に確定して保存し、参照時には再計算しない。既存の単体6ケースを予定回から依頼を生成する経路へ更新し、ローカル1シナリオでは`to_message()`による4項目の形式を検証する。重複するテストは追加しない。
+
+```python
+schedule = SourceAcquisitionSchedule.model_validate(event)
+selection = await dispatch.select(schedule.cadence)
+requests = tuple(schedule.create_request(source.id) for source in selection.targets)
+```
+
+追加修正後の検証結果（2026-09-14）: Ruff lint・format check、全単体6,836件、DB統合1,434件、`make test-local`の82件が成功した。別ワーキングツリーでは認証DB準備用の既存フロントエンド依存をロックファイルから導入して再実行した。今回の新規テスト追加はなく、既存の単体6ケースとローカル1シナリオを更新した。

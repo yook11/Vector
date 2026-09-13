@@ -4,8 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.collection.sources.acquisition_request import (
-    SourceDispatchInput,
-    build_acquisition_requests,
+    SourceAcquisitionSchedule,
 )
 from app.collection.sources.dispatch import (
     SourceDispatchRejectionCode,
@@ -36,12 +35,14 @@ async def test_requests_follow_current_active_registered_sources(system_database
         dispatch = SourceDispatchService(
             async_sessionmaker(engine, expire_on_commit=False)
         )
-        schedule = SourceDispatchInput.model_validate(
+        schedule = SourceAcquisitionSchedule.model_validate(
             {"cadence": "high", "scheduled_at": "2026-09-13T10:00:00+09:00"}
         )
         selection = await dispatch.select(schedule.cadence)
-        requests = build_acquisition_requests(schedule, selection.targets)
-        assert [request.model_dump(mode="json") for request in requests] == [
+        requests = tuple(
+            schedule.create_request(source.id) for source in selection.targets
+        )
+        assert [request.to_message() for request in requests] == [
             {
                 "request_id": f"high/2026-09-13T01:00:00Z/{ids['TechCrunch']}",
                 "cadence": "high",
@@ -59,7 +60,10 @@ async def test_requests_follow_current_active_registered_sources(system_database
                 ids["TechCrunch"],
             )
         selection = await dispatch.select(schedule.cadence)
-        assert build_acquisition_requests(schedule, selection.targets) == ()
+        assert (
+            tuple(schedule.create_request(source.id) for source in selection.targets)
+            == ()
+        )
         assert [item.source_id for item in selection.rejections] == [unknown_id]
 
         async with system_database.connect("vector") as db:
@@ -67,7 +71,10 @@ async def test_requests_follow_current_active_registered_sources(system_database
                 "UPDATE news_sources SET is_active = false WHERE id = $1", unknown_id
             )
         selection = await dispatch.select(schedule.cadence)
-        assert build_acquisition_requests(schedule, selection.targets) == ()
+        assert (
+            tuple(schedule.create_request(source.id) for source in selection.targets)
+            == ()
+        )
         assert selection.rejections == ()
     finally:
         await engine.dispose()

@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, computed_field
+from pydantic import BaseModel, BeforeValidator, ConfigDict
 
 from app.collection.sources.fetch_cadence import FetchCadence
-
-if TYPE_CHECKING:
-    from app.collection.sources.dispatch import SourceDispatchTarget
 
 
 def _normalize_scheduled_at(value: datetime) -> datetime:
@@ -54,41 +52,36 @@ def build_acquisition_request_id(
     return f"{cadence.value}/{timestamp}/{source_id}"
 
 
-class SourceDispatchInput(BaseModel):
-    """Schedulerが指定した予定回を保持する。"""
+class SourceAcquisitionSchedule(BaseModel):
+    """ニュース取得の頻度と、1回分の予定時刻を保持する。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     cadence: FetchCadence
     scheduled_at: ScheduledAt
 
+    def create_request(self, source_id: int) -> SourceAcquisitionRequest:
+        return SourceAcquisitionRequest(schedule=self, source_id=source_id)
 
-class SourceAcquisitionRequest(BaseModel):
-    """ソースの取得依頼と、その内容に対応した識別子を保持する。"""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+@dataclass(frozen=True, slots=True)
+class SourceAcquisitionRequest:
+    """生成時に確定したIDと、対象ソース・予定回を保持する。"""
 
-    cadence: FetchCadence
-    scheduled_at: ScheduledAt
-    source_id: int = Field(gt=0, strict=True)
+    schedule: SourceAcquisitionSchedule
+    source_id: int
+    request_id: str = field(init=False)
 
-    @computed_field
-    @property
-    def request_id(self) -> str:
-        return build_acquisition_request_id(
-            self.cadence, self.scheduled_at, self.source_id
+    def __post_init__(self) -> None:
+        request_id = build_acquisition_request_id(
+            self.schedule.cadence, self.schedule.scheduled_at, self.source_id
         )
+        object.__setattr__(self, "request_id", request_id)
 
-
-def build_acquisition_requests(
-    schedule: SourceDispatchInput, sources: tuple[SourceDispatchTarget, ...]
-) -> tuple[SourceAcquisitionRequest, ...]:
-    """確認済みの対象ソースから、その予定回の取得依頼一覧を作る。"""
-    return tuple(
-        SourceAcquisitionRequest(
-            cadence=schedule.cadence,
-            scheduled_at=schedule.scheduled_at,
-            source_id=source.id,
-        )
-        for source in sources
-    )
+    def to_message(self) -> dict[str, str | int]:
+        """予定回を展開し、取得依頼の送信項目を返す。"""
+        return {
+            **self.schedule.model_dump(mode="json"),
+            "source_id": self.source_id,
+            "request_id": self.request_id,
+        }

@@ -6,8 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.collection.sources.acquisition_request import (
-    SourceDispatchInput,
-    build_acquisition_request_id,
+    SourceAcquisitionSchedule,
 )
 from app.collection.sources.fetch_cadence import FetchCadence
 
@@ -16,7 +15,14 @@ def test_request_identity_uses_the_scheduled_instant_and_source():
     """時差表記だけの違いは同じ依頼となり、別の予定回・頻度・ソースは区別する。"""
     utc = datetime(2026, 9, 13, 1, tzinfo=UTC)
     jst = datetime.fromisoformat("2026-09-13T10:00:00+09:00")
-    build = build_acquisition_request_id
+
+    def build(cadence, scheduled_at, source_id):
+        return (
+            SourceAcquisitionSchedule(cadence=cadence, scheduled_at=scheduled_at)
+            .create_request(source_id)
+            .request_id
+        )
+
     original = build(FetchCadence.HIGH, utc, 123)
     assert build(FetchCadence.HIGH, jst, 123) == original
     assert (
@@ -45,6 +51,6 @@ def test_request_identity_uses_the_scheduled_instant_and_source():
 def test_schedule_rejects_time_that_would_require_completion_or_rounding(scheduled_at):
     """予定時刻を補完・丸めなければ受け取れない入力を拒否する。"""
     with pytest.raises(ValidationError):
-        SourceDispatchInput.model_validate(
+        SourceAcquisitionSchedule.model_validate(
             {"cadence": "high", "scheduled_at": scheduled_at}
         )
