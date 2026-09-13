@@ -8,9 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedCode,
-    AssessmentReadyBuildBlockedError,
     AssessmentReadyBuildFacts,
+    AssessmentReadyBuildRejectionReason,
     ReadyForAssessment,
 )
 from app.queue.messages.assessment import AssessmentTrigger
@@ -72,15 +71,14 @@ class TestTryAdvanceFrom:
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
-    async def test_raises_blocked_when_curation_missing(self) -> None:
+    async def test_returns_rejection_when_curation_missing(self) -> None:
         repo = _repo_mock(missing=True)
 
-        with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
-            await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
+        rejected = await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
-        assert exc_info.value.code is AssessmentReadyBuildBlockedCode.CURATION_MISSING
+        assert rejected.reason is AssessmentReadyBuildRejectionReason.CURATION_MISSING
         # facts 無く analyzable_article_id は運べない (audit の source_id も空)
-        assert exc_info.value.analyzable_article_id is None
+        assert rejected.analyzable_article_id is None
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -89,12 +87,11 @@ class TestTryAdvanceFrom:
             facts=_facts(has_analyzed_article=True, analyzable_article_id=7)
         )
 
-        with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
-            await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
+        rejected = await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
-        assert exc_info.value.code is AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE
-        # analyzable_article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
-        assert exc_info.value.analyzable_article_id == 7
+        assert rejected.reason is AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE
+        # 拒否値の記事IDはDB由来の事実を保持する。
+        assert rejected.analyzable_article_id == 7
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -103,14 +100,13 @@ class TestTryAdvanceFrom:
             facts=_facts(has_out_of_scope_article=True, analyzable_article_id=7)
         )
 
-        with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
-            await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
+        rejected = await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
         assert (
-            exc_info.value.code is AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE
+            rejected.reason is AssessmentReadyBuildRejectionReason.ALREADY_OUT_OF_SCOPE
         )
-        # analyzable_article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
-        assert exc_info.value.analyzable_article_id == 7
+        # 拒否値の記事IDはDB由来の事実を保持する。
+        assert rejected.analyzable_article_id == 7
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
 
@@ -149,12 +145,19 @@ class TestAssessmentTrigger:
             AssessmentTrigger(curation_id=-1)
 
 
-def test_ready_build_blocked_code_partitions_idempotent_skip_from_durable() -> None:
-    """ALREADY_* のみ冪等 skip、CURATION_MISSING は残す整合性兆候。"""
-    idempotent = {c for c in AssessmentReadyBuildBlockedCode if c.is_idempotent_skip}
-    durable = {c for c in AssessmentReadyBuildBlockedCode if not c.is_idempotent_skip}
-    assert idempotent == {
-        AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-        AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+def test_rejection_reasons_partition_idempotent_skip_from_durable() -> None:
+    """処理済みだけを監査対象から除き、欠損と入力不正の理由を記録する。"""
+    idempotent = {
+        c for c in AssessmentReadyBuildRejectionReason if c.is_idempotent_skip
     }
-    assert durable == {AssessmentReadyBuildBlockedCode.CURATION_MISSING}
+    durable = {
+        c for c in AssessmentReadyBuildRejectionReason if not c.is_idempotent_skip
+    }
+    assert idempotent == {
+        AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE,
+        AssessmentReadyBuildRejectionReason.ALREADY_OUT_OF_SCOPE,
+    }
+    assert durable == {
+        AssessmentReadyBuildRejectionReason.CURATION_MISSING,
+        AssessmentReadyBuildRejectionReason.INPUT_INVALID,
+    }

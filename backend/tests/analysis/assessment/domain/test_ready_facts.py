@@ -4,12 +4,10 @@ from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import ValidationError
 
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedCode,
-    AssessmentReadyBuildBlockedError,
     AssessmentReadyBuildFacts,
+    AssessmentReadyBuildRejectionReason,
     ReadyForAssessment,
 )
 
@@ -34,36 +32,47 @@ def test_from_facts_builds_ready_with_db_identity():
 @pytest.mark.parametrize(
     "facts, code, article_id",
     [
-        (None, AssessmentReadyBuildBlockedCode.CURATION_MISSING, None),
+        (None, AssessmentReadyBuildRejectionReason.CURATION_MISSING, None),
         (
             replace(_FACTS, has_analyzed_article=True),
-            AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+            AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE,
             7,
         ),
         (
             replace(_FACTS, has_out_of_scope_article=True),
-            AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+            AssessmentReadyBuildRejectionReason.ALREADY_OUT_OF_SCOPE,
             7,
         ),
         (
             replace(_FACTS, has_analyzed_article=True, has_out_of_scope_article=True),
-            AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+            AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE,
             7,
         ),
     ],
 )
-def test_blocked_conditions_preserve_existing_order_and_article_id(
+def test_rejection_conditions_preserve_existing_order_and_article_id(
     facts, code, article_id
 ):
-    with pytest.raises(AssessmentReadyBuildBlockedError) as raised:
-        ReadyForAssessment.from_facts(5, facts)
-    assert raised.value.code is code
-    assert raised.value.analyzable_article_id == article_id
+    rejected = ReadyForAssessment.from_facts(5, facts)
+    assert rejected.reason is code
+    assert rejected.analyzable_article_id == article_id
 
 
-def test_invalid_input_remains_validation_error():
-    with pytest.raises(ValidationError):
-        ReadyForAssessment.from_facts(5, replace(_FACTS, summary=""))
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("translated_title", ""),
+        ("summary", ""),
+        ("curation_id", 0),
+        ("curation_id", -1),
+    ],
+)
+def test_invalid_input_becomes_ready_build_rejection(field, value):
+    """入力制約違反をDB由来IDと安全な理由コードへ変換する。"""
+    rejected = ReadyForAssessment.from_facts(5, replace(_FACTS, **{field: value}))
+    assert rejected.reason is AssessmentReadyBuildRejectionReason.INPUT_INVALID
+    assert rejected.analyzable_article_id == 7
+    assert rejected.reason.value == "assessment_ready_build_blocked_input_invalid"
 
 
 @pytest.mark.asyncio

@@ -26,8 +26,8 @@ from logfire.testing import CaptureLogfire
 from app.ai_providers.errors import AIProviderConfigurationError, AIProviderNetworkError
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedCode,
-    AssessmentReadyBuildBlockedError,
+    AssessmentReadyBuildRejected,
+    AssessmentReadyBuildRejectionReason,
     ReadyForAssessment,
 )
 from app.analysis.assessment.errors import (
@@ -343,14 +343,14 @@ async def test_ready_build_failed_emits_classified_outcome(
 @pytest.mark.parametrize(
     "code",
     [
-        AssessmentReadyBuildBlockedCode.CURATION_MISSING,
-        AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-        AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+        AssessmentReadyBuildRejectionReason.CURATION_MISSING,
+        AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE,
+        AssessmentReadyBuildRejectionReason.ALREADY_OUT_OF_SCOPE,
     ],
 )
 @pytest.mark.asyncio
 async def test_ready_build_blocked_emits_nothing(
-    capfire: CaptureLogfire, code: AssessmentReadyBuildBlockedCode
+    capfire: CaptureLogfire, code: AssessmentReadyBuildRejectionReason
 ) -> None:
     """ready-build blocked は全コード stale/冪等で emit しない (rejected 無し)。"""
     from app.queue.tasks.assessment import assess_content
@@ -358,15 +358,15 @@ async def test_ready_build_blocked_emits_nothing(
     ctx = _make_ctx()
     session = ctx.state.session_factory.return_value.__aenter__.return_value
     session.commit = AsyncMock()
-    blocked = AssessmentReadyBuildBlockedError(code, analyzable_article_id=7)
+    blocked = AssessmentReadyBuildRejected(code, analyzable_article_id=7)
     with (
         patch(
             "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
-            new=AsyncMock(side_effect=blocked),
+            new=AsyncMock(return_value=blocked),
         ),
         patch("app.queue.tasks.assessment.AssessmentAuditRepository") as mock_audit_cls,
     ):
-        mock_audit_cls.return_value.append_ready_build_blocked = AsyncMock()
+        mock_audit_cls.return_value.append_ready_build_rejected = AsyncMock()
         await assess_content(trigger=_trigger(), ctx=ctx)
 
     metrics = collected_metrics(capfire)

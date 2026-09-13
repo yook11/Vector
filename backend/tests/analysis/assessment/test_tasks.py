@@ -14,8 +14,8 @@ from app.ai_providers.errors import (
     AIProviderRateLimitedError,
 )
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedCode,
-    AssessmentReadyBuildBlockedError,
+    AssessmentReadyBuildRejected,
+    AssessmentReadyBuildRejectionReason,
     ReadyForAssessment,
 )
 from app.analysis.assessment.service import (
@@ -81,14 +81,14 @@ def _make_ready(curation_id: int = 2) -> ReadyForAssessment:
 
 
 def _patch_ready_construction(
-    result: ReadyForAssessment | AssessmentReadyBuildBlockedError,
+    result: ReadyForAssessment | AssessmentReadyBuildRejected,
     *,
     analyzable_article_id: int = 7,
 ):
     """try_advance_from を patch する。成功時は (ready, 監査主語) の tuple を返す。"""
     mock = (
-        AsyncMock(side_effect=result)
-        if isinstance(result, AssessmentReadyBuildBlockedError)
+        AsyncMock(return_value=result)
+        if isinstance(result, AssessmentReadyBuildRejected)
         else AsyncMock(return_value=(result, analyzable_article_id))
     )
     return patch(
@@ -108,8 +108,8 @@ class TestAssessContent:
 
         ctx = _make_ctx(assessor=_make_provider_fake())
         trigger = _make_trigger(curation_id=42)
-        exc = AssessmentReadyBuildBlockedError(
-            AssessmentReadyBuildBlockedCode.CURATION_MISSING
+        exc = AssessmentReadyBuildRejected(
+            AssessmentReadyBuildRejectionReason.CURATION_MISSING
         )
 
         with (
@@ -117,12 +117,12 @@ class TestAssessContent:
             patch("app.queue.tasks.assessment.AssessmentAuditRepository") as mock_audit,
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             await assess_content(trigger=trigger, ctx=ctx)
 
-        mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
+        mock_audit.return_value.append_ready_build_rejected.assert_awaited_once_with(
             curation_id=42,
-            exc=exc,
+            rejected=exc,
         )
         mock_svc_cls.assert_not_called()
 
@@ -133,8 +133,8 @@ class TestAssessContent:
 
         ctx = _make_ctx(assessor=_make_provider_fake())
         trigger = _make_trigger(curation_id=42)
-        exc = AssessmentReadyBuildBlockedError(
-            AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+        exc = AssessmentReadyBuildRejected(
+            AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE,
             analyzable_article_id=7,
         )
 
@@ -144,14 +144,14 @@ class TestAssessContent:
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
             capture_logs() as cap,
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             await assess_content(trigger=trigger, ctx=ctx)
 
         # 冪等 skip は repository を触らず pipeline_events 行を焼かない
         mock_audit.assert_not_called()
         rejected = [e for e in cap if e["event"] == "assess_content_rejected"]
         assert len(rejected) == 1
-        assert rejected[0]["code"] == exc.code.value
+        assert rejected[0]["code"] == exc.reason.value
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
@@ -383,15 +383,15 @@ class TestAssessContentStageSpan:
         from app.queue.tasks.assessment import assess_content
 
         ctx = _make_ctx(assessor=_make_provider_fake())
-        exc = AssessmentReadyBuildBlockedError(
-            AssessmentReadyBuildBlockedCode.CURATION_MISSING
+        exc = AssessmentReadyBuildRejected(
+            AssessmentReadyBuildRejectionReason.CURATION_MISSING
         )
         with (
             _patch_ready_construction(exc),
             patch("app.queue.tasks.assessment.AssessmentAuditRepository") as mock_audit,
             patch("app.queue.tasks.assessment.AssessmentService"),
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             await assess_content(trigger=_make_trigger(curation_id=42), ctx=ctx)
 
         attrs = stage_attrs(capfire)

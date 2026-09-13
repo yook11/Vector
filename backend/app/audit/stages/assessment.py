@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedError,
+    AssessmentReadyBuildRejected,
     ReadyForAssessment,
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
@@ -132,24 +132,17 @@ class AssessmentAuditRepository:
             article_id=analyzable_article_id,
         )
 
-    # --- Ready 構築 blocked / failed ---------------------------------------
+    # --- Ready 構築 rejected / failed ---------------------------------------
 
-    async def append_ready_build_blocked(
-        self, *, curation_id: int, exc: AssessmentReadyBuildBlockedError
+    async def append_ready_build_rejected(
+        self, *, curation_id: int, rejected: AssessmentReadyBuildRejected
     ) -> None:
-        """Ready 構築が domain precondition により進めなかった事実を記録する。
-
-        Domain が reason code で説明できた停止なので rejected として焼く。
-        ``article_id`` が判明する経路では top-level に渡して source_id を補填する
-        (CURATION_MISSING は対象 curation 不在で article_id なし = source_id 空)。
-        """
+        """Ready側の拒否理由と確認済み記事IDをそのまま記録する。"""
         await self._append_event(
             event_type=EventType.REJECTED,
-            outcome_code=exc.code.value,
-            payload=AssessmentPayload(
-                curation_id=curation_id,
-            ),
-            article_id=exc.analyzable_article_id,
+            outcome_code=rejected.reason.value,
+            payload=AssessmentPayload(curation_id=curation_id),
+            article_id=rejected.analyzable_article_id,
         )
 
     async def append_ready_build_failed(

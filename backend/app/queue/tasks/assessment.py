@@ -10,7 +10,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedError,
+    AssessmentReadyBuildRejected,
     ReadyForAssessment,
 )
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
@@ -54,30 +54,10 @@ async def assess_content(
     with assessment_stage_span(curation_id=trigger.curation_id) as stage:
         async with session_factory() as session:
             try:
-                (
-                    ready,
-                    analyzable_article_id,
-                ) = await ReadyForAssessment.try_advance_from(
+                ready_build = await ReadyForAssessment.try_advance_from(
                     curation_id=trigger.curation_id,
                     repo=AssessmentRepository(session),
                 )
-            except AssessmentReadyBuildBlockedError as exc:
-                # 冪等 skip (ALREADY_*) は勝者の行と冗長。監査に残さず log のみ。
-                # 恒久的な欠損 (CURATION_MISSING) は REJECTED を残す。
-                if not exc.code.is_idempotent_skip:
-                    await AssessmentAuditRepository(session).append_ready_build_blocked(
-                        curation_id=trigger.curation_id,
-                        exc=exc,
-                    )
-                    await session.commit()
-                logger.info(
-                    "assess_content_rejected",
-                    curation_id=trigger.curation_id,
-                    reason="ready_build_blocked",
-                    code=exc.code.value,
-                )
-                stage.set_result("skipped")
-                return
             except Exception as exc:
                 await _append_ready_build_failed_audit(
                     session_factory,
@@ -93,6 +73,26 @@ async def assess_content(
                     "infra_error" if projection.failure_kind == "db_error" else "failed"
                 )
                 raise
+
+            if isinstance(ready_build, AssessmentReadyBuildRejected):
+                if not ready_build.reason.is_idempotent_skip:
+                    await AssessmentAuditRepository(
+                        session
+                    ).append_ready_build_rejected(
+                        curation_id=trigger.curation_id,
+                        rejected=ready_build,
+                    )
+                    await session.commit()
+                logger.info(
+                    "assess_content_rejected",
+                    curation_id=trigger.curation_id,
+                    reason="ready_build_rejected",
+                    code=ready_build.reason.value,
+                )
+                stage.set_result("skipped")
+                return
+
+            ready, analyzable_article_id = ready_build
 
         stage.set_article_id(analyzable_article_id)
 

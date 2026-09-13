@@ -41,7 +41,21 @@ CurationのSignal結果＋article.curated_signalをOutboxに保存
 | `OUT_OF_SCOPE` | 対象外の判定結果・成功監査をcommitできた | なし |
 | `ALREADY_ASSESSED` | 開始時または保存時に判定済みと確認できた | 追加しない |
 
-エラーは正常終了の値に含めず、例外で伝える。Curation不存在、入力・AI応答の契約違反、provider障害、DB障害、timeout、想定外例外を含む。正常終了の結果は永続化・処理済み確認の結末であり、AIが返す判定内容とは区別する。
+Ready構築時にCuration不存在またはReady入力制約違反が確定した場合は、理由付きの`AssessmentReadyBuildRejected`を返して受信完了とする。AI応答の契約違反、provider障害、DB障害、timeout、想定外例外は例外で伝える。正常終了の結果は永続化・処理済み確認の結末であり、AIが返す判定内容やReady拒否とは区別する。
+
+### Ready拒否の受信完了（2026-09-13）
+
+実装・検証済み。全単体6,655件・全DB統合1,402件が成功し、拒否監査の後処理側への移動後にも関連単体745件・両工程のDB統合219件を再確認した。Ruffも成功し、AWS適用は行っていない。
+
+本節は開始時の不存在・Ready入力検証に関する過去のスライス記録を更新する。
+
+- `domain/ready.py`の不変な`AssessmentReadyBuildRejected`が、`AssessmentReadyBuildRejectionReason`と任意のDB由来`analyzable_article_id`を持つ。Readyの両構築入口は、従来の`(ReadyForAssessment, 記事ID)`または拒否値を返す。`AssessmentReadyBuildBlockedError`は廃止し、Consumerで別の拒否値へ詰め替えない。
+- `CURATION_MISSING`は記事IDなし、Readyモデル生成時の入力検証エラーは`INPUT_INVALID`とDB由来IDで返す。制約は維持し、DB取得障害・想定外例外は拒否に変換しない。
+- Consumerは`ALREADY_IN_SCOPE`／`ALREADY_OUT_OF_SCOPE`を従来の`ALREADY_ASSESSED`へ対応付ける。欠損・入力不正では同じ拒否値を監査へ渡して返し、Service・AI・成功監査・後続Outbox・成功／実行失敗メトリクスを呼ばない。
+- `append_ready_build_rejected`は`REJECTED`と理由コードを記録し、本文・入力値・検証例外を保存しない。既存の`assessment_ready_build_blocked_*`文字列は維持し、入力不正用コードを追加する。通常の記録障害は安全なログとaudit-dropped計測へ退避し、受信完了を維持する。
+- 拒否監査は業務処理の60秒制限を抜けた後に、`AssessmentConsumerFailureHandler.handle_ready_build_rejected`が行う。実行失敗の分類・計測・通知は通さない。
+- Lambdaは拒否のmessageIdを`batchItemFailures`へ含めず、`reason=ready_build_rejected`と`rejection_code`で完了を記録する。SQS削除APIは呼ばない。Service実行中の失敗とキャンセルの契約は維持する。
+- ServiceのCompletion・DB schema・イベントpayload・資源ライフサイクルは変更しない。旧TaskiqもReady側の同じ拒否値で分岐し、救済経路を存続させる。
 
 ### 最初のタスク：正常終了の契約
 

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import ValidationError
 from sqlalchemy import delete, select, text
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -25,7 +25,11 @@ from app.ai_providers.errors import (
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.consumer import EmbeddingConsumer
-from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.analysis.embedding.domain.ready import (
+    EmbeddingReadyBuildRejected,
+    EmbeddingReadyBuildRejectionReason,
+    ReadyForEmbedding,
+)
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
@@ -38,6 +42,7 @@ from app.analysis.embedding.service import EmbeddingCompletion
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
+from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.cloudwatch.records import metric_records
@@ -138,41 +143,63 @@ async def test_already_embedded_completes_without_ai_or_audit(
 
 
 @pytest.mark.asyncio
-async def test_missing_at_start_records_unlinked_failure(
+async def test_missing_at_start_records_unlinked_rejection(
     db_session, session_factory, embedder
 ):
-    """開始時の不存在でも分析記事IDを残して失敗監査を確定する。"""
+    """開始時の欠損は分析記事IDだけを持つ拒否として受信完了する。"""
     event = ArticleAssessedInScope(curation_id=999_999, analyzed_article_id=999_999)
-    with pytest.raises(EmbeddingAnalyzedArticleMissingError):
-        await EmbeddingConsumer(session_factory, embedder).consume(event)
+    result = await EmbeddingConsumer(session_factory, embedder).consume(event)
+    assert result == EmbeddingReadyBuildRejected(
+        EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
+    )
     embedder.embed_document.assert_not_awaited()
     events = await _events(db_session)
     assert len(events) == 1
+    assert events[0].event_type == "rejected"
     assert events[0].article_id is None
-    assert events[0].outcome_code == "embedding_analyzed_article_missing"
+    assert (
+        events[0].outcome_code
+        == "embedding_ready_build_blocked_analyzed_article_missing"
+    )
     assert events[0].payload["analyzed_article_id"] == event.analyzed_article_id
-    assert events[0].payload["failure_kind"] == "target_missing"
 
 
 @pytest.mark.asyncio
-async def test_ready_validation_failure_keeps_known_article_id(
-    db_session, session_factory, target, embedder
+async def test_ready_validation_rejection_keeps_known_article_id(
+    db_session, session_factory, target, embedder, capsys
 ):
-    """Readyの検証失敗でも取得済みの記事IDを失敗監査に使う。"""
+    """入力不正はDB由来IDで拒否記録し、記事保持のまま受信完了する。"""
     event, article_id = target
-    with pytest.raises(ValidationError) as invalid:
-        ReadyForEmbedding(
-            analyzed_article_id=event.analyzed_article_id, text_for_embedding=""
+    from_facts = ReadyForEmbedding.from_facts
+    rejected_results = []
+
+    def invalid_from_facts(analyzed_article_id, facts):
+        rejected = from_facts(
+            analyzed_article_id, replace(facts, summary="", key_points=[])
         )
-    with patch(f"{_MODULE}.ReadyForEmbedding.from_facts", side_effect=invalid.value):
-        with pytest.raises(ValidationError) as raised:
-            await EmbeddingConsumer(session_factory, embedder).consume(event)
-    assert raised.value is invalid.value
+        rejected_results.append(rejected)
+        return rejected
+
+    with patch.object(ReadyForEmbedding, "from_facts", side_effect=invalid_from_facts):
+        result = await EmbeddingConsumer(session_factory, embedder).consume(event)
+    assert result is rejected_results[0]
+    assert result == EmbeddingReadyBuildRejected(
+        EmbeddingReadyBuildRejectionReason.INPUT_INVALID, article_id
+    )
     embedder.embed_document.assert_not_awaited()
     events = await _events(db_session)
     assert len(events) == 1
     assert events[0].article_id == article_id
-    assert events[0].outcome_code == "unexpected_error"
+    assert events[0].event_type == "rejected"
+    assert events[0].outcome_code == "embedding_ready_build_blocked_input_invalid"
+    assert events[0].payload.get("input_text") is None
+    assert events[0].payload.get("error_chain") is None
+    assert await db_session.get(AnalyzableArticleRecord, article_id) is not None
+    assert await db_session.get(ArticleCuration, event.curation_id) is not None
+    stored = await db_session.get(AnalyzedArticleRecord, event.analyzed_article_id)
+    assert stored is not None and stored.embedding is None
+    assert list(await db_session.scalars(select(OutboxEvent))) == []
+    assert metric_records(capsys.readouterr().out, "processing_outcome") == []
 
 
 @pytest.mark.asyncio
@@ -537,20 +564,20 @@ async def test_sqs_processing_saves_once_and_records_only_business_failures(
             ]
         },
     )
-    assert failed_items == [
-        {"itemIdentifier": "invalid"},
-        {"itemIdentifier": "missing"},
-    ]
+    assert failed_items == [{"itemIdentifier": "invalid"}]
     audits = await _events(db_session)
-    assert [audit.event_type for audit in audits] == ["succeeded", "failed"]
+    assert [audit.event_type for audit in audits] == ["succeeded", "rejected"]
     assert audits[0].article_id == article_id
-    assert audits[1].outcome_code == "embedding_analyzed_article_missing"
+    assert (
+        audits[1].outcome_code
+        == "embedding_ready_build_blocked_analyzed_article_missing"
+    )
     assert (
         await db_session.get(AnalyzedArticleRecord, payload.analyzed_article_id)
     ).embedding is not None
     embedder.embed_document.assert_awaited_once()
     outcomes = metric_records(capsys.readouterr().out, "processing_outcome")
-    assert [r["result"] for r in outcomes] == ["succeeded", "failed"]
+    assert [r["result"] for r in outcomes] == ["succeeded"]
 
 
 @pytest.mark.asyncio
@@ -718,3 +745,75 @@ async def test_consumer_with_invocation_database_resources(
     assert len(events) == 1
     assert events[0].article_id == article_id
     assert events[0].event_type == ("failed" if disconnect else "succeeded")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("secondary_failure", ["none", "log", "metric"])
+async def test_rejection_audit_failure_preserves_receipt_completion(
+    db_session, session_factory, target, embedder, secondary_failure
+):
+    """拒否監査の保存と診断に失敗しても、確定した受信完了を維持する。"""
+    from app.audit.stages.embedding import EmbeddingAuditRepository
+
+    event = ArticleAssessedInScope(curation_id=999_999, analyzed_article_id=999_999)
+    append = EmbeddingAuditRepository.append_ready_build_rejected
+
+    async def append_then_fail(repo, **kwargs):
+        await append(repo, **kwargs)
+        raise RuntimeError("private-audit-details")
+
+    with (
+        patch.object(
+            EmbeddingAuditRepository,
+            "append_ready_build_rejected",
+            new=append_then_fail,
+        ),
+        patch(f"{_MODULE}_failure_handling.logger") as log,
+        patch(f"{_MODULE}_failure_handling.record_audit_dropped") as dropped,
+    ):
+        if secondary_failure == "log":
+            log.warning.side_effect = RuntimeError("private-log-details")
+        if secondary_failure == "metric":
+            dropped.side_effect = RuntimeError("private-metric-details")
+        result = await EmbeddingConsumer(session_factory, embedder).consume(event)
+
+    assert result == EmbeddingReadyBuildRejected(
+        EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
+    )
+    assert await _events(db_session) == []
+    embedder.embed_document.assert_not_awaited()
+    dropped.assert_called_once()
+    assert "private" not in str(log.warning.call_args)
+
+
+@pytest.mark.asyncio
+async def test_rejection_handling_runs_after_business_timeout(
+    session_factory, embedder
+):
+    """拒否確定後の監査は業務タイマーを解除してから実行する。"""
+    consumer = EmbeddingConsumer(session_factory, embedder)
+    event = ArticleAssessedInScope(curation_id=999_999, analyzed_article_id=999_999)
+    business_timeout = asyncio.timeout(60)
+    handle_rejected = consumer._failure_handler.handle_ready_build_rejected
+
+    async def handle_after_deadline(**kwargs):
+        with pytest.raises(RuntimeError, match="finished"):
+            business_timeout.reschedule(asyncio.get_running_loop().time())
+        await asyncio.sleep(0)
+        await handle_rejected(**kwargs)
+
+    with (
+        patch(f"{_MODULE}.timeout", return_value=business_timeout),
+        patch.object(
+            consumer._failure_handler,
+            "handle_ready_build_rejected",
+            side_effect=handle_after_deadline,
+        ) as rejection_handler,
+        patch.object(consumer._failure_handler, "handle") as failure_handler,
+    ):
+        result = await consumer.consume(event)
+
+    assert isinstance(result, EmbeddingReadyBuildRejected)
+    rejection_handler.assert_awaited_once()
+    failure_handler.assert_not_called()
+    embedder.embed_document.assert_not_awaited()

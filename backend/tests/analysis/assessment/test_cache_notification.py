@@ -11,8 +11,8 @@ from pydantic import SecretStr
 from structlog.testing import capture_logs
 
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlockedCode,
-    AssessmentReadyBuildBlockedError,
+    AssessmentReadyBuildRejected,
+    AssessmentReadyBuildRejectionReason,
     ReadyForAssessment,
 )
 from app.analysis.assessment.service import (
@@ -159,15 +159,15 @@ async def test_no_published_article_does_not_send_invalidation_request(
 @pytest.mark.parametrize(
     "code",
     [
-        AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-        AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+        AssessmentReadyBuildRejectionReason.ALREADY_IN_SCOPE,
+        AssessmentReadyBuildRejectionReason.ALREADY_OUT_OF_SCOPE,
     ],
 )
 async def test_already_assessed_article_does_not_send_invalidation_request(
-    notification_case: NotificationCase, code: AssessmentReadyBuildBlockedCode
+    notification_case: NotificationCase, code: AssessmentReadyBuildRejectionReason
 ) -> None:
     """解析済みの記事への重複トリガーでは通知しない。"""
-    notification_case.ready.side_effect = AssessmentReadyBuildBlockedError(
+    notification_case.ready.return_value = AssessmentReadyBuildRejected(
         code, analyzable_article_id=7
     )
 

@@ -8,9 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlockedCode,
-    EmbeddingReadyBuildBlockedError,
     EmbeddingReadyBuildFacts,
+    EmbeddingReadyBuildRejectionReason,
     ReadyForEmbedding,
 )
 from app.queue.messages.embedding import EmbeddingTrigger
@@ -175,14 +174,13 @@ class TestTryAdvanceFrom:
         # hint があっても Ready 構築 precondition は迂回しない。
         repo = _repo_mock(missing=True)
 
-        with pytest.raises(EmbeddingReadyBuildBlockedError) as exc_info:
-            await ReadyForEmbedding.try_advance_from(
-                analyzed_article_id=100, embedding_repo=repo, analyzable_hint=777
-            )
+        rejected = await ReadyForEmbedding.try_advance_from(
+            analyzed_article_id=100, embedding_repo=repo, analyzable_hint=777
+        )
 
         assert (
-            exc_info.value.code
-            is EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
+            rejected.reason
+            is EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
         )
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
@@ -190,12 +188,11 @@ class TestTryAdvanceFrom:
     async def test_hint_does_not_bypass_already_embedded(self) -> None:
         repo = _repo_mock(facts=_facts(has_embedding=True))
 
-        with pytest.raises(EmbeddingReadyBuildBlockedError) as exc_info:
-            await ReadyForEmbedding.try_advance_from(
-                analyzed_article_id=100, embedding_repo=repo, analyzable_hint=777
-            )
+        rejected = await ReadyForEmbedding.try_advance_from(
+            analyzed_article_id=100, embedding_repo=repo, analyzable_hint=777
+        )
 
-        assert exc_info.value.code is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
+        assert rejected.reason is EmbeddingReadyBuildRejectionReason.ALREADY_EMBEDDED
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
     @pytest.mark.asyncio
@@ -257,12 +254,17 @@ class TestEmbeddingTrigger:
             EmbeddingTrigger(analyzed_article_id=1, analyzable_article_id=-1)
 
 
-def test_ready_build_blocked_code_partitions_idempotent_skip_from_durable() -> None:
-    """ALREADY_EMBEDDED のみ冪等 skip、ANALYZED_ARTICLE_MISSING は残す整合性兆候。"""
-    idempotent = {c for c in EmbeddingReadyBuildBlockedCode if c.is_idempotent_skip}
-    durable = {c for c in EmbeddingReadyBuildBlockedCode if not c.is_idempotent_skip}
-    assert idempotent == {EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED}
-    assert durable == {EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING}
+def test_rejection_reasons_partition_idempotent_skip_from_durable() -> None:
+    """生成済みだけを監査対象から除き、欠損と入力不正の理由を記録する。"""
+    idempotent = {c for c in EmbeddingReadyBuildRejectionReason if c.is_idempotent_skip}
+    durable = {
+        c for c in EmbeddingReadyBuildRejectionReason if not c.is_idempotent_skip
+    }
+    assert idempotent == {EmbeddingReadyBuildRejectionReason.ALREADY_EMBEDDED}
+    assert durable == {
+        EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING,
+        EmbeddingReadyBuildRejectionReason.INPUT_INVALID,
+    }
 
 
 class TestFromFacts:
@@ -279,20 +281,28 @@ class TestFromFacts:
     @pytest.mark.parametrize(
         ("facts", "code"),
         [
-            (None, EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING),
+            (None, EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING),
             (
                 _facts(has_embedding=True),
-                EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED,
+                EmbeddingReadyBuildRejectionReason.ALREADY_EMBEDDED,
             ),
         ],
     )
-    def test_preserves_blocked_reasons(self, facts, code) -> None:
+    def test_preserves_rejection_reasons(self, facts, code) -> None:
         """取得済みの事実でも不存在と生成済みの理由を保持する。"""
-        with pytest.raises(EmbeddingReadyBuildBlockedError) as raised:
-            ReadyForEmbedding.from_facts(1, facts)
-        assert raised.value.code is code
+        rejected = ReadyForEmbedding.from_facts(1, facts)
+        assert rejected.reason is code
 
-    def test_rejects_invalid_input_without_io(self) -> None:
+    @pytest.mark.parametrize(
+        "analyzed_article_id, summary", [(1, ""), (0, "summary"), (-1, "summary")]
+    )
+    def test_rejects_invalid_input_without_io(
+        self, analyzed_article_id, summary
+    ) -> None:
         """本文の入力検証を副作用なしで実行する。"""
-        with pytest.raises(ValidationError):
-            ReadyForEmbedding.from_facts(1, _facts(summary=""))
+        rejected = ReadyForEmbedding.from_facts(
+            analyzed_article_id, _facts(summary=summary), analyzable_hint=999
+        )
+        assert rejected.reason is EmbeddingReadyBuildRejectionReason.INPUT_INVALID
+        assert rejected.analyzable_article_id == _facts().analyzable_article_id
+        assert rejected.reason.value == "embedding_ready_build_blocked_input_invalid"

@@ -11,6 +11,7 @@ from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.assessment.consumer_failure_classification import (
     AssessmentFailureClassification,
 )
+from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -79,6 +80,33 @@ class AssessmentConsumerFailureHandler:
                 self._record_secondary_failure(
                     "notification", curation_id, exc, notification_exc
                 )
+
+    async def handle_ready_build_rejected(
+        self, *, curation_id: int, rejected: AssessmentReadyBuildRejected
+    ) -> None:
+        """理由記録の通常障害で、確定した受信完了を再配信へ戻さない。"""
+        try:
+            async with self._session_factory() as session:
+                await AssessmentAuditRepository(session).append_ready_build_rejected(
+                    curation_id=curation_id, rejected=rejected
+                )
+                await session.commit()
+        except Exception as audit_exc:
+            try:
+                logger.warning(
+                    "assessment_ready_build_rejected_audit_dropped",
+                    curation_id=curation_id,
+                    reason=rejected.reason.value,
+                    audit_error_class=exception_fqn(audit_exc),
+                )
+            except Exception:  # noqa: S110
+                # 診断ログの障害でも受信完了を維持する。
+                pass
+            try:
+                record_audit_dropped(AssessmentAuditRepository.STAGE)
+            except Exception:  # noqa: S110
+                # 計測の障害でも受信完了を維持する。
+                pass
 
     @staticmethod
     def _record_secondary_failure(

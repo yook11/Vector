@@ -6,14 +6,14 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.shared.text import normalize_mention_surface
 
 __all__ = [
     "EmbeddingPreconditionProtocol",
-    "EmbeddingReadyBuildBlockedCode",
-    "EmbeddingReadyBuildBlockedError",
+    "EmbeddingReadyBuildRejectionReason",
+    "EmbeddingReadyBuildRejected",
     "EmbeddingReadyBuildFacts",
     "ReadyForEmbedding",
 ]
@@ -21,16 +21,17 @@ __all__ = [
 _MAX_MENTIONS_FOR_EMBEDDING = 30
 
 
-class EmbeddingReadyBuildBlockedCode(StrEnum):
-    """Stage 5 Ready 構築 blocked の監査 outcome_code。"""
+class EmbeddingReadyBuildRejectionReason(StrEnum):
+    """Ready構築を拒否する理由と既存の監査コード。"""
 
     ANALYZED_ARTICLE_MISSING = "embedding_ready_build_blocked_analyzed_article_missing"
+    INPUT_INVALID = "embedding_ready_build_blocked_input_invalid"
     ALREADY_EMBEDDED = "embedding_ready_build_blocked_already_embedded"
 
     @property
     def is_idempotent_skip(self) -> bool:
         """別 worker が先に処理済みで no-op になった冪等 skip か (勝者の行と冗長)。"""
-        return self is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
+        return self is EmbeddingReadyBuildRejectionReason.ALREADY_EMBEDDED
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,12 +44,16 @@ class EmbeddingReadyBuildFacts:
     key_points: Any
 
 
-class EmbeddingReadyBuildBlockedError(Exception):
-    """Stage 5 入力として採用できなかった場合に投げる例外。"""
+@dataclass(frozen=True, slots=True)
+class EmbeddingReadyBuildRejected:
+    """Readyを構築できない理由とDBで確認した記事IDを表す。"""
 
-    def __init__(self, code: EmbeddingReadyBuildBlockedCode) -> None:
-        self.code = code
-        super().__init__(code.value)
+    reason: EmbeddingReadyBuildRejectionReason
+    analyzable_article_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason, EmbeddingReadyBuildRejectionReason):
+            raise TypeError("reason must be EmbeddingReadyBuildRejectionReason")
 
 
 class EmbeddingPreconditionProtocol(Protocol):
@@ -77,10 +82,11 @@ class ReadyForEmbedding(BaseModel):
         embedding_repo: EmbeddingPreconditionProtocol,
         *,
         analyzable_hint: int | None = None,
-    ) -> tuple[ReadyForEmbedding, int]:
+    ) -> tuple[ReadyForEmbedding, int] | EmbeddingReadyBuildRejected:
         """DB 事実から Ready を構築し、監査主語の analyzable_article_id を確定する。
 
-        対象外なら blocked 例外を投げる。analyzable_article_id は trigger 由来の
+        構築できない場合は理由付きの拒否結果を返す。
+        analyzable_article_id は trigger 由来の
         ``analyzable_hint`` を優先し、旧 in-flight message (None) のときだけ DB 射影に
         fallback する。Ready 構築が成功した時点で facts は非 None なので、返す
         analyzable_article_id は必ず int になる。
@@ -97,25 +103,33 @@ class ReadyForEmbedding(BaseModel):
         facts: EmbeddingReadyBuildFacts | None,
         *,
         analyzable_hint: int | None = None,
-    ) -> tuple[ReadyForEmbedding, int]:
+    ) -> tuple[ReadyForEmbedding, int] | EmbeddingReadyBuildRejected:
         """取得済みの事実から、I/Oなしで開始条件と入力を検証する。"""
         if facts is None:
-            raise EmbeddingReadyBuildBlockedError(
-                EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
+            return EmbeddingReadyBuildRejected(
+                EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
             )
 
         if facts.has_embedding:
-            raise EmbeddingReadyBuildBlockedError(
-                EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
+            return EmbeddingReadyBuildRejected(
+                EmbeddingReadyBuildRejectionReason.ALREADY_EMBEDDED,
+                analyzable_article_id=facts.analyzable_article_id,
             )
 
-        ready = cls(
-            analyzed_article_id=analyzed_article_id,
-            text_for_embedding=_render_embedding_text(
-                summary=facts.summary,
-                key_points=facts.key_points,
-            ),
+        text_for_embedding = _render_embedding_text(
+            summary=facts.summary,
+            key_points=facts.key_points,
         )
+        try:
+            ready = cls(
+                analyzed_article_id=analyzed_article_id,
+                text_for_embedding=text_for_embedding,
+            )
+        except ValidationError:
+            return EmbeddingReadyBuildRejected(
+                EmbeddingReadyBuildRejectionReason.INPUT_INVALID,
+                analyzable_article_id=facts.analyzable_article_id,
+            )
         analyzable_article_id = (
             analyzable_hint
             if analyzable_hint is not None

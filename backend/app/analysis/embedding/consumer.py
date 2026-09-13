@@ -16,11 +16,9 @@ from app.analysis.embedding.consumer_failure_handling import (
     EmbeddingConsumerFailureHandler,
 )
 from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlockedCode,
-    EmbeddingReadyBuildBlockedError,
+    EmbeddingReadyBuildRejected,
     ReadyForEmbedding,
 )
-from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import (
     EmbeddingCompletion,
@@ -44,7 +42,9 @@ class EmbeddingConsumer:
         self._service = EmbeddingService(session_factory)
         self._failure_handler = EmbeddingConsumerFailureHandler(session_factory)
 
-    async def consume(self, event: ArticleAssessedInScope) -> EmbeddingCompletion:
+    async def consume(
+        self, event: ArticleAssessedInScope
+    ) -> EmbeddingCompletion | EmbeddingReadyBuildRejected:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
         analyzable_article_id: int | None = None
         try:
@@ -56,25 +56,17 @@ class EmbeddingConsumer:
                     if facts is not None:
                         analyzable_article_id = facts.analyzable_article_id
 
-                try:
-                    ready, analyzable_article_id = ReadyForEmbedding.from_facts(
-                        event.analyzed_article_id, facts
-                    )
-                except EmbeddingReadyBuildBlockedError as blocked:
-                    if blocked.code is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED:
-                        return EmbeddingCompletion.ALREADY_EMBEDDED
-                    if (
-                        blocked.code
-                        is EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
-                    ):
-                        raise EmbeddingAnalyzedArticleMissingError() from blocked
-                    raise
-
-                return await self._service.execute(
-                    ready,
-                    self._embedder,
-                    analyzable_article_id=analyzable_article_id,
+                build_result = ReadyForEmbedding.from_facts(
+                    event.analyzed_article_id, facts
                 )
+                if not isinstance(build_result, EmbeddingReadyBuildRejected):
+                    ready, analyzable_article_id = build_result
+
+                    return await self._service.execute(
+                        ready,
+                        self._embedder,
+                        analyzable_article_id=analyzable_article_id,
+                    )
         except Exception as exc:
             try:
                 failure = classify_embedding_failure(exc)
@@ -97,3 +89,12 @@ class EmbeddingConsumer:
                     # 後処理とログが失敗しても元の処理例外を維持する。
                     pass
             raise
+
+        rejected = build_result
+        if rejected.reason.is_idempotent_skip:
+            return EmbeddingCompletion.ALREADY_EMBEDDED
+
+        await self._failure_handler.handle_ready_build_rejected(
+            analyzed_article_id=event.analyzed_article_id, rejected=rejected
+        )
+        return rejected

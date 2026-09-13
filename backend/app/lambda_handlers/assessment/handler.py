@@ -5,6 +5,7 @@ from typing import TypedDict
 
 import structlog
 
+from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.lambda_handlers.assessment.composition import open_assessment_consumer
 from app.lambda_handlers.assessment.event import (
     AssessmentEventInvalidError,
@@ -93,12 +94,22 @@ async def _run_assessment(
                     SqsBatchItemIdentifier(itemIdentifier=record.message_id)
                 )
             else:
+                rejection_fields = (
+                    {"rejection_code": completion.reason.value}
+                    if isinstance(completion, AssessmentReadyBuildRejected)
+                    else {}
+                )
                 _log_completion(
                     message_id=record.message_id,
                     event_id=str(curated_event.event_id),
                     curation_id=curated_event.payload.curation_id,
                     analyzable_article_id=curated_event.payload.analyzable_article_id,
-                    reason=completion.kind.value,
+                    reason=(
+                        "ready_build_rejected"
+                        if isinstance(completion, AssessmentReadyBuildRejected)
+                        else completion.kind.value
+                    ),
+                    **rejection_fields,
                 )
         return failed_items
 

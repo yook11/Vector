@@ -8,7 +8,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlockedError,
+    EmbeddingReadyBuildRejected,
     ReadyForEmbedding,
 )
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
@@ -47,28 +47,11 @@ async def generate_embedding(
     with embedding_stage_span(analyzed_article_id=trigger.analyzed_article_id) as stage:
         async with session_factory() as session:
             try:
-                ready, analyzable_article_id = await ReadyForEmbedding.try_advance_from(
+                ready_build = await ReadyForEmbedding.try_advance_from(
                     analyzed_article_id=trigger.analyzed_article_id,
                     embedding_repo=EmbeddingRepository(session),
                     analyzable_hint=trigger.analyzable_article_id,
                 )
-            except EmbeddingReadyBuildBlockedError as exc:
-                # 冪等 skip (ALREADY_EMBEDDED) は勝者の行と冗長で log のみに逃がす。
-                # 恒久的な欠損 (ANALYZED_ARTICLE_MISSING) は REJECTED を残す。
-                if not exc.code.is_idempotent_skip:
-                    await EmbeddingAuditRepository(session).append_ready_build_blocked(
-                        analyzed_article_id=trigger.analyzed_article_id,
-                        exc=exc,
-                    )
-                    await session.commit()
-                logger.info(
-                    "generate_embedding_rejected",
-                    analyzed_article_id=trigger.analyzed_article_id,
-                    reason="ready_build_blocked",
-                    code=exc.code.value,
-                )
-                stage.set_result("skipped")
-                return
             except Exception as exc:
                 await _append_ready_build_failed_audit(
                     session_factory,
@@ -84,6 +67,24 @@ async def generate_embedding(
                     "infra_error" if projection.failure_kind == "db_error" else "failed"
                 )
                 raise
+
+            if isinstance(ready_build, EmbeddingReadyBuildRejected):
+                if not ready_build.reason.is_idempotent_skip:
+                    await EmbeddingAuditRepository(session).append_ready_build_rejected(
+                        analyzed_article_id=trigger.analyzed_article_id,
+                        rejected=ready_build,
+                    )
+                    await session.commit()
+                logger.info(
+                    "generate_embedding_rejected",
+                    analyzed_article_id=trigger.analyzed_article_id,
+                    reason="ready_build_rejected",
+                    code=ready_build.reason.value,
+                )
+                stage.set_result("skipped")
+                return
+
+            ready, analyzable_article_id = ready_build
 
         stage.set_article_id(analyzable_article_id)
 

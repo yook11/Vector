@@ -41,8 +41,8 @@ from app.ai_providers.errors import (
 from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlockedCode,
-    EmbeddingReadyBuildBlockedError,
+    EmbeddingReadyBuildRejected,
+    EmbeddingReadyBuildRejectionReason,
 )
 from app.analysis.embedding.errors import (
     EmbeddingError,
@@ -155,26 +155,27 @@ def test_embedding_payload_uses_ai_model_key_not_embedding_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_blocked_records_missing_analysis_rejected(
+async def test_append_ready_build_rejected_records_missing_analysis_rejected(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Ready build blocked は rejected として analyzed_article_id を payload に残す。"""
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_ready_build_blocked(
+        await EmbeddingAuditRepository(session).append_ready_build_rejected(
             analyzed_article_id=999,
-            exc=EmbeddingReadyBuildBlockedError(
-                EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
+            rejected=EmbeddingReadyBuildRejected(
+                EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
             ),
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING.value
+        db_session, EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING.value
     )
     assert ev.event_type == "rejected"
     assert (
-        ev.outcome_code == EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING.value
+        ev.outcome_code
+        == EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING.value
     )
     assert ev.article_id is None
     assert ev.payload["analyzed_article_id"] == 999
