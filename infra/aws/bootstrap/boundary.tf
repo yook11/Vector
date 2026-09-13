@@ -133,6 +133,18 @@ locals {
       boundary   = aws_iam_policy.assessment_outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-assessment-outbox-relay-scheduler"]
     }
+    CurationConsumerLambda = {
+      boundary   = aws_iam_policy.curation_consumer_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-curation-consumer-lambda"]
+    }
+    CurationOutboxRelayLambda = {
+      boundary   = aws_iam_policy.curation_outbox_relay_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-curation-outbox-relay-lambda"]
+    }
+    CurationOutboxRelayScheduler = {
+      boundary   = aws_iam_policy.curation_outbox_relay_scheduler_boundary.arn
+      role_names = ["${var.name_prefix}-curation-outbox-relay-scheduler"]
+    }
     Chatbot = {
       boundary   = aws_iam_policy.chatbot_boundary.arn
       role_names = ["${var.name_prefix}-chatbot"]

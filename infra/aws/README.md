@@ -441,11 +441,17 @@ Terraform変数のdefault=nullだけでは現在の版は保持できない。�
 set -euo pipefail
 relay_vars_tmp=$(mktemp ./outbox-relay-vars.XXXXXX)
 consumer_vars_tmp=$(mktemp ./embedding-consumer-vars.XXXXXX)
-trap 'rm -f "$relay_vars_tmp" "$consumer_vars_tmp"' EXIT
+assessment_vars_tmp=$(mktemp ./assessment-vars.XXXXXX)
+curation_vars_tmp=$(mktemp ./curation-vars.XXXXXX)
+trap 'rm -f "$relay_vars_tmp" "$consumer_vars_tmp" "$assessment_vars_tmp" "$curation_vars_tmp"' EXIT
 terraform state pull | python3 scripts/resolve-outbox-relay-image.py > "$relay_vars_tmp"
 terraform state pull | python3 scripts/resolve-embedding-consumer-image.py > "$consumer_vars_tmp"
+terraform state pull | python3 scripts/resolve-assessment-images.py > "$assessment_vars_tmp"
+terraform state pull | python3 scripts/resolve-curation-images.py > "$curation_vars_tmp"
 mv "$relay_vars_tmp" outbox-relay.auto.tfvars.json
 mv "$consumer_vars_tmp" embedding-consumer.auto.tfvars.json
+mv "$assessment_vars_tmp" assessment.auto.tfvars.json
+mv "$curation_vars_tmp" curation.auto.tfvars.json
 ```
 
 明示した版をplanする場合はConsumerのスクリプトへ`--digest "$CONSUMER_DIGEST"`を渡し、backend ECR内の存在も別途確認する。生成ファイルやstateをコミット・公開しない。stateの現行イメージが不正、現行インスタンスが複数、state取得失敗の場合は停止し、ファイルを手作業でnullへ変更して続行しない。
@@ -464,3 +470,29 @@ docker run --rm --platform linux/arm64 --read-only \
 ```
 
 LambdaのCI管理権限はConsumer関数ARNとFunctionArn条件で限定する。マッピングのConsumerタグは作成時に必須とし、タグ操作も既存のConsumerタグ一致を要求するため、他のマッピングへタグを後付けして管理範囲を拡張できない。Consumerタグの変更・削除は許可しない。タグ付き作成とResourceTag条件の考え方は[AWSのABAC例](https://docs.aws.amazon.com/lambda/latest/dg/attribute-based-access-control-example.html)に合わせ、AWS上での適用確認は後続に残す。
+
+## Curationの配置（スライス6前半）
+
+今回追加するのはTerraform・bootstrap・既存GitHub Actionsのplan／apply設定であり、AWSへの適用・キー登録・digest指定は行っていない。独立したデプロイ経路は追加しない。
+
+- Consumerは`${name_prefix}-curation-consumer`、arm64・1,024MB・120秒・予約同時実行10。専用subnetのCIDRは`cidrsubnet(var.vpc_cidr, 8, 32)`で、RDS・Gemini proxy・SSMへの通信だけを許可する。
+- relayは`${name_prefix}-curation-outbox-relay`、arm64・512MB・120秒・予約同時実行1。既存のOutbox relay用通信経路からCurationキューへ送り、専用Schedulerが1分間隔で起動する。
+- 既存`outbox["curation"]`の保持期間は14日から4日、可視性は30秒から720秒へ変更する。5回の受信後に専用DLQ（保持14日）へ移し、可視メッセージ1件以上で既存SNSへ通知する。保持期間短縮により既に4日を超えたメッセージが期限切れになるため、適用前に滞留を確認する。
+- digest未指定なら対応Lambda・mapping／scheduleは作成しない。指定時は作成と有効化を同時に行う。受信はバッチ1・待機0秒・最大同時実行10・`ReportBatchItemFailures`。
+
+### 後続タスクでの適用順序
+
+1. **bootstrap先行**: 管理者の既存bootstrap経路で専用boundaryとCI権限を反映する。本体CIにはbootstrap変更権限を追加しない。policy移動を含むため`-target`で部分適用しない。
+2. **基盤・キー準備**: 両digestを初回nullのまま、既存のproduction承認付きTerraform applyでキュー・DLQ・subnet・SG・ロール・ログ・proxy設定を配置する。既存proxy serviceはTerraformのtask definition更新に追従するため、本体applyでCurationの許可CIDRを反映し、通信を確認する。`/${name_prefix}/curation-consumer/gemini-api-key`をSecureString・既存`alias/aws/ssm`で管理者がTerraform外から登録する。実値はコマンド引数・tfvars・state・CIログへ渡さない。
+3. **Consumer有効化**: backend ECRに存在するarm64イメージを選び、既存`AWS terraform apply`の`curation_consumer_image_digest`だけを指定して承認付き実行を行う。relay入力は省略する。ConsumerのActive／Successful、mappingのEnabled・対象キュー・受信設定、SSM・RDS IAM・proxy接続を確認する。キューに既存メッセージがあればこの時点で処理が始まる。
+4. **通常経路切替時にrelay有効化**: 上流Taskiq直接投入の終了と合わせる後続タスクで`curation_outbox_relay_image_digest`を指定する。Consumer入力の省略はstateの現行値を保持する。実配送・DB保存・部分バッチ応答・DLQ移動・SNS通知を確認する。旧救済は別タスクとして扱う。
+
+通常のplan／applyでは`resolve-curation-images.py`が現行digestを保持する。片側更新・切り戻しは対応入力だけに明示digestを渡す。state不正・digest不正・明示イメージのECR不在なら停止し、nullやタグへ置き換えて続行しない。digest省略を停止操作として使わない。ローカルの読み取り専用planでも上記の全工程のdigest保持処理を行い、生成JSON・stateはコミットしない。
+
+確認用outputsは`curation_consumer_*`（関数・digest・subnet・SG・ロール・ログ・SSM参照・mapping UUID）、`curation_outbox_relay_*`（関数・digest・ロール・ログ・Scheduler）、`curation_dlq_*`、既存`outbox_queue_urls`／`outbox_queue_arns`を使用する。実AWSの権限成立・配送・通知はmock planの成功だけでは検証済みとしない。
+
+### 今回のローカル検証範囲
+
+本体・bootstrapのmock planとdigestスクリプトの実CLIテストを主な保証とする。実state・tfvarsをコピーしない一時ディレクトリで`terraform fmt -check`、`init -backend=false -input=false -lockfile=readonly`、`validate`、`test`を実行する。Pythonのlint・formatと`python3 -m unittest discover -s infra/aws/scripts -p 'test_*.py'`、変更したworkflowのactionlintも実行する。既存のbackend業務コード・業務テストは変更しない。`backend/tests/scripts/test_assessment_infrastructure.py`の既存CI shellテストへCurationを追加し、state取得失敗時の設定非配置・一時ファイル解放と、明示イメージがECRにない場合の停止を共有テストで確認する。
+
+actionlint 1.7.12は既存の`concurrency.queue: max`を未対応キーとして扱う。この1種類だけを`-ignore 'unexpected key "queue" for "concurrency" section'`で除外し、残りを検証する。既存値は[GitHub公式のqueue仕様](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)と照合し、productionの順次実行設定を変更しない。

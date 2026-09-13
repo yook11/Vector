@@ -73,10 +73,15 @@ run "ci_manages_assessment_without_broadening_mapping_access" {
       alltrue([for policy in [
         aws_iam_policy.apply_outbox.policy,
         aws_iam_policy.apply_assessment_consumer.policy,
+        aws_iam_policy.apply_embedding_consumer.policy,
         aws_iam_policy.assessment_consumer_lambda_boundary.policy,
         aws_iam_policy.assessment_outbox_relay_lambda_boundary.policy,
         aws_iam_policy.assessment_outbox_relay_scheduler_boundary.policy,
         aws_iam_policy.lambda_config_readback.policy,
+        aws_iam_policy.apply_curation_consumer.policy,
+        aws_iam_policy.curation_consumer_lambda_boundary.policy,
+        aws_iam_policy.curation_outbox_relay_lambda_boundary.policy,
+        aws_iam_policy.curation_outbox_relay_scheduler_boundary.policy,
       ] : length(policy) <= 6144]) &&
       aws_iam_role_policy_attachment.apply_assessment_consumer.role == aws_iam_role.ci["apply"].name &&
       contains(local.managed_pipeline_queue_arns, local.assessment_dlq_arn) &&
@@ -95,7 +100,7 @@ run "ci_manages_assessment_without_broadening_mapping_access" {
         values(s.Condition.StringEquals) == ["slice-test-assessment-consumer"]
       ]) &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_outbox.policy).Statement :
-        s.Sid != "ManageOutboxLambda" ? true : toset(s.Resource) == toset([local.outbox_lambda_arn, local.assessment_outbox_relay_lambda_arn])
+        s.Sid != "ManageOutboxLambda" ? true : toset(s.Resource) == toset([local.outbox_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.curation_outbox_relay_lambda_arn])
       ])
     )
     error_message = "関数のARNとmappingのタグ条件を固定し、他Consumerを管理しない。"
@@ -109,7 +114,10 @@ run "boundary_pairing_guards_remain_complete" {
     condition = alltrue([for expected in local.boundary_pairing_statements :
       [for actual in concat(
         jsondecode(aws_iam_role_policy.apply.policy).Statement,
-        jsondecode(aws_iam_policy.apply_outbox.policy).Statement
+        jsondecode(aws_iam_policy.apply_outbox.policy).Statement,
+        jsondecode(aws_iam_policy.apply_curation_consumer.policy).Statement,
+        jsondecode(aws_iam_policy.apply_embedding_consumer.policy).Statement,
+        jsondecode(aws_iam_policy.apply_assessment_consumer.policy).Statement
       ) : jsonencode(actual) if actual.Sid == expected.Sid] == [jsonencode(expected)]
     ])
     error_message = "既存・追加の全ロールで、同じboundary固定Denyを1件ずつ保持する。"
@@ -193,4 +201,22 @@ override_resource {
   override_during = plan
   target          = aws_iam_policy.agentcore_gateway_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-agentcore-gateway-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.curation_consumer_lambda_boundary
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-consumer-lambda-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.curation_outbox_relay_lambda_boundary
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-outbox-relay-lambda-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.curation_outbox_relay_scheduler_boundary
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-outbox-relay-scheduler-boundary" }
 }

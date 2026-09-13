@@ -3,7 +3,7 @@ data "aws_kms_key" "lambda_config" {
 }
 
 locals {
-  lambda_config_function_arns = [local.outbox_lambda_arn, local.embedding_consumer_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.assessment_consumer_lambda_arn]
+  lambda_config_function_arns = [local.outbox_lambda_arn, local.embedding_consumer_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.assessment_consumer_lambda_arn, local.curation_consumer_lambda_arn, local.curation_outbox_relay_lambda_arn]
   lambda_kms_service          = "lambda.${var.region}.amazonaws.com"
 }
 

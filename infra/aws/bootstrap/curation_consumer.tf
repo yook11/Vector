@@ -1,23 +1,23 @@
 locals {
-  assessment_consumer_eni_actions = [
+  curation_consumer_eni_actions = [
     "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
     "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
   ]
 }
 
-resource "aws_iam_policy" "assessment_consumer_lambda_boundary" {
-  name        = "${var.name_prefix}-assessment-consumer-lambda-boundary"
+resource "aws_iam_policy" "curation_consumer_lambda_boundary" {
+  name        = "${var.name_prefix}-curation-consumer-lambda-boundary"
   path        = "/${var.name_prefix}-ci/"
-  description = "Ceiling for the assessment consumer Lambda execution role."
+  description = "Ceiling for the curation consumer Lambda execution role."
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "ConsumeAssessmentEvents"
+        Sid      = "ConsumeCurationEvents"
         Effect   = "Allow"
         Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-        Resource = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-assessment"
+        Resource = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-curation"
       },
       {
         Sid      = "RdsIamAuthAsApp"
@@ -26,45 +26,45 @@ resource "aws_iam_policy" "assessment_consumer_lambda_boundary" {
         Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector_app"
       },
       {
-        Sid      = "ReadDeepSeekKey"
+        Sid      = "ReadGeminiKey"
         Effect   = "Allow"
         Action   = "ssm:GetParameter"
-        Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/assessment-consumer/deepseek-api-key"
+        Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/curation-consumer/gemini-api-key"
       },
       {
         Sid      = "WriteConsumerLogs"
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.name_prefix}-assessment-consumer:*"
+        Resource = "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.name_prefix}-curation-consumer:*"
       },
       {
         Sid      = "ManageLambdaNetworkInterfaces"
         Effect   = "Allow"
-        Action   = local.assessment_consumer_eni_actions
+        Action   = local.curation_consumer_eni_actions
         Resource = "*"
       },
       {
         Sid       = "DenyEniOperationsFromFunctionCode"
         Effect    = "Deny"
-        Action    = local.assessment_consumer_eni_actions
+        Action    = local.curation_consumer_eni_actions
         Resource  = "*"
-        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.assessment_consumer_lambda_arn } }
+        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.curation_consumer_lambda_arn } }
       },
       local.boundary_no_escalation_statement,
     ]
   })
 }
 
-resource "aws_iam_policy" "apply_assessment_consumer" {
-  name        = "${var.name_prefix}-ci-apply-assessment-consumer"
+resource "aws_iam_policy" "apply_curation_consumer" {
+  name        = "${var.name_prefix}-ci-apply-curation-consumer"
   path        = "/${var.name_prefix}-ci/"
-  description = "Manage only the assessment Lambda and its event source mappings."
+  description = "Manage only the curation Lambda and its event source mappings."
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = concat([
       {
-        Sid    = "ManageAssessmentFunction"
+        Sid    = "ManageCurationFunction"
         Effect = "Allow"
         Action = [
           "lambda:CreateFunction", "lambda:DeleteFunction",
@@ -75,61 +75,61 @@ resource "aws_iam_policy" "apply_assessment_consumer" {
           "lambda:DeleteFunctionConcurrency", "lambda:GetRuntimeManagementConfig",
           "lambda:ListTags", "lambda:TagResource", "lambda:UntagResource",
         ]
-        Resource = local.assessment_consumer_lambda_arn
+        Resource = local.curation_consumer_lambda_arn
       },
       {
-        Sid      = "CreateAssessmentMapping"
+        Sid      = "CreateCurationMapping"
         Effect   = "Allow"
         Action   = "lambda:CreateEventSourceMapping"
         Resource = "*"
         Condition = {
-          ArnEquals    = { "lambda:FunctionArn" = local.assessment_consumer_lambda_arn }
-          StringEquals = { "aws:RequestTag/Consumer" = "${var.name_prefix}-assessment-consumer" }
+          ArnEquals    = { "lambda:FunctionArn" = local.curation_consumer_lambda_arn }
+          StringEquals = { "aws:RequestTag/Consumer" = "${var.name_prefix}-curation-consumer" }
         }
       },
       {
-        Sid      = "ManageAssessmentMapping"
+        Sid      = "ManageCurationMapping"
         Effect   = "Allow"
         Action   = ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping", "lambda:DeleteEventSourceMapping"]
         Resource = "arn:aws:lambda:${var.region}:${local.account_id}:event-source-mapping:*"
         Condition = {
-          ArnEquals    = { "lambda:FunctionArn" = local.assessment_consumer_lambda_arn }
-          StringEquals = { "aws:ResourceTag/Consumer" = "${var.name_prefix}-assessment-consumer" }
+          ArnEquals    = { "lambda:FunctionArn" = local.curation_consumer_lambda_arn }
+          StringEquals = { "aws:ResourceTag/Consumer" = "${var.name_prefix}-curation-consumer" }
         }
       },
       {
-        Sid       = "ReadAssessmentMappingTags"
+        Sid       = "ReadCurationMappingTags"
         Effect    = "Allow"
         Action    = "lambda:ListTags"
         Resource  = "arn:aws:lambda:${var.region}:${local.account_id}:event-source-mapping:*"
-        Condition = { StringEquals = { "aws:ResourceTag/Consumer" = "${var.name_prefix}-assessment-consumer" } }
+        Condition = { StringEquals = { "aws:ResourceTag/Consumer" = "${var.name_prefix}-curation-consumer" } }
       },
       {
-        Sid      = "TagAssessmentMapping"
+        Sid      = "TagCurationMapping"
         Effect   = "Allow"
         Action   = "lambda:TagResource"
         Resource = "arn:aws:lambda:${var.region}:${local.account_id}:event-source-mapping:*"
         Condition = {
-          StringEquals                = { "aws:ResourceTag/Consumer" = "${var.name_prefix}-assessment-consumer" }
-          StringEqualsIfExists        = { "aws:RequestTag/Consumer" = "${var.name_prefix}-assessment-consumer" }
+          StringEquals                = { "aws:ResourceTag/Consumer" = "${var.name_prefix}-curation-consumer" }
+          StringEqualsIfExists        = { "aws:RequestTag/Consumer" = "${var.name_prefix}-curation-consumer" }
           "ForAllValues:StringEquals" = { "aws:TagKeys" = ["Consumer", "Project", "ManagedBy"] }
         }
       },
       {
-        Sid      = "UntagAssessmentMappingMetadata"
+        Sid      = "UntagCurationMappingMetadata"
         Effect   = "Allow"
         Action   = "lambda:UntagResource"
         Resource = "arn:aws:lambda:${var.region}:${local.account_id}:event-source-mapping:*"
         Condition = {
-          StringEquals                = { "aws:ResourceTag/Consumer" = "${var.name_prefix}-assessment-consumer" }
+          StringEquals                = { "aws:ResourceTag/Consumer" = "${var.name_prefix}-curation-consumer" }
           "ForAllValues:StringEquals" = { "aws:TagKeys" = ["Project", "ManagedBy"] }
         }
       },
-    ], local.assessment_boundary_pairing_statements)
+    ], local.curation_boundary_pairing_statements)
   })
 }
 
-resource "aws_iam_role_policy_attachment" "apply_assessment_consumer" {
+resource "aws_iam_role_policy_attachment" "apply_curation_consumer" {
   role       = aws_iam_role.ci["apply"].name
-  policy_arn = aws_iam_policy.apply_assessment_consumer.arn
+  policy_arn = aws_iam_policy.apply_curation_consumer.arn
 }

@@ -16,10 +16,10 @@ resource "aws_sqs_queue" "outbox" {
   name                       = "${var.name_prefix}-article-${each.key}"
   fifo_queue                 = false
   sqs_managed_sse_enabled    = true
-  message_retention_seconds  = contains(["embedding", "assessment"], each.key) ? 345600 : 1209600
-  visibility_timeout_seconds = contains(["embedding", "assessment"], each.key) ? 720 : 30
-  redrive_policy = contains(["embedding", "assessment"], each.key) ? jsonencode({
-    deadLetterTargetArn = each.key == "embedding" ? aws_sqs_queue.embedding_dlq.arn : aws_sqs_queue.assessment_dlq.arn
+  message_retention_seconds  = contains(["embedding", "assessment", "curation"], each.key) ? 345600 : 1209600
+  visibility_timeout_seconds = contains(["embedding", "assessment", "curation"], each.key) ? 720 : 30
+  redrive_policy = contains(["embedding", "assessment", "curation"], each.key) ? jsonencode({
+    deadLetterTargetArn = { embedding = aws_sqs_queue.embedding_dlq.arn, assessment = aws_sqs_queue.assessment_dlq.arn, curation = aws_sqs_queue.curation_dlq.arn }[each.key]
     maxReceiveCount     = 5
   }) : null
 }
@@ -90,6 +90,12 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
         Principal = { AWS = aws_iam_role.assessment_outbox_relay.arn }
         Action    = "sqs:SendMessage"
         Resource  = aws_sqs_queue.outbox["assessment"].arn
+      },
+      {
+        Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.curation_outbox_relay.arn }
+        Action    = "sqs:SendMessage"
+        Resource  = aws_sqs_queue.outbox["curation"].arn
       },
     ]
   })
@@ -188,7 +194,7 @@ resource "aws_ecr_repository_policy" "outbox_relay" {
       Principal = { Service = "lambda.amazonaws.com" }
       Action    = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
       Condition = {
-        ArnLike      = { "aws:SourceArn" = [local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn] }
+        ArnLike      = { "aws:SourceArn" = [local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn] }
         StringEquals = { "aws:SourceAccount" = local.account_id }
       }
     }]

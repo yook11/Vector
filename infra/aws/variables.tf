@@ -231,3 +231,27 @@ variable "assessment_outbox_relay_image_digest" {
     error_message = "assessment_outbox_relay_image_digest must be null or a sha256 digest with 64 lowercase hexadecimal characters."
   }
 }
+
+variable "curation_consumer_image_digest" {
+  description = "Consumer用の共通backendイメージdigest（初回のみnull、通常plan/applyではstateの現行値を引き継ぐ）。"
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.curation_consumer_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.curation_consumer_image_digest))
+    error_message = "curation_consumer_image_digest must be null or a sha256 digest with 64 lowercase hexadecimal characters."
+  }
+}
+
+variable "curation_outbox_relay_image_digest" {
+  description = "Curation relay用の共通backendイメージdigest（初回のみnull、通常plan/applyではstateの現行値を引き継ぐ）。"
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.curation_outbox_relay_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.curation_outbox_relay_image_digest))
+    error_message = "curation_outbox_relay_image_digest must be null or a sha256 digest with 64 lowercase hexadecimal characters."
+  }
+}
