@@ -5,8 +5,8 @@ from __future__ import annotations
 from app.collection.article_completion.completion_failure import (
     CompletionRejection,
 )
+from app.collection.article_completion.content import ScrapedContent
 from app.collection.article_completion.ready import ReadyForArticleCompletion
-from app.collection.article_completion.scraper import ScrapedContent
 from app.collection.domain.analyzable_article import (
     AnalyzableArticle,
     QualityTooLow,

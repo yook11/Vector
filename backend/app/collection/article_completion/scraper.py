@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import html
 import re
 from collections import defaultdict
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
@@ -16,21 +14,15 @@ import structlog
 import trafilatura
 from trafilatura.settings import Document as TrafilaturaDocument
 
+from app.collection.article_completion.content import RawResponse as RawResponse
+from app.collection.article_completion.content import ScrapedContent as ScrapedContent
 from app.collection.article_completion.scrape_failure import (
     ScrapeContentFailure,
-    ScrapeContentQualityTooLow,
     ScrapeFailure,
     ScrapeNotHtml,
     ScrapeParseCrashed,
     ScrapeParserGaveUp,
 )
-from app.collection.domain.article_limits import (
-    ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
-)
-from app.collection.domain.article_limits import (
-    ARTICLE_TITLE_MAX_LENGTH as _TITLE_MAX_LENGTH,
-)
-from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_error_mapping import (
     external_fetch_error_from_exception,
 )
@@ -59,27 +51,6 @@ _META_CHARSET_RE = re.compile(
 _META_HTTP_EQUIV_CHARSET_RE = re.compile(rb"charset\s*=\s*([^\s\"';>]+)", re.IGNORECASE)
 _SNIFF_BYTES = 2048
 
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-
-
-def _strip_html_tags(text: str | None) -> str | None:
-    """scrape した title 文字列から HTML タグを除去し entity を decode する。"""
-    if text is None:
-        return None
-    cleaned = _HTML_TAG_RE.sub("", text)
-    return html.unescape(cleaned).strip()
-
-
-@dataclass(frozen=True, slots=True)
-class RawResponse:
-    """``_fetch`` が返す httpx 非依存の中間値。"""
-
-    url: str
-    content_type: str
-    charset_from_header: str | None
-    content: bytes
-    decoded_text: str
-
 
 def _decode_html_response(raw: RawResponse) -> str:
     """HTTP charset が無い場合だけ HTML meta charset を sniff して decode する。"""
@@ -102,49 +73,6 @@ def _decode_html_response(raw: RawResponse) -> str:
             )
 
     return raw.decoded_text
-
-
-@dataclass(frozen=True)
-class ScrapedContent:
-    """取得成功: 品質ゲートを通過した本文・タイトル。"""
-
-    title: str
-    body: str
-    published_at: PublishedAt | None
-
-    def __post_init__(self) -> None:
-        if not self.title:
-            raise ValueError("title must be non-empty")
-        if len(self.title) > _TITLE_MAX_LENGTH:
-            raise ValueError(f"title exceeds {_TITLE_MAX_LENGTH} chars")
-        if len(self.body) < _BODY_MIN_LENGTH:
-            raise ValueError(f"body must be at least {_BODY_MIN_LENGTH} chars")
-
-    @classmethod
-    def try_create(
-        cls,
-        *,
-        raw_title: str | None,
-        stripped_body: str,
-        raw_date: str | None,
-    ) -> ScrapedContent | ScrapeContentQualityTooLow:
-        """素材が品質ゲートを満たせば ``ScrapedContent``、無理なら失敗値を返す。"""
-        cleaned_title = _strip_html_tags(raw_title)
-        title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
-        body = stripped_body if len(stripped_body) >= _BODY_MIN_LENGTH else None
-
-        if body is None or title is None:
-            body_length = len(stripped_body)
-            # paywall stub / 拒否ページ判別に使えるよう、本文がゼロでも閾値以上でも
-            # ない (= title 欠落で落ちた) 場合は冒頭断片を残さない。
-            body_sample = stripped_body if 0 < body_length < _BODY_MIN_LENGTH else None
-            return ScrapeContentQualityTooLow(
-                body_length=body_length,
-                title_present=title is not None,
-                body_sample=body_sample,
-            )
-
-        return cls(title=title, body=body, published_at=PublishedAt.parse(raw_date))
 
 
 class _RobotsGate:
@@ -188,9 +116,9 @@ def _parse_raw_response_as_html_document(
     raw: RawResponse,
 ) -> TrafilaturaDocument | ScrapeNotHtml | ScrapeParserGaveUp | ScrapeParseCrashed:
     """RawResponse を HTML document として解釈し、失敗は値で返す。"""
-    if "text/html" not in raw.content_type:
+    if "text/html" not in (raw.content_type or ""):
         logger.info("content_not_html", url=raw.url, content_type=raw.content_type)
-        return ScrapeNotHtml(content_type=raw.content_type)
+        return ScrapeNotHtml(content_type=raw.content_type or "")
 
     # decode 失敗は fallback に畳み、ScrapeParseCrashed は trafilatura 専用に保つ。
     html = _decode_html_response(raw)
@@ -232,8 +160,8 @@ def _build_scraped_content_from_document(
     document: TrafilaturaDocument,
     *,
     url: str,
-) -> ScrapedContent | ScrapeContentQualityTooLow:
-    """``TrafilaturaDocument`` を primitives に射影し品質ゲートに通す。"""
+) -> ScrapedContent:
+    """抽出結果を整形し、完成条件の判定前の素材として返す。"""
     text = document.text
     body_stripped = text.strip() if text else ""
 
@@ -248,20 +176,11 @@ def _build_scraped_content_from_document(
             body_length=len(body_stripped),
         )
 
-    # 品質ゲート判定は ScrapedContent.try_create に集約する。
-    outcome = ScrapedContent.try_create(
+    return ScrapedContent.from_extraction(
         raw_title=document.title,
         stripped_body=body_stripped,
         raw_date=document.date,
     )
-    if isinstance(outcome, ScrapeContentQualityTooLow):
-        logger.info(
-            "content_quality_too_low",
-            url=url,
-            body_length=outcome.body_length,
-            title_present=outcome.title_present,
-        )
-    return outcome
 
 
 class ArticleScraper:

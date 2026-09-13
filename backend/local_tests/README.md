@@ -2,6 +2,8 @@
 
 実行: リポジトリルートで`make test-local`。
 
+`test_source_acquisition_requests.py`は、Scheduler入力から実DBの有効なソースを選定し、取得依頼一覧を作る経路を担当する。DB変更後の再選定と、cadence・登録状況による除外を確認する。対象外の理由は既存の確認結果に残り、取得依頼一覧には混ぜない。ID生成の時差同一性・入力拒否は通常の単体テストが担当し、同じ選定シナリオを重複させない。SQS送信・Lambda入口の実装時にはこの経路を拡張する。
+
 Docker、backendの`uv sync --frozen`、frontendの`npm ci`、Node/npmが必要。
 Better Auth CLIは既存のfrontend developmentイメージと同じ版をnpxで起動する。
 
