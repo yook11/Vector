@@ -394,14 +394,21 @@ class RunTests(unittest.TestCase):
             self.provisioned(),
         )
         self.check.side_effect = lambda *args: calls.append("readiness")
-        self.run.collect.side_effect = lambda: calls.append("collect")
+        self.run.collect.side_effect = lambda **kwargs: calls.append("collect")
         self.run.destroy.side_effect = lambda: calls.append("destroy")
 
         def database(*args):
             calls.append("database")
             raise RuntimeError("database_failure")
 
+        attempt = Mock()
+        attempt.path = self.directory / "test-attempts/1"
+        attempt.target = "aws_tests/embedding/test_event_processing.py"
+        attempt.result = {"status": "running", "target": attempt.target}
+        attempt.collect.side_effect = lambda: calls.append("selection")
+        attempt.cases.return_value = []
         with (
+            patch.object(controller.testing, "TestAttempt", return_value=attempt),
             patch.object(
                 controller.assets,
                 "prepare_assets",
@@ -418,10 +425,11 @@ class RunTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "database_failure"),
                 redirect_stdout(io.StringIO()),
             ):
-                self.run.run()
+                self.run.run(attempt.target)
         self.assertEqual(
             calls,
             [
+                "selection",
                 "preflight",
                 "schema",
                 "provision",

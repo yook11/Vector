@@ -5,16 +5,16 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import sys
-import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from botocore.exceptions import ClientError
 
-from . import assets, cleanup, readiness, remote, snapshot
+from . import assets, cleanup, readiness, remote, snapshot, testing
 from .common import LOCAL, ROOT, client, execute, identity, save, session
 
 
@@ -71,6 +71,10 @@ class Run:
             f"{name}: {value['status']}"
             for name, value in self.result["phases"].items()
         )
+        if latest := self.result.get("latest_test_attempt"):
+            lines.append(f"最新試験結果: {latest}/result.json")
+            attempt = self.result["test_attempts"][-1]
+            lines.append(f"試験対象: {attempt['target']}")
         lines.append("常設基盤（IAM・state S3・ECR・SSM）は保持します。")
         (self.directory / "summary.txt").write_text("\n".join(lines) + "\n")
 
@@ -160,7 +164,7 @@ class Run:
         raw = snapshot.load(self.directory / "outputs.json")
         return {key: value["value"] for key, value in raw.items()}
 
-    def collect(self):
+    def collect(self, *, destination=None):
         with self.phase("collection"):
             outputs_file = self.directory / "outputs.json"
             raw = snapshot.load(outputs_file) if outputs_file.exists() else {}
@@ -178,11 +182,13 @@ class Run:
                     }
                 },
             )
-            destination = self.directory / (
+            destination = destination or self.directory / (
                 "logs-" + datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
             )
             destination.mkdir()
-            self.result.setdefault("log_directories", []).append(destination.name)
+            self.result.setdefault("log_directories", []).append(
+                str(destination.relative_to(self.directory))
+            )
             self.persist()
             cleanup.collect_logs(self.runner, {"execution": execution}, destination)
 
@@ -526,91 +532,146 @@ class Run:
                 flush=True,
             )
 
-    def run(self):
+    def require_prepared(self):
+        if any(
+            self.result["phases"].get(name, {}).get("status", "not_run") != "not_run"
+            for name in ("cleanup_access", "destroy", "verification")
+        ):
+            raise RuntimeError("deletion_started_use_new_run_id")
+        if not self.result.get("apply_completed") or any(
+            self.result["phases"].get(name, {}).get("status") != "passed"
+            for name in ("up", "prepare", "database")
+        ):
+            raise RuntimeError("prepare_must_pass_before_test")
+
+    def test(self, target, timeout=300):
+        self.execute_tests(target, timeout, create=False)
+
+    def run(self, target, timeout=300):
+        self.execute_tests(target, timeout, create=True)
+
+    def execute_tests(self, target, timeout, *, create):
+        attempt = testing.TestAttempt(self.directory, target, timeout)
+        attempt.result.update(
+            run_id=self.directory.name,
+            source_revision=self.inputs["source_revision"],
+            backend_image_digest=self.inputs["backend_image_digest"],
+        )
+        self.result.setdefault("test_attempts", []).append(attempt.result)
+        self.result["latest_test_attempt"] = str(
+            attempt.path.relative_to(self.directory)
+        )
+        self.result["tests"] = []
+        for name in (
+            "test_selection",
+            "test",
+            "preflight",
+            "resources",
+            *readiness.PHASES,
+            "collection",
+        ):
+            self.result["phases"][name] = {"status": "not_run"}
+        access_confirmed = False
+        failed = False
         try:
-            self.preflight()
-            with self.phase("auth_schema"):
-                assets.prepare_assets(self.directory, self.inputs["source_revision"])
-            self.provision()
-            outputs = self.verify_resources()
-            readiness.check(self.aws, self.runner, outputs, self.phase, self.command)
-            self.prepare_database(outputs)
-            with self.phase("test"):
-                self.result["test_deadline"] = time.time() + 300
-                self.persist()
+            with self.phase("test_run"):
                 try:
-                    execute(
-                        [
-                            str(ROOT / "backend/.venv/bin/python"),
-                            "-m",
-                            "pytest",
-                            "-p",
-                            "aws_tests.reporting",
-                            "--aws-smoke-report",
-                            str(self.directory / "test-results.json"),
-                            "aws_tests/embedding/test_event_processing.py",
-                            "-q",
-                            "--aws-smoke-outputs",
-                            str(self.directory / "outputs.json"),
-                            "--aws-account-config",
-                            str(self.directory / "account.json"),
-                            "--aws-runner-profile",
-                            self.manifest["runner_profile"],
-                            "-o",
-                            "junit_family=xunit1",
-                            "--junitxml=" + str(self.directory / "junit.xml"),
-                        ],
-                        cwd=self.directory / "workspace/backend",
-                        log=self.directory / "pytest.log",
-                        timeout=300,
-                        env=snapshot.environment(self.directory),
+                    with self.phase("test_selection"):
+                        if not create:
+                            self.require_prepared()
+                        attempt.collect()
+                    if create:
+                        self.preflight()
+                    else:
+                        self.preflight(resume=True)
+                    access_confirmed = True
+                    if create:
+                        with self.phase("auth_schema"):
+                            assets.prepare_assets(
+                                self.directory, self.inputs["source_revision"]
+                            )
+                        self.provision()
+                    outputs = self.verify_resources()
+                    readiness.check(
+                        self.aws, self.runner, outputs, self.phase, self.command
                     )
+                    if create:
+                        self.prepare_database(outputs)
+                    with self.phase("test"):
+                        attempt.execute(self.manifest["runner_profile"])
+                except BaseException:
+                    failed = True
+                    raise
                 finally:
-                    self.read_test_results()
-                cases = self.result["tests"]
-                if (
-                    not isinstance(cases, list)
-                    or len(cases) != 2
-                    or any(case["status"] != "passed" for case in cases)
-                ):
-                    raise RuntimeError("both_smoke_cases_must_pass")
+                    try:
+                        if access_confirmed and self.result["apply_attempted"]:
+                            try:
+                                self.collect(destination=attempt.path / "logs")
+                            except Exception:
+                                if not failed:
+                                    raise
+                                print(
+                                    "結果回収が不完全です。元の失敗と回収結果を記録します。",
+                                    flush=True,
+                                )
+                    finally:
+                        if create and self.result["apply_attempted"]:
+                            self.destroy()
+        except BaseException as error:
+            attempt.result["error_type"] = type(error).__name__
+            raise
         finally:
             try:
-                if self.result["apply_attempted"]:
-                    try:
-                        self.collect()
-                    except Exception:
-                        print(
-                            "結果回収が不完全です。記録を残して削除へ進みます。",
-                            flush=True,
-                        )
-                    finally:
-                        self.destroy()
-            finally:
+                self.result["tests"] = attempt.cases()
+            except (OSError, ValueError) as error:
+                self.result["tests"] = []
+                attempt.result["report_error_type"] = type(error).__name__
+            attempt.result.update(
+                status=self.result["phases"]["test_run"]["status"],
+                finished_at=now(),
+                log_collection=dict(self.result["phases"]["collection"]),
+            )
+            attempt.persist()
+            if create:
                 self.result["finished_at"] = now()
-                self.persist()
-        if any(p["status"] != "passed" for p in self.result["phases"].values()):
-            raise RuntimeError("one_or_more_phases_failed")
-
-    def read_test_results(self):
-        path = self.directory / "test-results.json"
-        if not path.exists():
-            self.result["tests"] = {
-                "status": "unconfirmed",
-                "reason": "test_report_missing",
-            }
-            return
-        self.result["tests"] = snapshot.load(path)
+            self.persist()
+            print(
+                f"RunId: {self.directory.name}\n対象: {attempt.target}\n"
+                f"結果保存先: {attempt.path}\n状態: {attempt.result['status']}\n",
+                flush=True,
+            )
+            if not create:
+                print(
+                    "testは環境を自動削除しません。\n"
+                    f"再実行: make aws-smoke-test RUN_ID={self.directory.name} "
+                    f"TEST={shlex.quote(attempt.target)} TIMEOUT={attempt.timeout}\n"
+                    f"削除: make aws-smoke-destroy RUN_ID={self.directory.name}",
+                    flush=True,
+                )
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="試験AWSの構築・DB準備・試験・回収・削除確認"
     )
-    parser.add_argument("action", choices=["up", "prepare", "run", "destroy", "status"])
+    parser.add_argument(
+        "action", choices=["up", "prepare", "test", "run", "destroy", "status"]
+    )
     parser.add_argument("--run-id", default=os.environ.get("RUN_ID"))
     parser.add_argument("--runner-profile", default="vector-test-runner")
+    parser.add_argument(
+        "--test", default=os.environ.get("TEST"), help="aws_tests配下の実行対象"
+    )
+    parser.add_argument(
+        "--timeout", default=os.environ.get("TIMEOUT") or "300", help="試験の上限秒数"
+    )
     args = parser.parse_args()
+    if args.action in {"test", "run"}:
+        try:
+            args.test = testing.selector(args.test, ROOT)
+            args.timeout = testing.timeout_seconds(args.timeout)
+        except (ValueError, OSError) as error:
+            parser.error(f"TESTまたはTIMEOUTが不正です: {type(error).__name__}")
     run_id = args.run_id or (
         datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         if args.action in {"up", "run"}
@@ -648,8 +709,10 @@ def main():
             run.up()
         elif args.action == "prepare":
             run.prepare()
+        elif args.action == "test":
+            run.test(args.test, args.timeout)
         elif args.action == "run":
-            run.run()
+            run.run(args.test, args.timeout)
         elif args.action == "destroy":
             try:
                 if run.result.get("up_attempts") or (

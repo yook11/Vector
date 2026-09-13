@@ -14,13 +14,13 @@ from botocore.session import Session
 
 
 class EmbeddingRuntime:
-    def __init__(self, outputs, expected_account, profile):
+    def __init__(self, outputs, expected_account, profile, *, deadline):
         self.outputs = outputs
         self.run = outputs["run"]
         self.execution = outputs["execution"]
         self.database = outputs["database"]
         self.evidence = []
-        self.deadline = time.monotonic() + 300
+        self.deadline = deadline
         self.stack = ExitStack()
         prefix = f"vector-test-{self.run['run_id']}"
         if not re.fullmatch(r"[0-9]{12}", expected_account):

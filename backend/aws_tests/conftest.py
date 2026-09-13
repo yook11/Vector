@@ -1,6 +1,8 @@
 """AWS出力を明示した場合だけ、準備済み試験環境への接続を許可する。"""
 
 import json
+import math
+import time
 from pathlib import Path
 
 import pytest
@@ -13,10 +15,21 @@ def pytest_addoption(parser):
     group.addoption("--aws-smoke-outputs", help="試験環境のterraform output -json")
     group.addoption("--aws-account-config", help="期待アカウントのローカルaccount.json")
     group.addoption("--aws-runner-profile", default="vector-test-runner")
+    group.addoption(
+        "--aws-smoke-deadline", type=float, help="実行元が定めるmonotonic期限"
+    )
 
 
 @pytest.fixture(scope="session")
-def embedding_runtime(request):
+def aws_smoke_deadline(request):
+    deadline = request.config.getoption("--aws-smoke-deadline")
+    if deadline is None or not math.isfinite(deadline) or deadline <= time.monotonic():
+        raise pytest.UsageError("有効な --aws-smoke-deadline が必要です")
+    return deadline
+
+
+@pytest.fixture(scope="session")
+def embedding_runtime(request, aws_smoke_deadline):
     outputs_path = request.config.getoption("--aws-smoke-outputs")
     account_path = request.config.getoption("--aws-account-config")
     if not outputs_path or not account_path:
@@ -31,6 +44,7 @@ def embedding_runtime(request):
         outputs,
         account["expected_account_id"],
         request.config.getoption("--aws-runner-profile"),
+        deadline=aws_smoke_deadline,
     )
     try:
         yield runtime
