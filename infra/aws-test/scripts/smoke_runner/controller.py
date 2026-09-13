@@ -65,6 +65,19 @@ class Run:
         self.persist()
 
     def persist(self):
+        if directory := getattr(self, "destroy_directory", None):
+            attempt = self.result["destroy_attempts"][-1]
+            attempt["phases"] = {
+                name: dict(self.result["phases"][name])
+                for name in (
+                    "cleanup_access",
+                    "collection",
+                    "inventory",
+                    "destroy",
+                    "verification",
+                )
+            }
+            save(directory / "result.json", attempt)
         save(self.directory / "result.json", self.result)
         lines = [f"RunId: {self.directory.name}", f"State: {self.result['state']}"]
         lines.extend(
@@ -75,6 +88,15 @@ class Run:
             lines.append(f"最新試験結果: {latest}/result.json")
             attempt = self.result["test_attempts"][-1]
             lines.append(f"試験対象: {attempt['target']}")
+        if latest := self.result.get("latest_destroy_attempt"):
+            attempt = self.result["destroy_attempts"][-1]
+            lines.extend(
+                [
+                    f"最新削除結果: {latest}/result.json",
+                    f"削除完了: {attempt['deletion_status']}",
+                    f"削除コマンド: {attempt['status']}",
+                ]
+            )
         lines.append("常設基盤（IAM・state S3・ECR・SSM）は保持します。")
         (self.directory / "summary.txt").write_text("\n".join(lines) + "\n")
 
@@ -109,7 +131,7 @@ class Run:
         execute(
             ["terraform", *args],
             cwd=self.directory / "workspace/infra/aws-test/smoke",
-            log=self.directory / log,
+            log=getattr(self, "destroy_directory", self.directory) / log,
             timeout=timeout,
             env=snapshot.environment(self.directory),
             progress=True,
@@ -166,6 +188,11 @@ class Run:
 
     def collect(self, *, destination=None):
         with self.phase("collection"):
+            identity(
+                self.runner,
+                self.inputs["expected_account_id"],
+                "AWSReservedSSO_VectorTestRunner_",
+            )
             outputs_file = self.directory / "outputs.json"
             raw = snapshot.load(outputs_file) if outputs_file.exists() else {}
             prefix = "vector-test-" + self.directory.name
@@ -192,62 +219,144 @@ class Run:
             self.persist()
             cleanup.collect_logs(self.runner, {"execution": execution}, destination)
 
-    def destroy(self):
+    def destroy(self, *, collection=None):
         if not self.result["apply_attempted"]:
+            print("構築apply未開始のため、削除処理は実行しません。", flush=True)
             raise RuntimeError("this_command_has_not_started_provisioning")
-        self.result["phases"]["verification"] = {"status": "not_run"}
+        parent = self.directory / "destroy-attempts"
+        number = (
+            max((int(p.name) for p in parent.glob("*") if p.name.isdigit()), default=0)
+            + 1
+        )
+        directory = parent / str(number)
+        directory.mkdir(parents=True)
+        attempt = {
+            "number": number,
+            "started_at": now(),
+            "status": "running",
+            "deletion_status": "unconfirmed",
+            "run_id": self.directory.name,
+            "state": self.result["state"],
+        }
+        self.result.setdefault("destroy_attempts", []).append(attempt)
+        self.result["latest_destroy_attempt"] = str(
+            directory.relative_to(self.directory)
+        )
+        for name in ("cleanup_access", "inventory", "destroy", "verification"):
+            self.result["phases"][name] = {"status": "not_run"}
+        self.result["phases"]["collection"] = dict(collection or {"status": "not_run"})
+        self.destroy_directory = directory
         self.persist()
-        with self.phase("cleanup_access"):
-            self.authenticate()
-            self.claim()
-        previous = self.directory / "inventory.json"
-        known = snapshot.load(previous) if previous.exists() else {}
-        # 残存照会に失敗しても削除を試み、照会失敗そのものはレポートへ残す。
         try:
-            with self.phase("inventory"):
-                self.tf(["show", "-json"], "state-before-destroy.json")
-                known = cleanup.remember_state(
-                    snapshot.load(self.directory / "state-before-destroy.json"), known
+            with self.phase("cleanup_access"):
+                snapshot.verify(self.directory)
+                if (
+                    self.backend["key"]
+                    != f"smoke/{self.directory.name}/terraform.tfstate"
+                    or self.backend["bucket"]
+                    != f"vector-test-tfstate-{self.inputs['expected_account_id']}"
+                ):
+                    raise RuntimeError("saved_state_scope_mismatch")
+                self.authenticate()
+                self.claim()
+                self.initialize()
+            if collection is None:
+                try:
+                    self.collect(destination=directory / "logs")
+                except Exception:
+                    print(
+                        "ログ回収に失敗しました。結果を残して削除を続行します。",
+                        flush=True,
+                    )
+                self.result["phases"]["collection"]["directory"] = str(
+                    (directory / "logs").relative_to(self.directory)
                 )
-                save(previous, known)
-                known = cleanup.inventory(self.aws, self.directory.name, known)
-                save(previous, known)
-        except Exception:
+                self.persist()
+            previous = self.directory / "inventory.json"
+            known = snapshot.load(previous) if previous.exists() else {}
+            try:
+                with self.phase("inventory"):
+                    self.tf(["show", "-json"], "state-before-destroy.json")
+                    known = cleanup.remember_state(
+                        snapshot.load(directory / "state-before-destroy.json"), known
+                    )
+                    save(previous, known)
+                    save(directory / "known-resources.json", known)
+                    actual = cleanup.inventory(self.aws, self.directory.name, known)
+                    save(directory / "inventory.json", actual)
+                    known = cleanup.merge_inventory(known, actual)
+                    save(previous, known)
+                    save(directory / "known-resources.json", known)
+            except Exception:
+                print(
+                    "削除前の照会に失敗しました。記録を残して削除を試みます。",
+                    flush=True,
+                )
+            with self.phase("destroy"):
+                self.authenticate()
+                self.tf(["state", "list"], "state-before-destroy.txt")
+                if (directory / "state-before-destroy.txt").read_text().strip():
+                    self.tf(
+                        [
+                            "plan",
+                            "-destroy",
+                            "-input=false",
+                            "-lock-timeout=60s",
+                            "-var-file=" + str(self.directory / "inputs.tfvars.json"),
+                            "-out=" + str(directory / "destroy.tfplan"),
+                        ],
+                        "destroy-plan.log",
+                        600,
+                    )
+                    self.tf(
+                        [
+                            "apply",
+                            "-input=false",
+                            "-lock-timeout=60s",
+                            str(directory / "destroy.tfplan"),
+                        ],
+                        "destroy.log",
+                        5400,
+                    )
+                else:
+                    self.result["phases"]["destroy"]["reason"] = "state_already_empty"
+            with self.phase("verification"):
+                self.tf(["state", "list"], "state-after-destroy.txt")
+                if (directory / "state-after-destroy.txt").read_text().strip():
+                    raise RuntimeError("terraform_state_not_empty")
+                try:
+                    cleanup.verify_deleted(
+                        self.aws, self.directory.name, known, directory
+                    )
+                finally:
+                    if (directory / "remaining.json").exists():
+                        save(
+                            self.directory / "remaining.json",
+                            snapshot.load(directory / "remaining.json"),
+                        )
+                if self.result["phases"]["inventory"]["status"] != "passed":
+                    raise RuntimeError("pre_destroy_inventory_unconfirmed")
+            attempt["deletion_status"] = "passed"
+            if self.result["phases"]["collection"]["status"] != "passed":
+                raise RuntimeError("deletion_confirmed_log_collection_incomplete")
+            attempt["status"] = "passed"
+        except BaseException as error:
+            attempt.update(status="failed", error_type=type(error).__name__)
+            if isinstance(error, RuntimeError):
+                attempt["reason"] = str(error)
+            raise
+        finally:
+            attempt["finished_at"] = now()
+            self.persist()
+            del self.destroy_directory
             print(
-                "削除前の照会に失敗しました。記録を残して削除を試みます。", flush=True
+                f"RunId: {self.directory.name}\n"
+                f"削除結果: {attempt['deletion_status']}\n"
+                f"ログ回収: {self.result['phases']['collection']['status']}\n"
+                f"結果保存先: {directory}\n"
+                f"再実行: make aws-smoke-destroy RUN_ID={self.directory.name}",
+                flush=True,
             )
-        with self.phase("destroy"):
-            self.authenticate()
-            self.initialize()
-            self.tf(
-                [
-                    "plan",
-                    "-destroy",
-                    "-input=false",
-                    "-lock-timeout=60s",
-                    "-var-file=" + str(self.directory / "inputs.tfvars.json"),
-                    "-out=" + str(self.directory / "destroy.tfplan"),
-                ],
-                "destroy-plan.log",
-                600,
-            )
-            self.tf(
-                [
-                    "apply",
-                    "-input=false",
-                    "-lock-timeout=60s",
-                    str(self.directory / "destroy.tfplan"),
-                ],
-                "destroy.log",
-                5400,
-            )
-        with self.phase("verification"):
-            self.tf(["state", "list"], "state-after-destroy.txt")
-            if (self.directory / "state-after-destroy.txt").read_text().strip():
-                raise RuntimeError("terraform_state_not_empty")
-            cleanup.verify_deleted(self.aws, self.directory.name, known, self.directory)
-            if self.result["phases"]["inventory"]["status"] != "passed":
-                raise RuntimeError("pre_destroy_inventory_unconfirmed")
 
     def preflight(self, *, resume=False):
         with self.phase("preflight"):
@@ -344,7 +453,7 @@ class Run:
             )
             save(previous, known)
             actual = cleanup.inventory(self.aws, self.directory.name, known)
-            save(previous, actual)
+            save(previous, cleanup.merge_inventory(known, actual))
             resources = outputs["resources"]
             required = {
                 "Vpcs": ("VpcId", [resources["vpc"]]),
@@ -616,7 +725,16 @@ class Run:
                                 )
                     finally:
                         if create and self.result["apply_attempted"]:
-                            self.destroy()
+                            self.destroy(
+                                collection={
+                                    **self.result["phases"]["collection"],
+                                    "directory": str(
+                                        (attempt.path / "logs").relative_to(
+                                            self.directory
+                                        )
+                                    ),
+                                }
+                            )
         except BaseException as error:
             attempt.result["error_type"] = type(error).__name__
             raise
@@ -714,15 +832,7 @@ def main():
         elif args.action == "run":
             run.run(args.test, args.timeout)
         elif args.action == "destroy":
-            try:
-                if run.result.get("up_attempts") or (
-                    run.result["phases"].get("collection", {}).get("status") != "passed"
-                ):
-                    run.collect()
-            except Exception:
-                print("結果回収が不完全です。記録を残して削除へ進みます。", flush=True)
-            finally:
-                run.destroy()
+            run.destroy()
         else:
             with run.phase("status"):
                 run.authenticate()

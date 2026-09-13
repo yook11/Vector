@@ -325,21 +325,40 @@ class RunTests(unittest.TestCase):
         inventory["VpcEndpoints"] = [{"VpcEndpointId": "vpce-ssm"}]
         controller.Run.verify_resources(self.run)
 
-    def test_old_report_can_still_be_destroyed(self):
+    def deletion_fixture(self):
         self.run.result["apply_attempted"] = True
+        self.run.backend["bucket"] = "vector-test-tfstate-123456789012"
         self.run.authenticate = Mock()
         self.run.claim = Mock()
         self.run.initialize = Mock()
-        self.run.tf = Mock()
-        common.save(self.directory / "state-before-destroy.json", {})
-        (self.directory / "state-after-destroy.txt").write_text("")
+
+        def tf(args, log, timeout=300):
+            target = self.run.destroy_directory / log
+            target.write_text("{}" if args == ["show", "-json"] else "")
+
+        def collect(*, destination):
+            with self.run.phase("collection"):
+                destination.mkdir()
+                common.save(
+                    destination / "log-collection.json",
+                    {"runner": {"status": "absent"}},
+                )
+
+        self.run.tf = Mock(side_effect=tf)
+        self.run.collect.side_effect = collect
+        self.run.destroy = Mock(wraps=controller.Run.destroy.__get__(self.run))
+
+    def test_old_report_can_still_be_destroyed(self):
+        self.deletion_fixture()
         with (
             patch.object(controller.cleanup, "inventory", return_value={}),
             patch.object(controller.cleanup, "verify_deleted") as verify,
+            redirect_stdout(io.StringIO()),
         ):
-            controller.Run.destroy(self.run)
+            self.run.destroy()
         verify.assert_called_once()
         self.assertEqual(self.run.result["phases"]["verification"]["status"], "passed")
+        self.assertEqual(self.run.result["destroy_attempts"][0]["status"], "passed")
 
     def test_cli_creates_snapshot_then_calls_up(self):
         with (
@@ -359,10 +378,13 @@ class RunTests(unittest.TestCase):
             run.return_value.run.assert_not_called()
 
     def test_destroy_collects_new_logs_after_up(self):
+        self.deletion_fixture()
         self.run.result["up_attempts"] = [{"number": 1}]
         self.run.result["phases"]["collection"]["status"] = "passed"
         self.run.persist()
         with (
+            patch.object(controller.cleanup, "inventory", return_value={}),
+            patch.object(controller.cleanup, "verify_deleted"),
             patch.object(controller, "LOCAL", self.directory.parent.parent),
             patch.object(
                 sys, "argv", ["aws-smoke.py", "destroy", "--run-id", "sample"]
@@ -395,7 +417,7 @@ class RunTests(unittest.TestCase):
         )
         self.check.side_effect = lambda *args: calls.append("readiness")
         self.run.collect.side_effect = lambda **kwargs: calls.append("collect")
-        self.run.destroy.side_effect = lambda: calls.append("destroy")
+        self.run.destroy.side_effect = lambda **kwargs: calls.append("destroy")
 
         def database(*args):
             calls.append("database")

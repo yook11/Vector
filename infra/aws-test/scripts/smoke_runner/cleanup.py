@@ -196,6 +196,16 @@ def inventory(aws, run_id, known=None):
     return remaining
 
 
+def merge_inventory(known, current):
+    result = {key: list(items) for key, items in known.items()}
+    for key, items in current.items():
+        saved = result.setdefault(key, [])
+        for item in items:
+            if item not in saved:
+                saved.append(item)
+    return result
+
+
 def remember_state(state, known):
     def resources(module):
         yield from module.get("resources", [])
@@ -228,14 +238,22 @@ def remember_state(state, known):
             )
         elif resource["type"] == "aws_lambda_event_source_mapping":
             known.setdefault("EventSourceMappings", []).append(value["uuid"])
-    return known
+    return merge_inventory({}, known)
 
 
 def verify_deleted(aws, run_id, known, directory):
-    deadline = time.monotonic() + 180
+    started = time.monotonic()
+    deadline = started + 180
     while True:
         remaining = inventory(aws, run_id, known)
         save(directory / "remaining.json", remaining)
+        print(
+            f"残存確認: {int(time.monotonic() - started)}秒 "
+            + ", ".join(
+                f"{kind}={len(items)}" for kind, items in remaining.items() if items
+            ),
+            flush=True,
+        )
         if not any(remaining.values()):
             return
         if time.monotonic() >= deadline:
@@ -244,10 +262,13 @@ def verify_deleted(aws, run_id, known, directory):
 
 
 def collect_logs(aws, outputs, directory):
-    deadline = time.monotonic() + 120
+    started = time.monotonic()
+    deadline = started + 120
+    last_progress = started
     collected = {}
     with client(aws, "logs") as logs:
         for kind, group in outputs["execution"]["log_groups"].items():
+            print(f"ログ回収: {kind} {int(time.monotonic() - started)}秒", flush=True)
             try:
                 with (directory / f"{kind}.jsonl").open("w") as output:
                     if time.monotonic() >= deadline:
@@ -257,9 +278,22 @@ def collect_logs(aws, outputs, directory):
                     ):
                         if time.monotonic() >= deadline:
                             raise TimeoutError("log_collection_timeout")
+                        current = time.monotonic()
+                        if current - last_progress >= 30:
+                            print(
+                                f"ログ回収: {kind} {int(current - started)}秒",
+                                flush=True,
+                            )
+                            last_progress = current
                         for event in page["events"]:
                             output.write(json.dumps(event, ensure_ascii=False) + "\n")
                 collected[kind] = {"status": "collected"}
+            except ClientError as error:
+                missing = error.response["Error"]["Code"] == "ResourceNotFoundException"
+                collected[kind] = {
+                    "status": "absent" if missing else "unconfirmed",
+                    "aws_error_code": error.response["Error"]["Code"],
+                }
             except Exception as error:
                 collected[kind] = {
                     "status": "unconfirmed",
@@ -267,5 +301,5 @@ def collect_logs(aws, outputs, directory):
                 }
             finally:
                 save(directory / "log-collection.json", collected)
-    if any(v["status"] != "collected" for v in collected.values()):
+    if any(v["status"] not in {"collected", "absent"} for v in collected.values()):
         raise RuntimeError("log_collection_incomplete")
