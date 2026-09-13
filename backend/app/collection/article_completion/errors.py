@@ -59,10 +59,16 @@ class ArticleContentQualityError(ArticleCompletionError):
 
 
 class ArticleCompletionRejectedError(ArticleCompletionError):
-    """記事の構築で判明した既存のdefectを保持し、品質を再判定しない。"""
+    """記事の構築拒否の理由と未分類の詳細を保持し、品質を再判定しない。"""
 
     CODE: ClassVar[str] = "article_completion_rejected"
 
-    def __init__(self, *, defects: tuple[AnalyzableArticleDefect, ...]) -> None:
+    def __init__(
+        self,
+        *,
+        defects: tuple[AnalyzableArticleDefect, ...],
+        unmapped: tuple[str, ...] = (),
+    ) -> None:
         super().__init__()
         self.defects = defects
+        self.unmapped = unmapped
