@@ -72,3 +72,54 @@ class ArticleCompletionRejectedError(ArticleCompletionError):
         super().__init__()
         self.defects = defects
         self.unmapped = unmapped
+
+
+class FetchResource(StrEnum):
+    """制限に達したときに取得していたリソース。"""
+
+    ROBOTS_TXT = "robots_txt"
+    ARTICLE_PAGE = "article_page"
+
+
+class ResponseSizeBasis(StrEnum):
+    """上限超過を確認したサイズの根拠。"""
+
+    DECLARED_CONTENT_LENGTH = "declared_content_length"
+    RECEIVED_DECODED_BODY = "received_decoded_body"
+
+
+class RobotsDisallowedError(ArticleCompletionError):
+    """robotsのルールで対象記事の取得が明示的に禁止された。"""
+
+    CODE: ClassVar[str] = "article_robots_disallowed"
+
+
+class ResponseSizeLimitExceededError(ArticleCompletionError):
+    """応答サイズの上限と、超過を確認した時点の事実を保持する。"""
+
+    CODE: ClassVar[str] = "article_response_size_limit_exceeded"
+
+    def __init__(
+        self,
+        *,
+        resource: FetchResource,
+        limit_bytes: int,
+        observed_bytes: int,
+        size_basis: ResponseSizeBasis,
+    ) -> None:
+        super().__init__()
+        self.resource = resource
+        self.limit_bytes = limit_bytes
+        self.observed_bytes = observed_bytes
+        self.size_basis = size_basis
+
+
+class FetchDeadlineExceededError(ArticleCompletionError):
+    """通信の停滞とは別に、取得全体の制限時間を超えた事実を保持する。"""
+
+    CODE: ClassVar[str] = "article_fetch_deadline_exceeded"
+
+    def __init__(self, *, resource: FetchResource, limit_seconds: float) -> None:
+        super().__init__()
+        self.resource = resource
+        self.limit_seconds = limit_seconds

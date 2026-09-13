@@ -1,6 +1,6 @@
 # 共通HTTPエラーと本文補完エラーの実装プラン
 
-Status: タスク1・2の定義はPR #356で実装・マージ済み（2026-09-13）。タスク3のHTTP変換、新経路用HTML抽出と記事の統合・構築処理を実装済み。工程側ハンドラー・新経路への接続は後続タスクとする。
+Status: タスク1・2の定義はPR #356で実装・マージ済み（2026-09-13）。タスク3のHTTP変換、新経路用HTTP取得・HTML抽出・記事の統合と構築を実装済み。工程側ハンドラー・新経路への接続は後続タスクとする。
 
 ## Problem
 
@@ -182,3 +182,33 @@ DB状態の確認・HTTP取得・SQS・再試行・closed化・監査・保存�
 ### 検証結果
 
 Ruff lint・format成功、新経路6ケースと旧Completerの2ケースが成功。単体6,882件成功（`pytest tests/ -m 'not integration' -x -q`）、DB統合1,434件成功（`make test-integration PYTEST_ARGS='-x -q'`）。一時DB・Redis・networkの削除を確認した。旧Completer・Service・Readyには差分がなく、新しい構築拒否エラーの利用は新関数に限定されている。
+
+## タスク3の続き: 記事補完用HTTP取得（2026-09-14）
+
+### Problem / Evidence
+
+取得済みHTMLを扱う新経路に対し、共通HTTPエラーを使って応答を取得する入口を追加する。旧スクレイパーのrobots判定・サイズ上限・文字コード処理、共通HTTP変換と宛先保護、[HTTPXのストリーミングAPI](https://www.python-httpx.org/async/#streaming-responses)と[Pythonの期限API](https://docs.python.org/3.13/library/asyncio-task.html#asyncio.timeout)を確認した。全量受信後のサイズ判定を、新経路では受信途中の制限にする。
+
+### 実装とInvariants
+
+- `article_fetch.py`の非同期関数`fetch_article_response(url: SafeUrl) -> RawResponse`を追加する。既存の外部HTTPクライアントを1試行内で共有し、robots確認から記事受信まで実行する。リダイレクト非追従・内部リトライなし・キャッシュなしとし、既存の通信保護を維持する。
+- robotsの2xxを解析し、許可または404なら記事を取得する。404の本文は読まず、他の非成功応答と確認失敗では記事へ進まない。明示的な禁止とHTTPの403を区別する。
+- 共通の受信処理でrobots・記事の本文を10MiBに制限する。Content-Length超過での早期拒否と、64KiB単位の展開後本文の累積確認を行う。上限ちょうどを許容し、超過チャンクを保持せず中断する。本文量の制限をSDK内部の圧縮展開も含む厳密なメモリ上限とは扱わない。
+- 通信待ち時間・取得全体の期限はrobots 10秒、記事30秒とする。記事の時計はrobots確認後に開始し、期限切れやキャンセルでも応答とクライアントを閉じる。
+- `RobotsDisallowedError`、`ResponseSizeLimitExceededError`、`FetchDeadlineExceededError`を追加する。取得していたものは`resource: FetchResource`（`ROBOTS_TXT` / `ARTICLE_PAGE`）、サイズ判定の根拠は`size_basis: ResponseSizeBasis`（`DECLARED_CONTENT_LENGTH` / `RECEIVED_DECODED_BODY`）で表し、上限・確認サイズ・制限秒数を必要なエラーに保持する。再試行判断・出力処理・本文断片は追加しない。
+- 共通HTTP変換・元例外を保持し、ヘッダー受信直後のUTC時刻をHTTP応答へ渡す。自身のタイマー以外のTimeoutError、HostBlockedError、対象外例外、外部キャンセルはそのまま伝播する。
+- RawResponseに応答情報と展開後本文を保持し、HTTPXの文字コード選択・置換処理を維持する。HTML受け入れとmeta charsetの処理は抽出側に任せる。
+
+### 重要なテスト / Non-goals / Done
+
+新規テストはrobotsによる取得制御、受信途中のサイズ制限、失敗の誤変換防止、取得期限と資源解放の4保証に限定する。HTTPXの実応答・非同期ストリームを使い、ネットワークはモックする。既存の通信分類表やエラー定義だけのテストを重複させない。期限はテスト内で短くし、10秒・30秒の実時間待機はしない。
+
+旧Taskiqの取得・抽出・構築処理は変更しない。新しい取得・抽出・構築の連結、再試行・監査・DB・SQS・Consumerへの接続は後続とする。ローカルmainで既存の未コミット変更を保持し、仕様更新、Ruff lint・format、単体とDB統合テスト、旧経路への未接続を確認して完了とする。
+
+### 検証結果
+
+Ruff lint・format成功、新規の重要な16ケース成功、単体6,898件成功（`pytest tests/ -m 'not integration' -x -q`）、DB統合1,434件成功（`make test-integration PYTEST_ARGS='-x -q'`）。一時DB・Redis・networkの削除を確認した。旧スクレイパー・Service・HTML抽出・記事構築に差分はなく、新しい取得関数と取得固有エラーは旧Taskiqへ接続していない。
+
+取得制限の情報名は、原因との混同を避けるため`target`から`resource`（`ROBOTS_TXT` / `ARTICLE_PAGE`）、`size_source`から`size_basis`（`DECLARED_CONTENT_LENGTH` / `RECEIVED_DECODED_BODY`）へ変更した。型名も`FetchResource`・`ResponseSizeBasis`へ揃えた。このフィールド名変更ではエラー名・CODE・継承・動作を変更せず、新規テストも追加していない。変更後のRuff lint・format、単体6,898件、DB統合1,434件が成功し、一時環境の削除を確認した。取得関連の3エラーと2つのenumはArticle接頭辞を外し、失敗内容を表す名前へ変更した。補完工程を示すArticleCompletionErrorの継承とCODEは維持し、共通基盤への移動や動作変更は行わない。
+
+最終命名への変更後もRuff lint・format、単体6,898件、DB統合1,434件が成功し、一時DB・Redis・networkの削除を確認した。
