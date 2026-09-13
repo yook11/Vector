@@ -21,13 +21,13 @@ from app.ai_providers.errors import (
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.domain.ready import ReadyForCuration
-from app.analysis.curation.errors import (
-    CurationError,
+from app.analysis.curation.metrics import record_curation_processing_outcome
+from app.analysis.curation.task_errors import (
     CurationRecoverableError,
+    CurationTaskError,
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
-from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -166,7 +166,7 @@ class CurationFailureHandler:
     async def _audit_failure(
         self,
         ready: ReadyForCuration,
-        exc: CurationError | DatabaseError,
+        exc: CurationTaskError | DatabaseError,
         curator: BaseCurator,
     ) -> None:
         """best-effort failure audit (DB 落ち / schema 不整合は log fallback)。

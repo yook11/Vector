@@ -14,10 +14,11 @@ from app.ai_providers.errors import (
 )
 from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.domain.ready import (
-    CurationReadyBuildBlockedCode,
-    CurationReadyBuildBlockedError,
+    CurationReadyBuildRejected,
+    CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
+from app.analysis.curation.service import CurationCompletion, CurationCompletionKind
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
@@ -66,13 +67,9 @@ def _fixed_ready(analyzable_article_id: int = 1) -> ReadyForCuration:
 
 
 def _patch_try_advance_from(
-    result: ReadyForCuration | CurationReadyBuildBlockedError,
+    result: ReadyForCuration | CurationReadyBuildRejected,
 ) -> object:
-    mock = (
-        AsyncMock(side_effect=result)
-        if isinstance(result, CurationReadyBuildBlockedError)
-        else AsyncMock(return_value=result)
-    )
+    mock = AsyncMock(return_value=result)
     return patch.object(
         ReadyForCuration,
         "try_advance_from",
@@ -88,12 +85,7 @@ class TestCurateContent:
     async def test_chains_assess_with_trigger_when_service_returns_curation_id(
         self,
     ) -> None:
-        """signal 勝者 (Service が int を返す) → ``assess_content.kiq`` で chain。
-
-        案 3: 上流 Stage 3 task は Stage 4 Ready を構築せず、ID だけ運ぶ
-        AssessmentTrigger を kiq に enqueue する。Ready 構築は下流 Stage 4
-        task が処理開始時に行う。
-        """
+        """Signal保存完了のIDをAssessmentTriggerで後続へ渡す。"""
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
@@ -103,7 +95,9 @@ class TestCurateContent:
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=42)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=CurationCompletion(CurationCompletionKind.SIGNAL, 42)
+            )
             mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
@@ -112,7 +106,10 @@ class TestCurateContent:
         )
 
     @pytest.mark.asyncio
-    async def test_noise_or_race_loss_does_not_chain(self) -> None:
+    @pytest.mark.parametrize(
+        "kind", [CurationCompletionKind.NOISE, CurationCompletionKind.ALREADY_CURATED]
+    )
+    async def test_noise_or_race_loss_does_not_chain(self, kind) -> None:
         """Service が None を返したら chain しない (noise 勝者 / race 敗北を吸収)。"""
         from app.queue.tasks.curation import curate_content
 
@@ -123,7 +120,9 @@ class TestCurateContent:
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=CurationCompletion(kind)
+            )
             mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
@@ -140,8 +139,8 @@ class TestCurateContent:
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
-        exc = CurationReadyBuildBlockedError(
-            CurationReadyBuildBlockedCode.ARTICLE_MISSING
+        exc = CurationReadyBuildRejected(
+            CurationReadyBuildRejectionReason.ARTICLE_MISSING
         )
 
         with (
@@ -150,13 +149,13 @@ class TestCurateContent:
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
-        mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
+        mock_audit.return_value.append_ready_build_rejected.assert_awaited_once_with(
             target_article_id=1,
-            exc=exc,
+            rejected=exc,
         )
         mock_svc_cls.assert_not_called()
         mock_assess.kiq.assert_not_called()
@@ -167,8 +166,8 @@ class TestCurateContent:
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
-        exc = CurationReadyBuildBlockedError(
-            CurationReadyBuildBlockedCode.ALREADY_CURATED,
+        exc = CurationReadyBuildRejected(
+            CurationReadyBuildRejectionReason.ALREADY_CURATED,
             analyzable_article_id=1,
         )
 
@@ -179,7 +178,7 @@ class TestCurateContent:
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
             capture_logs() as cap,
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
@@ -188,7 +187,7 @@ class TestCurateContent:
         # 逃がし先 log が code を保持する (可観測性維持)
         rejected = [e for e in cap if e["event"] == "curate_content_rejected"]
         assert len(rejected) == 1
-        assert rejected[0]["code"] == exc.code.value
+        assert rejected[0]["code"] == exc.reason.value
         mock_svc_cls.assert_not_called()
         mock_assess.kiq.assert_not_called()
 
@@ -227,21 +226,15 @@ class TestCurateContent:
 
     @pytest.mark.asyncio
     async def test_rate_limited_records_audit_and_returns(self) -> None:
-        """RateLimited は CurationRecoverableError に詰め替えられる経路。
-
-        本番経路 (Service.execute) で ACL ``map_provider_to_curation`` により
-        Stage 3 marker に詰め替えられる。本テストは Service を mock しているため、
-        production と同じ詰め替え済 marker を side_effect として渡して
-        handler の挙動 (last_attempt → audit + return) を再現する。
-        """
-        from app.analysis.curation.errors import map_provider_to_curation
+        """Serviceのレート制限エラーを旧経路へ変換し、最終試行の監査で終了する。"""
+        from app.analysis.curation.errors import to_curation_error
         from app.queue.tasks.curation import curate_content
 
         # 最終試行: _retries=max_retries-1=1 (旧 max_retries=1 は非最終が存在しない)
         mock_ctx = _make_ctx(curator=_make_provider_fake(), retries=1, max_retries=2)
         raw_exc = AIProviderRateLimitedError("429")
         try:
-            raise map_provider_to_curation(raw_exc) from raw_exc
+            raise to_curation_error(raw_exc) from raw_exc
         except Exception as wrapped:  # noqa: BLE001
             wrapped_exc = wrapped
 
@@ -258,8 +251,8 @@ class TestCurateContent:
         mock_audit_cls.return_value.append_failure.assert_awaited_once()
         # 詰め替え済 Stage 3 marker が audit に渡る (元 provider は __cause__)。
         audit_exc = mock_audit_cls.return_value.append_failure.await_args.kwargs["exc"]
-        assert audit_exc is wrapped_exc
-        assert isinstance(audit_exc.__cause__, AIProviderRateLimitedError)
+        assert audit_exc.__cause__ is wrapped_exc
+        assert wrapped_exc.__cause__ is raw_exc
 
     @pytest.mark.asyncio
     async def test_audit_failure_falls_back_to_log(self) -> None:
@@ -272,7 +265,7 @@ class TestCurateContent:
         message に混入した secret prefix が log field から除去されることも
         確認する (red-team chain γ-2 対称化)。
         """
-        from app.analysis.curation.errors import map_provider_to_curation
+        from app.analysis.curation.errors import to_curation_error
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake(), retries=0, max_retries=2)
@@ -284,7 +277,7 @@ class TestCurateContent:
             "api key missing Authorization: Bearer sk-live-BUSINESSSECRETabc"
         )
         try:
-            raise map_provider_to_curation(raw_exc) from raw_exc
+            raise to_curation_error(raw_exc) from raw_exc
         except Exception as wrapped:  # noqa: BLE001
             business_exc = wrapped
 
@@ -338,7 +331,9 @@ class TestCurateContentStageSpan:
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=42)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=CurationCompletion(CurationCompletionKind.SIGNAL, 42)
+            )
             mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
@@ -361,7 +356,9 @@ class TestCurateContentStageSpan:
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=CurationCompletion(CurationCompletionKind.NOISE)
+            )
             mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
@@ -377,8 +374,8 @@ class TestCurateContentStageSpan:
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
-        exc = CurationReadyBuildBlockedError(
-            CurationReadyBuildBlockedCode.ARTICLE_MISSING
+        exc = CurationReadyBuildRejected(
+            CurationReadyBuildRejectionReason.ARTICLE_MISSING
         )
         with (
             _patch_try_advance_from(exc),
@@ -386,7 +383,7 @@ class TestCurateContentStageSpan:
             patch("app.queue.tasks.curation.CurationService"),
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
-            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_audit.return_value.append_ready_build_rejected = AsyncMock()
             mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
@@ -430,7 +427,7 @@ class TestCurateContentStageSpan:
         - AIProviderOutputBlockedError: CODE="ai_error_output_blocked",
           FAILURE_MODE=TARGET_REJECTED (AIProviderContentError 固定)
           → app/ai_providers/errors.py
-        - map_provider_to_curation: TARGET_REJECTED → CurationTerminalDropError,
+        - to_curation_task_error: TARGET_REJECTED → CurationTerminalDropError,
           failure_kind=mode.value="target_rejected", code=exc.CODE
           → app/analysis/curation/errors.py
         - CurationTerminalDropError: RETRYABILITY=NON_RETRYABLE,
@@ -438,12 +435,12 @@ class TestCurateContentStageSpan:
         - annotate_span_failure: failure_action は not None の場合だけ焼く
           → app/logfire/failure_attrs.py
         """
-        from app.analysis.curation.errors import map_provider_to_curation
+        from app.analysis.curation.errors import to_curation_error
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
         raw = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
-        marker = map_provider_to_curation(raw)
+        marker = to_curation_error(raw)
 
         with (
             _patch_try_advance_from(_fixed_ready()),

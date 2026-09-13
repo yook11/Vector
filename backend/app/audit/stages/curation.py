@@ -32,10 +32,13 @@ if TYPE_CHECKING:
     from app.analysis.curation.ai.envelope import CurationCall
     from app.analysis.curation.domain import Noise, Signal
     from app.analysis.curation.domain.ready import (
-        CurationReadyBuildBlockedError,
+        CurationReadyBuildRejected,
         ReadyForCuration,
     )
-    from app.analysis.curation.errors import CurationError, CurationTerminalDropError
+    from app.analysis.curation.task_errors import (
+        CurationTaskError,
+        CurationTerminalDropError,
+    )
 
 logger = structlog.get_logger(__name__)
 
@@ -173,34 +176,29 @@ class CurationAuditRepository:
             article_id=analyzable_article_id,
         )
 
-    # --- Ready 構築 blocked / failed ---------------------------------------
+    # --- Ready 構築拒否と構築中の障害 ---------------------------------------
 
-    async def append_ready_build_blocked(
-        self, *, target_article_id: int, exc: CurationReadyBuildBlockedError
+    async def append_ready_build_rejected(
+        self, *, target_article_id: int, rejected: CurationReadyBuildRejected
     ) -> None:
-        """Ready 構築が domain precondition により進めなかった事実を記録する。
-
-        Domain が reason code で説明できた停止なので rejected として焼く。
-        """
+        """Ready側の拒否理由と安全な記事情報を記録する。"""
         payload = CurationPayload(
             target_article_id=target_article_id,
-            input_content_length=exc.content_length,
-            max_content_length=exc.max_content_length,
+            input_content_length=rejected.content_length,
+            max_content_length=rejected.max_content_length,
         )
         await self._append_event(
             event_type=EventType.REJECTED,
-            outcome_code=exc.code.value,
+            outcome_code=rejected.reason.value,
             payload=payload,
-            # 記事が現存する blocked (ALREADY_* / CONTENT_TOO_LARGE) のみ
-            # article_id を運び source_id を補填する。ARTICLE_MISSING は対象
-            # 記事が無く FK 不能なため None (sought id は payload.target_article_id)。
-            article_id=exc.analyzable_article_id,
+            # DBで確認できた記事IDだけを使い、欠損時の探索IDはpayloadに留める。
+            article_id=rejected.analyzable_article_id,
         )
 
     async def append_ready_build_failed(
         self, *, target_article_id: int, exc: Exception
     ) -> None:
-        """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
+        """Ready構築中の障害を、確定した拒否とは区別して記録する。"""
         projection = project_ready_build_failure(stage_prefix=self.STAGE.value, exc=exc)
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
@@ -222,7 +220,7 @@ class CurationAuditRepository:
         self,
         *,
         ready: ReadyForCuration,
-        exc: CurationError | DatabaseError,
+        exc: CurationTaskError | DatabaseError,
         curator: BaseCurator,
     ) -> None:
         """article を削除しない curation 失敗を記録する。"""

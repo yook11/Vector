@@ -1,4 +1,4 @@
-"""Stage 3 ACL — ``map_provider_to_curation`` の翻訳契約テスト。
+"""Stage 3 ACL — Serviceエラーから旧Taskiqへの変換 の翻訳契約テスト。
 
 mapper は provider error を「retry / DROP 軸 (Recoverable / TerminalKeep /
 TerminalDrop) + 原因軸 (failure_kind = mode 値 / failure_reason = reason 値)」に
@@ -29,12 +29,13 @@ from app.ai_providers.gemini.error_translator import (
     GeminiContentRejectionReason,
     GeminiStateReason,
 )
-from app.analysis.curation.errors import (
-    CurationError,
+from app.analysis.curation.errors import to_curation_error
+from app.analysis.curation.task_errors import (
     CurationRecoverableError,
+    CurationTaskError,
     CurationTerminalDropError,
     CurationTerminalKeepError,
-    map_provider_to_curation,
+    to_curation_task_error,
 )
 
 # 代表 reason (mapper は値そのものを failure_reason に運ぶ。種別は不問)。
@@ -44,7 +45,7 @@ _STATE_REASON = GeminiStateReason.TIMEOUT
 # leaf → (期待 marker, 期待 failure_kind)。plan の disposition 表 (spec) が出所。
 # retryable な回復クラス → Recoverable / TARGET_REJECTED → TerminalDrop (記事削除) /
 # それ以外 (operator_action_required) → TerminalKeep。
-_LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[CurationError], str]] = {
+_LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[CurationTaskError], str]] = {
     AIProviderNetworkError: (CurationRecoverableError, "attempt_scoped"),
     AIProviderServiceUnavailableError: (
         CurationRecoverableError,
@@ -92,7 +93,7 @@ class TestMapProviderToCuration:
     ) -> None:
         expected_marker, expected_kind = _LEAF_EXPECTATION[exc_type]
 
-        result = map_provider_to_curation(_instantiate(exc_type))
+        result = to_curation_task_error(to_curation_error(_instantiate(exc_type)))
 
         assert isinstance(result, expected_marker)
         assert result.failure_kind == expected_kind  # type: ignore[union-attr]
@@ -103,15 +104,18 @@ class TestMapProviderToCuration:
     ) -> None:
         original = _instantiate(exc_type)
 
-        result = map_provider_to_curation(original)
+        business = to_curation_error(original)
+        result = to_curation_task_error(business)
 
+        assert business.provider_error is original
+        assert result.__cause__ is business
         assert result.provider_error is original  # type: ignore[union-attr]
 
     @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        result = map_provider_to_curation(_instantiate(exc_type))
+        result = to_curation_task_error(to_curation_error(_instantiate(exc_type)))
 
         assert result.code == exc_type.CODE  # type: ignore[union-attr]
 
@@ -122,7 +126,7 @@ class TestMapProviderToCuration:
         original = _instantiate(exc_type)
         expected = original.reason.value  # type: ignore[attr-defined]
 
-        result = map_provider_to_curation(original)
+        result = to_curation_task_error(to_curation_error(original))
 
         assert result.failure_reason == expected  # type: ignore[union-attr]
 
@@ -134,8 +138,8 @@ class TestMapProviderToCuration:
         self, exc_type: type[AIProviderError]
     ) -> None:
         # state reason は任意。未指定なら failure_reason は焼かれない。
-        result = map_provider_to_curation(
-            _instantiate(exc_type, with_state_reason=False)
+        result = to_curation_task_error(
+            to_curation_error(_instantiate(exc_type, with_state_reason=False))
         )
 
         assert result.failure_reason is None  # type: ignore[union-attr]
@@ -165,11 +169,11 @@ class TestMapProviderToCurationUnregistered:
         bare = AIProviderError("bare base")
 
         with pytest.raises(TypeError, match="unmapped provider error"):
-            map_provider_to_curation(bare)
+            to_curation_task_error(to_curation_error(bare))
 
     def test_direct_ai_provider_error_subclass_raises(self) -> None:
         class _NeitherStateNorContent(AIProviderError):
             CODE = "ai_error_neither_for_test"
 
         with pytest.raises(TypeError, match="unmapped provider error"):
-            map_provider_to_curation(_NeitherStateNorContent())
+            to_curation_task_error(to_curation_error(_NeitherStateNorContent()))

@@ -47,14 +47,12 @@ from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import (
-    CurationReadyBuildBlockedCode,
-    CurationReadyBuildBlockedError,
+    CurationReadyBuildRejected,
+    CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
-from app.analysis.curation.errors import (
-    CurationResponseInvalidError,
-    map_provider_to_curation,
-)
+from app.analysis.curation.errors import CurationResponseInvalidError, to_curation_error
+from app.analysis.curation.task_errors import to_curation_task_error
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.audit.stages.curation import CurationAuditRepository
 from app.collection.persistence.analyzable_article_repository import (
@@ -192,25 +190,25 @@ async def _fetch_by_outcome(
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_blocked_records_missing_article_rejected(
+async def test_append_ready_build_rejected_records_missing_article_rejected(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Ready build blocked は rejected として trigger article id を payload に残す。"""
     async with session_factory() as session:
-        await CurationAuditRepository(session).append_ready_build_blocked(
+        await CurationAuditRepository(session).append_ready_build_rejected(
             target_article_id=999,
-            exc=CurationReadyBuildBlockedError(
-                CurationReadyBuildBlockedCode.ARTICLE_MISSING
+            rejected=CurationReadyBuildRejected(
+                CurationReadyBuildRejectionReason.ARTICLE_MISSING
             ),
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, CurationReadyBuildBlockedCode.ARTICLE_MISSING.value
+        db_session, CurationReadyBuildRejectionReason.ARTICLE_MISSING.value
     )
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == CurationReadyBuildBlockedCode.ARTICLE_MISSING.value
+    assert ev.outcome_code == CurationReadyBuildRejectionReason.ARTICLE_MISSING.value
     # ARTICLE_MISSING は対象記事が不在で FK 不能 → article_id / source_id とも空
     assert ev.article_id is None
     assert ev.source_id is None
@@ -218,7 +216,7 @@ async def test_append_ready_build_blocked_records_missing_article_rejected(
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_blocked_records_content_too_large(
+async def test_append_ready_build_rejected_records_content_too_large(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -226,24 +224,24 @@ async def test_append_ready_build_blocked_records_content_too_large(
     """content too large は reason evidence と source_id を残す (記事は現存)。"""
     # 実在 article を sample_source に紐付け、source_id 補填を非空虚に検証する
     article = await _make_article(db_session, sample_source)
-    exc = CurationReadyBuildBlockedError(
-        CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+    exc = CurationReadyBuildRejected(
+        CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE,
         analyzable_article_id=article.id,
         content_length=200_001,
         max_content_length=200_000,
     )
     async with session_factory() as session:
-        await CurationAuditRepository(session).append_ready_build_blocked(
+        await CurationAuditRepository(session).append_ready_build_rejected(
             target_article_id=article.id,
-            exc=exc,
+            rejected=exc,
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE.value
+        db_session, CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE.value
     )
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE.value
+    assert ev.outcome_code == CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE.value
     assert ev.article_id == article.id
     assert ev.source_id == sample_source.id
     assert ev.payload["target_article_id"] == article.id
@@ -417,7 +415,7 @@ async def test_append_drop_article_records_failure_with_drop_category(
     article_id = article.id
     raw_exc = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
     try:
-        raise map_provider_to_curation(raw_exc) from raw_exc
+        raise to_curation_task_error(to_curation_error(raw_exc)) from raw_exc
     except Exception as wrapped:  # noqa: BLE001
         exc = wrapped
     curator = _curator_mock()
@@ -530,7 +528,7 @@ async def test_append_backfill_curation_aged_out_keeps_article_identity_after_de
 def _wrap(raw: BaseException) -> BaseException:
     """ACL で詰め替え + ``__cause__`` を保持する helper。"""
     try:
-        raise map_provider_to_curation(raw) from raw  # type: ignore[arg-type]
+        raise to_curation_task_error(to_curation_error(raw)) from raw  # type: ignore[arg-type]
     except BaseException as wrapped:  # noqa: BLE001
         return wrapped
 
@@ -575,7 +573,7 @@ def _wrap(raw: BaseException) -> BaseException:
             None,
         ),
         (
-            lambda: CurationResponseInvalidError(),
+            lambda: to_curation_task_error(CurationResponseInvalidError()),
             "extraction_response_invalid",
             "retryable",
             "ai_response_invalid",

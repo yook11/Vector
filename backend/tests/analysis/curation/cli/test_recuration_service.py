@@ -45,6 +45,7 @@ from app.analysis.curation.cli.recuration_service import (
     RecurationSummary,
 )
 from app.analysis.curation.domain import Noise, Signal
+from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.curation.repository import CurationRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -252,20 +253,22 @@ async def test_dry_run_calls_curator_but_rolls_back(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type", [AIProviderNetworkError, CurationResponseInvalidError]
+)
 async def test_retries_then_succeeds(
+    error_type,
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AIProviderNetworkError 1 回 → 成功で success_ids に入る。"""
+    """回復可能な失敗後の成功を、既定の再試行でsuccess_idsへ集約する。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/retry"
     )
     await _seed_extraction(db_session, article=article)
 
-    curator = _curator(
-        side_effect=[AIProviderNetworkError("transient"), _signal_call()]
-    )
+    curator = _curator(side_effect=[error_type(), _signal_call()])
     service = RecurationService(session_factory, max_retries=3)
     summary = await service.execute((article.id,), curator, dry_run=False)
 
@@ -274,18 +277,22 @@ async def test_retries_then_succeeds(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type", [AIProviderNetworkError, CurationResponseInvalidError]
+)
 async def test_failed_after_max_retries(
+    error_type,
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AIProviderNetworkError が max_retries 回連続で failed_ids に入る。"""
+    """回復可能な失敗が上限回数続くとfailed_idsへ集約する。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/failed"
     )
     await _seed_extraction(db_session, article=article)
 
-    curator = _curator(side_effect=AIProviderNetworkError("dead"))
+    curator = _curator(side_effect=error_type())
     service = RecurationService(session_factory, max_retries=2)
     summary = await service.execute((article.id,), curator, dry_run=False)
 

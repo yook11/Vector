@@ -6,31 +6,32 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 __all__ = [
     "CurationPreconditionProtocol",
-    "CurationReadyBuildBlockedCode",
-    "CurationReadyBuildBlockedError",
+    "CurationReadyBuildRejectionReason",
+    "CurationReadyBuildRejected",
     "CurationReadyBuildFacts",
     "ReadyForCuration",
 ]
 
 
-class CurationReadyBuildBlockedCode(StrEnum):
-    """Stage 3 Ready 構築 blocked の監査 outcome_code。"""
+class CurationReadyBuildRejectionReason(StrEnum):
+    """Ready拒否の監査コードを保存済みの文字列と対応付ける。"""
 
     ARTICLE_MISSING = "curation_ready_build_blocked_article_missing"
     ALREADY_CURATED = "curation_ready_build_blocked_already_curated"
     ALREADY_REJECTED_AS_NOISE = "curation_ready_build_blocked_already_rejected_as_noise"
     CONTENT_TOO_LARGE = "curation_ready_build_blocked_content_too_large"
+    INPUT_INVALID = "curation_ready_build_blocked_input_invalid"
 
     @property
     def is_idempotent_skip(self) -> bool:
         """別 worker が先に処理済みで no-op になった冪等 skip か (勝者の行と冗長)。"""
         return self in {
-            CurationReadyBuildBlockedCode.ALREADY_CURATED,
-            CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE,
+            CurationReadyBuildRejectionReason.ALREADY_CURATED,
+            CurationReadyBuildRejectionReason.ALREADY_REJECTED_AS_NOISE,
         }
 
 
@@ -45,30 +46,24 @@ class CurationReadyBuildFacts:
     has_noise_curation: bool
 
 
-class CurationReadyBuildBlockedError(Exception):
-    """Stage 3 入力として採用できなかった場合に投げる例外。"""
+@dataclass(frozen=True, slots=True)
+class CurationReadyBuildRejected:
+    """Ready構築の拒否理由と、DBで確認した記事情報を表す。"""
 
-    def __init__(
-        self,
-        code: CurationReadyBuildBlockedCode,
-        *,
-        analyzable_article_id: int | None = None,
-        content_length: int | None = None,
-        max_content_length: int | None = None,
-    ) -> None:
-        self.code = code
-        # 対象記事が現存する blocked のみ analyzable_article_id を持つ (audit が
-        # source_id を補填する根拠)。ARTICLE_MISSING は記事不在で None。
-        self.analyzable_article_id = analyzable_article_id
-        self.content_length = content_length
-        self.max_content_length = max_content_length
-        super().__init__(code.value)
+    reason: CurationReadyBuildRejectionReason
+    analyzable_article_id: int | None = None
+    content_length: int | None = None
+    max_content_length: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason, CurationReadyBuildRejectionReason):
+            raise TypeError("reason must be CurationReadyBuildRejectionReason")
 
 
 class CurationPreconditionProtocol(Protocol):
     """Ready 構築に必要な DB 事実だけを読む repository contract。
 
-    構築可否と blocked 理由は ``ReadyForCuration`` が判定する。
+    構築可否と拒否理由は ``ReadyForCuration`` が判定する。
     """
 
     async def load_ready_build_facts(
@@ -93,37 +88,54 @@ class ReadyForCuration(BaseModel):
         *,
         analyzable_article_id: int,
         repo: CurationPreconditionProtocol,
-    ) -> ReadyForCuration:
-        """DB 事実から Ready を構築し、対象外なら blocked 例外を投げる。"""
+    ) -> ReadyForCuration | CurationReadyBuildRejected:
+        """DB事実を一度取得して、Ready構築または拒否の判定へ渡す。"""
         facts = await repo.load_ready_build_facts(analyzable_article_id)
+        return cls.from_facts(facts)
+
+    @classmethod
+    def from_facts(
+        cls, facts: CurationReadyBuildFacts | None
+    ) -> ReadyForCuration | CurationReadyBuildRejected:
+        """取得済みの事実から、開始条件とモデルの入力制約を検証する。"""
         if facts is None:
-            raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlockedCode.ARTICLE_MISSING
+            return CurationReadyBuildRejected(
+                CurationReadyBuildRejectionReason.ARTICLE_MISSING
             )
 
         if facts.has_signal_curation:
-            raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlockedCode.ALREADY_CURATED,
+            return CurationReadyBuildRejected(
+                CurationReadyBuildRejectionReason.ALREADY_CURATED,
                 analyzable_article_id=facts.analyzable_article_id,
             )
 
         if facts.has_noise_curation:
-            raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE,
+            return CurationReadyBuildRejected(
+                CurationReadyBuildRejectionReason.ALREADY_REJECTED_AS_NOISE,
                 analyzable_article_id=facts.analyzable_article_id,
             )
 
-        content_length = len(facts.original_content)
-        if content_length > cls.MAX_CONTENT_LENGTH:
-            raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+        try:
+            return cls(
                 analyzable_article_id=facts.analyzable_article_id,
-                content_length=content_length,
-                max_content_length=cls.MAX_CONTENT_LENGTH,
+                original_title=facts.original_title,
+                original_content=facts.original_content,
             )
-
-        return cls(
-            analyzable_article_id=facts.analyzable_article_id,
-            original_title=facts.original_title,
-            original_content=facts.original_content,
-        )
+        except ValidationError as exc:
+            if any(
+                error["loc"] == ("original_content",)
+                and error["type"] == "string_too_long"
+                for error in exc.errors(
+                    include_url=False, include_context=False, include_input=False
+                )
+            ):
+                return CurationReadyBuildRejected(
+                    CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE,
+                    analyzable_article_id=facts.analyzable_article_id,
+                    content_length=len(facts.original_content),
+                    max_content_length=cls.MAX_CONTENT_LENGTH,
+                )
+            return CurationReadyBuildRejected(
+                CurationReadyBuildRejectionReason.INPUT_INVALID,
+                analyzable_article_id=facts.analyzable_article_id,
+            )

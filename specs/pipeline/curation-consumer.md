@@ -1,6 +1,6 @@
 # CurationConsumer — 分析可能な記事の完成イベントによる本文整形
 
-Status: スライス1のAssessment／EmbeddingにおけるReady拒否の受信完了を実装・検証済み（2026-09-13）。Curationの通常経路移行と3工程すべての統一は後続スライスとし、AWSへの適用は未実施。
+Status: スライス1のAssessment／EmbeddingにおけるReady拒否の受信完了と、スライス2のCuration契約整理を実装・検証済み（2026-09-13）。Curationの通常経路移行と3工程すべての統一は後続スライスとし、AWSへの適用は未実施。
 
 ## Problem
 
@@ -14,7 +14,7 @@ Status: スライス1のAssessment／EmbeddingにおけるReady拒否の受信�
 
 - [取得サービス](../../backend/app/collection/article_acquisition/service.py)と[本文補完サービス](../../backend/app/collection/article_completion/service.py): 記事の保存とOutbox記録を同じトランザクションで確定する。現在のイベント種別は発行元ごとに分かれている。
 - [ReadyForCuration](../../backend/app/analysis/curation/domain/ready.py): DB上の記事の存在、Signal／Noiseの保存済み状態、タイトル・本文の制約を判定する。本文の上限は200,000文字。
-- [CurationService](../../backend/app/analysis/curation/service.py)と[Repository](../../backend/app/analysis/curation/repository.py): Signal／Noiseの保存、成功監査、Signal時のOutbox記録を所有する。現在のService戻り値はIDまたはNone。
+- [CurationService](../../backend/app/analysis/curation/service.py)と[Repository](../../backend/app/analysis/curation/repository.py): Signal／Noiseの保存、成功監査、Signal時のOutbox記録を所有する。Serviceは`CurationCompletion`で保存完了と保存競合を区別する（スライス2）。
 - [Assessment仕様](./assessment-consumer.md)と[Embedding仕様](./embedding-consumer.md): 正常終了と失敗伝播、借用するAIクライアント、呼び出し単位の資源管理、SQS部分バッチ応答の参照元。
 - [Outbox送信契約](./outbox-sqs-message-contract.md)と[relay実行部](../../backend/app/lambda_handlers/outbox_relay/execution.py): 保存済みイベントの検証・配送と、単一イベント種別の配送入口を提供する。
 - [Curationタスク](../../backend/app/queue/tasks/curation.py)、[救済タスク](../../backend/app/queue/tasks/backfill.py)、[ECS設定](../../infra/aws/ecs.tf): 旧Taskiq経路が残り、本番向け定義では3工程の救済が有効になる構成。
@@ -82,13 +82,13 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 
 - 各工程のReady側は、不変の`ReadyBuildRejected`値で拒否理由とDB由来記事IDを返す。`ReadyBuildBlockedError`と別の拒否結果を併存させず、ConsumerはReady側から受け取った同じ値を監査へ渡し、受信完了結果として返す。工程間で扱いを揃えるための汎用Consumerや共通基底クラスは要求しない。
 - 処理済みの理由もReady側の同じ拒否値で伝え、Consumerが既存の処理済みCompletionへ対応付ける。処理済みの監査・成功計測を追加しない。
-- Readyモデル生成時の入力検証エラーだけを`INPUT_INVALID`へ対応付け、入力制約やEmbeddingテキスト生成ルールを変えない。
+- Readyモデル生成時の入力検証エラーだけを拒否へ対応付ける。Curationの本文上限超過は既存の`CONTENT_TOO_LARGE`、その他は`INPUT_INVALID`とし、入力制約やEmbeddingテキスト生成ルールを変えない。
 - 拒否監査は`REJECTED`と理由コードを記録し、本文・入力値・検証例外を保存しない。対象欠損では記事IDを補完せず、入力不正ではDB由来IDを使う。通常の監査障害は安全なログとaudit-dropped計測へ退避し、拒否を再配信に戻さない。
 - Lambda入口はこの結果のmessageIdを`batchItemFailures`へ含めない。SQS連携の成功応答によってメッセージを削除させ、ConsumerからSQSの削除APIを呼ばない。
 - Ready拒否ではAI・結果保存・成功監査・後続Outboxを実行しない。終了理由を記録し、分析成功や処理済みとは区別する。
 - Ready拒否を失敗応答にしないため、この理由での自動再配信・DLQ送りは行わない。既存の監査上のretryabilityから配送判断を導出しない。
 - 本ルールは対象の状態・内容からReadyを作れないと確定した場合に適用する。DB取得障害や想定外例外を一括してReady拒否へ変換しない。
-- 現行Assessment／Embeddingの対象欠損を例外として返す動作は変更対象であり、本仕様の共通ルールを優先する。
+- Assessment／Embeddingの対象欠損はスライス1で理由付きの受信完了へ変更済み。
 
 ## Curationの処理完了と受信完了
 
@@ -177,6 +177,36 @@ Lambdaの完了ログは`reason=ready_build_rejected`と`rejection_code`を持�
 このスライスはAssessment／Embeddingの受信完了までを対象とし、Curation実装・救済移行・hold／日次上限の撤去・インフラ・AWS適用を含めない。共有Readyを使う旧Taskiq呼び出し元は値による分岐へ接続し、救済と資源ライフサイクル共通化を維持する。
 
 実装・検証結果（2026-09-13）: スライス1は完了。Ruffのlint・formatが成功し、全単体6,655件と`make test-integration`の全DB統合1,402件が成功した。並行作業の拒否監査移動を取り込んだ最終状態で、関連単体745件・両工程のDB統合219件を再検証した。対象欠損・入力不正の拒否監査、DB由来IDと記事保持、同じ拒否値の伝播、監査・診断障害時の受信完了、業務タイマー解除後の監査、両Lambdaの混在バッチ応答を確認した。テスト用DB・Redisは終了処理で削除済み。CurationとAWSは未変更。
+
+### スライス2の確定契約（2026-09-13）
+
+このスライスのProblemは、Curationの保存完了・処理済み・Ready拒否・実行失敗を呼び出し元へ区別して伝えること。Ready・Service・エラー契約と、それを共有する旧Taskiq／再キュレーションCLIの接続を対象とする。
+
+`domain/ready.py`に不変の`CurationReadyBuildRejected`と`CurationReadyBuildRejectionReason`を置く。`from_facts`と非同期の`try_advance_from`は`ReadyForCuration | CurationReadyBuildRejected`を返す。DB事実は一度だけ取得し、成功時の記事IDはReady自身から読む。
+
+判定順序は対象欠損、Signal保存済み、Noise保存済み、Readyモデル構築の順とする。本文の空文字・200,000文字上限、タイトルの空文字、記事IDの正数制約はReadyモデルで保証する。モデル構築前の本文長判定は行わない。モデル生成時の`ValidationError`について、`original_content`の`string_too_long`があれば`CONTENT_TOO_LARGE`、それ以外は`INPUT_INVALID`へ対応付ける。複数違反でも本文上限超過を優先する。判定は[Pydanticの構造化されたエラー情報](https://docs.pydantic.dev/latest/errors/validation_errors/#string_too_long)を使い、入力値・context・URLを取得しない。
+
+拒否値は理由とDB由来記事IDを持つ。対象欠損では記事IDを補完しない。上限超過時だけ本文文字数と上限値を保持し、本文・検証例外・入力値は保持しない。`append_ready_build_rejected`は同じ拒否値から`REJECTED`を記録する。既存の`curation_ready_build_blocked_*`文字列と数値の監査項目を維持し、入力不正は`curation_ready_build_blocked_input_invalid`を追加する。DB取得障害とモデル生成以外の想定外例外はそのまま伝播する。
+
+`service.py`の不変な`CurationCompletion`は次の組合せだけを許可する。
+
+| kind | 確定条件 | curation_id |
+|---|---|---|
+| `SIGNAL` | Signal・成功監査・後続Outboxをcommitした | 正の整数必須 |
+| `NOISE` | Noise・成功監査をcommitした | なし |
+| `ALREADY_CURATED` | Repositoryが保存時に既存行との競合を確認した | なし |
+
+Repositoryの保存ID／競合時`None`／例外の契約とトランザクションを維持する。保存・監査・Outbox・commitの失敗をCompletionへ変換しない。AIの`Signal | Noise`も変更しない。
+
+`errors.py`の`CurationFailureReason`は`PROVIDER_ERROR`と`RESPONSE_INVALID`を持つ。`CurationError`は理由と分類済みの元プロバイダー例外を保持する。プロバイダー障害では元例外を必須とし、Serviceは`raise to_curation_error(exc) from exc`で同一性と原因チェーンを保つ。`CurationResponseInvalidError()`は引数なし・コード`extraction_response_invalid`を維持する。文字列表現は安全なコードだけとし、再試行・hold・記事削除の制御属性を持たない。既存Curationエラー・DB障害・timeout・想定外例外は変換しない。
+
+旧経路の`CurationRecoverableError`／`CurationTerminalKeepError`／`CurationTerminalDropError`は`task_errors.py`へ置き、`CurationTaskError`を共通基底とする。`to_curation_task_error`がServiceエラーを既存の再試行・保持・削除方針へ対応付ける。プロバイダー障害の原因チェーンはTaskエラー → Serviceエラー → 元プロバイダー例外となる。旧TaskiqはReady拒否を値で分岐し、Serviceの`SIGNAL`だけでAssessmentを投入する。Noise・処理済み・Ready拒否では投入しない。CLIも同じ旧経路分類へ接続し、再試行回数・成功／失敗／スキップ・dry-run・既存Signalの更新を維持する。
+
+本スライスのInvariantsは、入力検証の集約、保存の原子性、拒否時のAI非実行と記事保持、旧Taskiq／CLIの運用方針の維持とする。Non-goalsはConsumer・Lambda・イベント配送・救済移行・hold／日次上限の撤去・DB schema・外部API・イベントpayload・依存パッケージ・AWS設定の変更。新経路の拒否監査best-effortとSQS受信完了への接続はスライス3・4で実装する。
+
+Doneは、4種類の結末を型と理由で説明でき、Readyの境界値と判定優先順位、Serviceの保存原子性、旧経路の接続が単体・実DBテストで確認できること。開始時にPR #351のマージを確認し、最新`main`（`d1e0e9c802a6c80938adcaf3a05aba4947b44711`）から作業を分離した。Assessment／Embedding Consumerの未コミット変更は取り込まない。
+
+実装・検証結果（2026-09-13）: スライス2は完了。Ruffのlint・format、全単体6,656件と`make test-integration`の全DB統合1,417件が成功した。実DBでSignal／Noiseの完了値と成功監査・Outboxの一致、保存競合の処理済み結果、保存・監査・Outbox・commit失敗時のロールバック、本文不正の拒否監査と記事保持・AI／後続非実行、Taskエラーから元プロバイダー例外までの原因チェーンを確認した。CLIの応答不正も既定の再試行・成功／失敗集約へ接続済み。テスト用PostgreSQL・Redisは終了処理で削除済み。Consumer・Lambda・配送・AWSは未変更。
 
 Ready拒否の検証は、各工程のConsumerで理由と副作用の不在を確認し、Lambda入口でReady拒否・処理済み・実行失敗の混在時に実行失敗のmessageIdだけが失敗一覧に載ることを確認する。既存の対象欠損を再配信する期待値は置き換える。SQSの削除動作そのものを模した重複テストは作らない。
 

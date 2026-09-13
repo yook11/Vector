@@ -24,9 +24,10 @@ from sqlalchemy.exc import (
 from app.ai_providers.errors import AIProviderOutputBlockedError
 from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.assessment.task_errors import AssessmentRecoverableError
-from app.analysis.curation.errors import (
+from app.analysis.curation.errors import to_curation_error
+from app.analysis.curation.task_errors import (
     CurationRecoverableError,
-    map_provider_to_curation,
+    to_curation_task_error,
 )
 from app.analysis.embedding.task_errors import EmbeddingRecoverableError
 from app.audit.failure_projection import (
@@ -78,7 +79,7 @@ def test_project_marker_failure_reads_curation_instance_cause_axis() -> None:
     provider error の ``FAILURE_MODE`` / ``reason`` 由来の instance 値。
     """
     raw = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
-    exc = map_provider_to_curation(raw)
+    exc = to_curation_task_error(to_curation_error(raw))
 
     assert project_marker_failure(exc) == FailureProjection(
         failure_kind="target_rejected",

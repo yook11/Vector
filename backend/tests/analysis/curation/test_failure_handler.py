@@ -7,7 +7,7 @@
 - ``pipeline_events.article_id`` は ``ondelete=SET NULL`` のため audit 行は残る
   ただし新規 INSERT 時点では ``article_id`` が埋まっている (DELETE 前)
 - ``source_id`` が auto-resolve される (article DELETE 後でも source 追跡可能)
-- ``CurationTerminalDropError`` (ACL ``map_provider_to_curation`` で
+- ``CurationTerminalDropError`` (ACL ``to_curation_task_error`` で
   ``AIProviderOutputBlockedError`` / ``AIProviderInputRejectedError`` から
   詰め替えられる) で ``outcome_code`` / ``retryability`` /
   payload failure attrs が記録される
@@ -38,8 +38,9 @@ from app.ai_providers.gemini.error_translator import GeminiContentRejectionReaso
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.domain.ready import ReadyForCuration
-from app.analysis.curation.errors import map_provider_to_curation
+from app.analysis.curation.errors import to_curation_error
 from app.analysis.curation.failure_handling import CurationFailureHandler
+from app.analysis.curation.task_errors import to_curation_task_error
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
@@ -110,7 +111,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
 
     raw_exc = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
     try:
-        raise map_provider_to_curation(raw_exc) from raw_exc
+        raise to_curation_task_error(to_curation_error(raw_exc)) from raw_exc
     except Exception as wrapped:  # noqa: BLE001
         exc = wrapped
     decision = await handler.handle(
@@ -178,7 +179,7 @@ async def test_input_rejected_writes_audit_then_deletes_article(
         reason=GeminiContentRejectionReason.CONTEXT_LENGTH
     )
     try:
-        raise map_provider_to_curation(raw_exc) from raw_exc
+        raise to_curation_task_error(to_curation_error(raw_exc)) from raw_exc
     except Exception as wrapped:  # noqa: BLE001
         exc = wrapped
     decision = await handler.handle(
@@ -218,7 +219,7 @@ async def test_input_rejected_writes_audit_then_deletes_article(
 def _wrap(raw: BaseException) -> BaseException:
     """ACL で Stage 3 marker に詰め替え + ``__cause__`` を保持する helper。"""
     try:
-        raise map_provider_to_curation(raw) from raw  # type: ignore[arg-type]
+        raise to_curation_task_error(to_curation_error(raw)) from raw  # type: ignore[arg-type]
     except BaseException as wrapped:  # noqa: BLE001
         return wrapped
 

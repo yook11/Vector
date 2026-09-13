@@ -32,7 +32,11 @@ from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.curation.domain import CurationResult, Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
-from app.analysis.curation.service import CurationService
+from app.analysis.curation.service import (
+    CurationCompletion,
+    CurationCompletionKind,
+    CurationService,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -302,8 +306,8 @@ async def test_extraction_creates_extraction(
     result = await svc.execute(ready, mock_curator)
 
     # signal 勝者: Service は新規 article_extractions.id (int) を返す
-    assert isinstance(result, int)
-    assert result > 0
+    assert result.kind is CurationCompletionKind.SIGNAL
+    assert result.curation_id > 0
 
     db_session.expire_all()
     persisted = (
@@ -313,7 +317,7 @@ async def test_extraction_creates_extraction(
             )
         )
     ).scalar_one()
-    assert persisted.id == result
+    assert persisted.id == result.curation_id
     assert persisted.translated_title == "量子ブレイクスルー"
 
 
@@ -351,7 +355,7 @@ async def test_extraction_race_loser_returns_none_and_skips_audit(
     result = await svc.execute(ready, mock_curator)
 
     # race 敗北は None で表現される (Stage 4 chain しない)
-    assert result is None
+    assert result == CurationCompletion(CurationCompletionKind.ALREADY_CURATED)
 
     db_session.expire_all()
     # 既存 row は上書きされていない (UPDATE ではなく ON CONFLICT DO NOTHING)
@@ -423,7 +427,7 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     result = await svc.execute(ready, mock_curator)
 
     # noise 勝者: Stage 4 chain しないため Service は None を返す
-    assert result is None
+    assert result == CurationCompletion(CurationCompletionKind.NOISE)
 
     db_session.expire_all()
     # extraction_noises に 1 行入っている

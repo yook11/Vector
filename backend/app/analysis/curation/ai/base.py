@@ -75,14 +75,8 @@ class BaseCurator(abc.ABC):
             Generic envelope。
 
         Raises:
-            AIProviderError: provider 呼び出し由来の失敗 (Layer 2-A)。Stage 3
-                boundary (``CurationService.execute`` /
-                ``RecurationService._curate_once_mapped``) の ACL
-                ``map_provider_to_curation`` で Stage 3 marker に詰め替えられ、
-                Task 層で dispatch される。
-            CurationError: Stage 3 工程由来の失敗 (Layer 2-B)。
-                ``CurationResponseInvalidError`` 等は curator 内部で raise
-                され、既に Stage 3 Layer 1 marker subclass として伝搬する。
+            AIProviderError: Serviceで原因を保持したCurationErrorへ変換する。
+            CurationError: 応答不正など、Curation工程で確定した失敗を伝播する。
         """
         ...
 
