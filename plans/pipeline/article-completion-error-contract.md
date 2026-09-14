@@ -221,7 +221,7 @@ Ruff lint・format成功、新規の重要な16ケース成功、単体6,898件�
 
 ### 実装内容 / Invariants
 
-- `consumer_failure_classification.py`に同期の純粋関数`classify_completion_failure(exc: Exception, *, now: datetime) -> CompletionFailureDecision`を追加する。不変の結果はaction（retry / close）、retry_at、code、requires_investigationを持つ。
+- `consumer_failure_classification.py`に同期の純粋関数`classify_completion_failure(exc: Exception, *, now: datetime) -> RetryArticleCompletion | CloseArticleCompletion`を追加する。戻り値にユニオンを直接記述し、別名・共通基底・actionフィールドは追加しない。不変の両結果型はcodeとrequires_investigationを持ち、RetryArticleCompletionだけがretry_atを持つ。指定なし・無効・0秒・期限経過済みでNoneになることをコメントに明記する。
 - HTTP応答と補完固有の確定分類は[Consumer仕様](../../specs/pipeline/article-completion-consumer.md#補完工程の確定した失敗判断)を正本とする。407・511・425、範囲外応答、未分類・抽出異常を調査対象とし、プロキシの拒否を記事側のHTTP拒否へ流用しない。
 - 構築拒否は既知・未分類が混在しても、未分類・空の拒否理由があれば再試行を優先する。元例外、原因チェーン、defects、unmappedを変更しない。
 - 再試行対象のHTTP応答だけでRetry-Afterを解釈する。秒数は応答受信時刻基準、HTTP日時は旧形式も含めてUTC化する。経過済み・0秒・不正・表現範囲外は追加待機なし、有効な未来時刻は短縮しない。内部の時計・ログ・通信は不要。
@@ -236,3 +236,7 @@ DB更新・SQS操作・監査・ログ・通知・Consumer接続・正常終了�
 ### 検証結果
 
 Ruff lint・format（app全体と追加テスト）成功。追加64ケース成功、単体6,932件成功（integration 1,434件を分離）、`make test-integration PYTEST_ARGS='-x -q'`でDB統合1,434件成功。一時DB・Redisコンテナとnetworkの削除を確認した。新関数のproduction参照は定義元のみで、旧Taskiq・既存エラー・DB・SQSへの接続変更はない。
+
+### 結果型の分離
+
+RetryArticleCompletionとCloseArticleCompletionに分け、戻り値にユニオンを直接記述する形へ修正した。再試行結果だけにretry_atを持たせ、Noneになる理由をフィールドと解釈関数のコメントへ追記した。既存64ケースの期待結果を更新し、新規テストは追加していない。修正後もRuff lint・format、単体6,932件、DB統合1,434件が成功し、一時環境の削除を確認した。

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Literal
 
 from app.collection.article_completion.errors import (
     ArticleCompletionRejectedError,
@@ -24,17 +23,25 @@ from app.http.failure import HttpTransportFailureReason, HttpTransportStage
 
 
 @dataclass(frozen=True, slots=True)
-class CompletionFailureDecision:
-    """副作用の実行と原因情報の出力は、呼び出し側へ委ねる。"""
+class RetryArticleCompletion:
+    """補完を再試行する判断と、追加で待機が必要な時刻を表す。"""
 
-    action: Literal["retry", "close"]
     code: str
     retry_at: datetime | None = None
+    """再試行可能なUTC日時で、指定なし・無効・0秒・期限経過済みならNone。"""
+    requires_investigation: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CloseArticleCompletion:
+    """補完を終了する判断と、その理由の識別情報を表す。"""
+
+    code: str
     requires_investigation: bool = False
 
 
 def _retry_at(exc: HttpResponseError, *, now: datetime) -> datetime | None:
-    """解釈可能な待機指示だけを、短縮せずにUTC時刻へ変換する。"""
+    """有効な未来の待機時刻をUTCで返し、指定なし・無効・0秒・期限経過済みならNoneを返す。"""
     value = exc.retry_after
     if value is None or not (value := value.strip()):
         return None
@@ -57,7 +64,7 @@ def _retry_at(exc: HttpResponseError, *, now: datetime) -> datetime | None:
 
 def classify_completion_failure(
     exc: Exception, *, now: datetime
-) -> CompletionFailureDecision:
+) -> RetryArticleCompletion | CloseArticleCompletion:
     """発生事実を変更せず、補完工程として必要な対処を返す。"""
     if isinstance(exc, HttpResponseError):
         status = exc.status_code
@@ -67,17 +74,17 @@ def classify_completion_failure(
             or status in (408, 421, 429)
             or (500 <= status < 600 and status not in (501, 505))
         )
-        return CompletionFailureDecision(
-            action="retry" if retry else "close",
-            code=exc.CODE,
-            retry_at=_retry_at(exc, now=now) if retry else None,
-            requires_investigation=investigate,
-        )
+        if retry:
+            return RetryArticleCompletion(
+                code=exc.CODE,
+                retry_at=_retry_at(exc, now=now),
+                requires_investigation=investigate,
+            )
+        return CloseArticleCompletion(code=exc.CODE)
 
     if isinstance(exc, HttpTransportError):
         failure = exc.failure
-        return CompletionFailureDecision(
-            action="retry",
+        return RetryArticleCompletion(
             code=exc.CODE,
             requires_investigation=(
                 failure.stage is HttpTransportStage.UNKNOWN
@@ -92,14 +99,12 @@ def classify_completion_failure(
             or bool(exc.unmapped)
             or AnalyzableArticleDefect.UNMAPPED_VALIDATION_ERROR in exc.defects
         )
-        return CompletionFailureDecision(
-            action="retry" if investigate else "close",
-            code=exc.CODE,
-            requires_investigation=investigate,
-        )
+        if investigate:
+            return RetryArticleCompletion(code=exc.CODE, requires_investigation=True)
+        return CloseArticleCompletion(code=exc.CODE)
 
     if isinstance(exc, HostBlockedError):
-        return CompletionFailureDecision(action="close", code="host_blocked")
+        return CloseArticleCompletion(code="host_blocked")
 
     if isinstance(
         exc,
@@ -111,15 +116,12 @@ def classify_completion_failure(
             ArticleContentQualityError,
         ),
     ):
-        return CompletionFailureDecision(action="close", code=exc.CODE)
+        return CloseArticleCompletion(code=exc.CODE)
 
     if isinstance(exc, (FetchDeadlineExceededError, ArticleExtractionCrashedError)):
-        return CompletionFailureDecision(
-            action="retry",
+        return RetryArticleCompletion(
             code=exc.CODE,
             requires_investigation=isinstance(exc, ArticleExtractionCrashedError),
         )
 
-    return CompletionFailureDecision(
-        action="retry", code="unknown", requires_investigation=True
-    )
+    return RetryArticleCompletion(code="unknown", requires_investigation=True)

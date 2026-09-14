@@ -1,11 +1,12 @@
 """補完工程の終了判断と、相手が指定した待機期限を保証する。"""
 
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Literal
 
 import pytest
 
 from app.collection.article_completion.consumer_failure_classification import (
+    CloseArticleCompletion,
+    RetryArticleCompletion,
     classify_completion_failure,
 )
 from app.collection.article_completion.errors import (
@@ -39,42 +40,45 @@ _NOW = _RECEIVED + timedelta(seconds=30)
 
 
 @pytest.mark.parametrize(
-    ("status", "action", "investigate"),
+    ("status", "expected_result", "investigate"),
     [
-        (302, "close", False),
-        (400, "close", False),
-        (401, "close", False),
-        (403, "close", False),
-        (404, "close", False),
-        (407, "retry", True),
-        (408, "retry", False),
-        (410, "close", False),
-        (421, "retry", False),
-        (425, "retry", True),
-        (429, "retry", False),
-        (451, "close", False),
-        (499, "close", False),
-        (500, "retry", False),
-        (501, "close", False),
-        (502, "retry", False),
-        (503, "retry", False),
-        (504, "retry", False),
-        (505, "close", False),
-        (507, "retry", False),
-        (511, "retry", True),
-        (599, "retry", False),
-        (100, "retry", True),
-        (200, "retry", True),
-        (600, "retry", True),
+        (302, CloseArticleCompletion, False),
+        (400, CloseArticleCompletion, False),
+        (401, CloseArticleCompletion, False),
+        (403, CloseArticleCompletion, False),
+        (404, CloseArticleCompletion, False),
+        (407, RetryArticleCompletion, True),
+        (408, RetryArticleCompletion, False),
+        (410, CloseArticleCompletion, False),
+        (421, RetryArticleCompletion, False),
+        (425, RetryArticleCompletion, True),
+        (429, RetryArticleCompletion, False),
+        (451, CloseArticleCompletion, False),
+        (499, CloseArticleCompletion, False),
+        (500, RetryArticleCompletion, False),
+        (501, CloseArticleCompletion, False),
+        (502, RetryArticleCompletion, False),
+        (503, RetryArticleCompletion, False),
+        (504, RetryArticleCompletion, False),
+        (505, CloseArticleCompletion, False),
+        (507, RetryArticleCompletion, False),
+        (511, RetryArticleCompletion, True),
+        (599, RetryArticleCompletion, False),
+        (100, RetryArticleCompletion, True),
+        (200, RetryArticleCompletion, True),
+        (600, RetryArticleCompletion, True),
     ],
 )
 def test_http_response_decision(
-    status: int, action: Literal["retry", "close"], investigate: bool
+    status: int,
+    expected_result: type[RetryArticleCompletion] | type[CloseArticleCompletion],
+    investigate: bool,
 ) -> None:
     """補完工程で合意した応答分類に従い、環境側の問題では記事を閉じない。"""
     exc = HttpResponseError(status_code=status, received_at=_RECEIVED)
     decision = classify_completion_failure(exc, now=_NOW)
-    assert (decision.action, decision.requires_investigation) == (action, investigate)
+    assert isinstance(decision, expected_result)
+    assert decision.requires_investigation is investigate
 
 
 @pytest.mark.parametrize(
@@ -95,7 +99,7 @@ def test_transport_failure_never_becomes_article_rejection(
     decision = classify_completion_failure(
         HttpTransportError(failure=failure), now=_NOW
     )
-    assert decision.action == "retry"
+    assert isinstance(decision, RetryArticleCompletion)
     assert decision.requires_investigation is investigate
 
 
@@ -119,8 +123,7 @@ def test_transport_failure_never_becomes_article_rejection(
 def test_known_completion_rejection_closes(exc: Exception) -> None:
     """確認済みの取得禁止や補完条件不足だけを終了へ進める。"""
     decision = classify_completion_failure(exc, now=_NOW)
-    assert decision.action == "close"
-    assert decision.retry_at is None
+    assert isinstance(decision, CloseArticleCompletion)
     assert decision.requires_investigation is False
 
 
@@ -138,7 +141,7 @@ def test_uncertain_build_rejection_preserves_reasons_and_retries(
     """未分類が混在する構築拒否は情報を失わず、終了より調査と再試行を優先する。"""
     exc = ArticleCompletionRejectedError(defects=defects, unmapped=unmapped)
     decision = classify_completion_failure(exc, now=_NOW)
-    assert decision.action == "retry"
+    assert isinstance(decision, RetryArticleCompletion)
     assert decision.requires_investigation is True
     assert decision.code == "article_completion_rejected"
     assert exc.defects is defects
@@ -182,7 +185,7 @@ def test_execution_failure_preserves_cause_and_retries(
     except Exception as original:
         traceback = original.__traceback__
         decision = classify_completion_failure(original, now=_NOW)
-        assert decision.action == "retry"
+        assert isinstance(decision, RetryArticleCompletion)
         assert decision.code == code
         assert decision.requires_investigation is investigate
         assert original.__cause__ is cause
@@ -221,6 +224,7 @@ def test_retry_after_preserves_valid_future_deadline(
         retry_after=value,
     )
     decision = classify_completion_failure(exc, now=_NOW)
+    assert isinstance(decision, RetryArticleCompletion)
     assert decision.retry_at == expected
     if decision.retry_at is not None:
         assert decision.retry_at.tzinfo is UTC
@@ -234,5 +238,4 @@ def test_retry_after_does_not_override_close(status: int) -> None:
         status_code=status, received_at=_RECEIVED, retry_after="120"
     )
     decision = classify_completion_failure(exc, now=_NOW)
-    assert decision.action == "close"
-    assert decision.retry_at is None
+    assert isinstance(decision, CloseArticleCompletion)
