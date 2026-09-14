@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from app.analysis.assessment.events import (
     ArticleAssessedInScope,
     ArticleAssessedInScopeEvent,
-    AssessedEventValidationError,
+    AssessedEventInvalidError,
 )
 
 pytestmark = pytest.mark.unit
@@ -88,12 +88,12 @@ def test_from_input_accepts_native_python_values(data):
 def test_from_input_raises_only_safe_shared_failure(data, changes, reason, field, code):
     """入力やPydantic例外を残さず、共有の理由・項目・コードだけを返す。"""
     data.update(changes)
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
     error = caught.value
-    assert error.failure.reason.value == reason
+    assert error.invalid.reason.value == reason
     assert [
-        (issue.field.value, issue.code.value) for issue in error.failure.issues
+        (issue.field.value, issue.code.value) for issue in error.invalid.issues
     ] == [(field, code)]
     assert error.__cause__ is None
     assert error.__context__ is None
@@ -104,9 +104,9 @@ def test_from_input_raises_only_safe_shared_failure(data, changes, reason, field
 @pytest.mark.parametrize("data", [None, [], "private-input", 1])
 def test_from_input_rejects_non_object_input(data):
     """objectを受け取っても、イベントとして不正なら共有例外へ変換する。"""
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
-    assert caught.value.failure.reason.value == "invalid_envelope"
+    assert caught.value.invalid.reason.value == "invalid_envelope"
     assert caught.value.__context__ is None
 
 
@@ -116,9 +116,9 @@ def test_from_input_rejects_non_object_input(data):
 def test_missing_envelope_field_is_invalid(data, field):
     """イベントの必須項目が欠けていたら拒否する。"""
     del data[field]
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
-    assert caught.value.failure.reason.value == "invalid_envelope"
+    assert caught.value.invalid.reason.value == "invalid_envelope"
 
 
 @pytest.mark.parametrize(
@@ -149,9 +149,9 @@ def test_contract_rejects_invalid_field_values(data, field, value, reason):
     data[field] = value
     with pytest.raises(ValidationError):
         ArticleAssessedInScopeEvent.model_validate(data)
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
-    assert caught.value.failure.reason.value == reason
+    assert caught.value.invalid.reason.value == reason
     assert "private-" not in str(caught.value)
     assert "private-" not in "".join(traceback.format_exception(caught.value))
     assert caught.value.__context__ is None
@@ -163,17 +163,17 @@ def test_contract_rejects_invalid_field_values(data, field, value, reason):
 def test_payload_ids_are_strict_positive_integers(data, field, value):
     """payloadのIDは厳密な正の整数だけを受け付ける。"""
     data["payload"][field] = value
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
-    assert caught.value.failure.reason.value == "invalid_payload"
+    assert caught.value.invalid.reason.value == "invalid_payload"
 
 
 def test_payload_unknown_field_is_rejected(data):
     """payloadに契約外の項目を許可しない。"""
     data["payload"]["private-field"] = "private-value"
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
-    assert caught.value.failure.reason.value == "invalid_payload"
+    assert caught.value.invalid.reason.value == "invalid_payload"
     assert "private-" not in str(caught.value)
 
 
@@ -199,9 +199,9 @@ def test_payload_unknown_field_is_rejected(data):
 def test_error_reason_precedence(data, updates, reason):
     """複数の契約違反がある場合も、定義された理由の優先順位を守る。"""
     data.update(updates)
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
-    assert caught.value.failure.reason.value == reason
+    assert caught.value.invalid.reason.value == reason
 
 
 @pytest.mark.parametrize(
@@ -241,14 +241,14 @@ def test_error_reason_precedence(data, updates, reason):
 def test_validation_details_are_safe_and_deduplicated(data, changes, expected):
     """検証詳細は入力値を含まない項目とコードへ集約する。"""
     data.update(changes)
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
     error = caught.value
     assert [
-        (issue.field.value, issue.code.value) for issue in error.failure.issues
+        (issue.field.value, issue.code.value) for issue in error.invalid.issues
     ] == expected
     assert "private-" not in str(error)
-    assert "private-" not in repr(error.failure.issues)
+    assert "private-" not in repr(error.invalid.issues)
     assert error.__cause__ is None and error.__context__ is None
 
 
@@ -271,11 +271,11 @@ def test_payload_is_immutable(data):
 def test_validation_issue_is_immutable(data):
     """共有の検証詳細は書き換えられない。"""
     data["payload"] = {}
-    with pytest.raises(AssessedEventValidationError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(data)
 
     with pytest.raises(FrozenInstanceError):
-        caught.value.failure.issues[0].field = "private-field"
+        caught.value.invalid.issues[0].field = "private-field"
 
 
 def test_json_dump_normalizes_time_to_utc_with_fraction(data):

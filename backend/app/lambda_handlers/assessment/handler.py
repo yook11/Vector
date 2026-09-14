@@ -6,9 +6,10 @@ from typing import TypedDict
 import structlog
 
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
+from app.analysis.curation.events import CuratedEventInvalidError
 from app.lambda_handlers.assessment.composition import open_assessment_consumer
 from app.lambda_handlers.assessment.event import (
-    AssessmentEventInvalidError,
+    AssessmentMessageJsonInvalidError,
     parse_curated_signal_event,
 )
 from app.lambda_handlers.assessment.failure_recorder import (
@@ -69,7 +70,13 @@ async def _run_assessment(
 
             try:
                 curated_event = parse_curated_signal_event(message_body)
-            except AssessmentEventInvalidError as exc:
+            except AssessmentMessageJsonInvalidError:
+                failure_recorder.record_invalid_json(message_id=record.message_id)
+                failed_items.append(
+                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                )
+                continue
+            except CuratedEventInvalidError as exc:
                 failure_recorder.record_invalid_event(exc, message_id=record.message_id)
                 failed_items.append(
                     SqsBatchItemIdentifier(itemIdentifier=record.message_id)

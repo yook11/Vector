@@ -221,6 +221,7 @@ class RejectApplicationSettings(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectApplicationSettings())
 from app.lambda_handlers.completion.composition import open_completion_resources
+from app.lambda_handlers.completion.handler import handler
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
 
 async def run():
@@ -228,6 +229,7 @@ async def run():
         assert callable(resources.consumer.consume)
         assert callable(resources.sqs_client.change_message_visibility)
 asyncio.run(run())
+assert handler({"Records": []}, None) == {"batchItemFailures": []}
 assert "app.config" not in sys.modules
 assert not any(m.startswith("app.queue") for m in sys.modules)
 """,

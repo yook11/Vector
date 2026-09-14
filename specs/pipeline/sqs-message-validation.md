@@ -42,3 +42,29 @@ Ruff lint・format、全単体テストとmake test-integrationで検証する�
 - `make test-integration TEST_COMPOSE_PROJECT=vector-test-sqs-validation-20260912 PYTEST_ARGS='-x -q'`で統合テスト1,400件が成功し、一時DB・Redis・ネットワークの削除まで確認した。
 - 既存の非推奨・Logfire関連の警告は残る。検証範囲外のlocal_tests・実AWS試験・デプロイは未実施。
 - 形式検証は既存部品の直接利用に戻し、共通バッチ実行関数・診断Protocol・コールバックを撤去した。工程別compositionへの配置統一は維持した。
+
+
+## イベント契約とSQS受信の責務整理（2026-09-14）
+
+補完・Curation・Assessment・Embeddingの4受信工程で、イベント契約と配送処理を分離した。イベント型は`from_input(data)`で入力を検証し、型内部の変換処理で固定の理由・項目・コードを返す。検証例外の`invalid`は`reason`と`issues`を保持し、入力値・未知項目名・元のPydantic例外の原因チェーンを引き継がない。
+
+| イベント | 契約の所有先 |
+|---|---|
+| `article.incomplete_recorded` | `collection/article_acquisition/events.py` |
+| `article.analyzable_created` | `collection/events.py`（取得・補完の共有契約） |
+| `article.curated_signal` | `analysis/curation/events.py` |
+| `article.assessed_in_scope` | `analysis/assessment/events.py` |
+
+工程別Lambdaの解析関数はJSON解析後にイベント型の`from_input`を呼び、イベント検証例外をそのまま伝える。JSON構文・重複キー・非標準数値の拒否はLambda側に残し、工程別の`MessageJsonInvalidError`で表す。Lambda側に同じイベント違反理由を再定義しない。
+
+イベント検証例外・JSON解析例外・共通の`SqsInputError`は通常の`Exception`を継承し、`VectorDomainError`・`SAFE_ATTRS`に依存しない。配送recorderがログ名・理由・検証詳細を選択し、JSON解析失敗では従来どおり`reason="invalid_json"`と空の`issues`を記録する。ログ障害で配送結果を変更しない。
+
+全IDの事前検証、逐次処理、個別入力不正の再配信、後続処理の継続、キャンセル伝播は維持した。既存Outbox送信も同じイベント契約を使用し、送信本文・日時表現・送信失敗への変換を維持する。Consumer・DB schema・依存・AWS設定・Outboxの例外階層は変更しない。
+
+形式検証のテストはイベント所有工程、JSON解析と例外の伝播はLambdaの解析テスト、再配信と配送診断は各handlerテストに置く。補完の実handler・実Consumer・実DBの保証は`local_tests/completion/test_completion_delivery.py`に維持する。
+
+検証結果（2026-09-14）: app全体と変更テストのRuff lint・format、全単体7,078件、`make test-integration`のDB統合1,481件、`make test-local`のローカル111件が成功した。`git diff --check`と一時DB・Redis・ネットワーク・ボリュームの削除を確認した。既存の非推奨・Logfire関連の警告は残る。AWS実接続・設定適用、可視性変更・残り時間の検証はスライス4・5の対象として未実施。
+
+イベント不正の型名は`EventInvalid`・`EventInvalidError`・`EventInvalidReason`・`EventInvalidIssue`・`EventInvalidField`・`EventInvalidCode`に統一する。例外は`invalid`に不正情報を保持し、Pydanticの`ValidationError`からの変換はイベント型の`_event_invalid_from_validation_error`が担当する。Outboxが受け取る検証詳細のProtocolも`EventInvalidIssue`とし、分類条件・ログ・配送応答は変更しない。
+
+EventInvalidへの命名統一後の最終検証（2026-09-14）: コミット対象だけを反映した検証用チェックアウトで、app全体・変更PythonファイルのRuff lint・format、全単体7,048件、DB統合1,475件、ローカル110件が成功した。別件の未コミットテスト整理は含めていない。差分チェックと一時DB・Redis・ネットワーク・ボリュームの削除を確認した。AWS実接続・設定適用、個別待機・残り時間管理はスライス4・5に残る。
