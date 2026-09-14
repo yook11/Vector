@@ -25,7 +25,7 @@ from app.analysis.curation.task_errors import CurationRecoverableError
 from app.audit.domain.event import EventType
 from app.audit.stages.backfill import BackfillOutcomeCode
 from app.audit.stages.dispatch import DispatchOutcomeCode
-from app.queue.helpers.backlog import BackfillTarget
+from app.backfill.targets import BackfillTarget
 from app.queue.tasks.acquisition import _append_dispatch_run_event
 from app.queue.tasks.backfill import (
     _append_backfill_item_event,

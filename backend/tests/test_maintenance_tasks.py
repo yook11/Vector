@@ -13,6 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import Stage
+from app.backfill.targets import BackfillTarget
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -25,7 +26,6 @@ from app.models.category import Category
 from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
-from app.queue.helpers.backlog import BackfillTarget
 
 
 def _ctx_with_session_factory() -> MagicMock:

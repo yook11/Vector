@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
-from app.analysis.embedding.task_errors import EmbeddingTaskError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import BasePipelineEventPayload, EmbeddingPayload
 from app.audit.error_chain import extract_error_chain
@@ -25,6 +22,11 @@ from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
 from app.db.errors import DatabaseError
 from app.models.backfill_exclusion import BackfillExclusionReason
+
+if TYPE_CHECKING:
+    from app.analysis.embedding.ai.base import BaseEmbedder
+    from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
+    from app.analysis.embedding.task_errors import EmbeddingTaskError
 
 
 class EmbeddingOutcomeCode(StrEnum):

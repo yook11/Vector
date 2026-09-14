@@ -15,7 +15,7 @@ from structlog.testing import capture_logs
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.stages.backfill import BackfillOutcomeCode
-from app.queue.helpers.backlog import BackfillTarget
+from app.backfill.targets import BackfillTarget
 from app.queue.tasks import backfill as tasks
 from tests.logfire._span_helpers import pipeline_stage_attrs
 
