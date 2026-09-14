@@ -52,7 +52,7 @@ Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マー�
 - イベントの入口には既存の未完成記事保存イベントを使う。記事内容・URL・補完ポリシーはDBと既存の宣言から取得する。
 - 完成時はキュレーション移行で定義する共通の記事完成イベントへ接続する。補完ConsumerからキュレーションのTaskiqタスクを直接投入しない。
 - Lambda入口はSQS形式、部分バッチ応答、接続・資源の生成終了を担当する。Consumer・ServiceにはSQSのreceipt handle等を持ち込まない。
-- HTML抽出の設定、フィールドの採用ルール、完成記事の品質条件、外部通信の既存の保護を維持する。品質判定は観測値との統合後に行う。外部通信中にDB接続・トランザクションを保持しない。
+- 重複除去以外のHTML抽出設定、フィールドの採用ルール、完成記事の品質条件、外部通信の既存の保護を維持する。品質判定は観測値との統合後に行う。外部通信中にDB接続・トランザクションを保持しない。
 - 完成記事の保存・未完成行の削除・成功監査・Outboxは同じトランザクションで確定し、失敗した場合はロールバックする。commit成功後に受信完了とし、競合した処理は後続イベントを追加しない。
 - 失敗理由・元の原因を保持し、監査の分類とSQSへの応答判断を分ける。受信完了を記事完成成功と混同しない。
 
@@ -228,7 +228,7 @@ HTTPの根拠: [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-15
 - `RawResponse`と`ScrapedContent`は補完パッケージ内の`content.py`で共有し、旧`scraper.py`経由のimportも維持する。`content_type`は欠如を`None`で表せる。
 - 入力はパラメーターを除去し、前後空白・大文字小文字を正規化したメディアタイプが`text/html`の応答に限る。欠如・JSON・PDF・XHTML等は元の値を保持した`ArticleContentTypeError`とする。
 - HTTP charset指定があれば`decoded_text`を使う。指定がなければ先頭2,048バイトのHTML内charset指定を試し、指定なし・デコード失敗時は`decoded_text`へ戻る。新しい抽出処理自体はログを出力しない。
-- Trafilaturaの精度優先・コメント除外・表抽出・重複除去・メタデータ・日時抽出設定は維持する。戻り値と例外は[公式の抽出API](https://trafilatura.readthedocs.io/en/latest/corefunctions.html#bare-extraction)に沿って境界で扱う。
+- Trafilaturaの精度優先・コメント除外・表抽出・メタデータ・日時抽出設定は維持する。新経路の重複除去は無効にし、別記事・過去試行の履歴を理由に素材を除外しない。記事内の文章の繰り返しは許容し、独自のキャッシュ管理は追加しない。戻り値と例外は[公式の抽出API](https://trafilatura.readthedocs.io/en/latest/corefunctions.html#bare-extraction)に沿って境界で扱う。
 - 抽出結果`None`は`ArticleExtractionEmptyError`、Document以外は`ArticleExtractionCrashedError(UNEXPECTED_RESULT)`とする。抽出器が投げた通常例外だけを`ArticleExtractionCrashedError(EXCEPTION)`へ変換し、元例外をチェーンする。周辺処理の想定外例外・キャンセル・プロセス終了はそのまま伝播する。
 - `ScrapedContent`は不変の素材であり、タイトル・公開日時の欠如を許容する。本文欠如は空文字にする。`from_extraction()`でタイトルのタグ除去・entity変換・前後空白除去・500文字への切り詰め、本文の前後空白除去、既存の日時変換を行い、空タイトルは`None`にする。
 - タイトル必須・本文50文字以上等は素材の生成時に判定しない。ソース別の採用方針で観測値と統合した後、既存の`AnalyzableArticle.build_or_reject()`で完成条件を判定する。`ArticleContentQualityError`はこの抽出処理では使わない。
@@ -288,4 +288,4 @@ HTTPの根拠: [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-15
 
 監査は既存CompletionPayloadを使い、再試行をfailed、終了をrejected、outcome_codeを判断code、retryabilityを工程判断に合わせる。対象ID・既知のソース情報・例外型と原因チェーンの型名・HTTPステータス・定義された通信／抽出理由・構築defectsを明示的に選ぶ。自由文・本文・生のヘッダーを追加出力せず、未分類の構築詳細と待機／調査情報は元例外と結果値に保持する。監査schema、エラー定義、失敗分類表は変更しない。
 
-今回の完了条件は19ケースを含むローカルテスト全体、単体、DB統合、lint・formatの成功と一時環境の削除である。配送ハンドラーの結果変換、Retry-Afterの可視性制御、救済投入、旧経路との切替・デプロイは後続タスクとする。Consumer実装時点では抽出器のプロセス内キャッシュの寿命を変更していない。後続の配送仕様では、別記事・過去試行に依存しない抽出をスライス2で実装する。
+今回の完了条件は19ケースを含むローカルテスト全体、単体、DB統合、lint・formatの成功と一時環境の削除である。配送ハンドラーの結果変換、Retry-Afterの可視性制御、救済投入、旧経路との切替・デプロイは後続タスクとする。Consumer実装時点では抽出器のプロセス内キャッシュの寿命を変更していない。配送スライス2では、重複除去を無効にして別記事・過去試行に依存しない抽出とし、補完ローカルテストのキャッシュリセットも不要にする。

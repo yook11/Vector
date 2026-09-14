@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from sqlalchemy import text
-from trafilatura.meta import reset_caches
 
 from app.db.engine import create_worker_engine
 from app.db.session import caller_managed_session_factory
@@ -16,15 +15,6 @@ from local_tests.completion.commit_control import hold_commit
 from local_tests.completion.http_control import GatedResponses
 from local_tests.completion.support import article_response, consumer_contract
 from local_tests.http import StubHttp
-
-
-@pytest.fixture(autouse=True)
-def isolated_extraction_cache():
-    reset_caches()
-    try:
-        yield
-    finally:
-        reset_caches()
 
 
 @pytest.fixture

@@ -170,3 +170,5 @@ HTTPのみMockTransportで差し替え、抽出・構築・Repositoryは差し�
 HTTP分類・文字コード・構築条件・監査の全属性は部品テストに任せ、同じ条件表を繰り返さない。旧経路の独立した保証は残す。SQS・Lambda・IAM・通知の実通信は今回保証しない。
 
 対象だけを実行する場合は`cd backend && uv run pytest local_tests/completion -q`、全体確認は`make test-local`で行う。Consumerの読み込みはfixtureがテスト専用設定を用意した後に行う。
+
+補完の新経路は抽出時の重複除去を無効にしているため、補完fixtureで抽出器のキャッシュをリセットしない。同じHTMLの再処理・別記事の先行処理でも素材が欠落しない保証は、`tests/collection/article_completion/test_html_extraction.py`で実抽出器を使って確認する。
