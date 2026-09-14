@@ -1,6 +1,6 @@
 # 共通HTTPエラーと本文補完エラーの実装プラン
 
-Status: タスク1・2の定義はPR #356で実装・マージ済み（2026-09-13）。タスク3のHTTP変換、新経路用HTTP取得・HTML抽出・記事の統合と構築を実装済み。工程側ハンドラー・新経路への接続は後続タスクとする。
+Status: タスク1・2の定義はPR #356で実装・マージ済み（2026-09-13）。タスク3のHTTP変換、新経路用HTTP取得・HTML抽出・記事の統合と構築を実装済み。工程側の純粋な失敗分類・Retry-After解釈を実装済み。副作用を行うハンドラーと新経路への接続は後続タスクとする。
 
 ## Problem
 
@@ -212,3 +212,27 @@ Ruff lint・format成功、新規の重要な16ケース成功、単体6,898件�
 取得制限の情報名は、原因との混同を避けるため`target`から`resource`（`ROBOTS_TXT` / `ARTICLE_PAGE`）、`size_source`から`size_basis`（`DECLARED_CONTENT_LENGTH` / `RECEIVED_DECODED_BODY`）へ変更した。型名も`FetchResource`・`ResponseSizeBasis`へ揃えた。このフィールド名変更ではエラー名・CODE・継承・動作を変更せず、新規テストも追加していない。変更後のRuff lint・format、単体6,898件、DB統合1,434件が成功し、一時環境の削除を確認した。取得関連の3エラーと2つのenumはArticle接頭辞を外し、失敗内容を表す名前へ変更した。補完工程を示すArticleCompletionErrorの継承とCODEは維持し、共通基盤への移動や動作変更は行わない。
 
 最終命名への変更後もRuff lint・format、単体6,898件、DB統合1,434件が成功し、一時DB・Redis・networkの削除を確認した。
+
+## タスク4: 補完工程の失敗判断とRetry-After解釈（2026-09-14）
+
+### Problem / Evidence
+
+新経路のエラーから、原因情報を保持したまま工程の再試行・終了と待機を決める。共通HTTP・補完エラー、AI分析の分類と副作用の分離、本文補完Consumer仕様、HTTP RFCとPython標準日時解析APIを確認した。旧Taskiqの分類や監査基盤への依存は持ち込まない。
+
+### 実装内容 / Invariants
+
+- `consumer_failure_classification.py`に同期の純粋関数`classify_completion_failure(exc: Exception, *, now: datetime) -> CompletionFailureDecision`を追加する。不変の結果はaction（retry / close）、retry_at、code、requires_investigationを持つ。
+- HTTP応答と補完固有の確定分類は[Consumer仕様](../../specs/pipeline/article-completion-consumer.md#補完工程の確定した失敗判断)を正本とする。407・511・425、範囲外応答、未分類・抽出異常を調査対象とし、プロキシの拒否を記事側のHTTP拒否へ流用しない。
+- 構築拒否は既知・未分類が混在しても、未分類・空の拒否理由があれば再試行を優先する。元例外、原因チェーン、defects、unmappedを変更しない。
+- 再試行対象のHTTP応答だけでRetry-Afterを解釈する。秒数は応答受信時刻基準、HTTP日時は旧形式も含めてUTC化する。経過済み・0秒・不正・表現範囲外は追加待機なし、有効な未来時刻は短縮しない。内部の時計・ログ・通信は不要。
+- 調査の記録・通知・緊急度は出力側で扱う。DLQ移動後も非closed行の救済再投入を許し、停止や累積試行上限を追加しない。
+
+### Non-goals / Done
+
+DB更新・SQS操作・監査・ログ・通知・Consumer接続・正常終了型の追加は行わない。既存エラーの責務・旧Taskiqの動作を維持する。今回はローカルmainを変更せず、専用worktreeと`codex/completion-failure-classification`で作業し、既存のbackfill等の未コミット変更を保持する。
+
+テストはHTTP判断表、誤った終了の防止、待機時刻、原因情報の保持に絞り、通信分類・完成条件の網羅や型定義だけの保証を重複させない。Ruff lint・format、単体（`-m 'not integration'`）、`make test-integration`を実行し、一時環境の削除と旧Taskiqへの未接続を確認したら、日本語コミット・PRを作成して完了とする。
+
+### 検証結果
+
+Ruff lint・format（app全体と追加テスト）成功。追加64ケース成功、単体6,932件成功（integration 1,434件を分離）、`make test-integration PYTEST_ARGS='-x -q'`でDB統合1,434件成功。一時DB・Redisコンテナとnetworkの削除を確認した。新関数のproduction参照は定義元のみで、旧Taskiq・既存エラー・DB・SQSへの接続変更はない。
