@@ -133,6 +133,18 @@ locals {
       boundary   = aws_iam_policy.assessment_outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-assessment-outbox-relay-scheduler"]
     }
+    CompletionConsumerLambda = {
+      boundary   = aws_iam_policy.completion_consumer_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-completion-consumer-lambda"]
+    }
+    CompletionOutboxRelayLambda = {
+      boundary   = aws_iam_policy.completion_outbox_relay_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-completion-outbox-relay-lambda"]
+    }
+    CompletionOutboxRelayScheduler = {
+      boundary   = aws_iam_policy.completion_outbox_relay_scheduler_boundary.arn
+      role_names = ["${var.name_prefix}-completion-outbox-relay-scheduler"]
+    }
     CurationConsumerLambda = {
       boundary   = aws_iam_policy.curation_consumer_lambda_boundary.arn
       role_names = ["${var.name_prefix}-curation-consumer-lambda"]

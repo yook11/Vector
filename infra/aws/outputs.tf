@@ -268,3 +268,79 @@ output "curation_outbox_relay_scheduler_role_arn" {
 output "curation_outbox_relay_schedule_group_name" {
   value = aws_scheduler_schedule_group.curation_outbox_relay.name
 }
+
+output "completion_consumer_subnet_id" {
+  value = aws_subnet.completion_consumer.id
+}
+
+output "completion_consumer_security_group_id" {
+  value = aws_security_group.completion_consumer.id
+}
+
+output "completion_consumer_role_arn" {
+  value = aws_iam_role.completion_consumer.arn
+}
+
+output "completion_consumer_log_group_name" {
+  value = aws_cloudwatch_log_group.completion_consumer.name
+}
+
+output "completion_dlq_url" {
+  value = aws_sqs_queue.completion_dlq.url
+}
+
+output "completion_dlq_arn" {
+  value = aws_sqs_queue.completion_dlq.arn
+}
+
+output "completion_consumer_function_name" {
+  value = try(aws_lambda_function.completion_consumer[0].function_name, null)
+}
+
+output "completion_consumer_function_arn" {
+  value = try(aws_lambda_function.completion_consumer[0].arn, null)
+}
+
+output "completion_consumer_image_digest" {
+  value = var.completion_consumer_image_digest
+}
+
+output "completion_consumer_event_source_mapping_uuid" {
+  value = try(aws_lambda_event_source_mapping.completion_consumer[0].uuid, null)
+}
+
+output "completion_consumer_enabled" {
+  value = var.completion_consumer_enabled
+}
+
+output "completion_outbox_relay_function_name" {
+  value = one(aws_lambda_function.completion_outbox_relay[*].function_name)
+}
+
+output "completion_outbox_relay_image_digest" {
+  value = var.completion_outbox_relay_image_digest
+}
+
+output "completion_outbox_relay_function_arn" {
+  value = one(aws_lambda_function.completion_outbox_relay[*].arn)
+}
+
+output "completion_outbox_relay_role_arn" {
+  value = aws_iam_role.completion_outbox_relay.arn
+}
+
+output "completion_outbox_relay_log_group_name" {
+  value = aws_cloudwatch_log_group.completion_outbox_relay.name
+}
+
+output "completion_outbox_relay_scheduler_role_arn" {
+  value = aws_iam_role.completion_outbox_relay_scheduler.arn
+}
+
+output "completion_outbox_relay_schedule_group_name" {
+  value = aws_scheduler_schedule_group.completion_outbox_relay.name
+}
+
+output "completion_relay_enabled" {
+  value = var.completion_relay_enabled
+}

@@ -9,10 +9,15 @@ locals {
   assessment_outbox_relay_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-assessment-outbox-relay-lambda"
   assessment_dlq_arn                 = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-assessment-dlq"
   curation_consumer_lambda_arn       = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-curation-consumer"
+  completion_consumer_lambda_arn     = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-completion-consumer"
   curation_consumer_role_arn         = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-curation-consumer-lambda"
+  completion_consumer_role_arn       = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-completion-consumer-lambda"
   curation_outbox_relay_lambda_arn   = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-curation-outbox-relay"
+  completion_outbox_relay_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-completion-outbox-relay"
   curation_outbox_relay_role_arn     = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-curation-outbox-relay-lambda"
+  completion_outbox_relay_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-completion-outbox-relay-lambda"
   curation_dlq_arn                   = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-curation-dlq"
+  completion_dlq_arn                 = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-completion-dlq"
   outbox_lambda_arn                  = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-outbox-relay"
   outbox_queue_arns = [
     for stage in ["completion", "curation", "assessment", "embedding"] :
@@ -21,7 +26,7 @@ locals {
   embedding_consumer_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-embedding-consumer"
   embedding_consumer_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-embedding-consumer-lambda"
   embedding_dlq_arn             = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-embedding-dlq"
-  managed_pipeline_queue_arns   = concat(local.outbox_queue_arns, [local.embedding_dlq_arn, local.assessment_dlq_arn, local.curation_dlq_arn])
+  managed_pipeline_queue_arns   = concat(local.outbox_queue_arns, [local.embedding_dlq_arn, local.assessment_dlq_arn, local.curation_dlq_arn, local.completion_dlq_arn])
   outbox_lambda_eni_actions = [
     "ec2:CreateNetworkInterface",
     "ec2:DescribeNetworkInterfaces",
@@ -38,12 +43,14 @@ locals {
         local.assessment_consumer_role_arn,
         local.assessment_outbox_relay_role_arn,
         local.curation_consumer_role_arn,
+        local.completion_consumer_role_arn,
         local.curation_outbox_relay_role_arn,
+        local.completion_outbox_relay_role_arn,
       ]
       service = "lambda.amazonaws.com"
     }
     Scheduler = {
-      arns    = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"]
+      arns    = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"]
       service = "scheduler.amazonaws.com"
     }
   }
@@ -159,9 +166,14 @@ locals {
     for key, statement in local.boundary_pairing_statements_by_group : statement
     if contains(local.curation_boundary_groups, key)
   ]
+  completion_boundary_groups = toset(["CompletionConsumerLambda", "CompletionOutboxRelayLambda", "CompletionOutboxRelayScheduler"])
+  completion_boundary_pairing_statements = [
+    for key, statement in local.boundary_pairing_statements_by_group : statement
+    if contains(local.completion_boundary_groups, key)
+  ]
   inline_boundary_pairing_statements = [
     for key, statement in local.boundary_pairing_statements_by_group : statement
-    if !contains(setunion(local.outbox_boundary_groups, local.assessment_boundary_groups, local.curation_boundary_groups, toset(["EmbeddingConsumerLambda"])), key)
+    if !contains(setunion(local.outbox_boundary_groups, local.assessment_boundary_groups, local.curation_boundary_groups, local.completion_boundary_groups, toset(["EmbeddingConsumerLambda"])), key)
   ]
 
   # CI が assume できるロール。name は「何をするロールか」で付ける
@@ -340,9 +352,11 @@ resource "aws_iam_role_policy" "apply" {
   depends_on = [
     aws_iam_role_policy_attachment.lambda_config_readback,
     aws_iam_role_policy_attachment.apply_outbox,
+    aws_iam_role_policy_attachment.apply_pass_role,
     aws_iam_role_policy_attachment.apply_embedding_consumer,
     aws_iam_role_policy_attachment.apply_assessment_consumer,
     aws_iam_role_policy_attachment.apply_curation_consumer,
+    aws_iam_role_policy_attachment.apply_completion_consumer,
   ]
 
   name = "terraform-apply"
@@ -519,51 +533,6 @@ resource "aws_iam_role_policy" "apply" {
         Action   = local.iam_write_actions
         Resource = local.ci_scope_arns
       },
-      # 5. 意図したサービス以外への PassRole を拒否する。
-      #    許すのは ECS (task / execution role)、Chatbot (Slack 通知の channel role)、
-      #    AgentCore、relay 専用の Lambda と Scheduler に限定する。
-      #
-      # IamWithinManagedPath の `iam:*` が PassRole を含むため、条件付き Allow を
-      # 書くだけでは絞れない (Allow は和集合)。explicit Deny が唯一の手段。
-      # iam:PassedToService が無い場合も StringNotEquals は true になるので拒否側に倒れる。
-      {
-        Sid      = "DenyPassRoleToUnintendedServices"
-        Effect   = "Deny"
-        Action   = "iam:PassRole"
-        Resource = "*"
-        Condition = {
-          StringNotEquals = {
-            "iam:PassedToService" = [
-              "ecs-tasks.amazonaws.com",
-              "chatbot.amazonaws.com",
-              "bedrock-agentcore.amazonaws.com",
-              "lambda.amazonaws.com",
-              "scheduler.amazonaws.com",
-            ]
-          }
-        }
-      },
-      # 5b. AgentCore へ渡せるのは gateway service role 1 本だけ。
-      #
-      # ECS のように「/vector/ 配下なら何でも」にはしない。CI は
-      # IamWithinManagedPath で /vector/ 配下のロールを作成・変更できるため、
-      # prefix 一致にすると「CI が強い権限のロールを作って AgentCore へ渡す」
-      # 経路が開く。名前を 1 本に固定して、その経路を塞ぐ。
-      #
-      # ロール名は本体スタックの aws_iam_role.agentcore_gateway と対応する。
-      # bootstrap から本体の local は参照できないので二重管理になる。名前を
-      # 変えるときは両方直す (片方だけだと apply が PassRole で落ちて気づく)。
-      {
-        Sid         = "DenyPassRoleToAgentCoreExceptGateway"
-        Effect      = "Deny"
-        Action      = "iam:PassRole"
-        NotResource = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-agentcore-gateway"
-        Condition = {
-          StringEquals = {
-            "iam:PassedToService" = "bedrock-agentcore.amazonaws.com"
-          }
-        }
-      },
       # 6. secret の値を読めないようにする。
       #
       # SSM parameter は Terraform で管理しない (aws_ssm_parameter の value は
@@ -579,7 +548,7 @@ resource "aws_iam_role_policy" "apply" {
 
 # 追加分は managed policy に分離し、apply ロールの inline policy 容量を圧迫しない。
 resource "aws_iam_policy" "apply_outbox" {
-  depends_on = [aws_iam_role_policy_attachment.apply_assessment_consumer]
+  depends_on = [aws_iam_role_policy_attachment.apply_assessment_consumer, aws_iam_role_policy_attachment.apply_pass_role]
 
   name        = "${var.name_prefix}-ci-apply-outbox"
   path        = "/${var.name_prefix}-ci/"
@@ -623,7 +592,7 @@ resource "aws_iam_policy" "apply_outbox" {
           "lambda:TagResource",
           "lambda:UntagResource",
         ]
-        Resource = [local.outbox_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.curation_outbox_relay_lambda_arn]
+        Resource = [local.outbox_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.curation_outbox_relay_lambda_arn, local.completion_outbox_relay_lambda_arn]
       },
       {
         Sid    = "ManageOutboxSchedule"
@@ -634,7 +603,7 @@ resource "aws_iam_policy" "apply_outbox" {
           "scheduler:UpdateSchedule",
           "scheduler:DeleteSchedule",
         ]
-        Resource = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${name}/${var.name_prefix}-${name}"]
+        Resource = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${name}/${var.name_prefix}-${name}"]
       },
       {
         Sid    = "ManageOutboxScheduleGroup"
@@ -647,9 +616,9 @@ resource "aws_iam_policy" "apply_outbox" {
           "scheduler:TagResource",
           "scheduler:UntagResource",
         ]
-        Resource = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-${name}"]
+        Resource = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-${name}"]
       },
-    ], local.outbox_pass_role_guards, local.outbox_boundary_pairing_statements)
+    ], local.outbox_boundary_pairing_statements)
   })
 }
 

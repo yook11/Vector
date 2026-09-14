@@ -399,3 +399,111 @@ async def test_sqs_cleanup_failure_preserves_delivery_response(
     assert (await stored_completion(system_database, target)).pending[
         "status"
     ] == "open"
+
+
+@pytest.mark.asyncio
+async def test_acquired_incomplete_article_reaches_completion_through_relay(
+    system_database,
+    completion_sessions,
+    delivery_runtime,
+    monkeypatch,
+):
+    """取得が確定した未完成イベントを実Relay・Consumer経由で完成記事へ進める。"""
+    from app.collection.article_acquisition.reader import rss_reader
+    from app.collection.article_acquisition.service import ArticleAcquisitionService
+    from app.collection.sources.definitions.venturebeat import VentureBeatSource
+    from app.lambda_handlers.outbox_relay import completion_handler
+    from tests.outbox.completion_runtime import (
+        COMPLETION_QUEUE_URL,
+        configure_completion_relay,
+    )
+
+    article_url = "https://venturebeat.com/completion-delivery-acquired"
+    feed = f"""<rss version="2.0"><channel><title>VentureBeat</title>
+    <item><title>Completion delivery article</title><link>{article_url}</link>
+    <pubDate>{format_datetime(datetime.now(UTC), usegmt=True)}</pubDate></item>
+    </channel></rss>"""
+    monkeypatch.setattr(
+        rss_reader,
+        "make_external_async_client",
+        lambda **kwargs: httpx.AsyncClient(  # noqa: TID251
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, text=feed)
+            ),
+            **kwargs,
+        ),
+    )
+    async with system_database.connect("vector_app") as reader:
+        source_id = await reader.fetchval(
+            "SELECT id FROM news_sources WHERE name=$1", "VentureBeat"
+        )
+    assert source_id is not None
+    assert (
+        await ArticleAcquisitionService(
+            completion_sessions, VentureBeatSource()
+        ).execute(source_id)
+        == []
+    )
+    async with system_database.connect("vector_app") as reader:
+        pending_id = await reader.fetchval(
+            "SELECT id FROM incomplete_articles WHERE url=$1", article_url
+        )
+        event_id = await reader.fetchval(
+            "SELECT event_id FROM outbox_events "
+            "WHERE event_type='article.incomplete_recorded'"
+        )
+    assert pending_id is not None and event_id is not None
+
+    relay = configure_completion_relay(
+        monkeypatch, system_database.url("vector_app", sqlalchemy=True)
+    )
+    await asyncio.to_thread(completion_handler, {}, None)
+    assert [batch["QueueUrl"] for batch in relay.batches] == [COMPLETION_QUEUE_URL]
+    entries = relay.batches[0]["Entries"]
+    assert len(entries) == 1
+    body = json.loads(entries[0]["MessageBody"])
+    assert body["event_id"] == str(event_id)
+    assert body["payload"] == {
+        "source_id": source_id,
+        "incomplete_article_id": pending_id,
+    }
+    response = await asyncio.to_thread(
+        delivery_runtime.handler,
+        {
+            "Records": [
+                {
+                    "messageId": "sqs-" + entries[0]["Id"],
+                    "receiptHandle": "test-completion-receipt",
+                    "body": entries[0]["MessageBody"],
+                }
+            ]
+        },
+        delivery_runtime.context,
+    )
+    assert response == {"batchItemFailures": []}
+    async with system_database.connect("vector_app") as reader:
+        assert (
+            await reader.fetchval(
+                "SELECT published_at FROM outbox_events WHERE event_id=$1", event_id
+            )
+            is not None
+        )
+        assert (
+            await reader.fetchval(
+                "SELECT id FROM incomplete_articles WHERE id=$1", pending_id
+            )
+            is None
+        )
+        completed_id = await reader.fetchval(
+            "SELECT id FROM analyzable_articles WHERE source_url=$1", article_url
+        )
+        assert completed_id is not None
+        assert (
+            await reader.fetchval(
+                "SELECT count(*) FROM outbox_events "
+                "WHERE event_type='article.analyzable_created'"
+            )
+            == 1
+        )
+    await asyncio.to_thread(completion_handler, {}, None)
+    assert len(relay.batches) == 1

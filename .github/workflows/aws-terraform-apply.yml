@@ -51,6 +51,26 @@ on:
         description: "relayの作成・更新・ロールバック先sha256 digest（空欄は現状維持）"
         required: false
         type: string
+      completion_consumer_image_digest:
+        description: "補完Consumerのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      completion_outbox_relay_image_digest:
+        description: "補完Relayのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      completion_consumer_state:
+        description: "補完Consumerの受信状態（keepは現状維持、初回は停止）"
+        required: false
+        type: choice
+        default: keep
+        options: [keep, enabled, disabled]
+      completion_relay_state:
+        description: "補完Relayの定期送信状態（keepは現状維持、初回は停止）"
+        required: false
+        type: choice
+        default: keep
+        options: [keep, enabled, disabled]
 
 permissions:
   id-token: write
@@ -267,6 +287,39 @@ jobs:
               echo "Curation image: $requested_digest" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
+
+      - name: Resolve Completion images
+        env:
+          REQUESTED_CONSUMER_DIGEST: ${{ inputs.completion_consumer_image_digest }}
+          REQUESTED_RELAY_DIGEST: ${{ inputs.completion_outbox_relay_image_digest }}
+          REQUESTED_CONSUMER_STATE: ${{ inputs.completion_consumer_state }}
+          REQUESTED_RELAY_STATE: ${{ inputs.completion_relay_state }}
+        run: |
+          set -euo pipefail
+          # 両方のdigestが正常に解決された場合だけ設定を配置する。
+          completion_vars_tmp=$(mktemp ./completion-vars.XXXXXX)
+          trap 'rm -f "$completion_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-completion-images.py \
+                --consumer-digest "$REQUESTED_CONSUMER_DIGEST" \
+                --relay-digest "$REQUESTED_RELAY_DIGEST" \
+                --consumer-state "${REQUESTED_CONSUMER_STATE:-keep}" \
+                --relay-state "${REQUESTED_RELAY_STATE:-keep}" \
+            > "$completion_vars_tmp"
+          for requested_digest in "$REQUESTED_CONSUMER_DIGEST" "$REQUESTED_RELAY_DIGEST"; do
+            if [ -n "$requested_digest" ]; then
+              repository=$(terraform output -json ecr_repository_urls | jq -er '.backend | split("/")[1:] | join("/")')
+              image=$(aws ecr describe-images --repository-name "$repository" \
+                --image-ids "imageDigest=$requested_digest" \
+                --query 'imageDetails[0].imageDigest' --output text)
+              if [ "$image" != "$requested_digest" ]; then
+                echo "::error::backend ECRリポジトリに指定digestが存在しない"
+                exit 1
+              fi
+              echo "Completion image: $requested_digest" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          mv "$completion_vars_tmp" completion.auto.tfvars.json
 
       # plan → apply を 1 step で行い、tfplan を step 間でも持ち回らない。
       # 適用されるのは常にこの step 自身が plan した内容になる。
