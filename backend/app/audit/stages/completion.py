@@ -27,6 +27,14 @@ from app.audit.failure_projection import (
 from app.audit.injection_signal import record_injection_boundary_detected
 from app.audit.repository import PipelineEventRepository
 from app.collection.article_completion.completion_failure import CompletionRejection
+from app.collection.article_completion.consumer_failure_classification import (
+    CloseArticleCompletion,
+    RetryArticleCompletion,
+)
+from app.collection.article_completion.errors import (
+    ArticleCompletionRejectedError,
+    ArticleExtractionCrashedError,
+)
 from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildFacts,
     ReadyForArticleCompletion,
@@ -54,6 +62,7 @@ from app.collection.domain.observed_article import ObservedArticleInvalidError
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.db.errors import DatabaseError
+from app.http.errors import HttpResponseError, HttpTransportError
 
 logger = structlog.get_logger(__name__)
 
@@ -88,6 +97,68 @@ class ArticleCompletionAuditRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._events = PipelineEventRepository(session)
+
+    async def append_consumer_succeeded(
+        self,
+        *,
+        incomplete_article_id: int,
+        source_id: int,
+        analyzable_article_id: int,
+        article: AnalyzableArticle,
+    ) -> None:
+        """新経路の成功を試行番号に依存せず、記事保存と同じ取引へ追加する。"""
+        await self._append_event(
+            event_type=EventType.SUCCEEDED,
+            outcome_code=CompletionOutcomeCode.ARTICLE_COMPLETED.value,
+            payload=CompletionPayload(
+                incomplete_article_id=incomplete_article_id,
+                canonical_url=str(article.source_url),
+                body_length=len(article.body),
+            ),
+            source_id=source_id,
+            article_id=analyzable_article_id,
+        )
+
+    async def append_consumer_failed(
+        self,
+        *,
+        incomplete_article_id: int,
+        source_id: int | None,
+        source_name: str | None,
+        exc: Exception,
+        decision: RetryArticleCompletion | CloseArticleCompletion,
+    ) -> None:
+        """工程判断と選択した原因情報だけを監査へ写し、例外の自由文は出力しない。"""
+        retry = isinstance(decision, RetryArticleCompletion)
+        reason_code: str | None = None
+        if isinstance(exc, HttpTransportError):
+            reason_code = exc.failure.reason.value
+        elif isinstance(exc, ArticleExtractionCrashedError):
+            reason_code = exc.reason.value
+        await self._append_event(
+            event_type=EventType.FAILED if retry else EventType.REJECTED,
+            outcome_code=decision.code,
+            payload=CompletionPayload(
+                incomplete_article_id=incomplete_article_id,
+                source_name=source_name,
+                failure_action="retry" if retry else "close",
+                error_chain=extract_error_chain(exc),
+                reason_code=reason_code,
+                http_status=exc.status_code
+                if isinstance(exc, HttpResponseError)
+                else None,
+                defects=(
+                    [defect.value for defect in exc.defects]
+                    if isinstance(exc, ArticleCompletionRejectedError)
+                    else None
+                ),
+            ),
+            source_id=source_id,
+            error_class=exception_fqn(exc),
+            retryability=Retryability.RETRYABLE
+            if retry
+            else Retryability.NON_RETRYABLE,
+        )
 
     async def append_persist_outcome(
         self,
