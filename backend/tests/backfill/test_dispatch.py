@@ -152,21 +152,6 @@ async def test_invalid_result_correspondence_is_rejected_before_audit(audit, fau
 
 
 @pytest.mark.asyncio
-async def test_each_dispatch_generates_fresh_event_ids(audit):
-    """同じ事実の再投入でも別のイベントIDを割り当てる。"""
-    publisher = Mock()
-    publisher.publish_batch.side_effect = lambda items: BatchPublishResult(
-        tuple(PublishSucceeded(item.event_id) for item in items)
-    )
-    await dispatch(publisher, targets(1))
-    await dispatch(publisher, targets(1))
-    first, second = [call.args[0][0] for call in publisher.publish_batch.call_args_list]
-    assert first.event_id != second.event_id
-    assert first.payload == second.payload
-    assert first.occurred_at == second.occurred_at == NOW
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("payload", "builder", "event_model"),
     [

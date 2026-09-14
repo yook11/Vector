@@ -3,7 +3,6 @@
 from datetime import datetime
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.audit.stages.curation import CurationAuditRepository
@@ -18,6 +17,7 @@ from app.backfill.repository import PipelineBacklog
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
+from app.db.session import SessionFactory
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
     BackfillExclusionReason,
@@ -28,7 +28,7 @@ logger = structlog.get_logger(__name__)
 
 
 async def delete_aged_out_curations(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     *,
     created_before: datetime,
 ) -> int:
@@ -60,7 +60,7 @@ async def delete_aged_out_curations(
 
 
 async def exclude_aged_out_assessments(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     *,
     created_before: datetime,
 ) -> int:
@@ -98,7 +98,7 @@ async def exclude_aged_out_assessments(
 
 
 async def exclude_aged_out_embeddings(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     *,
     created_before: datetime,
 ) -> int:
