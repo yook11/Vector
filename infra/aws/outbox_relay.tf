@@ -78,7 +78,7 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect    = "Allow"
         Principal = { AWS = aws_iam_role.outbox_relay.arn }
@@ -109,7 +109,12 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
         Action    = "sqs:SendMessage"
         Resource  = aws_sqs_queue.outbox["completion"].arn
       },
-    ]
+      ], [for stage in keys(local.backfill_stages) : {
+        Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.backfill[stage].arn }
+        Action    = "sqs:SendMessage"
+        Resource  = aws_sqs_queue.outbox[stage].arn
+    }])
   })
   tags = { Name = "${var.name_prefix}-vpce-sqs" }
 }
@@ -206,7 +211,7 @@ resource "aws_ecr_repository_policy" "outbox_relay" {
       Principal = { Service = "lambda.amazonaws.com" }
       Action    = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
       Condition = {
-        ArnLike      = { "aws:SourceArn" = [local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn, local.completion_consumer_arn, local.completion_outbox_relay_arn] }
+        ArnLike      = { "aws:SourceArn" = concat([local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn, local.completion_consumer_arn, local.completion_outbox_relay_arn], values(local.backfill_arns)) }
         StringEquals = { "aws:SourceAccount" = local.account_id }
       }
     }]

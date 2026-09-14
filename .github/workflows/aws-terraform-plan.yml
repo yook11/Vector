@@ -170,6 +170,16 @@ jobs:
             > "$completion_vars_tmp"
           mv "$completion_vars_tmp" completion.auto.tfvars.json
 
+      - name: Preserve Backfill images and schedules from state
+        run: |
+          set -euo pipefail
+          backfill_vars_tmp=$(mktemp ./backfill-vars.XXXXXX)
+          trap 'rm -f "$backfill_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-backfill-images.py \
+            > "$backfill_vars_tmp"
+          mv "$backfill_vars_tmp" backfill.auto.tfvars.json
+
       - name: Terraform plan
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}

@@ -72,6 +72,37 @@ on:
         default: keep
         options: [keep, enabled, disabled]
 
+      curation_backfill_image_digest:
+        description: "curation backfillのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      curation_backfill_state:
+        description: "curation backfillの定期起動（keepは現状維持、初回は有効）"
+        required: false
+        type: choice
+        default: keep
+        options: [keep, enabled, disabled]
+      assessment_backfill_image_digest:
+        description: "assessment backfillのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      assessment_backfill_state:
+        description: "assessment backfillの定期起動（keepは現状維持、初回は有効）"
+        required: false
+        type: choice
+        default: keep
+        options: [keep, enabled, disabled]
+      embedding_backfill_image_digest:
+        description: "embedding backfillのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      embedding_backfill_state:
+        description: "embedding backfillの定期起動（keepは現状維持、初回は有効）"
+        required: false
+        type: choice
+        default: keep
+        options: [keep, enabled, disabled]
+
 permissions:
   id-token: write
   contents: read
@@ -320,6 +351,42 @@ jobs:
             fi
           done
           mv "$completion_vars_tmp" completion.auto.tfvars.json
+
+      - name: Resolve Backfill images and schedules
+        env:
+          REQUESTED_CURATION_DIGEST: ${{ inputs.curation_backfill_image_digest }}
+          REQUESTED_CURATION_STATE: ${{ inputs.curation_backfill_state }}
+          REQUESTED_ASSESSMENT_DIGEST: ${{ inputs.assessment_backfill_image_digest }}
+          REQUESTED_ASSESSMENT_STATE: ${{ inputs.assessment_backfill_state }}
+          REQUESTED_EMBEDDING_DIGEST: ${{ inputs.embedding_backfill_image_digest }}
+          REQUESTED_EMBEDDING_STATE: ${{ inputs.embedding_backfill_state }}
+        run: |
+          set -euo pipefail
+          backfill_vars_tmp=$(mktemp ./backfill-vars.XXXXXX)
+          trap 'rm -f "$backfill_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-backfill-images.py \
+                --curation-digest "$REQUESTED_CURATION_DIGEST" \
+                --curation-state "${REQUESTED_CURATION_STATE:-keep}" \
+                --assessment-digest "$REQUESTED_ASSESSMENT_DIGEST" \
+                --assessment-state "${REQUESTED_ASSESSMENT_STATE:-keep}" \
+                --embedding-digest "$REQUESTED_EMBEDDING_DIGEST" \
+                --embedding-state "${REQUESTED_EMBEDDING_STATE:-keep}" \
+            > "$backfill_vars_tmp"
+          for requested_digest in "$REQUESTED_CURATION_DIGEST" "$REQUESTED_ASSESSMENT_DIGEST" "$REQUESTED_EMBEDDING_DIGEST"; do
+            if [ -n "$requested_digest" ]; then
+              repository=$(terraform output -json ecr_repository_urls | jq -er '.backend | split("/")[1:] | join("/")')
+              image=$(aws ecr describe-images --repository-name "$repository" \
+                --image-ids "imageDigest=$requested_digest" \
+                --query 'imageDetails[0].imageDigest' --output text)
+              if [ "$image" != "$requested_digest" ]; then
+                echo "::error::backend ECRリポジトリに指定digestが存在しない"
+                exit 1
+              fi
+              echo "Backfill image: $requested_digest" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          mv "$backfill_vars_tmp" backfill.auto.tfvars.json
 
       # plan → apply を 1 step で行い、tfplan を step 間でも持ち回らない。
       # 適用されるのは常にこの step 自身が plan した内容になる。

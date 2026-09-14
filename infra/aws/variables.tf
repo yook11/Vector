@@ -291,3 +291,54 @@ variable "completion_relay_enabled" {
   type        = bool
   default     = false
 }
+
+variable "curation_backfill_image_digest" {
+  description = "curation backfillのbackendイメージdigest（通常plan/applyではstateの現行値を引き継ぐ）。"
+  type        = string
+  default     = null
+  validation {
+    condition     = var.curation_backfill_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.curation_backfill_image_digest))
+    error_message = "backfill image digest must be null or sha256 followed by 64 lowercase hexadecimal characters."
+  }
+}
+
+variable "curation_backfill_enabled" {
+  description = "curation backfillの定期起動を有効にする（初回は有効、以後はstateの稼働状態を引き継ぐ）。"
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "assessment_backfill_image_digest" {
+  description = "assessment backfillのbackendイメージdigest（通常plan/applyではstateの現行値を引き継ぐ）。"
+  type        = string
+  default     = null
+  validation {
+    condition     = var.assessment_backfill_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.assessment_backfill_image_digest))
+    error_message = "backfill image digest must be null or sha256 followed by 64 lowercase hexadecimal characters."
+  }
+}
+
+variable "assessment_backfill_enabled" {
+  description = "assessment backfillの定期起動を有効にする（初回は有効、以後はstateの稼働状態を引き継ぐ）。"
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
+variable "embedding_backfill_image_digest" {
+  description = "embedding backfillのbackendイメージdigest（通常plan/applyではstateの現行値を引き継ぐ）。"
+  type        = string
+  default     = null
+  validation {
+    condition     = var.embedding_backfill_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.embedding_backfill_image_digest))
+    error_message = "backfill image digest must be null or sha256 followed by 64 lowercase hexadecimal characters."
+  }
+}
+
+variable "embedding_backfill_enabled" {
+  description = "embedding backfillの定期起動を有効にする（初回は有効、以後はstateの稼働状態を引き継ぐ）。"
+  type        = bool
+  default     = true
+  nullable    = false
+}
