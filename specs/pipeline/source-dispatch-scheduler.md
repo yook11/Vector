@@ -1,6 +1,6 @@
 # ソース取得依頼の投入 — EventBridge Scheduler / Lambda / SQS
 
-Status: 一部実装（2026-09-13）。ステップ1の入力検証・取得依頼生成を追加した。送信・再試行・Lambda入口・AWS設定は未実装。以下の「提案」は未確定であり、実装済みとして扱わない。
+Status: 一部実装（2026-09-15）。ステップ1の入力検証・取得依頼生成と、ステップ2のSQS送信・失敗分の再送を追加した。Lambda入口・AWS設定は未実装。以下の「提案」は未確定であり、実装済みとして扱わない。
 
 ## Problem
 
@@ -101,14 +101,14 @@ SQSのMessageIdとLambdaの実行IDを業務上の取得依頼IDには使わな�
 
 確定（2026-09-13）: 個別再送の上限後も失敗・受付不明が残った場合は、その結果をログ・メトリクスで表し、Lambdaをエラー終了する。正常戻り値に失敗情報を入れるだけの終了にはしない。AWSの設定された上限内で全体再実行につなげ、成功済み分を含む再送を同じ取得依頼IDで扱う。個別送信失敗の発生時点で他ソースへの送信を直ちに打ち切る意味ではない。
 
-残る決定事項は、同じ実行内の個別再送回数・待機時間と、残り実行時間が少ない場合の終了方法である。
+確定（2026-09-15）: アプリは初回込み最大3回、再送ラウンド前に一様乱数で0〜1秒・0〜2秒待つ。回復可能な通信・サービス障害だけを再送し、未知のサービスエラー・応答不正・想定外の例外は同じ実行内で再送しない。残り実行時間が少ない場合の終了方法はLambda接続時に決める。
 
 以下の値と手順を実装時に確定する。
 
-- 個別送信か最大10件のバッチ送信か、送信の同時実行数、SDK内の再試行回数と通信timeout。
+- 確定: SendMessageで個別送信し、同時実行数は1。接続timeoutは3秒、応答待ちは5秒、SDKはstandard・total_max_attempts=3。
 - Lambda実行timeout、メモリ、同時実行数。ソース数と送信上限時間で全対象を処理できることを確認する。
 - Schedulerの配送再試行回数・保持時間とDLQ。
-- Lambda非同期実行の再試行回数・保持時間と、上限後の記録方法。AWSのDLQ・失敗時の送信先を採用するかは未確定であり、独自の失敗イベント発行を今回の必須実装にしない。送信先を採用する場合は記録失敗も観測する。
+- Lambda非同期実行は関数エラー時の再試行を最大2回、イベント保持期限を6時間とする（設定適用は後続）。保持期限は関数エラーを6時間再試行する意味ではない。上限後の記録方法は未決定。AWSのDLQ・失敗時の送信先を採用するかは未確定であり、独自の失敗イベント発行を今回の必須実装にしない。送信先を採用する場合は記録失敗も観測する。
 - 最終失敗の通知先と復旧手順。失敗理由と識別可能な依頼をログ・監視で把握する。途中停止時に正確な未送信一覧が残ることは保証しない。手動復旧では元のcadence・予定実行時刻で全体を再実行する案とし、具体的な実行手順は未決定。
 
 ### 4. Consumerとの接続条件
@@ -184,3 +184,38 @@ requests = tuple(schedule.create_request(source.id) for source in selection.targ
 ```
 
 追加修正後の検証結果（2026-09-14）: Ruff lint・format check、全単体6,836件、DB統合1,434件、`make test-local`の82件が成功した。別ワーキングツリーでは認証DB準備用の既存フロントエンド依存をロックファイルから導入して再実行した。今回の新規テスト追加はなく、既存の単体6ケースとローカル1シナリオを更新した。
+
+
+## ステップ2：取得依頼のSQS送信
+
+Problem: 予定回から選んだ取得依頼をSQSへ送信し、成功済みを除いた再送と最終失敗を扱う。
+Evidence: ステップ1の予定回・依頼型、既存SourceDispatchService、app.http.failureの通信分類、既存OutboxのSQSコード対応表を確認した。Outboxの送信型はUUID・バッチ送信を前提としており、今回の文字列ID・単件送信へ流用しない。
+Invariants: 全対象の初回送信を先に行い、成功済みは同じ実行内で再送しない。再送は同じ依頼・同じJSON本文を使い、未送信を正常結果へ置き換えない。DB障害と外部キャンセルは伝播する。
+Non-goals: DB schema、依存、旧Taskiq、既存Outbox契約、Lambda入口、AWS適用、Consumer重複管理、進捗永続化、独自の失敗イベント、通知を変更・追加しない。
+Done: 合意した配送シナリオと境界の検証、既存チェックが通り、結果とAWS未接続の範囲を記録する。
+
+### 実装契約
+
+- SQSの送信・受付結果・SDK例外の解釈は`app/aws/sqs`が所有する。取得依頼側は`SourceAcquisitionSender`という送信契約に依存し、収集側の`SqsSourceAcquisitionSender`が変換した`SourceAcquisitionSendError`を受けて`acquisition_retry`で再送を判断する。投入工程・再送判断・送信アダプターは`collection/article_acquisition`に置く。SQS固有の分類を解釈するのは送信アダプターだけとし、工程には再送の扱いと安全な診断情報を渡す。収集側ではSDK例外やAWSコードを解釈せず、SQS側は収集ドメインをimportしない。既存のOutbox送信とLambda受信の配置・契約は変更しない。
+- `SourceAcquisitionDispatcher.dispatch(schedule)`は呼び出すたびにDBで対象を選び、`schedule.create_request(source.id)`で不変の依頼を生成する。正常時の戻り値はNone。対象0件はSDKクライアントを生成せず終了し、除外理由は既存の選定診断に残す。
+- `app.aws.sqs.message_sender.SqsMessageSender.send(body)`はSendMessageを1回呼ぶ（SDK内部の最大3試行を含む）。応答は`SqsSendResponse.from_response(raw_response)`で形式を検証した送信応答へ変換し、`response.verify_body(body)`で送信本文と照合する。送信応答の型は非空のMessageIdと32桁の十六進MD5を持つ不変の型とし、応答不正と本文不一致を区別する。SQSレコードによるConsumerへの処理依頼とは別の通信上の概念である。
+- 命名はSDKへ本文を渡す`SqsMessageSender`と、SendMessageの応答を表す`SqsSendResponse`に分ける。応答型は送信する業務メッセージの形式を定義せず、検証後もSender内部で扱う。
+- `app.aws.sqs.message_sender.create_sqs_client(session, region)`は接続3秒・応答待ち5秒、standard・初回込み最大3回を設定する。キューURLは投入側から1つ渡す。既存クライアント設定は変更しない。
+- `open_acquisition_sender`をsender_factoryとして注入し、内部で`open_sqs_message_sender`を利用する。クライアント生成時のSQS例外も工程側の例外へ変換する。クライアントの生成・通信・解放はスレッドへ移し、イベントループを塞がない。外部キャンセル時は進行中のSDK操作を回収してから解放し、キャンセルを伝播する。
+- `app.aws.sqs.errors.SqsSendFailure`は発生事実のみを保持し、`SqsSourceAcquisitionSender`が工程側の`AcquisitionSendFailure`へ変換する。`should_retry_acquisition_send`は変換済みの再送区分と試行回数だけで判断する。共通のclassify_botocoreで通信障害を分類する。
+- 通信timeout・DNS・network_io・protocol_violation・通信分類内のunknown、SQSのthrottled・service_unavailableを再送する。proxyはstatusなし・429・5xxを再送し、TLSとその他のproxy拒否は再送しない。
+- 既知のSQS拒否コードはHTTP statusより優先する。未分類5xxはサービス障害、それ以外の未知コードは調査対象とする。設定・資格情報不足、既知の拒否、応答不正・本文不一致、想定外の例外はアプリ内で再送しない。
+- 初回込み最大3回を依頼ごとに適用し、再送ラウンド前に一度だけ0〜1秒・0〜2秒待つ。待機と乱数は注入可能。再送中は対象を選び直さない。
+- 最終失敗は`UnsentAcquisitionRequest`にID・試行回数・失敗事実を保持し、`source_acquisition_send_failed`ログを出して`AcquisitionDispatchError`を返す。クライアント初期化で止まった場合は全対象を試行0回の未送信として記録する。
+- ログは取得依頼ID・試行回数・失敗分類・サービスコード・例外型・通信失敗理由に限定する。本文・Queue URL・資格情報・SDK自由文・生の例外チェーンを出さない。ログ・closeの通常例外は先行する送信結果を上書きしない。
+
+### 検証の所有先
+
+- 既存の実DBローカルシナリオを送信まで拡張した。Engadgetの初回成功とTechCrunchのサービス障害→応答timeout→成功を接続し、同じ本文・IDで失敗分だけを再送すること、DB変更後の対象再選定、cadence・登録状況による除外を確認する。
+- 上限到達と、再送対象外の失敗があっても他のソースを完了させる経路を追加した。後者は既知拒否を5xxより優先、未知コード、応答欠落、本文不一致を代表ケースとする。SDK境界のみ差し替え、送信アダプターと再送処理を実行する。
+- 単体では配送シナリオを複製せず、取得依頼側でDB障害の伝播、AWS側でcloseと診断の失敗による成功結果の維持・通信中のキャンセルと資源回収を検証する。既存3ケースの配置を責務に合わせ、新しいケースは追加していない。既存のID・時刻検証は維持する。
+- SDK内部の再試行アルゴリズム、AWS実配送・IAM・Lambda全体再実行は今回のテストでは検証しない。
+
+検証結果（2026-09-15）: SQSの責務を分離したmain上の実装で、Ruff lint・format check、全単体7,166件、`make test-integration`の1,475件、`make test-local`の138件が成功した。ステップ2での追加は配送を重複検証しない単体3ケースと、既存ローカル1シナリオの拡張・失敗系5ケース。今回のarticle_acquisitionへの配置変更・工程例外への変換後も、Ruff lint・format、単体7,166件（not integration）、統合1,475件、ローカル138件が成功した。全testsの直接実行は既定DB未起動で停止したため、単体と専用DBの統合実行に分けて検証した。既存テストの配置と参照先を更新し、再送対象外と調査対象の変換結果を既存ローカルケースで確認した。ケースの追加はなく、クライアント生成失敗の工程例外への変換は補助チェックで確認した。AWS実配送とLambda接続は未実装・未検証。
+
+命名整理後の検証結果（2026-09-15）: `SqsMessageSender`・`SqsSendResponse`への改名後、Ruff lint・format、単体7,166件、DB統合1,475件、ローカル138件が成功した。テストケースの追加はなく、送信・応答検証・再送の振る舞いは維持した。
