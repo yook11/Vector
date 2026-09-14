@@ -6,7 +6,6 @@ from datetime import datetime
 from uuid import uuid4
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import EventType
 from app.audit.stages.backfill import (
@@ -30,6 +29,7 @@ from app.backfill.policy import (
 )
 from app.backfill.repository import PipelineBacklog
 from app.backfill.targets import BackfillEventTarget
+from app.db.session import SessionFactory
 from app.logfire.stage_span import pipeline_stage_span
 from app.outbox.publishing.event_batch import MAX_BATCH_MESSAGES
 from app.outbox.publishing.publisher import (
@@ -45,7 +45,7 @@ logger = structlog.get_logger(__name__)
 
 @asynccontextmanager
 async def _run(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     *,
     backfill_stage: BackfillStage,
     op: str,
@@ -68,7 +68,7 @@ async def _run(
 
 
 async def _dispatch(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     publisher: EventPublisher,
     targets: Sequence[BackfillEventTarget],
     *,
@@ -125,7 +125,7 @@ async def _dispatch(
 
 
 async def backfill_curations(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     publisher: EventPublisher,
     *,
     enabled: bool,
@@ -167,7 +167,7 @@ async def backfill_curations(
 
 
 async def backfill_assessments(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     publisher: EventPublisher,
     *,
     enabled: bool,
@@ -211,7 +211,7 @@ async def backfill_assessments(
 
 
 async def backfill_embeddings(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     publisher: EventPublisher,
     *,
     enabled: bool,

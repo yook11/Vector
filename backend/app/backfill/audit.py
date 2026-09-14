@@ -1,7 +1,6 @@
 """再投入の受付結果と実行失敗をbest-effortで記録する。"""
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import EventType
 from app.audit.error_fields import exception_fqn
@@ -13,12 +12,13 @@ from app.audit.stages.backfill import (
     BackfillTargetKind,
 )
 from app.backfill.targets import BackfillTarget
+from app.db.session import SessionFactory
 
 logger = structlog.get_logger(__name__)
 
 
 async def append_backfill_item_event(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     *,
     backfill_stage: BackfillStage,
     run_id: str,
@@ -64,7 +64,7 @@ async def append_backfill_item_event(
 
 
 async def append_backfill_run_event(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: SessionFactory,
     *,
     backfill_stage: BackfillStage,
     run_id: str,

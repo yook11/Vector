@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -309,4 +309,30 @@ def create_migration_engine(
         application_name="vector-migration",
         password_provider=provider,
         **engine_kwargs,
+    )
+
+
+type BackfillStage = Literal["curation", "assessment", "embedding"]
+
+
+def create_backfill_engine(
+    settings: _RuntimeDatabaseSettings,
+    *,
+    stage: BackfillStage,
+    password_provider: Callable[[], Awaitable[str]],
+) -> AsyncEngine:
+    """一回のbackfill内で最大1接続を再利用するEngineを作る。"""
+    if not settings.db_iam_auth:
+        raise ValueError("Backfill requires RDS IAM authentication")
+    if not callable(password_provider):
+        raise TypeError("Backfill requires an IAM password provider")
+    return _create_engine(
+        settings.database_url,
+        application_name=f"vector-backfill-{stage}",
+        password_provider=password_provider,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+        connect_args={"timeout": 5, "command_timeout": 5},
+        echo=False,
     )

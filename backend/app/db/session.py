@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.db.translate import translate_database_error
 
+type SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+
 
 @asynccontextmanager
 async def open_entry_managed_session(
@@ -28,7 +30,7 @@ async def open_entry_managed_session(
 
 def caller_managed_session_factory(
     engine: AsyncEngine,
-) -> Callable[[], AbstractAsyncContextManager[AsyncSession]]:
+) -> SessionFactory:
     """Session の開閉だけを担う factory。begin / commit は処理側。"""
     inner = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
