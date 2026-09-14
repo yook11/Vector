@@ -35,7 +35,6 @@ from app.collection.external_fetch_errors import (
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
 _MOD = "app.collection.article_acquisition.reader.crossref_reader"
-_TOOLS_MOD = "app.collection.article_acquisition.tools.reader_tools"
 _FIXTURE = "mdpi_crossref.json"
 _CONTACT_EMAIL = "crossref-contact@example.invalid"
 
@@ -206,7 +205,7 @@ async def test_reader_tools_injects_contact_without_real_network(
     response = _response(200, b'{"message":{"items":[]}}')
 
     monkeypatch.setattr(
-        f"{_TOOLS_MOD}.settings",
+        "app.config.settings",
         SimpleNamespace(crossref_contact_email=_CONTACT_EMAIL),
     )
 
