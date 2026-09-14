@@ -74,8 +74,7 @@ jobs:
               - 'backend/pyproject.toml'
               - 'backend/uv.lock'
             bootstrap_access:
-              - 'infra/aws/bootstrap-access/**'
-              - 'infra/aws/bootstrap/**'
+              - 'infra/aws/**'
             frontend:
               - 'frontend/**'
             ci:
@@ -140,13 +139,19 @@ jobs:
           unzip -o -q "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/tf"
           echo "$RUNNER_TEMP/tf" >> "$GITHUB_PATH"
 
-      - name: Validate and test bootstrap access without AWS credentials
+      - name: Validate and test AWS infrastructure without AWS credentials
         run: |
           set -euo pipefail
-          terraform fmt -check -recursive
-          terraform init -backend=false -input=false -lockfile=readonly
-          terraform validate
-          terraform test -no-color
+          terraform fmt -check -recursive ..
+          for module in . .. ../bootstrap; do
+            (
+              cd "$module"
+              terraform init -backend=false -input=false -lockfile=readonly
+              terraform validate
+              terraform test -no-color
+            )
+          done
+          python3 -m unittest discover -s ../scripts -p 'test_*.py' -v
 
   aws-smoke:
     name: AWS smoke (unit + Terraform mock)

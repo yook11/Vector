@@ -37,7 +37,7 @@ locals {
   ]
   outbox_service_roles = {
     Lambda = {
-      arns = [
+      arns = concat(local.backfill_lambda_role_arns, [
         "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda",
         local.embedding_consumer_role_arn,
         local.assessment_consumer_role_arn,
@@ -46,11 +46,11 @@ locals {
         local.completion_consumer_role_arn,
         local.curation_outbox_relay_role_arn,
         local.completion_outbox_relay_role_arn,
-      ]
+      ])
       service = "lambda.amazonaws.com"
     }
     Scheduler = {
-      arns    = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"]
+      arns    = concat(local.backfill_scheduler_role_arns, [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"])
       service = "scheduler.amazonaws.com"
     }
   }
@@ -173,7 +173,7 @@ locals {
   ]
   inline_boundary_pairing_statements = [
     for key, statement in local.boundary_pairing_statements_by_group : statement
-    if !contains(setunion(local.outbox_boundary_groups, local.assessment_boundary_groups, local.curation_boundary_groups, local.completion_boundary_groups, toset(["EmbeddingConsumerLambda"])), key)
+    if !contains(setunion(local.outbox_boundary_groups, local.assessment_boundary_groups, local.curation_boundary_groups, local.completion_boundary_groups, toset(keys(local.backfill_role_boundary_groups)), toset(["EmbeddingConsumerLambda"])), key)
   ]
 
   # CI が assume できるロール。name は「何をするロールか」で付ける
@@ -357,6 +357,8 @@ resource "aws_iam_role_policy" "apply" {
     aws_iam_role_policy_attachment.apply_assessment_consumer,
     aws_iam_role_policy_attachment.apply_curation_consumer,
     aws_iam_role_policy_attachment.apply_completion_consumer,
+    aws_iam_role_policy_attachment.apply_backfill,
+    aws_iam_role_policy_attachment.apply_role_creation,
   ]
 
   name = "terraform-apply"
@@ -469,45 +471,7 @@ resource "aws_iam_role_policy" "apply" {
         }
       },
 
-      # --- ここから Deny。boundary はこの 6 点が揃って初めて構造になる ---
-
-      # 1. 想定した boundary 以外でのロール作成を拒否する。
-      #
-      # boundary を用途別に分けたので、ここは許可リストになる。リストに
-      # 載せた時点で「CI はこの中から選べる」という意味になり、用途の違う天井
-      # (task role に execution の天井など) を選べてしまう。それを防ぐのが 1b + 1c。
-      #
-      # 1b / 1c があれば CreateRole については冗長だが、iam:CreateUser を
-      # 押さえているのと、対応表を間違えても「boundary 無しは通さない」を
-      # 独立に保証するので残す。
-      {
-        Sid    = "DenyRoleCreationWithoutBoundary"
-        Effect = "Deny"
-        Action = [
-          "iam:CreateRole",
-          "iam:CreateUser",
-        ]
-        Resource = "*"
-        Condition = {
-          StringNotEquals = {
-            "iam:PermissionsBoundary" = [for group in local.role_boundary_groups : group.boundary]
-          }
-        }
-      },
-      # 1b. 対応表に無い名前のロールを作らせない。
-      #
-      # これが無いと、別名のロールを作って用途別 boundary をすり抜けられる。
-      # 1c は「このロールにはこの天井」を縛るだけなので、表に載っていない名前は
-      # どの Deny にも当たらず素通りしてしまう。
-      #
-      # 段を増やすときは boundary.tf の対応表を先に apply する。忘れると
-      # ここで CreateRole が落ちる (天井を決めずに段が増えないための順序)。
-      {
-        Sid         = "DenyRoleCreationOutsideKnownRoles"
-        Effect      = "Deny"
-        Action      = "iam:CreateRole"
-        NotResource = local.managed_role_arns
-      },
+      # ロール作成制約は専用policyで保持する。
       # 2. 作った後で boundary を外す / 差し替えるのを拒否する。
       {
         Sid    = "DenyBoundaryTampering"
