@@ -125,3 +125,39 @@ def test_invalid_message_id_reports_record_position(invalid_record):
         SqsRecordBatch.from_lambda_event({"Records": messages})
 
     assert caught.value.record_index == 1
+
+
+@pytest.mark.parametrize(
+    "handle,reason",
+    [
+        (None, SqsInputReason.INVALID_TYPE),
+        (123, SqsInputReason.INVALID_TYPE),
+        ("", SqsInputReason.EMPTY_RECEIPT_HANDLE),
+        (" \t", SqsInputReason.EMPTY_RECEIPT_HANDLE),
+    ],
+)
+def test_receipt_handle_validation_is_deferred(handle, reason):
+    """受信情報の不正はバッチ生成時でなく操作情報の取得時に拒否する。"""
+    batch = SqsRecordBatch.from_lambda_event(
+        {"Records": [{"messageId": "id", "receiptHandle": handle}]}
+    )
+    with pytest.raises(SqsInputError) as caught:
+        batch.records[0].receipt_handle_text()
+    assert caught.value.reason is reason
+    assert caught.value.field == "receiptHandle"
+
+
+def test_missing_receipt_handle_is_distinct_from_invalid_type():
+    """receiptHandleの欠落は型不正と区別する。"""
+    batch = SqsRecordBatch.from_lambda_event({"Records": [{"messageId": "id"}]})
+    with pytest.raises(SqsInputError) as caught:
+        batch.records[0].receipt_handle_text()
+    assert caught.value.reason is SqsInputReason.MISSING_REQUIRED_FIELD
+
+
+def test_receipt_handle_preserves_original_text():
+    """AWSから渡された操作情報の有効な文字列を加工しない。"""
+    batch = SqsRecordBatch.from_lambda_event(
+        {"Records": [{"messageId": "id", "receiptHandle": " handle "}]}
+    )
+    assert batch.records[0].receipt_handle_text() == " handle "

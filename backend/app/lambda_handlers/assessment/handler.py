@@ -1,7 +1,6 @@
 """Assessment Lambdaの初期化・バッチ検証・逐次処理・応答と終了を進める。"""
 
 import asyncio
-from typing import TypedDict
 
 import structlog
 
@@ -19,16 +18,12 @@ from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
 from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
+from app.lambda_handlers.sqs.response import (
+    SqsBatchFailureResponse,
+    SqsBatchItemIdentifier,
+)
 
 logger = structlog.get_logger(__name__)
-
-
-class SqsBatchItemIdentifier(TypedDict):
-    itemIdentifier: str
-
-
-class SqsBatchFailureResponse(TypedDict):
-    batchItemFailures: list[SqsBatchItemIdentifier]
 
 
 def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:

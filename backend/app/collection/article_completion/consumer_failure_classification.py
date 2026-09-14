@@ -16,6 +16,7 @@ from app.collection.article_completion.errors import (
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
+from app.collection.article_completion.retry_at import RetryAt
 from app.collection.domain.analyzable_article import AnalyzableArticleDefect
 from app.http.destination_policy import HostBlockedError
 from app.http.errors import HttpResponseError, HttpTransportError
@@ -27,7 +28,7 @@ class RetryArticleCompletion:
     """補完を再試行する判断と、追加で待機が必要な時刻を表す。"""
 
     code: str
-    retry_at: datetime | None = None
+    retry_at: RetryAt | None = None
     """再試行可能なUTC日時で、指定なし・無効・0秒・期限経過済みならNone。"""
     requires_investigation: bool = False
 
@@ -40,7 +41,7 @@ class CloseArticleCompletion:
     requires_investigation: bool = False
 
 
-def _retry_at(exc: HttpResponseError, *, now: datetime) -> datetime | None:
+def _retry_at(exc: HttpResponseError, *, now: datetime) -> RetryAt | None:
     """有効な未来の待機時刻をUTCで返し、指定なし・無効・0秒・期限経過済みならNoneを返す。"""
     value = exc.retry_after
     if value is None or not (value := value.strip()):
@@ -59,7 +60,7 @@ def _retry_at(exc: HttpResponseError, *, now: datetime) -> datetime | None:
             candidate = candidate.astimezone(UTC)
     except (ValueError, TypeError, OverflowError):
         return None
-    return candidate if candidate > now else None
+    return RetryAt(candidate) if candidate > now else None
 
 
 def classify_completion_failure(

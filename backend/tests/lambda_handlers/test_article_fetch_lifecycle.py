@@ -163,6 +163,7 @@ async def test_sqs_initialization_failure_releases_fetch_resources(
     monkeypatch.setattr(composition, "Session", Mock(return_value=session))
     monkeypatch.setattr(composition, "logger", resources.logger)
     settings = CompletionConsumerSettings(
+        sqs_article_completion_queue_url="https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion",
         database_url="postgresql+asyncpg://vector_collect@db.invalid/vector?sslmode=require",
         aws_region="ap-northeast-1",
     )
@@ -190,6 +191,7 @@ async def test_sqs_cleanup_failure_preserves_result_and_releases_database(
     monkeypatch.setattr(composition, "logger", resources.logger)
     resources.logger.warning.side_effect = RuntimeError("private logging")
     settings = CompletionConsumerSettings(
+        sqs_article_completion_queue_url="https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion",
         database_url="postgresql+asyncpg://vector_collect@db.invalid/vector?sslmode=require",
         aws_region="ap-northeast-1",
     )
@@ -229,7 +231,9 @@ async def run():
         assert callable(resources.consumer.consume)
         assert callable(resources.sqs_client.change_message_visibility)
 asyncio.run(run())
-assert handler({"Records": []}, None) == {"batchItemFailures": []}
+from types import SimpleNamespace
+context = SimpleNamespace(get_remaining_time_in_millis=lambda: 600_000)
+assert handler({"Records": []}, context) == {"batchItemFailures": []}
 assert "app.config" not in sys.modules
 assert not any(m.startswith("app.queue") for m in sys.modules)
 """,
@@ -239,6 +243,7 @@ assert not any(m.startswith("app.queue") for m in sys.modules)
             "ENV": "production",
             "DATABASE_URL": "postgresql+asyncpg://vector_collect@db.invalid/vector?sslmode=verify-full",
             "AWS_REGION": "ap-northeast-1",
+            "SQS_ARTICLE_COMPLETION_QUEUE_URL": "https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion",
             "EGRESS_PROXY_URL": "http://proxy.vector.internal:3128",
             "AWS_ACCESS_KEY_ID": "test-only-access-key",
             "AWS_SECRET_ACCESS_KEY": "test-only-secret-key",

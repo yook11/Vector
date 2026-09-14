@@ -17,8 +17,9 @@ class CompletionConsumerSettings(DatabaseConnectionSettings):
     aws_region: str = Field(min_length=1)
     database_url: str = Field(repr=False)
     db_iam_auth: bool = True
+    sqs_article_completion_queue_url: str = Field(min_length=1)
 
-    @field_validator("aws_region")
+    @field_validator("aws_region", "sqs_article_completion_queue_url")
     @classmethod
     def _reject_blank(cls, value: str) -> str:
         if not value.strip():
