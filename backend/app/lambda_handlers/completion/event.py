@@ -2,10 +2,10 @@
 
 import json
 
-from app.analysis.curation.events import ArticleCuratedSignalEvent
+from app.collection.article_acquisition.events import IncompleteArticleRecordedEvent
 
 
-class AssessmentMessageJsonInvalidError(Exception):
+class CompletionMessageJsonInvalidError(Exception):
     """SQS本文をJSONとして解析できない。"""
 
 
@@ -22,10 +22,12 @@ def _reject_constant(value: str) -> object:
     raise ValueError("nonstandard_json_constant")
 
 
-def parse_curated_signal_event(message_body: str) -> ArticleCuratedSignalEvent:
+def parse_incomplete_article_recorded_event(
+    message_body: str,
+) -> IncompleteArticleRecordedEvent:
     """JSON解析後の入力をイベント型の検証入口へ渡す。"""
     if not isinstance(message_body, str):
-        raise AssessmentMessageJsonInvalidError()
+        raise CompletionMessageJsonInvalidError()
     try:
         data = json.loads(
             message_body,
@@ -35,6 +37,6 @@ def parse_curated_signal_event(message_body: str) -> ArticleCuratedSignalEvent:
     except (ValueError, RecursionError):
         pass
     else:
-        return ArticleCuratedSignalEvent.from_input(data)
+        return IncompleteArticleRecordedEvent.from_input(data)
     # 入力を含む解析例外をcontextに残さないよう、exceptの外で送出する。
-    raise AssessmentMessageJsonInvalidError()
+    raise CompletionMessageJsonInvalidError()

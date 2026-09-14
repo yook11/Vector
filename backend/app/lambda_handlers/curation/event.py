@@ -1,42 +1,12 @@
-"""SQS本文を検証し、共通記事完成イベントへ復元する。"""
+"""SQS本文をJSONとして解析し、工程のイベント契約へ渡す。"""
 
 import json
-from enum import StrEnum
-from typing import ClassVar
 
-from app.collection.events import (
-    AnalyzableArticleCreatedEvent,
-    AnalyzableEventValidationError,
-    AnalyzableEventValidationIssue,
-)
-from app.logfire.exceptions import VectorDomainError
+from app.collection.events import AnalyzableArticleCreatedEvent
 
 
-class CurationEventInvalidReason(StrEnum):
-    """受信本文をイベントとして扱えない理由。"""
-
-    INVALID_JSON = "invalid_json"
-    INVALID_ENVELOPE = "invalid_envelope"
-    UNSUPPORTED_EVENT_TYPE = "unsupported_event_type"
-    UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
-    INVALID_PAYLOAD = "invalid_payload"
-
-
-class CurationEventInvalidError(VectorDomainError):
-    """本文を保持せず、入力不正の理由と安全な検証詳細を返す。"""
-
-    CODE: ClassVar[str] = "curation_event_invalid"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "issues")
-
-    def __init__(
-        self,
-        *,
-        reason: CurationEventInvalidReason,
-        issues: tuple[AnalyzableEventValidationIssue, ...] = (),
-    ) -> None:
-        super().__init__()
-        self.reason = reason
-        self.issues = issues
+class CurationMessageJsonInvalidError(Exception):
+    """SQS本文をJSONとして解析できない。"""
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -55,10 +25,9 @@ def _reject_constant(value: str) -> object:
 def parse_analyzable_article_created_event(
     message_body: str,
 ) -> AnalyzableArticleCreatedEvent:
-    """JSONの解析と契約検証を行い、失敗時は安全な理由だけを伝える。"""
+    """JSON解析後の入力をイベント型の検証入口へ渡す。"""
     if not isinstance(message_body, str):
-        raise CurationEventInvalidError(reason=CurationEventInvalidReason.INVALID_JSON)
-    issues: tuple[AnalyzableEventValidationIssue, ...] = ()
+        raise CurationMessageJsonInvalidError()
     try:
         data = json.loads(
             message_body,
@@ -66,13 +35,8 @@ def parse_analyzable_article_created_event(
             parse_constant=_reject_constant,
         )
     except (ValueError, RecursionError):
-        reason = CurationEventInvalidReason.INVALID_JSON
+        pass
     else:
-        try:
-            return AnalyzableArticleCreatedEvent.from_input(data)
-        except AnalyzableEventValidationError as exc:
-            failure = exc.failure
-            reason = CurationEventInvalidReason(failure.reason)
-            issues = failure.issues
-    # 検証例外のcontextに入力本文を残さないよう、exceptの外で送出する。
-    raise CurationEventInvalidError(reason=reason, issues=issues)
+        return AnalyzableArticleCreatedEvent.from_input(data)
+    # 入力を含む解析例外をcontextに残さないよう、exceptの外で送出する。
+    raise CurationMessageJsonInvalidError()

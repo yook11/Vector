@@ -8,7 +8,7 @@ import pytest
 
 from app.analysis.curation.events import (
     ArticleCuratedSignalEvent,
-    CuratedEventValidationError,
+    CuratedEventInvalidError,
 )
 from app.lambda_handlers.assessment.event import parse_curated_signal_event
 from app.outbox.publishing.curated_signal import build_curated_signal_message
@@ -45,14 +45,14 @@ def test_invalid_event_preserves_safe_validation_details():
         occurred_at=datetime.fromisoformat("2026-09-12T03:00:00Z"),
         payload={"curation_id": "private-input", "analyzable_article_id": 456},
     )
-    with pytest.raises(CuratedEventValidationError) as validation:
+    with pytest.raises(CuratedEventInvalidError) as validation:
         ArticleCuratedSignalEvent.from_input(asdict(envelope))
 
     with pytest.raises(PublishEventInvalidError) as caught:
         build_curated_signal_message(envelope)
 
-    assert caught.value.reason.value == validation.value.failure.reason.value
-    assert caught.value.issues == validation.value.failure.issues
+    assert caught.value.reason.value == validation.value.invalid.reason.value
+    assert caught.value.issues == validation.value.invalid.issues
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     assert "private-input" not in str(caught.value)

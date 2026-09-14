@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from app.http.failure import HttpTransportFailure
 
 
-class EventValidationIssue(Protocol):
+class EventInvalidIssue(Protocol):
     """イベント固有の検証詳細を固定の項目・理由として受け取る。"""
 
     @property
@@ -144,7 +144,7 @@ class PublishEventInvalidError(PublishError):
         self,
         *,
         reason: PublishEventInvalidReason,
-        issues: tuple[EventValidationIssue, ...] = (),
+        issues: tuple[EventInvalidIssue, ...] = (),
     ) -> None:
         super().__init__()
         self.reason = reason

@@ -6,9 +6,11 @@ from uuid import UUID
 
 import pytest
 
-from app.analysis.assessment.events import ArticleAssessedInScopeEvent
+from app.analysis.assessment.events import (
+    ArticleAssessedInScopeEvent,
+    AssessedEventInvalidError,
+)
 from app.lambda_handlers.embedding.event import (
-    EmbeddingEventInvalidError,
     parse_assessed_in_scope_event,
 )
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
@@ -98,7 +100,7 @@ def test_sender_and_receiver_share_validation_details(data, changes):
     from app.outbox.publishing.errors import PublishEventInvalidError
 
     data.update(changes)
-    with pytest.raises(EmbeddingEventInvalidError) as received:
+    with pytest.raises(AssessedEventInvalidError) as received:
         parse_assessed_in_scope_event(json.dumps(data))
     with pytest.raises(PublishEventInvalidError) as caught:
         build_assessed_in_scope_message(
@@ -111,7 +113,7 @@ def test_sender_and_receiver_share_validation_details(data, changes):
             )
         )
     sent = caught.value
-    assert sent.reason.value == received.value.reason.value
-    assert sent.issues == received.value.issues
+    assert sent.reason.value == received.value.invalid.reason.value
+    assert sent.issues == received.value.invalid.issues
     assert sent.__cause__ is None and sent.__context__ is None
     assert "private-" not in str(sent)

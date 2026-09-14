@@ -1,42 +1,12 @@
-"""SQS本文を検証し、配送情報を含まない対象内判定イベントへ復元する。"""
+"""SQS本文をJSONとして解析し、工程のイベント契約へ渡す。"""
 
 import json
-from enum import StrEnum
-from typing import ClassVar
 
-from app.analysis.assessment.events import (
-    ArticleAssessedInScopeEvent,
-    AssessedEventValidationError,
-    AssessedEventValidationIssue,
-)
-from app.logfire.exceptions import VectorDomainError
+from app.analysis.assessment.events import ArticleAssessedInScopeEvent
 
 
-class EmbeddingEventInvalidReason(StrEnum):
-    """受信本文をイベントとして扱えない理由。"""
-
-    INVALID_JSON = "invalid_json"
-    INVALID_ENVELOPE = "invalid_envelope"
-    UNSUPPORTED_EVENT_TYPE = "unsupported_event_type"
-    UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
-    INVALID_PAYLOAD = "invalid_payload"
-
-
-class EmbeddingEventInvalidError(VectorDomainError):
-    """本文を保持せず、入力不正の理由と安全な検証詳細を返す。"""
-
-    CODE: ClassVar[str] = "embedding_event_invalid"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "issues")
-
-    def __init__(
-        self,
-        *,
-        reason: EmbeddingEventInvalidReason,
-        issues: tuple[AssessedEventValidationIssue, ...] = (),
-    ) -> None:
-        super().__init__()
-        self.reason = reason
-        self.issues = issues
+class EmbeddingMessageJsonInvalidError(Exception):
+    """SQS本文をJSONとして解析できない。"""
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -53,12 +23,9 @@ def _reject_constant(value: str) -> object:
 
 
 def parse_assessed_in_scope_event(message_body: str) -> ArticleAssessedInScopeEvent:
-    """JSONの解析と契約検証を行い、失敗時は安全な理由だけを伝える。"""
+    """JSON解析後の入力をイベント型の検証入口へ渡す。"""
     if not isinstance(message_body, str):
-        raise EmbeddingEventInvalidError(
-            reason=EmbeddingEventInvalidReason.INVALID_JSON
-        )
-    issues: tuple[AssessedEventValidationIssue, ...] = ()
+        raise EmbeddingMessageJsonInvalidError()
     try:
         data = json.loads(
             message_body,
@@ -66,13 +33,8 @@ def parse_assessed_in_scope_event(message_body: str) -> ArticleAssessedInScopeEv
             parse_constant=_reject_constant,
         )
     except (ValueError, RecursionError):
-        reason = EmbeddingEventInvalidReason.INVALID_JSON
+        pass
     else:
-        try:
-            return ArticleAssessedInScopeEvent.from_input(data)
-        except AssessedEventValidationError as exc:
-            failure = exc.failure
-            reason = EmbeddingEventInvalidReason(failure.reason)
-            issues = failure.issues
-    # 検証例外のcontextに入力本文を残さないよう、exceptの外で送出する。
-    raise EmbeddingEventInvalidError(reason=reason, issues=issues)
+        return ArticleAssessedInScopeEvent.from_input(data)
+    # 入力を含む解析例外をcontextに残さないよう、exceptの外で送出する。
+    raise EmbeddingMessageJsonInvalidError()

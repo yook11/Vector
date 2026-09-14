@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from app.collection.events import (
     AnalyzableArticleCreated,
     AnalyzableArticleCreatedEvent,
-    AnalyzableEventValidationError,
+    AnalyzableEventInvalidError,
 )
 
 pytestmark = pytest.mark.unit
@@ -52,11 +52,11 @@ def test_from_input_accepts_typed_values():
 def test_rejection_does_not_keep_input_or_validation_error():
     """不正なIDを固定の詳細へ変換し、入力値や元の検証例外を残さない。"""
     data = {**RECEIVED_STRINGS, "event_id": "private-id"}
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(data)
     error = caught.value
-    assert error.failure.reason.value == "invalid_envelope"
-    assert [(i.field.value, i.code.value) for i in error.failure.issues] == [
+    assert error.invalid.reason.value == "invalid_envelope"
+    assert [(i.field.value, i.code.value) for i in error.invalid.issues] == [
         ("event_id", "invalid_value")
     ]
     assert error.__cause__ is None and error.__context__ is None
@@ -66,7 +66,7 @@ def test_rejection_does_not_keep_input_or_validation_error():
 
 def test_missing_envelope_field_is_invalid_envelope():
     """イベントIDの欠落を外側の構造不正とし、欠けた項目を示す。"""
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {
                 "event_type": "article.analyzable_created",
@@ -75,81 +75,81 @@ def test_missing_envelope_field_is_invalid_envelope():
                 "payload": {"analyzable_article_id": 3},
             }
         )
-    assert caught.value.failure.reason.value == "invalid_envelope"
-    assert [(i.field.value, i.code.value) for i in caught.value.failure.issues] == [
+    assert caught.value.invalid.reason.value == "invalid_envelope"
+    assert [(i.field.value, i.code.value) for i in caught.value.invalid.issues] == [
         ("event_id", "missing_required_field")
     ]
 
 
 def test_naive_occurred_at_is_invalid():
     """タイムゾーンのない日時を拒否し、日時の値が不正だと示す。"""
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {**RECEIVED_STRINGS, "occurred_at": "2026-09-12T00:00:00"}
         )
-    assert caught.value.failure.reason.value == "invalid_envelope"
-    assert [(i.field.value, i.code.value) for i in caught.value.failure.issues] == [
+    assert caught.value.invalid.reason.value == "invalid_envelope"
+    assert [(i.field.value, i.code.value) for i in caught.value.invalid.issues] == [
         ("occurred_at", "invalid_value")
     ]
 
 
 def test_unsupported_event_type():
     """別種別のイベントを拒否し、未対応のイベント種別として示す。"""
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {**RECEIVED_STRINGS, "event_type": "private-type"}
         )
-    assert caught.value.failure.reason.value == "unsupported_event_type"
-    assert [(i.field.value, i.code.value) for i in caught.value.failure.issues] == [
+    assert caught.value.invalid.reason.value == "unsupported_event_type"
+    assert [(i.field.value, i.code.value) for i in caught.value.invalid.issues] == [
         ("event_type", "unsupported_event_type")
     ]
 
 
 def test_unsupported_schema_version():
     """未対応の版を拒否し、バージョンの不一致として示す。"""
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {**RECEIVED_STRINGS, "schema_version": 2}
         )
-    assert caught.value.failure.reason.value == "unsupported_schema_version"
-    assert [(i.field.value, i.code.value) for i in caught.value.failure.issues] == [
+    assert caught.value.invalid.reason.value == "unsupported_schema_version"
+    assert [(i.field.value, i.code.value) for i in caught.value.invalid.issues] == [
         ("schema_version", "unsupported_schema_version")
     ]
 
 
 def test_payload_id_violation_is_invalid_payload():
     """正整数でないanalyzable_article_idをpayload不正とし、対象のID項目を示す。"""
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {
                 **RECEIVED_STRINGS,
                 "payload": {"analyzable_article_id": 0},
             }
         )
-    assert caught.value.failure.reason.value == "invalid_payload"
-    assert [(i.field.value, i.code.value) for i in caught.value.failure.issues] == [
+    assert caught.value.invalid.reason.value == "invalid_payload"
+    assert [(i.field.value, i.code.value) for i in caught.value.invalid.issues] == [
         ("payload.analyzable_article_id", "invalid_value")
     ]
 
 
 def test_missing_payload_id_is_not_envelope_failure():
     """payload内のID欠落を、外側の構造不正と区別して示す。"""
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {
                 **RECEIVED_STRINGS,
                 "payload": {},
             }
         )
-    assert caught.value.failure.reason.value == "invalid_payload"
-    assert [(i.field.value, i.code.value) for i in caught.value.failure.issues] == [
+    assert caught.value.invalid.reason.value == "invalid_payload"
+    assert [(i.field.value, i.code.value) for i in caught.value.invalid.issues] == [
         ("payload.analyzable_article_id", "missing_required_field")
     ]
 
 
 def test_unknown_keys_are_grouped_without_leaking_names():
     """未知キー名を公開せず親項目へ集約し、同じ詳細を重複させない。"""
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {
                 **RECEIVED_STRINGS,
@@ -162,7 +162,7 @@ def test_unknown_keys_are_grouped_without_leaking_names():
                 },
             }
         )
-    failure = caught.value.failure
+    failure = caught.value.invalid
     assert failure.reason.value == "invalid_envelope"
     assert {(i.field.value, i.code.value) for i in failure.issues} == {
         ("event", "unknown_field"),
@@ -174,7 +174,7 @@ def test_unknown_keys_are_grouped_without_leaking_names():
 
 def test_overlapping_violations_keep_envelope_reason_and_all_details():
     """違反が重なった場合は構造不正を優先し、個々の詳細も保持する。"""
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {
                 **RECEIVED_STRINGS,
@@ -184,8 +184,8 @@ def test_overlapping_violations_keep_envelope_reason_and_all_details():
                 "payload": {"analyzable_article_id": 0},
             }
         )
-    assert caught.value.failure.reason.value == "invalid_envelope"
-    assert [(i.field.value, i.code.value) for i in caught.value.failure.issues] == [
+    assert caught.value.invalid.reason.value == "invalid_envelope"
+    assert [(i.field.value, i.code.value) for i in caught.value.invalid.issues] == [
         ("event_type", "unsupported_event_type"),
         ("schema_version", "unsupported_schema_version"),
         ("occurred_at", "invalid_value"),
@@ -195,11 +195,11 @@ def test_overlapping_violations_keep_envelope_reason_and_all_details():
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "3", None])
 def test_payload_requires_strict_positive_integer(value):
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
             {**RECEIVED_STRINGS, "payload": {"analyzable_article_id": value}}
         )
-    assert caught.value.failure.reason.value == "invalid_payload"
+    assert caught.value.invalid.reason.value == "invalid_payload"
 
 
 @pytest.mark.parametrize(
@@ -212,9 +212,9 @@ def test_payload_requires_strict_positive_integer(value):
     ],
 )
 def test_envelope_does_not_coerce_invalid_types(field, value):
-    with pytest.raises(AnalyzableEventValidationError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input({**RECEIVED_STRINGS, field: value})
-    assert caught.value.failure.reason.value == "invalid_envelope"
+    assert caught.value.invalid.reason.value == "invalid_envelope"
 
 
 def test_event_and_payload_are_immutable_and_serialize_in_utc():

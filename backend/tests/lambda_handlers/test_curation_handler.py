@@ -439,3 +439,49 @@ def test_ready_build_rejection_logs_only_its_reason(wiring, reason):
     fields = wiring.log.info.call_args.kwargs
     assert fields["reason"] == "ready_build_rejected"
     assert fields["rejection_code"] == reason.value
+
+
+def test_contract_failure_log_contains_only_declared_details(wiring):
+    """工程の検証詳細を記録し、未知項目名や本文をログへ出さない。"""
+    data = json.loads(valid_body())
+    data["payload"]["private-field"] = "private-value"
+    module.handler(
+        {
+            "Records": [
+                {
+                    "messageId": "invalid",
+                    "body": json.dumps(data),
+                    "receiptHandle": "private-receipt",
+                }
+            ]
+        },
+        None,
+    )
+
+    wiring.log.warning.assert_called_once_with(
+        "curation_message_input_invalid",
+        message_id="invalid",
+        reason="invalid_payload",
+        issues=[{"field": "payload", "code": "unknown_field"}],
+    )
+
+
+def test_validation_log_failure_preserves_redelivery(wiring):
+    """JSON・イベント検証のログ障害でも再配信対象を維持する。"""
+    wiring.log.warning.side_effect = RuntimeError("private-log")
+    data = json.loads(valid_body())
+    data["schema_version"] = 2
+    messages = [
+        {"messageId": "json", "body": "private-json"},
+        {"messageId": "event", "body": json.dumps(data)},
+        {"messageId": "following", "body": valid_body()},
+    ]
+
+    response = module.handler({"Records": messages}, None)
+
+    assert response == {
+        "batchItemFailures": [
+            {"itemIdentifier": "json"},
+            {"itemIdentifier": "event"},
+        ]
+    }

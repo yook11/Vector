@@ -9,11 +9,10 @@ import pytest
 from app.collection.events import (
     AnalyzableArticleCreated,
     AnalyzableArticleCreatedEvent,
-    AnalyzableEventValidationError,
+    AnalyzableEventInvalidError,
 )
 from app.lambda_handlers.curation.event import (
-    CurationEventInvalidError,
-    CurationEventInvalidReason,
+    CurationMessageJsonInvalidError,
     parse_analyzable_article_created_event,
 )
 
@@ -56,12 +55,9 @@ def test_parser_returns_whole_event_and_consumer_payload(data):
 )
 def test_invalid_json_is_rejected_without_retaining_body(body):
     """非文字列・壊れたJSON・重複キー・非標準定数を、本文を残さず拒否する。"""
-    with pytest.raises(CurationEventInvalidError) as caught:
+    with pytest.raises(CurationMessageJsonInvalidError) as caught:
         parse_analyzable_article_created_event(body)
     error = caught.value
-    assert error.CODE == "curation_event_invalid"
-    assert error.reason is CurationEventInvalidReason.INVALID_JSON
-    assert error.issues == ()
     assert error.__cause__ is None and error.__context__ is None
     assert "private-" not in "".join(traceback.format_exception(error))
 
@@ -70,17 +66,16 @@ def test_deep_json_is_reported_as_invalid_json():
     """実際に深くネストした本文の解析失敗を、入力を持たないJSON不正へ変換する。"""
     depth = 10_000
     body = "[" * depth + "0" + "]" * depth
-    with pytest.raises(CurationEventInvalidError) as caught:
+    with pytest.raises(CurationMessageJsonInvalidError) as caught:
         parse_analyzable_article_created_event(body)
-    assert caught.value.reason is CurationEventInvalidReason.INVALID_JSON
     assert caught.value.__cause__ is None and caught.value.__context__ is None
 
 
 def test_valid_json_with_wrong_root_uses_event_contract():
     """JSONとして正しい配列は解析不正にせず、共有契約の構造不正として返す。"""
-    with pytest.raises(CurationEventInvalidError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         parse_analyzable_article_created_event("[]")
-    assert caught.value.reason is CurationEventInvalidReason.INVALID_ENVELOPE
+    assert caught.value.invalid.reason == "invalid_envelope"
 
 
 @pytest.mark.parametrize(
@@ -97,14 +92,13 @@ def test_shared_rejection_preserves_reason_and_details_without_exception_chain(
 ):
     """実共有検証の理由と詳細をそのまま引き継ぎ、元の検証例外を保持しない。"""
     data.update(changes)
-    with pytest.raises(AnalyzableEventValidationError) as shared:
+    with pytest.raises(AnalyzableEventInvalidError) as shared:
         AnalyzableArticleCreatedEvent.from_input(data)
-    with pytest.raises(CurationEventInvalidError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         parse_analyzable_article_created_event(json.dumps(data))
     error = caught.value
-    assert error.reason.value == shared.value.failure.reason.value
-    assert error.issues == shared.value.failure.issues
-    assert error.SAFE_ATTRS == ("CODE", "reason", "issues")
+    assert error.invalid.reason.value == shared.value.invalid.reason.value
+    assert error.invalid.issues == shared.value.invalid.issues
     assert error.__cause__ is None and error.__context__ is None
     assert "private-" not in str(error)
     assert "private-" not in "".join(traceback.format_exception(error))
@@ -123,3 +117,17 @@ def test_unexpected_failure_and_process_exit_pass_through(data, monkeypatch, ori
     with pytest.raises(type(original)) as caught:
         parse_analyzable_article_created_event(json.dumps(data))
     assert caught.value is original
+
+
+def test_contract_failure_is_not_wrapped(data, monkeypatch):
+    """イベントの検証例外を配送側で再構築せず同じ例外で伝える。"""
+    with pytest.raises(AnalyzableEventInvalidError) as original:
+        AnalyzableArticleCreatedEvent.from_input({})
+
+    def reject(_data):
+        raise original.value
+
+    monkeypatch.setattr(AnalyzableArticleCreatedEvent, "from_input", reject)
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
+        parse_analyzable_article_created_event(json.dumps(data))
+    assert caught.value is original.value

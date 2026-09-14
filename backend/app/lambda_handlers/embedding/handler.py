@@ -5,10 +5,11 @@ from typing import TypedDict
 
 import structlog
 
+from app.analysis.assessment.events import AssessedEventInvalidError
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
 from app.lambda_handlers.embedding.composition import open_embedding_consumer
 from app.lambda_handlers.embedding.event import (
-    EmbeddingEventInvalidError,
+    EmbeddingMessageJsonInvalidError,
     parse_assessed_in_scope_event,
 )
 from app.lambda_handlers.embedding.failure_recorder import (
@@ -69,7 +70,13 @@ async def _run_embedding(
 
             try:
                 assessed_event = parse_assessed_in_scope_event(message_body)
-            except EmbeddingEventInvalidError as exc:
+            except EmbeddingMessageJsonInvalidError:
+                failure_recorder.record_invalid_json(message_id=record.message_id)
+                failed_items.append(
+                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                )
+                continue
+            except AssessedEventInvalidError as exc:
                 failure_recorder.record_invalid_event(exc, message_id=record.message_id)
                 failed_items.append(
                     SqsBatchItemIdentifier(itemIdentifier=record.message_id)

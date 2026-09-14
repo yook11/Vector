@@ -12,6 +12,8 @@ Better Auth CLIは既存のfrontend developmentイメージと同じ版をnpxで
 ここには、ローカルに用意した実DB環境でしか確認できないテストを置く。
 DB不要の接続URL・準備処理の単体テストは通常の`tests/`に置く。
 
+テストファイル追加時は既存のbasenameと`__init__.py`の有無を確認し、packageでない工程ディレクトリ間では固有の工程名をファイル名に含める。限定実行の前に`cd backend && uv run pytest local_tests/ --collect-only -q`で全体の収集を確認する。
+
 ```text
 local_tests/
 ├── database.py                   共通DBの構築・分離
@@ -148,7 +150,7 @@ DBロールとテーブル権限は既存の初期化／migrationを正本とし
 
 ## CompletionのConsumer接続（テストファースト）
 
-`completion/`はConsumer → HTTP取得 → HTML抽出 → 記事構築 → 実DBの確定を対象にする。先行テストへ実装済みの`app.collection.article_completion.consumer`を接続し、実際の抽出・構築・DB確定まで検証する。SQS・Lambdaへの接続は後続とする。
+`completion/`はConsumer → HTTP取得 → HTML抽出 → 記事構築 → 実DBの確定を対象にする。実装済みの`app.collection.article_completion.consumer`を接続し、実際の抽出・構築・DB確定まで検証する。`test_completion_delivery.py`ではSQSイベントを実Lambda handlerへ渡し、同じ確定結果から部分バッチ応答までを確認する。
 
 補完側の`conftest.py`は、テスト専用設定・Collect権限のDB接続・実Consumer・HTTP応答と待機・確定制御のfixtureを組み立てる。DBの作成・分離・破棄は既存の`database.py`と共通fixtureへ任せる。HTTPの差し替えと記録は共通の`local_tests/http.py`を使い、robotsの許可や記事の応答内容は補完側で決める。
 
@@ -156,7 +158,7 @@ fixtureは環境・コンポーネントの準備と寿命の管理に使い、�
 
 イベント処理は「補完不要」「完成の一括確定」「失敗判断とDB状態」の3クラスに分け、行なし／closedと失敗監査障害時の再試行／終了は個別のテストにする。セッション境界ではHTTP待機中の観測タイミングとassertを本文に残す。重複・競合を含む先行17ケースの条件と期待結果を維持し、初回DB照会障害と外部キャンセルの2ケースを追加する。全19ケースが実Consumerの`consume()`を呼び、追加処理不要の理由も確認する。
 
-公開入口は`ArticleCompletionConsumer(session_factory).consume(incomplete_article_id)`とする。戻り値は`CompletionSucceeded`（完成記事IDを保持）、`CompletionNotRequired`（missing・closed・superseded・url_conflictの理由付き）、`CompletionFailed`（元例外を`error`、RetryArticleCompletion / CloseArticleCompletionを`decision`に保持）の3種類として検証する。Consumerは通常の補完失敗を値で返す。これはSQSの受信完了と同じ意味ではなく、配送接続は後続タスクとする。型の配置や内部の分解を固定せず、これらの名前をConsumerモジュールから参照できることを入口の契約にする。
+公開入口は`ArticleCompletionConsumer(session_factory).consume(incomplete_article_id)`とする。戻り値は`CompletionSucceeded`（完成記事IDを保持）、`CompletionNotRequired`（missing・closed・superseded・url_conflictの理由付き）、`CompletionFailed`（元例外を`error`、RetryArticleCompletion / CloseArticleCompletionを`decision`に保持）の3種類として検証する。Consumerは通常の補完失敗を値で返し、配送handlerが再試行判断だけを失敗一覧へ対応付ける。型の配置や内部の分解を固定せず、これらの名前をConsumerモジュールから参照できることを入口の契約にする。
 
 | テスト | 振る舞い |
 |---|---|
@@ -164,8 +166,11 @@ fixtureは環境・コンポーネントの準備と寿命の管理に使い、�
 | test_event_processing.pyの障害ケース | 完成保存の4操作後のロールバックと再処理、closed確定失敗の再試行、失敗監査の障害が元の判断を変えないこと、初回DB障害を対象なしと見なさないこと |
 | test_duplicate_processing.py | 完成後の再受信、成功／closedの4通りの並行競合で先行確定を維持すること |
 | test_session_boundaries.py | HTTP応答待ちでのDB解放と、外部キャンセル時のHTTP・DB資源解放 |
+| test_completion_delivery.py | 混在バッチの保存結果と部分応答、再試行後の完成、closed確定失敗の再配信、完成後の再受信、DBのソースを正とする処理 |
 
-HTTPのみMockTransportで差し替え、抽出・構築・Repositoryは差し替えない。抽出器のキャッシュは各ケースの前後に公式の`trafilatura.meta.reset_caches()`で初期化し、別ケースのサンプルHTMLが重複扱いになることを防ぐ。同一ケース内の重複除去と本番の設定は維持する。DBは共通system_databaseを使い、書き込みはvector_collect、確定後の内容確認はvector_appの別接続で行う。未確定の保存は書き込み接続の許可列（監査id・Outbox event_id）の件数と対象記事の状態で確認する。実SQLエラーはflush後・commit前に発生させる。並行処理はHTTP応答とcommitを制御し、pg_blocking_pidsで実際の競合待機を確認してから先行処理を再開する。SQLの書き方やロック方式自体は固定しない。
+ConsumerのテストはHTTPをMockTransportで差し替え、抽出・構築・Repositoryは差し替えない。DBは共通system_databaseを使い、書き込みはvector_collect、確定後の内容確認はvector_appの別接続で行う。未確定の保存は書き込み接続の許可列（監査id・Outbox event_id）の件数と対象記事の状態で確認する。実SQLエラーはflush後・commit前に発生させる。並行処理はHTTP応答とcommitを制御し、pg_blocking_pidsで実際の競合待機を確認してから先行処理を再開する。SQLの書き方やロック方式自体は固定しない。
+
+配送テストは実handler・設定型・資源管理・Consumer・製品Engineを通し、IAM認証を有効にしてvector_collectへ接続する。署名結果だけを共通`inject_test_db_signer`でローカルDBの認証情報へ置き換え、SQSクライアントとHTTPを外部境界で差し替える。混在バッチでは失敗後の記事も完成することと、本文不正の記事が未変更であることを確認する。既存Consumerテストの分類表や競合・資源管理の保証を配送テストへ複製しない。
 
 HTTP分類・文字コード・構築条件・監査の全属性は部品テストに任せ、同じ条件表を繰り返さない。旧経路の独立した保証は残す。SQS・Lambda・IAM・通知の実通信は今回保証しない。
 

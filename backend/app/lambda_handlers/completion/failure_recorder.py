@@ -1,4 +1,4 @@
-"""Embedding Lambdaの失敗診断を集約し、配送結果と元の例外を維持する。"""
+"""補完配送の診断を入力本文や例外の自由文を含めずに記録する。"""
 
 from __future__ import annotations
 
@@ -9,36 +9,22 @@ from structlog.stdlib import BoundLogger
 from app.audit.error_fields import exception_fqn
 
 if TYPE_CHECKING:
-    from app.analysis.assessment.events import (
-        ArticleAssessedInScopeEvent,
-        AssessedEventInvalidError,
+    from app.collection.article_acquisition.events import (
+        IncompleteArticleEventInvalidError,
+        IncompleteArticleRecordedEvent,
     )
     from app.lambda_handlers.sqs.errors import SqsInputError
 
 
-class EmbeddingLambdaFailureRecorder:
-    """安全な診断項目だけを記録し、再配信と例外伝播は呼び出し元に委ねる。"""
+class CompletionLambdaFailureRecorder:
+    """入力・配送処理の失敗を、診断障害から独立させる。"""
 
     def __init__(self, logger: BoundLogger) -> None:
         self._logger = logger
 
-    def record_initialization_failure(self, stage: str, error: Exception) -> None:
-        self._record(
-            "embedding_initialization_failed",
-            stage=stage,
-            error_class=exception_fqn(error),
-        )
-
-    def record_cleanup_failure(self, resource: str, error: Exception) -> None:
-        self._record(
-            "embedding_resources_cleanup_failed",
-            resource=resource,
-            error_class=exception_fqn(error),
-        )
-
     def record_invalid_sqs_input(self, error: SqsInputError) -> None:
         self._record(
-            "embedding_sqs_input_invalid",
+            "completion_sqs_input_invalid",
             reason=error.reason.value,
             field=error.field,
             record_index=error.record_index,
@@ -46,7 +32,7 @@ class EmbeddingLambdaFailureRecorder:
 
     def record_invalid_body(self, error: SqsInputError, *, message_id: str) -> None:
         self._record(
-            "embedding_message_input_invalid",
+            "completion_message_input_invalid",
             message_id=message_id,
             reason="invalid_body",
             issues=[{"field": "body", "code": error.reason.value}],
@@ -54,17 +40,17 @@ class EmbeddingLambdaFailureRecorder:
 
     def record_invalid_json(self, *, message_id: str) -> None:
         self._record(
-            "embedding_message_input_invalid",
+            "completion_message_input_invalid",
             message_id=message_id,
             reason="invalid_json",
             issues=[],
         )
 
     def record_invalid_event(
-        self, error: AssessedEventInvalidError, *, message_id: str
+        self, error: IncompleteArticleEventInvalidError, *, message_id: str
     ) -> None:
         self._record(
-            "embedding_message_input_invalid",
+            "completion_message_input_invalid",
             message_id=message_id,
             reason=error.invalid.reason.value,
             issues=[
@@ -78,21 +64,21 @@ class EmbeddingLambdaFailureRecorder:
         error: Exception,
         *,
         message_id: str,
-        assessed_event: ArticleAssessedInScopeEvent | None = None,
+        article_event: IncompleteArticleRecordedEvent | None = None,
     ) -> None:
         fields: dict[str, object] = {"message_id": message_id}
-        if assessed_event is not None:
+        if article_event is not None:
             fields.update(
-                event_id=str(assessed_event.event_id),
-                analyzed_article_id=assessed_event.payload.analyzed_article_id,
+                event_id=str(article_event.event_id),
+                incomplete_article_id=article_event.payload.incomplete_article_id,
             )
         self._record(
-            "embedding_message_failed", **fields, error_class=exception_fqn(error)
+            "completion_message_failed", **fields, error_class=exception_fqn(error)
         )
 
     def _record(self, event: str, **fields: object) -> None:
         try:
             self._logger.warning(event, **fields)
         except Exception:  # noqa: S110
-            # 診断出力の障害で配送結果や元の例外を変えない。
+            # 診断障害で元の配送結果を置き換えない。
             pass
