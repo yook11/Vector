@@ -172,7 +172,7 @@ HTTPの通信失敗・エラー応答は`app/http/`の全工程共通エラー�
 - 構築拒否は`UNMAPPED_VALIDATION_ERROR`を含むか`unmapped`が非空なら、既知の理由が混在していても再試行を優先する。`defects`が空の場合も調査対象として再試行する。
 - robotsの404は取得処理で記事取得へ進むため、この分類へ届かない。robotsの403はHTTP拒否であり、robotsルールによる明示的禁止に変換しない。
 - `proxy_status`は通信失敗の事実であり、記事側のHTTP応答分類へ流用しない。プロキシ接続時の403だけで記事を終了させない。
-- 戻り値は`RetryArticleCompletion | CloseArticleCompletion`を直接記述し、外側の型やユニオンの別名は作らない。どちらも不変で`code`と`requires_investigation`を持ち、再試行の結果だけが`retry_at`（任意のUTC日時）を持つ。対処は結果型で区別し、actionフィールドは持たない。対応済みエラーは既存CODE、HostBlockedErrorは`host_blocked`、分類対象外は`unknown`とする。
+- 戻り値は`RetryArticleCompletion | CloseArticleCompletion`を直接記述し、外側の型やユニオンの別名は作らない。どちらも不変で`code`と`requires_investigation`を持ち、再試行の結果だけが`retry_at`（`RetryAt | None`）を持つ。対処は結果型で区別し、actionフィールドは持たない。対応済みエラーは既存CODE、HostBlockedErrorは`host_blocked`、分類対象外は`unknown`とする。
 - 元例外・原因チェーン・構築拒否の詳細を変更せず、呼び出し側が保持する。調査対象は即時通知の指示ではなく、出力や緊急度の判断は後続処理が所有する。
 - キャンセル・プロセス終了は対象外とし、呼び出し側は通常のExceptionだけを渡す。正常な処理済み・競合・対象行なし・closed済みは扱わない。
 - DB更新・SQS操作・監査・ログ・通知はこの関数内で行わず、旧Taskiqには接続しない。
@@ -196,7 +196,7 @@ HTTPの根拠: [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-15
 
 ## SQS・Lambdaへの配送接続
 
-確定した契約と実装スライスは[記事補完のSQS・Lambda配送仕様](./article-completion-delivery.md)を正本とする。Lambdaは最大10分、最大10件を逐次処理し、残り75秒未満なら次の記事を開始せず未着手分を再配信対象とする。1件全体の期限は追加しない。
+確定した契約と実装スライスは[記事補完のSQS・Lambda配送仕様](./article-completion-delivery.md)を正本とする。Lambdaは最大10分、最大10件を逐次処理し、残り60秒未満なら次の記事を開始せず未着手分を再配信対象とする。1件全体の期限は追加しない。
 
 再試行は部分バッチ失敗一覧で返し、有効なretry_atがあればreceiptHandleを使って可視性を変更する。元のretry_atを維持し、実際の個別待機を最大11時間へ制限する。待機変更が失敗しても受信完了にしない。配送診断はCloudWatch向け構造化ログへ出し、DB監査・記事の状態判断と分ける。
 

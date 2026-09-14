@@ -1,6 +1,6 @@
 """SQSレコード群の構造を検証し、本文を個別に取り出す。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Self
 
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
@@ -11,6 +11,8 @@ class SqsRecord:
     message_id: str
     body: object
     body_present: bool
+    receipt_handle: object = field(default=None, repr=False)
+    receipt_handle_present: bool = False
 
     @classmethod
     def from_input(cls, record: object, *, record_index: int) -> Self:
@@ -33,7 +35,13 @@ class SqsRecord:
         elif not message_id.strip():
             reason = SqsInputReason.EMPTY_MESSAGE_ID
         else:
-            return cls(message_id, record.get("body"), "body" in record)
+            return cls(
+                message_id,
+                record.get("body"),
+                "body" in record,
+                record.get("receiptHandle"),
+                "receiptHandle" in record,
+            )
         raise SqsInputError(reason=reason, field="messageId", record_index=record_index)
 
     def body_text(self) -> str:
@@ -45,6 +53,18 @@ class SqsRecord:
         else:
             return self.body
         raise SqsInputError(reason=reason, field="body")
+
+    def receipt_handle_text(self) -> str:
+        """可視性変更が必要なときだけ、受信時の操作情報を検証する。"""
+        if not self.receipt_handle_present:
+            reason = SqsInputReason.MISSING_REQUIRED_FIELD
+        elif not isinstance(self.receipt_handle, str):
+            reason = SqsInputReason.INVALID_TYPE
+        elif not self.receipt_handle.strip():
+            reason = SqsInputReason.EMPTY_RECEIPT_HANDLE
+        else:
+            return self.receipt_handle
+        raise SqsInputError(reason=reason, field="receiptHandle")
 
 
 @dataclass(frozen=True, slots=True)

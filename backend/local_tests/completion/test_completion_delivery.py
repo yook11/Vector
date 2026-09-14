@@ -2,7 +2,10 @@
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from importlib import import_module
+from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -24,6 +27,7 @@ from tests.iam_fixtures import inject_test_db_signer
 def message(name, target, *, source_id=None):
     return {
         "messageId": name,
+        "receiptHandle": "receipt-" + name,
         "body": json.dumps(
             {
                 "event_id": str(uuid4()),
@@ -51,13 +55,26 @@ def delivery_runtime(system_database, monkeypatch):
             resources_module=article_fetch_lifecycle,
         ),
         db_iam_auth=True,
+        sqs_article_completion_queue_url="https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion",
     )
     monkeypatch.setattr(module, "CompletionConsumerSettings", lambda: settings)
     sqs = Mock(spec_set=["close", "change_message_visibility"])
     session = Mock(spec_set=["create_client"])
     session.create_client.return_value = sqs
     monkeypatch.setattr(composition, "Session", Mock(return_value=session))
-    return module
+    state = SimpleNamespace(
+        handler=module.handler,
+        context=SimpleNamespace(
+            get_remaining_time_in_millis=Mock(return_value=600_000)
+        ),
+        sqs=sqs,
+        settings=settings,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    clock = Mock(wraps=datetime)
+    clock.now.side_effect = lambda tz: state.now.astimezone(tz)
+    monkeypatch.setattr(module, "datetime", clock)
+    return state
 
 
 @pytest.mark.asyncio
@@ -88,7 +105,9 @@ async def test_failed_messages_are_returned_and_later_article_completes(
         ],
     }
 
-    response = await asyncio.to_thread(delivery_runtime.handler, batch, None)
+    response = await asyncio.to_thread(
+        delivery_runtime.handler, batch, delivery_runtime.context
+    )
 
     assert response == {
         "batchItemFailures": [
@@ -118,7 +137,7 @@ async def test_committed_closed_article_is_acknowledged(
     response = await asyncio.to_thread(
         delivery_runtime.handler,
         {"Records": [message("forbidden", article)]},
-        None,
+        delivery_runtime.context,
     )
 
     assert response == {"batchItemFailures": []}
@@ -141,7 +160,7 @@ async def test_already_closed_article_is_acknowledged_without_changes(
     response = await asyncio.to_thread(
         delivery_runtime.handler,
         {"Records": [message("closed", article)]},
-        None,
+        delivery_runtime.context,
     )
 
     assert response == {"batchItemFailures": []}
@@ -161,7 +180,7 @@ async def test_existing_article_is_preserved_and_message_is_acknowledged(
     response = await asyncio.to_thread(
         delivery_runtime.handler,
         {"Records": [message("existing", article)]},
-        None,
+        delivery_runtime.context,
     )
 
     assert response == {"batchItemFailures": []}
@@ -189,7 +208,9 @@ async def test_invalid_event_is_returned_without_changing_article(
         ],
     }
 
-    response = await asyncio.to_thread(delivery_runtime.handler, batch, None)
+    response = await asyncio.to_thread(
+        delivery_runtime.handler, batch, delivery_runtime.context
+    )
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "invalid"}]}
     assert await stored_completion(system_database, article) == before
@@ -205,17 +226,17 @@ async def test_redelivery_completes_previously_retryable_article(
     target = await seed_pending(system_database, "https://example.com/redelivery")
     batch = {"Records": [message("retry", target)]}
     page_response.return_value = httpx.Response(429, headers={"Retry-After": "120"})
-    assert await asyncio.to_thread(delivery_runtime.handler, batch, None) == {
-        "batchItemFailures": [{"itemIdentifier": "retry"}]
-    }
+    assert await asyncio.to_thread(
+        delivery_runtime.handler, batch, delivery_runtime.context
+    ) == {"batchItemFailures": [{"itemIdentifier": "retry"}]}
     before = await stored_completion(system_database, target)
     assert before.pending["status"] == "open"
     assert before.articles == before.outbox == []
 
     page_response.return_value = article_response("Recovered delivery")
-    assert await asyncio.to_thread(delivery_runtime.handler, batch, None) == {
-        "batchItemFailures": []
-    }
+    assert await asyncio.to_thread(
+        delivery_runtime.handler, batch, delivery_runtime.context
+    ) == {"batchItemFailures": []}
     after = await stored_completion(system_database, target)
     assert after.pending is None
     assert len(after.articles) == len(after.successes) == len(after.outbox) == 1
@@ -235,7 +256,7 @@ async def test_failed_close_commit_is_reported_for_redelivery(
         response = await asyncio.to_thread(
             delivery_runtime.handler,
             {"Records": [message("failed", target)]},
-            None,
+            delivery_runtime.context,
         )
     assert fault.error is not None
     assert response == {"batchItemFailures": [{"itemIdentifier": "failed"}]}
@@ -253,15 +274,15 @@ async def test_completed_message_redelivery_preserves_saved_article(
     """完成後の同じ配送を受信完了にし、保存済み本文とイベントを維持する。"""
     target = await seed_pending(system_database, "https://example.com/completed-again")
     batch = {"Records": [message("completed", target)]}
-    assert await asyncio.to_thread(delivery_runtime.handler, batch, None) == {
-        "batchItemFailures": []
-    }
+    assert await asyncio.to_thread(
+        delivery_runtime.handler, batch, delivery_runtime.context
+    ) == {"batchItemFailures": []}
     before = await stored_completion(system_database, target)
     assert len(before.articles) == 1
     page_response.return_value = article_response("Must not replace saved article")
-    assert await asyncio.to_thread(delivery_runtime.handler, batch, None) == {
-        "batchItemFailures": []
-    }
+    assert await asyncio.to_thread(
+        delivery_runtime.handler, batch, delivery_runtime.context
+    ) == {"batchItemFailures": []}
     assert await stored_completion(system_database, target) == before
 
 
@@ -275,7 +296,7 @@ async def test_database_source_wins_over_event_source(
     response = await asyncio.to_thread(
         delivery_runtime.handler,
         {"Records": [message("source", target, source_id=target.source_id + 1000000)]},
-        None,
+        delivery_runtime.context,
     )
     assert response == {"batchItemFailures": []}
     stored = await stored_completion(system_database, target)
@@ -283,3 +304,98 @@ async def test_database_source_wins_over_event_source(
     assert len(stored.articles) == 1
     assert stored.articles[0]["source_id"] == target.source_id
     assert stored.articles[0]["original_title"] == target.title
+
+
+@pytest.mark.asyncio
+async def test_http_retry_time_reaches_visibility_and_partial_response(
+    system_database,
+    delivery_runtime,
+    page_response,
+):
+    """実Consumerの429待機時刻が可視性変更へ届いても再配信対象を維持する。"""
+    target = await seed_pending(system_database, "https://example.com/wait")
+    retry_time = delivery_runtime.now + timedelta(minutes=10)
+    page_response.return_value = httpx.Response(
+        429, headers={"Retry-After": format_datetime(retry_time, usegmt=True)}
+    )
+    response = await asyncio.to_thread(
+        delivery_runtime.handler,
+        {"Records": [message("wait", target)]},
+        delivery_runtime.context,
+    )
+    delivery_runtime.sqs.change_message_visibility.assert_called_once_with(
+        QueueUrl=delivery_runtime.settings.sqs_article_completion_queue_url,
+        ReceiptHandle="receipt-wait",
+        VisibilityTimeout=600,
+    )
+    assert response == {"batchItemFailures": [{"itemIdentifier": "wait"}]}
+    stored = await stored_completion(system_database, target)
+    assert stored.pending["status"] == "open"
+    assert stored.articles == stored.outbox == []
+
+
+@pytest.mark.asyncio
+async def test_visibility_failure_keeps_article_open_for_redelivery(
+    system_database,
+    delivery_runtime,
+    page_response,
+):
+    """可視性変更の障害で実DBの記事をclosed化せず再配信対象にする。"""
+    target = await seed_pending(system_database, "https://example.com/wait-failure")
+    page_response.return_value = httpx.Response(429, headers={"Retry-After": "120"})
+    delivery_runtime.sqs.change_message_visibility.side_effect = RuntimeError(
+        "private-sqs"
+    )
+    response = await asyncio.to_thread(
+        delivery_runtime.handler,
+        {"Records": [message("failed-wait", target)]},
+        delivery_runtime.context,
+    )
+    delivery_runtime.sqs.change_message_visibility.assert_called_once()
+    assert response == {"batchItemFailures": [{"itemIdentifier": "failed-wait"}]}
+    stored = await stored_completion(system_database, target)
+    assert stored.pending["status"] == "open"
+    assert stored.articles == stored.successes == stored.outbox == []
+
+
+@pytest.mark.asyncio
+async def test_insufficient_time_preserves_unstarted_article(
+    system_database,
+    delivery_runtime,
+):
+    """先行記事の確定後に時間不足なら、未着手記事と監査を変更しない。"""
+    first = await seed_pending(system_database, "https://example.com/started")
+    unstarted = await seed_pending(system_database, "https://example.com/unstarted")
+    before = await stored_completion(system_database, unstarted)
+    delivery_runtime.context.get_remaining_time_in_millis.side_effect = [60_000, 59_999]
+    response = await asyncio.to_thread(
+        delivery_runtime.handler,
+        {"Records": [message("started", first), message("unstarted", unstarted)]},
+        delivery_runtime.context,
+    )
+    assert response == {"batchItemFailures": [{"itemIdentifier": "unstarted"}]}
+    assert await stored_completion(system_database, unstarted) == before
+    assert (await stored_completion(system_database, first)).pending is None
+
+
+@pytest.mark.asyncio
+async def test_sqs_cleanup_failure_preserves_delivery_response(
+    system_database,
+    delivery_runtime,
+    page_response,
+):
+    """待機設定後のクライアント解放障害でもDB結果と再配信応答を保つ。"""
+    target = await seed_pending(system_database, "https://example.com/wait-cleanup")
+    page_response.return_value = httpx.Response(429, headers={"Retry-After": "120"})
+    delivery_runtime.sqs.close.side_effect = RuntimeError("private-close")
+    response = await asyncio.to_thread(
+        delivery_runtime.handler,
+        {"Records": [message("cleanup", target)]},
+        delivery_runtime.context,
+    )
+    delivery_runtime.sqs.change_message_visibility.assert_called_once()
+    delivery_runtime.sqs.close.assert_called_once()
+    assert response == {"batchItemFailures": [{"itemIdentifier": "cleanup"}]}
+    assert (await stored_completion(system_database, target)).pending[
+        "status"
+    ] == "open"

@@ -22,6 +22,7 @@ from app.collection.article_completion.errors import (
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
+from app.collection.article_completion.retry_at import RetryAt
 from app.collection.domain.analyzable_article import AnalyzableArticleDefect as Defect
 from app.http.destination_policy import HostBlockedError
 from app.http.errors import HttpResponseError, HttpTransportError
@@ -225,9 +226,7 @@ def test_retry_after_preserves_valid_future_deadline(
     )
     decision = classify_completion_failure(exc, now=_NOW)
     assert isinstance(decision, RetryArticleCompletion)
-    assert decision.retry_at == expected
-    if decision.retry_at is not None:
-        assert decision.retry_at.tzinfo is UTC
+    assert decision.retry_at == (RetryAt(expected) if expected is not None else None)
     assert exc.retry_after == value
 
 

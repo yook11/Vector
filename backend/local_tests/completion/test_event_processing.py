@@ -193,7 +193,8 @@ class TestCompletionFailurePreservesDecisionAndState:
         assert result.error.status_code == 429
         assert isinstance(result.error.__cause__, httpx.HTTPStatusError)
         assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
-        assert result.decision.retry_at == result.error.received_at + timedelta(
+        assert result.decision.retry_at is not None
+        assert result.decision.retry_at.value == result.error.received_at + timedelta(
             seconds=120
         )
         stored = await stored_completion(system_database, pending_article)
@@ -263,7 +264,8 @@ class TestCompletionFailurePreservesDecisionAndState:
         assert isinstance(result.error, HttpResponseError)
         assert result.error.status_code == 429
         assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
-        assert result.decision.retry_at == result.error.received_at + timedelta(
+        assert result.decision.retry_at is not None
+        assert result.decision.retry_at.value == result.error.received_at + timedelta(
             seconds=120
         )
         stored_after_failure = await stored_completion(system_database, pending_article)

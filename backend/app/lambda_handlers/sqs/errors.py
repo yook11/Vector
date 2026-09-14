@@ -9,6 +9,7 @@ class SqsInputReason(StrEnum):
 
     MISSING_REQUIRED_FIELD = "missing_required_field"
     INVALID_TYPE = "invalid_type"
+    EMPTY_RECEIPT_HANDLE = "empty_receipt_handle"
     EMPTY_MESSAGE_ID = "empty_message_id"
     DUPLICATE_MESSAGE_ID = "duplicate_message_id"
 
