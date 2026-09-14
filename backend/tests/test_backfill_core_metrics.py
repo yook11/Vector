@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.queue.helpers.backlog import BackfillTarget
+from app.backfill.targets import BackfillTarget
 from app.queue.tasks import backfill as tasks
 
 

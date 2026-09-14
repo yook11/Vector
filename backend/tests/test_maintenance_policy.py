@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from app.queue.helpers.window import BackfillWindow
+from app.backfill.policy import BackfillWindow
 from app.shared.time import utc_now
 
 

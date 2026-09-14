@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.backfill.repository import PipelineBacklog as BackfillRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -329,7 +330,7 @@ async def test_aged_out_curation_returns_old_child_null_articles(
         created_at=now - timedelta(days=10),
     )
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     ids = await backlog.analyzable_article_ids_aged_out_curation(
         created_before=now - timedelta(days=7),
         limit=10,
@@ -351,7 +352,7 @@ async def test_aged_out_curation_excludes_recent_articles(
         created_at=now - timedelta(days=1),
     )
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     ids = await backlog.analyzable_article_ids_aged_out_curation(
         created_before=now - timedelta(days=7),
         limit=10,
@@ -379,7 +380,7 @@ async def test_aged_out_curation_excludes_articles_with_curation(
     )
     await db_session.commit()
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     ids = await backlog.analyzable_article_ids_aged_out_curation(
         created_before=now - timedelta(days=7),
         limit=10,
@@ -409,7 +410,7 @@ async def test_aged_out_curation_excludes_articles_with_noise(
     )
     await db_session.commit()
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     ids = await backlog.analyzable_article_ids_aged_out_curation(
         created_before=now - timedelta(days=7),
         limit=10,
@@ -577,7 +578,7 @@ async def test_aged_out_assessment_returns_old_unassessed_curations(
     )
     curation = await _make_curation(db_session, article)
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     ids = await backlog.curation_ids_aged_out_assessment(
         created_before=now - timedelta(days=7),
         limit=10,
@@ -641,7 +642,7 @@ async def test_aged_out_assessment_excludes_recent_completed_and_excluded(
     )
     await db_session.commit()
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     ids = await backlog.curation_ids_aged_out_assessment(
         created_before=now - timedelta(days=7),
         limit=10,
@@ -932,7 +933,7 @@ async def test_aged_out_embedding_returns_old_null_embedding_analysis(
         sample_categories[0],
     )
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     ids = await backlog.analyzed_article_ids_aged_out_embedding(
         created_before=now - timedelta(days=7),
         limit=10,
@@ -992,7 +993,7 @@ async def test_aged_out_embedding_excludes_recent_embedded_and_excluded(
     )
     await db_session.commit()
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     ids = await backlog.analyzed_article_ids_aged_out_embedding(
         created_before=now - timedelta(days=7),
         limit=10,

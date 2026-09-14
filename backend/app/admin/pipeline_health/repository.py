@@ -1,8 +1,4 @@
-"""pipeline health 観測のための read-only クエリ (Repository)。
-
-pipeline_events / incomplete_articles を集計し、backfill 系は ``PipelineBacklog``
-(= 既存 cron と同一述語) に委譲する。全クエリは観測専用で副作用を持たない。
-"""
+"""管理画面向けに工程の監査イベント・未完了件数・最古時刻を集計する。"""
 
 from __future__ import annotations
 
@@ -12,9 +8,17 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
+from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
+from app.models.article_curation import ArticleCuration
+from app.models.backfill_exclusion import (
+    AssessmentBackfillExclusion,
+    EmbeddingBackfillExclusion,
+)
+from app.models.curation_noise import CurationNoise
 from app.models.incomplete_article import IncompleteArticle
+from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.pipeline_event import PipelineEvent
-from app.queue.helpers.backlog import PipelineBacklog
 
 # completion queue とみなす incomplete_articles の状態 (CHECK 制約と一致)。
 _QUEUE_STATUSES: tuple[str, ...] = ("open", "running")
@@ -23,7 +27,6 @@ _QUEUE_STATUSES: tuple[str, ...] = ("open", "running")
 class PipelineHealthRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._backlog = PipelineBacklog(session)
 
     async def event_counts_24h(
         self, *, event_window_start: datetime
@@ -70,15 +73,112 @@ class PipelineHealthRepository:
     ) -> dict[Stage, tuple[int, datetime | None]]:
         """backfill 補助メトリクスの ``(件数, 最古 created_at)`` を返す。"""
         return {
-            Stage.CURATION: await self._backlog.articles_pending_curation_stats(
+            Stage.CURATION: await self.articles_pending_curation_stats(
                 created_before=created_before, created_after=created_after
             ),
-            Stage.ASSESSMENT: await self._backlog.curations_pending_assessment_stats(
+            Stage.ASSESSMENT: await self.curations_pending_assessment_stats(
                 created_before=created_before, created_after=created_after
             ),
             Stage.EMBEDDING: (
-                await self._backlog.analyzed_articles_pending_embedding_stats(
+                await self.analyzed_articles_pending_embedding_stats(
                     created_before=created_before, created_after=created_after
                 )
             ),
         }
+
+    async def articles_pending_curation_stats(
+        self, *, created_before: datetime, created_after: datetime
+    ) -> tuple[int, datetime | None]:
+        """未完了件数と元記事の最古作成時刻を同じ照会で返す。"""
+        stmt = (
+            select(
+                func.count(AnalyzableArticleRecord.id),
+                func.min(AnalyzableArticleRecord.created_at),
+            )
+            .select_from(AnalyzableArticleRecord)
+            .outerjoin(
+                ArticleCuration,
+                ArticleCuration.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
+            .outerjoin(
+                CurationNoise,
+                CurationNoise.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
+            .where(
+                ArticleCuration.id.is_(None),
+                CurationNoise.id.is_(None),
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
+            )
+        )
+        row = (await self._session.execute(stmt)).one()
+        return int(row[0]), row[1]
+
+    async def curations_pending_assessment_stats(
+        self, *, created_before: datetime, created_after: datetime
+    ) -> tuple[int, datetime | None]:
+        """未完了件数と元記事の最古作成時刻を同じ照会で返す。"""
+        stmt = (
+            select(
+                func.count(ArticleCuration.id),
+                func.min(AnalyzableArticleRecord.created_at),
+            )
+            .select_from(ArticleCuration)
+            .join(
+                AnalyzableArticleRecord,
+                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+            )
+            .outerjoin(
+                AnalyzedArticleRecord,
+                AnalyzedArticleRecord.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                OutOfScopeArticleRecord,
+                OutOfScopeArticleRecord.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                AssessmentBackfillExclusion,
+                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
+            )
+            .where(
+                AnalyzedArticleRecord.id.is_(None),
+                OutOfScopeArticleRecord.id.is_(None),
+                AssessmentBackfillExclusion.curation_id.is_(None),
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
+            )
+        )
+        row = (await self._session.execute(stmt)).one()
+        return int(row[0]), row[1]
+
+    async def analyzed_articles_pending_embedding_stats(
+        self, *, created_before: datetime, created_after: datetime
+    ) -> tuple[int, datetime | None]:
+        """未完了件数と元記事の最古作成時刻を同じ照会で返す。"""
+        stmt = (
+            select(
+                func.count(AnalyzedArticleRecord.id),
+                func.min(AnalyzableArticleRecord.created_at),
+            )
+            .select_from(AnalyzedArticleRecord)
+            .join(
+                ArticleCuration, ArticleCuration.id == AnalyzedArticleRecord.curation_id
+            )
+            .join(
+                AnalyzableArticleRecord,
+                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+            )
+            .outerjoin(
+                EmbeddingBackfillExclusion,
+                EmbeddingBackfillExclusion.analyzed_article_id
+                == AnalyzedArticleRecord.id,
+            )
+            .where(
+                AnalyzedArticleRecord.embedding.is_(None),
+                EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
+            )
+        )
+        row = (await self._session.execute(stmt)).one()
+        return int(row[0]), row[1]

@@ -1,19 +1,14 @@
-"""back-fill 対象 AnalyzableArticleRecord ID のクエリ (Repository)。
-
-メインフローで諦め return された結果として下流子テーブルが NULL になっている
-記事を、年齢ウィンドウの範囲で発見する。SQL は SQLAlchemy 2.0 スタイルで
-組み立て、文字列結合や生 SQL は使わない。
-"""
+"""旧 Taskiq backfill の対象取得と件数観測を担う。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.backfill.targets import BackfillTarget
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -26,39 +21,18 @@ from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 
 
-@dataclass(frozen=True, slots=True)
-class BackfillTarget:
-    """backfill が enqueue と監査に使う対象 snapshot。"""
-
-    target_id: int
-    analyzable_article_id: int
-    source_name: str | None
-
-
 class PipelineBacklog:
-    """子テーブル NULL 状態を年齢ウィンドウで発見する。
-
-    ID 取得メソッド (``*_pending_*``) は LIMIT 付きで dispatch 対象を返す。
-    COUNT メソッド (``count_*``) は LIMIT なしの真の総数を Logfire gauge
-    観測用に返す (dispatch list の ``len()`` は LIMIT で saturate するため、
-    詰まりの可視化には COUNT 経路が必要)。stats メソッド (``*_pending_*_stats``)
-    は同述語の ``(総数, 最古 created_at)`` を 1 クエリで返す (health endpoint 用)。
-    3 系統は stage ごとの ``_*_pending`` 述語ビルダを共有する。kiq dispatch・
-    予算消費の判断は呼び出し側 (cron task) の責務。
-    """
+    """旧経路の再投入対象を年齢と工程の完了状態から取得する。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    # --- pending 述語ビルダ (ids / count / stats が共有する SQL 本体の単一定義) ---
-    # 各 stage の FROM + JOIN + anti-join + 年齢窓だけを組み立て、SELECT 列は呼び出し側
-    # が渡す。``select_from`` を明示し ``func.min(AnalyzableArticleRecord.created_at)``
-    # 系の FROM 推論ずれも固定する。``*_targets_pending`` (NewsSource 付き) /
-    # ``*_aged_out_*``
-    # (下限なし) は述語が分岐するため共有しない。
-
     def _curation_pending(
-        self, stmt: Select[Any], *, created_before: datetime, created_after: datetime
+        self,
+        stmt: Select[Any],
+        *,
+        created_before: datetime,
+        created_after: datetime | None = None,
     ) -> Select[Any]:
         return (
             stmt.select_from(AnalyzableArticleRecord)
@@ -74,12 +48,20 @@ class PipelineBacklog:
                 ArticleCuration.id.is_(None),
                 CurationNoise.id.is_(None),
                 AnalyzableArticleRecord.created_at < created_before,
-                AnalyzableArticleRecord.created_at >= created_after,
+                (
+                    AnalyzableArticleRecord.created_at >= created_after
+                    if created_after is not None
+                    else true()
+                ),
             )
         )
 
     def _assessment_pending(
-        self, stmt: Select[Any], *, created_before: datetime, created_after: datetime
+        self,
+        stmt: Select[Any],
+        *,
+        created_before: datetime,
+        created_after: datetime | None = None,
     ) -> Select[Any]:
         return (
             stmt.select_from(ArticleCuration)
@@ -104,12 +86,20 @@ class PipelineBacklog:
                 OutOfScopeArticleRecord.id.is_(None),
                 AssessmentBackfillExclusion.curation_id.is_(None),
                 AnalyzableArticleRecord.created_at < created_before,
-                AnalyzableArticleRecord.created_at >= created_after,
+                (
+                    AnalyzableArticleRecord.created_at >= created_after
+                    if created_after is not None
+                    else true()
+                ),
             )
         )
 
     def _embedding_pending(
-        self, stmt: Select[Any], *, created_before: datetime, created_after: datetime
+        self,
+        stmt: Select[Any],
+        *,
+        created_before: datetime,
+        created_after: datetime | None = None,
     ) -> Select[Any]:
         return (
             stmt.select_from(AnalyzedArticleRecord)
@@ -130,7 +120,11 @@ class PipelineBacklog:
                 AnalyzedArticleRecord.embedding.is_(None),
                 EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
                 AnalyzableArticleRecord.created_at < created_before,
-                AnalyzableArticleRecord.created_at >= created_after,
+                (
+                    AnalyzableArticleRecord.created_at >= created_after
+                    if created_after is not None
+                    else true()
+                ),
             )
         )
 
@@ -206,63 +200,6 @@ class PipelineBacklog:
         )
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
-
-    async def articles_pending_curation_stats(
-        self,
-        *,
-        created_before: datetime,
-        created_after: datetime,
-    ) -> tuple[int, datetime | None]:
-        """curation/noise 未処理 article record の stats を返す。
-
-        ``count_articles_pending_curation`` と同一述語を 1 クエリで COUNT + MIN する
-        (health endpoint が count と最古を別クエリに分けないため)。最古 = dispatch 順
-        (``created_at`` asc) の先頭。対象なしは ``(0, None)``。
-        """
-        stmt = self._curation_pending(
-            select(
-                func.count(AnalyzableArticleRecord.id),
-                func.min(AnalyzableArticleRecord.created_at),
-            ),
-            created_before=created_before,
-            created_after=created_after,
-        )
-        row = (await self._session.execute(stmt)).one()
-        return int(row[0]), row[1]
-
-    async def analyzable_article_ids_aged_out_curation(
-        self,
-        *,
-        created_before: datetime,
-        limit: int,
-    ) -> list[int]:
-        """``created_before`` より古い child-NULL article record ID を返す。
-
-        curation/noise いずれの子も無く物理削除する対象。下限 (年齢ウィンドウの
-        ``created_after``) を持たず、``analyzable_article_ids_pending_curation`` の
-        通常再投入窓 (``[after, before)``) とは disjoint な
-        「窓から落ちた古い記事」を拾う。
-        """
-        stmt = (
-            select(AnalyzableArticleRecord.id)
-            .outerjoin(
-                ArticleCuration,
-                ArticleCuration.analyzable_article_id == AnalyzableArticleRecord.id,
-            )
-            .outerjoin(
-                CurationNoise,
-                CurationNoise.analyzable_article_id == AnalyzableArticleRecord.id,
-            )
-            .where(
-                ArticleCuration.id.is_(None),
-                CurationNoise.id.is_(None),
-                AnalyzableArticleRecord.created_at < created_before,
-            )
-            .order_by(AnalyzableArticleRecord.created_at.asc())
-            .limit(limit)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
 
     async def assessment_targets_pending(
         self,
@@ -353,69 +290,6 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
 
-    async def curations_pending_assessment_stats(
-        self,
-        *,
-        created_before: datetime,
-        created_after: datetime,
-    ) -> tuple[int, datetime | None]:
-        """assessment 未処理 curation の ``(総数, 最古 created_at)`` (観測専用)。
-
-        ``count_curations_pending_assessment`` と同一述語を 1 クエリで COUNT+MIN。
-        対象なしは ``(0, None)``。
-        """
-        stmt = self._assessment_pending(
-            select(
-                func.count(ArticleCuration.id),
-                func.min(AnalyzableArticleRecord.created_at),
-            ),
-            created_before=created_before,
-            created_after=created_after,
-        )
-        row = (await self._session.execute(stmt)).one()
-        return int(row[0]), row[1]
-
-    async def curation_ids_aged_out_assessment(
-        self,
-        *,
-        created_before: datetime,
-        limit: int,
-    ) -> list[int]:
-        """通常窓から落ちた assessment 未完了 Curation ID を返す。
-
-        Stage 4/5 は保全価値のある部分結果を持つため物理削除せず、呼び出し側が
-        ``assessment_backfill_exclusions`` に current-state sentinel を作る。
-        """
-        stmt = (
-            select(ArticleCuration.id)
-            .join(
-                AnalyzableArticleRecord,
-                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
-            )
-            .outerjoin(
-                AnalyzedArticleRecord,
-                AnalyzedArticleRecord.curation_id == ArticleCuration.id,
-            )
-            .outerjoin(
-                OutOfScopeArticleRecord,
-                OutOfScopeArticleRecord.curation_id == ArticleCuration.id,
-            )
-            .outerjoin(
-                AssessmentBackfillExclusion,
-                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
-            )
-            .where(
-                AnalyzedArticleRecord.id.is_(None),
-                OutOfScopeArticleRecord.id.is_(None),
-                AssessmentBackfillExclusion.curation_id.is_(None),
-                AnalyzableArticleRecord.created_at < created_before,
-            )
-            .order_by(AnalyzableArticleRecord.created_at.asc())
-            .limit(limit)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
     async def analyzed_article_ids_pending_embedding(
         self,
         *,
@@ -490,62 +364,6 @@ class PipelineBacklog:
         )
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
-
-    async def analyzed_articles_pending_embedding_stats(
-        self,
-        *,
-        created_before: datetime,
-        created_after: datetime,
-    ) -> tuple[int, datetime | None]:
-        """embedding NULL analyzed article の stats を返す。
-
-        ``count_analyzed_articles_pending_embedding`` と同一述語を 1 クエリで
-        COUNT + MIN する。
-        対象なしは ``(0, None)``。
-        """
-        stmt = self._embedding_pending(
-            select(
-                func.count(AnalyzedArticleRecord.id),
-                func.min(AnalyzableArticleRecord.created_at),
-            ),
-            created_before=created_before,
-            created_after=created_after,
-        )
-        row = (await self._session.execute(stmt)).one()
-        return int(row[0]), row[1]
-
-    async def analyzed_article_ids_aged_out_embedding(
-        self,
-        *,
-        created_before: datetime,
-        limit: int,
-    ) -> list[int]:
-        """通常窓から落ちた embedding NULL AnalyzedArticleRecord ID を返す。"""
-        stmt = (
-            select(AnalyzedArticleRecord.id)
-            .join(
-                ArticleCuration,
-                ArticleCuration.id == AnalyzedArticleRecord.curation_id,
-            )
-            .join(
-                AnalyzableArticleRecord,
-                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
-            )
-            .outerjoin(
-                EmbeddingBackfillExclusion,
-                EmbeddingBackfillExclusion.analyzed_article_id
-                == AnalyzedArticleRecord.id,
-            )
-            .where(
-                AnalyzedArticleRecord.embedding.is_(None),
-                EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
-                AnalyzableArticleRecord.created_at < created_before,
-            )
-            .order_by(AnalyzableArticleRecord.created_at.asc())
-            .limit(limit)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
 
 
 def _target_from_row(row: tuple[int, int, object | None]) -> BackfillTarget:
