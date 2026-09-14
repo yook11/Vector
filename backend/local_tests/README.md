@@ -12,6 +12,8 @@ Better Auth CLIは既存のfrontend developmentイメージと同じ版をnpxで
 ここには、ローカルに用意した実DB環境でしか確認できないテストを置く。
 DB不要の接続URL・準備処理の単体テストは通常の`tests/`に置く。
 
+検証場所の集約とケースの統合は分けて考える。条件や期待結果が異なる場合は別ケースとし、操作と検証が同じならparametrizeを使える。準備・接続設定・外部応答の形式はfixtureやsupportへ分離し、ケース固有の入力と重要な期待値はテスト本文に残す。混在バッチや競合など、複数対象の相互作用を保証する場合は一つのケースで扱う。
+
 テストファイル追加時は既存のbasenameと`__init__.py`の有無を確認し、packageでない工程ディレクトリ間では固有の工程名をファイル名に含める。限定実行の前に`cd backend && uv run pytest local_tests/ --collect-only -q`で全体の収集を確認する。
 
 ```text
@@ -23,6 +25,7 @@ local_tests/
 ├── test_database_permissions.py  3ロールの許可一覧・実操作（40件）
 ├── test_auth_provisioning_schema.py  既存のAuthデータ契約（2件）
 ├── test_database_isolation.py    実DBのケース分離・失敗時の回収（2件）
+├── acquisition/test_article_acquisition.py  取得記事の充足・不足による保存先とイベント（2件）
 ├── embedding/conftest.py         共通の接続設定・HTTP境界fixture
 ├── embedding/support.py          記事準備・実ハンドラー呼び出し
 ├── embedding/test_session_boundaries.py  AI待機前のセッション返却（1件）
@@ -140,13 +143,16 @@ DBロールとテーブル権限は既存の初期化／migrationを正本とし
 記事単位AI分析の資源管理は`app.lambda_handlers.article_analysis_lifecycle`を通す。共通テストはこの入口を直接検証する。工程別のセッション境界テストでは、共通`analysis_engines` fixtureで借用先Engineを観測し、実SDK・Consumer・DBを通す。
 
 
-## Curationの記事完成イベント配送
+## 取得記事の保存とイベント記録
 
-`curation/test_delivery.py`は取得・本文補完の両方から実Serviceで記事を保存し、実Curation relayが送信したMessageBodyを変更せず実Curation Lambdaへ渡す。共通記事完成イベントの一種類への統一、記事ID・イベントID・発生時刻・配送先の維持、対応するSignal・成功監査・Assessment向けOutboxの確定を確認する。発行元で異なる本文に異なるAI応答を返し、対象記事への保存まで照合する。
+`acquisition/test_article_acquisition.py`は、実RSS取得・変換・DB保存を通して次の2ケースを確認する。
 
-取得・補完は`vector_collect`、relay・Consumerは`vector_app`を使う。旧取得サービスの全体設定へはfixtureで非機密の値を渡し、製品のDB処理は差し替えない。RSS HTTP、記事スクレイピング、SQS通信、SSM・RDS署名、Gemini HTTPだけを外部境界で置き換える。AWSの実配送・実IAM認証は確認しない。
+- 本文が揃った記事は完成記事として内容を保存し、対応する`article.analyzable_created`だけを記録する。
+- 本文不足の記事は取得できた情報を未完成記事として保存し、対応する`article.incomplete_recorded`だけを記録する。
 
-正常な記事完成イベントを確認する2つのServiceテストはこの経路へ集約した。非発行・ロールバックは既存Serviceテスト、配送の拒否・通信失敗はrelay統合テスト、Curation結果別の応答・入力制約・共通資源管理は既存テストが担当する。同じケースを発行元と結果の全組合せで繰り返さない。
+各ケースは記事1件を扱い、反対側の保存先が空であることも確認する。RSSのHTTP応答だけを差し替え、取得Service・変換・保存・イベント生成は実物を使う。取得は`vector_collect`、結果の読み取りは別接続の`vector_app`で行う。
+
+従来の`curation/test_delivery.py`をこの取得工程のテストへ置き換えた。Completionの実行、Relayの配送、Gemini応答、Curation結果の検証は含めない。補完の保存・完成イベントは`completion/`、Relayの配送契約は`tests/lambda_handlers/test_curation_relay_integration.py`、Curationの処理は既存のCurationテストが担当する。従来の取得・補完からRelayを経てCurationへ至る一連の接続保証は、今回の2ケースでは行わない。
 
 ## CompletionのConsumer接続（テストファースト）
 

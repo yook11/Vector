@@ -283,7 +283,7 @@ Invariantsは、両発行元の同一契約、保存の原子性、保存済み�
 
 保証の所有先を次のように分担する。
 
-- `local_tests/curation/test_delivery.py`: migration適用済みDBで、実RSS取得・変換・記事保存、本文補完・保存、実relayと送信本文、実Curation Lambda・SDK・Consumer・Serviceから結果・監査・後続Outboxの確定までを接続する。発行元の記事に対応する別々のAI結果を確認し、正常時のイベント内容だけを確認していた2つのServiceテストをここへ集約する。
+- `local_tests/acquisition/test_article_acquisition.py`: 取得工程の2ケースとして、充足時の完成記事保存・完成イベントと、不足時の未完成記事保存・補完依頼イベントを確認する。各ケースは記事1件を扱い、実RSS取得・変換・保存・イベント記録までを接続する。従来の`curation/test_delivery.py`から検証範囲を変更し、Completion・Relay・Curationは実行しない。
 - 既存取得・本文補完Serviceテスト: 未完成・保存競合・補完済み競合での非発行と、Outbox障害時の記事・成功監査・補完状態のロールバックを所有する。旧Taskiq経路の期待値も新種別へ接続し、既存投入は維持する。
 - `tests/lambda_handlers/test_curation_relay_integration.py`: 新イベントの正常分・不正分・旧2種別を混在させて、正常配送・不正分停止・旧行の全列保持を確認する。通信障害1ケースで再試行予約への接続を確認し、共通relayのbackoff・上限・SDKエラー網羅は複製しない。
 - `tests/outbox/publishing/test_analyzable_message.py`: 新しいエラー変換が安全な理由・項目だけを保持することを確認する。Envelopeの項目別制約は共有契約の既存テストを使う。
@@ -293,6 +293,8 @@ Invariantsは、両発行元の同一契約、保存の原子性、保存済み�
 Doneは、両発行元からCuration保存までの接続、原子性、対象種別の限定、失敗時の共通契約への接続を重複を抑えたテストで保証すること。実装開始時に最新`main`（`5bf4a5b7b607cd90684318a70e4705f9b505ad91`）から`codex/curation-delivery`へ分離し、他作業のローカル変更は取り込まない。
 
 実装・検証結果（2026-09-13）: スライス5は完了。Ruffのlint・format、全単体6,784件、`make test-integration`の全DB統合1,434件、`make test-local`のmigration適用済みDBテスト81件が成功した。最終assert補強後にCurationの経路テストと未完成記事の非発行テストを再確認した。各専用DB・Redis・ネットワークは終了処理で削除済み。AWSへの適用と通常経路の切替は未実施。
+
+テスト整理（2026-09-15）: 取得時点で完成している記事と、本文不足を補完する記事を独立した2ケースへ分けた。接続・認証・外部通信の差し替えは`curation/conftest.py`で準備し、入力・工程の実行・重要なassertは本文に残す。DB読み取りと通信形式の処理は通常関数にまとめ、完成済みの補完不要と、本文不足時の補完前後のイベントを明示的に確認する。Ruff lint・format、対象2ケース、全単体7,166件、DB統合1,475件、`make test-local`の139件が成功した。業務コードは変更していない。
 
 ## スライス6前半: CurationのTerraform・bootstrap・CI定義（2026-09-13）
 
@@ -330,3 +332,9 @@ CI権限は関数・キュー・Scheduler・ロールを完全列挙し、mappin
 Doneは、AWSを変更せず配置・通信・権限・digest保持・有効化の定義と適用手順を検証できること。Non-goalsはAWS適用、秘密情報登録、通常経路有効化、上流Taskiq終了、救済・hold・日次上限・CLI整理、DB schema・API・依存パッケージ変更。後続の適用順序は[運用手順](../../infra/aws/README.md#curationの配置スライス6前半)に従う。
 
 検証結果（2026-09-13、Terraform 1.15.8）: 本体19件・bootstrap11件のmock plan、digestスクリプト11件、既存のAssessment／EmbeddingとCurationのCI接続を含むインフラテスト41件が成功。変更PythonのRuff lint・format、本体／bootstrapと変更テストのTerraform fmt、backend無効init・validateを実施した。actionlintは既存`queue: max`の未対応警告だけを除外して成功し、当該設定をGitHub公式仕様と照合した。本体validateには既存Cloud Mapの`failure_threshold`非推奨警告が残る。実AWS・実state・実tfvarsは使用せず、DB業務テストは今回の範囲外として未実行。
+
+### 取得テストの検証範囲見直し（2026-09-15）
+
+上流2経路からCuration確定までを一括検証していたローカルテストを、取得工程の保存先とイベントを確認する2ケースへ置き換えた。RSS応答以外の取得処理は実物を使う。補完・Relay・Curationは各工程の既存テストが担当し、保存済みMessageBodyをRelayからCurationへ渡す一連の接続検証は現在のローカルテストから外れる。過去のスライス5の実装・検証記録は当時の範囲を示す。
+
+検証結果: 取得工程の2ケース、ローカル全139件、単体7,166件、DB統合1,475件、Ruff lint・formatが成功した。全ローカルテストの収集も確認済み。製品コードとDB schemaは変更していない。
