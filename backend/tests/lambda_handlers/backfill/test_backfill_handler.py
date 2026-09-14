@@ -19,10 +19,10 @@ from app.lambda_handlers.backfill.settings import (
 
 handler = importlib.import_module("app.lambda_handlers.backfill.handler")
 pytestmark = pytest.mark.unit
-STAGES = [
-    ("curation", "curations", CurationBackfillSettings, "article.analyzable_created"),
-    ("assessment", "assessments", AssessmentBackfillSettings, "article.curated_signal"),
-    ("embedding", "embeddings", EmbeddingBackfillSettings, "article.assessed_in_scope"),
+SETTINGS = [
+    ("curation", "curations", CurationBackfillSettings),
+    ("assessment", "assessments", AssessmentBackfillSettings),
+    ("embedding", "embeddings", EmbeddingBackfillSettings),
 ]
 
 
@@ -38,18 +38,18 @@ def settings_for(settings_type, stage, **overrides):
     )
 
 
-@pytest.mark.parametrize("stage,plural,settings_type,event_type", STAGES)
+@pytest.mark.parametrize("stage,plural,settings_type", SETTINGS)
 def test_stage_defaults_to_enabled_without_other_stage_settings(
-    monkeypatch, stage, plural, settings_type, event_type
+    monkeypatch, stage, plural, settings_type
 ):
     """自工程の接続設定だけでデフォルト有効になる。"""
     monkeypatch.delenv(f"BACKFILL_{plural.upper()}_ENABLED", raising=False)
     assert getattr(settings_for(settings_type, stage), f"backfill_{plural}_enabled")
 
 
-@pytest.mark.parametrize("stage,plural,settings_type,event_type", STAGES)
+@pytest.mark.parametrize("stage,plural,settings_type", SETTINGS)
 def test_disabled_does_not_start_async_execution(
-    monkeypatch, stage, plural, settings_type, event_type
+    monkeypatch, stage, plural, settings_type
 ):
     """無効時は接続管理を含む非同期実行を開始しない。"""
     settings = settings_for(
@@ -62,11 +62,9 @@ def test_disabled_does_not_start_async_execution(
     run.assert_not_called()
 
 
-@pytest.mark.parametrize("stage,plural,settings_type,event_type", STAGES)
-def test_handler_passes_fixed_time_and_stage_route(
-    monkeypatch, stage, plural, settings_type, event_type
-):
-    """入力イベントによらず起動時刻と自工程の配線を一度渡す。"""
+@pytest.mark.parametrize("stage,plural,settings_type", SETTINGS)
+def test_handler_fixes_reference_time(monkeypatch, stage, plural, settings_type):
+    """入力の時刻を使わず、起動時刻を一度取得して渡す。"""
     settings = settings_for(
         settings_type, stage, **{f"backfill_{plural}_enabled": True}
     )
@@ -89,53 +87,82 @@ def test_handler_passes_fixed_time_and_stage_route(
     args = run.call_args
     assert args.args == (settings,)
     assert args.kwargs["now"] is now
-    assert args.kwargs["stage"] == stage
-    assert args.kwargs["operation"] is getattr(handler, f"backfill_{plural}")
-    assert args.kwargs["route"].event_type == event_type
-    assert args.kwargs["route"].queue_url == f"https://sqs.invalid/{stage}"
 
 
-@pytest.mark.parametrize(
-    "override",
-    [
-        {"db_iam_auth": False},
-        {
-            "database_url": "postgresql+asyncpg://user:secret@database.invalid/db?sslmode=require"
-        },
-        {"database_url": "postgresql+asyncpg://user@database.invalid/db"},
-        {"aws_region": " "},
-        {"sqs_article_curation_queue_url": " "},
-    ],
-)
-def test_invalid_connection_settings_are_rejected(override):
-    """IAM・TLS・空の接続設定を入口で拒否する。"""
-    defaults = {
-        "env": "production",
-        "database_url": "postgresql+asyncpg://user@database.invalid/db?sslmode=require",
-        "aws_region": "ap-northeast-1",
-        "sqs_article_curation_queue_url": "https://sqs.invalid/curation",
-    }
-    with pytest.raises(ValidationError):
-        CurationBackfillSettings(**(defaults | override))
+def test_settings_require_iam_authentication():
+    """新経路のIAM認証を無効化できない。"""
+    with pytest.raises(ValidationError, match="requires RDS IAM"):
+        settings_for(CurationBackfillSettings, "curation", db_iam_auth=False)
 
 
-@pytest.mark.parametrize("phase", ["settings", "execution"])
-def test_handler_failure_propagates_without_retry(monkeypatch, phase):
-    """設定と実行の失敗を正常終了に変換せず、そのまま伝える。"""
-    error = RuntimeError("private detail")
-    load = Mock(return_value=settings_for(CurationBackfillSettings, "curation"))
+def test_settings_reject_password_in_iam_url():
+    """IAM接続先に固定パスワードを併記できない。"""
+    with pytest.raises(ValidationError, match="contains a password"):
+        CurationBackfillSettings(
+            env="production",
+            aws_region="ap-northeast-1",
+            database_url="postgresql+asyncpg://user:secret@database.invalid/db?sslmode=require",
+            sqs_article_curation_queue_url="https://sqs.invalid/curation",
+        )
+
+
+def test_production_settings_require_tls():
+    """productionのDB接続先にはTLS指定を必須にする。"""
+    with pytest.raises(ValidationError, match="TLS sslmode"):
+        CurationBackfillSettings(
+            env="production",
+            aws_region="ap-northeast-1",
+            database_url="postgresql+asyncpg://user@database.invalid/db",
+            sqs_article_curation_queue_url="https://sqs.invalid/curation",
+        )
+
+
+def test_settings_reject_blank_aws_region():
+    """空白だけのリージョンを接続設定として扱わない。"""
+    with pytest.raises(ValidationError, match="region must not be blank"):
+        CurationBackfillSettings(
+            env="test",
+            aws_region=" ",
+            database_url="postgresql+asyncpg://user@database.invalid/db",
+            sqs_article_curation_queue_url="https://sqs.invalid/curation",
+        )
+
+
+def test_settings_reject_blank_queue_url():
+    """空白だけの送信先キューを受け付けない。"""
+    with pytest.raises(ValidationError, match="queue URL must not be blank"):
+        settings_for(
+            CurationBackfillSettings, "curation", sqs_article_curation_queue_url=" "
+        )
+
+
+def test_settings_failure_propagates_without_starting_execution(monkeypatch):
+    """設定失敗は非同期処理を開始せず元の例外を伝える。"""
+    error = RuntimeError("settings")
+    load = Mock(side_effect=error)
     run = AsyncMock()
-    if phase == "settings":
-        load.side_effect = error
-    else:
-        run.side_effect = error
     monkeypatch.setattr(handler, "CurationBackfillSettings", load)
     monkeypatch.setattr(handler, "run_backfill", run)
     with pytest.raises(RuntimeError) as caught:
         handler.curation_handler({}, None)
     assert caught.value is error
-    load.assert_called_once()
-    assert run.await_count == (phase == "execution")
+    run.assert_not_called()
+
+
+def test_execution_failure_propagates_without_retry(monkeypatch):
+    """非同期実行の失敗を再試行せず元の例外を伝える。"""
+    error = RuntimeError("execution")
+    monkeypatch.setattr(
+        handler,
+        "CurationBackfillSettings",
+        lambda: settings_for(CurationBackfillSettings, "curation"),
+    )
+    run = AsyncMock(side_effect=error)
+    monkeypatch.setattr(handler, "run_backfill", run)
+    with pytest.raises(RuntimeError) as caught:
+        handler.curation_handler({}, None)
+    assert caught.value is error
+    run.assert_awaited_once()
 
 
 def test_failure_log_contains_only_stage_phase_and_exception_type(monkeypatch):

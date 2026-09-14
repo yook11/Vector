@@ -177,3 +177,13 @@ HTTP分類・文字コード・構築条件・監査の全属性は部品テス�
 対象だけを実行する場合は`cd backend && uv run pytest local_tests/completion -q`、全体確認は`make test-local`で行う。Consumerの読み込みはfixtureがテスト専用設定を用意した後に行う。
 
 補完の新経路は抽出時の重複除去を無効にしているため、補完fixtureで抽出器のキャッシュをリセットしない。同じHTMLの再処理・別記事の先行処理でも素材が欠落しない保証は、`tests/collection/article_completion/test_html_extraction.py`で実抽出器を使って確認する。
+
+## Backfillの入口と共通資源管理
+
+`backfill/test_backfill_delivery.py`は3工程の実Lambda入口を個別に呼び、保存済みID・時刻が各キューへ配送されることを確認する。未完了記事の再投入は独立した1ケースに置き、配送ケースに資源管理のassertを混ぜない。
+
+`backfill/test_backfill_lifecycle.py`は共通の`open_backfill_resources`を直接呼ぶ。工程名でparametrizeせず、実接続の生存期間・再利用・呼び出し間の分離、SQL障害・外部キャンセル・初期化失敗・終了障害を具体名のケースで確認する。接続を使用したケースでは、製品のdispose完了後に別接続の`pg_stat_activity`から接続IDが消えたことを確認する。初期化途中でまだDB接続がないケースは、取得済みengine・RDSの解放だけを確認する。
+
+DBは共通`system_database`のmigration適用済み環境を使い、実行は`vector_app`ロール、データ準備は管理用接続とする。IAM署名とSQS通信だけを外部境界で差し替える。テーブル作成・DB権限の一覧確認を独自に追加しない。
+
+通常の`tests/lambda_handlers/backfill/`には設定、時刻固定、無効時の起動抑止、例外の受け渡し、安全なログ、engine・SDKへ渡す設定だけを残す。本体の再投入UUIDテストはローカルの再投入ケースへ集約し、通常の本体テストにはRedis・Outbox不使用の独立した保証を残す。期間境界・件数上限・送信結果分類の条件表は既存の部品テストが所有し、ここで繰り返さない。

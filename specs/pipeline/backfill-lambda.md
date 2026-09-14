@@ -31,14 +31,23 @@ IAM認証を必須とし、パスワード入りURLの拒否とproductionのTLS�
 AWS定義・Scheduler・デプロイ・自動再試行の設定・旧経路の停止と削除は後続スライス。
 旧Taskiq設定、DB schema、consumer受信契約は変更しない。
 
-専用設定・配線・時刻固定・解放と失敗優先順位を単体テストで確認する。
-実DBの署名器のみを既存IAM fixtureで差し替え、実入口から保存済み事実をSDKスタブへ送る。
-同じ入口の繰り返しでも接続とイベントループを持ち越さず、新しいイベントIDで再送できることを確認する。
-Ruff lint・format check・全単体・make test-integrationの成功を完了条件とする。
+専用設定・時刻固定・起動抑止・安全なログ・接続設定の引き渡しは通常の単体テストが担当する。
+全体動作と実資源管理は`local_tests/backfill/`へ置き、共通system_databaseのmigration適用済みDBを使用する。
+工程ごとの配送は個別ケースで確認し、再投入と共通資源管理を混ぜない。
+共通資源は共通入口を直接呼び、実接続の生存期間・再利用・分離・失敗時の解放を確認する。
+使用済み接続の終了は、別接続のpg_stat_activityから接続IDが消えたことまで確認する。
+本体の同じ再投入保証はローカル側へ集約し、Redis・Outbox不使用と各部品の条件表は通常テストに維持する。
+Ruff lint・format check・全単体・make test-integration・make test-localの成功を完了条件とする。
 
-## 検証結果（2026-09-14）
+## 先行コミットの検証結果（2026-09-14）
 
-- Ruff lint・format check・差分の空白チェックが成功した。
-- 全単体テスト6,992件、make test-integrationのDB統合テスト1,478件が成功した。
-- 新規テストは単体34件と実入口からのDB統合3件で、3工程の再起動・配送事実・資源の非共有を確認した。
-- テスト用DB・Redis・ネットワークは終了処理で削除した。AWSへの適用は行っていない。
+- Ruff lint・format check・全単体テスト6,992件、通常DB統合テスト1,478件が成功した。
+- この時点の通常DB統合はモデルから作成するDBであり、migration適用後の保証は含んでいなかった。
+- 追加コミットで上記の所有先へ移し、配送・再投入・資源管理を分離する。
+
+## テスト整理後の検証結果（2026-09-14）
+
+- 全単体7,073件、make test-integrationの通常DB統合1,475件、make test-localのmigration適用済みDBテスト128件が成功した。
+- backfillのlocal_testsは配送・再投入4件と共通資源管理14件。工程別配送に共通資源管理のassertを含めない。
+- Ruff lint・format check・差分の空白チェックが成功し、製品コードとAWS設定は変更していない。
+- backend/tests/AGENTS.mdのparametrizeルール変更を同じPRに含める。

@@ -159,7 +159,7 @@ async def test_run_limit_keeps_oldest_fifty(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("stage", "entry"), CASES)
-async def test_unfinished_target_is_resent_without_redis_or_outbox(
+async def test_backfill_does_not_use_redis_or_outbox(
     db_session,
     session_factory,
     sample_source,
@@ -168,7 +168,7 @@ async def test_unfinished_target_is_resent_without_redis_or_outbox(
     stage,
     entry,
 ):
-    """RedisやOutboxに依存せず、未完了の記事は次回も送る。"""
+    """再投入時にRedisの旧制御やOutboxを使用しない。"""
     from app.queue.helpers import budget, stage_hold
 
     budget_call = AsyncMock(side_effect=AssertionError("budget must not be used"))
@@ -181,12 +181,7 @@ async def test_unfinished_target_is_resent_without_redis_or_outbox(
     )
     publisher = RecordingPublisher()
     await entry(session_factory, publisher, enabled=True, now=NOW)
-    await entry(
-        session_factory, publisher, enabled=True, now=NOW + timedelta(minutes=30)
-    )
-    assert len(publisher.envelopes) == 2
-    assert publisher.envelopes[0].event_id != publisher.envelopes[1].event_id
-    assert publisher.envelopes[0].payload == publisher.envelopes[1].payload
+    assert len(publisher.envelopes) == 1
     assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
     budget_call.assert_not_called()
     hold_call.assert_not_called()
