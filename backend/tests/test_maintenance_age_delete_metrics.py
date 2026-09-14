@@ -1,4 +1,4 @@
-"""``app/queue/tasks/backfill.py`` の年齢削除 metric 記録 oracle。
+"""``app.backfill.cleanup`` の年齢削除 metric 記録 oracle。
 
 検証する性質:
 - 削除発生時、``vector.curation.age_deleted`` counter が削除件数分 +N。
@@ -7,7 +7,7 @@
 - attribute は ``{"stage": "curation"}`` 1 key 固定、article_id / URL に類する
   dynamic 値が attribute / dump 全体に混入しない (capfire 全文検索 oracle)。
 
-unit 層で metric 経路のみ検証するため、repository 群は patch する。capfire fixture
+実DBの削除結果とmetricを照合する。capfire fixture
 が ``logfire.configure(...)`` を呼ぶため、本テスト内では ``setup_logfire`` を呼ばない。
 """
 
@@ -16,12 +16,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.queue.tasks.backfill import _delete_aged_out_curations
+from app.backfill.cleanup import delete_aged_out_curations
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 
 
 def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -36,61 +36,41 @@ def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
     return [dp.get("attributes", {}) for dp in metric["data"]["data_points"]]
 
 
-def _make_session_factory() -> Any:
-    """session_factory(): async context manager を返す callable (AsyncSession stub)。"""
+@pytest.fixture
+def invoke_cleanup(capfire, db_session, session_factory, sample_source):
+    """指定IDの期限切れ記事を実DBから削除してmetricを回収する。"""
 
-    class _AsyncSessionStub:
-        def __init__(self) -> None:
-            self.commit = AsyncMock()
-
-        async def __aenter__(self) -> _AsyncSessionStub:
-            return self
-
-        async def __aexit__(self, *_exc: object) -> None:
-            return None
-
-    return MagicMock(side_effect=_AsyncSessionStub)
-
-
-async def _invoke_with_aged_ids(
-    capfire: CaptureLogfire, aged_ids: list[int]
-) -> list[dict[str, Any]]:
-    """``_delete_aged_out_curations`` を ``article_ids`` 固定で呼んで metric を回収。"""
-    backlog = MagicMock()
-    backlog.analyzable_article_ids_aged_out_curation = AsyncMock(return_value=aged_ids)
-    audit_repo = MagicMock()
-    audit_repo.append_backfill_curation_aged_out = AsyncMock()
-    article_repo = MagicMock()
-    article_repo.delete_by_id = AsyncMock()
-
-    with (
-        patch(
-            "app.queue.tasks.backfill.PipelineBacklog",
-            return_value=backlog,
-        ),
-        patch(
-            "app.audit.stages.curation.CurationAuditRepository",
-            return_value=audit_repo,
-        ),
-        patch(
-            "app.collection.persistence.analyzable_article_repository.AnalyzableArticleRepository",
-            return_value=article_repo,
-        ),
-    ):
-        await _delete_aged_out_curations(
-            _make_session_factory(),
+    async def invoke(aged_ids):
+        old = datetime(2025, 12, 1, tzinfo=UTC)
+        for article_id in aged_ids:
+            db_session.add(
+                AnalyzableArticleRecord(
+                    id=article_id,
+                    source_id=sample_source.id,
+                    source_url=f"https://example.com/aged/{article_id}",
+                    original_title="title",
+                    original_content="content",
+                    published_at=old,
+                    created_at=old,
+                )
+            )
+        await db_session.commit()
+        await delete_aged_out_curations(
+            session_factory,
             created_before=datetime(2026, 1, 1, tzinfo=UTC),
         )
+        return capfire.get_collected_metrics()
 
-    return capfire.get_collected_metrics()
+    return invoke
 
 
 @pytest.mark.asyncio
 async def test_age_deleted_counter_increments_by_deleted_count(
     capfire: CaptureLogfire,
+    invoke_cleanup,
 ) -> None:
     """N 件削除なら ``vector.curation.age_deleted`` counter は +N。"""
-    metrics = await _invoke_with_aged_ids(capfire, [101, 102, 103])
+    metrics = await invoke_cleanup([101, 102, 103])
 
     age_deleted = _find_metric(metrics, "vector.curation.age_deleted")
     assert age_deleted is not None
@@ -100,9 +80,10 @@ async def test_age_deleted_counter_increments_by_deleted_count(
 @pytest.mark.asyncio
 async def test_age_deleted_attribute_is_stage_only(
     capfire: CaptureLogfire,
+    invoke_cleanup,
 ) -> None:
     """counter attribute は ``{"stage": "curation"}`` 1 key 固定。"""
-    metrics = await _invoke_with_aged_ids(capfire, [201, 202])
+    metrics = await invoke_cleanup([201, 202])
 
     age_deleted = _find_metric(metrics, "vector.curation.age_deleted")
     assert age_deleted is not None
@@ -113,9 +94,10 @@ async def test_age_deleted_attribute_is_stage_only(
 @pytest.mark.asyncio
 async def test_age_delete_batch_size_records_actual_count(
     capfire: CaptureLogfire,
+    invoke_cleanup,
 ) -> None:
     """histogram に削除件数 N が record される (削除発生 cycle)。"""
-    metrics = await _invoke_with_aged_ids(capfire, [301, 302, 303, 304, 305])
+    metrics = await invoke_cleanup([301, 302, 303, 304, 305])
 
     hist = _find_metric(metrics, "vector.curation.age_delete_batch_size")
     assert hist is not None
@@ -130,13 +112,14 @@ async def test_age_delete_batch_size_records_actual_count(
 @pytest.mark.asyncio
 async def test_age_delete_batch_size_records_zero_baseline(
     capfire: CaptureLogfire,
+    invoke_cleanup,
 ) -> None:
     """0 件 cycle も baseline として histogram に 0 を record する。
 
     counter は increment しないが histogram には ``record(0)`` が出る契約。
     平常 cycle の分布形を p99 参照に活用するための spec 上の意図。
     """
-    metrics = await _invoke_with_aged_ids(capfire, [])
+    metrics = await invoke_cleanup([])
 
     # counter は increment されない (0 件のため)
     age_deleted = _find_metric(metrics, "vector.curation.age_deleted")
@@ -161,6 +144,7 @@ async def test_age_delete_batch_size_records_zero_baseline(
 @pytest.mark.asyncio
 async def test_age_delete_metrics_do_not_leak_article_ids(
     capfire: CaptureLogfire,
+    invoke_cleanup,
 ) -> None:
     """metric attribute / dump 全体に article_id 値が混入しない (capfire oracle)。
 
@@ -169,7 +153,7 @@ async def test_age_delete_metrics_do_not_leak_article_ids(
     """
     # 検出しやすい目印 ID を使う (空虚回避)
     distinctive_ids = [987654321, 123456789]
-    metrics = await _invoke_with_aged_ids(capfire, distinctive_ids)
+    metrics = await invoke_cleanup(distinctive_ids)
 
     dumped = json.dumps(metrics, default=str, ensure_ascii=False)
     for article_id in distinctive_ids:

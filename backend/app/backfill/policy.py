@@ -33,3 +33,9 @@ class BackfillWindow:
         ``created_after``: これより新しい行のみが対象 (鮮度維持)。
         """
         return (now - self.pipeline_grace, now - self.freshness_window)
+
+
+CURATIONS_LIMIT = 50
+CURATIONS_DELETE_LIMIT = 200
+ASSESSMENTS_LIMIT = 50
+EMBEDDINGS_LIMIT = 50

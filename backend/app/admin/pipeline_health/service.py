@@ -16,7 +16,7 @@ from app.admin.pipeline_health.schemas import (
     PipelineStageHealth,
 )
 from app.audit.domain.event import EventType, Stage
-from app.queue.helpers.window import BackfillWindow
+from app.backfill.policy import BackfillWindow
 from app.shared.time import utc_now
 
 _EVENT_WINDOW = timedelta(hours=24)
