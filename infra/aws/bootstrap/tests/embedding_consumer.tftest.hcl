@@ -85,6 +85,8 @@ run "lambda_configuration_decrypt_is_restricted" {
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-assessment-consumer",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-consumer",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-outbox-relay",
+                "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-completion-consumer",
+                "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-completion-outbox-relay",
               ]
             }
           }
@@ -104,6 +106,8 @@ run "lambda_configuration_decrypt_is_restricted" {
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-assessment-consumer",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-consumer",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-outbox-relay",
+                "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-completion-consumer",
+                "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-completion-outbox-relay",
               ]
             }
           }
@@ -234,7 +238,7 @@ run "ci_can_manage_dlq_without_granting_relay_send" {
 
   assert {
     condition = (
-      toset(local.managed_pipeline_queue_arns) == setunion(toset(local.outbox_queue_arns), toset([local.embedding_dlq_arn, local.assessment_dlq_arn, local.curation_dlq_arn])) &&
+      toset(local.managed_pipeline_queue_arns) == setunion(toset(local.outbox_queue_arns), toset([local.embedding_dlq_arn, local.assessment_dlq_arn, local.curation_dlq_arn, local.completion_dlq_arn])) &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_outbox.policy).Statement : s.Sid != "ManagePipelineQueues" ? true :
         toset(s.Resource) == toset(local.managed_pipeline_queue_arns) &&
         !contains(s.Action, "sqs:SendMessage") && !contains(s.Action, "sqs:ReceiveMessage") && !contains(s.Action, "sqs:PurgeQueue")
@@ -243,7 +247,7 @@ run "ci_can_manage_dlq_without_granting_relay_send" {
         toset(s.Resource) == toset(local.outbox_queue_arns) && !contains(s.Resource, local.embedding_dlq_arn)
       ]) &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_outbox.policy).Statement : s.Sid != "ManageOutboxLambda" ? true :
-        toset(s.Resource) == toset([local.outbox_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.curation_outbox_relay_lambda_arn])
+        toset(s.Resource) == toset([local.outbox_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.curation_outbox_relay_lambda_arn, local.completion_outbox_relay_lambda_arn])
       ])
     )
     error_message = "CIだけにDLQ管理と専用relayの管理を追加し、既存relayの送信先を維持する。"
@@ -268,7 +272,9 @@ run "passrole_allows_only_pipeline_lambda_roles" {
           local.assessment_consumer_role_arn,
           local.assessment_outbox_relay_role_arn,
           local.curation_consumer_role_arn,
+          local.completion_consumer_role_arn,
           local.curation_outbox_relay_role_arn,
+          local.completion_outbox_relay_role_arn,
         ]) && s.Condition.StringEquals["iam:PassedToService"] == "lambda.amazonaws.com"
       ]) &&
       alltrue([for s in local.outbox_pass_role_guards : s.Sid != "DenyPipelineLambdaRolesToOtherServices" ? true :
@@ -279,18 +285,20 @@ run "passrole_allows_only_pipeline_lambda_roles" {
           local.assessment_consumer_role_arn,
           local.assessment_outbox_relay_role_arn,
           local.curation_consumer_role_arn,
+          local.completion_consumer_role_arn,
           local.curation_outbox_relay_role_arn,
+          local.completion_outbox_relay_role_arn,
         ]) && s.Condition.StringNotEquals["iam:PassedToService"] == "lambda.amazonaws.com"
       ]) &&
       alltrue([for s in local.outbox_pass_role_guards : s.Sid != "DenyPassRoleToSchedulerExceptPipelineRoles" ? true :
-        s.NotResource == ["arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler"] &&
+        s.NotResource == ["arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-outbox-relay-scheduler"] &&
         s.Condition.StringEquals["iam:PassedToService"] == "scheduler.amazonaws.com"
       ]) &&
       alltrue([for s in local.outbox_pass_role_guards : s.Sid != "DenyPipelineSchedulerRolesToOtherServices" ? true :
-        s.Resource == ["arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler"] &&
+        s.Resource == ["arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-outbox-relay-scheduler"] &&
         s.Effect == "Deny" && s.Condition.StringNotEquals["iam:PassedToService"] == "scheduler.amazonaws.com"
       ]) &&
-      alltrue([for guard in local.outbox_pass_role_guards : contains(jsondecode(aws_iam_policy.apply_outbox.policy).Statement, guard)])
+      alltrue([for guard in local.outbox_pass_role_guards : contains(jsondecode(aws_iam_policy.apply_pass_role.policy).Statement, guard)])
     )
     error_message = "LambdaとSchedulerのPassRole制約を双方向に維持する。"
   }

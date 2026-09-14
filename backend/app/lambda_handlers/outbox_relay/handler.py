@@ -4,16 +4,19 @@ import asyncio
 
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.curation.events import ArticleCuratedSignal
+from app.collection.article_acquisition.events import IncompleteArticleRecorded
 from app.collection.events import AnalyzableArticleCreated
 from app.lambda_handlers.outbox_relay.execution import run_relay
 from app.lambda_handlers.outbox_relay.settings import (
     AssessmentOutboxRelaySettings,
+    CompletionOutboxRelaySettings,
     CurationOutboxRelaySettings,
     EmbeddingOutboxRelaySettings,
 )
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.curated_signal import build_curated_signal_message
+from app.outbox.publishing.incomplete_recorded import build_incomplete_recorded_message
 from app.outbox.publishing.route import EventDeliveryRoute
 
 
@@ -46,5 +49,16 @@ def curation_handler(event: object, context: object) -> dict[str, str]:
         event_type=AnalyzableArticleCreated.EVENT_TYPE,
         queue_url=settings.sqs_article_curation_queue_url,
         build_message=build_analyzable_created_message,
+    )
+    return asyncio.run(run_relay(settings, route))
+
+
+def completion_handler(event: object, context: object) -> dict[str, str]:
+    """未完成記事記録イベントを補完キューへ配送する。"""
+    settings = CompletionOutboxRelaySettings()  # type: ignore[call-arg]
+    route = EventDeliveryRoute(
+        event_type=IncompleteArticleRecorded.EVENT_TYPE,
+        queue_url=settings.sqs_article_completion_queue_url,
+        build_message=build_incomplete_recorded_message,
     )
     return asyncio.run(run_relay(settings, route))

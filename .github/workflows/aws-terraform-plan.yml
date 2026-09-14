@@ -159,6 +159,17 @@ jobs:
             > "$curation_vars_tmp"
           mv "$curation_vars_tmp" curation.auto.tfvars.json
 
+      - name: Preserve Completion images from state
+        run: |
+          set -euo pipefail
+          # 両方のdigestが正常に解決された場合だけ設定を配置する。
+          completion_vars_tmp=$(mktemp ./completion-vars.XXXXXX)
+          trap 'rm -f "$completion_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-completion-images.py \
+            > "$completion_vars_tmp"
+          mv "$completion_vars_tmp" completion.auto.tfvars.json
+
       - name: Terraform plan
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}

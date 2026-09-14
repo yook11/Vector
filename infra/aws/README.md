@@ -496,3 +496,10 @@ LambdaのCI管理権限はConsumer関数ARNとFunctionArn条件で限定する�
 本体・bootstrapのmock planとdigestスクリプトの実CLIテストを主な保証とする。実state・tfvarsをコピーしない一時ディレクトリで`terraform fmt -check`、`init -backend=false -input=false -lockfile=readonly`、`validate`、`test`を実行する。Pythonのlint・formatと`python3 -m unittest discover -s infra/aws/scripts -p 'test_*.py'`、変更したworkflowのactionlintも実行する。既存のbackend業務コード・業務テストは変更しない。`backend/tests/scripts/test_assessment_infrastructure.py`の既存CI shellテストへCurationを追加し、state取得失敗時の設定非配置・一時ファイル解放と、明示イメージがECRにない場合の停止を共有テストで確認する。
 
 actionlint 1.7.12は既存の`concurrency.queue: max`を未対応キーとして扱う。この1種類だけを`-ignore 'unexpected key "queue" for "concurrency" section'`で除外し、残りを検証する。既存値は[GitHub公式のqueue仕様](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)と照合し、productionの順次実行設定を変更しない。
+
+
+## 補完ConsumerとRelay（スライス5）
+
+[記事補完の配送仕様](../../specs/pipeline/article-completion-delivery.md#スライス5relayと補完lambdaの配送経路2026-09-14)に設定・適用順序・確認結果を記録する。補完はConsumerとRelayの両digest、および受信・定期送信それぞれの稼働状態を既存plan／applyで保持する。初回digest指定時は両トリガーを無効にし、workflow_dispatchの`completion_consumer_state`／`completion_relay_state`で明示的に開始・停止する。
+
+bootstrapの専用boundaryと`ci-apply-pass-role`への拒否条件移設を本体より先に適用する。既存の専用bootstrap経路とGitHub production承認を維持し、旧Taskiqを並行稼働させる。DB schema・DB権限・旧経路のrolloutは変更しない。

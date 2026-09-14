@@ -1,6 +1,6 @@
 # 記事補完のSQS・Lambda配送仕様
 
-Status: スライス1〜4の起動・資源管理、抽出の独立、入力検証・Consumer接続、個別待機・残り時間管理を実装・ローカル検証済み（2026-09-14）。ConsumerとDB確定は実装済み。スライス5のAWS設定・接続検証は未実施であり、AWSへの適用完了を意味しない。
+Status: スライス1〜4の起動・資源管理、抽出の独立、入力検証・Consumer接続、個別待機・残り時間管理を実装・ローカル検証済み（2026-09-14）。ConsumerとDB確定は実装済み。スライス5のAWS設定と補完Relayを実装中。AWSへの適用・実接続は未確認。
 
 ## Problem
 
@@ -217,3 +217,56 @@ DLQへの移動とDBを同期しない。DLQの記事も非closedなら救済再
 仕様作成は、確定した設定・結果の対応・責務・制約・スライスごとの完了条件・後続で具体化するAWS設定を区別し、Consumer仕様と実装プランから参照できれば完了する。
 
 実装の完了は各スライスの検証結果で別途記録する。コードの検証成功とAWSへの適用・運用切替を同一視せず、本書のStatusを実装済みへ先回りして変更しない。
+
+
+## スライス5：Relayと補完Lambdaの配送経路（2026-09-14）
+
+### 作業定義
+
+- Problem: 取得が保存する`article.incomplete_recorded`をOutboxから送信する経路がなく、実装済みConsumerへAWSから届かない。
+- Evidence: 取得ServiceのOutbox同時確定、共通Relayのイベント別claim・送信・published確定、既存キュー、CollectとAppのDB権限、既存Lambda・bootstrap・GitHub Actionsを確認した。ユーザーはRelay追加と旧Taskiqを維持した新経路の実動確認を選択した。
+- Invariants: イベント契約、先勝ちDB確定、部分バッチ応答、60秒・20秒・11時間の制御を維持する。ConsumerはCollect、Relayは既存Outbox操作権限を持つAppとして接続する。通常applyでイメージと稼働状態を保持し、元キューの保持期間を短縮しない。
+- Non-goals: DB schema・DB grant・依存・業務判断の変更、旧Taskiq停止、新規通知・アラート、他工程の配送変更。
+- Done: ローカルで取得→実Relay→実Consumer→実DB確定とTerraform・CIの設定契約が通り、既存の承認経路でデプロイ後、実ログとDBで通常取得からの完成を確認する。ローカル完了とAWS完了は別々に記録する。
+
+### 確定した設定
+
+| 対象 | 設定 |
+|---|---|
+| 補完Consumer | 共通backend arm64イメージ、1024MB、600秒、予約同時実行5 |
+| SQS接続 | batch 10、収集待ち0秒、最大同時実行5、`ReportBatchItemFailures` |
+| 元キュー | 通常可視性3600秒、保持14日を維持、受信上限5回 |
+| 補完専用DLQ | Standard、SQS管理暗号化、保持14日、元キューだけからredrive許可、TLS必須 |
+| 補完Relay | 共通backend arm64イメージ、512MB、120秒、予約同時実行1、Scheduler毎分 |
+| 初回のトリガー | Consumer mapping・Relay Schedulerとも無効 |
+
+可視性3600秒は600秒の6倍で、[AWSのSQS接続推奨](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html)に対応する。同時実行は[Lambda SQS scaling](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html)の制約に従い、mappingと関数の予約を5で揃える。
+
+元キューが既に最大の14日保持であるため、既存メッセージの寿命を縮めず、DLQも14日にする。Standardキューの期限は最初の送信時刻から数えるので、DLQ移動後14日を保証しない。これは[DLQ保持期間の仕様](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)による制限である。
+
+Consumer専用private subnetは既存の未使用区画33を使い、RDS5432、取得プロキシ、SQS endpoint443だけへ接続する。プロキシでは取得worker同様の公開記事取得を許可し、既存の非公開宛先・port保護を維持する。AI資格情報・SSM通信は追加しない。可視性変更は実行role・boundary・SQS endpoint policy・双方向SGを接続する。LambdaのSQSポーリングはLambdaサービスが担当する。
+
+Relayはイベント所有工程の`IncompleteArticleRecordedEvent.from_input()`を再利用し、既存のOutboxエラー分類へ変換する。DBのCollectにはOutbox更新権限がないため、Relayは他工程と同じ`vector_app`を使う。DB権限は変更せず、SQS送信権限を補完キューに限定する。
+
+CIのPassRole拒否条件は`ci-apply-pass-role`に移設し、既存のサービス限定・対象role限定を維持する。移設先の取り付け後に元policyを更新する依存関係を置く。bootstrapは全体plan・applyとし、`-target`で部分適用しない。
+
+### デプロイと確認
+
+1. ReadOnlyの`default`で対象環境・既存queue・DB・proxy・実行ロールを確認する。SSO未認証なら`aws sso login --profile default`をユーザーが行う。
+2. `bootstrap-access/README.md`の専用`vector-bootstrap-apply`経路でbootstrap全体をplanし、追加boundary・CI権限・拒否条件の移設を先行適用する。本体CIや管理者fallbackで迂回しない。
+3. PRの検証後にmainへ反映し、既存`AWS app images`でmainのbackend arm64イメージを公開する。既存のCI・Security成功条件を維持し、ECSの旧経路rolloutは行わない。
+4. 既存`AWS terraform apply`へConsumer・Relayのdigestを指定する。`production`の承認後に本体を適用し、両トリガーが無効であること、設定・role・通信経路を確認する。
+5. `completion_consumer_state=enabled`で受信を開始し、次に`completion_relay_state=enabled`で定期送信を開始する。無指定／`keep`はstateの稼働状態を保持する。停止は対応するstateを`disabled`にする。
+6. 取得が作ったevent ID・未完成記事IDを照合し、Relayの送信、Consumerの`succeeded`、完成記事と`article.analyzable_created`確定を確認する。`not_required`だけでは新Consumerでの実取得成功と扱わない。429の可視性変更、再配信、DLQは別の確認項目として記録する。
+
+旧Taskiqが先に完成する場合や新ConsumerとHTTP取得が重複する場合がある。これは今回の並行運用に伴うものであり、既存の先勝ち確定で扱う。
+
+### 検証結果
+
+コミット候補だけの一時チェックアウトでRuff lint・format、単体7,133件（`-m 'not integration'`）、`make test-local`の133件が成功した。取得が作った未完成イベントを実RelayからSQS通信境界へ送り、その実本文を実Consumerへ渡して、Collectによる完成確定と次工程Outboxまで確認した。外部境界でRDS署名・HTTP・SQS通信だけを差し替えた。
+
+Terraformは本体26件・bootstrap14件のモックテストとfmt・validate、既存インフラスクリプト11件が成功した。workflowの実shellテストでstate取得失敗・ECRに存在しないdigestの拒否・一時設定の非配置、通常のイメージ／稼働状態保持を確認した。actionlint 1.7.12は既存の`concurrency.queue: max`を未対応として拒否し、mainの同じ行でも再現した。この既存診断だけを除外した変更workflowの検査は成功した。既存のTerraform非推奨・Logfire関連の警告は残る。
+
+ReadOnlyでのAWS確認: 補完Consumer・補完Relayは未配置。元キューの可視性は30秒、保持14日、redrive未設定、可視／処理中メッセージはいずれも0件だった。RDS `vector-db`はavailableかつIAM認証有効、SQS Interface endpointはavailableかつprivate DNS有効、予定区画`10.0.33.0/24`は未使用だった。これは設定読取であり、補完の実通信を確認した結果ではない。
+
+`make test-integration`のDB統合1,475件が成功した。一時DB・Redis・ネットワーク・ボリュームと検証用チェックアウトを削除し、`git diff --check`を確認した。bootstrapの専用SSOは未認証のため、実plan・適用は未実施。AWSでの送信・受信・HTTP取得・可視性変更・DLQ・DB確定ログは未確認で、スライス5のAWS完了条件に残る。

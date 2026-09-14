@@ -255,3 +255,39 @@ variable "curation_outbox_relay_image_digest" {
     error_message = "curation_outbox_relay_image_digest must be null or a sha256 digest with 64 lowercase hexadecimal characters."
   }
 }
+
+variable "completion_consumer_image_digest" {
+  description = "Consumer用の共通backendイメージdigest（初回のみnull、通常plan/applyではstateの現行値を引き継ぐ）。"
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.completion_consumer_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.completion_consumer_image_digest))
+    error_message = "completion_consumer_image_digest must be null or a sha256 digest with 64 lowercase hexadecimal characters."
+  }
+}
+
+variable "completion_consumer_enabled" {
+  description = "Enable completion SQS consumption after deployment verification."
+  type        = bool
+  default     = false
+}
+
+variable "completion_outbox_relay_image_digest" {
+  description = "Completion relay用の共通backendイメージdigest（初回のみnull、通常plan/applyではstateの現行値を引き継ぐ）。"
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.completion_outbox_relay_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.completion_outbox_relay_image_digest))
+    error_message = "completion_outbox_relay_image_digest must be null or a sha256 digest with 64 lowercase hexadecimal characters."
+  }
+}
+
+variable "completion_relay_enabled" {
+  description = "Enable completion Outbox delivery after deployment verification."
+  type        = bool
+  default     = false
+}
