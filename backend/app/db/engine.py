@@ -180,6 +180,27 @@ def create_lambda_engine(settings: _RuntimeDatabaseSettings) -> AsyncEngine:
     )
 
 
+def create_article_fetch_engine(
+    settings: _RuntimeDatabaseSettings,
+    *,
+    application_name: str,
+    password_provider: Callable[[], Awaitable[str]],
+) -> AsyncEngine:
+    """外部取得の待機中にDB接続を残さない記事取得工程用Engineを作る。"""
+    if not settings.db_iam_auth:
+        raise ValueError("Consumer requires RDS IAM authentication")
+    if not callable(password_provider):
+        raise TypeError("Consumer requires an IAM password provider")
+    return _create_engine(
+        settings.database_url,
+        application_name=application_name,
+        password_provider=password_provider,
+        poolclass=NullPool,
+        connect_args={"timeout": 5, "command_timeout": 5},
+        echo=False,
+    )
+
+
 def create_embedding_consumer_engine(
     settings: _RuntimeDatabaseSettings,
     *,
