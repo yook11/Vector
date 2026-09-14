@@ -167,3 +167,60 @@ def test_material_conversion_exception_propagates(raw) -> None:
     ):
         extract_html_content(raw)
     assert caught.value is original
+
+
+def _history_article(slug: str, *paragraphs: str) -> RawResponse:
+    html = (
+        f"<html><head><title>{slug}</title></head><body><article>"
+        + "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+        + "</article></body></html>"
+    )
+    return RawResponse(
+        url=f"https://example.com/{slug}",
+        content_type="text/html",
+        charset_from_header="utf-8",
+        content=html.encode(),
+        decoded_text=html,
+    )
+
+
+def test_repeated_extraction_preserves_material() -> None:
+    """同じHTMLを繰り返し抽出しても、素材は前回の処理で欠落しない。"""
+    body = (
+        "再配送の観測試験では、新しい気象衛星から届いた画像を解析した。"
+        "研究チームは雲の分布と地表の温度を複数の地点で測定し、"
+        "従来の予測モデルとの違いを報告書にまとめて公開している。"
+        "観測装置の校正方法も記載されており、各地の研究機関が同じ条件で"
+        "結果を比較できるよう、測定データと分析手順を提供する予定だ。"
+    )
+    raw = _history_article("repeated-observation", body)
+    first = extract_html_content(raw)
+    assert body in first.body
+
+    for _ in range(5):
+        assert extract_html_content(raw) == first
+
+
+def test_previous_articles_do_not_remove_shared_paragraph() -> None:
+    """別記事に含まれた共通の段落も、今回の記事の素材として残す。"""
+    shared = (
+        "共同観測計画では各研究機関が取得したデータを共通の形式で公開する。"
+        "測定機器の精度や設置場所の違いを確認できるよう、校正記録と観測条件も"
+        "添付される。利用者は各地点の気温や降水量を比較し、長期的な気候変動の"
+        "傾向を調べることができる。公開された資料は教育活動にも利用できる。"
+    )
+    raw = _history_article("shared-observation", shared)
+    first = extract_html_content(raw)
+    assert shared in first.body
+
+    for region in ("北海道", "東北", "関東", "九州", "沖縄"):
+        local_report = (
+            f"{region}の観測拠点では今年度の測定計画を発表した。"
+            "新たな観測機器を設置し、過去の測定値との比較を進めている。"
+            "担当者は現地の環境条件を確認しながら機器の動作を検証している。"
+            "今後は観測地点を増やし、地域内での気候の違いについても"
+            "詳しいデータを集めていく予定だ。調査の成果は年度末に公開される。"
+        )
+        extract_html_content(_history_article(region, shared, local_report))
+
+    assert extract_html_content(raw) == first

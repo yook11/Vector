@@ -9,8 +9,10 @@ from structlog.stdlib import BoundLogger
 from app.audit.error_fields import exception_fqn
 
 if TYPE_CHECKING:
-    from app.collection.events import AnalyzableArticleCreatedEvent
-    from app.lambda_handlers.curation.event import CurationEventInvalidError
+    from app.collection.events import (
+        AnalyzableArticleCreatedEvent,
+        AnalyzableEventInvalidError,
+    )
     from app.lambda_handlers.sqs.errors import SqsInputError
 
 
@@ -50,16 +52,24 @@ class CurationLambdaFailureRecorder:
             issues=[{"field": "body", "code": error.reason.value}],
         )
 
+    def record_invalid_json(self, *, message_id: str) -> None:
+        self._record(
+            "curation_message_input_invalid",
+            message_id=message_id,
+            reason="invalid_json",
+            issues=[],
+        )
+
     def record_invalid_event(
-        self, error: CurationEventInvalidError, *, message_id: str
+        self, error: AnalyzableEventInvalidError, *, message_id: str
     ) -> None:
         self._record(
             "curation_message_input_invalid",
             message_id=message_id,
-            reason=error.reason.value,
+            reason=error.invalid.reason.value,
             issues=[
                 {"field": issue.field.value, "code": issue.code.value}
-                for issue in error.issues
+                for issue in error.invalid.issues
             ],
         )
 

@@ -19,8 +19,6 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
-from app.logfire.exceptions import VectorDomainError
-
 
 class AnalyzableArticleCreated(BaseModel):
     """分析可能な記事の新規保存が確定した事実。"""
@@ -50,9 +48,9 @@ class AnalyzableArticleCreatedEvent(BaseModel):
         try:
             return cls.model_validate(data)
         except ValidationError as exc:
-            failure = analyzable_event_validation_failure(exc)
+            invalid = cls._event_invalid_from_validation_error(exc)
         # 入力値を含むValidationErrorをcontextに残さない。
-        raise AnalyzableEventValidationError(failure)
+        raise AnalyzableEventInvalidError(invalid)
 
     @field_validator("event_id", mode="before")
     @classmethod
@@ -88,6 +86,58 @@ class AnalyzableArticleCreatedEvent(BaseModel):
             )
         return value
 
+    @staticmethod
+    def _event_invalid_from_validation_error(
+        error: ValidationError,
+    ) -> AnalyzableEventInvalid:
+        """外側の構造、種別、バージョン、payloadの順に分類し詳細を抽出する。"""
+        reasons: set[AnalyzableEventInvalidReason] = set()
+        issues: dict[AnalyzableEventInvalidIssue, None] = {}
+        known_paths = {
+            tuple(field.value.split(".")): field
+            for field in AnalyzableEventInvalidField
+        }
+        for detail in error.errors(include_input=False, include_context=False):
+            kind = detail["type"]
+            location = detail["loc"]
+            if kind == "unsupported_event_type":
+                reasons.add(AnalyzableEventInvalidReason.UNSUPPORTED_EVENT_TYPE)
+                code = AnalyzableEventInvalidCode.UNSUPPORTED_EVENT_TYPE
+            elif kind == "unsupported_schema_version":
+                reasons.add(AnalyzableEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION)
+                code = AnalyzableEventInvalidCode.UNSUPPORTED_SCHEMA_VERSION
+            else:
+                reasons.add(
+                    AnalyzableEventInvalidReason.INVALID_PAYLOAD
+                    if len(location) > 1 and location[0] == "payload"
+                    else AnalyzableEventInvalidReason.INVALID_ENVELOPE
+                )
+                if kind == "missing":
+                    code = AnalyzableEventInvalidCode.MISSING_REQUIRED_FIELD
+                elif kind == "extra_forbidden":
+                    code = AnalyzableEventInvalidCode.UNKNOWN_FIELD
+                elif kind.endswith("_type") or kind == "is_instance_of":
+                    code = AnalyzableEventInvalidCode.INVALID_TYPE
+                else:
+                    code = AnalyzableEventInvalidCode.INVALID_VALUE
+            parent = (
+                AnalyzableEventInvalidField.PAYLOAD
+                if location and location[0] == "payload" and len(location) > 1
+                else AnalyzableEventInvalidField.EVENT
+            )
+            field = (
+                parent
+                if kind == "extra_forbidden"
+                else known_paths.get(location, parent)
+            )
+            issues[AnalyzableEventInvalidIssue(field=field, code=code)] = None
+        return AnalyzableEventInvalid(
+            reason=next(
+                reason for reason in AnalyzableEventInvalidReason if reason in reasons
+            ),
+            issues=tuple(issues),
+        )
+
 
 class AnalyzableEventInvalidReason(StrEnum):
     """入力値を含めずに共有できる、イベント契約違反の理由。"""
@@ -98,7 +148,7 @@ class AnalyzableEventInvalidReason(StrEnum):
     INVALID_PAYLOAD = "invalid_payload"
 
 
-class AnalyzableEventValidationField(StrEnum):
+class AnalyzableEventInvalidField(StrEnum):
     """診断に公開できる、契約で定義済みの項目。"""
 
     EVENT = "event"
@@ -110,7 +160,7 @@ class AnalyzableEventValidationField(StrEnum):
     ANALYZABLE_ARTICLE_ID = "payload.analyzable_article_id"
 
 
-class AnalyzableEventValidationCode(StrEnum):
+class AnalyzableEventInvalidCode(StrEnum):
     """入力値や検証ライブラリの自由文に依存しない違反コード。"""
 
     MISSING_REQUIRED_FIELD = "missing_required_field"
@@ -122,75 +172,24 @@ class AnalyzableEventValidationCode(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class AnalyzableEventValidationIssue:
+class AnalyzableEventInvalidIssue:
     """入力の内容を保持しない、一項目の契約違反。"""
 
-    field: AnalyzableEventValidationField
-    code: AnalyzableEventValidationCode
+    field: AnalyzableEventInvalidField
+    code: AnalyzableEventInvalidCode
 
 
 @dataclass(frozen=True, slots=True)
-class AnalyzableEventValidationFailure:
+class AnalyzableEventInvalid:
     """優先する失敗理由と、重複のない安全な検証詳細。"""
 
     reason: AnalyzableEventInvalidReason
-    issues: tuple[AnalyzableEventValidationIssue, ...]
+    issues: tuple[AnalyzableEventInvalidIssue, ...]
 
 
-class AnalyzableEventValidationError(VectorDomainError):
+class AnalyzableEventInvalidError(Exception):
     """イベントの構築失敗を、安全な理由と検証詳細で伝える。"""
 
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("failure",)
-
-    def __init__(self, failure: AnalyzableEventValidationFailure) -> None:
+    def __init__(self, invalid: AnalyzableEventInvalid) -> None:
         super().__init__()
-        self.failure = failure
-
-
-def analyzable_event_validation_failure(
-    error: ValidationError,
-) -> AnalyzableEventValidationFailure:
-    """外側の構造、種別、バージョン、payloadの順に分類し詳細を抽出する。"""
-    reasons: set[AnalyzableEventInvalidReason] = set()
-    issues: dict[AnalyzableEventValidationIssue, None] = {}
-    known_paths = {
-        tuple(field.value.split(".")): field for field in AnalyzableEventValidationField
-    }
-    for detail in error.errors(include_input=False, include_context=False):
-        kind = detail["type"]
-        location = detail["loc"]
-        if kind == "unsupported_event_type":
-            reasons.add(AnalyzableEventInvalidReason.UNSUPPORTED_EVENT_TYPE)
-            code = AnalyzableEventValidationCode.UNSUPPORTED_EVENT_TYPE
-        elif kind == "unsupported_schema_version":
-            reasons.add(AnalyzableEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION)
-            code = AnalyzableEventValidationCode.UNSUPPORTED_SCHEMA_VERSION
-        else:
-            reasons.add(
-                AnalyzableEventInvalidReason.INVALID_PAYLOAD
-                if len(location) > 1 and location[0] == "payload"
-                else AnalyzableEventInvalidReason.INVALID_ENVELOPE
-            )
-            if kind == "missing":
-                code = AnalyzableEventValidationCode.MISSING_REQUIRED_FIELD
-            elif kind == "extra_forbidden":
-                code = AnalyzableEventValidationCode.UNKNOWN_FIELD
-            elif kind.endswith("_type") or kind == "is_instance_of":
-                code = AnalyzableEventValidationCode.INVALID_TYPE
-            else:
-                code = AnalyzableEventValidationCode.INVALID_VALUE
-        parent = (
-            AnalyzableEventValidationField.PAYLOAD
-            if location and location[0] == "payload" and len(location) > 1
-            else AnalyzableEventValidationField.EVENT
-        )
-        field = (
-            parent if kind == "extra_forbidden" else known_paths.get(location, parent)
-        )
-        issues[AnalyzableEventValidationIssue(field=field, code=code)] = None
-    return AnalyzableEventValidationFailure(
-        reason=next(
-            reason for reason in AnalyzableEventInvalidReason if reason in reasons
-        ),
-        issues=tuple(issues),
-    )
+        self.invalid = invalid

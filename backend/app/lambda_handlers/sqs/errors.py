@@ -3,8 +3,6 @@
 from enum import StrEnum
 from typing import ClassVar
 
-from app.logfire.exceptions import VectorDomainError
-
 
 class SqsInputReason(StrEnum):
     """SQS配送構造の不正を示す固定の理由。"""
@@ -15,11 +13,10 @@ class SqsInputReason(StrEnum):
     DUPLICATE_MESSAGE_ID = "duplicate_message_id"
 
 
-class SqsInputError(VectorDomainError):
+class SqsInputError(Exception):
     """入力値を保持せず、配送構造の不正位置と理由を伝える。"""
 
     CODE: ClassVar[str] = "sqs_input_invalid"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "field", "record_index")
 
     def __init__(
         self,

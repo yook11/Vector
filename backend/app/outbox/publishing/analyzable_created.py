@@ -4,7 +4,7 @@ import json
 
 from app.collection.events import (
     AnalyzableArticleCreatedEvent,
-    AnalyzableEventValidationError,
+    AnalyzableEventInvalidError,
 )
 from app.outbox.publishing.errors import (
     PublishEventInvalidError,
@@ -28,12 +28,12 @@ def build_analyzable_created_message(
                 "payload": envelope.payload,
             }
         )
-    except AnalyzableEventValidationError as exc:
-        failure = exc.failure
-        reason = PublishEventInvalidReason(failure.reason)
+    except AnalyzableEventInvalidError as exc:
+        invalid = exc.invalid
+        reason = PublishEventInvalidReason(invalid.reason)
     else:
         return EventMessage(
             event_id=event.event_id,
             body=json.dumps(event.model_dump(mode="json"), allow_nan=False),
         )
-    raise PublishEventInvalidError(reason=reason, issues=failure.issues)
+    raise PublishEventInvalidError(reason=reason, issues=invalid.issues)

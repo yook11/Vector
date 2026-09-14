@@ -6,9 +6,10 @@ from typing import TypedDict
 import structlog
 
 from app.analysis.curation.domain.ready import CurationReadyBuildRejected
+from app.collection.events import AnalyzableEventInvalidError
 from app.lambda_handlers.curation.composition import open_curation_consumer
 from app.lambda_handlers.curation.event import (
-    CurationEventInvalidError,
+    CurationMessageJsonInvalidError,
     parse_analyzable_article_created_event,
 )
 from app.lambda_handlers.curation.failure_recorder import (
@@ -69,7 +70,13 @@ async def _run_curation(
 
             try:
                 article_event = parse_analyzable_article_created_event(message_body)
-            except CurationEventInvalidError as exc:
+            except CurationMessageJsonInvalidError:
+                failure_recorder.record_invalid_json(message_id=record.message_id)
+                failed_items.append(
+                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                )
+                continue
+            except AnalyzableEventInvalidError as exc:
                 failure_recorder.record_invalid_event(exc, message_id=record.message_id)
                 failed_items.append(
                     SqsBatchItemIdentifier(itemIdentifier=record.message_id)

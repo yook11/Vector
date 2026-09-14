@@ -10,10 +10,10 @@ import pytest
 from app.analysis.assessment.events import (
     ArticleAssessedInScope,
     ArticleAssessedInScopeEvent,
-    AssessedEventValidationError,
+    AssessedEventInvalidError,
 )
 from app.lambda_handlers.embedding.event import (
-    EmbeddingEventInvalidError,
+    EmbeddingMessageJsonInvalidError,
     parse_assessed_in_scope_event,
 )
 
@@ -59,9 +59,8 @@ def test_parser_restores_typed_event(data):
 )
 def test_rejects_invalid_json_without_retaining_input(body):
     """不正JSONは本文を保持せず拒否する。"""
-    with pytest.raises(EmbeddingEventInvalidError) as caught:
+    with pytest.raises(EmbeddingMessageJsonInvalidError) as caught:
         parse_assessed_in_scope_event(body)
-    assert caught.value.reason.value == "invalid_json"
     assert caught.value.__context__ is None
     assert "private" not in str(caught.value)
 
@@ -69,9 +68,9 @@ def test_rejects_invalid_json_without_retaining_input(body):
 @pytest.mark.parametrize("body", ["null", "[]", "1", "true", '"text"'])
 def test_json_root_must_be_an_object(body):
     """JSONのルートがオブジェクトでなければ共有契約の構造不正として返す。"""
-    with pytest.raises(EmbeddingEventInvalidError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         parse_assessed_in_scope_event(body)
-    assert caught.value.reason.value == "invalid_envelope"
+    assert caught.value.invalid.reason.value == "invalid_envelope"
 
 
 @pytest.mark.parametrize(
@@ -84,25 +83,39 @@ def test_json_root_must_be_an_object(body):
     ],
 )
 def test_shared_rejection_preserves_reason_and_details(data, changes):
-    """共有契約の拒否理由と詳細を、受信側の例外へそのまま引き継ぐ。"""
+    """工程の検証例外が、受信時も同じ拒否理由と詳細を伝える。"""
     data.update(changes)
-    with pytest.raises(AssessedEventValidationError) as shared:
+    with pytest.raises(AssessedEventInvalidError) as shared:
         ArticleAssessedInScopeEvent.from_input(data)
 
-    with pytest.raises(EmbeddingEventInvalidError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         parse_assessed_in_scope_event(json.dumps(data))
 
-    assert caught.value.reason.value == shared.value.failure.reason.value
-    assert caught.value.issues == shared.value.failure.issues
+    assert caught.value.invalid.reason.value == shared.value.invalid.reason.value
+    assert caught.value.invalid.issues == shared.value.invalid.issues
 
 
 def test_shared_rejection_does_not_retain_input_or_exception_chain(data):
-    """共有契約の検証例外や入力値を、受信側の例外に残さない。"""
+    """工程の検証例外に入力値や元の検証例外を残さない。"""
     data["payload"]["curation_id"] = "private-input"
 
-    with pytest.raises(EmbeddingEventInvalidError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         parse_assessed_in_scope_event(json.dumps(data))
 
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     assert "private-" not in "".join(traceback.format_exception(caught.value))
+
+
+def test_contract_failure_is_not_wrapped(data, monkeypatch):
+    """イベントの検証例外を配送側で再構築せず同じ例外で伝える。"""
+    with pytest.raises(AssessedEventInvalidError) as original:
+        ArticleAssessedInScopeEvent.from_input({})
+
+    def reject(_data):
+        raise original.value
+
+    monkeypatch.setattr(ArticleAssessedInScopeEvent, "from_input", reject)
+    with pytest.raises(AssessedEventInvalidError) as caught:
+        parse_assessed_in_scope_event(json.dumps(data))
+    assert caught.value is original.value

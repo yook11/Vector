@@ -8,7 +8,7 @@ import pytest
 
 from app.collection.events import (
     AnalyzableArticleCreatedEvent,
-    AnalyzableEventValidationError,
+    AnalyzableEventInvalidError,
 )
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
 from app.outbox.publishing.errors import PublishEventInvalidError
@@ -29,14 +29,14 @@ def test_invalid_event_preserves_safe_validation_details():
             "private-field": "private-value",
         },
     )
-    with pytest.raises(AnalyzableEventValidationError) as validation:
+    with pytest.raises(AnalyzableEventInvalidError) as validation:
         AnalyzableArticleCreatedEvent.from_input(asdict(envelope))
 
     with pytest.raises(PublishEventInvalidError) as caught:
         build_analyzable_created_message(envelope)
 
-    assert caught.value.reason.value == validation.value.failure.reason.value
-    assert caught.value.issues == validation.value.failure.issues
+    assert caught.value.reason.value == validation.value.invalid.reason.value
+    assert caught.value.issues == validation.value.invalid.issues
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     diagnostics = str(caught.value) + repr(vars(caught.value))

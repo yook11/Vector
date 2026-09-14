@@ -17,8 +17,6 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
-from app.logfire.exceptions import VectorDomainError
-
 
 class ArticleCuratedSignal(BaseModel):
     """Signalの整形結果を保存した場合だけ発行し、Noiseは対象にしない。"""
@@ -49,9 +47,9 @@ class ArticleCuratedSignalEvent(BaseModel):
         try:
             return cls.model_validate(data)
         except ValidationError as exc:
-            failure = curated_event_validation_failure(exc)
+            invalid = cls._event_invalid_from_validation_error(exc)
         # 入力値を含むValidationErrorをcontextに残さない。
-        raise CuratedEventValidationError(failure)
+        raise CuratedEventInvalidError(invalid)
 
     @field_validator("event_id", mode="before")
     @classmethod
@@ -87,6 +85,57 @@ class ArticleCuratedSignalEvent(BaseModel):
             )
         return value
 
+    @staticmethod
+    def _event_invalid_from_validation_error(
+        error: ValidationError,
+    ) -> CuratedEventInvalid:
+        """外側の構造、種別、バージョン、payloadの順に分類し詳細を抽出する。"""
+        reasons: set[CuratedEventInvalidReason] = set()
+        issues: dict[CuratedEventInvalidIssue, None] = {}
+        known_paths = {
+            tuple(field.value.split(".")): field for field in CuratedEventInvalidField
+        }
+        for detail in error.errors(include_input=False, include_context=False):
+            kind = detail["type"]
+            location = detail["loc"]
+            if kind == "unsupported_event_type":
+                reasons.add(CuratedEventInvalidReason.UNSUPPORTED_EVENT_TYPE)
+                code = CuratedEventInvalidCode.UNSUPPORTED_EVENT_TYPE
+            elif kind == "unsupported_schema_version":
+                reasons.add(CuratedEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION)
+                code = CuratedEventInvalidCode.UNSUPPORTED_SCHEMA_VERSION
+            else:
+                reasons.add(
+                    CuratedEventInvalidReason.INVALID_PAYLOAD
+                    if len(location) > 1 and location[0] == "payload"
+                    else CuratedEventInvalidReason.INVALID_ENVELOPE
+                )
+                if kind == "missing":
+                    code = CuratedEventInvalidCode.MISSING_REQUIRED_FIELD
+                elif kind == "extra_forbidden":
+                    code = CuratedEventInvalidCode.UNKNOWN_FIELD
+                elif kind.endswith("_type") or kind == "is_instance_of":
+                    code = CuratedEventInvalidCode.INVALID_TYPE
+                else:
+                    code = CuratedEventInvalidCode.INVALID_VALUE
+            parent = (
+                CuratedEventInvalidField.PAYLOAD
+                if location and location[0] == "payload" and len(location) > 1
+                else CuratedEventInvalidField.EVENT
+            )
+            field = (
+                parent
+                if kind == "extra_forbidden"
+                else known_paths.get(location, parent)
+            )
+            issues[CuratedEventInvalidIssue(field=field, code=code)] = None
+        return CuratedEventInvalid(
+            reason=next(
+                reason for reason in CuratedEventInvalidReason if reason in reasons
+            ),
+            issues=tuple(issues),
+        )
+
 
 class CuratedEventInvalidReason(StrEnum):
     """入力値を含めずに共有できる、イベント契約違反の理由。"""
@@ -97,7 +146,7 @@ class CuratedEventInvalidReason(StrEnum):
     INVALID_PAYLOAD = "invalid_payload"
 
 
-class CuratedEventValidationField(StrEnum):
+class CuratedEventInvalidField(StrEnum):
     """診断に公開できる、契約で定義済みの項目。"""
 
     EVENT = "event"
@@ -110,7 +159,7 @@ class CuratedEventValidationField(StrEnum):
     ANALYZABLE_ARTICLE_ID = "payload.analyzable_article_id"
 
 
-class CuratedEventValidationCode(StrEnum):
+class CuratedEventInvalidCode(StrEnum):
     """入力値や検証ライブラリの自由文に依存しない違反コード。"""
 
     MISSING_REQUIRED_FIELD = "missing_required_field"
@@ -122,75 +171,24 @@ class CuratedEventValidationCode(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class CuratedEventValidationIssue:
+class CuratedEventInvalidIssue:
     """入力の内容を保持しない、一項目の契約違反。"""
 
-    field: CuratedEventValidationField
-    code: CuratedEventValidationCode
+    field: CuratedEventInvalidField
+    code: CuratedEventInvalidCode
 
 
 @dataclass(frozen=True, slots=True)
-class CuratedEventValidationFailure:
+class CuratedEventInvalid:
     """優先する失敗理由と、重複のない安全な検証詳細。"""
 
     reason: CuratedEventInvalidReason
-    issues: tuple[CuratedEventValidationIssue, ...]
+    issues: tuple[CuratedEventInvalidIssue, ...]
 
 
-class CuratedEventValidationError(VectorDomainError):
+class CuratedEventInvalidError(Exception):
     """イベントの構築失敗を、安全な理由と検証詳細で伝える。"""
 
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("failure",)
-
-    def __init__(self, failure: CuratedEventValidationFailure) -> None:
+    def __init__(self, invalid: CuratedEventInvalid) -> None:
         super().__init__()
-        self.failure = failure
-
-
-def curated_event_validation_failure(
-    error: ValidationError,
-) -> CuratedEventValidationFailure:
-    """外側の構造、種別、バージョン、payloadの順に分類し詳細を抽出する。"""
-    reasons: set[CuratedEventInvalidReason] = set()
-    issues: dict[CuratedEventValidationIssue, None] = {}
-    known_paths = {
-        tuple(field.value.split(".")): field for field in CuratedEventValidationField
-    }
-    for detail in error.errors(include_input=False, include_context=False):
-        kind = detail["type"]
-        location = detail["loc"]
-        if kind == "unsupported_event_type":
-            reasons.add(CuratedEventInvalidReason.UNSUPPORTED_EVENT_TYPE)
-            code = CuratedEventValidationCode.UNSUPPORTED_EVENT_TYPE
-        elif kind == "unsupported_schema_version":
-            reasons.add(CuratedEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION)
-            code = CuratedEventValidationCode.UNSUPPORTED_SCHEMA_VERSION
-        else:
-            reasons.add(
-                CuratedEventInvalidReason.INVALID_PAYLOAD
-                if len(location) > 1 and location[0] == "payload"
-                else CuratedEventInvalidReason.INVALID_ENVELOPE
-            )
-            if kind == "missing":
-                code = CuratedEventValidationCode.MISSING_REQUIRED_FIELD
-            elif kind == "extra_forbidden":
-                code = CuratedEventValidationCode.UNKNOWN_FIELD
-            elif kind.endswith("_type") or kind == "is_instance_of":
-                code = CuratedEventValidationCode.INVALID_TYPE
-            else:
-                code = CuratedEventValidationCode.INVALID_VALUE
-        parent = (
-            CuratedEventValidationField.PAYLOAD
-            if location and location[0] == "payload" and len(location) > 1
-            else CuratedEventValidationField.EVENT
-        )
-        field = (
-            parent if kind == "extra_forbidden" else known_paths.get(location, parent)
-        )
-        issues[CuratedEventValidationIssue(field=field, code=code)] = None
-    return CuratedEventValidationFailure(
-        reason=next(
-            reason for reason in CuratedEventInvalidReason if reason in reasons
-        ),
-        issues=tuple(issues),
-    )
+        self.invalid = invalid

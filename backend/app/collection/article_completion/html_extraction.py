@@ -61,7 +61,7 @@ def extract_html_content(raw: RawResponse) -> ScrapedContent:
             favor_precision=True,
             include_comments=False,
             include_tables=True,
-            deduplicate=True,
+            deduplicate=False,
             with_metadata=True,
             date_extraction_params=date_extraction_params,
         )
