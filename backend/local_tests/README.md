@@ -16,6 +16,7 @@ DB不要の接続URL・準備処理の単体テストは通常の`tests/`に置�
 local_tests/
 ├── database.py                   共通DBの構築・分離
 ├── conftest.py                   共通fixture
+├── http.py                       共通のHTTP応答差し替え・リクエスト記録
 ├── test_article_analysis_lifecycle.py  共通ライフサイクルと実DB資源管理（11件）
 ├── test_database_permissions.py  3ロールの許可一覧・実操作（40件）
 ├── test_auth_provisioning_schema.py  既存のAuthデータ契約（2件）
@@ -29,7 +30,14 @@ local_tests/
 ├── assessment/support.py         記事準備・実ハンドラー呼び出し・別接続からの確認
 ├── assessment/test_event_processing.py  対象内・対象外の確定保存・原子性・通信失敗・DB待機期限切れ（5件）
 ├── assessment/test_duplicate_processing.py  再配送・同じ判定区分の同時保存（4件）
-└── assessment/test_session_boundaries.py  AI待機前のセッション返却（1件）
+├── assessment/test_session_boundaries.py  AI待機前のセッション返却（1件）
+├── completion/conftest.py        補完用設定・接続・制御のfixture
+├── completion/http_control.py   記事HTTP応答の停止・再開
+├── completion/commit_control.py 補完の確定直前の停止・実SQL障害
+├── completion/support.py        記事準備・別接続からの確定結果の確認
+├── completion/test_event_processing.py  正常終了・完成保存・失敗判断・原子性（12件）
+├── completion/test_duplicate_processing.py  再配送・並行競合（5件）
+└── completion/test_session_boundaries.py  HTTP待機中・キャンセル時の資源解放（2件）
 ```
 
 - `database.py`: Alembic headへの到達、必要なAuthテーブルとカテゴリ初期データの存在を準備時に確認し、不成立ならテストを開始しない。DB構造全体や既存データの移行を網羅するテストではない。
@@ -137,3 +145,28 @@ DBロールとテーブル権限は既存の初期化／migrationを正本とし
 取得・補完は`vector_collect`、relay・Consumerは`vector_app`を使う。旧取得サービスの全体設定へはfixtureで非機密の値を渡し、製品のDB処理は差し替えない。RSS HTTP、記事スクレイピング、SQS通信、SSM・RDS署名、Gemini HTTPだけを外部境界で置き換える。AWSの実配送・実IAM認証は確認しない。
 
 正常な記事完成イベントを確認する2つのServiceテストはこの経路へ集約した。非発行・ロールバックは既存Serviceテスト、配送の拒否・通信失敗はrelay統合テスト、Curation結果別の応答・入力制約・共通資源管理は既存テストが担当する。同じケースを発行元と結果の全組合せで繰り返さない。
+
+## CompletionのConsumer接続（テストファースト）
+
+`completion/`はConsumer → HTTP取得 → HTML抽出 → 記事構築 → 実DBの確定を対象にする。先行テストへ実装済みの`app.collection.article_completion.consumer`を接続し、実際の抽出・構築・DB確定まで検証する。SQS・Lambdaへの接続は後続とする。
+
+補完側の`conftest.py`は、テスト専用設定・Collect権限のDB接続・実Consumer・HTTP応答と待機・確定制御のfixtureを組み立てる。DBの作成・分離・破棄は既存の`database.py`と共通fixtureへ任せる。HTTPの差し替えと記録は共通の`local_tests/http.py`を使い、robotsの許可や記事の応答内容は補完側で決める。
+
+fixtureは環境・コンポーネントの準備と寿命の管理に使い、既存関数にDBを渡すだけのfixtureは作らない。`support.py`の記事データ準備・削除・確定結果と接続状況の読み取りは、普通のヘルパーとして本文から呼ぶ。応答待機は`completion/http_control.py`とfixtureで準備・解除し、確定直前の停止・実SQL障害は`control_commit` fixtureで利用できるようにし、`completion/commit_control.py`のcontext managerで開始・解除する。競合の再現手順は`completion/concurrent_processing.py`へ置き、`run_completion_race` fixtureがDB・2つのConsumer・待機制御を組み合わせて渡す。
+
+イベント処理は「補完不要」「完成の一括確定」「失敗判断とDB状態」の3クラスに分け、行なし／closedと失敗監査障害時の再試行／終了は個別のテストにする。セッション境界ではHTTP待機中の観測タイミングとassertを本文に残す。重複・競合を含む先行17ケースの条件と期待結果を維持し、初回DB照会障害と外部キャンセルの2ケースを追加する。全19ケースが実Consumerの`consume()`を呼び、追加処理不要の理由も確認する。
+
+公開入口は`ArticleCompletionConsumer(session_factory).consume(incomplete_article_id)`とする。戻り値は`CompletionSucceeded`（完成記事IDを保持）、`CompletionNotRequired`（missing・closed・superseded・url_conflictの理由付き）、`CompletionFailed`（元例外を`error`、RetryArticleCompletion / CloseArticleCompletionを`decision`に保持）の3種類として検証する。Consumerは通常の補完失敗を値で返す。これはSQSの受信完了と同じ意味ではなく、配送接続は後続タスクとする。型の配置や内部の分解を固定せず、これらの名前をConsumerモジュールから参照できることを入口の契約にする。
+
+| テスト | 振る舞い |
+|---|---|
+| test_event_processing.py | 対象なし・closedでHTTPなしの正常終了、open / runningで対象記事の原子的な完成、429の元例外と待機判断、403のclosed確定、別経路の同URL完成済み記事の維持 |
+| test_event_processing.pyの障害ケース | 完成保存の4操作後のロールバックと再処理、closed確定失敗の再試行、失敗監査の障害が元の判断を変えないこと、初回DB障害を対象なしと見なさないこと |
+| test_duplicate_processing.py | 完成後の再受信、成功／closedの4通りの並行競合で先行確定を維持すること |
+| test_session_boundaries.py | HTTP応答待ちでのDB解放と、外部キャンセル時のHTTP・DB資源解放 |
+
+HTTPのみMockTransportで差し替え、抽出・構築・Repositoryは差し替えない。抽出器のキャッシュは各ケースの前後に公式の`trafilatura.meta.reset_caches()`で初期化し、別ケースのサンプルHTMLが重複扱いになることを防ぐ。同一ケース内の重複除去と本番の設定は維持する。DBは共通system_databaseを使い、書き込みはvector_collect、確定後の内容確認はvector_appの別接続で行う。未確定の保存は書き込み接続の許可列（監査id・Outbox event_id）の件数と対象記事の状態で確認する。実SQLエラーはflush後・commit前に発生させる。並行処理はHTTP応答とcommitを制御し、pg_blocking_pidsで実際の競合待機を確認してから先行処理を再開する。SQLの書き方やロック方式自体は固定しない。
+
+HTTP分類・文字コード・構築条件・監査の全属性は部品テストに任せ、同じ条件表を繰り返さない。旧経路の独立した保証は残す。SQS・Lambda・IAM・通知の実通信は今回保証しない。
+
+対象だけを実行する場合は`cd backend && uv run pytest local_tests/completion -q`、全体確認は`make test-local`で行う。Consumerの読み込みはfixtureがテスト専用設定を用意した後に行う。

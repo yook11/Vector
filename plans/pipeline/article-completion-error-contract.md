@@ -240,3 +240,54 @@ Ruff lint・format（app全体と追加テスト）成功。追加64ケース成
 ### 結果型の分離
 
 RetryArticleCompletionとCloseArticleCompletionに分け、戻り値にユニオンを直接記述する形へ修正した。再試行結果だけにretry_atを持たせ、Noneになる理由をフィールドと解釈関数のコメントへ追記した。既存64ケースの期待結果を更新し、新規テストは追加していない。修正後もRuff lint・format、単体6,932件、DB統合1,434件が成功し、一時環境の削除を確認した。
+
+## タスク5の先行テスト: ConsumerからDB確定まで
+
+### Problem / Evidence / Invariants
+
+新経路のConsumerを接続した際の外部から観測できる振る舞いを、production実装より先にローカルテストへ定義する。既存のAssessment/Curationローカルテスト、migration適用済みDBの共通fixture、Collect権限、補完の原子的保存と確定した失敗判断を確認した。
+
+Consumerの入口は未完成記事IDで、完成・追加処理不要・失敗を区別する。失敗は元例外と工程判断を一緒に結果値で返す（error / decision）。終了判断ではclosed確定後に失敗結果を返し、closedのDB確定に失敗した場合は再試行結果にする。失敗監査の二次障害は元のエラー・待機時刻・確定済みclosedを覆さない。同URLの完成記事が既存なら未完成行だけを削除し、既存記事・監査・Outboxを増やさない。
+
+テストの配置と各保証は[ローカルテストREADME](../../backend/local_tests/README.md#completionのconsumer接続テストファースト)を参照する。HTTP以外の業務処理やDB結果を模倣せず、別接続から確定状態を確認する。並行処理の保証は実ロック待ち、ロールバックは実SQL障害で確認する。
+
+### Non-goals / Done
+
+今回は`backend/local_tests/completion/`と説明文書だけを追加し、本体・仮Consumer・DB schema・既存Taskiq・SQS接続は変更しない。`codex/completion-consumer-tests`の専用worktreeで実施する。全シナリオをcollectionでき、環境不備ではなくConsumer未実装で失敗することを確認し、既存の単体・DB統合が通り、一時環境の削除を確認した時点で停止する。本体を追加してGREENにする作業は次のタスクとする。
+
+### 先行テストの検証結果
+
+17ケースをcollectionでき、実DBの準備後に全件が`ModuleNotFoundError: app.collection.article_completion.consumer`で失敗するREDを確認した。設定不足やseed SQLの型不一致は修正済み。Consumer未実装のため、保存・競合・ロールバックの期待結果が成立することはまだ検証していない。
+
+Ruff lint・format（app全体と追加local_tests）成功、既存単体6,945件成功、`make test-integration PYTEST_ARGS='-x -q'`のDB統合1,475件成功。新規ローカルテストは対象ディレクトリを実行し、既存local_tests一式は再実行していない。ローカルテストと統合テストの一時DBコンテナ・networkの削除を確認した。productionコード・DB schema・既存Taskiqに差分はない。
+
+### 先行テストの配置整理
+
+ユーザー指定により未コミット変更をローカルmainへ移し、補完のconftestに混在していた環境準備と制御処理を分離する。共通DBのfixture、補完の17ケース、HTTP・コミットの制御を根拠とし、期待結果・DB権限・停止条件・後片付けを維持する。
+
+共通のHTTP応答差し替えと記録は`local_tests/http.py`、補完の応答待機は`completion/http_control.py`、確定直前の停止と実SQL障害は`completion/commit_control.py`へ置く。補完のconftestには、独立した設定fixtureと各道具の組み立て・後片付けを残す。DB準備の共通基盤、他工程、本体、schemaは変更せず、テストケースは増減しない。配置整理後も全17ケースを収集でき、Consumer未実装だけを理由に失敗することと既存単体・DB統合の成功を確認して完了とする。
+
+整理後のRuff lint・format、既存単体6,975件、DB統合1,475件が成功した。補完17ケースは全件Consumer未実装のModuleNotFoundErrorで失敗し、保存・競合の期待結果は未検証のままである。共通HTTPの応答・記録と停止・再開・後片付けは個別に動作確認した。既存local_tests一式は再実行していない。ローカルテストとDB統合の一時コンテナ・networkの削除を確認し、変更はローカルmainに未コミットで保持する。
+
+
+## タスク5の本体実装: ConsumerとDB確定
+
+### Problem / Evidence / Invariants
+
+既存の取得・抽出・構築・失敗分類を、新経路のConsumerとDB確定へ接続する。合意済みConsumer仕様、先行17ケース、既存完成記事Repository・監査payload、caller管理セッションとDB例外変換、Collect権限を確認した。
+
+Consumerは未完成記事IDを受け取り、既存CompletionSucceeded、理由付きCompletionNotRequired、元例外と工程判断を保持するCompletionFailedのユニオンを直接返す。新経路専用Repositoryは非closed条件でDELETE／UPDATEを競合させ、先行commitを維持する。成功時は記事保存・未完成行削除・成功監査・Outboxを一括commitする。URL競合は未完成行だけ削除する。再試行は行を変更せず、終了はclosed確定後に失敗結果を返す。
+
+HTTP待機前に読取セッションを閉じ、DB障害は既存のセッション境界で変換する。失敗監査は別トランザクションで行い、その通常例外を元の結果へ混ぜない。監査は明示した情報だけを既存payloadへ写し、例外の自由文・本文・生のヘッダーは追加出力しない。外部キャンセルは通常失敗へ変換しない。
+
+### Non-goals / Done
+
+ローカルmainの先行テストと既存変更を保持する。旧Taskiq・DB schemaと権限・ソースポリシー・失敗分類表・エラー定義を変更しない。SQS・Lambda・救済・通知・メトリクス・追加の全体期限は対象外とする。先行17ケースへ正常終了理由の確認を足し、新規ケースは初回DB照会障害と外部キャンセルの2つだけとする。Ruff lint・format、単体、DB統合、ローカルテスト全体の成功と一時環境の削除を確認して、未コミットで完了する。
+
+### 抽出キャッシュによるテスト間干渉
+
+実Consumerを接続すると、別ケースで同じサンプルHTMLを抽出した履歴が残り、保存テストが抽出拒否で終了した。インストール済み実装と[公式の重複判定仕様](https://trafilatura.readthedocs.io/en/latest/deduplication.html#clearing-the-cache)を確認し、補完fixtureで各ケースの前後にreset_caches()を呼んで分離した。同一ケース内の抽出・重複除去とproduction設定は維持し、抽出結果のモック化や期待条件の緩和は行っていない。長寿命の実行環境におけるキャッシュ寿命の見直しは配送接続時の検討事項として仕様へ残す。
+
+### 本体実装の検証結果
+
+Ruff lint・formatが成功。補完19ケースが実DBで成功し、単体6,975件（integration 1,475件を分離）、`make test-integration PYTEST_ARGS='-x -q'`のDB統合1,475件、`make test-local`の全101件（補完19件を含む）が成功した。ローカルテストとDB統合の一時コンテナ・networkの削除を確認した。旧Taskiqの実行経路、DB schema・権限、依存ファイルに差分はなく、変更はローカルmainに未コミットで保持する。
