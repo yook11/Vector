@@ -180,6 +180,26 @@ def create_lambda_engine(settings: _RuntimeDatabaseSettings) -> AsyncEngine:
     )
 
 
+def create_source_dispatch_engine(
+    settings: _RuntimeDatabaseSettings,
+    *,
+    password_provider: Callable[[], Awaitable[str]],
+) -> AsyncEngine:
+    """予定回の対象選定用Engineを、IAM認証と呼び出し単位の接続で作る。"""
+    if not settings.db_iam_auth:
+        raise ValueError("Source dispatch requires RDS IAM authentication")
+    if not callable(password_provider):
+        raise TypeError("Source dispatch requires an IAM password provider")
+    return _create_engine(
+        settings.database_url,
+        application_name="vector-source-dispatch",
+        password_provider=password_provider,
+        poolclass=NullPool,
+        connect_args={"timeout": 5, "command_timeout": 5},
+        echo=False,
+    )
+
+
 def create_article_fetch_engine(
     settings: _RuntimeDatabaseSettings,
     *,
