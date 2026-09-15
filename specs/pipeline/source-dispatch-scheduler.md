@@ -1,6 +1,6 @@
 # ソース取得依頼の投入 — EventBridge Scheduler / Lambda / SQS
 
-Status: 一部実装（2026-09-15）。ステップ1の入力検証・取得依頼生成と、ステップ2のSQS送信・失敗分の再送を追加した。Lambda入口・AWS設定は未実装。以下の「提案」は未確定であり、実装済みとして扱わない。
+Status: 一部実装（2026-09-15）。ステップ1の入力検証・取得依頼生成、ステップ2のSQS送信・失敗分の再送、ステップ3のLambda入口を実装した。AWS設定の作成・適用は未実装。以下の「提案」は未確定であり、実装済みとして扱わない。
 
 ## Problem
 
@@ -124,7 +124,7 @@ SQSのMessageIdとLambdaの実行IDを業務上の取得依頼IDには使わな�
 
 ### 5. 配備、監視、切替
 
-- Lambda入口・設定層・資源ライフサイクル・ソース登録の読み込み方を決める。対象選定に不要な取得クライアント・AI・Redisを初期化しない。
+- Lambda入口・設定層・資源ライフサイクルはステップ3で実装した。対象選定に不要な取得クライアント・AI・Redisを初期化しない。AWSへの配備・通常経路の有効化は後続とする。
 - DBへの読み取り接続、SQS送信、ログ・メトリクス、失敗記録に必要なIAM・ネットワーク経路を定義する。既存relayの権限やVPC endpoint policyで新Lambdaがそのまま動くとは仮定しない。
 - cadenceごとの対象件数・拒否件数・送信確認件数・投入完了・失敗を記録する。予定どおりの投入完了が途絶えた場合の監視を設け、既存dispatch_run監視との接続を決める。
 - Consumerの受信準備後に旧定期投入を停止し、新Schedulerを有効化する順序とロールバック手順を決める。切替中の実行中タスクと投入済みメッセージを考慮する。
@@ -170,7 +170,7 @@ SQSのMessageIdとLambdaの実行IDを業務上の取得依頼IDには使わな�
 検証の所有先:
 
 - [単体テスト](../../backend/tests/collection/sources/test_acquisition_request.py): IDの同一性と識別、補完・丸めが必要な時刻の拒否。DB照会は新しい関数の責務に含めず、中継クラスの例外伝播だけを確認していたテストは削除した。既存の選定障害の検証は維持する。
-- [ローカルテスト](../../backend/local_tests/test_source_acquisition_requests.py): migration適用済みDBと実際の選定・依頼生成を接続し、DBの現状態に対応する取得依頼一覧を検証する。対象外の理由は既存の確認結果側で確認する。同じ選定シナリオのモック単体テスト・別DB統合テストは追加しない。
+- [ローカルテスト](../../backend/local_tests/acquisition/test_source_acquisition_requests.py): migration適用済みDBと実際の選定・依頼生成を接続し、DBの現状態に対応する取得依頼一覧を検証する。対象外の理由は既存の確認結果側で確認する。同じ選定シナリオのモック単体テスト・別DB統合テストは追加しない。
 - 後続の送信・Lambda接続はこのローカル経路を拡張し、正常経路を別テストへ複製しない。AWS実配送はこのステップの検証対象外とする。
 
 検証結果（2026-09-13）: 取得依頼一覧と選定診断を分離した実装で、Ruff lint・format check、全単体6,866件、DB統合1,434件、ローカル82件が成功した。新規追加は単体6ケースと実DBのローカル1シナリオ。ステップ1は完了とし、SQS送信・AWS実行は未実装・未検証。
@@ -219,3 +219,30 @@ Done: 合意した配送シナリオと境界の検証、既存チェックが�
 検証結果（2026-09-15）: SQSの責務を分離したmain上の実装で、Ruff lint・format check、全単体7,166件、`make test-integration`の1,475件、`make test-local`の138件が成功した。ステップ2での追加は配送を重複検証しない単体3ケースと、既存ローカル1シナリオの拡張・失敗系5ケース。今回のarticle_acquisitionへの配置変更・工程例外への変換後も、Ruff lint・format、単体7,166件（not integration）、統合1,475件、ローカル138件が成功した。全testsの直接実行は既定DB未起動で停止したため、単体と専用DBの統合実行に分けて検証した。既存テストの配置と参照先を更新し、再送対象外と調査対象の変換結果を既存ローカルケースで確認した。ケースの追加はなく、クライアント生成失敗の工程例外への変換は補助チェックで確認した。AWS実配送とLambda接続は未実装・未検証。
 
 命名整理後の検証結果（2026-09-15）: `SqsMessageSender`・`SqsSendResponse`への改名後、Ruff lint・format、単体7,166件、DB統合1,475件、ローカル138件が成功した。テストケースの追加はなく、送信・応答検証・再送の振る舞いは維持した。
+
+
+## ステップ3：予定回をLambda入口へ接続する
+
+Problem: Schedulerが渡す予定回をLambda入口で検証し、既存の取得依頼投入へ接続する。
+Evidence: 既存の予定回型・投入処理・SQS送信、DB接続生成・IAM署名器、Lambdaの設定と資源管理を確認した。`vector_collect`は既存migrationで`news_sources`のSELECT権限を持つ。既存Relay専用の接続名や記事取得用HTTP設定の初期化は流用しない。
+Invariants: 元の予定時刻と依頼IDを維持する。不正入力では設定・接続資源を生成せず、設定不足では投入を始めない。全件成功または対象0件だけを正常終了とし、DB障害・未送信を成功に変換しない。通常の解放・診断失敗は確定済みの結果を変えない。
+Non-goals: AWSリソース作成・適用、DB schema・権限・依存変更、既存OutboxやTaskiqの変更、Consumer重複管理、進捗保存、失敗通知を追加しない。
+Done: Lambda入口から実DB・実投入処理へのローカル接続と、入口固有の失敗・資源回収の検証、既存チェックが通る。
+
+### 入口と接続契約
+
+- `app.lambda_handlers.source_dispatch.handler.handler(schedule_input, context) -> None`が予定回を受け取る。入力は既存の`cadence`・`scheduled_at`だけで、SQSレコードやイベントEnvelopeへ包まない。既存`SourceAcquisitionSchedule`で検証してから設定を読む。
+- `SourceDispatchSettings`は`DatabaseConnectionSettings`を継承する。`DATABASE_URL`・`AWS_REGION`・`SQS_SOURCE_ACQUISITION_QUEUE_URL`を要求し、`DB_IAM_AUTH`は既定true・false拒否とする。`ENV`は既存区分、既定productionとし、既存の本番TLS・IAM URL内パスワード禁止を維持する。`.env`やアプリ全体の設定は読まない。
+- DB接続先は`vector_collect`を指定する。実行ごとにRDS署名クライアントと専用Engineを所有し、既存IAM providerを接続する。Engineは`NullPool`、接続・コマンドの制限各5秒、接続名`vector-source-dispatch`。SDKクライアント生成・解放をスレッドへ移し、RDS初期化中のキャンセルでも生成結果を回収する。
+- `open_source_dispatcher`が既存の`SourceDispatchService`・`SourceAcquisitionDispatcher`を組み立てる。SQSは既存送信部品を遅延生成し、対象0件ではSQSクライアントを作らない。再送ループ・本文・ID生成を入口へ複製しない。
+- 入口の失敗は`SourceDispatchLambdaError`に変換し、`input`・`settings`・`resources`・`dispatch`の段階と例外型だけを保持・記録する。元の自由文・例外連鎖を表示せず、通常の例外は必ずエラー終了へつなぐ。未送信依頼の詳細ログは既存投入処理だけが所有し、入口では複製しない。
+- キャンセル・プロセス停止を通常例外へ変換しない。Engine・RDS解放の通常例外は安全な診断だけを残し、処理結果を上書きしない。SQSの解放契約は既存部品が所有する。
+
+### 検証の所有先とAWS接続
+
+- `local_tests/acquisition/test_source_acquisition_requests.py`の既存6ケースを実際の同期Lambda入口から呼ぶ形へ拡張する。実設定・IAM接続・対象選定・SQS送信を使い、AWS署名器・SQS SDK呼び出し・待機だけを差し替える。ログの捕捉時のみ共通ログ初期化を止める。再呼び出しで新しい接続と最新DB状態を使い、対象0件ではSQSクライアントを生成しないことも確認する。
+- 単体は入口の入力拒否、設定不足・IAM条件違反、DB障害、資源準備失敗時の回収、解放・診断失敗による結果の維持、RDS初期化中のキャンセルに限定する。DB障害の既存1ケースを入口へ移し、同じ配送シナリオや時刻・ID検証を追加しない。
+- Lambdaの関数エラー時の最大2回再実行・イベント保持6時間は合意済みだが未適用。Lambda制限時間、Scheduler・キュー・IAM・ネットワーク設定、実AWSでの動作確認は後続とする。
+- [Lambda公式の入口仕様](https://docs.aws.amazon.com/lambda/latest/dg/python-handler.html)に従い、同期の2引数入口から非同期処理を実行する。[SQLAlchemyのイベントループ間の接続共有に関する説明](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-multiple-asyncio-event-loops)に沿い、実行ごとのEngineと`NullPool`で接続を持ち越さない。
+
+検証結果（2026-09-15）: ステップ3は完了。Ruff lint・format、入口固有の単体9ケース、全単体7,174件、DB統合1,475件が成功した。ローカルテストは取得工程の`local_tests/acquisition/`へ移し、全139件の収集と`make test-local`の139件成功を確認した。既存6配送ケースを入口へ拡張し、DB障害1ケースを移設したため単体の純増は8件。AWS接続・実配送・設定適用は未実施。
