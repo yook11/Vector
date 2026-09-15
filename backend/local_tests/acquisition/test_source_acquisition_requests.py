@@ -204,6 +204,26 @@ async def test_dispatch_skips_sqs_when_no_matching_source(
     assert runtime.sqs_clients == []
 
 
+async def test_invalid_source_name_does_not_stop_other_dispatch_targets(
+    system_database, acquisition_sources, start_dispatch
+):
+    """DB上の不正名を個別の棄却にし、登録済みソースの投入を継続する。"""
+    sources = acquisition_sources
+    async with system_database.connect("vector") as db:
+        await db.execute(
+            "UPDATE news_sources SET name='!!!' WHERE id=$1", sources.unregistered
+        )
+    runtime = start_dispatch({sources.high: [None], sources.other_high: [None]})
+    with capture_logs() as logs:
+        await runtime.invoke()
+    assert runtime.sent_source_ids == [sources.high, sources.other_high]
+    assert any(
+        log["event"] == "dispatch_source_name_invalid"
+        and log["source_id"] == sources.unregistered
+        for log in logs
+    )
+
+
 async def test_retryable_failure_is_resent_until_accepted(
     acquisition_sources, start_dispatch
 ):

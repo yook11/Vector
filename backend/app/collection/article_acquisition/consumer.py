@@ -4,19 +4,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import String, cast, select
-
+from app.collection.article_acquisition.failure_handling import (
+    ArticleAcquisitionFailureHandler,
+)
 from app.collection.article_acquisition.service import ArticleAcquisitionService
-from app.collection.article_acquisition.strategy import SOURCES
+from app.collection.article_acquisition.source_resolution import (
+    AcquisitionNotRequired,
+    resolve_acquisition_source,
+)
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.sources.acquisition_request import SourceAcquisitionRequest
-from app.collection.sources.source_name import SourceName
 from app.db.session import SessionFactory
-from app.models.news_source import NewsSource
-
-
-class AcquisitionSourceInvalidError(Exception):
-    """有効なソースを登録済みの取得定義へ解決できない。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,28 +29,24 @@ class ArticleAcquisitionConsumer:
     ) -> None:
         self._session_factory = session_factory
         self._tools_factory = tools_factory
+        self._failure_handler = ArticleAcquisitionFailureHandler(session_factory)
 
     async def consume(self, request: SourceAcquisitionRequest) -> AcquisitionResult:
-        async with self._session_factory() as session:
-            row = (
-                await session.execute(
-                    select(
-                        cast(NewsSource.name, String).label("name"),
-                        NewsSource.is_active,
-                    ).where(NewsSource.id == request.source_id)
-                )
-            ).one_or_none()
-        if row is None:
-            return AcquisitionResult("missing")
-        if not row.is_active:
-            return AcquisitionResult("inactive")
-        try:
-            source = SOURCES.get(SourceName(row.name))
-        except ValueError:
-            source = None
-        if source is None:
-            raise AcquisitionSourceInvalidError("source_not_registered")
-        ids = await ArticleAcquisitionService(
+        source = await resolve_acquisition_source(
+            source_id=request.source_id, session_factory=self._session_factory
+        )
+        if isinstance(source, AcquisitionNotRequired):
+            return AcquisitionResult(source.reason)
+        service = ArticleAcquisitionService(
             self._session_factory, source, self._tools_factory
-        ).execute(source_id=request.source_id)
+        )
+        try:
+            ids = await service.execute(source_id=request.source_id)
+        except Exception as exc:
+            await self._failure_handler.record_source_failure(
+                source_id=request.source_id,
+                source_name=str(source.name),
+                exc=exc,
+            )
+            raise
         return AcquisitionResult("acquired", len(ids))

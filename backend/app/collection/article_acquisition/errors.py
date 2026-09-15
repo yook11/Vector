@@ -14,6 +14,10 @@ from app.collection.external_fetch_errors import ExternalFetchError
 from app.logfire.exceptions import VectorDomainError
 
 
+class AcquisitionSourceInvalidError(Exception):
+    """有効なソースを登録済みの取得定義へ解決できない。"""
+
+
 class AcquisitionConversionDefect(StrEnum):
     """acquisition がスコープ所有する変換棄却理由 (自己記述コード)。
 

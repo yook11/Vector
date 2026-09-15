@@ -55,11 +55,11 @@ def invoke_acquisition(system_database, monkeypatch):
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(entrypoint, "setup_lambda_logging", lambda: None)
-    schedule = SourceAcquisitionSchedule.model_validate(
-        {"cadence": "high", "scheduled_at": "2026-09-15T00:00:00Z"}
-    )
 
-    async def invoke(source_id):
+    async def invoke(source_id, *, cadence="high"):
+        schedule = SourceAcquisitionSchedule.model_validate(
+            {"cadence": cadence, "scheduled_at": "2026-09-15T00:00:00Z"}
+        )
         event = {
             "Records": [
                 {

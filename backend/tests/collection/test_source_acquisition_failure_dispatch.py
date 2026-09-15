@@ -26,6 +26,7 @@ from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchSsrfBlockedError,
 )
+from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -217,6 +218,28 @@ async def test_unexpected_error_writes_audit_and_returns_true(
     assert ev.error_class.endswith(".RuntimeError")
     assert ev.payload["failure_kind"] == "unknown"
     assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_database_failure_writes_audit_and_returns_true(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """DB障害は再試行可能な監査を残し、Taskiqへ再送出を要求する。"""
+    handler = ArticleAcquisitionFailureHandler(session_factory)
+    reraise = await handler.handle_source_failure(
+        source_id=sample_source.id,
+        source_name="VentureBeat",
+        exc=DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+    )
+
+    assert reraise is True
+    events = await _fetch_acquisition_events(db_session, sample_source.id)
+    assert len(events) == 1
+    assert events[0].event_type == "failed"
+    assert events[0].outcome_code == "db_runtime_error"
+    assert events[0].retryability == "retryable"
 
 
 @pytest.mark.asyncio

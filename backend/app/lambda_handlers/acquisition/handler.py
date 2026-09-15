@@ -6,7 +6,7 @@ from time import monotonic
 import structlog
 
 from app.audit.error_fields import exception_fqn
-from app.collection.article_acquisition.consumer import AcquisitionSourceInvalidError
+from app.collection.article_acquisition.errors import AcquisitionSourceInvalidError
 from app.collection.sources.acquisition_request import AcquisitionRequestInvalidError
 from app.lambda_handlers.acquisition.composition import open_acquisition_consumer
 from app.lambda_handlers.acquisition.message import (

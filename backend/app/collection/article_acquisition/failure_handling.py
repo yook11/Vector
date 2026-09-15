@@ -36,20 +36,34 @@ class ArticleAcquisitionFailureHandler:
         exc: BaseException,
     ) -> bool:
         """taskiq に raise すべきなら ``True``、return すべきなら ``False``。"""
-        match exc:
-            case AcquisitionError():
+        await self.record_source_failure(
+            source_id=source_id, source_name=source_name, exc=exc
+        )
+        if isinstance(exc, AcquisitionError):
+            return False
+        if not isinstance(exc, DatabaseError):
+            logger.exception(
+                "acquire_source_unexpected_error",
+                source_id=source_id,
+            )
+        return True
+
+    async def record_source_failure(
+        self,
+        *,
+        source_id: int | None,
+        source_name: str | None,
+        exc: BaseException,
+    ) -> None:
+        """再試行の判断を行わず、ソースの取得失敗を別セッションで監査する。"""
+        try:
+            if isinstance(exc, AcquisitionError | DatabaseError):
                 await self._audit_failure(source_id, source_name, exc)
-                return False
-            case DatabaseError():
-                await self._audit_failure(source_id, source_name, exc)
-                return True
-            case _:
+            else:
                 await self._audit_unexpected_failure(source_id, source_name, exc)
-                logger.exception(
-                    "acquire_source_unexpected_error",
-                    source_id=source_id,
-                )
-                return True
+        except Exception:  # noqa: S110
+            # 監査・診断の通常障害で元の取得失敗を置き換えない。
+            pass
 
     async def handle_conversion_rejected(
         self,
