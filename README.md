@@ -2,7 +2,9 @@
 
 > 海外テックニュース収集・AI翻訳・投資分析ダッシュボード
 
-次世代コンピューティング、マテリアル・インフォマティクスなど、日本では情報が少ない先端分野の海外ニュースを自動収集し、AI で翻訳・要約・インパクト分析を行う投資ダッシュボードです。
+先端テクノロジーに関する海外の情報は、日本でニュースとして取り上げられるまでに時間がかかり、最新の動向をすばやく把握しづらいと感じていました。
+
+この課題を解決したいという思いから、海外のニュース記事を自動で収集・翻訳・要約し、何が起きているのかを日本語ですばやく把握できるアプリの開発を始めました。
 
 公開URL: [https://vectorbrief.online](https://vectorbrief.online)（招待制）
 本サービスは外部のAI APIを利用したポートフォリオ作品のため、デモは招待制で公開しています。ご覧になりたい方は、X（@yook_dev）までお気軽にご連絡ください。
@@ -68,7 +70,8 @@ AI との開発の進め方についても、その後、考え方が大きく�
 | フロントエンド | Next.js 16 (App Router / BFF)・React 19・TypeScript・Tailwind CSS v4・shadcn/ui |
 | 認証 | Better Auth (frontend BFF で完結) |
 | バックエンド | Python 3.13・FastAPI・Pydantic / SQLModel・Alembic |
-| 非同期処理 | taskiq (worker / scheduler)・ElastiCache Valkey (queue / レート制限)・Transactional Outbox / Amazon SQS / AWS Lambda（段階移行中） |
+| 記事処理 | EventBridge Scheduler・AWS Lambda・Amazon SQS・Transactional Outbox |
+| その他の非同期処理 | taskiq (worker / scheduler)・ElastiCache Valkey (queue / レート制限) |
 | データ | Amazon RDS for PostgreSQL・pgvector (768次元ベクトル検索) |
 | AI | Gemini (翻訳・要約・リサーチ計画・回答生成・Embedding)・DeepSeek (重要度・投資文脈分析・検索クエリ生成・根拠精査) |
 | 外部検索 | Amazon Bedrock AgentCore Gateway (Web Search) |
@@ -77,9 +80,11 @@ AI との開発の進め方についても、その後、考え方が大きく�
 ## Architecture
 
 Vector は、ブラウザから直接到達できる入口を Next.js BFF に寄せ、backend API と worker 群を内部側に閉じる構成です。
-本番環境は AWS (ap-northeast-1) で動作しています。ALB を唯一の公開入口とし、frontend・API・scheduler・各 worker を ECS Fargate の service として分離、データは RDS PostgreSQL と ElastiCache Valkey に置いています。構成は Terraform (`infra/aws/`) で管理しています。
+本番環境は AWS (ap-northeast-1) で動作しています。ALB を唯一の公開入口とし、frontend・API・リサーチや週次ブリーフィングなどの worker は ECS Fargate で実行します。記事の収集・分析は EventBridge Scheduler・SQS・Lambda によるイベント駆動構成です。データは RDS PostgreSQL と ElastiCache Valkey に置き、構成は Terraform (`infra/aws/`) で管理しています。
 
 以前は Fly.io と Neon PostgreSQL で運用していましたが、この構成はすでに停止しています。現在の本番インフラの正本は `infra/aws/` の Terraform です。
+
+### ネットワーク境界と通信経路
 
 ```mermaid
 flowchart TB
@@ -94,7 +99,7 @@ flowchart TB
         subgraph AppNet["app subnet — public IP を持たない"]
             FE["frontend<br/>Next.js BFF / 認証"]
             API["api<br/>FastAPI"]
-            WORKER["worker / scheduler<br/>収集・AI分析・派生処理"]
+            WORKER["バックグラウンド処理<br/>VPC 接続 Lambda / ECS worker"]
         end
 
         subgraph DataNet["data subnet"]
@@ -134,7 +139,9 @@ flowchart TB
     class RDS,VK data
 ```
 
-公開入口、内部 API、外部 HTML 取得 worker、DB 権限を分けることで、外部入力を扱う処理の影響範囲を小さくしています。
+緑の線はブラウザからの公開経路、オレンジの線は外部ニュース・AI API への通信経路を示しています。バックグラウンド処理は通信上の役割としてまとめており、各処理が必要な DB・Valkey に接続します。Lambda は VPC 接続先を示し、実行環境自体をサブネット内に配置するものではありません。
+
+公開入口、内部 API、外部 HTML の取得処理、DB 権限を分けることで、外部入力を扱う処理の影響範囲を小さくしています。
 この分割の背景と、非同期パイプライン・セキュリティ境界の設計判断は [docs/architecture.md](docs/architecture.md) にまとめています。ただし、同文書のインフラ構成は旧 Fly.io / Neon 運用時の記録であり、現在の AWS 構成を説明するものではありません。
 
 以下の記事は、Fly.io / Neon から AWS へ移行した時点の選定理由とトレードオフをまとめた記録です。現在も本番基盤には AWS を利用していますが、個別の構成や運用方式はその後も更新しており、現行構成の正本は `infra/aws/` です。
@@ -144,9 +151,58 @@ flowchart TB
 
 ## ニュース処理パイプライン
 
-収集した記事は、本文補完、翻訳・要約、重要度・投資文脈の分析、ベクトル生成という複数の非同期ステージを通して処理します。各ステージの実行結果は Pipeline Events に記録し、途中で処理が止まった場合は、backfill が DB の状態から未完了の工程を再発見して通常のキューへ再投入します。
+取得した記事は、必要に応じて本文を補完し、翻訳・要約、重要度・投資文脈の分析、Embedding（ベクトル）生成へ進みます。途中で対象外と判定した記事は、後続の分析へ進めません。
 
-現在はコスト最適化のため、常時稼働 worker と taskiq / Valkey を中心とした構成から、Transactional Outbox・Amazon SQS・AWS Lambda を利用するイベント駆動構成へ段階的に移行しています。
+### イベント駆動による実行と工程間の受け渡し
+
+この図はネットワーク配置ではなく、処理を起動し、次の工程へ渡す仕組みを示しています。
+
+```mermaid
+flowchart TB
+    subgraph Start["収集の起点"]
+        direction LR
+        SCHEDULE["EventBridge Scheduler"] --> DISPATCH["Lambda<br/>取得依頼"]
+        DISPATCH --> REQUEST["SQS<br/>取得依頼キュー"]
+        REQUEST --> ACQUIRE["Lambda<br/>記事取得"]
+    end
+
+    subgraph Handoff["工程間の受け渡し"]
+        direction TB
+        TIMER["EventBridge Scheduler<br/>一定間隔で起動"]
+        subgraph Delivery["結果の保存から次工程の実行まで"]
+            direction LR
+            DB[("PostgreSQL<br/>処理結果とイベントを<br/>同一トランザクションで記録")]
+            DB -->|未配送イベント| RELAY["Lambda / Outbox Relay<br/>DB の未配送イベントを読み<br/>SQS へ配送"]
+            RELAY -->|次工程の実行依頼を送信| QUEUE["SQS<br/>実行依頼を保持"]
+            QUEUE -->|メッセージ取得・関数起動<br/>イベントソースマッピング| NEXT["Lambda<br/>依頼を受けて処理を実行"]
+            NEXT --> SAVE[("PostgreSQL<br/>処理結果を確定<br/>後続があればイベントも同時に記録")]
+        end
+        TIMER --> RELAY
+    end
+
+    Start ~~~ Handoff
+
+    classDef compute fill:#eef2ff,stroke:#6366f1,color:#111827;
+    classDef data fill:#fef3c7,stroke:#f59e0b,color:#111827;
+    class SCHEDULE,DISPATCH,ACQUIRE,TIMER,RELAY,NEXT compute
+    class REQUEST,DB,QUEUE,SAVE data
+```
+
+工程間の受け渡しは、次の流れで進みます。
+
+1. **処理結果とイベントを一緒に記録する。** 記事取得などの工程が完了すると、処理結果と、次工程へ進むためのイベントを PostgreSQL の同一トランザクションで保存します。イベントの保存先が Outbox です。これにより、結果だけが保存され、次工程へ渡すイベントが記録されない状態を防ぎます。
+2. **Scheduler が Relay を定期起動する。** EventBridge Scheduler は一定間隔で Outbox Relay の Lambda を起動します。DB の変更を監視しているのではなく、起動された Relay が Outbox の未配送イベントを読み出します。
+3. **次工程の実行依頼を SQS へ送る。** Relay はイベントをメッセージとして、対応する工程の SQS キューへ送ります。このメッセージが、次工程を実行する依頼になります。
+4. **SQS の依頼を取得して Lambda を起動する。** AWS が管理するイベントソースマッピングが SQS をポーリングし、取得したメッセージを渡して、その工程の Lambda 関数を起動します。関数内で SQS を監視する必要はありません。
+5. **処理結果を確定し、後続があればイベントも記録する。** Lambda 関数は依頼を受けて処理を実行します。次の工程へ進む場合は、今回の処理結果と新しいイベントを同一トランザクションで記録します。そのイベントを Relay が配送し、同じ受け渡しを繰り返します。後続工程がない場合は、結果を保存して終了します。
+
+図中の2つの PostgreSQL は、工程の前後での保存を表すために分けて描いています。別々の DB を意味するものではありません。SQS から関数を起動する仕組みは [AWS の公式ドキュメント](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html) を参照してください。
+
+未完了の分析工程を再投入する backfill も、Scheduler から定期実行します。
+
+記事の取得から Embedding までの処理は、運用コストを最適化するため、Transactional Outbox・Amazon SQS・AWS Lambda を使うイベント駆動構成へ移行しました。この構成を選んだ理由や設計上の判断については、現在記事を執筆中です。
+
+旧 taskiq 経路の撤去は今後行う予定です。
 
 以下の記事は、移行前の Redis Streams を中心とした非同期パイプラインについて、再配送や重複実行から DB の整合性を守る仕組みをまとめた開発記録です。
 
