@@ -88,10 +88,6 @@ def notification_case(monkeypatch: pytest.MonkeyPatch) -> NotificationCase:
             )
         ),
     )
-    # 後続処理は置き換えるだけにし、このファイルの期待値には含めない。
-    monkeypatch.setattr(
-        "app.queue.tasks.assessment.generate_embedding.kiq", AsyncMock()
-    )
     monkeypatch.setattr(settings, "internal_frontend_base_url", "http://frontend:3000")
     monkeypatch.setattr(settings, "revalidate_bearer_secret", SecretStr(_SECRET))
     monkeypatch.setattr(

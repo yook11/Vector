@@ -138,9 +138,9 @@ locals {
       DATABASE_URL                = local.backend_db_url["vector_app"]
       AUTH_RETENTION_DATABASE_URL = local.backend_db_url["vector_auth"]
       REDIS_URL                   = local.broker_redis_url["analysis"]
-      # 本番では明示的に有効化する (config.py の default は両方 false)。
+      # Embeddingの救済投入はLambda側へ移し、旧workerは残件処理のため維持する。
       BACKFILL_ASSESSMENTS_ENABLED = "true"
-      BACKFILL_EMBEDDINGS_ENABLED  = "true"
+      BACKFILL_EMBEDDINGS_ENABLED  = "false"
     }
     insights = {
       DATABASE_URL = local.backend_db_url["vector_app"]

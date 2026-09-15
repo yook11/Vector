@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
@@ -28,9 +26,7 @@ from app.logfire.article_stage import assessment_stage_span
 from app.queue.brokers import broker_analysis
 from app.queue.helpers.stage_hold import set_stage_hold
 from app.queue.messages.assessment import AssessmentTrigger
-from app.queue.messages.embedding import EmbeddingTrigger
 from app.queue.retry import is_last_attempt
-from app.queue.tasks.embedding import generate_embedding
 from app.shared.revalidate import FrontendRevalidateNotifier
 
 logger = structlog.get_logger(__name__)
@@ -47,7 +43,7 @@ async def assess_content(
     trigger: AssessmentTrigger,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一 curation を assessment し、in-scope 成功時だけ embedding に chain する。"""
+    """単一curationを判定し、後続配送はServiceが保存するOutboxへ委ねる。"""
     session_factory = ctx.state.session_factory
     assessor: BaseAssessor = ctx.state.assessor
 
@@ -129,16 +125,8 @@ async def assess_content(
             return
 
         if result.kind is AssessmentCompletionKind.IN_SCOPE:
-            # コミット済みの一覧を無効化し、後続の投入失敗でも通知を欠落させない。
             notifier = FrontendRevalidateNotifier.from_settings(settings)
             await notifier.notify(tags=["articles:list", "articles:categories"])
-            await generate_embedding.kiq(
-                EmbeddingTrigger(
-                    analyzed_article_id=cast(int, result.analyzed_article_id),
-                    analyzable_article_id=analyzable_article_id,
-                )
-            )
-            stage.mark_next_task_enqueued()
 
 
 async def _append_ready_build_failed_audit(
