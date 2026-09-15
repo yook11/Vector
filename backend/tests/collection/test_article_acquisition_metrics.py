@@ -322,13 +322,13 @@ async def test_outcome_rejected_not_emitted_when_audit_dropped(
 ) -> None:
     """rejected の best-effort 監査が drop したら outcome{rejected} を計上しない。
 
-    ``handle_conversion_rejected`` の監査 commit が失敗すると pipeline_events 行は
+    ``record_conversion_rejected`` の監査 commit が失敗すると pipeline_events 行は
     残らない。metric を監査に揃えるため、この場合 rejected counter は increment
     しない (監査成否に関係なく +1 する旧実装を落とす非空虚オラクル)。analyzable 1 件を
     併投入し metric dump を非空にする (capfire は zero-metric で crash するため)。
     """
     monkeypatch.setattr(
-        "app.collection.article_acquisition.failure_handling."
+        "app.collection.article_acquisition.failure_recording."
         "SourceAcquisitionAuditRepository",
         _FailingConversionAuditRepo,
     )
@@ -413,8 +413,8 @@ async def test_run_failed_emits_failed_sum1(
 ) -> None:
     """execute が AcquisitionReadError を raise する stub → run{result=failed} sum==1。
 
-    AcquisitionReadError は AcquisitionError なので handle_source_failure が
-    reraise=False を返し task は return する。succeeded は不在 or 0。
+    AcquisitionReadError は AcquisitionError なのでTaskiq入口はerror結果を返す。
+    succeeded は不在 or 0。
     """
     monkeypatch.setattr(
         "app.collection.article_acquisition.service.ArticleAcquisitionService",

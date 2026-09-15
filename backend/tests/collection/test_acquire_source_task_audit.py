@@ -34,6 +34,7 @@ from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
+from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
@@ -101,11 +102,11 @@ def _span_ctx() -> MagicMock:
 
 @contextmanager
 def _acquire_failure_patches(
-    *, service_exc: Exception, handle_source_failure: AsyncMock
+    *, service_exc: Exception, record_source_failure: AsyncMock
 ) -> Iterator[None]:
     """acquire_source の失敗経路を capfire で回す patch 群 (実 DB / 実 net 回避)。
 
-    service は ``service_exc`` を raise、reraise 判定 / 二次例外は引数で注入。
+    service は ``service_exc`` を raise、監査の二次例外は引数で注入。
     """
     fake_sources = MagicMock()
     fake_sources.__getitem__ = MagicMock(return_value=MagicMock())
@@ -121,8 +122,8 @@ def _acquire_failure_patches(
         ),
         patch("app.queue.tasks.acquisition.record_acquisition_run"),
         patch(
-            "app.queue.tasks.acquisition.ArticleAcquisitionFailureHandler",
-            return_value=MagicMock(handle_source_failure=handle_source_failure),
+            "app.queue.tasks.acquisition.ArticleAcquisitionFailureRecorder",
+            return_value=MagicMock(record_source_failure=record_source_failure),
         ),
         patch(
             "app.queue.tasks.acquisition.curate_content",
@@ -320,9 +321,9 @@ class TestAcquireSourceStageSpan:
                 "app.queue.tasks.acquisition.record_acquisition_run",
             ),
             patch(
-                "app.queue.tasks.acquisition.ArticleAcquisitionFailureHandler",
+                "app.queue.tasks.acquisition.ArticleAcquisitionFailureRecorder",
                 return_value=MagicMock(
-                    handle_source_failure=AsyncMock(return_value=False)
+                    record_source_failure=AsyncMock(return_value=None)
                 ),
             ),
             patch(
@@ -344,13 +345,13 @@ class TestAcquireSourceStageSpan:
     async def test_swallowed_failure_records_classification_on_span(
         self, capfire: CaptureLogfire
     ) -> None:
-        """握り潰し (reraise=False): error dict を返しつつ span に分類属性が乗る。"""
+        """取得エラーはerror結果を返し、spanに元の失敗分類を残す。"""
         marker = AcquisitionReadError(
             origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
         )
         with _acquire_failure_patches(
             service_exc=marker,
-            handle_source_failure=AsyncMock(return_value=False),
+            record_source_failure=AsyncMock(return_value=None),
         ):
             result = await collection_tasks.acquire_source(
                 AcquireSourceTaskInput(id=7, name="FakeSource"),
@@ -369,28 +370,28 @@ class TestAcquireSourceStageSpan:
     async def test_reraised_failure_keeps_classification_on_span(
         self, capfire: CaptureLogfire
     ) -> None:
-        """貫通 (reraise=True): task は再送出し、span は分類属性を持つ。
+        """DB障害はtaskで再送出し、spanにDB障害の分類属性を残す。
 
         この経路の明示 record_failure は backstop と同一 exc を二重記録するため、本
         テストは「再送出 + 分類が乗る + no-override で壊れない」観測契約を固定する。
         明示記録の欠落自体は握り潰し / 二次例外テストが捕捉する。
         """
-        marker = AcquisitionReadError(
-            origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
+        marker = DatabaseTimeoutError(
+            reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT
         )
         with _acquire_failure_patches(
             service_exc=marker,
-            handle_source_failure=AsyncMock(return_value=True),
+            record_source_failure=AsyncMock(return_value=None),
         ):
-            with pytest.raises(AcquisitionReadError):
+            with pytest.raises(DatabaseTimeoutError):
                 await collection_tasks.acquire_source(
                     AcquireSourceTaskInput(id=7, name="FakeSource"),
                     ctx=_span_ctx(),  # type: ignore[arg-type]
                 )
 
         attrs = pipeline_stage_attrs(capfire)
-        assert attrs["failure_kind"] == "external_fetch"
-        assert attrs["error_class"].endswith(".AcquisitionReadError")
+        assert attrs["failure_kind"] == "db_runtime"
+        assert attrs["error_class"].endswith(".DatabaseTimeoutError")
 
     @pytest.mark.asyncio
     async def test_secondary_handler_error_keeps_original_classification(
@@ -402,7 +403,7 @@ class TestAcquireSourceStageSpan:
         )
         with _acquire_failure_patches(
             service_exc=marker,
-            handle_source_failure=AsyncMock(side_effect=RuntimeError("audit down")),
+            record_source_failure=AsyncMock(side_effect=RuntimeError("audit down")),
         ):
             with pytest.raises(RuntimeError, match="audit down"):
                 await collection_tasks.acquire_source(
@@ -443,6 +444,29 @@ async def test_unexpected_error_records_then_reraises(
     assert row.error_class.endswith(".RuntimeError")  # type: ignore[union-attr]
     assert row.payload["failure_kind"] == "unknown"
     assert row.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_database_error_records_then_reraises_original(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Taskiq入口はDB障害を監査した後、同じ例外を再送出する。"""
+    failure = DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT)
+    _patch_service_to_raise(monkeypatch, failure)
+
+    with pytest.raises(DatabaseTimeoutError) as raised:
+        await collection_tasks.acquire_source(
+            AcquireSourceTaskInput(id=vb_source.id, name=str(vb_source.name)),
+            ctx=_ctx(session_factory),  # type: ignore[arg-type]
+        )
+
+    assert raised.value is failure
+    row = await _failed_event(db_session)
+    assert row.outcome_code == "db_runtime_error"
+    assert row.retryability == "retryable"
 
 
 @pytest.mark.asyncio

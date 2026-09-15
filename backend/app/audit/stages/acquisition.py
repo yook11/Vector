@@ -19,7 +19,8 @@ from app.audit.failure_projection import (
     FailureProjection,
     Retryability,
     failure_action_value,
-    project_failure,
+    project_db_failure,
+    project_marker_failure,
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
@@ -104,7 +105,11 @@ class SourceAcquisitionAuditRepository:
         exc: AcquisitionError | DatabaseError,
     ) -> None:
         """source 全体の acquisition 失敗を記録する。"""
-        projection = project_failure(exc, fallback_code="unexpected_error")
+        projection = (
+            project_marker_failure(exc)
+            or project_db_failure(exc)
+            or unknown_failure_projection()
+        )
         await self._append_failed_event(
             source_id=source_id,
             source_name=source_name,

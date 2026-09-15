@@ -217,7 +217,7 @@ resource "aws_ecr_repository_policy" "outbox_relay" {
       Principal = { Service = "lambda.amazonaws.com" }
       Action    = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
       Condition = {
-        ArnLike      = { "aws:SourceArn" = concat([local.source_dispatch_arn, local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn, local.completion_consumer_arn, local.completion_outbox_relay_arn], values(local.backfill_arns)) }
+        ArnLike      = { "aws:SourceArn" = concat([local.acquisition_consumer_arn, local.source_dispatch_arn, local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn, local.completion_consumer_arn, local.completion_outbox_relay_arn], values(local.backfill_arns)) }
         StringEquals = { "aws:SourceAccount" = local.account_id }
       }
     }]

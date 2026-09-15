@@ -7,7 +7,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+)
 
 from app.collection.sources.fetch_cadence import FetchCadence
 
@@ -85,3 +92,27 @@ class SourceAcquisitionRequest:
             "source_id": self.source_id,
             "request_id": self.request_id,
         }
+
+
+class AcquisitionRequestInvalidError(Exception):
+    """受信した取得依頼が契約と一致しない。"""
+
+
+class _AcquisitionMessage(SourceAcquisitionSchedule):
+    request_id: str
+    source_id: StrictInt = Field(gt=0)
+
+
+def acquisition_request_from_message(value: object) -> SourceAcquisitionRequest:
+    """送信側と同じ予定回・IDの契約で受信本文を検証する。"""
+    try:
+        message = _AcquisitionMessage.model_validate(value)
+        schedule = SourceAcquisitionSchedule(
+            cadence=message.cadence, scheduled_at=message.scheduled_at
+        )
+        request = schedule.create_request(message.source_id)
+        if request.request_id == message.request_id:
+            return request
+    except (ValidationError, ValueError):
+        pass
+    raise AcquisitionRequestInvalidError("invalid_acquisition_request")

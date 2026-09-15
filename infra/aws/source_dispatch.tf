@@ -41,7 +41,11 @@ resource "aws_sqs_queue" "source_dispatch" {
   fifo_queue                 = false
   sqs_managed_sse_enabled    = true
   message_retention_seconds  = 1209600
-  visibility_timeout_seconds = 30
+  visibility_timeout_seconds = each.key == "acquisition" ? 1800 : 30
+  redrive_policy = each.key == "acquisition" ? jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.acquisition_dlq.arn
+    maxReceiveCount     = 5
+  }) : null
 }
 
 resource "aws_sqs_queue_policy" "source_dispatch" {
@@ -255,14 +259,14 @@ resource "aws_lambda_function_event_invoke_config" "source_dispatch" {
 resource "aws_cloudwatch_dashboard" "source_dispatch" {
   dashboard_name = local.source_dispatch_name
   dashboard_body = jsonencode({
-    widgets = [for index, key in ["scheduler_failure", "execution_failure"] : {
-      type = "metric", x = index * 12, y = 0, width = 12, height = 6
+    widgets = [for index, key in ["scheduler_failure", "execution_failure", "consumer_failure"] : {
+      type = "metric", x = (index % 2) * 12, y = floor(index / 2) * 6, width = 12, height = 6
       properties = {
-        title  = key == "scheduler_failure" ? "Scheduler 配送失敗" : "Lambda 実行失敗"
+        title  = key == "scheduler_failure" ? "Scheduler 配送失敗" : key == "execution_failure" ? "Lambda 実行失敗" : "取得Consumer 処理失敗"
         region = var.region, view = "timeSeries", period = 300, stat = "Maximum"
         metrics = [
-          ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.source_dispatch[key].name, { label = "残件数（概数）" }],
-          ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", aws_sqs_queue.source_dispatch[key].name, { label = "最古メッセージ経過秒数", yAxis = "right" }],
+          ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", (key == "consumer_failure" ? aws_sqs_queue.acquisition_dlq.name : aws_sqs_queue.source_dispatch[key].name), { label = "残件数（概数）" }],
+          ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", (key == "consumer_failure" ? aws_sqs_queue.acquisition_dlq.name : aws_sqs_queue.source_dispatch[key].name), { label = "最古メッセージ経過秒数", yAxis = "right" }],
         ]
       }
     }]

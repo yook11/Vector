@@ -1,19 +1,21 @@
-"""``ArticleAcquisitionFailureHandler`` の dispatch integration test。"""
+"""``ArticleAcquisitionFailureRecorder`` の監査記録テスト。"""
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.errors import (
     AcquisitionReadError,
 )
-from app.collection.article_acquisition.failure_handling import (
-    ArticleAcquisitionFailureHandler,
+from app.collection.article_acquisition.failure_recording import (
+    ArticleAcquisitionFailureRecorder,
 )
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
@@ -26,6 +28,7 @@ from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchSsrfBlockedError,
 )
+from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -61,25 +64,25 @@ def _conversion_rejection() -> AcquisitionConversionRejection:
 
 
 @pytest.mark.asyncio
-async def test_acquisition_error_writes_audit_and_returns_false(
+async def test_acquisition_error_records_structured_audit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """fetch 失敗 → origin CODE の audit 1 行 + fetch specifics + ``reraise=False``。"""
+    """fetch 失敗 → origin CODE の audit 1 行 + fetch specifics。"""
     source_id = sample_source.id
-    handler = ArticleAcquisitionFailureHandler(session_factory)
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
     exc = AcquisitionReadError(
         origin=FetchAccessDeniedError(status_code=403, reason="forbidden")
     )
-    reraise = await handler.handle_source_failure(
+    result = await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
         exc=exc,
     )
 
-    assert reraise is False
+    assert result is None
     await db_session.rollback()
     events = await _fetch_acquisition_events(db_session, source_id)
     assert len(events) == 1
@@ -113,7 +116,7 @@ async def test_read_failure_writes_reason_outcome_and_read_payload(
     ``read_*`` payload に焼く (接続失敗と別 outcome + 構造化列を end-to-end で固定)。
     """
     source_id = sample_source.id
-    handler = ArticleAcquisitionFailureHandler(session_factory)
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
     exc = AcquisitionReadError(
         origin=UnreadableResponseError(
@@ -122,13 +125,13 @@ async def test_read_failure_writes_reason_outcome_and_read_payload(
             field="items",
         )
     )
-    reraise = await handler.handle_source_failure(
+    result = await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
         exc=exc,
     )
 
-    assert reraise is False
+    assert result is None
     await db_session.rollback()
     events = await _fetch_acquisition_events(db_session, source_id)
     assert len(events) == 1
@@ -166,20 +169,20 @@ async def test_fetch_failure_error_message_uses_self_describing_default_excludin
     discriminator になる (redaction の有無に依らず str(origin) と区別できる)。
     """
     source_id = sample_source.id
-    handler = ArticleAcquisitionFailureHandler(session_factory)
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
     exc = AcquisitionReadError(
         origin=FetchSsrfBlockedError(
             "blocked Authorization: Bearer sk-live-SSRFSECRETvalue123"
         )
     )
-    reraise = await handler.handle_source_failure(
+    result = await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
         exc=exc,
     )
 
-    assert reraise is False
+    assert result is None
     await db_session.rollback()
     events = await _fetch_acquisition_events(db_session, source_id)
     assert len(events) == 1
@@ -190,22 +193,22 @@ async def test_fetch_failure_error_message_uses_self_describing_default_excludin
 
 
 @pytest.mark.asyncio
-async def test_unexpected_error_writes_audit_and_returns_true(
+async def test_unexpected_error_records_unknown_audit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """想定外 ``Exception`` → unexpected_error audit + ``reraise=True``。"""
+    """想定外 ``Exception`` → unexpected_error audit。"""
     source_id = sample_source.id
-    handler = ArticleAcquisitionFailureHandler(session_factory)
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
-    reraise = await handler.handle_source_failure(
+    result = await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
         exc=RuntimeError("boom"),
     )
 
-    assert reraise is True
+    assert result is None
     await db_session.rollback()
     events = await _fetch_acquisition_events(db_session, source_id)
     assert len(events) == 1
@@ -220,14 +223,61 @@ async def test_unexpected_error_writes_audit_and_returns_true(
 
 
 @pytest.mark.asyncio
+async def test_database_failure_records_retryability(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """DB障害の監査は再試行可能な失敗として保存する。"""
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
+    result = await recorder.record_source_failure(
+        source_id=sample_source.id,
+        source_name="VentureBeat",
+        exc=DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+    )
+
+    assert result is None
+    events = await _fetch_acquisition_events(db_session, sample_source.id)
+    assert len(events) == 1
+    assert events[0].event_type == "failed"
+    assert events[0].outcome_code == "db_runtime_error"
+    assert events[0].retryability == "retryable"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_failure_audit_propagates(
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """監査commit時のキャンセルは通常の監査障害として握り潰さない。"""
+
+    def cancel_commit(session):
+        raise asyncio.CancelledError()
+
+    @asynccontextmanager
+    async def cancelled_audit_session():
+        async with session_factory() as session:
+            event.listen(session.sync_session, "before_commit", cancel_commit)
+            yield session
+
+    recorder = ArticleAcquisitionFailureRecorder(cancelled_audit_session)
+    with pytest.raises(asyncio.CancelledError):
+        await recorder.record_source_failure(
+            source_id=sample_source.id,
+            source_name="VentureBeat",
+            exc=RuntimeError("original failure"),
+        )
+
+
+@pytest.mark.asyncio
 async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """audit Repository が落ちても handler は完走し redacted log に退避する。"""
+    """audit Repository が落ちても recorder は完走し redacted log に退避する。"""
     source_id = sample_source.id
-    handler = ArticleAcquisitionFailureHandler(session_factory)
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
     business_exc = AcquisitionReadError(
         origin=FetchSsrfBlockedError(
@@ -237,7 +287,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
 
     with (
         patch(
-            "app.collection.article_acquisition.failure_handling.SourceAcquisitionAuditRepository"
+            "app.collection.article_acquisition.failure_recording.SourceAcquisitionAuditRepository"
         ) as mock_audit_cls,
         capture_logs() as cap,
     ):
@@ -246,13 +296,13 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
                 "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
             )
         )
-        reraise = await handler.handle_source_failure(
+        result = await recorder.record_source_failure(
             source_id=source_id,
             source_name="VentureBeat",
             exc=business_exc,
         )
 
-    assert reraise is False
+    assert result is None
     drops = [
         e for e in cap if e.get("event") == "source_acquisition_failure_audit_dropped"
     ]
@@ -273,9 +323,9 @@ async def test_conversion_rejection_writes_rejected_audit(
 ) -> None:
     """entry 単位の変換棄却 → rejected audit。source failure とは分けて扱う。"""
     source_id = sample_source.id
-    handler = ArticleAcquisitionFailureHandler(session_factory)
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
-    await handler.handle_conversion_rejected(source_id, _conversion_rejection())
+    await recorder.record_conversion_rejected(source_id, _conversion_rejection())
 
     await db_session.rollback()
     events = await _fetch_acquisition_events(db_session, source_id)
@@ -304,12 +354,12 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
     ``business_outcome_code`` のみを残す (secret 混入経路が構造的に消える)。redaction
     の witness は audit 例外 (落ちた監査 DB から漏れうる secret) の方で保つ。
     """
-    handler = ArticleAcquisitionFailureHandler(session_factory)
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
     rejection = _conversion_rejection()
 
     with (
         patch(
-            "app.collection.article_acquisition.failure_handling.SourceAcquisitionAuditRepository"
+            "app.collection.article_acquisition.failure_recording.SourceAcquisitionAuditRepository"
         ) as mock_audit_cls,
         capture_logs() as cap,
     ):
@@ -319,7 +369,7 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
             )
         )
 
-        await handler.handle_conversion_rejected(sample_source.id, rejection)
+        await recorder.record_conversion_rejected(sample_source.id, rejection)
 
     drops = [
         e for e in cap if e.get("event") == "fetched_article_conversion_audit_dropped"

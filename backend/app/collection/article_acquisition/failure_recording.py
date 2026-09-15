@@ -1,9 +1,8 @@
-"""Stage 1 の失敗・棄却後処理を実行する service。"""
+"""取得失敗と変換棄却を、配送方式に依存せず監査へ記録する。"""
 
 from __future__ import annotations
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -17,41 +16,36 @@ from app.collection.article_acquisition.metrics import (
     record_acquisition_outcome,
 )
 from app.db.errors import DatabaseError
+from app.db.session import SessionFactory
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
 
 
-class ArticleAcquisitionFailureHandler:
-    """Stage 1 の source-level failure と entry-level rejection を処理する。"""
+class ArticleAcquisitionFailureRecorder:
+    """ソースの取得失敗と記事単位の変換棄却の記録を担う。"""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
 
-    async def handle_source_failure(
+    async def record_source_failure(
         self,
         *,
         source_id: int | None,
         source_name: str | None,
         exc: BaseException,
-    ) -> bool:
-        """taskiq に raise すべきなら ``True``、return すべきなら ``False``。"""
-        match exc:
-            case AcquisitionError():
+    ) -> None:
+        """再試行の判断を行わず、ソースの取得失敗を別セッションで監査する。"""
+        try:
+            if isinstance(exc, AcquisitionError | DatabaseError):
                 await self._audit_failure(source_id, source_name, exc)
-                return False
-            case DatabaseError():
-                await self._audit_failure(source_id, source_name, exc)
-                return True
-            case _:
+            else:
                 await self._audit_unexpected_failure(source_id, source_name, exc)
-                logger.exception(
-                    "acquire_source_unexpected_error",
-                    source_id=source_id,
-                )
-                return True
+        except Exception:  # noqa: S110
+            # 監査・診断の通常障害で元の取得失敗を置き換えない。
+            pass
 
-    async def handle_conversion_rejected(
+    async def record_conversion_rejected(
         self,
         source_id: int,
         rej: AcquisitionConversionRejection,

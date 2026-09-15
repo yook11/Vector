@@ -45,3 +45,14 @@ async def load_stored_events(database):
             "SELECT event_type, schema_version, payload FROM outbox_events"
         )
     return [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]
+
+
+async def load_acquisition_failures(database, source_id):
+    async with database.connect("vector_app") as reader:
+        rows = await reader.fetch(
+            "SELECT outcome_code, retryability, error_class, payload "
+            "FROM pipeline_events WHERE source_id=$1 "
+            "AND stage='acquisition' AND event_type='failed'",
+            source_id,
+        )
+    return [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]

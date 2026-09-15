@@ -29,8 +29,9 @@ from app.audit.stages.dispatch import (
     DispatchOutcomeCode,
 )
 from app.cloudwatch.emf import emit_metric
-from app.collection.article_acquisition.failure_handling import (
-    ArticleAcquisitionFailureHandler,
+from app.collection.article_acquisition.errors import AcquisitionError
+from app.collection.article_acquisition.failure_recording import (
+    ArticleAcquisitionFailureRecorder,
 )
 from app.collection.article_acquisition.metrics import (
     AcquisitionRunResult,
@@ -38,6 +39,7 @@ from app.collection.article_acquisition.metrics import (
 )
 from app.collection.sources.dispatch import SourceDispatchService
 from app.collection.sources.fetch_cadence import FetchCadence
+from app.db.errors import DatabaseError
 from app.logfire.stage_span import pipeline_stage_span
 from app.queue.brokers import broker_collection, broker_dispatch
 from app.queue.messages.collection import AcquireSourceTaskInput
@@ -444,7 +446,8 @@ async def acquire_source(
     本文未取得の記事は後段 ``scrape_html_body`` task へ進む。
 
     失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
-    例外は ``ArticleAcquisitionFailureHandler`` に委譲する。active な cron dispatch
+    例外を ``ArticleAcquisitionFailureRecorder`` で監査し、この入口で再送出を判断する。
+    active な cron dispatch
     対象は次の tick で再 dispatch されるが、inactive source の manual fetch は
     operator が再実行する。
     """
@@ -464,21 +467,23 @@ async def acquire_source(
         source = SOURCES[SourceName(arg.name)]
         svc = ArticleAcquisitionService(session_factory, source)
 
-        handler = ArticleAcquisitionFailureHandler(session_factory)
+        recorder = ArticleAcquisitionFailureRecorder(session_factory)
         try:
             persisted_ids = await svc.execute(source_id)
         except Exception as exc:
-            # 元の fetch/read 失敗を span に残す (handler/監査の二次例外より前)。
+            # 元の fetch/read 失敗を span に残す (監査の二次例外より前)。
             stage.record_failure(exc)
             record_acquisition_run(AcquisitionRunResult.FAILED)
-            reraise = await handler.handle_source_failure(
+            await recorder.record_source_failure(
                 source_id=source_id,
                 source_name=arg.name,
                 exc=exc,
             )
-            if reraise:
-                raise
-            return {"source_id": source_id, "status": "error", "reason": str(exc)}
+            if isinstance(exc, AcquisitionError):
+                return {"source_id": source_id, "status": "error", "reason": str(exc)}
+            if not isinstance(exc, DatabaseError):
+                logger.exception("acquire_source_unexpected_error", source_id=source_id)
+            raise
 
         record_acquisition_run(AcquisitionRunResult.SUCCEEDED)
 

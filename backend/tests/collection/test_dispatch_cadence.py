@@ -91,8 +91,8 @@ def _ctx(
 
 
 def _row(source_id: int, name: str) -> SimpleNamespace:
-    """``select(NewsSource.id, raw_name)`` の 1 行スタンド。"""
-    return SimpleNamespace(id=source_id, name=name, raw_name=name)
+    """有効ソースの読み取り結果を表す1行スタンド。"""
+    return SimpleNamespace(id=source_id, raw_name=name, is_active=True)
 
 
 def _events(ctx: SimpleNamespace) -> list[Any]:

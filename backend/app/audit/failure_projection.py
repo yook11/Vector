@@ -9,16 +9,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypedDict
 
-from redis.exceptions import (
-    ConnectionError as RedisConnectionError,
-)
-from redis.exceptions import (
-    RedisError,
-)
-from redis.exceptions import (
-    TimeoutError as RedisTimeoutError,
-)
-
 from app.audit.db_errors import DbErrorCause, classify_db_error
 
 
@@ -167,6 +157,16 @@ def project_db_failure(exc: BaseException) -> FailureProjection | None:
 
 def project_redis_failure(exc: BaseException) -> FailureProjection | None:
     """Redis 例外を失敗属性へ投影する。"""
+    from redis.exceptions import (
+        ConnectionError as RedisConnectionError,
+    )
+    from redis.exceptions import (
+        RedisError,
+    )
+    from redis.exceptions import (
+        TimeoutError as RedisTimeoutError,
+    )
+
     if isinstance(exc, (RedisConnectionError, RedisTimeoutError)):
         return FailureProjection(
             failure_kind="redis_unavailable",

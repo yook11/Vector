@@ -18,12 +18,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import structlog
-from sqlalchemy import String, cast, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.fetch_cadence import FetchCadence
+from app.collection.sources.registry import acquisition_source_for
+from app.collection.sources.repository import RecordedSource, SourceRepository
 from app.collection.sources.source_name import SourceName
-from app.models.news_source import NewsSource
+from app.db.session import SessionFactory
 
 logger = structlog.get_logger(__name__)
 
@@ -73,7 +74,7 @@ class SourceDispatchService:
     すべきか決める」だけのドメイン責任を担う。
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
 
     async def select(self, cadence: FetchCadence | None) -> SourceDispatchSelection:
@@ -86,67 +87,50 @@ class SourceDispatchService:
             dispatch 対象と source 単位 rejection。``SOURCES`` に無いコード未登録
             source や source 名の不正は run 全体を落とさず rejection に畳む。
         """
-        # SOURCES は import が重いため lazy (scheduler の import を軽く保つ)。
-        from app.collection.article_acquisition.strategy import SOURCES
-
         async with self._session_factory() as session:
-            raw_name = cast(NewsSource.name, String).label("raw_name")
-            rows = list(
-                (
-                    await session.execute(
-                        select(NewsSource.id, raw_name)
-                        .where(NewsSource.is_active == True)  # noqa: E712
-                        .order_by(raw_name)
-                    )
-                ).all()
-            )
-
+            sources = await SourceRepository(session).list_active()
         targets: list[SourceDispatchTarget] = []
         rejections: list[SourceDispatchRejection] = []
-        for row in rows:
-            raw_source_name = _raw_source_name(row)
-            try:
-                source_name = SourceName(raw_source_name)
-            except (TypeError, ValueError) as exc:
-                rejections.append(
-                    SourceDispatchRejection(
-                        source_id=row.id,
-                        source_name=None,
-                        outcome_code=SourceDispatchRejectionCode.SOURCE_NAME_INVALID,
-                        raw_source_name=(
-                            raw_source_name
-                            if isinstance(raw_source_name, str)
-                            else repr(raw_source_name)
-                        ),
-                        exc=exc,
-                    )
-                )
-                logger.warning(
-                    "dispatch_source_name_invalid",
-                    source_id=row.id,
-                    raw_source_name=raw_source_name,
-                )
-                continue
-            source_def = SOURCES.get(source_name)
-            if source_def is None:
-                rejections.append(
-                    SourceDispatchRejection(
-                        source_id=row.id,
-                        source_name=str(source_name),
-                        outcome_code=SourceDispatchRejectionCode.SOURCE_NOT_REGISTERED,
-                    )
-                )
-                logger.warning("dispatch_source_unknown", source_name=str(source_name))
-                continue
-            if cadence is not None and source_def.fetch_cadence is not cadence:
-                continue
-            targets.append(SourceDispatchTarget(id=row.id, name=source_name))
+        for source in sources:
+            selection = _select_dispatch_target(source, cadence)
+            if isinstance(selection, SourceDispatchTarget):
+                targets.append(selection)
+            elif isinstance(selection, SourceDispatchRejection):
+                rejections.append(selection)
         return SourceDispatchSelection(
             targets=tuple(targets),
             rejections=tuple(rejections),
         )
 
 
-def _raw_source_name(row: object) -> object:
-    """SQLAlchemy Row / test double の raw source name を取り出す。"""
-    return getattr(row, "raw_name", getattr(row, "name", None))
+def _select_dispatch_target(
+    source: RecordedSource, cadence: FetchCadence | None
+) -> SourceDispatchTarget | SourceDispatchRejection | None:
+    """有効ソースの登録状態と頻度から、投入対象または棄却理由を返す。"""
+    try:
+        source_name = SourceName(source.raw_name)
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "dispatch_source_name_invalid",
+            source_id=source.id,
+            raw_source_name=source.raw_name,
+        )
+        return SourceDispatchRejection(
+            source_id=source.id,
+            source_name=None,
+            outcome_code=SourceDispatchRejectionCode.SOURCE_NAME_INVALID,
+            raw_source_name=source.raw_name,
+            exc=exc,
+        )
+    try:
+        source_def = acquisition_source_for(source_name)
+    except SourceNotRegisteredError:
+        logger.warning("dispatch_source_unknown", source_name=str(source_name))
+        return SourceDispatchRejection(
+            source_id=source.id,
+            source_name=str(source_name),
+            outcome_code=SourceDispatchRejectionCode.SOURCE_NOT_REGISTERED,
+        )
+    if cadence is not None and source_def.fetch_cadence is not cadence:
+        return None
+    return SourceDispatchTarget(id=source.id, name=source_name)
