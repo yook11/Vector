@@ -68,7 +68,10 @@ resource "aws_sqs_queue_policy" "source_dispatch" {
         Principal = "*"
         Action    = "sqs:SendMessage"
         Resource  = each.value.arn
-        Condition = { StringNotEquals = { "aws:sourceVpce" = aws_vpc_endpoint.outbox_sqs.id } }
+        Condition = {
+          StringNotEquals         = { "aws:sourceVpce" = aws_vpc_endpoint.outbox_sqs.id }
+          StringNotEqualsIfExists = { "aws:CalledViaLast" = "sqs.amazonaws.com" }
+        }
     }] : [])
   })
 }
