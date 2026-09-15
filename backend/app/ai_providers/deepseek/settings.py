@@ -9,7 +9,7 @@ class DeepSeekConnectionSettings:
     """秘密情報やモデル仕様を含まない不変の通信設定。"""
 
     connect_timeout: float = 3.0
-    read_timeout: float = 10.0
+    read_timeout: float = 30.0
     write_timeout: float = 10.0
     pool_timeout: float = 3.0
 
