@@ -81,6 +81,12 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
     Statement = concat([
       {
         Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.source_dispatch.arn }
+        Action    = "sqs:SendMessage"
+        Resource  = aws_sqs_queue.source_dispatch["acquisition"].arn
+      },
+      {
+        Effect    = "Allow"
         Principal = { AWS = aws_iam_role.outbox_relay.arn }
         Action    = "sqs:SendMessage"
         Resource  = [for queue in aws_sqs_queue.outbox : queue.arn]
@@ -211,7 +217,7 @@ resource "aws_ecr_repository_policy" "outbox_relay" {
       Principal = { Service = "lambda.amazonaws.com" }
       Action    = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
       Condition = {
-        ArnLike      = { "aws:SourceArn" = concat([local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn, local.completion_consumer_arn, local.completion_outbox_relay_arn], values(local.backfill_arns)) }
+        ArnLike      = { "aws:SourceArn" = concat([local.source_dispatch_arn, local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn, local.completion_consumer_arn, local.completion_outbox_relay_arn], values(local.backfill_arns)) }
         StringEquals = { "aws:SourceAccount" = local.account_id }
       }
     }]

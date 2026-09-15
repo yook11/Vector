@@ -240,3 +240,9 @@ inline 10,240文字／managed 6,144文字の上限を守るため、boundary固�
 | その他の既存ロール | 既存apply inline policy |
 
 移動先managed policyの更新・取り付けを移動元の更新より先に行う`depends_on`を持つため、`-target`による部分適用は行わない。本体より先にbootstrap全体を既存管理者経路で適用し、その後[本体の適用手順](../README.md#curationの配置スライス6前半)へ進む。今回、AWSへの適用・SecureStringの登録・Consumer／relayの有効化は未実施。
+
+## 取得依頼投入の配備権限
+
+`source_dispatch.tf`で投入LambdaとScheduler専用の権限境界・管理ポリシーを追加した。Lambda境界のDBユーザーは`vector_collect`、送信先は通常の取得依頼キューと実行失敗保存先に限定し、Scheduler境界は投入Lambdaの起動と専用DLQへの送信に限定する。
+
+CIの管理対象・PassRoleの双方向制約・設定復号許可へ追加し、既存の拒否条件を維持する。これらは本体applyに先行して適用する。アプリrollout権限は変更しない。AWSへの適用と実配送の検証は未実施で、停止状態の初回配備と手動確認は本体READMEの「取得依頼投入」に従う。

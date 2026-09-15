@@ -27,7 +27,7 @@ def run_block(workflow, step_name):
     return textwrap.dedent("\n".join(commands))
 
 
-class BackfillWorkflowTest(unittest.TestCase):
+class WorkflowSandbox(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -37,14 +37,12 @@ class BackfillWorkflowTest(unittest.TestCase):
         (self.bin / "python3").symlink_to(sys.executable)
         scripts = self.directory / "scripts"
         scripts.mkdir()
-        shutil.copy(Path(__file__).with_name("resolve-backfill-images.py"), scripts)
-        (self.directory / "state.json").write_text(json.dumps(deployed_state()))
+        shutil.copy(Path(__file__).with_name(self.script), scripts)
+        (self.directory / "state.json").write_text(json.dumps(self.initial_state()))
         self.env = {
             "PATH": f"{self.bin}:{os.defpath}",
             "GITHUB_STEP_SUMMARY": str(self.directory / "summary"),
-            "REQUESTED_CURATION_DIGEST": "",
-            "REQUESTED_ASSESSMENT_DIGEST": "",
-            "REQUESTED_EMBEDDING_DIGEST": "",
+            **{name: "" for name in self.input_names},
         }
         self.executable("terraform", "#!/bin/sh\ncat state.json\n")
 
@@ -64,23 +62,43 @@ class BackfillWorkflowTest(unittest.TestCase):
         )
 
     def apply(self):
-        return self.execute(
-            "aws-terraform-apply.yml", "Resolve Backfill images and schedules"
-        )
+        return self.execute("aws-terraform-apply.yml", self.apply_step)
 
     def plan(self):
         return self.execute(
             "aws-terraform-plan.yml",
-            "Preserve Backfill images and schedules from state",
+            self.plan_step,
         )
 
     def settings(self):
-        return json.loads((self.directory / "backfill.auto.tfvars.json").read_text())
+        return json.loads((self.directory / self.settings_file).read_text())
 
     def assert_no_settings(self, result):
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((self.directory / "backfill.auto.tfvars.json").exists())
-        self.assertEqual(list(self.directory.glob("backfill-vars.*")), [])
+        self.assertFalse((self.directory / self.settings_file).exists())
+        self.assertEqual(list(self.directory.glob(self.temporary_pattern)), [])
+
+    def ecr_stubs(self):
+        self.executable(
+            "terraform",
+            '#!/bin/sh\nif [ "$1" = state ]; then cat state.json; else\n'
+            "printf '%s\\n' '{\"backend\":\"registry.invalid/vector/backend\"}'\nfi\n",
+        )
+        (self.bin / "jq").symlink_to(shutil.which("jq"))
+
+
+class BackfillWorkflowTest(WorkflowSandbox):
+    script = "resolve-backfill-images.py"
+    initial_state = staticmethod(deployed_state)
+    input_names = (
+        "REQUESTED_CURATION_DIGEST",
+        "REQUESTED_ASSESSMENT_DIGEST",
+        "REQUESTED_EMBEDDING_DIGEST",
+    )
+    apply_step = "Resolve Backfill images and schedules"
+    plan_step = "Preserve Backfill images and schedules from state"
+    settings_file = "backfill.auto.tfvars.json"
+    temporary_pattern = "backfill-vars.*"
 
     def test_plan_preserves_stopped_assessment(self):
         result = self.plan()
@@ -108,14 +126,6 @@ class BackfillWorkflowTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.settings()["curation_backfill_enabled"])
         self.assertTrue(self.settings()["embedding_backfill_enabled"])
-
-    def ecr_stubs(self):
-        self.executable(
-            "terraform",
-            '#!/bin/sh\nif [ "$1" = state ]; then cat state.json; else\n'
-            "printf '%s\\n' '{\"backend\":\"registry.invalid/vector/backend\"}'\nfi\n",
-        )
-        (self.bin / "jq").symlink_to(shutil.which("jq"))
 
     def test_apply_missing_requested_image_stops_before_installing_settings(self):
         self.ecr_stubs()

@@ -386,7 +386,7 @@ run "consumer_image_and_enabled_mapping" {
   assert {
     condition = (
       length(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement) == 1 &&
-      toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.ArnLike["aws:SourceArn"]) == toset([local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn,
+      toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.ArnLike["aws:SourceArn"]) == toset([local.source_dispatch_arn, local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn,
       local.completion_consumer_arn, local.curation_outbox_relay_arn, local.completion_outbox_relay_arn, local.backfill_arns["curation"], local.backfill_arns["assessment"], local.backfill_arns["embedding"]]) &&
       jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.StringEquals["aws:SourceAccount"] == "123456789012" &&
       jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Principal.Service == "lambda.amazonaws.com" &&

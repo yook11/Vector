@@ -503,3 +503,62 @@ actionlint 1.7.12は既存の`concurrency.queue: max`を未対応キーとして
 [記事補完の配送仕様](../../specs/pipeline/article-completion-delivery.md#スライス5relayと補完lambdaの配送経路2026-09-14)に設定・適用順序・確認結果を記録する。補完はConsumerとRelayの両digest、および受信・定期送信それぞれの稼働状態を既存plan／applyで保持する。初回digest指定時は両トリガーを無効にし、workflow_dispatchの`completion_consumer_state`／`completion_relay_state`で明示的に開始・停止する。
 
 bootstrapの専用boundaryと`ci-apply-pass-role`への拒否条件移設を本体より先に適用する。既存の専用bootstrap経路とGitHub production承認を維持し、旧Taskiqを並行稼働させる。DB schema・DB権限・旧経路のrolloutは変更しない。
+
+## 取得依頼投入（Scheduler / Lambda）
+
+ステップ4のコード・配備CIを実装済み。AWSへの適用・実配送・所要時間の実測は未実施。
+
+### 定義と配備入力
+
+- 共通の`source-dispatch` Lambdaをarm64・512MB・120秒・予約同時実行数3で定義する。既存backend ECRイメージの入口を`app.lambda_handlers.source_dispatch.handler.handler`にする。
+- HIGHは毎時00/15/30/45分、MEDIUMは毎時00分、LOWはUTCの00/06/12/18時。予定入力は`cadence`と`scheduled_at`で、後者はSchedulerの`<aws.scheduler.scheduled-time>`。Flexible Time WindowはOFF。
+- Schedulerの再試行は2回・期限600秒、Lambda関数エラーの再試行は2回・イベント保持21600秒。Lambdaの受付後の失敗をSchedulerの再試行で回復する構成ではない。
+- 通常キュー`source-acquisition`と、`source-dispatch-scheduler-dlq`・`source-dispatch-execution-failures`の全てをStandard・SQS管理暗号化・14日保持とする。通常キューの可視性は暫定30秒で、Consumer接続時に見直す。
+- Terraform変数は`source_dispatch_image_digest`（初期null）・`source_dispatch_enabled`（初期false）。apply workflowの入力は`source_dispatch_image_digest`と`source_dispatch_state`（keep/enabled/disabled）。`keep`は既存の有効状態を維持し、初回digest指定時も停止する。作成前にenabledを指定するにはdigestも必要。
+- plan/applyとも専用resolverで既存digestと3スケジュールの状態を維持する。state取得・解析失敗、不正digest、3スケジュールの欠落・混在、明示イメージのECR不存在は停止する。不整合stateを空に戻してapplyしない。部分適用の修復時もplanを確認し、3スケジュールを停止状態に揃えてからCIを再開する。
+- digest未指定・未配備の場合もキュー・ロール・ログ・schedule group・ダッシュボードは作るが、Lambdaとスケジュールは作らない。
+
+### 後続の配備と実測
+
+1. Bootstrapの専用境界、CIの関数・キュー管理、PassRole、Lambda設定復号の変更を管理者経路で適用する。アプリ用rolloutロールの権限は増やさない。
+2. 入口を含むbackendイメージを既存のビルド経路で作成し、そのdigestをapply workflowへ指定する。`source_dispatch_state=disabled`で本体を配備する。3スケジュールがDISABLEDであることを確認する。
+3. `terraform output -json source_dispatch`から対象Lambda・通常キュー・失敗保存先・ダッシュボードを確認する。`vector_collect`のIAM接続と、通常キューへのVPCE経由送信を確認する。`AWS_REGION`はLambdaの予約変数を使うため手動設定しない。
+4. Consumerが未接続であることを確認し、検証するcadenceと予定時刻を記録してから手動起動する。例えば次の入力を`dispatch-input.json`へ用意し、実行権限を持つ運用者が起動する。
+
+```json
+{"cadence":"high","scheduled_at":"2026-09-15T00:00:00Z"}
+```
+
+```bash
+aws lambda invoke \
+  --function-name "$DISPATCH_FUNCTION_ARN" \
+  --invocation-type RequestResponse \
+  --cli-binary-format raw-in-base64-out \
+  --cli-read-timeout 180 \
+  --payload file://dispatch-input.json \
+  dispatch-response.json
+```
+
+HTTPのStatusCodeだけで成功を判断せず`FunctionError`と専用ログを確認する。この同期呼び出しではLambdaの非同期再試行と失敗時送信先を検証したことにはならない。非同期経路は別途`--invocation-type Event`で確認し、受付202だけで投入完了と判断しない。
+
+5. 各cadenceについて、その時点のDB有効状態とコード登録から決まる対象件数、キューで確認した取得依頼ID・source_id、LambdaのREPORTにあるDurationを記録する。最大規模の予定回と3cadence同時起動も確認する。120秒との差を報告し、必要なら設定を別差分で調整する。障害時には全個別再試行を終える前に120秒へ達する可能性があり、その場合は同じ予定回の全体再実行になる。
+6. 手動実行は本物の依頼を残す。Consumerを接続する前に、検証予定時刻の依頼を後続で処理するか、取得依頼IDを確認して個別に削除するかを記録する。他の依頼を含む可能性があるためキュー全体のpurgeは行わない。個別削除にはReceiveMessageで取得したreceipt handleを使用し、送信実行ロールへ削除権限を追加しない。
+7. Consumerの可視性・再配信・重複処理管理を実装した後、既存の実行中Taskiqタスクと投入済み依頼を確認し、旧定期投入を停止してから`source_dispatch_state=enabled`で3スケジュールを有効にする。この切替は今回実施しない。
+
+切り戻しでは先にSchedulerをdisabledにする。既にLambdaが受け付けた予定回・再試行と、SQS投入済み依頼は残るため、停止確認後に旧経路の再開を判断する。過去イメージへの切り戻しは同じdigest入力で行う。
+
+### 失敗記録とメトリクス
+
+`source_dispatch` outputのダッシュボードで、二つの保存先の可視残件数と最古メッセージ経過時間を確認する。通知・アラーム・自動再投入は作らない。件数は概数であり、閲覧による受信中や14日の期限切れでも減るため、ゼロを復旧成功とは扱わない。
+
+保存先を手動で読む際は元のcadence・scheduled_atとエラーを確認する。Lambdaの失敗時送信先では`requestPayload`が元の入力であり、実行記録全体を入口へ渡さない。原因の修正後に元の入力で全体を再実行するか判断する。既に成功したソースへの再送と、その時点のDBによる再選定を許容する。詳細な未送信依頼は`source_acquisition_send_failed`ログで確認する。
+
+失敗記録の配送自体も失敗しうるため、AWS配備時には保存先の実到達とサービス標準の配送失敗メトリクスも確認する。保存先の空状態だけでは配送成功を保証しない。記録は14日で消えるため、その期間内に人間が確認する運用とする。
+
+### AWSを変更しない検証
+
+本体・Bootstrapのfmtチェック、backend無効のinit、validate、mock testを行う。隔離コピーは既存の「AWSを変更しない検証」に従い、templatesと`backend/app/http/non_public_ranges.json`の相対配置まで保持する。実state・tfvars・実環境の接続情報はコピーしない。
+
+Pythonは変更した配備スクリプトとテストへRuff lint・formatチェックを適用し、`python3 -m unittest discover -s infra/aws/scripts -p 'test_*.py'`を実行する。workflowはactionlintで確認する。actionlint 1.7.12は既存の`concurrency.queue: max`に未対応なので、変更前でも同じエラーであることを確認し、その診断だけを除外した検証結果を区別して報告する。
+
+バックエンド回帰はbackendを作業ディレクトリとして`uv run pytest tests/ -m unit -x -q`、ルートで`make test-integration`・`make test-local`を行う。後者の認証schema生成にはfrontendのインストール済み依存が必要なため、分離ワーキングツリーでも事前に用意する。独自のDB接続設定を作ったり業務シナリオを複製したりしない。
