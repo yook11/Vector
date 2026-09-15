@@ -189,7 +189,7 @@ run "executor_cannot_manage_its_own_stack" {
       arn        = "arn:aws:sts::123456789012:assumed-role/vector-bootstrap-apply/bootstrap"
     }
   }
-  expect_failures = [aws_iam_role.bootstrap_apply]
+  expect_failures = [aws_iam_role.bootstrap_apply, aws_iam_role.operations]
 }
 
 run "another_account_administrator_is_rejected" {
@@ -201,7 +201,7 @@ run "another_account_administrator_is_rejected" {
       arn        = "arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_WorkloadAdministrator_abc123/admin"
     }
   }
-  expect_failures = [aws_iam_role.bootstrap_apply]
+  expect_failures = [aws_iam_role.bootstrap_apply, aws_iam_role.operations]
 }
 
 run "wildcard_account_is_rejected" {
