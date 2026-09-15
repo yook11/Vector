@@ -180,6 +180,16 @@ jobs:
             > "$backfill_vars_tmp"
           mv "$backfill_vars_tmp" backfill.auto.tfvars.json
 
+      - name: Preserve Source dispatch image and schedules from state
+        run: |
+          set -euo pipefail
+          dispatch_vars_tmp=$(mktemp ./source-dispatch-vars.XXXXXX)
+          trap 'rm -f "$dispatch_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-source-dispatch.py \
+            > "$dispatch_vars_tmp"
+          mv "$dispatch_vars_tmp" source-dispatch.auto.tfvars.json
+
       - name: Terraform plan
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}

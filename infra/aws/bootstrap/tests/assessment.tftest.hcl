@@ -124,7 +124,8 @@ run "boundary_pairing_guards_remain_complete" {
         jsondecode(aws_iam_policy.apply_completion_consumer.policy).Statement,
         jsondecode(aws_iam_policy.apply_embedding_consumer.policy).Statement,
         jsondecode(aws_iam_policy.apply_assessment_consumer.policy).Statement,
-        jsondecode(aws_iam_policy.apply_backfill.policy).Statement
+        jsondecode(aws_iam_policy.apply_backfill.policy).Statement,
+        jsondecode(aws_iam_policy.apply_source_dispatch.policy).Statement
       ) : jsonencode(actual) if actual.Sid == expected.Sid] == [jsonencode(expected)]
     ])
     error_message = "既存・追加の全ロールで、同じboundary固定Denyを1件ずつ保持する。"
