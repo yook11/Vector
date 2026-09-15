@@ -144,13 +144,13 @@ run "consumer_network_is_private_and_gemini_only" {
     condition = (
       local.proxy_clients.embedding_consumer.cidr == aws_subnet.embedding_consumer.cidr_block &&
       toset(local.proxy_clients.embedding_consumer.domains) == toset(["generativelanguage.googleapis.com"]) &&
-      !local.proxy_clients.embedding_consumer.unrestricted &&
+      !local.proxy_clients.embedding_consumer.allow_any_domain &&
       strcontains(local.squid_conf, "acl src_embedding_consumer src ${aws_subnet.embedding_consumer.cidr_block}") &&
       strcontains(local.squid_conf, "http_access allow src_embedding_consumer dst_embedding_consumer") &&
       alltrue([for name in local.egress_stages :
         local.proxy_clients[name].cidr == local.app_subnet_cidrs[name] &&
         toset(local.proxy_clients[name].domains) == toset(flatten([for vendor in local.stages[name].egress_vendors : local.egress_vendor_domains[vendor]])) &&
-        local.proxy_clients[name].unrestricted == local.stages[name].egress_unrestricted
+        local.proxy_clients[name].allow_any_domain == local.stages[name].egress_allow_any_domain
       ])
     )
     error_message = "Geminiだけを許可し、既存proxyクライアントは変更しない。"

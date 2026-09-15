@@ -27,8 +27,8 @@ async def _resolve_host(host: str) -> list[str]:
     return [info[4][0] for info in infos]
 
 
-async def ensure_host_is_public(host: str) -> tuple[PublicIpAddress, ...]:
-    """ホスト名を DNS 解決し、全アドレスが ``PublicIpAddress`` であることを保証する。
+async def resolve_public_host_addresses(host: str) -> tuple[PublicIpAddress, ...]:
+    """ホスト名をDNS解決し、共通のIP方針で検証したアドレス一覧を返す。
 
     docker compose のサービス名 (``backend``, ``db``, ...) や、A レコードが
     プライベート IP に向いている悪意あるドメインを実フェッチ前に弾く。

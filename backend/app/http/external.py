@@ -25,7 +25,7 @@ from app.http.destination_policy import (
     NotAPublicIpError,
     PublicIpAddress,
 )
-from app.http.destination_resolution import ensure_host_is_public
+from app.http.destination_resolution import resolve_public_host_addresses
 from app.http.settings import HttpSettings
 
 # AsyncHTTPTransport の constructor 引数のうち make_external_async_client が
@@ -84,7 +84,7 @@ class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
         try:
             PublicIpAddress(original_host)
         except NotAnIpAddressError:
-            # DNS 名 → resolve + pin に進む
+            # DNS名は解決結果へIP方針を適用し、接続先の固定は経路に従う。
             pass
         except NotAPublicIpError as e:
             msg = f"host is non-public IP literal: {original_host}"
@@ -92,7 +92,7 @@ class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
         else:
             return await super().handle_async_request(request)
 
-        addrs = await ensure_host_is_public(original_host)
+        addrs = await resolve_public_host_addresses(original_host)
         if self._pins_connection:
             # 最初の resolved IP に pin。multi-A / dual-stack でも全件 public 検証
             # 済なので 1 個目を選んで安全。
@@ -103,6 +103,8 @@ class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
 def make_external_async_client(**kwargs: Any) -> httpx.AsyncClient:
     """宛先検証を持つ標準transportと、設定で確定したプロキシを使用する。
 
+    許可ドメインは送信元の実行単位に対応するプロキシ設定が管理する。
+    元のホスト名を渡すため、プロキシ自身の接続先にもIP制限が必要になる。
     リダイレクト追従は既定でFalseとし、明示的なTrueは維持する。
     transport用の引数を取り分け、残りの引数はHTTPXへ委譲する。
     標準transportの経路は設定が決め、呼び出し側のproxy引数は上書きする。

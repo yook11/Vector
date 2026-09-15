@@ -157,7 +157,7 @@ run "consumer_permissions_and_network_are_scoped" {
       endswith(jsondecode(aws_iam_role_policy.acquisition_consumer.policy).Statement[1].Resource, "/vector_collect") &&
       aws_vpc_security_group_egress_rule.acquisition_consumer_to_rds.to_port == 5432 &&
       aws_vpc_security_group_egress_rule.acquisition_consumer_to_proxy.to_port == var.proxy_port &&
-      local.proxy_clients.acquisition_consumer.unrestricted &&
+      local.proxy_clients.acquisition_consumer.allow_any_domain &&
       length(jsondecode(aws_sqs_queue_policy.acquisition_dlq.policy).Statement) == 1 &&
       jsondecode(aws_sqs_queue_policy.source_dispatch["acquisition"].policy).Statement[1].Action == "sqs:SendMessage"
     )

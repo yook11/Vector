@@ -180,7 +180,7 @@ run "consumer_network_and_permissions_are_scoped" {
       aws_route_table_association.assessment_consumer.route_table_id == aws_route_table.app.id &&
       local.proxy_clients.assessment_consumer.domains == ["api.deepseek.com"] &&
       local.proxy_clients.assessment_consumer.cidr == aws_subnet.assessment_consumer.cidr_block &&
-      !local.proxy_clients.assessment_consumer.unrestricted &&
+      !local.proxy_clients.assessment_consumer.allow_any_domain &&
       strcontains(local.squid_conf, "http_access allow src_assessment_consumer dst_assessment_consumer") &&
       alltrue([for key, endpoint in aws_vpc_endpoint.interface :
         contains(endpoint.security_group_ids, aws_security_group.assessment_consumer_ssm.id) == (key == "ssm")

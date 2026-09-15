@@ -24,7 +24,7 @@ locals {
   stages = {
     frontend = {
       subnet_index   = 20, needs_broker = false
-      egress_vendors = [], egress_unrestricted = false
+      egress_vendors = [], egress_allow_any_domain = false
       image          = "frontend", db_users = ["vector_auth"]
       cpu            = 256, memory = 1024, port = 3000, singleton = false
       command        = []
@@ -36,7 +36,7 @@ locals {
     }
     api = {
       subnet_index   = 21, needs_broker = true
-      egress_vendors = ["logfire"], egress_unrestricted = false
+      egress_vendors = ["logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_app"]
       cpu            = 256, memory = 512, port = 8000, singleton = false
       command        = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -54,7 +54,7 @@ locals {
     # `scale count scheduler=1` に相当する制約を deployment configuration で作る。
     scheduler = {
       subnet_index   = 22, needs_broker = true
-      egress_vendors = ["logfire"], egress_unrestricted = false
+      egress_vendors = ["logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = []
       cpu            = 256, memory = 512, port = null, singleton = true
       command        = ["supervisord", "-n", "-c", "/app/supervisord/scheduler.conf"]
@@ -66,7 +66,7 @@ locals {
     }
     fetch = {
       subnet_index   = 23, needs_broker = true
-      egress_vendors = ["logfire"], egress_unrestricted = true
+      egress_vendors = ["logfire"], egress_allow_any_domain = true
       image          = "backend", db_users = ["vector_collect"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/fetch.conf"]
@@ -78,7 +78,7 @@ locals {
     }
     analysis = {
       subnet_index   = 24, needs_broker = true
-      egress_vendors = ["gemini", "deepseek", "logfire"], egress_unrestricted = false
+      egress_vendors = ["gemini", "deepseek", "logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_app", "vector_auth"]
       cpu            = 256, memory = 2048, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/analysis.conf"]
@@ -92,7 +92,7 @@ locals {
     }
     insights = {
       subnet_index   = 25, needs_broker = true
-      egress_vendors = ["deepseek", "logfire"], egress_unrestricted = false
+      egress_vendors = ["deepseek", "logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_app"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/insights.conf"]
@@ -105,7 +105,7 @@ locals {
     }
     agent = {
       subnet_index   = 26, needs_broker = true
-      egress_vendors = ["deepseek", "gemini", "tavily", "logfire"], egress_unrestricted = false
+      egress_vendors = ["deepseek", "gemini", "tavily", "logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_app"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/agent.conf"]
@@ -129,7 +129,7 @@ locals {
   broker_stages = toset([for name, s in local.stages : name if s.needs_broker])
   egress_stages = toset([
     for name, s in local.stages : name
-    if length(s.egress_vendors) > 0 || s.egress_unrestricted
+    if length(s.egress_vendors) > 0 || s.egress_allow_any_domain
   ])
 
   # image は 2 つ (backend / frontend) を段で共有する。

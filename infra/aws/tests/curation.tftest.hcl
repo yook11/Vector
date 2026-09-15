@@ -182,7 +182,7 @@ run "consumer_network_and_permissions_are_scoped" {
       aws_route_table_association.curation_consumer.route_table_id == aws_route_table.app.id &&
       local.proxy_clients.curation_consumer.domains == ["generativelanguage.googleapis.com"] &&
       local.proxy_clients.curation_consumer.cidr == aws_subnet.curation_consumer.cidr_block &&
-      !local.proxy_clients.curation_consumer.unrestricted &&
+      !local.proxy_clients.curation_consumer.allow_any_domain &&
       strcontains(local.squid_conf, "http_access allow src_curation_consumer dst_curation_consumer") &&
       alltrue([for key, endpoint in aws_vpc_endpoint.interface :
         contains(endpoint.security_group_ids, aws_security_group.curation_consumer_ssm.id) == (key == "ssm")
