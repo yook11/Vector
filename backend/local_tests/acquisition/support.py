@@ -1,7 +1,7 @@
 """取得テストのRSS応答と、確定した保存結果の読み取り。"""
 
 import json
-from xml.sax.saxutils import escape
+from html import escape
 
 import httpx
 
