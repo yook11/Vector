@@ -20,7 +20,6 @@ from app.analysis.curation.domain.ready import (
 )
 from app.analysis.curation.service import CurationCompletion, CurationCompletionKind
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 from tests.logfire._span_helpers import stage_attrs
 
@@ -82,10 +81,10 @@ def _patch_try_advance_from(
 
 class TestCurateContent:
     @pytest.mark.asyncio
-    async def test_chains_assess_with_trigger_when_service_returns_curation_id(
+    async def test_signal_completion_does_not_enqueue_assessment(
         self,
     ) -> None:
-        """Signal保存完了のIDをAssessmentTriggerで後続へ渡す。"""
+        """Signal保存完了後も旧Assessmentキューへ直接投入しない。"""
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
@@ -93,17 +92,16 @@ class TestCurateContent:
         with (
             _patch_try_advance_from(_fixed_ready()),
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ) as enqueue,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=CurationCompletion(CurationCompletionKind.SIGNAL, 42)
             )
-            mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
-        mock_assess.kiq.assert_awaited_once_with(
-            AssessmentTrigger(curation_id=42),
-        )
+        enqueue.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -118,15 +116,16 @@ class TestCurateContent:
         with (
             _patch_try_advance_from(_fixed_ready()),
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ) as enqueue,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=CurationCompletion(kind)
             )
-            mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
-        mock_assess.kiq.assert_not_called()
+        enqueue.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:
@@ -147,10 +146,11 @@ class TestCurateContent:
             _patch_try_advance_from(exc),
             patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit,
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ) as enqueue,
         ):
             mock_audit.return_value.append_ready_build_rejected = AsyncMock()
-            mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         mock_audit.return_value.append_ready_build_rejected.assert_awaited_once_with(
@@ -158,7 +158,7 @@ class TestCurateContent:
             rejected=exc,
         )
         mock_svc_cls.assert_not_called()
-        mock_assess.kiq.assert_not_called()
+        enqueue.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_idempotent_skip_escapes_audit_and_logs_only(self) -> None:
@@ -175,11 +175,12 @@ class TestCurateContent:
             _patch_try_advance_from(exc),
             patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit,
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ) as enqueue,
             capture_logs() as cap,
         ):
             mock_audit.return_value.append_ready_build_rejected = AsyncMock()
-            mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         # 冪等 skip は repository を触らず pipeline_events 行を焼かない
@@ -189,7 +190,7 @@ class TestCurateContent:
         assert len(rejected) == 1
         assert rejected[0]["code"] == exc.reason.value
         mock_svc_cls.assert_not_called()
-        mock_assess.kiq.assert_not_called()
+        enqueue.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_ready_build_exception_audits_and_reraises(self) -> None:
@@ -210,9 +211,10 @@ class TestCurateContent:
                 new=AsyncMock(),
             ) as audit_failed,
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ) as enqueue,
         ):
-            mock_assess.kiq = AsyncMock()
             with pytest.raises(RuntimeError):
                 await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
@@ -222,7 +224,7 @@ class TestCurateContent:
             exc=exc,
         )
         mock_svc_cls.assert_not_called()
-        mock_assess.kiq.assert_not_called()
+        enqueue.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rate_limited_records_audit_and_returns(self) -> None:
@@ -314,32 +316,32 @@ class TestCurateContentStageSpan:
     """``article_stage`` span の curation task 配線 (capfire oracle)。
 
     Service は mock するため signal / noise の result は service テストが正本。
-    ここでは task が設定する skipped / failed と、kiq 成功後の
-    mark、success 経路で task が result を設定しないことを固定する。
+    ここではtaskが設定するskipped / failedと、成功時に旧投入を記録しないことを固定する。
     """
 
     @pytest.mark.asyncio
-    async def test_chain_marks_next_task_without_setting_result(
+    async def test_signal_completion_does_not_mark_next_task(
         self, capfire: CaptureLogfire
     ) -> None:
-        """signal 勝者 (kiq 成功) → next_task_enqueued=True + name。result は不設定。"""
+        """Signal保存完了後も旧タスクの投入済み記録を付けない。"""
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
         with (
             _patch_try_advance_from(_fixed_ready()),
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ),
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=CurationCompletion(CurationCompletionKind.SIGNAL, 42)
             )
-            mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         attrs = stage_attrs(capfire)
-        assert attrs["next_task_enqueued"] is True
-        assert attrs["next_task_name"] == "assess_content"
+        assert attrs["next_task_enqueued"] is False
+        assert "next_task_name" not in attrs
         # result は service (mock) の責務。task は success 経路で result を設定しない。
         assert "result" not in attrs
 
@@ -354,12 +356,13 @@ class TestCurateContentStageSpan:
         with (
             _patch_try_advance_from(_fixed_ready()),
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ),
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=CurationCompletion(CurationCompletionKind.NOISE)
             )
-            mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         attrs = stage_attrs(capfire)
@@ -381,10 +384,11 @@ class TestCurateContentStageSpan:
             _patch_try_advance_from(exc),
             patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit,
             patch("app.queue.tasks.curation.CurationService"),
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ),
         ):
             mock_audit.return_value.append_ready_build_rejected = AsyncMock()
-            mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         assert stage_attrs(capfire)["result"] == "skipped"
@@ -409,9 +413,10 @@ class TestCurateContentStageSpan:
                 new=AsyncMock(),
             ),
             patch("app.queue.tasks.curation.CurationService"),
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ),
         ):
-            mock_assess.kiq = AsyncMock()
             with pytest.raises(RuntimeError):
                 await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
@@ -448,13 +453,14 @@ class TestCurateContentStageSpan:
             patch(
                 "app.queue.tasks.curation.CurationFailureHandler"
             ) as mock_handler_cls,
-            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
+            ),
         ):
             mock_svc_cls.return_value.execute = AsyncMock(side_effect=marker)
             mock_handler_cls.return_value.handle = AsyncMock(
                 return_value=FailureHandlingDecision(reraise=False)
             )
-            mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         attrs = stage_attrs(capfire)

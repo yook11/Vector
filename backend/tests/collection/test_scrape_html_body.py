@@ -9,15 +9,14 @@ task は処理開始時に ``ReadyForArticleCompletion.try_advance_from`` で厚
   ``tests/collection/article_completion/test_service.py``
 - precondition gateway (pending lifecycle 判定 / Ready 構築):
   ``tests/collection/article_completion/test_repository.py``
-- 下流 Stage 3 は ID-only ``CurationTrigger`` を kiq に渡すのみ
+- 下流Curationへの配送はServiceが保存したOutboxの責務
 
 検証する task 不変条件:
 
 - Ready build blocked → log のみ (監査に焼かない) + ``None`` 返却、
   Service 不構築 / chain 不発火
 - Ready build failed → failed audit 後に re-raise、Service 不構築 / chain 不発火
-- ``int`` (analyzable_article_id) → ``curate_content.kiq`` を
-  ``CurationTrigger(analyzable_article_id)`` で発火 + success dict 返却
+- ``int`` (analyzable_article_id) → 旧キューへ投入せずsuccess dictを返却
 - ``None`` (lease 衝突 / 永続失敗 / 一時失敗 / race-loss) → ``None``
   返却、chain 発火せず
 """
@@ -48,7 +47,6 @@ from app.collection.sources.article_completion_policy import DEFAULT_POLICY
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.source_name import SourceName
 from app.db.errors import DatabaseUnexpectedError
-from app.queue.messages.curation import CurationTrigger
 from app.queue.tasks.completion import scrape_html_body
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import pipeline_stage_attrs
@@ -57,7 +55,7 @@ _SERVICE_EXECUTE = (
     "app.collection.article_completion.service.ArticleCompletionService.execute"
 )
 _SERVICE_CLS = "app.queue.tasks.completion.ArticleCompletionService"
-_CURATE_CONTENT_KIQ = "app.queue.tasks.completion.curate_content.kiq"
+_CURATE_CONTENT_KIQ = "app.queue.tasks.curation.curate_content.kiq"
 
 _METRIC = "vector.completion.processing_outcome"
 _ALL_RESULTS = ("succeeded", "failed", "infra_error")
@@ -189,11 +187,11 @@ async def test_ready_build_unexpected_exception_audits_and_reraises(
 
 
 @pytest.mark.asyncio
-async def test_chains_curate_content_with_trigger_when_article_id_returned(
+async def test_returns_success_without_enqueuing_curation_when_article_id_returned(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``int`` (analyzable_article_id) → ``curate_content.kiq`` を Trigger で発火 + success dict."""  # noqa: E501
+    """本文補完の成功を返し、旧Curationキューへ直接投入しない。"""
     curate_content_kiq = AsyncMock()
     monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=123))
     monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
@@ -208,9 +206,7 @@ async def test_chains_curate_content_with_trigger_when_article_id_returned(
         "analyzable_article_id": 123,
         "status": "success",
     }
-    curate_content_kiq.assert_awaited_once_with(
-        CurationTrigger(analyzable_article_id=123)
-    )
+    curate_content_kiq.assert_not_awaited()
 
 
 @pytest.mark.asyncio

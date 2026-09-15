@@ -1,7 +1,7 @@
 """収集 (acquisition) タスク — パイプラインの最前段 (Stage 1)。
 
 経路: ``dispatch_high/medium/low`` (cron) または ``dispatch_sources`` (admin 手動) →
-``acquire_source`` → ``curate_content`` chain (本文込み) または
+``acquire_source`` → Outbox経由のCuration (本文込み) または
 ``scrape_html_body`` (completion, DB 駆動)。本ファイルは Stage 1 の cron dispatch
 と per-source 取り込みに絞り、HTML 取得 + 本文抽出 (Stage 2) は
 ``app/queue/tasks/completion.py`` の責務。
@@ -43,9 +43,7 @@ from app.db.errors import DatabaseError
 from app.logfire.stage_span import pipeline_stage_span
 from app.queue.brokers import broker_collection, broker_dispatch
 from app.queue.messages.collection import AcquireSourceTaskInput
-from app.queue.messages.curation import CurationTrigger
 from app.queue.schedule import CADENCE_CRON
-from app.queue.tasks.curation import curate_content
 
 logger = structlog.get_logger(__name__)
 
@@ -442,7 +440,7 @@ async def acquire_source(
     """ソースを取り込む。
 
     ``arg.id`` は ``news_sources.id`` (FK 用)、``arg.name`` は ``SOURCES`` dispatch の
-    lookup キー。本文込みで取れた記事は永続化して ``curate_content`` に enqueue、
+    lookup キー。本文込みで取れた記事は永続化し、後続のCurationはOutbox経由で進む。
     本文未取得の記事は後段 ``scrape_html_body`` task へ進む。
 
     失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
@@ -488,11 +486,6 @@ async def acquire_source(
         record_acquisition_run(AcquisitionRunResult.SUCCEEDED)
 
         article_created_count = len(persisted_ids)
-        # 永続化済 analyzable_article_id を Trigger に詰めて enqueue。
-        for analyzable_article_id in persisted_ids:
-            await curate_content.kiq(
-                CurationTrigger(analyzable_article_id=analyzable_article_id)
-            )
         # 本文未取得分は `incomplete_articles` の DB 駆動。`dispatch_html_fetch_jobs`
         # cron poller が `scrape_html_body` に投入するため、ここでは直接 kiq しない。
         payload = {

@@ -15,7 +15,7 @@ from app.analysis.curation.domain.ready import (
 from app.analysis.curation.failure_handling import CurationFailureHandler
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
-from app.analysis.curation.service import CurationCompletionKind, CurationService
+from app.analysis.curation.service import CurationService
 from app.analysis.curation.task_errors import to_curation_task_error
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
@@ -25,10 +25,8 @@ from app.audit.stages.curation import CurationAuditRepository
 from app.logfire.article_stage import curation_stage_span
 from app.queue.brokers import broker_analysis
 from app.queue.helpers.stage_hold import set_stage_hold
-from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 from app.queue.retry import is_last_attempt
-from app.queue.tasks.assessment import assess_content
 
 logger = structlog.get_logger(__name__)
 
@@ -44,7 +42,7 @@ async def curate_content(
     trigger: CurationTrigger,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一記事を curation し、signal 成功時だけ assessment に chain する。"""
+    """単一記事をcurationし、後続のAssessmentは保存済みOutbox経由で進める。"""
     session_factory = ctx.state.session_factory
     curator: BaseCurator = ctx.state.curator
 
@@ -101,7 +99,7 @@ async def curate_content(
         handler = CurationFailureHandler(session_factory)
 
         try:
-            result = await svc.execute(ready, curator)
+            await svc.execute(ready, curator)
         except Exception as exc:
             # handler / hold が二次例外で落ちても元の業務例外を span に残す
             # (no-override で最初の業務例外を保持)。
@@ -125,10 +123,6 @@ async def curate_content(
                     raise task_exc from exc
                 raise
             return
-
-        if result.kind is CurationCompletionKind.SIGNAL:
-            await assess_content.kiq(AssessmentTrigger(curation_id=result.curation_id))
-            stage.mark_next_task_enqueued()
 
 
 async def _append_ready_build_failed_audit(

@@ -219,6 +219,22 @@ run "first_deployment_enables_all_three_stages" {
   }
 }
 
+run "legacy_curation_backfill_is_disabled_in_ecs" {
+  command = plan
+  assert {
+    condition     = local.stage_environment.analysis.BACKFILL_CURATIONS_ENABLED == "false"
+    error_message = "ECSの旧Curation救済からTaskiqへ再投入しない。"
+  }
+}
+
+run "legacy_assessment_backfill_is_disabled_in_ecs" {
+  command = plan
+  assert {
+    condition     = local.stage_environment.analysis.BACKFILL_ASSESSMENTS_ENABLED == "false"
+    error_message = "ECSの旧Assessment救済からTaskiqへ再投入しない。"
+  }
+}
+
 run "legacy_embedding_backfill_is_disabled_in_ecs" {
   command = plan
   assert {

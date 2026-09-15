@@ -126,7 +126,7 @@ def _acquire_failure_patches(
             return_value=MagicMock(record_source_failure=record_source_failure),
         ),
         patch(
-            "app.queue.tasks.acquisition.curate_content",
+            "app.queue.tasks.curation.curate_content",
             new=MagicMock(kiq=AsyncMock()),
         ),
     ):
@@ -210,7 +210,7 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
     monkeypatch.setattr(RssReader, "fetch", reader)
     monkeypatch.setitem(SOURCES, VentureBeatSource.name, FailingSource)
     enqueue = AsyncMock()
-    monkeypatch.setattr(collection_tasks.curate_content, "kiq", enqueue)
+    monkeypatch.setattr("app.queue.tasks.curation.curate_content.kiq", enqueue)
 
     with pytest.raises(RuntimeError) as caught:
         await collection_tasks.acquire_source(
@@ -327,7 +327,7 @@ class TestAcquireSourceStageSpan:
                 ),
             ),
             patch(
-                "app.queue.tasks.acquisition.curate_content",
+                "app.queue.tasks.curation.curate_content",
                 new=MagicMock(kiq=AsyncMock()),
             ),
         ):
@@ -534,7 +534,7 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
     monkeypatch.setattr(RssReader, "fetch", reader)
     monkeypatch.setitem(SOURCES, VentureBeatSource.name, MultiSource)
     enqueue = AsyncMock()
-    monkeypatch.setattr(collection_tasks.curate_content, "kiq", enqueue)
+    monkeypatch.setattr("app.queue.tasks.curation.curate_content.kiq", enqueue)
     arg = AcquireSourceTaskInput(id=vb_source.id, name=str(vb_source.name))
     if scenario == "selection_failed":
         with pytest.raises(RuntimeError) as caught:
@@ -578,7 +578,7 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
             "article_created",
             "incomplete_article_created",
         ]
-        enqueue.assert_awaited_once()
+        enqueue.assert_not_awaited()
     else:
         assert not article_ids and not incomplete_ids and not outbox
         assert len(events) == 1
