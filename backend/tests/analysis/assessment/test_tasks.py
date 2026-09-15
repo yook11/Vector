@@ -24,7 +24,6 @@ from app.analysis.assessment.service import (
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.queue.messages.assessment import AssessmentTrigger
-from app.queue.messages.embedding import EmbeddingTrigger
 from app.shared.revalidate import NullRevalidateNotifier
 from tests.logfire._span_helpers import one_article_stage_span, stage_attrs
 
@@ -185,12 +184,8 @@ class TestAssessContent:
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_in_scope_chains_embedding_with_trigger(self) -> None:
-        """in-scope 成功 (analyzed_article_id 返却) → EmbeddingTrigger で chain。
-
-        assessment task は embedding 用 Ready を構築せず、ID だけを運ぶ
-        EmbeddingTrigger を kiq に enqueue する。
-        """
+    async def test_in_scope_does_not_enqueue_embedding(self) -> None:
+        """対象内保存に成功しても旧Embeddingタスクを投入しない。"""
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
@@ -200,7 +195,10 @@ class TestAssessContent:
         with (
             _patch_ready_construction(ready),
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
-            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
+            patch(
+                "app.queue.tasks.embedding.generate_embedding.kiq",
+                new_callable=AsyncMock,
+            ) as enqueue_embedding,
         ):
             # 対象内保存の正常終了から保存済み記事IDを引き継ぐ。
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -208,17 +206,13 @@ class TestAssessContent:
                     AssessmentCompletionKind.IN_SCOPE, 100
                 )
             )
-            mock_embed.kiq = AsyncMock()
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
         # 構築された Ready が Service に渡され、監査主語 (元記事 id) が明示引数で届く
         call_args = mock_svc_cls.return_value.execute.call_args
         assert call_args[0][0] is ready
         assert call_args.kwargs["analyzable_article_id"] == 7
-        # 監査主語 (元記事 id) を Stage 5 へ引き継いで chain する。
-        mock_embed.kiq.assert_awaited_once_with(
-            EmbeddingTrigger(analyzed_article_id=100, analyzable_article_id=7)
-        )
+        enqueue_embedding.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -240,15 +234,17 @@ class TestAssessContent:
         with (
             _patch_ready_construction(_make_ready(curation_id=2)),
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
-            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
+            patch(
+                "app.queue.tasks.embedding.generate_embedding.kiq",
+                new_callable=AsyncMock,
+            ) as enqueue_embedding,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=AssessmentCompletion(kind)
             )
-            mock_embed.kiq = AsyncMock()
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
-        mock_embed.kiq.assert_not_called()
+        enqueue_embedding.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
@@ -312,15 +308,14 @@ class TestAssessContentStageSpan:
     """``article_stage`` span の assessment task 配線 (capfire oracle)。
 
     Service は mock するため in_scope / out_of_scope の result は service テストが
-    正本。ここでは task が設定する skipped / failed、kiq 成功後の
-    mark、ready 構築後の article_id late-binding を固定する。
+    正本。ここではskipped / failed、旧投入なし、Ready構築後の記事ID設定を検証する。
     """
 
     @pytest.mark.asyncio
-    async def test_in_scope_chain_marks_next_task_and_binds_article_id(
+    async def test_in_scope_does_not_mark_next_task_and_binds_article_id(
         self, capfire: CaptureLogfire
     ) -> None:
-        """in-scope 成功 → mark (name=generate_embedding) + article_id late-bind。"""
+        """対象内保存のspanに記事IDを設定し、旧タスクの投入済み記録を残さない。"""
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
@@ -328,19 +323,17 @@ class TestAssessContentStageSpan:
         with (
             _patch_ready_construction(ready),
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
-            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=AssessmentCompletion(
                     AssessmentCompletionKind.IN_SCOPE, 100
                 )
             )
-            mock_embed.kiq = AsyncMock()
             await assess_content(trigger=_make_trigger(curation_id=2), ctx=mock_ctx)
 
         attrs = stage_attrs(capfire)
-        assert attrs["next_task_enqueued"] is True
-        assert attrs["next_task_name"] == "generate_embedding"
+        assert attrs["next_task_enqueued"] is False
+        assert "next_task_name" not in attrs
         assert attrs["article_id"] == 7
         # result は service (mock) の責務。task は success 経路で result を設定しない。
         assert "result" not in attrs
@@ -363,12 +356,10 @@ class TestAssessContentStageSpan:
         with (
             _patch_ready_construction(_make_ready(curation_id=2)),
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
-            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=AssessmentCompletion(kind)
             )
-            mock_embed.kiq = AsyncMock()
             await assess_content(trigger=_make_trigger(curation_id=2), ctx=mock_ctx)
 
         attrs = stage_attrs(capfire)
