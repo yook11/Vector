@@ -125,6 +125,8 @@ resource "aws_iam_role_policy" "source_dispatch" {
   })
 }
 
+# 投入処理はCloudWatch Logsと標準メトリクスを使い、X-Rayは採用しない。
+# nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "source_dispatch" {
   count = var.source_dispatch_image_digest == null ? 0 : 1
 
