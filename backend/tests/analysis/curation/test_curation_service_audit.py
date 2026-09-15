@@ -534,7 +534,7 @@ async def test_task_ready_rejection_keeps_article_without_ai_or_followup(
     )
 
     with patch(
-        "app.queue.tasks.curation.assess_content.kiq", new_callable=AsyncMock
+        "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
     ) as enqueue:
         await curate_content(CurationTrigger(analyzable_article_id=article.id), ctx)
     curator.curate.assert_not_awaited()

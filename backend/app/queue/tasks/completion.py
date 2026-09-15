@@ -6,7 +6,7 @@
   - ``sweep_expired_leases`` (cron, 1 分間隔): worker crash で ``status='running'``
     のまま残った行を ``open`` に戻す
   - ``scrape_html_body`` (event-driven): HTML 取得 + 本文抽出 + Article 永続化を
-    ``ArticleCompletionService`` に委譲、成功時は ``curate_content`` chain
+    ``ArticleCompletionService`` に委譲し、後続のCurationはOutbox経由で進む
 
 再投入は DB の ``ready_at`` を SSoT とした cron poller に統一する。worker
 crash で ``status='running'`` のまま残った行は ``sweep_expired_leases`` が
@@ -38,9 +38,7 @@ from app.collection.article_completion.service import ArticleCompletionService
 from app.db.errors import DatabaseError
 from app.logfire.stage_span import pipeline_stage_span
 from app.queue.brokers import broker_collection, broker_dispatch
-from app.queue.messages.curation import CurationTrigger
 from app.queue.schedule import CRON_HTML_FETCH
-from app.queue.tasks.curation import curate_content
 
 logger = structlog.get_logger(__name__)
 
@@ -118,9 +116,7 @@ async def scrape_html_body(
     再投入する。task は ``ReadyForArticleCompletion.try_advance_from`` で Ready を
     構築し (対象消滅 / 別 worker 完了済み等の benign な skip は log のみで ``None``)、
     Service に渡す。
-    analyzable_article_id が返れば ``curate_content`` に enqueue、``None`` は何もしない
-    (DB 状態 + audit は
-    Service / failure handler 内で完結済)。
+    成功時はIDを返し、後続のCurationはServiceが保存したOutbox経由で進む。
     """
     with pipeline_stage_span(
         Stage.COMPLETION, op="scrape_html_body", article_id=incomplete_article_id
@@ -161,9 +157,6 @@ async def scrape_html_body(
 
         if analyzable_article_id is None:
             return None
-        await curate_content.kiq(
-            CurationTrigger(analyzable_article_id=analyzable_article_id)
-        )
         return {
             "incomplete_article_id": incomplete_article_id,
             "analyzable_article_id": analyzable_article_id,
