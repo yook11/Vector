@@ -160,7 +160,11 @@ class PipelineBacklog:
         rows = (await self._session.execute(stmt)).tuples().all()
         return [
             BackfillEventTarget(
-                target=BackfillTarget(target_id, article_id, source_name),
+                target=BackfillTarget(
+                    target_id,
+                    article_id,
+                    source_name.root if source_name is not None else None,
+                ),
                 occurred_at=occurred_at,
                 payload=AnalyzableArticleCreated(analyzable_article_id=target_id),
             )
@@ -215,7 +219,11 @@ class PipelineBacklog:
         rows = (await self._session.execute(stmt)).tuples().all()
         return [
             BackfillEventTarget(
-                target=BackfillTarget(target_id, article_id, source_name),
+                target=BackfillTarget(
+                    target_id,
+                    article_id,
+                    source_name.root if source_name is not None else None,
+                ),
                 occurred_at=occurred_at,
                 payload=ArticleCuratedSignal(
                     analyzable_article_id=article_id, curation_id=target_id
@@ -273,7 +281,11 @@ class PipelineBacklog:
         rows = (await self._session.execute(stmt)).tuples().all()
         return [
             BackfillEventTarget(
-                target=BackfillTarget(target_id, article_id, source_name),
+                target=BackfillTarget(
+                    target_id,
+                    article_id,
+                    source_name.root if source_name is not None else None,
+                ),
                 occurred_at=occurred_at,
                 payload=ArticleAssessedInScope(
                     curation_id=curation_id, analyzed_article_id=target_id
