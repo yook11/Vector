@@ -2,9 +2,9 @@
 
 ## 作業定義
 
-- Problem: 既存20件は通常の結合テスト環境でskipされ、禁止操作の抜けや実行内容と名前の不一致がある。
-- Evidence: n3・y2・z14・z22の権限migration、既存ロールテスト、共通のmigration適用済みDBを照合した。
-- Invariants: 製品権限とmigrationを変更しない。実ロールで接続する。期待値はmigrationから自動生成せず、下記の許可仕様として定義する。各ケースのDBは分離する。
+- Problem: 各実行ロールの必要権限と禁止操作を明示し、Relayの配信処理を限定した権限で成立させる。
+- Evidence: n3・y2・z14・z22・z23の権限migration、既存ロールテスト、共通のmigration適用済みDBを照合した。
+- Invariants: Auth・App・Collectの既存権限を維持する。実ロールで接続する。期待値はmigrationから自動生成せず、下記の許可仕様として定義する。各ケースのDBは分離する。
 - Non-goals: ユーザー作成からログインまでの実装、AWS IAMの実認証、既存データの移行、全PostgreSQL機能のアクセス制御検証。
 - Done: 許可一覧との一致と代表的な実操作をskipなしで検証し、旧ロールテストを置換する。既存Auth構造契約2件は動作テストへの置換まで維持する。
 
@@ -22,12 +22,17 @@ DMLはSELECT・INSERT・UPDATE・DELETEを表す。
 | vector_collect | public.incomplete_articles | DML |
 | vector_collect | public.pipeline_events | INSERT、id・occurred_atのSELECT |
 | vector_collect | public.outbox_events | INSERT、event_id・schema_version・occurred_at・next_attempt_at・attempt_countのSELECT |
+| vector_outbox_relay | public.outbox_events | 下記11列のSELECTと7列のUPDATE |
+
+RelayのSELECT列はevent_id・event_type・schema_version・payload・occurred_at・published_at・next_attempt_at・attempt_count・lease_token・leased_until・delivery_stopped_at。
+UPDATE列はlease_token・leased_until・attempt_count・published_at・next_attempt_at・delivery_stopped_at・delivery_stop_reason。
+delivery_stop_reasonは更新だけを許可する。表全体へのSELECT／UPDATEやINSERTは付与せず、イベント本文の変更とイベント作成・削除を禁止する。
 
 対象はpublic・authの通常表、partitioned table、view、materialized view、foreign tableとその列。
 テーブル操作はDML・TRUNCATE・REFERENCES・TRIGGER・MAINTAIN、列操作はSELECT・INSERT・UPDATE・REFERENCESを照合する。
 許可一覧にない操作は禁止し、権限の再付与（GRANT OPTION）も禁止する。
-明示したCollectのテーブル・列が存在することも確認し、存在しない対象が収集から消えて合格することを防ぐ。
-新しいテーブルも実DBのカタログから収集するため、Auth/Appは担当schemaのDMLが必要で、Collectは未列挙なら禁止となる。
+明示したCollectとRelayのテーブル・列が存在することも確認し、存在しない対象が収集から消えて合格することを防ぐ。
+新しいテーブルも実DBのカタログから収集するため、Auth/Appは担当schemaのDMLが必要で、CollectとRelayは未列挙なら禁止となる。
 将来オブジェクトを生成するDEFAULT PRIVILEGESそのものの試験ではなく、対象コードの全migration適用後の権限を検証する。
 
 ## 採番と管理権限
@@ -36,8 +41,9 @@ DMLはSELECT・INSERT・UPDATE・DELETEを表す。
 - App: public内のsequenceにUSAGE。y2で既に付与したSELECT・UPDATEは、次の所有テーブルに限定して保持する。
   - agent_message_sources、analyzable_articles、analyzed_articles、article_curations、curation_noises、incomplete_articles、categories、news_sources、out_of_scope_articles、pipeline_events、query_embedding_cache、weekly_briefings。
 - Collect: analyzable_articles・incomplete_articles・pipeline_eventsに所有されるsequenceにUSAGEのみ。
+- Relay: sequence権限なし。publicのUSAGEを付与し、DB・schema・tableの所有者にならない。
 - 上記以外のsequence権限とGRANT OPTIONは禁止する。
-- 3ロールはsuperuser・DB作成・ロール作成・RLS迂回・replicationを持たず、管理ロールvectorや他の実行ロールにSET ROLEできない。
+- 4ロールはsuperuser・DB作成・ロール作成・RLS迂回・replicationを持たず、管理ロールvectorや他の実行ロールにSET ROLEできない。
 - public・auth内のCREATEは禁止し、許可操作のために必要なschema USAGEを確認する。
 
 Appのsequence追加権限は現行契約の明示であり、最小権限の再設計は今回行わない。
@@ -55,11 +61,23 @@ RLSによる行単位の可視性、関数のEXECUTE、全組み込みロール�
 
 ## 配置と実行
 
-- `backend/local_tests/test_database_permissions.py`: 許可一覧・権限照合・実操作40件。
+- `backend/local_tests/permissions/`: 許可一覧・権限照合・代表的な実操作。Relayの禁止操作はSQLSTATE 42501で拒否を確認する。
+- `permissions/test_auth_permissions.py`・`test_app_permissions.py`・`test_collect_permissions.py`・`test_outbox_relay_permissions.py`にロールごとの期待値と操作を置き、`test_role_boundaries.py`に接続主体・管理属性・ロール切替・schema権限の共通検査を置く。
+- `permissions/support.py`は実効権限と対象オブジェクトを取得し、期待する許可一覧の判定は各ロールのテストが担う。
+- `backend/local_tests/outbox_relay/`: 既存Relayテストの実行接続をvector_outbox_relayへ切り替え、配送成功・再試行・停止・並行実行・障害時の保存結果を検証する。repository操作ごとの成功権限テストは重ねず、Relayの振る舞いで確認する。
+- `backend/local_tests/migrations/test_outbox_relay_migration.py`: z22からz23への往復、既存Outboxデータと既存ACLの維持を確認する。
 - `backend/local_tests/test_auth_provisioning_schema.py`: 旧テストから保持したAuth構造契約2件。
 - 旧`backend/tests/test_db_user_isolation.py`と独自の接続・skip処理は削除する。
 - Outbox個別migrationの往復検証は既存の`backend/tests/outbox/test_collect_permissions_migration.py`に残す。
-- 実行: backendで`uv run pytest local_tests/test_database_permissions.py local_tests/test_auth_provisioning_schema.py -q`。
+- 実行: リポジトリルートで`make test-local`。
+
+## Relayロールの初期化
+
+ロール作成は共通init scriptとDB初期構築SQL、表・列のGRANTはz23のAlembic migrationが担当する。ロール未作成の場合、migrationはエラーで停止する。
+
+共通ローカル初期化はNOLOGINで作成し、local_testsのセッション初期化でテスト用LOGINと固定パスワードを設定する。業務GRANTはfixtureへ追加しない。CIのhead適用前にも同名ロールを作成する。RDSの初期構築SQLはLOGINとrds_iamを付与する。
+
+既存開発DBには、管理用psql接続で`CREATE ROLE vector_outbox_relay NOLOGIN;`を一度実行してからmigrationを適用する。既に同名ロールがある場合は再作成しない。downgradeはz23が追加した列GRANTとpublicへの直接USAGEを撤去し、ロール自体は保持する。
 
 ## 検証結果（2026-09-11）
 
