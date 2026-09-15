@@ -13,6 +13,7 @@ from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
+from app.collection.sources.source_name import SourceName
 
 BackfillStage = Literal["curate", "assess", "embed"]
 BackfillTargetKind = Literal["article", "curation", "analyzed_article"]
@@ -53,7 +54,7 @@ class BackfillAuditRepository:
         target_kind: BackfillTargetKind,
         target_id: int,
         analyzable_article_id: int | None,
-        source_name: str | None,
+        source_name: SourceName | None,
         exc: BaseException | None = None,
         retryability: Retryability | None = None,
     ) -> None:

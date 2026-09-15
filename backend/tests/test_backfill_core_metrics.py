@@ -18,6 +18,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.backfill.targets import BackfillTarget
+from app.collection.sources.source_name import SourceName
 from app.queue.tasks import backfill as tasks
 
 
@@ -89,7 +90,7 @@ def _target(target_id: int) -> BackfillTarget:
     return BackfillTarget(
         target_id=target_id,
         analyzable_article_id=target_id + 1000,
-        source_name="VentureBeat",
+        source_name=SourceName("VentureBeat"),
     )
 
 

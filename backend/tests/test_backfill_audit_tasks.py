@@ -16,6 +16,7 @@ from structlog.testing import capture_logs
 from app.audit.domain.event import EventType, Stage
 from app.audit.stages.backfill import BackfillOutcomeCode
 from app.backfill.targets import BackfillTarget
+from app.collection.sources.source_name import SourceName
 from app.queue.tasks import backfill as tasks
 from tests.logfire._span_helpers import pipeline_stage_attrs
 
@@ -112,7 +113,7 @@ def _target(target_id: int) -> BackfillTarget:
     return BackfillTarget(
         target_id=target_id,
         analyzable_article_id=target_id + 1000,
-        source_name="VentureBeat",
+        source_name=SourceName("VentureBeat"),
     )
 
 

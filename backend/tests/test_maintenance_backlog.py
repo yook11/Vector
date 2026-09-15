@@ -141,7 +141,7 @@ async def test_pending_curation_targets_include_audit_snapshot(
     assert any(
         target.target_id == article.id
         and target.analyzable_article_id == article.id
-        and target.source_name == str(sample_source.name)
+        and target.source_name == sample_source.name
         for target in targets
     )
 
@@ -477,7 +477,7 @@ async def test_pending_assessment_targets_include_audit_snapshot(
     assert any(
         target.target_id == curation.id
         and target.analyzable_article_id == article.id
-        and target.source_name == str(sample_source.name)
+        and target.source_name == sample_source.name
         for target in targets
     )
 
@@ -752,7 +752,7 @@ async def test_pending_embedding_targets_include_audit_snapshot(
     assert any(
         target.target_id == analysis.id
         and target.analyzable_article_id == article.id
-        and target.source_name == str(sample_source.name)
+        and target.source_name == sample_source.name
         for target in targets
     )
 

@@ -26,6 +26,7 @@ from app.audit.domain.event import EventType
 from app.audit.stages.backfill import BackfillOutcomeCode
 from app.audit.stages.dispatch import DispatchOutcomeCode
 from app.backfill.targets import BackfillTarget
+from app.collection.sources.source_name import SourceName
 from app.queue.tasks.acquisition import _append_dispatch_run_event
 from app.queue.tasks.backfill import (
     _append_backfill_item_event,
@@ -77,7 +78,7 @@ async def test_backfill_item_audit_drop_derives_stage_from_backfill_stage(
     target = BackfillTarget(
         target_id=1,
         analyzable_article_id=1001,
-        source_name="TestSource",
+        source_name=SourceName("TestSource"),
     )
 
     await _append_backfill_item_event(

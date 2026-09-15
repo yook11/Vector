@@ -6,6 +6,7 @@ from datetime import datetime
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.collection.events import AnalyzableArticleCreated
+from app.collection.sources.source_name import SourceName
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,7 +15,7 @@ class BackfillTarget:
 
     target_id: int
     analyzable_article_id: int
-    source_name: str | None
+    source_name: SourceName | None
 
 
 @dataclass(frozen=True, slots=True)
