@@ -25,7 +25,13 @@ def is_contract_path_allowed(path: str) -> bool:
         return False
     return (
         path.startswith(
-            (_VERSIONS, "backend/tests/", "frontend/src/test/", "frontend/e2e/")
+            (
+                _VERSIONS,
+                "backend/tests/",
+                "backend/local_tests/",
+                "frontend/src/test/",
+                "frontend/e2e/",
+            )
         )
         or _FRONTEND_TEST.fullmatch(path) is not None
         or path in {"frontend/vitest.setup.client.ts", "frontend/vitest.setup.node.ts"}
