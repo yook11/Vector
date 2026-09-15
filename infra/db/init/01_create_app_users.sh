@@ -7,6 +7,7 @@
 #   docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "CREATE ROLE vector_auth    WITH LOGIN PASSWORD '...'"
 #   docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "CREATE ROLE vector_app     WITH LOGIN PASSWORD '...'"
 #   docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "CREATE ROLE vector_collect WITH LOGIN PASSWORD '...'"
+#   docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "CREATE ROLE vector_outbox_relay NOLOGIN"
 # then run `alembic upgrade head` to apply GRANT migration.
 
 set -e
@@ -46,6 +47,9 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_app')
 SELECT format('CREATE ROLE vector_collect WITH LOGIN PASSWORD %L', :'collect_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_collect')
 \gexec
+SELECT 'CREATE ROLE vector_outbox_relay NOLOGIN'
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_outbox_relay')
+\gexec
 EOSQL
 
-echo "Created Postgres app roles (vector_auth, vector_app, vector_collect) — GRANT applied via alembic migration."
+echo "Created Postgres app roles (vector_auth, vector_app, vector_collect, vector_outbox_relay) — GRANT applied via alembic migration."
