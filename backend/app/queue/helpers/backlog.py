@@ -9,6 +9,7 @@ from sqlalchemy import Select, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backfill.targets import BackfillTarget
+from app.collection.sources.source_name import SourceName
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -366,10 +367,10 @@ class PipelineBacklog:
         return int(result.scalar_one())
 
 
-def _target_from_row(row: tuple[int, int, object | None]) -> BackfillTarget:
+def _target_from_row(row: tuple[int, int, SourceName | None]) -> BackfillTarget:
     target_id, analyzable_article_id, source_name = row
     return BackfillTarget(
         target_id=target_id,
         analyzable_article_id=analyzable_article_id,
-        source_name=str(source_name) if source_name is not None else None,
+        source_name=source_name,
     )

@@ -6,6 +6,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.collection.sources.source_name import SourceName
+
 
 class BasePipelineEventPayload(BaseModel):
     """全 payload variant の共通 field。"""
@@ -31,6 +33,7 @@ class BackfillPayload(BasePipelineEventPayload):
     """Backfill stage payload。"""
 
     kind: Literal["backfill"] = "backfill"
+    source_name: SourceName | None = None
     backfill_stage: Literal["curate", "assess", "embed"]
     run_id: str | None = None
     target_kind: Literal["article", "curation", "analyzed_article"] | None = None

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import Stage
 from app.backfill.targets import BackfillTarget
+from app.collection.sources.source_name import SourceName
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -48,7 +49,7 @@ def _target(
     target_id: int,
     *,
     analyzable_article_id: int | None = None,
-    source_name: str | None = "VentureBeat",
+    source_name: SourceName | None = SourceName("VentureBeat"),
 ) -> BackfillTarget:
     """backfill enqueue 対象の test double を返す。"""
     return BackfillTarget(

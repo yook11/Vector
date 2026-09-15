@@ -18,6 +18,7 @@ from app.collection.events import (
     AnalyzableArticleCreated,
     AnalyzableArticleCreatedEvent,
 )
+from app.collection.sources.source_name import SourceName
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.curated_signal import build_curated_signal_message
@@ -36,7 +37,7 @@ NOW = datetime(2026, 9, 14, 0, 0, tzinfo=UTC)
 def targets(count):
     return [
         BackfillEventTarget(
-            target=BackfillTarget(i, i, "source"),
+            target=BackfillTarget(i, i, SourceName("source")),
             occurred_at=NOW,
             payload=AnalyzableArticleCreated(analyzable_article_id=i),
         )
@@ -184,7 +185,12 @@ async def test_reconstructed_event_is_accepted_by_consumer_contract(
         EventDeliveryRoute(payload.EVENT_TYPE, "queue-url", builder), sender
     )
     await dispatch(
-        publisher, [BackfillEventTarget(BackfillTarget(11, 11, "source"), NOW, payload)]
+        publisher,
+        [
+            BackfillEventTarget(
+                BackfillTarget(11, 11, SourceName("source")), NOW, payload
+            )
+        ],
     )
     body = sender.send_batch.call_args.kwargs["messages"][0].body
     event = event_model.from_input(json.loads(body))

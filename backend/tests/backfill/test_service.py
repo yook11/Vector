@@ -30,6 +30,30 @@ CASES = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("stage", "entry"), CASES)
+async def test_requeued_target_audit_preserves_source_name(
+    db_session, session_factory, sample_source, sample_categories, stage, entry
+):
+    """DBから復元したソース名を文字列として再投入の監査へ保存する。"""
+    target = await seed_target(
+        db_session, sample_source, sample_categories[0], stage, NOW - timedelta(hours=1)
+    )
+
+    await entry(session_factory, RecordingPublisher(), enabled=True, now=NOW)
+
+    event = (
+        await db_session.execute(
+            select(PipelineEvent).where(
+                PipelineEvent.outcome_code == "backfill_item_enqueued",
+                PipelineEvent.article_id == target.article_id,
+            )
+        )
+    ).scalar_one()
+    assert event.payload["target_id"] == target.target_id
+    assert event.payload["source_name"] == str(sample_source.name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("stage", "entry"), CASES)
 async def test_window_and_saved_event_facts(
     db_session, session_factory, sample_source, sample_categories, stage, entry
 ):

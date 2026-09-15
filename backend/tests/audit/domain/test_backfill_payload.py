@@ -6,6 +6,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from app.audit.domain.payloads import BackfillPayload, PipelineEventPayload
+from app.collection.sources.source_name import SourceName
 
 
 def test_kind_is_backfill_default() -> None:
@@ -35,11 +36,12 @@ def test_full_backfill_payload_roundtrip() -> None:
         run_id="run-1",
         target_kind="curation",
         target_id=42,
-        source_name="VentureBeat",
+        source_name=SourceName("VentureBeat"),
         daily_max=600,
         error_message="queue down",
         error_chain=["builtins.RuntimeError"],
     )
     dumped = original.model_dump(mode="json", exclude_none=False)
+    assert dumped["source_name"] == "VentureBeat"
     restored = BackfillPayload.model_validate(dumped)
     assert restored == original
