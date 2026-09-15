@@ -105,6 +105,7 @@ contractに同梱できるpathは以下に固定する。
 
 - `backend/alembic/versions/**`
 - `backend/tests/**`（fixture・helper・`conftest.py`を含む）
+- `backend/local_tests/**`（実DBテストの準備処理・fixture・helperを含む）
 - `frontend/src/**/*.{test,spec}.{ts,tsx}`
 - `frontend/src/test/**`
 - `frontend/e2e/**`（fixture・テスト専用setupを含む）

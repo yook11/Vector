@@ -22,6 +22,10 @@ _TEST_PATHS = (
     "backend/tests/test_contract.py",
     "backend/tests/conftest.py",
     "backend/tests/fixtures/helper.py",
+    "backend/local_tests/migrations/test_permissions.py",
+    "backend/local_tests/conftest.py",
+    "backend/local_tests/database.py",
+    "backend/local_tests/permissions/support.py",
     "frontend/src/feature.test.ts",
     "frontend/src/nested/feature.spec.tsx",
     "frontend/src/test/mock.ts",
@@ -34,6 +38,7 @@ _TEST_PATHS = (
 _RUNTIME_PATHS = (
     "backend/app/service.py",
     "backend/scripts/migration_runner.py",
+    "backend/local_tests_extra/runtime.py",
     ".github/workflows/ci.yml",
     "infra/aws/ecs.tf",
     "backend/pyproject.toml",
