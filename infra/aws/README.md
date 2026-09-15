@@ -506,19 +506,21 @@ bootstrapの専用boundaryと`ci-apply-pass-role`への拒否条件移設を本�
 
 ## 取得依頼投入（Scheduler / Lambda）
 
-ステップ4のコード・配備CIを実装済み。AWSへの適用・実配送・所要時間の実測は未実施。
+投入基盤は2026-09-15にAWSへ配備済みで、3スケジュールはDISABLED。実配送・所要時間の実測は未実施。今回追加した取得Consumer・DLQ・受信設定は未配備で、後述の「取得Consumerの配備」に従って接続する。
 
 ### 定義と配備入力
 
 - 共通の`source-dispatch` Lambdaをarm64・512MB・120秒・予約同時実行数3で定義する。既存backend ECRイメージの入口を`app.lambda_handlers.source_dispatch.handler.handler`にする。
 - HIGHは毎時00/15/30/45分、MEDIUMは毎時00分、LOWはUTCの00/06/12/18時。予定入力は`cadence`と`scheduled_at`で、後者はSchedulerの`<aws.scheduler.scheduled-time>`。Flexible Time WindowはOFF。
 - Schedulerの再試行は2回・期限600秒、Lambda関数エラーの再試行は2回・イベント保持21600秒。Lambdaの受付後の失敗をSchedulerの再試行で回復する構成ではない。
-- 通常キュー`source-acquisition`と、`source-dispatch-scheduler-dlq`・`source-dispatch-execution-failures`の全てをStandard・SQS管理暗号化・14日保持とする。通常キューの可視性は暫定30秒で、Consumer接続時に見直す。
+- 通常キュー`source-acquisition`と、`source-dispatch-scheduler-dlq`・`source-dispatch-execution-failures`の全てをStandard・SQS管理暗号化・14日保持とする。配備済み通常キューの可視性は30秒。今回のConsumer定義の適用で1,800秒へ変更し、専用DLQへのredrive（最大受信5回）を接続する。
 - Terraform変数は`source_dispatch_image_digest`（初期null）・`source_dispatch_enabled`（初期false）。apply workflowの入力は`source_dispatch_image_digest`と`source_dispatch_state`（keep/enabled/disabled）。`keep`は既存の有効状態を維持し、初回digest指定時も停止する。作成前にenabledを指定するにはdigestも必要。
 - plan/applyとも専用resolverで既存digestと3スケジュールの状態を維持する。state取得・解析失敗、不正digest、3スケジュールの欠落・混在、明示イメージのECR不存在は停止する。不整合stateを空に戻してapplyしない。部分適用の修復時もplanを確認し、3スケジュールを停止状態に揃えてからCIを再開する。
 - digest未指定・未配備の場合もキュー・ロール・ログ・schedule group・ダッシュボードは作るが、Lambdaとスケジュールは作らない。
 
-### 後続の配備と実測
+### 投入基盤の初回配備・任意の手動確認
+
+以下は初回配備と任意の実測手順。投入基盤の配備は完了済みであり、手動実測は今回のConsumer実装の完了条件に含めない。
 
 1. Bootstrapの専用境界、CIの関数・キュー管理、PassRole、Lambda設定復号の変更を管理者経路で適用する。アプリ用rolloutロールの権限は増やさない。
 2. 入口を含むbackendイメージを既存のビルド経路で作成し、そのdigestをapply workflowへ指定する。`source_dispatch_state=disabled`で本体を配備する。3スケジュールがDISABLEDであることを確認する。
@@ -543,13 +545,13 @@ HTTPのStatusCodeだけで成功を判断せず`FunctionError`と専用ログを
 
 5. 各cadenceについて、その時点のDB有効状態とコード登録から決まる対象件数、キューで確認した取得依頼ID・source_id、LambdaのREPORTにあるDurationを記録する。最大規模の予定回と3cadence同時起動も確認する。120秒との差を報告し、必要なら設定を別差分で調整する。障害時には全個別再試行を終える前に120秒へ達する可能性があり、その場合は同じ予定回の全体再実行になる。
 6. 手動実行は本物の依頼を残す。Consumerを接続する前に、検証予定時刻の依頼を後続で処理するか、取得依頼IDを確認して個別に削除するかを記録する。他の依頼を含む可能性があるためキュー全体のpurgeは行わない。個別削除にはReceiveMessageで取得したreceipt handleを使用し、送信実行ロールへ削除権限を追加しない。
-7. Consumerの可視性・再配信・重複処理管理を実装した後、既存の実行中Taskiqタスクと投入済み依頼を確認し、旧定期投入を停止してから`source_dispatch_state=enabled`で3スケジュールを有効にする。この切替は今回実施しない。
+7. Consumerの受信接続と重複取得を許容する保存契約を確認した後、既存の実行中Taskiqタスクと投入済み依頼を確認し、旧定期投入を停止してから`source_dispatch_state=enabled`で3スケジュールを有効にする。この切替は今回実施しない。
 
 切り戻しでは先にSchedulerをdisabledにする。既にLambdaが受け付けた予定回・再試行と、SQS投入済み依頼は残るため、停止確認後に旧経路の再開を判断する。過去イメージへの切り戻しは同じdigest入力で行う。
 
 ### 失敗記録とメトリクス
 
-`source_dispatch` outputのダッシュボードで、二つの保存先の可視残件数と最古メッセージ経過時間を確認する。通知・アラーム・自動再投入は作らない。件数は概数であり、閲覧による受信中や14日の期限切れでも減るため、ゼロを復旧成功とは扱わない。
+`source_dispatch` outputのダッシュボードで、Scheduler配送失敗・投入Lambda実行失敗の二つの保存先を確認する。今回のConsumer配備でConsumer DLQを追加し、三つそれぞれの可視残件数と最古メッセージ経過時間を確認できる。通知・アラーム・自動再投入は作らない。件数は概数であり、閲覧による受信中や14日の期限切れでも減るため、ゼロを復旧成功とは扱わない。
 
 保存先を手動で読む際は元のcadence・scheduled_atとエラーを確認する。Lambdaの失敗時送信先では`requestPayload`が元の入力であり、実行記録全体を入口へ渡さない。原因の修正後に元の入力で全体を再実行するか判断する。既に成功したソースへの再送と、その時点のDBによる再選定を許容する。詳細な未送信依頼は`source_acquisition_send_failed`ログで確認する。
 
@@ -561,4 +563,49 @@ HTTPのStatusCodeだけで成功を判断せず`FunctionError`と専用ログを
 
 Pythonは変更した配備スクリプトとテストへRuff lint・formatチェックを適用し、`python3 -m unittest discover -s infra/aws/scripts -p 'test_*.py'`を実行する。workflowはactionlintで確認する。actionlint 1.7.12は既存の`concurrency.queue: max`に未対応なので、変更前でも同じエラーであることを確認し、その診断だけを除外した検証結果を区別して報告する。
 
-バックエンド回帰はbackendを作業ディレクトリとして`uv run pytest tests/ -m unit -x -q`、ルートで`make test-integration`・`make test-local`を行う。後者の認証schema生成にはfrontendのインストール済み依存が必要なため、分離ワーキングツリーでも事前に用意する。独自のDB接続設定を作ったり業務シナリオを複製したりしない。
+バックエンド回帰はbackendを作業ディレクトリとして`uv run pytest tests/ -m 'not integration' -x -q`、ルートで`make test-integration`・`make test-local`を行う。後者の認証schema生成にはfrontendのインストール済み依存が必要なため、分離ワーキングツリーでも事前に用意する。独自のDB接続設定を作ったり業務シナリオを複製したりしない。
+
+
+## 取得Consumerの配備
+
+コード・Terraform・CIを実装済み、Consumerは未配備。AWS適用・旧Taskiq停止・Scheduler有効化は後続作業とする。処理済みIDをDBやRedisへ保存せず、同じ依頼は再取得する。既存の正規化URLによる記事保存と新規記事だけのOutbox生成を維持する。
+
+### 設定と入力
+
+| 項目 | 定義 |
+|---|---|
+| 関数入口 | `app.lambda_handlers.acquisition.handler.handler` |
+| イメージ | 既存backend ECRのdigest指定 |
+| Lambda | arm64・1,024MB・300秒・予約同時実行5 |
+| 受信接続 | 既存取得依頼キュー・1件・待機0秒・最大同時実行5 |
+| 失敗応答 | `ReportBatchItemFailures` |
+| 通常キュー | 可視性1,800秒・保持14日・`maxReceiveCount=5` |
+| Consumer DLQ | `source-acquisition-dlq`・Standard・SQS管理暗号化・保持14日 |
+| DB・外部HTTP | `vector_collect`のIAM/TLS・既存プロキシ・Crossref連絡先 |
+
+SQS起動にはLambda非同期呼び出しの再試行回数・失敗時送信先を設定しない。取得例外は恒久的な失敗もSQSへ返し、SQSが最大受信回数に従って専用DLQへ移動する。無効・削除済みソースは現在の状態を確認して正常終了し、再配送の対象にしない。
+
+apply workflowの入力は`acquisition_consumer_image_digest`と`acquisition_consumer_state`（`keep / enabled / disabled`）。Terraform変数はdigestと`acquisition_consumer_enabled`。未指定ではstateの値を維持し、初回digest指定後も明示有効化までは停止する。digest未指定ではLambda・受信接続を作成しないが、DLQ・ネットワーク・権限などは作成する。
+
+plan/applyとも`resolve-acquisition-consumer.py`でstateを検証する。state取得失敗、不正構造、不正な有効状態、digest不正、受信接続だけが残った状態、指定イメージのECR不存在は停止する。生成設定を手でnullやfalseへ戻して続行しない。
+
+### 適用と切替の順序
+
+1. **Bootstrap反映**: 専用権限境界・CI管理権限・PassRole・Lambda設定参照許可を管理者経路で適用する。通常の本体applyより先に行う。
+2. **イメージ作成**: Consumer入口を含むmainのbackendイメージを既存のビルドCIで作り、ECR digestを記録する。依存やDB schemaの変更はない。
+3. **停止状態で本体配備**: apply workflowへ対象digestと`acquisition_consumer_state=disabled`を渡す。`source_dispatch_state=disabled`を維持し、既存の他Consumer・Relayのdigestと状態は未指定で引き継ぐ。planで通常キューの可視性・redrive、Consumer用サブネットと既存プロキシ設定の更新も確認する。
+4. **受信前確認**: `terraform output -json acquisition_consumer`でLambda ARN・受信UUID・DLQ・ログ・ダッシュボードを確認する。Lambdaの状態がActive/Successful、受信接続がDisabled、3スケジュールがDISABLEDであることを確認する。共有プロキシにConsumerの専用サブネット設定が反映され、後続の補完・分析へのRelay／ConsumerとOutboxの滞留状態も確認する。環境変数や資格情報の値をログへ出さない。
+5. **Consumer受信有効化**: キューの投入済み依頼とその後続処理の扱いを確認してから、digestは未指定のまま`acquisition_consumer_state=enabled`でapplyする。既存の依頼も直ちに取得対象になる。古い予定回もアプリでは破棄しない。検証用依頼を処理しない判断なら、運用権限で該当IDのメッセージだけを削除し、キュー全体をpurgeしない。
+6. **定期投入切替**: Consumerの受信接続がEnabledであることを確認する。既存Taskiqの実行中処理と投入済みタスクを考慮して旧定期投入を停止し、`source_dispatch_state=enabled`で新Schedulerを有効にする。手動取得の経路は変更しない。
+
+稼働開始後に`acquisition_message_processed`の結果・所要時間とLambda REPORT、キューの滞留、Consumer DLQを確認する。300秒／1,800秒／同時実行5の妥当性は実負荷で評価し、調整は別差分とする。手動invokeによる実測は必須にしない。取得依頼IDは追跡に使い、記事・Outboxの重複判定には使わない。
+
+切り戻す場合は新Schedulerを停止し、必要に応じてConsumerの受信接続もdisabledにする。実行中のLambdaや投入済み依頼は消えないため、その状態を確認して旧経路の再開を判断する。キューのpurge・DLQの自動再投入は行わない。
+
+### 失敗記録と確認先
+
+Consumer DLQはScheduler配送失敗・投入Lambda実行失敗とは別キューで、redrive元を通常の取得依頼キューに限定する。通常キューの送信元VPCE制限は維持するが、Lambdaサービスの受信・削除には適用しない。
+
+`acquisition_consumer` outputの`log_group`と`dashboard_url`を使い、Consumer DLQの可視残件数と最古メッセージ経過時間を確認する。通知・アラーム・独自メトリクス・自動再投入は追加しない。Standardキューでは元の投入時刻が保持期限の起点となるため、DLQ移動後に必ず14日残るわけではない。DLQの最古経過時間メトリクスも残り保持期間そのものではない。
+
+原因修正後の再投入は運用判断とする。元の4項目と取得依頼IDを維持し、現在のソース状態で再取得されること、取得済みの記事は既存URL一意制約によって追加保存されないことを踏まえる。詳細な手動redriveの自動化は別タスクで扱う。

@@ -122,6 +122,7 @@ run "boundary_pairing_guards_remain_complete" {
         jsondecode(aws_iam_policy.apply_outbox.policy).Statement,
         jsondecode(aws_iam_policy.apply_curation_consumer.policy).Statement,
         jsondecode(aws_iam_policy.apply_completion_consumer.policy).Statement,
+        jsondecode(aws_iam_policy.apply_acquisition_consumer.policy).Statement,
         jsondecode(aws_iam_policy.apply_embedding_consumer.policy).Statement,
         jsondecode(aws_iam_policy.apply_assessment_consumer.policy).Statement,
         jsondecode(aws_iam_policy.apply_backfill.policy).Statement,

@@ -6,7 +6,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.errors import (
@@ -41,6 +40,7 @@ from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
 from app.collection.sources.article_source import AcquirableSource
+from app.db.session import SessionFactory
 from app.models.outbox_event import OutboxEvent
 
 logger = structlog.get_logger(__name__)
@@ -51,7 +51,7 @@ class ArticleAcquisitionService:
 
     def __init__(
         self,
-        session_factory: async_sessionmaker[AsyncSession],
+        session_factory: SessionFactory,
         source: AcquirableSource,
         tools_factory: Callable[[], ReaderTools] = ReaderTools,
     ) -> None:

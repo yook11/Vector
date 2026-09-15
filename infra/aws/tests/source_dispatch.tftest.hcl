@@ -140,7 +140,7 @@ run "deployed_dispatch_is_disabled_and_connected" {
     error_message = "LambdaはIAM接続・逐次投入を行い、内部失敗を専用キューへ保存する。予約変数は上書きしない。"
   }
   assert {
-    condition     = alltrue([for queue in aws_sqs_queue.source_dispatch : !queue.fifo_queue && queue.sqs_managed_sse_enabled && queue.message_retention_seconds == 1209600 && queue.visibility_timeout_seconds == 30])
+    condition     = alltrue([for key, queue in aws_sqs_queue.source_dispatch : !queue.fifo_queue && queue.sqs_managed_sse_enabled && queue.message_retention_seconds == 1209600 && (key == "acquisition" || queue.visibility_timeout_seconds == 30)])
     error_message = "通常・失敗キューをStandard、暗号化、14日保持とする。"
   }
   assert {

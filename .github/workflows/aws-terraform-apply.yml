@@ -83,6 +83,17 @@ on:
         default: keep
         options: [keep, enabled, disabled]
 
+      acquisition_consumer_image_digest:
+        description: "取得Consumerのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      acquisition_consumer_state:
+        description: "取得依頼の受信（keepは現状維持、初回は停止）"
+        required: false
+        type: choice
+        default: keep
+        options: [keep, enabled, disabled]
+
       curation_backfill_image_digest:
         description: "curation backfillのsha256 digest（空欄は現状維持）"
         required: false
@@ -424,6 +435,32 @@ jobs:
             echo "Source dispatch image: $REQUESTED_DISPATCH_DIGEST" >> "$GITHUB_STEP_SUMMARY"
           fi
           mv "$dispatch_vars_tmp" source-dispatch.auto.tfvars.json
+
+      - name: Resolve Acquisition consumer image and state
+        env:
+          REQUESTED_ACQUISITION_DIGEST: ${{ inputs.acquisition_consumer_image_digest }}
+          REQUESTED_ACQUISITION_STATE: ${{ inputs.acquisition_consumer_state }}
+        run: |
+          set -euo pipefail
+          acquisition_vars_tmp=$(mktemp ./acquisition-consumer-vars.XXXXXX)
+          trap 'rm -f "$acquisition_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-acquisition-consumer.py \
+                --digest "$REQUESTED_ACQUISITION_DIGEST" \
+                --state "${REQUESTED_ACQUISITION_STATE:-keep}" \
+            > "$acquisition_vars_tmp"
+          if [ -n "$REQUESTED_ACQUISITION_DIGEST" ]; then
+            repository=$(terraform output -json ecr_repository_urls | jq -er '.backend | split("/")[1:] | join("/")')
+            image=$(aws ecr describe-images --repository-name "$repository" \
+              --image-ids "imageDigest=$REQUESTED_ACQUISITION_DIGEST" \
+              --query 'imageDetails[0].imageDigest' --output text)
+            if [ "$image" != "$REQUESTED_ACQUISITION_DIGEST" ]; then
+              echo "::error::backend ECRリポジトリに指定digestが存在しない"
+              exit 1
+            fi
+            echo "Acquisition consumer image: $REQUESTED_ACQUISITION_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          mv "$acquisition_vars_tmp" acquisition-consumer.auto.tfvars.json
 
       # plan → apply を 1 step で行い、tfplan を step 間でも持ち回らない。
       # 適用されるのは常にこの step 自身が plan した内容になる。

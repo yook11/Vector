@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
@@ -17,6 +16,7 @@ from app.collection.article_acquisition.metrics import (
     record_acquisition_outcome,
 )
 from app.db.errors import DatabaseError
+from app.db.session import SessionFactory
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -25,7 +25,7 @@ logger = structlog.get_logger(__name__)
 class ArticleAcquisitionFailureHandler:
     """Stage 1 の source-level failure と entry-level rejection を処理する。"""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
 
     async def handle_source_failure(

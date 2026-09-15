@@ -137,6 +137,10 @@ locals {
       boundary   = aws_iam_policy.completion_consumer_lambda_boundary.arn
       role_names = ["${var.name_prefix}-completion-consumer-lambda"]
     }
+    AcquisitionConsumerLambda = {
+      boundary   = aws_iam_policy.acquisition_consumer_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-acquisition-consumer-lambda"]
+    }
     CompletionOutboxRelayLambda = {
       boundary   = aws_iam_policy.completion_outbox_relay_lambda_boundary.arn
       role_names = ["${var.name_prefix}-completion-outbox-relay-lambda"]

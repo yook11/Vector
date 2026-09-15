@@ -46,6 +46,11 @@ locals {
       domains      = []
       unrestricted = true
     }
+    acquisition_consumer = {
+      cidr         = local.acquisition_consumer_subnet_cidr
+      domains      = []
+      unrestricted = true
+    }
     curation_consumer = {
       cidr         = local.curation_consumer_subnet_cidr
       domains      = local.egress_vendor_domains.gemini

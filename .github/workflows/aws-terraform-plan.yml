@@ -190,6 +190,16 @@ jobs:
             > "$dispatch_vars_tmp"
           mv "$dispatch_vars_tmp" source-dispatch.auto.tfvars.json
 
+      - name: Preserve Acquisition consumer image and state from state
+        run: |
+          set -euo pipefail
+          acquisition_vars_tmp=$(mktemp ./acquisition-consumer-vars.XXXXXX)
+          trap 'rm -f "$acquisition_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-acquisition-consumer.py \
+            > "$acquisition_vars_tmp"
+          mv "$acquisition_vars_tmp" acquisition-consumer.auto.tfvars.json
+
       - name: Terraform plan
         env:
           TF_VAR_image_tag: ${{ steps.image.outputs.tag }}

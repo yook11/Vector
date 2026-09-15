@@ -82,6 +82,7 @@ run "lambda_configuration_decrypt_is_restricted" {
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-assessment-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-embedding-backfill",
+                "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-acquisition-consumer",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-source-dispatch",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-outbox-relay",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-embedding-consumer",
@@ -107,6 +108,7 @@ run "lambda_configuration_decrypt_is_restricted" {
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-assessment-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-embedding-backfill",
+                "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-acquisition-consumer",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-source-dispatch",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-outbox-relay",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-embedding-consumer",
@@ -246,7 +248,7 @@ run "ci_can_manage_dlq_without_granting_relay_send" {
 
   assert {
     condition = (
-      toset(local.managed_pipeline_queue_arns) == setunion(toset(local.outbox_queue_arns), toset([local.embedding_dlq_arn, local.assessment_dlq_arn, local.curation_dlq_arn, local.completion_dlq_arn]), toset(values(local.source_dispatch_queue_arns))) &&
+      toset(local.managed_pipeline_queue_arns) == setunion(toset(local.outbox_queue_arns), toset([local.embedding_dlq_arn, local.assessment_dlq_arn, local.curation_dlq_arn, local.completion_dlq_arn, local.acquisition_dlq_arn]), toset(values(local.source_dispatch_queue_arns))) &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_outbox.policy).Statement : s.Sid != "ManagePipelineQueues" ? true :
         toset(s.Resource) == toset(local.managed_pipeline_queue_arns) &&
         !contains(s.Action, "sqs:SendMessage") && !contains(s.Action, "sqs:ReceiveMessage") && !contains(s.Action, "sqs:PurgeQueue")
@@ -282,6 +284,7 @@ run "passrole_allows_only_pipeline_lambda_roles" {
           local.assessment_outbox_relay_role_arn,
           local.curation_consumer_role_arn,
           local.completion_consumer_role_arn,
+          local.acquisition_consumer_role_arn,
           local.curation_outbox_relay_role_arn,
           local.completion_outbox_relay_role_arn,
           "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-backfill-lambda",
@@ -299,6 +302,7 @@ run "passrole_allows_only_pipeline_lambda_roles" {
           local.assessment_outbox_relay_role_arn,
           local.curation_consumer_role_arn,
           local.completion_consumer_role_arn,
+          local.acquisition_consumer_role_arn,
           local.curation_outbox_relay_role_arn,
           local.completion_outbox_relay_role_arn,
           "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-backfill-lambda",
