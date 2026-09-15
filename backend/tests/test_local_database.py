@@ -7,7 +7,9 @@ import pytest
 from local_tests import database as module
 
 
-@pytest.mark.parametrize("failure", ["startup", "auth", "migration", "test"])
+@pytest.mark.parametrize(
+    "failure", ["startup", "relay_login", "auth", "migration", "test"]
+)
 def test_failure_always_removes_its_own_compose_project(monkeypatch, failure):
     """セットアップの途中とテスト本体の例外で同じ専用プロジェクトを削除する。"""
     calls = []
@@ -21,6 +23,7 @@ def test_failure_always_removes_its_own_compose_project(monkeypatch, failure):
                     "POSTGRES_APP_PASSWORD": "app-test",
                     "POSTGRES_AUTH_PASSWORD": "auth-test",
                     "POSTGRES_COLLECT_PASSWORD": "collect-test",
+                    "POSTGRES_OUTBOX_RELAY_PASSWORD": "relay-test",
                 }
             }
         }
@@ -41,12 +44,17 @@ def test_failure_always_removes_its_own_compose_project(monkeypatch, failure):
     async def prepare(database):
         return None
 
+    async def relay_login(database):
+        if failure == "relay_login":
+            raise RuntimeError("injected failure")
+
     def auth(*args):
         if failure == "auth":
             raise RuntimeError("injected failure")
 
     monkeypatch.setattr(module, "_run", run)
     monkeypatch.setattr(module, "_prepare_auth", prepare)
+    monkeypatch.setattr(module, "_prepare_outbox_relay_login", relay_login)
     monkeypatch.setattr(module, "_verify_template", prepare)
     monkeypatch.setattr(module, "_migrate_auth", auth)
     with pytest.raises(RuntimeError, match="injected failure"):

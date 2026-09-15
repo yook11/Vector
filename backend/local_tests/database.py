@@ -23,7 +23,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
 ROOT = Path(__file__).resolve().parents[2]
-Role = Literal["vector", "vector_app", "vector_auth", "vector_collect"]
+Role = Literal[
+    "vector", "vector_app", "vector_auth", "vector_collect", "vector_outbox_relay"
+]
 
 
 class RunnerSettings(BaseSettings):
@@ -79,6 +81,17 @@ def migration_heads() -> set[str]:
 async def _prepare_auth(database: SystemDatabase) -> None:
     async with database.connect("vector") as connection:
         await connection.execute("CREATE SCHEMA auth")
+
+
+async def _prepare_outbox_relay_login(database: SystemDatabase) -> None:
+    async with database.connect("vector") as connection:
+        # initとmigrationが作るロール・権限を保ち、テスト認証だけを設定する。
+        statement = await connection.fetchval(
+            "SELECT format('ALTER ROLE vector_outbox_relay LOGIN PASSWORD %L', "
+            "$1::text)",
+            database.passwords["vector_outbox_relay"],
+        )
+        await connection.execute(statement)
 
 
 def _migrate_auth(database: SystemDatabase, env: dict[str, str]) -> None:
@@ -192,8 +205,10 @@ def migrated_database() -> Iterator[SystemDatabase]:
                 "vector_app": values["POSTGRES_APP_PASSWORD"],
                 "vector_auth": values["POSTGRES_AUTH_PASSWORD"],
                 "vector_collect": values["POSTGRES_COLLECT_PASSWORD"],
+                "vector_outbox_relay": values["POSTGRES_OUTBOX_RELAY_PASSWORD"],
             },
         )
+        asyncio.run(_prepare_outbox_relay_login(database))
         asyncio.run(_prepare_auth(database))
         _migrate_auth(database, env)
         _run(

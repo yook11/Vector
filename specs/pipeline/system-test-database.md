@@ -62,7 +62,7 @@ Better Authには正本のCLI設定と関連ソースを一時ディレクトリ
 - Evidence: Alembic headは既に準備処理で確認しており、テーブル・初期データの存在確認も準備条件である。権限とケース分離は実DBが必要だが、URL組み立てと準備処理の単体テストは実DBを使わない。
 - Invariants: 製品の権限・migration・ケース分離の方法を維持し、既存の確認事項を削除しない。
 - Non-goals: 業務システムテストの追加、製品コード・schema・認証の変更、既存の通常結合テストの移行。
-- Done: `local_tests/database.py`と`conftest.py`を共通準備とし、`test_database_permissions.py`に権限5件、`test_database_isolation.py`に実DBの分離・回収2件をまとめる。DB不要の単体5件は`tests/test_local_database.py`に置く。移動後の参照と実行を確認する。
+- Done: `local_tests/database.py`と`conftest.py`を共通準備とし、`permissions/`にロール別の権限照合、`test_database_isolation.py`に実DBの分離・回収2件をまとめる。DB不要の単体5件は`tests/test_local_database.py`に置く。移動後の参照と実行を確認する。
 
 マイグレーション到達と必要なAuthテーブル・カテゴリ初期データの存在は、DB準備時に確認して不成立なら停止する。
 ローカル一式の実行名は`make test-local`とする。上記Verificationの`make test-system`は改名前の実績であり、業務フロー7件の成功を意味しない。
