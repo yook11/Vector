@@ -31,7 +31,7 @@ CurationのSignal結果＋article.curated_signalをOutboxに保存
 - Lambda入口は秘密情報・DB・AIクライアントの準備、SQSとイベントの検証、Consumer呼び出し、配送結果の応答、資源の終了を担う。
 - Consumerは`curation_id`によるDB状態取得、Ready構築、Service実行、エラーの分類・後処理を担う。Taskiq ContextやSQSの形式には依存しない。
 - Serviceは判定、保存時の状態確認、結果・成功監査・必要なOutboxのcommitを担う。
-- DeepSeekは通信設定、クライアントの生成・終了、判定処理を分ける。Assessorは準備済みクライアントを借用する。秘密情報の取得と資源の利用範囲はLambda呼び出し単位とし、通信timeoutは接続3秒・読み取り10秒・書き込み10秒・プール待ち3秒、SDK・HTTP内部再試行は0回とする。
+- DeepSeekは通信設定、クライアントの生成・終了、判定処理を分ける。Assessorは準備済みクライアントを借用する。秘密情報の取得と資源の利用範囲はLambda呼び出し単位とし、通信timeoutは接続3秒・読み取り30秒・書き込み10秒・プール待ち3秒、SDK・HTTP内部再試行は0回とする。
 
 ## 正常終了とエラー
 
@@ -146,7 +146,7 @@ Evidence: Geminiの接続設定・クライアント管理、DeepSeekの既存�
 
 Invariants: 判定モデル・プロンプト・strict function calling・応答解析・プロバイダー例外変換・保存契約を維持する。Assessorは準備済みクライアントを借用し、生成・終了や秘密情報の取得を行わない。通常の終了障害と診断ログ障害で利用結果を上書きせず、外部キャンセルは伝播する。
 
-- `DeepSeekConnectionSettings`はfrozen・slots付きdataclass。接続3秒・読み取り10秒・書き込み10秒・プール待ち3秒を既定値とし、正の有限数だけ受け付ける。秘密情報・モデル仕様は含めない。
+- `DeepSeekConnectionSettings`はfrozen・slots付きdataclass。接続3秒・読み取り30秒・書き込み10秒・プール待ち3秒を既定値とし、正の有限数だけ受け付ける。秘密情報・モデル仕様は含めない。
 - `open_deepseek_client(api_key, base_url, settings)`はasync context manager。既存の外部HTTPファクトリを使用し、SDK・HTTPの再試行を0回にする。SDKへ同じtimeoutを明示する。HTTPの読み取り上限はチャンク待ち時間であり、Consumerの業務処理全体60秒とは別の制限。
 - SDK生成失敗でもHTTPを回収し、SDK終了後にHTTPが未解放なら回収を試みる。診断は資源名と例外クラスだけを記録する。空・空白だけのAPIキーは生成前に`AIProviderConfigurationError(NOT_CONFIGURED)`とする。
 - `DeepSeekAssessor(client)`へ変更。`base_url`は既存の`DEEPSEEK_ASSESSMENT_SPEC`を配線側から渡し、定義を重複させない。
@@ -193,7 +193,7 @@ Done: 設定の読み取り範囲、Engine設定、資源の生成・終了順�
 
 ## 詳細化・有効化までに決めること
 
-1. **実行・配送の数値**：業務処理の上限は60秒で確定済み。DeepSeek通信は接続3秒・読み取り10秒・書き込み10秒・プール待ち3秒、SDK・HTTP内部再試行0回で確定済み。残りはLambdaのtimeout、同時実行数、受信件数、SQS可視性timeout・保持期間・DLQ上限。Embeddingの値を参照し、Assessmentへの適用値を確定する。
+1. **実行・配送の数値**：業務処理の上限は60秒で確定済み。DeepSeek通信は接続3秒・読み取り30秒・書き込み10秒・プール待ち3秒、SDK・HTTP内部再試行0回で確定済み。残りはLambdaのtimeout、同時実行数、受信件数、SQS可視性timeout・保持期間・DLQ上限。Embeddingの値を参照し、Assessmentへの適用値を確定する。
 2. **移行・再処理**：既存Taskiqとの併用期間と停止順序、既存backfillの扱い、蓄積済みOutboxの配信範囲、DLQの停止・調査・再投入手順。新Consumerのエラー契約とは分けて決める。
 3. **一覧更新通知**：既存Taskiq入口にある保存後通知を新経路のどこで実行するか、通知失敗時の復旧をどうするか。[一覧の新着検知仕様](../news/article-list-update-notification.md)と整合させる。
 

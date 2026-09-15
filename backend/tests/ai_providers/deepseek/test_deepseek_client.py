@@ -26,14 +26,14 @@ def test_settings_reject_invalid_timeouts(field, value):
 
 
 def test_settings_are_immutable_and_secret_free():
-    """既定の待機時間が3・10・10・3秒で固定され、設定が変更不可かつ秘密情報を持たないことを確認する。"""
+    """既定の待機時間が3・30・10・3秒で固定され、設定が変更不可かつ秘密情報を持たないことを確認する。"""
     settings = DeepSeekConnectionSettings()
     assert (
         settings.connect_timeout,
         settings.read_timeout,
         settings.write_timeout,
         settings.pool_timeout,
-    ) == (3, 10, 10, 3)
+    ) == (3, 30, 10, 3)
     with pytest.raises(FrozenInstanceError):
         settings.read_timeout = 1
     assert "api_key" not in repr(settings)
@@ -88,7 +88,7 @@ async def test_real_sdk_uses_timeout_and_never_retries(monkeypatch, outcome):
     assert requests[0].url.host == "api.deepseek.com"
     assert requests[0].extensions["timeout"] == {
         "connect": 3,
-        "read": 10,
+        "read": 30,
         "write": 10,
         "pool": 3,
     }
