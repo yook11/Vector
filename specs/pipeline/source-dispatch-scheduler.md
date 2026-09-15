@@ -297,7 +297,8 @@ Done: Consumer・AWS定義・CI・重要な振る舞いのテストと既存回�
 - ソースのDB読み取りは`SourceRepository`へ集約する。投入側の`SourceDispatchService`は有効ソースの登録状態・cadenceから対象を選定し、受信側の`resolve_acquisition_source()`は現在の有効状態と登録定義から取得対象を解決する。いずれも読み取りセッションを閉じてから判定し、DB障害は伝播する。
 - `ArticleAcquisitionConsumer.consume()`は取得対象の解決結果に従い、`ArticleAcquisitionService.execute(source_id)`を呼ぶ。無効・削除済みの終了状態は保存せず、再配送時には再確認する。
 - 開始前の確認後にソースが変更されても開始済み処理は中断しない。cadenceの再選定や依頼の古さによる破棄はしない。フィード部分失敗・記事拒否の既存契約を維持し、サービス全体の失敗を再配送に対応付ける。
-- 取得サービスの失敗は`ArticleAcquisitionFailureHandler.record_source_failure()`で別セッションへ監査し、元の例外を再送出してSQSへ失敗を返す。監査・診断の通常障害で元の例外を置き換えず、キャンセルは伝播する。Taskiq向けの`handle_source_failure()`は同じ監査処理を使い、既存の再送出判断を維持する。
+- 取得サービスの失敗は配送方式に依存しない`ArticleAcquisitionFailureRecorder.record_source_failure()`で別セッションへ監査する。SQSのConsumerは元の例外を再送出し、Taskiqのタスク入口は取得エラーを結果として返してDB障害・想定外例外を再送出する。監査・診断の通常障害で元の取得失敗を置き換えず、キャンセルは伝播する。
+- 変換棄却もRecorderの`record_conversion_rejected()`で別セッションに記録し、commit成功後だけ棄却メトリクスを計上する。取得監査は取得エラーとDBエラーの分類を使い、Redis例外の分類やTaskiq・アプリ全体の設定を読み込まない。
 - `AcquisitionConsumerSettings`と補完工程の共通ライフサイクルを使用し、呼び出しごとのRDS IAM署名・TLS・NullPool・HTTPプロキシ方針を維持する。`ReaderTools`には連絡先を設定した`CrossrefReader`を明示注入し、アプリ全体の設定や不要な秘密情報を読み込まない。Taskiq側の生成方法は変更しない。
 - 診断`acquisition_message_processed`はSQSメッセージID・検証済み取得依頼ID・ソースID・結果・所要時間・安全な失敗コード／例外型を記録する。不正本文や例外自由文は新設ログへ出さない。ログ・解放の通常障害で確定結果を変えず、キャンセルは伝播する。
 

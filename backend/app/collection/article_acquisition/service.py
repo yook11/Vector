@@ -14,8 +14,8 @@ from app.collection.article_acquisition.errors import (
 from app.collection.article_acquisition.events import (
     IncompleteArticleRecorded,
 )
-from app.collection.article_acquisition.failure_handling import (
-    ArticleAcquisitionFailureHandler,
+from app.collection.article_acquisition.failure_recording import (
+    ArticleAcquisitionFailureRecorder,
 )
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
@@ -58,7 +58,7 @@ class ArticleAcquisitionService:
         self._session_factory = session_factory
         self._source = source
         self._tools_factory = tools_factory
-        self._failure_handler = ArticleAcquisitionFailureHandler(session_factory)
+        self._failure_recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
     async def execute(self, source_id: int) -> list[int]:
         async with self._session_factory() as session:
@@ -135,9 +135,8 @@ class ArticleAcquisitionService:
                                 )
                             )
                         case AcquisitionConversionRejection() as rej:
-                            # rejected の監査+metric は handler が所有する (別 tx commit
-                            # 成功時のみ計上し main commit とは独立)。
-                            await self._failure_handler.handle_conversion_rejected(
+                            # 棄却の件数は別トランザクションの監査commit後に計上する。
+                            await self._failure_recorder.record_conversion_rejected(
                                 source_id, rej
                             )
             except (ExternalFetchError, UnreadableResponseError) as exc:
@@ -147,7 +146,7 @@ class ArticleAcquisitionService:
 
         # analyzable/observed の監査は本 session と同一 tx。commit 成功後にだけ計上し
         # 監査行と件数を揃える (dedup skip は continue で非計数、run 失敗時は rollback
-        # され未 emit)。rejected は別 tx 監査のため handler が計上する。
+        # され未 emit)。rejected は別 tx 監査のため Recorder が計上する。
         record_acquisition_outcome(
             AcquisitionEntryOutcome.ANALYZABLE, count=len(persisted_ids)
         )

@@ -302,12 +302,12 @@ async def test_audit_and_diagnostic_failures_preserve_original_fetch_failure(
     system_database, invoke_acquisition, source_id, rss_response, monkeypatch
 ):
     """監査保存と退避ログが失敗しても、元の取得例外で再配送を要求する。"""
-    from app.collection.article_acquisition import failure_handling
+    from app.collection.article_acquisition import failure_recording
 
     rss_response.side_effect = httpx.ReadTimeout("private-fetch-detail")
     audit_log = Mock()
     audit_log.exception.side_effect = RuntimeError("private-diagnostic-detail")
-    monkeypatch.setattr(failure_handling, "logger", audit_log)
+    monkeypatch.setattr(failure_recording, "logger", audit_log)
     async with system_database.connect("vector") as db:
         await db.execute("REVOKE INSERT ON pipeline_events FROM vector_collect")
     try:
