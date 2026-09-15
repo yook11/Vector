@@ -159,11 +159,15 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph Start["収集の起点"]
-        direction LR
-        SCHEDULE["EventBridge Scheduler"] --> DISPATCH["Lambda<br/>取得依頼"]
-        DISPATCH --> REQUEST["SQS<br/>取得依頼キュー"]
-        REQUEST --> ACQUIRE["Lambda<br/>記事取得"]
+    subgraph Start["収集の起点 — ソースごとに取得し、記事ごとに次工程を決める"]
+        direction TB
+        SCHEDULE["EventBridge Scheduler<br/>取得頻度に応じて定期起動"]
+        SCHEDULE --> DISPATCH["Lambda / 取得依頼の投入<br/>今回取得するソースを DB から選ぶ"]
+        DISPATCH -->|ソースごとに取得依頼を送信| REQUEST["SQS<br/>このソースから記事を取得する依頼を保持"]
+        REQUEST -->|メッセージ取得・関数起動| ACQUIRE["Lambda / 記事取得<br/>指定ソースから記事を取得"]
+        ACQUIRE --> READY{"記事ごとに判定<br/>分析に必要な本文が揃っているか"}
+        READY -->|揃っている| ANALYZABLE["分析へ進める記事を保存<br/>翻訳・要約へ進むイベントも記録"]
+        READY -->|本文補完が必要| INCOMPLETE["補完待ちの記事を保存<br/>本文補完へ進むイベントも記録"]
     end
 
     subgraph Handoff["工程間の受け渡し"]
@@ -185,8 +189,11 @@ flowchart TB
     classDef compute fill:#eef2ff,stroke:#6366f1,color:#111827;
     classDef data fill:#fef3c7,stroke:#f59e0b,color:#111827;
     class SCHEDULE,DISPATCH,ACQUIRE,TIMER,RELAY,NEXT compute
-    class REQUEST,DB,QUEUE,SAVE data
+    class REQUEST,DB,QUEUE,SAVE,ANALYZABLE,INCOMPLETE data
+    class READY compute
 ```
+
+収集では、取得頻度に応じて対象ソースを選び、ソースごとの取得依頼を SQS へ送ります。取得した記事は、本文が揃っていれば翻訳・要約へ、本文の補完が必要なら本文補完へ進みます。どちらの分岐でも、記事と次工程へのイベントを同一トランザクションで保存し、下段の Outbox Relay による配送へつなぎます。図では取得失敗・重複・保存対象外の経路を省略しています。
 
 工程間の受け渡しは、次の流れで進みます。
 
