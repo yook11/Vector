@@ -340,8 +340,8 @@ class FetchEgressBlockedError(ExternalFetchError):
     どちらかは監査の stage で読み分ける (allowlist を持つ段か否か)。
     proxy がどの ACL で落としたかは proxy 側の access log が持つ。
 
-    通常経路では app 側の ``ensure_host_is_public`` が先に落とすため、
-    この code が出ること自体が「設定漏れか稀な事象」の信号になる。
+    app 側の ``resolve_public_host_addresses`` は自身のDNS解決結果を検証するため、
+    プロキシ自身の解決結果や許可ドメインによる拒否とは区別する。
     """
 
     CODE: ClassVar[str] = "fetch_egress_blocked"

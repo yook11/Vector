@@ -59,6 +59,8 @@ VPCは`10.80.0.0/16`。Lambda・EC2の用途別にサブネットを分け、DB�
 公開ルートはプロキシ用だけ。NAT Gateway、IP転送、SSH受信口は作らず、プロキシの3128番はLambdaと実行用EC2からのみ受け入れる。
 SSMとssmmessagesのInterface endpointを主AZに各1つ設け、Private DNSを有効にする。SSM Agentの管理通信は`no_proxy`で直接接続し、Dockerやパッケージ取得の成否に依存しない。CloudWatch Logsへの転送には既存プロキシを使う。
 Lambdaとrunnerの許可先は、送信元サブネット別のSquid ACLで分離する。runner用のAWS許可先をLambdaへ流用しない。
+`smoke/compute.tf`は両者の`allow_any_domain`を`false`にし、本体と共通のSquidテンプレートへ渡す。
+アプリのIP検証とプロキシ自身の宛先検証の分担は[HTTPの宛先方針](../../backend/app/http/README.md)を参照する。
 プロキシのアクセスログには時刻・HTTPメソッド・ステータスだけを残し、URL・ヘッダーを記録しない。
 
 - AMIはAWS公開パラメーターからAL2023 ARM64を取得し、実際に使ったIDを出力する。

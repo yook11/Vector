@@ -215,6 +215,12 @@ private runbookには初期構築の前提を残し、通常migrationのロー�
 
 ## egress proxy の残余
 
+許可ドメインは`locals.tf`の`egress_vendors`から`proxy.tf`の一覧へ対応する。
+`egress_allow_any_domain`は`proxy_clients`の`allow_any_domain`へ渡し、consumer専用設定も同じ属性で定義する。
+この値が`true`でもプロキシ経由は必須で、非公開IP・許可外ポートの拒否は維持する。
+アプリの送信前検証との分担と、設定検証では確認できないデプロイ後の検証項目は
+[HTTPの宛先方針](../../backend/app/http/README.md)を参照する。
+
 - **オープンプロキシ化はアドレスの不在が防いでいる。** proxy は private subnet に
   public IP 無しで置く。仮に 3128 の inbound SG を CIDR で緩めても、インターネット
   からこの task を宛先に指定する手段が無い。SG (app SG 参照のみ) と squid.conf の

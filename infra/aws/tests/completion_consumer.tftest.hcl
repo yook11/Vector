@@ -178,7 +178,7 @@ run "completion_network_has_no_direct_internet_route" {
       !aws_subnet.completion_consumer.map_public_ip_on_launch &&
       aws_route_table_association.completion_consumer.route_table_id == aws_route_table.app.id &&
       local.proxy_clients.completion_consumer.cidr == aws_subnet.completion_consumer.cidr_block &&
-      local.proxy_clients.completion_consumer.unrestricted &&
+      local.proxy_clients.completion_consumer.allow_any_domain &&
       local.proxy_clients.completion_consumer.domains == [] &&
       strcontains(local.squid_conf, "http_access allow src_completion_consumer") &&
       aws_vpc_security_group_egress_rule.completion_consumer_to_sqs.referenced_security_group_id == aws_security_group.outbox_sqs_endpoint.id &&

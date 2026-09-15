@@ -28,33 +28,33 @@ locals {
         for vendor in local.stages[name].egress_vendors :
         local.egress_vendor_domains[vendor]
       ])
-      unrestricted = local.stages[name].egress_unrestricted
+      allow_any_domain = local.stages[name].egress_allow_any_domain
     }
     }, {
     assessment_consumer = {
-      cidr         = local.assessment_consumer_subnet_cidr
-      domains      = local.egress_vendor_domains.deepseek
-      unrestricted = false
+      cidr             = local.assessment_consumer_subnet_cidr
+      domains          = local.egress_vendor_domains.deepseek
+      allow_any_domain = false
     }
     embedding_consumer = {
-      cidr         = local.embedding_consumer_subnet_cidr
-      domains      = local.egress_vendor_domains.gemini
-      unrestricted = false
+      cidr             = local.embedding_consumer_subnet_cidr
+      domains          = local.egress_vendor_domains.gemini
+      allow_any_domain = false
     }
     completion_consumer = {
-      cidr         = local.completion_consumer_subnet_cidr
-      domains      = []
-      unrestricted = true
+      cidr             = local.completion_consumer_subnet_cidr
+      domains          = []
+      allow_any_domain = true
     }
     acquisition_consumer = {
-      cidr         = local.acquisition_consumer_subnet_cidr
-      domains      = []
-      unrestricted = true
+      cidr             = local.acquisition_consumer_subnet_cidr
+      domains          = []
+      allow_any_domain = true
     }
     curation_consumer = {
-      cidr         = local.curation_consumer_subnet_cidr
-      domains      = local.egress_vendor_domains.gemini
-      unrestricted = false
+      cidr             = local.curation_consumer_subnet_cidr
+      domains          = local.egress_vendor_domains.gemini
+      allow_any_domain = false
     }
   })
 

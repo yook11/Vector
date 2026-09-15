@@ -63,9 +63,8 @@ acl src_${name} src ${client.cidr}
 acl dst_${name} dstdomain ${join(" ", client.domains)}
 http_access allow src_${name} dst_${name}
 %{ endif ~}
-%{ if client.unrestricted ~}
-# 宛先を絞らない。出先が news_sources テーブル駆動で可変なため、静的な
-# allowlist を書けない。到達可能な範囲は上の to_private deny だけが決める。
+%{ if client.allow_any_domain ~}
+# 可変ドメインを許可する場合も、先に評価した非公開IP・ポート・管理機能の拒否は維持する。
 http_access allow src_${name}
 %{ endif ~}
 

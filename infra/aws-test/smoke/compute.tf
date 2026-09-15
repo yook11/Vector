@@ -20,8 +20,8 @@ locals {
     private_v4_ranges = local.non_public_ranges.v4
     private_v6_ranges = local.non_public_ranges.v6
     clients = {
-      embedding = { cidr = local.subnets.lambda.cidr, domains = ["generativelanguage.googleapis.com"], unrestricted = false }
-      runner    = { cidr = local.subnets.runner.cidr, domains = local.runner_domains, unrestricted = false }
+      embedding = { cidr = local.subnets.lambda.cidr, domains = ["generativelanguage.googleapis.com"], allow_any_domain = false }
+      runner    = { cidr = local.subnets.runner.cidr, domains = local.runner_domains, allow_any_domain = false }
     }
   })
   # 署名付きURLやHTTPヘッダーをアクセスログへ残さない。

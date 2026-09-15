@@ -196,7 +196,7 @@ async def test_destination_policy_rejection_propagates(monkeypatch) -> None:
     async def reject(host):
         raise original
 
-    monkeypatch.setattr(external, "ensure_host_is_public", reject)
+    monkeypatch.setattr(external, "resolve_public_host_addresses", reject)
     monkeypatch.setattr(
         external,
         "HttpSettings",
