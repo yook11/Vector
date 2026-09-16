@@ -13,6 +13,7 @@ from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.consumer import AssessmentConsumer
+from app.analysis.assessment.repository import AssessmentRepository
 from app.aws.ssm import get_secret_parameter
 from app.db.engine import create_assessment_consumer_engine
 from app.lambda_handlers.article_analysis_lifecycle import (
@@ -50,9 +51,11 @@ def open_assessment_consumer(
             settings=DeepSeekConnectionSettings(),
         )
 
-    def build_consumer(
+    async def build_consumer(
         *, session_factory: SessionFactory, client: AsyncOpenAI
     ) -> AssessmentConsumer:
+        async with session_factory() as session:
+            await AssessmentRepository(session).assert_category_catalog_covers_enum()
         return AssessmentConsumer(session_factory, DeepSeekAssessor(client))
 
     return open_article_analysis_consumer(

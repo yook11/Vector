@@ -159,7 +159,7 @@ async def lifecycle(system_database, monkeypatch):
             scope.client.closed = True
             scope.order.append("client_close")
 
-    def build_consumer(
+    async def build_consumer(
         *, session_factory: module.SessionFactory, client: ClientProbe
     ) -> BorrowedConsumer:
         state.preparation_order.append("consumer")

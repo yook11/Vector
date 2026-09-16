@@ -86,7 +86,7 @@ def lifecycle(monkeypatch):
         order.append("consumer")
         return SimpleNamespace(**kwargs)
 
-    state.build_consumer = Mock(side_effect=build_consumer)
+    state.build_consumer = AsyncMock(side_effect=build_consumer)
     state.arguments = dict(
         aws_region="ap-northeast-1",
         database_url="postgresql+asyncpg://vector_app@db.invalid:5432/vector?sslmode=require",
@@ -146,6 +146,11 @@ async def test_uses_invocation_signer_with_unchanged_sdk_configuration(lifecycle
         ("create_engine", "resources", ["rds_close"]),
         ("session_factory", "resources", ["engine_close", "rds_close"]),
         ("open_client", "ai_client", ["engine_close", "rds_close"]),
+        (
+            "build_consumer",
+            "consumer",
+            ["client_close", "engine_close", "rds_close"],
+        ),
     ],
 )
 async def test_initialization_failure_closes_only_acquired_resources(

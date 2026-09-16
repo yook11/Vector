@@ -172,15 +172,7 @@ class AssessmentRepository:
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def assert_category_catalog_covers_enum(self) -> None:
-        """全 ``InScopeCategory`` が DB に在るか検証し、欠落で raise する。
-
-        worker 起動時に 1 回呼ぶ。DB に enum の slug が欠けていれば
-        ``CategoryEnumDatabaseMismatchError`` を投げ、起動を fail-fast させる
-        (enum↔DB の不整合をデプロイ時に loud に検出する)。
-
-        ``Category.slug`` は ``CategorySlug`` VO で返るため ``.root`` で str に正規化
-        してから集合演算する(VO は str と等価/同ハッシュではない)。
-        """
+        """処理開始に必要な全 InScopeCategory がDBに存在することを確認する。"""
         rows = (await self._session.execute(select(Category.slug))).scalars().all()
         db_slugs = {slug.root for slug in rows}
         missing = missing_category_slugs(db_slugs)
