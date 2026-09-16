@@ -161,7 +161,7 @@ variable "log_retention_days" {
 }
 
 variable "ecr_retained_images" {
-  description = "ECR に残す image 数。超えた分は lifecycle policy で失効させる。"
+  description = "backend以外のECRに残すimage数。backendはLambdaの参照を保つため自動削除しない。"
   type        = number
   default     = 10
 }
