@@ -207,9 +207,13 @@ flowchart TB
 
 未完了の分析工程を再投入する backfill も、Scheduler から定期実行します。
 
-記事の取得から Embedding までの処理は、運用コストを最適化するため、Transactional Outbox・Amazon SQS・AWS Lambda を使うイベント駆動構成へ移行しました。この構成を選んだ理由や設計上の判断については、現在記事を執筆中です。
+記事の取得から Embedding までの処理は、運用コストを最適化するため、Transactional Outbox・Amazon SQS・AWS Lambda を使うイベント駆動構成へ移行しました。
 
-旧 taskiq 経路の撤去は今後行う予定です。
+移行の背景、イベント駆動と定期実行の使い分け、Standard キューを選んだ理由、Outbox の再送・重複処理への対応については、以下の記事にまとめています。
+
+[月額約270ドルの運用コストを見直すためのFargateからLambda・SQSへの移行とイベント駆動設計](https://zenn.dev/yook/articles/zenn-event-driven-outbox-draft)
+
+旧 taskiq 経路は、工程ごとに段階的に撤去しています。
 
 以下の記事は、移行前の Redis Streams を中心とした非同期パイプラインについて、再配送や重複実行から DB の整合性を守る仕組みをまとめた開発記録です。
 
