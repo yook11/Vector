@@ -90,7 +90,7 @@ def _test_database_name_for_worker(worker_id: str | None) -> str:
 
 
 # テスト DB 初期化は table owner 権限が必要なため migration role で接続する。
-# application role の権限境界は local_tests/test_database_permissions.py が所有する。
+# application role の権限境界は local_tests/permissions/ が所有する。
 _ADMIN_DB_URL = settings.migration_database_url or settings.database_url
 TEST_DATABASE_NAME = _test_database_name_for_worker(
     os.environ.get("PYTEST_XDIST_WORKER")

@@ -56,7 +56,7 @@
 ### テストの分類
 
 - `local_tests/`には実環境でしか確認できないテストを置き、共通DBを使うだけでシステムテストと呼ばない。
-- DBの権限は`local_tests/test_database_permissions.py`で許可一覧から照合し、独自接続や環境不足のskipを追加しない。実DBの分離・回収は`local_tests/test_database_isolation.py`で確認する。
+- DBの権限は`local_tests/permissions/`で許可一覧から照合し、独自接続や環境不足のskipを追加しない。実DBの分離・回収は`local_tests/test_database_isolation.py`で確認する。
 - DB不要の接続URL・準備処理の単体テストは`tests/test_local_database.py`に置く。
 - migration到達・必要テーブルの存在は共通DBの準備条件として確認する。
 - 業務のシステムテストは`local_tests/<工程名>/`に配置し、入力から保存・応答までの保証範囲を明示する。
