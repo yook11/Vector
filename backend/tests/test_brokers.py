@@ -603,7 +603,7 @@ async def test_wire_briefing_adapter_attaches_generator_to_state() -> None:
     """broker_briefing 起動時に briefing generator が state へ attach される。
 
     briefing の AI provider 選択も composition root で hardcode する設計 (Pure DI) を
-    構造的に保証する (analysis / embedding と同じ集約点)。
+    構造的に保証する (analysis と同じ集約点)。
     """
     from app.insights.briefing.llm import DeepSeekBriefingGenerator
     from app.queue.composition import _wire_briefing_adapter
@@ -835,7 +835,6 @@ async def test_agent_worker_owns_only_agent_live_redis() -> None:
     ("broker_name", "needs_catalog"),
     [
         ("broker_analysis", True),
-        ("broker_embedding", False),
         ("broker_maintenance", False),
     ],
 )

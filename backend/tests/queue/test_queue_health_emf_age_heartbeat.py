@@ -8,7 +8,7 @@
 出さない(``observation_up=0`` のみ、A3 の担当)。
 
 Logfire gauge 記録内容自体の正本は ``test_queue_health_task.py``、
-``PIPELINE_QUEUE_TARGETS`` への embedding stage 追加自体の正本は
+``PIPELINE_QUEUE_TARGETS`` の対象一覧の正本は
 ``test_stream_health.py``。``emit_metric`` の EMF 構造(Namespace/Unit/float 値)の
 正本は ``test_emf.py``。本ファイルは age emit の stage ごとの成否分岐だけを検証する。
 """
@@ -32,11 +32,10 @@ from app.queue.tasks import queue_health as module
 from tests.cloudwatch.records import metric_records
 
 _AGE_METRIC = "oldest_outstanding_enqueue_age"
-# embedding は本タスクで PIPELINE_QUEUE_TARGETS に追加された新規観測対象。
 _STAGE_SPECS = (
     ("acquisition", "pipeline:acquisition"),
     ("completion", "pipeline:completion"),
-    ("embedding", "pipeline:embedding"),
+    ("assessment", "pipeline:assessment"),
 )
 _STAGES = tuple(stage for stage, _ in _STAGE_SPECS)
 _TARGETS = tuple(
@@ -98,7 +97,7 @@ async def test_success_stages_emit_age_with_snapshot_value_or_zero_for_none(
     assert {record["stage"]: record[_AGE_METRIC] for record in age_records} == {
         "acquisition": 42.5,
         "completion": 0.0,
-        "embedding": 7.25,
+        "assessment": 7.25,
     }
 
 

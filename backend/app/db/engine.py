@@ -28,7 +28,6 @@ WORKER_POOL_SIZING: dict[str, tuple[int, int]] = {
     "dispatch": (5, 5),
     "collection": (5, 5),
     "analysis": (5, 5),
-    "embedding": (5, 5),
     "trend_discovery": (2, 2),
     "briefing": (5, 5),
     "agent": (5, 5),

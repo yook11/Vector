@@ -3,9 +3,18 @@ from __future__ import annotations
 from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.db.settings import DatabaseConnectionSettings
+
+
+class AssessmentNotificationSettings(BaseSettings):
+    """保存後通知に必要な内部宛先と既存の認証キー取得先を読む。"""
+
+    model_config = SettingsConfigDict(env_file=None, hide_input_in_errors=True)
+
+    internal_frontend_base_url: str
+    revalidate_bearer_secret_parameter_path: str
 
 
 class AssessmentConsumerSettings(DatabaseConnectionSettings):

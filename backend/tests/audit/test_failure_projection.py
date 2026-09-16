@@ -29,7 +29,6 @@ from app.analysis.curation.task_errors import (
     CurationRecoverableError,
     to_curation_task_error,
 )
-from app.analysis.embedding.task_errors import EmbeddingRecoverableError
 from app.audit.failure_projection import (
     FailureAction,
     FailureProjection,
@@ -104,7 +103,7 @@ def test_project_failure_prefers_marker_projection() -> None:
 
 
 def test_project_marker_failure_reads_instance_failure_kind_and_reason() -> None:
-    """assessment / embedding は原因軸を instance 値で持つ (classvar より優先)。"""
+    """assessment は原因軸を instance 値で持つ (classvar より優先)。"""
     exc = AssessmentRecoverableError(
         code="ai_error_rate_limited",
         failure_kind="time_based_recovery",
@@ -122,7 +121,7 @@ def test_project_marker_failure_reads_instance_failure_kind_and_reason() -> None
 
 def test_project_marker_failure_classvar_marker_has_no_failure_reason() -> None:
     """classvar 宣言 marker (briefing / completion / acquisition) は failure_reason
-    を持たない (None)。原因軸を instance 値で持つのは assessment / embedding /
+    を持たない (None)。原因軸を instance 値で持つのは assessment /
     curation のみで、classvar fallback 経路は reason を焼かない。
     """
     projection = project_marker_failure(BriefingConfigurationError("missing key"))
@@ -164,17 +163,6 @@ def test_project_marker_failure_does_not_require_stage_marker_attribute() -> Non
         ),
         (
             AssessmentRecoverableError(
-                code="ai_error_network", failure_kind="attempt_scoped"
-            ),
-            FailureProjection(
-                failure_kind="attempt_scoped",
-                retryability=Retryability.RETRYABLE,
-                failure_action=None,
-                code="ai_error_network",
-            ),
-        ),
-        (
-            EmbeddingRecoverableError(
                 code="ai_error_network", failure_kind="attempt_scoped"
             ),
             FailureProjection(

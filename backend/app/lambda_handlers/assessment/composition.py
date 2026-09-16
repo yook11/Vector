@@ -1,5 +1,6 @@
 """記事単位AI分析のライフサイクルへAssessmentの依存を配線する。"""
 
+import asyncio
 from contextlib import AbstractAsyncContextManager
 
 import structlog
@@ -12,6 +13,7 @@ from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.consumer import AssessmentConsumer
+from app.aws.ssm import get_secret_parameter
 from app.db.engine import create_assessment_consumer_engine
 from app.lambda_handlers.article_analysis_lifecycle import (
     IamPasswordProvider,
@@ -21,7 +23,12 @@ from app.lambda_handlers.article_analysis_lifecycle import (
 from app.lambda_handlers.assessment.failure_recorder import (
     AssessmentLambdaFailureRecorder,
 )
-from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
+from app.lambda_handlers.assessment.notification import ArticleListUpdateNotifier
+from app.lambda_handlers.assessment.settings import (
+    AssessmentConsumerSettings,
+    AssessmentNotificationSettings,
+)
+from app.shared.revalidate import FrontendRevalidateNotifier
 
 logger = structlog.get_logger(__name__)
 
@@ -57,3 +64,21 @@ def open_assessment_consumer(
         build_consumer=build_consumer,
         failure_recorder=AssessmentLambdaFailureRecorder(logger),
     )
+
+
+def build_article_list_notifier(*, aws_region: str) -> ArticleListUpdateNotifier:
+    """通知先を先に確定し、認証キーは保存後の通知時に取得する。"""
+    settings = AssessmentNotificationSettings()  # type: ignore[call-arg]
+
+    async def secret_provider() -> SecretStr:
+        return await asyncio.to_thread(
+            get_secret_parameter,
+            region=aws_region,
+            path=settings.revalidate_bearer_secret_parameter_path,
+        )
+
+    transport = FrontendRevalidateNotifier(
+        frontend_base_url=settings.internal_frontend_base_url,
+        secret_provider=secret_provider,
+    )
+    return ArticleListUpdateNotifier(transport)

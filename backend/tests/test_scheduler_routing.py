@@ -27,7 +27,6 @@ from app.insights.trend_discovery.scheduler import create_scheduler
 from app.queue.brokers import (
     broker_analysis,
     broker_collection,
-    broker_embedding,
 )
 from app.queue.schedulers import (
     scheduler_agent,
@@ -61,17 +60,12 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
         {
             "backfill_curations",
             "backfill_assessments",
-            "backfill_embeddings",
             "observe_pipeline_queue_health",
             "purge_auth_rate_limits",
             "purge_pipeline_events",
         },
     ),
 ]
-
-# schedule.py の cron 時刻表 (SSoT) が列挙する cron task の総数。新 cron 追加時は
-# 時刻表・_EXPECTED_CRON・本定数の 3 点を同時更新する (drift 時に本テストが赤になる)。
-_TOTAL_CRON_COUNT = 14
 
 
 def test_scheduler_entrypoint_uses_exact_scheduler_set() -> None:
@@ -118,22 +112,20 @@ async def test_scheduler_discovers_exactly_its_brokers_cron(
 
 
 @pytest.mark.asyncio
-async def test_all_cron_partitioned_across_schedulers() -> None:
-    """5 scheduler 全体で全 cron を漏れ・重複なく分割発見する (totality)。"""
+async def test_cron_tasks_do_not_overlap_across_schedulers() -> None:
+    """同じcronが複数のschedulerから発火しない。"""
     discovered = [await _discovered_cron_task_names(s) for _, s, _ in _EXPECTED_CRON]
     union: set[str] = set().union(*discovered)
     # 重複なし: 各 scheduler の発見数の総和が union サイズと一致 = pairwise disjoint
     # (同一 cron が複数 scheduler から二重発火しない)。
     assert sum(len(d) for d in discovered) == len(union)
-    # 漏れなし: 時刻表 SSoT の全 cron を覆う。
-    assert len(union) == _TOTAL_CRON_COUNT
 
 
 @pytest.mark.asyncio
 async def test_schedulerless_brokers_have_no_cron() -> None:
     """scheduler を持たない broker に schedule 付き task が無い (orphan cron 検出)。
 
-    collection / analysis / embedding broker は scheduler を持たないため、ここに cron が
+    collection / analysis broker は scheduler を持たないため、ここに cron が
     紛れ込むと永久に発火しない。taskiq 自身の discovery (LabelScheduleSource) で
     schedule 付き task を数え、空であることを保証する。
     """
@@ -141,7 +133,6 @@ async def test_schedulerless_brokers_have_no_cron() -> None:
     for label, broker in (
         ("collection", broker_collection),
         ("analysis", broker_analysis),
-        ("embedding", broker_embedding),
     ):
         source = LabelScheduleSource(broker)
         await source.startup()

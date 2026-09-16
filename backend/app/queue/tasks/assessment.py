@@ -14,20 +14,18 @@ from app.analysis.assessment.domain.ready import (
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
-from app.analysis.assessment.service import AssessmentCompletionKind, AssessmentService
+from app.analysis.assessment.service import AssessmentService
 from app.analysis.assessment.task_errors import to_assessment_task_error
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.assessment import AssessmentAuditRepository
-from app.config import settings
 from app.logfire.article_stage import assessment_stage_span
 from app.queue.brokers import broker_analysis
 from app.queue.helpers.stage_hold import set_stage_hold
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.retry import is_last_attempt
-from app.shared.revalidate import FrontendRevalidateNotifier
 
 logger = structlog.get_logger(__name__)
 
@@ -96,7 +94,7 @@ async def assess_content(
         handler = AssessmentFailureHandler(session_factory)
 
         try:
-            result = await svc.execute(
+            await svc.execute(
                 ready, assessor, analyzable_article_id=analyzable_article_id
             )
         except Exception as exc:
@@ -123,10 +121,6 @@ async def assess_content(
                     raise
                 raise task_exc from exc
             return
-
-        if result.kind is AssessmentCompletionKind.IN_SCOPE:
-            notifier = FrontendRevalidateNotifier.from_settings(settings)
-            await notifier.notify(tags=["articles:list", "articles:categories"])
 
 
 async def _append_ready_build_failed_audit(

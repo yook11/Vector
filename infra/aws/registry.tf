@@ -18,12 +18,9 @@ resource "aws_ecr_repository" "this" {
   tags = { Name = "${var.name_prefix}-${each.value}" }
 }
 
-# 設定しないと古い image が無期限に積み上がって課金され続ける。
-#
-# ロールバック可能窓 = この保持数。ECS task は再起動のたびに pull するので、
-# 失効した image を参照する古い task definition へは戻せない。
+# backendは更新頻度が異なるLambdaがdigestを参照し続けるため、自動削除しない。
 resource "aws_ecr_lifecycle_policy" "this" {
-  for_each = aws_ecr_repository.this
+  for_each = { for name, repository in aws_ecr_repository.this : name => repository if name != "backend" }
 
   repository = each.value.name
 

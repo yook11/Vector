@@ -15,7 +15,6 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
-    EmbeddingBackfillExclusion,
 )
 from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
@@ -86,40 +85,6 @@ class PipelineBacklog:
                 AnalyzedArticleRecord.id.is_(None),
                 OutOfScopeArticleRecord.id.is_(None),
                 AssessmentBackfillExclusion.curation_id.is_(None),
-                AnalyzableArticleRecord.created_at < created_before,
-                (
-                    AnalyzableArticleRecord.created_at >= created_after
-                    if created_after is not None
-                    else true()
-                ),
-            )
-        )
-
-    def _embedding_pending(
-        self,
-        stmt: Select[Any],
-        *,
-        created_before: datetime,
-        created_after: datetime | None = None,
-    ) -> Select[Any]:
-        return (
-            stmt.select_from(AnalyzedArticleRecord)
-            .join(
-                ArticleCuration,
-                ArticleCuration.id == AnalyzedArticleRecord.curation_id,
-            )
-            .join(
-                AnalyzableArticleRecord,
-                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
-            )
-            .outerjoin(
-                EmbeddingBackfillExclusion,
-                EmbeddingBackfillExclusion.analyzed_article_id
-                == AnalyzedArticleRecord.id,
-            )
-            .where(
-                AnalyzedArticleRecord.embedding.is_(None),
-                EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
                 AnalyzableArticleRecord.created_at < created_before,
                 (
                     AnalyzableArticleRecord.created_at >= created_after
@@ -285,81 +250,6 @@ class PipelineBacklog:
         """
         stmt = self._assessment_pending(
             select(func.count(ArticleCuration.id)),
-            created_before=created_before,
-            created_after=created_after,
-        )
-        result = await self._session.execute(stmt)
-        return int(result.scalar_one())
-
-    async def analyzed_article_ids_pending_embedding(
-        self,
-        *,
-        created_before: datetime,
-        created_after: datetime,
-        limit: int,
-    ) -> list[int]:
-        """embedding が NULL な AnalyzedArticleRecord ID を返す (Stage 5 残)."""
-        stmt = (
-            self._embedding_pending(
-                select(AnalyzedArticleRecord.id),
-                created_before=created_before,
-                created_after=created_after,
-            )
-            .order_by(AnalyzableArticleRecord.created_at.asc())
-            .limit(limit)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def embedding_targets_pending(
-        self,
-        *,
-        created_before: datetime,
-        created_after: datetime,
-        limit: int,
-    ) -> list[BackfillTarget]:
-        """Stage 5 backfill の enqueue / audit 対象を返す。"""
-        stmt = (
-            select(
-                AnalyzedArticleRecord.id,
-                ArticleCuration.analyzable_article_id,
-                NewsSource.name,
-            )
-            .join(
-                ArticleCuration,
-                ArticleCuration.id == AnalyzedArticleRecord.curation_id,
-            )
-            .join(
-                AnalyzableArticleRecord,
-                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
-            )
-            .outerjoin(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
-            .outerjoin(
-                EmbeddingBackfillExclusion,
-                EmbeddingBackfillExclusion.analyzed_article_id
-                == AnalyzedArticleRecord.id,
-            )
-            .where(
-                AnalyzedArticleRecord.embedding.is_(None),
-                EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
-                AnalyzableArticleRecord.created_at < created_before,
-                AnalyzableArticleRecord.created_at >= created_after,
-            )
-            .order_by(AnalyzableArticleRecord.created_at.asc())
-            .limit(limit)
-        )
-        rows = (await self._session.execute(stmt)).tuples().all()
-        return [_target_from_row(row) for row in rows]
-
-    async def count_analyzed_articles_pending_embedding(
-        self,
-        *,
-        created_before: datetime,
-        created_after: datetime,
-    ) -> int:
-        """embedding NULL analyzed article の真の総数 (LIMIT なし COUNT)。"""
-        stmt = self._embedding_pending(
-            select(func.count(AnalyzedArticleRecord.id)),
             created_before=created_before,
             created_after=created_after,
         )

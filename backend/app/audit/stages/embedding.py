@@ -15,18 +15,13 @@ from app.audit.failure_projection import (
     FailureProjection,
     Retryability,
     failure_action_value,
-    project_failure,
-    unknown_failure_projection,
 )
-from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
-from app.db.errors import DatabaseError
 from app.models.backfill_exclusion import BackfillExclusionReason
 
 if TYPE_CHECKING:
     from app.analysis.embedding.ai.base import BaseEmbedder
     from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
-    from app.analysis.embedding.task_errors import EmbeddingTaskError
 
 
 class EmbeddingOutcomeCode(StrEnum):
@@ -96,42 +91,7 @@ class EmbeddingAuditRepository:
             article_id=rejected.analyzable_article_id,
         )
 
-    async def append_ready_build_failed(
-        self, *, analyzed_article_id: int, exc: Exception
-    ) -> None:
-        """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
-        projection = project_ready_build_failure(stage_prefix=self.STAGE.value, exc=exc)
-        payload = EmbeddingPayload(
-            failure_kind=projection.failure_kind,
-            analyzed_article_id=analyzed_article_id,
-            error_message=error_message_of(exc),
-            error_chain=extract_error_chain(exc),
-        )
-        await self._append_event(
-            event_type=EventType.FAILED,
-            outcome_code=projection.outcome_code,
-            payload=payload,
-            error_class=exception_fqn(exc),
-            retryability=Retryability.UNKNOWN,
-        )
-
-    # --- 失敗経路 (Task 層 2 marker dispatch + catch-all、別 session 別 tx) -
-
-    async def append_failure(
-        self,
-        *,
-        analyzed_article_id: int,
-        article_id: int,
-        exc: EmbeddingTaskError | DatabaseError,
-    ) -> None:
-        """embedding 失敗を記録する。"""
-        projection = self._projection_of(exc)
-        await self._append_failed_event(
-            analyzed_article_id=analyzed_article_id,
-            article_id=article_id,
-            exc=exc,
-            projection=projection,
-        )
+    # --- Consumer分類済み失敗の監査 ---
 
     async def append_classified_failure(
         self,
@@ -147,21 +107,6 @@ class EmbeddingAuditRepository:
             article_id=article_id,
             exc=exc,
             projection=projection,
-        )
-
-    async def append_unexpected_failure(
-        self,
-        *,
-        analyzed_article_id: int,
-        article_id: int,
-        exc: BaseException,
-    ) -> None:
-        """想定外の embedding 失敗を unknown として記録する。"""
-        await self._append_failed_event(
-            analyzed_article_id=analyzed_article_id,
-            article_id=article_id,
-            exc=exc,
-            projection=unknown_failure_projection(),
         )
 
     async def _append_failed_event(
@@ -236,8 +181,3 @@ class EmbeddingAuditRepository:
             error_class=error_class,
             retryability=retryability,
         )
-
-    @staticmethod
-    def _projection_of(exc: BaseException) -> FailureProjection:
-        """Stage 5 失敗を class attr / adapter から projection する。"""
-        return project_failure(exc)

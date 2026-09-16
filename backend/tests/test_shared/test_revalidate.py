@@ -1,23 +1,30 @@
 """FrontendRevalidateNotifier — HTTP 200 / HTTP error / network error の 3 ケース。
 
-設計契約: notify は **絶対に raise しない** (warn 降格のみ)。
+設計契約: 通常の通知失敗は warn に降格し、実行キャンセルは伝播する。
 """
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import AsyncMock, Mock
+
 import httpx  # noqa: TID251 (テスト内 mock 構築のため、実通信なし)
 import pytest
+from pydantic import SecretStr
+from structlog.testing import capture_logs
 
+from app.shared import revalidate
 from app.shared.revalidate import (
     FrontendRevalidateNotifier,
     NullRevalidateNotifier,
 )
 
 
-def _notifier() -> FrontendRevalidateNotifier:
+def _notifier(*, secret_provider=None) -> FrontendRevalidateNotifier:
     return FrontendRevalidateNotifier(
         frontend_base_url="http://frontend:3000",
-        secret="test-secret-32characters-long-xxxx",
+        secret_provider=secret_provider
+        or AsyncMock(return_value=SecretStr("test-secret-32characters-long-xxxx")),
     )
 
 
@@ -86,3 +93,45 @@ class TestNullNotifier:
     async def test_is_no_op(self) -> None:
         # 何もしないし raise もしない
         await NullRevalidateNotifier().notify(tags=["trends"])
+
+
+@pytest.mark.asyncio
+async def test_secret_failure_logs_only_error_class(monkeypatch):
+    """キー取得失敗の警告に例外自由文や秘密値を含めない。"""
+    provider = AsyncMock(side_effect=RuntimeError("private-notification-secret"))
+    client = Mock()
+    monkeypatch.setattr(revalidate, "make_internal_async_client", client)
+
+    with capture_logs() as logs:
+        await _notifier(secret_provider=provider).notify(tags=["articles:list"])
+
+    client.assert_not_called()
+    assert logs == [
+        {
+            "event": "frontend_revalidate_failed",
+            "tags": ["articles:list"],
+            "error_class": "builtins.RuntimeError",
+            "log_level": "warning",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_notification_diagnostic_failure_does_not_escape(monkeypatch):
+    """通知障害のログ出力が失敗しても呼び出し元へ例外を返さない。"""
+    provider = AsyncMock(side_effect=RuntimeError("notification unavailable"))
+    log = Mock(warning=Mock(side_effect=RuntimeError("logging failed")))
+    monkeypatch.setattr(revalidate, "logger", log)
+
+    await _notifier(secret_provider=provider).notify(tags=["articles:list"])
+
+    log.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_notification_cancellation_propagates():
+    """実行キャンセルを通常の通知障害として抑止しない。"""
+    provider = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _notifier(secret_provider=provider).notify(tags=["articles:list"])

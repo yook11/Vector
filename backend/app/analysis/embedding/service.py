@@ -21,7 +21,6 @@ from app.analysis.embedding.errors import (
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.embedding.repository import EmbeddingRepository, EmbeddingSaveState
 from app.audit.stages.embedding import EmbeddingAuditRepository
-from app.logfire.article_stage import set_embedding_stage_result
 
 logger = structlog.get_logger(__name__)
 
@@ -78,7 +77,6 @@ class EmbeddingService:
                     "embedding_concurrent_write",
                     analyzed_article_id=ready.analyzed_article_id,
                 )
-                set_embedding_stage_result("skipped")
                 return EmbeddingCompletion.ALREADY_EMBEDDED
             saved = await repo.save(
                 vector,
@@ -99,6 +97,5 @@ class EmbeddingService:
             analyzed_article_id=ready.analyzed_article_id,
             model=embedder.model_name,
         )
-        set_embedding_stage_result("succeeded")
         record_embedding_processing_outcome("succeeded")
         return EmbeddingCompletion.SAVED

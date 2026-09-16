@@ -18,8 +18,10 @@ from app.ai_providers.deepseek import client as deepseek_module
 from app.analysis.assessment.consumer import AssessmentConsumer
 from app.analysis.assessment.repository import AssessmentRepository
 from app.lambda_handlers import article_analysis_lifecycle as resource_module
+from app.lambda_handlers.assessment import composition
 from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
 from app.models.outbox_event import OutboxEvent
+from app.shared import revalidate
 from local_tests.assessment.support import deepseek_reply, handler_module
 from tests.iam_fixtures import inject_test_db_signer
 
@@ -30,7 +32,23 @@ def deepseek_response():
 
 
 @pytest.fixture
-def assessment_runtime(system_database, monkeypatch, deepseek_response):
+def notification_response():
+    return AsyncMock(return_value=httpx.Response(200, json={"ok": True}))
+
+
+@pytest.fixture
+def notification_secret():
+    return Mock(return_value=SecretStr("test-notification-key"))
+
+
+@pytest.fixture
+def assessment_runtime(
+    system_database,
+    monkeypatch,
+    deepseek_response,
+    notification_response,
+    notification_secret,
+):
     settings = AssessmentConsumerSettings(
         env="test",
         aws_region="ap-northeast-1",
@@ -56,6 +74,24 @@ def assessment_runtime(system_database, monkeypatch, deepseek_response):
         )
 
     monkeypatch.setattr(deepseek_module, "make_external_async_client", http_factory)
+    monkeypatch.setenv(
+        "INTERNAL_FRONTEND_BASE_URL", "http://frontend.vector.internal:3000"
+    )
+    monkeypatch.setenv(
+        "REVALIDATE_BEARER_SECRET_PARAMETER_PATH", "/test/revalidate-key"
+    )
+    monkeypatch.setattr(
+        composition,
+        "get_secret_parameter",
+        notification_secret,
+    )
+    monkeypatch.setattr(
+        revalidate,
+        "make_internal_async_client",
+        lambda **kwargs: httpx.AsyncClient(  # noqa: TID251
+            transport=httpx.MockTransport(notification_response), **kwargs
+        ),
+    )
 
 
 @dataclass

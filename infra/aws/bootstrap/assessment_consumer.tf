@@ -32,6 +32,12 @@ resource "aws_iam_policy" "assessment_consumer_lambda_boundary" {
         Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/assessment-consumer/deepseek-api-key"
       },
       {
+        Sid      = "ReadFrontendNotificationKey"
+        Effect   = "Allow"
+        Action   = "ssm:GetParameter"
+        Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/frontend/revalidate-bearer-secret"
+      },
+      {
         Sid      = "WriteConsumerLogs"
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]

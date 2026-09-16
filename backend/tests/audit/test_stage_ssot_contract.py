@@ -71,8 +71,7 @@ _RAW_STAGE_KEYWORD_TARGETS = {
     _APP / "audit" / "stages" / "curation.py": {"curation"},
     _APP / "queue" / "tasks" / "assessment.py": {"assessment"},
     _APP / "queue" / "tasks" / "curation.py": {"curation"},
-    _APP / "queue" / "tasks" / "embedding.py": {"embedding"},
-    _APP / "logfire" / "article_stage.py": {"assessment", "curation", "embedding"},
+    _APP / "logfire" / "article_stage.py": {"assessment", "curation"},
 }
 
 

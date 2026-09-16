@@ -13,6 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import Stage
+from app.backfill.cleanup import exclude_aged_out_embeddings
 from app.backfill.targets import BackfillTarget
 from app.collection.sources.source_name import SourceName
 from app.models.analyzable_article_record import AnalyzableArticleRecord
@@ -530,7 +531,6 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
     sample_categories: list[Category],
 ) -> None:
     """古い embedding NULL analysis は削除せず exclusion + audit を残す。"""
-    from app.queue.tasks import backfill as tasks
 
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
@@ -548,7 +548,7 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
     article_id = article.id
     analyzed_article_id = analysis.id
 
-    excluded = await tasks._exclude_aged_out_embeddings(
+    excluded = await exclude_aged_out_embeddings(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -587,7 +587,6 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
     sample_categories: list[Category],
 ) -> None:
     """helper 実行時点で embedding 済みなら exclusion / audit を作らない。"""
-    from app.queue.tasks import backfill as tasks
 
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
@@ -604,7 +603,7 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
         embedding=[0.1] * 768,
     )
 
-    excluded = await tasks._exclude_aged_out_embeddings(
+    excluded = await exclude_aged_out_embeddings(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -622,7 +621,7 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
     assert excluded == 0
 
 
-# assessments / embeddings の disabled パスも同様に early-return することの確認
+# assessments の disabled パスも同様に early-return することの確認
 
 
 @pytest.mark.asyncio
@@ -641,27 +640,6 @@ async def test_assessments_disabled_returns_early() -> None:
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         await tasks.backfill_assessments(ctx=ctx)
-    held.assert_not_called()
-    exclude.assert_not_called()
-    backlog_cls.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_embeddings_disabled_returns_early() -> None:
-    from app.queue.tasks import backfill as tasks
-
-    ctx = _ctx_with_session_factory()
-    with (
-        patch.object(tasks.settings, "backfill_embeddings_enabled", False),
-        patch("app.queue.tasks.backfill.is_stage_held", new=AsyncMock()) as held,
-        patch(
-            "app.queue.tasks.backfill._exclude_aged_out_embeddings",
-            new=AsyncMock(return_value=0),
-        ) as exclude,
-        patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
-        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
-    ):
-        await tasks.backfill_embeddings(ctx=ctx)
     held.assert_not_called()
     exclude.assert_not_called()
     backlog_cls.assert_not_called()
@@ -698,36 +676,3 @@ async def test_assessments_held_skips_entire_run() -> None:
     backlog_cls.assert_not_called()
     budget.assert_not_called()
     assess_task.kiq.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_embeddings_held_skips_entire_run() -> None:
-    """embedding hold 中は backlog / budget / kiq に進まない。"""
-    from app.queue.tasks import backfill as tasks
-
-    ctx = _ctx_with_session_factory()
-    with (
-        patch.object(tasks.settings, "backfill_embeddings_enabled", True),
-        patch(
-            "app.queue.tasks.backfill.is_stage_held",
-            new=AsyncMock(return_value=True),
-        ) as held,
-        patch(
-            "app.queue.tasks.backfill._exclude_aged_out_embeddings",
-            new=AsyncMock(return_value=0),
-        ) as exclude,
-        patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
-        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
-        patch(
-            "app.queue.tasks.backfill.consume_daily_budget", new=AsyncMock()
-        ) as budget,
-        patch("app.queue.tasks.backfill.generate_embedding") as embedding_task,
-    ):
-        await tasks.backfill_embeddings(ctx=ctx)
-
-    held.assert_awaited_once()
-    assert held.await_args.args[1] is Stage.EMBEDDING
-    exclude.assert_not_called()
-    backlog_cls.assert_not_called()
-    budget.assert_not_called()
-    embedding_task.kiq.assert_not_called()

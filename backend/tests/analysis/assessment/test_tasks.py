@@ -1,6 +1,5 @@
 """``assess_content`` task の分岐テスト。"""
 
-from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,18 +23,7 @@ from app.analysis.assessment.service import (
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.queue.messages.assessment import AssessmentTrigger
-from app.shared.revalidate import NullRevalidateNotifier
 from tests.logfire._span_helpers import one_article_stage_span, stage_attrs
-
-
-@pytest.fixture(autouse=True)
-def isolate_cache_notification() -> Iterator[None]:
-    """既存のタスク分岐テストでは通知の外部通信だけを切り離す。"""
-    with patch(
-        "app.queue.tasks.assessment.FrontendRevalidateNotifier.from_settings",
-        return_value=NullRevalidateNotifier(),
-    ):
-        yield
 
 
 def _make_provider_fake() -> MagicMock:
@@ -184,8 +172,8 @@ class TestAssessContent:
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_in_scope_does_not_enqueue_embedding(self) -> None:
-        """対象内保存に成功しても旧Embeddingタスクを投入しない。"""
+    async def test_in_scope_passes_ready_and_article_id_to_service(self) -> None:
+        """対象内の処理にはReadyと監査主語をServiceへ渡す。"""
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
@@ -195,10 +183,6 @@ class TestAssessContent:
         with (
             _patch_ready_construction(ready),
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
-            patch(
-                "app.queue.tasks.embedding.generate_embedding.kiq",
-                new_callable=AsyncMock,
-            ) as enqueue_embedding,
         ):
             # 対象内保存の正常終了から保存済み記事IDを引き継ぐ。
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -212,7 +196,7 @@ class TestAssessContent:
         call_args = mock_svc_cls.return_value.execute.call_args
         assert call_args[0][0] is ready
         assert call_args.kwargs["analyzable_article_id"] == 7
-        enqueue_embedding.assert_not_awaited()
+        mock_svc_cls.return_value.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -222,10 +206,10 @@ class TestAssessContent:
             AssessmentCompletionKind.ALREADY_ASSESSED,
         ],
     )
-    async def test_non_in_scope_completion_does_not_chain(
+    async def test_non_in_scope_completion_executes_service_once(
         self, kind: AssessmentCompletionKind
     ) -> None:
-        """対象外保存と重複スキップでは後続タスクを投入しない。"""
+        """対象外と重複スキップでもServiceを一度だけ実行する。"""
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
@@ -234,17 +218,13 @@ class TestAssessContent:
         with (
             _patch_ready_construction(_make_ready(curation_id=2)),
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
-            patch(
-                "app.queue.tasks.embedding.generate_embedding.kiq",
-                new_callable=AsyncMock,
-            ) as enqueue_embedding,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=AssessmentCompletion(kind)
             )
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
-        enqueue_embedding.assert_not_awaited()
+        mock_svc_cls.return_value.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
