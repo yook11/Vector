@@ -50,6 +50,18 @@ locals {
         ]
       },
       {
+        Sid    = "ReadDatabaseAdminRolesForRefresh"
+        Effect = "Allow"
+        Resource = [
+          "arn:aws:iam::${local.account_id}:role/vector-db-admin/vector-db-roles-controller",
+          "arn:aws:iam::${local.account_id}:role/vector-db-admin/vector-db-roles-exec",
+          "arn:aws:iam::${local.account_id}:role/vector-db-admin/vector-db-roles-task",
+        ]
+        Action = [
+          "iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+        ]
+      },
+      {
         Sid      = "ManageCiPolicyPath"
         Effect   = "Allow"
         Resource = local.ci_policy_arn_pattern
