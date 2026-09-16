@@ -62,17 +62,16 @@ jobs:
           registry="$account.dkr.ecr.$REGION.amazonaws.com"
           echo "::add-mask::$registry"
           aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+          tag="db-roles-$RELEASE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           count=$(aws ecr batch-get-image --repository-name "$PREFIX/backend" \
-            --image-ids "imageTag=db-roles-$RELEASE_SHA" --query 'length(images)' --output text)
-          case "$count" in
-            0)
-              docker build --platform linux/arm64 --provenance=false \
-                -f backend/Dockerfile.db-roles -t "$registry/$PREFIX/backend:db-roles-$RELEASE_SHA" backend
-              docker push "$registry/$PREFIX/backend:db-roles-$RELEASE_SHA"
-              ;;
-            1) ;;
-            *) exit 2 ;;
-          esac
+            --image-ids "imageTag=$tag" --query 'length(images)' --output text)
+          if [[ "$count" != "0" ]]; then
+            echo "DB role image tag already exists or cannot be verified" >&2
+            exit 2
+          fi
+          docker buildx build --platform linux/arm64 --provenance=false --push \
+            --metadata-file "$RUNNER_TEMP/db-roles-build.json" \
+            -f backend/Dockerfile.db-roles -t "$registry/$PREFIX/backend:$tag" backend
       - name: Verify image and publish approval summary
         env:
           GH_TOKEN: ${{ github.token }}
@@ -83,6 +82,7 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" --release-sha "$RELEASE_SHA" \
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --region "$REGION" --prefix "$PREFIX" \
+            --build-metadata "$RUNNER_TEMP/db-roles-build.json" \
             --evidence "$RUNNER_TEMP/db-roles-image.json" --summary-file "$GITHUB_STEP_SUMMARY"
       - id: evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

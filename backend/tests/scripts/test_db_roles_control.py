@@ -3,6 +3,8 @@
 import importlib
 import io
 import json
+import shutil
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -292,3 +294,139 @@ def test_workflow_separates_build_credentials_from_approved_apply():
     assert "AWS_PUSH_ROLE_ARN" in json.dumps(build)
     assert "get-secret-value" not in source
     assert "AWS_DB_ROLES_ROLE_ARN" in json.dumps(apply)
+
+
+@pytest.fixture
+def build_metadata(args, tmp_path):
+    args.build_metadata = tmp_path / "build.json"
+    args.build_metadata.write_text(
+        json.dumps({"containerimage.digest": "sha256:" + "b" * 64})
+    )
+    return args.build_metadata
+
+
+def test_approval_records_current_build_digest(
+    monkeypatch, args, record, build_metadata
+):
+    """今回のbuildとECRが一致したimageだけを承認対象へ渡す。"""
+    aws = Mock()
+    aws.call.side_effect = [
+        {"Account": record["account"]},
+        {"images": [{"imageId": {"imageDigest": "sha256:" + "b" * 64}}]},
+    ]
+    monkeypatch.setattr(control, "command", Mock())
+    monkeypatch.setattr(control, "verify_image", Mock())
+    assert control.evidence(args, aws) == record
+    assert aws.call.call_args.args[-1] == f"imageTag=db-roles-{args.release_sha}-123-2"
+
+
+def test_registry_digest_mismatch_cannot_become_approved_image(
+    monkeypatch, args, build_metadata
+):
+    """ECRに別のimageがあっても今回のbuild結果と異なれば採用しない。"""
+    aws = Mock()
+    aws.call.side_effect = [
+        {"Account": "123456789012"},
+        {"images": [{"imageId": {"imageDigest": "sha256:" + "c" * 64}}]},
+    ]
+    command = Mock()
+    monkeypatch.setattr(control, "command", command)
+    with pytest.raises(
+        control.RoleControlError, match="build_registry_digest_mismatch"
+    ):
+        control.evidence(args, aws)
+    command.assert_not_called()
+
+
+def test_config_digest_cannot_replace_build_manifest_digest(args, build_metadata):
+    """manifest digestがない場合にローカルimage IDで代用しない。"""
+    build_metadata.write_text(
+        json.dumps({"containerimage.config.digest": "sha256:" + "b" * 64})
+    )
+    with pytest.raises(control.RoleControlError, match="invalid_build_digest"):
+        control.evidence(args, Mock())
+
+
+@pytest.fixture
+def run_build_step(tmp_path):
+    source = (ROOT / ".github/workflows/aws-db-roles.yml").read_text()
+    workflow = yaml.safe_load(source)
+    step = next(
+        step
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Build immutable dedicated image"
+    )
+    script = tmp_path / "build.sh"
+    script.write_text(
+        """
+aws() {
+  case "$1 $2" in
+    'sts get-caller-identity') echo 123456789012 ;;
+    'ecr get-login-password') echo dummy ;;
+    'ecr batch-get-image') echo "$EXISTING_IMAGES" ;;
+    *) return 90 ;;
+  esac
+}
+docker() {
+  if [[ "$1" == login ]]; then
+    read -r password
+    return 0
+  fi
+  printf '%s\\n' "$@" >> "$RUNNER_TEMP/docker-args"
+  return "$BUILD_STATUS"
+}
+"""
+        + step["run"]
+    )
+
+    def run(existing_images, build_status="0"):
+        result = subprocess.run(  # noqa: S603
+            [shutil.which("bash"), str(script)],
+            env={
+                "PREFIX": "vector",
+                "REGION": "ap-northeast-1",
+                "RELEASE_SHA": "a" * 40,
+                "GITHUB_RUN_ID": "123",
+                "GITHUB_RUN_ATTEMPT": "2",
+                "RUNNER_TEMP": str(tmp_path),
+                "EXISTING_IMAGES": existing_images,
+                "BUILD_STATUS": build_status,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        calls = tmp_path / "docker-args"
+        return result, calls.read_text().splitlines() if calls.exists() else []
+
+    return run
+
+
+def test_existing_tag_stops_without_reusing_image(run_build_step):
+    """タグが既存ならbuildを省略して成功扱いにせず停止する。"""
+    result, calls = run_build_step("1")
+    assert result.returncode != 0
+    assert calls == []
+
+
+def test_new_attempt_builds_and_pushes_source_with_digest_metadata(run_build_step):
+    """空きタグには対象ソースをbuildして実行回固有のタグとmetadataを出力する。"""
+    result, calls = run_build_step("0")
+    assert result.returncode == 0, result.stderr
+    assert calls[:2] == ["buildx", "build"]
+    assert "--push" in calls
+    assert "--metadata-file" in calls
+    expected_image = (
+        "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/vector/backend:"
+        f"db-roles-{'a' * 40}-123-2"
+    )
+    assert expected_image in calls
+    assert calls[-1] == "backend"
+
+
+def test_build_push_failure_does_not_fall_back_to_registry_image(run_build_step):
+    """確認後のpush競合を含むbuild失敗を既存imageの再利用で回避しない。"""
+    result, calls = run_build_step("0", build_status="1")
+    assert result.returncode != 0
+    assert calls.count("build") == 1
+    assert "pull" not in calls

@@ -95,6 +95,15 @@ def verify_image(root: Path, image: str) -> None:
 
 
 def evidence(args, aws: Aws) -> dict:
+    if args.build_metadata is None:
+        raise RoleControlError("build_metadata_required")
+    build_digest = json.loads(args.build_metadata.read_text()).get(
+        "containerimage.digest"
+    )
+    if not isinstance(build_digest, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", build_digest
+    ):
+        raise RoleControlError("invalid_build_digest")
     digest, roles = read_manifest(args.repo_root)
     account = aws.call("sts", "get-caller-identity")["Account"]
     if not re.fullmatch(r"\d{12}", account):
@@ -105,16 +114,18 @@ def evidence(args, aws: Aws) -> dict:
         "--repository-name",
         f"{args.prefix}/backend",
         "--image-ids",
-        f"imageTag=db-roles-{args.release_sha}",
+        f"imageTag=db-roles-{args.release_sha}-{args.run_id}-{args.run_attempt}",
     )
     images = response["images"]
-    if len(images) != 1 or not re.fullmatch(
-        r"sha256:[0-9a-f]{64}", images[0]["imageId"]["imageDigest"]
+    if (
+        response.get("failures")
+        or len(images) != 1
+        or images[0]["imageId"]["imageDigest"] != build_digest
     ):
-        raise RoleControlError("invalid_digest")
+        raise RoleControlError("build_registry_digest_mismatch")
     image = (
         f"{account}.dkr.ecr.{args.region}.amazonaws.com/{args.prefix}/backend"
-        f"@{images[0]['imageId']['imageDigest']}"
+        f"@{build_digest}"
     )
     command("docker", "pull", image)
     verify_image(args.repo_root, image)
@@ -384,6 +395,7 @@ def main(argv=None) -> int:
     parser.add_argument("--prefix", required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--summary-file", type=Path)
+    parser.add_argument("--build-metadata", type=Path)
     args = parser.parse_args(argv)
     try:
         if (

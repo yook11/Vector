@@ -16,7 +16,7 @@
 
 ## 実行境界
 
-GitHub Actionsから最新mainの固定SHAを使用し、CI・Security成功を確認する。専用imageを作成し、digestとmanifestのハッシュを記録する。production-db-rolesの承認後、同じSHAが最新mainであることを再確認し、専用Fargate taskを起動する。全本番変更と同じconcurrency groupに参加する。
+GitHub Actionsから最新mainの固定SHAを使用し、CI・Security成功を確認する。専用imageは毎回そのソースからbuildし、SHA・run ID・run attemptを含む一意のタグでpushする。既存タグは再利用せず停止し、ECRのIMMUTABLE設定で確認後の競合による上書きも拒否する。Buildxのmetadataにあるmanifest digestをECRの登録結果と照合し、一致したbuild由来digestとmanifestのハッシュを記録する。production-db-rolesの承認後、同じSHAが最新mainであることを再確認し、記録されたdigestで専用Fargate taskを起動する。タグから実行imageを再選択しない。全本番変更と同じconcurrency groupに参加する。
 
 専用execution roleだけが対象RDSのmaster secretを取得し、ECSがpasswordをコンテナへ注入する。GitHubのcontrollerはsecretを読めない。task roleはAWS API権限を持たない。DB接続はverify-fullを使用し、接続情報と例外の詳細をログへ出さない。
 
