@@ -146,6 +146,8 @@ preflightはアカウントとロールを検査するが、同じPermission Set
 
 ## 既存bootstrapの更新
 
+DBロール管理用のcontroller・exec・taskは既存bootstrapと同じstateにあるため、bootstrap担当にはこの3ロールのGetRole・GetRolePolicy・ListRolePolicies・ListAttachedRolePoliciesだけを許可する。管理者専用ロールの変更・利用権限は委譲しない。この読取権限の初回追加は、管理者がbootstrap-accessをplan・applyしてから専用ロールでbootstrapを更新する。
+
 委譲導入後は、新しいConsumer用boundaryや`vector-ci-apply-*` policyを追加するときも、
 管理者によるbootstrap-accessの更新は不要。専用ロールでbootstrapを更新し、
 最後に本体のTerraformを既存の承認付きCIで適用する。

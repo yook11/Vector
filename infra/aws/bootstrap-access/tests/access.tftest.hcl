@@ -215,3 +215,39 @@ run "wildcard_hosted_zone_is_rejected" {
   variables { hosted_zone_id = "*" }
   expect_failures = [var.hosted_zone_id]
 }
+
+run "database_admin_roles_can_be_refreshed" {
+  command = plan
+  assert {
+    condition = [for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement : s
+      if s.Sid == "ReadDatabaseAdminRolesForRefresh"
+      ] == [jsondecode(jsonencode({
+        Sid    = "ReadDatabaseAdminRolesForRefresh"
+        Effect = "Allow"
+        Resource = [
+          "arn:aws:iam::123456789012:role/vector-db-admin/vector-db-roles-controller",
+          "arn:aws:iam::123456789012:role/vector-db-admin/vector-db-roles-exec",
+          "arn:aws:iam::123456789012:role/vector-db-admin/vector-db-roles-task",
+        ]
+        Action = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"]
+    }))]
+    error_message = "同じstateのDB管理3ロールへrefreshに必要な4つの読取操作だけを追加する。"
+  }
+}
+
+run "database_admin_role_writes_and_other_roles_stay_excluded" {
+  command = plan
+  assert {
+    condition = alltrue([for role in ["controller", "exec", "task", "other"] :
+      alltrue([for s in jsondecode(aws_iam_role_policy.bootstrap_apply.policy).Statement :
+        s.Effect != "Allow" ? true :
+        !anytrue([for pattern in flatten([s.Resource]) : can(regex("^${replace(pattern, "*", ".*")}$", "arn:aws:iam::123456789012:role/vector-db-admin/vector-db-roles-${role}"))]) || (
+          role != "other" && length(setsubtract(toset(flatten([s.Action])), toset([
+            "iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+          ]))) == 0
+        )
+      ])
+    ])
+    error_message = "DB管理ロールへの書込・利用権限と対象外ロールの参照を、他のAllow経由でも増やさない。"
+  }
+}
