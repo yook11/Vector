@@ -227,6 +227,17 @@ run "relay_sends_only_to_curation_queue" {
   }
   assert {
     condition = (
+      startswith(aws_lambda_function.curation_outbox_relay[0].environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
+      aws_lambda_function.curation_outbox_relay[0].environment[0].variables.DB_IAM_AUTH == "true" &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.curation_outbox_relay.policy).Statement : s.Resource if s.Action == "rds-db:connect" && s.Effect == "Allow"])) == toset([
+        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_app",
+        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
+      ])
+    )
+    error_message = "Curation Relayは専用ユーザーへ切り替え、移行中の接続許可を新旧2ロールに限定する。"
+  }
+  assert {
+    condition = (
       aws_lambda_function.curation_outbox_relay[0].image_config[0].command == tolist(["app.lambda_handlers.outbox_relay.curation_handler"]) &&
       aws_lambda_function.curation_outbox_relay[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.curation_outbox_relay_image_digest}" &&
       aws_lambda_function.curation_outbox_relay[0].vpc_config[0].subnet_ids == toset([aws_subnet.app["api"].id]) &&
@@ -237,7 +248,7 @@ run "relay_sends_only_to_curation_queue" {
       aws_lambda_function.curation_outbox_relay[0].reserved_concurrent_executions == 1 &&
       aws_lambda_function.curation_outbox_relay[0].environment[0].variables == tomap({
         ENV                            = "production"
-        DATABASE_URL                   = local.backend_db_url["vector_app"]
+        DATABASE_URL                   = local.backend_db_url["vector_outbox_relay"]
         DB_IAM_AUTH                    = "true"
         SQS_ARTICLE_CURATION_QUEUE_URL = aws_sqs_queue.outbox["curation"].url
       }) &&

@@ -319,6 +319,17 @@ run "consumer_image_and_enabled_mapping" {
   }
   assert {
     condition = (
+      startswith(aws_lambda_function.outbox_relay[0].environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
+      aws_lambda_function.outbox_relay[0].environment[0].variables.DB_IAM_AUTH == "true" &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.outbox_relay.policy).Statement : s.Resource if s.Action == "rds-db:connect" && s.Effect == "Allow"])) == toset([
+        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_app",
+        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
+      ])
+    )
+    error_message = "Embedding Relayは専用ユーザーへ切り替え、移行中の接続許可を新旧2ロールに限定する。"
+  }
+  assert {
+    condition = (
       aws_lambda_function.embedding_consumer[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.embedding_consumer_image_digest}" &&
       aws_lambda_function.outbox_relay[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.outbox_relay_image_digest}" &&
       aws_lambda_function.embedding_consumer[0].function_name == "slice-test-embedding-consumer" &&

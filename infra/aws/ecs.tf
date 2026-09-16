@@ -21,7 +21,7 @@ locals {
   #
   # `sslmode=require` は db_ssl.py が verify-full に格上げする。
   backend_db_url = {
-    for user in toset(["vector_app", "vector_collect", "vector_auth"]) :
+    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay"]) :
     user => "postgresql+asyncpg://${user}@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
   }
   migration_db_url = "postgresql+asyncpg://vector@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"

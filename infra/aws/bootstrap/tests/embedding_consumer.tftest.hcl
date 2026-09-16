@@ -387,3 +387,17 @@ run "consumer_management_stays_within_its_boundary" {
     error_message = "他マッピングへの固定タグ後付け・所属変更・所属タグ削除を許可しない。"
   }
 }
+
+run "relay_boundary_preserves_connections_during_cutover" {
+  command = plan
+  assert {
+    condition = toset(flatten([
+      for s in jsondecode(aws_iam_policy.outbox_relay_lambda_boundary.policy).Statement : s.Resource
+      if s.Action == "rds-db:connect" && s.Effect == "Allow"
+      ])) == toset([
+      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app",
+      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_outbox_relay",
+    ])
+    error_message = "Embedding Relayの境界は切替中の新旧DBユーザーだけに接続を許可する。"
+  }
+}

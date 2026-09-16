@@ -103,3 +103,17 @@ run "pass_role_guards_survive_policy_relocation" {
     error_message = "ポリシー移設後もサービスとロールのPassRole拒否を維持し、容量上限を守る。"
   }
 }
+
+run "relay_boundary_preserves_connections_during_cutover" {
+  command = plan
+  assert {
+    condition = toset(flatten([
+      for s in jsondecode(aws_iam_policy.completion_outbox_relay_lambda_boundary.policy).Statement : s.Resource
+      if s.Action == "rds-db:connect" && s.Effect == "Allow"
+      ])) == toset([
+      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app",
+      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_outbox_relay",
+    ])
+    error_message = "Completion Relayの境界は切替中の新旧DBユーザーだけに接続を許可する。"
+  }
+}
