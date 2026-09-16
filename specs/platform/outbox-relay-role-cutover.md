@@ -2,30 +2,27 @@
 
 ## 作業定義
 
-- Problem: DBに作成・権限付与済みのvector_outbox_relayを、4つのRelayの実際の接続に使用する。
-- Evidence: z23、各RelayのDATABASE_URL・実行ポリシー・権限境界、Terraform mock test、既存image digest保持処理を照合する。
-- Invariants: Relayの接続先ユーザーだけを切り替える。更新途中の旧設定でも接続を維持する。Consumer・Scheduler・キュー・ネットワーク・image digest・起動状態は維持する。
-- Non-goals: DB migration、アプリコード変更、ログ改善、DBのvector_app自体の権限削除。
-- Done: 新旧接続許可を保持した切替設定とテスト、適用順序、旧許可を削除する条件を揃える。
+- Problem: 専用ユーザーへの切替後もRelayに残るvector_appへの接続許可を削除する。
+- Evidence: z23の適用成功、4つのRelayの設定更新成功・専用ユーザー接続・切替後の定期実行で認証や権限エラーがないこと、既存IAM設定とTerraformテストを照合する。
+- Invariants: Relayの実行ポリシーと権限境界のDB接続許可をvector_outbox_relayだけに限定する。接続URL・Consumer・Scheduler・キュー・ネットワーク・image digest・起動状態は維持する。
+- Non-goals: DB migration、アプリコード変更、ログ改善、DBのvector_app自体の削除や権限変更。
+- Done: 4つのRelayの実行ポリシー・権限境界から旧許可を削除し、専用ユーザーだけを許すテストと適用手順を揃える。
 
-## 変更内容
+## 最終状態
 
-Embedding・Assessment・Curation・CompletionのRelayはDATABASE_URLをvector_outbox_relayへ変更する。共通URL生成に同ユーザーを追加し、DB IAM認証とTLSは維持する。
+Embedding・Assessment・Curation・Completion Relayはvector_outbox_relayで接続し、実行ポリシーと権限境界も同ユーザーへのrds-db:connectだけを許可する。DB IAM認証とTLSを維持する。vector_appはConsumerなど他のアプリが継続して使用する。
 
-移行中は4つのRelayの実行ポリシーと権限境界でvector_app・vector_outbox_relayの両方への接続を許可する。Lambda設定の更新前や実行中の旧設定からの接続を維持するためであり、恒久的な許可仕様ではない。新規設定は専用ロールだけを使用する。
+切替時はLambda更新前や実行中の旧設定からの接続を維持するため、新旧両方のIAM接続許可を一時的に保持した。旧許可の削除は、全Relayの設定更新と旧実行の終了を確認した後に行う。
 
-## 適用順序
+## 旧接続許可の削除手順
 
-1. vector_outbox_relayの作成とz23適用成功を確認する。
-2. 最新コードと既存state・tfvarsを使用し、管理者のbootstrap planで4つのRelay権限境界への接続許可追加だけであることを確認して適用する。db_role_master_secret_arnなどの既存入力は維持する。
-3. bootstrapの反映を確認してから、本体のAWS terraform applyを承認する。既存image digestを保持し、4つのRelayの実行ポリシーと接続URL以外に想定外の差分がないことを確認する。未配備のRelayを新規起動しない。
-4. 配備済みRelayのLastUpdateStatusがSuccessfulとなり、新ユーザーの設定、既存の配送処理、認証・権限エラーがないことを確認する。更新前の実行が終了するまで旧許可を保持する。停止中のRelayは起動状態を維持する。
-5. 確認完了後の別PRで、実行ポリシーと権限境界からvector_appへの接続許可を削除する。全Relayが専用ユーザーで動く状態を確認するまで削除を適用しない。
+1. 配備済みRelayのLastUpdateStatusがSuccessfulで、DATABASE_URLがvector_outbox_relayであること、更新前の実行が終了し、切替後の定期実行で認証・権限エラーがないことを確認する。
+2. bootstrap専用ユーザーで既存state・tfvarsを使用してplanし、4つのRelay権限境界から旧ユーザーの接続許可を削除する差分だけであることを確認して適用する。db_role_master_secret_arnなどの既存入力を維持する。
+3. 本体のAWS terraform applyを承認し、4つのRelay実行ポリシーから旧許可を削除する。既存image digest・Lambda接続URL・起動状態を維持し、想定外の差分がないことを確認する。
+4. 新ユーザーによる定期実行と、実行ポリシー・権限境界の両方で旧接続許可がなくなったことを確認する。
 
-切替に失敗した場合は旧許可を残したまま、接続URLをvector_appへ戻す変更を通常の承認付きTerraform経路で適用する。DBのGRANTや既存ロールは削除しない。
-
-Lambda更新中の呼び出しは旧設定を使うため、depends_onだけでは移行中の認証を保証できない。[AWSの更新時の状態](https://docs.aws.amazon.com/lambda/latest/dg/functions-states.html)を参照する。
+旧許可削除後は、接続URLだけをvector_appへ戻しても認証できない。切戻しが必要なら、レビュー済み変更でbootstrapの権限境界と本体の実行ポリシーに旧接続許可を戻してからURLを変更する。DBのGRANTや既存ロールは削除しない。
 
 ## 検証
 
-各RelayのTerraformテストで新ユーザーのURLと新旧2ロールに限定した実行ポリシーを確認し、bootstrap側では各境界が同じ2ロールに限定されることを確認する。既存Consumerの接続先、image、配送先、起動設定は既存テストで確認する。両stackのfmt・validate・mock testと既存image保持スクリプトのテストを実行する。
+各RelayのTerraformテストで専用ユーザーのURLと単一ユーザーに限定した実行ポリシーを確認し、bootstrap側でも各境界が同じユーザーだけを許可することを確認する。既存Consumerの接続先、image、配送先、起動設定は既存テストで確認する。両stackのfmt・validate・mock testを実行する。

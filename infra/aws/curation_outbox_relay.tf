@@ -29,13 +29,9 @@ resource "aws_iam_role_policy" "curation_outbox_relay" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = "rds-db:connect"
-        # 設定更新前の実行が終わるまで旧ユーザーの接続許可を保持する。
-        Resource = [
-          "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_app",
-          "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
-        ]
+        Effect   = "Allow"
+        Action   = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay"
       },
       {
         Effect   = "Allow"

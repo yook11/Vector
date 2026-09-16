@@ -90,16 +90,15 @@ run "ci_limits_curation_management_to_its_function_and_tag" {
   }
 }
 
-run "relay_boundary_preserves_connections_during_cutover" {
+run "relay_boundary_allows_only_dedicated_db_user" {
   command = plan
   assert {
     condition = toset(flatten([
       for s in jsondecode(aws_iam_policy.curation_outbox_relay_lambda_boundary.policy).Statement : s.Resource
       if s.Action == "rds-db:connect" && s.Effect == "Allow"
       ])) == toset([
-      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app",
       "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_outbox_relay",
     ])
-    error_message = "Curation Relayの境界は切替中の新旧DBユーザーだけに接続を許可する。"
+    error_message = "Curation Relayの境界は専用DBユーザーだけに接続を許可し、旧Appユーザーへの接続を許可しない。"
   }
 }
