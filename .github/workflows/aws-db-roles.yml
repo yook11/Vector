@@ -1,0 +1,166 @@
+name: AWS DB roles
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  RELEASE_SHA: ${{ github.sha }}
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      artifact-id: ${{ steps.evidence.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
+      - run: uv sync --frozen --no-dev --python 3.13 --project backend
+      - name: Require current main and successful checks before credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          backend/.venv/bin/python .github/scripts/check_app_release.py source \
+            --repo-root "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" \
+            --release-sha "$RELEASE_SHA"
+      - id: tf
+        name: Read Terraform defaults
+        run: |
+          set -euo pipefail
+          for name in region name_prefix; do
+            value=$(awk "/variable \"$name\"/,/^}/" infra/aws/variables.tf | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1)
+            [[ "$value" =~ ^[a-z][a-z0-9-]+$ ]] || exit 2
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_PUSH_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+      - name: Build immutable dedicated image
+        env:
+          PREFIX: ${{ steps.tf.outputs.name_prefix }}
+          REGION: ${{ steps.tf.outputs.region }}
+        run: |
+          set -euo pipefail
+          account=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$account"
+          registry="$account.dkr.ecr.$REGION.amazonaws.com"
+          echo "::add-mask::$registry"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+          tag="db-roles-$RELEASE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          count=$(aws ecr batch-get-image --repository-name "$PREFIX/backend" \
+            --image-ids "imageTag=$tag" --query 'length(images)' --output text)
+          if [[ "$count" != "0" ]]; then
+            echo "DB role image tag already exists or cannot be verified" >&2
+            exit 2
+          fi
+          docker buildx build --platform linux/arm64 --provenance=false --push \
+            --metadata-file "$RUNNER_TEMP/db-roles-build.json" \
+            -f backend/Dockerfile.db-roles -t "$registry/$PREFIX/backend:$tag" backend
+      - name: Verify image and publish approval summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIX: ${{ steps.tf.outputs.name_prefix }}
+          REGION: ${{ steps.tf.outputs.region }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/backend" backend/.venv/bin/python .github/scripts/db_roles.py image \
+            --repo-root "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" --release-sha "$RELEASE_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --region "$REGION" --prefix "$PREFIX" \
+            --build-metadata "$RUNNER_TEMP/db-roles-build.json" \
+            --evidence "$RUNNER_TEMP/db-roles-image.json" --summary-file "$GITHUB_STEP_SUMMARY"
+      - id: evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: db-roles-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/db-roles-image.json
+          if-no-files-found: error
+          retention-days: 30
+
+  apply:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: production-db-roles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: vector-production-change
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/db-roles
+          digest-mismatch: error
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
+      - run: uv sync --frozen --no-dev --python 3.13 --project backend
+      - name: Recheck release after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          backend/.venv/bin/python .github/scripts/check_app_release.py source \
+            --repo-root "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" --release-sha "$RELEASE_SHA"
+      - id: tf
+        name: Read Terraform defaults
+        run: |
+          set -euo pipefail
+          for name in region name_prefix; do
+            value=$(awk "/variable \"$name\"/,/^}/" infra/aws/variables.tf | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1)
+            [[ "$value" =~ ^[a-z][a-z0-9-]+$ ]] || exit 2
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_DB_ROLES_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
+          unset-current-credentials: true
+      - id: roles
+        name: Run approved role creation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIX: ${{ steps.tf.outputs.name_prefix }}
+          REGION: ${{ steps.tf.outputs.region }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/backend" backend/.venv/bin/python .github/scripts/db_roles.py run \
+            --repo-root "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" --release-sha "$RELEASE_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --region "$REGION" --prefix "$PREFIX" --evidence "$RUNNER_TEMP/db-roles/db-roles-image.json"
+      - name: Stop only this attempt's task
+        if: ${{ always() && (steps.roles.outcome == 'failure' || steps.roles.outcome == 'cancelled') }}
+        timeout-minutes: 5
+        env:
+          PREFIX: ${{ steps.tf.outputs.name_prefix }}
+          REGION: ${{ steps.tf.outputs.region }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/backend" backend/.venv/bin/python .github/scripts/db_roles.py cleanup \
+            --repo-root "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" --release-sha "$RELEASE_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --region "$REGION" --prefix "$PREFIX" --evidence "$RUNNER_TEMP/db-roles/db-roles-image.json"

@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1.7
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca AS builder
+ENV UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+FROM python:3.13-slim-bookworm@sha256:c45a22ea000adfd9cda29364bbe7edd23001ce5cc2ad15857cfbf7766943b9ca AS runtime
+ENV PATH="/app/.venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+RUN groupadd --system --gid 1001 backend \
+ && useradd --system --uid 1001 --gid backend backend
+COPY --from=builder --chown=backend:backend /app/.venv /app/.venv
+COPY --chown=backend:backend scripts/db_role_runner.py /app/scripts/db_role_runner.py
+COPY --chown=backend:backend db_roles.json /app/db_roles.json
+COPY --chown=backend:backend app/db/rds-ca-ap-northeast-1.pem /app/app/db/rds-ca-ap-northeast-1.pem
+USER backend
+ENTRYPOINT ["python", "-m", "scripts.db_role_runner"]

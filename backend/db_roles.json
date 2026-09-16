@@ -1,0 +1,4 @@
+{
+  "protocol_version": 1,
+  "roles": ["vector_outbox_relay"]
+}
