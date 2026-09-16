@@ -1,6 +1,6 @@
 """AI adapter wiring (Pure DI composition root)。
 
-Stage 3 (curation) / Stage 4 (assessment) / Stage 5 (embedding) と週次 briefing で
+Stage 3 (curation) / Stage 4 (assessment) と週次 briefing で
 利用する AI provider 選択を本 module で hardcode する設計 (Pure DI)。切替は env 変更
 ではなくコード変更 + worker restart。Stage ごとに別の抽象を別の具象クラスに紐付ける
 ため、共有 env による誤切替の余地が構造的に生じない。
@@ -14,7 +14,7 @@ Stage 3 (curation) / Stage 4 (assessment) / Stage 5 (embedding) と週次 briefi
 すると AI を実行しない process (scheduler / collect / maintenance / trend_discovery)
 まで重い SDK (openai + google.genai、実測 ~133MB) を起動時に常駐させてしまう。関数
 本体内 import なら、SDK は当該 compose が実際に走る worker (broker_analysis /
-broker_embedding / broker_briefing / broker_agent) でのみロードされる。本契約は
+broker_briefing / broker_agent) でのみロードされる。本契約は
 ``tests/test_lazy_ai_sdk_import.py`` の import 隔離 oracle で構造的に pin する。
 """
 
@@ -64,19 +64,6 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
             assessor_model=state.assessor.model_name,
         )
         state.analysis_client_resources = resources.pop_all()
-
-
-async def _wire_embedding_adapters(state: TaskiqState) -> None:
-    """Stage 5 の embedder アダプターを worker 起動時に構築する。"""
-    # 具象 SDK の import を関数本体に遅延 (module docstring 参照)。
-    from app.analysis.embedding.ai.gemini import GeminiEmbedder
-
-    state.embedder = GeminiEmbedder()
-    logger.info(
-        "embedding_adapters_wired",
-        embedder=type(state.embedder).__name__,
-        embedder_model=state.embedder.model_name,
-    )
 
 
 async def _wire_briefing_adapter(state: TaskiqState) -> None:

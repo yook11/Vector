@@ -1,30 +1,4 @@
-"""AI 分析パイプラインの記事ステージ span helper。
-
-curation → assessment → embedding の各 taskiq task は、taskiq の
-``OpenTelemetryMiddleware`` が張る ``execute/<task_name>`` span の **子**として
-``article_stage`` span を 1 つ開く。span には stage / result / article_id /
-next_task_enqueued をドメイン語彙で載せ、「どの記事がどの工程をどう抜けたか」を
-Logfire 上で直接クエリできるようにする。
-
-span attribute には本文・prompt・AI response・URL query・認証情報は載せない。
-低 cardinality の語彙 (stage / result / task_name) と内部 DB ID
-(article_id / curation_id / analyzed_article_id)、失敗時は failure projection 由来の
-分類属性 (failure_kind / code / retryability / error_class /
-failure_action) のみを載せる。
-
-設計方針: ステージは 3 つ (増えても 5 程度) で、特性 (result 語彙・次工程の有無・
-article_id がいつ判明するか) がそれぞれ違う。共通基底に押し込めると各ステージの記録
-方法がクラス間にバラけて読みにくいため、ステージごとに独立した記録口クラスと
-context manager を素直に並べる。継承で共有しない。終端 embedding は
-``mark_next_task_enqueued`` を持たないことで「次工程が無い」を構造で示す。
-
-ステージ間で唯一共有するのは ``_current_stage_span`` ContextVar 1 個だけ。await 先の
-deep-stack service が signature を変えずに result を書くための土管で、ステージの特性は
-表さない。taskiq の async path
-は ``copy_context()`` を通らず同一 await チェーンを共有するため task が積んだ handle を
-service が見られる。task 間は ``asyncio.create_task`` が context をコピーするので漏れ
-ない。``finally`` での ``reset(token)`` は必須。
-"""
+"""CurationとAssessmentのTaskiq実行に記事単位のspanを付与する。"""
 
 from __future__ import annotations
 
@@ -42,7 +16,6 @@ from app.logfire.failure_attrs import annotate_span_failure
 # stage 別の result 語彙。値だけで「記事がどう抜けたか」が読めるよう自己記述的にする。
 CurationStageResult = Literal["signal", "noise", "skipped", "failed"]
 AssessmentResult = Literal["in_scope", "out_of_scope", "skipped", "failed"]
-EmbeddingResult = Literal["succeeded", "skipped", "failed"]
 
 _SPAN_NAME = "article_stage"
 
@@ -101,41 +74,9 @@ class AssessmentStageSpan:
         """trigger に無く ready で判明する article_id を後付けする。"""
         self._span.set_attribute("article_id", article_id)
 
-    def mark_next_task_enqueued(self) -> None:
-        """generate_embedding の kiq 成功直後に呼ぶ。次 task 名を同時に焼く。"""
-        self._span.set_attribute("next_task_enqueued", True)
-        self._span.set_attribute("next_task_name", "generate_embedding")
-
-
-class EmbeddingStageSpan:
-    """embedding task の記録口。終端ステージなので次工程の記録手段を持たない。"""
-
-    def __init__(self, span: LogfireSpan) -> None:
-        self._span = span
-        self._result_set = False
-        self._failure_set = False
-
-    def set_result(self, result: EmbeddingResult) -> None:
-        """result を一度だけ焼く (no-override)。"""
-        if self._result_set:
-            return
-        self._span.set_attribute("result", result)
-        self._result_set = True
-
-    def record_failure(self, exc: Exception) -> None:
-        """失敗分類属性を一度だけ焼く (no-override)。元の業務例外を最優先で残す。"""
-        if self._failure_set:
-            return
-        annotate_span_failure(self._span, exc)
-        self._failure_set = True
-
-    def set_article_id(self, article_id: int) -> None:
-        """trigger に無く ready で判明する article_id を後付けする。"""
-        self._span.set_attribute("article_id", article_id)
-
 
 _current_stage_span: contextvars.ContextVar[
-    CurationStageSpan | AssessmentStageSpan | EmbeddingStageSpan | None
+    CurationStageSpan | AssessmentStageSpan | None
 ] = contextvars.ContextVar("article_stage_span", default=None)
 
 
@@ -194,32 +135,6 @@ def assessment_stage_span(*, curation_id: int) -> Iterator[AssessmentStageSpan]:
             _current_stage_span.reset(token)
 
 
-@contextmanager
-def embedding_stage_span(*, analyzed_article_id: int) -> Iterator[EmbeddingStageSpan]:
-    """embedding task の ``article_stage`` span を開く context manager。
-
-    終端ステージなので next_task 系 attribute は一切載せない。article_id は ready
-    構築後に ``set_article_id`` で後付けする。backstop / contextvar は他ステージと同じ。
-    """
-    with logfire.span(
-        _SPAN_NAME,
-        stage=Stage.EMBEDDING.value,
-        task_name="generate_embedding",
-        analyzed_article_id=analyzed_article_id,
-    ) as span:
-        recorder = EmbeddingStageSpan(span)
-        token = _current_stage_span.set(recorder)
-        try:
-            yield recorder
-        except BaseException as exc:
-            recorder.set_result("failed")
-            if isinstance(exc, Exception):
-                recorder.record_failure(exc)
-            raise
-        finally:
-            _current_stage_span.reset(token)
-
-
 def set_curation_stage_result(result: CurationStageResult) -> None:
     """現在の span が curation の時だけ result を焼く。それ以外は no-op。
 
@@ -237,13 +152,5 @@ def set_assessment_stage_result(result: AssessmentResult) -> None:
     """現在の span が assessment の時だけ result を焼く。それ以外は no-op。"""
     recorder = _current_stage_span.get()
     if not isinstance(recorder, AssessmentStageSpan):
-        return
-    recorder.set_result(result)
-
-
-def set_embedding_stage_result(result: EmbeddingResult) -> None:
-    """現在の span が embedding の時だけ result を焼く。それ以外は no-op。"""
-    recorder = _current_stage_span.get()
-    if not isinstance(recorder, EmbeddingStageSpan):
         return
     recorder.set_result(result)

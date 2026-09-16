@@ -40,7 +40,7 @@ class _TaskCase:
     empty_log: str
 
 
-# hold gate は 3 stage 共通の is_stage_held 1 本なので case ごとに持たせない。
+# hold gate は 2 stage 共通の is_stage_held 1 本なので case ごとに持たせない。
 _HOLD_PATCH = "app.queue.tasks.backfill.is_stage_held"
 
 CASES = [
@@ -77,23 +77,6 @@ CASES = [
         disabled_log="backfill_assessments_disabled",
         held_log="backfill_assessments_held",
         empty_log="backfill_assessments_empty",
-    ),
-    _TaskCase(
-        name="embed",
-        task=tasks.backfill_embeddings,
-        enabled_attr="backfill_embeddings_enabled",
-        ageout_patch="app.queue.tasks.backfill._exclude_aged_out_embeddings",
-        queue_task_patch="app.queue.tasks.backfill.generate_embedding",
-        count_method="count_analyzed_articles_pending_embedding",
-        target_method="embedding_targets_pending",
-        budget_role="embed",
-        backfill_stage="embed",
-        target_kind="analyzed_article",
-        limit=tasks.EMBEDDINGS_LIMIT,
-        daily_max=tasks.EMBEDDINGS_DAILY_MAX,
-        disabled_log="backfill_embeddings_disabled",
-        held_log="backfill_embeddings_held",
-        empty_log="backfill_embeddings_empty",
     ),
 ]
 
@@ -451,30 +434,3 @@ class TestBackfillStageSpan:
         attrs = pipeline_stage_attrs(capfire)
         assert attrs["stage"] == Stage.BACKFILL_ASSESS.value  # == "backfill_assess"
         assert attrs["op"] == "backfill_assessments"
-
-    @pytest.mark.asyncio
-    async def test_backfill_embeddings_span_stage_and_op(
-        self, capfire: CaptureLogfire
-    ) -> None:
-        """stage=backfill_embed / op=backfill_embeddings が span に開く。"""
-        case = next(c for c in CASES if c.name == "embed")
-        ctx, backlog, queue_task = _backfill_ctx_with_targets(case, [_target(1)])
-
-        with (
-            patch.object(tasks.settings, case.enabled_attr, True),
-            patch(_HOLD_PATCH, AsyncMock(return_value=False)),
-            patch(case.ageout_patch, AsyncMock(return_value=0)),
-            patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
-            patch(
-                "app.queue.tasks.backfill.consume_daily_budget",
-                AsyncMock(return_value=1),
-            ),
-            patch(case.queue_task_patch, queue_task),
-            patch("app.queue.tasks.backfill._append_backfill_item_event", AsyncMock()),
-            patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
-        ):
-            await tasks.backfill_embeddings(ctx=ctx)
-
-        attrs = pipeline_stage_attrs(capfire)
-        assert attrs["stage"] == Stage.BACKFILL_EMBED.value  # == "backfill_embed"
-        assert attrs["op"] == "backfill_embeddings"

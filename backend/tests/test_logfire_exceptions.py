@@ -51,10 +51,6 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingResponseInvalidError,
 )
-from app.analysis.embedding.task_errors import (
-    EmbeddingRecoverableError,
-    EmbeddingTerminalError,
-)
 from app.logfire.exceptions import VectorDomainError
 
 
@@ -251,16 +247,16 @@ _OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
 
 
 @pytest.mark.parametrize("cls", _OTHER_LAYER1_MARKERS)
-def test_assessment_embedding_layer1_str_format(
+def test_assessment_layer1_str_format(
     cls: type[VectorDomainError],
 ) -> None:
-    """Assessment / Embedding Layer 1 marker の ``__str__`` も code のみ。"""
+    """Assessment Layer 1 marker の ``__str__`` も code のみ。"""
     exc = cls(code="ai_error_network", failure_kind="attempt_scoped")  # type: ignore[call-arg]
     assert str(exc) == f"{cls.__name__}(code='ai_error_network')"
 
 
 @pytest.mark.parametrize("cls", _OTHER_LAYER1_MARKERS)
-def test_assessment_embedding_layer1_rejects_positional_message(
+def test_assessment_layer1_rejects_positional_message(
     cls: type[VectorDomainError],
 ) -> None:
     with pytest.raises(TypeError):
@@ -334,17 +330,6 @@ def _build_all_marker_instances() -> list[VectorDomainError]:
             provider_error=provider,
         ),
         AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
-        EmbeddingRecoverableError(
-            code="ai_error_network",
-            failure_kind="attempt_scoped",
-            provider_error=provider,
-        ),
-        EmbeddingTerminalError(
-            code="ai_error_input_rejected",
-            failure_kind="target_rejected",
-            failure_reason="safety",
-            provider_error=provider,
-        ),
         EmbeddingResponseInvalidError(),
     ]
 

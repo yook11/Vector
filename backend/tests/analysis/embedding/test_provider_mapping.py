@@ -1,4 +1,4 @@
-"""Serviceで元のプロバイダー例外を保持し、Taskiq境界で従来の分類に変換する。"""
+"""Serviceのプロバイダー例外変換を検証する。"""
 
 from __future__ import annotations
 
@@ -26,37 +26,21 @@ from app.analysis.embedding.errors import (
     EmbeddingFailureReason,
     to_embedding_error,
 )
-from app.analysis.embedding.task_errors import (
-    EmbeddingRecoverableError,
-    EmbeddingTaskError,
-    EmbeddingTerminalError,
-    to_embedding_task_error,
-)
 
 _CONTENT_REASON = GeminiContentRejectionReason.SAFETY
 _STATE_REASON = GeminiStateReason.TIMEOUT
 
-# leaf → (期待 marker, 期待 failure_kind)。plan の disposition 表 (spec) が出所。
-_LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[EmbeddingTaskError], str]] = {
-    AIProviderNetworkError: (EmbeddingRecoverableError, "attempt_scoped"),
-    AIProviderServiceUnavailableError: (
-        EmbeddingRecoverableError,
-        "time_based_recovery",
-    ),
-    AIProviderRateLimitedError: (EmbeddingRecoverableError, "time_based_recovery"),
-    AIProviderUsageLimitExhaustedError: (
-        EmbeddingRecoverableError,
-        "condition_based_recovery",
-    ),
-    AIProviderConfigurationError: (EmbeddingTerminalError, "operator_action_required"),
-    AIProviderRequestInvalidError: (EmbeddingTerminalError, "operator_action_required"),
-    AIProviderInsufficientBalanceError: (
-        EmbeddingTerminalError,
-        "operator_action_required",
-    ),
-    AIProviderInputRejectedError: (EmbeddingTerminalError, "target_rejected"),
-    AIProviderOutputBlockedError: (EmbeddingTerminalError, "target_rejected"),
-}
+_PROVIDER_LEAVES = (
+    AIProviderNetworkError,
+    AIProviderServiceUnavailableError,
+    AIProviderRateLimitedError,
+    AIProviderUsageLimitExhaustedError,
+    AIProviderConfigurationError,
+    AIProviderRequestInvalidError,
+    AIProviderInsufficientBalanceError,
+    AIProviderInputRejectedError,
+    AIProviderOutputBlockedError,
+)
 
 
 def _instantiate(
@@ -70,71 +54,26 @@ def _instantiate(
     return exc_type()
 
 
-def _task_error(provider: AIProviderError) -> EmbeddingTaskError:
-    service_error = to_embedding_error(provider)
-    assert type(service_error) is EmbeddingError
-    assert not hasattr(service_error, "RETRYABILITY")
-    assert service_error.reason is EmbeddingFailureReason.PROVIDER_ERROR
-    assert service_error.provider_error is provider
-    result = to_embedding_task_error(service_error)
-    assert isinstance(result, EmbeddingTaskError)
-    assert result.__cause__ is service_error
-    return result
-
-
 class TestToEmbeddingError:
     """全 provider leaf の翻訳契約 (golden 写像)。"""
 
-    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
-    def test_maps_to_expected_marker_and_failure_kind(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        expected_marker, expected_kind = _LEAF_EXPECTATION[exc_type]
-
-        result = _task_error(_instantiate(exc_type))
-
-        assert isinstance(result, expected_marker)
-        assert result.failure_kind == expected_kind
-
-    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    @pytest.mark.parametrize("exc_type", list(_PROVIDER_LEAVES))
     def test_preserves_provider_error_identity(
         self, exc_type: type[AIProviderError]
     ) -> None:
         original = _instantiate(exc_type)
 
-        result = _task_error(original)
+        result = to_embedding_error(original)
 
         assert result.provider_error is original  # type: ignore[union-attr]
 
-    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    @pytest.mark.parametrize("exc_type", list(_PROVIDER_LEAVES))
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        result = _task_error(_instantiate(exc_type))
+        result = to_embedding_error(_instantiate(exc_type))
 
         assert result.code == exc_type.CODE  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
-    def test_carries_reason_value_as_failure_reason(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-        expected = original.reason.value  # type: ignore[attr-defined]
-
-        result = _task_error(original)
-
-        assert result.failure_reason == expected  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [t for t in _LEAF_EXPECTATION if not issubclass(t, AIProviderContentError)],
-    )
-    def test_state_without_reason_has_none_failure_reason(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        result = _task_error(_instantiate(exc_type, with_state_reason=False))
-
-        assert result.failure_reason is None  # type: ignore[union-attr]
 
     def test_golden_covers_all_provider_leaves(self) -> None:
         expected = frozenset(
@@ -150,7 +89,7 @@ class TestToEmbeddingError:
                 AIProviderOutputBlockedError,
             }
         )
-        assert frozenset(_LEAF_EXPECTATION) == expected
+        assert frozenset(_PROVIDER_LEAVES) == expected
 
 
 class TestToEmbeddingErrorUnregistered:
@@ -168,3 +107,11 @@ class TestToEmbeddingErrorUnregistered:
 
         with pytest.raises(TypeError, match="unmapped provider error"):
             to_embedding_error(_NeitherStateNorContent())
+
+
+@pytest.mark.parametrize("exc_type", _PROVIDER_LEAVES)
+def test_provider_error_uses_service_provider_reason(exc_type):
+    """プロバイダーの障害はServiceの共通理由へ変換する。"""
+    error = to_embedding_error(_instantiate(exc_type))
+    assert isinstance(error, EmbeddingError)
+    assert error.reason is EmbeddingFailureReason.PROVIDER_ERROR

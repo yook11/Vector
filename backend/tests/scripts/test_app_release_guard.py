@@ -242,7 +242,7 @@ with events.open('a') as stream:
 def argument(name):
     return args[args.index(name) + 1]
 if operation == 'list-services':
-    print('arn:ecs:service/vector/api\\tarn:ecs:service/vector/frontend')
+    print('arn:ecs:service/vector/api\\tarn:ecs:service/vector/scheduler')
 elif operation == 'describe-services':
     print('arn:ecs:task-definition/vector-' + argument('--services') + ':1')
 elif operation == 'describe-task-definition':
@@ -265,6 +265,10 @@ elif operation == 'register-task-definition':
 elif operation != 'update-service':
     raise SystemExit('unexpected AWS operation')
 """,
+    )
+    _executable(
+        tmp_path / "bin/python3",
+        "import sys\nassert sys.argv[1].endswith('/verify_ecs_rollout.py')\n",
     )
     with (_ROOT / ".github/workflows/aws-app-images.yml").open() as stream:
         workflow = yaml.safe_load(stream)

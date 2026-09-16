@@ -14,7 +14,7 @@ Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード�
 
 - [OutboxからSQSへの送信契約](./outbox-sqs-message-contract.md)：イベント形式と送信先。
 - [ArticleAssessedInScope](../../backend/app/analysis/assessment/events.py)：イベント種別・バージョン・payload。
-- [既存Taskiqタスク](../../backend/app/queue/tasks/embedding.py)：Ready構築、Service呼び出し、失敗処理。現在のtask timeoutは60秒。
+- 旧Taskiqタスクは廃止済み。現在の実行入口は`EmbeddingConsumer`で、処理期限は60秒。
 - [EmbeddingService](../../backend/app/analysis/embedding/service.py)：AI呼び出しと、ベクトル・成功監査の同一トランザクション保存。
 - [EmbeddingConsumer](../../backend/app/analysis/embedding/consumer.py)：検証済みpayloadの受信、開始状態の取得、60秒の業務処理、失敗後処理と例外伝播。
 - [EmbeddingRepository](../../backend/app/analysis/embedding/repository.py)：生成済み判定と、embeddingがNULLの場合だけ更新する保存処理。

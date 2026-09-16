@@ -1,6 +1,6 @@
 """``app.logfire.article_stage`` helper の不変条件 (正本)。
 
-stage span の attribute 語彙・mark の意味・終端ステージの構造保証・例外 backstop・
+stage span の attribute 語彙・mark の意味・例外 backstop・
 no-override・span 文脈外 no-op・PII 非含有を、capfire の exported span を oracle に
 固定する。task / service 配線テストはこの helper の上に乗るため、helper 自体の
 契約はここを正本とする。
@@ -20,14 +20,10 @@ from app.audit.domain.event import Stage
 from app.logfire.article_stage import (
     AssessmentResult,
     CurationStageResult,
-    EmbeddingResult,
-    EmbeddingStageSpan,
     assessment_stage_span,
     curation_stage_span,
-    embedding_stage_span,
     set_assessment_stage_result,
     set_curation_stage_result,
-    set_embedding_stage_result,
 )
 from tests.logfire._span_helpers import domain_attr_keys, stage_attrs
 
@@ -85,26 +81,6 @@ def test_assessment_open_attributes(capfire: CaptureLogfire) -> None:
     assert "next_task_name" not in attrs
 
 
-def test_embedding_open_attributes(capfire: CaptureLogfire) -> None:
-    """embedding open では analyzed_article_id を持ち、next_task 系は無い。"""
-    with embedding_stage_span(analyzed_article_id=13):
-        pass
-    attrs = stage_attrs(capfire)
-    assert attrs["stage"] == Stage.EMBEDDING.value
-    assert attrs["task_name"] == "generate_embedding"
-    assert attrs["analyzed_article_id"] == 13
-    assert "analysis_id" not in attrs
-    assert "next_task_enqueued" not in attrs
-    assert "next_task_name" not in attrs
-    assert "article_id" not in attrs
-
-
-def test_embedding_stage_span_rejects_legacy_analysis_id_keyword() -> None:
-    with pytest.raises(TypeError):
-        with embedding_stage_span(analysis_id=13):
-            pass
-
-
 # 不変条件 2: set_result が各語彙を反映 (handle 経由 = task が使う API)
 
 _CURATION_RESULTS: list[CurationStageResult] = [
@@ -116,11 +92,6 @@ _CURATION_RESULTS: list[CurationStageResult] = [
 _ASSESSMENT_RESULTS: list[AssessmentResult] = [
     "in_scope",
     "out_of_scope",
-    "skipped",
-    "failed",
-]
-_EMBEDDING_RESULTS: list[EmbeddingResult] = [
-    "succeeded",
     "skipped",
     "failed",
 ]
@@ -146,16 +117,6 @@ def test_assessment_set_result_reflects(
     assert stage_attrs(capfire)["result"] == result
 
 
-@pytest.mark.parametrize("result", _EMBEDDING_RESULTS)
-def test_embedding_set_result_reflects(
-    capfire: CaptureLogfire, result: EmbeddingResult
-) -> None:
-    """embedding handle.set_result が span に result を反映する。"""
-    with embedding_stage_span(analyzed_article_id=1) as stage:
-        stage.set_result(result)
-    assert stage_attrs(capfire)["result"] == result
-
-
 # 不変条件 2': module 関数経由 = service が使う API。span 内なら result を焼く。
 
 
@@ -177,28 +138,12 @@ def test_assessment_module_function_sets_result_inside_span(
     assert stage_attrs(capfire)["result"] == "in_scope"
 
 
-def test_embedding_module_function_sets_result_inside_span(
-    capfire: CaptureLogfire,
-) -> None:
-    """``set_embedding_stage_result`` が現在の embedding span に result を焼く。"""
-    with embedding_stage_span(analyzed_article_id=1):
-        set_embedding_stage_result("succeeded")
-    assert stage_attrs(capfire)["result"] == "succeeded"
-
-
-# 不変条件 3: set_article_id の late-binding (assessment / embedding)
+# 不変条件 3: set_article_id の late-binding (assessment)
 
 
 def test_assessment_set_article_id_late_binds(capfire: CaptureLogfire) -> None:
     """assessment は open 後に set_article_id で article_id を後付けできる。"""
     with assessment_stage_span(curation_id=11) as stage:
-        stage.set_article_id(99)
-    assert stage_attrs(capfire)["article_id"] == 99
-
-
-def test_embedding_set_article_id_late_binds(capfire: CaptureLogfire) -> None:
-    """embedding は open 後に set_article_id で article_id を後付けできる。"""
-    with embedding_stage_span(analyzed_article_id=13) as stage:
         stage.set_article_id(99)
     assert stage_attrs(capfire)["article_id"] == 99
 
@@ -215,17 +160,6 @@ def test_curation_mark_next_task_sets_flag_and_name(
     attrs = stage_attrs(capfire)
     assert attrs["next_task_enqueued"] is True
     assert attrs["next_task_name"] == "assess_content"
-
-
-def test_assessment_mark_next_task_sets_flag_and_name(
-    capfire: CaptureLogfire,
-) -> None:
-    """assessment の mark 後に next_task_enqueued=True + name=generate_embedding。"""
-    with assessment_stage_span(curation_id=1) as stage:
-        stage.mark_next_task_enqueued()
-    attrs = stage_attrs(capfire)
-    assert attrs["next_task_enqueued"] is True
-    assert attrs["next_task_name"] == "generate_embedding"
 
 
 def test_curation_without_mark_has_no_next_task_name(
@@ -248,14 +182,6 @@ def test_assessment_without_mark_has_no_next_task_name(
     attrs = stage_attrs(capfire)
     assert attrs["next_task_enqueued"] is False
     assert "next_task_name" not in attrs
-
-
-# 不変条件 5: 終端ステージ embedding は mark_next_task_enqueued を持たない
-
-
-def test_embedding_handle_has_no_mark_next_task() -> None:
-    """embedding handle に mark_next_task_enqueued が無い (終端ステージの構造保証)。"""
-    assert not hasattr(EmbeddingStageSpan, "mark_next_task_enqueued")
 
 
 # 不変条件 6: 例外 backstop (result 未設定で例外貫通 → failed + 再送出)
@@ -344,7 +270,6 @@ def test_module_functions_noop_outside_span(capfire: CaptureLogfire) -> None:
     """span 外 (CLI / service 単体) で result setter を呼んでも落ちず span も出ない。"""
     set_curation_stage_result("signal")
     set_assessment_stage_result("in_scope")
-    set_embedding_stage_result("succeeded")
     assert capfire.exporter.exported_spans_as_dict() == []
 
 
@@ -379,16 +304,6 @@ def test_no_unexpected_attributes_assessment(capfire: CaptureLogfire) -> None:
     with assessment_stage_span(curation_id=1) as stage:
         stage.set_article_id(2)
         stage.set_result("in_scope")
-        stage.mark_next_task_enqueued()
-    keys = domain_attr_keys(stage_attrs(capfire))
-    assert keys <= _ALLOWED_DOMAIN_KEYS, f"unexpected attribute keys: {keys}"
-
-
-def test_no_unexpected_attributes_embedding(capfire: CaptureLogfire) -> None:
-    """embedding span のドメイン attribute は許可キー集合の部分集合に収まる。"""
-    with embedding_stage_span(analyzed_article_id=1) as stage:
-        stage.set_article_id(2)
-        stage.set_result("succeeded")
     keys = domain_attr_keys(stage_attrs(capfire))
     assert keys <= _ALLOWED_DOMAIN_KEYS, f"unexpected attribute keys: {keys}"
 

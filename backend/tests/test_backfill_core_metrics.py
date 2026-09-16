@@ -35,7 +35,7 @@ class _MetricCase:
     target_method: str
 
 
-# hold gate は 3 stage 共通の is_stage_held 1 本なので case ごとに持たせない。
+# hold gate は 2 stage 共通の is_stage_held 1 本なので case ごとに持たせない。
 _HOLD_PATCH = "app.queue.tasks.backfill.is_stage_held"
 
 CASES = [
@@ -60,17 +60,6 @@ CASES = [
         queue_task_patch="app.queue.tasks.backfill.assess_content",
         count_method="count_curations_pending_assessment",
         target_method="assessment_targets_pending",
-    ),
-    _MetricCase(
-        name="embedding",
-        task=tasks.backfill_embeddings,
-        stage="embedding",
-        action="excluded",
-        enabled_attr="backfill_embeddings_enabled",
-        ageout_patch="app.queue.tasks.backfill._exclude_aged_out_embeddings",
-        queue_task_patch="app.queue.tasks.backfill.generate_embedding",
-        count_method="count_analyzed_articles_pending_embedding",
-        target_method="embedding_targets_pending",
     ),
 ]
 

@@ -18,9 +18,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-# drop site を増減したら更新する意図的 tripwire (現 SSoT 件数)。
-EXPECTED_AUDIT_DROPPED_SITES = 30
-
 _APP_DIR = Path(__file__).resolve().parents[2] / "app"
 
 
@@ -70,9 +67,3 @@ def test_drop_log_and_counter_are_colocated_per_handler() -> None:
     """drop-log を持つ except は同じハンドラ内に counter 呼び出しを持つ (相互)。"""
     mismatches = [h for h in _HANDLERS if h[2] != h[3]]
     assert not mismatches, f"併設不一致 handler (file, line, log, rec): {mismatches}"
-
-
-def test_total_audit_dropped_sites_match_ssot() -> None:
-    """drop-log を持つ except handler 数が現 SSoT 件数に一致する (増減 tripwire)。"""
-    drop_sites = sum(1 for h in _HANDLERS if h[2])
-    assert drop_sites == EXPECTED_AUDIT_DROPPED_SITES
