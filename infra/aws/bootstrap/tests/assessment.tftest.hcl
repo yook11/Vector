@@ -247,3 +247,17 @@ override_resource {
   target          = aws_iam_policy.completion_outbox_relay_scheduler_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-completion-outbox-relay-scheduler-boundary" }
 }
+
+run "relay_boundary_preserves_connections_during_cutover" {
+  command = plan
+  assert {
+    condition = toset(flatten([
+      for s in jsondecode(aws_iam_policy.assessment_outbox_relay_lambda_boundary.policy).Statement : s.Resource
+      if s.Action == "rds-db:connect" && s.Effect == "Allow"
+      ])) == toset([
+      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app",
+      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_outbox_relay",
+    ])
+    error_message = "Assessment Relayの境界は切替中の新旧DBユーザーだけに接続を許可する。"
+  }
+}

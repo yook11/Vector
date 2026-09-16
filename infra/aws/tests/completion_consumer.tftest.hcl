@@ -188,16 +188,27 @@ run "completion_network_has_no_direct_internet_route" {
   }
 }
 
-run "relay_uses_existing_app_outbox_permissions_and_starts_disabled" {
+run "relay_uses_dedicated_db_user_and_starts_disabled" {
   command = plan
   variables {
     completion_outbox_relay_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   }
   assert {
     condition = (
+      startswith(aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
+      aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DB_IAM_AUTH == "true" &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.completion_outbox_relay.policy).Statement : s.Resource if s.Action == "rds-db:connect" && s.Effect == "Allow"])) == toset([
+        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_app",
+        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
+      ])
+    )
+    error_message = "Completion Relayは専用ユーザーへ切り替え、移行中の接続許可を新旧2ロールに限定する。"
+  }
+  assert {
+    condition = (
       length(aws_lambda_function.completion_consumer) == 0 &&
       aws_lambda_function.completion_outbox_relay[0].image_config[0].command == tolist(["app.lambda_handlers.outbox_relay.completion_handler"]) &&
-      aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DATABASE_URL == local.backend_db_url["vector_app"] &&
+      aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DATABASE_URL == local.backend_db_url["vector_outbox_relay"] &&
       aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DB_IAM_AUTH == "true" &&
       aws_lambda_function.completion_outbox_relay[0].environment[0].variables.SQS_ARTICLE_COMPLETION_QUEUE_URL == aws_sqs_queue.outbox["completion"].url &&
       aws_lambda_function.completion_outbox_relay[0].timeout == 120 &&
@@ -210,7 +221,7 @@ run "relay_uses_existing_app_outbox_permissions_and_starts_disabled" {
         try(statement.Action == "sqs:SendMessage" && statement.Resource == aws_sqs_queue.outbox["completion"].arn && statement.Principal.AWS == aws_iam_role.completion_outbox_relay.arn, false)
       ])
     )
-    error_message = "Relayは既存OutboxのApp接続と補完専用送信権限を使い、明示するまで起動しない。"
+    error_message = "Relayは専用DB接続と補完専用送信権限を使い、明示するまで起動しない。"
   }
 }
 

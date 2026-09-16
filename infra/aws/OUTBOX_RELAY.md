@@ -19,7 +19,7 @@ handlerは起動ごとに設定・DB Engine・publisher・failure handlerを組�
 - Lambdaはarm64・512MB・タイムアウト120秒・予約済み同時実行数1とする。
 - EventBridge Schedulerは1分間隔・Flexible Time Windowなしで有効にする。
 - relay専用SGからRDSの5432とSQS専用Interface VPCエンドポイントの443だけを許可する。
-- LambdaのDB認証は既存 `vector_app` に対するRDS IAM認証とTLSを使い、DBロール・schemaは変更しない。
+- LambdaのDB認証は `vector_outbox_relay` に対するRDS IAM認証とTLSを使う。切替中の新旧接続許可と適用順序は[DB接続ロール切替](../../specs/platform/outbox-relay-role-cutover.md)に従う。
 - SQSの送信操作はrelay専用ロール・対象4キュー・専用VPCエンドポイントに限定する。
 - Lambda・SchedulerのIAMロールとpermissions boundaryは既存ECSのものから独立させる。
 - AI鍵・Redis・HTTPプロキシ・アプリ認証用秘密はLambdaへ渡さない。

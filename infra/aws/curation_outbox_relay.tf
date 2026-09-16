@@ -29,9 +29,13 @@ resource "aws_iam_role_policy" "curation_outbox_relay" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_app"
+        Effect = "Allow"
+        Action = "rds-db:connect"
+        # 設定更新前の実行が終わるまで旧ユーザーの接続許可を保持する。
+        Resource = [
+          "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_app",
+          "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
+        ]
       },
       {
         Effect   = "Allow"
@@ -91,7 +95,7 @@ resource "aws_lambda_function" "curation_outbox_relay" {
   environment {
     variables = {
       ENV                            = "production"
-      DATABASE_URL                   = local.backend_db_url["vector_app"]
+      DATABASE_URL                   = local.backend_db_url["vector_outbox_relay"]
       DB_IAM_AUTH                    = "true"
       SQS_ARTICLE_CURATION_QUEUE_URL = aws_sqs_queue.outbox["curation"].url
     }
