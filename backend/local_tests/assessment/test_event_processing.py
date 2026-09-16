@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.analysis.assessment import consumer as consumer_module
+from app.analysis.curation.events import ArticleCuratedSignal
 from local_tests.assessment.support import (
     deepseek_reply,
     fetch_stored_assessment,
@@ -19,9 +20,9 @@ from local_tests.assessment.support import (
 
 @pytest.mark.asyncio
 async def test_in_scope_assessment_completes_successfully(
-    system_database, assessment_runtime, deepseek_response
+    system_database, assessment_runtime, deepseek_response, notification_response
 ):
-    """対象内と判定された記事の結果・成功監査・後続Outboxが正しく保存される。"""
+    """対象内の結果・成功監査・後続Outboxを保存し、記事一覧の更新を通知する。"""
     other = await seed_curation(
         system_database,
         "https://example.com/other",
@@ -49,6 +50,11 @@ async def test_in_scope_assessment_completes_successfully(
     response = await invoke_event(target)
 
     assert response == {"batchItemFailures": []}
+    notification_response.assert_awaited_once()
+    request = notification_response.await_args.args[0]
+    assert json.loads(request.content) == {
+        "tags": ["articles:list", "articles:categories"]
+    }
 
     # AIへ渡った本文が、イベントで指定した記事のものかを確認する。
     deepseek_response.assert_awaited_once()
@@ -105,7 +111,11 @@ async def test_in_scope_assessment_completes_successfully(
 
 @pytest.mark.asyncio
 async def test_out_of_scope_event_saves_result_without_outbox(
-    system_database, assessment_runtime, deepseek_response
+    system_database,
+    assessment_runtime,
+    deepseek_response,
+    notification_response,
+    notification_secret,
 ):
     """対象外結果と成功監査だけを確定し、Embedding向けOutboxを発行しない。"""
     target = await seed_curation(system_database, "https://example.com/out-of-scope")
@@ -131,11 +141,17 @@ async def test_out_of_scope_event_saves_result_without_outbox(
     assert saved.audits[0]["event_type"] == "succeeded"
     assert saved.audits[0]["article_id"] == target.analyzable_article_id
     assert saved.outbox == []
+    notification_response.assert_not_awaited()
+    notification_secret.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_database_failure_rolls_back_result_audit_and_outbox(
-    system_database, assessment_runtime, database_error_before_commit
+    system_database,
+    assessment_runtime,
+    database_error_before_commit,
+    notification_response,
+    notification_secret,
 ):
     """3種類の実INSERT後のDB障害で全てを戻し、失敗監査だけを別トランザクションで確定する。"""
     target = await seed_curation(system_database, "https://example.com/rollback")
@@ -152,6 +168,8 @@ async def test_database_failure_rolls_back_result_audit_and_outbox(
     assert len(saved.audits) == 1
     assert saved.audits[0]["event_type"] == "failed"
     assert saved.audits[0]["article_id"] == target.analyzable_article_id
+    notification_response.assert_not_awaited()
+    notification_secret.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -237,3 +255,87 @@ async def test_database_wait_timeout_rolls_back_and_allows_retry(
     assert await invoke_event(target) == {"batchItemFailures": []}
     stored = await fetch_stored_assessment(system_database, target.curation_id)
     assert len(stored.in_scope) == 1
+
+
+@pytest.mark.asyncio
+async def test_notification_observes_committed_article(
+    system_database, assessment_runtime, notification_response
+):
+    """一覧通知を送る時点で別接続から保存済みの記事を取得できる。"""
+    target = await seed_curation(
+        system_database, "https://example.com/notify-after-commit"
+    )
+    observed_articles = []
+
+    async def observe(request):
+        saved = await fetch_stored_assessment(system_database, target.curation_id)
+        observed_articles.extend(saved.in_scope)
+        return httpx.Response(200, json={"ok": True})
+
+    notification_response.side_effect = observe
+    await invoke_event(target)
+
+    assert len(observed_articles) == 1
+    assert observed_articles[0]["translated_title"] == "対象タイトル"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.Response(500), httpx.ConnectError("notification unavailable")],
+    ids=["http-500", "network-unavailable"],
+)
+async def test_notification_failure_preserves_saved_article_and_success_response(
+    system_database, assessment_runtime, notification_response, failure
+):
+    """通知先の障害で保存済み記事を失敗応答に変えない。"""
+    target = await seed_curation(
+        system_database, "https://example.com/notification-failure"
+    )
+    notification_response.side_effect = [failure]
+
+    response = await invoke_event(target)
+
+    notification_response.assert_awaited_once()
+    assert response == {"batchItemFailures": []}
+    saved = await fetch_stored_assessment(system_database, target.curation_id)
+    assert len(saved.in_scope) == 1
+    assert [audit["event_type"] for audit in saved.audits] == ["succeeded"]
+    assert len(saved.outbox) == 1
+
+
+@pytest.mark.asyncio
+async def test_notification_secret_failure_preserves_saved_article_and_success_response(
+    system_database, assessment_runtime, notification_secret, notification_response
+):
+    """通知用キーの取得障害でも保存結果を維持し、SQSへ失敗を返さない。"""
+    target = await seed_curation(
+        system_database, "https://example.com/notification-secret-failure"
+    )
+    notification_secret.side_effect = RuntimeError("notification key unavailable")
+
+    response = await invoke_event(target)
+
+    notification_secret.assert_called_once_with(
+        region="ap-northeast-1", path="/test/revalidate-key"
+    )
+    notification_response.assert_not_awaited()
+    assert response == {"batchItemFailures": []}
+    saved = await fetch_stored_assessment(system_database, target.curation_id)
+    assert len(saved.in_scope) == 1
+    assert [audit["event_type"] for audit in saved.audits] == ["succeeded"]
+    assert len(saved.outbox) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_curation_does_not_notify(
+    assessment_runtime, notification_response, notification_secret
+):
+    """存在しないCurationの入力を拒否した場合は記事一覧を通知しない。"""
+    missing = ArticleCuratedSignal(curation_id=999999, analyzable_article_id=999999)
+
+    response = await invoke_event(missing)
+
+    assert response == {"batchItemFailures": []}
+    notification_response.assert_not_awaited()
+    notification_secret.assert_not_called()

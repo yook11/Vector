@@ -43,7 +43,7 @@ def valid_body(*, curation_id=11, analyzable_article_id=101):
 def wiring(monkeypatch):
     state = SimpleNamespace(
         order=[],
-        settings=object(),
+        settings=SimpleNamespace(aws_region="ap-northeast-1"),
         consumer=SimpleNamespace(
             consume=AsyncMock(
                 return_value=AssessmentCompletion(
@@ -66,6 +66,10 @@ def wiring(monkeypatch):
     monkeypatch.setattr(module, "open_assessment_consumer", state.open)
     state.settings_factory = Mock(return_value=state.settings)
     monkeypatch.setattr(module, "AssessmentConsumerSettings", state.settings_factory)
+    state.notifier = SimpleNamespace(notify_article_list_updated=AsyncMock())
+    monkeypatch.setattr(
+        module, "build_article_list_notifier", Mock(return_value=state.notifier)
+    )
     monkeypatch.setattr(module, "logger", state.log)
     monkeypatch.setattr(module, "setup_lambda_logging", Mock())
     return state
@@ -149,7 +153,9 @@ async def test_messages_finish_sequentially_in_input_order(wiring):
 
     wiring.consumer.consume.side_effect = consume
 
-    await module._run_assessment({"Records": messages}, wiring.settings)
+    await module._run_assessment(
+        {"Records": messages}, wiring.settings, wiring.notifier
+    )
 
     assert steps == [("start", 11), ("end", 11), ("start", 22), ("end", 22)]
 
@@ -363,7 +369,9 @@ async def test_control_exception_stops_batch(wiring, interruption):
     ]
 
     with pytest.raises(type(interruption)) as caught:
-        await module._run_assessment({"Records": messages}, wiring.settings)
+        await module._run_assessment(
+            {"Records": messages}, wiring.settings, wiring.notifier
+        )
 
     assert caught.value is interruption
     wiring.consumer.consume.assert_awaited_once()
@@ -423,6 +431,7 @@ async def test_processing_cancellation_leaves_borrowed_scope(wiring):
         await module._run_assessment(
             {"Records": [{"messageId": "cancelled", "body": valid_body()}]},
             wiring.settings,
+            wiring.notifier,
         )
 
     assert wiring.order == ["open", "close"]

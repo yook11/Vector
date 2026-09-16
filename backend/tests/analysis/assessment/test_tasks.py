@@ -1,6 +1,5 @@
 """``assess_content`` task の分岐テスト。"""
 
-from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,18 +23,7 @@ from app.analysis.assessment.service import (
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.queue.messages.assessment import AssessmentTrigger
-from app.shared.revalidate import NullRevalidateNotifier
 from tests.logfire._span_helpers import one_article_stage_span, stage_attrs
-
-
-@pytest.fixture(autouse=True)
-def isolate_cache_notification() -> Iterator[None]:
-    """既存のタスク分岐テストでは通知の外部通信だけを切り離す。"""
-    with patch(
-        "app.queue.tasks.assessment.FrontendRevalidateNotifier.from_settings",
-        return_value=NullRevalidateNotifier(),
-    ):
-        yield
 
 
 def _make_provider_fake() -> MagicMock:

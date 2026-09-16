@@ -5,8 +5,15 @@ import asyncio
 import structlog
 
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
+from app.analysis.assessment.service import (
+    AssessmentCompletion,
+    AssessmentCompletionKind,
+)
 from app.analysis.curation.events import CuratedEventInvalidError
-from app.lambda_handlers.assessment.composition import open_assessment_consumer
+from app.lambda_handlers.assessment.composition import (
+    build_article_list_notifier,
+    open_assessment_consumer,
+)
 from app.lambda_handlers.assessment.event import (
     AssessmentMessageJsonInvalidError,
     parse_curated_signal_event,
@@ -14,6 +21,7 @@ from app.lambda_handlers.assessment.event import (
 from app.lambda_handlers.assessment.failure_recorder import (
     AssessmentLambdaFailureRecorder,
 )
+from app.lambda_handlers.assessment.notification import ArticleListUpdateNotifier
 from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
 from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError
@@ -31,17 +39,20 @@ def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:
     setup_lambda_logging()
     try:
         settings = AssessmentConsumerSettings()  # type: ignore[call-arg]
+        notifier = build_article_list_notifier(aws_region=settings.aws_region)
     except Exception as exc:
         AssessmentLambdaFailureRecorder(logger).record_initialization_failure(
             "settings", exc
         )
         raise
-    failed_items = asyncio.run(_run_assessment(lambda_event, settings))
+    failed_items = asyncio.run(_run_assessment(lambda_event, settings, notifier))
     return SqsBatchFailureResponse(batchItemFailures=failed_items)
 
 
 async def _run_assessment(
-    lambda_event: object, settings: AssessmentConsumerSettings
+    lambda_event: object,
+    settings: AssessmentConsumerSettings,
+    notifier: ArticleListUpdateNotifier,
 ) -> list[SqsBatchItemIdentifier]:
     """資源を管理して各レコードを処理し、失敗した項目の識別子を返す。"""
     failure_recorder = AssessmentLambdaFailureRecorder(logger)
@@ -96,6 +107,11 @@ async def _run_assessment(
                     SqsBatchItemIdentifier(itemIdentifier=record.message_id)
                 )
             else:
+                if (
+                    isinstance(completion, AssessmentCompletion)
+                    and completion.kind is AssessmentCompletionKind.IN_SCOPE
+                ):
+                    await notifier.notify_article_list_updated()
                 rejection_fields = (
                     {"rejection_code": completion.reason.value}
                     if isinstance(completion, AssessmentReadyBuildRejected)
