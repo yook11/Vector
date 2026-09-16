@@ -8,14 +8,10 @@ resource "aws_iam_policy" "completion_outbox_relay_lambda_boundary" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "RdsIamAuthForRelayCutover"
-        Effect = "Allow"
-        Action = "rds-db:connect"
-        # 接続先の切替確認後に旧ユーザーの許可を削除する。
-        Resource = [
-          "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector_app",
-          "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector_outbox_relay",
-        ]
+        Sid      = "RdsIamAuthAsOutboxRelay"
+        Effect   = "Allow"
+        Action   = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector_outbox_relay"
       },
       {
         Sid      = "SendPipelineEvents"
