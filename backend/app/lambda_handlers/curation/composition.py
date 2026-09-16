@@ -41,7 +41,7 @@ def open_curation_consumer(
             settings=GeminiConnectionSettings(),
         )
 
-    def build_consumer(
+    async def build_consumer(
         *, session_factory: SessionFactory, client: AsyncClient
     ) -> CurationConsumer:
         return CurationConsumer(session_factory, GeminiCurator(client=client))

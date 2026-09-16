@@ -41,7 +41,7 @@ def open_embedding_consumer(
             settings=GeminiConnectionSettings(),
         )
 
-    def build_consumer(
+    async def build_consumer(
         *, session_factory: SessionFactory, client: AsyncClient
     ) -> EmbeddingConsumer:
         return EmbeddingConsumer(session_factory, GeminiEmbedder(client=client))

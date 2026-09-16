@@ -37,6 +37,18 @@ def wiring(request, monkeypatch):
     create_engine = Mock(return_value=engine)
     monkeypatch.setattr(module, f"create_{stage}_consumer_engine", create_engine)
     factory = Mock()
+    if stage == "assessment":
+
+        @asynccontextmanager
+        async def open_session():
+            yield object()
+
+        factory.side_effect = open_session
+        monkeypatch.setattr(
+            module.AssessmentRepository,
+            "assert_category_catalog_covers_enum",
+            AsyncMock(),
+        )
     monkeypatch.setattr(
         lifecycle, "caller_managed_session_factory", Mock(return_value=factory)
     )

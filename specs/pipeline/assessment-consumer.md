@@ -168,6 +168,7 @@ Evidence: Embeddingの設定・資源管理・組み立てと、共通SSM取得�
 - 共通の`app/lambda_handlers/article_analysis_lifecycle.py`にある`open_article_analysis_consumer`が、利用範囲ごとにSSMからAPIキーを取得し、専用RDS署名器・Engine・session factory・AIクライアントを準備する。秘密情報は`SecretStr`で扱い、資源を保持するDTOは公開しない。
 - `create_assessment_consumer_engine`は1接続・追加接続なし、プール待ち・接続・SQL実行の上限を各5秒にする。application_nameは`vector-assessment-consumer`。IAM署名器は必須引数とし、省略・Noneを拒否する。非IAM用の分岐を設けず、共通のTLS・pre-pingとDB例外変換を利用する。
 - `app/lambda_handlers/assessment/composition.py`の`open_assessment_consumer(settings)`は、設定を捕捉する型付きの名前付き関数でEngine・DeepSeekクライアント・AssessorとConsumerの生成を指定し、共通のasync context managerを返す。共通側が準備・終了順序を所有し、SDK内部の生成・解放は`open_deepseek_client`が所有する。公開handlerやSQSの入力形式には依存しない。
+- Consumer生成関数は非同期とし、共通側が生成完了を待つ。Assessmentは呼び出しごとにRepositoryで全`InScopeCategory`の存在を確認し、検証用セッションを閉じてからConsumerを生成する。不足・DB障害はconsumer段階の初期化失敗として伝播し、記事処理へ進まない。検証成功のキャッシュは持たない。
 - 終了はDeepSeek、Engine、RDSの順。初期化失敗時も作成済み資源を解放し、同じ例外を返す。初期化の診断段階は共通側でresources・ai_client・consumerに固定し、yield後の業務例外は初期化失敗として記録しない。
 - 初期化・終了の診断には段階／資源名と例外クラスだけを記録する。通常の終了・診断障害で結果を上書きせず、キャンセル・プロセス終了は抑止しない。準備・終了へ新しい時間制限は追加しない。
 

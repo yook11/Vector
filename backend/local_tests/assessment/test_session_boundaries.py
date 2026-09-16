@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from local_tests.assessment.support import deepseek_reply, invoke_event, seed_curation
 
 
@@ -32,3 +33,26 @@ async def test_read_session_is_returned_while_waiting_for_ai(
     finally:
         gate.release()
         await asyncio.wait_for(asyncio.shield(invocation), 15)
+
+
+@pytest.mark.asyncio
+async def test_catalog_failure_releases_database_session(
+    system_database, assessment_runtime, analysis_engines
+):
+    """カテゴリー検証の失敗後も、検証用の実DB接続を残さない。"""
+    target = await seed_curation(system_database, "https://example.com/catalog-cleanup")
+    async with system_database.connect("vector") as connection:
+        await connection.execute("DELETE FROM categories WHERE slug='computing'")
+
+    with pytest.raises(CategoryEnumDatabaseMismatchError):
+        await invoke_event(target)
+
+    assert len(analysis_engines) == 1
+    assert analysis_engines[0].pool.checkedout() == 0
+    async with system_database.connect("vector_app") as connection:
+        connections = await connection.fetchval(
+            "SELECT count(*) FROM pg_stat_activity "
+            "WHERE datname=current_database() AND application_name=$1",
+            "vector-assessment-consumer",
+        )
+    assert connections == 0

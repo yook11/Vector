@@ -35,7 +35,7 @@ class ClientFactory[ClientT](Protocol):
 
 
 class ConsumerFactory[ConsumerT, ClientT](Protocol):
-    def __call__(
+    async def __call__(
         self, *, session_factory: SessionFactory, client: ClientT
     ) -> ConsumerT: ...
 
@@ -94,7 +94,9 @@ async def open_article_analysis_consumer[ConsumerT, ClientT](
             stage = "ai_client"
             client = await stack.enter_async_context(open_client(api_key=api_key))
             stage = "consumer"
-            consumer = build_consumer(session_factory=session_factory, client=client)
+            consumer = await build_consumer(
+                session_factory=session_factory, client=client
+            )
         except Exception as exc:
             failure_recorder.record_initialization_failure(stage, exc)
             raise
