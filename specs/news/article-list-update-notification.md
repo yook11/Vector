@@ -10,7 +10,7 @@ Status: Implemented
 
 ## Evidence
 
-- `backend/app/queue/tasks/assessment.py` は、分析結果の保存成功後に `articles:list` と `articles:categories` を通知する。
+- `backend/app/lambda_handlers/assessment/handler.py` は、新規の対象内保存完了後に `ArticleListUpdateNotifier.notify_article_list_updated()` で `articles:list` と `articles:categories` を通知する（[通知経路の移設仕様](../pipeline/assessment-list-notification.md)）。
 - `frontend/src/app/api/internal/revalidate/route.ts` は、認証・入力検証後に `revalidateTag(tag, { expire: 0 })` を実行する。
 - `frontend/src/features/news/api/get-articles.ts` と `get-categories.ts` は、`use cache` と `cacheLife("minutes")` で一覧・カテゴリー件数をキャッシュする。
 - `frontend/src/app/(public)/page.tsx` は、一覧・カテゴリー・ウォッチ状態を取得して Server Components で描画する。

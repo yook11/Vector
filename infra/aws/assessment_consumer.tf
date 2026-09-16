@@ -1,8 +1,9 @@
 locals {
-  assessment_consumer_name           = "${var.name_prefix}-assessment-consumer"
-  assessment_consumer_arn            = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.assessment_consumer_name}"
-  assessment_consumer_parameter_path = "/${var.name_prefix}/assessment-consumer/deepseek-api-key"
-  assessment_consumer_subnet_cidr    = cidrsubnet(var.vpc_cidr, 8, 29)
+  assessment_consumer_name               = "${var.name_prefix}-assessment-consumer"
+  assessment_consumer_arn                = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.assessment_consumer_name}"
+  assessment_consumer_parameter_path     = "/${var.name_prefix}/assessment-consumer/deepseek-api-key"
+  assessment_notification_parameter_path = "/${var.name_prefix}/frontend/revalidate-bearer-secret"
+  assessment_consumer_subnet_cidr        = cidrsubnet(var.vpc_cidr, 8, 29)
   assessment_consumer_eni_actions = [
     "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
     "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
@@ -104,6 +105,22 @@ resource "aws_vpc_security_group_egress_rule" "assessment_consumer_to_ssm" {
   to_port                      = 443
 }
 
+resource "aws_vpc_security_group_egress_rule" "assessment_consumer_to_frontend" {
+  security_group_id            = aws_security_group.assessment_consumer.id
+  referenced_security_group_id = aws_security_group.app["frontend"].id
+  ip_protocol                  = "tcp"
+  from_port                    = 3000
+  to_port                      = 3000
+}
+
+resource "aws_vpc_security_group_ingress_rule" "frontend_from_assessment_consumer" {
+  security_group_id            = aws_security_group.app["frontend"].id
+  referenced_security_group_id = aws_security_group.assessment_consumer.id
+  ip_protocol                  = "tcp"
+  from_port                    = 3000
+  to_port                      = 3000
+}
+
 resource "aws_vpc_security_group_ingress_rule" "ssm_from_assessment_consumer" {
   security_group_id            = aws_security_group.assessment_consumer_ssm.id
   referenced_security_group_id = aws_security_group.assessment_consumer.id
@@ -154,6 +171,12 @@ resource "aws_iam_role_policy" "assessment_consumer" {
         Effect   = "Allow"
         Action   = "ssm:GetParameter"
         Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter${local.assessment_consumer_parameter_path}"
+      },
+      {
+        Sid      = "ReadFrontendNotificationKey"
+        Effect   = "Allow"
+        Action   = "ssm:GetParameter"
+        Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter${local.assessment_notification_parameter_path}"
       },
       {
         Sid      = "WriteConsumerLogs"
@@ -231,11 +254,13 @@ resource "aws_lambda_function" "assessment_consumer" {
 
   environment {
     variables = {
-      ENV                             = "production"
-      DATABASE_URL                    = local.backend_db_url["vector_app"]
-      DB_IAM_AUTH                     = "true"
-      DEEPSEEK_API_KEY_PARAMETER_PATH = local.assessment_consumer_parameter_path
-      EGRESS_PROXY_URL                = local.proxy_url
+      ENV                                     = "production"
+      DATABASE_URL                            = local.backend_db_url["vector_app"]
+      DB_IAM_AUTH                             = "true"
+      DEEPSEEK_API_KEY_PARAMETER_PATH         = local.assessment_consumer_parameter_path
+      EGRESS_PROXY_URL                        = local.proxy_url
+      INTERNAL_FRONTEND_BASE_URL              = local.internal_frontend_url
+      REVALIDATE_BEARER_SECRET_PARAMETER_PATH = local.assessment_notification_parameter_path
     }
   }
 
@@ -249,6 +274,8 @@ resource "aws_lambda_function" "assessment_consumer" {
     aws_vpc_security_group_ingress_rule.proxy_from_assessment_consumer,
     aws_vpc_security_group_egress_rule.assessment_consumer_to_ssm,
     aws_vpc_security_group_ingress_rule.ssm_from_assessment_consumer,
+    aws_vpc_security_group_egress_rule.assessment_consumer_to_frontend,
+    aws_vpc_security_group_ingress_rule.frontend_from_assessment_consumer,
   ]
 }
 

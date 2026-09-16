@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import httpx  # noqa: TID251 (テスト内 mock 構築のため、実通信なし)
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -354,7 +355,9 @@ class TestNotifierIntegration:
 
         notifier = FrontendRevalidateNotifier(
             frontend_base_url="http://frontend:3000",
-            secret="test-secret-32characters-long-xxxx",
+            secret_provider=AsyncMock(
+                return_value=SecretStr("test-secret-32characters-long-xxxx")
+            ),
         )
         llm = _llm_mock(headline="OK", summary="SUMMARY")
         service = WeeklyBriefingService(_factory_for(db_session), llm, notifier)

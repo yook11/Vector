@@ -260,3 +260,24 @@ run "relay_boundary_allows_only_dedicated_db_user" {
     error_message = "Assessment Relayの境界は専用DBユーザーだけに接続を許可し、旧Appユーザーへの接続を許可しない。"
   }
 }
+
+# 通知用キーは既存frontendの1件だけを追加し、SSMの一覧取得や書き込みを許可しない。
+run "consumer_reads_only_assessment_and_notification_keys" {
+  command = plan
+  assert {
+    condition = {
+      for s in jsondecode(aws_iam_policy.assessment_consumer_lambda_boundary.policy).Statement : s.Sid => { action = s.Action, resource = s.Resource }
+      if s.Effect == "Allow" && startswith(try(tostring(s.Action), ""), "ssm:")
+      } == {
+      ReadDeepSeekKey = {
+        action   = "ssm:GetParameter"
+        resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/deepseek-api-key"
+      }
+      ReadFrontendNotificationKey = {
+        action   = "ssm:GetParameter"
+        resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/frontend/revalidate-bearer-secret"
+      }
+    }
+    error_message = "AssessmentのSSM権限はDeepSeekキーと一覧通知キーの単件取得に限定する。"
+  }
+}

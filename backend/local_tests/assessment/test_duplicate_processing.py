@@ -18,7 +18,12 @@ from local_tests.assessment.support import (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("category", ["ai", "out_of_scope"])
 async def test_redelivery_preserves_first_result_audit_and_outbox(
-    system_database, assessment_runtime, deepseek_response, category
+    system_database,
+    assessment_runtime,
+    deepseek_response,
+    notification_response,
+    notification_secret,
+    category,
 ):
     """再配送で異なるAI応答を用意しても初回の結果・監査・Outboxを上書きせず正常終了する。"""
     target = await seed_curation(system_database, "https://example.com/redelivery")
@@ -37,10 +42,15 @@ async def test_redelivery_preserves_first_result_audit_and_outbox(
         category=category, investor_take="再配送時の異なる判断"
     )
 
+    notification_response.reset_mock()
+    notification_secret.reset_mock()
+
     response = await invoke_sqs_record(record)
 
     assert response == {"batchItemFailures": []}
     assert await fetch_stored_assessment(system_database, target.curation_id) == first
+    notification_response.assert_not_awaited()
+    notification_secret.assert_not_called()
 
 
 @pytest.mark.asyncio

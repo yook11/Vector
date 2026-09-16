@@ -127,11 +127,13 @@ run "consumer_receives_assessment_queue_with_embedding_limits" {
       aws_lambda_function.assessment_consumer[0].timeout == 120 &&
       aws_lambda_function.assessment_consumer[0].reserved_concurrent_executions == 10 &&
       aws_lambda_function.assessment_consumer[0].environment[0].variables == tomap({
-        ENV                             = "production"
-        DATABASE_URL                    = local.backend_db_url["vector_app"]
-        DB_IAM_AUTH                     = "true"
-        DEEPSEEK_API_KEY_PARAMETER_PATH = "/slice-test/assessment-consumer/deepseek-api-key"
-        EGRESS_PROXY_URL                = local.proxy_url
+        ENV                                     = "production"
+        DATABASE_URL                            = local.backend_db_url["vector_app"]
+        DB_IAM_AUTH                             = "true"
+        DEEPSEEK_API_KEY_PARAMETER_PATH         = "/slice-test/assessment-consumer/deepseek-api-key"
+        EGRESS_PROXY_URL                        = local.proxy_url
+        INTERNAL_FRONTEND_BASE_URL              = "http://frontend.vector.internal:3000"
+        REVALIDATE_BEARER_SECRET_PARAMETER_PATH = "/slice-test/frontend/revalidate-bearer-secret"
       }) &&
       aws_lambda_event_source_mapping.assessment_consumer[0].event_source_arn == aws_sqs_queue.outbox["assessment"].arn &&
       aws_lambda_event_source_mapping.assessment_consumer[0].function_name == aws_lambda_function.assessment_consumer[0].arn &&
@@ -192,16 +194,18 @@ run "consumer_network_and_permissions_are_scoped" {
     condition = alltrue([for pair in [
       { outbound = aws_vpc_security_group_egress_rule.assessment_consumer_to_rds, inbound = aws_vpc_security_group_ingress_rule.rds_from_assessment_consumer, target = aws_security_group.rds.id, port = 5432 },
       { outbound = aws_vpc_security_group_egress_rule.assessment_consumer_to_proxy, inbound = aws_vpc_security_group_ingress_rule.proxy_from_assessment_consumer, target = aws_security_group.proxy.id, port = var.proxy_port },
+      { outbound = aws_vpc_security_group_egress_rule.assessment_consumer_to_frontend, inbound = aws_vpc_security_group_ingress_rule.frontend_from_assessment_consumer, target = aws_security_group.app["frontend"].id, port = 3000 },
       { outbound = aws_vpc_security_group_egress_rule.assessment_consumer_to_ssm, inbound = aws_vpc_security_group_ingress_rule.ssm_from_assessment_consumer, target = aws_security_group.assessment_consumer_ssm.id, port = 443 },
       ] :
       pair.outbound.security_group_id == aws_security_group.assessment_consumer.id &&
       pair.outbound.referenced_security_group_id == pair.target &&
       pair.inbound.security_group_id == pair.target &&
       pair.inbound.referenced_security_group_id == aws_security_group.assessment_consumer.id &&
+      pair.outbound.ip_protocol == "tcp" && pair.inbound.ip_protocol == "tcp" &&
       pair.outbound.from_port == pair.port && pair.outbound.to_port == pair.port &&
       pair.inbound.from_port == pair.port && pair.inbound.to_port == pair.port
     ])
-    error_message = "DB・proxy・SSMへの通信を両側のSGで限定する。"
+    error_message = "DB・proxy・SSM・frontendへの通信を両側のSGで限定する。"
   }
   assert {
     condition = (
@@ -325,4 +329,31 @@ override_resource {
   override_during = plan
   target          = aws_security_group.assessment_consumer_ssm
   values          = { id = "sg-00000000000000008" }
+}
+
+# 通知用キーは既存frontendの1件だけを追加し、SSMの一覧取得や書き込みを許可しない。
+run "consumer_reads_only_assessment_and_notification_keys" {
+  command = plan
+  assert {
+    condition = {
+      for s in jsondecode(aws_iam_role_policy.assessment_consumer.policy).Statement : s.Sid => { action = s.Action, resource = s.Resource }
+      if s.Effect == "Allow" && startswith(try(tostring(s.Action), ""), "ssm:")
+      } == {
+      ReadDeepSeekKey = {
+        action   = "ssm:GetParameter"
+        resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/deepseek-api-key"
+      }
+      ReadFrontendNotificationKey = {
+        action   = "ssm:GetParameter"
+        resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/frontend/revalidate-bearer-secret"
+      }
+    }
+    error_message = "AssessmentのSSM権限はDeepSeekキーと一覧通知キーの単件取得に限定する。"
+  }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_security_group.app["frontend"]
+  values          = { id = "sg-00000000000000009" }
 }
