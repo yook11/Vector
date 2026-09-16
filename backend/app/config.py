@@ -142,11 +142,9 @@ class Settings(DatabaseSettings, HttpSettings):
     redis_iam_cache_name: str | None = None
 
     # back-fill (パイプライン保守)
-    # curation は救済機構の前提として常時有効。assessments / embeddings は
-    # 明示的に有効化する。
+    # assessment の旧backfillは明示的に有効化する。
     backfill_curations_enabled: bool = True
     backfill_assessments_enabled: bool = False
-    backfill_embeddings_enabled: bool = False
 
     # pipeline_events retention。kill switch + batch 上限で purge 負荷を抑える。
     pipeline_events_retention_enabled: bool = True

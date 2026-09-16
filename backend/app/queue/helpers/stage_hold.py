@@ -19,9 +19,9 @@ logger = structlog.get_logger(__name__)
 
 _HOLD_TTL_SECONDS = 6 * 60 * 60  # 6h
 
-# hold を持つのは AI provider 障害で止まりうる 3 stage だけ。
+# hold を持つのは AI provider 障害で止まりうる 2 stage だけ。
 # 値の出所は Stage に一本化する。
-HoldableStage = Literal[Stage.CURATION, Stage.ASSESSMENT, Stage.EMBEDDING]
+HoldableStage = Literal[Stage.CURATION, Stage.ASSESSMENT]
 _HOLDABLE_STAGES: tuple[HoldableStage, ...] = get_args(HoldableStage)
 
 

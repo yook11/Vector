@@ -1,4 +1,4 @@
-"""実DBで保存・生成済み・コミット失敗時のspanと成功カウンタを検証する。"""
+"""実DBで保存・生成済み・コミット失敗時の成功カウンタを検証する。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from app.analysis.embedding.domain.value_objects import (
 )
 from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.service import EmbeddingService
-from app.logfire.article_stage import embedding_stage_span
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -27,7 +26,6 @@ from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
-from tests.logfire._span_helpers import stage_attrs
 
 _METRIC = "vector.embedding.processing_outcome"
 _ALL_RESULTS = ("succeeded", "failed", "infra_error")
@@ -83,24 +81,11 @@ async def _execute(
     ready = ReadyForEmbedding(
         analyzed_article_id=analysis_id, text_for_embedding="summary"
     )
-    with embedding_stage_span(analyzed_article_id=analysis_id):
-        await EmbeddingService(session_factory).execute(
-            ready,
-            _make_embedder(),
-            analyzable_article_id=article_id,
-        )
-
-
-@pytest.mark.asyncio
-async def test_save_success_sets_stage_result_succeeded(
-    session_factory: async_sessionmaker[AsyncSession],
-    embedding_article: tuple[AnalyzedArticleRecord, int],
-    capfire: CaptureLogfire,
-) -> None:
-    """保存と成功監査の確定後にsucceededを記録する。"""
-    analysis, article_id = embedding_article
-    await _execute(session_factory, analysis.id, article_id)
-    assert stage_attrs(capfire)["result"] == "succeeded"
+    await EmbeddingService(session_factory).execute(
+        ready,
+        _make_embedder(),
+        analyzable_article_id=article_id,
+    )
 
 
 @pytest.mark.asyncio
@@ -116,21 +101,6 @@ async def test_save_success_emits_processing_outcome_succeeded(
     assert sum_counter_for_result(metrics, _METRIC, "succeeded") == 1
     for other in ("failed", "infra_error"):
         assert sum_counter_for_result(metrics, _METRIC, other) == 0
-
-
-@pytest.mark.asyncio
-async def test_race_loss_sets_stage_result_skipped(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    embedding_article: tuple[AnalyzedArticleRecord, int],
-    capfire: CaptureLogfire,
-) -> None:
-    """保存前に生成済みを確認した場合はskippedを記録する。"""
-    analysis, article_id = embedding_article
-    analysis.embedding = [0.4] * EMBEDDING_DIMENSION
-    await db_session.commit()
-    await _execute(session_factory, analysis.id, article_id)
-    assert stage_attrs(capfire)["result"] == "skipped"
 
 
 @pytest.mark.asyncio
@@ -188,5 +158,4 @@ async def test_missing_article_is_not_observed_as_skipped_or_succeeded(
     """保存先不存在を正常な競合として観測しない。"""
     with pytest.raises(EmbeddingAnalyzedArticleMissingError):
         await _execute(session_factory, 999_999, 999_999)
-    assert stage_attrs(capfire)["result"] not in ("skipped", "succeeded")
     assert sum_counter_for_result(collected_metrics(capfire), _METRIC, "succeeded") == 0

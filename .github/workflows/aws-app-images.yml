@@ -174,7 +174,7 @@ jobs:
     # そもそも存在しないので、ゲートは運用の約束ではなく経路の不在になる。
     environment: production-rollout
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     concurrency:
       group: vector-production-change
       cancel-in-progress: false
@@ -273,6 +273,11 @@ jobs:
             exit 1
           fi
 
+          if ! grep -Fxq 'scheduler' <<<"$services"; then
+            echo "::error::scheduler service が見つからないため更新を中止します"
+            exit 1
+          fi
+
           # 1 パス目: 全段の revision を登録するだけ。ここで落ちても本番は無傷。
           registered=""
           expected_task_definitions='{}'
@@ -315,15 +320,32 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE/release" --repo "$GITHUB_REPOSITORY" \
             --release-sha "$RELEASE_SHA"
 
-          # 2 パス目: 実際に本番を入れ替える。1 パス目で全段が揃っているので、
-          # 途中で落ちても「一部だけ新 revision」で終わる窓が短い。
+          # 旧cronの投入を止めてからworkerを更新する。
           expected_file="$RUNNER_TEMP/expected-task-definitions.json"
           printf '%s\n' "$expected_task_definitions" > "$expected_file"
           rollout_started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-          echo "expected-file=$expected_file" >> "$GITHUB_OUTPUT"
           echo "rollout-started-at=$rollout_started_at" >> "$GITHUB_OUTPUT"
+          scheduler_arn=$(jq -er '.scheduler' <<<"$expected_task_definitions")
+          scheduler_file="$RUNNER_TEMP/scheduler-task-definition.json"
+          jq '{scheduler: .scheduler}' <<<"$expected_task_definitions" > "$scheduler_file"
+          aws ecs update-service \
+            --cluster "$CLUSTER" --service scheduler --task-definition "$scheduler_arn" >/dev/null
+          echo "- scheduler -> ${scheduler_arn##*/}" >> "$GITHUB_STEP_SUMMARY"
+          python3 .rollout-control/.github/scripts/verify_ecs_rollout.py \
+            --cluster "$CLUSTER" --image-tag "$IMAGE_TAG" \
+            --expected-task-definitions "$scheduler_file" \
+            --rollout-started-at "$rollout_started_at" \
+            --poll-seconds 15 --timeout-seconds 1200 \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+          # schedulerの待機中にmainが進んだ場合も後続の更新を止める。
+          .rollout-control/backend/.venv/bin/python .rollout-control/.github/scripts/check_app_release.py rollout \
+            --repo-root "$GITHUB_WORKSPACE/release" --repo "$GITHUB_REPOSITORY" \
+            --release-sha "$RELEASE_SHA"
+          echo "expected-file=$expected_file" >> "$GITHUB_OUTPUT"
           while read -r svc arn; do
             [ -n "$svc" ] || continue
+            [ "$svc" != scheduler ] || continue
             aws ecs update-service \
               --cluster "$CLUSTER" --service "$svc" --task-definition "$arn" >/dev/null
             echo "- \`$svc\` -> \`${arn##*/}\`" >> "$GITHUB_STEP_SUMMARY"

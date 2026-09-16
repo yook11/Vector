@@ -1,4 +1,4 @@
-"""pipeline 5 stage (acquisition〜embedding) Stream health の毎分sampler。"""
+"""pipeline 4 stage (acquisition〜assessment) Stream health の毎分sampler。"""
 
 from __future__ import annotations
 
@@ -117,7 +117,7 @@ def _record_success(snapshot: StreamHealthSnapshot) -> None:
 async def observe_pipeline_queue_health(
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """固定5stageのsnapshotを独立して取得しLogfireへ記録する。"""
+    """固定4stageのsnapshotを独立して取得しLogfireへ記録する。"""
     redis = ctx.state.pipeline_control_redis
     for target in PIPELINE_QUEUE_TARGETS:
         try:

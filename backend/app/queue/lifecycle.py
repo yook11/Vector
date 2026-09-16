@@ -1,6 +1,6 @@
 """broker / scheduler の lifecycle event hook を attach する。
 
-本 module を import するだけで共通catalogのbroker × 7に対する
+本 module を import するだけで共通catalogのbroker × 6に対する
 WORKER_STARTUP / WORKER_SHUTDOWN / CLIENT_STARTUP / CLIENT_SHUTDOWN hook が
 登録される (副作用)。broker ごとの Redis 用途と AI adapter 配線は
 ``WorkerRuntime`` に集約し、単一 startup が順に実行する。AI provider の具象選択
@@ -44,14 +44,12 @@ from app.queue.brokers import (
     broker_briefing,
     broker_collection,
     broker_dispatch,
-    broker_embedding,
     broker_maintenance,
 )
 from app.queue.composition import (
     _warm_agent_sdk_imports,
     _wire_analysis_adapters,
     _wire_briefing_adapter,
-    _wire_embedding_adapters,
 )
 from app.queue.deadline_schedule import create_deadline_schedule_source
 from app.redis import (
@@ -220,7 +218,7 @@ def _register_client_lifecycle(broker: RedisStreamBroker, label: str) -> None:
     worker ではないので CLIENT_* が走る。cron 駆動を持つ broker
     (broker_dispatch / broker_briefing / broker_agent /
     broker_maintenance) のみに本関数を当てる。collection は API が producer
-    として startup するが cron が無い。analysis / embedding は scheduler も
+    として startup するが cron が無い。analysis は scheduler も
     API producer も無い。
 
     enqueue 側は DB を触らない (engine / session_factory は WORKER_STARTUP のみ)
@@ -253,15 +251,6 @@ _register_worker_lifecycle(
         redis_factory=create_worker_pipeline_control_client,
         redis_attr="pipeline_control_redis",
         compose=_wire_analysis_adapters,
-    ),
-)
-_register_worker_lifecycle(
-    broker_embedding,
-    WorkerRuntime(
-        "embedding",
-        redis_factory=create_worker_pipeline_control_client,
-        redis_attr="pipeline_control_redis",
-        compose=_wire_embedding_adapters,
     ),
 )
 _register_worker_lifecycle(

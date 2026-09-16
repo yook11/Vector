@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.shared.text import normalize_mention_surface
 
 __all__ = [
-    "EmbeddingPreconditionProtocol",
     "EmbeddingReadyBuildRejectionReason",
     "EmbeddingReadyBuildRejected",
     "EmbeddingReadyBuildFacts",
@@ -56,17 +55,6 @@ class EmbeddingReadyBuildRejected:
             raise TypeError("reason must be EmbeddingReadyBuildRejectionReason")
 
 
-class EmbeddingPreconditionProtocol(Protocol):
-    """Ready 構築に必要な DB 事実だけを読む repository contract。
-
-    構築可否と blocked 理由は ``ReadyForEmbedding`` が判定する。
-    """
-
-    async def load_ready_build_facts(
-        self, analyzed_article_id: int
-    ) -> EmbeddingReadyBuildFacts | None: ...
-
-
 class ReadyForEmbedding(BaseModel):
     """embedder 入力と Stage 5 precondition を満たした不変オブジェクト。"""
 
@@ -76,33 +64,10 @@ class ReadyForEmbedding(BaseModel):
     text_for_embedding: str = Field(min_length=1)
 
     @classmethod
-    async def try_advance_from(
-        cls,
-        analyzed_article_id: int,
-        embedding_repo: EmbeddingPreconditionProtocol,
-        *,
-        analyzable_hint: int | None = None,
-    ) -> tuple[ReadyForEmbedding, int] | EmbeddingReadyBuildRejected:
-        """DB 事実から Ready を構築し、監査主語の analyzable_article_id を確定する。
-
-        構築できない場合は理由付きの拒否結果を返す。
-        analyzable_article_id は trigger 由来の
-        ``analyzable_hint`` を優先し、旧 in-flight message (None) のときだけ DB 射影に
-        fallback する。Ready 構築が成功した時点で facts は非 None なので、返す
-        analyzable_article_id は必ず int になる。
-        """
-        facts = await embedding_repo.load_ready_build_facts(analyzed_article_id)
-        return cls.from_facts(
-            analyzed_article_id, facts, analyzable_hint=analyzable_hint
-        )
-
-    @classmethod
     def from_facts(
         cls,
         analyzed_article_id: int,
         facts: EmbeddingReadyBuildFacts | None,
-        *,
-        analyzable_hint: int | None = None,
     ) -> tuple[ReadyForEmbedding, int] | EmbeddingReadyBuildRejected:
         """取得済みの事実から、I/Oなしで開始条件と入力を検証する。"""
         if facts is None:
@@ -130,12 +95,7 @@ class ReadyForEmbedding(BaseModel):
                 EmbeddingReadyBuildRejectionReason.INPUT_INVALID,
                 analyzable_article_id=facts.analyzable_article_id,
             )
-        analyzable_article_id = (
-            analyzable_hint
-            if analyzable_hint is not None
-            else facts.analyzable_article_id
-        )
-        return ready, analyzable_article_id
+        return ready, facts.analyzable_article_id
 
 
 def _render_embedding_text(*, summary: str, key_points: Any) -> str:

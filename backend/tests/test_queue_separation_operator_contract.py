@@ -325,7 +325,6 @@ def test_redis_topology_spec_records_final_collect_acl_boundary() -> None:
             for stream in (
                 "pipeline:content",
                 "pipeline:assessment",
-                "pipeline:embedding",
                 "pipeline:maintenance",
             )
         )

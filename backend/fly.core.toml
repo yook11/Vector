@@ -111,7 +111,6 @@ primary_region = 'nrt'
   # (Redis 永続化と併せて Stage4/5 の塩漬け記事を確実に再投入する)。
   # Fly [env] の値は文字列必須 ("true")。
   BACKFILL_ASSESSMENTS_ENABLED = "true"
-  BACKFILL_EMBEDDINGS_ENABLED = "true"
 
 # 同一 image を 4 process group で起動する。process 名は [[services]] /
 # [[checks]] / [[vm]] の processes 指定と一致必須。

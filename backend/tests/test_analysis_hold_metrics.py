@@ -1,4 +1,4 @@
-"""assessment / embedding hold metric の Logfire oracle。"""
+"""assessment hold metric の Logfire oracle。"""
 
 from __future__ import annotations
 
@@ -33,7 +33,6 @@ def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
     ("stage", "metric_name"),
     [
         (Stage.ASSESSMENT, "vector.assessment.hold_set"),
-        (Stage.EMBEDDING, "vector.embedding.hold_set"),
     ],
 )
 async def test_set_hold_increments_success_counter_with_reason_only(
@@ -58,7 +57,6 @@ async def test_set_hold_increments_success_counter_with_reason_only(
     ("stage", "metric_name"),
     [
         (Stage.ASSESSMENT, "vector.assessment.hold_set_failed"),
-        (Stage.EMBEDDING, "vector.embedding.hold_set_failed"),
     ],
 )
 async def test_set_hold_failure_increments_failed_counter_with_reason_only(

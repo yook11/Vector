@@ -32,7 +32,6 @@ from app.queue.brokers import (
     broker_briefing,
     broker_collection,
     broker_dispatch,
-    broker_embedding,
     broker_maintenance,
 )
 
@@ -50,14 +49,12 @@ _BROKERS_WITH_SCHEDULER = (
 _BROKERS_WITHOUT_CLIENT_LIFECYCLE = (
     (broker_collection, "collection"),
     (broker_analysis, "analysis"),
-    (broker_embedding, "embedding"),
     (_TREND_WORKER_BROKER, "trend_discovery_worker"),
 )
 _WORKER_BROKERS = (
     (broker_dispatch, "dispatch"),
     (broker_collection, "collection"),
     (broker_analysis, "analysis"),
-    (broker_embedding, "embedding"),
     (_TREND_WORKER_BROKER, "trend_discovery"),
     (broker_briefing, "briefing"),
     (broker_agent, "agent"),
@@ -93,7 +90,7 @@ def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
     """CLIENT_STARTUP hook が cron 駆動 5 broker のみに登録される。
 
     collection は API が producer として startup するが cron が無く、
-    analysis / embedding は enqueue 側 startup 対象外。CLIENT hook の
+    analysis は enqueue 側 startup 対象外。CLIENT hook の
     対象集合はこの 5 本のまま。
     """
     for broker, label in _BROKERS_WITH_SCHEDULER:

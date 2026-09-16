@@ -4,7 +4,7 @@
 maintenance / trend_discovery) と API プロセスの module import は、起動時に重い
 AI SDK (``openai`` + ``google.genai``、実測 ~133MB) を import してはならない。
 SDK は AI を実行する worker の compose 関数本体 (broker_analysis /
-broker_embedding / broker_briefing / broker_agent)、または API の
+broker_briefing / broker_agent)、または API の
 request-scoped factory 内でのみロードされる設計 (``app/queue/composition.py``
 と ``app/agent/router.py`` の遅延 import)。
 

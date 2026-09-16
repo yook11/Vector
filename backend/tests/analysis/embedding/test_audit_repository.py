@@ -1,22 +1,4 @@
-"""``EmbeddingAuditRepository`` の semantic method 単独テスト。
-
-audit row の shape SSoT が repository に集約されたことを検証する:
-
-- ``append_success`` で
-  ``outcome_code="embedding_completed"`` + payload に
-  ``ai_model`` / ``vector_dimension`` が embedder から取得されている
-- ``append_failure`` で **retry 軸 (Recoverable / Terminal) + Layer 2-B + catch-all**:
-  - ``EmbeddingRecoverableError`` → ``retryability=retryable`` / failure_kind=mode 値
-  - ``EmbeddingTerminalError`` → ``retryability=non_retryable`` / failure_kind=mode 値
-  - ``EmbeddingResponseInvalidError`` (Layer 2-B) → ``retryability=retryable`` /
-    ``outcome_code="embedding_response_invalid"`` / failure_kind="ai_response_invalid"
-  - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
-    ``outcome_code="unexpected_error"``
-- ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録 (Service の
-  ``raise to_embedding_error(exc) from exc`` の wrapper 連鎖を想定)
-- ``error_message`` が ``redact_secrets()`` 経由
-- repository は ``commit`` を呼ばない (caller の tx 境界保持)
-"""
+"""Embeddingの成功・拒否・分類済み失敗の監査を検証する。"""
 
 from __future__ import annotations
 
@@ -40,6 +22,9 @@ from app.ai_providers.errors import (
 )
 from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
+from app.analysis.embedding.consumer_failure_classification import (
+    classify_embedding_failure,
+)
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildRejected,
     EmbeddingReadyBuildRejectionReason,
@@ -48,9 +33,6 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingResponseInvalidError,
     to_embedding_error,
-)
-from app.analysis.embedding.task_errors import (
-    to_embedding_task_error,
 )
 from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.stages.embedding import EmbeddingAuditRepository
@@ -183,31 +165,6 @@ async def test_append_ready_build_rejected_records_missing_analysis_rejected(
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_failed_records_unknown_failure(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """Ready build failed は failed / unknown retryability で trigger id を残す。"""
-    exc = RuntimeError("ready build exploded")
-    async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_ready_build_failed(
-            analyzed_article_id=123,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_by_outcome(
-        db_session, "embedding_ready_build_failed_unexpected_error"
-    )
-    assert ev.event_type == "failed"
-    assert ev.retryability == "unknown"
-    assert ev.error_class == "builtins.RuntimeError"
-    assert ev.payload["failure_kind"] == "unexpected_error"
-    assert ev.payload["analyzed_article_id"] == 123
-    assert "analysis_id" not in ev.payload
-
-
-@pytest.mark.asyncio
 async def test_append_success_records_with_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -321,16 +278,17 @@ async def test_append_failure_recoverable_maps_to_retryable(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingRecoverableError → retryable / failure_kind=mode 値。"""
+    """ネットワーク障害の分類を監査へ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = to_embedding_error(AIProviderNetworkError())
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_failure(
+        await EmbeddingAuditRepository(session).append_classified_failure(
             analyzed_article_id=1,
             article_id=article.id,
-            exc=to_embedding_task_error(exc),
+            exc=exc,
+            projection=classify_embedding_failure(exc).audit,
         )
         await session.commit()
 
@@ -348,16 +306,17 @@ async def test_append_failure_terminal_operator_action(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """OPERATOR_ACTION_REQUIRED → Terminal / non_retryable / mode 値 failure_kind。"""
+    """設定不備の分類を監査へ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = to_embedding_error(AIProviderConfigurationError())
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_failure(
+        await EmbeddingAuditRepository(session).append_classified_failure(
             analyzed_article_id=1,
             article_id=article.id,
-            exc=to_embedding_task_error(exc),
+            exc=exc,
+            projection=classify_embedding_failure(exc).audit,
         )
         await session.commit()
 
@@ -374,7 +333,7 @@ async def test_append_failure_terminal_target_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """TARGET_REJECTED → Terminal / non_retryable / failure_reason に reason 値。"""
+    """対象拒否の分類と理由を監査へ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = to_embedding_error(
@@ -382,10 +341,11 @@ async def test_append_failure_terminal_target_rejected(
     )
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_failure(
+        await EmbeddingAuditRepository(session).append_classified_failure(
             analyzed_article_id=1,
             article_id=article.id,
-            exc=to_embedding_task_error(exc),
+            exc=exc,
+            projection=classify_embedding_failure(exc).audit,
         )
         await session.commit()
 
@@ -403,16 +363,17 @@ async def test_append_failure_layer_2b_response_invalid(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """応答不正はTaskiq境界で変換し、従来のコードとretryable分類を維持する。"""
+    """応答不正の分類をコードとretryabilityへ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = EmbeddingResponseInvalidError()
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_failure(
+        await EmbeddingAuditRepository(session).append_classified_failure(
             analyzed_article_id=1,
             article_id=article.id,
-            exc=to_embedding_task_error(exc),
+            exc=exc,
+            projection=classify_embedding_failure(exc).audit,
         )
         await session.commit()
 
@@ -436,10 +397,11 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
     exc = RuntimeError("boom")
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_unexpected_failure(
+        await EmbeddingAuditRepository(session).append_classified_failure(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
+            projection=classify_embedding_failure(exc).audit,
         )
         await session.commit()
 
@@ -502,10 +464,11 @@ async def test_append_failure_projects_db_exceptions(
     exc = exc_factory()  # type: ignore[operator]
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_failure(
+        await EmbeddingAuditRepository(session).append_classified_failure(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
+            projection=classify_embedding_failure(exc).audit,
         )
         await session.commit()
 
@@ -522,7 +485,7 @@ async def test_append_failure_walks_error_chain_via_cause(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """監査にTaskiq分類・Service失敗・元のプロバイダー例外を残す。"""
+    """監査にService失敗と元のプロバイダー例外を残す。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     try:
@@ -532,20 +495,20 @@ async def test_append_failure_walks_error_chain_via_cause(
             raise to_embedding_error(inner) from inner
     except EmbeddingError as exc:
         async with session_factory() as session:
-            await EmbeddingAuditRepository(session).append_failure(
+            await EmbeddingAuditRepository(session).append_classified_failure(
                 analyzed_article_id=1,
                 article_id=article.id,
-                exc=to_embedding_task_error(exc),
+                exc=exc,
+                projection=classify_embedding_failure(exc).audit,
             )
             await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     chain = ev.payload["error_chain"]
     assert chain is not None
-    assert len(chain) == 3
-    assert chain[0].endswith(".EmbeddingRecoverableError")
-    assert chain[1].endswith(".EmbeddingError")
-    assert chain[2].endswith(".AIProviderNetworkError")
+    assert len(chain) == 2
+    assert chain[0].endswith(".EmbeddingError")
+    assert chain[1].endswith(".AIProviderNetworkError")
 
 
 @pytest.mark.asyncio
@@ -563,10 +526,11 @@ async def test_append_failure_redacts_secrets_in_error_message(
     )
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_unexpected_failure(
+        await EmbeddingAuditRepository(session).append_classified_failure(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
+            projection=classify_embedding_failure(exc).audit,
         )
         await session.commit()
 

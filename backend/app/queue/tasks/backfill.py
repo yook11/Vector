@@ -20,9 +20,6 @@ from app.backfill.cleanup import (
 from app.backfill.cleanup import (
     exclude_aged_out_assessments as _exclude_aged_out_assessments,
 )
-from app.backfill.cleanup import (
-    exclude_aged_out_embeddings as _exclude_aged_out_embeddings,
-)
 from app.backfill.metrics import (
     backlog_gauge as _backlog_gauge,
 )
@@ -35,7 +32,6 @@ from app.backfill.metrics import (
 from app.backfill.policy import (
     ASSESSMENTS_LIMIT,
     CURATIONS_LIMIT,
-    EMBEDDINGS_LIMIT,
     BackfillWindow,
 )
 from app.config import settings
@@ -46,22 +42,18 @@ from app.queue.helpers.budget import consume_daily_budget
 from app.queue.helpers.stage_hold import is_stage_held
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
-from app.queue.messages.embedding import EmbeddingTrigger
 from app.queue.schedule import (
     CRON_BACKFILL_ASSESSMENTS,
     CRON_BACKFILL_CURATIONS,
-    CRON_BACKFILL_EMBEDDINGS,
 )
 from app.queue.tasks.assessment import assess_content
 from app.queue.tasks.curation import curate_content
-from app.queue.tasks.embedding import generate_embedding
 from app.shared.time import utc_now
 
 logger = structlog.get_logger(__name__)
 
 CURATIONS_DAILY_MAX = 600
 ASSESSMENTS_DAILY_MAX = 600
-EMBEDDINGS_DAILY_MAX = 1500
 
 _held_gauge = logfire.metric_gauge(
     "vector.backfill.held",
@@ -359,149 +351,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 
         logger.info(
             "backfill_assessments_completed",
-            found=found,
-            granted=granted,
-            requeued=enqueued,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Stage 5: embedding の塩漬け救済
-# ---------------------------------------------------------------------------
-
-
-@broker_maintenance.task(
-    task_name="backfill_embeddings",
-    timeout=120,
-    max_retries=0,
-    retry_on_error=False,
-    schedule=[{"cron": CRON_BACKFILL_EMBEDDINGS}],
-)
-async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
-    """embedding NULL の analysis を発見し ``generate_embedding`` を再投入する。
-
-    maintenance は投入対象を見つけ、precondition 検証と Ready 構築は下流 task に
-    委ねる。既に処理済みの stale trigger は Stage 5 task 側で観測する。
-    """
-    with pipeline_stage_span(Stage.BACKFILL_EMBED, op="backfill_embeddings"):
-        session_factory = ctx.state.session_factory
-        run_id = _new_backfill_run_id()
-        if not settings.backfill_embeddings_enabled:
-            # kill switch off = 運用ゲート。監査に焼かず log で観測する。
-            logger.info("backfill_embeddings_disabled")
-            return
-
-        try:
-            embedding_held = await is_stage_held(
-                ctx.state.pipeline_control_redis, Stage.EMBEDDING
-            )
-            _record_hold_state("embedding", held=embedding_held)
-            if embedding_held:
-                # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
-                logger.warning("backfill_embeddings_held")
-                return
-
-            before, after = BackfillWindow().boundaries_at(utc_now())
-
-            aged_out_count = await _exclude_aged_out_embeddings(
-                session_factory, created_before=after
-            )
-            _record_aged_out("embedding", action="excluded", count=aged_out_count)
-
-            async with session_factory() as session:
-                backlog = PipelineBacklog(session)
-                backlog_count = await backlog.count_analyzed_articles_pending_embedding(
-                    created_before=before,
-                    created_after=after,
-                )
-                targets = await backlog.embedding_targets_pending(
-                    created_before=before,
-                    created_after=after,
-                    limit=EMBEDDINGS_LIMIT,
-                )
-
-            _backlog_gauge.set(backlog_count, attributes={"stage": "embedding"})
-
-            found = len(targets)
-            if found == 0:
-                # 対象 0 件 = 運用ゲート。監査に焼かず log + backlog gauge で観測する。
-                logger.info("backfill_embeddings_empty")
-                return
-
-            granted = await consume_daily_budget(
-                ctx.state.pipeline_control_redis, "embed", found, EMBEDDINGS_DAILY_MAX
-            )
-            if granted == 0:
-                # 予算上限に到達し実対象を先送り = run レベルの棄却。
-                # benign skip ではなく REJECTED で監査に残す。
-                await _append_backfill_run_event(
-                    session_factory,
-                    backfill_stage="embed",
-                    run_id=run_id,
-                    event_type=EventType.REJECTED,
-                    outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
-                    daily_max=EMBEDDINGS_DAILY_MAX,
-                )
-                logger.warning(
-                    "backfill_embeddings_daily_budget_exhausted", found=found
-                )
-                return
-
-            # ID のみ enqueue し、precondition 検証は Stage 5 task に委ねる。
-            enqueued = 0
-            failed = 0
-            for target in targets[:granted]:
-                try:
-                    await generate_embedding.kiq(
-                        EmbeddingTrigger(
-                            analyzed_article_id=target.target_id,
-                            analyzable_article_id=target.analyzable_article_id,
-                        ),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    failed += 1
-                    await _append_backfill_item_event(
-                        session_factory,
-                        backfill_stage="embed",
-                        run_id=run_id,
-                        target_kind="analyzed_article",
-                        target=target,
-                        event_type=EventType.FAILED,
-                        outcome_code=BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
-                        exc=exc,
-                    )
-                    logger.warning(
-                        "backfill_embeddings_kiq_failed",
-                        analyzed_article_id=target.target_id,
-                        error=str(exc),
-                    )
-                    continue
-
-                enqueued += 1
-                await _append_backfill_item_event(
-                    session_factory,
-                    backfill_stage="embed",
-                    run_id=run_id,
-                    target_kind="analyzed_article",
-                    target=target,
-                    event_type=EventType.SUCCEEDED,
-                    outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
-                )
-
-            _record_dispatched("embedding", enqueued)
-        except Exception as exc:
-            await _append_backfill_run_event(
-                session_factory,
-                backfill_stage="embed",
-                run_id=run_id,
-                event_type=EventType.FAILED,
-                outcome_code=BackfillOutcomeCode.RUN_FAILED,
-                exc=exc,
-            )
-            raise
-
-        logger.info(
-            "backfill_embeddings_completed",
             found=found,
             granted=granted,
             requeued=enqueued,
