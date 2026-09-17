@@ -80,11 +80,11 @@ prepareのsummaryを開き、SHA・mode・target head・migration tree OID・led
 復旧verifyで利用可能なledgerが無ければ開始revision・rangeは未確認とし、
 API障害でbaselineを確認できない場合は復旧扱いにしない。
 
-expandは先に適用し、その後アプリを反映する。contractは**互換コードを最新mainとして
-本番へ反映してからcontract PRをmergeする**。contractの対象SHAの直前main SHAが
-proxy以外の全serviceへ完全反映済みで、ledgerもそのschemaに一致していることを必要とする。
-直前SHAとの差分は下記の許可pathに限定し、CIと本番prepareで同じ規則を使う。
-mixedはCIとrunnerで拒否し、条件を満たすためのapp rolloutはmigration workflowから実行しない。
+権限追加など新アプリの前提となる変更はDBを先に適用し、旧カラム・権限の削除は互換アプリを先に反映する。
+適用順序は変更ごとにPRと承認時に確認し、contractで直前main SHAの全serviceへの反映を一律には要求しない。
+ledgerがcontract直前のschemaに一致することと、直前SHAとの差分が下記の許可pathに限定されることは引き続き検証する。
+CIと本番prepareで同じ規則を使い、mixedはCIとrunnerで拒否する。
+app rolloutはmigration workflowから実行しない。
 
 ### Contract PRの変更範囲
 

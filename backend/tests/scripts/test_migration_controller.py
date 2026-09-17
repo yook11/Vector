@@ -430,9 +430,7 @@ def test_changed_or_invalid_preconditions_never_register_or_start(tmp_path, inva
 @pytest.mark.parametrize(
     "invalid", ["empty", "in_progress", "old", "runtime", "definition"]
 )
-def test_contract_requires_completed_parent_application_without_updates(
-    tmp_path, invalid
-):
+def test_contract_does_not_require_parent_application_rollout(tmp_path, invalid):
     config, prepared, evidence, ecs, ledger, api, events = _setup(tmp_path, "contract")
     if invalid == "empty":
         ecs.service_names = ["proxy"]
@@ -448,7 +446,8 @@ def test_contract_requires_completed_parent_application_without_updates(
         config, prepared, evidence, ecs, ledger, revalidate=lambda: None
     )
 
-    assert (result, events, ledger.read_latest().record.release_sha) == (2, [], _PARENT)
+    assert result == 0
+    assert ledger.read_latest().record.release_sha == _SHA
 
 
 def test_consecutive_runs_always_use_base_not_previous_runtime_environment(tmp_path):
