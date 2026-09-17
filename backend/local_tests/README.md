@@ -35,6 +35,7 @@ uv run pytest local_tests/ --collect-only -q
 
 `system_database_template`が専用Postgres・ロール・Better Auth・Alembic headを準備する。
 `system_database`はケースごとにDBを複製し、終了後に削除する。
+TEMPLATEが引き継がないDB単位のACLは、migration適用済みDBの実際のACLから復元する。
 
 - `system_database.connect("vector_app")`: 指定ロール自身で認証する接続。
 - `system_database.url("vector_app", sqlalchemy=True)`: 製品Engine用の接続URL。

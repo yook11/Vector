@@ -24,7 +24,12 @@ from sqlalchemy.engine import URL
 
 ROOT = Path(__file__).resolve().parents[2]
 Role = Literal[
-    "vector", "vector_app", "vector_auth", "vector_collect", "vector_outbox_relay"
+    "vector",
+    "vector_app",
+    "vector_auth",
+    "vector_collect",
+    "vector_outbox_relay",
+    "vector_auth_rate_limit_cleanup",
 ]
 
 
@@ -83,15 +88,16 @@ async def _prepare_auth(database: SystemDatabase) -> None:
         await connection.execute("CREATE SCHEMA auth")
 
 
-async def _prepare_outbox_relay_login(database: SystemDatabase) -> None:
+async def _prepare_dedicated_role_logins(database: SystemDatabase) -> None:
     async with database.connect("vector") as connection:
         # initとmigrationが作るロール・権限を保ち、テスト認証だけを設定する。
-        statement = await connection.fetchval(
-            "SELECT format('ALTER ROLE vector_outbox_relay LOGIN PASSWORD %L', "
-            "$1::text)",
-            database.passwords["vector_outbox_relay"],
-        )
-        await connection.execute(statement)
+        for role in ("vector_outbox_relay", "vector_auth_rate_limit_cleanup"):
+            statement = await connection.fetchval(
+                "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', $1::text, $2::text)",
+                role,
+                database.passwords[role],
+            )
+            await connection.execute(statement)
 
 
 def _migrate_auth(database: SystemDatabase, env: dict[str, str]) -> None:
@@ -148,12 +154,13 @@ async def _verify_template(database: SystemDatabase) -> None:
         }
         if actual != migration_heads():
             raise RuntimeError("system DB migration heads do not match source")
-        # CREATE DATABASE TEMPLATEはDB単位のACLを複製しないため黙って権限を変えない。
-        acl = await connection.fetchval(
-            "SELECT datacl FROM pg_database WHERE datname = current_database()"
-        )
-        if acl is not None:
-            raise RuntimeError("system DB template has unsupported database-level ACL")
+        # 所有者以外のgrantorは複製時に同じ授権関係を再現できないため拒否する。
+        if await connection.fetchval(
+            "SELECT EXISTS (SELECT FROM pg_database d, "
+            "LATERAL aclexplode(d.datacl) a "
+            "WHERE d.datname=current_database() AND a.grantor <> d.datdba)"
+        ):
+            raise RuntimeError("system DB template has unsupported ACL grantor")
     async with database.connect("vector_app") as connection:
         if not await connection.fetchval("SELECT count(*) FROM categories"):
             raise RuntimeError("system DB category seed is missing")
@@ -206,9 +213,12 @@ def migrated_database() -> Iterator[SystemDatabase]:
                 "vector_auth": values["POSTGRES_AUTH_PASSWORD"],
                 "vector_collect": values["POSTGRES_COLLECT_PASSWORD"],
                 "vector_outbox_relay": values["POSTGRES_OUTBOX_RELAY_PASSWORD"],
+                "vector_auth_rate_limit_cleanup": values[
+                    "POSTGRES_AUTH_CLEANUP_PASSWORD"
+                ],
             },
         )
-        asyncio.run(_prepare_outbox_relay_login(database))
+        asyncio.run(_prepare_dedicated_role_logins(database))
         asyncio.run(_prepare_auth(database))
         _migrate_auth(database, env)
         _run(
@@ -233,6 +243,25 @@ async def isolated_database(template: SystemDatabase) -> AsyncIterator[SystemDat
     async with admin.connect("vector") as connection:
         await connection.execute("CREATE DATABASE system_test TEMPLATE vector")
     try:
+        async with admin.connect("vector") as connection:
+            grants = await connection.fetch(
+                "SELECT format('GRANT %s ON DATABASE %I TO %s%s', "
+                "a.privilege_type, 'system_test', "
+                "CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, "
+                "CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END) "
+                "AS statement FROM pg_database d "
+                "CROSS JOIN LATERAL aclexplode("
+                "coalesce(d.datacl, acldefault('d',d.datdba))) a "
+                "LEFT JOIN pg_roles r ON r.oid=a.grantee "
+                "WHERE d.datname='vector' AND a.grantee <> d.datdba"
+            )
+            async with connection.transaction():
+                # TEMPLATEがコピーしないDB ACLを元DBの正本から復元する。
+                await connection.execute(
+                    "REVOKE ALL ON DATABASE system_test FROM PUBLIC"
+                )
+                for grant in grants:
+                    await connection.execute(grant["statement"])
         yield replace(template, name="system_test")
     finally:
         async with admin.connect("vector") as connection:
