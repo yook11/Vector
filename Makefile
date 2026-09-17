@@ -66,11 +66,11 @@ pipeline-restart: verify-env  ## backend app code・設定・ORM 変更後の再
 pipeline-down:  ## パイプライン停止（DB/Redis は残す → データ保持）
 	docker compose stop $(PIPELINE)
 
-pipeline-status:  ## サービス状態と4-stage pipeline Stream観測
+pipeline-status:  ## サービス状態と3-stage pipeline Stream観測
 	@echo "=== Containers ==="
 	@docker compose ps --format 'table {{.Name}}\t{{.State}}\t{{.Status}}'
 	@echo
-	@echo "=== 4-stage pipeline Stream status ==="
+	@echo "=== 3-stage pipeline Stream status ==="
 	@docker compose exec -T backend python scripts/pipeline_queue_status.py \
 	  || echo "pipeline Stream status unavailable"
 	@echo

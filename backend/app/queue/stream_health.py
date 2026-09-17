@@ -1,6 +1,4 @@
-"""acquisition / completion / curation / assessment の
-4 stageを読むRedis Stream health snapshot。
-"""
+"""acquisition / completion / curationを読むRedis Stream health snapshot。"""
 
 from __future__ import annotations
 
@@ -15,7 +13,6 @@ StreamHealthStage = Literal[
     "acquisition",
     "completion",
     "curation",
-    "assessment",
 ]
 StreamHealthFailureReason = Literal[
     "stream_missing",
@@ -78,11 +75,6 @@ PIPELINE_QUEUE_TARGETS = (
     StreamHealthTarget(
         stage="curation",
         stream="pipeline:curation",
-        group="taskiq",
-    ),
-    StreamHealthTarget(
-        stage="assessment",
-        stream="pipeline:assessment",
         group="taskiq",
     ),
 )

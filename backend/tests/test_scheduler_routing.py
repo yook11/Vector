@@ -59,7 +59,6 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
         scheduler_maintenance,
         {
             "backfill_curations",
-            "backfill_assessments",
             "observe_pipeline_queue_health",
             "purge_auth_rate_limits",
             "purge_pipeline_events",

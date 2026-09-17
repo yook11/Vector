@@ -533,12 +533,8 @@ async def test_task_ready_rejection_keeps_article_without_ai_or_followup(
         state=SimpleNamespace(session_factory=session_factory, curator=curator)
     )
 
-    with patch(
-        "app.queue.tasks.assessment.assess_content.kiq", new_callable=AsyncMock
-    ) as enqueue:
-        await curate_content(CurationTrigger(analyzable_article_id=article.id), ctx)
+    await curate_content(CurationTrigger(analyzable_article_id=article.id), ctx)
     curator.curate.assert_not_awaited()
-    enqueue.assert_not_awaited()
     async with session_factory() as reader:
         assert await reader.get(AnalyzableArticleRecord, article.id) is not None
         (audit,) = await _fetch_curation_events(reader, article.id)

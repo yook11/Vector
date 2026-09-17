@@ -1,4 +1,4 @@
-"""実Redisでのanalysis multi-Stream transport / recovery契約。"""
+"""実RedisでのCuration Stream transport / recovery契約。"""
 
 from __future__ import annotations
 
@@ -26,19 +26,16 @@ pytestmark = [
     pytest.mark.xdist_group("redis"),
 ]
 
-Stage = Literal["curation", "assessment"]
+Stage = Literal["curation"]
 
 _PRODUCTION_STREAM_BY_STAGE: dict[Stage, str] = {
     "curation": "pipeline:curation",
-    "assessment": "pipeline:assessment",
 }
 _TASK_BY_STAGE: dict[Stage, tuple[str, str]] = {
     "curation": ("app.queue.tasks.curation", "curate_content"),
-    "assessment": ("app.queue.tasks.assessment", "assess_content"),
 }
 _TRIGGER_BY_STAGE: dict[Stage, dict[str, int]] = {
     "curation": {"analyzable_article_id": 1},
-    "assessment": {"curation_id": 1},
 }
 
 
@@ -49,13 +46,10 @@ class AnalysisTransport:
     redis: Redis
     broker: RedisStreamBroker
     curation_stream: str
-    assessment_stream: str
     group: str = "taskiq"
 
     def stream_for(self, stage: Stage) -> str:
-        if stage == "curation":
-            return self.curation_stream
-        return self.assessment_stream
+        return self.curation_stream
 
     def lock_for(self, stage: Stage) -> str:
         return f"autoclaim:{self.group}:{self.stream_for(stage)}"
@@ -67,11 +61,9 @@ async def analysis_transport() -> AsyncIterator[AnalysisTransport]:
     suffix = uuid4().hex
     redis = aioredis.from_url(settings.redis_url)
     curation_stream = f"test:pipeline:curation:transport:{suffix}"
-    assessment_stream = f"test:pipeline:assessment:transport:{suffix}"
     broker = RedisStreamBroker(
         url=settings.redis_url,
         queue_name=curation_stream,
-        additional_streams={assessment_stream: ">"},
         consumer_group_name="taskiq",
         consumer_id="0-0",
         maxlen=10_000,
@@ -84,7 +76,6 @@ async def analysis_transport() -> AsyncIterator[AnalysisTransport]:
         redis=redis,
         broker=broker,
         curation_stream=curation_stream,
-        assessment_stream=assessment_stream,
     )
     try:
         yield transport
@@ -92,9 +83,7 @@ async def analysis_transport() -> AsyncIterator[AnalysisTransport]:
         await broker.shutdown()
         await redis.delete(
             curation_stream,
-            assessment_stream,
             transport.lock_for("curation"),
-            transport.lock_for("assessment"),
         )
         await redis.aclose()
 
@@ -226,10 +215,9 @@ async def _seed_stale_pending(
 async def test_one_listener_consumes_prestartup_messages_and_acks_source_streams(
     analysis_transport: AnalysisTransport,
 ) -> None:
-    """0-0 groupはstartup前の両Stream messageを1 listenerで回収する。"""
+    """0-0 groupはstartup前のCurationのmessageを1 listenerで回収する。"""
     expected = {
-        (await _enqueue(analysis_transport, stage)).task_id
-        for stage in ("curation", "assessment")
+        (await _enqueue(analysis_transport, "curation")).task_id for _ in range(2)
     }
     await analysis_transport.broker.startup()
 
@@ -243,16 +231,14 @@ async def test_one_listener_consumes_prestartup_messages_and_acks_source_streams
     assert (
         received,
         await _pending_count(analysis_transport, "curation"),
-        await _pending_count(analysis_transport, "assessment"),
-    ) == (expected, 0, 0)
+    ) == (expected, 0)
 
 
-@pytest.mark.parametrize("stage", ["curation", "assessment"])
 async def test_simple_retry_xadd_stays_on_originating_stage_stream(
     analysis_transport: AnalysisTransport,
-    stage: Stage,
 ) -> None:
     """SimpleRetryは受信queue_nameを保ち、実Redisの同じStreamへ再投入する。"""
+    stage: Stage = "curation"
     middleware = SimpleRetryMiddleware(default_retry_count=0)
     middleware.set_broker(analysis_transport.broker)
     message = _taskiq_message(
@@ -270,24 +256,21 @@ async def test_simple_retry_xadd_stays_on_originating_stage_stream(
     await middleware.on_error(message, result, RuntimeError("test-local retry"))
 
     origin = analysis_transport.stream_for(stage)
-    other_stage: Stage = "assessment" if stage == "curation" else "curation"
     rows = await analysis_transport.redis.xrange(origin)
     retried = analysis_transport.broker.formatter.loads(rows[0][1][b"data"])
     assert (
         await analysis_transport.redis.xlen(origin),
-        await analysis_transport.redis.xlen(analysis_transport.stream_for(other_stage)),
         retried.labels["queue_name"],
         int(retried.labels["_retries"]),
-    ) == (1, 0, origin, 1)
+    ) == (1, origin, 1)
 
 
 async def test_stale_pel_is_claimed_only_after_wake_and_batch_is_capped_at_100(
     analysis_transport: AnalysisTransport,
 ) -> None:
-    """新規配達がないiterationではscanせず、wake後に両Streamを最大100件ずつscanする。"""
+    """新規配達がなければscanせず、wake後はCurationを最大100件回収する。"""
     await analysis_transport.broker.startup()
     await _seed_stale_pending(analysis_transport, "curation", 101)
-    await _seed_stale_pending(analysis_transport, "assessment", 1)
 
     waiting: asyncio.Task[AckableMessage] | None = None
     async with _listener(analysis_transport) as listener:
@@ -302,7 +285,7 @@ async def test_stale_pel_is_claimed_only_after_wake_and_batch_is_capped_at_100(
             await wake_delivery.ack()
 
             claimed: Counter[str] = Counter()
-            for _ in range(101):
+            for _ in range(100):
                 delivery = await _next(listener)
                 claimed[_decode(analysis_transport, delivery).labels["queue_name"]] += 1
                 await delivery.ack()
@@ -322,17 +305,14 @@ async def test_stale_pel_is_claimed_only_after_wake_and_batch_is_capped_at_100(
     assert (
         claimed,
         await _pending_count(analysis_transport, "curation"),
-        await _pending_count(analysis_transport, "assessment"),
         {item["consumer"] for item in remaining},
     ) == (
         Counter(
             {
                 analysis_transport.curation_stream: 100,
-                analysis_transport.assessment_stream: 1,
             }
         ),
         1,
-        0,
         {b"seed-consumer"},
     )
 
@@ -350,7 +330,7 @@ async def test_one_wake_cleans_at_most_100_ghost_pel_references(
     deleted = await analysis_transport.redis.xdel(
         analysis_transport.curation_stream, *ghost_ids
     )
-    wake = await _enqueue(analysis_transport, "assessment")
+    wake = await _enqueue(analysis_transport, "curation")
 
     scan: asyncio.Task[AckableMessage] | None = None
     async with _listener(analysis_transport) as listener:
@@ -376,7 +356,7 @@ async def test_one_wake_cleans_at_most_100_ghost_pel_references(
         yielded_live_payload,
         remaining_ghosts,
         await analysis_transport.redis.xlen(analysis_transport.curation_stream),
-    ) == (1_001, False, 901, 0)
+    ) == (1_001, False, 901, 1)
 
 
 async def test_autoclaim_lock_primitive_uses_finite_production_timeout(
@@ -431,12 +411,11 @@ async def test_group_recreation_at_zero_replays_acked_retained_messages(
     """ACK済みでもgroup loss後は再配達され、rate-limit returnを完了保証にできない。
 
     task側の「gate拒否ならService/downstreamなしで正常return」は
-    analysis/{curation,assessment}/test_tasks.py のquota skip testが固定する。
+    analysis/curation/test_tasks.py のquota skip testが固定する。
     ここではその正常ACK後もretained payloadが再進入し得るtransport側だけを固定する。
     """
     expected = {
-        (await _enqueue(analysis_transport, stage)).task_id
-        for stage in ("curation", "assessment")
+        (await _enqueue(analysis_transport, "curation")).task_id for _ in range(2)
     }
     await analysis_transport.broker.startup()
 
@@ -445,10 +424,7 @@ async def test_group_recreation_at_zero_replays_acked_retained_messages(
             delivery = await _next(listener)
             await delivery.ack()
 
-    for stream in (
-        analysis_transport.curation_stream,
-        analysis_transport.assessment_stream,
-    ):
+    for stream in (analysis_transport.curation_stream,):
         await analysis_transport.redis.xgroup_destroy(stream, analysis_transport.group)
     await analysis_transport.broker._declare_consumer_group()
 
@@ -462,7 +438,5 @@ async def test_group_recreation_at_zero_replays_acked_retained_messages(
     assert (
         replayed,
         await analysis_transport.redis.xlen(analysis_transport.curation_stream),
-        await analysis_transport.redis.xlen(analysis_transport.assessment_stream),
         await _pending_count(analysis_transport, "curation"),
-        await _pending_count(analysis_transport, "assessment"),
-    ) == (expected, 1, 1, 0, 0)
+    ) == (expected, 2, 0)

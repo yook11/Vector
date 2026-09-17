@@ -1,4 +1,4 @@
-"""assessment hold helper の Redis 契約テスト。"""
+"""curation hold helper の Redis 契約テスト。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from app.queue.helpers.stage_hold import HoldableStage, is_stage_held, set_stage
 @pytest.mark.parametrize(
     ("stage", "key"),
     [
-        (Stage.ASSESSMENT, "assessment:hold"),
+        (Stage.CURATION, "curation:hold"),
     ],
 )
 async def test_set_hold_writes_stage_key_with_six_hour_ttl(
@@ -38,7 +38,7 @@ async def test_set_hold_writes_stage_key_with_six_hour_ttl(
 @pytest.mark.parametrize(
     ("stage", "key"),
     [
-        (Stage.ASSESSMENT, "assessment:hold"),
+        (Stage.CURATION, "curation:hold"),
     ],
 )
 async def test_is_hold_reads_stage_key(
@@ -59,7 +59,7 @@ async def test_is_hold_reads_stage_key(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", [Stage.ASSESSMENT])
+@pytest.mark.parametrize("stage", [Stage.CURATION])
 async def test_is_hold_fail_open_on_redis_error(stage: HoldableStage) -> None:
     """Redis 障害時は cron 救済を止めないため fail-open する。"""
     fake_redis = AsyncMock()
@@ -69,7 +69,7 @@ async def test_is_hold_fail_open_on_redis_error(stage: HoldableStage) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", [Stage.ASSESSMENT])
+@pytest.mark.parametrize("stage", [Stage.CURATION])
 async def test_set_hold_swallows_redis_error(stage: HoldableStage) -> None:
     """hold set は best-effort なので Redis 障害で caller を落とさない。"""
     fake_redis = AsyncMock()

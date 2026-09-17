@@ -215,7 +215,6 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
         "pipeline:metadata",
         "pipeline:content",
         "pipeline:analysis",
-        "pipeline:assessment",
         "pipeline:maintenance",
     )
     denied_locks = tuple(f"autoclaim:taskiq:{stream}" for stream in denied_streams)

@@ -6,7 +6,7 @@
 
 ## Evidence
 
-- `app.backfill.repository.PipelineBacklog`：新経路のイベント対象抽出・件数観測・期限切れ整理の照会。旧 Taskiq の対象取得は `app.queue.helpers.backlog`、管理画面の集計は `app.admin.pipeline_health.repository` が担う。
+- `app.backfill.repository.PipelineBacklog`：新経路のイベント対象抽出・件数観測・期限切れ整理の照会。旧 Taskiq Curation の対象取得は `app.queue.helpers.backlog`、管理画面の集計は `app.admin.pipeline_health.repository` が担う。
 - `app.backfill.targets`：監査主語と再投入する保存済み事実。
 - `app.backfill.policy`：元記事の年齢窓と一回の処理上限。
 - 各consumerの共有イベント型と、既存`RoutedEventPublisher`・`SqsSender`。
@@ -44,13 +44,13 @@ DBと送信クライアントの生成・終了、設定取得は呼び出し元
 
 ## Compatibility / Non-goals
 
-旧Taskiqタスクの対象取得・件数観測は `app.queue.helpers.backlog` に残す。期間判定・整理・監査・metric・一回上限は新経路の共通部分を参照する。旧経路の日次予算・stage hold・Taskiq投入・定期実行は残す。管理画面の件数・最古時刻の集計は `app.admin.pipeline_health.repository` が持ち、期間判定は共通部分を参照する。
+旧Taskiq Curationタスクの対象取得・件数観測は `app.queue.helpers.backlog` に残す。期間判定・整理・監査・metric・一回上限は新経路の共通部分を参照する。Curationの日次予算・stage hold・Taskiq投入・定期実行は残す。旧Assessment・EmbeddingのTaskiq backfillは撤去し、Lambdaからの再投入と共有cleanupを維持する。管理画面の件数・最古時刻の集計は `app.admin.pipeline_health.repository` が持ち、期間判定は共通部分を参照する。
 
 Lambda入口、Scheduler、AWS権限・ネットワーク、デプロイ、旧経路の停止・撤去は後続スライスとする。DB schema・consumer・受信契約・新規dependencyは変更しない。後続Schedulerでは既存の30分間隔と工程別オフセットを引き継ぐ。
 
 ## Done
 
-全3工程の対象抽出、期限切れ整理の原子性と競合、イベント内容、分割送信、失敗の伝播と継続を検証し、旧経路のテストを維持する。`/check`のlint・format check・単体・DB統合テストが成功する。AWS上の動作確認は今回の完了条件に含めない。
+全3工程の対象抽出、期限切れ整理の原子性と競合、イベント内容、分割送信、失敗の伝播と継続を検証し、共有Curation経路のテストを維持する。`/check`のlint・format check・単体・DB統合テストが成功する。AWS上の動作確認は今回の完了条件に含めない。
 
 ## 検証結果（2026-09-14）
 

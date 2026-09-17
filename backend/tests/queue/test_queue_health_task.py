@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from types import ModuleType, SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, call
 
 import pytest
 from logfire.testing import CaptureLogfire
@@ -34,10 +34,9 @@ _STAGE_SPECS = (
     ("acquisition", "pipeline:acquisition"),
     ("completion", "pipeline:completion"),
     ("curation", "pipeline:curation"),
-    ("assessment", "pipeline:assessment"),
 )
 _STAGES = tuple(stage for stage, _ in _STAGE_SPECS)
-_FOUR_TARGETS = tuple(
+_TARGETS = tuple(
     StreamHealthTarget(
         stage=cast(StreamHealthStage, stage),
         stream=stream,
@@ -49,7 +48,6 @@ _FAILURE_REASON_BY_STAGE = {
     "acquisition": "stream_missing",
     "completion": "group_missing",
     "curation": "lag_unknown",
-    "assessment": "redis_unavailable",
 }
 
 
@@ -170,14 +168,14 @@ async def test_empty_snapshots_record_zero_ages_up_and_redis_timestamp(
     snapshots = [
         _empty_snapshot(target, timestamp)
         for target, timestamp in zip(
-            _FOUR_TARGETS,
-            (1_000.25, 2_000.5, 3_000.75, 4_000.125),
+            _TARGETS,
+            (1_000.25, 2_000.5, 3_000.75),
             strict=True,
         )
     ]
     read_health = AsyncMock(side_effect=snapshots)
     monkeypatch.setattr(module, "read_stream_health", read_health)
-    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
+    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _TARGETS)
 
     await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
     values, attribute_keys = _queue_metric_values(capfire)
@@ -187,7 +185,7 @@ async def test_empty_snapshots_record_zero_ages_up_and_redis_timestamp(
         values,
         attribute_keys,
     ) == (
-        [call(redis, target) for target in _FOUR_TARGETS],
+        [call(redis, target) for target in _TARGETS],
         {
             "vector.pipeline.queue.retained_entries": dict.fromkeys(_STAGES, 0),
             "vector.pipeline.queue.lag": dict.fromkeys(_STAGES, 0),
@@ -206,7 +204,6 @@ async def test_empty_snapshots_record_zero_ages_up_and_redis_timestamp(
                 "acquisition": 1_000.25,
                 "completion": 2_000.5,
                 "curation": 3_000.75,
-                "assessment": 4_000.125,
             },
         },
         _all_stage_only_attributes(),
@@ -222,7 +219,7 @@ async def test_nonempty_snapshots_record_exact_counts_and_enqueue_ages(
     redis = object()
     snapshots = [
         _snapshot(
-            _FOUR_TARGETS[0],
+            _TARGETS[0],
             timestamp=3_000.75,
             retained=11,
             lag=7,
@@ -232,7 +229,7 @@ async def test_nonempty_snapshots_record_exact_counts_and_enqueue_ages(
             outstanding_age=35.25,
         ),
         _snapshot(
-            _FOUR_TARGETS[1],
+            _TARGETS[1],
             timestamp=4_000.125,
             retained=5,
             lag=0,
@@ -242,7 +239,7 @@ async def test_nonempty_snapshots_record_exact_counts_and_enqueue_ages(
             outstanding_age=9.5,
         ),
         _snapshot(
-            _FOUR_TARGETS[2],
+            _TARGETS[2],
             timestamp=5_000.5,
             retained=17,
             lag=4,
@@ -251,23 +248,13 @@ async def test_nonempty_snapshots_record_exact_counts_and_enqueue_ages(
             pending_age=None,
             outstanding_age=22.0,
         ),
-        _snapshot(
-            _FOUR_TARGETS[3],
-            timestamp=6_000.25,
-            retained=9,
-            lag=1,
-            pending=1,
-            undelivered_age=3.0,
-            pending_age=6.0,
-            outstanding_age=6.0,
-        ),
     ]
     monkeypatch.setattr(
         module,
         "read_stream_health",
         AsyncMock(side_effect=snapshots),
     )
-    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
+    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _TARGETS)
 
     await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
     values, attribute_keys = _queue_metric_values(capfire)
@@ -278,49 +265,41 @@ async def test_nonempty_snapshots_record_exact_counts_and_enqueue_ages(
                 "acquisition": 11,
                 "completion": 5,
                 "curation": 17,
-                "assessment": 9,
             },
             "vector.pipeline.queue.lag": {
                 "acquisition": 7,
                 "completion": 0,
                 "curation": 4,
-                "assessment": 1,
             },
             "vector.pipeline.queue.pending": {
                 "acquisition": 3,
                 "completion": 2,
                 "curation": 0,
-                "assessment": 1,
             },
             "vector.pipeline.queue.oldest_undelivered_enqueue_age": {
                 "acquisition": 12.5,
                 "completion": 0,
                 "curation": 22.0,
-                "assessment": 3.0,
             },
             "vector.pipeline.queue.oldest_pending_enqueue_age": {
                 "acquisition": 35.25,
                 "completion": 9.5,
                 "curation": 0,
-                "assessment": 6.0,
             },
             "vector.pipeline.queue.oldest_outstanding_enqueue_age": {
                 "acquisition": 35.25,
                 "completion": 9.5,
                 "curation": 22.0,
-                "assessment": 6.0,
             },
             "vector.pipeline.queue.observation_up": {
                 "acquisition": 1,
                 "completion": 1,
                 "curation": 1,
-                "assessment": 1,
             },
             "vector.pipeline.queue.observation_timestamp": {
                 "acquisition": 3_000.75,
                 "completion": 4_000.125,
                 "curation": 5_000.5,
-                "assessment": 6_000.25,
             },
         },
         _all_stage_only_attributes(),
@@ -355,11 +334,11 @@ async def test_one_stage_failure_records_only_up_zero_and_continues_other_stage(
             pending_age=30.0,
             outstanding_age=30.0,
         )
-        for target in _FOUR_TARGETS
+        for target in _TARGETS
     ]
     read_health = AsyncMock(side_effect=results)
     monkeypatch.setattr(module, "read_stream_health", read_health)
-    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
+    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _TARGETS)
 
     with capture_logs() as logs:
         await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
@@ -378,7 +357,7 @@ async def test_one_stage_failure_records_only_up_zero_and_continues_other_stage(
         attribute_keys,
         failure_logs,
     ) == (
-        [call(redis, target) for target in _FOUR_TARGETS],
+        [call(redis, target) for target in _TARGETS],
         {
             "vector.pipeline.queue.retained_entries": dict.fromkeys(
                 successful_stages, 8
@@ -431,7 +410,7 @@ async def test_failure_tick_does_not_overwrite_last_successful_data_or_timestamp
             pending_age=50.0 + 10 * index,
             outstanding_age=50.0 + 10 * index,
         )
-        for index, target in enumerate(_FOUR_TARGETS)
+        for index, target in enumerate(_TARGETS)
     ]
     read_health = AsyncMock(
         side_effect=[
@@ -444,12 +423,12 @@ async def test_failure_tick_does_not_overwrite_last_successful_data_or_timestamp
                         _FAILURE_REASON_BY_STAGE[target.stage],
                     ),
                 )
-                for target in _FOUR_TARGETS
+                for target in _TARGETS
             ],
         ]
     )
     monkeypatch.setattr(module, "read_stream_health", read_health)
-    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
+    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _TARGETS)
 
     await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))
     await module.observe_pipeline_queue_health(ctx=_health_ctx(redis))

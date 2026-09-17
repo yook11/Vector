@@ -69,9 +69,8 @@ _EXPECTED_REPOSITORY_STAGE_CONSTANTS = {
 _RAW_STAGE_KEYWORD_TARGETS = {
     _APP / "audit" / "stages" / "completion.py": {"completion"},
     _APP / "audit" / "stages" / "curation.py": {"curation"},
-    _APP / "queue" / "tasks" / "assessment.py": {"assessment"},
     _APP / "queue" / "tasks" / "curation.py": {"curation"},
-    _APP / "logfire" / "article_stage.py": {"assessment", "curation"},
+    _APP / "logfire" / "article_stage.py": {"curation"},
 }
 
 

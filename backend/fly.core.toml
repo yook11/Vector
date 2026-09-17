@@ -55,7 +55,7 @@ primary_region = 'nrt'
 # (#712) で一律引き上げた値を、遅延 AI SDK import (#714) の本番反映後に実測した
 # 物理 RSS (fly ssh `/proc/meminfo` の Total-Available) に基づき右サイズする。
 # 実測 working set (idle, deploy 直後):
-# - worker-analysis ~819MB: analysis(curation gemini + assessment deepseek)+embedding
+# - worker-analysis: analysis(curation gemini) + maintenance
 #   (gemini)+maintenance を同居。AI worker 2 本が SDK を持つため最大 → 1.5GB。
 # - worker-insights ~484MB: trend(SDK-free)+briefing(deepseek/openai)同居 → 768MB。
 # - worker-agent: user-facing Q&A agent。768MB 始まりで deploy 後 RSS 実測。
@@ -107,10 +107,8 @@ primary_region = 'nrt'
   # 本番に持ち込んだ瞬間 Machine が crashloop する)。
   INTERNAL_FRONTEND_BASE_URL = "http://your-vector-frontend-app.flycast:3000"
   # back-fill 救済網 (maintenance worker)。config.py の default は
-  # assessments/embeddings とも False のため、本番では明示的に有効化する
   # (Redis 永続化と併せて Stage4/5 の塩漬け記事を確実に再投入する)。
   # Fly [env] の値は文字列必須 ("true")。
-  BACKFILL_ASSESSMENTS_ENABLED = "true"
 
 # 同一 image を 4 process group で起動する。process 名は [[services]] /
 # [[checks]] / [[vm]] の processes 指定と一致必須。
@@ -120,7 +118,7 @@ primary_region = 'nrt'
 #   Firecracker VM は bindv6only=1) だと check が connection refused で永久に critical
 #   になり deploy が最初の api machine で停止する。一方 flycast 実トラフィックは
 #   6PN=IPv6 で届くため IPv4-only (`0.0.0.0`) も不可。空文字列で両 family を listen する。
-# - worker-analysis: analysis (curation+assessment) + embedding + maintenance
+# - worker-analysis: analysis (curation) + maintenance
 #   (back-fill 救済 + retention purge) を 1 container に同居 (supervisord 管理)
 # - worker-insights: trend discovery + briefing cron worker
 # - worker-agent: user-facing research agent run worker + stale sweeper

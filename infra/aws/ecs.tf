@@ -138,9 +138,8 @@ locals {
       DATABASE_URL                = local.backend_db_url["vector_app"]
       AUTH_RETENTION_DATABASE_URL = local.backend_db_url["vector_auth"]
       REDIS_URL                   = local.broker_redis_url["analysis"]
-      # AI分析3工程の救済投入はLambda側へ移し、旧workerは残件処理のため維持する。
-      BACKFILL_CURATIONS_ENABLED   = "false"
-      BACKFILL_ASSESSMENTS_ENABLED = "false"
+      # Curationの救済投入はLambda側へ移し、旧workerは残件処理のため維持する。
+      BACKFILL_CURATIONS_ENABLED = "false"
     }
     insights = {
       DATABASE_URL = local.backend_db_url["vector_app"]

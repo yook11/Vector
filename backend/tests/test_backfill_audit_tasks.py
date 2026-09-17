@@ -40,7 +40,7 @@ class _TaskCase:
     empty_log: str
 
 
-# hold gate は 2 stage 共通の is_stage_held 1 本なので case ごとに持たせない。
+# 旧Curationのhold gateを差し替える。
 _HOLD_PATCH = "app.queue.tasks.backfill.is_stage_held"
 
 CASES = [
@@ -60,23 +60,6 @@ CASES = [
         disabled_log="backfill_curations_disabled",
         held_log="backfill_curations_held",
         empty_log="backfill_curations_empty",
-    ),
-    _TaskCase(
-        name="assess",
-        task=tasks.backfill_assessments,
-        enabled_attr="backfill_assessments_enabled",
-        ageout_patch="app.queue.tasks.backfill._exclude_aged_out_assessments",
-        queue_task_patch="app.queue.tasks.backfill.assess_content",
-        count_method="count_curations_pending_assessment",
-        target_method="assessment_targets_pending",
-        budget_role="assess",
-        backfill_stage="assess",
-        target_kind="curation",
-        limit=tasks.ASSESSMENTS_LIMIT,
-        daily_max=tasks.ASSESSMENTS_DAILY_MAX,
-        disabled_log="backfill_assessments_disabled",
-        held_log="backfill_assessments_held",
-        empty_log="backfill_assessments_empty",
     ),
 ]
 
@@ -375,7 +358,7 @@ def _backfill_ctx_with_targets(
 
 
 class TestBackfillStageSpan:
-    """backfill 3 task が pipeline_stage span を正しく開く配線テスト。
+    """Curation backfill task が pipeline_stage span を正しく開く配線テスト。
 
     kill switch 有効 + hold なし + targets 1 件 + budget あり の正常系を流し、
     pipeline_stage span がちょうど 1 件開くことを確認する。
@@ -407,30 +390,3 @@ class TestBackfillStageSpan:
         attrs = pipeline_stage_attrs(capfire)
         assert attrs["stage"] == Stage.BACKFILL_CURATE.value  # == "backfill_curate"
         assert attrs["op"] == "backfill_curations"
-
-    @pytest.mark.asyncio
-    async def test_backfill_assessments_span_stage_and_op(
-        self, capfire: CaptureLogfire
-    ) -> None:
-        """stage=backfill_assess / op=backfill_assessments が span に開く。"""
-        case = next(c for c in CASES if c.name == "assess")
-        ctx, backlog, queue_task = _backfill_ctx_with_targets(case, [_target(1)])
-
-        with (
-            patch.object(tasks.settings, case.enabled_attr, True),
-            patch(_HOLD_PATCH, AsyncMock(return_value=False)),
-            patch(case.ageout_patch, AsyncMock(return_value=0)),
-            patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
-            patch(
-                "app.queue.tasks.backfill.consume_daily_budget",
-                AsyncMock(return_value=1),
-            ),
-            patch(case.queue_task_patch, queue_task),
-            patch("app.queue.tasks.backfill._append_backfill_item_event", AsyncMock()),
-            patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
-        ):
-            await tasks.backfill_assessments(ctx=ctx)
-
-        attrs = pipeline_stage_attrs(capfire)
-        assert attrs["stage"] == Stage.BACKFILL_ASSESS.value  # == "backfill_assess"
-        assert attrs["op"] == "backfill_assessments"

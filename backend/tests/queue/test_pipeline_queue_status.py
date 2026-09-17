@@ -16,7 +16,6 @@ _STAGE_SPECS = (
     ("acquisition", "pipeline:acquisition"),
     ("completion", "pipeline:completion"),
     ("curation", "pipeline:curation"),
-    ("assessment", "pipeline:assessment"),
 )
 
 
@@ -82,12 +81,11 @@ def _normalized_header(output: str) -> str:
     return re.sub(r"[^a-z]+", "_", first_line).strip("_")
 
 
-def test_cli_module_docstring_names_all_four_pipeline_stages() -> None:
+def test_cli_module_docstring_names_all_three_pipeline_stages() -> None:
     module = _cli_module()
     docstring = (module.__doc__ or "").casefold()
 
     assert all(stage in docstring for stage, _ in _STAGE_SPECS)
-    assert not docstring.startswith("curation / assessment")
 
 
 @pytest.mark.asyncio
@@ -150,7 +148,6 @@ async def test_cli_maps_missing_and_unknown_to_nonzero_statuses(
             module.StreamHealthError(stage="acquisition", reason=missing_reason),
             module.StreamHealthError(stage="completion", reason="group_missing"),
             module.StreamHealthError(stage="curation", reason="lag_unknown"),
-            _snapshot("assessment"),
         ]
     )
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
@@ -183,7 +180,6 @@ async def test_cli_maps_missing_and_unknown_to_nonzero_statuses(
             "unavailable",
         ],
         "pipeline:curation": ["-", "-", "-", "-", "-", "-", "unknown"],
-        "pipeline:assessment": ["0", "0", "0", "-", "-", "-", "ok"],
     }
 
 
@@ -210,9 +206,6 @@ async def test_cli_maps_redis_and_snapshot_inconsistency_to_failure(
                 stage="completion", reason="inconsistent_snapshot"
             ),
             module.StreamHealthError(stage="curation", reason="redis_unavailable"),
-            module.StreamHealthError(
-                stage="assessment", reason="inconsistent_snapshot"
-            ),
         ]
     )
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
@@ -227,7 +220,6 @@ async def test_cli_maps_redis_and_snapshot_inconsistency_to_failure(
         ["pipeline:acquisition", "-", "-", "-", "-", "-", "-", "failure"],
         ["pipeline:completion", "-", "-", "-", "-", "-", "-", "failure"],
         ["pipeline:curation", "-", "-", "-", "-", "-", "-", "failure"],
-        ["pipeline:assessment", "-", "-", "-", "-", "-", "-", "failure"],
     ]
 
 

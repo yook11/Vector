@@ -35,7 +35,6 @@ _AGE_METRIC = "oldest_outstanding_enqueue_age"
 _STAGE_SPECS = (
     ("acquisition", "pipeline:acquisition"),
     ("completion", "pipeline:completion"),
-    ("assessment", "pipeline:assessment"),
 )
 _STAGES = tuple(stage for stage, _ in _STAGE_SPECS)
 _TARGETS = tuple(
@@ -87,7 +86,6 @@ async def test_success_stages_emit_age_with_snapshot_value_or_zero_for_none(
     snapshots = [
         _snapshot_with_age(_TARGETS[0], timestamp=1_000.0, outstanding_age=42.5),
         _snapshot_with_age(_TARGETS[1], timestamp=2_000.0, outstanding_age=None),
-        _snapshot_with_age(_TARGETS[2], timestamp=3_000.0, outstanding_age=7.25),
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
@@ -97,7 +95,6 @@ async def test_success_stages_emit_age_with_snapshot_value_or_zero_for_none(
     assert {record["stage"]: record[_AGE_METRIC] for record in age_records} == {
         "acquisition": 42.5,
         "completion": 0.0,
-        "assessment": 7.25,
     }
 
 

@@ -100,7 +100,7 @@ def _parse_worker_programs() -> dict[str, int | None]:
 
 
 def test_analysis_broker_reads_only_stage_specific_streams() -> None:
-    """analysis broker は curation を主 Stream、assessment を追加購読に固定する。"""
+    """analysis broker は CurationのStreamを購読する。"""
     from app.queue.brokers import broker_analysis
 
     assert {
@@ -114,7 +114,7 @@ def test_analysis_broker_reads_only_stage_specific_streams() -> None:
         "unacknowledged_lock_timeout": broker_analysis.unacknowledged_lock_timeout,
     } == {
         "queue_name": "pipeline:curation",
-        "additional_streams": {"pipeline:assessment": ">"},
+        "additional_streams": {},
         "consumer_group_name": "taskiq",
         "consumer_id": "0-0",
         "maxlen": 10_000,
@@ -332,19 +332,8 @@ def test_collection_control_task_keeps_dispatch_routing_and_execution_contract(
                 "retry_on_error": True,
             },
         ),
-        (
-            "app.queue.tasks.assessment",
-            "assess_content",
-            "assess_content",
-            {
-                "queue_name": "pipeline:assessment",
-                "timeout": 180,
-                "max_retries": 2,
-                "retry_on_error": True,
-            },
-        ),
     ],
-    ids=["curation", "assessment"],
+    ids=["curation"],
 )
 def test_analysis_task_keeps_stage_routing_and_execution_labels(
     task_module: str,
@@ -352,7 +341,7 @@ def test_analysis_task_keeps_stage_routing_and_execution_labels(
     expected_task_name: str,
     expected_labels: dict[str, object],
 ) -> None:
-    """両 task は共有 broker のまま stage 固有 Stream と既存実行契約を持つ。"""
+    """Curationは既存のbroker・Stream・実行契約を維持する。"""
     import importlib
 
     from app.queue.brokers import broker_analysis
@@ -366,7 +355,7 @@ def test_analysis_task_keeps_stage_routing_and_execution_labels(
 
 
 def test_analysis_worker_keeps_single_shared_runtime() -> None:
-    """curation / assessment は単一 process と既存 ACK・並列度を共有する。"""
+    """Curationは既存のprocess・ACK・並列度を維持する。"""
     assert _analysis_worker_commands() == [
         [
             "taskiq",
@@ -377,7 +366,6 @@ def test_analysis_worker_keeps_single_shared_runtime() -> None:
             "10",
             "app.queue.brokers:broker_analysis",
             "app.queue.tasks.curation",
-            "app.queue.tasks.assessment",
             "--ack-type",
             "when_executed",
         ]
@@ -574,7 +562,6 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state(
 
     Provider 選択を hardcode する設計 (Pure DI) を構造的に保証する。
     """
-    from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
     from app.analysis.curation.ai.gemini import GeminiCurator
     from app.queue.composition import _wire_analysis_adapters
 
@@ -584,16 +571,12 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state(
         patch("app.config.settings") as mock_cs,
     ):
         mock_cs.gemini_api_key = SecretStr("test-key")
-        mock_cs.deepseek_api_key = SecretStr("test-key")
         await _wire_analysis_adapters(state)
 
     assert isinstance(state.curator, GeminiCurator)
-    assert isinstance(state.assessor, DeepSeekAssessor)
-    assert not state.assessor._client.is_closed()
     from app.queue.lifecycle import _aclose_worker_resources
 
     await _aclose_worker_resources(state)
-    assert state.assessor._client.is_closed()
     assert len(gemini_http_clients) == 1
     assert gemini_http_clients[0].is_closed
 
@@ -762,7 +745,6 @@ async def _worker_lifecycle_stubs(
     *,
     live: MagicMock | None = None,
     control: MagicMock | None = None,
-    catalog: bool = False,
     compose: bool = False,
 ):
     patches = [
@@ -782,13 +764,6 @@ async def _worker_lifecycle_stubs(
     ]
     if not compose:
         patches.append(patch("app.queue.lifecycle._compose", new_callable=AsyncMock))
-    if catalog:
-        patches.append(
-            patch(
-                "app.analysis.assessment.repository.AssessmentRepository.assert_category_catalog_covers_enum",
-                new_callable=AsyncMock,
-            )
-        )
     with ExitStack() as stack:
         for item in patches:
             stack.enter_context(item)
@@ -832,15 +807,11 @@ async def test_agent_worker_owns_only_agent_live_redis() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("broker_name", "needs_catalog"),
-    [
-        ("broker_analysis", True),
-        ("broker_maintenance", False),
-    ],
+    "broker_name",
+    ["broker_analysis", "broker_maintenance"],
 )
 async def test_pipeline_workers_own_only_pipeline_control_redis(
     broker_name: str,
-    needs_catalog: bool,
 ) -> None:
     from app.queue import brokers
 
@@ -850,9 +821,10 @@ async def test_pipeline_workers_own_only_pipeline_control_redis(
     control = _owned_redis()
     state = TaskiqState()
 
-    async with _worker_lifecycle_stubs(
-        engine, control=control, catalog=needs_catalog
-    ) as (create_live, create_control):
+    async with _worker_lifecycle_stubs(engine, control=control) as (
+        create_live,
+        create_control,
+    ):
         await broker.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
         await broker.event_handlers[TaskiqEvents.WORKER_SHUTDOWN][0](state)
 
@@ -872,19 +844,15 @@ async def test_analysis_startup_wires_ai_providers() -> None:
     control = _owned_redis()
     state = TaskiqState()
 
-    async with _worker_lifecycle_stubs(
-        engine, control=control, catalog=True, compose=True
-    ):
+    async with _worker_lifecycle_stubs(engine, control=control, compose=True):
         with (
             patch("app.config.settings") as mock_cs,
         ):
             mock_cs.gemini_api_key = SecretStr("test-key")
-            mock_cs.deepseek_api_key = SecretStr("test-key")
             await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
 
     assert state.pipeline_control_redis is control
     assert state.curator.provider == "gemini"
-    assert state.assessor.provider == "deepseek"
 
 
 @pytest.mark.asyncio
@@ -981,7 +949,7 @@ async def test_agent_worker_owns_deadline_schedule_source(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_analysis_composition_failure_closes_prepared_client(gemini_http_clients):
-    """ワーカーへの配線中に失敗しても、準備済みのDeepSeekクライアントを閉じる。"""
+    """ワーカーへの配線中に失敗しても、準備済みのGeminiクライアントを閉じる。"""
     from app.queue.composition import _wire_analysis_adapters
 
     state = TaskiqState()
@@ -991,19 +959,17 @@ async def test_analysis_composition_failure_closes_prepared_client(gemini_http_c
         patch("app.analysis.curation.ai.gemini.GeminiCurator"),
         patch("app.queue.composition.logger.info", side_effect=failure),
     ):
-        config.deepseek_api_key = SecretStr("test-key")
         config.gemini_api_key = SecretStr("test-key")
         with pytest.raises(RuntimeError) as caught:
             await _wire_analysis_adapters(state)
     assert caught.value is failure
-    assert state.assessor._client.is_closed()
     assert len(gemini_http_clients) == 1
     assert gemini_http_clients[0].is_closed
 
 
 @pytest.mark.asyncio
 async def test_analysis_startup_failure_closes_client(gemini_http_clients):
-    """配線後のワーカー起動処理が失敗した場合、DeepSeekクライアントを閉じて元の例外を返す。"""
+    """配線後のワーカー起動処理が失敗した場合、Geminiクライアントを閉じて元の例外を返す。"""
     from app.queue.brokers import broker_analysis
 
     engine = MagicMock(dispose=AsyncMock())
@@ -1015,21 +981,19 @@ async def test_analysis_startup_failure_closes_client(gemini_http_clients):
             patch("app.analysis.curation.ai.gemini.GeminiCurator"),
             patch("app.queue.lifecycle.logger.info", side_effect=failure),
         ):
-            config.deepseek_api_key = SecretStr("test-key")
             config.gemini_api_key = SecretStr("test-key")
             with pytest.raises(RuntimeError) as caught:
                 await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](
                     state
                 )
     assert caught.value is failure
-    assert state.assessor._client.is_closed()
     assert len(gemini_http_clients) == 1
     assert gemini_http_clients[0].is_closed
 
 
 @pytest.mark.asyncio
 async def test_analysis_client_closes_even_if_redis_shutdown_fails(gemini_http_clients):
-    """Redisの終了失敗でDeepSeekの解放を妨げず、元のRedis例外を呼び出し元へ返す。"""
+    """Redisの終了失敗でGeminiの解放を妨げず、元のRedis例外を呼び出し元へ返す。"""
     from app.queue.composition import _wire_analysis_adapters
     from app.queue.lifecycle import _aclose_worker_resources
 
@@ -1040,13 +1004,11 @@ async def test_analysis_client_closes_even_if_redis_shutdown_fails(gemini_http_c
         patch("app.config.settings") as config,
         patch("app.analysis.curation.ai.gemini.GeminiCurator"),
     ):
-        config.deepseek_api_key = SecretStr("test-key")
         config.gemini_api_key = SecretStr("test-key")
         await _wire_analysis_adapters(state)
     with pytest.raises(RuntimeError) as caught:
         await _aclose_worker_resources(state)
     assert caught.value is failure
-    assert state.assessor._client.is_closed()
     assert len(gemini_http_clients) == 1
     assert gemini_http_clients[0].is_closed
 
@@ -1066,25 +1028,3 @@ def gemini_http_clients(monkeypatch):
 
     monkeypatch.setattr(module, "make_external_async_client", track)
     return clients
-
-
-@pytest.mark.asyncio
-async def test_analysis_second_provider_failure_closes_gemini(gemini_http_clients):
-    """後から作るDeepSeekの初期化失敗でも先に作ったGeminiを解放する。"""
-    from app.queue.composition import _wire_analysis_adapters
-
-    original = RuntimeError("deepseek initialization failed")
-    with (
-        patch("app.config.settings") as config,
-        patch(
-            "app.ai_providers.deepseek.client.open_deepseek_client",
-            side_effect=original,
-        ),
-    ):
-        config.gemini_api_key = SecretStr("test-key")
-        config.deepseek_api_key = SecretStr("test-key")
-        with pytest.raises(RuntimeError) as caught:
-            await _wire_analysis_adapters(TaskiqState())
-    assert caught.value is original
-    assert len(gemini_http_clients) == 1
-    assert gemini_http_clients[0].is_closed

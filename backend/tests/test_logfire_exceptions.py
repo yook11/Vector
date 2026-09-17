@@ -31,11 +31,8 @@ from app.ai_providers.gemini.error_translator import (
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.errors import (
     AssessmentError,
+    AssessmentFailureReason,
     AssessmentResponseInvalidError,
-)
-from app.analysis.assessment.task_errors import (
-    AssessmentRecoverableError,
-    AssessmentTerminalError,
 )
 from app.analysis.curation.errors import (
     CurationError,
@@ -240,29 +237,6 @@ def test_curation_layer1_requires_code_kwarg(cls: type[CurationError]) -> None:
         cls()  # type: ignore[call-arg]
 
 
-_OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
-    AssessmentRecoverableError,
-    AssessmentTerminalError,
-)
-
-
-@pytest.mark.parametrize("cls", _OTHER_LAYER1_MARKERS)
-def test_assessment_layer1_str_format(
-    cls: type[VectorDomainError],
-) -> None:
-    """Assessment Layer 1 marker の ``__str__`` も code のみ。"""
-    exc = cls(code="ai_error_network", failure_kind="attempt_scoped")  # type: ignore[call-arg]
-    assert str(exc) == f"{cls.__name__}(code='ai_error_network')"
-
-
-@pytest.mark.parametrize("cls", _OTHER_LAYER1_MARKERS)
-def test_assessment_layer1_rejects_positional_message(
-    cls: type[VectorDomainError],
-) -> None:
-    with pytest.raises(TypeError):
-        cls("legacy_message")  # type: ignore[call-arg]
-
-
 _LAYER2B_FIXED_CODE: tuple[tuple[type[VectorDomainError], str], ...] = (
     (CurationResponseInvalidError, "extraction_response_invalid"),
     (EmbeddingResponseInvalidError, "embedding_response_invalid"),
@@ -318,15 +292,8 @@ def _build_all_marker_instances() -> list[VectorDomainError]:
             provider_error=provider,
         ),
         CurationResponseInvalidError(),
-        AssessmentRecoverableError(
-            code="ai_error_network",
-            failure_kind="attempt_scoped",
-            provider_error=provider,
-        ),
-        AssessmentTerminalError(
-            code="ai_error_input_rejected",
-            failure_kind="target_rejected",
-            failure_reason="safety",
+        AssessmentError(
+            reason=AssessmentFailureReason.PROVIDER_ERROR,
             provider_error=provider,
         ),
         AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
@@ -343,13 +310,12 @@ def test_all_marker_str_never_contains_provider_error_repr_payload() -> None:
         ensure_ascii=False,
     )
     assessment_record = str(
-        AssessmentRecoverableError(
-            code="ai_error_network",
-            failure_kind="attempt_scoped",
+        AssessmentError(
+            reason=AssessmentFailureReason.PROVIDER_ERROR,
             provider_error=AIProviderRateLimitedError(),
         )
     )
-    assert "rate_limited" not in assessment_record
+    assert "provider_error" not in assessment_record
     assert "AIProviderRateLimitedError" not in assessment_record
     assert all(type(exc).__name__ in rendered_all for exc in instances)
 
@@ -381,7 +347,6 @@ def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
     assert issubclass(CurationResponseInvalidError, CurationError)
     assert not issubclass(CurationResponseInvalidError, CurationRecoverableError)
     assert issubclass(AssessmentResponseInvalidError, AssessmentError)
-    assert not issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingError)
 
 

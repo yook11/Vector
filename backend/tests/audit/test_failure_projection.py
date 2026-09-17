@@ -23,7 +23,6 @@ from sqlalchemy.exc import (
 
 from app.ai_providers.errors import AIProviderOutputBlockedError
 from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
-from app.analysis.assessment.task_errors import AssessmentRecoverableError
 from app.analysis.curation.errors import to_curation_error
 from app.analysis.curation.task_errors import (
     CurationRecoverableError,
@@ -102,23 +101,6 @@ def test_project_failure_prefers_marker_projection() -> None:
     )
 
 
-def test_project_marker_failure_reads_instance_failure_kind_and_reason() -> None:
-    """assessment は原因軸を instance 値で持つ (classvar より優先)。"""
-    exc = AssessmentRecoverableError(
-        code="ai_error_rate_limited",
-        failure_kind="time_based_recovery",
-        failure_reason="rate_limited",
-    )
-
-    assert project_marker_failure(exc) == FailureProjection(
-        failure_kind="time_based_recovery",
-        retryability=Retryability.RETRYABLE,
-        failure_action=None,
-        code="ai_error_rate_limited",
-        failure_reason="rate_limited",
-    )
-
-
 def test_project_marker_failure_classvar_marker_has_no_failure_reason() -> None:
     """classvar 宣言 marker (briefing / completion / acquisition) は failure_reason
     を持たない (None)。原因軸を instance 値で持つのは assessment /
@@ -152,17 +134,6 @@ def test_project_marker_failure_does_not_require_stage_marker_attribute() -> Non
     [
         (
             CurationRecoverableError(
-                code="ai_error_network", failure_kind="attempt_scoped"
-            ),
-            FailureProjection(
-                failure_kind="attempt_scoped",
-                retryability=Retryability.RETRYABLE,
-                failure_action=None,
-                code="ai_error_network",
-            ),
-        ),
-        (
-            AssessmentRecoverableError(
                 code="ai_error_network", failure_kind="attempt_scoped"
             ),
             FailureProjection(

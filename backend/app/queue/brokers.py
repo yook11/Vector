@@ -61,7 +61,6 @@ broker_collection = _make_broker(
 )
 broker_analysis = _make_broker(
     "pipeline:curation",
-    additional_streams={"pipeline:assessment": ">"},
     consumer_id="0-0",
     unacknowledged_lock_timeout=60,
 )

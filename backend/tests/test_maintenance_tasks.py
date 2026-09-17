@@ -12,8 +12,6 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.audit.domain.event import Stage
-from app.backfill.cleanup import exclude_aged_out_embeddings
 from app.backfill.targets import BackfillTarget
 from app.collection.sources.source_name import SourceName
 from app.models.analyzable_article_record import AnalyzableArticleRecord
@@ -438,7 +436,7 @@ async def test_exclude_aged_out_assessments_keeps_article_and_audits(
     sample_source: NewsSource,
 ) -> None:
     """古い未 assessment curation は削除せず exclusion + audit を残す。"""
-    from app.queue.tasks import backfill as tasks
+    from app.backfill.cleanup import exclude_aged_out_assessments
 
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
@@ -452,7 +450,7 @@ async def test_exclude_aged_out_assessments_keeps_article_and_audits(
     curation_id = curation.id
     source_id = sample_source.id
 
-    excluded = await tasks._exclude_aged_out_assessments(
+    excluded = await exclude_aged_out_assessments(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -493,7 +491,7 @@ async def test_exclude_aged_out_assessments_skips_completed_race(
     sample_categories: list[Category],
 ) -> None:
     """helper 実行時点で assessment 済みなら exclusion / audit を作らない。"""
-    from app.queue.tasks import backfill as tasks
+    from app.backfill.cleanup import exclude_aged_out_assessments
 
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
@@ -505,7 +503,7 @@ async def test_exclude_aged_out_assessments_skips_completed_race(
     curation = await _make_curation(db_session, article)
     await _make_analyzed_article(db_session, curation, sample_categories[0])
 
-    excluded = await tasks._exclude_aged_out_assessments(
+    excluded = await exclude_aged_out_assessments(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -531,6 +529,7 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
     sample_categories: list[Category],
 ) -> None:
     """古い embedding NULL analysis は削除せず exclusion + audit を残す。"""
+    from app.backfill.cleanup import exclude_aged_out_embeddings
 
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
@@ -587,6 +586,7 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
     sample_categories: list[Category],
 ) -> None:
     """helper 実行時点で embedding 済みなら exclusion / audit を作らない。"""
+    from app.backfill.cleanup import exclude_aged_out_embeddings
 
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
@@ -619,60 +619,3 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
     )
     assert events == []
     assert excluded == 0
-
-
-# assessments の disabled パスも同様に early-return することの確認
-
-
-@pytest.mark.asyncio
-async def test_assessments_disabled_returns_early() -> None:
-    from app.queue.tasks import backfill as tasks
-
-    ctx = _ctx_with_session_factory()
-    with (
-        patch.object(tasks.settings, "backfill_assessments_enabled", False),
-        patch("app.queue.tasks.backfill.is_stage_held", new=AsyncMock()) as held,
-        patch(
-            "app.queue.tasks.backfill._exclude_aged_out_assessments",
-            new=AsyncMock(return_value=0),
-        ) as exclude,
-        patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
-        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
-    ):
-        await tasks.backfill_assessments(ctx=ctx)
-    held.assert_not_called()
-    exclude.assert_not_called()
-    backlog_cls.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_assessments_held_skips_entire_run() -> None:
-    """assessment hold 中は backlog / budget / kiq に進まない。"""
-    from app.queue.tasks import backfill as tasks
-
-    ctx = _ctx_with_session_factory()
-    with (
-        patch.object(tasks.settings, "backfill_assessments_enabled", True),
-        patch(
-            "app.queue.tasks.backfill.is_stage_held",
-            new=AsyncMock(return_value=True),
-        ) as held,
-        patch(
-            "app.queue.tasks.backfill._exclude_aged_out_assessments",
-            new=AsyncMock(return_value=0),
-        ) as exclude,
-        patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
-        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
-        patch(
-            "app.queue.tasks.backfill.consume_daily_budget", new=AsyncMock()
-        ) as budget,
-        patch("app.queue.tasks.backfill.assess_content") as assess_task,
-    ):
-        await tasks.backfill_assessments(ctx=ctx)
-
-    held.assert_awaited_once()
-    assert held.await_args.args[1] is Stage.ASSESSMENT
-    exclude.assert_not_called()
-    backlog_cls.assert_not_called()
-    budget.assert_not_called()
-    assess_task.kiq.assert_not_called()

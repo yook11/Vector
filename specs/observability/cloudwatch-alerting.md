@@ -20,7 +20,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - ALB target group は frontend のみ。ブラウザからの API 呼び出しも Next.js proxy 経由で frontend を通るため、ユーザー向けリクエストは実質すべて ALB メトリクス(`HTTPCode_*_5XX_Count` / `UnHealthyHostCount` / `TargetResponseTime`)に乗る。無料。
 - アプリメトリクス 43 種(`vector.*`)は Logfire にのみ送信。CloudWatch には届いていない。
 - cron 時刻表の SSoT は `backend/app/queue/schedule.py`: dispatch_high 15 分間隔 / medium 1 時間 / low 6 時間、completion 系は毎分、backfill 系は 30 分間隔。
-- `observe_pipeline_queue_health`(`backend/app/queue/tasks/queue_health.py`)が毎分、acquisition / completion / curation / assessment の 4 stream について `oldest_outstanding_enqueue_age`(最古の未処理 entry の経過秒数)等を stage 属性付き gauge で Logfire に記録している。観測失敗時は `observation_up=0`。**embedding と dispatch の stream は観測対象外**(`PIPELINE_QUEUE_TARGETS` 固定 4 stage)。
+- `observe_pipeline_queue_health`(`backend/app/queue/tasks/queue_health.py`)が毎分、acquisition / completion / curation の 3 stream について `oldest_outstanding_enqueue_age`(最古の未処理 entry の経過秒数)等を stage 属性付き gauge で Logfire に記録している。観測失敗時は `observation_up=0`。**assessment・embedding・dispatch の stream は観測対象外**(`PIPELINE_QUEUE_TARGETS` 固定 3 stage)。
 - queue_health は analysis サービス内の maintenance worker(`supervisord/analysis.conf`)で動く。maintenance worker は backfill 救済・retention purge も担う。
 - AI provider エラーは翻訳層で分類済み(`app/ai_providers/gemini/error_translator.py` / `app/ai_providers/deepseek/error_translator.py`): 一時的な `AIProviderRateLimitedError` と、利用枠の枯渇である `AIProviderUsageLimitExhaustedError`(Gemini 429 の quota/daily)・`AIProviderInsufficientBalanceError`(DeepSeek 残高切れ)を区別している。
 - 無料枠向けの事前ゲートと専用Logfireカウンタは撤去済み。実APIの429・利用枠枯渇・残高不足の分類と通知は維持する。
@@ -67,7 +67,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | ID | 症状 | 検知シグナル | 種別 |
 |----|------|-------------|------|
 | A1 | 収集の供給が止まっている(全体途絶) | EMF `dispatch_run` の不在 | metric alarm |
-| A2 | 特定工程で仕事が消化されていない(工程名指し) | EMF `oldest_outstanding_enqueue_age{stage}` | metric alarm × 4 |
+| A2 | 特定工程で仕事が消化されていない(工程名指し) | EMF `oldest_outstanding_enqueue_age{stage}` | metric alarm × 3 |
 | A3 | queue 観測自体が死んでいる(Valkey 障害含む) | EMF `observation_up` | metric alarm (math MIN) |
 | A4 | 工程別の失敗率(completion / curation / assessment / embedding) | EMF `processing_outcome{stage, result}` の failed 率 | metric alarm (math) × 4 |
 | A5 | ECS タスクの異常停止(crash / OOM / 起動不能) | EventBridge ECS Task State Change | event 通知 |
@@ -88,9 +88,9 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 - 症状: 「その工程に仕事が積まれたまま、閾値時間を超えて消化されていない」。
 - 条件: `oldest_outstanding_enqueue_age{stage}` の Max、period 5min。閾値の初期値は全 stage 一律 **30 分**。退避機構(stage hold / 再試行 backoff / gate skip)は対象メッセージを ack して stream から降ろし、backfill 再投入で age は 0 に戻るため、退避中の滞留はこの age には現れない。したがってこの alarm は工程によらず consumer の生存監視(worker 死・孤児 PEL)であり、閾値は正常時に entry が stream 内に留まり得る時間(バースト掃け切り+gate pacing で 15 分程度)に余裕を掛けた値として置く。実測で調整する前提。`TreatMissingData = notBreaching`(観測死は A3 が担当。仕事ゼロのときは age=0 が emit されるので、生きていれば missing にならない)。(2026-08-14 変更: 当初 AI 3 stage は退避機構を根拠に 60 分としていたが、退避は ack で stream を離れ age に映らず根拠が成立しないため 30 分へ統一。)
-- alarm は stage ごとに 1 本(計 4 本)。alarm 名と説明文に工程名を焼き、Slack 通知が「assessment 工程が停止しています」とそのまま読めるようにする。
+- alarm は stage ごとに 1 本(計 3 本)。alarm 名と説明文に工程名を焼き、Slack 通知が「curation 工程が停止しています」とそのまま読めるようにする。
 - 量に依存しない: 新着ゼロの時間帯は age=0 で鳴らず、仕事があるのに consumer が死んでいれば age が線形に伸びて確実に鳴る。工程別の活動量 missing data 検知が持つ「閑散時間帯の誤発火」を原理的に回避する。
-- データ源: 既存の queue_health 観測を EMF に二重 sink する。旧Embedding streamは廃止に伴い対象外とする。新Embedding経路はSQS／Lambdaの監視とA4を維持する。dispatch streamはA1の担当。
+- データ源: 既存の queue_health 観測を EMF に二重 sink する。旧Assessment・Embedding streamは廃止に伴い対象外とする。新Assessment・Embedding経路はSQS／Lambdaの監視とA4を維持する。dispatch streamはA1の担当。
 - アクション: 該当工程の worker ログ確認 → 再起動。rate limit 起因なら pacing 設定と backlog を確認。
 
 ### A3: 観測の死活(メタ監視)
@@ -104,7 +104,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 ### A4: 工程別の失敗率(仕事はしているが失敗が支配的)
 
 - Signal: EMF `processing_outcome{stage, result}`。既存 Logfire counter(`record_*_processing_outcome`)と同一の分類確定点からの二重 sink。対象 4 工程 = completion / curation / assessment / embedding。
-- 条件(共通形): metric math `IF(total >= 10, failed / total, 0) >= 閾値`、1 evaluation period、`TreatMissingData = notBreaching`(仕事ゼロ・標本不足の窓は評価しない)。分母は各工程の既存不変条件を踏襲し infra_error は分母外: completion = succeeded+failed / curation = signal+noise+rejected+failed / assessment = in_scope+out_of_scope+failed / embedding = succeeded+failed。
+- 条件(共通形): metric math `IF(total >= 10, failed / total, 0) >= 閾値`、1 evaluation period、`TreatMissingData = notBreaching`(仕事ゼロ・標本不足の窓は評価しない)。分母は各工程の現行結果を用いる（Consumerの失敗はDB障害もfailedに含む）: completion = succeeded+failed / curation = signal+noise+rejected+failed / assessment = in_scope+out_of_scope+failed / embedding = succeeded+failed。
 - 閾値と評価窓(2026-08-12 の 28 日実測ベースライン由来の**暫定値**。運用実測で調整):
 
 | stage | 閾値 | 窓 | ベースライン実測と根拠 |
@@ -161,7 +161,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 |---|---|---|
 | scheduler / dispatch worker 死 | A1(+ A3 missing 側) | 供給が止まった |
 | collection worker 死(2026-06-08 実績) | A2 acquisition / completion | 工程名指し |
-| analysis worker(curation / assessment)死 | A2 該当 stage | 工程名指し |
+| analysis worker(curation)死 | A2 該当 stage | 工程名指し |
 | Embedding Consumer 障害 | Lambda／DLQ監視・A4 embedding | 新SQS経路を確認 |
 | maintenance worker 死 | A3(missing) | 観測と救済が止まった |
 | Valkey(broker)全面障害 | A3(up=0、約 5 分)+ A1 | broker 障害と推定可能 |
@@ -180,9 +180,9 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 
 - Namespace: `Vector/Pipeline`
 - `dispatch_run` — dimension `cadence` ∈ {high, medium, low}(3 系列)。dispatch task の**正常完了時**に 1。失敗時は emit しない。alarm consumer は high のみ、medium / low は将来の dashboard consumer 前提。
-- `oldest_outstanding_enqueue_age` — dimension `stage` × 4(acquisition / completion / curation / assessment)。queue_health の毎分観測を Logfire gauge と EMF の二重 sink にする。仕事が無いときは 0 を emit(既存の `_age_or_zero` と同じ)。
+- `oldest_outstanding_enqueue_age` — dimension `stage` × 3(acquisition / completion / curation)。queue_health の毎分観測を Logfire gauge と EMF の二重 sink にする。仕事が無いときは 0 を emit(既存の `_age_or_zero` と同じ)。
 - `observation_up` — dimension `stage` × 4。既存セマンティクス(成功 1 / 失敗 0)のまま二重 sink。
-- `processing_outcome` — dimension `stage` × `result`(15 系列: completion 3 + curation 5 + assessment 4 + embedding 3)。emit point・分類境界は既存 Logfire metric `vector.{stage}.processing_outcome{result}` と同一(`record_*_processing_outcome` 内の二重 sink)。分類ロジックは 1 か所、sink が 2 つ。stage dimension は `observation_up` / `oldest_outstanding_enqueue_age` と同じパターン。
+- `processing_outcome` — dimension `stage` × `result`(14 系列: completion 3 + curation 5 + assessment 3 + embedding 3)。emit point・分類境界は既存 Logfire metric `vector.{stage}.processing_outcome{result}` と同一(`record_*_processing_outcome` 内の二重 sink)。分類ロジックは 1 か所、sink が 2 つ。stage dimension は `observation_up` / `oldest_outstanding_enqueue_age` と同じパターン。
 - `ai_provider_exhausted` — dimension `kind` × `provider`(≤ 4 系列)。emit point は A6 の通り。
 - 実装方式: EMF は公開安定仕様の JSON 形式なので、依存追加せず stdout へ 1 行 JSON を書く薄い helper を第一候補とする(`aws-embedded-metrics` 採用は依存追加になるため Ask First 対象)。書式は公式仕様で確認済み: root の `_aws.Timestamp`(epoch ミリ秒)+ `_aws.CloudWatchMetrics[]`(Namespace / Dimensions / Metrics)、metric・dimension の値は root 直下に置く。StorageResolution は既定の 60 秒でよい。
 - 抽出経路: PutLogEvents 経由なら特別なヘッダー不要と公式に明記されており、awslogs ドライバは PutLogEvents で配送するため、stdout → 自動抽出が成立する。ただし「ECS + awslogs」の組み合わせを一文で明記した公式ページは無いため、Step 2 のデプロイ後に `AWS/Logs` namespace の EMF エラーメトリクスで実地確認する。
@@ -202,10 +202,9 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 
 ## 4. コスト概算
 
-- カスタムメトリクス 約 32 系列(dispatch_run 3 + age 5 + observation_up 5 + processing_outcome 15 + ai_provider_exhausted 4)≈ $9.6/月
-- alarm 14 本(A1×1, A2×5, A3×1, A4×4, A6×1, A7×1, A8×1)≈ $1.4/月
-- SNS / Chatbot / EventBridge: 無料枠内
-- 合計 $8/月未満。Logfire 側の削減はなし(trace は残留のため)。
+- 本カタログのカスタムメトリクスは27系列(dispatch_run 3 + age 3 + observation_up 3 + processing_outcome 14 + ai_provider_exhausted 4)。
+- 本カタログのalarmは12本(A1×1, A2×3, A3×1, A4×4, A6×1, A7×1, A8×1)。
+- SQS／Lambda固有の監視は各工程の定義を参照する。費用は実際の利用量と料金で確認する。Logfireのtraceは維持する。
 
 ## 5. 実装順序(1 アラートずつ確定 → 実装 → 次へ)
 

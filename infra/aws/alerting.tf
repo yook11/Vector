@@ -202,23 +202,8 @@ resource "aws_cloudwatch_metric_alarm" "queue_observation_stalled" {
   }
 
   metric_query {
-    id = "obs_assessment"
-
-    metric {
-      namespace   = "Vector/Pipeline"
-      metric_name = "observation_up"
-      period      = 60
-      stat        = "Minimum"
-
-      dimensions = {
-        stage = "assessment"
-      }
-    }
-  }
-
-  metric_query {
     id          = "observation_floor"
-    expression  = "MIN([FILL(obs_acquisition, 0), FILL(obs_completion, 0), FILL(obs_curation, 0), FILL(obs_assessment, 0)])"
+    expression  = "MIN([FILL(obs_acquisition, 0), FILL(obs_completion, 0), FILL(obs_curation, 0)])"
     label       = "observation_up floor"
     return_data = true
   }
@@ -243,7 +228,6 @@ locals {
     acquisition = { threshold = 1800, service = "fetch" }
     completion  = { threshold = 1800, service = "fetch" }
     curation    = { threshold = 1800, service = "analysis" }
-    assessment  = { threshold = 1800, service = "analysis" }
   }
 }
 

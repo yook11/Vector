@@ -30,10 +30,9 @@ _STAGE_SPECS = (
     ("acquisition", "pipeline:acquisition"),
     ("completion", "pipeline:completion"),
     ("curation", "pipeline:curation"),
-    ("assessment", "pipeline:assessment"),
 )
 _STAGES = tuple(stage for stage, _ in _STAGE_SPECS)
-_FOUR_TARGETS = tuple(
+_TARGETS = tuple(
     StreamHealthTarget(
         stage=cast(StreamHealthStage, stage),
         stream=stream,
@@ -45,7 +44,6 @@ _FAILURE_REASON_BY_STAGE = {
     "acquisition": "stream_missing",
     "completion": "group_missing",
     "curation": "lag_unknown",
-    "assessment": "redis_unavailable",
 }
 
 
@@ -79,7 +77,7 @@ def _health_ctx(redis: object = object()) -> SimpleNamespace:
 
 
 def _patch_targets(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _FOUR_TARGETS)
+    monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", _TARGETS)
 
 
 @pytest.mark.asyncio
@@ -87,11 +85,11 @@ async def test_all_stages_success_emit_observation_up_one_per_stage(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """全4 stage成功時、stageごとにobservation_up=1のEMF行が1行、計4行出る。"""
+    """全3 stage成功時、stageごとにobservation_up=1のEMF行が1行、計3行出る。"""
     _patch_targets(monkeypatch)
     snapshots = [
         _successful_observation_snapshot(target, 1_000.0 + index)
-        for index, target in enumerate(_FOUR_TARGETS)
+        for index, target in enumerate(_TARGETS)
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
@@ -99,7 +97,7 @@ async def test_all_stages_success_emit_observation_up_one_per_stage(
     records = metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
 
     assert [record["stage"] for record in records] == list(_STAGES)
-    assert [record[_OBSERVATION_UP_METRIC] for record in records] == [1, 1, 1, 1]
+    assert [record[_OBSERVATION_UP_METRIC] for record in records] == [1, 1, 1]
     metric_def = records[0]["_aws"]["CloudWatchMetrics"][0]
     assert metric_def["Namespace"] == "Vector/Pipeline"
     assert metric_def["Dimensions"] == [["stage"]]
@@ -119,7 +117,7 @@ async def test_one_stage_failure_emits_zero_and_continues_other_stages(
         _stream_health_error(target)
         if target.stage == failing_stage
         else _successful_observation_snapshot(target, 1_000.0)
-        for target in _FOUR_TARGETS
+        for target in _TARGETS
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=results))
 
@@ -135,17 +133,17 @@ async def test_one_stage_failure_emits_zero_and_continues_other_stages(
 
 
 @pytest.mark.asyncio
-async def test_all_stages_failure_emit_four_zero_lines(
+async def test_all_stages_failure_emit_three_zero_lines(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """全stage失敗時、4行すべてobservation_up=0で出る。"""
+    """全stage失敗時、3行すべてobservation_up=0で出る。"""
     _patch_targets(monkeypatch)
-    errors = [_stream_health_error(target) for target in _FOUR_TARGETS]
+    errors = [_stream_health_error(target) for target in _TARGETS]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=errors))
 
     await module.observe_pipeline_queue_health(ctx=_health_ctx())
     records = metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
 
     assert [record["stage"] for record in records] == list(_STAGES)
-    assert [record[_OBSERVATION_UP_METRIC] for record in records] == [0, 0, 0, 0]
+    assert [record[_OBSERVATION_UP_METRIC] for record in records] == [0, 0, 0]

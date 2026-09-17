@@ -1,33 +1,8 @@
-"""``AssessmentAuditRepository`` の semantic method 単独テスト。
-
-audit row の shape SSoT が repository に集約されたことを検証する:
-
-- ``append_in_scope`` で
-  ``outcome_code="assessed_in_scope"`` + payload に
-  ``category_slug`` / ``investor_take`` 詰まる
-  (``category_slug`` は ``in_scope.category.value`` から Repository 内で導出、
-  ``raw_category`` envelope 由来とは独立)
-- ``append_out_of_scope`` で
-  ``outcome_code="assessed_out_of_scope"`` + payload に
-  ``investor_take`` が非 None
-  (PR #447 対称化追従、in-scope 固有 field の ``category_slug`` のみ None)
-- ``append_failure`` で **retry 軸 (Recoverable / Terminal) + Layer 2-B + catch-all**:
-  - ``AssessmentRecoverableError`` → ``retryability=retryable`` / failure_kind=mode 値
-  - ``AssessmentTerminalError`` → ``retryability=non_retryable`` / failure_kind=mode 値
-  - ``AssessmentResponseInvalidError`` (defect 載せ替え) → ``retryability=retryable`` /
-    ``outcome_code`` は defect の value (parse 由来 / provider envelope 由来とも具体値)
-  - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
-    ``outcome_code="unexpected_error"``
-- ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録
-- ``error_message`` が ``redact_secrets()`` 経由
-- ``ai_raw_response`` が成功・失敗両経路で ``[:_AI_RAW_RESPONSE_LIMIT]`` 切詰
-- repository は ``commit`` を呼ばない (caller の tx 境界保持)
-"""
+"""Assessmentの成功・拒否・分類済み失敗の監査と秘匿を実DBで確認する。"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import StrEnum
 from typing import Any
 
 import pytest
@@ -41,15 +16,12 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInputRejectedError,
     AIProviderNetworkError,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
-from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.gemini import GeminiResponseDefect
-from app.analysis.assessment.ai.parse import AssessmentResponseDefect
+from app.analysis.assessment.consumer_failure_classification import (
+    classify_assessment_failure,
+)
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
     AssessmentReadyBuildRejectionReason,
@@ -62,11 +34,7 @@ from app.analysis.assessment.domain.result import (
 )
 from app.analysis.assessment.errors import (
     AssessmentError,
-    AssessmentResponseInvalidError,
     to_assessment_error,
-)
-from app.analysis.assessment.task_errors import (
-    to_assessment_task_error,
 )
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
@@ -260,30 +228,6 @@ async def test_append_ready_build_rejected_records_missing_curation_rejected(
     assert ev.article_id is None
     assert ev.source_id is None
     assert ev.payload["curation_id"] == 999
-
-
-@pytest.mark.asyncio
-async def test_append_ready_build_failed_records_unknown_failure(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """Ready build failed は failed / unknown retryability で trigger id を残す。"""
-    exc = RuntimeError("ready build exploded")
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_ready_build_failed(
-            curation_id=123,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_by_outcome(
-        db_session, "assessment_ready_build_failed_unexpected_error"
-    )
-    assert ev.event_type == "failed"
-    assert ev.retryability == "unknown"
-    assert ev.error_class == "builtins.RuntimeError"
-    assert ev.payload["failure_kind"] == "unexpected_error"
-    assert ev.payload["curation_id"] == 123
 
 
 @pytest.mark.asyncio
@@ -527,159 +471,7 @@ async def test_append_backfill_assessment_aged_out_records_rejected(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_recoverable_maps_to_retryable(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """AssessmentRecoverableError → retryable / failure_kind=mode 値。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    exc = to_assessment_task_error(to_assessment_error(AIProviderNetworkError()))
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
-            ready=_ready(extraction),
-            article_id=article.id,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.event_type == "failed"
-    assert ev.outcome_code == "ai_error_network"
-    assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "attempt_scoped"
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.asyncio
-async def test_append_failure_terminal_operator_action(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """OPERATOR_ACTION_REQUIRED → Terminal / non_retryable / mode 値 failure_kind。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    exc = to_assessment_task_error(to_assessment_error(AIProviderConfigurationError()))
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
-            ready=_ready(extraction),
-            article_id=article.id,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "ai_error_configuration"
-    assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "operator_action_required"
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.asyncio
-async def test_append_failure_terminal_target_rejected(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """TARGET_REJECTED → Terminal / non_retryable / failure_reason に reason 値。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    exc = to_assessment_task_error(
-        to_assessment_error(
-            AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY)
-        )
-    )
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
-            ready=_ready(extraction),
-            article_id=article.id,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "ai_error_input_rejected"
-    assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "target_rejected"
-    assert ev.payload["failure_reason"] == "safety"
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.parametrize(
-    "defect",
-    [*AssessmentResponseDefect, *GeminiResponseDefect, *DeepSeekResponseDefect],
-)
-@pytest.mark.asyncio
-async def test_append_failure_response_invalid_bakes_defect_code(
-    defect: StrEnum,
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """parse 由来 defect は具体 ``outcome_code`` として焼かれ、retryable を維持。
-
-    marker が ``code=defect.value`` を持つので監査ステージ無変更で具体コードが
-    流れる (内容の schema 違反でも recoverable 統一)。
-    """
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    exc = to_assessment_task_error(AssessmentResponseInvalidError(defect))
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
-            ready=_ready(extraction),
-            article_id=article.id,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == defect.value
-    assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "ai_response_invalid"
-    assert ev.payload["failure_reason"] is None
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.asyncio
-async def test_append_failure_response_invalid_bakes_provider_envelope_code(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """provider envelope 由来 defect も具体 ``outcome_code`` で焼かれ retryable 維持。
-
-    marker は 1 つなので provider 契約違反 (tool_call 欠落等) も recoverable で揃う
-    — 設定起因の故障は retryability でなく code (provider 名入り) で可視化する。
-    """
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    exc = to_assessment_task_error(
-        AssessmentResponseInvalidError(DeepSeekResponseDefect.NO_TOOL_CALL)
-    )
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
-            ready=_ready(extraction),
-            article_id=article.id,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "assessment_response_deepseek_no_tool_call"
-    assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "ai_response_invalid"
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.asyncio
-async def test_append_failure_unknown_exception_maps_to_unknown(
+async def test_append_classified_failure_unknown_exception_maps_to_unknown(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -690,8 +482,9 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
     exc = RuntimeError("boom")
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_unexpected_failure(
-            ready=_ready(extraction),
+        await AssessmentAuditRepository(session).append_classified_failure(
+            curation_id=extraction.id,
+            projection=classify_assessment_failure(exc).audit,
             article_id=article.id,
             exc=exc,
         )
@@ -741,7 +534,7 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
         ),
     ],
 )
-async def test_append_failure_projects_db_exceptions(
+async def test_append_classified_failure_projects_db_exceptions(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -756,8 +549,9 @@ async def test_append_failure_projects_db_exceptions(
     exc = exc_factory()  # type: ignore[operator]
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
-            ready=_ready(extraction),
+        await AssessmentAuditRepository(session).append_classified_failure(
+            curation_id=extraction.id,
+            projection=classify_assessment_failure(exc).audit,
             article_id=article.id,
             exc=exc,
         )
@@ -771,12 +565,12 @@ async def test_append_failure_projects_db_exceptions(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_walks_error_chain_via_cause(
+async def test_append_classified_failure_walks_error_chain_via_cause(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Taskiq・Assessment・プロバイダーの原因チェーンを監査へ保存する。"""
+    """Assessment・プロバイダーの原因チェーンを監査へ保存する。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     try:
@@ -785,10 +579,11 @@ async def test_append_failure_walks_error_chain_via_cause(
         except AIProviderNetworkError as inner:
             raise to_assessment_error(inner) from inner
     except AssessmentError as service_error:
-        exc = to_assessment_task_error(service_error)
+        exc = service_error
         async with session_factory() as session:
-            await AssessmentAuditRepository(session).append_failure(
-                ready=_ready(extraction),
+            await AssessmentAuditRepository(session).append_classified_failure(
+                curation_id=extraction.id,
+                projection=classify_assessment_failure(exc).audit,
                 article_id=article.id,
                 exc=exc,
             )
@@ -798,14 +593,13 @@ async def test_append_failure_walks_error_chain_via_cause(
     chain = ev.payload["error_chain"]
     assert chain is not None
     assert chain == [
-        "app.analysis.assessment.task_errors.AssessmentRecoverableError",
         "app.analysis.assessment.errors.AssessmentError",
         "app.ai_providers.errors.AIProviderNetworkError",
     ]
 
 
 @pytest.mark.asyncio
-async def test_append_failure_redacts_secrets_in_error_message(
+async def test_append_classified_failure_redacts_secrets_in_error_message(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -819,8 +613,9 @@ async def test_append_failure_redacts_secrets_in_error_message(
     )
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_unexpected_failure(
-            ready=_ready(extraction),
+        await AssessmentAuditRepository(session).append_classified_failure(
+            curation_id=extraction.id,
+            projection=classify_assessment_failure(exc).audit,
             article_id=article.id,
             exc=exc,
         )
@@ -833,32 +628,32 @@ async def test_append_failure_redacts_secrets_in_error_message(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_truncates_raw_response_attr(
+async def test_append_classified_failure_omits_raw_response_attr(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """exc に raw_response instance attr が乗ったら 2KB 切詰 (成功経路と対称)。"""
+    """例外にAI生応答があっても、分類済み失敗の監査には複製しない。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     exc: Any = RuntimeError("schema mismatch")
     exc.raw_response = "x" * 5000
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_unexpected_failure(
-            ready=_ready(extraction),
+        await AssessmentAuditRepository(session).append_classified_failure(
+            curation_id=extraction.id,
+            projection=classify_assessment_failure(exc).audit,
             article_id=article.id,
             exc=exc,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.payload["ai_raw_response"] is not None
-    assert len(ev.payload["ai_raw_response"]) == 2048
+    assert ev.payload["ai_raw_response"] is None
 
 
 @pytest.mark.asyncio
-async def test_append_failure_records_curation_id_in_payload(
+async def test_append_classified_failure_records_curation_id_in_payload(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -872,8 +667,9 @@ async def test_append_failure_records_curation_id_in_payload(
     exc = RuntimeError("boom")
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_unexpected_failure(
-            ready=_ready(extraction),
+        await AssessmentAuditRepository(session).append_classified_failure(
+            curation_id=extraction.id,
+            projection=classify_assessment_failure(exc).audit,
             article_id=article.id,
             exc=exc,
         )

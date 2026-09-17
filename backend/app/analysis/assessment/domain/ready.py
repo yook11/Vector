@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 __all__ = [
-    "AssessmentPreconditionProtocol",
     "AssessmentReadyBuildRejectionReason",
     "AssessmentReadyBuildRejected",
     "AssessmentReadyBuildFacts",
@@ -58,17 +56,6 @@ class AssessmentReadyBuildRejected:
             raise TypeError("reason must be AssessmentReadyBuildRejectionReason")
 
 
-class AssessmentPreconditionProtocol(Protocol):
-    """Ready 構築に必要な DB 事実だけを読む repository contract。
-
-    構築可否と blocked 理由は ``ReadyForAssessment`` が判定する。
-    """
-
-    async def load_ready_build_facts(
-        self, curation_id: int
-    ) -> AssessmentReadyBuildFacts | None: ...
-
-
 class ReadyForAssessment(BaseModel):
     """assessor 入力と Stage 4 precondition を満たした不変オブジェクト。"""
 
@@ -77,19 +64,6 @@ class ReadyForAssessment(BaseModel):
     curation_id: int = Field(gt=0)
     translated_title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
-
-    @classmethod
-    async def try_advance_from(
-        cls,
-        *,
-        curation_id: int,
-        repo: AssessmentPreconditionProtocol,
-    ) -> tuple[ReadyForAssessment, int] | AssessmentReadyBuildRejected:
-        """DB 事実から Ready を構築し、facts 由来の authoritative な監査主語 (元記事 id)
-        を併せて返す。構築できない場合は理由付きの拒否結果を返す。
-        """
-        facts = await repo.load_ready_build_facts(curation_id)
-        return cls.from_facts(curation_id, facts)
 
     @classmethod
     def from_facts(
