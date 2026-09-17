@@ -1,11 +1,30 @@
 """共通DB基盤のケース分離と失敗時の回収を確認する。"""
 
+from dataclasses import replace
+
 import asyncpg
 import pytest
 
 from local_tests.database import isolated_database
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_clone_preserves_migrated_database_permissions(system_database_template):
+    """DB単位の権限はmigration済みの複製元と完全に一致する。"""
+    query = (
+        "SELECT a.grantor, a.grantee, a.privilege_type, a.is_grantable "
+        "FROM pg_database d CROSS JOIN LATERAL "
+        "aclexplode(coalesce(d.datacl, acldefault('d',d.datdba))) a "
+        "WHERE d.datname=$1 "
+        "ORDER BY a.grantor, a.grantee, a.privilege_type"
+    )
+    admin = replace(system_database_template, name="postgres")
+    async with admin.connect("vector") as connection:
+        expected = await connection.fetch(query, "vector")
+    async with isolated_database(system_database_template) as database:
+        async with database.connect("vector") as connection:
+            assert await connection.fetch(query, database.name) == expected
 
 
 async def test_committed_data_and_sequence_do_not_leak_between_cases(

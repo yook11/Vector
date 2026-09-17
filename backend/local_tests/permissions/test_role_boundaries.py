@@ -2,7 +2,13 @@
 
 import pytest
 
-ROLES = ("vector_auth", "vector_app", "vector_collect", "vector_outbox_relay")
+ROLES = (
+    "vector_auth",
+    "vector_app",
+    "vector_collect",
+    "vector_outbox_relay",
+    "vector_auth_rate_limit_cleanup",
+)
 pytestmark = pytest.mark.asyncio
 
 
@@ -63,6 +69,7 @@ async def test_runtime_cannot_create_objects_in_application_schemas(
         ("vector_app", ("public", "auth")),
         ("vector_collect", ("public",)),
         ("vector_outbox_relay", ("public",)),
+        ("vector_auth_rate_limit_cleanup", ("auth",)),
     ],
 )
 async def test_runtime_can_use_required_schemas(system_database, role, schemas):

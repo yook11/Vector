@@ -24,6 +24,7 @@ def test_failure_always_removes_its_own_compose_project(monkeypatch, failure):
                     "POSTGRES_AUTH_PASSWORD": "auth-test",
                     "POSTGRES_COLLECT_PASSWORD": "collect-test",
                     "POSTGRES_OUTBOX_RELAY_PASSWORD": "relay-test",
+                    "POSTGRES_AUTH_CLEANUP_PASSWORD": "cleanup-test",
                 }
             }
         }
@@ -54,7 +55,7 @@ def test_failure_always_removes_its_own_compose_project(monkeypatch, failure):
 
     monkeypatch.setattr(module, "_run", run)
     monkeypatch.setattr(module, "_prepare_auth", prepare)
-    monkeypatch.setattr(module, "_prepare_outbox_relay_login", relay_login)
+    monkeypatch.setattr(module, "_prepare_dedicated_role_logins", relay_login)
     monkeypatch.setattr(module, "_verify_template", prepare)
     monkeypatch.setattr(module, "_migrate_auth", auth)
     with pytest.raises(RuntimeError, match="injected failure"):

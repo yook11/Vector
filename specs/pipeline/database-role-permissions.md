@@ -23,6 +23,7 @@ DMLはSELECT・INSERT・UPDATE・DELETEを表す。
 | vector_collect | public.pipeline_events | INSERT、id・occurred_atのSELECT |
 | vector_collect | public.outbox_events | INSERT、event_id・schema_version・occurred_at・next_attempt_at・attempt_countのSELECT |
 | vector_outbox_relay | public.outbox_events | 下記11列のSELECTと7列のUPDATE |
+| vector_auth_rate_limit_cleanup | auth.rateLimit | lastRequest列のSELECTと表のDELETE |
 
 RelayのSELECT列はevent_id・event_type・schema_version・payload・occurred_at・published_at・next_attempt_at・attempt_count・lease_token・leased_until・delivery_stopped_at。
 UPDATE列はlease_token・leased_until・attempt_count・published_at・next_attempt_at・delivery_stopped_at・delivery_stop_reason。
@@ -87,3 +88,33 @@ RLSによる行単位の可視性、関数のEXECUTE、全組み込みロール�
 - 一時DBでUPDATE権限を剥奪、未許可テーブルのSELECTを付与、未許可列payloadのSELECTを付与する3つの変更をそれぞれ検出した。各変更はケースDBの削除で回収し、恒久的な権限変更や検証用テストの追加はしていない。
 - Ruff lint・formatと差分チェックが成功し、専用Compose環境は終了時に削除した。
 - 初回の照合では、旧sequence名keyword_categories_id_seqから所有テーブルを誤ってkeyword_categoriesと定義したため失敗した。c1のテーブル改名を確認し、許可一覧を実際の所有テーブルcategoriesに訂正した。
+
+## 認証カウンター掃除ロールの追加・適用
+
+`vector_auth_rate_limit_cleanup`は認証カウンター掃除Lambda用の専用ロール。
+接続先DBへのCONNECT、auth schemaへのUSAGE、`auth."rateLimit"."lastRequest"`への
+列SELECT、同テーブルへのDELETEだけを直接付与する。key・countの参照、INSERT・
+UPDATE・TRUNCATE・CREATE、他の認証テーブルやpipeline_eventsへの権限は追加しない。
+PUBLIC由来の接続権限は変更しない。10分超の行だけを削除する条件は後続アプリの
+DELETE句で保証し、DBのDELETE権限自体は行の年齢を制限しない。
+
+ロール作成は`backend/db_roles.json`を入力とするAWS DB roles workflow、GRANTは
+`z24_auth_cleanup_grants`のAlembic migrationが担当する。migrationはロール・表・
+lastRequest列が不足すれば停止し、Better Authのschemaを作成・変更しない。
+
+本番適用は次の順とする。
+
+1. PRをマージし、AWS DB rolesを最新mainで起動して`production-db-roles`を承認する。
+2. 作成成功後、同じ対象commitを指定してAWS DB migrationを`contract`モードで起動する。
+3. 承認前にmigration範囲が意図した権限追加であることを確認し、適用後にrevisionと
+   対象ロールの権限を読み取り確認する。本番カウンターを削除する試験は行わない。
+4. Lambda・Scheduler・Lambda側のrds-db:connectは別PRで追加する。
+
+本PRでは旧Taskiqの掃除を継続し、認証機能・既存データ・監査履歴の掃除は変更しない。
+downgradeは本migrationの直接GRANTのみを取り消し、ロール自体は保持する。
+後続Lambdaの稼働開始後に戻す場合は、先にその定期起動と実行を停止する。
+
+新規ローカルDBは共通init scriptがNOLOGINロールを作成する。既存開発DBでは
+管理接続で`CREATE ROLE vector_auth_rate_limit_cleanup NOLOGIN;`を一度実行し、
+Better Authのmigration後にAlembicを適用する。local_testsでは共通基盤がテスト用
+LOGINだけを設定し、GRANTは製品migrationに委ねる。
