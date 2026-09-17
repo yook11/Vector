@@ -1,6 +1,6 @@
 # AssessmentConsumer — イベント受信と投資判定
 
-Status: Consumer・資源準備・共有イベント契約・本文解析に加え、Assessment Lambda入口とSQS部分バッチ応答を実装・検証済み（2026-09-12）。Assessment向けOutbox配送と別relay入口、Consumer・relayのTerraform定義を実装。AWSへの適用と稼働開始は未実施。
+Status: Assessment Lambda・relay・通知・カテゴリー初期化を実装しAWSへ反映済み。旧Taskiq経路を撤去する。撤去の本番反映前には更新後の記事保存・後続イベント・通知成功と旧Redisの未配達・処理中件数を確認する。以下の各日付の検証結果・非目標はその時点の記録である。
 
 ## Problem
 
@@ -12,7 +12,7 @@ Curationの完了イベントからAssessmentを実行し、対象内の判定�
 - [Embedding Lambda入口](../../backend/app/lambda_handlers/embedding/handler.py)：初期化、入力検証、部分バッチ応答、資源の終了。
 - [Gemini通信設定](../../backend/app/ai_providers/gemini/settings.py)と[クライアント管理](../../backend/app/ai_providers/gemini/client.py)：DeepSeekの責務分担の参照元。
 - [Curationイベント](../../backend/app/analysis/curation/events.py)、[Assessment保存処理](../../backend/app/analysis/assessment/service.py)、[Outbox送信契約](./outbox-sqs-message-contract.md)：既存のpayloadと保存・配送境界。
-- [relay](../../backend/app/outbox/delivery/relay.py)と[Scheduler定義](../../infra/aws/outbox_relay.tf)：コード上の配送入口はEmbedding向けとAssessment向けに分離済み。既存Scheduler定義はEmbedding向けの1分間隔起動だけで、Assessment向けのAWS設定は未追加。AWSの稼働状態は本仕様では確認していない。
+- [relay](../../backend/app/outbox/delivery/relay.py)と[Scheduler定義](../../infra/aws/outbox_relay.tf)：コード上の配送入口はEmbedding向けとAssessment向けに分離済み。Assessment向けの独立したScheduler・relay・SQS・Consumerを定義している。実際の有効／停止状態はAWSで確認する。
 
 ## 全体フローと責務
 
@@ -49,13 +49,13 @@ Ready構築時にCuration不存在またはReady入力制約違反が確定し�
 
 本節は開始時の不存在・Ready入力検証に関する過去のスライス記録を更新する。
 
-- `domain/ready.py`の不変な`AssessmentReadyBuildRejected`が、`AssessmentReadyBuildRejectionReason`と任意のDB由来`analyzable_article_id`を持つ。Readyの両構築入口は、従来の`(ReadyForAssessment, 記事ID)`または拒否値を返す。`AssessmentReadyBuildBlockedError`は廃止し、Consumerで別の拒否値へ詰め替えない。
+- `domain/ready.py`の不変な`AssessmentReadyBuildRejected`が、`AssessmentReadyBuildRejectionReason`と任意のDB由来`analyzable_article_id`を持つ。Readyの純粋な`from_facts()`は、従来の`(ReadyForAssessment, 記事ID)`または拒否値を返す。`AssessmentReadyBuildBlockedError`は廃止し、Consumerで別の拒否値へ詰め替えない。
 - `CURATION_MISSING`は記事IDなし、Readyモデル生成時の入力検証エラーは`INPUT_INVALID`とDB由来IDで返す。制約は維持し、DB取得障害・想定外例外は拒否に変換しない。
 - Consumerは`ALREADY_IN_SCOPE`／`ALREADY_OUT_OF_SCOPE`を従来の`ALREADY_ASSESSED`へ対応付ける。欠損・入力不正では同じ拒否値を監査へ渡して返し、Service・AI・成功監査・後続Outbox・成功／実行失敗メトリクスを呼ばない。
 - `append_ready_build_rejected`は`REJECTED`と理由コードを記録し、本文・入力値・検証例外を保存しない。既存の`assessment_ready_build_blocked_*`文字列は維持し、入力不正用コードを追加する。通常の記録障害は安全なログとaudit-dropped計測へ退避し、受信完了を維持する。
 - 拒否監査は業務処理の60秒制限を抜けた後に、`AssessmentConsumerFailureHandler.handle_ready_build_rejected`が行う。実行失敗の分類・計測・通知は通さない。
 - Lambdaは拒否のmessageIdを`batchItemFailures`へ含めず、`reason=ready_build_rejected`と`rejection_code`で完了を記録する。SQS削除APIは呼ばない。Service実行中の失敗とキャンセルの契約は維持する。
-- ServiceのCompletion・DB schema・イベントpayload・資源ライフサイクルは変更しない。旧TaskiqもReady側の同じ拒否値で分岐し、救済経路を存続させる。
+- ServiceのCompletion・DB schema・イベントpayload・資源ライフサイクルは変更しない。Taskiq用のReady構築入口は撤去し、ConsumerがDB取得と純粋なReady構築を担う。
 
 ### 最初のタスク：正常終了の契約
 
@@ -93,7 +93,7 @@ Done: 3種類の正常終了の根拠、エラーとの境界、後続イベン�
 - `service.py`に`AssessmentCompletionKind(StrEnum)`と`AssessmentCompletion`（frozen・slots付きdataclass）を定義した。kindの値は`in_scope`・`out_of_scope`・`already_assessed`とする。
 - 結果型は`kind`と`analyzed_article_id: int | None`を持ち、`IN_SCOPE`だけ正の整数IDを必須とし、他の結果へのID付与を拒否する。AIの判定内容を表す`AssessmentResult`は変更していない。
 - Serviceは保存・commit成功またはRepositoryの重複スキップを正常終了へ対応付ける。RepositoryのID／`None`／例外の契約、SQL、ロック、DB schemaは変更していない。
-- 既存Taskiqは`IN_SCOPE`だけ一覧更新通知、続いて結果型の記事IDによるEmbeddingタスク投入を行う。この接続は既存稼働の維持に限定し、新Consumerの後続配送は引き続きOutbox経由とする。
+- `IN_SCOPE`保存後の一覧通知はLambda入口で送信し、後続配送はOutbox経由とする。旧Taskiqからの通知・後続タスク投入は撤去する。
 - 結果型の不正な組み合わせ、実DBでの重複保存、対象外と重複スキップの非通知・非投入をテストへ反映した。保存行・成功監査・Outboxの一致、重複時のcommit非実行、保存・commit・Outbox失敗時の例外とロールバックも検証した。
 - 検証結果：`ruff check`と`ruff format --check`（app全体・変更したテスト）が成功。`uv run pytest tests/ -m unit -x -q`は6,366件成功。旧戻り値を期待していた統合テスト2件の更新後、該当ファイルの単体テスト14件を再確認した。`make test-integration PYTEST_ARGS='-x -q'`は1,354件成功・22件skipで終了し、テスト用DB・Redisは終了処理で削除した。今回の正常終了結果スライスは完了とする。
 

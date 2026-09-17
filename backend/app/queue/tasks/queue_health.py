@@ -1,4 +1,4 @@
-"""pipeline 4 stage (acquisition〜assessment) Stream health の毎分sampler。"""
+"""pipeline 3 stage (acquisition〜curation) Stream health の毎分sampler。"""
 
 from __future__ import annotations
 

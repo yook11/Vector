@@ -1,5 +1,7 @@
 # Stage 4 — Assessment 命名統一リファクタ計画
 
+> 過去の移行記録。旧Taskiq Assessmentは本コードから撤去したため、以下の旧経路・配線の記述は現行仕様ではない。現行構成は[こちら](../pipeline/assessment-consumer.md)を参照する。
+
 Status: Implemented
 
 > **適用範囲**: 本リファクタは **命名の統一とパッケージ rename のみ** を対象とする。

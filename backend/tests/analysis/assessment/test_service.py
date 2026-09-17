@@ -32,7 +32,6 @@ from app.analysis.assessment.service import (
     AssessmentCompletionKind,
     AssessmentService,
 )
-from app.logfire.article_stage import assessment_stage_span
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import (
     AnalyzedArticleRecord as AnalyzedArticleRecordORM,
@@ -46,7 +45,6 @@ from app.models.out_of_scope_article_record import (
 from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
-from tests.logfire._span_helpers import stage_attrs
 from tests.outbox import RejectOutboxInsert
 
 _AI_MODEL = "gemini-2.5-flash-lite"
@@ -483,75 +481,6 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     assert result == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
-
-
-@pytest.mark.asyncio
-async def test_in_scope_sets_stage_result_in_scope(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    sample_categories: list[Category],
-    capfire: CaptureLogfire,
-) -> None:
-    """in-scope 保存成功で active span に result=in_scope が焼かれる。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    assessor = _make_assessor(return_envelope=_in_scope_call(InScopeCategory.AI))
-
-    svc = AssessmentService(session_factory)
-    with assessment_stage_span(curation_id=extraction.id):
-        await svc.execute(
-            _ready(extraction), assessor, analyzable_article_id=article.id
-        )
-
-    assert stage_attrs(capfire)["result"] == "in_scope"
-
-
-@pytest.mark.asyncio
-async def test_out_of_scope_sets_stage_result_out_of_scope(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    capfire: CaptureLogfire,
-) -> None:
-    """out-of-scope 保存成功で active span に result=out_of_scope が焼かれる。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    assessor = _make_assessor(return_envelope=_out_of_scope_call())
-
-    svc = AssessmentService(session_factory)
-    with assessment_stage_span(curation_id=extraction.id):
-        await svc.execute(
-            _ready(extraction), assessor, analyzable_article_id=article.id
-        )
-
-    assert stage_attrs(capfire)["result"] == "out_of_scope"
-
-
-@pytest.mark.asyncio
-async def test_race_loss_sets_stage_result_skipped(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    sample_categories: list[Category],
-    capfire: CaptureLogfire,
-) -> None:
-    """in-scope の楽観ロック敗北 (save_in_scope=None) で result=skipped が焼かれる。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    assessor = _make_assessor(return_envelope=_in_scope_call(InScopeCategory.AI))
-
-    svc = AssessmentService(session_factory)
-    with assessment_stage_span(curation_id=extraction.id):
-        with patch(
-            "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
-            new=AsyncMock(return_value=None),
-        ):
-            await svc.execute(
-                _ready(extraction), assessor, analyzable_article_id=article.id
-            )
-
-    assert stage_attrs(capfire)["result"] == "skipped"
 
 
 # processing_outcome emit — commit 後に in_scope/out_of_scope、race loss は emit しない

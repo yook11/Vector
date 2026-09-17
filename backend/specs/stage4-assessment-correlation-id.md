@@ -1,5 +1,7 @@
 # Stage 4 Assessment: 監査主語を Ready から外し facts 由来で運ぶ
 
+> 過去の移行記録。旧Taskiq Assessmentは本コードから撤去したため、以下の旧経路・配線の記述は現行仕様ではない。現行構成は[こちら](../../specs/pipeline/assessment-consumer.md)を参照する。
+
 ## 位置付け
 
 Stage 5 embedding の型純度リファクタ（#888）と同じ動機（処理前提の型に監査用 id を

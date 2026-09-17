@@ -213,7 +213,7 @@ Read path の追加不変条件:
 - category catalog の DB 事前検証は既存 `assert_category_catalog_covers_enum()` を維持し、対象は `InScopeCategory` のみとする。
 - Assessment Lambdaは呼び出しごとのConsumer初期化で全カテゴリーを検証し、検証用セッションを閉じてからConsumerを生成する。
 - カテゴリー不足・DB障害は初期化失敗として伝播し、AI実行・保存・通知へ進まない。保存時のカテゴリー存在確認も維持する。
-- 旧workerの事前検証は、新Lambdaへの移設を本番確認して旧経路を撤去するまで維持する。
+- カテゴリーの事前検証は新Assessment Consumer初期化時に実行する。旧Taskiq workerでの検証は撤去した。
 - `AssessmentCategory = InScopeCategory | OutOfScopeCategory` はこの仕様では追加しない。
 
 ## Test Plan

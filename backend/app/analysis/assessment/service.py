@@ -25,7 +25,6 @@ from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
 from app.audit.stages.assessment import AssessmentAuditRepository
-from app.logfire.article_stage import set_assessment_stage_result
 from app.models.outbox_event import OutboxEvent
 
 logger = structlog.get_logger(__name__)
@@ -105,7 +104,6 @@ class AssessmentService:
                             "assessment_in_scope_concurrent_write",
                             curation_id=curation_id,
                         )
-                        set_assessment_stage_result("skipped")
                         return AssessmentCompletion(
                             AssessmentCompletionKind.ALREADY_ASSESSED
                         )
@@ -131,7 +129,6 @@ class AssessmentService:
                         "assessment_in_scope_completed",
                         curation_id=curation_id,
                     )
-                    set_assessment_stage_result("in_scope")
                     record_assessment_processing_outcome("in_scope")
                     return AssessmentCompletion(
                         AssessmentCompletionKind.IN_SCOPE, analyzed_article_id
@@ -148,7 +145,6 @@ class AssessmentService:
                             "assessment_out_of_scope_concurrent_write",
                             curation_id=curation_id,
                         )
-                        set_assessment_stage_result("skipped")
                         return AssessmentCompletion(
                             AssessmentCompletionKind.ALREADY_ASSESSED
                         )
@@ -163,7 +159,6 @@ class AssessmentService:
                         "assessment_out_of_scope_completed",
                         curation_id=curation_id,
                     )
-                    set_assessment_stage_result("out_of_scope")
                     record_assessment_processing_outcome("out_of_scope")
                     # Stage 5 chain なし
                     return AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)

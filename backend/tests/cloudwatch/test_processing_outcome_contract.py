@@ -54,9 +54,9 @@ _SERIES: list[tuple[Callable[[Any], None], str, str]] = [
 _SERIES_IDS = [f"{stage}-{result}" for _, stage, result in _SERIES]
 
 
-def test_series_total_is_fifteen() -> None:
-    """全系列数は 15 (spec のコスト見積もりと alarm 分母定義の前提)。"""
-    assert len(_SERIES) == 15
+def test_series_total_is_fourteen() -> None:
+    """全系列数は 14 (spec のコスト見積もりと alarm 分母定義の前提)。"""
+    assert len(_SERIES) == 14
 
 
 @pytest.mark.parametrize(

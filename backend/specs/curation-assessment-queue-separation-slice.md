@@ -1,5 +1,7 @@
 # Curation / Assessment Redis Stream 分割仕様
 
+> 過去の移行記録。旧Taskiq Assessmentは本コードから撤去したため、以下の旧経路・配線の記述は現行仕様ではない。現行構成は[こちら](redis-production-topology.md)を参照する。
+
 > 日付: 2026-07-17
 >
 > ステータス: 実装方針合意済み

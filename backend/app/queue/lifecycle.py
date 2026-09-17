@@ -188,16 +188,6 @@ def _register_worker_lifecycle(
                         max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
                     )
             logger.info(f"{label}_worker_startup")
-
-            if label == "analysis":
-                # enum↔categories seed のドリフトを起動時に fail-fast 検出する
-                # (lazy import で broker wiring の import 順序に影響させない)。
-                from app.analysis.assessment.repository import AssessmentRepository
-
-                async with state.session_factory() as session:
-                    await AssessmentRepository(
-                        session
-                    ).assert_category_catalog_covers_enum()
         except BaseException:
             analysis_clients = getattr(state, "analysis_client_resources", None)
             if analysis_clients is not None:

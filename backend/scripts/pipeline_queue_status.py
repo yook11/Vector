@@ -1,4 +1,4 @@
-"""acquisition / completion / curation / assessment の4 stageを表示する
+"""acquisition / completion / curation の3 stageを表示する
 operator向けRedis Stream status。
 """
 

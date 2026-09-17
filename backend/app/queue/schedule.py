@@ -13,7 +13,6 @@
                      |              |              | observe_pipeline_queue_health
   */15 * * * *       | :00,:15,...  | :00,:15,...  | dispatch_high
   0,30 * * * *       | :00,:30      | :00,:30      | backfill_curations
-  5,35 * * * *       | :05,:35      | :05,:35      | backfill_assessments
   20,50 * * * *      | :20,:50      | :20,:50      | purge_auth_rate_limits
   * * * * *          | 毎分         | 毎分         | sweep_deadline_exceeded_agent_runs
   25 * * * *         | :25          | :25          | purge_pipeline_events
@@ -37,15 +36,11 @@ from app.collection.sources.fetch_cadence import FetchCadence
 # 1 分間隔 — article_completion stage の DB 駆動 poll / lease sweep
 CRON_HTML_FETCH = "* * * * *"
 
-# 1 分間隔 — pipeline 4 stage (acquisition〜assessment) Stream health の継続観測
+# 1 分間隔 — pipeline 3 stage (acquisition〜curation) Stream health の継続観測
 CRON_PIPELINE_QUEUE_HEALTH = "* * * * *"
 
 # 30 分間隔 — curation back-fill (Stage 3 救済、:00 / :30 起動)
 CRON_BACKFILL_CURATIONS = "0,30 * * * *"
-
-# 30 分間隔 + 5 分オフセット — assessment back-fill (Stage 4 救済、:05 / :35 起動)
-CRON_BACKFILL_ASSESSMENTS = "5,35 * * * *"
-
 
 # 30 分間隔 + 20 分オフセット — Better Auth rateLimit retention purge
 CRON_AUTH_RATE_LIMIT_PURGE = "20,50 * * * *"

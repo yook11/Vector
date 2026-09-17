@@ -331,8 +331,8 @@ services:
     init: true
     command: supervisord -n -c /app/supervisord/fetch.conf
 
-  # --- taskiq workers: analysis (curation + assessment) + embedding を 1 container に同居 ---
-  # broker_analysisの1つの共有worker processがcuration/assessmentの2 Streamを購読する。
+  # --- CurationとmaintenanceのTaskiq workerを同じcontainerで稼働する ---
+  # broker_analysisはCurationのStreamを購読する。
   # 起動はGEMINI_API_KEY共有で共倒れし、稼働時もfail_fastが片programのFATALで
   # containerごと落とすため、process境界があってもcontainer単位の障害分離はない。
   worker-analysis:

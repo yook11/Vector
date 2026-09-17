@@ -131,20 +131,6 @@ def _compose_comment_text() -> str:
     )
 
 
-def _worker_analysis_comment_context() -> str:
-    lines = _required_text(_COMPOSE_FILE).splitlines()
-    service_line = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if re.fullmatch(r"  worker-analysis:", line)
-        ),
-        None,
-    )
-    assert service_line is not None, "worker-analysis service is missing"
-    return "\n".join(lines[max(0, service_line - 12) : service_line])
-
-
 def test_makefile_does_not_keep_dead_queues_variable() -> None:
     makefile = _required_text(_MAKEFILE)
 
@@ -178,17 +164,16 @@ def test_pipeline_status_does_not_call_retained_entries_queue_depth() -> None:
     assert not _contains_any(target, ("queue depth", "backlog", "キュー深度"))
 
 
-def test_pipeline_status_names_the_full_four_stage_pipeline() -> None:
+def test_pipeline_status_names_the_full_three_stage_pipeline() -> None:
     target = _normalized(_make_target("pipeline-status"))
 
     assert (
         "analysis stream観測" not in target
-        and "curation / assessment stream status" not in target
         and "pipeline" in target
         and "stream" in target
         and _contains_any(
             target,
-            ("4-stage", "4 stage", "4段", "四段", "4ステージ", "全4"),
+            ("3-stage", "3 stage", "3段", "三段", "3ステージ", "全3"),
         )
     )
 
@@ -236,38 +221,12 @@ def test_core_redis_acl_remains_broad() -> None:
     assert {"~*", "&*", "+@all"}.issubset(tokens)
 
 
-def test_redis_topology_spec_names_greenfield_two_stream_live_topology() -> None:
-    spec = _normalized(_required_text(_REDIS_TOPOLOGY_SPEC))
-
-    assert (
-        "pipeline:curation" in spec
-        and "pipeline:assessment" in spec
-        and "pipeline:analysis" in spec
-        and _contains_any(spec, ("greenfield", "初回公開前", "未デプロイ"))
-        and _contains_any(spec, ("legacy", "旧stream", "旧 stream"))
-        and _contains_any(spec, ("存在しない", "作らない", "削除", "除外"))
-        and _contains_any(
-            spec,
-            (
-                "migration不要",
-                "migrationは不要",
-                "migration は不要",
-                "migrationを行わない",
-                "migrationは行わない",
-                "移行不要",
-                "移行を行わない",
-            ),
-        )
-    )
-
-
-def test_redis_topology_spec_records_all_four_stage_stream_rows() -> None:
+def test_redis_topology_spec_records_all_three_stage_stream_rows() -> None:
     spec = _required_text(_REDIS_TOPOLOGY_SPEC)
     expected_consumers = {
         "pipeline:acquisition": "broker_collection",
         "pipeline:completion": "broker_collection",
         "pipeline:curation": "broker_analysis",
-        "pipeline:assessment": "broker_analysis",
     }
 
     rows = {
@@ -324,7 +283,6 @@ def test_redis_topology_spec_records_final_collect_acl_boundary() -> None:
             stream in section
             for stream in (
                 "pipeline:content",
-                "pipeline:assessment",
                 "pipeline:maintenance",
             )
         )
@@ -333,7 +291,7 @@ def test_redis_topology_spec_records_final_collect_acl_boundary() -> None:
     )
 
 
-def test_topology_spec_records_four_stage_freshness_and_completion_alerts() -> None:
+def test_topology_spec_records_three_stage_freshness_and_completion_alerts() -> None:
     section = _normalized(
         _markdown_section(
             _required_text(_REDIS_TOPOLOGY_SPEC),
@@ -342,11 +300,8 @@ def test_topology_spec_records_four_stage_freshness_and_completion_alerts() -> N
     )
 
     assert (
-        all(
-            stage in section
-            for stage in ("acquisition", "completion", "curation", "assessment")
-        )
-        and _contains_any(section, ("4-stage", "4 stage", "4段", "4ステージ"))
+        all(stage in section for stage in ("acquisition", "completion", "curation"))
+        and _contains_any(section, ("3-stage", "3 stage", "3段", "3ステージ"))
         and _contains_any(section, ("3分", "3 分", "3 minutes"))
         and all(
             term in section
@@ -379,18 +334,6 @@ def test_redis_topology_spec_distinguishes_retention_and_live_group_state() -> N
         )
         and _contains_any(spec, ("ack 済み", "ack済み"))
         and _contains_any(spec, ("区別", "異なる", "別の指標"))
-    )
-
-
-def test_redis_topology_spec_records_final_two_stream_memory_tradeoff() -> None:
-    spec = _normalized(_required_text(_REDIS_TOPOLOGY_SPEC))
-
-    assert (
-        _contains_any(spec, ("2 stream", "2stream", "2本", "2つのstream"))
-        and "20,000" in spec
-        and "9.84 mb" in spec
-        and "4.92 mb" in spec
-        and _contains_any(spec, ("trade-off", "tradeoff", "トレードオフ"))
     )
 
 
@@ -503,18 +446,6 @@ def test_compose_comment_calls_maxlen_retained_history_not_backlog() -> None:
                 "キュー深度ではなく",
             ),
         )
-    )
-
-
-def test_compose_comment_describes_analysis_broker_as_shared_stream_consumer() -> None:
-    context = _normalized(_worker_analysis_comment_context())
-
-    assert (
-        "broker_analysis" in context
-        and "curation" in context
-        and "assessment" in context
-        and _contains_any(context, ("共有 worker", "共有worker", "shared worker"))
-        and _contains_any(context, ("consume", "consumer", "購読", "読み取"))
     )
 
 

@@ -172,7 +172,7 @@ class _RecordingRedis:
 
 
 def test_pipeline_queue_targets_and_stage_vocabulary_are_fixed() -> None:
-    """A2 alarm はこの4 stage 分だけ張られるため、系列数と語彙をここで固定する。"""
+    """A2 alarm はこの3 stage 分だけ張られるため、系列数と語彙をここで固定する。"""
     module = _health_module()
 
     assert (
@@ -182,12 +182,11 @@ def test_pipeline_queue_targets_and_stage_vocabulary_are_fixed() -> None:
             for target in module.PIPELINE_QUEUE_TARGETS
         ),
     ) == (
-        ("acquisition", "completion", "curation", "assessment"),
+        ("acquisition", "completion", "curation"),
         (
             ("acquisition", "pipeline:acquisition", "taskiq"),
             ("completion", "pipeline:completion", "taskiq"),
             ("curation", "pipeline:curation", "taskiq"),
-            ("assessment", "pipeline:assessment", "taskiq"),
         ),
     )
 
@@ -503,7 +502,7 @@ async def test_snapshot_failures_use_fixed_nonzero_reasons(
     reason: str,
 ) -> None:
     module = _health_module()
-    target = _target(module, "assessment")
+    target = _target(module, "curation")
     redis = _RecordingRedis(pipeline_results=[pipeline_result])
 
     with pytest.raises(module.StreamHealthError) as raised:
@@ -514,7 +513,7 @@ async def test_snapshot_failures_use_fixed_nonzero_reasons(
         raised.value.stage,
         raised.value.reason,
         {"payload", "task_id", "consumer", "consumer_uuid"} & public_state.keys(),
-    ) == ("assessment", reason, set())
+    ) == ("curation", reason, set())
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,6 @@ _FOUR_STAGE_SPECS = (
     ("acquisition", "pipeline:acquisition"),
     ("completion", "pipeline:completion"),
     ("curation", "pipeline:curation"),
-    ("assessment", "pipeline:assessment"),
 )
 
 
@@ -50,16 +49,16 @@ async def stream_case() -> AsyncIterator[tuple[Redis, StreamHealthTarget]]:
 
 
 @pytest.fixture
-async def four_stage_stream_case() -> AsyncIterator[
+async def three_stage_stream_case() -> AsyncIterator[
     tuple[Redis, tuple[StreamHealthTarget, ...]]
 ]:
-    """4 stage固有のStreamを作り、観測後にまとめて削除する。"""
+    """3 stage固有のStreamを作り、観測後にまとめて削除する。"""
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     suffix = uuid4().hex
     targets = tuple(
         StreamHealthTarget(
             stage=cast(StreamHealthStage, stage),
-            stream=f"test:{stream}:health-four:{suffix}",
+            stream=f"test:{stream}:health-three:{suffix}",
             group="taskiq",
         )
         for stage, stream in _FOUR_STAGE_SPECS
@@ -84,11 +83,11 @@ def _counts_and_age_presence(
     )
 
 
-async def test_real_redis_observes_four_stage_targets_independently(
-    four_stage_stream_case: tuple[Redis, tuple[StreamHealthTarget, ...]],
+async def test_real_redis_observes_three_stage_targets_independently(
+    three_stage_stream_case: tuple[Redis, tuple[StreamHealthTarget, ...]],
 ) -> None:
     """各stageのretained / lagを別Streamの値として観測する。"""
-    redis, targets = four_stage_stream_case
+    redis, targets = three_stage_stream_case
     for entry_count, target in enumerate(targets, start=1):
         await redis.xgroup_create(
             target.stream,
@@ -108,7 +107,6 @@ async def test_real_redis_observes_four_stage_targets_independently(
         ("acquisition", 1, 1, 0),
         ("completion", 2, 2, 0),
         ("curation", 3, 3, 0),
-        ("assessment", 4, 4, 0),
     )
 
 

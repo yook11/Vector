@@ -12,7 +12,6 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     to_assessment_error,
 )
-from app.analysis.assessment.task_errors import AssessmentTaskError
 
 
 class SampleDefect(StrEnum):
@@ -101,7 +100,6 @@ def test_curation_missing_has_no_details():
 )
 def test_core_errors_are_independent_of_task_classification(exc):
     assert isinstance(exc, AssessmentError)
-    assert not isinstance(exc, AssessmentTaskError)
     for attr in ("RETRYABILITY", "FAILURE_ACTION", "failure_kind", "failure_reason"):
         assert not hasattr(exc, attr)
     assert exc.SAFE_ATTRS == ("code",)

@@ -35,7 +35,7 @@ class _MetricCase:
     target_method: str
 
 
-# hold gate は 2 stage 共通の is_stage_held 1 本なので case ごとに持たせない。
+# 旧Curationのhold gateを差し替える。
 _HOLD_PATCH = "app.queue.tasks.backfill.is_stage_held"
 
 CASES = [
@@ -49,17 +49,6 @@ CASES = [
         queue_task_patch="app.queue.tasks.backfill.curate_content",
         count_method="count_articles_pending_curation",
         target_method="curation_targets_pending",
-    ),
-    _MetricCase(
-        name="assessment",
-        task=tasks.backfill_assessments,
-        stage="assessment",
-        action="excluded",
-        enabled_attr="backfill_assessments_enabled",
-        ageout_patch="app.queue.tasks.backfill._exclude_aged_out_assessments",
-        queue_task_patch="app.queue.tasks.backfill.assess_content",
-        count_method="count_curations_pending_assessment",
-        target_method="assessment_targets_pending",
     ),
 ]
 

@@ -78,13 +78,12 @@ locals {
     }
     analysis = {
       subnet_index   = 24, needs_broker = true
-      egress_vendors = ["gemini", "deepseek", "logfire"], egress_allow_any_domain = false
+      egress_vendors = ["gemini", "logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_app", "vector_auth"]
       cpu            = 256, memory = 2048, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/analysis.conf"]
       secrets = {
         GEMINI_API_KEY           = "gemini-api-key"
-        DEEPSEEK_API_KEY         = "deepseek-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"

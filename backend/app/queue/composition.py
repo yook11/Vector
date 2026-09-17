@@ -1,6 +1,6 @@
 """AI adapter wiring (Pure DI composition root)。
 
-Stage 3 (curation) / Stage 4 (assessment) と週次 briefing で
+Stage 3 (curation) と週次 briefing で
 利用する AI provider 選択を本 module で hardcode する設計 (Pure DI)。切替は env 変更
 ではなくコード変更 + worker restart。Stage ごとに別の抽象を別の具象クラスに紐付ける
 ため、共有 env による誤切替の余地が構造的に生じない。
@@ -29,14 +29,10 @@ logger = structlog.get_logger(__name__)
 
 
 async def _wire_analysis_adapters(state: TaskiqState) -> None:
-    """Stage 3 / Stage 4 の AI アダプターを worker 起動時に構築する。"""
+    """Curation の AI アダプターを worker 起動時に構築する。"""
     # 具象 SDK の import を関数本体に遅延 (module docstring 参照)。
-    from app.ai_providers.deepseek.client import open_deepseek_client
-    from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
     from app.ai_providers.gemini.client import open_gemini_client
     from app.ai_providers.gemini.settings import GeminiConnectionSettings
-    from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
-    from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
     from app.analysis.curation.ai.gemini import GeminiCurator
     from app.config import settings
 
@@ -48,20 +44,10 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
             )
         )
         state.curator = GeminiCurator(client=gemini_client)
-        client = await resources.enter_async_context(
-            open_deepseek_client(
-                api_key=settings.deepseek_api_key,
-                base_url=DEEPSEEK_ASSESSMENT_SPEC.base_url,
-                settings=DeepSeekConnectionSettings(),
-            )
-        )
-        state.assessor = DeepSeekAssessor(client)
         logger.info(
             "analysis_adapters_wired",
             curator=type(state.curator).__name__,
             curator_model=state.curator.model_name,
-            assessor=type(state.assessor).__name__,
-            assessor_model=state.assessor.model_name,
         )
         state.analysis_client_resources = resources.pop_all()
 

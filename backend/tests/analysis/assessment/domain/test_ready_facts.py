@@ -1,7 +1,6 @@
 """取得済みの開始条件と既存の非同期入口の契約を検証する。"""
 
 from dataclasses import replace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -73,13 +72,3 @@ def test_invalid_input_becomes_ready_build_rejection(field, value):
     assert rejected.reason is AssessmentReadyBuildRejectionReason.INPUT_INVALID
     assert rejected.analyzable_article_id == 7
     assert rejected.reason.value == "assessment_ready_build_blocked_input_invalid"
-
-
-@pytest.mark.asyncio
-async def test_legacy_entry_loads_once_and_delegates():
-    repo = AsyncMock()
-    repo.load_ready_build_facts.return_value = _FACTS
-    assert await ReadyForAssessment.try_advance_from(
-        curation_id=5, repo=repo
-    ) == ReadyForAssessment.from_facts(5, _FACTS)
-    repo.load_ready_build_facts.assert_awaited_once_with(5)
