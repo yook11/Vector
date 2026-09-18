@@ -26,10 +26,13 @@ locals {
     for stage in ["completion", "curation", "assessment", "embedding"] :
     "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-${stage}"
   ]
-  embedding_consumer_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-embedding-consumer"
-  embedding_consumer_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-embedding-consumer-lambda"
-  embedding_dlq_arn             = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-embedding-dlq"
-  managed_pipeline_queue_arns   = concat(local.outbox_queue_arns, values(local.source_dispatch_queue_arns), [local.embedding_dlq_arn, local.assessment_dlq_arn, local.curation_dlq_arn, local.completion_dlq_arn, local.acquisition_dlq_arn])
+  embedding_consumer_lambda_arn              = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-embedding-consumer"
+  embedding_consumer_role_arn                = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-embedding-consumer-lambda"
+  embedding_dlq_arn                          = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-embedding-dlq"
+  auth_rate_limit_cleanup_lambda_arn         = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-auth-rate-limit-cleanup"
+  auth_rate_limit_cleanup_lambda_role_arn    = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-auth-rate-limit-cleanup-lambda"
+  auth_rate_limit_cleanup_scheduler_role_arn = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-auth-rate-limit-cleanup-scheduler"
+  managed_pipeline_queue_arns                = concat(local.outbox_queue_arns, values(local.source_dispatch_queue_arns), [local.embedding_dlq_arn, local.assessment_dlq_arn, local.curation_dlq_arn, local.completion_dlq_arn, local.acquisition_dlq_arn])
   outbox_lambda_eni_actions = [
     "ec2:CreateNetworkInterface",
     "ec2:DescribeNetworkInterfaces",
@@ -50,11 +53,12 @@ locals {
         local.acquisition_consumer_role_arn,
         local.curation_outbox_relay_role_arn,
         local.completion_outbox_relay_role_arn,
+        local.auth_rate_limit_cleanup_lambda_role_arn,
       ])
       service = "lambda.amazonaws.com"
     }
     Scheduler = {
-      arns    = concat(local.backfill_scheduler_role_arns, [local.source_dispatch_scheduler_role_arn], [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"])
+      arns    = concat(local.backfill_scheduler_role_arns, [local.source_dispatch_scheduler_role_arn, local.auth_rate_limit_cleanup_scheduler_role_arn], [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"])
       service = "scheduler.amazonaws.com"
     }
   }
@@ -177,7 +181,7 @@ locals {
   ]
   inline_boundary_pairing_statements = [
     for key, statement in local.boundary_pairing_statements_by_group : statement
-    if !contains(setunion(local.outbox_boundary_groups, local.assessment_boundary_groups, local.curation_boundary_groups, local.completion_boundary_groups, toset(keys(local.backfill_role_boundary_groups)), toset(keys(local.source_dispatch_role_boundary_groups)), toset(["EmbeddingConsumerLambda", "AcquisitionConsumerLambda"])), key)
+    if !contains(setunion(local.outbox_boundary_groups, local.assessment_boundary_groups, local.curation_boundary_groups, local.completion_boundary_groups, toset(keys(local.backfill_role_boundary_groups)), toset(keys(local.source_dispatch_role_boundary_groups)), toset(["EmbeddingConsumerLambda", "AcquisitionConsumerLambda", "AuthRateLimitCleanupLambda", "AuthRateLimitCleanupScheduler"])), key)
   ]
 
   # CI が assume できるロール。name は「何をするロールか」で付ける
@@ -363,6 +367,7 @@ resource "aws_iam_role_policy" "apply" {
     aws_iam_role_policy_attachment.apply_completion_consumer,
     aws_iam_role_policy_attachment.apply_acquisition_consumer,
     aws_iam_role_policy_attachment.apply_backfill,
+    aws_iam_role_policy_attachment.apply_auth_rate_limit_cleanup,
     aws_iam_role_policy_attachment.apply_source_dispatch,
     aws_iam_role_policy_attachment.apply_role_creation,
   ]

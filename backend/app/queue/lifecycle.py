@@ -25,13 +25,9 @@ from taskiq_redis import RedisStreamBroker
 from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
 from app.config import settings
 from app.db.engine import (
-    AUTH_RETENTION_MAX_OVERFLOW,
-    AUTH_RETENTION_POOL_SIZE,
     DEFAULT_POOL_TIMEOUT,
     WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
-    auth_retention_service_name,
-    create_auth_retention_engine,
     create_worker_engine,
     worker_service_name,
 )
@@ -96,8 +92,6 @@ async def _aclose_worker_resources(state: TaskiqState) -> None:
     async with AsyncExitStack() as stack:
         if hasattr(state, "engine"):
             stack.push_async_callback(state.engine.dispose)
-        if hasattr(state, "auth_engine"):
-            stack.push_async_callback(state.auth_engine.dispose)
         live = getattr(state, "agent_live_redis", None)
         if live is not None:
             stack.push_async_callback(live.aclose)
@@ -157,36 +151,6 @@ def _register_worker_lifecycle(
         _attach_worker_redis(state, runtime)
         try:
             await _compose(runtime, state)
-            if label == "maintenance":
-                try:
-                    state.auth_engine = create_auth_retention_engine(settings)
-                except RuntimeError as exc:
-                    logger.error(
-                        "maintenance_auth_retention_engine_missing",
-                        error_type=exc.__class__.__name__,
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "maintenance_auth_retention_engine_failed",
-                        error_type=exc.__class__.__name__,
-                    )
-                else:
-                    state.auth_session_factory = caller_managed_session_factory(
-                        state.auth_engine
-                    )
-                    logfire.instrument_sqlalchemy(engine=state.auth_engine)
-                    log_pool_initialized(
-                        service_name=auth_retention_service_name(),
-                        pool_size=AUTH_RETENTION_POOL_SIZE,
-                        max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
-                        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
-                        pool_timeout=DEFAULT_POOL_TIMEOUT,
-                    )
-                    register_pool_metrics(
-                        state.auth_engine,
-                        pool_size=AUTH_RETENTION_POOL_SIZE,
-                        max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
-                    )
             logger.info(f"{label}_worker_startup")
         except BaseException:
             analysis_clients = getattr(state, "analysis_client_resources", None)

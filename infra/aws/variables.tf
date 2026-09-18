@@ -342,3 +342,22 @@ variable "embedding_backfill_enabled" {
   default     = true
   nullable    = false
 }
+
+variable "auth_rate_limit_cleanup_image_digest" {
+  description = "認証カウンター掃除Lambdaのbackendイメージdigest（通常plan/applyではstateの現行値を引き継ぐ）。"
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.auth_rate_limit_cleanup_image_digest == null ? true : can(regex("^sha256:[0-9a-f]{64}$", var.auth_rate_limit_cleanup_image_digest))
+    error_message = "auth_rate_limit_cleanup_image_digest must be null or a sha256 digest with 64 lowercase hexadecimal characters."
+  }
+}
+
+variable "auth_rate_limit_cleanup_enabled" {
+  description = "認証カウンター掃除の定期起動を有効にする（初回は停止、以後はstateの稼働状態を引き継ぐ）。"
+  type        = bool
+  default     = false
+  nullable    = false
+}

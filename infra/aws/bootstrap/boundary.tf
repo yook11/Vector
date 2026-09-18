@@ -161,6 +161,14 @@ locals {
       boundary   = aws_iam_policy.curation_outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-curation-outbox-relay-scheduler"]
     }
+    AuthRateLimitCleanupLambda = {
+      boundary   = aws_iam_policy.auth_rate_limit_cleanup_lambda_boundary.arn
+      role_names = ["${var.name_prefix}-auth-rate-limit-cleanup-lambda"]
+    }
+    AuthRateLimitCleanupScheduler = {
+      boundary   = aws_iam_policy.auth_rate_limit_cleanup_scheduler_boundary.arn
+      role_names = ["${var.name_prefix}-auth-rate-limit-cleanup-scheduler"]
+    }
     Chatbot = {
       boundary   = aws_iam_policy.chatbot_boundary.arn
       role_names = ["${var.name_prefix}-chatbot"]

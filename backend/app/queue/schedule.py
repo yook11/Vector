@@ -13,7 +13,6 @@
                      |              |              | observe_pipeline_queue_health
   */15 * * * *       | :00,:15,...  | :00,:15,...  | dispatch_high
   0,30 * * * *       | :00,:30      | :00,:30      | backfill_curations
-  20,50 * * * *      | :20,:50      | :20,:50      | purge_auth_rate_limits
   * * * * *          | 毎分         | 毎分         | sweep_deadline_exceeded_agent_runs
   25 * * * *         | :25          | :25          | purge_pipeline_events
   0 * * * *          | :00          | :00          | dispatch_medium
@@ -41,9 +40,6 @@ CRON_PIPELINE_QUEUE_HEALTH = "* * * * *"
 
 # 30 分間隔 — curation back-fill (Stage 3 救済、:00 / :30 起動)
 CRON_BACKFILL_CURATIONS = "0,30 * * * *"
-
-# 30 分間隔 + 20 分オフセット — Better Auth rateLimit retention purge
-CRON_AUTH_RATE_LIMIT_PURGE = "20,50 * * * *"
 
 # 1 分間隔 — agent run の期限切れを確定
 CRON_AGENT_RUN_SWEEP = "* * * * *"
