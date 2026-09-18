@@ -21,7 +21,7 @@ locals {
   #
   # `sslmode=require` は db_ssl.py が verify-full に格上げする。
   backend_db_url = {
-    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay"]) :
+    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay", "vector_auth_rate_limit_cleanup"]) :
     user => "postgresql+asyncpg://${user}@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
   }
   migration_db_url = "postgresql+asyncpg://vector@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
@@ -90,10 +90,6 @@ locals {
 
   # 段ごとの追加 env。
   #
-  # analysis だけ DB URL を 2 本持つ。同居する maintenance worker の
-  # purge_auth_rate_limits が auth."rateLimit" を消すため、
-  # lifecycle.py の build_auth_retention_engine が別 engine を建てる。
-  # 「1 task = 1 DB user」を仮定した形では表現できない。
   stage_environment = {
     frontend = {
       # RDS の CA は Node 内蔵 store に無い private root。pg は内蔵 store を使うので
@@ -135,9 +131,8 @@ locals {
       REDIS_URL    = local.broker_redis_url["fetch"]
     }
     analysis = {
-      DATABASE_URL                = local.backend_db_url["vector_app"]
-      AUTH_RETENTION_DATABASE_URL = local.backend_db_url["vector_auth"]
-      REDIS_URL                   = local.broker_redis_url["analysis"]
+      DATABASE_URL = local.backend_db_url["vector_app"]
+      REDIS_URL    = local.broker_redis_url["analysis"]
       # Curationの救済投入はLambda側へ移し、旧workerは残件処理のため維持する。
       BACKFILL_CURATIONS_ENABLED = "false"
     }

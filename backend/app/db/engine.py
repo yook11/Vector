@@ -36,8 +36,6 @@ WORKER_POOL_SIZING: dict[str, tuple[int, int]] = {
 # Neon autosuspend (既定 300s) の手前で接続を張り替え、pre_ping 依存を
 # 減らす (60s マージン)。共通既定 (3600) を worker のみ override する。
 WORKER_POOL_RECYCLE_SECONDS = 240
-AUTH_RETENTION_POOL_SIZE = 1
-AUTH_RETENTION_MAX_OVERFLOW = 1
 DEFAULT_POOL_RECYCLE = 3600
 DEFAULT_POOL_TIMEOUT = 5
 
@@ -48,12 +46,6 @@ class _RuntimeDatabaseSettings(Protocol):
     database_url: str
     db_iam_auth: bool
     aws_region: str | None
-
-
-class _AuthRetentionDatabaseSettings(_RuntimeDatabaseSettings, Protocol):
-    """認証データ保守のEngineだけが必要とする追加の接続先。"""
-
-    auth_retention_database_url: str | None
 
 
 def _merge_server_settings(
@@ -286,29 +278,6 @@ def create_assessment_consumer_engine(
     )
 
 
-def auth_retention_service_name() -> str:
-    """auth schema retention用DB接続のapplication_nameを返す。"""
-    return "vector-worker-maintenance-auth"
-
-
-def create_auth_retention_engine(
-    settings: _AuthRetentionDatabaseSettings,
-) -> AsyncEngine:
-    """auth schema retention用Engineを作る。"""
-    if settings.auth_retention_database_url is None:
-        raise RuntimeError("AUTH_RETENTION_DATABASE_URL is not configured")
-    url = settings.auth_retention_database_url
-    return _create_engine(
-        url,
-        application_name=auth_retention_service_name(),
-        password_provider=_runtime_password_provider(settings, url),
-        echo=False,
-        pool_size=AUTH_RETENTION_POOL_SIZE,
-        max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
-        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
-    )
-
-
 def create_migration_engine(
     settings: MigrationSettings,
     **engine_kwargs: Any,
@@ -354,4 +323,23 @@ def create_backfill_engine(
         pool_timeout=5,
         connect_args={"timeout": 5, "command_timeout": 5},
         echo=False,
+    )
+
+
+def create_auth_rate_limit_cleanup_engine(
+    settings: _RuntimeDatabaseSettings,
+    *,
+    password_provider: Callable[[], Awaitable[str]],
+) -> AsyncEngine:
+    """一回の削除に使う接続を、Lambda期限より短い待機上限で作る。"""
+    return _create_engine(
+        settings.database_url,
+        application_name="vector-auth-rate-limit-cleanup",
+        password_provider=password_provider,
+        poolclass=NullPool,
+        connect_args={
+            "timeout": 5,
+            "command_timeout": 15,
+            "server_settings": {"statement_timeout": "15000", "lock_timeout": "3000"},
+        },
     )

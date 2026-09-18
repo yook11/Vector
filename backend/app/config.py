@@ -148,11 +148,6 @@ class Settings(DatabaseSettings, HttpSettings):
     pipeline_events_retention_enabled: bool = True
     pipeline_events_retention_max_batches: int = 5
 
-    # Better Auth rateLimit retention。auth."rateLimit" は一時 counter であり、
-    # enforcement window 経過後の長期保持を避ける。
-    auth_rate_limit_retention_enabled: bool = True
-    auth_rate_limit_retention_max_batches: int = 5
-
     # 可観測性 (Logfire)
     # token 未設定時は Logfire 送信を no-op にする。token は必ず settings 経由で
     # 観測層 bootstrap に渡す。

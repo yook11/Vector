@@ -693,39 +693,6 @@ class TestSocketTimeout:
         assert isinstance(broker_dispatch.result_backend, DummyResultBackend)
 
 
-@pytest.mark.asyncio
-async def test_maintenance_startup_logs_auth_engine_failure_without_raising() -> None:
-    """auth retention engine 初期化失敗は maintenance worker startup を落とさない。"""
-    from app.queue.brokers import broker_maintenance
-
-    handler = broker_maintenance.event_handlers[TaskiqEvents.WORKER_STARTUP][0]
-    state = TaskiqState()
-
-    with (
-        patch("app.queue.lifecycle.setup_logfire"),
-        patch("app.queue.lifecycle.create_worker_engine", return_value=MagicMock()),
-        patch("app.queue.lifecycle.create_worker_pipeline_control_client"),
-        patch(
-            "app.queue.lifecycle.create_auth_retention_engine",
-            side_effect=ValueError("bad AUTH_RETENTION_DATABASE_URL"),
-        ),
-        patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
-        patch("app.queue.lifecycle.log_pool_initialized"),
-        patch("app.queue.lifecycle.register_pool_metrics"),
-        capture_logs() as logs,
-    ):
-        await handler(state)
-
-    assert hasattr(state, "session_factory")
-    assert not hasattr(state, "auth_session_factory")
-    assert any(
-        log["event"] == "maintenance_auth_retention_engine_failed"
-        and log["error_type"] == "ValueError"
-        for log in logs
-    )
-    assert any(log["event"] == "maintenance_worker_startup" for log in logs)
-
-
 def _owned_redis() -> MagicMock:
     redis = MagicMock()
     redis.aclose = AsyncMock()
@@ -753,10 +720,6 @@ async def _worker_lifecycle_stubs(
         patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
         patch("app.queue.lifecycle.log_pool_initialized"),
         patch("app.queue.lifecycle.register_pool_metrics"),
-        patch(
-            "app.queue.lifecycle.create_auth_retention_engine",
-            side_effect=RuntimeError("unused"),
-        ),
         patch(
             "app.queue.lifecycle.caller_managed_session_factory",
             return_value=_session_factory_stub(),
