@@ -28,7 +28,7 @@ resource "aws_db_instance" "this" {
   identifier     = "${var.name_prefix}-db"
   engine         = "postgres"
   engine_version = var.postgres_major_version
-  instance_class = "db.t4g.micro"
+  instance_class = "db.t4g.small"
 
   db_name  = var.name_prefix
   username = "${var.name_prefix}_master"
