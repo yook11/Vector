@@ -6,16 +6,32 @@ import json
 import sys
 
 import pytest
+import structlog
 from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticCustomError
 from sqlalchemy.exc import IntegrityError
 
+from app.log_policy import BASE_LOG_RULES, PolicyLogger
+from app.log_policy.budget import TEXT_LIMIT
 from app.log_policy.processor import LogPolicyProcessor
-from app.log_policy.safe_exception_log import extract_safe_exception_fields
+from app.log_policy.safe_exception_log import FRAME_LIMIT, extract_exception_fields
 
 pytestmark = pytest.mark.unit
 
 _SECRET = "synthetic-row-value"
+
+
+def test_exception_extraction_leaves_sanitization_to_common_preparation() -> None:
+    """例外抽出だけの入口は共通サニタイズも文字数制限も行わず、原文のフィールドを返す。"""
+    message = (
+        "x" * TEXT_LIMIT + " request with sk-proj-abcdef0123456789ABCDEFxyz failed"
+    )
+    fields = extract_exception_fields(ValueError(message))
+    assert fields == {
+        "error_class": "builtins.ValueError",
+        "error_message": message,
+        "frames": [],
+    }
 
 
 class TestSqlException:
@@ -48,7 +64,7 @@ class TestSqlException:
         assert "[SQL:" in raw
         assert "[parameters:" in raw
         assert _SECRET in raw
-        fields = extract_safe_exception_fields(exc_info)
+        fields = extract_exception_fields(exc_info)
         assert fields is not None
         assert fields["error_class"] == "sqlalchemy.exc.IntegrityError"
         assert fields["error_message"] == (
@@ -76,7 +92,7 @@ class TestSqlException:
         )
         exc = IntegrityError("INSERT ...", (_SECRET,), orig)
         assert _SECRET in exc.args[0]
-        fields = extract_safe_exception_fields(exc)
+        fields = extract_exception_fields(exc)
         assert fields is not None
         assert fields["error_message"] == (
             '(builtins.Exception) duplicate key violates unique constraint "t_key"'
@@ -91,7 +107,7 @@ class TestSqlException:
             Exception(f'invalid input syntax for type integer: "{_SECRET}"'),
         )
         assert _SECRET in exc.args[0]
-        fields = extract_safe_exception_fields(exc)
+        fields = extract_exception_fields(exc)
         assert fields is not None
         assert fields["error_message"] == (
             '(builtins.Exception) invalid input syntax for type integer: "***"'
@@ -104,11 +120,57 @@ class TestSqlException:
             sqlstate = "23505"
 
         exc = IntegrityError("INSERT ...", (_SECRET,), DriverError("duplicate key"))
-        fields = extract_safe_exception_fields(exc)
+        fields = extract_exception_fields(exc)
         assert fields is not None
         assert fields["sqlstate"] == "23505"
         assert "duplicate key" in fields["error_message"]
         assert _SECRET not in json.dumps(fields)
+
+    def test_missing_sqlstate_is_omitted(self) -> None:
+        """driverに診断コードがない場合はsqlstateフィールドを作らない。"""
+        exc = IntegrityError("INSERT ...", (), Exception("duplicate key"))
+        fields = extract_exception_fields(exc)
+        assert fields is not None
+        assert "sqlstate" not in fields
+
+    @pytest.mark.parametrize("state", ["2350", "235050", "42p01", 23505])
+    def test_invalid_sqlstate_is_omitted(self, state) -> None:
+        """英大文字・数字5文字でない診断コードはログへ追加しない。"""
+
+        class DriverError(Exception):
+            sqlstate = state
+
+        exc = IntegrityError("INSERT ...", (), DriverError("duplicate key"))
+        fields = extract_exception_fields(exc)
+        assert fields is not None
+        assert "sqlstate" not in fields
+
+    def test_pgcode_is_output_as_sqlstate(self) -> None:
+        """driverがpgcodeで返す診断コードもsqlstateとして組み立てる。"""
+
+        class DriverError(Exception):
+            pgcode = "23505"
+
+        exc = IntegrityError("INSERT ...", (), DriverError("duplicate key"))
+        fields = extract_exception_fields(exc)
+        assert fields is not None
+        assert fields["sqlstate"] == "23505"
+
+    def test_sqlstate_extraction_failure_uses_fixed_message(self) -> None:
+        """SQLSTATEの取得が失敗しても途中の原因文や診断コードを出さない。"""
+
+        class DriverError(Exception):
+            @property
+            def sqlstate(self):
+                raise RuntimeError(_SECRET)
+
+        exc = IntegrityError("INSERT ...", (), DriverError("duplicate key"))
+        fields = extract_exception_fields(exc)
+        assert fields == {
+            "error_class": "sqlalchemy.exc.IntegrityError",
+            "error_message": "[exception message unavailable]",
+            "frames": [],
+        }
 
     def test_cyclic_sql_parameters_use_fixed_message(self) -> None:
         """パラメータが循環しても原文へ戻らず、固定文だけを残す。"""
@@ -116,7 +178,7 @@ class TestSqlException:
         params.append(params)
         exc = IntegrityError("INSERT ...", params, Exception(_SECRET))
         assert _SECRET in exc.args[0]
-        fields = extract_safe_exception_fields(exc)
+        fields = extract_exception_fields(exc)
         assert fields is not None
         assert fields["error_message"] == (
             "SQL error (parameters exceeded inspection limit)"
@@ -139,10 +201,11 @@ class TestValidationException:
         with pytest.raises(ValidationError) as captured:
             Payload.model_validate({"values": {_SECRET: _SECRET}})
         assert _SECRET in str(captured.value)
-        fields = extract_safe_exception_fields(captured.value)
+        fields = extract_exception_fields(captured.value)
         assert fields is not None
         assert fields["error_class"] == "pydantic_core._pydantic_core.ValidationError"
         assert fields["error_message"] == "Validation failed (1 errors): int_parsing"
+        assert "sqlstate" not in fields
         assert _SECRET not in json.dumps(fields)
 
     def test_validation_custom_message_is_not_forwarded(self) -> None:
@@ -158,7 +221,7 @@ class TestValidationException:
             ],
         )
         assert _SECRET in str(exc)
-        fields = extract_safe_exception_fields(exc)
+        fields = extract_exception_fields(exc)
         assert fields is not None
         assert fields["error_message"] == "Validation failed (1 errors): custom_error"
         assert _SECRET not in json.dumps(fields)
@@ -177,7 +240,7 @@ class TestBrokenException:
         try:
             raise BrokenError()
         except BrokenError as exc:
-            fields = extract_safe_exception_fields(exc)
+            fields = extract_exception_fields(exc)
         assert fields is not None
         assert fields["error_class"].endswith("BrokenError")
         assert fields["error_message"] == "[exception message unavailable]"
@@ -200,7 +263,7 @@ class TestExcInfo:
         try:
             _raise()
         except ValueError:
-            fields = extract_safe_exception_fields(sys.exc_info())
+            fields = extract_exception_fields(sys.exc_info())
         assert fields is not None
         innermost = fields["frames"][-1]
         assert set(innermost) == {"file", "function", "line"}
@@ -212,7 +275,7 @@ class TestExcInfo:
         try:
             raise ValueError("boom")
         except ValueError:
-            fields = extract_safe_exception_fields(True)
+            fields = extract_exception_fields(True)
         assert fields is not None
         assert fields["error_class"] == "builtins.ValueError"
         assert fields["error_message"] == "boom"
@@ -222,7 +285,7 @@ class TestExcInfo:
         try:
             raise RuntimeError("instance form")
         except RuntimeError as exc:
-            fields = extract_safe_exception_fields(exc)
+            fields = extract_exception_fields(exc)
         assert fields is not None
         assert fields["error_class"] == "builtins.RuntimeError"
         assert fields["error_message"] == "instance form"
@@ -231,7 +294,7 @@ class TestExcInfo:
     @pytest.mark.parametrize("value", [None, False], ids=["none", "false"])
     def test_exc_info_absent_yields_nothing(self, value) -> None:
         """exc_info が無い / False のログには例外フィールドを足さない。"""
-        assert extract_safe_exception_fields(value) is None
+        assert extract_exception_fields(value) is None
 
     @pytest.mark.parametrize(
         "value",
@@ -244,13 +307,48 @@ class TestExcInfo:
     )
     def test_invalid_exc_info_is_ignored(self, value) -> None:
         """型が合わない tuple は例外フィールドを作らない。"""
-        assert extract_safe_exception_fields(value) is None
+        assert extract_exception_fields(value) is None
 
     def test_invalid_exc_info_is_not_forwarded(self) -> None:
         """processor は不正な exc_info を無視し、生値もキーも出さない。"""
         output = LogPolicyProcessor()(
-            None, "error", {"event": "failed", "exc_info": (str, _SECRET, None)}
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": (str, _SECRET, None)},
         )
         assert "exc_info" not in output
         assert "error_class" not in output
         assert _SECRET not in json.dumps(output)
+
+    def test_frame_count_at_limit_is_preserved(self) -> None:
+        """frame数が上限ちょうどなら全件を抽出する。"""
+
+        def fail(depth):
+            if depth:
+                fail(depth - 1)
+            else:
+                raise ValueError("failed")
+
+        with pytest.raises(ValueError) as captured:
+            fail(FRAME_LIMIT - 2)
+        fields = extract_exception_fields(captured.value)
+        assert fields is not None
+        assert len(fields["frames"]) == FRAME_LIMIT
+        assert fields["frames"][-1]["function"] == "fail"
+
+    def test_frame_count_over_limit_replaces_whole_frames_field(self) -> None:
+        """frame数が上限を超える場合は末尾への切り詰めも行わず、frames全体を固定マーカーにする。"""
+
+        def fail(depth):
+            if depth:
+                fail(depth - 1)
+            else:
+                raise ValueError("failed")
+
+        with pytest.raises(ValueError) as captured:
+            fail(FRAME_LIMIT - 1)
+        assert extract_exception_fields(captured.value) == {
+            "error_class": "builtins.ValueError",
+            "error_message": "failed",
+            "frames": "[limit]",
+        }

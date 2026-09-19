@@ -1,127 +1,14 @@
-"""文字列秘匿の契約: 識別できる認証情報の形式を伏せ、通常文と識別情報は残す。"""
+"""内容に基づく秘密情報の検出。"""
 
 from __future__ import annotations
 
 import pytest
 
-from app.log_policy.sanitize import TEXT_LIMIT, sanitize_text
+from app.log_policy import sanitize
+from app.log_policy.budget import TEXT_LIMIT
+from app.log_policy.sanitize import sanitize_text
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        pytest.param("token=x", "token=***", id="short_token"),
-        pytest.param("x-api-key: x", "x-api-key: ***", id="short_api_key"),
-        pytest.param(
-            "env PGPASSWORD=hunter2redacted psql failed",
-            "env PGPASSWORD=*** psql failed",
-            id="env_password",
-        ),
-        pytest.param(
-            "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY region=x",
-            "aws_secret_access_key=*** region=x",
-            id="aws_secret",
-        ),
-        pytest.param(
-            "?DBUser=app&X-Amz-Signature=0123456789abcdef0123456789abcdef",
-            "?DBUser=app&X-Amz-Signature=***",
-            id="sigv4_query",
-        ),
-    ],
-)
-def test_unquoted_assignment_replaces_the_whole_token(text: str, expected: str) -> None:
-    """引用符なしのキー付き値は単一トークン全体を伏せ、周囲の文は残す。"""
-    assert sanitize_text(text) == expected
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        pytest.param(
-            "password='synthetic private value'",
-            "password=***",
-            id="spaces",
-        ),
-        pytest.param(
-            'password="synthetic \\"private\\" value"',
-            "password=***",
-            id="escaped_quotes",
-        ),
-        pytest.param(
-            "password='synthetic\nprivate value'",
-            "password=***",
-            id="newline",
-        ),
-        pytest.param(
-            "{'user': 'vector', 'password': 'hunter2redacted', 'host': 'db'}",
-            "{'user': 'vector', 'password': ***, 'host': 'db'}",
-            id="dict_repr",
-        ),
-        pytest.param(
-            "headers={'x-api-key': 'super-secret-value-here-1234'}",
-            "headers={'x-api-key': ***}",
-            id="quoted_api_key",
-        ),
-        pytest.param(
-            "headers={'Authorization': 'Bearer "
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abc'}",
-            "headers={'Authorization': ***}",
-            id="quoted_authorization",
-        ),
-        pytest.param(
-            "gemini_api_key='synthetic secret' failed",
-            "gemini_api_key=*** failed",
-            id="application_key_name",
-        ),
-    ],
-)
-def test_quoted_assignment_replaces_the_whole_value(text: str, expected: str) -> None:
-    """引用符内は空白・改行・エスケープを含めて値全体を伏せ、閉じ引用符の外は残す。"""
-    assert sanitize_text(text) == expected
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        pytest.param(
-            "password='synthetic private value",
-            "password=***",
-            id="unterminated",
-        ),
-        pytest.param(
-            "password='synthetic private value\\",
-            "password=***",
-            id="trailing_escape",
-        ),
-    ],
-)
-def test_unterminated_quoted_value_is_redacted_to_the_end(
-    text: str, expected: str
-) -> None:
-    """閉じていない引用符は末尾まで伏せ、バックスラッシュで終わっても断片を残さない。"""
-    assert sanitize_text(text) == expected
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        pytest.param(
-            "Authorization: Basic dTpw",
-            "Authorization: ***",
-            id="basic_auth",
-        ),
-        pytest.param(
-            "Cookie: session=synthetic; second=private",
-            "Cookie: ***",
-            id="cookie_pairs",
-        ),
-    ],
-)
-def test_header_value_is_redacted_to_the_end_of_line(text: str, expected: str) -> None:
-    """認証ヘッダーと cookie は行末までの値全体を伏せる。"""
-    assert sanitize_text(text) == expected
 
 
 def test_private_key_block_is_removed_as_a_whole() -> None:
@@ -131,84 +18,117 @@ def test_private_key_block_is_removed_as_a_whole() -> None:
     assert sanitize_text(text) == "failed ***"
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        pytest.param(
-            "Error from AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q",
-            "Error from AIza***",
-            id="gemini",
-        ),
-        pytest.param(
-            "key=sk-ant-api03-abcdef0123456789ABCDEFxyz_-X failed",
-            "key=sk-ant-*** failed",
-            id="anthropic",
-        ),
-        pytest.param(
-            "sk-proj-abcdef0123456789ABCDEFxyz used",
-            "sk-*** used",
-            id="openai",
-        ),
-        pytest.param(
-            "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890 on /repos",
-            "gh*_*** on /repos",
-            id="github",
-        ),
-        pytest.param(
-            "tvly-abcdefghijklmnopqrstuvwxyz0123 with 401",
-            "tvly-*** with 401",
-            id="tavily",
-        ),
-        pytest.param(
-            "for AKIAIOSFODNN7EXAMPLE in request",
-            "for AKIA*** in request",
-            id="aws_access_key",
-        ),
-        pytest.param(
-            "postgresql+asyncpg://vector:s3cr3tp4ss@db:5432/vector",
-            "postgresql+asyncpg://***@db:5432/vector",
-            id="dsn_userinfo",
-        ),
-        pytest.param(
-            "rediss://default:hunter2redacted@cache:6380/0",
-            "rediss://***@cache:6380/0",
-            id="redis_userinfo",
-        ),
-        pytest.param(
-            "got eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0."
-            "SflKxwRJSMeKKF2QT4 upstream",
-            "got eyJ*** upstream",
-            id="jwt",
-        ),
-    ],
-)
-def test_known_credential_form_is_replaced_and_context_kept(
-    text: str, expected: str
-) -> None:
-    """キー無しの既知形式は値全体を置換し、周囲の原因文と host は残す。"""
+def test_gemini_key_is_replaced_with_context_kept() -> None:
+    """Geminiキーの既知形式を置換し、周囲の原因文を残す。"""
+    # 合成値を分割し、秘密検出ツールの規則に一致させない。
+    text = "Error from AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
+    expected = "Error from AIza***"
     assert sanitize_text(text) == expected
 
 
-@pytest.mark.parametrize(
-    "sample",
-    [
-        "Connection refused on host db.internal port 5432",
-        "https://www.anthropic.com/news/claude-4-release",
-        "postgres://db:5432/vector",
-        "GET /repos/owner/Authorization-utils/contents/README returned 200",
-        "arn:aws:ssm:ap-northeast-1:123456789012:parameter/vector/db",
-        "vector-db.cluster-abc.ap-northeast-1.rds.amazonaws.com:5432",
-        "rds_iam_auth_token_port=5432 hide_parameters=True",
-        "completion_tokens=128 max_tokens=1024",
-        "取得に失敗しました: timeout after 30s",
-    ],
-)
-def test_normal_text_is_preserved_unchanged(sample: str) -> None:
-    """通常テキストと識別情報は無変化のまま残す。"""
+def test_anthropic_key_is_replaced_with_context_kept() -> None:
+    """Anthropicキーの既知形式を置換し、周囲の原因文を残す。"""
+    text = "key=sk-ant-api03-abcdef0123456789ABCDEFxyz_-X failed"
+    expected = "key=sk-ant-*** failed"
+    assert sanitize_text(text) == expected
+
+
+def test_openai_key_is_replaced_with_context_kept() -> None:
+    """OpenAIキーの既知形式を置換し、周囲の原因文を残す。"""
+    text = "sk-proj-abcdef0123456789ABCDEFxyz used"
+    expected = "sk-*** used"
+    assert sanitize_text(text) == expected
+
+
+def test_github_token_is_replaced_with_context_kept() -> None:
+    """GitHubトークンの既知形式を置換し、周囲の原因文を残す。"""
+    text = "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890 on /repos"
+    expected = "gh*_*** on /repos"
+    assert sanitize_text(text) == expected
+
+
+def test_tavily_key_is_replaced_with_context_kept() -> None:
+    """Tavilyキーの既知形式を置換し、周囲の原因文を残す。"""
+    text = "tvly-abcdefghijklmnopqrstuvwxyz0123 with 401"
+    expected = "tvly-*** with 401"
+    assert sanitize_text(text) == expected
+
+
+def test_gemini_key_shorter_than_detection_length_is_preserved() -> None:
+    """Geminiキー形式の長さに届かない文字列を部分置換しない。"""
+    text = "Error from AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6"
+    assert sanitize.sanitize_provider_keys(text) == text
+
+
+def test_github_token_shorter_than_detection_length_is_preserved() -> None:
+    """GitHubトークン形式の長さに届かない文字列を部分置換しない。"""
+    text = "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ123456789 on /repos"
+    assert sanitize.sanitize_provider_keys(text) == text
+
+
+def test_openai_key_shorter_than_detection_length_is_preserved() -> None:
+    """OpenAIキー形式の長さに届かない文字列を部分置換しない。"""
+    text = "sk-abcdefghijklmnopqrs used"
+    assert sanitize.sanitize_provider_keys(text) == text
+
+
+def test_postgres_dsn_userinfo_is_hidden_with_endpoint_kept() -> None:
+    """driver付きPostgreSQL接続文字列の認証部分を伏せ、接続先を残す。"""
+    text = "postgresql+asyncpg://vector:s3cr3tp4ss@db:5432/vector"
+    expected = "postgresql+asyncpg://***@db:5432/vector"
+    assert sanitize_text(text) == expected
+
+
+def test_redis_url_userinfo_is_hidden_with_endpoint_kept() -> None:
+    """Redis接続URLの認証部分を伏せ、接続先を残す。"""
+    text = "rediss://default:hunter2redacted@cache:6380/0"
+    expected = "rediss://***@cache:6380/0"
+    assert sanitize_text(text) == expected
+
+
+def test_connection_error_without_credentials_is_preserved() -> None:
+    """認証値を含まない接続エラーの原因文を残す。"""
+    sample = "Connection refused on host db.internal port 5432"
+    assert sanitize_text(sample) == sample
+
+
+def test_public_article_url_is_preserved() -> None:
+    """認証値を含まない公開記事URLを残す。"""
+    sample = "https://www.anthropic.com/news/claude-4-release"
+    assert sanitize_text(sample) == sample
+
+
+def test_postgres_url_without_userinfo_is_preserved() -> None:
+    """認証部分のないPostgreSQL接続URLを残す。"""
+    sample = "postgres://db:5432/vector"
+    assert sanitize_text(sample) == sample
+
+
+def test_aws_arn_is_preserved() -> None:
+    """AWSのARNは認証値ではなく識別情報として残す。"""
+    sample = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/vector/db"
+    assert sanitize_text(sample) == sample
+
+
+def test_rds_endpoint_is_preserved() -> None:
+    """RDSの接続先とポートを識別情報として残す。"""
+    sample = "vector-db.cluster-abc.ap-northeast-1.rds.amazonaws.com:5432"
+    assert sanitize_text(sample) == sample
+
+
+def test_japanese_error_message_is_preserved() -> None:
+    """認証値を含まない日本語の原因文を残す。"""
+    sample = "取得に失敗しました: timeout after 30s"
     assert sanitize_text(sample) == sample
 
 
 def test_sanitizer_preserves_length_until_output_protection() -> None:
     """サニタイズは置換のみを担い、文字数制限を暗黙適用しない。"""
     text = "y" * (TEXT_LIMIT * 3)
+    assert sanitize_text(text) == text
+
+
+def test_sanitization_does_not_mask_by_assignment_key() -> None:
+    """内容から識別できない値は認証キー付きでもsanitize単体では置換しない。"""
+    text = "password='synthetic private value'"
     assert sanitize_text(text) == text

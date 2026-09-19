@@ -1,0 +1,1007 @@
+{
+  "python": "3.13.11",
+  "platform": "Darwin",
+  "machine": "arm64",
+  "batches": 7,
+  "iterations_per_batch": 3,
+  "equivalence": {
+    "url_cases": 20400,
+    "jwt_cases": 30000
+  },
+  "strings": [
+    {
+      "case": "ascii",
+      "chars": 500,
+      "median_ms": 0.02325,
+      "max_batch_mean_ms": 0.023847
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 500,
+      "median_ms": 0.022167,
+      "max_batch_mean_ms": 0.022403
+    },
+    {
+      "case": "jwt_two_segments",
+      "chars": 500,
+      "median_ms": 0.022458,
+      "max_batch_mean_ms": 0.024069
+    },
+    {
+      "case": "jwt_tokens",
+      "chars": 500,
+      "median_ms": 0.051431,
+      "max_batch_mean_ms": 0.073778
+    },
+    {
+      "case": "public_url",
+      "chars": 500,
+      "median_ms": 0.024583,
+      "max_batch_mean_ms": 0.026611
+    },
+    {
+      "case": "long_scheme",
+      "chars": 500,
+      "median_ms": 0.031736,
+      "max_batch_mean_ms": 0.057695
+    },
+    {
+      "case": "assignments",
+      "chars": 500,
+      "median_ms": 0.032278,
+      "max_batch_mean_ms": 0.033195
+    },
+    {
+      "case": "quoted_secret",
+      "chars": 500,
+      "median_ms": 0.015486,
+      "max_batch_mean_ms": 0.016333
+    },
+    {
+      "case": "japanese",
+      "chars": 500,
+      "median_ms": 0.014264,
+      "max_batch_mean_ms": 0.014292
+    },
+    {
+      "case": "ascii",
+      "chars": 2048,
+      "median_ms": 0.088528,
+      "max_batch_mean_ms": 0.091069
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 2048,
+      "median_ms": 0.085917,
+      "max_batch_mean_ms": 0.089583
+    },
+    {
+      "case": "jwt_two_segments",
+      "chars": 2048,
+      "median_ms": 0.085528,
+      "max_batch_mean_ms": 0.091028
+    },
+    {
+      "case": "jwt_tokens",
+      "chars": 2048,
+      "median_ms": 0.193028,
+      "max_batch_mean_ms": 0.197444
+    },
+    {
+      "case": "public_url",
+      "chars": 2048,
+      "median_ms": 0.089972,
+      "max_batch_mean_ms": 0.091583
+    },
+    {
+      "case": "long_scheme",
+      "chars": 2048,
+      "median_ms": 0.124361,
+      "max_batch_mean_ms": 0.173208
+    },
+    {
+      "case": "assignments",
+      "chars": 2048,
+      "median_ms": 0.123917,
+      "max_batch_mean_ms": 0.128361
+    },
+    {
+      "case": "quoted_secret",
+      "chars": 2048,
+      "median_ms": 0.046667,
+      "max_batch_mean_ms": 0.047625
+    },
+    {
+      "case": "japanese",
+      "chars": 2048,
+      "median_ms": 0.053167,
+      "max_batch_mean_ms": 0.055097
+    },
+    {
+      "case": "ascii",
+      "chars": 4096,
+      "median_ms": 0.174847,
+      "max_batch_mean_ms": 0.191056
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 4096,
+      "median_ms": 0.168111,
+      "max_batch_mean_ms": 0.17675
+    },
+    {
+      "case": "jwt_two_segments",
+      "chars": 4096,
+      "median_ms": 0.170458,
+      "max_batch_mean_ms": 0.184403
+    },
+    {
+      "case": "jwt_tokens",
+      "chars": 4096,
+      "median_ms": 0.370097,
+      "max_batch_mean_ms": 0.404292
+    },
+    {
+      "case": "public_url",
+      "chars": 4096,
+      "median_ms": 0.172111,
+      "max_batch_mean_ms": 0.18725
+    },
+    {
+      "case": "long_scheme",
+      "chars": 4096,
+      "median_ms": 0.245056,
+      "max_batch_mean_ms": 0.26875
+    },
+    {
+      "case": "assignments",
+      "chars": 4096,
+      "median_ms": 0.244028,
+      "max_batch_mean_ms": 0.249875
+    },
+    {
+      "case": "quoted_secret",
+      "chars": 4096,
+      "median_ms": 0.095361,
+      "max_batch_mean_ms": 0.108597
+    },
+    {
+      "case": "japanese",
+      "chars": 4096,
+      "median_ms": 0.107139,
+      "max_batch_mean_ms": 0.110486
+    },
+    {
+      "case": "ascii",
+      "chars": 8192,
+      "median_ms": 0.363153,
+      "max_batch_mean_ms": 0.379889
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 8192,
+      "median_ms": 0.334472,
+      "max_batch_mean_ms": 0.344278
+    },
+    {
+      "case": "jwt_two_segments",
+      "chars": 8192,
+      "median_ms": 0.333722,
+      "max_batch_mean_ms": 0.378653
+    },
+    {
+      "case": "jwt_tokens",
+      "chars": 8192,
+      "median_ms": 0.780292,
+      "max_batch_mean_ms": 0.825528
+    },
+    {
+      "case": "public_url",
+      "chars": 8192,
+      "median_ms": 0.33818,
+      "max_batch_mean_ms": 0.349069
+    },
+    {
+      "case": "long_scheme",
+      "chars": 8192,
+      "median_ms": 0.480472,
+      "max_batch_mean_ms": 0.536889
+    },
+    {
+      "case": "assignments",
+      "chars": 8192,
+      "median_ms": 0.481722,
+      "max_batch_mean_ms": 0.486569
+    },
+    {
+      "case": "quoted_secret",
+      "chars": 8192,
+      "median_ms": 0.192097,
+      "max_batch_mean_ms": 0.198389
+    },
+    {
+      "case": "japanese",
+      "chars": 8192,
+      "median_ms": 0.212597,
+      "max_batch_mean_ms": 0.216417
+    },
+    {
+      "case": "ascii",
+      "chars": 16384,
+      "median_ms": 0.703958,
+      "max_batch_mean_ms": 0.732667
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 16384,
+      "median_ms": 0.664375,
+      "max_batch_mean_ms": 0.729333
+    },
+    {
+      "case": "jwt_two_segments",
+      "chars": 16384,
+      "median_ms": 0.656653,
+      "max_batch_mean_ms": 0.723555
+    },
+    {
+      "case": "jwt_tokens",
+      "chars": 16384,
+      "median_ms": 1.529278,
+      "max_batch_mean_ms": 1.581569
+    },
+    {
+      "case": "public_url",
+      "chars": 16384,
+      "median_ms": 0.676014,
+      "max_batch_mean_ms": 0.749153
+    },
+    {
+      "case": "long_scheme",
+      "chars": 16384,
+      "median_ms": 0.974028,
+      "max_batch_mean_ms": 1.018278
+    },
+    {
+      "case": "assignments",
+      "chars": 16384,
+      "median_ms": 0.948819,
+      "max_batch_mean_ms": 1.001792
+    },
+    {
+      "case": "quoted_secret",
+      "chars": 16384,
+      "median_ms": 0.373819,
+      "max_batch_mean_ms": 0.411319
+    },
+    {
+      "case": "japanese",
+      "chars": 16384,
+      "median_ms": 0.415736,
+      "max_batch_mean_ms": 0.42793
+    },
+    {
+      "case": "ascii",
+      "chars": 32768,
+      "median_ms": 1.424139,
+      "max_batch_mean_ms": 1.571847
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 32768,
+      "median_ms": 1.372889,
+      "max_batch_mean_ms": 1.427278
+    },
+    {
+      "case": "jwt_two_segments",
+      "chars": 32768,
+      "median_ms": 1.338347,
+      "max_batch_mean_ms": 1.437806
+    },
+    {
+      "case": "jwt_tokens",
+      "chars": 32768,
+      "median_ms": 3.147514,
+      "max_batch_mean_ms": 3.25325
+    },
+    {
+      "case": "public_url",
+      "chars": 32768,
+      "median_ms": 1.407222,
+      "max_batch_mean_ms": 1.518347
+    },
+    {
+      "case": "long_scheme",
+      "chars": 32768,
+      "median_ms": 1.974847,
+      "max_batch_mean_ms": 2.284445
+    },
+    {
+      "case": "assignments",
+      "chars": 32768,
+      "median_ms": 1.928236,
+      "max_batch_mean_ms": 2.0
+    },
+    {
+      "case": "quoted_secret",
+      "chars": 32768,
+      "median_ms": 0.754778,
+      "max_batch_mean_ms": 1.069653
+    },
+    {
+      "case": "japanese",
+      "chars": 32768,
+      "median_ms": 0.836389,
+      "max_batch_mean_ms": 0.904958
+    },
+    {
+      "case": "ascii",
+      "chars": 65536,
+      "median_ms": 2.887875,
+      "max_batch_mean_ms": 3.000694
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 65536,
+      "median_ms": 2.744,
+      "max_batch_mean_ms": 2.779972
+    },
+    {
+      "case": "jwt_two_segments",
+      "chars": 65536,
+      "median_ms": 2.635875,
+      "max_batch_mean_ms": 2.87718
+    },
+    {
+      "case": "jwt_tokens",
+      "chars": 65536,
+      "median_ms": 6.649125,
+      "max_batch_mean_ms": 7.366292
+    },
+    {
+      "case": "public_url",
+      "chars": 65536,
+      "median_ms": 2.807167,
+      "max_batch_mean_ms": 2.965306
+    },
+    {
+      "case": "long_scheme",
+      "chars": 65536,
+      "median_ms": 4.000694,
+      "max_batch_mean_ms": 4.115903
+    },
+    {
+      "case": "assignments",
+      "chars": 65536,
+      "median_ms": 3.840833,
+      "max_batch_mean_ms": 3.945764
+    },
+    {
+      "case": "quoted_secret",
+      "chars": 65536,
+      "median_ms": 1.865139,
+      "max_batch_mean_ms": 2.090445
+    },
+    {
+      "case": "japanese",
+      "chars": 65536,
+      "median_ms": 1.726361,
+      "max_batch_mean_ms": 1.765264
+    }
+  ],
+  "legacy_comparison": [
+    {
+      "case": "url_ascii",
+      "chars": 500,
+      "before": {
+        "median_ms": 0.990291,
+        "max_batch_mean_ms": 1.011583
+      },
+      "after": {
+        "median_ms": 0.000347,
+        "max_batch_mean_ms": 0.000403
+      }
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 500,
+      "before": {
+        "median_ms": 0.050375,
+        "max_batch_mean_ms": 0.058833
+      },
+      "after": {
+        "median_ms": 0.000875,
+        "max_batch_mean_ms": 0.001111
+      }
+    },
+    {
+      "case": "url_ascii",
+      "chars": 2048,
+      "before": {
+        "median_ms": 16.669083,
+        "max_batch_mean_ms": 16.742792
+      },
+      "after": {
+        "median_ms": 0.000653,
+        "max_batch_mean_ms": 0.001278
+      }
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 2048,
+      "before": {
+        "median_ms": 0.811208,
+        "max_batch_mean_ms": 0.968292
+      },
+      "after": {
+        "median_ms": 0.002,
+        "max_batch_mean_ms": 0.002431
+      }
+    },
+    {
+      "case": "url_ascii",
+      "chars": 10000,
+      "before": {
+        "median_ms": 381.905042,
+        "max_batch_mean_ms": 414.305584
+      },
+      "after": {
+        "median_ms": 0.001931,
+        "max_batch_mean_ms": 0.002361
+      }
+    },
+    {
+      "case": "jwt_prefixes",
+      "chars": 10000,
+      "before": {
+        "median_ms": 19.6235,
+        "max_batch_mean_ms": 20.4645
+      },
+      "after": {
+        "median_ms": 0.007972,
+        "max_batch_mean_ms": 0.010028
+      }
+    }
+  ],
+  "events": [
+    {
+      "case": "ascii",
+      "fields": 1,
+      "sanitized_input_chars": 8192,
+      "value_chars": 8176,
+      "key_chars": 7,
+      "median_ms": 0.352542,
+      "max_batch_mean_ms": 0.371833
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 1,
+      "sanitized_input_chars": 8192,
+      "value_chars": 8176,
+      "key_chars": 7,
+      "median_ms": 0.754278,
+      "max_batch_mean_ms": 0.925403
+    },
+    {
+      "case": "assignments",
+      "fields": 1,
+      "sanitized_input_chars": 8192,
+      "value_chars": 8176,
+      "key_chars": 7,
+      "median_ms": 0.479181,
+      "max_batch_mean_ms": 0.484736
+    },
+    {
+      "case": "ascii",
+      "fields": 16,
+      "sanitized_input_chars": 8192,
+      "value_chars": 8065,
+      "key_chars": 118,
+      "median_ms": 0.410625,
+      "max_batch_mean_ms": 0.445139
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 16,
+      "sanitized_input_chars": 8192,
+      "value_chars": 8065,
+      "key_chars": 118,
+      "median_ms": 0.834153,
+      "max_batch_mean_ms": 1.065014
+    },
+    {
+      "case": "assignments",
+      "fields": 16,
+      "sanitized_input_chars": 8192,
+      "value_chars": 8065,
+      "key_chars": 118,
+      "median_ms": 0.522083,
+      "max_batch_mean_ms": 0.567528
+    },
+    {
+      "case": "ascii",
+      "fields": 128,
+      "sanitized_input_chars": 8192,
+      "value_chars": 7141,
+      "key_chars": 1042,
+      "median_ms": 0.767542,
+      "max_batch_mean_ms": 0.813222
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 128,
+      "sanitized_input_chars": 8192,
+      "value_chars": 7141,
+      "key_chars": 1042,
+      "median_ms": 1.135194,
+      "max_batch_mean_ms": 1.168667
+    },
+    {
+      "case": "assignments",
+      "fields": 128,
+      "sanitized_input_chars": 8192,
+      "value_chars": 7141,
+      "key_chars": 1042,
+      "median_ms": 0.911986,
+      "max_batch_mean_ms": 0.926806
+    },
+    {
+      "case": "ascii",
+      "fields": 512,
+      "sanitized_input_chars": 8192,
+      "value_chars": 3685,
+      "key_chars": 4498,
+      "median_ms": 2.000458,
+      "max_batch_mean_ms": 2.35068
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 512,
+      "sanitized_input_chars": 8192,
+      "value_chars": 3685,
+      "key_chars": 4498,
+      "median_ms": 2.316542,
+      "max_batch_mean_ms": 2.539833
+    },
+    {
+      "case": "assignments",
+      "fields": 512,
+      "sanitized_input_chars": 8192,
+      "value_chars": 3685,
+      "key_chars": 4498,
+      "median_ms": 2.084778,
+      "max_batch_mean_ms": 2.741903
+    },
+    {
+      "case": "ascii",
+      "fields": 900,
+      "sanitized_input_chars": 8192,
+      "value_chars": 193,
+      "key_chars": 7990,
+      "median_ms": 3.316208,
+      "max_batch_mean_ms": 3.428722
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 900,
+      "sanitized_input_chars": 8192,
+      "value_chars": 193,
+      "key_chars": 7990,
+      "median_ms": 3.230903,
+      "max_batch_mean_ms": 3.36382
+    },
+    {
+      "case": "assignments",
+      "fields": 900,
+      "sanitized_input_chars": 8192,
+      "value_chars": 193,
+      "key_chars": 7990,
+      "median_ms": 3.252167,
+      "max_batch_mean_ms": 3.346292
+    },
+    {
+      "case": "ascii",
+      "fields": 1,
+      "sanitized_input_chars": 16384,
+      "value_chars": 16368,
+      "key_chars": 7,
+      "median_ms": 0.694986,
+      "max_batch_mean_ms": 0.723375
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 1,
+      "sanitized_input_chars": 16384,
+      "value_chars": 16368,
+      "key_chars": 7,
+      "median_ms": 1.542153,
+      "max_batch_mean_ms": 1.590125
+    },
+    {
+      "case": "assignments",
+      "fields": 1,
+      "sanitized_input_chars": 16384,
+      "value_chars": 16368,
+      "key_chars": 7,
+      "median_ms": 0.929764,
+      "max_batch_mean_ms": 0.987111
+    },
+    {
+      "case": "ascii",
+      "fields": 16,
+      "sanitized_input_chars": 16384,
+      "value_chars": 16257,
+      "key_chars": 118,
+      "median_ms": 0.720264,
+      "max_batch_mean_ms": 0.755347
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 16,
+      "sanitized_input_chars": 16384,
+      "value_chars": 16257,
+      "key_chars": 118,
+      "median_ms": 1.558208,
+      "max_batch_mean_ms": 1.667944
+    },
+    {
+      "case": "assignments",
+      "fields": 16,
+      "sanitized_input_chars": 16384,
+      "value_chars": 16257,
+      "key_chars": 118,
+      "median_ms": 0.996236,
+      "max_batch_mean_ms": 1.08125
+    },
+    {
+      "case": "ascii",
+      "fields": 128,
+      "sanitized_input_chars": 16384,
+      "value_chars": 15333,
+      "key_chars": 1042,
+      "median_ms": 1.111445,
+      "max_batch_mean_ms": 1.157583
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 128,
+      "sanitized_input_chars": 16384,
+      "value_chars": 15333,
+      "key_chars": 1042,
+      "median_ms": 1.86218,
+      "max_batch_mean_ms": 1.957986
+    },
+    {
+      "case": "assignments",
+      "fields": 128,
+      "sanitized_input_chars": 16384,
+      "value_chars": 15333,
+      "key_chars": 1042,
+      "median_ms": 1.466042,
+      "max_batch_mean_ms": 2.09075
+    },
+    {
+      "case": "ascii",
+      "fields": 512,
+      "sanitized_input_chars": 16384,
+      "value_chars": 11877,
+      "key_chars": 4498,
+      "median_ms": 2.569639,
+      "max_batch_mean_ms": 5.733667
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 512,
+      "sanitized_input_chars": 16384,
+      "value_chars": 11877,
+      "key_chars": 4498,
+      "median_ms": 6.079639,
+      "max_batch_mean_ms": 9.659431
+    },
+    {
+      "case": "assignments",
+      "fields": 512,
+      "sanitized_input_chars": 16384,
+      "value_chars": 11877,
+      "key_chars": 4498,
+      "median_ms": 3.545,
+      "max_batch_mean_ms": 5.832611
+    },
+    {
+      "case": "ascii",
+      "fields": 900,
+      "sanitized_input_chars": 16384,
+      "value_chars": 8385,
+      "key_chars": 7990,
+      "median_ms": 3.612597,
+      "max_batch_mean_ms": 3.705181
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 900,
+      "sanitized_input_chars": 16384,
+      "value_chars": 8385,
+      "key_chars": 7990,
+      "median_ms": 4.133,
+      "max_batch_mean_ms": 4.319667
+    },
+    {
+      "case": "assignments",
+      "fields": 900,
+      "sanitized_input_chars": 16384,
+      "value_chars": 8385,
+      "key_chars": 7990,
+      "median_ms": 3.604611,
+      "max_batch_mean_ms": 3.929681
+    },
+    {
+      "case": "ascii",
+      "fields": 1,
+      "sanitized_input_chars": 32768,
+      "value_chars": 32752,
+      "key_chars": 7,
+      "median_ms": 1.426236,
+      "max_batch_mean_ms": 1.458083
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 1,
+      "sanitized_input_chars": 32768,
+      "value_chars": 32752,
+      "key_chars": 7,
+      "median_ms": 3.092542,
+      "max_batch_mean_ms": 3.161653
+    },
+    {
+      "case": "assignments",
+      "fields": 1,
+      "sanitized_input_chars": 32768,
+      "value_chars": 32752,
+      "key_chars": 7,
+      "median_ms": 4.4155,
+      "max_batch_mean_ms": 6.782333
+    },
+    {
+      "case": "ascii",
+      "fields": 16,
+      "sanitized_input_chars": 32768,
+      "value_chars": 32641,
+      "key_chars": 118,
+      "median_ms": 2.877542,
+      "max_batch_mean_ms": 3.893264
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 16,
+      "sanitized_input_chars": 32768,
+      "value_chars": 32641,
+      "key_chars": 118,
+      "median_ms": 4.365417,
+      "max_batch_mean_ms": 6.687958
+    },
+    {
+      "case": "assignments",
+      "fields": 16,
+      "sanitized_input_chars": 32768,
+      "value_chars": 32641,
+      "key_chars": 118,
+      "median_ms": 2.002597,
+      "max_batch_mean_ms": 2.3135
+    },
+    {
+      "case": "ascii",
+      "fields": 128,
+      "sanitized_input_chars": 32768,
+      "value_chars": 31717,
+      "key_chars": 1042,
+      "median_ms": 1.85493,
+      "max_batch_mean_ms": 1.908514
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 128,
+      "sanitized_input_chars": 32768,
+      "value_chars": 31717,
+      "key_chars": 1042,
+      "median_ms": 3.287139,
+      "max_batch_mean_ms": 3.514667
+    },
+    {
+      "case": "assignments",
+      "fields": 128,
+      "sanitized_input_chars": 32768,
+      "value_chars": 31717,
+      "key_chars": 1042,
+      "median_ms": 2.331694,
+      "max_batch_mean_ms": 2.51243
+    },
+    {
+      "case": "ascii",
+      "fields": 512,
+      "sanitized_input_chars": 32768,
+      "value_chars": 28261,
+      "key_chars": 4498,
+      "median_ms": 3.050792,
+      "max_batch_mean_ms": 3.170903
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 512,
+      "sanitized_input_chars": 32768,
+      "value_chars": 28261,
+      "key_chars": 4498,
+      "median_ms": 4.630194,
+      "max_batch_mean_ms": 4.76875
+    },
+    {
+      "case": "assignments",
+      "fields": 512,
+      "sanitized_input_chars": 32768,
+      "value_chars": 28261,
+      "key_chars": 4498,
+      "median_ms": 3.771042,
+      "max_batch_mean_ms": 3.861542
+    },
+    {
+      "case": "ascii",
+      "fields": 900,
+      "sanitized_input_chars": 32768,
+      "value_chars": 24769,
+      "key_chars": 7990,
+      "median_ms": 4.330208,
+      "max_batch_mean_ms": 4.474681
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 900,
+      "sanitized_input_chars": 32768,
+      "value_chars": 24769,
+      "key_chars": 7990,
+      "median_ms": 5.919139,
+      "max_batch_mean_ms": 5.970722
+    },
+    {
+      "case": "assignments",
+      "fields": 900,
+      "sanitized_input_chars": 32768,
+      "value_chars": 24769,
+      "key_chars": 7990,
+      "median_ms": 4.751139,
+      "max_batch_mean_ms": 4.911389
+    },
+    {
+      "case": "ascii",
+      "fields": 1,
+      "sanitized_input_chars": 65536,
+      "value_chars": 65520,
+      "key_chars": 7,
+      "median_ms": 2.799819,
+      "max_batch_mean_ms": 2.920542
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 1,
+      "sanitized_input_chars": 65536,
+      "value_chars": 65520,
+      "key_chars": 7,
+      "median_ms": 6.217389,
+      "max_batch_mean_ms": 6.339806
+    },
+    {
+      "case": "assignments",
+      "fields": 1,
+      "sanitized_input_chars": 65536,
+      "value_chars": 65520,
+      "key_chars": 7,
+      "median_ms": 3.922695,
+      "max_batch_mean_ms": 4.087222
+    },
+    {
+      "case": "ascii",
+      "fields": 16,
+      "sanitized_input_chars": 65536,
+      "value_chars": 65409,
+      "key_chars": 118,
+      "median_ms": 2.961778,
+      "max_batch_mean_ms": 3.040097
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 16,
+      "sanitized_input_chars": 65536,
+      "value_chars": 65409,
+      "key_chars": 118,
+      "median_ms": 6.252986,
+      "max_batch_mean_ms": 6.434778
+    },
+    {
+      "case": "assignments",
+      "fields": 16,
+      "sanitized_input_chars": 65536,
+      "value_chars": 65409,
+      "key_chars": 118,
+      "median_ms": 3.819069,
+      "max_batch_mean_ms": 3.984319
+    },
+    {
+      "case": "ascii",
+      "fields": 128,
+      "sanitized_input_chars": 65536,
+      "value_chars": 64485,
+      "key_chars": 1042,
+      "median_ms": 3.147361,
+      "max_batch_mean_ms": 3.206861
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 128,
+      "sanitized_input_chars": 65536,
+      "value_chars": 64485,
+      "key_chars": 1042,
+      "median_ms": 6.388528,
+      "max_batch_mean_ms": 6.438278
+    },
+    {
+      "case": "assignments",
+      "fields": 128,
+      "sanitized_input_chars": 65536,
+      "value_chars": 64485,
+      "key_chars": 1042,
+      "median_ms": 4.304042,
+      "max_batch_mean_ms": 4.392417
+    },
+    {
+      "case": "ascii",
+      "fields": 512,
+      "sanitized_input_chars": 65536,
+      "value_chars": 61029,
+      "key_chars": 4498,
+      "median_ms": 4.363875,
+      "max_batch_mean_ms": 4.474333
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 512,
+      "sanitized_input_chars": 65536,
+      "value_chars": 61029,
+      "key_chars": 4498,
+      "median_ms": 7.295986,
+      "max_batch_mean_ms": 7.394111
+    },
+    {
+      "case": "assignments",
+      "fields": 512,
+      "sanitized_input_chars": 65536,
+      "value_chars": 61029,
+      "key_chars": 4498,
+      "median_ms": 5.660097,
+      "max_batch_mean_ms": 6.005555
+    },
+    {
+      "case": "ascii",
+      "fields": 900,
+      "sanitized_input_chars": 65536,
+      "value_chars": 57537,
+      "key_chars": 7990,
+      "median_ms": 5.910847,
+      "max_batch_mean_ms": 6.160389
+    },
+    {
+      "case": "jwt_tokens",
+      "fields": 900,
+      "sanitized_input_chars": 65536,
+      "value_chars": 57537,
+      "key_chars": 7990,
+      "median_ms": 9.42425,
+      "max_batch_mean_ms": 18.396236
+    },
+    {
+      "case": "assignments",
+      "fields": 900,
+      "sanitized_input_chars": 65536,
+      "value_chars": 57537,
+      "key_chars": 7990,
+      "median_ms": 7.134236,
+      "max_batch_mean_ms": 8.391444
+    }
+  ]
+}

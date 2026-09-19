@@ -6,29 +6,33 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
+from functools import partial
 
 import pytest
 import structlog
 from structlog.testing import LogCapture
 
-from app.log_policy import LogPolicyRules, build_processors
+from app.log_policy import build_processors, create_policy_logger
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def configure_chain() -> Iterator[Callable[[Iterable[LogPolicyRules]], LogCapture]]:
-    """与えた目的ポリシーで実チェーンを構成し、捕捉した entries を返す。"""
+def configure_chain() -> Iterator[Callable[[], LogCapture]]:
+    """規則の登録を持たない実チェーンを構成し、捕捉した entries を返す。"""
     original = structlog.get_config().copy()
 
-    def _configure(rules: Iterable[LogPolicyRules]) -> LogCapture:
+    def _configure() -> LogCapture:
         capture = LogCapture()
         structlog.configure(
-            processors=build_processors(rules, capture),
+            processors=build_processors(capture),
             wrapper_class=structlog.make_filtering_bound_logger(0),
             context_class=dict,
-            logger_factory=structlog.PrintLoggerFactory(),
+            logger_factory=partial(
+                create_policy_logger,
+                output_logger_factory=structlog.PrintLoggerFactory(),
+            ),
             cache_logger_on_first_use=False,
         )
         return capture
