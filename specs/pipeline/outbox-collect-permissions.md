@@ -16,7 +16,7 @@ PostgreSQLではINSERTに加え、RETURNINGで参照する列のSELECTが必要�
 
 ## 適用と確認
 
-既存gateではGRANTを自動expandの許可対象にしていないため、MIGRATION_KINDはcontractとし、gateを変更しない。DBとしては権限の追加だけでデータ削除・列変更はない。既存migration workflowのcontractモードでこのrevisionを含むイメージを用意し、production-migration承認後に適用する。contractの前提である直前mainの互換アプリ反映・ledger確認も省略しない。具体的な入力と順序は[既存migration手順](../../infra/aws/MIGRATION_WORKFLOW.md)に従う。ワーカーのコード変更は不要だが、既存contract gateが要求する互換版の反映条件を満たすかは適用前に確認する。migration用イメージには新revisionを含める。
+既存gateではGRANTを自動expandの許可対象にしていないため、MIGRATION_KINDはcontractとし、gateを変更しない。DBとしては権限の追加だけでデータ削除・列変更はない。既存migration workflowのcontractモードでこのrevisionを含むイメージを用意し、production-migration承認後に適用する。contract直前schemaとのledger一致を確認する。具体的な入力と順序は[既存migration手順](../../infra/aws/MIGRATION_WORKFLOW.md)に従う。ワーカーのコード変更は不要で、この権限追加の前提としてAPP反映は要求しない。migration用イメージには新revisionを含める。
 
 適用後はfetchの権限エラーが止まり、取得保存件数、本文整形・投資判定の完了、relayの送信、Consumerの完了が進むことを確認する。今回のローカル検証と本番復旧は分けて記録する。
 

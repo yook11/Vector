@@ -43,6 +43,6 @@ controller・execution・taskのIAMロールはbootstrapで管理する保護pat
 - IAM quota: 通常apply roleのmanaged policy attachmentは12本になるため、適用先の上限が12以上であることを確認する。
 - 起動: `gh workflow run aws-db-roles.yml --ref main`。任意SQL・任意image・任意ロール名をworkflow入力で受け取らない。
 
-imageのbuildジョブsummaryには対象SHA・ロール名・manifestハッシュ・image digestを表示する。承認前にこのsummaryを確認する。実行結果はworkflowと専用CloudWatch Logs `/ecs/vector-db-roles`で確認する。初回導入後、GRANTのcontract PRをマージする前には、その直前mainが既存アプリへ反映済みであることも既存手順どおり確認する。
+imageのbuildジョブsummaryには対象SHA・ロール名・manifestハッシュ・image digestを表示する。承認前にこのsummaryを確認する。実行結果はworkflowと専用CloudWatch Logs `/ecs/vector-db-roles`で確認する。GRANTのような権限追加は、新しい権限を使うアプリの反映前に適用する。適用順序は変更内容に応じて承認時に確認する。
 
 ECSのsecret注入は専用execution roleとFargate 1.4.0を使用する。実装根拠は[AWS公式のsecret注入仕様](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html)を参照。

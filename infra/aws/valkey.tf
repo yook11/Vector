@@ -49,20 +49,6 @@ locals {
       "(~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion resetchannels -@all +set +get +del +evalsha)",
       "(~taskiq:* resetchannels -@all +set)",
     ])
-    analysis = join(" ", [
-      "on ~pipeline:curation ~pipeline:maintenance resetchannels -@all",
-      "+xadd +xgroup|create +xreadgroup +xack +xautoclaim",
-      "+multi +exec +time +script|exists +script|load",
-      local.valkey_common_acl,
-      "(~autoclaim:taskiq:pipeline:curation ~autoclaim:taskiq:pipeline:maintenance resetchannels -@all +set +get +del +evalsha)",
-      "(~taskiq:* resetchannels -@all +set)",
-      "(~ratelimit:* resetchannels -@all +evalsha +zremrangebyscore +zcard +zadd +zrange +expire)",
-      "(~backfill:budget:* resetchannels -@all +eval +get +incrby +expire)",
-      # stage hold は set_stage_hold / is_stage_held (SET / EXISTS) のみ。key pattern は
-      # backend/app/queue/helpers/stage_hold.py の HoldableStage と 1:1。
-      "(~curation:hold resetchannels -@all +set +exists)",
-      "(~pipeline:acquisition ~pipeline:completion ~pipeline:curation resetchannels -@all +xlen +xinfo|groups +xpending +xrange)",
-    ])
     insights = join(" ", [
       "on ~trend_discovery ~briefing resetchannels -@all",
       "+xgroup|create +xreadgroup +xack +xautoclaim",

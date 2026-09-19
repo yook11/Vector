@@ -1,31 +1,13 @@
 """実際の直前revisionから配信権限migrationの互換性を確認する。"""
 
 import pytest
-from alembic.config import Config
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import command
-from local_tests.database import ROOT
+from local_tests.migrations.support import migrate as _migrate
 from local_tests.permissions.support import read_column_permissions
 
 REVISION = "z23_grant_outbox_relay"
 PREDECESSOR = "z22_grant_collect_outbox"
-
-
-async def _migrate(database, operation, revision):
-    engine = create_async_engine(database.url("vector", sqlalchemy=True))
-
-    def run(connection):
-        config = Config(str(ROOT / "backend/alembic.ini"))
-        config.set_main_option("script_location", str(ROOT / "backend/alembic"))
-        config.attributes["connection"] = connection
-        operation(config, revision)
-
-    try:
-        async with engine.connect() as connection:
-            await connection.run_sync(run)
-    finally:
-        await engine.dispose()
 
 
 @pytest.fixture

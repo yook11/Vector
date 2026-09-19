@@ -3,7 +3,7 @@ data "aws_kms_key" "lambda_config" {
 }
 
 locals {
-  lambda_config_function_arns = concat(values(local.backfill_lambda_arns), [local.acquisition_consumer_lambda_arn, local.source_dispatch_lambda_arn, local.outbox_lambda_arn, local.embedding_consumer_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.assessment_consumer_lambda_arn, local.curation_consumer_lambda_arn, local.curation_outbox_relay_lambda_arn, local.completion_consumer_lambda_arn, local.completion_outbox_relay_lambda_arn])
+  lambda_config_function_arns = concat(values(local.backfill_lambda_arns), [local.acquisition_consumer_lambda_arn, local.source_dispatch_lambda_arn, local.outbox_lambda_arn, local.embedding_consumer_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.assessment_consumer_lambda_arn, local.curation_consumer_lambda_arn, local.curation_outbox_relay_lambda_arn, local.completion_consumer_lambda_arn, local.completion_outbox_relay_lambda_arn, local.auth_rate_limit_cleanup_lambda_arn])
   lambda_kms_service          = "lambda.${var.region}.amazonaws.com"
 }
 

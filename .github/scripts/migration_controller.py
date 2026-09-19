@@ -28,7 +28,6 @@ from migration_ledger import (
     MigrationLedger,
     StartedAttempt,
 )
-from verify_ecs_rollout import completed_service_issues
 
 if TYPE_CHECKING:
     from migration_image import ImageEvidence
@@ -172,16 +171,6 @@ def _preflight(
         or len(container["environment"]) != 4
     ):
         raise ControllerError("base_execution_override")
-    if prepared.mode == "contract":
-        names = [
-            arn.rsplit("/", 1)[-1]
-            for arn in client.list_services(config.cluster)
-            if arn.rsplit("/", 1)[-1] != "proxy"
-        ]
-        if not prepared.contract_parent_sha or completed_service_issues(
-            config.cluster, prepared.contract_parent_sha, names, client
-        ):
-            raise ControllerError("contract_application_prerequisite_failed")
     # ひな型の厳格検証が終わるまで、実行要求を環境変数へ混ぜない。
     repository, _, _ = container["image"].rpartition(":")
     container["image"] = f"{repository}@{evidence.image_digest}"

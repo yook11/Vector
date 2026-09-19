@@ -180,6 +180,16 @@ jobs:
             > "$backfill_vars_tmp"
           mv "$backfill_vars_tmp" backfill.auto.tfvars.json
 
+      - name: Preserve auth rate limit cleanup image and schedule from state
+        run: |
+          set -euo pipefail
+          cleanup_vars_tmp=$(mktemp ./auth-rate-limit-cleanup-vars.XXXXXX)
+          trap 'rm -f "$cleanup_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-auth-rate-limit-cleanup.py \
+            > "$cleanup_vars_tmp"
+          mv "$cleanup_vars_tmp" auth-rate-limit-cleanup.auto.tfvars.json
+
       - name: Preserve Source dispatch image and schedules from state
         run: |
           set -euo pipefail

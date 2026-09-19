@@ -199,6 +199,9 @@ jobs:
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_outbox_relay') THEN
               CREATE ROLE vector_outbox_relay NOLOGIN;
             END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_auth_rate_limit_cleanup') THEN
+              CREATE ROLE vector_auth_rate_limit_cleanup NOLOGIN;
+            END IF;
           END \$\$;
           EOF
 

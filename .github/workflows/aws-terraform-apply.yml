@@ -124,6 +124,16 @@ on:
         type: choice
         default: keep
         options: [keep, enabled, disabled]
+      auth_rate_limit_cleanup_image_digest:
+        description: "認証カウンター掃除Lambdaのsha256 digest（空欄は現状維持）"
+        required: false
+        type: string
+      auth_rate_limit_cleanup_state:
+        description: "認証カウンター掃除の定期起動（keepは現状維持、初回は停止）"
+        required: false
+        type: choice
+        default: keep
+        options: [keep, enabled, disabled]
 
 permissions:
   id-token: write
@@ -409,6 +419,32 @@ jobs:
             fi
           done
           mv "$backfill_vars_tmp" backfill.auto.tfvars.json
+
+      - name: Resolve auth rate limit cleanup image and schedule
+        env:
+          REQUESTED_DIGEST: ${{ inputs.auth_rate_limit_cleanup_image_digest }}
+          REQUESTED_STATE: ${{ inputs.auth_rate_limit_cleanup_state }}
+        run: |
+          set -euo pipefail
+          cleanup_vars_tmp=$(mktemp ./auth-rate-limit-cleanup-vars.XXXXXX)
+          trap 'rm -f "$cleanup_vars_tmp"' EXIT
+          terraform state pull \
+            | python3 scripts/resolve-auth-rate-limit-cleanup.py \
+                --digest "$REQUESTED_DIGEST" \
+                --state "${REQUESTED_STATE:-keep}" \
+            > "$cleanup_vars_tmp"
+          if [ -n "$REQUESTED_DIGEST" ]; then
+            repository=$(terraform output -json ecr_repository_urls | jq -er '.backend | split("/")[1:] | join("/")')
+            image=$(aws ecr describe-images --repository-name "$repository" \
+              --image-ids "imageDigest=$REQUESTED_DIGEST" \
+              --query 'imageDetails[0].imageDigest' --output text)
+            if [ "$image" != "$REQUESTED_DIGEST" ]; then
+              echo "::error::backend ECRリポジトリに指定digestが存在しない"
+              exit 1
+            fi
+            echo "Auth rate limit cleanup image: $REQUESTED_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          mv "$cleanup_vars_tmp" auth-rate-limit-cleanup.auto.tfvars.json
 
       - name: Resolve Source dispatch image and schedules
         env:
