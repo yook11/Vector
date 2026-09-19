@@ -32,32 +32,6 @@ from app.queue.schedule import CADENCE_CRON
 _SUPERVISORD_DIR = Path(__file__).resolve().parent.parent / "supervisord"
 
 
-def _analysis_worker_commands() -> list[list[str]]:
-    """``broker_analysis`` を起動する worker command を token 列で返す。"""
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.read(_SUPERVISORD_DIR / "analysis.conf")
-    return [
-        shlex.split(command)
-        for section in parser.sections()
-        if section.startswith("program:")
-        and "taskiq worker" in (command := parser[section].get("command", ""))
-        and "app.queue.brokers:broker_analysis" in command
-    ]
-
-
-def _maintenance_worker_commands() -> list[list[str]]:
-    """``broker_maintenance`` を起動するworker commandをtoken列で返す。"""
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.read(_SUPERVISORD_DIR / "analysis.conf")
-    return [
-        shlex.split(command)
-        for section in parser.sections()
-        if section.startswith("program:")
-        and "taskiq worker" in (command := parser[section].get("command", ""))
-        and "app.queue.brokers:broker_maintenance" in command
-    ]
-
-
 def _fetch_worker_commands() -> dict[str, list[str]]:
     """fetch container の worker program を program 名から command token 列へ写す。"""
     parser = configparser.ConfigParser(interpolation=None)
@@ -97,31 +71,6 @@ def _parse_worker_programs() -> dict[str, int | None]:
                 int(max_match.group(1)) if max_match else None
             )
     return workers
-
-
-def test_analysis_broker_reads_only_stage_specific_streams() -> None:
-    """analysis broker は CurationのStreamを購読する。"""
-    from app.queue.brokers import broker_analysis
-
-    assert {
-        "queue_name": broker_analysis.queue_name,
-        "additional_streams": broker_analysis.additional_streams,
-        "consumer_group_name": broker_analysis.consumer_group_name,
-        "consumer_id": broker_analysis.consumer_id,
-        "maxlen": broker_analysis.maxlen,
-        "idle_timeout": broker_analysis.idle_timeout,
-        "unacknowledged_batch_size": broker_analysis.unacknowledged_batch_size,
-        "unacknowledged_lock_timeout": broker_analysis.unacknowledged_lock_timeout,
-    } == {
-        "queue_name": "pipeline:curation",
-        "additional_streams": {},
-        "consumer_group_name": "taskiq",
-        "consumer_id": "0-0",
-        "maxlen": 10_000,
-        "idle_timeout": 600_000,
-        "unacknowledged_batch_size": 100,
-        "unacknowledged_lock_timeout": 60,
-    }
 
 
 def test_dispatch_broker_keeps_control_stream_runtime_contract() -> None:
@@ -318,60 +267,6 @@ def test_collection_control_task_keeps_dispatch_routing_and_execution_contract(
     )
 
 
-@pytest.mark.parametrize(
-    ("task_module", "task_attr", "expected_task_name", "expected_labels"),
-    [
-        (
-            "app.queue.tasks.curation",
-            "curate_content",
-            "curate_content",
-            {
-                "queue_name": "pipeline:curation",
-                "timeout": 180,
-                "max_retries": 1,
-                "retry_on_error": True,
-            },
-        ),
-    ],
-    ids=["curation"],
-)
-def test_analysis_task_keeps_stage_routing_and_execution_labels(
-    task_module: str,
-    task_attr: str,
-    expected_task_name: str,
-    expected_labels: dict[str, object],
-) -> None:
-    """Curationは既存のbroker・Stream・実行契約を維持する。"""
-    import importlib
-
-    from app.queue.brokers import broker_analysis
-
-    task = getattr(importlib.import_module(task_module), task_attr)
-    assert (task.broker, task.task_name, task.labels) == (
-        broker_analysis,
-        expected_task_name,
-        expected_labels,
-    )
-
-
-def test_analysis_worker_keeps_single_shared_runtime() -> None:
-    """Curationは既存のprocess・ACK・並列度を維持する。"""
-    assert _analysis_worker_commands() == [
-        [
-            "taskiq",
-            "worker",
-            "--workers",
-            "1",
-            "--max-async-tasks",
-            "10",
-            "app.queue.brokers:broker_analysis",
-            "app.queue.tasks.curation",
-            "--ack-type",
-            "when_executed",
-        ]
-    ]
-
-
 def test_collection_workers_keep_two_program_shared_runtime() -> None:
     """collection は dispatch / collection の2 processと既存並列度を維持する。"""
     assert _fetch_worker_commands() == {
@@ -412,7 +307,6 @@ def test_collection_lifecycle_keeps_pool_and_scheduler_boundary() -> None:
         scheduler_agent,
         scheduler_briefing,
         scheduler_dispatch,
-        scheduler_maintenance,
     )
 
     scheduler_trend_discovery = create_scheduler()
@@ -424,7 +318,6 @@ def test_collection_lifecycle_keeps_pool_and_scheduler_boundary() -> None:
             scheduler_trend_discovery,
             scheduler_agent,
             scheduler_briefing,
-            scheduler_maintenance,
         )
     )
     assert (
@@ -478,9 +371,6 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
         patch("app.queue.lifecycle.log_pool_initialized") as log_pool_initialized,
         patch("app.queue.lifecycle.register_pool_metrics"),
         patch("app.queue.lifecycle.create_worker_agent_live_client") as create_live,
-        patch(
-            "app.queue.lifecycle.create_worker_pipeline_control_client"
-        ) as create_control,
         capture_logs() as logs,
     ):
         for handler in broker.event_handlers[TaskiqEvents.WORKER_STARTUP]:
@@ -495,9 +385,7 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
     engine.dispose.assert_awaited_once_with()
     assert state.engine is engine
     create_live.assert_not_called()
-    create_control.assert_not_called()
     assert not hasattr(state, "agent_live_redis")
-    assert not hasattr(state, "pipeline_control_redis")
     events = {log["event"] for log in logs}
     assert startup_event in events
     assert shutdown_event in events
@@ -521,26 +409,6 @@ async def test_dispatch_client_lifecycle_uses_renamed_events() -> None:
     assert "dispatch_client_shutdown" in events
 
 
-def test_maintenance_worker_imports_queue_health_without_runtime_split() -> None:
-    """queue samplerは既存maintenance workerのmoduleとして同じruntimeを使う。"""
-    assert _maintenance_worker_commands() == [
-        [
-            "taskiq",
-            "worker",
-            "--workers",
-            "1",
-            "--max-async-tasks",
-            "10",
-            "app.queue.brokers:broker_maintenance",
-            "app.queue.tasks.backfill",
-            "app.queue.tasks.retention",
-            "app.queue.tasks.queue_health",
-            "--ack-type",
-            "when_executed",
-        ]
-    ]
-
-
 class TestCadenceCronMapping:
     """``CADENCE_CRON`` が全 tier を 5-field cron に写像する。"""
 
@@ -552,33 +420,6 @@ class TestCadenceCronMapping:
         """各 cron 式が 5 フィールド (taskiq cron 形式) であること。"""
         for cadence, cron in CADENCE_CRON.items():
             assert len(cron.split()) == 5, f"{cadence} cron must be 5-field: {cron!r}"
-
-
-@pytest.mark.asyncio
-async def test_wire_analysis_adapters_attaches_adapters_to_state(
-    gemini_http_clients,
-) -> None:
-    """broker_analysis の WORKER_STARTUP で adapter が state に attach される。
-
-    Provider 選択を hardcode する設計 (Pure DI) を構造的に保証する。
-    """
-    from app.analysis.curation.ai.gemini import GeminiCurator
-    from app.queue.composition import _wire_analysis_adapters
-
-    state = TaskiqState()
-    state.pipeline_control_redis = MagicMock(aclose=AsyncMock())
-    with (
-        patch("app.config.settings") as mock_cs,
-    ):
-        mock_cs.gemini_api_key = SecretStr("test-key")
-        await _wire_analysis_adapters(state)
-
-    assert isinstance(state.curator, GeminiCurator)
-    from app.queue.lifecycle import _aclose_worker_resources
-
-    await _aclose_worker_resources(state)
-    assert len(gemini_http_clients) == 1
-    assert gemini_http_clients[0].is_closed
 
 
 @pytest.mark.asyncio
@@ -711,7 +552,6 @@ async def _worker_lifecycle_stubs(
     engine: MagicMock,
     *,
     live: MagicMock | None = None,
-    control: MagicMock | None = None,
     compose: bool = False,
 ):
     patches = [
@@ -736,13 +576,7 @@ async def _worker_lifecycle_stubs(
                 return_value=live if live is not None else MagicMock(),
             )
         )
-        create_control = stack.enter_context(
-            patch(
-                "app.queue.lifecycle.create_worker_pipeline_control_client",
-                return_value=control if control is not None else MagicMock(),
-            )
-        )
-        yield create_live, create_control
+        yield create_live
 
 
 @pytest.mark.asyncio
@@ -754,68 +588,13 @@ async def test_agent_worker_owns_only_agent_live_redis() -> None:
     live = _owned_redis()
     state = TaskiqState()
 
-    async with _worker_lifecycle_stubs(engine, live=live) as (
-        create_live,
-        create_control,
-    ):
+    async with _worker_lifecycle_stubs(engine, live=live) as create_live:
         await broker_agent.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
         await broker_agent.event_handlers[TaskiqEvents.WORKER_SHUTDOWN][0](state)
 
     create_live.assert_called_once_with(settings)
-    create_control.assert_not_called()
     assert state.agent_live_redis is live
-    assert not hasattr(state, "pipeline_control_redis")
     live.aclose.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "broker_name",
-    ["broker_analysis", "broker_maintenance"],
-)
-async def test_pipeline_workers_own_only_pipeline_control_redis(
-    broker_name: str,
-) -> None:
-    from app.queue import brokers
-
-    broker = getattr(brokers, broker_name)
-    engine = MagicMock()
-    engine.dispose = AsyncMock()
-    control = _owned_redis()
-    state = TaskiqState()
-
-    async with _worker_lifecycle_stubs(engine, control=control) as (
-        create_live,
-        create_control,
-    ):
-        await broker.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
-        await broker.event_handlers[TaskiqEvents.WORKER_SHUTDOWN][0](state)
-
-    create_live.assert_not_called()
-    create_control.assert_called_once_with(settings)
-    assert state.pipeline_control_redis is control
-    assert not hasattr(state, "agent_live_redis")
-    control.aclose.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_analysis_startup_wires_ai_providers() -> None:
-    from app.queue.brokers import broker_analysis
-
-    engine = MagicMock()
-    engine.dispose = AsyncMock()
-    control = _owned_redis()
-    state = TaskiqState()
-
-    async with _worker_lifecycle_stubs(engine, control=control, compose=True):
-        with (
-            patch("app.config.settings") as mock_cs,
-        ):
-            mock_cs.gemini_api_key = SecretStr("test-key")
-            await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
-
-    assert state.pipeline_control_redis is control
-    assert state.curator.provider == "gemini"
 
 
 @pytest.mark.asyncio
@@ -895,9 +674,7 @@ async def test_agent_worker_owns_deadline_schedule_source(monkeypatch):
     source = MagicMock(startup=AsyncMock(), shutdown=AsyncMock())
     factory = MagicMock(return_value=source)
     monkeypatch.setattr("app.queue.lifecycle.create_deadline_schedule_source", factory)
-    async with _worker_lifecycle_stubs(
-        engine, live=_owned_redis(), control=_owned_redis()
-    ):
+    async with _worker_lifecycle_stubs(engine, live=_owned_redis()):
         for broker in (broker_agent, broker_collection):
             state = TaskiqState()
             await broker.event_handlers[TaskiqEvents.WORKER_STARTUP][0](state)
@@ -908,72 +685,6 @@ async def test_agent_worker_owns_deadline_schedule_source(monkeypatch):
     factory.assert_called_once_with(settings)
     source.startup.assert_awaited_once()
     source.shutdown.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_analysis_composition_failure_closes_prepared_client(gemini_http_clients):
-    """ワーカーへの配線中に失敗しても、準備済みのGeminiクライアントを閉じる。"""
-    from app.queue.composition import _wire_analysis_adapters
-
-    state = TaskiqState()
-    failure = RuntimeError("wiring log failed")
-    with (
-        patch("app.config.settings") as config,
-        patch("app.analysis.curation.ai.gemini.GeminiCurator"),
-        patch("app.queue.composition.logger.info", side_effect=failure),
-    ):
-        config.gemini_api_key = SecretStr("test-key")
-        with pytest.raises(RuntimeError) as caught:
-            await _wire_analysis_adapters(state)
-    assert caught.value is failure
-    assert len(gemini_http_clients) == 1
-    assert gemini_http_clients[0].is_closed
-
-
-@pytest.mark.asyncio
-async def test_analysis_startup_failure_closes_client(gemini_http_clients):
-    """配線後のワーカー起動処理が失敗した場合、Geminiクライアントを閉じて元の例外を返す。"""
-    from app.queue.brokers import broker_analysis
-
-    engine = MagicMock(dispose=AsyncMock())
-    state = TaskiqState()
-    failure = RuntimeError("startup log failed")
-    async with _worker_lifecycle_stubs(engine, compose=True):
-        with (
-            patch("app.config.settings") as config,
-            patch("app.analysis.curation.ai.gemini.GeminiCurator"),
-            patch("app.queue.lifecycle.logger.info", side_effect=failure),
-        ):
-            config.gemini_api_key = SecretStr("test-key")
-            with pytest.raises(RuntimeError) as caught:
-                await broker_analysis.event_handlers[TaskiqEvents.WORKER_STARTUP][0](
-                    state
-                )
-    assert caught.value is failure
-    assert len(gemini_http_clients) == 1
-    assert gemini_http_clients[0].is_closed
-
-
-@pytest.mark.asyncio
-async def test_analysis_client_closes_even_if_redis_shutdown_fails(gemini_http_clients):
-    """Redisの終了失敗でGeminiの解放を妨げず、元のRedis例外を呼び出し元へ返す。"""
-    from app.queue.composition import _wire_analysis_adapters
-    from app.queue.lifecycle import _aclose_worker_resources
-
-    state = TaskiqState()
-    failure = RuntimeError("redis close failed")
-    state.pipeline_control_redis = MagicMock(aclose=AsyncMock(side_effect=failure))
-    with (
-        patch("app.config.settings") as config,
-        patch("app.analysis.curation.ai.gemini.GeminiCurator"),
-    ):
-        config.gemini_api_key = SecretStr("test-key")
-        await _wire_analysis_adapters(state)
-    with pytest.raises(RuntimeError) as caught:
-        await _aclose_worker_resources(state)
-    assert caught.value is failure
-    assert len(gemini_http_clients) == 1
-    assert gemini_http_clients[0].is_closed
 
 
 @pytest.fixture

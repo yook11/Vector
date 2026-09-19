@@ -22,7 +22,7 @@ def _health_module() -> ModuleType:
         raise
 
 
-def _target(module: ModuleType, stage: str = "curation") -> Any:
+def _target(module: ModuleType, stage: str = "completion") -> Any:
     stream = f"pipeline:{stage}"
     return module.StreamHealthTarget(stage=stage, stream=stream, group="taskiq")
 
@@ -172,7 +172,7 @@ class _RecordingRedis:
 
 
 def test_pipeline_queue_targets_and_stage_vocabulary_are_fixed() -> None:
-    """A2 alarm はこの3 stage 分だけ張られるため、系列数と語彙をここで固定する。"""
+    """観測対象は fetch の2 stage に限るため、語彙と対象 Stream をここで固定する。"""
     module = _health_module()
 
     assert (
@@ -182,11 +182,10 @@ def test_pipeline_queue_targets_and_stage_vocabulary_are_fixed() -> None:
             for target in module.PIPELINE_QUEUE_TARGETS
         ),
     ) == (
-        ("acquisition", "completion", "curation"),
+        ("acquisition", "completion"),
         (
             ("acquisition", "pipeline:acquisition", "taskiq"),
             ("completion", "pipeline:completion", "taskiq"),
-            ("curation", "pipeline:curation", "taskiq"),
         ),
     )
 
@@ -219,8 +218,8 @@ async def test_empty_stream_snapshot_has_zero_counts_and_no_ages() -> None:
             "oldest_outstanding_enqueue_age",
         ),
         (
-            "curation",
-            "pipeline:curation",
+            "completion",
+            "pipeline:completion",
             "taskiq",
             1_000.25,
             0,
@@ -309,7 +308,7 @@ async def test_invalid_redis_integer_is_inconsistent_snapshot(
         await module.read_stream_health(redis, target)
 
     assert (raised.value.stage, raised.value.reason) == (
-        "curation",
+        "completion",
         "inconsistent_snapshot",
     )
 
@@ -362,11 +361,11 @@ async def test_snapshot_uses_one_transaction_exact_group_and_enqueue_ages() -> N
         [
             ("pipeline", True),
             ("TIME",),
-            ("XLEN", "pipeline:curation"),
-            ("XINFO GROUPS", "pipeline:curation"),
+            ("XLEN", "pipeline:completion"),
+            ("XINFO GROUPS", "pipeline:completion"),
             (
                 "XPENDING",
-                "pipeline:curation",
+                "pipeline:completion",
                 "taskiq",
                 "-",
                 "+",
@@ -375,7 +374,7 @@ async def test_snapshot_uses_one_transaction_exact_group_and_enqueue_ages() -> N
                 None,
             ),
             ("EXEC",),
-            ("XRANGE", "pipeline:curation", "(990000-0", "+", 1),
+            ("XRANGE", "pipeline:completion", "(990000-0", "+", 1),
         ],
     )
 
@@ -477,7 +476,7 @@ async def test_inconsistent_xrange_after_one_reread_is_failure() -> None:
         raised.value.reason,
         sum(call == ("pipeline", True) for call in redis.calls),
         sum(call[0] == "XRANGE" for call in redis.calls),
-    ) == ("curation", "inconsistent_snapshot", 2, 2)
+    ) == ("completion", "inconsistent_snapshot", 2, 2)
 
 
 @pytest.mark.asyncio
@@ -502,7 +501,7 @@ async def test_snapshot_failures_use_fixed_nonzero_reasons(
     reason: str,
 ) -> None:
     module = _health_module()
-    target = _target(module, "curation")
+    target = _target(module, "completion")
     redis = _RecordingRedis(pipeline_results=[pipeline_result])
 
     with pytest.raises(module.StreamHealthError) as raised:
@@ -513,7 +512,7 @@ async def test_snapshot_failures_use_fixed_nonzero_reasons(
         raised.value.stage,
         raised.value.reason,
         {"payload", "task_id", "consumer", "consumer_uuid"} & public_state.keys(),
-    ) == ("curation", reason, set())
+    ) == ("completion", reason, set())
 
 
 @pytest.mark.asyncio
@@ -536,7 +535,7 @@ async def test_post_transaction_redis_failure_is_redis_unavailable() -> None:
         await module.read_stream_health(redis, target)
 
     assert (raised.value.stage, raised.value.reason) == (
-        "curation",
+        "completion",
         "redis_unavailable",
     )
 
@@ -557,7 +556,7 @@ async def test_idle_diagnostic_is_explicit_bounded_existence_check(
         [
             (
                 "XPENDING",
-                "pipeline:curation",
+                "pipeline:completion",
                 "taskiq",
                 "-",
                 "+",

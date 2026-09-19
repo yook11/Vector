@@ -24,15 +24,11 @@ from taskiq.schedule_sources import LabelScheduleSource
 
 import app.queue.registry  # noqa: F401  cron 登録の副作用 import (get_all_tasks を満たす)
 from app.insights.trend_discovery.scheduler import create_scheduler
-from app.queue.brokers import (
-    broker_analysis,
-    broker_collection,
-)
+from app.queue.brokers import broker_collection
 from app.queue.schedulers import (
     scheduler_agent,
     scheduler_briefing,
     scheduler_dispatch,
-    scheduler_maintenance,
 )
 
 scheduler_trend_discovery = create_scheduler()
@@ -54,30 +50,20 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
     ("trend_discovery", scheduler_trend_discovery, {"run_trend_discovery"}),
     ("agent", scheduler_agent, {"sweep_deadline_exceeded_agent_runs"}),
     ("briefing", scheduler_briefing, {"dispatch_weekly_briefings"}),
-    (
-        "maintenance",
-        scheduler_maintenance,
-        {
-            "backfill_curations",
-            "observe_pipeline_queue_health",
-            "purge_pipeline_events",
-        },
-    ),
 ]
 
 
 def test_scheduler_entrypoint_uses_exact_scheduler_set() -> None:
-    """統合 entrypoint は final 5 scheduler だけを実行する。"""
+    """統合 entrypoint は final 4 scheduler だけを実行する。"""
     from app.queue.scheduler_entrypoint import _create_schedulers
 
     schedulers = _create_schedulers()
 
-    assert len(schedulers) == 5
+    assert len(schedulers) == 4
     assert schedulers[0] is scheduler_dispatch
     assert schedulers[1].broker.queue_name == "trend_discovery"
     assert schedulers[2] is scheduler_agent
     assert schedulers[3] is scheduler_briefing
-    assert schedulers[4] is scheduler_maintenance
 
 
 async def _discovered_cron_task_names(scheduler: TaskiqScheduler) -> set[str]:
@@ -123,15 +109,12 @@ async def test_cron_tasks_do_not_overlap_across_schedulers() -> None:
 async def test_schedulerless_brokers_have_no_cron() -> None:
     """scheduler を持たない broker に schedule 付き task が無い (orphan cron 検出)。
 
-    collection / analysis broker は scheduler を持たないため、ここに cron が
+    collection broker は scheduler を持たないため、ここに cron が
     紛れ込むと永久に発火しない。taskiq 自身の discovery (LabelScheduleSource) で
     schedule 付き task を数え、空であることを保証する。
     """
     orphans: dict[str, set[str]] = {}
-    for label, broker in (
-        ("collection", broker_collection),
-        ("analysis", broker_analysis),
-    ):
+    for label, broker in (("collection", broker_collection),):
         source = LabelScheduleSource(broker)
         await source.startup()
         names = {task.task_name for task in await source.get_schedules()}

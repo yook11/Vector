@@ -1,22 +1,20 @@
 """遅延 AI SDK import の構造保証テスト (import-time footprint guard)。
 
 非 AI を実行しない taskiq プロセス (scheduler / collect の dispatch・collection /
-maintenance / trend_discovery) と API プロセスの module import は、起動時に重い
+trend_discovery) と API プロセスの module import は、起動時に重い
 AI SDK (``openai`` + ``google.genai``、実測 ~133MB) を import してはならない。
-SDK は AI を実行する worker の compose 関数本体 (broker_analysis /
-broker_briefing / broker_agent)、または API の
+SDK は AI を実行する worker の compose 関数本体 (broker_briefing / broker_agent)、
+または API の
 request-scoped factory 内でのみロードされる設計 (``app/queue/composition.py``
 と ``app/agent/router.py`` の遅延 import)。
 
-各プロセスの import surface は ``supervisord/{scheduler,fetch,insights,analysis}.conf``
-(maintenance program は analysis.conf) の ``taskiq worker``/``taskiq scheduler`` 起動
-引数に一致させる。clean な module table が必要なため subprocess で検証する
-(in-process だと他テストが既に SDK を import 済)。
+各プロセスの import surface は ``supervisord/{scheduler,fetch,insights}.conf`` の
+``taskiq worker``/``taskiq scheduler`` 起動引数に一致させる。clean な module table
+が必要なため subprocess で検証する (in-process だと他テストが既に SDK を import 済)。
 """
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
 import sys
 import textwrap
@@ -33,7 +31,7 @@ _NON_AI_IMPORT_SURFACES = {
     "agent_package": "import app.agent",
     # AnsweringRunner composition はInput Safety Agentを配線してもSDK-freeに保つ。
     "agent_composition": "import app.agent.composition",
-    # scheduler.conf: python -m app.queue.scheduler_entrypoint (5 cron scheduler 統合)。
+    # scheduler.conf: python -m app.queue.scheduler_entrypoint (4 cron scheduler 統合)。
     # entrypoint は schedulers + registry を import するため最広の import surface。
     "scheduler": "import app.queue.scheduler_entrypoint",
     # fetch.conf: taskiq worker app.queue.brokers:broker_{dispatch,collection}
@@ -41,11 +39,6 @@ _NON_AI_IMPORT_SURFACES = {
     "collect": (
         "import app.queue.brokers, app.queue.tasks.acquisition, "
         "app.queue.tasks.completion"
-    ),
-    # analysis.conf (maintenance program): broker_maintenance backfill retention
-    "maintenance": (
-        "import app.queue.brokers, app.queue.tasks.backfill, "
-        "app.queue.tasks.retention, app.queue.tasks.queue_health"
     ),
     # insights.conf (trend program): process factoryがbrokerとtaskを構築する。
     "trend_discovery": (
@@ -89,12 +82,6 @@ def test_non_ai_process_import_does_not_load_ai_sdk(surface: str) -> None:
     SDK の import-time ロードを構造的に禁じる。回帰すると当該プロセスが待機中も
     ~133MB の AI SDK を常駐させ OOM 余地を作る。
     """
-    if (
-        surface == "maintenance"
-        and importlib.util.find_spec("app.queue.tasks.queue_health") is None
-    ):
-        pytest.fail("app.queue.tasks.queue_health is not implemented")
-
     loaded = _ai_sdk_modules_loaded_after(_NON_AI_IMPORT_SURFACES[surface])
     assert loaded == set(), (
         f"{surface} の import surface が AI SDK をロードした: {sorted(loaded)}"

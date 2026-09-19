@@ -9,7 +9,7 @@
 
 各 error は「回復クラス (mode)」と「詳細 (reason)」を自己記述する。mode は
 「起きた後どう対応するか」(待てば治る / 人が直す / 対象を捨てる) の括りで、
-handler が retry / hold を導出する。provider の具体的な状態 (5xx / timeout /
+handler が retry を導出する。provider の具体的な状態 (5xx / timeout /
 safety 等) は mode ではなく ``reason`` (検知箇所が所有する StrEnum) が運ぶ。
 """
 
@@ -33,7 +33,7 @@ class AIProviderFailureMode(StrEnum):
     - 対象が拒否され回復しないか (TARGET_REJECTED)
 
     provider の具体的な状態 (5xx / timeout / safety block 等) は本 enum ではなく
-    各 error の ``reason`` が運ぶ。handler は本 enum から retry / hold を導出する。
+    各 error の ``reason`` が運ぶ。handler は本 enum から retry を導出する。
     将来の回復パターン (例: 別の条件付き回復) が要るなら member を足して表す。
     """
 
@@ -44,8 +44,7 @@ class AIProviderFailureMode(StrEnum):
     """時間経過で回復する。backoff 再試行が有効 (provider 一時不応答 / throttling)。"""
 
     CONDITION_BASED_RECOVERY = "condition_based_recovery"
-    """回復に条件が要る (利用枠の回復待ち)。条件成立まで近い再試行は無効で、
-    枯渇時は hold して条件成立を待つ。"""
+    """回復に条件が要る (利用枠の回復待ち)。条件成立まで近い再試行は無効。"""
 
     OPERATOR_ACTION_REQUIRED = "operator_action_required"
     """運用者の対応なしには回復しない (設定不正 / 要求不正 / 残高不足)。"""
@@ -59,21 +58,6 @@ class AIProviderFailureMode(StrEnum):
         return self in (
             AIProviderFailureMode.ATTEMPT_SCOPED,
             AIProviderFailureMode.TIME_BASED_RECOVERY,
-            AIProviderFailureMode.CONDITION_BASED_RECOVERY,
-        )
-
-    @property
-    def is_stage_hold_mode(self) -> bool:
-        """この回復クラスが stage の退避 (hold) を要するか。
-
-        OPERATOR_ACTION_REQUIRED は運用者対応なしに回復せず、
-        CONDITION_BASED_RECOVERY は利用枠の回復を待つ必要があるため stage を
-        hold する。hold を「いつ」立てるか (即時か retry 枯渇時か) は consumer
-        (handler) が retry の余地と合わせて決める。本 property はどの回復クラスが
-        hold を要するかの SSoT。
-        """
-        return self in (
-            AIProviderFailureMode.OPERATOR_ACTION_REQUIRED,
             AIProviderFailureMode.CONDITION_BASED_RECOVERY,
         )
 
@@ -200,8 +184,7 @@ class AIProviderOutputBlockedError(AIProviderContentError):
 
 
 # ---------------------------------------------------------------------------
-# State 起因: 運用側修正が必要 (記事は健全、Stage 3 (curation) では keep marker
-# ``CurationTerminalKeepError`` 行き)。
+# State 起因: 運用側修正が必要 (記事は健全)。
 # 回復クラス = OPERATOR_ACTION_REQUIRED。
 # ---------------------------------------------------------------------------
 

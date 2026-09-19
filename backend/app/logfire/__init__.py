@@ -4,7 +4,6 @@ submodule:
 - ``setup`` — プロセス起動時の ``logfire.configure()`` + structlog 配線。
 - ``db_pool`` — DB コネクションプールの起動ログと metrics 登録。
 - ``exceptions`` — PII-safe な ``__str__`` を持つドメイン例外基底。
-- ``article_stage`` — AI 分析パイプラインの記事ステージ span helper。
 - ``stage_span`` — 非 AI worker 工程の汎用ステージ span helper。
 - ``redaction`` — 例外自由文を export 前に落とす span redactor。
 

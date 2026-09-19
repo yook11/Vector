@@ -135,7 +135,7 @@ async def test_worker_cleanup_cancels_reservations_before_closing_source():
     state = SimpleNamespace(
         agent_deadline_source=source,
         agent_deadline_scheduler=scheduler,
-        pipeline_control_redis=SimpleNamespace(
+        agent_live_redis=SimpleNamespace(
             aclose=AsyncMock(side_effect=RuntimeError("close failed"))
         ),
     )

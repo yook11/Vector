@@ -1,8 +1,8 @@
 # fly.core.toml — vector-core (secret-heavy backend)
 #
 # 本番バックエンドを 2 app に分割した crown-jewel 側。AI 鍵 / 本物 BFF 鍵 /
-# revalidate 鍵を保持し、API + 分析 (analysis/embedding) + insights + scheduler +
-# 保守 (maintenance) を担う。外部 web を fetch する acquisition/completion worker は
+# revalidate 鍵を保持し、API + insights + agent + scheduler を担う。
+# 外部 web を fetch する acquisition/completion worker は
 # vector-collect (fly.collect.toml) に分離し、本 app に同居させない。
 # 同一 image を 2 fly.toml で deploy する (process group で役割を分ける)。
 #
@@ -55,8 +55,6 @@ primary_region = 'nrt'
 # (#712) で一律引き上げた値を、遅延 AI SDK import (#714) の本番反映後に実測した
 # 物理 RSS (fly ssh `/proc/meminfo` の Total-Available) に基づき右サイズする。
 # 実測 working set (idle, deploy 直後):
-# - worker-analysis: analysis(curation gemini) + maintenance
-#   (gemini)+maintenance を同居。AI worker 2 本が SDK を持つため最大 → 1.5GB。
 # - worker-insights ~484MB: trend(SDK-free)+briefing(deepseek/openai)同居 → 768MB。
 # - worker-agent: user-facing Q&A agent。768MB 始まりで deploy 後 RSS 実測。
 # - scheduler ~200MB級: 4 cron scheduler を 1 プロセスに統合 (SDK-free, full import 1 回)。
@@ -68,11 +66,6 @@ primary_region = 'nrt'
   memory = '512mb'
   cpus = 1
   processes = ['api']
-
-[[vm]]
-  memory = '1536mb'
-  cpus = 1
-  processes = ['worker-analysis']
 
 [[vm]]
   memory = '768mb'
@@ -106,9 +99,6 @@ primary_region = 'nrt'
   # fail-closed 検証される (誤って "frontend" (compose DNS) や localhost を
   # 本番に持ち込んだ瞬間 Machine が crashloop する)。
   INTERNAL_FRONTEND_BASE_URL = "http://your-vector-frontend-app.flycast:3000"
-  # back-fill 救済網 (maintenance worker)。config.py の default は
-  # (Redis 永続化と併せて Stage4/5 の塩漬け記事を確実に再投入する)。
-  # Fly [env] の値は文字列必須 ("true")。
 
 # 同一 image を 4 process group で起動する。process 名は [[services]] /
 # [[checks]] / [[vm]] の processes 指定と一致必須。
@@ -118,15 +108,12 @@ primary_region = 'nrt'
 #   Firecracker VM は bindv6only=1) だと check が connection refused で永久に critical
 #   になり deploy が最初の api machine で停止する。一方 flycast 実トラフィックは
 #   6PN=IPv6 で届くため IPv4-only (`0.0.0.0`) も不可。空文字列で両 family を listen する。
-# - worker-analysis: analysis (curation) + maintenance
-#   (back-fill 救済 + retention purge) を 1 container に同居 (supervisord 管理)
 # - worker-insights: trend discovery + briefing cron worker
 # - worker-agent: user-facing research agent run worker + stale sweeper
-# - scheduler: 全 cron の発火元 (metadata / trend_discovery / briefing /
-#   agent / maintenance の 5 scheduler)。singleton 厳守 (fly scale count scheduler=1)。
+# - scheduler: 全 cron の発火元 (dispatch / trend_discovery / briefing / agent の
+#   4 scheduler)。singleton 厳守 (fly scale count scheduler=1)。
 [processes]
   api = "uvicorn app.main:app --host '' --port 8000"
-  worker-analysis = "supervisord -n -c /app/supervisord/analysis.conf"
   worker-insights = "supervisord -n -c /app/supervisord/insights.conf"
   worker-agent = "supervisord -n -c /app/supervisord/agent.conf"
   scheduler = "supervisord -n -c /app/supervisord/scheduler.conf"

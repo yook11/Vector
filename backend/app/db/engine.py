@@ -21,17 +21,14 @@ API_POOL_MAX_OVERFLOW = 10
 # 最大 1 connection のため縮小 (2,2)=cap4。
 # supervisord の --max-async-tasks は該当 worker の cap 以下に保つ
 # (通常パスの上限ガード、tests/test_brokers.py が pin する)。error-path で
-# 別 audit session を開く経路 (acquisition の変換棄却 / curation の
-# ready-build 失敗) があり飽和不可能の保証ではない。二重 audit 分は
-# max_overflow + pool_timeout fail-fast で吸収する。
+# 別 audit session を開く経路 (acquisition の変換棄却) があり飽和不可能の
+# 保証ではない。二重 audit 分は max_overflow + pool_timeout fail-fast で吸収する。
 WORKER_POOL_SIZING: dict[str, tuple[int, int]] = {
     "dispatch": (5, 5),
     "collection": (5, 5),
-    "analysis": (5, 5),
     "trend_discovery": (2, 2),
     "briefing": (5, 5),
     "agent": (5, 5),
-    "maintenance": (5, 5),
 }
 # Neon autosuspend (既定 300s) の手前で接続を張り替え、pre_ping 依存を
 # 減らす (60s マージン)。共通既定 (3600) を worker のみ override する。

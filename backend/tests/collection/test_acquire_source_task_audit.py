@@ -125,10 +125,6 @@ def _acquire_failure_patches(
             "app.queue.tasks.acquisition.ArticleAcquisitionFailureRecorder",
             return_value=MagicMock(record_source_failure=record_source_failure),
         ),
-        patch(
-            "app.queue.tasks.curation.curate_content",
-            new=MagicMock(kiq=AsyncMock()),
-        ),
     ):
         yield
 
@@ -209,8 +205,6 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
     )
     monkeypatch.setattr(RssReader, "fetch", reader)
     monkeypatch.setitem(SOURCES, VentureBeatSource.name, FailingSource)
-    enqueue = AsyncMock()
-    monkeypatch.setattr("app.queue.tasks.curation.curate_content.kiq", enqueue)
 
     with pytest.raises(RuntimeError) as caught:
         await collection_tasks.acquire_source(
@@ -249,7 +243,6 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
         "builtins.RuntimeError",
         "builtins.ValueError",
     ]
-    enqueue.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -325,10 +318,6 @@ class TestAcquireSourceStageSpan:
                 return_value=MagicMock(
                     record_source_failure=AsyncMock(return_value=None)
                 ),
-            ),
-            patch(
-                "app.queue.tasks.curation.curate_content",
-                new=MagicMock(kiq=AsyncMock()),
             ),
         ):
             await collection_tasks.acquire_source(
@@ -533,8 +522,6 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
     )
     monkeypatch.setattr(RssReader, "fetch", reader)
     monkeypatch.setitem(SOURCES, VentureBeatSource.name, MultiSource)
-    enqueue = AsyncMock()
-    monkeypatch.setattr("app.queue.tasks.curation.curate_content.kiq", enqueue)
     arg = AcquireSourceTaskInput(id=vb_source.id, name=str(vb_source.name))
     if scenario == "selection_failed":
         with pytest.raises(RuntimeError) as caught:
@@ -578,7 +565,6 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
             "article_created",
             "incomplete_article_created",
         ]
-        enqueue.assert_not_awaited()
     else:
         assert not article_ids and not incomplete_ids and not outbox
         assert len(events) == 1
@@ -605,4 +591,3 @@ async def test_multi_feed_task_preserves_persistence_and_failure_audit(
         else:
             assert row.payload["error_chain"][-1] == "builtins.ValueError"
             assert row.payload["feed_failures"] is None
-        enqueue.assert_not_awaited()

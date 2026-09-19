@@ -1,9 +1,9 @@
 """span に失敗分類属性を焼く共有 helper。
 
-``pipeline_stage`` / ``article_stage`` の両 span helper が、貫通例外の backstop と
-握り潰し失敗の明示記録の双方で同一語彙 (``pipeline_events`` と同じ failure_kind /
-code / retryability) を span に複写するために使う。失敗分類は ``project_failure``
-に一元化し、ここは span への複写だけを担う (分類ロジックは再実装しない)。
+``pipeline_stage`` span helper が、貫通例外の backstop と握り潰し失敗の明示記録の
+双方で同一語彙 (``pipeline_events`` と同じ failure_kind / code / retryability) を
+span に複写するために使う。失敗分類は ``project_failure`` に一元化し、ここは span
+への複写だけを担う (分類ロジックは再実装しない)。
 """
 
 from __future__ import annotations

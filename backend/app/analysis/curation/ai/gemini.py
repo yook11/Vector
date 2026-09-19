@@ -125,8 +125,7 @@ class GeminiCurator(BaseCurator):
 
         parsed = response.parsed
         if not isinstance(parsed, GeminiCurationResponse):
-            # provider は応答したが Stage 3 schema として消化不可 (Layer 2-B、
-            # CurationRecoverableError 派生、taskiq retry → cron 救済)
+            # provider は応答したが Stage 3 schema として消化不可 (Layer 2-B)。
             # Phase 4: 旧 message 引数廃止。詳細は repository/logger 側で別経路で残す。
             raise CurationResponseInvalidError()
         result = parse_curation(parsed)

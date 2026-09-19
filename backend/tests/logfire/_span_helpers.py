@@ -1,8 +1,8 @@
 """capfire から stage span を取り出す共有 helper。
 
-``article_stage`` (AI 3 工程) と ``pipeline_stage`` (非 AI worker 工程) の両方を
-span 名で取り分ける。各テストは期待値を仕様から直書きする。本 helper は span の
-抽出だけを担い、属性の期待値は持たない (再実装による tautology を避ける)。
+``pipeline_stage`` (非 AI worker 工程) を span 名で取り出す。各テストは期待値を
+仕様から直書きする。本 helper は span の抽出だけを担い、属性の期待値は持たない
+(再実装による tautology を避ける)。
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from typing import Any
 
 from logfire.testing import CaptureLogfire
 
-_ARTICLE_STAGE_SPAN_NAME = "article_stage"
 _PIPELINE_STAGE_SPAN_NAME = "pipeline_stage"
 
 # logfire が全 span に自動付与する framework attribute の prefix。
@@ -32,21 +31,6 @@ def one_span_named(capfire: CaptureLogfire, name: str) -> dict[str, Any]:
     spans = spans_named(capfire, name)
     assert len(spans) == 1, f"expected exactly 1 {name} span, got {len(spans)}"
     return spans[0]
-
-
-def article_stage_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
-    """exporter に出た ``article_stage`` span を出現順に返す。"""
-    return spans_named(capfire, _ARTICLE_STAGE_SPAN_NAME)
-
-
-def one_article_stage_span(capfire: CaptureLogfire) -> dict[str, Any]:
-    """``article_stage`` span がちょうど 1 件あることを確認して返す。"""
-    return one_span_named(capfire, _ARTICLE_STAGE_SPAN_NAME)
-
-
-def stage_attrs(capfire: CaptureLogfire) -> dict[str, Any]:
-    """ちょうど 1 件の ``article_stage`` span の attributes を返す。"""
-    return one_article_stage_span(capfire)["attributes"]
 
 
 def pipeline_stage_attrs(capfire: CaptureLogfire) -> dict[str, Any]:

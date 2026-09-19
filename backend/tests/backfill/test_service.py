@@ -183,23 +183,10 @@ async def test_run_limit_keeps_oldest_fifty(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("stage", "entry"), CASES)
-async def test_backfill_does_not_use_redis_or_outbox(
-    db_session,
-    session_factory,
-    sample_source,
-    sample_categories,
-    monkeypatch,
-    stage,
-    entry,
+async def test_backfill_does_not_use_outbox(
+    db_session, session_factory, sample_source, sample_categories, stage, entry
 ):
-    """再投入時にRedisの旧制御やOutboxを使用しない。"""
-    from app.queue.helpers import budget, stage_hold
-
-    budget_call = AsyncMock(side_effect=AssertionError("budget must not be used"))
-    hold_call = AsyncMock(side_effect=AssertionError("hold must not be used"))
-    monkeypatch.setattr(budget, "consume_daily_budget", budget_call)
-    monkeypatch.setattr(stage_hold, "is_stage_held", hold_call)
-    monkeypatch.setattr(stage_hold, "set_stage_hold", hold_call)
+    """再投入は送信先へ直接渡し、Outboxへ保存しない。"""
     await seed_target(
         db_session, sample_source, sample_categories[0], stage, NOW - timedelta(days=1)
     )
@@ -207,8 +194,6 @@ async def test_backfill_does_not_use_redis_or_outbox(
     await entry(session_factory, publisher, enabled=True, now=NOW)
     assert len(publisher.envelopes) == 1
     assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
-    budget_call.assert_not_called()
-    hold_call.assert_not_called()
 
 
 @pytest.mark.asyncio

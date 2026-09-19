@@ -331,15 +331,6 @@ services:
     init: true
     command: supervisord -n -c /app/supervisord/fetch.conf
 
-  # --- CurationとmaintenanceのTaskiq workerを同じcontainerで稼働する ---
-  # broker_analysisはCurationのStreamを購読する。
-  # 起動はGEMINI_API_KEY共有で共倒れし、稼働時もfail_fastが片programのFATALで
-  # containerごと落とすため、process境界があってもcontainer単位の障害分離はない。
-  worker-analysis:
-    <<: *worker-base
-    init: true
-    command: supervisord -n -c /app/supervisord/analysis.conf
-
   worker-insights:
     <<: *worker-base
     init: true
@@ -350,7 +341,7 @@ services:
     init: true
     command: supervisord -n -c /app/supervisord/agent.conf
 
-  # --- taskiq scheduler (dispatch + trend discovery + briefing + agent + maintenance を 1 container に同居) ---
+  # --- taskiq scheduler (dispatch + trend discovery + briefing + agent を 1 container に同居) ---
   scheduler:
     <<: *worker-base
     init: true

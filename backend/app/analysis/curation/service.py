@@ -19,7 +19,6 @@ from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
 from app.audit.stages.curation import CurationAuditRepository
-from app.logfire.article_stage import set_curation_stage_result
 from app.models.outbox_event import OutboxEvent
 
 logger = structlog.get_logger(__name__)
@@ -91,7 +90,6 @@ class CurationService:
                             "curate_race_loss_signal",
                             analyzable_article_id=ready.analyzable_article_id,
                         )
-                        set_curation_stage_result("skipped")
                         return CurationCompletion(
                             CurationCompletionKind.ALREADY_CURATED
                         )
@@ -117,7 +115,6 @@ class CurationService:
                         analyzable_article_id=ready.analyzable_article_id,
                         curation_id=curation_id,
                     )
-                    set_curation_stage_result("signal")
                     record_curation_processing_outcome("signal")
                     return CurationCompletion(
                         CurationCompletionKind.SIGNAL, curation_id
@@ -133,7 +130,6 @@ class CurationService:
                             "curate_race_loss_noise",
                             analyzable_article_id=ready.analyzable_article_id,
                         )
-                        set_curation_stage_result("skipped")
                         return CurationCompletion(
                             CurationCompletionKind.ALREADY_CURATED
                         )
@@ -148,7 +144,6 @@ class CurationService:
                         analyzable_article_id=ready.analyzable_article_id,
                         noise_id=noise_id,
                     )
-                    set_curation_stage_result("noise")
                     record_curation_processing_outcome("noise")
                     return CurationCompletion(CurationCompletionKind.NOISE)
 

@@ -32,3 +32,21 @@
 - 1段目: Terraformのfmt・validate・mock test。実環境のplanが、analysisから派生する資源と対象監視の撤去、broker利用者一覧の更新、egress proxyの許可一覧更新に限られることを確認する。
 - 2段目: Ruff、backend unit、integration、Terraformのvalidate・mock test。削除したmodule・symbolの残存参照を検索する。
 - 反映後: サービス一覧、各LambdaのActiveと処理継続、SQS・DLQ、撤去に起因する通知が無いことを確認する。
+
+## 2段目の実施結果
+
+削除したもの。
+
+- 旧Curation taskと専用の失敗処理、stage holdとその語彙、日次投入上限。
+- maintenanceのtask 3本(旧救済・`pipeline_events`の保持期間削除・queue観測)と、analysis／maintenanceのbroker・scheduler・worker起動定義。
+- 記事単位のspan、旧backlog照会、Ready構築の失敗投影、Curationのkiq message。
+- 再curationの保守CLIと、それだけが使っていた失敗分類・Repositoryの更新系。
+- 上記だけを検証していたテスト。現役機能の保証(backfillのメトリクスとspan、backlog件数、Ready判定)は現役経路を直接検証する形へ移した。
+
+維持したものと理由。
+
+- Stream healthの読み取りとoperator用の状態表示: 取得・本文補完はfetchのTaskiq Streamが現役のため、観測対象からCurationだけを外して残す。fetch側の移行で併せて扱う。
+- 監査の語彙(Stage・outcome code・payload型): 保存済みの`pipeline_events`を読み出すため。
+- 処理結果メトリクスの語彙: 系列数の契約と失敗率監視が依存しており、メトリクス整備の範囲とする。
+
+provider障害時に再投入を止める仕組みは新経路に持たない。再配信とDLQに任せる。

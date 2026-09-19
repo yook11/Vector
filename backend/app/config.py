@@ -85,9 +85,8 @@ class Settings(DatabaseSettings, HttpSettings):
     aws_region: str | None = None
 
     # AI
-    # Stage 3 (curation) と Stage 4 (assessment) のアダプター選択は env では
-    # なく composition.py の wiring (_wire_analysis_adapters) で hardcode する。
-    # 切替はコード変更 + worker restart で行うため、ここに provider 名は持たない。
+    # AI アダプターの選択は env ではなく各 composition の wiring で hardcode する。
+    # 切替はコード変更 + 再デプロイで行うため、ここに provider 名は持たない。
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
     deepseek_api_key: SecretStr = SecretStr("")
@@ -140,13 +139,6 @@ class Settings(DatabaseSettings, HttpSettings):
     # token 署名の host に使う cache 名 (replication group id)。署名対象は DNS
     # endpoint ではなく cache 名で、URL からは導出できないため明示的に受ける。
     redis_iam_cache_name: str | None = None
-
-    # back-fill (パイプライン保守)
-    backfill_curations_enabled: bool = True
-
-    # pipeline_events retention。kill switch + batch 上限で purge 負荷を抑える。
-    pipeline_events_retention_enabled: bool = True
-    pipeline_events_retention_max_batches: int = 5
 
     # 可観測性 (Logfire)
     # token 未設定時は Logfire 送信を no-op にする。token は必ず settings 経由で

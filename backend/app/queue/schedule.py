@@ -10,11 +10,8 @@
   -------------------|--------------|--------------|---------------------------------
   * * * * *          | 毎分         | 毎分         | dispatch_html_fetch_jobs
                      |              |              | sweep_expired_leases
-                     |              |              | observe_pipeline_queue_health
   */15 * * * *       | :00,:15,...  | :00,:15,...  | dispatch_high
-  0,30 * * * *       | :00,:30      | :00,:30      | backfill_curations
   * * * * *          | 毎分         | 毎分         | sweep_deadline_exceeded_agent_runs
-  25 * * * *         | :25          | :25          | purge_pipeline_events
   0 * * * *          | :00          | :00          | dispatch_medium
   0 */6 * * *        | 00,06,12,18  | (UTC=JST-9)  | dispatch_low
   5 15 * * *         | 15:05        | 00:05 (毎日) | run_trend_discovery
@@ -35,17 +32,8 @@ from app.collection.sources.fetch_cadence import FetchCadence
 # 1 分間隔 — article_completion stage の DB 駆動 poll / lease sweep
 CRON_HTML_FETCH = "* * * * *"
 
-# 1 分間隔 — pipeline 3 stage (acquisition〜curation) Stream health の継続観測
-CRON_PIPELINE_QUEUE_HEALTH = "* * * * *"
-
-# 30 分間隔 — curation back-fill (Stage 3 救済、:00 / :30 起動)
-CRON_BACKFILL_CURATIONS = "0,30 * * * *"
-
 # 1 分間隔 — agent run の期限切れを確定
 CRON_AGENT_RUN_SWEEP = "* * * * *"
-
-# :25 — pipeline_events retention purge (他 cron と最少 overlap な minute)
-CRON_PIPELINE_EVENTS_PURGE = "25 * * * *"
 
 # JST 毎日 00:05 — rolling 7d Trend Discovery 実行 (UTC 前日 15:05)
 CRON_TREND_DISCOVERY = "5 15 * * *"

@@ -287,7 +287,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
         # 3e. 429 / RESOURCE_EXHAUSTED。構造化 details に per-day violation を
         #     確認できた場合だけ利用枠 exhausted (positive allowlist)。それ以外
         #     (RPM/TPM バースト・details 欠損/不正/未知) は rate limit に倒し、
-        #     誤った 6h hold と A6 誤発火を避ける。
+        #     A6 誤発火を避ける。
         if code == 429 or status == "RESOURCE_EXHAUSTED":
             if _has_per_day_quota_violation(exc):
                 return AIProviderUsageLimitExhaustedError(

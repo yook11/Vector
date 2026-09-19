@@ -23,7 +23,6 @@ from app.analysis.curation.service import (
     CurationCompletionKind,
     CurationService,
 )
-from app.logfire.article_stage import curation_stage_span
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
@@ -31,7 +30,6 @@ from app.models.news_source import NewsSource
 from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
-from tests.logfire._span_helpers import stage_attrs
 from tests.outbox import RejectOutboxInsert
 
 _PROCESSING_OUTCOME_METRIC = "vector.curation.processing_outcome"
@@ -186,64 +184,6 @@ async def test_response_invalid_error_passes_through_without_service_audit(
     # Service は audit を焼かない (失敗経路は task 層末尾の inline audit 責務、PR4)
     events = await _fetch_curation_events(db_session, article.id)
     assert len(events) == 0
-
-
-@pytest.mark.asyncio
-async def test_signal_sets_stage_result_signal(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    capfire: CaptureLogfire,
-) -> None:
-    """signal 保存成功で active span に result=signal が焼かれる。"""
-    article = await _make_article(db_session, sample_source)
-    ready = await _ready(article)
-    svc = CurationService(session_factory)
-
-    with curation_stage_span(article_id=article.id):
-        await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
-
-    assert stage_attrs(capfire)["result"] == "signal"
-
-
-@pytest.mark.asyncio
-async def test_noise_sets_stage_result_noise(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    capfire: CaptureLogfire,
-) -> None:
-    """noise 保存成功で active span に result=noise が焼かれる。"""
-    article = await _make_article(db_session, sample_source)
-    ready = await _ready(article)
-    svc = CurationService(session_factory)
-
-    with curation_stage_span(article_id=article.id):
-        await svc.execute(ready, _curator(return_envelope=_noise_envelope()))
-
-    assert stage_attrs(capfire)["result"] == "noise"
-
-
-@pytest.mark.asyncio
-async def test_signal_race_loss_sets_stage_result_skipped(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    capfire: CaptureLogfire,
-) -> None:
-    """signal の楽観ロック敗北 (save_signal=None) で result=skipped が焼かれる。"""
-    article = await _make_article(db_session, sample_source)
-    ready = await _ready(article)
-    svc = CurationService(session_factory)
-
-    with curation_stage_span(article_id=article.id):
-        with patch(
-            "app.analysis.curation.repository.CurationRepository.save_signal",
-            new=AsyncMock(return_value=None),
-        ):
-            await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
-
-    assert stage_attrs(capfire)["result"] == "skipped"
 
 
 # processing_outcome emit — commit 後に signal/noise、race loss は emit しない
@@ -506,91 +446,3 @@ async def test_persistence_failures_propagate_and_roll_back_all_results(
             for model in (ArticleCuration, CurationNoise, PipelineEvent, OutboxEvent)
         }
     assert remaining == {name: [] for name in remaining}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "content, reason_suffix, expected_length",
-    [
-        pytest.param("", "input_invalid", None, id="empty-content"),
-        pytest.param("秘" * 200_001, "content_too_large", 200_001, id="too-large"),
-    ],
-)
-async def test_task_ready_rejection_keeps_article_without_ai_or_followup(
-    db_session, session_factory, sample_source, content, reason_suffix, expected_length
-):
-    """DB事実からの入力拒否は安全な拒否監査だけを残し、記事と後続経路を保つ。"""
-    from types import SimpleNamespace
-
-    from app.queue.messages.curation import CurationTrigger
-    from app.queue.tasks.curation import curate_content
-
-    article = await _make_article(db_session, sample_source)
-    article.original_content = content
-    await db_session.commit()
-    curator = _curator()
-    ctx = SimpleNamespace(
-        state=SimpleNamespace(session_factory=session_factory, curator=curator)
-    )
-
-    await curate_content(CurationTrigger(analyzable_article_id=article.id), ctx)
-    curator.curate.assert_not_awaited()
-    async with session_factory() as reader:
-        assert await reader.get(AnalyzableArticleRecord, article.id) is not None
-        (audit,) = await _fetch_curation_events(reader, article.id)
-        assert audit.event_type == "rejected"
-        assert audit.outcome_code == "curation_ready_build_blocked_" + reason_suffix
-        assert audit.source_id == sample_source.id
-        assert audit.payload["input_content_length"] == expected_length
-        assert audit.payload["max_content_length"] == (
-            200_000 if expected_length else None
-        )
-        assert all(
-            audit.payload.get(key) is None
-            for key in ("input_content_head", "error_message", "error_chain")
-        )
-        assert "秘" not in repr(audit.payload)
-        for model in (ArticleCuration, CurationNoise, OutboxEvent):
-            assert (await reader.scalars(select(model))).all() == []
-
-
-@pytest.mark.asyncio
-async def test_task_provider_failure_preserves_service_cause_through_real_audit(
-    db_session, session_factory, sample_source
-):
-    """実Serviceのプロバイダー障害を旧Taskiq分類へ接続し、監査まで原因を保持する。"""
-    from types import SimpleNamespace
-
-    from app.ai_providers.errors import AIProviderNetworkError
-    from app.analysis.curation.errors import CurationError
-    from app.analysis.curation.task_errors import CurationRecoverableError
-    from app.queue.messages.curation import CurationTrigger
-    from app.queue.tasks.curation import curate_content
-
-    article = await _make_article(db_session, sample_source)
-    provider = AIProviderNetworkError()
-    ctx = SimpleNamespace(
-        state=SimpleNamespace(
-            session_factory=session_factory, curator=_curator(side_effect=provider)
-        ),
-        message=SimpleNamespace(labels={"_retries": 0, "max_retries": 2}),
-    )
-    with pytest.raises(CurationRecoverableError) as raised:
-        await curate_content(CurationTrigger(analyzable_article_id=article.id), ctx)
-    business = raised.value.__cause__
-    assert isinstance(business, CurationError)
-    assert business.__cause__ is provider
-    assert raised.value.provider_error is business.provider_error is provider
-    async with session_factory() as reader:
-        (audit,) = await _fetch_curation_events(reader, article.id)
-        assert audit.outcome_code == provider.CODE
-        assert audit.event_type == "failed"
-        chain = repr(audit.payload["error_chain"])
-        assert all(
-            name in chain
-            for name in (
-                "CurationRecoverableError",
-                "CurationError",
-                "AIProviderNetworkError",
-            )
-        )

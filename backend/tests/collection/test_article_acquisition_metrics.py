@@ -91,7 +91,7 @@ class _StubSource(BaseArticleSource):
 
 
 # ---------------------------------------------------------------------------
-# capfire helpers (test_curation_hold_metrics.py と同パターン)
+# capfire helpers
 # ---------------------------------------------------------------------------
 
 
@@ -383,10 +383,7 @@ async def test_run_succeeded_emits_succeeded_sum1(
     monkeypatch: pytest.MonkeyPatch,
     capfire: CaptureLogfire,
 ) -> None:
-    """execute が [] を返す stub → run{result=succeeded} sum==1、failed は不在 or 0。
-
-    空リストなら downstream curate_content.kiq は呼ばれないので broker 不要。
-    """
+    """execute が [] を返す stub → run{result=succeeded} sum==1、failed は不在 or 0。"""
     monkeypatch.setattr(
         "app.collection.article_acquisition.service.ArticleAcquisitionService",
         _SucceedingService,

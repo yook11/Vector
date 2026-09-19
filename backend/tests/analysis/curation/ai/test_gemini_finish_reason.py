@@ -3,12 +3,11 @@
 検証する性質:
 - finish_reason が SAFETY/RECITATION/BLOCKLIST/PROHIBITED_CONTENT/SPII の
   いずれかなら ``AIProviderOutputBlockedError`` (Layer 2-A) を raise する
-  (Stage 3 boundary で ``CurationTerminalDropError`` に詰め替えられる)
 - ``finish_reason=STOP`` (通常終了) で ``parsed`` が CurationResult なら
   ``CurationCall`` を返す
 - ``finish_reason=MAX_TOKENS`` のように policy block 系 **以外** で
   ``parsed`` が CurationResult でない場合は ``CurationResponseInvalidError``
-  (Layer 2-B、``CurationRecoverableError`` 派生)
+  (Layer 2-B)
 """
 
 from __future__ import annotations

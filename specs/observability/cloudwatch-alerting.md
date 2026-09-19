@@ -204,7 +204,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 
 ## 4. コスト概算
 
-- 本カタログのカスタムメトリクスは27系列(dispatch_run 3 + age 3 + observation_up 3 + processing_outcome 14 + ai_provider_exhausted 4)。
+- 本カタログのカスタムメトリクスは21系列(dispatch_run 3 + processing_outcome 14 + ai_provider_exhausted 4)。age 3・observation_up 3 は queue 観測の撤去(2026-09)で emit を停止した。
 - 本カタログのalarmは8本(A1×1, A4×4, A6×1, A7×1, A8×1)。A2×3・A3×1 は 2026-09 に廃止。
 - SQS／Lambda固有の監視は各工程の定義を参照する。費用は実際の利用量と料金で確認する。Logfireのtraceは維持する。
 

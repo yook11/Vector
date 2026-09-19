@@ -3,6 +3,8 @@
 > 更新: 2026-09-17
 >
 > ステータス: Taskiq Assessment撤去後の構成。Fly固有の容量・ACL説明はFly構成を対象とし、AWSの権限は `infra/aws/valkey.tf` を正本とする。
+>
+> 2026-09: CurationのTaskiq経路とmaintenance(queue観測・救済・保持期間削除)は撤去した。本書の該当記述は撤去前の構成を示す。
 
 ## 決定
 

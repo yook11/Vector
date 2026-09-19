@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,15 +69,6 @@ class CurationRepository:
     # signal path
     # ------------------------------------------------------------------
 
-    async def signal_exists_for_article(self, analyzable_article_id: int) -> bool:
-        """signal curation が既に存在するかを返す。"""
-        stmt = (
-            select(ArticleCuration.id)
-            .where(ArticleCuration.analyzable_article_id == analyzable_article_id)
-            .limit(1)
-        )
-        return (await self._session.execute(stmt)).first() is not None
-
     async def save_signal(
         self,
         call: CurationCall[Signal],
@@ -97,55 +88,6 @@ class CurationRepository:
             .returning(ArticleCuration.id)
         )
         return (await self._session.execute(stmt)).scalar()
-
-    async def update_signal_idempotent(
-        self,
-        call: CurationCall[Signal],
-        *,
-        analyzable_article_id: int,
-    ) -> int:
-        """既存の Extraction を新しい ``CurationCall[Signal]`` で上書きする (CLI 用)。
-
-        ``CurationCall[Signal]`` のみ受け付ける型 narrow により、Noise を
-        signal table に上書きする経路を構造的に排除する
-        (``feedback_structural_guarantee``)。
-
-        Phase 1B α-1 の re-curation CLI 専用。再現性を持たせるため:
-
-        - 親 ``ArticleCuration`` は **UPDATE のみ** (DELETE しない)。これにより
-          ``analyzed_articles`` / ``out_of_scope_articles`` /
-          ``article_embeddings`` / ``watchlist_entries`` への CASCADE 連鎖を
-          構造的に回避する
-          (parent DELETE するとユーザの watchlist が消失するため)。
-        - ``extracted_at`` は ``func.now()`` で再採番する (再抽出した時刻として
-          扱い、後段の運用で「いつ抽出された」を取り違えない)。
-
-        対象 analyzable_article_id に対する curation が存在しない前提 (CLI 側で事前に
-        ``signal_exists_for_article`` で絞り込む)。存在しない場合は
-        ``NoResultFound``。
-
-        Returns:
-            更新された ``article_curations.id`` (parent UPDATE のみで id は不変)
-        """
-        signal = call.result
-        update_stmt = (
-            update(ArticleCuration)
-            .where(ArticleCuration.analyzable_article_id == analyzable_article_id)
-            .values(
-                translated_title=signal.title_ja,
-                summary=signal.summary_ja,
-                extracted_at=func.now(),
-            )
-            .returning(ArticleCuration.id)
-        )
-        curation_id = (await self._session.execute(update_stmt)).scalar_one()
-        await self._session.flush()
-
-        return curation_id
-
-    # ------------------------------------------------------------------
-    # noise path
-    # ------------------------------------------------------------------
 
     async def save_noise(
         self,

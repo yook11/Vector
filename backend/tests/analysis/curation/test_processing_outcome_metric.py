@@ -20,7 +20,6 @@ from app.analysis.curation.metrics import (
     CurationProcessingOutcome,
     record_curation_processing_outcome,
 )
-from app.logfire.article_stage import curation_stage_span
 from tests.logfire._metric_helpers import (
     assert_attribute_contract,
     collected_metrics,
@@ -44,22 +43,6 @@ def test_record_emits_one_count_for_each_result(
     assert sum_counter_for_result(metrics, _METRIC, result) == 1
     for other in (r for r in _ALL_RESULTS if r != result):
         assert sum_counter_for_result(metrics, _METRIC, other) == 0
-
-
-# backstop は span result=failed を焼くが processing_outcome は emit しない
-# (ready-build / DB 失敗を一律 failed に混ぜないための分離。本 metric 設計の動機)
-
-
-def test_backstop_failed_does_not_emit_processing_outcome(
-    capfire: CaptureLogfire,
-) -> None:
-    """result 未設定で例外貫通 → backstop の failed は counter を汚さない。"""
-    with pytest.raises(ValueError, match="boom"):
-        with curation_stage_span(article_id=1):
-            raise ValueError("boom")
-    metrics = collected_metrics(capfire)
-    for result in _ALL_RESULTS:
-        assert sum_counter_for_result(metrics, _METRIC, result) == 0
 
 
 # attribute contract: result key のみ、値は宣言された語彙のみ

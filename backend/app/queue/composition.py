@@ -1,9 +1,8 @@
 """AI adapter wiring (Pure DI composition root)。
 
-Stage 3 (curation) と週次 briefing で
-利用する AI provider 選択を本 module で hardcode する設計 (Pure DI)。切替は env 変更
-ではなくコード変更 + worker restart。Stage ごとに別の抽象を別の具象クラスに紐付ける
-ため、共有 env による誤切替の余地が構造的に生じない。
+週次 briefing で利用する AI provider 選択を本 module で hardcode する設計
+(Pure DI)。切替は env 変更ではなくコード変更 + worker restart。Stage ごとに別の
+抽象を別の具象クラスに紐付けるため、共有 env による誤切替の余地が構造的に生じない。
 
 本 module は配線関数だけを提供する。WORKER_STARTUP への登録と実行順は
 ``lifecycle.py`` の WorkerRuntime が担う。engine 生成や Logfire bootstrap などの
@@ -11,45 +10,19 @@ Stage 3 (curation) と週次 briefing で
 
 具象 adapter (Gemini / DeepSeek SDK) の import は **各関数の本体内に遅延**させる。
 本 module は lifecycle 経由で全プロセスが import するため、top-level で具象を import
-すると AI を実行しない process (scheduler / collect / maintenance / trend_discovery)
+すると AI を実行しない process (scheduler / collect / trend_discovery)
 まで重い SDK (openai + google.genai、実測 ~133MB) を起動時に常駐させてしまう。関数
-本体内 import なら、SDK は当該 compose が実際に走る worker (broker_analysis /
-broker_briefing / broker_agent) でのみロードされる。本契約は
+本体内 import なら、SDK は当該 compose が実際に走る worker (broker_briefing /
+broker_agent) でのみロードされる。本契約は
 ``tests/test_lazy_ai_sdk_import.py`` の import 隔離 oracle で構造的に pin する。
 """
 
 from __future__ import annotations
 
-from contextlib import AsyncExitStack
-
 import structlog
 from taskiq import TaskiqState
 
 logger = structlog.get_logger(__name__)
-
-
-async def _wire_analysis_adapters(state: TaskiqState) -> None:
-    """Curation の AI アダプターを worker 起動時に構築する。"""
-    # 具象 SDK の import を関数本体に遅延 (module docstring 参照)。
-    from app.ai_providers.gemini.client import open_gemini_client
-    from app.ai_providers.gemini.settings import GeminiConnectionSettings
-    from app.analysis.curation.ai.gemini import GeminiCurator
-    from app.config import settings
-
-    async with AsyncExitStack() as resources:
-        gemini_client = await resources.enter_async_context(
-            open_gemini_client(
-                api_key=settings.gemini_api_key,
-                settings=GeminiConnectionSettings(),
-            )
-        )
-        state.curator = GeminiCurator(client=gemini_client)
-        logger.info(
-            "analysis_adapters_wired",
-            curator=type(state.curator).__name__,
-            curator_model=state.curator.model_name,
-        )
-        state.analysis_client_resources = resources.pop_all()
 
 
 async def _wire_briefing_adapter(state: TaskiqState) -> None:

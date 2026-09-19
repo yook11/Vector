@@ -55,7 +55,6 @@ _SERVICE_EXECUTE = (
     "app.collection.article_completion.service.ArticleCompletionService.execute"
 )
 _SERVICE_CLS = "app.queue.tasks.completion.ArticleCompletionService"
-_CURATE_CONTENT_KIQ = "app.queue.tasks.curation.curate_content.kiq"
 
 _METRIC = "vector.completion.processing_outcome"
 _ALL_RESULTS = ("succeeded", "failed", "infra_error")
@@ -114,7 +113,6 @@ async def test_ready_build_skipped_error_logs_and_does_not_call_service(
         _patch_try_advance_from(exc),
         patch("app.queue.tasks.completion.ArticleCompletionAuditRepository") as audit,
         patch(_SERVICE_CLS) as mock_svc_cls,
-        patch(_CURATE_CONTENT_KIQ) as mock_kiq,
         capture_logs() as logs,
     ):
         audit.return_value.append_ready_build_error = AsyncMock()
@@ -127,7 +125,6 @@ async def test_ready_build_skipped_error_logs_and_does_not_call_service(
     audit.return_value.append_ready_build_error.assert_not_awaited()
     assert [e for e in logs if e.get("event") == "scrape_html_body_skipped"]
     mock_svc_cls.assert_not_called()
-    mock_kiq.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -144,7 +141,6 @@ async def test_ready_build_failed_error_audits_and_reraises(
             new=AsyncMock(),
         ) as audit_error,
         patch(_SERVICE_CLS) as mock_svc_cls,
-        patch(_CURATE_CONTENT_KIQ) as mock_kiq,
     ):
         with pytest.raises(SourceNotRegisteredError):
             await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
@@ -155,7 +151,6 @@ async def test_ready_build_failed_error_audits_and_reraises(
         exc=exc,
     )
     mock_svc_cls.assert_not_called()
-    mock_kiq.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -172,7 +167,6 @@ async def test_ready_build_unexpected_exception_audits_and_reraises(
             new=AsyncMock(),
         ) as audit_error,
         patch(_SERVICE_CLS) as mock_svc_cls,
-        patch(_CURATE_CONTENT_KIQ) as mock_kiq,
     ):
         with pytest.raises(RuntimeError):
             await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
@@ -183,18 +177,15 @@ async def test_ready_build_unexpected_exception_audits_and_reraises(
         exc=exc,
     )
     mock_svc_cls.assert_not_called()
-    mock_kiq.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_returns_success_without_enqueuing_curation_when_article_id_returned(
+async def test_returns_success_when_article_id_returned(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """本文補完の成功を返し、旧Curationキューへ直接投入しない。"""
-    curate_content_kiq = AsyncMock()
+    """本文補完の成功を、保存した記事IDとともに返す。"""
     monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=123))
-    monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
 
     with _patch_try_advance_from(_fixed_ready(incomplete_article_id=42)):
         result = await scrape_html_body(
@@ -206,7 +197,6 @@ async def test_returns_success_without_enqueuing_curation_when_article_id_return
         "analyzable_article_id": 123,
         "status": "success",
     }
-    curate_content_kiq.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -214,10 +204,8 @@ async def test_returns_none_when_service_returns_none(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Service が ``None`` を返したら task も ``None`` 返却、chain は発火しない。"""
-    curate_content_kiq = AsyncMock()
+    """Service が ``None`` を返したら task も ``None`` を返す。"""
     monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=None))
-    monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
 
     with _patch_try_advance_from(_fixed_ready(incomplete_article_id=123)):
         result = await scrape_html_body(
@@ -225,7 +213,6 @@ async def test_returns_none_when_service_returns_none(
         )
 
     assert result is None
-    curate_content_kiq.assert_not_awaited()
 
 
 # processing_outcome metric (ready-build 段の emit)
@@ -241,7 +228,6 @@ async def test_ready_build_skipped_does_not_emit_processing_outcome(
     with (
         _patch_try_advance_from(exc),
         patch(_SERVICE_CLS),
-        patch(_CURATE_CONTENT_KIQ),
     ):
         await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
 
@@ -263,7 +249,6 @@ async def test_ready_build_vo_error_emits_failed(
             new=AsyncMock(),
         ),
         patch(_SERVICE_CLS),
-        patch(_CURATE_CONTENT_KIQ),
     ):
         with pytest.raises(SourceNotRegisteredError):
             await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
@@ -287,7 +272,6 @@ async def test_ready_build_db_error_emits_infra_error(
             new=AsyncMock(),
         ),
         patch(_SERVICE_CLS),
-        patch(_CURATE_CONTENT_KIQ),
     ):
         with pytest.raises(DatabaseUnexpectedError):
             await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
@@ -319,7 +303,6 @@ class TestScrapeHtmlBodyStageSpan:
                 _SERVICE_CLS,
                 return_value=MagicMock(execute=AsyncMock(return_value=None)),
             ),
-            patch(_CURATE_CONTENT_KIQ, new=AsyncMock()),
         ):
             await scrape_html_body(
                 incomplete_article_id=target_article_id,

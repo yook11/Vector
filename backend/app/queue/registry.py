@@ -13,8 +13,5 @@ from __future__ import annotations
 # ため、本 module を import するだけで cron 登録が完了する。
 import app.queue.tasks.acquisition  # noqa: F401  (dispatch_high/medium/low)
 import app.queue.tasks.agent_run  # noqa: F401  (sweep_deadline_exceeded_agent_runs)
-import app.queue.tasks.backfill  # noqa: F401  (backfill_curations)
 import app.queue.tasks.briefing  # noqa: F401  (dispatch_weekly_briefings)
 import app.queue.tasks.completion  # noqa: F401  (dispatch_html_fetch_jobs, sweep_expired_leases)
-import app.queue.tasks.queue_health  # noqa: F401  (observe_pipeline_queue_health)
-import app.queue.tasks.retention  # noqa: F401  (purge_pipeline_events)

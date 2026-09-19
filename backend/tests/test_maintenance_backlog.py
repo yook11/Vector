@@ -20,7 +20,6 @@ from app.models.category import Category
 from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
-from app.queue.helpers.backlog import PipelineBacklog
 
 
 async def _make_article(
@@ -92,171 +91,7 @@ async def _make_analyzed_article(
     return assessment
 
 
-# analyzable_article_ids_pending_curation
-
-
-@pytest.mark.asyncio
-async def test_pending_curation_returns_articles_without_curation(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-) -> None:
-    """curation 子が無い AnalyzableArticleRecord が境界内なら返る。"""
-    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
-    article = await _make_article(
-        db_session,
-        sample_source,
-        url="https://e.com/a",
-        created_at=now - timedelta(hours=1),
-    )
-
-    backlog = PipelineBacklog(db_session)
-    ids = await backlog.analyzable_article_ids_pending_curation(
-        created_before=now - timedelta(minutes=30),
-        created_after=now - timedelta(days=7),
-        limit=10,
-    )
-    assert article.id in ids
-
-
-@pytest.mark.asyncio
-async def test_pending_curation_targets_include_audit_snapshot(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-) -> None:
-    """curation backfill target は analyzable_article_id / source_name を含む。"""
-    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
-    article = await _make_article(
-        db_session,
-        sample_source,
-        url="https://e.com/curation-target",
-        created_at=now - timedelta(hours=1),
-    )
-
-    backlog = PipelineBacklog(db_session)
-    targets = await backlog.curation_targets_pending(
-        created_before=now - timedelta(minutes=30),
-        created_after=now - timedelta(days=7),
-        limit=10,
-    )
-    assert any(
-        target.target_id == article.id
-        and target.analyzable_article_id == article.id
-        and target.source_name == sample_source.name
-        for target in targets
-    )
-
-
-@pytest.mark.asyncio
-async def test_pending_curation_excludes_too_recent(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-) -> None:
-    """pipeline_grace 内 (新しすぎる) は対象外。"""
-    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
-    article = await _make_article(
-        db_session,
-        sample_source,
-        url="https://e.com/b",
-        created_at=now - timedelta(minutes=5),
-    )
-
-    backlog = PipelineBacklog(db_session)
-    ids = await backlog.analyzable_article_ids_pending_curation(
-        created_before=now - timedelta(minutes=30),
-        created_after=now - timedelta(days=7),
-        limit=10,
-    )
-    assert article.id not in ids
-
-
-@pytest.mark.asyncio
-async def test_pending_curation_excludes_too_old(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-) -> None:
-    """freshness_window 外 (古すぎる) は対象外。"""
-    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
-    article = await _make_article(
-        db_session,
-        sample_source,
-        url="https://e.com/c",
-        created_at=now - timedelta(days=10),
-    )
-
-    backlog = PipelineBacklog(db_session)
-    ids = await backlog.analyzable_article_ids_pending_curation(
-        created_before=now - timedelta(minutes=30),
-        created_after=now - timedelta(days=7),
-        limit=10,
-    )
-    assert article.id not in ids
-
-
-@pytest.mark.asyncio
-async def test_pending_curation_excludes_articles_with_curation(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-) -> None:
-    """curation 子がある AnalyzableArticleRecord は対象外。"""
-    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
-    article = await _make_article(
-        db_session,
-        sample_source,
-        url="https://e.com/d",
-        created_at=now - timedelta(hours=1),
-    )
-    db_session.add(
-        ArticleCuration(
-            analyzable_article_id=article.id,
-            translated_title="tt",
-            summary="ss",
-        )
-    )
-    await db_session.commit()
-
-    backlog = PipelineBacklog(db_session)
-    ids = await backlog.analyzable_article_ids_pending_curation(
-        created_before=now - timedelta(minutes=30),
-        created_after=now - timedelta(days=7),
-        limit=10,
-    )
-    assert article.id not in ids
-
-
-@pytest.mark.asyncio
-async def test_pending_curation_excludes_noise_articles(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-) -> None:
-    """noise 判定済みの article record は再投入対象に入らない。
-
-    signal/noise は排他なので noise 行が在れば curation は完了している。
-    旧クエリは ArticleCuration だけ見て noise を child-NULL 扱いしていた
-    (latent bug = 無駄な再投入 / 年齢削除ではデータ欠損)。
-    """
-    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
-    article = await _make_article(
-        db_session,
-        sample_source,
-        url="https://e.com/noise",
-        created_at=now - timedelta(hours=1),
-    )
-    db_session.add(
-        CurationNoise(
-            analyzable_article_id=article.id,
-            translated_title="ノイズタイトル",
-            summary="ノイズ要約",
-        )
-    )
-    await db_session.commit()
-
-    backlog = PipelineBacklog(db_session)
-    ids = await backlog.analyzable_article_ids_pending_curation(
-        created_before=now - timedelta(minutes=30),
-        created_after=now - timedelta(days=7),
-        limit=10,
-    )
-    assert article.id not in ids
+# count_articles_pending_curation
 
 
 @pytest.mark.asyncio
@@ -297,20 +132,20 @@ async def test_count_pending_curation_returns_true_count_without_limit(
     )
     await db_session.commit()
 
-    backlog = PipelineBacklog(db_session)
+    backlog = BackfillRepository(db_session)
     count = await backlog.count_articles_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
     )
-    ids = await backlog.analyzable_article_ids_pending_curation(
+    targets = await backlog.curation_events_pending(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=2,
     )
     pending_ids = {article.id for article in pending}
-    assert count == 3
-    assert len(ids) == 2
-    assert set(ids).issubset(pending_ids)
+    assert count == len(pending)
+    assert len(targets) == 2
+    assert {item.target.target_id for item in targets}.issubset(pending_ids)
 
 
 # analyzable_article_ids_aged_out_curation (年齢削除対象 = 窓外の child-NULL)
