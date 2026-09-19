@@ -234,7 +234,8 @@ resource "aws_scheduler_schedule" "source_dispatch" {
   target {
     arn      = aws_lambda_function.source_dispatch[0].arn
     role_arn = aws_iam_role.source_dispatch_scheduler.arn
-    input    = jsonencode({ cadence = each.key, scheduled_at = "<aws.scheduler.scheduled-time>" })
+    # jsonencodeは`<` `>`を\u003c \u003eへ退避しSchedulerのキーワード置換に一致しないため、文字列で組み立てる。
+    input = "{\"cadence\":\"${each.key}\",\"scheduled_at\":\"<aws.scheduler.scheduled-time>\"}"
     retry_policy {
       maximum_retry_attempts       = 2
       maximum_event_age_in_seconds = 600
