@@ -54,7 +54,7 @@ API契約の正本はFastAPIのPydantic schema、DB変更の正本はAlembic mig
 | `collection/` | 記事取得・補完 |
 | `insights/` | briefingなどの集約結果 |
 | `news/` | ニュース表示契約 |
-| `observability/` | Logfireと処理結果メトリクス |
+| `observability/` | アプリケーションログ、CloudWatch、Logfireと処理結果メトリクス |
 | `pipeline/` | pipeline横断の型・命名・永続化契約 |
 | `platform/` | 複数bounded contextに関係する基盤変更 |
 
@@ -92,6 +92,9 @@ API契約の正本はFastAPIのPydantic schema、DB変更の正本はAlembic mig
 | Insights | [Briefing schema naming](./insights/briefing-schema-naming.md) | Implemented |
 | News | [Article card key points](./news/article-card-key-points.md) | Implemented |
 | News | [CategoryBrief rename](./news/category-brief-rename.md) | Accepted |
+| Observability | [アプリケーションログの概念別ポリシーとCloudWatch集約](./observability/application-logging-policy.md) | Accepted |
+| Observability | [AI分析のログポリシー](./observability/ai-analysis-logging-policy.md) | Accepted |
+| Observability | [アプリケーションログの共通基底ポリシー](./observability/logging-base-policy.md) | Partially implemented |
 | Observability | [Assessment outcome metrics](./observability/logfire-assessment-outcome-metrics.md) | Implemented |
 | Observability | [Completion outcome metrics](./observability/logfire-completion-outcome-metrics.md) | Implemented |
 | Observability | [Curation outcome metrics](./observability/logfire-curation-outcome-metrics.md) | Implemented |
