@@ -4,14 +4,8 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 
 - ``append_signal`` / ``append_noise`` で
   ``outcome_code`` と成功 payload が記録される
-- ``append_drop_article`` で
-  Stage 3 marker の ``code`` 由来の ``outcome_code`` と failure attrs が記録
-- ``append_failure`` で **Stage 3 marker 型による dispatch** が動作:
-  - ``CurationTerminalDropError`` → ``retryability=non_retryable`` / ``drop_article``
-  - ``CurationTerminalKeepError`` → ``retryability=non_retryable``
-  - ``CurationRecoverableError`` → ``retryability=retryable``
-  - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
-    ``outcome_code=unexpected_error``
+- ``append_ready_build_rejected`` で拒否理由と安全な記事情報が記録される
+- ``append_backfill_curation_aged_out`` で削除に耐える記事識別子が記録される
 - repository は ``commit`` を呼ばない (caller の tx 境界保持)
 """
 
@@ -25,22 +19,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import select
-from sqlalchemy.exc import (
-    IntegrityError,
-    InvalidRequestError,
-    OperationalError,
-    ProgrammingError,
-)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-)
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
@@ -51,8 +32,6 @@ from app.analysis.curation.domain.ready import (
     CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
-from app.analysis.curation.errors import CurationResponseInvalidError, to_curation_error
-from app.analysis.curation.task_errors import to_curation_task_error
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.audit.stages.curation import CurationAuditRepository
 from app.collection.persistence.analyzable_article_repository import (
@@ -250,30 +229,6 @@ async def test_append_ready_build_rejected_records_content_too_large(
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_failed_records_unknown_failure(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """Ready build failed は failed / unknown retryability で trigger id を残す。"""
-    exc = RuntimeError("ready build exploded")
-    async with session_factory() as session:
-        await CurationAuditRepository(session).append_ready_build_failed(
-            target_article_id=123,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_by_outcome(
-        db_session, "curation_ready_build_failed_unexpected_error"
-    )
-    assert ev.event_type == "failed"
-    assert ev.retryability == "unknown"
-    assert ev.error_class == "builtins.RuntimeError"
-    assert ev.payload["failure_kind"] == "unexpected_error"
-    assert ev.payload["target_article_id"] == 123
-
-
-@pytest.mark.asyncio
 async def test_append_signal_records_success_with_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -401,63 +356,6 @@ async def test_append_noise_records_curated_noise(
 
 
 @pytest.mark.asyncio
-async def test_append_drop_article_records_failure_with_drop_category(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """drop 経路で failure attrs と outcome_code=exc.code が記録。
-
-    本番の failure_handling は AIProviderError を ACL で Stage 3 marker に
-    詰め替えてから本 method を呼ぶため、テストも同じ流れを再現する。
-    """
-    article = await _make_article(db_session, sample_source)
-    article_id = article.id
-    raw_exc = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
-    try:
-        raise to_curation_task_error(to_curation_error(raw_exc)) from raw_exc
-    except Exception as wrapped:  # noqa: BLE001
-        exc = wrapped
-    curator = _curator_mock()
-
-    async with session_factory() as session:
-        await CurationAuditRepository(session).append_drop_article(
-            ready=_ready(article),
-            code=exc.code,
-            exc=exc,
-            curator=curator,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article_id)
-    expected_input = _expected_input_fields(article.original_content)
-    assert ev.event_type == "failed"
-    assert ev.outcome_code == "ai_error_output_blocked"
-    assert ev.retryability == "non_retryable"
-    assert ev.error_class is not None
-    assert ev.error_class.endswith(".CurationTerminalDropError")
-    assert ev.payload["failure_kind"] == "target_rejected"
-    assert ev.payload["failure_action"] == "drop_article"
-    # 原因詳細は provider reason 値 (SAFETY) がそのまま焼かれる。
-    assert ev.payload["failure_reason"] == GeminiContentRejectionReason.SAFETY.value
-    assert ev.payload["error_message"] is not None
-    assert ev.payload["error_chain"]
-    # __cause__ chain に元 provider error も保持される
-    assert ev.payload["error_chain"][0].endswith(".CurationTerminalDropError")
-    assert any(
-        s.endswith(".AIProviderOutputBlockedError") for s in ev.payload["error_chain"]
-    )
-    # repository が ready.original_content から input snapshot を計算する。
-    assert ev.payload["input_content_length"] == expected_input["input_content_length"]
-    assert ev.payload["input_content_head"] == expected_input["input_content_head"]
-    assert ev.payload["input_content_hash"] == expected_input["input_content_hash"]
-    # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
-    # (Gemini ClassVar hardcode を消した)
-    assert ev.payload["ai_model"] == "test-extract-model"
-    assert ev.payload["prompt_version"] == "test-extract-prompt-v1"
-
-
-@pytest.mark.asyncio
 async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -523,157 +421,6 @@ async def test_append_backfill_curation_aged_out_keeps_article_identity_after_de
     assert ev.source_id == sample_source.id
     # 記事識別子は削除に耐える payload snapshot で残る
     assert ev.payload["target_article_id"] == article_id
-
-
-def _wrap(raw: BaseException) -> BaseException:
-    """ACL で詰め替え + ``__cause__`` を保持する helper。"""
-    try:
-        raise to_curation_task_error(to_curation_error(raw)) from raw  # type: ignore[arg-type]
-    except BaseException as wrapped:  # noqa: BLE001
-        return wrapped
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    (
-        "exc_factory",
-        "expected_outcome_code",
-        "expected_retryability",
-        "expected_failure_kind",
-        "expected_failure_action",
-        "expected_failure_reason",
-    ),
-    [
-        (
-            lambda: _wrap(
-                AIProviderInputRejectedError(
-                    reason=GeminiContentRejectionReason.INPUT_BLOCKED
-                )
-            ),
-            "ai_error_input_rejected",
-            "non_retryable",
-            "target_rejected",
-            "drop_article",
-            GeminiContentRejectionReason.INPUT_BLOCKED.value,
-        ),
-        (
-            lambda: _wrap(AIProviderConfigurationError()),
-            "ai_error_configuration",
-            "non_retryable",
-            "operator_action_required",
-            None,
-            None,
-        ),
-        (
-            lambda: _wrap(AIProviderNetworkError()),
-            "ai_error_network",
-            "retryable",
-            "attempt_scoped",
-            None,
-            None,
-        ),
-        (
-            lambda: to_curation_task_error(CurationResponseInvalidError()),
-            "extraction_response_invalid",
-            "retryable",
-            "ai_response_invalid",
-            None,
-            None,
-        ),
-        (
-            lambda: RuntimeError("surprise"),
-            "unexpected_error",
-            "unknown",
-            "unknown",
-            None,
-            None,
-        ),
-        # 外部 DB 例外は classify_db_error adapter で意味ラベルに分類される
-        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。
-        (
-            lambda: OperationalError("SELECT 1", {}, Exception("conn reset")),
-            "db_runtime_error",
-            "retryable",
-            "db_runtime",
-            None,
-            None,
-        ),
-        (
-            lambda: IntegrityError("INSERT", {}, Exception("unique violation")),
-            "db_constraint_error",
-            "non_retryable",
-            "db_constraint",
-            None,
-            None,
-        ),
-        (
-            lambda: ProgrammingError("SELECT bad", {}, Exception("no such column")),
-            "db_query_or_schema_error",
-            "non_retryable",
-            "db_query_or_schema",
-            None,
-            None,
-        ),
-        (
-            lambda: InvalidRequestError("detached instance"),
-            "db_unknown_error",
-            "unknown",
-            "db_unknown",
-            None,
-            None,
-        ),
-    ],
-)
-async def test_append_failure_dispatches_failure_projection_from_exc(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    exc_factory: object,
-    expected_outcome_code: str,
-    expected_retryability: str,
-    expected_failure_kind: str,
-    expected_failure_action: str | None,
-    expected_failure_reason: str | None,
-) -> None:
-    """append_failure は exc 型から failure projection を自動導出する。"""
-    article = await _make_article(db_session, sample_source)
-    exc = exc_factory()  # type: ignore[operator]
-    curator = _curator_mock()
-
-    async with session_factory() as session:
-        repo = CurationAuditRepository(session)
-        if isinstance(exc, RuntimeError):
-            await repo.append_unexpected_failure(
-                ready=_ready(article),
-                exc=exc,
-                curator=curator,
-            )
-        else:
-            await repo.append_failure(
-                ready=_ready(article),
-                exc=exc,
-                curator=curator,
-            )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    expected_input = _expected_input_fields(article.original_content)
-    assert ev.event_type == "failed"
-    assert ev.outcome_code == expected_outcome_code
-    assert ev.retryability == expected_retryability
-    assert ev.error_class is not None
-    assert ev.error_class.endswith(f".{type(exc).__name__}")
-    assert ev.payload["failure_kind"] == expected_failure_kind
-    assert ev.payload["failure_action"] == expected_failure_action
-    assert ev.payload["failure_reason"] == expected_failure_reason
-    # repository が ready.original_content から input snapshot を計算する。
-    assert ev.payload["input_content_length"] == expected_input["input_content_length"]
-    assert ev.payload["input_content_head"] == expected_input["input_content_head"]
-    assert ev.payload["input_content_hash"] == expected_input["input_content_hash"]
-    # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
-    # (Gemini ClassVar hardcode を消した)
-    assert ev.payload["ai_model"] == "test-extract-model"
-    assert ev.payload["prompt_version"] == "test-extract-prompt-v1"
 
 
 @pytest.mark.asyncio

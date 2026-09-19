@@ -11,7 +11,6 @@ from app.redis.clients import (
     create_api_agent_live_client,
     create_cli_pipeline_control_client,
     create_worker_agent_live_client,
-    create_worker_pipeline_control_client,
     taskiq_stream_connection,
 )
 from app.redis.iam_auth import ElastiCacheIAMProvider
@@ -52,15 +51,6 @@ def test_create_worker_agent_live_client_uses_worker_pool(
     monkeypatch.setattr("app.redis.clients.aioredis.from_url", spy)
     create_worker_agent_live_client(settings)
     assert spy.call_args.kwargs["max_connections"] == 16
-
-
-def test_create_worker_pipeline_control_client_uses_worker_pool(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    spy = MagicMock()
-    monkeypatch.setattr("app.redis.clients.aioredis.from_url", spy)
-    create_worker_pipeline_control_client(settings)
-    assert spy.call_args.kwargs["max_connections"] == 12
 
 
 def test_create_cli_pipeline_control_client_uses_cli_pool(

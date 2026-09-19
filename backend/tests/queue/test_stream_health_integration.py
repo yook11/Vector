@@ -25,10 +25,9 @@ pytestmark = [
     pytest.mark.xdist_group("redis"),
 ]
 
-_FOUR_STAGE_SPECS = (
+_STAGE_SPECS = (
     ("acquisition", "pipeline:acquisition"),
     ("completion", "pipeline:completion"),
-    ("curation", "pipeline:curation"),
 )
 
 
@@ -37,8 +36,8 @@ async def stream_case() -> AsyncIterator[tuple[Redis, StreamHealthTarget]]:
     """各case専用Streamを作り、成否にかかわらず削除する。"""
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     target = StreamHealthTarget(
-        stage="curation",
-        stream=f"test:pipeline:curation:health:{uuid4().hex}",
+        stage="completion",
+        stream=f"test:pipeline:completion:health:{uuid4().hex}",
         group="taskiq",
     )
     try:
@@ -49,7 +48,7 @@ async def stream_case() -> AsyncIterator[tuple[Redis, StreamHealthTarget]]:
 
 
 @pytest.fixture
-async def three_stage_stream_case() -> AsyncIterator[
+async def stage_stream_case() -> AsyncIterator[
     tuple[Redis, tuple[StreamHealthTarget, ...]]
 ]:
     """3 stage固有のStreamを作り、観測後にまとめて削除する。"""
@@ -61,7 +60,7 @@ async def three_stage_stream_case() -> AsyncIterator[
             stream=f"test:{stream}:health-three:{suffix}",
             group="taskiq",
         )
-        for stage, stream in _FOUR_STAGE_SPECS
+        for stage, stream in _STAGE_SPECS
     )
     try:
         yield redis, targets
@@ -83,11 +82,11 @@ def _counts_and_age_presence(
     )
 
 
-async def test_real_redis_observes_three_stage_targets_independently(
-    three_stage_stream_case: tuple[Redis, tuple[StreamHealthTarget, ...]],
+async def test_real_redis_observes_stage_targets_independently(
+    stage_stream_case: tuple[Redis, tuple[StreamHealthTarget, ...]],
 ) -> None:
     """各stageのretained / lagを別Streamの値として観測する。"""
-    redis, targets = three_stage_stream_case
+    redis, targets = stage_stream_case
     for entry_count, target in enumerate(targets, start=1):
         await redis.xgroup_create(
             target.stream,
@@ -106,7 +105,6 @@ async def test_real_redis_observes_three_stage_targets_independently(
     ) == (
         ("acquisition", 1, 1, 0),
         ("completion", 2, 2, 0),
-        ("curation", 3, 3, 0),
     )
 
 
@@ -235,6 +233,6 @@ async def test_real_redis_missing_stream_or_group_is_not_zero_snapshot(
         await read_stream_health(redis, target)
 
     assert (raised.value.stage, raised.value.reason) == (
-        "curation",
+        "completion",
         expected_reason,
     )

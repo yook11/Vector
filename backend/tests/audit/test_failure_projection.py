@@ -21,13 +21,6 @@ from sqlalchemy.exc import (
     OperationalError,
 )
 
-from app.ai_providers.errors import AIProviderOutputBlockedError
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
-from app.analysis.curation.errors import to_curation_error
-from app.analysis.curation.task_errors import (
-    CurationRecoverableError,
-    to_curation_task_error,
-)
 from app.audit.failure_projection import (
     FailureAction,
     FailureProjection,
@@ -70,41 +63,18 @@ def _stmt_error(cls: type[Exception]) -> Exception:
     return cls("SELECT 1", {}, Exception("orig"))
 
 
-def test_project_marker_failure_reads_curation_instance_cause_axis() -> None:
-    """curation も原因軸を instance 値で持つ (mapper 経由で mode 値 + reason 値)。
-
-    retry / DROP 軸は marker classvar (NON_RETRYABLE / DROP_ARTICLE)、原因軸は
-    provider error の ``FAILURE_MODE`` / ``reason`` 由来の instance 値。
-    """
-    raw = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
-    exc = to_curation_task_error(to_curation_error(raw))
-
-    assert project_marker_failure(exc) == FailureProjection(
-        failure_kind="target_rejected",
-        retryability=Retryability.NON_RETRYABLE,
-        failure_action=FailureAction.DROP_ARTICLE,
-        code="ai_error_output_blocked",
-        failure_reason="safety",
-    )
-
-
 def test_project_failure_prefers_marker_projection() -> None:
-    exc = CurationRecoverableError(
-        code="ai_error_network", failure_kind="attempt_scoped"
-    )
-
-    assert project_failure(exc) == FailureProjection(
+    assert project_failure(_StageLessMarkerError()) == FailureProjection(
         failure_kind="attempt_scoped",
         retryability=Retryability.RETRYABLE,
         failure_action=None,
-        code="ai_error_network",
+        code="stage_less_marker",
     )
 
 
 def test_project_marker_failure_classvar_marker_has_no_failure_reason() -> None:
     """classvar 宣言 marker (briefing / completion / acquisition) は failure_reason
-    を持たない (None)。原因軸を instance 値で持つのは assessment /
-    curation のみで、classvar fallback 経路は reason を焼かない。
+    を持たない (None)。classvar fallback 経路は reason を焼かない。
     """
     projection = project_marker_failure(BriefingConfigurationError("missing key"))
 
@@ -132,17 +102,6 @@ def test_project_marker_failure_does_not_require_stage_marker_attribute() -> Non
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
-        (
-            CurationRecoverableError(
-                code="ai_error_network", failure_kind="attempt_scoped"
-            ),
-            FailureProjection(
-                failure_kind="attempt_scoped",
-                retryability=Retryability.RETRYABLE,
-                failure_action=None,
-                code="ai_error_network",
-            ),
-        ),
         (
             BriefingConfigurationError("missing key"),
             FailureProjection(

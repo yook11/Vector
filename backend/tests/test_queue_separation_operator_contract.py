@@ -164,20 +164,6 @@ def test_pipeline_status_does_not_call_retained_entries_queue_depth() -> None:
     assert not _contains_any(target, ("queue depth", "backlog", "キュー深度"))
 
 
-def test_pipeline_status_names_the_full_three_stage_pipeline() -> None:
-    target = _normalized(_make_target("pipeline-status"))
-
-    assert (
-        "analysis stream観測" not in target
-        and "pipeline" in target
-        and "stream" in target
-        and _contains_any(
-            target,
-            ("3-stage", "3 stage", "3段", "三段", "3ステージ", "全3"),
-        )
-    )
-
-
 def test_collect_redis_acl_has_only_required_queue_and_autoclaim_key_surfaces() -> None:
     key_patterns = {
         token for token in _redis_acl_tokens("collect") if token.startswith("~")

@@ -28,11 +28,9 @@ from app.insights.trend_discovery.scheduler import (
 from app.insights.trend_discovery.worker import create_broker as create_trend_broker
 from app.queue.brokers import (
     broker_agent,
-    broker_analysis,
     broker_briefing,
     broker_collection,
     broker_dispatch,
-    broker_maintenance,
 )
 
 # middleware の identity / 順序 unit テスト
@@ -44,21 +42,17 @@ _BROKERS_WITH_SCHEDULER = (
     (_TREND_SCHEDULER_BROKER, "trend_discovery_scheduler"),
     (broker_briefing, "briefing"),
     (broker_agent, "agent"),
-    (broker_maintenance, "maintenance"),
 )
 _BROKERS_WITHOUT_CLIENT_LIFECYCLE = (
     (broker_collection, "collection"),
-    (broker_analysis, "analysis"),
     (_TREND_WORKER_BROKER, "trend_discovery_worker"),
 )
 _WORKER_BROKERS = (
     (broker_dispatch, "dispatch"),
     (broker_collection, "collection"),
-    (broker_analysis, "analysis"),
     (_TREND_WORKER_BROKER, "trend_discovery"),
     (broker_briefing, "briefing"),
     (broker_agent, "agent"),
-    (broker_maintenance, "maintenance"),
 )
 _ALL_BROKERS = _BROKERS_WITH_SCHEDULER + _BROKERS_WITHOUT_CLIENT_LIFECYCLE
 

@@ -131,7 +131,6 @@ def test_provider_classification_preserves_existing_audit_and_notification(
     assert failure.provider_exhaustion is (provider_error if notified else None)
     assert classify_embedding_failure(error) == failure
     assert not hasattr(failure, "reraise")
-    assert not hasattr(failure, "stage_hold_reason")
     assert error.__cause__ is None
     assert capsys.readouterr().out == ""
 

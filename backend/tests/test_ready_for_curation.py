@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
@@ -14,7 +13,6 @@ from app.analysis.curation.domain.ready import (
     CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
-from app.queue.messages.curation import CurationTrigger
 
 
 def _facts(
@@ -34,68 +32,34 @@ def _facts(
     )
 
 
-def _repo_mock(
-    *,
-    facts: CurationReadyBuildFacts | None = None,
-    missing: bool = False,
-) -> AsyncMock:
-    repo = AsyncMock()
-    repo.load_ready_build_facts = AsyncMock(
-        return_value=None if missing else facts or _facts()
-    )
-    return repo
-
-
-class TestTryAdvanceFrom:
-    @pytest.mark.asyncio
-    async def test_builds_ready_from_repository_facts(self) -> None:
+class TestFromFactsDecision:
+    def test_builds_ready_from_facts(self) -> None:
         facts = _facts(analyzable_article_id=42, content="Article body" * 10)
-        repo = _repo_mock(facts=facts)
 
-        ready = await ReadyForCuration.try_advance_from(
-            analyzable_article_id=42, repo=repo
-        )
+        ready = ReadyForCuration.from_facts(facts)
 
         assert ready == ReadyForCuration(
             analyzable_article_id=42,
             original_title=facts.original_title,
             original_content=facts.original_content,
         )
-        repo.load_ready_build_facts.assert_awaited_once_with(42)
 
-    @pytest.mark.asyncio
-    async def test_returns_rejection_when_article_missing(self) -> None:
-        repo = _repo_mock(missing=True)
-
-        rejected = await ReadyForCuration.try_advance_from(
-            analyzable_article_id=99, repo=repo
-        )
+    def test_returns_rejection_when_article_missing(self) -> None:
+        rejected = ReadyForCuration.from_facts(None)
 
         assert rejected.reason is CurationReadyBuildRejectionReason.ARTICLE_MISSING
         # 記事不在 → analyzable_article_id は運べない (audit の source_id も空になる)
         assert rejected.analyzable_article_id is None
-        repo.load_ready_build_facts.assert_awaited_once_with(99)
 
-    @pytest.mark.asyncio
-    async def test_returns_rejection_when_signal_exists(self) -> None:
-        repo = _repo_mock(facts=_facts(has_signal_curation=True))
-
-        rejected = await ReadyForCuration.try_advance_from(
-            analyzable_article_id=42, repo=repo
-        )
+    def test_returns_rejection_when_signal_exists(self) -> None:
+        rejected = ReadyForCuration.from_facts(_facts(has_signal_curation=True))
 
         assert rejected.reason is CurationReadyBuildRejectionReason.ALREADY_CURATED
         # analyzable_article_id が拒否値経由で監査まで運ばれる (source_id 補填の根拠)
         assert rejected.analyzable_article_id == 42
-        repo.load_ready_build_facts.assert_awaited_once_with(42)
 
-    @pytest.mark.asyncio
-    async def test_returns_rejection_when_noise_exists(self) -> None:
-        repo = _repo_mock(facts=_facts(has_noise_curation=True))
-
-        rejected = await ReadyForCuration.try_advance_from(
-            analyzable_article_id=42, repo=repo
-        )
+    def test_returns_rejection_when_noise_exists(self) -> None:
+        rejected = ReadyForCuration.from_facts(_facts(has_noise_curation=True))
 
         assert (
             rejected.reason
@@ -103,16 +67,11 @@ class TestTryAdvanceFrom:
         )
         # analyzable_article_id が拒否値経由で監査まで運ばれる (source_id 補填の根拠)
         assert rejected.analyzable_article_id == 42
-        repo.load_ready_build_facts.assert_awaited_once_with(42)
 
-    @pytest.mark.asyncio
-    async def test_returns_rejection_when_content_too_large(self) -> None:
+    def test_returns_rejection_when_content_too_large(self) -> None:
         oversized = "x" * (ReadyForCuration.MAX_CONTENT_LENGTH + 1)
-        repo = _repo_mock(facts=_facts(content=oversized))
 
-        rejected = await ReadyForCuration.try_advance_from(
-            analyzable_article_id=42, repo=repo
-        )
+        rejected = ReadyForCuration.from_facts(_facts(content=oversized))
 
         assert rejected.reason is CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE
         # analyzable_article_id が拒否値経由で監査まで運ばれる (source_id 補填の根拠)
@@ -159,18 +118,6 @@ class TestReadyForCurationFieldConstraints:
         )
         with pytest.raises(ValidationError):
             ready.analyzable_article_id = 999  # type: ignore[misc]
-
-
-class TestCurationTrigger:
-    def test_carries_article_id_only(self) -> None:
-        trigger = CurationTrigger(analyzable_article_id=42)
-        assert trigger.analyzable_article_id == 42
-
-    def test_rejects_non_positive_article_id(self) -> None:
-        with pytest.raises(ValidationError):
-            CurationTrigger(analyzable_article_id=0)
-        with pytest.raises(ValidationError):
-            CurationTrigger(analyzable_article_id=-1)
 
 
 def test_ready_build_blocked_code_partitions_idempotent_skip_from_durable() -> None:
@@ -246,17 +193,6 @@ def test_processed_state_precedes_input_validation(signal, noise, reason):
         )
     )
     assert result == CurationReadyBuildRejected(reason, analyzable_article_id=42)
-
-
-@pytest.mark.asyncio
-async def test_repository_failure_propagates_unchanged():
-    """DB取得の失敗をReady拒否へ置き換えない。"""
-    original = RuntimeError("repository failure")
-    repo = _repo_mock()
-    repo.load_ready_build_facts.side_effect = original
-    with pytest.raises(RuntimeError) as raised:
-        await ReadyForCuration.try_advance_from(analyzable_article_id=42, repo=repo)
-    assert raised.value is original
 
 
 def test_unexpected_model_failure_propagates_unchanged(monkeypatch):

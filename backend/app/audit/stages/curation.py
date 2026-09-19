@@ -19,25 +19,16 @@ from app.audit.failure_projection import (
     FailureProjection,
     Retryability,
     failure_action_value,
-    project_failure,
-    unknown_failure_projection,
 )
 from app.audit.injection_signal import record_injection_boundary_detected
-from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
-from app.db.errors import DatabaseError
 
 if TYPE_CHECKING:
-    from app.analysis.curation.ai.base import BaseCurator
     from app.analysis.curation.ai.envelope import CurationCall
     from app.analysis.curation.domain import Noise, Signal
     from app.analysis.curation.domain.ready import (
         CurationReadyBuildRejected,
         ReadyForCuration,
-    )
-    from app.analysis.curation.task_errors import (
-        CurationTaskError,
-        CurationTerminalDropError,
     )
 
 logger = structlog.get_logger(__name__)
@@ -119,45 +110,6 @@ class CurationAuditRepository:
                 analyzable_article_id=ready.analyzable_article_id
             )
 
-    # --- DROP 経路 (article DELETE と同一 tx) -----------------------------
-
-    async def append_drop_article(
-        self,
-        *,
-        ready: ReadyForCuration,
-        code: str,
-        exc: CurationTerminalDropError,
-        curator: BaseCurator,
-    ) -> None:
-        """article 削除を伴う curation 失敗を記録する。"""
-        projection = self._projection_of(exc, fallback_code=code)
-        content = _input_content_fields(ready.original_content)
-        payload = CurationPayload(
-            failure_kind=projection.failure_kind,
-            failure_action=failure_action_value(projection),
-            failure_reason=projection.failure_reason,
-            # DROP は記事 DELETE と同一 tx で焼かれ FK article_id が SET NULL に
-            # 落ちるため、削除に耐える記事識別子を payload に控える。
-            target_article_id=ready.analyzable_article_id,
-            **content,
-            ai_model=curator.model_name,
-            prompt_version=curator.prompt_version,
-            error_message=error_message_of(exc),
-            error_chain=extract_error_chain(exc),
-        )
-        await self._append_event(
-            event_type=EventType.FAILED,
-            outcome_code=projection.code,
-            payload=payload,
-            article_id=ready.analyzable_article_id,
-            error_class=exception_fqn(exc),
-            retryability=projection.retryability,
-        )
-        if content["injection_markers_present"]:
-            self._record_injection_detected(
-                analyzable_article_id=ready.analyzable_article_id
-            )
-
     # --- 救済断念経路 (年齢削除と同一 tx) ---------------------------------
 
     async def append_backfill_curation_aged_out(
@@ -176,7 +128,7 @@ class CurationAuditRepository:
             article_id=analyzable_article_id,
         )
 
-    # --- Ready 構築拒否と構築中の障害 ---------------------------------------
+    # --- Ready 構築拒否 -----------------------------------------------------
 
     async def append_ready_build_rejected(
         self, *, target_article_id: int, rejected: CurationReadyBuildRejected
@@ -195,42 +147,7 @@ class CurationAuditRepository:
             article_id=rejected.analyzable_article_id,
         )
 
-    async def append_ready_build_failed(
-        self, *, target_article_id: int, exc: Exception
-    ) -> None:
-        """Ready構築中の障害を、確定した拒否とは区別して記録する。"""
-        projection = project_ready_build_failure(stage_prefix=self.STAGE.value, exc=exc)
-        payload = CurationPayload(
-            failure_kind=projection.failure_kind,
-            target_article_id=target_article_id,
-            error_message=error_message_of(exc),
-            error_chain=extract_error_chain(exc),
-        )
-        await self._append_event(
-            event_type=EventType.FAILED,
-            outcome_code=projection.outcome_code,
-            payload=payload,
-            error_class=exception_fqn(exc),
-            retryability=Retryability.UNKNOWN,
-        )
-
-    # --- 失敗経路 (Task 層 4 marker dispatch) -----------------------------
-
-    async def append_failure(
-        self,
-        *,
-        ready: ReadyForCuration,
-        exc: CurationTaskError | DatabaseError,
-        curator: BaseCurator,
-    ) -> None:
-        """article を削除しない curation 失敗を記録する。"""
-        projection = self._projection_of(exc)
-        await self._append_failed_event(
-            ready=ready,
-            exc=exc,
-            curator=curator,
-            projection=projection,
-        )
+    # --- Consumerが分類した失敗の監査 ------------------------------------
 
     async def append_classified_failure(
         self,
@@ -257,53 +174,6 @@ class CurationAuditRepository:
             error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
-
-    async def append_unexpected_failure(
-        self,
-        *,
-        ready: ReadyForCuration,
-        exc: BaseException,
-        curator: BaseCurator,
-    ) -> None:
-        """想定外の curation 失敗を unknown として記録する。"""
-        await self._append_failed_event(
-            ready=ready,
-            exc=exc,
-            curator=curator,
-            projection=unknown_failure_projection(),
-        )
-
-    async def _append_failed_event(
-        self,
-        *,
-        ready: ReadyForCuration,
-        exc: BaseException,
-        curator: BaseCurator,
-        projection: FailureProjection,
-    ) -> None:
-        content = _input_content_fields(ready.original_content)
-        payload = CurationPayload(
-            failure_kind=projection.failure_kind,
-            failure_action=failure_action_value(projection),
-            failure_reason=projection.failure_reason,
-            **content,
-            ai_model=curator.model_name,
-            prompt_version=curator.prompt_version,
-            error_message=error_message_of(exc),
-            error_chain=extract_error_chain(exc),
-        )
-        await self._append_event(
-            event_type=EventType.FAILED,
-            outcome_code=projection.code,
-            payload=payload,
-            article_id=ready.analyzable_article_id,
-            error_class=exception_fqn(exc),
-            retryability=projection.retryability,
-        )
-        if content["injection_markers_present"]:
-            self._record_injection_detected(
-                analyzable_article_id=ready.analyzable_article_id
-            )
 
     # --- internal helpers -------------------------------------------------
 
@@ -364,13 +234,6 @@ class CurationAuditRepository:
             error_class=error_class,
             retryability=retryability,
         )
-
-    @staticmethod
-    def _projection_of(
-        exc: BaseException, *, fallback_code: str = "unexpected_error"
-    ) -> FailureProjection:
-        """Stage 3 失敗を class attr / adapter から projection する。"""
-        return project_failure(exc, fallback_code=fallback_code)
 
 
 class _InputContentFields(TypedDict):

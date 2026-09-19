@@ -14,10 +14,6 @@ from app.analysis.curation.errors import (
     to_curation_error,
 )
 from app.analysis.curation.service import CurationService
-from app.analysis.curation.task_errors import (
-    CurationRecoverableError,
-    to_curation_task_error,
-)
 
 
 @pytest.mark.parametrize(
@@ -46,7 +42,6 @@ def test_response_invalid_keeps_code_without_legacy_policy():
     )
     assert not hasattr(error, "RETRYABILITY")
     assert not hasattr(error, "FAILURE_ACTION")
-    assert not isinstance(error, CurationRecoverableError)
 
 
 def test_provider_error_string_does_not_expose_provider_message():
@@ -57,26 +52,6 @@ def test_provider_error_string_does_not_expose_provider_message():
     assert error.reason is CurationFailureReason.PROVIDER_ERROR
     assert error.code == provider.CODE
     assert "private" not in str(error)
-
-
-def test_response_invalid_maps_to_existing_task_policy_with_cause():
-    """応答不正は旧経路で再試行分類となり、業務上の原因を保持する。"""
-    original = CurationResponseInvalidError()
-    mapped = to_curation_task_error(original)
-    assert isinstance(mapped, CurationRecoverableError)
-    assert mapped.code == "extraction_response_invalid"
-    assert mapped.failure_kind == "ai_response_invalid"
-    assert mapped.provider_error is None
-    assert mapped.failure_reason is None
-    assert mapped.__cause__ is original
-
-
-@pytest.mark.parametrize(
-    "original", [RuntimeError("unexpected"), asyncio.CancelledError()]
-)
-def test_non_curation_errors_are_not_reclassified(original):
-    """Curation以外の例外は旧経路への変換でも同じインスタンスを保つ。"""
-    assert to_curation_task_error(original) is original
 
 
 @pytest.mark.asyncio

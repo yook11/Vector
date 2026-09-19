@@ -1,6 +1,6 @@
 """broker / scheduler の lifecycle event hook を attach する。
 
-本 module を import するだけで共通catalogのbroker × 6に対する
+本 module を import するだけで共通catalogのbroker × 4に対する
 WORKER_STARTUP / WORKER_SHUTDOWN / CLIENT_STARTUP / CLIENT_SHUTDOWN hook が
 登録される (副作用)。broker ごとの Redis 用途と AI adapter 配線は
 ``WorkerRuntime`` に集約し、単一 startup が順に実行する。AI provider の具象選択
@@ -36,22 +36,16 @@ from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
 from app.queue.brokers import (
     broker_agent,
-    broker_analysis,
     broker_briefing,
     broker_collection,
     broker_dispatch,
-    broker_maintenance,
 )
 from app.queue.composition import (
     _warm_agent_sdk_imports,
-    _wire_analysis_adapters,
     _wire_briefing_adapter,
 )
 from app.queue.deadline_schedule import create_deadline_schedule_source
-from app.redis import (
-    create_worker_agent_live_client,
-    create_worker_pipeline_control_client,
-)
+from app.redis import create_worker_agent_live_client
 
 logger = structlog.get_logger(__name__)
 
@@ -65,7 +59,7 @@ class WorkerRuntime:
 
     label: str
     redis_factory: _RedisFactory | None = None
-    redis_attr: Literal["pipeline_control_redis", "agent_live_redis"] | None = None
+    redis_attr: Literal["agent_live_redis"] | None = None
     compose: _Compose | None = None
 
     def __post_init__(self) -> None:
@@ -101,12 +95,6 @@ async def _aclose_worker_resources(state: TaskiqState) -> None:
         deadline_scheduler = getattr(state, "agent_deadline_scheduler", None)
         if deadline_scheduler is not None:
             stack.push_async_callback(deadline_scheduler.cancel_pending_reservations)
-        analysis_clients = getattr(state, "analysis_client_resources", None)
-        if analysis_clients is not None:
-            stack.push_async_callback(analysis_clients.aclose)
-        control = getattr(state, "pipeline_control_redis", None)
-        if control is not None:
-            stack.push_async_callback(control.aclose)
 
 
 def _register_worker_lifecycle(
@@ -149,14 +137,8 @@ def _register_worker_lifecycle(
                 state.agent_deadline_source
             )
         _attach_worker_redis(state, runtime)
-        try:
-            await _compose(runtime, state)
-            logger.info(f"{label}_worker_startup")
-        except BaseException:
-            analysis_clients = getattr(state, "analysis_client_resources", None)
-            if analysis_clients is not None:
-                await analysis_clients.aclose()
-            raise
+        await _compose(runtime, state)
+        logger.info(f"{label}_worker_startup")
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
     async def on_shutdown(state: TaskiqState) -> None:
@@ -170,17 +152,15 @@ def _register_client_lifecycle(broker: RedisStreamBroker, label: str) -> None:
     ``broker.startup()`` は ``is_worker_process`` 分岐で WORKER_STARTUP /
     CLIENT_STARTUP を発火する (taskiq.abc.broker)。API と scheduler はどちらも
     worker ではないので CLIENT_* が走る。cron 駆動を持つ broker
-    (broker_dispatch / broker_briefing / broker_agent /
-    broker_maintenance) のみに本関数を当てる。collection は API が producer
-    として startup するが cron が無い。analysis は scheduler も
-    API producer も無い。
+    (broker_dispatch / broker_briefing / broker_agent) のみに本関数を当てる。
+    collection は API が producer として startup するが cron が無い。
 
     enqueue 側は DB を触らない (engine / session_factory は WORKER_STARTUP のみ)
     ため、本 hook は startup/shutdown ログだけを担う。
 
-    Logfire bootstrap は本 hook では呼ばない。scheduler は 1 プロセスで 5 broker
+    Logfire bootstrap は本 hook では呼ばない。scheduler は 1 プロセスで 4 broker
     の CLIENT_STARTUP が走るため、hook 内で ``setup_logfire`` を呼ぶと
-    ``logfire.instrument_httpx`` (global patch) が 5 回積み重なり「プロセスごとに
+    ``logfire.instrument_httpx`` (global patch) が 4 回積み重なり「プロセスごとに
     1 度」契約 (test_logfire_setup) を破る。API は lifespan、scheduler は
     entrypoint が process 先頭で 1 度だけ呼ぶ。scheduler 固有の識別は
     ``setup_logfire("vector-scheduler")`` が持つ。enqueue 自体の telemetry は
@@ -199,15 +179,6 @@ def _register_client_lifecycle(broker: RedisStreamBroker, label: str) -> None:
 _register_worker_lifecycle(broker_dispatch, WorkerRuntime("dispatch"))
 _register_worker_lifecycle(broker_collection, WorkerRuntime("collection"))
 _register_worker_lifecycle(
-    broker_analysis,
-    WorkerRuntime(
-        "analysis",
-        redis_factory=create_worker_pipeline_control_client,
-        redis_attr="pipeline_control_redis",
-        compose=_wire_analysis_adapters,
-    ),
-)
-_register_worker_lifecycle(
     broker_briefing,
     WorkerRuntime("briefing", compose=_wire_briefing_adapter),
 )
@@ -220,21 +191,12 @@ _register_worker_lifecycle(
         compose=_warm_agent_sdk_imports,
     ),
 )
-_register_worker_lifecycle(
-    broker_maintenance,
-    WorkerRuntime(
-        "maintenance",
-        redis_factory=create_worker_pipeline_control_client,
-        redis_attr="pipeline_control_redis",
-    ),
-)
 
-# broker_dispatch / broker_briefing / broker_agent /
-# broker_maintenance は worker と enqueue 側 (API / scheduler) で同じ broker
-# object を共有するため、_register_worker_lifecycle (WORKER_STARTUP) と
+# broker_dispatch / broker_briefing / broker_agent は worker と enqueue 側
+# (API / scheduler) で同じ broker object を共有するため、
+# _register_worker_lifecycle (WORKER_STARTUP) と
 # _register_client_lifecycle (CLIENT_STARTUP) の両方を呼ぶ。
 # プロセスが違うのでイベント発火が衝突することはない。
 _register_client_lifecycle(broker_dispatch, "dispatch")
 _register_client_lifecycle(broker_briefing, "briefing")
 _register_client_lifecycle(broker_agent, "agent")
-_register_client_lifecycle(broker_maintenance, "maintenance")

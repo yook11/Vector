@@ -64,31 +64,6 @@ async def _make_article(
     return article
 
 
-@pytest.mark.asyncio
-async def test_signal_exists_for_article_returns_false_when_no_extraction(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    article = await _make_article(db_session, sample_source, "https://example.com/none")
-    repo = CurationRepository(db_session)
-    assert await repo.signal_exists_for_article(article.id) is False
-
-
-@pytest.mark.asyncio
-async def test_signal_exists_for_article_returns_true_after_save(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    article = await _make_article(
-        db_session, sample_source, "https://example.com/exists"
-    )
-    repo = CurationRepository(db_session)
-    curation_id = await repo.save_signal(
-        _signal_call(), analyzable_article_id=article.id
-    )
-    await db_session.commit()
-    assert curation_id is not None
-    assert await repo.signal_exists_for_article(article.id) is True
-
-
 # save_signal → int | None
 
 
@@ -129,44 +104,6 @@ async def test_save_signal_returns_none_on_duplicate_in_same_session(
 
     second = await repo.save_signal(_signal_call(), analyzable_article_id=article.id)
     assert second is None
-
-
-# update_signal_idempotent (re-extraction CLI 用)
-
-
-@pytest.mark.asyncio
-async def test_update_signal_idempotent_updates_parent_in_place(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    """parent ``ArticleCuration`` は同じ id のまま値だけ差し替わる。
-
-    parent を DELETE しないことで ``analyzed_articles`` /
-    ``out_of_scope_articles`` / ``article_embeddings`` / ``watchlist_entries``
-    への CASCADE 連鎖が起きないことを構造的に保証する。
-    """
-    article = await _make_article(
-        db_session, sample_source, "https://example.com/update-idempotent"
-    )
-    repo = CurationRepository(db_session)
-    first = await repo.save_signal(_signal_call(), analyzable_article_id=article.id)
-    await db_session.commit()
-    assert first is not None
-    parent_id = first
-
-    updated_id = await repo.update_signal_idempotent(
-        _signal_call(title_ja="新タイトル", summary_ja="新要約"),
-        analyzable_article_id=article.id,
-    )
-    await db_session.commit()
-
-    assert updated_id == parent_id  # parent UPDATE only — id 不変
-    parent_after = (
-        await db_session.execute(
-            select(ArticleCuration).where(ArticleCuration.id == updated_id)
-        )
-    ).scalar_one()
-    assert parent_after.translated_title == "新タイトル"
-    assert parent_after.summary == "新要約"
 
 
 # 並行 save_signal 統合テスト

@@ -8,7 +8,7 @@ payload 値が constructor 経由で渡っても、Logfire に載る文字列へ
 from __future__ import annotations
 
 import json
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import pytest
 
@@ -36,13 +36,7 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.curation.errors import (
     CurationError,
-    CurationFailureReason,
     CurationResponseInvalidError,
-)
-from app.analysis.curation.task_errors import (
-    CurationRecoverableError,
-    CurationTerminalDropError,
-    CurationTerminalKeepError,
 )
 from app.analysis.embedding.errors import (
     EmbeddingError,
@@ -191,52 +185,6 @@ def test_ai_provider_error_base_inherits_vector_domain_error() -> None:
     assert issubclass(AIProviderError, VectorDomainError)
 
 
-_CURATION_LAYER1_MARKERS: tuple[type[CurationError], ...] = (
-    CurationRecoverableError,
-    CurationTerminalKeepError,
-    CurationTerminalDropError,
-)
-
-
-@pytest.mark.parametrize("cls", _CURATION_LAYER1_MARKERS)
-def test_curation_layer1_str_contains_only_code(cls: type[CurationError]) -> None:
-    """Curation Layer 1 marker の ``__str__`` は class name + code のみ。"""
-    exc = cls(code="ai_error_rate_limited", failure_kind="time_based_recovery")  # type: ignore[call-arg]
-    assert str(exc) == f"{cls.__name__}(code='ai_error_rate_limited')"
-
-
-@pytest.mark.parametrize("cls", _CURATION_LAYER1_MARKERS)
-def test_curation_layer1_holds_provider_error_in_attr(
-    cls: type[CurationError],
-) -> None:
-    """``provider_error`` は forensics 用 attr で、``__str__`` には出ない。"""
-    provider = AIProviderRateLimitedError()
-    exc = cls(  # type: ignore[call-arg]
-        code="ai_error_rate_limited",
-        failure_kind="time_based_recovery",
-        provider_error=provider,
-    )
-    assert exc.provider_error is provider
-    assert "Provider" not in str(exc)
-    assert "provider_error" not in str(exc)
-
-
-@pytest.mark.parametrize("cls", _CURATION_LAYER1_MARKERS)
-def test_curation_layer1_rejects_positional_message(
-    cls: type[CurationError],
-) -> None:
-    """Curation Layer 1 marker は positional message を拒否する (PII 境界)。"""
-    with pytest.raises(TypeError):
-        cls("legacy_message")  # type: ignore[call-arg]
-
-
-@pytest.mark.parametrize("cls", _CURATION_LAYER1_MARKERS)
-def test_curation_layer1_requires_code_kwarg(cls: type[CurationError]) -> None:
-    """``code`` は required kwarg (audit 軸が必ず立つことを構造的に保証)。"""
-    with pytest.raises(TypeError):
-        cls()  # type: ignore[call-arg]
-
-
 _LAYER2B_FIXED_CODE: tuple[tuple[type[VectorDomainError], str], ...] = (
     (CurationResponseInvalidError, "extraction_response_invalid"),
     (EmbeddingResponseInvalidError, "embedding_response_invalid"),
@@ -275,22 +223,6 @@ def _build_all_marker_instances() -> list[VectorDomainError]:
         AIProviderUsageLimitExhaustedError(),
         AIProviderServiceUnavailableError(),
         AIProviderNetworkError(),
-        CurationRecoverableError(
-            code="ai_error_rate_limited",
-            failure_kind="time_based_recovery",
-            provider_error=provider,
-        ),
-        CurationTerminalKeepError(
-            code="ai_error_configuration",
-            failure_kind="operator_action_required",
-            provider_error=provider,
-        ),
-        CurationTerminalDropError(
-            code="ai_error_input_rejected",
-            failure_kind="target_rejected",
-            failure_reason="safety",
-            provider_error=provider,
-        ),
         CurationResponseInvalidError(),
         AssessmentError(
             reason=AssessmentFailureReason.PROVIDER_ERROR,
@@ -345,14 +277,5 @@ def test_stage_base_classes_inherit_vector_domain_error() -> None:
 def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
     """Layer 2-B class は対応する Layer 1 marker を継承する。"""
     assert issubclass(CurationResponseInvalidError, CurationError)
-    assert not issubclass(CurationResponseInvalidError, CurationRecoverableError)
     assert issubclass(AssessmentResponseInvalidError, AssessmentError)
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingError)
-
-
-def test_curation_error_is_not_layer1_marker() -> None:
-    """``CurationError`` 自体は Layer 1 marker の subclass ではない。"""
-    sample: Any = CurationError(reason=CurationFailureReason.RESPONSE_INVALID)
-    assert not isinstance(sample, CurationRecoverableError)
-    assert not isinstance(sample, CurationTerminalKeepError)
-    assert not isinstance(sample, CurationTerminalDropError)

@@ -13,7 +13,6 @@ AGENT_LIVE_WORKER_MAX_CONNECTIONS = 16
 AGENT_LIVE_SOCKET_TIMEOUT_SECONDS = 2
 AGENT_LIVE_SOCKET_CONNECT_TIMEOUT_SECONDS = 5
 
-PIPELINE_CONTROL_MAX_CONNECTIONS = 12
 PIPELINE_CONTROL_CLI_MAX_CONNECTIONS = 4
 PIPELINE_CONTROL_SOCKET_TIMEOUT_SECONDS = 5
 PIPELINE_CONTROL_SOCKET_CONNECT_TIMEOUT_SECONDS = 5
@@ -109,15 +108,6 @@ def create_worker_agent_live_client(settings: _RuntimeRedisSettings) -> aioredis
     """agent worker が所有する agent live client を作る。"""
     return _create_agent_live_client(
         settings, max_connections=AGENT_LIVE_WORKER_MAX_CONNECTIONS
-    )
-
-
-def create_worker_pipeline_control_client(
-    settings: _RuntimeRedisSettings,
-) -> aioredis.Redis:
-    """analysis / embedding / maintenance worker が所有する control client を作る。"""
-    return _create_pipeline_control_client(
-        settings, max_connections=PIPELINE_CONTROL_MAX_CONNECTIONS
     )
 
 

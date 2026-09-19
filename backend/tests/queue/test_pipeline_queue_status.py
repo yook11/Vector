@@ -15,7 +15,6 @@ _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts/pipeline_queue_sta
 _STAGE_SPECS = (
     ("acquisition", "pipeline:acquisition"),
     ("completion", "pipeline:completion"),
-    ("curation", "pipeline:curation"),
 )
 
 
@@ -81,7 +80,7 @@ def _normalized_header(output: str) -> str:
     return re.sub(r"[^a-z]+", "_", first_line).strip("_")
 
 
-def test_cli_module_docstring_names_all_three_pipeline_stages() -> None:
+def test_cli_module_docstring_names_all_pipeline_stages() -> None:
     module = _cli_module()
     docstring = (module.__doc__ or "").casefold()
 
@@ -146,8 +145,7 @@ async def test_cli_maps_missing_and_unknown_to_nonzero_statuses(
     read_health = AsyncMock(
         side_effect=[
             module.StreamHealthError(stage="acquisition", reason=missing_reason),
-            module.StreamHealthError(stage="completion", reason="group_missing"),
-            module.StreamHealthError(stage="curation", reason="lag_unknown"),
+            module.StreamHealthError(stage="completion", reason="lag_unknown"),
         ]
     )
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
@@ -170,16 +168,7 @@ async def test_cli_maps_missing_and_unknown_to_nonzero_statuses(
             "-",
             "unavailable",
         ],
-        "pipeline:completion": [
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "unavailable",
-        ],
-        "pipeline:curation": ["-", "-", "-", "-", "-", "-", "unknown"],
+        "pipeline:completion": ["-", "-", "-", "-", "-", "-", "unknown"],
     }
 
 
@@ -205,7 +194,6 @@ async def test_cli_maps_redis_and_snapshot_inconsistency_to_failure(
             module.StreamHealthError(
                 stage="completion", reason="inconsistent_snapshot"
             ),
-            module.StreamHealthError(stage="curation", reason="redis_unavailable"),
         ]
     )
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
@@ -219,7 +207,6 @@ async def test_cli_maps_redis_and_snapshot_inconsistency_to_failure(
     assert failure_rows == [
         ["pipeline:acquisition", "-", "-", "-", "-", "-", "-", "failure"],
         ["pipeline:completion", "-", "-", "-", "-", "-", "-", "failure"],
-        ["pipeline:curation", "-", "-", "-", "-", "-", "-", "failure"],
     ]
 
 

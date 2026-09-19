@@ -3,9 +3,8 @@
   - scheduler_dispatch:        収集 dispatch 用 cron
   - scheduler_briefing:        週次 briefing 用 cron
   - scheduler_agent:           agent run deadline sweeper 用 cron
-  - scheduler_maintenance:     back-fill 救済 + retention purge 用 cron
 
-本moduleの4つとTrend Discovery側の1つは、``app.queue.scheduler_entrypoint`` が
+本moduleの3つとTrend Discovery側の1つは、``app.queue.scheduler_entrypoint`` が
 1プロセスで並行実行する。各schedulerは自分のbrokerへkickするため、task→queue
 routingは不変。共通catalog側のcron task登録は``registry.py``を参照する。
 """
@@ -20,7 +19,6 @@ from app.queue.brokers import (
     broker_agent,
     broker_briefing,
     broker_dispatch,
-    broker_maintenance,
 )
 from app.queue.deadline_schedule import create_deadline_schedule_source
 
@@ -38,8 +36,4 @@ scheduler_agent = TaskiqScheduler(
         LabelScheduleSource(broker_agent),
         create_deadline_schedule_source(settings),
     ],
-)
-scheduler_maintenance = TaskiqScheduler(
-    broker=broker_maintenance,
-    sources=[LabelScheduleSource(broker_maintenance)],
 )

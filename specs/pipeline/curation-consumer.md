@@ -1,6 +1,6 @@
 # CurationConsumer — 分析可能な記事の完成イベントによる本文整形
 
-Status: スライス1〜5とスライス6前半（Terraform・bootstrap・CI定義）を実装・ローカル検証済み。AWSへの適用・キー登録・Consumer／relayの有効化・通常経路切替は未実施（2026-09-13）。
+Status: 全スライスを実装し、本番で稼働中。旧Taskiq経路は2026-09に撤去した（[analysis-service-retirement.md](./analysis-service-retirement.md)）。
 
 ## Problem
 

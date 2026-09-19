@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import ClassVar, Protocol
+from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 __all__ = [
-    "CurationPreconditionProtocol",
     "CurationReadyBuildRejectionReason",
     "CurationReadyBuildRejected",
     "CurationReadyBuildFacts",
@@ -60,17 +59,6 @@ class CurationReadyBuildRejected:
             raise TypeError("reason must be CurationReadyBuildRejectionReason")
 
 
-class CurationPreconditionProtocol(Protocol):
-    """Ready 構築に必要な DB 事実だけを読む repository contract。
-
-    構築可否と拒否理由は ``ReadyForCuration`` が判定する。
-    """
-
-    async def load_ready_build_facts(
-        self, analyzable_article_id: int
-    ) -> CurationReadyBuildFacts | None: ...
-
-
 class ReadyForCuration(BaseModel):
     """curator 入力と Stage 3 precondition を満たした不変オブジェクト。"""
 
@@ -81,17 +69,6 @@ class ReadyForCuration(BaseModel):
     analyzable_article_id: int = Field(gt=0)
     original_title: str = Field(min_length=1)
     original_content: str = Field(min_length=1, max_length=MAX_CONTENT_LENGTH)
-
-    @classmethod
-    async def try_advance_from(
-        cls,
-        *,
-        analyzable_article_id: int,
-        repo: CurationPreconditionProtocol,
-    ) -> ReadyForCuration | CurationReadyBuildRejected:
-        """DB事実を一度取得して、Ready構築または拒否の判定へ渡す。"""
-        facts = await repo.load_ready_build_facts(analyzable_article_id)
-        return cls.from_facts(facts)
 
     @classmethod
     def from_facts(

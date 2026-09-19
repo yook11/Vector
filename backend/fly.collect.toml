@@ -45,8 +45,7 @@ primary_region = 'nrt'
 
 # worker-fetchのみ。fetch.confはbroker_dispatchのdispatch/sweep制御と、broker_collectionが
 # pipeline:acquisition / pipeline:completionの両Streamを読む共有consumerを1 containerに
-# 同居させる。back-fill / retention は
-# broker_maintenance に分離済で core 側 (worker-analysis) が担うため本 app には無い。
+# 同居させる。
 [processes]
   worker-fetch = "supervisord -n -c /app/supervisord/fetch.conf"
 

@@ -3,7 +3,7 @@
 枯渇 (残高切れ・利用枠消尽) は残高チャージ等の運用者対応が必須の事象。発生の
 たびに素直に 1 打点 emit し、通知の重複抑制は alarm の状態遷移に委ねる。一時的
 rate limit (時間経過で回復) は対象外。kind には provider CODE をそのまま使い、
-stage hold reason / audit outcome_code と同一語彙で突き合わせられるようにする。
+audit outcome_code と同一語彙で突き合わせられるようにする。
 """
 
 from __future__ import annotations

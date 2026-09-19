@@ -1,4 +1,4 @@
-"""acquisition / completion / curationを読むRedis Stream health snapshot。"""
+"""acquisition / completionを読むRedis Stream health snapshot。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,7 @@ from typing import Literal, NoReturn
 from redis.asyncio import Redis
 from redis.exceptions import RedisError, ResponseError
 
-StreamHealthStage = Literal[
-    "acquisition",
-    "completion",
-    "curation",
-]
+StreamHealthStage = Literal["acquisition", "completion"]
 StreamHealthFailureReason = Literal[
     "stream_missing",
     "group_missing",
@@ -70,11 +66,6 @@ PIPELINE_QUEUE_TARGETS = (
     StreamHealthTarget(
         stage="completion",
         stream="pipeline:completion",
-        group="taskiq",
-    ),
-    StreamHealthTarget(
-        stage="curation",
-        stream="pipeline:curation",
         group="taskiq",
     ),
 )

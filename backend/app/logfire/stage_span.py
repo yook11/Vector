@@ -1,7 +1,7 @@
 """非 AI worker 工程の Logfire span helper。
 
-``article_stage`` (AI 分析 3 工程) が持つ result 語彙を非 AI 工程は持たないため、
-``Stage`` を強制注入する最小 recorder を yield する context manager を 1 本置く。
+非 AI 工程は result 語彙を持たないため、``Stage`` を強制注入する最小 recorder を
+yield する context manager を 1 本置く。
 recorder は result 語彙を持たず、失敗分類の複写 (``record_failure``) だけを担う。span は
 taskiq ``OpenTelemetryMiddleware`` の ``execute/<task_name>`` span の子として開き、
 「どの工程で・どの場所で例外が起きたか」を Logfire の stage 軸で絞り込めるようにする。
