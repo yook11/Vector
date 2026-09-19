@@ -22,3 +22,7 @@ f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact
 f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/test_ai_analyzer.py:gcp-api-key:508
 f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/test_gemini_embedder.py:gcp-api-key:178
 f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/test_observability_recording.py:gcp-api-key:114
+# ログ秘匿の置換・切り詰め順序を検証する合成APIキーとJWTだけを除外する（PR #406）。
+cae96b0acaece7d693c567a7c905766eb8ce5d4d:backend/tests/log_policy/test_output_limits.py:gcp-api-key:16
+cae96b0acaece7d693c567a7c905766eb8ce5d4d:backend/tests/log_policy/test_sanitize.py:gcp-api-key:138
+cae96b0acaece7d693c567a7c905766eb8ce5d4d:backend/tests/log_policy/test_sanitize.py:jwt:178
