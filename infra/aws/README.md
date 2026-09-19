@@ -511,7 +511,7 @@ bootstrapの専用boundaryと`ci-apply-pass-role`への拒否条件移設を本�
 
 ## 取得依頼投入（Scheduler / Lambda）
 
-投入基盤は2026-09-15にAWSへ配備済みで、3スケジュールはDISABLED。実配送・所要時間の実測は未実施。今回追加した取得Consumer・DLQ・受信設定は未配備で、後述の「取得Consumerの配備」に従って接続する。
+投入基盤は2026-09-15にAWSへ配備し、同日に3スケジュールと取得Consumerの受信を有効化した。Schedulerの`<aws.scheduler.scheduled-time>`が`jsonencode`のエスケープで置換されず、Lambdaが入力検証で全件失敗していた不具合を2026-09-19に修正した。実配送の確認結果は仕様書に記録する。
 
 ### 定義と配備入力
 
@@ -573,7 +573,7 @@ Pythonは変更した配備スクリプトとテストへRuff lint・formatチ�
 
 ## 取得Consumerの配備
 
-コード・Terraform・CIを実装済み、Consumerは未配備。AWS適用・旧Taskiq停止・Scheduler有効化は後続作業とする。処理済みIDをDBやRedisへ保存せず、同じ依頼は再取得する。既存の正規化URLによる記事保存と新規記事だけのOutbox生成を維持する。
+Consumerと3スケジュールは2026-09-15に有効化済み。旧Taskiqの定期投入は並走中で、停止は後続作業とする。処理済みIDをDBやRedisへ保存せず、同じ依頼は再取得する。既存の正規化URLによる記事保存と新規記事だけのOutbox生成を維持する。
 
 ### 設定と入力
 

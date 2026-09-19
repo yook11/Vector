@@ -117,7 +117,7 @@ run "deployed_dispatch_is_disabled_and_connected" {
     condition = length(aws_scheduler_schedule.source_dispatch) == 3 && alltrue([for cadence, schedule in aws_scheduler_schedule.source_dispatch :
       schedule.state == "DISABLED" && schedule.schedule_expression_timezone == "UTC" && schedule.flexible_time_window[0].mode == "OFF" &&
       schedule.schedule_expression == { high = "cron(0,15,30,45 * * * ? *)", medium = "cron(0 * * * ? *)", low = "cron(0 0,6,12,18 * * ? *)" }[cadence] &&
-      jsondecode(schedule.target[0].input) == { cadence = cadence, scheduled_at = "<aws.scheduler.scheduled-time>" } &&
+      schedule.target[0].input == "{\"cadence\":\"${cadence}\",\"scheduled_at\":\"<aws.scheduler.scheduled-time>\"}" &&
       schedule.target[0].arn == aws_lambda_function.source_dispatch[0].arn && schedule.target[0].role_arn == aws_iam_role.source_dispatch_scheduler.arn &&
       schedule.target[0].retry_policy[0].maximum_retry_attempts == 2 && schedule.target[0].retry_policy[0].maximum_event_age_in_seconds == 600 &&
       schedule.target[0].dead_letter_config[0].arn == aws_sqs_queue.source_dispatch["scheduler_failure"].arn

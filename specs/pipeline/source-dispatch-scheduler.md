@@ -1,6 +1,6 @@
 # ソース取得依頼の投入 — EventBridge Scheduler / Lambda / SQS
 
-Status: Consumer接続までコード実装済み（2026-09-15）。投入基盤（ステップ1〜4）はAWSへ配備済みで、3スケジュールは停止している。今回追加した取得Consumer・受信接続・Consumer用DLQは未配備。AWS実配送・所要時間の実測・旧Taskiq停止・Scheduler有効化は後続工程。以下のステップ別記録は当時の範囲と検証結果を示す。
+Status: ステップ1〜5を実装し、投入基盤・取得Consumer・3スケジュールは2026-09-15に有効化済み。Schedulerの予定時刻が`jsonencode`のエスケープで置換されず入力検証で全件失敗していた不具合をステップ6（2026-09-19）で修正。実配送の確認結果はステップ6に記録し、旧Taskiq停止と撤去は後続工程。以下のステップ別記録は当時の範囲と検証結果を示す。
 
 ## Problem
 
@@ -330,3 +330,16 @@ Done: Consumer・AWS定義・CI・重要な振る舞いのテストと既存回�
 - AWS定義: 実state・tfvarsを含まない隔離環境で本体・Bootstrapのfmt・init（backend無効、lockfile readonly）・validate・testが成功した。mock testは本体43件・Bootstrap24件、配備スクリプト全体のunittestは63件成功。変更スクリプトのlint・formatも成功した。
 - actionlint 1.7.12は既存の`concurrency.queue: max`だけに未対応のため、その既存診断を除外して変更workflowの検証が成功した。通常実行が完全成功したとは扱わない。新ConsumerのSemgrep検査は指摘なし。X-Rayを追加しない方針の除外は理由とルールIDを明示した。
 - コード・ローカル検証・仕様書・配備手順まで完了。今回のAWS適用、Consumer受信有効化、旧Taskiq停止、Scheduler有効化、実配送・実測は行っていない。
+
+
+## ステップ6 — Scheduler入力の修正と実配送確認（2026-09-19）
+
+Problem: 有効化後に投入Lambdaが全件`phase=input`で失敗し、取得依頼がSQSへ届いていなかった。
+
+Evidence: 失敗記録キューの`requestPayload`で`scheduled_at`が`<aws.scheduler.scheduled-time>`の文字列のままであることを確認した。Terraformの`jsonencode`は`<` `>`を`\u003c` `\u003e`へ退避するため、Schedulerの文字列置換に一致しない。既存tftestは`jsondecode`で比較していたため検出できなかった。旧Taskiq経路は稼働しており取得の欠落はない。
+
+修正: `target.input`を`jsonencode`から文字列で組み立てる形へ変更し、tftestを生文字列の完全一致に置き換えた。`cadence`は固定のコード定義のみで、Lambda側の入力検証は変更しない。
+
+検証: 隔離コピーで`terraform fmt`・`init`・`validate`・`test`が成功した（51件）。断言差し替えだけでは1件失敗し、修正後に通ることを確認した。滞留した失敗記録は旧経路が取得済みのため再実行せず、14日で消える。
+
+実配送の確認: apply後に追記する。
