@@ -266,7 +266,7 @@ resource "aws_lambda_function" "assessment_consumer" {
 
   depends_on = [
     aws_iam_role_policy.assessment_consumer,
-    aws_ecr_repository_policy.outbox_relay,
+    aws_ecr_repository_policy.backend_lambda_pull,
     aws_route_table_association.assessment_consumer,
     aws_vpc_security_group_egress_rule.assessment_consumer_to_rds,
     aws_vpc_security_group_ingress_rule.rds_from_assessment_consumer,

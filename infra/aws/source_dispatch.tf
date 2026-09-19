@@ -169,7 +169,7 @@ resource "aws_lambda_function" "source_dispatch" {
   depends_on = [
     aws_iam_role_policy.source_dispatch,
     aws_cloudwatch_log_group.source_dispatch,
-    aws_ecr_repository_policy.outbox_relay,
+    aws_ecr_repository_policy.backend_lambda_pull,
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
     aws_vpc_security_group_ingress_rule.sqs_from_outbox_relay,

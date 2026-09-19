@@ -81,6 +81,21 @@ run "lambda_backend_images_do_not_expire" {
   }
 }
 
+run "backend_image_pull_is_limited_to_prefixed_lambdas" {
+  command = plan
+
+  assert {
+    condition = (
+      length(jsondecode(aws_ecr_repository_policy.backend_lambda_pull.policy).Statement) == 1 &&
+      jsondecode(aws_ecr_repository_policy.backend_lambda_pull.policy).Statement[0].Condition.ArnLike["aws:SourceArn"] == "arn:aws:lambda:${var.region}:123456789012:function:slice-test-*" &&
+      jsondecode(aws_ecr_repository_policy.backend_lambda_pull.policy).Statement[0].Condition.StringEquals["aws:SourceAccount"] == "123456789012" &&
+      jsondecode(aws_ecr_repository_policy.backend_lambda_pull.policy).Statement[0].Principal.Service == "lambda.amazonaws.com" &&
+      toset(jsondecode(aws_ecr_repository_policy.backend_lambda_pull.policy).Statement[0].Action) == toset(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"])
+    )
+    error_message = "backend ECRからの取得は、同一アカウントで名前がprefixに従うLambdaだけに許可する。"
+  }
+}
+
 run "other_repositories_keep_configured_retention" {
   command = plan
 

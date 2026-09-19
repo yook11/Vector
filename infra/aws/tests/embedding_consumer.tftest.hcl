@@ -393,17 +393,6 @@ run "consumer_image_and_enabled_mapping" {
     )
     error_message = "relayの既存実行上限と対象関数を維持し、1分間隔の定期送信を有効にする。"
   }
-  assert {
-    condition = (
-      length(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement) == 1 &&
-      toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.ArnLike["aws:SourceArn"]) == toset([local.acquisition_consumer_arn, local.source_dispatch_arn, local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn,
-      local.completion_consumer_arn, local.curation_outbox_relay_arn, local.completion_outbox_relay_arn, local.backfill_arns["curation"], local.backfill_arns["assessment"], local.backfill_arns["embedding"]]) &&
-      jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.StringEquals["aws:SourceAccount"] == "123456789012" &&
-      jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Principal.Service == "lambda.amazonaws.com" &&
-      toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Action) == toset(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"])
-    )
-    error_message = "backend ECRからの取得は同一アカウントのrelay・Consumer・backfillだけに許可する。"
-  }
 }
 
 run "reject_mutable_image_tag" {

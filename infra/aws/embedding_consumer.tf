@@ -241,7 +241,7 @@ resource "aws_lambda_function" "embedding_consumer" {
 
   depends_on = [
     aws_iam_role_policy.embedding_consumer,
-    aws_ecr_repository_policy.outbox_relay,
+    aws_ecr_repository_policy.backend_lambda_pull,
     aws_route_table_association.embedding_consumer,
     aws_vpc_security_group_egress_rule.embedding_consumer_to_rds,
     aws_vpc_security_group_ingress_rule.rds_from_embedding_consumer,

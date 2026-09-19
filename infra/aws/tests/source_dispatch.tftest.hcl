@@ -157,7 +157,6 @@ run "deployed_dispatch_is_disabled_and_connected" {
   assert {
     condition = (
       anytrue([for s in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement : try(s.Principal.AWS == aws_iam_role.source_dispatch.arn && s.Action == "sqs:SendMessage" && s.Resource == aws_sqs_queue.source_dispatch["acquisition"].arn, false)]) &&
-      contains(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.ArnLike["aws:SourceArn"], local.source_dispatch_arn) &&
       jsondecode(aws_sqs_queue_policy.source_dispatch["acquisition"].policy).Statement[1].Condition.StringNotEquals["aws:sourceVpce"] == aws_vpc_endpoint.outbox_sqs.id &&
       alltrue([for key in ["scheduler_failure", "execution_failure"] : length(jsondecode(aws_sqs_queue_policy.source_dispatch[key].policy).Statement) == 1 && jsondecode(aws_sqs_queue_policy.source_dispatch[key].policy).Statement[0].Condition.Bool["aws:SecureTransport"] == "false"])
     )
