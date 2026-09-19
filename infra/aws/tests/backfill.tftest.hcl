@@ -341,14 +341,3 @@ run "scheduler_trust_and_invocation_are_stage_scoped" {
   }
 }
 
-run "backend_image_retrieval_includes_backfills_and_existing_functions" {
-  command = plan
-  assert {
-    condition = toset(jsondecode(aws_ecr_repository_policy.outbox_relay.policy).Statement[0].Condition.ArnLike["aws:SourceArn"]) == toset(concat([
-      local.acquisition_consumer_arn, local.source_dispatch_arn, local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn,
-      local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn,
-      local.completion_consumer_arn, local.completion_outbox_relay_arn,
-    ], values(local.backfill_arns)))
-    error_message = "ECR取得許可にbackfillを追加し、既存関数の取得許可を維持する。"
-  }
-}

@@ -241,7 +241,7 @@ resource "aws_lambda_function" "curation_consumer" {
 
   depends_on = [
     aws_iam_role_policy.curation_consumer,
-    aws_ecr_repository_policy.outbox_relay,
+    aws_ecr_repository_policy.backend_lambda_pull,
     aws_route_table_association.curation_consumer,
     aws_vpc_security_group_egress_rule.curation_consumer_to_rds,
     aws_vpc_security_group_ingress_rule.rds_from_curation_consumer,

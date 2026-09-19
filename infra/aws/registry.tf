@@ -18,6 +18,29 @@ resource "aws_ecr_repository" "this" {
   tags = { Name = "${var.name_prefix}-${each.value}" }
 }
 
+# 関数を列挙すると追加時の漏れが遅れて無音で止まるため、名前で許可し関数の作成権限側で絞る。
+resource "aws_ecr_repository_policy" "backend_lambda_pull" {
+  repository = aws_ecr_repository.this["backend"].name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "LambdaImageRetrieval"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+      Condition = {
+        ArnLike      = { "aws:SourceArn" = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-*" }
+        StringEquals = { "aws:SourceAccount" = local.account_id }
+      }
+    }]
+  })
+}
+
+moved {
+  from = aws_ecr_repository_policy.outbox_relay
+  to   = aws_ecr_repository_policy.backend_lambda_pull
+}
+
 # backendは更新頻度が異なるLambdaがdigestを参照し続けるため、自動削除しない。
 resource "aws_ecr_lifecycle_policy" "this" {
   for_each = { for name, repository in aws_ecr_repository.this : name => repository if name != "backend" }

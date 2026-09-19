@@ -210,23 +210,6 @@ resource "aws_iam_role_policy" "outbox_relay" {
   })
 }
 
-resource "aws_ecr_repository_policy" "outbox_relay" {
-  repository = aws_ecr_repository.this["backend"].name
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid       = "LambdaImageRetrieval"
-      Effect    = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
-      Action    = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
-      Condition = {
-        ArnLike      = { "aws:SourceArn" = concat([local.acquisition_consumer_arn, local.source_dispatch_arn, local.outbox_relay_arn, local.embedding_consumer_arn, local.assessment_outbox_relay_arn, local.assessment_consumer_arn, local.curation_consumer_arn, local.curation_outbox_relay_arn, local.completion_consumer_arn, local.completion_outbox_relay_arn], values(local.backfill_arns)) }
-        StringEquals = { "aws:SourceAccount" = local.account_id }
-      }
-    }]
-  })
-}
-
 # relayはCloudWatch Logsと標準メトリクスを使い、X-Rayは採用しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "outbox_relay" {
@@ -269,7 +252,7 @@ resource "aws_lambda_function" "outbox_relay" {
 
   depends_on = [
     aws_iam_role_policy.outbox_relay,
-    aws_ecr_repository_policy.outbox_relay,
+    aws_ecr_repository_policy.backend_lambda_pull,
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
   ]

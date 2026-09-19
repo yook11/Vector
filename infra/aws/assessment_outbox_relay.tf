@@ -99,7 +99,7 @@ resource "aws_lambda_function" "assessment_outbox_relay" {
 
   depends_on = [
     aws_iam_role_policy.assessment_outbox_relay,
-    aws_ecr_repository_policy.outbox_relay,
+    aws_ecr_repository_policy.backend_lambda_pull,
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
   ]
