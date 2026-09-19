@@ -265,10 +265,9 @@ private runbookには初期構築の前提を残し、通常migrationのロー�
   frontend の `pool-ssl.ts` の両方が RDS の CA (`rds-ca-rsa2048-g1` 系) を信頼して
   いる必要がある。**Neon の CA とは別物**。「接続はできるのに証明書検証で落ちる」枠
 - **GRANT との突き合わせ** — IAM が決めるのは入口だけ。`fetch` が `vector_collect`
-  だけで dispatch と collection の両方を賄えるか、`analysis` の maintenance が
-  `vector_app` で purge を全部できるかは、provisioning 時に migration の GRANT と
-  1 回突き合わせる。IAM が緩くても GRANT 側で落ちるだけなので事故にはならないが、
-  切り分けが速くなる
+  だけで dispatch と collection の両方を賄えるかは、provisioning 時に migration の
+  GRANT と 1 回突き合わせる。IAM が緩くても GRANT 側で落ちるだけなので事故には
+  ならないが、切り分けが速くなる
 
 ## 未決 / 未検証
 

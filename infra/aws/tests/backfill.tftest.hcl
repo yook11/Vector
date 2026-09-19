@@ -219,14 +219,6 @@ run "first_deployment_enables_all_three_stages" {
   }
 }
 
-run "legacy_curation_backfill_is_disabled_in_ecs" {
-  command = plan
-  assert {
-    condition     = local.stage_environment.analysis.BACKFILL_CURATIONS_ENABLED == "false"
-    error_message = "ECSの旧Curation救済からTaskiqへ再投入しない。"
-  }
-}
-
 run "scheduled_invocations_keep_offsets_and_target_pairings" {
   command = plan
   variables {

@@ -3,6 +3,8 @@
 作成: 2026-08-11
 Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで合意済み)
 
+2026-09 更新: A2(工程別の滞留)と A3(観測の死活)は、データ源の queue_health を動かしていた ECS analysis サービスの撤去に伴い廃止した。パイプラインの観測はログ・メトリクス整備(CloudWatch)へ移す。以下の A2 / A3 の記述は設計経緯として残す。
+
 ---
 
 ## Work Definition
@@ -67,15 +69,15 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | ID | 症状 | 検知シグナル | 種別 |
 |----|------|-------------|------|
 | A1 | 収集の供給が止まっている(全体途絶) | EMF `dispatch_run` の不在 | metric alarm |
-| A2 | 特定工程で仕事が消化されていない(工程名指し) | EMF `oldest_outstanding_enqueue_age{stage}` | metric alarm × 3 |
-| A3 | queue 観測自体が死んでいる(Valkey 障害含む) | EMF `observation_up` | metric alarm (math MIN) |
+| A2 | (廃止 2026-09)特定工程で仕事が消化されていない(工程名指し) | EMF `oldest_outstanding_enqueue_age{stage}` | metric alarm × 3 |
+| A3 | (廃止 2026-09)queue 観測自体が死んでいる(Valkey 障害含む) | EMF `observation_up` | metric alarm (math MIN) |
 | A4 | 工程別の失敗率(completion / curation / assessment / embedding) | EMF `processing_outcome{stage, result}` の failed 率 | metric alarm (math) × 4 |
 | A5 | ECS タスクの異常停止(crash / OOM / 起動不能) | EventBridge ECS Task State Change | event 通知 |
 | A6 | AI 利用枠の枯渇(残高切れ・日次 quota 切れ) | EMF `ai_provider_exhausted` | metric alarm |
 | A7 | ユーザーにエラーが見えている | ALB 5XX | metric alarm |
 | A8 | frontend が到達不能 | ALB UnHealthyHostCount | metric alarm |
 
-「止まっている」の検知は A1 / A2 / A3 の 3 層で役割分担する。検知原理が異なるため 1 本にまとめない。
+「止まっている」の検知は A1 / A2 / A3 の 3 層で役割分担する。検知原理が異なるため 1 本にまとめない。(A2 / A3 廃止後は A1 と各工程の SQS／Lambda 監視が担う)
 
 ### A1: 供給ハートビート(全体途絶)
 
@@ -203,7 +205,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 ## 4. コスト概算
 
 - 本カタログのカスタムメトリクスは27系列(dispatch_run 3 + age 3 + observation_up 3 + processing_outcome 14 + ai_provider_exhausted 4)。
-- 本カタログのalarmは12本(A1×1, A2×3, A3×1, A4×4, A6×1, A7×1, A8×1)。
+- 本カタログのalarmは8本(A1×1, A4×4, A6×1, A7×1, A8×1)。A2×3・A3×1 は 2026-09 に廃止。
 - SQS／Lambda固有の監視は各工程の定義を参照する。費用は実際の利用量と料金で確認する。Logfireのtraceは維持する。
 
 ## 5. 実装順序(1 アラートずつ確定 → 実装 → 次へ)
