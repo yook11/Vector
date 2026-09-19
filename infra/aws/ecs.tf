@@ -130,12 +130,6 @@ locals {
       DATABASE_URL = local.backend_db_url["vector_collect"]
       REDIS_URL    = local.broker_redis_url["fetch"]
     }
-    analysis = {
-      DATABASE_URL = local.backend_db_url["vector_app"]
-      REDIS_URL    = local.broker_redis_url["analysis"]
-      # Curationの救済投入はLambda側へ移し、旧workerは残件処理のため維持する。
-      BACKFILL_CURATIONS_ENABLED = "false"
-    }
     insights = {
       DATABASE_URL = local.backend_db_url["vector_app"]
       REDIS_URL    = local.broker_redis_url["insights"]
@@ -288,7 +282,6 @@ resource "aws_ecs_service" "this" {
     }
   }
 
-  # worker-analysis は起動時の import が重く、0.25 vCPU では約 2 倍に伸びる。
   # LB 付きの段だけに効く設定なので frontend にのみ余裕を持たせる。
   health_check_grace_period_seconds = each.key == "frontend" ? 120 : null
 
