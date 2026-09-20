@@ -2,6 +2,8 @@
 
 Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード実装済み・AWS未適用（2026-09-10）
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
+
 業務上の成功・失敗、再配信設定、Taskiqとの併用方針と、Lambda呼び出し単位の接続・APIキー管理は合意済み。Lambda実行の数値設定と実装詳細は、各スライスの確定項目に分ける。基盤のTerraform実装と実環境での有効化を区別して記録する。
 
 ## Problem

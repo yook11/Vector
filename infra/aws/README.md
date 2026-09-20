@@ -319,6 +319,8 @@ read-only の plan ロールでは通らない)。
 
 ## EmbeddingConsumer Lambda（スライス3.4）
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../../specs/platform/app-rollout.md)を参照する。
+
 共通backendイメージをarm64のLambdaとして起動する。Consumerの版は`embedding_consumer_image_digest`で独立指定し、ECSのimage_tagやrelayのdigestとは連動させない。メモリ1024MB、timeout120秒、予約同時実行10、1回1件、最大同時実行10、ReportBatchItemFailuresで固定する。スライス3.4ではSQSトリガーを`enabled=false`で配置した。スライス4.1以降の目標状態は`enabled=true`であり、既存マッピングの更新・今後の新規作成ともに受信を有効にする。relayのSchedulerはスライス4.1では`DISABLED`を維持した。スライス4.2で`ENABLED`へ更新する。
 
 関数は専用サブネット・SG・実行ロール・ロググループを使用する。環境変数はproduction、IAM認証のvector_app用DB URL、専用Gemini SSMパス、EGRESS_PROXY_URLを渡す。AWS_REGIONはLambdaが提供する。APIキーの値はTerraform・イメージ・ログへ置かず、Consumer呼び出し時にSSMから取得する。SSMの準備は有効化前に行い、値の登録と実通信検証は別作業とする。
@@ -437,29 +439,9 @@ BASH
 
 原因を解消してからenabled=trueと対応テストを戻し、PR plan・マージ・production承認付きapplyで再開する。再開時もdigestを保持し、Enabledの確認と監視を行う。DLQ再投入の具体的操作は別タスクとする。
 
-### ローカルplanでのdigest保持
+### Lambdaのイメージと有効状態
 
-Terraform変数のdefault=nullだけでは現在の版は保持できない。既存の使い方の`terraform plan`を実行する前に、relayとConsumerの両方について次を実行する。通常のplan/apply workflowはこの処理を実装済み。ローカルの本番applyは実行せず、既存の承認付きCI経路を使用する。
-
-```bash
-# infra/awsで、認証とbackendの初期化後に実行する。
-set -euo pipefail
-relay_vars_tmp=$(mktemp ./outbox-relay-vars.XXXXXX)
-consumer_vars_tmp=$(mktemp ./embedding-consumer-vars.XXXXXX)
-assessment_vars_tmp=$(mktemp ./assessment-vars.XXXXXX)
-curation_vars_tmp=$(mktemp ./curation-vars.XXXXXX)
-trap 'rm -f "$relay_vars_tmp" "$consumer_vars_tmp" "$assessment_vars_tmp" "$curation_vars_tmp"' EXIT
-terraform state pull | python3 scripts/resolve-outbox-relay-image.py > "$relay_vars_tmp"
-terraform state pull | python3 scripts/resolve-embedding-consumer-image.py > "$consumer_vars_tmp"
-terraform state pull | python3 scripts/resolve-assessment-images.py > "$assessment_vars_tmp"
-terraform state pull | python3 scripts/resolve-curation-images.py > "$curation_vars_tmp"
-mv "$relay_vars_tmp" outbox-relay.auto.tfvars.json
-mv "$consumer_vars_tmp" embedding-consumer.auto.tfvars.json
-mv "$assessment_vars_tmp" assessment.auto.tfvars.json
-mv "$curation_vars_tmp" curation.auto.tfvars.json
-```
-
-明示した版をplanする場合はConsumerのスクリプトへ`--digest "$CONSUMER_DIGEST"`を渡し、backend ECR内の存在も別途確認する。生成ファイルやstateをコミット・公開しない。stateの現行イメージが不正、現行インスタンスが複数、state取得失敗の場合は停止し、ファイルを手作業でnullへ変更して続行しない。
+Lambdaの版はTerraformで指定しない。新規作成時だけbackendリポジトリの最新イメージを使い、以降の`image_uri`の変更は追わない。トリガーの有効状態はコードで宣言する。ローカルplanに事前の変数生成は不要。設計と経緯は[app rollout](../../specs/platform/app-rollout.md)を参照する。
 
 ### ローカルのイメージ起動検証
 
@@ -477,6 +459,8 @@ docker run --rm --platform linux/arm64 --read-only \
 LambdaのCI管理権限はConsumer関数ARNとFunctionArn条件で限定する。マッピングのConsumerタグは作成時に必須とし、タグ操作も既存のConsumerタグ一致を要求するため、他のマッピングへタグを後付けして管理範囲を拡張できない。Consumerタグの変更・削除は許可しない。タグ付き作成とResourceTag条件の考え方は[AWSのABAC例](https://docs.aws.amazon.com/lambda/latest/dg/attribute-based-access-control-example.html)に合わせ、AWS上での適用確認は後続に残す。
 
 ## Curationの配置（スライス6前半）
+
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../../specs/platform/app-rollout.md)を参照する。
 
 今回追加するのはTerraform・bootstrap・既存GitHub Actionsのplan／apply設定であり、AWSへの適用・キー登録・digest指定は行っていない。独立したデプロイ経路は追加しない。
 
@@ -505,11 +489,15 @@ actionlint 1.7.12は既存の`concurrency.queue: max`を未対応キーとして
 
 ## 補完ConsumerとRelay（スライス5）
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../../specs/platform/app-rollout.md)を参照する。
+
 [記事補完の配送仕様](../../specs/pipeline/article-completion-delivery.md#スライス5relayと補完lambdaの配送経路2026-09-14)に設定・適用順序・確認結果を記録する。補完はConsumerとRelayの両digest、および受信・定期送信それぞれの稼働状態を既存plan／applyで保持する。初回digest指定時は両トリガーを無効にし、workflow_dispatchの`completion_consumer_state`／`completion_relay_state`で明示的に開始・停止する。
 
 bootstrapの専用boundaryと`ci-apply-pass-role`への拒否条件移設を本体より先に適用する。既存の専用bootstrap経路とGitHub production承認を維持し、旧Taskiqを並行稼働させる。DB schema・DB権限・旧経路のrolloutは変更しない。
 
 ## 取得依頼投入（Scheduler / Lambda）
+
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../../specs/platform/app-rollout.md)を参照する。
 
 投入基盤は2026-09-15にAWSへ配備し、同日に3スケジュールと取得Consumerの受信を有効化した。Schedulerの`<aws.scheduler.scheduled-time>`が`jsonencode`のエスケープで置換されず、Lambdaが入力検証で全件失敗していた不具合を2026-09-19に修正した。実配送の確認結果は仕様書に記録する。
 
@@ -572,6 +560,8 @@ Pythonは変更した配備スクリプトとテストへRuff lint・formatチ�
 
 
 ## 取得Consumerの配備
+
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../../specs/platform/app-rollout.md)を参照する。
 
 Consumerと3スケジュールは2026-09-15に有効化済み。旧Taskiqの定期投入は並走中で、停止は後続作業とする。処理済みIDをDBやRedisへ保存せず、同じ依頼は再取得する。既存の正規化URLによる記事保存と新規記事だけのOutbox生成を維持する。
 

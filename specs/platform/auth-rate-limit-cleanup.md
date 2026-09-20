@@ -1,5 +1,7 @@
 # 認証カウンターの定期掃除
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](./app-rollout.md)を参照する。
+
 ## 責務と期限
 
 `vector-auth-rate-limit-cleanup` Lambdaは、Better Authの`auth."rateLimit"`から、呼び出し開始時点で`lastRequest`が10分より古い行を削除する。境界時刻の行は残す。時刻はUnixミリ秒とし、一回のパラメーター付きDELETEをtransactionで確定する。イベント入力から期限・件数・接続先を変更できない。

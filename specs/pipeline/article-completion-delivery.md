@@ -2,6 +2,8 @@
 
 Status: スライス1〜4の起動・資源管理、抽出の独立、入力検証・Consumer接続、個別待機・残り時間管理を実装・ローカル検証済み（2026-09-14）。ConsumerとDB確定は実装済み。スライス5のAWS設定と補完Relayを実装中。AWSへの適用・実接続は未確認。
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
+
 ## Problem
 
 `article.incomplete_recorded`をSQSから受け取り、既存のArticleCompletionConsumerへ渡し、DB確定後の受信完了または再配信へ対応付ける。待機指示、Lambdaの残り時間、資源管理を配送側で扱う。
