@@ -640,7 +640,7 @@ resource "aws_iam_role_policy" "push" {
 
 # --- app-rollout ----------------------------------------------------------
 #
-# 本番の service を入れ替えるだけ。image は焼かないので ECR への書き込みは持たない。
+# 本番の service と Lambda のイメージを入れ替えるだけ。image は焼かないので ECR への書き込みは持たない。
 # 本丸は ecs:RegisterTaskDefinition と iam:PassRole で、ここを絞らないと
 # 「強いロールを渡した task definition を登録する」が通る。
 
@@ -678,6 +678,37 @@ resource "aws_iam_role_policy" "rollout" {
         Condition = {
           StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
         }
+      },
+      {
+        Sid      = "LambdaListForRollout"
+        Effect   = "Allow"
+        Action   = "lambda:ListFunctions"
+        Resource = "*"
+        Condition = {
+          StringEquals = { "aws:RequestedRegion" = var.region }
+        }
+      },
+      # 関数を列挙すると追加時に漏れるため名前で許可し、設定変更・作成・削除は渡さない。
+      {
+        Sid    = "LambdaImageRollout"
+        Effect = "Allow"
+        Action = [
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:UpdateFunctionCode",
+        ]
+        Resource = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-*"
+      },
+      # Lambdaのコード更新は、呼び出し側にも対象イメージの取得権限を要求する。
+      {
+        Sid    = "BackendImageReadForLambdaRollout"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:DescribeImages",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = "arn:aws:ecr:${var.region}:${local.account_id}:repository/${var.name_prefix}/backend"
       },
     ], local.secret_read_statements)
   })
