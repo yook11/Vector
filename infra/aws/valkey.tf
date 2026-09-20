@@ -18,6 +18,10 @@
 #   発行するため。XADD だけでは起動できない。
 # - autoclaim:taskiq:<stream> は taskiq の再配達 lock。SET NX で取得し、
 #   解放は EVALSHA の Lua が GET + DEL を呼ぶ。
+# - vector-agent-deadline:* は run 期限の単発予約。書くのは api / agent、
+#   読む・消すのは scheduler だけ。
+# - SCAN は key 引数を持たず ~pattern で絞れない。scheduler は過去分の予約探索で
+#   毎秒ノード全体を走査するため、broker ノードの key 数が小さいことが前提。
 locals {
   # redis-py 8 / node-redis 6 は RESP3 既定で HELLO を発行する。CLIENT (SETINFO 含む)
   # は @connection が丸ごと含むため個別指定しない。全体追加済み command への
@@ -34,11 +38,13 @@ locals {
       "+multi +exec",
       local.valkey_common_acl,
       "(~agent:run:* resetchannels -@all +xadd +xrange +xread +exists +expire)",
+      "(~vector-agent-deadline:* resetchannels -@all +set +rpush)",
     ])
     scheduler = join(" ", [
-      "on ~pipeline:dispatch ~trend_discovery ~briefing ~agent -@all",
+      "on ~pipeline:dispatch ~trend_discovery ~briefing ~agent resetchannels -@all",
       "+xadd +xgroup|create",
       local.valkey_common_acl,
+      "(~vector-agent-deadline:* resetchannels -@all +scan +lrange +mget +getdel +lrem)",
     ])
     fetch = join(" ", [
       "on ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion resetchannels -@all",
@@ -65,6 +71,7 @@ locals {
       "(~agent:run:* resetchannels -@all +xadd +expire)",
       "(~autoclaim:taskiq:agent resetchannels -@all +set +get +del +evalsha)",
       "(~taskiq:* resetchannels -@all +set)",
+      "(~vector-agent-deadline:* resetchannels -@all +set +rpush)",
     ])
   }
 
