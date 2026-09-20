@@ -67,7 +67,6 @@ variables {
   slack_channel_id       = "C0123456789"
 }
 
-
 override_resource {
   override_during = plan
   target          = aws_security_group.completion_consumer
@@ -98,40 +97,29 @@ override_resource {
   values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-consumer-lambda" }
 }
 
-run "no_digest_does_not_start_completion" {
+run "completion_consumer_receives_with_bounded_execution" {
   command = plan
-  assert {
-    condition     = length(aws_lambda_function.completion_consumer) == 0 && length(aws_lambda_event_source_mapping.completion_consumer) == 0
-    error_message = "digest未指定では補完Lambdaと受信を開始しない。"
-  }
-}
-
-run "completion_initial_deployment_keeps_trigger_disabled" {
-  command = plan
-  variables {
-    completion_consumer_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  }
   assert {
     condition = (
-      aws_lambda_function.completion_consumer[0].timeout == 600 &&
-      aws_lambda_function.completion_consumer[0].memory_size == 1024 &&
-      aws_lambda_function.completion_consumer[0].reserved_concurrent_executions == 5 &&
-      aws_lambda_function.completion_consumer[0].image_config[0].command == tolist(["app.lambda_handlers.completion.handler.handler"]) &&
-      aws_lambda_function.completion_consumer[0].architectures == tolist(["arm64"]) &&
-      aws_lambda_function.completion_consumer[0].environment[0].variables == tomap({
+      aws_lambda_function.completion_consumer.timeout == 600 &&
+      aws_lambda_function.completion_consumer.memory_size == 1024 &&
+      aws_lambda_function.completion_consumer.reserved_concurrent_executions == 5 &&
+      aws_lambda_function.completion_consumer.image_config[0].command == tolist(["app.lambda_handlers.completion.handler.handler"]) &&
+      aws_lambda_function.completion_consumer.architectures == tolist(["arm64"]) &&
+      aws_lambda_function.completion_consumer.environment[0].variables == tomap({
         ENV                              = "production"
         DATABASE_URL                     = local.backend_db_url["vector_collect"]
         DB_IAM_AUTH                      = "true"
         EGRESS_PROXY_URL                 = local.proxy_url
         SQS_ARTICLE_COMPLETION_QUEUE_URL = aws_sqs_queue.outbox["completion"].url
       }) &&
-      !aws_lambda_event_source_mapping.completion_consumer[0].enabled &&
-      aws_lambda_event_source_mapping.completion_consumer[0].batch_size == 10 &&
-      aws_lambda_event_source_mapping.completion_consumer[0].maximum_batching_window_in_seconds == 0 &&
-      aws_lambda_event_source_mapping.completion_consumer[0].scaling_config[0].maximum_concurrency == 5 &&
-      aws_lambda_event_source_mapping.completion_consumer[0].function_response_types == toset(["ReportBatchItemFailures"])
+      aws_lambda_event_source_mapping.completion_consumer.enabled &&
+      aws_lambda_event_source_mapping.completion_consumer.batch_size == 10 &&
+      aws_lambda_event_source_mapping.completion_consumer.maximum_batching_window_in_seconds == 0 &&
+      aws_lambda_event_source_mapping.completion_consumer.scaling_config[0].maximum_concurrency == 5 &&
+      aws_lambda_event_source_mapping.completion_consumer.function_response_types == toset(["ReportBatchItemFailures"])
     )
-    error_message = "補完の時間予算・Collect接続・部分応答を設定し、初回受信は無効にする。"
+    error_message = "補完の時間予算・Collect接続・部分応答を設定し、受信を有効にする。"
   }
 }
 
@@ -188,15 +176,12 @@ run "completion_network_has_no_direct_internet_route" {
   }
 }
 
-run "relay_uses_dedicated_db_user_and_starts_disabled" {
+run "relay_uses_dedicated_db_user_and_runs_every_minute" {
   command = plan
-  variables {
-    completion_outbox_relay_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  }
   assert {
     condition = (
-      startswith(aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
-      aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DB_IAM_AUTH == "true" &&
+      startswith(aws_lambda_function.completion_outbox_relay.environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
+      aws_lambda_function.completion_outbox_relay.environment[0].variables.DB_IAM_AUTH == "true" &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.completion_outbox_relay.policy).Statement : s.Resource if s.Action == "rds-db:connect" && s.Effect == "Allow"])) == toset([
         "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
       ])
@@ -205,35 +190,21 @@ run "relay_uses_dedicated_db_user_and_starts_disabled" {
   }
   assert {
     condition = (
-      length(aws_lambda_function.completion_consumer) == 0 &&
-      aws_lambda_function.completion_outbox_relay[0].image_config[0].command == tolist(["app.lambda_handlers.outbox_relay.completion_handler"]) &&
-      aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DATABASE_URL == local.backend_db_url["vector_outbox_relay"] &&
-      aws_lambda_function.completion_outbox_relay[0].environment[0].variables.DB_IAM_AUTH == "true" &&
-      aws_lambda_function.completion_outbox_relay[0].environment[0].variables.SQS_ARTICLE_COMPLETION_QUEUE_URL == aws_sqs_queue.outbox["completion"].url &&
-      aws_lambda_function.completion_outbox_relay[0].timeout == 120 &&
-      aws_lambda_function.completion_outbox_relay[0].reserved_concurrent_executions == 1 &&
-      aws_scheduler_schedule.completion_outbox_relay[0].state == "DISABLED" &&
-      aws_scheduler_schedule.completion_outbox_relay[0].schedule_expression == "rate(1 minute)" &&
+      aws_lambda_function.completion_outbox_relay.image_config[0].command == tolist(["app.lambda_handlers.outbox_relay.completion_handler"]) &&
+      aws_lambda_function.completion_outbox_relay.environment[0].variables.DATABASE_URL == local.backend_db_url["vector_outbox_relay"] &&
+      aws_lambda_function.completion_outbox_relay.environment[0].variables.DB_IAM_AUTH == "true" &&
+      aws_lambda_function.completion_outbox_relay.environment[0].variables.SQS_ARTICLE_COMPLETION_QUEUE_URL == aws_sqs_queue.outbox["completion"].url &&
+      aws_lambda_function.completion_outbox_relay.timeout == 120 &&
+      aws_lambda_function.completion_outbox_relay.reserved_concurrent_executions == 1 &&
+      aws_scheduler_schedule.completion_outbox_relay.state == "ENABLED" &&
+      aws_scheduler_schedule.completion_outbox_relay.schedule_expression == "rate(1 minute)" &&
       jsondecode(aws_iam_role_policy.completion_outbox_relay.policy).Statement[1].Action == "sqs:SendMessage" &&
       jsondecode(aws_iam_role_policy.completion_outbox_relay.policy).Statement[1].Resource == aws_sqs_queue.outbox["completion"].arn &&
       anytrue([for statement in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement :
         try(statement.Action == "sqs:SendMessage" && statement.Resource == aws_sqs_queue.outbox["completion"].arn && statement.Principal.AWS == aws_iam_role.completion_outbox_relay.arn, false)
       ])
     )
-    error_message = "Relayは専用DB接続と補完専用送信権限を使い、明示するまで起動しない。"
+    error_message = "Relayは専用DB接続と補完専用送信権限を使い、毎分の送信を有効にする。"
   }
 }
 
-run "explicit_activation_connects_both_triggers" {
-  command = plan
-  variables {
-    completion_consumer_image_digest     = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    completion_outbox_relay_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    completion_consumer_enabled          = true
-    completion_relay_enabled             = true
-  }
-  assert {
-    condition     = aws_lambda_event_source_mapping.completion_consumer[0].enabled && aws_scheduler_schedule.completion_outbox_relay[0].state == "ENABLED"
-    error_message = "明示した受信と定期送信の起動を実リソースへ反映する。"
-  }
-}

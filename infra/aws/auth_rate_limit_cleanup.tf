@@ -62,12 +62,10 @@ resource "aws_iam_role_policy" "auth_rate_limit_cleanup" {
 # 認証カウンター掃除はCloudWatch Logsと標準メトリクスを使用する。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "auth_rate_limit_cleanup" {
-  count = var.auth_rate_limit_cleanup_image_digest == null ? 0 : 1
-
   function_name                  = local.auth_rate_limit_cleanup_name
   role                           = aws_iam_role.auth_rate_limit_cleanup.arn
   package_type                   = "Image"
-  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${var.auth_rate_limit_cleanup_image_digest}"
+  image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
   memory_size                    = 512
   timeout                        = 30
@@ -100,12 +98,14 @@ resource "aws_lambda_function" "auth_rate_limit_cleanup" {
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
   ]
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }
 
 resource "aws_lambda_function_event_invoke_config" "auth_rate_limit_cleanup" {
-  count = var.auth_rate_limit_cleanup_image_digest == null ? 0 : 1
-
-  function_name                = aws_lambda_function.auth_rate_limit_cleanup[0].function_name
+  function_name                = aws_lambda_function.auth_rate_limit_cleanup.function_name
   maximum_retry_attempts       = 2
   maximum_event_age_in_seconds = 600
 
@@ -150,18 +150,16 @@ resource "aws_iam_role_policy" "auth_rate_limit_cleanup_scheduler" {
 }
 
 resource "aws_scheduler_schedule" "auth_rate_limit_cleanup" {
-  count = var.auth_rate_limit_cleanup_image_digest == null ? 0 : 1
-
   name                         = local.auth_rate_limit_cleanup_name
   group_name                   = aws_scheduler_schedule_group.auth_rate_limit_cleanup.name
-  state                        = var.auth_rate_limit_cleanup_enabled ? "ENABLED" : "DISABLED"
+  state                        = "ENABLED"
   schedule_expression          = "cron(20,50 * * * ? *)"
   schedule_expression_timezone = "UTC"
 
   flexible_time_window { mode = "OFF" }
 
   target {
-    arn      = aws_lambda_function.auth_rate_limit_cleanup[0].arn
+    arn      = aws_lambda_function.auth_rate_limit_cleanup.arn
     role_arn = aws_iam_role.auth_rate_limit_cleanup_scheduler.arn
     input    = "{}"
 

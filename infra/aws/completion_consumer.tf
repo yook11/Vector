@@ -168,12 +168,10 @@ resource "aws_iam_role_policy" "completion_consumer" {
 # CloudWatch Logsと既存EMFを使い、X-Rayは追加しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "completion_consumer" {
-  count = var.completion_consumer_image_digest == null ? 0 : 1
-
   function_name                  = local.completion_consumer_name
   role                           = aws_iam_role.completion_consumer.arn
   package_type                   = "Image"
-  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${var.completion_consumer_image_digest}"
+  image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
   memory_size                    = 1024
   timeout                        = 600
@@ -220,14 +218,16 @@ resource "aws_lambda_function" "completion_consumer" {
     aws_vpc_security_group_egress_rule.completion_consumer_to_sqs,
     aws_vpc_security_group_ingress_rule.sqs_from_completion_consumer,
   ]
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }
 
 resource "aws_lambda_event_source_mapping" "completion_consumer" {
-  count = var.completion_consumer_image_digest == null ? 0 : 1
-
   event_source_arn                   = aws_sqs_queue.outbox["completion"].arn
-  function_name                      = aws_lambda_function.completion_consumer[0].arn
-  enabled                            = var.completion_consumer_enabled
+  function_name                      = aws_lambda_function.completion_consumer.arn
+  enabled                            = true
   batch_size                         = 10
   maximum_batching_window_in_seconds = 0
   function_response_types            = ["ReportBatchItemFailures"]

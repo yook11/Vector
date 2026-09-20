@@ -84,7 +84,7 @@ override_resource {
 }
 override_resource {
   override_during = plan
-  target          = aws_lambda_function.source_dispatch[0]
+  target          = aws_lambda_function.source_dispatch
   values          = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-source-dispatch" }
 }
 override_resource {
@@ -103,39 +103,31 @@ override_resource {
   values          = { arn = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-source-dispatch-execution-failures", url = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/slice-test-source-dispatch-execution-failures" }
 }
 
-run "unconfigured_dispatch_never_starts" {
+run "dispatch_schedules_are_enabled_and_connected" {
   command = plan
-  assert {
-    condition     = length(aws_lambda_function.source_dispatch) == 0 && length(aws_scheduler_schedule.source_dispatch) == 0 && length(aws_sqs_queue.source_dispatch) == 3
-    error_message = "digest未指定では投入Lambdaと定期起動を作成しない。"
-  }
-}
-run "deployed_dispatch_is_disabled_and_connected" {
-  command = plan
-  variables { source_dispatch_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
   assert {
     condition = length(aws_scheduler_schedule.source_dispatch) == 3 && alltrue([for cadence, schedule in aws_scheduler_schedule.source_dispatch :
-      schedule.state == "DISABLED" && schedule.schedule_expression_timezone == "UTC" && schedule.flexible_time_window[0].mode == "OFF" &&
+      schedule.state == "ENABLED" && schedule.schedule_expression_timezone == "UTC" && schedule.flexible_time_window[0].mode == "OFF" &&
       schedule.schedule_expression == { high = "cron(0,15,30,45 * * * ? *)", medium = "cron(0 * * * ? *)", low = "cron(0 0,6,12,18 * * ? *)" }[cadence] &&
       schedule.target[0].input == "{\"cadence\":\"${cadence}\",\"scheduled_at\":\"<aws.scheduler.scheduled-time>\"}" &&
-      schedule.target[0].arn == aws_lambda_function.source_dispatch[0].arn && schedule.target[0].role_arn == aws_iam_role.source_dispatch_scheduler.arn &&
+      schedule.target[0].arn == aws_lambda_function.source_dispatch.arn && schedule.target[0].role_arn == aws_iam_role.source_dispatch_scheduler.arn &&
       schedule.target[0].retry_policy[0].maximum_retry_attempts == 2 && schedule.target[0].retry_policy[0].maximum_event_age_in_seconds == 600 &&
       schedule.target[0].dead_letter_config[0].arn == aws_sqs_queue.source_dispatch["scheduler_failure"].arn
     ])
-    error_message = "UTCの予定回と元の時刻、配送再試行、専用DLQを維持し初回は無効にする。"
+    error_message = "UTCの予定回と元の時刻、配送再試行、専用DLQを維持し、3つの予定を有効にする。"
   }
   assert {
     condition = (
-      aws_lambda_function.source_dispatch[0].timeout == 120 && aws_lambda_function.source_dispatch[0].reserved_concurrent_executions == 3 &&
-      aws_lambda_function.source_dispatch[0].memory_size == 512 && one(aws_lambda_function.source_dispatch[0].architectures) == "arm64" &&
-      one(aws_lambda_function.source_dispatch[0].image_config[0].command) == "app.lambda_handlers.source_dispatch.handler.handler" &&
-      aws_lambda_function.source_dispatch[0].environment[0].variables["DB_IAM_AUTH"] == "true" &&
-      aws_lambda_function.source_dispatch[0].environment[0].variables["DATABASE_URL"] == local.backend_db_url["vector_collect"] &&
-      aws_lambda_function.source_dispatch[0].environment[0].variables["SQS_SOURCE_ACQUISITION_QUEUE_URL"] == aws_sqs_queue.source_dispatch["acquisition"].url &&
-      !contains(keys(aws_lambda_function.source_dispatch[0].environment[0].variables), "AWS_REGION") &&
-      aws_lambda_function_event_invoke_config.source_dispatch[0].maximum_retry_attempts == 2 &&
-      aws_lambda_function_event_invoke_config.source_dispatch[0].maximum_event_age_in_seconds == 21600 &&
-      aws_lambda_function_event_invoke_config.source_dispatch[0].destination_config[0].on_failure[0].destination == aws_sqs_queue.source_dispatch["execution_failure"].arn
+      aws_lambda_function.source_dispatch.timeout == 120 && aws_lambda_function.source_dispatch.reserved_concurrent_executions == 3 &&
+      aws_lambda_function.source_dispatch.memory_size == 512 && one(aws_lambda_function.source_dispatch.architectures) == "arm64" &&
+      one(aws_lambda_function.source_dispatch.image_config[0].command) == "app.lambda_handlers.source_dispatch.handler.handler" &&
+      aws_lambda_function.source_dispatch.environment[0].variables["DB_IAM_AUTH"] == "true" &&
+      aws_lambda_function.source_dispatch.environment[0].variables["DATABASE_URL"] == local.backend_db_url["vector_collect"] &&
+      aws_lambda_function.source_dispatch.environment[0].variables["SQS_SOURCE_ACQUISITION_QUEUE_URL"] == aws_sqs_queue.source_dispatch["acquisition"].url &&
+      !contains(keys(aws_lambda_function.source_dispatch.environment[0].variables), "AWS_REGION") &&
+      aws_lambda_function_event_invoke_config.source_dispatch.maximum_retry_attempts == 2 &&
+      aws_lambda_function_event_invoke_config.source_dispatch.maximum_event_age_in_seconds == 21600 &&
+      aws_lambda_function_event_invoke_config.source_dispatch.destination_config[0].on_failure[0].destination == aws_sqs_queue.source_dispatch["execution_failure"].arn
     )
     error_message = "LambdaはIAM接続・逐次投入を行い、内部失敗を専用キューへ保存する。予約変数は上書きしない。"
   }
@@ -147,7 +139,7 @@ run "deployed_dispatch_is_disabled_and_connected" {
     condition = (
       jsondecode(aws_iam_role_policy.source_dispatch.policy).Statement[0].Resource == "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_collect" &&
       toset(jsondecode(aws_iam_role_policy.source_dispatch.policy).Statement[1].Resource) == toset([aws_sqs_queue.source_dispatch["acquisition"].arn, aws_sqs_queue.source_dispatch["execution_failure"].arn]) &&
-      jsondecode(aws_iam_role_policy.source_dispatch_scheduler.policy).Statement[0].Resource == aws_lambda_function.source_dispatch[0].arn &&
+      jsondecode(aws_iam_role_policy.source_dispatch_scheduler.policy).Statement[0].Resource == aws_lambda_function.source_dispatch.arn &&
       jsondecode(aws_iam_role_policy.source_dispatch_scheduler.policy).Statement[1].Resource == aws_sqs_queue.source_dispatch["scheduler_failure"].arn &&
       jsondecode(aws_iam_role.source_dispatch_scheduler.assume_role_policy).Statement[0].Condition.ArnEquals["aws:SourceArn"] == aws_scheduler_schedule_group.source_dispatch.arn &&
       jsondecode(aws_iam_role.source_dispatch_scheduler.assume_role_policy).Statement[0].Condition.StringEquals["aws:SourceAccount"] == "123456789012"
@@ -170,20 +162,4 @@ run "deployed_dispatch_is_disabled_and_connected" {
     ])
     error_message = "両保存先の標準件数・経過時間をダッシュボードで確認できる。"
   }
-}
-run "explicit_enable_starts_all_cadences" {
-  command = plan
-  variables {
-    source_dispatch_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    source_dispatch_enabled      = true
-  }
-  assert {
-    condition     = alltrue([for schedule in aws_scheduler_schedule.source_dispatch : schedule.state == "ENABLED"])
-    error_message = "明示指定で3スケジュールを有効にする。"
-  }
-}
-run "enable_requires_image" {
-  command = plan
-  variables { source_dispatch_enabled = true }
-  expect_failures = [var.source_dispatch_enabled]
 }

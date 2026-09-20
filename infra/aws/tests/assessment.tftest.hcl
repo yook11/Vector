@@ -97,36 +97,19 @@ override_resource {
   values          = { "arn" : "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-lambda" }
 }
 
-
 # 初回の基盤準備では、イメージ指定前に処理を開始しない。
-run "without_digests_no_assessment_triggers" {
-  command = plan
-  assert {
-    condition = (
-      length(aws_lambda_function.assessment_consumer) == 0 &&
-      length(aws_lambda_event_source_mapping.assessment_consumer) == 0 &&
-      length(aws_lambda_function.assessment_outbox_relay) == 0 &&
-      length(aws_scheduler_schedule.assessment_outbox_relay) == 0
-    )
-    error_message = "digest未指定では両Lambdaと起動トリガーを作成しない。"
-  }
-}
 
 # Consumerだけを指定してもrelayは起動せず、対象キューから既存と同じ上限で受信する。
 run "consumer_receives_assessment_queue_with_embedding_limits" {
   command = plan
-  variables {
-    assessment_consumer_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  }
   assert {
     condition = (
-      aws_lambda_function.assessment_consumer[0].image_config[0].command == tolist(["app.lambda_handlers.assessment.handler.handler"]) &&
-      aws_lambda_function.assessment_consumer[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.assessment_consumer_image_digest}" &&
-      aws_lambda_function.assessment_consumer[0].architectures == tolist(["arm64"]) &&
-      aws_lambda_function.assessment_consumer[0].memory_size == 1024 &&
-      aws_lambda_function.assessment_consumer[0].timeout == 120 &&
-      aws_lambda_function.assessment_consumer[0].reserved_concurrent_executions == 10 &&
-      aws_lambda_function.assessment_consumer[0].environment[0].variables == tomap({
+      aws_lambda_function.assessment_consumer.image_config[0].command == tolist(["app.lambda_handlers.assessment.handler.handler"]) &&
+      aws_lambda_function.assessment_consumer.architectures == tolist(["arm64"]) &&
+      aws_lambda_function.assessment_consumer.memory_size == 1024 &&
+      aws_lambda_function.assessment_consumer.timeout == 120 &&
+      aws_lambda_function.assessment_consumer.reserved_concurrent_executions == 10 &&
+      aws_lambda_function.assessment_consumer.environment[0].variables == tomap({
         ENV                                     = "production"
         DATABASE_URL                            = local.backend_db_url["vector_app"]
         DB_IAM_AUTH                             = "true"
@@ -135,14 +118,13 @@ run "consumer_receives_assessment_queue_with_embedding_limits" {
         INTERNAL_FRONTEND_BASE_URL              = "http://frontend.vector.internal:3000"
         REVALIDATE_BEARER_SECRET_PARAMETER_PATH = "/slice-test/frontend/revalidate-bearer-secret"
       }) &&
-      aws_lambda_event_source_mapping.assessment_consumer[0].event_source_arn == aws_sqs_queue.outbox["assessment"].arn &&
-      aws_lambda_event_source_mapping.assessment_consumer[0].function_name == aws_lambda_function.assessment_consumer[0].arn &&
-      aws_lambda_event_source_mapping.assessment_consumer[0].enabled &&
-      aws_lambda_event_source_mapping.assessment_consumer[0].batch_size == 1 &&
-      aws_lambda_event_source_mapping.assessment_consumer[0].maximum_batching_window_in_seconds == 0 &&
-      aws_lambda_event_source_mapping.assessment_consumer[0].scaling_config[0].maximum_concurrency == 10 &&
-      aws_lambda_event_source_mapping.assessment_consumer[0].function_response_types == toset(["ReportBatchItemFailures"]) &&
-      length(aws_lambda_function.assessment_outbox_relay) == 0
+      aws_lambda_event_source_mapping.assessment_consumer.event_source_arn == aws_sqs_queue.outbox["assessment"].arn &&
+      aws_lambda_event_source_mapping.assessment_consumer.function_name == aws_lambda_function.assessment_consumer.arn &&
+      aws_lambda_event_source_mapping.assessment_consumer.enabled &&
+      aws_lambda_event_source_mapping.assessment_consumer.batch_size == 1 &&
+      aws_lambda_event_source_mapping.assessment_consumer.maximum_batching_window_in_seconds == 0 &&
+      aws_lambda_event_source_mapping.assessment_consumer.scaling_config[0].maximum_concurrency == 10 &&
+      aws_lambda_event_source_mapping.assessment_consumer.function_response_types == toset(["ReportBatchItemFailures"])
     )
     error_message = "Assessmentの入口・秘密情報参照・SQS受信上限を正しく接続する。"
   }
@@ -223,13 +205,10 @@ run "consumer_network_and_permissions_are_scoped" {
 # relayだけを指定してもConsumerは起動せず、Assessmentの配送を定期実行する。
 run "relay_sends_only_to_assessment_queue" {
   command = plan
-  variables {
-    assessment_outbox_relay_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  }
   assert {
     condition = (
-      startswith(aws_lambda_function.assessment_outbox_relay[0].environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
-      aws_lambda_function.assessment_outbox_relay[0].environment[0].variables.DB_IAM_AUTH == "true" &&
+      startswith(aws_lambda_function.assessment_outbox_relay.environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
+      aws_lambda_function.assessment_outbox_relay.environment[0].variables.DB_IAM_AUTH == "true" &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.assessment_outbox_relay.policy).Statement : s.Resource if s.Action == "rds-db:connect" && s.Effect == "Allow"])) == toset([
         "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
       ])
@@ -238,22 +217,20 @@ run "relay_sends_only_to_assessment_queue" {
   }
   assert {
     condition = (
-      aws_lambda_function.assessment_outbox_relay[0].image_config[0].command == tolist(["app.lambda_handlers.outbox_relay.assessment_handler"]) &&
-      aws_lambda_function.assessment_outbox_relay[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.assessment_outbox_relay_image_digest}" &&
-      aws_lambda_function.assessment_outbox_relay[0].memory_size == 512 &&
-      aws_lambda_function.assessment_outbox_relay[0].timeout == 120 &&
-      aws_lambda_function.assessment_outbox_relay[0].reserved_concurrent_executions == 1 &&
-      aws_lambda_function.assessment_outbox_relay[0].environment[0].variables == tomap({
+      aws_lambda_function.assessment_outbox_relay.image_config[0].command == tolist(["app.lambda_handlers.outbox_relay.assessment_handler"]) &&
+      aws_lambda_function.assessment_outbox_relay.memory_size == 512 &&
+      aws_lambda_function.assessment_outbox_relay.timeout == 120 &&
+      aws_lambda_function.assessment_outbox_relay.reserved_concurrent_executions == 1 &&
+      aws_lambda_function.assessment_outbox_relay.environment[0].variables == tomap({
         ENV                              = "production"
         DATABASE_URL                     = local.backend_db_url["vector_outbox_relay"]
         DB_IAM_AUTH                      = "true"
         SQS_ARTICLE_ASSESSMENT_QUEUE_URL = aws_sqs_queue.outbox["assessment"].url
       }) &&
-      aws_scheduler_schedule.assessment_outbox_relay[0].schedule_expression == "rate(1 minute)" &&
-      aws_scheduler_schedule.assessment_outbox_relay[0].state == "ENABLED" &&
-      aws_scheduler_schedule.assessment_outbox_relay[0].target[0].arn == aws_lambda_function.assessment_outbox_relay[0].arn &&
-      jsondecode(aws_iam_role_policy.assessment_outbox_relay_scheduler.policy).Statement[0].Resource == local.assessment_outbox_relay_arn &&
-      length(aws_lambda_function.assessment_consumer) == 0
+      aws_scheduler_schedule.assessment_outbox_relay.schedule_expression == "rate(1 minute)" &&
+      aws_scheduler_schedule.assessment_outbox_relay.state == "ENABLED" &&
+      aws_scheduler_schedule.assessment_outbox_relay.target[0].arn == aws_lambda_function.assessment_outbox_relay.arn &&
+      jsondecode(aws_iam_role_policy.assessment_outbox_relay_scheduler.policy).Statement[0].Resource == local.assessment_outbox_relay_arn
     )
     error_message = "専用relayの入口と1分間隔の起動を接続する。"
   }
@@ -267,14 +244,6 @@ run "relay_sends_only_to_assessment_queue" {
 }
 
 # mutable tagは両方の入口で受け付けない。
-run "reject_assessment_image_tags" {
-  command = plan
-  variables {
-    assessment_consumer_image_digest     = "latest"
-    assessment_outbox_relay_image_digest = "latest"
-  }
-  expect_failures = [var.assessment_consumer_image_digest, var.assessment_outbox_relay_image_digest]
-}
 
 override_resource {
   override_during = plan
@@ -317,7 +286,6 @@ override_resource {
   target          = aws_security_group.outbox_sqs_endpoint
   values          = { id = "sg-00000000000000006" }
 }
-
 
 override_resource {
   override_during = plan

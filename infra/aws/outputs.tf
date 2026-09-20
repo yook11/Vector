@@ -91,14 +91,9 @@ output "outbox_queue_arns" {
   value       = { for stage, queue in aws_sqs_queue.outbox : stage => queue.arn }
 }
 
-output "outbox_relay_image_digest" {
-  description = "通常plan/applyが保持するrelayのデプロイ済みイメージdigest。"
-  value       = var.outbox_relay_image_digest
-}
-
 output "outbox_relay_function_name" {
   description = "イメージ未指定時はnull。"
-  value       = one(aws_lambda_function.outbox_relay[*].function_name)
+  value       = aws_lambda_function.outbox_relay.function_name
 }
 
 output "embedding_consumer_subnet_id" {
@@ -130,19 +125,15 @@ output "embedding_dlq_arn" {
 }
 
 output "embedding_consumer_function_name" {
-  value = try(aws_lambda_function.embedding_consumer[0].function_name, null)
+  value = aws_lambda_function.embedding_consumer.function_name
 }
 
 output "embedding_consumer_function_arn" {
-  value = try(aws_lambda_function.embedding_consumer[0].arn, null)
-}
-
-output "embedding_consumer_image_digest" {
-  value = var.embedding_consumer_image_digest
+  value = aws_lambda_function.embedding_consumer.arn
 }
 
 output "embedding_consumer_event_source_mapping_uuid" {
-  value = try(aws_lambda_event_source_mapping.embedding_consumer[0].uuid, null)
+  value = aws_lambda_event_source_mapping.embedding_consumer.uuid
 }
 
 output "assessment_consumer_subnet_id" {
@@ -174,27 +165,19 @@ output "assessment_dlq_arn" {
 }
 
 output "assessment_consumer_function_name" {
-  value = try(aws_lambda_function.assessment_consumer[0].function_name, null)
+  value = aws_lambda_function.assessment_consumer.function_name
 }
 
 output "assessment_consumer_function_arn" {
-  value = try(aws_lambda_function.assessment_consumer[0].arn, null)
-}
-
-output "assessment_consumer_image_digest" {
-  value = var.assessment_consumer_image_digest
+  value = aws_lambda_function.assessment_consumer.arn
 }
 
 output "assessment_consumer_event_source_mapping_uuid" {
-  value = try(aws_lambda_event_source_mapping.assessment_consumer[0].uuid, null)
+  value = aws_lambda_event_source_mapping.assessment_consumer.uuid
 }
 
 output "assessment_outbox_relay_function_name" {
-  value = one(aws_lambda_function.assessment_outbox_relay[*].function_name)
-}
-
-output "assessment_outbox_relay_image_digest" {
-  value = var.assessment_outbox_relay_image_digest
+  value = aws_lambda_function.assessment_outbox_relay.function_name
 }
 
 output "curation_consumer_subnet_id" {
@@ -226,31 +209,23 @@ output "curation_dlq_arn" {
 }
 
 output "curation_consumer_function_name" {
-  value = try(aws_lambda_function.curation_consumer[0].function_name, null)
+  value = aws_lambda_function.curation_consumer.function_name
 }
 
 output "curation_consumer_function_arn" {
-  value = try(aws_lambda_function.curation_consumer[0].arn, null)
-}
-
-output "curation_consumer_image_digest" {
-  value = var.curation_consumer_image_digest
+  value = aws_lambda_function.curation_consumer.arn
 }
 
 output "curation_consumer_event_source_mapping_uuid" {
-  value = try(aws_lambda_event_source_mapping.curation_consumer[0].uuid, null)
+  value = aws_lambda_event_source_mapping.curation_consumer.uuid
 }
 
 output "curation_outbox_relay_function_name" {
-  value = one(aws_lambda_function.curation_outbox_relay[*].function_name)
-}
-
-output "curation_outbox_relay_image_digest" {
-  value = var.curation_outbox_relay_image_digest
+  value = aws_lambda_function.curation_outbox_relay.function_name
 }
 
 output "curation_outbox_relay_function_arn" {
-  value = one(aws_lambda_function.curation_outbox_relay[*].arn)
+  value = aws_lambda_function.curation_outbox_relay.arn
 }
 
 output "curation_outbox_relay_role_arn" {
@@ -294,35 +269,23 @@ output "completion_dlq_arn" {
 }
 
 output "completion_consumer_function_name" {
-  value = try(aws_lambda_function.completion_consumer[0].function_name, null)
+  value = aws_lambda_function.completion_consumer.function_name
 }
 
 output "completion_consumer_function_arn" {
-  value = try(aws_lambda_function.completion_consumer[0].arn, null)
-}
-
-output "completion_consumer_image_digest" {
-  value = var.completion_consumer_image_digest
+  value = aws_lambda_function.completion_consumer.arn
 }
 
 output "completion_consumer_event_source_mapping_uuid" {
-  value = try(aws_lambda_event_source_mapping.completion_consumer[0].uuid, null)
-}
-
-output "completion_consumer_enabled" {
-  value = var.completion_consumer_enabled
+  value = aws_lambda_event_source_mapping.completion_consumer.uuid
 }
 
 output "completion_outbox_relay_function_name" {
-  value = one(aws_lambda_function.completion_outbox_relay[*].function_name)
-}
-
-output "completion_outbox_relay_image_digest" {
-  value = var.completion_outbox_relay_image_digest
+  value = aws_lambda_function.completion_outbox_relay.function_name
 }
 
 output "completion_outbox_relay_function_arn" {
-  value = one(aws_lambda_function.completion_outbox_relay[*].arn)
+  value = aws_lambda_function.completion_outbox_relay.arn
 }
 
 output "completion_outbox_relay_role_arn" {
@@ -339,8 +302,4 @@ output "completion_outbox_relay_scheduler_role_arn" {
 
 output "completion_outbox_relay_schedule_group_name" {
   value = aws_scheduler_schedule_group.completion_outbox_relay.name
-}
-
-output "completion_relay_enabled" {
-  value = var.completion_relay_enabled
 }

@@ -84,7 +84,7 @@ override_resource {
 }
 override_resource {
   override_during = plan
-  target          = aws_lambda_function.source_dispatch[0]
+  target          = aws_lambda_function.source_dispatch
   values          = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-source-dispatch" }
 }
 override_resource {

@@ -1,24 +1,17 @@
 locals {
   backfill_stages = {
     curation = {
-      image_digest = var.curation_backfill_image_digest
-      enabled      = var.curation_backfill_enabled
-      schedule     = "cron(0,30 * * * ? *)"
+      schedule = "cron(0,30 * * * ? *)"
     }
     assessment = {
-      image_digest = var.assessment_backfill_image_digest
-      enabled      = var.assessment_backfill_enabled
-      schedule     = "cron(5,35 * * * ? *)"
+      schedule = "cron(5,35 * * * ? *)"
     }
     embedding = {
-      image_digest = var.embedding_backfill_image_digest
-      enabled      = var.embedding_backfill_enabled
-      schedule     = "cron(10,40 * * * ? *)"
+      schedule = "cron(10,40 * * * ? *)"
     }
   }
-  backfill_names     = { for stage in keys(local.backfill_stages) : stage => "${var.name_prefix}-${stage}-backfill" }
-  backfill_arns      = { for stage, name in local.backfill_names : stage => "arn:aws:lambda:${var.region}:${local.account_id}:function:${name}" }
-  deployed_backfills = { for stage, config in local.backfill_stages : stage => config if config.image_digest != null }
+  backfill_names = { for stage in keys(local.backfill_stages) : stage => "${var.name_prefix}-${stage}-backfill" }
+  backfill_arns  = { for stage, name in local.backfill_names : stage => "arn:aws:lambda:${var.region}:${local.account_id}:function:${name}" }
 }
 
 resource "aws_cloudwatch_log_group" "backfill" {
@@ -86,12 +79,12 @@ resource "aws_iam_role_policy" "backfill" {
 # backfillはCloudWatch Logsと標準メトリクスを使用する。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "backfill" {
-  for_each = local.deployed_backfills
+  for_each = local.backfill_stages
 
   function_name                  = local.backfill_names[each.key]
   role                           = aws_iam_role.backfill[each.key].arn
   package_type                   = "Image"
-  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${each.value.image_digest}"
+  image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
   memory_size                    = 512
   timeout                        = 120
@@ -128,6 +121,10 @@ resource "aws_lambda_function" "backfill" {
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
   ]
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }
 
 resource "aws_scheduler_schedule_group" "backfill" {
@@ -172,11 +169,11 @@ resource "aws_iam_role_policy" "backfill_scheduler" {
 }
 
 resource "aws_scheduler_schedule" "backfill" {
-  for_each = local.deployed_backfills
+  for_each = local.backfill_stages
 
   name                         = local.backfill_names[each.key]
   group_name                   = aws_scheduler_schedule_group.backfill[each.key].name
-  state                        = each.value.enabled ? "ENABLED" : "DISABLED"
+  state                        = "ENABLED"
   schedule_expression          = each.value.schedule
   schedule_expression_timezone = "UTC"
 
@@ -199,7 +196,7 @@ resource "aws_scheduler_schedule" "backfill" {
 }
 
 resource "aws_lambda_function_event_invoke_config" "backfill" {
-  for_each = local.deployed_backfills
+  for_each = local.backfill_stages
 
   function_name                = aws_lambda_function.backfill[each.key].function_name
   maximum_retry_attempts       = 0

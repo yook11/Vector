@@ -84,7 +84,7 @@ override_resource {
 }
 override_resource {
   override_during = plan
-  target          = aws_lambda_function.source_dispatch[0]
+  target          = aws_lambda_function.source_dispatch
   values          = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-source-dispatch" }
 }
 override_resource {
@@ -103,33 +103,24 @@ override_resource {
   values          = { arn = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-source-dispatch-execution-failures", url = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/slice-test-source-dispatch-execution-failures" }
 }
 
-
-run "consumer_is_absent_without_digest" {
+run "consumer_receives_with_bounded_execution" {
   command = plan
-  assert {
-    condition     = length(aws_lambda_function.acquisition_consumer) == 0 && length(aws_lambda_event_source_mapping.acquisition_consumer) == 0
-    error_message = "初回digest未指定では受信接続を作らない。"
-  }
-}
-run "consumer_starts_disabled_with_bounded_execution" {
-  command = plan
-  variables { acquisition_consumer_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
   assert {
     condition = (
-      aws_lambda_function.acquisition_consumer[0].timeout == 300 &&
-      aws_lambda_function.acquisition_consumer[0].memory_size == 1024 &&
-      aws_lambda_function.acquisition_consumer[0].reserved_concurrent_executions == 5 &&
-      aws_lambda_function.acquisition_consumer[0].architectures == tolist(["arm64"]) &&
-      aws_lambda_function.acquisition_consumer[0].image_config[0].command == tolist(["app.lambda_handlers.acquisition.handler.handler"]) &&
-      aws_lambda_function.acquisition_consumer[0].environment[0].variables.CROSSREF_CONTACT_EMAIL == var.crossref_contact_email &&
-      aws_lambda_function.acquisition_consumer[0].environment[0].variables.DB_IAM_AUTH == "true" &&
-      !aws_lambda_event_source_mapping.acquisition_consumer[0].enabled &&
-      aws_lambda_event_source_mapping.acquisition_consumer[0].batch_size == 1 &&
-      aws_lambda_event_source_mapping.acquisition_consumer[0].maximum_batching_window_in_seconds == 0 &&
-      aws_lambda_event_source_mapping.acquisition_consumer[0].scaling_config[0].maximum_concurrency == 5 &&
-      aws_lambda_event_source_mapping.acquisition_consumer[0].function_response_types == toset(["ReportBatchItemFailures"])
+      aws_lambda_function.acquisition_consumer.timeout == 300 &&
+      aws_lambda_function.acquisition_consumer.memory_size == 1024 &&
+      aws_lambda_function.acquisition_consumer.reserved_concurrent_executions == 5 &&
+      aws_lambda_function.acquisition_consumer.architectures == tolist(["arm64"]) &&
+      aws_lambda_function.acquisition_consumer.image_config[0].command == tolist(["app.lambda_handlers.acquisition.handler.handler"]) &&
+      aws_lambda_function.acquisition_consumer.environment[0].variables.CROSSREF_CONTACT_EMAIL == var.crossref_contact_email &&
+      aws_lambda_function.acquisition_consumer.environment[0].variables.DB_IAM_AUTH == "true" &&
+      aws_lambda_event_source_mapping.acquisition_consumer.enabled &&
+      aws_lambda_event_source_mapping.acquisition_consumer.batch_size == 1 &&
+      aws_lambda_event_source_mapping.acquisition_consumer.maximum_batching_window_in_seconds == 0 &&
+      aws_lambda_event_source_mapping.acquisition_consumer.scaling_config[0].maximum_concurrency == 5 &&
+      aws_lambda_event_source_mapping.acquisition_consumer.function_response_types == toset(["ReportBatchItemFailures"])
     )
-    error_message = "受信時間・同時実行・初期停止・取得入口の契約を守る。"
+    error_message = "受信時間・同時実行・有効な受信・取得入口の契約を守る。"
   }
 }
 run "queue_redrive_and_failure_dashboard" {
