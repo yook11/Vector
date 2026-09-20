@@ -152,12 +152,10 @@ resource "aws_iam_role_policy" "acquisition_consumer" {
 # CloudWatch Logsと既存EMFを使い、X-Rayは追加しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "acquisition_consumer" {
-  count = var.acquisition_consumer_image_digest == null ? 0 : 1
-
   function_name                  = local.acquisition_consumer_name
   role                           = aws_iam_role.acquisition_consumer.arn
   package_type                   = "Image"
-  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${var.acquisition_consumer_image_digest}"
+  image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
   memory_size                    = 1024
   timeout                        = 300
@@ -202,14 +200,16 @@ resource "aws_lambda_function" "acquisition_consumer" {
     aws_vpc_security_group_egress_rule.acquisition_consumer_to_proxy,
     aws_vpc_security_group_ingress_rule.proxy_from_acquisition_consumer,
   ]
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }
 
 resource "aws_lambda_event_source_mapping" "acquisition_consumer" {
-  count = var.acquisition_consumer_image_digest == null ? 0 : 1
-
   event_source_arn                   = aws_sqs_queue.source_dispatch["acquisition"].arn
-  function_name                      = aws_lambda_function.acquisition_consumer[0].arn
-  enabled                            = var.acquisition_consumer_enabled
+  function_name                      = aws_lambda_function.acquisition_consumer.arn
+  enabled                            = true
   batch_size                         = 1
   maximum_batching_window_in_seconds = 0
   function_response_types            = ["ReportBatchItemFailures"]
@@ -222,33 +222,10 @@ resource "aws_lambda_event_source_mapping" "acquisition_consumer" {
   depends_on = [aws_iam_role_policy.acquisition_consumer]
 }
 
-variable "acquisition_consumer_image_digest" {
-  type        = string
-  default     = null
-  description = "取得Consumerのbackendイメージdigest。nullでは関数と受信接続を作成しない。"
-  validation {
-    condition     = var.acquisition_consumer_image_digest == null || can(regex("^sha256:[0-9a-f]{64}$", var.acquisition_consumer_image_digest))
-    error_message = "取得Consumerはsha256 digestで指定してください。"
-  }
-}
-
-variable "acquisition_consumer_enabled" {
-  type        = bool
-  default     = false
-  nullable    = false
-  description = "取得Consumerの受信を明示的に開始する。"
-  validation {
-    condition     = !var.acquisition_consumer_enabled || var.acquisition_consumer_image_digest != null
-    error_message = "受信の有効化にはイメージdigestが必要です。"
-  }
-}
-
 output "acquisition_consumer" {
   value = {
-    lambda_arn                = try(aws_lambda_function.acquisition_consumer[0].arn, null)
-    event_source_mapping_uuid = try(aws_lambda_event_source_mapping.acquisition_consumer[0].uuid, null)
-    enabled                   = var.acquisition_consumer_enabled
-    image_digest              = var.acquisition_consumer_image_digest
+    lambda_arn                = aws_lambda_function.acquisition_consumer.arn
+    event_source_mapping_uuid = aws_lambda_event_source_mapping.acquisition_consumer.uuid
     dlq_url                   = aws_sqs_queue.acquisition_dlq.url
     dlq_arn                   = aws_sqs_queue.acquisition_dlq.arn
     log_group                 = aws_cloudwatch_log_group.acquisition_consumer.name

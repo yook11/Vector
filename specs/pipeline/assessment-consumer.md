@@ -2,6 +2,8 @@
 
 Status: Assessment Lambda・relay・通知・カテゴリー初期化を実装しAWSへ反映済み。旧Taskiq経路を撤去する。撤去の本番反映前には更新後の記事保存・後続イベント・通知成功と旧Redisの未配達・処理中件数を確認する。以下の各日付の検証結果・非目標はその時点の記録である。
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
+
 ## Problem
 
 Curationの完了イベントからAssessmentを実行し、対象内の判定結果をEmbeddingへつなぐ。イベント駆動に移したEmbeddingの責務分担を基準にする。既存AssessmentのRecoverable／Terminal、Taskiq retry、hold、backfillの方針は、新Consumerの設計根拠にしない。

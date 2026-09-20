@@ -2,6 +2,8 @@
 
 Status: ステップ1〜5を実装し、投入基盤・取得Consumer・3スケジュールは2026-09-15に有効化済み。Schedulerの予定時刻が`jsonencode`のエスケープで置換されず入力検証で全件失敗していた不具合をステップ6（2026-09-19）で修正。実配送の確認結果はステップ6に記録し、旧Taskiq停止と撤去は後続工程。以下のステップ別記録は当時の範囲と検証結果を示す。
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
+
 ## Problem
 
 ニュース取得の最前段にある定期投入を、EventBridge Schedulerが共通のLambdaを起動し、Lambdaがcadenceに応じたソースの取得依頼をSQSへ直接送る構成へ移す。Scheduler、対象選定、送信、取得Consumerの責務と、投入失敗時の回復境界を定義する。

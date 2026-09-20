@@ -181,21 +181,8 @@ override_resource {
   values          = { id = "sg-00000000000000010" }
 }
 
-run "no_digest_does_not_create_invocations" {
-  command = plan
-  assert {
-    condition     = length(aws_lambda_function.backfill) == 0 && length(aws_scheduler_schedule.backfill) == 0 && length(aws_lambda_function_event_invoke_config.backfill) == 0
-    error_message = "未配置工程のLambda・非同期設定・scheduleは作成しない。"
-  }
-}
-
 run "first_deployment_enables_all_three_stages" {
   command = plan
-  variables {
-    curation_backfill_image_digest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    assessment_backfill_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    embedding_backfill_image_digest  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  }
   assert {
     condition     = toset(keys(aws_lambda_function.backfill)) == toset(["curation", "assessment", "embedding"]) && alltrue([for schedule in aws_scheduler_schedule.backfill : schedule.state == "ENABLED"])
     error_message = "3工程のイメージを指定した初回は全工程を有効にする。"
@@ -206,7 +193,6 @@ run "first_deployment_enables_all_three_stages" {
       function.image_config[0].command == tolist(["app.lambda_handlers.backfill.${stage}_handler"]) &&
       function.image_config[0].entry_point == tolist(["/app/.venv/bin/python", "-m", "awslambdaric"]) &&
       function.image_config[0].working_directory == "/app" &&
-      function.image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${local.backfill_stages[stage].image_digest}" &&
       function.environment[0].variables == tomap({
         ENV                                     = "production"
         DATABASE_URL                            = local.backend_db_url["vector_app"]
@@ -221,11 +207,6 @@ run "first_deployment_enables_all_three_stages" {
 
 run "scheduled_invocations_keep_offsets_and_target_pairings" {
   command = plan
-  variables {
-    curation_backfill_image_digest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    assessment_backfill_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    embedding_backfill_image_digest  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  }
   assert {
     condition = { for stage, schedule in aws_scheduler_schedule.backfill : stage => schedule.schedule_expression } == {
       curation   = "cron(0,30 * * * ? *)"
@@ -245,11 +226,6 @@ run "scheduled_invocations_keep_offsets_and_target_pairings" {
 
 run "both_retry_layers_expire_after_sixty_seconds_without_error_retries" {
   command = plan
-  variables {
-    curation_backfill_image_digest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    assessment_backfill_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    embedding_backfill_image_digest  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  }
   assert {
     condition = alltrue([for stage, schedule in aws_scheduler_schedule.backfill :
       schedule.target[0].retry_policy[0].maximum_retry_attempts == 0 &&
@@ -264,31 +240,8 @@ run "both_retry_layers_expire_after_sixty_seconds_without_error_retries" {
   }
 }
 
-run "explicit_stop_affects_only_assessment_schedule" {
-  command = plan
-  variables {
-    curation_backfill_image_digest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    assessment_backfill_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    embedding_backfill_image_digest  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    assessment_backfill_enabled      = false
-  }
-  assert {
-    condition = { for stage, schedule in aws_scheduler_schedule.backfill : stage => schedule.state } == {
-      curation   = "ENABLED"
-      assessment = "DISABLED"
-      embedding  = "ENABLED"
-    } && length(aws_lambda_function.backfill) == 3
-    error_message = "明示停止は該当工程のscheduleだけに適用し、Lambdaは維持する。"
-  }
-}
-
 run "backfill_reuses_private_relay_connections_with_bounded_compute" {
   command = plan
-  variables {
-    curation_backfill_image_digest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    assessment_backfill_image_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    embedding_backfill_image_digest  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  }
   assert {
     condition = alltrue([for function in aws_lambda_function.backfill :
       function.architectures == tolist(["arm64"]) && function.memory_size == 512 &&

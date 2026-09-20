@@ -2,6 +2,8 @@
 
 Status: 全スライスを実装し、本番で稼働中。旧Taskiq経路は2026-09に撤去した（[analysis-service-retirement.md](./analysis-service-retirement.md)）。
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
+
 ## Problem
 
 分析可能な記事が完成したことを契機に、CurationをOutbox・SQS・Lambdaで実行する。取得段階で本文まで揃った場合と、本文補完段階で揃った場合は、同じ業務上の事実として一種類のイベントを発行する。

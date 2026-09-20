@@ -213,12 +213,10 @@ resource "aws_iam_role_policy" "outbox_relay" {
 # relayはCloudWatch Logsと標準メトリクスを使い、X-Rayは採用しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "outbox_relay" {
-  count = var.outbox_relay_image_digest == null ? 0 : 1
-
   function_name                  = local.outbox_relay_name
   role                           = aws_iam_role.outbox_relay.arn
   package_type                   = "Image"
-  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${var.outbox_relay_image_digest}"
+  image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
   memory_size                    = 512
   timeout                        = 120
@@ -256,6 +254,10 @@ resource "aws_lambda_function" "outbox_relay" {
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
   ]
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }
 
 resource "aws_scheduler_schedule_group" "outbox_relay" {
@@ -294,8 +296,6 @@ resource "aws_iam_role_policy" "outbox_relay_scheduler" {
 }
 
 resource "aws_scheduler_schedule" "outbox_relay" {
-  count = var.outbox_relay_image_digest == null ? 0 : 1
-
   name                = local.outbox_relay_name
   group_name          = aws_scheduler_schedule_group.outbox_relay.name
   state               = "ENABLED"
@@ -306,7 +306,7 @@ resource "aws_scheduler_schedule" "outbox_relay" {
   }
 
   target {
-    arn      = aws_lambda_function.outbox_relay[0].arn
+    arn      = aws_lambda_function.outbox_relay.arn
     role_arn = aws_iam_role.outbox_relay_scheduler.arn
     input    = "{}"
   }

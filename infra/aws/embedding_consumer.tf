@@ -198,12 +198,10 @@ resource "aws_cloudwatch_metric_alarm" "embedding_dlq_not_empty" {
 # CloudWatch Logsと既存EMFを使い、X-Rayは追加しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "embedding_consumer" {
-  count = var.embedding_consumer_image_digest == null ? 0 : 1
-
   function_name                  = local.embedding_consumer_name
   role                           = aws_iam_role.embedding_consumer.arn
   package_type                   = "Image"
-  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${var.embedding_consumer_image_digest}"
+  image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
   memory_size                    = 1024
   timeout                        = 120
@@ -250,13 +248,15 @@ resource "aws_lambda_function" "embedding_consumer" {
     aws_vpc_security_group_egress_rule.embedding_consumer_to_ssm,
     aws_vpc_security_group_ingress_rule.ssm_from_embedding_consumer,
   ]
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }
 
 resource "aws_lambda_event_source_mapping" "embedding_consumer" {
-  count = var.embedding_consumer_image_digest == null ? 0 : 1
-
   event_source_arn                   = aws_sqs_queue.outbox["embedding"].arn
-  function_name                      = aws_lambda_function.embedding_consumer[0].arn
+  function_name                      = aws_lambda_function.embedding_consumer.arn
   enabled                            = true
   batch_size                         = 1
   maximum_batching_window_in_seconds = 0

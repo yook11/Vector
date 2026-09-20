@@ -221,12 +221,10 @@ resource "aws_cloudwatch_metric_alarm" "assessment_dlq_not_empty" {
 # CloudWatch Logsと既存EMFを使い、X-Rayは追加しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "assessment_consumer" {
-  count = var.assessment_consumer_image_digest == null ? 0 : 1
-
   function_name                  = local.assessment_consumer_name
   role                           = aws_iam_role.assessment_consumer.arn
   package_type                   = "Image"
-  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${var.assessment_consumer_image_digest}"
+  image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
   memory_size                    = 1024
   timeout                        = 120
@@ -277,13 +275,15 @@ resource "aws_lambda_function" "assessment_consumer" {
     aws_vpc_security_group_egress_rule.assessment_consumer_to_frontend,
     aws_vpc_security_group_ingress_rule.frontend_from_assessment_consumer,
   ]
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }
 
 resource "aws_lambda_event_source_mapping" "assessment_consumer" {
-  count = var.assessment_consumer_image_digest == null ? 0 : 1
-
   event_source_arn                   = aws_sqs_queue.outbox["assessment"].arn
-  function_name                      = aws_lambda_function.assessment_consumer[0].arn
+  function_name                      = aws_lambda_function.assessment_consumer.arn
   enabled                            = true
   batch_size                         = 1
   maximum_batching_window_in_seconds = 0

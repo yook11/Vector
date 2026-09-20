@@ -1,5 +1,7 @@
 # backendイメージの保持
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](./app-rollout.md)を参照する。
+
 ## 作業定義
 
 - Problem: ECRの件数ベースの削除が、稼働中Lambdaの参照するbackendイメージを削除する。

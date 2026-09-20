@@ -97,7 +97,6 @@ override_resource {
   values          = { "arn" : "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-lambda" }
 }
 
-
 # 初回の基盤準備では、イメージ指定前に処理を開始しない。
 run "redrive_preserves_direct_send_boundary" {
   command = plan

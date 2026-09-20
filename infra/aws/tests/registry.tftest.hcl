@@ -56,6 +56,9 @@ mock_provider "aws" {
   mock_resource "aws_ecr_repository" {
     defaults = { arn = "arn:aws:ecr:ap-northeast-1:123456789012:repository/test", repository_url = "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/test" }
   }
+  mock_data "aws_ecr_image" {
+    defaults = { image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+  }
 }
 
 variables {
@@ -93,6 +96,31 @@ run "backend_image_pull_is_limited_to_prefixed_lambdas" {
       toset(jsondecode(aws_ecr_repository_policy.backend_lambda_pull.policy).Statement[0].Action) == toset(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"])
     )
     error_message = "backend ECRからの取得は、同一アカウントで名前がprefixに従うLambdaだけに許可する。"
+  }
+}
+
+run "lambdas_start_from_the_latest_backend_image" {
+  command = plan
+
+  assert {
+    condition = alltrue([for image_uri in concat(
+      [for function in aws_lambda_function.backfill : function.image_uri],
+      [
+        aws_lambda_function.outbox_relay.image_uri,
+        aws_lambda_function.curation_outbox_relay.image_uri,
+        aws_lambda_function.assessment_outbox_relay.image_uri,
+        aws_lambda_function.completion_outbox_relay.image_uri,
+        aws_lambda_function.curation_consumer.image_uri,
+        aws_lambda_function.assessment_consumer.image_uri,
+        aws_lambda_function.embedding_consumer.image_uri,
+        aws_lambda_function.completion_consumer.image_uri,
+        aws_lambda_function.acquisition_consumer.image_uri,
+        aws_lambda_function.source_dispatch.image_uri,
+        aws_lambda_function.auth_rate_limit_cleanup.image_uri,
+      ]) :
+      image_uri == "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ])
+    error_message = "Lambdaの新規作成はbackendの最新イメージをdigestで参照し、版の前進はrolloutに任せる。"
   }
 }
 

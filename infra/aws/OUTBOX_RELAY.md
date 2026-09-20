@@ -47,6 +47,8 @@ handlerは起動ごとに設定・DB Engine・publisher・failure handlerを組�
 
 ## 初回構築
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../../specs/platform/app-rollout.md)を参照する。
+
 1. bootstrapの既存管理手順に従い、専用boundary・作成可能ロール・CI管理権限を先に適用する。通常applyロールではbootstrapを更新できない。
 2. PRをmainへマージし、既存 `AWS terraform apply` のproduction承認を経て本体を適用する。イメージ未指定ではLambdaとscheduleは作成せず、キュー・IAM・SG・エンドポイント・ログ・schedule groupまで作成する。
 3. handlerと `awslambdaric` を含むmainのbackendイメージを、既存 `AWS app images` workflowでECRへ配布する。ECSと同一のイメージ成果物を使う。backendイメージは単一のlinux/arm64でビルドする。
@@ -58,15 +60,7 @@ handlerは起動ごとに設定・DB Engine・publisher・failure handlerを組�
 
 ## 更新とロールバック
 
-通常のPR planと自動applyは `resolve-outbox-relay-image.py` で現行Lambdaのdigestをstateから引き継ぐ。初回にLambdaがない場合だけnullを使用し、state取得失敗や不正な参照をnullへ置き換えない。
-
-生成中の空JSONをTerraformが読まないよう、自動読み込み対象外の一時ファイルに出力し、処理成功後に `.auto.tfvars.json` へ移動する。
-
-更新・ロールバックはいずれも `AWS terraform apply` の手動入力に、ECRに存在するbackend digestを明示する。空欄では現状を保持する。Lambdaのコード配布はTerraformが担当し、ECSイメージのpush・rolloutだけではLambdaを更新しない。
-
-Lambda以外も含む本体スタック全体のplanを行うため、更新時にも差分を確認する。以前のworkflow revisionからの適用は既存の最新infra確認で拒否する。CLIからの独自applyや `update-function-code` を通常の更新経路にしない。
-
-既存ECRの保持世代数はLambdaにも適用される。古いdigestは削除され得るため、ECSだけを更新し続けてLambdaを保持窓外へ取り残さない。ロールバック先はECRで存在を確認する。タグだけの付け替えで永続保持される構成ではない。
+relayの版はTerraformで指定せず、`image_uri`の変更を追わない。版の前進と切り戻しは、ECSと同じ`AWS app images`のrolloutへ移す（移行中。設計は[app rollout](../../specs/platform/app-rollout.md)）。それまでの間、版は現在のイメージのまま据え置く。
 
 ## 検証再開時の確認
 
@@ -113,7 +107,7 @@ SSM・DB・プロキシ・認証の共通障害や設定不備が継続した場
 3. スケジュールの無効化操作を実行し、再取得して状態DISABLEDを確認する。スケジュールを削除したり、ターゲット・実行間隔を変更したりしない。
 4. 既に配信・実行された呼び出しは残り得る。Consumerはキュー内の処理を続けるため、Consumer側にも継続障害があれば[既存の受信停止手順](README.md#consumerの受信有効化監視停止再開スライス41)で停止する。実行中処理の強制終了・キュー削除・purgeは行わない。
 5. 停止中は再有効化するapplyを承認しない。Terraformの同じSchedulerを `state = "DISABLED"` に変更してマージ・反映し、手動変更とコードを一致させる。
-6. 原因解消後、Consumerの受信再開を確認したうえで、Terraformを `ENABLED` へ戻し、production承認付きapplyでrelayを再開する。digestは維持する。
+6. 原因解消後、Consumerの受信再開を確認したうえで、Terraformを `ENABLED` へ戻し、production承認付きapplyでrelayを再開する。
 
 [Schedulerの状態管理](https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-schedule-state.html)に従い、緊急停止にはコンソールの無効化を使う。CLIの `update-schedule` は省略した設定を既定値へ戻すため、Stateだけを指定するコマンドは使わない。[UpdateSchedule仕様](https://docs.aws.amazon.com/cli/latest/reference/scheduler/update-schedule.html)
 

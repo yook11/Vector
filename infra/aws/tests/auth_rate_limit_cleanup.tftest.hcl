@@ -27,29 +27,27 @@ mock_provider "aws" {
 }
 
 variables {
-  name_prefix                          = "slice-test"
-  root_domain                          = "example.com"
-  frontend_domain                      = "app.example.com"
-  crossref_contact_email               = "test@example.com"
-  slack_team_id                        = "T0123456789"
-  slack_channel_id                     = "C0123456789"
-  auth_rate_limit_cleanup_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  name_prefix            = "slice-test"
+  root_domain            = "example.com"
+  frontend_domain        = "app.example.com"
+  crossref_contact_email = "test@example.com"
+  slack_team_id          = "T0123456789"
+  slack_channel_id       = "C0123456789"
 }
 
-run "cleanup_is_deployed_stopped_with_bounded_runtime" {
+run "cleanup_runs_with_bounded_runtime" {
   command = plan
   assert {
     condition = (
-      length(aws_lambda_function.auth_rate_limit_cleanup) == 1 &&
-      aws_lambda_function.auth_rate_limit_cleanup[0].architectures == tolist(["arm64"]) &&
-      aws_lambda_function.auth_rate_limit_cleanup[0].memory_size == 512 &&
-      aws_lambda_function.auth_rate_limit_cleanup[0].timeout == 30 &&
-      aws_lambda_function.auth_rate_limit_cleanup[0].reserved_concurrent_executions == 1 &&
-      aws_lambda_function.auth_rate_limit_cleanup[0].image_config[0].command == tolist(["app.lambda_handlers.auth_rate_limit_cleanup.handler.handler"]) &&
-      aws_lambda_function.auth_rate_limit_cleanup[0].environment[0].variables["DATABASE_URL"] == local.backend_db_url["vector_auth_rate_limit_cleanup"] &&
-      aws_scheduler_schedule.auth_rate_limit_cleanup[0].state == "DISABLED"
+      aws_lambda_function.auth_rate_limit_cleanup.architectures == tolist(["arm64"]) &&
+      aws_lambda_function.auth_rate_limit_cleanup.memory_size == 512 &&
+      aws_lambda_function.auth_rate_limit_cleanup.timeout == 30 &&
+      aws_lambda_function.auth_rate_limit_cleanup.reserved_concurrent_executions == 1 &&
+      aws_lambda_function.auth_rate_limit_cleanup.image_config[0].command == tolist(["app.lambda_handlers.auth_rate_limit_cleanup.handler.handler"]) &&
+      aws_lambda_function.auth_rate_limit_cleanup.environment[0].variables["DATABASE_URL"] == local.backend_db_url["vector_auth_rate_limit_cleanup"] &&
+      aws_scheduler_schedule.auth_rate_limit_cleanup.state == "ENABLED"
     )
-    error_message = "専用DB接続の掃除Lambdaをarm64/512MiB/30秒/同時実行1で停止配置する。"
+    error_message = "専用DB接続の掃除Lambdaをarm64/512MiB/30秒/同時実行1で配置し、定期起動を有効にする。"
   }
 }
 
@@ -57,14 +55,14 @@ run "schedule_and_async_delivery_match_the_retry_contract" {
   command = plan
   assert {
     condition = (
-      aws_scheduler_schedule.auth_rate_limit_cleanup[0].schedule_expression == "cron(20,50 * * * ? *)" &&
-      aws_scheduler_schedule.auth_rate_limit_cleanup[0].schedule_expression_timezone == "UTC" &&
-      aws_scheduler_schedule.auth_rate_limit_cleanup[0].flexible_time_window[0].mode == "OFF" &&
-      aws_scheduler_schedule.auth_rate_limit_cleanup[0].target[0].input == "{}" &&
-      aws_scheduler_schedule.auth_rate_limit_cleanup[0].target[0].retry_policy[0].maximum_retry_attempts == 0 &&
-      aws_lambda_function_event_invoke_config.auth_rate_limit_cleanup[0].maximum_retry_attempts == 2 &&
-      aws_lambda_function_event_invoke_config.auth_rate_limit_cleanup[0].maximum_event_age_in_seconds == 600 &&
-      aws_lambda_function_event_invoke_config.auth_rate_limit_cleanup[0].destination_config[0].on_failure[0].destination == aws_sns_topic.alerts.arn
+      aws_scheduler_schedule.auth_rate_limit_cleanup.schedule_expression == "cron(20,50 * * * ? *)" &&
+      aws_scheduler_schedule.auth_rate_limit_cleanup.schedule_expression_timezone == "UTC" &&
+      aws_scheduler_schedule.auth_rate_limit_cleanup.flexible_time_window[0].mode == "OFF" &&
+      aws_scheduler_schedule.auth_rate_limit_cleanup.target[0].input == "{}" &&
+      aws_scheduler_schedule.auth_rate_limit_cleanup.target[0].retry_policy[0].maximum_retry_attempts == 0 &&
+      aws_lambda_function_event_invoke_config.auth_rate_limit_cleanup.maximum_retry_attempts == 2 &&
+      aws_lambda_function_event_invoke_config.auth_rate_limit_cleanup.maximum_event_age_in_seconds == 600 &&
+      aws_lambda_function_event_invoke_config.auth_rate_limit_cleanup.destination_config[0].on_failure[0].destination == aws_sns_topic.alerts.arn
     )
     error_message = "毎時20/50分の入力固定scheduleとLambda非同期再試行・失敗通知を構成する。"
   }

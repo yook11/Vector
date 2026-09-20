@@ -13,27 +13,6 @@ locals {
   }
 }
 
-variable "source_dispatch_image_digest" {
-  type        = string
-  default     = null
-  description = "投入Lambdaのbackendイメージdigest。nullではLambdaとスケジュールを作成しない。"
-  validation {
-    condition     = var.source_dispatch_image_digest == null || can(regex("^sha256:[0-9a-f]{64}$", var.source_dispatch_image_digest))
-    error_message = "イメージはsha256 digestで指定してください。"
-  }
-}
-
-variable "source_dispatch_enabled" {
-  type        = bool
-  default     = false
-  nullable    = false
-  description = "Consumer接続後に明示的に有効化する。"
-  validation {
-    condition     = !var.source_dispatch_enabled || var.source_dispatch_image_digest != null
-    error_message = "定期投入の有効化にはイメージdigestが必要です。"
-  }
-}
-
 resource "aws_sqs_queue" "source_dispatch" {
   for_each = local.source_dispatch_queue_names
 
@@ -135,12 +114,10 @@ resource "aws_iam_role_policy" "source_dispatch" {
 # 投入処理はCloudWatch Logsと標準メトリクスを使い、X-Rayは採用しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "source_dispatch" {
-  count = var.source_dispatch_image_digest == null ? 0 : 1
-
   function_name                  = local.source_dispatch_name
   role                           = aws_iam_role.source_dispatch.arn
   package_type                   = "Image"
-  image_uri                      = "${aws_ecr_repository.this["backend"].repository_url}@${var.source_dispatch_image_digest}"
+  image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
   memory_size                    = 512
   timeout                        = 120
@@ -176,6 +153,10 @@ resource "aws_lambda_function" "source_dispatch" {
     aws_vpc_security_group_egress_rule.outbox_relay_to_sqs,
     aws_sqs_queue_policy.source_dispatch,
   ]
+
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }
 
 resource "aws_scheduler_schedule_group" "source_dispatch" {
@@ -221,18 +202,18 @@ resource "aws_iam_role_policy" "source_dispatch_scheduler" {
 }
 
 resource "aws_scheduler_schedule" "source_dispatch" {
-  for_each = var.source_dispatch_image_digest == null ? {} : local.source_dispatch_schedules
+  for_each = local.source_dispatch_schedules
 
   name                         = "${local.source_dispatch_name}-${each.key}"
   group_name                   = aws_scheduler_schedule_group.source_dispatch.name
-  state                        = var.source_dispatch_enabled ? "ENABLED" : "DISABLED"
+  state                        = "ENABLED"
   schedule_expression          = each.value
   schedule_expression_timezone = "UTC"
   flexible_time_window {
     mode = "OFF"
   }
   target {
-    arn      = aws_lambda_function.source_dispatch[0].arn
+    arn      = aws_lambda_function.source_dispatch.arn
     role_arn = aws_iam_role.source_dispatch_scheduler.arn
     # jsonencodeは`<` `>`を\u003c \u003eへ退避しSchedulerのキーワード置換に一致しないため、文字列で組み立てる。
     input = "{\"cadence\":\"${each.key}\",\"scheduled_at\":\"<aws.scheduler.scheduled-time>\"}"
@@ -248,9 +229,7 @@ resource "aws_scheduler_schedule" "source_dispatch" {
 }
 
 resource "aws_lambda_function_event_invoke_config" "source_dispatch" {
-  count = var.source_dispatch_image_digest == null ? 0 : 1
-
-  function_name                = aws_lambda_function.source_dispatch[0].function_name
+  function_name                = aws_lambda_function.source_dispatch.function_name
   maximum_retry_attempts       = 2
   maximum_event_age_in_seconds = 21600
   destination_config {
@@ -279,7 +258,7 @@ resource "aws_cloudwatch_dashboard" "source_dispatch" {
 
 output "source_dispatch" {
   value = {
-    lambda_arn            = try(aws_lambda_function.source_dispatch[0].arn, null)
+    lambda_arn            = aws_lambda_function.source_dispatch.arn
     acquisition_queue_url = aws_sqs_queue.source_dispatch["acquisition"].url
     failure_queues = { for key in ["scheduler_failure", "execution_failure"] : key => {
       arn = aws_sqs_queue.source_dispatch[key].arn, url = aws_sqs_queue.source_dispatch[key].url

@@ -245,8 +245,7 @@ run "dlq_notification_without_consumer_activation" {
       aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.comparison_operator == "GreaterThanOrEqualToThreshold" &&
       aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.treat_missing_data == "notBreaching" &&
       aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.alarm_actions == toset([aws_sns_topic.alerts.arn]) &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.ok_actions == toset([aws_sns_topic.alerts.arn]) &&
-      length(aws_lambda_function.outbox_relay) == 0
+      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.ok_actions == toset([aws_sns_topic.alerts.arn])
     )
     error_message = "DLQ滞留通知だけを既存SNSへ接続し、初回構築でrelayを起動しない。"
   }
@@ -294,33 +293,12 @@ override_resource {
   values          = { id = "sg-00000000000000006" }
 }
 
-run "without_digest_no_consumer_or_mapping" {
-  command = plan
-  assert {
-    condition = (
-      length(aws_lambda_function.embedding_consumer) == 0 &&
-      length(aws_lambda_event_source_mapping.embedding_consumer) == 0 &&
-      length(aws_lambda_function.outbox_relay) == 0 &&
-      length(aws_scheduler_schedule.outbox_relay) == 0 &&
-      output.embedding_consumer_function_name == null &&
-      output.embedding_consumer_function_arn == null &&
-      output.embedding_consumer_image_digest == null &&
-      output.embedding_consumer_event_source_mapping_uuid == null
-    )
-    error_message = "初回digest未指定ではConsumer・relayと各起動トリガーを作成しない。"
-  }
-}
-
 run "consumer_image_and_enabled_mapping" {
   command = plan
-  variables {
-    embedding_consumer_image_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    outbox_relay_image_digest       = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  }
   assert {
     condition = (
-      startswith(aws_lambda_function.outbox_relay[0].environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
-      aws_lambda_function.outbox_relay[0].environment[0].variables.DB_IAM_AUTH == "true" &&
+      startswith(aws_lambda_function.outbox_relay.environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
+      aws_lambda_function.outbox_relay.environment[0].variables.DB_IAM_AUTH == "true" &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.outbox_relay.policy).Statement : s.Resource if s.Action == "rds-db:connect" && s.Effect == "Allow"])) == toset([
         "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
       ])
@@ -329,34 +307,32 @@ run "consumer_image_and_enabled_mapping" {
   }
   assert {
     condition = (
-      aws_lambda_function.embedding_consumer[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.embedding_consumer_image_digest}" &&
-      aws_lambda_function.outbox_relay[0].image_uri == "${aws_ecr_repository.this["backend"].repository_url}@${var.outbox_relay_image_digest}" &&
-      aws_lambda_function.embedding_consumer[0].function_name == "slice-test-embedding-consumer" &&
-      aws_lambda_function.embedding_consumer[0].package_type == "Image" &&
-      aws_lambda_function.embedding_consumer[0].architectures == tolist(["arm64"]) &&
-      aws_lambda_function.embedding_consumer[0].memory_size == 1024 &&
-      aws_lambda_function.embedding_consumer[0].timeout == 120 &&
-      aws_lambda_function.embedding_consumer[0].reserved_concurrent_executions == 10 &&
-      aws_lambda_function.outbox_relay[0].reserved_concurrent_executions == 1
+      aws_lambda_function.embedding_consumer.function_name == "slice-test-embedding-consumer" &&
+      aws_lambda_function.embedding_consumer.package_type == "Image" &&
+      aws_lambda_function.embedding_consumer.architectures == tolist(["arm64"]) &&
+      aws_lambda_function.embedding_consumer.memory_size == 1024 &&
+      aws_lambda_function.embedding_consumer.timeout == 120 &&
+      aws_lambda_function.embedding_consumer.reserved_concurrent_executions == 10 &&
+      aws_lambda_function.outbox_relay.reserved_concurrent_executions == 1
     )
     error_message = "Consumerのイメージと実行上限をrelayから独立して設定する。"
   }
   assert {
     condition = (
-      aws_lambda_function.embedding_consumer[0].image_config[0].entry_point == tolist(["/app/.venv/bin/python", "-m", "awslambdaric"]) &&
-      aws_lambda_function.embedding_consumer[0].image_config[0].command == tolist(["app.lambda_handlers.embedding.handler"]) &&
-      aws_lambda_function.embedding_consumer[0].image_config[0].working_directory == "/app" &&
-      aws_lambda_function.embedding_consumer[0].vpc_config[0].subnet_ids == toset([aws_subnet.embedding_consumer.id]) &&
-      aws_lambda_function.embedding_consumer[0].vpc_config[0].security_group_ids == toset([aws_security_group.embedding_consumer.id]) &&
-      aws_lambda_function.embedding_consumer[0].role == aws_iam_role.embedding_consumer.arn &&
-      aws_lambda_function.embedding_consumer[0].logging_config[0].log_group == aws_cloudwatch_log_group.embedding_consumer.name &&
-      aws_lambda_function.embedding_consumer[0].logging_config[0].log_format == "Text" &&
-      aws_lambda_function.embedding_consumer[0].tracing_config[0].mode == "PassThrough"
+      aws_lambda_function.embedding_consumer.image_config[0].entry_point == tolist(["/app/.venv/bin/python", "-m", "awslambdaric"]) &&
+      aws_lambda_function.embedding_consumer.image_config[0].command == tolist(["app.lambda_handlers.embedding.handler"]) &&
+      aws_lambda_function.embedding_consumer.image_config[0].working_directory == "/app" &&
+      aws_lambda_function.embedding_consumer.vpc_config[0].subnet_ids == toset([aws_subnet.embedding_consumer.id]) &&
+      aws_lambda_function.embedding_consumer.vpc_config[0].security_group_ids == toset([aws_security_group.embedding_consumer.id]) &&
+      aws_lambda_function.embedding_consumer.role == aws_iam_role.embedding_consumer.arn &&
+      aws_lambda_function.embedding_consumer.logging_config[0].log_group == aws_cloudwatch_log_group.embedding_consumer.name &&
+      aws_lambda_function.embedding_consumer.logging_config[0].log_format == "Text" &&
+      aws_lambda_function.embedding_consumer.tracing_config[0].mode == "PassThrough"
     )
     error_message = "既存入口を専用ネットワーク・権限・ログへ接続する。"
   }
   assert {
-    condition = aws_lambda_function.embedding_consumer[0].environment[0].variables == tomap({
+    condition = aws_lambda_function.embedding_consumer.environment[0].variables == tomap({
       ENV                           = "production"
       DATABASE_URL                  = local.backend_db_url["vector_app"]
       DB_IAM_AUTH                   = "true"
@@ -367,38 +343,30 @@ run "consumer_image_and_enabled_mapping" {
   }
   assert {
     condition = (
-      aws_lambda_event_source_mapping.embedding_consumer[0].function_name == aws_lambda_function.embedding_consumer[0].arn &&
-      aws_lambda_event_source_mapping.embedding_consumer[0].event_source_arn == aws_sqs_queue.outbox["embedding"].arn &&
-      aws_lambda_event_source_mapping.embedding_consumer[0].enabled &&
-      aws_lambda_event_source_mapping.embedding_consumer[0].batch_size == 1 &&
-      aws_lambda_event_source_mapping.embedding_consumer[0].maximum_batching_window_in_seconds == 0 &&
-      aws_lambda_event_source_mapping.embedding_consumer[0].scaling_config[0].maximum_concurrency == 10 &&
-      aws_lambda_event_source_mapping.embedding_consumer[0].function_response_types == toset(["ReportBatchItemFailures"]) &&
-      aws_lambda_event_source_mapping.embedding_consumer[0].tags.Consumer == "slice-test-embedding-consumer" &&
-      output.embedding_consumer_image_digest == var.embedding_consumer_image_digest
+      aws_lambda_event_source_mapping.embedding_consumer.function_name == aws_lambda_function.embedding_consumer.arn &&
+      aws_lambda_event_source_mapping.embedding_consumer.event_source_arn == aws_sqs_queue.outbox["embedding"].arn &&
+      aws_lambda_event_source_mapping.embedding_consumer.enabled &&
+      aws_lambda_event_source_mapping.embedding_consumer.batch_size == 1 &&
+      aws_lambda_event_source_mapping.embedding_consumer.maximum_batching_window_in_seconds == 0 &&
+      aws_lambda_event_source_mapping.embedding_consumer.scaling_config[0].maximum_concurrency == 10 &&
+      aws_lambda_event_source_mapping.embedding_consumer.function_response_types == toset(["ReportBatchItemFailures"]) &&
+      aws_lambda_event_source_mapping.embedding_consumer.tags.Consumer == "slice-test-embedding-consumer"
     )
     error_message = "Consumerの有効な受信と1件ずつの部分バッチ応答を維持する。"
   }
   assert {
     condition = (
-      aws_scheduler_schedule.outbox_relay[0].state == "ENABLED" &&
-      aws_scheduler_schedule.outbox_relay[0].schedule_expression == "rate(1 minute)" &&
-      aws_scheduler_schedule.outbox_relay[0].flexible_time_window[0].mode == "OFF" &&
-      aws_scheduler_schedule.outbox_relay[0].group_name == aws_scheduler_schedule_group.outbox_relay.name &&
-      aws_scheduler_schedule.outbox_relay[0].target[0].arn == aws_lambda_function.outbox_relay[0].arn &&
-      aws_scheduler_schedule.outbox_relay[0].target[0].role_arn == aws_iam_role.outbox_relay_scheduler.arn &&
-      aws_scheduler_schedule.outbox_relay[0].target[0].input == "{}" &&
-      aws_lambda_function.outbox_relay[0].memory_size == 512 &&
-      aws_lambda_function.outbox_relay[0].timeout == 120
+      aws_scheduler_schedule.outbox_relay.state == "ENABLED" &&
+      aws_scheduler_schedule.outbox_relay.schedule_expression == "rate(1 minute)" &&
+      aws_scheduler_schedule.outbox_relay.flexible_time_window[0].mode == "OFF" &&
+      aws_scheduler_schedule.outbox_relay.group_name == aws_scheduler_schedule_group.outbox_relay.name &&
+      aws_scheduler_schedule.outbox_relay.target[0].arn == aws_lambda_function.outbox_relay.arn &&
+      aws_scheduler_schedule.outbox_relay.target[0].role_arn == aws_iam_role.outbox_relay_scheduler.arn &&
+      aws_scheduler_schedule.outbox_relay.target[0].input == "{}" &&
+      aws_lambda_function.outbox_relay.memory_size == 512 &&
+      aws_lambda_function.outbox_relay.timeout == 120
     )
     error_message = "relayの既存実行上限と対象関数を維持し、1分間隔の定期送信を有効にする。"
   }
 }
 
-run "reject_mutable_image_tag" {
-  command = plan
-  variables {
-    embedding_consumer_image_digest = "latest"
-  }
-  expect_failures = [var.embedding_consumer_image_digest]
-}

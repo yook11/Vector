@@ -151,7 +151,6 @@ jobs:
               terraform test -no-color
             )
           done
-          python3 -m unittest discover -s ../scripts -p 'test_*.py' -v
 
   aws-smoke:
     name: AWS smoke (unit + Terraform mock)

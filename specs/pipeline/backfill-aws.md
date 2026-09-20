@@ -1,5 +1,7 @@
 # 工程別backfillのAWS構成（スライス3）
 
+> 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
+
 ## Work Definition
 
 - **Problem**: 実装済みのcuration・投資判定・embedding backfillをAWSへ配置し、定期起動できる構成を用意する。

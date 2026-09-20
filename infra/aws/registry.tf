@@ -36,6 +36,17 @@ resource "aws_ecr_repository_policy" "backend_lambda_pull" {
   })
 }
 
+# Lambdaの版はrolloutが進めるため、ここで決めるのは新規作成時の初期値だけ。
+# リポジトリ資源を参照すると読み取りがapplyまで遅延するため、名前を直接組み立てる。
+data "aws_ecr_image" "backend_latest" {
+  repository_name = "${var.name_prefix}/backend"
+  most_recent     = true
+}
+
+locals {
+  lambda_initial_image_uri = "${aws_ecr_repository.this["backend"].repository_url}@${data.aws_ecr_image.backend_latest.image_digest}"
+}
+
 moved {
   from = aws_ecr_repository_policy.outbox_relay
   to   = aws_ecr_repository_policy.backend_lambda_pull
