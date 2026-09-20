@@ -142,6 +142,7 @@ apply / migration / rolloutは各Environmentの承認後のOIDCだけを受け�
 今回閉じるのは承認なしでその権限を取得する入口である。
 rolloutの `iam:PassRole` は対応表のアプリtask / execution roleに限り、proxy、
 migration、管理用roleは渡せない。rolloutに `RunTask` や直接DB接続権限は無い。
+rolloutのLambda権限は、名前がprefixに従う関数のコード差し替えと読み取り、backendリポジトリの読み取りに限る。設定変更・作成・削除・実行の権限は無い。
 DB ownerのIAM接続権限はmigration task roleだけに残し、CIのmigrate roleからは除く。
 
 通常のinfra変更はPRのplan確認 → mainへmerge → `AWS terraform apply`の承認とする。
