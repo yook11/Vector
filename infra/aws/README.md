@@ -146,6 +146,7 @@ bootstrapの継続更新は[専用ロールの手動手順](bootstrap-access/REA
   反映されない)。infra 起因の変更は「apply 後に rollout を再実行」が正規手順。
   rollout は family の最新 ACTIVE revision を土台に image tag だけ差し替えるので、
   再実行すると Terraform 由来の変更もそこで取り込まれる。
+  Lambdaも`ignore_changes = [image_uri]`で同じ分担だが、Terraformが直接持つ設定（メモリ・環境変数など）はapplyだけで反映され、rolloutの再実行は要らない。
 - **Valkey の ACL ミスは二重に静か。** worker 側は taskiq が XGROUP CREATE の
   NOPERM を debug で握り潰し、後段の XREADGROUP が NOGROUP で落ちて初めて発現する。
   frontend 側は fail-open で rate limit が黙って無効化され、60 秒ごとの

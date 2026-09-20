@@ -60,7 +60,7 @@ handlerは起動ごとに設定・DB Engine・publisher・failure handlerを組�
 
 ## 更新とロールバック
 
-relayの版はTerraformで指定せず、`image_uri`の変更を追わない。版の前進と切り戻しは、ECSと同じ`AWS app images`のrolloutへ移す（移行中。設計は[app rollout](../../specs/platform/app-rollout.md)）。それまでの間、版は現在のイメージのまま据え置く。
+relayの版はTerraformで指定せず、`image_uri`の変更を追わない。版の前進と切り戻しは、ECSと同じ`AWS app images`のrolloutが行う。設計は[app rollout](../../specs/platform/app-rollout.md)を参照する。
 
 ## 検証再開時の確認
 
