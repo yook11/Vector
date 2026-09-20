@@ -315,6 +315,26 @@ def test_release_requires_main_approval_read_only_ledger_and_shared_exclusion() 
     assert "concurrency" not in app and "concurrency" not in jobs["push"]
 
 
+def test_lambda_images_follow_verified_ecs_rollout_under_the_release_guard() -> None:
+    steps = _load_workflow(_RELEASE_WORKFLOW)["jobs"]["rollout"]["steps"]
+    names = [step.get("name") for step in steps]
+    lambda_step = steps[names.index("Roll out Lambda functions")]
+    script = lambda_step["run"]
+
+    # ECSの検証が失敗したrunではLambdaへ進まないよう、常時実行の条件を付けない。
+    assert names.index("Verify rollout completion") < names.index(
+        "Roll out Lambda functions"
+    )
+    assert "if" not in lambda_step
+    assert script.index("check_app_release.py rollout") < script.index(
+        ".rollout-control/.github/scripts/rollout_lambda_images.py"
+    )
+    assert '--repository "$NAME_PREFIX/backend"' in script
+    assert '--image-tag "$IMAGE_TAG"' in script
+    assert lambda_step["env"]["IMAGE_TAG"] == "${{ env.RELEASE_SHA }}"
+    assert lambda_step["env"]["NAME_PREFIX"] == "${{ steps.tf.outputs.name_prefix }}"
+
+
 def test_old_release_routes_are_absent_but_migration_ci_remains() -> None:
     ci = _load_workflow(_CI_WORKFLOW)
     app = _load_workflow(_RELEASE_WORKFLOW)
