@@ -65,7 +65,6 @@ def test_output_truncated_error_is_retried_in_request(classify: _Classifier) -> 
 
     assert exc.reason is not None
     assert attrs.code == exc.CODE
-    assert attrs.failure_kind == exc.FAILURE_MODE.value
     assert attrs.failure_reason == exc.reason.value
     assert attrs.request_retry_disposition is RequestRetryDisposition.RETRY_IN_REQUEST
 
@@ -81,10 +80,10 @@ def test_output_truncated_error_is_retried_in_request(classify: _Classifier) -> 
         AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
     ],
     ids=[
-        "network_attempt_scoped",
-        "rate_limited_time_based_recovery",
-        "configuration_operator_action_required",
-        "usage_limit_condition_based_recovery",
+        "network",
+        "rate_limited",
+        "configuration",
+        "usage_limit",
         "output_blocked_content_error",
     ],
 )
@@ -94,9 +93,7 @@ def test_other_provider_errors_stay_do_not_retry_in_request(
 ) -> None:
     """打ち切り以外のState/Content errorの分類は不変 (regression guard)。
 
-    AIProviderNetworkErrorはAIProviderOutputTruncatedErrorと同じ
-    FAILURE_MODE (ATTEMPT_SCOPED) を持つため、disposition判定がFAILURE_MODEだけを
-    見て型を見ない実装ならここが誤って RETRY_IN_REQUEST になり検知できる。
+    通信障害と打ち切りを具体的な例外型で区別する。
     """
     attrs = classify(exc)
 
@@ -117,7 +114,6 @@ def test_evidence_draft_invalid_error_is_retried_in_request() -> None:
     attrs = classify_answer_synthesis_failure(exc)
 
     assert attrs.code == ANSWER_DRAFT_INVALID
-    assert attrs.failure_kind == "ai_response_invalid"
     assert attrs.failure_reason == "unknown citation ref: 9"
     assert attrs.request_retry_disposition is RequestRetryDisposition.RETRY_IN_REQUEST
 
@@ -138,7 +134,6 @@ def test_validation_error_is_retried_in_request() -> None:
     attrs = classify_answer_synthesis_failure(exc)
 
     assert attrs.code == PYDANTIC_VALIDATION_FAILED
-    assert attrs.failure_kind == "ai_response_invalid"
     assert attrs.failure_reason == PYDANTIC_VALIDATION_FAILED
     assert attrs.request_retry_disposition is RequestRetryDisposition.RETRY_IN_REQUEST
 
@@ -151,6 +146,5 @@ def test_unclassified_exception_falls_back_to_unknown() -> None:
     attrs = classify_answer_synthesis_failure(RuntimeError("boom"))
 
     assert attrs.code == "unexpected_error"
-    assert attrs.failure_kind == "unknown"
     assert attrs.failure_reason is None
     assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN

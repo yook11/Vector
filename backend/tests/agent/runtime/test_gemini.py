@@ -13,8 +13,6 @@ from google.genai import errors as genai_errors
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
-    AIProviderContentRejectionKind,
-    AIProviderFailureMode,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
@@ -257,23 +255,18 @@ async def test_unknown_extra_field_location_is_collapsed_to_fixed_placeholder() 
 
 
 @pytest.mark.parametrize(
-    ("finish_reason", "expected_reason", "expected_kind_name"),
+    ("finish_reason", "expected_reason"),
     [
-        ("SAFETY", GeminiContentRejectionReason.SAFETY, "SAFETY"),
-        ("RECITATION", GeminiContentRejectionReason.RECITATION, "OTHER"),
-        ("BLOCKLIST", GeminiContentRejectionReason.BLOCKLIST, "OTHER"),
-        (
-            "PROHIBITED_CONTENT",
-            GeminiContentRejectionReason.PROHIBITED_CONTENT,
-            "OTHER",
-        ),
-        ("SPII", GeminiContentRejectionReason.SPII, "OTHER"),
+        ("SAFETY", GeminiContentRejectionReason.SAFETY),
+        ("RECITATION", GeminiContentRejectionReason.RECITATION),
+        ("BLOCKLIST", GeminiContentRejectionReason.BLOCKLIST),
+        ("PROHIBITED_CONTENT", GeminiContentRejectionReason.PROHIBITED_CONTENT),
+        ("SPII", GeminiContentRejectionReason.SPII),
     ],
 )
 async def test_blocked_finish_reason_maps_to_existing_provider_error(
     finish_reason: str,
     expected_reason: GeminiContentRejectionReason,
-    expected_kind_name: str,
 ) -> None:
     """拒否理由を既存の provider エラー語彙へ対応付ける。"""
     client = FakeGeminiClient([blocked_response(finish_reason)])
@@ -283,10 +276,6 @@ async def test_blocked_finish_reason_maps_to_existing_provider_error(
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value.reason is expected_reason
-    assert exc_info.value.rejection_kind is getattr(
-        AIProviderContentRejectionKind,
-        expected_kind_name,
-    )
     assert client.models.generate_content.await_count == 1
     client.close.assert_not_awaited()
     client.aclose.assert_not_awaited()
@@ -307,7 +296,6 @@ async def test_call_max_tokens_finish_reason_is_truncated_even_with_valid_json()
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value.CODE == "ai_error_output_truncated"
-    assert exc_info.value.FAILURE_MODE is AIProviderFailureMode.ATTEMPT_SCOPED
     assert exc_info.value.reason is not None
     assert exc_info.value.reason.value == "output_token_limit_reached"
     assert client.models.generate_content.await_count == 1
@@ -343,8 +331,6 @@ async def test_non_stream_prompt_feedback_precedes_candidate_safety() -> None:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value.reason is GeminiContentRejectionReason.INPUT_BLOCKED
-    assert exc_info.value.rejection_kind is AIProviderContentRejectionKind.SAFETY
-    assert exc_info.value.is_safety_rejection is True
     assert client.models.generate_content.await_count == 1
 
 

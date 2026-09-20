@@ -32,17 +32,14 @@ def classify_curation_failure(exc: Exception) -> CurationFailureClassification:
             provider_error = exc.provider_error
             if provider_error is None:
                 raise TypeError("provider error is required")
-            mode = provider_error.FAILURE_MODE
             return CurationFailureClassification(
                 audit=FailureProjection(
                     code=exc.code,
-                    failure_kind=mode.value,
+                    failure_kind=None,
                     failure_reason=provider_error.reason.value
                     if provider_error.reason is not None
                     else None,
-                    retryability=Retryability.RETRYABLE
-                    if mode.retryable
-                    else Retryability.NON_RETRYABLE,
+                    retryability=None,
                     failure_action=None,
                 ),
                 provider_exhaustion=exhausted_provider_error(provider_error),

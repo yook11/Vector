@@ -1,5 +1,7 @@
 # pipeline_events 失敗属性 projection 仕様
 
+> 2026-09-20更新: AIプロバイダーの回復分類は廃止した。Assessment／Curation／Embeddingのprovider失敗は、failure_kind・retryabilityをnullで保存し、CODE・reason・例外情報は保持する。共有projectionはこの2項目のNoneを許容する。DB等の既存分類、DB schema、過去の監査行は変更しない。以下の旧分類に関する記述はprovider失敗には適用しない。
+
 旧分類 enum に混在していた意味を分解し、各 stage の error class / adapter を
 監査情報の SSoT にするための仕様。
 

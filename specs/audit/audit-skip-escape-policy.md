@@ -66,7 +66,7 @@ pipeline_events を**クエリ時に読む consumer は 2 つだけ**。この 2
    - **`daily_budget_exhausted` は逃がさず REJECTED として監査に残す**(§7)。理由: これは benign skip でなく「実対象(`found>0`)を予算上限で先送りした run レベルの棄却」で、`no_targets`(`found==0`=先送りなし)と質が違う。率のアラートが要る場合は Logfire 側で監査行 / log から出し、**専用 counter は作らない**。
 2. **consumer 契約を壊さない**: 残す `SUCCEEDED` / `FAILED` / `acquisition・completion の REJECTED` を消さない。`pipeline_health` の succeeded/failed 集計、`source_health` の failureReasons を不変に保つ。
 3. **DB schema を変えない(PR-1/1.5)**: `ck_pipeline_events_event_type` の `'skipped'`、enum、既存 pipeline_events 行を変更しない。DB からの `'skipped'` 除去・データ整理は本仕様の対象外(別判断)。
-4. **processing_outcome の分母定義を変えない**: 各 stage の `record_*_processing_outcome` は「勝者のみ計上 / infra_error 分母外 / 冪等 skip・stale 非計上」を維持。
+4. **processing_outcome の計上境界を維持する**: 各 stage の `record_*_processing_outcome` は「勝者のみ計上 / 冪等 skip・stale 非計上」を維持。 AI分析の実行失敗は原因によらずfailedに含める。記事収集側のinfra_error分母外は維持する。
 5. **ドメイン構築失敗は残す**: VO / entity build error、`reason_code` を持つ `FAILED` / `REJECTED` は監査に残す。
 6. **semantic API は残す**: `append_trend_discovery_run_event_best_effort` / `_append_backfill_run_event` 等は `FAILED` / `SUCCEEDED` でも使うため関数は残し、`SKIPPED` 呼び出しだけ外す。
 

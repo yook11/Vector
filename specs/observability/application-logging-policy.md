@@ -1,12 +1,14 @@
 # アプリケーションログの概念別ポリシーとCloudWatch集約
 
 作成: 2026-09-17
+更新: 2026-09-20（共通基底・AI分析の出力契約との整合）
 Status: Accepted
-Implementation: 未実装。本書は設計契約であり、既存経路への適用完了を意味しない。
+Implementation: Partially implemented。共通基底の規則・processor・例外構造化・チェーン部品を実装済み。既存アプリへの接続、詳細な原因抽出、URLの目的別変換、CloudWatch配送の検証は未完了。
 
 関連: [#317 記録方針の共通化](https://github.com/yook11/Vector/issues/317)、[#328 エラーの情報保持と安全な記録の分離](https://github.com/yook11/Vector/issues/328)
 
 概念別仕様: [AI分析のログポリシー](./ai-analysis-logging-policy.md)
+共通機構の正本: [アプリケーションログの共通基底ポリシー](./logging-base-policy.md)。本書は到達すべき運用契約を定め、実装済みの保証範囲・deny/allow/maskの意味・上限は基底仕様を参照する。
 
 ## Problem
 
@@ -16,7 +18,7 @@ structlogのcontextへ処理の事実を追加し、概念ごとのポリシー�
 
 ## Evidence
 
-確認時のHEAD: `3706a4d1e`。コード・設定・既存テストの読解に基づき、実環境のログ配送や漏洩を実証したものではない。
+初回確認時のHEAD: `3706a4d1e`。2026-09-20に`0ccd60b8e`でベース・AI分析・ログ設定を再確認した。コード・設定・既存テストの読解に基づき、実環境のログ配送や漏洩を実証したものではない。
 
 | 対象 | 現状と根拠 |
 | --- | --- |
@@ -56,11 +58,11 @@ structlogのcontextへ処理の事実を追加し、概念ごとのポリシー�
 | backend API・worker・scheduler・Lambdaの通常ログ | 共通の記録処理 → JSON stdout → 実行基盤の配送 → CloudWatch Logs |
 | frontendサーバーログ | 同じ情報別契約をTypeScript側で適用 → JSON出力 → 実行基盤の配送 → CloudWatch Logs |
 | 直接のLogfireログ呼び出し | 通常ログの入口へ移行し、Logfireへの重複転送を終了 |
-| Logfireメトリクス・トレース | 既存の計数・相関・自動計装と秘匿規則を維持 |
+| Logfireメトリクス・トレース | 計数・相関・自動計装を維持。例外情報の扱いは出力先のポリシーで定義する |
 | CloudWatch EMF | メトリクスとして維持。専用の値・dimension制約を適用し、EMF構造を汎用ログschemaへ変換しない |
 | 標準logging・依存ライブラリのログ | 出力元を列挙し、専用adapterを介して共通ポリシーへ接続 |
 
-自動計装が生成するログ相当のレコードも実装時の棚卸し対象とする。`StructlogProcessor`の除去だけでLogfireへの全ログ転送が終わったとは扱わない。span上の必要な例外イベントはトレースの一部として維持し、既存の保護を外さない。
+自動計装が生成するログ相当のレコードも実装時の棚卸し対象とする。`StructlogProcessor`の除去だけでLogfireへの全ログ転送が終わったとは扱わない。通常ログはCloudWatchへ切り替える。記録契約は調査に必要な情報と禁止・mask・sanitizeの定義から決め、既存のLogfireの一律置換や例外の情報制限を前提にしない。
 
 CloudWatchは運用者に閲覧を限定する前提とし、実装時に実際の閲覧権限・転送先を確認する。保持期間は既存設定を踏襲し、本書では変更しない。開発用consoleも同じポリシーを通した後に整形し、開発環境を秘匿の例外にしない。
 
@@ -70,17 +72,17 @@ AWSランタイムのシステムログやOS・proxy・DBサービス自体の�
 
 ### 2.1 定義と適用
 
-ポリシーの正本を記録基盤内に置き、共通規則と概念ごとの許可項目・値制約・変換規則を定義する。ポリシー名には既存の業務語彙を使う。
+ポリシーの正本を記録基盤内に置き、共通規則と処理目的ごとの許可項目・値制約・変換規則を定義する。識別子は基底の`LogPolicy`を使い、bounded context名ごとに別の識別子を作らない。
 
-- `collection`: 記事取得・本文補完のURL、HTTP結果、抽出結果、失敗診断。
-- `analysis`: 記事のAI分析の相関情報・結果・失敗診断。初期対象のCurationとAssessmentは一つのポリシーを使い、stage属性で区別する。詳細は[AI分析ポリシー](./ai-analysis-logging-policy.md)を正本とする。
+- `external_content_fetch`: 記事取得・本文補完のURL、HTTP結果、抽出結果、失敗診断。目的別allowは未定義。
+- `ai_inference`: 記事のAI分析の相関情報・結果・失敗診断。初期対象のCurationとAssessmentは一つの完成済みルールを使い、stage属性で区別する。項目・出所・保護方法は[AI分析ポリシー](./ai-analysis-logging-policy.md)を正本とする。
 - Embedding・Agent等への適用は、対象情報と責務を確認してから定義する。AI利用という理由だけで同じポリシーを無条件に適用しない。
-- `db`: DB操作の原因説明、SQLSTATE、制約等の診断。
-- HTTP要求や運用処理も、既存の責務に対応した概念単位で定義する。
+- `user_interaction` / `pipeline_control` / `infrastructure`: 基底に識別子を定義済み。目的別allowと適用経路は別途定義する。
+- DB例外は実行中の目的ポリシーで記録し、共通のSQL例外保護を適用する。例外型だけを理由に`db`という別ポリシーへ切り替えない。
 
 これは概念の分割基準であり、イベントごとに別ポリシーを作る指示ではない。同一概念の開始・成功・失敗ログは同じポリシーを使う。
 
-処理の入口またはloggerの構築時に、コードが所有するポリシーを結び付ける。下流はcontextに事実を追加し、ログ出力時に共通processorが適用する。payload中の`policy`や`service`等でポリシー選択・基盤metadataを上書きできない。
+loggerの構築時に、コードが所有する完成済みルールを結び付ける。下流はcontextに事実を追加し、ログ出力時に共通processorが適用する。ルールはlogger属性が保持し、`log_policy`はprocessorが生成する。service等の値の出所は記録側が保証し、外部payloadをcontextやkwargsへ一括展開しない。
 
 共通規則の禁止・変換は概念側のAllowより優先する。複数ポリシーのAllowを無条件に合成して許可範囲を広げない。例えばAssessment中のDB例外は、Assessmentの文脈を保ち、共通のDB例外変換を参照する。
 
@@ -88,25 +90,28 @@ AWSランタイムのシステムログやOS・proxy・DBサービス自体の�
 
 | 指定 | 動作 |
 | --- | --- |
-| `Allow` | 宣言された型・値の範囲を満たす値を保持する。 |
-| `Mask` | 項目の存在が必要な場合だけ、存在する値全体を`[redacted]`へ置換する。 |
-| `Sanitize` | URLや例外等の概念に対応した変換を通し、原因説明などの許可された部分を保持する。 |
-| 未登録 / `Drop` | キーと値を出さない。禁止項目を明示する場合はDropと定義できる。 |
+| `deny` | 構造化項目をキーごと除外する。allowより優先し、ネスト内にも適用する。 |
+| `allow` | トップレベルの採用項目を指定する。採用後の文字列もsanitize・maskを通す。 |
+| `mask` | 文字列内の指定キー付き値を`***`へ置換する。辞書の値全体を置換する指定ではなく、allowを兼ねない。 |
+| sanitize・例外/URL抽出 | 既知形式の秘密やSQL実データ等を除き、通常の原因説明などを保持する。deny/allow/maskとは別の変換処理。 |
+| 未登録 | トップレベルでallowにもdenyにも該当しない項目を除外し、名前・値を出さず件数を記録する。 |
 
-任意文字列を許可した分類コード、任意辞書を許可したcontextなどで制約を迂回しない。enumは許可するenum型・値まで定義する。ネストした項目も同じ規則で選別し、親のAllowで子孫全体を許可しない。
+任意文字列を許可した分類コード、任意辞書を許可したcontextなどで制約を迂回しない。enumや数値の業務上の値制約、ネストの子項目は目的別の記録側が保証する。ベースのallowはトップレベルだけのため、任意辞書を渡さず宣言済みの子項目を抽出する。基底の構造・上限検査とネスト内denyはその後にも適用する。
 
-項目が存在しない場合は捏造しない。未知のキー名自体が入力値である可能性があるため、除外キーの一覧や原文を診断へ転載しない。
+項目が存在しない場合は捏造しない。未知キーは`_unregistered_count`だけを記録する。明示denyは基底どおり`_denied_keys`、ネスト内の除外は件数で診断し、診断自体にもサニタイズと上限を適用する。
 
 ### 2.3 共通の出力情報
 
 | 情報 | 契約 |
 | --- | --- |
-| timestamp・level・service・environment・policy | 記録基盤が設定する。 |
+| timestamp・level・logger・logger_name | 基底allow。level・timestampはチェーンが生成する。 |
+| log_policy | processorがloggerのルールから生成する。基底ルール単独では付けない。 |
+| service・environment | 目的別allowとし、記録側が設定層・実行基盤から取得する。基底allowには含めない。 |
 | event | コードで定義された安定したイベント名。入力値や例外文を埋め込まない。イベントごとのAllow Listは持たない。 |
 | request_id・message_id・event_id・trace_id等 | 該当処理で取得できる相関IDを、概念ごとに形式検証して保持する。 |
 | stage・対象記事ID・provider・model | 概念のAllow Listに存在し、既存の語彙・型に適合する場合に保持する。 |
 | status・原因code/reason・duration・件数 | 既存の分類と単位を保持し、既知の異なる失敗を同じunknownへ潰さない。 |
-| error_class・error_message・frames・cause | 失敗時に例外変換を通して保持する。失敗理由が内部に存在する場合は記録側へ渡す。 |
+| error_class・error_message・frames・causes | 失敗時に例外変換を通して保持する。外側の例外情報は基底に実装済み、causes等の連鎖抽出は追加実装が必要。 |
 
 既存の意味が同じフィールド名を再利用し、単なる命名統一で全呼び出し元を変更しない。各概念の詳細な項目・型の列挙は、その概念を接続する実装と同時に正本へ追加する。汎用`extra`で未定義の項目を通さない。
 
@@ -150,10 +155,10 @@ service等はプロセス単位、request/message ID等は処理単位、例外�
 
 ### 4.2 SQL・DB例外
 
-- SQLパラメーターの値は、位置引数・名前付き引数・まとめ実行を問わず出さない。ログで存在を示す場合は全体を`[redacted]`とする。
+- SQLパラメーターの値は、位置引数・名前付き引数・まとめ実行を問わず出さない。構造化項目はdeny、原因文への混入はSQL例外抽出で除く。
 - SQLSTATE、DB操作種別、schema/table/column/constraint名と保護後の原因文は残す。
-- SQLのテンプレートは、値が別パラメーターに分離されていると確認できる場合に限り保持できる。リテラルを含むSQLや分離不能なstatementは省略する。
-- driverのprimary messageへ入力値が引用される場合も対象にする。`DETAIL`、`HINT`、`CONTEXT`、internal query、行データは生で添付せず、必要な説明を安全に分離できた場合だけ保持する。
+- 基底は例外に含まれるSQL本文を除去する。今回のAI分析もSQLテンプレートを許可せず、操作名・SQLSTATE・制約名・保護後の原因文で調査する。
+- driverのprimary messageへ入力値が引用される場合も対象にする。`DETAIL`、`HINT`、`CONTEXT`、internal query、行データは基底どおり除去する。
 - SQLAlchemyの`hide_parameters=True`は維持するが、それだけでdriverの原因文やSQL本文が保護されるとは扱わない。
 - 外側の例外を保護しても、cause・別属性・手動文字列化でパラメーターが再掲されないことを確認する。
 
@@ -183,7 +188,7 @@ service等はプロセス単位、request/message ID等は処理単位、例外�
 
 password、API key、Authorization、session token、認証cookie、秘密鍵、接続URLの資格情報を生で出さない。既知の機微フィールドは値の長さにかかわらず全体を除去・マスクし、既知形式の検出は補助として使う。
 
-Sanitizeは秘匿後に切り詰める。改行・制御文字等でログ行を偽装できないJSON出力とし、長文・深いネスト・多数のcauseには有限の上限を設ける。上限は実装時に定数と境界テストで明示し、切り詰めで秘密の断片が残らないようにする。
+基底の構造・予算検査を先に行い、採用する文字列へsanitize・maskを適用する。上限超過は基底の固定マーカーまたは固定イベントへ置換し、生文字列の先頭抜粋は作らない。改行・制御文字等でログ行を偽装できないJSON出力とする。多数の原因を抽出する場合は、出力側だけでなく抽出側でも有限の上限と循環検知を設ける。
 
 ## 5. 出力例
 
@@ -192,36 +197,36 @@ Sanitizeは秘匿後に切り詰める。改行・制御文字等でログ行を
 公開記事URLを保持し、失敗の説明を読める例:
 
 ```json
-{"timestamp":"2026-09-17T00:00:00Z","level":"warning","service":"collection","environment":"test","policy":"collection","event":"content_parse_error","article_id":123,"url":"https://example.com/news/article?id=42","error_class":"RuntimeError","error_message":"Article extraction failed: unsupported document structure"}
+{"timestamp":"2026-09-17T00:00:00Z","level":"warning","service":"collection","environment":"test","log_policy":"external_content_fetch","event":"content_parse_error","article_id":123,"url":"https://example.com/news/article?id=42","error_class":"RuntimeError","error_message":"Article extraction failed: unsupported document structure"}
 ```
 
 DBの原因を残し、パラメーターと行データを出さない例:
 
 ```json
-{"timestamp":"2026-09-17T00:00:00Z","level":"error","service":"api","environment":"test","policy":"db","event":"database_operation_failed","error_class":"IntegrityError","error_message":"duplicate key value violates unique constraint","sqlstate":"23505","constraint":"example_unique_constraint","parameters":"[redacted]"}
+{"timestamp":"2026-09-17T00:00:00Z","level":"error","log_policy":"ai_inference","event":"assessment_message_failed","stage":"assessment","operation":"save_result","error_class":"sqlalchemy.exc.IntegrityError","error_message":"duplicate key value violates unique constraint","sqlstate":"23505","constraint_name":"example_unique_constraint"}
 ```
 
 `http://127.0.0.1/private`を含む失敗では、URL属性を`[redacted]`とし、原因文の同じURLも置換する。timeout等の説明や例外型は保持する。記事本文が同時に渡されても出力しない。
 
 ## 6. ポリシー未定義・記録失敗
 
-未登録フィールドは省略する。ポリシーが未選択・不正の場合は任意データを出さず、基盤が生成する固定の診断イベント、時刻、level、信頼できるservice・発生箇所だけを出す。元の未知ポリシー名・イベント文・payloadをその診断へ転載しない。
+未登録フィールドは省略する。ルール省略時は`BASE_LOG_RULES`を使い、基底allowと共通保護だけを適用する。不正なルール型はfactoryで拒否する。processor内の失敗は`log_policy_failed`と固定の`_policy_error`へ置換し、元データや未取得のmetadataを補わない。
 
 未登録のイベント名ごとにAllow Listを要求する仕組みは作らない。イベント名はコード由来という契約を入口とテストで保証する。
 
-個別フィールドの変換失敗では、そのフィールドを省略し、固定の理由と残りの安全な情報を保持する。記録処理全体が失敗した場合も原文を出さず、再帰的なログ失敗を起こさない最小の出力へ退避する。障害時に業務結果を変更しないことと、起動時の設定不備を検出することは区別する。
+既知の不正値や局所上限は基底の固定マーカー等へ置換し、共有予算超過はログ全体を固定イベントへ置換する。予期しないprocessorの失敗も原文へ戻さない。renderer・stdoutの失敗は出力境界で元の業務結果を維持し、同じloggerへ再帰して診断しない。processorだけで出力先の障害を保護できるとは扱わない。
 
 ## 7. Implementation
 
-現在は文書のみ。production code・テスト・AWS設定・Issueは変更していない。
+共通部品は[基底仕様](./logging-base-policy.md)の範囲で実装済み。2026-09-20の更新は文書のみであり、既存ログ・テスト・AWS設定・Issueを変更していない。以下は未完了の接続・拡張工程である。
 
-1. 共通のポリシー定義・例外/URL変換・structlog processorを実装し、合成データで保持と非露出を検証する。
+1. 既存の共通部品を使い、目的別allow・追加deny/maskと、不足する原因連鎖・検証診断・URL変換を実装して保持と非露出を検証する。
 2. Assessment Lambdaの処理失敗と検証失敗を先行接続する。既存のreasonを渡し、通常の原因説明・field/code・相関情報が出ることを確認する。
 3. API・残りのLambda・稼働中worker/schedulerを接続する。処理入口でポリシーを選び、個別のマスク処理を共通処理へ寄せる。
 4. frontend・標準logging・直接出力・直接Logfire呼び出しを棚卸しして接続する。Logfire通常ログ転送を除去し、メトリクス・トレースを回帰確認する。
 5. stdoutの実出力と、許可された検証環境でのCloudWatch到達・検索可能性を確認する。未移行経路と適用済み経路を一覧にする。
 
-#328の例外側の整理は出力側の保護を接続・検証してから進める。`SAFE_ATTRS`等の制約を先に外して生データを露出させない。`app/logfire`の既存初期化から通常ログの責務を分離し、ログの設定がLogfire送信の有無に依存しないようにする。
+#328の例外側の整理では、ログ出力を理由に原因情報を捨てる制約を外し、原因文・元例外・失敗箇所・実行条件の不足を発生元で補う。`SAFE_ATTRS`等の既存実装を新しい記録契約の根拠にせず、内部で情報を保持する責任と出力時に保護する責任を分ける。通常ログはLogfireからCloudWatchへ切り替え、出力時に新しいポリシーを適用する。
 
 PythonとTypeScriptで情報別契約と合成入出力例を共有する。仕様を共有するためだけの新規コード生成・設定配信機構は導入しない。
 
@@ -233,8 +238,8 @@ PythonとTypeScriptで情報別契約と合成入出力例を共有する。仕�
 | --- | --- | --- |
 | P01 | 同じ概念の複数イベントを出力 | 同じポリシーが適用され、イベントごとの項目設定が不要。 |
 | P02 | 同じ値をbind・contextvars・ログ引数から渡す | すべて同じ許可・変換結果となる。 |
-| P03 | 未登録フィールド・ネスト・入力由来の未知キー | キーと値が出ず、許可された診断項目は残る。 |
-| P04 | 外部入力でpolicy・service等を上書きしようとする | 基盤が選んだポリシー・metadataを変更できない。 |
+| P03 | 未登録フィールド・ネスト・入力由来の未知キー | トップレベルは基底、ネストは目的別の明示抽出で除外し、許可された診断項目は残る。 |
+| P04 | 外部入力でlog_policy・service等を上書きしようとする | logger所有のルールと、記録側が設定したmetadataを変更できない。 |
 | E01 | 同じprovider例外型でtimeoutとconnectionを発生 | reasonと原因説明で区別でき、型だけにならない。 |
 | E02 | 通常の原因文と秘密値を含む例外 | 原因の説明を残し、秘密値だけを保護する。 |
 | E03 | SQL位置引数・名前付き引数・まとめ実行 | 各独立ケースで値が出ず、SQLSTATE・原因・制約は残る。 |
@@ -250,7 +255,7 @@ PythonとTypeScriptで情報別契約と合成入出力例を共有する。仕�
 | F01 | ポリシー不正・sanitizer失敗・renderer失敗 | 原文のfallbackなし。安全な最小診断と業務結果を維持。 |
 | F02 | 長文・制御文字・切り詰め境界に秘密 | JSON一件として読め、秘密の断片や偽のログ行が残らない。 |
 | O01 | production stdoutと開発consoleの実出力 | 秘匿内容が一致し、JSON/表示の整形で原文が復活しない。 |
-| O02 | Logfire通常ログ転送の撤去 | 通常ログはCloudWatch経路へ出て、既存metric/spanの計数・相関・保護は維持。 |
+| O02 | Logfire通常ログ転送の撤去 | 通常ログはCloudWatch経路へ出て、新しいポリシーで原因情報を保持・保護する。metric/spanの計数・相関は維持。 |
 | O03 | frontend・標準logging・EMF・自動計装 | 接続済み経路の保証と専用契約を確認し、未移行を明示。 |
 | O04 | CloudWatchへ配送した合成ログ | event・相関ID・原因で検索でき、非露出を実際の保存結果でも確認。 |
 

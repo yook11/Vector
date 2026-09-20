@@ -246,7 +246,7 @@ async def test_race_loss_does_not_emit_processing_outcome(
         await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
 
     metrics = collected_metrics(capfire)
-    for result in ("signal", "noise", "rejected", "failed", "infra_error"):
+    for result in ("signal", "noise", "rejected", "failed"):
         assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0
 
 

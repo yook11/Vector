@@ -136,9 +136,9 @@ resource "aws_cloudwatch_metric_alarm" "dispatch_run_stalled" {
 # --- A4: 工程別の失敗率 -------------------------------------------------------
 #
 # 「仕事はしているが失敗が支配的」を工程別に検知する。シグナルは各工程の
-# 分類確定点が emit する processing_outcome{stage, result}。分母は各工程の
-# 既存不変条件を踏襲し infra_error は分母外。最小標本 10 未満の窓は IF で
-# 0 に倒して評価しない (少量時間帯の誤発火防止)。
+# 分類確定点が emit する processing_outcome{stage, result} を用いる。
+# AI分析失敗は原因によらず failed、completion の infra_error は分母外。
+# 最小標本 10 未満の窓は IF で 0 に倒して評価しない (少量時間帯の誤発火防止)。
 #
 # 閾値・窓は 2026-08-12 の 28 日実測ベースライン由来の暫定値 (spec §A4)。
 # completion の 90% は「慢性 54% 失敗 (外部サイトのブロック) が普段の姿」の

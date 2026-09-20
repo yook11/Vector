@@ -102,7 +102,11 @@ async def test_records_classification_without_changing_original_error(
     event = events[0]
     assert event.event_type == "failed"
     assert event.outcome_code == failure.audit.code
-    assert event.retryability == failure.audit.retryability.value
+    assert event.retryability == (
+        failure.audit.retryability.value
+        if failure.audit.retryability is not None
+        else None
+    )
     assert event.payload["failure_kind"] == failure.audit.failure_kind
     assert event.payload["failure_reason"] == failure.audit.failure_reason
     assert event.payload["analyzed_article_id"] == 123
@@ -117,7 +121,7 @@ async def test_records_classification_without_changing_original_error(
     output = capsys.readouterr().out
     outcomes = metric_records(output, "processing_outcome")
     assert len(outcomes) == 1
-    assert outcomes[0]["result"] == failure.outcome
+    assert outcomes[0]["result"] == "failed"
     notices = metric_records(output, "ai_provider_exhausted")
     if failure.provider_exhaustion is not None:
         assert len(notices) == 1

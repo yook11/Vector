@@ -28,7 +28,7 @@ from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _METRIC = "vector.embedding.processing_outcome"
-_ALL_RESULTS = ("succeeded", "failed", "infra_error")
+_ALL_RESULTS = ("succeeded", "failed")
 
 
 def _make_embedder() -> MagicMock:
@@ -99,7 +99,7 @@ async def test_save_success_emits_processing_outcome_succeeded(
     await _execute(session_factory, analysis.id, article_id)
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _METRIC, "succeeded") == 1
-    for other in ("failed", "infra_error"):
+    for other in ("failed",):
         assert sum_counter_for_result(metrics, _METRIC, other) == 0
 
 

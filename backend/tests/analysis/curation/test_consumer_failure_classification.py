@@ -39,79 +39,59 @@ from app.db.errors import (
 
 
 @pytest.mark.parametrize(
-    ("provider_error", "kind", "retryability", "notified"),
+    ("provider_error", "notified"),
     [
         (
             AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT),
-            "attempt_scoped",
-            "retryable",
             False,
         ),
         (
             AIProviderServiceUnavailableError(),
-            "time_based_recovery",
-            "retryable",
             False,
         ),
         (
             AIProviderRateLimitedError(),
-            "time_based_recovery",
-            "retryable",
             False,
         ),
         (
             AIProviderUsageLimitExhaustedError(),
-            "condition_based_recovery",
-            "retryable",
             True,
         ),
         (
             AIProviderInsufficientBalanceError(),
-            "operator_action_required",
-            "non_retryable",
             True,
         ),
         (
             AIProviderConfigurationError(),
-            "operator_action_required",
-            "non_retryable",
             False,
         ),
         (
             AIProviderRequestInvalidError(),
-            "operator_action_required",
-            "non_retryable",
             False,
         ),
         (
             AIProviderOutputTruncatedError(),
-            "attempt_scoped",
-            "retryable",
             False,
         ),
         (
             AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY),
-            "target_rejected",
-            "non_retryable",
             False,
         ),
         (
             AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
-            "target_rejected",
-            "non_retryable",
             False,
         ),
     ],
 )
 def test_provider_classification_preserves_existing_audit_and_notification(
-    provider_error, kind, retryability, notified, capsys
+    provider_error, notified, capsys
 ) -> None:
     """全provider分類で監査コード・原因詳細・枯渇通知対象を維持する。"""
     error = to_curation_error(provider_error)
     failure = classify_curation_failure(error)
     assert failure.audit.code == provider_error.CODE
-    assert failure.audit.failure_kind == kind
-    assert failure.audit.retryability.value == retryability
+    assert failure.audit.failure_kind is None
+    assert failure.audit.retryability is None
     assert failure.audit.failure_reason == (
         provider_error.reason.value if provider_error.reason is not None else None
     )

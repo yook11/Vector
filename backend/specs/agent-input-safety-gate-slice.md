@@ -1,5 +1,7 @@
 # Agent input safety gate slice 仕様
 
+> 2026-09-20追記: 本書のFAILURE_MODE／AIProviderFailureMode、rejection_kind／AIProviderContentRejectionKind、is_safety_rejectionに関する記述は廃止前の設計記録である。これらの分類は共有例外と利用側から撤去する。具体的な例外型・CODE・reasonと、例外型による回答生成の再試行判断は維持する。回答生成の内部失敗情報からfailure_kindを削除し、代替分類は追加しない。
+
 更新日: 2026-07-20
 
 実装状況: Implemented — 2026-07-20

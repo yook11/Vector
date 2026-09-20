@@ -252,7 +252,7 @@ async def test_execute_shortcircuits_when_already_persisted(
 
 
 @pytest.mark.asyncio
-async def test_execute_wraps_target_rejected_provider_error(
+async def test_execute_wraps_input_rejected_provider_error(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,

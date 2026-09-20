@@ -37,7 +37,7 @@ class EmbeddingConsumerFailureHandler:
     ) -> None:
         """通常の二次障害で元の処理例外を置き換えず、後処理だけを実行する。"""
         try:
-            record_embedding_processing_outcome(failure.outcome)
+            record_embedding_processing_outcome("failed")
         except Exception as metric_exc:
             self._record_secondary_failure(
                 "processing_metric", analyzed_article_id, exc, metric_exc
