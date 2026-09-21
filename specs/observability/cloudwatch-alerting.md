@@ -68,7 +68,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 | ID | 症状 | 検知シグナル | 種別 |
 |----|------|-------------|------|
-| A1 | 収集の供給が止まっている(全体途絶) | EMF `dispatch_run` の不在 | metric alarm |
+| A1 | 収集の供給が止まっている(全体途絶) | Lambda の Invocations − Errors の不在(source-dispatch / acquisition-consumer) | metric alarm × 2 |
 | A2 | (廃止 2026-09)特定工程で仕事が消化されていない(工程名指し) | EMF `oldest_outstanding_enqueue_age{stage}` | metric alarm × 3 |
 | A3 | (廃止 2026-09)queue 観測自体が死んでいる(Valkey 障害含む) | EMF `observation_up` | metric alarm (math MIN) |
 | A4 | 工程別の失敗率(completion / curation / assessment / embedding) | EMF `processing_outcome{stage, result}` の failed 率 | metric alarm (math) × 4 |
@@ -81,10 +81,11 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 ### A1: 供給ハートビート(全体途絶)
 
-- 条件: `Vector/Pipeline` `dispatch_run{cadence=high}` の Sum、period 1h、2 evaluation periods 連続で 0。`TreatMissingData = breaching`(emit が無い = 途絶とみなす)。
-- 根拠: dispatch_high は 15 分間隔なので 1h に 4 回期待。2h 無音は確実に異常。emit は dispatch task の**正常完了時**のみとし、scheduler 死・broker 死・dispatch worker 死・DB 死のいずれでも鳴る。
-- 工程を名指ししないのは役割分担: 供給源(cron 駆動)が止まると下流には滞留が発生しないため、下流観測(A2)では検知できない。2026-06-08 の障害はこのケース。
-- アクション: scheduler / fetch サービスのログ確認 → 停止プロセスの再起動。
+- 条件: `AWS/Lambda` の `Invocations − Errors`(metric math、FILL 0)を `FunctionName` 別に Sum、period 1h、2 evaluation periods 連続で 0 以下。`TreatMissingData = breaching`(起動が無い = 途絶とみなす)。対象は source-dispatch(投入)と acquisition-consumer(受信)の 2 本。
+- 根拠: 投入は HIGH 15 分 + MEDIUM 1 時間で 1h に 5 回、Consumer は約 48 回期待。2h 無音は確実に異常。Scheduler 停止・受信接続の無効化・イメージ削除・関数エラーのいずれでも「成功が来ない」に収斂する。
+- 投入と受信を分けるのは、投入成功だけでは受信接続の停止(2026-09-15〜19 の無音)を検知できないため。
+- アクション: 投入側は Scheduler の状態と失敗記録キュー、受信側は event source mapping の状態と `source-acquisition` の滞留を確認する。
+- 2026-09-21 変更前: Taskiq の `dispatch_high` 正常完了時に emit する EMF `dispatch_run{cadence=high}` の不在で検知していた。旧 cron の撤去に伴い Lambda 標準メトリクスへ移した。
 
 ### A2: 工程別の滞留(工程を名指し)
 
@@ -161,7 +162,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 | 障害モード(実績 / 想定) | 拾う定義 | Slack で分かること |
 |---|---|---|
-| scheduler / dispatch worker 死 | A1(+ A3 missing 側) | 供給が止まった |
+| Scheduler 停止 / 投入 Lambda 失敗 | A1 source-dispatch | 供給が止まった |
+| 取得 Consumer の受信停止 | A1 acquisition-consumer | 受信が止まった |
 | collection worker 死(2026-06-08 実績) | A2 acquisition / completion | 工程名指し |
 | analysis worker(curation)死 | A2 該当 stage | 工程名指し |
 | Embedding Consumer 障害 | Lambda／DLQ監視・A4 embedding | 新SQS経路を確認 |
@@ -173,7 +175,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | 一時的 rate limit / gate pacing | 鳴らさない(滞留すれば A2) | — |
 | api 停止 | A7(SSR 経由 5XX), A5 | — |
 | frontend 停止 | A8, A7, A5 | — |
-| RDS 障害 | A1(dispatch 失敗), A7 | — |
+| RDS 障害 | A1(投入 Lambda の DB 照会失敗), A7 | — |
 | OOM kill | A5(exit 137) | サービスと exit code |
 
 ## 2. EMF メトリクス契約(新規 emit)
@@ -181,7 +183,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で自動的にメトリクス化されるため、新しい egress 経路も SDK 送信も不要。
 
 - Namespace: `Vector/Pipeline`
-- `dispatch_run` — dimension `cadence` ∈ {high, medium, low}(3 系列)。dispatch task の**正常完了時**に 1。失敗時は emit しない。alarm consumer は high のみ、medium / low は将来の dashboard consumer 前提。
+- `dispatch_run` — (廃止 2026-09-21)旧 Taskiq dispatch の正常完了ハートビート。A1 は Lambda 標準メトリクスへ移行した。
 - `oldest_outstanding_enqueue_age` — dimension `stage` × 3(acquisition / completion / curation)。queue_health の毎分観測を Logfire gauge と EMF の二重 sink にする。仕事が無いときは 0 を emit(既存の `_age_or_zero` と同じ)。
 - `observation_up` — dimension `stage` × 4。既存セマンティクス(成功 1 / 失敗 0)のまま二重 sink。
 - `processing_outcome` — dimension `stage` × `result`(14 系列: completion 3 + curation 5 + assessment 3 + embedding 3)。emit point・分類境界は既存 Logfire metric `vector.{stage}.processing_outcome{result}` と同一(`record_*_processing_outcome` 内の二重 sink)。分類ロジックは 1 か所、sink が 2 つ。stage dimension は `observation_up` / `oldest_outstanding_enqueue_age` と同じパターン。

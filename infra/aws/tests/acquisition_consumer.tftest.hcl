@@ -122,6 +122,20 @@ run "consumer_receives_with_bounded_execution" {
     )
     error_message = "受信時間・同時実行・有効な受信・取得入口の契約を守る。"
   }
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["acquisition_consumer"].threshold == 0 &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["acquisition_consumer"].evaluation_periods == 2 &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["acquisition_consumer"].comparison_operator == "LessThanOrEqualToThreshold" &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["acquisition_consumer"].treat_missing_data == "breaching" &&
+      alltrue([for query in aws_cloudwatch_metric_alarm.lambda_success_stalled["acquisition_consumer"].metric_query : length(query.metric) == 0 ? true :
+        query.metric[0].namespace == "AWS/Lambda" && query.metric[0].period == 3600 && query.metric[0].dimensions.FunctionName == local.acquisition_consumer_name
+      ]) &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["acquisition_consumer"].alarm_actions == toset([aws_sns_topic.alerts.arn]) &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["acquisition_consumer"].ok_actions == toset([aws_sns_topic.alerts.arn])
+    )
+    error_message = "取得Consumerの正常完了が2時間ゼロなら受信停止として通知する。"
+  }
 }
 run "queue_redrive_and_failure_dashboard" {
   command = plan

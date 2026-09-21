@@ -10,10 +10,7 @@
   -------------------|--------------|--------------|---------------------------------
   * * * * *          | 毎分         | 毎分         | dispatch_html_fetch_jobs
                      |              |              | sweep_expired_leases
-  */15 * * * *       | :00,:15,...  | :00,:15,...  | dispatch_high
   * * * * *          | 毎分         | 毎分         | sweep_deadline_exceeded_agent_runs
-  0 * * * *          | :00          | :00          | dispatch_medium
-  0 */6 * * *        | 00,06,12,18  | (UTC=JST-9)  | dispatch_low
   5 15 * * *         | 15:05        | 00:05 (毎日) | run_trend_discovery
   5 15 * * 0         | Sun 15:05    | Mon 00:05    | dispatch_weekly_briefings
 
@@ -27,8 +24,6 @@ minute 衝突確認は本表で行う (新規 cron 追加時の overlap 回避 S
 
 from __future__ import annotations
 
-from app.collection.sources.fetch_cadence import FetchCadence
-
 # 1 分間隔 — article_completion stage の DB 駆動 poll / lease sweep
 CRON_HTML_FETCH = "* * * * *"
 
@@ -40,13 +35,3 @@ CRON_TREND_DISCOVERY = "5 15 * * *"
 
 # JST 月曜 00:05 — 週次 briefing 生成 (UTC 日曜 15:05)
 CRON_WEEKLY_BRIEFING = "5 15 * * 0"
-
-
-# FetchCadence tier → cron 写像 (旧 brokers.CADENCE_CRON)。
-# tier 別に固定間隔で dispatch する。調整は本 dict の変更 + scheduler restart のみで
-# 可逆 (env / DB を経由しない)。
-CADENCE_CRON: dict[FetchCadence, str] = {
-    FetchCadence.HIGH: "*/15 * * * *",  # 15 分間隔
-    FetchCadence.MEDIUM: "0 * * * *",  # 1 時間間隔
-    FetchCadence.LOW: "0 */6 * * *",  # 6 時間間隔
-}
