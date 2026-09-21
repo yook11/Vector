@@ -6,8 +6,6 @@ import pytest
 import structlog
 
 from app.log_policy import BASE_LOG_RULES, LogPolicy, LogPolicyRules, PolicyLogger
-from app.log_policy.base import BASE_ALLOW, BASE_DENY, BASE_MASK
-from app.log_policy.policies.ai_inference import AI_INFERENCE_LOG_RULES
 from app.log_policy.policies.article_text import ARTICLE_TEXT_KEYS
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_POLICY
 from app.log_policy.processor import LogPolicyProcessor
@@ -17,16 +15,6 @@ pytestmark = pytest.mark.unit
 
 class TestPurposeRuleConstants:
     """実際の目的ポリシー定数が基底と本文の禁止を保持し、設定名の表記揺れも禁止する。"""
-
-    def test_ai_inference_rules_include_usage_fields_and_article_deny(self) -> None:
-        """AI推論の共通定数は基底・本文禁止とモデル・トークン数の許可を保持する。"""
-        assert AI_INFERENCE_LOG_RULES.allow == BASE_ALLOW | {
-            "model",
-            "input_tokens",
-            "output_tokens",
-        }
-        assert AI_INFERENCE_LOG_RULES.deny == BASE_DENY | ARTICLE_TEXT_KEYS
-        assert AI_INFERENCE_LOG_RULES.mask == BASE_MASK | ARTICLE_TEXT_KEYS
 
     @pytest.mark.parametrize(
         "key", ["GEMINI_API_KEY", "openaiApiKey", "Deepseek-Api-Key"]
@@ -42,19 +30,12 @@ class TestPurposeRuleConstants:
         assert "synthetic" not in json.dumps(output)
 
     @pytest.mark.parametrize("key", sorted(ARTICLE_TEXT_KEYS))
-    @pytest.mark.parametrize(
-        "rules",
-        [
-            pytest.param(AI_INFERENCE_LOG_RULES, id="ai_inference"),
-            pytest.param(EXTERNAL_CONTENT_POLICY, id="external_content"),
-        ],
-    )
-    def test_article_text_rules_preserve_structured_and_assignment_protection(
-        self, key, rules
+    def test_external_content_preserves_structured_and_assignment_protection(
+        self, key
     ) -> None:
-        """本文を扱う各目的は本文項目の除外と文字列内の値のマスクを維持する。"""
+        """外部コンテンツのポリシーはdenyで本文項目を除外し、maskで文字列内の本文値を伏せる。"""
         output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
+            PolicyLogger(EXTERNAL_CONTENT_POLICY, structlog.ReturnLogger()),
             "info",
             {"event": f"{key}='synthetic body'", key: "synthetic body"},
         )

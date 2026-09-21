@@ -56,7 +56,7 @@ Ready構築時にCuration不存在またはReady入力制約違反が確定し�
 - Consumerは`ALREADY_IN_SCOPE`／`ALREADY_OUT_OF_SCOPE`を従来の`ALREADY_ASSESSED`へ対応付ける。欠損・入力不正では同じ拒否値を監査へ渡して返し、Service・AI・成功監査・後続Outbox・成功／実行失敗メトリクスを呼ばない。
 - `append_ready_build_rejected`は`REJECTED`と理由コードを記録し、本文・入力値・検証例外を保存しない。既存の`assessment_ready_build_blocked_*`文字列は維持し、入力不正用コードを追加する。通常の記録障害は安全なログとaudit-dropped計測へ退避し、受信完了を維持する。
 - 拒否監査は業務処理の60秒制限を抜けた後に、`AssessmentConsumerFailureHandler.handle_ready_build_rejected`が行う。実行失敗の分類・計測・通知は通さない。
-- Lambdaは拒否のmessageIdを`batchItemFailures`へ含めず、`reason=ready_build_rejected`と`rejection_code`で完了を記録する。SQS削除APIは呼ばない。Service実行中の失敗とキャンセルの契約は維持する。
+- Lambdaは拒否のmessageIdを`batchItemFailures`へ含めない。これは再処理を要求しない判断であり、業務上の正常完了を意味しない。ログ定義は`assessment_message_processing_failed`（WARNING）に既存の`rejection_code`と`message_disposition=completed`を残す形とする。現行の`reason=ready_build_rejected`を伴う完了ログからの切り替えは後続の接続タスクで行う。SQS削除APIは呼ばず、Service実行中の失敗とキャンセルの契約は維持する。
 - ServiceのCompletion・DB schema・イベントpayload・資源ライフサイクルは変更しない。Taskiq用のReady構築入口は撤去し、ConsumerがDB取得と純粋なReady構築を担う。
 
 ### 最初のタスク：正常終了の契約
@@ -270,10 +270,22 @@ Evidence: Embedding handler・FailureRecorder、共通SqsRecordBatch、Assessmen
 | IN_SCOPE・OUT_OF_SCOPE・ALREADY_ASSESSED | すべて成功ログを記録し、失敗一覧へ含めない |
 
 - 部分応答には入力順のmessageIdを加工せず載せる。初期化・構造不正では全件の失敗応答を合成しない。キャンセル・プロセス終了は個別失敗へ変換しない。
-- `AssessmentLambdaFailureRecorder`がassessment_sqs_input_invalid、assessment_message_input_invalid、assessment_message_failedを記録する。構造不正はreason・field・record_index、個別入力不正はmessage_id・reason・安全なissues、処理失敗はmessage_id・error_classを持つ。本文取得失敗のreasonはinvalid_body。
-- 検証済みイベントがある処理失敗にはevent_id・curation_id・analyzable_article_idを付ける。正常ログassessment_message_completedは同じ識別情報とreason=completion.kind.valueを持つ。
-- イベント由来IDは配送診断に限定し、DB監査の主語へ補完しない。本文・例外の自由文をログへ出さず、通常のログ障害で結果・例外を変えない。
+- 現行の`AssessmentLambdaFailureRecorder`はassessment_sqs_input_invalid、assessment_message_input_invalid、assessment_message_failedを記録する。構造不正はreason・field・record_index、個別入力不正はmessage_id・reason・安全なissues、処理失敗はmessage_id・error_classを持つ。本文取得失敗のreasonはinvalid_body。メッセージ単位のイベント名・level・項目は下記の新定義へ後続タスクで接続する。
+- 現行では、検証済みイベントがある処理失敗にevent_id・curation_id・analyzable_article_idを付け、正常ログassessment_message_completedに同じ識別情報とreason=completion.kind.valueを付ける。新定義では正常結果を`outcome`へ移し、前提不成立は失敗ログへ分離する。
+- イベント由来IDは配送診断に限定し、DB監査の主語へ補完しない。現行の型名中心の診断から、既存ポリシーを通した例外診断への接続は後続タスクとする。本文・未保護の例外自由文を出さず、通常のログ障害で結果・例外を変えない。
 - 成功・失敗監査、メトリクス、Outboxは既存Consumer／Serviceへ任せる。クライアント・DBなどの終了も既存compositionの責任とし、入口から重複実行しない。
+
+### ログ定義の更新（2026-09-21、実行経路は未接続）
+
+正本は[AI分析ログポリシー](../observability/ai-analysis-logging-policy.md)の§3.3.1とする。今回は仕様と目的別allow・既存定義テストの期待値を更新し、handlerやSQS応答は変更しない。
+
+- `assessment_message_processing_started`：検証済みmessageIdを得た後、本文の取得・解析前にINFOで記録する。
+- `assessment_message_processing_completed`：`in_scope` / `out_of_scope` / `already_assessed`を`outcome`に持つINFOの終端ログとする。
+- `assessment_message_processing_failed`：Curation欠損・入力条件不成立・契約上の入力不正はWARNING、処理例外はERRORの終端ログとする。
+- 各メッセージの結果を捕捉できる場合は開始1回と終端1回。終端は業務結果とSQS応答への扱いが確定した時点で記録し、`duration_ms`は開始からの実測時間とする。
+- 前提不成立は既存の拒否値を使い、ログのために例外化しない。業務上の失敗とSQS応答を分離し、前提不成立では`message_disposition=completed`、既存の個別失敗応答では`batch_item_failure`を記録する。
+- 初期化・バッチ全体の入力不正・二次障害・cleanupは既存の別の記録境界に残す。例外の抽出・分類・構造は既存変換に任せる。
+- handlerからstdoutまでの内容・level・タイミング・回数・context分離と、ログ障害時の業務結果維持は次の接続タスクで検証する。
 
 ### 検証の責任と未接続部分
 
