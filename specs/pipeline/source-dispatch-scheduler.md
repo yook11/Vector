@@ -1,6 +1,6 @@
 # ソース取得依頼の投入 — EventBridge Scheduler / Lambda / SQS
 
-Status: ステップ1〜5を実装し、投入基盤・取得Consumer・3スケジュールは2026-09-15に有効化済み。Schedulerの予定時刻が`jsonencode`のエスケープで置換されず入力検証で全件失敗していた不具合をステップ6（2026-09-19）で修正。実配送の確認結果はステップ6に記録し、旧Taskiq停止と撤去は後続工程。以下のステップ別記録は当時の範囲と検証結果を示す。
+Status: ステップ1〜5を実装し、投入基盤・取得Consumer・3スケジュールは2026-09-15に有効化済み。Schedulerの予定時刻が`jsonencode`のエスケープで置換されず入力検証で全件失敗していた不具合をステップ6（2026-09-19）で修正。実配送の確認結果はステップ6に記録。旧Taskiqの定期投入はステップ7（2026-09-21）で撤去し、管理者の手動取得と`fetch`サービスは維持する。再配信の失敗分類は別タスク。以下のステップ別記録は当時の範囲と検証結果を示す。
 
 > 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
 
@@ -344,4 +344,19 @@ Evidence: 失敗記録キューの`requestPayload`で`scheduled_at`が`<aws.sche
 
 検証: 隔離コピーで`terraform fmt`・`init`・`validate`・`test`が成功した（51件）。断言差し替えだけでは1件失敗し、修正後に通ることを確認した。滞留した失敗記録は旧経路が取得済みのため再実行せず、14日で消える。
 
-実配送の確認: apply後に追記する。
+実配送の確認（2026-09-19 07:58〜09-20 02:35 UTC）: 投入Lambdaは97回起動・Errors 0・最大7.8秒（制限120秒）。取得依頼539件を投入し滞留0。Consumerは903回起動・Errors 0・最大9.7秒（制限300秒）。HIGH 150・MEDIUM 247・LOW 45件が`acquired`。失敗はVentureBeat（429）・Cornell Chronicle（403）・ORNL（読み取り失敗）の3ソースのみで、旧経路でも同じく失敗している。Consumer DLQは85件（約110件/日、全て上記3ソース）。失敗記録キューへの新規増加はない。`created_count`は旧cronが先行しURL一意制約で旧経路側に保存されるため0（MEDIUM 1件のみ）。
+
+
+## ステップ7 — 旧Taskiq定期投入の撤去と供給途絶アラームの移行（2026-09-21）
+
+Problem: 旧cronが先行して新規保存を持つ並走状態を終え、供給途絶の検知をTaskiqの`dispatch_run`から新経路へ移す。
+
+撤去: `dispatch_high/medium/low`、`CADENCE_CRON`、A1用の`dispatch_run` EMF送出と関連テストを削除した。管理者の手動取得（`dispatch_sources`→`acquire_source`）、`_dispatch`本体、Logfireの`vector.dispatch.*`、dispatch監査、`fetch`サービスは維持する。
+
+アラーム: `dispatch-run-stalled`を削除し、`source-dispatch-stalled`と`acquisition-consumer-stalled`を追加した。いずれも`AWS/Lambda`の`Invocations − Errors`を1時間窓で合計し、2期間連続で0以下なら発火する。欠損はbreaching。平常値は投入5回/時、Consumer約48回/時。検知遅れは従来と同じ最大2時間。関数名は文字列localで参照し、Lambda未配備の構成でもplanが通る。
+
+反映順序: mergeでECSのrollout（scheduler→他サービス）とTerraform applyが並行して起動する。applyの承認がrolloutより2時間以上遅れると旧A1が一度鳴るため、merge後すぐ承認する。旧cron停止中も新経路は継続し取得の欠落はない。切り戻しはPRのrevert。
+
+検証: Ruff lint・format、変更範囲の単体150件、隔離コピーのtftest 38件（断言追加だけの状態で2件失敗、アラーム追加後に成功）。
+
+反映後の確認: applyとrollout後に追記する。

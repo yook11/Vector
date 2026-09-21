@@ -40,9 +40,6 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
         "dispatch",
         scheduler_dispatch,
         {
-            "dispatch_high",
-            "dispatch_medium",
-            "dispatch_low",
             "dispatch_html_fetch_jobs",
             "sweep_expired_leases",
         },

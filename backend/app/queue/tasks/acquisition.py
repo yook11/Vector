@@ -1,10 +1,10 @@
 """収集 (acquisition) タスク — パイプラインの最前段 (Stage 1)。
 
-経路: ``dispatch_high/medium/low`` (cron) または ``dispatch_sources`` (admin 手動) →
-``acquire_source`` → Outbox経由のCuration (本文込み) または
-``scrape_html_body`` (completion, DB 駆動)。本ファイルは Stage 1 の cron dispatch
-と per-source 取り込みに絞り、HTML 取得 + 本文抽出 (Stage 2) は
-``app/queue/tasks/completion.py`` の責務。
+経路: ``dispatch_sources`` (admin 手動) → ``acquire_source`` → Outbox経由のCuration
+(本文込み) または ``scrape_html_body`` (completion, DB 駆動)。定期投入は EventBridge
+Scheduler が起動する source-dispatch Lambda (``app.lambda_handlers.source_dispatch``)
+が担う。本ファイルは admin 手動の dispatch と per-source 取り込みに絞り、HTML 取得 +
+本文抽出 (Stage 2) は ``app/queue/tasks/completion.py`` の責務。
 
 dispatch 系 task は ``SourceDispatchService`` に「何を dispatch すべきか」の決定を
 委譲する。task の責務は selection result を kiq message DTO に変換して
@@ -28,7 +28,6 @@ from app.audit.stages.dispatch import (
     DispatchCadence,
     DispatchOutcomeCode,
 )
-from app.cloudwatch.emf import emit_metric
 from app.collection.article_acquisition.errors import AcquisitionError
 from app.collection.article_acquisition.failure_recording import (
     ArticleAcquisitionFailureRecorder,
@@ -43,7 +42,6 @@ from app.db.errors import DatabaseError
 from app.logfire.stage_span import pipeline_stage_span
 from app.queue.brokers import broker_collection, broker_dispatch
 from app.queue.messages.collection import AcquireSourceTaskInput
-from app.queue.schedule import CADENCE_CRON
 
 logger = structlog.get_logger(__name__)
 
@@ -341,68 +339,6 @@ async def _append_dispatch_run_failed(
     )
 
 
-# CloudWatch A1 alarm (供給ハートビート) が消費する契約名。Terraform 側と揃える。
-# cron dispatch の正常完了だけを 1 打点とし、admin 手動の dispatch_sources は数えない。
-_DISPATCH_RUN_METRIC = "dispatch_run"
-
-
-@broker_dispatch.task(
-    task_name="dispatch_high",
-    timeout=60,
-    max_retries=1,
-    retry_on_error=True,
-    schedule=[{"cron": CADENCE_CRON[FetchCadence.HIGH]}],
-)
-async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
-    """HIGH tier のソースを dispatch する (15 分間隔)。"""
-    result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.HIGH)
-    emit_metric(
-        _DISPATCH_RUN_METRIC,
-        dimensions={"cadence": FetchCadence.HIGH.value},
-        value=1,
-        unit="Count",
-    )
-    return result
-
-
-@broker_dispatch.task(
-    task_name="dispatch_medium",
-    timeout=60,
-    max_retries=1,
-    retry_on_error=True,
-    schedule=[{"cron": CADENCE_CRON[FetchCadence.MEDIUM]}],
-)
-async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
-    """MEDIUM tier のソースを dispatch する (1 時間間隔)。"""
-    result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.MEDIUM)
-    emit_metric(
-        _DISPATCH_RUN_METRIC,
-        dimensions={"cadence": FetchCadence.MEDIUM.value},
-        value=1,
-        unit="Count",
-    )
-    return result
-
-
-@broker_dispatch.task(
-    task_name="dispatch_low",
-    timeout=60,
-    max_retries=1,
-    retry_on_error=True,
-    schedule=[{"cron": CADENCE_CRON[FetchCadence.LOW]}],
-)
-async def dispatch_low(ctx: Context = TaskiqDepends()) -> dict:
-    """LOW tier のソースを dispatch する (6 時間間隔)。"""
-    result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.LOW)
-    emit_metric(
-        _DISPATCH_RUN_METRIC,
-        dimensions={"cadence": FetchCadence.LOW.value},
-        value=1,
-        unit="Count",
-    )
-    return result
-
-
 @broker_dispatch.task(
     task_name="dispatch_sources",
     timeout=60,
@@ -414,8 +350,8 @@ async def dispatch_sources(
 ) -> dict:
     """全 tier の active ソースを一括 dispatch する (admin 手動 fetch 経路)。
 
-    cron 発火は tier 別 ``dispatch_high`` / ``dispatch_medium`` / ``dispatch_low``
-    が担うため、本タスクは schedule を持たず ``.kiq()`` 明示呼び出し専用。
+    定期投入は EventBridge Scheduler の source-dispatch Lambda が担うため、
+    本タスクは schedule を持たず ``.kiq()`` 明示呼び出し専用。
     """
     logger.info("dispatch_sources_started")
     return await _dispatch(ctx.state.session_factory, cadence=None)

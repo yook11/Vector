@@ -17,7 +17,6 @@ from structlog.testing import capture_logs
 from taskiq import TaskiqEvents, TaskiqState
 
 import app.db.engine as db_engine
-from app.collection.sources.fetch_cadence import FetchCadence
 from app.config import settings
 from app.db.engine import (
     WORKER_POOL_RECYCLE_SECONDS,
@@ -26,7 +25,6 @@ from app.db.engine import (
     worker_service_name,
 )
 from app.queue.messages.collection import AcquireSourceTaskInput
-from app.queue.schedule import CADENCE_CRON
 
 # supervisord の worker 定義 (taskiq worker 起動引数の SSoT)。
 _SUPERVISORD_DIR = Path(__file__).resolve().parent.parent / "supervisord"
@@ -188,36 +186,6 @@ def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
     [
         (
             "app.queue.tasks.acquisition",
-            "dispatch_high",
-            {
-                "timeout": 60,
-                "max_retries": 1,
-                "retry_on_error": True,
-                "schedule": [{"cron": "*/15 * * * *"}],
-            },
-        ),
-        (
-            "app.queue.tasks.acquisition",
-            "dispatch_medium",
-            {
-                "timeout": 60,
-                "max_retries": 1,
-                "retry_on_error": True,
-                "schedule": [{"cron": "0 * * * *"}],
-            },
-        ),
-        (
-            "app.queue.tasks.acquisition",
-            "dispatch_low",
-            {
-                "timeout": 60,
-                "max_retries": 1,
-                "retry_on_error": True,
-                "schedule": [{"cron": "0 */6 * * *"}],
-            },
-        ),
-        (
-            "app.queue.tasks.acquisition",
             "dispatch_sources",
             {"timeout": 60, "max_retries": 1, "retry_on_error": True},
         ),
@@ -243,9 +211,6 @@ def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
         ),
     ],
     ids=[
-        "dispatch-high",
-        "dispatch-medium",
-        "dispatch-low",
         "dispatch-sources",
         "dispatch-completion",
         "sweep-completion",
@@ -407,19 +372,6 @@ async def test_dispatch_client_lifecycle_uses_renamed_events() -> None:
     events = {log["event"] for log in logs}
     assert "dispatch_client_startup" in events
     assert "dispatch_client_shutdown" in events
-
-
-class TestCadenceCronMapping:
-    """``CADENCE_CRON`` が全 tier を 5-field cron に写像する。"""
-
-    def test_every_cadence_tier_has_a_cron(self) -> None:
-        """tier → cron 写像が全 ``FetchCadence`` メンバを網羅する (全域性)。"""
-        assert set(CADENCE_CRON) == set(FetchCadence)
-
-    def test_each_cron_has_five_fields(self) -> None:
-        """各 cron 式が 5 フィールド (taskiq cron 形式) であること。"""
-        for cadence, cron in CADENCE_CRON.items():
-            assert len(cron.split()) == 5, f"{cadence} cron must be 5-field: {cron!r}"
 
 
 @pytest.mark.asyncio
