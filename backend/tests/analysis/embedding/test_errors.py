@@ -12,6 +12,7 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingFailureReason,
     EmbeddingResponseInvalidError,
+    to_embedding_error,
 )
 
 
@@ -33,11 +34,6 @@ class TestEmbeddingResponseInvalidError:
         exc = EmbeddingResponseInvalidError()
         assert exc.provider_error is None
         assert not hasattr(exc, "RETRYABILITY")
-
-    def test_str_renders_code_only(self) -> None:
-        exc = EmbeddingResponseInvalidError()
-        expected = "EmbeddingResponseInvalidError(code='embedding_response_invalid')"
-        assert str(exc) == expected
 
     def test_positional_message_rejected(self) -> None:
         with pytest.raises(TypeError):
@@ -74,3 +70,22 @@ def test_service_error_carries_reason_without_retry_policy(error_type, reason):
     error = error_type()
     assert error.reason is reason
     assert not hasattr(error, "RETRYABILITY")
+
+
+def test_embedding_error_directly_inherits_exception():
+    """工程例外はログ固有の基底クラスへ依存しない。"""
+    assert EmbeddingError.__bases__ == (Exception,)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        to_embedding_error(AIProviderRateLimitedError("provider diagnostic")),
+        EmbeddingResponseInvalidError(),
+        EmbeddingAnalyzedArticleMissingError(),
+    ],
+)
+def test_embedding_error_uses_standard_empty_message(error):
+    """メッセージ未指定の例外文字列をcodeで補完しない。"""
+    assert error.args == ()
+    assert str(error) == ""

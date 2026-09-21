@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar
 
 from app.ai_providers.errors import (
-    AIProviderContentError,
+    CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderError,
-    AIProviderStateError,
 )
-from app.logfire.exceptions import VectorDomainError
 
 
 class EmbeddingFailureReason(StrEnum):
@@ -21,23 +18,19 @@ class EmbeddingFailureReason(StrEnum):
     PROVIDER_ERROR = "provider_error"
 
 
-class EmbeddingError(VectorDomainError):
+class EmbeddingError(Exception):
     """失敗理由と元のプロバイダー例外を呼び出し元へ伝える。"""
-
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
 
     def __init__(
         self,
         *,
         reason: EmbeddingFailureReason,
-        provider_error: AIProviderStateError | AIProviderContentError | None = None,
+        provider_error: AIProviderError | None = None,
     ) -> None:
         if not isinstance(reason, EmbeddingFailureReason):
             raise TypeError("reason must be an EmbeddingFailureReason")
         if reason is EmbeddingFailureReason.PROVIDER_ERROR:
-            if not isinstance(
-                provider_error, AIProviderStateError | AIProviderContentError
-            ):
+            if not isinstance(provider_error, CLASSIFIED_AI_PROVIDER_ERRORS):
                 raise TypeError("provider_error must be a classified AI provider error")
         elif provider_error is not None:
             raise TypeError("provider_error requires PROVIDER_ERROR reason")
@@ -71,7 +64,7 @@ class EmbeddingResponseInvalidError(EmbeddingError):
 
 def to_embedding_error(exc: AIProviderError) -> EmbeddingError:
     """プロバイダー例外を保持し、Serviceの失敗理由を付与する。"""
-    if not isinstance(exc, AIProviderStateError | AIProviderContentError):
+    if not isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
         raise TypeError(f"unmapped provider error: {type(exc).__qualname__}")
     return EmbeddingError(
         reason=EmbeddingFailureReason.PROVIDER_ERROR, provider_error=exc

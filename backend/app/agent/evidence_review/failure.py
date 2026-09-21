@@ -6,8 +6,8 @@ from pydantic import ValidationError
 
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
-    AIProviderContentError,
-    AIProviderStateError,
+    CLASSIFIED_AI_PROVIDER_ERRORS,
+    AIProviderError,
 )
 
 __all__ = ["EvidenceReviewError", "evidence_review_error_from"]
@@ -15,11 +15,7 @@ __all__ = ["EvidenceReviewError", "evidence_review_error_from"]
 _REVIEWER_TIMEOUT = "reviewer_timeout"
 
 type _EvidenceReviewSourceError = (
-    AgentResponseInvalidError
-    | AIProviderStateError
-    | AIProviderContentError
-    | TimeoutError
-    | ValidationError
+    AgentResponseInvalidError | AIProviderError | TimeoutError | ValidationError
 )
 
 
@@ -40,7 +36,7 @@ def evidence_review_error_from(
 
     if isinstance(cause, AgentResponseInvalidError):
         return EvidenceReviewError(code=cause.defect.value)
-    if isinstance(cause, AIProviderStateError | AIProviderContentError):
+    if isinstance(cause, CLASSIFIED_AI_PROVIDER_ERRORS):
         code = cause.reason.value if cause.reason is not None else cause.CODE
         return EvidenceReviewError(code=code)
     if isinstance(cause, TimeoutError):

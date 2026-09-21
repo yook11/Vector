@@ -6,7 +6,6 @@ import pytest
 
 from app.ai_providers.errors import (
     AIProviderConfigurationError,
-    AIProviderContentError,
     AIProviderError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -19,7 +18,6 @@ from app.ai_providers.errors import (
     AIProviderUsageLimitExhaustedError,
 )
 from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
     GeminiStateReason,
 )
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
@@ -32,7 +30,6 @@ from app.analysis.assessment.errors import (
 from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
 
 # 代表 reason (mapper は値そのものを failure_reason に運ぶ。種別は不問)。
-_CONTENT_REASON = GeminiContentRejectionReason.SAFETY
 _STATE_REASON = GeminiStateReason.TIMEOUT
 
 _PROVIDER_ERRORS = (
@@ -49,15 +46,9 @@ _PROVIDER_ERRORS = (
 )
 
 
-def _instantiate(
-    exc_type: type[AIProviderError], *, with_state_reason: bool = True
-) -> AIProviderError:
-    """provider error を構築する。content 系は reason 必須、state 系は任意。"""
-    if issubclass(exc_type, AIProviderContentError):
-        return exc_type(reason=_CONTENT_REASON)
-    if with_state_reason:
-        return exc_type(reason=_STATE_REASON)
-    return exc_type()
+def _instantiate(exc_type: type[AIProviderError]) -> AIProviderError:
+    """変換先でも保持される任意の理由を付与する。"""
+    return exc_type(reason=_STATE_REASON)
 
 
 @pytest.mark.parametrize("exc_type", _PROVIDER_ERRORS)

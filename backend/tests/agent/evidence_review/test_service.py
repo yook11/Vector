@@ -367,9 +367,16 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
     )
 
 
+class _UnregisteredProviderError(AIProviderError):
+    CODE = "unregistered_provider_error"
+
+
 @pytest.mark.asyncio
-async def test_review_propagates_unclassified_provider_error() -> None:
-    """回復クラスを宣言しない裸のprovider errorは工程codeに変換しない。"""
+@pytest.mark.parametrize("error_type", [AIProviderError, _UnregisteredProviderError])
+async def test_review_propagates_unclassified_provider_error(
+    error_type: type[AIProviderError],
+) -> None:
+    """基底型と未知の直接サブクラスは工程codeに変換しない。"""
     tasks = [
         collected_task(
             task_index=0,
@@ -384,7 +391,7 @@ async def test_review_propagates_unclassified_provider_error() -> None:
         )
     ]
 
-    error = AIProviderError()
+    error = error_type()
     runtime = ScriptedAgentRuntime([error])
 
     with pytest.raises(AIProviderError) as raised:

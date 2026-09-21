@@ -23,13 +23,11 @@ from app.agent.runtime.contract import (
     AgentRuntimeScopeFactory,
 )
 from app.ai_providers.errors import (
-    AIProviderContentError,
-    AIProviderStateError,
+    CLASSIFIED_AI_PROVIDER_ERRORS,
 )
 
 _PLANNING_SOURCE_ERRORS = (
-    AIProviderStateError,
-    AIProviderContentError,
+    *CLASSIFIED_AI_PROVIDER_ERRORS,
     AgentResponseInvalidError,
 )
 _MAX_ATTEMPTS = 2

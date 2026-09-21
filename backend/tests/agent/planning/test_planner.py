@@ -379,10 +379,16 @@ async def test_classified_provider_failure_records_failed_outcome() -> None:
     )
 
 
+class _UnregisteredProviderError(AIProviderError):
+    CODE = "unregistered_provider_error"
+
+
+@pytest.mark.parametrize("error_type", [AIProviderError, _UnregisteredProviderError])
 async def test_bare_provider_error_propagates_as_unclassified_without_outcome_metric(
     capfire: CaptureLogfire,
+    error_type: type[AIProviderError],
 ) -> None:
-    error = AIProviderError()
+    error = error_type()
     runtime = ScriptedAgentRuntime([error])
     service, factory = _service(runtime)
 

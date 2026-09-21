@@ -1,6 +1,6 @@
 # Logfire Embedding Processing Outcome Metrics
 
-## 現行契約（2026-09-20）
+## 現行契約（2026-09-21）
 
 - `vector.embedding.processing_outcome`とCloudWatch EMFの`processing_outcome{stage=embedding,result}`を維持し、resultは`succeeded`／`failed`の2値とする。
 - Consumerの失敗はprovider・DB・その他の原因によらず`failed`として1回記録する。分類関数のoutcomeと`is_infra_provider_error`は削除する。成功時の計測点、Ready拒否・冪等skipの扱いは変更しない。
@@ -11,7 +11,7 @@
 
 ## 旧仕様（以下は廃止前の設計記録）
 
-以下のinfra_error分類・回復分類・3値メトリクスの要件は廃止済みであり、現行要件ではない。
+以下のinfra_error分類・回復分類・3値メトリクスおよびState／Contentの中間クラスによる型階層は廃止済みであり、現行要件ではない。
 
 作成: 2026-06-17
 Status: Implemented (PR #817)

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from app.agent.runtime.contract import AgentResponseInvalidError
 from app.ai_providers.errors import (
-    AIProviderContentError,
-    AIProviderStateError,
+    AIProviderError,
 )
 
 __all__ = ["PlanningError", "planning_error_from"]
@@ -22,7 +21,7 @@ class PlanningError(Exception):
 
 
 def planning_error_from(
-    cause: AIProviderStateError | AIProviderContentError | AgentResponseInvalidError,
+    cause: AIProviderError | AgentResponseInvalidError,
 ) -> PlanningError:
     if isinstance(cause, AgentResponseInvalidError):
         return PlanningError(code=cause.defect.value)

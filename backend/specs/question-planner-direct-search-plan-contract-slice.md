@@ -356,7 +356,7 @@ prompt revision対象であるため、`EXTERNAL_QUERY_PROMPT_VERSION`と
 2. invalid JSON、object以外、schema不一致、または正規化後のquery / goal不足など、安全に分類した
    response defectだけは`previous_error`を渡してattempt 2を実行する。
 3. attempt 2でもresponse defectなら、`PlanningError`へ変換して伝播しrunを停止する。
-4. provider state / content errorなど、request内ではretryしない失敗はattempt内retryせず、
+4. 共有の`CLASSIFIED_AI_PROVIDER_ERRORS`に含まれるプロバイダー具体型など、request内ではretryしない失敗はattempt内retryせず、
    `PlanningError`へ変換して伝播しrunを停止する。
 5. Runtime scopeの開始・終了失敗、未分類例外、`CancelledError`もfallbackへ変換せず伝播する。
 

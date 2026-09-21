@@ -17,6 +17,15 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 
 今回見直す直接の理由は、実際の調査で失敗理由がログに残っていなかったことである。禁止情報とその保護方法を先に定義し、その境界内で調査に必要な情報を積極的に残す。既存ログに項目がないことや、現在のベースが抽出しないことを、その情報を記録しない理由にはしない。
 
+## AIプロバイダー例外の保持契約（2026-09-21）
+
+- `AIProviderError`は通常の`Exception`を直接継承し、既存の具体型10種類と`CODE`を維持する。State／Contentの中間クラスは廃止する。
+- 位置引数を標準の`args`と`str()`で保持する。引数なしの文字列は空であり、`CODE`や`reason`で補完しない。
+- 共通の`reason: StrEnum | None`は任意とし、StrEnumと`None`以外の値、および未定義キーワード引数は拒否する。
+- プロバイダー例外は`VectorDomainError`と`SAFE_ATTRS`に依存しない。保持した情報を出力する際の保護はログ側の責務とし、Assessment・Curation・Embeddingの工程例外も通常の`Exception`を直接継承する。工程の`reason`・`provider_error`・`defect`の組み合わせ検証と`code`は維持し、既存コンストラクターではメッセージを渡さないため`str()`は空となる。DB・収集・Outbox等の例外は対象外とする。
+- 呼び出し側は`CLASSIFIED_AI_PROVIDER_ERRORS`の具体型とそのサブクラスを判定対象とする。裸の基底型と未知の直接サブクラスを分類済みへ広げず、既存の処理制御を維持する。
+- この整理は保持契約までとし、SDKのメッセージ・応答詳細の新たな取得、AI専用ログ変換、Assessment Lambdaへの接続は後続工程とする。
+
 ## Evidence
 
 再確認時のHEAD: `0ccd60b8e`。以下はコード・テストの読解による確認であり、実環境の出力検証ではない。
@@ -26,7 +35,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 | Lambdaの失敗記録 | [Assessment](../../backend/app/lambda_handlers/assessment/failure_recorder.py)・[Curation](../../backend/app/lambda_handlers/curation/failure_recorder.py)の処理失敗ログはIDと例外型を記録し、原因文やstackを渡していない。 |
 | 処理期限 | [Assessment Consumer](../../backend/app/analysis/assessment/consumer.py)・[Curation Consumer](../../backend/app/analysis/curation/consumer.py)は業務処理全体を60秒に制限し、失敗後処理はその期限の外で行う。 |
 | 原因の分類 | [Assessment分類](../../backend/app/analysis/assessment/consumer_failure_classification.py)・[Curation分類](../../backend/app/analysis/curation/consumer_failure_classification.py)はproviderの詳細reasonを`failure_reason`へ投影する。 |
-| 内部例外 | [Assessment errors](../../backend/app/analysis/assessment/errors.py)・[Curation errors](../../backend/app/analysis/curation/errors.py)は`provider_error`を保持するが、文字列はcode中心になる。 |
+| 内部例外 | [Assessment errors](../../backend/app/analysis/assessment/errors.py)・[Curation errors](../../backend/app/analysis/curation/errors.py)は`provider_error`と`code`を属性で保持する。文字列は標準の空文字となり、診断情報は属性・原因チェーンから取得する。 |
 | 通信の原因 | [Gemini translator](../../backend/app/ai_providers/gemini/error_translator.py)はtimeoutとconnection等を区別する。ログ側で独自の分類を作り直す必要はない。 |
 | 検証失敗 | [Assessment parse](../../backend/app/analysis/assessment/ai/parse.py)には欠落・型違反・値違反等のdefectがあり、未知の検証失敗を元の例外として伝える経路もある。 |
 | 正常結果 | [Assessment Service](../../backend/app/analysis/assessment/service.py)には`in_scope`・`out_of_scope`・`already_assessed`、[Curation Service](../../backend/app/analysis/curation/service.py)にはsignal・noise・処理済みの区別がある。 |

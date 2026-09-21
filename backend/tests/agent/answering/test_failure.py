@@ -21,6 +21,8 @@ from app.agent.answering.failure import (
 )
 from app.ai_providers.errors import (
     AIProviderConfigurationError,
+    AIProviderError,
+    AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
     AIProviderOutputTruncatedError,
@@ -91,7 +93,7 @@ def test_other_provider_errors_stay_do_not_retry_in_request(
     classify: _Classifier,
     exc: BaseException,
 ) -> None:
-    """打ち切り以外のState/Content errorの分類は不変 (regression guard)。
+    """打ち切り以外のプロバイダー例外の再試行判断を維持する。
 
     通信障害と打ち切りを具体的な例外型で区別する。
     """
@@ -147,4 +149,40 @@ def test_unclassified_exception_falls_back_to_unknown() -> None:
 
     assert attrs.code == "unexpected_error"
     assert attrs.failure_reason is None
+    assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN
+
+
+@pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
+@pytest.mark.parametrize(
+    "error_type", [AIProviderInputRejectedError, AIProviderOutputBlockedError]
+)
+def test_rejection_without_reason_keeps_code_and_no_retry(classify, error_type) -> None:
+    """理由を省略した拒否でも具体的なコードと再試行判断を維持する。"""
+    attrs = classify(error_type())
+    assert attrs.code == error_type.CODE
+    assert attrs.failure_reason is None
+    assert (
+        attrs.request_retry_disposition
+        is RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST
+    )
+
+
+@pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
+def test_bare_provider_error_remains_unclassified(classify) -> None:
+    """基底型を具体的なプロバイダー失敗へ分類しない。"""
+    attrs = classify(AIProviderError("diagnostic"))
+    assert attrs.code == "unexpected_error"
+    assert attrs.failure_reason is None
+    assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN
+
+
+@pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
+def test_unknown_direct_provider_subclass_remains_unclassified(classify) -> None:
+    """独自のCODEを持つ未知の直接サブクラスも分類しない。"""
+
+    class UnknownProviderError(AIProviderError):
+        CODE = "unknown_provider_failure"
+
+    attrs = classify(UnknownProviderError())
+    assert attrs.code == "unexpected_error"
     assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN

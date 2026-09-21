@@ -6,7 +6,6 @@ import pytest
 
 from app.ai_providers.errors import (
     AIProviderConfigurationError,
-    AIProviderContentError,
     AIProviderError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -18,7 +17,6 @@ from app.ai_providers.errors import (
     AIProviderUsageLimitExhaustedError,
 )
 from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
     GeminiStateReason,
 )
 from app.analysis.embedding.errors import (
@@ -27,7 +25,6 @@ from app.analysis.embedding.errors import (
     to_embedding_error,
 )
 
-_CONTENT_REASON = GeminiContentRejectionReason.SAFETY
 _STATE_REASON = GeminiStateReason.TIMEOUT
 
 _PROVIDER_LEAVES = (
@@ -43,15 +40,9 @@ _PROVIDER_LEAVES = (
 )
 
 
-def _instantiate(
-    exc_type: type[AIProviderError], *, with_state_reason: bool = True
-) -> AIProviderError:
-    """provider error を構築する。content 系は reason 必須、state 系は任意。"""
-    if issubclass(exc_type, AIProviderContentError):
-        return exc_type(reason=_CONTENT_REASON)
-    if with_state_reason:
-        return exc_type(reason=_STATE_REASON)
-    return exc_type()
+def _instantiate(exc_type: type[AIProviderError]) -> AIProviderError:
+    """変換先でも保持される任意の理由を付与する。"""
+    return exc_type(reason=_STATE_REASON)
 
 
 class TestToEmbeddingError:
@@ -93,7 +84,7 @@ class TestToEmbeddingError:
 
 
 class TestToEmbeddingErrorUnregistered:
-    """state でも content でもない ``AIProviderError`` で fail-fast。"""
+    """登録されていない ``AIProviderError`` で fail-fast。"""
 
     def test_bare_provider_error_base_raises_type_error(self) -> None:
         bare = AIProviderError("bare base")
@@ -102,11 +93,11 @@ class TestToEmbeddingErrorUnregistered:
             to_embedding_error(bare)
 
     def test_direct_ai_provider_error_subclass_raises(self) -> None:
-        class _NeitherStateNorContent(AIProviderError):
-            CODE = "ai_error_neither_for_test"
+        class _UnregisteredProviderError(AIProviderError):
+            CODE = "ai_error_unregistered_for_test"
 
         with pytest.raises(TypeError, match="unmapped provider error"):
-            to_embedding_error(_NeitherStateNorContent())
+            to_embedding_error(_UnregisteredProviderError())
 
 
 @pytest.mark.parametrize("exc_type", _PROVIDER_LEAVES)

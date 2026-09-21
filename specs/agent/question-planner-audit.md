@@ -11,6 +11,7 @@ wire schema 不一致、completed plan の意味的不整合である。最大 a
 安全な分類情報だけを含む。
 
 分類済み provider failure、runtime scope failure、unknown failure、cancellation は retry しない。
+分類済みの対象は共有の`CLASSIFIED_AI_PROVIDER_ERRORS`に列挙された具体型とそのサブクラスとし、裸の`AIProviderError`と未知の直接サブクラスは捕捉せず伝播する。State／Contentの中間クラスは使用しない。
 response defect と分類済み provider failure の終端は `PlanningError` として伝播し、それ以外の終端
 failure は変換せず伝播する。いずれも plan、検索、回答生成を開始しない。
 

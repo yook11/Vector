@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar
 
 from app.ai_providers.errors import (
-    AIProviderContentError,
+    CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderError,
-    AIProviderStateError,
 )
-from app.logfire.exceptions import VectorDomainError
 
 
 class AssessmentFailureReason(StrEnum):
@@ -21,24 +18,20 @@ class AssessmentFailureReason(StrEnum):
     CURATION_MISSING = "curation_missing"
 
 
-class AssessmentError(VectorDomainError):
+class AssessmentError(Exception):
     """失敗理由と原因の詳細を呼び出し元へ伝える。"""
-
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
 
     def __init__(
         self,
         *,
         reason: AssessmentFailureReason,
-        provider_error: AIProviderStateError | AIProviderContentError | None = None,
+        provider_error: AIProviderError | None = None,
         defect: StrEnum | None = None,
     ) -> None:
         if not isinstance(reason, AssessmentFailureReason):
             raise TypeError("reason must be an AssessmentFailureReason")
         if reason is AssessmentFailureReason.PROVIDER_ERROR:
-            if not isinstance(
-                provider_error, AIProviderStateError | AIProviderContentError
-            ):
+            if not isinstance(provider_error, CLASSIFIED_AI_PROVIDER_ERRORS):
                 raise TypeError("provider_error must be a classified AI provider error")
         elif provider_error is not None:
             raise TypeError("provider_error requires PROVIDER_ERROR reason")
@@ -78,7 +71,7 @@ class AssessmentCurationMissingError(AssessmentError):
 
 def to_assessment_error(exc: AIProviderError) -> AssessmentError:
     """プロバイダー例外を保持し、Serviceの失敗理由を付与する。"""
-    if not isinstance(exc, AIProviderStateError | AIProviderContentError):
+    if not isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
         raise TypeError(f"unmapped provider error: {type(exc).__qualname__}")
     return AssessmentError(
         reason=AssessmentFailureReason.PROVIDER_ERROR, provider_error=exc

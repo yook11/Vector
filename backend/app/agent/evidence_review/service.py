@@ -45,8 +45,7 @@ from app.agent.runtime.contract import (
     AgentRuntimeScopeFactory,
 )
 from app.ai_providers.errors import (
-    AIProviderContentError,
-    AIProviderStateError,
+    CLASSIFIED_AI_PROVIDER_ERRORS,
 )
 
 __all__ = ["EvidenceReviewer", "EvidenceReviewService"]
@@ -55,8 +54,7 @@ _MAX_REVIEW_ATTEMPTS = 2
 _REVIEW_TIMEOUT_SECONDS = 15
 _REVIEW_SOURCE_ERRORS = (
     AgentResponseInvalidError,
-    AIProviderStateError,
-    AIProviderContentError,
+    *CLASSIFIED_AI_PROVIDER_ERRORS,
     TimeoutError,
 )
 

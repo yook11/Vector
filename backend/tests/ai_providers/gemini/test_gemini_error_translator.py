@@ -82,15 +82,11 @@ def test_server_error_translates_to_service_unavailable() -> None:
     assert translated.CODE == "ai_error_service_unavailable"
 
 
-# Leaked API key → ConfigurationError (固定文言)
+# Leaked API key → ConfigurationError
 
 
-def test_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
-    """key prefix を含む SDK message が ``__str__`` に出ない。
-
-    translator は ``AIProviderConfigurationError()`` を引数なしで返し、
-    ``__str__`` は ``CODE='ai_error_configuration'`` のみを返す。
-    """
+def test_translator_does_not_copy_leaked_key_message() -> None:
+    """変換時にSDKの漏洩キー情報を例外メッセージへ取り込まない。"""
     sdk_message = (
         "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been "
         "reported as leaked at https://github.com/foo/bar"
@@ -100,10 +96,9 @@ def test_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
     translated = translate_gemini_error(exc)
 
     assert isinstance(translated, AIProviderConfigurationError)
-    # SAFE_ATTRS 経路で SDK 生 message が一切残らない構造的契約 (PII 隔離)
     assert "AIza" not in str(translated)
     assert "github.com" not in str(translated)
-    assert "ai_error_configuration" in str(translated)
+    assert translated.CODE == "ai_error_configuration"
 
 
 # 設定系 status / HTTP code → ConfigurationError

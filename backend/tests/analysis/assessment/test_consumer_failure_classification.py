@@ -200,3 +200,18 @@ def test_all_response_defects_preserve_code(defect):
     assert failure.audit.retryability is Retryability.RETRYABLE
     assert not hasattr(failure, "outcome")
     assert failure.provider_exhaustion is None
+
+
+@pytest.mark.parametrize(
+    "error_type", [AIProviderInputRejectedError, AIProviderOutputBlockedError]
+)
+def test_rejection_without_reason_has_nullable_audit_details(error_type) -> None:
+    """理由を省略した拒否でも監査コードを保持し、詳細を補完しない。"""
+    provider = error_type("provider diagnostic")
+    error = to_assessment_error(provider)
+    failure = classify_assessment_failure(error)
+    assert failure.audit.code == provider.CODE
+    assert failure.audit.failure_reason is None
+    assert failure.audit.failure_kind is None
+    assert failure.audit.retryability is None
+    assert error.provider_error is provider
