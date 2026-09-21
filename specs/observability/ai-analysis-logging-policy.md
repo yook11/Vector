@@ -32,7 +32,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 | 正常結果 | [Assessment Service](../../backend/app/analysis/assessment/service.py)には`in_scope`・`out_of_scope`・`already_assessed`、[Curation Service](../../backend/app/analysis/curation/service.py)にはsignal・noise・処理済みの区別がある。 |
 | 対処と二次障害 | [Assessment handler](../../backend/app/lambda_handlers/assessment/handler.py)は失敗項目をバッチ応答へ含める。[失敗後処理](../../backend/app/analysis/assessment/consumer_failure_handling.py)は監査・計測・通知の障害を元の失敗と区別しているが、診断は主に例外型である。 |
 | ベースとAIルール | [base.py](../../backend/app/log_policy/base.py)の基本allowは5項目。[ai_inference.py](../../backend/app/log_policy/policies/ai_inference.py)の追加allowはモデルと入出力トークン数のみで、記事IDや業務分類はまだ含まれない。 |
-| 例外抽出 | [safe_exception_log.py](../../backend/app/log_policy/safe_exception_log.py)は外側の例外型・原因文・frame・SQLSTATEを抽出する。原因連鎖、provider属性、検証fieldの抽出は追加実装が必要。 |
+| 例外抽出 | [exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py)は外側の例外型・原因文・frame・SQLSTATEを抽出する。原因連鎖、provider属性、検証fieldの抽出は追加実装が必要。 |
 | 接続と使用量 | [Lambdaログ設定](../../backend/app/lambda_handlers/logging.py)はポリシー未接続。[DeepSeek](../../backend/app/analysis/assessment/ai/deepseek.py)の一部失敗ログに`completion_tokens`があるが、正常系の入出力使用量や全工程の経過時間は記録していない。 |
 
 ## Invariants
@@ -115,9 +115,10 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `failure_kind`, `retryability` | DB障害など既存の非provider分類に値がある場合のみ記録する。providerの回復分類は廃止し、代替分類やunknownで埋めない。 |
 | `http_status`, `provider_code`, `finish_reason` | 既知SDKの対応属性から取得するstatus/code/終了理由。statusは100〜599の整数。codeは整数または128文字以内の英数字・`_` / `.` / `:` / `-`からなる識別子、終了理由は同形式の文字列。形式が有効なら新しい値も残し、既存分類へ無理に対応付けない。形式外の説明文は保護後の`error_message`へ残す。 |
 | `error_class`, `error_message`, `frames` | `exc_info`から基底が抽出する外側の例外情報。`frames`は`file` / `function` / `line`のみ。外側の原因文が短いcodeでも内側の診断を省略する理由にしない。 |
-| `causes` | 原因の構造化リスト。各要素は`relation`（`cause` / `context` / `provider_error` / `group_member`）、例外情報、取得済みの`code` / `failure_reason` / `http_status` / `provider_code` / `sqlstate` / `constraint_name`、子の`causes`のみ。各例外を同じ保護経路に通す。 |
-| `sqlstate`, `constraint_name` | DB例外の対応属性から取得。SQLSTATEは英大文字・数字5文字。制約名もSQL実データの除去・sanitize・maskを通す。 |
-| `issues` | 入力・応答の検証診断。各要素は`field` / `code`と、取得できた`expected_type` / `constraints`のみ。field/typeはschema・コード所有の値、codeは既存defectまたは検証分類。constraintsはschema由来の`gt` / `ge` / `lt` / `le` / `min_length` / `max_length`の有限数値のみ。 |
+| `causes` | 原因の構造化リスト。各要素は例外情報、取得済みの`code` / `failure_reason` / `http_status` / `provider_code` / `error_details`、子の`causes` / `exceptions`のみ。外側と同じ例外構造を使い、取得元を示す`relation`ラベルは付けない。各例外を同じ保護経路に通す。 |
+| `exceptions` | ExceptionGroupのメンバー。各要素は外側と同じ例外構造を持ち、原因と同じ総数予算を使う。上限で残りを省略した場合は末尾に`[limit]`を置く。 |
+| `error_details` | 型別診断。PostgreSQLは`kind: "postgresql"`と取得できた`sqlstate` / `schema_name` / `table_name` / `column_name` / `constraint_name` / `data_type_name`のみ。SQLSTATEは英大文字・数字5文字。アプリ用変換を指定した検証例外は`kind: "application_validation"`と既存の`reason` / `issues(field, code)`を持つ。診断は共通sanitize・目的別mask・上限を通し、SQL診断属性はパラメータの部分一致置換から独立させる。トップレベルの`sqlstate` / `constraint_name`は出さない。 |
+| `issues` | 検証境界で分類済みの項目別診断。今回対応する検証例外は`error_details.issues`に既存Enumの`field` / `code`を出力する。`expected_type` / `constraints`の自動抽出や、別のトップレベル`issues`の自動生成は行わない。 |
 | `duration_ms` | 当該ログが表す業務試行またはAI呼び出しの実測経過時間。業務試行の終端ではメッセージ開始からの時間。 |
 | `timeout_scope`, `timeout_phase`, `timeout_seconds`, `timeout_elapsed_ms` | scopeは`consumer` / `http` / `db`。phaseは観測できた`connect` / `read` / `write` / `pool` / `statement` / `lock`。有効期限と、その期限の対象範囲で測定できた経過時間。 |
 | `ai_call_attempt`, `sqs_receive_count` | アプリが開始したAI呼び出しの通番と、SQSから取得した受信回数。どちらも正の整数。見えないSDK内部試行は数えない。 |
@@ -130,7 +131,9 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `slug`, `missing` | category enumとDBの不整合診断。既存enum由来のslugまたはそのリストのみ。AIが返した未検証のcategoryを入れない。 |
 | `url` | 必要時に取得済みの公開記事URL。上位仕様§4.4の専用変換を通す。基底のuserinfo除去だけで保護完了にしない。 |
 
-`issues.field`は既存の宣言済みfieldを使い、schema外の入力キーは`unknown`とする。Pydanticの`errors()`をそのまま添付せず、schemaに照合して診断を組み立てる。元の検証例外を失っている経路は、検証を行う地点で安全な診断を確保する。本文や任意ctxから期待制約を推定しない。
+検証境界がPydanticの失敗を既存の業務例外へ分類し、アプリ用のログ変換は`reason`と`issues(field, code)`を`error_details.kind="application_validation"`へ写す。未知の入力キーは既存の`event` / `payload`と`unknown_field`へ集約した結果を使う。ログ側ではスキーマ・alias・Union・`loc`を再解釈せず、入力・任意ctx・元の説明文を添付しない。生のValidationErrorは基底で件数と標準分類だけを保持する。
+
+今回の対応は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類に限る。`build_processors`の`exception_converter`へ`convert_application_exception`を指定して接続し、原因とグループにも同じ変換を適用する。実行環境へのロガー接続は別作業とする。追加の診断項目は、その境界で調査上の不足が確認された場合に検討する。
 
 ### 3.3 命名と記録単位
 
@@ -148,7 +151,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | 認証情報 | 基底の`CREDENTIAL_KEYS`をdeny・maskとして継承する。パスワード、API key、Authorization、cookie、秘密鍵、セッショントークン等。既知の秘密形式はsanitizeでも保護する。独自に短い別リストへ置き換えない。 |
 | 記事・生成本文 | 既存の`body`, `content`, `text`, `html`, `description`, `summary`, `translation`, `key_points`, `snippet`, `answer`をdeny・maskする。AI側には`original_content`, `original_title`, `title`, `title_ja`, `summary_ja`, `translated_title`, `investor_take`も追加する。タイトルも初期のAI診断には出さず、IDで対象を特定する。基底や他の目的のtitle規則は変更しない。 |
 | prompt・応答 | AI側で`prompt`, `messages`, `request`, `response`, `payload`, `request_body`, `response_body`, `raw_response`, `raw_arguments`, `raw_category`, `raw_relevance`をdeny・maskする。部分抜粋も出さない。`prompt_version`・使用量・検証codeは別項目で残す。 |
-| SQL実データ | AI側で`sql`, `statement`, `parameters`, `params`, `rows`をdeny・maskする。基底のSQL例外抽出でSQL本文・パラメーター・DETAIL/HINT/CONTEXT等を除去し、primary messageとSQLSTATEを残す。今回SQLテンプレートの出力は許可しない。 |
+| SQL実データ | AI側で`sql`, `statement`, `parameters`, `params`, `rows`をdeny・maskする。基底のSQL例外抽出でSQL本文・パラメーター・DETAIL/HINT/CONTEXT等を除去し、保護後のprimary messageと`error_details`内の診断属性を残す。今回SQLテンプレートの出力は許可しない。 |
 | 検証input・任意dump | AI側で`input`, `ctx`, `config`, `settings`, `headers`, `locals`, `args`, `notes`, `__dict__`をdeny・maskする。SDKオブジェクト、設定全体、例外args/notes/__dict__、取得行を丸ごと出さない。診断用`issues`は§3.2の固定形状に再構成する。 |
 | URL・内部宛先 | 公開記事URLの通常host/path/記事識別queryは保持する。userinfo・認証query・署名・内部IP/既知内部hostは上位仕様§4.4で保護する。例外文に混在する場合も対象とし、残る説明を一律に消さない。 |
 
@@ -164,11 +167,11 @@ denyは構造化項目をキーごと除外する。maskは文字列内のキー
 
 原因文が空なら`[empty exception message]`、安全に分離できない禁止情報しかない場合は`[exception message omitted]`、抽出自体の失敗は基底の`[exception message unavailable]`で区別する。キー付き値だけを伏せた文には基底のマスク結果を使い、この省略表示へ一律置換しない。取得できないoperation・timeout段階等は項目を省略し、観測していない事実を補わない。空・省略の追加表示はAI記録側の未実装要件であり、現行基底の動作とは区別する。
 
-Pythonのcause/contextだけでなく、既存の`provider_error`のように明示的に保持された原因も対象とする。外側と内側の例外を区別し、循環・深さ・件数を制限する。stackはlocals・生args・ソース行を含めず、アプリと依存ライブラリの発生箇所を追える形で保持する。
+Pythonのcause/contextは基底が抽出する。既存の`provider_error`のようにSDK固有の属性へ保持された原因も目的別実装の対象とするが、この取得は未実装である。外側と内側の例外を区別し、循環・深さ・件数を制限する。stackはlocals・生args・ソース行を含めず、アプリと依存ライブラリの発生箇所を追える形で保持する。
 
-原因抽出は外側を含め最大8例外、外側から最大3段の関係までとし、同じ例外を繰り返し展開しない。直接causeを優先し、`provider_error`が同じ例外を指す場合は重複させない。contextは明示causeがなく、抑制されていない場合だけ辿る。上限・循環で省略した`causes`の枝はそれぞれ`[limit]` / `[cycle]`で示す。各frameの上限と最終ログの共有予算は基底を維持する。共有予算を超えれば基底の固定イベントになるため、原因連鎖を追加した出力で予算を検証し、保持できない代表ケースを未対応のまま完了扱いしない。
+原因抽出は外側を含め最大32例外、外側から最大8段の関係までとし、ExceptionGroupのメンバーを含む全枝で予算を共有する。同じ参照の再登場も数え、現在の経路に戻る参照を循環として止める。直接causeを優先し、`provider_error`が同じ例外を指す場合は重複させない。contextは明示causeがなく、抑制されていない場合だけ辿る。原因は`causes`、グループのメンバーは`exceptions`へ格納する。上限・循環で省略した枝はそれぞれ`[limit]` / `[cycle]`で示し、メンバーの残りの省略は配列末尾の`[limit]`で示す。各frameの上限と最終ログの共有予算は基底を維持する。共有予算を超えれば基底の固定イベントになるため、原因連鎖を追加した出力で予算を検証し、保持できない代表ケースを未対応のまま完了扱いしない。
 
-SDK例外のrequest/response bodyを含む表現は、既知の診断message・status・codeだけを抽出する。SQL例外の内側にあるdriver例外も、外側のパラメーター保護文脈を使って抽出する。SQLAlchemy例外だけを保護してから`orig`を通常の`str()`で再出力する迂回を認めない。未知の形式で混入部分を分離できなければ、その原因文を省略し、型・frame・分類・他の原因を残す。
+SDK例外のrequest/response bodyを含む表現は、既知の診断message・status・codeだけを抽出する。SQL例外の内側にあるdriver例外は、外側のSQL例外ノードの`error_details`へ診断属性を集約する。原因文は外側のパラメーター保護文脈で保護し、内部driverを別ノードへ再出力しない。SQLAlchemy例外だけを保護してから`orig`を通常の`str()`で再出力する迂回を認めない。未知の形式で混入部分を分離できなければ、その原因文を省略し、型・frame・分類・他の原因を残す。
 
 SQLパラメーターや本文だけを除去できる場合は、その部分を除いて説明を残す。安全に分離できない部分を省略した場合も、他の原因説明・型・分類・frame・相関情報は保持する。未知の例外型という理由だけで全文を消さない。任意自由文の秘密・本文を完全検出できるという保証は置かず、既知の混入形式を共通変換とテストで扱う。
 

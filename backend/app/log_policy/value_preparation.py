@@ -12,6 +12,7 @@ from app.log_policy.mask import mask_assignments
 from app.log_policy.sanitize import sanitize_text
 
 DEPTH_LIMIT = 10
+EXCEPTION_DEPTH_LIMIT = 19
 
 
 class _ValueMarker(Enum):
@@ -41,14 +42,25 @@ class LogValuePreparer:
     )
     active_container_ids: set[int] = field(default_factory=set)
 
-    def prepare_field_value(self, field_value: Any) -> Any:
-        """トップレベルのキーの値を、ネストした中身ごとに構造検査・サニタイズ・マスクして出力用に整える。"""
-        inspected_value = self.inspect_value(field_value)
+    def prepare_field_value(
+        self,
+        field_value: Any,
+        *,
+        depth_limit: int = DEPTH_LIMIT,
+    ) -> Any:
+        """指定された深さ上限で値を構造検査し、サニタイズ・マスクして出力用に整える。"""
+        inspected_value = self.inspect_value(field_value, depth_limit=depth_limit)
         return self.prepare_text_values(inspected_value)
 
-    def inspect_value(self, value: Any, depth: int = 0) -> Any:
+    def inspect_value(
+        self,
+        value: Any,
+        depth: int = 0,
+        *,
+        depth_limit: int = DEPTH_LIMIT,
+    ) -> Any:
         """深さ・型・循環を確認し、値の種類に応じた検査へ振り分ける。"""
-        if depth > DEPTH_LIMIT:
+        if depth > depth_limit:
             return _ValueMarker.LIMIT
 
         if not is_supported_value(value):
@@ -66,9 +78,9 @@ class LogValuePreparer:
         self.active_container_ids.add(id(value))
         try:
             if value_type is dict:
-                return self.inspect_dictionary(value, depth)
+                return self.inspect_dictionary(value, depth, depth_limit=depth_limit)
 
-            return self.inspect_sequence(value, depth)
+            return self.inspect_sequence(value, depth, depth_limit=depth_limit)
         finally:
             self.active_container_ids.remove(id(value))
 
@@ -96,7 +108,11 @@ class LogValuePreparer:
         return value
 
     def inspect_dictionary(
-        self, dictionary: dict[Any, Any], depth: int
+        self,
+        dictionary: dict[Any, Any],
+        depth: int,
+        *,
+        depth_limit: int = DEPTH_LIMIT,
     ) -> dict[str, Any] | _ValueMarker:
         """辞書を検査し、denyのキーと長すぎるキーは値ごと落として診断へ記録し、文字列でないキーがあれば辞書ごとマーカーに置き換える。"""
         if any(type(key) is not str for key in dictionary):
@@ -117,13 +133,19 @@ class LogValuePreparer:
 
             self.budget.check_and_count_text_chars(len(key))
 
-            inspected_value = self.inspect_value(child_value, depth + 1)
+            inspected_value = self.inspect_value(
+                child_value, depth + 1, depth_limit=depth_limit
+            )
             inspected_dictionary[key] = inspected_value
 
         return inspected_dictionary
 
     def inspect_sequence(
-        self, sequence: list[Any] | tuple[Any, ...], depth: int
+        self,
+        sequence: list[Any] | tuple[Any, ...],
+        depth: int,
+        *,
+        depth_limit: int = DEPTH_LIMIT,
     ) -> list[Any]:
         """配列を検査し、要素は落とさず順序と件数を保ったまま、問題のある要素だけをマーカーに置き換える。"""
         inspected_items: list[Any] = []
@@ -131,7 +153,9 @@ class LogValuePreparer:
         for child_value in sequence:
             self.budget.check_and_count_log_items(1)
 
-            inspected_value = self.inspect_value(child_value, depth + 1)
+            inspected_value = self.inspect_value(
+                child_value, depth + 1, depth_limit=depth_limit
+            )
             inspected_items.append(inspected_value)
 
         return inspected_items

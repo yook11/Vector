@@ -58,6 +58,8 @@
 
 ## Delegation
 
+サブエージェントにastraを使用しない
+
 デフォルトは main agent が Grep / Read / Glob で直接進める。サブエージェントは起動しない。
 
 起動してよいのは次だけ。

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Literal, NotRequired, TypedDict
 
+from asyncpg import PostgresError
+from sqlalchemy.dialects.postgresql.asyncpg import AsyncAdapt_asyncpg_dbapi
 from sqlalchemy.exc import StatementError
 
 _SQL_DETAIL = re.compile(
@@ -13,6 +16,82 @@ _SQL_DETAIL = re.compile(
 
 PARAMETER_VISIT_LIMIT = 1000
 PARAMETER_DEPTH_LIMIT = 10
+SQL_EXCEPTION_LIMIT = 8
+
+
+class PostgresErrorDetails(TypedDict):
+    """原因文と独立して保持するPostgreSQLの診断属性。"""
+
+    kind: Literal["postgresql"]
+    sqlstate: NotRequired[str]
+    schema_name: NotRequired[str]
+    table_name: NotRequired[str]
+    column_name: NotRequired[str]
+    constraint_name: NotRequired[str]
+    data_type_name: NotRequired[str]
+
+
+def is_postgres_error(exc: BaseException) -> bool:
+    """対応するドライバー型だけをPostgreSQLの例外として認める。"""
+    return isinstance(exc, (PostgresError, AsyncAdapt_asyncpg_dbapi.Error))
+
+
+def _read_attribute(exc: BaseException, name: str) -> object:
+    """一属性の取得失敗で、他の診断属性を失わないようにする。"""
+    try:
+        return getattr(exc, name, None)
+    except Exception:
+        return None
+
+
+def _postgres_source(exc: BaseException) -> BaseException | None:
+    """SQLのラッパーを有限回辿り、診断属性を持つ元例外を優先する。"""
+    current = _read_attribute(exc, "orig") if isinstance(exc, StatementError) else exc
+    seen: set[int] = set()
+    adapter: BaseException | None = None
+    for _ in range(SQL_EXCEPTION_LIMIT):
+        if not isinstance(current, BaseException) or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, PostgresError):
+            return current
+        if isinstance(current, AsyncAdapt_asyncpg_dbapi.Error) and adapter is None:
+            adapter = current
+        if isinstance(current, StatementError):
+            current = _read_attribute(current, "orig")
+            continue
+        cause = _read_attribute(current, "__cause__")
+        if isinstance(cause, BaseException):
+            current = cause
+        elif _read_attribute(current, "__suppress_context__") is False:
+            current = _read_attribute(current, "__context__")
+        else:
+            break
+    return adapter
+
+
+def extract_sql_error_details(exc: BaseException) -> PostgresErrorDetails | None:
+    """同じ元例外の許可属性だけを取り、文字列の保護は共通の値準備へ渡す。"""
+    source = _postgres_source(exc)
+    if source is None:
+        return None
+    details: PostgresErrorDetails = {"kind": "postgresql"}
+    for attribute in ("sqlstate", "pgcode"):
+        state = _read_attribute(source, attribute)
+        if type(state) is str and re.fullmatch(r"[A-Z0-9]{5}", state):
+            details["sqlstate"] = state
+            break
+    for name in (
+        "schema_name",
+        "table_name",
+        "column_name",
+        "constraint_name",
+        "data_type_name",
+    ):
+        value = _read_attribute(source, name)
+        if type(value) is str and value:
+            details[name] = value
+    return details if len(details) > 1 else None
 
 
 def extract_sql_error_message(exc: StatementError) -> str:
@@ -51,9 +130,3 @@ def extract_sql_error_message(exc: StatementError) -> str:
     for literal in sorted(literals, key=len, reverse=True):
         message = message.replace(literal, "***")
     return message
-
-
-def extract_sqlstate(exc: StatementError) -> str | None:
-    """driverの診断コードがSQLSTATEの形式を満たす場合だけ返す。"""
-    state = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
-    return state if type(state) is str and re.fullmatch(r"[A-Z0-9]{5}", state) else None

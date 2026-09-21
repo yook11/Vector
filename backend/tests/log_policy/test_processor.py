@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
 import structlog
 
@@ -11,8 +14,10 @@ from app.log_policy import (
     LogPolicyRules,
     PolicyLogger,
     policy_logger,
+    value_preparation,
 )
 from app.log_policy.budget import MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
+from app.log_policy.exceptions import extraction
 from app.log_policy.processor import LogPolicyProcessor
 
 pytestmark = pytest.mark.unit
@@ -406,9 +411,9 @@ class TestDiagnostics:
         prepared_inputs = []
         original = LogValuePreparer.prepare_field_value
 
-        def capture_value(self, field_value):
+        def capture_value(self, field_value, **kwargs):
             prepared_inputs.append(field_value)
-            return original(self, field_value)
+            return original(self, field_value, **kwargs)
 
         monkeypatch.setattr(LogValuePreparer, "prepare_field_value", capture_value)
         prepared_event = LogPolicyProcessor()(
@@ -421,7 +426,85 @@ class TestDiagnostics:
 
 
 class TestExceptionFields:
-    """例外項目を保護して通常項目と併記し、生成した例外項目を同名入力より優先する。"""
+    """例外専用項目への任意入力を除外し、実際の例外から抽出した情報を保護して出力する。"""
+
+    def test_exceptions_argument_is_dropped_even_when_allowed(
+        self, configure_chain
+    ) -> None:
+        """allow宣言があってもログ引数のexceptionsを例外情報として採用しない。"""
+        capture = configure_chain()
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"exceptions"}))
+        logger = policy_logger("test", rules)
+
+        logger.error("failed", exceptions=[{"error_message": "injected failure"}])
+
+        entry = capture.entries[0]
+        assert entry["event"] == "failed"
+        assert "exceptions" not in entry
+
+    def test_bound_exceptions_are_dropped_even_when_allowed(
+        self, configure_chain
+    ) -> None:
+        """allow宣言があってもbindしたexceptionsを例外情報として採用しない。"""
+        capture = configure_chain()
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"exceptions"}))
+        logger = policy_logger("test", rules).bind(
+            exceptions=[{"error_message": "injected failure"}]
+        )
+
+        logger.error("failed")
+
+        entry = capture.entries[0]
+        assert entry["event"] == "failed"
+        assert "exceptions" not in entry
+
+    def test_contextvars_exceptions_are_dropped_even_when_allowed(
+        self, configure_chain
+    ) -> None:
+        """allow宣言があってもcontextvarsのexceptionsを例外情報として採用しない。"""
+        capture = configure_chain()
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"exceptions"}))
+        logger = policy_logger("test", rules)
+        structlog.contextvars.bind_contextvars(
+            exceptions=[{"error_message": "injected failure"}]
+        )
+
+        logger.error("failed")
+
+        entry = capture.entries[0]
+        assert entry["event"] == "failed"
+        assert "exceptions" not in entry
+
+    def test_generated_group_members_are_output_with_secrets_masked(
+        self, configure_chain
+    ) -> None:
+        """グループから抽出したメンバーは、原因文の秘密情報を伏せて出力する。"""
+        capture = configure_chain()
+        logger = policy_logger("test", BASE_LOG_RULES)
+        group = ExceptionGroup(
+            "parallel failures",
+            [
+                ValueError("request with sk-proj-abcdef0123456789ABCDEFxyz failed"),
+                TypeError("invalid response type"),
+            ],
+        )
+
+        logger.error("failed", exc_info=group)
+
+        entry = capture.entries[0]
+        assert entry["exceptions"] == [
+            {
+                "error_class": "builtins.ValueError",
+                "error_message": "request with sk-*** failed",
+                "frames": [],
+            },
+            {
+                "error_class": "builtins.TypeError",
+                "error_message": "invalid response type",
+                "frames": [],
+            },
+        ]
+        assert "sk-proj-abcdef0123456789ABCDEFxyz" not in repr(entry)
 
     def test_normal_and_exception_fields_are_output_with_secrets_masked(self) -> None:
         """通常項目と例外項目を併記するとき、両方の秘密値をマスクして出力する。"""
@@ -492,6 +575,115 @@ class TestExceptionFields:
             "log_policy": "infrastructure",
         }
 
+    def test_invalid_exc_info_is_not_forwarded(self) -> None:
+        """processor は不正な exc_info を無視し、生値もキーも出さない。"""
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": (str, "synthetic-row-value", None)},
+        )
+        assert "exc_info" not in output
+        assert "error_class" not in output
+        assert "synthetic-row-value" not in json.dumps(output)
+
+
+def _nested_value(*, depth: int, leaf: Any) -> Any:
+    value = leaf
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def _cause_node(fields: Any, cause_depth: int) -> Any:
+    for _ in range(cause_depth):
+        fields = fields["causes"][0]
+    return fields
+
+
+def _failure_with_cause_chain(cause_depth: int) -> tuple[BaseException, ValueError]:
+    try:
+        raise ValueError("operation failed")
+    except ValueError as exc:
+        inner = exc
+
+    outer: BaseException = inner
+    for _ in range(cause_depth):
+        parent = RuntimeError("operation failed")
+        parent.__cause__ = outer
+        outer = parent
+    return outer, inner
+
+
+class TestExceptionValueDepthLimit:
+    """通常入力と例外データで、値準備の深さ上限を使い分ける。"""
+
+    @pytest.fixture
+    def exception_at_value_limit(self, monkeypatch: pytest.MonkeyPatch):
+        """例外用の値準備上限内にframeの値が収まる、最も深い連鎖を用意する。"""
+        # 原因1段で2階層が増え、frameの値はさらに2階層深くなる。
+        cause_depth = (value_preparation.EXCEPTION_DEPTH_LIMIT - 2) // 2
+        outer, inner = _failure_with_cause_chain(cause_depth)
+        # 探索側で先に打ち切られないようにし、値準備の上限は変更しない。
+        monkeypatch.setattr(extraction, "CAUSE_DEPTH_LIMIT", cause_depth)
+        monkeypatch.setattr(extraction, "EXCEPTION_LIMIT", cause_depth + 1)
+        tb = inner.__traceback__
+        expected_frame = {
+            "file": tb.tb_frame.f_code.co_filename,
+            "function": tb.tb_frame.f_code.co_name,
+            "line": tb.tb_lineno,
+        }
+        return outer, cause_depth, expected_frame
+
+    @pytest.fixture
+    def exception_beyond_value_limit(self, monkeypatch: pytest.MonkeyPatch):
+        """原因文とframe辞書を上限内に置き、frameの各値を上限の外に置く。"""
+        cause_depth = value_preparation.EXCEPTION_DEPTH_LIMIT // 2
+        outer, _ = _failure_with_cause_chain(cause_depth)
+        # 探索側で先に打ち切られないようにし、値準備の上限は変更しない。
+        monkeypatch.setattr(extraction, "CAUSE_DEPTH_LIMIT", cause_depth)
+        monkeypatch.setattr(extraction, "EXCEPTION_LIMIT", cause_depth + 1)
+        return outer, cause_depth
+
+    def test_normal_and_exception_values_use_their_own_limits(
+        self, exception_at_value_limit
+    ) -> None:
+        """通常入力は通常上限で止まり、例外のframe情報は例外用の上限内で残る。"""
+        exc, cause_depth, expected_frame = exception_at_value_limit
+        normal_value = _nested_value(
+            depth=value_preparation.EXCEPTION_DEPTH_LIMIT, leaf="normal value"
+        )
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "payload": normal_value, "exc_info": exc},
+        )
+
+        assert output["payload"] == _nested_value(
+            depth=value_preparation.DEPTH_LIMIT + 1, leaf="[limit]"
+        )
+        inner = _cause_node(output, cause_depth)
+        assert inner["frames"] == [expected_frame]
+
+    def test_exception_value_beyond_its_limit_is_replaced(
+        self, exception_beyond_value_limit
+    ) -> None:
+        """上限内の原因文を残し、上限直後のframeの各値だけをlimitに置き換える。"""
+        exc, cause_depth = exception_beyond_value_limit
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": exc},
+        )
+
+        inner = _cause_node(output, cause_depth)
+        assert inner["error_message"] == "operation failed"
+        assert inner["frames"] == [
+            {"file": "[limit]", "function": "[limit]", "line": "[limit]"}
+        ]
+
 
 class TestProcessingOrder:
     """採用した値を項目ごとに順に準備し、不採用の値は準備処理へ渡さない。"""
@@ -512,8 +704,8 @@ class TestProcessingOrder:
                 steps.append("read_event")
                 yield "event", "completed"
 
-        def prepare_value(self, field_value):
-            prepared_value = original(self, field_value)
+        def prepare_value(self, field_value, **kwargs):
+            prepared_value = original(self, field_value, **kwargs)
             steps.append(prepared_value)
             return prepared_value
 
@@ -543,7 +735,7 @@ class TestProcessingOrder:
         """禁止・未登録・長すぎる名前の項目の値は構造検査やサニタイズへ渡さず除外する。"""
         from app.log_policy.value_preparation import LogValuePreparer
 
-        def unexpected_preparation(self, field_value):
+        def unexpected_preparation(self, field_value, **kwargs):
             raise AssertionError("excluded value must not be prepared")
 
         monkeypatch.setattr(

@@ -111,7 +111,7 @@ loggerの構築時に、コードが所有する完成済みルールを結び�
 | request_id・message_id・event_id・trace_id等 | 該当処理で取得できる相関IDを、概念ごとに形式検証して保持する。 |
 | stage・対象記事ID・provider・model | 概念のAllow Listに存在し、既存の語彙・型に適合する場合に保持する。 |
 | status・原因code/reason・duration・件数 | 既存の分類と単位を保持し、既知の異なる失敗を同じunknownへ潰さない。 |
-| error_class・error_message・frames・causes | 失敗時に例外変換を通して保持する。外側の例外情報は基底に実装済み、causes等の連鎖抽出は追加実装が必要。 |
+| error_class・error_message・frames・error_details・causes・exceptions | 失敗時に基底の例外変換を通して保持する。通常のcause/contextとSQL診断は基底で抽出し、SDK固有の原因構造は追加実装する。 |
 
 既存の意味が同じフィールド名を再利用し、単なる命名統一で全呼び出し元を変更しない。各概念の詳細な項目・型の列挙は、その概念を接続する実装と同時に正本へ追加する。汎用`extra`で未定義の項目を通さない。
 
@@ -145,9 +145,10 @@ service等はプロセス単位、request/message ID等は処理単位、例外�
 | --- | --- |
 | timeout、接続失敗、model不存在、権限不足等の説明 | 原因文を保持し、混在する認証情報・内部IP等を置換する。 |
 | providerのcode・reason・HTTP status | 既存の分類・応答の構造から取り出す。応答本文全体は添付しない。 |
-| Pydanticの検証失敗 | 宣言済みfield、違反code、安全な数値制約と原因説明を残す。`input`、任意の`ctx`、値を引用したvalidator文はそのまま出さない。未知の入力キーは固定のunknown表示にする。 |
+| アプリの検証失敗 | 検証境界が既存のEnumへ整理した`reason`と`issues(field, code)`を、`error_details.kind="application_validation"`として保持する。未知の入力キーは境界の既存分類（`event` / `payload`と`unknown_field`）を使い、ログ側で再解釈しない。 |
+| 生のPydantic例外 | 件数と標準分類だけを保持する。`input` / `ctx` / `msg` / `loc` / `title`を転記せず、独自分類は`custom_error`にする。汎用的なスキーマ解釈や数値制約の自動抽出は行わない。 |
 | traceback | file・function・lineを保持する。locals、ソース行、任意notes、args/repr/__dict__のdumpは添付しない。 |
-| cause/context・ExceptionGroup | 原因の型・関係・保護後の説明を保持し、各要素に同じ規則を適用する。循環・件数・深さを制限する。 |
+| cause/context・ExceptionGroup | 原因は`causes`、グループのメンバーは`exceptions`の各要素に型・保護後の説明を保持し、同じ規則を適用する。取得元の関係ラベルは付けず、全枝で総数と深さを共有し、現在の経路の循環を検出する。 |
 
 既知のSDK・DB・検証例外は、構造化された情報を優先して抽出する。汎用例外の通常の原因文もサニタイズ対象とし、未知の例外型という理由だけで全文を消さない。
 
@@ -190,6 +191,8 @@ password、API key、Authorization、session token、認証cookie、秘密鍵、
 
 基底の構造・予算検査を先に行い、採用する文字列へsanitize・maskを適用する。上限超過は基底の固定マーカーまたは固定イベントへ置換し、生文字列の先頭抜粋は作らない。改行・制御文字等でログ行を偽装できないJSON出力とする。多数の原因を抽出する場合は、出力側だけでなく抽出側でも有限の上限と循環検知を設ける。
 
+アプリの検証診断は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類に対応する。`build_processors(..., exception_converter=convert_application_exception)`で変換担当を指定した場合に適用し、指定しない場合は既存の共通変換を使う。業務分類・再送出方法は維持し、実行環境への接続は別作業とする。値準備の例外用上限は19で、例外探索の深さ8にある`issues`の`field`・`code`まで保持する。
+
 ## 5. 出力例
 
 以下は期待する表示の合成例であり、実際の障害ログではない。追加項目はイベント別ではなく、該当概念のポリシーに登録する。
@@ -203,7 +206,7 @@ password、API key、Authorization、session token、認証cookie、秘密鍵、
 DBの原因を残し、パラメーターと行データを出さない例:
 
 ```json
-{"timestamp":"2026-09-17T00:00:00Z","level":"error","log_policy":"ai_inference","event":"assessment_message_failed","stage":"assessment","operation":"save_result","error_class":"sqlalchemy.exc.IntegrityError","error_message":"duplicate key value violates unique constraint","sqlstate":"23505","constraint_name":"example_unique_constraint"}
+{"timestamp":"2026-09-17T00:00:00Z","level":"error","log_policy":"ai_inference","event":"assessment_message_failed","stage":"assessment","operation":"save_result","error_class":"sqlalchemy.exc.IntegrityError","error_message":"duplicate key value violates unique constraint","error_details":{"kind":"postgresql","sqlstate":"23505","constraint_name":"example_unique_constraint"}}
 ```
 
 `http://127.0.0.1/private`を含む失敗では、URL属性を`[redacted]`とし、原因文の同じURLも置換する。timeout等の説明や例外型は保持する。記事本文が同時に渡されても出力しない。
