@@ -12,17 +12,7 @@ from app.db.errors import (
     DatabaseError,
     DatabaseTimeoutError,
     DatabaseTimeoutErrorReason,
-    DatabaseUnexpectedError,
 )
-from app.logfire.exceptions import VectorDomainError
-
-
-def test_database_error_is_vector_domain_error() -> None:
-    assert issubclass(DatabaseError, VectorDomainError)
-    assert issubclass(DatabaseConnectionError, DatabaseError)
-    assert issubclass(DatabaseTimeoutError, DatabaseError)
-    assert issubclass(DatabaseConstraintError, DatabaseError)
-    assert issubclass(DatabaseUnexpectedError, DatabaseError)
 
 
 def test_database_error_cannot_be_instantiated_directly() -> None:
@@ -46,67 +36,6 @@ def test_reason_values_name_what_happened() -> None:
         "check_violation",
         "unclassified_constraint",
     }
-
-
-@pytest.mark.parametrize(
-    ("exc", "expected"),
-    [
-        (
-            DatabaseConnectionError(
-                reason=DatabaseConnectionErrorReason.CONNECTION_FAILED
-            ),
-            "DatabaseConnectionError(reason='connection_failed')",
-        ),
-        (
-            DatabaseConnectionError(
-                reason=DatabaseConnectionErrorReason.CONNECTION_LOST
-            ),
-            "DatabaseConnectionError(reason='connection_lost')",
-        ),
-        (
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.LOCK_TIMEOUT),
-            "DatabaseTimeoutError(reason='lock_timeout')",
-        ),
-        (
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
-            "DatabaseTimeoutError(reason='statement_timeout')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.UNIQUE_VIOLATION
-            ),
-            "DatabaseConstraintError(reason='unique_violation')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.FOREIGN_KEY_VIOLATION
-            ),
-            "DatabaseConstraintError(reason='foreign_key_violation')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.NOT_NULL_VIOLATION
-            ),
-            "DatabaseConstraintError(reason='not_null_violation')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.CHECK_VIOLATION
-            ),
-            "DatabaseConstraintError(reason='check_violation')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.UNCLASSIFIED_CONSTRAINT
-            ),
-            "DatabaseConstraintError(reason='unclassified_constraint')",
-        ),
-        (DatabaseUnexpectedError(), "DatabaseUnexpectedError"),
-    ],
-)
-def test_str_exposes_class_and_reason_only(exc: DatabaseError, expected: str) -> None:
-    assert str(exc) == expected
-    assert exc.args == ()
 
 
 @pytest.mark.parametrize(

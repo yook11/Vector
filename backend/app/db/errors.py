@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar
-
-from app.logfire.exceptions import VectorDomainError
 
 __all__ = [
     "DatabaseConnectionError",
@@ -37,27 +34,18 @@ class DatabaseConstraintErrorReason(StrEnum):
     UNCLASSIFIED_CONSTRAINT = "unclassified_constraint"
 
 
-class DatabaseError(VectorDomainError):
+class DatabaseError(Exception):
     """データベース由来エラーの共通祖先。捕捉用であり、直接は送出しない。"""
-
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self) -> None:
         if type(self) is DatabaseError:
             raise TypeError("DatabaseError cannot be instantiated directly")
         super().__init__()
 
-    def __str__(self) -> str:
-        reason = getattr(self, "reason", None)
-        if not isinstance(reason, StrEnum):
-            return self.__class__.__name__
-        return f"{self.__class__.__name__}(reason={reason.value!r})"
-
 
 class DatabaseConnectionError(DatabaseError):
     """接続できなかった、または接続が切れた。"""
 
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("reason",)
     reason: DatabaseConnectionErrorReason
 
     def __init__(self, *, reason: DatabaseConnectionErrorReason) -> None:
@@ -70,7 +58,6 @@ class DatabaseConnectionError(DatabaseError):
 class DatabaseTimeoutError(DatabaseError):
     """データベースの待ちが尽きた。"""
 
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("reason",)
     reason: DatabaseTimeoutErrorReason
 
     def __init__(self, *, reason: DatabaseTimeoutErrorReason) -> None:
@@ -83,7 +70,6 @@ class DatabaseTimeoutError(DatabaseError):
 class DatabaseConstraintError(DatabaseError):
     """データベースの制約違反が起きた。"""
 
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("reason",)
     reason: DatabaseConstraintErrorReason
 
     def __init__(self, *, reason: DatabaseConstraintErrorReason) -> None:

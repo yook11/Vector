@@ -1,4 +1,4 @@
-"""送信失敗の情報保持と、例外文面に公開する情報の境界を検証する。"""
+"""送信失敗の属性保持と出力時の情報保護を検証する。"""
 
 import pytest
 
@@ -67,8 +67,6 @@ def test_configuration_error_keeps_stable_reason(
     error = PublishConfigurationError(reason=reason)
     assert isinstance(error, PublishError)
     assert error.reason is reason
-    assert reason.value in str(error)
-    assert error.args == ()
 
 
 @pytest.mark.parametrize("reason", list(PublishEventInvalidReason))
@@ -79,8 +77,6 @@ def test_event_invalid_error_does_not_require_event_content(
     error = PublishEventInvalidError(reason=reason)
     assert isinstance(error, PublishError)
     assert error.reason is reason
-    assert reason.value in str(error)
-    assert error.args == ()
 
 
 @pytest.mark.parametrize("cleanup", [False, True])
@@ -175,8 +171,8 @@ def test_integrity_error_preserves_reason_and_diagnostics():
     }
 
 
-def test_integrity_error_displays_fixed_message_without_private_diagnostics():
-    """固定の説明文を表示し、調査情報を例外の通常表示へ露出しない。"""
+def test_integrity_error_keeps_fixed_message_as_attribute():
+    """固定の説明文を保持し、秘密を含む調査情報は例外文面へ露出しない。"""
     from app.outbox.publishing.errors import (
         PublishIntegrityError,
         PublishIntegrityReason,
@@ -191,7 +187,6 @@ def test_integrity_error_displays_fixed_message_without_private_diagnostics():
         error.MESSAGE
         == "送信本文と、送信先が受け取った本文のチェックサムが一致しません。"
     )
-    assert error.MESSAGE in str(error)
     assert error.args == ()
     assert marker not in str(error)
     assert marker not in repr(error)
@@ -206,7 +201,6 @@ def test_response_invalid_error_exposes_only_fixed_diagnostics(reason):
     assert error.CODE == "publish_response_invalid"
     assert vars(error) == {"reason": reason}
     assert error.args == ()
-    assert error.reason.value in str(error)
     assert "PRIVATE" not in str(error)
     assert "PRIVATE" not in repr(error)
 

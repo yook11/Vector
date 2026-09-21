@@ -465,7 +465,7 @@ Done: 既存テストによる振る舞いの検証と、lint・format・全単�
 
 Problem: 終了失敗をPublishUnexpectedErrorのphaseで表すと送信失敗との区別が読み取りにくく、変換関数にoverloadが必要になる。
 Evidence: 終了失敗はイベントの受付結果を上書きせず、再試行policyへ渡さない既存契約を持つ。
-PublishCleanupErrorはVectorDomainErrorを直接継承し、CODE=publish_cleanup_errorとoriginal_exception_typeを安全な診断情報として持つ。
+PublishCleanupErrorはExceptionを直接継承し、CODE=publish_cleanup_errorとoriginal_exception_typeを安全な診断情報として持つ。
 PublishErrorの継承関係から分離し、SQS Publisher内の診断に使用する。BatchPublishResultには含めない。
 publish_cleanup_error_from_exceptionは元の例外をcauseとして保持し、送信失敗の分類は行わない。
 PublishPhase.CLEANUPとoverloadを削除し、終了失敗を型で識別する。
@@ -525,7 +525,7 @@ SqsMessageBatchのローカル検証（2026-09-08）: lint・format、全単体�
 Problem: decodeとID照合で検出した違反が同じ想定外エラーになり、何が不正だったかを呼び出し元で確認できなかった。
 Evidence: 既存の応答形式検証・ID照合・本文MD5比較、エラーマッピング、停止policy、停止確定後の記録を対象とする。
 
-- PublishResponseInvalidError(CODE=publish_response_invalid)はPublishErrorを継承し、共通のreasonだけを保持する。SQS固有のfieldは持たず、SAFE_ATTRSもCODEとreasonだけとする。
+- PublishResponseInvalidError(CODE=publish_response_invalid)はPublishErrorを継承し、共通のreasonだけを保持する。SQS固有のfieldは持たず、CODEとreasonは属性として保持する。メッセージは自動補完しない。
 - PublishResponseInvalidReasonはinvalid_type、missing_required_field、empty_required_field、invalid_checksum_format、unknown_entry_id、duplicate_entry_id、missing_entry_idとする。項目が存在してNoneならinvalid_type、キー自体の欠落ならmissing_required_field、必須文字列が空ならempty_required_fieldとする。
 - SQS側のsqs/response_errors.pyに定義するSqsResponseFieldはresponse、successful_entries、failed_entries、successful_entry、failed_entry、entry_id、message_id、body_checksum、error_code、sender_faultとする。実際のID、本文、チェックサム、SDK自由文、request IDは取り込まない。
 - InvalidSqsBatchResponseをsqs/response_errors.pyに置き、decode・ID照合が共有するPublishResponseInvalidReasonとSQS固有のSqsResponseFieldを指定して送出する。旧PublishResponseFieldの互換名は設けない。応答検証とマッピングの循環依存を作らず、違反理由を二重定義しない。
@@ -628,3 +628,8 @@ Non-goals: AWS上のAssessment relay Lambda・Scheduler・IAM・キュー・イ�
 設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。本文準備の失敗は`publishing.error_mapping.publish_preparation_error_from_exception`で扱い、分類済みPublishErrorの同一性、想定外例外のPREPARE_EVENTと原因チェーンを維持する。RoutedEventPublisherとSqsMessageBatchがこの処理を共有し、SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
 
 PR作成時の最終検証: 設定名・本文準備エラーの責務整理と、既存のイベント／受信handlerテスト整理を含め、app全体・変更テストのRuff lint・format、単体テスト6,628件が成功した。統合テスト1,400件も同一の製品コードで成功し、一時DB・Redisは削除済み。統合検証後の追加対象は単体テストと文書のみ。テストガイドへ保証の所有先・1テスト1不変条件の方針を反映した。AWS設定・デプロイは未実施。
+
+
+## 例外の標準化（2026-09-21）
+
+`PublishError`・`PublishCleanupError`とSQS通信の`SqsSendError`は通常の`Exception`を直接継承し、`SAFE_ATTRS`を廃止する。具体型・CODE・reason・診断属性・`PublishIntegrityError.MESSAGE`定数は維持する。メッセージ未指定の例外文面は空とし、属性値を文面へ補完しない。送信結果、再送・停止の判断、後始末の失敗との分離、recorderが明示する理由・停止説明・通知は変更しない。

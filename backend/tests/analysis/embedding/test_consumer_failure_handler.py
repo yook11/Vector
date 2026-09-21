@@ -33,7 +33,11 @@ from app.analysis.embedding.errors import (
     to_embedding_error,
 )
 from app.audit.stages.embedding import EmbeddingAuditRepository
-from app.db.errors import DatabaseUnexpectedError
+from app.db.errors import (
+    DatabaseConnectionError,
+    DatabaseConnectionErrorReason,
+    DatabaseUnexpectedError,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -252,3 +256,37 @@ async def test_rejection_audit_failure_does_not_escape_handler(
     assert await _events(db_session) == []
     dropped.assert_called_once()
     assert "private" not in str(log.warning.call_args)
+
+
+@pytest.mark.asyncio
+async def test_database_failure_audit_preserves_classification_with_null_message(
+    db_session, session_factory, article_id
+):
+    """DB例外の文面が空でも実DBへ分類と原因チェーンを保存する。"""
+    from sqlalchemy.exc import OperationalError
+
+    cause = OperationalError(None, None, RuntimeError("private database details"))
+    error = DatabaseConnectionError(
+        reason=DatabaseConnectionErrorReason.CONNECTION_LOST
+    )
+    error.__cause__ = cause
+    failure = classify_embedding_failure(error)
+
+    await EmbeddingConsumerFailureHandler(session_factory).handle(
+        failure=failure,
+        exc=error,
+        analyzed_article_id=123,
+        analyzable_article_id=article_id,
+        provider="gemini",
+    )
+
+    (event,) = await _events(db_session)
+    assert event.payload["error_message"] is None
+    assert event.outcome_code == "db_runtime_error"
+    assert event.retryability == "retryable"
+    assert event.payload["failure_kind"] == failure.audit.failure_kind
+    assert event.error_class == "app.db.errors.DatabaseConnectionError"
+    assert event.payload["error_chain"] == [
+        "app.db.errors.DatabaseConnectionError",
+        "sqlalchemy.exc.OperationalError",
+    ]

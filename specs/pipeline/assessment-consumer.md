@@ -232,7 +232,7 @@ Evidence: Curationの既存payload、EmbeddingのArticleAssessedInScopeEvent・�
 
 - `app/lambda_handlers/assessment/event.py`の`parse_curated_signal_event(message_body: str) -> ArticleCuratedSignalEvent`はJSON解析後に共有契約へ委譲する。イベント内容を別実装で検証しない。
 - 非文字列、壊れたJSON、重複キー、NaN・Infinityなどの非標準定数、解析時のRecursionErrorはinvalid_jsonとする。JSONとして正常な配列などは共有契約のinvalid_envelopeとなる。
-- `AssessmentEventInvalidError`はCODE=assessment_event_invalid、reason、tupleのissuesを保持する。reasonは共有の4理由にinvalid_jsonを加えたAssessmentEventInvalidReason。SAFE_ATTRSはCODE・reason・issuesのみとし、共有の詳細値をそのまま引き継ぐ。
+- 旧契約（廃止済み）: `AssessmentEventInvalidError`はCODE=assessment_event_invalid、reason、tupleのissuesを保持する。reasonは共有の4理由にinvalid_jsonを加えたAssessmentEventInvalidReason。SAFE_ATTRSはCODE・reason・issuesのみとし、共有の詳細値をそのまま引き継ぐ。
 - エラー変換はexceptの外で送出し、本文や元の検証例外を原因チェーンへ残さない。想定外例外・プロセス終了を入力不正に変換しない。
 - 戻り値はイベント全体。後続handlerがevent.payloadを既存Consumerへ渡す予定だが、このスライスでは接続しない。
 

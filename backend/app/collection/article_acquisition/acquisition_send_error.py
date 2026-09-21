@@ -3,8 +3,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from app.logfire.exceptions import VectorDomainError
-
 
 class RetryDisposition(StrEnum):
     RETRYABLE = "retryable"
@@ -21,7 +19,7 @@ class AcquisitionSendFailure:
     transport_reason: str | None = None
 
 
-class SourceAcquisitionSendError(VectorDomainError):
+class SourceAcquisitionSendError(Exception):
     def __init__(self, failure: AcquisitionSendFailure) -> None:
         super().__init__()
         self.failure = failure

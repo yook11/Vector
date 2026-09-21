@@ -32,7 +32,7 @@ PR #687で導入したread originの自己記述化を前提とする。現行�
 | `AcquisitionReadError(AcquisitionError)` | 例外 | `SourceAcquisitionError` + `AcquisitionExternalFetchError` + `AcquisitionUnreadableResponseError` |
 | `AcquisitionConversionRejection` | 値 | `ConversionRejection` (rename) |
 | `AcquisitionConversionDefect` | 理由 enum | 維持 |
-| `AcquisitionError(VectorDomainError)` | 基底 | 維持 (`STAGE=ACQUISITION` / catch 型) |
+| `AcquisitionError(Exception)` | 基底 | 取得例外の捕捉型を維持 |
 
 - `Acquisition` 接頭で段が揃う(他段 `CurationError`/`AssessmentError` と同規約)
 - `Error`(例外) / `Rejection`(値) の接尾で形が分かれる
@@ -47,7 +47,6 @@ PR #687で導入したread originの自己記述化を前提とする。現行�
 
 ```python
 class AcquisitionReadError(AcquisitionError):
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     origin: ExternalFetchError | UnreadableResponseError
@@ -163,3 +162,8 @@ uv run ruff format --check <変更ファイル列挙>
 uv run pytest tests/ -q -m unit
 make test-integration PYTEST_ARGS="tests/collection/test_source_acquisition_failure_dispatch.py -q"
 ```
+
+
+## 例外の標準化（2026-09-21）
+
+`AcquisitionError`・`AcquisitionDispatchError`・`SourceAcquisitionSendError`は通常の`Exception`を直接継承する。失敗情報は`origin`・`failures`・`failure_count`・`failure`・`unsent`に保持し、既存の監査分類と再送判断を維持する。既存コンストラクターがメッセージを渡さない例外は空文字となり、型名や件数による文面の補完は行わない。取得元の既定メッセージから作る監査の詳細は維持する。

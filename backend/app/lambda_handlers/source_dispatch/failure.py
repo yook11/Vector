@@ -1,20 +1,17 @@
 """投入Lambdaの失敗を、入力や接続情報を含まない診断へ変換する。"""
 
-from typing import ClassVar, Literal
+from typing import Literal
 
 import structlog
 
 from app.audit.error_fields import exception_fqn
-from app.logfire.exceptions import VectorDomainError
 
 type FailurePhase = Literal["input", "settings", "resources", "dispatch"]
 
 logger = structlog.get_logger(__name__)
 
 
-class SourceDispatchLambdaError(VectorDomainError):
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("phase", "error_class")
-
+class SourceDispatchLambdaError(Exception):
     def __init__(self, *, phase: FailurePhase, error_class: str) -> None:
         super().__init__()
         self.phase = phase

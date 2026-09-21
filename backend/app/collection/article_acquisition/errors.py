@@ -11,7 +11,6 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
 from app.collection.external_fetch_errors import ExternalFetchError
-from app.logfire.exceptions import VectorDomainError
 
 
 class AcquisitionSourceInvalidError(Exception):
@@ -32,7 +31,7 @@ class AcquisitionConversionDefect(StrEnum):
     UNEXPECTED_ERROR = "acquisition_conversion_unexpected_error"
 
 
-class AcquisitionError(VectorDomainError):
+class AcquisitionError(Exception):
     """Stage 1 固有例外の共通基底。
 
     外部接続境界の ``ExternalFetchError`` family は origin error なので、本基底を
@@ -56,11 +55,9 @@ class AcquisitionReadError(AcquisitionError):
 
     ``code`` / ``FAILURE_KIND`` / ``RETRYABILITY`` は instance 属性。projection
     (``project_marker_failure``) が大文字 ``FAILURE_KIND`` / ``RETRYABILITY`` を
-    getattr し ``code`` を小文字で先読みする配線に合わせる。``__str__``
-    (``SAFE_ATTRS``) は ``code`` のみ公開し origin の生 message を載せない。
+    getattr し ``code`` を小文字で先読みする配線に合わせる。
     """
 
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     origin: ExternalFetchError | UnreadableResponseError
@@ -102,7 +99,6 @@ class RssFeedErrors(AcquisitionError):
     CODE: ClassVar[str] = "rss_feed_errors"
     FAILURE_KIND: ClassVar[str] = "rss_feeds"
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("failure_count",)
     RETRYABILITY: Retryability
 
     def __init__(self, failures: list[RssFeedFailure]) -> None:

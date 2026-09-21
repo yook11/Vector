@@ -36,8 +36,8 @@ class UnreadableResponseReason(StrEnum):
 class UnreadableResponseError(Exception):
     """取得済み payload を reader が構造化できなかった read-domain origin error。
 
-    ``ExternalFetchError`` family と対称の origin error (``VectorDomainError`` は
-    継承しない)。``reason`` (何が起きたか) と安全文脈を instance に持ち、``CODE`` は
+    ``ExternalFetchError`` family と対称の origin error。
+    ``reason`` (何が起きたか) と安全文脈を instance に持ち、``CODE`` は
     reason.value を公開する (marker base が origin の ``CODE`` を outcome_code に
     焼く配線をそのまま使う)。``__str__`` は明示 message があればそれ、無ければ
     PII-free な ``_default_message`` を返す (fetch family と対称)。
