@@ -84,11 +84,7 @@ _FINISH_REASON_TO_CONTENT_REASON: dict[FinishReason, GeminiContentRejectionReaso
 async def test_policy_block_finish_reason_raises_output_blocked(
     blocked_reason: FinishReason,
 ) -> None:
-    """policy block 系 finish_reason は OutputBlocked を raise し reason を運ぶ。
-
-    AIProvider*Error は SDK 生値を ``__str__`` に載せない (SAFE_ATTRS 契約) が、
-    どの policy block かは ``reason`` (PII-free な種別ラベル) で自己記述する。
-    """
+    """拒否のfinish_reasonに対応した具体型とreasonを保持する。"""
     response = _make_response(finish_reason=blocked_reason, text="some draft")
     curator = _make_curator(response)
     with pytest.raises(AIProviderOutputBlockedError) as ei:

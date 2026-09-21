@@ -74,7 +74,6 @@ def test_response_invalid_preserves_defect():
     assert exc.defect is SampleDefect.INVALID
     assert exc.code == SampleDefect.INVALID.value
     assert exc.provider_error is None
-    assert str(exc) == "AssessmentResponseInvalidError(code='assessment_test_invalid')"
 
 
 def test_response_invalid_rejects_free_text():
@@ -102,5 +101,28 @@ def test_core_errors_are_independent_of_task_classification(exc):
     assert isinstance(exc, AssessmentError)
     for attr in ("RETRYABILITY", "FAILURE_ACTION", "failure_kind", "failure_reason"):
         assert not hasattr(exc, attr)
-    assert exc.SAFE_ATTRS == ("code",)
     assert "private sdk text" not in str(exc)
+
+
+def test_assessment_error_directly_inherits_exception():
+    """工程例外はログ固有の基底クラスへ依存しない。"""
+    assert AssessmentError.__bases__ == (Exception,)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        to_assessment_error(AIProviderNetworkError("provider diagnostic")),
+        AssessmentResponseInvalidError(SampleDefect.INVALID),
+        AssessmentCurationMissingError(),
+    ],
+)
+def test_assessment_error_uses_standard_empty_message(error):
+    """メッセージ未指定の例外文字列をcodeで補完しない。"""
+    assert error.args == ()
+    assert str(error) == ""
+
+
+def test_response_invalid_is_assessment_error():
+    """応答不正を工程例外として捕捉できる。"""
+    assert issubclass(AssessmentResponseInvalidError, AssessmentError)

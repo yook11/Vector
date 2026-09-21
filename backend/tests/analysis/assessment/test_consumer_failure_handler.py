@@ -13,6 +13,7 @@ from structlog.testing import capture_logs
 from app.ai_providers.errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
+    AIProviderOutputBlockedError,
     AIProviderUsageLimitExhaustedError,
 )
 from app.ai_providers.gemini.error_translator import GeminiStateReason
@@ -265,4 +266,32 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     assert event.payload["error_chain"] == [
         "app.analysis.assessment.errors.AssessmentError",
         "app.ai_providers.errors.AIProviderNetworkError",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rejection_without_reason_is_persisted_with_nullable_audit_details(
+    db_session, session_factory, article_id
+) -> None:
+    """理由なしの拒否でも実DBにコードと原因チェーンを保存する。"""
+    provider_error = AIProviderOutputBlockedError("provider diagnostic")
+    error = to_assessment_error(provider_error)
+    error.__cause__ = provider_error
+
+    await AssessmentConsumerFailureHandler(session_factory).handle(
+        failure=classify_assessment_failure(error),
+        exc=error,
+        curation_id=123,
+        analyzable_article_id=article_id,
+        provider="gemini",
+    )
+
+    (event,) = await _events(db_session)
+    assert event.outcome_code == "ai_error_output_blocked"
+    assert event.retryability is None
+    assert event.payload["failure_kind"] is None
+    assert event.payload["failure_reason"] is None
+    assert event.payload["error_chain"] == [
+        "app.analysis.assessment.errors.AssessmentError",
+        "app.ai_providers.errors.AIProviderOutputBlockedError",
     ]

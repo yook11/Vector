@@ -138,8 +138,7 @@ class TestGeminiCallApiSuccess:
 class TestGeminiFinishReasonBlocked:
     @pytest.mark.asyncio
     async def test_finish_reason_safety_raises_blocked(self) -> None:
-        """Phase 4: 旧 ``str(exc)`` で finish_reason 検査は廃止。
-        AIProvider*Error は SAFE_ATTRS=("CODE",) のみで識別する契約。"""
+        """拒否の具体型とCODE・reasonを保持する。"""
         assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         _patch_assessor_call(

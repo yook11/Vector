@@ -7,9 +7,8 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ai_providers.errors import (
-    AIProviderContentError,
+    CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderOutputTruncatedError,
-    AIProviderStateError,
 )
 
 PYDANTIC_VALIDATION_FAILED = "answer_synthesis_pydantic_validation_failed"
@@ -54,14 +53,14 @@ def classify_answer_synthesis_failure(
     )
 
     # 打ち切りだけはrequest内でretryする。同じ入力でも書き方次第で収まるため。
-    # AIProviderStateErrorのsubclassなので、下の分岐より先に判定する必要がある。
+    # 打ち切りは分類済み例外にも含まれるため、先に判定する。
     if isinstance(exc, AIProviderOutputTruncatedError):
         return AnswerSynthesisFailureAttributes(
             code=exc.CODE,
             failure_reason=exc.reason.value if exc.reason is not None else None,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
-    if isinstance(exc, AIProviderStateError | AIProviderContentError):
+    if isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
         return AnswerSynthesisFailureAttributes(
             code=exc.CODE,
             failure_reason=exc.reason.value if exc.reason is not None else None,
@@ -94,14 +93,14 @@ def classify_direct_answer_failure(
     from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 
     # 打ち切りだけはrequest内でretryする。同じ入力でも書き方次第で収まるため。
-    # AIProviderStateErrorのsubclassなので、下の分岐より先に判定する必要がある。
+    # 打ち切りは分類済み例外にも含まれるため、先に判定する。
     if isinstance(exc, AIProviderOutputTruncatedError):
         return DirectAnswerFailureAttributes(
             code=exc.CODE,
             failure_reason=exc.reason.value if exc.reason is not None else None,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
-    if isinstance(exc, AIProviderStateError | AIProviderContentError):
+    if isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
         return DirectAnswerFailureAttributes(
             code=exc.CODE,
             failure_reason=exc.reason.value if exc.reason is not None else None,

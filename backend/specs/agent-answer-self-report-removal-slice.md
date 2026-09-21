@@ -1,5 +1,7 @@
 # 回答生成の自己申告撤去と欠損入力化 slice 仕様
 
+> 2026-09-21追記: State／Contentの中間クラスを使う記述は廃止前の設計記録である。現在は具体型10種類が通常の`Exception`を継承する`AIProviderError`の直下にあり、呼び出し側は共有の`CLASSIFIED_AI_PROVIDER_ERRORS`で判定する。`reason`は任意とし、基底型と未知の直接サブクラスを分類済みへ広げない。
+
 > 2026-09-20追記: 本書のFAILURE_MODE／AIProviderFailureMode、rejection_kind／AIProviderContentRejectionKind、is_safety_rejectionに関する記述は廃止前の設計記録である。これらの分類は共有例外と利用側から撤去する。具体的な例外型・CODE・reasonと、例外型による回答生成の再試行判断は維持する。回答生成の内部失敗情報からfailure_kindを削除し、代替分類は追加しない。
 
 > 更新: 生成不能時の `EvidenceAnswerUnavailable` / 固定文保存は廃止し、[工程の時間上限と生成失敗の契約](agent-stage-timeouts-slice.md)へ置き換える。
@@ -154,12 +156,11 @@ Direct Answer Agentは既に`response_schema=None`のplain text streamで本文�
   | `SAFETY` / `RECITATION` / `BLOCKLIST` / `PROHIBITED_CONTENT` / `SPII` | 出力ブロック |
   | 観測されない | 通信切断(現行の`STREAM_TRUNCATED`) |
 
-- `MAX_TOKENS`は`AIProviderStateError`系の専用leafで表す。回復クラスは`ATTEMPT_SCOPED`とする。
-  同じ入力でも書き方次第で収まるため、その実行だけの問題である。reasonはadapter local検知の
-  並びへ追加する。
+- `MAX_TOKENS`は`AIProviderOutputTruncatedError`で表す。adapterは既存の
+  `GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED`を付与する。共有例外のreason自体は任意とする。
 - 打ち切りはrequest内でretryする。`classify_answer_synthesis_failure()`と
   `classify_direct_answer_failure()`で、この型だけを`RETRY_IN_REQUEST`とする。他の
-  `AIProviderStateError`の分類は変えない。
+  プロバイダー具体型の再試行判断は変えない。
 - retryのrepair contextへ「前回は長さ上限で打ち切られた」を伝える。伝えなければ同じ長さで
   再び切れ、2 attemptを消費するだけになる。
 - blocked-setを`_FINISH_REASON_TO_CONTENT_REASON`のkeyと一致させる。写像を持つ理由が

@@ -73,7 +73,7 @@ def test_rate_limited_is_recoverable_by_waiting_and_does_not_emit(
 def test_other_state_error_not_in_exhausted_set_does_not_emit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """枯渇系以外の ``AIProviderStateError`` (設定不正等) は emit しない。"""
+    """枯渇系以外の プロバイダー例外（設定不正等） は emit しない。"""
     record_ai_provider_exhausted(AIProviderConfigurationError(), provider="gemini")
 
     assert metric_records(capsys.readouterr().out, _METRIC) == []

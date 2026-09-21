@@ -1,21 +1,12 @@
-"""``ai_provider_errors`` の 2 系統階層 / reason 契約テスト。
+"""AIプロバイダー例外の継承・引数保持・任意の理由の共通契約。"""
 
-検証する不変条件:
-- provider error は state / content の 2 系統に分かれ、両者とも ``AIProviderError``
-  の subclass。
-- content の ``reason`` は必須 + StrEnum 型ガード、state の ``reason`` は任意。
-
-``__str__`` / SAFE_ATTRS の PII 境界は ``tests/test_logfire_exceptions.py`` が
-正本として所有するため、本ファイルでは重複しない。
-"""
-
-from __future__ import annotations
+from enum import StrEnum
 
 import pytest
 
 from app.ai_providers.errors import (
+    CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderConfigurationError,
-    AIProviderContentError,
     AIProviderError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -25,98 +16,141 @@ from app.ai_providers.errors import (
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
-    AIProviderStateError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
+
+
+class Reason(StrEnum):
+    TIMEOUT = "timeout"
+
+
+_CONCRETE_ERRORS = (
+    (AIProviderInputRejectedError, "ai_error_input_rejected"),
+    (AIProviderOutputBlockedError, "ai_error_output_blocked"),
+    (AIProviderConfigurationError, "ai_error_configuration"),
+    (AIProviderRequestInvalidError, "ai_error_request_invalid"),
+    (AIProviderInsufficientBalanceError, "ai_error_insufficient_balance"),
+    (AIProviderRateLimitedError, "ai_error_rate_limited"),
+    (AIProviderUsageLimitExhaustedError, "ai_error_usage_limit_exhausted"),
+    (AIProviderServiceUnavailableError, "ai_error_service_unavailable"),
+    (AIProviderNetworkError, "ai_error_network"),
+    (AIProviderOutputTruncatedError, "ai_error_output_truncated"),
 )
-
-_STATE_LEAVES: tuple[type[AIProviderStateError], ...] = (
-    AIProviderNetworkError,
-    AIProviderServiceUnavailableError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
-    AIProviderConfigurationError,
-    AIProviderRequestInvalidError,
-    AIProviderInsufficientBalanceError,
-    AIProviderOutputTruncatedError,
-)
-
-_CONTENT_LEAVES: tuple[type[AIProviderContentError], ...] = (
-    AIProviderInputRejectedError,
-    AIProviderOutputBlockedError,
-)
+_ERROR_TYPES = (AIProviderError, *(cls for cls, _ in _CONCRETE_ERRORS))
 
 
-@pytest.mark.parametrize("cls", _STATE_LEAVES)
-def test_state_leaf_is_state_error_not_content(
-    cls: type[AIProviderStateError],
-) -> None:
-    """state leaf は ``AIProviderStateError`` 配下で ``AIProviderContentError`` 外。"""
-    assert issubclass(cls, AIProviderStateError)
-    assert issubclass(cls, AIProviderError)
-    assert not issubclass(cls, AIProviderContentError)
+def test_base_directly_inherits_exception() -> None:
+    """基底例外は通常のExceptionを直接継承する。"""
+    assert AIProviderError.__bases__ == (Exception,)
 
 
-@pytest.mark.parametrize("cls", _CONTENT_LEAVES)
-def test_content_leaf_is_content_error_not_state(
-    cls: type[AIProviderContentError],
-) -> None:
-    """content leaf は ``AIProviderContentError`` 配下、``AIProviderStateError`` 外。"""
-    assert issubclass(cls, AIProviderContentError)
-    assert issubclass(cls, AIProviderError)
-    assert not issubclass(cls, AIProviderStateError)
+@pytest.mark.parametrize("cls,code", _CONCRETE_ERRORS)
+def test_concrete_error_directly_inherits_base_with_existing_code(cls, code) -> None:
+    """既存の具体型とCODEの対応を中間クラスなしで維持する。"""
+    assert cls.__bases__ == (AIProviderError,)
+    assert cls.CODE == code
 
 
-# -- content reason 契約 (必須 + 型ガード) --
+def test_classified_errors_cover_existing_concrete_types() -> None:
+    """分類済み例外の集合は既存の具体型10種類に限定する。"""
+    assert set(CLASSIFIED_AI_PROVIDER_ERRORS) == {cls for cls, _ in _CONCRETE_ERRORS}
+    assert len(CLASSIFIED_AI_PROVIDER_ERRORS) == 10
 
 
-@pytest.mark.parametrize("cls", _CONTENT_LEAVES)
-def test_content_reason_is_required(cls: type[AIProviderContentError]) -> None:
-    """content error は reason 必須 (検知箇所が拒否理由を必ず上げる)。"""
-    with pytest.raises(TypeError):
-        cls()  # type: ignore[call-arg]
+def test_concrete_subclass_is_classified() -> None:
+    """具体型を継承した例外も従来どおり判定対象になる。"""
+
+    class NetworkFailure(AIProviderNetworkError):
+        pass
+
+    assert isinstance(NetworkFailure(), CLASSIFIED_AI_PROVIDER_ERRORS)
 
 
-@pytest.mark.parametrize("cls", _CONTENT_LEAVES)
-def test_content_reason_rejects_non_strenum(
-    cls: type[AIProviderContentError],
-) -> None:
-    """content error は自由文字列 reason を ``TypeError`` で拒否する (PII 境界)。"""
-    with pytest.raises(TypeError, match="StrEnum"):
-        cls(reason="safety")  # type: ignore[arg-type]
+def test_bare_base_is_not_classified() -> None:
+    """基底型そのものを分類済みとして扱わない。"""
+    assert not isinstance(AIProviderError(), CLASSIFIED_AI_PROVIDER_ERRORS)
 
 
-@pytest.mark.parametrize("cls", _CONTENT_LEAVES)
-def test_content_reason_is_stored(cls: type[AIProviderContentError]) -> None:
-    """content error は渡された StrEnum reason を保持する (forensics)。"""
-    exc = cls(reason=GeminiContentRejectionReason.RECITATION)
-    assert exc.reason is GeminiContentRejectionReason.RECITATION
+def test_unknown_direct_subclass_is_not_classified() -> None:
+    """CODEを持っていても未知の直接サブクラスは分類済みにしない。"""
+
+    class UnknownFailure(AIProviderError):
+        CODE = "unknown_provider_failure"
+
+    assert not isinstance(UnknownFailure(), CLASSIFIED_AI_PROVIDER_ERRORS)
 
 
-# -- state reason 契約 (任意 + 型ガード + legacy 互換) --
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+def test_no_args_uses_empty_exception_representation(cls) -> None:
+    """引数なしではCODEによる文字列の補完を行わない。"""
+    error = cls()
+    assert error.args == ()
+    assert str(error) == ""
 
 
-def test_state_reason_defaults_to_none() -> None:
-    """state error の reason は任意 (未指定は None)。"""
-    assert AIProviderNetworkError().reason is None
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+def test_message_is_preserved(cls) -> None:
+    """渡したメッセージを通常のExceptionと同じように保持する。"""
+    error = cls("provider diagnostic message")
+    assert error.args == ("provider diagnostic message",)
+    assert str(error) == "provider diagnostic message"
 
 
-def test_state_reason_accepts_strenum() -> None:
-    """state error は StrEnum reason を保持する。"""
-    exc = AIProviderServiceUnavailableError(reason=GeminiStateReason.SERVER_ERROR)
-    assert exc.reason is GeminiStateReason.SERVER_ERROR
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+def test_multiple_args_are_preserved(cls) -> None:
+    """文字列以外も含む複数引数を改変しない。"""
+    detail = {"status": 503}
+    error = cls("unavailable", detail)
+    assert error.args == ("unavailable", detail)
+    assert error.args[1] is detail
+    assert str(error) == str(Exception("unavailable", detail))
 
 
-def test_state_reason_rejects_non_strenum() -> None:
-    """state error も自由文字列 reason は ``TypeError`` で拒否する (PII 境界)。"""
-    with pytest.raises(TypeError, match="StrEnum"):
-        AIProviderNetworkError(reason="timeout")  # type: ignore[arg-type]
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+def test_reason_defaults_to_none(cls) -> None:
+    """すべての例外で理由を省略できる。"""
+    assert cls().reason is None
 
 
-def test_state_accepts_legacy_positional_message() -> None:
-    """state error は legacy positional message を捨てて構築できる (reason は None)。"""
-    exc = AIProviderConfigurationError("sensitive sdk message")
-    assert exc.reason is None
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+def test_reason_accepts_explicit_none(cls) -> None:
+    """理由として明示的なNoneを渡せる。"""
+    assert cls(reason=None).reason is None
+
+
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+def test_reason_is_preserved_separately_from_args(cls) -> None:
+    """理由は引数とは独立して保持する。"""
+    error = cls("request failed", reason=Reason.TIMEOUT)
+    assert error.reason is Reason.TIMEOUT
+    assert error.args == ("request failed",)
+    assert str(error) == "request failed"
+
+
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+def test_reason_does_not_fill_empty_message(cls) -> None:
+    """理由だけを渡してもメッセージを補完しない。"""
+    assert str(cls(reason=Reason.TIMEOUT)) == ""
+
+
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+@pytest.mark.parametrize("reason", ["timeout", 1])
+def test_reason_rejects_non_strenum(cls, reason) -> None:
+    """StrEnum以外の理由を拒否する。"""
+    with pytest.raises(TypeError, match="reason must be a StrEnum member or None"):
+        cls(reason=reason)
+
+
+@pytest.mark.parametrize("cls", _ERROR_TYPES)
+def test_unknown_keyword_is_rejected(cls) -> None:
+    """未定義のキーワードを黙って捨てない。"""
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        cls(unrelated_attr="diagnostic")
+
+
+def test_cause_chain_is_preserved() -> None:
+    """元例外との明示的な原因チェーンを保持する。"""
+    cause = TimeoutError("socket timeout")
+    with pytest.raises(AIProviderNetworkError) as raised:
+        raise AIProviderNetworkError("provider timeout") from cause
+    assert raised.value.__cause__ is cause

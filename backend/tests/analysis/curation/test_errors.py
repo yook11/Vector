@@ -37,9 +37,6 @@ def test_response_invalid_keeps_code_without_legacy_policy():
     assert error.reason is CurationFailureReason.RESPONSE_INVALID
     assert error.code == "extraction_response_invalid"
     assert error.provider_error is None
-    assert (
-        str(error) == "CurationResponseInvalidError(code='extraction_response_invalid')"
-    )
     assert not hasattr(error, "RETRYABILITY")
     assert not hasattr(error, "FAILURE_ACTION")
 
@@ -95,3 +92,32 @@ async def test_service_wraps_provider_with_same_cause():
     assert raised.value.provider_error is provider
     assert raised.value.__cause__ is provider
     session_factory.assert_not_called()
+
+
+def test_curation_error_directly_inherits_exception():
+    """工程例外はログ固有の基底クラスへ依存しない。"""
+    assert CurationError.__bases__ == (Exception,)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        to_curation_error(AIProviderRateLimitedError("provider diagnostic")),
+        CurationResponseInvalidError(),
+    ],
+)
+def test_curation_error_uses_standard_empty_message(error):
+    """メッセージ未指定の例外文字列をcodeで補完しない。"""
+    assert error.args == ()
+    assert str(error) == ""
+
+
+def test_response_invalid_is_curation_error():
+    """応答不正を工程例外として捕捉できる。"""
+    assert issubclass(CurationResponseInvalidError, CurationError)
+
+
+def test_response_invalid_rejects_positional_message():
+    """応答不正の既存の引数なしコンストラクターを維持する。"""
+    with pytest.raises(TypeError):
+        CurationResponseInvalidError("diagnostic")

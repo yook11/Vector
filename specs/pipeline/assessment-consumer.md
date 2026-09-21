@@ -104,10 +104,10 @@ Done: 3種類の正常終了の根拠、エラーとの境界、後続イベン�
 Problem: AssessmentのServiceエラーを再試行分類から独立させ、Embeddingと同じく失敗理由と原因の詳細を呼び出し元へ伝える。
 
 - `AssessmentFailureReason(StrEnum)`は`PROVIDER_ERROR=provider_error`、`RESPONSE_INVALID=response_invalid`、`CURATION_MISSING=curation_missing`を定義する。
-- `AssessmentError`は`reason`・`provider_error`・`defect`を持つ。プロバイダー失敗だけ分類済みの`AIProviderStateError`または`AIProviderContentError`を必須とし、応答不正だけ`StrEnum`のdefectを必須とする。それ以外の詳細は`None`に限定し、不正な組み合わせは`TypeError`で拒否する。
+- `AssessmentError`は`reason`・`provider_error`・`defect`を持つ。プロバイダー失敗だけ`CLASSIFIED_AI_PROVIDER_ERRORS`に列挙された具体型（またはそのサブクラス）の`AIProviderError`を必須とし、応答不正だけ`StrEnum`のdefectを必須とする。それ以外の詳細は`None`に限定し、不正な組み合わせは`TypeError`で拒否する。
 - `code`はプロバイダーの`CODE`、応答不正の`defect.value`、不存在の`assessment_curation_missing`とする。`AssessmentResponseInvalidError(defect)`の呼び出し形式と全16種類の詳細コードを維持する。`AssessmentCurationMissingError()`も定義する。
 - Serviceは`to_assessment_error`で元のプロバイダー例外を同一インスタンスとして保持し、`raise ... from exc`で原因チェーンをつなぐ。既存のAssessmentエラー・DB障害・timeout・想定外例外はそのまま伝播する。正常終了・保存内容・トランザクション境界は維持する。
-- `SAFE_ATTRS=("code",)`とし、エラー文字列へ入力本文やSDK例外の自由文を追加しない。
+- `AssessmentError`は通常の`Exception`を直接継承し、`SAFE_ATTRS`を持たない。既存コンストラクターはメッセージを渡さず、`str()`は空文字となる。コードと原因は`code`・`provider_error`・原因チェーンで保持する。
 - 既存Taskiqとの接続は`task_errors.py`の独立した`AssessmentTaskError`階層と`to_assessment_task_error`が担う。プロバイダー失敗は既存の分類属性へ対応付け、応答不正はRecoverable／`ai_response_invalid`、不存在はTerminal／`target_missing`へ変換する。Assessment以外の例外は同一インスタンスを返す。
 - Taskiq入口は変換後の例外をspan・FailureHandlerへ渡し、変換時だけ元例外を原因として再送出する。既存Taskiqの再試行・hold・監査項目・メトリクスを維持する。旧mapper・旧importの互換aliasは残さず、Taskiq例外のモジュール名変更と原因チェーンへのAssessmentエラー追加は意図した変更とする。
 

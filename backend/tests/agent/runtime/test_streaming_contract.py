@@ -36,8 +36,8 @@ from app.ai_providers.errors import (
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
     AIProviderRateLimitedError,
-    AIProviderStateError,
     AIProviderUsageLimitExhaustedError,
 )
 from app.ai_providers.gemini.error_translator import (
@@ -530,7 +530,7 @@ async def test_max_tokens_finish_reason_raises_classified_truncation_error(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
-    with pytest.raises(AIProviderStateError) as exc_info:
+    with pytest.raises(AIProviderOutputTruncatedError) as exc_info:
         _ = [
             fragment
             async for fragment in runtime.stream_text(
@@ -572,7 +572,7 @@ async def test_max_tokens_after_partial_fragment_yield_still_raises_classified_e
     )
 
     fragments: list[str] = []
-    with pytest.raises(AIProviderStateError) as exc_info:
+    with pytest.raises(AIProviderOutputTruncatedError) as exc_info:
         async for fragment in runtime.stream_text(
             make_agent(response_schema=None),
             "typed input",
