@@ -275,3 +275,26 @@ def test_no_unexpected_attributes_on_failure_path(capfire: CaptureLogfire) -> No
             raise ValueError("token=sk-secret https://internal/secret?q=1")
     keys = domain_attr_keys(pipeline_stage_attrs(capfire))
     assert keys <= _ALLOWED_DOMAIN_KEYS, f"unexpected attribute keys: {keys}"
+
+
+def test_span_omits_absent_failure_classification(capfire, monkeypatch) -> None:
+    """未設定の分類属性をspanへ補完せず、失敗コードを記録する。"""
+    from app.audit.failure_projection import FailureProjection
+    from app.logfire import failure_attrs
+
+    projection = FailureProjection(
+        failure_kind=None,
+        retryability=None,
+        failure_action=None,
+        code="ai_error_network",
+    )
+    monkeypatch.setattr(failure_attrs, "project_failure", lambda exc: projection)
+
+    with pytest.raises(RuntimeError):
+        with pipeline_stage_span(Stage.TREND_DISCOVERY, op="run_trend_discovery"):
+            raise RuntimeError("failed")
+
+    attrs = pipeline_stage_attrs(capfire)
+    assert "failure_kind" not in attrs
+    assert "retryability" not in attrs
+    assert attrs["code"] == "ai_error_network"

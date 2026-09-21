@@ -12,8 +12,10 @@ from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
     AIProviderInsufficientBalanceError,
+    AIProviderNetworkError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.ai_providers.gemini.error_translator import GeminiStateReason
 from app.analysis.assessment.consumer_failure_classification import (
     classify_assessment_failure,
 )
@@ -235,3 +237,32 @@ async def test_rejection_audit_failure_does_not_escape_handler(
     assert await _events(db_session) == []
     dropped.assert_called_once()
     assert "private" not in str(log.warning.call_args)
+
+
+@pytest.mark.asyncio
+async def test_provider_audit_preserves_cause_without_recovery_classification(
+    db_session, session_factory, article_id
+) -> None:
+    """実DBの監査行に原因を保持し、廃止した回復分類はnullで保存する。"""
+    provider_error = AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT)
+    error = to_assessment_error(provider_error)
+    error.__cause__ = provider_error
+
+    await AssessmentConsumerFailureHandler(session_factory).handle(
+        failure=classify_assessment_failure(error),
+        exc=error,
+        curation_id=123,
+        analyzable_article_id=article_id,
+        provider="gemini",
+    )
+
+    (event,) = await _events(db_session)
+    assert event.outcome_code == "ai_error_network"
+    assert event.retryability is None
+    assert event.payload["failure_kind"] is None
+    assert event.payload["failure_reason"] == GeminiStateReason.TIMEOUT.value
+    assert event.error_class == "app.analysis.assessment.errors.AssessmentError"
+    assert event.payload["error_chain"] == [
+        "app.analysis.assessment.errors.AssessmentError",
+        "app.ai_providers.errors.AIProviderNetworkError",
+    ]

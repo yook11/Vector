@@ -4,6 +4,8 @@ from typing import Any
 
 import pytest
 import structlog
+from asyncpg import PostgresError
+from sqlalchemy.exc import IntegrityError
 
 from app.log_policy import BASE_LOG_RULES, LogPolicy, LogPolicyRules, PolicyLogger
 from app.log_policy.budget import (
@@ -747,4 +749,79 @@ class TestBudgetOverflowReason:
             "event": "log_policy_budget_exceeded",
             "_policy_limited": True,
             "_policy_limit_reason": "text_total",
+        }
+
+
+class TestSqlDiagnosticBudgets:
+    """SQL診断と原因連鎖も通常項目と同じ予算で制限する。"""
+
+    def test_diagnostic_name_at_text_limit_is_preserved(self) -> None:
+        """単一文字列の上限ちょうどの診断名は失われない。"""
+        exc = PostgresError.new({"C": "23505", "M": "duplicate", "n": "x" * TEXT_LIMIT})
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": exc},
+        )
+        assert output["error_details"]["constraint_name"] == "x" * TEXT_LIMIT
+
+    def test_cause_diagnostics_exceed_shared_text_budget(self) -> None:
+        """各診断属性が単独上限内でも合計文字数超過でログ全体を置換する。"""
+        driver = PostgresError.new(
+            {
+                "C": "23505",
+                "M": "duplicate",
+                "s": "x" * TEXT_LIMIT,
+                "t": "x" * TEXT_LIMIT,
+                "c": "x" * TEXT_LIMIT,
+                "n": "x" * TEXT_LIMIT,
+            }
+        )
+        outer = RuntimeError("wrapped")
+        outer.__cause__ = IntegrityError("INSERT ...", (), driver)
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": outer},
+        )
+        assert output == {
+            "event": "log_policy_budget_exceeded",
+            "_policy_limited": True,
+            "_policy_limit_reason": "text_total",
+        }
+
+    def test_cause_diagnostics_share_item_budget_with_normal_fields(self) -> None:
+        """通常配列と原因の診断属性の合計件数でログ全体の上限を判定する。"""
+        outer = RuntimeError("wrapped")
+        outer.__cause__ = PostgresError.new({"C": "23505", "M": "duplicate"})
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "error",
+            {"payload": [0] * 250, "exc_info": outer},
+        )
+        assert output == {
+            "event": "log_policy_budget_exceeded",
+            "_policy_limited": True,
+            "_policy_limit_reason": "value_count",
+        }
+
+    def test_long_diagnostic_attribute_preserves_other_fields(self) -> None:
+        """一つの診断名が長すぎても兄弟のSQLSTATEを残す。"""
+        exc = IntegrityError(
+            "INSERT ...",
+            (),
+            PostgresError.new(
+                {"C": "23505", "M": "duplicate", "n": "x" * (TEXT_LIMIT + 1)}
+            ),
+        )
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": exc},
+        )
+        assert output["error_details"] == {
+            "kind": "postgresql",
+            "sqlstate": "23505",
+            "constraint_name": "[limit]",
         }

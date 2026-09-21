@@ -30,8 +30,8 @@ class FailureAction(StrEnum):
 class FailureProjection:
     """DB wire 値へ落とす前の失敗属性。"""
 
-    failure_kind: str
-    retryability: Retryability
+    failure_kind: str | None
+    retryability: Retryability | None
     failure_action: FailureAction | None
     code: str
     # 原因詳細 (failure_kind = ファミリー / code = 具体 CODE とは別軸)。
@@ -46,7 +46,7 @@ class FailurePayloadFields(TypedDict):
     流入し得ると型検査されるため、key set を固定する。
     """
 
-    failure_kind: str
+    failure_kind: str | None
     failure_action: str | None
 
 
@@ -91,9 +91,8 @@ def project_failure(
 def project_marker_failure(exc: BaseException) -> FailureProjection | None:
     """自前 marker 例外を失敗属性へ投影する。
 
-    ``failure_kind`` は instance 値 (AI 分析 stage の curation / assessment /
-    embedding の原因軸 = mode 値) を優先し classvar ``FAILURE_KIND`` (completion /
-    briefing / acquisition) に fallback する。``failure_reason`` は instance 値を持つ
+    ``failure_kind`` は instance 値を優先し classvar ``FAILURE_KIND`` に fallback する。
+    ``failure_reason`` は instance 値を持つ
     marker だけが焼く。
     """
     failure_kind = _failure_kind_of_marker(exc)
@@ -208,9 +207,7 @@ def _code_of_marker(exc: BaseException) -> str | None:
 def _failure_kind_of_marker(exc: BaseException) -> str | None:
     """instance ``failure_kind`` を優先し classvar ``FAILURE_KIND`` に fallback。
 
-    AI 分析 stage (curation / assessment / embedding) は原因軸を instance 値
-    (mode 値) で持つ。completion / briefing / acquisition は従来どおり classvar を
-    宣言する。
+    completion / briefing / acquisition は classvar を宣言する。
     """
     kind = getattr(exc, "failure_kind", None)
     if isinstance(kind, str) and kind:

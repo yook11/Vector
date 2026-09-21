@@ -30,7 +30,6 @@ class AnswerSynthesisFailureAttributes(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     code: str = Field(min_length=1)
-    failure_kind: str = Field(min_length=1)
     failure_reason: str | None = None
     request_retry_disposition: RequestRetryDisposition
 
@@ -41,7 +40,6 @@ class DirectAnswerFailureAttributes(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     code: str = Field(min_length=1)
-    failure_kind: str = Field(min_length=1)
     failure_reason: str | None = None
     request_retry_disposition: RequestRetryDisposition
 
@@ -60,35 +58,29 @@ def classify_answer_synthesis_failure(
     if isinstance(exc, AIProviderOutputTruncatedError):
         return AnswerSynthesisFailureAttributes(
             code=exc.CODE,
-            failure_kind=exc.FAILURE_MODE.value,
             failure_reason=exc.reason.value if exc.reason is not None else None,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
-    # FAILURE_MODE を持つのは State/Content の2系統のみ (裸の基底は unknown へ落とす)。
     if isinstance(exc, AIProviderStateError | AIProviderContentError):
         return AnswerSynthesisFailureAttributes(
             code=exc.CODE,
-            failure_kind=exc.FAILURE_MODE.value,
             failure_reason=exc.reason.value if exc.reason is not None else None,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
         )
     if isinstance(exc, EvidenceAnswerDraftInvalidError):
         return AnswerSynthesisFailureAttributes(
             code=ANSWER_DRAFT_INVALID,
-            failure_kind="ai_response_invalid",
             failure_reason=str(exc) or ANSWER_DRAFT_INVALID,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     if isinstance(exc, ValidationError):
         return AnswerSynthesisFailureAttributes(
             code=PYDANTIC_VALIDATION_FAILED,
-            failure_kind="ai_response_invalid",
             failure_reason=PYDANTIC_VALIDATION_FAILED,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     return AnswerSynthesisFailureAttributes(
         code="unexpected_error",
-        failure_kind="unknown",
         failure_reason=None,
         request_retry_disposition=RequestRetryDisposition.UNKNOWN,
     )
@@ -106,28 +98,23 @@ def classify_direct_answer_failure(
     if isinstance(exc, AIProviderOutputTruncatedError):
         return DirectAnswerFailureAttributes(
             code=exc.CODE,
-            failure_kind=exc.FAILURE_MODE.value,
             failure_reason=exc.reason.value if exc.reason is not None else None,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
-    # FAILURE_MODE を持つのは State/Content の2系統のみ (裸の基底は unknown へ落とす)。
     if isinstance(exc, AIProviderStateError | AIProviderContentError):
         return DirectAnswerFailureAttributes(
             code=exc.CODE,
-            failure_kind=exc.FAILURE_MODE.value,
             failure_reason=exc.reason.value if exc.reason is not None else None,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
         )
     if isinstance(exc, DirectAnswerInvalidError):
         return DirectAnswerFailureAttributes(
             code=exc.code,
-            failure_kind="ai_response_invalid",
             failure_reason=exc.code,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     return DirectAnswerFailureAttributes(
         code="unexpected_error",
-        failure_kind="unknown",
         failure_reason=None,
         request_retry_disposition=RequestRetryDisposition.UNKNOWN,
     )

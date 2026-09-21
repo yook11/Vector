@@ -6,14 +6,26 @@ from typing import Any
 from app.log_policy.base import LogPolicyRules
 from app.log_policy.budget import LogBudgetExceeded, LogEventBudget
 from app.log_policy.diagnostics import LogProcessingDiagnostics
+from app.log_policy.exceptions.conversion import ExceptionConverter, convert_exception
+from app.log_policy.exceptions.extraction import extract_exception_fields
 from app.log_policy.field_selection import LogFieldSelector
 from app.log_policy.logger import PolicyLogger
-from app.log_policy.safe_exception_log import extract_exception_fields
-from app.log_policy.value_preparation import LogValuePreparer
+from app.log_policy.value_preparation import (
+    DEPTH_LIMIT,
+    EXCEPTION_DEPTH_LIMIT,
+    LogValuePreparer,
+)
 
 
 class LogPolicyProcessor:
     """各処理を順に適用し、失敗時も原文を出さない。"""
+
+    def __init__(
+        self,
+        *,
+        exception_converter: ExceptionConverter = convert_exception,
+    ) -> None:
+        self._exception_converter = exception_converter
 
     def __call__(
         self,
@@ -48,18 +60,23 @@ class LogPolicyProcessor:
                     continue
                 # ここまで残った項目だけを採用し、名前の文字数を数えて値を準備する。
                 budget.check_and_count_text_chars(len(field_name))
-                prepared_event[field_name] = preparer.prepare_field_value(field_value)
+                prepared_event[field_name] = preparer.prepare_field_value(
+                    field_value, depth_limit=DEPTH_LIMIT
+                )
 
-            # 例外から安全に抽出した項目は、同名の入力があっても上書きして優先する。
-            exception_fields = extract_exception_fields(event_dict.get("exc_info"))
+            # 同名の通常入力より、実際の例外から抽出した情報を優先する。
+            exception_fields = extract_exception_fields(
+                event_dict.get("exc_info"),
+                exception_converter=self._exception_converter,
+            )
             if exception_fields is not None:
                 budget.check_and_count_log_items(len(exception_fields))
                 for field_name, field_value in exception_fields.items():
                     budget.check_and_count_text_chars(len(field_name))
                     prepared_event[field_name] = preparer.prepare_field_value(
-                        field_value
+                        field_value, depth_limit=EXCEPTION_DEPTH_LIMIT
                     )
-            # どのポリシーで処理したログかを、ルール由来の固定値で出力に付ける。
+            # どのポリシーで処理したログかを、出力に残す。
             if rules.policy is not None:
                 prepared_event["log_policy"] = rules.policy.value
             prepared_diagnostics = diagnostics.prepare_log_fields(

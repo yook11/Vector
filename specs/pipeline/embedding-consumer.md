@@ -140,7 +140,7 @@ Serviceの失敗は`EmbeddingError.reason`（`EmbeddingFailureReason`）で表�
 |---|---|---|
 | `ARTICLE_MISSING` | 保存対象の記事が存在しない | `embedding_analyzed_article_missing`／`target_missing`、追加再試行なし |
 | `RESPONSE_INVALID` | 埋め込み応答がベクトルの契約を満たさない | `embedding_response_invalid`／`ai_response_invalid`、既存上限まで再試行 |
-| `PROVIDER_ERROR` | 元のprovider例外に429・通信障害・残高不足などの分類と詳細を保持 | providerの既存FAILURE_MODEから再試行・holdを判断 |
+| `PROVIDER_ERROR` | 元のprovider例外に429・通信障害・残高不足などの分類と詳細を保持 | 回復分類を持たず、SQSへの失敗応答はhandlerが決定する |
 
 DB障害と想定外例外は`EmbeddingError`に包まず伝播する。`code`はreasonと元のprovider例外から導出し、監査コードを二重管理しない。
 
@@ -186,10 +186,10 @@ consumerでは両者を区別し、生成済みを確認できた場合だけ対
 
 分類関数とConsumer用ハンドラーを実装し、Consumer本体から開始時の取得・Ready構築・Service実行中の失敗を接続する。入力イベントの検証・SQS応答は入口部品へ接続し、Lambda起動関数の組み立ては後続とする。
 
-- `classify_embedding_failure(exc)`は副作用のない関数で、`EmbeddingFailureClassification`を返す。監査用の`FailureProjection`、監視上の`failed`／`infra_error`、必要な枯渇通知の元例外を持つ。
+- `classify_embedding_failure(exc)`は副作用のない関数で、`EmbeddingFailureClassification`を返す。監査用の`FailureProjection`と必要な枯渇通知の元例外を持ち、`outcome`は持たない。
 - Serviceのreasonと元のprovider例外から直接分類し、Taskiq用のRecoverable／Terminalには変換しない。DB例外は共有のDB分類を使う。想定外例外と通常のTimeoutErrorは`unexpected_error`／`unknown`として失敗に分類する。
-- 監査上のretryabilityは失敗の性質として維持するが、例外抑止・再配信・holdの判断には使用しない。
-- `EmbeddingConsumerFailureHandler.handle()`は分類結果、元の例外、分析記事ID、記事ID、providerを受け取り、失敗件数の計測・失敗監査・必要な枯渇通知をそれぞれ試みる。戻り値はNoneで、処理全体の成功を示す値ではない。
+- provider失敗の監査ではfailure_kind・retryabilityをnullとし、CODE・reason・例外情報を保持する。DB障害などの既存監査分類は維持するが、再配信の判断には使用しない。
+- `EmbeddingConsumerFailureHandler.handle()`は分類結果、元の例外、分析記事ID、記事ID、providerを受け取り、失敗件数の計測・失敗監査・必要な枯渇通知をそれぞれ試みる。計測結果はDB・provider障害も含め一律`failed`とする。戻り値はNoneで、処理全体の成功を示す値ではない。
 - 監査は元の例外のerror_class・error_chainを保持し、既存のpayload組み立てと秘匿処理を再利用する。枯渇通知は既存の`ai_provider_exhausted`打点で、残高不足・利用枠枯渇のみを対象とする。通常の429は枯渇通知の対象外。
 - 後処理の通常の例外は捕捉し、処理名・記事ID・例外クラスだけを二次障害ログに記録する。例外本文やトレースバックは出さない。監査失敗時は既存の監査drop計測も試みる。ログ出力自体の失敗でも残りの後処理を継続する。
 - 元の例外の再送出は後続のConsumerの責務であり、ハンドラー内では再送出も成功への変換も行わない。キャンセルやプロセス終了を通常の二次障害として抑止しない。

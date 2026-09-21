@@ -1,5 +1,13 @@
 # Logfire Curation Processing Outcome Metrics
 
+## 現行契約（2026-09-20）
+
+`vector.curation.processing_outcome`とCloudWatch EMFの送信先・計測点は維持し、resultは`signal`／`noise`／`rejected`／`failed`の4値とする。Consumerの実行失敗は原因によらず`failed`として計測する。`infra_error`は型・説明から削除し、成功・Ready拒否・冪等skipの扱いは変更しない。CloudWatchの失敗率計算式・閾値は維持する。
+
+## 旧仕様（以下は廃止前の設計記録）
+
+以下のinfra_error分類・5値メトリクスの記述は廃止済みであり、現行要件ではない。
+
 作成: 2026-06-15
 Status: Implemented (PR #814)
 

@@ -219,7 +219,7 @@ Problemは、検証済みの記事完成イベントからCurationの実行と�
 
 `CurationConsumer(session_factory, curator)`は準備済み依存を借用し、`consume(event)`から`CurationCompletion | CurationReadyBuildRejected`を返す。DB事実取得・Ready構築・Service実行を60秒に制限する。DB事実は一度取得し、取得セッションを閉じてからReadyを構築する。Signal／Noise保存済みは追加の監査・AI・成功計測なしで`ALREADY_CURATED`へ対応付け、その他の拒否は期限外の理由記録後に同じ拒否値を返す。成立時はServiceのCompletionをそのまま返す。
 
-`CurationFailureClassification`と`classify_curation_failure`は副作用を持たず、Serviceエラーを監査情報とプロバイダー枯渇通知対象へ投影する。プロバイダーは元例外の分類を保持し、応答不正は`extraction_response_invalid`／`ai_response_invalid`を使用する。DBは既存の`project_db_failure`、timeout・想定外例外はunknown分類を使用する。全分類で記事削除の`failure_action`を持たせず、retryabilityから再配信の制御を導出しない。
+`CurationFailureClassification`と`classify_curation_failure`は副作用を持たず、Serviceエラーを監査情報とプロバイダー枯渇通知対象へ投影する。プロバイダーは元例外のCODE・reasonを保持し、監査のfailure_kind・retryabilityはnullとする。応答不正は`extraction_response_invalid`／`ai_response_invalid`を使用する。DBは既存の`project_db_failure`、timeout・想定外例外はunknown分類を使用する。全分類で記事削除の`failure_action`を持たせず、retryabilityから再配信の制御を導出しない。
 
 `CurationConsumerFailureHandler`の実行失敗後処理は期限外で行う。Assessmentと同じ`failed`計測、別セッションでの失敗監査、該当時の既存プロバイダー枯渇通知を独立して試みる。通常の分類・後処理・診断障害でもConsumerは元の実行例外を同一インスタンス・原因チェーンのまま再送出する。キャンセル・プロセス終了は通常の失敗として抑止しない。
 

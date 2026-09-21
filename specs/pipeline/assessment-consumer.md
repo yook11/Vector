@@ -126,8 +126,8 @@ Problem: 正常終了・失敗理由の契約を、Taskiqに依存しないイ�
 - `AssessmentConsumer(session_factory, assessor)`は借用したAssessorを使い、`consume(ArticleCuratedSignal) -> AssessmentCompletion`を提供する。クライアントの生成・終了は担当しない。
 - 業務処理の上限は60秒とする。既存の`curation_id`照会を1回だけ行い、取得したDB由来の記事IDを保持して読み取りセッションを閉じ、`ReadyForAssessment.from_facts`とServiceへ進む。イベントの記事IDは補完・照合に使わない。
 - 開始時の対象内／対象外判定済みは`ALREADY_ASSESSED`を返し、AI・保存・成功監査・Outbox・成功メトリクスを追加しない。Curation不存在は原因付きの`AssessmentCurationMissingError`とする。Ready検証失敗でも取得済みのDB由来IDを失敗監査へ渡し、未取得なら`article_id=None`とする。
-- `AssessmentFailureClassification`は監査用`FailureProjection`と任意の枯渇通知対象を持ち、`outcome`は持たない。プロバイダーのCODE・FAILURE_MODE・reasonを保持し、枯渇判定は共通関数を使う。応答不正は詳細codeと`ai_response_invalid`、不存在は`assessment_curation_missing`と`target_missing`、DBは共通DB投影、timeout・その他はunknown投影とする。
-- 新AssessmentConsumerではDB・プロバイダー・その他の失敗を一律`processing_outcome{result=failed}`として計測し、`infra_error`区分を使わない。失敗率には原因を問わず処理失敗を含め、詳細は監査の型・コードで識別する。既存TaskiqやEmbeddingの計測契約は変更しない。
+- `AssessmentFailureClassification`は監査用`FailureProjection`と任意の枯渇通知対象を持ち、`outcome`は持たない。プロバイダーのCODE・reasonを保持し、監査のfailure_kind・retryabilityはnullとする。枯渇判定は共通関数を使う。応答不正は詳細codeと`ai_response_invalid`、不存在は`assessment_curation_missing`と`target_missing`、DBは共通DB投影、timeout・その他はunknown投影とする。
+- 新AssessmentConsumerではDB・プロバイダー・その他の失敗を一律`processing_outcome{result=failed}`として計測し、`infra_error`区分を使わない。失敗率には原因を問わず処理失敗を含め、詳細は監査の型・コードで識別する。記事収集側の計測契約は変更しない。
 - 監査のretryabilityは観測情報だけに使い、失敗はすべて元例外のまま呼び出し元へ返す。ConsumerにTaskiq分類、hold、独自再試行は持ち込まない。
 - 失敗後処理は60秒の外で、処理メトリクス・別セッションでの失敗監査commit・必要なプロバイダー枯渇通知を順番に独立して試みる。監査失敗時はaudit droppedを計測する。通常の二次例外や診断ログ障害で元例外を置き換えず、後続の処理を継続する。外部キャンセルは抑止しない。
 - `AssessmentAuditRepository.append_classified_failure`はReadyを要求せず、分類を再計算せずに`FAILED`を記録する。既存の制限・マスキングを通したメッセージと原因チェーンを保存し、入力本文・AI生応答は収集しない。旧Taskiq用監査は維持する。

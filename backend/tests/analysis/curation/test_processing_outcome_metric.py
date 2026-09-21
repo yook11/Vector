@@ -1,7 +1,6 @@
 """``vector.curation.processing_outcome`` counter の不変条件 (正本)。
 
-curation 処理試行の結末を集計する metric。インフラ障害 (infra_error) を成功率の
-分母から外して可視化するため、span result の影ではなく分類が判明する境界で emit する。
+curationの処理結果を集計し、Consumerの失敗は原因によらずfailedとして数える。
 本ファイルは helper の emit 契約と、span backstop が counter を汚さないことを固定する
 (emit 境界ごとの分類は service / task / handler の各テストが正本)。
 
@@ -30,7 +29,7 @@ _METRIC = "vector.curation.processing_outcome"
 _ALL_RESULTS = get_args(CurationProcessingOutcome)
 
 
-# helper 契約: 5 値それぞれを 1 件として記録する
+# helper 契約: 4 値それぞれを 1 件として記録する
 
 
 @pytest.mark.parametrize("result", _ALL_RESULTS)

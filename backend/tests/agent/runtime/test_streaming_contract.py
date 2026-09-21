@@ -33,8 +33,6 @@ import app.ai_providers.gemini.error_translator as gemini_error_translator_modul
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
-    AIProviderContentRejectionKind,
-    AIProviderFailureMode,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
@@ -450,7 +448,7 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
             )
         ]
 
-    assert exc_info.value.rejection_kind is AIProviderContentRejectionKind.SAFETY
+    assert exc_info.value.reason is GeminiContentRejectionReason.INPUT_BLOCKED
     span = tracer.spans[0]
     assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
@@ -464,23 +462,18 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
 
 
 @pytest.mark.parametrize(
-    ("finish_reason", "expected_kind_name", "expected_reason"),
+    ("finish_reason", "expected_reason"),
     [
-        ("SAFETY", "SAFETY", GeminiContentRejectionReason.SAFETY),
-        ("RECITATION", "OTHER", GeminiContentRejectionReason.RECITATION),
-        ("BLOCKLIST", "OTHER", GeminiContentRejectionReason.BLOCKLIST),
-        (
-            "PROHIBITED_CONTENT",
-            "OTHER",
-            GeminiContentRejectionReason.PROHIBITED_CONTENT,
-        ),
-        ("SPII", "OTHER", GeminiContentRejectionReason.SPII),
+        ("SAFETY", GeminiContentRejectionReason.SAFETY),
+        ("RECITATION", GeminiContentRejectionReason.RECITATION),
+        ("BLOCKLIST", GeminiContentRejectionReason.BLOCKLIST),
+        ("PROHIBITED_CONTENT", GeminiContentRejectionReason.PROHIBITED_CONTENT),
+        ("SPII", GeminiContentRejectionReason.SPII),
     ],
 )
 async def test_blocked_finish_reason_records_blocked_outcome_without_event(
     monkeypatch: pytest.MonkeyPatch,
     finish_reason: str,
-    expected_kind_name: str,
     expected_reason: GeminiContentRejectionReason,
 ) -> None:
     tracer = FakeTracer()
@@ -501,10 +494,6 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
         ]
 
     assert exc_info.value.reason is expected_reason
-    assert exc_info.value.rejection_kind is getattr(
-        AIProviderContentRejectionKind,
-        expected_kind_name,
-    )
     span = tracer.spans[0]
     assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
@@ -554,7 +543,6 @@ async def test_max_tokens_finish_reason_raises_classified_truncation_error(
     error = exc_info.value
     assert not isinstance(error, AIProviderOutputBlockedError)
     assert error.CODE == "ai_error_output_truncated"
-    assert error.FAILURE_MODE is AIProviderFailureMode.ATTEMPT_SCOPED
     assert isinstance(error.reason, GeminiStateReason)
     assert error.reason.value == "output_token_limit_reached"
 
@@ -596,7 +584,6 @@ async def test_max_tokens_after_partial_fragment_yield_still_raises_classified_e
     error = exc_info.value
     assert not isinstance(error, AIProviderOutputBlockedError)
     assert error.CODE == "ai_error_output_truncated"
-    assert error.FAILURE_MODE is AIProviderFailureMode.ATTEMPT_SCOPED
     assert isinstance(error.reason, GeminiStateReason)
     assert error.reason.value == "output_token_limit_reached"
 

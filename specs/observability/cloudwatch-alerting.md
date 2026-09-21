@@ -106,6 +106,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 ### A4: 工程別の失敗率(仕事はしているが失敗が支配的)
 
+2026-09-20: AI分析のinfra_error分類を廃止。Embeddingもprovider・DB障害をfailedに含めるため、旧infra_error分が失敗率へ加わる。計算式・閾値・評価窓は維持し、過去メトリクスの再分類は行わない。
+
 - Signal: EMF `processing_outcome{stage, result}`。既存 Logfire counter(`record_*_processing_outcome`)と同一の分類確定点からの二重 sink。対象 4 工程 = completion / curation / assessment / embedding。
 - 条件(共通形): metric math `IF(total >= 10, failed / total, 0) >= 閾値`、1 evaluation period、`TreatMissingData = notBreaching`(仕事ゼロ・標本不足の窓は評価しない)。分母は各工程の現行結果を用いる（Consumerの失敗はDB障害もfailedに含む）: completion = succeeded+failed / curation = signal+noise+rejected+failed / assessment = in_scope+out_of_scope+failed / embedding = succeeded+failed。
 - 閾値と評価窓(2026-08-12 の 28 日実測ベースライン由来の**暫定値**。運用実測で調整):
@@ -186,7 +188,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 - `dispatch_run` — (廃止 2026-09-21)旧 Taskiq dispatch の正常完了ハートビート。A1 は Lambda 標準メトリクスへ移行した。
 - `oldest_outstanding_enqueue_age` — dimension `stage` × 3(acquisition / completion / curation)。queue_health の毎分観測を Logfire gauge と EMF の二重 sink にする。仕事が無いときは 0 を emit(既存の `_age_or_zero` と同じ)。
 - `observation_up` — dimension `stage` × 4。既存セマンティクス(成功 1 / 失敗 0)のまま二重 sink。
-- `processing_outcome` — dimension `stage` × `result`(14 系列: completion 3 + curation 5 + assessment 3 + embedding 3)。emit point・分類境界は既存 Logfire metric `vector.{stage}.processing_outcome{result}` と同一(`record_*_processing_outcome` 内の二重 sink)。分類ロジックは 1 か所、sink が 2 つ。stage dimension は `observation_up` / `oldest_outstanding_enqueue_age` と同じパターン。
+- `processing_outcome` — dimension `stage` × `result`(12 系列: completion 3 + curation 4 + assessment 3 + embedding 2)。emit point・分類境界は既存 Logfire metric `vector.{stage}.processing_outcome{result}` と同一(`record_*_processing_outcome` 内の二重 sink)。分類ロジックは 1 か所、sink が 2 つ。stage dimension は `observation_up` / `oldest_outstanding_enqueue_age` と同じパターン。
 - `ai_provider_exhausted` — dimension `kind` × `provider`(≤ 4 系列)。emit point は A6 の通り。
 - 実装方式: EMF は公開安定仕様の JSON 形式なので、依存追加せず stdout へ 1 行 JSON を書く薄い helper を第一候補とする(`aws-embedded-metrics` 採用は依存追加になるため Ask First 対象)。書式は公式仕様で確認済み: root の `_aws.Timestamp`(epoch ミリ秒)+ `_aws.CloudWatchMetrics[]`(Namespace / Dimensions / Metrics)、metric・dimension の値は root 直下に置く。StorageResolution は既定の 60 秒でよい。
 - 抽出経路: PutLogEvents 経由なら特別なヘッダー不要と公式に明記されており、awslogs ドライバは PutLogEvents で配送するため、stdout → 自動抽出が成立する。ただし「ECS + awslogs」の組み合わせを一文で明記した公式ページは無いため、Step 2 のデプロイ後に `AWS/Logs` namespace の EMF エラーメトリクスで実地確認する。
@@ -206,7 +208,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 
 ## 4. コスト概算
 
-- 本カタログのカスタムメトリクスは21系列(dispatch_run 3 + processing_outcome 14 + ai_provider_exhausted 4)。age 3・observation_up 3 は queue 観測の撤去(2026-09)で emit を停止した。
+- 本カタログのカスタムメトリクスは19系列(dispatch_run 3 + processing_outcome 12 + ai_provider_exhausted 4)。age 3・observation_up 3 は queue 観測の撤去(2026-09)で emit を停止した。
 - 本カタログのalarmは8本(A1×1, A4×4, A6×1, A7×1, A8×1)。A2×3・A3×1 は 2026-09 に廃止。
 - SQS／Lambda固有の監視は各工程の定義を参照する。費用は実際の利用量と料金で確認する。Logfireのtraceは維持する。
 

@@ -11,9 +11,48 @@ from app.log_policy.budget import (
     LogBudgetExceeded,
     LogEventBudget,
 )
-from app.log_policy.value_preparation import LogValuePreparer
+from app.log_policy.value_preparation import EXCEPTION_DEPTH_LIMIT, LogValuePreparer
 
 pytestmark = pytest.mark.unit
+
+
+class TestExceptionPreparationDepth:
+    """例外の値準備で指定する上限ちょうどと、その一段先を検証する。"""
+
+    def test_value_at_exception_limit_is_preserved(self) -> None:
+        """例外用の深さ上限ちょうどにある値は保持する。"""
+        value = "diagnostic"
+        for _ in range(EXCEPTION_DEPTH_LIMIT):
+            value = [value]
+        preparer = LogValuePreparer(BASE_DENY)
+
+        result = preparer.prepare_field_value(value, depth_limit=EXCEPTION_DEPTH_LIMIT)
+
+        assert result == value
+
+    def test_value_beyond_exception_limit_is_not_inspected(self, monkeypatch) -> None:
+        """例外用の上限を一段超えた値は、型の検査前にlimitへ置き換える。"""
+        from app.log_policy import value_preparation
+
+        omitted = object()
+        value = omitted
+        expected = "[limit]"
+        for _ in range(EXCEPTION_DEPTH_LIMIT + 1):
+            value = [value]
+            expected = [expected]
+        original = value_preparation.is_supported_value
+
+        def inspect_type(candidate):
+            if candidate is omitted:
+                pytest.fail("must not inspect a value beyond the depth limit")
+            return original(candidate)
+
+        monkeypatch.setattr(value_preparation, "is_supported_value", inspect_type)
+        preparer = LogValuePreparer(BASE_DENY)
+
+        result = preparer.prepare_field_value(value, depth_limit=EXCEPTION_DEPTH_LIMIT)
+
+        assert result == expected
 
 
 class TestTypeConversion:
@@ -73,9 +112,9 @@ class TestTypeConversion:
         inspected_values = []
         original = preparer.inspect_value
 
-        def inspect(value, depth=0):
+        def inspect(value, depth=0, **kwargs):
             inspected_values.append(value)
-            return original(value, depth)
+            return original(value, depth, **kwargs)
 
         monkeypatch.setattr(preparer, "inspect_value", inspect)
         assert preparer.prepare_field_value(field_value) == "[non-string-key]"
@@ -172,9 +211,9 @@ class TestInspectionOrder:
         counts = []
         original = preparer.inspect_value
 
-        def inspect(value, depth=0):
+        def inspect(value, depth=0, **kwargs):
             counts.append(preparer.budget.log_item_count)
-            return original(value, depth)
+            return original(value, depth, **kwargs)
 
         monkeypatch.setattr(preparer, "inspect_value", inspect)
         assert preparer.inspect_dictionary({"first": 1, "second": 2}, depth=0) == {
@@ -200,9 +239,9 @@ class TestInspectionOrder:
         inspected_values = []
         original = preparer.inspect_value
 
-        def inspect(value, depth=0):
+        def inspect(value, depth=0, **kwargs):
             inspected_values.append(value)
-            return original(value, depth)
+            return original(value, depth, **kwargs)
 
         monkeypatch.setattr(preparer, "inspect_value", inspect)
         with pytest.raises(LogBudgetExceeded, match="^value_count$"):
@@ -227,9 +266,9 @@ class TestInspectionOrder:
         inspected_values = []
         original = preparer.inspect_value
 
-        def inspect(value, depth=0):
+        def inspect(value, depth=0, **kwargs):
             inspected_values.append(value)
-            return original(value, depth)
+            return original(value, depth, **kwargs)
 
         monkeypatch.setattr(preparer, "inspect_value", inspect)
         with pytest.raises(LogBudgetExceeded, match="^value_count$"):

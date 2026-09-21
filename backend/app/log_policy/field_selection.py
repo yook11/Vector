@@ -7,6 +7,9 @@ from app.log_policy.base import normalize_key
 from app.log_policy.budget import TEXT_LIMIT
 from app.log_policy.diagnostics import LogProcessingDiagnostics
 
+# 例外からの生成は共通ロガーが担うため、呼び出し側で定義した同名フィールドは除外する。
+_EXCEPTION_OUTPUT_ONLY_FIELDS = frozenset({"error_details", "causes", "exceptions"})
+
 _EXCLUDED_FIELDS = frozenset(
     {
         "stack",
@@ -42,6 +45,8 @@ class LogFieldSelector:
             return False
 
         normalized_name = normalize_key(field_name)
+        if normalized_name in _EXCEPTION_OUTPUT_ONLY_FIELDS:
+            return False
         if normalized_name in self.deny:
             self.diagnostics.record_top_level_denied(field_name)
             return False

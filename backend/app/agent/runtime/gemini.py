@@ -29,7 +29,6 @@ from app.agent.runtime.llm_failure import (
     llm_attempt_failed_from,
 )
 from app.ai_providers.errors import (
-    AIProviderContentRejectionKind,
     AIProviderError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -111,18 +110,12 @@ class GeminiAgentRuntime:
                 if _has_prompt_block(response):
                     classified_error = AIProviderInputRejectedError(
                         reason=GeminiContentRejectionReason.INPUT_BLOCKED,
-                        rejection_kind=AIProviderContentRejectionKind.SAFETY,
                     )
                 else:
                     finish_reason = _finish_reason_name(response)
                     if finish_reason in OUTPUT_BLOCKED_FINISH_REASONS:
                         classified_error = AIProviderOutputBlockedError(
                             reason=output_blocked_reason(finish_reason),
-                            rejection_kind=(
-                                AIProviderContentRejectionKind.SAFETY
-                                if finish_reason == "SAFETY"
-                                else AIProviderContentRejectionKind.OTHER
-                            ),
                         )
                     elif finish_reason == "MAX_TOKENS":
                         classified_error = AIProviderOutputTruncatedError(
@@ -215,7 +208,6 @@ class GeminiAgentRuntime:
                     if _has_prompt_block(chunk):
                         classified_error = AIProviderInputRejectedError(
                             reason=GeminiContentRejectionReason.INPUT_BLOCKED,
-                            rejection_kind=AIProviderContentRejectionKind.SAFETY,
                         )
                         break
 
@@ -231,11 +223,6 @@ class GeminiAgentRuntime:
                     if blocked_reason_name is not None:
                         classified_error = AIProviderOutputBlockedError(
                             reason=output_blocked_reason(blocked_reason_name),
-                            rejection_kind=(
-                                AIProviderContentRejectionKind.SAFETY
-                                if blocked_reason_name == "SAFETY"
-                                else AIProviderContentRejectionKind.OTHER
-                            ),
                         )
                         break
                     if "MAX_TOKENS" in finish_reason_names:

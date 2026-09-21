@@ -133,15 +133,48 @@ structlog.configure(
 - 代替は `body_length` `has_body` 等の計量値と記事 ID・URL。
 - `title` は v1 では対象にしない。
 - dict / list / tuple 内でも禁止キーを再帰的に除外する。選択した目的の確定済みmaskを文字列・例外文のマスク処理へ渡し、`content='...'` 等のキー付きの表現を伏せる。本文用maskを指定していない目的へ暗黙適用しない。自由文として埋め込まれた記事本文の完全検出は保証しない。
-- 入力値を漏らさない例外保護は引き続き共通とする。Pydantic `ValidationError` は `str(exc)` を使わず、件数と標準エラー分類だけを抽出する。`input` / `ctx` のほか、入力を含み得る `msg` / `loc` / `title` / カスタム分類文字列も出さない。フィールド別の調査情報は目的ポリシーで別途定義する。
+- 入力値を漏らさない例外保護は引き続き共通とする。生のPydantic `ValidationError` は `str(exc)` を使わず、件数と標準エラー分類だけを抽出する。`input` / `ctx` のほか、入力を含み得る `msg` / `loc` / `title` / カスタム分類文字列も出さない。アプリの検証境界が分類済みの理由・項目・コードは、後述のアプリ用変換で取り出す。
 
-### 3. SQL パラメータ
+### 3. SQL診断とパラメータ
 
-SQLAlchemy 例外の `str(exc)` に連結される `[SQL: …]` と `[parameters: …]` を除外する。例外型・frame を残し、primary message は保護してから出す。driver の `sqlstate` / `pgcode` が英大文字・数字5文字なら `sqlstate` として別に残す。
+SQLAlchemy例外の原因文からSQL実データを除き、診断属性は`error_details`へ独立して保持する。共通の`error_class` / `error_message` / `frames`は維持し、トップレベルの`sqlstate`は出さない。
 
-- `hide_parameters=True` は維持するが、それで保護済みとは扱わない。
-- `args[0]` から `DETAIL` / `HINT` / `CONTEXT` / `QUERY` / `STATEMENT` / `LINE N` 以降を除外する。primary message 中にもパラメータが入り得るため、`params` の組み込み型の値と、その既知のエスケープ表現を置換する。constraint 名もパラメータと一致する部分は伏せる。
-- パラメータが循環・深さ超過・件数超過・独自型の場合、message を固定文にする。未知の driver 独自表現に含まれる値の完全検出は保証しない。新しい例外形式は個別の抽出規則と回帰テストを追加する。
+- `error_details`の共通型は`ErrorDetails = PostgresErrorDetails | ApplicationValidationDetails`とする。PostgreSQLの診断は`PostgresErrorDetails`で、`kind: "postgresql"`と任意の`sqlstate` / `schema_name` / `table_name` / `column_name` / `constraint_name` / `data_type_name`だけを持つ。有効なSQL診断値が一つもない場合は項目自体を省略する。
+- SQLAlchemyの`orig`から最大8例外を、循環検出とcontextの表示抑制を守って探索する。asyncpgの`PostgresError`を取得元とし、元例外を取得できない場合だけ既知のSQLAlchemy asyncpg adapterの診断を使う。同名属性があるだけの未知例外をPostgreSQLと判定せず、異なる例外から診断属性を寄せ集めない。
+- `sqlstate` / `pgcode`は順に検査し、英大文字・数字5文字の最初の有効値を`error_details.sqlstate`へ入れる。対象名は空でない組み込み文字列のみを採用する。欠落・不正値・取得に失敗した属性は省略し、他の正常な属性を残す。
+- `hide_parameters=True`を維持する。原因文は`str(exc)`を使わず`args[0]`から取得し、`DETAIL` / `HINT` / `CONTEXT` / `QUERY` / `STATEMENT` / `LINE N`以降を除く。原因文に含まれるbind値と既知のエスケープ表現を置換する。
+- パラメータとの部分一致置換は原因文だけに適用し、診断属性へ適用しない。診断属性にも共通sanitize・目的別mask・文字数上限を適用する。SQL本文・パラメータ・行データ・補足文や任意属性は転記しない。
+- パラメータが循環・深さ超過・件数超過・独自型の場合は原因文を固定文にするが、診断属性は維持する。原因文抽出の失敗も`[exception message unavailable]`に局所化する。
+- パラメータの保護文脈がないasyncpg例外・adapter例外を直接受け取った場合は、診断属性を取得し、原因文を`[exception message omitted]`にする。未知のdriver独自表現に含まれる値の完全検出は保証しない。
+
+### アプリの検証診断
+
+検証境界はPydanticの失敗を既存の業務例外へ分類し、ログ側はその例外が持つ`invalid.reason`と`invalid.issues`を出力形式へ写す。スキーマ・alias・Union・`loc`の汎用解釈、全フィールドの許可リスト、数値制約の自動抽出は行わない。
+
+- `convert_application_exception`の対象は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類。同名属性があるだけの未知例外は対象にせず、SQL・生のValidationError・通常例外とともに既存の`convert_exception`へ委譲する。
+- `ApplicationValidationDetails`は`kind: "application_validation"`、既存Enumの値による`reason`、`issues: [{field, code}]`を持つ。項目の順序・重複は変更せず、任意属性・元の入力を転記しない。
+- 原因文は`Validation failed: {reason}`。属性取得・変換に失敗した場合は`[exception message unavailable]`とし、診断を省略する。元の例外の`str()`へ戻さない。
+- `cause_is_aggregated`は偽で、通常の原因探索を維持する。境界での分類・Enum・再送出方法は変更しない。
+- `build_processors` → `LogPolicyProcessor` → `extract_exception_fields`のキーワード専用引数`exception_converter`で変換担当を渡す。既定値は`convert_exception`で、アプリ用変換を使うチェーンは構築時に明示する。共通処理はアプリ固有の例外型をimportしない。
+- 実行環境のロガー設定・Logfireへの接続は対象外で、変換担当を指定したチェーンでの出力までを保証する。
+
+```json
+{"error_message":"Validation failed: invalid_payload","error_details":{"kind":"application_validation","reason":"invalid_payload","issues":[{"field":"payload.curation_id","code":"missing_required_field"}]}}
+```
+
+### 原因チェーン
+
+DB層はアプリ用例外への変換と`raise ... from exc`による原因の保持を担う。ログ側はその業務分類を変更せず、通常の例外連鎖を辿る。
+
+- `causes`の各要素は外側と同じ`ExceptionLogFields`とし、各例外自身の型・原因文・frame・任意の`error_details`・子の`causes`・グループの`exceptions`を持つ。取得元を示す関係ラベルは付けず、内側の診断属性を親へ引き上げない。
+- `__cause__`を優先し、明示causeがなく`__suppress_context__`が偽の場合だけ`__context__`を辿る。`raise ... from None`を尊重する。
+- 最大32例外・外側から最大8段の関係までとし、原因・グループのメンバーで総数と深さを共有する。外側を1件とし、子の型判定・属性取得の前に上限を確認する。同じ参照の再登場や循環確認も総数に含め、現在の経路に戻る参照だけを`[cycle]`とする。
+- `BaseExceptionGroup`のメンバーは`exceptions`に格納する。原因を先に辿り、メンバーは元の順序で各原因まで展開する。上限までの情報を残し、省略する原因は`causes: "[limit]"`、メンバーの残りは`exceptions`の末尾の`"[limit]"`で示し、その先の走査を止める。
+- SQL内部のadapter・driver例外はSQL例外ノードへ集約し、それより内側を別ノードで文字列化しない。これにより、`orig`の原文から実データが再出力される迂回を防ぐ。
+- `error_details` / `causes` / `exceptions`は共通ロガーが例外から生成する出力専用項目とし、ログ引数・bind・contextvars由来の同名項目は正規化後に除外する。allow宣言があっても入力辞書を受け入れない。
+- 各原因・メンバーノードにも同じ値準備と共有予算を適用する。通常のcause/contextとExceptionGroupの子展開を基底が所有し、`provider_error`などSDK固有の取得は別途対応する。
+
+共通探索は上限・循環を確認してから指定された `exception_converter` を呼び、例外1件の原因文・診断属性・内部原因の集約状態を受け取る。同じ変換担当を原因とグループの各ノードへ引き継ぎ、集約済みの内部原因は再展開しない。総数上限は `EXCEPTION_LIMIT`、深さ上限は `CAUSE_DEPTH_LIMIT` で定義する。
 
 ### 4. 未登録キー
 
@@ -156,27 +189,29 @@ SQLAlchemy 例外の `str(exc)` に連結される `[SQL: …]` と `[parameters
 - `event` / `level` / `timestamp` / `logger` / `logger_name` は `BASE_ALLOW` に含め、allow選別で特別扱いしない。基本項目も通常の値と同じ構造検査・deny除外・サニタイズを通し、キー名を理由とする文字列型の強制は行わない。`level` と `timestamp` はチェーン前段で生成する。ConsoleRendererが要求するlevelの文字列型はこのチェーンで保証し、processor単体から直接接続する場合にはこの保証はない。
 - `stack` / `stack_info` / `exception` / `_record` / `_from_structlog` / `_log_policy_rules` / `exc_info` は renderer へ転送しない。スタック調査には `exc_info` から抽出した frame metadata を使う。
 - 出力値は組み込みの JSON 相当型に限定する。bytes / set / 独自オブジェクト / 組み込み型の subclass は固定マーカーにし、`repr` / `__structlog__` 等を呼ばない。
-- 単一文字列4000文字、イベント内合計16000文字、走査256件、ネスト深さ10までとする。上限超過は問題のあるトップレベル項目全体を `[limit]` に置換する。循環参照と非有限浮動小数はそれぞれ `[cycle]` / `[non-finite]` とし、共有参照は循環扱いしない。ネストした辞書に非文字列キーがあれば、その辞書全体を `[non-string-key]` にし値は見ない。
+- 単一文字列4000文字、イベント内合計16000文字、走査256件、通常入力のネスト深さ10、抽出した例外項目のネスト深さ19までとする。深さ上限の超過は、その位置の値だけを `[limit]` に置換する。循環参照と非有限浮動小数はそれぞれ `[cycle]` / `[non-finite]` とし、共有参照は循環扱いしない。ネストした辞書に非文字列キーがあれば、その辞書全体を `[non-string-key]` にし値は見ない。
 - 例外の `__str__` が失敗しても型と frame を残し、message は固定文にする。processor 自体の失敗は入力を含まない `log_policy_failed` に置き換え、業務側へ例外を伝播させない。原文 fallback や保護処理からの再帰ログはしない。
 - ネスト内の未登録キーの allow 制御、自由文中の未知の秘密・本文の判別は別の保証であり、共通 deny の完全一致検査だけでは保証しない。
 
 #### 入力上限と置換単位
 
-文字列・合計文字数・走査数の上限と共有予算は `budget.py` の `LogEventBudget` が所有し、深さの上限は構造検査を行う `value_preparation.py` に定義する。frame数の上限は抽出を所有する `safe_exception_log.py` に置く。定数だけの `limits.py` は設けない。単一文字列4000文字は、確認した診断文（典型的には数十〜数百文字、長い検証要約は約1700文字）に余裕を持たせた初期値である。イベント合計16000文字は、原因文・URL・frameなどを同時に残す余裕として採用した。2msという処理時間の仮目標から確定した値ではなく、本番の時間保証でもない。
+文字列・合計文字数・走査数の上限と共有予算は `budget.py` の `LogEventBudget` が所有し、深さの上限は構造検査を行う `value_preparation.py` に定義する。frame数の上限は抽出を所有する `exceptions/extraction.py` に置く。定数だけの `limits.py` は設けない。単一文字列4000文字は、確認した診断文（典型的には数十〜数百文字、長い検証要約は約1700文字）に余裕を持たせた初期値である。イベント合計16000文字は、原因文・URL・frameなどを同時に残す余裕として採用した。2msという処理時間の仮目標から確定した値ではなく、本番の時間保証でもない。
 
 | 制約 | 上限 | 超過時 |
 | --- | ---: | --- |
 | サニタイズ前の単一文字列・キー名 | 4000文字 | 文字列はその値だけを `[limit]` にする。キー名ならその項目を除外し、診断へ記録する。 |
 | イベント内の保護対象文字数合計 | 16000文字 | ログ全体を共有予算超過の固定出力へ置換する（理由 `text_total`）。 |
 | イベント内の走査数 | 256件 | ログ全体を共有予算超過の固定出力へ置換し、走査を止める（理由 `value_count`）。 |
-| ネストの深さ | 10 | 超過した位置の値だけを `[limit]` にする。 |
+| 通常入力のネストの深さ | 10 | 超過した位置の値だけを `[limit]` にする。 |
+| 抽出した例外項目のネストの深さ | 19 | 超過した位置の値だけを `[limit]` にし、型検査・サニタイズ・マスクへ進まない。 |
 | 例外frame数 | 50 | `frames` 全体を `[limit]` にし、末尾への切り詰めや残りの走査をしない。 |
 | 整数のビット長 | 4096bit | 超過した整数だけを `[limit]` にする。 |
 
+- processorは1つの `LogValuePreparer` に、通常入力には `DEPTH_LIMIT`、抽出した例外項目には `EXCEPTION_DEPTH_LIMIT` を呼び出し引数で渡す。上限は再帰処理へ引き継ぎ、インスタンスの設定は切り替えない。文字数・走査数の予算と診断情報はログ全体で共有する。例外用の19は、例外関係8段の`error_details.issues`にある`field`・`code`まで扱える辞書・配列の深さとして定義し、Pythonの例外探索の段数とは区別する。
 - すべて上限ちょうどは保持し、超えた場合だけ置換する。文字数はPythonの文字列長で数え、UTF-8やJSONのバイト数ではない。
 - 一項目の構造検査を完了してから、局所置換後に残った値をサニタイズする。置換した値の原文はサニタイズせず、秘密の断片も残さない。後続項目で共有予算を超えた場合には、先行項目の準備結果も出力せず破棄する。
 - 単一長文・深さ・巨大整数の超過では、その位置だけ置換し正常な兄弟は残す。上限を超える文字列の原文は文字数予算へ加算しないが、残す文字列・キー名と実行済みの走査は計上し、巻き戻さない。共有予算の上限ちょうどで完了した場合は正常とし、追加の文字数・走査が必要なときに超過として処理を中止する。
-- 合計文字数には、採用されたトップレベルの名前・文字列値・ネストのキーを含める。例外の `error_class` / `error_message` / `frames` / `sqlstate` も通常項目と同じ入口で値を準備し、最後に入力由来の `_denied_keys` も同じ予算で処理する。同名項目は、SQLの実データや検証入力を除いた例外由来の値で上書きして優先する。固定のポリシー識別子・件数・マーカーはサニタイズ対象の文字数に加算しない。
+- 合計文字数には、採用されたトップレベルの名前・文字列値・ネストのキーを含める。例外の `error_class` / `error_message` / `frames` / `error_details` / `causes` も通常項目と同じ入口で値を準備し、最後に入力由来の `_denied_keys` も同じ予算で処理する。同名項目は、SQLの実データや検証入力を除いた例外由来の値で上書きして優先する。固定のポリシー識別子・件数・マーカーはサニタイズ対象の文字数に加算しない。
 - denyや未登録で除外した値は文字数検査もサニタイズもしない。キー正規化の前にはキー自体の長さを検査する。
 - 走査数は深さと異なり、値・辞書・リストを一つずつ数える。例として単独の `[1, 2, 3]` はコンテナを含め4件。ネストのキーは値と同じ1項目として数えるが、文字数には加算する。
 - トップレベルの項目を取り出すたび、項目名の検査より先に一件として数え、入力に含まれる内部制御・禁止・未登録・非文字列キーも256件の予算を消費する。ロガー属性のルールは入力に含まれず件数を消費しない。`log_item_count` はログ出力回数や最終フィールド数ではなく、この共有予算に計上した項目数を表し、上限は `MAX_ITEMS_PER_LOG_EVENT` とする。採用したトップレベル値は二重に数えず、例外の生成フィールドは値準備の前にまとめて計上し、ネストは各項目をたどる際に計上する。生成項目が残り予算を超える場合は加算せず中断する。入力の `exc_info` と変換で生成する各項目はそれぞれ計上する。例外の抽出自体は予算を持たず、値準備は呼び出し側の予算を使う。processor経由では通常値と同じ予算を使う。
@@ -207,13 +242,15 @@ SQLAlchemy 例外の `str(exc)` に連結される `[SQL: …]` と `[parameters
 | `inspect_dictionary` | 非文字列キーがあれば辞書全体を `[non-string-key]` にし値は見ない。文字列キーだけのとき、一項目ごとに検査件数・キー長・deny・合計文字数を確認し、子の値を `inspect_value` で検査して新しい辞書へ格納する。 |
 | `inspect_sequence` | 配列をたどり、各要素の件数を確認・加算し、子の値を `inspect_value` で検査して順序を保った新しい配列へ格納する。 |
 | `prepare_text_values` | 検査済みの組み込み型の構造だけを辿り、文字列値とネストのキーへ `sanitize_text` → 同じ `mask` による `mask_assignments` を一度ずつ直接適用する。トップレベルの項目名は置換しない。 |
-| `extract_exception_fields` | 受けてよい `exc_info` は structlog と同じ3形式（`True` / 例外 / 3要素 tuple）とし、合ったものだけ `ExcInfo` に揃える。原因文は型を見て `extract_sql_error_message` / `extract_validation_message` / `str(exc)` のどれかから一度取り、型名とframeを合わせて `ExceptionLogFields` を作る。SQL例外では `extract_sqlstate` から有効な値を取得できた場合だけ `sqlstate` を足す。合わない値はフィールドを作らない。伏せ字と上限は値準備が担当する。processorは通常入力の走査後に生成項目を抽出し、通常項目と同じ入口で各値を準備する。 |
+| `extract_exception_fields` | 受けてよい `exc_info` は structlog と同じ3形式（`True` / 例外 / 3要素 tuple）とし、合ったものだけ `ExcInfo` に揃える。原因文は型を見て `extract_sql_error_message` / `extract_validation_message` / `str(exc)` のどれかから一度取り、型名とframeを合わせて `ExceptionLogFields` を作る。SQL例外では原因文と独立した `extract_sql_error_details` から `error_details` を追加し、通常例外のcause/contextを同じ構造の `causes` へ、グループのメンバーを `exceptions` へ展開する。直接のdriver例外は原文を省略する。合わない値はフィールドを作らない。伏せ字と上限は値準備が担当する。processorは通常入力の走査後に生成項目を抽出し、通常項目と同じ入口で各値を準備する。 |
 
 検査で作る構造は入力と分離し、入力は変更しない。値の置換(`[limit]`・`[unsupported]`・`[cycle]`・`[non-finite]`・`[non-string-key]`)は内部マーカーで表し、サニタイズ・マスクを通さず固定文字列として出力する。`LogBudgetExceeded` は共有予算超過をprocessorへ通知する。単独の値準備・例外準備ではこの通知を呼び出し側へ伝播し、processorではログ全体を固定出力へ置換して業務側へ伝播させない。
 
 processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞書へ `diagnostics.prepare_log_fields(...)` の結果を結合し、診断のフィールド名や構造には立ち入らない。診断はキー名の一覧全体の予算検査を終えてからサニタイズし、長すぎるキー名は原文を処理せず `[limit]` にする。診断の準備中に共有予算を超過した場合も、通常項目を含むログ全体を固定出力へ置換する。
 
-入力からログ出力までの上限・共有予算の境界は `test_output_limits.py` が担当する。`TestLocalReplacement` で単一文字列・キー名・整数・深さ・例外由来の値の超過した位置だけを置換し正常な兄弟を残すことを、`TestWholeLogReplacementByTextBudget` / `TestWholeLogReplacementByItemBudget` で共有予算の上限ちょうどの保持と超過時のログ全体の置換を、processor経由で確認する。不正キー・内部項目・生成した例外項目・例外frameも実際の入力へ含め、通常項目との予算共有を確認する。禁止したネスト項目の件数、辞書と配列の混在、複数項目にまたがる予算共有も、上限ちょうどと一件超過の別テストで確認する。複数の予算を同時に超えたときの理由は `TestBudgetOverflowReason` が担当する。例外frame数の上限は抽出側が所有するため `test_safe_exception_log.py` が担当する。processorの走査停止と状態分離は `test_processor.py`、超過した値をサニタイズへ渡さない処理内部の保証は `test_value_conversion.py`、置換後のマーカーと固定出力がrendererで戻らないことは `test_chain.py` が担当する。境界の異なる条件は独立したテストにし、予算をテスト側で直接加算するだけのケースを出力保証として扱わない。
+入力からログ出力までの上限・共有予算の境界は `test_output_limits.py` が担当する。`TestLocalReplacement` で単一文字列・キー名・整数・深さ・例外由来の値の超過した位置だけを置換し正常な兄弟を残すことを、`TestWholeLogReplacementByTextBudget` / `TestWholeLogReplacementByItemBudget` で共有予算の上限ちょうどの保持と超過時のログ全体の置換を、processor経由で確認する。不正キー・内部項目・生成した例外項目・例外frameも実際の入力へ含め、通常項目との予算共有を確認する。禁止したネスト項目の件数、辞書と配列の混在、複数項目にまたがる予算共有も、上限ちょうどと一件超過の別テストで確認する。複数の予算を同時に超えたときの理由は `TestBudgetOverflowReason` が担当する。例外frame数の上限は抽出側が所有するため `exceptions/test_extraction.py` が担当する。processorの走査停止と状態分離は `test_processor.py`、超過した値をサニタイズへ渡さない処理内部の保証は `test_value_conversion.py`、置換後のマーカーと固定出力がrendererで戻らないことは `test_chain.py` が担当する。境界の異なる条件は独立したテストにし、予算をテスト側で直接加算するだけのケースを出力保証として扱わない。
+
+`test_processor.py` の `TestExceptionValueDepthLimit` は、同じログ内の通常入力と例外項目に異なる深さ上限を適用し、上限内のframeを保持して上限直後の値を置換することを確認する。`test_value_conversion.py`は例外用の値準備上限ちょうどの保持と一段超過の検査停止を、`exceptions/test_application_output.py`は探索の最深部の`field`・`code`が最終ログへ残ることを確認する。
 
 `test_budget.py` は `TestItemAccounting` / `TestTextAccounting` で計上と超過通知の単体契約を確認し、まとめた件数が超過したときに部分加算しない保証も保持する。診断の記録・集計・出力準備・返却値の分離は `test_diagnostics.py`、項目名の検査・deny優先・allow判定は `test_field_selection.py`、一項目ずつの処理順・不採用値を検査しないこと・実チェーンとの接続は `test_processor.py`、循環・共有参照・予約キー・独自型は `test_base_guards.py`、処理失敗時の固定出力と保護処理からの再帰ログの禁止は `test_processor.py` が担当する。`test_value_conversion.py` は辞書の操作・型変換・入力非変更・診断の独立性・文字列の処理回数を確認し、検査前の件数計上、不正な辞書の中身を検査しないこと、予算超過した項目の値やキーを処理しないことは呼び出しの記録で確認する。トップレベル項目の二重計上は `test_output_limits.py` の上限件数ちょうどの出力テストに集約する。
 
@@ -221,7 +258,7 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 
 - API / worker / Lambda 共通の structlog 構成を本パッケージが持ち、processor を renderer の直前に置く。既存の `setup_logfire` (`logfire.StructlogProcessor` を含む) と `setup_lambda_logging` は、組み込み時にこの構成へ置き換える。
 - 順序: deny除外 → 未登録除外 → 一項目の構造検査と局所置換 → 残った文字列値・ネストのキー名のsanitize → mask。共有予算超過はどの工程でもログ全体の固定出力へ切り替える。切り詰めは行わない。
-- 例外は `format_exc_info` の代わりに基底が構造化する。processor が `exc_info` を消費し、型 FQN、規則 3 を通した message、frame metadata (file / function / line。locals・ソース行は含めない) に置き換える。renderer には `exc_info` が届かないため、dev console も traceback 文字列を出さない。cause chain の扱いは目的ポリシー実装時に決める。
+- 例外は `format_exc_info` の代わりに基底が構造化する。processor が `exc_info` を消費し、型 FQN、規則 3 を通した message、frame metadata (file / function / line。locals・ソース行は含めない) に置き換える。renderer には `exc_info` が届かないため、dev console も traceback 文字列を出さない。通常のcause/contextは基底で構造化し、SDK固有の原因構造は目的ポリシー実装時に対応する。
 - 例外文・型FQN・frameのファイル名と関数名には、選択したポリシーの同じ `mask` と内容検出を適用する。型名とframeに共通maskのみを暗黙適用しない。
 - 配置は `backend/app/log_policy/`。既存チェーンの置き換えは、目的ポリシーの定義と `policy_logger` への移行を終えてから行う (置き換え時点で未宣言 logger の全フィールドが落ちるため)。
 
@@ -229,7 +266,7 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 
 - AI推論のモデル・トークン数以外の目的別allow一覧とmoduleとの対応 (別文書)。
 - 利用者テキスト (question / previous turn) の禁止。利用者対話ポリシー側で定める。
-- 任意の自由文の意味解析、未知の例外形式からの入力値の完全抽出、ExceptionGroup の子例外展開。traceback の locals は常に除外する。
+- 任意の自由文の意味解析、未知の例外形式からの入力値の完全抽出。traceback の locals は常に除外する。
 - public / restricted の profile 引数、Logfire の trace / span 側の変更、frontend、監査 DB `error_message` の契約変更。
 - 既存ログの再加工、`title` の扱い、構造化項目の値全体をmaskで置換する機能。
 
@@ -256,7 +293,14 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 - B01 / B03 / B04 / B06 / 文字列によるポリシー指定の拒否 / event の sanitize: `test_processor.py` (実チェーン + `LogCapture` で検証。`capture_logs` は configured processors を差し替えるため使わない)
 - B02 / 通常テキストの保持: `test_sanitize.py`・`test_mask.py`・`test_text_preparation.py`
 - B07 / 通常値・例外文・型名・frameの出力上限: `test_output_limits.py`
-- B05 / frame metadata / `exc_info` の 3 形式: `test_safe_exception_log.py`
+- `exc_info`の解決、cause/context・グループの共通探索、循環、深さ・総数・frame上限、集約済み原因の探索停止: `exceptions/test_extraction.py`
+- B05 / SQL原因文の変換: `exceptions/test_sql_conversion.py`、生のValidationErrorの保護: `exceptions/test_safe_exception_log.py`
+- アプリの4種類の検証例外の診断変換、対象外の委譲、変換失敗時の保護: `exceptions/test_application_conversion.py`
+- 検証境界からJSONまでの診断保持、最深部の項目、共有予算: `exceptions/test_application_output.py`
+- SQL診断の許可属性・取得失敗・原因文との独立性、SQL内部の集約と親子の診断分離: `exceptions/test_sql_details.py`
+- 不正な`exc_info`の生値を出力しないこと: `test_processor.py`
+- JSON出力の保護・診断辞書の注入防止: `exceptions/test_sql_output.py`
+- 実DBでの一意制約・NOT NULL違反と製品セッション境界からの診断出力: `exceptions/test_sql_diagnostics_integration.py`
 - B06a / キー正規化 / deny・maskの独立性と継承・親の非変更・allowの明示: `test_base.py`
 - B06b / 登録済み規則の適用・未登録時の制限: `test_processor.py`
 - 認証キーの表記揺れ、継承済みdenyの構造化項目への伝達とmaskの文字列・例外への伝達: `test_policy_boundaries.py`
@@ -279,8 +323,10 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 - [backend/app/log_policy/base.py](../../backend/app/log_policy/base.py): `LogPolicy`、基底allow・deny・mask、`BASE_LOG_RULES`、`normalize_key`、`LogPolicyRules` (生成時のallow・deny・mask確定と継承)
 - [backend/app/log_policy/sanitize.py](../../backend/app/log_policy/sanitize.py): S1/S2 パターン集、`sanitize_text`（内容から秘密情報を検出する）。長さ制限は出力側
 - [backend/app/log_policy/mask.py](../../backend/app/log_policy/mask.py): `mask_assignments`（指定キーに対応する文字列内の値全体を伏せる）
-- [backend/app/log_policy/exceptions/](../../backend/app/log_policy/exceptions/): 種類ごとの情報抽出。`sql.py` は実データを除いた原因文とSQLSTATEを別々の関数で返し、`validation.py` は件数と標準分類を含む説明文を返す。分岐と出力フィールドの組み立ては呼び出し側が持つ
-- [backend/app/log_policy/safe_exception_log.py](../../backend/app/log_policy/safe_exception_log.py): `exc_info` の解決と `ExceptionLogFields` の組み立て。型は型名・原因文・frameと任意のSQLSTATEを持つ最終出力の契約とし、共通の中間型やSQL専用の出力型は設けない。伏せ字と上限は値準備が担当する
+- [backend/app/log_policy/exceptions/](../../backend/app/log_policy/exceptions/): 種類ごとの情報抽出。`sql.py` は実データを除いた原因文と `PostgresErrorDetails` を独立して返し、`validation.py` は件数と標準分類を含む説明文を返す。分岐と出力フィールドの組み立ては呼び出し側が持つ
+- [backend/app/log_policy/exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py): `exc_info` の解決と `ExceptionLogFields` の組み立て。型は型名・原因文・frameと任意の `error_details` / `causes` / `exceptions` を持つ最終出力の契約とする。原因ノードにも同じ型を使う。伏せ字と上限は値準備が担当する
+- [backend/app/log_policy/exceptions/conversion.py](../../backend/app/log_policy/exceptions/conversion.py): 例外1件の種類別変換を担当し、原因文・診断属性・内部原因の集約状態を返す。SQL内部の診断抽出は `sql.py` に委譲し、通常の原因連鎖とグループの探索は `extraction.py` が担当する
+- [backend/app/log_policy/exceptions/application.py](../../backend/app/log_policy/exceptions/application.py): アプリ固有の検証例外から既存の理由・項目・コードを取り出す。共通ロガーへの依存はこの変換担当からの一方向とし、構築時に明示して接続する
 - [backend/app/log_policy/policies/ai_inference.py](../../backend/app/log_policy/policies/ai_inference.py)、[external_content.py](../../backend/app/log_policy/policies/external_content.py): 目的別定義（AI推論はモデル・トークン数の完成済みルールも定義）
 - [backend/app/log_policy/diagnostics.py](../../backend/app/log_policy/diagnostics.py): ログ一件の診断の記録・集計・出力形式への変換
 - [backend/app/log_policy/field_selection.py](../../backend/app/log_policy/field_selection.py): トップレベルの項目名の検査とdeny・allow判定

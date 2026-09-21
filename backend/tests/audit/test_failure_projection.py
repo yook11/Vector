@@ -54,7 +54,7 @@ class _StageLessMarkerError(Exception):
 
     def __init__(self) -> None:
         super().__init__("marker")
-        self.failure_kind = "attempt_scoped"
+        self.failure_kind = "test_marker"
         self.code = "stage_less_marker"
 
 
@@ -65,7 +65,7 @@ def _stmt_error(cls: type[Exception]) -> Exception:
 
 def test_project_failure_prefers_marker_projection() -> None:
     assert project_failure(_StageLessMarkerError()) == FailureProjection(
-        failure_kind="attempt_scoped",
+        failure_kind="test_marker",
         retryability=Retryability.RETRYABLE,
         failure_action=None,
         code="stage_less_marker",
@@ -92,7 +92,7 @@ def test_project_marker_failure_does_not_require_stage_marker_attribute() -> Non
     projection = project_marker_failure(_StageLessMarkerError())
 
     assert projection == FailureProjection(
-        failure_kind="attempt_scoped",
+        failure_kind="test_marker",
         retryability=Retryability.RETRYABLE,
         failure_action=None,
         code="stage_less_marker",
@@ -330,27 +330,27 @@ def test_completion_persist_crash_projection_returns_unknown_for_catch_all() -> 
 
 def test_failure_payload_fields_serializes_action_value() -> None:
     projection = FailureProjection(
-        failure_kind="target_rejected",
+        failure_kind="external_fetch",
         retryability=Retryability.NON_RETRYABLE,
         failure_action=FailureAction.DROP_ARTICLE,
-        code="ai_error_output_blocked",
+        code="test_external_fetch",
     )
 
     assert failure_payload_fields(projection) == {
-        "failure_kind": "target_rejected",
+        "failure_kind": "external_fetch",
         "failure_action": "drop_article",
     }
 
 
-def test_failure_payload_fields_keeps_missing_action_none() -> None:
+def test_failure_payload_fields_keeps_absent_classification_and_action_none() -> None:
     projection = FailureProjection(
-        failure_kind="attempt_scoped",
-        retryability=Retryability.RETRYABLE,
+        failure_kind=None,
+        retryability=None,
         failure_action=None,
         code="ai_error_network",
     )
 
     assert failure_payload_fields(projection) == {
-        "failure_kind": "attempt_scoped",
+        "failure_kind": None,
         "failure_action": None,
     }

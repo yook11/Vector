@@ -273,7 +273,7 @@ async def test_append_backfill_embedding_aged_out_records_rejected(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_recoverable_maps_to_retryable(
+async def test_append_network_failure_without_recovery_classification(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -295,13 +295,13 @@ async def test_append_failure_recoverable_maps_to_retryable(
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_network"
-    assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "attempt_scoped"
+    assert ev.retryability is None
+    assert ev.payload["failure_kind"] is None
     assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
-async def test_append_failure_terminal_operator_action(
+async def test_append_configuration_failure_without_recovery_classification(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -322,13 +322,13 @@ async def test_append_failure_terminal_operator_action(
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "ai_error_configuration"
-    assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "operator_action_required"
+    assert ev.retryability is None
+    assert ev.payload["failure_kind"] is None
     assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
-async def test_append_failure_terminal_target_rejected(
+async def test_append_input_rejection_preserves_reason_without_recovery_classification(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -351,8 +351,8 @@ async def test_append_failure_terminal_target_rejected(
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "ai_error_input_rejected"
-    assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "target_rejected"
+    assert ev.retryability is None
+    assert ev.payload["failure_kind"] is None
     assert ev.payload["failure_reason"] == "safety"
     assert ev.payload["failure_action"] is None
 

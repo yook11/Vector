@@ -40,94 +40,63 @@ from app.db.errors import (
 
 
 @pytest.mark.parametrize(
-    ("provider_error", "kind", "retryability", "outcome", "notified"),
+    ("provider_error", "notified"),
     [
         (
             AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT),
-            "attempt_scoped",
-            "retryable",
-            "infra_error",
             False,
         ),
         (
             AIProviderServiceUnavailableError(),
-            "time_based_recovery",
-            "retryable",
-            "infra_error",
             False,
         ),
         (
             AIProviderRateLimitedError(),
-            "time_based_recovery",
-            "retryable",
-            "infra_error",
             False,
         ),
         (
             AIProviderUsageLimitExhaustedError(),
-            "condition_based_recovery",
-            "retryable",
-            "infra_error",
             True,
         ),
         (
             AIProviderInsufficientBalanceError(),
-            "operator_action_required",
-            "non_retryable",
-            "infra_error",
             True,
         ),
         (
             AIProviderConfigurationError(),
-            "operator_action_required",
-            "non_retryable",
-            "infra_error",
             False,
         ),
         (
             AIProviderRequestInvalidError(),
-            "operator_action_required",
-            "non_retryable",
-            "failed",
             False,
         ),
         (
             AIProviderOutputTruncatedError(),
-            "attempt_scoped",
-            "retryable",
-            "failed",
             False,
         ),
         (
             AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY),
-            "target_rejected",
-            "non_retryable",
-            "failed",
             False,
         ),
         (
             AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
-            "target_rejected",
-            "non_retryable",
-            "failed",
             False,
         ),
     ],
 )
 def test_provider_classification_preserves_existing_audit_and_notification(
-    provider_error, kind, retryability, outcome, notified, capsys
+    provider_error, notified, capsys
 ) -> None:
     """全provider分類で監査コード・原因詳細・枯渇通知対象を維持する。"""
     error = to_embedding_error(provider_error)
     failure = classify_embedding_failure(error)
     assert failure.audit.code == provider_error.CODE
-    assert failure.audit.failure_kind == kind
-    assert failure.audit.retryability.value == retryability
+    assert failure.audit.failure_kind is None
+    assert failure.audit.retryability is None
     assert failure.audit.failure_reason == (
         provider_error.reason.value if provider_error.reason is not None else None
     )
     assert failure.audit.failure_action is None
-    assert failure.outcome == outcome
     assert failure.provider_exhaustion is (provider_error if notified else None)
     assert classify_embedding_failure(error) == failure
     assert not hasattr(failure, "reraise")
@@ -158,7 +127,6 @@ def test_service_failure_reasons(error, code, kind, retryability) -> None:
     assert failure.audit.code == code
     assert failure.audit.failure_kind == kind
     assert failure.audit.retryability is retryability
-    assert failure.outcome == "failed"
     assert failure.provider_exhaustion is None
 
 
@@ -198,7 +166,6 @@ def test_database_failure_uses_shared_projection(error, code, retryability) -> N
     failure = classify_embedding_failure(error)
     assert failure.audit.code == code
     assert failure.audit.retryability.value == retryability
-    assert failure.outcome == "infra_error"
     assert failure.provider_exhaustion is None
 
 
@@ -208,5 +175,4 @@ def test_unexpected_failure_and_timeout_are_not_success(error) -> None:
     failure = classify_embedding_failure(error)
     assert failure.audit.code == "unexpected_error"
     assert failure.audit.retryability is Retryability.UNKNOWN
-    assert failure.outcome == "failed"
     assert failure.provider_exhaustion is None

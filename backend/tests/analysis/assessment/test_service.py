@@ -554,7 +554,7 @@ async def test_race_loss_does_not_emit_processing_outcome(
         )
 
     metrics = collected_metrics(capfire)
-    for result in ("in_scope", "out_of_scope", "failed", "infra_error"):
+    for result in ("in_scope", "out_of_scope", "failed"):
         assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0
 
 

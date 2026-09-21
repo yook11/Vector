@@ -122,8 +122,7 @@ class CurationPayload(BasePipelineEventPayload):
     kind: Literal["curation"] = "curation"
     failure_kind: str | None = None
     failure_action: str | None = None
-    # 原因詳細 (provider error の reason 値)。failure_kind = 回復クラス /
-    # outcome_code = CODE とは別軸。provider 由来でない失敗は None。
+    # プロバイダーのreasonを保持し、回復分類は記録しない。
     failure_reason: str | None = None
     target_article_id: int | None = None
     ai_model: str | None = None
@@ -145,8 +144,7 @@ class AssessmentPayload(BasePipelineEventPayload):
     kind: Literal["assessment"] = "assessment"
     failure_kind: str | None = None
     failure_action: str | None = None
-    # 原因詳細 (provider error の reason 値)。failure_kind = 回復クラス /
-    # outcome_code = CODE とは別軸。provider 由来でない失敗は None。
+    # プロバイダーのreasonを保持し、回復分類は記録しない。
     failure_reason: str | None = None
 
     curation_id: int | None = None

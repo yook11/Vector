@@ -23,9 +23,11 @@ def annotate_span_failure(span: LogfireSpan, exc: Exception) -> None:
     (BaseException 系) を対象外にする。
     """
     projection = project_failure(exc)
-    span.set_attribute("failure_kind", projection.failure_kind)
+    if projection.failure_kind is not None:
+        span.set_attribute("failure_kind", projection.failure_kind)
     span.set_attribute("code", projection.code)
-    span.set_attribute("retryability", projection.retryability.value)
+    if projection.retryability is not None:
+        span.set_attribute("retryability", projection.retryability.value)
     span.set_attribute("error_class", exception_fqn(exc))
     if projection.failure_action is not None:
         span.set_attribute("failure_action", projection.failure_action.value)
