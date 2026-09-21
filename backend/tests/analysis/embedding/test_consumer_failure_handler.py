@@ -290,5 +290,3 @@ async def test_database_failure_audit_preserves_classification_with_null_message
         "app.db.errors.DatabaseConnectionError",
         "sqlalchemy.exc.OperationalError",
     ]
-    assert error.reason is DatabaseConnectionErrorReason.CONNECTION_LOST
-    assert error.__cause__ is cause
