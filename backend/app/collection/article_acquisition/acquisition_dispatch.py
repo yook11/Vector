@@ -23,7 +23,6 @@ from app.collection.sources.acquisition_request import (
     SourceAcquisitionSchedule,
 )
 from app.collection.sources.dispatch import SourceDispatchService
-from app.logfire.exceptions import VectorDomainError
 
 logger = structlog.get_logger(__name__)
 
@@ -41,7 +40,7 @@ class UnsentAcquisitionRequest:
     failure: AcquisitionSendFailure
 
 
-class AcquisitionDispatchError(VectorDomainError):
+class AcquisitionDispatchError(Exception):
     def __init__(self, unsent: tuple[UnsentAcquisitionRequest, ...]) -> None:
         super().__init__()
         self.unsent = unsent

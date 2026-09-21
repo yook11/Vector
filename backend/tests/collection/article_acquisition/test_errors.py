@@ -127,3 +127,23 @@ def test_external_fetch_error_family_has_no_stage_policy_attrs() -> None:
         assert not hasattr(cls, "FAILURE_KIND")
         assert not hasattr(cls, "RETRYABILITY")
         assert not hasattr(cls, "FAILURE_ACTION")
+
+
+def test_acquisition_error_directly_inherits_exception():
+    """取得工程の基底は通常のExceptionを直接継承する。"""
+    assert AcquisitionError.__bases__ == (Exception,)
+
+
+@pytest.mark.parametrize("args", [(), ("diagnostic",), ("diagnostic", 503)])
+def test_acquisition_base_preserves_standard_exception_args(args):
+    """独自コンストラクターのない基底は標準の引数保持に従う。"""
+    error = AcquisitionError(*args)
+    assert error.args == args
+    assert str(error) == str(Exception(*args))
+
+
+def test_read_error_does_not_fill_message_from_origin():
+    """originやcodeを例外メッセージへ自動補完しない。"""
+    error = AcquisitionReadError(origin=FetchGatewayError(status_code=502))
+    assert error.args == ()
+    assert str(error) == ""

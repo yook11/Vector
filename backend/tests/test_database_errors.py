@@ -14,11 +14,10 @@ from app.db.errors import (
     DatabaseTimeoutErrorReason,
     DatabaseUnexpectedError,
 )
-from app.logfire.exceptions import VectorDomainError
 
 
-def test_database_error_is_vector_domain_error() -> None:
-    assert issubclass(DatabaseError, VectorDomainError)
+def test_database_error_directly_inherits_exception() -> None:
+    assert DatabaseError.__bases__ == (Exception,)
     assert issubclass(DatabaseConnectionError, DatabaseError)
     assert issubclass(DatabaseTimeoutError, DatabaseError)
     assert issubclass(DatabaseConstraintError, DatabaseError)
@@ -49,63 +48,29 @@ def test_reason_values_name_what_happened() -> None:
 
 
 @pytest.mark.parametrize(
-    ("exc", "expected"),
+    "exc",
     [
-        (
-            DatabaseConnectionError(
-                reason=DatabaseConnectionErrorReason.CONNECTION_FAILED
-            ),
-            "DatabaseConnectionError(reason='connection_failed')",
+        DatabaseConnectionError(reason=DatabaseConnectionErrorReason.CONNECTION_FAILED),
+        DatabaseConnectionError(reason=DatabaseConnectionErrorReason.CONNECTION_LOST),
+        DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.LOCK_TIMEOUT),
+        DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+        DatabaseConstraintError(reason=DatabaseConstraintErrorReason.UNIQUE_VIOLATION),
+        DatabaseConstraintError(
+            reason=DatabaseConstraintErrorReason.FOREIGN_KEY_VIOLATION
         ),
-        (
-            DatabaseConnectionError(
-                reason=DatabaseConnectionErrorReason.CONNECTION_LOST
-            ),
-            "DatabaseConnectionError(reason='connection_lost')",
+        DatabaseConstraintError(
+            reason=DatabaseConstraintErrorReason.NOT_NULL_VIOLATION
         ),
-        (
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.LOCK_TIMEOUT),
-            "DatabaseTimeoutError(reason='lock_timeout')",
+        DatabaseConstraintError(reason=DatabaseConstraintErrorReason.CHECK_VIOLATION),
+        DatabaseConstraintError(
+            reason=DatabaseConstraintErrorReason.UNCLASSIFIED_CONSTRAINT
         ),
-        (
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
-            "DatabaseTimeoutError(reason='statement_timeout')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.UNIQUE_VIOLATION
-            ),
-            "DatabaseConstraintError(reason='unique_violation')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.FOREIGN_KEY_VIOLATION
-            ),
-            "DatabaseConstraintError(reason='foreign_key_violation')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.NOT_NULL_VIOLATION
-            ),
-            "DatabaseConstraintError(reason='not_null_violation')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.CHECK_VIOLATION
-            ),
-            "DatabaseConstraintError(reason='check_violation')",
-        ),
-        (
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.UNCLASSIFIED_CONSTRAINT
-            ),
-            "DatabaseConstraintError(reason='unclassified_constraint')",
-        ),
-        (DatabaseUnexpectedError(), "DatabaseUnexpectedError"),
+        DatabaseUnexpectedError(),
     ],
 )
-def test_str_exposes_class_and_reason_only(exc: DatabaseError, expected: str) -> None:
-    assert str(exc) == expected
+def test_database_error_uses_standard_empty_message(exc: DatabaseError) -> None:
+    """メッセージ未指定時は型名や理由で補完しない。"""
+    assert str(exc) == ""
     assert exc.args == ()
 
 

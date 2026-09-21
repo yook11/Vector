@@ -15,7 +15,6 @@ from app.http.failure import (
     HttpTransportFailure,
     classify_botocore,
 )
-from app.logfire.exceptions import VectorDomainError
 
 
 class SqsSendFailureKind(StrEnum):
@@ -38,7 +37,7 @@ class SqsSendFailure:
     transport: HttpTransportFailure | None = None
 
 
-class SqsSendError(VectorDomainError):
+class SqsSendError(Exception):
     def __init__(self, failure: SqsSendFailure) -> None:
         super().__init__()
         self.failure = failure

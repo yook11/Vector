@@ -185,3 +185,17 @@ async def test_cancellation_during_initialization_recovers_rds_client(
             await task
     rds.close.assert_called_once()
     engine.dispose.assert_not_awaited()
+
+
+def test_source_dispatch_error_directly_inherits_exception():
+    """Lambdaの投入例外は通常のExceptionを直接継承する。"""
+    assert SourceDispatchLambdaError.__bases__ == (Exception,)
+
+
+def test_source_dispatch_error_has_no_implicit_message():
+    """処理段階と原因型を例外文面へ自動補完しない。"""
+    error = SourceDispatchLambdaError(
+        phase="dispatch", error_class="builtins.RuntimeError"
+    )
+    assert error.args == ()
+    assert str(error) == ""

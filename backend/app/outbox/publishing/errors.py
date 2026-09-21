@@ -5,8 +5,6 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Protocol
 
-from app.logfire.exceptions import VectorDomainError
-
 if TYPE_CHECKING:
     from app.http.failure import HttpTransportFailure
 
@@ -83,18 +81,16 @@ class PublishPhase(StrEnum):
     CLASSIFY_FAILURE = "classify_failure"
 
 
-class PublishError(VectorDomainError):
+class PublishError(Exception):
     """想定外の失敗を含む、イベント送信失敗の共通祖先。"""
 
     CODE: ClassVar[str] = "publish_error"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE",)
 
 
 class PublishTransportError(PublishError):
     """通信失敗の分類結果を保持し、イベント送信の失敗として伝える。"""
 
     CODE: ClassVar[str] = "publish_transport_error"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "failure")
 
     def __init__(self, *, failure: HttpTransportFailure) -> None:
         super().__init__()
@@ -105,7 +101,6 @@ class PublishServiceError(PublishError):
     """送信先のエラー応答を共通理由と調査用の情報で表す。"""
 
     CODE: ClassVar[str] = "publish_service_error"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "status_code")
 
     def __init__(
         self,
@@ -127,7 +122,6 @@ class PublishConfigurationError(PublishError):
     """送信に必要な資格情報または設定が不足している。"""
 
     CODE: ClassVar[str] = "publish_configuration_error"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason")
 
     def __init__(self, *, reason: PublishConfigurationReason) -> None:
         super().__init__()
@@ -138,7 +132,6 @@ class PublishEventInvalidError(PublishError):
     """イベントを送信内容として扱えない。"""
 
     CODE: ClassVar[str] = "publish_event_invalid"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "issues")
 
     def __init__(
         self,
@@ -158,7 +151,6 @@ class PublishIntegrityError(PublishError):
     MESSAGE: ClassVar[str] = (
         "送信本文と、送信先が受け取った本文のチェックサムが一致しません。"
     )
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason", "MESSAGE")
 
     def __init__(
         self, *, reason: PublishIntegrityReason, request_id: str | None = None
@@ -172,7 +164,6 @@ class PublishResponseInvalidError(PublishError):
     """応答を検証できない失敗で、送信先が未受付とは断定しない。"""
 
     CODE: ClassVar[str] = "publish_response_invalid"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason")
 
     def __init__(self, *, reason: PublishResponseInvalidReason) -> None:
         super().__init__()
@@ -184,13 +175,6 @@ class PublishUnexpectedError(PublishError):
 
     CODE: ClassVar[str] = "publish_unexpected_error"
     reason: ClassVar[str] = "unexpected_exception"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = (
-        "CODE",
-        "reason",
-        "original_exception_type",
-        "phase",
-        "classification_exception_type",
-    )
 
     def __init__(
         self,
@@ -213,11 +197,10 @@ class PublishUnexpectedError(PublishError):
         )
 
 
-class PublishCleanupError(VectorDomainError):
+class PublishCleanupError(Exception):
     """送信結果とは独立した、クライアント終了処理の失敗を表す。"""
 
     CODE: ClassVar[str] = "publish_cleanup_error"
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "original_exception_type")
 
     def __init__(self, *, original_exception: Exception) -> None:
         super().__init__()

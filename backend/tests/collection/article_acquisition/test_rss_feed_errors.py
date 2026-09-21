@@ -94,3 +94,10 @@ def test_existing_payload_and_unrelated_error_have_no_feed_failures() -> None:
         AcquisitionPayload.model_validate({"kind": "acquisition"}).feed_failures is None
     )
     assert _feed_failure_payloads(RuntimeError("unrelated")) is None
+
+
+def test_rss_failure_count_does_not_fill_exception_message():
+    """RSSの失敗件数は属性に保持し、例外文面には補完しない。"""
+    error = RssFeedErrors([_failure(False)])
+    assert error.args == ()
+    assert str(error) == ""

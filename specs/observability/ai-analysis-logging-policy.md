@@ -22,7 +22,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 - `AIProviderError`は通常の`Exception`を直接継承し、既存の具体型10種類と`CODE`を維持する。State／Contentの中間クラスは廃止する。
 - 位置引数を標準の`args`と`str()`で保持する。引数なしの文字列は空であり、`CODE`や`reason`で補完しない。
 - 共通の`reason: StrEnum | None`は任意とし、StrEnumと`None`以外の値、および未定義キーワード引数は拒否する。
-- プロバイダー例外は`VectorDomainError`と`SAFE_ATTRS`に依存しない。保持した情報を出力する際の保護はログ側の責務とし、Assessment・Curation・Embeddingの工程例外も通常の`Exception`を直接継承する。工程の`reason`・`provider_error`・`defect`の組み合わせ検証と`code`は維持し、既存コンストラクターではメッセージを渡さないため`str()`は空となる。DB・収集・Outbox等の例外は対象外とする。
+- プロバイダー例外は`VectorDomainError`と`SAFE_ATTRS`に依存しない。保持した情報を出力する際の保護はログ側の責務とし、Assessment・Curation・Embeddingの工程例外も通常の`Exception`を直接継承する。工程の`reason`・`provider_error`・`defect`の組み合わせ検証と`code`は維持し、既存コンストラクターではメッセージを渡さないため`str()`は空となる。後続の共通基底撤去でDB・収集・Outbox等も標準化する（[共通ログ方針](application-logging-policy.md)）。
 - 呼び出し側は`CLASSIFIED_AI_PROVIDER_ERRORS`の具体型とそのサブクラスを判定対象とする。裸の基底型と未知の直接サブクラスを分類済みへ広げず、既存の処理制御を維持する。
 - この整理は保持契約までとし、SDKのメッセージ・応答詳細の新たな取得、AI専用ログ変換、Assessment Lambdaへの接続は後続工程とする。
 

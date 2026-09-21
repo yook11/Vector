@@ -287,3 +287,12 @@ PythonとTypeScriptで情報別契約と合成入出力例を共有する。仕�
 - [ECSからCloudWatchへのログ配送](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html): stdout/stderrとawslogs。
 
 外部資料は機構の根拠であり、概念の分割・本文除外・内部IP除外は本アプリで採用した設計判断である。
+
+
+## 例外からログ専用基底を撤去（2026-09-21）
+
+`VectorDomainError`と`SAFE_ATTRS`は全利用先から撤去する。DB、SQS送信、取得工程・投入、投入Lambda、Outboxの各基底も通常の`Exception`を直接継承する。DBの独自`__str__`も廃止するが、基底の直接生成禁止・必須reasonの型検証・原因チェーンは維持する。
+
+既存コンストラクターの引数と保持属性を維持し、メッセージ未指定時は`args == ()`、`str(error) == ""`とする。独自コンストラクターを持たない基底は標準の引数保持に従う。型名・code・reason・件数・固定文による補完は行わない。監査の文字列変換結果が空の場合は既存の処理で`payload.error_message=null`とし、既存の構造化コード・分類・例外型・原因チェーンを維持する。DBスキーマ・既存行は変更しない。
+
+この撤去では新しいメッセージ引数、原因情報の追加取得、ログ変換・出力ポリシーの接続は行わず、既存のLogfire出力保護と公開応答の境界を維持する。
