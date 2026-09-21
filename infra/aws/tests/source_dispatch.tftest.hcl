@@ -118,6 +118,20 @@ run "dispatch_schedules_are_enabled_and_connected" {
   }
   assert {
     condition = (
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["source_dispatch"].threshold == 0 &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["source_dispatch"].evaluation_periods == 2 &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["source_dispatch"].comparison_operator == "LessThanOrEqualToThreshold" &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["source_dispatch"].treat_missing_data == "breaching" &&
+      alltrue([for query in aws_cloudwatch_metric_alarm.lambda_success_stalled["source_dispatch"].metric_query : length(query.metric) == 0 ? true :
+        query.metric[0].namespace == "AWS/Lambda" && query.metric[0].period == 3600 && query.metric[0].dimensions.FunctionName == local.source_dispatch_name
+      ]) &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["source_dispatch"].alarm_actions == toset([aws_sns_topic.alerts.arn]) &&
+      aws_cloudwatch_metric_alarm.lambda_success_stalled["source_dispatch"].ok_actions == toset([aws_sns_topic.alerts.arn])
+    )
+    error_message = "投入Lambdaの正常完了が2時間ゼロなら供給途絶として通知する。"
+  }
+  assert {
+    condition = (
       aws_lambda_function.source_dispatch.timeout == 120 && aws_lambda_function.source_dispatch.reserved_concurrent_executions == 3 &&
       aws_lambda_function.source_dispatch.memory_size == 512 && one(aws_lambda_function.source_dispatch.architectures) == "arm64" &&
       one(aws_lambda_function.source_dispatch.image_config[0].command) == "app.lambda_handlers.source_dispatch.handler.handler" &&

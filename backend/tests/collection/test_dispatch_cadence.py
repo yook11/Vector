@@ -1,10 +1,8 @@
-"""tier 別 dispatch の分岐配線テスト (unit)。
+"""admin 手動 dispatch の配線テスト (unit)。
 
-``dispatch_high`` / ``dispatch_medium`` / ``dispatch_low`` と全 tier 一括の
 ``dispatch_sources`` が、どの active source に ``acquire_source`` を kiq するかの
 契約を固定する:
 
-- cadence 指定の dispatch はその tier の source 定義のみ kiq する。
 - DB の active source 名が ``SOURCES`` に無ければ (コード未登録) skip する。
 - ``dispatch_sources`` (cadence=None) は登録済 active source を全て kiq する。
 
@@ -142,27 +140,6 @@ def _collected_metrics(capfire: CaptureLogfire) -> list[dict[str, Any]]:
         return capfire.get_collected_metrics()
     except AttributeError:
         return []
-
-
-@pytest.mark.asyncio
-async def test_dispatch_high_dispatches_only_high_tier(
-    captured_kiq: AsyncMock,
-) -> None:
-    """``dispatch_high`` は HIGH tier の source のみ kiq する。"""
-    rows = [_row(1, "Alpha"), _row(2, "Beta"), _row(3, "Gamma")]
-    ctx = _ctx(rows)
-
-    result = await collection_tasks.dispatch_high(ctx=ctx)  # type: ignore[arg-type]
-
-    assert _kiqed_names(captured_kiq) == ["Alpha"]
-    assert result == {"dispatched_count": 1}
-    # 成功 occurrence は metric へ移設。監査は per-run heartbeat (件数なし) のみ。
-    assert _outcome_codes(ctx) == ["dispatch_run_completed"]
-    event = _events(ctx)[0]
-    assert event.stage == "dispatch"
-    assert event.event_type == "succeeded"
-    assert event.source_id is None
-    assert event.payload["cadence"] == "high"
 
 
 @pytest.mark.asyncio

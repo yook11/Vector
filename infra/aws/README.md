@@ -146,6 +146,7 @@ bootstrapの継続更新は[専用ロールの手動手順](bootstrap-access/REA
   反映されない)。infra 起因の変更は「apply 後に rollout を再実行」が正規手順。
   rollout は family の最新 ACTIVE revision を土台に image tag だけ差し替えるので、
   再実行すると Terraform 由来の変更もそこで取り込まれる。
+  Lambdaも`ignore_changes = [image_uri]`で同じ分担だが、Terraformが直接持つ設定（メモリ・環境変数など）はapplyだけで反映され、rolloutの再実行は要らない。
 - **Valkey の ACL ミスは二重に静か。** worker 側は taskiq が XGROUP CREATE の
   NOPERM を debug で握り潰し、後段の XREADGROUP が NOGROUP で落ちて初めて発現する。
   frontend 側は fail-open で rate limit が黙って無効化され、60 秒ごとの
@@ -563,7 +564,7 @@ Pythonは変更した配備スクリプトとテストへRuff lint・formatチ�
 
 > 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../../specs/platform/app-rollout.md)を参照する。
 
-Consumerと3スケジュールは2026-09-15に有効化済み。旧Taskiqの定期投入は並走中で、停止は後続作業とする。処理済みIDをDBやRedisへ保存せず、同じ依頼は再取得する。既存の正規化URLによる記事保存と新規記事だけのOutbox生成を維持する。
+Consumerと3スケジュールは2026-09-15に有効化済み。旧Taskiqの定期投入は2026-09-21に撤去し、Taskiqには管理者の手動取得だけが残る。供給途絶は`source-dispatch-stalled`と`acquisition-consumer-stalled`の2アラームで検知する。処理済みIDをDBやRedisへ保存せず、同じ依頼は再取得する。既存の正規化URLによる記事保存と新規記事だけのOutbox生成を維持する。
 
 ### 設定と入力
 

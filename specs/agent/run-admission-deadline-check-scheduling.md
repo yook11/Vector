@@ -123,6 +123,7 @@ runを終了させない。このタスクから回答生成後の期限へ再�
 - 小さなアダプターで予約本体と時刻索引への登録をRedisの`MULTI/EXEC`へまとめ、接続poolの終了処理を補う。
 - JSON形式で保存し、日時はtimezone付きISO形式とする。
 - 既存のRedis接続・IAM認証設定を継承する。APIとschedulerはプロセスごとに接続を所有し、終了時に解放する。
+- 本番のValkeyは最小権限ACLのため、専用prefixのkeyと発行コマンドを、予約するuserと取得・削除するuserの両方に[ACL](../../infra/aws/valkey.tf)で許可する。
 - `skip_past_schedules=False`により、登録遅延や再起動後も過去の予約を取得する。送信後の単発予約削除はsourceの既存処理を使う。
 - agent schedulerの予約一覧更新のみ1秒間隔とする。他schedulerの60秒間隔と、毎分のDB定期回収は維持する。
 - バックグラウンド予約全体は2秒で打ち切る。Redis接続・socket・pool待機にも2秒を設定するが、各待機を合計して上限を延ばさない。

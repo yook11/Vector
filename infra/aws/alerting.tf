@@ -106,31 +106,64 @@ resource "aws_iam_role_policy" "chatbot" {
 
 # --- A1: 収集パイプライン途絶 (供給ハートビート) ----------------------------
 #
-# backend が dispatch task の正常完了時にだけ emit する EMF メトリクス
-# dispatch_run{cadence=high} (app/queue/tasks/acquisition.py) が 2 時間
-# 途絶えたら発火する。TreatMissingData = breaching が本 alarm の核で、
-# scheduler / broker (Valkey) / dispatch worker / DB のどの死でも
-# 「emit が来ない」に収斂する (原因を区別しないのは意図的)。
-# dispatch_high は 15 分間隔なので、正常時は 1h bin に 4 打点入る。
+# 取得依頼の投入 (EventBridge Scheduler → source-dispatch Lambda) と受信
+# (SQS → acquisition-consumer Lambda) それぞれの「正常完了した起動」が 2 時間
+# ゼロなら発火する。正常時は投入 5 回/時 (HIGH 4 + MEDIUM 1)、Consumer 約 48
+# 回/時。Invocations が無い時間帯はデータ点自体が無いため、TreatMissingData =
+# breaching が本 alarm の核で、Scheduler 停止・受信接続の無効化・イメージ削除・
+# 関数エラーのどれでも「成功が来ない」に収斂する (原因を区別しないのは意図的)。
+# 関数名は文字列 local を参照し、digest 未指定で Lambda が無い構成でも plan が通る。
 
-resource "aws_cloudwatch_metric_alarm" "dispatch_run_stalled" {
-  alarm_name          = "${var.name_prefix}-dispatch-run-stalled"
-  alarm_description   = "収集パイプラインの供給が止まっている (dispatch_high の正常完了が 2 時間ゼロ)。ECS の scheduler / fetch サービスのログと、Valkey・DB の状態を確認する。"
-  namespace           = "Vector/Pipeline"
-  metric_name         = "dispatch_run"
-  statistic           = "Sum"
-  period              = 3600
-  evaluation_periods  = 2
-  threshold           = 0
-  comparison_operator = "LessThanOrEqualToThreshold"
-  treat_missing_data  = "breaching"
-
-  dimensions = {
-    cadence = "high"
+locals {
+  lambda_success_heartbeat_alarms = {
+    source_dispatch = {
+      alarm_name    = "${local.source_dispatch_name}-stalled"
+      function_name = local.source_dispatch_name
+      description   = "取得依頼の投入 (source-dispatch Lambda) の正常完了が 2 時間ゼロ。EventBridge Scheduler の状態と /aws/lambda/${local.source_dispatch_name} のログ、失敗記録キューを確認する。"
+    }
+    acquisition_consumer = {
+      alarm_name    = "${local.acquisition_consumer_name}-stalled"
+      function_name = local.acquisition_consumer_name
+      description   = "取得 Consumer (acquisition-consumer Lambda) の正常完了が 2 時間ゼロ。SQS 受信接続 (event source mapping) の状態と /aws/lambda/${local.acquisition_consumer_name} のログ、source-acquisition キューの滞留を確認する。"
+    }
   }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_success_stalled" {
+  for_each = local.lambda_success_heartbeat_alarms
+
+  alarm_name          = each.value.alarm_name
+  alarm_description   = each.value.description
+  comparison_operator = "LessThanOrEqualToThreshold"
+  threshold           = 0
+  evaluation_periods  = 2
+  treat_missing_data  = "breaching"
 
   alarm_actions = [aws_sns_topic.alerts.arn]
   ok_actions    = [aws_sns_topic.alerts.arn]
+
+  dynamic "metric_query" {
+    for_each = { invocations = "Invocations", errors = "Errors" }
+
+    content {
+      id = metric_query.key
+
+      metric {
+        namespace   = "AWS/Lambda"
+        metric_name = metric_query.value
+        period      = 3600
+        stat        = "Sum"
+        dimensions  = { FunctionName = each.value.function_name }
+      }
+    }
+  }
+
+  metric_query {
+    id          = "successes"
+    expression  = "FILL(invocations, 0) - FILL(errors, 0)"
+    label       = "successful invocations"
+    return_data = true
+  }
 }
 
 # --- A4: 工程別の失敗率 -------------------------------------------------------

@@ -370,3 +370,24 @@ jobs:
             --poll-seconds 15 \
             --timeout-seconds 1200 \
             --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # ECSが新しいimageで収束した後にだけ進む。起動しないimageをLambdaへ広げない。
+      - name: Roll out Lambda functions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME_PREFIX: ${{ steps.tf.outputs.name_prefix }}
+          IMAGE_TAG: ${{ env.RELEASE_SHA }}
+        run: |
+          set -euo pipefail
+          # ECSの検証中にmainが進んだ場合はLambdaの更新を始めない。
+          .rollout-control/backend/.venv/bin/python .rollout-control/.github/scripts/check_app_release.py rollout \
+            --repo-root "$GITHUB_WORKSPACE/release" --repo "$GITHUB_REPOSITORY" \
+            --release-sha "$RELEASE_SHA"
+          # 対象はAWSに問い合わせる。workflowに関数の一覧を持つと追加時に黙って漏れる。
+          python3 .rollout-control/.github/scripts/rollout_lambda_images.py \
+            --name-prefix "$NAME_PREFIX" \
+            --repository "$NAME_PREFIX/backend" \
+            --image-tag "$IMAGE_TAG" \
+            --poll-seconds 10 \
+            --timeout-seconds 900 \
+            --summary-file "$GITHUB_STEP_SUMMARY"

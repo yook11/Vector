@@ -1,6 +1,6 @@
 # app rollout — 版の持ち主と対象
 
-Status: 段階1（Terraformが版と有効状態の手入力を手放す）を実装、AWS未適用（2026-09-20）。段階2（rolloutがLambdaを更新する）は未実装。
+Status: 段階1は反映済み（2026-09-20）。段階2（rolloutがLambdaを更新する）を実装、本番での初回rolloutは未実施。
 
 ## Work Definition
 
@@ -21,13 +21,19 @@ backendイメージで動くものは、ECSのserviceもLambdaも同じ分担に
 | 持ち主 | 持つもの |
 |---|---|
 | Terraform | 実行設定（メモリ・timeout・環境変数・ネットワーク・権限）と、トリガーの有効状態 |
-| app rollout | 版（どのイメージで動くか）。前進も切り戻しも同じ経路で、過去のrelease SHAを指定すれば全体が戻る |
+| app rollout | 版（どのイメージで動くか）。前進も切り戻しも同じ経路で、修正やrevertをmainへ入れてrolloutする |
 
 Terraformは版の変更を追わない。ECSは`ignore_changes = [task_definition]`、Lambdaは`ignore_changes = [image_uri]`で同じ型にする。
 
 新規作成時だけは初期値が要る。Lambdaはbackendリポジトリの最新イメージをdigestで参照する（`infra/aws/registry.tf`）。作成後の最初のrolloutで他と同じ版に揃う。
 
 ECSとLambdaで実装が分かれるのは、AWSのAPIが違う箇所だけとする。ロール・workflow・承認・release SHAは1つで、「Lambdaのrollout」という別の仕組みは作らない。
+
+## 更新の順序
+
+rolloutは、scheduler、残りのECS service、ECSの収束確認、Lambdaの順に進める。LambdaをECSの収束後にするのは、起動しないイメージをLambdaへ広げないため。更新の直前にrelease guardを再実行し、mainが進んでいたら始めない。
+
+Lambdaの対象は、名前がprefixに従い、backendリポジトリのイメージで動く関数とし、AWSへ問い合わせて決める。すでに同じイメージの関数は更新しないため、途中で失敗したrolloutは再実行で続きから収束する。
 
 ## 有効状態
 
@@ -58,3 +64,5 @@ digest未指定なら関数を作らない、という段階投入のスイッ�
 
 - 2026-09-19: 切替の前に、既存のdigest入力で全14関数をECSと同じイメージへ揃えた。パイプラインに影響しない6関数を先に、本線の8関数を後に更新した。更新後、relayの毎分実行と各ConsumerのErrorsは0、DLQの増加は無かった。
 - 2026-09-20: 段階1を実装した。本体のmock plan 38件、bootstrapのmock plan 34件、`backend/tests/scripts` 377件が成功した。変更したworkflowのactionlintは、既知の`queue: max`の警告だけだった。期待する実planは、`count`を外した資源の付け替え23件のみで、add／change／destroyは0とする。
+- 2026-09-20: rolloutロールの権限追加（bootstrap）と段階1を反映した。本体の適用は付け替え23件のみで、add／change／destroyは0だった。適用後もLambda 14関数のイメージは変わらず、event source mapping 5本とschedule 11本は有効のままだった。
+- 2026-09-20: 段階2を実装した。`backend/tests/scripts` 391件が成功し、読み取り権限で実環境の対象選択を確認した（対象14関数、対象外0件）。rolloutロールによる実際のコード更新は、初回rolloutまで未確認。
