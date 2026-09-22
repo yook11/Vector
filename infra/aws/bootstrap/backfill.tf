@@ -8,9 +8,12 @@ locals {
   backfill_schedule_arns      = [for stage in local.backfill_stages : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-backfill/${var.name_prefix}-${stage}-backfill"]
   backfill_queue_arns         = [for stage in local.backfill_stages : "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-${stage}"]
   backfill_log_group_arns     = [for stage in local.backfill_stages : "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.name_prefix}-${stage}-backfill:*"]
+  # DeleteScheduleGroupはgroup配下の全scheduleを消すため、schedule/<group>/*へのDeleteScheduleも要る。
+  backfill_schedule_group_wildcard_arn = "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-backfill/*"
   # 本体が旧scheduleと旧groupを削除し終えるまでCIに残す。旧boundaryの撤去と同じPRで消す。
-  backfill_legacy_schedule_arns       = [for stage in local.backfill_stages : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${stage}-backfill/${var.name_prefix}-${stage}-backfill"]
-  backfill_legacy_schedule_group_arns = [for stage in local.backfill_stages : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-${stage}-backfill"]
+  backfill_legacy_schedule_arns                = [for stage in local.backfill_stages : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${stage}-backfill/${var.name_prefix}-${stage}-backfill"]
+  backfill_legacy_schedule_group_wildcard_arns = [for stage in local.backfill_stages : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${stage}-backfill/*"]
+  backfill_legacy_schedule_group_arns          = [for stage in local.backfill_stages : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-${stage}-backfill"]
   backfill_role_boundary_groups = {
     BackfillLambda = {
       boundary   = aws_iam_policy.backfill_lambda_boundary_shared.arn
@@ -191,7 +194,7 @@ resource "aws_iam_policy" "apply_backfill" {
         Sid      = "ManageBackfillSchedules"
         Effect   = "Allow"
         Action   = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"]
-        Resource = concat(local.backfill_schedule_arns, local.backfill_legacy_schedule_arns)
+        Resource = concat(local.backfill_schedule_arns, [local.backfill_schedule_group_wildcard_arn], local.backfill_legacy_schedule_arns, local.backfill_legacy_schedule_group_wildcard_arns)
       },
       {
         Sid      = "ManageBackfillScheduleGroups"

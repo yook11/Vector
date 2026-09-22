@@ -177,11 +177,13 @@ run "ci_schedule_management_is_limited_to_backfill_groups" {
         Action = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"],
         Resource = concat(
           [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-backfill/slice-test-${stage}-backfill"],
+          ["arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-backfill/*"],
           [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-${stage}-backfill/slice-test-${stage}-backfill"],
+          [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-${stage}-backfill/*"],
         )
       }]
     )
-    error_message = "scheduleのCRUDを共通groupのbackfill名と、削除待ちの旧groupに限定する。"
+    error_message = "scheduleのCRUDを共通groupと削除待ちの旧groupに限定し、group削除に要するgroup配下のDeleteScheduleを含める。"
   }
   assert {
     condition = (
