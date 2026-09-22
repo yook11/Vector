@@ -42,42 +42,6 @@ override_resource {
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-scheduler-boundary" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.backfill_lambda_boundary["curation"]
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-backfill-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.backfill_scheduler_boundary["curation"]
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-backfill-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.backfill_lambda_boundary["assessment"]
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-backfill-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.backfill_scheduler_boundary["assessment"]
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-backfill-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.backfill_lambda_boundary["embedding"]
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-embedding-backfill-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.backfill_scheduler_boundary["embedding"]
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-embedding-backfill-scheduler-boundary" }
-}
-
 run "backfill_roles_require_their_own_boundary" {
   command = plan
   assert {
@@ -127,19 +91,6 @@ run "scheduler_boundary_invokes_only_backfill_functions" {
   }
 }
 
-run "legacy_stage_boundaries_remain_until_old_roles_are_deleted" {
-  command = plan
-  assert {
-    condition = (
-      toset(keys(aws_iam_policy.backfill_lambda_boundary)) == toset(["curation", "assessment", "embedding"]) &&
-      toset(keys(aws_iam_policy.backfill_scheduler_boundary)) == toset(["curation", "assessment", "embedding"]) &&
-      !anytrue([for group in local.role_boundary_groups : contains(values(aws_iam_policy.backfill_lambda_boundary)[*].arn, group.boundary)]) &&
-      !anytrue([for group in local.role_boundary_groups : contains(values(aws_iam_policy.backfill_scheduler_boundary)[*].arn, group.boundary)])
-    )
-    error_message = "旧段別boundaryは本体で旧ロールを削除するまで残し、対応表からは外す。"
-  }
-}
-
 run "ci_can_manage_async_settings_only_on_backfill_functions" {
   command = plan
   assert {
@@ -178,25 +129,20 @@ run "ci_schedule_management_is_limited_to_backfill_groups" {
         Resource = concat(
           [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-backfill/slice-test-${stage}-backfill"],
           ["arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-backfill/*"],
-          [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-${stage}-backfill/slice-test-${stage}-backfill"],
-          [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-${stage}-backfill/*"],
         )
       }]
     )
-    error_message = "scheduleのCRUDを共通groupと削除待ちの旧groupに限定し、group削除に要するgroup配下のDeleteScheduleを含める。"
+    error_message = "scheduleのCRUDを共通groupのbackfill名に限定し、group削除に要するgroup配下のDeleteScheduleを含める。"
   }
   assert {
     condition = (
       [for s in jsondecode(aws_iam_policy.apply_backfill.policy).Statement : s if s.Sid == "ManageBackfillScheduleGroups"] == [{
-        Sid    = "ManageBackfillScheduleGroups", Effect = "Allow",
-        Action = ["scheduler:CreateScheduleGroup", "scheduler:GetScheduleGroup", "scheduler:DeleteScheduleGroup", "scheduler:ListTagsForResource", "scheduler:TagResource", "scheduler:UntagResource"],
-        Resource = concat(
-          ["arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-backfill"],
-          [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-${stage}-backfill"],
-        )
+        Sid      = "ManageBackfillScheduleGroups", Effect = "Allow",
+        Action   = ["scheduler:CreateScheduleGroup", "scheduler:GetScheduleGroup", "scheduler:DeleteScheduleGroup", "scheduler:ListTagsForResource", "scheduler:TagResource", "scheduler:UntagResource"],
+        Resource = ["arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-backfill"]
       }]
     )
-    error_message = "groupの作成・削除・参照・タグ管理を共通groupと削除待ちの旧groupだけに限定する。"
+    error_message = "groupの作成・削除・参照・タグ管理を共通groupだけに限定する。"
   }
 }
 

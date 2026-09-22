@@ -1,6 +1,6 @@
 # IAMロールの概念別統合
 
-Status: 第一歩（backfill）を実装済み（2026-09-22）。本番適用と旧boundaryの撤去は未実施。配信・AI分析・外部取得は未着手。
+Status: 第一歩（backfill）を実装済み（2026-09-22）。本番適用済みで、旧boundaryも撤去済み。配信・AI分析・外部取得は未着手。
 
 ## Work Definition
 
@@ -30,7 +30,7 @@ Status: 第一歩（backfill）を実装済み（2026-09-22）。本番適用と
 
 ## Implementation
 
-- 救済（backfill）: 段別ロール6本・boundary 6本を `${name_prefix}-backfill-lambda`／`-scheduler` とboundary 2本へ統合。`apply_role_creation` は6,136→5,380字、`apply_pass_role` は5,148→4,448字、`apply_backfill` は4,138→3,074字（テスト用prefix）。
+- 救済（backfill）: 段別ロール6本・boundary 6本を `${name_prefix}-backfill-lambda`／`-scheduler` とboundary 2本へ統合。`apply_role_creation` は6,136→5,380字、`apply_pass_role` は5,148→4,448字、`apply_backfill` は4,138→3,074字（テスト用prefix）。切替後に段別の旧boundary 6本と旧schedule／groupの許可を撤去した。
 - 配信、AI分析、外部取得: 未着手。
 
 ## Verification
