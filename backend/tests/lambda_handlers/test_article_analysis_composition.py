@@ -1,5 +1,6 @@
 """工程別の設定・SDK・Consumerが共通ライフサイクルへ正しく接続されることを確認する。"""
 
+import json
 from contextlib import asynccontextmanager
 from importlib import import_module
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pydantic import SecretStr
 
+from app.analysis.logging import create_article_analysis_logger
 from app.lambda_handlers import article_analysis_lifecycle as lifecycle
 
 pytestmark = pytest.mark.unit
@@ -60,8 +62,19 @@ def wiring(request, monkeypatch):
 
     client_factory = Mock(side_effect=open_client)
     monkeypatch.setattr(module, f"open_{provider}_client", client_factory)
-    log = Mock()
-    monkeypatch.setattr(module, "logger", log)
+    open_consumer = getattr(module, f"open_{stage}_consumer")
+    log = None
+    if stage == "assessment":
+
+        def open_consumer(settings):
+            return module.open_assessment_consumer(
+                settings,
+                logger=create_article_analysis_logger().bind(stage=stage),
+            )
+
+    else:
+        log = Mock()
+        monkeypatch.setattr(module, "logger", log)
     return SimpleNamespace(
         module=module,
         stage=stage,
@@ -74,7 +87,7 @@ def wiring(request, monkeypatch):
         create_engine=create_engine,
         open_client=client_factory,
         log=log,
-        open=getattr(module, f"open_{stage}_consumer"),
+        open=open_consumer,
     )
 
 
@@ -133,7 +146,7 @@ async def test_builds_real_consumer_with_borrowed_dependencies(wiring):
     ],
 )
 async def test_initialization_diagnostics_preserve_stage_identity(
-    wiring, monkeypatch, dependency, expected_stage
+    wiring, monkeypatch, capsys, dependency, expected_stage
 ):
     """工程固有の診断名を維持し、AI準備の診断段階を共通名で記録する。"""
     original = RuntimeError("private-initialization")
@@ -154,8 +167,17 @@ async def test_initialization_diagnostics_preserve_stage_identity(
         async with wiring.open(wiring.settings):
             pytest.fail("初期化失敗時に貸し出してはいけない")
     assert caught.value is original
-    wiring.log.warning.assert_called_once_with(
-        f"{wiring.stage}_initialization_failed",
-        stage=expected_stage,
-        error_class="builtins.RuntimeError",
-    )
+    if wiring.stage == "assessment":
+        log_entry = json.loads(capsys.readouterr().out)
+        assert log_entry["event"] == "assessment_initialization_failed"
+        assert log_entry["stage"] == "assessment"
+        assert log_entry["operation"] == expected_stage
+        assert log_entry["level"] == "error"
+        assert log_entry["error_class"] == "builtins.RuntimeError"
+        assert log_entry["error_message"] == "private-initialization"
+    else:
+        wiring.log.warning.assert_called_once_with(
+            f"{wiring.stage}_initialization_failed",
+            stage=expected_stage,
+            error_class="builtins.RuntimeError",
+        )
