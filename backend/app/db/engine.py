@@ -297,7 +297,7 @@ def create_migration_engine(
     )
 
 
-type BackfillStage = Literal["curation", "assessment", "embedding"]
+type BackfillStage = Literal["curation", "assessment", "embedding", "completion"]
 
 
 def create_backfill_engine(

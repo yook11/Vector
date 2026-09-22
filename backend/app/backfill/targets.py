@@ -5,6 +5,7 @@ from datetime import datetime
 
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.curation.events import ArticleCuratedSignal
+from app.collection.article_acquisition.events import IncompleteArticleRecorded
 from app.collection.events import AnalyzableArticleCreated
 from app.collection.sources.source_name import SourceName
 
@@ -14,7 +15,7 @@ class BackfillTarget:
     """backfill が enqueue と監査に使う対象 snapshot。"""
 
     target_id: int
-    analyzable_article_id: int
+    analyzable_article_id: int | None
     source_name: SourceName | None
 
 
@@ -24,4 +25,9 @@ class BackfillEventTarget:
 
     target: BackfillTarget
     occurred_at: datetime
-    payload: AnalyzableArticleCreated | ArticleCuratedSignal | ArticleAssessedInScope
+    payload: (
+        AnalyzableArticleCreated
+        | ArticleCuratedSignal
+        | ArticleAssessedInScope
+        | IncompleteArticleRecorded
+    )

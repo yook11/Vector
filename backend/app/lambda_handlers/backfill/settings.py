@@ -27,6 +27,7 @@ class BackfillConnectionSettings(DatabaseConnectionSettings):
         "sqs_article_curation_queue_url",
         "sqs_article_assessment_queue_url",
         "sqs_article_embedding_queue_url",
+        "sqs_article_completion_queue_url",
         check_fields=False,
     )
     @classmethod
@@ -55,3 +56,8 @@ class AssessmentBackfillSettings(BackfillConnectionSettings):
 class EmbeddingBackfillSettings(BackfillConnectionSettings):
     sqs_article_embedding_queue_url: str = Field(min_length=1)
     backfill_embeddings_enabled: bool = True
+
+
+class CompletionBackfillSettings(BackfillConnectionSettings):
+    sqs_article_completion_queue_url: str = Field(min_length=1)
+    backfill_completions_enabled: bool = True

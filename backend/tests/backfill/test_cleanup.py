@@ -7,9 +7,11 @@ import pytest
 from sqlalchemy import func, select
 
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.audit.stages.curation import CurationAuditRepository
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.backfill.cleanup import (
+    close_aged_out_completions,
     delete_aged_out_curations,
     exclude_aged_out_assessments,
     exclude_aged_out_embeddings,
@@ -20,8 +22,14 @@ from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
     EmbeddingBackfillExclusion,
 )
+from app.models.incomplete_article import IncompleteArticle
 from app.models.pipeline_event import PipelineEvent
-from tests.backfill.helpers import complete_target, seed_target
+from tests.backfill.helpers import (
+    complete_target,
+    seed_target,
+    target_exists,
+    target_is_pending,
+)
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
 CUTOFF = NOW - timedelta(days=7)
@@ -32,6 +40,11 @@ CASES = [
         "embedding",
         exclude_aged_out_embeddings,
         "analyzed_article_ids_aged_out_embedding",
+    ),
+    (
+        "completion",
+        close_aged_out_completions,
+        "incomplete_article_ids_aged_out_completion",
     ),
 ]
 
@@ -118,7 +131,7 @@ async def test_completion_between_selection_and_lock_is_preserved(
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-    assert await db_session.get(AnalyzableArticleRecord, target.article_id) is not None
+    assert await target_exists(db_session, target, stage)
     assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 0
 
 
@@ -162,7 +175,7 @@ async def test_cleanup_waits_for_uncommitted_completion(
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-    assert await db_session.get(AnalyzableArticleRecord, target.article_id) is not None
+    assert await target_exists(db_session, target, stage)
     assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 0
 
 
@@ -187,6 +200,12 @@ async def test_cleanup_waits_for_uncommitted_completion(
             exclude_aged_out_embeddings,
             EmbeddingAuditRepository,
             "append_backfill_embedding_aged_out",
+        ),
+        (
+            "completion",
+            close_aged_out_completions,
+            ArticleCompletionAuditRepository,
+            "append_backfill_completion_aged_out",
         ),
     ],
 )
@@ -218,7 +237,7 @@ async def test_audit_failure_rolls_back_cleanup(
     monkeypatch.setattr(audit_class, audit_method, fail_after_audit)
     with pytest.raises(RuntimeError, match="audit failed"):
         await cleanup(session_factory, created_before=CUTOFF)
-    assert await db_session.get(AnalyzableArticleRecord, target.article_id) is not None
+    assert await target_is_pending(db_session, target, stage)
     assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 0
     assert (
         await db_session.scalar(
@@ -260,11 +279,18 @@ async def test_expired_selection_rechecks_disappeared_target(
 
     async def remove_after_selection(self, **kwargs):
         ids = await original(self, **kwargs)
-        await db_session.execute(
-            delete(AnalyzableArticleRecord).where(
-                AnalyzableArticleRecord.id == target.article_id
+        if stage == "completion":
+            await db_session.execute(
+                delete(IncompleteArticle).where(
+                    IncompleteArticle.id == target.target_id
+                )
             )
-        )
+        else:
+            await db_session.execute(
+                delete(AnalyzableArticleRecord).where(
+                    AnalyzableArticleRecord.id == target.article_id
+                )
+            )
         await db_session.commit()
         return ids
 
@@ -280,6 +306,7 @@ async def test_expired_selection_rechecks_disappeared_target(
         ("curation", delete_aged_out_curations, 200),
         ("assessment", exclude_aged_out_assessments, 50),
         ("embedding", exclude_aged_out_embeddings, 50),
+        ("completion", close_aged_out_completions, 50),
     ],
 )
 async def test_cleanup_obeys_per_run_limit(
@@ -296,3 +323,28 @@ async def test_cleanup_obeys_per_run_limit(
         )
     assert await cleanup(session_factory, created_before=CUTOFF) == limit
     assert await cleanup(session_factory, created_before=CUTOFF) == 1
+
+
+@pytest.mark.asyncio
+async def test_completion_aged_out_closes_row_with_audit(
+    db_session, session_factory, sample_source, sample_categories
+):
+    """期限切れの未完成行は削除せずclosedにし、打ち切りの監査を同じ取引で残す。"""
+    target = await seed_target(
+        db_session,
+        sample_source,
+        sample_categories[0],
+        "completion",
+        CUTOFF - timedelta(days=1),
+    )
+    assert await close_aged_out_completions(session_factory, created_before=CUTOFF) == 1
+    incomplete = await db_session.get(IncompleteArticle, target.target_id)
+    assert incomplete.status == "closed"
+    assert incomplete.leased_until is None
+    event = (await db_session.execute(select(PipelineEvent))).scalar_one()
+    assert event.stage == "completion"
+    assert event.outcome_code == "backfill_completion_aged_out"
+    assert event.source_id == sample_source.id
+    assert event.payload["incomplete_article_id"] == target.target_id
+    assert event.payload["source_name"] == str(sample_source.name)
+    assert await close_aged_out_completions(session_factory, created_before=CUTOFF) == 0

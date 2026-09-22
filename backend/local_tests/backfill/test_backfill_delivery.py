@@ -5,6 +5,9 @@ import asyncio
 import pytest
 
 from app.lambda_handlers.assessment.event import parse_curated_signal_event
+from app.lambda_handlers.completion.event import (
+    parse_incomplete_article_recorded_event,
+)
 from app.lambda_handlers.curation.event import parse_analyzable_article_created_event
 from app.lambda_handlers.embedding.event import parse_assessed_in_scope_event
 from local_tests.backfill.support import (
@@ -14,6 +17,7 @@ from local_tests.backfill.support import (
     seed_analysis,
     seed_article,
     seed_curation,
+    seed_incomplete_article,
 )
 
 
@@ -66,6 +70,23 @@ async def test_embedding_delivers_saved_assessment(system_database, delivery):
         "analyzed_article_id": analyzed_id,
     }
     assert event.occurred_at == ANALYZED_AT
+
+
+@pytest.mark.asyncio
+async def test_completion_delivers_saved_incomplete_article(system_database, delivery):
+    """補完キューにclosedでない未完成行の保存事実が配送される。"""
+    incomplete_id = await seed_incomplete_article(
+        system_database, "https://example.com/completion"
+    )
+    await asyncio.to_thread(delivery.handler.completion_handler, {}, None)
+    assert len(delivery.batches) == 1
+    batch = delivery.batches[0]
+    assert batch["QueueUrl"] == "https://sqs.invalid/completion"
+    assert len(batch["Entries"]) == 1
+    event = parse_incomplete_article_recorded_event(batch["Entries"][0]["MessageBody"])
+    assert event.payload.incomplete_article_id == incomplete_id
+    assert event.payload.source_id > 0
+    assert event.occurred_at == CREATED_AT
 
 
 @pytest.mark.asyncio

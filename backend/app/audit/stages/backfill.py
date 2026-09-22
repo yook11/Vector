@@ -15,13 +15,17 @@ from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
 from app.collection.sources.source_name import SourceName
 
-BackfillStage = Literal["curate", "assess", "embed"]
-BackfillTargetKind = Literal["article", "curation", "analyzed_article"]
+BackfillStage = Literal["curate", "assess", "embed", "complete"]
+BackfillTargetKind = Literal[
+    "article", "curation", "analyzed_article", "incomplete_article"
+]
 
 _STAGE_BY_BACKFILL_STAGE: dict[BackfillStage, Stage] = {
     "curate": Stage.BACKFILL_CURATE,
     "assess": Stage.BACKFILL_ASSESS,
     "embed": Stage.BACKFILL_EMBED,
+    # 補完救済の監査は補完本体と同じstageへ残す (専用stageを追加しない)。
+    "complete": Stage.COMPLETION,
 }
 
 

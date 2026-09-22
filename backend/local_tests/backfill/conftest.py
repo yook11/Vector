@@ -46,6 +46,7 @@ def delivery(backfill_connection, monkeypatch):
         ("curation", "curations"),
         ("assessment", "assessments"),
         ("embedding", "embeddings"),
+        ("completion", "completions"),
     ]:
         monkeypatch.setenv(
             f"SQS_ARTICLE_{stage.upper()}_QUEUE_URL", f"https://sqs.invalid/{stage}"

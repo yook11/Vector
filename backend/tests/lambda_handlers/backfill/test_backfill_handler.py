@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from app.lambda_handlers.backfill import failure_recorder
 from app.lambda_handlers.backfill.settings import (
     AssessmentBackfillSettings,
+    CompletionBackfillSettings,
     CurationBackfillSettings,
     EmbeddingBackfillSettings,
 )
@@ -23,6 +24,7 @@ SETTINGS = [
     ("curation", "curations", CurationBackfillSettings),
     ("assessment", "assessments", AssessmentBackfillSettings),
     ("embedding", "embeddings", EmbeddingBackfillSettings),
+    ("completion", "completions", CompletionBackfillSettings),
 ]
 
 

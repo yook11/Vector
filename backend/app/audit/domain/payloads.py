@@ -34,9 +34,11 @@ class BackfillPayload(BasePipelineEventPayload):
 
     kind: Literal["backfill"] = "backfill"
     source_name: SourceName | None = None
-    backfill_stage: Literal["curate", "assess", "embed"]
+    backfill_stage: Literal["curate", "assess", "embed", "complete"]
     run_id: str | None = None
-    target_kind: Literal["article", "curation", "analyzed_article"] | None = None
+    target_kind: (
+        Literal["article", "curation", "analyzed_article", "incomplete_article"] | None
+    ) = None
     target_id: int | None = None
     # daily_max は budget exhausted event 専用の「停止の閾値」(B 級 config snapshot)。
     daily_max: int | None = None

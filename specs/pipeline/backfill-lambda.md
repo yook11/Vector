@@ -7,18 +7,18 @@ DBの未完了状態から救済するbackfill本体を、工程別Lambdaで一�
 
 ## Interface
 
-`app.lambda_handlers.backfill` の `curation_handler`・`assessment_handler`・`embedding_handler` が `(event, context)` を受け取り、正常終了時は `None` を返す。
+`app.lambda_handlers.backfill` の `curation_handler`・`assessment_handler`・`embedding_handler`・`completion_handler` が `(event, context)` を受け取り、正常終了時は `None` を返す。
 入力eventから工程や時刻を選ばず、各入口が起動時に一度取得したUTC時刻を本体へ渡す。
 
 専用Settingsは `DATABASE_URL`・`AWS_REGION`・`DB_IAM_AUTH` と自工程の `SQS_ARTICLE_<STAGE>_QUEUE_URL` を要求する。
 IAM認証を必須とし、パスワード入りURLの拒否とproductionのTLS必須条件は既存設定層を利用する。
-`BACKFILL_CURATIONS_ENABLED`・`BACKFILL_ASSESSMENTS_ENABLED`・`BACKFILL_EMBEDDINGS_ENABLED` はそれぞれデフォルトtrue。明示的なfalseでは設定検証後に終了し、接続を生成しない。
+`BACKFILL_CURATIONS_ENABLED`・`BACKFILL_ASSESSMENTS_ENABLED`・`BACKFILL_EMBEDDINGS_ENABLED`・`BACKFILL_COMPLETIONS_ENABLED` はそれぞれデフォルトtrue。明示的なfalseでは設定検証後に終了し、接続を生成しない。
 アプリ全体のSettings・.env・AI接続設定・Redis設定を読み込まない。
 
 ## Invariants
 
 - 呼び出しごとにRDS署名クライアント・engine・publisherを準備する。engineのpoolは1接続、overflowは0、接続・コマンド・pool待機は各5秒。
-- DB接続識別名は `vector-backfill-curation`・`vector-backfill-assessment`・`vector-backfill-embedding` とする。
+- DB接続識別名は `vector-backfill-curation`・`vector-backfill-assessment`・`vector-backfill-embedding`・`vector-backfill-completion` とする。
 - session factoryは開閉だけを担い、記事単位のトランザクションと監査はbackfill本体が所有する。
 - 工程別の既存イベント・本文builder・送信先をRoutedEventPublisherとSqsSenderへ渡す。SQSクライアントはSqsSenderが送信ごとに解放する。
 - 正常・初期化失敗・本体失敗・キャンセル時も、取得済みengineとRDSクライアントを逆順に解放する。

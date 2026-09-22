@@ -67,14 +67,14 @@ run "lambda_boundary_limits_database_queues_logs_and_eni" {
     condition = (
       jsondecode(aws_iam_policy.backfill_lambda_boundary.policy).Statement == [
         { Sid = "RdsIamAuthAsApp", Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app" },
-        { Sid = "SendPipelineEvents", Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "curation", "embedding"] : "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-${stage}"] },
-        { Sid = "WriteBackfillLogs", Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "curation", "embedding"] : "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/slice-test-${stage}-backfill:*"] },
+        { Sid = "SendPipelineEvents", Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-${stage}"] },
+        { Sid = "WriteBackfillLogs", Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/slice-test-${stage}-backfill:*"] },
         { Sid = "ManageLambdaNetworkInterfaces", Effect = "Allow", Action = local.outbox_lambda_eni_actions, Resource = "*" },
-        { Sid = "DenyNetworkManagementFromFunctionCode", Effect = "Deny", Action = local.outbox_lambda_eni_actions, Resource = "*", Condition = { ArnEquals = { "lambda:SourceFunctionArn" = [for stage in ["assessment", "curation", "embedding"] : local.backfill_lambda_arns[stage]] } } },
+        { Sid = "DenyNetworkManagementFromFunctionCode", Effect = "Deny", Action = local.outbox_lambda_eni_actions, Resource = "*", Condition = { ArnEquals = { "lambda:SourceFunctionArn" = [for stage in ["assessment", "completion", "curation", "embedding"] : local.backfill_lambda_arns[stage]] } } },
         local.boundary_no_escalation_statement,
       ]
     )
-    error_message = "実行権限の天井をbackfillの3キュー・3ロググループとvector_appに限定し、ENIコード実行と権限昇格を拒否する。"
+    error_message = "実行権限の天井をbackfillの4キュー・4ロググループとvector_appに限定し、ENIコード実行と権限昇格を拒否する。"
   }
 }
 
@@ -83,11 +83,11 @@ run "scheduler_boundary_invokes_only_backfill_functions" {
   assert {
     condition = (
       jsondecode(aws_iam_policy.backfill_scheduler_boundary.policy).Statement == [
-        { Sid = "InvokeBackfillOnly", Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [for stage in ["assessment", "curation", "embedding"] : local.backfill_lambda_arns[stage]] },
+        { Sid = "InvokeBackfillOnly", Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : local.backfill_lambda_arns[stage]] },
         local.boundary_no_escalation_statement,
       ]
     )
-    error_message = "Schedulerの天井にはbackfillの3関数のInvokeFunctionのみを許可する。"
+    error_message = "Schedulerの天井にはbackfillの4関数のInvokeFunctionのみを許可する。"
   }
 }
 
@@ -127,7 +127,7 @@ run "ci_schedule_management_is_limited_to_backfill_groups" {
         Sid    = "ManageBackfillSchedules", Effect = "Allow",
         Action = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"],
         Resource = concat(
-          [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-backfill/slice-test-${stage}-backfill"],
+          [for stage in ["assessment", "completion", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-backfill/slice-test-${stage}-backfill"],
           ["arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-backfill/*"],
         )
       }]

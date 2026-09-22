@@ -15,6 +15,7 @@ from app.models.backfill_exclusion import (
     EmbeddingBackfillExclusion,
 )
 from app.models.curation_noise import CurationNoise
+from app.models.incomplete_article import IncompleteArticle
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
@@ -25,7 +26,14 @@ CASES = [
     ("curation", service.backfill_curations),
     ("assessment", service.backfill_assessments),
     ("embedding", service.backfill_embeddings),
+    ("completion", service.backfill_completions),
 ]
+PAYLOAD_KEY = {
+    "curation": "analyzable_article_id",
+    "assessment": "curation_id",
+    "embedding": "analyzed_article_id",
+    "completion": "incomplete_article_id",
+}
 
 
 @pytest.mark.asyncio
@@ -43,11 +51,11 @@ async def test_requeued_target_audit_preserves_source_name(
     event = (
         await db_session.execute(
             select(PipelineEvent).where(
-                PipelineEvent.outcome_code == "backfill_item_enqueued",
-                PipelineEvent.article_id == target.article_id,
+                PipelineEvent.outcome_code == "backfill_item_enqueued"
             )
         )
     ).scalar_one()
+    assert event.article_id == target.article_id
     assert event.payload["target_id"] == target.target_id
     assert event.payload["source_name"] == str(sample_source.name)
 
@@ -74,11 +82,7 @@ async def test_window_and_saved_event_facts(
     publisher = RecordingPublisher()
     await entry(session_factory, publisher, enabled=True, now=NOW)
     expected = [records[3], records[2]]
-    key = {
-        "curation": "analyzable_article_id",
-        "assessment": "curation_id",
-        "embedding": "analyzed_article_id",
-    }[stage]
+    key = PAYLOAD_KEY[stage]
     assert [item.payload[key] for item in publisher.envelopes] == [
         item.target_id for item in expected
     ]
@@ -92,6 +96,10 @@ async def test_window_and_saved_event_facts(
     if stage == "embedding":
         assert [item.payload["curation_id"] for item in publisher.envelopes] == [
             item.curation_id for item in expected
+        ]
+    if stage == "completion":
+        assert [item.payload["source_id"] for item in publisher.envelopes] == [
+            sample_source.id for _ in expected
         ]
 
 
@@ -126,12 +134,17 @@ async def test_completed_and_excluded_targets_are_not_sent(
                 investor_take="take",
             )
         )
-    else:
+    elif stage == "embedding":
         db_session.add(
             EmbeddingBackfillExclusion(
                 analyzed_article_id=other.target_id,
                 reason_code="backfill_embedding_aged_out",
             )
+        )
+    else:
+        # 補完成功は未完成行を削除するため、消えた行は再投入の対象にならない。
+        await db_session.delete(
+            await db_session.get(IncompleteArticle, other.target_id)
         )
     if stage == "assessment":
         excluded = await seed_target(
@@ -171,12 +184,7 @@ async def test_run_limit_keeps_oldest_fifty(
     ]
     publisher = RecordingPublisher()
     await entry(session_factory, publisher, enabled=True, now=NOW)
-    key = {
-        "curation": "analyzable_article_id",
-        "assessment": "curation_id",
-        "embedding": "analyzed_article_id",
-    }[stage]
-    assert [item.payload[key] for item in publisher.envelopes] == [
+    assert [item.payload[PAYLOAD_KEY[stage]] for item in publisher.envelopes] == [
         item.target_id for item in reversed(records[1:])
     ]
 
