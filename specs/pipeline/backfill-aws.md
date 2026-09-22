@@ -44,7 +44,7 @@ applyの明示digestはbackend ECRに存在することも確認する。state�
 
 2026-09-22に段別のロール6本を段共通の2本へ統合した。実行ロール `${name_prefix}-backfill-lambda` とSchedulerロール `${name_prefix}-backfill-scheduler` を、それぞれ専用のboundaryへ固定する。実行boundaryは `vector_app` でのRDS接続、3工程の `article-*` キューへの送信、3工程のロググループ、関数コードからのENI操作拒否を持ち、Scheduler boundaryは3関数の起動だけを許す。schedule groupは `${name_prefix}-backfill` 1つに3 scheduleを収容し、Schedulerの信頼元はSourceAccountとこのgroupに限定する。工程を足すときは `backfill_stages` に加えるだけで、ロール・boundary・CIの許可表は増えない。
 
-CIにはbackfillだけのLambda・非同期実行設定・schedule管理権限を持たせる。段別の旧boundaryと旧schedule／groupの管理許可は、本体で旧ロールと旧groupを削除するまで残し、後続PRで撤去する。PassRoleのサービス対応とapp rolloutからの分離は維持する。統合の方針は[IAMロールの概念別統合](../platform/iam-role-consolidation.md)を参照する。
+CIにはbackfillだけのLambda・非同期実行設定・schedule管理権限を持たせる。段別の旧boundaryと旧schedule／groupの管理許可は、本体の切替後に撤去した。段共通boundaryのTerraformラベル `*_shared` は、旧アドレスがstateから消えた後に `moved` で元の名前へ戻す。PassRoleのサービス対応とapp rolloutからの分離は維持する。統合の方針は[IAMロールの概念別統合](../platform/iam-role-consolidation.md)を参照する。
 
 ## 検証の分担
 
