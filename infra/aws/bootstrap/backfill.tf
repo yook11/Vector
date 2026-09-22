@@ -1,5 +1,5 @@
 locals {
-  backfill_stages      = toset(["curation", "assessment", "embedding"])
+  backfill_stages      = toset(["curation", "assessment", "embedding", "completion"])
   backfill_lambda_arns = { for stage in local.backfill_stages : stage => "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-${stage}-backfill" }
   # 救済(backfill)は段共通の実行ロール・Schedulerロールで動く。段を足すときは列挙に加えるだけで許可表は伸びない。
   backfill_lambda_role_arn    = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-backfill-lambda"

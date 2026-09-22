@@ -9,6 +9,9 @@ locals {
     embedding = {
       schedule = "cron(10,40 * * * ? *)"
     }
+    completion = {
+      schedule = "cron(15,45 * * * ? *)"
+    }
   }
   backfill_names = { for stage in keys(local.backfill_stages) : stage => "${var.name_prefix}-${stage}-backfill" }
   backfill_arns  = { for stage, name in local.backfill_names : stage => "arn:aws:lambda:${var.region}:${local.account_id}:function:${name}" }

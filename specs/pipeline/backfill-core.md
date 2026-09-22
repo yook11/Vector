@@ -14,7 +14,7 @@
 
 ## Interface
 
-`app.backfill.service`に`backfill_curations`・`backfill_assessments`・`backfill_embeddings`を用意する。いずれも`session_factory, publisher, *, enabled, now`を受け取り、正常時は`None`、続行不能な障害は例外を返す。`now`はタイムゾーン付き日時を呼び出し元から渡す。
+`app.backfill.service`に`backfill_curations`・`backfill_assessments`・`backfill_embeddings`・`backfill_completions`を用意する。いずれも`session_factory, publisher, *, enabled, now`を受け取り、正常時は`None`、続行不能な障害は例外を返す。`now`はタイムゾーン付き日時を呼び出し元から渡す。
 
 DBと送信クライアントの生成・終了、設定取得は呼び出し元の責任とする。publisherは工程ごとの既存本文builderとキューを指定した`RoutedEventPublisher`に`SqsSender`を組み合わせる。新本体にTaskiq・Lambda・Redisの依存を持たせない。
 
@@ -23,7 +23,7 @@ DBと送信クライアントの生成・終了、設定取得は呼び出し元
 - 順序：有効設定 → 期限切れ整理 → backlog総数と対象の取得 → 最大10件ずつ送信 → 結果記録。
 - 無効ならDB照会・整理・送信を行わない。日次予算とstage holdは新経路に設けない。
 - 全工程で元記事の`created_at`を基準に、`now - 7日 <= created_at < now - 30分`を救済する。古い記事を優先し、一回50件まで送る。同時刻は対象ID順とする。
-- `created_at < now - 7日`は期限切れとする。curationは一回200件まで削除し、投資判定・embeddingは一回50件まで既存の救済除外行を作る。
+- `created_at < now - 7日`は期限切れとする。curationは一回200件まで削除し、投資判定・embeddingは一回50件まで既存の救済除外行を作る。補完は一回50件まで未完成行を`closed`へ更新し、行は残す。
 - 整理は一記事一トランザクションとし、親となる対象行をロックした後に新たな照会で未完了・期限切れを再確認する。完了・削除・除外済みならスキップする。整理と監査を同時にcommitし、失敗時は両方をrollbackする。
 - 対象・件数のSELECTは同一の完了判定を使うが、並行更新による観測総数と抽出件数の差は許容する。
 - SQS送信時にはDBセッションと行ロックを保持しない。処理中状態・SQS・DLQは照会しない。
@@ -35,6 +35,7 @@ DBと送信クライアントの生成・終了、設定取得は呼び出し元
 | curation | article.analyzable_created | analyzable_article_id | 元記事created_at |
 | 投資判定 | article.curated_signal | analyzable_article_id・curation_id | curationのextracted_at |
 | embedding | article.assessed_in_scope | curation_id・analyzed_article_id | 分析結果のanalyzed_at |
+| 補完 | article.incomplete_recorded | source_id・incomplete_article_id | 未完成行のcreated_at |
 
 対象ごと・再投入ごとに新しいUUIDをevent_idに使う。既存Outbox行の再送ではなく、DBに残る事実から受信契約に沿って再構成する。Outboxの検索・追加・状態更新は行わない。
 

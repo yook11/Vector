@@ -80,6 +80,7 @@ run "lambda_configuration_decrypt_is_restricted" {
             ArnNotEquals = {
               "kms:EncryptionContext:aws:lambda:FunctionArn" = [
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-assessment-backfill",
+                "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-completion-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-embedding-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-acquisition-consumer",
@@ -107,6 +108,7 @@ run "lambda_configuration_decrypt_is_restricted" {
             ArnEquals = {
               "kms:EncryptionContext:aws:lambda:FunctionArn" = [
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-assessment-backfill",
+                "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-completion-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-embedding-backfill",
                 "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-acquisition-consumer",

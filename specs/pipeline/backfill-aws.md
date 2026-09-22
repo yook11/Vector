@@ -17,6 +17,7 @@
 | curation | `${name_prefix}-curation-backfill` | `curation_handler` | `cron(0,30 * * * ? *)` |
 | assessment | `${name_prefix}-assessment-backfill` | `assessment_handler` | `cron(5,35 * * * ? *)` |
 | embedding | `${name_prefix}-embedding-backfill` | `embedding_handler` | `cron(10,40 * * * ? *)` |
+| completion | `${name_prefix}-completion-backfill` | `completion_handler` | `cron(15,45 * * * ? *)` |
 
 handlerのパッケージは `app.lambda_handlers.backfill`。backend ECRイメージをarm64・512MB・120秒・予約同時実行数1で利用する。既存relayのprivate subnetとsecurity groupを再利用し、RDSは `vector_app` のIAM認証、自工程のSQS送信だけを許可する。環境変数はproduction、DB接続、IAM認証、自工程のキューと有効設定のみで、AWSリージョンはLambdaの標準環境変数を使用する。
 
@@ -42,7 +43,7 @@ applyの明示digestはbackend ECRに存在することも確認する。state�
 
 ## bootstrap
 
-2026-09-22に段別のロール6本を段共通の2本へ統合した。実行ロール `${name_prefix}-backfill-lambda` とSchedulerロール `${name_prefix}-backfill-scheduler` を、それぞれ専用のboundaryへ固定する。実行boundaryは `vector_app` でのRDS接続、3工程の `article-*` キューへの送信、3工程のロググループ、関数コードからのENI操作拒否を持ち、Scheduler boundaryは3関数の起動だけを許す。schedule groupは `${name_prefix}-backfill` 1つに3 scheduleを収容し、Schedulerの信頼元はSourceAccountとこのgroupに限定する。工程を足すときは `backfill_stages` に加えるだけで、ロール・boundary・CIの許可表は増えない。
+2026-09-22に段別のロール6本を段共通の2本へ統合した。実行ロール `${name_prefix}-backfill-lambda` とSchedulerロール `${name_prefix}-backfill-scheduler` を、それぞれ専用のboundaryへ固定する。実行boundaryは `vector_app` でのRDS接続、4工程の `article-*` キューへの送信、4工程のロググループ、関数コードからのENI操作拒否を持ち、Scheduler boundaryは4関数の起動だけを許す。schedule groupは `${name_prefix}-backfill` 1つに4 scheduleを収容し、Schedulerの信頼元はSourceAccountとこのgroupに限定する。工程を足すときは `backfill_stages` に加えるだけで、ロール・boundary・CIの許可表は増えない。
 
 CIにはbackfillだけのLambda・非同期実行設定・schedule管理権限を持たせる。段別の旧boundaryと旧schedule／groupの管理許可は、本体の切替後に撤去した。段共通boundaryのTerraformラベルは、旧アドレスがstateから消えた後に `moved` で `backfill_lambda_boundary`／`backfill_scheduler_boundary` へ戻した。PassRoleのサービス対応とapp rolloutからの分離は維持する。統合の方針は[IAMロールの概念別統合](../platform/iam-role-consolidation.md)を参照する。
 

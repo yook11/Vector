@@ -147,15 +147,30 @@ override_resource {
 
 override_resource {
   override_during = plan
+  target          = aws_lambda_function.backfill["completion"]
+  values          = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-completion-backfill" }
+}
+override_resource {
+  override_during = plan
+  target          = aws_cloudwatch_log_group.backfill["completion"]
+  values          = { arn = "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/slice-test-completion-backfill" }
+}
+override_resource {
+  override_during = plan
+  target          = aws_sqs_queue.outbox["completion"]
+  values          = { arn = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-completion", url = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/slice-test-article-completion" }
+}
+override_resource {
+  override_during = plan
   target          = aws_security_group.outbox_relay
   values          = { id = "sg-00000000000000010" }
 }
 
-run "first_deployment_enables_all_three_stages" {
+run "first_deployment_enables_all_four_stages" {
   command = plan
   assert {
-    condition     = toset(keys(aws_lambda_function.backfill)) == toset(["curation", "assessment", "embedding"]) && alltrue([for schedule in aws_scheduler_schedule.backfill : schedule.state == "ENABLED"])
-    error_message = "3工程のイメージを指定した初回は全工程を有効にする。"
+    condition     = toset(keys(aws_lambda_function.backfill)) == toset(["curation", "assessment", "embedding", "completion"]) && alltrue([for schedule in aws_scheduler_schedule.backfill : schedule.state == "ENABLED"])
+    error_message = "4工程の初回配置は全工程を有効にする。"
   }
   assert {
     condition = alltrue([for stage, function in aws_lambda_function.backfill :
@@ -182,6 +197,7 @@ run "scheduled_invocations_keep_offsets_and_target_pairings" {
       curation   = "cron(0,30 * * * ? *)"
       assessment = "cron(5,35 * * * ? *)"
       embedding  = "cron(10,40 * * * ? *)"
+      completion = "cron(15,45 * * * ? *)"
       } && alltrue([for stage, schedule in aws_scheduler_schedule.backfill :
         schedule.schedule_expression_timezone == "UTC" &&
         schedule.flexible_time_window[0].mode == "OFF" &&
@@ -232,16 +248,16 @@ run "execution_role_and_endpoint_allow_only_backfill_queues" {
       alltrue([for function in aws_lambda_function.backfill : function.role == aws_iam_role.backfill.arn]) &&
       jsondecode(aws_iam_role_policy.backfill.policy).Statement == [
         { Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app" },
-        { Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "curation", "embedding"] : aws_sqs_queue.outbox[stage].arn] },
-        { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "curation", "embedding"] : "${aws_cloudwatch_log_group.backfill[stage].arn}:*"] },
+        { Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : aws_sqs_queue.outbox[stage].arn] },
+        { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : "${aws_cloudwatch_log_group.backfill[stage].arn}:*"] },
         { Effect = "Allow", Action = local.outbox_relay_eni_actions, Resource = "*" },
-        { Sid = "DenyEniOperationsFromFunctionCode", Effect = "Deny", Action = local.outbox_relay_eni_actions, Resource = "*", Condition = { ArnEquals = { "lambda:SourceFunctionArn" = [for stage in ["assessment", "curation", "embedding"] : local.backfill_arns[stage]] } } },
+        { Sid = "DenyEniOperationsFromFunctionCode", Effect = "Deny", Action = local.outbox_relay_eni_actions, Resource = "*", Condition = { ArnEquals = { "lambda:SourceFunctionArn" = [for stage in ["assessment", "completion", "curation", "embedding"] : local.backfill_arns[stage]] } } },
       ] &&
       [for statement in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement : statement if try(statement.Principal.AWS == aws_iam_role.backfill.arn, false)] == [
-        { Effect = "Allow", Principal = { AWS = aws_iam_role.backfill.arn }, Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "curation", "embedding"] : aws_sqs_queue.outbox[stage].arn] }
+        { Effect = "Allow", Principal = { AWS = aws_iam_role.backfill.arn }, Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : aws_sqs_queue.outbox[stage].arn] }
       ]
     )
-    error_message = "段共通の実行roleとendpointをbackfillの3キューへの送信だけに限定し、DBロールとENI拒否を維持する。"
+    error_message = "段共通の実行roleとendpointをbackfillの4キューへの送信だけに限定し、DBロールとENI拒否を維持する。"
   }
   assert {
     condition = alltrue([for policy in aws_sqs_queue_policy.outbox :
@@ -261,8 +277,8 @@ run "scheduler_trust_and_invocation_are_backfill_scoped" {
         Effect    = "Allow", Principal = { Service = "scheduler.amazonaws.com" }, Action = "sts:AssumeRole",
         Condition = { StringEquals = { "aws:SourceAccount" = "123456789012" }, ArnEquals = { "aws:SourceArn" = aws_scheduler_schedule_group.backfill.arn } }
       }] &&
-      jsondecode(aws_iam_role_policy.backfill_scheduler.policy).Statement == [{ Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [for stage in ["assessment", "curation", "embedding"] : local.backfill_arns[stage]] }]
+      jsondecode(aws_iam_role_policy.backfill_scheduler.policy).Statement == [{ Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : local.backfill_arns[stage]] }]
     )
-    error_message = "Schedulerの信頼元をaccountと共通groupに、呼び出しをbackfillの3関数に限定する。"
+    error_message = "Schedulerの信頼元をaccountと共通groupに、呼び出しをbackfillの4関数に限定する。"
   }
 }

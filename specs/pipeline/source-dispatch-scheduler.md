@@ -360,3 +360,5 @@ Problem: 旧cronが先行して新規保存を持つ並走状態を終え、供�
 検証: Ruff lint・format、変更範囲の単体150件、隔離コピーのtftest 38件（断言追加だけの状態で2件失敗、アラーム追加後に成功）。
 
 反映後の確認: applyとrollout後に追記する。
+
+補完救済（backfillのcompletion段）の配備後に補完Taskiqを撤去する。
