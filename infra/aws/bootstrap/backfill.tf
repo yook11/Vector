@@ -12,19 +12,29 @@ locals {
   backfill_schedule_group_wildcard_arn = "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-backfill/*"
   backfill_role_boundary_groups = {
     BackfillLambda = {
-      boundary   = aws_iam_policy.backfill_lambda_boundary_shared.arn
+      boundary   = aws_iam_policy.backfill_lambda_boundary.arn
       role_names = ["${var.name_prefix}-backfill-lambda"]
     }
     BackfillScheduler = {
-      boundary   = aws_iam_policy.backfill_scheduler_boundary_shared.arn
+      boundary   = aws_iam_policy.backfill_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-backfill-scheduler"]
     }
   }
   backfill_boundary_pairing_statements = [for key, statement in local.boundary_pairing_statements_by_group : statement if contains(keys(local.backfill_role_boundary_groups), key)]
 }
 
-# 段別boundaryの旧アドレスが state から消えた後のPRで、movedにより backfill_lambda_boundary へ改名する。
-resource "aws_iam_policy" "backfill_lambda_boundary_shared" {
+# 段別boundaryの撤去後に段共通boundaryを元のラベルへ戻す。本番へ適用済みになったら削除してよい。
+moved {
+  from = aws_iam_policy.backfill_lambda_boundary_shared
+  to   = aws_iam_policy.backfill_lambda_boundary
+}
+
+moved {
+  from = aws_iam_policy.backfill_scheduler_boundary_shared
+  to   = aws_iam_policy.backfill_scheduler_boundary
+}
+
+resource "aws_iam_policy" "backfill_lambda_boundary" {
   name        = "${var.name_prefix}-backfill-lambda-boundary"
   path        = "/${var.name_prefix}-ci/"
   description = "Ceiling for the backfill Lambda execution role."
@@ -72,7 +82,7 @@ resource "aws_iam_policy" "backfill_lambda_boundary_shared" {
   })
 }
 
-resource "aws_iam_policy" "backfill_scheduler_boundary_shared" {
+resource "aws_iam_policy" "backfill_scheduler_boundary" {
   name        = "${var.name_prefix}-backfill-scheduler-boundary"
   path        = "/${var.name_prefix}-ci/"
   description = "Ceiling for the backfill Scheduler execution role."
