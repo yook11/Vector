@@ -154,6 +154,25 @@ def test_declared_logger_uses_globally_configured_json_renderer(
     assert _SECRET not in rendered
 
 
+def test_zero_value_is_preserved_in_json_output(configure_chain) -> None:
+    """許可された項目の0は未取得として除外せず、JSONへ数値のまま出力する。"""
+    from app.log_policy import build_processors, create_policy_logger
+
+    configure_chain()
+    structlog.configure(
+        logger_factory=partial(
+            create_policy_logger, output_logger_factory=structlog.ReturnLoggerFactory()
+        ),
+        processors=build_processors(structlog.processors.JSONRenderer()),
+    )
+    logger = policy_logger("test", _RULES)
+
+    log_entry = json.loads(logger.info("completed", source_id=0))
+
+    assert type(log_entry["source_id"]) is int
+    assert log_entry["source_id"] == 0
+
+
 def test_declared_logger_uses_globally_configured_console_renderer(
     configure_chain,
 ) -> None:

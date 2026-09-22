@@ -3,10 +3,17 @@
 import json
 
 from app.analysis.curation.events import ArticleCuratedSignalEvent
+from app.shared.errors import ApplicationError
 
 
-class AssessmentMessageJsonInvalidError(Exception):
+class AssessmentMessageJsonInvalidError(ApplicationError):
     """SQS本文をJSONとして解析できない。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Assessment message JSON parsing failed",
+            details={"reason": "invalid_json"},
+        )
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

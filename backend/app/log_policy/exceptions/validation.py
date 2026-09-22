@@ -7,7 +7,17 @@ from typing import get_args
 from pydantic import ValidationError
 from pydantic_core import ErrorType
 
+from app.log_policy.exceptions.types import ConvertedException
+
 _VALIDATION_TYPES = frozenset(get_args(ErrorType))
+
+
+def convert_validation_exception(exc: ValidationError) -> ConvertedException:
+    """入力値を除いた検証メッセージを共通形式へ渡し、抽出失敗時は原文へ戻さない。"""
+    try:
+        return ConvertedException(message=extract_validation_message(exc))
+    except Exception:
+        return ConvertedException(message="[exception message unavailable]")
 
 
 def extract_validation_message(exc: ValidationError) -> str:

@@ -12,9 +12,6 @@ from pydantic import SecretStr
 from app.aws import ssm
 from app.db import iam
 from app.lambda_handlers import article_analysis_lifecycle as module
-from app.lambda_handlers.assessment.failure_recorder import (
-    AssessmentLambdaFailureRecorder,
-)
 
 pytestmark = pytest.mark.unit
 
@@ -22,8 +19,8 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def lifecycle(monkeypatch):
     order = []
-    log = Mock()
-    state = SimpleNamespace(order=order, log=log)
+    recorder = Mock(spec=module.ArticleAnalysisLifecycleRecorder)
+    state = SimpleNamespace(order=order, recorder=recorder)
 
     def secret(**kwargs):
         order.append("secret")
@@ -94,7 +91,7 @@ def lifecycle(monkeypatch):
         create_engine=state.create_engine,
         open_client=state.open_client,
         build_consumer=state.build_consumer,
-        failure_recorder=AssessmentLambdaFailureRecorder(log),
+        failure_recorder=recorder,
     )
 
     def open_consumer():
@@ -167,23 +164,9 @@ async def test_initialization_failure_closes_only_acquired_resources(
             pytest.fail("初期化失敗時に貸し出してはいけない")
     assert caught.value is original
     assert [event for event in lifecycle.order if event.endswith("_close")] == closed
-    lifecycle.log.warning.assert_called_once_with(
-        "assessment_initialization_failed",
-        stage=stage,
-        error_class="builtins.RuntimeError",
+    lifecycle.recorder.record_initialization_failure.assert_called_once_with(
+        stage, original
     )
-
-
-@pytest.mark.asyncio
-async def test_initialization_log_failure_preserves_original(lifecycle):
-    """診断出力が失敗しても初期化の元例外を保持する。"""
-    original = RuntimeError("original")
-    lifecycle.build_consumer.side_effect = original
-    lifecycle.log.warning.side_effect = RuntimeError("log-failed")
-    with pytest.raises(RuntimeError) as caught:
-        async with lifecycle.open():
-            pytest.fail("初期化失敗時に貸し出してはいけない")
-    assert caught.value is original
 
 
 @pytest.mark.asyncio
@@ -200,7 +183,7 @@ async def test_borrower_failure_is_not_initialization_failure(lifecycle, failure
         async with lifecycle.open():
             raise failure
     assert caught.value is failure
-    lifecycle.log.warning.assert_not_called()
+    assert not lifecycle.recorder.mock_calls
     assert lifecycle.order[-3:] == ["client_close", "engine_close", "rds_close"]
 
 
@@ -208,13 +191,8 @@ async def test_borrower_failure_is_not_initialization_failure(lifecycle, failure
 @pytest.mark.parametrize(
     "failure", [None, RuntimeError("original"), asyncio.CancelledError()]
 )
-@pytest.mark.parametrize("log_fails", [False, True])
-async def test_cleanup_failures_preserve_borrower_outcome(
-    lifecycle, failure, log_fails
-):
-    """通常の終了・ログ障害は後続解放を妨げず、利用結果を保持する。"""
-    if log_fails:
-        lifecycle.log.warning.side_effect = RuntimeError("private-log")
+async def test_cleanup_failures_preserve_borrower_outcome(lifecycle, failure):
+    """資源の終了障害は後続解放を妨げず、利用結果を保持する。"""
 
     async def run():
         async with lifecycle.open():
@@ -233,9 +211,9 @@ async def test_cleanup_failures_preserve_borrower_outcome(
     lifecycle.engines[0].dispose.assert_awaited_once()
     lifecycle.rds_clients[0].close.assert_called_once()
     assert [
-        call.kwargs["resource"] for call in lifecycle.log.warning.call_args_list
+        call.args[0]
+        for call in lifecycle.recorder.record_cleanup_failure.call_args_list
     ] == ["engine", "rds"]
-    assert "private" not in repr(lifecycle.log.warning.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -249,7 +227,7 @@ async def test_initialization_interrupt_propagates(lifecycle, failure):
         async with lifecycle.open():
             pytest.fail("中断時に貸し出してはいけない")
     assert caught.value is failure
-    lifecycle.log.warning.assert_not_called()
+    assert not lifecycle.recorder.mock_calls
     assert lifecycle.order[-2:] == ["engine_close", "rds_close"]
 
 
@@ -278,7 +256,7 @@ async def test_cleanup_cancellation_propagates_and_releases_remaining(
     assert caught.value is original
     actual = [event for event in lifecycle.order if event.endswith("_close")]
     assert actual == closed
-    lifecycle.log.warning.assert_not_called()
+    assert not lifecycle.recorder.mock_calls
 
 
 @pytest.mark.asyncio

@@ -191,7 +191,7 @@ password、API key、Authorization、session token、認証cookie、秘密鍵、
 
 基底の構造・予算検査を先に行い、採用する文字列へsanitize・maskを適用する。上限超過は基底の固定マーカーまたは固定イベントへ置換し、生文字列の先頭抜粋は作らない。改行・制御文字等でログ行を偽装できないJSON出力とする。多数の原因を抽出する場合は、出力側だけでなく抽出側でも有限の上限と循環検知を設ける。
 
-アプリの検証診断は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類に対応する。`build_processors(..., exception_converter=convert_application_exception)`で変換担当を指定した場合に適用し、指定しない場合は既存の共通変換を使う。業務分類・再送出方法は維持し、実行環境への接続は別作業とする。値準備の例外用上限は19で、例外探索の深さ8にある`issues`の`field`・`code`まで保持する。
+アプリの検証診断は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類に対応する。既定の共通入口`convert_exception`がSQL・Pydantic・イベント検証・共通アプリケーション例外・通常例外を種類別の変換へ振り分ける。各変換は同じ`ConvertedException`を返し、固有の診断構造は各担当側が所有する。業務分類・再送出方法は維持し、実行環境への接続は別作業とする。値準備の例外用上限は19で、例外探索の深さ8にある`issues`の`field`・`code`まで保持する。
 
 ## 5. 出力例
 

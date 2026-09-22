@@ -5,7 +5,8 @@ from __future__ import annotations
 import structlog
 from structlog.types import Processor
 
-from app.log_policy.exceptions.conversion import ExceptionConverter, convert_exception
+from app.log_policy.exceptions.conversion import convert_exception
+from app.log_policy.exceptions.types import ExceptionConverter
 from app.log_policy.processor import LogPolicyProcessor
 
 

@@ -15,8 +15,19 @@ from app.lambda_handlers.assessment.event import (
     AssessmentMessageJsonInvalidError,
     parse_curated_signal_event,
 )
+from app.log_policy.exceptions.conversion import convert_exception
 
 pytestmark = pytest.mark.unit
+
+
+def test_invalid_json_error_exposes_expected_diagnostics() -> None:
+    """JSON解析失敗の固定メッセージと理由を、共通の診断形式へ渡す。"""
+    error = AssessmentMessageJsonInvalidError()
+
+    converted_error = convert_exception(error)
+
+    assert converted_error.message == "Assessment message JSON parsing failed"
+    assert converted_error.error_details == {"reason": "invalid_json"}
 
 
 @pytest.fixture

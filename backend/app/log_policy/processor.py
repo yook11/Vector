@@ -6,8 +6,9 @@ from typing import Any
 from app.log_policy.base import LogPolicyRules
 from app.log_policy.budget import LogBudgetExceeded, LogEventBudget
 from app.log_policy.diagnostics import LogProcessingDiagnostics
-from app.log_policy.exceptions.conversion import ExceptionConverter, convert_exception
+from app.log_policy.exceptions.conversion import convert_exception
 from app.log_policy.exceptions.extraction import extract_exception_fields
+from app.log_policy.exceptions.types import ExceptionConverter
 from app.log_policy.field_selection import LogFieldSelector
 from app.log_policy.logger import PolicyLogger
 from app.log_policy.value_preparation import (

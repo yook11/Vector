@@ -11,7 +11,6 @@ from app.analysis.assessment.events import (
     AssessedEventInvalidError,
 )
 from app.log_policy import BASE_LOG_RULES, PolicyLogger, build_processors, policy_logger
-from app.log_policy.exceptions.application import convert_application_exception
 from app.log_policy.exceptions.extraction import CAUSE_DEPTH_LIMIT, EXCEPTION_LIMIT
 
 pytestmark = pytest.mark.unit
@@ -39,13 +38,10 @@ def validation_failure() -> AssessedEventInvalidError:
 
 @pytest.fixture
 def application_logger(configure_chain):
-    """構築時にアプリ用変換を指定し、実際のJSON出力を返すロガーを作る。"""
+    """既定の共通変換を通して、実際のJSON出力を返すロガーを作る。"""
     configure_chain()
     structlog.configure(
-        processors=build_processors(
-            structlog.processors.JSONRenderer(),
-            exception_converter=convert_application_exception,
-        ),
+        processors=build_processors(structlog.processors.JSONRenderer()),
         logger_factory=lambda *_: PolicyLogger(
             BASE_LOG_RULES, structlog.ReturnLogger()
         ),

@@ -10,6 +10,8 @@ from asyncpg import PostgresError
 from sqlalchemy.dialects.postgresql.asyncpg import AsyncAdapt_asyncpg_dbapi
 from sqlalchemy.exc import StatementError
 
+from app.log_policy.exceptions.types import ConvertedException
+
 _SQL_DETAIL = re.compile(
     r"(?:^|\n)\s*(?:DETAIL|HINT|CONTEXT|QUERY|STATEMENT|LINE \d+):", re.I
 )
@@ -29,6 +31,25 @@ class PostgresErrorDetails(TypedDict):
     column_name: NotRequired[str]
     constraint_name: NotRequired[str]
     data_type_name: NotRequired[str]
+
+
+def convert_sql_exception(exc: BaseException) -> ConvertedException:
+    """SQLの原因文を保護し、診断属性と原因の集約状態を共通形式へ渡す。"""
+    try:
+        message = (
+            extract_sql_error_message(exc)
+            if isinstance(exc, StatementError)
+            else "[exception message omitted]"
+        )
+    except Exception:
+        message = "[exception message unavailable]"
+
+    # 原因文の取得に失敗しても、診断属性は独立して取得する。
+    return ConvertedException(
+        message=message,
+        error_details=extract_sql_error_details(exc),
+        cause_is_aggregated=True,
+    )
 
 
 def is_postgres_error(exc: BaseException) -> bool:

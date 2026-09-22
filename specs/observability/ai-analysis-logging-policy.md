@@ -1,9 +1,9 @@
 # AI分析のログポリシー
 
 作成: 2026-09-17
-更新: 2026-09-20（ベース仕様との整合・出力契約の具体化）
+更新: 2026-09-22（Assessmentの入口・終端と資源管理のログ接続）
 Status: Accepted
-Implementation: Partially implemented。本文10項目のdeny・maskと、`model` / `input_tokens` / `output_tokens` のallowを実装済み。本書で追加定義する項目・診断抽出・既存ログへの接続は未実装。
+Implementation: Partially implemented。Assessmentの入口・終端、初期化・バッチ不正・共有ライフサイクルのcleanupをAI目的ポリシーへ接続済み。内部のConsumer・Service・Repository・AIプロバイダー・通知のログと、Curation・Embeddingへの適用は未移行。追加診断・保護要件、AWS適用とCloudWatch到達確認は後続工程とする。
 
 上位仕様: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)
 基底の正本: [アプリケーションログの共通基底ポリシー](./logging-base-policy.md)
@@ -28,7 +28,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 
 ## Evidence
 
-再確認時のHEAD: `0ccd60b8e`。以下はコード・テストの読解による確認であり、実環境の出力検証ではない。
+定義時に確認したHEAD: `c3e595b11`。以下の表は2026-09-21時点の記録であり、実環境の出力検証ではない。2026-09-22の接続範囲はImplementationを参照する。
 
 | 対象 | 確認した事実 |
 | --- | --- |
@@ -40,8 +40,8 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 | 検証失敗 | [Assessment parse](../../backend/app/analysis/assessment/ai/parse.py)には欠落・型違反・値違反等のdefectがあり、未知の検証失敗を元の例外として伝える経路もある。 |
 | 正常結果 | [Assessment Service](../../backend/app/analysis/assessment/service.py)には`in_scope`・`out_of_scope`・`already_assessed`、[Curation Service](../../backend/app/analysis/curation/service.py)にはsignal・noise・処理済みの区別がある。 |
 | 対処と二次障害 | [Assessment handler](../../backend/app/lambda_handlers/assessment/handler.py)は失敗項目をバッチ応答へ含める。[失敗後処理](../../backend/app/analysis/assessment/consumer_failure_handling.py)は監査・計測・通知の障害を元の失敗と区別しているが、診断は主に例外型である。 |
-| ベースとAIルール | [base.py](../../backend/app/log_policy/base.py)の基本allowは5項目。[ai_inference.py](../../backend/app/log_policy/policies/ai_inference.py)の追加allowはモデルと入出力トークン数のみで、記事IDや業務分類はまだ含まれない。 |
-| 例外抽出 | [exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py)は外側の例外型・原因文・frame・SQLSTATEを抽出する。原因連鎖、provider属性、検証fieldの抽出は追加実装が必要。 |
+| ベースとAIルール | [base.py](../../backend/app/log_policy/base.py)の基本allowは5項目。[ai_inference.py](../../backend/app/log_policy/policies/ai_inference.py)にはモデル・入出力トークン数と§3.3.1の処理情報を定義済み。実行経路には未接続。 |
+| 例外抽出 | [exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py)は例外型・原因文・frame・原因連鎖・ExceptionGroupを抽出し、SQL診断と、[イベント検証変換](../../backend/app/log_policy/exceptions/event_validation.py)による4種類の検証例外のreason/issuesを利用できる。今回、既存の変換は変更しない。provider属性等の追加診断は後続工程。 |
 | 接続と使用量 | [Lambdaログ設定](../../backend/app/lambda_handlers/logging.py)はポリシー未接続。[DeepSeek](../../backend/app/analysis/assessment/ai/deepseek.py)の一部失敗ログに`completion_tokens`があるが、正常系の入出力使用量や全工程の経過時間は記録していない。 |
 
 ## Invariants
@@ -60,7 +60,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 - 分析結果の内容や品質をログから閲覧・評価する機能、本文の別保存先の新設。
 - Agentのユーザー質問、週次分析、Embedding等への一括適用。初期対象は記事のAssessmentとCurationとし、追加適用時に必要情報を確認する。
 - 再試行戦略・timeout設定・例外分類・業務結果の変更、新しい計測サービスや依存の導入。
-- 本書作成時点でのコード実装、structlog設定変更、AWS操作、Issue更新。
+- 今回の定義変更でのhandler・structlog設定・例外変換・SQS応答・監査・メトリクスの変更、AWS操作、Issue更新。
 
 ## 1. ポリシーの単位と責任
 
@@ -117,8 +117,8 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `request_id`, `message_id`, `event_id`, `trace_id`, `span_id` | Lambda context、SQSの検証済み識別子、検証済みイベント、tracer由来。任意payload中の同名項目は採用しない。 |
 | `analyzable_article_id`, `curation_id`, `analyzed_article_id`, `noise_id` | 取得・保存結果から得た正の整数。読み込み前でも検証済みイベントで確定したIDは記録できる。 |
 | `provider`, `model`, `prompt_version` | 使用中のadapter/spec由来の識別子。`model_name`属性をログの`model`へ対応付ける。 |
-| `outcome` | 正常終端の`CompletionKind.value`、または`ready_build_rejected`。失敗の説明文を入れない。 |
-| `rejection_code` | ReadyBuildで確定した既存reasonの値。正常な受信完了と前提不成立の詳細を併記する。 |
+| `outcome` | 正常終端の`CompletionKind.value`。Assessmentでは`in_scope` / `out_of_scope` / `already_assessed`。前提不成立や失敗の説明文を正常結果へ混ぜない。 |
+| `rejection_code` | ReadyBuildで確定した既存reasonの値。Assessmentの前提不成立は失敗ログへ記録し、再処理を要求しない判断は`message_disposition=completed`で別に示す。 |
 | `reason`, `field`, `record_index` | SQS・イベント入力不正の既存reason、宣言されたfield、0始まりのレコード位置。`reason`を正常結果や例外自由文に再利用しない。 |
 | `code`, `failure_reason` | 既存の例外から取得する。providerの詳細reasonや応答defectを汎用の失敗codeに潰さない。 |
 | `failure_kind`, `retryability` | DB障害など既存の非provider分類に値がある場合のみ記録する。providerの回復分類は廃止し、代替分類やunknownで埋めない。 |
@@ -142,14 +142,49 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 
 検証境界がPydanticの失敗を既存の業務例外へ分類し、アプリ用のログ変換は`reason`と`issues(field, code)`を`error_details.kind="application_validation"`へ写す。未知の入力キーは既存の`event` / `payload`と`unknown_field`へ集約した結果を使う。ログ側ではスキーマ・alias・Union・`loc`を再解釈せず、入力・任意ctx・元の説明文を添付しない。生のValidationErrorは基底で件数と標準分類だけを保持する。
 
-今回の対応は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類に限る。`build_processors`の`exception_converter`へ`convert_application_exception`を指定して接続し、原因とグループにも同じ変換を適用する。実行環境へのロガー接続は別作業とする。追加の診断項目は、その境界で調査上の不足が確認された場合に検討する。
+イベント検証の対応は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類とする。`build_processors`の既定の共通入口`convert_exception`からイベント検証専用の変換を呼び、原因とグループにも同じ入口を適用する。共通の`ApplicationError`は別の変換関数でメッセージと診断用辞書を受け渡す。実行環境へのロガー接続は別作業とする。追加の診断項目は、その境界で調査上の不足が確認された場合に検討する。
 
 ### 3.3 命名と記録単位
 
 - 識別子は`log_policy=ai_inference`、モデルは`model`、時間は`*_ms` / `*_seconds`、使用量は`input_tokens` / `output_tokens`へ統一する。業務モデル・監査DBの属性名はログの命名に合わせて改名しない。
 - `operation`の初期語彙は`settings` / `resources` / `ai_client` / `consumer` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `audit` / `notification` / `processing_metric` / `audit_dropped_metric` / `cleanup`とする。`consumer`は既存のConsumer構築を表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
 - 既存の`stage=settings/resources/ai_client/consumer`は`operation`へ移す。正常終端の`reason`は`outcome`へ移す。二次障害の`audit_error_class`は`secondary_error_class`へ揃える。
-- 既存の`assessment_message_completed` / `curation_message_completed`等のeventは維持する。開始は対応する`*_message_started`を追加し、AI呼び出しの既存`assessor_api_call/success`・`curator_api_call/success`は業務メッセージとは別の単位として扱う。eventにID・例外文を埋め込まない。
+- Assessmentのメッセージ単位のeventは§3.3.1へ統一する。Assessment handlerは旧イベント名から切り替え済み。Curationへの適用も後続とし、AI呼び出しの既存`assessor_api_call/success`・`curator_api_call/success`は業務メッセージとは別の単位として扱う。eventにID・例外文を埋め込まない。
+
+### 3.3.1 Assessmentの開始・完了・失敗ログ
+
+この節の出力契約と目的別allowは、Assessment handlerの入口・終端へ接続済みである。イベントごとの専用クラスやポリシーは追加せず、一つの`AI_INFERENCE_LOG_RULES`を使う。
+
+| イベント名 | 記録する条件・タイミング | level |
+| --- | --- | --- |
+| `assessment_message_processing_started` | 検証済みSQSメッセージIDを確認した後、本文の取得・解析前。 | INFO |
+| `assessment_message_processing_completed` | 判定の保存完了または処理済みを確認し、そのメッセージの業務結果とSQS応答への扱いが確定した時点。 | INFO |
+| `assessment_message_processing_failed` | 前提不成立または処理中の失敗について、業務結果とSQS応答への扱いが確定した時点。 | 前提不成立・契約上の入力不正はWARNING、処理例外はERROR |
+
+処理開始後に結果を捕捉できたメッセージは、開始1回と完了または失敗1回を基本とする。初期化失敗・バッチ全体の入力不正・監査や通知の二次障害・cleanup失敗は、既存の別の記録境界に残す。キャンセルや強制終了について終端を捏造しない。
+
+| 状況 | 終端イベントの末尾 | 結果・理由 | `message_disposition` |
+| --- | --- | --- | --- |
+| 対象内または対象外として保存完了 | `completed` | `outcome=in_scope` / `out_of_scope` | `completed` |
+| DBで分析済みと確認 | `completed` | `outcome=already_assessed` | `completed` |
+| Curation欠損 | `failed` | `rejection_code=assessment_ready_build_blocked_curation_missing` | `completed` |
+| 分析入力の条件不成立 | `failed` | `rejection_code=assessment_ready_build_blocked_input_invalid` | `completed` |
+| 既存契約でバッチ失敗応答に含める入力不正・処理例外 | `failed` | 既存の入力診断または例外診断 | `batch_item_failure` |
+
+ログは業務処理の成否を表し、`message_disposition`はhandlerが決定したSQS応答への扱いを表す。前提不成立を失敗として記録しても、既存の受信完了・再配信・監査・メトリクスの動作は変えない。既存の拒否値をそのまま使い、ログのために例外化しない。
+
+| 対象 | 出力項目 |
+| --- | --- |
+| 共通 | `event` / `timestamp` / `level` / `log_policy` / `service` / `environment` / `stage`。`stage=assessment`、`log_policy=ai_inference`。 |
+| 開始 | `request_id` / `message_id`。`request_id`はLambda context、`message_id`は検証済みSQSレコード由来。 |
+| 完了 | `request_id` / `message_id`、検証・取得済みの`event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id`、`outcome` / `duration_ms` / `message_disposition`。 |
+| 失敗 | 取得済みの相関ID・対象ID、確定できる`operation`、`duration_ms` / `message_disposition`。前提不成立なら`rejection_code`、例外なら既存の`exc_info`変換による診断項目。 |
+
+未取得の項目は省略し、未検証の入力からIDを補完しない。`operation`は失敗した処理が確定している場合だけ記録する。`duration_ms`は`perf_counter()`で測ったメッセージ開始から終端直前までの経過時間をミリ秒で表す。
+
+処理情報のallowは`service` / `environment` / `stage` / `operation` / `request_id` / `message_id` / `event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id` / `outcome` / `rejection_code` / `duration_ms` / `message_disposition`。cleanup資源の識別には追加の`resource`を使う。既存の`model` / `input_tokens` / `output_tokens`を維持する。基底5項目は継承し、processorが生成する`log_policy`と例外診断項目は目的別allowへ登録しない。
+
+例外の分類・抽出・構造は既存処理に任せ、今回新設しない。`SqsInputError`と`AssessmentMessageJsonInvalidError`は`ApplicationError`として明示した診断を共通変換へ渡し、イベント検証例外も`exc_info`で渡す。本文10項目と認証情報のdeny・maskを維持し、§3.2の残りのallow、§3.4の追加保護、URL変換等の未実装要件をこの定義変更の完了に含めない。
 
 ### 3.4 禁止・マスク・サニタイズ
 
@@ -213,13 +248,14 @@ provider例外には回復分類・retryabilityを持たせない。DB障害な�
 | --- | --- |
 | 処理開始 | stage、取得済み相関ID、対象ID、取得済みprovider/model。 |
 | 正常終了 | 相関ID、処理時間、処理結果コード、取得できた使用量・保存先ID。 |
-| 対象外・noise・処理済み・前提不成立 | 既存の結果code/reasonを残し、例外による失敗と区別する。 |
+| 対象外・noise・処理済み | 既存の正常結果を残す。Assessmentでは§3.3.1の`outcome`を使う。 |
+| Assessmentの前提不成立 | §3.3.1の失敗ログに`rejection_code`を記録し、再処理を要求しない判断を`message_disposition=completed`で示す。 |
 
 処理開始と終端の記録は通常のINFO設定で確認できるようにする。すべての内部関数の成功ログやAI応答本文は要求しない。業務試行の入口・終端を所有する境界で記録し、各層から同じ完了ログを重複して出さない。内部のAI呼び出し試行を記録する場合は、業務試行と区別する。
 
 | 所有する境界 | 記録責任・level |
 | --- | --- |
-| Lambda handler | 検証済みmessage IDを得た時点の開始と、各メッセージの正常完了をINFO。処理失敗はERROR、契約で扱う入力不正はWARNING。バッチ全体の入力不正ではmessage IDを捏造しない。 |
+| Lambda handler | 検証済みmessage IDを得た時点の開始と、各メッセージの正常完了をINFO。処理失敗はERROR、前提不成立・契約で扱う入力不正はWARNING。Assessmentは§3.3.1の3イベントを使う。バッチ全体の入力不正ではmessage IDを捏造しない。 |
 | AI adapter | 呼び出し開始・正常終了をINFO。provider/model/prompt version、試行、実測時間、取得済み使用量。API応答の不備等の固有診断をWARNINGで出す場合も、業務試行の終端とは数えない。 |
 | Consumer / Service / Repository | operationと分類・保存状態を確保して終端へ渡す。Handlerと同じ完了ログを重複させない。並行書き込み敗北・不整合など独立した事実の既存ログは役割を残す。 |
 | 初期化・失敗後処理・cleanup | 実際に捕捉する境界で原因付きログを記録する。業務開始不能な初期化はERROR。元の結果を維持する二次障害・cleanup失敗はWARNING。 |
@@ -257,16 +293,29 @@ provider例外には回復分類・retryabilityを持たせない。DB障害な�
 
 2026-09-20は本書と上位仕様の文書だけを更新した。既存のログ出力・分類・設定・テストは変更していない。
 
+2026-09-21の変更範囲は、§3.3.1の出力契約、目的別allow、既存の定義テストの期待値までだった。handler・共通ログ設定・例外変換・SQS応答・監査・メトリクスは変更せず、実行経路への接続は次項で実施した。
+
+### Assessmentの入口・終端接続（2026-09-22）
+
+- [AI記事分析ロガー](../../backend/app/analysis/logging.py)は、既存の目的ルール・factory・processor・JSON標準出力を明示して構築する。各呼び出しで生成し、グローバル設定から独立させる。未移行ログのためのLambda共通設定は維持する。
+- `service=article_analysis`、`stage=assessment`を付け、Lambda contextに有効な文字列があれば`request_id`、設定取得後は`settings.env`から`environment`を付ける。取得前の項目は省略する。呼び出し元のcontextvarsは退避・クリアし、`finally`で復元する。各メッセージの識別情報は派生ロガーに束縛する。
+- handlerは§3.3.1の開始・終端を直接記録する。`operation`は本文取得・解析に`parse_message`、イベント契約違反に`validate_event`、前提不成立に`build_ready`を使う。Consumer内部の失敗箇所は推測せず省略する。
+- 初期化は`assessment_initialization_failed`（ERROR）、バッチ不正は`assessment_sqs_input_invalid`（WARNING）、資源cleanupは`assessment_resources_cleanup_failed`（ERROR）を維持する。初期化箇所は`operation`、cleanupは`operation=cleanup`と`resource`に記録する。
+- [共通ラッパー](../../backend/app/log_policy/bound_logger.py)の`ApplicationBoundLogger`を`wrapper_class`に指定し、`logger.info/warning/error`からprocessor・JSON化・出力までの`Exception`を捕捉する。生データによるfallbackや再帰的な再記録は行わず、`bind()`後も同じ保護を維持する。位置引数による文字列展開は保護範囲外とし、イベント名とキーワード項目で記録する。`BaseException`は抑止しない。ライフサイクル用の記録クラスには共有インターフェースの初期化・cleanupの2メソッドだけを残す。
+- SQS応答・通知順序・監査・メトリクス・資源の所有権は維持する。内部ログ、共有DeepSeekクライアント内部のcleanup、他工程の接続は今回の範囲外である。
+
+以下の表は2026-09-21の定義時点における全体の差分整理であり、上記の部分接続以外は後続工程とする。
+
 | 境界 | 実装済み | 接続・追加が必要な内容 |
 | --- | --- | --- |
 | 共通基底 | logger属性のルール、allow/deny/mask、外側の例外・SQL/検証の基本保護、上限 | 本書の追加診断を通した予算と最終出力の検証。基底の汎用allowを広げない。 |
-| AI目的ルール | 本文10項目とモデル・入力/出力tokens | §3の追加allow・deny・mask、記録側の出所・値・ネスト形状の保証。 |
-| 原因・検証診断 | 分類reason、provider_error、応答defect等を内部保持 | 原因連鎖、SDK診断、既知field/制約、DB制約名、空・省略の区別を安全に抽出。 |
+| AI目的ルール | 本文10項目のdeny・mask、モデル・入力/出力tokensと§3.3.1の処理情報のallow | §3.3.1以外の追加allow・deny・mask、記録側の出所・値・ネスト形状の保証。 |
+| 原因・検証診断 | 原因連鎖・ExceptionGroup・SQL診断・4種類のイベント検証例外の変換、分類reason・provider_error・応答defect等の内部保持 | 既存変換の実行経路への接続。SDK属性の追加診断、空・省略の区別等は後続工程であり、今回の定義変更では扱わない。 |
 | 実行中の事実 | ID・正常結果・一部のモデル/使用量 | request/message文脈の設定と復元、operation、経過時間、timeout範囲、試行、実際の処遇・保存状態。 |
 | 出力経路 | LambdaのJSON出力と各層のstructlog | factoryとprocessorの接続、各loggerのルール宣言、出力障害による業務結果の変更防止。共有AI clientのcleanupも対象。 |
 | URL・内部宛先 | 基底の資格情報保護 | 公開記事URLと例外文の内部宛先の専用変換。未実装のまま保護済みとしない。 |
 
-実装は次の境界で進める。
+後続の接続・追加実装は次の境界で進める。今回の定義変更では以下を完了扱いにしない。
 
 1. 既存の基底に本書の完成済みルールと診断抽出を追加し、必要情報の保持と禁止情報の非露出を合成入出力で検証する。
 2. Assessmentの失敗記録へ接続し、初期化・処理全体・AI呼び出し・検証・保存・二次障害を確認する。渡されていないreason等の受け渡しも接続範囲に含める。
@@ -294,7 +343,7 @@ provider例外には回復分類・retryabilityを持たせない。DB障害な�
 | A13 | 正常な対象外・noise・処理済み | 正常な結果を識別でき、生成本文を出さない。 |
 | A14 | 並行実行・バッチ内メッセージ・Lambda再利用 | stage・ID・operation・例外が別処理へ混ざらない。 |
 | A15 | 共通変換またはログ出力が失敗 | 生データfallback・再帰なし。業務結果を変更しない。 |
-| A16 | 通常INFO設定で開始と終端を出力 | 実行を相関でき、成功ログの本文dumpや層ごとの重複がない。 |
+| A16 | 通常INFO設定で開始と終端を出力 | Assessmentは§3.3.1のイベント名・level・項目に従い、開始1回と終端1回を相関できる。前提不成立は失敗ログでも受信完了を維持し、本文dumpや層ごとの重複がない。 |
 | A17 | §3の既存名から出力名への対応 | model・tokens・outcome・stage/operationの意味が一致し、必要項目が未登録として落ちない。 |
 | A18 | 各追加deny対象を構造化値・キー付き文字列・例外へ混入 | 各経路で値が残らず、同時に入れた通常の原因説明・ID・codeが残る。 |
 | A19 | causes/issuesに未知キー・生input・任意ctx | 宣言した子項目だけが残る。トップレベルallowだけを試験して完了にしない。 |
@@ -306,13 +355,27 @@ provider例外には回復分類・retryabilityを持たせない。DB障害な�
 
 既存の[Assessment Consumerテスト](../../backend/tests/analysis/assessment/test_consumer.py)、[分類テスト](../../backend/tests/analysis/assessment/test_consumer_failure_classification.py)、[失敗後処理テスト](../../backend/tests/analysis/assessment/test_consumer_failure_handler.py)、[応答解析テスト](../../backend/tests/analysis/assessment/ai/test_parse_assessment.py)、[Curation Consumerテスト](../../backend/tests/analysis/curation/test_consumer.py)を業務契約の根拠として維持する。
 
-共通変換は単体で、呼び出し側からの原因伝達と最終stdoutは接続テストで検証する。CloudWatchの実配送は許可された検証環境で確認し、単体テスト成功を配送確認済みとは扱わない。
+共通変換・目的ポリシーの出力は既存の所有テストで検証する。共通ラッパーによる出力障害の捕捉は`test_bound_logger.py`へ集約し、SQS応答・処理順序・資源解放は既存の業務テストで維持する。今回、ログ箇所ごとの文言・項目・出力回数の期待値を複製するテストは追加しない。CloudWatchの実配送は許可された検証環境で確認し、対象テスト成功を配送確認済みとは扱わない。
 
 2026-09-20の文書検証では、ローカル参照先、JSON例の構文、許可名と禁止名の重複、受入条件の識別子、差分の空白を確認した。`/check`の文書変更規則に従い、実行コード・schema・依存・実行時設定を変更していないためコードのテストは未実行。実装時は`/check`を実行し、未検証経路と理由を記録する。
 
+2026-09-21の定義変更は、app全体と変更テストのRuff lint・format確認、`uv run pytest tests/ -m unit -x -q`の7,244件、`make test-integration TEST_COMPOSE_PROJECT=vector-test-assessment-log-definition-20260921 PYTEST_ARGS='-x -q'`の1,291件が成功した。一時DB・Redisは終了・削除済み。新規テストは追加せず、既存定義テストの期待値を更新した。仕様と目的別allowの17項目の一致、既存deny・maskの維持、変更した2仕様のローカル参照43件、変更範囲が予定した4ファイルであることを確認した。handlerからstdoutまでの新契約の出力確認・AWS適用・CloudWatch到達確認は未実施であり、定義完了と区別する。
+
+2026-09-22の接続変更では、共通記録口・チェーン・processor・AI目的ポリシー・例外変換と、Assessment handler・イベント・設定・共有ライフサイクル・SQS入力の対象テスト304件が成功した（DB統合4件は選択対象外）。今回変更したPython 9ファイルのRuff lint・format確認と差分の空白検査も成功した。ユーザー指定により検証は対象範囲に限定し、全体テスト・DB統合テスト・AWS適用は行っていない。
+
+共通ラッパーへの置き換えと中断・終了・キャンセルのケース追加後、同じ対象範囲で307件成功・DB統合4件は選択対象外。PRで変更するPythonファイルのRuff lint・format確認も成功した。出力障害と中断の伝播のテストはラッパー側の5ケースに集約し、ログ箇所別のテストは追加していない。
+
 ## Done
 
-方針の整合・項目決定（今回）:
+Assessmentのログ定義（2026-09-21）:
+
+- [x] 開始・完了・失敗の意味、イベント名、level、出力項目を§3.3.1で確定した。
+- [x] 業務上の失敗とSQS応答への扱いを分離し、前提不成立を正常結果に含めない。
+- [x] 目的別allowと既存の定義テストの期待値を更新し、基底・deny・mask・実行経路を維持した。
+- [x] Assessmentの入口・終端と資源管理のログを共通チェーンへ接続した（2026-09-22）。
+- [ ] AWS適用とCloudWatch到達は未確認。内部ログ・他工程は後続で移行する。
+
+方針の整合・項目決定（2026-09-20）:
 
 - [x] 調査に必要な原因情報を残す目的と、禁止・mask・sanitizeの責任を明記した。
 - [x] 出力名・出所・値制約・記録境界を定義し、ベース仕様との違いと追加実装を区別した。
