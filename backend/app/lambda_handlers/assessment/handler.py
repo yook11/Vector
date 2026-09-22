@@ -30,6 +30,7 @@ from app.lambda_handlers.sqs.response import (
     SqsBatchFailureResponse,
     SqsBatchItemIdentifier,
 )
+from app.shared.time import elapsed_ms_since
 
 
 def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:
@@ -83,7 +84,7 @@ async def _run_assessment(
         failed_items: list[SqsBatchItemIdentifier] = []
         for record in record_batch.records:
             message_logger = logger.bind(message_id=record.message_id)
-            started_at = perf_counter()
+            started_at_seconds = perf_counter()
             message_logger.info("assessment_message_processing_started")
             try:
                 message_body = record.body_text()
@@ -92,7 +93,7 @@ async def _run_assessment(
                 message_logger.warning(
                     "assessment_message_processing_failed",
                     operation="parse_message",
-                    duration_ms=(perf_counter() - started_at) * 1000,
+                    duration_ms=elapsed_ms_since(started_at_seconds),
                     message_disposition="batch_item_failure",
                     exc_info=exc,
                 )
@@ -104,7 +105,7 @@ async def _run_assessment(
                 message_logger.warning(
                     "assessment_message_processing_failed",
                     operation="validate_event",
-                    duration_ms=(perf_counter() - started_at) * 1000,
+                    duration_ms=elapsed_ms_since(started_at_seconds),
                     message_disposition="batch_item_failure",
                     exc_info=exc,
                 )
@@ -116,7 +117,7 @@ async def _run_assessment(
                 message_logger.error(
                     "assessment_message_processing_failed",
                     operation="parse_message",
-                    duration_ms=(perf_counter() - started_at) * 1000,
+                    duration_ms=elapsed_ms_since(started_at_seconds),
                     message_disposition="batch_item_failure",
                     exc_info=exc,
                 )
@@ -135,7 +136,7 @@ async def _run_assessment(
             except Exception as exc:
                 message_logger.error(
                     "assessment_message_processing_failed",
-                    duration_ms=(perf_counter() - started_at) * 1000,
+                    duration_ms=elapsed_ms_since(started_at_seconds),
                     message_disposition="batch_item_failure",
                     exc_info=exc,
                 )
@@ -153,7 +154,7 @@ async def _run_assessment(
                         "assessment_message_processing_failed",
                         operation="build_ready",
                         rejection_code=completion.reason.value,
-                        duration_ms=(perf_counter() - started_at) * 1000,
+                        duration_ms=elapsed_ms_since(started_at_seconds),
                         message_disposition="completed",
                     )
                 else:
@@ -164,7 +165,7 @@ async def _run_assessment(
                     message_logger.info(
                         "assessment_message_processing_completed",
                         outcome=completion.kind.value,
-                        duration_ms=(perf_counter() - started_at) * 1000,
+                        duration_ms=elapsed_ms_since(started_at_seconds),
                         message_disposition="completed",
                     )
         return failed_items
