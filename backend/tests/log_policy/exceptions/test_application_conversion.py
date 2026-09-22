@@ -1,4 +1,4 @@
-"""アプリの検証境界が整理した診断情報をログ形式へ変換する契約。"""
+"""アプリで定義した例外の診断情報を、共通のログ形式へ変換する契約。"""
 
 from dataclasses import asdict
 
@@ -9,9 +9,27 @@ from app.analysis.assessment import events as assessment
 from app.analysis.curation import events as curation
 from app.collection import events as collection
 from app.collection.article_acquisition import events as acquisition
-from app.log_policy.exceptions.application import convert_application_exception
+from app.log_policy.exceptions.conversion import convert_exception
 
 pytestmark = pytest.mark.unit
+
+
+def test_application_error_subclass_keeps_message_and_details() -> None:
+    """ApplicationErrorを継承した例外のメッセージと診断情報を、共通形式へ写す。"""
+    from app.shared.errors import ApplicationError
+
+    class SampleApplicationError(ApplicationError):
+        pass
+
+    error = SampleApplicationError(
+        "処理を実行できません",
+        details={"reason": "missing_required_field"},
+    )
+
+    converted_error = convert_exception(error)
+
+    assert converted_error.message == "処理を実行できません"
+    assert converted_error.error_details == {"reason": "missing_required_field"}
 
 
 def test_analyzable_event_keeps_reason_and_issues() -> None:
@@ -32,7 +50,7 @@ def test_analyzable_event_keeps_reason_and_issues() -> None:
     )
     exc.extra = "synthetic-private-value"
 
-    result = convert_application_exception(exc)
+    result = convert_exception(exc)
 
     assert asdict(result) == {
         "message": "Validation failed: invalid_payload",
@@ -73,7 +91,7 @@ def test_incomplete_article_event_keeps_reason_and_issues() -> None:
         )
     )
 
-    result = convert_application_exception(exc)
+    result = convert_exception(exc)
 
     assert asdict(result) == {
         "message": "Validation failed: invalid_payload",
@@ -110,7 +128,7 @@ def test_curated_event_keeps_reason_and_issues() -> None:
         )
     )
 
-    result = convert_application_exception(exc)
+    result = convert_exception(exc)
 
     assert asdict(result) == {
         "message": "Validation failed: invalid_payload",
@@ -147,7 +165,7 @@ def test_assessed_event_keeps_reason_and_issues() -> None:
         )
     )
 
-    result = convert_application_exception(exc)
+    result = convert_exception(exc)
 
     assert asdict(result) == {
         "message": "Validation failed: unsupported_schema_version",
@@ -174,7 +192,7 @@ def test_unknown_exception_does_not_read_invalid_attribute() -> None:
         def invalid(self):
             pytest.fail("must not inspect an unsupported exception")
 
-    result = convert_application_exception(UnknownError("operation failed"))
+    result = convert_exception(UnknownError("operation failed"))
 
     assert asdict(result) == {
         "message": "operation failed",
@@ -192,7 +210,7 @@ def test_raw_validation_error_uses_existing_protected_conversion() -> None:
     with pytest.raises(ValidationError) as caught:
         Payload.model_validate({"values": {"synthetic-private-key": "private-value"}})
 
-    result = convert_application_exception(caught.value)
+    result = convert_exception(caught.value)
 
     assert asdict(result) == {
         "message": "Validation failed (1 errors): int_parsing",
@@ -215,7 +233,7 @@ def test_failed_diagnostic_access_does_not_stringify_exception() -> None:
     )
     del exc.invalid
 
-    result = convert_application_exception(exc)
+    result = convert_exception(exc)
 
     assert asdict(result) == {
         "message": "[exception message unavailable]",
@@ -234,7 +252,7 @@ def test_invalid_issue_does_not_return_partial_diagnostics() -> None:
     )
     exc.args = ("synthetic-private-message",)
 
-    result = convert_application_exception(exc)
+    result = convert_exception(exc)
 
     assert asdict(result) == {
         "message": "[exception message unavailable]",

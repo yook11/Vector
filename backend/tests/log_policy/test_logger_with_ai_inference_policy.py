@@ -8,7 +8,6 @@ import structlog
 
 from app.log_policy import build_processors, create_policy_logger, policy_logger
 from app.log_policy.base import BASE_ALLOW
-from app.log_policy.exceptions.application import convert_application_exception
 from app.log_policy.policies.ai_inference import AI_INFERENCE_LOG_RULES
 
 pytestmark = pytest.mark.unit
@@ -38,10 +37,7 @@ def logger_with_ai_inference_policy(configure_chain):
             create_policy_logger,
             output_logger_factory=structlog.WriteLoggerFactory(),
         ),
-        processors=build_processors(
-            structlog.processors.JSONRenderer(),
-            exception_converter=convert_application_exception,
-        ),
+        processors=build_processors(structlog.processors.JSONRenderer()),
     )
     return policy_logger("test.logger_with_ai_inference_policy", AI_INFERENCE_LOG_RULES)
 

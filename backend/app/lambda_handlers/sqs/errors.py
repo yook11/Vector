@@ -3,6 +3,8 @@
 from enum import StrEnum
 from typing import ClassVar
 
+from app.shared.errors import ApplicationError, ApplicationErrorValue
+
 
 class SqsInputReason(StrEnum):
     """SQS配送構造の不正を示す固定の理由。"""
@@ -14,7 +16,7 @@ class SqsInputReason(StrEnum):
     DUPLICATE_MESSAGE_ID = "duplicate_message_id"
 
 
-class SqsInputError(Exception):
+class SqsInputError(ApplicationError):
     """入力値を保持せず、配送構造の不正位置と理由を伝える。"""
 
     CODE: ClassVar[str] = "sqs_input_invalid"
@@ -26,7 +28,16 @@ class SqsInputError(Exception):
         field: str,
         record_index: int | None = None,
     ) -> None:
-        super().__init__()
+        details: dict[str, ApplicationErrorValue] = {
+            "reason": reason.value,
+            "field": field,
+        }
+        if record_index is not None:
+            details["record_index"] = record_index
+        super().__init__(
+            f"SQS input validation failed: {reason.value}",
+            details=details,
+        )
         self.reason = reason
         self.field = field
         self.record_index = record_index

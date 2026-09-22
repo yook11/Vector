@@ -17,6 +17,7 @@ AI_INFERENCE_LOG_RULES = AI_INFERENCE_POLICY.extend(
             "environment",
             "stage",
             "operation",
+            "resource",
             "request_id",
             "message_id",
             "event_id",

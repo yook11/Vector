@@ -8,7 +8,7 @@ import pytest
 
 from app.log_policy.budget import TEXT_LIMIT
 from app.log_policy.exceptions import extraction
-from app.log_policy.exceptions.conversion import ConvertedException
+from app.log_policy.exceptions.types import ConvertedException
 
 pytestmark = pytest.mark.unit
 

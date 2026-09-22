@@ -3,10 +3,10 @@
 import asyncio
 from contextlib import AbstractAsyncContextManager
 
-import structlog
 from openai import AsyncOpenAI
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.deepseek.client import open_deepseek_client
 from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
@@ -31,11 +31,11 @@ from app.lambda_handlers.assessment.settings import (
 )
 from app.shared.revalidate import FrontendRevalidateNotifier
 
-logger = structlog.get_logger(__name__)
-
 
 def open_assessment_consumer(
     settings: AssessmentConsumerSettings,
+    *,
+    logger: FilteringBoundLogger,
 ) -> AbstractAsyncContextManager[AssessmentConsumer]:
     """工程別の生成関数を渡し、資源の準備・終了順序を共通側へ委ねる。"""
 

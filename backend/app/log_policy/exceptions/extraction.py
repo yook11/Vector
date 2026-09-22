@@ -10,11 +10,8 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Literal, NotRequired, TypedDict
 
-from app.log_policy.exceptions.conversion import (
-    ErrorDetails,
-    ExceptionConverter,
-    convert_exception,
-)
+from app.log_policy.exceptions.conversion import convert_exception
+from app.log_policy.exceptions.types import ErrorDetails, ExceptionConverter
 
 FRAME_LIMIT = 50
 EXCEPTION_LIMIT = 32

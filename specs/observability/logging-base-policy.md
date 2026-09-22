@@ -139,7 +139,7 @@ structlog.configure(
 
 SQLAlchemy例外の原因文からSQL実データを除き、診断属性は`error_details`へ独立して保持する。共通の`error_class` / `error_message` / `frames`は維持し、トップレベルの`sqlstate`は出さない。
 
-- `error_details`の共通型は`ErrorDetails = PostgresErrorDetails | ApplicationValidationDetails`とする。PostgreSQLの診断は`PostgresErrorDetails`で、`kind: "postgresql"`と任意の`sqlstate` / `schema_name` / `table_name` / `column_name` / `constraint_name` / `data_type_name`だけを持つ。有効なSQL診断値が一つもない場合は項目自体を省略する。
+- `error_details`の共通型は`types.py`の`ErrorDetails = Mapping[str, object]`とし、各変換が生成した文字列キーの診断用辞書を受け渡す。固有フィールドの型は各担当側で定義し、共通型では種類を列挙しない。PostgreSQLの診断は`PostgresErrorDetails`で、`kind: "postgresql"`と任意の`sqlstate` / `schema_name` / `table_name` / `column_name` / `constraint_name` / `data_type_name`だけを持つ。有効なSQL診断値が一つもない場合は項目自体を省略する。
 - SQLAlchemyの`orig`から最大8例外を、循環検出とcontextの表示抑制を守って探索する。asyncpgの`PostgresError`を取得元とし、元例外を取得できない場合だけ既知のSQLAlchemy asyncpg adapterの診断を使う。同名属性があるだけの未知例外をPostgreSQLと判定せず、異なる例外から診断属性を寄せ集めない。
 - `sqlstate` / `pgcode`は順に検査し、英大文字・数字5文字の最初の有効値を`error_details.sqlstate`へ入れる。対象名は空でない組み込み文字列のみを採用する。欠落・不正値・取得に失敗した属性は省略し、他の正常な属性を残す。
 - `hide_parameters=True`を維持する。原因文は`str(exc)`を使わず`args[0]`から取得し、`DETAIL` / `HINT` / `CONTEXT` / `QUERY` / `STATEMENT` / `LINE N`以降を除く。原因文に含まれるbind値と既知のエスケープ表現を置換する。
@@ -147,16 +147,20 @@ SQLAlchemy例外の原因文からSQL実データを除き、診断属性は`err
 - パラメータが循環・深さ超過・件数超過・独自型の場合は原因文を固定文にするが、診断属性は維持する。原因文抽出の失敗も`[exception message unavailable]`に局所化する。
 - パラメータの保護文脈がないasyncpg例外・adapter例外を直接受け取った場合は、診断属性を取得し、原因文を`[exception message omitted]`にする。未知のdriver独自表現に含まれる値の完全検出は保証しない。
 
+### 共通アプリケーション例外の診断
+
+`app/shared/errors.py`の`ApplicationError`はログに依存せず、メッセージと任意の診断用辞書`details`を保持する。値の型注釈はJSONで表せる値を対象とする。`convert_application_error`は`str(exc)`と`details`を`ConvertedException`へ写し、診断情報が`None`なら最終出力の`error_details`を省略する。取得に失敗した場合は`[exception message unavailable]`を返し、任意属性へのfallbackは行わない。後段の共通sanitize・mask・出力制限を適用する。`SqsInputError`と`AssessmentMessageJsonInvalidError`へ適用し、Assessmentの入口・終端のログ経路へ接続済み。他のLambda・内部ログへの適用は後続とする。
+
 ### アプリの検証診断
 
 検証境界はPydanticの失敗を既存の業務例外へ分類し、ログ側はその例外が持つ`invalid.reason`と`invalid.issues`を出力形式へ写す。スキーマ・alias・Union・`loc`の汎用解釈、全フィールドの許可リスト、数値制約の自動抽出は行わない。
 
-- `convert_application_exception`の対象は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類。同名属性があるだけの未知例外は対象にせず、SQL・生のValidationError・通常例外とともに既存の`convert_exception`へ委譲する。
-- `ApplicationValidationDetails`は`kind: "application_validation"`、既存Enumの値による`reason`、`issues: [{field, code}]`を持つ。項目の順序・重複は変更せず、任意属性・元の入力を転記しない。
+- `event_validation.py`の`convert_event_validation_exception`の対象は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類。同名属性があるだけの未知例外は対象にしない。共通入口`convert_exception`がイベント検証・SQL・生のValidationError・ApplicationError・通常例外の順に各変換へ振り分ける。
+- `event_validation.py`の`EventValidationDetails`は`kind: "application_validation"`、既存Enumの値による`reason`、`issues: [{field, code}]`を持つ。項目の順序・重複は変更せず、任意属性・元の入力を転記しない。
 - 原因文は`Validation failed: {reason}`。属性取得・変換に失敗した場合は`[exception message unavailable]`とし、診断を省略する。元の例外の`str()`へ戻さない。
 - `cause_is_aggregated`は偽で、通常の原因探索を維持する。境界での分類・Enum・再送出方法は変更しない。
-- `build_processors` → `LogPolicyProcessor` → `extract_exception_fields`のキーワード専用引数`exception_converter`で変換担当を渡す。既定値は`convert_exception`で、アプリ用変換を使うチェーンは構築時に明示する。共通処理はアプリ固有の例外型をimportしない。
-- 実行環境のロガー設定・Logfireへの接続は対象外で、変換担当を指定したチェーンでの出力までを保証する。
+- `build_processors` → `LogPolicyProcessor` → `extract_exception_fields`のキーワード専用引数`exception_converter`で変換担当を渡す。既定値は全種類を振り分ける共通入口`convert_exception`とし、アプリ用の別入口は設けない。引数による変換担当の差し替え口は維持する。種類固有の情報抽出は各変換に閉じ、共通結果型は`types.py`で定義する。
+- 実行環境のロガー設定・Logfireへの接続は対象外で、既定チェーンでの出力までを保証する。
 
 ```json
 {"error_message":"Validation failed: invalid_payload","error_details":{"kind":"application_validation","reason":"invalid_payload","issues":[{"field":"payload.curation_id","code":"missing_required_field"}]}}
@@ -323,14 +327,15 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 - [backend/app/log_policy/base.py](../../backend/app/log_policy/base.py): `LogPolicy`、基底allow・deny・mask、`BASE_LOG_RULES`、`normalize_key`、`LogPolicyRules` (生成時のallow・deny・mask確定と継承)
 - [backend/app/log_policy/sanitize.py](../../backend/app/log_policy/sanitize.py): S1/S2 パターン集、`sanitize_text`（内容から秘密情報を検出する）。長さ制限は出力側
 - [backend/app/log_policy/mask.py](../../backend/app/log_policy/mask.py): `mask_assignments`（指定キーに対応する文字列内の値全体を伏せる）
-- [backend/app/log_policy/exceptions/](../../backend/app/log_policy/exceptions/): 種類ごとの情報抽出。`sql.py` は実データを除いた原因文と `PostgresErrorDetails` を独立して返し、`validation.py` は件数と標準分類を含む説明文を返す。分岐と出力フィールドの組み立ては呼び出し側が持つ
+- [backend/app/log_policy/exceptions/](../../backend/app/log_policy/exceptions/): 種類ごとの変換。`sql.py` は原因文の保護とSQL診断、`validation.py` はPydantic検証、`event_validation.py` はイベント検証、`application.py` は共通アプリケーション例外を担当し、すべて `ConvertedException` を返す
 - [backend/app/log_policy/exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py): `exc_info` の解決と `ExceptionLogFields` の組み立て。型は型名・原因文・frameと任意の `error_details` / `causes` / `exceptions` を持つ最終出力の契約とする。原因ノードにも同じ型を使う。伏せ字と上限は値準備が担当する
 - [backend/app/log_policy/exceptions/conversion.py](../../backend/app/log_policy/exceptions/conversion.py): 例外1件の種類別変換を担当し、原因文・診断属性・内部原因の集約状態を返す。SQL内部の診断抽出は `sql.py` に委譲し、通常の原因連鎖とグループの探索は `extraction.py` が担当する
-- [backend/app/log_policy/exceptions/application.py](../../backend/app/log_policy/exceptions/application.py): アプリ固有の検証例外から既存の理由・項目・コードを取り出す。共通ロガーへの依存はこの変換担当からの一方向とし、構築時に明示して接続する
+- [backend/app/log_policy/exceptions/application.py](../../backend/app/log_policy/exceptions/application.py): `ApplicationError`のメッセージと明示された`details`を共通形式へ写す。例外の任意属性を自動展開せず、共通入口から呼び出す
 - [backend/app/log_policy/policies/ai_inference.py](../../backend/app/log_policy/policies/ai_inference.py)、[external_content.py](../../backend/app/log_policy/policies/external_content.py): 目的別定義（AI推論はモデル・トークン数の完成済みルールも定義）
 - [backend/app/log_policy/diagnostics.py](../../backend/app/log_policy/diagnostics.py): ログ一件の診断の記録・集計・出力形式への変換
 - [backend/app/log_policy/field_selection.py](../../backend/app/log_policy/field_selection.py): トップレベルの項目名の検査とdeny・allow判定
 - [backend/app/log_policy/value_preparation.py](../../backend/app/log_policy/value_preparation.py): 選別済みの値をログに使える状態へ準備する処理、構造検査とサニタイズ、共有予算
+- [backend/app/log_policy/bound_logger.py](../../backend/app/log_policy/bound_logger.py): `wrapper_class`に指定するINFO以上の共通ラッパー。通常のログメソッドからprocessor・整形・出力までの例外を捕捉し、再記録しない。`bind()`後も同じ保護を維持し、プロセス中断は抑止しない。位置引数の文字列展開は保護範囲外。検証は`test_bound_logger.py`に集約する
 - [backend/app/log_policy/processor.py](../../backend/app/log_policy/processor.py): 完成済みルールの受け取り、一項目ずつの計上・選別・値準備・格納、例外と診断の接続、固定の失敗イベント
 - [backend/app/log_policy/logger.py](../../backend/app/log_policy/logger.py): `PolicyLogger`、`create_policy_logger`、structlogの遅延生成を使う `policy_logger`
 - [backend/app/log_policy/chain.py](../../backend/app/log_policy/chain.py): `build_processors` (既存チェーンへの組み込みは未実施)
