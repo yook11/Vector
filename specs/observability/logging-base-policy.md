@@ -149,7 +149,7 @@ SQLAlchemy例外の原因文からSQL実データを除き、診断属性は`err
 
 ### 共通アプリケーション例外の診断
 
-`app/shared/errors.py`の`ApplicationError`はログに依存せず、メッセージと任意の診断用辞書`details`を保持する。値の型注釈はJSONで表せる値を対象とする。`convert_application_error`は`str(exc)`と`details`を`ConvertedException`へ写し、診断情報が`None`なら最終出力の`error_details`を省略する。取得に失敗した場合は`[exception message unavailable]`を返し、任意属性へのfallbackは行わない。後段の共通sanitize・mask・出力制限を適用する。`SqsInputError`と`AssessmentMessageJsonInvalidError`へ適用し、Assessmentの入口・終端のログ経路へ接続済み。他のLambda・内部ログへの適用は後続とする。
+`app/shared/errors.py`の`ApplicationError`はログに依存せず、メッセージと任意の診断用辞書`details`を保持する。値の型注釈はJSONで表せる値を対象とする。`convert_application_error`は`str(exc)`と`details`を`ConvertedException`へ写し、診断情報が`None`なら最終出力の`error_details`を省略する。取得に失敗した場合は`[exception message unavailable]`を返し、任意属性へのfallbackは行わない。後段の共通sanitize・mask・出力制限を適用する。`SqsInputError`と`AssessmentMessageJsonInvalidError`へ適用し、Assessmentの入口・終端のログ経路へ接続済み。`AIProviderError`と`AssessmentError`も同じ基底を継承し、例外側で定義した説明と`code` / `reason`を取得する。AI呼び出し・クライアント内部のロガー接続は後続とする。Assessmentの未定義categoryは、検証境界で元のValueErrorの原因表示を抑制し、アプリケーション例外の診断で完結させる。通常のValueErrorの共通変換は変更しない。外側の説明を固定文にしても原因連鎖全体の入力値対策が完了するわけではなく、SDK例外の説明に残る値の保護は別途対応する。
 
 ### アプリの検証診断
 

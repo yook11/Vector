@@ -23,7 +23,6 @@ from app.lambda_handlers.assessment.event import (
 )
 from app.lambda_handlers.assessment.notification import ArticleListUpdateNotifier
 from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
-from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
@@ -38,14 +37,18 @@ def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:
     outer_context = structlog.contextvars.get_contextvars()
     structlog.contextvars.clear_contextvars()
     try:
-        setup_lambda_logging()
         logger = create_article_analysis_logger().bind(stage="assessment")
+        structlog.contextvars.bind_contextvars(
+            service="article_analysis", stage="assessment"
+        )
         request_id = getattr(context, "aws_request_id", None)
         if isinstance(request_id, str) and request_id.strip():
             logger = logger.bind(request_id=request_id)
+            structlog.contextvars.bind_contextvars(request_id=request_id)
         try:
             settings = AssessmentConsumerSettings()  # type: ignore[call-arg]
             logger = logger.bind(environment=settings.env)
+            structlog.contextvars.bind_contextvars(environment=settings.env)
             notifier = build_article_list_notifier(aws_region=settings.aws_region)
         except Exception as exc:
             logger.error(
@@ -132,7 +135,9 @@ async def _run_assessment(
                 analyzable_article_id=curated_event.payload.analyzable_article_id,
             )
             try:
-                completion = await consumer.consume(curated_event.payload)
+                completion = await consumer.consume(
+                    curated_event.payload, logger=message_logger
+                )
             except Exception as exc:
                 message_logger.error(
                     "assessment_message_processing_failed",
@@ -148,7 +153,11 @@ async def _run_assessment(
                     isinstance(completion, AssessmentCompletion)
                     and completion.kind is AssessmentCompletionKind.IN_SCOPE
                 ):
-                    await notifier.notify_article_list_updated()
+                    with structlog.contextvars.bound_contextvars(
+                        message_id=record.message_id,
+                        event_id=str(curated_event.event_id),
+                    ):
+                        await notifier.notify_article_list_updated()
                 if isinstance(completion, AssessmentReadyBuildRejected):
                     message_logger.warning(
                         "assessment_message_processing_failed",

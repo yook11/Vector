@@ -285,8 +285,16 @@ Evidence: Embedding handler・FailureRecorder、共通SqsRecordBatch、Assessmen
 - 各メッセージの結果を捕捉できる場合は開始1回と終端1回。終端は業務結果とSQS応答への扱いが確定した時点で記録し、`duration_ms`は開始からの実測時間とする。
 - 前提不成立は既存の拒否値を使い、ログのために例外化しない。業務上の失敗とSQS応答を分離し、前提不成立では`message_disposition=completed`、既存の個別失敗応答では`batch_item_failure`を記録する。
 - 初期化・バッチ全体の入力不正・二次障害・cleanupは既存の別の記録境界に残す。例外の抽出・分類・構造は既存変換に任せる。
-- 共通のAI記事分析ロガーを呼び出し時に構築し、request_id・environment・stageを付けてcompositionにも渡す。共有のLambdaログ設定や内部ログ、他工程は一括で変更しない。
+- 共通のAI記事分析ロガーを呼び出し時に構築し、request_id・environment・stageを付けてcompositionにも渡す。handlerで検証済みイベント・対象IDをbindしたロガーをConsumer・Service・失敗後処理の必須キーワード引数`logger`へ渡す。AssessmentのAI呼び出しへも同じロガーを渡し、DeepSeekクライアントにはcompositionから呼び出し単位のロガーを渡す。Assessment handlerの共有Lambdaログ設定呼び出しは削除済みとし、共通関数本体と他工程の呼び出しを維持する。通知処理内部・SSM cleanupは下記の専用ポリシーへ接続済みとし、他工程の業務ログ移行は後続とする。
 - 出力障害の捕捉は`ApplicationBoundLogger`の共通テストで検証する。各記録箇所は通常の`logger.info/warning/error`を呼ぶ。SQS応答は既存の業務テストで検証し、ログ文言・項目の期待値を各箇所へ複製しない。AWS適用・CloudWatch到達は今回の接続実装の完了条件に含めない。
+
+### 内部ログの接続（2026-09-22）
+
+- Serviceはcommit後に`assessment_result_saved`をINFOで出し、`outcome=in_scope / out_of_scope`と、対象内のみ保存済み`analyzed_article_id`を残す。保存競合では`assessment_result_save_skipped`をINFOで出し、`reason=concurrent_write`とする。
+- 二次障害の4イベントはWARNINGで維持する。処理名、元の業務例外型、二次例外の`exc_info`を渡し、診断の抽出と出力障害の捕捉は共通処理へ任せる。前提不成立の監査失敗は`rejection_code`を残す。
+- Repositoryはカテゴリ不整合の直接ログを削除し、起動時・保存時のチェックと既存例外を維持する。不足カテゴリは例外メッセージから初期化・メッセージ失敗の境界で記録する。
+- 内部ログはhandlerのメッセージ用ロガーを引き継ぎ、インスタンスには保持しない。内部でメッセージ全体の時間・SQS応答を再記録しない。出力項目の詳細は[AI分析ログ仕様 §3.3.2](../observability/ai-analysis-logging-policy.md#332-assessment内部の記録)を正本とする。
+- ログごとの出力テストは増やさず、既存のConsumer受け渡しテストをロガーの相関情報まで拡張する。業務テストの呼び出しを新しい引数へ対応させ、共通ラッパー・変換・ポリシーのテスト責務を維持する。
 
 ### 検証の責任と未接続部分
 
@@ -298,6 +306,35 @@ Done: 正常終了・個別失敗・バッチ失敗を適切に応答／伝播�
 検証結果: 実装時点では新規8ケースを含む関連単体テスト72件が成功。app全体・追加テストのRuff lint／format確認、`uv run pytest tests/ -m unit -x -q`の6,620件、`make test-integration PYTEST_ARGS="-x -q"`の1,400件が成功した。既存の非推奨・Logfire関連の警告は残る。一時DB・Redisは終了済み。local_tests・実AWSスモーク・デプロイは今回の範囲外として実行していない。
 
 PR作成前に混在バッチのテストを整理した。messageIdをテスト内に明示し、Consumerが4回処理されたことと失敗した2件だけの応答を確認する。修正後の対象テスト1件とRuff lint／format確認は成功。製品コードは変更せず、全体の成功済み検証は再実行していない。
+
+## AssessmentのAI内部ログ接続（2026-09-22）
+
+- ServiceからAssessorへ必須キーワード引数`logger`でメッセージ用ロガーを渡す。DeepSeek・Geminiの`assess` / `_call_once` / `_call_api`の契約を揃え、`_call_once`で`model`をbindする。ロガーをインスタンスに保持せず、AI呼び出しの既存の開始・成功・打ち切り・応答不正のイベント名とタイミングを維持する。
+- `open_deepseek_client`はcompositionの呼び出し単位ロガーを受け取る。cleanupはWARNINGで`operation=cleanup`・`resource`・完全修飾名の`error_class`だけを呼び出し情報へ追加し、メッセージ情報や例外文は渡さない。ログ障害の捕捉は共通ラッパーへ任せ、SDK・HTTPの終了順序とキャンセル伝播は維持する。
+- DeepSeekの`completion_tokens` / 設定の`max_tokens`はログでは`output_tokens` / `max_output_tokens`へ対応付ける。boolを除く非負整数だけを採用し、0は保持、未取得・不正型は省略する。終了理由は`stop` / `length` / `tool_calls` / `content_filter` / `function_call`だけを記録する。打ち切りは`reason=output_token_limit_reached`、応答不正は既存の`code`を記録する。
+- 出力契約の正本は[AI分析ログ仕様§3.3.3](../observability/ai-analysis-logging-policy.md#333-assessmentのai呼び出しとdeepseek-cleanup)。今回の内部ログに`exc_info`・生の例外文・プロンプト・応答本文は渡さない。正常時の使用量ログや戻り値モデルの項目は追加しない。
+- 業務結果・例外分類と原因連鎖・SQS応答・監査・通知・メトリクス・SDK設定は変更しない。このAI内部ログ接続時点では、共通ログ設定からの独立と通知内部への接続を後続とした。現在は以下のスライスで対応済み。HTTP・AI SDK例外の変換、他工程・エージェントの業務ログへの適用は後続とする。既存の終端ログに残るHTTP・SDK例外の入力値保護は未対応であり、例外全体の保護完了とは扱わない。
+- テストは既存の受け渡し確認と、DeepSeek固有の項目変換・cleanupの実JSON出力を担当する。共通マスク・例外診断・ログ障害保護・SQS応答の検証を各箇所へ複製しない。検証は関連単体テストと変更ファイルのlint・formatに限定し、DBテストは収集確認までとする。
+
+検証結果: 関連単体テスト587件成功（DB統合85件は実行対象外）、Geminiの公開入口を使うテスト更新後の11件も成功。変更Python 16ファイルのlint・formatと、DB利用ケースを含む539件の収集確認が成功した。全体・DB統合・実AI呼び出しは未実行。`setup_lambda_logging()`の削除、コミット・PR更新・デプロイは行っていない。
+
+## キャッシュ更新通知・SSMの専用ロガー接続（2026-09-22）
+
+通知とSSMは各処理内で専用ロガーを生成し、記事分析ロガーを受け渡さない。通知は`cache_revalidation`、秘密情報取得のcleanupは`infrastructure`の限定したルールを使う。定義の正本は[アプリケーションログ仕様§2.4](../observability/application-logging-policy.md#24-キャッシュ更新通知秘密情報取得2026-09-22)。
+
+Assessment handlerは呼び出し情報をcontextvarsへ束縛し、通知中だけ検証済みmessage_id・event_idを共有する。通知とその認証キー取得のSSMログに相関情報が残り、後のcleanupには持ち越さない。外側のcontextは既存finallyで復元する。通知用の秘密取得失敗とHTTP通知失敗は`operation=get_secret` / `notify`で区別する。
+
+通知の通常失敗の抑止・SSM取得結果と先行例外の保持・資源解放・キャンセル伝播・業務順序は維持する。共有部品の公開APIと他工程のLambda設定は変更しない。共有部品の既存利用箇所も専用ポリシーで出力するが、他工程への相関情報の追加は含めない。この接続時点で後続とした`setup_lambda_logging()`の呼び出し削除は、次項で対応した。HTTP・SDK専用変換、コミット・デプロイは未実施。
+
+検証結果: 関連単体テスト1,152件が成功（DB利用83件は対象外）。今回のPython 13ファイルのRuff lint・format確認も成功。全体・DB統合テストと実通信は実行していない。
+
+## AssessmentのLambda共通ログ設定への依存解消（2026-09-22）
+
+Assessment handlerから`setup_lambda_logging`のimportと呼び出しを削除した。記事分析・通知・SSMは各目的別ロガーの明示的なprocessor・JSON出力・共通ラッパーを使い、handlerはグローバルstructlog設定を変更しない。共通設定関数本体と他工程の呼び出しは維持する。
+
+ロガー引数・bind・contextvarsの束縛と復元は変更しない。公開API・型・業務結果・例外伝播・SQS応答・資源解放を維持する。テストfixtureのsetup用Mockを削除し、使用すると失敗するグローバルprocessorを設定した状態でも、実handlerが設定を書き換えずJSONの完了ログと相関IDを出力するテストを1件追加した。既存の相関情報・業務結果・共通保護のテストは維持する。
+
+検証結果: 関連単体テスト171件が成功し、変更したPython 2ファイルのRuff lint・format確認も成功した。追加テストは呼び出し削除前に失敗することを確認済み。全体テスト・DB統合テスト・実AWS通信は実行していない。
 
 ## Assessment向けOutbox配送（2026-09-12）
 

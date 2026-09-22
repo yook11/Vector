@@ -12,6 +12,7 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     to_assessment_error,
 )
+from app.shared.errors import ApplicationError
 
 
 class SampleDefect(StrEnum):
@@ -104,23 +105,30 @@ def test_core_errors_are_independent_of_task_classification(exc):
     assert "private sdk text" not in str(exc)
 
 
-def test_assessment_error_directly_inherits_exception():
-    """工程例外はログ固有の基底クラスへ依存しない。"""
-    assert AssessmentError.__bases__ == (Exception,)
+def test_assessment_error_is_application_error():
+    """工程例外を共通のアプリケーション例外として扱える。"""
+    assert isinstance(AssessmentCurationMissingError(), ApplicationError)
 
 
 @pytest.mark.parametrize(
-    "error",
+    "error,expected_message",
     [
-        to_assessment_error(AIProviderNetworkError("provider diagnostic")),
-        AssessmentResponseInvalidError(SampleDefect.INVALID),
-        AssessmentCurationMissingError(),
+        (
+            to_assessment_error(AIProviderNetworkError("private-provider-diagnostic")),
+            "AIプロバイダーの処理失敗により記事を判定できませんでした",
+        ),
+        (
+            AssessmentResponseInvalidError(SampleDefect.INVALID),
+            "AI応答が記事判定の契約を満たしていません",
+        ),
+        (AssessmentCurationMissingError(), "判定対象のCurationが存在しません"),
     ],
 )
-def test_assessment_error_uses_standard_empty_message(error):
-    """メッセージ未指定の例外文字列をcodeで補完しない。"""
-    assert error.args == ()
-    assert str(error) == ""
+def test_assessment_error_describes_failure_without_copying_provider_text(
+    error, expected_message
+):
+    """工程の失敗を説明し、プロバイダーの任意メッセージは転記しない。"""
+    assert str(error) == expected_message
 
 
 def test_response_invalid_is_assessment_error():

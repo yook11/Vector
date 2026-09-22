@@ -56,62 +56,73 @@ def _make_status_error(status_code: int, msg: str = "x") -> APIStatusError:
 # 固定するので、分類の正本テストはここ 1 本。__init__ の NOT_CONFIGURED は translator
 # 分岐外 (adapter 検知) なので本テーブルには含めない。
 @pytest.mark.parametrize(
-    "exc_factory,expected_cls,expected_reason",
+    "exc_factory,expected_cls,expected_reason,expected_message",
     [
         (
             lambda: APITimeoutError(request=_make_request()),
             AIProviderNetworkError,
             DeepSeekStateReason.TIMEOUT,
+            "AIプロバイダーとの通信がタイムアウトしました",
         ),
         (
             lambda: APIConnectionError(request=_make_request()),
             AIProviderNetworkError,
             DeepSeekStateReason.CONNECTION,
+            "AIプロバイダーに接続できませんでした",
         ),
         (
             lambda: TimeoutError("t"),
             AIProviderNetworkError,
             DeepSeekStateReason.TIMEOUT,
+            "AIプロバイダーとの通信がタイムアウトしました",
         ),
         (
             lambda: ConnectionError("c"),
             AIProviderNetworkError,
             DeepSeekStateReason.CONNECTION,
+            "AIプロバイダーに接続できませんでした",
         ),
         (
             lambda: OSError("dns"),
             AIProviderNetworkError,
             DeepSeekStateReason.CONNECTION,
+            "AIプロバイダーに接続できませんでした",
         ),
         (
             lambda: AuthenticationError("k", response=_make_response(401), body=None),
             AIProviderConfigurationError,
             DeepSeekStateReason.AUTH,
+            "AIプロバイダーの認証に失敗しました",
         ),
         (
             lambda: PermissionDeniedError("d", response=_make_response(403), body=None),
             AIProviderConfigurationError,
             DeepSeekStateReason.PERMISSION_DENIED,
+            "AIプロバイダーへのアクセス権限がありません",
         ),
         (
             lambda: NotFoundError("m", response=_make_response(404), body=None),
             AIProviderConfigurationError,
             DeepSeekStateReason.NOT_FOUND,
+            "AIプロバイダーの要求先が見つかりません",
         ),
         (
             lambda: _make_status_error(402, "Insufficient Balance"),
             AIProviderInsufficientBalanceError,
             DeepSeekStateReason.INSUFFICIENT_BALANCE,
+            "AIプロバイダーの利用残高が不足しています",
         ),
         (
             lambda: OpenAIRateLimitError("r", response=_make_response(429), body=None),
             AIProviderRateLimitedError,
             DeepSeekStateReason.RATE_LIMITED,
+            "AIプロバイダーの呼び出し頻度の上限に達しました",
         ),
         (
             lambda: BadRequestError("b", response=_make_response(400), body=None),
             AIProviderRequestInvalidError,
             DeepSeekStateReason.BAD_REQUEST,
+            "AIプロバイダーがリクエストを不正と判定しました",
         ),
         (
             lambda: UnprocessableEntityError(
@@ -119,26 +130,30 @@ def _make_status_error(status_code: int, msg: str = "x") -> APIStatusError:
             ),
             AIProviderRequestInvalidError,
             DeepSeekStateReason.UNPROCESSABLE,
+            "AIプロバイダーがリクエストを処理できませんでした",
         ),
         (
             lambda: InternalServerError("s", response=_make_response(500), body=None),
             AIProviderServiceUnavailableError,
             DeepSeekStateReason.SERVER_ERROR,
+            "AIプロバイダー内部でサーバーエラーが発生しました",
         ),
         (
             lambda: _make_status_error(503, "upstream"),
             AIProviderServiceUnavailableError,
             DeepSeekStateReason.SERVER_ERROR,
+            "AIプロバイダー内部でサーバーエラーが発生しました",
         ),
     ],
 )
-def test_translation_carries_code_and_reason(
-    exc_factory, expected_cls: type, expected_reason: object
+def test_translation_carries_code_reason_and_explanation(
+    exc_factory, expected_cls: type, expected_reason: object, expected_message: str
 ) -> None:
-    """各分岐が CODE (class) に加え DeepSeek 状態の reason を自己記述する。"""
+    """SDK例外を分類し、入力値を含まない説明と理由を伝える。"""
     translated = translate_deepseek_error(exc_factory())
     assert isinstance(translated, expected_cls)
     assert translated.reason is expected_reason  # type: ignore[attr-defined]
+    assert str(translated) == expected_message
 
 
 def test_402_is_evaluated_before_rate_limited() -> None:

@@ -67,15 +67,18 @@ def wiring(request, monkeypatch):
     if stage == "assessment":
 
         def open_consumer(settings):
+            result.log = create_article_analysis_logger().bind(
+                stage=stage, request_id="request-001"
+            )
             return module.open_assessment_consumer(
                 settings,
-                logger=create_article_analysis_logger().bind(stage=stage),
+                logger=result.log,
             )
 
     else:
         log = Mock()
         monkeypatch.setattr(module, "logger", log)
-    return SimpleNamespace(
+    result = SimpleNamespace(
         module=module,
         stage=stage,
         provider=provider,
@@ -89,6 +92,7 @@ def wiring(request, monkeypatch):
         log=log,
         open=open_consumer,
     )
+    return result
 
 
 @pytest.mark.asyncio
@@ -112,6 +116,7 @@ async def test_passes_stage_configuration_to_delayed_factories(wiring):
         )
         if wiring.stage == "assessment":
             expected["base_url"] = wiring.module.DEEPSEEK_ASSESSMENT_SPEC.base_url
+            expected["logger"] = wiring.log
         wiring.open_client.assert_called_once_with(**expected)
 
 

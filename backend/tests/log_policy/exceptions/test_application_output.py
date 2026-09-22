@@ -6,6 +6,8 @@ from uuid import UUID
 import pytest
 import structlog
 
+from app.analysis.assessment.ai.parse import parse_assessment
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
     AssessedEventInvalidError,
@@ -72,6 +74,36 @@ def test_boundary_diagnostics_reach_json_without_input(
     assert output["frames"]
     assert "causes" not in output
     assert "synthetic-private" not in json.dumps(output)
+
+
+def test_unknown_category_logs_application_diagnostics_without_invalid_value(
+    application_logger,
+) -> None:
+    """カテゴリー不正の説明・分類・発生位置を残し、元の値を原因経由でも出さない。"""
+    with pytest.raises(AssessmentResponseInvalidError) as caught:
+        parse_assessment(
+            {
+                "category": "PRIVATE_CATEGORY_SENTINEL",
+                "investor_take": "x",
+                "key_points": [],
+            }
+        )
+
+    output = json.loads(
+        application_logger.error("assessment_failed", exc_info=caught.value)
+    )
+
+    assert output["error_class"] == (
+        "app.analysis.assessment.errors.AssessmentResponseInvalidError"
+    )
+    assert output["error_message"] == "AI応答のcategoryが定義済みの分類ではありません"
+    assert output["error_details"] == {
+        "reason": "response_invalid",
+        "code": "assessment_response_category_unknown_value",
+    }
+    assert any(frame["function"] == "parse_assessment" for frame in output["frames"])
+    assert "PRIVATE_CATEGORY_SENTINEL" not in json.dumps(output)
+    assert "causes" not in output
 
 
 def test_deepest_exception_keeps_issue_fields_and_codes(

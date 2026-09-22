@@ -1,9 +1,9 @@
 # アプリケーションログの概念別ポリシーとCloudWatch集約
 
 作成: 2026-09-17
-更新: 2026-09-20（共通基底・AI分析の出力契約との整合）
+更新: 2026-09-22（AssessmentのLambda共通ログ設定への依存を解消）
 Status: Accepted
-Implementation: Partially implemented。共通基底の規則・processor・例外構造化・チェーン部品を実装済み。既存アプリへの接続、詳細な原因抽出、URLの目的別変換、CloudWatch配送の検証は未完了。
+Implementation: Partially implemented。共通基底の規則・processor・例外構造化・チェーン部品を実装済み。Assessmentは目的別ロガーでJSON出力し、Lambda共通ログ設定への依存を解消済み。他の既存アプリへの接続、詳細な原因抽出、URLの目的別変換、CloudWatch配送の検証は未完了。
 
 関連: [#317 記録方針の共通化](https://github.com/yook11/Vector/issues/317)、[#328 エラーの情報保持と安全な記録の分離](https://github.com/yook11/Vector/issues/328)
 
@@ -77,7 +77,9 @@ AWSランタイムのシステムログやOS・proxy・DBサービス自体の�
 - `external_content_fetch`: 記事取得・本文補完のURL、HTTP結果、抽出結果、失敗診断。目的別allowは未定義。
 - `ai_inference`: 記事のAI分析の相関情報・結果・失敗診断。初期対象のCurationとAssessmentは一つの完成済みルールを使い、stage属性で区別する。項目・出所・保護方法は[AI分析ポリシー](./ai-analysis-logging-policy.md)を正本とする。
 - Embedding・Agent等への適用は、対象情報と責務を確認してから定義する。AI利用という理由だけで同じポリシーを無条件に適用しない。
-- `user_interaction` / `pipeline_control` / `infrastructure`: 基底に識別子を定義済み。目的別allowと適用経路は別途定義する。
+- `cache_revalidation`: キャッシュ更新通知の対象・処理箇所・相関情報。§2.4に定義する。
+- `infrastructure`: 秘密情報取得の資源終了ログを§2.4の限定したルールへ接続済み。インフラ全般の項目を許可した状態ではない。
+- `user_interaction` / `pipeline_control`: 基底に識別子を定義済み。目的別allowと適用経路は別途定義する。
 - DB例外は実行中の目的ポリシーで記録し、共通のSQL例外保護を適用する。例外型だけを理由に`db`という別ポリシーへ切り替えない。
 
 これは概念の分割基準であり、イベントごとに別ポリシーを作る指示ではない。同一概念の開始・成功・失敗ログは同じポリシーを使う。
@@ -114,6 +116,35 @@ loggerの構築時に、コードが所有する完成済みルールを結び�
 | error_class・error_message・frames・error_details・causes・exceptions | 失敗時に基底の例外変換を通して保持する。通常のcause/contextとSQL診断は基底で抽出し、SDK固有の原因構造は追加実装する。 |
 
 既存の意味が同じフィールド名を再利用し、単なる命名統一で全呼び出し元を変更しない。各概念の詳細な項目・型の列挙は、その概念を接続する実装と同時に正本へ追加する。汎用`extra`で未定義の項目を通さない。
+
+### 2.4 キャッシュ更新通知・秘密情報取得（2026-09-22）
+
+通知と秘密情報取得は記事分析からも利用されるが、記事分析の目的ルールは使わない。各処理が自分の目的ルールを結び付けたロガーを呼び出しごとに生成する。
+
+| 目的 | 識別子・ルール | 目的固有のallow |
+| --- | --- | --- |
+| キャッシュ更新通知 | `cache_revalidation` / `CACHE_REVALIDATION_LOG_RULES` | `tags` / `operation` / `error_class` |
+| 秘密情報取得 | `infrastructure` / `SECRET_ACCESS_LOG_RULES` | `operation` / `resource` / `error_class` |
+
+両ルールとも`service` / `environment` / `stage` / `request_id` / `message_id` / `event_id`をallowに持つ。基底の認証情報deny・maskを継承し、基底項目と自動生成の`log_policy`は重複定義しない。モデル・使用量・記事IDは追加しない。`tags`はアプリが組み立てるキャッシュタグのリストで、任意の外部入力を許可するものではない。タグの意味は呼び出し側が所有し、ポリシーはタグの業務検証を複製しない。
+
+| イベント | level | 出力する診断 |
+| --- | --- | --- |
+| `frontend_revalidate_ok` | INFO | 成功した通知の`tags`と相関情報。 |
+| `frontend_revalidate_failed` | WARNING | `tags`、秘密取得中なら`operation=get_secret`、通知通信・応答確認中なら`operation=notify`、例外型の完全修飾名`error_class`と相関情報。 |
+| `ssm_parameter_cleanup_failed` | WARNING | `operation=cleanup`、`resource=ssm`、例外型の完全修飾名`error_class`と相関情報。 |
+
+内部URL・パラメーターパス・秘密値・認証ヘッダー・SDK応答全体を渡さない。HTTP・AWS SDK例外の専用変換は後続とし、この3イベントには生の例外文や`exc_info`を追加しない。SSMの取得失敗は既存どおり呼び出し元へ伝播させ、取得開始・成功・失敗のイベントを増やさない。通知の通常失敗の抑止、SSMの取得結果・先行例外保持、キャンセル伝播、通信設定・資源解放順序を維持する。
+
+[共通のJSONロガー構築口](../../backend/app/log_policy/runtime.py)は既存の`create_policy_logger`・`build_processors`・`ApplicationBoundLogger`・`JSONRenderer`・`WriteLoggerFactory`を明示する。INFO以上を出力し、グローバルstructlog設定に依存しない。記事分析ロガーもこの構築口を使う。通常の出力障害は共通ラッパーで捕捉し、通知・SSMに同じ保護を再実装しない。
+
+Assessmentは呼び出し境界で`service` / `stage` / 有効な`request_id` / 設定取得後の`environment`をcontextvarsへ束縛し、既存のfinallyで外側のcontextを復元する。通知中だけ検証済みの`message_id` / `event_id`を追加し、通知終了時に解除・復元する。SSMの`asyncio.to_thread`にも現在のcontextが伝わるため、AIキー取得時は呼び出し情報、通知キー取得時は通知中の相関情報が残る。メッセージ情報を後のライフサイクルcleanupへ持ち越さない。
+
+共有部品の既存呼び出し元も、この専用ポリシーによるJSON出力になる。呼び出しAPIは維持するが、Assessment以外の入口で相関情報を追加する作業は含めない。Assessment handlerの`setup_lambda_logging()`のimportと呼び出しは削除済み。共通関数本体と他工程の呼び出しは維持する。共通変換を通る既存終端例外のHTTP・SDK由来入力値の保護完了も、この接続の完了条件には含めない。
+
+テストは各ルールを通した許可項目と不要項目の選別、実際の通知・SSMのJSON出力、Assessmentの共有contextの範囲を確認する。共通マスク・例外変換・ログ障害保護は既存の共通テストに任せる。通信や秘密情報取得はテストで差し替え、実環境へ送信しない。
+
+検証結果: ポリシー・通知・SSM・Assessment・共有ライフサイクル・DeepSeekの関連単体テスト1,152件が成功（DB利用83件は選択対象外）。追加・変更したPython 13ファイルのRuff lint・format確認が成功した。全体テスト・DB統合テスト・実通信・デプロイは実行していない。
 
 ## 3. contextから出力まで
 
@@ -296,3 +327,8 @@ PythonとTypeScriptで情報別契約と合成入出力例を共有する。仕�
 既存コンストラクターの引数と保持属性を維持し、メッセージ未指定時は`args == ()`、`str(error) == ""`とする。独自コンストラクターを持たない基底は標準の引数保持に従う。型名・code・reason・件数・固定文による補完は行わない。監査の文字列変換結果が空の場合は既存の処理で`payload.error_message=null`とし、既存の構造化コード・分類・例外型・原因チェーンを維持する。DBスキーマ・既存行は変更しない。
 
 この撤去では新しいメッセージ引数、原因情報の追加取得、ログ変換・出力ポリシーの接続は行わず、既存のLogfire出力保護と公開応答の境界を維持する。
+
+
+### AIプロバイダー・Assessmentの説明と診断（2026-09-22）
+
+上記の空メッセージ維持は2026-09-21の撤去時点の契約である。AIプロバイダーとAssessmentは`ApplicationError`へ移行し、失敗箇所で入力値を含めない具体的な説明を渡す。共通変換は説明と明示された`details`（code・reason）を受け取り、分類や説明文の再構築は行わない。詳細は[AI分析ログ仕様](ai-analysis-logging-policy.md)を正本とする。原因連鎖の入力値保護とAI内部ロガー接続はこの変更に含めない。

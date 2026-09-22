@@ -86,6 +86,16 @@ class GeminiStateReason(StrEnum):
     OUTPUT_TOKEN_LIMIT_REACHED = "output_token_limit_reached"  # noqa: S105
 
 
+_CONFIG_REASON_MESSAGES: dict[GeminiStateReason, str] = {
+    GeminiStateReason.AUTH: "AIプロバイダーの認証に失敗しました",
+    GeminiStateReason.PERMISSION_DENIED: "AIプロバイダーへのアクセス権限がありません",
+    GeminiStateReason.NOT_FOUND: "AIプロバイダーの要求先が見つかりません",
+    GeminiStateReason.FAILED_PRECONDITION: (
+        "AIプロバイダーの利用に必要な前提条件が満たされていません"
+    ),
+}
+
+
 # finish_reason 名 → content 拒否 reason。出力ブロックを検知した adapter が、
 # 自身の blocked-set に含めた finish_reason 名を本写像で reason に変換する。
 _FINISH_REASON_TO_CONTENT_REASON: dict[str, GeminiContentRejectionReason] = {
@@ -230,17 +240,30 @@ def translate_gemini_error(exc: Exception) -> Exception:
     # Network errors。SDK 生 message を渡さず、PII 含有経路を残さない。
     # timeout / connection を reason で区別する。
     if isinstance(exc, httpx.TimeoutException):
-        return AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT)
+        return AIProviderNetworkError(
+            "AIプロバイダーとの通信がタイムアウトしました",
+            reason=GeminiStateReason.TIMEOUT,
+        )
     if isinstance(exc, httpx.ConnectError):
-        return AIProviderNetworkError(reason=GeminiStateReason.CONNECTION)
+        return AIProviderNetworkError(
+            "AIプロバイダーに接続できませんでした", reason=GeminiStateReason.CONNECTION
+        )
     if isinstance(exc, TimeoutError):
-        return AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT)
+        return AIProviderNetworkError(
+            "AIプロバイダーとの通信がタイムアウトしました",
+            reason=GeminiStateReason.TIMEOUT,
+        )
     if isinstance(exc, ConnectionError | OSError):
-        return AIProviderNetworkError(reason=GeminiStateReason.CONNECTION)
+        return AIProviderNetworkError(
+            "AIプロバイダーに接続できませんでした", reason=GeminiStateReason.CONNECTION
+        )
 
     # 2. ServerError は APIError subclass なので先に判定して 5xx を分離する。
     if isinstance(exc, genai_errors.ServerError):
-        return AIProviderServiceUnavailableError(reason=GeminiStateReason.SERVER_ERROR)
+        return AIProviderServiceUnavailableError(
+            "AIプロバイダー内部でサーバーエラーが発生しました",
+            reason=GeminiStateReason.SERVER_ERROR,
+        )
 
     # 3. APIError は ClientError / ServerError の共通親型。ServerError を
     #    先に処理済みなので、ここに来るのは 4xx 系。google-genai 1.x の APIError は
@@ -253,33 +276,45 @@ def translate_gemini_error(exc: Exception) -> Exception:
 
         # 3a. Leaked API key は固定文言だけを見て、SDK 生 message は外へ出さない。
         if "reported as leaked" in message:
-            return AIProviderConfigurationError(reason=GeminiStateReason.LEAKED_API_KEY)
+            return AIProviderConfigurationError(
+                "AIプロバイダーがAPIキーの漏洩を検知しました",
+                reason=GeminiStateReason.LEAKED_API_KEY,
+            )
 
         # 3b. 設定系 status を **先に** 評価。FAILED_PRECONDITION が同時に
         #     code=400 を持っていても ConfigurationError に振り分ける。
         if status in _STATUS_TO_CONFIG_REASON:
-            return AIProviderConfigurationError(reason=_STATUS_TO_CONFIG_REASON[status])
+            reason = _STATUS_TO_CONFIG_REASON[status]
+            return AIProviderConfigurationError(
+                _CONFIG_REASON_MESSAGES[reason], reason=reason
+            )
 
         # 3c. 設定系 HTTP code (gRPC status が空の envelope 用)。
         if code in _HTTP_CODE_TO_CONFIG_REASON:
+            reason = _HTTP_CODE_TO_CONFIG_REASON[code]
             return AIProviderConfigurationError(
-                reason=_HTTP_CODE_TO_CONFIG_REASON[code]
+                _CONFIG_REASON_MESSAGES[reason], reason=reason
             )
 
         # 3d. 400 / INVALID_ARGUMENT を 3-way 分岐。
         if code == 400 or status == "INVALID_ARGUMENT":
             if "api key" in message:
-                return AIProviderConfigurationError(reason=GeminiStateReason.AUTH)
+                return AIProviderConfigurationError(
+                    "AIプロバイダーの認証に失敗しました", reason=GeminiStateReason.AUTH
+                )
             if "permission" in message:
                 return AIProviderConfigurationError(
-                    reason=GeminiStateReason.PERMISSION_DENIED
+                    "AIプロバイダーへのアクセス権限がありません",
+                    reason=GeminiStateReason.PERMISSION_DENIED,
                 )
             if "blocked" in message or "safety" in message:
                 return AIProviderInputRejectedError(
+                    "AIプロバイダーが安全性の制約により入力を拒否しました",
                     reason=GeminiContentRejectionReason.INPUT_BLOCKED,
                 )
             return AIProviderRequestInvalidError(
-                reason=GeminiStateReason.INVALID_ARGUMENT
+                "AIプロバイダーがリクエストの引数を不正と判定しました",
+                reason=GeminiStateReason.INVALID_ARGUMENT,
             )
 
         # 3e. 429 / RESOURCE_EXHAUSTED。構造化 details に per-day violation を
@@ -289,9 +324,13 @@ def translate_gemini_error(exc: Exception) -> Exception:
         if code == 429 or status == "RESOURCE_EXHAUSTED":
             if _has_per_day_quota_violation(exc):
                 return AIProviderUsageLimitExhaustedError(
-                    reason=GeminiStateReason.QUOTA_EXHAUSTED
+                    "AIプロバイダーの1日当たりの利用枠を使い切りました",
+                    reason=GeminiStateReason.QUOTA_EXHAUSTED,
                 )
-            return AIProviderRateLimitedError(reason=GeminiStateReason.RATE_LIMITED)
+            return AIProviderRateLimitedError(
+                "AIプロバイダーの呼び出し頻度の上限に達しました",
+                reason=GeminiStateReason.RATE_LIMITED,
+            )
 
     # 4. 未知。stage-local 側で stage-specific 判定 (ValidationError 等) を
     #    補えるよう、加工せず返す。

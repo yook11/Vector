@@ -24,16 +24,15 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Protocol
 
-import structlog
 from pydantic import SecretStr
 
 from app.audit.error_fields import exception_fqn
 from app.http.internal import make_internal_async_client
+from app.log_policy.policies.cache_revalidation import CACHE_REVALIDATION_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 if TYPE_CHECKING:
     from app.config import Settings
-
-logger = structlog.get_logger(__name__)
 
 
 class RevalidateNotifier(Protocol):
@@ -67,8 +66,11 @@ class FrontendRevalidateNotifier:
         )
 
     async def notify(self, *, tags: Sequence[str]) -> None:
+        logger = create_policy_json_logger(__name__, CACHE_REVALIDATION_LOG_RULES)
+        operation = "get_secret"
         try:
             secret = await self._secret_provider()
+            operation = "notify"
             async with make_internal_async_client(timeout=5.0) as client:
                 resp = await client.post(
                     self._url,
@@ -78,15 +80,12 @@ class FrontendRevalidateNotifier:
                 resp.raise_for_status()
             logger.info("frontend_revalidate_ok", tags=list(tags))
         except Exception as exc:
-            try:
-                logger.warning(
-                    "frontend_revalidate_failed",
-                    tags=list(tags),
-                    error_class=exception_fqn(exc),
-                )
-            except Exception:  # noqa: S110
-                # 診断障害で保存済みの処理結果を変えない。
-                pass
+            logger.warning(
+                "frontend_revalidate_failed",
+                tags=list(tags),
+                operation=operation,
+                error_class=exception_fqn(exc),
+            )
 
 
 class NullRevalidateNotifier:

@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, Mock
 
 import httpx  # noqa: TID251 (テスト内 mock 構築のため、実通信なし)
 import pytest
+import structlog
 from pydantic import SecretStr
-from structlog.testing import capture_logs
 
 from app.shared import revalidate
 from app.shared.revalidate import (
@@ -96,36 +97,61 @@ class TestNullNotifier:
 
 
 @pytest.mark.asyncio
-async def test_secret_failure_logs_only_error_class(monkeypatch):
-    """キー取得失敗の警告に例外自由文や秘密値を含めない。"""
-    provider = AsyncMock(side_effect=RuntimeError("private-notification-secret"))
+async def test_secret_failure_logs_only_error_class(monkeypatch, capsys):
+    """キー取得失敗は通知ポリシーで処理箇所と型を残し、秘密値は出さない。"""
+    provider = AsyncMock(side_effect=RuntimeError("PRIVATE_NOTIFICATION_SECRET"))
     client = Mock()
     monkeypatch.setattr(revalidate, "make_internal_async_client", client)
 
-    with capture_logs() as logs:
+    with structlog.contextvars.bound_contextvars(request_id="request-001"):
         await _notifier(secret_provider=provider).notify(tags=["articles:list"])
 
-    client.assert_not_called()
-    assert logs == [
-        {
-            "event": "frontend_revalidate_failed",
-            "tags": ["articles:list"],
-            "error_class": "builtins.RuntimeError",
-            "log_level": "warning",
-        }
-    ]
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert record["log_policy"] == "cache_revalidation"
+    assert record["operation"] == "get_secret"
+    assert record["error_class"] == "builtins.RuntimeError"
+    assert record["request_id"] == "request-001"
+    assert record["tags"] == ["articles:list"]
+    assert "PRIVATE_NOTIFICATION_SECRET" not in output
+    assert "error_message" not in record
 
 
 @pytest.mark.asyncio
-async def test_notification_diagnostic_failure_does_not_escape(monkeypatch):
-    """通知障害のログ出力が失敗しても呼び出し元へ例外を返さない。"""
-    provider = AsyncMock(side_effect=RuntimeError("notification unavailable"))
-    log = Mock(warning=Mock(side_effect=RuntimeError("logging failed")))
-    monkeypatch.setattr(revalidate, "logger", log)
+async def test_http_failure_log_identifies_notification_operation(monkeypatch, capsys):
+    """HTTP失敗の記録は秘密取得と区別し、応答本文や内部URLを出さない。"""
 
-    await _notifier(secret_provider=provider).notify(tags=["articles:list"])
+    async def respond(request):
+        return httpx.Response(500, text="PRIVATE_RESPONSE")
 
-    log.warning.assert_called_once()
+    _patch_transport(monkeypatch, httpx.MockTransport(respond))
+    await _notifier().notify(tags=["articles:list"])
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert record["event"] == "frontend_revalidate_failed"
+    assert record["operation"] == "notify"
+    assert record["error_class"] == "httpx.HTTPStatusError"
+    assert record["level"] == "warning"
+    assert "PRIVATE_RESPONSE" not in output
+    assert "http://frontend:3000" not in output
+
+
+@pytest.mark.asyncio
+async def test_success_log_uses_cache_revalidation_policy(monkeypatch, capsys):
+    """成功時も通知専用ポリシーで更新対象をJSONへ記録する。"""
+
+    async def respond(request):
+        return httpx.Response(200)
+
+    _patch_transport(monkeypatch, httpx.MockTransport(respond))
+    await _notifier().notify(tags=["articles:list"])
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["event"] == "frontend_revalidate_ok"
+    assert record["log_policy"] == "cache_revalidation"
+    assert record["tags"] == ["articles:list"]
+    assert record["level"] == "info"
 
 
 @pytest.mark.asyncio

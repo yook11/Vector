@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import abc
 
-import structlog
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.errors import AIProviderError
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentError
-
-logger = structlog.get_logger(__name__)
 
 
 class BaseAssessor(abc.ABC):
@@ -67,6 +65,8 @@ class BaseAssessor(abc.ABC):
         self,
         title_ja: str,
         summary_ja: str,
+        *,
+        logger: FilteringBoundLogger,
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """Stage 3 (Curation) の出力を判定し ``AssessmentCall`` envelope を返す。
 
@@ -89,7 +89,7 @@ class BaseAssessor(abc.ABC):
 
     @abc.abstractmethod
     async def _call_api(
-        self, prompt: str
+        self, prompt: str, *, logger: FilteringBoundLogger
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """プロバイダー SDK を呼び出し、``AssessmentCall`` を返す。
 
@@ -114,7 +114,7 @@ class BaseAssessor(abc.ABC):
     # -- 単発呼び出し --
 
     async def _call_once(
-        self, prompt: str
+        self, prompt: str, *, logger: FilteringBoundLogger
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """1 回の API call。SDK 例外を ``AIProvider*Error`` 階層に翻訳して raise。
 
@@ -125,10 +125,11 @@ class BaseAssessor(abc.ABC):
           ``raise`` (from なし、UNKNOWN として catch-all 経路へ)
         - 翻訳された場合のみ ``raise translated from exc`` で原因連鎖
         """
+        call_logger = logger.bind(model=self.model_name)
         try:
-            logger.info("assessor_api_call", model=self.model_name)
-            result = await self._call_api(prompt)
-            logger.info("assessor_api_success", model=self.model_name)
+            call_logger.info("assessor_api_call")
+            result = await self._call_api(prompt, logger=call_logger)
+            call_logger.info("assessor_api_success")
             return result
         except (AIProviderError, AssessmentError):
             # 既に階層内 (parse_assessment が raise した

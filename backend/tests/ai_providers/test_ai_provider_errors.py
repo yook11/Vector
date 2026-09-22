@@ -18,6 +18,7 @@ from app.ai_providers.errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.shared.errors import ApplicationError
 
 
 class Reason(StrEnum):
@@ -39,9 +40,9 @@ _CONCRETE_ERRORS = (
 _ERROR_TYPES = (AIProviderError, *(cls for cls, _ in _CONCRETE_ERRORS))
 
 
-def test_base_directly_inherits_exception() -> None:
-    """基底例外は通常のExceptionを直接継承する。"""
-    assert AIProviderError.__bases__ == (Exception,)
+def test_base_is_application_error() -> None:
+    """プロバイダー例外を共通のアプリケーション例外として扱える。"""
+    assert isinstance(AIProviderError(), ApplicationError)
 
 
 @pytest.mark.parametrize("cls,code", _CONCRETE_ERRORS)
@@ -80,12 +81,31 @@ def test_unknown_direct_subclass_is_not_classified() -> None:
     assert not isinstance(UnknownFailure(), CLASSIFIED_AI_PROVIDER_ERRORS)
 
 
-@pytest.mark.parametrize("cls", _ERROR_TYPES)
-def test_no_args_uses_empty_exception_representation(cls) -> None:
-    """引数なしではCODEによる文字列の補完を行わない。"""
-    error = cls()
-    assert error.args == ()
-    assert str(error) == ""
+@pytest.mark.parametrize(
+    "cls,expected_message",
+    [
+        (AIProviderError, "AIプロバイダーの処理に失敗しました"),
+        (AIProviderInputRejectedError, "AIプロバイダーが入力を拒否しました"),
+        (AIProviderOutputBlockedError, "AIプロバイダーが応答の出力を抑止しました"),
+        (AIProviderConfigurationError, "AIプロバイダーの設定または利用条件が不正です"),
+        (AIProviderRequestInvalidError, "AIプロバイダーへのリクエストが不正です"),
+        (
+            AIProviderInsufficientBalanceError,
+            "AIプロバイダーの利用残高が不足しています",
+        ),
+        (AIProviderRateLimitedError, "AIプロバイダーの呼び出し頻度の上限に達しました"),
+        (AIProviderUsageLimitExhaustedError, "AIプロバイダーの利用枠を使い切りました"),
+        (AIProviderServiceUnavailableError, "AIプロバイダーのサービスを利用できません"),
+        (AIProviderNetworkError, "AIプロバイダーとの通信に失敗しました"),
+        (
+            AIProviderOutputTruncatedError,
+            "AIプロバイダーの応答が途中で打ち切られました",
+        ),
+    ],
+)
+def test_no_message_describes_known_failure_kind(cls, expected_message) -> None:
+    """詳細な理由が不明でも、例外型が表す失敗の説明を残す。"""
+    assert str(cls()) == expected_message
 
 
 @pytest.mark.parametrize("cls", _ERROR_TYPES)
@@ -97,13 +117,10 @@ def test_message_is_preserved(cls) -> None:
 
 
 @pytest.mark.parametrize("cls", _ERROR_TYPES)
-def test_multiple_args_are_preserved(cls) -> None:
-    """文字列以外も含む複数引数を改変しない。"""
-    detail = {"status": 503}
-    error = cls("unavailable", detail)
-    assert error.args == ("unavailable", detail)
-    assert error.args[1] is detail
-    assert str(error) == str(Exception("unavailable", detail))
+def test_message_rejects_arbitrary_objects(cls) -> None:
+    """応答などの任意オブジェクトを説明文として受け取らない。"""
+    with pytest.raises(TypeError, match="message must be a string or None"):
+        cls({"body": "private-response"})
 
 
 @pytest.mark.parametrize("cls", _ERROR_TYPES)
@@ -125,12 +142,6 @@ def test_reason_is_preserved_separately_from_args(cls) -> None:
     assert error.reason is Reason.TIMEOUT
     assert error.args == ("request failed",)
     assert str(error) == "request failed"
-
-
-@pytest.mark.parametrize("cls", _ERROR_TYPES)
-def test_reason_does_not_fill_empty_message(cls) -> None:
-    """理由だけを渡してもメッセージを補完しない。"""
-    assert str(cls(reason=Reason.TIMEOUT)) == ""
 
 
 @pytest.mark.parametrize("cls", _ERROR_TYPES)
