@@ -32,13 +32,13 @@ variables {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.backfill_lambda_boundary_shared
+  target          = aws_iam_policy.backfill_lambda_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-lambda-boundary" }
 }
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.backfill_scheduler_boundary_shared
+  target          = aws_iam_policy.backfill_scheduler_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-scheduler-boundary" }
 }
 
@@ -47,9 +47,9 @@ run "backfill_roles_require_their_own_boundary" {
   assert {
     condition = (
       length(local.backfill_role_boundary_groups) == 2 &&
-      local.role_boundary_groups["BackfillLambda"].boundary == aws_iam_policy.backfill_lambda_boundary_shared.arn &&
+      local.role_boundary_groups["BackfillLambda"].boundary == aws_iam_policy.backfill_lambda_boundary.arn &&
       local.role_boundary_groups["BackfillLambda"].role_names == ["slice-test-backfill-lambda"] &&
-      local.role_boundary_groups["BackfillScheduler"].boundary == aws_iam_policy.backfill_scheduler_boundary_shared.arn &&
+      local.role_boundary_groups["BackfillScheduler"].boundary == aws_iam_policy.backfill_scheduler_boundary.arn &&
       local.role_boundary_groups["BackfillScheduler"].role_names == ["slice-test-backfill-scheduler"] &&
       alltrue([for statement in local.backfill_boundary_pairing_statements :
         statement.Effect == "Deny" && statement.Action == "iam:CreateRole" &&
@@ -65,7 +65,7 @@ run "lambda_boundary_limits_database_queues_logs_and_eni" {
   command = plan
   assert {
     condition = (
-      jsondecode(aws_iam_policy.backfill_lambda_boundary_shared.policy).Statement == [
+      jsondecode(aws_iam_policy.backfill_lambda_boundary.policy).Statement == [
         { Sid = "RdsIamAuthAsApp", Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app" },
         { Sid = "SendPipelineEvents", Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "curation", "embedding"] : "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-${stage}"] },
         { Sid = "WriteBackfillLogs", Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "curation", "embedding"] : "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/slice-test-${stage}-backfill:*"] },
@@ -82,7 +82,7 @@ run "scheduler_boundary_invokes_only_backfill_functions" {
   command = plan
   assert {
     condition = (
-      jsondecode(aws_iam_policy.backfill_scheduler_boundary_shared.policy).Statement == [
+      jsondecode(aws_iam_policy.backfill_scheduler_boundary.policy).Statement == [
         { Sid = "InvokeBackfillOnly", Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [for stage in ["assessment", "curation", "embedding"] : local.backfill_lambda_arns[stage]] },
         local.boundary_no_escalation_statement,
       ]
@@ -168,8 +168,8 @@ run "backfill_policies_stay_within_iam_size_limits" {
     condition = (
       length(aws_iam_policy.apply_backfill.policy) <= 6144 && length(aws_iam_policy.apply_pass_role.policy) <= 6144 &&
       length(aws_iam_policy.lambda_config_readback.policy) <= 6144 && length(aws_iam_role_policy.apply.policy) <= 10240 &&
-      length(aws_iam_policy.backfill_lambda_boundary_shared.policy) <= 6144 &&
-      length(aws_iam_policy.backfill_scheduler_boundary_shared.policy) <= 6144
+      length(aws_iam_policy.backfill_lambda_boundary.policy) <= 6144 &&
+      length(aws_iam_policy.backfill_scheduler_boundary.policy) <= 6144
     )
     error_message = "追加後もIAM容量を守る: backfill=${length(aws_iam_policy.apply_backfill.policy)}, PassRole=${length(aws_iam_policy.apply_pass_role.policy)}, inline=${length(aws_iam_role_policy.apply.policy)}。"
   }
