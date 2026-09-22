@@ -43,7 +43,7 @@ locals {
   ]
   outbox_service_roles = {
     Lambda = {
-      arns = concat(local.backfill_lambda_role_arns, [local.source_dispatch_lambda_role_arn,
+      arns = concat([local.backfill_lambda_role_arn], [local.source_dispatch_lambda_role_arn,
         "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda",
         local.embedding_consumer_role_arn,
         local.assessment_consumer_role_arn,
@@ -58,7 +58,7 @@ locals {
       service = "lambda.amazonaws.com"
     }
     Scheduler = {
-      arns    = concat(local.backfill_scheduler_role_arns, [local.source_dispatch_scheduler_role_arn, local.auth_rate_limit_cleanup_scheduler_role_arn], [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"])
+      arns    = concat([local.backfill_scheduler_role_arn], [local.source_dispatch_scheduler_role_arn, local.auth_rate_limit_cleanup_scheduler_role_arn], [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"])
       service = "scheduler.amazonaws.com"
     }
   }

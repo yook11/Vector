@@ -290,9 +290,7 @@ run "passrole_allows_only_pipeline_lambda_roles" {
           local.curation_outbox_relay_role_arn,
           local.completion_outbox_relay_role_arn,
           local.auth_rate_limit_cleanup_lambda_role_arn,
-          "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-backfill-lambda",
-          "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-backfill-lambda",
-          "arn:aws:iam::123456789012:role/slice-test/slice-test-embedding-backfill-lambda",
+          "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-lambda",
         ]) && s.Condition.StringEquals["iam:PassedToService"] == "lambda.amazonaws.com"
       ]) &&
       alltrue([for s in local.outbox_pass_role_guards : s.Sid != "DenyPipelineLambdaRolesToOtherServices" ? true :
@@ -309,17 +307,15 @@ run "passrole_allows_only_pipeline_lambda_roles" {
           local.curation_outbox_relay_role_arn,
           local.completion_outbox_relay_role_arn,
           local.auth_rate_limit_cleanup_lambda_role_arn,
-          "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-backfill-lambda",
-          "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-backfill-lambda",
-          "arn:aws:iam::123456789012:role/slice-test/slice-test-embedding-backfill-lambda",
+          "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-lambda",
         ]) && s.Condition.StringNotEquals["iam:PassedToService"] == "lambda.amazonaws.com"
       ]) &&
       alltrue([for s in local.outbox_pass_role_guards : s.Sid != "DenyPassRoleToSchedulerExceptPipelineRoles" ? true :
-        s.NotResource == ["arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-backfill-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-backfill-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-embedding-backfill-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-source-dispatch-scheduler", local.auth_rate_limit_cleanup_scheduler_role_arn, "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-outbox-relay-scheduler"] &&
+        s.NotResource == ["arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-source-dispatch-scheduler", local.auth_rate_limit_cleanup_scheduler_role_arn, "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-outbox-relay-scheduler"] &&
         s.Condition.StringEquals["iam:PassedToService"] == "scheduler.amazonaws.com"
       ]) &&
       alltrue([for s in local.outbox_pass_role_guards : s.Sid != "DenyPipelineSchedulerRolesToOtherServices" ? true :
-        s.Resource == ["arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-backfill-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-backfill-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-embedding-backfill-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-source-dispatch-scheduler", local.auth_rate_limit_cleanup_scheduler_role_arn, "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-outbox-relay-scheduler"] &&
+        s.Resource == ["arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-source-dispatch-scheduler", local.auth_rate_limit_cleanup_scheduler_role_arn, "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler", "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-outbox-relay-scheduler"] &&
         s.Effect == "Deny" && s.Condition.StringNotEquals["iam:PassedToService"] == "scheduler.amazonaws.com"
       ]) &&
       alltrue([for guard in local.outbox_pass_role_guards : contains(jsondecode(aws_iam_policy.apply_pass_role.policy).Statement, guard)])
