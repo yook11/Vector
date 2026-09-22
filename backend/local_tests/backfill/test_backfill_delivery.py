@@ -4,12 +4,11 @@ import asyncio
 
 import pytest
 
-from app.lambda_handlers.assessment.event import parse_curated_signal_event
-from app.lambda_handlers.completion.event import (
-    parse_incomplete_article_recorded_event,
-)
-from app.lambda_handlers.curation.event import parse_analyzable_article_created_event
-from app.lambda_handlers.embedding.event import parse_assessed_in_scope_event
+from app.analysis.assessment.events import ArticleAssessedInScopeEvent
+from app.analysis.curation.events import ArticleCuratedSignalEvent
+from app.collection.article_acquisition.events import IncompleteArticleRecordedEvent
+from app.collection.events import AnalyzableArticleCreatedEvent
+from app.lambda_handlers.sqs.records import SqsRecord
 from local_tests.backfill.support import (
     ANALYZED_AT,
     CREATED_AT,
@@ -30,7 +29,9 @@ async def test_curation_delivers_saved_article(system_database, delivery):
     batch = delivery.batches[0]
     assert batch["QueueUrl"] == "https://sqs.invalid/curation"
     assert len(batch["Entries"]) == 1
-    event = parse_analyzable_article_created_event(batch["Entries"][0]["MessageBody"])
+    event = AnalyzableArticleCreatedEvent.from_input(
+        SqsRecord(message_id="id", body=batch["Entries"][0]["MessageBody"]).parse_json()
+    )
     assert event.payload.model_dump() == {"analyzable_article_id": article_id}
     assert event.occurred_at == CREATED_AT
 
@@ -45,7 +46,9 @@ async def test_assessment_delivers_saved_curation(system_database, delivery):
     batch = delivery.batches[0]
     assert batch["QueueUrl"] == "https://sqs.invalid/assessment"
     assert len(batch["Entries"]) == 1
-    event = parse_curated_signal_event(batch["Entries"][0]["MessageBody"])
+    event = ArticleCuratedSignalEvent.from_input(
+        SqsRecord(message_id="id", body=batch["Entries"][0]["MessageBody"]).parse_json()
+    )
     assert event.payload.model_dump() == {
         "analyzable_article_id": article_id,
         "curation_id": curation_id,
@@ -64,7 +67,9 @@ async def test_embedding_delivers_saved_assessment(system_database, delivery):
     batch = delivery.batches[0]
     assert batch["QueueUrl"] == "https://sqs.invalid/embedding"
     assert len(batch["Entries"]) == 1
-    event = parse_assessed_in_scope_event(batch["Entries"][0]["MessageBody"])
+    event = ArticleAssessedInScopeEvent.from_input(
+        SqsRecord(message_id="id", body=batch["Entries"][0]["MessageBody"]).parse_json()
+    )
     assert event.payload.model_dump() == {
         "curation_id": curation_id,
         "analyzed_article_id": analyzed_id,
@@ -83,7 +88,9 @@ async def test_completion_delivers_saved_incomplete_article(system_database, del
     batch = delivery.batches[0]
     assert batch["QueueUrl"] == "https://sqs.invalid/completion"
     assert len(batch["Entries"]) == 1
-    event = parse_incomplete_article_recorded_event(batch["Entries"][0]["MessageBody"])
+    event = IncompleteArticleRecordedEvent.from_input(
+        SqsRecord(message_id="id", body=batch["Entries"][0]["MessageBody"]).parse_json()
+    )
     assert event.payload.incomplete_article_id == incomplete_id
     assert event.payload.source_id > 0
     assert event.occurred_at == CREATED_AT
@@ -94,13 +101,17 @@ async def test_next_invocation_replays_unfinished_article(system_database, deliv
     """未完了の同じ記事は次の起動でも新しいイベントIDで配送される。"""
     article_id = await seed_article(system_database, "https://example.com/replay")
     await asyncio.to_thread(delivery.handler.curation_handler, {}, None)
-    first = parse_analyzable_article_created_event(
-        delivery.batches[0]["Entries"][0]["MessageBody"]
+    first = AnalyzableArticleCreatedEvent.from_input(
+        SqsRecord(
+            message_id="id", body=delivery.batches[0]["Entries"][0]["MessageBody"]
+        ).parse_json()
     )
     await asyncio.to_thread(delivery.handler.curation_handler, {}, None)
     assert len(delivery.batches) == 2
-    second = parse_analyzable_article_created_event(
-        delivery.batches[1]["Entries"][0]["MessageBody"]
+    second = AnalyzableArticleCreatedEvent.from_input(
+        SqsRecord(
+            message_id="id", body=delivery.batches[1]["Entries"][0]["MessageBody"]
+        ).parse_json()
     )
     assert first.event_id != second.event_id
     assert (

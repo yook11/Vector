@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from app.collection.sources.acquisition_request import AcquisitionRequestInvalidError
-from app.lambda_handlers.acquisition.message import (
-    AcquisitionMessageJsonInvalidError,
-    parse_acquisition_request,
+from app.collection.sources.acquisition_request import (
+    AcquisitionRequestInvalidError,
+    acquisition_request_from_message,
 )
+from app.lambda_handlers.sqs.records import SqsRecord
 
 
 def message(**updates):
@@ -25,13 +25,8 @@ def message(**updates):
 def test_source_id_requires_positive_integer(source_id):
     """受信側でもソースIDを補完・型変換しない。"""
     with pytest.raises(AcquisitionRequestInvalidError):
-        parse_acquisition_request(json.dumps(message(source_id=source_id)))
-
-
-@pytest.mark.parametrize("body", ["{", '{"source_id":1,"source_id":2}', "NaN"])
-def test_nonstandard_or_invalid_json_is_rejected(body):
-    """曖昧な本文を依頼として受け付けない。"""
-    with pytest.raises(
-        (AcquisitionMessageJsonInvalidError, AcquisitionRequestInvalidError)
-    ):
-        parse_acquisition_request(body)
+        acquisition_request_from_message(
+            SqsRecord(
+                message_id="id", body=json.dumps(message(source_id=source_id))
+            ).parse_json()
+        )

@@ -17,8 +17,7 @@ from app.collection.article_completion.consumer_failure_classification import (
     CloseArticleCompletion,
     RetryArticleCompletion,
 )
-from app.lambda_handlers.completion.event import CompletionMessageJsonInvalidError
-from app.lambda_handlers.sqs.errors import SqsInputError
+from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
 
 if TYPE_CHECKING:
     from app.collection.article_acquisition.events import (
@@ -49,7 +48,7 @@ class CompletionLambdaFailureRecorder:
         match error:
             case SqsInputError():
                 self.record_invalid_body(error, message_id=message_id)
-            case CompletionMessageJsonInvalidError():
+            case SqsMessageJsonInvalidError():
                 self.record_invalid_json(message_id=message_id)
             case IncompleteArticleEventInvalidError():
                 self.record_invalid_event(error, message_id=message_id)

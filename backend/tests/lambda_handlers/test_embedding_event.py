@@ -12,10 +12,7 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
     AssessedEventInvalidError,
 )
-from app.lambda_handlers.embedding.event import (
-    EmbeddingMessageJsonInvalidError,
-    parse_assessed_in_scope_event,
-)
+from app.lambda_handlers.sqs.records import SqsRecord
 
 pytestmark = pytest.mark.unit
 
@@ -33,7 +30,9 @@ def data():
 
 def test_parser_restores_typed_event(data):
     """受信本文から、Consumerへ渡す型付きイベントを復元する。"""
-    event = parse_assessed_in_scope_event(json.dumps(data))
+    event = ArticleAssessedInScopeEvent.from_input(
+        SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+    )
 
     assert isinstance(event, ArticleAssessedInScopeEvent)
     assert event.event_id == UUID(int=1)
@@ -43,33 +42,13 @@ def test_parser_restores_typed_event(data):
     )
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "",
-        "{",
-        '{"private":',
-        "NaN",
-        "Infinity",
-        "-Infinity",
-        '{"x":1,"x":2}',
-        '{"payload":{"x":1,"x":2}}',
-        '{"payload":{"x":NaN}}',
-    ],
-)
-def test_rejects_invalid_json_without_retaining_input(body):
-    """不正JSONは本文を保持せず拒否する。"""
-    with pytest.raises(EmbeddingMessageJsonInvalidError) as caught:
-        parse_assessed_in_scope_event(body)
-    assert caught.value.__context__ is None
-    assert "private" not in str(caught.value)
-
-
 @pytest.mark.parametrize("body", ["null", "[]", "1", "true", '"text"'])
 def test_json_root_must_be_an_object(body):
     """JSONのルートがオブジェクトでなければ共有契約の構造不正として返す。"""
     with pytest.raises(AssessedEventInvalidError) as caught:
-        parse_assessed_in_scope_event(body)
+        ArticleAssessedInScopeEvent.from_input(
+            SqsRecord(message_id="id", body=body).parse_json()
+        )
     assert caught.value.invalid.reason.value == "invalid_envelope"
 
 
@@ -89,7 +68,9 @@ def test_shared_rejection_preserves_reason_and_details(data, changes):
         ArticleAssessedInScopeEvent.from_input(data)
 
     with pytest.raises(AssessedEventInvalidError) as caught:
-        parse_assessed_in_scope_event(json.dumps(data))
+        ArticleAssessedInScopeEvent.from_input(
+            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+        )
 
     assert caught.value.invalid.reason.value == shared.value.invalid.reason.value
     assert caught.value.invalid.issues == shared.value.invalid.issues
@@ -100,7 +81,9 @@ def test_shared_rejection_does_not_retain_input_or_exception_chain(data):
     data["payload"]["curation_id"] = "private-input"
 
     with pytest.raises(AssessedEventInvalidError) as caught:
-        parse_assessed_in_scope_event(json.dumps(data))
+        ArticleAssessedInScopeEvent.from_input(
+            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+        )
 
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
@@ -117,5 +100,7 @@ def test_contract_failure_is_not_wrapped(data, monkeypatch):
 
     monkeypatch.setattr(ArticleAssessedInScopeEvent, "from_input", reject)
     with pytest.raises(AssessedEventInvalidError) as caught:
-        parse_assessed_in_scope_event(json.dumps(data))
+        ArticleAssessedInScopeEvent.from_input(
+            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+        )
     assert caught.value is original.value

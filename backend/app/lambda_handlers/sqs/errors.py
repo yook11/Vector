@@ -41,3 +41,13 @@ class SqsInputError(ApplicationError):
         self.reason = reason
         self.field = field
         self.record_index = record_index
+
+
+class SqsMessageJsonInvalidError(ApplicationError):
+    """SQS本文をJSONとして解析できない。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "SQS message JSON parsing failed",
+            details={"reason": "invalid_json"},
+        )

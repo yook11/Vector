@@ -28,11 +28,20 @@ def delivery():
     state.records = SqsRecordBatch.from_lambda_event(
         {
             "Records": [
-                {"messageId": "first", "receiptHandle": " private-first "},
-                {"messageId": "second", "receiptHandle": "private-second"},
+                {
+                    "messageId": "first",
+                    "body": "{}",
+                    "receiptHandle": " private-first ",
+                },
+                {
+                    "messageId": "second",
+                    "body": "{}",
+                    "receiptHandle": "private-second",
+                },
             ]
         }
     ).records
+    state.records = tuple(record.to_record() for record in state.records)
     return state
 
 
@@ -152,12 +161,14 @@ async def test_invalid_receipt_skips_only_its_wait(delivery):
             "Records": [
                 {
                     "messageId": "first",
+                    "body": "{}",
                     "receiptHandle": {"private-key": "private-value"},
                 },
-                {"messageId": "second", "receiptHandle": "valid"},
+                {"messageId": "second", "body": "{}", "receiptHandle": "valid"},
             ]
         }
     ).records
+    delivery.records = tuple(record.to_record() for record in delivery.records)
     retry = RetryAt(delivery.now + timedelta(seconds=120))
     await apply(
         delivery, [RedeliveryWait("first", retry), RedeliveryWait("second", retry)]

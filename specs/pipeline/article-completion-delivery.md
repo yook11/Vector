@@ -116,7 +116,7 @@ SQSクライアントは接続・読取待ち各5秒、SDKの総試行回数1回
 
 [補完handler](../../backend/app/lambda_handlers/completion/handler.py)は既存の設定と`open_completion_resources`で呼び出し専用の資源を開き、`SqsRecordBatch`で全IDを検証してから逐次処理する。同期の`handler(lambda_event, context)`が非同期処理を実行し、失敗IDの原文と入力順を保持した`batchItemFailures`を返す。空バッチは空の失敗一覧となる。
 
-[イベント解析](../../backend/app/lambda_handlers/completion/event.py)はSQS本文のJSON解析と重複キー・非標準数値の拒否を担当し、解析結果を[取得工程のイベント契約](../../backend/app/collection/article_acquisition/events.py)の`IncompleteArticleRecordedEvent.from_input()`へ渡す。イベント型が既存Outboxのenvelopeと`IncompleteArticleRecorded`を使い、UUID・種類・version・タイムゾーン付き日時、必須項目・余分な項目・両IDの厳密な正整数を検証する。形式検証と失敗変換・送出は`from_input()`へ集約し、違反の変換処理もイベント型のprivateメソッドに置く。不正時の例外には固定の理由・項目・検証コードだけを保持し、入力値を持つ元の検証例外をcontextへ引き継がない。
+[SQSレコード](../../backend/app/lambda_handlers/sqs/records.py)は`SqsRecordInput.to_record()`で本文の文字列型を検証した後、`SqsRecord.parse_json()`でJSON解析と重複キー・非標準数値の拒否を担当し、解析結果を[取得工程のイベント契約](../../backend/app/collection/article_acquisition/events.py)の`IncompleteArticleRecordedEvent.from_input()`へ渡す。イベント型が既存Outboxのenvelopeと`IncompleteArticleRecorded`を使い、UUID・種類・version・タイムゾーン付き日時、必須項目・余分な項目・両IDの厳密な正整数を検証する。形式検証と失敗変換・送出は`from_input()`へ集約し、違反の変換処理もイベント型のprivateメソッドに置く。不正時の例外には固定の理由・項目・検証コードだけを保持し、入力値を持つ元の検証例外をcontextへ引き継がない。
 
 本文不正はConsumerを呼ばず個別失敗とし、正常入力では`incomplete_article_id`だけを渡す。成功・処理不要・closed確定は受信完了、再試行判断と配送側の通常例外は当該メッセージの失敗となる。初期化や全ID検証の失敗は呼び出し全体へ伝播し、外部キャンセルを個別失敗へ変換しない。DBの確定やHTTP失敗分類、メッセージ削除・再投入を配送側で行わない。
 
