@@ -69,27 +69,27 @@ variables {
 
 override_resource {
   override_during = plan
+  target          = aws_iam_role.backfill
+  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-lambda" }
+}
+override_resource {
+  override_during = plan
+  target          = aws_iam_role.backfill_scheduler
+  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-scheduler" }
+}
+override_resource {
+  override_during = plan
+  target          = aws_scheduler_schedule_group.backfill
+  values          = { arn = "arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-backfill" }
+}
+override_resource {
+  override_during = plan
   target          = aws_lambda_function.backfill["curation"]
   values          = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-backfill" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.backfill["curation"]
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-backfill-lambda" }
-}
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.backfill_scheduler["curation"]
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-backfill-scheduler" }
-}
 
-override_resource {
-  override_during = plan
-  target          = aws_scheduler_schedule_group.backfill["curation"]
-  values          = { arn = "arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-curation-backfill" }
-}
 
 override_resource {
   override_during = plan
@@ -109,23 +109,8 @@ override_resource {
   values          = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-assessment-backfill" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.backfill["assessment"]
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-backfill-lambda" }
-}
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.backfill_scheduler["assessment"]
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-backfill-scheduler" }
-}
 
-override_resource {
-  override_during = plan
-  target          = aws_scheduler_schedule_group.backfill["assessment"]
-  values          = { arn = "arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-assessment-backfill" }
-}
 
 override_resource {
   override_during = plan
@@ -145,23 +130,8 @@ override_resource {
   values          = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-embedding-backfill" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.backfill["embedding"]
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-embedding-backfill-lambda" }
-}
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.backfill_scheduler["embedding"]
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-embedding-backfill-scheduler" }
-}
 
-override_resource {
-  override_during = plan
-  target          = aws_scheduler_schedule_group.backfill["embedding"]
-  values          = { arn = "arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-embedding-backfill" }
-}
 
 override_resource {
   override_during = plan
@@ -217,10 +187,10 @@ run "scheduled_invocations_keep_offsets_and_target_pairings" {
         schedule.flexible_time_window[0].mode == "OFF" &&
         schedule.target[0].input == "{}" &&
         schedule.target[0].arn == aws_lambda_function.backfill[stage].arn &&
-        schedule.target[0].role_arn == aws_iam_role.backfill_scheduler[stage].arn &&
-        schedule.group_name == aws_scheduler_schedule_group.backfill[stage].name
-    ])
-    error_message = "UTCで30分間隔と工程別offsetを保ち、対応するLambdaを起動する。"
+        schedule.target[0].role_arn == aws_iam_role.backfill_scheduler.arn &&
+        schedule.group_name == aws_scheduler_schedule_group.backfill.name
+    ]) && aws_scheduler_schedule_group.backfill.name == "slice-test-backfill"
+    error_message = "UTCで30分間隔と工程別offsetを保ち、共通groupと共通Schedulerロールで対応するLambdaを起動する。"
   }
 }
 
@@ -253,23 +223,25 @@ run "backfill_reuses_private_relay_connections_with_bounded_compute" {
   }
 }
 
-run "execution_roles_and_endpoint_allow_only_their_own_queue" {
+run "execution_role_and_endpoint_allow_only_backfill_queues" {
   command = plan
   assert {
-    condition = alltrue([for stage, role in aws_iam_role.backfill :
-      role.permissions_boundary == "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-${stage}-backfill-lambda-boundary" &&
-      jsondecode(aws_iam_role_policy.backfill[stage].policy).Statement == [
+    condition = (
+      aws_iam_role.backfill.name == "slice-test-backfill-lambda" &&
+      aws_iam_role.backfill.permissions_boundary == "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-lambda-boundary" &&
+      alltrue([for function in aws_lambda_function.backfill : function.role == aws_iam_role.backfill.arn]) &&
+      jsondecode(aws_iam_role_policy.backfill.policy).Statement == [
         { Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app" },
-        { Effect = "Allow", Action = "sqs:SendMessage", Resource = aws_sqs_queue.outbox[stage].arn },
-        { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = "${aws_cloudwatch_log_group.backfill[stage].arn}:*" },
+        { Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "curation", "embedding"] : aws_sqs_queue.outbox[stage].arn] },
+        { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "curation", "embedding"] : "${aws_cloudwatch_log_group.backfill[stage].arn}:*"] },
         { Effect = "Allow", Action = local.outbox_relay_eni_actions, Resource = "*" },
-        { Sid = "DenyEniOperationsFromFunctionCode", Effect = "Deny", Action = local.outbox_relay_eni_actions, Resource = "*", Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.backfill_arns[stage] } } },
+        { Sid = "DenyEniOperationsFromFunctionCode", Effect = "Deny", Action = local.outbox_relay_eni_actions, Resource = "*", Condition = { ArnEquals = { "lambda:SourceFunctionArn" = [for stage in ["assessment", "curation", "embedding"] : local.backfill_arns[stage]] } } },
       ] &&
-      [for statement in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement : statement if try(statement.Principal.AWS == role.arn, false)] == [
-        { Effect = "Allow", Principal = { AWS = role.arn }, Action = "sqs:SendMessage", Resource = aws_sqs_queue.outbox[stage].arn }
+      [for statement in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement : statement if try(statement.Principal.AWS == aws_iam_role.backfill.arn, false)] == [
+        { Effect = "Allow", Principal = { AWS = aws_iam_role.backfill.arn }, Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "curation", "embedding"] : aws_sqs_queue.outbox[stage].arn] }
       ]
-    ])
-    error_message = "実行roleとendpointを自工程の送信だけに限定し、DBロールとENI拒否を維持する。"
+    )
+    error_message = "段共通の実行roleとendpointをbackfillの3キューへの送信だけに限定し、DBロールとENI拒否を維持する。"
   }
   assert {
     condition = alltrue([for policy in aws_sqs_queue_policy.outbox :
@@ -279,18 +251,18 @@ run "execution_roles_and_endpoint_allow_only_their_own_queue" {
   }
 }
 
-run "scheduler_trust_and_invocation_are_stage_scoped" {
+run "scheduler_trust_and_invocation_are_backfill_scoped" {
   command = plan
   assert {
-    condition = alltrue([for stage, role in aws_iam_role.backfill_scheduler :
-      role.permissions_boundary == "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-${stage}-backfill-scheduler-boundary" &&
-      jsondecode(role.assume_role_policy).Statement == [{
+    condition = (
+      aws_iam_role.backfill_scheduler.name == "slice-test-backfill-scheduler" &&
+      aws_iam_role.backfill_scheduler.permissions_boundary == "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-scheduler-boundary" &&
+      jsondecode(aws_iam_role.backfill_scheduler.assume_role_policy).Statement == [{
         Effect    = "Allow", Principal = { Service = "scheduler.amazonaws.com" }, Action = "sts:AssumeRole",
-        Condition = { StringEquals = { "aws:SourceAccount" = "123456789012" }, ArnEquals = { "aws:SourceArn" = aws_scheduler_schedule_group.backfill[stage].arn } }
+        Condition = { StringEquals = { "aws:SourceAccount" = "123456789012" }, ArnEquals = { "aws:SourceArn" = aws_scheduler_schedule_group.backfill.arn } }
       }] &&
-      jsondecode(aws_iam_role_policy.backfill_scheduler[stage].policy).Statement == [{ Effect = "Allow", Action = "lambda:InvokeFunction", Resource = local.backfill_arns[stage] }]
-    ])
-    error_message = "Schedulerの信頼元をaccount・groupに、呼び出しを自工程Lambdaに限定する。"
+      jsondecode(aws_iam_role_policy.backfill_scheduler.policy).Statement == [{ Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [for stage in ["assessment", "curation", "embedding"] : local.backfill_arns[stage]] }]
+    )
+    error_message = "Schedulerの信頼元をaccountと共通groupに、呼び出しをbackfillの3関数に限定する。"
   }
 }
-
