@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, Mock, call
 
 import pytest
+import structlog
 
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
@@ -109,7 +110,7 @@ def test_batch_reports_only_failed_message_ids(wiring):
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):
-    """異なる入力のpayloadを、バッチで共有するConsumerへそのまま渡す。"""
+    """各payloadとそのメッセージの相関情報を持つロガーをConsumerへ渡す。"""
     messages = [
         {
             "messageId": "first",
@@ -121,13 +122,36 @@ def test_each_payload_is_passed_to_the_shared_consumer(wiring):
         },
     ]
 
-    module.handler({"Records": messages}, None)
+    module.handler({"Records": messages}, SimpleNamespace(aws_request_id="request-1"))
 
     wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
     assert wiring.consumer.consume.await_args_list == [
-        call(ArticleCuratedSignal(curation_id=11, analyzable_article_id=101)),
-        call(ArticleCuratedSignal(curation_id=22, analyzable_article_id=202)),
+        call(
+            ArticleCuratedSignal(curation_id=11, analyzable_article_id=101), logger=ANY
+        ),
+        call(
+            ArticleCuratedSignal(curation_id=22, analyzable_article_id=202), logger=ANY
+        ),
     ]
+
+    for invocation, message in zip(
+        wiring.consumer.consume.await_args_list, messages, strict=True
+    ):
+        payload = invocation.args[0]
+        context = structlog.get_context(invocation.kwargs["logger"])
+        assert (
+            context.items()
+            >= {
+                "service": "article_analysis",
+                "stage": "assessment",
+                "environment": "test",
+                "request_id": "request-1",
+                "message_id": message["messageId"],
+                "event_id": json.loads(message["body"])["event_id"],
+                "curation_id": payload.curation_id,
+                "analyzable_article_id": payload.analyzable_article_id,
+            }.items()
+        )
 
 
 @pytest.mark.asyncio
@@ -145,7 +169,7 @@ async def test_messages_finish_sequentially_in_input_order(wiring):
     ]
     steps = []
 
-    async def consume(payload):
+    async def consume(payload, *, logger):
         steps.append(("start", payload.curation_id))
         await asyncio.sleep(0)
         steps.append(("end", payload.curation_id))
@@ -202,7 +226,7 @@ def test_invalid_message_does_not_prevent_following_message(wiring, invalid_mess
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "invalid"}]}
     wiring.consumer.consume.assert_awaited_once_with(
-        ArticleCuratedSignal(curation_id=11, analyzable_article_id=101)
+        ArticleCuratedSignal(curation_id=11, analyzable_article_id=101), logger=ANY
     )
 
 
@@ -267,7 +291,7 @@ def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
     response = module.handler({"Records": messages}, None)
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "parse-failed"}]}
-    wiring.consumer.consume.assert_awaited_once_with(parsed.payload)
+    wiring.consumer.consume.assert_awaited_once_with(parsed.payload, logger=ANY)
 
 
 @pytest.mark.asyncio

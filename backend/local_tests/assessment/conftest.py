@@ -231,8 +231,8 @@ def completion_results(monkeypatch):
     results = []
     consume = AssessmentConsumer.consume
 
-    async def observe(self, event):
-        result = await consume(self, event)
+    async def observe(self, event, *, logger):
+        result = await consume(self, event, logger=logger)
         results.append(result)
         return result
 

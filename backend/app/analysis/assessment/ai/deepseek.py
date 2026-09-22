@@ -134,7 +134,8 @@ class DeepSeekAssessor(BaseAssessor):
                 max_tokens=self.SPEC.gen_config.get("max_tokens"),
             )
             raise AIProviderOutputTruncatedError(
-                reason=DeepSeekStateReason.OUTPUT_TOKEN_LIMIT_REACHED
+                "AI応答が出力トークン数の上限に達して打ち切られました",
+                reason=DeepSeekStateReason.OUTPUT_TOKEN_LIMIT_REACHED,
             )
 
         try:
@@ -143,11 +144,13 @@ class DeepSeekAssessor(BaseAssessor):
             # invalid にはしない。tool_call 欠落と tool 名相違を別 defect に分ける。
             if not tool_calls:
                 raise AssessmentResponseInvalidError(
-                    DeepSeekResponseDefect.NO_TOOL_CALL
+                    DeepSeekResponseDefect.NO_TOOL_CALL,
+                    message="AI応答に必要なツール呼び出しがありません",
                 )
             if tool_calls[0].function.name != tool_name:
                 raise AssessmentResponseInvalidError(
-                    DeepSeekResponseDefect.WRONG_TOOL_NAME
+                    DeepSeekResponseDefect.WRONG_TOOL_NAME,
+                    message="AI応答のツール名が要求したものと一致しません",
                 )
 
             raw_arguments = tool_calls[0].function.arguments or ""
@@ -156,12 +159,14 @@ class DeepSeekAssessor(BaseAssessor):
             except json.JSONDecodeError as exc:
                 # raw AI 応答は例外 message に含めない。
                 raise AssessmentResponseInvalidError(
-                    DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
+                    DeepSeekResponseDefect.ARGUMENTS_NOT_JSON,
+                    message="AI応答のツール引数をJSONとして解析できません",
                 ) from exc
 
             if not isinstance(payload, dict):
                 raise AssessmentResponseInvalidError(
-                    DeepSeekResponseDefect.ARGUMENTS_NOT_DICT
+                    DeepSeekResponseDefect.ARGUMENTS_NOT_DICT,
+                    message="AI応答のツール引数がJSONオブジェクトではありません",
                 )
 
             # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)

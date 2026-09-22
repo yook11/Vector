@@ -5,7 +5,15 @@ from dataclasses import asdict
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
+from app.ai_providers.errors import AIProviderError, AIProviderNetworkError
 from app.analysis.assessment import events as assessment
+from app.analysis.assessment.ai.parse import parse_assessment
+from app.analysis.assessment.errors import (
+    AssessmentCurationMissingError,
+    AssessmentResponseInvalidError,
+    to_assessment_error,
+)
 from app.analysis.curation import events as curation
 from app.collection import events as collection
 from app.collection.article_acquisition import events as acquisition
@@ -258,4 +266,104 @@ def test_invalid_issue_does_not_return_partial_diagnostics() -> None:
         "message": "[exception message unavailable]",
         "error_details": None,
         "cause_is_aggregated": False,
+    }
+
+
+def test_provider_error_keeps_message_code_and_reason() -> None:
+    """プロバイダー例外の明示した診断だけを共通形式へ渡す。"""
+    error = AIProviderNetworkError("request failed", reason=DeepSeekStateReason.TIMEOUT)
+    error.response = {"body": "private-response"}
+
+    converted = convert_exception(error)
+
+    assert converted.message == "request failed"
+    assert converted.error_details == {"code": "ai_error_network", "reason": "timeout"}
+
+
+def test_provider_error_without_reason_keeps_only_code() -> None:
+    """具体的な理由がなければ、通信失敗の説明とcodeだけを渡す。"""
+    converted = convert_exception(AIProviderNetworkError())
+
+    assert converted.message == "AIプロバイダーとの通信に失敗しました"
+    assert converted.error_details == {"code": "ai_error_network"}
+
+
+def test_unclassified_provider_base_does_not_invent_code() -> None:
+    """CODE未定義の基底例外も変換でき、存在しない診断を補完しない。"""
+    converted = convert_exception(AIProviderError("unclassified"))
+
+    assert converted.message == "unclassified"
+    assert converted.error_details is None
+
+
+def test_unclassified_provider_base_keeps_explicit_reason() -> None:
+    """CODEを持たない例外でも明示した理由は失わない。"""
+    converted = convert_exception(
+        AIProviderError(reason=DeepSeekStateReason.CONNECTION)
+    )
+
+    assert converted.error_details == {"reason": "connection"}
+
+
+def test_assessment_provider_error_keeps_stage_reason_and_code() -> None:
+    """工程の診断にはプロバイダー例外の本文やオブジェクトを転記しない。"""
+    provider_error = AIProviderNetworkError(
+        "private-provider-response", reason=DeepSeekStateReason.TIMEOUT
+    )
+    error = to_assessment_error(provider_error)
+
+    converted = convert_exception(error)
+
+    assert (
+        converted.message == "AIプロバイダーの処理失敗により記事を判定できませんでした"
+    )
+    assert converted.error_details == {
+        "reason": "provider_error",
+        "code": "ai_error_network",
+    }
+
+
+@pytest.mark.parametrize(
+    "category,expected_message,expected_code",
+    [
+        (
+            {"private": "input"},
+            "AI応答のcategoryが文字列ではありません",
+            "assessment_response_category_wrong_type",
+        ),
+        (
+            "private-unknown-category",
+            "AI応答のcategoryが定義済みの分類ではありません",
+            "assessment_response_category_unknown_value",
+        ),
+    ],
+)
+def test_assessment_response_error_keeps_specific_violation(
+    category, expected_message, expected_code
+) -> None:
+    """検知場所の具体的な説明と違反を取得し、外側の診断には入力値を含めない。"""
+    with pytest.raises(AssessmentResponseInvalidError) as caught:
+        parse_assessment(
+            {"category": category, "investor_take": "private-take", "key_points": []}
+        )
+    error = caught.value
+    error.raw_response = "private-response"
+
+    converted = convert_exception(error)
+
+    assert converted.message == expected_message
+    assert converted.error_details == {
+        "reason": "response_invalid",
+        "code": expected_code,
+    }
+
+
+def test_assessment_missing_curation_keeps_reason_and_code() -> None:
+    """Curation欠損も他のAssessment例外と同じ診断形式へ写す。"""
+    converted = convert_exception(AssessmentCurationMissingError())
+
+    assert converted.message == "判定対象のCurationが存在しません"
+    assert converted.error_details == {
+        "reason": "curation_missing",
+        "code": "assessment_curation_missing",
     }

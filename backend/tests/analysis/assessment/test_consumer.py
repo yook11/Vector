@@ -10,7 +10,6 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from structlog.testing import capture_logs
 
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
@@ -30,12 +29,18 @@ from app.analysis.assessment.service import (
     AssessmentCompletionKind,
 )
 from app.analysis.curation.events import ArticleCuratedSignal
+from app.analysis.logging import create_article_analysis_logger
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 
 _MODULE = "app.analysis.assessment.consumer"
+
+
+@pytest.fixture
+def assessment_logger():
+    return create_article_analysis_logger().bind(stage="assessment")
 
 
 @pytest.fixture
@@ -86,13 +91,13 @@ def consumer(session_factory):
     ],
 )
 async def test_ready_is_delegated_and_service_completion_returned(
-    consumer, target, completion
+    consumer, target, completion, assessment_logger
 ):
     """Ready成立時はServiceへ入力を渡し、その完了値をそのまま返す。"""
     consumer._service.execute.return_value = completion
 
     event = target.model_copy(update={"analyzable_article_id": 999_999})
-    result = await consumer.consume(event)
+    result = await consumer.consume(event, logger=assessment_logger)
 
     consumer._service.execute.assert_awaited_once_with(
         ReadyForAssessment(
@@ -102,6 +107,7 @@ async def test_ready_is_delegated_and_service_completion_returned(
         ),
         consumer._assessor,
         analyzable_article_id=target.analyzable_article_id,
+        logger=assessment_logger,
     )
     assert result is completion
     consumer._failure_handler.handle.assert_not_awaited()
@@ -111,7 +117,7 @@ async def test_ready_is_delegated_and_service_completion_returned(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", [AnalyzedArticleRecord, OutOfScopeArticleRecord])
 async def test_already_assessed_skips_execution_and_postprocessing(
-    db_session, consumer, target, sample_categories, model
+    db_session, consumer, target, sample_categories, model, assessment_logger
 ):
     """判定済みならServiceも後処理も呼ばず処理済みを返す。"""
     fields = dict(
@@ -125,7 +131,7 @@ async def test_already_assessed_skips_execution_and_postprocessing(
     db_session.add(model(**fields))
     await db_session.commit()
 
-    result = await consumer.consume(target)
+    result = await consumer.consume(target, logger=assessment_logger)
 
     assert result == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
     consumer._service.execute.assert_not_awaited()
@@ -142,7 +148,7 @@ async def test_already_assessed_skips_execution_and_postprocessing(
     ],
 )
 async def test_rejection_is_passed_unchanged_to_postprocessing(
-    consumer, target, reason
+    consumer, target, reason, assessment_logger
 ):
     """構築拒否はServiceを呼ばず、同じ拒否値を監査処理と呼び出し元へ渡す。"""
     rejected = AssessmentReadyBuildRejected(
@@ -152,18 +158,20 @@ async def test_rejection_is_passed_unchanged_to_postprocessing(
         else target.analyzable_article_id,
     )
     with patch.object(ReadyForAssessment, "from_facts", return_value=rejected):
-        result = await consumer.consume(target)
+        result = await consumer.consume(target, logger=assessment_logger)
 
     assert result is rejected
     handler = consumer._failure_handler.handle_ready_build_rejected
-    handler.assert_awaited_once_with(curation_id=target.curation_id, rejected=rejected)
+    handler.assert_awaited_once_with(
+        curation_id=target.curation_id, rejected=rejected, logger=assessment_logger
+    )
     assert handler.await_args.kwargs["rejected"] is rejected
     consumer._service.execute.assert_not_awaited()
     consumer._failure_handler.handle.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_ready_facts_are_loaded_once(consumer, target):
+async def test_ready_facts_are_loaded_once(consumer, target, assessment_logger):
     """イベントで指定された記事のDB事実を一度だけ取得してReady判定へ渡す。"""
     load_facts = AssessmentRepository.load_ready_build_facts
     facts_read = []
@@ -179,7 +187,7 @@ async def test_ready_facts_are_loaded_once(consumer, target):
             ReadyForAssessment, "from_facts", wraps=ReadyForAssessment.from_facts
         ) as build,
     ):
-        await consumer.consume(target)
+        await consumer.consume(target, logger=assessment_logger)
 
     assert len(facts_read) == 1
     assert facts_read[0][0] == target.curation_id
@@ -195,7 +203,9 @@ async def test_ready_facts_are_loaded_once(consumer, target):
         RuntimeError("private-business-error"),
     ],
 )
-async def test_execution_failure_is_classified_and_reraised(consumer, target, original):
+async def test_execution_failure_is_classified_and_reraised(
+    consumer, target, original, assessment_logger
+):
     """実行例外とDB由来記事IDを後処理へ渡し、同じ例外と原因を再送出する。"""
     cause = ValueError("private-cause")
     original.__cause__ = cause
@@ -203,7 +213,8 @@ async def test_execution_failure_is_classified_and_reraised(consumer, target, or
 
     with pytest.raises(type(original)) as raised:
         await consumer.consume(
-            target.model_copy(update={"analyzable_article_id": 999_999})
+            target.model_copy(update={"analyzable_article_id": 999_999}),
+            logger=assessment_logger,
         )
 
     assert raised.value is original
@@ -214,6 +225,7 @@ async def test_execution_failure_is_classified_and_reraised(consumer, target, or
         curation_id=target.curation_id,
         analyzable_article_id=target.analyzable_article_id,
         provider="deepseek",
+        logger=assessment_logger,
     )
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
@@ -221,7 +233,7 @@ async def test_execution_failure_is_classified_and_reraised(consumer, target, or
 
 @pytest.mark.asyncio
 async def test_ready_read_failure_does_not_substitute_event_id(
-    db_session, test_database_url, consumer, target
+    db_session, test_database_url, consumer, target, assessment_logger
 ):
     """DB事実の取得失敗では、探索IDを監査の記事IDへ補完しない。"""
     await db_session.execute(
@@ -233,13 +245,14 @@ async def test_ready_read_failure_does_not_substitute_event_id(
     try:
         consumer._session_factory = async_sessionmaker(engine, expire_on_commit=False)
         with pytest.raises(DBAPIError) as raised:
-            await consumer.consume(target)
+            await consumer.consume(target, logger=assessment_logger)
         consumer._failure_handler.handle.assert_awaited_once_with(
             failure=classify_assessment_failure(raised.value),
             exc=raised.value,
             curation_id=target.curation_id,
             analyzable_article_id=None,
             provider="deepseek",
+            logger=assessment_logger,
         )
         consumer._service.execute.assert_not_awaited()
     finally:
@@ -249,7 +262,9 @@ async def test_ready_read_failure_does_not_substitute_event_id(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["read", "execute"])
-async def test_business_timeout_ends_before_failure_handling(consumer, target, phase):
+async def test_business_timeout_ends_before_failure_handling(
+    consumer, target, phase, assessment_logger
+):
     """取得・実行中の期限切れを伝播し、後処理はタイマー解除後に呼ぶ。"""
     business_timeout = asyncio.timeout(None)
     load_facts = AssessmentRepository.load_ready_build_facts
@@ -276,7 +291,7 @@ async def test_business_timeout_ends_before_failure_handling(consumer, target, p
         patch.object(AssessmentRepository, "load_ready_build_facts", new=observe_read),
         pytest.raises(TimeoutError) as raised,
     ):
-        await consumer.consume(target)
+        await consumer.consume(target, logger=assessment_logger)
 
     consumer._failure_handler.handle.assert_awaited_once()
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is raised.value
@@ -285,7 +300,9 @@ async def test_business_timeout_ends_before_failure_handling(consumer, target, p
 
 
 @pytest.mark.asyncio
-async def test_rejection_handling_runs_after_business_timeout(consumer):
+async def test_rejection_handling_runs_after_business_timeout(
+    consumer, assessment_logger
+):
     """拒否確定後の監査は業務タイマーを解除してから実行する。"""
     business_timeout = asyncio.timeout(None)
 
@@ -298,7 +315,8 @@ async def test_rejection_handling_runs_after_business_timeout(consumer):
     )
     with patch(f"{_MODULE}.timeout", return_value=business_timeout):
         result = await consumer.consume(
-            ArticleCuratedSignal(curation_id=999_999, analyzable_article_id=999_999)
+            ArticleCuratedSignal(curation_id=999_999, analyzable_article_id=999_999),
+            logger=assessment_logger,
         )
 
     assert result == AssessmentReadyBuildRejected(
@@ -309,11 +327,11 @@ async def test_rejection_handling_runs_after_business_timeout(consumer):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "operation", ["classification", "handler", "handler_and_logger"]
-)
-async def test_secondary_failure_preserves_original(consumer, target, operation):
-    """分類・後処理・診断の障害で元の実行例外を置き換えない。"""
+@pytest.mark.parametrize("operation", ["classification", "handler"])
+async def test_secondary_failure_preserves_original(
+    consumer, target, operation, assessment_logger
+):
+    """分類・後処理の障害で元の実行例外を置き換えない。"""
     original = AssessmentResponseInvalidError(
         AssessmentResponseDefect.CATEGORY_KEY_MISSING
     )
@@ -330,25 +348,16 @@ async def test_secondary_failure_preserves_original(consumer, target, operation)
             side_effect=RuntimeError("secondary-secret"),
         )
     )
-    with capture_logs() as logs, boundary:
-        if operation == "handler_and_logger":
-            with (
-                patch(
-                    f"{_MODULE}.logger.warning", side_effect=RuntimeError("log-secret")
-                ),
-                pytest.raises(type(original)) as raised,
-            ):
-                await consumer.consume(target)
-        else:
-            with pytest.raises(type(original)) as raised:
-                await consumer.consume(target)
+    with boundary, pytest.raises(type(original)) as raised:
+        await consumer.consume(target, logger=assessment_logger)
 
     assert raised.value is original
-    assert "secondary-secret" not in str(logs)
 
 
 @pytest.mark.asyncio
-async def test_cancellation_bypasses_failure_handling(consumer, target):
+async def test_cancellation_bypasses_failure_handling(
+    consumer, target, assessment_logger
+):
     """実行中の外部キャンセルは失敗後処理を呼ばず伝播する。"""
     started = asyncio.Event()
 
@@ -357,7 +366,7 @@ async def test_cancellation_bypasses_failure_handling(consumer, target):
         await asyncio.Event().wait()
 
     consumer._service.execute.side_effect = wait_cancel
-    task = asyncio.create_task(consumer.consume(target))
+    task = asyncio.create_task(consumer.consume(target, logger=assessment_logger))
     try:
         async with asyncio.timeout(5):
             await started.wait()
@@ -375,7 +384,9 @@ async def test_cancellation_bypasses_failure_handling(consumer, target):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["ready_rejection", "execution_failure"])
-async def test_postprocessing_cancellation_propagates(consumer, target, phase):
+async def test_postprocessing_cancellation_propagates(
+    consumer, target, phase, assessment_logger
+):
     """後処理からのキャンセルを通常の二次障害として抑止しない。"""
     cancelled = asyncio.CancelledError()
     if phase == "ready_rejection":
@@ -389,6 +400,6 @@ async def test_postprocessing_cancellation_propagates(consumer, target, phase):
         consumer._failure_handler.handle.side_effect = cancelled
 
     with pytest.raises(asyncio.CancelledError) as raised:
-        await consumer.consume(event)
+        await consumer.consume(event, logger=assessment_logger)
 
     assert raised.value is cancelled

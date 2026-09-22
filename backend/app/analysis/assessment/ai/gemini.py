@@ -68,7 +68,10 @@ class GeminiAssessor(BaseAssessor):
         if not api_key:
             # provider error detail に secret や provider message を含めない。
             # reason で「未設定」を他の configuration 原因と区別する。
-            raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
+            raise AIProviderConfigurationError(
+                "AIプロバイダーのAPIキーが設定されていません",
+                reason=GeminiStateReason.NOT_CONFIGURED,
+            )
         self._client = genai.Client(api_key=api_key)
 
     # -- BaseAssessor property 契約 --
@@ -123,7 +126,13 @@ class GeminiAssessor(BaseAssessor):
         ):
             # blocked-set 内なので finish_reason_name は写像に必ず存在する。
             raise AIProviderOutputBlockedError(
-                reason=output_blocked_reason(finish_reason_name)
+                {
+                    "SAFETY": "AIプロバイダーが安全性の制約により応答を抑止しました",
+                    "RECITATION": (
+                        "AIプロバイダーが引用に関する制約により応答を抑止しました"
+                    ),
+                }[finish_reason_name],
+                reason=output_blocked_reason(finish_reason_name),
             )
 
         text = response.text or ""
@@ -131,10 +140,16 @@ class GeminiAssessor(BaseAssessor):
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
             # raw AI 応答は例外 message に含めない。
-            raise AssessmentResponseInvalidError(GeminiResponseDefect.NOT_JSON) from exc
+            raise AssessmentResponseInvalidError(
+                GeminiResponseDefect.NOT_JSON,
+                message="AI応答をJSONとして解析できません",
+            ) from exc
 
         if not isinstance(payload, dict):
-            raise AssessmentResponseInvalidError(GeminiResponseDefect.NOT_OBJECT)
+            raise AssessmentResponseInvalidError(
+                GeminiResponseDefect.NOT_OBJECT,
+                message="AI応答がJSONオブジェクトではありません",
+            )
 
         # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)
         # を担保。通過後の payload["category"] は str 確定なので str() 暗黙 coerce

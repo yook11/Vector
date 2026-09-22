@@ -132,7 +132,9 @@ async def _run_assessment(
                 analyzable_article_id=curated_event.payload.analyzable_article_id,
             )
             try:
-                completion = await consumer.consume(curated_event.payload)
+                completion = await consumer.consume(
+                    curated_event.payload, logger=message_logger
+                )
             except Exception as exc:
                 message_logger.error(
                     "assessment_message_processing_failed",

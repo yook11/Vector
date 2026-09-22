@@ -1,9 +1,9 @@
 # AI分析のログポリシー
 
 作成: 2026-09-17
-更新: 2026-09-22（Assessmentの入口・終端と資源管理のログ接続）
+更新: 2026-09-22（Assessment内部への共通ロガー接続）
 Status: Accepted
-Implementation: Partially implemented。Assessmentの入口・終端、初期化・バッチ不正・共有ライフサイクルのcleanupをAI目的ポリシーへ接続済み。内部のConsumer・Service・Repository・AIプロバイダー・通知のログと、Curation・Embeddingへの適用は未移行。追加診断・保護要件、AWS適用とCloudWatch到達確認は後続工程とする。
+Implementation: Partially implemented。Assessmentの入口・終端、初期化・バッチ不正・共有ライフサイクルのcleanupをAI目的ポリシーへ接続済み。Consumer・Service・失敗後処理も同じメッセージ用ロガーへ接続済みで、Repositoryの重複ログは例外記録へ集約した。AIプロバイダー・通知処理内部のログと、Curation・Embeddingへの適用は未移行。追加診断・保護要件、AWS適用とCloudWatch到達確認は後続工程とする。
 
 上位仕様: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)
 基底の正本: [アプリケーションログの共通基底ポリシー](./logging-base-policy.md)
@@ -17,14 +17,21 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 
 今回見直す直接の理由は、実際の調査で失敗理由がログに残っていなかったことである。禁止情報とその保護方法を先に定義し、その境界内で調査に必要な情報を積極的に残す。既存ログに項目がないことや、現在のベースが抽出しないことを、その情報を記録しない理由にはしない。
 
-## AIプロバイダー例外の保持契約（2026-09-21）
+## AIプロバイダー・Assessment例外の診断契約（2026-09-22）
 
-- `AIProviderError`は通常の`Exception`を直接継承し、既存の具体型10種類と`CODE`を維持する。State／Contentの中間クラスは廃止する。
-- 位置引数を標準の`args`と`str()`で保持する。引数なしの文字列は空であり、`CODE`や`reason`で補完しない。
-- 共通の`reason: StrEnum | None`は任意とし、StrEnumと`None`以外の値、および未定義キーワード引数は拒否する。
-- プロバイダー例外は`VectorDomainError`と`SAFE_ATTRS`に依存しない。保持した情報を出力する際の保護はログ側の責務とし、Assessment・Curation・Embeddingの工程例外も通常の`Exception`を直接継承する。工程の`reason`・`provider_error`・`defect`の組み合わせ検証と`code`は維持し、既存コンストラクターではメッセージを渡さないため`str()`は空となる。後続の共通基底撤去でDB・収集・Outbox等も標準化する（[共通ログ方針](application-logging-policy.md)）。
-- 呼び出し側は`CLASSIFIED_AI_PROVIDER_ERRORS`の具体型とそのサブクラスを判定対象とする。裸の基底型と未知の直接サブクラスを分類済みへ広げず、既存の処理制御を維持する。
-- この整理は保持契約までとし、SDKのメッセージ・応答詳細の新たな取得、AI専用ログ変換、Assessment Lambdaへの接続は後続工程とする。
+- `AIProviderError`と`AssessmentError`は、ログ基盤に依存しない`ApplicationError`を継承する。既存の具体型、`CODE` / `code`、`reason`・`provider_error`・`defect`の保持と組み合わせ検証を維持する。
+- 説明は空文字の維持を目的とせず、失敗を分類・検知した場所で固定文を渡す。例として「AIプロバイダーとの通信がタイムアウトしました」「AI応答のcategoryが文字列ではありません」を使い、SDKの生メッセージ、応答本文、不正な実値は埋め込まない。
+- プロバイダー例外は任意の文字列`message`と任意の`reason: StrEnum | None`を受け取る。説明を省略した呼び出しでは、具体型で確定する失敗種別の固定文を使う。任意オブジェクトや複数の位置引数を説明として受け取らない。
+- DeepSeek・GeminiのSDK例外分類とAssessmentの応答検証では、理由に対応する具体的な説明を渡す。Assessmentの工程例外は任意のキーワード`message`を受け取り、省略時は工程の失敗理由を説明する固定文を使う。プロバイダー例外の任意メッセージを工程の説明へ転記しない。
+- `details`はプロバイダーでは取得できた`code` / `reason`、Assessmentでは`code` / `reason`とする。応答不正の具体的な`defect`は既存の`code`に反映されるため重複登録しない。プロバイダー例外本体やSDK属性、応答の任意属性は診断辞書へコピーしない。CODEのない基底型ではcodeを補完せず、診断項目がなければ`details=None`とする。
+- 既存の`convert_exception` → `convert_application_error`が説明と診断を共通形式へ写す。専用のAI変換分岐は追加しない。呼び出し側の分類済み判定は既存の具体型10種類とそのサブクラスを維持する。
+- メッセージが付くことで、既存の監査経路でも従来空だった説明が保存され得る。監査スキーマ・分類・通知判断は変更しない。Curation・Embeddingの工程例外の継承と説明は今回変更しない。
+- 未定義のcategoryは`AssessmentResponseInvalidError`の説明とcodeで診断を完結させる。入力値を含む元の`ValueError`は`raise ... from None`で原因表示を抑制し、共通ログではアプリケーション例外の説明・code・reason・発生frameを残す。Pythonの`__context__`から例外オブジェクト自体を消去する処理ではない。
+- 共通の原因抽出と通常のValueErrorの変換は変更しない。SDK例外の説明には応答由来の値が入り得るため、専用変換による保護は後続とする。AI呼び出し・クライアントのロガー接続も今回の対象外とする。
+
+2026-09-22の診断契約変更では、AIプロバイダー・Assessment・共通例外変換・handler・監査payloadの対象単体テスト833件が成功した（DB統合83件は選択対象外）。変更したPython 13ファイルのRuff lint・format確認も成功した。SDK由来の値を新しい外側の説明へ転記しないことと、共通変換が説明・code・reasonを取得することを確認した。全体テスト・DB統合テスト・原因連鎖の保護変更・ロガー接続・デプロイは実施していない。
+
+続くcategory原因表示の抑制では、parse・defect契約・アプリケーション例外変換・JSON出力の対象テスト97件が成功した。実際のparseで生成した例外を共通processorとrendererへ渡し、未定義のcategory値が原因経由でも出力されず、説明・分類・発生位置が残ることを確認した。SDK例外の保護は未対応のままとする。
 
 ## Evidence
 
@@ -119,7 +126,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `provider`, `model`, `prompt_version` | 使用中のadapter/spec由来の識別子。`model_name`属性をログの`model`へ対応付ける。 |
 | `outcome` | 正常終端の`CompletionKind.value`。Assessmentでは`in_scope` / `out_of_scope` / `already_assessed`。前提不成立や失敗の説明文を正常結果へ混ぜない。 |
 | `rejection_code` | ReadyBuildで確定した既存reasonの値。Assessmentの前提不成立は失敗ログへ記録し、再処理を要求しない判断は`message_disposition=completed`で別に示す。 |
-| `reason`, `field`, `record_index` | SQS・イベント入力不正の既存reason、宣言されたfield、0始まりのレコード位置。`reason`を正常結果や例外自由文に再利用しない。 |
+| `reason`, `field`, `record_index` | SQS・イベント入力不正の既存reason、宣言されたfield、0始まりのレコード位置。Assessmentの保存見送りでは固定値`reason=concurrent_write`も許可する。正常終端の結果は`outcome`、前提不成立は`rejection_code`を使い、例外自由文には再利用しない。 |
 | `code`, `failure_reason` | 既存の例外から取得する。providerの詳細reasonや応答defectを汎用の失敗codeに潰さない。 |
 | `failure_kind`, `retryability` | DB障害など既存の非provider分類に値がある場合のみ記録する。providerの回復分類は廃止し、代替分類やunknownで埋めない。 |
 | `http_status`, `provider_code`, `finish_reason` | 既知SDKの対応属性から取得するstatus/code/終了理由。statusは100〜599の整数。codeは整数または128文字以内の英数字・`_` / `.` / `:` / `-`からなる識別子、終了理由は同形式の文字列。形式が有効なら新しい値も残し、既存分類へ無理に対応付けない。形式外の説明文は保護後の`error_message`へ残す。 |
@@ -136,7 +143,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `message_disposition` | handlerが決定した`completed` / `batch_item_failure`。AWSへ返すバッチ応答への採用を表し、配信・再実行の完了を表さない。 |
 | `persistence_state` | `committed` / `rolled_back` / `unknown`。対応する結果保存transactionで観測した状態のみ。commit中の切断は成功・失敗が確定しない限り`unknown`。 |
 | `resource` | cleanup対象のコード所有名。既存の`rds` / `engine` / `http` / `sdk` / `sdk_sync` / `sdk_async`を使う。接続文字列全体を渡さない。 |
-| `business_error_class`, `secondary_error_class` | 二次障害ログにおける元の業務例外型と二次例外型。二次例外の原因文・frameはそのログの`error_message` / `frames`に記録する。 |
+| `business_error_class` | 二次障害ログにおける元の業務例外型。二次例外は`exc_info`から`error_class` / `error_message` / `frames`へ変換し、`secondary_error_class` / `audit_error_class`を重複して渡さない。 |
 | `slug`, `missing` | category enumとDBの不整合診断。既存enum由来のslugまたはそのリストのみ。AIが返した未検証のcategoryを入れない。 |
 | `url` | 必要時に取得済みの公開記事URL。上位仕様§4.4の専用変換を通す。基底のuserinfo除去だけで保護完了にしない。 |
 
@@ -147,8 +154,8 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 ### 3.3 命名と記録単位
 
 - 識別子は`log_policy=ai_inference`、モデルは`model`、時間は`*_ms` / `*_seconds`、使用量は`input_tokens` / `output_tokens`へ統一する。業務モデル・監査DBの属性名はログの命名に合わせて改名しない。
-- `operation`の初期語彙は`settings` / `resources` / `ai_client` / `consumer` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `audit` / `notification` / `processing_metric` / `audit_dropped_metric` / `cleanup`とする。`consumer`は既存のConsumer構築を表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
-- 既存の`stage=settings/resources/ai_client/consumer`は`operation`へ移す。正常終端の`reason`は`outcome`へ移す。二次障害の`audit_error_class`は`secondary_error_class`へ揃える。
+- `operation`の初期語彙は`settings` / `resources` / `ai_client` / `consumer` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `audit` / `notification` / `processing_metric` / `audit_dropped_metric` / `failure_handling` / `cleanup`とする。`consumer`は既存のConsumer構築を表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
+- 既存の`stage=settings/resources/ai_client/consumer`は`operation`へ移す。正常終端の`reason`は`outcome`へ移す。二次障害の`audit_error_class` / `secondary_error_class`は`exc_info`由来の`error_class`へ揃える。
 - Assessmentのメッセージ単位のeventは§3.3.1へ統一する。Assessment handlerは旧イベント名から切り替え済み。Curationへの適用も後続とし、AI呼び出しの既存`assessor_api_call/success`・`curator_api_call/success`は業務メッセージとは別の単位として扱う。eventにID・例外文を埋め込まない。
 
 ### 3.3.1 Assessmentの開始・完了・失敗ログ
@@ -182,9 +189,26 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 
 未取得の項目は省略し、未検証の入力からIDを補完しない。`operation`は失敗した処理が確定している場合だけ記録する。`duration_ms`は`perf_counter()`で測ったメッセージ開始から終端直前までの経過時間をミリ秒で表す。
 
-処理情報のallowは`service` / `environment` / `stage` / `operation` / `request_id` / `message_id` / `event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id` / `outcome` / `rejection_code` / `duration_ms` / `message_disposition`。cleanup資源の識別には追加の`resource`を使う。既存の`model` / `input_tokens` / `output_tokens`を維持する。基底5項目は継承し、processorが生成する`log_policy`と例外診断項目は目的別allowへ登録しない。
+処理情報のallowは`service` / `environment` / `stage` / `operation` / `request_id` / `message_id` / `event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id` / `outcome` / `rejection_code` / `duration_ms` / `message_disposition`。cleanup資源の識別には追加の`resource`を使う。内部ログでは`reason` / `business_error_class`もallowへ追加する。既存の`model` / `input_tokens` / `output_tokens`を維持する。基底5項目は継承し、processorが生成する`log_policy`と例外診断項目は目的別allowへ登録しない。
 
 例外の分類・抽出・構造は既存処理に任せ、今回新設しない。`SqsInputError`と`AssessmentMessageJsonInvalidError`は`ApplicationError`として明示した診断を共通変換へ渡し、イベント検証例外も`exc_info`で渡す。本文10項目と認証情報のdeny・maskを維持し、§3.2の残りのallow、§3.4の追加保護、URL変換等の未実装要件をこの定義変更の完了に含めない。
+
+### 3.3.2 Assessment内部の記録
+
+handlerは検証済みイベント・対象IDをbindした`message_logger`をConsumerへ渡す。Consumerの`consume`、Serviceの`execute`、失敗後処理の`handle` / `handle_ready_build_rejected`は必須キーワード引数`logger: FilteringBoundLogger`で受け取り、同じロガーを引き継ぐ。メッセージ用ロガーをインスタンス属性に保存せず、内部で別のロガーを構築しない。
+
+| 場面 | イベント・レベル | 記録内容 |
+| --- | --- | --- |
+| 保存commit成功 | `assessment_result_saved` / INFO | `outcome=in_scope`または`out_of_scope`。対象内のみ保存した`analyzed_article_id`を追加する。 |
+| 同時処理による保存見送り | `assessment_result_save_skipped` / INFO | `reason=concurrent_write`。 |
+| 失敗後処理全体の障害 | `assessment_consumer_failure_processing_failed` / WARNING | `operation=failure_handling`、`business_error_class`、二次例外の`exc_info`。 |
+| 失敗監査の保存障害 | `assessment_consumer_failure_audit_dropped` / WARNING | `operation=audit`、`business_error_class`、二次例外の`exc_info`。 |
+| 前提不成立の監査保存障害 | `assessment_ready_build_rejected_audit_dropped` / WARNING | `operation=audit`、`rejection_code`、二次例外の`exc_info`。元の業務例外型は付けない。 |
+| 計測・通知の障害 | `assessment_consumer_failure_handling_failed` / WARNING | 既存の`processing_metric` / `audit_dropped_metric` / `notification`を`operation`とし、`business_error_class`と二次例外の`exc_info`を渡す。 |
+
+相関情報はhandlerから引き継ぐ。内部ログにはメッセージ全体の`duration_ms`や`message_disposition`を追加しない。通常のログ障害は共通ラッパーで捕捉し、監査・通知・メトリクスの実行順序や元の例外伝播は維持する。前提不成立の監査drop計測失敗を抑止する既存処理も維持する。
+
+Repositoryの起動時・保存時のカテゴリ整合性チェックは維持し、直接ログは削除する。`CategoryEnumDatabaseMismatchError`の既存メッセージが持つ不足カテゴリを、初期化・メッセージ失敗境界の`exc_info`経由で記録する。専用の`details`やRepositoryへのロガー引数は追加しない。
 
 ### 3.4 禁止・マスク・サニタイズ
 
@@ -240,7 +264,7 @@ provider例外には回復分類・retryabilityを持たせない。DB障害な�
 
 元の分析失敗と監査・通知・cleanup等の二次障害は、それぞれの原因文・stack・operationを関連付けて残す。二次障害が元の例外や成功済みの業務結果を置き換えない。ログ自体の失敗は上位仕様の最小診断へ退避し、再帰的に同じloggerを呼ばない。
 
-一次障害の詳細はメッセージ失敗ログに、二次障害の詳細はその処理境界の別ログに残し、取得済みのrequest/message/event/記事IDで結ぶ。二次障害ログは`business_error_class`と`secondary_error_class`を伴い、`operation`は失敗した監査・通知等を示す。cleanup等で元の業務例外が存在しない場合は捏造しない。記録障害を捕捉する既存境界は維持し、AI呼び出し内・保存後のログにも同じ業務結果非変更の保証を接続する。
+一次障害の詳細はメッセージ失敗ログに、二次障害の詳細はその処理境界の別ログに残し、取得済みのrequest/message/event/記事IDで結ぶ。二次障害ログは元の例外があれば`business_error_class`を伴い、二次例外の型は共通変換の`error_class`へ記録する。`operation`は失敗した監査・通知等を示す。cleanup等で元の業務例外が存在しない場合は捏造しない。記録障害は共通ラッパーで捕捉する。Assessmentの保存後ログは接続済みで、AI呼び出し内部への同じ保証の接続は後続とする。
 
 ## 5. 正常時の記録と除外情報
 
@@ -302,14 +326,14 @@ provider例外には回復分類・retryabilityを持たせない。DB障害な�
 - handlerは§3.3.1の開始・終端を直接記録する。`operation`は本文取得・解析に`parse_message`、イベント契約違反に`validate_event`、前提不成立に`build_ready`を使う。Consumer内部の失敗箇所は推測せず省略する。
 - 初期化は`assessment_initialization_failed`（ERROR）、バッチ不正は`assessment_sqs_input_invalid`（WARNING）、資源cleanupは`assessment_resources_cleanup_failed`（ERROR）を維持する。初期化箇所は`operation`、cleanupは`operation=cleanup`と`resource`に記録する。
 - [共通ラッパー](../../backend/app/log_policy/bound_logger.py)の`ApplicationBoundLogger`を`wrapper_class`に指定し、`logger.info/warning/error`からprocessor・JSON化・出力までの`Exception`を捕捉する。生データによるfallbackや再帰的な再記録は行わず、`bind()`後も同じ保護を維持する。位置引数による文字列展開は保護範囲外とし、イベント名とキーワード項目で記録する。`BaseException`は抑止しない。ライフサイクル用の記録クラスには共有インターフェースの初期化・cleanupの2メソッドだけを残す。
-- SQS応答・通知順序・監査・メトリクス・資源の所有権は維持する。内部ログ、共有DeepSeekクライアント内部のcleanup、他工程の接続は今回の範囲外である。
+- SQS応答・通知順序・監査・メトリクス・資源の所有権は維持する。Consumer・Service・失敗後処理の内部ログは§3.3.2へ接続済み。AIプロバイダー・通知処理内部、共有DeepSeekクライアント内部のcleanup、他工程の接続は後続とする。
 
 以下の表は2026-09-21の定義時点における全体の差分整理であり、上記の部分接続以外は後続工程とする。
 
 | 境界 | 実装済み | 接続・追加が必要な内容 |
 | --- | --- | --- |
 | 共通基底 | logger属性のルール、allow/deny/mask、外側の例外・SQL/検証の基本保護、上限 | 本書の追加診断を通した予算と最終出力の検証。基底の汎用allowを広げない。 |
-| AI目的ルール | 本文10項目のdeny・mask、モデル・入力/出力tokensと§3.3.1の処理情報のallow | §3.3.1以外の追加allow・deny・mask、記録側の出所・値・ネスト形状の保証。 |
+| AI目的ルール | 本文10項目のdeny・mask、モデル・入力/出力tokensと§3.3.1・§3.3.2の処理情報のallow | §3.3.1・§3.3.2以外の追加allow・deny・mask、記録側の出所・値・ネスト形状の保証。 |
 | 原因・検証診断 | 原因連鎖・ExceptionGroup・SQL診断・4種類のイベント検証例外の変換、分類reason・provider_error・応答defect等の内部保持 | 既存変換の実行経路への接続。SDK属性の追加診断、空・省略の区別等は後続工程であり、今回の定義変更では扱わない。 |
 | 実行中の事実 | ID・正常結果・一部のモデル/使用量 | request/message文脈の設定と復元、operation、経過時間、timeout範囲、試行、実際の処遇・保存状態。 |
 | 出力経路 | LambdaのJSON出力と各層のstructlog | factoryとprocessorの接続、各loggerのルール宣言、出力障害による業務結果の変更防止。共有AI clientのcleanupも対象。 |
@@ -364,6 +388,9 @@ provider例外には回復分類・retryabilityを持たせない。DB障害な�
 2026-09-22の接続変更では、共通記録口・チェーン・processor・AI目的ポリシー・例外変換と、Assessment handler・イベント・設定・共有ライフサイクル・SQS入力の対象テスト304件が成功した（DB統合4件は選択対象外）。今回変更したPython 9ファイルのRuff lint・format確認と差分の空白検査も成功した。ユーザー指定により検証は対象範囲に限定し、全体テスト・DB統合テスト・AWS適用は行っていない。
 
 共通ラッパーへの置き換えと中断・終了・キャンセルのケース追加後、同じ対象範囲で307件成功・DB統合4件は選択対象外。PRで変更するPythonファイルのRuff lint・format確認も成功した。出力障害と中断の伝播のテストはラッパー側の5ケースに集約し、ログ箇所別のテストは追加していない。
+
+2026-09-22の内部ログ接続では、Assessment・AI分析・handler・composition・共通ラッパー・AI目的ポリシー・例外変換の対象単体テスト600件が成功した（DB統合89件は選択対象外）。同じ対象の689件と`local_tests/assessment/`の19件の収集が成功した。変更したPython 13ファイルのRuff lint・format確認と差分の空白検査も成功した。DBテストは引数と観測用補助関数を更新したが実行していない。ユーザー指定により全体テスト・DB統合・ローカルDBテスト・AWS適用は行っていない。
+
 
 ## Done
 

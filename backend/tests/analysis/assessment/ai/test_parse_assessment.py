@@ -304,12 +304,6 @@ class TestParseAssessmentKeyPoints:
 class TestParseAssessmentErrorContract:
     """raise される ``AssessmentResponseInvalidError`` の attr / cause 連鎖。"""
 
-    def test_unknown_category_chains_value_error(self) -> None:
-        # 値違反系は原例外を __cause__ に連鎖する (enum 外値は ValueError 由来)。
-        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            parse_assessment(_payload(category="made_up_value"))
-        assert isinstance(exc_info.value.__cause__, ValueError)
-
     def test_missing_key_chains_key_error(self) -> None:
         # key 欠落は KeyError を __cause__ に連鎖する。
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:

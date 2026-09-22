@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,8 +20,6 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
-
-logger = structlog.get_logger(__name__)
 
 
 class CategoryEnumDatabaseMismatchError(Exception):
@@ -52,8 +49,6 @@ def missing_category_slugs(db_slugs: set[str]) -> set[str]:
 
 
 class AssessmentRepository:
-    """Domain 判断を持たず、DB 事実と保存結果だけを返す。"""
-
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
@@ -116,11 +111,6 @@ class AssessmentRepository:
             # enum↔DB の不整合 = 不変条件の破れ。marker でない例外を投げ failure
             # handler の case _: (想定外) に落として unexpected_error として焼く。
             # 通常は起動時 assert_category_catalog_covers_enum が先に fail-fast する。
-            logger.error(
-                "category_enum_database_mismatch",
-                slug=in_scope.category.value,
-                curation_id=article.curation_id,
-            )
             raise CategoryEnumDatabaseMismatchError({in_scope.category.value})
 
         stmt = (
@@ -177,5 +167,4 @@ class AssessmentRepository:
         db_slugs = {slug.root for slug in rows}
         missing = missing_category_slugs(db_slugs)
         if missing:
-            logger.error("category_enum_database_mismatch", missing=sorted(missing))
             raise CategoryEnumDatabaseMismatchError(missing)

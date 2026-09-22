@@ -27,6 +27,7 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     to_assessment_error,
 )
+from app.analysis.logging import create_article_analysis_logger
 from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
 
 # 代表 reason (mapper は値そのものを failure_reason に運ぶ。種別は不問)。
@@ -44,6 +45,11 @@ _PROVIDER_ERRORS = (
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
 )
+
+
+@pytest.fixture
+def assessment_logger():
+    return create_article_analysis_logger().bind(stage="assessment")
 
 
 def _instantiate(exc_type: type[AIProviderError]) -> AIProviderError:
@@ -68,7 +74,9 @@ def test_service_contract_retains_provider_details_without_retry_classification(
 
 @pytest.mark.parametrize("exc_type", _PROVIDER_ERRORS)
 @pytest.mark.asyncio
-async def test_service_wraps_provider_error_before_opening_db(exc_type):
+async def test_service_wraps_provider_error_before_opening_db(
+    exc_type, assessment_logger
+):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -85,7 +93,9 @@ async def test_service_wraps_provider_error_before_opening_db(exc_type):
         curation_id=1, translated_title="title", summary="summary"
     )
     with pytest.raises(AssessmentError) as raised:
-        await service.execute(ready, assessor, analyzable_article_id=1)
+        await service.execute(
+            ready, assessor, analyzable_article_id=1, logger=assessment_logger
+        )
     assert raised.value.reason is AssessmentFailureReason.PROVIDER_ERROR
     assert raised.value.provider_error is original
     assert raised.value.__cause__ is original
@@ -102,7 +112,9 @@ async def test_service_wraps_provider_error_before_opening_db(exc_type):
     ],
 )
 @pytest.mark.asyncio
-async def test_service_preserves_non_provider_exception_identity(original):
+async def test_service_preserves_non_provider_exception_identity(
+    original, assessment_logger
+):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -118,7 +130,7 @@ async def test_service_preserves_non_provider_exception_identity(original):
     assessor = SimpleNamespace(assess=AsyncMock(side_effect=original))
     with pytest.raises(type(original)) as raised:
         await AssessmentService(no_session).execute(
-            ready, assessor, analyzable_article_id=1
+            ready, assessor, analyzable_article_id=1, logger=assessment_logger
         )
     assert raised.value is original
     assert original.__cause__ is None

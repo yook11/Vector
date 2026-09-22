@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.typing import FilteringBoundLogger
 
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.assessment.consumer_failure_classification import (
@@ -16,8 +16,6 @@ from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.assessment import AssessmentAuditRepository
-
-logger = structlog.get_logger(__name__)
 
 
 class AssessmentConsumerFailureHandler:
@@ -34,13 +32,14 @@ class AssessmentConsumerFailureHandler:
         curation_id: int,
         analyzable_article_id: int | None,
         provider: str,
+        logger: FilteringBoundLogger,
     ) -> None:
         """通常の二次障害で元の処理例外を置き換えず、後処理だけを実行する。"""
         try:
             record_assessment_processing_outcome("failed")
         except Exception as metric_exc:
             self._record_secondary_failure(
-                "processing_metric", curation_id, exc, metric_exc
+                "processing_metric", curation_id, exc, metric_exc, logger=logger
             )
 
         try:
@@ -53,22 +52,18 @@ class AssessmentConsumerFailureHandler:
                 )
                 await session.commit()
         except Exception as audit_exc:
-            try:
-                logger.warning(
-                    "assessment_consumer_failure_audit_dropped",
-                    operation="audit",
-                    curation_id=curation_id,
-                    business_error_class=exception_fqn(exc),
-                    secondary_error_class=exception_fqn(audit_exc),
-                )
-            except Exception:  # noqa: S110
-                # ログの障害でdrop計測と通知を止めない。
-                pass
+            logger.warning(
+                "assessment_consumer_failure_audit_dropped",
+                operation="audit",
+                curation_id=curation_id,
+                business_error_class=exception_fqn(exc),
+                exc_info=audit_exc,
+            )
             try:
                 record_audit_dropped(AssessmentAuditRepository.STAGE)
             except Exception as metric_exc:
                 self._record_secondary_failure(
-                    "audit_dropped_metric", curation_id, exc, metric_exc
+                    "audit_dropped_metric", curation_id, exc, metric_exc, logger=logger
                 )
 
         if failure.provider_exhaustion is not None:
@@ -78,11 +73,15 @@ class AssessmentConsumerFailureHandler:
                 )
             except Exception as notification_exc:
                 self._record_secondary_failure(
-                    "notification", curation_id, exc, notification_exc
+                    "notification", curation_id, exc, notification_exc, logger=logger
                 )
 
     async def handle_ready_build_rejected(
-        self, *, curation_id: int, rejected: AssessmentReadyBuildRejected
+        self,
+        *,
+        curation_id: int,
+        rejected: AssessmentReadyBuildRejected,
+        logger: FilteringBoundLogger,
     ) -> None:
         """理由記録の通常障害で、確定した受信完了を再配信へ戻さない。"""
         try:
@@ -92,16 +91,13 @@ class AssessmentConsumerFailureHandler:
                 )
                 await session.commit()
         except Exception as audit_exc:
-            try:
-                logger.warning(
-                    "assessment_ready_build_rejected_audit_dropped",
-                    curation_id=curation_id,
-                    reason=rejected.reason.value,
-                    audit_error_class=exception_fqn(audit_exc),
-                )
-            except Exception:  # noqa: S110
-                # 診断ログの障害でも受信完了を維持する。
-                pass
+            logger.warning(
+                "assessment_ready_build_rejected_audit_dropped",
+                curation_id=curation_id,
+                operation="audit",
+                rejection_code=rejected.reason.value,
+                exc_info=audit_exc,
+            )
             try:
                 record_audit_dropped(AssessmentAuditRepository.STAGE)
             except Exception:  # noqa: S110
@@ -114,16 +110,14 @@ class AssessmentConsumerFailureHandler:
         curation_id: int,
         original: Exception,
         secondary: Exception,
+        *,
+        logger: FilteringBoundLogger,
     ) -> None:
-        """二次障害は例外本文やトレースバックを出さずに記録する。"""
-        try:
-            logger.warning(
-                "assessment_consumer_failure_handling_failed",
-                operation=operation,
-                curation_id=curation_id,
-                business_error_class=exception_fqn(original),
-                secondary_error_class=exception_fqn(secondary),
-            )
-        except Exception:  # noqa: S110
-            # ログ出力自体の障害でも元の例外と残りの後処理を優先する。
-            pass
+        """二次例外の診断を共通変換へ渡し、元の業務例外型を添える。"""
+        logger.warning(
+            "assessment_consumer_failure_handling_failed",
+            operation=operation,
+            curation_id=curation_id,
+            business_error_class=exception_fqn(original),
+            exc_info=secondary,
+        )

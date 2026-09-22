@@ -32,6 +32,7 @@ from app.analysis.assessment.service import (
     AssessmentCompletionKind,
     AssessmentService,
 )
+from app.analysis.logging import create_article_analysis_logger
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import (
     AnalyzedArticleRecord as AnalyzedArticleRecordORM,
@@ -49,6 +50,11 @@ from tests.outbox import RejectOutboxInsert
 
 _AI_MODEL = "gemini-2.5-flash-lite"
 _PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
+
+
+@pytest.fixture
+def assessment_logger():
+    return create_article_analysis_logger().bind(stage="assessment")
 
 
 async def _make_article(
@@ -150,6 +156,7 @@ async def test_in_scope_success_records_audit(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
+    assessment_logger,
 ) -> None:
     """``_handle_in_scope`` 成功で ``outcome_code=assessed_in_scope`` の audit 1 行。
 
@@ -170,7 +177,10 @@ async def test_in_scope_success_records_audit(
 
     svc = AssessmentService(session_factory)
     result = await svc.execute(
-        _ready(extraction), assessor, analyzable_article_id=subject_article.id
+        _ready(extraction),
+        assessor,
+        analyzable_article_id=subject_article.id,
+        logger=assessment_logger,
     )
     assert result.kind is AssessmentCompletionKind.IN_SCOPE
     assert result.analyzed_article_id is not None
@@ -196,6 +206,7 @@ async def test_in_scope_success_passes_snapshot_to_repository(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    assessment_logger,
 ) -> None:
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -209,7 +220,10 @@ async def test_in_scope_success_passes_snapshot_to_repository(
         new=save_mock,
     ):
         result = await svc.execute(
-            _ready(extraction), assessor, analyzable_article_id=article.id
+            _ready(extraction),
+            assessor,
+            analyzable_article_id=article.id,
+            logger=assessment_logger,
         )
 
     assert result == AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 777)
@@ -230,6 +244,7 @@ async def test_out_of_scope_success_records_audit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    assessment_logger,
 ) -> None:
     """out-of-scope 成功で ``outcome_code=assessed_out_of_scope`` の audit 1 行。"""
     article = await _make_article(db_session, sample_source)
@@ -238,7 +253,10 @@ async def test_out_of_scope_success_records_audit(
 
     svc = AssessmentService(session_factory)
     result = await svc.execute(
-        _ready(extraction), assessor, analyzable_article_id=article.id
+        _ready(extraction),
+        assessor,
+        analyzable_article_id=article.id,
+        logger=assessment_logger,
     )
     assert result == AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
 
@@ -272,6 +290,7 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
+    assessment_logger,
 ) -> None:
     """実DBの重複スキップは処理済みとなり、成功監査とOutboxを追加しない。"""
     article = await _make_article(db_session, sample_source)
@@ -293,7 +312,10 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
 
     svc = AssessmentService(session_factory)
     result = await svc.execute(
-        _ready(extraction), assessor, analyzable_article_id=article.id
+        _ready(extraction),
+        assessor,
+        analyzable_article_id=article.id,
+        logger=assessment_logger,
     )
 
     assert result == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
@@ -310,6 +332,7 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
 @pytest.mark.asyncio
 async def test_provider_network_error_preserves_provider_cause(
     session_factory: async_sessionmaker[AsyncSession],
+    assessment_logger,
 ) -> None:
     """``AIProviderNetworkError`` → ``AssessmentError`` で wrap。
 
@@ -327,7 +350,9 @@ async def test_provider_network_error_preserves_provider_cause(
     svc = AssessmentService(session_factory)
 
     with pytest.raises(AssessmentError) as excinfo:
-        await svc.execute(ready, assessor, analyzable_article_id=1)
+        await svc.execute(
+            ready, assessor, analyzable_article_id=1, logger=assessment_logger
+        )
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
     assert excinfo.value.code == provider_exc.CODE
@@ -336,6 +361,7 @@ async def test_provider_network_error_preserves_provider_cause(
 @pytest.mark.asyncio
 async def test_provider_configuration_error_preserves_provider_cause(
     session_factory: async_sessionmaker[AsyncSession],
+    assessment_logger,
 ) -> None:
     """設定エラーも再試行分類を付けずに保持する。"""
     provider_exc = AIProviderConfigurationError("bad api key")
@@ -349,7 +375,9 @@ async def test_provider_configuration_error_preserves_provider_cause(
     svc = AssessmentService(session_factory)
 
     with pytest.raises(AssessmentError) as excinfo:
-        await svc.execute(ready, assessor, analyzable_article_id=1)
+        await svc.execute(
+            ready, assessor, analyzable_article_id=1, logger=assessment_logger
+        )
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
     assert excinfo.value.code == provider_exc.CODE
@@ -361,6 +389,7 @@ async def test_unknown_category_raises_enum_db_mismatch(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    assessment_logger,
 ) -> None:
     """``in_scope.category.value`` が catalog 未登録 →
     ``CategoryEnumDatabaseMismatchError`` raise。
@@ -378,7 +407,10 @@ async def test_unknown_category_raises_enum_db_mismatch(
     svc = AssessmentService(session_factory)
     with pytest.raises(CategoryEnumDatabaseMismatchError) as excinfo:
         await svc.execute(
-            _ready(extraction), assessor, analyzable_article_id=article.id
+            _ready(extraction),
+            assessor,
+            analyzable_article_id=article.id,
+            logger=assessment_logger,
         )
     assert excinfo.value.missing == {"ai"}
 
@@ -388,6 +420,7 @@ async def test_unknown_category_does_not_record_audit_in_service(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    assessment_logger,
 ) -> None:
     """``CategoryEnumDatabaseMismatchError`` 経路でも Service が audit を焼かない
     (失敗 audit は Task 層末尾の inline audit ブロックが別 session で焼く責務)。
@@ -401,7 +434,10 @@ async def test_unknown_category_does_not_record_audit_in_service(
     svc = AssessmentService(session_factory)
     with pytest.raises(CategoryEnumDatabaseMismatchError):
         await svc.execute(
-            _ready(extraction), assessor, analyzable_article_id=article.id
+            _ready(extraction),
+            assessor,
+            analyzable_article_id=article.id,
+            logger=assessment_logger,
         )
 
     events = await _fetch_assessment_events(db_session, article.id)
@@ -414,6 +450,7 @@ async def test_audit_rolled_back_when_commit_fails(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
+    assessment_logger,
 ) -> None:
     """``session.commit`` が raise すると業務 INSERT も audit も両方残らない
     (同 session 同 tx の原子性)。
@@ -433,7 +470,10 @@ async def test_audit_rolled_back_when_commit_fails(
     ):
         with pytest.raises(RuntimeError, match="commit failed"):
             await svc.execute(
-                _ready(extraction), assessor, analyzable_article_id=article.id
+                _ready(extraction),
+                assessor,
+                analyzable_article_id=article.id,
+                logger=assessment_logger,
             )
 
     # audit も業務 analyzed_articles も両方ゼロ (同 tx で rollback)
@@ -458,6 +498,7 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    assessment_logger,
 ) -> None:
     """out-of-scope 経路の race lost でも audit は焼かれない。"""
     article = await _make_article(db_session, sample_source)
@@ -475,7 +516,10 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
     svc = AssessmentService(session_factory)
     result = await svc.execute(
-        _ready(extraction), assessor, analyzable_article_id=article.id
+        _ready(extraction),
+        assessor,
+        analyzable_article_id=article.id,
+        logger=assessment_logger,
     )
 
     assert result == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
@@ -493,6 +537,7 @@ async def test_in_scope_emits_processing_outcome_in_scope(
     sample_source: NewsSource,
     sample_categories: list[Category],
     capfire: CaptureLogfire,
+    assessment_logger,
 ) -> None:
     """in_scope 保存 + commit 後に processing_outcome{result=in_scope} が +1。"""
     article = await _make_article(db_session, sample_source)
@@ -500,7 +545,12 @@ async def test_in_scope_emits_processing_outcome_in_scope(
     assessor = _make_assessor(return_envelope=_in_scope_call(InScopeCategory.AI))
 
     svc = AssessmentService(session_factory)
-    await svc.execute(_ready(extraction), assessor, analyzable_article_id=article.id)
+    await svc.execute(
+        _ready(extraction),
+        assessor,
+        analyzable_article_id=article.id,
+        logger=assessment_logger,
+    )
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "in_scope") == 1
@@ -515,6 +565,7 @@ async def test_out_of_scope_emits_processing_outcome_out_of_scope(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     capfire: CaptureLogfire,
+    assessment_logger,
 ) -> None:
     """out_of_scope 保存 + commit 後に out_of_scope が +1 される。"""
     article = await _make_article(db_session, sample_source)
@@ -522,7 +573,12 @@ async def test_out_of_scope_emits_processing_outcome_out_of_scope(
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
 
     svc = AssessmentService(session_factory)
-    await svc.execute(_ready(extraction), assessor, analyzable_article_id=article.id)
+    await svc.execute(
+        _ready(extraction),
+        assessor,
+        analyzable_article_id=article.id,
+        logger=assessment_logger,
+    )
 
     metrics = collected_metrics(capfire)
     assert (
@@ -538,6 +594,7 @@ async def test_race_loss_does_not_emit_processing_outcome(
     sample_source: NewsSource,
     sample_categories: list[Category],
     capfire: CaptureLogfire,
+    assessment_logger,
 ) -> None:
     """楽観ロック敗北 (commit 未到達) では processing_outcome を emit しない。"""
     article = await _make_article(db_session, sample_source)
@@ -550,7 +607,10 @@ async def test_race_loss_does_not_emit_processing_outcome(
         new=AsyncMock(return_value=None),
     ):
         await svc.execute(
-            _ready(extraction), assessor, analyzable_article_id=article.id
+            _ready(extraction),
+            assessor,
+            analyzable_article_id=article.id,
+            logger=assessment_logger,
         )
 
     metrics = collected_metrics(capfire)
@@ -564,13 +624,17 @@ async def test_in_scope_persists_result_and_matching_outbox_event(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
+    assessment_logger,
 ) -> None:
     article = await _make_article(db_session, sample_source)
     curation = await _make_extraction(db_session, article)
     assessor = _make_assessor(return_envelope=_in_scope_call())
 
     completion = await AssessmentService(session_factory).execute(
-        _ready(curation), assessor, analyzable_article_id=article.id
+        _ready(curation),
+        assessor,
+        analyzable_article_id=article.id,
+        logger=assessment_logger,
     )
 
     async with session_factory() as reader:
@@ -608,6 +672,7 @@ async def test_outbox_insert_failure_rolls_back_in_scope_result(
     sample_source: NewsSource,
     sample_categories: list[Category],
     reject_outbox_insert: RejectOutboxInsert,
+    assessment_logger,
 ) -> None:
     article = await _make_article(db_session, sample_source)
     curation = await _make_extraction(db_session, article)
@@ -616,7 +681,10 @@ async def test_outbox_insert_failure_rolls_back_in_scope_result(
 
     with pytest.raises(IntegrityError, match=constraint_name):
         await AssessmentService(session_factory).execute(
-            _ready(curation), assessor, analyzable_article_id=article.id
+            _ready(curation),
+            assessor,
+            analyzable_article_id=article.id,
+            logger=assessment_logger,
         )
 
     async with session_factory() as reader:
@@ -658,13 +726,17 @@ async def test_out_of_scope_writes_no_outbox_event(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    assessment_logger,
 ) -> None:
     article = await _make_article(db_session, sample_source)
     curation = await _make_extraction(db_session, article)
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
 
     completion = await AssessmentService(session_factory).execute(
-        _ready(curation), assessor, analyzable_article_id=article.id
+        _ready(curation),
+        assessor,
+        analyzable_article_id=article.id,
+        logger=assessment_logger,
     )
 
     async with session_factory() as reader:
@@ -691,6 +763,7 @@ async def test_duplicate_save_returns_already_assessed_without_commit(
     sample_source: NewsSource,
     sample_categories: list[Category],
     in_scope: bool,
+    assessment_logger,
 ) -> None:
     """Repositoryが実DBで重複を検出すると、Serviceはcommitせず判定済みを返す。"""
     article = await _make_article(db_session, sample_source)
@@ -700,7 +773,9 @@ async def test_duplicate_save_returns_already_assessed_without_commit(
         return_envelope=_in_scope_call() if in_scope else _out_of_scope_call()
     )
     service = AssessmentService(session_factory)
-    first = await service.execute(ready, assessor, analyzable_article_id=article.id)
+    first = await service.execute(
+        ready, assessor, analyzable_article_id=article.id, logger=assessment_logger
+    )
 
     assert first.kind is (
         AssessmentCompletionKind.IN_SCOPE
@@ -710,7 +785,7 @@ async def test_duplicate_save_returns_already_assessed_without_commit(
 
     with patch.object(AsyncSession, "commit", new_callable=AsyncMock) as commit:
         repeated = await service.execute(
-            ready, assessor, analyzable_article_id=article.id
+            ready, assessor, analyzable_article_id=article.id, logger=assessment_logger
         )
         commit.assert_not_awaited()
 

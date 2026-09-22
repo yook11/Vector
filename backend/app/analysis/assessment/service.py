@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import assert_never
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.errors import AIProviderError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -26,8 +26,6 @@ from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.outbox_event import OutboxEvent
-
-logger = structlog.get_logger(__name__)
 
 
 class AssessmentCompletionKind(StrEnum):
@@ -74,6 +72,7 @@ class AssessmentService:
         assessor: BaseAssessor,
         *,
         analyzable_article_id: int,
+        logger: FilteringBoundLogger,
     ) -> AssessmentCompletion:
         """判定結果のcommitまたは重複保存の見送りを正常終了として返す。"""
         try:
@@ -101,7 +100,8 @@ class AssessmentService:
                     # 楽観的ロック敗北時は、勝者だけが audit / commit する。
                     if analyzed_article_id is None:
                         logger.info(
-                            "assessment_in_scope_concurrent_write",
+                            "assessment_result_save_skipped",
+                            reason="concurrent_write",
                             curation_id=curation_id,
                         )
                         return AssessmentCompletion(
@@ -126,7 +126,9 @@ class AssessmentService:
                     )
                     await session.commit()
                     logger.info(
-                        "assessment_in_scope_completed",
+                        "assessment_result_saved",
+                        outcome="in_scope",
+                        analyzed_article_id=analyzed_article_id,
                         curation_id=curation_id,
                     )
                     record_assessment_processing_outcome("in_scope")
@@ -142,7 +144,8 @@ class AssessmentService:
                     # 楽観的ロック敗北時は、勝者だけが audit / commit する。
                     if out_of_scope_article_id is None:
                         logger.info(
-                            "assessment_out_of_scope_concurrent_write",
+                            "assessment_result_save_skipped",
+                            reason="concurrent_write",
                             curation_id=curation_id,
                         )
                         return AssessmentCompletion(
@@ -156,7 +159,8 @@ class AssessmentService:
                     )
                     await session.commit()
                     logger.info(
-                        "assessment_out_of_scope_completed",
+                        "assessment_result_saved",
+                        outcome="out_of_scope",
                         curation_id=curation_id,
                     )
                     record_assessment_processing_outcome("out_of_scope")

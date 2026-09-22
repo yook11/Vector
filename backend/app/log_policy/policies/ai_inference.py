@@ -26,6 +26,8 @@ AI_INFERENCE_LOG_RULES = AI_INFERENCE_POLICY.extend(
             "analyzed_article_id",
             "outcome",
             "rejection_code",
+            "reason",
+            "business_error_class",
             "duration_ms",
             "message_disposition",
             "model",

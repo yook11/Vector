@@ -106,33 +106,39 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
         category_raw = payload["category"]
     except KeyError as exc:
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.CATEGORY_KEY_MISSING
+            AssessmentResponseDefect.CATEGORY_KEY_MISSING,
+            message="AI応答にcategoryがありません",
         ) from exc
     try:
         investor_take_raw = payload["investor_take"]
     except KeyError as exc:
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.INVESTOR_TAKE_KEY_MISSING
+            AssessmentResponseDefect.INVESTOR_TAKE_KEY_MISSING,
+            message="AI応答にinvestor_takeがありません",
         ) from exc
     try:
         key_points_raw = payload["key_points"]
     except KeyError as exc:
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.KEY_POINTS_KEY_MISSING
+            AssessmentResponseDefect.KEY_POINTS_KEY_MISSING,
+            message="AI応答にkey_pointsがありません",
         ) from exc
 
     # 型違反: isinstance 先頭検証。自前判定なので原例外 (cause) はない。
     if not isinstance(category_raw, str):
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.CATEGORY_WRONG_TYPE
+            AssessmentResponseDefect.CATEGORY_WRONG_TYPE,
+            message="AI応答のcategoryが文字列ではありません",
         )
     if not isinstance(investor_take_raw, str):
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.INVESTOR_TAKE_WRONG_TYPE
+            AssessmentResponseDefect.INVESTOR_TAKE_WRONG_TYPE,
+            message="AI応答のinvestor_takeが文字列ではありません",
         )
     if not isinstance(key_points_raw, list):
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.KEY_POINTS_WRONG_TYPE
+            AssessmentResponseDefect.KEY_POINTS_WRONG_TYPE,
+            message="AI応答のkey_pointsがリストではありません",
         )
 
     # key_point 要素の Pydantic 検証 (content 空 / mention type 外値 / 非 dict 等)。
@@ -141,7 +147,8 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
     except ValidationError as exc:
         # ValidationError は payload 値を含みうるため、公開 message には載せない。
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.KEY_POINT_INVALID
+            AssessmentResponseDefect.KEY_POINT_INVALID,
+            message="AI応答のkey_pointsの要素が契約を満たしていません",
         ) from exc
 
     # 最終構築: InScope / OutOfScope の Field 制約 (investor_take 空/長さ,
@@ -155,10 +162,12 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
             )
         try:
             in_scope_category = InScopeCategory(category_raw)
-        except ValueError as exc:
+        except ValueError:
+            # 元のValueErrorにはAIが生成した値が含まれるため、原因として公開しない。
             raise AssessmentResponseInvalidError(
-                AssessmentResponseDefect.CATEGORY_UNKNOWN_VALUE
-            ) from exc
+                AssessmentResponseDefect.CATEGORY_UNKNOWN_VALUE,
+                message="AI応答のcategoryが定義済みの分類ではありません",
+            ) from None
         return InScope(
             category=in_scope_category,
             investor_take=investor_take_raw,
@@ -168,4 +177,14 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
         defect = _final_construction_defect(exc)
         if defect is None:
             raise
-        raise AssessmentResponseInvalidError(defect) from exc
+        raise AssessmentResponseInvalidError(
+            defect,
+            message={
+                AssessmentResponseDefect.INVESTOR_TAKE_INVALID: (
+                    "AI応答のinvestor_takeが値の制約を満たしていません"
+                ),
+                AssessmentResponseDefect.KEY_POINTS_TOO_MANY: (
+                    "AI応答のkey_pointsが件数の上限を超えています"
+                ),
+            }[defect],
+        ) from exc

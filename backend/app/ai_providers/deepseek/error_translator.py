@@ -84,45 +84,75 @@ def translate_deepseek_error(exc: Exception) -> Exception:
     # timeout / connection を reason で区別する (APITimeoutError は
     # APIConnectionError の subclass なので先に評価する)。
     if isinstance(exc, APITimeoutError):
-        return AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)
+        return AIProviderNetworkError(
+            "AIプロバイダーとの通信がタイムアウトしました",
+            reason=DeepSeekStateReason.TIMEOUT,
+        )
     if isinstance(exc, APIConnectionError):
-        return AIProviderNetworkError(reason=DeepSeekStateReason.CONNECTION)
+        return AIProviderNetworkError(
+            "AIプロバイダーに接続できませんでした",
+            reason=DeepSeekStateReason.CONNECTION,
+        )
     if isinstance(exc, TimeoutError):
-        return AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)
+        return AIProviderNetworkError(
+            "AIプロバイダーとの通信がタイムアウトしました",
+            reason=DeepSeekStateReason.TIMEOUT,
+        )
     if isinstance(exc, (ConnectionError, OSError)):
-        return AIProviderNetworkError(reason=DeepSeekStateReason.CONNECTION)
+        return AIProviderNetworkError(
+            "AIプロバイダーに接続できませんでした",
+            reason=DeepSeekStateReason.CONNECTION,
+        )
 
     if isinstance(exc, AuthenticationError):
-        return AIProviderConfigurationError(reason=DeepSeekStateReason.AUTH)
+        return AIProviderConfigurationError(
+            "AIプロバイダーの認証に失敗しました", reason=DeepSeekStateReason.AUTH
+        )
     if isinstance(exc, PermissionDeniedError):
         return AIProviderConfigurationError(
-            reason=DeepSeekStateReason.PERMISSION_DENIED
+            "AIプロバイダーへのアクセス権限がありません",
+            reason=DeepSeekStateReason.PERMISSION_DENIED,
         )
     if isinstance(exc, NotFoundError):
-        return AIProviderConfigurationError(reason=DeepSeekStateReason.NOT_FOUND)
+        return AIProviderConfigurationError(
+            "AIプロバイダーの要求先が見つかりません",
+            reason=DeepSeekStateReason.NOT_FOUND,
+        )
 
     # HTTP 402 を OpenAIRateLimitError より先に評価 (DeepSeek 固有)
     if isinstance(exc, APIStatusError) and exc.status_code == 402:
         return AIProviderInsufficientBalanceError(
-            reason=DeepSeekStateReason.INSUFFICIENT_BALANCE
+            "AIプロバイダーの利用残高が不足しています",
+            reason=DeepSeekStateReason.INSUFFICIENT_BALANCE,
         )
 
     if isinstance(exc, OpenAIRateLimitError):
-        return AIProviderRateLimitedError(reason=DeepSeekStateReason.RATE_LIMITED)
+        return AIProviderRateLimitedError(
+            "AIプロバイダーの呼び出し頻度の上限に達しました",
+            reason=DeepSeekStateReason.RATE_LIMITED,
+        )
 
     if isinstance(exc, BadRequestError):
-        return AIProviderRequestInvalidError(reason=DeepSeekStateReason.BAD_REQUEST)
+        return AIProviderRequestInvalidError(
+            "AIプロバイダーがリクエストを不正と判定しました",
+            reason=DeepSeekStateReason.BAD_REQUEST,
+        )
     if isinstance(exc, UnprocessableEntityError):
-        return AIProviderRequestInvalidError(reason=DeepSeekStateReason.UNPROCESSABLE)
+        return AIProviderRequestInvalidError(
+            "AIプロバイダーがリクエストを処理できませんでした",
+            reason=DeepSeekStateReason.UNPROCESSABLE,
+        )
 
     if isinstance(exc, InternalServerError):
         return AIProviderServiceUnavailableError(
-            reason=DeepSeekStateReason.SERVER_ERROR
+            "AIプロバイダー内部でサーバーエラーが発生しました",
+            reason=DeepSeekStateReason.SERVER_ERROR,
         )
 
     if isinstance(exc, APIStatusError) and 500 <= exc.status_code < 600:
         return AIProviderServiceUnavailableError(
-            reason=DeepSeekStateReason.SERVER_ERROR
+            "AIプロバイダー内部でサーバーエラーが発生しました",
+            reason=DeepSeekStateReason.SERVER_ERROR,
         )
 
     return exc  # bare re-raise (UNKNOWN)

@@ -37,6 +37,7 @@ from app.analysis.curation.service import (
     CurationCompletionKind,
     CurationService,
 )
+from app.analysis.logging import create_article_analysis_logger
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -45,6 +46,11 @@ from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.pipeline_event import PipelineEvent
+
+
+@pytest.fixture
+def assessment_logger():
+    return create_article_analysis_logger().bind(stage="assessment")
 
 
 def _make_extraction_result(
@@ -452,6 +458,7 @@ async def test_assessment_persists_category(
     session_factory,
     sample_categories: list[Category],
     sample_source: NewsSource,
+    assessment_logger,
 ) -> None:
     """Stage 4 が category_id を含む analysis を生成する。"""
     article, extraction = await _create_article_with_extraction(
@@ -488,7 +495,10 @@ async def test_assessment_persists_category(
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(
-        ready, mock_assessor, analyzable_article_id=extraction.analyzable_article_id
+        ready,
+        mock_assessor,
+        analyzable_article_id=extraction.analyzable_article_id,
+        logger=assessment_logger,
     )
     assert result.kind is AssessmentCompletionKind.IN_SCOPE
 
@@ -509,6 +519,7 @@ async def test_assessment_persists_rejection_when_out_of_scope(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
+    assessment_logger,
 ) -> None:
     """AI が OutOfScope を返したときに Rejection が永続化されチェーンが止まる。"""
     article, extraction = await _create_article_with_extraction(
@@ -535,7 +546,9 @@ async def test_assessment_persists_rejection_when_out_of_scope(
         summary=extraction.summary,
     )
     svc = AssessmentService(session_factory)
-    result = await svc.execute(ready, mock_assessor, analyzable_article_id=article.id)
+    result = await svc.execute(
+        ready, mock_assessor, analyzable_article_id=article.id, logger=assessment_logger
+    )
     assert result == AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
 
     db_session.expire_all()

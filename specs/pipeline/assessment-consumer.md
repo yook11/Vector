@@ -285,8 +285,16 @@ Evidence: Embedding handler・FailureRecorder、共通SqsRecordBatch、Assessmen
 - 各メッセージの結果を捕捉できる場合は開始1回と終端1回。終端は業務結果とSQS応答への扱いが確定した時点で記録し、`duration_ms`は開始からの実測時間とする。
 - 前提不成立は既存の拒否値を使い、ログのために例外化しない。業務上の失敗とSQS応答を分離し、前提不成立では`message_disposition=completed`、既存の個別失敗応答では`batch_item_failure`を記録する。
 - 初期化・バッチ全体の入力不正・二次障害・cleanupは既存の別の記録境界に残す。例外の抽出・分類・構造は既存変換に任せる。
-- 共通のAI記事分析ロガーを呼び出し時に構築し、request_id・environment・stageを付けてcompositionにも渡す。共有のLambdaログ設定や内部ログ、他工程は一括で変更しない。
+- 共通のAI記事分析ロガーを呼び出し時に構築し、request_id・environment・stageを付けてcompositionにも渡す。handlerで検証済みイベント・対象IDをbindしたロガーをConsumer・Service・失敗後処理の必須キーワード引数`logger`へ渡す。共有のLambdaログ設定、AIプロバイダー・通知処理内部、他工程のログは未移行として維持する。
 - 出力障害の捕捉は`ApplicationBoundLogger`の共通テストで検証する。各記録箇所は通常の`logger.info/warning/error`を呼ぶ。SQS応答は既存の業務テストで検証し、ログ文言・項目の期待値を各箇所へ複製しない。AWS適用・CloudWatch到達は今回の接続実装の完了条件に含めない。
+
+### 内部ログの接続（2026-09-22）
+
+- Serviceはcommit後に`assessment_result_saved`をINFOで出し、`outcome=in_scope / out_of_scope`と、対象内のみ保存済み`analyzed_article_id`を残す。保存競合では`assessment_result_save_skipped`をINFOで出し、`reason=concurrent_write`とする。
+- 二次障害の4イベントはWARNINGで維持する。処理名、元の業務例外型、二次例外の`exc_info`を渡し、診断の抽出と出力障害の捕捉は共通処理へ任せる。前提不成立の監査失敗は`rejection_code`を残す。
+- Repositoryはカテゴリ不整合の直接ログを削除し、起動時・保存時のチェックと既存例外を維持する。不足カテゴリは例外メッセージから初期化・メッセージ失敗の境界で記録する。
+- 内部ログはhandlerのメッセージ用ロガーを引き継ぎ、インスタンスには保持しない。内部でメッセージ全体の時間・SQS応答を再記録しない。出力項目の詳細は[AI分析ログ仕様 §3.3.2](../observability/ai-analysis-logging-policy.md#332-assessment内部の記録)を正本とする。
+- ログごとの出力テストは増やさず、既存のConsumer受け渡しテストをロガーの相関情報まで拡張する。業務テストの呼び出しを新しい引数へ対応させ、共通ラッパー・変換・ポリシーのテスト責務を維持する。
 
 ### 検証の責任と未接続部分
 

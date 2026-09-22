@@ -98,6 +98,7 @@ def test_translator_does_not_copy_leaked_key_message() -> None:
     assert isinstance(translated, AIProviderConfigurationError)
     assert "AIza" not in str(translated)
     assert "github.com" not in str(translated)
+    assert str(translated) == "AIプロバイダーがAPIキーの漏洩を検知しました"
     assert translated.CODE == "ai_error_configuration"
 
 

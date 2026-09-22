@@ -8,6 +8,7 @@ from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderError,
 )
+from app.shared.errors import ApplicationError
 
 
 class AssessmentFailureReason(StrEnum):
@@ -18,13 +19,14 @@ class AssessmentFailureReason(StrEnum):
     CURATION_MISSING = "curation_missing"
 
 
-class AssessmentError(Exception):
+class AssessmentError(ApplicationError):
     """失敗理由と原因の詳細を呼び出し元へ伝える。"""
 
     def __init__(
         self,
         *,
         reason: AssessmentFailureReason,
+        message: str | None = None,
         provider_error: AIProviderError | None = None,
         defect: StrEnum | None = None,
     ) -> None:
@@ -40,10 +42,26 @@ class AssessmentError(Exception):
                 raise TypeError("defect must be a StrEnum member")
         elif defect is not None:
             raise TypeError("defect requires RESPONSE_INVALID reason")
-        super().__init__()
         self.reason = reason
         self.provider_error = provider_error
         self.defect = defect
+        if message is not None and not isinstance(message, str):
+            raise TypeError("message must be a string or None")
+        default_message = {
+            AssessmentFailureReason.PROVIDER_ERROR: (
+                "AIプロバイダーの処理失敗により記事を判定できませんでした"
+            ),
+            AssessmentFailureReason.RESPONSE_INVALID: (
+                "AI応答が記事判定の契約を満たしていません"
+            ),
+            AssessmentFailureReason.CURATION_MISSING: (
+                "判定対象のCurationが存在しません"
+            ),
+        }[reason]
+        super().__init__(
+            default_message if message is None else message,
+            details={"reason": reason.value, "code": self.code},
+        )
 
     @property
     def code(self) -> str:
@@ -58,8 +76,12 @@ class AssessmentError(Exception):
 class AssessmentResponseInvalidError(AssessmentError):
     """応答不正の詳細は検知場所が所有する列挙型で受け取る。"""
 
-    def __init__(self, defect: StrEnum) -> None:
-        super().__init__(reason=AssessmentFailureReason.RESPONSE_INVALID, defect=defect)
+    def __init__(self, defect: StrEnum, *, message: str | None = None) -> None:
+        super().__init__(
+            reason=AssessmentFailureReason.RESPONSE_INVALID,
+            defect=defect,
+            message=message,
+        )
 
 
 class AssessmentCurationMissingError(AssessmentError):
