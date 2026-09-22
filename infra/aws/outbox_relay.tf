@@ -115,12 +115,13 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
         Action    = "sqs:SendMessage"
         Resource  = aws_sqs_queue.outbox["completion"].arn
       },
-      ], [for stage in keys(local.backfill_stages) : {
+      {
         Effect    = "Allow"
-        Principal = { AWS = aws_iam_role.backfill[stage].arn }
+        Principal = { AWS = aws_iam_role.backfill.arn }
         Action    = "sqs:SendMessage"
-        Resource  = aws_sqs_queue.outbox[stage].arn
-    }])
+        Resource  = [for stage in keys(local.backfill_stages) : aws_sqs_queue.outbox[stage].arn]
+      },
+    ])
   })
   tags = { Name = "${var.name_prefix}-vpce-sqs" }
 }

@@ -32,6 +32,18 @@ variables {
 
 override_resource {
   override_during = plan
+  target          = aws_iam_policy.backfill_lambda_boundary_shared
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-lambda-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.backfill_scheduler_boundary_shared
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-scheduler-boundary" }
+}
+
+override_resource {
+  override_during = plan
   target          = aws_iam_policy.backfill_lambda_boundary["curation"]
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-backfill-lambda-boundary" }
 }
@@ -70,52 +82,61 @@ run "backfill_roles_require_their_own_boundary" {
   command = plan
   assert {
     condition = (
-      length(local.backfill_role_boundary_groups) == 6 && alltrue([for stage in ["curation", "assessment", "embedding"] :
-        local.role_boundary_groups["${title(stage)}BackfillLambda"].boundary == aws_iam_policy.backfill_lambda_boundary[stage].arn &&
-        local.role_boundary_groups["${title(stage)}BackfillLambda"].role_names == ["slice-test-${stage}-backfill-lambda"] &&
-        local.role_boundary_groups["${title(stage)}BackfillScheduler"].boundary == aws_iam_policy.backfill_scheduler_boundary[stage].arn &&
-        local.role_boundary_groups["${title(stage)}BackfillScheduler"].role_names == ["slice-test-${stage}-backfill-scheduler"]
-        ]) && alltrue([for statement in local.backfill_boundary_pairing_statements :
+      length(local.backfill_role_boundary_groups) == 2 &&
+      local.role_boundary_groups["BackfillLambda"].boundary == aws_iam_policy.backfill_lambda_boundary_shared.arn &&
+      local.role_boundary_groups["BackfillLambda"].role_names == ["slice-test-backfill-lambda"] &&
+      local.role_boundary_groups["BackfillScheduler"].boundary == aws_iam_policy.backfill_scheduler_boundary_shared.arn &&
+      local.role_boundary_groups["BackfillScheduler"].role_names == ["slice-test-backfill-scheduler"] &&
+      alltrue([for statement in local.backfill_boundary_pairing_statements :
         statement.Effect == "Deny" && statement.Action == "iam:CreateRole" &&
         contains(jsondecode(aws_iam_policy.apply_backfill.policy).Statement, statement) &&
         !contains(local.inline_boundary_pairing_statements, statement)
       ])
     )
-    error_message = "6ロールを専用boundaryに固定し、CIの作成制約を取り付ける。"
+    error_message = "段共通の2ロールを専用boundaryに固定し、CIの作成制約を取り付ける。"
   }
 }
 
-run "lambda_boundaries_limit_database_queue_logs_and_eni" {
+run "lambda_boundary_limits_database_queues_logs_and_eni" {
   command = plan
   assert {
     condition = (
-      alltrue([for stage, policy in aws_iam_policy.backfill_lambda_boundary :
-        jsondecode(policy.policy).Statement == [
-          { Sid = "RdsIamAuthAsApp", Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app" },
-          { Sid = "SendPipelineEvents", Effect = "Allow", Action = "sqs:SendMessage", Resource = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-${stage}" },
-          { Sid = "WriteBackfillLogs", Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/slice-test-${stage}-backfill:*" },
-          { Sid = "ManageLambdaNetworkInterfaces", Effect = "Allow", Action = local.outbox_lambda_eni_actions, Resource = "*" },
-          { Sid = "DenyNetworkManagementFromFunctionCode", Effect = "Deny", Action = local.outbox_lambda_eni_actions, Resource = "*", Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.backfill_lambda_arns[stage] } } },
-          local.boundary_no_escalation_statement,
-        ]
-      ])
+      jsondecode(aws_iam_policy.backfill_lambda_boundary_shared.policy).Statement == [
+        { Sid = "RdsIamAuthAsApp", Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app" },
+        { Sid = "SendPipelineEvents", Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "curation", "embedding"] : "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-${stage}"] },
+        { Sid = "WriteBackfillLogs", Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "curation", "embedding"] : "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/slice-test-${stage}-backfill:*"] },
+        { Sid = "ManageLambdaNetworkInterfaces", Effect = "Allow", Action = local.outbox_lambda_eni_actions, Resource = "*" },
+        { Sid = "DenyNetworkManagementFromFunctionCode", Effect = "Deny", Action = local.outbox_lambda_eni_actions, Resource = "*", Condition = { ArnEquals = { "lambda:SourceFunctionArn" = [for stage in ["assessment", "curation", "embedding"] : local.backfill_lambda_arns[stage]] } } },
+        local.boundary_no_escalation_statement,
+      ]
     )
-    error_message = "実行権限の天井を自工程の送信とvector_appに限定し、ENIコード実行と権限昇格を拒否する。"
+    error_message = "実行権限の天井をbackfillの3キュー・3ロググループとvector_appに限定し、ENIコード実行と権限昇格を拒否する。"
   }
 }
 
-run "scheduler_boundaries_invoke_only_their_stage" {
+run "scheduler_boundary_invokes_only_backfill_functions" {
   command = plan
   assert {
     condition = (
-      alltrue([for stage, policy in aws_iam_policy.backfill_scheduler_boundary :
-        jsondecode(policy.policy).Statement == [
-          { Sid = "InvokeBackfillOnly", Effect = "Allow", Action = "lambda:InvokeFunction", Resource = local.backfill_lambda_arns[stage] },
-          local.boundary_no_escalation_statement,
-        ]
-      ])
+      jsondecode(aws_iam_policy.backfill_scheduler_boundary_shared.policy).Statement == [
+        { Sid = "InvokeBackfillOnly", Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [for stage in ["assessment", "curation", "embedding"] : local.backfill_lambda_arns[stage]] },
+        local.boundary_no_escalation_statement,
+      ]
     )
-    error_message = "Schedulerの天井には自工程のInvokeFunctionのみを許可する。"
+    error_message = "Schedulerの天井にはbackfillの3関数のInvokeFunctionのみを許可する。"
+  }
+}
+
+run "legacy_stage_boundaries_remain_until_old_roles_are_deleted" {
+  command = plan
+  assert {
+    condition = (
+      toset(keys(aws_iam_policy.backfill_lambda_boundary)) == toset(["curation", "assessment", "embedding"]) &&
+      toset(keys(aws_iam_policy.backfill_scheduler_boundary)) == toset(["curation", "assessment", "embedding"]) &&
+      !anytrue([for group in local.role_boundary_groups : contains(values(aws_iam_policy.backfill_lambda_boundary)[*].arn, group.boundary)]) &&
+      !anytrue([for group in local.role_boundary_groups : contains(values(aws_iam_policy.backfill_scheduler_boundary)[*].arn, group.boundary)])
+    )
+    error_message = "旧段別boundaryは本体で旧ロールを削除するまで残し、対応表からは外す。"
   }
 }
 
@@ -152,22 +173,28 @@ run "ci_schedule_management_is_limited_to_backfill_groups" {
   assert {
     condition = (
       [for s in jsondecode(aws_iam_policy.apply_backfill.policy).Statement : s if s.Sid == "ManageBackfillSchedules"] == [{
-        Sid      = "ManageBackfillSchedules", Effect = "Allow",
-        Action   = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"],
-        Resource = [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-${stage}-backfill/slice-test-${stage}-backfill"]
+        Sid    = "ManageBackfillSchedules", Effect = "Allow",
+        Action = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"],
+        Resource = concat(
+          [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-backfill/slice-test-${stage}-backfill"],
+          [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-${stage}-backfill/slice-test-${stage}-backfill"],
+        )
       }]
     )
-    error_message = "scheduleのCRUDをbackfill名とgroupに限定する。"
+    error_message = "scheduleのCRUDを共通groupのbackfill名と、削除待ちの旧groupに限定する。"
   }
   assert {
     condition = (
       [for s in jsondecode(aws_iam_policy.apply_backfill.policy).Statement : s if s.Sid == "ManageBackfillScheduleGroups"] == [{
-        Sid      = "ManageBackfillScheduleGroups", Effect = "Allow",
-        Action   = ["scheduler:CreateScheduleGroup", "scheduler:GetScheduleGroup", "scheduler:DeleteScheduleGroup", "scheduler:ListTagsForResource", "scheduler:TagResource", "scheduler:UntagResource"],
-        Resource = [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-${stage}-backfill"]
+        Sid    = "ManageBackfillScheduleGroups", Effect = "Allow",
+        Action = ["scheduler:CreateScheduleGroup", "scheduler:GetScheduleGroup", "scheduler:DeleteScheduleGroup", "scheduler:ListTagsForResource", "scheduler:TagResource", "scheduler:UntagResource"],
+        Resource = concat(
+          ["arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-backfill"],
+          [for stage in ["assessment", "curation", "embedding"] : "arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-${stage}-backfill"],
+        )
       }]
     )
-    error_message = "groupの作成・削除・参照・タグ管理をbackfillだけに限定する。"
+    error_message = "groupの作成・削除・参照・タグ管理を共通groupと削除待ちの旧groupだけに限定する。"
   }
 }
 
@@ -175,10 +202,10 @@ run "pass_role_keeps_service_pairing_and_rollout_separation" {
   command = plan
   assert {
     condition = (
-      alltrue([for arn in local.backfill_lambda_role_arns :
+      alltrue([for arn in [local.backfill_lambda_role_arn] :
         contains(local.outbox_service_roles.Lambda.arns, arn) && !contains(local.outbox_service_roles.Scheduler.arns, arn) &&
         contains(local.managed_role_arns, arn) && !contains(local.app_role_arns, arn)
-        ]) && alltrue([for arn in local.backfill_scheduler_role_arns :
+        ]) && alltrue([for arn in [local.backfill_scheduler_role_arn] :
         contains(local.outbox_service_roles.Scheduler.arns, arn) && !contains(local.outbox_service_roles.Lambda.arns, arn) &&
         contains(local.managed_role_arns, arn) && !contains(local.app_role_arns, arn)
       ]) && alltrue([for guard in local.outbox_pass_role_guards : contains(jsondecode(aws_iam_policy.apply_pass_role.policy).Statement, guard)])
@@ -193,8 +220,8 @@ run "backfill_policies_stay_within_iam_size_limits" {
     condition = (
       length(aws_iam_policy.apply_backfill.policy) <= 6144 && length(aws_iam_policy.apply_pass_role.policy) <= 6144 &&
       length(aws_iam_policy.lambda_config_readback.policy) <= 6144 && length(aws_iam_role_policy.apply.policy) <= 10240 &&
-      alltrue([for p in aws_iam_policy.backfill_lambda_boundary : length(p.policy) <= 6144]) &&
-      alltrue([for p in aws_iam_policy.backfill_scheduler_boundary : length(p.policy) <= 6144])
+      length(aws_iam_policy.backfill_lambda_boundary_shared.policy) <= 6144 &&
+      length(aws_iam_policy.backfill_scheduler_boundary_shared.policy) <= 6144
     )
     error_message = "追加後もIAM容量を守る: backfill=${length(aws_iam_policy.apply_backfill.policy)}, PassRole=${length(aws_iam_policy.apply_pass_role.policy)}, inline=${length(aws_iam_role_policy.apply.policy)}。"
   }

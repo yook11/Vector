@@ -12,6 +12,8 @@ locals {
   }
   backfill_names = { for stage in keys(local.backfill_stages) : stage => "${var.name_prefix}-${stage}-backfill" }
   backfill_arns  = { for stage, name in local.backfill_names : stage => "arn:aws:lambda:${var.region}:${local.account_id}:function:${name}" }
+  # 救済(backfill)は段共通のロールで動く。段を足すときは backfill_stages に加えるだけで、ロールと boundary は増えない。
+  backfill_role_name = "${var.name_prefix}-backfill"
 }
 
 resource "aws_cloudwatch_log_group" "backfill" {
@@ -22,11 +24,9 @@ resource "aws_cloudwatch_log_group" "backfill" {
 }
 
 resource "aws_iam_role" "backfill" {
-  for_each = local.backfill_stages
-
-  name                 = "${local.backfill_names[each.key]}-lambda"
+  name                 = "${local.backfill_role_name}-lambda"
   path                 = "/${var.name_prefix}/"
-  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.backfill_names[each.key]}-lambda-boundary"
+  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.backfill_role_name}-lambda-boundary"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -38,10 +38,8 @@ resource "aws_iam_role" "backfill" {
 }
 
 resource "aws_iam_role_policy" "backfill" {
-  for_each = local.backfill_stages
-
-  name = "${each.key}-backfill"
-  role = aws_iam_role.backfill[each.key].id
+  name = "backfill"
+  role = aws_iam_role.backfill.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -53,12 +51,12 @@ resource "aws_iam_role_policy" "backfill" {
       {
         Effect   = "Allow"
         Action   = "sqs:SendMessage"
-        Resource = aws_sqs_queue.outbox[each.key].arn
+        Resource = [for stage in keys(local.backfill_stages) : aws_sqs_queue.outbox[stage].arn]
       },
       {
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "${aws_cloudwatch_log_group.backfill[each.key].arn}:*"
+        Resource = [for stage in keys(local.backfill_stages) : "${aws_cloudwatch_log_group.backfill[stage].arn}:*"]
       },
       {
         Effect   = "Allow"
@@ -70,7 +68,7 @@ resource "aws_iam_role_policy" "backfill" {
         Effect    = "Deny"
         Action    = local.outbox_relay_eni_actions
         Resource  = "*"
-        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.backfill_arns[each.key] } }
+        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = values(local.backfill_arns) } }
       },
     ]
   })
@@ -82,7 +80,7 @@ resource "aws_lambda_function" "backfill" {
   for_each = local.backfill_stages
 
   function_name                  = local.backfill_names[each.key]
-  role                           = aws_iam_role.backfill[each.key].arn
+  role                           = aws_iam_role.backfill.arn
   package_type                   = "Image"
   image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
@@ -128,17 +126,13 @@ resource "aws_lambda_function" "backfill" {
 }
 
 resource "aws_scheduler_schedule_group" "backfill" {
-  for_each = local.backfill_stages
-
-  name = local.backfill_names[each.key]
+  name = local.backfill_role_name
 }
 
 resource "aws_iam_role" "backfill_scheduler" {
-  for_each = local.backfill_stages
-
-  name                 = "${local.backfill_names[each.key]}-scheduler"
+  name                 = "${local.backfill_role_name}-scheduler"
   path                 = "/${var.name_prefix}/"
-  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.backfill_names[each.key]}-scheduler-boundary"
+  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.backfill_role_name}-scheduler-boundary"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -147,23 +141,21 @@ resource "aws_iam_role" "backfill_scheduler" {
       Action    = "sts:AssumeRole"
       Condition = {
         StringEquals = { "aws:SourceAccount" = local.account_id }
-        ArnEquals    = { "aws:SourceArn" = aws_scheduler_schedule_group.backfill[each.key].arn }
+        ArnEquals    = { "aws:SourceArn" = aws_scheduler_schedule_group.backfill.arn }
       }
     }]
   })
 }
 
 resource "aws_iam_role_policy" "backfill_scheduler" {
-  for_each = local.backfill_stages
-
-  name = "invoke-${each.key}-backfill"
-  role = aws_iam_role.backfill_scheduler[each.key].id
+  name = "invoke-backfill"
+  role = aws_iam_role.backfill_scheduler.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
       Action   = "lambda:InvokeFunction"
-      Resource = local.backfill_arns[each.key]
+      Resource = values(local.backfill_arns)
     }]
   })
 }
@@ -172,7 +164,7 @@ resource "aws_scheduler_schedule" "backfill" {
   for_each = local.backfill_stages
 
   name                         = local.backfill_names[each.key]
-  group_name                   = aws_scheduler_schedule_group.backfill[each.key].name
+  group_name                   = aws_scheduler_schedule_group.backfill.name
   state                        = "ENABLED"
   schedule_expression          = each.value.schedule
   schedule_expression_timezone = "UTC"
@@ -183,7 +175,7 @@ resource "aws_scheduler_schedule" "backfill" {
 
   target {
     arn      = aws_lambda_function.backfill[each.key].arn
-    role_arn = aws_iam_role.backfill_scheduler[each.key].arn
+    role_arn = aws_iam_role.backfill_scheduler.arn
     input    = "{}"
 
     retry_policy {
