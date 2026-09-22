@@ -79,6 +79,7 @@ class AssessmentService:
             call = await assessor.assess(
                 title_ja=ready.translated_title,
                 summary_ja=ready.summary,
+                logger=logger,
             )
         except AIProviderError as exc:
             # 元のプロバイダー例外を原因チェーンにも保持する。

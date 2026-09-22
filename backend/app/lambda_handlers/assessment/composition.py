@@ -49,6 +49,7 @@ def open_assessment_consumer(
             api_key=api_key,
             base_url=DEEPSEEK_ASSESSMENT_SPEC.base_url,
             settings=DeepSeekConnectionSettings(),
+            logger=logger,
         )
 
     async def build_consumer(

@@ -1,6 +1,7 @@
 """実SDKの通信設定と、利用範囲の資源解放を検証する。"""
 
 import asyncio
+import json
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -13,6 +14,14 @@ from pydantic import SecretStr
 from app.ai_providers.deepseek import client as module
 from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.ai_providers.errors import AIProviderConfigurationError
+from app.analysis.logging import create_article_analysis_logger
+
+
+@pytest.fixture
+def make_invocation_logger():
+    return lambda: create_article_analysis_logger().bind(
+        stage="assessment", request_id="request-001"
+    )
 
 
 @pytest.mark.parametrize(
@@ -41,7 +50,9 @@ def test_settings_are_immutable_and_secret_free():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", [200, 429, 500, 503, "timeout", "connect"])
-async def test_real_sdk_uses_timeout_and_never_retries(monkeypatch, outcome):
+async def test_real_sdk_uses_timeout_and_never_retries(
+    monkeypatch, outcome, make_invocation_logger
+):
     """実SDKの送信に4種類の待機上限が適用され、通信・HTTPエラーでも再送しないことを確認する。"""
     requests = []
     clients = []
@@ -74,6 +85,7 @@ async def test_real_sdk_uses_timeout_and_never_retries(monkeypatch, outcome):
 
     monkeypatch.setattr(module, "make_external_async_client", factory)
     async with module.open_deepseek_client(
+        logger=make_invocation_logger(),
         api_key=SecretStr("test-private-key"),
         base_url="https://api.deepseek.com/beta",
         settings=DeepSeekConnectionSettings(),
@@ -110,10 +122,13 @@ def resources(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key", ["", " ", "\n\t"])
-async def test_empty_key_rejected_before_creation(resources, key):
+async def test_empty_key_rejected_before_creation(
+    resources, key, make_invocation_logger
+):
     """空または空白だけのAPIキーでは、HTTP・SDKの資源を生成せず設定エラーにする。"""
     with pytest.raises(AIProviderConfigurationError):
         async with module.open_deepseek_client(
+            logger=make_invocation_logger(),
             api_key=SecretStr(key),
             base_url="https://api.deepseek.com/beta",
             settings=DeepSeekConnectionSettings(),
@@ -127,12 +142,15 @@ async def test_empty_key_rejected_before_creation(resources, key):
 @pytest.mark.parametrize(
     "failure", [None, RuntimeError("private"), asyncio.CancelledError()]
 )
-async def test_closes_resources_and_preserves_body_exception(resources, failure):
+async def test_closes_resources_and_preserves_body_exception(
+    resources, failure, make_invocation_logger
+):
     """利用の成功・失敗・キャンセルのいずれでも資源を閉じ、元の例外を保持する。"""
     http, sdk, _, _ = resources
 
     async def run():
         async with module.open_deepseek_client(
+            logger=make_invocation_logger(),
             api_key=SecretStr("private"),
             base_url="https://api.deepseek.com/beta",
             settings=DeepSeekConnectionSettings(),
@@ -153,12 +171,13 @@ async def test_closes_resources_and_preserves_body_exception(resources, failure)
 
 
 @pytest.mark.asyncio
-async def test_sdk_creation_failure_closes_http(resources):
+async def test_sdk_creation_failure_closes_http(resources, make_invocation_logger):
     """SDK生成に失敗した場合も、先に作成したHTTPクライアントを解放する。"""
     failure = RuntimeError("private")
     resources[3].side_effect = failure
     with pytest.raises(RuntimeError) as caught:
         async with module.open_deepseek_client(
+            logger=make_invocation_logger(),
             api_key=SecretStr("private"),
             base_url="https://api.deepseek.com/beta",
             settings=DeepSeekConnectionSettings(),
@@ -169,21 +188,19 @@ async def test_sdk_creation_failure_closes_http(resources):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("log_fails", [False, True])
 @pytest.mark.parametrize("body_fails", [False, True])
 async def test_cleanup_failures_do_not_change_result(
-    resources, monkeypatch, log_fails, body_fails
+    resources, body_fails, make_invocation_logger
 ):
-    """終了処理と診断ログが失敗しても、残りの終了処理を試みて元の成功・失敗を保持する。"""
+    """終了処理が失敗しても、残りの終了処理を試みて元の成功・失敗を保持する。"""
     http, sdk, _, _ = resources
     for closer in (http.aclose, sdk.close):
         closer.side_effect = RuntimeError("private-key")
-    log = Mock(side_effect=RuntimeError("log-private") if log_fails else None)
-    monkeypatch.setattr(module.logger, "warning", log)
     failure = ValueError("original")
 
     async def run():
         async with module.open_deepseek_client(
+            logger=make_invocation_logger(),
             api_key=SecretStr("private-key"),
             base_url="https://api.deepseek.com/beta",
             settings=DeepSeekConnectionSettings(),
@@ -198,21 +215,20 @@ async def test_cleanup_failures_do_not_change_result(
         assert caught.value is failure
     else:
         assert await run() == "completed"
-    assert log.call_count == 2
-    assert "private" not in repr(log.call_args_list)
-    assert {call.kwargs["resource"] for call in log.call_args_list} == {
-        "http",
-        "sdk",
-    }
+    http.aclose.assert_awaited_once()
+    sdk.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_cleanup_cancellation_propagates_and_other_resources_close(resources):
+async def test_cleanup_cancellation_propagates_and_other_resources_close(
+    resources, make_invocation_logger
+):
     """SDK終了中のキャンセルを抑止せず、残ったHTTP資源の解放も試みる。"""
     http, sdk, _, _ = resources
     sdk.close.side_effect = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):
         async with module.open_deepseek_client(
+            logger=make_invocation_logger(),
             api_key=SecretStr("private"),
             base_url="https://api.deepseek.com/beta",
             settings=DeepSeekConnectionSettings(),
@@ -223,7 +239,9 @@ async def test_cleanup_cancellation_propagates_and_other_resources_close(resourc
 
 
 @pytest.mark.asyncio
-async def test_real_factory_and_sdk_scope_with_custom_settings(monkeypatch):
+async def test_real_factory_and_sdk_scope_with_custom_settings(
+    monkeypatch, make_invocation_logger
+):
     """実ファクトリで指定値を送信へ反映し、利用範囲ごとに別資源を作ってHTTPを一度だけ閉じる。"""
     from app.http import external
 
@@ -247,6 +265,7 @@ async def test_real_factory_and_sdk_scope_with_custom_settings(monkeypatch):
     sdk_clients = []
     for _ in range(2):
         async with module.open_deepseek_client(
+            logger=make_invocation_logger(),
             api_key=SecretStr("private"),
             base_url="https://api.deepseek.com/beta",
             settings=settings,
@@ -265,3 +284,30 @@ async def test_real_factory_and_sdk_scope_with_custom_settings(monkeypatch):
         == {"connect": 3, "read": 7, "write": 10, "pool": 3}
         for request in sent
     )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_logs_resource_and_exception_type_without_message(
+    resources, make_invocation_logger, capsys
+):
+    """cleanupの対象と型を呼び出し情報付きで残し、例外の生メッセージは出さない。"""
+    http, sdk, _, _ = resources
+    http.is_closed = True
+    sdk.close.side_effect = RuntimeError("PRIVATE_CLEANUP_MESSAGE")
+    async with module.open_deepseek_client(
+        api_key=SecretStr("synthetic-key"),
+        base_url="https://api.deepseek.com/beta",
+        settings=DeepSeekConnectionSettings(),
+        logger=make_invocation_logger(),
+    ):
+        pass
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert record["operation"] == "cleanup"
+    assert record["resource"] == "sdk"
+    assert record["error_class"] == "builtins.RuntimeError"
+    assert record["request_id"] == "request-001"
+    assert record["level"] == "warning"
+    assert "message_id" not in record
+    assert "PRIVATE_CLEANUP_MESSAGE" not in output
+    assert "error_message" not in record

@@ -72,8 +72,44 @@ def wiring(monkeypatch):
     monkeypatch.setattr(
         module, "build_article_list_notifier", Mock(return_value=state.notifier)
     )
-    monkeypatch.setattr(module, "setup_lambda_logging", Mock())
     return state
+
+
+def test_handler_outputs_json_without_global_logging_configuration(
+    wiring, monkeypatch, capsys
+):
+    """グローバル設定を使用・変更せず、目的別ロガーからJSONを出力する。"""
+    configure = structlog.configure
+    original_config = structlog.get_config().copy()
+
+    def reject_global_processor(logger, method_name, event_dict):
+        raise AssertionError("global processor must not be used")
+
+    try:
+        configure(processors=[reject_global_processor])
+        global_config = structlog.get_config().copy()
+        configure_spy = Mock(wraps=configure)
+        with monkeypatch.context() as scoped:
+            scoped.setattr(structlog, "configure", configure_spy)
+
+            module.handler(
+                {"Records": [{"messageId": "message-001", "body": valid_body()}]},
+                SimpleNamespace(aws_request_id="request-001"),
+            )
+
+            configure_spy.assert_not_called()
+            assert structlog.get_config() == global_config
+
+        records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        completed = next(
+            record
+            for record in records
+            if record["event"] == "assessment_message_processing_completed"
+        )
+        assert completed["log_policy"] == "ai_inference"
+        assert completed["message_id"] == "message-001"
+    finally:
+        configure(**original_config)
 
 
 def test_batch_reports_only_failed_message_ids(wiring):
@@ -372,3 +408,43 @@ def test_ready_build_rejection_is_not_reported_as_batch_failure(wiring, reason):
         {"Records": [{"messageId": "rejected", "body": valid_body()}]}, None
     )
     assert response == {"batchItemFailures": []}
+
+
+def test_shared_logging_context_is_scoped_to_invocation_and_notification(wiring):
+    """通知中だけメッセージの相関情報を共有し、cleanupと呼び出し元へ持ち越さない。"""
+    snapshots = {}
+
+    @asynccontextmanager
+    async def open_consumer(settings, *, logger):
+        snapshots["initialization"] = structlog.contextvars.get_contextvars()
+        try:
+            yield wiring.consumer
+        finally:
+            snapshots["cleanup"] = structlog.contextvars.get_contextvars()
+
+    async def notify():
+        snapshots["notification"] = structlog.contextvars.get_contextvars()
+
+    wiring.open.side_effect = open_consumer
+    wiring.notifier.notify_article_list_updated.side_effect = notify
+    with structlog.contextvars.bound_contextvars(request_id="outer-request"):
+        outer_context = structlog.contextvars.get_contextvars()
+        module.handler(
+            {"Records": [{"messageId": "message-001", "body": valid_body()}]},
+            SimpleNamespace(aws_request_id="request-001"),
+        )
+        assert structlog.contextvars.get_contextvars() == outer_context
+
+    invocation = {
+        "service": "article_analysis",
+        "stage": "assessment",
+        "environment": "test",
+        "request_id": "request-001",
+    }
+    assert snapshots["initialization"] == invocation
+    assert snapshots["cleanup"] == invocation
+    assert snapshots["notification"] == {
+        **invocation,
+        "message_id": "message-001",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+    }

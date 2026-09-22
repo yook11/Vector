@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.deepseek.client import open_deepseek_client
 from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
@@ -50,6 +51,7 @@ from app.analysis.assessment.domain.result import (
     ValidCategory,
 )
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
+from app.analysis.logging import create_article_analysis_logger
 from app.config import settings
 from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
@@ -84,12 +86,14 @@ class SampleResult:
     deepseek: CallResult
 
 
-async def _call_assessor(assessor: BaseAssessor, sample: Sample) -> CallResult:
+async def _call_assessor(
+    assessor: BaseAssessor, sample: Sample, *, logger: FilteringBoundLogger
+) -> CallResult:
     """1 件を assessor に通し、レイテンシと結果/エラーを記録する。"""
     start = time.perf_counter()
     try:
         result = await assessor.assess(
-            title_ja=sample.title_ja, summary_ja=sample.summary_ja
+            title_ja=sample.title_ja, summary_ja=sample.summary_ja, logger=logger
         )
     except (AIProviderError, AssessmentResponseInvalidError) as exc:
         elapsed = time.perf_counter() - start
@@ -127,10 +131,12 @@ async def _process_sample(
     sample: Sample,
     gemini: GeminiAssessor,
     deepseek: DeepSeekAssessor,
+    *,
+    logger: FilteringBoundLogger,
 ) -> SampleResult:
     g_res, d_res = await asyncio.gather(
-        _call_assessor(gemini, sample),
-        _call_assessor(deepseek, sample),
+        _call_assessor(gemini, sample, logger=logger),
+        _call_assessor(deepseek, sample, logger=logger),
     )
     return SampleResult(sample=sample, gemini=g_res, deepseek=d_res)
 
@@ -341,10 +347,12 @@ async def _run(limit: int, output_path: Path) -> int:
     print(f"Loaded {len(samples)} samples")
 
     gemini = GeminiAssessor()
+    logger = create_article_analysis_logger().bind(stage="assessment")
     async with open_deepseek_client(
         api_key=settings.deepseek_api_key,
         base_url=DEEPSEEK_ASSESSMENT_SPEC.base_url,
         settings=DeepSeekConnectionSettings(),
+        logger=logger,
     ) as client:
         deepseek = DeepSeekAssessor(client)
 
@@ -355,7 +363,12 @@ async def _run(limit: int, output_path: Path) -> int:
                 end=" ",
                 flush=True,
             )
-            result = await _process_sample(sample, gemini, deepseek)
+            result = await _process_sample(
+                sample,
+                gemini,
+                deepseek,
+                logger=logger.bind(curation_id=sample.curation_id),
+            )
             g_label = (
                 result.gemini.category_value or f"ERR({result.gemini.error_class})"
             )

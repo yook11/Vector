@@ -1,8 +1,11 @@
 """SSM取得の復号・通信設定・秘密情報と終了の境界を検証する。"""
 
+import asyncio
+import json
 from unittest.mock import Mock
 
 import pytest
+import structlog
 from pydantic import SecretStr
 
 from app.aws import ssm
@@ -55,11 +58,8 @@ def test_invalid_secret(sdk, response):
 
 
 @pytest.mark.parametrize("failure", [None, RuntimeError("original")])
-@pytest.mark.parametrize("log_fails", [False, True])
-def test_cleanup_preserves_result(sdk, monkeypatch, failure, log_fails):
+def test_cleanup_preserves_result(sdk, failure):
     sdk[1].close.side_effect = RuntimeError("private-key")
-    log = Mock(side_effect=RuntimeError("log") if log_fails else None)
-    monkeypatch.setattr(ssm.logger, "warning", log)
     if failure:
         sdk[1].get_parameter.side_effect = failure
         with pytest.raises(RuntimeError) as caught:
@@ -72,7 +72,6 @@ def test_cleanup_preserves_result(sdk, monkeypatch, failure, log_fails):
             ).get_secret_value()
             == "private-key"
         )
-    assert "private-key" not in repr(log.call_args_list)
 
 
 @pytest.mark.parametrize("status,expected_attempts", [(503, 2), (400, 1)])
@@ -121,3 +120,27 @@ def test_real_sdk_retry_limit(monkeypatch, status, expected_attempts):
         with pytest.raises(ClientError):
             ssm.get_secret_parameter(region="ap-northeast-1", path="/key")
     assert len(attempts) == expected_attempts
+
+
+@pytest.mark.asyncio
+async def test_cleanup_log_uses_secret_policy_and_invocation_context(sdk, capsys):
+    """スレッド内のSSM終了失敗も相関情報付きで記録し、秘密値とパスは出さない。"""
+    sdk[1].close.side_effect = RuntimeError("PRIVATE_CLEANUP_MESSAGE")
+    with structlog.contextvars.bound_contextvars(request_id="request-001"):
+        await asyncio.to_thread(
+            ssm.get_secret_parameter,
+            region="ap-northeast-1",
+            path="/PRIVATE_PARAMETER_PATH",
+        )
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert record["log_policy"] == "infrastructure"
+    assert record["event"] == "ssm_parameter_cleanup_failed"
+    assert record["operation"] == "cleanup"
+    assert record["resource"] == "ssm"
+    assert record["error_class"] == "builtins.RuntimeError"
+    assert record["request_id"] == "request-001"
+    assert "PRIVATE_" not in output
+    assert "private-key" not in output
+    assert "error_message" not in record

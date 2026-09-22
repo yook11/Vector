@@ -12,9 +12,9 @@ import json
 from enum import StrEnum
 from typing import Final
 
-import structlog
 from google import genai
 from google.genai.types import GenerateContentConfig
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.errors import (
     AIProviderConfigurationError,
@@ -36,8 +36,6 @@ from app.analysis.assessment.ai.spec import (
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.config import settings
-
-logger = structlog.get_logger(__name__)
 
 # Gemini が応答を抑制した場合の finish_reason 値。SDK 経由で出力 block を直接
 # 知らせるシグナルなので、_translate_error 経由ではなく _call_api 内で
@@ -92,13 +90,15 @@ class GeminiAssessor(BaseAssessor):
         self,
         title_ja: str,
         summary_ja: str,
+        *,
+        logger: FilteringBoundLogger,
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """Stage 3 (Curation) の出力を判定する。原文は読まない。"""
         prompt = GeminiAssessmentPrompt.render(title_ja=title_ja, summary_ja=summary_ja)
-        return await self._call_once(prompt)
+        return await self._call_once(prompt, logger=logger)
 
     async def _call_api(
-        self, prompt: str
+        self, prompt: str, *, logger: FilteringBoundLogger
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """Gemini の generate_content API を呼び出し ``AssessmentCall`` を返す。
 

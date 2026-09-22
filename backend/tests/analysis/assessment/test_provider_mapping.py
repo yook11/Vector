@@ -134,3 +134,26 @@ async def test_service_preserves_non_provider_exception_identity(
         )
     assert raised.value is original
     assert original.__cause__ is None
+
+
+@pytest.mark.asyncio
+async def test_service_passes_message_logger_to_assessor(assessment_logger):
+    """Serviceが受け取ったロガーをそのままAssessorへ渡す。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from app.analysis.assessment.domain.ready import ReadyForAssessment
+    from app.analysis.assessment.service import AssessmentService
+
+    failure = RuntimeError("stop before database")
+    assessor = SimpleNamespace(assess=AsyncMock(side_effect=failure))
+    ready = ReadyForAssessment(
+        curation_id=1, translated_title="title", summary="summary"
+    )
+    with pytest.raises(RuntimeError):
+        await AssessmentService(Mock()).execute(
+            ready, assessor, analyzable_article_id=1, logger=assessment_logger
+        )
+    assessor.assess.assert_awaited_once_with(
+        title_ja="title", summary_ja="summary", logger=assessment_logger
+    )

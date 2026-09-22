@@ -1,15 +1,16 @@
 """Parameter Storeの秘密情報を取得し、通信資源を取得操作内で閉じる。"""
 
-import structlog
 from botocore.config import Config
 from botocore.session import Session
 from pydantic import SecretStr
 
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.secret_access import SECRET_ACCESS_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 
 def get_secret_parameter(*, region: str, path: str) -> SecretStr:
     """キャッシュせず、復号した値だけを秘密情報型で返す。"""
+    logger = create_policy_json_logger(__name__, SECRET_ACCESS_LOG_RULES)
     client = Session().create_client(
         "ssm",
         region_name=region,
@@ -32,12 +33,9 @@ def get_secret_parameter(*, region: str, path: str) -> SecretStr:
         try:
             client.close()
         except Exception as exc:
-            try:
-                logger.warning(
-                    "ssm_parameter_cleanup_failed",
-                    resource="ssm",
-                    error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
-                )
-            except Exception:  # noqa: S110
-                # 診断障害で取得結果や先行例外を置き換えない。
-                pass
+            logger.warning(
+                "ssm_parameter_cleanup_failed",
+                operation="cleanup",
+                resource="ssm",
+                error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
+            )

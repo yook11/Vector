@@ -63,7 +63,7 @@ def _patch_assessor_call(assessor: GeminiAssessor, response: MagicMock) -> Async
 
 class TestGeminiCallApiSuccess:
     @pytest.mark.asyncio
-    async def test_in_scope_round_trip(self) -> None:
+    async def test_in_scope_round_trip(self, make_assessment_logger) -> None:
         assessor = GeminiAssessor()
         text = json.dumps(
             {
@@ -74,7 +74,9 @@ class TestGeminiCallApiSuccess:
         )
         _patch_assessor_call(assessor, _stub_response(text))
 
-        call = await assessor._call_api("prompt")
+        call = await assessor.assess(
+            "title", "summary", logger=make_assessment_logger()
+        )
 
         assert isinstance(call, AssessmentCall)
         assert isinstance(call.result, InScope)
@@ -86,7 +88,7 @@ class TestGeminiCallApiSuccess:
         assert call.model_name == GEMINI_ASSESSMENT_SPEC.model
 
     @pytest.mark.asyncio
-    async def test_out_of_scope_round_trip(self) -> None:
+    async def test_out_of_scope_round_trip(self, make_assessment_logger) -> None:
         assessor = GeminiAssessor()
         text = json.dumps(
             {
@@ -97,7 +99,7 @@ class TestGeminiCallApiSuccess:
         )
         _patch_assessor_call(assessor, _stub_response(text))
 
-        call = await assessor._call_api("prompt")
+        call = await assessor._call_api("prompt", logger=make_assessment_logger())
 
         assert isinstance(call.result, OutOfScope)
         assert call.result.investor_take == "Not relevant."
@@ -105,12 +107,12 @@ class TestGeminiCallApiSuccess:
         assert call.model_name == GEMINI_ASSESSMENT_SPEC.model
 
     @pytest.mark.asyncio
-    async def test_uses_dict_response_schema(self) -> None:
+    async def test_uses_dict_response_schema(self, make_assessment_logger) -> None:
         assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         mock_call = _patch_assessor_call(assessor, _stub_response(text))
 
-        await assessor._call_api("prompt")
+        await assessor._call_api("prompt", logger=make_assessment_logger())
 
         # generate_content が呼ばれた config 引数の response_schema が dict であること
         kwargs = mock_call.await_args.kwargs
@@ -120,13 +122,15 @@ class TestGeminiCallApiSuccess:
         assert config.response_schema.get("type") == "OBJECT"
 
     @pytest.mark.asyncio
-    async def test_structured_output_mechanism_reaches_sdk(self) -> None:
+    async def test_structured_output_mechanism_reaches_sdk(
+        self, make_assessment_logger
+    ) -> None:
         """機構 (JSON mode) を structured_output に分離後も config に届くこと。"""
         assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         mock_call = _patch_assessor_call(assessor, _stub_response(text))
 
-        await assessor._call_api("prompt")
+        await assessor._call_api("prompt", logger=make_assessment_logger())
 
         config = mock_call.await_args.kwargs["config"]
         assert config.response_mime_type == "application/json"
@@ -137,7 +141,9 @@ class TestGeminiCallApiSuccess:
 
 class TestGeminiFinishReasonBlocked:
     @pytest.mark.asyncio
-    async def test_finish_reason_safety_raises_blocked(self) -> None:
+    async def test_finish_reason_safety_raises_blocked(
+        self, make_assessment_logger
+    ) -> None:
         """拒否の具体型とCODE・reasonを保持する。"""
         assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
@@ -146,32 +152,36 @@ class TestGeminiFinishReasonBlocked:
         )
 
         with pytest.raises(AIProviderOutputBlockedError) as exc_info:
-            await assessor._call_api("prompt")
+            await assessor._call_api("prompt", logger=make_assessment_logger())
 
         assert exc_info.value.CODE == "ai_error_output_blocked"
         assert exc_info.value.reason is GeminiContentRejectionReason.SAFETY
 
     @pytest.mark.asyncio
-    async def test_finish_reason_recitation_raises_blocked(self) -> None:
+    async def test_finish_reason_recitation_raises_blocked(
+        self, make_assessment_logger
+    ) -> None:
         assessor = GeminiAssessor()
         _patch_assessor_call(
             assessor, _stub_response("{}", finish_reason_name="RECITATION")
         )
 
         with pytest.raises(AIProviderOutputBlockedError) as exc_info:
-            await assessor._call_api("prompt")
+            await assessor._call_api("prompt", logger=make_assessment_logger())
 
         assert exc_info.value.CODE == "ai_error_output_blocked"
         assert exc_info.value.reason is GeminiContentRejectionReason.RECITATION
 
     @pytest.mark.asyncio
-    async def test_finish_reason_stop_does_not_raise(self) -> None:
+    async def test_finish_reason_stop_does_not_raise(
+        self, make_assessment_logger
+    ) -> None:
         """正常終了の finish_reason (STOP 等) では raise せず parse に進む。"""
         assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         _patch_assessor_call(assessor, _stub_response(text, finish_reason_name="STOP"))
 
-        call = await assessor._call_api("prompt")
+        call = await assessor._call_api("prompt", logger=make_assessment_logger())
         assert isinstance(call.result, InScope)
 
 
@@ -180,46 +190,54 @@ class TestGeminiFinishReasonBlocked:
 
 class TestGeminiInvalidPayload:
     @pytest.mark.asyncio
-    async def test_invalid_json_raises_gemini_not_json(self) -> None:
+    async def test_invalid_json_raises_gemini_not_json(
+        self, make_assessment_logger
+    ) -> None:
         """非 JSON は adapter 所有 ``NOT_JSON`` defect で envelope 契約違反を焼く。"""
         assessor = GeminiAssessor()
         _patch_assessor_call(assessor, _stub_response("not json at all"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await assessor._call_api("prompt")
+            await assessor._call_api("prompt", logger=make_assessment_logger())
 
         assert exc_info.value.code == GeminiResponseDefect.NOT_JSON
 
     @pytest.mark.asyncio
-    async def test_non_object_payload_raises_gemini_not_object(self) -> None:
+    async def test_non_object_payload_raises_gemini_not_object(
+        self, make_assessment_logger
+    ) -> None:
         assessor = GeminiAssessor()
         # JSON array (list) は object ではないので reject
         _patch_assessor_call(assessor, _stub_response("[1, 2, 3]"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await assessor._call_api("prompt")
+            await assessor._call_api("prompt", logger=make_assessment_logger())
 
         assert exc_info.value.code == GeminiResponseDefect.NOT_OBJECT
 
     @pytest.mark.asyncio
-    async def test_missing_key_payload_surfaces_parse_defect(self) -> None:
+    async def test_missing_key_payload_surfaces_parse_defect(
+        self, make_assessment_logger
+    ) -> None:
         """parse の内容違反 (key 欠落) が adapter を素通りして焼かれる。"""
         assessor = GeminiAssessor()
         text = json.dumps({"category": "ai"})  # investor_take 欠落
         _patch_assessor_call(assessor, _stub_response(text))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await assessor._call_api("prompt")
+            await assessor._call_api("prompt", logger=make_assessment_logger())
 
         assert exc_info.value.code == AssessmentResponseDefect.INVESTOR_TAKE_KEY_MISSING
 
     @pytest.mark.asyncio
-    async def test_empty_text_raises_gemini_not_json(self) -> None:
+    async def test_empty_text_raises_gemini_not_json(
+        self, make_assessment_logger
+    ) -> None:
         """response.text が None / 空 → JSON parse 失敗 → ``NOT_JSON``。"""
         assessor = GeminiAssessor()
         _patch_assessor_call(assessor, _stub_response(""))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await assessor._call_api("prompt")
+            await assessor._call_api("prompt", logger=make_assessment_logger())
 
         assert exc_info.value.code == GeminiResponseDefect.NOT_JSON

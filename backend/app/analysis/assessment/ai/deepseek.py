@@ -16,8 +16,8 @@ import json
 from enum import StrEnum
 from typing import Final
 
-import structlog
 from openai import AsyncOpenAI
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.deepseek.error_translator import (
     DeepSeekStateReason,
@@ -37,7 +37,9 @@ from app.analysis.assessment.ai.spec import (
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 
-logger = structlog.get_logger(__name__)
+_KNOWN_FINISH_REASONS = frozenset(
+    {"stop", "length", "tool_calls", "content_filter", "function_call"}
+)
 
 
 class DeepSeekResponseDefect(StrEnum):
@@ -82,15 +84,17 @@ class DeepSeekAssessor(BaseAssessor):
         self,
         title_ja: str,
         summary_ja: str,
+        *,
+        logger: FilteringBoundLogger,
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """Stage 3 (Curation) の出力を判定する。原文は読まない。"""
         prompt = DeepSeekAssessmentPrompt.render(
             title_ja=title_ja, summary_ja=summary_ja
         )
-        return await self._call_once(prompt)
+        return await self._call_once(prompt, logger=logger)
 
     async def _call_api(
-        self, prompt: str
+        self, prompt: str, *, logger: FilteringBoundLogger
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """DeepSeek の chat.completions API を Function Calling 経由で呼び出す。
 
@@ -123,6 +127,13 @@ class DeepSeekAssessor(BaseAssessor):
         choice = resp.choices[0]
         finish_reason = choice.finish_reason
         completion_tokens = resp.usage.completion_tokens if resp.usage else None
+        usage_fields: dict[str, int] = {}
+        for name, value in (
+            ("output_tokens", completion_tokens),
+            ("max_output_tokens", self.SPEC.gen_config.get("max_tokens")),
+        ):
+            if type(value) is int and value >= 0:
+                usage_fields[name] = value
 
         # 切り詰め応答は JSON 破損 (ARGUMENTS_NOT_JSON) と別分類にする。strict な
         # constrained decoding では不正 JSON の実経路がほぼ切り詰めのみで、混ぜると
@@ -130,8 +141,8 @@ class DeepSeekAssessor(BaseAssessor):
         if finish_reason == "length":
             logger.warning(
                 "assessment_deepseek_output_truncated",
-                completion_tokens=completion_tokens,
-                max_tokens=self.SPEC.gen_config.get("max_tokens"),
+                reason=DeepSeekStateReason.OUTPUT_TOKEN_LIMIT_REACHED.value,
+                **usage_fields,
             )
             raise AIProviderOutputTruncatedError(
                 "AI応答が出力トークン数の上限に達して打ち切られました",
@@ -175,12 +186,15 @@ class DeepSeekAssessor(BaseAssessor):
             result = parse_assessment(payload)
         except AssessmentResponseInvalidError as exc:
             # 応答が使えない時の観測材料 (raw は載せない。失敗の扱いは変えない)。
+            if (
+                isinstance(finish_reason, str)
+                and finish_reason in _KNOWN_FINISH_REASONS
+            ):
+                logger = logger.bind(finish_reason=finish_reason)
             logger.warning(
                 "assessment_deepseek_response_defect",
                 code=exc.code,
-                finish_reason=finish_reason,
-                completion_tokens=completion_tokens,
-                max_tokens=self.SPEC.gen_config.get("max_tokens"),
+                **usage_fields,
             )
             raise
 
