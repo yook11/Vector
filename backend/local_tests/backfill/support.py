@@ -24,6 +24,19 @@ async def seed_article(database, url):
         )
 
 
+async def seed_incomplete_article(database, url):
+    async with database.connect("vector") as connection:
+        return await connection.fetchval(
+            "INSERT INTO incomplete_articles "
+            "(url, source_id, source_name, status, observed_article, "
+            "ready_at, created_at) "
+            "SELECT $1, id, name, 'open', '{}'::jsonb, $2, $2 FROM news_sources "
+            "ORDER BY id LIMIT 1 RETURNING id",
+            url,
+            CREATED_AT,
+        )
+
+
 async def seed_curation(database, article_id):
     async with database.connect("vector") as connection:
         return await connection.fetchval(

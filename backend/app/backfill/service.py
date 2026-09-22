@@ -16,6 +16,7 @@ from app.audit.stages.backfill import (
 )
 from app.backfill.audit import append_backfill_item_event, append_backfill_run_event
 from app.backfill.cleanup import (
+    close_aged_out_completions,
     delete_aged_out_curations,
     exclude_aged_out_assessments,
     exclude_aged_out_embeddings,
@@ -23,6 +24,7 @@ from app.backfill.cleanup import (
 from app.backfill.metrics import backlog_gauge, record_aged_out, record_dispatched
 from app.backfill.policy import (
     ASSESSMENTS_LIMIT,
+    COMPLETIONS_LIMIT,
     CURATIONS_LIMIT,
     EMBEDDINGS_LIMIT,
     BackfillWindow,
@@ -250,5 +252,49 @@ async def backfill_embeddings(
             backfill_stage="embed",
             stage="embedding",
             target_kind="analyzed_article",
+            run_id=run_id,
+        )
+
+
+async def backfill_completions(
+    session_factory: SessionFactory,
+    publisher: EventPublisher,
+    *,
+    enabled: bool,
+    now: datetime,
+) -> None:
+    """補完の期限切れをclosedにし、期限内の未完成行を再投入する。"""
+    if not enabled:
+        logger.info("backfill_completions_disabled")
+        return
+    async with _run(
+        session_factory,
+        backfill_stage="complete",
+        op="backfill_completions",
+    ) as run_id:
+        before, after = BackfillWindow().boundaries_at(now)
+        cleaned = await close_aged_out_completions(
+            session_factory, created_before=after
+        )
+        record_aged_out("completion", action="closed", count=cleaned)
+        async with session_factory() as session:
+            backlog = PipelineBacklog(session)
+            count = await backlog.count_incomplete_articles_pending_completion(
+                created_before=before,
+                created_after=after,
+            )
+            targets = await backlog.completion_events_pending(
+                created_before=before,
+                created_after=after,
+                limit=COMPLETIONS_LIMIT,
+            )
+        backlog_gauge.set(count, attributes={"stage": "completion"})
+        await _dispatch(
+            session_factory,
+            publisher,
+            targets,
+            backfill_stage="complete",
+            stage="completion",
+            target_kind="incomplete_article",
             run_id=run_id,
         )

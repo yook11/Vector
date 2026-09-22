@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.backfill.targets import BackfillEventTarget, BackfillTarget
+from app.collection.article_acquisition.events import IncompleteArticleRecorded
 from app.collection.events import AnalyzableArticleCreated
+from app.collection.sources.source_name import SourceName
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -20,6 +22,7 @@ from app.models.backfill_exclusion import (
     EmbeddingBackfillExclusion,
 )
 from app.models.curation_noise import CurationNoise
+from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 
@@ -129,6 +132,23 @@ class PipelineBacklog:
                     else true()
                 ),
             )
+        )
+
+    def _completion_pending(
+        self,
+        stmt: Select[Any],
+        *,
+        created_before: datetime,
+        created_after: datetime | None = None,
+    ) -> Select[Any]:
+        return stmt.select_from(IncompleteArticle).where(
+            IncompleteArticle.status != "closed",
+            IncompleteArticle.created_at < created_before,
+            (
+                IncompleteArticle.created_at >= created_after
+                if created_after is not None
+                else true()
+            ),
         )
 
     async def curation_events_pending(
@@ -301,6 +321,93 @@ class PipelineBacklog:
             created_before=created_before,
         ).where(AnalyzedArticleRecord.id == target_id)
         return await self._session.scalar(stmt)
+
+    async def completion_events_pending(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+        limit: int,
+    ) -> list[BackfillEventTarget]:
+        """補完の再投入payloadと監査主語を同じ照会で取得する。"""
+        stmt = (
+            self._completion_pending(
+                select(
+                    IncompleteArticle.id,
+                    IncompleteArticle.source_id,
+                    IncompleteArticle.source_name,
+                    IncompleteArticle.created_at,
+                ),
+                created_before=created_before,
+                created_after=created_after,
+            )
+            .order_by(IncompleteArticle.created_at.asc(), IncompleteArticle.id.asc())
+            .limit(limit)
+        )
+        rows = (await self._session.execute(stmt)).tuples().all()
+        return [
+            BackfillEventTarget(
+                target=BackfillTarget(target_id, None, source_name),
+                occurred_at=occurred_at,
+                payload=IncompleteArticleRecorded(
+                    source_id=source_id, incomplete_article_id=target_id
+                ),
+            )
+            for target_id, source_id, source_name, occurred_at in rows
+        ]
+
+    async def lock_aged_out_completion(
+        self,
+        target_id: int,
+        *,
+        created_before: datetime,
+    ) -> tuple[int, SourceName] | None:
+        """行ロック後の新しい照会で期限切れと未完了を再確認する。"""
+        locked = await self._session.scalar(
+            select(IncompleteArticle.id)
+            .where(IncompleteArticle.id == target_id)
+            .with_for_update()
+        )
+        if locked is None:
+            return None
+        stmt = self._completion_pending(
+            select(IncompleteArticle.source_id, IncompleteArticle.source_name),
+            created_before=created_before,
+        ).where(IncompleteArticle.id == target_id)
+        row = (await self._session.execute(stmt)).tuples().one_or_none()
+        return None if row is None else (row[0], row[1])
+
+    async def count_incomplete_articles_pending_completion(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+    ) -> int:
+        """補完未完了の未完成行の真の総数 (LIMIT なし COUNT)。"""
+        stmt = self._completion_pending(
+            select(func.count(IncompleteArticle.id)),
+            created_before=created_before,
+            created_after=created_after,
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
+
+    async def incomplete_article_ids_aged_out_completion(
+        self,
+        *,
+        created_before: datetime,
+        limit: int,
+    ) -> list[int]:
+        """通常窓から落ちた補完未完了の未完成行 ID を返す。"""
+        stmt = (
+            self._completion_pending(
+                select(IncompleteArticle.id), created_before=created_before
+            )
+            .order_by(IncompleteArticle.created_at.asc(), IncompleteArticle.id.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
 
     async def count_articles_pending_curation(
         self,

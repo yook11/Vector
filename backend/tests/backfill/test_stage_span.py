@@ -32,6 +32,12 @@ CASES = [
         Stage.BACKFILL_EMBED,
         "backfill_embeddings",
     ),
+    (
+        service.backfill_completions,
+        "app.backfill.service.close_aged_out_completions",
+        Stage.COMPLETION,
+        "backfill_completions",
+    ),
 ]
 
 
@@ -61,6 +67,8 @@ async def test_enabled_run_opens_one_span_with_own_stage_and_op(
                 "assessment_events_pending": [],
                 "count_analyzed_articles_pending_embedding": 0,
                 "embedding_events_pending": [],
+                "count_incomplete_articles_pending_completion": 0,
+                "completion_events_pending": [],
             }.items()
         }
     )

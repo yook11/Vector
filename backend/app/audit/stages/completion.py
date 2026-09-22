@@ -87,6 +87,7 @@ class CompletionOutcomeCode(StrEnum):
     READY_BUILD_FAILED_UNEXPECTED_ERROR = (
         "completion_ready_build_failed_unexpected_error"
     )
+    BACKFILL_COMPLETION_AGED_OUT = "backfill_completion_aged_out"
 
 
 class ArticleCompletionAuditRepository:
@@ -158,6 +159,26 @@ class ArticleCompletionAuditRepository:
             retryability=Retryability.RETRYABLE
             if retry
             else Retryability.NON_RETRYABLE,
+        )
+
+    async def append_backfill_completion_aged_out(
+        self,
+        *,
+        incomplete_article_id: int,
+        source_id: int,
+        source_name: str,
+    ) -> None:
+        """古い未完成行の補完を救済が打ち切った事実を、closed更新と同じ取引へ残す。"""
+        await self._append_event(
+            event_type=EventType.REJECTED,
+            outcome_code=CompletionOutcomeCode.BACKFILL_COMPLETION_AGED_OUT.value,
+            payload=CompletionPayload(
+                incomplete_article_id=incomplete_article_id,
+                source_name=source_name,
+                failure_action="close",
+            ),
+            source_id=source_id,
+            retryability=Retryability.NON_RETRYABLE,
         )
 
     async def append_persist_outcome(

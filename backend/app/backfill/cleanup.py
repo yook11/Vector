@@ -1,19 +1,24 @@
 """期限切れの未完了データと監査を一記事ずつ原子的に整理する。"""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.audit.stages.curation import CurationAuditRepository
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.backfill.metrics import age_delete_batch_size_histogram, age_deleted_counter
 from app.backfill.policy import (
     ASSESSMENTS_LIMIT,
+    COMPLETIONS_LIMIT,
     CURATIONS_DELETE_LIMIT,
     EMBEDDINGS_LIMIT,
 )
 from app.backfill.repository import PipelineBacklog
+from app.collection.article_completion.consumer_repository import (
+    ArticleCompletionConsumerRepository,
+)
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
@@ -131,3 +136,41 @@ async def exclude_aged_out_embeddings(
     if excluded:
         logger.info("backfill_embeddings_aged_out_excluded", excluded=excluded)
     return excluded
+
+
+async def close_aged_out_completions(
+    session_factory: SessionFactory,
+    *,
+    created_before: datetime,
+) -> int:
+    """期限切れの未完成行だけをclosedにし、補完の打ち切りを確定する。"""
+    async with session_factory() as session:
+        ids = await PipelineBacklog(session).incomplete_article_ids_aged_out_completion(
+            created_before=created_before,
+            limit=COMPLETIONS_LIMIT,
+        )
+    closed = 0
+    for incomplete_article_id in ids:
+        async with session_factory() as session, session.begin():
+            backlog = PipelineBacklog(session)
+            locked = await backlog.lock_aged_out_completion(
+                incomplete_article_id,
+                created_before=created_before,
+            )
+            if locked is None:
+                continue
+            source_id, source_name = locked
+            await ArticleCompletionConsumerRepository(session).close_nonclosed(
+                incomplete_article_id, now=datetime.now(UTC)
+            )
+            await ArticleCompletionAuditRepository(
+                session
+            ).append_backfill_completion_aged_out(
+                incomplete_article_id=incomplete_article_id,
+                source_id=source_id,
+                source_name=str(source_name),
+            )
+        closed += 1
+    if closed:
+        logger.info("backfill_completions_aged_out_closed", closed=closed)
+    return closed

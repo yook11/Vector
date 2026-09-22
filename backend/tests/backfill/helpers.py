@@ -7,18 +7,32 @@ from uuid import uuid4
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
+from app.models.incomplete_article import IncompleteArticle
 from app.outbox.publishing.publisher import BatchPublishResult, PublishSucceeded
 
 
 @dataclass(frozen=True)
 class SeededTarget:
-    article_id: int
+    article_id: int | None
     target_id: int
     curation_id: int | None
     occurred_at: datetime
 
 
 async def seed_target(session, source, category, stage, created_at):
+    if stage == "completion":
+        incomplete = IncompleteArticle(
+            url=f"https://example.com/{uuid4()}",
+            source_id=source.id,
+            source_name=source.name,
+            status="open",
+            observed_article={},
+            ready_at=created_at,
+            created_at=created_at,
+        )
+        session.add(incomplete)
+        await session.commit()
+        return SeededTarget(None, incomplete.id, None, created_at)
     article = AnalyzableArticleRecord(
         source_id=source.id,
         source_url=f"https://example.com/{uuid4()}",
@@ -79,9 +93,13 @@ async def complete_target(session, target, stage, category):
                 category_id=category.id,
             )
         )
-    else:
+    elif stage == "embedding":
         result = await session.get(AnalyzedArticleRecord, target.target_id)
         result.embedding = [0.1] * 768
+    else:
+        incomplete = await session.get(IncompleteArticle, target.target_id)
+        incomplete.status = "closed"
+        incomplete.leased_until = None
     await session.flush()
 
 
@@ -98,3 +116,18 @@ class RecordingPublisher:
     @property
     def envelopes(self):
         return [item for batch in self.batches for item in batch]
+
+
+async def target_exists(session, target, stage) -> bool:
+    """整理の対象行が削除されずに残っているかを返す。"""
+    if stage == "completion":
+        return await session.get(IncompleteArticle, target.target_id) is not None
+    return await session.get(AnalyzableArticleRecord, target.article_id) is not None
+
+
+async def target_is_pending(session, target, stage) -> bool:
+    """整理の対象行が救済対象のまま残っているかを返す。"""
+    if stage == "completion":
+        incomplete = await session.get(IncompleteArticle, target.target_id)
+        return incomplete is not None and incomplete.status != "closed"
+    return await target_exists(session, target, stage)
