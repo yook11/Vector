@@ -104,10 +104,6 @@ output "embedding_consumer_security_group_id" {
   value = aws_security_group.embedding_consumer.id
 }
 
-output "embedding_consumer_role_arn" {
-  value = aws_iam_role.embedding_consumer.arn
-}
-
 output "embedding_consumer_log_group_name" {
   value = aws_cloudwatch_log_group.embedding_consumer.name
 }
@@ -142,10 +138,6 @@ output "assessment_consumer_subnet_id" {
 
 output "assessment_consumer_security_group_id" {
   value = aws_security_group.assessment_consumer.id
-}
-
-output "assessment_consumer_role_arn" {
-  value = aws_iam_role.assessment_consumer.arn
 }
 
 output "assessment_consumer_log_group_name" {
@@ -186,10 +178,6 @@ output "curation_consumer_subnet_id" {
 
 output "curation_consumer_security_group_id" {
   value = aws_security_group.curation_consumer.id
-}
-
-output "curation_consumer_role_arn" {
-  value = aws_iam_role.curation_consumer.arn
 }
 
 output "curation_consumer_log_group_name" {
@@ -302,4 +290,8 @@ output "completion_outbox_relay_scheduler_role_arn" {
 
 output "completion_outbox_relay_schedule_group_name" {
   value = aws_scheduler_schedule_group.completion_outbox_relay.name
+}
+
+output "article_analysis_role_arn" {
+  value = aws_iam_role.article_analysis.arn
 }

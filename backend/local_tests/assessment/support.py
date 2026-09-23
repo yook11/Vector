@@ -154,7 +154,7 @@ async def fetch_stored_assessment(database, curation_id):
 async def wait_for_blocked_connection(database, blocker_pid, invocations):
     """指定の接続に遮られた実AssessmentのSQLがロック待ちになるまで待つ。"""
     deadline = asyncio.get_running_loop().time() + 3
-    async with database.connect("vector_app") as connection:
+    async with database.connect("vector_article_analysis") as connection:
         while True:
             assert all(not task.done() for task in invocations), (
                 "ロック待ちになる前に処理が終了した"

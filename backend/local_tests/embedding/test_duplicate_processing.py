@@ -61,7 +61,7 @@ async def test_redelivered_event_completes_without_overwriting_saved_embedding(
 async def _wait_until_follower_blocked_by_row_lock(database, leader_pid, invocations):
     """後続側が先行側の行ロックで待たされる状態を実DBで確認する。"""
     deadline = asyncio.get_running_loop().time() + ROW_LOCK_TIMEOUT
-    async with database.connect("vector_app") as connection:
+    async with database.connect("vector_article_analysis") as connection:
         while True:
             assert all(not task.done() for task in invocations), (
                 "行ロックで待たされる前に呼び出しが終了した"

@@ -111,7 +111,7 @@ run "consumer_receives_assessment_queue_with_embedding_limits" {
       aws_lambda_function.assessment_consumer.reserved_concurrent_executions == 10 &&
       aws_lambda_function.assessment_consumer.environment[0].variables == tomap({
         ENV                                     = "production"
-        DATABASE_URL                            = local.backend_db_url["vector_app"]
+        DATABASE_URL                            = local.backend_db_url["vector_article_analysis"]
         DB_IAM_AUTH                             = "true"
         DEEPSEEK_API_KEY_PARAMETER_PATH         = "/slice-test/assessment-consumer/deepseek-api-key"
         EGRESS_PROXY_URL                        = local.proxy_url
@@ -152,7 +152,7 @@ run "assessment_redrive_and_dlq_notification" {
   }
 }
 
-# Consumerの通信先とデータ権限をAssessmentの対象に限定する。
+# Consumerの通信先をAssessmentの対象に限定する。
 run "consumer_network_and_permissions_are_scoped" {
   command = plan
   assert {
@@ -188,17 +188,6 @@ run "consumer_network_and_permissions_are_scoped" {
       pair.inbound.from_port == pair.port && pair.inbound.to_port == pair.port
     ])
     error_message = "DB・proxy・SSM・frontendへの通信を両側のSGで限定する。"
-  }
-  assert {
-    condition = (
-      aws_iam_role.assessment_consumer.permissions_boundary == "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-consumer-lambda-boundary" &&
-      { for s in jsondecode(aws_iam_role_policy.assessment_consumer.policy).Statement : s.Sid => s.Resource if contains(["ConsumeAssessmentEvents", "RdsIamAuthAsApp", "ReadDeepSeekKey"], s.Sid) } == {
-        ConsumeAssessmentEvents = aws_sqs_queue.outbox["assessment"].arn
-        RdsIamAuthAsApp         = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app"
-        ReadDeepSeekKey         = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/deepseek-api-key"
-      }
-    )
-    error_message = "Consumerは対象キュー・vector_app・専用キーを使用する。"
   }
 }
 
@@ -297,27 +286,6 @@ override_resource {
   override_during = plan
   target          = aws_security_group.assessment_consumer_ssm
   values          = { id = "sg-00000000000000008" }
-}
-
-# 通知用キーは既存frontendの1件だけを追加し、SSMの一覧取得や書き込みを許可しない。
-run "consumer_reads_only_assessment_and_notification_keys" {
-  command = plan
-  assert {
-    condition = {
-      for s in jsondecode(aws_iam_role_policy.assessment_consumer.policy).Statement : s.Sid => { action = s.Action, resource = s.Resource }
-      if s.Effect == "Allow" && startswith(try(tostring(s.Action), ""), "ssm:")
-      } == {
-      ReadDeepSeekKey = {
-        action   = "ssm:GetParameter"
-        resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/deepseek-api-key"
-      }
-      ReadFrontendNotificationKey = {
-        action   = "ssm:GetParameter"
-        resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/frontend/revalidate-bearer-secret"
-      }
-    }
-    error_message = "AssessmentのSSM権限はDeepSeekキーと一覧通知キーの単件取得に限定する。"
-  }
 }
 
 override_resource {

@@ -25,7 +25,7 @@ uv run pytest local_tests/ --collect-only -q
 
 - `permissions/`: ロール別の許可一覧・禁止操作と、共通の権限境界。
 - `migrations/`: migrationごとのupgrade・downgrade、既存データや権限の維持。
-- `outbox_relay/`、`acquisition/`、`assessment/`、`embedding/`、`completion/`、`backfill/`: 各処理の動作。
+- `outbox_relay/`、`acquisition/`、`curation/`、`assessment/`、`embedding/`、`completion/`、`backfill/`: 各処理の動作。
 - 直下の`test_*.py`: DB分離や共通ライフサイクルなど、工程をまたぐ基盤。
 
 共通の接続設定は`conftest.py`、データ準備・観測処理は`support.py`に置く。

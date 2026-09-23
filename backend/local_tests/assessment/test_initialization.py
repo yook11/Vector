@@ -44,7 +44,9 @@ async def test_catalog_read_failure_prevents_article_processing(
         system_database, "https://example.com/catalog-db-error"
     )
     async with system_database.connect("vector") as connection:
-        await connection.execute("REVOKE SELECT ON categories FROM vector_app")
+        await connection.execute(
+            "REVOKE SELECT ON categories FROM vector_article_analysis"
+        )
 
     with pytest.raises(DatabaseUnexpectedError):
         await invoke_event(target)

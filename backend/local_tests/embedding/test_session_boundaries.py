@@ -21,7 +21,7 @@ async def test_read_session_is_returned_while_waiting_for_ai(
         assert len(analysis_engines) == 1
         assert analysis_engines[0].pool.checkedout() == 0
         assert not invocation.done()
-        async with system_database.connect("vector_app") as connection:
+        async with system_database.connect("vector_article_analysis") as connection:
             rows = await connection.fetch(
                 "SELECT state, xact_start FROM pg_stat_activity "
                 "WHERE datname=current_database() AND application_name=$1",

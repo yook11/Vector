@@ -21,6 +21,7 @@ from app.lambda_handlers import article_analysis_lifecycle as resource_module
 from app.lambda_handlers.assessment import composition
 from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
 from app.models.outbox_event import OutboxEvent
+from app.models.pipeline_event import PipelineEvent
 from app.shared import revalidate
 from local_tests.assessment.support import deepseek_reply, handler_module
 from tests.iam_fixtures import inject_test_db_signer
@@ -54,7 +55,7 @@ def assessment_runtime(
         aws_region="ap-northeast-1",
         database_url=inject_test_db_signer(
             monkeypatch,
-            system_database.url("vector_app", sqlalchemy=True),
+            system_database.url("vector_article_analysis", sqlalchemy=True),
             resources_module=resource_module,
         ),
         db_iam_auth=True,
@@ -107,24 +108,35 @@ def database_error_before_commit(monkeypatch):
     commit = AsyncSession.commit
 
     async def fail_after_flush(session):
-        event = next((row for row in session.new if isinstance(row, OutboxEvent)), None)
+        pending = list(session.new)
+        event = next((row for row in pending if isinstance(row, OutboxEvent)), None)
         if event is not None:
+            audit = next(
+                (
+                    row
+                    for row in pending
+                    if isinstance(row, PipelineEvent)
+                    and row.stage == "assessment"
+                    and row.event_type == "succeeded"
+                ),
+                None,
+            )
             await session.flush()
+            # 分析ロールは監査・Outboxの本文を読めないため、追加した行を主キーで数える。
             counts = (
                 await session.execute(
                     text(
                         "SELECT "
                         "(SELECT count(*) FROM analyzed_articles "
                         "WHERE curation_id=:curation), "
-                        "(SELECT count(*) FROM pipeline_events "
-                        "WHERE stage='assessment' "
-                        "AND event_type='succeeded' "
-                        "AND (payload->>'curation_id')::integer=:curation), "
-                        "(SELECT count(*) FROM outbox_events "
-                        "WHERE event_type='article.assessed_in_scope' "
-                        "AND (payload->>'curation_id')::integer=:curation)"
+                        "(SELECT count(*) FROM pipeline_events WHERE id=:audit), "
+                        "(SELECT count(*) FROM outbox_events WHERE event_id=:event)"
                     ),
-                    {"curation": event.payload["curation_id"]},
+                    {
+                        "curation": event.payload["curation_id"],
+                        "audit": audit.id if audit is not None else None,
+                        "event": event.event_id,
+                    },
                 )
             ).one()
             observation.pending_counts.append(tuple(counts))

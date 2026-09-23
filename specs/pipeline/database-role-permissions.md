@@ -29,6 +29,12 @@ DMLはSELECT・INSERT・UPDATE・DELETEを表す。
 | vector_article_analysis | public.analyzed_articles | SELECT・INSERT、embedding列のUPDATE |
 | vector_article_analysis | public.pipeline_events | INSERT、id・occurred_atのSELECT |
 | vector_article_analysis | public.outbox_events | INSERT、event_id・schema_version・occurred_at・next_attempt_at・attempt_countのSELECT |
+| vector_backfill | public.analyzable_articles | SELECT・DELETE、id列のUPDATE |
+| vector_backfill | public.article_curations・analyzed_articles | SELECT、id列のUPDATE |
+| vector_backfill | public.curation_noises・out_of_scope_articles・news_sources | SELECT |
+| vector_backfill | public.assessment_backfill_exclusions・embedding_backfill_exclusions | SELECT・INSERT |
+| vector_backfill | public.incomplete_articles | SELECT、status・leased_until・updated_at列のUPDATE |
+| vector_backfill | public.pipeline_events | INSERT、id・occurred_atのSELECT |
 
 RelayのSELECT列はevent_id・event_type・schema_version・payload・occurred_at・published_at・next_attempt_at・attempt_count・lease_token・leased_until・delivery_stopped_at。
 UPDATE列はlease_token・leased_until・attempt_count・published_at・next_attempt_at・delivery_stopped_at・delivery_stop_reason。
@@ -37,8 +43,8 @@ delivery_stop_reasonは更新だけを許可する。表全体へのSELECT／UPD
 対象はpublic・authの通常表、partitioned table、view、materialized view、foreign tableとその列。
 テーブル操作はDML・TRUNCATE・REFERENCES・TRIGGER・MAINTAIN、列操作はSELECT・INSERT・UPDATE・REFERENCESを照合する。
 許可一覧にない操作は禁止し、権限の再付与（GRANT OPTION）も禁止する。
-明示したCollect・Relay・記事分析のテーブル・列が存在することも確認し、存在しない対象が収集から消えて合格することを防ぐ。
-新しいテーブルも実DBのカタログから収集するため、Auth/Appは担当schemaのDMLが必要で、Collect・Relay・記事分析は未列挙なら禁止となる。
+明示したCollect・Relay・記事分析・backfillのテーブル・列が存在することも確認し、存在しない対象が収集から消えて合格することを防ぐ。
+新しいテーブルも実DBのカタログから収集するため、Auth/Appは担当schemaのDMLが必要で、Collect・Relay・記事分析・backfillは未列挙なら禁止となる。
 将来オブジェクトを生成するDEFAULT PRIVILEGESそのものの試験ではなく、対象コードの全migration適用後の権限を検証する。
 
 ## 採番と管理権限
@@ -49,6 +55,7 @@ delivery_stop_reasonは更新だけを許可する。表全体へのSELECT／UPD
 - Collect: analyzable_articles・incomplete_articles・pipeline_eventsに所有されるsequenceにUSAGEのみ。
 - Relay: sequence権限なし。publicのUSAGEを付与し、DB・schema・tableの所有者にならない。
 - 記事分析: article_curations・curation_noises・analyzed_articles・out_of_scope_articles・pipeline_eventsに所有されるsequenceにUSAGEのみ。
+- backfill: pipeline_eventsに所有されるsequenceにUSAGEのみ。
 - 上記以外のsequence権限とGRANT OPTIONは禁止する。
 - 各実行ロールはsuperuser・DB作成・ロール作成・RLS迂回・replicationを持たず、管理ロールvectorや他の実行ロールにSET ROLEできない。
 - public・auth内のCREATEは禁止し、許可操作のために必要なschema USAGEを確認する。
@@ -69,7 +76,7 @@ RLSによる行単位の可視性、関数のEXECUTE、全組み込みロール�
 ## 配置と実行
 
 - `backend/local_tests/permissions/`: 許可一覧・権限照合・代表的な実操作。Relayの禁止操作はSQLSTATE 42501で拒否を確認する。
-- `permissions/test_auth_permissions.py`・`test_app_permissions.py`・`test_collect_permissions.py`・`test_outbox_relay_permissions.py`・`test_article_analysis_permissions.py`にロールごとの期待値と操作を置き、`test_role_boundaries.py`に接続主体・管理属性・ロール切替・schema権限の共通検査を置く。
+- `permissions/test_auth_permissions.py`・`test_app_permissions.py`・`test_collect_permissions.py`・`test_outbox_relay_permissions.py`・`test_article_analysis_permissions.py`・`test_backfill_permissions.py`にロールごとの期待値と操作を置き（backfillは期待値だけを置き、成功する操作は`local_tests/backfill/`のフロー試験が確かめる）、`test_role_boundaries.py`に接続主体・管理属性・ロール切替・schema権限の共通検査を置く。
 - `permissions/support.py`は実効権限と対象オブジェクトを取得し、期待する許可一覧の判定は各ロールのテストが担う。
 - `backend/local_tests/outbox_relay/`: 既存Relayテストの実行接続をvector_outbox_relayへ切り替え、配送成功・再試行・停止・並行実行・障害時の保存結果を検証する。repository操作ごとの成功権限テストは重ねず、Relayの振る舞いで確認する。
 - `backend/local_tests/migrations/test_outbox_relay_migration.py`: z22からz23への往復、既存Outboxデータと既存ACLの維持を確認する。

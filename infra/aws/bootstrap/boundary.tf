@@ -80,7 +80,7 @@ locals {
   # bootstrap は本体の local.stages を参照できないので段名をここでも持つ。段を増やす
   # ときは、この表を apply してから本体を apply する。順序を守らないと CreateRole が
   # Deny で落ちる。天井を決めずに段が増えないようにするための順序。
-  role_boundary_groups = merge(local.backfill_role_boundary_groups, local.source_dispatch_role_boundary_groups, {
+  role_boundary_groups = merge(local.backfill_role_boundary_groups, local.source_dispatch_role_boundary_groups, local.article_analysis_role_boundary_groups, {
     Task = {
       boundary = aws_iam_policy.task_boundary.arn
       role_names = [
@@ -113,17 +113,9 @@ locals {
       boundary   = aws_iam_policy.outbox_relay_lambda_boundary.arn
       role_names = ["${var.name_prefix}-outbox-relay-lambda"]
     }
-    EmbeddingConsumerLambda = {
-      boundary   = aws_iam_policy.embedding_consumer_lambda_boundary.arn
-      role_names = ["${var.name_prefix}-embedding-consumer-lambda"]
-    }
     OutboxRelayScheduler = {
       boundary   = aws_iam_policy.outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-outbox-relay-scheduler"]
-    }
-    AssessmentConsumerLambda = {
-      boundary   = aws_iam_policy.assessment_consumer_lambda_boundary.arn
-      role_names = ["${var.name_prefix}-assessment-consumer-lambda"]
     }
     AssessmentOutboxRelayLambda = {
       boundary   = aws_iam_policy.assessment_outbox_relay_lambda_boundary.arn
@@ -148,10 +140,6 @@ locals {
     CompletionOutboxRelayScheduler = {
       boundary   = aws_iam_policy.completion_outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-completion-outbox-relay-scheduler"]
-    }
-    CurationConsumerLambda = {
-      boundary   = aws_iam_policy.curation_consumer_lambda_boundary.arn
-      role_names = ["${var.name_prefix}-curation-consumer-lambda"]
     }
     CurationOutboxRelayLambda = {
       boundary   = aws_iam_policy.curation_outbox_relay_lambda_boundary.arn

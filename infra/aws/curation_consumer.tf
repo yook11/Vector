@@ -3,10 +3,6 @@ locals {
   curation_consumer_arn            = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.curation_consumer_name}"
   curation_consumer_parameter_path = "/${var.name_prefix}/curation-consumer/gemini-api-key"
   curation_consumer_subnet_cidr    = cidrsubnet(var.vpc_cidr, 8, 32)
-  curation_consumer_eni_actions = [
-    "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
-    "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
-  ]
 }
 
 resource "aws_sqs_queue" "curation_dlq" {
@@ -117,67 +113,6 @@ resource "aws_cloudwatch_log_group" "curation_consumer" {
   retention_in_days = var.log_retention_days
 }
 
-resource "aws_iam_role" "curation_consumer" {
-  name                 = "${local.curation_consumer_name}-lambda"
-  path                 = "/${var.name_prefix}/"
-  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.curation_consumer_name}-lambda-boundary"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "curation_consumer" {
-  name = "curation-consumer"
-  role = aws_iam_role.curation_consumer.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ConsumeCurationEvents"
-        Effect   = "Allow"
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-        Resource = aws_sqs_queue.outbox["curation"].arn
-      },
-      {
-        Sid      = "RdsIamAuthAsApp"
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_app"
-      },
-      {
-        Sid      = "ReadGeminiKey"
-        Effect   = "Allow"
-        Action   = "ssm:GetParameter"
-        Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter${local.curation_consumer_parameter_path}"
-      },
-      {
-        Sid      = "WriteConsumerLogs"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "${aws_cloudwatch_log_group.curation_consumer.arn}:*"
-      },
-      {
-        Sid      = "ManageLambdaNetworkInterfaces"
-        Effect   = "Allow"
-        Action   = local.curation_consumer_eni_actions
-        Resource = "*"
-      },
-      {
-        Sid       = "DenyEniOperationsFromFunctionCode"
-        Effect    = "Deny"
-        Action    = local.curation_consumer_eni_actions
-        Resource  = "*"
-        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.curation_consumer_arn } }
-      },
-    ]
-  })
-}
-
 resource "aws_cloudwatch_metric_alarm" "curation_dlq_not_empty" {
   alarm_name          = "${local.curation_consumer_name}-dlq-not-empty"
   alarm_description   = "CurationのDLQに未対応メッセージがある。原因を確認し、必要ならSQSトリガーを手動停止する。自動停止・再投入は行わない。"
@@ -199,7 +134,7 @@ resource "aws_cloudwatch_metric_alarm" "curation_dlq_not_empty" {
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "curation_consumer" {
   function_name                  = local.curation_consumer_name
-  role                           = aws_iam_role.curation_consumer.arn
+  role                           = aws_iam_role.article_analysis.arn
   package_type                   = "Image"
   image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
@@ -230,7 +165,7 @@ resource "aws_lambda_function" "curation_consumer" {
   environment {
     variables = {
       ENV                           = "production"
-      DATABASE_URL                  = local.backend_db_url["vector_app"]
+      DATABASE_URL                  = local.backend_db_url["vector_article_analysis"]
       DB_IAM_AUTH                   = "true"
       GEMINI_API_KEY_PARAMETER_PATH = local.curation_consumer_parameter_path
       EGRESS_PROXY_URL              = local.proxy_url
@@ -238,7 +173,7 @@ resource "aws_lambda_function" "curation_consumer" {
   }
 
   depends_on = [
-    aws_iam_role_policy.curation_consumer,
+    aws_iam_role_policy.article_analysis,
     aws_ecr_repository_policy.backend_lambda_pull,
     aws_route_table_association.curation_consumer,
     aws_vpc_security_group_egress_rule.curation_consumer_to_rds,
@@ -267,5 +202,5 @@ resource "aws_lambda_event_source_mapping" "curation_consumer" {
   }
 
   tags       = { Consumer = local.curation_consumer_name }
-  depends_on = [aws_iam_role_policy.curation_consumer]
+  depends_on = [aws_iam_role_policy.article_analysis]
 }

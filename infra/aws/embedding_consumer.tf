@@ -3,10 +3,6 @@ locals {
   embedding_consumer_arn            = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.embedding_consumer_name}"
   embedding_consumer_parameter_path = "/${var.name_prefix}/embedding-consumer/gemini-api-key"
   embedding_consumer_subnet_cidr    = cidrsubnet(var.vpc_cidr, 8, 28)
-  embedding_consumer_eni_actions = [
-    "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
-    "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
-  ]
 }
 
 resource "aws_sqs_queue" "embedding_dlq" {
@@ -117,67 +113,6 @@ resource "aws_cloudwatch_log_group" "embedding_consumer" {
   retention_in_days = var.log_retention_days
 }
 
-resource "aws_iam_role" "embedding_consumer" {
-  name                 = "${local.embedding_consumer_name}-lambda"
-  path                 = "/${var.name_prefix}/"
-  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.embedding_consumer_name}-lambda-boundary"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "embedding_consumer" {
-  name = "embedding-consumer"
-  role = aws_iam_role.embedding_consumer.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ConsumeEmbeddingEvents"
-        Effect   = "Allow"
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-        Resource = aws_sqs_queue.outbox["embedding"].arn
-      },
-      {
-        Sid      = "RdsIamAuthAsApp"
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_app"
-      },
-      {
-        Sid      = "ReadGeminiKey"
-        Effect   = "Allow"
-        Action   = "ssm:GetParameter"
-        Resource = "arn:aws:ssm:${var.region}:${local.account_id}:parameter${local.embedding_consumer_parameter_path}"
-      },
-      {
-        Sid      = "WriteConsumerLogs"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "${aws_cloudwatch_log_group.embedding_consumer.arn}:*"
-      },
-      {
-        Sid      = "ManageLambdaNetworkInterfaces"
-        Effect   = "Allow"
-        Action   = local.embedding_consumer_eni_actions
-        Resource = "*"
-      },
-      {
-        Sid       = "DenyEniOperationsFromFunctionCode"
-        Effect    = "Deny"
-        Action    = local.embedding_consumer_eni_actions
-        Resource  = "*"
-        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.embedding_consumer_arn } }
-      },
-    ]
-  })
-}
-
 resource "aws_cloudwatch_metric_alarm" "embedding_dlq_not_empty" {
   alarm_name          = "${local.embedding_consumer_name}-dlq-not-empty"
   alarm_description   = "EmbeddingのDLQに未対応メッセージがある。原因を確認し、必要ならSQSトリガーを手動停止する。自動停止・再投入は行わない。"
@@ -199,7 +134,7 @@ resource "aws_cloudwatch_metric_alarm" "embedding_dlq_not_empty" {
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "embedding_consumer" {
   function_name                  = local.embedding_consumer_name
-  role                           = aws_iam_role.embedding_consumer.arn
+  role                           = aws_iam_role.article_analysis.arn
   package_type                   = "Image"
   image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
@@ -230,7 +165,7 @@ resource "aws_lambda_function" "embedding_consumer" {
   environment {
     variables = {
       ENV                           = "production"
-      DATABASE_URL                  = local.backend_db_url["vector_app"]
+      DATABASE_URL                  = local.backend_db_url["vector_article_analysis"]
       DB_IAM_AUTH                   = "true"
       GEMINI_API_KEY_PARAMETER_PATH = local.embedding_consumer_parameter_path
       EGRESS_PROXY_URL              = local.proxy_url
@@ -238,7 +173,7 @@ resource "aws_lambda_function" "embedding_consumer" {
   }
 
   depends_on = [
-    aws_iam_role_policy.embedding_consumer,
+    aws_iam_role_policy.article_analysis,
     aws_ecr_repository_policy.backend_lambda_pull,
     aws_route_table_association.embedding_consumer,
     aws_vpc_security_group_egress_rule.embedding_consumer_to_rds,
@@ -267,5 +202,5 @@ resource "aws_lambda_event_source_mapping" "embedding_consumer" {
   }
 
   tags       = { Consumer = local.embedding_consumer_name }
-  depends_on = [aws_iam_role_policy.embedding_consumer]
+  depends_on = [aws_iam_role_policy.article_analysis]
 }

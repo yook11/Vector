@@ -49,7 +49,7 @@ resource "aws_iam_role_policy" "backfill" {
       {
         Effect   = "Allow"
         Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_app"
+        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_backfill"
       },
       {
         Effect   = "Allow"
@@ -109,7 +109,7 @@ resource "aws_lambda_function" "backfill" {
   environment {
     variables = {
       ENV                                        = "production"
-      DATABASE_URL                               = local.backend_db_url["vector_app"]
+      DATABASE_URL                               = local.backend_db_url["vector_backfill"]
       DB_IAM_AUTH                                = "true"
       "SQS_ARTICLE_${upper(each.key)}_QUEUE_URL" = aws_sqs_queue.outbox[each.key].url
       "BACKFILL_${upper(each.key)}S_ENABLED"     = "true"
