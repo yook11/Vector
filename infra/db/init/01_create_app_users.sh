@@ -53,6 +53,9 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_outbox_relay')
 SELECT 'CREATE ROLE vector_auth_rate_limit_cleanup NOLOGIN'
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_auth_rate_limit_cleanup')
 \gexec
+SELECT 'CREATE ROLE vector_article_analysis NOLOGIN'
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_article_analysis')
+\gexec
 EOSQL
 
-echo "Created Postgres app roles (vector_auth, vector_app, vector_collect, vector_outbox_relay, vector_auth_rate_limit_cleanup) — GRANT applied via alembic migration."
+echo "Created Postgres app roles (vector_auth, vector_app, vector_collect, vector_outbox_relay, vector_auth_rate_limit_cleanup, vector_article_analysis) — GRANT applied via alembic migration."
