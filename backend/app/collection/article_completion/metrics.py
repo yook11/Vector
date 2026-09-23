@@ -29,7 +29,7 @@ _lease_swept_counter = logfire.metric_counter(
 def record_completion_processing_outcome(result: CompletionProcessingOutcome) -> None:
     """completion 処理試行の結末を counter に 1 件記録する。"""
     _processing_outcome_counter.add(1, attributes={"result": result})
-    # CloudWatch 失敗率 alarm が消費する二重 sink。Terraform 側と契約名を揃える。
+    # CloudWatch で成功率を確認する二重 sink (completion は失敗率 alarm を置かない)。
     emit_metric(
         "processing_outcome",
         dimensions={"stage": "completion", "result": result},
