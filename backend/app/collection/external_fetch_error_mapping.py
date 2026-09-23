@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 
 import httpx
@@ -27,17 +26,7 @@ from app.collection.external_fetch_errors import (
 )
 from app.http.destination_policy import HostBlockedError
 from app.http.destination_resolution import HostResolutionError
-
-# httpcore は CONNECT の非 2xx を "<status> <reason>" 形式で ProxyError に載せる
-# (``_async/http_proxy.py`` の ``"%d %s" % (status, reason)``)。構造化された
-# status は例外に載らないので、先頭の 3 桁だけを読む。
-_PROXY_REFUSAL_STATUS = re.compile(r"^(\d{3})\b")
-
-
-def _proxy_refusal_status(exc: httpx.ProxyError) -> int | None:
-    """proxy が CONNECT に返した status。読めなければ ``None``。"""
-    match = _PROXY_REFUSAL_STATUS.match(str(exc))
-    return int(match.group(1)) if match else None
+from app.http.failure import HttpTransportFailureReason, classify_httpx
 
 
 def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
@@ -123,11 +112,10 @@ def external_fetch_error_from_exception(
     # TimeoutException は RequestError の subclass なので先に判定する。
     if isinstance(exc, httpx.TimeoutException):
         return FetchTimeoutError(f"timeout: {target_label}: {exc}")
-    # ProxyError は RequestError の subclass なので先に判定する。
-    # 403 は egress 政策による恒久的な拒否、5xx は proxy が上流に到達できない
-    # 一時障害。同じ型で来るので status で分けないと retryable の向きが逆になる。
-    if isinstance(exc, httpx.ProxyError):
-        if _proxy_refusal_status(exc) == 403:
+    # 共通HTTPが読み取った事実に、既存の取得処理の終了・再試行方針を適用する。
+    failure = classify_httpx(exc)
+    if failure is not None and failure.reason is HttpTransportFailureReason.PROXY:
+        if failure.proxy_status == 403:
             return FetchEgressBlockedError(f"egress denied: {target_label}: {exc}")
         return FetchNetworkError(f"proxy error: {target_label}: {exc}")
     if isinstance(exc, httpx.RequestError):

@@ -243,14 +243,7 @@ def test_translate_unknown_exception_falls_back_to_network() -> None:
 
 
 class TestProxyRefusal:
-    """egress proxy の CONNECT 拒否を政策拒否として分類することを固定する。
-
-    ``httpcore`` は CONNECT の **非 2xx 全部** を ``ProxyError`` に畳む
-    (``http_proxy.py`` の ``"%d %s" % (status, reason)``)。403 (allowlist /
-    private-deny) と 5xx (proxy が上流に到達できない) が同じ型で来るため、
-    status を見ないと「政策で恒久的に塞がれている」と「一時的な障害」が
-    混ざる。retryable の向きが逆になるので、ここで分ける。
-    """
+    """共通HTTPが読み取ったプロキシ失敗に対し、既存取得処理の対処を維持する。"""
 
     def test_403_is_egress_blocked_and_terminal(self) -> None:
         err = external_fetch_error_from_exception(

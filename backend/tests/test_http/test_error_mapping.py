@@ -84,8 +84,8 @@ def test_non_transport_errors_remain_unconverted(exc: Exception) -> None:
     assert http_transport_error_from_exception(exc) is None
 
 
-def test_origin_refusal_is_not_a_transport_failure() -> None:
-    """取得先から届いた403応答をproxy接続拒否へ誤変換しない。"""
+def test_response_refusal_is_not_a_transport_failure() -> None:
+    """通常の403応答をproxy接続拒否へ誤変換しない。"""
     response = httpx.Response(
         403, request=httpx.Request("GET", "https://example.invalid/article")
     )
@@ -96,8 +96,8 @@ def test_origin_refusal_is_not_a_transport_failure() -> None:
 
 
 @pytest.mark.parametrize("status_code", [302, 403, 429, 503])
-def test_response_conversion_preserves_origin_status(status_code: int) -> None:
-    """取得先のステータスを別の原因へ置き換えず伝える。"""
+def test_response_conversion_preserves_received_status(status_code: int) -> None:
+    """応答の生成元を断定せず、受信したステータスを伝える。"""
     response = httpx.Response(
         status_code, request=httpx.Request("GET", "https://example.invalid/article")
     )

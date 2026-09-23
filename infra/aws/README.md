@@ -230,8 +230,8 @@ private runbookには初期構築の前提を残し、通常migrationのロー�
   proxy を再デプロイしても変わらないので、外部ベンダー側の allowlist に登録できる。
 - **非公開レンジの正本は app 側の 1 ファイル** (`backend/app/http/non_public_ranges.json`)。Terraform は `jsondecode(file(...))` で読んで
   squid.conf を生成し、app は実行時の判定に使う。**ポリシーの持ち主はアプリで、
-  Squid は写し**。アプリはPythonのIP判定も加え、`TestNonPublicRangeParity`は
-  同じIPについて **proxyの非公開レンジ拒否 ⊆ appの拒否** を確認する。
+  Squid は写し**。アプリはPythonのIP判定も加え、`TestPublicIpAddressProhibitedRanges`は
+  JSONの全レンジの両端について、アプリが拒否することを確認する。
   DNS解決結果の一致や、ドメイン・ポートを含む全拒否条件の一致は保証しない。
   責任分担と通常のプロキシ経路は[HTTPの宛先方針](../../backend/app/http/README.md)を参照する。
 - **proxy が落ちると全 egress が止まり、Logfire も止まる。** 障害の観測は

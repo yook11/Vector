@@ -1,6 +1,5 @@
 """HTML scrape 層 (scraper) のテスト。"""
 
-import socket
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -33,22 +32,9 @@ from app.collection.external_fetch_errors import (
     FetchSsrfBlockedError,
     FetchTimeoutError,
 )
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 from app.shared.security.safe_url import SafeUrl
-
-
-@pytest.fixture(autouse=True)
-def _stub_dns_resolver():
-    """全テストで実 DNS を叩かないように ``_resolve_host`` を public IP 固定にする。
-
-    SSRF/DNS 関連のシナリオを検証したいテストは、本 fixture の上に
-    個別 patch を重ねて override する。
-    """
-    with patch(
-        "app.http.destination_resolution._resolve_host",
-        new=AsyncMock(return_value=["8.8.8.8"]),
-    ):
-        yield
-
 
 SAMPLE_HTML = """
 <html>
@@ -309,50 +295,26 @@ class TestArticleScraper:
         assert "robots" in str(result)
 
     @pytest.mark.asyncio
-    async def test_ssrf_private_ip_returns_fetch_failed(self) -> None:
-        """ホスト名の DNS 解決結果が private IP なら fetch せず SSRF block。"""
-        scraper = ArticleScraper()
-        with patch(
-            "app.http.destination_resolution._resolve_host",
-            new=AsyncMock(return_value=["172.18.0.5"]),
-        ):
-            result = await scraper.scrape(
-                SafeUrl("https://internal-trick.example.com/")
-            )
+    async def test_host_rejection_returns_fetch_blocked(self) -> None:
+        """HTTP側の宛先拒否を記事取得の拒否結果へ変換する。"""
+        origin = HostBlockedError("destination denied")
+        client = _mock_async_client([origin])
+        with _patch_client(client):
+            result = await ArticleScraper().scrape(SafeUrl("https://example.com/"))
 
-        assert isinstance(result, ExternalFetchError)
         assert isinstance(result, FetchSsrfBlockedError)
-        assert "non-public address" in str(result)
+        assert result.__cause__ is origin
 
     @pytest.mark.asyncio
-    async def test_ssrf_link_local_returns_fetch_failed(self) -> None:
-        """A レコードがクラウドメタデータ (169.254.169.254) を指しているケース。"""
-        scraper = ArticleScraper()
-        with patch(
-            "app.http.destination_resolution._resolve_host",
-            new=AsyncMock(return_value=["169.254.169.254"]),
-        ):
-            result = await scraper.scrape(
-                SafeUrl("https://metadata-attack.example.com/")
-            )
+    async def test_resolution_failure_returns_fetch_network_error(self) -> None:
+        """HTTP側の名前解決失敗を記事取得の通信失敗結果へ変換する。"""
+        origin = HostResolutionError("resolution failed")
+        client = _mock_async_client([origin])
+        with _patch_client(client):
+            result = await ArticleScraper().scrape(SafeUrl("https://example.com/"))
 
-        assert isinstance(result, ExternalFetchError)
-        assert isinstance(result, FetchSsrfBlockedError)
-        assert "169.254.169.254" in str(result)
-
-    @pytest.mark.asyncio
-    async def test_dns_failure_returns_fetch_failed(self) -> None:
-        """DNS 解決失敗は network origin error (disposition で retryable)。"""
-        scraper = ArticleScraper()
-        with patch(
-            "app.http.destination_resolution._resolve_host",
-            new=AsyncMock(side_effect=socket.gaierror("nope")),
-        ):
-            result = await scraper.scrape(SafeUrl("https://nonexistent.invalid/"))
-
-        assert isinstance(result, ExternalFetchError)
         assert isinstance(result, FetchNetworkError)
-        assert "DNS resolution failed" in str(result)
+        assert result.__cause__ is origin
 
     @pytest.mark.asyncio
     async def test_3xx_redirect_returns_fetch_failed(self) -> None:
