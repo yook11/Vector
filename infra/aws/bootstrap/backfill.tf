@@ -49,12 +49,6 @@ resource "aws_iam_policy" "backfill_lambda_boundary" {
         Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector_backfill"
       },
       {
-        Sid      = "RdsIamAuthAsApp"
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector_app"
-      },
-      {
         Sid      = "SendPipelineEvents"
         Effect   = "Allow"
         Action   = "sqs:SendMessage"

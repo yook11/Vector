@@ -51,12 +51,6 @@ resource "aws_iam_role_policy" "backfill" {
         Action   = "rds-db:connect"
         Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_backfill"
       },
-      # 切替前の設定で動く実行のために残し、切替の確認後に外す。
-      {
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_app"
-      },
       {
         Effect   = "Allow"
         Action   = "sqs:SendMessage"

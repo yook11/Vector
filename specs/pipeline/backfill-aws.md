@@ -43,7 +43,7 @@ applyの明示digestはbackend ECRに存在することも確認する。state�
 
 ## bootstrap
 
-2026-09-22に段別のロール6本を段共通の2本へ統合した。実行ロール `${name_prefix}-backfill-lambda` とSchedulerロール `${name_prefix}-backfill-scheduler` を、それぞれ専用のboundaryへ固定する。実行boundaryは `vector_app` でのRDS接続、4工程の `article-*` キューへの送信、4工程のロググループ、関数コードからのENI操作拒否を持ち、Scheduler boundaryは4関数の起動だけを許す。schedule groupは `${name_prefix}-backfill` 1つに4 scheduleを収容し、Schedulerの信頼元はSourceAccountとこのgroupに限定する。工程を足すときは `backfill_stages` に加えるだけで、ロール・boundary・CIの許可表は増えない。
+2026-09-22に段別のロール6本を段共通の2本へ統合した。実行ロール `${name_prefix}-backfill-lambda` とSchedulerロール `${name_prefix}-backfill-scheduler` を、それぞれ専用のboundaryへ固定する。実行boundaryは `vector_backfill` でのRDS接続、4工程の `article-*` キューへの送信、4工程のロググループ、関数コードからのENI操作拒否を持ち、Scheduler boundaryは4関数の起動だけを許す。schedule groupは `${name_prefix}-backfill` 1つに4 scheduleを収容し、Schedulerの信頼元はSourceAccountとこのgroupに限定する。工程を足すときは `backfill_stages` に加えるだけで、ロール・boundary・CIの許可表は増えない。
 
 CIにはbackfillだけのLambda・非同期実行設定・schedule管理権限を持たせる。段別の旧boundaryと旧schedule／groupの管理許可は、本体の切替後に撤去した。段共通boundaryのTerraformラベルは、旧アドレスがstateから消えた後に `moved` で `backfill_lambda_boundary`／`backfill_scheduler_boundary` へ戻した。PassRoleのサービス対応とapp rolloutからの分離は維持する。統合の方針は[IAMロールの概念別統合](../platform/iam-role-consolidation.md)を参照する。
 
