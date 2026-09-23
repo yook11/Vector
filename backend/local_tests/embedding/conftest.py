@@ -80,7 +80,7 @@ def embedding_runtime(system_database, monkeypatch, gemini_response):
         aws_region="ap-northeast-1",
         database_url=inject_test_db_signer(
             monkeypatch,
-            system_database.url("vector_app", sqlalchemy=True),
+            system_database.url("vector_article_analysis", sqlalchemy=True),
             resources_module=resource_module,
         ),
         db_iam_auth=True,

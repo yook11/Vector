@@ -194,7 +194,9 @@ async def test_database_wait_timeout_preserves_unsaved_article_and_allows_retry(
                 )
                 assert len(deadlines) == 1
                 loop, timeout = deadlines.pop()
-                async with system_database.connect("vector_app") as monitor:
+                async with system_database.connect(
+                    "vector_article_analysis"
+                ) as monitor:
                     await _wait_for_blocked_connection(monitor, blocker_pid, invocation)
 
                 # 実際のロック待ちを確認してから、元のtimeoutの期限だけを到来させる。
