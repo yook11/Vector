@@ -1,17 +1,29 @@
-"""保存済み事実の準備と実接続終了の確認を行う。"""
+"""保存済み事実の準備、保存結果の読み取り、実接続終了の確認を行う。"""
 
 # ruff: noqa: S101 — テスト専用の検証ヘルパー。
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
+from typing import Any, NamedTuple
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
 CREATED_AT = NOW - timedelta(hours=1)
+# 救済の期間（7日）を超え、期限切れとして整理される作成時刻。
+AGED_CREATED_AT = NOW - timedelta(days=8)
 EXTRACTED_AT = CREATED_AT + timedelta(minutes=1)
 ANALYZED_AT = CREATED_AT + timedelta(minutes=2)
 
 
-async def seed_article(database, url):
+class AuditEvent(NamedTuple):
+    stage: str
+    event_type: str
+    outcome_code: str
+    article_id: int | None
+    payload: dict[str, Any]
+
+
+async def seed_article(database, url, created_at=CREATED_AT):
     async with database.connect("vector") as connection:
         return await connection.fetchval(
             "INSERT INTO analyzable_articles "
@@ -20,11 +32,11 @@ async def seed_article(database, url):
             "SELECT id, $1, 'title', 'content', $2, $2 FROM news_sources "
             "ORDER BY id LIMIT 1 RETURNING id",
             url,
-            CREATED_AT,
+            created_at,
         )
 
 
-async def seed_incomplete_article(database, url):
+async def seed_incomplete_article(database, url, created_at=CREATED_AT):
     async with database.connect("vector") as connection:
         return await connection.fetchval(
             "INSERT INTO incomplete_articles "
@@ -33,7 +45,7 @@ async def seed_incomplete_article(database, url):
             "SELECT $1, id, name, 'open', '{}'::jsonb, $2, $2 FROM news_sources "
             "ORDER BY id LIMIT 1 RETURNING id",
             url,
-            CREATED_AT,
+            created_at,
         )
 
 
@@ -61,11 +73,30 @@ async def seed_analysis(database, curation_id):
         )
 
 
+async def read_audit_events(database):
+    """確定した監査を追加順に返す。"""
+    async with database.connect("vector") as connection:
+        rows = await connection.fetch(
+            "SELECT stage, event_type, outcome_code, article_id, payload "
+            "FROM pipeline_events ORDER BY id"
+        )
+    return [
+        AuditEvent(
+            row["stage"],
+            row["event_type"],
+            row["outcome_code"],
+            row["article_id"],
+            json.loads(row["payload"]),
+        )
+        for row in rows
+    ]
+
+
 async def assert_connections_closed(database, scope):
     """実disposeの完了と、別接続から使用済みDB接続の消滅を確認する。"""
     assert scope.disposed
     assert scope.order == ["engine", "rds"]
-    async with database.connect("vector_app") as connection:
+    async with database.connect("vector_backfill") as connection:
         deadline = asyncio.get_running_loop().time() + 2
         while await connection.fetchval(
             "SELECT count(*) FROM pg_stat_activity "
