@@ -30,6 +30,7 @@ Role = Literal[
     "vector_collect",
     "vector_outbox_relay",
     "vector_auth_rate_limit_cleanup",
+    "vector_article_analysis",
 ]
 
 
@@ -91,7 +92,11 @@ async def _prepare_auth(database: SystemDatabase) -> None:
 async def _prepare_dedicated_role_logins(database: SystemDatabase) -> None:
     async with database.connect("vector") as connection:
         # initとmigrationが作るロール・権限を保ち、テスト認証だけを設定する。
-        for role in ("vector_outbox_relay", "vector_auth_rate_limit_cleanup"):
+        for role in (
+            "vector_outbox_relay",
+            "vector_auth_rate_limit_cleanup",
+            "vector_article_analysis",
+        ):
             statement = await connection.fetchval(
                 "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', $1::text, $2::text)",
                 role,
@@ -216,6 +221,7 @@ def migrated_database() -> Iterator[SystemDatabase]:
                 "vector_auth_rate_limit_cleanup": values[
                     "POSTGRES_AUTH_CLEANUP_PASSWORD"
                 ],
+                "vector_article_analysis": values["POSTGRES_ARTICLE_ANALYSIS_PASSWORD"],
             },
         )
         asyncio.run(_prepare_dedicated_role_logins(database))
