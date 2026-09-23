@@ -276,11 +276,9 @@ async def _finalize_deadline_exceeded_runs(
                     AgentRun.id.in_(run_ids),
                     _has_reached_recovery_deadline(literal(now)),
                 )
-                .values(
-                    status=AgentRunStatus.DEADLINE_EXCEEDED.value,
-                    assistant_message_id=None,
-                    error_code=None,
-                )
+                # 回答とerror_codeは制約で既にNULLのため書かず、
+                # APIロールにこの2列の更新権限を求めない。
+                .values(status=AgentRunStatus.DEADLINE_EXCEEDED.value)
                 .returning(AgentRun.id)
                 .execution_options(synchronize_session=False)
             )
