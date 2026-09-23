@@ -25,7 +25,7 @@
 
 - 製品のhandler・SDK・Consumer・Repository・Engine・disposeを使い、DB操作・終了処理をモックしない。
 - テスト用Settings、IAM署名、SSM取得、Gemini HTTP応答を差し替える。DB待機ケースでは実timeoutの期限到来も制御する。
-- 管理者はデータ準備用とし、処理はvector_appの接続設定を使う。
+- 管理者はデータ準備用とし、処理はvector_article_analysisの接続設定を使う。
 - 各呼び出しのEngine観測結果は1件を要求してpopで取り出し、配列の位置と呼び出し回数を対応づけない。
 - Engine終了直前の貸出数が0で、応答時にはdisposeが完了している。
 - 別接続から保存結果を確認し、使用した接続IDがpg_stat_activityから消えることを最大2秒の待機で確認する。

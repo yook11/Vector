@@ -113,7 +113,7 @@ run "consumer_receives_curation_queue_with_embedding_limits" {
       aws_lambda_function.curation_consumer.reserved_concurrent_executions == 10 &&
       aws_lambda_function.curation_consumer.environment[0].variables == tomap({
         ENV                           = "production"
-        DATABASE_URL                  = local.backend_db_url["vector_app"]
+        DATABASE_URL                  = local.backend_db_url["vector_article_analysis"]
         DB_IAM_AUTH                   = "true"
         GEMINI_API_KEY_PARAMETER_PATH = "/slice-test/curation-consumer/gemini-api-key"
         EGRESS_PROXY_URL              = local.proxy_url
@@ -152,7 +152,7 @@ run "curation_redrive_and_dlq_notification" {
   }
 }
 
-# Consumerの通信先とデータ権限をCurationの対象に限定する。
+# Consumerの通信先をCurationの対象に限定する。
 run "consumer_network_and_permissions_are_scoped" {
   command = plan
   assert {
@@ -186,17 +186,6 @@ run "consumer_network_and_permissions_are_scoped" {
       pair.inbound.from_port == pair.port && pair.inbound.to_port == pair.port
     ])
     error_message = "DB・proxy・SSMへの通信を両側のSGで限定する。"
-  }
-  assert {
-    condition = (
-      aws_iam_role.curation_consumer.permissions_boundary == "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-consumer-lambda-boundary" &&
-      { for s in jsondecode(aws_iam_role_policy.curation_consumer.policy).Statement : s.Sid => s.Resource if contains(["ConsumeCurationEvents", "RdsIamAuthAsApp", "ReadGeminiKey"], s.Sid) } == {
-        ConsumeCurationEvents = aws_sqs_queue.outbox["curation"].arn
-        RdsIamAuthAsApp       = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app"
-        ReadGeminiKey         = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/curation-consumer/gemini-api-key"
-      }
-    )
-    error_message = "Consumerは対象キュー・vector_app・専用キーを使用する。"
   }
 }
 

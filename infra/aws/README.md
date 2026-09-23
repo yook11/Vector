@@ -324,7 +324,7 @@ read-only の plan ロールでは通らない)。
 
 共通backendイメージをarm64のLambdaとして起動する。Consumerの版は`embedding_consumer_image_digest`で独立指定し、ECSのimage_tagやrelayのdigestとは連動させない。メモリ1024MB、timeout120秒、予約同時実行10、1回1件、最大同時実行10、ReportBatchItemFailuresで固定する。スライス3.4ではSQSトリガーを`enabled=false`で配置した。スライス4.1以降の目標状態は`enabled=true`であり、既存マッピングの更新・今後の新規作成ともに受信を有効にする。relayのSchedulerはスライス4.1では`DISABLED`を維持した。スライス4.2で`ENABLED`へ更新する。
 
-関数は専用サブネット・SG・実行ロール・ロググループを使用する。環境変数はproduction、IAM認証のvector_app用DB URL、専用Gemini SSMパス、EGRESS_PROXY_URLを渡す。AWS_REGIONはLambdaが提供する。APIキーの値はTerraform・イメージ・ログへ置かず、Consumer呼び出し時にSSMから取得する。SSMの準備は有効化前に行い、値の登録と実通信検証は別作業とする。
+関数は専用サブネット・SG・ロググループと、AI分析の共通実行ロールを使用する。環境変数はproduction、IAM認証のvector_article_analysis用DB URL、専用Gemini SSMパス、EGRESS_PROXY_URLを渡す。AWS_REGIONはLambdaが提供する。APIキーの値はTerraform・イメージ・ログへ置かず、Consumer呼び出し時にSSMから取得する。SSMの準備は有効化前に行い、値の登録と実通信検証は別作業とする。
 
 ### 初回構築・更新・切り戻し
 

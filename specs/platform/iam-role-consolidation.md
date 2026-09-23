@@ -7,7 +7,7 @@ Status: 第一歩（backfill）を実装済み（2026-09-22）。本番適用済
 - Problem: Lambda関数1つごとに実行ロール・Schedulerロール・boundaryを複製しているため、関数が増えるたびにbootstrapの共有許可表（ロール作成ガード、boundary対応表、PassRoleガード、設定復号の対象、SQS endpoint）が伸びる。`apply_role_creation` managed policyは2026-09-21時点で6,136字（テスト用prefix）で、IAMの上限6,144字に達した。
 - Evidence: `infra/aws/bootstrap/oidc.tf` の `managed_role_arns`・`outbox_service_roles`・`boundary_pairing_statements_by_group`、`infra/aws/bootstrap/role_creation.tf`、各Lambdaのboundary、Terraform mock testのpolicy長断言。
 - Invariants: ロールは「同じ振る舞いと同じ到達範囲」で束ねる。概念をまたぐ権限は1ロールに持たせない。各boundaryはno-escalationと関数コードからのENI操作拒否を保つ。CIはboundaryペアリングで縛られたロールしか作れない。切替中に稼働中の関数を作り直さない。
-- Non-goals: DBロールの概念分割（別途行う）、Lambda関数自体の統合、概念名の語彙変更、権限の緩和（wildcard化）。
+- Non-goals: DBロールの概念分割（別途行う。AI分析だけは、同じ3関数のDB接続先をvector_article_analysisへ切り替える作業を統合と同時に行う）、Lambda関数自体の統合、概念名の語彙変更、権限の緩和（wildcard化）。
 - Done: 5概念（外部取得／AI分析／配信／救済／運用）それぞれが実行ロール1本とboundary1組で動き、関数の追加で共有許可表が伸びない。
 
 ## 概念
@@ -15,7 +15,7 @@ Status: 第一歩（backfill）を実装済み（2026-09-22）。本番適用済
 | 概念 | 主体 | 共通する到達範囲 |
 |---|---|---|
 | 外部取得 | source-dispatch、acquisition-consumer、completion-consumer | プロキシ経由の外部HTTP、取得系キュー、`vector_collect` |
-| AI分析 | curation／assessment／embedding consumer | AI資格情報、分析結果の保存、`vector_app` |
+| AI分析 | curation／assessment／embedding consumer | AI資格情報、分析結果の保存、`vector_article_analysis` |
 | 配信 | Outbox relay 4本 | Outboxの読み取りと各キューへの送信、`vector_outbox_relay` |
 | 救済 | backfill各段 | DBの読み取りと期限切れ整理、各キューへの送信。外部へ出ない |
 | 運用 | auth-rate-limit-cleanupなど | 個別 |
@@ -31,7 +31,8 @@ Status: 第一歩（backfill）を実装済み（2026-09-22）。本番適用済
 ## Implementation
 
 - 救済（backfill）: 段別ロール6本・boundary 6本を `${name_prefix}-backfill-lambda`／`-scheduler` とboundary 2本へ統合。`apply_role_creation` は6,136→5,380字、`apply_pass_role` は5,148→4,448字、`apply_backfill` は4,138→3,074字（テスト用prefix）。切替後に段別の旧boundary 6本と旧schedule／groupの許可を撤去した。
-- 配信、AI分析、外部取得: 未着手。
+- AI分析: 未着手。DB接続先の切替と同時に行う（[記事単位AI分析のDBロール分離](../pipeline/article-analysis-role.md)）。
+- 配信、外部取得: 未着手。
 
 ## Verification
 
