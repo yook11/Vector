@@ -248,7 +248,6 @@ run "execution_role_and_endpoint_allow_only_backfill_queues" {
       alltrue([for function in aws_lambda_function.backfill : function.role == aws_iam_role.backfill.arn]) &&
       jsondecode(aws_iam_role_policy.backfill.policy).Statement == [
         { Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_backfill" },
-        { Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app" },
         { Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : aws_sqs_queue.outbox[stage].arn] },
         { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : "${aws_cloudwatch_log_group.backfill[stage].arn}:*"] },
         { Effect = "Allow", Action = local.outbox_relay_eni_actions, Resource = "*" },
