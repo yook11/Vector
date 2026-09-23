@@ -315,7 +315,7 @@ Problemは、実装済みのCuration Consumerとrelayを既存GitHub ActionsのT
 
 Consumerはprimary AZの`cidrsubnet(var.vpc_cidr, 8, 32)`から既存appルートテーブルを使用する。SGの送信先はRDS:5432、既存proxy、SSM endpoint:443だけとし、proxyはGeminiの既存許可ドメインだけを通す。relayは既存APIサブネット・Outbox SG・SQS endpointを使用し、実行ロールとendpoint policyの両方でCurationキューへの送信に限定する。ConsumerはIAM認証の`vector_article_analysis`、relayは`vector_outbox_relay`で接続し、両Lambdaは既存TLSとbackend ECRのdigestイメージを使用する。キューの暗号化・TLS強制・送信元endpoint制限を維持する。
 
-Geminiキーは`/${name_prefix}/curation-consumer/gemini-api-key`を参照する。実値をTerraformで作成・読取・管理せず、state・変数・ログへ入れない。各実行ロールに専用boundaryを付け、既存の権限昇格拒否・関数コードからのENI操作拒否を維持する。
+Geminiキーは`/${name_prefix}/curation-consumer/gemini-api-key`を参照する。実値をTerraformで作成・読取・管理せず、state・変数・ログへ入れない。Consumerは[AI分析](../platform/iam-role-consolidation.md)の共通実行ロールと共通boundaryを使い、relay・Schedulerの実行ロールには専用boundaryを付ける。既存の権限昇格拒否・関数コードからのENI操作拒否は維持する。
 
 ### 有効化と既存CI
 

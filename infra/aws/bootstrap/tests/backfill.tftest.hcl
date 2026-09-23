@@ -213,20 +213,8 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.embedding_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-embedding-consumer-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_policy.outbox_relay_scheduler_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-outbox-relay-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.assessment_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-consumer-lambda-boundary" }
 }
 
 override_resource {
@@ -251,12 +239,6 @@ override_resource {
   override_during = plan
   target          = aws_iam_policy.agentcore_gateway_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-agentcore-gateway-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.curation_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-consumer-lambda-boundary" }
 }
 
 override_resource {
