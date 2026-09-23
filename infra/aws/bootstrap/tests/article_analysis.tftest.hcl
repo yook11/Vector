@@ -57,12 +57,6 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.assessment_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-consumer-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_policy.assessment_outbox_relay_lambda_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-outbox-relay-lambda-boundary" }
 }
@@ -123,12 +117,6 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.curation_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-consumer-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_policy.curation_outbox_relay_lambda_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-outbox-relay-lambda-boundary" }
 }
@@ -137,12 +125,6 @@ override_resource {
   override_during = plan
   target          = aws_iam_policy.curation_outbox_relay_scheduler_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-outbox-relay-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.embedding_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-embedding-consumer-lambda-boundary" }
 }
 
 override_resource {
@@ -239,18 +221,20 @@ run "boundary_limits_analysis_to_its_queues_keys_logs_and_database_user" {
   }
 }
 
-run "pass_role_admits_shared_role_and_keeps_old_roles_until_removal" {
+run "pass_role_admits_only_shared_analysis_role" {
   command = plan
   assert {
     condition = (
       contains(local.outbox_service_roles.Lambda.arns, local.article_analysis_lambda_role_arn) &&
       !contains(local.outbox_service_roles.Scheduler.arns, local.article_analysis_lambda_role_arn) &&
-      alltrue([for arn in [local.curation_consumer_role_arn, local.assessment_consumer_role_arn, local.embedding_consumer_role_arn] :
-        contains(local.outbox_service_roles.Lambda.arns, arn) && contains(local.managed_role_arns, arn)
+      alltrue([for stage in ["curation", "assessment", "embedding"] :
+        !contains(local.outbox_service_roles.Lambda.arns, "arn:aws:iam::123456789012:role/slice-test/slice-test-${stage}-consumer-lambda") &&
+        !contains(local.managed_role_arns, "arn:aws:iam::123456789012:role/slice-test/slice-test-${stage}-consumer-lambda")
       ]) &&
+      length(setintersection(toset(keys(local.role_boundary_groups)), toset(["CurationConsumerLambda", "AssessmentConsumerLambda", "EmbeddingConsumerLambda"]))) == 0 &&
       alltrue([for guard in local.outbox_pass_role_guards : contains(jsondecode(aws_iam_policy.apply_pass_role.policy).Statement, guard)])
     )
-    error_message = "共通ロールはLambdaにだけ渡せるようにし、旧ロールへ戻せるよう旧boundaryの撤去までは旧3ロールも残す。"
+    error_message = "共通ロールはLambdaにだけ渡せるようにし、関数ごとの旧3ロールはPassRole・ロール作成の許可表と対応表から除く。"
   }
 }
 

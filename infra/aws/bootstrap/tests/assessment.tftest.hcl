@@ -36,31 +36,23 @@ run "assessment_roles_have_specific_boundaries" {
   command = plan
   assert {
     condition = (
-      local.role_boundary_groups.AssessmentConsumerLambda.role_names == ["slice-test-assessment-consumer-lambda"] &&
-      local.role_boundary_groups.AssessmentConsumerLambda.boundary == aws_iam_policy.assessment_consumer_lambda_boundary.arn &&
       local.role_boundary_groups.AssessmentOutboxRelayLambda.role_names == ["slice-test-assessment-outbox-relay-lambda"] &&
       local.role_boundary_groups.AssessmentOutboxRelayLambda.boundary == aws_iam_policy.assessment_outbox_relay_lambda_boundary.arn &&
       local.role_boundary_groups.AssessmentOutboxRelayScheduler.role_names == ["slice-test-assessment-outbox-relay-scheduler"] &&
       local.role_boundary_groups.AssessmentOutboxRelayScheduler.boundary == aws_iam_policy.assessment_outbox_relay_scheduler_boundary.arn &&
       alltrue([for policy in [
-        aws_iam_policy.assessment_consumer_lambda_boundary.policy,
         aws_iam_policy.assessment_outbox_relay_lambda_boundary.policy,
         aws_iam_policy.assessment_outbox_relay_scheduler_boundary.policy,
       ] : contains(jsondecode(policy).Statement, local.boundary_no_escalation_statement)])
     )
-    error_message = "Assessmentの3ロールと権限境界を対応させ、権限昇格を禁止する。"
+    error_message = "Assessmentのrelay・Schedulerの2ロールと権限境界を対応させ、権限昇格を禁止する。"
   }
   assert {
     condition = (
-      { for s in jsondecode(aws_iam_policy.assessment_consumer_lambda_boundary.policy).Statement : s.Sid => s.Resource if contains(["ConsumeAssessmentEvents", "ReadDeepSeekKey", "RdsIamAuthAsApp"], s.Sid) } == {
-        ConsumeAssessmentEvents = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-assessment"
-        ReadDeepSeekKey         = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/deepseek-api-key"
-        RdsIamAuthAsApp         = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app"
-      } &&
       [for s in jsondecode(aws_iam_policy.assessment_outbox_relay_lambda_boundary.policy).Statement : s.Resource if s.Sid == "SendPipelineEvents"] == ["arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-assessment"] &&
       [for s in jsondecode(aws_iam_policy.assessment_outbox_relay_scheduler_boundary.policy).Statement : s.Resource if s.Sid == "InvokeRelayOnly"] == [local.assessment_outbox_relay_lambda_arn]
     )
-    error_message = "Consumer・relay・Schedulerの天井をそれぞれの対象だけに限定する。"
+    error_message = "relay・Schedulerの天井をそれぞれの対象だけに限定する。"
   }
 }
 
@@ -75,7 +67,6 @@ run "ci_manages_assessment_without_broadening_mapping_access" {
         aws_iam_policy.apply_pass_role.policy,
         aws_iam_policy.apply_assessment_consumer.policy,
         aws_iam_policy.apply_embedding_consumer.policy,
-        aws_iam_policy.assessment_consumer_lambda_boundary.policy,
         aws_iam_policy.assessment_outbox_relay_lambda_boundary.policy,
         aws_iam_policy.assessment_outbox_relay_scheduler_boundary.policy,
         aws_iam_policy.lambda_config_readback.policy,
@@ -84,15 +75,13 @@ run "ci_manages_assessment_without_broadening_mapping_access" {
         aws_iam_policy.completion_consumer_lambda_boundary.policy,
         aws_iam_policy.completion_outbox_relay_lambda_boundary.policy,
         aws_iam_policy.completion_outbox_relay_scheduler_boundary.policy,
-        aws_iam_policy.curation_consumer_lambda_boundary.policy,
         aws_iam_policy.curation_outbox_relay_lambda_boundary.policy,
         aws_iam_policy.curation_outbox_relay_scheduler_boundary.policy,
       ] : length(policy) <= 6144]) &&
       aws_iam_role_policy_attachment.apply_assessment_consumer.role == aws_iam_role.ci["apply"].name &&
       contains(local.managed_pipeline_queue_arns, local.assessment_dlq_arn) &&
-      contains(local.managed_role_arns, local.assessment_consumer_role_arn) &&
       contains(local.managed_role_arns, local.assessment_outbox_relay_role_arn) &&
-      !contains(local.app_role_arns, local.assessment_consumer_role_arn)
+      !contains(local.app_role_arns, local.assessment_outbox_relay_role_arn)
     )
     error_message = "IAM policy容量: inline=${length(aws_iam_role_policy.apply.policy)}, outbox=${length(aws_iam_policy.apply_outbox.policy)}。許可一覧とrollout分離も維持する。"
   }
@@ -173,20 +162,8 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.embedding_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-embedding-consumer-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_policy.outbox_relay_scheduler_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-outbox-relay-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.assessment_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-consumer-lambda-boundary" }
 }
 
 override_resource {
@@ -211,12 +188,6 @@ override_resource {
   override_during = plan
   target          = aws_iam_policy.agentcore_gateway_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-agentcore-gateway-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.curation_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-consumer-lambda-boundary" }
 }
 
 override_resource {
@@ -259,26 +230,5 @@ run "relay_boundary_allows_only_dedicated_db_user" {
       "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_outbox_relay",
     ])
     error_message = "Assessment Relayの境界は専用DBユーザーだけに接続を許可し、旧Appユーザーへの接続を許可しない。"
-  }
-}
-
-# 通知用キーは既存frontendの1件だけを追加し、SSMの一覧取得や書き込みを許可しない。
-run "consumer_reads_only_assessment_and_notification_keys" {
-  command = plan
-  assert {
-    condition = {
-      for s in jsondecode(aws_iam_policy.assessment_consumer_lambda_boundary.policy).Statement : s.Sid => { action = s.Action, resource = s.Resource }
-      if s.Effect == "Allow" && startswith(try(tostring(s.Action), ""), "ssm:")
-      } == {
-      ReadDeepSeekKey = {
-        action   = "ssm:GetParameter"
-        resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/deepseek-api-key"
-      }
-      ReadFrontendNotificationKey = {
-        action   = "ssm:GetParameter"
-        resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/frontend/revalidate-bearer-secret"
-      }
-    }
-    error_message = "AssessmentのSSM権限はDeepSeekキーと一覧通知キーの単件取得に限定する。"
   }
 }

@@ -226,6 +226,8 @@ push用roleはbuild専用repository secretのままにする。migration / rollo
 
 ## Curationの権限追加（スライス6前半）
 
+> 2026-09-23: Consumerの専用boundaryは、AI分析の共通boundaryへ統合して撤去した（[IAMロールの概念別統合](../../../specs/platform/iam-role-consolidation.md)）。以下は構築時の記録。
+
 Curation Consumer・relay・Schedulerの3ロールに専用boundaryを追加する。Consumerは専用SQS受信・Gemini SSM参照・`vector_app`のRDS IAM認証、relayはCurationキュー送信・同DB認証、Schedulerは専用relayの呼び出しに限定する。権限昇格拒否と関数コードからのENI操作拒否は維持する。
 
 既存CIの管理対象、PassRole、SQS/DLQ・Scheduler、Lambda設定読戻しの対象ARN一覧へCurationだけを追加する。`ci-apply-curation-consumer`をapplyロールへ取り付け、関数ARN・Consumerタグでmapping管理を限定する。production承認と秘密情報の値の読取禁止は変更しない。
