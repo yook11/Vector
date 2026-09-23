@@ -5,18 +5,17 @@ import asyncio
 import structlog
 
 from app.analysis.curation.domain.ready import CurationReadyBuildRejected
-from app.collection.events import AnalyzableEventInvalidError
-from app.lambda_handlers.curation.composition import open_curation_consumer
-from app.lambda_handlers.curation.event import (
-    CurationMessageJsonInvalidError,
-    parse_analyzable_article_created_event,
+from app.collection.events import (
+    AnalyzableArticleCreatedEvent,
+    AnalyzableEventInvalidError,
 )
+from app.lambda_handlers.curation.composition import open_curation_consumer
 from app.lambda_handlers.curation.failure_recorder import (
     CurationLambdaFailureRecorder,
 )
 from app.lambda_handlers.curation.settings import CurationConsumerSettings
 from app.lambda_handlers.logging import setup_lambda_logging
-from app.lambda_handlers.sqs.errors import SqsInputError
+from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
     SqsBatchFailureResponse,
@@ -53,36 +52,41 @@ async def _run_curation(
             raise
 
         failed_items: list[SqsBatchItemIdentifier] = []
-        for record in record_batch.records:
+        for record_input in record_batch.records:
             try:
-                message_body = record.body_text()
+                record = record_input.to_record()
             except SqsInputError as exc:
-                failure_recorder.record_invalid_body(exc, message_id=record.message_id)
+                failure_recorder.record_invalid_body(
+                    exc, message_id=record_input.message_id
+                )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
 
             try:
-                article_event = parse_analyzable_article_created_event(message_body)
-            except CurationMessageJsonInvalidError:
-                failure_recorder.record_invalid_json(message_id=record.message_id)
+                parsed_body = record.parse_json()
+                article_event = AnalyzableArticleCreatedEvent.from_input(parsed_body)
+            except SqsMessageJsonInvalidError:
+                failure_recorder.record_invalid_json(message_id=record_input.message_id)
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
             except AnalyzableEventInvalidError as exc:
-                failure_recorder.record_invalid_event(exc, message_id=record.message_id)
+                failure_recorder.record_invalid_event(
+                    exc, message_id=record_input.message_id
+                )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
             except Exception as exc:
                 failure_recorder.record_message_failure(
-                    exc, message_id=record.message_id
+                    exc, message_id=record_input.message_id
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
 
@@ -90,10 +94,10 @@ async def _run_curation(
                 completion = await consumer.consume(article_event.payload)
             except Exception as exc:
                 failure_recorder.record_message_failure(
-                    exc, message_id=record.message_id, article_event=article_event
+                    exc, message_id=record_input.message_id, article_event=article_event
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
             else:
                 rejection_fields = (
@@ -102,7 +106,7 @@ async def _run_curation(
                     else {}
                 )
                 _log_completion(
-                    message_id=record.message_id,
+                    message_id=record_input.message_id,
                     event_id=str(article_event.event_id),
                     analyzable_article_id=article_event.payload.analyzable_article_id,
                     reason=(

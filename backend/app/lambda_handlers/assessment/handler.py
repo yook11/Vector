@@ -11,19 +11,18 @@ from app.analysis.assessment.service import (
     AssessmentCompletion,
     AssessmentCompletionKind,
 )
-from app.analysis.curation.events import CuratedEventInvalidError
+from app.analysis.curation.events import (
+    ArticleCuratedSignalEvent,
+    CuratedEventInvalidError,
+)
 from app.analysis.logging import create_article_analysis_logger
 from app.lambda_handlers.assessment.composition import (
     build_article_list_notifier,
     open_assessment_consumer,
 )
-from app.lambda_handlers.assessment.event import (
-    AssessmentMessageJsonInvalidError,
-    parse_curated_signal_event,
-)
 from app.lambda_handlers.assessment.notification import ArticleListUpdateNotifier
 from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
-from app.lambda_handlers.sqs.errors import SqsInputError
+from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
     SqsBatchFailureResponse,
@@ -85,14 +84,15 @@ async def _run_assessment(
             raise
 
         failed_items: list[SqsBatchItemIdentifier] = []
-        for record in record_batch.records:
-            message_logger = logger.bind(message_id=record.message_id)
+        for record_input in record_batch.records:
+            message_logger = logger.bind(message_id=record_input.message_id)
             started_at_seconds = perf_counter()
             message_logger.info("assessment_message_processing_started")
             try:
-                message_body = record.body_text()
-                curated_event = parse_curated_signal_event(message_body)
-            except (SqsInputError, AssessmentMessageJsonInvalidError) as exc:
+                record = record_input.to_record()
+                parsed_body = record.parse_json()
+                curated_event = ArticleCuratedSignalEvent.from_input(parsed_body)
+            except (SqsInputError, SqsMessageJsonInvalidError) as exc:
                 message_logger.warning(
                     "assessment_message_processing_failed",
                     operation="parse_message",
@@ -101,7 +101,7 @@ async def _run_assessment(
                     exc_info=exc,
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
             except CuratedEventInvalidError as exc:
@@ -113,7 +113,7 @@ async def _run_assessment(
                     exc_info=exc,
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
             except Exception as exc:
@@ -125,7 +125,7 @@ async def _run_assessment(
                     exc_info=exc,
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
 
@@ -146,7 +146,7 @@ async def _run_assessment(
                     exc_info=exc,
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
             else:
                 if (
@@ -154,7 +154,7 @@ async def _run_assessment(
                     and completion.kind is AssessmentCompletionKind.IN_SCOPE
                 ):
                     with structlog.contextvars.bound_contextvars(
-                        message_id=record.message_id,
+                        message_id=record_input.message_id,
                         event_id=str(curated_event.event_id),
                     ):
                         await notifier.notify_article_list_updated()

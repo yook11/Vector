@@ -4,19 +4,18 @@ import asyncio
 
 import structlog
 
-from app.analysis.assessment.events import AssessedEventInvalidError
+from app.analysis.assessment.events import (
+    ArticleAssessedInScopeEvent,
+    AssessedEventInvalidError,
+)
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
 from app.lambda_handlers.embedding.composition import open_embedding_consumer
-from app.lambda_handlers.embedding.event import (
-    EmbeddingMessageJsonInvalidError,
-    parse_assessed_in_scope_event,
-)
 from app.lambda_handlers.embedding.failure_recorder import (
     EmbeddingLambdaFailureRecorder,
 )
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 from app.lambda_handlers.logging import setup_lambda_logging
-from app.lambda_handlers.sqs.errors import SqsInputError
+from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
     SqsBatchFailureResponse,
@@ -53,36 +52,41 @@ async def _run_embedding(
             raise
 
         failed_items: list[SqsBatchItemIdentifier] = []
-        for record in record_batch.records:
+        for record_input in record_batch.records:
             try:
-                message_body = record.body_text()
+                record = record_input.to_record()
             except SqsInputError as exc:
-                failure_recorder.record_invalid_body(exc, message_id=record.message_id)
+                failure_recorder.record_invalid_body(
+                    exc, message_id=record_input.message_id
+                )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
 
             try:
-                assessed_event = parse_assessed_in_scope_event(message_body)
-            except EmbeddingMessageJsonInvalidError:
-                failure_recorder.record_invalid_json(message_id=record.message_id)
+                parsed_body = record.parse_json()
+                assessed_event = ArticleAssessedInScopeEvent.from_input(parsed_body)
+            except SqsMessageJsonInvalidError:
+                failure_recorder.record_invalid_json(message_id=record_input.message_id)
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
             except AssessedEventInvalidError as exc:
-                failure_recorder.record_invalid_event(exc, message_id=record.message_id)
+                failure_recorder.record_invalid_event(
+                    exc, message_id=record_input.message_id
+                )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
             except Exception as exc:
                 failure_recorder.record_message_failure(
-                    exc, message_id=record.message_id
+                    exc, message_id=record_input.message_id
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
 
@@ -90,10 +94,12 @@ async def _run_embedding(
                 completion = await consumer.consume(assessed_event.payload)
             except Exception as exc:
                 failure_recorder.record_message_failure(
-                    exc, message_id=record.message_id, assessed_event=assessed_event
+                    exc,
+                    message_id=record_input.message_id,
+                    assessed_event=assessed_event,
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
             else:
                 rejection_fields = (
@@ -102,7 +108,7 @@ async def _run_embedding(
                     else {}
                 )
                 _log_completion(
-                    message_id=record.message_id,
+                    message_id=record_input.message_id,
                     event_id=str(assessed_event.event_id),
                     analyzed_article_id=assessed_event.payload.analyzed_article_id,
                     reason=(

@@ -11,13 +11,14 @@ from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.analysis.assessment.events import ArticleAssessedInScopeEvent
 from app.db.errors import DatabaseError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from app.lambda_handlers.embedding.event import parse_assessed_in_scope_event
+from app.lambda_handlers.sqs.records import SqsRecord
 from app.models.outbox_event import OutboxEvent
 from app.outbox.publishing.errors import PublishError, PublishTransportError
 from app.outbox.publishing.publisher import (
@@ -422,7 +423,9 @@ async def test_invalid_event_is_stopped_and_valid_event_is_delivered(
     def send(**kwargs):
         entries = kwargs["Entries"]
         assert len(entries) == 1
-        event = parse_assessed_in_scope_event(entries[0]["MessageBody"])
+        event = ArticleAssessedInScopeEvent.from_input(
+            SqsRecord(message_id="id", body=entries[0]["MessageBody"]).parse_json()
+        )
         assert event.event_id == good.event_id
         assert event.payload.model_dump() == good.before["payload"]
         return {

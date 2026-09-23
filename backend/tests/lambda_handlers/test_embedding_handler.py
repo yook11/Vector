@@ -16,6 +16,7 @@ from app.analysis.embedding.domain.ready import (
 )
 from app.analysis.embedding.service import EmbeddingCompletion
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
+from app.lambda_handlers.sqs.records import SqsRecord
 
 module = import_module("app.lambda_handlers.embedding.handler")
 pytestmark = pytest.mark.unit
@@ -227,11 +228,12 @@ def test_input_logging_failure_does_not_replace_batch_error(wiring):
 def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
     """想定外の解析障害も、そのメッセージだけの失敗として後続を処理する。"""
     body = valid_body()
-    parsed = module.parse_assessed_in_scope_event(body)
+    parsed_body = SqsRecord(message_id="id", body=body).parse_json()
+    parsed = module.ArticleAssessedInScopeEvent.from_input(parsed_body)
     monkeypatch.setattr(
-        module,
-        "parse_assessed_in_scope_event",
-        Mock(side_effect=[RuntimeError("private-parser"), parsed]),
+        SqsRecord,
+        "parse_json",
+        Mock(side_effect=[RuntimeError("private-parser"), parsed_body]),
     )
     messages = [
         {"messageId": "parse-failed", "body": body},

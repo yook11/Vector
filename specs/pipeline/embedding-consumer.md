@@ -74,7 +74,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 発行元のpayload検証・Outbox保存を維持し、relayのSQS publisherで保存済みの5項目を`ArticleAssessedInScopeEvent`として検証する。共通型はUUID・タイムゾーン付き日時・対象イベント種別・整数バージョン1・型付きpayloadを保証し、未知項目や数値文字列・真偽値・小数から整数への変換を拒否する。UUIDと日時のJSON文字列は明示的に復元する。記事存在やID同士の対応のDB照合は行わない。
 
-受信本文は`app/lambda_handlers/embedding/event.py`の`parse_assessed_in_scope_event(message_body: str)`で解析し、同じ共通型を返す。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
+受信データは`record_input.to_record()`で本文の文字列型を検証し、`record.parse_json()`の解析結果を`ArticleAssessedInScopeEvent.from_input(parsed_body)`へ渡して同じ共通型に復元する。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
 
 不正本文は`EmbeddingEventInvalidError`で伝える。理由はJSON解析の`invalid_json`、外側の構造・項目型の`invalid_envelope`、対象外種別の`unsupported_event_type`、未対応版の`unsupported_schema_version`、payload内部の`invalid_payload`の順で優先する。payload自体の欠落や非オブジェクトは外側の構造不正に含む。共有のassessed_event_validation_failureは、大分類と重複のない不変の検証詳細を返す。詳細は既知の項目名と固定コードだけとし、未知キーはeventまたはpayloadのunknown_fieldへ置き換える。本文・入力値・検証自由文を属性や原因・contextに保持せず、本文解析関数内ではログ・監査・通知を行わない。JSON解析失敗はinvalid_jsonと空の詳細一覧で返す。
 
@@ -84,7 +84,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 ### SQSメッセージ処理と部分バッチ応答
 
-`app/lambda_handlers/embedding/handler.py`の`_run_embedding(lambda_event, settings)`は、資源とConsumerの組み立て、バッチ検証、レコードの逐次処理、失敗IDの集約、資源終了までを進める。ループ内で本文の取り出し、parse_assessed_in_scope_eventによる業務イベント検証、consumer.consumeの実行と結果記録を順に行う。SQSへの直接操作は行わない。
+`app/lambda_handlers/embedding/handler.py`の`_run_embedding(lambda_event, settings)`は、資源とConsumerの組み立て、バッチ検証、レコードの逐次処理、失敗IDの集約、資源終了までを進める。ループ内でレコードの構築、parse_jsonによるJSON解析、ArticleAssessedInScopeEvent.from_inputによる業務イベント検証、consumer.consumeの実行と結果記録を順に行う。SQSへの直接操作は行わない。
 
 最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はSqsInputErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
 
@@ -489,7 +489,7 @@ Done: handler.pyで準備から応答・終了までを追え、既存の配送�
 Problem: バッチの進行はhandler.pyに集約したが、1件のイベント検証とConsumer呼び出しが別関数に隠れ、検証後に実行する順序を入口から読めない。
 Evidence: record_handler.pyの本文検証・完了判定・診断処理と、既存の配送・資源管理・実Consumer接続テストを基準にする。
 
-_run_embeddingのループ内でrecord.body_text、parse_assessed_in_scope_event、consumer.consumeの順に呼ぶ。本文やイベントの不正は失敗IDを追加して次のレコードへ進み、Consumerを呼ばない。Consumerの通常例外も個別失敗とする。record_handler.pyとprocess_embedding_recordは廃止し、診断項目の詳細はfailure_recorder、検証ルールはSQS共通型とevent.pyに維持する。
+_run_embeddingのループ内でrecord_input.to_record、record.parse_json、ArticleAssessedInScopeEvent.from_input、consumer.consumeの順に呼ぶ。本文やイベントの不正は失敗IDを追加して次のレコードへ進み、Consumerを呼ばない。Consumerの通常例外も個別失敗とする。record_handler.pyとprocess_embedding_recordは廃止し、診断項目の詳細はfailure_recorder、検証ルールはSQS共通型とイベント所有工程のevents.pyに置く。
 
 Invariants: 資源準備後に全レコードの構造とIDを先に検証し、各本文を検証した後でのみConsumerを呼ぶ。逐次処理、元のmessageId、成功・失敗のログ項目、キャンセルの伝播、資源の終了を維持する。
 Non-goals: 公開起動パス、設定・資源管理、業務イベント契約、ConsumerとSQS共通型の実装、AWS設定は変更しない。
@@ -499,7 +499,7 @@ Done: handler.pyだけで入力検証からConsumer実行・配送結果の集�
 
 ### 入力の段階を区別する命名
 
-Lambdaの入力全体をlambda_event、検証済みレコード集合をrecord_batch、取り出した本文をmessage_body、解析済みの対象内判定イベントをassessed_eventとする。SqsRecordBatch.from_lambda_eventはLambda入力全体からレコード集合を復元し、parse_assessed_in_scope_event(message_body)は本文を共有のArticleAssessedInScopeEventへ変換する。SqsRecord.body_textは配送上の本文を取り出す役割として維持する。
+Lambdaの入力全体をlambda_event、検証済みレコード集合をrecord_batch、JSON解析した本文をparsed_body、解析済みの対象内判定イベントをassessed_eventとする。SqsRecordBatch.from_lambda_eventはLambda入力全体からレコード集合を復元し、SqsRecordInput.to_recordは本文の文字列型を検証する。SqsRecord.parse_jsonの解析結果をArticleAssessedInScopeEvent.from_inputへ渡してイベントを復元する。
 
 変更は命名と参照更新に限定し、検証条件、エラーコードとログの項目名、実行順序、部分バッチ応答は維持する。
 

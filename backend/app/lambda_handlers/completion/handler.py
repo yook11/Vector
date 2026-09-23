@@ -7,6 +7,7 @@ from typing import Any, assert_never
 
 import structlog
 
+from app.collection.article_acquisition.events import IncompleteArticleRecordedEvent
 from app.collection.article_completion.consumer import (
     CompletionFailed,
     CompletionNotRequired,
@@ -18,9 +19,6 @@ from app.collection.article_completion.consumer_failure_classification import (
 )
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
 from app.lambda_handlers.completion.composition import open_completion_resources
-from app.lambda_handlers.completion.event import (
-    parse_incomplete_article_recorded_event,
-)
 from app.lambda_handlers.completion.failure_recorder import (
     CompletionLambdaFailureRecorder,
 )
@@ -31,7 +29,7 @@ from app.lambda_handlers.completion.redelivery_wait import (
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
 from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.records import SqsRecordBatch
+from app.lambda_handlers.sqs.records import SqsRecord, SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
     SqsBatchFailureResponse,
     SqsBatchItemIdentifier,
@@ -81,7 +79,8 @@ async def _run_completion(
 
         failed_items: list[SqsBatchItemIdentifier] = []
         waits: list[RedeliveryWait] = []
-        for index, record in enumerate(batch.records):
+        validated_records: list[SqsRecord] = []
+        for index, record_input in enumerate(batch.records):
             if context.get_remaining_time_in_millis() < MIN_ARTICLE_REMAINING_MILLIS:
                 for unstarted in batch.records[index:]:
                     failed_items.append(
@@ -91,8 +90,10 @@ async def _run_completion(
                 break
             article_event = None
             try:
-                body = record.body_text()
-                article_event = parse_incomplete_article_recorded_event(body)
+                record = record_input.to_record()
+                validated_records.append(record)
+                parsed_body = record.parse_json()
+                article_event = IncompleteArticleRecordedEvent.from_input(parsed_body)
                 completion = await resources.consumer.consume(
                     article_event.payload.incomplete_article_id
                 )
@@ -105,29 +106,33 @@ async def _run_completion(
                         decision=RetryArticleCompletion(retry_at=retry_at)
                     ):
                         if retry_at is not None:
-                            waits.append(RedeliveryWait(record.message_id, retry_at))
+                            waits.append(
+                                RedeliveryWait(record_input.message_id, retry_at)
+                            )
                         failed_items.append(
-                            SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                            SqsBatchItemIdentifier(
+                                itemIdentifier=record_input.message_id
+                            )
                         )
                     case _:
                         assert_never(completion)
             except Exception as exc:
                 recorder.record_processing_error(
-                    exc, message_id=record.message_id, article_event=article_event
+                    exc, message_id=record_input.message_id, article_event=article_event
                 )
                 failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record.message_id)
+                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
                 continue
 
             recorder.record_completion(
                 completion,
-                message_id=record.message_id,
+                message_id=record_input.message_id,
                 article_event=article_event,
             )
         await apply_redelivery_waits(
             waits,
-            records=batch.records,
+            records=validated_records,
             sqs_client=resources.sqs_client,
             queue_url=settings.sqs_article_completion_queue_url,
             context=context,

@@ -26,34 +26,41 @@ def test_batch_preserves_body_without_interpreting_business_event(body):
         " second ",
         "first",
     ]
-    assert [record.body_text() for record in record_batch.records] == [
+    assert [record.to_record().body for record in record_batch.records] == [
         body,
         "another-body",
     ]
 
 
-@pytest.mark.parametrize(
-    ("body_fields", "reason"),
-    [
-        ({}, SqsInputReason.MISSING_REQUIRED_FIELD),
-        ({"body": None}, SqsInputReason.INVALID_TYPE),
-        ({"body": 3}, SqsInputReason.INVALID_TYPE),
-    ],
-)
-def test_invalid_body_is_deferred_until_individual_record_is_read(body_fields, reason):
+def test_missing_body_is_rejected_when_creating_individual_record():
+    """本文欠落は全IDの確認後に当該レコードだけで拒否する。"""
+    record_batch = SqsRecordBatch.from_lambda_event(
+        {"Records": [{"messageId": "missing-body"}]}
+    )
+
+    with pytest.raises(SqsInputError) as caught:
+        record_batch.records[0].to_record()
+
+    assert caught.value.reason is SqsInputReason.MISSING_REQUIRED_FIELD
+    assert caught.value.field == "body"
+
+
+@pytest.mark.parametrize("body", [None, 3, True, {}, [], b"private-body"])
+def test_non_string_body_does_not_prevent_following_record(body):
+    """本文の型不正を個別に拒否し、後続レコードの構築を妨げない。"""
     record_batch = SqsRecordBatch.from_lambda_event(
         {
             "Records": [
-                {"messageId": "bad", **body_fields},
+                {"messageId": "bad", "body": body},
                 {"messageId": "good", "body": "usable-body"},
             ]
         }
     )
     with pytest.raises(SqsInputError) as caught:
-        record_batch.records[0].body_text()
-    assert caught.value.reason is reason
+        record_batch.records[0].to_record()
+    assert caught.value.reason is SqsInputReason.INVALID_TYPE
     assert caught.value.field == "body"
-    assert record_batch.records[1].body_text() == "usable-body"
+    assert record_batch.records[1].to_record().body == "usable-body"
 
 
 def test_duplicate_id_precedes_invalid_body_and_error_does_not_expose_input():
@@ -139,25 +146,27 @@ def test_invalid_message_id_reports_record_position(invalid_record):
 def test_receipt_handle_validation_is_deferred(handle, reason):
     """受信情報の不正はバッチ生成時でなく操作情報の取得時に拒否する。"""
     batch = SqsRecordBatch.from_lambda_event(
-        {"Records": [{"messageId": "id", "receiptHandle": handle}]}
+        {"Records": [{"messageId": "id", "body": "{}", "receiptHandle": handle}]}
     )
     with pytest.raises(SqsInputError) as caught:
-        batch.records[0].receipt_handle_text()
+        batch.records[0].to_record().receipt_handle_text()
     assert caught.value.reason is reason
     assert caught.value.field == "receiptHandle"
 
 
 def test_missing_receipt_handle_is_distinct_from_invalid_type():
     """receiptHandleの欠落は型不正と区別する。"""
-    batch = SqsRecordBatch.from_lambda_event({"Records": [{"messageId": "id"}]})
+    batch = SqsRecordBatch.from_lambda_event(
+        {"Records": [{"messageId": "id", "body": "{}"}]}
+    )
     with pytest.raises(SqsInputError) as caught:
-        batch.records[0].receipt_handle_text()
+        batch.records[0].to_record().receipt_handle_text()
     assert caught.value.reason is SqsInputReason.MISSING_REQUIRED_FIELD
 
 
 def test_receipt_handle_preserves_original_text():
     """AWSから渡された操作情報の有効な文字列を加工しない。"""
     batch = SqsRecordBatch.from_lambda_event(
-        {"Records": [{"messageId": "id", "receiptHandle": " handle "}]}
+        {"Records": [{"messageId": "id", "body": "{}", "receiptHandle": " handle "}]}
     )
-    assert batch.records[0].receipt_handle_text() == " handle "
+    assert batch.records[0].to_record().receipt_handle_text() == " handle "
