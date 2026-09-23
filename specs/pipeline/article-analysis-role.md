@@ -9,7 +9,7 @@
   - DB IAM認証とTLSを維持する。
   - vector_appの権限と、vector_appで動く他の処理は変更しない。
   - 権限の正本は初期化SQLとmigrationとし、テストのfixtureでGRANTを足さない。
-- Non-goals: vector_appの縮小、他の処理のロール分離、IAMロールの概念統合、行単位の制限、段ごとのロール分割。
+- Non-goals: vector_appの縮小、他の処理のロール分離、行単位の制限、段ごとのロール分割。
 - Done: vector_article_analysisに許可一覧どおりの権限を付与し、3段が新ロールで動くことをローカル実DBで確認する。3つのLambdaが新ロールで接続し、実行ポリシーと権限境界にvector_appへの接続許可が残らない。
 
 ## 権限の粒度
@@ -39,9 +39,14 @@
 
 ## 切替
 
+IAMロールの概念統合の[AI分析](../platform/iam-role-consolidation.md)と同時に行う。対象の3関数が同じで、新しい共通権限境界を最初から新ロールだけで作れば、旧権限境界の撤去でvector_appへの接続許可も無くなるため。
+
 1. ロールを作成し、付与のmigrationを適用する。
-2. 3つのconsumerの権限境界と実行ポリシーに新ロールへの接続許可を加え、接続URLを新ロールへ切り替える。権限境界の変更を先に適用し、更新前の設定で動く実行のためにvector_appへの接続許可は残す。
-3. 3つのLambdaの設定更新が完了し、切替後の処理に認証・権限のエラーが無いことを確認してから、権限境界と実行ポリシーからvector_appへの接続許可を外す。
+2. bootstrapでAI分析の共通権限境界を作り、DB接続はvector_article_analysisだけを許可する。3つの旧権限境界は残す。
+3. 本体で共通の実行ロールを作り、3つのLambdaの実行ロールと接続URLを同時に切り替え、旧ロールを削除する。
+4. 切替後の処理に認証・権限のエラーが無いことを確認してから、bootstrapから旧権限境界を撤去する。
+
+旧権限境界を撤去するまでは、本体の変更を戻せば旧ロールとvector_appでの接続に戻せる。
 
 ## 検証
 
@@ -50,4 +55,4 @@
 - curation: `local_tests/curation/`を新設し、migration適用済みDBで製品のhandlerを新ロールで動かす。signalと判定した記事はcuration結果・監査・Outboxが保存され、noiseと判定した記事はnoise・監査が保存されてOutboxを発行しないことを確認する。AIとの通信は境界で差し替える。
 - assessment・embedding: 既存のローカル実DBテストの接続を新ロールへ切り替える。
 - migration: `local_tests/migrations/`でupgrade・downgradeの往復、ロール不在時の停止、既存データとACLの維持を確認する。
-- インフラ: 3つのconsumerと権限境界のTerraformテストで、接続URLと接続許可の対象ユーザーを確認する。
+- インフラ: AI分析の共通実行ロールと権限境界のTerraformテストで、3つのLambdaの接続URLと、接続を許可するDBユーザーがvector_article_analysisだけであることを確認する。

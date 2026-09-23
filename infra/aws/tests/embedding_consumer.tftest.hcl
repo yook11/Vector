@@ -174,60 +174,6 @@ run "consumer_network_is_private_and_gemini_only" {
   }
 }
 
-run "consumer_permissions_are_scoped" {
-  command = plan
-
-  assert {
-    condition = (
-      aws_iam_role.embedding_consumer.name == "slice-test-embedding-consumer-lambda" &&
-      aws_iam_role.embedding_consumer.permissions_boundary == "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-embedding-consumer-lambda-boundary" &&
-      jsondecode(aws_iam_role.embedding_consumer.assume_role_policy).Statement[0].Principal.Service == "lambda.amazonaws.com"
-    )
-    error_message = "専用boundaryとLambdaの信頼関係を維持する。"
-  }
-  assert {
-    condition = (
-      length(jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement) == 6 &&
-      toset([for s in jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement : s.Sid]) == toset(["ConsumeEmbeddingEvents", "ReadGeminiKey", "RdsIamAuthAsApp", "WriteConsumerLogs", "ManageLambdaNetworkInterfaces", "DenyEniOperationsFromFunctionCode"]) &&
-      alltrue([for s in jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement :
-        s.Effect == (contains(["DenyEniOperationsFromFunctionCode", "NoPrivilegeEscalation"], s.Sid) ? "Deny" : "Allow")
-      ]) &&
-      alltrue([for s in jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement :
-        !contains(["ManageLambdaNetworkInterfaces", "DenyEniOperationsFromFunctionCode"], s.Sid) ? true :
-        s.Resource == "*" && toset(s.Action) == toset([
-          "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
-          "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
-        ])
-      ]) &&
-      alltrue([for s in jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement :
-        s.Sid != "ConsumeEmbeddingEvents" ? true :
-        toset(s.Action) == toset(["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]) && s.Resource == aws_sqs_queue.outbox["embedding"].arn
-      ]) &&
-      alltrue([for s in jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement :
-        s.Sid != "ReadGeminiKey" ? true :
-        s.Action == "ssm:GetParameter" && s.Resource == "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/embedding-consumer/gemini-api-key"
-      ]) &&
-      alltrue([for s in jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement :
-        s.Sid != "RdsIamAuthAsApp" ? true :
-        s.Action == "rds-db:connect" && s.Resource == "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_app"
-      ]) &&
-      alltrue([for s in jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement :
-        s.Sid != "WriteConsumerLogs" ? true :
-        toset(s.Action) == toset(["logs:CreateLogStream", "logs:PutLogEvents"]) && s.Resource == "${aws_cloudwatch_log_group.embedding_consumer.arn}:*"
-      ])
-    )
-    error_message = "SQS・SSM・DB・ログの権限をConsumerの対象に限定する。"
-  }
-  assert {
-    condition = alltrue([for s in jsondecode(aws_iam_role_policy.embedding_consumer.policy).Statement :
-      s.Sid != "DenyEniOperationsFromFunctionCode" ? true :
-      s.Effect == "Deny" && toset(s.Action) == toset(local.embedding_consumer_eni_actions) &&
-      s.Condition.ArnEquals["lambda:SourceFunctionArn"] == "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-embedding-consumer"
-    ])
-    error_message = "関数コードからのENI操作を明示的に拒否する。"
-  }
-}
-
 run "dlq_notification_without_consumer_activation" {
   command = plan
 
@@ -324,7 +270,7 @@ run "consumer_image_and_enabled_mapping" {
       aws_lambda_function.embedding_consumer.image_config[0].working_directory == "/app" &&
       aws_lambda_function.embedding_consumer.vpc_config[0].subnet_ids == toset([aws_subnet.embedding_consumer.id]) &&
       aws_lambda_function.embedding_consumer.vpc_config[0].security_group_ids == toset([aws_security_group.embedding_consumer.id]) &&
-      aws_lambda_function.embedding_consumer.role == aws_iam_role.embedding_consumer.arn &&
+      aws_lambda_function.embedding_consumer.role == aws_iam_role.article_analysis.arn &&
       aws_lambda_function.embedding_consumer.logging_config[0].log_group == aws_cloudwatch_log_group.embedding_consumer.name &&
       aws_lambda_function.embedding_consumer.logging_config[0].log_format == "Text" &&
       aws_lambda_function.embedding_consumer.tracing_config[0].mode == "PassThrough"
@@ -334,7 +280,7 @@ run "consumer_image_and_enabled_mapping" {
   assert {
     condition = aws_lambda_function.embedding_consumer.environment[0].variables == tomap({
       ENV                           = "production"
-      DATABASE_URL                  = local.backend_db_url["vector_app"]
+      DATABASE_URL                  = local.backend_db_url["vector_article_analysis"]
       DB_IAM_AUTH                   = "true"
       GEMINI_API_KEY_PARAMETER_PATH = local.embedding_consumer_parameter_path
       EGRESS_PROXY_URL              = local.proxy_url

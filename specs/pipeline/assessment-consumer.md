@@ -361,7 +361,7 @@ PR作成時の最終検証: 設定名・本文準備エラーの責務整理と�
 
 Problem: 従来の部品テスト用DB・Assessor差し替えだけでは確認できない、製品Engine・実SDK・handlerを含めた保存と接続管理を保証する。
 Evidence: `local_tests/embedding/`、共通DB構築、AssessmentのConsumer・Service・Resourcesと既存テストを基準とする。
-Invariants: migration適用済みDBへ製品Engineから`vector_app`で接続する。製品コード・DB schema・権限は変更しない。既存の設定・エラー・監査・メトリクスの契約を維持する。
+Invariants: migration適用済みDBへ製品Engineから`vector_article_analysis`で接続する。製品コード・DB schema・権限は変更しない。既存の設定・エラー・監査・メトリクスの契約を維持する。
 Non-goals: AWS IAMの実認証、本番TLS、SQS実配送、AI実通信、デプロイ、対象内と対象外の同時保存に対する排他制御。
 Done: 実呼び出しの確定保存・失敗時の原子性・同じ区分での重複抑止・資源解放を検証し、移した保証を既存テストに重複して残さない。
 

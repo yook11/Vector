@@ -293,6 +293,7 @@ run "passrole_allows_only_pipeline_lambda_roles" {
           local.completion_outbox_relay_role_arn,
           local.auth_rate_limit_cleanup_lambda_role_arn,
           "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-lambda",
+          "arn:aws:iam::123456789012:role/slice-test/slice-test-article-analysis-lambda",
         ]) && s.Condition.StringEquals["iam:PassedToService"] == "lambda.amazonaws.com"
       ]) &&
       alltrue([for s in local.outbox_pass_role_guards : s.Sid != "DenyPipelineLambdaRolesToOtherServices" ? true :
@@ -310,6 +311,7 @@ run "passrole_allows_only_pipeline_lambda_roles" {
           local.completion_outbox_relay_role_arn,
           local.auth_rate_limit_cleanup_lambda_role_arn,
           "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-lambda",
+          "arn:aws:iam::123456789012:role/slice-test/slice-test-article-analysis-lambda",
         ]) && s.Condition.StringNotEquals["iam:PassedToService"] == "lambda.amazonaws.com"
       ]) &&
       alltrue([for s in local.outbox_pass_role_guards : s.Sid != "DenyPassRoleToSchedulerExceptPipelineRoles" ? true :
