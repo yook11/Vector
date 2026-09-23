@@ -21,7 +21,7 @@ backfillは記事・分析結果・未完成記事を読み、期限切れの整
 - 削除: analyzable_articlesだけに付与する。子表の削除とpipeline_events.article_idのNULL化は外部キーの動作として参照側の表の所有者権限で動くため、子表には付与しない。
 - 追加: 除外2表は表単位とする。INSERTは既存行を変えないため。
 - 更新: incomplete_articlesのstatus・leased_until・updated_at列だけとする。
-- 行ロック: 整理の前にanalyzable_articles・article_curations・analyzed_articlesの対象行をFOR UPDATEでロックする。PostgreSQLはこれに対象表の少なくとも1列のUPDATE権限を要求し、DELETE権限では代われないため、3表のid列だけにUPDATEを付与する。idは書き換えても本文・分析結果・時刻が変わらず、参照されている行の変更は外部キーが拒否する。incomplete_articlesのロックは更新する列の権限で成立する。
+- 行ロック: 整理の前にanalyzable_articles・article_curations・analyzed_articlesの対象行をFOR UPDATEでロックする。PostgreSQLはこれに対象表の少なくとも1列のUPDATE権限を要求し、DELETE権限では代われないため、3表のid列だけにUPDATEを付与する。idは書き換えても本文・分析結果・時刻が変わらず、参照されている行の変更は外部キーが拒否する。参照されていない行のidは書き換えられ、採番より先の値にされると後の追加が一意制約違反になるが、行ロックのための付与として許容する。incomplete_articlesのロックは更新する列の権限で成立する。
 - 採番: pipeline_eventsのidのsequenceのUSAGEだけを付与する。除外2表は採番しない。
 - 接続: 接続先DBのCONNECTとpublicのUSAGEを直接付与する。
 - 新しい表への自動付与、REFERENCES、TRUNCATEは付与しない。backfillが新しい表・列を使うときはGRANTのmigrationを追加する。
