@@ -43,6 +43,12 @@ resource "aws_iam_policy" "backfill_lambda_boundary" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid      = "RdsIamAuthAsBackfill"
+        Effect   = "Allow"
+        Action   = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector_backfill"
+      },
+      {
         Sid      = "RdsIamAuthAsApp"
         Effect   = "Allow"
         Action   = "rds-db:connect"

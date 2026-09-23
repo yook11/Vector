@@ -19,7 +19,7 @@
 | embedding | `${name_prefix}-embedding-backfill` | `embedding_handler` | `cron(10,40 * * * ? *)` |
 | completion | `${name_prefix}-completion-backfill` | `completion_handler` | `cron(15,45 * * * ? *)` |
 
-handlerのパッケージは `app.lambda_handlers.backfill`。backend ECRイメージをarm64・512MB・120秒・予約同時実行数1で利用する。既存relayのprivate subnetとsecurity groupを再利用し、RDSは `vector_app` のIAM認証、自工程のSQS送信だけを許可する。環境変数はproduction、DB接続、IAM認証、自工程のキューと有効設定のみで、AWSリージョンはLambdaの標準環境変数を使用する。
+handlerのパッケージは `app.lambda_handlers.backfill`。backend ECRイメージをarm64・512MB・120秒・予約同時実行数1で利用する。既存relayのprivate subnetとsecurity groupを再利用し、RDSは `vector_backfill` のIAM認証、自工程のSQS送信だけを許可する。環境変数はproduction、DB接続、IAM認証、自工程のキューと有効設定のみで、AWSリージョンはLambdaの標準環境変数を使用する。
 
 Schedulerはflexible window OFF、入力 `{}`。Scheduler配送再試行とLambda関数エラー再試行はそれぞれ0回、最大イベント有効期間は両方60秒。Lambda非同期実行設定とScheduler実行権限の作成後にscheduleを作成する。基盤側の重複配送は引き続き許容し、未完了記事は次回のDB抽出で拾い直す。
 
