@@ -66,7 +66,7 @@ run "lambda_boundary_limits_database_queues_logs_and_eni" {
   assert {
     condition = (
       jsondecode(aws_iam_policy.backfill_lambda_boundary.policy).Statement == [
-        { Sid = "RdsIamAuthAsApp", Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_app" },
+        { Sid = "RdsIamAuthAsBackfill", Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_backfill" },
         { Sid = "SendPipelineEvents", Effect = "Allow", Action = "sqs:SendMessage", Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-${stage}"] },
         { Sid = "WriteBackfillLogs", Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/slice-test-${stage}-backfill:*"] },
         { Sid = "ManageLambdaNetworkInterfaces", Effect = "Allow", Action = local.outbox_lambda_eni_actions, Resource = "*" },
@@ -74,7 +74,7 @@ run "lambda_boundary_limits_database_queues_logs_and_eni" {
         local.boundary_no_escalation_statement,
       ]
     )
-    error_message = "実行権限の天井をbackfillの4キュー・4ロググループとvector_appに限定し、ENIコード実行と権限昇格を拒否する。"
+    error_message = "実行権限の天井をbackfillの4キュー・4ロググループとvector_backfillに限定し、ENIコード実行と権限昇格を拒否する。"
   }
 }
 
@@ -213,20 +213,8 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.embedding_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-embedding-consumer-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_policy.outbox_relay_scheduler_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-outbox-relay-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.assessment_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-consumer-lambda-boundary" }
 }
 
 override_resource {
@@ -251,12 +239,6 @@ override_resource {
   override_during = plan
   target          = aws_iam_policy.agentcore_gateway_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-agentcore-gateway-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.curation_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-consumer-lambda-boundary" }
 }
 
 override_resource {

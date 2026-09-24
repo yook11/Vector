@@ -612,7 +612,7 @@ API例外は既存translate_gemini_errorへ委譲し、未分類例外とキャ�
 
 スライス1のTerraformを実装した。embedding元キューのみ保持4日・可視性720秒・受信上限5回に変更し、保持14日の専用DLQを紐付ける。DLQはembedding元キューだけからredriveを許可し、非TLSを拒否する。
 
-Consumer専用サブネットはprimary AZのCIDR index 28とし、appルートテーブルを使用する。専用SGはRDS・proxy・SSMだけに接続し、proxyはGeminiのみ許可する。実行ロールとbootstrapの専用boundaryは元キュー受信・対象DB・専用Geminiパラメーター読取・専用ログ・LambdaのENI管理に限定する。CIのDLQ管理権限とrelayの送信権限は分離する。
+Consumer専用サブネットはprimary AZのCIDR index 28とし、appルートテーブルを使用する。専用SGはRDS・proxy・SSMだけに接続し、proxyはGeminiのみ許可する。実行ロールとboundaryは[AI分析](../platform/iam-role-consolidation.md)の共通ロールと共通boundaryとし、分析キューの受信・`vector_article_analysis`での接続・AIキーの読取・ログ・LambdaのENI管理に限定する。CIのDLQ管理権限とrelayの送信権限は分離する。
 
 DLQ滞留通知は`ApproximateNumberOfMessagesVisible`のMaximum・60秒・1評価期間・1件以上・欠測正常で判定し、ALARM/OK遷移を既存SNSへ送る。自動停止・自動再投入は行わない。障害時は後続のSQSトリガーを手動停止・再開する。
 

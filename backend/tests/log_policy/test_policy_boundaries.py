@@ -30,26 +30,24 @@ class TestPurposeRuleConstants:
         assert "synthetic" not in json.dumps(output)
 
     @pytest.mark.parametrize("key", sorted(ARTICLE_TEXT_KEYS))
-    def test_external_content_preserves_structured_and_assignment_protection(
-        self, key
-    ) -> None:
-        """外部コンテンツのポリシーはdenyで本文項目を除外し、maskで文字列内の本文値を伏せる。"""
+    def test_external_content_denies_article_fields(self, key) -> None:
+        """外部コンテンツのポリシーはdenyで本文項目を除外する。"""
         output = LogPolicyProcessor()(
             PolicyLogger(EXTERNAL_CONTENT_POLICY, structlog.ReturnLogger()),
             "info",
-            {"event": f"{key}='synthetic body'", key: "synthetic body"},
+            {"event": "failed", key: "synthetic body"},
         )
-        assert output["event"] == f"{key}=***"
         assert key not in output
+        assert output["_denied_keys"] == [key]
 
 
 class TestDenyAndMaskSeparation:
-    """deny は構造化項目、mask は文字列内の値にだけ働き、互いの効果を与えない。"""
+    """deny と mask は項目名で働き、文字列の中に書かれた値は変えない。"""
 
     def test_inherited_deny_and_mask_apply_to_their_respective_targets(self) -> None:
-        """継承済みのdenyで構造化項目を除外し、maskで文字列内の値を伏せる。"""
+        """継承済みのdenyで項目を除外し、継承済みのmaskで項目の値を置き換える。"""
         purpose = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset(), mask=frozenset({"RestrictedSample"})
+            LogPolicy.INFRASTRUCTURE, frozenset(), mask=frozenset({"MaskedSample"})
         )
         purpose = purpose.extend(
             allow=frozenset(), deny=frozenset({"RestrictedSample"})
@@ -59,39 +57,46 @@ class TestDenyAndMaskSeparation:
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
             {
-                "event": "RestrictedSample='synthetic event' failed",
                 "RestrictedSample": "synthetic field",
-                "payload": {"RestrictedSample": "synthetic nested", "count": 1},
+                "payload": {
+                    "RestrictedSample": "synthetic nested",
+                    "MaskedSample": "synthetic nested",
+                    "count": 1,
+                },
             },
         )
-        assert output["event"] == "RestrictedSample=*** failed"
         assert "RestrictedSample" not in output
         assert output["_denied_keys"] == ["RestrictedSample"]
-        assert output["payload"] == {"count": 1}
+        assert output["payload"] == {"MaskedSample": "***", "count": 1}
         assert output["_denied_nested_count"] == 1
 
-    def test_deny_alone_does_not_mask_text_assignments(self) -> None:
-        """追加denyは構造化項目を除外しても文字列内の値はマスクしない。"""
+    @pytest.mark.parametrize(
+        "protection_rules",
+        [
+            pytest.param({"deny": frozenset({"restricted_sample"})}, id="deny"),
+            pytest.param({"mask": frozenset({"restricted_sample"})}, id="mask"),
+        ],
+    )
+    def test_protection_rules_do_not_change_text_content(
+        self, protection_rules
+    ) -> None:
+        """deny・maskに登録したキー名が文字列の中に書かれていても、その値は変えない。"""
         rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE,
-            frozenset({"payload"}),
-            deny=frozenset({"restricted_sample"}),
+            LogPolicy.INFRASTRUCTURE, frozenset({"payload"}), **protection_rules
         )
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
             {
                 "event": "restricted_sample=synthetic",
-                "restricted_sample": "hidden",
-                "payload": {"restricted_sample": "hidden", "count": 1},
+                "payload": {"note": "restricted_sample=synthetic"},
             },
         )
         assert output["event"] == "restricted_sample=synthetic"
-        assert "restricted_sample" not in output
-        assert output["payload"] == {"count": 1}
+        assert output["payload"] == {"note": "restricted_sample=synthetic"}
 
-    def test_mask_alone_does_not_remove_or_replace_structured_values(self) -> None:
-        """maskは文字列内のキー付き値にだけ働き、辞書の同名項目は残す。"""
+    def test_mask_preserves_field_names_when_replacing_values(self) -> None:
+        """mask対象の項目名はトップレベルでもネスト内でも残し、値全体を置き換える。"""
         rules = LogPolicyRules(
             LogPolicy.INFRASTRUCTURE,
             frozenset({"payload", "restricted_sample"}),
@@ -101,88 +106,43 @@ class TestDenyAndMaskSeparation:
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
             {
-                "event": "restricted_sample=synthetic",
+                "event": "completed",
                 "restricted_sample": "visible",
                 "payload": {"restricted_sample": "visible"},
             },
         )
-        assert output["event"] == "restricted_sample=***"
-        assert output["restricted_sample"] == "visible"
-        assert output["payload"] == {"restricted_sample": "visible"}
+        assert output["event"] == "completed"
+        assert output["restricted_sample"] == "***"
+        assert output["payload"] == {"restricted_sample": "***"}
 
-    def test_mask_does_not_grant_top_level_allow(self) -> None:
-        """maskへ追加したキーもallowにないトップレベル項目なら未登録として落とす。"""
+
+class TestTopLevelAllow:
+    """保護規則の登録はトップレベル項目の出力許可を与えない。"""
+
+    @pytest.mark.parametrize(
+        "protection_rules",
+        [
+            pytest.param(
+                {"mask": frozenset({"canonical_url"})},
+                id="mask_without_allow",
+            ),
+            pytest.param(
+                {"sanitize": frozenset({"canonical_url"})},
+                id="sanitize_without_allow",
+            ),
+        ],
+    )
+    def test_protection_rules_do_not_grant_top_level_allow(
+        self, protection_rules
+    ) -> None:
+        """保護規則へ登録してもallowにないトップレベル項目は未登録として落とす。"""
         rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset(), mask=frozenset({"private_text"})
+            LogPolicy.INFRASTRUCTURE, frozenset(), **protection_rules
         )
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
-            {"private_text": "synthetic"},
+            {"canonical_url": "synthetic"},
         )
-        assert "private_text" not in output
+        assert "canonical_url" not in output
         assert output["_unregistered_count"] == 1
-
-
-class TestMaskWiring:
-    """目的別 mask が例外項目・ネストのキーと配列・診断キー名に届く。"""
-
-    def test_custom_mask_applies_to_every_exception_field(self) -> None:
-        """例外文・型名・frameのファイル名と関数名に、同じ目的別maskを適用する。"""
-        error_type = type(
-            "RestrictedSample='synthetic class'", (Exception,), {"__module__": "sample"}
-        )
-
-        def fail():
-            raise error_type("RestrictedSample='synthetic message'")
-
-        fail.__code__ = fail.__code__.replace(
-            co_filename="RestrictedSample='synthetic filename'",
-            co_name="RestrictedSample='synthetic function'",
-        )
-        with pytest.raises(error_type) as captured:
-            fail()
-        rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset(), mask=frozenset({"RestrictedSample"})
-        )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "error",
-            {"event": "failed", "exc_info": captured.value},
-        )
-        assert output["error_class"] == "sample.RestrictedSample=***"
-        assert output["error_message"] == "RestrictedSample=***"
-        assert output["frames"][-1] == {
-            "file": "RestrictedSample=***",
-            "function": "RestrictedSample=***",
-            "line": output["frames"][-1]["line"],
-        }
-
-    def test_nested_keys_and_list_values_use_resolved_mask(self) -> None:
-        """ネストのキー名と配列内の文字列にも目的別maskを適用する。"""
-        rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE,
-            frozenset({"payload"}),
-            mask=frozenset({"private_text"}),
-        )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {"payload": {"private_text=synthetic": ["private_text=other"]}},
-        )
-        assert output["payload"] == {"private_text=***": ["private_text=***"]}
-
-    def test_diagnostic_key_names_use_custom_mask(self) -> None:
-        """denyで除外したキー名の診断にも独立した目的別maskを適用する。"""
-        rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE,
-            frozenset(),
-            deny=frozenset({"private_text=synthetic"}),
-            mask=frozenset({"private_text"}),
-        )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {"private_text=synthetic": "hidden"},
-        )
-        assert output["_denied_keys"] == ["private_text=***"]

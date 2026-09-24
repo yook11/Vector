@@ -6,6 +6,10 @@ Implementation: 基底規則・processor・例外構造化・チェーン構成�
 
 関連: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)、[デプロイ診断ログの共通秘匿ポリシー](../platform/deployment-log-policy.md)
 
+変更状況: [項目別サニタイズのログポリシー](./logging-sanitization-policy.md)を優先する。対象項目の値全体を、検査・再帰の前に `***` へ置き換えるマスクは実装済み。以下の文字列内部の置換をmaskと呼ぶ記述は旧契約であり、その処理は情報漏洩防止としてポリシーから切り離した。項目別サニタイズは `canonical_url`・`source_url` の対応と構築時の検証まで実装済みで、実際の共通・目的別項目の選定は未実施。
+
+文字列内部の処理 (内容検出・キー付き値の置換・置換表記・`BASE_MASK`)、記事本文の文字列内保護、`redact` の語の扱い、それらのテストの配置は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。
+
 ## Problem
 
 structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼び出し側の規律 (`redact_secrets` の手巻き、`logger.exception()` の回避) に依存している。結果として、例外文を丸ごと捨てる箇所と生で出す箇所が混在する。
@@ -325,8 +329,8 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 ## Implementation
 
 - [backend/app/log_policy/base.py](../../backend/app/log_policy/base.py): `LogPolicy`、基底allow・deny・mask、`BASE_LOG_RULES`、`normalize_key`、`LogPolicyRules` (生成時のallow・deny・mask確定と継承)
-- [backend/app/log_policy/sanitize.py](../../backend/app/log_policy/sanitize.py): S1/S2 パターン集、`sanitize_text`（内容から秘密情報を検出する）。長さ制限は出力側
-- [backend/app/log_policy/mask.py](../../backend/app/log_policy/mask.py): `mask_assignments`（指定キーに対応する文字列内の値全体を伏せる）
+- [backend/app/log_policy/leak_prevention.py](../../backend/app/log_policy/leak_prevention.py): 情報漏洩防止（文字列に紛れた既知の種類の認証情報を種類付きの表記へ置き換える）。旧 `sanitize_text`・`mask_assignments` を置き換えた。長さ制限は出力側
+- [backend/app/log_policy/sanitize.py](../../backend/app/log_policy/sanitize.py): 項目別サニタイズの対応表と共通入口 `sanitize_field_value`
 - [backend/app/log_policy/exceptions/](../../backend/app/log_policy/exceptions/): 種類ごとの変換。`sql.py` は原因文の保護とSQL診断、`validation.py` はPydantic検証、`event_validation.py` はイベント検証、`application.py` は共通アプリケーション例外を担当し、すべて `ConvertedException` を返す
 - [backend/app/log_policy/exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py): `exc_info` の解決と `ExceptionLogFields` の組み立て。型は型名・原因文・frameと任意の `error_details` / `causes` / `exceptions` を持つ最終出力の契約とする。原因ノードにも同じ型を使う。伏せ字と上限は値準備が担当する
 - [backend/app/log_policy/exceptions/conversion.py](../../backend/app/log_policy/exceptions/conversion.py): 例外1件の種類別変換を担当し、原因文・診断属性・内部原因の集約状態を返す。SQL内部の診断抽出は `sql.py` に委譲し、通常の原因連鎖とグループの探索は `extraction.py` が担当する

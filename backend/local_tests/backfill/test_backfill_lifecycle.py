@@ -23,7 +23,7 @@ async def test_connections_live_until_scope_exit(system_database, lifecycle):
         scope = lifecycle.invocations[-1]
         assert pid in scope.pids
         assert not scope.disposed
-        async with system_database.connect("vector_app") as connection:
+        async with system_database.connect("vector_backfill") as connection:
             assert (
                 await connection.fetchval(
                     "SELECT count(*) FROM pg_stat_activity WHERE pid=$1", pid

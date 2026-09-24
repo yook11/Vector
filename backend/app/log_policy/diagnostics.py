@@ -3,8 +3,7 @@
 from typing import Any
 
 from app.log_policy.budget import TEXT_LIMIT, LogEventBudget
-from app.log_policy.mask import mask_assignments
-from app.log_policy.sanitize import sanitize_text
+from app.log_policy.leak_prevention import prevent_credential_leaks
 
 
 class LogProcessingDiagnostics:
@@ -34,10 +33,8 @@ class LogProcessingDiagnostics:
     def record_nested_key_limit_reached(self) -> None:
         self._policy_limited = True
 
-    def prepare_log_fields(
-        self, *, mask: frozenset[str], budget: LogEventBudget
-    ) -> dict[str, Any]:
-        """入力由来の診断を共有予算で検査し、マスク・サニタイズして返す。"""
+    def prepare_log_fields(self, *, budget: LogEventBudget) -> dict[str, Any]:
+        """入力由来の診断を共有予算で検査し、情報漏洩防止を適用して返す。"""
         diagnostic_fields = self.as_fields()
         if not self._denied_keys:
             return diagnostic_fields
@@ -55,8 +52,7 @@ class LogProcessingDiagnostics:
             if len(key) > TEXT_LIMIT:
                 prepared_keys.append("[limit]")
                 continue
-            sanitized_key = sanitize_text(key)
-            prepared_keys.append(mask_assignments(sanitized_key, mask=mask))
+            prepared_keys.append(prevent_credential_leaks(key))
         diagnostic_fields["_denied_keys"] = prepared_keys
         return diagnostic_fields
 

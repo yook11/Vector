@@ -1,6 +1,6 @@
 # IAMロールの概念別統合
 
-Status: 第一歩（backfill）を実装済み（2026-09-22）。本番適用済みで、旧boundaryも撤去済み。配信・AI分析・外部取得は未着手。
+Status: 救済（backfill）とAI分析を実装済み（2026-09-23）。いずれも本番適用済みで、旧boundaryも撤去済み。配信・外部取得は未着手。
 
 ## Work Definition
 
@@ -25,13 +25,13 @@ Status: 第一歩（backfill）を実装済み（2026-09-22）。本番適用済
 ## 切替手順
 
 1. bootstrapで新boundaryと新ロール名を許可表に加え、旧boundaryは残す。管理者経路でapplyする。
-2. 本体で新ロールを作り、関数の `role` とscheduleの `role_arn`／groupを切り替え、旧ロールと旧groupを削除する。CI applyは `/${name_prefix}/` 配下に `iam:*` を持つため旧ロールの削除は許可表に依存しない。
+2. 本体で新ロールを作り、関数の `role` とscheduleの `role_arn`／groupを切り替え、旧ロールと旧groupを削除する。CI applyは `/${name_prefix}/` 配下に `iam:*` を持つため旧ロールの削除は許可表に依存しない。同じapplyで旧ロールも削除すると、関数の`role`更新より先に旧ロールが消えることがある（AI分析で観測）。流量のある関数では、旧ロールを残したまま切り替え、次のapplyで削除する。
 3. 旧boundaryは旧ロールに付いている間は削除できないため、2の後にbootstrapから撤去し、段共通boundaryを元のアドレスへ移す。
 
 ## Implementation
 
 - 救済（backfill）: 段別ロール6本・boundary 6本を `${name_prefix}-backfill-lambda`／`-scheduler` とboundary 2本へ統合。`apply_role_creation` は6,136→5,380字、`apply_pass_role` は5,148→4,448字、`apply_backfill` は4,138→3,074字（テスト用prefix）。切替後に段別の旧boundary 6本と旧schedule／groupの許可を撤去した。
-- AI分析: 未着手。DB接続先の切替と同時に行う（[記事単位AI分析のDBロール分離](../pipeline/article-analysis-role.md)）。
+- AI分析: 関数ごとのロール3本・boundary 3本を`${name_prefix}-article-analysis-lambda`とboundary 1本へ統合し、DB接続を`vector_article_analysis`へ切り替えた（[記事単位AI分析のDBロール分離](../pipeline/article-analysis-role.md)）。`apply_role_creation`は5,632→5,276字、`apply_pass_role`は4,448→4,120字（テスト用prefix）。切替後の処理に認証・権限のエラーが無いことを確かめてから、旧boundary 3本を撤去した。
 - 配信、外部取得: 未着手。
 
 ## Verification

@@ -652,6 +652,9 @@ jobs:
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_article_analysis') THEN
               CREATE ROLE vector_article_analysis NOLOGIN;
             END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_backfill') THEN
+              CREATE ROLE vector_backfill NOLOGIN;
+            END IF;
           END \$\$;
           EOF
 
@@ -904,6 +907,9 @@ jobs:
             END IF;
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_article_analysis') THEN
               CREATE ROLE vector_article_analysis NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_backfill') THEN
+              CREATE ROLE vector_backfill NOLOGIN;
             END IF;
           END \$\$;
           EOF

@@ -26,6 +26,7 @@ def test_failure_always_removes_its_own_compose_project(monkeypatch, failure):
                     "POSTGRES_OUTBOX_RELAY_PASSWORD": "relay-test",
                     "POSTGRES_AUTH_CLEANUP_PASSWORD": "cleanup-test",
                     "POSTGRES_ARTICLE_ANALYSIS_PASSWORD": "analysis-test",
+                    "POSTGRES_BACKFILL_PASSWORD": "backfill-test",
                 }
             }
         }
