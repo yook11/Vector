@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from app.log_policy.sanitize import SANITIZABLE_FIELDS
+
 
 class LogPolicy(StrEnum):
     """logger 構築時に宣言する、適用するポリシーの識別子。"""
@@ -107,11 +109,17 @@ class LogPolicyRules:
             "sanitize",
             frozenset(normalize_key(key) for key in self.sanitize),
         )
+        name = self.policy.value if self.policy is not None else "base"
         # allow と確定済み deny の重複は定義時に落とし、processor に到達させない。
         overlap = self.allow & self.deny
         if overlap:
-            name = self.policy.value if self.policy is not None else "base"
             raise ValueError(f"{name}: allow が deny と重複: {sorted(overlap)}")
+        # 登録漏れを、ログ出力時の処理失敗ではなく定義時に検出する。
+        unregistered = self.sanitize - SANITIZABLE_FIELDS
+        if unregistered:
+            raise ValueError(
+                f"{name}: 対応するサニタイズがない項目: {sorted(unregistered)}"
+            )
 
     def extend(
         self,

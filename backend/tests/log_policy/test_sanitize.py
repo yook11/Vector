@@ -54,6 +54,11 @@ class TestArticleUrl:
                 "https://example.com/a/1?p=123",
                 id="empty_fragment",
             ),
+            pytest.param(
+                "https://user:syn\nthetic@example.com/a/1",
+                "https://example.com/a/1",
+                id="userinfo_split_by_newline",
+            ),
         ],
     )
     def test_userinfo_and_fragment_are_removed(self, url: str, expected: str) -> None:

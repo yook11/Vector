@@ -1,7 +1,7 @@
 # ログの情報漏洩防止と項目別サニタイズの責務分離
 
 作成: 2026-09-24
-Status: 情報漏洩防止を実装済み (Step 3)・サニタイズの対応表と構築時の検証は未実装 (Step 4)
+Status: 情報漏洩防止と項目別サニタイズを実装済み (Step 4)・関連仕様の同期は未実施 (Step 5)
 
 [共通基底ポリシー](./logging-base-policy.md)と[項目別サニタイズのログポリシー](./logging-sanitization-policy.md)の後続として、全文字列に適用している処理を情報漏洩防止として定義し直し、項目別サニタイズとの責務を分ける差分仕様。文字列内部の処理とサニタイズの対象は本書を優先する。
 
@@ -78,7 +78,7 @@ Status: 情報漏洩防止を実装済み (Step 3)・サニタイズの対応表
 
 - 対応表には、調査に要る部分を定義した処理だけを登録する。情報漏洩防止の検出処理は登録しない。
 - 最初の登録は `canonical_url`・`source_url` → `sanitize_article_url` とする。実際のポリシーでの有効化は後続とし、基底の `sanitize` は空のままとする。
-- `LogPolicyRules` は正規化後の `sanitize` に対応表にない項目名があれば、構築時に `ValueError` を出す。登録を忘れた項目の値がそのまま出力されることを防ぐ。
+- `LogPolicyRules` は正規化後の `sanitize` に対応表にない項目名があれば、構築時に `ValueError` を出す。登録漏れを、ログ出力時の処理失敗ではなく定義時に検出する。
 - 共通入口は正規化済みの登録項目名を受け取る。値が `str` でなければ `[unsupported]` を返す。
 
 ### `sanitize_article_url`
@@ -92,7 +92,8 @@ Status: 情報漏洩防止を実装済み (Step 3)・サニタイズの対応表
 | フラグメント | 落とす |
 
 - 追跡用パラメーターの除去は、値の発生元である `CanonicalArticleUrl` の正規化に任せる。log_policy から collection の処理を参照しない。
-- userinfo もフラグメントもない値は変更しない。URL として分解できない値は `[unsupported]` にする。
+- userinfo は、URL の分解で除かれるタブ・改行を挟んでいても残さない。
+- userinfo もフラグメントもない値は、URL の表記の揃え (scheme の小文字化、タブ・改行の除去など) を除き変更しない。URL として分解できない値は `[unsupported]` にする。
 - 例: `https://user:pass@example.com/a/1?p=123#top` → `https://example.com/a/1?p=123`
 
 ## テストの配置
