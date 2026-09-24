@@ -23,7 +23,7 @@ from tests.iam_fixtures import inject_test_db_signer
 def backfill_connection(system_database, monkeypatch):
     url = inject_test_db_signer(
         monkeypatch,
-        system_database.url("vector_app", sqlalchemy=True),
+        system_database.url("vector_backfill", sqlalchemy=True),
         resources_module=resources,
     )
     for key, value in {

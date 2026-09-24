@@ -76,7 +76,7 @@ RLSによる行単位の可視性、関数のEXECUTE、全組み込みロール�
 ## 配置と実行
 
 - `backend/local_tests/permissions/`: 許可一覧・権限照合・代表的な実操作。Relayの禁止操作はSQLSTATE 42501で拒否を確認する。
-- `permissions/test_auth_permissions.py`・`test_app_permissions.py`・`test_collect_permissions.py`・`test_outbox_relay_permissions.py`・`test_article_analysis_permissions.py`・`test_backfill_permissions.py`にロールごとの期待値と操作を置き、`test_role_boundaries.py`に接続主体・管理属性・ロール切替・schema権限の共通検査を置く。
+- `permissions/test_auth_permissions.py`・`test_app_permissions.py`・`test_collect_permissions.py`・`test_outbox_relay_permissions.py`・`test_article_analysis_permissions.py`・`test_backfill_permissions.py`にロールごとの期待値と操作を置き（backfillは期待値だけを置き、成功する操作は`local_tests/backfill/`のフロー試験が確かめる）、`test_role_boundaries.py`に接続主体・管理属性・ロール切替・schema権限の共通検査を置く。
 - `permissions/support.py`は実効権限と対象オブジェクトを取得し、期待する許可一覧の判定は各ロールのテストが担う。
 - `backend/local_tests/outbox_relay/`: 既存Relayテストの実行接続をvector_outbox_relayへ切り替え、配送成功・再試行・停止・並行実行・障害時の保存結果を検証する。repository操作ごとの成功権限テストは重ねず、Relayの振る舞いで確認する。
 - `backend/local_tests/migrations/test_outbox_relay_migration.py`: z22からz23への往復、既存Outboxデータと既存ACLの維持を確認する。

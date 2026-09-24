@@ -31,6 +31,7 @@ Role = Literal[
     "vector_outbox_relay",
     "vector_auth_rate_limit_cleanup",
     "vector_article_analysis",
+    "vector_backfill",
 ]
 
 
@@ -96,6 +97,7 @@ async def _prepare_dedicated_role_logins(database: SystemDatabase) -> None:
             "vector_outbox_relay",
             "vector_auth_rate_limit_cleanup",
             "vector_article_analysis",
+            "vector_backfill",
         ):
             statement = await connection.fetchval(
                 "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', $1::text, $2::text)",
@@ -222,6 +224,7 @@ def migrated_database() -> Iterator[SystemDatabase]:
                     "POSTGRES_AUTH_CLEANUP_PASSWORD"
                 ],
                 "vector_article_analysis": values["POSTGRES_ARTICLE_ANALYSIS_PASSWORD"],
+                "vector_backfill": values["POSTGRES_BACKFILL_PASSWORD"],
             },
         )
         asyncio.run(_prepare_dedicated_role_logins(database))
