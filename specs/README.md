@@ -95,6 +95,8 @@ API契約の正本はFastAPIのPydantic schema、DB変更の正本はAlembic mig
 | Observability | [アプリケーションログの概念別ポリシーとCloudWatch集約](./observability/application-logging-policy.md) | Accepted |
 | Observability | [AI分析のログポリシー](./observability/ai-analysis-logging-policy.md) | Accepted |
 | Observability | [アプリケーションログの共通基底ポリシー](./observability/logging-base-policy.md) | Partially implemented |
+| Observability | [項目別サニタイズのログポリシー](./observability/logging-sanitization-policy.md) | Partially implemented |
+| Observability | [ログの情報漏洩防止と項目別サニタイズの責務分離](./observability/logging-leak-prevention-policy.md) | Implemented |
 | Observability | [Assessment outcome metrics](./observability/logfire-assessment-outcome-metrics.md) | Implemented |
 | Observability | [Completion outcome metrics](./observability/logfire-completion-outcome-metrics.md) | Implemented |
 | Observability | [Curation outcome metrics](./observability/logfire-curation-outcome-metrics.md) | Implemented |

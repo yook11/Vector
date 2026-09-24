@@ -20,6 +20,10 @@ class TestDefinition:
         assert BASE_LOG_RULES.deny == BASE_DENY
         assert BASE_LOG_RULES.mask == BASE_MASK
 
+    def test_base_mask_is_empty(self) -> None:
+        """認証キーはdenyで項目ごと除外するため、基底のmaskには入れない。"""
+        assert BASE_MASK == frozenset()
+
     def test_allow_is_normalized_and_stored_with_base_fields(self) -> None:
         """allowは生成時に正規化と基底の追加を完了し、取得時に再生成しない。"""
         rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"RequestCount"}))
@@ -100,6 +104,25 @@ class TestDefinition:
         """直接生成した規則にも共通の禁止項目が必ず含まれる。"""
         rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset())
         assert rules.deny == BASE_DENY
+
+    def test_input_changes_do_not_change_constructed_rules(self) -> None:
+        """作成に渡した変更可能な入力を書き換えても、確定した各規則は変わらない。"""
+        sanitize_fields = {"canonical_url"}
+        rules = LogPolicyRules(
+            policy=LogPolicy.INFRASTRUCTURE,
+            allow=frozenset({"canonical_url"}),
+            deny=frozenset({"hidden_field"}),
+            mask=frozenset({"private_text"}),
+            sanitize=sanitize_fields,
+        )
+
+        sanitize_fields.clear()
+        sanitize_fields.add("source_url")
+
+        assert rules.allow == BASE_ALLOW | {"canonical_url"}
+        assert rules.deny == BASE_DENY | {"hidden_field"}
+        assert rules.mask == BASE_MASK | {"private_text"}
+        assert rules.sanitize == BASE_LOG_RULES.sanitize | {"canonical_url"}
 
 
 class TestExtension:
@@ -225,3 +248,59 @@ class TestMask:
         )
         parent.extend(allow=frozenset(), mask=frozenset({"child_private"}))
         assert parent.mask == BASE_MASK | {"parent_private"}
+
+
+class TestSanitize:
+    """サニタイズ対象の項目名を正規化し、親子の対象項目を合わせ、対応する処理のない項目名を拒否する。"""
+
+    def test_sanitize_normalizes_field_name(self) -> None:
+        """正規化後のサニタイズ対象のキー集合が期待値と一致する。"""
+        rules = LogPolicyRules(
+            policy=LogPolicy.INFRASTRUCTURE,
+            allow=frozenset(),
+            sanitize=frozenset({"CanonicalUrl"}),
+        )
+
+        assert rules.sanitize == BASE_LOG_RULES.sanitize | {"canonical_url"}
+
+    def test_extension_merges_different_sanitize_fields(self) -> None:
+        """子に別の項目を追加すると、親と子の両方がサニタイズ対象になる。"""
+        parent = LogPolicyRules(
+            policy=LogPolicy.INFRASTRUCTURE,
+            allow=frozenset(),
+            sanitize=frozenset({"canonical_url"}),
+        )
+
+        child = parent.extend(
+            allow=frozenset(),
+            sanitize=frozenset({"source_url"}),
+        )
+
+        assert child.sanitize == BASE_LOG_RULES.sanitize | {
+            "canonical_url",
+            "source_url",
+        }
+
+    def test_extension_does_not_duplicate_same_sanitize_field(self) -> None:
+        """親と子で同じ項目を指定しても、サニタイズ対象は重複しない。"""
+        parent = LogPolicyRules(
+            policy=LogPolicy.INFRASTRUCTURE,
+            allow=frozenset(),
+            sanitize=frozenset({"canonical_url"}),
+        )
+
+        child = parent.extend(
+            allow=frozenset(),
+            sanitize=frozenset({"canonical_url"}),
+        )
+
+        assert child.sanitize == BASE_LOG_RULES.sanitize | {"canonical_url"}
+
+    def test_field_without_registered_sanitizer_fails_at_definition(self) -> None:
+        """対応表にない項目名をサニタイズ対象にすると、定義時に拒否する。"""
+        with pytest.raises(ValueError, match="対応するサニタイズがない項目"):
+            LogPolicyRules(
+                policy=LogPolicy.INFRASTRUCTURE,
+                allow=frozenset(),
+                sanitize=frozenset({"connection_url"}),
+            )

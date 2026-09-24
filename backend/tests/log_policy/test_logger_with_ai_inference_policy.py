@@ -1,4 +1,4 @@
-"""AI推論ポリシーのallow・deny・maskが実際のJSON標準出力に適用される。"""
+"""AI推論ポリシーのallow・denyが実際のJSON標準出力に適用される。"""
 
 import json
 from functools import partial
@@ -82,21 +82,3 @@ def test_denied_field_is_excluded(
     assert private_value not in output
     assert denied_field in log_entry["_denied_keys"]
     assert log_entry["message_id"] == "message-001"
-
-
-@pytest.mark.parametrize("masked_field", ARTICLE_FIELDS_TO_PROTECT)
-def test_masked_assignment_hides_value(
-    logger_with_ai_inference_policy, capsys, masked_field
-) -> None:
-    """ポリシーのmaskで指定された項目の値は文字列内で伏せ、前後の内容はログに出力する。"""
-    private_value = "PRIVATE_ARTICLE_VALUE"
-
-    logger_with_ai_inference_policy.info(
-        f"before {masked_field}='{private_value}' after",
-    )
-
-    output = capsys.readouterr().out
-    log_entry = json.loads(output)
-
-    assert log_entry["event"] == f"before {masked_field}=*** after"
-    assert private_value not in output

@@ -13,8 +13,8 @@ from app.log_policy.processor import LogPolicyProcessor
 pytestmark = pytest.mark.unit
 
 
-def test_sql_details_are_sanitized_in_json_renderer(configure_chain) -> None:
-    """診断属性もJSON化前に共通サニタイズを通す。"""
+def test_sql_details_are_redacted_in_json_renderer(configure_chain) -> None:
+    """診断属性もJSON化前に情報漏洩防止を通す。"""
     configure_chain()
     structlog.configure(
         processors=[LogPolicyProcessor(), structlog.processors.JSONRenderer()],
@@ -29,7 +29,8 @@ def test_sql_details_are_sanitized_in_json_renderer(configure_chain) -> None:
             {
                 "C": "23505",
                 "M": "duplicate",
-                "n": "sk-proj-abcdef0123456789ABCDEFxyz",
+                # 合成値を分割し、秘密検出ツールの規則に一致させない。
+                "n": "AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q",
                 "D": "synthetic-private-row",
             }
         ),
@@ -38,7 +39,7 @@ def test_sql_details_are_sanitized_in_json_renderer(configure_chain) -> None:
     assert output["error_details"] == {
         "kind": "postgresql",
         "sqlstate": "23505",
-        "constraint_name": "sk-***",
+        "constraint_name": "[redacted:gemini_api_key]",
     }
     assert "sqlstate" not in output
     assert "synthetic-private" not in json.dumps(output)
@@ -83,21 +84,22 @@ def test_generated_details_replace_injected_details(configure_chain) -> None:
     assert "synthetic-private" not in json.dumps(capture.entries[0])
 
 
-def test_cause_details_share_purpose_mask() -> None:
-    """原因ノードの診断属性にも選択した目的のmaskを適用する。"""
+def test_cause_details_are_redacted() -> None:
+    """原因ノードの診断属性にも情報漏洩防止を適用する。"""
     cause = IntegrityError(
         "INSERT ...",
         (),
         PostgresError.new(
-            {"C": "23505", "M": "duplicate", "n": "content='synthetic-private'"}
+            {"C": "23505", "M": "duplicate", "n": "password='synthetic-private'"}
         ),
     )
     outer = RuntimeError("wrapped")
     outer.__cause__ = cause
-    rules = BASE_LOG_RULES.extend(allow=frozenset(), mask=frozenset({"content"}))
     output = LogPolicyProcessor()(
-        PolicyLogger(rules, structlog.ReturnLogger()),
+        PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
         "error",
         {"event": "failed", "exc_info": outer},
     )
-    assert output["causes"][0]["error_details"]["constraint_name"] == "content=***"
+    assert output["causes"][0]["error_details"]["constraint_name"] == (
+        "password=[redacted:credential]"
+    )

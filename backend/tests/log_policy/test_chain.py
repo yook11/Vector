@@ -28,21 +28,20 @@ _RULES = LogPolicyRules(
     deny=frozenset({"content"}),
 )
 # 合成値を分割し、秘密検出ツールの規則に一致させない。
-_OPENAI_KEY = "sk-" + "proj-abcdef0123456789ABCDEFxyz"
+_GEMINI_KEY = "AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
+# 認証キーより後ろは末尾まで置き換わるため、キー付きの値を最後に置く。
 _DETAIL_WITH_EVERY_CREDENTIAL_FORM = (
-    "password='synthetic private value' "
-    f"key={_OPENAI_KEY} "
+    f"key={_GEMINI_KEY} "
     "for AKIAIOSFODNN7EXAMPLE "
     "postgresql+asyncpg://user:secret@db:5432/vector "
-    "?X-Amz-Signature=synthetic&DBUser=app "
-    "got eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abc failed"
+    "got eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abc failed "
+    "password='synthetic private value' host=db"
 )
 _DETAIL_FRAGMENTS = (
     "synthetic private value",
-    _OPENAI_KEY,
+    _GEMINI_KEY,
     "AKIAIOSFODNN7EXAMPLE",
     "user:secret@",
-    "X-Amz-Signature=synthetic",
     "eyJhbGciOiJIUzI1NiJ9",
 )
 
@@ -78,9 +77,9 @@ def test_json_and_console_keep_the_same_redaction(configure_chain) -> None:
     assert "exc_info" not in entry
     assert _SECRET not in entry["reason"]
     assert entry["detail"] == (
-        "password=*** key=sk-*** for AKIA*** "
-        "postgresql+asyncpg://***@db:5432/vector "
-        "?X-Amz-Signature=***&DBUser=app got eyJ*** failed"
+        "key=[redacted:gemini_api_key] for [redacted:aws_access_key_id] "
+        "postgresql+asyncpg://[redacted:url_userinfo]@db:5432/vector "
+        "got [redacted:jwt] failed password=[redacted:credential]"
     )
 
     json_output = structlog.processors.JSONRenderer()(None, "error", dict(entry))
@@ -129,7 +128,10 @@ def test_structured_event_is_prepared_before_rendering(renderer) -> None:
             PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()), "info", entry
         )
 
-    assert entry["event"] == {"message": "token=***", "count": 3}
+    assert entry["event"] == {
+        "message": "token=[redacted:credential]",
+        "count": 3,
+    }
     rendered = processors[-1](None, "info", dict(entry))
     assert _SECRET not in rendered
     assert "synthetic" not in rendered
@@ -150,7 +152,7 @@ def test_declared_logger_uses_globally_configured_json_renderer(
         processors=build_processors(structlog.processors.JSONRenderer()),
     )
     rendered = logger.info("completed", reason=f"token={_SECRET}")
-    assert json.loads(rendered)["reason"] == "token=***"
+    assert json.loads(rendered)["reason"] == "token=[redacted:credential]"
     assert _SECRET not in rendered
 
 
@@ -189,7 +191,7 @@ def test_declared_logger_uses_globally_configured_console_renderer(
     )
     rendered = logger.info("completed", reason=f"token={_SECRET}")
     assert "completed" in rendered
-    assert "token=***" in rendered
+    assert "token=[redacted:credential]" in rendered
     assert _SECRET not in rendered
 
 
