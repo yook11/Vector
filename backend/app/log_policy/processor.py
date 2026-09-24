@@ -86,9 +86,7 @@ class LogPolicyProcessor:
             # どのポリシーで処理したログかを、出力に残す。
             if rules.policy is not None:
                 prepared_event["log_policy"] = rules.policy.value
-            prepared_diagnostics = diagnostics.prepare_log_fields(
-                mask=rules.mask, budget=budget
-            )
+            prepared_diagnostics = diagnostics.prepare_log_fields(budget=budget)
             prepared_event.update(prepared_diagnostics)
         except LogBudgetExceeded as exc:
             # 予算オーバー時はログ全体を固定出力へ置換する。

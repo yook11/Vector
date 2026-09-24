@@ -34,7 +34,6 @@ _DETAIL_WITH_EVERY_CREDENTIAL_FORM = (
     f"key={_GEMINI_KEY} "
     "for AKIAIOSFODNN7EXAMPLE "
     "postgresql+asyncpg://user:secret@db:5432/vector "
-    "?X-Amz-Signature=synthetic&DBUser=app "
     "got eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abc failed "
     "password='synthetic private value' host=db"
 )
@@ -43,7 +42,6 @@ _DETAIL_FRAGMENTS = (
     _GEMINI_KEY,
     "AKIAIOSFODNN7EXAMPLE",
     "user:secret@",
-    "X-Amz-Signature=synthetic",
     "eyJhbGciOiJIUzI1NiJ9",
 )
 
@@ -81,7 +79,6 @@ def test_json_and_console_keep_the_same_redaction(configure_chain) -> None:
     assert entry["detail"] == (
         "key=[redacted:gemini_api_key] for [redacted:aws_access_key_id] "
         "postgresql+asyncpg://[redacted:url_userinfo]@db:5432/vector "
-        "?X-Amz-Signature=[redacted:aws_signed_query]&DBUser=app "
         "got [redacted:jwt] failed password=[redacted:credential]"
     )
 

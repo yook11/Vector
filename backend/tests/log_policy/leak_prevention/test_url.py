@@ -68,7 +68,15 @@ def test_scheme_without_any_letter_is_not_treated_as_url() -> None:
     assert redact_url_userinfo(text) == text
 
 
-@pytest.mark.parametrize("letter", ["İ", "ı", "ſ", "K"])
+@pytest.mark.parametrize(
+    "letter",
+    [
+        pytest.param("\u0130", id="capital_i_with_dot"),
+        pytest.param("\u0131", id="dotless_i"),
+        pytest.param("\u017f", id="long_s"),
+        pytest.param("\u212a", id="kelvin_sign"),
+    ],
+)
 def test_scheme_keeps_previous_ignorecase_character_coverage(letter: str) -> None:
     """以前のIGNORECASEで認識した文字を含むschemeも秘匿範囲から外さない。"""
     text = f"failed {letter}://user:synthetic@host"

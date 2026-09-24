@@ -63,7 +63,8 @@ CREDENTIAL_KEYS = frozenset(
 
 BASE_ALLOW = frozenset({"event", "level", "timestamp", "logger", "logger_name"})
 BASE_DENY = CREDENTIAL_KEYS
-BASE_MASK = CREDENTIAL_KEYS
+# 認証キーは deny で項目ごと除外するため、項目単位の mask には入れない。
+BASE_MASK: frozenset[str] = frozenset()
 
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])([A-Z])")
 _ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")

@@ -8,15 +8,15 @@ from typing import Any
 from app.log_policy.base import BASE_MASK, normalize_key
 from app.log_policy.budget import TEXT_LIMIT, LogEventBudget
 from app.log_policy.diagnostics import LogProcessingDiagnostics
-from app.log_policy.mask import mask_assignments
-from app.log_policy.sanitize import sanitize_field_value, sanitize_text
+from app.log_policy.leak_prevention import prevent_credential_leaks
+from app.log_policy.sanitize import sanitize_field_value
 
 DEPTH_LIMIT = 10
 EXCEPTION_DEPTH_LIMIT = 19
 
 
 class _ValueMarker(Enum):
-    """置換後の固定文字列は入力の文字列ではないため、サニタイズ・マスクの対象にしない。"""
+    """置換後の固定文字列は入力の文字列ではないため、サニタイズ・情報漏洩防止の対象にしない。"""
 
     MASKED = "***"
     LIMIT = "[limit]"
@@ -33,7 +33,7 @@ def is_supported_value(value: Any) -> bool:
 
 @dataclass
 class LogValuePreparer:
-    """項目名でマスクを判定し、対象外の値を構造検査・サニタイズして出力用に整える。"""
+    """項目名でマスクを判定し、対象外の値を構造検査・サニタイズ・情報漏洩防止で出力用に整える。"""
 
     deny: frozenset[str]
     mask: frozenset[str] = BASE_MASK
@@ -51,7 +51,7 @@ class LogValuePreparer:
         field_name: str | None = None,
         depth_limit: int = DEPTH_LIMIT,
     ) -> Any:
-        """マスク対象を先に置換し、対象外は構造検査とサニタイズで出力用に整える。"""
+        """マスク対象を先に置換し、対象外は構造検査・サニタイズ・情報漏洩防止で出力用に整える。"""
         inspected_value = self.inspect_value(
             field_value, field_name=field_name, depth_limit=depth_limit
         )
@@ -172,15 +172,14 @@ class LogValuePreparer:
         return inspected_items
 
     def prepare_text_values(self, value: Any, *, field_name: str | None = None) -> Any:
-        """検査済みの構造で項目別サニタイズを適用し、文字列と辞書キーを出力用に整える。"""
+        """検査済みの構造で項目別サニタイズを適用し、文字列と辞書キーへ最後に情報漏洩防止を適用する。"""
         if type(value) is _ValueMarker:
             return value.value
         if type(value) is dict:
             prepared_dictionary: dict[str, Any] = {}
             for key, child_value in value.items():
-                sanitized_key = sanitize_text(key)
-                masked_key = mask_assignments(sanitized_key, mask=self.mask)
-                prepared_dictionary[masked_key] = self.prepare_text_values(
+                prepared_key = prevent_credential_leaks(key)
+                prepared_dictionary[prepared_key] = self.prepare_text_values(
                     child_value, field_name=key
                 )
             return prepared_dictionary
@@ -196,6 +195,5 @@ class LogValuePreparer:
                     return sanitized_value
                 value = sanitized_value
         if type(value) is str:
-            sanitized_text = sanitize_text(value)
-            return mask_assignments(sanitized_text, mask=self.mask)
+            return prevent_credential_leaks(value)
         return value

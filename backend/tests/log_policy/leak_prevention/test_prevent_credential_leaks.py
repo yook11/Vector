@@ -46,11 +46,6 @@ _LOGFIRE_TOKEN = "pylf_v1_us_" + "SyntheticToken0123456789"
             id="aws_access_key_id",
         ),
         pytest.param(
-            "?X-Amz-Signature=synthetic&DBUser=app",
-            "?X-Amz-Signature=[redacted:aws_signed_query]&DBUser=app",
-            id="aws_signed_query",
-        ),
-        pytest.param(
             "postgresql://user:synthetic@db:5432/vector failed",
             "postgresql://[redacted:url_userinfo]@db:5432/vector failed",
             id="url_userinfo",

@@ -21,7 +21,7 @@ class TestDefinition:
         assert BASE_LOG_RULES.mask == BASE_MASK
 
     def test_base_mask_is_empty(self) -> None:
-        """認証キーはdenyと情報漏洩防止が持つため、基底のmaskは空にする。"""
+        """認証キーはdenyで項目ごと除外するため、基底のmaskには入れない。"""
         assert BASE_MASK == frozenset()
 
     def test_allow_is_normalized_and_stored_with_base_fields(self) -> None:

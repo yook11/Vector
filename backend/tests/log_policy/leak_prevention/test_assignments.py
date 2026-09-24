@@ -115,6 +115,26 @@ class TestRedactionRange:
             "{'user': 'vector', 'password': [redacted:credential]"
         )
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "X-Amz-Signature",
+            "X-Amz-Credential",
+            "X-Amz-Security-Token",
+            "x-amz-signature",
+        ],
+    )
+    def test_signed_query_parameter_is_replaced_to_the_end(self, name: str) -> None:
+        """AWS署名付きクエリの認証パラメーターも、&を値の終端とせず末尾まで置き換える。"""
+        text = (
+            "db.example.invalid:5432/?Action=connect&DBUser=app"
+            f"&{name}=synthetic%2Fvalue&X-Amz-Expires=900"
+        )
+        assert redact_credential_assignments(text) == (
+            f"db.example.invalid:5432/?Action=connect&DBUser=app&{name}"
+            "=[redacted:credential]"
+        )
+
     def test_first_credential_key_ends_the_output(self) -> None:
         """最初の認証キーより後ろは、別の認証キーを含めて一度の置換で覆う。"""
         text = "token=first password=second"
