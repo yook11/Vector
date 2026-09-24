@@ -29,20 +29,19 @@ def test_inherited_policy_is_applied_to_the_final_json_log(capsys) -> None:
     """継承したポリシーを持つロガーは、共通情報・bind・ログ引数を合わせた一件のJSONを規則どおり出力する。"""
     common_rules = LogPolicyRules(
         policy=LogPolicy.INFRASTRUCTURE,
-        allow=frozenset({"request_id", "service", "connection_url", "message"}),
+        allow=frozenset({"request_id", "service", "canonical_url", "message"}),
         deny=frozenset({"private_note"}),
         mask=frozenset({"private_text"}),
-        sanitize=frozenset({"connection_url"}),
+        sanitize=frozenset({"canonical_url"}),
     )
     rules = common_rules.extend(
-        allow=common_rules.allow | {"operation", "upstream_message", "reference"},
-        sanitize=frozenset({"upstream_message"}),
+        allow=common_rules.allow
+        | {"operation", "private_text", "source_url", "reference"},
+        sanitize=frozenset({"source_url"}),
     )
     logger = create_policy_json_logger("test.logging", rules).bind(
         service="catalog",
-        connection_url=(
-            "https://user:synthetic@example.com/path?note=eyJabc.eyJdef.signature"
-        ),
+        canonical_url="https://example.com/a/1?p=123#top",
         private_note="PRIVATE_NOTE",
     )
 
@@ -50,8 +49,9 @@ def test_inherited_policy_is_applied_to_the_final_json_log(capsys) -> None:
         logger.info(
             "upstream_checked",
             operation="healthcheck",
-            message="before private_text='synthetic private' after",
-            upstream_message="got eyJabc.eyJdef.signature failed",
+            private_text="synthetic private",
+            message="connect failed password=synthetic host=db",
+            source_url="https://user:synthetic@example.com/b/2#top",
             reference="https://docs:synthetic@example.com/reference",
             extra_field="unregistered",
         )
@@ -67,11 +67,12 @@ def test_inherited_policy_is_applied_to_the_final_json_log(capsys) -> None:
         "log_policy": "infrastructure",
         "request_id": "request-001",
         "service": "catalog",
+        "canonical_url": "https://example.com/a/1?p=123",
         "operation": "healthcheck",
-        "connection_url": "https://***@example.com/path?note=eyJ***",
-        "message": "before private_text=*** after",
-        "upstream_message": "got eyJ*** failed",
-        "reference": "https://***@example.com/reference",
+        "private_text": "***",
+        "message": "connect failed password=[redacted:credential]",
+        "source_url": "https://example.com/b/2",
+        "reference": "https://[redacted:url_userinfo]@example.com/reference",
         "_denied_keys": ["private_note"],
         "_unregistered_count": 1,
     }

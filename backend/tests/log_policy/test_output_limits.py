@@ -78,8 +78,8 @@ class TestLocalReplacement:
             "log_policy": "infrastructure",
         }
 
-    def test_nested_key_at_limit_is_sanitized_without_truncation(self) -> None:
-        """上限内の辞書キーは全文をサニタイズして残す。"""
+    def test_nested_key_at_limit_is_redacted_without_truncation(self) -> None:
+        """上限内の辞書キーは全文に情報漏洩防止を適用して残す。"""
         suffix = " password='synthetic private'"
         key = "x" * (TEXT_LIMIT - len(suffix)) + suffix
         output = LogPolicyProcessor()(
@@ -88,7 +88,9 @@ class TestLocalReplacement:
             {"event": {key: 1}},
         )
         assert output == {
-            "event": {"x" * (TEXT_LIMIT - len(suffix)) + " password=***": 1}
+            "event": {
+                "x" * (TEXT_LIMIT - len(suffix)) + " password=[redacted:credential]": 1
+            }
         }
 
     def test_nested_long_key_is_excluded_without_losing_siblings(self) -> None:
@@ -146,7 +148,7 @@ class TestLocalReplacement:
         )
         assert output == {"event": {"too_large": "[limit]", "count": 3}}
 
-    def test_exception_message_at_limit_keeps_sanitization(self) -> None:
+    def test_exception_message_at_limit_keeps_redaction(self) -> None:
         """上限ちょうどの例外文は検査後に秘匿して保持する。"""
         suffix = " token=synthetic"
         prefix = "x" * (TEXT_LIMIT - len(suffix))
@@ -158,7 +160,7 @@ class TestLocalReplacement:
         assert output == {
             "event": "failed",
             "error_class": "builtins.ValueError",
-            "error_message": prefix + " token=***",
+            "error_message": prefix + " token=[redacted:credential]",
             "frames": [],
         }
 

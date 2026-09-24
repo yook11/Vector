@@ -24,6 +24,8 @@ from app.log_policy.value_preparation import DEPTH_LIMIT
 pytestmark = pytest.mark.unit
 
 _SECRET = "hunter2-synthetic-secret"
+# 合成値を分割し、秘密検出ツールの規則に一致させない。
+_GEMINI_KEY = "AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
 _PRIVATE_SAMPLE = "保護対象の合成テキスト"
 
 _TEST_RULES = LogPolicyRules(
@@ -51,7 +53,7 @@ def sanitizing_logger() -> PolicyLogger:
     rules = LogPolicyRules(
         policy=LogPolicy.INFRASTRUCTURE,
         allow=frozenset({"payload"}),
-        sanitize=frozenset({"connection_url"}),
+        sanitize=frozenset({"canonical_url"}),
     )
     return PolicyLogger(rules, structlog.ReturnLogger())
 
@@ -250,34 +252,13 @@ class TestFieldSelection:
 
 
 class TestFieldProtection:
-    """採用した値の秘密情報・ネスト内の禁止項目・不正な構造を出力に残さない。"""
-
-    def test_credential_inside_allowed_text_is_sanitized(self, configure_chain) -> None:
-        """許可した自由文に混入した credential だけを伏せ、原因文は残す。"""
-        capture = configure_chain()
-        logger = policy_logger("test", _INFRA_RULES)
-        logger.warning(
-            "db_connect_failed",
-            error_message=(
-                f"connection to postgresql://vector:{_SECRET}@db:5432/v refused"
-            ),
-        )
-        message = capture.entries[0]["error_message"]
-        assert _SECRET not in message
-        assert message.startswith("connection to postgresql://***@db:5432/v refused")
-
-    def test_event_string_is_sanitized(self, configure_chain) -> None:
-        """event 文字列に混入した credential も置換される。"""
-        capture = configure_chain()
-        logger = policy_logger("test", _TEST_RULES)
-        logger.info(f"failed with Authorization: Bearer {_SECRET}abcdef0123456789")
-        assert _SECRET not in capture.entries[0]["event"]
+    """採用した値のネスト内の禁止項目・不正な構造を出力に残さない。"""
 
     @pytest.mark.parametrize(
         "key", ["event", "level", "timestamp", "logger", "logger_name", "loggerName"]
     )
     def test_base_fields_use_normal_value_preparation(self, key: str) -> None:
-        """基本項目も通常の構造検査・deny除外・サニタイズを通す。"""
+        """基本項目も通常の構造検査・deny除外・情報漏洩防止を通す。"""
         fields = {
             key: {"password": "synthetic", "message": "token=synthetic", "count": 1}
         }
@@ -285,7 +266,7 @@ class TestFieldProtection:
             PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()), "info", fields
         )
         assert output == {
-            key: {"message": "token=***", "count": 1},
+            key: {"message": "token=[redacted:credential]", "count": 1},
             "_denied_nested_count": 1,
         }
 
@@ -433,114 +414,264 @@ class TestSanitize:
         """辞書の中に辞書がある場合でも、登録した項目をサニタイズする。"""
         fields = {
             "payload": {
-                "details": {
-                    "connection_url": "https://user:synthetic@example.com/path",
-                },
+                "details": {"canonical_url": "https://example.com/a/1?p=123#top"},
             },
         }
 
         output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
 
         assert output["payload"] == {
-            "details": {
-                "connection_url": "https://***@example.com/path",
-            },
+            "details": {"canonical_url": "https://example.com/a/1?p=123"},
         }
 
     def test_registered_field_in_dictionary_inside_list_is_sanitized(
         self, sanitizing_logger: PolicyLogger
     ) -> None:
         """配列の中に辞書がある場合でも、登録した項目をサニタイズする。"""
-        fields = {
-            "payload": [
-                {
-                    "connection_url": "https://user:synthetic@example.com/path",
-                },
-            ],
-        }
+        fields = {"payload": [{"canonical_url": "https://example.com/a/1?p=123#top"}]}
 
         output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
 
-        assert output["payload"] == [
-            {
-                "connection_url": "https://***@example.com/path",
-            },
-        ]
+        assert output["payload"] == [{"canonical_url": "https://example.com/a/1?p=123"}]
 
     def test_registered_field_with_nested_lists_is_sanitized(
         self, sanitizing_logger: PolicyLogger
     ) -> None:
         """登録項目の配列の中に配列がある場合でも、中の文字列をサニタイズする。"""
         fields = {
-            "payload": {
-                "connection_url": [
-                    ["https://user:synthetic@example.com/path"],
-                ],
-            },
+            "payload": {"canonical_url": [["https://example.com/a/1?p=123#top"]]},
         }
 
         output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
 
         assert output["payload"] == {
-            "connection_url": [
-                ["https://***@example.com/path"],
-            ],
+            "canonical_url": [["https://example.com/a/1?p=123"]],
+        }
+
+    def test_unregistered_field_is_not_sanitized(
+        self, sanitizing_logger: PolicyLogger
+    ) -> None:
+        """未登録の項目は同じ値でもサニタイズしない。"""
+        fields = {"payload": {"reference": "https://example.com/a/1?p=123#top"}}
+
+        output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
+
+        assert output["payload"] == {
+            "reference": "https://example.com/a/1?p=123#top",
         }
 
     def test_unregistered_field_inside_registered_field_is_preserved(
         self, sanitizing_logger: PolicyLogger
     ) -> None:
-        """登録項目の配下でも、辞書内の未登録項目の数値はそのまま残す。"""
+        """登録項目の配下でも、辞書内の未登録項目はサニタイズしない。"""
         fields = {
             "payload": {
-                "connection_url": [
-                    {
-                        "note": 123,
-                    },
-                ],
+                "canonical_url": [{"note": "https://example.com/a/1?p=123#top"}],
             },
         }
 
         output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
 
         assert output["payload"] == {
-            "connection_url": [
-                {
-                    "note": 123,
-                },
-            ],
+            "canonical_url": [{"note": "https://example.com/a/1?p=123#top"}],
         }
 
     def test_registered_top_level_field_is_matched_by_normalized_name(self) -> None:
         """トップレベルの項目名を正規化して照合し、登録項目の型不一致を置換する。"""
         rules = BASE_LOG_RULES.extend(
-            allow=frozenset({"connection_url"}),
-            sanitize=frozenset({"connection_url"}),
+            allow=frozenset({"canonical_url"}),
+            sanitize=frozenset({"canonical_url"}),
         )
 
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
-            {"ConnectionUrl": 123},
+            {"CanonicalUrl": 123},
         )
 
-        assert output == {"ConnectionUrl": "[unsupported]"}
+        assert output == {"CanonicalUrl": "[unsupported]"}
 
     def test_registered_non_string_values_in_nested_containers_are_replaced(
         self, sanitizing_logger: PolicyLogger
     ) -> None:
         """辞書と配列が入れ子でも、登録項目の配列内にある型不一致の値を置換する。"""
+        fields = {"payload": {"details": [{"canonical_url": [[123]]}]}}
+
+        output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
+
+        assert output["payload"] == {
+            "details": [{"canonical_url": [["[unsupported]"]]}],
+        }
+
+
+class TestLeakPrevention:
+    """採用した値・ネストのキー・例外・診断の文字列に、最後に情報漏洩防止を適用する。"""
+
+    def test_credential_inside_allowed_text_is_redacted(self, configure_chain) -> None:
+        """許可した自由文に混入した credential だけを置き換え、原因文は残す。"""
+        capture = configure_chain()
+        logger = policy_logger("test", _INFRA_RULES)
+        logger.warning(
+            "db_connect_failed",
+            error_message=(
+                f"connection to postgresql://vector:{_SECRET}@db:5432/v refused"
+            ),
+        )
+        message = capture.entries[0]["error_message"]
+        assert _SECRET not in message
+        assert message == (
+            "connection to postgresql://[redacted:url_userinfo]@db:5432/v refused"
+        )
+
+    def test_event_string_is_redacted(self, configure_chain) -> None:
+        """event 文字列に混入した credential も置換される。"""
+        capture = configure_chain()
+        logger = policy_logger("test", _TEST_RULES)
+        logger.info(f"failed with Authorization: Bearer {_SECRET}abcdef0123456789")
+        assert capture.entries[0]["event"] == (
+            "failed with Authorization: [redacted:credential]"
+        )
+
+    def test_nested_keys_and_list_values_are_redacted(self) -> None:
+        """ネストの辞書キーと配列内の文字列にも、情報漏洩防止を適用する。"""
+        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"payload": {"token=synthetic": ["token=other"]}},
+        )
+
+        assert output["payload"] == {
+            "token=[redacted:credential]": ["token=[redacted:credential]"],
+        }
+
+    def test_leak_prevention_runs_after_sanitize(
+        self, sanitizing_logger: PolicyLogger
+    ) -> None:
+        """サニタイズで残した部分にも、情報漏洩防止を適用する。"""
         fields = {
             "payload": {
-                "details": [{"connection_url": [[123]]}],
+                "canonical_url": f"https://example.com/a/1?key={_GEMINI_KEY}#top",
             },
         }
 
         output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
 
         assert output["payload"] == {
-            "details": [{"connection_url": [["[unsupported]"]]}],
+            "canonical_url": "https://example.com/a/1?key=[redacted:gemini_api_key]",
         }
+
+    def test_exception_message_is_redacted_in_output(self) -> None:
+        """例外メッセージ内のAPIキーを置き換え、周囲の原因文を残して出力する。"""
+        message = f"request with {_GEMINI_KEY} failed"
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": ValueError(message)},
+        )
+        assert output == {
+            "event": "failed",
+            "error_class": "builtins.ValueError",
+            "error_message": "request with [redacted:gemini_api_key] failed",
+            "frames": [],
+        }
+
+    def test_every_exception_field_is_redacted(self) -> None:
+        """例外文・型名・frameのファイル名と関数名にも、情報漏洩防止を適用する。"""
+        error_type = type(
+            "password='synthetic class'", (Exception,), {"__module__": "sample"}
+        )
+
+        def fail():
+            raise error_type("password='synthetic message'")
+
+        fail.__code__ = fail.__code__.replace(
+            co_filename="password='synthetic filename'",
+            co_name="password='synthetic function'",
+        )
+        with pytest.raises(error_type) as captured:
+            fail()
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": captured.value},
+        )
+
+        assert output["error_class"] == "sample.password=[redacted:credential]"
+        assert output["error_message"] == "password=[redacted:credential]"
+        assert output["frames"][-1] == {
+            "file": "password=[redacted:credential]",
+            "function": "password=[redacted:credential]",
+            "line": output["frames"][-1]["line"],
+        }
+
+    def test_generated_group_members_are_output_with_secrets_redacted(
+        self, configure_chain
+    ) -> None:
+        """グループから抽出したメンバーは、原因文の秘密情報を伏せて出力する。"""
+        capture = configure_chain()
+        logger = policy_logger("test", BASE_LOG_RULES)
+        group = ExceptionGroup(
+            "parallel failures",
+            [
+                ValueError(f"request with {_GEMINI_KEY} failed"),
+                TypeError("invalid response type"),
+            ],
+        )
+
+        logger.error("failed", exc_info=group)
+
+        entry = capture.entries[0]
+        assert entry["exceptions"] == [
+            {
+                "error_class": "builtins.ValueError",
+                "error_message": "request with [redacted:gemini_api_key] failed",
+                "frames": [],
+            },
+            {
+                "error_class": "builtins.TypeError",
+                "error_message": "invalid response type",
+                "frames": [],
+            },
+        ]
+        assert _GEMINI_KEY not in repr(entry)
+
+    def test_normal_and_exception_fields_are_output_with_secrets_redacted(
+        self,
+    ) -> None:
+        """通常項目と例外項目を併記するとき、両方の秘密値を置き換えて出力する。"""
+        output = LogPolicyProcessor()(
+            PolicyLogger(_TEST_RULES, structlog.ReturnLogger()),
+            "error",
+            {
+                "event": "failed",
+                "payload": {"message": "password=normal-secret", "count": 3},
+                "exc_info": ValueError("token=exception-secret"),
+            },
+        )
+        assert output == {
+            "event": "failed",
+            "payload": {"message": "password=[redacted:credential]", "count": 3},
+            "error_class": "builtins.ValueError",
+            "error_message": "token=[redacted:credential]",
+            "frames": [],
+            "log_policy": _TEST_RULES.policy.value,
+        }
+
+    def test_denied_key_names_are_redacted_before_output(self) -> None:
+        """診断に記録した入力由来の禁止キー名にも情報漏洩防止を適用して出力する。"""
+        key = "token=synthetic"
+        rules = LogPolicyRules(
+            LogPolicy.PIPELINE_CONTROL, allow=frozenset(), deny=frozenset({key})
+        )
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", key: _SECRET},
+        )
+        assert output["_denied_keys"] == ["token=[redacted:credential]"]
 
 
 class TestDiagnostics:
@@ -578,19 +709,6 @@ class TestDiagnostics:
         assert output["_unregistered_count"] == 1
         assert key_name not in output
         assert key_name not in repr(output)
-
-    def test_denied_key_names_are_sanitized_before_output(self) -> None:
-        """診断に記録した入力由来の禁止キー名もサニタイズして出力する。"""
-        key = "token=synthetic"
-        rules = LogPolicyRules(
-            LogPolicy.PIPELINE_CONTROL, allow=frozenset(), deny=frozenset({key})
-        )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {"event": "completed", key: _SECRET},
-        )
-        assert output["_denied_keys"] == ["token=***"]
 
     def test_diagnostics_do_not_leak_between_processor_calls(self) -> None:
         """同じprocessorで次のログを処理しても前回の診断は残らない。"""
@@ -696,72 +814,6 @@ class TestExceptionFields:
         assert entry["event"] == "failed"
         assert "exceptions" not in entry
 
-    def test_generated_group_members_are_output_with_secrets_masked(
-        self, configure_chain
-    ) -> None:
-        """グループから抽出したメンバーは、原因文の秘密情報を伏せて出力する。"""
-        capture = configure_chain()
-        logger = policy_logger("test", BASE_LOG_RULES)
-        group = ExceptionGroup(
-            "parallel failures",
-            [
-                ValueError("request with sk-proj-abcdef0123456789ABCDEFxyz failed"),
-                TypeError("invalid response type"),
-            ],
-        )
-
-        logger.error("failed", exc_info=group)
-
-        entry = capture.entries[0]
-        assert entry["exceptions"] == [
-            {
-                "error_class": "builtins.ValueError",
-                "error_message": "request with sk-*** failed",
-                "frames": [],
-            },
-            {
-                "error_class": "builtins.TypeError",
-                "error_message": "invalid response type",
-                "frames": [],
-            },
-        ]
-        assert "sk-proj-abcdef0123456789ABCDEFxyz" not in repr(entry)
-
-    def test_normal_and_exception_fields_are_output_with_secrets_masked(self) -> None:
-        """通常項目と例外項目を併記するとき、両方の秘密値をマスクして出力する。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(_TEST_RULES, structlog.ReturnLogger()),
-            "error",
-            {
-                "event": "failed",
-                "payload": {"message": "password=normal-secret", "count": 3},
-                "exc_info": ValueError("token=exception-secret"),
-            },
-        )
-        assert output == {
-            "event": "failed",
-            "payload": {"message": "password=***", "count": 3},
-            "error_class": "builtins.ValueError",
-            "error_message": "token=***",
-            "frames": [],
-            "log_policy": _TEST_RULES.policy.value,
-        }
-
-    def test_exception_message_is_sanitized_in_output(self) -> None:
-        """例外メッセージ内のAPIキーを伏せ、周囲の原因文を残して出力する。"""
-        message = "request with sk-proj-abcdef0123456789ABCDEFxyz failed"
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "error",
-            {"event": "failed", "exc_info": ValueError(message)},
-        )
-        assert output == {
-            "event": "failed",
-            "error_class": "builtins.ValueError",
-            "error_message": "request with sk-*** failed",
-            "frames": [],
-        }
-
     def test_generated_exception_message_replaces_same_named_input(self) -> None:
         """同名の入力があっても、例外から抽出した項目を出力に採用する。"""
         output = LogPolicyProcessor()(
@@ -776,7 +828,7 @@ class TestExceptionFields:
         assert output == {
             "event": "failed",
             "error_class": "builtins.ValueError",
-            "error_message": "token=***",
+            "error_message": "token=[redacted:credential]",
             "frames": [],
             "log_policy": "infrastructure",
         }
@@ -792,7 +844,7 @@ class TestExceptionFields:
             {"error_message": "token=synthetic", "exc_info": exc_info},
         )
         assert prepared_event == {
-            "error_message": "token=***",
+            "error_message": "token=[redacted:credential]",
             "log_policy": "infrastructure",
         }
 
@@ -884,13 +936,11 @@ class TestDepthLimit:
         """深さ上限ちょうどの登録項目にも、サニタイズを適用する。"""
         rules = BASE_LOG_RULES.extend(
             allow=frozenset({"payload"}),
-            sanitize=frozenset({"connection_url"}),
+            sanitize=frozenset({"canonical_url"}),
         )
         payload = _nested_value(
             depth=DEPTH_LIMIT - 1,
-            leaf={
-                "connection_url": "https://user:synthetic@example.com/path",
-            },
+            leaf={"canonical_url": "https://example.com/a/1?p=123#top"},
         )
 
         output = LogPolicyProcessor()(
@@ -903,19 +953,16 @@ class TestDepthLimit:
             "event": "completed",
             "payload": _nested_value(
                 depth=DEPTH_LIMIT - 1,
-                leaf={"connection_url": "https://***@example.com/path"},
+                leaf={"canonical_url": "https://example.com/a/1?p=123"},
             ),
         }
 
-    def test_text_at_depth_limit_is_masked(self) -> None:
-        """深さ上限ちょうどの文字列にも、マスクを適用する。"""
-        rules = BASE_LOG_RULES.extend(
-            allow=frozenset({"payload"}),
-            mask=frozenset({"private_text"}),
-        )
+    def test_text_at_depth_limit_is_redacted(self) -> None:
+        """深さ上限ちょうどの文字列にも、情報漏洩防止を適用する。"""
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
         payload = _nested_value(
             depth=DEPTH_LIMIT - 1,
-            leaf={"message": "private_text=synthetic"},
+            leaf={"message": "password=synthetic"},
         )
 
         output = LogPolicyProcessor()(
@@ -928,7 +975,7 @@ class TestDepthLimit:
             "event": "completed",
             "payload": _nested_value(
                 depth=DEPTH_LIMIT - 1,
-                leaf={"message": "private_text=***"},
+                leaf={"message": "password=[redacted:credential]"},
             ),
         }
 
@@ -996,8 +1043,8 @@ class TestDepthLimit:
             "payload": _nested_value(depth=DEPTH_LIMIT, leaf={"items": "[limit]"}),
         }
 
-    def test_depth_over_limit_preserves_and_masks_siblings(self) -> None:
-        """深さ上限を超えた部分だけを置換し、隣の正常な文字列にはマスクを適用する。"""
+    def test_depth_over_limit_preserves_and_redacts_siblings(self) -> None:
+        """深さ上限を超えた部分だけを置換し、隣の正常な文字列には情報漏洩防止を適用する。"""
         nested = _nested_value(depth=DEPTH_LIMIT + 1, leaf="synthetic")
 
         output = LogPolicyProcessor()(
@@ -1008,7 +1055,7 @@ class TestDepthLimit:
 
         assert output == {
             "event": {
-                "first": "token=***",
+                "first": "token=[redacted:credential]",
                 "nested": _nested_value(depth=DEPTH_LIMIT, leaf="[limit]"),
             },
         }
@@ -1115,7 +1162,7 @@ class TestProcessingOrder:
         )
         assert steps == [
             "read_payload",
-            {"message": "token=***"},
+            {"message": "token=[redacted:credential]"},
             "read_event",
             "completed",
         ]
@@ -1193,16 +1240,16 @@ class TestProcessingFailures:
             structlog.ReturnLogger(), "info", {"event": _SECRET}
         ) == {"event": "log_policy_failed", "_policy_error": "processing_failed"}
 
-    def test_diagnostic_sanitization_failure_does_not_restore_raw_key_names(
+    def test_diagnostic_leak_prevention_failure_does_not_restore_raw_key_names(
         self,
         monkeypatch,
     ) -> None:
-        """診断のサニタイズが失敗しても原文に戻らず固定エラーだけを返す。"""
+        """診断の情報漏洩防止が失敗しても原文に戻らず固定エラーだけを返す。"""
 
         def fail(text):
             raise ValueError("synthetic-private-key")
 
-        monkeypatch.setattr("app.log_policy.diagnostics.sanitize_text", fail)
+        monkeypatch.setattr("app.log_policy.diagnostics.prevent_credential_leaks", fail)
         prepared_event = LogPolicyProcessor()(
             PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
             "info",
@@ -1213,15 +1260,17 @@ class TestProcessingFailures:
             "_policy_error": "processing_failed",
         }
 
-    def test_value_sanitization_failure_returns_only_fixed_metadata(
+    def test_value_leak_prevention_failure_returns_only_fixed_metadata(
         self, monkeypatch
     ) -> None:
-        """値のサニタイズが失敗しても業務側へ例外や原文を返さない。"""
+        """値の情報漏洩防止が失敗しても業務側へ例外や原文を返さない。"""
 
         def fail(*_, **__):
             raise ValueError(_SECRET)
 
-        monkeypatch.setattr("app.log_policy.value_preparation.sanitize_text", fail)
+        monkeypatch.setattr(
+            "app.log_policy.value_preparation.prevent_credential_leaks", fail
+        )
         output = LogPolicyProcessor()(
             PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
             "error",
@@ -1240,7 +1289,9 @@ class TestProcessingFailures:
         def fail(*_, **__):
             raise ValueError(_SECRET)
 
-        monkeypatch.setattr("app.log_policy.value_preparation.sanitize_text", fail)
+        monkeypatch.setattr(
+            "app.log_policy.value_preparation.prevent_credential_leaks", fail
+        )
         processed_methods = []
         original = LogPolicyProcessor.__call__
 

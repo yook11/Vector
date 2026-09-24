@@ -95,7 +95,10 @@ class TestTypeConversion:
         preparer = LogValuePreparer(BASE_DENY)
         field_value = value
         preparer.budget.check_and_count_log_items(1)
-        assert preparer.prepare_field_value(field_value) == ["token=***", 3]
+        assert preparer.prepare_field_value(field_value) == [
+            "token=[redacted:credential]",
+            3,
+        ]
 
     def test_mapping_with_mixed_keys_is_replaced(self) -> None:
         """文字列キーが混ざっていても非文字列キーがあれば辞書全体を置換する。"""
@@ -175,10 +178,10 @@ class TestNestedDeny:
 
 
 class TestInspectionOrder:
-    """各項目を計上してから検査し、超過した項目は検査せず後続も取り出さず、サニタイズは成功後に一度だけ行う。"""
+    """各項目を計上してから検査し、超過した項目は検査せず後続も取り出さず、情報漏洩防止は成功後に一度だけ行う。"""
 
     def test_masked_field_skips_value_inspection_and_text_preparation(self) -> None:
-        """マスク対象の値は型・内部構造を検査せず、置換後のマーカーもサニタイズしない。"""
+        """マスク対象の値は型・内部構造を検査せず、置換後のマーカーにサニタイズも情報漏洩防止も適用しない。"""
         preparer = LogValuePreparer(
             BASE_DENY,
             mask=frozenset({"private_text"}),
@@ -195,12 +198,8 @@ class TestInspectionOrder:
                 side_effect=AssertionError("must not sanitize a masked field"),
             ),
             patch(
-                "app.log_policy.value_preparation.sanitize_text",
-                side_effect=AssertionError("must not sanitize a mask marker"),
-            ),
-            patch(
-                "app.log_policy.value_preparation.mask_assignments",
-                side_effect=AssertionError("must not process a mask marker"),
+                "app.log_policy.value_preparation.prevent_credential_leaks",
+                side_effect=AssertionError("must not redact a mask marker"),
             ),
         ):
             output = preparer.prepare_field_value(
@@ -308,48 +307,55 @@ class TestInspectionOrder:
         assert preparer.budget.log_item_count == MAX_ITEMS_PER_LOG_EVENT
         assert inspected_values == [1]
 
-    def test_successful_field_sanitizes_each_text_once(self) -> None:
-        """検査段階でサニタイズを実行せず成功後に各文字列を一度だけ処理する。"""
-        from app.log_policy.sanitize import sanitize_text
+    def test_successful_field_redacts_each_text_once(self) -> None:
+        """検査段階で情報漏洩防止を実行せず成功後に各文字列を一度だけ処理する。"""
+        from app.log_policy.leak_prevention import prevent_credential_leaks
 
         with patch(
-            "app.log_policy.value_preparation.sanitize_text", wraps=sanitize_text
-        ) as sanitize:
+            "app.log_policy.value_preparation.prevent_credential_leaks",
+            wraps=prevent_credential_leaks,
+        ) as redact:
             preparer = LogValuePreparer(BASE_DENY)
             field_value = {"message": "token=synthetic"}
             preparer.budget.check_and_count_log_items(1)
             prepared_value = preparer.prepare_field_value(field_value)
-        assert prepared_value == {"message": "token=***"}
-        assert [call.args[0] for call in sanitize.call_args_list] == [
+        assert prepared_value == {"message": "token=[redacted:credential]"}
+        assert [call.args[0] for call in redact.call_args_list] == [
             "message",
             "token=synthetic",
         ]
 
-    def test_text_above_limit_is_replaced_without_sanitizing(self) -> None:
-        """一文字でも超過した文字列にはサニタイズを実行しない。"""
-        with patch("app.log_policy.value_preparation.sanitize_text") as sanitize:
+    def test_text_above_limit_is_replaced_without_leak_prevention(self) -> None:
+        """一文字でも超過した文字列には情報漏洩防止を実行しない。"""
+        with patch(
+            "app.log_policy.value_preparation.prevent_credential_leaks"
+        ) as redact:
             preparer = LogValuePreparer(BASE_DENY)
             field_value = "x" * (TEXT_LIMIT + 1)
             preparer.budget.check_and_count_log_items(1)
             prepared_value = preparer.prepare_field_value(field_value)
         assert prepared_value == "[limit]"
-        sanitize.assert_not_called()
+        redact.assert_not_called()
 
-    def test_nested_long_text_is_not_passed_to_sanitization(self) -> None:
-        """長すぎる文字列だけ置換し、原文をサニタイズへ渡さず正常な兄弟だけ処理する。"""
-        from app.log_policy.sanitize import sanitize_text
+    def test_nested_long_text_is_not_passed_to_leak_prevention(self) -> None:
+        """長すぎる文字列だけ置換し、原文を情報漏洩防止へ渡さず正常な兄弟だけ処理する。"""
+        from app.log_policy.leak_prevention import prevent_credential_leaks
 
         text = "x" * (TEXT_LIMIT + 1)
         payload = {"first": "password=synthetic", "nested": [text]}
         with patch(
-            "app.log_policy.value_preparation.sanitize_text", wraps=sanitize_text
-        ) as sanitize:
+            "app.log_policy.value_preparation.prevent_credential_leaks",
+            wraps=prevent_credential_leaks,
+        ) as redact:
             preparer = LogValuePreparer(BASE_DENY)
             field_value = payload
             preparer.budget.check_and_count_log_items(1)
             prepared_value = preparer.prepare_field_value(field_value)
-        assert prepared_value == {"first": "password=***", "nested": ["[limit]"]}
-        assert text not in [call.args[0] for call in sanitize.call_args_list]
+        assert prepared_value == {
+            "first": "password=[redacted:credential]",
+            "nested": ["[limit]"],
+        }
+        assert text not in [call.args[0] for call in redact.call_args_list]
 
     def test_nested_long_key_is_excluded_before_normalization(self) -> None:
         """長すぎるネストのキーは正規化へ渡さず、その項目だけ除外して上限診断に記録する。"""
