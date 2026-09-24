@@ -498,6 +498,7 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
     for original in (*queued_runs, running):
         persisted = await _persisted_run(session_factory, original.id)
         assert persisted.status == "deadline_exceeded"
+        assert persisted.assistant_message_id is None
         assert persisted.error_code is None
         assert persisted.attempt_epoch == original.attempt_epoch
 
@@ -580,6 +581,7 @@ async def test_sweep_terminalizes_when_queued_quota_is_ineligible_or_inconsisten
     for original in (*underflow_runs, missing_counter, legacy):
         persisted = await _persisted_run(session_factory, original.id)
         assert persisted.status == "deadline_exceeded"
+        assert persisted.assistant_message_id is None
         assert persisted.error_code is None
 
 
