@@ -50,7 +50,11 @@ class LogPolicyProcessor:
         selector = LogFieldSelector(rules.allow, rules.deny, diagnostics)
         budget = LogEventBudget()
         preparer = LogValuePreparer(
-            deny=rules.deny, mask=rules.mask, budget=budget, diagnostics=diagnostics
+            deny=rules.deny,
+            mask=rules.mask,
+            sanitize=rules.sanitize,
+            budget=budget,
+            diagnostics=diagnostics,
         )
         prepared_event: dict[str, Any] = {}
         try:
@@ -62,7 +66,7 @@ class LogPolicyProcessor:
                 # ここまで残った項目だけを採用し、名前の文字数を数えて値を準備する。
                 budget.check_and_count_text_chars(len(field_name))
                 prepared_event[field_name] = preparer.prepare_field_value(
-                    field_value, depth_limit=DEPTH_LIMIT
+                    field_value, field_name=field_name, depth_limit=DEPTH_LIMIT
                 )
 
             # 同名の通常入力より、実際の例外から抽出した情報を優先する。
@@ -75,7 +79,9 @@ class LogPolicyProcessor:
                 for field_name, field_value in exception_fields.items():
                     budget.check_and_count_text_chars(len(field_name))
                     prepared_event[field_name] = preparer.prepare_field_value(
-                        field_value, depth_limit=EXCEPTION_DEPTH_LIMIT
+                        field_value,
+                        field_name=field_name,
+                        depth_limit=EXCEPTION_DEPTH_LIMIT,
                     )
             # どのポリシーで処理したログかを、出力に残す。
             if rules.policy is not None:

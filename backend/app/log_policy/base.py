@@ -1,4 +1,4 @@
-"""基底allow・deny・maskと、生成時に確定するログ規則。"""
+"""基底allow・deny・maskと項目別sanitizeを、生成時に確定するログ規則。"""
 
 from __future__ import annotations
 
@@ -70,19 +70,20 @@ _ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
 
 
 def normalize_key(key: str) -> str:
-    """deny / allow / mask 照合用にキー名を snake_case 小文字へ正規化する。"""
+    """ポリシー照合用に項目名を snake_case 小文字へ正規化する。"""
     key = _ACRONYM_BOUNDARY.sub(r"\1_\2", key)
     return _CAMEL_BOUNDARY.sub(r"_\1", key).replace("-", "_").lower()
 
 
 @dataclass(frozen=True, slots=True)
 class LogPolicyRules:
-    """基底を含む完成済み規則を保持し、継承時も親のdeny・maskを維持する。"""
+    """基底を含む完成済み規則を保持し、継承時も親のdeny・mask・sanitizeを維持する。"""
 
     policy: LogPolicy | None
     allow: frozenset[str]
     deny: frozenset[str] = field(default_factory=frozenset)
     mask: frozenset[str] = field(default_factory=frozenset)
+    sanitize: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -100,6 +101,11 @@ class LogPolicyRules:
             "mask",
             BASE_MASK | frozenset(normalize_key(key) for key in self.mask),
         )
+        object.__setattr__(
+            self,
+            "sanitize",
+            frozenset(normalize_key(key) for key in self.sanitize),
+        )
         # allow と確定済み deny の重複は定義時に落とし、processor に到達させない。
         overlap = self.allow & self.deny
         if overlap:
@@ -112,13 +118,15 @@ class LogPolicyRules:
         allow: frozenset[str],
         deny: frozenset[str] = frozenset(),
         mask: frozenset[str] = frozenset(),
+        sanitize: frozenset[str] = frozenset(),
     ) -> LogPolicyRules:
-        """親のdeny・maskを維持し、明示した許可項目で新しい規則を定義する。"""
+        """親のdeny・mask・sanitizeを維持し、明示した許可項目で新しい規則を定義する。"""
         return LogPolicyRules(
             policy=self.policy,
             allow=allow,
             deny=self.deny | deny,
             mask=self.mask | mask,
+            sanitize=self.sanitize | sanitize,
         )
 
 

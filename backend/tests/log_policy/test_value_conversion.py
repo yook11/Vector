@@ -177,6 +177,38 @@ class TestNestedDeny:
 class TestInspectionOrder:
     """各項目を計上してから検査し、超過した項目は検査せず後続も取り出さず、サニタイズは成功後に一度だけ行う。"""
 
+    def test_masked_field_skips_value_inspection_and_text_preparation(self) -> None:
+        """マスク対象の値は型・内部構造を検査せず、置換後のマーカーもサニタイズしない。"""
+        preparer = LogValuePreparer(
+            BASE_DENY,
+            mask=frozenset({"private_text"}),
+            sanitize=frozenset({"private_text"}),
+        )
+
+        with (
+            patch(
+                "app.log_policy.value_preparation.is_supported_value",
+                side_effect=AssertionError("must not inspect a masked value"),
+            ),
+            patch(
+                "app.log_policy.value_preparation.sanitize_field_value",
+                side_effect=AssertionError("must not sanitize a masked field"),
+            ),
+            patch(
+                "app.log_policy.value_preparation.sanitize_text",
+                side_effect=AssertionError("must not sanitize a mask marker"),
+            ),
+            patch(
+                "app.log_policy.value_preparation.mask_assignments",
+                side_effect=AssertionError("must not process a mask marker"),
+            ),
+        ):
+            output = preparer.prepare_field_value(
+                {"message": "synthetic"}, field_name="private_text"
+            )
+
+        assert output == "***"
+
     def test_denied_fields_stop_being_inspected_when_budget_is_exhausted(
         self,
         monkeypatch,

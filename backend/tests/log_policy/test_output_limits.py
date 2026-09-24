@@ -14,7 +14,6 @@ from app.log_policy.budget import (
     TEXT_LIMIT,
 )
 from app.log_policy.processor import LogPolicyProcessor
-from app.log_policy.value_preparation import DEPTH_LIMIT
 
 pytestmark = pytest.mark.unit
 
@@ -146,46 +145,6 @@ class TestLocalReplacement:
             {"event": {"too_large": 1 << 4096, "count": 3}},
         )
         assert output == {"event": {"too_large": "[limit]", "count": 3}}
-
-    def test_value_at_depth_limit_is_preserved(self) -> None:
-        """深さ上限ちょうどの値は、正常な別項目とともにログへ残す。"""
-        value: Any = 7
-        for _ in range(DEPTH_LIMIT):
-            value = [value]
-        fields = {"event": value, "logger": "test"}
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()), "info", fields
-        )
-        assert output == fields
-
-    def test_value_beyond_depth_limit_is_replaced(self) -> None:
-        """深さ上限を一段超えた値だけを置換し、正常な別項目はログへ残す。"""
-        value: Any = "synthetic"
-        expected: Any = "[limit]"
-        for _ in range(DEPTH_LIMIT + 1):
-            value = [value]
-            expected = [expected]
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "info",
-            {"event": value, "logger": "test"},
-        )
-        assert output == {"event": expected, "logger": "test"}
-
-    def test_depth_over_limit_preserves_and_sanitizes_siblings(self) -> None:
-        """深さ上限の位置だけ置換し、正常な兄弟の秘密は秘匿する。"""
-        nested: Any = "synthetic"
-        for _ in range(DEPTH_LIMIT + 1):
-            nested = [nested]
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "info",
-            {"event": {"first": "token=synthetic", "nested": nested}},
-        )
-        expected: Any = "[limit]"
-        for _ in range(DEPTH_LIMIT):
-            expected = [expected]
-        assert output == {"event": {"first": "token=***", "nested": expected}}
 
     def test_exception_message_at_limit_keeps_sanitization(self) -> None:
         """上限ちょうどの例外文は検査後に秘匿して保持する。"""

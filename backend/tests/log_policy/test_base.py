@@ -101,6 +101,25 @@ class TestDefinition:
         rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset())
         assert rules.deny == BASE_DENY
 
+    def test_input_changes_do_not_change_constructed_rules(self) -> None:
+        """作成に渡した変更可能な入力を書き換えても、確定した各規則は変わらない。"""
+        sanitize_fields = {"connection_url"}
+        rules = LogPolicyRules(
+            policy=LogPolicy.INFRASTRUCTURE,
+            allow=frozenset({"connection_url"}),
+            deny=frozenset({"hidden_field"}),
+            mask=frozenset({"private_text"}),
+            sanitize=sanitize_fields,
+        )
+
+        sanitize_fields.clear()
+        sanitize_fields.add("signed_url")
+
+        assert rules.allow == BASE_ALLOW | {"connection_url"}
+        assert rules.deny == BASE_DENY | {"hidden_field"}
+        assert rules.mask == BASE_MASK | {"private_text"}
+        assert rules.sanitize == BASE_LOG_RULES.sanitize | {"connection_url"}
+
 
 class TestExtension:
     """継承で祖先の deny を保ち、親の規則を変更せず、allow は明示した分だけを持つ。"""
@@ -225,3 +244,50 @@ class TestMask:
         )
         parent.extend(allow=frozenset(), mask=frozenset({"child_private"}))
         assert parent.mask == BASE_MASK | {"parent_private"}
+
+
+class TestSanitize:
+    """サニタイズ対象の項目名を正規化し、親子の対象項目を合わせる。"""
+
+    def test_sanitize_normalizes_field_name(self) -> None:
+        """正規化後のサニタイズ対象のキー集合が期待値と一致する。"""
+        rules = LogPolicyRules(
+            policy=LogPolicy.INFRASTRUCTURE,
+            allow=frozenset(),
+            sanitize=frozenset({"ConnectionUrl"}),
+        )
+
+        assert rules.sanitize == BASE_LOG_RULES.sanitize | {"connection_url"}
+
+    def test_extension_merges_different_sanitize_fields(self) -> None:
+        """子に別の項目を追加すると、親と子の両方がサニタイズ対象になる。"""
+        parent = LogPolicyRules(
+            policy=LogPolicy.INFRASTRUCTURE,
+            allow=frozenset(),
+            sanitize=frozenset({"connection_url"}),
+        )
+
+        child = parent.extend(
+            allow=frozenset(),
+            sanitize=frozenset({"signed_url"}),
+        )
+
+        assert child.sanitize == BASE_LOG_RULES.sanitize | {
+            "connection_url",
+            "signed_url",
+        }
+
+    def test_extension_does_not_duplicate_same_sanitize_field(self) -> None:
+        """親と子で同じ項目を指定しても、サニタイズ対象は重複しない。"""
+        parent = LogPolicyRules(
+            policy=LogPolicy.INFRASTRUCTURE,
+            allow=frozenset(),
+            sanitize=frozenset({"connection_url"}),
+        )
+
+        child = parent.extend(
+            allow=frozenset(),
+            sanitize=frozenset({"connection_url"}),
+        )
+
+        assert child.sanitize == BASE_LOG_RULES.sanitize | {"connection_url"}

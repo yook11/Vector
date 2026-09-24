@@ -6,6 +6,8 @@ Implementation: 基底規則・processor・例外構造化・チェーン構成�
 
 関連: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)、[デプロイ診断ログの共通秘匿ポリシー](../platform/deployment-log-policy.md)
 
+変更状況: [項目別サニタイズのログポリシー](./logging-sanitization-policy.md)を優先する。対象項目の値全体を、検査・再帰の前に `***` へ置き換えるマスクは実装済み。以下の文字列内部の置換をmaskと呼ぶ記述は旧契約であり、その処理とポリシーの切り離しは別タスクとする。項目別サニタイズはポリシーから共通入口への接続まで実装済み。実際の共通・目的別項目の選定は未実施で、既存の全文字列処理は維持している。
+
 ## Problem
 
 structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼び出し側の規律 (`redact_secrets` の手巻き、`logger.exception()` の回避) に依存している。結果として、例外文を丸ごと捨てる箇所と生で出す箇所が混在する。

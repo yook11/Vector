@@ -9,7 +9,7 @@ from app.log_policy.base import BASE_MASK, normalize_key
 from app.log_policy.budget import TEXT_LIMIT, LogEventBudget
 from app.log_policy.diagnostics import LogProcessingDiagnostics
 from app.log_policy.mask import mask_assignments
-from app.log_policy.sanitize import sanitize_text
+from app.log_policy.sanitize import sanitize_field_value, sanitize_text
 
 DEPTH_LIMIT = 10
 EXCEPTION_DEPTH_LIMIT = 19
@@ -18,6 +18,7 @@ EXCEPTION_DEPTH_LIMIT = 19
 class _ValueMarker(Enum):
     """置換後の固定文字列は入力の文字列ではないため、サニタイズ・マスクの対象にしない。"""
 
+    MASKED = "***"
     LIMIT = "[limit]"
     UNSUPPORTED = "[unsupported]"
     CYCLE = "[cycle]"
@@ -32,10 +33,11 @@ def is_supported_value(value: Any) -> bool:
 
 @dataclass
 class LogValuePreparer:
-    """トップレベルの項目名は扱わず、項目の値を構造検査・サニタイズ・マスクして出力用に整える。"""
+    """項目名でマスクを判定し、対象外の値を構造検査・サニタイズして出力用に整える。"""
 
     deny: frozenset[str]
     mask: frozenset[str] = BASE_MASK
+    sanitize: frozenset[str] = field(default_factory=frozenset, kw_only=True)
     budget: LogEventBudget = field(default_factory=LogEventBudget, kw_only=True)
     diagnostics: LogProcessingDiagnostics = field(
         default_factory=LogProcessingDiagnostics, kw_only=True
@@ -46,20 +48,29 @@ class LogValuePreparer:
         self,
         field_value: Any,
         *,
+        field_name: str | None = None,
         depth_limit: int = DEPTH_LIMIT,
     ) -> Any:
         """指定された深さ上限で値を構造検査し、サニタイズ・マスクして出力用に整える。"""
-        inspected_value = self.inspect_value(field_value, depth_limit=depth_limit)
-        return self.prepare_text_values(inspected_value)
+        inspected_value = self.inspect_value(
+            field_value, field_name=field_name, depth_limit=depth_limit
+        )
+        return self.prepare_text_values(inspected_value, field_name=field_name)
 
     def inspect_value(
         self,
         value: Any,
         depth: int = 0,
         *,
+        field_name: str | None = None,
         depth_limit: int = DEPTH_LIMIT,
     ) -> Any:
-        """深さ・型・循環を確認し、値の種類に応じた検査へ振り分ける。"""
+        """マスク対象の内部には触れず、対象外だけ深さ・型・循環を検査する。"""
+        if field_name is not None:
+            normalized_field_name = normalize_key(field_name)
+            if normalized_field_name in self.mask:
+                return _ValueMarker.MASKED
+
         if depth > depth_limit:
             return _ValueMarker.LIMIT
 
@@ -134,7 +145,7 @@ class LogValuePreparer:
             self.budget.check_and_count_text_chars(len(key))
 
             inspected_value = self.inspect_value(
-                child_value, depth + 1, depth_limit=depth_limit
+                child_value, depth + 1, field_name=key, depth_limit=depth_limit
             )
             inspected_dictionary[key] = inspected_value
 
@@ -160,20 +171,31 @@ class LogValuePreparer:
 
         return inspected_items
 
-    def prepare_text_values(self, value: Any) -> Any:
-        """検査済みの構造だけを辿り、文字列と辞書キーを一度ずつ出力用に整える。"""
+    def prepare_text_values(self, value: Any, *, field_name: str | None = None) -> Any:
+        """検査済みの構造で項目別サニタイズを適用し、文字列と辞書キーを出力用に整える。"""
         if type(value) is _ValueMarker:
             return value.value
-        if type(value) is str:
-            sanitized_text = sanitize_text(value)
-            return mask_assignments(sanitized_text, mask=self.mask)
         if type(value) is dict:
             prepared_dictionary: dict[str, Any] = {}
             for key, child_value in value.items():
                 sanitized_key = sanitize_text(key)
                 masked_key = mask_assignments(sanitized_key, mask=self.mask)
-                prepared_dictionary[masked_key] = self.prepare_text_values(child_value)
+                prepared_dictionary[masked_key] = self.prepare_text_values(
+                    child_value, field_name=key
+                )
             return prepared_dictionary
         if type(value) is list:
-            return [self.prepare_text_values(item) for item in value]
+            return [
+                self.prepare_text_values(item, field_name=field_name) for item in value
+            ]
+        if field_name is not None:
+            normalized_field_name = normalize_key(field_name)
+            if normalized_field_name in self.sanitize:
+                sanitized_value = sanitize_field_value(normalized_field_name, value)
+                if type(value) is not str:
+                    return sanitized_value
+                value = sanitized_value
+        if type(value) is str:
+            sanitized_text = sanitize_text(value)
+            return mask_assignments(sanitized_text, mask=self.mask)
         return value

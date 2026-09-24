@@ -90,8 +90,8 @@ class TestDenyAndMaskSeparation:
         assert "restricted_sample" not in output
         assert output["payload"] == {"count": 1}
 
-    def test_mask_alone_does_not_remove_or_replace_structured_values(self) -> None:
-        """maskは文字列内のキー付き値にだけ働き、辞書の同名項目は残す。"""
+    def test_mask_preserves_field_names_when_replacing_values(self) -> None:
+        """mask対象の項目名はトップレベルでもネスト内でも残し、値全体を置き換える。"""
         rules = LogPolicyRules(
             LogPolicy.INFRASTRUCTURE,
             frozenset({"payload", "restricted_sample"}),
@@ -101,26 +101,45 @@ class TestDenyAndMaskSeparation:
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
             {
-                "event": "restricted_sample=synthetic",
+                "event": "completed",
                 "restricted_sample": "visible",
                 "payload": {"restricted_sample": "visible"},
             },
         )
-        assert output["event"] == "restricted_sample=***"
-        assert output["restricted_sample"] == "visible"
-        assert output["payload"] == {"restricted_sample": "visible"}
+        assert output["event"] == "completed"
+        assert output["restricted_sample"] == "***"
+        assert output["payload"] == {"restricted_sample": "***"}
 
-    def test_mask_does_not_grant_top_level_allow(self) -> None:
-        """maskへ追加したキーもallowにないトップレベル項目なら未登録として落とす。"""
+
+class TestTopLevelAllow:
+    """保護規則の登録はトップレベル項目の出力許可を与えない。"""
+
+    @pytest.mark.parametrize(
+        "protection_rules",
+        [
+            pytest.param(
+                {"mask": frozenset({"connection_url"})},
+                id="mask_without_allow",
+            ),
+            pytest.param(
+                {"sanitize": frozenset({"connection_url"})},
+                id="sanitize_without_allow",
+            ),
+        ],
+    )
+    def test_protection_rules_do_not_grant_top_level_allow(
+        self, protection_rules
+    ) -> None:
+        """保護規則へ登録してもallowにないトップレベル項目は未登録として落とす。"""
         rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset(), mask=frozenset({"private_text"})
+            LogPolicy.INFRASTRUCTURE, frozenset(), **protection_rules
         )
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
-            {"private_text": "synthetic"},
+            {"connection_url": "synthetic"},
         )
-        assert "private_text" not in output
+        assert "connection_url" not in output
         assert output["_unregistered_count"] == 1
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from collections.abc import Callable
 
 _PROVIDER_KEY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # AI provider keys
@@ -121,3 +122,17 @@ def sanitize_text(text: str) -> str:
     text = sanitize_aws_signed_query_credentials(text)
     text = sanitize_url_userinfo(text)
     return sanitize_jwts(text)
+
+
+_FIELD_SANITIZERS: dict[str, Callable[[str], str]] = {
+    "connection_url": sanitize_url_userinfo,
+    "upstream_message": sanitize_jwts,
+}
+
+
+def sanitize_field_value(field_name: str, value: object) -> str:
+    """対応表にある項目の値を処理し、入力型が合わなければ固定マーカーを返す。"""
+    sanitizer = _FIELD_SANITIZERS[field_name]
+    if type(value) is not str:
+        return "[unsupported]"
+    return sanitizer(value)

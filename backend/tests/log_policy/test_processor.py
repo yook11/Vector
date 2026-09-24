@@ -19,6 +19,7 @@ from app.log_policy import (
 from app.log_policy.budget import MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
 from app.log_policy.exceptions import extraction
 from app.log_policy.processor import LogPolicyProcessor
+from app.log_policy.value_preparation import DEPTH_LIMIT
 
 pytestmark = pytest.mark.unit
 
@@ -34,6 +35,25 @@ _INFRA_RULES = LogPolicyRules(
     policy=LogPolicy.INFRASTRUCTURE,
     allow=frozenset({"resource", "endpoint", "error_message"}),
 )
+
+
+@pytest.fixture
+def masking_logger() -> PolicyLogger:
+    rules = BASE_LOG_RULES.extend(
+        allow=frozenset({"private_text", "payload"}),
+        mask=frozenset({"private_text"}),
+    )
+    return PolicyLogger(rules, structlog.ReturnLogger())
+
+
+@pytest.fixture
+def sanitizing_logger() -> PolicyLogger:
+    rules = LogPolicyRules(
+        policy=LogPolicy.INFRASTRUCTURE,
+        allow=frozenset({"payload"}),
+        sanitize=frozenset({"connection_url"}),
+    )
+    return PolicyLogger(rules, structlog.ReturnLogger())
 
 
 class TestLoggingInputSources:
@@ -319,6 +339,207 @@ class TestFieldProtection:
             "payload": "[non-string-key]",
             "source_id": 7,
             "log_policy": _TEST_RULES.policy.value,
+        }
+
+
+class TestMask:
+    """対象項目の値全体を、型やネスト先によらず固定マーカーへ置き換える。"""
+
+    def test_string_field_is_masked(self, masking_logger: PolicyLogger) -> None:
+        """対象項目の値が文字列なら、その文字列全体をマスクする。"""
+        fields = {"private_text": "synthetic private text"}
+
+        output = LogPolicyProcessor()(masking_logger, "info", fields)
+
+        assert output == {"private_text": "***"}
+
+    def test_numeric_field_is_masked(self, masking_logger: PolicyLogger) -> None:
+        """対象項目の値が数値でも、固定マーカーに置き換える。"""
+        fields = {"private_text": 123}
+
+        output = LogPolicyProcessor()(masking_logger, "info", fields)
+
+        assert output == {"private_text": "***"}
+
+    def test_dictionary_field_is_masked_as_a_whole(
+        self, masking_logger: PolicyLogger
+    ) -> None:
+        """対象項目の値が辞書なら、辞書全体を一つの固定マーカーに置き換える。"""
+        fields = {"private_text": {"message": "synthetic"}}
+
+        output = LogPolicyProcessor()(masking_logger, "info", fields)
+
+        assert output == {"private_text": "***"}
+
+    def test_list_field_is_masked_as_a_whole(
+        self, masking_logger: PolicyLogger
+    ) -> None:
+        """対象項目の値が配列なら、配列全体を一つの固定マーカーに置き換える。"""
+        fields = {"private_text": ["first", "second"]}
+
+        output = LogPolicyProcessor()(masking_logger, "info", fields)
+
+        assert output == {"private_text": "***"}
+
+    def test_field_in_nested_dictionary_is_masked(
+        self, masking_logger: PolicyLogger
+    ) -> None:
+        """辞書の中に辞書がある場合でも、対象項目の値全体をマスクする。"""
+        fields = {"payload": {"details": {"private_text": "synthetic"}}}
+
+        output = LogPolicyProcessor()(masking_logger, "info", fields)
+
+        assert output == {"payload": {"details": {"private_text": "***"}}}
+
+    def test_field_in_dictionary_inside_list_is_masked(
+        self, masking_logger: PolicyLogger
+    ) -> None:
+        """配列内の辞書でも、対象項目の値全体をマスクして兄弟項目を残す。"""
+        fields = {
+            "payload": [{"private_text": {"message": "synthetic"}, "count": 1}],
+        }
+
+        output = LogPolicyProcessor()(masking_logger, "info", fields)
+
+        assert output == {"payload": [{"private_text": "***", "count": 1}]}
+
+    def test_field_outside_mask_is_preserved(
+        self, masking_logger: PolicyLogger
+    ) -> None:
+        """対象名を含む別の項目名はマスクせず、値をそのまま残す。"""
+        fields = {"payload": {"private_text_suffix": "synthetic"}}
+
+        output = LogPolicyProcessor()(masking_logger, "info", fields)
+
+        assert output == {"payload": {"private_text_suffix": "synthetic"}}
+
+    def test_normalized_field_name_is_matched_for_masking(
+        self, masking_logger: PolicyLogger
+    ) -> None:
+        """項目名を正規化して対象と一致すれば、元の項目名を残して値をマスクする。"""
+        fields = {"PrivateText": "synthetic"}
+
+        output = LogPolicyProcessor()(masking_logger, "info", fields)
+
+        assert output == {"PrivateText": "***"}
+
+
+class TestSanitize:
+    """辞書や配列がネストしていても、登録した項目にだけサニタイズを適用する。"""
+
+    def test_registered_field_in_nested_dictionary_is_sanitized(
+        self, sanitizing_logger: PolicyLogger
+    ) -> None:
+        """辞書の中に辞書がある場合でも、登録した項目をサニタイズする。"""
+        fields = {
+            "payload": {
+                "details": {
+                    "connection_url": "https://user:synthetic@example.com/path",
+                },
+            },
+        }
+
+        output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
+
+        assert output["payload"] == {
+            "details": {
+                "connection_url": "https://***@example.com/path",
+            },
+        }
+
+    def test_registered_field_in_dictionary_inside_list_is_sanitized(
+        self, sanitizing_logger: PolicyLogger
+    ) -> None:
+        """配列の中に辞書がある場合でも、登録した項目をサニタイズする。"""
+        fields = {
+            "payload": [
+                {
+                    "connection_url": "https://user:synthetic@example.com/path",
+                },
+            ],
+        }
+
+        output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
+
+        assert output["payload"] == [
+            {
+                "connection_url": "https://***@example.com/path",
+            },
+        ]
+
+    def test_registered_field_with_nested_lists_is_sanitized(
+        self, sanitizing_logger: PolicyLogger
+    ) -> None:
+        """登録項目の配列の中に配列がある場合でも、中の文字列をサニタイズする。"""
+        fields = {
+            "payload": {
+                "connection_url": [
+                    ["https://user:synthetic@example.com/path"],
+                ],
+            },
+        }
+
+        output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
+
+        assert output["payload"] == {
+            "connection_url": [
+                ["https://***@example.com/path"],
+            ],
+        }
+
+    def test_unregistered_field_inside_registered_field_is_preserved(
+        self, sanitizing_logger: PolicyLogger
+    ) -> None:
+        """登録項目の配下でも、辞書内の未登録項目の数値はそのまま残す。"""
+        fields = {
+            "payload": {
+                "connection_url": [
+                    {
+                        "note": 123,
+                    },
+                ],
+            },
+        }
+
+        output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
+
+        assert output["payload"] == {
+            "connection_url": [
+                {
+                    "note": 123,
+                },
+            ],
+        }
+
+    def test_registered_top_level_field_is_matched_by_normalized_name(self) -> None:
+        """トップレベルの項目名を正規化して照合し、登録項目の型不一致を置換する。"""
+        rules = BASE_LOG_RULES.extend(
+            allow=frozenset({"connection_url"}),
+            sanitize=frozenset({"connection_url"}),
+        )
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"ConnectionUrl": 123},
+        )
+
+        assert output == {"ConnectionUrl": "[unsupported]"}
+
+    def test_registered_non_string_values_in_nested_containers_are_replaced(
+        self, sanitizing_logger: PolicyLogger
+    ) -> None:
+        """辞書と配列が入れ子でも、登録項目の配列内にある型不一致の値を置換する。"""
+        fields = {
+            "payload": {
+                "details": [{"connection_url": [[123]]}],
+            },
+        }
+
+        output = LogPolicyProcessor()(sanitizing_logger, "info", fields)
+
+        assert output["payload"] == {
+            "details": [{"connection_url": [["[unsupported]"]]}],
         }
 
 
@@ -612,6 +833,185 @@ def _failure_with_cause_chain(cause_depth: int) -> tuple[BaseException, ValueErr
         parent.__cause__ = outer
         outer = parent
     return outer, inner
+
+
+class TestDepthLimit:
+    """深さ上限までは通常の規則を適用し、超えた部分だけを置換する。"""
+
+    def test_value_at_depth_limit_is_preserved(self) -> None:
+        """深さ上限ちょうどの値は、正常な別項目とともにログへ残す。"""
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
+        payload = _nested_value(depth=DEPTH_LIMIT, leaf=7)
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", "payload": payload},
+        )
+
+        assert output == {
+            "event": "completed",
+            "payload": _nested_value(depth=DEPTH_LIMIT, leaf=7),
+        }
+
+    def test_denied_field_at_depth_limit_is_removed(self) -> None:
+        """深さ上限ちょうどでも、禁止項目を除外して他の項目を残す。"""
+        rules = BASE_LOG_RULES.extend(
+            allow=frozenset({"payload"}),
+            deny=frozenset({"restricted_sample"}),
+        )
+        payload = _nested_value(
+            depth=DEPTH_LIMIT - 1,
+            leaf={"restricted_sample": "synthetic", "count": 1},
+        )
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", "payload": payload},
+        )
+
+        assert output == {
+            "event": "completed",
+            "payload": _nested_value(
+                depth=DEPTH_LIMIT - 1,
+                leaf={"count": 1},
+            ),
+            "_denied_nested_count": 1,
+        }
+
+    def test_registered_field_at_depth_limit_is_sanitized(self) -> None:
+        """深さ上限ちょうどの登録項目にも、サニタイズを適用する。"""
+        rules = BASE_LOG_RULES.extend(
+            allow=frozenset({"payload"}),
+            sanitize=frozenset({"connection_url"}),
+        )
+        payload = _nested_value(
+            depth=DEPTH_LIMIT - 1,
+            leaf={
+                "connection_url": "https://user:synthetic@example.com/path",
+            },
+        )
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", "payload": payload},
+        )
+
+        assert output == {
+            "event": "completed",
+            "payload": _nested_value(
+                depth=DEPTH_LIMIT - 1,
+                leaf={"connection_url": "https://***@example.com/path"},
+            ),
+        }
+
+    def test_text_at_depth_limit_is_masked(self) -> None:
+        """深さ上限ちょうどの文字列にも、マスクを適用する。"""
+        rules = BASE_LOG_RULES.extend(
+            allow=frozenset({"payload"}),
+            mask=frozenset({"private_text"}),
+        )
+        payload = _nested_value(
+            depth=DEPTH_LIMIT - 1,
+            leaf={"message": "private_text=synthetic"},
+        )
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", "payload": payload},
+        )
+
+        assert output == {
+            "event": "completed",
+            "payload": _nested_value(
+                depth=DEPTH_LIMIT - 1,
+                leaf={"message": "private_text=***"},
+            ),
+        }
+
+    def test_dictionary_value_beyond_depth_limit_is_replaced(self) -> None:
+        """辞書内の値が深さ上限を超えたら、項目名を残して値を [limit] に置き換える。"""
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
+        payload = _nested_value(depth=DEPTH_LIMIT, leaf={"value": 7})
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", "payload": payload},
+        )
+
+        assert output == {
+            "event": "completed",
+            "payload": _nested_value(depth=DEPTH_LIMIT, leaf={"value": "[limit]"}),
+        }
+
+    def test_list_value_beyond_depth_limit_is_replaced(self) -> None:
+        """配列内の値が深さ上限を超えたら、その要素を [limit] に置き換える。"""
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
+        payload = _nested_value(depth=DEPTH_LIMIT, leaf=["synthetic"])
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", "payload": payload},
+        )
+
+        assert output == {
+            "event": "completed",
+            "payload": _nested_value(depth=DEPTH_LIMIT, leaf=["[limit]"]),
+        }
+
+    def test_dictionary_inside_list_beyond_depth_limit_is_replaced(self) -> None:
+        """配列内の辞書が深さ上限を超えたら、辞書全体を [limit] に置き換える。"""
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
+        payload = _nested_value(depth=DEPTH_LIMIT, leaf=[{"value": 7}])
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", "payload": payload},
+        )
+
+        assert output == {
+            "event": "completed",
+            "payload": _nested_value(depth=DEPTH_LIMIT, leaf=["[limit]"]),
+        }
+
+    def test_list_inside_dictionary_beyond_depth_limit_is_replaced(self) -> None:
+        """辞書内の配列が深さ上限を超えたら、配列全体を [limit] に置き換える。"""
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
+        payload = _nested_value(depth=DEPTH_LIMIT, leaf={"items": [7]})
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "info",
+            {"event": "completed", "payload": payload},
+        )
+
+        assert output == {
+            "event": "completed",
+            "payload": _nested_value(depth=DEPTH_LIMIT, leaf={"items": "[limit]"}),
+        }
+
+    def test_depth_over_limit_preserves_and_masks_siblings(self) -> None:
+        """深さ上限を超えた部分だけを置換し、隣の正常な文字列にはマスクを適用する。"""
+        nested = _nested_value(depth=DEPTH_LIMIT + 1, leaf="synthetic")
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "info",
+            {"event": {"first": "token=synthetic", "nested": nested}},
+        )
+
+        assert output == {
+            "event": {
+                "first": "token=***",
+                "nested": _nested_value(depth=DEPTH_LIMIT, leaf="[limit]"),
+            },
+        }
 
 
 class TestExceptionValueDepthLimit:
