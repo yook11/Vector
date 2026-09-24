@@ -51,7 +51,7 @@ class LogValuePreparer:
         field_name: str | None = None,
         depth_limit: int = DEPTH_LIMIT,
     ) -> Any:
-        """指定された深さ上限で値を構造検査し、サニタイズ・マスクして出力用に整える。"""
+        """マスク対象を先に置換し、対象外は構造検査とサニタイズで出力用に整える。"""
         inspected_value = self.inspect_value(
             field_value, field_name=field_name, depth_limit=depth_limit
         )
