@@ -1,7 +1,8 @@
 # ログの情報漏洩防止と項目別サニタイズの責務分離
 
 作成: 2026-09-24
-Status: 情報漏洩防止と項目別サニタイズを実装済み (Step 4)・関連仕様の同期は未実施 (Step 5)
+Status: Implemented
+Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log_policy/leak_prevention.py)、項目別サニタイズの対応表と `sanitize_article_url` を [sanitize.py](../../backend/app/log_policy/sanitize.py)、対応表にない項目名の拒否を [base.py](../../backend/app/log_policy/base.py) に実装済み。実際のポリシーでの `sanitize` の有効化は後続とする。
 
 [共通基底ポリシー](./logging-base-policy.md)と[項目別サニタイズのログポリシー](./logging-sanitization-policy.md)の後続として、全文字列に適用している処理を情報漏洩防止として定義し直し、項目別サニタイズとの責務を分ける差分仕様。文字列内部の処理とサニタイズの対象は本書を優先する。
 
@@ -11,8 +12,8 @@ Status: 情報漏洩防止と項目別サニタイズを実装済み (Step 4)・
 
 ## Evidence
 
-- [sanitize.py](../../backend/app/log_policy/sanitize.py): 形式ごとの検出と `sanitize_text`、項目別サニタイズの対応表 (`connection_url → sanitize_url_userinfo`、`upstream_message → sanitize_jwts`) を同じモジュールに持つ。AIプロバイダーのキーは `_PROVIDER_KEY_PATTERNS` にまとめて検出し、アプリが保持しない GitHub・Anthropic・Tavily・OpenAI の形式を含む。DeepSeek の形式はない。
-- [mask.py](../../backend/app/log_policy/mask.py): 文字列中のキー付き値の終端を引用符・括弧・区切り文字から推測する。値に区切り文字が含まれると残りが出力される (`password=abc,def` → `password=***,def`)。
+- [sanitize.py](../../backend/app/log_policy/sanitize.py) (変更前): 形式ごとの検出と `sanitize_text`、項目別サニタイズの対応表 (`connection_url → sanitize_url_userinfo`、`upstream_message → sanitize_jwts`) を同じモジュールに持つ。AIプロバイダーのキーは `_PROVIDER_KEY_PATTERNS` にまとめて検出し、アプリが保持しない GitHub・Anthropic・Tavily・OpenAI の形式を含む。DeepSeek の形式はない。
+- `mask.py` (Step 3 で削除): 文字列中のキー付き値の終端を引用符・括弧・区切り文字から推測する。値に区切り文字が含まれると残りが出力される (`password=abc,def` → `password=***,def`)。
 - [value_preparation.py](../../backend/app/log_policy/value_preparation.py)・[diagnostics.py](../../backend/app/log_policy/diagnostics.py): 文字列値・辞書キー・除外キーの診断へ `sanitize_text → mask_assignments(mask=rules.mask)` を適用する。
 - [config.py](../../backend/app/config.py) と Lambda の設定: アプリが保持する形式を持つ認証情報は Gemini・DeepSeek・Logfire。`openai_api_key` は定義のみで読まれず、Tavily は実行経路で生成されない。
 - Gemini SDK はキー漏洩時に `API key AIza... has been reported as leaked` を返し、原因連鎖の `error_message` として出力される。キー名の目印がなく、形式による検出だけが保護になる。
@@ -133,6 +134,20 @@ Status: 情報漏洩防止と項目別サニタイズを実装済み (Step 4)・
 | 3 | `leak_prevention.py` を作り、`sanitize.py` の検出処理と `mask.py` を移して削除する。値準備・診断を入口へ切り替え、`BASE_MASK` を空にし、ベンチマークスクリプトの参照を更新する。 | 単体・適用箇所・出力後のテストと、ベンチマークの旧正規表現との一致確認。 |
 | 4 | `sanitize.py` の対応表を `sanitize_article_url` に置き換え、構築時の検証を追加する。 | サニタイズと規則構築のテスト。 |
 | 5 | 関連仕様の記述を同期する。 | `/check` で変更範囲を検証する。 |
+
+## Verification
+
+2026-09-24 に次を確認した。
+
+- `uv run pytest tests/log_policy -q -m unit`: 606件成功。
+  - 種類ごとの検出境界: `leak_prevention/`
+  - 共通入口と `sanitize_article_url`: `test_sanitize.py`
+  - 未登録項目名の拒否: `test_base.py`
+  - 適用箇所: `test_processor.py`
+  - 最終出力: `test_chain.py`・`test_logging.py`
+- ベンチマークスクリプトの `_check_equivalence`: URL userinfo 20,400件と JWT 30,000件で、置換結果が旧正規表現と一致した。
+- `uv run ruff check`・`uv run ruff format --check`: `app/`・ベンチマークスクリプト・`tests/log_policy/` で成功した。
+- 実際のポリシーでの `sanitize` の有効化と AWS 上の出力確認は、Non-goals のため実施していない。
 
 ## Done
 
