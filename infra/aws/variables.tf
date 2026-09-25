@@ -84,7 +84,7 @@ variable "enable_db_bastion" {
 variable "crossref_contact_email" {
   description = <<-EOT
     Crossref API の User-Agent に載せる連絡先 (backend Settings の必須項目)。
-    実際に使うのは fetch だけだが、Settings が構築時に全段で要求する。
+    実際に使うのは取得の Lambda だけだが、Settings が構築時に全段で要求する。
     公開 repo に実アドレスを置かないため default を持たず tfvars で渡す。
   EOT
   type        = string
