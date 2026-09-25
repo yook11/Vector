@@ -33,7 +33,7 @@ def is_supported_value(value: Any) -> bool:
 
 @dataclass
 class LogValuePreparer:
-    """項目名でマスクを判定し、対象外の値を構造検査・サニタイズ・情報漏洩防止で出力用に整える。"""
+    """ログの構造を捜査して、出力用に整える"""
 
     deny: frozenset[str]
     mask: frozenset[str] = BASE_MASK
@@ -51,7 +51,7 @@ class LogValuePreparer:
         field_name: str | None = None,
         depth_limit: int = DEPTH_LIMIT,
     ) -> Any:
-        """マスク対象を先に置換し、対象外は構造検査・サニタイズ・情報漏洩防止で出力用に整える。"""
+        """値の準備の入口で、検査で形を確定させてから文字列を加工し、共有予算の超過は例外のまま呼び出し側へ伝える。"""
         inspected_value = self.inspect_value(
             field_value, field_name=field_name, depth_limit=depth_limit
         )
@@ -65,12 +65,14 @@ class LogValuePreparer:
         field_name: str | None = None,
         depth_limit: int = DEPTH_LIMIT,
     ) -> Any:
-        """マスク対象の内部には触れず、対象外だけ深さ・型・循環を検査する。"""
+        """値の木を再帰的にたどる中心で、位置ごとに打ち切るか子へ進むかを決める。"""
+        # マスク対象の項目を先に確認して、中身を見ずに丸ごと伏せる。
         if field_name is not None:
             normalized_field_name = normalize_key(field_name)
             if normalized_field_name in self.mask:
                 return _ValueMarker.MASKED
 
+        # 深すぎる位置と扱えない型は、その位置だけ打ち切る。
         if depth > depth_limit:
             return _ValueMarker.LIMIT
 
@@ -79,10 +81,11 @@ class LogValuePreparer:
 
         value_type = type(value)
 
+        # 子を持たない値は、木の末端としてここで検査を終える。
         if value_type in {type(None), bool, int, float, str}:
             return self.inspect_scalar(value)
 
-        # 辞書・配列では、現在の経路に戻る参照だけを循環として扱う。
+        # 辞書・配列は経路に載せて子へ進み、経路上に戻る参照だけを循環とする。
         if id(value) in self.active_container_ids:
             return _ValueMarker.CYCLE
 
@@ -98,7 +101,7 @@ class LogValuePreparer:
     def inspect_scalar(
         self, value: None | bool | int | float | str
     ) -> None | bool | int | float | str | _ValueMarker:
-        """子を持たない値を検査し、長すぎる文字列・大きすぎる整数・非有限の数は、ログのその部分だけをマーカーに置き換える。"""
+        """木の末端の値が、ログに出せる大きさと種類かを確かめる。"""
         value_type = type(value)
 
         if value is None or value_type is bool:
@@ -125,7 +128,7 @@ class LogValuePreparer:
         *,
         depth_limit: int = DEPTH_LIMIT,
     ) -> dict[str, Any] | _ValueMarker:
-        """辞書を検査し、denyのキーと長すぎるキーは値ごと落として診断へ記録し、文字列でないキーがあれば辞書ごとマーカーに置き換える。"""
+        """辞書のキーごとに残すか落とすかを決め、残したキーの値だけを子として検査を続ける。"""
         if any(type(key) is not str for key in dictionary):
             return _ValueMarker.NON_STRING_KEY
 
@@ -134,6 +137,7 @@ class LogValuePreparer:
         for key, child_value in dictionary.items():
             self.budget.check_and_count_log_items(1)
 
+            # 長すぎるキーとdenyのキーは、値を見ずに落として診断に残す。
             if len(key) > TEXT_LIMIT:
                 self.diagnostics.record_nested_key_limit_reached()
                 continue
@@ -158,7 +162,7 @@ class LogValuePreparer:
         *,
         depth_limit: int = DEPTH_LIMIT,
     ) -> list[Any]:
-        """配列を検査し、要素は落とさず順序と件数を保ったまま、問題のある要素だけをマーカーに置き換える。"""
+        """配列は要素を落とさず、各要素を子として同じ検査にかける。"""
         inspected_items: list[Any] = []
 
         for child_value in sequence:
@@ -172,9 +176,10 @@ class LogValuePreparer:
         return inspected_items
 
     def prepare_text_values(self, value: Any, *, field_name: str | None = None) -> Any:
-        """検査済みの構造で項目別サニタイズを適用し、文字列と辞書キーへ最後に情報漏洩防止を適用する。"""
+        """形が確定した木をもう一度たどり、文字列だけを項目別サニタイズと情報漏洩防止で加工する。"""
         if type(value) is _ValueMarker:
             return value.value
+        # 配列の要素は親の項目名を引き継ぎ、辞書に入ったら子のキーで選び直す。
         if type(value) is dict:
             prepared_dictionary: dict[str, Any] = {}
             for key, child_value in value.items():
@@ -191,6 +196,7 @@ class LogValuePreparer:
             normalized_field_name = normalize_key(field_name)
             if normalized_field_name in self.sanitize:
                 sanitized_value = sanitize_field_value(normalized_field_name, value)
+                # 入力型が合わない値は固定マーカーになるため、情報漏洩防止へ渡さない。
                 if type(value) is not str:
                     return sanitized_value
                 value = sanitized_value

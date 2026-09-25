@@ -256,11 +256,13 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 
 processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞書へ `diagnostics.prepare_log_fields(...)` の結果を結合し、診断のフィールド名や構造には立ち入らない。診断はキー名の一覧全体の予算検査を終えてからサニタイズし、長すぎるキー名は原文を処理せず `[limit]` にする。診断の準備中に共有予算を超過した場合も、通常項目を含むログ全体を固定出力へ置換する。
 
-入力からログ出力までの上限・共有予算の境界は `test_output_limits.py` が担当する。`TestLocalReplacement` で単一文字列・キー名・整数・深さ・例外由来の値の超過した位置だけを置換し正常な兄弟を残すことを、`TestWholeLogReplacementByTextBudget` / `TestWholeLogReplacementByItemBudget` で共有予算の上限ちょうどの保持と超過時のログ全体の置換を、processor経由で確認する。不正キー・内部項目・生成した例外項目・例外frameも実際の入力へ含め、通常項目との予算共有を確認する。禁止したネスト項目の件数、辞書と配列の混在、複数項目にまたがる予算共有も、上限ちょうどと一件超過の別テストで確認する。複数の予算を同時に超えたときの理由は `TestBudgetOverflowReason` が担当する。例外frame数の上限は抽出側が所有するため `exceptions/test_extraction.py` が担当する。processorの走査停止と状態分離は `test_processor.py`、超過した値をサニタイズへ渡さない処理内部の保証は `test_value_conversion.py`、置換後のマーカーと固定出力がrendererで戻らないことは `test_chain.py` が担当する。境界の異なる条件は独立したテストにし、予算をテスト側で直接加算するだけのケースを出力保証として扱わない。
+入力からログ出力までの上限・共有予算の境界は `test_output_limits.py` が担当する。`TestLocalReplacement` で単一文字列・キー名・整数・深さ・例外由来の値の超過した位置だけを置換し正常な兄弟を残すことを、`TestWholeLogReplacementByTextBudget` / `TestWholeLogReplacementByItemBudget` で共有予算の上限ちょうどの保持と超過時のログ全体の置換を、processor経由で確認する。不正キー・内部項目・生成した例外項目・例外frameも実際の入力へ含め、通常項目との予算共有を確認する。禁止したネスト項目の件数、辞書と配列の混在、複数項目にまたがる予算共有も、上限ちょうどと一件超過の別テストで確認する。複数の予算を同時に超えたときの理由は `TestBudgetOverflowReason` が担当する。例外frame数の上限は抽出側が所有するため `exceptions/test_extraction.py` が担当する。processorの走査停止と状態分離は `test_processor.py`、超過した値をサニタイズへ渡さない処理内部の保証は `test_value_preparation.py`、置換後のマーカーと固定出力がrendererで戻らないことは `test_chain.py` が担当する。境界の異なる条件は独立したテストにし、予算をテスト側で直接加算するだけのケースを出力保証として扱わない。
 
-`test_processor.py` の `TestExceptionValueDepthLimit` は、同じログ内の通常入力と例外項目に異なる深さ上限を適用し、上限内のframeを保持して上限直後の値を置換することを確認する。`test_value_conversion.py`は例外用の値準備上限ちょうどの保持と一段超過の検査停止を、`exceptions/test_application_output.py`は探索の最深部の`field`・`code`が最終ログへ残ることを確認する。
+`test_value_preparation.py` は `LogValuePreparer` を直接呼ぶ単体テストを集約する。`TestTextLimits` は単一文字列の上限ちょうどの保持・超過時の局所置換・長い原文の文字数計上と情報漏洩防止の省略・配列の順序と重複の保持を担当する。`TestSharedBudget` は既存予算と要素を合算した上限ちょうどの準備成功、および後続要素での超過時に先行文字列も加工せず `LogBudgetExceeded` を伝播することを確認する。値準備の単体テストでは固定の失敗ログを期待せず、ログ全体の置換と正常な別フィールドの保持は既存のprocessor経由テストで保証する。
 
-`test_budget.py` は `TestItemAccounting` / `TestTextAccounting` で計上と超過通知の単体契約を確認し、まとめた件数が超過したときに部分加算しない保証も保持する。診断の記録・集計・出力準備・返却値の分離は `test_diagnostics.py`、項目名の検査・deny優先・allow判定は `test_field_selection.py`、一項目ずつの処理順・不採用値を検査しないこと・実チェーンとの接続は `test_processor.py`、循環・共有参照・予約キー・独自型は `test_base_guards.py`、処理失敗時の固定出力と保護処理からの再帰ログの禁止は `test_processor.py` が担当する。`test_value_conversion.py` は辞書の操作・型変換・入力非変更・診断の独立性・文字列の処理回数を確認し、検査前の件数計上、不正な辞書の中身を検査しないこと、予算超過した項目の値やキーを処理しないことは呼び出しの記録で確認する。トップレベル項目の二重計上は `test_output_limits.py` の上限件数ちょうどの出力テストに集約する。
+`test_processor.py` の `TestExceptionValueDepthLimit` は、同じログ内の通常入力と例外項目に異なる深さ上限を適用し、上限内のframeを保持して上限直後の値を置換することを確認する。`test_value_preparation.py`は例外用の値準備上限ちょうどの保持と一段超過の検査停止を、`exceptions/test_application_output.py`は探索の最深部の`field`・`code`が最終ログへ残ることを確認する。
+
+`test_budget.py` は `TestItemAccounting` / `TestTextAccounting` で計上と超過通知の単体契約を確認し、まとめた件数が超過したときに部分加算しない保証も保持する。診断の記録・集計・出力準備・返却値の分離は `test_diagnostics.py`、項目名の検査・deny優先・allow判定は `test_field_selection.py`、一項目ずつの処理順・不採用値を検査しないこと・実チェーンとの接続は `test_processor.py`、循環・共有参照・予約キー・独自型は `test_base_guards.py`、処理失敗時の固定出力と保護処理からの再帰ログの禁止は `test_processor.py` が担当する。`test_value_preparation.py` は辞書の操作・型変換・入力非変更・診断の独立性・文字列の処理回数を確認し、検査前の件数計上、不正な辞書の中身を検査しないこと、予算超過した項目の値やキーを処理しないことは呼び出しの記録で確認する。トップレベル項目の二重計上は `test_output_limits.py` の上限件数ちょうどの出力テストに集約する。
 
 ## 適用位置
 
@@ -521,7 +523,7 @@ processorは、ルール取得 → 診断生成 → 同じ診断を持つprepare
 - `_denied_keys` は内部リストのコピーを取り出し、通常値・例外と同じ予算とdenyで準備してから出力する。
 - 値の上限超過は既存の `[limit]` 置換を維持し、新たな診断集計は追加しない。
 
-診断の単体契約は `test_diagnostics.py`、トップレベルとネストの記録の合流・ログ間の状態分離・禁止キー名のサニタイズは `test_processor.py`、単独preparerの状態分離は `test_value_conversion.py` が担当する。既存の入力境界と予算・走査停止のテストは移行して維持した。
+診断の単体契約は `test_diagnostics.py`、トップレベルとネストの記録の合流・ログ間の状態分離・禁止キー名のサニタイズは `test_processor.py`、単独preparerの状態分離は `test_value_preparation.py` が担当する。既存の入力境界と予算・走査停止のテストは移行して維持した。
 
 今回の検証: 関連テスト288件成功。バックエンドapp・関連テスト・測定スクリプトのlint、formatチェック（675ファイル）、実装・テスト・測定スクリプトの旧名参照確認、git diff --checkが成功した。全体単体テストとmake test-integrationはユーザー指示により再実行していない。
 
@@ -614,7 +616,7 @@ Done: 検査件数の加算を共通の列挙処理へ集約し、関連テス�
 
 トップレベルの入力検査件数は選別完了後にpreparerへ引き継ぎ、選択済みフィールドは `already_counted=True` で二重計上を避ける。ネスト・例外・診断の検査は同じ加算カウンターを継続する。
 
-共通列挙処理の遅延加算・上限直前と超過時の停止・計上済み項目の扱いと、辞書・配列・要素が一度ずつ数えられることを `test_value_conversion.py` で確認する。既存の予算境界・deny除外・例外・診断・rendererのテストは維持する。
+共通列挙処理の遅延加算・上限直前と超過時の停止・計上済み項目の扱いと、辞書・配列・要素が一度ずつ数えられることを `test_value_preparation.py` で確認する。既存の予算境界・deny除外・例外・診断・rendererのテストは維持する。
 
 今回の検証: 関連テスト314件成功。lint、formatチェック（675ファイル）、旧名参照確認、git diff --checkが成功した。全体単体テストとmake test-integrationはユーザー指示により保留した。
 
