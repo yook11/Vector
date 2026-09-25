@@ -8,21 +8,13 @@ import logfire
 
 from app.cloudwatch.emf import emit_metric
 
-# 成功率の分母は succeeded+failed。infra_error は emit するが分母外。
-CompletionProcessingOutcome = Literal["succeeded", "failed", "infra_error"]
+# 失敗は原因によらず failed とし、成功率の分母は succeeded+failed。
+CompletionProcessingOutcome = Literal["succeeded", "failed"]
 
 _processing_outcome_counter = logfire.metric_counter(
     "vector.completion.processing_outcome",
     unit="1",
-    description=(
-        "completion 処理試行の結末件数。result 別 (succeeded/failed/infra_error)"
-    ),
-)
-
-_lease_swept_counter = logfire.metric_counter(
-    "vector.completion.lease_swept",
-    unit="1",
-    description="lease 失効により open へ戻した completion 件数。",
+    description="completion 処理試行の結末件数。result 別 (succeeded/failed)",
 )
 
 
@@ -36,9 +28,3 @@ def record_completion_processing_outcome(result: CompletionProcessingOutcome) ->
         value=1,
         unit="Count",
     )
-
-
-def record_completion_lease_swept(swept_count: int) -> None:
-    """lease sweep が open へ戻した正数件数だけを記録する。"""
-    if swept_count > 0:
-        _lease_swept_counter.add(swept_count)
