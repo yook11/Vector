@@ -1,16 +1,16 @@
 """``ObservedArticle`` — 外部ソースから取得できた記事事実の値オブジェクト。
 
 取れた事実だけを持つ (要否 / 優先は ``ArticleCompletionPolicy`` が決める)。
-``incomplete_articles.observed_article`` (JSONB) に焼かれ、cron poller で
+``incomplete_articles.observed_article`` (JSONB) に焼かれ、補完 Consumer で
 再 hydrate される (``model_dump(mode="json", by_alias=True)`` で永続化、
 ``try_build`` で復元)。
 
 - identity ``source_name`` / ``source_url`` は表層列が authoritative
   (``incomplete_articles.source_name`` NOT NULL + composite FK /
   ``incomplete_articles.url`` UNIQUE)。JSONB には焼かない
-  (``Field(exclude=True)``) — in-memory では運搬のため必須。Stage 2 reader
-  (``ArticleCompletionRepository``) は表層列の値を ``model_validate`` 前に
-  raw へ注入する。
+  (``Field(exclude=True)``) — in-memory では運搬のため必須。Stage 2 の補完
+  Consumer は表層列の値を ``try_build`` に渡し、``model_validate`` 前に raw へ
+  注入する。
 - ``origin`` は audit メタで merge を駆動しない。
 """
 

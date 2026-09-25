@@ -36,14 +36,7 @@ scheduler_trend_discovery = create_scheduler()
 # 仕様 (schedule.py 時刻表 + task module のbroker登録先) から
 # 直書きした scheduler → 発見されるべき cron task_name 集合。
 _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
-    (
-        "dispatch",
-        scheduler_dispatch,
-        {
-            "dispatch_html_fetch_jobs",
-            "sweep_expired_leases",
-        },
-    ),
+    ("dispatch", scheduler_dispatch, set()),
     ("trend_discovery", scheduler_trend_discovery, {"run_trend_discovery"}),
     ("agent", scheduler_agent, {"sweep_deadline_exceeded_agent_runs"}),
     ("briefing", scheduler_briefing, {"dispatch_weekly_briefings"}),

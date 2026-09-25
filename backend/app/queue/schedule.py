@@ -8,8 +8,6 @@
 
   cron               | UTC          | JST          | task
   -------------------|--------------|--------------|---------------------------------
-  * * * * *          | 毎分         | 毎分         | dispatch_html_fetch_jobs
-                     |              |              | sweep_expired_leases
   * * * * *          | 毎分         | 毎分         | sweep_deadline_exceeded_agent_runs
   5 15 * * *         | 15:05        | 00:05 (毎日) | run_trend_discovery
   5 15 * * 0         | Sun 15:05    | Mon 00:05    | dispatch_weekly_briefings
@@ -23,9 +21,6 @@ minute 衝突確認は本表で行う (新規 cron 追加時の overlap 回避 S
 """
 
 from __future__ import annotations
-
-# 1 分間隔 — article_completion stage の DB 駆動 poll / lease sweep
-CRON_HTML_FETCH = "* * * * *"
 
 # 1 分間隔 — agent run の期限切れを確定
 CRON_AGENT_RUN_SWEEP = "* * * * *"

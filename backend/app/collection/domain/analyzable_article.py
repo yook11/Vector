@@ -91,8 +91,8 @@ class QualityTooLow:
     """不変条件に届かず構築できない理由を分類済み defect 集合で表す。
 
     free-text の Pydantic message (body 断片を含みうる = PII リスク) は保持せず、
-    監査に焼くのは構造化 defect のみ。completer がこれを ``CompletionRejection``
-    に翻訳する。
+    監査に焼くのは構造化 defect のみ。補完ではこれを
+    ``ArticleCompletionRejectedError`` に翻訳する。
     """
 
     defects: tuple[AnalyzableArticleDefect, ...]
