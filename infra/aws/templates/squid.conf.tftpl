@@ -50,9 +50,9 @@ http_access deny CONNECT !SSL_ports
 http_access deny to_private
 
 # Squid 自身の管理インターフェース。既定の squid.conf が必ず持つ防御で、
-# スクラッチで組むと落ちる。**fetch は宛先無制限なので、これが無いと
+# スクラッチで組むと落ちる。**取得・補完の Lambda は宛先無制限なので、これが無いと
 # http://<任意の public ホスト>/squid-internal-mgr/... で設定ダンプに届く**
-# (宛先が public なので to_private を抜け、fetch の allow に落ちる)。
+# (宛先が public なので to_private を抜け、宛先無制限の allow に落ちる)。
 # manager は組み込み ACL なので宣言は要らない。
 http_access deny manager
 

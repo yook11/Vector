@@ -1,7 +1,7 @@
 # execution role の policy が実 ARN を参照できるよう、pull 元と送り先を先に作る。
 
-# backend は 1 image を 5 段が共有する。段ごとに repo を分けても、同じ image を
-# 5 回 push することになるだけで境界は増えない。
+# backend は 1 image を 4 段が共有する。段ごとに repo を分けても、同じ image を
+# 4 回 push することになるだけで境界は増えない。
 #
 # IMMUTABLE の帰結: deploy は毎回一意な tag (commit SHA) で push する。
 # latest の上書きができないので、push job 側の契約になる。

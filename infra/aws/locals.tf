@@ -16,7 +16,7 @@ locals {
   #   cron を発火するだけで DB engine を作らない (scheduler_entrypoint.py が
   #   is_scheduler_process=True で WORKER_STARTUP を立てず、lifecycle.py の
   #   engine 生成 hook が走らない)。
-  # - image: backend は 1 つの image を 5 段が command 違いで起動する (Fly の
+  # - image: backend は 1 つの image を 4 段が command 違いで起動する (Fly の
   #   process group と同じ形)。frontend だけ別 image。
   # - needs_egress: frontend は外部への出先を持たない (Logfire も外部 API も無い)。
   stages = {
@@ -56,18 +56,6 @@ locals {
       image          = "backend", db_users = []
       cpu            = 256, memory = 512, port = null, singleton = true
       command        = ["supervisord", "-n", "-c", "/app/supervisord/scheduler.conf"]
-      secrets = {
-        BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
-        REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
-        LOGFIRE_TOKEN            = "logfire-token"
-      }
-    }
-    fetch = {
-      subnet_index   = 23, needs_broker = true
-      egress_vendors = ["logfire"], egress_allow_any_domain = true
-      image          = "backend", db_users = ["vector_collect"]
-      cpu            = 256, memory = 1024, port = null, singleton = false
-      command        = ["supervisord", "-n", "-c", "/app/supervisord/fetch.conf"]
       secrets = {
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
