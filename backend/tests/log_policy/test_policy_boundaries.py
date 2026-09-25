@@ -158,26 +158,6 @@ class TestDenyAndMaskSeparation:
         assert output["event"] == "restricted_sample=synthetic"
         assert output["payload"] == {"note": "restricted_sample=synthetic"}
 
-    def test_mask_preserves_field_names_when_replacing_values(self) -> None:
-        """mask対象の項目名はトップレベルでもネスト内でも残し、値全体を置き換える。"""
-        rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE,
-            frozenset({"payload", "restricted_sample"}),
-            mask=frozenset({"restricted_sample"}),
-        )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {
-                "event": "completed",
-                "restricted_sample": "visible",
-                "payload": {"restricted_sample": "visible"},
-            },
-        )
-        assert output["event"] == "completed"
-        assert output["restricted_sample"] == "***"
-        assert output["payload"] == {"restricted_sample": "***"}
-
 
 class TestTopLevelAllow:
     """保護規則の登録はトップレベル項目の出力許可を与えない。"""

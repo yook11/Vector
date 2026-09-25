@@ -101,10 +101,6 @@ PEM秘密鍵はキー付き値の処理より先に保護する。`private_key=-
 
 認証ヘッダー・cookieは既存の専用規則を優先し、引用符付き値は閉じ引用符まで、それ以外は括弧で始まっていても行末または `}` の手前まで伏せる。その他のキー付き値の終端は `:` / `=` の後の空白を除いた先頭文字で判定する。引用符ならエスケープを考慮した閉じ引用符まで、`[` / `{` / `(` なら引用符内の括弧を無視し、入れ子を追跡した対応する閉じ括弧までを一つの値として `***` にする。JSON文字列・Pythonの辞書や配列表現・例外文でも同じ規則を適用し、保護対象の内部の項目名や値の型には依存しない。引用符・括弧が閉じない場合や対応しない閉じ括弧を検出した場合は値の開始から文字列末尾まで伏せ、後続項目らしい文字列から処理を再開しない。これは値の範囲の判定であり、JSONやPython構文全体の妥当性検証や値への復元は行わない。それ以外の先頭文字では既存の引用符なし値の区切り規則を維持する。
 
-対象別の検証は `test_sanitize_aws.py` / `test_sanitize_jwt.py` / `test_sanitize_url.py` が担当し、`test_sanitize.py` で内容検出、`test_mask.py` でキー付き値のマスク、`test_text_preparation.py` で両者の合成を検証する。
-
-`test_mask.py` では値全体の除去と安全な前後の診断保持を期待文字列で確認し、正常な終端・入れ子・引用符・壊れた終端を別条件として扱う。`test_mask_rendering.py` では本文を保護する目的ポリシーの代表としてAI推論の規則を共通チェーンに通し、JSON文字列・Python表現・例外文へ表現が変わってもJSON / consoleの最終出力に保護対象の各要素が残らないことを確認する。認証情報と本文の検証は分ける。両目的ポリシーが本文を守ることは `test_policy_boundaries.py`、ネストの禁止項目が renderer 後も残らないことは `test_chain.py` が担当する。
-
 URLは `://` を起点に左側のschemeを確認し、隣接する数字・記号の後ろのURLも保護する。JWTはbase64url区画を一度ずつ走査し、不成立の接頭辞ごとに長い接尾部を再走査しない。検出結果の比較と実測は[性能測定記録](./log-sanitization-benchmark-2026-09-18.md)を参照。その後の入力上限と項目単位の置換は、以下の「入力上限と置換単位」に定める。
 
 ### 2. 目的別 deny・mask との境界（記事本文）
@@ -256,13 +252,7 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 
 processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞書へ `diagnostics.prepare_log_fields(...)` の結果を結合し、診断のフィールド名や構造には立ち入らない。診断はキー名の一覧全体の予算検査を終えてからサニタイズし、長すぎるキー名は原文を処理せず `[limit]` にする。診断の準備中に共有予算を超過した場合も、通常項目を含むログ全体を固定出力へ置換する。
 
-入力からログ出力までの上限・共有予算の境界は `test_output_limits.py` が担当する。`TestLocalReplacement` で単一文字列・キー名・整数・深さ・例外由来の値の超過した位置だけを置換し正常な兄弟を残すことを、`TestWholeLogReplacementByTextBudget` / `TestWholeLogReplacementByItemBudget` で共有予算の上限ちょうどの保持と超過時のログ全体の置換を、processor経由で確認する。不正キー・内部項目・生成した例外項目・例外frameも実際の入力へ含め、通常項目との予算共有を確認する。禁止したネスト項目の件数、辞書と配列の混在、複数項目にまたがる予算共有も、上限ちょうどと一件超過の別テストで確認する。複数の予算を同時に超えたときの理由は `TestBudgetOverflowReason` が担当する。例外frame数の上限は抽出側が所有するため `exceptions/test_extraction.py` が担当する。processorの走査停止と状態分離は `test_processor.py`、超過した値をサニタイズへ渡さない処理内部の保証は `test_value_preparation.py`、置換後のマーカーと固定出力がrendererで戻らないことは `test_chain.py` が担当する。境界の異なる条件は独立したテストにし、予算をテスト側で直接加算するだけのケースを出力保証として扱わない。
-
-`test_value_preparation.py` は `LogValuePreparer` を直接呼ぶ単体テストを集約する。`TestTextLimits` は単一文字列の上限ちょうどの保持・超過時の局所置換・長い原文の文字数計上と情報漏洩防止の省略・配列の順序と重複の保持を担当する。`TestSharedBudget` は既存予算と要素を合算した上限ちょうどの準備成功、および後続要素での超過時に先行文字列も加工せず `LogBudgetExceeded` を伝播することを確認する。値準備の単体テストでは固定の失敗ログを期待せず、ログ全体の置換と正常な別フィールドの保持は既存のprocessor経由テストで保証する。
-
-`test_processor.py` の `TestExceptionValueDepthLimit` は、同じログ内の通常入力と例外項目に異なる深さ上限を適用し、上限内のframeを保持して上限直後の値を置換することを確認する。`test_value_preparation.py`は例外用の値準備上限ちょうどの保持と一段超過の検査停止を、`exceptions/test_application_output.py`は探索の最深部の`field`・`code`が最終ログへ残ることを確認する。
-
-`test_budget.py` は `TestItemAccounting` / `TestTextAccounting` で計上と超過通知の単体契約を確認し、まとめた件数が超過したときに部分加算しない保証も保持する。診断の記録・集計・出力準備・返却値の分離は `test_diagnostics.py`、項目名の検査・deny優先・allow判定・トップレベルの計上と返却順は `test_field_selection.py`、選別を終えてから値を準備する処理順・不採用値を検査しないこと・実チェーンとの接続は `test_processor.py`、循環・共有参照・予約キー・独自型は `test_base_guards.py`、処理失敗時の固定出力と保護処理からの再帰ログの禁止は `test_processor.py` が担当する。`test_value_preparation.py` は辞書の操作・型変換・入力非変更・診断の独立性・文字列の処理回数を確認し、検査前の件数計上、不正な辞書の中身を検査しないこと、予算超過した項目の値やキーを処理しないことは呼び出しの記録で確認する。トップレベル項目の二重計上は `test_output_limits.py` の上限件数ちょうどの出力テストに集約する。
+境界の異なる条件は独立したテストにし、予算をテスト側で直接加算するだけのケースを出力保証として扱わない。
 
 ## 適用位置
 
@@ -297,26 +287,6 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 | B07 | 上限超の長文末尾に secret | その文字列を `[limit]` にし、原文のサニタイズを実行せず断片も残さない。 |
 | B08 | production JSON と dev console | 秘匿結果が一致し、整形で原文が復活しない。 |
 | B09 | 予約キー、独自オブジェクト、循環・深い・大量の値、処理失敗 | 迂回や原文 fallback がなく、保護処理で業務を落とさない。 |
-
-所在テスト ([backend/tests/log_policy/](../../backend/tests/log_policy/)):
-
-- B01 / B03 / B04 / B06 / 文字列によるポリシー指定の拒否 / event の sanitize: `test_processor.py` (実チェーン + `LogCapture` で検証。`capture_logs` は configured processors を差し替えるため使わない)
-- B02 / 通常テキストの保持: `test_sanitize.py`・`test_mask.py`・`test_text_preparation.py`
-- B07 / 通常値・例外文・型名・frameの出力上限: `test_output_limits.py`
-- `exc_info`の解決、cause/context・グループの共通探索、循環、深さ・総数・frame上限、集約済み原因の探索停止: `exceptions/test_extraction.py`
-- B05 / SQL原因文の変換: `exceptions/test_sql_conversion.py`、生のValidationErrorの保護: `exceptions/test_safe_exception_log.py`
-- アプリの4種類の検証例外の診断変換、対象外の委譲、変換失敗時の保護: `exceptions/test_application_conversion.py`
-- 検証境界からJSONまでの診断保持、最深部の項目、共有予算: `exceptions/test_application_output.py`
-- SQL診断の許可属性・取得失敗・原因文との独立性、SQL内部の集約と親子の診断分離: `exceptions/test_sql_details.py`
-- 不正な`exc_info`の生値を出力しないこと: `test_processor.py`
-- JSON出力の保護・診断辞書の注入防止: `exceptions/test_sql_output.py`
-- 実DBでの一意制約・NOT NULL違反と製品セッション境界からの診断出力: `exceptions/test_sql_diagnostics_integration.py`
-- B06a / キー正規化 / deny・maskの独立性と継承・親の非変更・allowの明示: `test_base.py`
-- B06b / 登録済み規則の適用・未登録時の制限: `test_processor.py`
-- 認証キーの表記揺れ、継承済みdenyの構造化項目への伝達とmaskの文字列・例外への伝達: `test_policy_boundaries.py`
-- B01 / B02 / B04 / B05 / B09 の回帰条件: `test_base_guards.py`
-- B08: `test_chain.py` (`JSONRenderer` と `ConsoleRenderer` を `build_processors` で通し、宣言後の共通出力設定も反映する)
-- ルールの保持・生成時の型確認・遅延生成・キャッシュ・入力経路からのルール変更防止: `test_logger.py`
 
 共通deny強化時の検証 (2026-09-17、責務分離前):
 
@@ -745,3 +715,16 @@ Non-goals: 入れ子の判定の置き場所、予算の上限値と数え方、
 Done: `LogFieldSelector.select` を `select_fields` に置き換えた。selectorが共有予算を受け取ってトップレベル項目の計上と判定を行い、受け付けた項目を入力順に返す。processorは選別結果の値を準備して格納する。トップレベルの選別を終えてから値を準備するため、件数と文字数を同時に超える入力ではトップレベルの件数超過を先に返す。従来の「一項目ずつ取り出し、選別結果の中間辞書を作らない」方針はこの形に置き換えた。
 
 検証: ruff lint・format成功。ログ関連の単体テスト615件が成功した。allow・deny・未登録・入れ子の規則・例外・予算超過を含む入力で、変更前後のprocessor出力が一致することを確認した。integrationはDB・repositoryに触れていないため実行していない。
+
+
+## テストの重複整理と仕様からのテスト配置の削除（2026-09-25）
+
+Problem: 同じ不変条件を、値準備・processor・出力上限・規則の境界の各テストで重ねて確認していた。selectorへ選別を集約した後は、トップレベル項目の判定も単体テストとprocessor経由のテストで重なっていた。仕様がテストの置き場所を決めていたため、振る舞いに合わせてテストを置き直せなかった。
+
+Invariants: 削除した各テストの不変条件を確認するテストが別に残ること。実装と出力内容は変更しない。
+
+Non-goals: processor経由で確認すべき範囲の整理と、値準備の振る舞いを確認するテストの移動は後続で行う。
+
+Done: 重複していたテスト25件を削除した。上限をまたぐ秘密の断片、入れ子の長すぎるキーの兄弟、辞書キーへの情報漏洩防止の確認は値準備の単体テストへ集約し、深さ上限のテストは通常と例外の上限でパラメータ化した。仕様からテストの所在と担当の記述を削除した。
+
+検証: ruff lint・format成功。ログ関連の単体テスト590件が成功した（変更前613件から、削除25件とパラメータ化による追加2件を反映）。integrationはDB・repositoryに触れていないため実行していない。

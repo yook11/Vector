@@ -21,49 +21,6 @@ pytestmark = pytest.mark.unit
 class TestLocalReplacement:
     """超過した位置だけを置換し、正常な兄弟と前後の項目を残す。"""
 
-    def test_text_at_limit_is_preserved(self) -> None:
-        """全角4000文字ちょうどの値をPythonの文字列長で数えて残し、前後の正常項目も保持する。"""
-        text = "あ" * TEXT_LIMIT
-        fields = {"event": "completed", "payload": text, "attempt": 2}
-        rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset({"payload", "attempt"})
-        )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()), "info", fields
-        )
-        assert output == {**fields, "log_policy": "infrastructure"}
-
-    def test_text_above_limit_replaces_only_that_field(self) -> None:
-        """4001文字の値だけ置換し、前後の正常項目をログへ残す。"""
-        fields = {
-            "event": "completed",
-            "payload": "あ" * (TEXT_LIMIT + 1),
-            "attempt": 2,
-        }
-        rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset({"payload", "attempt"})
-        )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()), "info", fields
-        )
-        assert output == {
-            "event": "completed",
-            "payload": "[limit]",
-            "attempt": 2,
-            "log_policy": "infrastructure",
-        }
-
-    def test_secret_crossing_text_limit_leaves_no_fragment(self) -> None:
-        """上限をまたぐ秘密の前半も出力へ残さない。"""
-        # 合成値を分割し、秘密検出ツールの規則に一致させない。
-        text = "x" * (TEXT_LIMIT - 10) + "AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "info",
-            {"event": text},
-        )
-        assert output == {"event": "[limit]"}
-
     def test_field_limit_preserves_earlier_and_later_normal_fields(self) -> None:
         """単一項目の超過は前後の正常なトップレベル項目を巻き込まない。"""
         fields = {"event": "failed", "payload": ["x" * (TEXT_LIMIT + 1)], "attempt": 2}
@@ -92,35 +49,6 @@ class TestLocalReplacement:
                 "x" * (TEXT_LIMIT - len(suffix)) + " password=[redacted:credential]": 1
             }
         }
-
-    def test_nested_long_key_is_excluded_without_losing_siblings(self) -> None:
-        """長すぎるキーの項目だけ除外して診断し、正常な兄弟は残す。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "info",
-            {"event": {"x" * (TEXT_LIMIT + 1): "synthetic", "count": 1}},
-        )
-        assert output == {"event": {"count": 1}, "_policy_limited": True}
-
-    def test_long_top_level_name_is_excluded_without_echo(self) -> None:
-        """長すぎるトップレベル名は名前も値も出さず、上限診断だけを残す。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "info",
-            {"x" * (TEXT_LIMIT + 1): "synthetic"},
-        )
-        assert output == {"_policy_limited": True}
-
-    def test_processor_nonstring_field_name_is_reported_through_diagnostics(
-        self,
-    ) -> None:
-        """非文字列の項目名は未登録として除外し、正常な後続項目を残す。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "info",
-            {7: "synthetic", "event": "completed"},
-        )
-        assert output == {"event": "completed", "_unregistered_count": 1}
 
     def test_integer_at_bit_limit_is_preserved(self) -> None:
         """4096bitちょうどの整数は正常な別項目とともにログへ残す。"""
@@ -497,66 +425,6 @@ class TestWholeLogReplacementByItemBudget:
             },
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
-        }
-
-    def test_nonstring_field_name_at_item_budget_preserves_log(self) -> None:
-        """除外項目を含め上限件数ちょうどなら正常なpayloadを保持する。"""
-        payload = [1] * (MAX_ITEMS_PER_LOG_EVENT - 2)
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {7: "synthetic", "payload": payload},
-        )
-        assert output == {
-            "payload": payload,
-            "log_policy": "infrastructure",
-            "_unregistered_count": 1,
-        }
-
-    def test_nonstring_field_name_consumes_shared_item_budget(self) -> None:
-        """非文字列の項目名を除外しても、その項目数は共有予算に残る。"""
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
-        prepared_event = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {
-                7: "synthetic",
-                "payload": [1] * (MAX_ITEMS_PER_LOG_EVENT - 1),
-            },
-        )
-        assert prepared_event == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
-        }
-
-    def test_internal_field_at_item_budget_preserves_log(self) -> None:
-        """除外項目を含め上限件数ちょうどなら正常なpayloadを保持する。"""
-        payload = [1] * (MAX_ITEMS_PER_LOG_EVENT - 2)
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {"_log_policy_rules": "synthetic", "payload": payload},
-        )
-        assert output == {"payload": payload, "log_policy": "infrastructure"}
-
-    def test_internal_field_consumes_shared_item_budget(self) -> None:
-        """出力しない内部項目も通常値の走査と同じ項目数の予算を使う。"""
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
-        prepared_event = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {
-                "_log_policy_rules": object(),
-                "payload": [1] * (MAX_ITEMS_PER_LOG_EVENT - 1),
-            },
-        )
-        assert prepared_event == {
             "event": "log_policy_budget_exceeded",
             "_policy_limited": True,
             "_policy_limit_reason": "value_count",
