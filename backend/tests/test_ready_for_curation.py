@@ -13,6 +13,7 @@ from app.analysis.curation.domain.ready import (
     CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
+from app.collection.domain.article_limits import ARTICLE_BODY_MAX_LENGTH
 
 
 def _facts(
@@ -69,7 +70,7 @@ class TestFromFactsDecision:
         assert rejected.analyzable_article_id == 42
 
     def test_returns_rejection_when_content_too_large(self) -> None:
-        oversized = "x" * (ReadyForCuration.MAX_CONTENT_LENGTH + 1)
+        oversized = "x" * (ARTICLE_BODY_MAX_LENGTH + 1)
 
         rejected = ReadyForCuration.from_facts(_facts(content=oversized))
 
@@ -77,7 +78,7 @@ class TestFromFactsDecision:
         # analyzable_article_id が拒否値経由で監査まで運ばれる (source_id 補填の根拠)
         assert rejected.analyzable_article_id == 42
         assert rejected.content_length == len(oversized)
-        assert rejected.max_content_length == ReadyForCuration.MAX_CONTENT_LENGTH
+        assert rejected.max_content_length == ARTICLE_BODY_MAX_LENGTH
 
 
 class TestReadyForCurationFieldConstraints:
@@ -94,7 +95,7 @@ class TestReadyForCurationFieldConstraints:
             )
 
     def test_rejects_oversized_original_content(self) -> None:
-        oversized = "x" * (ReadyForCuration.MAX_CONTENT_LENGTH + 1)
+        oversized = "x" * (ARTICLE_BODY_MAX_LENGTH + 1)
         with pytest.raises(ValidationError):
             ReadyForCuration(
                 analyzable_article_id=1,
@@ -135,7 +136,7 @@ def test_ready_build_blocked_code_partitions_idempotent_skip_from_durable() -> N
     }
 
 
-@pytest.mark.parametrize("length", [1, ReadyForCuration.MAX_CONTENT_LENGTH])
+@pytest.mark.parametrize("length", [1, ARTICLE_BODY_MAX_LENGTH])
 def test_from_facts_accepts_content_boundaries(length):
     """モデルが許す本文長ならReadyを構築する。"""
     result = ReadyForCuration.from_facts(_facts(content="あ" * length))
@@ -164,13 +165,13 @@ def test_from_facts_returns_input_invalid(field, value):
 
 def test_content_limit_rejection_takes_precedence_over_other_input_errors():
     """複数の入力違反があっても本文上限超過の理由と数値だけを保持する。"""
-    length = ReadyForCuration.MAX_CONTENT_LENGTH + 1
+    length = ARTICLE_BODY_MAX_LENGTH + 1
     result = ReadyForCuration.from_facts(_facts(title="", content="秘" * length))
     assert result == CurationReadyBuildRejected(
         CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE,
         analyzable_article_id=42,
         content_length=length,
-        max_content_length=ReadyForCuration.MAX_CONTENT_LENGTH,
+        max_content_length=ARTICLE_BODY_MAX_LENGTH,
     )
     assert "秘" not in repr(result)
 
@@ -187,7 +188,7 @@ def test_processed_state_precedes_input_validation(signal, noise, reason):
     result = ReadyForCuration.from_facts(
         _facts(
             title="",
-            content="x" * (ReadyForCuration.MAX_CONTENT_LENGTH + 1),
+            content="x" * (ARTICLE_BODY_MAX_LENGTH + 1),
             has_signal_curation=signal,
             has_noise_curation=noise,
         )

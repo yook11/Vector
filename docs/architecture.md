@@ -188,7 +188,7 @@ class AnalyzableArticle(BaseModel):
     model_config = ConfigDict(frozen=True)  # 生成後は変更不可
 
     title: str = Field(min_length=1, max_length=500)
-    body: str = Field(min_length=50, max_length=1_048_576)  # 本文は必須
+    body: str = Field(min_length=50, max_length=200_000)    # 本文は必須
     published_at: PublishedAt                                # 公開日時は必須
     source_id: int = Field(gt=0)
     source_url: CanonicalArticleUrl
