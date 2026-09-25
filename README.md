@@ -209,7 +209,7 @@ flowchart TB
 
 [月額約270ドルの運用コストを見直すためのFargateからLambda・SQSへの移行とイベント駆動設計](https://zenn.dev/yook/articles/zenn-event-driven-outbox-draft)
 
-旧 taskiq 経路は、工程ごとに段階的に撤去しています。
+旧 taskiq 経路は、工程ごとに段階的に撤去しました。
 
 以下の記事は、移行前の Redis Streams を中心とした非同期パイプラインについて、再配送や重複実行から DB の整合性を守る仕組みをまとめた開発記録です。
 

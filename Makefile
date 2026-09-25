@@ -20,7 +20,7 @@ test-local:  ## migration適用済みDBでローカルテスト一式を実行
         test-integration-guard test-integration-print-project
 
 # サービス分類（変更する時はここだけ触る）
-WORKERS  := worker-fetch worker-insights worker-agent scheduler
+WORKERS  := worker-insights worker-agent scheduler
 PIPELINE := backend $(WORKERS)
 
 # 統合テスト専用 Postgres を立てる compose の呼び出し前置詞。
@@ -66,13 +66,9 @@ pipeline-restart: verify-env  ## backend app code・設定・ORM 変更後の再
 pipeline-down:  ## パイプライン停止（DB/Redis は残す → データ保持）
 	docker compose stop $(PIPELINE)
 
-pipeline-status:  ## サービス状態とpipeline Stream観測
+pipeline-status:  ## サービス状態
 	@echo "=== Containers ==="
 	@docker compose ps --format 'table {{.Name}}\t{{.State}}\t{{.Status}}'
-	@echo
-	@echo "=== pipeline Stream status ==="
-	@docker compose exec -T backend python scripts/pipeline_queue_status.py \
-	  || echo "pipeline Stream status unavailable"
 	@echo
 	@restarting=$$(docker compose ps --format json \
 	  | jq -r 'select(.State=="restarting") | "  ! \(.Name): \(.Status)"'); \

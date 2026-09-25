@@ -1,19 +1,18 @@
 """scheduler routing totality oracle — cron task の broker(queue)割り当て不変条件。
 
-統合 scheduler (``app.queue.scheduler_entrypoint``) は 5 つの stock TaskiqScheduler を
+統合 scheduler (``app.queue.scheduler_entrypoint``) は 3 つの stock TaskiqScheduler を
 1 プロセスで並行実行する。各 scheduler は自分の broker へ kick するため、cron task →
 queue の routing が壊れないことが Option B の前提。本テストはその不変条件を Redis なしで
 固定する:
 
   (a) 各 scheduler の ``LabelScheduleSource`` が自分の broker に属する cron task だけを
       過不足なく発見する。
-  (b) 5 scheduler 全体で全 cron task を漏れ・重複なく分割発見する (totality)。
-  (c) scheduler を持たない broker に schedule 付き task が無い (orphan cron 検出)。
+  (b) 3 scheduler 全体で全 cron task を漏れ・重複なく分割発見する (totality)。
 
 期待集合は仕様 (``app/queue/schedule.py`` の cron 時刻表 + 各 task module の
 broker登録先) から直書きする。実装出力を期待値にしない。
 誤 broker への登録は ``LabelScheduleSource`` の ``task.broker != self.broker`` skip で
-発見集合から落ち、(a)/(b)/(c) のいずれかが赤になる。
+発見集合から落ち、(a)/(b) のいずれかが赤になる。
 """
 
 from __future__ import annotations
@@ -24,11 +23,9 @@ from taskiq.schedule_sources import LabelScheduleSource
 
 import app.queue.registry  # noqa: F401  cron 登録の副作用 import (get_all_tasks を満たす)
 from app.insights.trend_discovery.scheduler import create_scheduler
-from app.queue.brokers import broker_collection
 from app.queue.schedulers import (
     scheduler_agent,
     scheduler_briefing,
-    scheduler_dispatch,
 )
 
 scheduler_trend_discovery = create_scheduler()
@@ -36,7 +33,6 @@ scheduler_trend_discovery = create_scheduler()
 # 仕様 (schedule.py 時刻表 + task module のbroker登録先) から
 # 直書きした scheduler → 発見されるべき cron task_name 集合。
 _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
-    ("dispatch", scheduler_dispatch, set()),
     ("trend_discovery", scheduler_trend_discovery, {"run_trend_discovery"}),
     ("agent", scheduler_agent, {"sweep_deadline_exceeded_agent_runs"}),
     ("briefing", scheduler_briefing, {"dispatch_weekly_briefings"}),
@@ -44,16 +40,15 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
 
 
 def test_scheduler_entrypoint_uses_exact_scheduler_set() -> None:
-    """統合 entrypoint は final 4 scheduler だけを実行する。"""
+    """統合 entrypoint は final 3 scheduler だけを実行する。"""
     from app.queue.scheduler_entrypoint import _create_schedulers
 
     schedulers = _create_schedulers()
 
-    assert len(schedulers) == 4
-    assert schedulers[0] is scheduler_dispatch
-    assert schedulers[1].broker.queue_name == "trend_discovery"
-    assert schedulers[2] is scheduler_agent
-    assert schedulers[3] is scheduler_briefing
+    assert len(schedulers) == 3
+    assert schedulers[0].broker.queue_name == "trend_discovery"
+    assert schedulers[1] is scheduler_agent
+    assert schedulers[2] is scheduler_briefing
 
 
 async def _discovered_cron_task_names(scheduler: TaskiqScheduler) -> set[str]:
@@ -93,21 +88,3 @@ async def test_cron_tasks_do_not_overlap_across_schedulers() -> None:
     # 重複なし: 各 scheduler の発見数の総和が union サイズと一致 = pairwise disjoint
     # (同一 cron が複数 scheduler から二重発火しない)。
     assert sum(len(d) for d in discovered) == len(union)
-
-
-@pytest.mark.asyncio
-async def test_schedulerless_brokers_have_no_cron() -> None:
-    """scheduler を持たない broker に schedule 付き task が無い (orphan cron 検出)。
-
-    collection broker は scheduler を持たないため、ここに cron が
-    紛れ込むと永久に発火しない。taskiq 自身の discovery (LabelScheduleSource) で
-    schedule 付き task を数え、空であることを保証する。
-    """
-    orphans: dict[str, set[str]] = {}
-    for label, broker in (("collection", broker_collection),):
-        source = LabelScheduleSource(broker)
-        await source.startup()
-        names = {task.task_name for task in await source.get_schedules()}
-        if names:
-            orphans[label] = names
-    assert orphans == {}

@@ -149,11 +149,11 @@ def test_create_worker_engine_passes_only_usage_kwargs(
 ) -> None:
     spy = MagicMock()
     monkeypatch.setattr("app.db.engine._create_engine", spy)
-    create_worker_engine(settings, "collection")
-    pool_size, max_overflow = WORKER_POOL_SIZING["collection"]
+    create_worker_engine(settings, "briefing")
+    pool_size, max_overflow = WORKER_POOL_SIZING["briefing"]
     spy.assert_called_once_with(
         settings.database_url,
-        application_name=worker_service_name("collection"),
+        application_name=worker_service_name("briefing"),
         password_provider=None,
         echo=False,
         pool_size=pool_size,

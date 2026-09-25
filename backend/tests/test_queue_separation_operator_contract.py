@@ -26,31 +26,6 @@ def _normalized(text: str) -> str:
     return unicodedata.normalize("NFKC", text).casefold()
 
 
-def _make_target(target: str) -> str:
-    lines = _required_text(_MAKEFILE).splitlines()
-    start = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if re.match(rf"^{re.escape(target)}\s*:", line)
-        ),
-        None,
-    )
-    assert start is not None, f"Makefile target {target} is missing"
-
-    end = len(lines)
-    for index in range(start + 1, len(lines)):
-        line = lines[index]
-        if (
-            line
-            and not line.startswith((" ", "\t", "#"))
-            and re.match(r"^[A-Za-z0-9_.%/-]+\s*:", line)
-        ):
-            end = index
-            break
-    return "\n".join(lines[start:end])
-
-
 def _redis_acl_tokens(user: str) -> set[str]:
     config = tomllib.loads(_required_text(_REDIS_FLY_CONFIG))
     redis_command = config["processes"]["redis"]
@@ -117,33 +92,6 @@ def test_makefile_does_not_keep_dead_queues_variable() -> None:
     makefile = _required_text(_MAKEFILE)
 
     assert re.search(r"(?m)^\s*QUEUES\s*(?::=|\?=|\+=|=)", makefile) is None
-
-
-def test_pipeline_status_delegates_queue_semantics_to_backend_adapter() -> None:
-    target = _normalized(_make_target("pipeline-status"))
-
-    assert (
-        re.search(
-            r"docker\s+compose\s+exec(?:\s+\S+)*\s+backend\s+"
-            r"(?:uv\s+run\s+)?python\s+\S*scripts/pipeline_queue_status\.py",
-            target,
-        )
-        is not None
-    )
-
-
-def test_pipeline_status_does_not_reimplement_raw_redis_stream_semantics() -> None:
-    target = _normalized(_make_target("pipeline-status"))
-
-    assert (
-        re.search(r"\bredis-cli\b[^\n]*(?:xlen|xpending|xinfo|xrange)", target) is None
-    )
-
-
-def test_pipeline_status_does_not_call_retained_entries_queue_depth() -> None:
-    target = _normalized(_make_target("pipeline-status"))
-
-    assert not _contains_any(target, ("queue depth", "backlog", "キュー深度"))
 
 
 def test_collect_redis_acl_has_only_required_queue_and_autoclaim_key_surfaces() -> None:

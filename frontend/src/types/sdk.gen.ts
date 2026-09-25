@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CancelResearchRunData, CancelResearchRunErrors, CancelResearchRunResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, CreateResearchResponseData, CreateResearchResponseErrors, CreateResearchResponseResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, DeleteResearchThreadData, DeleteResearchThreadErrors, DeleteResearchThreadResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetResearchRunData, GetResearchRunErrors, GetResearchRunResponses, GetResearchThreadData, GetResearchThreadErrors, GetResearchThreadResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetSourceHealthData, GetSourceHealthErrors, GetSourceHealthResponses, GetTrendsData, GetTrendsErrors, GetTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListResearchThreadsData, ListResearchThreadsErrors, ListResearchThreadsResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses, StreamResearchRunEventsData, StreamResearchRunEventsErrors, StreamResearchRunEventsResponse, StreamResearchRunEventsResponses } from './types.gen';
+import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CancelResearchRunData, CancelResearchRunErrors, CancelResearchRunResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, CreateResearchResponseData, CreateResearchResponseErrors, CreateResearchResponseResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, DeleteResearchThreadData, DeleteResearchThreadErrors, DeleteResearchThreadResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetResearchRunData, GetResearchRunErrors, GetResearchRunResponses, GetResearchThreadData, GetResearchThreadErrors, GetResearchThreadResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetSourceHealthData, GetSourceHealthErrors, GetSourceHealthResponses, GetTrendsData, GetTrendsErrors, GetTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListResearchThreadsData, ListResearchThreadsErrors, ListResearchThreadsResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses, StreamResearchRunEventsData, StreamResearchRunEventsErrors, StreamResearchRunEventsResponse, StreamResearchRunEventsResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -198,33 +198,6 @@ export const deactivateSource = <ThrowOnError extends boolean = false>(options: 
  * 全ニュースソースの取得・分析可能化 health を返す。
  */
 export const getSourceHealth = <ThrowOnError extends boolean = false>(options?: Options<GetSourceHealthData, ThrowOnError>): RequestResult<GetSourceHealthResponses, GetSourceHealthErrors, ThrowOnError> => (options?.client ?? client).get<GetSourceHealthResponses, GetSourceHealthErrors, ThrowOnError>({ url: '/api/v1/admin/sources/health', ...options });
-
-/**
- * Fetch News
- *
- * ニュース取得タスクを best-effort でキュー投入する。
- *
- * `source_ids` 指定時はソースごとに個別 task を dispatch し、未指定時は
- * `dispatch_sources` で全 active source を dispatch する。`202 Accepted` と
- * `dispatchedCount` は enqueue の受付のみを表し、実行・完了・耐久性を保証しない。
- *
- * - inactive source は cron で自動再投入されない。operator は request 時刻と
- * source ID に対応する実行証跡を確認し、queue 滞留の解消後も証跡がなければ
- * 再実行する。
- * - 再実行時も durable row の dedup は維持されるが、外部 HTTP 取得と新規記事の
- * AI 処理は再発し得る。
- * - multi-source の enqueue は非 atomic なループであり、失敗時は一部だけ
- * enqueue 済みになり得る。
- * - durable job ID / status の永続化は別 slice で扱う。
- */
-export const fetchNews = <ThrowOnError extends boolean = false>(options?: Options<FetchNewsData, ThrowOnError>): RequestResult<FetchNewsResponses, FetchNewsErrors, ThrowOnError> => (options?.client ?? client).post<FetchNewsResponses, FetchNewsErrors, ThrowOnError>({
-    url: '/api/v1/admin/pipeline/fetch',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers
-    }
-});
 
 /**
  * Get Pipeline Health

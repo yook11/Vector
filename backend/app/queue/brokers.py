@@ -1,17 +1,15 @@
 """taskiq broker 定義。
 
 broker:
-  - broker_dispatch:   管理者の手動取得を source ごとの取得依頼へ展開する control task
-  - broker_collection: 手動取得の acquisition を処理する consumer
   - broker_briefing:  週次カテゴリ別 LLM ブリーフィング生成 (cron 駆動、別 queue)
   - broker_agent:     user-facing research agent 非同期 run + deadline sweeper
 
 Workers: broker ごとに 1 つ (docker-compose.yml / supervisord conf を参照)。
 Scheduler / lifecycle の attach は本 module の **末尾の副作用 import** で行う。
 `from app.queue.brokers import broker_X` 1 行で:
-  - broker × 4 の生成
+  - broker × 2 の生成
   - 各 broker への WORKER_STARTUP / CLIENT_STARTUP hook attach
-  - 共通catalogに残る3つのTaskiqSchedulerの生成
+  - 共通catalogに残る2つのTaskiqSchedulerの生成
 が全て完了する。AI adapter 配線は lifecycle の WorkerRuntime.compose が呼ぶ。
 順序は循環 import を避けるため厳守。
 """
@@ -47,12 +45,6 @@ def _make_broker(
     )
 
 
-broker_dispatch = _make_broker("pipeline:dispatch")
-broker_collection = _make_broker(
-    "pipeline:acquisition",
-    consumer_id="0-0",
-    unacknowledged_lock_timeout=60,
-)
 broker_briefing = _make_broker("briefing")
 broker_agent = _make_broker("agent")
 
@@ -60,7 +52,7 @@ broker_agent = _make_broker("agent")
 # broker object が出揃ったあとで lifecycle / schedulers を attach する。
 # 各 module は import するだけで broker.on_event() に hook を登録する副作用
 # を持つ。本 module の末尾に置くことで:
-#   - broker × 4 が定義済の状態で各 hook 登録が走る
+#   - broker × 2 が定義済の状態で各 hook 登録が走る
 #   - `from app.queue.brokers import broker_X` 単独で lifecycle 完了が保証される
 #     (test や entrypoint が個別に lifecycle module を import する必要なし)
 import app.queue.lifecycle  # noqa: E402, F401, I001

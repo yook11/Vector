@@ -37,7 +37,7 @@ from app.insights.trend_discovery.router import (
 )
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
-from app.queue.brokers import broker_agent, broker_collection, broker_dispatch
+from app.queue.brokers import broker_agent
 from app.queue.deadline_schedule import create_deadline_schedule_source
 from app.redis import create_api_agent_live_client
 from app.routers import (
@@ -48,7 +48,7 @@ from app.routers import (
 
 logger = structlog.get_logger(__name__)
 
-_API_PRODUCER_BROKERS = (broker_agent, broker_collection, broker_dispatch)
+_API_PRODUCER_BROKERS = (broker_agent,)
 
 
 def _sanitize_validation_errors(

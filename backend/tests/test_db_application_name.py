@@ -14,7 +14,7 @@ from app.db.engine import create_cli_engine, worker_service_name
 async def test_application_name_reaches_postgres_current_setting(
     test_database_url: str,
 ) -> None:
-    service_name = worker_service_name("collection")
+    service_name = worker_service_name("briefing")
     engine = create_cli_engine(
         settings,
         service_name,
