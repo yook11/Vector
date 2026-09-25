@@ -41,7 +41,7 @@ locals {
     ENV        = "production"
     AWS_REGION = var.region
     # Settings が構築時に全段で要求する必須項目 (実際に使うのは frontend_url が
-    # api、crossref が fetch)。frontend (Node) は読まないが common で害はない。
+    # api、crossref は取得の Lambda だけ)。frontend (Node) は読まないが common で害はない。
     FRONTEND_URL           = "https://${var.frontend_domain}"
     CROSSREF_CONTACT_EMAIL = var.crossref_contact_email
     # IAM モードは明示フラグで入る。「password が無いから IAM」という推測にすると、
@@ -125,10 +125,6 @@ locals {
     scheduler = {
       DATABASE_URL = local.backend_db_url["vector_app"]
       REDIS_URL    = local.broker_redis_url["scheduler"]
-    }
-    fetch = {
-      DATABASE_URL = local.backend_db_url["vector_collect"]
-      REDIS_URL    = local.broker_redis_url["fetch"]
     }
     insights = {
       DATABASE_URL = local.backend_db_url["vector_app"]

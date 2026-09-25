@@ -46,14 +46,6 @@ locals {
       local.valkey_common_acl,
       "(~vector-agent-deadline:* resetchannels -@all +scan +lrange +mget +getdel +lrem)",
     ])
-    fetch = join(" ", [
-      "on ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion resetchannels -@all",
-      "+xadd +xgroup|create +xreadgroup +xack +xautoclaim",
-      "+multi +exec +script|exists +script|load",
-      local.valkey_common_acl,
-      "(~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion resetchannels -@all +set +get +del +evalsha)",
-      "(~taskiq:* resetchannels -@all +set)",
-    ])
     insights = join(" ", [
       "on ~trend_discovery ~briefing resetchannels -@all",
       "+xgroup|create +xreadgroup +xack +xautoclaim",
