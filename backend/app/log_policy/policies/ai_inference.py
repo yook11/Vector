@@ -7,7 +7,6 @@ AI_INFERENCE_POLICY = LogPolicyRules(
     policy=LogPolicy.AI_INFERENCE,
     allow=frozenset(),
     deny=ARTICLE_TEXT_KEYS,
-    mask=ARTICLE_TEXT_KEYS,
 )
 
 AI_INFERENCE_LOG_RULES = AI_INFERENCE_POLICY.extend(

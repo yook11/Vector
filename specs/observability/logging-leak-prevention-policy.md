@@ -2,7 +2,7 @@
 
 作成: 2026-09-24
 Status: Implemented
-Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log_policy/leak_prevention.py)、項目別サニタイズの対応表と `sanitize_article_url` を [sanitize.py](../../backend/app/log_policy/sanitize.py)、対応表にない項目名の拒否を [base.py](../../backend/app/log_policy/base.py) に実装済み。実際のポリシーでの `sanitize` の有効化は後続とする。
+Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log_policy/leak_prevention.py)、項目別サニタイズの対応表と `sanitize_article_url` を [sanitize.py](../../backend/app/log_policy/sanitize.py) に実装済み。実際のポリシーでの `sanitize` の有効化は後続とする。
 
 [共通基底ポリシー](./logging-base-policy.md)と[項目別サニタイズのログポリシー](./logging-sanitization-policy.md)の後続として、全文字列に適用している処理を情報漏洩防止として定義し直し、項目別サニタイズとの責務を分ける差分仕様。文字列内部の処理とサニタイズの対象は本書を優先する。
 
@@ -79,8 +79,8 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 
 - 対応表には、調査に要る部分を定義した処理だけを登録する。情報漏洩防止の検出処理は登録しない。
 - 最初の登録は `canonical_url`・`source_url` → `sanitize_article_url` とする。実際のポリシーでの有効化は後続とし、基底の `sanitize` は空のままとする。
-- `LogPolicyRules` は正規化後の `sanitize` に対応表にない項目名があれば、構築時に `ValueError` を出す。登録漏れを、ログ出力時の処理失敗ではなく定義時に検出する。
-- 共通入口は正規化済みの登録項目名を受け取る。値が `str` でなければ `[unsupported]` を返す。
+- ポリシーの `sanitize` に対応表にない項目名があっても、構築時には拒否しない。その項目の値は `[unsupported]` にし、ログの他の項目はそのまま出力する。
+- 共通入口は正規化済みの項目名を受け取り、対応表にない項目名、または `str` でない値には `[unsupported]` を返す。
 
 ### `sanitize_article_url`
 
@@ -149,10 +149,12 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 - `uv run ruff check`・`uv run ruff format --check`: `app/`・ベンチマークスクリプト・`tests/log_policy/` で成功した。
 - 実際のポリシーでの `sanitize` の有効化と AWS 上の出力確認は、Non-goals のため実施していない。
 
+2026-09-25 に構築時の検証をやめ、対応表にない項目名の値を `[unsupported]` にした。設定ミスのときにログを残すための逃げ道なので、専用のテストは置かない。
+
 ## Done
 
 - 情報漏洩防止の対象の種類・関数・表記が `leak_prevention.py` から読み取れ、種類ごとの単体テストがある。
 - 値準備と診断は情報漏洩防止の入口だけを呼び、ポリシーの `mask` は文字列の内容に影響しない。
-- サニタイズの対応表は `sanitize_article_url` だけを持ち、対応表にない項目名はポリシー構築時に拒否される。
+- サニタイズの対応表は `sanitize_article_url` だけを持ち、対応表にない項目名の値は `[unsupported]` として出力される。
 - 最終出力に認証情報が残らず、調査に必要な文と識別情報が残ることをテストで確認できている。
 - 関連仕様と実装状態を同期し、未実行の検証があれば理由を明記している。

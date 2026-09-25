@@ -1,26 +1,69 @@
 """アプリ固有の認証情報の共通禁止と、追加 deny の適用を検証する。"""
 
+import importlib
 import json
+import pkgutil
 
 import pytest
 import structlog
 
-from app.log_policy import BASE_LOG_RULES, LogPolicy, LogPolicyRules, PolicyLogger
-from app.log_policy.policies.article_text import ARTICLE_TEXT_KEYS
+from app.log_policy import (
+    BASE_LOG_RULES,
+    LogPolicy,
+    LogPolicyRules,
+    PolicyLogger,
+    policies,
+)
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_POLICY
 from app.log_policy.processor import LogPolicyProcessor
 
 pytestmark = pytest.mark.unit
 
 
+def _policy_rules() -> list:
+    """policies/ の規則を集め、追加したポリシーも検査対象に含める。"""
+    params = []
+    for module_info in pkgutil.iter_modules(policies.__path__):
+        module = importlib.import_module(f"{policies.__name__}.{module_info.name}")
+        params.extend(
+            pytest.param(value, id=f"{module_info.name}.{name}")
+            for name, value in vars(module).items()
+            if type(value) is LogPolicyRules
+        )
+    return params
+
+
 class TestPurposeRuleConstants:
-    """実際の目的ポリシー定数が基底と本文の禁止を保持し、設定名の表記揺れも禁止する。"""
+    """実際のポリシー定数が認証情報と本文を禁止し、allow と deny を重ねない。"""
 
     @pytest.mark.parametrize(
-        "key", ["GEMINI_API_KEY", "openaiApiKey", "Deepseek-Api-Key"]
+        "key",
+        [
+            "gemini_api_key",
+            "GEMINI_API_KEY",
+            "openai_api_key",
+            "openaiApiKey",
+            "deepseek_api_key",
+            "Deepseek-Api-Key",
+            "tavily_api_key",
+            "logfire_token",
+            "bff_jwt_signing_secret",
+            "revalidate_bearer_secret",
+            "postgres_auth_password",
+            "postgres_app_password",
+            "postgres_collect_password",
+            "aws_secret_access_key",
+            "AWSAccessKeyId",
+            "session_token",
+            "refresh_token",
+            "APIKey",
+            "privateKey",
+            "Proxy-Authorization",
+            "Set-Cookie",
+        ],
     )
-    def test_application_credential_alias_is_denied(self, key) -> None:
-        """設定名の大文字・camelCase・ハイフン表記も禁止する。"""
+    def test_credential_field_is_denied(self, key) -> None:
+        """認証情報の項目は、設定名や表記揺れを含めて基底のdenyで除外する。"""
         output = LogPolicyProcessor()(
             PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
             "info",
@@ -29,7 +72,22 @@ class TestPurposeRuleConstants:
         assert output["_denied_keys"] == [key]
         assert "synthetic" not in json.dumps(output)
 
-    @pytest.mark.parametrize("key", sorted(ARTICLE_TEXT_KEYS))
+    # 保護対象が設定から消えても検出できるよう、仕様の本文10項目を明示する。
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "body",
+            "content",
+            "text",
+            "html",
+            "description",
+            "summary",
+            "translation",
+            "key_points",
+            "snippet",
+            "answer",
+        ],
+    )
     def test_external_content_denies_article_fields(self, key) -> None:
         """外部コンテンツのポリシーはdenyで本文項目を除外する。"""
         output = LogPolicyProcessor()(
@@ -39,6 +97,11 @@ class TestPurposeRuleConstants:
         )
         assert key not in output
         assert output["_denied_keys"] == [key]
+
+    @pytest.mark.parametrize("rules", _policy_rules())
+    def test_policy_does_not_allow_denied_field(self, rules: LogPolicyRules) -> None:
+        """実際のポリシーは、denyで除外される項目をallowに入れない。"""
+        assert rules.allow & rules.deny == frozenset()
 
 
 class TestDenyAndMaskSeparation:

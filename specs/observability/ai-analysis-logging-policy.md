@@ -1,7 +1,7 @@
 # AI分析のログポリシー
 
 作成: 2026-09-17
-更新: 2026-09-22（AssessmentのLambda共通ログ設定への依存を解消）
+更新: 2026-09-25（本文などの禁止をdenyだけで扱い、maskを外す）
 Status: Accepted
 Implementation: Partially implemented。Assessmentの入口・終端、初期化・バッチ不正・共有ライフサイクルのcleanupをAI目的ポリシーへ接続済み。Consumer・Service・失敗後処理も同じメッセージ用ロガーへ接続済みで、Repositoryの重複ログは例外記録へ集約した。AssessmentのAI呼び出しと共有DeepSeekクライアントのcleanupも接続済み。通知処理内部とSSM cleanupは記事分析とは別の目的ポリシーへ接続済み（[上位仕様§2.4](./application-logging-policy.md#24-キャッシュ更新通知秘密情報取得2026-09-22)）。Curation・Embedding・エージェントの業務ログへの適用は未移行。HTTP・AI SDK例外の入力値保護は未対応。追加診断・保護要件、AWS適用とCloudWatch到達確認は後続工程とする。
 
@@ -9,7 +9,7 @@ Implementation: Partially implemented。Assessmentの入口・終端、初期化
 基底の正本: [アプリケーションログの共通基底ポリシー](./logging-base-policy.md)
 関連: [#317 記録方針の共通化](https://github.com/yook11/Vector/issues/317)、[#328 エラーの情報保持と安全な記録の分離](https://github.com/yook11/Vector/issues/328)
 
-変更状況: mask・sanitize と文字列内の認証情報の置換は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。本書で mask を文字列内のキー付き値の置換、sanitize を既知形式の秘密の検出とする記述と、文字列中の本文を mask で伏せる記述は旧契約。
+変更状況: mask・sanitize と文字列内の認証情報の置換は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。本書で sanitize を既知形式の秘密の検出とする記述は旧契約。
 
 ## Problem
 
@@ -57,7 +57,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 
 - 共通規則の上に一つのAI分析ポリシーを置く。イベントやAssessment/CurationごとにAllow Listを複製しない。
 - 原因説明、発生箇所、原因のつながり、既存の詳細reasonを保持し、すべてを例外型やunknownだけへ縮退させない。
-- 情報を許可することと保護することを両立させる。allowに登録した文字列もsanitize・maskを通し、禁止部分だけを除いた診断を残す。
+- 情報を許可することと保護することを両立させる。allowに登録した文字列もsanitizeを通し、禁止部分だけを除いた診断を残す。
 - 診断可能なプロダクションコードの失敗は、AI provider由来かどうかにかかわらず対象にする。
 - 記事本文・分析結果本文・prompt・応答全体・SQLパラメーター・認証情報は出さない。例外に混入した場合も同じ規則を適用する。
 - 記録するのは取得できた事実と実際の判断であり、発生箇所・再試行・使用量等を推測しない。
@@ -88,7 +88,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 
 Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽出・秘匿規則は基底の共通処理を使う。DBエラーという理由で相関情報を捨てたり、別ポリシーの許可項目を丸ごと合成したりしない。
 
-認証情報のdeny・maskは基底を継承し、本文・応答などの禁止はAI推論側で定義する。denyは構造化項目の除外、maskは文字列内の指定キーに対応する値の置換、sanitizeは既知の秘密形式の検出・置換を担う。denyからmaskへの暗黙継承はないため、文字列でも保護する禁止キーは両方に明示する。`extend(allow=...)`は親の目的別allowを引き継がないため、モデル・使用量を含む本書の許可項目を一つの完成済みルールにまとめる。
+認証情報のdenyは基底を継承し、本文・応答などの禁止はAI推論側で定義する。禁止する項目は値も項目名も調査に使わないため、denyで除外してmaskには入れない。`extend(allow=...)`は親の目的別allowを引き継がないため、モデル・使用量を含む本書の許可項目を一つの完成済みルールにまとめる。
 
 ## 2. 調査対象となる失敗
 
@@ -111,7 +111,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 以下をAI分析の完成済みルールと記録側の値契約とする。全項目を毎回埋めるのではなく、取得できたものを記録する。必要な情報が現在伝達されていない箇所はImplementationの不足として扱い、取得・伝達を追加する。
 
 - 基底allowは`event` / `level` / `timestamp` / `logger` / `logger_name`の5項目。`log_policy`はprocessorがルールから生成する。下表の追加項目を基底へ無条件に加えない。
-- allowは出力項目の選択であり、サニタイズ免除ではない。すべての文字列と例外由来項目に共通のsanitize・目的別mask・上限を適用する。
+- allowは出力項目の選択であり、サニタイズ免除ではない。すべての文字列と例外由来項目に共通のsanitize・上限を適用する。
 - ベースのallow選別はトップレベルだけである。下表の構造化項目はAI分析側で宣言した子項目だけを新しいdict/listへ抽出する。任意の`extra` / `metadata`、SDK応答や例外の丸ごとdumpは許可しない。
 - 未取得は項目を省略し、0・1・空文字・推測した分類で補わない。取得済みの0は残す。数値ではboolを拒否し、時間は有限の非負数、件数は非負整数とする。
 - 調査に必要な項目の不足は本書へ追加し、同じAI分析ルールに反映する。正常経路の未登録項目を黙って受け入れず、最終出力の契約テストで検出する。
@@ -135,7 +135,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `error_class`, `error_message`, `frames` | `exc_info`から基底が抽出する外側の例外情報。DeepSeek cleanupでは`exc_info`を渡さず、`error_class`だけを例外型の完全修飾名から明示する。`frames`は`file` / `function` / `line`のみ。外側の原因文が短いcodeでも内側の診断を省略する理由にしない。 |
 | `causes` | 原因の構造化リスト。各要素は例外情報、取得済みの`code` / `failure_reason` / `http_status` / `provider_code` / `error_details`、子の`causes` / `exceptions`のみ。外側と同じ例外構造を使い、取得元を示す`relation`ラベルは付けない。各例外を同じ保護経路に通す。 |
 | `exceptions` | ExceptionGroupのメンバー。各要素は外側と同じ例外構造を持ち、原因と同じ総数予算を使う。上限で残りを省略した場合は末尾に`[limit]`を置く。 |
-| `error_details` | 型別診断。PostgreSQLは`kind: "postgresql"`と取得できた`sqlstate` / `schema_name` / `table_name` / `column_name` / `constraint_name` / `data_type_name`のみ。SQLSTATEは英大文字・数字5文字。アプリ用変換を指定した検証例外は`kind: "application_validation"`と既存の`reason` / `issues(field, code)`を持つ。診断は共通sanitize・目的別mask・上限を通し、SQL診断属性はパラメータの部分一致置換から独立させる。トップレベルの`sqlstate` / `constraint_name`は出さない。 |
+| `error_details` | 型別診断。PostgreSQLは`kind: "postgresql"`と取得できた`sqlstate` / `schema_name` / `table_name` / `column_name` / `constraint_name` / `data_type_name`のみ。SQLSTATEは英大文字・数字5文字。アプリ用変換を指定した検証例外は`kind: "application_validation"`と既存の`reason` / `issues(field, code)`を持つ。診断は共通sanitize・上限を通し、SQL診断属性はパラメータの部分一致置換から独立させる。トップレベルの`sqlstate` / `constraint_name`は出さない。 |
 | `issues` | 検証境界で分類済みの項目別診断。今回対応する検証例外は`error_details.issues`に既存Enumの`field` / `code`を出力する。`expected_type` / `constraints`の自動抽出や、別のトップレベル`issues`の自動生成は行わない。 |
 | `duration_ms` | 当該ログが表す業務試行またはAI呼び出しの実測経過時間。業務試行の終端ではメッセージ開始からの時間。 |
 | `timeout_scope`, `timeout_phase`, `timeout_seconds`, `timeout_elapsed_ms` | scopeは`consumer` / `http` / `db`。phaseは観測できた`connect` / `read` / `write` / `pool` / `statement` / `lock`。有効期限と、その期限の対象範囲で測定できた経過時間。 |
@@ -193,7 +193,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 
 処理情報のallowは`service` / `environment` / `stage` / `operation` / `request_id` / `message_id` / `event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id` / `outcome` / `rejection_code` / `duration_ms` / `message_disposition`。cleanup資源の識別には追加の`resource`を使う。内部ログでは`reason` / `business_error_class` / `code` / `finish_reason` / `max_output_tokens` / `error_class`もallowへ追加する。既存の`model` / `input_tokens` / `output_tokens`を維持する。基底5項目は継承し、processorが生成する`log_policy`と例外診断項目は目的別allowへ重複登録しない。ただし`error_class`はDeepSeek cleanupで明示するため登録する。
 
-例外の分類・抽出・構造は既存処理に任せ、今回新設しない。`SqsInputError`と`AssessmentMessageJsonInvalidError`は`ApplicationError`として明示した診断を共通変換へ渡し、イベント検証例外も`exc_info`で渡す。本文10項目と認証情報のdeny・maskを維持し、§3.2の残りのallow、§3.4の追加保護、URL変換等の未実装要件をこの定義変更の完了に含めない。
+例外の分類・抽出・構造は既存処理に任せ、今回新設しない。`SqsInputError`と`AssessmentMessageJsonInvalidError`は`ApplicationError`として明示した診断を共通変換へ渡し、イベント検証例外も`exc_info`で渡す。本文10項目と認証情報のdenyを維持し、§3.2の残りのallow、§3.4の追加保護、URL変換等の未実装要件をこの定義変更の完了に含めない。
 
 ### 3.3.2 Assessment内部の記録
 
@@ -234,22 +234,22 @@ Assessment handlerの`setup_lambda_logging()`呼び出しは削除済みで、�
 
 検証結果: 関連単体テスト587件が成功（DB統合85件は選択対象外）。続くGeminiの公開`assess`経由へのテスト更新後も対象11件が成功した。変更したPython 16ファイルのRuff lint・format確認、DB利用ケースとローカルAssessmentテストを含む539件の収集確認が成功。全体・DB統合・実AI呼び出し・デプロイは実施していない。比較用スクリプトの呼び出しも必須logger引数へ対応させたが、実行はしていない。
 
-### 3.4 禁止・マスク・サニタイズ
+### 3.4 禁止・サニタイズ
 
 以下はINFO・WARNING・ERROR・DEBUG、構造化項目・ネスト・例外文のどこでも同じ保護対象とする。禁止部分を安全に分離できる原因文は、その前後の説明を残す。
 
 | 対象 | 出さない情報・処理 |
 | --- | --- |
-| 認証情報 | 基底の`CREDENTIAL_KEYS`をdeny・maskとして継承する。パスワード、API key、Authorization、cookie、秘密鍵、セッショントークン等。既知の秘密形式はsanitizeでも保護する。独自に短い別リストへ置き換えない。 |
-| 記事・生成本文 | 既存の`body`, `content`, `text`, `html`, `description`, `summary`, `translation`, `key_points`, `snippet`, `answer`をdeny・maskする。AI側には`original_content`, `original_title`, `title`, `title_ja`, `summary_ja`, `translated_title`, `investor_take`も追加する。タイトルも初期のAI診断には出さず、IDで対象を特定する。基底や他の目的のtitle規則は変更しない。 |
-| prompt・応答 | AI側で`prompt`, `messages`, `request`, `response`, `payload`, `request_body`, `response_body`, `raw_response`, `raw_arguments`, `raw_category`, `raw_relevance`をdeny・maskする。部分抜粋も出さない。`prompt_version`・使用量・検証codeは別項目で残す。 |
-| SQL実データ | AI側で`sql`, `statement`, `parameters`, `params`, `rows`をdeny・maskする。基底のSQL例外抽出でSQL本文・パラメーター・DETAIL/HINT/CONTEXT等を除去し、保護後のprimary messageと`error_details`内の診断属性を残す。今回SQLテンプレートの出力は許可しない。 |
-| 検証input・任意dump | AI側で`input`, `ctx`, `config`, `settings`, `headers`, `locals`, `args`, `notes`, `__dict__`をdeny・maskする。SDKオブジェクト、設定全体、例外args/notes/__dict__、取得行を丸ごと出さない。診断用`issues`は§3.2の固定形状に再構成する。 |
+| 認証情報 | 基底の`CREDENTIAL_KEYS`をdenyとして継承する。パスワード、API key、Authorization、cookie、秘密鍵、セッショントークン等。既知の秘密形式はsanitizeでも保護する。独自に短い別リストへ置き換えない。 |
+| 記事・生成本文 | 既存の`body`, `content`, `text`, `html`, `description`, `summary`, `translation`, `key_points`, `snippet`, `answer`をdenyする。AI側には`original_content`, `original_title`, `title`, `title_ja`, `summary_ja`, `translated_title`, `investor_take`も追加する。タイトルも初期のAI診断には出さず、IDで対象を特定する。基底や他の目的のtitle規則は変更しない。 |
+| prompt・応答 | AI側で`prompt`, `messages`, `request`, `response`, `payload`, `request_body`, `response_body`, `raw_response`, `raw_arguments`, `raw_category`, `raw_relevance`をdenyする。部分抜粋も出さない。`prompt_version`・使用量・検証codeは別項目で残す。 |
+| SQL実データ | AI側で`sql`, `statement`, `parameters`, `params`, `rows`をdenyする。基底のSQL例外抽出でSQL本文・パラメーター・DETAIL/HINT/CONTEXT等を除去し、保護後のprimary messageと`error_details`内の診断属性を残す。今回SQLテンプレートの出力は許可しない。 |
+| 検証input・任意dump | AI側で`input`, `ctx`, `config`, `settings`, `headers`, `locals`, `args`, `notes`, `__dict__`をdenyする。SDKオブジェクト、設定全体、例外args/notes/__dict__、取得行を丸ごと出さない。診断用`issues`は§3.2の固定形状に再構成する。 |
 | URL・内部宛先 | 公開記事URLの通常host/path/記事識別queryは保持する。userinfo・認証query・署名・内部IP/既知内部hostは上位仕様§4.4で保護する。例外文に混在する場合も対象とし、残る説明を一律に消さない。 |
 
 追加キーはAI推論の目的ルールが所有し、他目的と共有する本文10項目の定義を無条件に拡大しない。キー照合は基底の正規化後の完全一致であり、`token`のdenyが`input_tokens`を禁止することはない。
 
-denyは構造化項目をキーごと除外する。maskは文字列内のキー付き値を`***`へ置換し、sanitizeはAPI key形式・JWT・PEM・AWS認証情報・URL userinfo等の既知形式を基底どおりに置換する。これらを通すことを条件に通常の原因文を許可する。未知の自由文中の本文・秘密を完全検出できるという契約にはしない。
+denyは構造化項目をキーごと除外する。sanitizeはAPI key形式・JWT・PEM・AWS認証情報・URL userinfo等の既知形式を基底どおりに置換する。これらを通すことを条件に通常の原因文を許可する。未知の自由文中の本文・秘密を完全検出できるという契約にはしない。
 
 ## 4. 失敗時の記録
 
@@ -257,7 +257,7 @@ denyは構造化項目をキーごと除外する。maskは文字列内のキー
 
 記録できる状態で失敗を捕捉した場合、event・stage・operation・例外型・保護後の原因文・発生箇所と、その時点で取得済みの相関IDを残す。既存のcode/reasonやprovider_errorが存在する場合は、外側の例外の`str()`だけで終わらせず抽出する。
 
-原因文が空なら`[empty exception message]`、安全に分離できない禁止情報しかない場合は`[exception message omitted]`、抽出自体の失敗は基底の`[exception message unavailable]`で区別する。キー付き値だけを伏せた文には基底のマスク結果を使い、この省略表示へ一律置換しない。取得できないoperation・timeout段階等は項目を省略し、観測していない事実を補わない。空・省略の追加表示はAI記録側の未実装要件であり、現行基底の動作とは区別する。
+原因文が空なら`[empty exception message]`、安全に分離できない禁止情報しかない場合は`[exception message omitted]`、抽出自体の失敗は基底の`[exception message unavailable]`で区別する。キー付き値だけを伏せた文には基底の情報漏洩防止の結果を使い、この省略表示へ一律置換しない。取得できないoperation・timeout段階等は項目を省略し、観測していない事実を補わない。空・省略の追加表示はAI記録側の未実装要件であり、現行基底の動作とは区別する。
 
 Pythonのcause/contextは基底が抽出する。既存の`provider_error`のようにSDK固有の属性へ保持された原因も目的別実装の対象とするが、この取得は未実装である。外側と内側の例外を区別し、循環・深さ・件数を制限する。stackはlocals・生args・ソース行を含めず、アプリと依存ライブラリの発生箇所を追える形で保持する。
 
@@ -357,7 +357,7 @@ provider例外には回復分類・retryabilityを持たせない。DB障害な�
 | 境界 | 実装済み | 接続・追加が必要な内容 |
 | --- | --- | --- |
 | 共通基底 | logger属性のルール、allow/deny/mask、外側の例外・SQL/検証の基本保護、上限 | 本書の追加診断を通した予算と最終出力の検証。基底の汎用allowを広げない。 |
-| AI目的ルール | 本文10項目のdeny・mask、モデル・入力/出力tokensと§3.3.1・§3.3.2の処理情報のallow | §3.3.1・§3.3.2以外の追加allow・deny・mask、記録側の出所・値・ネスト形状の保証。 |
+| AI目的ルール | 本文10項目のdeny、モデル・入力/出力tokensと§3.3.1・§3.3.2の処理情報のallow | §3.3.1・§3.3.2以外の追加allow・deny、記録側の出所・値・ネスト形状の保証。 |
 | 原因・検証診断 | 原因連鎖・ExceptionGroup・SQL診断・4種類のイベント検証例外の変換、分類reason・provider_error・応答defect等の内部保持 | 既存変換の実行経路への接続。SDK属性の追加診断、空・省略の区別等は後続工程であり、今回の定義変更では扱わない。 |
 | 実行中の事実 | ID・正常結果・一部のモデル/使用量 | request/message文脈の設定と復元、operation、経過時間、timeout範囲、試行、実際の処遇・保存状態。 |
 | 出力経路 | LambdaのJSON出力と各層のstructlog | factoryとprocessorの接続、各loggerのルール宣言、出力障害による業務結果の変更防止。共有AI clientのcleanupも対象。 |
