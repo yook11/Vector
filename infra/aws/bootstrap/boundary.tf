@@ -84,7 +84,7 @@ locals {
     Task = {
       boundary = aws_iam_policy.task_boundary.arn
       role_names = [
-        for s in ["frontend", "api", "scheduler", "fetch", "analysis", "insights", "proxy"] :
+        for s in ["frontend", "api", "scheduler", "insights", "proxy"] :
         "${var.name_prefix}-${s}-task"
       ]
     }
@@ -101,7 +101,7 @@ locals {
     Execution = {
       boundary = aws_iam_policy.execution_boundary.arn
       role_names = [
-        for s in ["frontend", "api", "scheduler", "fetch", "analysis", "insights", "agent", "proxy"] :
+        for s in ["frontend", "api", "scheduler", "insights", "agent", "proxy"] :
         "${var.name_prefix}-${s}-exec"
       ]
     }

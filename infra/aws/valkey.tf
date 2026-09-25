@@ -34,14 +34,14 @@ locals {
   # (元から既定 deny に対する additive な allowlist)。
   broker_user_access = {
     api = join(" ", [
-      "on ~pipeline:dispatch ~pipeline:acquisition ~agent resetchannels -@all +xadd",
+      "on ~agent resetchannels -@all +xadd",
       "+multi +exec",
       local.valkey_common_acl,
       "(~agent:run:* resetchannels -@all +xadd +xrange +xread +exists +expire)",
       "(~vector-agent-deadline:* resetchannels -@all +set +rpush)",
     ])
     scheduler = join(" ", [
-      "on ~pipeline:dispatch ~trend_discovery ~briefing ~agent resetchannels -@all",
+      "on ~trend_discovery ~briefing ~agent resetchannels -@all",
       "+xadd +xgroup|create",
       local.valkey_common_acl,
       "(~vector-agent-deadline:* resetchannels -@all +scan +lrange +mget +getdel +lrem)",
