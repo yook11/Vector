@@ -1,6 +1,6 @@
 """Stage 3 (curation) Gemini Prompt — template + render に責務を絞った class。
 
-Prompt 文面 (``TEMPLATE``) と入力 sanitize / truncate (``render``) のみを担う。
+Prompt 文面 (``TEMPLATE``) と入力 sanitize (``render``) のみを担う。
 API call config (model / gen_config / response_schema / system_instruction /
 version) は ``gemini_spec.GeminiCurationSpec`` 側に SSoT を移した。
 
@@ -41,14 +41,10 @@ class GeminiCurationPrompt:
 - signal/noise の判断に迷ったら signal を選ぶ。
 """
 
-    # Gemini 固有の入力整形 (本文を切り詰めて投入)。system 不変条件としての hard cap
-    # (200_000 char) は ReadyForCuration.MAX_CONTENT_LENGTH 側で別途保証される。
-    CONTENT_MAX_LENGTH: ClassVar[int] = 20_000
-
     @classmethod
     def render(cls, *, title: str, content: str) -> str:
         """sanitize 済み本文を ``<untrusted_input>`` に埋めて返す。"""
         return cls.TEMPLATE.format(
             title=sanitize_for_untrusted_block(title),
-            content=sanitize_for_untrusted_block(content[: cls.CONTENT_MAX_LENGTH]),
+            content=sanitize_for_untrusted_block(content),
         )

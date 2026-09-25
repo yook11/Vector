@@ -15,7 +15,7 @@ Status: 全スライスを実装し、本番で稼働中。旧Taskiq経路は202
 ## Evidence
 
 - [取得サービス](../../backend/app/collection/article_acquisition/service.py)と[本文補完サービス](../../backend/app/collection/article_completion/service.py): 記事の保存とOutbox記録を同じトランザクションで確定する。スライス5で両発行元を共通の`AnalyzableArticleCreated`へ接続した。
-- [ReadyForCuration](../../backend/app/analysis/curation/domain/ready.py): DB上の記事の存在、Signal／Noiseの保存済み状態、タイトル・本文の制約を判定する。本文の上限は200,000文字。
+- [ReadyForCuration](../../backend/app/analysis/curation/domain/ready.py): DB上の記事の存在、Signal／Noiseの保存済み状態、タイトル・本文の制約を判定する。本文の上限は収集の`ARTICLE_BODY_MAX_LENGTH`（200,000文字）で検証する。
 - [CurationService](../../backend/app/analysis/curation/service.py)と[Repository](../../backend/app/analysis/curation/repository.py): Signal／Noiseの保存、成功監査、Signal時のOutbox記録を所有する。Serviceは`CurationCompletion`で保存完了と保存競合を区別する（スライス2）。
 - [Assessment仕様](./assessment-consumer.md)と[Embedding仕様](./embedding-consumer.md): 正常終了と失敗伝播、借用するAIクライアント、呼び出し単位の資源管理、SQS部分バッチ応答の参照元。
 - [Outbox送信契約](./outbox-sqs-message-contract.md)と[relay実行部](../../backend/app/lambda_handlers/outbox_relay/execution.py): 保存済みイベントの検証・配送と、単一イベント種別の配送入口を提供する。
@@ -187,7 +187,7 @@ Lambdaの完了ログは`reason=ready_build_rejected`と`rejection_code`を持�
 
 `domain/ready.py`に不変の`CurationReadyBuildRejected`と`CurationReadyBuildRejectionReason`を置く。`from_facts`と非同期の`try_advance_from`は`ReadyForCuration | CurationReadyBuildRejected`を返す。DB事実は一度だけ取得し、成功時の記事IDはReady自身から読む。
 
-判定順序は対象欠損、Signal保存済み、Noise保存済み、Readyモデル構築の順とする。本文の空文字・200,000文字上限、タイトルの空文字、記事IDの正数制約はReadyモデルで保証する。モデル構築前の本文長判定は行わない。モデル生成時の`ValidationError`について、`original_content`の`string_too_long`があれば`CONTENT_TOO_LARGE`、それ以外は`INPUT_INVALID`へ対応付ける。複数違反でも本文上限超過を優先する。判定は[Pydanticの構造化されたエラー情報](https://docs.pydantic.dev/latest/errors/validation_errors/#string_too_long)を使い、入力値・context・URLを取得しない。
+判定順序は対象欠損、Signal保存済み、Noise保存済み、Readyモデル構築の順とする。本文の空文字・収集の`ARTICLE_BODY_MAX_LENGTH`（200,000文字）による上限、タイトルの空文字、記事IDの正数制約はReadyモデルで保証する。モデル構築前の本文長判定は行わない。モデル生成時の`ValidationError`について、`original_content`の`string_too_long`があれば`CONTENT_TOO_LARGE`、それ以外は`INPUT_INVALID`へ対応付ける。複数違反でも本文上限超過を優先する。判定は[Pydanticの構造化されたエラー情報](https://docs.pydantic.dev/latest/errors/validation_errors/#string_too_long)を使い、入力値・context・URLを取得しない。
 
 拒否値は理由とDB由来記事IDを持つ。対象欠損では記事IDを補完しない。上限超過時だけ本文文字数と上限値を保持し、本文・検証例外・入力値は保持しない。`append_ready_build_rejected`は同じ拒否値から`REJECTED`を記録する。既存の`curation_ready_build_blocked_*`文字列と数値の監査項目を維持し、入力不正は`curation_ready_build_blocked_input_invalid`を追加する。DB取得障害とモデル生成以外の想定外例外はそのまま伝播する。
 

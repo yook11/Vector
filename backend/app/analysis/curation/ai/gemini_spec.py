@@ -1,6 +1,6 @@
 """Stage 3 GeminiCurator の call spec を SSoT として保持する。
 
-Prompt (本文 / sanitize / truncate) と Spec (API call config / version /
+Prompt (本文 / sanitize) と Spec (API call config / version /
 rate policy) を分離するための module。Spec は frozen dataclass + module
 singleton で凍結し、Curator は ``SPEC`` class attr 経由でのみ参照する。
 

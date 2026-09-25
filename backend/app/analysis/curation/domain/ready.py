@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from app.collection.domain.article_limits import ARTICLE_BODY_MAX_LENGTH
 
 __all__ = [
     "CurationReadyBuildRejectionReason",
@@ -64,11 +65,9 @@ class ReadyForCuration(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    MAX_CONTENT_LENGTH: ClassVar[int] = 200_000
-
     analyzable_article_id: int = Field(gt=0)
     original_title: str = Field(min_length=1)
-    original_content: str = Field(min_length=1, max_length=MAX_CONTENT_LENGTH)
+    original_content: str = Field(min_length=1, max_length=ARTICLE_BODY_MAX_LENGTH)
 
     @classmethod
     def from_facts(
@@ -110,7 +109,7 @@ class ReadyForCuration(BaseModel):
                     CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE,
                     analyzable_article_id=facts.analyzable_article_id,
                     content_length=len(facts.original_content),
-                    max_content_length=cls.MAX_CONTENT_LENGTH,
+                    max_content_length=ARTICLE_BODY_MAX_LENGTH,
                 )
             return CurationReadyBuildRejected(
                 CurationReadyBuildRejectionReason.INPUT_INVALID,
