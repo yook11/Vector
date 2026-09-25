@@ -21,7 +21,7 @@ locals {
   #
   # `sslmode=require` は db_ssl.py が verify-full に格上げする。
   backend_db_url = {
-    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay", "vector_auth_rate_limit_cleanup", "vector_article_analysis", "vector_backfill"]) :
+    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay", "vector_auth_rate_limit_cleanup", "vector_article_analysis", "vector_backfill", "vector_api"]) :
     user => "postgresql+asyncpg://${user}@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
   }
   migration_db_url = "postgresql+asyncpg://vector@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
@@ -112,7 +112,7 @@ locals {
       CLIENT_IP_TRUST = "alb-xff-last"
     }
     api = {
-      DATABASE_URL = local.backend_db_url["vector_app"]
+      DATABASE_URL = local.backend_db_url["vector_api"]
       REDIS_URL    = local.broker_redis_url["api"]
       # research 開始 API の設定プリフライトが presence を見るだけ。実呼び出しは
       # agent 段が担うので、api には IAM 権限も PrivateLink も与えない。
