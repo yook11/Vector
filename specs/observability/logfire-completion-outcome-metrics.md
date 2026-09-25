@@ -1,5 +1,13 @@
 # Logfire Completion Processing Outcome Metrics
 
+## 現行契約（2026-09-25）
+
+`vector.completion.processing_outcome`とCloudWatch EMFは補完Consumerだけが送出し、resultは`succeeded`／`failed`の2値とする。失敗は再試行・終了や原因によらず`failed`とし、処理不要と競合負けは送出しない。`infra_error`と`vector.completion.lease_swept`は旧Taskiq経路とともに廃止した。失敗率アラームは設けない。
+
+## 旧仕様（以下は撤去前の設計記録）
+
+以下の旧Taskiq経路・infra_error分類の記述は廃止済みであり、現行要件ではない。
+
 作成: 2026-06-17
 Status: Implemented (PR #819)
 
