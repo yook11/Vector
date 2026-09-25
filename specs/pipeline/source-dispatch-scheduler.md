@@ -383,4 +383,4 @@ Problem: 定期取得はLambda経路が担い、管理者の手動取得（`POST
 
 反映順序: infra（#453）の適用後にbackendを反映する。backendを先に反映すると、新しいimageに`fetch.conf`がなく、稼働中の`fetch`サービスが起動できない。Valkeyのapi・schedulerの許可はbackendの反映後に絞る。
 
-反映後の確認: 追記する。
+反映後の確認: infra（#453）の適用後、`fetch`サービスはINACTIVEになり、proxyは新しいrevisionへの入れ替えを完了し、Valkeyの`vector-fetch`ユーザーは削除された。backend（#455）の反映後、schedulerはtrend_discovery・agent・briefingの3つだけを起動し、api・schedulerのエラーログは0件だった。いずれの後も投入・取得・補完のLambdaはエラー0件で、供給途絶の2アラームはOKだった（2026-09-25）。backendの反映後に、Valkeyのapi・schedulerの許可から手動取得のStreamを外し、bootstrapのロール名の許可表から`fetch`と`analysis`を外した。
