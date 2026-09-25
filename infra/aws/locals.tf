@@ -32,11 +32,10 @@ locals {
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
       }
     }
-    # api の vector_app は切替前のタスクが入れ替わるまでの接続用で、切替の確認後に外す。
     api = {
       subnet_index   = 21, needs_broker = true
       egress_vendors = ["logfire"], egress_allow_any_domain = false
-      image          = "backend", db_users = ["vector_app", "vector_api"]
+      image          = "backend", db_users = ["vector_api"]
       cpu            = 256, memory = 512, port = 8000, singleton = false
       command        = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
       secrets = {
