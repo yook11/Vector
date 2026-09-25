@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, ClassVar, TypedDict
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
 from app.analysis.prompt_safety import screen_untrusted_text
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import BasePipelineEventPayload, CurationPayload
@@ -248,13 +247,11 @@ class _InputContentFields(TypedDict):
 def _input_content_fields(original_content: str) -> _InputContentFields:
     """curation audit payload の input content field と injection 信号を計算する。
 
-    検知・無害化はともに LLM プロンプトへ渡る窓 (= 保存する窓) と同じ ``truncated``
-    スライス上で行う。窓を超えた位置の境界タグは truncate で LLM に届かず無害なので
-    検知しない (裏取り不能な false positive と、2 万字超記事での full scan を同時に
-    避ける)。検知は境界タグ限定の高信号、無害化は sanitize による別軸。
+    検知・無害化はともに LLM プロンプトへ渡る本文全体 (= 保存の対象) で行い、走査量は
+    収集の本文上限で頭打ちになる。検知は境界タグ限定の高信号、無害化は sanitize
+    による別軸。
     """
-    truncated = original_content[: GeminiCurationPrompt.CONTENT_MAX_LENGTH]
-    screening = screen_untrusted_text(truncated)
+    screening = screen_untrusted_text(original_content)
     return {
         "input_content_length": len(original_content),
         "input_content_head": screening.sanitized[:_INPUT_CONTENT_HEAD_LIMIT],

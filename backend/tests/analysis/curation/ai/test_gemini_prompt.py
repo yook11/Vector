@@ -34,13 +34,14 @@ def test_render_neutralizes_atx_header_in_content() -> None:
     assert "#​ " in rendered
 
 
-def test_render_truncates_content_to_max_length() -> None:
-    """content は ``CONTENT_MAX_LENGTH`` (20_000 文字) で切り詰められる。"""
-    # TEMPLATE に含まれない一意な marker を 30_000 個並べて切り詰めを観察する
+def test_render_embeds_whole_content_without_truncation() -> None:
+    """content は切り詰めず、全文を ``<untrusted_input>`` に埋める。"""
+    # 旧来の切り詰め (20_000 文字) を超える長さで、全文が残ることを観察する
     marker = "Z"
+    content = marker * 30_000
     assert marker not in GeminiCurationPrompt.TEMPLATE
-    rendered = GeminiCurationPrompt.render(title="t", content=marker * 30_000)
-    assert rendered.count(marker) == GeminiCurationPrompt.CONTENT_MAX_LENGTH
+    rendered = GeminiCurationPrompt.render(title="t", content=content)
+    assert rendered.count(marker) == len(content)
 
 
 def test_prompt_template_does_not_enumerate_response_fields() -> None:

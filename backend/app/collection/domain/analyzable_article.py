@@ -104,7 +104,7 @@ class AnalyzableArticle(BaseModel):
 
     不変条件 (Field で保証):
     - ``title``: 1..500 文字
-    - ``body``: 50..1_048_576 文字
+    - ``body``: 50..200_000 文字
     - ``published_at``: 必須
     - ``source_id`` / ``source_url``: 原産情報 (UNIQUE 衝突判定 / 監査に必須)
     - frozen: 生成後は不変
