@@ -25,7 +25,7 @@ class HttpTransportError(HttpError):
 
 
 class HttpResponseError(HttpError):
-    """応答は受け取ったが成功でなかった事実を保持し、Retry-Afterの採用や解釈は行わない。"""
+    """非成功応答の事実を保持し、応答の生成元やRetry-Afterの採用は判断しない。"""
 
     CODE: ClassVar[str] = "http_response_error"
 

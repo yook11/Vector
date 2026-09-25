@@ -329,19 +329,11 @@ class FetchSsrfBlockedError(ExternalFetchError):
 
 
 class FetchEgressBlockedError(ExternalFetchError):
-    """egress proxy が宛先への接続を拒否した (CONNECT 403)。
+    """プロキシのCONNECT 403を、既存の取得処理で終了扱いにした。
 
-    ``FetchSsrfBlockedError`` は app 内の SSRF guard が事前に落とした場合。
-    こちらは **経路側の政策**で止まった場合で、原因は 2 つある。
-
-    - allowlist に無い宛先 (設定漏れ。段に allowlist がある場合)
-    - private 宛先 (app 側の事前検証をすり抜けた = rebind 窓)
-
-    どちらかは監査の stage で読み分ける (allowlist を持つ段か否か)。
-    proxy がどの ACL で落としたかは proxy 側の access log が持つ。
-
-    app 側の ``resolve_public_host_addresses`` は自身のDNS解決結果を検証するため、
-    プロキシ自身の解決結果や許可ドメインによる拒否とは区別する。
+    共通HTTPが保持するのはプロキシの応答statusであり、終了する判断はこの取得処理が所有する。
+    403だけではドメイン・IP・ポートのどの制限かを特定できず、アプリ側の
+    ``FetchSsrfBlockedError`` や通常のHTTP応答の403とは区別する。
     """
 
     CODE: ClassVar[str] = "fetch_egress_blocked"

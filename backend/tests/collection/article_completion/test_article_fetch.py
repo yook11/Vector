@@ -20,8 +20,9 @@ from app.collection.article_completion.errors import (
 )
 from app.http import external
 from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 from app.http.errors import HttpResponseError, HttpTransportError
-from app.http.failure import HttpTransportFailureReason
+from app.http.failure import HttpTransportFailureReason, HttpTransportStage
 from app.shared.security.safe_url import SafeUrl
 
 _URL = SafeUrl("https://example.com:8443/news/article?edition=1")
@@ -205,6 +206,26 @@ async def test_destination_policy_rejection_propagates(monkeypatch) -> None:
     with pytest.raises(HostBlockedError) as caught:
         await article_fetch.fetch_article_response(_URL)
     assert caught.value is original
+
+
+async def test_resolution_failure_becomes_transport_failure(monkeypatch) -> None:
+    """名前解決の失敗を、元の例外を保ったまま通信準備段階のDNS失敗へ変換する。"""
+    original = HostResolutionError("resolution failed")
+
+    async def fail(host):
+        raise original
+
+    monkeypatch.setattr(external, "resolve_public_host_addresses", fail)
+    monkeypatch.setattr(
+        external,
+        "HttpSettings",
+        lambda: SimpleNamespace(egress_proxy_url="http://proxy.internal:3128"),
+    )
+    with pytest.raises(HttpTransportError) as caught:
+        await article_fetch.fetch_article_response(_URL)
+    assert caught.value.failure.stage == HttpTransportStage.PREPARATION
+    assert caught.value.failure.reason == HttpTransportFailureReason.DNS_RESOLUTION
+    assert caught.value.__cause__ is original
 
 
 @pytest.mark.parametrize("content_length", [None, "invalid", "1"])

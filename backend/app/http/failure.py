@@ -1,6 +1,7 @@
 """単一の通信試行で応答の受信を完了できなかった失敗を、段階と理由で表す。
 
-HTTPエラー応答、資格情報不足、SSRF拒否、不正なURLやリクエスト生成は対象外。
+通常のHTTPエラー応答、SDKの資格情報不足、アプリの宛先拒否、不正なURLやリクエスト生成は対象外。
+プロキシのCONNECT応答は接続確立時の事実として扱い、取得先の応答やACLの拒否理由とは区別する。
 ライブラリ例外の分類結果を各文脈の例外へ載せる値であり、retryやholdは判断しない。
 """
 
@@ -57,7 +58,7 @@ class HttpTransportFailure:
     stage: HttpTransportStage
     reason: HttpTransportFailureReason
     proxy_status: int | None = None
-    """proxyが拒否時に返したHTTP statusで、取得できない場合や対象外はNoneとする。"""
+    """proxy接続確立時に得たHTTP statusで、取得できない場合や対象外はNoneとする。"""
 
     @property
     def request_may_have_reached_server(self) -> bool:
@@ -93,6 +94,7 @@ def classify_httpx(exc: Exception) -> HttpTransportFailure | None:
 
     RemoteProtocolErrorをRECEIVEとするのはHTTP/1.1経路の前提で、
     HTTP/2を有効にする場合は送信中のGOAWAY等を含めて段階を再確認する。
+    通常の応答statusや例外文中のホスト名から、プロキシ障害や拒否理由を推測しない。
     """
     if isinstance(exc, HostResolutionError):
         return HttpTransportFailure(
