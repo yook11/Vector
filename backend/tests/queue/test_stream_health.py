@@ -22,7 +22,7 @@ def _health_module() -> ModuleType:
         raise
 
 
-def _target(module: ModuleType, stage: str = "completion") -> Any:
+def _target(module: ModuleType, stage: str = "acquisition") -> Any:
     stream = f"pipeline:{stage}"
     return module.StreamHealthTarget(stage=stage, stream=stream, group="taskiq")
 
@@ -182,11 +182,8 @@ def test_pipeline_queue_targets_and_stage_vocabulary_are_fixed() -> None:
             for target in module.PIPELINE_QUEUE_TARGETS
         ),
     ) == (
-        ("acquisition", "completion"),
-        (
-            ("acquisition", "pipeline:acquisition", "taskiq"),
-            ("completion", "pipeline:completion", "taskiq"),
-        ),
+        ("acquisition",),
+        (("acquisition", "pipeline:acquisition", "taskiq"),),
     )
 
 
@@ -218,8 +215,8 @@ async def test_empty_stream_snapshot_has_zero_counts_and_no_ages() -> None:
             "oldest_outstanding_enqueue_age",
         ),
         (
-            "completion",
-            "pipeline:completion",
+            "acquisition",
+            "pipeline:acquisition",
             "taskiq",
             1_000.25,
             0,
@@ -308,7 +305,7 @@ async def test_invalid_redis_integer_is_inconsistent_snapshot(
         await module.read_stream_health(redis, target)
 
     assert (raised.value.stage, raised.value.reason) == (
-        "completion",
+        "acquisition",
         "inconsistent_snapshot",
     )
 
@@ -361,11 +358,11 @@ async def test_snapshot_uses_one_transaction_exact_group_and_enqueue_ages() -> N
         [
             ("pipeline", True),
             ("TIME",),
-            ("XLEN", "pipeline:completion"),
-            ("XINFO GROUPS", "pipeline:completion"),
+            ("XLEN", "pipeline:acquisition"),
+            ("XINFO GROUPS", "pipeline:acquisition"),
             (
                 "XPENDING",
-                "pipeline:completion",
+                "pipeline:acquisition",
                 "taskiq",
                 "-",
                 "+",
@@ -374,7 +371,7 @@ async def test_snapshot_uses_one_transaction_exact_group_and_enqueue_ages() -> N
                 None,
             ),
             ("EXEC",),
-            ("XRANGE", "pipeline:completion", "(990000-0", "+", 1),
+            ("XRANGE", "pipeline:acquisition", "(990000-0", "+", 1),
         ],
     )
 
@@ -476,7 +473,7 @@ async def test_inconsistent_xrange_after_one_reread_is_failure() -> None:
         raised.value.reason,
         sum(call == ("pipeline", True) for call in redis.calls),
         sum(call[0] == "XRANGE" for call in redis.calls),
-    ) == ("completion", "inconsistent_snapshot", 2, 2)
+    ) == ("acquisition", "inconsistent_snapshot", 2, 2)
 
 
 @pytest.mark.asyncio
@@ -501,7 +498,7 @@ async def test_snapshot_failures_use_fixed_nonzero_reasons(
     reason: str,
 ) -> None:
     module = _health_module()
-    target = _target(module, "completion")
+    target = _target(module, "acquisition")
     redis = _RecordingRedis(pipeline_results=[pipeline_result])
 
     with pytest.raises(module.StreamHealthError) as raised:
@@ -512,7 +509,7 @@ async def test_snapshot_failures_use_fixed_nonzero_reasons(
         raised.value.stage,
         raised.value.reason,
         {"payload", "task_id", "consumer", "consumer_uuid"} & public_state.keys(),
-    ) == ("completion", reason, set())
+    ) == ("acquisition", reason, set())
 
 
 @pytest.mark.asyncio
@@ -535,7 +532,7 @@ async def test_post_transaction_redis_failure_is_redis_unavailable() -> None:
         await module.read_stream_health(redis, target)
 
     assert (raised.value.stage, raised.value.reason) == (
-        "completion",
+        "acquisition",
         "redis_unavailable",
     )
 
@@ -556,7 +553,7 @@ async def test_idle_diagnostic_is_explicit_bounded_existence_check(
         [
             (
                 "XPENDING",
-                "pipeline:completion",
+                "pipeline:acquisition",
                 "taskiq",
                 "-",
                 "+",

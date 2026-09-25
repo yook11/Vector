@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -14,7 +13,6 @@ from app.config import settings
 from app.queue.stream_health import (
     StreamHealthError,
     StreamHealthSnapshot,
-    StreamHealthStage,
     StreamHealthTarget,
     read_stream_health,
 )
@@ -25,47 +23,20 @@ pytestmark = [
     pytest.mark.xdist_group("redis"),
 ]
 
-_STAGE_SPECS = (
-    ("acquisition", "pipeline:acquisition"),
-    ("completion", "pipeline:completion"),
-)
-
 
 @pytest.fixture
 async def stream_case() -> AsyncIterator[tuple[Redis, StreamHealthTarget]]:
     """各case専用Streamを作り、成否にかかわらず削除する。"""
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     target = StreamHealthTarget(
-        stage="completion",
-        stream=f"test:pipeline:completion:health:{uuid4().hex}",
+        stage="acquisition",
+        stream=f"test:pipeline:acquisition:health:{uuid4().hex}",
         group="taskiq",
     )
     try:
         yield redis, target
     finally:
         await redis.delete(target.stream)
-        await redis.aclose()
-
-
-@pytest.fixture
-async def stage_stream_case() -> AsyncIterator[
-    tuple[Redis, tuple[StreamHealthTarget, ...]]
-]:
-    """3 stage固有のStreamを作り、観測後にまとめて削除する。"""
-    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-    suffix = uuid4().hex
-    targets = tuple(
-        StreamHealthTarget(
-            stage=cast(StreamHealthStage, stage),
-            stream=f"test:{stream}:health-three:{suffix}",
-            group="taskiq",
-        )
-        for stage, stream in _STAGE_SPECS
-    )
-    try:
-        yield redis, targets
-    finally:
-        await redis.delete(*(target.stream for target in targets))
         await redis.aclose()
 
 
@@ -79,32 +50,6 @@ def _counts_and_age_presence(
         snapshot.oldest_undelivered_enqueue_age is not None,
         snapshot.oldest_pending_enqueue_age is not None,
         snapshot.oldest_outstanding_enqueue_age is not None,
-    )
-
-
-async def test_real_redis_observes_stage_targets_independently(
-    stage_stream_case: tuple[Redis, tuple[StreamHealthTarget, ...]],
-) -> None:
-    """各stageのretained / lagを別Streamの値として観測する。"""
-    redis, targets = stage_stream_case
-    for entry_count, target in enumerate(targets, start=1):
-        await redis.xgroup_create(
-            target.stream,
-            target.group,
-            id="0-0",
-            mkstream=True,
-        )
-        for entry_index in range(entry_count):
-            await redis.xadd(target.stream, {"payload": str(entry_index)})
-
-    snapshots = [await read_stream_health(redis, target) for target in targets]
-
-    assert tuple(
-        (snapshot.stage, snapshot.retained_entries, snapshot.lag, snapshot.pending)
-        for snapshot in snapshots
-    ) == (
-        ("acquisition", 1, 1, 0),
-        ("completion", 2, 2, 0),
     )
 
 
@@ -233,6 +178,6 @@ async def test_real_redis_missing_stream_or_group_is_not_zero_snapshot(
         await read_stream_health(redis, target)
 
     assert (raised.value.stage, raised.value.reason) == (
-        "completion",
+        "acquisition",
         expected_reason,
     )

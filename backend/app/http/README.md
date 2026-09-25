@@ -144,7 +144,6 @@ CONNECT成功後に受け取った403も、CONNECTそのものの拒否とは区
 | `test_http/test_failure.py`・`test_http/test_error_mapping.py` | DNS失敗の分類と、宛先拒否を通信失敗に混ぜないこと |
 | `test_http/test_proxy_failure.py` | HTTPX/httpcoreを通したCONNECT拒否・通常応答・TCP障害の区別（ネットワークとTLSはモック） |
 | `collection/test_external_fetch_error_mapping.py` | 利用機能での宛先拒否・通信失敗の意味づけ |
-| `collection/article_completion/test_scraper.py` | HTTP側の宛先拒否・解決失敗を記事取得の失敗結果として返す |
 | `test_shared/test_safe_url.py` | SafeUrlの既存契約 |
 | AWS試験用`test_snapshot.py` | JSONの同梱・内容保持と、保存されたTerraformからの相対参照 |
 

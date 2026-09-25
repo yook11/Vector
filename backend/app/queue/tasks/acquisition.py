@@ -1,10 +1,9 @@
 """収集 (acquisition) タスク — パイプラインの最前段 (Stage 1)。
 
 経路: ``dispatch_sources`` (admin 手動) → ``acquire_source`` → Outbox経由のCuration
-(本文込み) または ``scrape_html_body`` (completion, DB 駆動)。定期投入は EventBridge
-Scheduler が起動する source-dispatch Lambda (``app.lambda_handlers.source_dispatch``)
-が担う。本ファイルは admin 手動の dispatch と per-source 取り込みに絞り、HTML 取得 +
-本文抽出 (Stage 2) は ``app/queue/tasks/completion.py`` の責務。
+(本文込み) または補完Consumer (本文未取得)。定期投入は EventBridge Scheduler が起動
+する source-dispatch Lambda (``app.lambda_handlers.source_dispatch``) が担う。本ファイル
+は admin 手動の dispatch と per-source 取り込みに絞る。
 
 dispatch 系 task は ``SourceDispatchService`` に「何を dispatch すべきか」の決定を
 委譲する。task の責務は selection result を kiq message DTO に変換して
@@ -377,7 +376,7 @@ async def acquire_source(
 
     ``arg.id`` は ``news_sources.id`` (FK 用)、``arg.name`` は ``SOURCES`` dispatch の
     lookup キー。本文込みで取れた記事は永続化し、後続のCurationはOutbox経由で進む。
-    本文未取得の記事は後段 ``scrape_html_body`` task へ進む。
+    本文未取得の記事は未完成記事として保存し、Outbox経由で補完Consumerへ進む。
 
     失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
     例外を ``ArticleAcquisitionFailureRecorder`` で監査し、この入口で再送出を判断する。
@@ -422,8 +421,6 @@ async def acquire_source(
         record_acquisition_run(AcquisitionRunResult.SUCCEEDED)
 
         article_created_count = len(persisted_ids)
-        # 本文未取得分は `incomplete_articles` の DB 駆動。`dispatch_html_fetch_jobs`
-        # cron poller が `scrape_html_body` に投入するため、ここでは直接 kiq しない。
         payload = {
             "source_id": source_id,
             "source_name": arg.name,

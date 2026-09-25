@@ -17,10 +17,13 @@ from app.collection.article_completion.consumer_repository import (
 from app.collection.article_completion.consumer_result import (
     CompletionFailed,
     CompletionNotRequired,
+    CompletionSucceeded,
 )
 from app.collection.article_completion.html_completion import complete_with_html
 from app.collection.article_completion.html_extraction import extract_html_content
-from app.collection.article_completion.repository import CompletionSucceeded
+from app.collection.article_completion.metrics import (
+    record_completion_processing_outcome,
+)
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
@@ -124,4 +127,5 @@ class ArticleCompletionConsumer:
                 )
             )
             await session.commit()
+        record_completion_processing_outcome("succeeded")
         return CompletionSucceeded(analyzable_article_id=article_id)

@@ -362,3 +362,14 @@ Problem: 旧cronが先行して新規保存を持つ並走状態を終え、供�
 反映後の確認: applyとrollout後に追記する。
 
 補完救済（backfillのcompletion段）の配備後に補完Taskiqを撤去する。
+
+
+## ステップ8 — 補完Taskiqの撤去（2026-09-25）
+
+Problem: 補完救済と新経路の処理結果の送出が本番で動いたため、並走する旧補完Taskiqを撤去する。
+
+撤去: `dispatch_html_fetch_jobs`・`sweep_expired_leases`・`scrape_html_body`、`CRON_HTML_FETCH`、broker_collectionの`pipeline:completion`購読とStream監視、旧経路専用のモジュール・監査・テスト。管理者の手動取得（`dispatch_sources`→`acquire_source`）と`fetch`サービスは維持する。
+
+反映順序: Terraformの変更はない。merge後にアプリイメージをschedulerから順に入れ替える。未完成行はDBに残るため、切り戻しはPRのrevertで足りる。
+
+反映後の確認: 追記する。

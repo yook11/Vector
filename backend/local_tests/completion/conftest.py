@@ -82,7 +82,7 @@ def page_response():
 
 @pytest.fixture
 def completion_settings(monkeypatch, system_database):
-    # 補完packageの旧経路importが要求する設定にはテスト専用値だけを渡す。
+    # 配送handlerのHTTP設定などが要求する値にはテスト専用値だけを渡す。
     for name, value in {
         "ENV": "development",
         "EGRESS_PROXY_URL": "http://proxy.vector.internal:3128",

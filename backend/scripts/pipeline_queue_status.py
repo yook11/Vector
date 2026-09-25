@@ -1,6 +1,4 @@
-"""acquisition / completion の2 stageを表示する
-operator向けRedis Stream status。
-"""
+"""acquisition stageを表示するoperator向けRedis Stream status。"""
 
 from __future__ import annotations
 

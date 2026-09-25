@@ -31,7 +31,6 @@ from app.audit.failure_projection import (
     project_marker_failure,
     project_redis_failure,
 )
-from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.errors import (
     AcquisitionReadError,
 )
@@ -271,61 +270,6 @@ def test_source_acquisition_marker_projection_reads_marker_attrs(
     ``RETRYABLE`` 片方は ``NON_RETRYABLE`` に投影される (per-instance 導出の witness)。
     """
     assert project_failure(exc) == expected
-
-
-def test_completion_fetch_failed_projection_uses_scrape_decision() -> None:
-    retryable = ArticleCompletionAuditRepository._projection_of_fetch_failed(
-        FetchGatewayError(status_code=502)
-    )
-    terminal = ArticleCompletionAuditRepository._projection_of_fetch_failed(
-        FetchAccessDeniedError(status_code=403, reason="forbidden")
-    )
-
-    assert retryable == FailureProjection(
-        failure_kind="external_fetch",
-        retryability=Retryability.RETRYABLE,
-        failure_action=None,
-        code="fetch_gateway_failure",
-    )
-    assert terminal == FailureProjection(
-        failure_kind="external_fetch",
-        retryability=Retryability.NON_RETRYABLE,
-        failure_action=None,
-        code="fetch_access_denied",
-    )
-
-
-def test_completion_parse_crashed_projection_is_non_retryable() -> None:
-    assert ArticleCompletionAuditRepository._projection_of_parse_crashed() == (
-        FailureProjection(
-            failure_kind="scrape_parse_crashed",
-            retryability=Retryability.NON_RETRYABLE,
-            failure_action=None,
-            code="scrape_parse_crashed",
-        )
-    )
-
-
-def test_completion_persist_crash_projection_uses_db_adapter() -> None:
-    assert ArticleCompletionAuditRepository._projection_of_persist_crash(
-        _stmt_error(OperationalError)
-    ) == FailureProjection(
-        failure_kind="db_runtime",
-        retryability=Retryability.RETRYABLE,
-        failure_action=None,
-        code="persist_crashed",
-    )
-
-
-def test_completion_persist_crash_projection_returns_unknown_for_catch_all() -> None:
-    assert ArticleCompletionAuditRepository._projection_of_persist_crash(
-        RuntimeError("boom")
-    ) == FailureProjection(
-        failure_kind="persist_crashed",
-        retryability=Retryability.UNKNOWN,
-        failure_action=None,
-        code="persist_crashed",
-    )
 
 
 def test_failure_payload_fields_serializes_action_value() -> None:

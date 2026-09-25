@@ -1,4 +1,4 @@
-"""新経路の補完で追加処理が不要な理由と、失敗後の判断を伝える。"""
+"""補完の確定結果として、成功・追加処理が不要な理由・失敗後の判断を伝える。"""
 
 from dataclasses import dataclass
 from typing import Literal
@@ -7,6 +7,13 @@ from app.collection.article_completion.consumer_failure_classification import (
     CloseArticleCompletion,
     RetryArticleCompletion,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionSucceeded:
+    """完成記事の保存と未完成行の削除を確定した記事のIDを保持する。"""
+
+    analyzable_article_id: int
 
 
 @dataclass(frozen=True, slots=True)

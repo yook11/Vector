@@ -47,22 +47,23 @@ class LogPolicyProcessor:
     ) -> dict[str, Any]:
         """準備済みのログを返し、共有予算の超過時はログ全体を固定出力へ置換する。"""
         diagnostics = LogProcessingDiagnostics()
-        selector = LogFieldSelector(rules.allow, rules.deny, diagnostics)
         budget = LogEventBudget()
+        selector = LogFieldSelector(rules.allow, rules.deny, diagnostics, budget=budget)
         preparer = LogValuePreparer(
-            deny=rules.deny, mask=rules.mask, budget=budget, diagnostics=diagnostics
+            deny=rules.deny,
+            mask=rules.mask,
+            sanitize=rules.sanitize,
+            budget=budget,
+            diagnostics=diagnostics,
         )
         prepared_event: dict[str, Any] = {}
         try:
-            for field_name, field_value in event_dict.items():
-                budget.check_and_count_log_items(1)
-                # トップレベルの項目名を検査し、採用しない項目は値を見ずに落とす。
-                if not selector.select(field_name):
-                    continue
-                # ここまで残った項目だけを採用し、名前の文字数を数えて値を準備する。
-                budget.check_and_count_text_chars(len(field_name))
+            # まずセレクターがトップレベルの項目を選別、denyを除いたログを返す。
+            selected_fields = selector.select_fields(event_dict)
+            # 整理したログを検証していく。
+            for field_name, field_value in selected_fields.items():
                 prepared_event[field_name] = preparer.prepare_field_value(
-                    field_value, depth_limit=DEPTH_LIMIT
+                    field_value, field_name=field_name, depth_limit=DEPTH_LIMIT
                 )
 
             # 同名の通常入力より、実際の例外から抽出した情報を優先する。
@@ -75,14 +76,14 @@ class LogPolicyProcessor:
                 for field_name, field_value in exception_fields.items():
                     budget.check_and_count_text_chars(len(field_name))
                     prepared_event[field_name] = preparer.prepare_field_value(
-                        field_value, depth_limit=EXCEPTION_DEPTH_LIMIT
+                        field_value,
+                        field_name=field_name,
+                        depth_limit=EXCEPTION_DEPTH_LIMIT,
                     )
             # どのポリシーで処理したログかを、出力に残す。
             if rules.policy is not None:
                 prepared_event["log_policy"] = rules.policy.value
-            prepared_diagnostics = diagnostics.prepare_log_fields(
-                mask=rules.mask, budget=budget
-            )
+            prepared_diagnostics = diagnostics.prepare_log_fields(budget=budget)
             prepared_event.update(prepared_diagnostics)
         except LogBudgetExceeded as exc:
             # 予算オーバー時はログ全体を固定出力へ置換する。

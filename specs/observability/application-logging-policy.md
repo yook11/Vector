@@ -10,6 +10,8 @@ Implementation: Partially implemented。共通基底の規則・processor・例�
 概念別仕様: [AI分析のログポリシー](./ai-analysis-logging-policy.md)
 共通機構の正本: [アプリケーションログの共通基底ポリシー](./logging-base-policy.md)。本書は到達すべき運用契約を定め、実装済みの保証範囲・deny/allow/maskの意味・上限は基底仕様を参照する。
 
+変更状況: mask・sanitize と文字列内の認証情報の置換は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。本書で mask を文字列内のキー付き値の置換、sanitize を既知形式の秘密の検出とする記述は旧契約。
+
 ## Problem
 
 例外型だけのログや例外文の一律置換により、異なる失敗原因を調査できない。一方、ログの入口ごとに出力・秘匿の判断が分かれ、標準出力や手動属性には共通の制約がない。
@@ -126,7 +128,7 @@ loggerの構築時に、コードが所有する完成済みルールを結び�
 | キャッシュ更新通知 | `cache_revalidation` / `CACHE_REVALIDATION_LOG_RULES` | `tags` / `operation` / `error_class` |
 | 秘密情報取得 | `infrastructure` / `SECRET_ACCESS_LOG_RULES` | `operation` / `resource` / `error_class` |
 
-両ルールとも`service` / `environment` / `stage` / `request_id` / `message_id` / `event_id`をallowに持つ。基底の認証情報deny・maskを継承し、基底項目と自動生成の`log_policy`は重複定義しない。モデル・使用量・記事IDは追加しない。`tags`はアプリが組み立てるキャッシュタグのリストで、任意の外部入力を許可するものではない。タグの意味は呼び出し側が所有し、ポリシーはタグの業務検証を複製しない。
+両ルールとも`service` / `environment` / `stage` / `request_id` / `message_id` / `event_id`をallowに持つ。基底の認証情報denyを継承し、基底項目と自動生成の`log_policy`は重複定義しない。モデル・使用量・記事IDは追加しない。`tags`はアプリが組み立てるキャッシュタグのリストで、任意の外部入力を許可するものではない。タグの意味は呼び出し側が所有し、ポリシーはタグの業務検証を複製しない。
 
 | イベント | level | 出力する診断 |
 | --- | --- | --- |

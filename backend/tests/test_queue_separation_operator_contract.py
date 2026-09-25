@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import re
 import shlex
 import tomllib
@@ -16,9 +15,6 @@ _REDIS_TOPOLOGY_SPEC = (
     _REPOSITORY_ROOT / "backend" / "specs" / "redis-production-topology.md"
 )
 _COMPOSE_FILE = _REPOSITORY_ROOT / "docker-compose.yml"
-_FLY_COLLECT_CONFIG = _REPOSITORY_ROOT / "backend" / "fly.collect.toml"
-_FETCH_SUPERVISOR_CONFIG = _REPOSITORY_ROOT / "backend" / "supervisord" / "fetch.conf"
-_BROKERS_MODULE = _REPOSITORY_ROOT / "backend" / "app" / "queue" / "brokers.py"
 
 
 def _required_text(path: Path) -> str:
@@ -85,20 +81,6 @@ def _markdown_section(text: str, heading: str) -> str:
 
 def _contains_any(text: str, choices: tuple[str, ...]) -> bool:
     return any(choice in text for choice in choices)
-
-
-def _comment_text(path: Path) -> str:
-    return "\n".join(
-        line.lstrip()[1:].strip()
-        for line in _required_text(path).splitlines()
-        if line.lstrip().startswith("#")
-    )
-
-
-def _module_docstring(path: Path) -> str:
-    docstring = ast.get_docstring(ast.parse(_required_text(path)))
-    assert docstring is not None, f"module docstring is missing: {path}"
-    return docstring
 
 
 def _markdown_row_containing(text: str, token: str) -> str:
@@ -432,82 +414,4 @@ def test_compose_comment_calls_maxlen_retained_history_not_backlog() -> None:
                 "キュー深度ではなく",
             ),
         )
-    )
-
-
-def test_fetch_deployment_comments_match_control_and_multistream_roles() -> None:
-    fly_comments = _normalized(_comment_text(_FLY_COLLECT_CONFIG))
-    supervisor_comments = _normalized(_comment_text(_FETCH_SUPERVISOR_CONFIG))
-
-    fly_role_terms = (
-        "dispatch",
-        "collection",
-        "pipeline:dispatch",
-        "pipeline:acquisition",
-        "pipeline:completion",
-        "broker_dispatch",
-        "broker_collection",
-    )
-    supervisor_role_terms = (
-        "dispatch",
-        "collection",
-        "pipeline:dispatch",
-        "pipeline:acquisition",
-        "pipeline:completion",
-        "broker_collection",
-    )
-    shared_consumer_terms = (
-        "2 stream",
-        "2つの stream",
-        "両 stream",
-        "multi-stream",
-    )
-
-    assert (
-        all(term in fly_comments for term in fly_role_terms)
-        and _contains_any(fly_comments, ("control", "制御", "sweep"))
-        and _contains_any(fly_comments, shared_consumer_terms)
-        and _contains_any(
-            fly_comments, ("共有 consumer", "共有consumer", "shared consumer")
-        )
-        and "broker_metadata" not in fly_comments
-        and "broker_content" not in fly_comments
-    )
-    assert (
-        all(term in supervisor_comments for term in supervisor_role_terms)
-        and _contains_any(supervisor_comments, ("control", "制御", "sweep"))
-        and _contains_any(supervisor_comments, shared_consumer_terms)
-        and _contains_any(
-            supervisor_comments,
-            ("共有 consumer", "共有consumer", "shared consumer"),
-        )
-    )
-
-
-def test_broker_module_docstring_matches_control_and_multistream_roles() -> None:
-    docstring = _normalized(_module_docstring(_BROKERS_MODULE))
-
-    assert (
-        all(
-            term in docstring
-            for term in (
-                "broker_dispatch",
-                "dispatch",
-                "broker_collection",
-                "acquisition",
-                "completion",
-            )
-        )
-        and _contains_any(docstring, ("control", "制御", "sweep"))
-        and _contains_any(
-            docstring,
-            ("2 stream", "2つの stream", "両 stream", "multi-stream"),
-        )
-        and _contains_any(
-            docstring, ("共有 consumer", "共有consumer", "shared consumer")
-        )
-        and "broker_metadata" not in docstring
-        and "broker_content" not in docstring
-        and "rss/hn メタデータ取得 + dispatch" not in docstring
-        and "記事単位のコンテンツ抽出" not in docstring
     )

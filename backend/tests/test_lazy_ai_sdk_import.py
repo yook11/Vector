@@ -35,11 +35,8 @@ _NON_AI_IMPORT_SURFACES = {
     # entrypoint は schedulers + registry を import するため最広の import surface。
     "scheduler": "import app.queue.scheduler_entrypoint",
     # fetch.conf: taskiq worker app.queue.brokers:broker_{dispatch,collection}
-    #             app.queue.tasks.acquisition app.queue.tasks.completion
-    "collect": (
-        "import app.queue.brokers, app.queue.tasks.acquisition, "
-        "app.queue.tasks.completion"
-    ),
+    #             app.queue.tasks.acquisition
+    "collect": "import app.queue.brokers, app.queue.tasks.acquisition",
     # insights.conf (trend program): process factoryがbrokerとtaskを構築する。
     "trend_discovery": (
         "from app.insights.trend_discovery.worker import create_broker; create_broker()"

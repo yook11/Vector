@@ -2,7 +2,6 @@
 
 import pytest
 
-from app.log_policy.base import BASE_MASK
 from app.log_policy.budget import (
     EVENT_TEXT_LIMIT,
     MAX_ITEMS_PER_LOG_EVENT,
@@ -99,40 +98,35 @@ class TestStateIsolation:
 
 
 class TestPreparedFields:
-    """確定 mask を適用して共有予算に計上し、超過時はサニタイズ前に中断する。"""
-
-    def test_prepared_denied_keys_use_effective_mask(self) -> None:
-        """診断自身が確定済みmaskを使って入力由来のキー名を保護する。"""
-        diagnostics = LogProcessingDiagnostics()
-        diagnostics.record_top_level_denied("description=synthetic")
-        mask = BASE_MASK | {"description"}
-        assert diagnostics.prepare_log_fields(mask=mask, budget=LogEventBudget()) == {
-            "_denied_keys": ["description=***"]
-        }
+    """情報漏洩防止を適用して共有予算に計上し、超過時は情報漏洩防止の前に中断する。"""
 
     def test_prepared_denied_keys_preserve_order_and_duplicates(self) -> None:
-        """サニタイズ後もキー名の記録順と重複を保持する。"""
+        """情報漏洩防止の後もキー名の記録順と重複を保持する。"""
         diagnostics = LogProcessingDiagnostics()
         for key in ["token=first", "password=second", "token=first"]:
             diagnostics.record_top_level_denied(key)
-        assert diagnostics.prepare_log_fields(
-            mask=BASE_MASK, budget=LogEventBudget()
-        ) == {"_denied_keys": ["token=***", "password=***", "token=***"]}
+        assert diagnostics.prepare_log_fields(budget=LogEventBudget()) == {
+            "_denied_keys": [
+                "token=[redacted:credential]",
+                "password=[redacted:credential]",
+                "token=[redacted:credential]",
+            ]
+        }
 
     def test_prepared_denied_keys_do_not_mutate_recorded_keys(self) -> None:
         """準備や返却値の変更で記録済みのキー名を変更しない。"""
         diagnostics = LogProcessingDiagnostics()
         diagnostics.record_top_level_denied("token=synthetic")
-        fields = diagnostics.prepare_log_fields(mask=BASE_MASK, budget=LogEventBudget())
+        fields = diagnostics.prepare_log_fields(budget=LogEventBudget())
         fields["_denied_keys"].clear()
         assert diagnostics.as_fields() == {"_denied_keys": ["token=synthetic"]}
 
     def test_denied_keys_consume_shared_items_and_original_text(self) -> None:
-        """診断のフィールド・要素とサニタイズ前の文字数を既存予算へ加算する。"""
+        """診断のフィールド・要素と置換前の文字数を既存予算へ加算する。"""
         diagnostics = LogProcessingDiagnostics()
         diagnostics.record_top_level_denied("token=synthetic")
         budget = LogEventBudget(log_item_count=10, counted_text_chars=100)
-        diagnostics.prepare_log_fields(mask=BASE_MASK, budget=budget)
+        diagnostics.prepare_log_fields(budget=budget)
         assert budget.log_item_count == 12
         assert budget.counted_text_chars == 100 + len("_denied_keys") + len(
             "token=synthetic"
@@ -147,7 +141,7 @@ class TestPreparedFields:
         budget = LogEventBudget(
             log_item_count=MAX_ITEMS_PER_LOG_EVENT, counted_text_chars=EVENT_TEXT_LIMIT
         )
-        assert diagnostics.prepare_log_fields(mask=BASE_MASK, budget=budget) == {
+        assert diagnostics.prepare_log_fields(budget=budget) == {
             "_unregistered_count": 1,
             "_denied_nested_count": 1,
             "_policy_limited": True,
@@ -155,62 +149,70 @@ class TestPreparedFields:
         assert budget.log_item_count == MAX_ITEMS_PER_LOG_EVENT
         assert budget.counted_text_chars == EVENT_TEXT_LIMIT
 
-    def test_denied_key_at_text_limit_is_sanitized_once(self, monkeypatch) -> None:
-        """単一上限ちょうどのキー名を一度だけサニタイズする。"""
+    def test_denied_key_at_text_limit_is_redacted_once(self, monkeypatch) -> None:
+        """単一上限ちょうどのキー名に一度だけ情報漏洩防止を適用する。"""
         from unittest.mock import Mock
 
-        sanitize = Mock(return_value="sanitized")
-        monkeypatch.setattr("app.log_policy.diagnostics.sanitize_text", sanitize)
+        redact = Mock(return_value="redacted")
+        monkeypatch.setattr(
+            "app.log_policy.diagnostics.prevent_credential_leaks", redact
+        )
         diagnostics = LogProcessingDiagnostics()
         key = "x" * TEXT_LIMIT
         diagnostics.record_top_level_denied(key)
-        assert diagnostics.prepare_log_fields(
-            mask=BASE_MASK, budget=LogEventBudget()
-        ) == {"_denied_keys": ["sanitized"]}
-        sanitize.assert_called_once_with(key)
+        assert diagnostics.prepare_log_fields(budget=LogEventBudget()) == {
+            "_denied_keys": ["redacted"]
+        }
+        redact.assert_called_once_with(key)
 
-    def test_denied_key_above_text_limit_is_replaced_without_sanitizing(
+    def test_denied_key_above_text_limit_is_replaced_without_leak_prevention(
         self,
         monkeypatch,
     ) -> None:
-        """長すぎる診断文字列は原文の文字数計上もサニタイズもせず置換する。"""
+        """長すぎる診断文字列は原文の文字数計上も情報漏洩防止もせず置換する。"""
         from unittest.mock import Mock
 
-        sanitize = Mock()
-        monkeypatch.setattr("app.log_policy.diagnostics.sanitize_text", sanitize)
+        redact = Mock()
+        monkeypatch.setattr(
+            "app.log_policy.diagnostics.prevent_credential_leaks", redact
+        )
         diagnostics = LogProcessingDiagnostics()
         diagnostics.record_top_level_denied("x" * (TEXT_LIMIT + 1))
         budget = LogEventBudget()
-        assert diagnostics.prepare_log_fields(mask=BASE_MASK, budget=budget) == {
+        assert diagnostics.prepare_log_fields(budget=budget) == {
             "_denied_keys": ["[limit]"]
         }
         assert budget.counted_text_chars == len("_denied_keys")
-        sanitize.assert_not_called()
+        redact.assert_not_called()
 
-    def test_diagnostic_item_overflow_stops_before_sanitizing_any_key(
+    def test_diagnostic_item_overflow_stops_before_redacting_any_key(
         self, monkeypatch
     ) -> None:
-        """一覧の後続要素で件数を超過したときも先行キーをサニタイズしない。"""
+        """一覧の後続要素で件数を超過したときも先行キーに情報漏洩防止を適用しない。"""
         from unittest.mock import Mock
 
-        sanitize = Mock()
-        monkeypatch.setattr("app.log_policy.diagnostics.sanitize_text", sanitize)
+        redact = Mock()
+        monkeypatch.setattr(
+            "app.log_policy.diagnostics.prevent_credential_leaks", redact
+        )
         diagnostics = LogProcessingDiagnostics()
         diagnostics.record_top_level_denied("token=first")
         diagnostics.record_top_level_denied("password=second")
         budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 2)
         with pytest.raises(LogBudgetExceeded, match="value_count"):
-            diagnostics.prepare_log_fields(mask=BASE_MASK, budget=budget)
-        sanitize.assert_not_called()
+            diagnostics.prepare_log_fields(budget=budget)
+        redact.assert_not_called()
 
-    def test_diagnostic_text_overflow_stops_before_sanitizing_any_key(
+    def test_diagnostic_text_overflow_stops_before_redacting_any_key(
         self, monkeypatch
     ) -> None:
-        """診断の文字数も既存予算と合算し、超過時はサニタイズ前に中断する。"""
+        """診断の文字数も既存予算と合算し、超過時は情報漏洩防止の前に中断する。"""
         from unittest.mock import Mock
 
-        sanitize = Mock()
-        monkeypatch.setattr("app.log_policy.diagnostics.sanitize_text", sanitize)
+        redact = Mock()
+        monkeypatch.setattr(
+            "app.log_policy.diagnostics.prevent_credential_leaks", redact
+        )
         diagnostics = LogProcessingDiagnostics()
         diagnostics.record_top_level_denied("token=first")
         diagnostics.record_top_level_denied("password=second")
@@ -218,18 +220,5 @@ class TestPreparedFields:
             counted_text_chars=EVENT_TEXT_LIMIT - len("_denied_keystoken=first")
         )
         with pytest.raises(LogBudgetExceeded, match="text_total"):
-            diagnostics.prepare_log_fields(mask=BASE_MASK, budget=budget)
-        sanitize.assert_not_called()
-
-    def test_diagnostic_key_sanitizes_pem_before_masking_assignments(self) -> None:
-        """診断のキー名でもmaskより先にPEM全体を検出して本文を残さない。"""
-        diagnostics = LogProcessingDiagnostics()
-        # 合成値を分割し、秘密検出ツールの規則に一致させない。
-        diagnostics.record_top_level_denied(
-            "private_key=-----BEGIN "
-            + "PRIVATE KEY-----\nsynthetic-private-body\n"
-            + "-----END PRIVATE KEY----- failed"
-        )
-        assert diagnostics.prepare_log_fields(
-            mask=BASE_MASK, budget=LogEventBudget()
-        ) == {"_denied_keys": ["private_key=*** failed"]}
+            diagnostics.prepare_log_fields(budget=budget)
+        redact.assert_not_called()

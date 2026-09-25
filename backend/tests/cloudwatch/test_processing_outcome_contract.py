@@ -1,8 +1,9 @@
 """``processing_outcome`` EMF の call-site 契約 (正本)。
 
-CloudWatch A4 (工程別失敗率 alarm) が消費する stage × result の全系列を
-工程横断で 1 か所に固定する。wire format 自体の正本は test_emf.py、各工程の
-Logfire counter の不変条件は各 stage の test_processing_outcome_metric.py が持つ。
+CloudWatch に送る stage × result の全系列を工程横断で 1 か所に固定する
+(A4 の失敗率 alarm は completion 以外の系列を使う)。wire format 自体の正本は
+test_emf.py、各工程の Logfire counter の不変条件は各 stage の
+test_processing_outcome_metric.py が持つ。
 """
 
 from __future__ import annotations
@@ -54,9 +55,9 @@ _SERIES: list[tuple[Callable[[Any], None], str, str]] = [
 _SERIES_IDS = [f"{stage}-{result}" for _, stage, result in _SERIES]
 
 
-def test_series_total_is_twelve() -> None:
-    """全系列数は 12 (spec のコスト見積もりと alarm 分母定義の前提)。"""
-    assert len(_SERIES) == 12
+def test_series_total_is_eleven() -> None:
+    """全系列数は 11 (spec のコスト見積もりと alarm 分母定義の前提)。"""
+    assert len(_SERIES) == 11
 
 
 @pytest.mark.parametrize(

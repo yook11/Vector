@@ -1,4 +1,4 @@
-"""合成入力で旧検出結果との一致とサニタイズ負荷を測り、JSONで標準出力へ記録する。"""
+"""合成入力で旧検出結果との一致と情報漏洩防止の負荷を測り、JSONで標準出力へ記録する。"""
 
 from __future__ import annotations
 
@@ -13,12 +13,15 @@ from itertools import product
 
 import structlog
 
-from app.log_policy.base import BASE_MASK, LogPolicy, LogPolicyRules
+from app.log_policy.base import LogPolicy, LogPolicyRules
 from app.log_policy.budget import EVENT_TEXT_LIMIT, MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
+from app.log_policy.leak_prevention import (
+    prevent_credential_leaks,
+    redact_jwts,
+    redact_url_userinfo,
+)
 from app.log_policy.logger import create_policy_logger
-from app.log_policy.mask import mask_assignments
 from app.log_policy.processor import LogPolicyProcessor
-from app.log_policy.sanitize import sanitize_jwts, sanitize_text, sanitize_url_userinfo
 
 _REFERENCE_URL = re.compile(r"([a-z][a-z0-9+.\-]*)://[^@/\s]+@", re.IGNORECASE)
 _REFERENCE_JWT = re.compile(r"eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+")
@@ -85,10 +88,12 @@ def _check_equivalence() -> dict[str, int]:
         "".join(rng.choices(fragments, k=rng.randint(1, 30))) for _ in range(20000)
     ]
     for value in urls + generated:
-        if sanitize_url_userinfo(value) != _REFERENCE_URL.sub(r"\1://***@", value):
+        if redact_url_userinfo(value) != _REFERENCE_URL.sub(
+            r"\1://[redacted:url_userinfo]@", value
+        ):
             raise AssertionError(f"URLの置換結果が変わった: {value!r}")
     for value in jwts + generated:
-        if sanitize_jwts(value) != _REFERENCE_JWT.sub("eyJ***", value):
+        if redact_jwts(value) != _REFERENCE_JWT.sub("[redacted:jwt]", value):
             raise AssertionError(f"JWTの置換結果が変わった: {value!r}")
     return {
         "url_cases": len(urls) + len(generated),
@@ -97,7 +102,7 @@ def _check_equivalence() -> dict[str, int]:
 
 
 def main() -> None:
-    """現行の文字数制限は変更せず、サニタイズ単体とprocessor全体を測定する。"""
+    """現行の文字数制限は変更せず、情報漏洩防止単体とprocessor全体を測定する。"""
     report: dict = {
         "python": platform.python_version(),
         "platform": platform.system(),
@@ -135,9 +140,7 @@ def main() -> None:
                 {
                     "case": name,
                     "chars": len(value),
-                    **_measure(
-                        lambda: mask_assignments(sanitize_text(value), mask=BASE_MASK)
-                    ),
+                    **_measure(lambda: prevent_credential_leaks(value)),
                 }
             )
     for length in [500, 2048, 10000]:
@@ -145,14 +148,14 @@ def main() -> None:
             (
                 "url_ascii",
                 "x" * length,
-                lambda text: _REFERENCE_URL.sub(r"\1://***@", text),
-                sanitize_url_userinfo,
+                lambda text: _REFERENCE_URL.sub(r"\1://[redacted:url_userinfo]@", text),
+                redact_url_userinfo,
             ),
             (
                 "jwt_prefixes",
                 _repeat("eyJ", length),
-                lambda text: _REFERENCE_JWT.sub("eyJ***", text),
-                sanitize_jwts,
+                lambda text: _REFERENCE_JWT.sub("[redacted:jwt]", text),
+                redact_jwts,
             ),
         ]:
             report["legacy_comparison"].append(

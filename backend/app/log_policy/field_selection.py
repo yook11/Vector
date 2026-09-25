@@ -1,10 +1,11 @@
 """トップレベルの項目名を検査し、ログに残す項目を選ぶ。"""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.log_policy.base import normalize_key
-from app.log_policy.budget import TEXT_LIMIT
+from app.log_policy.budget import TEXT_LIMIT, LogEventBudget
 from app.log_policy.diagnostics import LogProcessingDiagnostics
 
 # 例外からの生成は共通ロガーが担うため、呼び出し側で定義した同名フィールドは除外する。
@@ -25,34 +26,45 @@ _EXCLUDED_FIELDS = frozenset(
 
 @dataclass
 class LogFieldSelector:
-    """値には触れず、項目名の制約とdeny・allowを判定する。"""
+    """値には触れず名前だけで判定し、このログが受け付けるトップレベルの項目を取り出す。"""
 
     allow: frozenset[str]
     deny: frozenset[str]
     diagnostics: LogProcessingDiagnostics
+    budget: LogEventBudget = field(kw_only=True)
 
-    def select(self, field_name: Any) -> bool:
-        """項目名を検査してdenyをallowより優先して選別し、除外の理由を診断へ記録する。"""
-        if type(field_name) is not str:
-            self.diagnostics.record_unregistered()
-            return False
+    def select_fields(self, event_dict: Mapping[Any, Any]) -> dict[str, Any]:
+        """入力ログの項目を一つずつ数えて判定し、受け付けた項目だけを入力順に返す。"""
+        selected_fields: dict[str, Any] = {}
 
-        if field_name in _EXCLUDED_FIELDS:
-            return False
+        for field_name, field_value in event_dict.items():
+            self.budget.check_and_count_log_items(1)
 
-        if len(field_name) > TEXT_LIMIT:
-            self.diagnostics.record_top_level_limit_reached()
-            return False
+            if type(field_name) is not str:
+                self.diagnostics.record_unregistered()
+                continue
 
-        normalized_name = normalize_key(field_name)
-        if normalized_name in _EXCEPTION_OUTPUT_ONLY_FIELDS:
-            return False
-        if normalized_name in self.deny:
-            self.diagnostics.record_top_level_denied(field_name)
-            return False
+            if field_name in _EXCLUDED_FIELDS:
+                continue
 
-        if normalized_name not in self.allow:
-            self.diagnostics.record_unregistered()
-            return False
+            if len(field_name) > TEXT_LIMIT:
+                self.diagnostics.record_top_level_limit_reached()
+                continue
 
-        return True
+            normalized_name = normalize_key(field_name)
+            if normalized_name in _EXCEPTION_OUTPUT_ONLY_FIELDS:
+                continue
+
+            # allowと重なってもdenyを優先し、除外の理由を名前付きで診断に残す。
+            if normalized_name in self.deny:
+                self.diagnostics.record_top_level_denied(field_name)
+                continue
+
+            if normalized_name not in self.allow:
+                self.diagnostics.record_unregistered()
+                continue
+
+            self.budget.check_and_count_text_chars(len(field_name))
+            selected_fields[field_name] = field_value
+
+        return selected_fields

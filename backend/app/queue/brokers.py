@@ -1,8 +1,8 @@
 """taskiq broker 定義。
 
 broker:
-  - broker_dispatch:   dispatch / sweep control task
-  - broker_collection: acquisition / completion の2 Stream共有 consumer
+  - broker_dispatch:   管理者の手動取得を source ごとの取得依頼へ展開する control task
+  - broker_collection: 手動取得の acquisition を処理する consumer
   - broker_briefing:  週次カテゴリ別 LLM ブリーフィング生成 (cron 駆動、別 queue)
   - broker_agent:     user-facing research agent 非同期 run + deadline sweeper
 
@@ -32,7 +32,6 @@ _stream = taskiq_stream_connection(settings)
 def _make_broker(
     queue_name: str,
     *,
-    additional_streams: dict[str, str | int] | None = None,
     consumer_group_name: str = "taskiq",
     consumer_id: str = "$",
     unacknowledged_batch_size: int = 100,
@@ -41,7 +40,6 @@ def _make_broker(
     return create_taskiq_stream_broker(
         _stream,
         queue_name,
-        additional_streams=additional_streams,
         consumer_group_name=consumer_group_name,
         consumer_id=consumer_id,
         unacknowledged_batch_size=unacknowledged_batch_size,
@@ -52,7 +50,6 @@ def _make_broker(
 broker_dispatch = _make_broker("pipeline:dispatch")
 broker_collection = _make_broker(
     "pipeline:acquisition",
-    additional_streams={"pipeline:completion": ">"},
     consumer_id="0-0",
     unacknowledged_lock_timeout=60,
 )

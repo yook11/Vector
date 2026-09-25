@@ -6,6 +6,10 @@ Implementation: 基底規則・processor・例外構造化・チェーン構成�
 
 関連: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)、[デプロイ診断ログの共通秘匿ポリシー](../platform/deployment-log-policy.md)
 
+変更状況: [項目別サニタイズのログポリシー](./logging-sanitization-policy.md)を優先する。対象項目の値全体を、検査・再帰の前に `***` へ置き換えるマスクは実装済み。以下の文字列内部の置換をmaskと呼ぶ記述は旧契約であり、その処理は情報漏洩防止としてポリシーから切り離した。項目別サニタイズは `canonical_url`・`source_url` の対応まで実装済みで、実際の共通・目的別項目の選定は未実施。
+
+文字列内部の処理 (内容検出・キー付き値の置換・置換表記・`BASE_MASK`)、記事本文の文字列内保護、`redact` の語の扱い、それらのテストの配置は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。
+
 ## Problem
 
 structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼び出し側の規律 (`redact_secrets` の手巻き、`logger.exception()` の回避) に依存している。結果として、例外文を丸ごと捨てる箇所と生で出す箇所が混在する。
@@ -41,8 +45,8 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 | 未登録 | トップレベルでdeny・allowに該当しない。maskの有無に関係なくキーごと落とす | `_unregistered_count` に件数 |
 
 - 継承はクラス継承ではなく、`LogPolicyRules.extend(*, allow, deny=frozenset(), mask=frozenset())` で新しい規則を作る操作で表す。直接生成時は基底allow・deny・maskを必ず含め、継承時は親のdeny・maskへそれぞれ追加分を足す。親の識別子を維持し、親の規則は変更しない。
-- `allow` は継承時に必ず明示し、親の目的別allowは自動追加しない。基底allowは常に自動追加する。`allow ∩ deny = ∅` を正規化後に構築時点で検証し、共通・親・子の禁止をallowで解除する定義を拒否する。
-- `mask` は `allow`・`deny` と重複できるが、項目の採用・除外には影響しない。追加denyを文字列でも保護する場合は同じキーをmaskへ明示する。
+- `allow` は継承時に必ず明示し、親の目的別allowは自動追加しない。基底allowは常に自動追加する。`allow` と `deny` が重なっても構築時には拒否せず、実行時に `deny` を優先して、共通・親・子の禁止をallowで解除させない。実際のポリシーで重ならないことはテストで確認する。
+- `mask` は `allow`・`deny` と重複できるが、項目の採用・除外には影響しない。`deny` と重なる項目は先に除外されるため、`mask` の指定は働かない。
 - `LogPolicyRules.allow`・`deny`・`mask` は基底・継承分を含む正規化済みの確定集合として構築時に保持する。processorは登録表を持たず、`PolicyLogger.rules` に保持された完成済みルールを直接適用する。同じ識別子のlogger同士でも規則を上書きし合わない。
 - processorは確定したdenyをフィールド選別・ネスト内の除外へ、確定したmaskを通常値・例外・診断の文字列準備へ渡し、下流で再合成しない。`create_policy_logger` はルール省略時に `BASE_LOG_RULES` を使い、指定値が厳密に `LogPolicyRules` 型でなければ生成時に拒否する。共通設定下の通常の `structlog.get_logger()` もこのfactoryを通る。processorはログごとの型確認や基本ルールへの差し戻しを行わず、factory未接続などの処理失敗では既存の固定エラーを返す。
 - deny・allow・mask はいずれもキー名の正規化後 (小文字・camelCase / PascalCase / 略語境界 / ハイフン → snake_case) の**完全一致**で判定する。部分一致や正規表現を使うと `completion_tokens` `rds_iam_auth_token_port` 等を巻き込み、例外リストが必要になる。基底に例外 (逃げ道) を置かないための条件である。
@@ -55,7 +59,7 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 
 - 共通の認証情報禁止・例外保護・未登録除外は、どの目的の処理からも、bind / contextvars / ログ引数のどこから来た値にも同じく適用される。
 - 基底のキー deny は認証情報だけを定める。基本5項目のallowは `BASE_ALLOW` に定義し、本文の禁止と追加allowは目的別に持つ。
-- 目的ポリシーは基底の deny・mask を独立して継承し、それぞれ足すことしかできない。基底より緩いポリシーは定義できない。
+- 目的ポリシーは基底の deny・mask を独立して継承し、それぞれ足すことしかできない。allow に基底の deny を入れても deny が優先されるため、基底より緩い出力にはならない。
 - 適用は structlog processor で行い、呼び出し側の手巻きに依存しない。renderer や Logfire 転送より前に確定させる。
 - 秘匿処理の失敗で業務結果・例外伝播・再試行を変えない。原文 fallback はしない。
 
@@ -105,7 +109,7 @@ URLは `://` を起点に左側のschemeを確認し、隣接する数字・記�
 
 ### 2. 目的別 deny・mask との境界（記事本文）
 
-`BASE_DENY = CREDENTIAL_KEYS`・`BASE_MASK = CREDENTIAL_KEYS` とし、本文・派生テキストは含めない。`policies/article_text.py` の禁止項目を `policies/external_content.py` と `policies/ai_inference.py` がそれぞれdeny・maskへ明示的に採用し、共通deny・maskを継承した規則として定義する。目的別モジュール内の `extend(allow=..., deny=..., mask=...)` で利用する規則を完成させ、loggerへ渡す。識別子から規則を検索したり、denyからmaskを暗黙に作ったりしない。
+`BASE_DENY = CREDENTIAL_KEYS` とし、本文・派生テキストは含めない。`policies/article_text.py` の禁止項目を `policies/external_content.py` と `policies/ai_inference.py` がそれぞれdenyへ明示的に採用し、共通denyを継承した規則として定義する。目的別モジュール内の `extend(allow=..., deny=...)` で利用する規則を完成させ、loggerへ渡す。識別子から規則を検索しない。
 
 ```python
 from functools import partial
@@ -219,29 +223,29 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 - denyや未登録で除外した値は文字数検査もサニタイズもしない。キー正規化の前にはキー自体の長さを検査する。
 - 走査数は深さと異なり、値・辞書・リストを一つずつ数える。例として単独の `[1, 2, 3]` はコンテナを含め4件。ネストのキーは値と同じ1項目として数えるが、文字数には加算する。
 - トップレベルの項目を取り出すたび、項目名の検査より先に一件として数え、入力に含まれる内部制御・禁止・未登録・非文字列キーも256件の予算を消費する。ロガー属性のルールは入力に含まれず件数を消費しない。`log_item_count` はログ出力回数や最終フィールド数ではなく、この共有予算に計上した項目数を表し、上限は `MAX_ITEMS_PER_LOG_EVENT` とする。採用したトップレベル値は二重に数えず、例外の生成フィールドは値準備の前にまとめて計上し、ネストは各項目をたどる際に計上する。生成項目が残り予算を超える場合は加算せず中断する。入力の `exc_info` と変換で生成する各項目はそれぞれ計上する。例外の抽出自体は予算を持たず、値準備は呼び出し側の予算を使う。processor経由では通常値と同じ予算を使う。
-- トップレベルとネストで共有する走査予算の129件目を確認した時点で超過を通知し、それ以降を列挙しない。各トップレベル項目の値を準備してから次の項目へ進むため、複数の上限を超える入力では、この順序で最初に検出した理由を返す。長すぎるキーはトップレベル・ネストとも名前や値を出さずその項目を除外し、`_policy_limited: true` で示す。
+- トップレベルとネストで共有する走査予算の129件目を確認した時点で超過を通知し、それ以降を列挙しない。トップレベルの選別を終えてから各項目の値を準備するため、複数の上限を超える入力では、この順序で最初に検出した理由を返す。トップレベルの件数超過は、値の件数・文字数の超過より先に検出する。長すぎるキーはトップレベル・ネストとも名前や値を出さずその項目を除外し、`_policy_limited: true` で示す。
 - SQLパラメータの抽出や例外の `__str__` は共通サニタイズ前の別工程であり、今回の入力上限でその抽出時間全体を保証しない。最終JSONの総バイト数の上限も別の契約である。
 
 #### 値変換の責務
 
-トップレベルの項目名の選別と、項目の値の構造検査・サニタイズを分ける。processorは `field_name` / `field_value` を一項目ずつ取り出し、計上 → `LogFieldSelector.select(field_name)` → 採用した名前の文字数計上 → `LogValuePreparer.prepare_field_value(field_value)` → 格納の順で処理する。不採用の値には触れず次へ進み、入力全体や選別結果の中間辞書は作らない。ネストした辞書では `key` / `child_value` と呼び、トップレベルのフィールドと区別する。
+トップレベルの項目名の選別と、項目の値の構造検査・サニタイズを分ける。processorは `LogFieldSelector.select_fields(event_dict)` から受け付けた項目を受け取り、各値を `LogValuePreparer.prepare_field_value(field_value, field_name=...)` へ渡して格納する。選別は項目を一つずつ取り出し、計上 → 項目名の判定 → 受け付けた名前の文字数計上の順で進め、受け付けた項目を値の参照のまま入力順に返す。不採用の値には触れない。ネストした辞書では `key` / `child_value` と呼び、トップレベルのフィールドと区別する。
 
-`LogFieldSelector` は型・内部項目・長さ・deny・allowを順に判定する。ネストした辞書の `inspect_dictionary` はdenyのみを判定し、トップレベルのallowを持ち込まない。どちらも共通の `normalize_key` と確定済みdenyを使い、禁止項目の値へ触れず除外する。選別側・構造検査側がそれぞれ同じ `LogProcessingDiagnostics` へ直接記録する。
+`LogFieldSelector` は項目を列挙しながら計上し、型・内部項目・長さ・deny・allowを順に判定して、受け付けた項目を返す。トップレベルではallowが除外を保証し、定義時にallowと重ならないdenyは、除外の理由を名前付きで診断へ残すために判定する。ネストした辞書の `inspect_dictionary` はdenyのみを判定し、トップレベルのallowを持ち込まない。どちらも共通の `normalize_key` と確定済みdenyを使い、禁止項目の値へ触れず除外する。選別側・構造検査側がそれぞれ同じ `LogProcessingDiagnostics` へ直接記録する。
 
 例外の生成項目は通常入力の走査後に抽出し、まとめて計上して、一つずつ値を準備して格納する。生成項目は入力allowによる選別に混ぜず、確定済みの同じdeny・maskと共有予算で保護する。
 
-`LogEventBudget` はログ一件ごとに作り、processor・値準備・診断が最初から共有する。トップレベル項目数と採用した項目名の文字数はprocessorが計上し、値準備は値の内部の検査と計上を担当する。`prepare_field_value` は呼び出し元の項目名を受け取らず、その項目を二重に数えない。単独利用の呼び出し側は外側の項目を先に計上する。診断は自身が生成する `_denied_keys` フィールドと各キー名を同じ予算へ計上し、出力準備を担当する。
+`LogEventBudget` はログ一件ごとにprocessorが作り、selector・値準備・診断と最初から共有する。入力のトップレベル項目数と採用した項目名の文字数はselectorが、例外の生成項目はprocessorが計上し、値準備は値の内部の検査と計上を担当する。`prepare_field_value` は項目名をmaskと項目別サニタイズの判定だけに使い、その項目を二重に数えない。単独利用の呼び出し側は外側の項目を先に計上する。診断は自身が生成する `_denied_keys` フィールドと各キー名を同じ予算へ計上し、出力準備を担当する。
 
 | 処理 | 責務 |
 | --- | --- |
-| `LogFieldSelector.select` | トップレベルの項目名だけを検査し、採用するかを返す。denyをallowより先に判定し、未登録は名前を残さず件数だけ記録する。 |
-| `LogPolicyProcessor` | 項目を順に計上・選別し、採用した項目名の文字数を数えて値の準備へつなぎ、返された値を格納する。例外と診断を合わせてログを組み立てる。 |
+| `LogFieldSelector.select_fields` | 入力ログのトップレベルの項目を一つずつ計上し、項目名だけで判定して、受け付けた項目を値の参照のまま入力順に返す。denyをallowより先に判定し、未登録は名前を残さず件数だけ記録する。受け付けた項目名の文字数も計上する。 |
+| `LogPolicyProcessor` | selectorから受け付けた項目を受け取り、各値を値の準備へ渡して格納する。例外の生成項目を計上して準備し、診断と合わせてログを組み立てる。 |
 | `LogProcessingDiagnostics` | 各工程の診断を集約し、`prepare_log_fields()` で入力由来のキー名を共有予算で検査・サニタイズして出力用の診断を返す。`as_fields()` は記録内容の独立したスナップショットであり、通常のログ出力には使わない。 |
 | `LogValuePreparer.prepare_field_value` | 一つの値を `inspect_value` で構造検査してから `prepare_text_values` でマスク・サニタイズし、準備した値を返す。項目名の選別・外側の項目の計上・出力辞書への格納・診断の出力準備は担当しない。 |
 | `LogEventBudget.check_and_count_log_items` | 追加件数がログ一件の共有上限に収まることを確認してから `log_item_count` へ加算する。超過時は部分加算せず中断する。 |
 | `LogEventBudget.check_and_count_text_chars` | 保護対象の文字数を共有カウンターへ加算し、合計文字数の超過時は中断する。 |
 | `inspect_value` | 件数を計上済みの一つの値の深さ・型を検査し、子を持たない値は `inspect_scalar`、辞書は `inspect_dictionary`、配列は `inspect_sequence` へ渡す。循環判定は `active_container_ids` で現在の経路だけを見る。 |
-| 項目の計上位置 | 通常入力は選別前、例外などの生成項目は値準備へ渡す前、ネストした辞書・配列は各項目の検査前に計上する。値準備ではトップレベル項目を再加算しない。 |
+| 項目の計上位置 | 通常入力はselectorが各項目の判定前、例外などの生成項目はprocessorが値準備へ渡す前、ネストした辞書・配列は各項目の検査前に計上する。値準備ではトップレベル項目を再加算しない。 |
 | `inspect_scalar` | `None`・真偽値はそのまま返し、巨大整数・非有限浮動小数・単一上限を超える文字列は固定マーカーへ置換する。文字列は単一上限を通過した文字数を合計へ加算し、全体上限の超過時はログの準備を中断する。 |
 | `inspect_dictionary` | 非文字列キーがあれば辞書全体を `[non-string-key]` にし値は見ない。文字列キーだけのとき、一項目ごとに検査件数・キー長・deny・合計文字数を確認し、子の値を `inspect_value` で検査して新しい辞書へ格納する。 |
 | `inspect_sequence` | 配列をたどり、各要素の件数を確認・加算し、子の値を `inspect_value` で検査して順序を保った新しい配列へ格納する。 |
@@ -252,11 +256,13 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 
 processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞書へ `diagnostics.prepare_log_fields(...)` の結果を結合し、診断のフィールド名や構造には立ち入らない。診断はキー名の一覧全体の予算検査を終えてからサニタイズし、長すぎるキー名は原文を処理せず `[limit]` にする。診断の準備中に共有予算を超過した場合も、通常項目を含むログ全体を固定出力へ置換する。
 
-入力からログ出力までの上限・共有予算の境界は `test_output_limits.py` が担当する。`TestLocalReplacement` で単一文字列・キー名・整数・深さ・例外由来の値の超過した位置だけを置換し正常な兄弟を残すことを、`TestWholeLogReplacementByTextBudget` / `TestWholeLogReplacementByItemBudget` で共有予算の上限ちょうどの保持と超過時のログ全体の置換を、processor経由で確認する。不正キー・内部項目・生成した例外項目・例外frameも実際の入力へ含め、通常項目との予算共有を確認する。禁止したネスト項目の件数、辞書と配列の混在、複数項目にまたがる予算共有も、上限ちょうどと一件超過の別テストで確認する。複数の予算を同時に超えたときの理由は `TestBudgetOverflowReason` が担当する。例外frame数の上限は抽出側が所有するため `exceptions/test_extraction.py` が担当する。processorの走査停止と状態分離は `test_processor.py`、超過した値をサニタイズへ渡さない処理内部の保証は `test_value_conversion.py`、置換後のマーカーと固定出力がrendererで戻らないことは `test_chain.py` が担当する。境界の異なる条件は独立したテストにし、予算をテスト側で直接加算するだけのケースを出力保証として扱わない。
+入力からログ出力までの上限・共有予算の境界は `test_output_limits.py` が担当する。`TestLocalReplacement` で単一文字列・キー名・整数・深さ・例外由来の値の超過した位置だけを置換し正常な兄弟を残すことを、`TestWholeLogReplacementByTextBudget` / `TestWholeLogReplacementByItemBudget` で共有予算の上限ちょうどの保持と超過時のログ全体の置換を、processor経由で確認する。不正キー・内部項目・生成した例外項目・例外frameも実際の入力へ含め、通常項目との予算共有を確認する。禁止したネスト項目の件数、辞書と配列の混在、複数項目にまたがる予算共有も、上限ちょうどと一件超過の別テストで確認する。複数の予算を同時に超えたときの理由は `TestBudgetOverflowReason` が担当する。例外frame数の上限は抽出側が所有するため `exceptions/test_extraction.py` が担当する。processorの走査停止と状態分離は `test_processor.py`、超過した値をサニタイズへ渡さない処理内部の保証は `test_value_preparation.py`、置換後のマーカーと固定出力がrendererで戻らないことは `test_chain.py` が担当する。境界の異なる条件は独立したテストにし、予算をテスト側で直接加算するだけのケースを出力保証として扱わない。
 
-`test_processor.py` の `TestExceptionValueDepthLimit` は、同じログ内の通常入力と例外項目に異なる深さ上限を適用し、上限内のframeを保持して上限直後の値を置換することを確認する。`test_value_conversion.py`は例外用の値準備上限ちょうどの保持と一段超過の検査停止を、`exceptions/test_application_output.py`は探索の最深部の`field`・`code`が最終ログへ残ることを確認する。
+`test_value_preparation.py` は `LogValuePreparer` を直接呼ぶ単体テストを集約する。`TestTextLimits` は単一文字列の上限ちょうどの保持・超過時の局所置換・長い原文の文字数計上と情報漏洩防止の省略・配列の順序と重複の保持を担当する。`TestSharedBudget` は既存予算と要素を合算した上限ちょうどの準備成功、および後続要素での超過時に先行文字列も加工せず `LogBudgetExceeded` を伝播することを確認する。値準備の単体テストでは固定の失敗ログを期待せず、ログ全体の置換と正常な別フィールドの保持は既存のprocessor経由テストで保証する。
 
-`test_budget.py` は `TestItemAccounting` / `TestTextAccounting` で計上と超過通知の単体契約を確認し、まとめた件数が超過したときに部分加算しない保証も保持する。診断の記録・集計・出力準備・返却値の分離は `test_diagnostics.py`、項目名の検査・deny優先・allow判定は `test_field_selection.py`、一項目ずつの処理順・不採用値を検査しないこと・実チェーンとの接続は `test_processor.py`、循環・共有参照・予約キー・独自型は `test_base_guards.py`、処理失敗時の固定出力と保護処理からの再帰ログの禁止は `test_processor.py` が担当する。`test_value_conversion.py` は辞書の操作・型変換・入力非変更・診断の独立性・文字列の処理回数を確認し、検査前の件数計上、不正な辞書の中身を検査しないこと、予算超過した項目の値やキーを処理しないことは呼び出しの記録で確認する。トップレベル項目の二重計上は `test_output_limits.py` の上限件数ちょうどの出力テストに集約する。
+`test_processor.py` の `TestExceptionValueDepthLimit` は、同じログ内の通常入力と例外項目に異なる深さ上限を適用し、上限内のframeを保持して上限直後の値を置換することを確認する。`test_value_preparation.py`は例外用の値準備上限ちょうどの保持と一段超過の検査停止を、`exceptions/test_application_output.py`は探索の最深部の`field`・`code`が最終ログへ残ることを確認する。
+
+`test_budget.py` は `TestItemAccounting` / `TestTextAccounting` で計上と超過通知の単体契約を確認し、まとめた件数が超過したときに部分加算しない保証も保持する。診断の記録・集計・出力準備・返却値の分離は `test_diagnostics.py`、項目名の検査・deny優先・allow判定・トップレベルの計上と返却順は `test_field_selection.py`、選別を終えてから値を準備する処理順・不採用値を検査しないこと・実チェーンとの接続は `test_processor.py`、循環・共有参照・予約キー・独自型は `test_base_guards.py`、処理失敗時の固定出力と保護処理からの再帰ログの禁止は `test_processor.py` が担当する。`test_value_preparation.py` は辞書の操作・型変換・入力非変更・診断の独立性・文字列の処理回数を確認し、検査前の件数計上、不正な辞書の中身を検査しないこと、予算超過した項目の値やキーを処理しないことは呼び出しの記録で確認する。トップレベル項目の二重計上は `test_output_limits.py` の上限件数ちょうどの出力テストに集約する。
 
 ## 適用位置
 
@@ -325,18 +331,18 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 ## Implementation
 
 - [backend/app/log_policy/base.py](../../backend/app/log_policy/base.py): `LogPolicy`、基底allow・deny・mask、`BASE_LOG_RULES`、`normalize_key`、`LogPolicyRules` (生成時のallow・deny・mask確定と継承)
-- [backend/app/log_policy/sanitize.py](../../backend/app/log_policy/sanitize.py): S1/S2 パターン集、`sanitize_text`（内容から秘密情報を検出する）。長さ制限は出力側
-- [backend/app/log_policy/mask.py](../../backend/app/log_policy/mask.py): `mask_assignments`（指定キーに対応する文字列内の値全体を伏せる）
+- [backend/app/log_policy/leak_prevention.py](../../backend/app/log_policy/leak_prevention.py): 情報漏洩防止（文字列に紛れた既知の種類の認証情報を種類付きの表記へ置き換える）。旧 `sanitize_text`・`mask_assignments` を置き換えた。長さ制限は出力側
+- [backend/app/log_policy/sanitize.py](../../backend/app/log_policy/sanitize.py): 項目別サニタイズの対応表と共通入口 `sanitize_field_value`
 - [backend/app/log_policy/exceptions/](../../backend/app/log_policy/exceptions/): 種類ごとの変換。`sql.py` は原因文の保護とSQL診断、`validation.py` はPydantic検証、`event_validation.py` はイベント検証、`application.py` は共通アプリケーション例外を担当し、すべて `ConvertedException` を返す
 - [backend/app/log_policy/exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py): `exc_info` の解決と `ExceptionLogFields` の組み立て。型は型名・原因文・frameと任意の `error_details` / `causes` / `exceptions` を持つ最終出力の契約とする。原因ノードにも同じ型を使う。伏せ字と上限は値準備が担当する
 - [backend/app/log_policy/exceptions/conversion.py](../../backend/app/log_policy/exceptions/conversion.py): 例外1件の種類別変換を担当し、原因文・診断属性・内部原因の集約状態を返す。SQL内部の診断抽出は `sql.py` に委譲し、通常の原因連鎖とグループの探索は `extraction.py` が担当する
 - [backend/app/log_policy/exceptions/application.py](../../backend/app/log_policy/exceptions/application.py): `ApplicationError`のメッセージと明示された`details`を共通形式へ写す。例外の任意属性を自動展開せず、共通入口から呼び出す
 - [backend/app/log_policy/policies/ai_inference.py](../../backend/app/log_policy/policies/ai_inference.py)、[external_content.py](../../backend/app/log_policy/policies/external_content.py): 目的別定義（AI推論はモデル・トークン数の完成済みルールも定義）
 - [backend/app/log_policy/diagnostics.py](../../backend/app/log_policy/diagnostics.py): ログ一件の診断の記録・集計・出力形式への変換
-- [backend/app/log_policy/field_selection.py](../../backend/app/log_policy/field_selection.py): トップレベルの項目名の検査とdeny・allow判定
+- [backend/app/log_policy/field_selection.py](../../backend/app/log_policy/field_selection.py): トップレベルの項目の計上と項目名によるdeny・allow判定、受け付けた項目の返却
 - [backend/app/log_policy/value_preparation.py](../../backend/app/log_policy/value_preparation.py): 選別済みの値をログに使える状態へ準備する処理、構造検査とサニタイズ、共有予算
 - [backend/app/log_policy/bound_logger.py](../../backend/app/log_policy/bound_logger.py): `wrapper_class`に指定するINFO以上の共通ラッパー。通常のログメソッドからprocessor・整形・出力までの例外を捕捉し、再記録しない。`bind()`後も同じ保護を維持し、プロセス中断は抑止しない。位置引数の文字列展開は保護範囲外。検証は`test_bound_logger.py`に集約する
-- [backend/app/log_policy/processor.py](../../backend/app/log_policy/processor.py): 完成済みルールの受け取り、一項目ずつの計上・選別・値準備・格納、例外と診断の接続、固定の失敗イベント
+- [backend/app/log_policy/processor.py](../../backend/app/log_policy/processor.py): 完成済みルールの受け取り、選別結果の値準備・格納、例外と診断の接続、固定の失敗イベント
 - [backend/app/log_policy/logger.py](../../backend/app/log_policy/logger.py): `PolicyLogger`、`create_policy_logger`、structlogの遅延生成を使う `policy_logger`
 - [backend/app/log_policy/chain.py](../../backend/app/log_policy/chain.py): `build_processors` (既存チェーンへの組み込みは未実施)
 
@@ -517,7 +523,7 @@ processorは、ルール取得 → 診断生成 → 同じ診断を持つprepare
 - `_denied_keys` は内部リストのコピーを取り出し、通常値・例外と同じ予算とdenyで準備してから出力する。
 - 値の上限超過は既存の `[limit]` 置換を維持し、新たな診断集計は追加しない。
 
-診断の単体契約は `test_diagnostics.py`、トップレベルとネストの記録の合流・ログ間の状態分離・禁止キー名のサニタイズは `test_processor.py`、単独preparerの状態分離は `test_value_conversion.py` が担当する。既存の入力境界と予算・走査停止のテストは移行して維持した。
+診断の単体契約は `test_diagnostics.py`、トップレベルとネストの記録の合流・ログ間の状態分離・禁止キー名のサニタイズは `test_processor.py`、単独preparerの状態分離は `test_value_preparation.py` が担当する。既存の入力境界と予算・走査停止のテストは移行して維持した。
 
 今回の検証: 関連テスト288件成功。バックエンドapp・関連テスト・測定スクリプトのlint、formatチェック（675ファイル）、実装・テスト・測定スクリプトの旧名参照確認、git diff --checkが成功した。全体単体テストとmake test-integrationはユーザー指示により再実行していない。
 
@@ -610,7 +616,7 @@ Done: 検査件数の加算を共通の列挙処理へ集約し、関連テス�
 
 トップレベルの入力検査件数は選別完了後にpreparerへ引き継ぎ、選択済みフィールドは `already_counted=True` で二重計上を避ける。ネスト・例外・診断の検査は同じ加算カウンターを継続する。
 
-共通列挙処理の遅延加算・上限直前と超過時の停止・計上済み項目の扱いと、辞書・配列・要素が一度ずつ数えられることを `test_value_conversion.py` で確認する。既存の予算境界・deny除外・例外・診断・rendererのテストは維持する。
+共通列挙処理の遅延加算・上限直前と超過時の停止・計上済み項目の扱いと、辞書・配列・要素が一度ずつ数えられることを `test_value_preparation.py` で確認する。既存の予算境界・deny除外・例外・診断・rendererのテストは維持する。
 
 今回の検証: 関連テスト314件成功。lint、formatチェック（675ファイル）、旧名参照確認、git diff --checkが成功した。全体単体テストとmake test-integrationはユーザー指示により保留した。
 
@@ -724,3 +730,18 @@ Non-goals: 全体の例外ハンドラでの `exc_info` 付きログへの対応
 Done: `FRAME_LIMIT` を50、`MAX_ITEMS_PER_LOG_EVENT` を256にした。framesが上限ちょうどのとき約205件を使い、通常項目に約51件が残る。合計文字数16000は据え置いた。
 
 検証: ruff lint・format成功。ログ関連と測定スクリプトの単体テスト944件が成功した。上限を1件だけ超える境界テストの入力を定数から導く形へ直した。integrationはDB・repositoryに触れていないため実行していない。
+
+
+## トップレベル項目の選別をselectorへ集約（2026-09-25）
+
+Problem: トップレベルの選別がprocessorとselectorに分かれていた。processorがループ・計上・不採用項目の除外を持ち、selectorは項目名一つの真偽値だけを返していたため、項目を選んで落とす責務がselectorから読み取れなかった。
+
+Evidence: processor・field_selection・value_preparationと関連テストを確認した。定義時にallowとdenyの重複を拒否するため、トップレベルのdenyは除外そのものではなく、除外の理由を名前付きで診断へ残す判定になっている。
+
+Invariants: 不採用の値に触れないこと、deny優先、未登録は件数だけ記録すること、トップレベル項目の計上規則（不採用も1件、文字数は採用した名前だけ）、入れ子のdeny・mask・項目別サニタイズを値準備が担当すること、出力内容と診断を維持する。
+
+Non-goals: 入れ子の判定の置き場所、予算の上限値と数え方、深さの上限値の変更。
+
+Done: `LogFieldSelector.select` を `select_fields` に置き換えた。selectorが共有予算を受け取ってトップレベル項目の計上と判定を行い、受け付けた項目を入力順に返す。processorは選別結果の値を準備して格納する。トップレベルの選別を終えてから値を準備するため、件数と文字数を同時に超える入力ではトップレベルの件数超過を先に返す。従来の「一項目ずつ取り出し、選別結果の中間辞書を作らない」方針はこの形に置き換えた。
+
+検証: ruff lint・format成功。ログ関連の単体テスト615件が成功した。allow・deny・未登録・入れ子の規則・例外・予算超過を含む入力で、変更前後のprocessor出力が一致することを確認した。integrationはDB・repositoryに触れていないため実行していない。
