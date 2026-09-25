@@ -19,6 +19,9 @@ from app.collection.article_completion.consumer_result import (
     CompletionFailed,
     CompletionNotRequired,
 )
+from app.collection.article_completion.metrics import (
+    record_completion_processing_outcome,
+)
 
 
 class ArticleCompletionConsumerFailureHandler:
@@ -53,6 +56,11 @@ class ArticleCompletionConsumerFailureHandler:
                 decision = classify_completion_failure(exc, now=datetime.now(UTC))
 
         result = CompletionFailed(error=exc, decision=decision)
+        try:
+            record_completion_processing_outcome("failed")
+        except Exception:  # noqa: S110
+            # 計測の障害は監査と同じく元の結果を変えない。
+            pass
         try:
             async with self._session_factory() as session:
                 await ArticleCompletionAuditRepository(session).append_consumer_failed(

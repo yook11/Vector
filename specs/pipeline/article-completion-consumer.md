@@ -289,3 +289,24 @@ HTTPの根拠: [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-15
 監査は既存CompletionPayloadを使い、再試行をfailed、終了をrejected、outcome_codeを判断code、retryabilityを工程判断に合わせる。対象ID・既知のソース情報・例外型と原因チェーンの型名・HTTPステータス・定義された通信／抽出理由・構築defectsを明示的に選ぶ。自由文・本文・生のヘッダーを追加出力せず、未分類の構築詳細と待機／調査情報は元例外と結果値に保持する。監査schema、エラー定義、失敗分類表は変更しない。
 
 今回の完了条件は19ケースを含むローカルテスト全体、単体、DB統合、lint・formatの成功と一時環境の削除である。配送ハンドラーの結果変換、Retry-Afterの可視性制御、救済投入、旧経路との切替・デプロイは後続タスクとする。Consumer実装時点では抽出器のプロセス内キャッシュの寿命を変更していない。配送スライス2では、重複除去を無効にして別記事・過去試行に依存しない抽出とし、補完ローカルテストのキャッシュリセットも不要にする。
+
+
+## 処理結果の計測（2026-09-23）
+
+Problem: 補完の新経路は`processing_outcome`を送出せず、completionの処理結果は旧Taskiq経路の送出だけで記録されている。旧経路を撤去すると成功・失敗の件数を確認できなくなる。
+
+Evidence: `record_completion_processing_outcome`を呼ぶのは旧経路のService・失敗処理・タスクだけである。他の3工程はConsumerの成功確定点と失敗処理で送出している。
+
+- Consumerの1回の処理につき、成功はsucceeded、失敗はfailedを1件送出し、処理不要は送出しない。
+- 成功は完成記事・未完成行削除・成功監査・Outboxのcommit後に数え、commitの失敗はfailedとする。
+- 失敗は再試行・終了の判断や原因によらずfailedとし、新経路ではinfra_errorを使わない。終了はclosedの確定後に数え、supersededになった場合は数えない。
+- 記事ではなく処理の回数を数える。再配信・救済による同じ記事の処理もそれぞれ数えるため、再試行が続く記事があると成功率は実態より低く見える。
+- 失敗率のアラームは設けない。失敗の大半は外部サイトの拒否で、率が上がっても取れる対処がない。成功率はメトリクスで確認し、原因はログの`completion_message_processed`と監査で追う。
+
+Invariants: 失敗処理での計測の障害は、監査と同じく元の例外・待機時刻・確定済みclosedを変えない。メトリクス名・dimension・値は変更しない。
+
+Non-goals: 旧経路の撤去とinfra_errorの語彙からの削除、失敗理由・判断のdimension追加、Consumerの停止検知。
+
+Done: 各結果の送出件数とresultをローカルテストで確認し、completionの失敗率アラームを削除する。デプロイ後にConsumerのログでprocessing_outcomeの送出を確認する。
+
+検証結果（2026-09-23）: 送出を追加する前に新規ローカルテスト12件を実行し、記録する側の7件が送出なしで失敗することを確認してから実装した。実装後、変更ファイルのRuff lint・format、`tests/collection/`・`tests/cloudwatch/`の単体1,141件、補完のローカルテスト45件が成功し、ローカルテスト全体の収集（317件）も確認した。Terraformは隔離コピーでfmt・init（backend無効、lockfile readonly）・validate・test（38件）が成功した。DB統合テストはRepository・SQLを変更していないため実行していない。本番への反映と送出の確認は未実施。

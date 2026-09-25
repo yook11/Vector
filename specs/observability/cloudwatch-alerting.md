@@ -49,6 +49,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - Container Insights の有効化。
 - ダッシュボード設計(別 spec。本 spec は「鳴るもの」だけを扱う)。
 - acquisition の失敗率アラート(失敗の実体が特定 source の恒久ブロックで、率アラートに固有の守備範囲がない。§A4 参照)。
+- completion の失敗率アラート(2026-09-23 に廃止。失敗の大半が外部サイトの拒否で、率が上がっても取れる対処がない。§A4 参照)。
 - 一時的 rate limit・自前 gate skip のアラート化(上記 Invariant の通り)。
 - backfill daily budget 枯渇のアラート化(救済経路の意図的な上限。異常な backlog 成長は A2 が拾う)。
 - agent のユーザー向け日次クォータ(回数制限)枯渇のアラート化(意図的なプロダクト上限で、利用者に 429 として直接見える。AI provider の枠枯渇とは別物)。
@@ -71,7 +72,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | A1 | 収集の供給が止まっている(全体途絶) | Lambda の Invocations − Errors の不在(source-dispatch / acquisition-consumer) | metric alarm × 2 |
 | A2 | (廃止 2026-09)特定工程で仕事が消化されていない(工程名指し) | EMF `oldest_outstanding_enqueue_age{stage}` | metric alarm × 3 |
 | A3 | (廃止 2026-09)queue 観測自体が死んでいる(Valkey 障害含む) | EMF `observation_up` | metric alarm (math MIN) |
-| A4 | 工程別の失敗率(completion / curation / assessment / embedding) | EMF `processing_outcome{stage, result}` の failed 率 | metric alarm (math) × 4 |
+| A4 | 工程別の失敗率(curation / assessment / embedding) | EMF `processing_outcome{stage, result}` の failed 率 | metric alarm (math) × 3 |
 | A5 | ECS タスクの異常停止(crash / OOM / 起動不能) | EventBridge ECS Task State Change | event 通知 |
 | A6 | AI 利用枠の枯渇(残高切れ・日次 quota 切れ) | EMF `ai_provider_exhausted` | metric alarm |
 | A7 | ユーザーにエラーが見えている | ALB 5XX | metric alarm |
@@ -108,13 +109,14 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 2026-09-20: AI分析のinfra_error分類を廃止。Embeddingもprovider・DB障害をfailedに含めるため、旧infra_error分が失敗率へ加わる。計算式・閾値・評価窓は維持し、過去メトリクスの再分類は行わない。
 
-- Signal: EMF `processing_outcome{stage, result}`。既存 Logfire counter(`record_*_processing_outcome`)と同一の分類確定点からの二重 sink。対象 4 工程 = completion / curation / assessment / embedding。
-- 条件(共通形): metric math `IF(total >= 10, failed / total, 0) >= 閾値`、1 evaluation period、`TreatMissingData = notBreaching`(仕事ゼロ・標本不足の窓は評価しない)。分母は各工程の現行結果を用いる（Consumerの失敗はDB障害もfailedに含む）: completion = succeeded+failed / curation = signal+noise+rejected+failed / assessment = in_scope+out_of_scope+failed / embedding = succeeded+failed。
+2026-09-23: completionを対象外にした。失敗の大半は外部サイトの拒否で、率が上がっても取れる対処がないため。`processing_outcome{stage=completion}`は成功率の確認用に送出を続け、補完の新経路（Consumer）も送出する。
+
+- Signal: EMF `processing_outcome{stage, result}`。既存 Logfire counter(`record_*_processing_outcome`)と同一の分類確定点からの二重 sink。対象 3 工程 = curation / assessment / embedding。
+- 条件(共通形): metric math `IF(total >= 10, failed / total, 0) >= 閾値`、1 evaluation period、`TreatMissingData = notBreaching`(仕事ゼロ・標本不足の窓は評価しない)。分母は各工程の現行結果を用いる（Consumerの失敗はDB障害もfailedに含む）: curation = signal+noise+rejected+failed / assessment = in_scope+out_of_scope+failed / embedding = succeeded+failed。
 - 閾値と評価窓(2026-08-12 の 28 日実測ベースライン由来の**暫定値**。運用実測で調整):
 
 | stage | 閾値 | 窓 | ベースライン実測と根拠 |
 |---|---|---|---|
-| completion | 90% | 3h | 慢性 54%(外部サイトのブロックが普段の姿)。90% = ほぼ全滅 = scraper / egress の構造故障だけを拾う |
 | curation | 50% | 3h | 3.7%、最悪日 15%(Gemini 障害日) |
 | assessment | 50% | 3h | 切り詰め修正(#132)後は 0〜5% 見込み(真の応答不正は 30 日 4 件)。既知パターン = 6 月の 54% 失敗を確実に検知 |
 | embedding | 50% | 12h | 0.1%。流量 ~1.2 件/h のため 3h 窓では最小標本 10 に届かない |
@@ -209,7 +211,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 ## 4. コスト概算
 
 - 本カタログのカスタムメトリクスは19系列(dispatch_run 3 + processing_outcome 12 + ai_provider_exhausted 4)。age 3・observation_up 3 は queue 観測の撤去(2026-09)で emit を停止した。
-- 本カタログのalarmは8本(A1×1, A4×4, A6×1, A7×1, A8×1)。A2×3・A3×1 は 2026-09 に廃止。
+- 本カタログのalarmは8本(A1×2, A4×3, A6×1, A7×1, A8×1)。A2×3・A3×1 は 2026-09 に、A4 の completion は 2026-09-23 に廃止。
 - SQS／Lambda固有の監視は各工程の定義を参照する。費用は実際の利用量と料金で確認する。Logfireのtraceは維持する。
 
 ## 5. 実装順序(1 アラートずつ確定 → 実装 → 次へ)

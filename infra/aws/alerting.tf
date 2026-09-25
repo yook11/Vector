@@ -170,24 +170,18 @@ resource "aws_cloudwatch_metric_alarm" "lambda_success_stalled" {
 #
 # 「仕事はしているが失敗が支配的」を工程別に検知する。シグナルは各工程の
 # 分類確定点が emit する processing_outcome{stage, result} を用いる。
-# AI分析失敗は原因によらず failed、completion の infra_error は分母外。
+# AI分析失敗は原因によらず failed。
 # 最小標本 10 未満の窓は IF で 0 に倒して評価しない (少量時間帯の誤発火防止)。
 #
 # 閾値・窓は 2026-08-12 の 28 日実測ベースライン由来の暫定値 (spec §A4)。
-# completion の 90% は「慢性 54% 失敗 (外部サイトのブロック) が普段の姿」の
-# 上に置いた「ほぼ全滅 = scraper/egress の構造故障」の線。embedding の窓が
-# 12h なのは流量 (~1.2 件/h) では 3h で最小標本に届かないため。
+# embedding の窓が 12h なのは流量 (~1.2 件/h) では 3h で最小標本に届かないため。
 # acquisition は対象外 (失敗の実体が特定 source の恒久ブロックで、率アラート
-# に固有の守備範囲がない。source_health / A1 の担当)。
+# に固有の守備範囲がない。source_health / A1 の担当)。completion も対象外
+# (失敗の大半が外部サイトの拒否で、率が上がっても取れる対処がない)。
 
 locals {
   # stage → 失敗率閾値・評価窓・分母の result 系列 (failed を含む)。
   pipeline_failure_rate_alarms = {
-    completion = {
-      threshold   = 0.9
-      period      = 10800
-      denominator = ["succeeded", "failed"]
-    }
     curation = {
       threshold   = 0.5
       period      = 10800
