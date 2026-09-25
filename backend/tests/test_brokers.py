@@ -97,7 +97,7 @@ def test_dispatch_broker_keeps_control_stream_runtime_contract() -> None:
 
 
 def test_collection_broker_reads_only_stage_specific_streams() -> None:
-    """collection broker は acquisition を主 Stream、completion だけを追加購読する。"""
+    """collection broker は acquisition Stream だけを購読する。"""
     from app.queue.brokers import broker_collection
 
     assert {
@@ -111,7 +111,7 @@ def test_collection_broker_reads_only_stage_specific_streams() -> None:
         "unacknowledged_lock_timeout": broker_collection.unacknowledged_lock_timeout,
     } == {
         "queue_name": "pipeline:acquisition",
-        "additional_streams": {"pipeline:completion": ">"},
+        "additional_streams": {},
         "consumer_group_name": "taskiq",
         "consumer_id": "0-0",
         "maxlen": 10_000,
@@ -142,20 +142,8 @@ def test_collection_broker_reads_only_stage_specific_streams() -> None:
             },
             (("arg", AcquireSourceTaskInput),),
         ),
-        (
-            "app.queue.tasks.completion",
-            "scrape_html_body",
-            "scrape_html_body",
-            {
-                "queue_name": "pipeline:completion",
-                "timeout": 60,
-                "max_retries": 0,
-                "retry_on_error": False,
-            },
-            (("incomplete_article_id", int),),
-        ),
     ],
-    ids=["acquisition", "completion"],
+    ids=["acquisition"],
 )
 def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
     task_module: str,
@@ -164,7 +152,7 @@ def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
     expected_labels: dict[str, object],
     expected_payload: tuple[tuple[str, type[object]], ...],
 ) -> None:
-    """両 task は stage 固有 Stream と既存 task name・payload・実行契約を持つ。"""
+    """acquire_source は stage 固有 Stream と task name・payload・実行契約を持つ。"""
     from app.queue.brokers import broker_collection
 
     task = getattr(importlib.import_module(task_module), task_attr)
@@ -189,39 +177,15 @@ def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
             "dispatch_sources",
             {"timeout": 60, "max_retries": 1, "retry_on_error": True},
         ),
-        (
-            "app.queue.tasks.completion",
-            "dispatch_html_fetch_jobs",
-            {
-                "timeout": 30,
-                "max_retries": 1,
-                "retry_on_error": True,
-                "schedule": [{"cron": "* * * * *"}],
-            },
-        ),
-        (
-            "app.queue.tasks.completion",
-            "sweep_expired_leases",
-            {
-                "timeout": 30,
-                "max_retries": 1,
-                "retry_on_error": True,
-                "schedule": [{"cron": "* * * * *"}],
-            },
-        ),
     ],
-    ids=[
-        "dispatch-sources",
-        "dispatch-completion",
-        "sweep-completion",
-    ],
+    ids=["dispatch-sources"],
 )
 def test_collection_control_task_keeps_dispatch_routing_and_execution_contract(
     task_module: str,
     task_attr: str,
     expected_labels: dict[str, object],
 ) -> None:
-    """dispatch / sweep は dispatch broker と既存 task name・labels を維持する。"""
+    """dispatch_sources は dispatch broker と既存 task name・labels を維持する。"""
     from app.queue.brokers import broker_dispatch
 
     task = getattr(importlib.import_module(task_module), task_attr)
@@ -244,7 +208,6 @@ def test_collection_workers_keep_two_program_shared_runtime() -> None:
             "10",
             "app.queue.brokers:broker_dispatch",
             "app.queue.tasks.acquisition",
-            "app.queue.tasks.completion",
             "--ack-type",
             "when_executed",
         ],
@@ -257,7 +220,6 @@ def test_collection_workers_keep_two_program_shared_runtime() -> None:
             "5",
             "app.queue.brokers:broker_collection",
             "app.queue.tasks.acquisition",
-            "app.queue.tasks.completion",
             "--ack-type",
             "when_executed",
         ],

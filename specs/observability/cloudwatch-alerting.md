@@ -111,6 +111,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 2026-09-23: completionを対象外にした。失敗の大半は外部サイトの拒否で、率が上がっても取れる対処がないため。`processing_outcome{stage=completion}`は成功率の確認用に送出を続け、補完の新経路（Consumer）も送出する。
 
+2026-09-25: 旧補完Taskiqを撤去し、completionの送出は新経路（Consumer）だけになった。completionの`infra_error`は語彙から外した。
+
 - Signal: EMF `processing_outcome{stage, result}`。既存 Logfire counter(`record_*_processing_outcome`)と同一の分類確定点からの二重 sink。対象 3 工程 = curation / assessment / embedding。
 - 条件(共通形): metric math `IF(total >= 10, failed / total, 0) >= 閾値`、1 evaluation period、`TreatMissingData = notBreaching`(仕事ゼロ・標本不足の窓は評価しない)。分母は各工程の現行結果を用いる（Consumerの失敗はDB障害もfailedに含む）: curation = signal+noise+rejected+failed / assessment = in_scope+out_of_scope+failed / embedding = succeeded+failed。
 - 閾値と評価窓(2026-08-12 の 28 日実測ベースライン由来の**暫定値**。運用実測で調整):
@@ -210,7 +212,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 
 ## 4. コスト概算
 
-- 本カタログのカスタムメトリクスは19系列(dispatch_run 3 + processing_outcome 12 + ai_provider_exhausted 4)。age 3・observation_up 3 は queue 観測の撤去(2026-09)で emit を停止した。
+- 本カタログのカスタムメトリクスは15系列(processing_outcome 11 + ai_provider_exhausted 4)。age 3・observation_up 3 は queue 観測の撤去(2026-09)で、dispatch_run 3 は取得依頼投入の移行(2026-09-21)で、completion の infra_error は旧補完経路の撤去(2026-09-25)で emit を停止した。
 - 本カタログのalarmは8本(A1×2, A4×3, A6×1, A7×1, A8×1)。A2×3・A3×1 は 2026-09 に、A4 の completion は 2026-09-23 に廃止。
 - SQS／Lambda固有の監視は各工程の定義を参照する。費用は実際の利用量と料金で確認する。Logfireのtraceは維持する。
 

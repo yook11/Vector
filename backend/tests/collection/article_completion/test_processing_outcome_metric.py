@@ -1,9 +1,8 @@
 """``vector.completion.processing_outcome`` counter の不変条件 (正本)。
 
-completion 処理試行の結末を集計する metric。infra_error (一時的) を成功率の分母から
-外して可視化する。本ファイルは helper の emit 契約と attribute 安全性を固定する
-(emit 境界ごとの分類は service / handler / task の各テストが正本)。completion には
-``article_stage`` span が無いため backstop テストは持たない。
+completion 処理試行の結末を集計する metric。本ファイルは helper の emit 契約と
+attribute 安全性を固定する (結果ごとの送出は補完 Consumer のローカルテストが正本)。
+completion には ``article_stage`` span が無いため backstop テストは持たない。
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ _METRIC = "vector.completion.processing_outcome"
 _ALL_RESULTS = get_args(CompletionProcessingOutcome)
 
 
-# helper 契約: 3 値それぞれを 1 件として記録する
+# helper 契約: 各値を 1 件として記録する
 
 
 @pytest.mark.parametrize("result", _ALL_RESULTS)

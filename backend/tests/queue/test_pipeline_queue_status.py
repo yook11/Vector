@@ -12,10 +12,7 @@ from unittest.mock import AsyncMock, call
 import pytest
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts/pipeline_queue_status.py"
-_STAGE_SPECS = (
-    ("acquisition", "pipeline:acquisition"),
-    ("completion", "pipeline:completion"),
-)
+_STAGE_SPECS = (("acquisition", "pipeline:acquisition"),)
 
 
 def _cli_module() -> ModuleType:
@@ -134,19 +131,24 @@ async def test_cli_uses_shared_snapshot_targets_and_empty_age_marker(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("missing_reason", ["stream_missing", "group_missing"])
+@pytest.mark.parametrize(
+    ("reason", "status"),
+    [
+        ("stream_missing", "unavailable"),
+        ("group_missing", "unavailable"),
+        ("lag_unknown", "unknown"),
+    ],
+)
 async def test_cli_maps_missing_and_unknown_to_nonzero_statuses(
     monkeypatch: pytest.MonkeyPatch,
-    missing_reason: str,
+    reason: str,
+    status: str,
 ) -> None:
     module = _cli_module()
     targets = _targets()
     redis = _NoDirectRedisCommands()
     read_health = AsyncMock(
-        side_effect=[
-            module.StreamHealthError(stage="acquisition", reason=missing_reason),
-            module.StreamHealthError(stage="completion", reason="lag_unknown"),
-        ]
+        side_effect=[module.StreamHealthError(stage="acquisition", reason=reason)]
     )
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
     monkeypatch.setattr(module, "read_stream_health", read_health)
@@ -158,18 +160,7 @@ async def test_cli_maps_missing_and_unknown_to_nonzero_statuses(
         if line.startswith("pipeline:")
     }
 
-    assert rows == {
-        "pipeline:acquisition": [
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "unavailable",
-        ],
-        "pipeline:completion": ["-", "-", "-", "-", "-", "-", "unknown"],
-    }
+    assert rows == {"pipeline:acquisition": ["-", "-", "-", "-", "-", "-", status]}
 
 
 def test_cli_parses_check_idle_as_an_explicit_opt_in_flag() -> None:
@@ -182,19 +173,16 @@ def test_cli_parses_check_idle_as_an_explicit_opt_in_flag() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["redis_unavailable", "inconsistent_snapshot"])
 async def test_cli_maps_redis_and_snapshot_inconsistency_to_failure(
     monkeypatch: pytest.MonkeyPatch,
+    reason: str,
 ) -> None:
     module = _cli_module()
     targets = _targets()
     redis = _NoDirectRedisCommands()
     read_health = AsyncMock(
-        side_effect=[
-            module.StreamHealthError(stage="acquisition", reason="redis_unavailable"),
-            module.StreamHealthError(
-                stage="completion", reason="inconsistent_snapshot"
-            ),
-        ]
+        side_effect=[module.StreamHealthError(stage="acquisition", reason=reason)]
     )
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
     monkeypatch.setattr(module, "read_stream_health", read_health)
@@ -205,8 +193,7 @@ async def test_cli_maps_redis_and_snapshot_inconsistency_to_failure(
     ]
 
     assert failure_rows == [
-        ["pipeline:acquisition", "-", "-", "-", "-", "-", "-", "failure"],
-        ["pipeline:completion", "-", "-", "-", "-", "-", "-", "failure"],
+        ["pipeline:acquisition", "-", "-", "-", "-", "-", "-", "failure"]
     ]
 
 
