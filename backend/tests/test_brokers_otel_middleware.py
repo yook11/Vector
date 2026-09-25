@@ -29,8 +29,6 @@ from app.insights.trend_discovery.worker import create_broker as create_trend_br
 from app.queue.brokers import (
     broker_agent,
     broker_briefing,
-    broker_collection,
-    broker_dispatch,
 )
 
 # middleware の identity / 順序 unit テスト
@@ -38,18 +36,12 @@ from app.queue.brokers import (
 _TREND_WORKER_BROKER = create_trend_broker()
 _TREND_SCHEDULER_BROKER = create_trend_scheduler().broker
 _BROKERS_WITH_SCHEDULER = (
-    (broker_dispatch, "dispatch"),
     (_TREND_SCHEDULER_BROKER, "trend_discovery_scheduler"),
     (broker_briefing, "briefing"),
     (broker_agent, "agent"),
 )
-_BROKERS_WITHOUT_CLIENT_LIFECYCLE = (
-    (broker_collection, "collection"),
-    (_TREND_WORKER_BROKER, "trend_discovery_worker"),
-)
+_BROKERS_WITHOUT_CLIENT_LIFECYCLE = ((_TREND_WORKER_BROKER, "trend_discovery_worker"),)
 _WORKER_BROKERS = (
-    (broker_dispatch, "dispatch"),
-    (broker_collection, "collection"),
     (_TREND_WORKER_BROKER, "trend_discovery"),
     (broker_briefing, "briefing"),
     (broker_agent, "agent"),
@@ -81,11 +73,9 @@ def test_otel_middleware_singleton_per_broker() -> None:
 
 
 def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
-    """CLIENT_STARTUP hook が cron 駆動 5 broker のみに登録される。
+    """CLIENT_STARTUP hook が cron 駆動の broker のみに登録される。
 
-    collection は API が producer として startup するが cron が無く、
-    analysis は enqueue 側 startup 対象外。CLIENT hook の
-    対象集合はこの 5 本のまま。
+    Trend Discovery の worker broker は enqueue 側 startup の対象外。
     """
     for broker, label in _BROKERS_WITH_SCHEDULER:
         handlers = broker.event_handlers.get(TaskiqEvents.CLIENT_STARTUP, [])
@@ -101,7 +91,7 @@ def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
 
 
 def test_worker_lifecycle_registered_for_all_brokers() -> None:
-    """各workerが所有する8 brokerにはWORKER_STARTUPが登録される。
+    """各workerが所有するbrokerにはWORKER_STARTUPが登録される。
 
     Trend Discoveryはworkerとschedulerが別broker instanceを所有するため、
     scheduler producerにはworker lifecycleを要求しない。

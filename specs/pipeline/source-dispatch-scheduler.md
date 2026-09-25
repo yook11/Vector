@@ -1,6 +1,6 @@
 # ソース取得依頼の投入 — EventBridge Scheduler / Lambda / SQS
 
-Status: ステップ1〜5を実装し、投入基盤・取得Consumer・3スケジュールは2026-09-15に有効化済み。Schedulerの予定時刻が`jsonencode`のエスケープで置換されず入力検証で全件失敗していた不具合をステップ6（2026-09-19）で修正。実配送の確認結果はステップ6に記録。旧Taskiqの定期投入はステップ7（2026-09-21）で撤去し、管理者の手動取得と`fetch`サービスは維持する。再配信の失敗分類は別タスク。以下のステップ別記録は当時の範囲と検証結果を示す。
+Status: ステップ1〜5を実装し、投入基盤・取得Consumer・3スケジュールは2026-09-15に有効化済み。Schedulerの予定時刻が`jsonencode`のエスケープで置換されず入力検証で全件失敗していた不具合をステップ6（2026-09-19）で修正。実配送の確認結果はステップ6に記録。旧Taskiqの定期投入はステップ7（2026-09-21）で、管理者の手動取得と`fetch`サービスはステップ9（2026-09-25）で撤去した。再配信の失敗分類は別タスク。以下のステップ別記録は当時の範囲と検証結果を示す。
 
 > 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
 
@@ -371,5 +371,16 @@ Problem: 補完救済と新経路の処理結果の送出が本番で動いた�
 撤去: `dispatch_html_fetch_jobs`・`sweep_expired_leases`・`scrape_html_body`、`CRON_HTML_FETCH`、broker_collectionの`pipeline:completion`購読とStream監視、旧経路専用のモジュール・監査・テスト。管理者の手動取得（`dispatch_sources`→`acquire_source`）と`fetch`サービスは維持する。
 
 反映順序: Terraformの変更はない。merge後にアプリイメージをschedulerから順に入れ替える。未完成行はDBに残るため、切り戻しはPRのrevertで足りる。
+
+反映後の確認: 追記する。
+
+
+## ステップ9 — 管理者の手動取得の撤去（2026-09-25）
+
+Problem: 定期取得はLambda経路が担い、管理者の手動取得（`POST /api/v1/admin/pipeline/fetch`）は直近30日で使われていない。手動取得のためだけに常駐する`fetch`サービスとTaskiq経路を撤去する。
+
+撤去: infraでは`fetch`の段（ECSサービス・タスク定義・IAMロール・subnet・SG・ロググループ・Valkeyユーザー）を#453で撤去した。backendでは手動取得のエンドポイント、`dispatch_sources`・`acquire_source`、`broker_dispatch`・`broker_collection`、`scheduler_dispatch`、`pipeline:acquisition`のStream監視、dispatch監査の書き込み、手動取得の経路だけが送出していた`vector.acquisition.run`・`vector.dispatch.*`、ローカルの`worker-fetch`を撤去した。`SourceDispatchService.select`は頻度を必須にした。過去のdispatch監査行を読むため、`Stage.DISPATCH`と`DispatchPayload`は残す。
+
+反映順序: infra（#453）の適用後にbackendを反映する。backendを先に反映すると、新しいimageに`fetch.conf`がなく、稼働中の`fetch`サービスが起動できない。Valkeyのapi・schedulerの許可はbackendの反映後に絞る。
 
 反映後の確認: 追記する。

@@ -1,6 +1,6 @@
 """broker / scheduler の lifecycle event hook を attach する。
 
-本 module を import するだけで共通catalogのbroker × 4に対する
+本 module を import するだけで共通catalogのbroker × 2に対する
 WORKER_STARTUP / WORKER_SHUTDOWN / CLIENT_STARTUP / CLIENT_SHUTDOWN hook が
 登録される (副作用)。broker ごとの Redis 用途と AI adapter 配線は
 ``WorkerRuntime`` に集約し、単一 startup が順に実行する。AI provider の具象選択
@@ -37,8 +37,6 @@ from app.logfire.setup import setup_logfire
 from app.queue.brokers import (
     broker_agent,
     broker_briefing,
-    broker_collection,
-    broker_dispatch,
 )
 from app.queue.composition import (
     _warm_agent_sdk_imports,
@@ -152,15 +150,14 @@ def _register_client_lifecycle(broker: RedisStreamBroker, label: str) -> None:
     ``broker.startup()`` は ``is_worker_process`` 分岐で WORKER_STARTUP /
     CLIENT_STARTUP を発火する (taskiq.abc.broker)。API と scheduler はどちらも
     worker ではないので CLIENT_* が走る。cron 駆動を持つ broker
-    (broker_dispatch / broker_briefing / broker_agent) のみに本関数を当てる。
-    collection は API が producer として startup するが cron が無い。
+    (broker_briefing / broker_agent) に本関数を当てる。
 
     enqueue 側は DB を触らない (engine / session_factory は WORKER_STARTUP のみ)
     ため、本 hook は startup/shutdown ログだけを担う。
 
-    Logfire bootstrap は本 hook では呼ばない。scheduler は 1 プロセスで 4 broker
+    Logfire bootstrap は本 hook では呼ばない。scheduler は 1 プロセスで 3 broker
     の CLIENT_STARTUP が走るため、hook 内で ``setup_logfire`` を呼ぶと
-    ``logfire.instrument_httpx`` (global patch) が 4 回積み重なり「プロセスごとに
+    ``logfire.instrument_httpx`` (global patch) が 3 回積み重なり「プロセスごとに
     1 度」契約 (test_logfire_setup) を破る。API は lifespan、scheduler は
     entrypoint が process 先頭で 1 度だけ呼ぶ。scheduler 固有の識別は
     ``setup_logfire("vector-scheduler")`` が持つ。enqueue 自体の telemetry は
@@ -176,8 +173,6 @@ def _register_client_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         logger.info(f"{label}_client_shutdown")
 
 
-_register_worker_lifecycle(broker_dispatch, WorkerRuntime("dispatch"))
-_register_worker_lifecycle(broker_collection, WorkerRuntime("collection"))
 _register_worker_lifecycle(
     broker_briefing,
     WorkerRuntime("briefing", compose=_wire_briefing_adapter),
@@ -192,11 +187,10 @@ _register_worker_lifecycle(
     ),
 )
 
-# broker_dispatch / broker_briefing / broker_agent は worker と enqueue 側
+# broker_briefing / broker_agent は worker と enqueue 側
 # (API / scheduler) で同じ broker object を共有するため、
 # _register_worker_lifecycle (WORKER_STARTUP) と
 # _register_client_lifecycle (CLIENT_STARTUP) の両方を呼ぶ。
 # プロセスが違うのでイベント発火が衝突することはない。
-_register_client_lifecycle(broker_dispatch, "dispatch")
 _register_client_lifecycle(broker_briefing, "briefing")
 _register_client_lifecycle(broker_agent, "agent")

@@ -181,17 +181,3 @@ def research_client(
 def admin_headers(sign_as_bff):
     """管理者としてBFFが署名した証明を付ける。管理の操作は利用者の行を参照しない。"""
     return sign_as_bff({"sub": str(uuid4()), "role": "admin"})
-
-
-@pytest.fixture
-def acquisition_requests(api_client, monkeypatch):
-    """手動取得が投入する取得依頼を、送らずにソースのidと名前で記録する。"""
-    from app.queue.tasks import acquisition
-
-    requests: list[tuple[int, str]] = []
-
-    async def record(message):
-        requests.append((message.id, message.name))
-
-    monkeypatch.setattr(acquisition.acquire_source, "kiq", record)
-    return requests

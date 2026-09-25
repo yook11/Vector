@@ -1,19 +1,16 @@
-"""``vector.acquisition.outcome`` / ``vector.acquisition.run`` metric の oracle テスト。
+"""``vector.acquisition.outcome`` metric の oracle テスト。
 
 検証する性質:
 - ``ArticleAcquisitionService.execute`` が commit 後に entry 変換結末を
   ``vector.acquisition.outcome{result=<analyzable|observed|rejected>}`` counter に
   正しく加算する (commit 前に raise した場合は emit しない)。
 - dedup skip (同 URL 既存で continue) は計数しない。
-- ``acquire_source`` task が run 結末を
-  ``vector.acquisition.run{result=<succeeded|failed>}`` counter に +1 する。
 - attribute 経路の値域が宣言された語彙 (``AcquisitionEntryOutcome``) に収まる。
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -21,13 +18,11 @@ from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import Stage
-from app.collection.article_acquisition.errors import AcquisitionReadError
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.metrics import AcquisitionEntryOutcome
 from app.collection.article_acquisition.service import ArticleAcquisitionService
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.external_fetch_errors import FetchSsrfBlockedError
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,
@@ -36,8 +31,6 @@ from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
-from app.queue.messages.collection import AcquireSourceTaskInput
-from app.queue.tasks import acquisition as collection_tasks
 from tests.logfire._metric_helpers import assert_attribute_contract
 
 _PUBLISHED = datetime(2026, 4, 30, tzinfo=UTC)
@@ -133,17 +126,6 @@ async def vb_source(db_session: AsyncSession) -> NewsSource:
     await db_session.commit()
     await db_session.refresh(source)
     return source
-
-
-# ---------------------------------------------------------------------------
-# task helper (test_acquire_source_task_audit.py と同パターン)
-# ---------------------------------------------------------------------------
-
-
-def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
-    state = SimpleNamespace(session_factory=session_factory)
-    message = SimpleNamespace(labels={})
-    return SimpleNamespace(state=state, message=message)
 
 
 # ---------------------------------------------------------------------------
@@ -348,83 +330,3 @@ async def test_outcome_rejected_not_emitted_when_audit_dropped(
     # analyzable は通常どおり計上され (stream は止まらない)、rejected は監査 drop で 0。
     assert _sum_for_result(metrics, "vector.acquisition.outcome", "analyzable") == 1
     assert _sum_for_result(metrics, "vector.acquisition.outcome", "rejected") == 0
-
-
-# ---------------------------------------------------------------------------
-# run counter テスト (acquire_source task 経由)
-# ---------------------------------------------------------------------------
-
-
-class _SucceedingService:
-    """execute が空リストを返す ArticleAcquisitionService スタブ。"""
-
-    def __init__(self, *_: Any, **__: Any) -> None: ...
-
-    async def execute(self, source_id: int) -> list[int]:  # noqa: ARG002
-        return []
-
-
-class _RaisingService:
-    """execute が AcquisitionReadError を raise する service スタブ。"""
-
-    def __init__(self, *_: Any, **__: Any) -> None: ...
-
-    async def execute(self, source_id: int) -> Any:  # noqa: ARG002
-        raise AcquisitionReadError(
-            origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
-        )
-
-
-@pytest.mark.asyncio
-async def test_run_succeeded_emits_succeeded_sum1(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-    capfire: CaptureLogfire,
-) -> None:
-    """execute が [] を返す stub → run{result=succeeded} sum==1、failed は不在 or 0。"""
-    monkeypatch.setattr(
-        "app.collection.article_acquisition.service.ArticleAcquisitionService",
-        _SucceedingService,
-    )
-    ctx = _ctx(session_factory)
-
-    await collection_tasks.acquire_source(
-        AcquireSourceTaskInput(id=vb_source.id, name="VentureBeat"),
-        ctx=ctx,  # type: ignore[arg-type]
-    )
-
-    metrics = capfire.get_collected_metrics()
-    assert _sum_for_result(metrics, "vector.acquisition.run", "succeeded") == 1
-    assert _sum_for_result(metrics, "vector.acquisition.run", "failed") == 0
-
-
-@pytest.mark.asyncio
-async def test_run_failed_emits_failed_sum1(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-    capfire: CaptureLogfire,
-) -> None:
-    """execute が AcquisitionReadError を raise する stub → run{result=failed} sum==1。
-
-    AcquisitionReadError は AcquisitionError なのでTaskiq入口はerror結果を返す。
-    succeeded は不在 or 0。
-    """
-    monkeypatch.setattr(
-        "app.collection.article_acquisition.service.ArticleAcquisitionService",
-        _RaisingService,
-    )
-    ctx = _ctx(session_factory)
-
-    result = await collection_tasks.acquire_source(
-        AcquireSourceTaskInput(id=vb_source.id, name="VentureBeat"),
-        ctx=ctx,  # type: ignore[arg-type]
-    )
-
-    assert result["status"] == "error"
-    metrics = capfire.get_collected_metrics()
-    assert _sum_for_result(metrics, "vector.acquisition.run", "failed") == 1
-    assert _sum_for_result(metrics, "vector.acquisition.run", "succeeded") == 0

@@ -299,38 +299,6 @@ export type FailureReason = {
 };
 
 /**
- * FetchRequest
- *
- * POST /api/v1/admin/pipeline/fetch のリクエストボディ。
- */
-export type FetchRequest = {
-    /**
-     * Sourceids
-     */
-    sourceIds?: Array<number> | null;
-};
-
-/**
- * FetchResponse
- *
- * POST /api/v1/admin/pipeline/fetch のレスポンス。
- */
-export type FetchResponse = {
-    /**
-     * Message
-     */
-    message: string;
-    /**
-     * Dispatchedcount
-     */
-    dispatchedCount?: number | null;
-    /**
-     * Jobid
-     */
-    jobId?: string | null;
-};
-
-/**
  * HTTPValidationError
  */
 export type HttpValidationError = {
@@ -2220,44 +2188,6 @@ export type GetSourceHealthResponses = {
 };
 
 export type GetSourceHealthResponse = GetSourceHealthResponses[keyof GetSourceHealthResponses];
-
-export type FetchNewsData = {
-    /**
-     * Body
-     */
-    body?: FetchRequest | null;
-    headers?: {
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-    };
-    path?: never;
-    query?: never;
-    url: '/api/v1/admin/pipeline/fetch';
-};
-
-export type FetchNewsErrors = {
-    /**
-     * Bad request
-     */
-    400: unknown;
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type FetchNewsError = FetchNewsErrors[keyof FetchNewsErrors];
-
-export type FetchNewsResponses = {
-    /**
-     * Successful Response
-     */
-    202: FetchResponse;
-};
-
-export type FetchNewsResponse = FetchNewsResponses[keyof FetchNewsResponses];
 
 export type GetPipelineHealthData = {
     body?: never;

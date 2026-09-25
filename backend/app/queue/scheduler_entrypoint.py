@@ -1,7 +1,7 @@
-"""統合 scheduler entrypoint — 4 つの stock TaskiqScheduler を 1 event loop で並行実行。
+"""統合 scheduler entrypoint — 3 つの stock TaskiqScheduler を 1 event loop で並行実行。
 
 各 scheduler は自分の broker へ kick するため task→queue routing は壊れない (Option B)。
-4 プロセス分の full app import を 1 回に畳み scheduler VM を 512mb に下げる。
+3 プロセス分の full app import を 1 回に畳み scheduler VM を 512mb に下げる。
 
 `taskiq scheduler` CLI (``run_scheduler``) が行う処理のうち必要分だけ再現する:
 ①各 broker に ``is_scheduler_process=True``、②共通``registry``とTrend Discovery
@@ -28,7 +28,6 @@ from app.logfire.setup import setup_logfire
 from app.queue.schedulers import (
     scheduler_agent,
     scheduler_briefing,
-    scheduler_dispatch,
 )
 
 logger = structlog.get_logger(__name__)
@@ -39,7 +38,6 @@ _LOOP_INTERVAL = timedelta(seconds=1)
 
 def _create_schedulers() -> tuple[TaskiqScheduler, ...]:
     return (
-        scheduler_dispatch,
         create_scheduler(),
         scheduler_agent,
         scheduler_briefing,

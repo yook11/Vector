@@ -8,9 +8,8 @@ import httpx
 import pytest
 from sqlalchemy import text
 
-from app.db.engine import create_worker_engine
+from app.db.engine import _create_engine
 from app.db.session import caller_managed_session_factory
-from app.lambda_handlers.outbox_relay.settings import OutboxRelayConnectionSettings
 from local_tests.completion.commit_control import hold_commit
 from local_tests.completion.http_control import GatedResponses
 from local_tests.completion.support import article_response, consumer_contract
@@ -50,14 +49,10 @@ def http_clients(monkeypatch, http_boundary):
 
 @pytest.fixture
 async def completion_engine(system_database):
-    engine = create_worker_engine(
-        OutboxRelayConnectionSettings(
-            env="test",
-            database_url=system_database.url("vector_collect", sqlalchemy=True),
-            db_iam_auth=False,
-            aws_region="ap-northeast-1",
-        ),
-        "collection",
+    # 接続の保持を pool の checkedout で観測するため、NullPool ではない Engine にする。
+    engine = _create_engine(
+        system_database.url("vector_collect", sqlalchemy=True),
+        application_name="vector-completion-consumer",
     )
     try:
         yield engine
