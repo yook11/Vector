@@ -67,7 +67,7 @@ variables {
   slack_channel_id       = "C0123456789"
 }
 
-run "api_connects_as_api_role_during_switch" {
+run "api_connects_only_as_api_role" {
   command = plan
 
   assert {
@@ -76,10 +76,9 @@ run "api_connects_as_api_role_during_switch" {
   }
   assert {
     condition = jsondecode(aws_iam_role_policy.task["api"].policy).Statement[0].Resource == [
-      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app",
       "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_api",
     ]
-    error_message = "切替前のタスクが入れ替わるまで、api段はvector_appにも接続できる。"
+    error_message = "api段のタスクロールはvector_apiにだけ接続できる。"
   }
 }
 
