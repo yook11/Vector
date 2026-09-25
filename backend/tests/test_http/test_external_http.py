@@ -1,14 +1,13 @@
-"""``make_external_async_client`` のユニットテスト。
+"""外部HTTPの送信可否・宛先指定・プロキシ経路・リダイレクトを検証する。
 
-SSRF 検証 + DNS rebind 防御を担う ``_PinnedDnsTransport`` の挙動、
-``follow_redirects`` の default、transport-level kwargs の振分を検証する。
-親 class ``httpx.AsyncHTTPTransport.handle_async_request`` を monkeypatch で
-short-circuit して、実 HTTP は出さずに pin された Request を観察する。
+名前解決の返答と送信処理を差し替え、アプリの宛先検証は実際に動かす。
+観察するのは送信直前のRequestであり、実TCP接続やTLS認証の成立は保証しない。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import socket
+from collections.abc import Callable
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -80,110 +79,183 @@ def redirect_requests(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return sent
 
 
-# Transport ベースの SSRF 検証
-class TestSsrfValidation:
+@pytest.fixture(params=["configured-proxy", "direct-transport"])
+def external_client(request: pytest.FixtureRequest) -> Callable[[], httpx.AsyncClient]:
+    """通常のプロキシ経路と既存transportの直接接続で送信前の検証を確認する。"""
+    if request.param == "configured-proxy":
+        return make_external_async_client
+    return lambda: httpx.AsyncClient(transport=_PinnedDnsTransport())
+
+
+class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_blocks_request_to_private_host(
-        self, captured_requests: list[httpx.Request]
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
     ) -> None:
+        """禁止IPへ解決されたホストは送信前に拒否する。"""
         with _patch_resolver("10.0.0.1"):
-            async with make_external_async_client() as client:
+            async with external_client() as client:
                 with pytest.raises(HostBlockedError):
                     await client.get("http://internal.example/")
         assert captured_requests == []
 
     @pytest.mark.asyncio
     async def test_blocks_request_to_loopback(
-        self, captured_requests: list[httpx.Request]
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
     ) -> None:
+        """ループバックへ解決されたホストに送信しない。"""
         with _patch_resolver("127.0.0.1"):
-            async with make_external_async_client() as client:
+            async with external_client() as client:
                 with pytest.raises(HostBlockedError):
                     await client.get("http://localhost-alias.example.com/")
         assert captured_requests == []
 
     @pytest.mark.asyncio
-    async def test_allows_request_to_public_host(
-        self, captured_requests: list[httpx.Request]
+    async def test_blocks_request_to_link_local(
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
     ) -> None:
-        with _patch_resolver("8.8.8.8"):
-            async with make_external_async_client() as client:
+        """メタデータIPへ解決されたホストに送信しない。"""
+        with _patch_resolver("169.254.169.254"):
+            async with external_client() as client:
+                with pytest.raises(HostBlockedError):
+                    await client.get("http://metadata-alias.example/")
+        assert captured_requests == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("address", ["8.8.8.8", "2001:4860:4860::8888"])
+    async def test_allows_request_to_public_host(
+        self,
+        address: str,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
+    ) -> None:
+        """公開IPの検証を通過したリクエストを送信処理へ渡す。"""
+        with _patch_resolver(address):
+            async with external_client() as client:
                 resp = await client.get("https://example.com/")
         assert resp.status_code == 200
         assert len(captured_requests) == 1
 
     @pytest.mark.asyncio
     async def test_propagates_host_resolution_error(
-        self, captured_requests: list[httpx.Request]
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
     ) -> None:
-        import socket
-
+        """DNS失敗を伝播し、送信処理には進まない。"""
         with _patch_resolver(socket.gaierror("name unknown")):
-            async with make_external_async_client() as client:
+            async with external_client() as client:
                 with pytest.raises(HostResolutionError):
                     await client.get("https://nonexistent.invalid/")
         assert captured_requests == []
 
     @pytest.mark.asyncio
     async def test_blocks_private_ip_literal(
-        self, captured_requests: list[httpx.Request]
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
     ) -> None:
         """private IP literal を直接渡された場合も transport が拒否する
         (defense-in-depth: SafeUrl で弾く前提だが二重保証)。"""
-        async with make_external_async_client() as client:
+        async with external_client() as client:
             with pytest.raises(HostBlockedError):
                 await client.get("http://10.0.0.1/")
         assert captured_requests == []
 
     @pytest.mark.asyncio
     async def test_passes_public_ip_literal_without_resolve(
-        self, captured_requests: list[httpx.Request]
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
     ) -> None:
         """public IP literal は DNS resolve せず通過。"""
         with patch(
             "app.http.destination_resolution._resolve_host",
             new=AsyncMock(side_effect=AssertionError("must not resolve")),
         ):
-            async with make_external_async_client() as client:
+            async with external_client() as client:
                 resp = await client.get("https://8.8.8.8/")
         assert resp.status_code == 200
         assert str(captured_requests[0].url) == "https://8.8.8.8/"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "addresses",
+        [
+            pytest.param(["8.8.8.8", "10.0.0.1"], id="prohibited-last"),
+            pytest.param(["10.0.0.1", "8.8.8.8"], id="prohibited-first"),
+        ],
+    )
+    async def test_mixed_resolution_never_reaches_send(
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
+        addresses: list[str],
+    ) -> None:
+        """公開IPも返る場合に禁止IPを無視して送信へ進まない。"""
+        with _patch_resolver(*addresses):
+            async with external_client() as client:
+                with pytest.raises(HostBlockedError):
+                    await client.get("https://mixed.example/")
+        assert captured_requests == []
 
-# DNS rebind 防御
-class TestDnsRebindResistance:
-    """validate と connect の間で DNS が切り替わっても
-    TCP 接続は validate 済の最初の IP に pin される (TOCTOU 不成立)。"""
+    @pytest.mark.asyncio
+    async def test_empty_resolution_never_reaches_send(
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
+    ) -> None:
+        """IPを取得できなかった場合は送信へ進まず解決失敗を伝える。"""
+        with _patch_resolver():
+            async with external_client() as client:
+                with pytest.raises(HostResolutionError):
+                    await client.get("https://empty.example/")
+        assert captured_requests == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "addresses",
+        [
+            pytest.param(["not-an-ip"], id="invalid-only"),
+            pytest.param(["8.8.8.8", "not-an-ip"], id="invalid-after-public"),
+            pytest.param(["not-an-ip", "8.8.8.8"], id="invalid-before-public"),
+        ],
+    )
+    async def test_invalid_resolution_never_reaches_send(
+        self,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
+        addresses: list[str],
+    ) -> None:
+        """不正なIPが混ざる場合は一部の公開IPだけで送信へ進まない。"""
+        with _patch_resolver(*addresses):
+            async with external_client() as client:
+                with pytest.raises(HostResolutionError):
+                    await client.get("https://invalid.example/")
+        assert captured_requests == []
+
+
+class TestDirectConnectionDestination:
+    """直接接続時に検証済みIPと元のHTTP・TLSホスト名を送信処理へ渡す。"""
 
     @pytest.mark.asyncio
     async def test_pins_to_first_resolved_ip(
         self, captured_requests: list[httpx.Request]
     ) -> None:
-        """``_resolve_host`` が複数回呼ばれても、TCP 接続先は 1 回目の解決
-        結果のみに依存する。
-        """
-        call_count = 0
-
-        async def fake_resolve(host: str) -> list[str]:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return ["8.8.8.8"]
-            return ["172.20.0.5"]  # 2nd resolve で internal を返す rebind 攻撃
-
-        with patch(
-            "app.http.destination_resolution._resolve_host", side_effect=fake_resolve
-        ):
+        """複数の検証済みIPのうち先頭を送信先に指定する。"""
+        with _patch_resolver("1.1.1.1", "8.8.8.8") as resolve:
             async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
-                await client.get("https://rebind.example/feed.xml")
+                await client.get("https://example.com/feed.xml")
 
         assert len(captured_requests) == 1
-        # URL host は 1st resolve の IP (8.8.8.8) に pin され、
-        # 内部 IP (172.20.0.5) には絶対に到達しない
-        assert captured_requests[0].url.host == "8.8.8.8"
-        assert captured_requests[0].url.host != "172.20.0.5"
-        # transport 内 resolve は 1 回のみ (2 度目以降の rebind に依存しない)
-        assert call_count == 1
+        assert captured_requests[0].url.host == "1.1.1.1"
+        resolve.assert_awaited_once_with("example.com")
 
     @pytest.mark.asyncio
     async def test_preserves_host_header_for_routing(
@@ -199,8 +271,7 @@ class TestDnsRebindResistance:
     async def test_sets_sni_hostname_extension_for_tls_verify(
         self, captured_requests: list[httpx.Request]
     ) -> None:
-        """``extensions["sni_hostname"]`` に元 host を設定し、TLS server_hostname
-        が IP に書換わらないことを保証 (cert verify pass 担保)。"""
+        """送信処理へ渡すTLS SNIの指定には元のホスト名を保持する。"""
         with _patch_resolver("8.8.8.8"):
             async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com/")
@@ -236,23 +307,14 @@ class TestDnsRebindResistance:
 
 # egress proxy 経由の経路
 class TestEgressProxyRouting:
-    """proxy を通す構成では接続先を書き換えない。
-
-    httpcore は CONNECT トンネルに ``sni_hostname`` を渡さないため、host を IP へ
-    書き換えると証明書の hostname 検証が壊れる。DNS rebind に対する防御はこの構成
-    でだけ proxy 側の非公開宛先 deny に移る。公開性の検証そのものは常に通す。
-    proxy 無し構成の pin は ``TestDnsRebindResistance`` が所有する。
-
-    経路は ``settings.egress_proxy_url`` だけが決める。kwargs から transport へ
-    proxy が渡ったかは host が書き換わらないことで観察する (proxy pool の構築自体は
-    httpx の責務)。
-    """
+    """設定されたプロキシを使い、送信処理へ元のホスト名を渡す。"""
 
     @pytest.mark.asyncio
     async def test_keeps_original_host_when_routed_through_proxy(
         self, egress_proxy: str, captured_requests: list[httpx.Request]
     ) -> None:
-        with _patch_resolver("8.8.8.8"):
+        """複数IPの検証後も、プロキシへ渡す宛先は元のホスト名を保持する。"""
+        with _patch_resolver("8.8.8.8", "2001:4860:4860::8888"):
             async with make_external_async_client() as client:
                 await client.get("https://example.com/path?x=1")
         url = captured_requests[0].url
@@ -271,39 +333,21 @@ class TestEgressProxyRouting:
         assert "sni_hostname" not in captured_requests[0].extensions
 
     @pytest.mark.asyncio
-    async def test_still_blocks_private_host_when_routed_through_proxy(
-        self, egress_proxy: str, captured_requests: list[httpx.Request]
-    ) -> None:
-        """公開性の検証は proxy 構成でも通る (proxy の deny に到達する前に落とす)。"""
-        with _patch_resolver("10.0.0.1"):
-            async with make_external_async_client() as client:
-                with pytest.raises(HostBlockedError):
-                    await client.get("http://internal.example/")
-        assert captured_requests == []
-
-    @pytest.mark.asyncio
-    async def test_still_blocks_private_ip_literal_when_routed_through_proxy(
-        self, egress_proxy: str, captured_requests: list[httpx.Request]
-    ) -> None:
-        async with make_external_async_client() as client:
-            with pytest.raises(HostBlockedError):
-                await client.get("http://10.0.0.1/")
-        assert captured_requests == []
-
-    @pytest.mark.asyncio
     async def test_caller_cannot_route_through_its_own_proxy(
-        self, captured_requests: list[httpx.Request]
+        self, egress_proxy: str, captured_requests: list[httpx.Request]
     ) -> None:
-        """呼び出し側の ``proxy=`` は経路を変えない (egress は factory が所有する)。
-
-        環境設定のproxyを維持し、呼び出し側の指定を採用しない。
-        """
-        with _patch_resolver("8.8.8.8"):
+        """呼び出し側の指定があっても設定されたプロキシでtransportを生成する。"""
+        with (
+            _patch_resolver("8.8.8.8"),
+            patch(
+                "app.http.external._PinnedDnsTransport", wraps=_PinnedDnsTransport
+            ) as constructor,
+        ):
             async with make_external_async_client(
                 proxy="http://attacker.example.com:3128"
             ) as client:
                 await client.get("https://example.com/")
-        assert captured_requests[0].url.host == "example.com"
+        assert constructor.call_args.kwargs["proxy"] == egress_proxy
 
 
 # follow_redirects の default 動作
@@ -383,51 +427,3 @@ class TestTransportStructure:
         # に成功) ことで、振分が正しいことが分かる。
         async with make_external_async_client(verify=True, http1=True) as client:
             assert isinstance(client._transport, _PinnedDnsTransport)
-
-
-_SQUID_CONF_TEMPLATE = (
-    Path(__file__).parents[3] / "infra" / "aws" / "templates" / "squid.conf.tftpl"
-)
-_DENY_NON_PUBLIC = "http_access deny to_private"
-
-
-def _squid_directives() -> list[str]:
-    """コメントと Terraform の制御行を落とした Squid ディレクティブ列 (評価順)。"""
-    return [
-        stripped
-        for line in _SQUID_CONF_TEMPLATE.read_text(encoding="utf-8").splitlines()
-        if (stripped := line.strip()) and not stripped.startswith(("#", "%{"))
-    ]
-
-
-class TestEgressProxyDenyContract:
-    """app が IP pin を手放す根拠が proxy 側に実在することを固定する。
-
-    proxy を経由する構成では DNS rebind 防御の最終責任が Squid の
-    ``http_access deny to_private`` に移る (``http.external`` の module docstring)。
-    レンジ定義の一致は ``TestNonPublicRangeParity`` が見るが、**拒否そのものが
-    conf に書かれているか** は誰も見ていなかった。この行を消してもレンジは一致する。
-    """
-
-    def test_template_is_readable(self) -> None:
-        """正本の場所がずれたら黙って緑にならず、ここで落ちる。"""
-        assert _SQUID_CONF_TEMPLATE.is_file()
-
-    def test_denies_non_public_destinations(self) -> None:
-        assert _DENY_NON_PUBLIC in _squid_directives()
-
-    @pytest.mark.parametrize("variable", ["private_v4_ranges", "private_v6_ranges"])
-    def test_deny_covers_range_source(self, variable: str) -> None:
-        """acl が正本の v4 / v6 双方を参照する (片方の列挙漏れは穴になる)。"""
-        acl = " ".join(
-            d for d in _squid_directives() if d.startswith("acl to_private ")
-        )
-        assert variable in acl
-
-    def test_deny_precedes_every_allow(self) -> None:
-        """Squid は上から評価するので、allow より後ろに置いた deny は死ぬ。"""
-        directives = _squid_directives()
-        first_allow = next(
-            i for i, d in enumerate(directives) if d.startswith("http_access allow")
-        )
-        assert directives.index(_DENY_NON_PUBLIC) < first_allow

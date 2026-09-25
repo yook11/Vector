@@ -14,7 +14,7 @@ from app.http.destination_policy import (
 
 
 class HostResolutionError(Exception):
-    """ホスト名の DNS 解決自体に失敗した。"""
+    """名前解決で有効なIP一覧を取得できなかった。"""
 
 
 async def _resolve_host(host: str) -> list[str]:
@@ -34,11 +34,11 @@ async def resolve_public_host_addresses(host: str) -> tuple[PublicIpAddress, ...
     プライベート IP に向いている悪意あるドメインを実フェッチ前に弾く。
 
     Returns:
-        DNS解決結果から得た検証済みアドレスのタプル。
+        DNS解決結果の順序を保持した、1件以上の検証済みアドレスのタプル。
 
     Raises:
         HostBlockedError: いずれかの解決結果が public でない。
-        HostResolutionError: DNS 解決に失敗した。
+        HostResolutionError: DNS解決に失敗したか、結果が空またはIP形式でない。
 
     Note:
         本関数は名前解決結果を検証し、実際の接続先は保証しない。
@@ -51,6 +51,10 @@ async def resolve_public_host_addresses(host: str) -> tuple[PublicIpAddress, ...
         msg = f"DNS resolution failed for host: {host}: {e}"
         raise HostResolutionError(msg) from e
 
+    if not resolved:
+        msg = f"DNS resolution returned no addresses for host: {host}"
+        raise HostResolutionError(msg)
+
     addrs: list[PublicIpAddress] = []
     for addr in resolved:
         try:
@@ -58,7 +62,7 @@ async def resolve_public_host_addresses(host: str) -> tuple[PublicIpAddress, ...
         except NotAPublicIpError as e:
             msg = f"host resolves to non-public address: {host} -> {addr}"
             raise HostBlockedError(msg) from e
-        except NotAnIpAddressError:
-            # getaddrinfo は IP を返すので通常ここには来ないが defense-in-depth
-            continue
+        except NotAnIpAddressError as e:
+            msg = f"DNS resolution returned an invalid address for host: {host}"
+            raise HostResolutionError(msg) from e
     return tuple(addrs)
