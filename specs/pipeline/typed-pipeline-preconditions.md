@@ -324,7 +324,7 @@ async def execute(self, ready: ReadyForClassification, classifier):
 
 本節の task 数・cron・routing は現行 runtime の契約ではない。現行の正本は
 `backend/app/queue/schedule.py` と各 task decorator であり、Stage A の定期投入は
-EventBridge Scheduler の source-dispatch Lambda、`dispatch_sources` は admin 手動実行である。
+EventBridge Scheduler の source-dispatch Lambda である。
 
 - `dispatch_sources` (Stage A 起動、`broker_metadata`、cron `0 * * * *`)
 - `generate_weekly_snapshot` (Stage F 起動、`broker_digest`、cron `5 15 * * 0` UTC = JST 月曜 00:05)

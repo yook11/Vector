@@ -1,4 +1,4 @@
-"""管理のAPIが、vector_apiの権限でソースの管理・健全性の表示・手動取得を行う。"""
+"""管理のAPIが、vector_apiの権限でソースの管理・健全性の表示を行う。"""
 
 from datetime import UTC, datetime, timedelta
 
@@ -301,24 +301,3 @@ async def test_source_health_summarizes_each_source(
         }
         for row in await news_sources_by_name(system_database)
     ]
-
-
-async def test_fetching_specified_source_enqueues_acquisition(
-    api_client, admin_headers, acquisition_requests, system_database
-):
-    """ソースを指定して取得を依頼すると、そのソースの取得が投入される。"""
-    source = await seeded_source(system_database)
-
-    response = await api_client.post(
-        "/api/v1/admin/pipeline/fetch",
-        json={"sourceIds": [source.id]},
-        headers=admin_headers,
-    )
-
-    assert response.status_code == 202
-    assert response.json() == {
-        "message": "Fetch tasks submitted",
-        "dispatchedCount": 1,
-        "jobId": None,
-    }
-    assert acquisition_requests == [(source.id, source.name)]

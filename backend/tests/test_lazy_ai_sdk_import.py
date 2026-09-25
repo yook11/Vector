@@ -31,12 +31,9 @@ _NON_AI_IMPORT_SURFACES = {
     "agent_package": "import app.agent",
     # AnsweringRunner composition はInput Safety Agentを配線してもSDK-freeに保つ。
     "agent_composition": "import app.agent.composition",
-    # scheduler.conf: python -m app.queue.scheduler_entrypoint (4 cron scheduler 統合)。
+    # scheduler.conf: python -m app.queue.scheduler_entrypoint (3 cron scheduler 統合)。
     # entrypoint は schedulers + registry を import するため最広の import surface。
     "scheduler": "import app.queue.scheduler_entrypoint",
-    # fetch.conf: taskiq worker app.queue.brokers:broker_{dispatch,collection}
-    #             app.queue.tasks.acquisition
-    "collect": "import app.queue.brokers, app.queue.tasks.acquisition",
     # insights.conf (trend program): process factoryがbrokerとtaskを構築する。
     "trend_discovery": (
         "from app.insights.trend_discovery.worker import create_broker; create_broker()"

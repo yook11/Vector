@@ -5,8 +5,6 @@
 
 - backfill item: ``backfill_stage="embed"`` から BACKFILL_EMBED が導出される。
 - backfill run: ``backfill_stage="assess"`` から BACKFILL_ASSESS が導出される。
-- dispatch run (stage はリテラル): ``_append_dispatch_run_event`` の
-  except 分岐で Stage.DISPATCH が emit されることを確認。
 
 DB 不要: session_factory を常に例外を上げる double に差し替えて except 分岐を強制する。
 capfire fixture が logfire.configure を自前で呼ぶため setup_logfire は不要。
@@ -19,11 +17,9 @@ from logfire.testing import CaptureLogfire
 
 from app.audit.domain.event import EventType
 from app.audit.stages.backfill import BackfillOutcomeCode
-from app.audit.stages.dispatch import DispatchOutcomeCode
 from app.backfill.audit import append_backfill_item_event, append_backfill_run_event
 from app.backfill.targets import BackfillTarget
 from app.collection.sources.source_name import SourceName
-from app.queue.tasks.acquisition import _append_dispatch_run_event
 
 _METRIC = "vector.audit.dropped"
 
@@ -117,28 +113,3 @@ async def test_backfill_run_audit_drop_derives_stage_from_backfill_stage(
     assert _sum_value(metric) == 1
     # wire 値 "backfill_assess" は Stage.BACKFILL_ASSESS の StrEnum 値。
     assert _attributes_for(metric) == [{"stage": "backfill_assess"}]
-
-
-# ---------------------------------------------------------------------------
-# Site 2: dispatch run (stage はリテラル Stage.DISPATCH)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dispatch_run_audit_drop_increments_counter_with_dispatch_stage(
-    capfire: CaptureLogfire,
-) -> None:
-    """audit write 失敗時に Stage.DISPATCH (wire="dispatch") が emit される。"""
-    await _append_dispatch_run_event(
-        _FailingSessionFactory(),
-        event_type=EventType.FAILED,
-        outcome_code=DispatchOutcomeCode.DISPATCH_RUN_FAILED,
-        cadence="high",
-        exc=RuntimeError("dispatch failed"),
-    )
-
-    metric = _find_metric(capfire.get_collected_metrics(), _METRIC)
-    assert metric is not None
-    assert _sum_value(metric) == 1
-    # wire 値 "dispatch" は Stage.DISPATCH の StrEnum 値 (SSoT: event.py)。
-    assert _attributes_for(metric) == [{"stage": "dispatch"}]

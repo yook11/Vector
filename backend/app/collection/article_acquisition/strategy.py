@@ -1,6 +1,6 @@
 """``AcquirableSource`` レジストリ (composition root)。
 
-``acquire_source`` task が参照する唯一の dispatch エントリポイント。env を
+``sources.registry`` の lookup が参照する唯一の登録表。env を
 読まず hardcode (Pure DI)、判定キーは ``news_sources.name``。
 """
 

@@ -24,7 +24,6 @@ _AUDIT_STAGE_REPOSITORY_FILES = [
         "briefing.py",
         "completion.py",
         "curation.py",
-        "dispatch.py",
         "embedding.py",
         "trend_discovery.py",
     )
@@ -51,9 +50,6 @@ _EXPECTED_REPOSITORY_STAGE_CONSTANTS = {
             "STAGE": "CURATION",
             "BACKFILL_STAGE": "BACKFILL_CURATE",
         },
-    },
-    "dispatch.py": {
-        "DispatchAuditRepository": {"STAGE": "DISPATCH"},
     },
     "embedding.py": {
         "EmbeddingAuditRepository": {

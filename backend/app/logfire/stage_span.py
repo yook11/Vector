@@ -11,8 +11,8 @@ span attribute には本文・URL・prompt・AI response・認証情報を載せ
 貫通した例外は ``logfire.span`` が OTel exception event として自動記録し level を error
 に上げる。加えて backstop で failure projection 由来の失敗分類属性 (failure_kind /
 code / retryability / error_class) も焼く。協調キャンセル (CancelledError 等) は
-``except Exception`` で失敗軸から除外する。再 raise せず握り潰す失敗 (acquire_source の
-非 retryable 経路など) は呼び出し側が ``record_failure`` を明示する (no-override)。
+``except Exception`` で失敗軸から除外する。再 raise せず握り潰す失敗は呼び出し側が
+``record_failure`` を明示する (no-override)。
 """
 
 from __future__ import annotations
