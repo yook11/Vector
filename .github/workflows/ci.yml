@@ -655,6 +655,9 @@ jobs:
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_backfill') THEN
               CREATE ROLE vector_backfill NOLOGIN;
             END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_api') THEN
+              CREATE ROLE vector_api NOLOGIN;
+            END IF;
           END \$\$;
           EOF
 
@@ -910,6 +913,9 @@ jobs:
             END IF;
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_backfill') THEN
               CREATE ROLE vector_backfill NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_api') THEN
+              CREATE ROLE vector_api NOLOGIN;
             END IF;
           END \$\$;
           EOF
