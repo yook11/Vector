@@ -12,33 +12,47 @@ from app.log_policy.budget import (
     LogBudgetExceeded,
     LogEventBudget,
 )
-from app.log_policy.value_preparation import EXCEPTION_DEPTH_LIMIT, LogValuePreparer
+from app.log_policy.value_preparation import (
+    DEPTH_LIMIT,
+    EXCEPTION_DEPTH_LIMIT,
+    LogValuePreparer,
+)
 
 pytestmark = pytest.mark.unit
 
+_DEPTH_LIMITS = pytest.mark.parametrize(
+    "depth_limit",
+    [DEPTH_LIMIT, EXCEPTION_DEPTH_LIMIT],
+    ids=["normal", "exception"],
+)
 
-class TestExceptionPreparationDepth:
-    """例外の値準備で指定する上限ちょうどと、その一段先を検証する。"""
 
-    def test_value_at_exception_limit_is_preserved(self) -> None:
-        """例外用の深さ上限ちょうどにある値は保持する。"""
+class TestPreparationDepth:
+    """指定された深さ上限ちょうどの値は保持し、その一段先は検査せず置き換える。"""
+
+    @_DEPTH_LIMITS
+    def test_value_at_depth_limit_is_preserved(self, depth_limit: int) -> None:
+        """深さ上限ちょうどにある値は保持する。"""
         value = "diagnostic"
-        for _ in range(EXCEPTION_DEPTH_LIMIT):
+        for _ in range(depth_limit):
             value = [value]
         preparer = LogValuePreparer(BASE_DENY)
 
-        result = preparer.prepare_field_value(value, depth_limit=EXCEPTION_DEPTH_LIMIT)
+        result = preparer.prepare_field_value(value, depth_limit=depth_limit)
 
         assert result == value
 
-    def test_value_beyond_exception_limit_is_not_inspected(self, monkeypatch) -> None:
-        """例外用の上限を一段超えた値は、型の検査前にlimitへ置き換える。"""
+    @_DEPTH_LIMITS
+    def test_value_beyond_depth_limit_is_not_inspected(
+        self, monkeypatch, depth_limit: int
+    ) -> None:
+        """上限を一段超えた値は、型の検査前にlimitへ置き換える。"""
         from app.log_policy import value_preparation
 
         omitted = object()
         value = omitted
         expected = "[limit]"
-        for _ in range(EXCEPTION_DEPTH_LIMIT + 1):
+        for _ in range(depth_limit + 1):
             value = [value]
             expected = [expected]
         original = value_preparation.is_supported_value
@@ -51,7 +65,7 @@ class TestExceptionPreparationDepth:
         monkeypatch.setattr(value_preparation, "is_supported_value", inspect_type)
         preparer = LogValuePreparer(BASE_DENY)
 
-        result = preparer.prepare_field_value(value, depth_limit=EXCEPTION_DEPTH_LIMIT)
+        result = preparer.prepare_field_value(value, depth_limit=depth_limit)
 
         assert result == expected
 
@@ -309,7 +323,7 @@ class TestInspectionOrder:
         assert inspected_values == [1]
 
     def test_successful_field_redacts_each_text_once(self) -> None:
-        """検査段階で情報漏洩防止を実行せず成功後に各文字列を一度だけ処理する。"""
+        """検査段階で情報漏洩防止を実行せず、成功後に辞書のキーと値の各文字列を一度だけ処理する。"""
         from app.log_policy.leak_prevention import prevent_credential_leaks
 
         with patch(
@@ -317,12 +331,14 @@ class TestInspectionOrder:
             wraps=prevent_credential_leaks,
         ) as redact:
             preparer = LogValuePreparer(BASE_DENY)
-            field_value = {"message": "token=synthetic"}
+            field_value = {"password=synthetic": "token=synthetic"}
             preparer.budget.check_and_count_log_items(1)
             prepared_value = preparer.prepare_field_value(field_value)
-        assert prepared_value == {"message": "token=[redacted:credential]"}
+        assert prepared_value == {
+            "password=[redacted:credential]": "token=[redacted:credential]"
+        }
         assert [call.args[0] for call in redact.call_args_list] == [
-            "message",
+            "password=synthetic",
             "token=synthetic",
         ]
 
@@ -348,13 +364,16 @@ class TestTextLimits:
         redact.assert_called_once_with(text)
 
     def test_text_above_limit_is_replaced_without_leak_prevention(self) -> None:
-        """上限超過の文字列は原文の文字数を加算せず、情報漏洩防止も適用せず置換する。"""
+        """上限をまたぐ秘密を含む文字列は、原文の文字数を加算せず情報漏洩防止も適用せず、断片を残さず置換する。"""
         budget = LogEventBudget(counted_text_chars=100)
         with patch(
             "app.log_policy.value_preparation.prevent_credential_leaks"
         ) as redact:
             preparer = LogValuePreparer(BASE_DENY, budget=budget)
-            field_value = "x" * (TEXT_LIMIT + 1)
+            # 合成値を分割し、秘密検出ツールの規則に一致させない。
+            field_value = (
+                "x" * (TEXT_LIMIT - 10) + "AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
+            )
             preparer.budget.check_and_count_log_items(1)
             prepared_value = preparer.prepare_field_value(field_value)
         assert prepared_value == "[limit]"
@@ -394,17 +413,29 @@ class TestTextLimits:
         }
         assert text not in [call.args[0] for call in redact.call_args_list]
 
-    def test_nested_long_key_is_excluded_before_normalization(self) -> None:
-        """長すぎるネストのキーは正規化へ渡さず、その項目だけ除外して上限診断に記録する。"""
-        with patch("app.log_policy.value_preparation.normalize_key") as normalize:
-            preparer = LogValuePreparer(BASE_DENY)
-            preparer.budget.check_and_count_log_items(1)
-            prepared_value = preparer.prepare_field_value(
-                {"x" * (TEXT_LIMIT + 1): "synthetic"}
-            )
-        assert prepared_value == {}
+    def test_nested_long_key_is_excluded_before_normalization(
+        self, monkeypatch
+    ) -> None:
+        """長すぎるネストのキーは正規化へ渡さず、その項目だけ除外して上限診断に記録し、兄弟は残す。"""
+        from app.log_policy import value_preparation
+
+        normalized_keys = []
+        original = value_preparation.normalize_key
+
+        def normalize(key):
+            normalized_keys.append(key)
+            return original(key)
+
+        monkeypatch.setattr(value_preparation, "normalize_key", normalize)
+        long_key = "x" * (TEXT_LIMIT + 1)
+        preparer = LogValuePreparer(BASE_DENY)
+        preparer.budget.check_and_count_log_items(1)
+        prepared_value = preparer.prepare_field_value(
+            {long_key: "synthetic", "count": 1}
+        )
+        assert prepared_value == {"count": 1}
         assert preparer.diagnostics.as_fields() == {"_policy_limited": True}
-        normalize.assert_not_called()
+        assert long_key not in normalized_keys
 
 
 class TestSharedBudget:

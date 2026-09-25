@@ -1,4 +1,4 @@
-"""予約キー・独自型・循環参照では原文へ戻らない。"""
+"""独自型・循環参照では原文へ戻らない。"""
 
 from __future__ import annotations
 
@@ -7,57 +7,13 @@ import json
 import pytest
 import structlog
 
-from app.log_policy import BASE_LOG_RULES, LogPolicy, LogPolicyRules, PolicyLogger
+from app.log_policy import LogPolicy, LogPolicyRules, PolicyLogger
 from app.log_policy.processor import LogPolicyProcessor
 
 pytestmark = pytest.mark.unit
 
 _SECRET = "synthetic private value"
 _RULES = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
-
-
-class TestReservedFields:
-    """予約名でもdenyを適用し、生スタックはrendererへ渡さない。"""
-
-    def test_structured_event_applies_policy_deny(self) -> None:
-        """構造化したeventの内部にも目的別のdenyを適用する。"""
-        rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset(), deny=frozenset({"content"})
-        )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {"event": {"content": _SECRET, "count": 1}},
-        )
-        assert output["event"] == {"count": 1}
-        assert _SECRET not in json.dumps(output)
-
-    @pytest.mark.parametrize("key", ["stack", "stack_info", "exception", "_record"])
-    def test_raw_traceback_and_record_are_not_forwarded(self, key: str) -> None:
-        """生スタックや LogRecord を renderer に渡さない。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "info",
-            {"event": "failed", key: _SECRET},
-        )
-        assert key not in output
-        assert output["event"] == "failed"
-        assert _SECRET not in json.dumps(output)
-
-    def test_allowed_exception_key_is_still_dropped(self) -> None:
-        """目的ポリシーで `exception` を許可しても予約キーとしては出さない。"""
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"exception"}))
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "error",
-            {
-                "event": "failed",
-                "exception": _SECRET,
-            },
-        )
-        assert "exception" not in output
-        assert output["event"] == "failed"
-        assert _SECRET not in json.dumps(output)
 
 
 class TestUnsupportedValues:

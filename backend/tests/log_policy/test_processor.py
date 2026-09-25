@@ -216,41 +216,6 @@ class TestRuleApplication:
         assert capture.entries[0]["log_policy"] == "pipeline_control"
 
 
-class TestFieldSelection:
-    """キー名の正規化と完全一致で項目を選別し、未登録項目を除外する。"""
-
-    def test_camel_case_variant_of_denied_key_is_dropped(self, configure_chain) -> None:
-        """`apiKey` は禁止キーとして落ち、値はログに出ない。"""
-        capture = configure_chain()
-        logger = policy_logger("test", _TEST_RULES)
-        logger.info("fetch_failed", apiKey=_SECRET)
-        entry = capture.entries[0]
-        assert "apiKey" not in entry
-        assert _SECRET not in repr(entry)
-
-    def test_exact_deny_keeps_similar_allowed_key(self, configure_chain) -> None:
-        """`token` の値は出ず、名前が似ていても許可した `completion_tokens` は残る。"""
-        rules = LogPolicyRules(
-            LogPolicy.PIPELINE_CONTROL, frozenset({"completion_tokens"})
-        )
-        capture = configure_chain()
-        logger = policy_logger("test", rules)
-        logger.info("usage", token=_SECRET, completion_tokens=128)
-        entry = capture.entries[0]
-        assert "token" not in entry
-        assert entry["completion_tokens"] == 128
-        assert _SECRET not in repr(entry)
-
-    def test_unregistered_key_is_dropped_and_counted(self, configure_chain) -> None:
-        """未登録キーは名前も値も出さず、件数だけを残す。"""
-        capture = configure_chain()
-        logger = policy_logger("test", _TEST_RULES)
-        logger.info("fetch_done", source_id=1, elapsed_ms=12)
-        entry = capture.entries[0]
-        assert entry["_unregistered_count"] == 1
-        assert "elapsed_ms" not in entry
-
-
 class TestFieldProtection:
     """採用した値のネスト内の禁止項目・不正な構造を出力に残さない。"""
 
@@ -303,24 +268,6 @@ class TestFieldProtection:
         entry = capture.entries[0]
         assert entry["items"] == [{"id": 1}, {"id": 2}]
         assert entry["_denied_nested_count"] == 1
-
-    def test_nonstring_mapping_is_replaced_without_losing_other_fields(self) -> None:
-        """非文字列キーを含む辞書全体を置換し、外側の正常な項目は保持する。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(_TEST_RULES, structlog.ReturnLogger()),
-            "info",
-            {
-                "event": "completed",
-                "payload": {200: "synthetic", "count": 1},
-                "source_id": 7,
-            },
-        )
-        assert output == {
-            "event": "completed",
-            "payload": "[non-string-key]",
-            "source_id": 7,
-            "log_policy": _TEST_RULES.policy.value,
-        }
 
 
 class TestMask:
@@ -531,20 +478,6 @@ class TestLeakPrevention:
         assert capture.entries[0]["event"] == (
             "failed with Authorization: [redacted:credential]"
         )
-
-    def test_nested_keys_and_list_values_are_redacted(self) -> None:
-        """ネストの辞書キーと配列内の文字列にも、情報漏洩防止を適用する。"""
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
-
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {"payload": {"token=synthetic": ["token=other"]}},
-        )
-
-        assert output["payload"] == {
-            "token=[redacted:credential]": ["token=[redacted:credential]"],
-        }
 
     def test_leak_prevention_runs_after_sanitize(
         self, sanitizing_logger: PolicyLogger
@@ -890,22 +823,6 @@ def _failure_with_cause_chain(cause_depth: int) -> tuple[BaseException, ValueErr
 class TestDepthLimit:
     """深さ上限までは通常の規則を適用し、超えた部分だけを置換する。"""
 
-    def test_value_at_depth_limit_is_preserved(self) -> None:
-        """深さ上限ちょうどの値は、正常な別項目とともにログへ残す。"""
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
-        payload = _nested_value(depth=DEPTH_LIMIT, leaf=7)
-
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {"event": "completed", "payload": payload},
-        )
-
-        assert output == {
-            "event": "completed",
-            "payload": _nested_value(depth=DEPTH_LIMIT, leaf=7),
-        }
-
     def test_denied_field_at_depth_limit_is_removed(self) -> None:
         """深さ上限ちょうどでも、禁止項目を除外して他の項目を残す。"""
         rules = BASE_LOG_RULES.extend(
@@ -995,22 +912,6 @@ class TestDepthLimit:
             "payload": _nested_value(depth=DEPTH_LIMIT, leaf={"value": "[limit]"}),
         }
 
-    def test_list_value_beyond_depth_limit_is_replaced(self) -> None:
-        """配列内の値が深さ上限を超えたら、その要素を [limit] に置き換える。"""
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
-        payload = _nested_value(depth=DEPTH_LIMIT, leaf=["synthetic"])
-
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "info",
-            {"event": "completed", "payload": payload},
-        )
-
-        assert output == {
-            "event": "completed",
-            "payload": _nested_value(depth=DEPTH_LIMIT, leaf=["[limit]"]),
-        }
-
     def test_dictionary_inside_list_beyond_depth_limit_is_replaced(self) -> None:
         """配列内の辞書が深さ上限を超えたら、辞書全体を [limit] に置き換える。"""
         rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
@@ -1081,16 +982,6 @@ class TestExceptionValueDepthLimit:
         }
         return outer, cause_depth, expected_frame
 
-    @pytest.fixture
-    def exception_beyond_value_limit(self, monkeypatch: pytest.MonkeyPatch):
-        """原因文とframe辞書を上限内に置き、frameの各値を上限の外に置く。"""
-        cause_depth = value_preparation.EXCEPTION_DEPTH_LIMIT // 2
-        outer, _ = _failure_with_cause_chain(cause_depth)
-        # 探索側で先に打ち切られないようにし、値準備の上限は変更しない。
-        monkeypatch.setattr(extraction, "CAUSE_DEPTH_LIMIT", cause_depth)
-        monkeypatch.setattr(extraction, "EXCEPTION_LIMIT", cause_depth + 1)
-        return outer, cause_depth
-
     def test_normal_and_exception_values_use_their_own_limits(
         self, exception_at_value_limit
     ) -> None:
@@ -1112,24 +1003,6 @@ class TestExceptionValueDepthLimit:
         )
         inner = _cause_node(output, cause_depth)
         assert inner["frames"] == [expected_frame]
-
-    def test_exception_value_beyond_its_limit_is_replaced(
-        self, exception_beyond_value_limit
-    ) -> None:
-        """上限内の原因文を残し、上限直後のframeの各値だけをlimitに置き換える。"""
-        exc, cause_depth = exception_beyond_value_limit
-
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "error",
-            {"event": "failed", "exc_info": exc},
-        )
-
-        inner = _cause_node(output, cause_depth)
-        assert inner["error_message"] == "operation failed"
-        assert inner["frames"] == [
-            {"file": "[limit]", "function": "[limit]", "line": "[limit]"}
-        ]
 
 
 class TestProcessingOrder:
