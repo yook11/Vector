@@ -25,8 +25,6 @@ from local_tests.api.research_boundaries import (
     RecordingRunEnqueuer,
 )
 
-_BFF_SIGNING_KEY = "test-api-bff-signing-key-xxxxxxxxxxxx"
-
 
 @pytest.fixture
 def api_settings(monkeypatch, system_database):
@@ -36,7 +34,7 @@ def api_settings(monkeypatch, system_database):
         "EGRESS_PROXY_URL": "http://proxy.vector.internal:3128",
         "DATABASE_URL": system_database.url("vector_api", sqlalchemy=True),
         "DB_IAM_AUTH": "false",
-        "BFF_JWT_SIGNING_SECRET": _BFF_SIGNING_KEY,
+        "BFF_JWT_SIGNING_SECRET": "test-api-bff-signing-key-xxxxxxxxxxxx",
         "REVALIDATE_BEARER_SECRET": "test-api-revalidate-xxxxxxxxxxxxxxx",
         "FRONTEND_URL": "http://localhost:3000",
         "INTERNAL_FRONTEND_BASE_URL": "http://localhost:3000",
@@ -66,11 +64,8 @@ async def api_engine(system_database):
 
 @pytest.fixture
 async def api_client(api_settings, api_engine, monkeypatch):
-    from app.config import settings
     from app.main import app
 
-    # 先に別の試験がsettingsを作っていても、検証鍵をこの試験の署名鍵に揃える。
-    monkeypatch.setattr(settings, "bff_jwt_signing_secret", SecretStr(_BFF_SIGNING_KEY))
     # lifespanは走らせず、本番と同じ2つの入口にvector_apiのEngineを渡す。
     monkeypatch.setattr(app.state, "engine", api_engine, raising=False)
     monkeypatch.setattr(
@@ -88,26 +83,36 @@ async def api_client(api_settings, api_engine, monkeypatch):
         app.dependency_overrides.clear()
 
 
-def _bff_signed_headers(claims: dict[str, str]) -> dict[str, str]:
-    now = int(time.time())
-    token = jwt.encode(
-        {
-            **claims,
-            "iss": "vector-bff",
-            "aud": "vector-backend",
-            "iat": now,
-            "exp": now + 60,
-        },
-        _BFF_SIGNING_KEY,
-        algorithm="HS256",
-    )
-    return {"Authorization": f"Bearer {token}"}
+@pytest.fixture
+def sign_as_bff(api_settings):
+    """製品が検証に使う鍵で、BFFと同じ形式の証明を作る。"""
+    from app.config import settings
+
+    # 先に別の試験がsettingsを作っていても、検証と同じ鍵で署名する。
+    key = settings.bff_jwt_signing_secret.get_secret_value()
+
+    def sign(claims: dict[str, str]) -> dict[str, str]:
+        now = int(time.time())
+        token = jwt.encode(
+            {
+                **claims,
+                "iss": "vector-bff",
+                "aud": "vector-backend",
+                "iat": now,
+                "exp": now + 60,
+            },
+            key,
+            algorithm="HS256",
+        )
+        return {"Authorization": f"Bearer {token}"}
+
+    return sign
 
 
 @pytest.fixture
-def bff_headers():
+def bff_headers(sign_as_bff):
     """利用者を含まないBFF経由の証明（閲覧系が要求する）を付ける。"""
-    return _bff_signed_headers({})
+    return sign_as_bff({})
 
 
 @pytest.fixture
@@ -125,9 +130,9 @@ async def user_id(system_database):
 
 
 @pytest.fixture
-def user_headers(user_id):
+def user_headers(user_id, sign_as_bff):
     """その利用者としてBFFが署名した証明を付ける。"""
-    return _bff_signed_headers({"sub": str(user_id), "role": "user"})
+    return sign_as_bff({"sub": str(user_id), "role": "user"})
 
 
 @pytest.fixture
@@ -173,9 +178,9 @@ def research_client(
 
 
 @pytest.fixture
-def admin_headers():
+def admin_headers(sign_as_bff):
     """管理者としてBFFが署名した証明を付ける。管理の操作は利用者の行を参照しない。"""
-    return _bff_signed_headers({"sub": str(uuid4()), "role": "admin"})
+    return sign_as_bff({"sub": str(uuid4()), "role": "admin"})
 
 
 @pytest.fixture
