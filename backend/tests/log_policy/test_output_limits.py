@@ -693,10 +693,10 @@ class TestWholeLogReplacementByItemBudget:
 class TestBudgetOverflowReason:
     """複数の共有予算を同時に超えうる入力で、どの理由を出力するか。"""
 
-    def test_first_value_text_overflow_precedes_later_top_level_count_overflow(
+    def test_top_level_count_overflow_precedes_value_text_overflow(
         self,
     ) -> None:
-        """先頭の値で文字数上限を超えたら、後続項目の件数超過より先に通知する。"""
+        """トップレベルの選別で件数上限を超えたら、値の文字数超過より先に通知する。"""
         rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
         prepared_event = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
@@ -709,7 +709,7 @@ class TestBudgetOverflowReason:
         assert prepared_event == {
             "event": "log_policy_budget_exceeded",
             "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
+            "_policy_limit_reason": "value_count",
         }
 
 

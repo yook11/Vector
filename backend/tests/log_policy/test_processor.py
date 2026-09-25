@@ -1133,12 +1133,12 @@ class TestExceptionValueDepthLimit:
 
 
 class TestProcessingOrder:
-    """採用した値を項目ごとに順に準備し、不採用の値は準備処理へ渡さない。"""
+    """トップレベルの選別を終えてから採用した値を準備し、不採用の値は準備処理へ渡さない。"""
 
-    def test_each_field_value_is_prepared_before_reading_next_field(
+    def test_all_fields_are_selected_before_values_are_prepared(
         self, monkeypatch
     ) -> None:
-        """一つの項目を選別して値を準備し終えるまで次の項目を取り出さない。"""
+        """トップレベルの項目をすべて選別してから、受け付けた項目の値を準備する。"""
         from app.log_policy.value_preparation import LogValuePreparer
 
         steps = []
@@ -1162,8 +1162,8 @@ class TestProcessingOrder:
         )
         assert steps == [
             "read_payload",
-            {"message": "token=[redacted:credential]"},
             "read_event",
+            {"message": "token=[redacted:credential]"},
             "completed",
         ]
 
@@ -1213,17 +1213,24 @@ class TestProcessingOrder:
             "_policy_limit_reason": "value_count",
         }
 
-    def test_nested_budget_overflow_stops_before_next_top_level_field(self) -> None:
-        """値の走査で予算を超えたら、次のトップレベル項目も取り出さない。"""
+    def test_nested_budget_overflow_skips_later_field_values(self, monkeypatch) -> None:
+        """値の走査で予算を超えたら、後続項目の値は準備しない。"""
+        from app.log_policy.value_preparation import LogValuePreparer
 
-        class EventFields(dict):
-            def items(self):
-                yield "payload", [1] * MAX_ITEMS_PER_LOG_EVENT
-                raise AssertionError("must not read next field after nested overflow")
+        prepared_field_names = []
+        original = LogValuePreparer.prepare_field_value
 
+        def prepare_value(self, field_value, **kwargs):
+            prepared_field_names.append(kwargs["field_name"])
+            return original(self, field_value, **kwargs)
+
+        monkeypatch.setattr(LogValuePreparer, "prepare_field_value", prepare_value)
         prepared_event = LogPolicyProcessor()(
-            PolicyLogger(_TEST_RULES, structlog.ReturnLogger()), "info", EventFields()
+            PolicyLogger(_TEST_RULES, structlog.ReturnLogger()),
+            "info",
+            {"payload": [1] * MAX_ITEMS_PER_LOG_EVENT, "event": "completed"},
         )
+        assert prepared_field_names == ["payload"]
         assert prepared_event == {
             "event": "log_policy_budget_exceeded",
             "_policy_limited": True,
