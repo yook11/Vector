@@ -1,4 +1,4 @@
-"""値の操作・型変換と、検査の順序・停止・状態分離の契約。"""
+"""値準備の上限・変換・共有予算・検査順序・状態分離を単体で検証する。"""
 
 from unittest.mock import patch
 
@@ -6,6 +6,7 @@ import pytest
 
 from app.log_policy.base import BASE_DENY
 from app.log_policy.budget import (
+    EVENT_TEXT_LIMIT,
     MAX_ITEMS_PER_LOG_EVENT,
     TEXT_LIMIT,
     LogBudgetExceeded,
@@ -325,17 +326,53 @@ class TestInspectionOrder:
             "token=synthetic",
         ]
 
+
+class TestTextLimits:
+    """文字列の上限境界と、超過した値・キーだけを処理対象から外すことを検証する。"""
+
+    def test_text_at_limit_is_preserved_and_redacted_once(self) -> None:
+        """単一上限ちょうどの文字列は全文を計上し、一度だけ情報漏洩防止へ渡す。"""
+        from app.log_policy.leak_prevention import prevent_credential_leaks
+
+        text = "あ" * TEXT_LIMIT
+        preparer = LogValuePreparer(BASE_DENY)
+
+        with patch(
+            "app.log_policy.value_preparation.prevent_credential_leaks",
+            wraps=prevent_credential_leaks,
+        ) as redact:
+            prepared_value = preparer.prepare_field_value(text)
+
+        assert prepared_value == text
+        assert preparer.budget.counted_text_chars == TEXT_LIMIT
+        redact.assert_called_once_with(text)
+
     def test_text_above_limit_is_replaced_without_leak_prevention(self) -> None:
-        """一文字でも超過した文字列には情報漏洩防止を実行しない。"""
+        """上限超過の文字列は原文の文字数を加算せず、情報漏洩防止も適用せず置換する。"""
+        budget = LogEventBudget(counted_text_chars=100)
         with patch(
             "app.log_policy.value_preparation.prevent_credential_leaks"
         ) as redact:
-            preparer = LogValuePreparer(BASE_DENY)
+            preparer = LogValuePreparer(BASE_DENY, budget=budget)
             field_value = "x" * (TEXT_LIMIT + 1)
             preparer.budget.check_and_count_log_items(1)
             prepared_value = preparer.prepare_field_value(field_value)
         assert prepared_value == "[limit]"
+        assert budget.counted_text_chars == 100
         redact.assert_not_called()
+
+    def test_sequence_replaces_long_text_preserving_order_and_duplicates(self) -> None:
+        """長い要素だけを置換し、保護した前後の文字列の順序と重複を維持する。"""
+        values = ["token=first", "x" * (TEXT_LIMIT + 1), "token=first"]
+        preparer = LogValuePreparer(BASE_DENY)
+
+        prepared_value = preparer.prepare_field_value(values)
+
+        assert prepared_value == [
+            "token=[redacted:credential]",
+            "[limit]",
+            "token=[redacted:credential]",
+        ]
 
     def test_nested_long_text_is_not_passed_to_leak_prevention(self) -> None:
         """長すぎる文字列だけ置換し、原文を情報漏洩防止へ渡さず正常な兄弟だけ処理する。"""
@@ -368,6 +405,70 @@ class TestInspectionOrder:
         assert prepared_value == {}
         assert preparer.diagnostics.as_fields() == {"_policy_limited": True}
         normalize.assert_not_called()
+
+
+class TestSharedBudget:
+    """値の内部を既存予算へ計上し、超過時は文字列を加工せず呼び出し元へ通知する。"""
+
+    def test_sequence_at_item_budget_is_prepared(self) -> None:
+        """一覧の最後の要素で共有件数上限ちょうどになる場合は全要素を準備する。"""
+        budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 2)
+        preparer = LogValuePreparer(BASE_DENY, budget=budget)
+
+        prepared_value = preparer.prepare_field_value(
+            ["token=first", "password=second"]
+        )
+
+        assert prepared_value == [
+            "token=[redacted:credential]",
+            "password=[redacted:credential]",
+        ]
+        assert budget.log_item_count == MAX_ITEMS_PER_LOG_EVENT
+
+    def test_sequence_item_overflow_stops_before_redacting_any_text(self) -> None:
+        """後続要素で共有件数を超過した場合は先行文字列も加工せず中断する。"""
+        budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 1)
+        preparer = LogValuePreparer(BASE_DENY, budget=budget)
+
+        with patch(
+            "app.log_policy.value_preparation.prevent_credential_leaks"
+        ) as redact:
+            with pytest.raises(LogBudgetExceeded, match="^value_count$"):
+                preparer.prepare_field_value(["token=first", "password=second"])
+
+        redact.assert_not_called()
+
+    def test_sequence_at_text_budget_is_prepared(self) -> None:
+        """置換前の文字数を合算して共有文字数上限ちょうどなら一覧を準備する。"""
+        budget = LogEventBudget(
+            counted_text_chars=EVENT_TEXT_LIMIT - len("token=firstpassword=second")
+        )
+        preparer = LogValuePreparer(BASE_DENY, budget=budget)
+
+        prepared_value = preparer.prepare_field_value(
+            ["token=first", "password=second"]
+        )
+
+        assert prepared_value == [
+            "token=[redacted:credential]",
+            "password=[redacted:credential]",
+        ]
+        assert budget.counted_text_chars == EVENT_TEXT_LIMIT
+
+    def test_sequence_text_overflow_stops_before_redacting_any_text(self) -> None:
+        """後続要素で共有文字数を超過した場合は先行文字列も加工せず中断する。"""
+        budget = LogEventBudget(
+            counted_text_chars=EVENT_TEXT_LIMIT - len("token=first")
+        )
+        preparer = LogValuePreparer(BASE_DENY, budget=budget)
+
+        with patch(
+            "app.log_policy.value_preparation.prevent_credential_leaks"
+        ) as redact:
+            with pytest.raises(LogBudgetExceeded, match="^text_total$"):
+                preparer.prepare_field_value(["token=first", "password=second"])
+
+        redact.assert_not_called()
 
 
 class TestIsolation:
