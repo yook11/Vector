@@ -55,7 +55,7 @@ class LogFieldSelector:
             if normalized_name in _EXCEPTION_OUTPUT_ONLY_FIELDS:
                 continue
 
-            # denyはallowと重ならないため、ここでは除外の理由を名前付きで診断に残す。
+            # allowと重なってもdenyを優先し、除外の理由を名前付きで診断に残す。
             if normalized_name in self.deny:
                 self.diagnostics.record_top_level_denied(field_name)
                 continue

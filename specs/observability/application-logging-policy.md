@@ -128,7 +128,7 @@ loggerの構築時に、コードが所有する完成済みルールを結び�
 | キャッシュ更新通知 | `cache_revalidation` / `CACHE_REVALIDATION_LOG_RULES` | `tags` / `operation` / `error_class` |
 | 秘密情報取得 | `infrastructure` / `SECRET_ACCESS_LOG_RULES` | `operation` / `resource` / `error_class` |
 
-両ルールとも`service` / `environment` / `stage` / `request_id` / `message_id` / `event_id`をallowに持つ。基底の認証情報deny・maskを継承し、基底項目と自動生成の`log_policy`は重複定義しない。モデル・使用量・記事IDは追加しない。`tags`はアプリが組み立てるキャッシュタグのリストで、任意の外部入力を許可するものではない。タグの意味は呼び出し側が所有し、ポリシーはタグの業務検証を複製しない。
+両ルールとも`service` / `environment` / `stage` / `request_id` / `message_id` / `event_id`をallowに持つ。基底の認証情報denyを継承し、基底項目と自動生成の`log_policy`は重複定義しない。モデル・使用量・記事IDは追加しない。`tags`はアプリが組み立てるキャッシュタグのリストで、任意の外部入力を許可するものではない。タグの意味は呼び出し側が所有し、ポリシーはタグの業務検証を複製しない。
 
 | イベント | level | 出力する診断 |
 | --- | --- | --- |

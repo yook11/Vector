@@ -20,12 +20,11 @@ _FIELD_SANITIZERS: dict[str, Callable[[str], str]] = {
     "canonical_url": sanitize_article_url,
     "source_url": sanitize_article_url,
 }
-SANITIZABLE_FIELDS = frozenset(_FIELD_SANITIZERS)
 
 
 def sanitize_field_value(field_name: str, value: object) -> str:
-    """対応表にある項目の値を処理し、入力型が合わなければ固定マーカーを返す。"""
-    sanitizer = _FIELD_SANITIZERS[field_name]
-    if type(value) is not str:
+    """対応表にある項目の値を処理し、処理のない項目名や入力型が合わない値は固定マーカーにする。"""
+    sanitizer = _FIELD_SANITIZERS.get(field_name)
+    if sanitizer is None or type(value) is not str:
         return "[unsupported]"
     return sanitizer(value)

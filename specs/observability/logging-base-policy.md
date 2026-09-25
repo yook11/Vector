@@ -6,7 +6,7 @@ Implementation: 基底規則・processor・例外構造化・チェーン構成�
 
 関連: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)、[デプロイ診断ログの共通秘匿ポリシー](../platform/deployment-log-policy.md)
 
-変更状況: [項目別サニタイズのログポリシー](./logging-sanitization-policy.md)を優先する。対象項目の値全体を、検査・再帰の前に `***` へ置き換えるマスクは実装済み。以下の文字列内部の置換をmaskと呼ぶ記述は旧契約であり、その処理は情報漏洩防止としてポリシーから切り離した。項目別サニタイズは `canonical_url`・`source_url` の対応と構築時の検証まで実装済みで、実際の共通・目的別項目の選定は未実施。
+変更状況: [項目別サニタイズのログポリシー](./logging-sanitization-policy.md)を優先する。対象項目の値全体を、検査・再帰の前に `***` へ置き換えるマスクは実装済み。以下の文字列内部の置換をmaskと呼ぶ記述は旧契約であり、その処理は情報漏洩防止としてポリシーから切り離した。項目別サニタイズは `canonical_url`・`source_url` の対応まで実装済みで、実際の共通・目的別項目の選定は未実施。
 
 文字列内部の処理 (内容検出・キー付き値の置換・置換表記・`BASE_MASK`)、記事本文の文字列内保護、`redact` の語の扱い、それらのテストの配置は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。
 
@@ -45,8 +45,8 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 | 未登録 | トップレベルでdeny・allowに該当しない。maskの有無に関係なくキーごと落とす | `_unregistered_count` に件数 |
 
 - 継承はクラス継承ではなく、`LogPolicyRules.extend(*, allow, deny=frozenset(), mask=frozenset())` で新しい規則を作る操作で表す。直接生成時は基底allow・deny・maskを必ず含め、継承時は親のdeny・maskへそれぞれ追加分を足す。親の識別子を維持し、親の規則は変更しない。
-- `allow` は継承時に必ず明示し、親の目的別allowは自動追加しない。基底allowは常に自動追加する。`allow ∩ deny = ∅` を正規化後に構築時点で検証し、共通・親・子の禁止をallowで解除する定義を拒否する。
-- `mask` は `allow`・`deny` と重複できるが、項目の採用・除外には影響しない。追加denyを文字列でも保護する場合は同じキーをmaskへ明示する。
+- `allow` は継承時に必ず明示し、親の目的別allowは自動追加しない。基底allowは常に自動追加する。`allow` と `deny` が重なっても構築時には拒否せず、実行時に `deny` を優先して、共通・親・子の禁止をallowで解除させない。実際のポリシーで重ならないことはテストで確認する。
+- `mask` は `allow`・`deny` と重複できるが、項目の採用・除外には影響しない。`deny` と重なる項目は先に除外されるため、`mask` の指定は働かない。
 - `LogPolicyRules.allow`・`deny`・`mask` は基底・継承分を含む正規化済みの確定集合として構築時に保持する。processorは登録表を持たず、`PolicyLogger.rules` に保持された完成済みルールを直接適用する。同じ識別子のlogger同士でも規則を上書きし合わない。
 - processorは確定したdenyをフィールド選別・ネスト内の除外へ、確定したmaskを通常値・例外・診断の文字列準備へ渡し、下流で再合成しない。`create_policy_logger` はルール省略時に `BASE_LOG_RULES` を使い、指定値が厳密に `LogPolicyRules` 型でなければ生成時に拒否する。共通設定下の通常の `structlog.get_logger()` もこのfactoryを通る。processorはログごとの型確認や基本ルールへの差し戻しを行わず、factory未接続などの処理失敗では既存の固定エラーを返す。
 - deny・allow・mask はいずれもキー名の正規化後 (小文字・camelCase / PascalCase / 略語境界 / ハイフン → snake_case) の**完全一致**で判定する。部分一致や正規表現を使うと `completion_tokens` `rds_iam_auth_token_port` 等を巻き込み、例外リストが必要になる。基底に例外 (逃げ道) を置かないための条件である。
@@ -59,7 +59,7 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 
 - 共通の認証情報禁止・例外保護・未登録除外は、どの目的の処理からも、bind / contextvars / ログ引数のどこから来た値にも同じく適用される。
 - 基底のキー deny は認証情報だけを定める。基本5項目のallowは `BASE_ALLOW` に定義し、本文の禁止と追加allowは目的別に持つ。
-- 目的ポリシーは基底の deny・mask を独立して継承し、それぞれ足すことしかできない。基底より緩いポリシーは定義できない。
+- 目的ポリシーは基底の deny・mask を独立して継承し、それぞれ足すことしかできない。allow に基底の deny を入れても deny が優先されるため、基底より緩い出力にはならない。
 - 適用は structlog processor で行い、呼び出し側の手巻きに依存しない。renderer や Logfire 転送より前に確定させる。
 - 秘匿処理の失敗で業務結果・例外伝播・再試行を変えない。原文 fallback はしない。
 
@@ -109,7 +109,7 @@ URLは `://` を起点に左側のschemeを確認し、隣接する数字・記�
 
 ### 2. 目的別 deny・mask との境界（記事本文）
 
-`BASE_DENY = CREDENTIAL_KEYS`・`BASE_MASK = CREDENTIAL_KEYS` とし、本文・派生テキストは含めない。`policies/article_text.py` の禁止項目を `policies/external_content.py` と `policies/ai_inference.py` がそれぞれdeny・maskへ明示的に採用し、共通deny・maskを継承した規則として定義する。目的別モジュール内の `extend(allow=..., deny=..., mask=...)` で利用する規則を完成させ、loggerへ渡す。識別子から規則を検索したり、denyからmaskを暗黙に作ったりしない。
+`BASE_DENY = CREDENTIAL_KEYS` とし、本文・派生テキストは含めない。`policies/article_text.py` の禁止項目を `policies/external_content.py` と `policies/ai_inference.py` がそれぞれdenyへ明示的に採用し、共通denyを継承した規則として定義する。目的別モジュール内の `extend(allow=..., deny=...)` で利用する規則を完成させ、loggerへ渡す。識別子から規則を検索しない。
 
 ```python
 from functools import partial

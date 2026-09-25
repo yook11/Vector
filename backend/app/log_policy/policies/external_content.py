@@ -7,5 +7,4 @@ EXTERNAL_CONTENT_POLICY = LogPolicyRules(
     policy=LogPolicy.EXTERNAL_CONTENT_FETCH,
     allow=frozenset(),
     deny=ARTICLE_TEXT_KEYS,
-    mask=ARTICLE_TEXT_KEYS,
 )
