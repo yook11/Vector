@@ -262,9 +262,9 @@ private runbookには初期構築の前提を残し、通常migrationのロー�
   log stream を作れないと task が起動しない
 - **interface endpoint の不足** — `ecs` / `ecs-agent` / `ecs-telemetry` は Fargate では
   不要だが、`ssmmessages` は ECS Exec を使うなら要る
-- **RDS の CA bundle** — `rds.force_ssl` + `verify-full` で繋ぐので、backend の image と
-  frontend の `pool-ssl.ts` の両方が RDS の CA (`rds-ca-rsa2048-g1` 系) を信頼して
-  いる必要がある。**Neon の CA とは別物**。「接続はできるのに証明書検証で落ちる」枠
+- **RDS の CA bundle** — `rds.force_ssl` + `verify-full` で繋ぐ。backend の `app/db/ssl.py`
+  と frontend の `pool-ssl.ts` は、RDS の regional bundle (root 3 本) だけを信頼する。
+  bundle が合っていないと「接続はできるのに証明書検証で落ちる」枠
 
 ## 未決 / 未検証
 

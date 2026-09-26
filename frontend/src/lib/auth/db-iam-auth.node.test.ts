@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { runtimePoolConfigFromUrl } from "./db-iam-auth";
+import { poolConfigFromUrl } from "./pool-ssl";
 
 const RDS_URL =
   "postgresql://vector_auth@vector-db.abc.ap-northeast-1.rds.amazonaws.com:5432/vector?search_path=auth&sslmode=require";
@@ -39,9 +40,9 @@ describe("runtimePoolConfigFromUrl — DB_IAM_AUTH が無効", () => {
 
   it("SSL 設定は素の poolConfigFromUrl と同じままにする", () => {
     vi.stubEnv("DB_IAM_AUTH", "false");
-    expect(runtimePoolConfigFromUrl(RDS_URL).ssl).toEqual({
-      rejectUnauthorized: true,
-    });
+    expect(runtimePoolConfigFromUrl(RDS_URL).ssl).toEqual(
+      poolConfigFromUrl(RDS_URL).ssl,
+    );
   });
 });
 
@@ -74,9 +75,9 @@ describe("runtimePoolConfigFromUrl — DB_IAM_AUTH が有効", () => {
   });
 
   it("SSL 設定は保持する (認証と CA 検証は別の関心事)", () => {
-    expect(runtimePoolConfigFromUrl(RDS_URL).ssl).toEqual({
-      rejectUnauthorized: true,
-    });
+    expect(runtimePoolConfigFromUrl(RDS_URL).ssl).toEqual(
+      poolConfigFromUrl(RDS_URL).ssl,
+    );
   });
 
   it("pg.Client に渡した後も password は生成器のまま残る (connectionString の再解析で password 関数が消える回帰の検出)", () => {

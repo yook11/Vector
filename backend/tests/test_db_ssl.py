@@ -327,14 +327,13 @@ class TestEngineResilienceDefaults:
         assert engine.sync_engine.pool._recycle == 60
 
 
-# 東京リージョンの RDS root 3 本 (RSA2048 / RSA4096 / ECC384)。いずれも自己署名で
-# certifi に無いため、足さないと verify-full が通らず AWS では接続が成立しない。
+# 東京リージョンの RDS root 3 本 (RSA2048 / RSA4096 / ECC384)。いずれも自己署名。
 _RDS_REGIONAL_ROOT_CNS = (
     "Amazon RDS ap-northeast-1 Root CA RSA2048 G1",
     "Amazon RDS ap-northeast-1 Root CA RSA4096 G1",
     "Amazon RDS ap-northeast-1 Root CA ECC384 G1",
 )
-# Neon の証明書チェーンの root (Let's Encrypt)。certifi 由来。
+# 公開の認証局の例 (Let's Encrypt)。
 _PUBLIC_ROOT_CN = "ISRG Root X1"
 
 _BACKEND_RDS_CA = Path(db_ssl.__file__).parent / "rds-ca-ap-northeast-1.pem"
@@ -355,31 +354,14 @@ def _trusted_root_cns() -> set[str]:
 
 
 class TestVerifyFullTrustAnchors:
-    """verify-full の信頼集合。RDS の private root を certifi に **足す** 形を固定する。
+    """verify-full の信頼集合は RDS の regional root 3 本だけ。"""
 
-    RDS の CA は自己署名の private root で certifi に含まれない。この app は
-    ``sslmode=require`` でも verify-full に格上げするため、足さないと AWS では
-    接続そのものが成立しない。一方 certifi を置き換えると Neon (Let's Encrypt)
-    が検証できず Fly が壊れる。**両方向を見ることで「追加であって置換でない」
-    ことが固定される。**
-    """
+    def test_trusts_exactly_the_rds_regional_roots(self) -> None:
+        """global bundle でも公開の認証局でもなく、使うリージョンの root だけ。"""
+        assert _trusted_root_cns() == set(_RDS_REGIONAL_ROOT_CNS)
 
-    @pytest.mark.parametrize("common_name", _RDS_REGIONAL_ROOT_CNS)
-    def test_trusts_rds_regional_root(self, common_name: str) -> None:
-        assert common_name in _trusted_root_cns()
-
-    def test_keeps_public_roots(self) -> None:
-        """certifi を置き換えていないこと (Neon の検証経路が今日と同じ)。"""
-        assert _PUBLIC_ROOT_CN in _trusted_root_cns()
-
-    def test_trusts_only_the_region_in_use(self) -> None:
-        """global bundle ではなく使うリージョンだけ。他リージョンの root は入らない。"""
-        other_region_roots = {
-            cn
-            for cn in _trusted_root_cns()
-            if cn.startswith("Amazon RDS ") and "ap-northeast-1" not in cn
-        }
-        assert other_region_roots == set()
+    def test_does_not_trust_public_roots(self) -> None:
+        assert _PUBLIC_ROOT_CN not in _trusted_root_cns()
 
     def test_frontend_bundle_is_byte_identical(self) -> None:
         """docker build context が backend / frontend に分かれるため 2 部持つ。
