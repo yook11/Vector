@@ -8,9 +8,6 @@ from datetime import UTC, datetime
 import structlog
 
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
-from app.collection.article_acquisition.errors import (
-    map_origin_to_acquisition,
-)
 from app.collection.article_acquisition.events import (
     IncompleteArticleRecorded,
 )
@@ -27,15 +24,11 @@ from app.collection.article_acquisition.metrics import (
     AcquisitionEntryOutcome,
     record_acquisition_outcome,
 )
-from app.collection.article_acquisition.reader.read_errors import (
-    UnreadableResponseError,
-)
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.events import AnalyzableArticleCreated
-from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
@@ -47,7 +40,7 @@ logger = structlog.get_logger(__name__)
 
 
 class ArticleAcquisitionService:
-    """取得失敗は Stage 1 marker に詰め替えて Task に伝播する。"""
+    """取得失敗は発生した例外のまま呼び出し側へ伝える。"""
 
     def __init__(
         self,
@@ -70,77 +63,72 @@ class ArticleAcquisitionService:
             observed_count = 0
             tools = self._tools_factory()
 
-            try:
-                async for fetched in fetch_articles(self._source, tools):
-                    try:
-                        outcome = convert_fetched_article(
-                            fetched, source=self._source, source_id=source_id
+            async for fetched in fetch_articles(self._source, tools):
+                try:
+                    outcome = convert_fetched_article(
+                        fetched, source=self._source, source_id=source_id
+                    )
+                except Exception as exc:
+                    # entry 単位の変換 bug は source 全体を止めず rejected に畳む。
+                    outcome = unexpected_rejection(
+                        fetched, source=self._source, cause=exc
+                    )
+                match outcome:
+                    case AnalyzableArticle() as ready:
+                        analyzable_article_id = await article_repo.save(ready)
+                        if analyzable_article_id is None:
+                            continue
+                        persisted_ids.append(analyzable_article_id)
+                        await audit.append_article_created(
+                            source_id=source_id,
+                            source_name=source_name,
+                            analyzable_article_id=analyzable_article_id,
+                            canonical_url=str(ready.source_url),
                         )
-                    except Exception as exc:
-                        # entry 単位の変換 bug は source 全体を止めず rejected に畳む。
-                        outcome = unexpected_rejection(
-                            fetched, source=self._source, cause=exc
+                        event = AnalyzableArticleCreated(
+                            analyzable_article_id=analyzable_article_id,
                         )
-                    match outcome:
-                        case AnalyzableArticle() as ready:
-                            analyzable_article_id = await article_repo.save(ready)
-                            if analyzable_article_id is None:
-                                continue
-                            persisted_ids.append(analyzable_article_id)
-                            await audit.append_article_created(
-                                source_id=source_id,
-                                source_name=source_name,
-                                analyzable_article_id=analyzable_article_id,
-                                canonical_url=str(ready.source_url),
+                        session.add(
+                            OutboxEvent(
+                                event_type=AnalyzableArticleCreated.EVENT_TYPE,
+                                schema_version=AnalyzableArticleCreated.SCHEMA_VERSION,
+                                payload=event.model_dump(mode="json"),
                             )
-                            event = AnalyzableArticleCreated(
-                                analyzable_article_id=analyzable_article_id,
+                        )
+                    case ObservedArticle() as observed:
+                        if await article_repo.exists_by_source_url(observed.source_url):
+                            continue
+                        incomplete_id = await incomplete_repo.save(
+                            observed,
+                            source_id=source_id,
+                            ready_at=datetime.now(UTC),
+                        )
+                        if incomplete_id is None:
+                            continue
+                        observed_count += 1
+                        await audit.append_incomplete_article_created(
+                            source_id=source_id,
+                            source_name=source_name,
+                            canonical_url=str(observed.source_url),
+                        )
+                        event = IncompleteArticleRecorded(
+                            source_id=source_id,
+                            incomplete_article_id=incomplete_id,
+                        )
+                        session.add(
+                            OutboxEvent(
+                                event_type=IncompleteArticleRecorded.EVENT_TYPE,
+                                schema_version=(
+                                    IncompleteArticleRecorded.SCHEMA_VERSION
+                                ),
+                                payload=event.model_dump(mode="json"),
                             )
-                            session.add(
-                                OutboxEvent(
-                                    event_type=AnalyzableArticleCreated.EVENT_TYPE,
-                                    schema_version=AnalyzableArticleCreated.SCHEMA_VERSION,
-                                    payload=event.model_dump(mode="json"),
-                                )
-                            )
-                        case ObservedArticle() as observed:
-                            if await article_repo.exists_by_source_url(
-                                observed.source_url
-                            ):
-                                continue
-                            incomplete_id = await incomplete_repo.save(
-                                observed,
-                                source_id=source_id,
-                                ready_at=datetime.now(UTC),
-                            )
-                            if incomplete_id is None:
-                                continue
-                            observed_count += 1
-                            await audit.append_incomplete_article_created(
-                                source_id=source_id,
-                                source_name=source_name,
-                                canonical_url=str(observed.source_url),
-                            )
-                            event = IncompleteArticleRecorded(
-                                source_id=source_id,
-                                incomplete_article_id=incomplete_id,
-                            )
-                            session.add(
-                                OutboxEvent(
-                                    event_type=IncompleteArticleRecorded.EVENT_TYPE,
-                                    schema_version=(
-                                        IncompleteArticleRecorded.SCHEMA_VERSION
-                                    ),
-                                    payload=event.model_dump(mode="json"),
-                                )
-                            )
-                        case AcquisitionConversionRejection() as rej:
-                            # 棄却の件数は別トランザクションの監査commit後に計上する。
-                            await self._failure_recorder.record_conversion_rejected(
-                                source_id, rej
-                            )
-            except (ExternalFetchError, UnreadableResponseError) as exc:
-                raise map_origin_to_acquisition(exc) from exc
+                        )
+                    case AcquisitionConversionRejection() as rej:
+                        # 棄却の件数は別トランザクションの監査commit後に計上する。
+                        await self._failure_recorder.record_conversion_rejected(
+                            source_id, rej
+                        )
 
             await session.commit()
 

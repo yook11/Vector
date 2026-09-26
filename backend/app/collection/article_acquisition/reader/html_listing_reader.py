@@ -64,7 +64,7 @@ class HtmlListingReader:
 
         Raises:
             UnreadableResponseError: 空 body / HTML 構造破損 (payload 全体の失敗)。
-            ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
+            HttpResponseError / HttpTransportError / HostBlockedError: 取得の失敗。
         """
         raw = await self._http.fetch(url=url, source_name=source_name)
         if not raw.strip():

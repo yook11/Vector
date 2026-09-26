@@ -3,6 +3,7 @@
 import html
 import re
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import assert_never
 
 import structlog
@@ -13,7 +14,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
-from app.collection.external_fetch_errors import ExternalFetchError
+from app.collection.external_fetch_failure import classify_external_fetch_failure
 from app.collection.sources.rss_acquisition import RssBodyPolicy, RssSource
 from app.collection.sources.rss_hooks import (
     RequiresBodyTransform,
@@ -22,6 +23,8 @@ from app.collection.sources.rss_hooks import (
     RequiresSelection,
     RequiresUrlTransform,
 )
+from app.http.destination_policy import HostBlockedError
+from app.http.errors import HttpResponseError, HttpTransportError
 
 logger = structlog.get_logger(__name__)
 
@@ -64,13 +67,32 @@ class RssFetcher:
                     source_name=str(source.name),
                     parse_mode=acquisition.parse_mode,
                 )
-            except (ExternalFetchError, UnreadableResponseError) as exc:
+            except (
+                HttpResponseError,
+                HttpTransportError,
+                HostBlockedError,
+                UnreadableResponseError,
+            ) as exc:
+                if isinstance(exc, UnreadableResponseError):
+                    code: str | None = exc.CODE
+                else:
+                    fetch_failure = classify_external_fetch_failure(
+                        exc, now=datetime.now(UTC)
+                    )
+                    code = fetch_failure.code if fetch_failure is not None else None
                 logger.warning(
                     "source_feed_fetch_failed",
                     source=str(source.name),
                     feed=feed_url,
-                    code=exc.CODE,
-                    error=str(exc),
+                    code=code,
+                    http_status=(
+                        exc.status_code if isinstance(exc, HttpResponseError) else None
+                    ),
+                    reason_code=(
+                        exc.failure.reason.value
+                        if isinstance(exc, HttpTransportError)
+                        else None
+                    ),
                 )
                 failures.append(RssFeedFailure(feed_url=feed_url, error=exc))
                 continue

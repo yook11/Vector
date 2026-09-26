@@ -7,7 +7,7 @@
   変換失敗)。``MAX_ENTRIES`` cap / lastmod 降順
 - ``to_fetched_article`` が in-scope entry に対し total (None/raise しない)
 - 全 passport は ``ObservedArticle`` (``HTML_TITLE_POLICY``)
-- ``RawHttpClient`` の ``ExternalFetchError`` は ``collect`` を素通しする
+- ``RawHttpClient`` の取得失敗 (共通HTTPエラー) は ``collect`` を素通しする
 
 loc/lastmod parse と XXE 防御は ``SitemapReader`` の責務へ移ったため
 ``test_sitemap_reader_contract.py`` が SSoT。本ファイルは parse を再検証
@@ -16,6 +16,7 @@ loc/lastmod parse と XXE 防御は ``SitemapReader`` の責務へ移ったた�
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -24,15 +25,12 @@ from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.reader.sitemap_reader import SitemapEntry
 from app.collection.article_acquisition.tools.raw_http_client import RawHttpClient
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.external_fetch_errors import (
-    FetchOriginServerError,
-    FetchResourceNotFoundError,
-)
 from app.collection.sources.definitions.anthropic import (
     AnthropicSource,
     is_collectable_anthropic_url,
     to_fetched_article,
 )
+from app.http.errors import HttpResponseError
 from tests.collection.sources._fixture_tools import fixture_tools
 from tests.collection.sources._invariant import (
     FetchItem,
@@ -139,18 +137,10 @@ def test_mapping_is_total_on_in_scope_missing_lastmod() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_recoverable_error_propagates_through_collect() -> None:
-    client = _RaisingRawHttpClient(
-        FetchResourceNotFoundError(status_code=404, reason="not_found")
+async def test_fetch_failure_propagates_through_collect() -> None:
+    error = HttpResponseError(
+        status_code=503, received_at=datetime(2026, 9, 26, tzinfo=UTC)
     )
-    with pytest.raises(FetchResourceNotFoundError):
-        await _drive(client)
-
-
-@pytest.mark.asyncio
-async def test_recoverable_error_propagates_through_collect() -> None:
-    client = _RaisingRawHttpClient(
-        FetchOriginServerError(status_code=500, reason="internal_error")
-    )
-    with pytest.raises(FetchOriginServerError):
-        await _drive(client)
+    with pytest.raises(HttpResponseError) as caught:
+        await _drive(_RaisingRawHttpClient(error))
+    assert caught.value is error

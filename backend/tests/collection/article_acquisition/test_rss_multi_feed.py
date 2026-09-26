@@ -1,6 +1,7 @@
 """複数フィードの巡回・失敗隔離・候補選択を共通取得入口から検証する。"""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, call
 
 import pytest
@@ -15,17 +16,20 @@ from app.collection.article_acquisition.reader.read_errors import (
 )
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
-from app.collection.external_fetch_errors import (
-    ExternalFetchError,
-    FetchOriginServerError,
-    FetchResourceNotFoundError,
-)
 from app.collection.sources.definitions.cornell import CornellChronicleSource
 from app.collection.sources.definitions.nasa import NASASource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.rss_acquisition import RssSource
+from app.http.destination_policy import HostBlockedError
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 
 _FEEDS = ("https://example.test/a", "https://example.test/b", "https://example.test/c")
+_RECEIVED = datetime(2026, 9, 26, tzinfo=UTC)
 _ENTRY = RssEntry(
     link="https://example.test/article",
     title="first",
@@ -75,17 +79,38 @@ async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "error",
+    ("error", "code", "http_status", "reason_code"),
     [
-        FetchOriginServerError(status_code=503, reason="unavailable"),
-        FetchResourceNotFoundError(status_code=404, reason="not_found"),
-        UnreadableResponseError(
-            reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
+        (
+            HttpResponseError(status_code=503, received_at=_RECEIVED),
+            "http_response_error",
+            503,
+            None,
+        ),
+        (
+            HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
+            "http_transport_error",
+            None,
+            "timeout",
+        ),
+        (HostBlockedError("private IP literal"), "host_blocked", None, None),
+        (
+            UnreadableResponseError(
+                reason=UnreadableResponseReason.MALFORMED_CONTENT,
+                response_format="feed",
+            ),
+            "read_malformed_content",
+            None,
+            None,
         ),
     ],
 )
 async def test_partial_failure_is_logged_and_other_feeds_continue(
-    error: ExternalFetchError | UnreadableResponseError,
+    error: Exception, code: str, http_status: int | None, reason_code: str | None
 ) -> None:
     reader = AsyncMock(spec=RssReader)
     reader.fetch.side_effect = [[_ENTRY], error, [_ENTRY]]
@@ -99,8 +124,9 @@ async def test_partial_failure_is_logged_and_other_feeds_continue(
             event="source_feed_fetch_failed",
             source=str(Source.name),
             feed=_FEEDS[1],
-            code=error.CODE,
-            error=str(error),
+            code=code,
+            http_status=http_status,
+            reason_code=reason_code,
             log_level="warning",
         )
     ]
@@ -116,8 +142,8 @@ async def test_all_failures_preserve_every_exception_and_cause() -> None:
     first.__cause__ = cause
     errors = [
         first,
-        FetchResourceNotFoundError(status_code=404, reason="not_found"),
-        FetchOriginServerError(status_code=503, reason="last_failure"),
+        HttpResponseError(status_code=404, received_at=_RECEIVED),
+        HttpResponseError(status_code=503, received_at=_RECEIVED),
     ]
     reader.fetch.side_effect = errors
     with capture_logs() as logs, pytest.raises(RssFeedErrors) as caught:
@@ -133,7 +159,7 @@ async def test_all_failures_preserve_every_exception_and_cause() -> None:
 @pytest.mark.parametrize("empty_only", [True, False])
 async def test_successful_empty_feed_counts_as_success(empty_only: bool) -> None:
     reader = AsyncMock(spec=RssReader)
-    error = FetchOriginServerError(status_code=503, reason="unavailable")
+    error = HttpResponseError(status_code=503, received_at=_RECEIVED)
     reader.fetch.side_effect = [[], [], []] if empty_only else [error, [], error]
     assert await _collect(reader) == []
     assert reader.fetch.await_count == 3
@@ -215,7 +241,7 @@ async def test_selection_runs_once_after_scope_and_controls_mapping_order(
     "error",
     [
         RuntimeError("selection bug"),
-        FetchResourceNotFoundError(status_code=404, reason="not_found"),
+        HttpResponseError(status_code=404, received_at=_RECEIVED),
     ],
 )
 async def test_selection_exception_is_not_caught_as_feed_failure(

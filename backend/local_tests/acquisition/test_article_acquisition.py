@@ -220,21 +220,19 @@ async def test_source_lookup_releases_database_connection_before_http(
 
 
 @pytest.mark.parametrize(
-    ("fetch_error", "expected_code", "expected_retryability"),
+    ("fetch_outcome", "expected_code", "expected_http_status", "expected_retryability"),
     [
         pytest.param(
             httpx.ReadTimeout("private-fetch-detail"),
-            "fetch_timeout",
+            "http_transport_error",
+            None,
             "retryable",
             id="timeout",
         ),
         pytest.param(
-            httpx.HTTPStatusError(
-                "private-fetch-detail",
-                request=httpx.Request("GET", "https://venturebeat.com/feed"),
-                response=httpx.Response(404),
-            ),
-            "fetch_resource_not_found",
+            [httpx.Response(404)],
+            "http_response_error",
+            404,
             "non_retryable",
             id="not_found",
         ),
@@ -245,12 +243,13 @@ async def test_fetch_failure_is_redelivered_and_can_recover(
     invoke_acquisition,
     source_id,
     rss_response,
-    fetch_error,
+    fetch_outcome,
     expected_code,
+    expected_http_status,
     expected_retryability,
 ):
     """取得の失敗を監査に残してSQSへ返し、次の配送で回復できる。"""
-    rss_response.side_effect = fetch_error
+    rss_response.side_effect = fetch_outcome
     assert await invoke_acquisition(source_id) == {
         "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
     }
@@ -261,6 +260,10 @@ async def test_fetch_failure_is_redelivered_and_can_recover(
     assert failures[0]["retryability"] == expected_retryability
     assert failures[0]["payload"]["source_name"] == "VentureBeat"
     assert failures[0]["payload"]["feed_failures"][0]["code"] == expected_code
+    assert (
+        failures[0]["payload"]["feed_failures"][0]["http_status"]
+        == expected_http_status
+    )
     rss_response.side_effect = None
     rss_response.return_value = rss_article_response(
         title="Recovered article",

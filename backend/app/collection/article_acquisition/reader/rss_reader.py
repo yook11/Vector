@@ -26,11 +26,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
-from app.collection.external_fetch_error_mapping import (
-    external_fetch_error_from_exception,
-)
-from app.http.destination_policy import HostBlockedError
-from app.http.destination_resolution import HostResolutionError
+from app.collection.article_acquisition.tools.source_http import get_source_response
 from app.http.external import make_external_async_client
 
 logger = structlog.get_logger(__name__)
@@ -179,11 +175,10 @@ class RssReader:
 
         Raises:
             UnreadableResponseError: 空 body / bozo かつ entries 空 (feed 構造破損)。
-            ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
+            HttpResponseError / HttpTransportError / HostBlockedError: 取得の失敗。
         """
         raw = await self._fetch_raw(
             endpoint_url=endpoint_url,
-            source_name=source_name,
             parse_mode=parse_mode,
             user_agent=user_agent,
             timeout=timeout,
@@ -214,7 +209,6 @@ class RssReader:
         self,
         *,
         endpoint_url: str,
-        source_name: str,
         parse_mode: ParseMode,
         user_agent: str,
         timeout: httpx.Timeout,
@@ -224,16 +218,5 @@ class RssReader:
             verify=True,
             timeout=timeout,
         ) as client:
-            try:
-                response = await client.get(endpoint_url)
-                response.raise_for_status()
-            except (
-                httpx.HTTPStatusError,
-                httpx.RequestError,
-                HostBlockedError,
-                HostResolutionError,
-            ) as e:
-                raise external_fetch_error_from_exception(
-                    e, target_label=source_name
-                ) from e
+            response = await get_source_response(client, endpoint_url)
             return response.content if parse_mode == "bytes" else response.text

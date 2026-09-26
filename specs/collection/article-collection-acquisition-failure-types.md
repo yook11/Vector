@@ -2,6 +2,8 @@
 
 Status: Implemented
 
+> 2026-09-26: `AcquisitionReadError`と取得失敗側の分類は撤去した。読取失敗`UnreadableResponseError`と変換棄却の契約は有効。取得失敗の監査は[取得工程の共通HTTPエラーへの移行](./acquisition-common-http-errors.md)を参照する。
+
 ## 目的
 
 collection BC stage1 (`article_acquisition`) の失敗型を、ドメインの 2 活動
