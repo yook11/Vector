@@ -1,6 +1,6 @@
-"""補完工程の終了判断と、相手が指定した待機期限を保証する。"""
+"""補完工程の再試行・終了の判断を保証する。"""
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -22,8 +22,8 @@ from app.collection.article_completion.errors import (
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
-from app.collection.article_completion.retry_at import RetryAt
 from app.collection.domain.analyzable_article import AnalyzableArticleDefect as Defect
+from app.collection.retry_at import RetryAt
 from app.http.destination_policy import HostBlockedError
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
@@ -41,73 +41,59 @@ _NOW = _RECEIVED + timedelta(seconds=30)
 
 
 @pytest.mark.parametrize(
-    ("status", "expected_result", "investigate"),
+    ("exc", "expected"),
     [
-        (302, CloseArticleCompletion, False),
-        (400, CloseArticleCompletion, False),
-        (401, CloseArticleCompletion, False),
-        (403, CloseArticleCompletion, False),
-        (404, CloseArticleCompletion, False),
-        (407, RetryArticleCompletion, True),
-        (408, RetryArticleCompletion, False),
-        (410, CloseArticleCompletion, False),
-        (421, RetryArticleCompletion, False),
-        (425, RetryArticleCompletion, True),
-        (429, RetryArticleCompletion, False),
-        (451, CloseArticleCompletion, False),
-        (499, CloseArticleCompletion, False),
-        (500, RetryArticleCompletion, False),
-        (501, CloseArticleCompletion, False),
-        (502, RetryArticleCompletion, False),
-        (503, RetryArticleCompletion, False),
-        (504, RetryArticleCompletion, False),
-        (505, CloseArticleCompletion, False),
-        (507, RetryArticleCompletion, False),
-        (511, RetryArticleCompletion, True),
-        (599, RetryArticleCompletion, False),
-        (100, RetryArticleCompletion, True),
-        (200, RetryArticleCompletion, True),
-        (600, RetryArticleCompletion, True),
+        pytest.param(
+            HttpResponseError(
+                status_code=429, received_at=_RECEIVED, retry_after="120"
+            ),
+            RetryArticleCompletion(
+                code="http_response_error",
+                retry_at=RetryAt(_RECEIVED + timedelta(seconds=120)),
+            ),
+            id="retryable_with_retry_after",
+        ),
+        pytest.param(
+            HttpResponseError(status_code=511, received_at=_RECEIVED),
+            RetryArticleCompletion(
+                code="http_response_error", requires_investigation=True
+            ),
+            id="retryable_response_requiring_investigation",
+        ),
+        pytest.param(
+            HttpTransportError(
+                failure=HttpTransportFailure(Stage.UNKNOWN, Reason.NETWORK_IO)
+            ),
+            RetryArticleCompletion(
+                code="http_transport_error", requires_investigation=True
+            ),
+            id="retryable_transport_requiring_investigation",
+        ),
+        pytest.param(
+            HttpResponseError(
+                status_code=403, received_at=_RECEIVED, retry_after="120"
+            ),
+            CloseArticleCompletion(code="http_response_error"),
+            id="non_retryable_response",
+        ),
+        pytest.param(
+            HostBlockedError(),
+            CloseArticleCompletion(code="host_blocked"),
+            id="host_blocked",
+        ),
     ],
 )
-def test_http_response_decision(
-    status: int,
-    expected_result: type[RetryArticleCompletion] | type[CloseArticleCompletion],
-    investigate: bool,
+def test_external_fetch_judgement_becomes_completion_decision(
+    exc: Exception,
+    expected: RetryArticleCompletion | CloseArticleCompletion,
 ) -> None:
-    """補完工程で合意した応答分類に従い、環境側の問題では記事を閉じない。"""
-    exc = HttpResponseError(status_code=status, received_at=_RECEIVED)
-    decision = classify_completion_failure(exc, now=_NOW)
-    assert isinstance(decision, expected_result)
-    assert decision.requires_investigation is investigate
-
-
-@pytest.mark.parametrize(
-    ("failure", "investigate"),
-    [
-        (HttpTransportFailure(Stage.RECEIVE, Reason.TIMEOUT), False),
-        (HttpTransportFailure(Stage.CONNECT, Reason.PROXY, proxy_status=403), False),
-        (HttpTransportFailure(Stage.CONNECT, Reason.PROXY, proxy_status=407), True),
-        (HttpTransportFailure(Stage.CONNECT, Reason.PROXY, proxy_status=511), True),
-        (HttpTransportFailure(Stage.UNKNOWN, Reason.NETWORK_IO), True),
-        (HttpTransportFailure(Stage.CONNECT, Reason.UNKNOWN), True),
-    ],
-)
-def test_transport_failure_never_becomes_article_rejection(
-    failure: HttpTransportFailure, investigate: bool
-) -> None:
-    """通信段階の失敗を記事のHTTP応答による終了へ読み替えない。"""
-    decision = classify_completion_failure(
-        HttpTransportError(failure=failure), now=_NOW
-    )
-    assert isinstance(decision, RetryArticleCompletion)
-    assert decision.requires_investigation is investigate
+    """外部取得の判断を、コード・待機時刻・調査対象を保ったまま補完の再試行・終了へ写す。"""
+    assert classify_completion_failure(exc, now=_NOW) == expected
 
 
 @pytest.mark.parametrize(
     "exc",
     [
-        HostBlockedError(),
         RobotsDisallowedError(),
         ResponseSizeLimitExceededError(
             resource=FetchResource.ARTICLE_PAGE,
@@ -191,50 +177,3 @@ def test_execution_failure_preserves_cause_and_retries(
         assert decision.requires_investigation is investigate
         assert original.__cause__ is cause
         assert original.__traceback__ is traceback
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (" 120 ", _RECEIVED + timedelta(seconds=120)),
-        ("172800", _RECEIVED + timedelta(days=2)),
-        ("Mon, 14 Sep 2026 12:02:00 GMT", _RECEIVED + timedelta(minutes=2)),
-        ("Monday, 14-Sep-26 12:02:00 GMT", _RECEIVED + timedelta(minutes=2)),
-        ("Mon Sep 14 12:02:00 2026", _RECEIVED + timedelta(minutes=2)),
-        ("Mon, 14 Sep 2026 21:02:00 +0900", _RECEIVED + timedelta(minutes=2)),
-        (None, None),
-        ("", None),
-        ("0", None),
-        ("30", None),
-        ("Mon, 14 Sep 2026 11:00:00 GMT", None),
-        ("-1", None),
-        ("1.5", None),
-        ("１２０", None),
-        ("not a date", None),
-        ("Mon, 14 Sep 2026 99:00:00 GMT", None),
-        ("999999999999999999999", None),
-    ],
-)
-def test_retry_after_preserves_valid_future_deadline(
-    value: str | None, expected: datetime | None
-) -> None:
-    """受信時刻基準の待機を短縮せず、経過済み・解釈不能な指示は追加待機にしない。"""
-    exc = HttpResponseError(
-        status_code=429,
-        received_at=_RECEIVED.astimezone(timezone(timedelta(hours=9))),
-        retry_after=value,
-    )
-    decision = classify_completion_failure(exc, now=_NOW)
-    assert isinstance(decision, RetryArticleCompletion)
-    assert decision.retry_at == (RetryAt(expected) if expected is not None else None)
-    assert exc.retry_after == value
-
-
-@pytest.mark.parametrize("status", [403, 501])
-def test_retry_after_does_not_override_close(status: int) -> None:
-    """待機ヘッダーがあっても補完終了の判断を再試行へ戻さない。"""
-    exc = HttpResponseError(
-        status_code=status, received_at=_RECEIVED, retry_after="120"
-    )
-    decision = classify_completion_failure(exc, now=_NOW)
-    assert isinstance(decision, CloseArticleCompletion)
