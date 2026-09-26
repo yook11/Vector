@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.collection.article_acquisition.consumer import AcquisitionResult
+from app.collection.article_acquisition.consumer import AcquisitionSucceeded
 from app.collection.article_acquisition.consumer_failure_classification import (
     NoRetryAcquisition,
     RetryAcquisition,
@@ -21,7 +21,7 @@ from tests.lambda_handlers.acquisition.test_message import message
 def runtime(monkeypatch):
     state = SimpleNamespace(
         consumer=SimpleNamespace(
-            consume=AsyncMock(return_value=AcquisitionResult("acquired"))
+            consume=AsyncMock(return_value=AcquisitionSucceeded(0))
         ),
         log=Mock(),
     )

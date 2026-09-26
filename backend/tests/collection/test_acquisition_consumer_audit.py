@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition.consumer import (
-    AcquisitionResult,
+    AcquisitionSucceeded,
     ArticleAcquisitionConsumer,
 )
 from app.collection.article_acquisition.consumer_failure_classification import (
@@ -246,7 +246,7 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
         "selection_failed": (RetryAcquisition, "retry"),
     }
     if scenario == "partial_success":
-        assert result == AcquisitionResult("acquired", 1)
+        assert result == AcquisitionSucceeded(1)
     else:
         assert isinstance(result, expected_failure[scenario][0])
         if scenario == "selection_failed":

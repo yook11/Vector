@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
 
 from app.collection.article_acquisition.consumer_failure_classification import (
     NoRetryAcquisition,
@@ -24,9 +23,10 @@ from app.db.session import SessionFactory
 
 
 @dataclass(frozen=True, slots=True)
-class AcquisitionResult:
-    result: Literal["acquired", "inactive", "missing"]
-    created_count: int = 0
+class AcquisitionSucceeded:
+    """取得を最後まで実行し、新しく保存した記事の件数を保持する。"""
+
+    created_count: int
 
 
 class ArticleAcquisitionConsumer:
@@ -39,12 +39,17 @@ class ArticleAcquisitionConsumer:
 
     async def consume(
         self, request: SourceAcquisitionRequest
-    ) -> AcquisitionResult | RetryAcquisition | NoRetryAcquisition:
+    ) -> (
+        AcquisitionSucceeded
+        | AcquisitionNotRequired
+        | RetryAcquisition
+        | NoRetryAcquisition
+    ):
         source = await resolve_acquisition_source(
             source_id=request.source_id, session_factory=self._session_factory
         )
         if isinstance(source, AcquisitionNotRequired):
-            return AcquisitionResult(source.reason)
+            return source
         service = ArticleAcquisitionService(
             self._session_factory, source, self._tools_factory
         )
@@ -58,4 +63,4 @@ class ArticleAcquisitionConsumer:
                 failure=failure,
             )
             return failure
-        return AcquisitionResult("acquired", len(ids))
+        return AcquisitionSucceeded(len(ids))
