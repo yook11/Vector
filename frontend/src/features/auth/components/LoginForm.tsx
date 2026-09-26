@@ -23,12 +23,31 @@ import { LoginSchema } from "../schemas/auth";
 
 type LoginFieldErrors = Partial<Record<"email" | "password", string>>;
 
+type SignInFailure = "invalid_credentials" | "rate_limited" | "unavailable";
+
 type LoginState =
   | { status: "idle" }
-  | { status: "error"; fieldErrors: LoginFieldErrors; formError?: string }
+  | {
+      status: "error";
+      fieldErrors: LoginFieldErrors;
+      signInFailure?: SignInFailure;
+    }
   | { status: "ok" };
 
 const INITIAL_STATE: LoginState = { status: "idle" };
+
+const SIGN_IN_FAILURE_MESSAGES: Record<SignInFailure, string> = {
+  invalid_credentials: "メールアドレスまたはパスワードが正しくありません。",
+  rate_limited:
+    "ログインの試行回数が上限に達しました。しばらくしてから再度お試しください。",
+  unavailable: "ログインできませんでした。時間をおいて再度お試しください。",
+};
+
+function classifySignInFailure(status: number): SignInFailure {
+  if (status === 401) return "invalid_credentials";
+  if (status === 429) return "rate_limited";
+  return "unavailable";
+}
 
 async function action(
   _prev: LoginState,
@@ -48,12 +67,11 @@ async function action(
   }
   const { error } = await signIn.email(parsed.data);
   if (error) {
-    // sign-in 失敗の credential 内訳 (email 不在 vs password 違い) は frontend に
-    // 出さない。formError に統合し、両 input を invalid 表示にする。
+    // credential の内訳 (email 不在 vs password 違い) は出さず、応答の種類だけで文言を分ける。
     return {
       status: "error",
       fieldErrors: {},
-      formError: "メールアドレスまたはパスワードが正しくありません。",
+      signInFailure: classifySignInFailure(error.status),
     };
   }
   return { status: "ok" };
@@ -88,10 +106,16 @@ export function LoginForm({
   const isError = state.status === "error";
   const emailError = isError ? state.fieldErrors.email : undefined;
   const passwordError = isError ? state.fieldErrors.password : undefined;
-  const formError = isError ? state.formError : undefined;
-  // formError は "credential 全体不正" の意味なので両 input を invalid とする。
-  const emailInvalid = !!emailError || !!formError;
-  const passwordInvalid = !!passwordError || !!formError;
+  const signInFailure = isError ? state.signInFailure : undefined;
+  const formError = signInFailure
+    ? SIGN_IN_FAILURE_MESSAGES[signInFailure]
+    : undefined;
+  // 認証情報の不一致だけを入力誤りとして両 input を invalid にする。
+  const credentialsInvalid = signInFailure === "invalid_credentials";
+  const emailInvalid = !!emailError || credentialsInvalid;
+  const passwordInvalid = !!passwordError || credentialsInvalid;
+  // 成功後もページを離れるまで送信中の表示を保ち、失敗したように見せない。
+  const busy = pending || state.status === "ok";
 
   const emailDescribedBy =
     [emailError && "email-error", formError && "login-form-error"]
@@ -117,7 +141,7 @@ export function LoginForm({
           </p>
         ) : null}
       </CardHeader>
-      <form action={formAction} aria-busy={pending}>
+      <form action={formAction} aria-busy={busy}>
         <CardContent className="flex flex-col gap-4">
           <Alert role="note">
             <AlertTitle>招待制で運用しています</AlertTitle>
@@ -146,7 +170,7 @@ export function LoginForm({
               autoComplete="email"
               spellCheck={false}
               required
-              disabled={pending}
+              disabled={busy}
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               aria-invalid={emailInvalid || undefined}
@@ -170,7 +194,7 @@ export function LoginForm({
               type="password"
               autoComplete="current-password"
               required
-              disabled={pending}
+              disabled={busy}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               aria-invalid={passwordInvalid || undefined}
@@ -188,8 +212,8 @@ export function LoginForm({
           </div>
         </CardContent>
         <CardFooter className="flex flex-col gap-2">
-          <Button type="submit" className="w-full" disabled={pending}>
-            {pending ? (
+          <Button type="submit" className="w-full" disabled={busy}>
+            {busy ? (
               <>
                 <Spinner data-icon="inline-start" aria-hidden="true" />
                 <span role="status" aria-live="polite" aria-atomic="true">

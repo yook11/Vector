@@ -151,10 +151,15 @@ describe("LoginForm — schema fail (field-level error)", () => {
 });
 
 describe("LoginForm — signIn 戻り値", () => {
-  it("authError があれば日本語の認証エラーを表示し、入力値を保持する", async () => {
+  it("認証情報の不一致 (401) なら日本語の認証エラーを表示し、入力値を保持する", async () => {
     mocks.signInEmail.mockResolvedValue({
       data: null,
-      error: { message: "ignored", code: "INVALID_CREDENTIALS" },
+      error: {
+        status: 401,
+        statusText: "Unauthorized",
+        message: "ignored",
+        code: "INVALID_EMAIL_OR_PASSWORD",
+      },
     });
 
     const user = userEvent.setup();
@@ -180,6 +185,43 @@ describe("LoginForm — signIn 戻り値", () => {
     });
     expect(mocks.router.push).not.toHaveBeenCalled();
     expect(mocks.router.refresh).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "試行制限 (429)",
+      429,
+      "ログインの試行回数が上限に達しました。しばらくしてから再度お試しください。",
+    ],
+    [
+      "サーバー障害 (500)",
+      500,
+      "ログインできませんでした。時間をおいて再度お試しください。",
+    ],
+  ])("%s なら認証情報の誤りとは別の文言を出し、入力欄を invalid にしない", async (_label, status, expectedMessage) => {
+    mocks.signInEmail.mockResolvedValue({
+      data: null,
+      error: { status, statusText: "ignored", message: "ignored" },
+    });
+
+    const user = userEvent.setup();
+    render(<LoginForm />);
+    await fillForm(user, "user@example.com", "secret");
+    const emailInput = screen.getByLabelText("メールアドレス");
+    const passwordInput = screen.getByLabelText("パスワード");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(expectedMessage);
+    expect(alert).not.toHaveTextContent(
+      "メールアドレスまたはパスワードが正しくありません。",
+    );
+    expect(emailInput).not.toHaveAttribute("aria-invalid");
+    expect(passwordInput).not.toHaveAttribute("aria-invalid");
+    expect(emailInput).toHaveValue("user@example.com");
+    expect(passwordInput).toHaveValue("secret");
+    expect(screen.getByRole("button", { name: "ログイン" })).toBeEnabled();
+    expect(mocks.router.push).not.toHaveBeenCalled();
   });
 
   it("成功時に router.push('/') と router.refresh() を順序通り呼ぶ", async () => {
@@ -239,6 +281,32 @@ describe("LoginForm — pending state", () => {
     ).toBeInTheDocument();
 
     resolveSign({ data: null, error: null });
+  });
+});
+
+describe("LoginForm — 成功後の遷移待ち", () => {
+  it("遷移を始めた後もログイン中の表示を保ち、再送信できない", async () => {
+    mocks.signInEmail.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
+
+    const user = userEvent.setup();
+    render(<LoginForm />);
+    await fillForm(user, "user@example.com", "secret");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
+
+    await waitFor(() => {
+      expect(mocks.router.push).toHaveBeenCalledWith("/");
+    });
+    const busyButton = screen.getByRole("button", { name: "ログイン中…" });
+    expect(busyButton).toBeDisabled();
+    expect(screen.getByLabelText("メールアドレス")).toBeDisabled();
+    expect(screen.getByLabelText("パスワード")).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.click(busyButton);
+    expect(mocks.signInEmail).toHaveBeenCalledTimes(1);
   });
 });
 
