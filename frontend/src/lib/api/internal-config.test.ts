@@ -3,7 +3,7 @@
  *
  * 検証対象は 2 段:
  * - global allowlist (全環境共通): localhost / 127.0.0.1 / backend / 実行基盤の
- *   内部 namespace (*.flycast / *.vector.internal) 以外を拒否
+ *   内部 namespace (*.vector.internal) 以外を拒否
  * - production narrowing (NODE_ENV="production"): 内部 namespace 以外を拒否
  *
  * backend 側 `_validate_internal_frontend_base_url` +
@@ -36,18 +36,16 @@ const DEV_HOST_URLS = [
   "http://127.0.0.1:8000/api/v1",
 ] as const;
 
-// 実行基盤の内部 namespace。Fly と AWS の両方を同じ allowlist が受理する。
-// backend 側 (test_config.py の _INTERNAL_NAMESPACE_URLS) が同じ 2 つを固定している。
+// 実行基盤の内部 namespace。backend 側 (test_config.py) も同じ namespace を固定している。
 const INTERNAL_NAMESPACE_URLS = [
-  "http://your-vector-core-app.flycast:8000/api/v1",
   "http://api.vector.internal:8000/api/v1",
 ] as const;
 
 // allowlist の境界。suffix の前の dot と「末尾であること」の 2 つが効いている。
 const REJECTED_URLS = [
   "http://evil.example.com/api/v1",
-  "http://xflycast:8000/api/v1",
-  "http://your-vector-core-app.flycast.attacker.com:8000/api/v1",
+  // Fly の内部 DNS は退役済みなので受理しない。
+  "http://your-vector-core-app.flycast:8000/api/v1",
   "http://evilvector.internal:8000/api/v1",
   "http://api.vector.internal.attacker.com:8000/api/v1",
   // .internal だが自分の namespace ではない (許すのは TLD 全体ではない)。

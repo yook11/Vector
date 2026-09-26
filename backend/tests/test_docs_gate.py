@@ -31,11 +31,11 @@ def reload_app_with_env(
     def _reload(env_value: str) -> FastAPI:
         monkeypatch.setenv("ENV", env_value)
         if env_value == "production":
-            # config.py の production narrowing で revalidate 宛先は *.flycast 必須。
-            # docs gate の検証に集中するため flycast 値を入れて Settings 構築を通す。
+            # config.py の production narrowing で revalidate 宛先は内部 namespace
+            # 必須。docs gate の検証に集中するため内部 namespace の値で構築を通す。
             monkeypatch.setenv(
                 "INTERNAL_FRONTEND_BASE_URL",
-                "http://your-vector-frontend-app.flycast:3000",
+                "http://frontend.vector.internal:3000",
             )
             # 同様に production SSL fail-safe (_require_ssl_in_production) も
             # DB 接続文字列に TLS sslmode を要求する。docs gate の検証に集中する

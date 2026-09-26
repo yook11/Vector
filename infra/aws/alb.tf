@@ -63,7 +63,7 @@ resource "aws_lb_target_group" "frontend" {
   vpc_id      = aws_vpc.main.id
 
   # root は未認証だと redirect するので、正常を誤判定しないよう
-  # 未認証ログイン画面の SSR 成功を routing 条件にする (Fly と同じ判断)。
+  # 未認証ログイン画面の SSR 成功を routing 条件にする。
   health_check {
     path                = "/auth/login"
     matcher             = "200"

@@ -26,13 +26,9 @@ const _ALLOWED_INTERNAL_API_HOSTS = new Set([
 ]);
 // 実行基盤が持つ内部 DNS namespace。先頭 dot が境界なので evilvector.internal は
 // マッチしない。`.internal` は ICANN が private-use 用に予約した TLD で公開 DNS に
-// 委任されないため、AWS 分を足しても外部ホストへの到達手段は増えない
-// (`.flycast` は Fly が内部 resolver で名乗るだけで、予約の裏付けは無い)。
+// 委任されないため、外部ホストへは到達しない。
 // 値は Terraform の `internal_namespace` と共有する契約 (infra/aws/variables.tf)。
-const _ALLOWED_INTERNAL_API_HOST_SUFFIXES = [
-  ".flycast",
-  ".vector.internal",
-] as const;
+const _ALLOWED_INTERNAL_API_HOST_SUFFIXES = [".vector.internal"] as const;
 
 // error message 用の表示形。suffix を足したときに message だけ古くなるのを防ぐ。
 const _INTERNAL_NAMESPACE_GLOBS = _ALLOWED_INTERNAL_API_HOST_SUFFIXES
@@ -49,7 +45,7 @@ function isInternalNamespaceHost(host: string): boolean {
  * INTERNAL_API_URL の host を全環境 allowlist + production narrowing で検証する。
  *
  * 全環境共通 (global allowlist): localhost / 127.0.0.1 / backend (compose DNS)
- * または実行基盤の内部 namespace (*.flycast / *.vector.internal) を許可。
+ * または実行基盤の内部 namespace (*.vector.internal) を許可。
  *
  * production narrowing (NODE_ENV="production"): dev host は本番で到達不能なため
  * 内部 namespace 以外を fail-closed で拒否する (backend の

@@ -103,7 +103,6 @@ locals {
       # 名前なので frontend はそちらを読まない)。
       REDIS_IAM_CACHE_NAME_RL = aws_elasticache_replication_group.rate_limit.replication_group_id
       # コード default (60/300) は通常閲覧で session bucket が 429 になる実測済み。
-      # Fly secrets の運用値と同値に揃える。
       RATE_LIMIT_SESSION_PER_MIN = "600"
       RATE_LIMIT_IP_PER_MIN      = "3000"
       # 入口が ALB なので、信頼できる client IP は ALB が XFF 末尾へ追記した値だけ。

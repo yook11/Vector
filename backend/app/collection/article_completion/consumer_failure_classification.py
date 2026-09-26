@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from email.utils import parsedate_to_datetime
+from datetime import datetime
 
 from app.collection.article_completion.errors import (
     ArticleCompletionRejectedError,
@@ -16,11 +15,13 @@ from app.collection.article_completion.errors import (
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
-from app.collection.article_completion.retry_at import RetryAt
 from app.collection.domain.analyzable_article import AnalyzableArticleDefect
-from app.http.destination_policy import HostBlockedError
-from app.http.errors import HttpResponseError, HttpTransportError
-from app.http.failure import HttpTransportFailureReason, HttpTransportStage
+from app.collection.external_fetch_failure import (
+    NonRetryableFetchFailure,
+    RetryableFetchFailure,
+    classify_external_fetch_failure,
+)
+from app.collection.retry_at import RetryAt
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,58 +42,21 @@ class CloseArticleCompletion:
     requires_investigation: bool = False
 
 
-def _retry_at(exc: HttpResponseError, *, now: datetime) -> RetryAt | None:
-    """有効な未来の待機時刻をUTCで返し、指定なし・無効・0秒・期限経過済みならNoneを返す。"""
-    value = exc.retry_after
-    if value is None or not (value := value.strip()):
-        return None
-    try:
-        if value.isascii() and value.isdecimal():
-            seconds = int(value)
-            if seconds == 0:
-                return None
-            candidate = exc.received_at.astimezone(UTC) + timedelta(seconds=seconds)
-        else:
-            candidate = parsedate_to_datetime(value)
-            # HTTPの旧asctime形式にはタイムゾーン指定がない。
-            if candidate.tzinfo is None:
-                candidate = candidate.replace(tzinfo=UTC)
-            candidate = candidate.astimezone(UTC)
-    except (ValueError, TypeError, OverflowError):
-        return None
-    return RetryAt(candidate) if candidate > now else None
-
-
 def classify_completion_failure(
     exc: Exception, *, now: datetime
 ) -> RetryArticleCompletion | CloseArticleCompletion:
     """発生事実を変更せず、補完工程として必要な対処を返す。"""
-    if isinstance(exc, HttpResponseError):
-        status = exc.status_code
-        investigate = status in (407, 425, 511) or not 300 <= status < 600
-        retry = (
-            investigate
-            or status in (408, 421, 429)
-            or (500 <= status < 600 and status not in (501, 505))
-        )
-        if retry:
+    match classify_external_fetch_failure(exc, now=now):
+        case RetryableFetchFailure(
+            code=code, retry_at=retry_at, requires_investigation=investigate
+        ):
             return RetryArticleCompletion(
-                code=exc.CODE,
-                retry_at=_retry_at(exc, now=now),
-                requires_investigation=investigate,
+                code=code, retry_at=retry_at, requires_investigation=investigate
             )
-        return CloseArticleCompletion(code=exc.CODE)
-
-    if isinstance(exc, HttpTransportError):
-        failure = exc.failure
-        return RetryArticleCompletion(
-            code=exc.CODE,
-            requires_investigation=(
-                failure.stage is HttpTransportStage.UNKNOWN
-                or failure.reason is HttpTransportFailureReason.UNKNOWN
-                or failure.proxy_status in (407, 511)
-            ),
-        )
+        case NonRetryableFetchFailure(code=code):
+            return CloseArticleCompletion(code=code)
+        case None:
+            pass
 
     if isinstance(exc, ArticleCompletionRejectedError):
         investigate = (
@@ -103,9 +67,6 @@ def classify_completion_failure(
         if investigate:
             return RetryArticleCompletion(code=exc.CODE, requires_investigation=True)
         return CloseArticleCompletion(code=exc.CODE)
-
-    if isinstance(exc, HostBlockedError):
-        return CloseArticleCompletion(code="host_blocked")
 
     if isinstance(
         exc,

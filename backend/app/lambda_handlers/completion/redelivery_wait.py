@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.collection.article_completion.retry_at import RetryAt
+from app.collection.retry_at import RetryAt
 from app.lambda_handlers.completion.composition import SqsMessageVisibilityClient
 from app.lambda_handlers.completion.failure_recorder import (
     CompletionLambdaFailureRecorder,

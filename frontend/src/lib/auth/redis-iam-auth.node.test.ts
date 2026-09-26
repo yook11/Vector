@@ -50,7 +50,7 @@ describe("redisIamConnectionOptions — REDIS_IAM_AUTH が無効", () => {
   it.each([
     "false",
     "",
-  ])("URL をそのまま返し credentialsProvider を付けない (dev / Fly 不変): REDIS_IAM_AUTH=%s", (flag) => {
+  ])("URL をそのまま返し credentialsProvider を付けない (dev 不変): REDIS_IAM_AUTH=%s", (flag) => {
     vi.stubEnv("REDIS_IAM_AUTH", flag);
     expect(redisIamConnectionOptions(REDIS_URL)).toEqual({ url: REDIS_URL });
   });

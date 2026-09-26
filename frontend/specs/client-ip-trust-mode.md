@@ -4,6 +4,8 @@
 >
 > Status: Approved (実装中)
 >
+> 2026-09-26 追記: Fly の退役に伴い `fly-client-ip` モードを撤去した。有効値は `alb-xff-last` だけで、`fly-client-ip` は不正値として fail-closed になる。以下の Fly の記述は導入時の記録。
+>
 > 対象: frontend の proxy / rate limit plan / Better Auth 設定 / SSE route
 
 ## Problem

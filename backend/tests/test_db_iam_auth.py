@@ -127,7 +127,7 @@ class TestCreateApiEngine:
     def test_disabled_leaves_password_to_the_url(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """既定は無効。Fly では経路が一切変わらない。"""
+        """既定は無効。dev では経路が一切変わらない。"""
         monkeypatch.setattr(settings, "db_iam_auth", False)
         assert "password" not in self._captured_connect_args(monkeypatch)
 

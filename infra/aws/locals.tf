@@ -10,14 +10,14 @@ locals {
   # 例外: secrets の bff-jwt-signing-secret / revalidate-bearer-secret は backend
   # 全段に配る。実際に使うのは api / insights だが、Settings が構築時に必須と
   # する契約のため (scheduler の DATABASE_URL と同じ「設定の契約が実使用より
-  # 広い」枠。Fly でも全段共有 app で同じ配布だった)。
+  # 広い」枠)。
   #
   # - db_users: IAM DB auth で名乗れる Postgres ロール。**scheduler は空**。
   #   cron を発火するだけで DB engine を作らない (scheduler_entrypoint.py が
   #   is_scheduler_process=True で WORKER_STARTUP を立てず、lifecycle.py の
   #   engine 生成 hook が走らない)。
-  # - image: backend は 1 つの image を 4 段が command 違いで起動する (Fly の
-  #   process group と同じ形)。frontend だけ別 image。
+  # - image: backend は 1 つの image を 4 段が command 違いで起動する。
+  #   frontend だけ別 image。
   # - needs_egress: frontend は外部への出先を持たない (Logfire も外部 API も無い)。
   stages = {
     frontend = {
@@ -48,8 +48,8 @@ locals {
         LOGFIRE_TOKEN            = "logfire-token"
       }
     }
-    # singleton: 新旧が並走すると cron が二重発火する。Fly の
-    # `scale count scheduler=1` に相当する制約を deployment configuration で作る。
+    # singleton: 新旧が並走すると cron が二重発火するので、deployment configuration で
+    # 1 task に保つ。
     scheduler = {
       subnet_index   = 22, needs_broker = true
       egress_vendors = ["logfire"], egress_allow_any_domain = false

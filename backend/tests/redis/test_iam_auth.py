@@ -113,7 +113,7 @@ class TestRedisConnectionOptions:
     """引数だけで接続指定を組み立てる純 builder。"""
 
     def test_disabled_leaves_url_and_kwargs_untouched(self) -> None:
-        """既定は無効。Fly / dev では URL も kwargs も一切変わらない。"""
+        """既定は無効。dev では URL も kwargs も一切変わらない。"""
         password_url = "redis://:secret@localhost:6379/0"
         url, kwargs = redis_connection_options(
             password_url,
