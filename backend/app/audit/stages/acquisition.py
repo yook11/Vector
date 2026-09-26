@@ -19,11 +19,13 @@ from app.audit.error_fields import exception_fqn, redacted_audit_message
 from app.audit.failure_projection import (
     FailureProjection,
     Retryability,
-    failure_action_value,
     project_db_failure,
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
+from app.collection.article_acquisition.consumer_failure_classification import (
+    AcquisitionFailureDecision,
+)
 from app.collection.article_acquisition.errors import RssFeedErrors
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
@@ -103,13 +105,14 @@ class SourceAcquisitionAuditRepository:
         source_id: int | None,
         source_name: str | None,
         exc: Exception,
+        decision: AcquisitionFailureDecision,
     ) -> None:
-        """source 全体の acquisition 失敗を記録する。"""
+        """source 全体の acquisition 失敗と、取得工程が決めた後始末を記録する。"""
         now = datetime.now(UTC)
         projection = _project_failure(exc, now=now)
         payload = AcquisitionPayload(
             failure_kind=projection.failure_kind,
-            failure_action=failure_action_value(projection),
+            failure_action=decision.value,
             source_name=source_name,
             error_message=_error_message(exc),
             error_chain=extract_error_chain(exc),

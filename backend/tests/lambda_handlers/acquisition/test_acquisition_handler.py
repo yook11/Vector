@@ -8,7 +8,13 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.collection.article_acquisition.consumer import AcquisitionResult
+from app.collection.article_acquisition.consumer import (
+    AcquisitionFailed,
+    AcquisitionResult,
+)
+from app.collection.article_acquisition.consumer_failure_classification import (
+    AcquisitionFailureDecision,
+)
 from app.lambda_handlers.acquisition import handler as entrypoint
 from tests.lambda_handlers.acquisition.test_message import message
 
@@ -75,3 +81,33 @@ def test_diagnostic_failure_preserves_completed_result(runtime):
     assert entrypoint.handler(
         {"Records": [{"messageId": "done", "body": json.dumps(message())}]}, None
     ) == {"batchItemFailures": []}
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_failures", "disposition"),
+    [
+        (
+            AcquisitionFailureDecision.RETRY,
+            [{"itemIdentifier": "failed"}],
+            "batch_item_failure",
+        ),
+        (AcquisitionFailureDecision.ABANDON, [], "completed"),
+    ],
+)
+def test_acquisition_failure_is_redelivered_only_when_decided_to_retry(
+    runtime, decision, expected_failures, disposition
+):
+    """取得の失敗は判断が再配信のときだけ返し、断念した依頼は受信完了にする。"""
+    runtime.consumer.consume.return_value = AcquisitionFailed(
+        error=RuntimeError("private-failure-detail"), decision=decision
+    )
+    response = entrypoint.handler(
+        {"Records": [{"messageId": "failed", "body": json.dumps(message())}]}, None
+    )
+    assert response == {"batchItemFailures": expected_failures}
+    fields = runtime.log.info.call_args.kwargs
+    assert fields["result"] == "failed"
+    assert fields["code"] == "processing_failed"
+    assert fields["error_class"] == "builtins.RuntimeError"
+    assert fields["message_disposition"] == disposition
+    assert "private-failure-detail" not in repr(runtime.log.mock_calls)

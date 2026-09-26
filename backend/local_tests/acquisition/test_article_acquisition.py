@@ -219,37 +219,11 @@ async def test_source_lookup_releases_database_connection_before_http(
     assert connections_at_fetch == [0]
 
 
-@pytest.mark.parametrize(
-    ("fetch_outcome", "expected_code", "expected_http_status", "expected_retryability"),
-    [
-        pytest.param(
-            httpx.ReadTimeout("private-fetch-detail"),
-            "http_transport_error",
-            None,
-            "retryable",
-            id="timeout",
-        ),
-        pytest.param(
-            [httpx.Response(404)],
-            "http_response_error",
-            404,
-            "non_retryable",
-            id="not_found",
-        ),
-    ],
-)
-async def test_fetch_failure_is_redelivered_and_can_recover(
-    system_database,
-    invoke_acquisition,
-    source_id,
-    rss_response,
-    fetch_outcome,
-    expected_code,
-    expected_http_status,
-    expected_retryability,
+async def test_retryable_fetch_failure_is_redelivered_and_can_recover(
+    system_database, invoke_acquisition, source_id, rss_response
 ):
-    """取得の失敗を監査に残してSQSへ返し、次の配送で回復できる。"""
-    rss_response.side_effect = fetch_outcome
+    """再試行で変わりうる取得失敗は監査に残してSQSへ返し、再配送で回復できる。"""
+    rss_response.side_effect = httpx.ReadTimeout("private-fetch-detail")
     assert await invoke_acquisition(source_id) == {
         "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
     }
@@ -257,13 +231,37 @@ async def test_fetch_failure_is_redelivered_and_can_recover(
     failures = await load_acquisition_failures(system_database, source_id)
     assert len(failures) == 1
     assert failures[0]["outcome_code"] == "rss_feed_errors"
-    assert failures[0]["retryability"] == expected_retryability
+    assert failures[0]["retryability"] == "retryable"
+    assert failures[0]["payload"]["failure_action"] == "retry"
     assert failures[0]["payload"]["source_name"] == "VentureBeat"
-    assert failures[0]["payload"]["feed_failures"][0]["code"] == expected_code
-    assert (
-        failures[0]["payload"]["feed_failures"][0]["http_status"]
-        == expected_http_status
+    feed_failure = failures[0]["payload"]["feed_failures"][0]
+    assert feed_failure["code"] == "http_transport_error"
+    assert feed_failure["reason_code"] == "timeout"
+    rss_response.side_effect = None
+    rss_response.return_value = rss_article_response(
+        title="Recovered article",
+        url="https://venturebeat.com/recovered",
+        body="Recovered body. " * 40,
     )
+    assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
+    assert len(await load_stored_events(system_database)) == 1
+
+
+async def test_non_retryable_fetch_failure_is_acknowledged_until_next_request(
+    system_database, invoke_acquisition, source_id, rss_response
+):
+    """再試行しても変わらない取得失敗は監査に残して受信完了し、次の依頼で回復できる。"""
+    rss_response.side_effect = [httpx.Response(404)]
+    assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
+    assert await load_stored_events(system_database) == []
+    failures = await load_acquisition_failures(system_database, source_id)
+    assert len(failures) == 1
+    assert failures[0]["outcome_code"] == "rss_feed_errors"
+    assert failures[0]["retryability"] == "non_retryable"
+    assert failures[0]["payload"]["failure_action"] == "abandon"
+    feed_failure = failures[0]["payload"]["feed_failures"][0]
+    assert feed_failure["code"] == "http_response_error"
+    assert feed_failure["http_status"] == 404
     rss_response.side_effect = None
     rss_response.return_value = rss_article_response(
         title="Recovered article",

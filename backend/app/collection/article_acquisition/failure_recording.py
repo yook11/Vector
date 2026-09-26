@@ -7,6 +7,9 @@ import structlog
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
+from app.collection.article_acquisition.consumer_failure_classification import (
+    AcquisitionFailureDecision,
+)
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
 )
@@ -32,10 +35,11 @@ class ArticleAcquisitionFailureRecorder:
         source_id: int | None,
         source_name: str | None,
         exc: Exception,
+        decision: AcquisitionFailureDecision,
     ) -> None:
-        """再試行の判断を行わず、ソースの取得失敗を別セッションで監査する。"""
+        """受け取った判断とソースの取得失敗を、別セッションで監査する。"""
         try:
-            await self._audit_failure(source_id, source_name, exc)
+            await self._audit_failure(source_id, source_name, exc, decision)
         except Exception:  # noqa: S110
             # 監査・診断の通常障害で元の取得失敗を置き換えない。
             pass
@@ -82,6 +86,7 @@ class ArticleAcquisitionFailureRecorder:
         source_id: int | None,
         source_name: str | None,
         exc: Exception,
+        decision: AcquisitionFailureDecision,
     ) -> None:
         """best-effort failure audit。失敗時は redacted log に退避する。"""
         try:
@@ -90,6 +95,7 @@ class ArticleAcquisitionFailureRecorder:
                     source_id=source_id,
                     source_name=source_name,
                     exc=exc,
+                    decision=decision,
                 )
                 await session.commit()
         except Exception as audit_exc:
