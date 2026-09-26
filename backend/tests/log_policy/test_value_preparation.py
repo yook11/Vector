@@ -12,47 +12,33 @@ from app.log_policy.budget import (
     LogBudgetExceeded,
     LogEventBudget,
 )
-from app.log_policy.value_preparation import (
-    DEPTH_LIMIT,
-    EXCEPTION_DEPTH_LIMIT,
-    LogValuePreparer,
-)
+from app.log_policy.value_preparation import DEPTH_LIMIT, LogValuePreparer
 
 pytestmark = pytest.mark.unit
 
-_DEPTH_LIMITS = pytest.mark.parametrize(
-    "depth_limit",
-    [DEPTH_LIMIT, EXCEPTION_DEPTH_LIMIT],
-    ids=["normal", "exception"],
-)
-
 
 class TestPreparationDepth:
-    """指定された深さ上限ちょうどの値は保持し、その一段先は検査せず置き換える。"""
+    """深さ上限ちょうどの値は保持し、その一段先は検査せず置き換える。"""
 
-    @_DEPTH_LIMITS
-    def test_value_at_depth_limit_is_preserved(self, depth_limit: int) -> None:
+    def test_value_at_depth_limit_is_preserved(self) -> None:
         """深さ上限ちょうどにある値は保持する。"""
         value = "diagnostic"
-        for _ in range(depth_limit):
+        for _ in range(DEPTH_LIMIT):
             value = [value]
         preparer = LogValuePreparer(BASE_DENY)
 
-        result = preparer.prepare_field_value(value, depth_limit=depth_limit)
+        result = preparer.prepare_field_value(value)
 
         assert result == value
 
-    @_DEPTH_LIMITS
-    def test_value_beyond_depth_limit_is_not_inspected(
-        self, monkeypatch, depth_limit: int
-    ) -> None:
+    def test_value_beyond_depth_limit_is_not_inspected(self, monkeypatch) -> None:
         """上限を一段超えた値は、型の検査前にlimitへ置き換える。"""
         from app.log_policy import value_preparation
 
         omitted = object()
         value = omitted
         expected = "[limit]"
-        for _ in range(depth_limit + 1):
+        for _ in range(DEPTH_LIMIT + 1):
             value = [value]
             expected = [expected]
         original = value_preparation.is_supported_value
@@ -65,7 +51,7 @@ class TestPreparationDepth:
         monkeypatch.setattr(value_preparation, "is_supported_value", inspect_type)
         preparer = LogValuePreparer(BASE_DENY)
 
-        result = preparer.prepare_field_value(value, depth_limit=depth_limit)
+        result = preparer.prepare_field_value(value)
 
         assert result == expected
 

@@ -11,11 +11,7 @@ from app.log_policy.exceptions.extraction import extract_exception_fields
 from app.log_policy.exceptions.types import ExceptionConverter
 from app.log_policy.field_selection import LogFieldSelector
 from app.log_policy.logger import PolicyLogger
-from app.log_policy.value_preparation import (
-    DEPTH_LIMIT,
-    EXCEPTION_DEPTH_LIMIT,
-    LogValuePreparer,
-)
+from app.log_policy.value_preparation import LogValuePreparer
 
 
 class LogPolicyProcessor:
@@ -63,7 +59,7 @@ class LogPolicyProcessor:
             # 整理したログを検証していく。
             for field_name, field_value in selected_fields.items():
                 prepared_event[field_name] = preparer.prepare_field_value(
-                    field_value, field_name=field_name, depth_limit=DEPTH_LIMIT
+                    field_value, field_name=field_name
                 )
 
             # 同名の通常入力より、実際の例外から抽出した情報を優先する。
@@ -82,9 +78,7 @@ class LogPolicyProcessor:
                 )
                 for field_name, field_value in exception_fields.items():
                     prepared_event[field_name] = exception_preparer.prepare_field_value(
-                        field_value,
-                        field_name=field_name,
-                        depth_limit=EXCEPTION_DEPTH_LIMIT,
+                        field_value, field_name=field_name
                     )
             # どのポリシーで処理したログかを、出力に残す。
             if rules.policy is not None:

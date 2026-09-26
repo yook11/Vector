@@ -12,7 +12,6 @@ from app.log_policy.leak_prevention import prevent_credential_leaks
 from app.log_policy.sanitize import sanitize_field_value
 
 DEPTH_LIMIT = 10
-EXCEPTION_DEPTH_LIMIT = 19
 
 
 class _ValueMarker(Enum):
@@ -45,25 +44,14 @@ class LogValuePreparer:
     active_container_ids: set[int] = field(default_factory=set)
 
     def prepare_field_value(
-        self,
-        field_value: Any,
-        *,
-        field_name: str | None = None,
-        depth_limit: int = DEPTH_LIMIT,
+        self, field_value: Any, *, field_name: str | None = None
     ) -> Any:
         """値の準備の入口で、検査で形を確定させてから文字列を加工し、共有予算の超過は例外のまま呼び出し側へ伝える。"""
-        inspected_value = self.inspect_value(
-            field_value, field_name=field_name, depth_limit=depth_limit
-        )
+        inspected_value = self.inspect_value(field_value, field_name=field_name)
         return self.prepare_text_values(inspected_value, field_name=field_name)
 
     def inspect_value(
-        self,
-        value: Any,
-        depth: int = 0,
-        *,
-        field_name: str | None = None,
-        depth_limit: int = DEPTH_LIMIT,
+        self, value: Any, depth: int = 0, *, field_name: str | None = None
     ) -> Any:
         """値の木を再帰的にたどる中心で、位置ごとに打ち切るか子へ進むかを決める。"""
         # マスク対象の項目を先に確認して、中身を見ずに丸ごと伏せる。
@@ -73,7 +61,7 @@ class LogValuePreparer:
                 return _ValueMarker.MASKED
 
         # 深すぎる位置と扱えない型は、その位置だけ打ち切る。
-        if depth > depth_limit:
+        if depth > DEPTH_LIMIT:
             return _ValueMarker.LIMIT
 
         if not is_supported_value(value):
@@ -92,9 +80,9 @@ class LogValuePreparer:
         self.active_container_ids.add(id(value))
         try:
             if value_type is dict:
-                return self.inspect_dictionary(value, depth, depth_limit=depth_limit)
+                return self.inspect_dictionary(value, depth)
 
-            return self.inspect_sequence(value, depth, depth_limit=depth_limit)
+            return self.inspect_sequence(value, depth)
         finally:
             self.active_container_ids.remove(id(value))
 
@@ -122,11 +110,7 @@ class LogValuePreparer:
         return value
 
     def inspect_dictionary(
-        self,
-        dictionary: dict[Any, Any],
-        depth: int,
-        *,
-        depth_limit: int = DEPTH_LIMIT,
+        self, dictionary: dict[Any, Any], depth: int
     ) -> dict[str, Any] | _ValueMarker:
         """辞書のキーごとに残すか落とすかを決め、残したキーの値だけを子として検査を続ける。"""
         if any(type(key) is not str for key in dictionary):
@@ -148,19 +132,13 @@ class LogValuePreparer:
 
             self.budget.check_and_count_text_chars(len(key))
 
-            inspected_value = self.inspect_value(
-                child_value, depth + 1, field_name=key, depth_limit=depth_limit
-            )
+            inspected_value = self.inspect_value(child_value, depth + 1, field_name=key)
             inspected_dictionary[key] = inspected_value
 
         return inspected_dictionary
 
     def inspect_sequence(
-        self,
-        sequence: list[Any] | tuple[Any, ...],
-        depth: int,
-        *,
-        depth_limit: int = DEPTH_LIMIT,
+        self, sequence: list[Any] | tuple[Any, ...], depth: int
     ) -> list[Any]:
         """配列は要素を落とさず、各要素を子として同じ検査にかける。"""
         inspected_items: list[Any] = []
@@ -168,9 +146,7 @@ class LogValuePreparer:
         for child_value in sequence:
             self.budget.check_and_count_log_items(1)
 
-            inspected_value = self.inspect_value(
-                child_value, depth + 1, depth_limit=depth_limit
-            )
+            inspected_value = self.inspect_value(child_value, depth + 1)
             inspected_items.append(inspected_value)
 
         return inspected_items
