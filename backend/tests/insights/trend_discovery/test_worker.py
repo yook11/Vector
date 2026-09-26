@@ -85,7 +85,7 @@ async def test_worker_lifecycle_owns_engine_and_session_factory() -> None:
         service_name="vector-worker-trend_discovery",
         pool_size=2,
         max_overflow=2,
-        pool_recycle=240,
+        pool_recycle=3600,
         pool_timeout=5,
     )
     assert state.engine is engine

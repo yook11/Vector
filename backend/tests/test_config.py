@@ -448,16 +448,17 @@ def test_db_iam_auth_allows_password_in_migration_url(
     assert Settings(db_iam_auth=True).migration_database_url is not None
 
 
-# Neon は public internet 越しの接続のため、production では DB 接続文字列に TLS
-# sslmode (require / verify-ca / verify-full) を要求する。dev は docker 同一
-# network の平文で良いので何も強制しない。
+# production では DB 接続文字列に TLS sslmode (require / verify-ca / verify-full)
+# を要求する。dev は docker 同一 network の平文で良いので何も強制しない。
 
-# sslmode を持たない Neon 風 URL。各テストで sslmode を付け外しする土台。
-_NEON_DB_URL_NO_SSL = (
-    "postgresql+asyncpg://vector_app:strongpassword@ep-x.neon.tech/neondb"
+# sslmode を持たない RDS 風 URL。各テストで sslmode を付け外しする土台。
+_RDS_DB_URL_NO_SSL = (
+    "postgresql+asyncpg://vector_app:strongpassword"
+    "@db.example.ap-northeast-1.rds.amazonaws.com/vector"
 )
-_NEON_AUTH_RETENTION_DB_URL_NO_SSL = (
-    "postgresql+asyncpg://vector_auth:strongpassword@ep-x.neon.tech/neondb"
+_RDS_AUTH_RETENTION_DB_URL_NO_SSL = (
+    "postgresql+asyncpg://vector_auth:strongpassword"
+    "@db.example.ap-northeast-1.rds.amazonaws.com/vector"
 )
 
 
@@ -465,7 +466,7 @@ def test_production_rejects_database_url_without_sslmode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """production で DATABASE_URL に sslmode が無ければ ValidationError。"""
-    monkeypatch.setenv("DATABASE_URL", _NEON_DB_URL_NO_SSL)
+    monkeypatch.setenv("DATABASE_URL", _RDS_DB_URL_NO_SSL)
     with pytest.raises(ValidationError, match="sslmode"):
         Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
 
@@ -474,7 +475,7 @@ def test_production_accepts_database_url_with_sslmode_require(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """production で sslmode=require 付き DATABASE_URL は通る。"""
-    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
+    monkeypatch.setenv("DATABASE_URL", f"{_RDS_DB_URL_NO_SSL}?sslmode=require")
     s = Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
     assert "sslmode=require" in s.database_url
 
@@ -483,7 +484,7 @@ def test_production_rejects_database_url_with_sslmode_disable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """production で sslmode=disable (平文) は ValidationError。"""
-    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=disable")
+    monkeypatch.setenv("DATABASE_URL", f"{_RDS_DB_URL_NO_SSL}?sslmode=disable")
     with pytest.raises(ValidationError, match="sslmode"):
         Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
 
@@ -493,8 +494,8 @@ def test_production_rejects_migration_url_without_sslmode(
 ) -> None:
     """production で MIGRATION_DATABASE_URL に sslmode が無ければ ValidationError。"""
     # DATABASE_URL 側は TLS を満たし、MIGRATION_DATABASE_URL だけ平文にする。
-    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
-    monkeypatch.setenv("MIGRATION_DATABASE_URL", _NEON_DB_URL_NO_SSL)
+    monkeypatch.setenv("DATABASE_URL", f"{_RDS_DB_URL_NO_SSL}?sslmode=require")
+    monkeypatch.setenv("MIGRATION_DATABASE_URL", _RDS_DB_URL_NO_SSL)
     with pytest.raises(ValidationError, match="MIGRATION_DATABASE_URL"):
         Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
 
@@ -503,10 +504,8 @@ def test_production_rejects_auth_retention_url_without_sslmode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """production で AUTH_RETENTION_DATABASE_URL に sslmode が無ければ reject。"""
-    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
-    monkeypatch.setenv(
-        "AUTH_RETENTION_DATABASE_URL", _NEON_AUTH_RETENTION_DB_URL_NO_SSL
-    )
+    monkeypatch.setenv("DATABASE_URL", f"{_RDS_DB_URL_NO_SSL}?sslmode=require")
+    monkeypatch.setenv("AUTH_RETENTION_DATABASE_URL", _RDS_AUTH_RETENTION_DB_URL_NO_SSL)
     with pytest.raises(ValidationError, match="AUTH_RETENTION_DATABASE_URL"):
         Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
 
@@ -515,8 +514,8 @@ def test_production_accepts_auth_retention_url_with_sslmode_require(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """production で auth retention 用 URL も sslmode=require 付きなら通る。"""
-    auth_url = f"{_NEON_AUTH_RETENTION_DB_URL_NO_SSL}?sslmode=require"
-    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
+    auth_url = f"{_RDS_AUTH_RETENTION_DB_URL_NO_SSL}?sslmode=require"
+    monkeypatch.setenv("DATABASE_URL", f"{_RDS_DB_URL_NO_SSL}?sslmode=require")
     monkeypatch.setenv("AUTH_RETENTION_DATABASE_URL", auth_url)
     s = Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
     assert s.auth_retention_database_url == auth_url
@@ -526,9 +525,9 @@ def test_development_allows_database_url_without_sslmode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """development では sslmode 無し DATABASE_URL でも起動できる (docker 平文)。"""
-    monkeypatch.setenv("DATABASE_URL", _NEON_DB_URL_NO_SSL)
+    monkeypatch.setenv("DATABASE_URL", _RDS_DB_URL_NO_SSL)
     s = Settings()
-    assert s.database_url == _NEON_DB_URL_NO_SSL
+    assert s.database_url == _RDS_DB_URL_NO_SSL
 
 
 # postgres_collect_password は接続URLには含めず、compose / init が

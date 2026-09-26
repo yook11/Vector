@@ -9,7 +9,7 @@ import { requireEnv } from "@/lib/env";
 // request 滞留や接続枯渇の増幅を抑える。
 // max=20 は frontend auth 用に明示し、backend pool と接続上限を分けて扱う。
 export const authPool = new Pool({
-  // sslmode は pool-ssl.ts で Neon/dev docker に合わせて変換する。
+  // sslmode は pool-ssl.ts で本番 (RDS) / dev docker に合わせて変換する。
   // DB_IAM_AUTH が有効なら password が接続ごとの IAM token 生成器になる。
   ...runtimePoolConfigFromUrl(requireEnv("AUTH_DATABASE_URL")),
   max: 20,

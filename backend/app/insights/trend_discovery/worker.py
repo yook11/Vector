@@ -9,8 +9,8 @@ from taskiq_redis import RedisStreamBroker
 
 from app.config import settings
 from app.db.engine import (
+    DEFAULT_POOL_RECYCLE,
     DEFAULT_POOL_TIMEOUT,
-    WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
     create_worker_engine,
     worker_service_name,
@@ -42,7 +42,7 @@ def _attach_worker_resources(broker: RedisStreamBroker) -> None:
                 service_name=service_name,
                 pool_size=pool_size,
                 max_overflow=max_overflow,
-                pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
+                pool_recycle=DEFAULT_POOL_RECYCLE,
                 pool_timeout=DEFAULT_POOL_TIMEOUT,
             )
             register_pool_metrics(

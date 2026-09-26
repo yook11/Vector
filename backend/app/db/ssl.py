@@ -1,11 +1,11 @@
 """接続文字列からSSL設定を分離する純粋ヘルパー。
 
-backend (SQLAlchemy + asyncpg) を Neon 等の managed Postgres に verify-full
-(CA + ホスト名検証) で繋ぐための一元化層。frontend の
+backend (SQLAlchemy + asyncpg) を RDS に verify-full (CA + ホスト名検証) で
+繋ぐための一元化層。frontend の
 ``frontend/src/lib/auth/pool-ssl.ts`` を backend に対称移植したもの。
 
 設計:
-- asyncpg は ``sslmode`` / ``channel_binding`` / ``ssl`` / ``sslrootcert`` 等を
+- asyncpg は ``sslmode`` / ``ssl`` / ``sslrootcert`` 等を
   kwarg で受けず、URL 由来の query が SQLAlchemy 経由で ``asyncpg.connect`` に
   そのまま渡ると connect 時に ``TypeError`` になる。よって URL から ssl 系
   param を取り除き、SSL は ``connect_args={"ssl": SSLContext}`` に正規化する。
@@ -13,12 +13,11 @@ backend (SQLAlchemy + asyncpg) を Neon 等の managed Postgres に verify-full
   (= verify-full 相当)。CA は ``certifi`` バンドルを明示する
   (asyncpg 0.31 は ``sslrootcert=system`` 非対応)。RDS の CA は certifi に無い
   private root なので、certifi に**足す** (置き換えない)。
-- ``sslmode=require`` でも verify-full に格上げする。Fly.io → Neon は public
-  internet を通るため検証は必須で、Neon は require でも TLS のため実害なし。
+- ``sslmode=require`` でも verify-full に格上げする。
   **平文にしたいのは ``sslmode=disable`` のときだけ**。TLS-without-verification
   モードは設計上存在しない。
 
-接続文字列のみで dev (docker, sslmode 無し → SSL 無効) と本番 (Neon,
+接続文字列のみで dev (docker, sslmode 無し → SSL 無効) と本番 (RDS,
 ``?sslmode=require`` → verify-full) を切り替えられる。
 
 import は標準ライブラリ + ``certifi`` + ``sqlalchemy`` のみに閉じるため、
@@ -55,7 +54,6 @@ _VALID_SSLMODES = frozenset(
 # TypeError を出すため、SQLAlchemy URL から network 接続前に剥がす。
 _SSL_QUERY_PARAMS = (
     "sslmode",
-    "channel_binding",
     "ssl",
     "sslrootcert",
     "sslcert",
@@ -64,9 +62,8 @@ _SSL_QUERY_PARAMS = (
 )
 _SSL_QUERY_PARAM_SET = frozenset(_SSL_QUERY_PARAMS)
 
-# [P1] guard から除外する param。sslmode は signal そのもの、channel_binding は
-# Neon ネイティブ文字列で sslmode と共存するため。
-_SSL_PARAMS_GUARD_EXEMPT = frozenset({"sslmode", "channel_binding"})
+# [P1] sslmode は signal そのものなので guard から除外する。
+_SSL_PARAMS_GUARD_EXEMPT = frozenset({"sslmode"})
 
 # sslmode 抜きで単独指定されると「SSL のつもりが平文化」を招く ssl 系 param。
 # これらが在って sslmode が無い場合は黙って剥がさず ValueError で落とす。
