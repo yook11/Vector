@@ -416,7 +416,6 @@ class SnapshotSaveStatus(StrEnum):
     """``SnapshotRepository.save`` の永続化結果。"""
 
     INSERTED = "inserted"
-    UPDATED = "updated"
     CONFLICT = "conflict"
 
 
@@ -458,51 +457,23 @@ class SnapshotRepository:
         )
         return (await self._session.execute(stmt)).first() is not None
 
-    async def save(
-        self,
-        snapshot: TrendsSnapshot,
-        *,
-        force: bool = False,
-    ) -> SnapshotSaveResult:
+    async def save(self, snapshot: TrendsSnapshot) -> SnapshotSaveResult:
         """snapshot を ``trends_snapshots`` に永続化する (commit は呼び出し側の責務)。
 
-        ``force=False`` (default) は新規 INSERT のみで、衝突時は副作用なしに
-        ``CONFLICT`` (``snapshot=None``) を返す。``force=True`` は既存行を上書きし、
-        ``generated_at`` も呼び出し側確定値で更新する (手動再生成経路)。
+        新規 INSERT のみで、衝突時は副作用なしに ``CONFLICT`` (``snapshot=None``)
+        を返す。
         """
-        existed = False
-        if force:
-            existed = await self.exists_for_window_end(snapshot.window_end)
-            stmt = (
-                pg_insert(TrendsSnapshot)
-                .values(
-                    window_end=snapshot.window_end,
-                    bundle=snapshot.bundle,
-                    source_analysis_count=snapshot.source_analysis_count,
-                    generated_at=snapshot.generated_at,
-                )
-                .on_conflict_do_update(
-                    index_elements=["window_end"],
-                    set_={
-                        "bundle": snapshot.bundle,
-                        "source_analysis_count": snapshot.source_analysis_count,
-                        "generated_at": snapshot.generated_at,
-                    },
-                )
-                .returning(TrendsSnapshot.window_end)
+        stmt = (
+            pg_insert(TrendsSnapshot)
+            .values(
+                window_end=snapshot.window_end,
+                bundle=snapshot.bundle,
+                source_analysis_count=snapshot.source_analysis_count,
+                generated_at=snapshot.generated_at,
             )
-        else:
-            stmt = (
-                pg_insert(TrendsSnapshot)
-                .values(
-                    window_end=snapshot.window_end,
-                    bundle=snapshot.bundle,
-                    source_analysis_count=snapshot.source_analysis_count,
-                    generated_at=snapshot.generated_at,
-                )
-                .on_conflict_do_nothing(index_elements=["window_end"])
-                .returning(TrendsSnapshot.window_end)
-            )
+            .on_conflict_do_nothing(index_elements=["window_end"])
+            .returning(TrendsSnapshot.window_end)
+        )
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return SnapshotSaveResult(
@@ -515,9 +486,4 @@ class SnapshotRepository:
             source_analysis_count=snapshot.source_analysis_count,
             generated_at=snapshot.generated_at,
         )
-        status = (
-            SnapshotSaveStatus.UPDATED
-            if force and existed
-            else SnapshotSaveStatus.INSERTED
-        )
-        return SnapshotSaveResult(status=status, snapshot=saved)
+        return SnapshotSaveResult(status=SnapshotSaveStatus.INSERTED, snapshot=saved)

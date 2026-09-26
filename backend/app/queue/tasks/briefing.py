@@ -256,7 +256,6 @@ async def generate_briefing_for_category(
             ready = await ReadyForBriefing.try_advance_from(
                 week_start=input_.week_start,
                 category_id=input_.category_id,
-                force=False,
                 briefing_repo=repo,
             )
         if ready is None:

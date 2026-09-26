@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 
 class RevalidateNotifier(Protocol):
-    """notify 1 メソッドだけを持つ抽象 (CLI 用 Null 差し替え用)。"""
+    """notify 1 メソッドだけを持つ抽象。"""
 
     async def notify(self, *, tags: Sequence[str]) -> None: ...
 

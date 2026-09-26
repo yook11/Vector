@@ -149,10 +149,9 @@ class TestExecute:
         """race 敗北: BriefingConflict が返り、勝者行が上書きされない。
 
         seed_briefing_analysis で 1 件の article を用意し、先に WeeklyBriefing
-        行を INSERT (= 他 worker の勝利を模擬) してから force=False の execute を
-        呼ぶ。save() が on_conflict_do_nothing で None を返すため BriefingConflict
-        になる。article_count は articles 取得数と一致し、勝者行の headline は
-        変わらない。
+        行を INSERT (= 他 worker の勝利を模擬) してから execute を呼ぶ。save() が
+        on_conflict_do_nothing で None を返すため BriefingConflict になる。
+        article_count は articles 取得数と一致し、勝者行の headline は変わらない。
         """
         await seed_briefing_analysis(
             category_id=ai_category.id,

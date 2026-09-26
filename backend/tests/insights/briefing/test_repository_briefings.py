@@ -1,4 +1,4 @@
-"""BriefingRepository の永続化挙動テスト (UPSERT / find / exists)。"""
+"""BriefingRepository の永続化挙動テスト (save / find / exists)。"""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ class TestSave:
         assert saved.input_article_count == _SAVE_KWARGS["input_article_count"]
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_conflict_without_force(
+    async def test_returns_none_on_conflict(
         self, db_session: AsyncSession, category: Category
     ) -> None:
         repo = BriefingRepository(db_session)
@@ -116,57 +116,6 @@ class TestSave:
         )
         assert existing is not None
         assert existing.headline == "v1"
-
-    @pytest.mark.asyncio
-    async def test_force_overwrites_existing(
-        self, db_session: AsyncSession, category: Category
-    ) -> None:
-        repo = BriefingRepository(db_session)
-        await repo.save(
-            _content(headline="v1", summary="s1"),
-            category_id=category.id,
-            **_SAVE_KWARGS,
-        )
-        await db_session.commit()
-
-        new_chapters = [BriefingChapter(heading="新章", body="新本文")]
-        forced = await repo.save(
-            _content(headline="v2", summary="s2", chapters=new_chapters),
-            category_id=category.id,
-            **_SAVE_KWARGS,
-            force=True,
-        )
-        await db_session.commit()
-        assert forced is not None
-        assert forced.headline == "v2"
-        assert forced.summary == "s2"
-        assert forced.chapters == [{"heading": "新章", "body": "新本文"}]
-
-    @pytest.mark.asyncio
-    async def test_force_updates_generated_at_and_updated_at(
-        self, db_session: AsyncSession, category: Category
-    ) -> None:
-        """force=True の upsert は generated_at / updated_at を NOW() に更新する。"""
-        repo = BriefingRepository(db_session)
-        first = await repo.save(
-            _content(headline="v1"), category_id=category.id, **_SAVE_KWARGS
-        )
-        await db_session.commit()
-        assert first is not None
-        original_generated_at = first.generated_at
-        original_updated_at = first.updated_at
-
-        forced = await repo.save(
-            _content(headline="v2"),
-            category_id=category.id,
-            **_SAVE_KWARGS,
-            force=True,
-        )
-        await db_session.commit()
-        assert forced is not None
-        # force upsert は generated_at / updated_at を更新する
-        assert forced.generated_at >= original_generated_at
-        assert forced.updated_at >= original_updated_at
 
 
 class TestExists:

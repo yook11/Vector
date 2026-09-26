@@ -3,8 +3,7 @@
 検証する観点:
 - ``find_latest`` / ``find_by_window_end`` の基本挙動
 - ``exists_for_window_end``: 不在 / 存在の cheap 判定
-- ``save(force=False)``: 新規で INSERTED / 衝突で CONFLICT (副作用なし)
-- ``save(force=True)``: 新規で INSERTED / 既存で UPDATED
+- ``save``: 新規で INSERTED / 衝突で CONFLICT (副作用なし)
 - 並行 save (asyncio.gather): 1 つは INSERTED / 1 つは CONFLICT
 """
 
@@ -32,7 +31,6 @@ def _snapshot(
     *,
     source_analysis_count: int = 10,
     marker: str = "v1",
-    generated_at: datetime = _GENERATED_AT,
 ) -> TrendsSnapshot:
     return TrendsSnapshot(
         window_end=window_end,
@@ -42,7 +40,7 @@ def _snapshot(
             "category_trends": [],
         },
         source_analysis_count=source_analysis_count,
-        generated_at=generated_at,
+        generated_at=_GENERATED_AT,
     )
 
 
@@ -107,10 +105,10 @@ class TestExistsForWindowEnd:
         assert await repo.exists_for_window_end(date(2026, 5, 2)) is False
 
 
-# save (force=False)
+# save
 
 
-class TestSaveDefault:
+class TestSave:
     @pytest.mark.asyncio
     async def test_returns_snapshot_on_new_insert(
         self, db_session: AsyncSession
@@ -135,7 +133,7 @@ class TestSaveDefault:
 
     @pytest.mark.asyncio
     async def test_conflict_does_not_overwrite(self, db_session: AsyncSession) -> None:
-        """``save(force=False)`` 衝突時、既存行は更新されない。"""
+        """``save`` 衝突時、既存行は更新されない。"""
         repo = SnapshotRepository(db_session)
         await repo.save(
             _snapshot(date(2026, 5, 3), source_analysis_count=10, marker="first")
@@ -151,60 +149,6 @@ class TestSaveDefault:
         assert existing is not None
         assert existing.source_analysis_count == 10
         assert existing.bundle["marker"] == "first"
-
-
-# save (force=True) — UPSERT 経路
-
-
-class TestSaveForce:
-    @pytest.mark.asyncio
-    async def test_inserts_when_absent(self, db_session: AsyncSession) -> None:
-        repo = SnapshotRepository(db_session)
-        result = await repo.save(_snapshot(date(2026, 5, 3)), force=True)
-        await db_session.commit()
-        assert result.status == SnapshotSaveStatus.INSERTED
-        assert result.snapshot is not None
-
-        existing = await repo.find_by_window_end(date(2026, 5, 3))
-        assert existing is not None
-        assert existing.bundle["marker"] == "v1"
-
-    @pytest.mark.asyncio
-    async def test_overwrites_existing(self, db_session: AsyncSession) -> None:
-        repo = SnapshotRepository(db_session)
-        first_generated_at = _GENERATED_AT
-        first = await repo.save(
-            _snapshot(
-                date(2026, 5, 3),
-                source_analysis_count=10,
-                marker="first",
-                generated_at=first_generated_at,
-            )
-        )
-        await db_session.commit()
-        assert first.snapshot is not None
-
-        second_generated_at = first_generated_at + timedelta(hours=1)
-        second = await repo.save(
-            _snapshot(
-                date(2026, 5, 3),
-                source_analysis_count=99,
-                marker="second",
-                generated_at=second_generated_at,
-            ),
-            force=True,
-        )
-        await db_session.commit()
-        assert second.status == SnapshotSaveStatus.UPDATED
-        assert second.snapshot is not None
-        # force=True は呼び出し側が確定した generated_at で上書きする
-        assert second.snapshot.generated_at == second_generated_at
-        assert second.snapshot.generated_at != first_generated_at
-
-        existing = await repo.find_by_window_end(date(2026, 5, 3))
-        assert existing is not None
-        assert existing.source_analysis_count == 99
-        assert existing.bundle["marker"] == "second"
 
 
 # 並行 save 統合テスト (Phase 1-3 同型)

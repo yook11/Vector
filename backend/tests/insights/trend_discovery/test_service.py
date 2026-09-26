@@ -1,18 +1,15 @@
 """TrendDiscoveryService.execute の挙動テスト。
 
 検証する観点:
-- execute(ready, force=False) 正常系: TrendDiscoveryCompleted を返し
-  snapshot を 1 行保存
+- execute(ready) 正常系: TrendDiscoveryCompleted を返し snapshot を 1 行保存
 - 集計対象記事 0 件: snapshot を保存せず SkippedNoTargetArticles を返す
-- execute(ready, force=True) 既存上書き: TrendDiscoveryCompleted を返し
-  source_analysis_count を反映 (`generated_at` も更新)
 - bundle 内容: camelCase payload として保存 (契約適合)。全カテゴリ 1 セクション
   ずつ含み、出現回数 / 伸び率の 2 ランキングがそれぞれの母集団で確定する
 - source_analysis_count: window 内の analysis 件数 (全カテゴリ合算)
 - 各ランキングは TOP_N_PER_RANKING 件で truncate
 - 上位 mention に key_point / related mention の文脈が付き、両ランキングに載る
   mention は同じ enrich 済みインスタンスを共有する
-- race 敗北 (force=False で同時 INSERT 競合): 読み戻しせず
+- race 敗北 (同時 INSERT 競合): 読み戻しせず
   TrendDiscoveryConflict を返す
 
 既存 snapshot skip は ``ReadyForTrendDiscovery.try_advance_from`` 側に移管されている。
@@ -55,10 +52,8 @@ JST = ZoneInfo("Asia/Tokyo")
 WINDOW_END = date(2026, 4, 20)
 
 
-def _ready(
-    window_end: date = WINDOW_END, *, force: bool = False
-) -> ReadyForTrendDiscovery:
-    return ReadyForTrendDiscovery(window_end=window_end, force=force)
+def _ready(window_end: date = WINDOW_END) -> ReadyForTrendDiscovery:
+    return ReadyForTrendDiscovery(window_end=window_end)
 
 
 def _jst(year: int, month: int, day: int, *, hour: int = 12) -> datetime:
@@ -120,55 +115,12 @@ class TestExecute:
         assert result.window_end == WINDOW_END
         assert result.source_analysis_count == 10
         assert result.completed_category_count == len(sample_categories)
-        assert result.updated is False
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
         assert snapshot is not None
         assert snapshot.source_analysis_count == 10
         assert snapshot.bundle["windowEnd"] == WINDOW_END.isoformat()
-
-    @pytest.mark.asyncio
-    async def test_overwrites_when_force(
-        self,
-        db_session: AsyncSession,
-        session_factory: async_sessionmaker[AsyncSession],
-        sample_categories: list[Category],
-        seed_analysis: SeedAnalysis,
-    ) -> None:
-        """既存あり + force=True: TrendDiscoveryCompleted を返し既存行を上書きする。"""
-        cat = sample_categories[0]
-        for i in range(10):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 14, hour=i),
-                mentions=[("NVIDIA", "company")],
-            )
-        await db_session.commit()
-
-        service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
-
-        # 追加 seed して再生成
-        for i in range(2):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 15, hour=i),
-                mentions=[("NVIDIA", "company")],
-            )
-        await db_session.commit()
-
-        result = await service.execute(_ready(force=True))
-        assert isinstance(result, TrendDiscoveryCompleted)
-        assert result.source_analysis_count == 12
-        assert result.updated is True
-
-        # キャッシュを破棄して最新値を読む
-        db_session.expire_all()
-        repo = SnapshotRepository(db_session)
-        snapshot = await repo.find_by_window_end(WINDOW_END)
-        assert snapshot is not None
-        assert snapshot.source_analysis_count == 12
 
     @pytest.mark.asyncio
     async def test_bundle_contains_all_categories(

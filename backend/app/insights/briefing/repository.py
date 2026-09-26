@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -139,15 +139,12 @@ class BriefingRepository:
         category_id: int,
         model_name: str,
         input_article_count: int,
-        force: bool = False,
     ) -> WeeklyBriefing | None:
         """検証済み briefing 内容を ``weekly_briefings`` に永続化する。
 
         入口を ``WeeklyBriefingContent`` に限定し「domain 検証を通った内容だけが
         保存される」を型で保証する。VO → 行への写像は本 method の責務。
-        ``force=False`` (default) は新規 INSERT のみで、race 敗北 (既存あり) は
-        副作用なしに ``None`` を返す。``force=True`` は既存行を上書きし
-        ``generated_at`` / ``updated_at`` を ``NOW()`` に更新する。
+        新規 INSERT のみで、race 敗北 (既存あり) は副作用なしに ``None`` を返す。
         """
         values = {
             "week_start_date": week_start,
@@ -166,31 +163,10 @@ class BriefingRepository:
             "model_name": model_name,
             "input_article_count": input_article_count,
         }
-        if force:
-            stmt = (
-                pg_insert(WeeklyBriefing)
-                .values(**values)
-                .on_conflict_do_update(
-                    constraint="uq_weekly_briefing",
-                    set_={
-                        "headline": values["headline"],
-                        "summary": values["summary"],
-                        "chapters": values["chapters"],
-                        "key_articles": values["key_articles"],
-                        "watch_points": values["watch_points"],
-                        "model_name": model_name,
-                        "input_article_count": input_article_count,
-                        "generated_at": func.now(),
-                        "updated_at": func.now(),
-                    },
-                )
-                .returning(WeeklyBriefing)
-            )
-        else:
-            stmt = (
-                pg_insert(WeeklyBriefing)
-                .values(**values)
-                .on_conflict_do_nothing(constraint="uq_weekly_briefing")
-                .returning(WeeklyBriefing)
-            )
+        stmt = (
+            pg_insert(WeeklyBriefing)
+            .values(**values)
+            .on_conflict_do_nothing(constraint="uq_weekly_briefing")
+            .returning(WeeklyBriefing)
+        )
         return (await self._session.execute(stmt)).scalar_one_or_none()

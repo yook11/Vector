@@ -8,13 +8,13 @@ Pattern A' での Stage:
 3 段階トランザクションパターン (LLM 呼出が 30-60s かかるため):
 1. read tx: articles + category 取得
 2. LLM 呼出 (no tx): DB connection を占有しない
-3. write tx: UPSERT
+3. write tx: INSERT
 
 例外:
 - 例外は捕まえずに伝播させる (taskiq の retry / failure tracking に委ねる:
   `feedback_failure_visibility.md`)
 - 「articles 0 件」は業務正常状態として ``Outcome.skipped()`` で表現する
-- race 敗北 (force=False で同時 INSERT 競合) は読み戻さず ``BriefingConflict``
+- race 敗北 (同時 INSERT 競合) は読み戻さず ``BriefingConflict``
   を返す (trend_discovery と同型)
 """
 
@@ -50,7 +50,7 @@ class GeneratedBriefing:
     """briefing を生成・保存した (または articles 0 件で生成スキップした) outcome。
 
     ``persisted=False`` は「articles 0 件で生成スキップ」の正常分岐を表す。
-    既存 briefing あり + force=False の skip は ``Ready.try_advance_from`` で
+    既存 briefing ありの skip は ``Ready.try_advance_from`` で
     吸収済みのためここには現れない。
     """
 
@@ -124,7 +124,7 @@ class WeeklyBriefingService:
             articles=articles,
         )
 
-        # --- write tx: UPSERT ---
+        # --- write tx: INSERT ---
         async with self._session_factory() as session:
             briefing_repo = BriefingRepository(session)
             saved = await briefing_repo.save(
@@ -133,7 +133,6 @@ class WeeklyBriefingService:
                 category_id=ready.category_id,
                 model_name=self._llm.MODEL,
                 input_article_count=len(articles),
-                force=ready.force,
             )
             # audit は INSERT 勝者だけが焼く (saved is None = race 敗北は沈黙、
             # 勝者プロセスが SUCCEEDED を 1 行付ける構造で完成行の重複を防ぐ)。
@@ -148,7 +147,7 @@ class WeeklyBriefingService:
             await session.commit()
 
         if saved is None:
-            # race 敗北 (force=False で他 worker が先行 INSERT): 読み戻さず
+            # race 敗北 (他 worker が先行 INSERT): 読み戻さず
             # Conflict を返す。revalidate 通知は勝者側が行う。
             logger.info(
                 "briefing_concurrent_write",
@@ -167,7 +166,6 @@ class WeeklyBriefingService:
             category_id=ready.category_id,
             category_slug=category.slug,
             article_count=len(articles),
-            forced=ready.force,
         )
         # 永続化成功後に frontend のキャッシュ無効化を通知する。tag は frontend の
         # lib/cache/tags.ts と一致させる。notifier 内部で warn 降格するため

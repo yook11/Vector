@@ -3,9 +3,9 @@
 Trend Discovery の ``ReadyForTrendDiscovery`` と同じ pattern A'
 (``feedback_taskiq_basemodel_required.md``, typed-pipeline spec):
 
-- 入口 task (cron / CLI) が cron/CLI 引数から構築する Ready
+- 入口 task (cron) が cron 引数から構築する Ready
 - ``model_validator`` で ``week_start.weekday() == 0`` を構造的に保証
-- ``try_advance_from`` で「既存 briefing あり + force=False → None」の業務正常 skip
+- ``try_advance_from`` で「既存 briefing あり → None」の業務正常 skip
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ class ReadyForBriefing(BaseModel):
     Invariants:
     - ``week_start.weekday() == 0`` (JST 月曜)
     - ``category_id > 0``
-    - ``force``: 既存 briefing を上書きする意図の明示
     - frozen
     """
 
@@ -39,7 +38,6 @@ class ReadyForBriefing(BaseModel):
 
     week_start: date
     category_id: int = Field(gt=0)
-    force: bool = False
 
     @model_validator(mode="after")
     def _ensure_monday(self) -> Self:
@@ -56,23 +54,19 @@ class ReadyForBriefing(BaseModel):
         *,
         week_start: date,
         category_id: int,
-        force: bool,
         briefing_repo: BriefingExistenceProtocol,
     ) -> ReadyForBriefing | None:
         """Briefing 生成へ advance できるかの判定。
 
         Precondition:
-        - ``force=False``: 同 (week, category) の briefing 未生成
-        - ``force=True``: 既存有無に関わらず通す (上書き経路)
+        - 同 (week, category) の briefing 未生成
 
         Returns:
             進める場合: ``ReadyForBriefing``
-            進めない場合: ``None`` (既存あり + force=False、業務正常状態)
+            進めない場合: ``None`` (既存あり、業務正常状態)
         """
-        candidate = cls(week_start=week_start, category_id=category_id, force=force)
-        if not force and await briefing_repo.exists(
-            week_start=week_start, category_id=category_id
-        ):
+        candidate = cls(week_start=week_start, category_id=category_id)
+        if await briefing_repo.exists(week_start=week_start, category_id=category_id):
             logger.info(
                 "briefing_skipped_existing",
                 week_start=week_start.isoformat(),

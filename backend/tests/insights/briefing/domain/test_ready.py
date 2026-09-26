@@ -36,38 +36,21 @@ class TestTryAdvanceFrom:
         ready = await ReadyForBriefing.try_advance_from(
             week_start=date(2026, 4, 20),
             category_id=1,
-            force=False,
             briefing_repo=repo,
         )
         assert ready is not None
         assert ready.week_start == date(2026, 4, 20)
         assert ready.category_id == 1
-        assert ready.force is False
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_existing_and_not_forced(self) -> None:
+    async def test_returns_none_when_existing(self) -> None:
         repo = FakeRepo(exists=True)
         ready = await ReadyForBriefing.try_advance_from(
             week_start=date(2026, 4, 20),
             category_id=1,
-            force=False,
             briefing_repo=repo,
         )
         assert ready is None
-
-    @pytest.mark.asyncio
-    async def test_returns_ready_when_forced_and_existing(self) -> None:
-        repo = FakeRepo(exists=True)
-        ready = await ReadyForBriefing.try_advance_from(
-            week_start=date(2026, 4, 20),
-            category_id=1,
-            force=True,
-            briefing_repo=repo,
-        )
-        assert ready is not None
-        assert ready.force is True
-        # force=True の経路では exists を呼ばないことを確認
-        repo.exists.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_non_monday_raises_before_repo_call(self) -> None:
@@ -77,7 +60,6 @@ class TestTryAdvanceFrom:
             await ReadyForBriefing.try_advance_from(
                 week_start=date(2026, 4, 21),
                 category_id=1,
-                force=False,
                 briefing_repo=repo,
             )
         repo.exists.assert_not_awaited()

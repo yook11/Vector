@@ -7,7 +7,7 @@
 - 集計対象の window は ``[current_start, current_end)`` を JST 00:00 起点
   で計算し、UTC-aware datetime に変換して repository に渡す
 - snapshot は 1 単位保存が責務 (feedback_snapshot_responsibility.md)
-- 例外は捕まえず raise する (CLI / Task の retry に委ねる:
+- 例外は捕まえず raise する (Task の retry に委ねる:
   feedback_failure_visibility.md)
 
 Pattern A' での Stage F:
@@ -16,7 +16,7 @@ Pattern A' での Stage F:
   Ready 側で吸収済み
 - ``execute(ready)`` は集計対象記事の件数を先に確認し、0 件なら保存せず
   ``SkippedNoTargetArticles`` を返す
-- race 敗北 (force=False で同時 INSERT 競合) は読み戻しせず
+- race 敗北 (同時 INSERT 競合) は読み戻しせず
   ``TrendDiscoveryConflict`` を返す
 """
 
@@ -64,8 +64,7 @@ logger = structlog.get_logger(__name__)
 _WEEK = timedelta(days=7)
 
 # 生成成功後に frontend へ revalidate を打つ cache tag。frontend の
-# lib/cache/tags.ts (cacheTags.trends) と一致させること。task / CLI 双方が
-# 同値を使うよう単一定義する (誤変更を防ぐため不変 tuple)。
+# lib/cache/tags.ts (cacheTags.trends) と一致させること。
 TRENDS_REVALIDATE_TAGS: tuple[str, ...] = ("trends",)
 
 
@@ -78,14 +77,13 @@ TRENDS_REVALIDATE_TAGS: tuple[str, ...] = ("trends",)
 class TrendDiscoveryCompleted:
     """trend discovery が完了し、snapshot を保存した。
 
-    既存 snapshot ありかつ ``force=False`` の skip ケースは ``Ready.try_advance_from``
-    で吸収済みのため Service.execute の戻り値からは消えている (Pattern A')。
+    既存 snapshot ありの skip ケースは ``Ready.try_advance_from`` で吸収済みのため
+    Service.execute の戻り値からは消えている (Pattern A')。
     """
 
     window_end: date
     source_analysis_count: int
     completed_category_count: int
-    updated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +133,6 @@ class TrendDiscoveryService:
                 snapshot_repo = SnapshotRepository(session)
                 ready = await ReadyForTrendDiscovery.try_advance_from(
                     window_end=window_end,
-                    force=False,
                     snapshot_repo=snapshot_repo,
                 )
         except Exception as exc:
@@ -145,8 +142,6 @@ class TrendDiscoveryService:
                 outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
                 window_start=window_start,
                 window_end=window_end,
-                trigger="cron",
-                requested_update=False,
                 exc=exc,
             )
             raise
@@ -167,8 +162,6 @@ class TrendDiscoveryService:
                 outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
                 window_start=window_start,
                 window_end=window_end,
-                trigger="cron",
-                requested_update=False,
                 exc=exc,
             )
             raise
@@ -188,19 +181,12 @@ class TrendDiscoveryService:
             )
             return
 
-        outcome_code = (
-            TrendDiscoveryOutcomeCode.RUN_UPDATED
-            if isinstance(outcome, TrendDiscoveryCompleted) and outcome.updated
-            else TrendDiscoveryOutcomeCode.RUN_COMPLETED
-        )
         await append_trend_discovery_run_event_best_effort(
             self._session_factory,
             event_type=EventType.SUCCEEDED,
-            outcome_code=outcome_code,
+            outcome_code=TrendDiscoveryOutcomeCode.RUN_COMPLETED,
             window_start=window_start,
             window_end=outcome.window_end,
-            trigger="cron",
-            requested_update=False,
             source_analysis_count=outcome.source_analysis_count,
             completed_category_count=outcome.completed_category_count,
         )
@@ -210,7 +196,6 @@ class TrendDiscoveryService:
             window_end=outcome.window_end.isoformat(),
             source_analysis_count=outcome.source_analysis_count,
             category_count=outcome.completed_category_count,
-            updated=outcome.updated,
         )
         await notifier.notify(tags=TRENDS_REVALIDATE_TAGS)
 
@@ -225,7 +210,7 @@ class TrendDiscoveryService:
         - ``current  = [window_end - 7d, window_end)``
         - ``previous = [window_end - 14d, window_end - 7d)`` (伸び率の前週比較用)
 
-        race 敗北 (``force=False`` 経路で同時 INSERT 競合) は読み戻しせず
+        race 敗北 (同時 INSERT 競合) は読み戻しせず
         ``TrendDiscoveryConflict`` を返す。
         """
         async with self._session_factory() as session:
@@ -241,7 +226,6 @@ class TrendDiscoveryService:
                 logger.info(
                     "trend_discovery_skipped_no_target_articles",
                     window_end=ready.window_end.isoformat(),
-                    forced=ready.force,
                 )
                 return SkippedNoTargetArticles(window_end=ready.window_end)
 
@@ -280,7 +264,7 @@ class TrendDiscoveryService:
                 source_analysis_count=source_count,
                 generated_at=generated_at,
             )
-            save_result = await snapshot_repo.save(snapshot, force=ready.force)
+            save_result = await snapshot_repo.save(snapshot)
             await session.commit()
 
             if save_result.status == SnapshotSaveStatus.CONFLICT:
@@ -301,14 +285,11 @@ class TrendDiscoveryService:
                 window_end=ready.window_end.isoformat(),
                 category_count=completed_category_count,
                 source_analysis_count=source_count,
-                forced=ready.force,
-                save_status=save_result.status.value,
             )
             return TrendDiscoveryCompleted(
                 window_end=ready.window_end,
                 source_analysis_count=source_count,
                 completed_category_count=completed_category_count,
-                updated=save_result.status == SnapshotSaveStatus.UPDATED,
             )
 
     @staticmethod
