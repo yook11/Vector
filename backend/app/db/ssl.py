@@ -10,9 +10,8 @@ backend (SQLAlchemy + asyncpg) を RDS に verify-full (CA + ホスト名検証)
   そのまま渡ると connect 時に ``TypeError`` になる。よって URL から ssl 系
   param を取り除き、SSL は ``connect_args={"ssl": SSLContext}`` に正規化する。
 - ``ssl.create_default_context`` は ``CERT_REQUIRED`` + ``check_hostname=True``
-  (= verify-full 相当)。CA は ``certifi`` バンドルを明示する
-  (asyncpg 0.31 は ``sslrootcert=system`` 非対応)。RDS の CA は certifi に無い
-  private root なので、certifi に**足す** (置き換えない)。
+  (= verify-full 相当)。CA は RDS の regional bundle (root 3 本) だけを信頼し、
+  公開の認証局は信頼しない。
 - ``sslmode=require`` でも verify-full に格上げする。
   **平文にしたいのは ``sslmode=disable`` のときだけ**。TLS-without-verification
   モードは設計上存在しない。
@@ -20,7 +19,7 @@ backend (SQLAlchemy + asyncpg) を RDS に verify-full (CA + ホスト名検証)
 接続文字列のみで dev (docker, sslmode 無し → SSL 無効) と本番 (RDS,
 ``?sslmode=require`` → verify-full) を切り替えられる。
 
-import は標準ライブラリ + ``certifi`` + ``sqlalchemy`` のみに閉じるため、
+import は標準ライブラリ + ``sqlalchemy`` のみに閉じるため、
 設定読込の副作用や循環依存なしにEngine生成とmigrationから共有できる。
 """
 
@@ -30,11 +29,10 @@ import ssl
 from pathlib import Path
 from typing import Any
 
-import certifi
 from sqlalchemy.engine import make_url
 
-# RDS の CA は自己署名の private root で certifi に含まれない。sslmode=require でも
-# verify-full に格上げするため、足さないと AWS では接続そのものが成立しない。
+# DB 接続で信頼するのはこの RDS の root だけ。RDS の証明書は AWS 独自の private root
+# が発行するので、公開の認証局は検証に使わない。
 #
 # 使うリージョンの 3 root (RSA2048 / RSA4096 / ECC384) だけを入れる。global bundle は
 # 全リージョン 108 root を無条件に信頼することになるので採らない。リージョンを
@@ -148,17 +146,12 @@ def clean_db_url(raw_url: str) -> str:
 def _verify_full_context() -> ssl.SSLContext:
     """verify-full (CA + ホスト名検証) の ``SSLContext`` を都度生成する。
 
-    ``create_default_context`` は ``CERT_REQUIRED`` + ``check_hostname=True``。
-    CA は certifi バンドルを明示する (asyncpg 0.31 は ``sslrootcert=system``
-    非対応)。**module キャッシュしない**: fork する worker で親→子に OpenSSL
+    ``create_default_context`` は ``cafile`` を渡すとそのファイルだけを読み、
+    ``CERT_REQUIRED`` + ``check_hostname=True`` を既定で有効にする。
+    RDS の CA はリージョンの全利用者に証明書を出すため、本人確認はホスト名の
+    検証が担う。**module キャッシュしない**: fork する worker で親→子に OpenSSL
     state を共有させないため (engine は WORKER_STARTUP = fork 後生成だが、
     module-level singleton を避けて親で先に作られる経路自体を排除する)。
     engine 生成はプロセス毎に数回のみで CA 読み込みコストは無視できる。
-
-    RDS の root は certifi の集合に**足す**。引かないので Neon 側の検証経路は
-    変わらない。条件分岐を持たないので Fly でもこの 3 root を信頼するが、
-    この CA は RDS のエンドポイントにしか証明書を発行しない。
     """
-    context = ssl.create_default_context(cafile=certifi.where())
-    context.load_verify_locations(cafile=_RDS_CA_BUNDLE)
-    return context
+    return ssl.create_default_context(cafile=_RDS_CA_BUNDLE)
