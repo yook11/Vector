@@ -191,8 +191,11 @@ class TestSqlNodeAssembly:
         fields = extract_exception_fields(outer)
         assert fields["error_class"] == "app.db.errors.DatabaseConstraintError"
         assert "error_details" not in fields
-        assert fields["causes"][0]["error_class"] == "sqlalchemy.exc.IntegrityError"
-        assert fields["causes"][0]["error_details"] == {
+        assert (
+            fields["related_exceptions"][0]["exception"]["error_class"]
+            == "sqlalchemy.exc.IntegrityError"
+        )
+        assert fields["related_exceptions"][0]["exception"]["error_details"] == {
             "kind": "postgresql",
             "sqlstate": "23505",
         }
@@ -215,7 +218,7 @@ class TestSqlNodeAssembly:
         sql_error.__cause__ = adapter
         fields = extract_exception_fields(sql_error)
         assert fields["error_details"]["constraint_name"] == "articles_key"
-        assert "causes" not in fields
+        assert "related_exceptions" not in fields
         assert "synthetic-private" not in json.dumps(fields)
 
     def test_unknown_sql_driver_cannot_bypass_parameter_protection(self) -> None:
@@ -224,5 +227,5 @@ class TestSqlNodeAssembly:
         exc = IntegrityError("INSERT ...", ("synthetic-private-parameter",), driver)
         exc.__cause__ = driver
         fields = extract_exception_fields(exc)
-        assert "causes" not in fields
+        assert "related_exceptions" not in fields
         assert "synthetic-private-parameter" not in json.dumps(fields)

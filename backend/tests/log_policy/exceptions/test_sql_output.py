@@ -49,11 +49,13 @@ def test_sql_details_are_redacted_in_json_renderer(configure_chain) -> None:
 def test_exception_details_cannot_be_injected(source, configure_chain) -> None:
     """allow宣言があっても入力経路の診断辞書を受け入れない。"""
     capture = configure_chain()
-    rules = LogPolicyRules(None, frozenset({"error_details", "causes", "errorDetails"}))
+    rules = LogPolicyRules(
+        None, frozenset({"error_details", "related_exceptions", "errorDetails"})
+    )
     logger = policy_logger("test", rules)
     payload = {
         "error_details": {"unknown": "synthetic-private"},
-        "causes": [{"error_message": "synthetic-private"}],
+        "related_exceptions": [{"error_message": "synthetic-private"}],
         "errorDetails": {"unknown": "synthetic-private"},
     }
     if source == "argument":
@@ -65,7 +67,7 @@ def test_exception_details_cannot_be_injected(source, configure_chain) -> None:
         logger.error("failed")
     assert "synthetic-private" not in json.dumps(capture.entries[0])
     assert "error_details" not in capture.entries[0]
-    assert "causes" not in capture.entries[0]
+    assert "related_exceptions" not in capture.entries[0]
 
 
 def test_generated_details_replace_injected_details(configure_chain) -> None:
@@ -100,6 +102,6 @@ def test_cause_details_are_redacted() -> None:
         "error",
         {"event": "failed", "exc_info": outer},
     )
-    assert output["causes"][0]["error_details"]["constraint_name"] == (
-        "password=[redacted:credential]"
-    )
+    assert output["related_exceptions"][0]["exception"]["error_details"][
+        "constraint_name"
+    ] == ("password=[redacted:credential]")

@@ -11,6 +11,8 @@ Implementation: Partially implemented。Assessmentの入口・終端、初期化
 
 変更状況: mask・sanitize と文字列内の認証情報の置換は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。本書で sanitize を既知形式の秘密の検出とする記述は旧契約。
 
+原因チェーンの形式と例外の上限・予算は[例外の変換と値の検査の責任分担](./logging-exception-conversion-policy.md)を優先する。SDK固有の原因構造もその形式に合わせる。
+
 ## Problem
 
 AI分析の失敗ログに例外型しか残らず、初期化・入力構築・通信・応答解析・保存のどこで何が起きたか調査できない。分析結果の全文を見ることよりも、失敗の原因、発生箇所、実行条件、対処を追えることを優先する。
