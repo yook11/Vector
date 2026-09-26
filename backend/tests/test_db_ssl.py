@@ -311,11 +311,10 @@ class TestPasswordProvider:
 
 
 class TestEngineResilienceDefaults:
-    """factory が全 engine に Neon scale-to-zero resilience を既定付与する不変条件。
+    """factory が全 engine に接続の健全性の既定を付与する不変条件。
 
-    呼び出し側が pool_* を渡さなくても、idle 接続の stale 化 (Neon autosuspend)
-    に耐える設定が付くことを保証する。worker engine はこの既定にのみ依存するため
-    (lifecycle.py が pool_* を渡さない)、ここが worker の保証点でもある。
+    既定は pre_ping / recycle / timeout。worker engine も recycle をこの既定に
+    任せるため、ここが worker の保証点でもある。
     """
 
     def test_pre_ping_enabled_by_default(self) -> None:

@@ -13,7 +13,6 @@ from app.db.engine import (
     API_POOL_MAX_OVERFLOW,
     API_POOL_SIZE,
     API_SERVICE_NAME,
-    WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
     create_api_engine,
     create_cli_engine,
@@ -158,7 +157,6 @@ def test_create_worker_engine_passes_only_usage_kwargs(
         echo=False,
         pool_size=pool_size,
         max_overflow=max_overflow,
-        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
     )
 
 

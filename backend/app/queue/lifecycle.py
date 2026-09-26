@@ -25,8 +25,8 @@ from taskiq_redis import RedisStreamBroker
 from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
 from app.config import settings
 from app.db.engine import (
+    DEFAULT_POOL_RECYCLE,
     DEFAULT_POOL_TIMEOUT,
-    WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
     create_worker_engine,
     worker_service_name,
@@ -108,9 +108,8 @@ def _register_worker_lifecycle(
         # service_name で 1 回ずつ呼ばれる。
         service_name = worker_service_name(label)
         setup_logfire(service_name)
-        # pool sizing は WORKER_POOL_SIZING (label 別)、recycle=240 で worker のみ
-        # override。resilience (pre_ping / pool_timeout) は Engine 共通の
-        # 既定 (Neon scale-to-zero 対策)。
+        # pool sizing は WORKER_POOL_SIZING (label 別)。recycle / pre_ping /
+        # pool_timeout は Engine 共通の既定。
         state.engine = create_worker_engine(settings, label)
         state.session_factory = caller_managed_session_factory(state.engine)
         # worker engine の DB query を 1 query = 1 span として Logfire に乗せる。
@@ -122,7 +121,7 @@ def _register_worker_lifecycle(
             service_name=service_name,
             pool_size=pool_size,
             max_overflow=max_overflow,
-            pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
+            pool_recycle=DEFAULT_POOL_RECYCLE,
             pool_timeout=DEFAULT_POOL_TIMEOUT,
         )
         register_pool_metrics(

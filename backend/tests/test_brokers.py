@@ -15,7 +15,7 @@ from taskiq import TaskiqEvents, TaskiqState
 import app.db.engine as db_engine
 from app.config import settings
 from app.db.engine import (
-    WORKER_POOL_RECYCLE_SECONDS,
+    DEFAULT_POOL_RECYCLE,
     WORKER_POOL_SIZING,
     create_worker_engine,
     worker_service_name,
@@ -116,10 +116,9 @@ class TestWorkerPoolSizing:
         pool = create_worker_engine(settings, "trend_discovery").sync_engine.pool
         assert (pool.size(), pool._max_overflow) == (2, 2)
 
-    def test_worker_recycle_overrides_factory_default(self) -> None:
-        # worker は recycle=240 で factory 既定 (3600) を override (autosuspend 手前)
+    def test_worker_recycle_uses_factory_default(self) -> None:
         pool = create_worker_engine(settings, "briefing").sync_engine.pool
-        assert pool._recycle == WORKER_POOL_RECYCLE_SECONDS == 240
+        assert pool._recycle == DEFAULT_POOL_RECYCLE == 3600
 
 
 class TestWorkerApplicationName:
