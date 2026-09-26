@@ -5,7 +5,7 @@ import { poolConfigFromUrl } from "./pool-ssl";
 describe("poolConfigFromUrl", () => {
   it("sslmode=require は ssl 検証を有効化し sslmode を connectionString から除く", () => {
     const { connectionString, ssl } = poolConfigFromUrl(
-      "postgresql://u:p@ep-x.aws.neon.tech/neondb?sslmode=require",
+      "postgresql://u:p@db.example.ap-northeast-1.rds.amazonaws.com/vector?sslmode=require",
     );
 
     expect(ssl).toEqual({ rejectUnauthorized: true });

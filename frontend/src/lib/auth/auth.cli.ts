@@ -30,7 +30,7 @@ import { authRateLimit, passwordPolicy } from "@/lib/auth/auth-config";
 import { poolConfigFromUrl } from "@/lib/auth/pool-ssl";
 import { requireEnv } from "@/lib/env";
 
-// CLI からも Neon (SSL 必須) に migrate するため、runtime (auth.ts) と同じ
+// CLI からも RDS (TLS 必須) に migrate するため、runtime (auth.ts) と同じ
 // SSL 変換を通す。詳細は pool-ssl.ts を参照。
 //
 // runtime と違い IAM 認証は通さない (db-iam-auth.ts ではなくこちら)。schema を
