@@ -42,7 +42,8 @@ def reload_app_with_env(
             # ため sslmode=require 付き URL を入れ、migration URL は外す。
             monkeypatch.setenv(
                 "DATABASE_URL",
-                "postgresql+asyncpg://vector_app:strongpassword@db.neon.tech/neondb"
+                "postgresql+asyncpg://vector_app:strongpassword"
+                "@db.example.ap-northeast-1.rds.amazonaws.com/vector"
                 "?sslmode=require",
             )
             monkeypatch.delenv("MIGRATION_DATABASE_URL", raising=False)

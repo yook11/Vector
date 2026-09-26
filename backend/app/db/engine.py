@@ -28,9 +28,6 @@ WORKER_POOL_SIZING: dict[str, tuple[int, int]] = {
     "briefing": (5, 5),
     "agent": (5, 5),
 }
-# Neon autosuspend (既定 300s) の手前で接続を張り替え、pre_ping 依存を
-# 減らす (60s マージン)。共通既定 (3600) を worker のみ override する。
-WORKER_POOL_RECYCLE_SECONDS = 240
 DEFAULT_POOL_RECYCLE = 3600
 DEFAULT_POOL_TIMEOUT = 5
 
@@ -130,7 +127,6 @@ def create_worker_engine(settings: _RuntimeDatabaseSettings, label: str) -> Asyn
         echo=False,
         pool_size=pool_size,
         max_overflow=max_overflow,
-        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
     )
 
 

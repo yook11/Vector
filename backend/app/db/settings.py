@@ -131,6 +131,5 @@ def _require_url_tls(url: str, env_name: str) -> None:
         raise ValueError(
             f"in production {env_name} must use a TLS sslmode "
             f"({sorted(_PRODUCTION_REQUIRED_SSLMODES)}), got {sslmode!r}; "
-            "append `?sslmode=require` (connections to Neon cross the "
-            "public internet)"
+            "append `?sslmode=require`"
         )
