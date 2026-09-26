@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.collection.article_acquisition.consumer import AcquisitionResult
+from app.collection.article_acquisition.consumer import AcquisitionSucceeded
+from app.collection.article_acquisition.consumer_failure_classification import (
+    NoRetryAcquisition,
+    RetryAcquisition,
+)
 from app.lambda_handlers.acquisition import handler as entrypoint
 from tests.lambda_handlers.acquisition.test_message import message
 
@@ -17,7 +21,7 @@ from tests.lambda_handlers.acquisition.test_message import message
 def runtime(monkeypatch):
     state = SimpleNamespace(
         consumer=SimpleNamespace(
-            consume=AsyncMock(return_value=AcquisitionResult("acquired"))
+            consume=AsyncMock(return_value=AcquisitionSucceeded(0))
         ),
         log=Mock(),
     )
@@ -75,3 +79,29 @@ def test_diagnostic_failure_preserves_completed_result(runtime):
     assert entrypoint.handler(
         {"Records": [{"messageId": "done", "body": json.dumps(message())}]}, None
     ) == {"batchItemFailures": []}
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected_failures", "disposition"),
+    [
+        (RetryAcquisition, [{"itemIdentifier": "failed"}], "batch_item_failure"),
+        (NoRetryAcquisition, [], "completed"),
+    ],
+)
+def test_acquisition_failure_is_redelivered_only_when_decided_to_retry(
+    runtime, failure_type, expected_failures, disposition
+):
+    """取得の失敗は再配信と判断したときだけ返し、それ以外は受信完了にする。"""
+    runtime.consumer.consume.return_value = failure_type(
+        RuntimeError("private-failure-detail")
+    )
+    response = entrypoint.handler(
+        {"Records": [{"messageId": "failed", "body": json.dumps(message())}]}, None
+    )
+    assert response == {"batchItemFailures": expected_failures}
+    fields = runtime.log.info.call_args.kwargs
+    assert fields["result"] == "failed"
+    assert fields["code"] == "processing_failed"
+    assert fields["error_class"] == "builtins.RuntimeError"
+    assert fields["message_disposition"] == disposition
+    assert "private-failure-detail" not in repr(runtime.log.mock_calls)

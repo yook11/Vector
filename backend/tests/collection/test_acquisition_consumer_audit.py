@@ -11,7 +11,14 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_acquisition.consumer import ArticleAcquisitionConsumer
+from app.collection.article_acquisition.consumer import (
+    AcquisitionSucceeded,
+    ArticleAcquisitionConsumer,
+)
+from app.collection.article_acquisition.consumer_failure_classification import (
+    NoRetryAcquisition,
+    RetryAcquisition,
+)
 from app.collection.article_acquisition.errors import RssFeedErrors
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
@@ -126,13 +133,13 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
     monkeypatch.setattr(RssReader, "fetch", reader)
     monkeypatch.setitem(SOURCES, VentureBeatSource.name, FailingSource)
 
-    with pytest.raises(RuntimeError) as caught:
-        await ArticleAcquisitionConsumer(session_factory, ReaderTools).consume(
-            _request(vb_source)
-        )
+    result = await ArticleAcquisitionConsumer(session_factory, ReaderTools).consume(
+        _request(vb_source)
+    )
 
-    assert caught.value is error
-    assert caught.value.__cause__ is cause
+    assert isinstance(result, RetryAcquisition)
+    assert result.error is error
+    assert result.error.__cause__ is cause
     assert len(saved_ids) == 1
     for model in (AnalyzableArticleRecord, IncompleteArticle):
         assert not (
@@ -157,6 +164,7 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
     assert row.event_type == "failed"
     assert row.outcome_code == "unexpected_error"
     assert row.error_class == "builtins.RuntimeError"
+    assert row.payload["failure_action"] == "retry"
     assert row.payload["error_message"] == "body transform failed"
     assert row.payload["error_chain"] == [
         "builtins.RuntimeError",
@@ -231,17 +239,21 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
     monkeypatch.setattr(RssReader, "fetch", reader)
     monkeypatch.setitem(SOURCES, VentureBeatSource.name, MultiSource)
     consumer = ArticleAcquisitionConsumer(session_factory, ReaderTools)
-    if scenario == "selection_failed":
-        with pytest.raises(RuntimeError) as caught:
-            await consumer.consume(_request(vb_source))
-        assert caught.value is selection_error
-        assert caught.value.__cause__ is cause
-    elif all_failed:
-        with pytest.raises(RssFeedErrors):
-            await consumer.consume(_request(vb_source))
+    result = await consumer.consume(_request(vb_source))
+    expected_failure = {
+        "all_failed": (NoRetryAcquisition, "no_retry"),
+        "all_failed_retryable": (RetryAcquisition, "retry"),
+        "selection_failed": (RetryAcquisition, "retry"),
+    }
+    if scenario == "partial_success":
+        assert result == AcquisitionSucceeded(1)
     else:
-        result = await consumer.consume(_request(vb_source))
-        assert result.result == "acquired"
+        assert isinstance(result, expected_failure[scenario][0])
+        if scenario == "selection_failed":
+            assert result.error is selection_error
+            assert result.error.__cause__ is cause
+        else:
+            assert isinstance(result.error, RssFeedErrors)
     assert reader.await_count == 2
 
     article_ids = (
@@ -282,6 +294,7 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
         assert row.outcome_code == (
             "rss_feed_errors" if all_failed else "unexpected_error"
         )
+        assert row.payload["failure_action"] == expected_failure[scenario][1]
         if all_failed:
             assert row.error_class.endswith(".RssFeedErrors")
             assert row.retryability == (

@@ -6,7 +6,15 @@ from time import monotonic
 import structlog
 
 from app.audit.error_fields import exception_fqn
+from app.collection.article_acquisition.consumer import AcquisitionSucceeded
+from app.collection.article_acquisition.consumer_failure_classification import (
+    NoRetryAcquisition,
+    RetryAcquisition,
+)
 from app.collection.article_acquisition.errors import AcquisitionSourceInvalidError
+from app.collection.article_acquisition.source_resolution import (
+    AcquisitionNotRequired,
+)
 from app.collection.sources.acquisition_request import (
     AcquisitionRequestInvalidError,
     acquisition_request_from_message,
@@ -60,6 +68,7 @@ async def _run(
         for record_input in batch.records:
             started = monotonic()
             fields: dict[str, object] = {"message_id": record_input.message_id}
+            disposition = "completed"
             try:
                 record = record_input.to_record()
                 parsed_body = record.parse_json()
@@ -68,7 +77,21 @@ async def _run(
                     request_id=request.request_id, source_id=request.source_id
                 )
                 result = await consumer.consume(request)
-                fields.update(result=result.result, created_count=result.created_count)
+                match result:
+                    case AcquisitionSucceeded(created_count=created_count):
+                        fields.update(result="acquired", created_count=created_count)
+                    case AcquisitionNotRequired(reason=reason):
+                        fields.update(result=reason, created_count=0)
+                    case (
+                        RetryAcquisition(error=error) | NoRetryAcquisition(error=error)
+                    ):
+                        fields.update(
+                            result="failed",
+                            code="processing_failed",
+                            error_class=exception_fqn(error),
+                        )
+                if isinstance(result, RetryAcquisition):
+                    disposition = "batch_item_failure"
             except Exception as exc:
                 code = "processing_failed"
                 if isinstance(
@@ -85,10 +108,13 @@ async def _run(
                 fields.update(
                     result="failed", code=code, error_class=exception_fqn(exc)
                 )
+                disposition = "batch_item_failure"
+            finally:
+                fields["message_disposition"] = disposition
+                fields["duration_seconds"] = monotonic() - started
+                _record(**fields)
+            if disposition == "batch_item_failure":
                 failures.append(
                     SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
-            finally:
-                fields["duration_seconds"] = monotonic() - started
-                _record(**fields)
     return SqsBatchFailureResponse(batchItemFailures=failures)

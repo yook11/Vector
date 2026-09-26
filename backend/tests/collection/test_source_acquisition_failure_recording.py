@@ -12,6 +12,10 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from app.collection.article_acquisition.consumer_failure_classification import (
+    NoRetryAcquisition,
+    RetryAcquisition,
+)
 from app.collection.article_acquisition.errors import RssFeedErrors, RssFeedFailure
 from app.collection.article_acquisition.failure_recording import (
     ArticleAcquisitionFailureRecorder,
@@ -84,8 +88,8 @@ async def test_http_response_failure_records_judgement_code_and_status(
     await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
-        exc=HttpResponseError(
-            status_code=403, received_at=_RECEIVED, retry_after="120"
+        failure=NoRetryAcquisition(
+            HttpResponseError(status_code=403, received_at=_RECEIVED, retry_after="120")
         ),
     )
 
@@ -100,7 +104,7 @@ async def test_http_response_failure_records_judgement_code_and_status(
     assert ev.error_class.endswith(".HttpResponseError")
     assert ev.payload["source_name"] == "VentureBeat"
     assert ev.payload["failure_kind"] == "external_fetch"
-    assert ev.payload["failure_action"] is None
+    assert ev.payload["failure_action"] == "no_retry"
     assert ev.payload["http_status"] == 403
     assert ev.payload["reason_code"] is None
     assert ev.payload["error_message"] is None
@@ -121,9 +125,11 @@ async def test_transport_failure_records_reason_as_retryable(
     await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
-        exc=HttpTransportError(
-            failure=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        failure=RetryAcquisition(
+            HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             )
         ),
     )
@@ -134,6 +140,7 @@ async def test_transport_failure_records_reason_as_retryable(
     ev = events[0]
     assert ev.outcome_code == "http_transport_error"
     assert ev.retryability == "retryable"
+    assert ev.payload["failure_action"] == "retry"
     assert ev.payload["failure_kind"] == "external_fetch"
     assert ev.payload["reason_code"] == "timeout"
     assert ev.payload["http_status"] is None
@@ -152,8 +159,11 @@ async def test_host_blocked_records_without_exception_message(
     await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
-        exc=HostBlockedError(
-            "host is non-public IP literal: 10.0.0.1 Bearer sk-live-SSRFSECRETvalue123"
+        failure=NoRetryAcquisition(
+            HostBlockedError(
+                "host is non-public IP literal: 10.0.0.1 "
+                "Bearer sk-live-SSRFSECRETvalue123"
+            )
         ),
     )
 
@@ -163,6 +173,7 @@ async def test_host_blocked_records_without_exception_message(
     ev = events[0]
     assert ev.outcome_code == "host_blocked"
     assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_action"] == "no_retry"
     assert ev.payload["error_message"] is None
     assert "10.0.0.1" not in str(ev.payload)
     assert "SSRFSECRET" not in str(ev.payload)
@@ -183,11 +194,13 @@ async def test_read_failure_writes_reason_outcome_and_read_payload(
     await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
-        exc=UnreadableResponseError(
-            "private body sk-live-READSECRETvalue123",
-            reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
-            response_format="json",
-            field="items",
+        failure=NoRetryAcquisition(
+            UnreadableResponseError(
+                "private body sk-live-READSECRETvalue123",
+                reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+                response_format="json",
+                field="items",
+            )
         ),
     )
 
@@ -201,6 +214,7 @@ async def test_read_failure_writes_reason_outcome_and_read_payload(
     assert ev.error_class is not None
     assert ev.error_class.endswith(".UnreadableResponseError")
     assert ev.payload["failure_kind"] == "unreadable_response"
+    assert ev.payload["failure_action"] == "no_retry"
     assert (
         ev.payload["error_message"] == "read_unexpected_field_shape: json field=items"
     )
@@ -213,8 +227,11 @@ async def test_read_failure_writes_reason_outcome_and_read_payload(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("second_status", "retryability"),
-    [(503, "retryable"), (404, "non_retryable")],
+    ("second_status", "retryability", "failure_type", "failure_action"),
+    [
+        (503, "retryable", RetryAcquisition, "retry"),
+        (404, "non_retryable", NoRetryAcquisition, "no_retry"),
+    ],
 )
 async def test_rss_feed_errors_record_every_feed_and_any_retryable(
     db_session: AsyncSession,
@@ -222,6 +239,8 @@ async def test_rss_feed_errors_record_every_feed_and_any_retryable(
     sample_source: NewsSource,
     second_status: int,
     retryability: str,
+    failure_type: type[RetryAcquisition | NoRetryAcquisition],
+    failure_action: str,
 ) -> None:
     """全フィード失敗は各フィードの原因を秘匿規則付きで残し、どれか1つでも
     再試行可能なら全体を再試行可能として記録する。
@@ -240,19 +259,21 @@ async def test_rss_feed_errors_record_every_feed_and_any_retryable(
     await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
-        exc=RssFeedErrors(
-            [
-                RssFeedFailure(
-                    feed_url=f"https://example.com/feed?key={secret}",
-                    error=read_error,
-                ),
-                RssFeedFailure(
-                    feed_url="https://example.com/other",
-                    error=HttpResponseError(
-                        status_code=second_status, received_at=_RECEIVED
+        failure=failure_type(
+            RssFeedErrors(
+                [
+                    RssFeedFailure(
+                        feed_url=f"https://example.com/feed?key={secret}",
+                        error=read_error,
                     ),
-                ),
-            ]
+                    RssFeedFailure(
+                        feed_url="https://example.com/other",
+                        error=HttpResponseError(
+                            status_code=second_status, received_at=_RECEIVED
+                        ),
+                    ),
+                ]
+            )
         ),
     )
 
@@ -262,6 +283,7 @@ async def test_rss_feed_errors_record_every_feed_and_any_retryable(
     ev = events[0]
     assert ev.outcome_code == "rss_feed_errors"
     assert ev.retryability == retryability
+    assert ev.payload["failure_action"] == failure_action
     assert ev.payload["failure_kind"] == "rss_feeds"
     assert secret not in str(ev.payload)
     assert "private body" not in str(ev.payload)
@@ -298,7 +320,7 @@ async def test_unexpected_error_records_unknown_audit(
     result = await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
-        exc=RuntimeError("boom"),
+        failure=RetryAcquisition(RuntimeError("boom")),
     )
 
     assert result is None
@@ -312,7 +334,7 @@ async def test_unexpected_error_records_unknown_audit(
     assert ev.error_class is not None
     assert ev.error_class.endswith(".RuntimeError")
     assert ev.payload["failure_kind"] == "unknown"
-    assert ev.payload["failure_action"] is None
+    assert ev.payload["failure_action"] == "retry"
 
 
 @pytest.mark.asyncio
@@ -326,7 +348,9 @@ async def test_database_failure_records_retryability(
     result = await recorder.record_source_failure(
         source_id=sample_source.id,
         source_name="VentureBeat",
-        exc=DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+        failure=RetryAcquisition(
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT)
+        ),
     )
 
     assert result is None
@@ -358,7 +382,7 @@ async def test_cancellation_during_failure_audit_propagates(
         await recorder.record_source_failure(
             source_id=sample_source.id,
             source_name="VentureBeat",
-            exc=RuntimeError("original failure"),
+            failure=RetryAcquisition(RuntimeError("original failure")),
         )
 
 
@@ -390,7 +414,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
         result = await recorder.record_source_failure(
             source_id=source_id,
             source_name="VentureBeat",
-            exc=business_exc,
+            failure=NoRetryAcquisition(business_exc),
         )
 
     assert result is None
