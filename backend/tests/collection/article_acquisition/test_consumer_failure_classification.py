@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 import pytest
 
 from app.collection.article_acquisition.consumer_failure_classification import (
-    AcquisitionFailureDecision,
+    NoRetryAcquisition,
+    RetryAcquisition,
     classify_acquisition_failure,
 )
 from app.collection.article_acquisition.errors import RssFeedErrors, RssFeedFailure
@@ -68,9 +69,7 @@ def test_failure_that_may_change_or_is_not_understood_is_redelivered(
     exc: Exception,
 ) -> None:
     """再試行で変わりうる失敗と、DB障害・想定外の失敗は再配信する。"""
-    assert classify_acquisition_failure(exc, now=_NOW) is (
-        AcquisitionFailureDecision.RETRY
-    )
+    assert classify_acquisition_failure(exc, now=_NOW) == RetryAcquisition(exc)
 
 
 @pytest.mark.parametrize(
@@ -79,11 +78,11 @@ def test_failure_that_may_change_or_is_not_understood_is_redelivered(
         pytest.param(_response_error(403), id="non_retryable_response"),
         pytest.param(HostBlockedError("private IP literal"), id="host_blocked"),
         pytest.param(_read_error(), id="unreadable_response"),
-        pytest.param(_feeds(_read_error(), _response_error(404)), id="rss_all_abandon"),
+        pytest.param(
+            _feeds(_read_error(), _response_error(404)), id="rss_all_no_retry"
+        ),
     ],
 )
-def test_failure_that_retry_cannot_change_is_abandoned(exc: Exception) -> None:
+def test_failure_that_retry_cannot_change_is_not_redelivered(exc: Exception) -> None:
     """再試行しても変わらない失敗は再配信せず、次の定期投入に任せる。"""
-    assert classify_acquisition_failure(exc, now=_NOW) is (
-        AcquisitionFailureDecision.ABANDON
-    )
+    assert classify_acquisition_failure(exc, now=_NOW) == NoRetryAcquisition(exc)

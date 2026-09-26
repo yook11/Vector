@@ -8,7 +8,8 @@ from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.consumer_failure_classification import (
-    AcquisitionFailureDecision,
+    NoRetryAcquisition,
+    RetryAcquisition,
 )
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
@@ -34,12 +35,11 @@ class ArticleAcquisitionFailureRecorder:
         *,
         source_id: int | None,
         source_name: str | None,
-        exc: Exception,
-        decision: AcquisitionFailureDecision,
+        failure: RetryAcquisition | NoRetryAcquisition,
     ) -> None:
-        """受け取った判断とソースの取得失敗を、別セッションで監査する。"""
+        """ソースの取得失敗と再配信の判断を、別セッションで監査する。"""
         try:
-            await self._audit_failure(source_id, source_name, exc, decision)
+            await self._audit_failure(source_id, source_name, failure)
         except Exception:  # noqa: S110
             # 監査・診断の通常障害で元の取得失敗を置き換えない。
             pass
@@ -85,17 +85,16 @@ class ArticleAcquisitionFailureRecorder:
         self,
         source_id: int | None,
         source_name: str | None,
-        exc: Exception,
-        decision: AcquisitionFailureDecision,
+        failure: RetryAcquisition | NoRetryAcquisition,
     ) -> None:
         """best-effort failure audit。失敗時は redacted log に退避する。"""
+        exc = failure.error
         try:
             async with self._session_factory() as session:
                 await SourceAcquisitionAuditRepository(session).append_failure(
                     source_id=source_id,
                     source_name=source_name,
-                    exc=exc,
-                    decision=decision,
+                    failure=failure,
                 )
                 await session.commit()
         except Exception as audit_exc:

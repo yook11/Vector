@@ -258,7 +258,7 @@ async def test_non_retryable_fetch_failure_is_acknowledged_until_next_request(
     assert len(failures) == 1
     assert failures[0]["outcome_code"] == "rss_feed_errors"
     assert failures[0]["retryability"] == "non_retryable"
-    assert failures[0]["payload"]["failure_action"] == "abandon"
+    assert failures[0]["payload"]["failure_action"] == "no_retry"
     feed_failure = failures[0]["payload"]["feed_failures"][0]
     assert feed_failure["code"] == "http_response_error"
     assert feed_failure["http_status"] == 404

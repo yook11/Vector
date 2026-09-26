@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from app.collection.article_acquisition.consumer_failure_classification import (
-    AcquisitionFailureDecision,
+    NoRetryAcquisition,
+    RetryAcquisition,
     classify_acquisition_failure,
 )
 from app.collection.article_acquisition.failure_recording import (
@@ -28,14 +29,6 @@ class AcquisitionResult:
     created_count: int = 0
 
 
-@dataclass(frozen=True, slots=True)
-class AcquisitionFailed:
-    """取得の元例外と、再配信するか断念するかの判断を保持する。"""
-
-    error: Exception
-    decision: AcquisitionFailureDecision
-
-
 class ArticleAcquisitionConsumer:
     def __init__(
         self, session_factory: SessionFactory, tools_factory: Callable[[], ReaderTools]
@@ -46,7 +39,7 @@ class ArticleAcquisitionConsumer:
 
     async def consume(
         self, request: SourceAcquisitionRequest
-    ) -> AcquisitionResult | AcquisitionFailed:
+    ) -> AcquisitionResult | RetryAcquisition | NoRetryAcquisition:
         source = await resolve_acquisition_source(
             source_id=request.source_id, session_factory=self._session_factory
         )
@@ -58,12 +51,11 @@ class ArticleAcquisitionConsumer:
         try:
             ids = await service.execute(source_id=request.source_id)
         except Exception as exc:
-            decision = classify_acquisition_failure(exc, now=datetime.now(UTC))
+            failure = classify_acquisition_failure(exc, now=datetime.now(UTC))
             await self._failure_recorder.record_source_failure(
                 source_id=request.source_id,
                 source_name=str(source.name),
-                exc=exc,
-                decision=decision,
+                failure=failure,
             )
-            return AcquisitionFailed(error=exc, decision=decision)
+            return failure
         return AcquisitionResult("acquired", len(ids))

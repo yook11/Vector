@@ -12,12 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition.consumer import (
-    AcquisitionFailed,
     AcquisitionResult,
     ArticleAcquisitionConsumer,
 )
 from app.collection.article_acquisition.consumer_failure_classification import (
-    AcquisitionFailureDecision,
+    NoRetryAcquisition,
+    RetryAcquisition,
 )
 from app.collection.article_acquisition.errors import RssFeedErrors
 from app.collection.article_acquisition.reader.read_errors import (
@@ -137,10 +137,9 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
         _request(vb_source)
     )
 
-    assert isinstance(result, AcquisitionFailed)
+    assert isinstance(result, RetryAcquisition)
     assert result.error is error
     assert result.error.__cause__ is cause
-    assert result.decision is AcquisitionFailureDecision.RETRY
     assert len(saved_ids) == 1
     for model in (AnalyzableArticleRecord, IncompleteArticle):
         assert not (
@@ -241,16 +240,15 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
     monkeypatch.setitem(SOURCES, VentureBeatSource.name, MultiSource)
     consumer = ArticleAcquisitionConsumer(session_factory, ReaderTools)
     result = await consumer.consume(_request(vb_source))
-    expected_decision = {
-        "all_failed": AcquisitionFailureDecision.ABANDON,
-        "all_failed_retryable": AcquisitionFailureDecision.RETRY,
-        "selection_failed": AcquisitionFailureDecision.RETRY,
+    expected_failure = {
+        "all_failed": (NoRetryAcquisition, "no_retry"),
+        "all_failed_retryable": (RetryAcquisition, "retry"),
+        "selection_failed": (RetryAcquisition, "retry"),
     }
     if scenario == "partial_success":
         assert result == AcquisitionResult("acquired", 1)
     else:
-        assert isinstance(result, AcquisitionFailed)
-        assert result.decision is expected_decision[scenario]
+        assert isinstance(result, expected_failure[scenario][0])
         if scenario == "selection_failed":
             assert result.error is selection_error
             assert result.error.__cause__ is cause
@@ -296,7 +294,7 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
         assert row.outcome_code == (
             "rss_feed_errors" if all_failed else "unexpected_error"
         )
-        assert row.payload["failure_action"] == expected_decision[scenario].value
+        assert row.payload["failure_action"] == expected_failure[scenario][1]
         if all_failed:
             assert row.error_class.endswith(".RssFeedErrors")
             assert row.retryability == (

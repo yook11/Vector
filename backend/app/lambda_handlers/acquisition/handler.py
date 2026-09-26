@@ -6,9 +6,9 @@ from time import monotonic
 import structlog
 
 from app.audit.error_fields import exception_fqn
-from app.collection.article_acquisition.consumer import AcquisitionFailed
+from app.collection.article_acquisition.consumer import AcquisitionResult
 from app.collection.article_acquisition.consumer_failure_classification import (
-    AcquisitionFailureDecision,
+    RetryAcquisition,
 )
 from app.collection.article_acquisition.errors import AcquisitionSourceInvalidError
 from app.collection.sources.acquisition_request import (
@@ -73,18 +73,18 @@ async def _run(
                     request_id=request.request_id, source_id=request.source_id
                 )
                 result = await consumer.consume(request)
-                if isinstance(result, AcquisitionFailed):
+                if isinstance(result, AcquisitionResult):
+                    fields.update(
+                        result=result.result, created_count=result.created_count
+                    )
+                else:
                     fields.update(
                         result="failed",
                         code="processing_failed",
                         error_class=exception_fqn(result.error),
                     )
-                    if result.decision is AcquisitionFailureDecision.RETRY:
-                        disposition = "batch_item_failure"
-                else:
-                    fields.update(
-                        result=result.result, created_count=result.created_count
-                    )
+                if isinstance(result, RetryAcquisition):
+                    disposition = "batch_item_failure"
             except Exception as exc:
                 code = "processing_failed"
                 if isinstance(

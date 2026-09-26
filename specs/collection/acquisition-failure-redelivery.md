@@ -14,18 +14,18 @@ Status: Implemented
 
 ## 判断と契約
 
-`classify_acquisition_failure(exc, *, now)`は`retry`（SQSの再配信に任せる）か`abandon`（受信完了にし、次の定期投入に任せる）を返す。
+`classify_acquisition_failure(exc, *, now)`は、元例外を持つ`RetryAcquisition`（SQSの再配信に任せる）か`NoRetryAcquisition`（受信完了にし、次の定期投入に任せる）を返す。再配信するかどうかは型で区別し、判断のフィールドは持たない。
 
 | 失敗 | 判断 |
 |---|---|
-| HTTP起因（`HttpResponseError`・`HttpTransportError`・`HostBlockedError`） | 外部取得の失敗判断が再試行可能ならretry、不可ならabandon |
-| `UnreadableResponseError` | abandon |
-| `RssFeedErrors` | どれか1つのフィードがretryならretry、それ以外はabandon |
-| DB障害・その他 | retry |
+| HTTP起因（`HttpResponseError`・`HttpTransportError`・`HostBlockedError`） | 外部取得の失敗判断が再試行可能なら`RetryAcquisition`、不可なら`NoRetryAcquisition` |
+| `UnreadableResponseError` | `NoRetryAcquisition` |
+| `RssFeedErrors` | どれか1つのフィードが`RetryAcquisition`なら`RetryAcquisition`、それ以外は`NoRetryAcquisition` |
+| DB障害・その他 | `RetryAcquisition` |
 
-- Consumerは取得処理の失敗を`AcquisitionFailed(error, decision)`として返し、handlerはretryだけを`batchItemFailures`に入れる。
+- Consumerは取得処理の失敗の判断結果をそのまま返し、handlerは`RetryAcquisition`だけを`batchItemFailures`に入れる。
 - ソース解決の失敗（有効だが未登録のソース・DB読み取り失敗）と不正な依頼は、従来どおり送出して再配信する。
-- 監査の`failure_action`に判断を記録し、ログの`acquisition_message_processed`に`message_disposition`を加える。
+- 監査の`failure_action`に`retry`・`no_retry`を記録し、ログの`acquisition_message_processed`に`message_disposition`を加える。
 
 ## Invariants
 
