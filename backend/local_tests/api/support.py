@@ -55,6 +55,11 @@ async def seeded_source(database) -> SeededSource:
     return SeededSource(row["id"], row["name"], row["attribution_label"])
 
 
+def api_time(moment: datetime) -> str:
+    """APIが返すUTC時刻の表記（末尾Z）にする。"""
+    return moment.isoformat().replace("+00:00", "Z")
+
+
 def embedding(first: float, second: float) -> str:
     """先頭2次元だけを持つ埋め込みを、halfvecのテキスト表現で返す。"""
     values = [first, second] + [0.0] * (EMBEDDING_DIMENSIONS - 2)
@@ -107,6 +112,37 @@ async def seed_out_of_scope(database, *, curation_id: int) -> None:
             "(curation_id, translated_title, summary, investor_take) "
             "VALUES ($1, 'title', 'summary', 'take')",
             curation_id,
+        )
+
+
+async def seed_curation_noise(database, *, analyzable_article_id: int) -> None:
+    async with database.connect("vector") as connection:
+        await connection.execute(
+            "INSERT INTO curation_noises "
+            "(analyzable_article_id, translated_title, summary) "
+            "VALUES ($1, 'noise', 'noise')",
+            analyzable_article_id,
+        )
+
+
+async def seed_assessment_exclusion(database, *, curation_id: int) -> None:
+    """期限を過ぎて判定の救済から外したcurationの記録を作る。"""
+    async with database.connect("vector") as connection:
+        await connection.execute(
+            "INSERT INTO assessment_backfill_exclusions (curation_id, reason_code) "
+            "VALUES ($1, 'backfill_assessment_aged_out')",
+            curation_id,
+        )
+
+
+async def seed_embedding_exclusion(database, *, analyzed_article_id: int) -> None:
+    """期限を過ぎて埋め込みの救済から外した分析結果の記録を作る。"""
+    async with database.connect("vector") as connection:
+        await connection.execute(
+            "INSERT INTO embedding_backfill_exclusions "
+            "(analyzed_article_id, reason_code) "
+            "VALUES ($1, 'backfill_embedding_aged_out')",
+            analyzed_article_id,
         )
 
 
@@ -516,17 +552,19 @@ async def seed_incomplete_article(
     url: str,
     status: str,
     created_at: datetime,
+    leased_until: datetime | None = None,
 ) -> None:
-    """本文の補完を待つ未完成記事を作る。処理中は扱わず、待ちか打ち切りだけとする。"""
+    """本文の補完を待つ未完成記事を作る。処理中（running）にはリースの期限を渡す。"""
     async with database.connect("vector") as connection:
         await connection.execute(
             "INSERT INTO incomplete_articles "
             "(url, source_id, source_name, status, observed_article, ready_at, "
-            "created_at) "
-            "VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $5)",
+            "leased_until, created_at) "
+            "VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6, $5)",
             url,
             source.id,
             source.name,
             status,
             created_at,
+            leased_until,
         )

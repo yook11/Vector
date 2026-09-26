@@ -63,6 +63,13 @@ async def api_engine(system_database):
 
 
 @pytest.fixture
+async def api_session(api_engine):
+    """観測時刻を固定して集計の規則を確かめるため、serviceへ直接渡すセッション。"""
+    async with caller_managed_session_factory(api_engine)() as session:
+        yield session
+
+
+@pytest.fixture
 async def api_client(api_settings, api_engine, monkeypatch):
     from app.main import app
 
