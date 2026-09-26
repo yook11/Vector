@@ -281,11 +281,11 @@ describe("proxy — research Server Actionは既存mutation rate limitを共有�
 });
 
 describe("proxy — _rsc prefetch tier", () => {
-  it("_rsc GET (fly 解決) は rl:rsc:<ip> 600 の寛容 ceiling で count する", async () => {
+  it("_rsc GET (xff 解決) は rl:rsc:<ip> 600 の寛容 ceiling で count する", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest("http://localhost:3000/news?_rsc=abc123", {
-      headers: { "fly-client-ip": "203.0.113.5" },
+      headers: { "x-forwarded-for": "203.0.113.5" },
     });
     await proxy(req);
     const args = mockEval.mock.calls[0]?.[1] as {
@@ -327,7 +327,7 @@ describe("proxy — anon mutation 終端 (IP 未解決)", () => {
 });
 
 describe("proxy — identity 解決の dev/prod 分岐", () => {
-  it("dev は fly 欠如時に xff 第一値を rl:ip key に使う", async () => {
+  it("dev は xff 第一値を rl:ip key に使う", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest("http://localhost:3000/news", {
@@ -352,19 +352,6 @@ describe("proxy — identity 解決の dev/prod 分岐", () => {
 });
 
 describe("proxy — CLIENT_IP_TRUST 経由の IP 解決 (production)", () => {
-  it("trust=fly-client-ip は fly-client-ip を信頼して rl:ip tier を組む", async () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
-    mockIsOpenValue = true;
-    mockEval.mockResolvedValue(1);
-    const req = mockNextRequest("http://localhost:3000/news", {
-      headers: { "fly-client-ip": "203.0.113.5" },
-    });
-    await proxy(req);
-    const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
-    expect(args.keys).toEqual(["rl:ip:203.0.113.5"]);
-  });
-
   it("trust=alb-xff-last は xff 末尾を信頼し、偽装 fly-client-ip を無視する (invariant 1)", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
@@ -394,13 +381,20 @@ describe("proxy — CLIENT_IP_TRUST 経由の IP 解決 (production)", () => {
     expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
   });
 
-  it("CLIENT_IP_TRUST が未知値なら未設定と同じく fail-closed + missing_ip (invariant 2)", async () => {
+  // fly-client-ip は Fly の退役で外したモード。
+  it.each([
+    "bogus-mode",
+    "fly-client-ip",
+  ])("CLIENT_IP_TRUST が未知値 (%s) なら未設定と同じく fail-closed + missing_ip (invariant 2)", async (trust) => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("CLIENT_IP_TRUST", "bogus-mode");
+    vi.stubEnv("CLIENT_IP_TRUST", trust);
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest("http://localhost:3000/news", {
-      headers: { "fly-client-ip": "203.0.113.5" },
+      headers: {
+        "fly-client-ip": "203.0.113.5",
+        "x-forwarded-for": "203.0.113.5",
+      },
     });
     await proxy(req);
     expect(mockEval).not.toHaveBeenCalled();
@@ -441,13 +435,13 @@ describe("proxy — x-vector-client-ip 内部ヘッダの上書き不変条件 (
 
   it("解決できた IP を x-vector-client-ip として下流へ設定する", async () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest("http://localhost:3000/news", {
       headers: {
         cookie: "better-auth.session_token=AAAA", // auth-redirect を回避し forwarded headers を観測可能にする
-        "fly-client-ip": "203.0.113.5",
+        "x-forwarded-for": "203.0.113.5",
       },
     });
     const res = await proxy(req);
@@ -456,13 +450,13 @@ describe("proxy — x-vector-client-ip 内部ヘッダの上書き不変条件 (
 
   it("IPv6 は /64 正規化後の値を x-vector-client-ip に設定する (識別単位の正規化)", async () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest("http://localhost:3000/news", {
       headers: {
         cookie: "better-auth.session_token=AAAA", // auth-redirect を回避し forwarded headers を観測可能にする
-        "fly-client-ip": "2001:db8:aaaa:bbbb:1:2:3:4",
+        "x-forwarded-for": "2001:db8:aaaa:bbbb:1:2:3:4",
       },
     });
     const res = await proxy(req);
@@ -508,12 +502,12 @@ describe("proxy — x-vector-client-ip 内部ヘッダの上書き不変条件 (
 
   it("SSE route は rate limit を skip しても x-vector-client-ip の設定は行う", async () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest(
       "http://localhost:3000/api/research/runs/00000000-0000-4000-a000-000000000010/events",
-      { headers: { "fly-client-ip": "203.0.113.5" } },
+      { headers: { "x-forwarded-for": "203.0.113.5" } },
     );
     const res = await proxy(req);
     expect(mockEval).not.toHaveBeenCalled();
@@ -546,13 +540,13 @@ describe("proxy — health checker UA は missing_ip signal を抑制する (inv
 
   it("health checker UA でも rate limit の判定自体はスキップしない (IP 解決時は通常どおり count する)", async () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest("http://localhost:3000/news", {
       headers: {
         "user-agent": "ELB-HealthChecker/2.0",
-        "fly-client-ip": "203.0.113.5",
+        "x-forwarded-for": "203.0.113.5",
       },
     });
     await proxy(req);
@@ -769,35 +763,6 @@ describe("proxy — XFF chain 観測のゲート (isProduction && trust=alb-xff-
     await proxy(
       mockNextRequest("http://localhost:3000/news", {
         headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
-      }),
-    );
-
-    expect(findLoggedEvent("frontend_xff_chain_observed")).toBeUndefined();
-  });
-
-  it("trust=fly-client-ip では production かつ XFF ありでも観測されない (Fly の XFF は別構造なので混ぜない)", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
-    mockIsOpenValue = true;
-    mockEval.mockResolvedValue(1);
-
-    await proxy(
-      mockNextRequest("http://localhost:3000/news", {
-        headers: {
-          "fly-client-ip": "203.0.113.5",
-          "x-forwarded-for": "1.2.3.4, 5.6.7.8",
-        },
-      }),
-    );
-    vi.setSystemTime(new Date("2026-01-01T00:05:00.000Z"));
-    await proxy(
-      mockNextRequest("http://localhost:3000/news", {
-        headers: {
-          "fly-client-ip": "203.0.113.5",
-          "x-forwarded-for": "1.2.3.4, 5.6.7.8",
-        },
       }),
     );
 

@@ -14,7 +14,7 @@ _VALID_BFF_SECRET = "b" * 64
 _VALID_REVALIDATE_SECRET = "c" * 64
 # baseline は sslmode=require 付き。production SSL fail-safe
 # (_require_ssl_in_production) は env="production" のとき DB URL に TLS sslmode を
-# 要求するため、production を渡す既存テスト (flycast narrowing 等) がこの fixture を
+# 要求するため、production を渡す既存テスト (namespace narrowing 等) がこの fixture を
 # 流用しても先に SSL で落ちない。dev では sslmode は無視されるので harmless。
 _VALID_DATABASE_URL = (
     "postgresql+asyncpg://vector_app:strongpassword@db:5432/vector?sslmode=require"
@@ -98,7 +98,7 @@ def test_settings_rejects_crossref_ci_dummy_in_production() -> None:
     with pytest.raises(ValidationError, match="monitored alias"):
         Settings(
             env="production",
-            internal_frontend_base_url="http://your-vector-frontend-app.flycast:3000",
+            internal_frontend_base_url="http://frontend.vector.internal:3000",
             crossref_contact_email=_CI_CROSSREF_CONTACT_EMAIL,
         )
 
@@ -252,14 +252,8 @@ def test_reject_when_secrets_equal() -> None:
 # REVALIDATE_BEARER_SECRET を Bearer 送信するため、宛先が攻撃者制御に向くと
 # secret 持ち出し経路になる。
 
-_VALID_FLYCAST_URL = "http://your-vector-frontend-app.flycast:3000"
-
-# 実行基盤の内部 namespace。Fly と AWS の両方を同じ allowlist が受理する。
-# frontend 側 (internal-config.test.ts) が同じ 2 つを同形で固定している。
-_INTERNAL_NAMESPACE_URLS = [
-    _VALID_FLYCAST_URL,
-    "http://frontend.vector.internal:3000",
-]
+# 実行基盤の内部 namespace。frontend 側 (internal-config.test.ts) も同じものを固定する。
+_NAMESPACE_FRONTEND_URL = "http://frontend.vector.internal:3000"
 
 # 本番では reject されるが development では許可される dev host 群。
 _DEV_HOST_URLS = [
@@ -276,9 +270,8 @@ _DEV_HOST_URLS = [
         "https://evil.com",
         "http://169.254.169.254",
         "http://frontend.attacker.com",  # substring 混同 (frontend で始まる別ホスト)
-        "http://xflycast:3000",  # suffix の前に dot が無い
-        # flycast suffix がホスト末尾でない。
-        "http://your-vector-frontend-app.flycast.attacker.com:3000",
+        # Fly の内部 DNS は退役済みなので受理しない。
+        "http://your-vector-frontend-app.flycast:3000",
         "http://evilvector.internal:3000",  # suffix の前に dot が無い (AWS 側)
         # namespace suffix がホスト末尾でない。
         "http://frontend.vector.internal.attacker.com:3000",
@@ -299,13 +292,10 @@ def test_internal_frontend_base_url_rejects_non_http_scheme(bad_url: str) -> Non
         Settings(internal_frontend_base_url=bad_url)
 
 
-@pytest.mark.parametrize("namespace_url", _INTERNAL_NAMESPACE_URLS)
-def test_internal_frontend_base_url_accepts_internal_namespace_in_development(
-    namespace_url: str,
-) -> None:
+def test_internal_frontend_base_url_accepts_internal_namespace_in_development() -> None:
     """development でも内部 namespace は global allowlist で許可される。"""
-    s = Settings(internal_frontend_base_url=namespace_url)
-    assert s.internal_frontend_base_url == namespace_url
+    s = Settings(internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
+    assert s.internal_frontend_base_url == _NAMESPACE_FRONTEND_URL
 
 
 @pytest.mark.parametrize("dev_host_url", _DEV_HOST_URLS)
@@ -326,13 +316,10 @@ def test_internal_frontend_base_url_rejects_dev_host_in_production(
         Settings(env="production", internal_frontend_base_url=dev_host_url)
 
 
-@pytest.mark.parametrize("namespace_url", _INTERNAL_NAMESPACE_URLS)
-def test_internal_frontend_base_url_accepts_internal_namespace_in_production(
-    namespace_url: str,
-) -> None:
+def test_internal_frontend_base_url_accepts_internal_namespace_in_production() -> None:
     """production で内部 namespace は許可される。"""
-    s = Settings(env="production", internal_frontend_base_url=namespace_url)
-    assert s.internal_frontend_base_url == namespace_url
+    s = Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
+    assert s.internal_frontend_base_url == _NAMESPACE_FRONTEND_URL
 
 
 # egress proxy の宛先。この値は全 task の全外向き通信の経路になるため、攻撃者ホストに
@@ -345,7 +332,6 @@ _VALID_EGRESS_PROXY_URLS = [
     # "http://proxy.${internal_namespace}:${proxy_port}")。両者がずれたら
     # task が起動できなくなるので、実値をそのまま受理側で固定する。
     "http://proxy.vector.internal:3128",
-    "http://proxy.your-vector-app.flycast:3128",
 ]
 
 
@@ -371,6 +357,7 @@ def test_egress_proxy_url_accepts_internal_namespace(proxy_url: str) -> None:
         "http://evilvector.internal:3128",  # suffix の前に dot が無い
         "http://proxy.vector.internal.attacker.com:3128",  # 末尾でない
         "http://proxy.attacker.internal:3128",  # 別 namespace
+        "http://proxy.your-vector-app.flycast:3128",  # 退役済みの Fly の内部 DNS
     ],
 )
 def test_egress_proxy_url_rejects_non_internal_host(bad_url: str) -> None:
@@ -404,7 +391,7 @@ _IAM_RUNTIME_URL = (
 
 
 def test_db_iam_auth_defaults_to_false() -> None:
-    """既定は無効。Fly は URL の password で繋ぐ。"""
+    """既定は無効。dev は URL の password で繋ぐ。"""
     assert Settings().db_iam_auth is False
 
 
@@ -430,7 +417,7 @@ def test_db_iam_auth_requires_region(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_aws_region_defaults_to_none() -> None:
-    """IAM 認証を使わない環境 (Fly / dev) では未設定が正しい。"""
+    """IAM 認証を使わない環境 (dev) では未設定が正しい。"""
     assert Settings().aws_region is None
 
 
@@ -480,7 +467,7 @@ def test_production_rejects_database_url_without_sslmode(
     """production で DATABASE_URL に sslmode が無ければ ValidationError。"""
     monkeypatch.setenv("DATABASE_URL", _NEON_DB_URL_NO_SSL)
     with pytest.raises(ValidationError, match="sslmode"):
-        Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+        Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
 
 
 def test_production_accepts_database_url_with_sslmode_require(
@@ -488,7 +475,7 @@ def test_production_accepts_database_url_with_sslmode_require(
 ) -> None:
     """production で sslmode=require 付き DATABASE_URL は通る。"""
     monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
-    s = Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+    s = Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
     assert "sslmode=require" in s.database_url
 
 
@@ -498,7 +485,7 @@ def test_production_rejects_database_url_with_sslmode_disable(
     """production で sslmode=disable (平文) は ValidationError。"""
     monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=disable")
     with pytest.raises(ValidationError, match="sslmode"):
-        Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+        Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
 
 
 def test_production_rejects_migration_url_without_sslmode(
@@ -509,7 +496,7 @@ def test_production_rejects_migration_url_without_sslmode(
     monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
     monkeypatch.setenv("MIGRATION_DATABASE_URL", _NEON_DB_URL_NO_SSL)
     with pytest.raises(ValidationError, match="MIGRATION_DATABASE_URL"):
-        Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+        Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
 
 
 def test_production_rejects_auth_retention_url_without_sslmode(
@@ -521,7 +508,7 @@ def test_production_rejects_auth_retention_url_without_sslmode(
         "AUTH_RETENTION_DATABASE_URL", _NEON_AUTH_RETENTION_DB_URL_NO_SSL
     )
     with pytest.raises(ValidationError, match="AUTH_RETENTION_DATABASE_URL"):
-        Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+        Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
 
 
 def test_production_accepts_auth_retention_url_with_sslmode_require(
@@ -531,7 +518,7 @@ def test_production_accepts_auth_retention_url_with_sslmode_require(
     auth_url = f"{_NEON_AUTH_RETENTION_DB_URL_NO_SSL}?sslmode=require"
     monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
     monkeypatch.setenv("AUTH_RETENTION_DATABASE_URL", auth_url)
-    s = Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+    s = Settings(env="production", internal_frontend_base_url=_NAMESPACE_FRONTEND_URL)
     assert s.auth_retention_database_url == auth_url
 
 
@@ -657,7 +644,7 @@ _IAM_REDIS_URL = "rediss://vector-app@vector-cache.abc.cache.amazonaws.com:6379/
 
 
 def test_redis_iam_auth_defaults_to_false() -> None:
-    """既定は無効。Fly / dev は URL の password で繋ぐ。"""
+    """既定は無効。dev は URL の password で繋ぐ。"""
     assert Settings().redis_iam_auth is False
 
 
@@ -736,7 +723,7 @@ def test_redis_iam_auth_requires_cache_name(monkeypatch: pytest.MonkeyPatch) -> 
 def test_redis_iam_auth_disabled_allows_password_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """無効時は従来通り URL の password で繋げる (Fly / dev の既定)。"""
+    """無効時は従来通り URL の password で繋げる (dev の既定)。"""
     password_url = "redis://:secret@localhost:6379/0"
     monkeypatch.setenv("REDIS_URL", password_url)
     s = Settings()

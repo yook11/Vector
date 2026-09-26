@@ -405,7 +405,7 @@ class TestDeepSeekObservabilityLog:
         assert record["output_tokens"] == 42
         assert record["max_output_tokens"] == 1536
         assert "PRIVATE_" not in output
-        assert "causes" not in record
+        assert "related_exceptions" not in record
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

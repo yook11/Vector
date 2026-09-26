@@ -11,7 +11,7 @@ from app.http.settings import HttpSettings
 
 @pytest.mark.parametrize(
     "value",
-    ["http://proxy.vector.internal:3128", "https://proxy.flycast:443"],
+    ["http://proxy.vector.internal:3128", "https://proxy.vector.internal:443"],
 )
 def test_http_settings_accept_existing_routes(value):
     assert HttpSettings(egress_proxy_url=value).egress_proxy_url == value
@@ -28,6 +28,7 @@ def test_http_settings_accept_existing_routes(value):
         "http://127.0.0.1:3128",
         "http://evilvector.internal",
         "http://proxy.vector.internal.evil.com",
+        "http://proxy.flycast:3128",
         "http://example.com",
         "socks5://proxy.vector.internal",
         "file:///tmp/proxy",
@@ -43,7 +44,7 @@ async def test_factory_reads_environment_each_time_without_cache(monkeypatch):
     """生成ごとに検証し、不正設定時はtransportを作らない。"""
     constructor = Mock(wraps=external._PinnedDnsTransport)
     monkeypatch.setattr(external, "_PinnedDnsTransport", constructor)
-    for value in ("http://proxy.vector.internal:3128", "https://proxy.flycast"):
+    for value in ("http://proxy.vector.internal:3128", "https://proxy.vector.internal"):
         monkeypatch.setenv("EGRESS_PROXY_URL", value)
         async with external.make_external_async_client():
             assert constructor.call_args.kwargs["proxy"] == value

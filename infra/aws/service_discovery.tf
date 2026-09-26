@@ -10,7 +10,6 @@ resource "aws_service_discovery_private_dns_namespace" "internal" {
 # ここで登録される名前を起動時ガードが接尾辞で受理する。
 #   backend  config.py の _enforce_internal_namespace_in_production
 #   frontend lib/api/internal-config.ts
-# どちらも意図的な構造的契約なので、外さずに `.flycast` との union で許す。
 resource "aws_service_discovery_service" "this" {
   for_each = local.discoverable_stages
 

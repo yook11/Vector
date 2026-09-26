@@ -3,7 +3,7 @@
 意図: 一過性故障は autorestart=unexpected + startretries=3 で吸収。3 retries
 経過しても起動できない永続バグのみ FATAL に遷移、本 listener が捕捉して
 supervisord 自身に SIGTERM → 全 program を stopasgroup で停止 → supervisord exit
-→ container exit → Docker / Fly.io が auto-restart。
+→ container exit → Docker / ECS が再起動。
 
 restart loop が docker ps で visible になるため、永続バグの存在は外側から
 明示的に観測できる (一過性故障では発火しないので sibling worker や LLM 呼出を

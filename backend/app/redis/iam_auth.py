@@ -111,7 +111,7 @@ def redis_connection_options(
     IAM 認証が有効なら「どの user で繋ぐか」を URL から provider へ写し、userinfo を
     除いた URL を返す。redis-py は URL の username と ``credential_provider`` の併用を
     ``DataError`` で拒否するため、URL を単一の情報源にしてここで分離する。
-    無効時は URL をそのまま使う (dev / Fly の password 認証)。
+    無効時は URL をそのまま使う (dev の password 認証)。
     """
     if not iam_auth:
         return url, {}

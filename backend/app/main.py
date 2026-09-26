@@ -85,7 +85,7 @@ def _drop_endpoint_args_on_success(
     return None
 
 
-# Fly health probe (fly.core.toml, 15s 間隔) を span 化しない。
+# health check の probe を span 化しない。
 # リクエスト URL 全体への正規表現 search で除外される。
 _LOGFIRE_EXCLUDED_URLS = "/api/v1/health$"
 

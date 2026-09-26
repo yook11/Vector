@@ -12,7 +12,7 @@
 - 「降格」であって「握り潰し」ではない (warn ログで運用に見える)
 
 通信先は compose 内部 DNS (``http://frontend:3000``) や実行基盤の内部 namespace
-(``*.flycast`` / ``*.vector.internal``) で、自分たちの deployment のコンテナ宛。
+(``*.vector.internal``) で、自分たちの deployment のコンテナ宛。
 よって ``make_internal_async_client`` を使う。
 
 宛先は既存アプリのSettingsで制限し、Assessment LambdaではTerraformが

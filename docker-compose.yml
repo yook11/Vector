@@ -324,7 +324,7 @@ services:
   # 設計判断: broker は役割単位 (broker_briefing / broker_agent 等) に分離。多 process container は supervisord
   # で管理 (Pattern B: limited self-heal)。一過性故障は autorestart=unexpected +
   # startretries=3 で吸収、永続バグは 3 retries で FATAL → fail_fast eventlistener が
-  # supervisord shutdown → container exit → docker / Fly.io が auto-restart loop で visible 化。
+  # supervisord shutdown → container exit → docker が auto-restart loop で visible 化。
   # `init: true` (tini) は維持し PID 1 zombie reaping を担当 (supervisord は tini の child)。
   worker-insights:
     <<: *worker-base
