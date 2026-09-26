@@ -92,13 +92,10 @@ locals {
   #
   stage_environment = {
     frontend = {
-      # RDS の CA は Node 内蔵 store に無い private root。pg は内蔵 store を使うので
-      # ここで足す (追加であって置換ではない)。path は Dockerfile の COPY 先。
-      NODE_EXTRA_CA_CERTS = "/app/rds-ca-ap-northeast-1.pem"
-      INTERNAL_API_URL    = local.internal_api_url
-      BETTER_AUTH_URL     = "https://${var.frontend_domain}"
-      AUTH_DATABASE_URL   = "postgresql://vector_auth@${local.db_endpoint}/${aws_db_instance.this.db_name}?search_path=auth&sslmode=require"
-      REDIS_URL_RL        = local.rate_limit_redis_url
+      INTERNAL_API_URL  = local.internal_api_url
+      BETTER_AUTH_URL   = "https://${var.frontend_domain}"
+      AUTH_DATABASE_URL = "postgresql://vector_auth@${local.db_endpoint}/${aws_db_instance.this.db_name}?search_path=auth&sslmode=require"
+      REDIS_URL_RL      = local.rate_limit_redis_url
       # rate-limit ノード用の署名 host (common の REDIS_IAM_CACHE_NAME は broker の
       # 名前なので frontend はそちらを読まない)。
       REDIS_IAM_CACHE_NAME_RL = aws_elasticache_replication_group.rate_limit.replication_group_id
