@@ -594,8 +594,8 @@ class TestSqlDiagnosticBudgets:
         )
         assert output["error_details"]["constraint_name"] == "x" * TEXT_LIMIT
 
-    def test_cause_diagnostics_exceed_shared_text_budget(self) -> None:
-        """各診断属性が単独上限内でも合計文字数超過でログ全体を置換する。"""
+    def test_cause_diagnostics_beyond_exception_text_total_are_replaced(self) -> None:
+        """各診断属性が単独上限内でも、例外側の文字数の合計に収まらない値だけを置換する。"""
         driver = PostgresError.new(
             {
                 "C": "23505",
@@ -613,11 +613,14 @@ class TestSqlDiagnosticBudgets:
             "error",
             {"event": "failed", "exc_info": outer},
         )
-        assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
-        }
+        details = output["related_exceptions"][0]["exception"]["error_details"]
+        assert output["event"] == "failed"
+        assert [
+            details["schema_name"],
+            details["table_name"],
+            details["column_name"],
+            details["constraint_name"],
+        ] == ["x" * TEXT_LIMIT, "x" * TEXT_LIMIT, "x" * TEXT_LIMIT, "[limit]"]
 
     def test_cause_diagnostics_share_item_budget_with_normal_fields(self) -> None:
         """通常配列と原因の診断属性の合計件数でログ全体の上限を判定する。"""

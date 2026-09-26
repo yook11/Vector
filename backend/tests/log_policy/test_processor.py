@@ -978,7 +978,6 @@ class TestExceptionValueDepthLimit:
         cause_depth = (value_preparation.EXCEPTION_DEPTH_LIMIT - 2) // 2
         outer, inner = _failure_with_cause_chain(cause_depth)
         # 探索側で先に打ち切られないようにし、値準備の上限は変更しない。
-        monkeypatch.setattr(extraction, "CAUSE_DEPTH_LIMIT", cause_depth)
         monkeypatch.setattr(extraction, "EXCEPTION_LIMIT", cause_depth + 1)
         tb = inner.__traceback__
         expected_frame = {
