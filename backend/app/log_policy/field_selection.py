@@ -9,7 +9,7 @@ from app.log_policy.budget import TEXT_LIMIT, LogEventBudget
 from app.log_policy.diagnostics import LogProcessingDiagnostics
 
 # 例外からの生成は共通ロガーが担うため、呼び出し側で定義した同名フィールドは除外する。
-_EXCEPTION_OUTPUT_ONLY_FIELDS = frozenset({"error_details", "causes", "exceptions"})
+_EXCEPTION_OUTPUT_ONLY_FIELDS = frozenset({"error_details", "related_exceptions"})
 
 _EXCLUDED_FIELDS = frozenset(
     {

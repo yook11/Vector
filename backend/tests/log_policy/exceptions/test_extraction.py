@@ -9,6 +9,7 @@ import pytest
 from app.log_policy.budget import TEXT_LIMIT
 from app.log_policy.exceptions import extraction
 from app.log_policy.exceptions.types import ConvertedException
+from app.shared.errors import ApplicationError
 
 pytestmark = pytest.mark.unit
 
@@ -74,32 +75,109 @@ class TestExcInfo:
         assert extraction.extract_exception_fields(value) is None
 
 
-class TestCauseRelationships:
-    """Pythonの例外連鎖に従って、記録する原因を選ぶ。"""
+class TestSingleException:
+    """連鎖のない例外を、外側の例外の項目へ変換する。"""
 
-    def test_visible_context_is_followed(self) -> None:
-        """明示causeがなければ抑制されていないcontextを記録する。"""
-        outer = RuntimeError("outer")
-        outer.__context__ = ValueError("inner")
-        assert extraction.extract_exception_fields(outer)["causes"] == [
-            {
-                "error_class": "builtins.ValueError",
-                "error_message": "inner",
-                "frames": [],
-            }
-        ]
+    def test_exception_without_chain_has_only_top_level_fields(self) -> None:
+        """連鎖のない例外は、型・原因文・発生位置だけの形に変換する。"""
+        fields = extraction.extract_exception_fields(ValueError("invalid value"))
+
+        assert fields == {
+            "error_class": "builtins.ValueError",
+            "error_message": "invalid value",
+            "frames": [],
+        }
+
+
+class TestRelations:
+    """前の例外を、関係の種類つきで外側から順に並べる。"""
+
+    def test_explicit_causes_are_listed_as_cause(self) -> None:
+        """明示causeの連鎖を、外側から順にcauseとして並べる。"""
+        outer = RuntimeError("fetch failed")
+        middle = ValueError("invalid response")
+        outer.__cause__ = middle
+        middle.__cause__ = OSError("connection refused")
+
+        fields = extraction.extract_exception_fields(outer)
+
+        assert fields == {
+            "error_class": "builtins.RuntimeError",
+            "error_message": "fetch failed",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "invalid response",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": 0,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.OSError",
+                        "error_message": "connection refused",
+                        "frames": [],
+                    },
+                },
+            ],
+        }
+
+    def test_visible_context_is_listed_as_context(self) -> None:
+        """明示causeがなく抑制されていないcontextを、contextとして並べる。"""
+        outer = RuntimeError("cleanup failed")
+        outer.__context__ = KeyError("missing")
+
+        fields = extraction.extract_exception_fields(outer)
+
+        assert fields == {
+            "error_class": "builtins.RuntimeError",
+            "error_message": "cleanup failed",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "context",
+                    "exception": {
+                        "error_class": "builtins.KeyError",
+                        "error_message": "'missing'",
+                        "frames": [],
+                    },
+                },
+            ],
+        }
 
     def test_explicit_cause_takes_precedence_over_context(self) -> None:
-        """明示causeがあるときは別のcontextを展開しない。"""
+        """causeとcontextの両方があるときは、causeだけを並べる。"""
         outer = RuntimeError("outer")
-        outer.__cause__ = ValueError("cause")
         outer.__context__ = ValueError("synthetic-private-context")
-        fields = extraction.extract_exception_fields(outer)
-        assert fields["causes"][0]["error_message"] == "cause"
-        assert "synthetic-private-context" not in json.dumps(fields)
+        outer.__cause__ = ValueError("cause")
 
-    def test_raise_from_none_hides_context(self) -> None:
-        """from Noneで表示を抑制した元の例外は、原因として辿らず出力しない。"""
+        fields = extraction.extract_exception_fields(outer)
+
+        assert fields == {
+            "error_class": "builtins.RuntimeError",
+            "error_message": "outer",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "cause",
+                        "frames": [],
+                    },
+                },
+            ],
+        }
+
+    def test_suppressed_context_is_not_listed(self) -> None:
+        """from Noneで抑制したcontextは、関連する例外として出力しない。"""
         try:
             try:
                 raise ValueError("synthetic-private-context")
@@ -107,71 +185,186 @@ class TestCauseRelationships:
                 raise RuntimeError("outer") from None
         except RuntimeError as exc:
             fields = extraction.extract_exception_fields(exc)
-        assert "causes" not in fields
+
+        assert "related_exceptions" not in fields
         assert "synthetic-private-context" not in json.dumps(fields)
 
-    def test_cyclic_cause_uses_marker(self) -> None:
-        """原因の循環参照を検出したら、[cycle]を出力して探索を止める。"""
+
+class TestGroupMembers:
+    """ExceptionGroupのメンバーを、memberとして元の順序で並べる。"""
+
+    def test_member_causes_follow_each_member(self) -> None:
+        """メンバーの原因は、そのメンバーの直後に並べる。"""
+        member_a = RuntimeError("task A failed")
+        member_a.__cause__ = OSError("timeout")
+        group = ExceptionGroup("batch failed", [member_a, TypeError("task B failed")])
+
+        fields = extraction.extract_exception_fields(group)
+
+        assert fields == {
+            "error_class": "builtins.ExceptionGroup",
+            "error_message": "batch failed (2 sub-exceptions)",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.RuntimeError",
+                        "error_message": "task A failed",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": 0,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.OSError",
+                        "error_message": "timeout",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.TypeError",
+                        "error_message": "task B failed",
+                        "frames": [],
+                    },
+                },
+            ],
+        }
+
+    def test_group_cause_precedes_members(self) -> None:
+        """グループ自体の原因を先に、メンバーを後に並べる。"""
+        group = ExceptionGroup(
+            "retry failed", [ValueError("attempt 1"), ValueError("attempt 2")]
+        )
+        group.__cause__ = OSError("connection refused")
+
+        fields = extraction.extract_exception_fields(group)
+
+        assert fields == {
+            "error_class": "builtins.ExceptionGroup",
+            "error_message": "retry failed (2 sub-exceptions)",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.OSError",
+                        "error_message": "connection refused",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "attempt 1",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "attempt 2",
+                        "frames": [],
+                    },
+                },
+            ],
+        }
+
+
+class TestCycles:
+    """たどっている経路に戻る参照だけを、循環として止める。"""
+
+    def test_reference_back_to_path_is_marked_as_cycle(self) -> None:
+        """経路上の例外に戻る関係は[cycle]として示し、その先へ進まない。"""
         outer = RuntimeError("outer")
         inner = ValueError("inner")
         outer.__cause__ = inner
         inner.__cause__ = outer
-        assert (
-            extraction.extract_exception_fields(outer)["causes"][0]["causes"]
-            == "[cycle]"
-        )
-
-
-class TestGroupExpansion:
-    """グループのメンバーと、それぞれの原因を取り出す。"""
-
-    def test_exception_group_cause_preserves_its_members(self) -> None:
-        """例外の原因がExceptionGroupの場合も、その各メンバーを記録する。"""
-        group = ExceptionGroup(
-            "parallel failures",
-            [ValueError("failure A"), TypeError("failure B")],
-        )
-        outer = RuntimeError("operation failed")
-        outer.__cause__ = group
 
         fields = extraction.extract_exception_fields(outer)
 
-        assert fields["causes"][0]["exceptions"] == [
-            {
-                "error_class": "builtins.ValueError",
-                "error_message": "failure A",
-                "frames": [],
-            },
-            {
-                "error_class": "builtins.TypeError",
-                "error_message": "failure B",
-                "frames": [],
-            },
-        ]
+        assert fields == {
+            "error_class": "builtins.RuntimeError",
+            "error_message": "outer",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "inner",
+                        "frames": [],
+                    },
+                },
+                {"parent": 0, "relation": "cause", "exception": "[cycle]"},
+            ],
+        }
 
-    def test_shared_cause_is_preserved_for_each_group_member(self) -> None:
-        """複数の例外が同じ原因インスタンスを共有しても、循環扱いせずそれぞれに記録する。"""
+    def test_same_cause_held_by_multiple_exceptions_is_not_a_cycle(self) -> None:
+        """複数の例外が同じ原因を持っているだけでは循環として扱わず、それぞれに並べる。"""
         shared_cause = ConnectionError("connection failed")
-
         member_a = RuntimeError("operation A failed")
         member_a.__cause__ = shared_cause
-
         member_b = RuntimeError("operation B failed")
         member_b.__cause__ = shared_cause
-
         group = ExceptionGroup("parallel failures", [member_a, member_b])
 
         fields = extraction.extract_exception_fields(group)
 
-        expected_cause = [
-            {
-                "error_class": "builtins.ConnectionError",
-                "error_message": "connection failed",
-                "frames": [],
-            }
-        ]
-        assert fields["exceptions"][0]["causes"] == expected_cause
-        assert fields["exceptions"][1]["causes"] == expected_cause
+        assert fields == {
+            "error_class": "builtins.ExceptionGroup",
+            "error_message": "parallel failures (2 sub-exceptions)",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.RuntimeError",
+                        "error_message": "operation A failed",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": 0,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ConnectionError",
+                        "error_message": "connection failed",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.RuntimeError",
+                        "error_message": "operation B failed",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": 2,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ConnectionError",
+                        "error_message": "connection failed",
+                        "frames": [],
+                    },
+                },
+            ],
+        }
 
 
 class TestDepthLimit:
@@ -184,11 +377,9 @@ class TestDepthLimit:
             parent = RuntimeError("parent")
             parent.__cause__ = outer
             outer = parent
-        fields = extraction.extract_exception_fields(outer)
-        for _ in range(extraction.CAUSE_DEPTH_LIMIT):
-            fields = fields["causes"][0]
-        assert fields["error_message"] == "last"
-        assert "causes" not in fields
+        related = extraction.extract_exception_fields(outer)["related_exceptions"]
+        assert len(related) == extraction.CAUSE_DEPTH_LIMIT
+        assert related[-1]["exception"]["error_message"] == "last"
 
     def test_chain_over_depth_limit_uses_marker(self) -> None:
         """深さ上限を超えた例外は読み取らず、その先を[limit]で示す。"""
@@ -198,10 +389,13 @@ class TestDepthLimit:
             parent = RuntimeError("parent")
             parent.__cause__ = outer
             outer = parent
-        fields = extraction.extract_exception_fields(outer)
-        for _ in range(extraction.CAUSE_DEPTH_LIMIT):
-            fields = fields["causes"][0]
-        assert fields["causes"] == "[limit]"
+        related = extraction.extract_exception_fields(outer)["related_exceptions"]
+        assert len(related) == extraction.CAUSE_DEPTH_LIMIT + 1
+        assert related[-1] == {
+            "parent": extraction.CAUSE_DEPTH_LIMIT - 1,
+            "relation": "cause",
+            "exception": "[limit]",
+        }
 
     def test_nested_group_members_beyond_depth_limit_are_not_inspected(self) -> None:
         """グループの中でさらにネストして深さ上限を超えたら、子を読まず省略する。"""
@@ -209,12 +403,17 @@ class TestDepthLimit:
         for _ in range(extraction.CAUSE_DEPTH_LIMIT):
             group = ExceptionGroup("nested failures", [group])
 
-        fields = extraction.extract_exception_fields(group)
+        related = extraction.extract_exception_fields(group)["related_exceptions"]
 
-        for _ in range(extraction.CAUSE_DEPTH_LIMIT):
-            fields = fields["exceptions"][0]
-        assert fields["error_message"] == "deepest failures (1 sub-exception)"
-        assert fields["exceptions"] == ["[limit]"]
+        assert len(related) == extraction.CAUSE_DEPTH_LIMIT + 1
+        assert related[-2]["exception"]["error_message"] == (
+            "deepest failures (1 sub-exception)"
+        )
+        assert related[-1] == {
+            "parent": extraction.CAUSE_DEPTH_LIMIT - 1,
+            "relation": "member",
+            "exception": "[limit]",
+        }
 
 
 class TestTotalLimit:
@@ -229,11 +428,15 @@ class TestTotalLimit:
 
         fields = extraction.extract_exception_fields(group)
 
-        assert fields["exceptions"] == [
+        assert fields["related_exceptions"] == [
             {
-                "error_class": "builtins.ValueError",
-                "error_message": f"failure {index}",
-                "frames": [],
+                "parent": None,
+                "relation": "member",
+                "exception": {
+                    "error_class": "builtins.ValueError",
+                    "error_message": f"failure {index}",
+                    "frames": [],
+                },
             }
             for index in range(member_count)
         ]
@@ -247,16 +450,20 @@ class TestTotalLimit:
 
         fields = extraction.extract_exception_fields(group)
 
-        assert fields["exceptions"] == [
+        assert fields["related_exceptions"] == [
             *[
                 {
-                    "error_class": "builtins.ValueError",
-                    "error_message": f"failure {index}",
-                    "frames": [],
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": f"failure {index}",
+                        "frames": [],
+                    },
                 }
                 for index in range(member_count)
             ],
-            "[limit]",
+            {"parent": None, "relation": "member", "exception": "[limit]"},
         ]
 
     def test_total_limit_inside_group_omits_causes_and_remaining_members(self) -> None:
@@ -271,21 +478,34 @@ class TestTotalLimit:
 
         fields = extraction.extract_exception_fields(outer)
 
-        expected_members = [
+        assert fields["related_exceptions"] == [
             {
-                "error_class": "builtins.ValueError",
-                "error_message": f"failure {index}",
-                "frames": [],
-            }
-            for index in range(member_count)
+                "parent": None,
+                "relation": "member",
+                "exception": {
+                    "error_class": "builtins.ExceptionGroup",
+                    "error_message": (
+                        f"inner failures ({member_count + 1} sub-exceptions)"
+                    ),
+                    "frames": [],
+                },
+            },
+            *[
+                {
+                    "parent": 0,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": f"failure {index}",
+                        "frames": [],
+                    },
+                }
+                for index in range(member_count)
+            ],
+            {"parent": member_count, "relation": "cause", "exception": "[limit]"},
+            {"parent": 0, "relation": "member", "exception": "[limit]"},
+            {"parent": None, "relation": "member", "exception": "[limit]"},
         ]
-        expected_members[-1]["causes"] = "[limit]"
-        assert fields["exceptions"][0]["exceptions"] == [
-            *expected_members,
-            "[limit]",
-        ]
-        assert len(fields["exceptions"]) == 2
-        assert fields["exceptions"][1] == "[limit]"
 
     def test_member_beyond_total_limit_is_not_converted(
         self, monkeypatch: pytest.MonkeyPatch
@@ -323,30 +543,42 @@ class TestTotalLimit:
             "error_class": "builtins.ExceptionGroup",
             "error_message": "parallel failures (2 sub-exceptions)",
             "frames": [],
-            "exceptions": [
+            "related_exceptions": [
                 {
-                    "error_class": "builtins.RuntimeError",
-                    "error_message": "operation A failed",
-                    "frames": [],
-                    "causes": [
-                        {
-                            "error_class": "builtins.ValueError",
-                            "error_message": "cause A",
-                            "frames": [],
-                        }
-                    ],
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.RuntimeError",
+                        "error_message": "operation A failed",
+                        "frames": [],
+                    },
                 },
                 {
-                    "error_class": "builtins.RuntimeError",
-                    "error_message": "operation B failed",
-                    "frames": [],
-                    "causes": [
-                        {
-                            "error_class": "builtins.ValueError",
-                            "error_message": "cause B",
-                            "frames": [],
-                        }
-                    ],
+                    "parent": 0,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "cause A",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.RuntimeError",
+                        "error_message": "operation B failed",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": 2,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "cause B",
+                        "frames": [],
+                    },
                 },
             ],
         }
@@ -368,32 +600,44 @@ class TestTotalLimit:
             "error_class": "builtins.ExceptionGroup",
             "error_message": "parallel failures (3 sub-exceptions)",
             "frames": [],
-            "exceptions": [
+            "related_exceptions": [
                 {
-                    "error_class": "builtins.RuntimeError",
-                    "error_message": "operation A failed",
-                    "frames": [],
-                    "causes": [
-                        {
-                            "error_class": "builtins.ValueError",
-                            "error_message": "cause A",
-                            "frames": [],
-                        }
-                    ],
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.RuntimeError",
+                        "error_message": "operation A failed",
+                        "frames": [],
+                    },
                 },
                 {
-                    "error_class": "builtins.RuntimeError",
-                    "error_message": "operation B failed",
-                    "frames": [],
-                    "causes": [
-                        {
-                            "error_class": "builtins.ValueError",
-                            "error_message": "cause B",
-                            "frames": [],
-                        }
-                    ],
+                    "parent": 0,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "cause A",
+                        "frames": [],
+                    },
                 },
-                "[limit]",
+                {
+                    "parent": None,
+                    "relation": "member",
+                    "exception": {
+                        "error_class": "builtins.RuntimeError",
+                        "error_message": "operation B failed",
+                        "frames": [],
+                    },
+                },
+                {
+                    "parent": 2,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.ValueError",
+                        "error_message": "cause B",
+                        "frames": [],
+                    },
+                },
+                {"parent": None, "relation": "member", "exception": "[limit]"},
             ],
         }
 
@@ -446,7 +690,7 @@ class TestConversionBoundary:
         outer.__cause__ = ValueError("inner")
         fields = extraction.extract_exception_fields(outer)
         assert fields["error_message"] == "[exception message unavailable]"
-        assert fields["causes"][0]["error_message"] == "inner"
+        assert fields["related_exceptions"][0]["exception"]["error_message"] == "inner"
 
     def test_aggregated_cause_is_not_followed(self) -> None:
         """変換担当が内部原因を集約済みとした場合、その原因へ進まない。"""
@@ -468,6 +712,66 @@ class TestConversionBoundary:
             "frames": [],
         }
         converter.assert_called_once_with(outer)
+
+    def test_details_of_cause_stay_in_its_exception(self) -> None:
+        """原因の診断情報は、その原因のexceptionの中に残し、外側へ引き上げない。"""
+        outer = RuntimeError("operation failed")
+        outer.__cause__ = ApplicationError(
+            "fetch failed", details={"reason": "network"}
+        )
+
+        fields = extraction.extract_exception_fields(outer)
+
+        assert fields == {
+            "error_class": "builtins.RuntimeError",
+            "error_message": "operation failed",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "app.shared.errors.ApplicationError",
+                        "error_message": "fetch failed",
+                        "frames": [],
+                        "error_details": {"reason": "network"},
+                    },
+                },
+            ],
+        }
+
+    def test_aggregated_related_exception_is_the_last_one_listed(self) -> None:
+        """関連する例外が内部原因を集約済みとした場合、その例外までを並べ、内部原因は読み取らない。"""
+        outer = RuntimeError("operation failed")
+        database_error = RuntimeError("database failed")
+        outer.__cause__ = database_error
+        database_error.__cause__ = _UntouchableError()
+
+        def convert(exc: BaseException) -> ConvertedException:
+            if exc is database_error:
+                return ConvertedException(
+                    message="database failed", cause_is_aggregated=True
+                )
+            return ConvertedException(message=str(exc))
+
+        fields = extraction.extract_exception_fields(outer, exception_converter=convert)
+
+        assert fields == {
+            "error_class": "builtins.RuntimeError",
+            "error_message": "operation failed",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.RuntimeError",
+                        "error_message": "database failed",
+                        "frames": [],
+                    },
+                },
+            ],
+        }
 
 
 class TestConfiguredConverter:
@@ -496,9 +800,10 @@ class TestConfiguredConverter:
             sibling,
         ]
         assert fields["error_message"] == "converted"
-        members = fields["causes"][0]["exceptions"]
-        assert members[0]["causes"][0]["error_message"] == "converted"
-        assert members[1]["error_message"] == "converted"
+        assert [
+            element["exception"]["error_message"]
+            for element in fields["related_exceptions"]
+        ] == ["converted", "converted", "converted", "converted"]
 
     def test_exception_beyond_depth_limit_is_not_converted(self) -> None:
         """深さ上限を超えた例外は、指定した変換担当へ渡さない。"""
@@ -515,9 +820,11 @@ class TestConfiguredConverter:
         )
 
         assert [call.args[0] for call in converter.call_args_list] == chain[:-1]
-        for _ in range(extraction.CAUSE_DEPTH_LIMIT):
-            fields = fields["causes"][0]
-        assert fields["causes"] == "[limit]"
+        assert fields["related_exceptions"][-1] == {
+            "parent": extraction.CAUSE_DEPTH_LIMIT - 1,
+            "relation": "cause",
+            "exception": "[limit]",
+        }
 
     def test_cycle_does_not_convert_same_path_again(self) -> None:
         """現在の経路に戻った例外は循環として示し、再変換しない。"""
@@ -532,7 +839,11 @@ class TestConfiguredConverter:
         )
 
         assert [call.args[0] for call in converter.call_args_list] == [outer, inner]
-        assert fields["causes"][0]["causes"] == "[cycle]"
+        assert fields["related_exceptions"][1] == {
+            "parent": 0,
+            "relation": "cause",
+            "exception": "[cycle]",
+        }
 
 
 class TestFrames:

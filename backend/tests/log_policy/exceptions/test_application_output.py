@@ -72,7 +72,7 @@ def test_boundary_diagnostics_reach_json_without_input(
         ],
     }
     assert output["frames"]
-    assert "causes" not in output
+    assert "related_exceptions" not in output
     assert "synthetic-private" not in json.dumps(output)
 
 
@@ -103,7 +103,7 @@ def test_unknown_category_logs_application_diagnostics_without_invalid_value(
     }
     assert any(frame["function"] == "parse_assessment" for frame in output["frames"])
     assert "PRIVATE_CATEGORY_SENTINEL" not in json.dumps(output)
-    assert "causes" not in output
+    assert "related_exceptions" not in output
 
 
 def test_deepest_exception_keeps_issue_fields_and_codes(
@@ -118,9 +118,8 @@ def test_deepest_exception_keeps_issue_fields_and_codes(
 
     output = json.loads(application_logger.error("event_failed", exc_info=outer))
 
-    for _ in range(CAUSE_DEPTH_LIMIT):
-        output = output["causes"][0]
-    assert output["error_details"] == {
+    deepest = output["related_exceptions"][CAUSE_DEPTH_LIMIT - 1]["exception"]
+    assert deepest["error_details"] == {
         "kind": "application_validation",
         "reason": "invalid_payload",
         "issues": [

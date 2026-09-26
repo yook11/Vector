@@ -557,16 +557,24 @@ class TestLeakPrevention:
         logger.error("failed", exc_info=group)
 
         entry = capture.entries[0]
-        assert entry["exceptions"] == [
+        assert entry["related_exceptions"] == [
             {
-                "error_class": "builtins.ValueError",
-                "error_message": "request with [redacted:gemini_api_key] failed",
-                "frames": [],
+                "parent": None,
+                "relation": "member",
+                "exception": {
+                    "error_class": "builtins.ValueError",
+                    "error_message": "request with [redacted:gemini_api_key] failed",
+                    "frames": [],
+                },
             },
             {
-                "error_class": "builtins.TypeError",
-                "error_message": "invalid response type",
-                "frames": [],
+                "parent": None,
+                "relation": "member",
+                "exception": {
+                    "error_class": "builtins.TypeError",
+                    "error_message": "invalid response type",
+                    "frames": [],
+                },
             },
         ]
         assert _GEMINI_KEY not in repr(entry)
@@ -700,52 +708,52 @@ class TestDiagnostics:
 class TestExceptionFields:
     """例外専用項目への任意入力を除外し、実際の例外から抽出した情報を保護して出力する。"""
 
-    def test_exceptions_argument_is_dropped_even_when_allowed(
+    def test_related_exceptions_argument_is_dropped_even_when_allowed(
         self, configure_chain
     ) -> None:
-        """allow宣言があってもログ引数のexceptionsを例外情報として採用しない。"""
+        """allow宣言があってもログ引数のrelated_exceptionsを例外情報として採用しない。"""
         capture = configure_chain()
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"exceptions"}))
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"related_exceptions"}))
         logger = policy_logger("test", rules)
 
-        logger.error("failed", exceptions=[{"error_message": "injected failure"}])
+        logger.error("failed", related_exceptions=[{"relation": "cause"}])
 
         entry = capture.entries[0]
         assert entry["event"] == "failed"
-        assert "exceptions" not in entry
+        assert "related_exceptions" not in entry
 
-    def test_bound_exceptions_are_dropped_even_when_allowed(
+    def test_bound_related_exceptions_are_dropped_even_when_allowed(
         self, configure_chain
     ) -> None:
-        """allow宣言があってもbindしたexceptionsを例外情報として採用しない。"""
+        """allow宣言があってもbindしたrelated_exceptionsを例外情報として採用しない。"""
         capture = configure_chain()
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"exceptions"}))
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"related_exceptions"}))
         logger = policy_logger("test", rules).bind(
-            exceptions=[{"error_message": "injected failure"}]
+            related_exceptions=[{"relation": "cause"}]
         )
 
         logger.error("failed")
 
         entry = capture.entries[0]
         assert entry["event"] == "failed"
-        assert "exceptions" not in entry
+        assert "related_exceptions" not in entry
 
-    def test_contextvars_exceptions_are_dropped_even_when_allowed(
+    def test_contextvars_related_exceptions_are_dropped_even_when_allowed(
         self, configure_chain
     ) -> None:
-        """allow宣言があってもcontextvarsのexceptionsを例外情報として採用しない。"""
+        """allow宣言があってもcontextvarsのrelated_exceptionsを例外情報として採用しない。"""
         capture = configure_chain()
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"exceptions"}))
+        rules = BASE_LOG_RULES.extend(allow=frozenset({"related_exceptions"}))
         logger = policy_logger("test", rules)
         structlog.contextvars.bind_contextvars(
-            exceptions=[{"error_message": "injected failure"}]
+            related_exceptions=[{"relation": "cause"}]
         )
 
         logger.error("failed")
 
         entry = capture.entries[0]
         assert entry["event"] == "failed"
-        assert "exceptions" not in entry
+        assert "related_exceptions" not in entry
 
     def test_generated_exception_message_replaces_same_named_input(self) -> None:
         """同名の入力があっても、例外から抽出した項目を出力に採用する。"""
@@ -801,9 +809,7 @@ def _nested_value(*, depth: int, leaf: Any) -> Any:
 
 
 def _cause_node(fields: Any, cause_depth: int) -> Any:
-    for _ in range(cause_depth):
-        fields = fields["causes"][0]
-    return fields
+    return fields["related_exceptions"][cause_depth - 1]["exception"]
 
 
 def _failure_with_cause_chain(cause_depth: int) -> tuple[BaseException, ValueError]:
