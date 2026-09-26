@@ -119,8 +119,9 @@ const vectorDisplay = Newsreader({
 });
 
 // OG/Twitter 画像の絶対 URL 解決に metadataBase が要る。frontend の公開オリジンは
-// BETTER_AUTH_URL (fly.toml [env]) を使う。FRONTEND_URL は backend (vector-core) の
-// CORS 用 var で frontend env には届かないため使わない。未設定の dev は localhost。
+// build 時に焼き込む BETTER_AUTH_URL (frontend/Dockerfile の ARG) を使う。FRONTEND_URL は
+// backend (vector-core) の CORS 用 var で frontend env には届かないため使わない。
+// 未設定の dev は localhost。
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.BETTER_AUTH_URL ?? "http://localhost:3000"),
   title: {

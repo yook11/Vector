@@ -391,7 +391,7 @@ _IAM_RUNTIME_URL = (
 
 
 def test_db_iam_auth_defaults_to_false() -> None:
-    """既定は無効。Fly は URL の password で繋ぐ。"""
+    """既定は無効。dev は URL の password で繋ぐ。"""
     assert Settings().db_iam_auth is False
 
 
@@ -417,7 +417,7 @@ def test_db_iam_auth_requires_region(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_aws_region_defaults_to_none() -> None:
-    """IAM 認証を使わない環境 (Fly / dev) では未設定が正しい。"""
+    """IAM 認証を使わない環境 (dev) では未設定が正しい。"""
     assert Settings().aws_region is None
 
 
@@ -644,7 +644,7 @@ _IAM_REDIS_URL = "rediss://vector-app@vector-cache.abc.cache.amazonaws.com:6379/
 
 
 def test_redis_iam_auth_defaults_to_false() -> None:
-    """既定は無効。Fly / dev は URL の password で繋ぐ。"""
+    """既定は無効。dev は URL の password で繋ぐ。"""
     assert Settings().redis_iam_auth is False
 
 
@@ -723,7 +723,7 @@ def test_redis_iam_auth_requires_cache_name(monkeypatch: pytest.MonkeyPatch) -> 
 def test_redis_iam_auth_disabled_allows_password_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """無効時は従来通り URL の password で繋げる (Fly / dev の既定)。"""
+    """無効時は従来通り URL の password で繋げる (dev の既定)。"""
     password_url = "redis://:secret@localhost:6379/0"
     monkeypatch.setenv("REDIS_URL", password_url)
     s = Settings()
