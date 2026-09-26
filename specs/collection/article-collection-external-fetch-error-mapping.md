@@ -2,6 +2,8 @@
 
 Status: Implemented
 
+> 2026-09-26: `ExternalFetchError`群と本変換は撤去した。取得工程は共通HTTPエラーを使う（[取得工程の共通HTTPエラーへの移行](./acquisition-common-http-errors.md)）。
+
 ## 目的
 
 `ExternalFetchError` を生成する変換ロジック (HTTP status / httpx 例外 → origin error)

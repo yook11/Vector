@@ -21,10 +21,6 @@ from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssRe
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_acquisition.strategy import SOURCES
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
-from app.collection.external_fetch_errors import (
-    FetchOriginServerError,
-    FetchSsrfBlockedError,
-)
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
 )
@@ -34,6 +30,8 @@ from app.collection.sources.acquisition_request import (
 )
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
 from app.collection.sources.fetch_cadence import FetchCadence
+from app.http.destination_policy import HostBlockedError
+from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
@@ -217,9 +215,11 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
     )
     all_failed = scenario.startswith("all_failed")
     second_error = (
-        FetchOriginServerError(status_code=503, reason="unavailable")
+        HttpResponseError(
+            status_code=503, received_at=datetime(2026, 9, 26, tzinfo=UTC)
+        )
         if scenario == "all_failed_retryable"
-        else FetchSsrfBlockedError("blocked")
+        else HostBlockedError("blocked")
     )
     reader = AsyncMock(
         side_effect=(
@@ -291,7 +291,11 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
             assert [f["feed_url"] for f in failures] == list(
                 MultiSource.acquisition.feeds
             )
-            assert [f["code"] for f in failures] == [read_error.CODE, second_error.CODE]
+            assert [(f["code"], f["http_status"]) for f in failures] == (
+                [("read_malformed_content", None), ("http_response_error", 503)]
+                if scenario == "all_failed_retryable"
+                else [("read_malformed_content", None), ("host_blocked", None)]
+            )
             assert failures[0]["error_chain"][-1] == "builtins.ValueError"
             assert failures[0]["error_class"].endswith(".UnreadableResponseError")
             assert failures[1]["error_class"].endswith(

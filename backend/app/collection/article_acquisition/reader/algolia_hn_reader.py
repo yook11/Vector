@@ -15,11 +15,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
-from app.collection.external_fetch_error_mapping import (
-    external_fetch_error_from_exception,
-)
-from app.http.destination_policy import HostBlockedError
-from app.http.destination_resolution import HostResolutionError
+from app.collection.article_acquisition.tools.source_http import get_source_response
 from app.http.external import make_external_async_client
 
 logger = structlog.get_logger(__name__)
@@ -80,7 +76,8 @@ class HackerNewsReader:
         """直近 ``window_seconds`` 内に投稿された ``points > min_points`` story を取得。
 
         Raises:
-            ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
+            HttpResponseError / HttpTransportError / HostBlockedError: 取得の失敗。
+            UnreadableResponseError: 応答を構造化できない。
         """
         since = int(time.time()) - window_seconds
         params: dict[str, str | int] = {
@@ -94,18 +91,9 @@ class HackerNewsReader:
             verify=True,
             timeout=_HTTP_TIMEOUT,
         ) as client:
-            try:
-                response = await client.get(self._endpoint_url, params=params)
-                response.raise_for_status()
-            except (
-                httpx.HTTPStatusError,
-                httpx.RequestError,
-                HostBlockedError,
-                HostResolutionError,
-            ) as e:
-                raise external_fetch_error_from_exception(
-                    e, target_label=source_name
-                ) from e
+            response = await get_source_response(
+                client, self._endpoint_url, params=params
+            )
 
             if not response.content.strip():
                 raise UnreadableResponseError(

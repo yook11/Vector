@@ -11,9 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition import service as service_module
-from app.collection.article_acquisition.errors import (
-    AcquisitionReadError,
-)
 from app.collection.article_acquisition.events import (
     IncompleteArticleRecorded,
 )
@@ -27,10 +24,6 @@ from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.events import AnalyzableArticleCreated
-from app.collection.external_fetch_errors import (
-    ExternalFetchError,
-    FetchAccessDeniedError,
-)
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,
@@ -38,6 +31,7 @@ from app.collection.sources.article_completion_policy import (
 from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.source_name import SourceName
+from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource, SourceType
@@ -133,7 +127,7 @@ class _RaisingReadSource(BaseArticleSource):
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
     fetch_cadence: ClassVar[FetchCadence] = FetchCadence.HIGH
 
-    def __init__(self, exc: ExternalFetchError | UnreadableResponseError) -> None:
+    def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
     async def read(
@@ -581,43 +575,29 @@ async def _succeeded_events(db_session: AsyncSession) -> list[PipelineEvent]:
 
 
 @pytest.mark.asyncio
-async def test_external_fetch_error_is_wrapped_to_acquisition_marker(
+@pytest.mark.parametrize(
+    "origin",
+    [
+        HttpResponseError(
+            status_code=403, received_at=datetime(2026, 9, 26, tzinfo=UTC)
+        ),
+        UnreadableResponseError(
+            reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
+        ),
+    ],
+)
+async def test_source_read_failure_propagates_without_rewrapping(
     session_factory: async_sessionmaker[AsyncSession],
     vb_source: NewsSource,
+    origin: Exception,
 ) -> None:
-    """外部取得 origin error は Stage 1 terminal marker に詰め替えて伝播する。"""
-    origin = FetchAccessDeniedError(status_code=403, reason="forbidden")
+    """取得・読取の失敗は取得工程のエラーで包み直さず、発生した例外のまま伝える。"""
     svc = ArticleAcquisitionService(session_factory, _RaisingReadSource(origin))
 
-    with pytest.raises(AcquisitionReadError) as raised:
+    with pytest.raises(type(origin)) as raised:
         await svc.execute(vb_source.id)
 
-    assert raised.value.code == "fetch_access_denied"
-    assert raised.value.origin is origin
-    assert raised.value.__cause__ is origin
-
-
-@pytest.mark.asyncio
-async def test_unreadable_response_error_is_wrapped_to_acquisition_marker(
-    session_factory: async_sessionmaker[AsyncSession],
-    vb_source: NewsSource,
-) -> None:
-    """読取 origin error は Stage 1 統合 marker に詰め替えて伝播する。
-
-    fetch と同じ ``AcquisitionReadError`` に写り、``code`` は origin の reason.value を
-    運ぶ (単一 CODE は廃止)。
-    """
-    origin = UnreadableResponseError(
-        reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
-    )
-    svc = ArticleAcquisitionService(session_factory, _RaisingReadSource(origin))
-
-    with pytest.raises(AcquisitionReadError) as raised:
-        await svc.execute(vb_source.id)
-
-    assert raised.value.code == "read_malformed_content"
-    assert raised.value.origin is origin
-    assert raised.value.__cause__ is origin
+    assert raised.value is origin
 
 
 @pytest.mark.asyncio

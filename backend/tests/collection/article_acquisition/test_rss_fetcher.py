@@ -26,12 +26,12 @@ from app.collection.article_acquisition.reader.rss_reader import (
 )
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.external_fetch_errors import FetchOriginServerError
 from app.collection.sources.definitions.openai import OpenAISource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.rss_acquisition import (
     RssSource,
 )
+from app.http.errors import HttpResponseError
 
 _PUBLISHED = datetime(2026, 5, 1, tzinfo=UTC)
 _ENTRY = RssEntry(
@@ -151,7 +151,9 @@ async def test_successful_empty_feed_remains_empty() -> None:
 @pytest.mark.parametrize(
     "error",
     [
-        FetchOriginServerError(status_code=503, reason="unavailable"),
+        HttpResponseError(
+            status_code=503, received_at=datetime(2026, 9, 26, tzinfo=UTC)
+        ),
         UnreadableResponseError(
             reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
         ),

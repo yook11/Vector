@@ -86,7 +86,7 @@ Status: Implemented
 
 ## 後続
 
-1. 取得工程の読み取りと監査を共通HTTPエラーへ移し、旧`ExternalFetchError`群を撤去する。再配信の挙動は変えない。
+1. 取得工程の読み取りと監査を共通HTTPエラーへ移し、旧`ExternalFetchError`群を撤去する。再配信の挙動は変えない。（[取得工程の共通HTTPエラーへの移行](./acquisition-common-http-errors.md)で実施）
 2. 取得工程の失敗判断とhandlerを実装し、本判断の結果を再配信・受信完了へ写す。[取得依頼の定期投入](../pipeline/source-dispatch-scheduler.md)§4を更新する。
 
 ## 実装記録（2026-09-26）

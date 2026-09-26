@@ -2,13 +2,14 @@
 
 engine は Source 宣言を **read → in_scope filter → select → map_entry** の順に
 合成する。stub source で (1) 合成順序、(2) ``BaseArticleSource`` default の供給、
-(3) ``read`` の read error (接続失敗 ``ExternalFetchError`` / 読取失敗
+(3) ``read`` の read error (取得失敗の共通HTTPエラー / 読取失敗
 ``UnreadableResponseError``) の明示素通り、(4) それ以外 (契約違反 bug) を funnel
 せず素通しすることを固定する。
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
@@ -20,8 +21,8 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseReason,
 )
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
-from app.collection.external_fetch_errors import FetchOriginServerError
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.http.errors import HttpResponseError
 
 _TOOLS = ReaderTools()
 
@@ -92,20 +93,22 @@ async def test_base_defaults_supply_in_scope_and_select() -> None:
 
 
 class _FailingReadSource(BaseArticleSource):
-    """``read`` が ``ExternalFetchError`` を raise する stub。"""
+    """``read`` が共通の応答エラーを raise する stub。"""
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[str]:  # noqa: ARG003
-        raise FetchOriginServerError(status_code=503, reason="boom")
+        raise HttpResponseError(
+            status_code=503, received_at=datetime(2026, 9, 26, tzinfo=UTC)
+        )
 
     @classmethod
     def map_entry(cls, entry: str) -> FetchedArticle:
         return _fa(entry)
 
 
-async def test_read_external_fetch_error_passes_through() -> None:
-    """``read`` の ``ExternalFetchError`` を engine は握りつぶさず素通りさせる。"""
-    with pytest.raises(FetchOriginServerError):
+async def test_read_http_response_error_passes_through() -> None:
+    """``read`` の共通の応答エラーを engine は握りつぶさず素通りさせる。"""
+    with pytest.raises(HttpResponseError):
         await _drain(_FailingReadSource)
 
 

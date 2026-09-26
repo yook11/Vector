@@ -27,10 +27,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseReason,
 )
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
-from app.collection.external_fetch_errors import (
-    FetchAccessDeniedError,
-    FetchOriginServerError,
-)
+from app.http.errors import HttpResponseError
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
@@ -109,16 +106,11 @@ async def _raise_through(status_code: int) -> None:
         )
 
 
-async def test_http_403_raises_access_denied() -> None:
-    """R4: payload 全体の失敗 (403) は ``ExternalFetchError`` 系に写る。"""
-    with pytest.raises(FetchAccessDeniedError):
+async def test_unsuccessful_response_raises_common_response_error() -> None:
+    """R4: payload 全体の失敗は共通の応答エラーとして status を保って伝わる。"""
+    with pytest.raises(HttpResponseError) as caught:
         await _raise_through(403)
-
-
-async def test_http_500_raises_origin_server_error() -> None:
-    """R4: payload 全体の失敗 (500) は ``ExternalFetchError`` 系に写る。"""
-    with pytest.raises(FetchOriginServerError):
-        await _raise_through(500)
+    assert caught.value.status_code == 403
 
 
 async def _fetch_body(content: bytes) -> list[CrossrefEntry]:
@@ -180,7 +172,7 @@ async def test_unreadable_payload_classified_by_reason(
 ) -> None:
     """接続成功だが構造化不能な payload は read 段固有の ``UnreadableResponseError``
     に写り、**どこがどう壊れたか** を reason + field で自己記述する (接続境界
-    ``ExternalFetchError`` とは別系統。生 ``JSONDecodeError`` / ``AttributeError`` を
+    の共通HTTPエラーとは別系統。生 ``JSONDecodeError`` / ``AttributeError`` を
     上位へ漏らさない)。
     """
     with pytest.raises(UnreadableResponseError) as raised:

@@ -12,7 +12,7 @@
   写像を通らないため、ここでしか HN シームの totality を pin できない。
   HN は収集スコープ述語を持たず全 entry を写すため degenerate witness は
   単に url=None entry)
-- ``HackerNewsReader`` の ``ExternalFetchError`` は ``collect`` を素通しする
+- ``HackerNewsReader`` の取得失敗 (共通HTTPエラー) は ``collect`` を素通しする
 
 passport 業務不変条件は ``test_non_rss_adapters_invariants.py`` [HackerNews]
 が 系統A シートベルトとして所有。degenerate hit の棄却 *理由*
@@ -26,6 +26,7 @@ spec が意図的に壊す silent-drop を業務ルールとして凍結する�
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -40,16 +41,13 @@ from app.collection.article_acquisition.reader.algolia_hn_reader import (
     normalize_hit,
 )
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.external_fetch_errors import (
-    FetchAccessDeniedError,
-    FetchOriginServerError,
-)
 from app.collection.sources.definitions.hacker_news import (
     HN_HITS_PER_PAGE,
     HN_MIN_POINTS,
     HN_SLIDING_WINDOW_SECONDS,
     HackerNewsSource,
 )
+from app.http.errors import HttpResponseError
 from tests.collection.sources._fixture_tools import fixture_tools
 from tests.collection.sources._invariant import FetchItem, drive_source
 
@@ -157,18 +155,10 @@ async def test_url_none_hit_surfaces_as_rejection_without_stopping_stream() -> N
 
 
 @pytest.mark.asyncio
-async def test_non_recoverable_error_propagates_through_collect() -> None:
-    client = _RaisingHNClient(
-        FetchAccessDeniedError(status_code=403, reason="forbidden")
+async def test_fetch_failure_propagates_through_collect() -> None:
+    error = HttpResponseError(
+        status_code=503, received_at=datetime(2026, 9, 26, tzinfo=UTC)
     )
-    with pytest.raises(FetchAccessDeniedError):
-        await _drive(client)
-
-
-@pytest.mark.asyncio
-async def test_recoverable_error_propagates_through_collect() -> None:
-    client = _RaisingHNClient(
-        FetchOriginServerError(status_code=500, reason="internal_error")
-    )
-    with pytest.raises(FetchOriginServerError):
-        await _drive(client)
+    with pytest.raises(HttpResponseError) as caught:
+        await _drive(_RaisingHNClient(error))
+    assert caught.value is error

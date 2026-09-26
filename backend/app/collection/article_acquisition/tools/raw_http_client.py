@@ -6,11 +6,7 @@ from typing import ClassVar
 
 import httpx
 
-from app.collection.external_fetch_error_mapping import (
-    external_fetch_error_from_exception,
-)
-from app.http.destination_policy import HostBlockedError
-from app.http.destination_resolution import HostResolutionError
+from app.collection.article_acquisition.tools.source_http import get_source_response
 from app.http.external import make_external_async_client
 
 _DEFAULT_USER_AGENT = (
@@ -39,23 +35,12 @@ class RawHttpClient:
         """1 URL を GET し ``bytes`` を返す。
 
         Raises:
-            ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
+            HttpResponseError / HttpTransportError / HostBlockedError: 取得の失敗。
         """
         async with make_external_async_client(
             headers={"User-Agent": self._user_agent, "Accept": self._accept},
             verify=True,
             timeout=self._timeout,
         ) as client:
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-            except (
-                httpx.HTTPStatusError,
-                httpx.RequestError,
-                HostBlockedError,
-                HostResolutionError,
-            ) as e:
-                raise external_fetch_error_from_exception(
-                    e, target_label=source_name
-                ) from e
+            response = await get_source_response(client, url)
             return response.content

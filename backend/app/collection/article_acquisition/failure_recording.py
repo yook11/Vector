@@ -7,7 +7,6 @@ import structlog
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
-from app.collection.article_acquisition.errors import AcquisitionError
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
 )
@@ -15,7 +14,6 @@ from app.collection.article_acquisition.metrics import (
     AcquisitionEntryOutcome,
     record_acquisition_outcome,
 )
-from app.db.errors import DatabaseError
 from app.db.session import SessionFactory
 from app.shared.security.redaction import redact_secrets
 
@@ -33,14 +31,11 @@ class ArticleAcquisitionFailureRecorder:
         *,
         source_id: int | None,
         source_name: str | None,
-        exc: BaseException,
+        exc: Exception,
     ) -> None:
         """再試行の判断を行わず、ソースの取得失敗を別セッションで監査する。"""
         try:
-            if isinstance(exc, AcquisitionError | DatabaseError):
-                await self._audit_failure(source_id, source_name, exc)
-            else:
-                await self._audit_unexpected_failure(source_id, source_name, exc)
+            await self._audit_failure(source_id, source_name, exc)
         except Exception:  # noqa: S110
             # 監査・診断の通常障害で元の取得失敗を置き換えない。
             pass
@@ -86,40 +81,12 @@ class ArticleAcquisitionFailureRecorder:
         self,
         source_id: int | None,
         source_name: str | None,
-        exc: AcquisitionError | DatabaseError,
+        exc: Exception,
     ) -> None:
         """best-effort failure audit。失敗時は redacted log に退避する。"""
         try:
             async with self._session_factory() as session:
                 await SourceAcquisitionAuditRepository(session).append_failure(
-                    source_id=source_id,
-                    source_name=source_name,
-                    exc=exc,
-                )
-                await session.commit()
-        except Exception as audit_exc:
-            logger.exception(
-                "source_acquisition_failure_audit_dropped",
-                source_id=source_id,
-                business_error_class=(exception_fqn(exc)),
-                business_error_message=redact_secrets(str(exc))[:500],
-                audit_error_class=(exception_fqn(audit_exc)),
-                audit_error_message=redact_secrets(str(audit_exc))[:500],
-            )
-            record_audit_dropped(SourceAcquisitionAuditRepository.STAGE)
-
-    async def _audit_unexpected_failure(
-        self,
-        source_id: int | None,
-        source_name: str | None,
-        exc: BaseException,
-    ) -> None:
-        """想定外失敗の best-effort audit。"""
-        try:
-            async with self._session_factory() as session:
-                await SourceAcquisitionAuditRepository(
-                    session
-                ).append_unexpected_failure(
                     source_id=source_id,
                     source_name=source_name,
                     exc=exc,
