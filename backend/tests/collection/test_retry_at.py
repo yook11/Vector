@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from app.collection.article_completion.retry_at import RetryAt
+from app.collection.retry_at import RetryAt
 
 
 def test_normalizes_aware_time_to_utc():

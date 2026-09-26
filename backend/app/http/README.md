@@ -90,7 +90,7 @@ AWS試験のスナップショットにも、同じ相対配置でJSONを同梱�
 共通HTTPは確認できた発生事実を保持し、終了・再試行・待機の判断は利用機能が所有する。
 通信ライブラリの例外解析は`failure.classify_httpx`へ集約し、
 `error_mapping`はその結果を`HttpTransportError`へ載せる。
-既存の記事取得の`external_fetch_error_mapping`もプロキシの分類結果を使用し、
+記事の取得工程・補完工程はどちらも共通HTTPエラーを受け取り、
 例外メッセージから独自にstatusを読み取らない。
 
 | 発生事実 | HTTP側の扱い | 保証しないこと |
@@ -122,15 +122,10 @@ CONNECT成功後に受け取った403も、CONNECTそのものの拒否とは区
 
 ### 利用機能の既存判断
 
-既存の取得処理はCONNECT 403を`FetchEgressBlockedError`へ変換して終了扱いにし、
-その他のプロキシ失敗を`FetchNetworkError`へ変換して再試行可能とする。
-一方、新しい記事補完Consumerは`HttpTransportError`として再試行する。
-この違いは[記事補完の仕様](../../../specs/pipeline/article-completion-consumer.md)に従い、共通分類器で統一しない。
-
-既存の取得処理には未知例外を`FetchNetworkError`へ倒す互換動作と、エラー自身の`retryable`が残る。
-既存エラー全体の共通契約への移行・判断のハンドラーへの移動は、今回のプロキシ解析共通化とは分けて扱う。
-失敗情報の内部保持と安全な記録の責任は[Issue #328](https://github.com/yook11/Vector/issues/328)と整合させ、
-今回の変更でログ・監査へ出力する情報を増やさない。
+記事の取得工程と補完工程は、共通HTTPエラーと宛先拒否を[外部取得の失敗判断](../../../specs/collection/external-fetch-failure-classification.md)で再試行可能・再試行不可に分け、後始末は各工程が決める。
+CONNECT 403を含むプロキシ失敗は通信失敗として再試行可能に分類し、プロキシ接続時の403だけで取得不可と扱わない。
+取得工程にあった未知例外を通信障害へ倒す互換動作と、エラー自身の`retryable`は撤去した（[取得工程の共通HTTPエラーへの移行](../../../specs/collection/acquisition-common-http-errors.md)）。
+失敗情報の内部保持と安全な記録の責任は[Issue #328](https://github.com/yook11/Vector/issues/328)と整合させる。
 
 ## テストによる確認範囲
 

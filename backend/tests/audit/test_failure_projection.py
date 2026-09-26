@@ -31,17 +31,6 @@ from app.audit.failure_projection import (
     project_marker_failure,
     project_redis_failure,
 )
-from app.collection.article_acquisition.errors import (
-    AcquisitionReadError,
-)
-from app.collection.article_acquisition.reader.read_errors import (
-    UnreadableResponseError,
-    UnreadableResponseReason,
-)
-from app.collection.external_fetch_errors import (
-    FetchAccessDeniedError,
-    FetchGatewayError,
-)
 from app.insights.briefing.errors import BriefingConfigurationError
 
 
@@ -219,57 +208,6 @@ def test_project_failure_uses_redis_projection_before_catch_all() -> None:
             code="redis_unavailable",
         )
     )
-
-
-@pytest.mark.parametrize(
-    ("exc", "expected"),
-    [
-        (
-            AcquisitionReadError(origin=FetchGatewayError(status_code=502)),
-            FailureProjection(
-                failure_kind="external_fetch",
-                retryability=Retryability.RETRYABLE,
-                failure_action=None,
-                code="fetch_gateway_failure",
-            ),
-        ),
-        (
-            AcquisitionReadError(
-                origin=FetchAccessDeniedError(status_code=403, reason="forbidden")
-            ),
-            FailureProjection(
-                failure_kind="external_fetch",
-                retryability=Retryability.NON_RETRYABLE,
-                failure_action=None,
-                code="fetch_access_denied",
-            ),
-        ),
-        (
-            AcquisitionReadError(
-                origin=UnreadableResponseError(
-                    reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
-                    response_format="json",
-                    field="items",
-                )
-            ),
-            FailureProjection(
-                failure_kind="unreadable_response",
-                retryability=Retryability.NON_RETRYABLE,
-                failure_action=None,
-                code="read_unexpected_field_shape",
-            ),
-        ),
-    ],
-)
-def test_source_acquisition_marker_projection_reads_marker_attrs(
-    exc: BaseException, expected: FailureProjection
-) -> None:
-    """統合 marker は instance ``RETRYABILITY`` を origin から導いて projection する。
-
-    gateway (retryable) と access_denied (terminal) を同一クラスで構築し、片方は
-    ``RETRYABLE`` 片方は ``NON_RETRYABLE`` に投影される (per-instance 導出の witness)。
-    """
-    assert project_failure(exc) == expected
 
 
 def test_failure_payload_fields_serializes_action_value() -> None:

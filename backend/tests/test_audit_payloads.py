@@ -110,26 +110,29 @@ class TestAcquisitionPayloadReadFailureFields:
         assert AcquisitionPayload.model_validate(dumped) == payload
 
 
-class TestAcquisitionPayloadFetchFailureFields:
-    """接続失敗 (fetch origin) の specifics 列。``http_status`` (既存) と対称に
-    ``reason`` / ``retry_after`` を構造化列で残す (outcome_code = CODE とは別に、後から
-    どの reason / どの retry-after で落ちたかを復元できるようにする)。
+class TestAcquisitionPayloadTransportFailureFields:
+    """通信失敗の理由は ``reason_code`` 列に残す。
+
+    撤去した旧列を含む保存済み行も読める。
     """
 
-    def test_fetch_fields_default_none(self) -> None:
-        payload = AcquisitionPayload()
-        assert payload.fetch_reason is None
-        assert payload.fetch_retry_after_seconds is None
-
-    def test_fetch_fields_serialize_to_json(self) -> None:
-        payload = AcquisitionPayload(
-            fetch_reason="service_unavailable",
-            fetch_retry_after_seconds=30.0,
-        )
+    def test_reason_code_defaults_none_and_serializes(self) -> None:
+        assert AcquisitionPayload().reason_code is None
+        payload = AcquisitionPayload(reason_code="timeout")
         dumped = payload.model_dump(mode="json")
-        assert dumped["fetch_reason"] == "service_unavailable"
-        assert dumped["fetch_retry_after_seconds"] == 30.0
+        assert dumped["reason_code"] == "timeout"
         assert AcquisitionPayload.model_validate(dumped) == payload
+
+    def test_stored_row_with_retired_fetch_fields_still_validates(self) -> None:
+        payload = AcquisitionPayload.model_validate(
+            {
+                "kind": "acquisition",
+                "http_status": 503,
+                "fetch_reason": "service_unavailable",
+                "fetch_retry_after_seconds": 30.0,
+            }
+        )
+        assert payload == AcquisitionPayload(http_status=503)
 
 
 class TestCompletionPayloadAuditKeys:
@@ -416,25 +419,6 @@ class TestPayloadFieldOwnership:
         )
         for payload_cls in payloads_without_read_fields:
             for field in read_fields:
-                assert field not in payload_cls.model_fields
-
-    def test_only_acquisition_payload_owns_fetch_failure_fields(self) -> None:
-        fetch_fields = ("fetch_reason", "fetch_retry_after_seconds")
-        for field in fetch_fields:
-            assert field in AcquisitionPayload.model_fields
-
-        payloads_without_fetch_fields = (
-            BasePipelineEventPayload,
-            DispatchPayload,
-            CompletionPayload,
-            CurationPayload,
-            AssessmentPayload,
-            EmbeddingPayload,
-            BriefingPayload,
-            TrendDiscoveryPayload,
-        )
-        for payload_cls in payloads_without_fetch_fields:
-            for field in fetch_fields:
                 assert field not in payload_cls.model_fields
 
     def test_injection_markers_present_owned_by_input_baking_payloads(self) -> None:

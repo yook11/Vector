@@ -32,10 +32,7 @@ afterEach(() => {
 });
 
 describe("runtimePoolConfigFromUrl — DB_IAM_AUTH が無効", () => {
-  it.each([
-    "false",
-    "",
-  ])("URL の password に任せる (Fly では経路が変わらない): DB_IAM_AUTH=%s", (flag) => {
+  it.each(["false", ""])("URL の password に任せる: DB_IAM_AUTH=%s", (flag) => {
     vi.stubEnv("DB_IAM_AUTH", flag);
     expect(runtimePoolConfigFromUrl(RDS_URL).password).toBeUndefined();
   });

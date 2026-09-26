@@ -23,17 +23,7 @@ from app.collection.article_acquisition.reader.rss_reader import (
     RssReader,
     normalize_entry,
 )
-from app.collection.external_fetch_errors import (
-    FetchAccessDeniedError,
-    FetchLegalBlockError,
-    FetchNetworkError,
-    FetchOriginServerError,
-    FetchRateLimitedError,
-    FetchResourceNotFoundError,
-    FetchSsrfBlockedError,
-)
-from app.http.destination_policy import HostBlockedError
-from app.http.destination_resolution import HostResolutionError
+from app.http.errors import HttpResponseError
 
 _MOD = "app.collection.article_acquisition.reader.rss_reader"
 
@@ -248,56 +238,13 @@ class TestRssReaderFetch:
 
         mock_parse.assert_called_once_with(payload)
 
-    async def test_403_raises_access_denied(self) -> None:
+    async def test_unsuccessful_response_raises_common_response_error(self) -> None:
+        """フィード全体の失敗は共通の応答エラーとして status を保って伝わる。"""
         response = _mock_response(status_code=403)
         with _patch_safe_client(response):
-            with pytest.raises(FetchAccessDeniedError):
+            with pytest.raises(HttpResponseError) as caught:
                 await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
-
-    async def test_404_raises_resource_not_found(self) -> None:
-        response = _mock_response(status_code=404)
-        with _patch_safe_client(response):
-            with pytest.raises(FetchResourceNotFoundError):
-                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
-
-    async def test_410_raises_resource_not_found(self) -> None:
-        response = _mock_response(status_code=410)
-        with _patch_safe_client(response):
-            with pytest.raises(FetchResourceNotFoundError):
-                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
-
-    async def test_451_raises_legal_block(self) -> None:
-        response = _mock_response(status_code=451)
-        with _patch_safe_client(response):
-            with pytest.raises(FetchLegalBlockError):
-                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
-
-    async def test_500_raises_origin_server_error(self) -> None:
-        response = _mock_response(status_code=500)
-        with _patch_safe_client(response):
-            with pytest.raises(FetchOriginServerError):
-                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
-
-    async def test_429_raises_rate_limited(self) -> None:
-        response = _mock_response(status_code=429)
-        with _patch_safe_client(response):
-            with pytest.raises(FetchRateLimitedError):
-                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
-
-    async def test_request_error_raises_network(self) -> None:
-        with _patch_safe_client(httpx.ConnectError("connection refused")):
-            with pytest.raises(FetchNetworkError):
-                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
-
-    async def test_host_blocked_raises_ssrf_blocked(self) -> None:
-        with _patch_safe_client(HostBlockedError("private IP literal")):
-            with pytest.raises(FetchSsrfBlockedError):
-                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
-
-    async def test_host_resolution_raises_network(self) -> None:
-        with _patch_safe_client(HostResolutionError("dns failure")):
-            with pytest.raises(FetchNetworkError):
-                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+        assert caught.value.status_code == 403
 
     async def test_bozo_with_no_entries_raises_parse_error(self) -> None:
         feed = _make_feed(entries=[], bozo=True)

@@ -1,6 +1,6 @@
 # ArticleCompletionConsumer — 未完成記事の補完をイベント駆動へ移行する
 
-Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マージ済み（2026-09-13）。共通HTTPの変換、新経路用HTTP取得・HTML抽出・記事の統合と構築を実装済み。新経路の失敗分類とRetry-After解釈を実装済み。正常終了型・失敗後処理・ConsumerとDB確定処理を実装済み。記事取得工程の共通起動・資源管理と補完への配線を実装・検証済み。配送ハンドラー・AWS接続は未実装。配送の確定設定と後続スライスは[配送仕様](./article-completion-delivery.md)を参照する。
+Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マージ済み（2026-09-13）。共通HTTPの変換、新経路用HTTP取得・HTML抽出・記事の統合と構築を実装済み。新経路の失敗分類とRetry-After解釈を実装済み。正常終了型・失敗後処理・ConsumerとDB確定処理を実装済み。記事取得工程の共通起動・資源管理と補完への配線を実装・検証済み。配送ハンドラー・AWS接続は未実装。配送の確定設定と後続スライスは[配送仕様](./article-completion-delivery.md)を参照する。HTTP起因の判断とRetry-After解釈は2026-09-26に外部取得の失敗判断へ切り出した。
 
 ## Problem
 
@@ -150,20 +150,13 @@ HTTPの通信失敗・エラー応答は`app/http/`の全工程共通エラー�
 
 ### 補完工程の確定した失敗判断
 
-新経路の`classify_completion_failure(exc, *, now)`は、補完工程の対処を決める純粋関数である。エラーそのものやHTTP規格に再試行方針を持たせない。
+新経路の`classify_completion_failure(exc, *, now)`は、補完工程の対処を決める純粋関数である。エラーそのものやHTTP規格に再試行方針を持たせない。HTTP起因の失敗は[外部取得の失敗判断](../collection/external-fetch-failure-classification.md)の結果を補完の対処へ写し、それ以外を補完工程として判断する。
 
 | 原因 | 対処 | 調査対象・補足 |
 |---|---|---|
-| 408 / 421 / 429 | 再試行 | 421は別接続での再試行、429は有効な待機指示を採用 |
-| 425 | 再試行 | 調査対象。TLS Early Dataに関する拒否であり、Early Dataによる再送は追加しない |
-| 407 / 511 | 再試行 | 調査対象。プロキシ・ネットワークの認証問題で記事を閉じない |
-| 500 / 502 / 503 / 504、501・505以外のその他5xx | 再試行 | サーバ・中継経路の失敗 |
-| 501 / 505 | 終了 | 現在の機能・HTTPバージョンでは取得不可 |
-| 401 / 403 / 404 / 410、上記以外の4xx | 終了 | 現在の要求では取得不可。403だけからボット拒否と推測しない |
-| 3xx | 終了 | リダイレクト非追従方針を維持 |
-| HttpResponseErrorに入った1xx・2xx・範囲外 | 再試行 | 調査対象。成功への読み替えは行わない |
-| HttpTransportError、FetchDeadlineExceededError | 再試行 | 通信の段階または理由がUNKNOWN、proxy_statusが407・511なら調査対象 |
-| HostBlockedError、RobotsDisallowedError | 終了 | 明示的な宛先保護・robotsルールによる拒否 |
+| HttpResponseError、HttpTransportError、HostBlockedError | 外部取得の失敗判断に従う | 再試行可能なら再試行、再試行不可なら終了。code・retry_at・調査対象は判断の値をそのまま使う |
+| FetchDeadlineExceededError | 再試行 | 取得全体の期限切れ |
+| RobotsDisallowedError | 終了 | robotsルールによる明示的な拒否 |
 | ResponseSizeLimitExceededError、ArticleContentTypeError | 終了 | 現在の取得・抽出条件では扱えない |
 | ArticleExtractionEmptyError、ArticleContentQualityError | 終了 | 抽出結果なし・品質不足。品質判定の新規接続は行わない |
 | 既知の理由だけのArticleCompletionRejectedError | 終了 | 完成記事の条件不足 |
@@ -171,24 +164,19 @@ HTTPの通信失敗・エラー応答は`app/http/`の全工程共通エラー�
 
 - 構築拒否は`UNMAPPED_VALIDATION_ERROR`を含むか`unmapped`が非空なら、既知の理由が混在していても再試行を優先する。`defects`が空の場合も調査対象として再試行する。
 - robotsの404は取得処理で記事取得へ進むため、この分類へ届かない。robotsの403はHTTP拒否であり、robotsルールによる明示的禁止に変換しない。
-- `proxy_status`は通信失敗の事実であり、記事側のHTTP応答分類へ流用しない。プロキシ接続時の403だけで記事を終了させない。
-- 戻り値は`RetryArticleCompletion | CloseArticleCompletion`を直接記述し、外側の型やユニオンの別名は作らない。どちらも不変で`code`と`requires_investigation`を持ち、再試行の結果だけが`retry_at`（`RetryAt | None`）を持つ。対処は結果型で区別し、actionフィールドは持たない。対応済みエラーは既存CODE、HostBlockedErrorは`host_blocked`、分類対象外は`unknown`とする。
+- 戻り値は`RetryArticleCompletion | CloseArticleCompletion`を直接記述し、外側の型やユニオンの別名は作らない。どちらも不変で`code`と`requires_investigation`を持ち、再試行の結果だけが`retry_at`（`RetryAt | None`）を持つ。対処は結果型で区別し、actionフィールドは持たない。HTTP起因の失敗は外部取得の失敗判断の`code`、補完固有のエラーは既存CODE、分類対象外は`unknown`とする。
 - 元例外・原因チェーン・構築拒否の詳細を変更せず、呼び出し側が保持する。調査対象は即時通知の指示ではなく、出力や緊急度の判断は後続処理が所有する。
 - キャンセル・プロセス終了は対象外とし、呼び出し側は通常のExceptionだけを渡す。正常な処理済み・競合・対象行なし・closed済みは扱わない。
 - DB更新・SQS操作・監査・ログ・通知はこの関数内で行わず、旧Taskiqには接続しない。
 - DLQへ移った記事も、非closedであれば救済によって新しいメッセージとして再投入してよい。人の対応まで停止する要件はなく、再投入抑制は追加しない。DLQの受信回数制限は記事全体の累積試行上限ではない。
 
-HTTPの根拠: [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-15)、[RFC 6585](https://www.rfc-editor.org/rfc/rfc6585.html)、[RFC 8470の425](https://www.rfc-editor.org/rfc/rfc8470.html#section-5.2)。これらを踏まえた補完工程の判断であり、旧Taskiqの分類は置き換えない。
+HTTP応答の判断の根拠は[外部取得の失敗判断](../collection/external-fetch-failure-classification.md)に置く。旧Taskiqの分類は置き換えない。
 
 ボット拒否は取得可否の判断であり、回避処理は含めない。200で返るチャレンジ画面等を判定する専用機構は現行にはないため、根拠なくボット拒否という理由を付けない。専用検出を追加するかは別途判断し、現行の抽出失敗と区別する根拠がある場合だけ専用理由を使う。
 
 ### Retry-Afterの確定した解釈
 
-- 再試行と判断したHttpResponseErrorだけに適用し、前後空白を除いたASCII非負整数は`received_at + 秒数`、HTTP日時は絶対日時として解釈する。
-- 標準ライブラリ`email.utils.parsedate_to_datetime`を利用し、旧HTTP日時形式も受け入れる。タイムゾーンのないasctime形式はUTCとして扱い、結果はUTCへ正規化する。[Python日時解析](https://docs.python.org/3.13/library/email.utils.html#email.utils.parsedate_to_datetime)
-- `now`と`received_at`は呼び出し側が渡すタイムゾーン付き日時とし、関数内で現在時刻を取得しない。候補時刻がnow以前、0秒、欠如・空値・不正値・日時として表現範囲外の値は`retry_at=None`とする。元エラーの生の値は保持する。
-- Noneは追加待機の指示なしであり、SQSの通常再配信を即時に変える意味ではない。終了する失敗をヘッダーの有無で再試行に変更しない。
-- 分類関数が返す有効な未来日時は短縮しない。配送側は元のretry_atを保持したまま個別待機を最大11時間へ制限し、長い指示より早い再試行を許容する。設定失敗を尊重済みとは扱わない。[RFC 9110 Retry-After](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3)
+Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetch-failure-classification.md#retry-afterの解釈)へ移した（2026-09-26）。補完工程は判断が返した`retry_at`をそのまま`RetryArticleCompletion`へ渡す。配送側は元のretry_atを保持したまま個別待機を最大11時間へ制限し、長い指示より早い再試行を許容する。設定失敗を尊重済みとは扱わない。
 
 ### 最初のスライスの完了条件
 

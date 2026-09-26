@@ -140,7 +140,7 @@ EventInvalidへの命名統一後の最終検証（2026-09-14）: コミット�
 
 ## スライス4：再配信待機と時間予算
 
-`RetryAt(value: datetime)`を補完工程に置き、タイムゾーン付き日時をUTCへ正規化して不変に保持する。`remaining(now)`は期限経過後に0を返すが、元の日時を変更しない。タイムゾーンなしの値・基準日時は拒否する。既存のRetry-After分類は維持し、指定なし・不正・0秒・分類時点で期限経過済みの場合は`None`、有効な未来日時だけを`RetryAt`にする。
+`RetryAt(value: datetime)`を補完工程に置き、タイムゾーン付き日時をUTCへ正規化して不変に保持する。`remaining(now)`は期限経過後に0を返すが、元の日時を変更しない。タイムゾーンなしの値・基準日時は拒否する。既存のRetry-After分類は維持し、指定なし・不正・0秒・分類時点で期限経過済みの場合は`None`、有効な未来日時だけを`RetryAt`にする。（2026-09-26に`RetryAt`とRetry-After解釈は[外部取得の失敗判断](../collection/external-fetch-failure-classification.md)としてcollection直下へ移した。）
 
 配送側の`RedeliveryWait(message_id, retry_at)`は再配信を待たせる指示であり、SQSの操作情報や11時間上限を補完工程へ持ち込まない。Queue URLは必須設定`SQS_ARTICLE_COMPLETION_QUEUE_URL`から取得する。スライス3の補完用設定には該当項目がなかったため、スライス4で追加した。設定の欠落・型不正・空文字・空白のみは起動失敗とし、本文から配送先を選ばない。AWSへの環境変数設定と権限適用はスライス5で行う。
 

@@ -17,8 +17,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.audit.domain.event import Stage
-from app.collection.article_acquisition.errors import AcquisitionReadError
-from app.collection.external_fetch_errors import FetchSsrfBlockedError
+from app.insights.briefing.errors import BriefingConfigurationError
 from app.logfire.stage_span import pipeline_stage_span
 from tests.logfire._span_helpers import (
     domain_attr_keys,
@@ -168,15 +167,15 @@ def test_marker_exception_records_classified_failure_attributes(
     capfire: CaptureLogfire,
 ) -> None:
     """marker 例外は project_failure の分類値 (unknown でない) が span に載る。"""
-    exc = AcquisitionReadError(origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1"))
-    with pytest.raises(AcquisitionReadError):
+    exc = BriefingConfigurationError("missing key")
+    with pytest.raises(BriefingConfigurationError):
         with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
             raise exc
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "external_fetch"
-    assert attrs["code"] == "fetch_ssrf_blocked"
+    assert attrs["failure_kind"] == "configuration"
+    assert attrs["code"] == "briefing_generation_llm_configuration_invalid"
     assert attrs["retryability"] == "non_retryable"
-    assert attrs["error_class"].endswith(".AcquisitionReadError")
+    assert attrs["error_class"].endswith(".BriefingConfigurationError")
 
 
 # 不変条件 7c: 協調キャンセルは失敗ではない (失敗分類属性を載せない)
@@ -203,29 +202,29 @@ def test_record_failure_via_recorder_sets_classified_attributes(
     capfire: CaptureLogfire,
 ) -> None:
     """握り潰し経路: raise せず ``record_failure`` を呼ぶと分類属性が span に載る。"""
-    exc = AcquisitionReadError(origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1"))
+    exc = BriefingConfigurationError("missing key")
     with pipeline_stage_span(
         Stage.ACQUISITION, op="acquire_source", source_id=1
     ) as stage:
         stage.record_failure(exc)
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "external_fetch"
-    assert attrs["code"] == "fetch_ssrf_blocked"
+    assert attrs["failure_kind"] == "configuration"
+    assert attrs["code"] == "briefing_generation_llm_configuration_invalid"
     assert attrs["retryability"] == "non_retryable"
-    assert attrs["error_class"].endswith(".AcquisitionReadError")
+    assert attrs["error_class"].endswith(".BriefingConfigurationError")
 
 
 def test_record_failure_is_no_override(capfire: CaptureLogfire) -> None:
     """record_failure は一度だけ焼く。二度目の例外では元の分類を上書きしない。"""
-    first = AcquisitionReadError(origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1"))
+    first = BriefingConfigurationError("missing key")
     with pipeline_stage_span(
         Stage.ACQUISITION, op="acquire_source", source_id=1
     ) as stage:
         stage.record_failure(first)
         stage.record_failure(ValueError("secondary"))
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "external_fetch"
-    assert attrs["error_class"].endswith(".AcquisitionReadError")
+    assert attrs["failure_kind"] == "configuration"
+    assert attrs["error_class"].endswith(".BriefingConfigurationError")
 
 
 def test_explicit_record_then_propagating_secondary_keeps_original(
@@ -236,9 +235,7 @@ def test_explicit_record_then_propagating_secondary_keeps_original(
     acquire_source の二次例外 (handler/監査 DB ダウン) を模す: 先に業務例外を記録し、
     後から別例外が span を貫通しても span の error_class は最初の業務例外のまま。
     """
-    business = AcquisitionReadError(
-        origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
-    )
+    business = BriefingConfigurationError("missing key")
     with pytest.raises(RuntimeError, match="audit down"):
         with pipeline_stage_span(
             Stage.ACQUISITION, op="acquire_source", source_id=1
@@ -246,8 +243,8 @@ def test_explicit_record_then_propagating_secondary_keeps_original(
             stage.record_failure(business)
             raise RuntimeError("audit down")
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "external_fetch"
-    assert attrs["error_class"].endswith(".AcquisitionReadError")
+    assert attrs["failure_kind"] == "configuration"
+    assert attrs["error_class"].endswith(".BriefingConfigurationError")
 
 
 # 不変条件 8: PII — ドメイン attribute は許可キーのみ (本文 / URL / prompt は乗らない)

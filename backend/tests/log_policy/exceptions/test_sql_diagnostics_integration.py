@@ -45,7 +45,7 @@ class TestDirectSqlDiagnostics:
         }
         assert _ROW_VALUE not in json.dumps(output)
         assert "[SQL:" not in json.dumps(output)
-        assert "causes" not in output
+        assert "related_exceptions" not in output
 
     async def test_not_null_violation_retains_column(
         self, db_session: AsyncSession
@@ -83,7 +83,7 @@ class TestSessionWrappedDiagnostics:
         output = _log_exception(captured.value)
         assert output["error_class"] == "app.db.errors.DatabaseConstraintError"
         assert "error_details" not in output
-        assert output["causes"][0]["error_details"] == {
+        assert output["related_exceptions"][0]["exception"]["error_details"] == {
             "kind": "postgresql",
             "sqlstate": "23505",
             "schema_name": "public",
@@ -103,7 +103,7 @@ class TestSessionWrappedDiagnostics:
                     insert(Category).values(slug="synthetic_private_slug", name=None)
                 )
         output = _log_exception(captured.value)
-        assert output["causes"][0]["error_details"] == {
+        assert output["related_exceptions"][0]["exception"]["error_details"] == {
             "kind": "postgresql",
             "sqlstate": "23502",
             "schema_name": "public",

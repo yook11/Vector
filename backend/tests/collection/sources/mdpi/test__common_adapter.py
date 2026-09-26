@@ -17,7 +17,7 @@
 - ``to_fetched_article`` が source_url を DOI canonical resolver にする写像
 - collect が documented な in-scope 件数より over-filter しない
 - ``works()`` には注入 ``issn`` / ``from_pub_date`` / ``rows`` (既定 20) が渡る
-- ``CrossrefReader`` の ``ExternalFetchError`` は ``collect`` を素通しする
+- ``CrossrefReader`` の取得失敗 (共通HTTPエラー) は ``collect`` を素通しする
 
 passport 業務不変条件 (at_least_one / 型許容 / 主経路型 / 永続化) は
 parametrized ``test_non_rss_adapters_invariants.py`` [MDPI*] が 系統A
@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -51,15 +52,12 @@ from app.collection.article_acquisition.reader.crossref_reader import (
     normalize_item,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.external_fetch_errors import (
-    FetchAccessDeniedError,
-    FetchOriginServerError,
-)
 from app.collection.sources.definitions.mdpi import (
     MDPIMaterialsSource,
     is_collectable_mdpi_work,
     to_fetched_article,
 )
+from app.http.errors import HttpResponseError
 from tests.collection.sources._fixture_tools import fixture_tools
 from tests.collection.sources._invariant import FetchItem, drive_source
 
@@ -280,18 +278,10 @@ async def test_client_kwargs_carry_issn_lookback_rows() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_recoverable_error_propagates_through_collect() -> None:
-    client = _RaisingCrossrefClient(
-        FetchAccessDeniedError(status_code=403, reason="forbidden")
+async def test_fetch_failure_propagates_through_collect() -> None:
+    error = HttpResponseError(
+        status_code=503, received_at=datetime(2026, 9, 26, tzinfo=UTC)
     )
-    with pytest.raises(FetchAccessDeniedError):
-        await _drive(client)
-
-
-@pytest.mark.asyncio
-async def test_recoverable_error_propagates_through_collect() -> None:
-    client = _RaisingCrossrefClient(
-        FetchOriginServerError(status_code=500, reason="internal_error")
-    )
-    with pytest.raises(FetchOriginServerError):
-        await _drive(client)
+    with pytest.raises(HttpResponseError) as caught:
+        await _drive(_RaisingCrossrefClient(error))
+    assert caught.value is error

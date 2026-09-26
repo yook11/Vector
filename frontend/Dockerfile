@@ -23,12 +23,9 @@ ENV NODE_ENV=production
 ARG BETTER_AUTH_SECRET=build-time-placeholder-do-not-use-in-runtime-32bytes
 ARG BETTER_AUTH_URL=https://vectorbrief.online
 ARG AUTH_DATABASE_URL=postgresql://build:build@localhost:5432/build
-# INTERNAL_API_URL は production build (builder stage は NODE_ENV=production) 時に
-# internal-config.ts の「production では *.flycast 必須」assertion が module 評価で
-# 走るため、ダミーも *.flycast にする (dev 値 http://backend:... だと build が
-# "in production INTERNAL_API_URL must be a *.flycast host" で落ちる)。公開 repo
-# では placeholder を既定にし、実運用値は private deploy secrets から渡す。
-ARG INTERNAL_API_URL=http://your-vector-core-app.flycast:8000/api/v1
+# INTERNAL_API_URL は builder の module 評価で production narrowing を通るよう、
+# 内部 namespace の host にする。
+ARG INTERNAL_API_URL=http://your-vector-api.vector.internal:8000/api/v1
 # 内部 trust 境界の 2 secret (BFF JWT 署名鍵 / revalidate Bearer / red-team C1)。
 ARG BFF_JWT_SIGNING_SECRET=build-time-placeholder-do-not-use-in-runtime-bff
 ARG REVALIDATE_BEARER_SECRET=build-time-placeholder-do-not-use-in-runtime-rev
@@ -117,8 +114,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 # RDS の CA。pg は Node 内蔵の trust store を使うので NODE_EXTRA_CA_CERTS で足す。
-# ENV はここに置かない。env を渡す環境 (AWS) でだけ有効にして、Fly では信頼集合を
-# 触らないため。Terraform 側で path を渡す。
+# ENV はここに置かず、RDS に繋ぐ環境 (AWS) でだけ Terraform が path を渡す。
 COPY --chown=nextjs:nodejs rds-ca-ap-northeast-1.pem ./rds-ca-ap-northeast-1.pem
 
 USER nextjs

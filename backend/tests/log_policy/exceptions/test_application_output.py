@@ -13,7 +13,7 @@ from app.analysis.assessment.events import (
     AssessedEventInvalidError,
 )
 from app.log_policy import BASE_LOG_RULES, PolicyLogger, build_processors, policy_logger
-from app.log_policy.exceptions.extraction import CAUSE_DEPTH_LIMIT, EXCEPTION_LIMIT
+from app.log_policy.exceptions.extraction import EXCEPTION_LIMIT
 
 pytestmark = pytest.mark.unit
 
@@ -72,7 +72,7 @@ def test_boundary_diagnostics_reach_json_without_input(
         ],
     }
     assert output["frames"]
-    assert "causes" not in output
+    assert "related_exceptions" not in output
     assert "synthetic-private" not in json.dumps(output)
 
 
@@ -103,44 +103,28 @@ def test_unknown_category_logs_application_diagnostics_without_invalid_value(
     }
     assert any(frame["function"] == "parse_assessment" for frame in output["frames"])
     assert "PRIVATE_CATEGORY_SENTINEL" not in json.dumps(output)
-    assert "causes" not in output
+    assert "related_exceptions" not in output
 
 
 def test_deepest_exception_keeps_issue_fields_and_codes(
     application_logger, validation_failure
 ) -> None:
-    """探索の最深部でも、診断項目のfield・codeまで値準備を通過する。"""
+    """件数の上限内で最も内側の例外でも、診断項目のfield・codeまで値準備を通過する。"""
+    # 外側を含めた件数の上限の、最後の1件に検証エラーを置く。
     outer: BaseException = validation_failure
-    for _ in range(CAUSE_DEPTH_LIMIT):
+    for _ in range(EXCEPTION_LIMIT - 1):
         parent = RuntimeError("operation failed")
         parent.__cause__ = outer
         outer = parent
 
     output = json.loads(application_logger.error("event_failed", exc_info=outer))
 
-    for _ in range(CAUSE_DEPTH_LIMIT):
-        output = output["causes"][0]
-    assert output["error_details"] == {
+    deepest = output["related_exceptions"][EXCEPTION_LIMIT - 2]["exception"]
+    assert deepest["error_details"] == {
         "kind": "application_validation",
         "reason": "invalid_payload",
         "issues": [
             {"field": "payload.curation_id", "code": "invalid_type"},
             {"field": "payload", "code": "unknown_field"},
         ],
-    }
-
-
-def test_application_details_use_shared_output_budget(
-    application_logger, validation_failure
-) -> None:
-    """探索範囲内でも診断全体が共有予算を超えたら、ログを固定イベントへ置き換える。"""
-    # グループ自身を含め探索上限内に収め、出力する診断の共有予算を検証する。
-    group = ExceptionGroup("failures", [validation_failure] * (EXCEPTION_LIMIT - 1))
-
-    output = json.loads(application_logger.error("event_failed", exc_info=group))
-
-    assert output == {
-        "event": "log_policy_budget_exceeded",
-        "_policy_limited": True,
-        "_policy_limit_reason": "value_count",
     }

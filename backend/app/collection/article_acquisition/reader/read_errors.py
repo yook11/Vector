@@ -1,9 +1,10 @@
 """応答は受け取ったが reader が構造化できなかった read-domain origin error。
 
-接続境界の ``external_fetch_errors.py`` と対称な「読取」語彙の SSoT。本 module は
-「何が起きたか (reason)」と安全文脈 (response_format / field / parser_position) を
+接続境界の共通HTTPエラー (``app/http/errors.py``) と対称な「読取」語彙の SSoT。
+本 module は「何が起きたか (reason)」と安全文脈 (response_format / field /
+parser_position) を
 扱い、retry 可否 / scheduling / action は段が持つ (読取失敗は実質すべて terminal
-なので marker 側で ``NON_RETRYABLE`` 固定。retryable 属性は持たない)。
+なので取得の監査は ``NON_RETRYABLE`` として記録する。retryable 属性は持たない)。
 
 各 reason の value はそのまま audit ``outcome_code`` に焼かれる (``acquisition_
 conversion`` の ``AcquisitionConversionDefect`` と同じ「値 = コード」パターン)。
@@ -36,11 +37,10 @@ class UnreadableResponseReason(StrEnum):
 class UnreadableResponseError(Exception):
     """取得済み payload を reader が構造化できなかった read-domain origin error。
 
-    ``ExternalFetchError`` family と対称の origin error。
+    共通HTTPエラーと対称の origin error。
     ``reason`` (何が起きたか) と安全文脈を instance に持ち、``CODE`` は
-    reason.value を公開する (marker base が origin の ``CODE`` を outcome_code に
-    焼く配線をそのまま使う)。``__str__`` は明示 message があればそれ、無ければ
-    PII-free な ``_default_message`` を返す (fetch family と対称)。
+    reason.value を公開する (取得の監査が outcome_code に使う)。``__str__`` は
+    明示 message があればそれ、無ければ PII-free な ``_default_message`` を返す。
     """
 
     def __init__(

@@ -54,6 +54,8 @@ class RssFeedFailurePayload(BaseModel):
     error_class: str
     error_message: str | None = None
     error_chain: list[str]
+    http_status: int | None = None
+    reason_code: str | None = None
 
 
 class AcquisitionPayload(BasePipelineEventPayload):
@@ -73,10 +75,8 @@ class AcquisitionPayload(BasePipelineEventPayload):
     content_type: str | None = None
     body_head: str | None = None
 
-    # 接続失敗 (fetch origin) の specifics。http_status (上の HTTP snapshot 列) と対称に
-    # outcome_code = CODE とは別に reason / Retry-After を復元できるようにする。
-    fetch_reason: str | None = None
-    fetch_retry_after_seconds: float | None = None
+    # 通信失敗の理由 (HttpTransportFailureReason)。補完の reason_code と同じ語彙。
+    reason_code: str | None = None
 
     # read 失敗 (reader 構造化不能) の specifics。outcome_code = reason.value とは別に
     # どの形式 / どのフィールド / どの位置で落ちたかを残す。

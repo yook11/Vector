@@ -1,11 +1,10 @@
 """``UnreadableResponseReason`` / ``UnreadableResponseError`` の read 段 origin
 契約テスト。
 
-接続境界 [test_external_fetch_error_codes.py](../../test_external_fetch_error_codes.py)
-の read 姉妹。reason.value がそのまま audit ``outcome_code`` に焼かれる自己記述
-コードであること、origin error が PII-free な既定 message を合成すること (生上流を
-載せない構造保証) を固定する。read 失敗は実質すべて terminal なので retryable 属性は
-持たない (marker 側で ``NON_RETRYABLE`` 固定)。
+接続境界の共通HTTPエラーと対になる read 段の契約。reason.value がそのまま audit
+``outcome_code`` に焼かれる自己記述コードであること、origin error が PII-free な
+既定 message を合成すること (生上流を載せない構造保証) を固定する。read 失敗は実質
+すべて terminal なので retryable 属性は持たない (取得の監査で ``NON_RETRYABLE``)。
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
-from app.collection.external_fetch_errors import ExternalFetchError
+from app.http.errors import HttpError
 
 # reason の value (= outcome_code) 集合の spec-lock。class rename には不変で、
 # 分類 drift / prefix ズレでのみ落ちる自己記述的 oracle。
@@ -107,9 +106,9 @@ def test_explicit_message_takes_precedence() -> None:
 
 
 def test_is_not_a_connection_error() -> None:
-    """接続境界 ``ExternalFetchError`` family とは独立した別系統 (継承しない)。"""
+    """接続境界の共通HTTPエラーとは独立した別系統 (継承しない)。"""
     exc = UnreadableResponseError(
         reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="json"
     )
-    assert not isinstance(exc, ExternalFetchError)
-    assert not issubclass(UnreadableResponseError, ExternalFetchError)
+    assert not isinstance(exc, HttpError)
+    assert not issubclass(UnreadableResponseError, HttpError)
