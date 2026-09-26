@@ -2,8 +2,7 @@
 //
 // node-postgres は接続文字列の `sslmode` と Pool の `ssl` オブジェクトを併用
 // すると互いを上書きし合う既知問題 (brianc/node-postgres#3355) があるため、
-// `sslmode` (および pg 非対応の `channel_binding`) を URL から取り除き、`ssl`
-// オブジェクトへ明示変換する。
+// `sslmode` を URL から取り除き、`ssl` オブジェクトへ明示変換する。
 //
 // Neon 等の managed Postgres は接続文字列に `sslmode=require` を含める一方、
 // dev (docker 同一ネットワーク) は持たないため、接続文字列のみで dev / 本番の
@@ -30,9 +29,8 @@ export function poolConfigFromUrl(rawUrl: string): PoolConfig {
     throw new Error("Invalid database connection URL.");
   }
   const sslmode = url.searchParams.get("sslmode");
-  // pg には sslmode / channel_binding を渡さない (#3355 回避 + 未対応 param 排除)。
+  // pg には sslmode を渡さない (#3355 回避)。
   url.searchParams.delete("sslmode");
-  url.searchParams.delete("channel_binding");
 
   const ssl =
     sslmode && sslmode !== "disable" ? { rejectUnauthorized: true } : false;

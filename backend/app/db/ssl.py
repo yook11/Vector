@@ -5,7 +5,7 @@ backend (SQLAlchemy + asyncpg) を Neon 等の managed Postgres に verify-full
 ``frontend/src/lib/auth/pool-ssl.ts`` を backend に対称移植したもの。
 
 設計:
-- asyncpg は ``sslmode`` / ``channel_binding`` / ``ssl`` / ``sslrootcert`` 等を
+- asyncpg は ``sslmode`` / ``ssl`` / ``sslrootcert`` 等を
   kwarg で受けず、URL 由来の query が SQLAlchemy 経由で ``asyncpg.connect`` に
   そのまま渡ると connect 時に ``TypeError`` になる。よって URL から ssl 系
   param を取り除き、SSL は ``connect_args={"ssl": SSLContext}`` に正規化する。
@@ -55,7 +55,6 @@ _VALID_SSLMODES = frozenset(
 # TypeError を出すため、SQLAlchemy URL から network 接続前に剥がす。
 _SSL_QUERY_PARAMS = (
     "sslmode",
-    "channel_binding",
     "ssl",
     "sslrootcert",
     "sslcert",
@@ -64,9 +63,8 @@ _SSL_QUERY_PARAMS = (
 )
 _SSL_QUERY_PARAM_SET = frozenset(_SSL_QUERY_PARAMS)
 
-# [P1] guard から除外する param。sslmode は signal そのもの、channel_binding は
-# Neon ネイティブ文字列で sslmode と共存するため。
-_SSL_PARAMS_GUARD_EXEMPT = frozenset({"sslmode", "channel_binding"})
+# [P1] sslmode は signal そのものなので guard から除外する。
+_SSL_PARAMS_GUARD_EXEMPT = frozenset({"sslmode"})
 
 # sslmode 抜きで単独指定されると「SSL のつもりが平文化」を招く ssl 系 param。
 # これらが在って sslmode が無い場合は黙って剥がさず ValueError で落とす。

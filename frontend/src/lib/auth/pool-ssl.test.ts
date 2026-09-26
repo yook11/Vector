@@ -12,15 +12,6 @@ describe("poolConfigFromUrl", () => {
     expect(connectionString).not.toContain("sslmode");
   });
 
-  it("Neon の channel_binding も pg に渡さない (未対応 param 排除)", () => {
-    const { connectionString } = poolConfigFromUrl(
-      "postgresql://u:p@ep-x.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
-    );
-
-    expect(connectionString).not.toContain("channel_binding");
-    expect(connectionString).not.toContain("sslmode");
-  });
-
   it("sslmode なし (dev / docker) は SSL を無効化する", () => {
     const { ssl } = poolConfigFromUrl("postgresql://u:p@db:5432/vector");
 

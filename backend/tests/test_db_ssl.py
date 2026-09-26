@@ -25,7 +25,6 @@ _DEV = "postgresql+asyncpg://vector_app:strongpass@db:5432/vector"
 
 _STRIPPED_PARAMS = (
     "sslmode",
-    "channel_binding",
     "ssl",
     "sslrootcert",
     "sslcert",
@@ -41,13 +40,6 @@ class TestSplitSslFromUrl:
         clean_url, connect_args = split_ssl_from_url(f"{_NEON}?sslmode=require")
         assert "ssl" in connect_args
         assert "sslmode" not in make_url(clean_url).query
-
-    def test_channel_binding_is_stripped(self) -> None:
-        # Neon ネイティブ文字列の channel_binding は asyncpg 非対応なので除去
-        clean_url, _ = split_ssl_from_url(
-            f"{_NEON}?sslmode=require&channel_binding=require"
-        )
-        assert "channel_binding" not in make_url(clean_url).query
 
     def test_no_sslmode_disables_ssl(self) -> None:
         _, connect_args = split_ssl_from_url(_DEV)
@@ -76,7 +68,6 @@ class TestSplitSslFromUrl:
     @pytest.mark.parametrize(
         "param_kv",
         [
-            "channel_binding=require",
             "ssl=true",
             "sslrootcert=/etc/ca.pem",
             "sslcert=/etc/client.crt",
