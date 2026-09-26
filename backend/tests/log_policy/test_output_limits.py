@@ -13,9 +13,29 @@ from app.log_policy.budget import (
     MAX_ITEMS_PER_LOG_EVENT,
     TEXT_LIMIT,
 )
+from app.log_policy.exceptions import extraction
 from app.log_policy.processor import LogPolicyProcessor
+from app.shared.errors import ApplicationError
 
 pytestmark = pytest.mark.unit
+
+
+def _raised_through_frames[E: BaseException](exc: E, frame_count: int) -> E:
+    """指定した数の関数呼び出しを通り抜けた状態で、渡した例外を返す。"""
+
+    def fail(depth: int) -> None:
+        if depth:
+            fail(depth - 1)
+        else:
+            raise exc
+
+    try:
+        fail(frame_count - 2)
+    except BaseException as raised:
+        if raised is exc:
+            return exc
+        raise
+    raise AssertionError("unreachable")
 
 
 class TestLocalReplacement:
@@ -124,7 +144,7 @@ class TestLocalReplacement:
 
 
 class TestWholeLogReplacementByTextBudget:
-    """通常項目・ネスト・例外・診断の文字数を合算し、上限を超えたらログ全体を置換する。"""
+    """通常項目・ネスト・診断の文字数を合算し、上限を超えたらログ全体を置換する。"""
 
     def test_processor_text_at_budget_is_not_exceeded(self) -> None:
         """イベント合計16000文字ちょうどで完了すれば通常出力を保持する。"""
@@ -235,23 +255,6 @@ class TestWholeLogReplacementByTextBudget:
             "_policy_limit_reason": "text_total",
         }
 
-    def test_exception_text_shares_budget_with_normal_fields(self) -> None:
-        """processorが例外用に文字数予算を作り直さない。"""
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset("abcd"))
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "error",
-            {
-                **{key: "x" * (TEXT_LIMIT - 1) for key in "abcd"},
-                "exc_info": ValueError("failed"),
-            },
-        )
-        assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
-        }
-
     def test_denied_names_share_event_text_budget(self) -> None:
         """禁止キー名の診断出力もイベントの文字数予算を迂回しない。"""
         rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset("abcd"))
@@ -271,7 +274,7 @@ class TestWholeLogReplacementByTextBudget:
 
 
 class TestWholeLogReplacementByItemBudget:
-    """除外項目・ネスト・例外・診断も含めた走査件数が上限を超えたらログ全体を置換する。"""
+    """除外項目・ネスト・診断も含めた走査件数が上限を超えたらログ全体を置換する。"""
 
     def test_denied_mapping_entry_at_item_budget_preserves_log(self) -> None:
         """ネストの禁止項目も一件に数え、合計が上限ちょうどなら残りを出力する。"""
@@ -430,99 +433,6 @@ class TestWholeLogReplacementByItemBudget:
             "_policy_limit_reason": "value_count",
         }
 
-    def test_generated_exception_fields_fit_exact_log_item_limit(self) -> None:
-        """入力のexc_infoと生成した例外項目を含めて上限ちょうどなら出力する。"""
-        unknown_fields = {f"unknown_{i}": 1 for i in range(MAX_ITEMS_PER_LOG_EVENT - 5)}
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "error",
-            {
-                "event": "failed",
-                "exc_info": ValueError("invalid data"),
-                **unknown_fields,
-            },
-        )
-        assert output == {
-            "event": "failed",
-            "error_class": "builtins.ValueError",
-            "error_message": "invalid data",
-            "frames": [],
-            "_unregistered_count": len(unknown_fields),
-        }
-
-    def test_generated_exception_fields_exceed_remaining_log_item_budget(self) -> None:
-        """入力走査の残り件数に例外項目が収まらなければログ全体を置換する。"""
-        unknown_fields = {f"unknown_{i}": 1 for i in range(MAX_ITEMS_PER_LOG_EVENT - 4)}
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "error",
-            {
-                "event": "failed",
-                "exc_info": ValueError("token=synthetic"),
-                **unknown_fields,
-            },
-        )
-        assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
-        }
-
-    def test_exception_frames_at_shared_item_budget_preserve_log(self) -> None:
-        """通常項目と例外frameの合計が上限件数ちょうどなら型・原因文・発生位置を保持する。"""
-
-        def fail():
-            raise ValueError("failed")
-
-        with pytest.raises(ValueError) as captured:
-            fail()
-        exc = captured.value.with_traceback(captured.value.__traceback__.tb_next)
-        # 通常3項目・例外3項目・frameの4項目を配列要素と同じ予算で数える。
-        payload = [1] * (MAX_ITEMS_PER_LOG_EVENT - 10)
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "error",
-            {"event": "failed", "payload": payload, "exc_info": exc},
-        )
-        assert output == {
-            "event": "failed",
-            "payload": payload,
-            "log_policy": "infrastructure",
-            "error_class": "builtins.ValueError",
-            "error_message": "failed",
-            "frames": [
-                {
-                    "file": __file__,
-                    "function": "fail",
-                    "line": fail.__code__.co_firstlineno + 1,
-                }
-            ],
-        }
-
-    def test_exception_frames_above_shared_item_budget_replace_log(self) -> None:
-        """通常項目と例外frameの合計が上限件数を一件超えるとログ全体を置換する。"""
-
-        def fail():
-            raise ValueError("failed")
-
-        with pytest.raises(ValueError) as captured:
-            fail()
-        exc = captured.value.with_traceback(captured.value.__traceback__.tb_next)
-        # 通常3項目・例外3項目・frameの4項目を配列要素と同じ予算で数える。
-        payload = [1] * (MAX_ITEMS_PER_LOG_EVENT - 10 + 1)
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "error",
-            {"event": "failed", "payload": payload, "exc_info": exc},
-        )
-        assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
-        }
-
     def test_budget_overflow_in_denied_key_diagnostics_replaces_whole_log(self) -> None:
         """禁止キー名の準備で走査上限に達しても入力名を含む途中結果を残さない。"""
         output = LogPolicyProcessor()(
@@ -531,24 +441,6 @@ class TestWholeLogReplacementByItemBudget:
             {
                 "password": "synthetic",
                 **{f"unknown_{i}": 1 for i in range(MAX_ITEMS_PER_LOG_EVENT - 1)},
-            },
-        )
-        assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
-        }
-
-    def test_exception_and_denied_key_diagnostics_share_log_item_budget(self) -> None:
-        """例外項目の計上後に生成する禁止キー診断も同じ残り予算を使う。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
-            "error",
-            {
-                "event": "failed",
-                "exc_info": ValueError("invalid data"),
-                "password": "synthetic",
-                **{f"unknown_{i}": 1 for i in range(MAX_ITEMS_PER_LOG_EVENT - 7)},
             },
         )
         assert output == {
@@ -582,7 +474,7 @@ class TestBudgetOverflowReason:
 
 
 class TestSqlDiagnosticBudgets:
-    """SQL診断と原因連鎖も通常項目と同じ予算で制限する。"""
+    """SQL診断と原因連鎖は、例外側の上限で制限する。"""
 
     def test_diagnostic_name_at_text_limit_is_preserved(self) -> None:
         """単一文字列の上限ちょうどの診断名は失われない。"""
@@ -594,8 +486,8 @@ class TestSqlDiagnosticBudgets:
         )
         assert output["error_details"]["constraint_name"] == "x" * TEXT_LIMIT
 
-    def test_cause_diagnostics_exceed_shared_text_budget(self) -> None:
-        """各診断属性が単独上限内でも合計文字数超過でログ全体を置換する。"""
+    def test_cause_diagnostics_beyond_exception_text_total_are_replaced(self) -> None:
+        """各診断属性が単独上限内でも、例外側の文字数の合計に収まらない値だけを置換する。"""
         driver = PostgresError.new(
             {
                 "C": "23505",
@@ -613,27 +505,14 @@ class TestSqlDiagnosticBudgets:
             "error",
             {"event": "failed", "exc_info": outer},
         )
-        assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
-        }
-
-    def test_cause_diagnostics_share_item_budget_with_normal_fields(self) -> None:
-        """通常配列と原因の診断属性の合計件数でログ全体の上限を判定する。"""
-        outer = RuntimeError("wrapped")
-        outer.__cause__ = PostgresError.new({"C": "23505", "M": "duplicate"})
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
-            "error",
-            {"payload": [0] * 250, "exc_info": outer},
-        )
-        assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
-        }
+        details = output["related_exceptions"][0]["exception"]["error_details"]
+        assert output["event"] == "failed"
+        assert [
+            details["schema_name"],
+            details["table_name"],
+            details["column_name"],
+            details["constraint_name"],
+        ] == ["x" * TEXT_LIMIT, "x" * TEXT_LIMIT, "x" * TEXT_LIMIT, "[limit]"]
 
     def test_long_diagnostic_attribute_preserves_other_fields(self) -> None:
         """一つの診断名が長すぎても兄弟のSQLSTATEを残す。"""
@@ -654,3 +533,62 @@ class TestSqlDiagnosticBudgets:
             "sqlstate": "23505",
             "constraint_name": "[limit]",
         }
+
+
+class TestExceptionBudget:
+    """例外の出力は、通常の項目と別の予算で検査する。"""
+
+    def test_chained_exception_frames_do_not_replace_normal_fields(self) -> None:
+        """連鎖した例外のframesが多くても、通常の項目を残したまま出力する。"""
+        # frameだけで通常の項目と共有していた件数の予算を使い切る量にする。
+        outer_frames = extraction.FRAME_TOTAL_LIMIT // 2
+        cause_frames = extraction.FRAME_TOTAL_LIMIT - outer_frames
+        outer = _raised_through_frames(ValueError("fetch failed"), outer_frames)
+        outer.__cause__ = _raised_through_frames(OSError("timeout"), cause_frames)
+        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"resource"}))
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(rules, structlog.ReturnLogger()),
+            "error",
+            {"event": "fetch_failed", "resource": "articles", "exc_info": outer},
+        )
+
+        assert output["event"] == "fetch_failed"
+        assert output["resource"] == "articles"
+        assert len(output["frames"]) == outer_frames
+        assert len(output["related_exceptions"][0]["exception"]["frames"]) == (
+            cause_frames
+        )
+
+    def test_exception_output_at_its_limits_passes_inspection_unchanged(self) -> None:
+        """例外側の上限いっぱいの出力は、検査を通っても置き換えられない。"""
+        # 件数・frame数・診断情報の項目数が例外側の上限を超える連鎖にする。
+        # 原因文は後ろほど短くし、長い原因文が入らなかった残りの文字数まで埋める。
+        text_limit = extraction.TEXT_LENGTH_LIMIT
+        message_lengths = [text_limit] * 3 + [
+            text_limit // 2**shift for shift in range(1, extraction.EXCEPTION_LIMIT - 1)
+        ]
+        chain = [
+            _raised_through_frames(
+                ApplicationError(
+                    "m" * length,
+                    details={
+                        f"item_{index}": "value"
+                        for index in range(extraction.DETAILS_ITEM_LIMIT)
+                    },
+                ),
+                extraction.FRAME_TOTAL_LIMIT // 2,
+            )
+            for length in message_lengths
+        ]
+        for parent, cause in zip(chain, chain[1:]):
+            parent.__cause__ = cause
+        exception_output = extraction.extract_exception_fields(chain[0])
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": chain[0]},
+        )
+
+        assert output == {"event": "failed", **exception_output}

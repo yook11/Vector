@@ -4,18 +4,14 @@ from collections.abc import MutableMapping
 from typing import Any
 
 from app.log_policy.base import LogPolicyRules
-from app.log_policy.budget import LogBudgetExceeded, LogEventBudget
+from app.log_policy.budget import LogBudgetExceeded, LogEventBudget, UncountedBudget
 from app.log_policy.diagnostics import LogProcessingDiagnostics
 from app.log_policy.exceptions.conversion import convert_exception
 from app.log_policy.exceptions.extraction import extract_exception_fields
 from app.log_policy.exceptions.types import ExceptionConverter
 from app.log_policy.field_selection import LogFieldSelector
 from app.log_policy.logger import PolicyLogger
-from app.log_policy.value_preparation import (
-    DEPTH_LIMIT,
-    EXCEPTION_DEPTH_LIMIT,
-    LogValuePreparer,
-)
+from app.log_policy.value_preparation import LogValuePreparer
 
 
 class LogPolicyProcessor:
@@ -63,7 +59,7 @@ class LogPolicyProcessor:
             # 整理したログを検証していく。
             for field_name, field_value in selected_fields.items():
                 prepared_event[field_name] = preparer.prepare_field_value(
-                    field_value, field_name=field_name, depth_limit=DEPTH_LIMIT
+                    field_value, field_name=field_name
                 )
 
             # 同名の通常入力より、実際の例外から抽出した情報を優先する。
@@ -72,13 +68,17 @@ class LogPolicyProcessor:
                 exception_converter=self._exception_converter,
             )
             if exception_fields is not None:
-                budget.check_and_count_log_items(len(exception_fields))
+                # 例外の出力の量は例外の変換の上限で決まるため、予算では数えない。
+                exception_preparer = LogValuePreparer(
+                    deny=rules.deny,
+                    mask=rules.mask,
+                    sanitize=rules.sanitize,
+                    budget=UncountedBudget(),
+                    diagnostics=diagnostics,
+                )
                 for field_name, field_value in exception_fields.items():
-                    budget.check_and_count_text_chars(len(field_name))
-                    prepared_event[field_name] = preparer.prepare_field_value(
-                        field_value,
-                        field_name=field_name,
-                        depth_limit=EXCEPTION_DEPTH_LIMIT,
+                    prepared_event[field_name] = exception_preparer.prepare_field_value(
+                        field_value, field_name=field_name
                     )
             # どのポリシーで処理したログかを、出力に残す。
             if rules.policy is not None:

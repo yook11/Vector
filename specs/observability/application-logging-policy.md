@@ -12,6 +12,8 @@ Implementation: Partially implemented。共通基底の規則・processor・例�
 
 変更状況: mask・sanitize と文字列内の認証情報の置換は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。本書で mask を文字列内のキー付き値の置換、sanitize を既知形式の秘密の検出とする記述は旧契約。
 
+原因チェーンの形式と例外項目の上限・予算は[例外の変換と値の検査の責任分担](./logging-exception-conversion-policy.md)を優先する。
+
 ## Problem
 
 例外型だけのログや例外文の一律置換により、異なる失敗原因を調査できない。一方、ログの入口ごとに出力・秘匿の判断が分かれ、標準出力や手動属性には共通の制約がない。

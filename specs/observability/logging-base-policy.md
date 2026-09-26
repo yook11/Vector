@@ -10,6 +10,8 @@ Implementation: 基底規則・processor・例外構造化・チェーン構成�
 
 文字列内部の処理 (内容検出・キー付き値の置換・置換表記・`BASE_MASK`)、記事本文の文字列内保護、`redact` の語の扱い、それらのテストの配置は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。
 
+例外の抽出・原因チェーンの形式・例外側の上限・例外の出力の予算・深さ上限は[例外の変換と値の検査の責任分担](./logging-exception-conversion-policy.md)を優先する。本書の `causes` / `exceptions`、例外用の上限、深さ19、例外項目の共有予算の記述は旧契約。
+
 ## Problem
 
 structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼び出し側の規律 (`redact_secrets` の手巻き、`logger.exception()` の回避) に依存している。結果として、例外文を丸ごと捨てる箇所と生で出す箇所が混在する。
