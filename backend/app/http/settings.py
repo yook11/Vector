@@ -6,7 +6,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 先頭のdotでホスト境界を固定し、通知先とプロキシで同じ内部namespaceを使う。
-INTERNAL_HOST_SUFFIXES = (".flycast", ".vector.internal")
+INTERNAL_HOST_SUFFIXES = (".vector.internal",)
 INTERNAL_NAMESPACE_GLOBS = " / ".join(f"*{suffix}" for suffix in INTERNAL_HOST_SUFFIXES)
 
 

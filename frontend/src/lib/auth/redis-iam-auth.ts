@@ -84,7 +84,7 @@ function buildTokenSigner(
  *
  * IAM 認証が有効なら「どの user で繋ぐか」を URL から provider へ写し、userinfo を
  * 除いた URL を返す (URL が単一の情報源)。無効時は URL をそのまま使う
- * (dev / Fly の password 認証)。誤設定は throw するので、fail-open にするかは
+ * (dev の password 認証)。誤設定は throw するので、fail-open にするかは
  * 呼び出し側が決める。
  */
 export function redisIamConnectionOptions(rawUrl: string): RedisIamConnection {

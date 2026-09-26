@@ -49,8 +49,8 @@ export async function proxy(request: NextRequest) {
   // ceiling を別財布で持ち、認証済 request は session sub-bucket + IP ceiling の
   // two-tier-AND で偽造 cookie バイパスを塞ぐ。
   //
-  // production の trusted source は CLIENT_IP_TRUST が宣言する (Fly は fly-client-ip、
-  // ALB は XFF 末尾)。未宣言は fail-closed で IP 未解決とし、read/`_rsc` を fail-open、
+  // production の trusted source は CLIENT_IP_TRUST が宣言する (ALB は XFF 末尾)。
+  // 未宣言は fail-closed で IP 未解決とし、read/`_rsc` を fail-open、
   // anon mutation のみ共有 global bucket で最低限縛る。dev/test は fallback を許可する。
   //
   // session token は下段の認証チェックでも再利用するため、ここで一度だけ取得する。
@@ -66,14 +66,13 @@ export async function proxy(request: NextRequest) {
   const forwardedFor = request.headers.get("x-forwarded-for");
   const clientIp = extractClientIp({
     trust,
-    flyClientIp: request.headers.get("fly-client-ip"),
     forwardedFor,
     realIp: request.headers.get("x-real-ip"),
     isProduction,
   });
   // ALB は append 固定で必ず 1 値以上を付けるため、XFF の有無が「ALB 経由か」と一致する。
   // health check と service connect の内部呼び出しは XFF を持たず、分母から自然に落ちる
-  // (偽装可能な UA 判定に依存しない)。Fly は XFF 末尾がアプリ自身の IP で別構造のため測らない。
+  // (偽装可能な UA 判定に依存しない)。
   if (isProduction && trust === "alb-xff-last") {
     const forwardedForValues = countForwardedForValues(forwardedFor);
     if (forwardedForValues > 0) {

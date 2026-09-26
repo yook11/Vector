@@ -301,7 +301,7 @@ class TestPasswordProvider:
     def test_absent_provider_leaves_password_to_the_url(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """未指定なら URL の password がそのまま使われる (Fly の経路)。"""
+        """未指定なら URL の password がそのまま使われる (dev の経路)。"""
         assert "password" not in self._captured_connect_args(monkeypatch)
 
     def test_caller_passed_password_raises(self) -> None:

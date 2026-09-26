@@ -10,20 +10,17 @@ import {
 
 // production は CLIENT_IP_TRUST で宣言された単一の出所のみ信頼し、それ以外は
 // fail-closed で null (missing_ip)。development / test は trust を無視し現行の
-// fallback (fly-client-ip → x-forwarded-for 先頭 → x-real-ip) を維持する。
+// fallback (x-forwarded-for 先頭 → x-real-ip) を維持する。
 
 describe("CLIENT_IP_HEADER", () => {
   it("proxy と downstream consumer が共有する内部ヘッダ名を固定する", () => {
-    // 値そのものが本番 ALB/Fly の設定・下流 route の契約なので、意図しない変更を検知する。
+    // 値そのものが本番 ALB の設定・下流 route の契約なので、意図しない変更を検知する。
     expect(CLIENT_IP_HEADER).toBe("x-vector-client-ip");
   });
 });
 
 describe("parseClientIpTrust", () => {
-  it.each([
-    "fly-client-ip",
-    "alb-xff-last",
-  ] as const)("有効値 %s をそのまま返す", (value) => {
+  it.each(["alb-xff-last"] as const)("有効値 %s をそのまま返す", (value) => {
     expect(parseClientIpTrust(value)).toBe(value);
   });
 
@@ -32,58 +29,12 @@ describe("parseClientIpTrust", () => {
     null,
     "",
     "unknown-mode",
-    "Fly-Client-IP",
-    " fly-client-ip",
+    // Fly の退役で外したモード。
+    "fly-client-ip",
+    "ALB-XFF-LAST",
+    " alb-xff-last",
   ])("有効値以外 (%j) は null を返す", (value) => {
     expect(parseClientIpTrust(value as string | undefined | null)).toBeNull();
-  });
-});
-
-describe("extractClientIp — production, trust=fly-client-ip", () => {
-  const base = { trust: "fly-client-ip" as ClientIpTrust, isProduction: true };
-
-  it("fly-client-ip の trim 値を採用する", () => {
-    expect(
-      extractClientIp({
-        ...base,
-        flyClientIp: "  203.0.113.10  ",
-        forwardedFor: null,
-        realIp: null,
-      }),
-    ).toBe("203.0.113.10");
-  });
-
-  it("x-forwarded-for / x-real-ip が来ても読まない", () => {
-    expect(
-      extractClientIp({
-        ...base,
-        flyClientIp: "203.0.113.10",
-        forwardedFor: "9.9.9.9",
-        realIp: "8.8.8.8",
-      }),
-    ).toBe("203.0.113.10");
-  });
-
-  it("fly-client-ip 欠如は他ヘッダがあっても fail-closed", () => {
-    expect(
-      extractClientIp({
-        ...base,
-        flyClientIp: null,
-        forwardedFor: "9.9.9.9",
-        realIp: "8.8.8.8",
-      }),
-    ).toBeNull();
-  });
-
-  it("fly-client-ip が空白のみでも fail-closed", () => {
-    expect(
-      extractClientIp({
-        ...base,
-        flyClientIp: "   ",
-        forwardedFor: null,
-        realIp: null,
-      }),
-    ).toBeNull();
   });
 });
 
@@ -94,7 +45,6 @@ describe("extractClientIp — production, trust=alb-xff-last", () => {
     expect(
       extractClientIp({
         ...base,
-        flyClientIp: null,
         forwardedFor: "1.2.3.4, 5.6.7.8",
         realIp: null,
       }),
@@ -105,7 +55,6 @@ describe("extractClientIp — production, trust=alb-xff-last", () => {
     expect(
       extractClientIp({
         ...base,
-        flyClientIp: null,
         forwardedFor: "1.2.3.4,   5.6.7.8   ",
         realIp: null,
       }),
@@ -116,19 +65,7 @@ describe("extractClientIp — production, trust=alb-xff-last", () => {
     expect(
       extractClientIp({
         ...base,
-        flyClientIp: null,
         forwardedFor: "5.6.7.8",
-        realIp: null,
-      }),
-    ).toBe("5.6.7.8");
-  });
-
-  it("偽装された fly-client-ip があっても無視する (invariant: alb-xff-last で fly 偽装値が識別に使われない)", () => {
-    expect(
-      extractClientIp({
-        ...base,
-        flyClientIp: "203.0.113.66",
-        forwardedFor: "1.2.3.4, 5.6.7.8",
         realIp: null,
       }),
     ).toBe("5.6.7.8");
@@ -138,7 +75,6 @@ describe("extractClientIp — production, trust=alb-xff-last", () => {
     expect(
       extractClientIp({
         ...base,
-        flyClientIp: null,
         forwardedFor: null,
         realIp: "9.9.9.9",
       }),
@@ -149,7 +85,6 @@ describe("extractClientIp — production, trust=alb-xff-last", () => {
     expect(
       extractClientIp({
         ...base,
-        flyClientIp: null,
         forwardedFor: "",
         realIp: null,
       }),
@@ -160,7 +95,6 @@ describe("extractClientIp — production, trust=alb-xff-last", () => {
     expect(
       extractClientIp({
         ...base,
-        flyClientIp: null,
         forwardedFor: "1.2.3.4, ",
         realIp: null,
       }),
@@ -173,7 +107,6 @@ describe("extractClientIp — production, trust=null (未設定/不正値)", () 
     expect(
       extractClientIp({
         trust: null,
-        flyClientIp: "203.0.113.10",
         forwardedFor: "1.2.3.4, 5.6.7.8",
         realIp: "9.9.9.9",
         isProduction: true,
@@ -185,7 +118,6 @@ describe("extractClientIp — production, trust=null (未設定/不正値)", () 
     expect(
       extractClientIp({
         trust: null,
-        flyClientIp: null,
         forwardedFor: null,
         realIp: null,
         isProduction: true,
@@ -196,26 +128,12 @@ describe("extractClientIp — production, trust=null (未設定/不正値)", () 
 
 describe("extractClientIp — 非 production は trust を無視し現行 fallback を維持する", () => {
   it.each([
-    "fly-client-ip",
     "alb-xff-last",
     null,
-  ] as const)("trust=%s でも fly-client-ip を最優先する", (trust) => {
+  ] as const)("trust=%s でも x-forwarded-for の先頭値 (末尾ではない) を採用する", (trust) => {
     expect(
       extractClientIp({
         trust,
-        flyClientIp: "203.0.113.10",
-        forwardedFor: "1.2.3.4",
-        realIp: null,
-        isProduction: false,
-      }),
-    ).toBe("203.0.113.10");
-  });
-
-  it("fly-client-ip 欠如時は x-forwarded-for の先頭値 (末尾ではない) に fallback する", () => {
-    expect(
-      extractClientIp({
-        trust: "alb-xff-last",
-        flyClientIp: null,
         forwardedFor: "203.0.113.1, 198.51.100.1, 10.0.0.1",
         realIp: null,
         isProduction: false,
@@ -227,7 +145,6 @@ describe("extractClientIp — 非 production は trust を無視し現行 fallba
     expect(
       extractClientIp({
         trust: null,
-        flyClientIp: null,
         forwardedFor: "  203.0.113.1  , 10.0.0.1",
         realIp: null,
         isProduction: false,
@@ -235,11 +152,10 @@ describe("extractClientIp — 非 production は trust を無視し現行 fallba
     ).toBe("203.0.113.1");
   });
 
-  it("fly-client-ip / x-forwarded-for が両方欠如なら x-real-ip に fallback する", () => {
+  it("x-forwarded-for が欠如なら x-real-ip に fallback する", () => {
     expect(
       extractClientIp({
         trust: null,
-        flyClientIp: null,
         forwardedFor: null,
         realIp: "203.0.113.2",
         isProduction: false,
@@ -251,7 +167,6 @@ describe("extractClientIp — 非 production は trust を無視し現行 fallba
     expect(
       extractClientIp({
         trust: null,
-        flyClientIp: null,
         forwardedFor: null,
         realIp: null,
         isProduction: false,
@@ -263,7 +178,6 @@ describe("extractClientIp — 非 production は trust を無視し現行 fallba
     expect(
       extractClientIp({
         trust: null,
-        flyClientIp: "   ",
         forwardedFor: "   ",
         realIp: "   ",
         isProduction: false,
@@ -295,23 +209,10 @@ describe("extractClientIp — IP 構文検証", () => {
   describe.each(
     VALID_IP_NORMALIZATIONS,
   )("妥当な IP %s は正規化後 %s として採用する", (ip, expected) => {
-    it("production, trust=fly-client-ip", () => {
-      expect(
-        extractClientIp({
-          trust: "fly-client-ip",
-          flyClientIp: ip,
-          forwardedFor: null,
-          realIp: null,
-          isProduction: true,
-        }),
-      ).toBe(expected);
-    });
-
     it("production, trust=alb-xff-last (xff 末尾)", () => {
       expect(
         extractClientIp({
           trust: "alb-xff-last",
-          flyClientIp: null,
           forwardedFor: `10.0.0.1, ${ip}`,
           realIp: null,
           isProduction: true,
@@ -319,12 +220,11 @@ describe("extractClientIp — IP 構文検証", () => {
       ).toBe(expected);
     });
 
-    it("非 production fallback (fly-client-ip)", () => {
+    it("非 production fallback (x-forwarded-for 先頭)", () => {
       expect(
         extractClientIp({
           trust: null,
-          flyClientIp: ip,
-          forwardedFor: null,
+          forwardedFor: `${ip}, 10.0.0.1`,
           realIp: null,
           isProduction: false,
         }),
@@ -343,38 +243,13 @@ describe("extractClientIp — IP 構文検証", () => {
   describe.each(
     INVALID_VALUES,
   )("非IP値 %j は fail-closed (未解決扱い)", (invalid) => {
-    it("production, trust=fly-client-ip", () => {
-      expect(
-        extractClientIp({
-          trust: "fly-client-ip",
-          flyClientIp: invalid,
-          forwardedFor: null,
-          realIp: null,
-          isProduction: true,
-        }),
-      ).toBeNull();
-    });
-
     it("production, trust=alb-xff-last (末尾が非IP)", () => {
       expect(
         extractClientIp({
           trust: "alb-xff-last",
-          flyClientIp: null,
           forwardedFor: `1.2.3.4, ${invalid}`,
           realIp: null,
           isProduction: true,
-        }),
-      ).toBeNull();
-    });
-
-    it("非 production fallback: fly-client-ip 由来 (他ソースも無ければ null)", () => {
-      expect(
-        extractClientIp({
-          trust: null,
-          flyClientIp: invalid,
-          forwardedFor: null,
-          realIp: null,
-          isProduction: false,
         }),
       ).toBeNull();
     });
@@ -383,7 +258,6 @@ describe("extractClientIp — IP 構文検証", () => {
       expect(
         extractClientIp({
           trust: null,
-          flyClientIp: null,
           forwardedFor: `${invalid}, 5.6.7.8`,
           realIp: null,
           isProduction: false,
@@ -395,7 +269,6 @@ describe("extractClientIp — IP 構文検証", () => {
       expect(
         extractClientIp({
           trust: null,
-          flyClientIp: null,
           forwardedFor: null,
           realIp: invalid,
           isProduction: false,
@@ -404,23 +277,10 @@ describe("extractClientIp — IP 構文検証", () => {
     });
   });
 
-  it("非 production fallback は不正な fly-client-ip をスキップし x-forwarded-for 先頭へ進む", () => {
-    expect(
-      extractClientIp({
-        trust: null,
-        flyClientIp: "not-an-ip",
-        forwardedFor: "203.0.113.1, 10.0.0.1",
-        realIp: null,
-        isProduction: false,
-      }),
-    ).toBe("203.0.113.1");
-  });
-
   it("非 production fallback は不正な x-forwarded-for 先頭値をスキップし x-real-ip へ進む", () => {
     expect(
       extractClientIp({
         trust: null,
-        flyClientIp: null,
         forwardedFor: "203.0.113.7:8080",
         realIp: "198.51.100.9",
         isProduction: false,
@@ -432,7 +292,6 @@ describe("extractClientIp — IP 構文検証", () => {
     expect(
       extractClientIp({
         trust: "alb-xff-last",
-        flyClientIp: null,
         forwardedFor: "203.0.113.1, not-an-ip",
         realIp: null,
         isProduction: true,
@@ -444,16 +303,14 @@ describe("extractClientIp — IP 構文検証", () => {
 describe("extractClientIp — IPv6 /64 正規化の不変条件", () => {
   it("同一 /64 内の異なるアドレス2つは同じ値に正規化される", () => {
     const a = extractClientIp({
-      trust: "fly-client-ip",
-      flyClientIp: "2001:db8:1:2::aaaa",
-      forwardedFor: null,
+      trust: "alb-xff-last",
+      forwardedFor: "2001:db8:1:2::aaaa",
       realIp: null,
       isProduction: true,
     });
     const b = extractClientIp({
-      trust: "fly-client-ip",
-      flyClientIp: "2001:db8:1:2:ffff:eeee:dddd:cccc",
-      forwardedFor: null,
+      trust: "alb-xff-last",
+      forwardedFor: "2001:db8:1:2:ffff:eeee:dddd:cccc",
       realIp: null,
       isProduction: true,
     });
@@ -463,16 +320,14 @@ describe("extractClientIp — IPv6 /64 正規化の不変条件", () => {
 
   it("異なる /64 は異なる値になる", () => {
     const a = extractClientIp({
-      trust: "fly-client-ip",
-      flyClientIp: "2001:db8:1:2::1",
-      forwardedFor: null,
+      trust: "alb-xff-last",
+      forwardedFor: "2001:db8:1:2::1",
       realIp: null,
       isProduction: true,
     });
     const b = extractClientIp({
-      trust: "fly-client-ip",
-      flyClientIp: "2001:db8:1:3::1",
-      forwardedFor: null,
+      trust: "alb-xff-last",
+      forwardedFor: "2001:db8:1:3::1",
       realIp: null,
       isProduction: true,
     });
@@ -486,9 +341,8 @@ describe("extractClientIp — IPv6 /64 正規化の不変条件", () => {
   ] as const)("表記ゆれ %s は同一 /64 なら同じ正規化結果 %s になる", (ip, expected) => {
     expect(
       extractClientIp({
-        trust: "fly-client-ip",
-        flyClientIp: ip,
-        forwardedFor: null,
+        trust: "alb-xff-last",
+        forwardedFor: ip,
         realIp: null,
         isProduction: true,
       }),
@@ -497,9 +351,8 @@ describe("extractClientIp — IPv6 /64 正規化の不変条件", () => {
 
   it("正規化後の値も IPv6 として構文妥当 (下流 Better Auth の isValidIP を通る形)", () => {
     const normalized = extractClientIp({
-      trust: "fly-client-ip",
-      flyClientIp: "2001:db8:aaaa:bbbb:1:2:3:4",
-      forwardedFor: null,
+      trust: "alb-xff-last",
+      forwardedFor: "2001:db8:aaaa:bbbb:1:2:3:4",
       realIp: null,
       isProduction: true,
     });
@@ -509,16 +362,14 @@ describe("extractClientIp — IPv6 /64 正規化の不変条件", () => {
 
   it("IPv4-mapped は異なる埋め込み IPv4 ごとに別の値になる (丸め前に剥がすため 1 バケツに畳まれない)", () => {
     const a = extractClientIp({
-      trust: "fly-client-ip",
-      flyClientIp: "::ffff:192.0.2.1",
-      forwardedFor: null,
+      trust: "alb-xff-last",
+      forwardedFor: "::ffff:192.0.2.1",
       realIp: null,
       isProduction: true,
     });
     const b = extractClientIp({
-      trust: "fly-client-ip",
-      flyClientIp: "::ffff:198.51.100.5",
-      forwardedFor: null,
+      trust: "alb-xff-last",
+      forwardedFor: "::ffff:198.51.100.5",
       realIp: null,
       isProduction: true,
     });
