@@ -125,7 +125,7 @@ CONNECT成功後に受け取った403も、CONNECTそのものの拒否とは区
 既存の取得処理はCONNECT 403を`FetchEgressBlockedError`へ変換して終了扱いにし、
 その他のプロキシ失敗を`FetchNetworkError`へ変換して再試行可能とする。
 一方、新しい記事補完Consumerは`HttpTransportError`として再試行する。
-この違いは[記事補完の仕様](../../../specs/pipeline/article-completion-consumer.md)に従い、共通分類器で統一しない。
+この違いは[外部取得の失敗判断](../../../specs/collection/external-fetch-failure-classification.md)に従い、共通分類器で統一しない。
 
 既存の取得処理には未知例外を`FetchNetworkError`へ倒す互換動作と、エラー自身の`retryable`が残る。
 既存エラー全体の共通契約への移行・判断のハンドラーへの移動は、今回のプロキシ解析共通化とは分けて扱う。

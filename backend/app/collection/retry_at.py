@@ -1,4 +1,4 @@
-"""補完を再試行するまで待つ時刻を表す。"""
+"""外部取得を再試行できるまで待つ時刻を表す。"""
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta

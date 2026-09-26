@@ -19,7 +19,7 @@ from app.collection.article_completion.consumer_failure_classification import (
     CloseArticleCompletion,
     RetryArticleCompletion,
 )
-from app.collection.article_completion.retry_at import RetryAt
+from app.collection.retry_at import RetryAt
 from app.lambda_handlers.sqs.errors import SqsInputError
 from tests.collection.test_incomplete_article_recorded_event import valid_event
 
