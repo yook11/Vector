@@ -22,12 +22,12 @@ from openai.types.chat.chat_completion_message_function_tool_call import (
 )
 from pydantic import SecretStr
 
-from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import (
     MAX_CHAPTERS_PER_BRIEFING,
     MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
     MAX_KEY_ARTICLES_PER_BRIEFING,
 )
+from app.insights.briefing.domain.ready import BriefingArticle
 from app.insights.briefing.errors import (
     BriefingLlmError,
     BriefingLlmResponseInvalidError,
@@ -86,7 +86,11 @@ async def test_disables_thinking_for_pro_model() -> None:
         result = await gen.generate(
             category_name="AI",
             week_start=date(2026, 4, 20),
-            articles=[ArticleInput(id=1, title_ja="t", summary_ja="s")],
+            articles=[
+                BriefingArticle(
+                    analyzed_article_id=1, translated_title="t", summary="s"
+                )
+            ],
         )
 
     create.assert_awaited_once()
@@ -144,7 +148,11 @@ async def _generate_with_mocked_response(arguments: dict) -> None:
         await gen.generate(
             category_name="AI",
             week_start=date(2026, 4, 20),
-            articles=[ArticleInput(id=1, title_ja="t", summary_ja="s")],
+            articles=[
+                BriefingArticle(
+                    analyzed_article_id=1, translated_title="t", summary="s"
+                )
+            ],
         )
 
 
@@ -250,7 +258,11 @@ async def test_generator_wraps_openai_api_error() -> None:
             await gen.generate(
                 category_name="AI",
                 week_start=date(2026, 4, 20),
-                articles=[ArticleInput(id=1, title_ja="t", summary_ja="s")],
+                articles=[
+                    BriefingArticle(
+                        analyzed_article_id=1, translated_title="t", summary="s"
+                    )
+                ],
             )
 
     assert raised.value.provider_error is provider_error

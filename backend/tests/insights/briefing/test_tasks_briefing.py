@@ -11,8 +11,13 @@ from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
 from app.audit.domain.event import Stage
-from app.insights.briefing.domain.ready import ReadyForBriefing
+from app.insights.briefing.domain.ready import (
+    BriefingArticle,
+    BriefingReadyBuildFacts,
+    ReadyForBriefing,
+)
 from app.insights.briefing.errors import BriefingConfigurationError
+from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.service import GeneratedBriefing
 from app.queue.messages.briefing import BriefingTaskInput
 from tests.logfire._span_helpers import pipeline_stage_attrs
@@ -47,6 +52,30 @@ def _category_rows(*category_ids: int) -> MagicMock:
     rows = MagicMock()
     rows.scalars = MagicMock(return_value=scalars)
     return rows
+
+
+_ARTICLE = BriefingArticle(analyzed_article_id=10, translated_title="t", summary="s")
+
+
+def _facts(
+    *,
+    already_generated: bool = False,
+    articles: tuple[BriefingArticle, ...] = (_ARTICLE,),
+) -> BriefingReadyBuildFacts:
+    return BriefingReadyBuildFacts(
+        category_slug="ai",
+        category_name="AI",
+        already_generated=already_generated,
+        articles=articles,
+    )
+
+
+def _patch_facts(facts: BriefingReadyBuildFacts | None):
+    return patch.object(
+        BriefingRepository,
+        "load_ready_build_facts",
+        new=AsyncMock(return_value=facts),
+    )
 
 
 def _patch_dispatch_audit_methods(audit_cls: MagicMock) -> None:
@@ -235,7 +264,7 @@ class TestDispatcher:
 
 class TestSubtask:
     @pytest.mark.asyncio
-    async def test_skips_when_ready_is_none_and_logs_existing(self) -> None:
+    async def test_skips_already_generated_week_and_logs_existing(self) -> None:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
@@ -243,11 +272,7 @@ class TestSubtask:
         service.execute = AsyncMock()
 
         with (
-            patch.object(
-                ReadyForBriefing,
-                "try_advance_from",
-                new=AsyncMock(return_value=None),
-            ),
+            _patch_facts(_facts(already_generated=True)),
             patch(
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
@@ -268,27 +293,50 @@ class TestSubtask:
         ]
 
     @pytest.mark.asyncio
-    async def test_invokes_service_when_ready(self) -> None:
+    async def test_records_input_empty_without_generating_when_no_articles(
+        self,
+    ) -> None:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
-        ready = ReadyForBriefing(week_start=date(2026, 4, 20), category_id=1)
+        service = MagicMock()
+        service.execute = AsyncMock()
+
+        with (
+            _patch_facts(_facts(articles=())),
+            patch(
+                "app.queue.tasks.briefing.WeeklyBriefingService",
+                return_value=service,
+            ),
+            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
+        ):
+            audit_cls.return_value.append_generation_input_empty = AsyncMock()
+            await briefing.generate_briefing_for_category(
+                BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
+                ctx=ctx,
+            )
+
+        service.execute.assert_not_awaited()
+        audit_cls.return_value.append_generation_input_empty.assert_awaited_once_with(
+            week_start=date(2026, 4, 20), category_id=1
+        )
+
+    @pytest.mark.asyncio
+    async def test_invokes_service_with_ready_built_from_facts(self) -> None:
+        from app.queue.tasks import briefing
+
+        ctx = _ctx_with_session_factory()
         service = MagicMock()
         service.execute = AsyncMock(
             return_value=GeneratedBriefing(
-                persisted=True,
                 week_start=date(2026, 4, 20),
                 category_id=1,
-                article_count=10,
+                article_count=1,
             )
         )
 
         with (
-            patch.object(
-                ReadyForBriefing,
-                "try_advance_from",
-                new=AsyncMock(return_value=ready),
-            ),
+            _patch_facts(_facts()),
             patch(
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
@@ -299,7 +347,15 @@ class TestSubtask:
                 ctx=ctx,
             )
 
-        service.execute.assert_awaited_once_with(ready)
+        service.execute.assert_awaited_once_with(
+            ReadyForBriefing(
+                week_start=date(2026, 4, 20),
+                category_id=1,
+                category_slug="ai",
+                category_name="AI",
+                articles=(_ARTICLE,),
+            )
+        )
         # composition root が broker_briefing 起動時に state へ wire した generator が
         # そのまま service に DI される (Pure DI 経路の不変条件)。
         assert service_cls.call_args.args[1] is ctx.state.briefing_generator
@@ -309,16 +365,11 @@ class TestSubtask:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
-        ready = ReadyForBriefing(week_start=date(2026, 4, 20), category_id=1)
         service = MagicMock()
         service.execute = AsyncMock(side_effect=RuntimeError("LLM down"))
 
         with (
-            patch.object(
-                ReadyForBriefing,
-                "try_advance_from",
-                new=AsyncMock(return_value=ready),
-            ),
+            _patch_facts(_facts()),
             patch(
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
@@ -331,6 +382,35 @@ class TestSubtask:
                 BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
                 ctx=ctx,
             )
+
+    @pytest.mark.asyncio
+    async def test_missing_category_is_recorded_as_unexpected_failure(self) -> None:
+        """dispatch 後にカテゴリが消えた場合は失敗として監査に焼き、retry に委ねる。"""
+        from app.queue.tasks import briefing
+
+        ctx = _ctx_with_session_factory()
+        service = MagicMock()
+        service.execute = AsyncMock()
+        service._llm.MODEL = "deepseek-v4-pro"
+
+        with (
+            _patch_facts(None),
+            patch(
+                "app.queue.tasks.briefing.WeeklyBriefingService",
+                return_value=service,
+            ),
+            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
+            pytest.raises(ValueError, match="Category not found"),
+        ):
+            audit_cls.return_value.append_unexpected_failure = AsyncMock()
+            await briefing.generate_briefing_for_category(
+                BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
+                ctx=ctx,
+            )
+
+        service.execute.assert_not_awaited()
+        kwargs = audit_cls.return_value.append_unexpected_failure.await_args.kwargs
+        assert (kwargs["week_start"], kwargs["category_id"]) == (date(2026, 4, 20), 1)
 
 
 class TestSubtaskFailureAudit:
@@ -347,17 +427,12 @@ class TestSubtaskFailureAudit:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory(retries=retries, max_retries=max_retries)
-        ready = ReadyForBriefing(week_start=date(2026, 4, 20), category_id=1)
         service = MagicMock()
         service.execute = AsyncMock(side_effect=exc)
         service._llm.MODEL = "deepseek-v4-pro"
 
         with (
-            patch.object(
-                ReadyForBriefing,
-                "try_advance_from",
-                new=AsyncMock(return_value=ready),
-            ),
+            _patch_facts(_facts()),
             patch(
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
@@ -378,11 +453,13 @@ class TestSubtaskFailureAudit:
         # 非最終試行: _retries=0 < max_retries-1=1 → retry_exhausted=None
         _, append_failure = await self._run_with_exc(exc, retries=0, max_retries=2)
 
-        append_failure.assert_awaited_once()
-        kwargs = append_failure.await_args.kwargs
-        assert kwargs["exc"] is exc
-        assert kwargs["retry_exhausted"] is None
-        assert kwargs["ai_model"] == "deepseek-v4-pro"
+        append_failure.assert_awaited_once_with(
+            week_start=date(2026, 4, 20),
+            category_id=1,
+            exc=exc,
+            retry_exhausted=None,
+            ai_model="deepseek-v4-pro",
+        )
 
     @pytest.mark.asyncio
     async def test_records_failure_with_retry_exhausted_on_last_attempt(self) -> None:
@@ -403,11 +480,9 @@ class TestGenerateBriefingForCategoryStageSpan:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
-        ready = ReadyForBriefing(week_start=date(2026, 4, 20), category_id=1)
         service = MagicMock()
         service.execute = AsyncMock(
             return_value=GeneratedBriefing(
-                persisted=True,
                 week_start=date(2026, 4, 20),
                 category_id=1,
                 article_count=5,
@@ -415,11 +490,7 @@ class TestGenerateBriefingForCategoryStageSpan:
         )
 
         with (
-            patch.object(
-                ReadyForBriefing,
-                "try_advance_from",
-                new=AsyncMock(return_value=ready),
-            ),
+            _patch_facts(_facts()),
             patch(
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,

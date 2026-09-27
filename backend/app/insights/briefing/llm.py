@@ -18,6 +18,7 @@ Function Calling + ``strict: true`` + inline flat schema で構造化出力を�
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from typing import Any, ClassVar, Final
 
@@ -29,8 +30,8 @@ from pydantic import ValidationError
 
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.config import settings
-from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
+from app.insights.briefing.domain.ready import BriefingArticle
 from app.insights.briefing.errors import (
     BriefingConfigurationError,
     BriefingLlmError,
@@ -214,7 +215,7 @@ class DeepSeekBriefingGenerator:
         *,
         category_name: str,
         week_start: date,
-        articles: list[ArticleInput],
+        articles: Sequence[BriefingArticle],
     ) -> WeeklyBriefingContent:
         """指定カテゴリの週次 briefing を 1 回の API 呼出で生成する。
 
@@ -273,7 +274,7 @@ class DeepSeekBriefingGenerator:
                 f"DeepSeek did not return {_TOOL_NAME} tool_call "
                 f"(finish_reason={choice.finish_reason})"
             )
-        input_ids = {a.id for a in articles}
+        input_ids = {a.analyzed_article_id for a in articles}
         try:
             return WeeklyBriefingContent.from_llm_payload(
                 tool_call.function.arguments, input_ids=input_ids
@@ -284,15 +285,15 @@ class DeepSeekBriefingGenerator:
             ) from exc
 
     @staticmethod
-    def _format_articles(articles: list[ArticleInput]) -> str:
+    def _format_articles(articles: Sequence[BriefingArticle]) -> str:
         """LLM に渡す記事ブロックを analyzed_article_id 付きで整形する。
 
         title / summary には ``sanitize_for_untrusted_block`` を適用し、
         ``</untrusted_input>`` リテラル経由の境界脱出を防ぐ。
         """
         return "\n\n".join(
-            f"analyzed_article_id: {a.id}\n"
-            f"タイトル: {sanitize_for_untrusted_block(a.title_ja)}\n"
-            f"要約: {sanitize_for_untrusted_block(a.summary_ja)}"
+            f"analyzed_article_id: {a.analyzed_article_id}\n"
+            f"タイトル: {sanitize_for_untrusted_block(a.translated_title)}\n"
+            f"要約: {sanitize_for_untrusted_block(a.summary)}"
             for a in articles
         )

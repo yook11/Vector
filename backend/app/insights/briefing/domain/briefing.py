@@ -1,28 +1,9 @@
-"""Briefing の LLM 出力 VO + ハルシネーション検証。
+"""briefing の成果物 (LLM 出力を検証した内容) の VO。
 
-DeepSeek-V4 Pro が返す JSON を ``WeeklyBriefingContent`` として受ける。
-``key_articles[].analyzed_article_id`` が ``input_ids`` の subset であることを
-``model_validator`` (mode="after") で検証し、捏造記事 id を含む応答を
-構造的に弾く。
-
-出力構造 (1 カテゴリ × 1 週):
-- ``headline``: 週を一言で表す見出し
-- ``summary``: 今週の総括 (リード文。headline 直後に置く数文の要旨)
-- ``chapters``: 章 (``heading`` 見出し + ``body`` 本文) のリスト。
-  本文を章立てしたストーリーとして構造化する (旧 ``overview`` 単一長文を置換)
-- ``key_articles``: その中で特に重要な記事 (analyzed_article_id + significance)
-- ``watch_points``: 今後どこを見るべきか (観察すべき問い・論点。statement)
-
-検証の入口:
-    LLM 応答の VO 化は ``WeeklyBriefingContent.from_llm_payload(payload,
-    input_ids=...)`` を唯一の production 入口とする。``input_ids`` を必須引数に
-    することで、context 渡し忘れによるハルシネーション検証スキップを構造的に防ぐ。
-
-サイズ上限 (red-team F10 構造防御):
-    各 str / list の max_length は LLM 暴走 / prompt injection で巨大 briefing が
-    DB に入る経路 (二次防御) を構造的に塞ぐ。共有 read 経路の防御は
-    ``briefing/schemas.py`` の response schema 側で同値の max_length を持って
-    実現する (router の model_validate 経由ではないため二箇所で持つ)。
+LLM 応答の VO 化は ``WeeklyBriefingContent.from_llm_payload`` だけを本番の入口にし、
+``input_ids`` を必須にして捏造記事 id の検証漏れを防ぐ。各上限は閲覧 API の
+response schema (``briefing/schemas.py``) にも同値で持つ
+(閲覧側はこの VO を通らないため)。
 """
 
 from __future__ import annotations
@@ -32,13 +13,6 @@ from typing import Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-# LLM 出力の現実的な上限。response schema (briefing/schemas.py) と同値で
-# 持ち、二箇所で同じ振る舞いを保証する。
-# - headline は短い見出し (一覧表示と詳細 header に同じものを使う)
-# - summary は headline 直後の総括リード (数文)
-# - chapters[].heading は章見出し、chapters[].body が週の流れ narrative を担う
-# - key_articles[].significance は記事単位の「なぜ重要か」の短文
-# - watch_points[].statement は「今後どこを見るべきか」の短文
 MAX_BRIEFING_HEADLINE_LEN: Final[int] = 200
 MAX_BRIEFING_SUMMARY_LEN: Final[int] = 1_000
 MAX_CHAPTER_HEADING_LEN: Final[int] = 80
@@ -55,11 +29,7 @@ MAX_WATCH_POINTS_PER_BRIEFING: Final[int] = 8
 
 
 class BriefingChapter(BaseModel):
-    """本文を構成する章 1 つ = 見出し (heading) + 本文 (body)。
-
-    headline 直後の ``summary`` とは別に、週のストーリーを章立てで構造化する。
-    章数は LLM 裁量で、件数の下限/上限は ``WeeklyBriefingContent.chapters`` 側で持つ。
-    """
+    """週の流れを章立てにした本文の章 1 つ。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -68,11 +38,7 @@ class BriefingChapter(BaseModel):
 
 
 class KeyArticle(BaseModel):
-    """その週で特に重要な記事 1 件 = 記事 id + なぜ重要か (significance)。
-
-    ``analyzed_article_id`` は LLM 入出力語彙で、値は公開 /news id 空間
-    (``AnalyzedArticleRecord.id``)。
-    """
+    """その週で特に重要な記事 1 件 (analyzed_article_id は公開記事 id と同じ空間)。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -81,10 +47,9 @@ class KeyArticle(BaseModel):
 
 
 class WatchPoint(BaseModel):
-    """今後どこを見るべきか = 観察すべき問い・論点 1 件。
+    """今後どこを見るべきかの論点 1 件。
 
-    v1 では記事 id 接地を持たない (statement のみ)。段階 2 で
-    ``basis_article_ids`` を additive に足せるよう、オブジェクト形で保持する。
+    根拠記事 id を後から足せるようオブジェクト形で持つ。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -93,10 +58,9 @@ class WatchPoint(BaseModel):
 
 
 class WeeklyBriefingContent(BaseModel):
-    """LLM が返す 1 カテゴリ × 1 週分の briefing 全体。
+    """LLM が返す 1 カテゴリ × 1 週分の briefing。
 
-    本 VO の検証を通った内容は ``BriefingRepository.save`` でそのまま永続化
-    できる (保存可能性の保証は本型の検証が担う)。
+    検証を通った内容はそのまま保存できる。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -105,15 +69,7 @@ class WeeklyBriefingContent(BaseModel):
     def from_llm_payload(
         cls, payload: str, *, input_ids: AbstractSet[int]
     ) -> WeeklyBriefingContent:
-        """LLM 応答 JSON を検証して VO 化する production 経路の唯一の入口。
-
-        ``input_ids`` を必須にすることで、context 渡し忘れでハルシネーション
-        検証が黙ってスキップされる経路を構造的に塞ぐ。
-
-        Raises:
-            pydantic.ValidationError: schema 違反 / 重複 analyzed_article_id /
-                ``input_ids`` 外の analyzed_article_id。
-        """
+        """schema 違反・重複 id・input_ids 外の id は ValidationError にする。"""
         return cls.model_validate_json(payload, context={"input_ids": input_ids})
 
     headline: str = Field(min_length=1, max_length=MAX_BRIEFING_HEADLINE_LEN)
@@ -130,13 +86,7 @@ class WeeklyBriefingContent(BaseModel):
 
     @model_validator(mode="after")
     def _reject_duplicate_key_article_ids(self) -> Self:
-        """``key_articles`` の analyzed_article_id 重複を構造的に弾く。
-
-        LLM が同一記事を複数回挙げても DB 到達前に落とす。「重要な記事」は
-        記事単位の編集判断であり同一記事の重複掲載は契約違反 (response の
-        keyArticles[].article.id 一意性もこれが支える)。
-        件数とは独立した制約なので context 不要 (常時実行)。
-        """
+        """同じ記事の重複掲載は契約違反で、閲覧 API の記事 id の一意性も支える。"""
         ids = [ka.analyzed_article_id for ka in self.key_articles]
         if len(ids) != len(set(ids)):
             raise ValueError(
@@ -146,12 +96,9 @@ class WeeklyBriefingContent(BaseModel):
 
     @model_validator(mode="after")
     def _validate_article_ids_subset(self, info: ValidationInfo) -> Self:
-        """``key_articles[].analyzed_article_id ⊆ input_ids`` を保証する。
+        """context に input_ids が無ければ検証しない。
 
-        ``info.context["input_ids"]`` が指定されていない場合は検証をスキップする
-        (テスト等で context を渡さない経路を許容する)。LLM 呼出経路では必ず
-        ``input_ids`` を渡すこと。``watch_points`` は v1 では記事 id を持たないため
-        検証対象外。
+        本番経路は from_llm_payload が必ず渡す。
         """
         context = info.context
         if context is None:

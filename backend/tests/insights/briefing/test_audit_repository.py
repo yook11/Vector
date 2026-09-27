@@ -16,7 +16,6 @@ from app.audit.stages.briefing import (
     BriefingAuditRepository,
     BriefingOutcomeCode,
 )
-from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.errors import (
     BriefingConfigurationError,
     BriefingLlmError,
@@ -35,10 +34,6 @@ async def ai_category(db_session: AsyncSession) -> Category:
     return cat
 
 
-def _ready(category_id: int, *, week: date = date(2026, 4, 20)) -> ReadyForBriefing:
-    return ReadyForBriefing(week_start=week, category_id=category_id)
-
-
 async def _fetch_one(db_session: AsyncSession) -> PipelineEvent:
     rows = (await db_session.execute(select(PipelineEvent))).scalars().all()
     assert len(rows) == 1, f"expected 1 event row, got {len(rows)}"
@@ -54,7 +49,8 @@ async def test_append_generation_completed_records_succeeded_row(
     """生成成功 audit が SUCCEEDED + outcome_code + payload 整合で記録される。"""
     async with session_factory() as session:
         await BriefingAuditRepository(session).append_generation_completed(
-            ready=_ready(ai_category.id),
+            week_start=date(2026, 4, 20),
+            category_id=ai_category.id,
             article_count=7,
             ai_model="deepseek-v4-pro",
         )
@@ -82,7 +78,8 @@ async def test_append_generation_input_empty_records_rejected_row(
     """記事ゼロが REJECTED + article_count=0 で記録される。"""
     async with session_factory() as session:
         await BriefingAuditRepository(session).append_generation_input_empty(
-            ready=_ready(ai_category.id),
+            week_start=date(2026, 4, 20),
+            category_id=ai_category.id,
         )
         await session.commit()
 
@@ -165,14 +162,16 @@ async def test_append_failure_projects_generation_exceptions(
         repo = BriefingAuditRepository(session)
         if isinstance(exc, RuntimeError):
             await repo.append_unexpected_failure(
-                ready=_ready(ai_category.id),
+                week_start=date(2026, 4, 20),
+                category_id=ai_category.id,
                 exc=exc,
                 retry_exhausted=None,
                 ai_model="deepseek-v4-pro",
             )
         else:
             await repo.append_failure(
-                ready=_ready(ai_category.id),
+                week_start=date(2026, 4, 20),
+                category_id=ai_category.id,
                 exc=exc,
                 retry_exhausted=None,
                 ai_model="deepseek-v4-pro",
@@ -199,7 +198,8 @@ async def test_append_failure_records_retry_exhausted_only_when_true(
     """``retry_exhausted=True`` のみ payload に出る。"""
     async with session_factory() as session:
         await BriefingAuditRepository(session).append_unexpected_failure(
-            ready=_ready(ai_category.id),
+            week_start=date(2026, 4, 20),
+            category_id=ai_category.id,
             exc=RuntimeError("last retry boom"),
             retry_exhausted=True,
             ai_model="deepseek-v4-pro",
@@ -225,7 +225,8 @@ async def test_append_failure_walks_error_chain_via_cause(
     except BriefingConfigurationError as exc:
         async with session_factory() as session:
             await BriefingAuditRepository(session).append_failure(
-                ready=_ready(ai_category.id),
+                week_start=date(2026, 4, 20),
+                category_id=ai_category.id,
                 exc=exc,
                 retry_exhausted=None,
                 ai_model="deepseek-v4-pro",
@@ -253,7 +254,8 @@ async def test_append_failure_redacts_secrets_in_error_message(
     )
     async with session_factory() as session:
         await BriefingAuditRepository(session).append_unexpected_failure(
-            ready=_ready(ai_category.id),
+            week_start=date(2026, 4, 20),
+            category_id=ai_category.id,
             exc=exc,
             retry_exhausted=None,
             ai_model="deepseek-v4-pro",
@@ -387,7 +389,8 @@ async def test_repository_does_not_commit(
     """repository は ``session.commit()`` を呼ばない。"""
     async with session_factory() as session:
         await BriefingAuditRepository(session).append_generation_completed(
-            ready=_ready(ai_category.id),
+            week_start=date(2026, 4, 20),
+            category_id=ai_category.id,
             article_count=1,
             ai_model="deepseek-v4-pro",
         )

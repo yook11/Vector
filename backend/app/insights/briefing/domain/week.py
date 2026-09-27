@@ -1,14 +1,6 @@
-"""週次 briefing の week_start 算出 — JST 月曜起点の純関数。
+"""週次 briefing の週の計算 (JST・月曜始まり)。
 
-Briefing BC は週単位の解説生成が本質のため、JST 月曜縛りの week_start 算出を
-持つ。Snapshot BC とはタイミング軸が異なる (snapshot は rolling 7d daily、
-briefing は週次) ため、関数は BC ごとに独立して保有する
-(`feedback_no_share_different_problems.md`)。
-
-責務分離:
-- ``latest_completed_week_start``: 純関数 (副作用なし、テスト容易)
-- ``now_in_jst``: side-effect 入口 (`datetime.now`)。Task から呼ぶ薄い
-  wrapper で、テストでは差し替え or 直接 datetime を渡す経路を取る
+trend_discovery の日次の rolling 窓とは生成の単位が異なるため、briefing で別に持つ。
 """
 
 from __future__ import annotations
@@ -34,5 +26,4 @@ def latest_completed_week_start(now: datetime) -> date:
 
 
 def now_in_jst() -> datetime:
-    """JST の現在時刻 (Task から呼ぶ side-effect 入口)。"""
     return datetime.now(ZoneInfo(WEEK_TZ))
