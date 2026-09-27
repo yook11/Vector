@@ -14,7 +14,7 @@ from pydantic import Field, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.fastapi import get_entry_managed_session
+from app.db.fastapi import EntryManagedSession
 from app.dependencies import require_bff_request
 from app.insights.briefing.domain.briefing import MAX_KEY_ARTICLES_PER_BRIEFING
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
@@ -111,7 +111,7 @@ def _to_category(category: Category) -> CategoryEmbed:
 
 @router.get("", dependencies=[Depends(require_bff_request)])
 async def list_briefings(
-    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
+    session: EntryManagedSession,
 ) -> BriefingListResponse:
     """全カテゴリの「ある中で最新」briefing を newspaper 一覧用に返す。
 
@@ -170,7 +170,7 @@ async def get_latest_briefing(
             max_length=50,
         ),
     ],
-    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
+    session: EntryManagedSession,
 ) -> BriefingResponse:
     """指定カテゴリの最新 briefing を返す (なければ state="empty")。"""
     category = await _fetch_category(session, category_slug)

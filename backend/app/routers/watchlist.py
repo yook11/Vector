@@ -3,9 +3,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.fastapi import get_entry_managed_session
+from app.db.fastapi import EntryManagedSession
 from app.dependencies import CurrentUser, get_current_user
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
@@ -24,7 +23,7 @@ router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
 
 
 def get_watchlist_service(
-    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
+    session: EntryManagedSession,
 ) -> WatchlistService:
     return WatchlistService(WatchlistRepository(session), ArticleRepository(session))
 

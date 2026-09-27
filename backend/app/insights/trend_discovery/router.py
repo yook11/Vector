@@ -17,9 +17,8 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.fastapi import get_entry_managed_session
+from app.db.fastapi import EntryManagedSession
 from app.dependencies import require_bff_request
 from app.insights.trend_discovery.query import TrendsQueryService
 from app.insights.trend_discovery.schemas import (
@@ -32,7 +31,7 @@ router = APIRouter(prefix="/api/v1/trends", tags=["trends"])
 
 
 def get_trends_query_service(
-    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
+    session: EntryManagedSession,
 ) -> TrendsQueryService:
     return TrendsQueryService(session)
 
