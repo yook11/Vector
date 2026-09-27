@@ -11,6 +11,7 @@ ROLES = (
     "vector_article_analysis",
     "vector_backfill",
     "vector_api",
+    "vector_insights",
 )
 pytestmark = pytest.mark.asyncio
 
@@ -76,6 +77,7 @@ async def test_runtime_cannot_create_objects_in_application_schemas(
         ("vector_article_analysis", ("public",)),
         ("vector_backfill", ("public",)),
         ("vector_api", ("public",)),
+        ("vector_insights", ("public",)),
     ],
 )
 async def test_runtime_can_use_required_schemas(system_database, role, schemas):
