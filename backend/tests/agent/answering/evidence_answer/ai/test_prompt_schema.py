@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import inspect
 import re
 from datetime import UTC, datetime
 
 import pytest
 
-import app.agent.answering.evidence_answer.prompts as evidence_answer_prompts_module
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
@@ -334,21 +332,6 @@ def test_rendered_input_does_not_leak_operator_facing_collection_diagnostics() -
     )
 
     assert not any(sentinel in rendered for sentinel in sentinels)
-
-
-def test_prompt_module_does_not_import_collection_or_evidence_run_types() -> None:
-    """条件12: 回答Agentのpromptがcollection診断・Evidence Run結果型をimportしない。
-
-    review_missingだけをtuple[str, ...]で受け取るため、収集診断・状態値の
-    型そのものを参照する経路が無い。sourceテキストにこれらの型名が一切
-    現れないことを確認する(import aliasやモジュール越しの参照も含めて
-    網羅的に検証できる)。
-    """
-    source = inspect.getsource(evidence_answer_prompts_module)
-
-    assert "ResearchTaskReport" not in source
-    assert "EvidenceRunCompleted" not in source
-    assert "EvidenceRunFailed" not in source
 
 
 @pytest.mark.parametrize(

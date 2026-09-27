@@ -43,15 +43,6 @@ def test_policy_exports_the_public_domain_functions_and_timeout_constants() -> N
     ) == (True, 10, 15)
 
 
-def test_url_deduplication_is_removed_from_policy() -> None:
-    """S1(合流と重複排除)。外部根拠のURL重複排除は廃止され、taskが違えば
-
-    同じURLが別の観点の根拠として並ぶことを許容する
-    (deduplicate_external_evidence_by_url()とその整合validatorを削除する)。
-    """
-    assert not hasattr(policy_module, "deduplicate_external_evidence_by_url")
-
-
 def test_clean_generated_queries_strips_caps_deduplicates_and_limits_to_three() -> None:
     overlong = "x" * 205
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -22,6 +22,7 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
+from app.agent.running.answer_generation import AgentAnswerGenerationRepository
 from app.agent.running.attempt_start import (
     AgentRunAttemptStartRepository,
     StartRunFailureReason,
@@ -312,7 +313,6 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
             setup_session,
             status="running",
             attempt_epoch=1,
-            answer_started_at=datetime.now(UTC),
         )
         thread_id = thread.id
     handoff_json = _handoff().model_dump(mode="json")
@@ -331,6 +331,10 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
                     )
                 )
                 assert attempt_epoch == 2
+
+        await AgentAnswerGenerationRepository(
+            session_factory, run.id, attempt_epoch
+        ).start_answer_generation()
 
         async with stale_session.begin():
             outcome = await AgentRunCompletionRepository(stale_session).complete_run(
@@ -425,7 +429,6 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
             setup_session,
             status="running",
             attempt_epoch=1,
-            answer_started_at=datetime.now(UTC),
         )
     stale_session = session_factory()
     try:
@@ -442,6 +445,10 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
                     )
                 )
                 assert attempt_epoch == 2
+
+        await AgentAnswerGenerationRepository(
+            session_factory, run.id, attempt_epoch
+        ).start_answer_generation()
 
         async with stale_session.begin():
             outcome = await AgentRunCompletionRepository(stale_session).complete_run(
@@ -576,6 +583,50 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
         assert terminal.status == "failed"
         assert terminal.error_code == "internal_error"
         assert terminal.attempt_epoch == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "redelivery_delay",
+    [
+        pytest.param(timedelta(seconds=4), id="before-original-deadline"),
+        pytest.param(timedelta(seconds=5), id="at-original-deadline"),
+        pytest.param(timedelta(seconds=6), id="after-original-deadline"),
+    ],
+)
+async def test_start_run_rejects_answering_run_without_changing_attempt(
+    session_factory: async_sessionmaker[AsyncSession],
+    redelivery_delay: timedelta,
+) -> None:
+    """回答生成開始済みなら実行権の取得を拒否し、世代と状態を変えない。"""
+    created_at = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
+    answer_started_at = created_at + timedelta(seconds=55)
+    redelivered_at = answer_started_at + redelivery_delay
+    initial_epoch = 1
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            created_at=created_at,
+            status="running",
+            attempt_epoch=initial_epoch,
+            answer_started_at=answer_started_at,
+        )
+
+    async with session_factory() as session:
+        async with session.begin():
+            redelivery = await AgentRunAttemptStartRepository(session).start_run(
+                run.id, now=redelivered_at
+            )
+
+    assert_start_failure(redelivery, StartRunFailureReason.ANSWER_ALREADY_STARTED)
+    async with session_factory() as session:
+        current = await session.get(AgentRun, run.id)
+        assert current is not None
+        assert (current.status, current.attempt_epoch, current.answer_started_at) == (
+            "running",
+            initial_epoch,
+            answer_started_at,
+        )
 
 
 @pytest.mark.asyncio

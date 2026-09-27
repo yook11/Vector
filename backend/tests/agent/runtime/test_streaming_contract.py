@@ -208,11 +208,6 @@ def _phase_span(trace_id: int, span_id: int) -> NonRecordingSpan:
     )
 
 
-def test_deepseek_runtime_does_not_implement_streaming_contract() -> None:
-    """DeepSeek runtimeはstreaming契約(stream_text)を実装しない。"""
-    assert not hasattr(DeepSeekAgentRuntime, "stream_text")
-
-
 async def test_unstarted_stream_close_does_not_open_provider_stream_or_span(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

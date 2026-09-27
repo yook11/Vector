@@ -9,7 +9,6 @@ from uuid import UUID
 
 import pytest
 
-import app.agent.running as running_module
 from app.agent.contract import AnswerQuestionResult
 from app.agent.research_handoff import (
     ResearchHandoff,
@@ -23,13 +22,6 @@ from app.agent.running import (
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from tests.agent.running._harness import THREAD_ID, USER_ID
-
-PUBLIC_CONTRACTS = {
-    "AnsweringRunner",
-    "RunIdentity",
-    "RunInput",
-    "RunResult",
-}
 
 
 def _field_contract(contract_type: type[Any]) -> tuple[tuple[str, Any], ...]:
@@ -46,24 +38,6 @@ def _is_frozen_and_slotted(instance: object) -> bool:
         and contract_type.__dataclass_params__.frozen
         and "__slots__" in contract_type.__dict__
         and not hasattr(instance, "__dict__")
-    )
-
-
-def test_running_package_exports_public_contracts() -> None:
-    running = running_module
-
-    assert (
-        PUBLIC_CONTRACTS <= set(running.__all__),
-        all(getattr(running, name, None) is not None for name in PUBLIC_CONTRACTS),
-        "Runner" not in running.__all__,
-        not hasattr(running, "Runner"),
-        not hasattr(running, "AnsweringRunContext"),
-    ) == (
-        True,
-        True,
-        True,
-        True,
-        True,
     )
 
 

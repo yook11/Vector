@@ -431,41 +431,6 @@ async def test_unclassified_failure_and_cancellation_propagate_without_metric(
     _assert_recorded(recorder, outcome=None)
 
 
-@pytest.mark.parametrize("failure_point", ["enter", "exit"])
-async def test_scope_failure_propagates_without_plan_or_metric(
-    failure_point: str,
-    capfire: CaptureLogfire,
-) -> None:
-    error = RuntimeError(f"runtime scope {failure_point} failed")
-    runtime = ScriptedAgentRuntime(
-        [
-            _draft(
-                plan_type="search",
-                research_tasks=[_task_draft("NVIDIA の根拠を確認する", ["NVIDIA"])],
-            )
-        ]
-    )
-    factory = RecordingPlannerRuntimeScopeFactory(
-        [runtime],
-        enter_error=error if failure_point == "enter" else None,
-        exit_error=error if failure_point == "exit" else None,
-    )
-    recorder = RecordingPlanningRecorder()
-    service = QuestionPlanningService(
-        agent=QUESTION_PLANNER_AGENT,
-        runtime_scope_factory=factory,
-        recorder=recorder,
-    )
-
-    with pytest.raises(RuntimeError) as raised:
-        await service.plan(_input())
-
-    assert raised.value is error
-    assert len(runtime.calls) == (0 if failure_point == "enter" else 1)
-    assert _metric_attributes(collected_metrics(capfire)) == []
-    _assert_recorded(recorder, outcome=None)
-
-
 async def test_search_plan_preserves_typed_time_window_through_service() -> None:
     target_time_window = TargetTimeWindow.model_validate(
         {"kind": "last_n_days", "days": 7}

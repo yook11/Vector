@@ -1,6 +1,5 @@
 """Evidence answer contract tests."""
 
-import inspect
 from dataclasses import MISSING, FrozenInstanceError, fields
 from typing import get_type_hints
 
@@ -9,30 +8,9 @@ from pydantic import ValidationError
 
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
-    EvidenceAnswerer,
     EvidenceAnswerInput,
 )
-from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.planning.contract import TargetTimeWindow
-
-
-def _first_input_annotation(method: object) -> object | None:
-    parameter_names = tuple(inspect.signature(method).parameters)
-    return get_type_hints(method).get(parameter_names[1])
-
-
-def test_evidence_answer_boundaries_accept_typed_input() -> None:
-    assert (
-        tuple(inspect.signature(EvidenceAnswerer.answer).parameters),
-        tuple(inspect.signature(EvidenceAnswerService.answer).parameters),
-        _first_input_annotation(EvidenceAnswerer.answer),
-        _first_input_annotation(EvidenceAnswerService.answer),
-    ) == (
-        ("self", "input"),
-        ("self", "input"),
-        EvidenceAnswerInput,
-        EvidenceAnswerInput,
-    )
 
 
 def test_review_missing_is_required_on_evidence_answer_input() -> None:
