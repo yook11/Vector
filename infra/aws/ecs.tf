@@ -21,7 +21,7 @@ locals {
   #
   # `sslmode=require` は db_ssl.py が verify-full に格上げする。
   backend_db_url = {
-    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay", "vector_auth_rate_limit_cleanup", "vector_article_analysis", "vector_backfill", "vector_api"]) :
+    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay", "vector_auth_rate_limit_cleanup", "vector_article_analysis", "vector_backfill", "vector_api", "vector_insights"]) :
     user => "postgresql+asyncpg://${user}@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
   }
   migration_db_url = "postgresql+asyncpg://vector@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
@@ -123,7 +123,7 @@ locals {
       REDIS_URL    = local.broker_redis_url["scheduler"]
     }
     insights = {
-      DATABASE_URL = local.backend_db_url["vector_app"]
+      DATABASE_URL = local.backend_db_url["vector_insights"]
       REDIS_URL    = local.broker_redis_url["insights"]
     }
     agent = {
