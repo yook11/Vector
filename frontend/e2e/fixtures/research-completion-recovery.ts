@@ -80,11 +80,11 @@ export const test = base.extend<{
         saveCompletedAnswerToDatabase: () =>
           completeResearchContinuity("closed"),
         expectCompletionNotDelivered: async () => {
-          await expect
-            .poll(async () => (await harness.stats()).targetPollResponses)
-            .toBeGreaterThan(0);
           const stats = await harness.stats();
-          expect(stats.terminalEventsSent).toBe(0);
+          expect(stats).toMatchObject({
+            draftEventsSent: 1,
+            terminalEventsSent: 0,
+          });
           expect(stats.targetPollStatuses).not.toContain("completed");
         },
       });

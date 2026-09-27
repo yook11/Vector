@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import delete, insert, select, update  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncConnection  # noqa: E402
 
+from app.agent.running.deadline.policy import deadline_for_run  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db.engine import create_cli_engine  # noqa: E402
 from app.models.agent_message import AgentMessage, AgentMessageSource  # noqa: E402
@@ -327,6 +328,7 @@ async def _reset_e2e_user_daily_quota(connection: AsyncConnection) -> None:
 
 
 async def _seed(connection: AsyncConnection) -> None:
+    active_run_created_at = dt.datetime.now(dt.UTC)
     owner = (
         await connection.execute(
             select(auth_user_ref.c.id).where(auth_user_ref.c.id == _E2E_USER_ID)
@@ -482,6 +484,7 @@ async def _seed(connection: AsyncConnection) -> None:
                 "status": "completed",
                 "error_code": None,
                 "created_at": thread.updated_at,
+                "deadline_at": deadline_for_run(thread.updated_at),
             }
             for thread in FIXTURE_THREADS
         ],
@@ -500,6 +503,7 @@ async def _seed(connection: AsyncConnection) -> None:
                     "status": "completed",
                     "error_code": None,
                     "created_at": fixture.updated_at,
+                    "deadline_at": deadline_for_run(fixture.updated_at),
                     "attempt_epoch": 1,
                 },
                 {
@@ -509,7 +513,8 @@ async def _seed(connection: AsyncConnection) -> None:
                     "assistant_message_id": None,
                     "status": "running",
                     "error_code": None,
-                    "created_at": fixture.updated_at,
+                    "created_at": active_run_created_at,
+                    "deadline_at": deadline_for_run(active_run_created_at),
                     "attempt_epoch": 1,
                 },
             )
@@ -529,19 +534,25 @@ async def _reset_continuity_run(
     variant: str,
 ) -> None:
     fixture = _continuity_fixture(variant)
+    created_at = dt.datetime.now(dt.UTC)
     result = await connection.execute(
         update(AgentRun)
         .where(
             AgentRun.id == fixture.active_run_id,
             AgentRun.thread_id == fixture.thread_id,
             AgentRun.user_message_id == fixture.active_user_message_id,
-            AgentRun.status.in_(("running", "failed", "completed")),
+            AgentRun.status.in_(
+                ("running", "failed", "completed", "deadline_exceeded")
+            ),
         )
         .values(
             status="running",
             error_code=None,
             assistant_message_id=None,
             attempt_epoch=1,
+            created_at=created_at,
+            deadline_at=deadline_for_run(created_at),
+            answer_started_at=None,
         )
         .execution_options(synchronize_session=False)
     )
