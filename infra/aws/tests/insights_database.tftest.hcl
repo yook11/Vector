@@ -67,31 +67,18 @@ variables {
   slack_channel_id       = "C0123456789"
 }
 
-run "api_connects_only_as_api_role" {
+run "insights_connects_as_insights_role_during_switch" {
   command = plan
 
   assert {
-    condition     = local.stage_environment["api"].DATABASE_URL == local.backend_db_url["vector_api"]
-    error_message = "api段はvector_apiで接続する。"
+    condition     = local.stage_environment["insights"].DATABASE_URL == local.backend_db_url["vector_insights"]
+    error_message = "insights段はvector_insightsで接続する。"
   }
   assert {
-    condition = jsondecode(aws_iam_role_policy.task["api"].policy).Statement[0].Resource == [
-      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_api",
+    condition = jsondecode(aws_iam_role_policy.task["insights"].policy).Statement[0].Resource == [
+      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app",
+      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_insights",
     ]
-    error_message = "api段のタスクロールはvector_apiにだけ接続できる。"
-  }
-}
-
-run "other_backend_stages_keep_app_role" {
-  command = plan
-
-  assert {
-    condition = alltrue([for stage in ["agent"] :
-      local.stage_environment[stage].DATABASE_URL == local.backend_db_url["vector_app"]
-      && jsondecode(aws_iam_role_policy.task[stage].policy).Statement[0].Resource == [
-        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app",
-      ]
-    ])
-    error_message = "agent段の接続はvector_appのまま変えない。"
+    error_message = "切替前のタスクが入れ替わるまで、insights段はvector_appにも接続できる。"
   }
 }
