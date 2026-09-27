@@ -408,6 +408,12 @@ jobs:
           key: better-auth-cli-${{ runner.os }}-${{ steps.better-auth-cli.outputs.version }}
 
       - name: Run local database tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@unreachable.invalid:5432/none
+          BFF_JWT_SIGNING_SECRET: test-only-collect-bootstrap-bff-xxxxxxxxxxxx
+          REVALIDATE_BEARER_SECRET: test-only-collect-bootstrap-rev-xxxxxxxxxxxx
+          FRONTEND_URL: http://localhost:3000
+          INTERNAL_FRONTEND_BASE_URL: http://localhost:3000
         run: |
           report="${RUNNER_TEMP}/local-db.xml"
           uv run pytest local_tests/ -x -q -rs --junitxml="$report"

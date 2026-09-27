@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from inspect import signature
 from types import SimpleNamespace
 
 import pytest
@@ -38,14 +37,6 @@ from tests.cloudwatch.records import metric_records
 class DataclassRuntimeOutput:
     result: str
     tags: list[str]
-
-
-async def test_constructor_accepts_only_borrowed_async_client() -> None:
-    """runtime が借用した非同期 client だけを受け取る境界を守る。"""
-    client = FakeGeminiClient([success_response()])
-
-    assert list(signature(GeminiAgentRuntime).parameters) == ["client", "llm_calls"]
-    GeminiAgentRuntime(client=client)
 
 
 async def test_call_uses_provider_once_and_returns_validated_output_directly() -> None:

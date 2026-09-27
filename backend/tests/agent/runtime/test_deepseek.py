@@ -31,18 +31,6 @@ from tests.agent.runtime._deepseek_helpers import (
 from tests.cloudwatch.records import metric_records
 
 
-async def test_constructor_accepts_only_borrowed_client_and_output_binding() -> None:
-    """runtime が借用 client と出力 binding だけを受け取る境界を守る。"""
-    assert list(signature(DeepSeekAgentRuntime).parameters) == [
-        "client",
-        "binding",
-        "llm_calls",
-    ]
-    DeepSeekAgentRuntime(
-        client=FakeDeepSeekClient([success_response()]), binding=make_binding()
-    )
-
-
 async def test_call_makes_one_forced_strict_function_call_and_returns_draft() -> None:
     """一試行が厳格な function call と検証済み出力を対応付ける。"""
     client = FakeDeepSeekClient([success_response(result="validated")])

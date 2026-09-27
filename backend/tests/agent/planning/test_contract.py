@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import inspect
 from dataclasses import FrozenInstanceError, fields
 from datetime import date, datetime
@@ -507,27 +506,6 @@ def test_planning_input_is_frozen_question_history_and_handoff() -> None:
         planning_input.as_of = datetime(2026, 7, 11)  # type: ignore[misc]
     with pytest.raises(TypeError):
         PlanningInput(question=question, as_of=as_of, telemetry=object())
-
-
-def test_legacy_planner_draft_boundaries_are_not_exported() -> None:
-    assert not hasattr(planning_contract_module, "QuestionPlanDraftGenerator")
-    assert not hasattr(planning_contract_module, "QuestionPlannerResponseInvalidError")
-
-    legacy_names = {
-        "GeminiQuestionPlanner",
-        "GeminiQuestionPlannerResponseDefect",
-        "GeminiQuestionPlannerSpec",
-        "GeminiQuestionPlannerPrompt",
-        "QuestionPlanDraftGenerator",
-        "QuestionPlannerResponseInvalidError",
-    }
-    for package_name in (
-        "app.agent",
-        "app.agent.planning",
-        "app.agent.planning.ai",
-    ):
-        package = importlib.import_module(package_name)
-        assert all(not hasattr(package, name) for name in legacy_names)
 
 
 class TestExternalResearchTask:

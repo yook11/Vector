@@ -32,6 +32,7 @@ _TERMINAL_STATUSES = (
 class StartRunFailureReason(StrEnum):
     RUN_NOT_FOUND = "run_not_found"
     ALREADY_FINISHED = "already_finished"
+    ANSWER_ALREADY_STARTED = "answer_already_started"
     DEADLINE_EXCEEDED = "deadline_exceeded"
     UNEXPECTED = "unexpected"
 
@@ -80,6 +81,12 @@ class AgentRunAttemptStartRepository:
                 observed_status=run.status,
             )
             return StartRunFailure(StartRunFailureReason.UNEXPECTED)
+
+        if (
+            run.status == AgentRunStatus.RUNNING.value
+            and run.answer_started_at is not None
+        ):
+            return StartRunFailure(StartRunFailureReason.ANSWER_ALREADY_STARTED)
 
         now = await database_now(self._session, now)
         if now >= run.deadline_at:

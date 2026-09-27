@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from taskiq import AsyncBroker, SimpleRetryMiddleware
+from collections.abc import AsyncGenerator
+
+from redis.asyncio import Redis
+from taskiq import AckableMessage, AsyncBroker, SimpleRetryMiddleware
 
 # taskiq 0.12.4ではtaskiq.middlewaresから公開されていない。
 from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
@@ -18,6 +21,49 @@ class _RedisStreamBroker(RedisStreamBroker):
         await AsyncBroker.startup(self)
         if self.is_worker_process or self.is_scheduler_process:
             await self._declare_consumer_group()
+
+    async def listen(self) -> AsyncGenerator[AckableMessage]:
+        """新着配送がない場合も、期限を過ぎた未ACK配送の回収へ進む。"""
+        async with Redis(connection_pool=self.connection_pool) as redis:
+            while True:
+                new_deliveries = await redis.xreadgroup(
+                    groupname=self.consumer_group_name,
+                    consumername=self.consumer_name,
+                    streams={self.queue_name: ">", **self.additional_streams},
+                    block=self.block,
+                    count=self.count,
+                    noack=False,
+                )
+                for stream, deliveries in new_deliveries or []:
+                    for message_id, message in deliveries:
+                        yield AckableMessage(
+                            data=message[b"data"],
+                            ack=self._ack_generator(id=message_id, queue_name=stream),
+                        )
+
+                # 新着がない場合も回収へ進み、taskiq-redisと同じ排他・ACK契約を保つ。
+                for stream in [self.queue_name, *self.additional_streams.keys()]:
+                    async with redis.pipeline() as pipeline:
+                        lock = pipeline.lock(
+                            f"autoclaim:{self.consumer_group_name}:{stream}",
+                            timeout=self.unacknowledged_lock_timeout,
+                        )
+                        await lock.acquire()
+                        await pipeline.xautoclaim(
+                            name=stream,
+                            groupname=self.consumer_group_name,
+                            consumername=self.consumer_name,
+                            min_idle_time=self.idle_timeout,
+                            count=self.unacknowledged_batch_size,
+                        )
+                        await lock.release()
+                        results = await pipeline.execute()
+                    recovered_deliveries = results[1][1]
+                    for message_id, message in recovered_deliveries:
+                        yield AckableMessage(
+                            data=message[b"data"],
+                            ack=self._ack_generator(id=message_id, queue_name=stream),
+                        )
 
     async def shutdown(self) -> None:
         try:

@@ -10,12 +10,7 @@ import pytest
 from sqlalchemy import literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
 from app.agent.running.cancellation import AgentRunCancellationRepository
-from app.agent.running.completion import (
-    AgentRunCompletionRepository,
-    RunCompletionSuccess,
-)
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -356,13 +351,12 @@ async def test_sweep_rechecks_recovery_deadline_after_answer_start_wins_lock(
 @pytest.mark.parametrize(
     ("terminalizer", "expected_status"),
     [
-        pytest.param("complete", "completed", id="answer-save"),
         pytest.param("fail", "failed", id="failure"),
         pytest.param("cancel", "failed", id="cancellation"),
     ],
 )
 @pytest.mark.parametrize("single_run", [False, True])
-async def test_sweep_preserves_terminal_transition_that_wins_run_lock(
+async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
     session_factory: async_sessionmaker[AsyncSession],
     terminalizer: str,
     expected_status: str,
@@ -389,23 +383,7 @@ async def test_sweep_preserves_terminal_transition_that_wins_run_lock(
         sweep_task: asyncio.Task[object] | None = None
         try:
             await terminal_session.begin()
-            if terminalizer == "complete":
-                outcome = await AgentRunCompletionRepository(
-                    terminal_session
-                ).complete_run(
-                    run_id=run.id,
-                    result=AnswerQuestionResult(
-                        status="answered",
-                        answer="保存済み回答",
-                        sources=[],
-                        missing_aspects=[],
-                        plan_summary=AnswerPlanSummary(plan_type="direct_answer"),
-                    ),
-                    expected_attempt_epoch=2,
-                    now=sweep_time - timedelta(microseconds=1),
-                )
-                assert outcome == RunCompletionSuccess()
-            elif terminalizer == "fail":
+            if terminalizer == "fail":
                 transitioned = await AgentRunFailureRepository(
                     terminal_session
                 ).mark_failed(

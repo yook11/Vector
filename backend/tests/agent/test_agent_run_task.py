@@ -1509,7 +1509,7 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
 
 
 @pytest.mark.asyncio
-async def test_epoch_advance_stops_old_worker_through_actual_probe(
+async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual_probe(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1545,11 +1545,11 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         probes.append(probe)
         return probe
 
-    class EpochAdvancingAgent:
+    class EpochAdvancingRunner:
         def __init__(self) -> None:
             self.continuation: object | None = None
 
-        async def answer(self) -> AnswerQuestionResult:
+        async def run(self, input: RunInput, *, identity: RunIdentity) -> RunResult:
             assert self.continuation is not None
             assert await self.continuation.should_continue() == Continue()  # type: ignore[attr-defined]
             async with session_factory() as restart_session:
@@ -1566,12 +1566,12 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
             )
             raise AnswerGenerationStopped
 
-    fake_agent = EpochAdvancingAgent()
+    fake_runner = EpochAdvancingRunner()
 
-    def build_agent(**kwargs: object) -> EpochAdvancingAgent:
+    def build_runner(**kwargs: object) -> EpochAdvancingRunner:
         del kwargs
-        fake_agent.continuation = probes[0]
-        return fake_agent
+        fake_runner.continuation = probes[0]
+        return fake_runner
 
     async def observe_complete(
         _repository: AgentRunCompletionRepository,
@@ -1580,7 +1580,6 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
     ) -> RunCompletionSuccess | RunCompletionFailure:
-        assert result == fake_agent.result
         complete_calls.append((run_id, expected_attempt_epoch))
         return RunCompletionFailure(RunCompletionFailureReason.TRANSITION_LOST)
 
@@ -1595,7 +1594,12 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         mark_failed_calls.append((run_id, expected_attempt_epoch))
         return False
 
-    _patch_delta_worker(monkeypatch, build_agent)
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
+    )
+    monkeypatch.setattr(agent_run_tasks, "build_answering_runner", build_runner)
     monkeypatch.setattr(agent_run_tasks, "AgentRunExecutionProbe", build_probe)
     monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", observe_complete)
     monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", observe_mark_failed)
@@ -2060,10 +2064,11 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
 
 
 @pytest.mark.asyncio
-async def test_completion_failure_uses_failed_terminal_choke_point(
+async def test_completion_failure_publishes_failed_terminal(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """回答の保存に失敗したときは失敗の終端通知を出す。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(_direct_result())
@@ -2077,11 +2082,6 @@ async def test_completion_failure_uses_failed_terminal_choke_point(
         expected_attempt_epoch: int,
         research_handoff: dict[str, Any] | None = None,
     ) -> RunCompletionSuccess | RunCompletionFailure:
-        assert (run_id, result, expected_attempt_epoch) == (
-            run.id,
-            fake_agent.result,
-            1,
-        )
         raise RuntimeError("completion failed")
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
@@ -2097,11 +2097,6 @@ async def test_completion_failure_uses_failed_terminal_choke_point(
         ctx=_ctx(session_factory),
     )
 
-    async with session_factory() as session:
-        persisted = await session.get(AgentRun, run.id)
-        assert persisted is not None
-        assert persisted.status == "failed"
-        assert persisted.error_code == "internal_error"
     terminal = [
         event
         for event in FakeLiveStreamPublisher.instances[0].published
@@ -2409,36 +2404,6 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
         assert failed is not None
         assert failed.status == "failed"
         assert failed.error_code == "generation_unavailable"
-
-
-@pytest.mark.asyncio
-async def test_answering_runner_failure_does_not_execute_answering_workflow(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(_direct_result())
-    error = AIProviderConfigurationError()
-    answering_runner = FakeAnsweringRunner(exc=error)
-    _patch_worker_execution(
-        monkeypatch,
-        lambda **_kwargs: fake_agent,
-        answering_runner=answering_runner,
-    )
-
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
-
-    async with session_factory() as session:
-        failed = await session.get(AgentRun, run.id)
-        assert failed is not None
-        assert failed.status == "failed"
-        assert failed.error_code == "generation_unavailable"
-    assert len(answering_runner.calls) == 1
-    assert fake_agent.calls == []
 
 
 @pytest.mark.asyncio

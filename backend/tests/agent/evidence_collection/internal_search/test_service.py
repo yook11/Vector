@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import fields
 from typing import Any
 from unittest.mock import Mock
 
@@ -515,14 +514,6 @@ class TestInternalSearchService:
         hits = await service.search(_queries("SECRET fallback question"))
 
         assert hits == []
-
-    def test_service_has_no_progress_event_reporter_field(self) -> None:
-        assert "events" not in {field.name for field in fields(InternalSearchService)}
-        with pytest.raises(TypeError):
-            InternalSearchService(  # type: ignore[call-arg]
-                embedder=FakeInternalQueryEmbedder(),
-                events=object(),
-            )
 
     async def test_search_articles_dedupes_by_curation_id_with_min_distance(
         self,

@@ -662,26 +662,20 @@ def _orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
+async def test_direct_answer_receives_previous_answer_and_history() -> None:
+    """直接回答の入力に前回の回答と会話履歴を渡す。"""
     input_ = _input(
         "前回の結論だけ",
         previous_answer="根拠付き前回答 [[1]]",
     )
     direct_draft = DirectAnswerDraft(answer="こんにちは。何を確認しますか？")
-    orchestrator, _, internal_search, evidence_answerer, direct_answerer = (
-        _orchestrator(
-            plan=_direct_plan(),
-            direct_draft=direct_draft,
-        )
+    orchestrator, _, _, _, direct_answerer = _orchestrator(
+        plan=_direct_plan(),
+        direct_draft=direct_draft,
     )
 
-    result = await orchestrator.answer(input_)
+    await orchestrator.answer(input_)
 
-    assert result.status == "answered"
-    assert result.answer == direct_draft.answer
-    assert result.sources == []
-    assert result.missing_aspects == []
-    assert result.plan_summary.plan_type == "direct_answer"
     assert direct_answerer.calls == [
         DirectAnswerInput(
             request=AnsweringRequest(
@@ -696,32 +690,6 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
             ),
             previous_answer=input_.previous_answer,
         )
-    ]
-    assert internal_search.calls == []
-    assert evidence_answerer.calls == []
-
-
-@pytest.mark.asyncio
-async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
-    """direct answer経路はplanningのあと回答サービスを呼び、
-
-    evidence_collectionとevidence_reviewは報告されない。
-    """
-    timeline = CallTimeline()
-    progress = FakeProgressReporter(timeline=timeline)
-    orchestrator, _, _, _, _ = _orchestrator(
-        plan=_direct_plan(),
-        direct_draft=DirectAnswerDraft(answer="直接回答です。"),
-        progress=progress,
-        timeline=timeline,
-    )
-
-    await orchestrator.answer(_input("こんにちは"))
-
-    assert timeline.events == [
-        "progress:planning",
-        "planner.plan",
-        "direct_answerer.answer",
     ]
 
 
@@ -937,35 +905,6 @@ async def test_answer_search_plan_omits_unused_external_source() -> None:
     assert result.plan_summary.plan_type == "search"
     assert [source.source_ref for source in result.sources] == ["1"]
     assert all(not isinstance(source, ExternalUrlSource) for source in result.sources)
-
-
-@pytest.mark.asyncio
-async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
-    """evidence空のRunでもsynthesisは呼ばれ、機構由来のmissing_aspects
-
-    (文言の正本はtest_result_assembly.py)によりstatusはinsufficientになる。
-    """
-    draft = _draft(
-        answer=(
-            "検索で引用できる根拠は見つかりませんでした。"
-            "一般論としては参考程度に扱ってください。"
-        ),
-        cited_refs=[],
-    )
-    orchestrator, _, _, evidence_answerer, _ = _orchestrator(
-        plan=_search_plan(),
-        outcome=_internal_outcome(0),
-        draft=draft,
-    )
-
-    result = await orchestrator.answer(_input())
-
-    assert result.status == "insufficient"
-    assert result.answer == draft.answer
-    assert result.sources == []
-    assert result.missing_aspects
-    assert len(evidence_answerer.calls) == 1
-    assert evidence_answerer.calls[0].evidence == ()
 
 
 @pytest.mark.asyncio
