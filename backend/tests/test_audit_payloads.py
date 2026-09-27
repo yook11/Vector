@@ -327,8 +327,6 @@ class TestTrendDiscoveryPayloadAuditKeys:
         payload = TrendDiscoveryPayload(
             window_start="2026-04-26",
             window_end="2026-05-03",
-            trigger="cli",
-            requested_update=True,
             source_analysis_count=42,
             completed_category_count=3,
             error_message="aggregation failed",

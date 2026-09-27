@@ -202,8 +202,6 @@ class TrendDiscoveryPayload(BasePipelineEventPayload):
     kind: Literal["trend_discovery"] = "trend_discovery"
     window_start: str | None = None
     window_end: str | None = None
-    trigger: Literal["cron", "cli"] | None = None
-    requested_update: bool | None = None
     source_analysis_count: int | None = None
     completed_category_count: int | None = None
 

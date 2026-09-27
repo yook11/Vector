@@ -72,7 +72,7 @@ class TestRun:
 
         ctx = _ctx_with_session_factory()
         target_window_end = date(2026, 5, 3)
-        ready = ReadyForTrendDiscovery(window_end=target_window_end, force=False)
+        ready = ReadyForTrendDiscovery(window_end=target_window_end)
 
         service = MagicMock()
         service.execute = AsyncMock(
@@ -117,8 +117,6 @@ class TestRun:
             audit.await_args.kwargs["outcome_code"]
             == TrendDiscoveryOutcomeCode.RUN_COMPLETED
         )
-        assert audit.await_args.kwargs["trigger"] == "cron"
-        assert audit.await_args.kwargs["requested_update"] is False
         assert audit.await_args.kwargs["source_analysis_count"] == 42
         assert audit.await_args.kwargs["completed_category_count"] == 3
 
@@ -166,7 +164,7 @@ class TestRun:
 
         ctx = _ctx_with_session_factory()
         target_window_end = date(2026, 5, 3)
-        ready = ReadyForTrendDiscovery(window_end=target_window_end, force=False)
+        ready = ReadyForTrendDiscovery(window_end=target_window_end)
 
         service = MagicMock()
         service.execute = AsyncMock(
@@ -216,7 +214,7 @@ class TestRun:
 
         ctx = _ctx_with_session_factory()
         target_window_end = date(2026, 5, 3)
-        ready = ReadyForTrendDiscovery(window_end=target_window_end, force=False)
+        ready = ReadyForTrendDiscovery(window_end=target_window_end)
 
         service = MagicMock()
         service.execute = AsyncMock(
@@ -270,7 +268,7 @@ class TestRun:
         from app.insights.trend_discovery import taskiq_job as trend_discovery
 
         ctx = _ctx_with_session_factory()
-        ready = ReadyForTrendDiscovery(window_end=date(2026, 5, 3), force=False)
+        ready = ReadyForTrendDiscovery(window_end=date(2026, 5, 3))
 
         service = MagicMock()
         service.execute = AsyncMock(side_effect=RuntimeError("aggregation failed"))
@@ -349,7 +347,7 @@ class TestRunTrendDiscoveryStageSpan:
 
         ctx = _ctx_with_session_factory()
         target_window_end = date(2026, 5, 3)
-        ready = ReadyForTrendDiscovery(window_end=target_window_end, force=False)
+        ready = ReadyForTrendDiscovery(window_end=target_window_end)
 
         service = MagicMock()
         service.execute = AsyncMock(

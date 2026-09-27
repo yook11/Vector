@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import StrEnum
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -17,8 +17,6 @@ from app.audit.failure_projection import Retryability
 from app.audit.metrics import record_audit_dropped
 from app.audit.repository import PipelineEventRepository
 
-TrendDiscoveryTrigger = Literal["cron", "cli"]
-
 logger = structlog.get_logger(__name__)
 
 
@@ -26,7 +24,6 @@ class TrendDiscoveryOutcomeCode(StrEnum):
     """Stage.TREND_DISCOVERY の outcome code。"""
 
     RUN_COMPLETED = "trend_discovery_run_completed"
-    RUN_UPDATED = "trend_discovery_run_updated"
     RUN_FAILED = "trend_discovery_run_failed"
 
 
@@ -45,8 +42,6 @@ class TrendDiscoveryAuditRepository:
         outcome_code: TrendDiscoveryOutcomeCode,
         window_start: date,
         window_end: date,
-        trigger: TrendDiscoveryTrigger,
-        requested_update: bool,
         source_analysis_count: int | None = None,
         completed_category_count: int | None = None,
         exc: BaseException | None = None,
@@ -56,8 +51,6 @@ class TrendDiscoveryAuditRepository:
         payload = TrendDiscoveryPayload(
             window_start=window_start.isoformat(),
             window_end=window_end.isoformat(),
-            trigger=trigger,
-            requested_update=requested_update,
             source_analysis_count=source_analysis_count,
             completed_category_count=completed_category_count,
             error_message=error_message_of(exc),
@@ -104,8 +97,6 @@ async def append_trend_discovery_run_event_best_effort(
     outcome_code: TrendDiscoveryOutcomeCode,
     window_start: date,
     window_end: date,
-    trigger: TrendDiscoveryTrigger,
-    requested_update: bool,
     source_analysis_count: int | None = None,
     completed_category_count: int | None = None,
     exc: BaseException | None = None,
@@ -118,8 +109,6 @@ async def append_trend_discovery_run_event_best_effort(
                 outcome_code=outcome_code,
                 window_start=window_start,
                 window_end=window_end,
-                trigger=trigger,
-                requested_update=requested_update,
                 source_analysis_count=source_analysis_count,
                 completed_category_count=completed_category_count,
                 exc=exc,
@@ -129,7 +118,6 @@ async def append_trend_discovery_run_event_best_effort(
         logger.exception(
             "trend_discovery_run_audit_dropped",
             outcome_code=outcome_code.value,
-            trigger=trigger,
             window_end=window_end.isoformat(),
             audit_error_class=exception_fqn(audit_exc),
         )

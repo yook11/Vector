@@ -7,7 +7,7 @@ briefing は週次) ため、関数は BC ごとに独立して保有する
 
 責務分離:
 - ``latest_completed_week_start``: 純関数 (副作用なし、テスト容易)
-- ``now_in_jst``: side-effect 入口 (`datetime.now`)。Task / CLI から呼ぶ薄い
+- ``now_in_jst``: side-effect 入口 (`datetime.now`)。Task から呼ぶ薄い
   wrapper で、テストでは差し替え or 直接 datetime を渡す経路を取る
 """
 
@@ -34,5 +34,5 @@ def latest_completed_week_start(now: datetime) -> date:
 
 
 def now_in_jst() -> datetime:
-    """JST の現在時刻 (Task / CLI から呼ぶ side-effect 入口)。"""
+    """JST の現在時刻 (Task から呼ぶ side-effect 入口)。"""
     return datetime.now(ZoneInfo(WEEK_TZ))

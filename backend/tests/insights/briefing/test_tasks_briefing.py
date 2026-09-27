@@ -272,9 +272,7 @@ class TestSubtask:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
-        ready = ReadyForBriefing(
-            week_start=date(2026, 4, 20), category_id=1, force=False
-        )
+        ready = ReadyForBriefing(week_start=date(2026, 4, 20), category_id=1)
         service = MagicMock()
         service.execute = AsyncMock(
             return_value=GeneratedBriefing(
@@ -311,9 +309,7 @@ class TestSubtask:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
-        ready = ReadyForBriefing(
-            week_start=date(2026, 4, 20), category_id=1, force=False
-        )
+        ready = ReadyForBriefing(week_start=date(2026, 4, 20), category_id=1)
         service = MagicMock()
         service.execute = AsyncMock(side_effect=RuntimeError("LLM down"))
 
@@ -351,9 +347,7 @@ class TestSubtaskFailureAudit:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory(retries=retries, max_retries=max_retries)
-        ready = ReadyForBriefing(
-            week_start=date(2026, 4, 20), category_id=1, force=False
-        )
+        ready = ReadyForBriefing(week_start=date(2026, 4, 20), category_id=1)
         service = MagicMock()
         service.execute = AsyncMock(side_effect=exc)
         service._llm.MODEL = "deepseek-v4-pro"
@@ -409,9 +403,7 @@ class TestGenerateBriefingForCategoryStageSpan:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
-        ready = ReadyForBriefing(
-            week_start=date(2026, 4, 20), category_id=1, force=False
-        )
+        ready = ReadyForBriefing(week_start=date(2026, 4, 20), category_id=1)
         service = MagicMock()
         service.execute = AsyncMock(
             return_value=GeneratedBriefing(
