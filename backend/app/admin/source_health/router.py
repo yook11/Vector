@@ -3,12 +3,11 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin.source_health.repository import SourceHealthRepository
 from app.admin.source_health.schemas import SourceHealthResponse, WindowHours
 from app.admin.source_health.service import SourceHealthService
-from app.db.fastapi import get_entry_managed_session
+from app.db.fastapi import EntryManagedSession
 
 # sources CRUD (admin/sources) と同じ /sources 名前空間を共有する。
 # CRUD (操作) と health (観測) は別 feature だが URL prefix は揃える。
@@ -16,7 +15,7 @@ router = APIRouter(prefix="/sources", tags=["admin:source-health"])
 
 
 def get_source_health_service(
-    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
+    session: EntryManagedSession,
 ) -> SourceHealthService:
     return SourceHealthService(SourceHealthRepository(session))
 

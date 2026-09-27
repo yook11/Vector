@@ -3,7 +3,6 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin.sources.repository import NewsSourceRepository
 from app.admin.sources.schemas import (
@@ -12,7 +11,7 @@ from app.admin.sources.schemas import (
     NewsSourceDetailList,
 )
 from app.admin.sources.service import NewsSourceService
-from app.db.fastapi import get_entry_managed_session
+from app.db.fastapi import EntryManagedSession
 
 # news_sources.id は PostgreSQL INTEGER (int32) のため、上限を path level で
 # 明示して OverflowError 由来の 500 leak を構造的に閉塞する。下限 1 は
@@ -25,7 +24,7 @@ router = APIRouter(prefix="/sources", tags=["admin:sources"])
 
 
 def get_news_source_service(
-    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
+    session: EntryManagedSession,
 ) -> NewsSourceService:
     return NewsSourceService(NewsSourceRepository(session))
 

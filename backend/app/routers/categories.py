@@ -1,9 +1,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.fastapi import get_entry_managed_session
+from app.db.fastapi import EntryManagedSession
 from app.dependencies import require_bff_request
 from app.repositories.category import CategoryRepository
 from app.schemas.category import CategoryDetailList
@@ -13,7 +12,7 @@ router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
 
 def get_category_service(
-    session: Annotated[AsyncSession, Depends(get_entry_managed_session)],
+    session: EntryManagedSession,
 ) -> CategoryService:
     return CategoryService(CategoryRepository(session))
 
