@@ -15,11 +15,12 @@ async def test_answer_with_fabricated_citations_is_not_saved(
     system_database,
     agent_user_id,
     agent_context,
+    owner_session_factory,
     agent_provider_responses,
 ):
     """AIが捏造した引用を含む回答は保存しない。"""
     created = await create_user_run(
-        agent_context.state.session_factory,
+        owner_session_factory,
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )
@@ -45,11 +46,12 @@ async def test_invalid_citation_is_regenerated_and_only_accepted_answer_is_saved
     system_database,
     agent_user_id,
     agent_context,
+    owner_session_factory,
     agent_provider_responses,
 ):
     """不正な引用を含む回答は再生成し、採用した回答と出典だけを保存する。"""
     created = await create_user_run(
-        agent_context.state.session_factory,
+        owner_session_factory,
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )

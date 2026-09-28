@@ -24,10 +24,11 @@ async def test_only_latest_attempt_can_complete_run(
     system_database,
     agent_user_id,
     agent_context,
+    owner_session_factory,
 ):
     """同じランを複数の実行が取得した場合、最新世代だけが回答を確定できる"""
     session_factory = agent_context.state.session_factory
-    async with session_factory() as session:
+    async with owner_session_factory() as session:
         async with session.begin():
             created = await AgentRunCreationRepository(session).create_user_run(
                 user_id=agent_user_id,

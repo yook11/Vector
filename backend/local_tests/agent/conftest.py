@@ -1,4 +1,4 @@
-"""Agentの実DB接続と、外部通信の代替を組み立てる。"""
+"""製品のAgentをvector_agentで動かし、準備と観測は所有者の接続で行う。"""
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import pytest
 from pydantic import SecretStr
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.agent import composition
 from app.agent.evidence_collection import EvidenceCollectionService
@@ -105,13 +107,28 @@ def agent_provider_responses(monkeypatch):
 
 
 @pytest.fixture
+async def owner_session_factory(system_database):
+    """APIが受け付けるrunの作成を、製品のロールと分けて所有者の接続で行う。"""
+    engine = create_async_engine(system_database.url("vector", sqlalchemy=True))
+    try:
+        yield caller_managed_session_factory(engine)
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
 async def agent_context(system_database):
     settings = SimpleNamespace(
-        database_url=system_database.url("vector_app", sqlalchemy=True),
+        database_url=system_database.url("vector_agent", sqlalchemy=True),
         db_iam_auth=False,
         aws_region=None,
     )
     engine = create_worker_engine(settings, "agent")
+    async with engine.connect() as connection:
+        role = await connection.scalar(text("SELECT current_user"))
+    if role != "vector_agent":
+        await engine.dispose()
+        raise RuntimeError(f"Agent試験がvector_agent以外で接続している: {role}")
     redis = Mock()
     redis.pipeline.return_value.execute = AsyncMock(return_value=["1-0", True])
     try:

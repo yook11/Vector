@@ -124,12 +124,13 @@ async def create_user_run(session_factory, *, user_id, question):
     return created
 
 
-async def create_answering_run(session_factory, *, user_id, question):
-    async with session_factory() as session:
-        async with session.begin():
-            created = await AgentRunCreationRepository(session).create_user_run(
-                user_id=user_id, question=question, thread_id=None
-            )
+async def create_answering_run(
+    owner_session_factory, session_factory, *, user_id, question
+):
+    """作成はAPIの受付として所有者で行い、開始からは製品のロールで進める。"""
+    created = await create_user_run(
+        owner_session_factory, user_id=user_id, question=question
+    )
 
     async with session_factory() as session:
         async with session.begin():
@@ -200,7 +201,7 @@ class SavedRunResult:
 
 async def fetch_saved_run_result(database, *, run_id, thread_id):
     """別接続から全回答を読み、Runが参照しない余分な回答も比較に含める。"""
-    async with database.connect("vector_app") as connection:
+    async with database.connect("vector") as connection:
         run = await connection.fetchrow(
             "SELECT id, status, assistant_message_id, error_code, attempt_epoch, "
             "answer_started_at "
@@ -226,3 +227,65 @@ async def fetch_saved_run_result(database, *, run_id, thread_id):
     for message in decoded_messages:
         message["missing_aspects"] = json.loads(message["missing_aspects"])
     return SavedRunResult(dict(run), decoded_messages, [dict(row) for row in sources])
+
+
+async def seed_analyzed_article(database, *, title, published_at):
+    """内部検索の検索語と同じ向きの埋め込みを持つ分析済み記事を作り、idを返す。"""
+    query_direction = "[" + ",".join(["1"] + ["0"] * (EMBEDDING_DIMENSION - 1)) + "]"
+    async with database.connect("vector") as connection:
+        source_id = await connection.fetchval(
+            "SELECT id FROM news_sources ORDER BY id LIMIT 1"
+        )
+        category_id = await connection.fetchval(
+            "SELECT id FROM categories WHERE slug = 'ai'"
+        )
+        article_id = await connection.fetchval(
+            "INSERT INTO analyzable_articles "
+            "(source_id, source_url, original_title, original_content, published_at) "
+            "VALUES ($1, 'https://example.com/internal-report', $2, 'content', $3) "
+            "RETURNING id",
+            source_id,
+            title,
+            published_at,
+        )
+        curation_id = await connection.fetchval(
+            "INSERT INTO article_curations "
+            "(analyzable_article_id, translated_title, summary) "
+            "VALUES ($1, $2, 'summary') RETURNING id",
+            article_id,
+            title,
+        )
+        return await connection.fetchval(
+            "INSERT INTO analyzed_articles "
+            "(curation_id, translated_title, summary, investor_take, category_id, "
+            "key_points, embedding, analyzed_at) "
+            "VALUES ($1, $2, '売上は前年同期比10%増と報じた', '需要の回復を示す', "
+            "$3, $4::jsonb, $5::text::halfvec, now()) RETURNING id",
+            curation_id,
+            title,
+            category_id,
+            json.dumps([{"content": "売上は前年同期比10%増", "mentions": []}]),
+            query_direction,
+        )
+
+
+async def read_research_handoff(database, *, thread_id):
+    async with database.connect("vector") as connection:
+        handoff = await connection.fetchval(
+            "SELECT research_handoff FROM agent_threads WHERE id = $1", thread_id
+        )
+    return None if handoff is None else json.loads(handoff)
+
+
+async def count_cached_query_embeddings(database):
+    async with database.connect("vector") as connection:
+        return await connection.fetchval("SELECT count(*) FROM query_embedding_cache")
+
+
+async def read_daily_quota_used_counts(database, *, user_id):
+    async with database.connect("vector") as connection:
+        rows = await connection.fetch(
+            "SELECT used_count FROM agent_user_daily_quotas WHERE user_id = $1",
+            user_id,
+        )
+    return [row["used_count"] for row in rows]

@@ -29,6 +29,7 @@ def test_failure_always_removes_its_own_compose_project(monkeypatch, failure):
                     "POSTGRES_BACKFILL_PASSWORD": "backfill-test",
                     "POSTGRES_API_PASSWORD": "api-test",
                     "POSTGRES_INSIGHTS_PASSWORD": "insights-test",
+                    "POSTGRES_AGENT_PASSWORD": "agent-test",
                 }
             }
         }

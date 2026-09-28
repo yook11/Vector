@@ -26,10 +26,11 @@ async def test_completed_run_is_not_reexecuted_on_redelivery(
     system_database,
     agent_user_id,
     agent_context,
+    owner_session_factory,
     agent_provider_responses,
 ):
     """完了済みランは再配送されても再実行しない"""
-    async with agent_context.state.session_factory() as session:
+    async with owner_session_factory() as session:
         async with session.begin():
             created = await AgentRunCreationRepository(session).create_user_run(
                 user_id=agent_user_id,
@@ -61,10 +62,11 @@ async def test_reexecution_of_completed_run_preserves_saved_result(
     system_database,
     agent_user_id,
     agent_context,
+    owner_session_factory,
     agent_provider_responses,
 ):
     """完了済みランが再実行された場合、保存結果が変わらない"""
-    async with agent_context.state.session_factory() as session:
+    async with owner_session_factory() as session:
         async with session.begin():
             created = await AgentRunCreationRepository(session).create_user_run(
                 user_id=agent_user_id,
