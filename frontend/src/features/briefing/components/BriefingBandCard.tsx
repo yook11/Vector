@@ -55,16 +55,6 @@ export function BriefingBandCard({
             {formatPaperDate(card.weekStart)} 週
           </span>
         )}
-        {/* article count (右端) */}
-        <span
-          className="ml-auto whitespace-nowrap italic text-[13px] text-[var(--vector-ink-muted)]"
-          style={{ fontFamily: "var(--font-vector-display)" }}
-        >
-          <span className="text-[15px] font-semibold not-italic text-[var(--vector-accent-ink)]">
-            {card.inputArticleCount}
-          </span>
-          件
-        </span>
       </div>
 
       {/* body */}

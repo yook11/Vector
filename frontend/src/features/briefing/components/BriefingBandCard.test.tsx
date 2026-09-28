@@ -13,7 +13,6 @@ function makeCard(
     headline: "AI 技術の最前線",
     // summary は「週」を含まないようにする (stale-week ラベルのテストが誤検知しないため)
     summary: "AI分野の最新動向レポート",
-    inputArticleCount: 12,
     ...overrides,
   };
 }
@@ -31,17 +30,6 @@ describe("BriefingBandCard — コンテンツ表示", () => {
     );
     expect(screen.getByText("量子コンピューティング速報")).toBeInTheDocument();
     expect(screen.getByText("量子技術の最新動向")).toBeInTheDocument();
-  });
-
-  it("inputArticleCount と「件」単位が表示される", () => {
-    render(
-      <BriefingBandCard
-        card={makeCard({ inputArticleCount: 42 })}
-        currentWeekStart="2026-06-02"
-      />,
-    );
-    expect(screen.getByText("42")).toBeInTheDocument();
-    expect(screen.getByText(/件/)).toBeInTheDocument();
   });
 
   it("category.name が表示される", () => {

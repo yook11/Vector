@@ -20,7 +20,6 @@ const BriefingSummarySchema = z.object({
   weekStart: z.iso.date(),
   headline: z.string(),
   summary: z.string(),
-  inputArticleCount: z.number(),
 });
 
 const BriefingListItemSchema = z.object({
@@ -30,7 +29,6 @@ const BriefingListItemSchema = z.object({
 
 export const BriefingListResponseSchema = z.object({
   currentWeekStart: z.iso.date(),
-  totalArticles: z.number(),
   items: z.array(BriefingListItemSchema),
 });
 
@@ -64,8 +62,6 @@ const BriefingDetailSchema = z.object({
   state: z.literal("briefing"),
   weekStart: z.iso.date(),
   generatedAt: z.iso.datetime({ offset: true }),
-  modelName: z.string(),
-  inputArticleCount: z.number(),
   category: CategorySchema,
   headline: z.string(),
   summary: z.string(),

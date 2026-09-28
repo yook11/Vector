@@ -1,17 +1,14 @@
-import { Sparkles } from "lucide-react";
 import { formatPaperDate } from "@/components/paper";
 
 interface BriefingMastheadProps {
   weekStart: string;
   weekEnd: string;
-  totalArticles: number;
 }
 
 /** Briefing 一覧ページのマストヘッド。eyebrow / H1 / メタ / 二重罫線 で週次紙面の入口を示す。 */
 export function BriefingMasthead({
   weekStart,
   weekEnd,
-  totalArticles,
 }: BriefingMastheadProps) {
   const weekStartLabel = formatPaperDate(weekStart);
   const weekEndLabel = formatPaperDate(weekEnd);
@@ -31,14 +28,6 @@ export function BriefingMasthead({
         >
           <span>
             {weekStartLabel} – {weekEndLabel}
-          </span>
-          <span className="text-[var(--vector-line)]">/</span>
-          <span className="inline-flex items-center gap-1.5">
-            <Sparkles
-              aria-hidden="true"
-              className="size-[13px] text-[var(--vector-accent)]"
-            />
-            今週 {totalArticles} 件を解析
           </span>
         </span>
       </div>

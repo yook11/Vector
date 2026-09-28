@@ -92,8 +92,7 @@ export function BriefingDocument({ briefing }: { briefing: BriefingDetail }) {
               aria-hidden="true"
               className="size-3.5 text-[var(--vector-accent)]"
             />
-            AIが今週 {briefing.inputArticleCount} 件の記事から生成 ·{" "}
-            {formatPaperDate(briefing.generatedAt)}{" "}
+            AIが生成 · {formatPaperDate(briefing.generatedAt)}{" "}
             {formatPaperTime(briefing.generatedAt)}
           </span>
         </div>

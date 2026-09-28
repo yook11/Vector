@@ -75,7 +75,7 @@ async function BriefingDetailContent({ slug }: { slug: string }) {
             style={{ fontFamily: "var(--font-vector-maru)" }}
           >
             まだ生成されていません。JST 月曜 00:05
-            の自動生成、もしくは手動実行を待ってから再度ご確認ください。
+            の自動生成を待ってから再度ご確認ください。
           </p>
         </div>
       </div>

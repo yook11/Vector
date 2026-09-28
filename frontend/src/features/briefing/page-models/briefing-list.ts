@@ -23,7 +23,6 @@ export interface ReadyBriefingCard {
   weekStart: string;
   headline: string;
   summary: string;
-  inputArticleCount: number;
 }
 
 export interface PendingCategory {
@@ -34,7 +33,6 @@ export interface PendingCategory {
 export interface BriefingListViewModel {
   weekStart: string; // currentWeekStart (週初・月曜)
   weekEnd: string; // weekStart + 6 日 (日曜) を導出
-  totalArticles: number;
   ready: ReadyBriefingCard[];
   pending: PendingCategory[];
 }
@@ -60,7 +58,6 @@ export async function getBriefingListViewModel(): Promise<BriefingListViewModel>
         weekStart: item.latest.weekStart,
         headline: item.latest.headline,
         summary: item.latest.summary,
-        inputArticleCount: item.latest.inputArticleCount,
       });
     }
   }
@@ -68,7 +65,6 @@ export async function getBriefingListViewModel(): Promise<BriefingListViewModel>
   return {
     weekStart: data.currentWeekStart,
     weekEnd: addDaysIso(data.currentWeekStart, 6),
-    totalArticles: data.totalArticles,
     ready,
     pending,
   };

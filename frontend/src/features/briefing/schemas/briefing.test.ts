@@ -16,7 +16,6 @@ describe("BriefingListResponseSchema", () => {
   it("accepts items with both generated (latest object) and empty (latest=null)", () => {
     const result = BriefingListResponseSchema.safeParse({
       currentWeekStart: "2026-04-27",
-      totalArticles: 64,
       items: [
         {
           category: CATEGORY,
@@ -24,7 +23,6 @@ describe("BriefingListResponseSchema", () => {
             weekStart: "2026-04-20",
             headline: "今週の AI ハイライト",
             summary: "今週の総括リード",
-            inputArticleCount: 64,
           },
         },
         {
@@ -35,12 +33,10 @@ describe("BriefingListResponseSchema", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.totalArticles).toBe(64);
       expect(result.data.items[0]?.latest?.headline).toBe(
         "今週の AI ハイライト",
       );
       expect(result.data.items[0]?.latest?.summary).toBe("今週の総括リード");
-      expect(result.data.items[0]?.latest?.inputArticleCount).toBe(64);
       expect(result.data.items[1]?.latest).toBeNull();
     }
   });
@@ -48,7 +44,6 @@ describe("BriefingListResponseSchema", () => {
   it("rejects when currentWeekStart is not an ISO date", () => {
     const result = BriefingListResponseSchema.safeParse({
       currentWeekStart: "2026-04-27T00:00:00Z",
-      totalArticles: 0,
       items: [],
     });
     expect(result.success).toBe(false);
@@ -57,10 +52,63 @@ describe("BriefingListResponseSchema", () => {
   it("rejects when latest is missing entirely (must be present as null or object)", () => {
     const result = BriefingListResponseSchema.safeParse({
       currentWeekStart: "2026-04-27",
-      totalArticles: 0,
       items: [{ category: CATEGORY }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("API から外す予定のフィールド", () => {
+  // backend が外す前にこの frontend が反映されても壊れないことを固定する。
+  it("一覧: totalArticles / inputArticleCount が届いても parse でき、結果には残らない", () => {
+    const result = BriefingListResponseSchema.safeParse({
+      currentWeekStart: "2026-04-27",
+      totalArticles: 64,
+      items: [
+        {
+          category: CATEGORY,
+          latest: {
+            weekStart: "2026-04-20",
+            headline: "h",
+            summary: "s",
+            inputArticleCount: 64,
+          },
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({
+        currentWeekStart: "2026-04-27",
+        items: [
+          {
+            category: CATEGORY,
+            latest: { weekStart: "2026-04-20", headline: "h", summary: "s" },
+          },
+        ],
+      });
+    }
+  });
+
+  it("詳細: modelName / inputArticleCount が届いても parse でき、結果には残らない", () => {
+    const result = BriefingResponseSchema.safeParse({
+      state: "briefing",
+      weekStart: "2026-04-20",
+      generatedAt: "2026-04-27T00:05:00+09:00",
+      modelName: "deepseek-v4-pro",
+      inputArticleCount: 132,
+      category: CATEGORY,
+      headline: "h",
+      summary: "s",
+      chapters: [{ heading: "h", body: "b" }],
+      keyArticles: [],
+      watchPoints: [],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("modelName");
+      expect(result.data).not.toHaveProperty("inputArticleCount");
+    }
   });
 });
 
@@ -70,8 +118,6 @@ describe("BriefingResponseSchema", () => {
       state: "briefing",
       weekStart: "2026-04-20",
       generatedAt: "2026-04-27T00:05:00+09:00",
-      modelName: "deepseek-v4-pro",
-      inputArticleCount: 132,
       category: CATEGORY,
       headline: "今週の AI ハイライト",
       summary: "今週の総括リード",
@@ -129,8 +175,6 @@ describe("BriefingResponseSchema", () => {
       state: "briefing",
       weekStart: "2026-04-20",
       generatedAt: "2026-04-27T00:05:00+09:00",
-      modelName: "deepseek-v4-pro",
-      inputArticleCount: 1,
       category: CATEGORY,
       headline: "今週のヘッドライン",
       summary: "今週の総括リード",
@@ -168,8 +212,6 @@ describe("BriefingResponseSchema", () => {
       state: "briefing",
       weekStart: "2026-04-20",
       generatedAt: "2026-04-27T00:05:00+09:00",
-      modelName: "deepseek-v4-pro",
-      inputArticleCount: 1,
       category: CATEGORY,
       headline: "h",
       summary: "s",
@@ -185,8 +227,6 @@ describe("BriefingResponseSchema", () => {
       state: "briefing",
       weekStart: "2026-04-20",
       generatedAt: "2026-04-27T00:05:00+09:00",
-      modelName: "deepseek-v4-pro",
-      inputArticleCount: 0,
       category: CATEGORY,
       headline: "h",
       keyArticles: [],

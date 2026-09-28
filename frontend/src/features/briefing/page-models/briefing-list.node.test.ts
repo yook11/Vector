@@ -15,18 +15,12 @@ beforeEach(() => {
 });
 
 function makeLatest(
-  overrides: {
-    weekStart?: string;
-    headline?: string;
-    summary?: string;
-    inputArticleCount?: number;
-  } = {},
+  overrides: { weekStart?: string; headline?: string; summary?: string } = {},
 ) {
   return {
     weekStart: overrides.weekStart ?? "2026-05-26",
     headline: overrides.headline ?? "見出し",
     summary: overrides.summary ?? "要約文",
-    inputArticleCount: overrides.inputArticleCount ?? 10,
   };
 }
 
@@ -34,7 +28,6 @@ describe("getBriefingListViewModel — ready / pending split", () => {
   it("latest があるアイテムは ready に入り、latest===null は pending に入る", async () => {
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: "2026-06-02",
-      totalArticles: 55,
       items: [
         {
           category: { slug: "ai", name: "AI" },
@@ -42,7 +35,6 @@ describe("getBriefingListViewModel — ready / pending split", () => {
             weekStart: "2026-06-02",
             headline: "AI の最前線",
             summary: "今週のAI動向まとめ",
-            inputArticleCount: 12,
           }),
         },
         {
@@ -61,7 +53,6 @@ describe("getBriefingListViewModel — ready / pending split", () => {
     expect(readyCard.weekStart).toBe("2026-06-02");
     expect(readyCard.headline).toBe("AI の最前線");
     expect(readyCard.summary).toBe("今週のAI動向まとめ");
-    expect(readyCard.inputArticleCount).toBe(12);
 
     // pending に latest なしアイテムが入る (slug / name のみ)
     expect(result.pending).toHaveLength(1);
@@ -72,7 +63,6 @@ describe("getBriefingListViewModel — ready / pending split", () => {
   it("全アイテムが ready のとき pending は空", async () => {
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: "2026-06-02",
-      totalArticles: 20,
       items: [
         { category: { slug: "ai", name: "AI" }, latest: makeLatest() },
         {
@@ -91,7 +81,6 @@ describe("getBriefingListViewModel — ready / pending split", () => {
   it("全アイテムが pending のとき ready は空", async () => {
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: "2026-06-02",
-      totalArticles: 0,
       items: [
         {
           category: { slug: "ai", name: "AI" },
@@ -116,7 +105,6 @@ describe("getBriefingListViewModel — ready の順序保持", () => {
     // 非アルファベット順で返ってきたとき、frontend は並び替えない
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: "2026-06-02",
-      totalArticles: 30,
       items: [
         {
           category: { slug: "space", name: "スペース" },
@@ -155,7 +143,6 @@ describe("getBriefingListViewModel — weekEnd 導出", () => {
     const weekStart = "2026-05-26";
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: weekStart,
-      totalArticles: 0,
       items: [],
     });
 
@@ -174,7 +161,6 @@ describe("getBriefingListViewModel — weekEnd 導出", () => {
     const weekStart = "2025-12-29";
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: weekStart,
-      totalArticles: 0,
       items: [],
     });
 
@@ -191,7 +177,6 @@ describe("getBriefingListViewModel — weekEnd 導出", () => {
   it("weekStart は currentWeekStart をそのまま返す", async () => {
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: "2026-06-02",
-      totalArticles: 0,
       items: [],
     });
 
@@ -201,37 +186,10 @@ describe("getBriefingListViewModel — weekEnd 導出", () => {
   });
 });
 
-describe("getBriefingListViewModel — totalArticles", () => {
-  it("totalArticles はバックエンドの値をそのまま返す", async () => {
-    mocks.listBriefings.mockResolvedValue({
-      currentWeekStart: "2026-06-02",
-      totalArticles: 137,
-      items: [],
-    });
-
-    const result = await getBriefingListViewModel();
-
-    expect(result.totalArticles).toBe(137);
-  });
-
-  it("totalArticles が 0 のとき 0 を返す", async () => {
-    mocks.listBriefings.mockResolvedValue({
-      currentWeekStart: "2026-06-02",
-      totalArticles: 0,
-      items: [],
-    });
-
-    const result = await getBriefingListViewModel();
-
-    expect(result.totalArticles).toBe(0);
-  });
-});
-
 describe("getBriefingListViewModel — listBriefings 呼び出し回数", () => {
   it("listBriefings を 1 度だけ呼ぶ", async () => {
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: "2026-06-02",
-      totalArticles: 0,
       items: [],
     });
 

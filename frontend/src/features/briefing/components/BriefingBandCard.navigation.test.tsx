@@ -54,7 +54,6 @@ const card: ReadyBriefingCard = {
   weekStart: "2026-07-21",
   headline: "Briefing カード",
   summary: "カテゴリ別の要約",
-  inputArticleCount: 3,
 };
 
 describe("BriefingBandCard navigation lifecycle", () => {
