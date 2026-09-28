@@ -1,4 +1,3 @@
-from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 
 
@@ -8,8 +7,8 @@ class CategoryDetail(_CamelBase):
     recentCount は直近 24 時間に AI 分類が完了した記事数。
     """
 
-    slug: CategorySlug
-    name: CategoryName
+    slug: str
+    name: str
     recent_count: int = 0
 
 

@@ -15,6 +15,7 @@ from app.db.fastapi import EntryManagedSession
 from app.dependencies import require_bff_request
 from app.insights.briefing.query import BriefingQueryService
 from app.insights.briefing.schemas import BriefingListResponse, BriefingResponse
+from app.models.category import CATEGORY_SLUG_PATTERN
 
 router = APIRouter(prefix="/api/v1/briefing", tags=["briefing"])
 
@@ -43,14 +44,7 @@ async def list_briefings(
     responses={404: {"description": "category not found"}},
 )
 async def get_latest_briefing(
-    category_slug: Annotated[
-        str,
-        Path(
-            pattern=r"^[a-z0-9][a-z0-9_]{0,49}$",
-            min_length=1,
-            max_length=50,
-        ),
-    ],
+    category_slug: Annotated[str, Path(pattern=CATEGORY_SLUG_PATTERN)],
     service: Annotated[BriefingQueryService, Depends(get_briefing_query_service)],
 ) -> BriefingResponse:
     """指定カテゴリの最新 briefing を返す (なければ state="empty")。"""

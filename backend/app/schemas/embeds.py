@@ -6,7 +6,6 @@
 """
 
 from app.collection.sources.source_name import SourceName
-from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 from app.shared.security.safe_url import SafeUrl
 
@@ -25,8 +24,8 @@ class CategoryEmbed(_CamelBase):
     サイドバー用の集計付き CategoryDetail とは役割が異なる。
     """
 
-    slug: CategorySlug
-    name: CategoryName
+    slug: str
+    name: str
 
 
 class OriginalArticleEmbed(_CamelBase):

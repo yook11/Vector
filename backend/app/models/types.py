@@ -14,50 +14,7 @@ from sqlalchemy.types import TypeDecorator
 
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.sources.source_name import SourceName
-from app.models.value_objects.category import CategoryName, CategorySlug
 from app.shared.security.safe_url import SafeUrl
-
-
-class CategorySlugType(TypeDecorator[CategorySlug]):
-    """CategorySlug <-> VARCHAR(50)."""
-
-    impl = String(50)
-    cache_ok = True
-
-    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, CategorySlug):
-            return value.root
-        if isinstance(value, str):
-            return CategorySlug(value).root
-        raise TypeError(f"Expected CategorySlug or str, got {type(value).__name__}")
-
-    def process_result_value(self, value: Any, dialect: Dialect) -> CategorySlug | None:
-        if value is None:
-            return None
-        return CategorySlug(value)
-
-
-class CategoryNameType(TypeDecorator[CategoryName]):
-    """CategoryName <-> VARCHAR(50)."""
-
-    impl = String(50)
-    cache_ok = True
-
-    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, CategoryName):
-            return value.root
-        if isinstance(value, str):
-            return CategoryName(value).root
-        raise TypeError(f"Expected CategoryName or str, got {type(value).__name__}")
-
-    def process_result_value(self, value: Any, dialect: Dialect) -> CategoryName | None:
-        if value is None:
-            return None
-        return CategoryName(value)
 
 
 class SourceNameType(TypeDecorator[SourceName]):

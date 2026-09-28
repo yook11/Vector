@@ -282,25 +282,24 @@ class TestListArticles:
         assert items[0]["translatedTitle"] == "後の記事"
         assert items[1]["translatedTitle"] == "先の記事"
 
+    @pytest.mark.parametrize(
+        "bad_slug",
+        [
+            "INVALID-slug",  # 大文字とハイフン
+            "%20ai%20",  # 前後の空白は正規化せず弾く
+        ],
+    )
     async def test_invalid_category_slug_returns_422(
-        self, bff_client: AsyncClient
+        self, bff_client: AsyncClient, bad_slug: str
     ) -> None:
-        """CategorySlug VO は slug パターンに合わない値を拒否する。"""
-        resp = await bff_client.get("/api/v1/articles?category=INVALID-slug")
+        """slug の形式に合わない値は、DB に問い合わせる前に 422 で弾く。"""
+        resp = await bff_client.get(f"/api/v1/articles?category={bad_slug}")
         assert resp.status_code == 422
-        detail = resp.json()["detail"]
-        assert isinstance(detail, list)
-        assert detail[0]["loc"] == ["query", "category"]
-        assert "Category slug" in detail[0]["msg"]
-
-    async def test_invalid_category_message_does_not_leak_vo_name(
-        self, bff_client: AsyncClient
-    ) -> None:
-        """422 エラーメッセージに内部 VO クラス名 (CategorySlug) を含めない。"""
-        resp = await bff_client.get("/api/v1/articles?category=INVALID-slug")
-        assert resp.status_code == 422
-        detail = resp.json()["detail"]
-        assert "CategorySlug" not in detail[0]["msg"]
+        [error] = resp.json()["detail"]
+        assert (error["loc"], error["type"]) == (
+            ["query", "category"],
+            "string_pattern_mismatch",
+        )
 
     async def test_filter_by_category(
         self,

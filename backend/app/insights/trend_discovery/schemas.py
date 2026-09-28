@@ -29,7 +29,6 @@ from app.insights.trend_discovery.domain.trend import (
     RelatedMention,
     TrendsBundle,
 )
-from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 
 
@@ -51,8 +50,8 @@ class _RankedMention(_CamelBase):
 
 class _CategoryTrends(_CamelBase):
     category_id: int
-    category_slug: CategorySlug
-    category_name: CategoryName
+    category_slug: str
+    category_name: str
     most_mentioned: list[_RankedMention]
     fastest_growing: list[_RankedMention]
 

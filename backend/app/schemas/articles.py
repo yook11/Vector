@@ -12,7 +12,7 @@ from pydantic import Field
 if TYPE_CHECKING:
     from app.schemas.base import PaginationParams
 
-from app.models.value_objects.category import CategorySlug
+from app.models.category import CATEGORY_SLUG_PATTERN
 from app.schemas.base import PaginationParams, _CamelBase
 from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed, OriginalArticleEmbed
 
@@ -27,12 +27,12 @@ class SortOrder(StrEnum):
 
 
 # ---------------------------------------------------------------------------
-# クエリパラメータ — VO 型を全レイヤーに通す
+# クエリパラメータ
 # ---------------------------------------------------------------------------
 
 
-# category は外向き第一級フィルタキー。サイドバーから渡される CategorySlug を受け取り
-# Pydantic がパース時に正規化・検証する。
+# category は外向き第一級フィルタキーで、形式は categories テーブルの制約と
+# 同じ pattern で検証する。
 # Topic は表示専用属性のため、フィルタキーとしては提供しない（2026-04 決定）。
 _CATEGORY_QUERY_DESCRIPTION = "Outbound primary filter key. Accepts a category slug."
 
@@ -41,15 +41,14 @@ class ArticleListParams(PaginationParams):
     """記事一覧（ニュース閲覧）用のクエリパラメータ。
 
     page/per_page は PaginationParams から継承する。
-    VO フィールド（CategorySlug）はクエリパラメータのパース時に
-    Pydantic が直接検証し、不正値は 422 レスポンスを返す。
+    category の形式が不正なら 422 レスポンスを返す。
     ルーターでは Annotated[ArticleListParams, Query()] として受け取り、
     Service / Repository レイヤーへそのまま受け渡す。
     """
 
     category: Annotated[
-        CategorySlug | None,
-        Query(description=_CATEGORY_QUERY_DESCRIPTION),
+        str | None,
+        Query(pattern=CATEGORY_SLUG_PATTERN, description=_CATEGORY_QUERY_DESCRIPTION),
     ] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 
