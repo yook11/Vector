@@ -594,7 +594,7 @@ class TestExecute:
                 analyzed_at=_jst(2026, 4, 14, hour=hour),
                 content=f"NVIDIA point {hour}",
                 mentions=[("NVIDIA", "company"), ("OpenAI", "company")],
-                embedding=[1.0, 0.0],  # 同一トピック → key_point は 1 本に畳まれる
+                embedding=[1.0, 0.0],
             )
         await db_session.commit()
 
@@ -615,8 +615,12 @@ class TestExecute:
         )
         # 同一インスタンス共有 (二重 enrich なし)。
         assert appearance is growth
-        # 文脈が付いている (related に OpenAI、key_point は記事 dedup で 1 本)。
-        assert len(appearance.key_points) == 1
+        # 同じベクトルの記事でも最新3記事の要点が付く。
+        assert appearance.key_points == (
+            "NVIDIA point 11",
+            "NVIDIA point 10",
+            "NVIDIA point 9",
+        )
         assert {str(r.name) for r in appearance.related_mentions} == {"OpenAI"}
 
 
@@ -690,3 +694,20 @@ class TestOutcomeTypes:
         )
         with pytest.raises(AttributeError):
             outcome.completed_category_count = 99  # type: ignore[misc]
+
+
+@pytest.mark.asyncio
+async def test_skips_when_only_recent_analyses_of_old_publications_exist(
+    db_session, session_factory, sample_categories, seed_analysis
+):
+    """期間内に分析した記事があっても、公開期間外なら対象なしとして終了する。"""
+    await seed_analysis(
+        category_id=sample_categories[0].id,
+        published_at=_jst(2026, 4, 1),
+        analyzed_at=_jst(2026, 4, 14),
+        mentions=[("NVIDIA", "company")],
+    )
+    await db_session.commit()
+    result = await TrendDiscoveryService(session_factory).execute(_ready())
+    assert isinstance(result, SkippedNoTargetArticles)
+    assert await SnapshotRepository(db_session).find_by_window_end(WINDOW_END) is None

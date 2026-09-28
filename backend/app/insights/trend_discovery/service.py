@@ -115,7 +115,7 @@ TrendDiscoveryOutcome = (
 
 
 class TrendDiscoveryService:
-    """rolling 7d の分析済み記事からTrend Discoveryを作成するユースケース。
+    """直近7日間に公開された分析済み記事からトレンドを作成する。
 
     1 session = 1 トランザクションとして集計と INSERT を atomic に実行する。
     """

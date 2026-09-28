@@ -37,7 +37,8 @@ async def test_trend_discovery_saves_snapshot_of_mentions_in_last_seven_days(
             system_database,
             category_id=category.id,
             title=f"trend-{number}",
-            analyzed_at=datetime(2026, 9, 24, 10 + number, tzinfo=JST),
+            published_at=datetime(2026, 9, 24, 10 + number, tzinfo=JST),
+            analyzed_at=datetime(2026, 9, 28, 14 - number, tzinfo=JST),
             key_points=[{"content": content, "mentions": mentions}],
             embedding_text=embedding(number / 5),
         )
@@ -75,8 +76,7 @@ async def test_trend_discovery_saves_snapshot_of_mentions_in_last_seven_days(
         }
     ]
     key_points = category_trends["mostMentioned"][0]["keyPoints"]
-    assert key_points
-    assert set(key_points) <= set(key_point_contents)
+    assert key_points == list(reversed(key_point_contents[-3:]))
     assert await insights_events(system_database) == [
         {
             "stage": "trend_discovery",

@@ -16,7 +16,7 @@ URL の重複制約を避けるため fixture 内のカウンタで一意な URL
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from itertools import count
 
 import pytest
@@ -29,8 +29,7 @@ from app.models.news_source import NewsSource
 
 SeedAnalysis = Callable[..., Awaitable[AnalyzedArticleRecord]]
 
-# AnalyzedArticleRecord.embedding は HALFVEC(768)。テストは近接 dedup を作り込みやすい
-# よう短いベクトルを渡し、ここで 768 次元へ 0 padding する。
+# 短いベクトルで選定結果の独立性を検証できるよう、保存時は768次元に補完する。
 _EMBEDDING_DIM = 768
 
 
@@ -48,6 +47,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
     Args (キーワード引数):
         category_id: ``AnalyzedArticleRecord.category_id`` に設定する FK。
         analyzed_at: ``analyzed_at`` を明示指定 (server_default を上書き)。
+        published_at: 公開日時を独立指定し、省略時は分析日時と同じ値にする。
         mentions: ``[(surface, type), ...]`` の列。``key_points`` JSONB に
             1 つの key_point としてまとめて焼き付ける (同一 assessment 内で同じ
             mention が複数 key_point に現れても COUNT(DISTINCT a.id) で 1 件と
@@ -57,7 +57,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             明示 seeding する (指定時は ``mentions`` / ``content`` より優先)。同一
             assessment 内の別 key_point 共起や記事内 dedup の検証に使う。
         embedding: ``AnalyzedArticleRecord.embedding`` に焼く float 列。768 次元未満は
-            0 padding する (近接 dedup 検証用に短いベクトルを渡せる)。None は
+            0 padding する。None は
             embedding 未設定 (旧行) を再現する。
         key_points_null: ``True`` のとき ``key_points`` を NULL のまま残す
             (PR 1 デプロイ前の旧行を再現する用途)。
@@ -72,6 +72,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         *,
         category_id: int,
         analyzed_at: datetime,
+        published_at: datetime | None = None,
         mentions: Sequence[tuple[str, str]] = (),
         content: str | None = None,
         key_points: Sequence[tuple[str, Sequence[tuple[str, str]]]] | None = None,
@@ -86,7 +87,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             source_url=url,
             original_title=f"seed-{n}",
             original_content="x" * 60,
-            published_at=datetime(2026, 1, 1, tzinfo=UTC),
+            published_at=published_at if published_at is not None else analyzed_at,
         )
         db_session.add(article)
         await db_session.flush()

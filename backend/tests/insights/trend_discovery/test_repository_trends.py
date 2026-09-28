@@ -5,7 +5,7 @@
   pool を current/previous 件数つきで返す (hot ゲート・並べ替えは service の責務
   なのでここでは掛けない)。
 - ``get_mention_key_points``: 指定 mention の現週 key_point content を記事レベル
-  dedup して最大 2 本。
+  重複なく最大3本。
 - ``get_related_mentions``: 指定 mention と同一 key_point 内で共起した別 mention を
   共起記事数 >= MIN_SHARED_ARTICLES で top3。
 - ``count_source_analyses``: 現週の analysis 件数。
@@ -19,12 +19,12 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
@@ -354,13 +354,13 @@ _NVIDIA_KEY = ("nvidia", "company")
 
 class TestGetMentionKeyPoints:
     @pytest.mark.asyncio
-    async def test_returns_latest_first_max_two(
+    async def test_returns_latest_first_max_three(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """最新優先で最大 2 本の content を返す (互いに離れた embedding)。"""
+        """公開日時の新しい順に最大3本の要点を返す。"""
         cat = sample_categories[0]
         await seed_analysis(
             category_id=cat.id,
@@ -391,16 +391,16 @@ class TestGetMentionKeyPoints:
             current_end=WEEK_END,
             mention_keys=[_NVIDIA_KEY],
         )
-        assert result[_NVIDIA_KEY] == ("newest", "middle")
+        assert result[_NVIDIA_KEY] == ("newest", "middle", "oldest")
 
     @pytest.mark.asyncio
-    async def test_collapses_near_duplicate_articles(
+    async def test_keeps_near_duplicate_articles(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """embedding が近接する別記事は同一トピックとして畳む。"""
+        """ベクトルが近い別記事も採用する。"""
         cat = sample_categories[0]
         await seed_analysis(
             category_id=cat.id,
@@ -431,7 +431,7 @@ class TestGetMentionKeyPoints:
             current_end=WEEK_END,
             mention_keys=[_NVIDIA_KEY],
         )
-        assert result[_NVIDIA_KEY] == ("primary", "distinct")
+        assert result[_NVIDIA_KEY] == ("primary", "near-dup", "distinct")
 
     @pytest.mark.asyncio
     async def test_same_assessment_yields_one_content(
@@ -446,8 +446,8 @@ class TestGetMentionKeyPoints:
             category_id=cat.id,
             analyzed_at=_jst(2026, 4, 14, hour=1),
             key_points=[
-                ("first key point", [("NVIDIA", "company")]),
-                ("second key point", [("NVIDIA", "company")]),
+                ("z-first key point", [("NVIDIA", "company"), ("NVIDIA", "company")]),
+                ("a-second key point", [("NVIDIA", "company")]),
             ],
             embedding=[1.0, 0.0],
         )
@@ -461,7 +461,7 @@ class TestGetMentionKeyPoints:
         )
         contents = result[_NVIDIA_KEY]
         assert len(contents) == 1
-        assert contents[0] in {"first key point", "second key point"}
+        assert contents[0] == "z-first key point"
 
     @pytest.mark.asyncio
     async def test_null_embedding_treated_as_distinct(
@@ -898,23 +898,6 @@ class TestWhitespaceNameKeyNormalization:
         assert _OPEN_AI_KEY not in result
 
 
-class TestMatchKeyExprGuard:
-    """``_match_key_expr`` は固定 alias のみ許可し未知 alias を raise で拒否する。
-
-    SQL fragment へ補間される唯一の動的部分なので、injection 経路を構造的に封じる
-    (assert ではなく raise で ``-O`` 実行時も剥がれないことを固定)。
-    """
-
-    @pytest.mark.parametrize("alias", ["m", "m1", "m2"])
-    def test_allows_fixed_aliases(self, alias: str) -> None:
-        assert f"{alias}->>'surface'" in _match_key_expr(alias)
-
-    @pytest.mark.parametrize("alias", ["x", "m3", "m; DROP TABLE t", ""])
-    def test_rejects_unknown_alias(self, alias: str) -> None:
-        with pytest.raises(ValueError, match="alias must be one of"):
-            _match_key_expr(alias)
-
-
 class TestMatchKeyParity:
     """SQL 名寄せ式 ``_match_key_expr`` と Python ``MentionName.match_key`` の一致。
 
@@ -957,15 +940,9 @@ class TestMatchKeyParity:
         surface: str,
     ) -> None:
         expected = MentionName(surface).match_key
-        # production の SQL 式そのものを literal surface 1 件に適用して評価する
-        # (式を再実装せず、_match_key_expr の出力を直接埋め込む)。raw text() では
-        # bind の型推論が効かないため CAST で jsonb を明示する。固定リテラル式のみ補間
-        # し値は bindparams で渡すため injection 経路はない (S608/text 誤検知)。
-        # nosemgrep
-        stmt = text(
-            f"SELECT {_match_key_expr('m')} AS k "  # noqa: S608 — 固定リテラル式のみ補間
-            "FROM (SELECT CAST(:payload AS jsonb) AS m) AS sub"
-        ).bindparams(bindparam("payload", json.dumps({"surface": surface})))
+        stmt = select(
+            _match_key_expr(bindparam("payload", {"surface": surface}, type_=JSONB))
+        )
         actual = (await db_session.execute(stmt)).scalar_one()
         assert actual == expected
 
