@@ -14,11 +14,7 @@ interface BriefingIndexViewProps {
 export function BriefingIndexView({ data }: BriefingIndexViewProps) {
   return (
     <div className="relative z-10 mx-auto max-w-[1180px] px-[clamp(18px,4vw,40px)] pt-[30px] pb-[80px]">
-      <BriefingMasthead
-        weekStart={data.weekStart}
-        weekEnd={data.weekEnd}
-        totalArticles={data.totalArticles}
-      />
+      <BriefingMasthead weekStart={data.weekStart} weekEnd={data.weekEnd} />
 
       <div className="mt-2 flex flex-col gap-[16px]">
         {data.ready.map((card) => (

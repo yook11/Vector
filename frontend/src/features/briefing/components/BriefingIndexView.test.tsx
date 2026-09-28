@@ -15,7 +15,6 @@ function makeReadyCard(
     weekStart: "2026-06-02",
     headline: "AI の最前線",
     summary: "今週のAI動向",
-    inputArticleCount: 10,
     ...overrides,
   };
 }
@@ -26,7 +25,6 @@ function makeViewModel(
   return {
     weekStart: "2026-06-02",
     weekEnd: "2026-06-08",
-    totalArticles: 0,
     ready: [],
     pending: [],
     ...overrides,
@@ -49,11 +47,7 @@ describe("BriefingIndexView — ready カード描画", () => {
         headline: "宇宙開発ニュース",
       }),
     ];
-    render(
-      <BriefingIndexView
-        data={makeViewModel({ ready: cards, totalArticles: 30 })}
-      />,
-    );
+    render(<BriefingIndexView data={makeViewModel({ ready: cards })} />);
 
     expect(screen.getByText("AI 動向レポート")).toBeInTheDocument();
     expect(screen.getByText("バイオ最新情報")).toBeInTheDocument();
@@ -96,9 +90,7 @@ describe("BriefingIndexView — pending セクション", () => {
   it("pending が空のとき「準備中」は表示されない", () => {
     const cards = [makeReadyCard()];
     render(
-      <BriefingIndexView
-        data={makeViewModel({ ready: cards, pending: [], totalArticles: 10 })}
-      />,
+      <BriefingIndexView data={makeViewModel({ ready: cards, pending: [] })} />,
     );
 
     expect(screen.queryByText("準備中")).not.toBeInTheDocument();
@@ -117,7 +109,6 @@ describe("BriefingIndexView — 全カテゴリ pending 状態 (ready 空)", () 
         data={makeViewModel({
           ready: [],
           pending,
-          totalArticles: 0,
         })}
       />,
     );
@@ -135,12 +126,5 @@ describe("BriefingIndexView — 全カテゴリ pending 状態 (ready 空)", () 
 
     // カードリンクは存在しない
     expect(screen.queryAllByRole("link")).toHaveLength(0);
-  });
-});
-
-describe("BriefingIndexView — masthead 表示", () => {
-  it("totalArticles が masthead に表示される", () => {
-    render(<BriefingIndexView data={makeViewModel({ totalArticles: 88 })} />);
-    expect(screen.getByText(/88/)).toBeInTheDocument();
   });
 });

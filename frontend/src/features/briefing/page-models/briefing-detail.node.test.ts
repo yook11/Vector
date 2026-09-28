@@ -20,8 +20,6 @@ describe("getBriefingDetailViewModel", () => {
       state: "briefing" as const,
       weekStart: "2026-04-20",
       generatedAt: "2026-04-27T00:05:00+09:00",
-      modelName: "deepseek-v4-pro",
-      inputArticleCount: 132,
       category: { slug: "ai", name: "AI" },
       headline: "今週の AI",
       summary: "今週の総括リード",
