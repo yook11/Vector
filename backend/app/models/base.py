@@ -9,13 +9,7 @@ from __future__ import annotations
 from sqlalchemy.orm import DeclarativeBase
 
 from app.collection.sources.source_name import SourceName
-from app.models.types import (
-    CategoryNameType,
-    CategorySlugType,
-    SafeUrlType,
-    SourceNameType,
-)
-from app.models.value_objects.category import CategoryName, CategorySlug
+from app.models.types import SafeUrlType, SourceNameType
 from app.shared.security.safe_url import SafeUrl
 
 
@@ -23,8 +17,6 @@ class Base(DeclarativeBase):
     """VO の type_annotation_map を備えた共通 DeclarativeBase。"""
 
     type_annotation_map = {  # noqa: RUF012
-        CategorySlug: CategorySlugType,
-        CategoryName: CategoryNameType,
         SafeUrl: SafeUrlType,
         SourceName: SourceNameType,
     }

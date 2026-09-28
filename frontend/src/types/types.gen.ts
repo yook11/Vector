@@ -198,8 +198,14 @@ export type BriefingSummary = {
  * recentCount は直近 24 時間に AI 分類が完了した記事数。
  */
 export type CategoryDetail = {
-    slug: CategorySlug;
-    name: CategoryName;
+    /**
+     * Slug
+     */
+    slug: string;
+    /**
+     * Name
+     */
+    name: string;
     /**
      * Recentcount
      */
@@ -227,35 +233,15 @@ export type CategoryDetailList = {
  * サイドバー用の集計付き CategoryDetail とは役割が異なる。
  */
 export type CategoryEmbed = {
-    slug: CategorySlug;
-    name: CategoryName;
+    /**
+     * Slug
+     */
+    slug: string;
+    /**
+     * Name
+     */
+    name: string;
 };
-
-/**
- * CategoryName
- *
- * カテゴリの日本語表示名。
- *
- * Invariants:
- * - ワード文字・中黒 (・)・空白・ハイフンで構成
- * - 空文字列や空白のみは不可
- * - 1-50 文字
- * - 生成後は不変
- */
-export type CategoryName = string;
-
-/**
- * CategorySlug
- *
- * URL セーフなカテゴリ識別子。
- *
- * Invariants:
- * - 先頭は小文字または数字
- * - 使用可能な文字は小文字・数字・アンダースコアのみ
- * - 1-50 文字
- * - 生成後は不変
- */
-export type CategorySlug = string;
 
 /**
  * EmptyBriefing
@@ -1088,8 +1074,14 @@ export type CategoryTrends = {
      * Categoryid
      */
     categoryId: number;
-    categorySlug: CategorySlug;
-    categoryName: CategoryName;
+    /**
+     * Categoryslug
+     */
+    categorySlug: string;
+    /**
+     * Categoryname
+     */
+    categoryName: string;
     /**
      * Mostmentioned
      */
@@ -1163,7 +1155,7 @@ export type ListArticlesData = {
          *
          * Outbound primary filter key. Accepts a category slug.
          */
-        category?: CategorySlug | null;
+        category?: string | null;
         sortOrder?: SortOrder;
     };
     url: '/api/v1/articles';

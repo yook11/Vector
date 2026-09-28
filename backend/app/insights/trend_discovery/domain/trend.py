@@ -37,7 +37,6 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_name import MentionName
-from app.models.value_objects.category import CategoryName, CategorySlug
 
 # hot 判定 (伸び率ランキング母集団) と noise floor のしきい値。
 # - MIN_CURRENT: floor (これ未満は noise として両ランキングから除外)
@@ -181,8 +180,8 @@ class CategoryTrends(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     category_id: int
-    category_slug: CategorySlug
-    category_name: CategoryName
+    category_slug: str
+    category_name: str
     most_mentioned: tuple[RankedMention, ...] = Field(max_length=TOP_N_PER_RANKING)
     fastest_growing: tuple[RankedMention, ...] = Field(max_length=TOP_N_PER_RANKING)
 

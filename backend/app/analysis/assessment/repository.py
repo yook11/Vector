@@ -164,7 +164,6 @@ class AssessmentRepository:
     async def assert_category_catalog_covers_enum(self) -> None:
         """処理開始に必要な全 InScopeCategory がDBに存在することを確認する。"""
         rows = (await self._session.execute(select(Category.slug))).scalars().all()
-        db_slugs = {slug.root for slug in rows}
-        missing = missing_category_slugs(db_slugs)
+        missing = missing_category_slugs(set(rows))
         if missing:
             raise CategoryEnumDatabaseMismatchError(missing)

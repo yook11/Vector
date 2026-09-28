@@ -37,7 +37,6 @@ from app.insights.trend_discovery.domain.trend import (
     select_fastest_growing,
     select_most_mentioned,
 )
-from app.models.value_objects.category import CategoryName, CategorySlug
 
 
 def _names(
@@ -212,8 +211,8 @@ class TestCategoryTrends:
     ) -> CategoryTrends:
         return CategoryTrends(
             category_id=1,
-            category_slug=CategorySlug("ai_ml"),
-            category_name=CategoryName("AI・ML"),
+            category_slug="ai_ml",
+            category_name="AI・ML",
             most_mentioned=most_mentioned,
             fastest_growing=fastest_growing,
         )
@@ -221,8 +220,8 @@ class TestCategoryTrends:
     def test_constructs_with_empty_rankings(self) -> None:
         category_trends = self._make()
         assert category_trends.category_id == 1
-        assert category_trends.category_slug.root == "ai_ml"
-        assert category_trends.category_name.root == "AI・ML"
+        assert category_trends.category_slug == "ai_ml"
+        assert category_trends.category_name == "AI・ML"
         assert category_trends.most_mentioned == ()
         assert category_trends.fastest_growing == ()
 
@@ -263,8 +262,8 @@ class TestTrendsBundle:
     def _category_trends(self, category_id: int = 1) -> CategoryTrends:
         return CategoryTrends(
             category_id=category_id,
-            category_slug=CategorySlug("ai_ml"),
-            category_name=CategoryName("AI・ML"),
+            category_slug="ai_ml",
+            category_name="AI・ML",
             most_mentioned=(),
             fastest_growing=(),
         )
@@ -314,8 +313,8 @@ class TestTrendsBundle:
         )
         category_trends = CategoryTrends(
             category_id=1,
-            category_slug=CategorySlug("ai_ml"),
-            category_name=CategoryName("AI・ML"),
+            category_slug="ai_ml",
+            category_name="AI・ML",
             most_mentioned=(enriched,),
             fastest_growing=(enriched,),
         )
