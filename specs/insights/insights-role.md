@@ -16,13 +16,13 @@
 
 Insightsは公開済みの分析結果を読み、週次の成果物を追加するだけの処理で、既存行を書き換えない。
 
-- 読み取り: analyzed_articles・categoriesは表単位のSELECTとする。中身は公開ニュースで隠す対象がなく、列単位では読む列が増えるたびにGRANTが要る。
+- 読み取り: analyzable_articles・article_curations・analyzed_articles・categoriesは表単位のSELECTとする。中身は公開ニュースで隠す対象がなく、列単位では読む列が増えるたびにGRANTが要る。
 - 成果物: trends_snapshots・weekly_briefingsはSELECT・INSERTとする。生成済みかの確認とINSERTのRETURNINGに使う。二重生成は一意制約とON CONFLICT DO NOTHINGで防ぐ。
 - 監査: pipeline_eventsはINSERTと、ORMがRETURNINGで受け取るid・occurred_atのSELECTだけとする。他の段の記録やpayloadは読めない。
 - 更新・削除: 付与しない。既存行を上書きする経路は手動実行CLIだけにあり、CLIとともに撤去した（#466）。
 - 採番: weekly_briefings・pipeline_eventsのidはsequenceで採番するため、そのsequenceのUSAGEだけを付与する。trends_snapshotsはwindow_endが主キーでsequenceを使わない。
 - 接続: 接続先DBのCONNECTとpublicのUSAGEを直接付与する。authには何も付与しない。
-- 新しい表への自動付与、REFERENCES、TRUNCATEは付与しない。外部キーの検証は親表の所有者権限で動く。Insightsが新しい表・列を使うときはGRANTのmigrationを追加する。
+- 新しい表への自動付与、REFERENCES、TRUNCATEは付与しない。外部キーの検証は親表の所有者権限で動く。新しく参照する表は明示的にGRANTする。読み取りを許可した表では列の追加・参照変更ごとに権限を分けず、クエリで必要な列だけ取得する。
 
 生成済みかの判定と同時実行時の二重保存の防止は、GRANTではなくコードの判定と一意制約が担う。2つのworkerは同じロールで動くため、トレンドとブリーフィングの書き込みは区別しない。
 
@@ -32,6 +32,7 @@ Insightsは公開済みの分析結果を読み、週次の成果物を追加す
 
 | 対象 | 使う操作 |
 |---|---|
+| analyzable_articles・article_curations | 元記事の公開日時、本文、翻訳・要約の参照 |
 | analyzed_articles | トレンドの集計、ブリーフィングの入力記事 |
 | categories | カテゴリ一覧、監査に記録するカテゴリslug |
 | trends_snapshots | 生成済みかの確認、トレンドの保存 |
@@ -64,3 +65,15 @@ insights段のタスクロールは共通の権限境界がDBユーザーを限�
 - 共通の境界: `test_role_boundaries.py`に新ロールを加える。
 - migration: `local_tests/migrations/`でupgrade・downgradeの往復、ロール不在時の停止、既存データとACLの維持を確認する。
 - インフラ: 本体のTerraformテストで、insights段の接続URLと接続を許可するDBユーザーを確認する。
+
+## 記事参照権限の追加
+
+- Problem: 公開日時を参照するトレンド処理には元記事・curationの参照が必要だが、InsightsロールにはそのSELECTがない。
+- Evidence: 公開日時はanalyzable_articlesに保存され、analyzed_articlesからarticle_curationsを介して参照する。既存のAgentロールもこの2表のSELECTを持つ。
+- Invariants: この2表へSELECTだけを付与し、INSERT・UPDATE・DELETE・TRUNCATE・GRANT OPTIONは付与しない。他ロールの権限、既存データ、既存のInsights権限を維持する。
+- Non-goals: トレンドの実行コード・選定ルール・DB構造・インデックスの変更、新しい表への自動付与。
+- Done: 権限の許可一覧、migrationの往復、データと他ロールの権限維持を実DBで確認する。
+
+`z30_grant_insights_publication` は `z29_grant_agent` に続くcontract migrationとして2表のSELECTを追加する。migration・権限テスト・仕様だけの先行PRとし、トレンドの実装は後続PRへ分ける。
+
+適用順は先行PRのマージ、権限migrationの適用、後続アプリの反映とする。権限の追加だけなので旧アプリはそのまま動作できる。ロールバックは追加権限に依存するアプリを戻した後にdowngradeし、今回のSELECTだけを取り消す。
