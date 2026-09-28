@@ -86,6 +86,7 @@ class TestGetBriefing:
     ) -> None:
         resp = await bff_client.get("/api/v1/briefing/nonexistent")
         assert resp.status_code == 404
+        assert resp.json() == {"detail": "Category not found"}
 
     @pytest.mark.asyncio
     async def test_requires_bff_proof(self, client: AsyncClient) -> None:
@@ -122,6 +123,45 @@ class TestGetBriefing:
         assert body["category"]["slug"] == "ai"
         # category は共有 CategoryEmbed (slug + name のみ、id は契約から撤去済)
         assert "id" not in body["category"]
+
+    @pytest.mark.asyncio
+    async def test_returns_most_recent_week_when_several_weeks_exist(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """同じカテゴリに複数週の briefing があれば、登録順ではなく最新週を返す。"""
+        # 最新週を登録順の中間に置き、先頭・末尾の登録行を選ぶ実装では落ちるようにする。
+        for week_start, headline in [
+            (date(2026, 4, 13), "先週の見出し"),
+            (date(2026, 4, 20), "新しい週の見出し"),
+            (date(2026, 4, 6), "先々週の見出し"),
+        ]:
+            db_session.add(
+                WeeklyBriefing(
+                    week_start_date=week_start,
+                    category_id=ai_category.id,
+                    headline=headline,
+                    summary="s",
+                    chapters=[{"heading": "h", "body": "b"}],
+                    key_articles=[],
+                    watch_points=[{"statement": "w"}],
+                    model_name="deepseek-v4-pro",
+                    input_article_count=1,
+                )
+            )
+            await db_session.flush()
+        await db_session.commit()
+
+        resp = await bff_client.get("/api/v1/briefing/ai")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert (body["weekStart"], body["headline"]) == (
+            "2026-04-20",
+            "新しい週の見出し",
+        )
 
     @pytest.mark.asyncio
     async def test_returns_briefing_with_embedded_article(
@@ -436,6 +476,56 @@ class TestListBriefings:
         assert ai_item["latest"]["inputArticleCount"] == 1
 
     @pytest.mark.asyncio
+    async def test_latest_is_most_recent_week_per_category(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """各カテゴリの latest は最新週の briefing で、未生成カテゴリは None のまま。"""
+        robotics = Category(slug="robotics", name="ロボティクス")
+        db_session.add(robotics)
+        await db_session.commit()
+        await db_session.refresh(robotics)
+        # 最新週を登録順の中間に置き、先頭・末尾の登録行を選ぶ実装では落ちるようにする。
+        for week_start, headline in [
+            (date(2026, 4, 13), "先週の見出し"),
+            (date(2026, 4, 20), "新しい週の見出し"),
+            (date(2026, 4, 6), "先々週の見出し"),
+        ]:
+            db_session.add(
+                WeeklyBriefing(
+                    week_start_date=week_start,
+                    category_id=ai_category.id,
+                    headline=headline,
+                    summary="s",
+                    chapters=[{"heading": "h", "body": "b"}],
+                    key_articles=[],
+                    watch_points=[{"statement": "w"}],
+                    model_name="deepseek-v4-pro",
+                    input_article_count=1,
+                )
+            )
+            await db_session.flush()
+        await db_session.commit()
+
+        resp = await bff_client.get("/api/v1/briefing")
+
+        assert resp.status_code == 200
+        assert resp.json()["items"] == [
+            {
+                "category": {"slug": "ai", "name": "AI"},
+                "latest": {
+                    "weekStart": "2026-04-20",
+                    "headline": "新しい週の見出し",
+                    "summary": "s",
+                    "inputArticleCount": 1,
+                },
+            },
+            {"category": {"slug": "robotics", "name": "ロボティクス"}, "latest": None},
+        ]
+
+    @pytest.mark.asyncio
     async def test_total_articles_counts_only_current_week(
         self,
         bff_client: AsyncClient,
@@ -504,7 +594,7 @@ class TestBriefingResponseSizeGuard:
     流れる経路を構造的に塞ぐ。
 
     AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 key_articles / watch_points を
-    直書きしたシナリオ。key_articles の件数は router の count guard が embed
+    直書きしたシナリオ。key_articles の件数は QueryService の count guard が embed
     fetch 前に弾き、それ以外は Field(max_length=...) が `_BriefingKeyArticle` /
     `_BriefingArticleEmbed` / `BriefingDetail(...)` 構築時に発火して、response に
     巨大 JSONB が含まれることを構造的に防ぐ。

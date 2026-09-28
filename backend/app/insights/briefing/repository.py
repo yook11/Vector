@@ -88,39 +88,6 @@ class BriefingRepository:
         )
         return (await self._session.execute(stmt)).first() is not None
 
-    async def find_latest_by_category(
-        self, *, category_id: int
-    ) -> WeeklyBriefing | None:
-        """指定カテゴリの最新 briefing 1 件を返す (なければ None)。
-
-        ix_weekly_briefings_category_week が左端 + DESC で効く。
-        """
-        stmt = (
-            select(WeeklyBriefing)
-            .where(WeeklyBriefing.category_id == category_id)
-            .order_by(WeeklyBriefing.week_start_date.desc())
-            .limit(1)
-        )
-        return (await self._session.execute(stmt)).scalar_one_or_none()
-
-    async def find_latest_for_each_category(self) -> dict[int, WeeklyBriefing]:
-        """category_id → 最新 briefing の dict を 1 クエリで返す。
-
-        未生成カテゴリは entry なし (呼出側で ``dict.get(id)`` → ``None``)。
-        PostgreSQL ``DISTINCT ON`` を使うことで、Python loop で N 回
-        ``find_latest_by_category`` を叩くより SQL 1 回で完結する。
-        """
-        stmt = (
-            select(WeeklyBriefing)
-            .order_by(
-                WeeklyBriefing.category_id,
-                WeeklyBriefing.week_start_date.desc(),
-            )
-            .distinct(WeeklyBriefing.category_id)
-        )
-        rows = (await self._session.execute(stmt)).scalars().all()
-        return {b.category_id: b for b in rows}
-
     async def find_by(
         self, *, week_start: date, category_id: int
     ) -> WeeklyBriefing | None:
