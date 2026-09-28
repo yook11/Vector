@@ -67,7 +67,7 @@ variables {
   slack_channel_id       = "C0123456789"
 }
 
-run "agent_connects_as_agent_role_during_switch" {
+run "agent_connects_only_as_agent_role" {
   command = plan
 
   assert {
@@ -76,9 +76,8 @@ run "agent_connects_as_agent_role_during_switch" {
   }
   assert {
     condition = jsondecode(aws_iam_role_policy.task["agent"].policy).Statement[0].Resource == [
-      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app",
       "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_agent",
     ]
-    error_message = "切替前のタスクが入れ替わるまで、agent段はvector_appにも接続できる。"
+    error_message = "agent段のタスクロールはvector_agentにだけ接続できる。"
   }
 }

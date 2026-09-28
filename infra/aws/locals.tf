@@ -76,11 +76,10 @@ locals {
         LOGFIRE_TOKEN            = "logfire-token"
       }
     }
-    # agent の vector_app は切替前のタスクが入れ替わるまでの接続用で、切替の確認後に外す。
     agent = {
       subnet_index   = 26, needs_broker = true
       egress_vendors = ["deepseek", "gemini", "tavily", "logfire"], egress_allow_any_domain = false
-      image          = "backend", db_users = ["vector_app", "vector_agent"]
+      image          = "backend", db_users = ["vector_agent"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/agent.conf"]
       secrets = {
