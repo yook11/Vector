@@ -1,21 +1,11 @@
 """WeeklyBriefingService — 1 カテゴリ × 1 週の briefing 生成ユースケース。
 
-Pattern A' での Stage:
-- 起動時に ``ReadyForBriefing`` を受け取り、precondition (既存 briefing 判定) は
-  Ready 側で吸収済み
-- ``execute(ready)`` は articles 取得 → LLM 呼出 → 永続化に専念
+開始条件と素材の記事は ``ReadyForBriefing`` がそろえて渡すため、ここでは
+LLM 呼出 → 永続化 → 通知だけを行う。LLM 呼出は 30-60s かかるため
+トランザクションの外で行い、書き込みだけを 1 トランザクションにまとめる。
 
-3 段階トランザクションパターン (LLM 呼出が 30-60s かかるため):
-1. read tx: articles + category 取得
-2. LLM 呼出 (no tx): DB connection を占有しない
-3. write tx: INSERT
-
-例外:
-- 例外は捕まえずに伝播させる (taskiq の retry / failure tracking に委ねる:
-  `feedback_failure_visibility.md`)
-- 「articles 0 件」は業務正常状態として ``Outcome.skipped()`` で表現する
-- race 敗北 (同時 INSERT 競合) は読み戻さず ``BriefingConflict``
-  を返す (trend_discovery と同型)
+例外は捕まえずに伝播させ、taskiq の retry と失敗監査に委ねる。
+同時 INSERT の競合に負けた場合は読み戻さず ``BriefingConflict`` を返す。
 """
 
 from __future__ import annotations
@@ -29,11 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.briefing import BriefingAuditRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.repository import (
-    BriefingArticleRepository,
-    BriefingRepository,
-)
-from app.models.category import Category
+from app.insights.briefing.repository import BriefingRepository
 
 if TYPE_CHECKING:
     # 具象 generator は composition root (broker_briefing hook) が構築し DI で渡す。
@@ -47,14 +33,8 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class GeneratedBriefing:
-    """briefing を生成・保存した (または articles 0 件で生成スキップした) outcome。
+    """briefing を生成して保存した。"""
 
-    ``persisted=False`` は「articles 0 件で生成スキップ」の正常分岐を表す。
-    既存 briefing ありの skip は ``Ready.try_advance_from`` で
-    吸収済みのためここには現れない。
-    """
-
-    persisted: bool
     week_start: date
     category_id: int
     article_count: int
@@ -86,53 +66,23 @@ class WeeklyBriefingService:
         self._notifier = notifier
 
     async def execute(self, ready: ReadyForBriefing) -> BriefingOutcome:
-        # --- read tx: articles + category 取得 ---
-        async with self._session_factory() as session:
-            articles = await BriefingArticleRepository(session).fetch(
-                week_start=ready.week_start,
-                category_id=ready.category_id,
-            )
-            category = await session.get(Category, ready.category_id)
-        if category is None:
-            raise ValueError(f"Category not found: id={ready.category_id}")
-
-        if not articles:
-            logger.info(
-                "briefing_skip_no_articles",
-                week_start=ready.week_start.isoformat(),
-                category_id=ready.category_id,
-                category_slug=category.slug,
-            )
-            # 記事ゼロは steady-state 異常系 (D2) — REJECTED で audit に焼く。
-            # 読 tx 直後の独立した別 tx で焼く (LLM 呼出も write tx も走らない)。
-            async with self._session_factory() as session:
-                await BriefingAuditRepository(session).append_generation_input_empty(
-                    ready=ready
-                )
-                await session.commit()
-            return GeneratedBriefing(
-                persisted=False,
-                week_start=ready.week_start,
-                category_id=ready.category_id,
-                article_count=0,
-            )
+        article_count = len(ready.articles)
 
         # --- LLM 呼出 (no tx, 30-60s) ---
         content = await self._llm.generate(
-            category_name=str(category.name),
+            category_name=ready.category_name,
             week_start=ready.week_start,
-            articles=articles,
+            articles=ready.articles,
         )
 
         # --- write tx: INSERT ---
         async with self._session_factory() as session:
-            briefing_repo = BriefingRepository(session)
-            saved = await briefing_repo.save(
+            saved = await BriefingRepository(session).save(
                 content,
                 week_start=ready.week_start,
                 category_id=ready.category_id,
                 model_name=self._llm.MODEL,
-                input_article_count=len(articles),
+                input_article_count=article_count,
             )
             # audit は INSERT 勝者だけが焼く (saved is None = race 敗北は沈黙、
             # 勝者プロセスが SUCCEEDED を 1 行付ける構造で完成行の重複を防ぐ)。
@@ -140,8 +90,9 @@ class WeeklyBriefingService:
             # を構造的に排除する。
             if saved is not None:
                 await BriefingAuditRepository(session).append_generation_completed(
-                    ready=ready,
-                    article_count=len(articles),
+                    week_start=ready.week_start,
+                    category_id=ready.category_id,
+                    article_count=article_count,
                     ai_model=self._llm.MODEL,
                 )
             await session.commit()
@@ -157,23 +108,24 @@ class WeeklyBriefingService:
             return BriefingConflict(
                 week_start=ready.week_start,
                 category_id=ready.category_id,
-                article_count=len(articles),
+                article_count=article_count,
             )
 
         logger.info(
             "briefing_generated",
             week_start=ready.week_start.isoformat(),
             category_id=ready.category_id,
-            category_slug=category.slug,
-            article_count=len(articles),
+            category_slug=ready.category_slug,
+            article_count=article_count,
         )
         # 永続化成功後に frontend のキャッシュ無効化を通知する。tag は frontend の
         # lib/cache/tags.ts と一致させる。notifier 内部で warn 降格するため
         # 例外は伝播しない。
-        await self._notifier.notify(tags=[f"briefing:{category.slug}", "briefing:list"])
+        await self._notifier.notify(
+            tags=[f"briefing:{ready.category_slug}", "briefing:list"]
+        )
         return GeneratedBriefing(
-            persisted=True,
             week_start=ready.week_start,
             category_id=ready.category_id,
-            article_count=len(articles),
+            article_count=article_count,
         )

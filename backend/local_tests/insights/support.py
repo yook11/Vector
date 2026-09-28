@@ -1,12 +1,13 @@
 """Insightsの試験で使う準備と観測。どちらも所有者の接続で行う。"""
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
+from app.insights.briefing.domain.ready import BriefingArticle
 
 JST = ZoneInfo("Asia/Tokyo")
 EMBEDDING_DIMENSIONS = 768
@@ -188,13 +189,17 @@ class BriefingGeneratorStub:
     calls: list[dict] = field(default_factory=list)
 
     async def generate(
-        self, *, category_name: str, week_start: date, articles: list[ArticleInput]
+        self,
+        *,
+        category_name: str,
+        week_start: date,
+        articles: Sequence[BriefingArticle],
     ) -> WeeklyBriefingContent:
         self.calls.append(
             {
                 "category_name": category_name,
                 "week_start": week_start,
-                "article_ids": [article.id for article in articles],
+                "article_ids": [article.analyzed_article_id for article in articles],
             }
         )
         if self.error is not None:

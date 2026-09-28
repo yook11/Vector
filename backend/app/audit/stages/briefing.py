@@ -22,7 +22,6 @@ from app.audit.failure_projection import (
 )
 from app.audit.repository import PipelineEventRepository
 from app.db.errors import DatabaseError
-from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.errors import BriefingError
 from app.models.category import Category
 
@@ -54,15 +53,16 @@ class BriefingAuditRepository:
     async def append_generation_completed(
         self,
         *,
-        ready: ReadyForBriefing,
+        week_start: date,
+        category_id: int,
         article_count: int,
         ai_model: str,
     ) -> None:
         """1カテゴリの briefing 生成成功を記録する。"""
-        category_slug = await self._resolve_category_slug(ready.category_id)
+        category_slug = await self._resolve_category_slug(category_id)
         payload = BriefingPayload(
-            week_start=ready.week_start.isoformat(),
-            category_id=ready.category_id,
+            week_start=week_start.isoformat(),
+            category_id=category_id,
             category_slug=category_slug,
             article_count=article_count,
             ai_model=ai_model,
@@ -76,13 +76,14 @@ class BriefingAuditRepository:
     async def append_generation_input_empty(
         self,
         *,
-        ready: ReadyForBriefing,
+        week_start: date,
+        category_id: int,
     ) -> None:
         """対象記事ゼロで LLM を呼ばなかったことを記録する。"""
-        category_slug = await self._resolve_category_slug(ready.category_id)
+        category_slug = await self._resolve_category_slug(category_id)
         payload = BriefingPayload(
-            week_start=ready.week_start.isoformat(),
-            category_id=ready.category_id,
+            week_start=week_start.isoformat(),
+            category_id=category_id,
             category_slug=category_slug,
             article_count=0,
         )
@@ -97,16 +98,18 @@ class BriefingAuditRepository:
     async def append_failure(
         self,
         *,
-        ready: ReadyForBriefing,
+        week_start: date,
+        category_id: int,
         exc: BriefingError | DatabaseError,
         retry_exhausted: bool | None,
         ai_model: str,
     ) -> None:
         """1カテゴリの briefing 生成失敗を記録する。"""
-        category_slug = await self._resolve_category_slug(ready.category_id)
+        category_slug = await self._resolve_category_slug(category_id)
         projection = self._projection_of(exc)
         await self._append_generation_failed_event(
-            ready=ready,
+            week_start=week_start,
+            category_id=category_id,
             category_slug=category_slug,
             exc=exc,
             retry_exhausted=retry_exhausted,
@@ -117,15 +120,17 @@ class BriefingAuditRepository:
     async def append_unexpected_failure(
         self,
         *,
-        ready: ReadyForBriefing,
+        week_start: date,
+        category_id: int,
         exc: BaseException,
         retry_exhausted: bool | None,
         ai_model: str,
     ) -> None:
         """想定外の briefing 生成失敗を unknown として記録する。"""
-        category_slug = await self._resolve_category_slug(ready.category_id)
+        category_slug = await self._resolve_category_slug(category_id)
         await self._append_generation_failed_event(
-            ready=ready,
+            week_start=week_start,
+            category_id=category_id,
             category_slug=category_slug,
             exc=exc,
             retry_exhausted=retry_exhausted,
@@ -136,7 +141,8 @@ class BriefingAuditRepository:
     async def _append_generation_failed_event(
         self,
         *,
-        ready: ReadyForBriefing,
+        week_start: date,
+        category_id: int,
         category_slug: str | None,
         exc: BaseException,
         retry_exhausted: bool | None,
@@ -146,8 +152,8 @@ class BriefingAuditRepository:
         payload = BriefingPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
-            week_start=ready.week_start.isoformat(),
-            category_id=ready.category_id,
+            week_start=week_start.isoformat(),
+            category_id=category_id,
             category_slug=category_slug,
             ai_model=ai_model,
             retry_exhausted=retry_exhausted,

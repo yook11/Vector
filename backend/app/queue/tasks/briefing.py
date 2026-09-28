@@ -9,12 +9,13 @@
   カテゴリ単位の enqueue 監査と週 1 行の summary 監査を焼く。
 - ``generate_briefing_for_category``: 1 カテゴリ × 1 週の生成。Service に委譲。
   失敗は監査に焼いた上で raise (taskiq の retry / failure tracking を維持)
-- precondition (既存 briefing 判定) は ``ReadyForBriefing.try_advance_from`` 側
+- 開始条件は ``ReadyForBriefing.from_facts`` が判定する
 
 エラー方針 (``feedback_failure_visibility.md``):
 - subtask は監査に焼いた後 raise し、taskiq の retry を継続する。
 - dispatcher は 1 カテゴリの enqueue 失敗を監査して続行する。
-- 既存 briefing あり (Ready が None) は監査に焼かず log で観測して正常終了する。
+- 既存 briefing ありは監査に焼かず log で観測し、記事 0 件は REJECTED を焼いて
+  正常終了する。
 """
 
 from __future__ import annotations
@@ -35,8 +36,14 @@ from app.audit.stages.briefing import (
 )
 from app.config import settings
 from app.db.errors import DatabaseError
-from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
+from app.insights.briefing.domain.briefing import (
+    latest_completed_week_start,
+    now_in_jst,
+)
+from app.insights.briefing.domain.ready import (
+    BriefingReadyBuildRejectionReason,
+    ReadyForBriefing,
+)
 from app.insights.briefing.errors import BriefingError
 from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.service import BriefingConflict, WeeklyBriefingService
@@ -251,22 +258,6 @@ async def generate_briefing_for_category(
     """1 カテゴリ × 1 週の briefing を生成する。失敗は監査して raise する。"""
     with pipeline_stage_span(Stage.BRIEFING, op="generate_briefing_for_category"):
         session_factory: async_sessionmaker[AsyncSession] = ctx.state.session_factory
-        async with session_factory() as session:
-            repo = BriefingRepository(session)
-            ready = await ReadyForBriefing.try_advance_from(
-                week_start=input_.week_start,
-                category_id=input_.category_id,
-                briefing_repo=repo,
-            )
-        if ready is None:
-            # 既存 briefing あり = benign な冪等 skip。監査に焼かず log で観測する。
-            logger.info(
-                "briefing_subtask_skipped_existing",
-                week_start=input_.week_start.isoformat(),
-                category_id=input_.category_id,
-            )
-            return
-
         notifier = FrontendRevalidateNotifier.from_settings(settings)
         # generator は composition root が broker_briefing 起動時に state へ wire する
         # (Pure DI / 遅延 SDK import: app/queue/composition.py)。
@@ -277,21 +268,58 @@ async def generate_briefing_for_category(
         # is_last_attempt(ctx) で give-up timing を判定し、retry 上限到達時のみ
         # payload.retry_exhausted=True を焼く。
         try:
-            outcome = await service.execute(ready)
+            async with session_factory() as session:
+                facts = await BriefingRepository(session).load_ready_build_facts(
+                    week_start=input_.week_start, category_id=input_.category_id
+                )
+            build_result = ReadyForBriefing.from_facts(
+                week_start=input_.week_start,
+                category_id=input_.category_id,
+                facts=facts,
+            )
+            if build_result is BriefingReadyBuildRejectionReason.ALREADY_GENERATED:
+                # 既存 briefing あり = benign な冪等 skip。監査に焼かず log で観測する。
+                logger.info(
+                    "briefing_subtask_skipped_existing",
+                    week_start=input_.week_start.isoformat(),
+                    category_id=input_.category_id,
+                )
+                return
+            if build_result is BriefingReadyBuildRejectionReason.NO_ARTICLES:
+                logger.info(
+                    "briefing_skip_no_articles",
+                    week_start=input_.week_start.isoformat(),
+                    category_id=input_.category_id,
+                )
+                async with session_factory() as session:
+                    await BriefingAuditRepository(
+                        session
+                    ).append_generation_input_empty(
+                        week_start=input_.week_start,
+                        category_id=input_.category_id,
+                    )
+                    await session.commit()
+                return
+            if build_result is BriefingReadyBuildRejectionReason.CATEGORY_MISSING:
+                # dispatch 後に削除された場合だけ起きるため、失敗として表に出す。
+                raise ValueError(f"Category not found: id={input_.category_id}")
+            outcome = await service.execute(build_result)
         except Exception as exc:
             async with session_factory() as session:
                 repo = BriefingAuditRepository(session)
                 retry_exhausted = True if is_last_attempt(ctx) else None
                 if isinstance(exc, (BriefingError, DatabaseError)):
                     await repo.append_failure(
-                        ready=ready,
+                        week_start=input_.week_start,
+                        category_id=input_.category_id,
                         exc=exc,
                         retry_exhausted=retry_exhausted,
                         ai_model=service._llm.MODEL,
                     )
                 else:
                     await repo.append_unexpected_failure(
-                        ready=ready,
+                        week_start=input_.week_start,
+                        category_id=input_.category_id,
                         exc=exc,
                         retry_exhausted=retry_exhausted,
                         ai_model=service._llm.MODEL,
@@ -312,5 +340,4 @@ async def generate_briefing_for_category(
             week_start=outcome.week_start.isoformat(),
             category_id=outcome.category_id,
             article_count=outcome.article_count,
-            persisted=outcome.persisted,
         )
