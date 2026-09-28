@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from app.agent.runs.projection import build_research_message_run
@@ -23,13 +24,15 @@ from app.shared.security.safe_url import SafeUrl
 
 def build_research_thread_list_item(
     *,
-    thread: AgentThread,
+    thread_id: UUID,
+    title: str,
+    updated_at: datetime,
     has_active_run: bool,
 ) -> ResearchThreadListItem:
     return ResearchThreadListItem(
-        thread_id=thread.id,
-        title=thread.title,
-        updated_at=thread.updated_at,
+        thread_id=thread_id,
+        title=title,
+        updated_at=updated_at,
         has_active_run=has_active_run,
     )
 
