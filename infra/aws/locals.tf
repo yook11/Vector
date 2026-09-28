@@ -62,11 +62,10 @@ locals {
         LOGFIRE_TOKEN            = "logfire-token"
       }
     }
-    # insights の vector_app は切替前のタスクが入れ替わるまでの接続用で、切替の確認後に外す。
     insights = {
       subnet_index   = 25, needs_broker = true
       egress_vendors = ["deepseek", "logfire"], egress_allow_any_domain = false
-      image          = "backend", db_users = ["vector_app", "vector_insights"]
+      image          = "backend", db_users = ["vector_insights"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/insights.conf"]
       secrets = {
