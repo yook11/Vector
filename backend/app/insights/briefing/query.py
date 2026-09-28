@@ -67,23 +67,12 @@ class BriefingQueryService:
                     week_start=briefing.week_start_date,
                     headline=briefing.headline,
                     summary=briefing.summary,
-                    input_article_count=briefing.input_article_count,
                 )
             )
             items.append(
                 BriefingListItem(category=_to_category(category), latest=latest)
             )
-        # 「今週 N 件を解析」用なので、生成が遅れた古い週の briefing は数えない。
-        total_articles = sum(
-            briefing.input_article_count
-            for briefing in latest_by_category.values()
-            if briefing.week_start_date == current_week_start
-        )
-        return BriefingListResponse(
-            current_week_start=current_week_start,
-            total_articles=total_articles,
-            items=items,
-        )
+        return BriefingListResponse(current_week_start=current_week_start, items=items)
 
     async def get_latest(self, category_slug: str) -> BriefingResponse:
         category = await self._fetch_category(category_slug)
@@ -114,8 +103,6 @@ class BriefingQueryService:
         return BriefingDetail(
             week_start=briefing.week_start_date,
             generated_at=briefing.generated_at,
-            model_name=briefing.model_name,
-            input_article_count=briefing.input_article_count,
             category=_to_category(category),
             headline=briefing.headline,
             summary=briefing.summary,
