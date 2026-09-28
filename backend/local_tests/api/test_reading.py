@@ -174,7 +174,6 @@ async def test_briefing_list_marks_categories_without_briefing(
                     "weekStart": "2026-09-14",
                     "headline": "今週の見出し",
                     "summary": "今週の要約",
-                    "inputArticleCount": 1,
                 }
                 if category == briefed
                 else None
@@ -223,8 +222,6 @@ async def test_briefing_detail_returns_saved_briefing(
         "state": "briefing",
         "weekStart": "2026-09-14",
         "generatedAt": "2026-09-21T00:00:00Z",
-        "modelName": "test-model",
-        "inputArticleCount": 1,
         "category": {"slug": category.slug, "name": category.name},
         "headline": "今週の見出し",
         "summary": "今週の要約",

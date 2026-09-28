@@ -96,14 +96,6 @@ export type BriefingDetail = {
      * Generatedat
      */
     generatedAt: string;
-    /**
-     * Modelname
-     */
-    modelName: string;
-    /**
-     * Inputarticlecount
-     */
-    inputArticleCount: number;
     category: CategoryEmbed;
     /**
      * Headline
@@ -143,19 +135,13 @@ export type BriefingListItem = {
  * ``GET /api/v1/briefing`` のレスポンス。
  *
  * ``items`` は ``Category.id`` 昇順で 11 カテゴリ全部を返す。並び順は
- * backend で確定し、frontend での sort を不要にする。``total_articles`` は
- * ``current_week_start`` 週に生成された briefing の ``input_article_count``
- * 合計 (masthead「今週 N 件を解析」用、古い週の stale briefing は含めない)。
+ * backend で確定し、frontend での sort を不要にする。
  */
 export type BriefingListResponse = {
     /**
      * Currentweekstart
      */
     currentWeekStart: string;
-    /**
-     * Totalarticles
-     */
-    totalArticles: number;
     /**
      * Items
      */
@@ -168,7 +154,7 @@ export type BriefingListResponse = {
  * 一覧行に同梱する briefing 要約 (``BriefingListItem.latest``)。
  *
  * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
- * 一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
+ * 一覧バンド表示用に見出し / summary を同梱する。詳細
  * (``BriefingDetail``) と異なり chapters / keyArticles は持たない。
  */
 export type BriefingSummary = {
@@ -184,10 +170,6 @@ export type BriefingSummary = {
      * Summary
      */
     summary: string;
-    /**
-     * Inputarticlecount
-     */
-    inputArticleCount: number;
 };
 
 /**

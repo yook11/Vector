@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -18,8 +18,6 @@ from app.insights.briefing.domain.briefing import (
     MAX_KEY_ARTICLES_PER_BRIEFING,
     MAX_WATCH_POINT_STATEMENT_LEN,
     MAX_WATCH_POINTS_PER_BRIEFING,
-    latest_completed_week_start,
-    now_in_jst,
 )
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
@@ -217,8 +215,6 @@ class TestGetBriefing:
         assert body["chapters"] == [
             {"heading": "資金とインフラ", "body": "今週の流れの本文"}
         ]
-        assert body["modelName"] == "deepseek-v4-pro"
-        assert body["inputArticleCount"] == 1
         # watchPoints は wrapper のない list[str]
         assert body["watchPoints"] == ["今後どこを見るべきか"]
         # keyArticles は編集判断 + 参照記事の自己完結 nested
@@ -437,8 +433,6 @@ class TestListBriefings:
         # どちらも未生成なので latest は None
         for item in body["items"]:
             assert item["latest"] is None
-        # 生成済が無いので解析記事総数は 0
-        assert body["totalArticles"] == 0
 
     @pytest.mark.asyncio
     async def test_includes_headline_for_generated_item(
@@ -469,9 +463,8 @@ class TestListBriefings:
         assert ai_item["latest"]["weekStart"] == "2026-04-20"
         # 一覧は短い headline をそのまま返す (旧 headlineExcerpt 抜粋ロジックは廃止)
         assert ai_item["latest"]["headline"] == "今週のヘッドライン"
-        # バンドカード用に summary / 件数も同梱する
+        # バンドカード用に summary も同梱する
         assert ai_item["latest"]["summary"] == "今週の総括リード"
-        assert ai_item["latest"]["inputArticleCount"] == 1
 
     @pytest.mark.asyncio
     async def test_latest_is_most_recent_week_per_category(
@@ -517,55 +510,10 @@ class TestListBriefings:
                     "weekStart": "2026-04-20",
                     "headline": "新しい週の見出し",
                     "summary": "s",
-                    "inputArticleCount": 1,
                 },
             },
             {"category": {"slug": "robotics", "name": "ロボティクス"}, "latest": None},
         ]
-
-    @pytest.mark.asyncio
-    async def test_total_articles_counts_only_current_week(
-        self,
-        bff_client: AsyncClient,
-        db_session: AsyncSession,
-        ai_category: Category,
-    ) -> None:
-        """totalArticles は今週生成された briefing のみ合計し、古い週の stale
-        briefing (生成が遅れたカテゴリの latest) は含めない。"""
-        current_week = latest_completed_week_start(now_in_jst())
-        old_week = current_week - timedelta(days=7)
-
-        robotics = Category(slug="robotics", name="ロボティクス")
-        db_session.add(robotics)
-        await db_session.commit()
-        await db_session.refresh(robotics)
-
-        # ai は今週分 (count=7)、robotics は古い週の stale briefing (count=40)
-        seeds = {
-            ai_category.id: (current_week, 7),
-            robotics.id: (old_week, 40),
-        }
-        for category_id, (week, count) in seeds.items():
-            db_session.add(
-                WeeklyBriefing(
-                    week_start_date=week,
-                    category_id=category_id,
-                    headline="h",
-                    summary="s",
-                    chapters=[{"heading": "h", "body": "b"}],
-                    key_articles=[{"analyzed_article_id": 1, "significance": "s"}],
-                    watch_points=[{"statement": "w"}],
-                    model_name="deepseek-v4-pro",
-                    input_article_count=count,
-                )
-            )
-        await db_session.commit()
-
-        resp = await bff_client.get("/api/v1/briefing")
-        assert resp.status_code == 200
-        body = resp.json()
-        # 今週分の 7 のみ。古い週の 40 は「今週の解析量」に含めない
-        assert body["totalArticles"] == 7
 
     @pytest.mark.asyncio
     async def test_orders_items_by_category_id(
