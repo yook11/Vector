@@ -92,7 +92,12 @@ class AgentThreadRepository:
         )
         rows = (
             await self._session.execute(
-                select(AgentThread, has_active_run.label("has_active_run"))
+                select(
+                    AgentThread.id,
+                    AgentThread.title,
+                    AgentThread.updated_at,
+                    has_active_run.label("has_active_run"),
+                )
                 .where(AgentThread.user_id == user_id)
                 .order_by(AgentThread.updated_at.desc(), AgentThread.id.desc())
                 .offset(pagination.offset)
@@ -102,10 +107,12 @@ class AgentThreadRepository:
         return PaginatedResearchThreadResponse.create(
             items=[
                 build_research_thread_list_item(
-                    thread=thread,
+                    thread_id=thread_id,
+                    title=title,
+                    updated_at=updated_at,
                     has_active_run=bool(has_active),
                 )
-                for thread, has_active in rows
+                for thread_id, title, updated_at, has_active in rows
             ],
             total=total,
             pagination=pagination,

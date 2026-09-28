@@ -2,23 +2,47 @@
 
 from sqlalchemy import exists, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import contains_eager, defer, selectinload
+from sqlalchemy.orm import contains_eager, defer, load_only, selectinload
 
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
+from app.models.news_source import NewsSource
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
 def article_eager_options_brief() -> list:
     """一覧用. 呼び出し側で curation → article まで join 済みであること."""
     return [
+        load_only(
+            AnalyzedArticleRecord.id,
+            AnalyzedArticleRecord.curation_id,
+            AnalyzedArticleRecord.category_id,
+            AnalyzedArticleRecord.translated_title,
+            AnalyzedArticleRecord.summary,
+            AnalyzedArticleRecord.key_points,
+            raiseload=True,
+        ),
         contains_eager(AnalyzedArticleRecord.curation)
+        .load_only(
+            ArticleCuration.id,
+            ArticleCuration.analyzable_article_id,
+            raiseload=True,
+        )
         .contains_eager(ArticleCuration.analyzable_article)
         .options(
-            defer(AnalyzableArticleRecord.original_content, raiseload=True),
-            selectinload(AnalyzableArticleRecord.news_source),
+            load_only(
+                AnalyzableArticleRecord.id,
+                AnalyzableArticleRecord.source_id,
+                AnalyzableArticleRecord.published_at,
+                raiseload=True,
+            ),
+            selectinload(AnalyzableArticleRecord.news_source).load_only(
+                NewsSource.name,
+                NewsSource.attribution_label,
+                raiseload=True,
+            ),
         ),
         # category は AnalyzedArticleRecord ルート相対なので上の chain には入れない.
         selectinload(AnalyzedArticleRecord.category),
@@ -57,14 +81,16 @@ class ArticleRepository:
             .join(ArticleCuration.analyzable_article)
             .options(*article_eager_options_brief())
         )
+        count_stmt = select(func.count()).select_from(AnalyzedArticleRecord)
 
         # フィルタ
         if query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
-            stmt = stmt.where(AnalyzedArticleRecord.category_id.in_(cat_id_sub))
+            category_filter = AnalyzedArticleRecord.category_id.in_(cat_id_sub)
+            stmt = stmt.where(category_filter)
+            count_stmt = count_stmt.where(category_filter)
 
         # 総件数
-        count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
         # ソート。published_at は NOT NULL (ドメイン不変条件 + DB 制約)。

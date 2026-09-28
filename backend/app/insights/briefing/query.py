@@ -55,22 +55,15 @@ class BriefingQueryService:
     async def list_latest(self) -> BriefingListResponse:
         current_week_start = latest_completed_week_start(now_in_jst())
         categories = await self._fetch_categories()
-        latest_by_category = await self._fetch_latest_briefing_for_each_category()
+        latest_by_category = await self._fetch_latest_summary_for_each_category()
 
         items: list[BriefingListItem] = []
         for category in categories:
-            briefing = latest_by_category.get(category.id)
-            latest = (
-                None
-                if briefing is None
-                else BriefingSummary(
-                    week_start=briefing.week_start_date,
-                    headline=briefing.headline,
-                    summary=briefing.summary,
-                )
-            )
             items.append(
-                BriefingListItem(category=_to_category(category), latest=latest)
+                BriefingListItem(
+                    category=_to_category(category),
+                    latest=latest_by_category.get(category.id),
+                )
             )
         return BriefingListResponse(current_week_start=current_week_start, items=items)
 
@@ -130,19 +123,31 @@ class BriefingQueryService:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def _fetch_latest_briefing_for_each_category(
+    async def _fetch_latest_summary_for_each_category(
         self,
-    ) -> dict[int, WeeklyBriefing]:
+    ) -> dict[int, BriefingSummary]:
         stmt = (
-            select(WeeklyBriefing)
+            select(
+                WeeklyBriefing.category_id,
+                WeeklyBriefing.week_start_date,
+                WeeklyBriefing.headline,
+                WeeklyBriefing.summary,
+            )
             .order_by(
                 WeeklyBriefing.category_id,
                 WeeklyBriefing.week_start_date.desc(),
             )
             .distinct(WeeklyBriefing.category_id)
         )
-        rows = (await self._session.execute(stmt)).scalars().all()
-        return {briefing.category_id: briefing for briefing in rows}
+        rows = (await self._session.execute(stmt)).all()
+        return {
+            row.category_id: BriefingSummary(
+                week_start=row.week_start_date,
+                headline=row.headline,
+                summary=row.summary,
+            )
+            for row in rows
+        }
 
     async def _fetch_article_embeds(
         self, analyzed_article_ids: set[int]
