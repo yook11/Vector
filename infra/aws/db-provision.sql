@@ -16,13 +16,13 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector')
 SELECT format('CREATE ROLE %I WITH LOGIN', r)
 FROM unnest(ARRAY['vector_auth', 'vector_app', 'vector_collect', 'vector_outbox_relay',
                   'vector_auth_rate_limit_cleanup', 'vector_article_analysis',
-                  'vector_backfill', 'vector_api', 'vector_insights']) AS r
+                  'vector_backfill', 'vector_api', 'vector_insights', 'vector_agent']) AS r
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r)
 \gexec
 
 GRANT rds_iam TO vector_auth, vector_app, vector_collect, vector_outbox_relay,
     vector_auth_rate_limit_cleanup, vector_article_analysis, vector_backfill, vector_api,
-    vector_insights;
+    vector_insights, vector_agent;
 
 -- migration にも CREATE EXTENSION IF NOT EXISTS vector があるが、owner 権限で
 -- 作れない環境に備えて master 側でも先に作る (冪等なので二重でも無害)。
