@@ -43,7 +43,7 @@ DMLはSELECT・INSERT・UPDATE・DELETEを表す。
 | vector_api | public.agent_runs | SELECT・INSERT、status・error_code列のUPDATE |
 | vector_api | public.agent_user_daily_quotas | SELECT・INSERT、used_count列のUPDATE |
 | vector_api | public.pipeline_events | stage・event_type・outcome_code・source_id・occurred_atのSELECT |
-| vector_insights | public.analyzed_articles・categories | SELECT |
+| vector_insights | public.analyzable_articles・article_curations・analyzed_articles・categories | SELECT |
 | vector_insights | public.trends_snapshots・weekly_briefings | SELECT・INSERT |
 | vector_insights | public.pipeline_events | INSERT、id・occurred_atのSELECT |
 | vector_agent | public.analyzable_articles・article_curations・analyzed_articles・categories・news_sources・weekly_briefings・trends_snapshots | SELECT |

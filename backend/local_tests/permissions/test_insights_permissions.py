@@ -13,11 +13,29 @@ from local_tests.permissions.support import (
 
 ROLE = "vector_insights"
 # トレンドの集計とブリーフィングの入力に読む表。
-READ_TABLES = ("analyzed_articles", "categories")
+READ_TABLES = (
+    "analyzable_articles",
+    "article_curations",
+    "analyzed_articles",
+    "categories",
+)
 # 生成済みかを確かめ、追加だけで保存する成果物の表。
 OUTPUT_TABLES = ("trends_snapshots", "weekly_briefings")
 SEQUENCE_TABLES = {"weekly_briefings", "pipeline_events"}
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT * FROM public.analyzable_articles",
+        "SELECT * FROM public.article_curations",
+    ],
+)
+async def test_insights_can_read_all_columns_of_article_tables(system_database, query):
+    """記事2表の全列をInsightsロール自身で参照できる。"""
+    async with system_database.connect(ROLE) as connection:
+        assert await connection.fetch(query) == []
 
 
 async def test_insights_has_only_listed_table_permissions(system_database):
