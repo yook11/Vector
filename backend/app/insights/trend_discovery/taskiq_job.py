@@ -1,20 +1,4 @@
-"""Trend Discovery ServiceをTaskiqへ登録するcron job。
-
-スケジュール:
-- ``CRON_TREND_DISCOVERY`` (UTC) = JST 毎日 00:05 — 直近完了 7 日窓
-  (``[今日0:00 - 7d, 今日0:00)`` JST) を集計し、
-  集計対象 analysis がある場合のみ ``trends_snapshots`` に 1 行 INSERT する
-
-責務:
-- Taskiq Contextからworker所有のsession factoryを取り出す
-- ``TrendDiscoveryService.create()`` を呼ぶ
-- task名、cron、timeout、retryをbrokerへ登録する
-
-エラー方針 (feedback_failure_visibility.md):
-- 例外は捕まえずに伝播させる (taskiq 側の retry/log に委ねる)
-- 既存 snapshot あり (Ready が None) は正常終了として扱う
-- 集計対象記事 0 件は Service の正常 skip として扱う
-"""
+"""トレンド生成をTaskiqの定期タスクとして登録する。"""
 
 from __future__ import annotations
 
@@ -29,7 +13,7 @@ from app.shared.revalidate import FrontendRevalidateNotifier
 
 
 async def run_trend_discovery(ctx: Context = TaskiqDepends()) -> None:
-    """workerのresourceを使ってTrend Discoveryを作成する。"""
+    """ワーカーのセッションと通知設定を使ってトレンドを生成する。"""
     with pipeline_stage_span(Stage.TREND_DISCOVERY, op="run_trend_discovery"):
         service = TrendDiscoveryService(ctx.state.session_factory)
         notifier = FrontendRevalidateNotifier.from_settings(settings)
@@ -39,7 +23,7 @@ async def run_trend_discovery(ctx: Context = TaskiqDepends()) -> None:
 def register_trend_discovery_task(
     broker: AsyncBroker,
 ) -> AsyncTaskiqDecoratedTask:
-    """Trend Discovery taskを指定されたbrokerへ登録する。"""
+    """トレンド生成タスクを指定されたブローカーへ登録する。"""
     return broker.register_task(
         run_trend_discovery,
         task_name="run_trend_discovery",

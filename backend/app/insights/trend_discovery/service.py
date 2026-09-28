@@ -1,33 +1,11 @@
-"""TrendDiscoveryService — rolling 7d の trend 発見 → bundle 構築 → INSERT を 1 ユース
-ケースとして組み立てる。
-
-責務:
-- 1 ユースケース = 1 session = 1 トランザクション (集計 SELECT も snapshot
-  INSERT も同一トランザクション内で実行する)
-- 集計対象の window は ``[current_start, current_end)`` を JST 00:00 起点
-  で計算し、UTC-aware datetime に変換して repository に渡す
-- snapshot は 1 単位保存が責務 (feedback_snapshot_responsibility.md)
-- 例外は捕まえず raise する (Task の retry に委ねる:
-  feedback_failure_visibility.md)
-
-Pattern A' での Stage F:
-- ``create()`` は最新の対象期間について precondition、生成、監査、通知を完結させる
-- 起動時に ``ReadyForTrendDiscovery`` を受け取り、precondition (既存 snapshot 判定) は
-  Ready 側で吸収済み
-- ``execute(ready)`` は集計対象記事の件数を先に確認し、0 件なら保存せず
-  ``SkippedNoTargetArticles`` を返す
-- race 敗北 (同時 INSERT 競合) は読み戻しせず
-  ``TrendDiscoveryConflict`` を返す
-"""
+"""トレンドの開始条件を確認し、集計・保存・監査・通知を順に行う。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import UTC, date, datetime
 
 import structlog
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import EventType
@@ -35,19 +13,18 @@ from app.audit.stages.trend_discovery import (
     TrendDiscoveryOutcomeCode,
     append_trend_discovery_run_event_best_effort,
 )
-from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
+from app.insights.trend_discovery.domain.ready import (
+    ReadyForTrendDiscovery,
+    TrendDiscoveryReadyBuildRejectionReason,
+)
 from app.insights.trend_discovery.domain.trend import (
     CategoryTrends,
     MentionKey,
     RankedMention,
     TrendsBundle,
+    TrendWindow,
     select_fastest_growing,
     select_most_mentioned,
-)
-from app.insights.trend_discovery.domain.window import (
-    WEEK_TZ,
-    latest_window_end,
-    now_in_jst,
 )
 from app.insights.trend_discovery.repository import (
     SnapshotRepository,
@@ -61,25 +38,13 @@ from app.shared.revalidate import RevalidateNotifier
 
 logger = structlog.get_logger(__name__)
 
-_WEEK = timedelta(days=7)
-
-# 生成成功後に frontend へ revalidate を打つ cache tag。frontend の
-# lib/cache/tags.ts (cacheTags.trends) と一致させること。
+# フロントエンドのcacheTags.trendsと揃える。
 TRENDS_REVALIDATE_TAGS: tuple[str, ...] = ("trends",)
-
-
-# ---------------------------------------------------------------------------
-# Outcome — Service 戻り値
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class TrendDiscoveryCompleted:
-    """trend discovery が完了し、snapshot を保存した。
-
-    既存 snapshot ありの skip ケースは ``Ready.try_advance_from`` で吸収済みのため
-    Service.execute の戻り値からは消えている (Pattern A')。
-    """
+    """トレンドの集計結果を保存した。"""
 
     window_end: date
     source_analysis_count: int
@@ -87,8 +52,15 @@ class TrendDiscoveryCompleted:
 
 
 @dataclass(frozen=True, slots=True)
+class SkippedAlreadyGenerated:
+    """同じ期間の生成結果が保存済みのため開始しなかった。"""
+
+    window_end: date
+
+
+@dataclass(frozen=True, slots=True)
 class SkippedNoTargetArticles:
-    """snapshot 集計対象の分析済み記事が 0 件のため生成を行わなかった。"""
+    """対象の分析済み記事がないため生成しなかった。"""
 
     window_end: date
     source_analysis_count: int = 0
@@ -97,7 +69,7 @@ class SkippedNoTargetArticles:
 
 @dataclass(frozen=True, slots=True)
 class TrendDiscoveryConflict:
-    """同時実行により別 worker が先に保存したため、自 worker は保存しなかった。"""
+    """同時実行した別のワーカーが先に保存したため、保存しなかった。"""
 
     window_end: date
     source_analysis_count: int
@@ -105,67 +77,41 @@ class TrendDiscoveryConflict:
 
 
 TrendDiscoveryOutcome = (
-    TrendDiscoveryCompleted | SkippedNoTargetArticles | TrendDiscoveryConflict
+    TrendDiscoveryCompleted
+    | SkippedAlreadyGenerated
+    | SkippedNoTargetArticles
+    | TrendDiscoveryConflict
 )
 
 
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
-
-
 class TrendDiscoveryService:
-    """直近7日間に公開された分析済み記事からトレンドを作成する。
-
-    1 session = 1 トランザクションとして集計と INSERT を atomic に実行する。
-    """
+    """トレンドの準備・集計・保存と、結果に応じた監査・通知を担う。"""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
     async def create(self, notifier: RevalidateNotifier) -> None:
-        """最新の完了済み7日間を対象にTrend Discoveryを作成する。"""
-        window_end = latest_window_end(now_in_jst())
-        window_start = window_end - _WEEK
-
+        """直近の完了済み7日間のトレンドを作成する。"""
+        window = TrendWindow.latest(datetime.now(UTC))
         try:
-            async with self._session_factory() as session:
-                snapshot_repo = SnapshotRepository(session)
-                ready = await ReadyForTrendDiscovery.try_advance_from(
-                    window_end=window_end,
-                    snapshot_repo=snapshot_repo,
-                )
+            outcome = await self.execute(window)
         except Exception as exc:
             await append_trend_discovery_run_event_best_effort(
                 self._session_factory,
                 event_type=EventType.FAILED,
                 outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
-                window_start=window_start,
-                window_end=window_end,
+                window_start=window.window_start,
+                window_end=window.window_end,
                 exc=exc,
             )
             raise
 
-        if ready is None:
+        if isinstance(outcome, SkippedAlreadyGenerated):
             logger.info(
                 "trend_discovery_task_skipped_already_exists",
-                window_end=window_end.isoformat(),
+                window_end=outcome.window_end.isoformat(),
             )
             return
-
-        try:
-            outcome = await self.execute(ready)
-        except Exception as exc:
-            await append_trend_discovery_run_event_best_effort(
-                self._session_factory,
-                event_type=EventType.FAILED,
-                outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
-                window_start=window_start,
-                window_end=window_end,
-                exc=exc,
-            )
-            raise
-
         if isinstance(outcome, SkippedNoTargetArticles):
             logger.info(
                 "trend_discovery_task_skipped_no_target_articles",
@@ -185,7 +131,7 @@ class TrendDiscoveryService:
             self._session_factory,
             event_type=EventType.SUCCEEDED,
             outcome_code=TrendDiscoveryOutcomeCode.RUN_COMPLETED,
-            window_start=window_start,
+            window_start=window.window_start,
             window_end=outcome.window_end,
             source_analysis_count=outcome.source_analysis_count,
             completed_category_count=outcome.completed_category_count,
@@ -199,98 +145,66 @@ class TrendDiscoveryService:
         )
         await notifier.notify(tags=TRENDS_REVALIDATE_TAGS)
 
-    async def execute(self, ready: ReadyForTrendDiscovery) -> TrendDiscoveryOutcome:
-        """``ready`` で指定された window_end の snapshot を集計・永続化する。
-
-        precondition (既存 snapshot 判定) は ``ReadyForTrendDiscovery.try_advance_from``
-        側で吸収済み。本メソッドは集計対象記事の件数を確認し、0 件なら
-        category 集計・保存に進まない。
-
-        集計窓は rolling 7d:
-        - ``current  = [window_end - 7d, window_end)``
-        - ``previous = [window_end - 14d, window_end - 7d)`` (伸び率の前週比較用)
-
-        race 敗北 (同時 INSERT 競合) は読み戻しせず
-        ``TrendDiscoveryConflict`` を返す。
-        """
+    async def execute(self, window: TrendWindow) -> TrendDiscoveryOutcome:
+        """準備から保存までを同じセッションで扱い、開始条件を満たした期間を集計する。"""
         async with self._session_factory() as session:
-            snapshot_repo = SnapshotRepository(session)
-            trends_repo = TrendsRepository(session)
-
-            current_end = self._jst_midnight_utc(ready.window_end)
-            current_start = current_end - _WEEK
-            source_count = await trends_repo.count_source_analyses(
-                current_start=current_start, current_end=current_end
+            facts = await TrendsRepository(session).load_ready_build_facts(
+                window=window
             )
-            if source_count == 0:
-                logger.info(
-                    "trend_discovery_skipped_no_target_articles",
-                    window_end=ready.window_end.isoformat(),
-                )
-                return SkippedNoTargetArticles(window_end=ready.window_end)
-
-            categories = await self._fetch_categories(session)
-            previous_start = current_start - _WEEK
-
-            category_trends_list: list[CategoryTrends] = []
-            for cat in categories:
-                category_trends_list.append(
-                    await self._build_category_trends(
-                        trends_repo,
-                        category=cat,
-                        current_start=current_start,
-                        current_end=current_end,
-                        previous_start=previous_start,
-                    )
-                )
-            category_trends = tuple(category_trends_list)
-            completed_category_count = len(category_trends)
-            bundle = TrendsBundle(
-                window_end=ready.window_end, category_trends=category_trends
-            )
-
-            # snapshot は API レスポンス (camelCase) をそのまま焼く。読取側は保存済
-            # bundle を Trends schema で再検証してから返す (router)。generated_at は
-            # JSON と DB列の双方へ同値を入れるためアプリ側で1つ確定する。
-            generated_at = datetime.now(UTC)
-            response = trends_from_snapshot(
-                bundle=bundle,
-                generated_at=generated_at,
-                source_analysis_count=source_count,
-            )
-            snapshot = TrendsSnapshot(
-                window_end=ready.window_end,
-                bundle=response.model_dump(mode="json", by_alias=True),
-                source_analysis_count=source_count,
-                generated_at=generated_at,
-            )
-            save_result = await snapshot_repo.save(snapshot)
+            ready = ReadyForTrendDiscovery.from_facts(window=window, facts=facts)
+            if ready is TrendDiscoveryReadyBuildRejectionReason.ALREADY_GENERATED:
+                return SkippedAlreadyGenerated(window_end=window.window_end)
+            if ready is TrendDiscoveryReadyBuildRejectionReason.NO_ARTICLES:
+                return SkippedNoTargetArticles(window_end=window.window_end)
+            outcome = await self._generate(session, ready)
             await session.commit()
+            return outcome
 
-            if save_result.status == SnapshotSaveStatus.CONFLICT:
-                logger.info(
-                    "trend_discovery_conflict",
-                    window_end=ready.window_end.isoformat(),
-                    category_count=completed_category_count,
-                    source_analysis_count=source_count,
+    async def _generate(
+        self, session: AsyncSession, ready: ReadyForTrendDiscovery
+    ) -> TrendDiscoveryCompleted | TrendDiscoveryConflict:
+        """開始条件を満たした期間を集計し、既存行を上書きせず保存する。"""
+        window = ready.window
+        trends_repo = TrendsRepository(session)
+        categories = await trends_repo.get_categories()
+        category_trends_list: list[CategoryTrends] = []
+        for cat in categories:
+            category_trends_list.append(
+                await self._build_category_trends(
+                    trends_repo,
+                    category=cat,
+                    current_start=window.current_start,
+                    current_end=window.current_end,
+                    previous_start=window.previous_start,
                 )
-                return TrendDiscoveryConflict(
-                    window_end=ready.window_end,
-                    source_analysis_count=source_count,
-                    completed_category_count=completed_category_count,
-                )
-
-            logger.info(
-                "trend_discovery_completed",
-                window_end=ready.window_end.isoformat(),
-                category_count=completed_category_count,
-                source_analysis_count=source_count,
             )
-            return TrendDiscoveryCompleted(
-                window_end=ready.window_end,
-                source_analysis_count=source_count,
+        category_trends = tuple(category_trends_list)
+        completed_category_count = len(category_trends)
+        bundle = TrendsBundle(window=window, category_trends=category_trends)
+        generated_at = datetime.now(UTC)
+        response = trends_from_snapshot(
+            bundle=bundle,
+            generated_at=generated_at,
+            source_analysis_count=ready.source_analysis_count,
+        )
+        snapshot = TrendsSnapshot(
+            window_end=window.window_end,
+            bundle=response.model_dump(mode="json", by_alias=True),
+            source_analysis_count=ready.source_analysis_count,
+            generated_at=generated_at,
+        )
+        save_result = await SnapshotRepository(session).save(snapshot)
+        if save_result.status == SnapshotSaveStatus.CONFLICT:
+            return TrendDiscoveryConflict(
+                window_end=window.window_end,
+                source_analysis_count=ready.source_analysis_count,
                 completed_category_count=completed_category_count,
             )
+        return TrendDiscoveryCompleted(
+            window_end=window.window_end,
+            source_analysis_count=ready.source_analysis_count,
+            completed_category_count=completed_category_count,
+        )
 
     @staticmethod
     async def _build_category_trends(
@@ -301,13 +215,7 @@ class TrendDiscoveryService:
         current_end: datetime,
         previous_start: datetime,
     ) -> CategoryTrends:
-        """1 カテゴリ分の 2 ランキングを確定し、上位 mention に文脈を添えて束ねる。
-
-        repository は floor 通過の全 mention を母集団として返し、2 ランキングの確定
-        (母集団の違い・hot ゲート含む) は domain の選定関数に委ねる。両ランキング
-        の和集合だけ key_point / related mention を取得し (1 カテゴリ 3 query)、
-        同一 mention が両方に載る場合は同じ enrich 済みインスタンスを共有する。
-        """
+        """上位メンションを補足し、両ランキングで同じメンションの情報を共有する。"""
         pool = await trends_repo.get_ranked_mentions(
             category_id=category.id,
             current_start=current_start,
@@ -354,20 +262,3 @@ class TrendDiscoveryService:
             most_mentioned=tuple(_with_context(m) for m in most_mentioned),
             fastest_growing=tuple(_with_context(m) for m in fastest_growing),
         )
-
-    @staticmethod
-    async def _fetch_categories(session: AsyncSession) -> tuple[Category, ...]:
-        stmt = select(Category).order_by(Category.id)
-        rows = (await session.execute(stmt)).scalars().all()
-        return tuple(rows)
-
-    @staticmethod
-    def _jst_midnight_utc(target_date: date) -> datetime:
-        """JST 当日 00:00 を UTC-aware datetime に変換する。"""
-        jst_midnight = datetime(
-            target_date.year,
-            target_date.month,
-            target_date.day,
-            tzinfo=ZoneInfo(WEEK_TZ),
-        )
-        return jst_midnight.astimezone(UTC)
