@@ -57,14 +57,9 @@ MAX_CATEGORIES_PER_BUNDLE: Final[int] = 20
 # - MAX_KEY_POINTS_PER_MENTION: 何が言われているか (key_point content) の本数
 # - MAX_RELATED_MENTIONS: 何と一緒に語られるか (related mention) の件数
 # - MIN_SHARED_ARTICLES: 1 記事だけの共起は noise として除外する閾値
-MAX_KEY_POINTS_PER_MENTION: Final[int] = 2
+MAX_KEY_POINTS_PER_MENTION: Final[int] = 3
 MAX_RELATED_MENTIONS: Final[int] = 3
 MIN_SHARED_ARTICLES: Final[int] = 2
-
-# key_point の記事レベル重複間引き閾値 (cosine 距離)。embedding は assessment(記事)
-# 単位の 1 本なので、距離がこの値未満の content は同一記事/同一トピックとして畳む。
-# 保守的初期値 (ほぼ同一のみ間引く)。実データで調整する。
-KEY_POINT_DEDUP_DISTANCE: Final[float] = 0.1
 
 # count フィールドの現実的な上限。anomaly 検出と response DoS 防御を兼ねる。
 # 1 カテゴリ × 1 週で 10_000 mention を超える単一 mention/topic は実運用では

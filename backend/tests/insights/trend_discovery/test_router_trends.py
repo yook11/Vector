@@ -128,3 +128,18 @@ class TestTrendsEndpoint:
         """BFF 経由証明の無い直叩きは 401 (login 検証ではなく BFF 経由証明)。"""
         resp = await client.get("/api/v1/trends")
         assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "points", [["legacy-a", "legacy-b"], ["new-a", "new-b", "new-c"]]
+)
+async def test_saved_key_points_are_returned_unchanged(bff_client, db_session, points):
+    """旧方式の2件と新方式の3件の要点を、保存されたままAPIで返す。"""
+    payload = _camel_bundle(date(2026, 5, 3))
+    payload["categoryTrends"][0]["mostMentioned"][0]["keyPoints"] = points
+    db_session.add(_snapshot(date(2026, 5, 3), bundle=payload))
+    await db_session.commit()
+    response = await bff_client.get("/api/v1/trends")
+    assert response.status_code == 200
+    assert response.json() == payload

@@ -1,10 +1,4 @@
-"""トレンド集計と TrendsSnapshot 永続化の Repository。
-
-読取側は ``analyzed_articles.key_points`` JSONB の ``key_points[].mentions[]``
-を 2 段 LATERAL で平坦化して集計し、Trend Discovery BC の VO で返す。dedup /
-top N の選定ポリシーは ``domain.mention_context`` の純関数へ委譲し、本モジュール
-は SQL 実行と Row 詰め替え (不正 legacy・drift 行の skip + warning) までを持つ。
-"""
+"""公開日時でトレンドを集計し、記事ごとの要点を選定してsnapshotを保存する。"""
 
 from __future__ import annotations
 
@@ -12,36 +6,36 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
-from typing import cast
+from typing import Any
 
 import sqlalchemy as sa
 import structlog
-from pgvector.sqlalchemy import HALFVEC
 from pydantic import ValidationError
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, func, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import Join, TableValuedAlias
 
 from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_context import (
-    KeyPointCandidate,
-    select_key_points,
     select_related_mentions,
 )
 from app.insights.trend_discovery.domain.trend import (
+    MAX_KEY_POINTS_PER_MENTION,
     MIN_CURRENT,
     MIN_SHARED_ARTICLES,
     MentionKey,
     RankedMention,
     RelatedMention,
 )
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
+from app.models.article_curation import ArticleCuration
 from app.models.trends_snapshot import TrendsSnapshot
 
 logger = structlog.get_logger(__name__)
-
-# embedding 次元 (AnalyzedArticleRecord.embedding は HALFVEC(768))。
-_EMBEDDING_DIM = 768
 
 # MentionType の既知値集合 (skip 警告の type_known 判定用)。
 _VALID_MENTION_TYPES = frozenset(t.value for t in MentionType)
@@ -62,24 +56,38 @@ def _invalid_mention_log_fields(
     }
 
 
-# ``_match_key_expr`` が SQL へ補間できる alias の許可リスト (補間される唯一の
-# 動的部分を固定リテラルに限定する injection ゲート)。
-_ALLOWED_MENTION_ALIASES = frozenset({"m", "m1", "m2"})
+def _match_key_expr(mention: ColumnElement[Any]) -> ColumnElement[str]:
+    """書込側と同じ空白の正規化と小文字化でメンションを照合する。"""
+    return func.lower(
+        func.btrim(
+            func.regexp_replace(mention["surface"].astext, "[[:space:]]+", " ", "g")
+        )
+    )
 
 
-def _match_key_expr(alias: str) -> str:
-    """mention surface の名寄せキー SQL 式を返す (連続空白 collapse + trim + lower)。
-
-    書込側 ``normalize_mention_surface`` / ``MentionName.match_key`` と同一規則に
-    揃える (NFKC は書込側で確定済み)。``alias`` は SQL fragment へ補間される唯一の
-    動的部分なので、許可リスト外は raise で拒否する (``-O`` で剥がれる assert に
-    しない)。
-    """
-    if alias not in _ALLOWED_MENTION_ALIASES:
-        msg = f"alias must be one of {sorted(_ALLOWED_MENTION_ALIASES)}, got {alias!r}"
-        raise ValueError(msg)
+def _json_array_elements(
+    value: ColumnElement[Any], name: str, *, with_ordinality: str | None = None
+) -> TableValuedAlias:
+    """旧データのNULL・非配列値を空配列として扱う。"""
     return (
-        f"lower(btrim(regexp_replace({alias}->>'surface', '[[:space:]]+', ' ', 'g')))"
+        func.jsonb_array_elements(
+            sa.case(
+                (func.jsonb_typeof(value) == "array", value),
+                else_=func.jsonb_build_array(),
+            )
+        )
+        .table_valued(sa.column("value", JSONB), with_ordinality=with_ordinality)
+        .render_derived(name=name)
+        .lateral()
+    )
+
+
+def _published_articles() -> Join:
+    return AnalyzedArticleRecord.__table__.join(
+        ArticleCuration, AnalyzedArticleRecord.curation_id == ArticleCuration.id
+    ).join(
+        AnalyzableArticleRecord,
+        ArticleCuration.analyzable_article_id == AnalyzableArticleRecord.id,
     )
 
 
@@ -169,72 +177,71 @@ class TrendsRepository:
         current_end: datetime,
         mention_keys: Sequence[MentionKey],
     ) -> dict[MentionKey, tuple[str, ...]]:
-        """指定 mention 群の現週 key_point content を記事レベル dedup して返す。
-
-        SQL は recency 降順 (analyzed_at DESC, id DESC) の候補行を取り、採択ポリシー
-        (assessment 単位 dedup / embedding 近接 dedup / 最大本数) は
-        ``select_key_points`` に委譲する。``mention_keys`` が空ならクエリしない。
-        """
+        """公開日時の新しい最大3記事から、そのメンションの最初の有効な要点を返す。"""
         if not mention_keys:
             return {}
+        points = _json_array_elements(
+            AnalyzedArticleRecord.key_points, "points", with_ordinality="position"
+        )
+        mentions = _json_array_elements(points.c.value["mentions"], "mentions")
+        match_key = _match_key_expr(mentions.c.value)
+        mention_type = mentions.c.value["type"].astext
+        content = points.c.value["content"].astext
+        candidates = (
+            select(
+                match_key.label("match_key"),
+                mention_type.label("type"),
+                AnalyzedArticleRecord.id.label("article_id"),
+                AnalyzableArticleRecord.published_at,
+                content.label("content"),
+                func.row_number()
+                .over(
+                    partition_by=(match_key, mention_type, AnalyzedArticleRecord.id),
+                    order_by=points.c.position,
+                )
+                .label("point_rank"),
+            )
+            .select_from(_published_articles())
+            .join(points, sa.true())
+            .join(mentions, sa.true())
+            .where(
+                AnalyzedArticleRecord.category_id == category_id,
+                AnalyzableArticleRecord.published_at >= current_start,
+                AnalyzableArticleRecord.published_at < current_end,
+                sa.tuple_(match_key, mention_type).in_(mention_keys),
+                func.jsonb_typeof(points.c.value["content"]) == "string",
+                content.op("~")("[^[:space:]]"),
+            )
+            .subquery("article_points")
+        )
+        articles = (
+            select(
+                candidates.c.match_key,
+                candidates.c.type,
+                candidates.c.content,
+                func.row_number()
+                .over(
+                    partition_by=(candidates.c.match_key, candidates.c.type),
+                    order_by=(
+                        candidates.c.published_at.desc(),
+                        candidates.c.article_id.desc(),
+                    ),
+                )
+                .label("article_rank"),
+            )
+            .where(candidates.c.point_rank == 1)
+            .subquery("latest_article_points")
+        )
         stmt = (
-            # 固定リテラル補間 + bindparams のため injection 経路なし。
-            # nosemgrep
-            text(
-                f"""
-                SELECT
-                  {_match_key_expr("m")} AS match_key,
-                  m->>'type' AS type,
-                  a.id AS analyzed_article_id,
-                  a.analyzed_at AS analyzed_at,
-                  a.embedding AS embedding,
-                  e->>'content' AS content
-                FROM analyzed_articles a
-                CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(a.key_points) = 'array'
-                       THEN a.key_points ELSE '[]'::jsonb END
-                ) AS e
-                CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(e->'mentions') = 'array'
-                       THEN e->'mentions' ELSE '[]'::jsonb END
-                ) AS m
-                WHERE a.category_id = :category_id
-                  AND a.analyzed_at >= :current_start
-                  AND a.analyzed_at < :current_end
-                  AND ({_match_key_expr("m")}, m->>'type') IN :mention_keys
-                -- recency 降順は select_key_points の precondition (崩すと
-                -- 無言で古い key_point が採択される)。
-                ORDER BY a.analyzed_at DESC, a.id DESC, e->>'content'
-                """  # noqa: S608 — 補間部は _match_key_expr の固定リテラルのみ
-            )
-            .bindparams(
-                sa.bindparam("category_id", category_id),
-                sa.bindparam("current_start", current_start),
-                sa.bindparam("current_end", current_end),
-                sa.bindparam("mention_keys", value=list(mention_keys), expanding=True),
-            )
-            .columns(
-                match_key=sa.String,
-                type=sa.String,
-                analyzed_article_id=sa.BigInteger,
-                analyzed_at=sa.DateTime(timezone=True),
-                embedding=HALFVEC(_EMBEDDING_DIM),
-                content=sa.String,
-            )
+            select(articles.c.match_key, articles.c.type, articles.c.content)
+            .where(articles.c.article_rank <= MAX_KEY_POINTS_PER_MENTION)
+            .order_by(articles.c.match_key, articles.c.type, articles.c.article_rank)
         )
         rows = (await self._session.execute(stmt)).all()
-        # SQL の ORDER BY (analyzed_at DESC, id DESC, content) をグループ内順序として
-        # 保存する詰め替え (recency 降順は select_key_points の precondition)。
-        candidates: dict[MentionKey, list[KeyPointCandidate]] = {}
+        contents: dict[MentionKey, list[str]] = {}
         for row in rows:
-            candidates.setdefault((row.match_key, row.type), []).append(
-                KeyPointCandidate(
-                    analyzed_article_id=row.analyzed_article_id,
-                    embedding=_to_vector(row.embedding),
-                    content=row.content,
-                )
-            )
-        return select_key_points(candidates)
+            contents.setdefault((row.match_key, row.type), []).append(row.content)
+        return {key: tuple(values) for key, values in contents.items()}
 
     async def get_related_mentions(
         self,
@@ -244,66 +251,41 @@ class TrendsRepository:
         current_end: datetime,
         mention_keys: Sequence[MentionKey],
     ) -> dict[MentionKey, tuple[RelatedMention, ...]]:
-        """指定 mention 群と同一 key_point 内で一緒に語られた別 mention を返す。
-
-        同一 key_point 内の mention を 2 回 LATERAL 展開し (m1=anchor / m2=相手)、
-        ``COUNT(DISTINCT a.id)`` (一緒に語られた記事数) で集計する。anchor ごとの
-        top N 選定は ``select_related_mentions`` に委譲する。不正な共起相手は当該
-        1 件のみ skip + warning し window 全体を落とさない (anchor 側は requested
-        key 由来で常に正常)。``mention_keys`` が空ならクエリしない。
-        """
+        """公開期間内の同じ要点で共起した別メンションを記事数順に返す。"""
         if not mention_keys:
             return {}
+        points = _json_array_elements(AnalyzedArticleRecord.key_points, "points")
+        anchors = _json_array_elements(points.c.value["mentions"], "anchors")
+        related_mentions = _json_array_elements(points.c.value["mentions"], "related")
+        anchor_key = _match_key_expr(anchors.c.value)
+        anchor_type = anchors.c.value["type"].astext
+        related_key = _match_key_expr(related_mentions.c.value)
+        related_type = related_mentions.c.value["type"].astext
+        shared_count = func.count(sa.distinct(AnalyzedArticleRecord.id))
         stmt = (
-            # 固定リテラル補間 + bindparams のため injection 経路なし。
-            # nosemgrep
-            text(
-                f"""
-                SELECT
-                  {_match_key_expr("m1")} AS anchor_key,
-                  m1->>'type' AS anchor_type,
-                  MIN(m2->>'surface') AS related_name,
-                  m2->>'type' AS related_type,
-                  COUNT(DISTINCT a.id) AS shared_article_count
-                FROM analyzed_articles a
-                CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(a.key_points) = 'array'
-                       THEN a.key_points ELSE '[]'::jsonb END
-                ) AS e
-                CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(e->'mentions') = 'array'
-                       THEN e->'mentions' ELSE '[]'::jsonb END
-                ) AS m1
-                CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(e->'mentions') = 'array'
-                       THEN e->'mentions' ELSE '[]'::jsonb END
-                ) AS m2
-                WHERE a.category_id = :category_id
-                  AND a.analyzed_at >= :current_start
-                  AND a.analyzed_at < :current_end
-                  AND ({_match_key_expr("m1")}, m1->>'type') IN :mention_keys
-                  AND ({_match_key_expr("m2")}, m2->>'type')
-                      <> ({_match_key_expr("m1")}, m1->>'type')
-                GROUP BY
-                  {_match_key_expr("m1")}, m1->>'type',
-                  {_match_key_expr("m2")}, m2->>'type'
-                HAVING COUNT(DISTINCT a.id) >= :min_shared
-                """  # noqa: S608 — 補間部は _match_key_expr の固定リテラルのみ
+            select(
+                anchor_key.label("anchor_key"),
+                anchor_type.label("anchor_type"),
+                func.min(related_mentions.c.value["surface"].astext).label(
+                    "related_name"
+                ),
+                related_type.label("related_type"),
+                shared_count.label("shared_article_count"),
             )
-            .bindparams(
-                sa.bindparam("category_id", category_id),
-                sa.bindparam("current_start", current_start),
-                sa.bindparam("current_end", current_end),
-                sa.bindparam("min_shared", MIN_SHARED_ARTICLES),
-                sa.bindparam("mention_keys", value=list(mention_keys), expanding=True),
+            .select_from(_published_articles())
+            .join(points, sa.true())
+            .join(anchors, sa.true())
+            .join(related_mentions, sa.true())
+            .where(
+                AnalyzedArticleRecord.category_id == category_id,
+                AnalyzableArticleRecord.published_at >= current_start,
+                AnalyzableArticleRecord.published_at < current_end,
+                sa.tuple_(anchor_key, anchor_type).in_(mention_keys),
+                sa.tuple_(related_key, related_type)
+                != sa.tuple_(anchor_key, anchor_type),
             )
-            .columns(
-                anchor_key=sa.String,
-                anchor_type=sa.String,
-                related_name=sa.String,
-                related_type=sa.String,
-                shared_article_count=sa.BigInteger,
-            )
+            .group_by(anchor_key, anchor_type, related_key, related_type)
+            .having(shared_count >= MIN_SHARED_ARTICLES)
         )
         rows = (await self._session.execute(stmt)).all()
         pairs: list[tuple[MentionKey, RelatedMention]] = []
@@ -329,10 +311,14 @@ class TrendsRepository:
     async def count_source_analyses(
         self, *, current_start: datetime, current_end: datetime
     ) -> int:
-        """指定 window 内の analysis 件数を全カテゴリ合算で返す (snapshot メタ情報)。"""
-        stmt = select(func.count(AnalyzedArticleRecord.id)).where(
-            AnalyzedArticleRecord.analyzed_at >= current_start,
-            AnalyzedArticleRecord.analyzed_at < current_end,
+        """期間内に公開された分析済み記事を、要点の有無によらず数える。"""
+        stmt = (
+            select(func.count(AnalyzedArticleRecord.id))
+            .select_from(_published_articles())
+            .where(
+                AnalyzableArticleRecord.published_at >= current_start,
+                AnalyzableArticleRecord.published_at < current_end,
+            )
         )
         return (await self._session.execute(stmt)).scalar_one()
 
@@ -344,67 +330,29 @@ class TrendsRepository:
         window_end: datetime,
         label: str,
     ):
-        """1 期間分の mention 集計 subquery (key_points JSONB 2 段 LATERAL 平坦化)。
-
-        (match_key, type) ごとに ``COUNT(DISTINCT a.id)`` で記事単位の出現数を数え
-        (同 assessment 内の重複 mention は 1 件)、display 名は ``MIN(m->>'surface')``
-        (casing 保持の代表値) を採用する。
-
-        ``jsonb_typeof(...) = 'array'`` の CASE は SQL NULL / JSON null / 非配列値の
-        空配列フォールバック。LATERAL は WHERE より先に評価されるため ``IS NOT
-        NULL`` では遮断できず、``none_as_null=False`` の既定では Python ``None``
-        が JSON null として書かれうる。bindparam の ``unique=True`` は current /
-        previous 両 subquery を同一 outer query に組むときの param 名衝突回避
-        (SQLAlchemy が自動 suffix)。
-        """
+        """期間内に公開された記事をメンションごとに重複なく数える。"""
+        points = _json_array_elements(AnalyzedArticleRecord.key_points, "points")
+        mentions = _json_array_elements(points.c.value["mentions"], "mentions")
+        match_key = _match_key_expr(mentions.c.value)
+        mention_type = mentions.c.value["type"].astext
         return (
-            # 固定リテラル補間 + bindparams のため injection 経路なし。
-            # nosemgrep
-            text(
-                f"""
-                SELECT
-                  {_match_key_expr("m")} AS match_key,
-                  m->>'type' AS type,
-                  MIN(m->>'surface') AS display_name,
-                  COUNT(DISTINCT a.id) AS cnt
-                FROM analyzed_articles a
-                CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(a.key_points) = 'array'
-                       THEN a.key_points ELSE '[]'::jsonb END
-                ) AS e
-                CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(e->'mentions') = 'array'
-                       THEN e->'mentions' ELSE '[]'::jsonb END
-                ) AS m
-                WHERE a.category_id = :category_id
-                  AND a.analyzed_at >= :window_start
-                  AND a.analyzed_at < :window_end
-                GROUP BY {_match_key_expr("m")}, m->>'type'
-                """  # noqa: S608 — 補間部は _match_key_expr の固定リテラルのみ
+            select(
+                match_key.label("match_key"),
+                mention_type.label("type"),
+                func.min(mentions.c.value["surface"].astext).label("display_name"),
+                func.count(sa.distinct(AnalyzedArticleRecord.id)).label("cnt"),
             )
-            .bindparams(
-                sa.bindparam("category_id", category_id, unique=True),
-                sa.bindparam("window_start", window_start, unique=True),
-                sa.bindparam("window_end", window_end, unique=True),
+            .select_from(_published_articles())
+            .join(points, sa.true())
+            .join(mentions, sa.true())
+            .where(
+                AnalyzedArticleRecord.category_id == category_id,
+                AnalyzableArticleRecord.published_at >= window_start,
+                AnalyzableArticleRecord.published_at < window_end,
             )
-            .columns(
-                match_key=sa.String,
-                type=sa.String,
-                display_name=sa.String,
-                cnt=sa.BigInteger,
-            )
+            .group_by(match_key, mention_type)
             .subquery(label)
         )
-
-
-def _to_vector(embedding: object) -> list[float] | None:
-    """HALFVEC 列の読み出し結果を float list に正規化する (NULL は None)。"""
-    if embedding is None:
-        return None
-    to_list = getattr(embedding, "to_list", None)
-    if callable(to_list):
-        return cast("list[float]", to_list())
-    return list(embedding)  # type: ignore[call-overload]
 
 
 # ---------------------------------------------------------------------------

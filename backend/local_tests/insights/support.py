@@ -40,6 +40,7 @@ async def seed_analyzed_article(
     category_id: int,
     title: str,
     analyzed_at: datetime,
+    published_at: datetime | None = None,
     key_points: list[dict] | None = None,
     embedding_text: str | None = None,
 ) -> int:
@@ -55,7 +56,7 @@ async def seed_analyzed_article(
             source_id,
             f"https://example.com/{title}",
             title,
-            analyzed_at,
+            published_at if published_at is not None else analyzed_at,
         )
         curation_id = await connection.fetchval(
             "INSERT INTO article_curations "
