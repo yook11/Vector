@@ -1,4 +1,6 @@
-"""briefing の成果物 (LLM 出力を検証した内容) の VO。
+"""briefing のルール: 発行周期と、成果物 (LLM 出力を検証した内容) の VO。
+
+briefing は (カテゴリ, JST 月曜始まりの週) ごとに 1 号出す。
 
 LLM 応答の VO 化は ``WeeklyBriefingContent.from_llm_payload`` だけを本番の入口にし、
 ``input_ids`` を必須にして捏造記事 id の検証漏れを防ぐ。各上限は閲覧 API の
@@ -9,9 +11,51 @@ response schema (``briefing/schemas.py``) にも同値で持つ
 from __future__ import annotations
 
 from collections.abc import Set as AbstractSet
+from datetime import date, datetime, time, timedelta
 from typing import Final, Self
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+
+# --- 発行周期 ---
+
+BRIEFING_TZ: Final[str] = "Asia/Tokyo"
+_WEEK: Final[timedelta] = timedelta(days=7)
+
+
+def latest_completed_week_start(now: datetime) -> date:
+    """``now`` (JST 想定の tz-aware datetime) における直近完了週の月曜日。
+
+    最新号の週として、生成タスクと閲覧 API の両方がこれを使う。
+
+    例: JST 2026-04-27 (月) 00:05 → 2026-04-20 (= 前週月曜)
+        JST 2026-04-26 (日) 23:50 → 2026-04-13 (= 完了済み週の月曜)
+        JST 2026-04-22 (水) 12:00 → 2026-04-13 (= 前週月曜)
+    """
+    today = now.date()
+    current_monday = today - timedelta(days=today.weekday())
+    return current_monday - _WEEK
+
+
+def require_week_start(week_start: date) -> None:
+    if week_start.weekday() != 0:
+        raise ValueError(
+            f"week_start must be a Monday (JST), got {week_start} "
+            f"(weekday={week_start.weekday()})"
+        )
+
+
+def week_bounds(week_start: date) -> tuple[datetime, datetime]:
+    """号が対象とする期間 [月曜 0:00 JST, 翌月曜 0:00 JST) を返す。"""
+    start = datetime.combine(week_start, time(0, 0), tzinfo=ZoneInfo(BRIEFING_TZ))
+    return start, start + _WEEK
+
+
+def now_in_jst() -> datetime:
+    return datetime.now(ZoneInfo(BRIEFING_TZ))
+
+
+# --- 成果物 ---
 
 MAX_BRIEFING_HEADLINE_LEN: Final[int] = 200
 MAX_BRIEFING_SUMMARY_LEN: Final[int] = 1_000

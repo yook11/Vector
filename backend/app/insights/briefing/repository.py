@@ -1,22 +1,19 @@
 """briefing の Ready 構築に使う事実の読取と、WeeklyBriefing の永続化 Repository。
 
-読取側の週境界は JST (``WEEK_TZ``) 月曜 00:00 起点の date で受け、DB の
-TIMESTAMPTZ (UTC) とは tz-aware datetime に変換して比較する。
-commit は呼び出し側の責務。
+週は月曜の date で受け、DB の TIMESTAMPTZ とは ``week_bounds`` の tz-aware な
+期間で比較する。commit は呼び出し側の責務。
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.briefing.domain.briefing import WeeklyBriefingContent
+from app.insights.briefing.domain.briefing import WeeklyBriefingContent, week_bounds
 from app.insights.briefing.domain.ready import BriefingArticle, BriefingReadyBuildFacts
-from app.insights.trend_discovery.domain.window import WEEK_TZ
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.category import Category
 from app.models.weekly_briefing import WeeklyBriefing
@@ -56,9 +53,7 @@ class BriefingRepository:
         """id は公開記事 id (AnalyzedArticleRecord.id) で、LLM 入出力・JSONB・
         閲覧 API の embed が同じ id 空間で揃う。
         """
-        tz = ZoneInfo(WEEK_TZ)
-        week_start_jst = datetime.combine(week_start, time(0, 0), tzinfo=tz)
-        week_end_jst = week_start_jst + timedelta(days=7)
+        week_start_jst, week_end_jst = week_bounds(week_start)
 
         stmt = (
             select(

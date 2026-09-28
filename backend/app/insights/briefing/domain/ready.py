@@ -12,6 +12,8 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.insights.briefing.domain.briefing import require_week_start
+
 
 class BriefingReadyBuildRejectionReason(StrEnum):
     """生成を始めない理由。"""
@@ -45,14 +47,6 @@ class BriefingReadyBuildFacts:
     articles: tuple[BriefingArticle, ...]
 
 
-def _require_monday(week_start: date) -> None:
-    if week_start.weekday() != 0:
-        raise ValueError(
-            f"week_start must be a Monday (JST), got {week_start} "
-            f"(weekday={week_start.weekday()})"
-        )
-
-
 class ReadyForBriefing(BaseModel):
     """生成に必要な値をそろえ、開始条件を満たした不変オブジェクト。"""
 
@@ -66,7 +60,7 @@ class ReadyForBriefing(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_monday(self) -> Self:
-        _require_monday(self.week_start)
+        require_week_start(self.week_start)
         return self
 
     @classmethod
@@ -79,7 +73,7 @@ class ReadyForBriefing(BaseModel):
     ) -> ReadyForBriefing | BriefingReadyBuildRejectionReason:
         """取得済みの事実から、I/O なしで開始条件を判定する。"""
         # 月曜でない週は入力の誤りなので、記事 0 件などの業務上の判定より先に弾く。
-        _require_monday(week_start)
+        require_week_start(week_start)
         if facts is None:
             return BriefingReadyBuildRejectionReason.CATEGORY_MISSING
         if facts.already_generated:

@@ -36,11 +36,14 @@ from app.audit.stages.briefing import (
 )
 from app.config import settings
 from app.db.errors import DatabaseError
+from app.insights.briefing.domain.briefing import (
+    latest_completed_week_start,
+    now_in_jst,
+)
 from app.insights.briefing.domain.ready import (
     BriefingReadyBuildRejectionReason,
     ReadyForBriefing,
 )
-from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.errors import BriefingError
 from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.service import BriefingConflict, WeeklyBriefingService

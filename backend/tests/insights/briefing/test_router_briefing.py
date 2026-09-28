@@ -18,8 +18,6 @@ from app.insights.briefing.domain.briefing import (
     MAX_KEY_ARTICLES_PER_BRIEFING,
     MAX_WATCH_POINT_STATEMENT_LEN,
     MAX_WATCH_POINTS_PER_BRIEFING,
-)
-from app.insights.briefing.domain.week import (
     latest_completed_week_start,
     now_in_jst,
 )

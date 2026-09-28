@@ -12,8 +12,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import NotFoundError
-from app.insights.briefing.domain.briefing import MAX_KEY_ARTICLES_PER_BRIEFING
-from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
+from app.insights.briefing.domain.briefing import (
+    MAX_KEY_ARTICLES_PER_BRIEFING,
+    latest_completed_week_start,
+    now_in_jst,
+)
 from app.insights.briefing.schemas import (
     BriefingDetail,
     BriefingListItem,
