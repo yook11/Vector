@@ -11,7 +11,7 @@ async def test_duplicate_before_answer_generation_only_latest_execution_saves_an
 ):
     """回答生成前に重複投入された場合、古い世代は回答生成に進まず最新世代だけが確定する。"""
     created = await create_user_run(
-        agent_workers.session_factory,
+        agent_workers.owner_session_factory,
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )
@@ -77,7 +77,7 @@ async def test_duplicate_during_generation_preserves_initial_execution(
 ):
     """回答生成中の重複配送は再実行せず、先行ワーカーの回答が確定する。"""
     created = await create_user_run(
-        agent_workers.session_factory,
+        agent_workers.owner_session_factory,
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )

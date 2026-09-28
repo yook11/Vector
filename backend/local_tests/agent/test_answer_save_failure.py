@@ -16,11 +16,12 @@ async def test_answer_save_failure_leaves_no_partial_result(
     system_database,
     agent_user_id,
     agent_context,
+    owner_session_factory,
     agent_provider_responses,
 ):
     """回答の保存途中で失敗した場合、回答と出典が部分的に残らない"""
     created = await create_user_run(
-        agent_context.state.session_factory,
+        owner_session_factory,
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )

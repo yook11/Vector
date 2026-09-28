@@ -26,7 +26,7 @@ class WorkerDeadlineRecovery:
         self.control = workers.controls[1]
 
     async def create_run(self, *, user_id, question, accepted_ago=timedelta()):
-        async with self.workers.session_factory() as session:
+        async with self.workers.owner_session_factory() as session:
             async with session.begin():
                 database_time = await session.scalar(select(func.clock_timestamp()))
                 created = await AgentRunCreationRepository(session).create_user_run(
@@ -65,7 +65,7 @@ class WorkerDeadlineRecovery:
         result = await self.workers.observe_run(
             run_id=created.run_id, thread_id=created.thread_id
         )
-        async with self.workers.session_factory() as session:
+        async with self.workers.owner_session_factory() as session:
             observed_at = await session.scalar(select(func.clock_timestamp()))
         return event, ObservedDeadlineCheck(event["worker_pid"], observed_at, result)
 

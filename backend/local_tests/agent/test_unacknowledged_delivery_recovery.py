@@ -12,7 +12,7 @@ async def test_unacknowledged_delivery_is_recovered_without_new_messages(
 ):
     """新しい配送がなくても、死亡したワーカーの未ACK配送を回収できる。"""
     created = await create_user_run(
-        agent_workers.session_factory,
+        agent_workers.owner_session_factory,
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )

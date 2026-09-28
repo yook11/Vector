@@ -31,11 +31,13 @@ async def test_answer_completion_wins_race_and_preserves_saved_result(
     system_database,
     agent_user_id,
     agent_context,
+    owner_session_factory,
     recovery_scope,
 ):
     """回答確定と期限回収が競合し、回答確定が先に成立した場合、確定結果が変わらない。"""
     session_factory = agent_context.state.session_factory
     run = await create_answering_run(
+        owner_session_factory,
         session_factory,
         user_id=agent_user_id,
         question="売上動向を調べてください",
@@ -94,11 +96,13 @@ async def test_deadline_recovery_wins_race_and_rejects_answer(
     system_database,
     agent_user_id,
     agent_context,
+    owner_session_factory,
     recovery_scope,
 ):
     """回答確定と期限回収が競合し、期限回収が先に成立した場合、回答は確定されない。"""
     session_factory = agent_context.state.session_factory
     run = await create_answering_run(
+        owner_session_factory,
         session_factory,
         user_id=agent_user_id,
         question="売上動向を調べてください",

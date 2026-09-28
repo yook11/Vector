@@ -11,10 +11,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.agent.answering.timing import answer_generation_recovery_window
 from app.agent.live_updates.stream import agent_run_live_stream_key
-from app.db.engine import create_worker_engine
 from app.db.session import caller_managed_session_factory
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import run_agent_answer
@@ -180,7 +180,7 @@ class AgentWorkers:
     def __init__(
         self,
         database,
-        session_factory,
+        owner_session_factory,
         broker,
         controls,
         processes,
@@ -188,7 +188,7 @@ class AgentWorkers:
         start_process,
     ):
         self.database = database
-        self.session_factory = session_factory
+        self.owner_session_factory = owner_session_factory
         self.broker = broker
         self.controls = controls
         self.processes = processes
@@ -393,15 +393,16 @@ async def start_agent_workers(database, log_directory):
         redis = Redis.from_url(redis_url, decode_responses=True, socket_timeout=None)
         stack.push_async_callback(redis.aclose)
         settings = SimpleNamespace(
-            database_url=database.url("vector_app", sqlalchemy=True),
+            database_url=database.url("vector_agent", sqlalchemy=True),
             db_iam_auth=False,
             redis_url=redis_url,
             redis_iam_auth=False,
             redis_iam_cache_name=None,
             aws_region=None,
         )
-        engine = create_worker_engine(settings, "agent")
-        stack.push_async_callback(engine.dispose)
+        # runの作成はAPIの受付に当たるため、ワーカーのロールと分けて所有者で行う。
+        owner_engine = create_async_engine(database.url("vector", sqlalchemy=True))
+        stack.push_async_callback(owner_engine.dispose)
         broker = create_taskiq_stream_broker(
             taskiq_stream_connection(settings), "agent"
         )
@@ -451,7 +452,7 @@ async def start_agent_workers(database, log_directory):
         ]
         yield AgentWorkers(
             database,
-            caller_managed_session_factory(engine),
+            caller_managed_session_factory(owner_engine),
             broker,
             controls,
             processes,
