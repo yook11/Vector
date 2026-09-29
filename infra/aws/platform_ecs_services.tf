@@ -1,21 +1,9 @@
-# ECS サービスの宣言。AWS-MIGRATION-INVENTORY.local.md の棚卸しがそのまま入る。
-# subnet / security group / IAM role・Valkey user は、この 1 表から生成する。
+# ECS サービスの宣言。subnet・security group・IAM role・Valkey user はこの表から生成する。
 # subnet の番号だけは platform_network.tf の subnet_indexes が持つ。
 locals {
-  # 各列は「そのサービスが実際に使うもの」であって「使いそうなもの」ではない。
-  #
-  # 例外: secrets の bff-jwt-signing-secret / revalidate-bearer-secret は backend
-  # 全サービスに配る。実際に使うのは api / insights だが、Settings が構築時に必須と
-  # する契約のため (scheduler の DATABASE_URL と同じ「設定の契約が実使用より
-  # 広い」枠)。
-  #
-  # - db_users: IAM DB auth で名乗れる Postgres ロール。**scheduler は空**。
-  #   cron を発火するだけで DB engine を作らない (scheduler_entrypoint.py が
-  #   is_scheduler_process=True で WORKER_STARTUP を立てず、lifecycle.py の
-  #   engine 生成 hook が走らない)。
-  # - image: backend は 1 つの image を 4 サービスが command 違いで起動する。
-  #   frontend だけ別 image。
-  # - needs_egress: frontend は外部への出先を持たない (Logfire も外部 API も無い)。
+  # 各列はそのサービスが実際に使うものだけを書く。
+  # bff-jwt-signing / revalidate-bearer の secret だけは、Settings が構築時に必須とするため backend の全サービスに配る。
+  # scheduler は cron を発火するだけで DB に接続しないので db_users が空。
   services = {
     frontend = {
       needs_broker   = false
@@ -36,8 +24,7 @@ locals {
       cpu            = 256, memory = 512, port = 8000, singleton = false
       command        = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
       secrets = {
-        # research 開始 API の設定プリフライトが両 key の存在を要求する。
-        # api は presence check のみで実呼び出しは agent サービスが担うため egress は不要。
+        # research 開始 API の事前チェックが key の存在だけを見る。呼び出しは agent が行うので api は外へ出ない。
         DEEPSEEK_API_KEY         = "deepseek-api-key"
         TAVILY_API_KEY           = "tavily-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
@@ -45,8 +32,7 @@ locals {
         LOGFIRE_TOKEN            = "logfire-token"
       }
     }
-    # singleton: 新旧が並走すると cron が二重発火するので、deployment configuration で
-    # 1 task に保つ。
+    # singleton: 新旧が並走すると cron が二重発火するので 1 task に保つ。
     scheduler = {
       needs_broker   = true
       egress_vendors = ["logfire"], egress_allow_any_domain = false
@@ -89,8 +75,7 @@ locals {
     }
   }
 
-  # subnet の CIDR は台帳 (subnet_cidrs) から引いて locals で確定させる。resource の
-  # cidr_block から読み戻すと plan 時に unknown になり、squid.conf の差分が読めなくなる。
+  # resource の cidr_block から読み戻すと plan 時に unknown になり squid.conf の差分が読めないため、locals で確定させる。
   app_subnet_cidrs = { for name in keys(local.services) : name => local.subnet_cidrs[name] }
 
   all_services    = toset(keys(local.services))
@@ -111,8 +96,6 @@ locals {
 resource "aws_ecs_cluster" "this" {
   name = var.name_prefix
 
-  # Container Insights は有効にすると CloudWatch のカスタムメトリクス課金が乗る。
-  # Logfire で可観測性を賄っているので二重に払わない。
   setting {
     name  = "containerInsights"
     value = "disabled"
@@ -123,84 +106,52 @@ locals {
   common_environment = {
     ENV        = "production"
     AWS_REGION = var.region
-    # Settings が構築時に全サービスで要求する必須項目 (実際に使うのは frontend_url が
-    # api、crossref は取得の Lambda だけ)。frontend (Node) は読まないが common で害はない。
+    # Settings が構築時に必須とするため全サービスに配る (実際に使うのは一部だけ)。
     FRONTEND_URL           = "https://${var.frontend_domain}"
     CROSSREF_CONTACT_EMAIL = var.crossref_contact_email
-    # IAM モードは明示フラグで入る。「password が無いから IAM」という推測にすると、
-    # password の設定漏れが黙って IAM モードとして動いてしまう。
+    # IAM 認証は明示フラグで有効にする。password の有無で推測すると、設定漏れが黙って IAM モードになる。
     DB_IAM_AUTH    = "true"
     REDIS_IAM_AUTH = "true"
-    # token 署名の host は DNS endpoint ではなく cache 名 (URL から導出できない)。
-    # 値は broker ノードの名前なので、rate-limit ノードに繋ぐ側はこれを読まない。
+    # token の署名に使う cache 名 (URL から導出できない)。broker ノードの名前なので rate-limit 側は読まない。
     REDIS_IAM_CACHE_NAME       = aws_elasticache_replication_group.broker.replication_group_id
     INTERNAL_FRONTEND_BASE_URL = local.internal_frontend_url
-    # proxy を通さない宛先。ECS の credential endpoint を入れないと SDK の
-    # 資格情報取得が proxy に迂回して死ぬ。内部 DNS と gateway host は env を読む
-    # client のための保険で、backend の内部宛 client (make_internal_async_client)
-    # は env を読まないので依存しない。
-    # RDS は 5432 の TCP で HTTP クライアントを通らないので入れない。
+    # ECS の credential endpoint を外すと、SDK の資格情報取得が proxy に迂回して失敗する。
     NO_PROXY = join(",", [
       "169.254.169.254",
       "169.254.170.2",
       ".${var.internal_namespace}",
-      # AgentCore Gateway は PrivateLink 経由の内部宛先。host は gateway_url
-      # から取り、suffix を推測しない。
+      # AgentCore Gateway は PrivateLink 経由の内部宛先。
       local.agentcore_gateway_host,
     ])
-    # SDK 経路 (DeepSeek / Gemini / Logfire) はこの env var を拾う。backend の
-    # HTTP client は拾わない: 第三者宛の `make_external_async_client` は明示
-    # transport を渡すため httpx が env proxy を無視し (settings 経由で注入する)、
-    # 内部宛の `make_internal_async_client` はそもそも env を読まない。
-    # **経路の決まり方が 3 通りある。**
-    #
-    # common なので frontend にも入るが、frontend は proxy への SG egress を持たない。
-    # Node は既定でこの env を読まないため現状は不活性で、読むライブラリが入ると
-    # frontend だけ到達不能で詰まる。その時は service_environment 側へ移す。
-    HTTPS_PROXY = local.proxy_url
-    HTTP_PROXY  = local.proxy_url
-    # 3 通りのうち settings 側。config.py の egress_proxy_url がこれを受け、
-    # make_external_async_client が第三者宛の全 client に proxy として差し込む。
-    #
-    # 上の NO_PROXY はこちらには効かない (env を読まない経路なので)。内部宛先は
-    # make_internal_async_client 側に分かれていて proxy を経由しないため、宛先の
-    # 分類さえ守れば private 宛先拒否を踏まない。
-    #
-    # common に置くので frontend にも入るが、frontend は Node の image で
-    # この値を読まない (Python の Settings field)。
+    # 外向き proxy の使われ方は 3 通り。SDK (DeepSeek / Gemini / Logfire) は HTTPS_PROXY を読み、
+    # backend の第三者宛 client は EGRESS_PROXY_URL を明示で使い、内部宛 client は proxy を通さない。
+    # frontend にも入るが Node は既定で読まない。読むライブラリを入れたら service_environment へ移す。
+    HTTPS_PROXY      = local.proxy_url
+    HTTP_PROXY       = local.proxy_url
     EGRESS_PROXY_URL = local.proxy_url
   }
 
-  # サービスごとの追加 env。
-  #
   service_environment = {
     frontend = {
       INTERNAL_API_URL  = local.internal_api_url
       BETTER_AUTH_URL   = "https://${var.frontend_domain}"
       AUTH_DATABASE_URL = "postgresql://vector_auth@${local.db_endpoint}/${aws_db_instance.this.db_name}?search_path=auth&sslmode=require"
       REDIS_URL_RL      = local.rate_limit_redis_url
-      # rate-limit ノード用の署名 host (common の REDIS_IAM_CACHE_NAME は broker の
-      # 名前なので frontend はそちらを読まない)。
+      # rate-limit ノードの署名用 cache 名 (common の REDIS_IAM_CACHE_NAME は broker 用)。
       REDIS_IAM_CACHE_NAME_RL = aws_elasticache_replication_group.rate_limit.replication_group_id
-      # コード default (60/300) は通常閲覧で session bucket が 429 になる実測済み。
+      # コードの既定値 (60/300) では通常の閲覧で session の枠が 429 になるため引き上げる。
       RATE_LIMIT_SESSION_PER_MIN = "600"
       RATE_LIMIT_IP_PER_MIN      = "3000"
-      # 入口が ALB なので、信頼できる client IP は ALB が XFF 末尾へ追記した値だけ。
-      # 未宣言だと per-IP 制限と Better Auth の login limiter が共有バケツに退化するため、
-      # aws_lb の xff_header_processing_mode = "append" と対で必ず配る。
+      # 信頼できる client IP は ALB が XFF 末尾に追記した値だけ。aws_lb の xff_header_processing_mode = "append" と対で配る。
       CLIENT_IP_TRUST = "alb-xff-last"
     }
     api = {
       DATABASE_URL = local.backend_db_url["vector_api"]
       REDIS_URL    = local.broker_redis_url["api"]
-      # research 開始 API の設定プリフライトが presence を見るだけ。実呼び出しは
-      # agent サービスが担うので、api には IAM 権限も PrivateLink も与えない。
+      # 事前チェックが存在を見るだけで、呼び出しは agent が行う (api に IAM 権限も PrivateLink も与えない)。
       AGENTCORE_GATEWAY_URL = aws_bedrockagentcore_gateway.web_search.gateway_url
     }
-    # scheduler は engine を作らないが、config.py の `database_url: str` が
-    # 必須設定なので値が無いと Settings の構築で落ちる。
-    # ただし task role に rds-db:connect は無いので、URL があっても接続はできない。
-    # **IAM の境界が設定の契約より狭い**状態で、権限としては正しい。
+    # scheduler は DB に接続しないが、Settings が database_url を必須とするため値だけ渡す (task role に rds-db:connect は無い)。
     scheduler = {
       DATABASE_URL = local.backend_db_url["vector_app"]
       REDIS_URL    = local.broker_redis_url["scheduler"]
@@ -212,8 +163,7 @@ locals {
     agent = {
       DATABASE_URL = local.backend_db_url["vector_agent"]
       REDIS_URL    = local.broker_redis_url["agent"]
-      # 外部検索の MCP 入口 (agent.tf)。宛先は PrivateLink 経由の内部 host で、
-      # backend は make_internal_async_client で叩く (env の proxy 設定を読まない)。
+      # 外部検索の入口 (agent.tf)。PrivateLink 経由の内部宛先なので proxy を通さない。
       AGENTCORE_GATEWAY_URL = aws_bedrockagentcore_gateway.web_search.gateway_url
     }
   }
@@ -245,7 +195,6 @@ resource "aws_ecs_task_definition" "this" {
   cpu                      = each.value.cpu
   memory                   = each.value.memory
 
-  # x86 比で約 20% 安い。依存の aarch64 wheel は 2026-07-27 に全数確認済み。
   runtime_platform {
     cpu_architecture        = "ARM64"
     operating_system_family = "LINUX"
@@ -254,9 +203,7 @@ resource "aws_ecs_task_definition" "this" {
   task_role_arn      = aws_iam_role.task[each.key].arn
   execution_role_arn = aws_iam_role.execution[each.key].arn
 
-  # command は空配列を渡さない。ECS では「未指定」ではなく「CMD を空で上書き」に
-  # なり得るため、image 側の CMD (frontend は `node server.js`、ENTRYPOINT 無し) が
-  # 消えてコンテナが即死する。指定しないサービスでは key ごと省く。
+  # 空配列は ECS で「CMD を空で上書き」になりコンテナが即死するため、command の無いサービスは key ごと省く。
   container_definitions = jsonencode([
     merge(
       length(each.value.command) == 0 ? {} : { command = each.value.command },
@@ -274,8 +221,7 @@ resource "aws_ecs_task_definition" "this" {
           { name = k, value = v }
         ]
 
-        # ECS が起動前に execution role で取得する。task role ではない。
-        # 値は Terraform の管理外 (CLI で put-parameter する)。
+        # 起動前に execution role が取得する。値は Terraform の管理外。
         secrets = [
           for env_name, param in each.value.secrets : {
             name      = env_name
@@ -286,8 +232,7 @@ resource "aws_ecs_task_definition" "this" {
         logConfiguration = {
           logDriver = "awslogs"
           options = {
-            # awslogs-create-group は使わない。log group は Terraform が作るので、
-            # execution role に logs:CreateLogGroup が要らない (boundary とも整合)。
+            # awslogs-create-group は使わない。log group は Terraform が作り、boundary は CreateLogGroup を許さない。
             "awslogs-group"         = aws_cloudwatch_log_group.this[each.key].name
             "awslogs-region"        = var.region
             "awslogs-stream-prefix" = "ecs"
@@ -307,17 +252,13 @@ resource "aws_ecs_service" "this" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
-  # 冗長化の水準は RDS Single-AZ が決めている。同じ AZ に置いて cross-AZ 転送費を
-  # ゼロにする。public IP は付けない (外へ出る経路は egress proxy だけ)。
   network_configuration {
     subnets          = [aws_subnet.app[each.key].id]
     security_groups  = [aws_security_group.app[each.key].id]
     assign_public_ip = false
   }
 
-  # singleton のサービスは新旧を並走させない。既定 (200/100) だと deploy 中に
-  # scheduler が 2 つ動いて cron が二重発火する。
-  # 対価は入れ替え中の停止で、worker と scheduler では許容できる。
+  # singleton のサービスは新旧を並走させない (入れ替え中は止まる)。
   deployment_maximum_percent         = each.value.singleton ? 100 : 200
   deployment_minimum_healthy_percent = each.value.singleton ? 0 : 100
 
@@ -350,9 +291,7 @@ resource "aws_ecs_service" "this" {
   depends_on = [aws_lb_listener.https]
 }
 
-# 内部到達は Cloud Map の service discovery。
-# ECS Service Connect は Envoy sidecar が各 task に載ってサイズ表を壊すので採らない。
-# 到達制御は security group だけが行い、名前解決は権限に関与しない。
+# 内部の名前解決。到達の可否は security group だけが決める。
 resource "aws_service_discovery_private_dns_namespace" "internal" {
   name        = var.internal_namespace
   description = "Internal service discovery for Vector"
@@ -378,28 +317,17 @@ resource "aws_service_discovery_service" "this" {
     routing_policy = "MULTIVALUE"
   }
 
-  # ECS が task の生死に応じて登録・解除する。Cloud Map 自身の health check は
-  # 使わない (課金対象で、ECS の管理と二重になる)。
-  # failure_threshold は AWS 側で 1 固定だが、空ブロックだと provider が API に
-  # 送らず実体が null になり、毎 plan が replace を要求し続ける。固定値を明示して
-  # round-trip を成立させる。
+  # failure_threshold は AWS 側で 1 固定だが、空ブロックだと毎回の plan が replace を要求するため明示する。
   health_check_custom_config {
     failure_threshold = 1
   }
 }
 
-# サービスごとに task role と execution role を 1 つずつ。計 14。
-#
-# なぜ execution role までサービスごとに分けるか: ECS の secret 注入は
-# コンテナ起動前に **execution role** が行う (task role ではない)。共有すると
-# 「全サービスの secret を読める role が 1 つ存在する」状態になり、サービスの分離がそこで崩れる。
+# task role と execution role をサービスごとに分ける。secret を注入するのは execution role なので、
+# 共有すると全サービスの secret を読める role ができる。
 
-# ECS が task を起動するときに引き受ける。confused deputy 対策として
-# 呼び出し元アカウントと ECS の ARN を条件に入れる。
-#
-# SourceArn は cluster ARN まで絞らない。AssumeRole 時の実体は task ARN で、
-# task ID は起動のたびに変わる。AWS のサンプルどおり region + account までに留める
-# (絞りすぎると全 task が起動しなくなる)。
+# confused deputy 対策で呼び出し元のアカウントと ECS を条件にする。
+# task ARN は起動のたびに変わるため、SourceArn は region と account までに留める。
 data "aws_iam_policy_document" "ecs_tasks_trust" {
   statement {
     effect  = "Allow"
@@ -425,14 +353,6 @@ data "aws_iam_policy_document" "ecs_tasks_trust" {
 }
 
 # --- task role ------------------------------------------------------------
-#
-# このアプリは実行時に AWS の API を呼ばない。LLM は外部 SaaS、キューは Valkey、
-# ログは Logfire、ストレージ無し。よって task role に載るのは IAM auth の入口
-# 2 アクション (rds-db:connect / elasticache:Connect) だけになる。
-#
-# これは偶然ではなくキュー選定の帰結。SQS を採っていればサービスごとに
-# sqs:SendMessage / ReceiveMessage / DeleteMessage が載り、IAM が主戦場のままだった。
-# Valkey を選んだ時点で、権限設計の重心が IAM から Redis ACL と Postgres の GRANT へ移った。
 resource "aws_iam_role" "task" {
   for_each = local.services
 
@@ -445,8 +365,6 @@ resource "aws_iam_role" "task" {
   permissions_boundary = local.boundary_arns[each.key == "agent" ? "agent-task" : "task"]
 }
 
-# scheduler には DB の policy を付けない。cron を発火するだけで DB engine を
-# 作らないため、持つのは下の elasticache:Connect だけになる。
 resource "aws_iam_role_policy" "task" {
   for_each = local.db_services
 
@@ -460,11 +378,7 @@ resource "aws_iam_role_policy" "task" {
         Sid    = "RdsIamAuth"
         Effect = "Allow"
         Action = "rds-db:connect"
-        # ARN が Postgres の user 名を名指しする。IAM が決めるのは
-        # 「どの入口に入れるか」だけで、入った後に何ができるかは
-        # migration の GRANT が全部決める。
-        # DbiResourceId (db-XXXXXXXX) であって instance identifier ではない。
-        # スナップショットから復元すると変わるので、必ず resource_id を参照する。
+        # 入った後の権限は migration の GRANT が決める。DbiResourceId はスナップショット復元で変わるので resource_id を参照する。
         Resource = [
           for user in local.services[each.value].db_users :
           "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/${user}"
@@ -474,9 +388,7 @@ resource "aws_iam_role_policy" "task" {
   })
 }
 
-# rds-db:connect と同型の入口権限。Connect は接続先 cache と接続 user の
-# **両方の ARN** に対して評価されるため、片方だけでは認証が通らない。
-# 入った後に何ができるかは platform_valkey.tf の access_string が全部決める。
+# Connect は cache と user の両方の ARN で評価されるので両方並べる。入った後の権限は platform_valkey.tf の access string が決める。
 resource "aws_iam_role_policy" "valkey" {
   for_each = local.valkey_connect_arns
 
@@ -516,9 +428,7 @@ resource "aws_iam_role_policy" "execution" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # resource を絞れないが、絞る必要もない。発行されるのは registry への
-      # ログイン用一時トークンで、それ自体は何も取得できない。実際に何を pull
-      # できるかは下の EcrPull が決める。
+      # 認証トークンは resource を絞れない。pull できる repo は下の EcrPull が決める。
       {
         Sid      = "EcrAuthToken"
         Effect   = "Allow"
@@ -535,12 +445,8 @@ resource "aws_iam_role_policy" "execution" {
         ]
         Resource = aws_ecr_repository.this[each.value.image].arn
       },
-      # 両形を並べる。provider の .arn は API が付ける :* を落とすので、
-      # ここでの式は log-group:/ecs/vector/<サービス>:* になる。AWS の
-      # Service Authorization Reference 上 log-group の ARN 形式は :* 付きなので
-      # 本来はこれで足りるが、CreateLogStream が接尾辞なしで評価される実装差の
-      # 報告があり、外すと awslogs driver (既定 blocking) が log stream を
-      # 作れず **task が起動しない**。両方書くコストはゼロなので保険を取る。
+      # log group の ARN は :* 付きと無しの両方を並べる。
+      # CreateLogStream が接尾辞なしで評価される例があり、欠けると task が起動しない。
       {
         Sid    = "CloudWatchLogsWrite"
         Effect = "Allow"
@@ -553,9 +459,7 @@ resource "aws_iam_role_policy" "execution" {
           "${aws_cloudwatch_log_group.this[each.key].arn}:*",
         ]
       },
-      # secret は Terraform で管理しない (aws_ssm_parameter の value は computed で、
-      # refresh のたびに実値が state に載るため)。値も箱も CLI で作り、ここでは
-      # path で参照するだけ。サービスの分離は「どの path を読めるか」で表現する。
+      # secret は Terraform で管理しない (value が refresh のたびに state に載るため)。サービスの分離は読める path で表す。
       {
         Sid    = "ParameterStoreRead"
         Effect = "Allow"
@@ -601,8 +505,6 @@ resource "aws_vpc_security_group_egress_rule" "app_to_rds" {
   referenced_security_group_id = aws_security_group.rds.id
 }
 
-# frontend は broker 側の Valkey に繋がない。rate-limit ノードは eviction 方針が
-# 真逆 (volatile-ttl / noeviction) で、parameter group がノード単位なので別ノード。
 resource "aws_vpc_security_group_ingress_rule" "valkey_broker_from_app" {
   for_each = local.broker_services
 
@@ -627,8 +529,7 @@ resource "aws_vpc_security_group_egress_rule" "app_to_valkey_broker" {
 
 # --- egress proxy ---------------------------------------------------------
 #
-# frontend は含めない。Logfire も外部 API も持たないため、外に出る手段を
-# 1 つも与えない。入口を持つ唯一のサービスが egress ゼロになる。
+# frontend は外への出先を持たないので含めない。
 
 resource "aws_vpc_security_group_ingress_rule" "proxy_from_app" {
   for_each = local.egress_services
@@ -654,8 +555,7 @@ resource "aws_vpc_security_group_egress_rule" "app_to_proxy" {
 
 # --- VPC endpoint ---------------------------------------------------------
 #
-# ENI は api の subnet 1 つだけに置くが、到達は VPC の local ルートで全 subnet
-# から届く。ここを開けないと image pull も secret 注入も log 送信も落ちる。
+# endpoint の ENI は api の subnet にしか無いが、VPC 内の経路で全 subnet から届く。
 
 resource "aws_vpc_security_group_ingress_rule" "endpoints_from_app" {
   for_each = local.all_services
@@ -679,13 +579,8 @@ resource "aws_vpc_security_group_egress_rule" "app_to_endpoints" {
   referenced_security_group_id = aws_security_group.endpoints.id
 }
 
-# ECR のレイヤー実体は S3 にあり、Fargate は task ENI から S3 へ直接取りに行く。
-# ルートテーブルに Gateway endpoint の経路があっても、SG の egress が無ければ
-# ここで落ちて task が起動しない (「規則ゼロは全拒否」がそのまま効く)。
-# 宛先は gateway endpoint が export する prefix list で参照する。
-#
-# frontend にもこの穴が要る = 「frontend は外に出られない」が形式上は崩れる。
-# 何を取れるかは aws_vpc_endpoint.s3 の endpoint policy が縛る (platform_network.tf)。
+# Fargate は ECR のレイヤーを S3 から直接取るので、全サービスに S3 への 443 が要る。
+# 取得できる対象は aws_vpc_endpoint.s3 の endpoint policy が縛る。
 resource "aws_vpc_security_group_egress_rule" "app_to_s3" {
   for_each = local.all_services
 
@@ -697,9 +592,6 @@ resource "aws_vpc_security_group_egress_rule" "app_to_s3" {
   prefix_list_id    = aws_vpc_endpoint.s3.prefix_list_id
 }
 
-# log group は Terraform が作る。
-# 帰結: task definition で awslogs-create-group を使わない。使うと execution role に
-# logs:CreateLogGroup が要り、boundary (書き込み 2 アクションのみ) で落ちる。
 resource "aws_cloudwatch_log_group" "this" {
   for_each = local.services
 

@@ -46,10 +46,6 @@ locals {
   }
 
   # IAM auth の入口 2 アクション。task 系の boundary が共有する。
-  #
-  # これだけで済むのは偶然ではなくキュー選定の帰結で、SQS を採っていれば
-  # sqs:* がサービスごとに載っていた。Valkey を選んだ時点で、権限設計の重心が
-  # IAM から Redis ACL と Postgres の GRANT へ移った。
   task_data_plane_statements = [
     {
       Sid      = "RdsIamAuth"
