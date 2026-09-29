@@ -57,6 +57,7 @@ export default defineConfig({
         "src/features/auth/components/LoginForm.tsx",
         "src/features/auth/components/ProvisionUserForm.tsx",
         "src/features/auth/components/ProvisionUserLink.tsx",
+        "src/features/auth/components/RegisterForm.tsx",
         "src/features/sources/components/SourceTable.tsx",
         "src/features/news/components/SearchBar.tsx",
         "src/features/watchlist/components/WatchlistButton.tsx",

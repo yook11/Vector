@@ -26,23 +26,31 @@ const ProvisionUserNameSchema = z
       ),
   );
 
-const ProvisionUserEmailSchema = z
+// Better Auth の signup は email を trim しないため、作成経路の入力側で trim する。
+const NewUserEmailSchema = z
   .string()
   .transform((value) => value.trim())
   .pipe(z.email("有効なメールアドレスを入力してください。"))
   .transform((value) => value.toLowerCase());
 
+const NewUserPasswordSchema = z
+  .string()
+  .min(
+    passwordPolicy.minLength,
+    `パスワードは${passwordPolicy.minLength}文字以上で入力してください。`,
+  )
+  .max(
+    passwordPolicy.maxLength,
+    `パスワードは${passwordPolicy.maxLength}文字以内で入力してください。`,
+  );
+
 export const ProvisionUserSchema = z.strictObject({
   name: ProvisionUserNameSchema,
-  email: ProvisionUserEmailSchema,
-  password: z
-    .string()
-    .min(
-      passwordPolicy.minLength,
-      `パスワードは${passwordPolicy.minLength}文字以上で入力してください。`,
-    )
-    .max(
-      passwordPolicy.maxLength,
-      `パスワードは${passwordPolicy.maxLength}文字以内で入力してください。`,
-    ),
+  email: NewUserEmailSchema,
+  password: NewUserPasswordSchema,
+});
+
+export const RegisterSchema = z.object({
+  email: NewUserEmailSchema,
+  password: NewUserPasswordSchema,
 });

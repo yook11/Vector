@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as authSchemas from "./auth";
 
-const { LoginSchema } = authSchemas;
+const { LoginSchema, RegisterSchema } = authSchemas;
 
 type ProvisionUserInput = {
   name: string;
@@ -151,6 +151,47 @@ describe("ProvisionUserSchema", () => {
     const result = provisionUserSchema().safeParse({
       ...validProvisionUserInput,
       [field]: value,
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("RegisterSchema", () => {
+  it("trims and lowercases the email and preserves the password", () => {
+    const result = RegisterSchema.safeParse({
+      email: "  New.User@EXAMPLE.COM  ",
+      password: " password ",
+    });
+
+    expect(result).toEqual({
+      success: true,
+      data: { email: "new.user@example.com", password: " password " },
+    });
+  });
+
+  it("rejects an email that is invalid after trimming", () => {
+    const result = RegisterSchema.safeParse({
+      email: "  not-an-email  ",
+      password: "password",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([8, 128])("accepts a password with %i characters", (length) => {
+    const result = RegisterSchema.safeParse({
+      email: "user@example.com",
+      password: "p".repeat(length),
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it.each([7, 129])("rejects a password with %i characters", (length) => {
+    const result = RegisterSchema.safeParse({
+      email: "user@example.com",
+      password: "p".repeat(length),
     });
 
     expect(result.success).toBe(false);

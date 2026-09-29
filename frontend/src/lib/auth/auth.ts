@@ -12,7 +12,7 @@ export const auth = betterAuth({
   basePath: "/api/auth",
   emailAndPassword: {
     enabled: true,
-    disableSignUp: true,
+    disableSignUp: false,
     minPasswordLength: passwordPolicy.minLength,
     maxPasswordLength: passwordPolicy.maxLength,
   },
