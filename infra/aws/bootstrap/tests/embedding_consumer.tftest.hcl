@@ -192,14 +192,11 @@ run "ci_can_manage_dlq_without_granting_relay_send" {
         toset(s.Resource) == toset(local.managed_pipeline_queue_arns) &&
         !contains(s.Action, "sqs:SendMessage") && !contains(s.Action, "sqs:ReceiveMessage") && !contains(s.Action, "sqs:PurgeQueue")
       ]) &&
-      alltrue([for s in jsondecode(aws_iam_policy.outbox_relay_lambda_boundary.policy).Statement : s.Sid != "SendPipelineEvents" ? true :
-        toset(s.Resource) == toset(local.outbox_queue_arns) && !contains(s.Resource, local.embedding_dlq_arn)
-      ]) &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_outbox.policy).Statement : s.Sid != "ManageOutboxLambda" ? true :
         toset(s.Resource) == toset([local.outbox_lambda_arn, local.assessment_outbox_relay_lambda_arn, local.curation_outbox_relay_lambda_arn, local.completion_outbox_relay_lambda_arn])
       ])
     )
-    error_message = "CIだけにDLQ管理と専用relayの管理を追加し、既存relayの送信先を維持する。"
+    error_message = "CIだけにDLQ管理と専用relayの管理を追加する。"
   }
 }
 

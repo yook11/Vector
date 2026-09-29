@@ -572,7 +572,8 @@ resource "aws_iam_policy" "apply_outbox" {
           "scheduler:UpdateSchedule",
           "scheduler:DeleteSchedule",
         ]
-        Resource = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${name}/${var.name_prefix}-${name}"]
+        # scheduleのgroup間の移動とgroupの削除(配下のDeleteScheduleを要求する)を通すため、group単位で許可する。
+        Resource = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${name}/*"]
       },
       {
         Sid    = "ManageOutboxScheduleGroup"

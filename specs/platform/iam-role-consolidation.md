@@ -1,6 +1,6 @@
 # IAMロールの概念別統合
 
-Status: 救済（backfill）とAI分析を実装済み（2026-09-23）。いずれも本番適用済みで、旧boundaryも撤去済み。配信・外部取得は未着手。
+Status: 救済（backfill）とAI分析を実装済み（2026-09-23）。いずれも本番適用済みで、旧boundaryも撤去済み。配信は着手（2026-09-29）、外部取得は未着手。
 
 ## Work Definition
 
@@ -32,7 +32,8 @@ Status: 救済（backfill）とAI分析を実装済み（2026-09-23）。いず�
 
 - 救済（backfill）: 段別ロール6本・boundary 6本を `${name_prefix}-backfill-lambda`／`-scheduler` とboundary 2本へ統合。`apply_role_creation` は6,136→5,380字、`apply_pass_role` は5,148→4,448字、`apply_backfill` は4,138→3,074字（テスト用prefix）。切替後に段別の旧boundary 6本と旧schedule／groupの許可を撤去した。
 - AI分析: 関数ごとのロール3本・boundary 3本を`${name_prefix}-article-analysis-lambda`とboundary 1本へ統合し、DB接続を`vector_article_analysis`へ切り替えた（[記事単位AI分析のDBロール分離](../pipeline/article-analysis-role.md)）。`apply_role_creation`は5,632→5,276字、`apply_pass_role`は4,448→4,120字（テスト用prefix）。切替後の処理に認証・権限のエラーが無いことを確かめてから、旧boundary 3本を撤去した。
-- 配信、外部取得: 未着手。
+- 配信: 汎用relayのロール（`${name_prefix}-outbox-relay-lambda`／`-scheduler`）を概念ロールとして残し、他3本をそこへ寄せる。このロールは4キューへの送信をboundary・実行ポリシー・VPC endpoint policyのすべてで既に持つため、新しいロール名の追加が要らず、切替手順の1は既存boundaryの書き換えになる。boundaryは工程を列挙せず命名規則（キュー `${name_prefix}-article-*`、関数とログ `${name_prefix}-*outbox-relay`）で書き、DLQへの送信は拒否する。実在するキュー・ログ・関数の列挙は本体の実行ポリシーが持つ。scheduleは汎用relayのgroupへまとめる。
+- 外部取得: 未着手。
 
 ## Verification
 

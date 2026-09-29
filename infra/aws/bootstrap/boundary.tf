@@ -66,6 +66,9 @@ locals {
     },
   ]
 
+  # 配信の天井は工程を列挙せず命名規則で書き、relay の追加で bootstrap を変えない。
+  outbox_relay_function_arn_pattern = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-*outbox-relay"
+
   # 本体スタックが作るロールと、その天井の対応。
   # **ここに無い名前のロールは作れない** (oidc.tf の DenyRoleCreationOutsideKnownRoles)。
   #
@@ -409,13 +412,20 @@ resource "aws_iam_policy" "outbox_relay_lambda_boundary" {
         Sid      = "SendPipelineEvents"
         Effect   = "Allow"
         Action   = "sqs:SendMessage"
-        Resource = local.outbox_queue_arns
+        Resource = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-*"
+      },
+      # 工程キューのパターンは DLQ にも当たるため、DLQ への送信だけを拒否する。
+      {
+        Sid      = "DenySendToDeadLetterQueues"
+        Effect   = "Deny"
+        Action   = "sqs:SendMessage"
+        Resource = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-*-dlq"
       },
       {
         Sid      = "WriteRelayLogs"
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.name_prefix}-outbox-relay:*"
+        Resource = "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.name_prefix}-*outbox-relay:*"
       },
       {
         Sid      = "ManageLambdaNetworkInterfaces"
@@ -429,8 +439,8 @@ resource "aws_iam_policy" "outbox_relay_lambda_boundary" {
         Action   = local.outbox_lambda_eni_actions
         Resource = "*"
         Condition = {
-          ArnEquals = {
-            "lambda:SourceFunctionArn" = local.outbox_lambda_arn
+          ArnLike = {
+            "lambda:SourceFunctionArn" = local.outbox_relay_function_arn_pattern
           }
         }
       },
@@ -451,7 +461,7 @@ resource "aws_iam_policy" "outbox_relay_scheduler_boundary" {
         Sid      = "InvokeRelayOnly"
         Effect   = "Allow"
         Action   = "lambda:InvokeFunction"
-        Resource = local.outbox_lambda_arn
+        Resource = local.outbox_relay_function_arn_pattern
       },
       local.boundary_no_escalation_statement,
     ]
