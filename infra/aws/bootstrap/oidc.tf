@@ -649,8 +649,8 @@ resource "aws_iam_role_policy" "rollout" {
         Sid    = "EcsRollout"
         Effect = "Allow"
         Action = [
-          # 入れ替え対象は cluster に問い合わせて数える。workflow 側に段の一覧を
-          # 持つと platform_ecs_services.tf と 2 箇所になり、段の追加が黙って漏れる。
+          # 入れ替え対象は cluster に問い合わせて数える。workflow 側にサービスの一覧を
+          # 持つと platform_ecs_services.tf と 2 箇所になり、サービスの追加が黙って漏れる。
           "ecs:ListServices",
           "ecs:DescribeServices",
           "ecs:DescribeTaskDefinition",

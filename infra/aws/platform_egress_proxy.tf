@@ -1,6 +1,6 @@
-# egress proxy。app 段が VPC の外へ出る唯一の経路になる。
+# egress proxy。app サービスが VPC の外へ出る唯一の経路になる。
 #
-# **stages の表には入れない。** proxy は「アプリの段」ではなく「経路の装置」で、
+# **services の表には入れない。** proxy は「アプリのサービス」ではなく「経路の装置」で、
 # 専用 subnet を持ち / 別 SG を持ち / allowlist の対象ではなく適用する側で /
 # DB にも Valkey にも繋がない。表に入れると全列に例外が入り、表の意味が薄まる。
 
@@ -22,37 +22,37 @@ locals {
   }
 
   proxy_clients = merge({
-    for name in local.egress_stages : name => {
+    for name in local.egress_services : name => {
       cidr = local.app_subnet_cidrs[name]
       domains = flatten([
-        for vendor in local.stages[name].egress_vendors :
+        for vendor in local.services[name].egress_vendors :
         local.egress_vendor_domains[vendor]
       ])
-      allow_any_domain = local.stages[name].egress_allow_any_domain
+      allow_any_domain = local.services[name].egress_allow_any_domain
     }
     }, {
     assessment_consumer = {
-      cidr             = local.assessment_consumer_subnet_cidr
+      cidr             = local.subnet_cidrs["assessment_consumer"]
       domains          = local.egress_vendor_domains.deepseek
       allow_any_domain = false
     }
     embedding_consumer = {
-      cidr             = local.embedding_consumer_subnet_cidr
+      cidr             = local.subnet_cidrs["embedding_consumer"]
       domains          = local.egress_vendor_domains.gemini
       allow_any_domain = false
     }
     completion_consumer = {
-      cidr             = local.completion_consumer_subnet_cidr
+      cidr             = local.subnet_cidrs["completion_consumer"]
       domains          = []
       allow_any_domain = true
     }
     acquisition_consumer = {
-      cidr             = local.acquisition_consumer_subnet_cidr
+      cidr             = local.subnet_cidrs["acquisition_consumer"]
       domains          = []
       allow_any_domain = true
     }
     curation_consumer = {
-      cidr             = local.curation_consumer_subnet_cidr
+      cidr             = local.subnet_cidrs["curation_consumer"]
       domains          = local.egress_vendor_domains.gemini
       allow_any_domain = false
     }
@@ -223,9 +223,9 @@ resource "aws_ecs_service" "proxy" {
     registry_arn = aws_service_discovery_service.proxy.arn
   }
 
-  # app 段と違い ignore_changes を付けない。**allowlist は task definition の env に
+  # app サービスと違い ignore_changes を付けない。**allowlist は task definition の env に
   # 焼かれている**ので、ignore すると「plan では差分が読めるのに service には
-  # 配送されない」状態になる。app 段でこのパターンが成立するのは rollout job が
+  # 配送されない」状態になる。app サービスでこのパターンが成立するのは rollout job が
   # revision を進めるからで、proxy は rollout の対象外 (backend / frontend のみ)。
   # proxy の task definition を触るのは Terraform だけなので、理由が当てはまらない。
 }
@@ -236,7 +236,7 @@ resource "aws_security_group" "proxy" {
   vpc_id      = aws_vpc.main.id
 }
 
-# どの宛先を許すかは proxy の allowlist が段ごとに決める。SG では port だけ。
+# どの宛先を許すかは proxy の allowlist が送信元の subnet ごとに決める。SG では port だけ。
 resource "aws_vpc_security_group_egress_rule" "proxy_to_internet" {
   for_each = toset(["80", "443"])
 

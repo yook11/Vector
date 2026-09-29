@@ -1,9 +1,27 @@
+# subnet の割り当て表。番号は VPC の CIDR を /24 に区切ったうちの何番目を使うかで、
+# 重なると作成時まで気付けないため、全 subnet の番号をここに並べる。
 locals {
-  acquisition_consumer_subnet_cidr = cidrsubnet(var.vpc_cidr, 8, 34)
-  completion_consumer_subnet_cidr  = cidrsubnet(var.vpc_cidr, 8, 33)
-  curation_consumer_subnet_cidr    = cidrsubnet(var.vpc_cidr, 8, 32)
-  assessment_consumer_subnet_cidr  = cidrsubnet(var.vpc_cidr, 8, 29)
-  embedding_consumer_subnet_cidr   = cidrsubnet(var.vpc_cidr, 8, 28)
+  subnet_indexes = {
+    public_alb_primary   = 0
+    public_alb_secondary = 1
+    public_nat           = 2
+    data_primary         = 10
+    data_secondary       = 11
+    frontend             = 20
+    api                  = 21
+    scheduler            = 22
+    insights             = 25
+    agent                = 26
+    migration            = 27
+    embedding_consumer   = 28
+    assessment_consumer  = 29
+    proxy                = 30
+    bastion              = 31
+    curation_consumer    = 32
+    completion_consumer  = 33
+    acquisition_consumer = 34
+  }
+  subnet_cidrs = { for name, index in local.subnet_indexes : name => cidrsubnet(var.vpc_cidr, 8, index) }
 }
 
 resource "aws_vpc" "main" {
@@ -16,6 +34,13 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
 
   tags = { Name = "${var.name_prefix}-vpc" }
+
+  lifecycle {
+    precondition {
+      condition     = length(distinct(values(local.subnet_indexes))) == length(local.subnet_indexes)
+      error_message = "subnet_indexes に同じ番号が 2 回以上ある。"
+    }
+  }
 }
 
 resource "aws_internet_gateway" "main" {
@@ -32,13 +57,13 @@ resource "aws_internet_gateway" "main" {
 # ALB は仕様上 2 AZ を要求する。target が 1 AZ でも動き、cross-zone 転送は無課金。
 resource "aws_subnet" "public_alb" {
   for_each = {
-    primary   = { az = var.az_primary, index = 0 }
-    secondary = { az = var.az_secondary, index = 1 }
+    primary   = var.az_primary
+    secondary = var.az_secondary
   }
 
   vpc_id            = aws_vpc.main.id
-  availability_zone = each.value.az
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, each.value.index)
+  availability_zone = each.value
+  cidr_block        = local.subnet_cidrs["public_alb_${each.key}"]
 
   tags = { Name = "${var.name_prefix}-public-alb-${each.key}" }
 }
@@ -48,17 +73,16 @@ resource "aws_subnet" "public_alb" {
 resource "aws_subnet" "public_nat" {
   vpc_id            = aws_vpc.main.id
   availability_zone = var.az_primary
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 2)
+  cidr_block        = local.subnet_cidrs["public_nat"]
 
   tags = { Name = "${var.name_prefix}-public-nat" }
 }
 
-# egress proxy 専用の private subnet。app 段の 20-26 は locals.stages から
-# 生成される範囲なので、手書きの index をそこに混ぜない。
+# egress proxy 専用の private subnet。
 resource "aws_subnet" "proxy" {
   vpc_id            = aws_vpc.main.id
   availability_zone = var.az_primary
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 30)
+  cidr_block        = local.subnet_cidrs["proxy"]
 
   tags = { Name = "${var.name_prefix}-proxy" }
 }
@@ -66,19 +90,19 @@ resource "aws_subnet" "proxy" {
 # RDS subnet group も 2 AZ を要求する。インスタンス自体は primary AZ に置く。
 resource "aws_subnet" "data" {
   for_each = {
-    primary   = { az = var.az_primary, index = 10 }
-    secondary = { az = var.az_secondary, index = 11 }
+    primary   = var.az_primary
+    secondary = var.az_secondary
   }
 
   vpc_id            = aws_vpc.main.id
-  availability_zone = each.value.az
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, each.value.index)
+  availability_zone = each.value
+  cidr_block        = local.subnet_cidrs["data_${each.key}"]
 
   tags = { Name = "${var.name_prefix}-data-${each.key}" }
 }
 
 resource "aws_subnet" "app" {
-  for_each = local.stages
+  for_each = local.services
 
   vpc_id            = aws_vpc.main.id
   availability_zone = var.az_primary
@@ -90,7 +114,7 @@ resource "aws_subnet" "app" {
 resource "aws_subnet" "migration" {
   vpc_id            = aws_vpc.main.id
   availability_zone = var.az_primary
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 27)
+  cidr_block        = local.subnet_cidrs["migration"]
 
   tags = { Name = "${var.name_prefix}-migration" }
 }
@@ -98,7 +122,7 @@ resource "aws_subnet" "migration" {
 resource "aws_subnet" "acquisition_consumer" {
   vpc_id                  = aws_vpc.main.id
   availability_zone       = var.az_primary
-  cidr_block              = local.acquisition_consumer_subnet_cidr
+  cidr_block              = local.subnet_cidrs["acquisition_consumer"]
   map_public_ip_on_launch = false
   tags                    = { Name = local.acquisition_consumer_name }
 }
@@ -106,7 +130,7 @@ resource "aws_subnet" "acquisition_consumer" {
 resource "aws_subnet" "completion_consumer" {
   vpc_id                  = aws_vpc.main.id
   availability_zone       = var.az_primary
-  cidr_block              = local.completion_consumer_subnet_cidr
+  cidr_block              = local.subnet_cidrs["completion_consumer"]
   map_public_ip_on_launch = false
   tags                    = { Name = local.completion_consumer_name }
 }
@@ -114,7 +138,7 @@ resource "aws_subnet" "completion_consumer" {
 resource "aws_subnet" "curation_consumer" {
   vpc_id                  = aws_vpc.main.id
   availability_zone       = var.az_primary
-  cidr_block              = local.curation_consumer_subnet_cidr
+  cidr_block              = local.subnet_cidrs["curation_consumer"]
   map_public_ip_on_launch = false
   tags                    = { Name = local.curation_consumer_name }
 }
@@ -122,7 +146,7 @@ resource "aws_subnet" "curation_consumer" {
 resource "aws_subnet" "assessment_consumer" {
   vpc_id                  = aws_vpc.main.id
   availability_zone       = var.az_primary
-  cidr_block              = local.assessment_consumer_subnet_cidr
+  cidr_block              = local.subnet_cidrs["assessment_consumer"]
   map_public_ip_on_launch = false
   tags                    = { Name = local.assessment_consumer_name }
 }
@@ -130,7 +154,7 @@ resource "aws_subnet" "assessment_consumer" {
 resource "aws_subnet" "embedding_consumer" {
   vpc_id                  = aws_vpc.main.id
   availability_zone       = var.az_primary
-  cidr_block              = local.embedding_consumer_subnet_cidr
+  cidr_block              = local.subnet_cidrs["embedding_consumer"]
   map_public_ip_on_launch = false
   tags                    = { Name = local.embedding_consumer_name }
 }
@@ -189,7 +213,7 @@ resource "aws_nat_gateway" "main" {
   depends_on = [aws_internet_gateway.main]
 }
 
-# app 段の構造的な保証: このルートテーブルに 0.0.0.0/0 を置かない。
+# app サービスの構造的な保証: このルートテーブルに 0.0.0.0/0 を置かない。
 # 設定でうっかり外に出るのではなく、経路が存在しない。
 # S3 Gateway endpoint のルートは aws_vpc_endpoint.s3 が注入する
 # (ECR のレイヤーが S3 から来るため、image pull に必要)。
@@ -236,7 +260,7 @@ resource "aws_route_table_association" "embedding_consumer" {
 }
 
 # VPC の外へ出られる唯一の app 側ルートテーブル。所属するのは proxy subnet だけ。
-# S3 の経路は aws_vpc_endpoint.s3 が注入する (image pull を app 段と同じ経路に
+# S3 の経路は aws_vpc_endpoint.s3 が注入する (image pull を app サービスと同じ経路に
 # 揃え、NAT のデータ処理課金も通らない)。
 resource "aws_route_table" "proxy" {
   vpc_id = aws_vpc.main.id
@@ -285,7 +309,7 @@ resource "aws_security_group" "endpoints" {
 # interface endpoint と違い、ルートテーブルに entry を持つのはこれだけ。
 #
 # endpoint policy が 4 層目の境界になる。SG は「S3 へ 443 で出られる」までしか
-# 絞れず、そのままだと frontend を含む全段がリージョンの S3 全域に到達できる
+# 絞れず、そのままだと frontend を含む全サービスがリージョンの S3 全域に到達できる
 # (public-writable bucket への PUT は credential 不要なので exfil 経路が復活し、
 # task role が空でも防げない)。policy で ECR のレイヤー bucket への read だけに
 # 縛ることで、frontend の外向き経路を image pull のみに戻す。
@@ -324,7 +348,7 @@ resource "aws_vpc_endpoint" "s3" {
 # (task role の ssmmessages:* とセット)。課金根拠の「4 本」もそこで変わる。
 # DB 踏み台 (platform_bastion.tf) は同じ endpoint を toggle の中で条件付きに持つ。
 #
-# bedrock-agentcore.gateway = agent 段の外部検索 (agent.tf)。app subnet は
+# bedrock-agentcore.gateway = agent サービスの外部検索 (agent.tf)。app subnet は
 # VPC の外へ出られないため、PrivateLink を張らないと gateway へ到達できない。
 # gateway 専用の service name で、bedrock-agentcore 本体とは別の endpoint。
 resource "aws_vpc_endpoint" "interface" {

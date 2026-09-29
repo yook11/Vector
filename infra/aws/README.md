@@ -23,7 +23,7 @@ egress proxy を宣言する。bootstrap スタック (`bootstrap/`) が先に�
 
 **subnet が権限の単位になる。** proxy が識別できるのは送信元 IP だけで security
 group は見えないため、allowlist を分けたい粒度で subnet を分ける必要がある。
-subnet 自体は無料なので段ごとに 1:1 で切る。
+subnet 自体は無料なので、ECS サービスと Lambda の実行単位ごとに 1:1 で切る。
 
 ## 守っている不変条件
 
@@ -41,10 +41,10 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
   応答しない) ため、app から proxy を迂回する経路は生まれない。
 - **frontend の外向き経路は ECR のレイヤー取得だけ。** Logfire も外部 API も
   呼ばないため proxy への接続を許さない。ただし image pull のために S3 への 443 は
-  全段で開ける必要があり、SG だけでは「リージョンの S3 全域」になってしまう
+  全サービスで開ける必要があり、SG だけでは「リージョンの S3 全域」になってしまう
   (public-writable bucket への PUT は credential 不要なので、task role が空でも
   exfil 経路になる)。**S3 Gateway endpoint の endpoint policy** で ECR のレイヤー
-  bucket への `s3:GetObject` に絞り、入口を持つ唯一の段の外向きを read 1 つに戻す。
+  bucket への `s3:GetObject` に絞り、入口を持つ唯一のサービスの外向きを read 1 つに戻す。
   この前提は Better Auth がメール送信も social provider も持たないこと (招待制、
   検証済み) に依存する。計測 SDK を足すと壊れるが、静かに漏れるのではなく
   接続失敗で明確に壊れる。
@@ -56,7 +56,7 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
   必要な相手だけを列挙する。console で作った SG は既定で egress 全許可だが、
   Terraform の `aws_security_group` は作成時にその既定規則を剥がすため、
   standalone rule で書いた分だけが有効になる。
-- **段に配るのは実際に使うものだけ。** `stages` の `db_users` / `needs_broker` /
+- **サービスに配るのは実際に使うものだけ。** `services` の `db_users` / `needs_broker` /
   `egress_vendors` が SG 規則と IAM policy と squid.conf の生成元になる。
   例えば scheduler は cron を発火するだけで DB engine を作らない
   (`scheduler_entrypoint.py` が `is_scheduler_process=True` で `WORKER_STARTUP` を
@@ -66,17 +66,21 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
   下限は 1 AZ。ECS task も Valkey も同じ AZ に置き、cross-AZ 転送費をゼロにする。
   `az_secondary` は ALB と RDS subnet group の 2 AZ 要件を満たすためだけに存在する。
 
-## 段の宣言は 1 箇所
+## 宣言は表で 1 箇所に置く
 
-`platform_ecs_services.tf` の `stages` が subnet と security group を生成する。棚卸しの表が
-そのまま入っており、段を増やすときに触るのはここだけ。
+- ECS サービスは `platform_ecs_services.tf` の `services` が宣言する。subnet・security group・
+  IAM role・Valkey user はこの表から生成する。
+- subnet の番号は `platform_network.tf` の `subnet_indexes` が全 subnet 分を持つ。
+  同じ番号を 2 回書くと plan で止まる。
+
+ECS サービスを増やすときは、この 2 つの表に 1 行ずつ足し、bootstrap のロール名の一覧も直す。
 
 ## ハマりどころ
 
 - **interface endpoint の ENI は 1 AZ につき 1 subnet にしか置けない。** 7 つの app
   subnet 全部には置けないので api の subnet に集約し、他からは VPC の local ルートで
   届かせる。到達制御は `sg-vpce` が行う。課金が「4 endpoint × 1 AZ」に収まる根拠。
-- **app subnet にも S3 Gateway endpoint の経路が要る。** frontend も含めて全段。
+- **app subnet にも S3 Gateway endpoint の経路が要る。** frontend も含めて全サービス。
   Fargate の image pull は ECR のレイヤーを S3 から取るため、これが無いと
   そもそも task が起動しない。**ルートだけでは足りず SG の egress も要る**
   (gateway endpoint の prefix list を参照する)。task が起動しないときの第一容疑者。

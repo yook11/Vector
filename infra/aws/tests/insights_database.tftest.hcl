@@ -71,13 +71,13 @@ run "insights_connects_only_as_insights_role" {
   command = plan
 
   assert {
-    condition     = local.stage_environment["insights"].DATABASE_URL == local.backend_db_url["vector_insights"]
-    error_message = "insights段はvector_insightsで接続する。"
+    condition     = local.service_environment["insights"].DATABASE_URL == local.backend_db_url["vector_insights"]
+    error_message = "insightsサービスはvector_insightsで接続する。"
   }
   assert {
     condition = jsondecode(aws_iam_role_policy.task["insights"].policy).Statement[0].Resource == [
       "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_insights",
     ]
-    error_message = "insights段のタスクロールはvector_insightsにだけ接続できる。"
+    error_message = "insightsサービスのタスクロールはvector_insightsにだけ接続できる。"
   }
 }

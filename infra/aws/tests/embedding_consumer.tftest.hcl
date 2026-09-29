@@ -129,10 +129,10 @@ run "consumer_network_is_private_and_gemini_only" {
       aws_subnet.embedding_consumer.availability_zone == var.az_primary &&
       !aws_subnet.embedding_consumer.map_public_ip_on_launch &&
       aws_route_table_association.embedding_consumer.route_table_id == aws_route_table.app.id &&
-      !contains(keys(local.stages), "embedding_consumer") &&
+      !contains(keys(local.services), "embedding_consumer") &&
       !contains(values(local.app_subnet_cidrs), aws_subnet.embedding_consumer.cidr_block)
     )
-    error_message = "専用サブネットを既存ECS段から分離してprivate経路に接続する。"
+    error_message = "専用サブネットを既存ECSサービスから分離してprivate経路に接続する。"
   }
   assert {
     condition = alltrue([for key, endpoint in aws_vpc_endpoint.interface :
@@ -147,10 +147,10 @@ run "consumer_network_is_private_and_gemini_only" {
       !local.proxy_clients.embedding_consumer.allow_any_domain &&
       strcontains(local.squid_conf, "acl src_embedding_consumer src ${aws_subnet.embedding_consumer.cidr_block}") &&
       strcontains(local.squid_conf, "http_access allow src_embedding_consumer dst_embedding_consumer") &&
-      alltrue([for name in local.egress_stages :
+      alltrue([for name in local.egress_services :
         local.proxy_clients[name].cidr == local.app_subnet_cidrs[name] &&
-        toset(local.proxy_clients[name].domains) == toset(flatten([for vendor in local.stages[name].egress_vendors : local.egress_vendor_domains[vendor]])) &&
-        local.proxy_clients[name].allow_any_domain == local.stages[name].egress_allow_any_domain
+        toset(local.proxy_clients[name].domains) == toset(flatten([for vendor in local.services[name].egress_vendors : local.egress_vendor_domains[vendor]])) &&
+        local.proxy_clients[name].allow_any_domain == local.services[name].egress_allow_any_domain
       ])
     )
     error_message = "Geminiだけを許可し、既存proxyクライアントは変更しない。"

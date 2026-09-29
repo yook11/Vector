@@ -6,7 +6,7 @@
 #
 # **用途ごとに分ける。** 天井は「そのロールの policy が壊れたときどこまで届くか」を
 # 決めるものなので、1 本に統合すると天井が全用途の和集合まで広がる。統合していた頃は
-# task role の天井に parameter/vector/* の ssm:GetParameter (= 全段の secret) が
+# task role の天井に parameter/vector/* の ssm:GetParameter (= 全サービスの secret) が
 # 載っていた。task role は container credentials endpoint から読める唯一の資格情報で、
 # アプリの RCE / SSRF が最初に手に入れるものなのに、である。
 #
@@ -48,7 +48,7 @@ locals {
   # IAM auth の入口 2 アクション。task 系の boundary が共有する。
   #
   # これだけで済むのは偶然ではなくキュー選定の帰結で、SQS を採っていれば
-  # sqs:* が段ごとに載っていた。Valkey を選んだ時点で、権限設計の重心が
+  # sqs:* がサービスごとに載っていた。Valkey を選んだ時点で、権限設計の重心が
   # IAM から Redis ACL と Postgres の GRANT へ移った。
   task_data_plane_statements = [
     {
@@ -77,9 +77,9 @@ locals {
   # 当たるため pattern だと 2 つの Deny を踏んで作成不能になり、そもそも pattern では
   # 「表に無い名前を拒否」を表現できない。
   #
-  # bootstrap は本体の local.stages を参照できないので段名をここでも持つ。段を増やす
+  # bootstrap は本体の local.services を参照できないのでサービス名をここでも持つ。サービスを増やす
   # ときは、この表を apply してから本体を apply する。順序を守らないと CreateRole が
-  # Deny で落ちる。天井を決めずに段が増えないようにするための順序。
+  # Deny で落ちる。天井を決めずにサービスが増えないようにするための順序。
   role_boundary_groups = merge(local.backfill_role_boundary_groups, local.source_dispatch_role_boundary_groups, local.article_analysis_role_boundary_groups, {
     Task = {
       boundary = aws_iam_policy.task_boundary.arn
@@ -88,7 +88,7 @@ locals {
         "${var.name_prefix}-${s}-task"
       ]
     }
-    # agent 段だけが外部検索で gateway を呼ぶ (本体の
+    # agent サービスだけが外部検索で gateway を呼ぶ (本体の
     # aws_iam_role_policy.agentcore_gateway_invoke)。天井もそこだけに限定する。
     AgentTask = {
       boundary   = aws_iam_policy.agent_task_boundary.arn
@@ -186,9 +186,9 @@ resource "aws_iam_policy" "task_boundary" {
   })
 }
 
-# agent 段の task role だけの天井。上に gateway 呼び出しを 1 つ足したもの。
+# agent サービスの task role だけの天井。上に gateway 呼び出しを 1 つ足したもの。
 #
-# 共通の task boundary には入れない。外部検索を持たない 7 段の天井まで
+# 共通の task boundary には入れない。外部検索を持たない 7 サービスの天井まで
 # 上げる理由が無い。
 resource "aws_iam_policy" "agent_task_boundary" {
   name        = "${var.name_prefix}-agent-task-boundary"

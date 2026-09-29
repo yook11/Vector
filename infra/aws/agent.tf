@@ -96,7 +96,7 @@ resource "aws_iam_role_policy" "agentcore_gateway" {
   })
 }
 
-# agent 段だけが gateway を呼ぶ。他段は外部検索を持たない。
+# agent サービスだけが gateway を呼ぶ。他のサービスは外部検索を持たない。
 resource "aws_iam_role_policy" "agentcore_gateway_invoke" {
   name = "agentcore-gateway-invoke"
   role = aws_iam_role.task["agent"].id

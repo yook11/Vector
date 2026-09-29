@@ -19,7 +19,7 @@
 
 `iam:CreateRole` と `iam:AttachRolePolicy` を持つロールは、AdministratorAccess を
 付けた新しいロールを作って引き受けられる。**`terraform-apply` は放っておくと実質
-管理者**で、そうなると段ごとに権限を分けた意味が消える。
+管理者**で、そうなるとサービスごとに権限を分けた意味が消える。
 
 対策は permissions boundary だが、**boundary は迂回路を全部塞いだときだけ構造になる**。
 
@@ -42,7 +42,7 @@ Administrator」** が通る。CI ロール自体の改変が抜けると「自�
 
 天井は「そのロールの policy が壊れたときどこまで届くか」を決めるものなので、
 1 本に統合すると天井が全用途の和集合まで広がる。統合していた頃は、task role の
-天井に全段の secret を読める `ssm:GetParameter` が載っていた。task role は
+天井に全サービスの secret を読める `ssm:GetParameter` が載っていた。task role は
 コンテナの中から読み出せる唯一の資格情報なのに、である。
 
 | boundary | 対象ロール | 中身 |
@@ -66,8 +66,8 @@ Administrator」** が通る。CI ロール自体の改変が抜けると「自�
 にも当たって 2 つの Deny を踏むのと、pattern では「表に無い名前を拒否」を
 表現できないため。
 
-段を増やすときは、この表を apply してから本体を apply する。順序を守らないと
-`CreateRole` が Deny で落ちる。天井を決めずに段が増えないようにするための順序。
+サービスを増やすときは、この表を apply してから本体を apply する。順序を守らないと
+`CreateRole` が Deny で落ちる。天井を決めずにサービスが増えないようにするための順序。
 
 **path で Allow 側からも成立させている。** 本体が作るロールは `/vector/`、
 CI ロールと boundary は `/vector-ci/`。apply の `iam:*` は `/vector/` にしか
