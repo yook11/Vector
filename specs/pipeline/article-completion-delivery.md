@@ -16,7 +16,7 @@ Status: スライス1〜4の起動・資源管理、抽出の独立、入力検�
 - [AIの資源管理](../../backend/app/lambda_handlers/article_analysis_lifecycle.py): 初期化・解放の参照元だが、AIクライアントやAPIキーへの依存をそのまま補完へ持ち込まない。
 - [外部HTTP](../../backend/app/http/external.py)、[ソース型](../../backend/app/collection/sources/article_source.py)、[取得ツール](../../backend/app/collection/article_acquisition/tools/reader_tools.py): HTTP設定は独立しているが、ソースの型参照からアプリ全体の設定を読み込む経路がある。
 - [HTML抽出](../../backend/app/collection/article_completion/html_extraction.py): スライス2着手時点では抽出器のプロセス内重複判定を利用し、記事・試行ごとの独立を保証していなかった。
-- [キュー設定](../../infra/aws/outbox_relay.tf): 補完キューは標準キュー、可視性30秒、保持14日、DLQ未設定。[キュレーションLambda](../../infra/aws/curation_consumer.tf)は120秒・バッチ1件で、今回の値へそのまま転用しない。
+- [キュー設定](../../infra/aws/news_pipeline_outbox.tf): 補完キューは標準キュー、可視性30秒、保持14日、DLQ未設定。[キュレーションLambda](../../infra/aws/news_pipeline_curation.tf)は120秒・バッチ1件で、今回の値へそのまま転用しない。
 
 上記はリポジトリ上の現状であり、稼働中のAWS環境は確認していない。
 

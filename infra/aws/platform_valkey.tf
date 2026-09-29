@@ -113,7 +113,7 @@ resource "aws_elasticache_parameter_group" "rate_limit" {
 }
 
 # IAM 認証なので password が存在せず、user を Terraform 管理にしても state に
-# 秘密が載らない。IAM が決めるのは「どの user として繋げるか」(iam.tf) だけで、
+# 秘密が載らない。IAM が決めるのは「どの user として繋げるか」(platform_ecs_services.tf) だけで、
 # 入った後に何ができるかは access_string が全部決める。
 resource "aws_elasticache_user" "broker" {
   for_each = local.broker_user_access
@@ -166,7 +166,7 @@ resource "aws_elasticache_replication_group" "broker" {
   engine         = "valkey"
   engine_version = var.valkey_version
   node_type      = "cache.t4g.micro"
-  # 既定値だが、ecs.tf が env の URL を組むのに参照するため明示する。
+  # 既定値だが、broker_endpoint が env の URL を組むのに参照するため明示する。
   port = 6379
 
   num_cache_clusters         = 1

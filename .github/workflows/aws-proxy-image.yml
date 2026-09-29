@@ -3,7 +3,7 @@ name: AWS proxy image
 # egress proxy の image を ECR に push する。
 #
 # app image と分けているのは proxy が「アプリの段」ではなく「経路の装置」で、tag が
-# squid の version 基準で振られるため (infra/aws/proxy.tf の注記)。初回は
+# squid の version 基準で振られるため (infra/aws/platform_egress_proxy.tf の注記)。初回は
 # apply -> proxy push -> app push の順で、proxy が起動しないと全 egress が止まる。
 #
 # workflow_dispatch のみ。main の push で自動に走らせないのは、AWS 側がまだ検証中で

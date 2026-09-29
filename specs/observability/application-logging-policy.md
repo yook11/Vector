@@ -34,7 +34,7 @@ structlogのcontextへ処理の事実を追加し、概念ごとのポリシー�
 | URL・自由文 | [scraper.py](../../backend/app/collection/article_completion/scraper.py)には記事URLと例外文を直接記録する経路がある。 |
 | frontend | [server-log.ts](../../frontend/src/lib/observability/server-log.ts)はqueryを除去するが、渡されたfieldsを展開しており、実行時の共通ポリシーはない。 |
 | 独立した出力 | [EMF](../../backend/app/cloudwatch/emf.py)は直接stdoutへJSONを書き、[scheduler](../../backend/app/queue/scheduler_entrypoint.py)には標準loggingのhandlerがある。[Agent](../../backend/app/agent/research_handoff/recall.py)等には直接のLogfireログ呼び出しがある。 |
-| 配送・保持 | [ECS](../../infra/aws/ecs.tf)のawslogs設定、[Assessment Lambda](../../infra/aws/assessment_consumer.tf)のlogging_configがある。[log_retention_days](../../infra/aws/variables.tf)の既定値は30日で、実環境の有効値は未確認。 |
+| 配送・保持 | [ECS](../../infra/aws/platform_ecs_services.tf)のawslogs設定、[Assessment Lambda](../../infra/aws/news_pipeline_assessment.tf)のlogging_configがある。[log_retention_days](../../infra/aws/variables.tf)の既定値は30日で、実環境の有効値は未確認。 |
 
 ## Invariants
 

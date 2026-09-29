@@ -10,7 +10,7 @@ Status: Curation・Assessment・Embeddingの配送入口を実装済み（Curati
 
 - イベント本体: `backend/app/models/outbox_event.py`
 - 既存payload定義: `backend/app/collection/events.py`、`backend/app/collection/article_acquisition/events.py`、`backend/app/analysis/{curation,assessment}/events.py`
-- キューと設定: `infra/aws/outbox_relay.tf`、`backend/app/lambda_handlers/outbox_relay/settings.py`
+- キューと設定: `infra/aws/news_pipeline_outbox.tf`、`backend/app/lambda_handlers/outbox_relay/settings.py`
 
 ## Invariants
 

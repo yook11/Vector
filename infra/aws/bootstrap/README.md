@@ -176,7 +176,7 @@ terraform apply
 
 apply 後、出力された `state_bucket_name` を `../versions.tf` の backend ブロックに
 書いて有効化する。boundary の ARN を本体スタックへ渡す必要は無い。本体は
-`name_prefix` から組み立てる (`iam.tf` の `boundary_arns`)。variable にすると
+`name_prefix` から組み立てる (`locals.tf` の `boundary_arns`)。variable にすると
 GitHub secret が boundary の数だけ増え、1 本の設定漏れで plan と apply の
 両方が止まるため。
 

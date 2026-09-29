@@ -15,7 +15,7 @@ Status: ステップ1〜5を実装し、投入基盤・取得Consumer・3スケ�
 - [現行投入タスク](../../backend/app/queue/tasks/acquisition.py): 定期3経路と管理者の手動経路があり、ソースごとにTaskiqへ投入する。現在の一部投入失敗を捕捉して継続する動作は、新Lambdaの成功条件の根拠にはしない。
 - [現行取得入力](../../backend/app/queue/messages/collection.py): DBのソースIDとコード定義の検索キーであるソース名を渡す。
 - [Outbox送信契約](./outbox-sqs-message-contract.md): アプリのevent_idとSQSのMessageIdを区別し、再送でも同じevent_idを維持する。ただし本工程は保存済み記事の完了イベントを配送するOutbox relayではなく、取得を依頼する処理である。
-- [既存AWS構成](../../infra/aws/outbox_relay.tf)と[既存監視](../../infra/aws/alerting.tf): Lambda・Scheduler・SQS接続とdispatch_runの監視がある。実装パターンの参照元であり、その権限・再試行設定の流用を確定するものではない。
+- [既存AWS構成](../../infra/aws/news_pipeline_outbox.tf)と[既存監視](../../infra/aws/news_pipeline_alerting.tf): Lambda・Scheduler・SQS接続とdispatch_runの監視がある。実装パターンの参照元であり、その権限・再試行設定の流用を確定するものではない。
 
 ## 合意済みの構成
 

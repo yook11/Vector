@@ -14,7 +14,7 @@ Curationの完了イベントからAssessmentを実行し、対象内の判定�
 - [Embedding Lambda入口](../../backend/app/lambda_handlers/embedding/handler.py)：初期化、入力検証、部分バッチ応答、資源の終了。
 - [Gemini通信設定](../../backend/app/ai_providers/gemini/settings.py)と[クライアント管理](../../backend/app/ai_providers/gemini/client.py)：DeepSeekの責務分担の参照元。
 - [Curationイベント](../../backend/app/analysis/curation/events.py)、[Assessment保存処理](../../backend/app/analysis/assessment/service.py)、[Outbox送信契約](./outbox-sqs-message-contract.md)：既存のpayloadと保存・配送境界。
-- [relay](../../backend/app/outbox/delivery/relay.py)と[Scheduler定義](../../infra/aws/outbox_relay.tf)：コード上の配送入口はEmbedding向けとAssessment向けに分離済み。Assessment向けの独立したScheduler・relay・SQS・Consumerを定義している。実際の有効／停止状態はAWSで確認する。
+- [relay](../../backend/app/outbox/delivery/relay.py)と[Scheduler定義](../../infra/aws/news_pipeline_outbox_relays.tf)：コード上の配送入口はEmbedding向けとAssessment向けに分離済み。Assessment向けの独立したScheduler・relay・SQS・Consumerを定義している。実際の有効／停止状態はAWSで確認する。
 
 ## 全体フローと責務
 

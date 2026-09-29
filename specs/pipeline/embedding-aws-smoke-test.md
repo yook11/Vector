@@ -27,9 +27,9 @@ bootstrapは既存管理者の`WorkloadAdministrator`で運用し、その権限
 - `backend/local_tests/embedding/`: migration適用済みDBを使った保存・失敗・接続解放・重複配送・同時処理のテスト。
 - `backend/local_tests/database.py`: ロール・Better Auth・Alembicを用いたDB準備の既存実装。
 - `backend/app/lambda_handlers/embedding/`: 実ハンドラー、設定、IAM接続とSSM取得。
-- `infra/aws/embedding_consumer.tf`: 本番のLambda・IAM・SQSイベントソースマッピング。
-- `infra/aws/outbox_relay.tf`: キューと再配送設定。
-- `infra/aws/proxy.tf`と`infra/aws/templates/squid.conf.tftpl`: 本番の外向きプロキシ構成。
+- `infra/aws/news_pipeline_embedding.tf`: 本番のLambda・IAM・SQSイベントソースマッピング。
+- `infra/aws/news_pipeline_outbox.tf`: キューと再配送設定。
+- `infra/aws/platform_egress_proxy.tf`と`infra/aws/templates/squid.conf.tftpl`: 本番の外向きプロキシ構成。
 - `infra/aws/scripts/verify-embedding-runtime.py`: リソースを差し替えるイメージ内起動試験であり、実AWS接続の保証ではない。
 
 既存Terraformは構成の参考とし、本番のstateや実行リソースをテストから操作しない。

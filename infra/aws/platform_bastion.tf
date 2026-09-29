@@ -28,7 +28,7 @@ resource "aws_route_table_association" "bastion" {
   route_table_id = aws_route_table.data.id
 }
 
-# Session Manager のデータチャネル。常設の 4 本 (endpoints.tf) に無いのは
+# Session Manager のデータチャネル。常設の 4 本 (platform_network.tf) に無いのは
 # ECS Exec を使わない決定のためで、踏み台が居る間だけここで足す。
 # agent の登録経路は常設の ssm endpoint が担う。
 #

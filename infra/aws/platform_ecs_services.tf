@@ -215,7 +215,7 @@ locals {
     agent = {
       DATABASE_URL = local.backend_db_url["vector_agent"]
       REDIS_URL    = local.broker_redis_url["agent"]
-      # 外部検索の MCP 入口 (agentcore.tf)。宛先は PrivateLink 経由の内部 host で、
+      # 外部検索の MCP 入口 (agent.tf)。宛先は PrivateLink 経由の内部 host で、
       # backend は make_internal_async_client で叩く (env の proxy 設定を読まない)。
       AGENTCORE_GATEWAY_URL = aws_bedrockagentcore_gateway.web_search.gateway_url
     }
@@ -444,7 +444,7 @@ resource "aws_iam_role" "task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_trust.json
 
   # agent 段だけ天井が違う。この task role だけが web search の gateway を呼ぶ
-  # (agentcore.tf の aws_iam_role_policy.agentcore_gateway_invoke)。
+  # (agent.tf の aws_iam_role_policy.agentcore_gateway_invoke)。
   permissions_boundary = local.boundary_arns[each.key == "agent" ? "agent-task" : "task"]
 }
 
@@ -479,7 +479,7 @@ resource "aws_iam_role_policy" "task" {
 
 # rds-db:connect と同型の入口権限。Connect は接続先 cache と接続 user の
 # **両方の ARN** に対して評価されるため、片方だけでは認証が通らない。
-# 入った後に何ができるかは valkey.tf の access_string が全部決める。
+# 入った後に何ができるかは platform_valkey.tf の access_string が全部決める。
 resource "aws_iam_role_policy" "valkey" {
   for_each = local.valkey_connect_arns
 
@@ -688,7 +688,7 @@ resource "aws_vpc_security_group_egress_rule" "app_to_endpoints" {
 # 宛先は gateway endpoint が export する prefix list で参照する。
 #
 # frontend にもこの穴が要る = 「frontend は外に出られない」が形式上は崩れる。
-# 何を取れるかは aws_vpc_endpoint.s3 の endpoint policy が縛る (endpoints.tf)。
+# 何を取れるかは aws_vpc_endpoint.s3 の endpoint policy が縛る (platform_network.tf)。
 resource "aws_vpc_security_group_egress_rule" "app_to_s3" {
   for_each = local.all_stages
 

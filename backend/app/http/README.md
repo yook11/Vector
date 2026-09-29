@@ -15,8 +15,8 @@
 | プロキシ | 自身が解決した接続先の検査と、実行単位ごとの制限 | 非公開IP・ポート・許可ドメインをACLで制限する |
 | 利用機能 | 失敗の意味づけ | 宛先拒否やDNS失敗を、記事取得失敗などへ変換する |
 
-処理ごとの許可ドメインは、[実行単位の設定](../../../infra/aws/locals.tf)と
-[プロキシ設定](../../../infra/aws/proxy.tf)が持つ。
+処理ごとの許可ドメインは、[実行単位の設定](../../../infra/aws/platform_ecs_services.tf)と
+[プロキシ設定](../../../infra/aws/platform_egress_proxy.tf)が持つ。
 workerやLambdaの送信元に対応するACLを使い、記事取得は可変のサイトを許可し、
 API呼び出しは実行単位に必要なベンダードメインへ限定する。
 アプリ側で処理別ポリシーを選択・差し替えする仕組みは持たない。
@@ -31,8 +31,8 @@ API呼び出しは実行単位に必要なベンダードメインへ限定す�
 | 許可ドメイン限定の外部通信 | `analysis`、`assessment_consumer`、`embedding_consumer`、`curation_consumer` | 送信前のIP検証・プロキシ必須 | 許可ドメイン・非公開IP・ポートの制限 |
 | 可変ドメインへの外部通信 | `fetch`、`acquisition_consumer`、`completion_consumer` | 送信前のIP検証・プロキシ必須 | ドメインを限定せず、非公開IP・ポートを制限 |
 
-[実行単位の設定](../../../infra/aws/locals.tf)の`egress_vendors`は、
-[プロキシ設定](../../../infra/aws/proxy.tf)のベンダードメイン一覧へ対応する。
+[実行単位の設定](../../../infra/aws/platform_ecs_services.tf)の`egress_vendors`は、
+[プロキシ設定](../../../infra/aws/platform_egress_proxy.tf)のベンダードメイン一覧へ対応する。
 `egress_allow_any_domain`はプロキシへ渡す`allow_any_domain`に対応し、
 consumer専用の設定も同じプロキシ設定内で定義する。
 `allow_any_domain = true`でも非公開IP・許可外ポートの拒否は解除しない。

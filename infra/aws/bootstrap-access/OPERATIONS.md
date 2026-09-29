@@ -32,7 +32,7 @@ Scheduler失敗DLQとLambda非同期実行失敗キューはSQS標準の再投�
 
 1. 管理者が既存bootstrap-accessのstateとtfvarsを使ってplanし、運用ロールとinline policyの追加だけであることを確認して適用する。別stateで既存リソースを重複作成しない。
 2. Identity Center管理権限でVectorDeployの既存inline policyを取得し、outputのdeploy_operations_assume_statementだけを追加する。既存statementを置換・削除しない。対象アカウントへPermission Setを再プロビジョニングする。
-3. 通常のインフラ変更経路でoutbox_relay.tfとsource_dispatch.tfのキューポリシー変更を適用する。
+3. 通常のインフラ変更経路でnews_pipeline_outbox.tfとnews_pipeline_source_dispatch.tfのキューポリシー変更を適用する。
 4. AWS CLIに以下のプロファイルを追加し、デプロイユーザーのSSOログイン後に本人確認する。
 
 ```ini
