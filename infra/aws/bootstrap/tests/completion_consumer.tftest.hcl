@@ -38,28 +38,18 @@ run "completion_roles_have_specific_boundaries" {
     condition = (
       local.role_boundary_groups.CompletionConsumerLambda.role_names == ["slice-test-completion-consumer-lambda"] &&
       local.role_boundary_groups.CompletionConsumerLambda.boundary == aws_iam_policy.completion_consumer_lambda_boundary.arn &&
-      local.role_boundary_groups.CompletionOutboxRelayLambda.role_names == ["slice-test-completion-outbox-relay-lambda"] &&
-      local.role_boundary_groups.CompletionOutboxRelayLambda.boundary == aws_iam_policy.completion_outbox_relay_lambda_boundary.arn &&
-      local.role_boundary_groups.CompletionOutboxRelayScheduler.role_names == ["slice-test-completion-outbox-relay-scheduler"] &&
-      local.role_boundary_groups.CompletionOutboxRelayScheduler.boundary == aws_iam_policy.completion_outbox_relay_scheduler_boundary.arn &&
-      alltrue([for policy in [
-        aws_iam_policy.completion_consumer_lambda_boundary.policy,
-        aws_iam_policy.completion_outbox_relay_lambda_boundary.policy,
-        aws_iam_policy.completion_outbox_relay_scheduler_boundary.policy,
-      ] : contains(jsondecode(policy).Statement, local.boundary_no_escalation_statement)])
+      contains(jsondecode(aws_iam_policy.completion_consumer_lambda_boundary.policy).Statement, local.boundary_no_escalation_statement)
     )
-    error_message = "Completionの3ロールと権限境界を対応させ、権限昇格を禁止する。"
+    error_message = "Completion Consumerのロールと権限境界を対応させ、権限昇格を禁止する。"
   }
   assert {
     condition = (
       { for s in jsondecode(aws_iam_policy.completion_consumer_lambda_boundary.policy).Statement : s.Sid => s.Resource if contains(["ConsumeCompletionEvents", "RdsIamAuthAsCollect"], s.Sid) } == {
         ConsumeCompletionEvents = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-completion"
         RdsIamAuthAsCollect     = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_collect"
-      } &&
-      [for s in jsondecode(aws_iam_policy.completion_outbox_relay_lambda_boundary.policy).Statement : s.Resource if s.Sid == "SendPipelineEvents"] == ["arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-completion"] &&
-      [for s in jsondecode(aws_iam_policy.completion_outbox_relay_scheduler_boundary.policy).Statement : s.Resource if s.Sid == "InvokeRelayOnly"] == [local.completion_outbox_relay_lambda_arn]
+      }
     )
-    error_message = "Consumer・relay・Schedulerの天井をそれぞれの対象だけに限定する。"
+    error_message = "Consumerの天井を補完キューとvector_collectに限定する。"
   }
 }
 
@@ -70,20 +60,14 @@ run "ci_limits_completion_management_to_its_function_and_tag" {
       aws_iam_role_policy_attachment.apply_completion_consumer.role == aws_iam_role.ci["apply"].name &&
       aws_iam_role_policy_attachment.apply_completion_consumer.policy_arn == aws_iam_policy.apply_completion_consumer.arn &&
       contains(local.managed_role_arns, local.completion_consumer_role_arn) &&
-      contains(local.managed_role_arns, local.completion_outbox_relay_role_arn) &&
       !contains(local.app_role_arns, local.completion_consumer_role_arn) &&
-      !contains(local.app_role_arns, local.completion_outbox_relay_role_arn) &&
       [for s in jsondecode(aws_iam_policy.apply_completion_consumer.policy).Statement : s.Resource if s.Sid == "ManageCompletionFunction"] == [local.completion_consumer_lambda_arn] &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_completion_consumer.policy).Statement :
         !contains(["CreateCompletionMapping", "ManageCompletionMapping"], s.Sid) ? true :
         s.Condition.ArnEquals["lambda:FunctionArn"] == local.completion_consumer_lambda_arn &&
         values(s.Condition.StringEquals) == ["slice-test-completion-consumer"]
       ]) &&
-      alltrue([for policy in [aws_iam_policy.completion_consumer_lambda_boundary.policy, aws_iam_policy.completion_outbox_relay_lambda_boundary.policy] :
-        [for s in jsondecode(policy).Statement : s.Condition.ArnEquals["lambda:SourceFunctionArn"] if contains(["DenyEniOperationsFromFunctionCode", "DenyNetworkManagementFromFunctionCode"], s.Sid)] == [
-          policy == aws_iam_policy.completion_consumer_lambda_boundary.policy ? local.completion_consumer_lambda_arn : local.completion_outbox_relay_lambda_arn
-        ]
-      ])
+      [for s in jsondecode(aws_iam_policy.completion_consumer_lambda_boundary.policy).Statement : s.Condition.ArnEquals["lambda:SourceFunctionArn"] if s.Sid == "DenyEniOperationsFromFunctionCode"] == [local.completion_consumer_lambda_arn]
     )
     error_message = "Completionの管理対象を関数・タグで限定し、関数コードからのENI操作を拒否する。"
   }
@@ -104,15 +88,3 @@ run "pass_role_guards_survive_policy_relocation" {
   }
 }
 
-run "relay_boundary_allows_only_dedicated_db_user" {
-  command = plan
-  assert {
-    condition = toset(flatten([
-      for s in jsondecode(aws_iam_policy.completion_outbox_relay_lambda_boundary.policy).Statement : s.Resource
-      if s.Action == "rds-db:connect" && s.Effect == "Allow"
-      ])) == toset([
-      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_outbox_relay",
-    ])
-    error_message = "Completion Relayの境界は専用DBユーザーだけに接続を許可し、旧Appユーザーへの接続を許可しない。"
-  }
-}

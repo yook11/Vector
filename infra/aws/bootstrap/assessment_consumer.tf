@@ -5,7 +5,7 @@ resource "aws_iam_policy" "apply_assessment_consumer" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = concat([
+    Statement = [
       {
         Sid    = "ManageAssessmentFunction"
         Effect = "Allow"
@@ -68,7 +68,7 @@ resource "aws_iam_policy" "apply_assessment_consumer" {
           "ForAllValues:StringEquals" = { "aws:TagKeys" = ["Project", "ManagedBy"] }
         }
       },
-    ], local.assessment_boundary_pairing_statements)
+    ]
   })
 }
 

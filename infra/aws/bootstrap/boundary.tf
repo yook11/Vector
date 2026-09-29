@@ -116,14 +116,6 @@ locals {
       boundary   = aws_iam_policy.outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-outbox-relay-scheduler"]
     }
-    AssessmentOutboxRelayLambda = {
-      boundary   = aws_iam_policy.assessment_outbox_relay_lambda_boundary.arn
-      role_names = ["${var.name_prefix}-assessment-outbox-relay-lambda"]
-    }
-    AssessmentOutboxRelayScheduler = {
-      boundary   = aws_iam_policy.assessment_outbox_relay_scheduler_boundary.arn
-      role_names = ["${var.name_prefix}-assessment-outbox-relay-scheduler"]
-    }
     CompletionConsumerLambda = {
       boundary   = aws_iam_policy.completion_consumer_lambda_boundary.arn
       role_names = ["${var.name_prefix}-completion-consumer-lambda"]
@@ -131,22 +123,6 @@ locals {
     AcquisitionConsumerLambda = {
       boundary   = aws_iam_policy.acquisition_consumer_lambda_boundary.arn
       role_names = ["${var.name_prefix}-acquisition-consumer-lambda"]
-    }
-    CompletionOutboxRelayLambda = {
-      boundary   = aws_iam_policy.completion_outbox_relay_lambda_boundary.arn
-      role_names = ["${var.name_prefix}-completion-outbox-relay-lambda"]
-    }
-    CompletionOutboxRelayScheduler = {
-      boundary   = aws_iam_policy.completion_outbox_relay_scheduler_boundary.arn
-      role_names = ["${var.name_prefix}-completion-outbox-relay-scheduler"]
-    }
-    CurationOutboxRelayLambda = {
-      boundary   = aws_iam_policy.curation_outbox_relay_lambda_boundary.arn
-      role_names = ["${var.name_prefix}-curation-outbox-relay-lambda"]
-    }
-    CurationOutboxRelayScheduler = {
-      boundary   = aws_iam_policy.curation_outbox_relay_scheduler_boundary.arn
-      role_names = ["${var.name_prefix}-curation-outbox-relay-scheduler"]
     }
     AuthRateLimitCleanupLambda = {
       boundary   = aws_iam_policy.auth_rate_limit_cleanup_lambda_boundary.arn

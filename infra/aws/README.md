@@ -479,7 +479,7 @@ LambdaのCI管理権限はConsumer関数ARNとFunctionArn条件で限定する�
 
 通常のplan／applyでは`resolve-curation-images.py`が現行digestを保持する。片側更新・切り戻しは対応入力だけに明示digestを渡す。state不正・digest不正・明示イメージのECR不在なら停止し、nullやタグへ置き換えて続行しない。digest省略を停止操作として使わない。ローカルの読み取り専用planでも上記の全工程のdigest保持処理を行い、生成JSON・stateはコミットしない。
 
-確認用outputsは`curation_consumer_*`（関数・digest・subnet・SG・ロール・ログ・SSM参照・mapping UUID）、`curation_outbox_relay_*`（関数・digest・ロール・ログ・Scheduler）、`curation_dlq_*`、既存`outbox_queue_urls`／`outbox_queue_arns`を使用する。実AWSの権限成立・配送・通知はmock planの成功だけでは検証済みとしない。
+確認用outputsは`curation_consumer_*`（関数・digest・subnet・SG・ロール・ログ・SSM参照・mapping UUID）、`curation_outbox_relay_*`（関数・ログ）、`curation_dlq_*`、既存`outbox_queue_urls`／`outbox_queue_arns`を使用する。実AWSの権限成立・配送・通知はmock planの成功だけでは検証済みとしない。
 
 ### 今回のローカル検証範囲
 

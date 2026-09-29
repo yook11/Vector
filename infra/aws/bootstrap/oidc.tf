@@ -5,7 +5,6 @@ locals {
 
   assessment_consumer_lambda_arn     = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-assessment-consumer"
   assessment_outbox_relay_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-assessment-outbox-relay"
-  assessment_outbox_relay_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-assessment-outbox-relay-lambda"
   assessment_dlq_arn                 = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-assessment-dlq"
   curation_consumer_lambda_arn       = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-curation-consumer"
   completion_consumer_lambda_arn     = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-completion-consumer"
@@ -14,8 +13,6 @@ locals {
   acquisition_consumer_role_arn      = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-acquisition-consumer-lambda"
   curation_outbox_relay_lambda_arn   = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-curation-outbox-relay"
   completion_outbox_relay_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-completion-outbox-relay"
-  curation_outbox_relay_role_arn     = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-curation-outbox-relay-lambda"
-  completion_outbox_relay_role_arn   = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-completion-outbox-relay-lambda"
   curation_dlq_arn                   = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-curation-dlq"
   completion_dlq_arn                 = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-completion-dlq"
   acquisition_dlq_arn                = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-source-acquisition-dlq"
@@ -42,17 +39,14 @@ locals {
     Lambda = {
       arns = concat([local.backfill_lambda_role_arn, local.article_analysis_lambda_role_arn], [local.source_dispatch_lambda_role_arn,
         "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda",
-        local.assessment_outbox_relay_role_arn,
         local.completion_consumer_role_arn,
         local.acquisition_consumer_role_arn,
-        local.curation_outbox_relay_role_arn,
-        local.completion_outbox_relay_role_arn,
         local.auth_rate_limit_cleanup_lambda_role_arn,
       ])
       service = "lambda.amazonaws.com"
     }
     Scheduler = {
-      arns    = concat([local.backfill_scheduler_role_arn], [local.source_dispatch_scheduler_role_arn, local.auth_rate_limit_cleanup_scheduler_role_arn], [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-${name}-scheduler"])
+      arns    = concat([local.backfill_scheduler_role_arn], [local.source_dispatch_scheduler_role_arn, local.auth_rate_limit_cleanup_scheduler_role_arn], ["arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-scheduler"])
       service = "scheduler.amazonaws.com"
     }
   }
@@ -158,24 +152,9 @@ locals {
     for key, statement in local.boundary_pairing_statements_by_group : statement
     if contains(local.outbox_boundary_groups, key)
   ]
-  assessment_boundary_groups = toset(["AssessmentOutboxRelayLambda", "AssessmentOutboxRelayScheduler"])
-  assessment_boundary_pairing_statements = [
-    for key, statement in local.boundary_pairing_statements_by_group : statement
-    if contains(local.assessment_boundary_groups, key)
-  ]
-  curation_boundary_groups = toset(["CurationOutboxRelayLambda", "CurationOutboxRelayScheduler"])
-  curation_boundary_pairing_statements = [
-    for key, statement in local.boundary_pairing_statements_by_group : statement
-    if contains(local.curation_boundary_groups, key)
-  ]
-  completion_boundary_groups = toset(["CompletionConsumerLambda", "CompletionOutboxRelayLambda", "CompletionOutboxRelayScheduler"])
-  completion_boundary_pairing_statements = [
-    for key, statement in local.boundary_pairing_statements_by_group : statement
-    if contains(local.completion_boundary_groups, key)
-  ]
   inline_boundary_pairing_statements = [
     for key, statement in local.boundary_pairing_statements_by_group : statement
-    if !contains(setunion(local.outbox_boundary_groups, local.assessment_boundary_groups, local.curation_boundary_groups, local.completion_boundary_groups, toset(keys(local.backfill_role_boundary_groups)), toset(keys(local.source_dispatch_role_boundary_groups)), toset(["AcquisitionConsumerLambda", "AuthRateLimitCleanupLambda", "AuthRateLimitCleanupScheduler"])), key)
+    if !contains(setunion(local.outbox_boundary_groups, toset(keys(local.backfill_role_boundary_groups)), toset(keys(local.source_dispatch_role_boundary_groups)), toset(["AcquisitionConsumerLambda", "CompletionConsumerLambda", "AuthRateLimitCleanupLambda", "AuthRateLimitCleanupScheduler"])), key)
   ]
 
   # CI が assume できるロール。name は「何をするロールか」で付ける
@@ -572,8 +551,8 @@ resource "aws_iam_policy" "apply_outbox" {
           "scheduler:UpdateSchedule",
           "scheduler:DeleteSchedule",
         ]
-        # scheduleのgroup間の移動とgroupの削除(配下のDeleteScheduleを要求する)を通すため、group単位で許可する。
-        Resource = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-${name}/*"]
+        # relayのscheduleは汎用groupの配下で管理し、relayの追加でbootstrapを変えない。
+        Resource = ["arn:aws:scheduler:${var.region}:${local.account_id}:schedule/${var.name_prefix}-outbox-relay/*"]
       },
       {
         Sid    = "ManageOutboxScheduleGroup"
@@ -586,7 +565,7 @@ resource "aws_iam_policy" "apply_outbox" {
           "scheduler:TagResource",
           "scheduler:UntagResource",
         ]
-        Resource = [for name in ["outbox-relay", "assessment-outbox-relay", "curation-outbox-relay", "completion-outbox-relay"] : "arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-${name}"]
+        Resource = ["arn:aws:scheduler:${var.region}:${local.account_id}:schedule-group/${var.name_prefix}-outbox-relay"]
       },
     ], local.outbox_boundary_pairing_statements)
   })

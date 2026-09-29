@@ -88,21 +88,36 @@ run "relay_naming_convention_covers_existing_relays" {
   }
 }
 
-run "ci_manages_relay_schedules_per_group" {
+run "relay_boundary_is_a_single_pair" {
   command = plan
   assert {
     condition = (
-      [for s in jsondecode(aws_iam_policy.apply_outbox.policy).Statement : s if s.Sid == "ManageOutboxSchedule"] == [{
-        Sid    = "ManageOutboxSchedule", Effect = "Allow",
-        Action = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"],
-        Resource = [
-          "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-outbox-relay/*",
-          "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-assessment-outbox-relay/*",
-          "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-curation-outbox-relay/*",
-          "arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-completion-outbox-relay/*",
-        ]
-      }]
+      [for key, group in local.role_boundary_groups : { key = key, role_names = group.role_names } if strcontains(key, "OutboxRelay")] == [
+        { key = "OutboxRelayLambda", role_names = ["slice-test-outbox-relay-lambda"] },
+        { key = "OutboxRelayScheduler", role_names = ["slice-test-outbox-relay-scheduler"] },
+      ]
     )
-    error_message = "scheduleの管理をrelayの4 groupの配下に限定し、group間の移動とgroup削除を通す。"
+    error_message = "配信は汎用relayの実行ロールとSchedulerロールの1組だけで、boundaryもその2本だけに対応させる。"
+  }
+}
+
+run "ci_manages_relay_schedules_in_the_shared_group" {
+  command = plan
+  assert {
+    condition = (
+      [for s in jsondecode(aws_iam_policy.apply_outbox.policy).Statement : s if contains(["ManageOutboxSchedule", "ManageOutboxScheduleGroup"], s.Sid)] == [
+        {
+          Sid      = "ManageOutboxSchedule", Effect = "Allow",
+          Action   = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"],
+          Resource = ["arn:aws:scheduler:ap-northeast-1:123456789012:schedule/slice-test-outbox-relay/*"]
+        },
+        {
+          Sid      = "ManageOutboxScheduleGroup", Effect = "Allow",
+          Action   = ["scheduler:CreateScheduleGroup", "scheduler:GetScheduleGroup", "scheduler:DeleteScheduleGroup", "scheduler:ListTagsForResource", "scheduler:TagResource", "scheduler:UntagResource"],
+          Resource = ["arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-outbox-relay"]
+        },
+      ]
+    )
+    error_message = "relayのscheduleとgroupの管理を汎用groupだけに限定する。"
   }
 }
