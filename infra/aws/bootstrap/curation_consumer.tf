@@ -5,7 +5,7 @@ resource "aws_iam_policy" "apply_curation_consumer" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = concat([
+    Statement = [
       {
         Sid    = "ManageCurationFunction"
         Effect = "Allow"
@@ -68,7 +68,7 @@ resource "aws_iam_policy" "apply_curation_consumer" {
           "ForAllValues:StringEquals" = { "aws:TagKeys" = ["Project", "ManagedBy"] }
         }
       },
-    ], local.curation_boundary_pairing_statements)
+    ]
   })
 }
 

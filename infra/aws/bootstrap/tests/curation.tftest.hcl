@@ -31,60 +31,20 @@ variables {
 }
 
 
-# 専用ロールは専用boundaryに固定し、既存の権限昇格拒否を維持する。
-run "curation_roles_have_specific_boundaries" {
-  command = plan
-  assert {
-    condition = (
-      local.role_boundary_groups.CurationOutboxRelayLambda.role_names == ["slice-test-curation-outbox-relay-lambda"] &&
-      local.role_boundary_groups.CurationOutboxRelayLambda.boundary == aws_iam_policy.curation_outbox_relay_lambda_boundary.arn &&
-      local.role_boundary_groups.CurationOutboxRelayScheduler.role_names == ["slice-test-curation-outbox-relay-scheduler"] &&
-      local.role_boundary_groups.CurationOutboxRelayScheduler.boundary == aws_iam_policy.curation_outbox_relay_scheduler_boundary.arn &&
-      alltrue([for policy in [
-        aws_iam_policy.curation_outbox_relay_lambda_boundary.policy,
-        aws_iam_policy.curation_outbox_relay_scheduler_boundary.policy,
-      ] : contains(jsondecode(policy).Statement, local.boundary_no_escalation_statement)])
-    )
-    error_message = "Curationのrelay・Schedulerの2ロールと権限境界を対応させ、権限昇格を禁止する。"
-  }
-  assert {
-    condition = (
-      [for s in jsondecode(aws_iam_policy.curation_outbox_relay_lambda_boundary.policy).Statement : s.Resource if s.Sid == "SendPipelineEvents"] == ["arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-curation"] &&
-      [for s in jsondecode(aws_iam_policy.curation_outbox_relay_scheduler_boundary.policy).Statement : s.Resource if s.Sid == "InvokeRelayOnly"] == [local.curation_outbox_relay_lambda_arn]
-    )
-    error_message = "relay・Schedulerの天井をそれぞれの対象だけに限定する。"
-  }
-}
-
 run "ci_limits_curation_management_to_its_function_and_tag" {
   command = plan
   assert {
     condition = (
       aws_iam_role_policy_attachment.apply_curation_consumer.role == aws_iam_role.ci["apply"].name &&
       aws_iam_role_policy_attachment.apply_curation_consumer.policy_arn == aws_iam_policy.apply_curation_consumer.arn &&
-      contains(local.managed_role_arns, local.curation_outbox_relay_role_arn) &&
-      !contains(local.app_role_arns, local.curation_outbox_relay_role_arn) &&
       [for s in jsondecode(aws_iam_policy.apply_curation_consumer.policy).Statement : s.Resource if s.Sid == "ManageCurationFunction"] == [local.curation_consumer_lambda_arn] &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_curation_consumer.policy).Statement :
         !contains(["CreateCurationMapping", "ManageCurationMapping"], s.Sid) ? true :
         s.Condition.ArnEquals["lambda:FunctionArn"] == local.curation_consumer_lambda_arn &&
         values(s.Condition.StringEquals) == ["slice-test-curation-consumer"]
-      ]) &&
-      [for s in jsondecode(aws_iam_policy.curation_outbox_relay_lambda_boundary.policy).Statement : s.Condition.ArnEquals["lambda:SourceFunctionArn"] if contains(["DenyEniOperationsFromFunctionCode", "DenyNetworkManagementFromFunctionCode"], s.Sid)] == [local.curation_outbox_relay_lambda_arn]
+      ])
     )
-    error_message = "Curationの管理対象を関数・タグで限定し、関数コードからのENI操作を拒否する。"
+    error_message = "Curationの管理対象を関数・タグで限定する。"
   }
 }
 
-run "relay_boundary_allows_only_dedicated_db_user" {
-  command = plan
-  assert {
-    condition = toset(flatten([
-      for s in jsondecode(aws_iam_policy.curation_outbox_relay_lambda_boundary.policy).Statement : s.Resource
-      if s.Action == "rds-db:connect" && s.Effect == "Allow"
-      ])) == toset([
-      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_outbox_relay",
-    ])
-    error_message = "Curation Relayの境界は専用DBユーザーだけに接続を許可し、旧Appユーザーへの接続を許可しない。"
-  }
-}

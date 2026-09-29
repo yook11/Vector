@@ -119,7 +119,7 @@ resource "aws_iam_policy" "apply_completion_consumer" {
           "ForAllValues:StringEquals" = { "aws:TagKeys" = ["Project", "ManagedBy"] }
         }
       },
-    ], local.completion_boundary_pairing_statements)
+    ], [local.boundary_pairing_statements_by_group["CompletionConsumerLambda"]])
   })
 }
 

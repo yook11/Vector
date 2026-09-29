@@ -57,18 +57,6 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.assessment_outbox_relay_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-outbox-relay-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.assessment_outbox_relay_scheduler_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-assessment-outbox-relay-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_policy.auth_rate_limit_cleanup_lambda_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-auth-rate-limit-cleanup-lambda-boundary" }
 }
@@ -101,30 +89,6 @@ override_resource {
   override_during = plan
   target          = aws_iam_policy.completion_consumer_lambda_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-completion-consumer-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.completion_outbox_relay_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-completion-outbox-relay-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.completion_outbox_relay_scheduler_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-completion-outbox-relay-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.curation_outbox_relay_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-outbox-relay-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.curation_outbox_relay_scheduler_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-curation-outbox-relay-scheduler-boundary" }
 }
 
 override_resource {
