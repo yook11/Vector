@@ -139,7 +139,7 @@ resource "aws_iam_role_policy" "acquisition_consumer" {
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "acquisition_consumer" {
   function_name                  = local.acquisition_consumer_name
-  role                           = aws_iam_role.acquisition_consumer.arn
+  role                           = aws_iam_role.article_fetch.arn
   package_type                   = "Image"
   image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
@@ -178,7 +178,7 @@ resource "aws_lambda_function" "acquisition_consumer" {
   }
 
   depends_on = [
-    aws_iam_role_policy.acquisition_consumer,
+    aws_iam_role_policy.article_fetch,
     aws_ecr_repository_policy.backend_lambda_pull,
     aws_route_table_association.acquisition_consumer,
     aws_vpc_security_group_egress_rule.acquisition_consumer_to_rds,
@@ -205,5 +205,5 @@ resource "aws_lambda_event_source_mapping" "acquisition_consumer" {
   }
 
   tags       = { Consumer = local.acquisition_consumer_name }
-  depends_on = [aws_iam_role_policy.acquisition_consumer]
+  depends_on = [aws_iam_role_policy.article_fetch]
 }
