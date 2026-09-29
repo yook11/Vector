@@ -87,12 +87,6 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_role.curation_outbox_relay
-  values          = { "arn" : "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-lambda" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_role.outbox_relay
   values          = { "arn" : "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-lambda" }
 }
