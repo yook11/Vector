@@ -189,17 +189,14 @@ run "consumer_network_and_permissions_are_scoped" {
   }
 }
 
-run "relay_sends_only_to_curation_queue" {
+run "relay_delivers_curation_events_every_minute" {
   command = plan
   assert {
     condition = (
       startswith(aws_lambda_function.curation_outbox_relay.environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
-      aws_lambda_function.curation_outbox_relay.environment[0].variables.DB_IAM_AUTH == "true" &&
-      toset(flatten([for s in jsondecode(aws_iam_role_policy.curation_outbox_relay.policy).Statement : s.Resource if s.Action == "rds-db:connect" && s.Effect == "Allow"])) == toset([
-        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
-      ])
+      aws_lambda_function.curation_outbox_relay.environment[0].variables.DB_IAM_AUTH == "true"
     )
-    error_message = "Curation Relayは専用ユーザーで接続し、旧Appユーザーへの接続を許可しない。"
+    error_message = "Curation Relayは専用DBユーザーでIAM認証する。"
   }
   assert {
     condition = (
@@ -218,17 +215,9 @@ run "relay_sends_only_to_curation_queue" {
       }) &&
       aws_scheduler_schedule.curation_outbox_relay.schedule_expression == "rate(1 minute)" &&
       aws_scheduler_schedule.curation_outbox_relay.state == "ENABLED" &&
-      aws_scheduler_schedule.curation_outbox_relay.target[0].arn == aws_lambda_function.curation_outbox_relay.arn &&
-      jsondecode(aws_iam_role_policy.curation_outbox_relay_scheduler.policy).Statement[0].Resource == local.curation_outbox_relay_arn
+      aws_scheduler_schedule.curation_outbox_relay.target[0].arn == aws_lambda_function.curation_outbox_relay.arn
     )
-    error_message = "専用relayの入口と1分間隔の起動を接続する。"
-  }
-  assert {
-    condition = (
-      jsondecode(aws_iam_role_policy.curation_outbox_relay.policy).Statement[1].Resource == aws_sqs_queue.outbox["curation"].arn &&
-      [for s in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement : s.Resource if s.Principal.AWS == aws_iam_role.curation_outbox_relay.arn] == [aws_sqs_queue.outbox["curation"].arn]
-    )
-    error_message = "専用relayは実行ロールとVPC endpointの両方でCurationキューだけへ送信できる。"
+    error_message = "Curation relayの入口・送信先キューと1分間隔の起動を接続する。"
   }
 }
 

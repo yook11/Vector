@@ -7,6 +7,8 @@ locals {
   assessment_outbox_relay_arn  = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.assessment_outbox_relay_name}"
   outbox_relay_name            = "${var.name_prefix}-outbox-relay"
   outbox_relay_arn             = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.outbox_relay_name}"
+  # 配信の4本は汎用relayの実行ロールとschedule groupを共有する。旧ロールとgroupは切替の次のapplyで削除する。
+  outbox_relay_function_arns = [local.outbox_relay_arn, local.completion_outbox_relay_arn, local.curation_outbox_relay_arn, local.assessment_outbox_relay_arn]
 }
 
 resource "aws_cloudwatch_log_group" "completion_outbox_relay" {
@@ -69,7 +71,7 @@ resource "aws_iam_role_policy" "completion_outbox_relay" {
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "completion_outbox_relay" {
   function_name                  = local.completion_outbox_relay_name
-  role                           = aws_iam_role.completion_outbox_relay.arn
+  role                           = aws_iam_role.outbox_relay.arn
   package_type                   = "Image"
   image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
@@ -102,7 +104,7 @@ resource "aws_lambda_function" "completion_outbox_relay" {
   }
 
   depends_on = [
-    aws_iam_role_policy.completion_outbox_relay,
+    aws_iam_role_policy.outbox_relay,
     aws_ecr_repository_policy.backend_lambda_pull,
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
@@ -150,7 +152,7 @@ resource "aws_iam_role_policy" "completion_outbox_relay_scheduler" {
 
 resource "aws_scheduler_schedule" "completion_outbox_relay" {
   name                = local.completion_outbox_relay_name
-  group_name          = aws_scheduler_schedule_group.completion_outbox_relay.name
+  group_name          = aws_scheduler_schedule_group.outbox_relay.name
   state               = "ENABLED"
   schedule_expression = "rate(1 minute)"
 
@@ -160,11 +162,11 @@ resource "aws_scheduler_schedule" "completion_outbox_relay" {
 
   target {
     arn      = aws_lambda_function.completion_outbox_relay.arn
-    role_arn = aws_iam_role.completion_outbox_relay_scheduler.arn
+    role_arn = aws_iam_role.outbox_relay_scheduler.arn
     input    = "{}"
   }
 
-  depends_on = [aws_iam_role_policy.completion_outbox_relay_scheduler]
+  depends_on = [aws_iam_role_policy.outbox_relay_scheduler]
 }
 
 resource "aws_cloudwatch_log_group" "curation_outbox_relay" {
@@ -227,7 +229,7 @@ resource "aws_iam_role_policy" "curation_outbox_relay" {
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "curation_outbox_relay" {
   function_name                  = local.curation_outbox_relay_name
-  role                           = aws_iam_role.curation_outbox_relay.arn
+  role                           = aws_iam_role.outbox_relay.arn
   package_type                   = "Image"
   image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
@@ -260,7 +262,7 @@ resource "aws_lambda_function" "curation_outbox_relay" {
   }
 
   depends_on = [
-    aws_iam_role_policy.curation_outbox_relay,
+    aws_iam_role_policy.outbox_relay,
     aws_ecr_repository_policy.backend_lambda_pull,
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
@@ -308,7 +310,7 @@ resource "aws_iam_role_policy" "curation_outbox_relay_scheduler" {
 
 resource "aws_scheduler_schedule" "curation_outbox_relay" {
   name                = local.curation_outbox_relay_name
-  group_name          = aws_scheduler_schedule_group.curation_outbox_relay.name
+  group_name          = aws_scheduler_schedule_group.outbox_relay.name
   state               = "ENABLED"
   schedule_expression = "rate(1 minute)"
 
@@ -318,11 +320,11 @@ resource "aws_scheduler_schedule" "curation_outbox_relay" {
 
   target {
     arn      = aws_lambda_function.curation_outbox_relay.arn
-    role_arn = aws_iam_role.curation_outbox_relay_scheduler.arn
+    role_arn = aws_iam_role.outbox_relay_scheduler.arn
     input    = "{}"
   }
 
-  depends_on = [aws_iam_role_policy.curation_outbox_relay_scheduler]
+  depends_on = [aws_iam_role_policy.outbox_relay_scheduler]
 }
 
 resource "aws_cloudwatch_log_group" "assessment_outbox_relay" {
@@ -385,7 +387,7 @@ resource "aws_iam_role_policy" "assessment_outbox_relay" {
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "assessment_outbox_relay" {
   function_name                  = local.assessment_outbox_relay_name
-  role                           = aws_iam_role.assessment_outbox_relay.arn
+  role                           = aws_iam_role.outbox_relay.arn
   package_type                   = "Image"
   image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
@@ -418,7 +420,7 @@ resource "aws_lambda_function" "assessment_outbox_relay" {
   }
 
   depends_on = [
-    aws_iam_role_policy.assessment_outbox_relay,
+    aws_iam_role_policy.outbox_relay,
     aws_ecr_repository_policy.backend_lambda_pull,
     aws_vpc_security_group_ingress_rule.rds_from_outbox_relay,
     aws_vpc_security_group_egress_rule.outbox_relay_to_rds,
@@ -466,7 +468,7 @@ resource "aws_iam_role_policy" "assessment_outbox_relay_scheduler" {
 
 resource "aws_scheduler_schedule" "assessment_outbox_relay" {
   name                = local.assessment_outbox_relay_name
-  group_name          = aws_scheduler_schedule_group.assessment_outbox_relay.name
+  group_name          = aws_scheduler_schedule_group.outbox_relay.name
   state               = "ENABLED"
   schedule_expression = "rate(1 minute)"
 
@@ -476,11 +478,11 @@ resource "aws_scheduler_schedule" "assessment_outbox_relay" {
 
   target {
     arn      = aws_lambda_function.assessment_outbox_relay.arn
-    role_arn = aws_iam_role.assessment_outbox_relay_scheduler.arn
+    role_arn = aws_iam_role.outbox_relay_scheduler.arn
     input    = "{}"
   }
 
-  depends_on = [aws_iam_role_policy.assessment_outbox_relay_scheduler]
+  depends_on = [aws_iam_role_policy.outbox_relay_scheduler]
 }
 
 resource "aws_cloudwatch_log_group" "outbox_relay" {
@@ -519,9 +521,16 @@ resource "aws_iam_role_policy" "outbox_relay" {
         Resource = [for queue in aws_sqs_queue.outbox : queue.arn]
       },
       {
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "${aws_cloudwatch_log_group.outbox_relay.arn}:*"
+        Effect = "Allow"
+        Action = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = [
+          for log_group in [
+            aws_cloudwatch_log_group.outbox_relay,
+            aws_cloudwatch_log_group.completion_outbox_relay,
+            aws_cloudwatch_log_group.curation_outbox_relay,
+            aws_cloudwatch_log_group.assessment_outbox_relay,
+          ] : "${log_group.arn}:*"
+        ]
       },
       {
         Effect   = "Allow"
@@ -533,7 +542,7 @@ resource "aws_iam_role_policy" "outbox_relay" {
         Effect    = "Deny"
         Action    = local.outbox_relay_eni_actions
         Resource  = "*"
-        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.outbox_relay_arn } }
+        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.outbox_relay_function_arns } }
       },
     ]
   })
@@ -619,7 +628,7 @@ resource "aws_iam_role_policy" "outbox_relay_scheduler" {
     Statement = [{
       Effect   = "Allow"
       Action   = "lambda:InvokeFunction"
-      Resource = local.outbox_relay_arn
+      Resource = local.outbox_relay_function_arns
     }]
   })
 }

@@ -181,12 +181,9 @@ run "relay_uses_dedicated_db_user_and_runs_every_minute" {
   assert {
     condition = (
       startswith(aws_lambda_function.completion_outbox_relay.environment[0].variables.DATABASE_URL, "postgresql+asyncpg://vector_outbox_relay@") &&
-      aws_lambda_function.completion_outbox_relay.environment[0].variables.DB_IAM_AUTH == "true" &&
-      toset(flatten([for s in jsondecode(aws_iam_role_policy.completion_outbox_relay.policy).Statement : s.Resource if s.Action == "rds-db:connect" && s.Effect == "Allow"])) == toset([
-        "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:${aws_db_instance.this.resource_id}/vector_outbox_relay",
-      ])
+      aws_lambda_function.completion_outbox_relay.environment[0].variables.DB_IAM_AUTH == "true"
     )
-    error_message = "Completion Relayは専用ユーザーで接続し、旧Appユーザーへの接続を許可しない。"
+    error_message = "Completion Relayは専用DBユーザーでIAM認証する。"
   }
   assert {
     condition = (
@@ -197,14 +194,9 @@ run "relay_uses_dedicated_db_user_and_runs_every_minute" {
       aws_lambda_function.completion_outbox_relay.timeout == 120 &&
       aws_lambda_function.completion_outbox_relay.reserved_concurrent_executions == 1 &&
       aws_scheduler_schedule.completion_outbox_relay.state == "ENABLED" &&
-      aws_scheduler_schedule.completion_outbox_relay.schedule_expression == "rate(1 minute)" &&
-      jsondecode(aws_iam_role_policy.completion_outbox_relay.policy).Statement[1].Action == "sqs:SendMessage" &&
-      jsondecode(aws_iam_role_policy.completion_outbox_relay.policy).Statement[1].Resource == aws_sqs_queue.outbox["completion"].arn &&
-      anytrue([for statement in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement :
-        try(statement.Action == "sqs:SendMessage" && statement.Resource == aws_sqs_queue.outbox["completion"].arn && statement.Principal.AWS == aws_iam_role.completion_outbox_relay.arn, false)
-      ])
+      aws_scheduler_schedule.completion_outbox_relay.schedule_expression == "rate(1 minute)"
     )
-    error_message = "Relayは専用DB接続と補完専用送信権限を使い、毎分の送信を有効にする。"
+    error_message = "Completion relayは補完キューへの毎分の送信を有効にする。"
   }
 }
 
