@@ -19,7 +19,7 @@ Vector は、海外の先端テックニュースを自動収集し、AI で日�
 
 内部に蓄積された記事と、外部から取得した記事を横断してリサーチし、質問への回答を生成します。
 
-https://github.com/user-attachments/assets/9b2a6caa-37ae-4382-b3c8-47964ee52cfb
+https://github.com/user-attachments/assets/cbd9db5b-e8e9-4a3a-ad84-c1c581770f6f
 
 以下の記事は、初期実装時点の設計と、そこから見えた課題をまとめた開発記録です。当時は小規模な招待制運用を前提に、まず機能を成立させることを優先しており、将来のスケールを支える実行制御や責任分離を十分に設計へ反映できていませんでした。その反省から、現在は工程構成、run の実行制御、外部検索経路、LLM 呼び出し基盤を見直しています。記事中の構成は現行実装とは異なり、現行設計については別の記事で紹介する予定です。
 
@@ -83,6 +83,14 @@ Vector は、ブラウザから直接到達できる入口を Next.js BFF に寄
 本番環境は AWS (ap-northeast-1) で動作しています。ALB を唯一の公開入口とし、frontend・API・リサーチや週次ブリーフィングなどの worker は ECS Fargate で実行します。記事の収集・分析は EventBridge Scheduler・SQS・Lambda によるイベント駆動構成です。データは RDS PostgreSQL と ElastiCache Valkey に置き、構成は Terraform (`infra/aws/`) で管理しています。
 
 以前は Fly.io と Neon PostgreSQL で運用していましたが、この構成はすでに停止しています。現在の本番インフラの正本は `infra/aws/` の Terraform です。
+
+### AWS全体構成
+
+![VectorのAWS構成。ALBとECS FargateによるWebアプリ、用途別にキューを分けたValkey、EventBridge Scheduler・SQS・Lambdaによる記事処理、RDS、外向き通信と運用基盤。](docs/assets/readme/aws-architecture.svg)
+
+2026年9月28日に読み取り用ロールで主要な実リソースと照合した構成です。図の枠は役割ごとの区分で、ネットワーク境界は次の図に示しています。Agent・日次トレンド集計・週次ブリーフィングは引き続きECS / Taskiq / Valkeyで動作し、記事処理の定期起動はEventBridge Schedulerが担当します。
+
+[確認したリソースと図の読み方](docs/aws-architecture.md) / [編集用draw.ioファイル](docs/assets/readme/aws-architecture.drawio)
 
 ### ネットワーク境界と通信経路
 
