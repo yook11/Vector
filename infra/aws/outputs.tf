@@ -246,20 +246,8 @@ output "curation_outbox_relay_function_arn" {
   value = aws_lambda_function.curation_outbox_relay.arn
 }
 
-output "curation_outbox_relay_role_arn" {
-  value = aws_iam_role.curation_outbox_relay.arn
-}
-
 output "curation_outbox_relay_log_group_name" {
   value = aws_cloudwatch_log_group.curation_outbox_relay.name
-}
-
-output "curation_outbox_relay_scheduler_role_arn" {
-  value = aws_iam_role.curation_outbox_relay_scheduler.arn
-}
-
-output "curation_outbox_relay_schedule_group_name" {
-  value = aws_scheduler_schedule_group.curation_outbox_relay.name
 }
 
 output "completion_consumer_subnet_id" {
@@ -306,20 +294,8 @@ output "completion_outbox_relay_function_arn" {
   value = aws_lambda_function.completion_outbox_relay.arn
 }
 
-output "completion_outbox_relay_role_arn" {
-  value = aws_iam_role.completion_outbox_relay.arn
-}
-
 output "completion_outbox_relay_log_group_name" {
   value = aws_cloudwatch_log_group.completion_outbox_relay.name
-}
-
-output "completion_outbox_relay_scheduler_role_arn" {
-  value = aws_iam_role.completion_outbox_relay_scheduler.arn
-}
-
-output "completion_outbox_relay_schedule_group_name" {
-  value = aws_scheduler_schedule_group.completion_outbox_relay.name
 }
 
 output "article_analysis_role_arn" {

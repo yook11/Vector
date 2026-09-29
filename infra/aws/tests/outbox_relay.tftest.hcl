@@ -67,7 +67,7 @@ variables {
   slack_channel_id       = "C0123456789"
 }
 
-# 共有ロールと旧ロールを取り違えていないことを示すため、ロールごとに別のARNを与える。
+# 汎用relayの実行ロールとSchedulerロールを取り違えないよう、それぞれ別のARNを与える。
 override_resource {
   override_during = plan
   target          = aws_iam_role.outbox_relay
@@ -78,42 +78,6 @@ override_resource {
   override_during = plan
   target          = aws_iam_role.outbox_relay_scheduler
   values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-scheduler" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.completion_outbox_relay
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-outbox-relay-lambda" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.curation_outbox_relay
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-lambda" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.assessment_outbox_relay
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-lambda" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.completion_outbox_relay_scheduler
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-outbox-relay-scheduler" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.curation_outbox_relay_scheduler
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-curation-outbox-relay-scheduler" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.assessment_outbox_relay_scheduler
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-assessment-outbox-relay-scheduler" }
 }
 
 override_resource {

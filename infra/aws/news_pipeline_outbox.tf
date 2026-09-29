@@ -91,26 +91,8 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
       },
       {
         Effect    = "Allow"
-        Principal = { AWS = aws_iam_role.assessment_outbox_relay.arn }
-        Action    = "sqs:SendMessage"
-        Resource  = aws_sqs_queue.outbox["assessment"].arn
-      },
-      {
-        Effect    = "Allow"
         Principal = { AWS = aws_iam_role.completion_consumer.arn }
         Action    = "sqs:ChangeMessageVisibility"
-        Resource  = aws_sqs_queue.outbox["completion"].arn
-      },
-      {
-        Effect    = "Allow"
-        Principal = { AWS = aws_iam_role.curation_outbox_relay.arn }
-        Action    = "sqs:SendMessage"
-        Resource  = aws_sqs_queue.outbox["curation"].arn
-      },
-      {
-        Effect    = "Allow"
-        Principal = { AWS = aws_iam_role.completion_outbox_relay.arn }
-        Action    = "sqs:SendMessage"
         Resource  = aws_sqs_queue.outbox["completion"].arn
       },
       {
