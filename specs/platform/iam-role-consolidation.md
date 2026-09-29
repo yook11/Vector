@@ -8,19 +8,20 @@ Status: 救済（backfill）とAI分析を実装済み（2026-09-23）、配信�
 - Evidence: `infra/aws/bootstrap/oidc.tf` の `managed_role_arns`・`outbox_service_roles`・`boundary_pairing_statements_by_group`、`infra/aws/bootstrap/role_creation.tf`、各Lambdaのboundary、Terraform mock testのpolicy長断言。
 - Invariants: ロールは「同じ振る舞いと同じ到達範囲」で束ねる。概念をまたぐ権限は1ロールに持たせない。各boundaryはno-escalationと関数コードからのENI操作拒否を保つ。CIはboundaryペアリングで縛られたロールしか作れない。切替中に稼働中の関数を作り直さない。
 - Non-goals: DBロールの概念分割（別途行う。AI分析だけは、同じ3関数のDB接続先をvector_article_analysisへ切り替える作業を統合と同時に行う）、Lambda関数自体の統合、概念名の語彙変更、権限の緩和（wildcard化）。
-- Done: 5概念（外部取得／AI分析／配信／救済／運用）それぞれが実行ロール1本とboundary1組で動き、関数の追加で共有許可表が伸びない。
+- Done: 6概念（外部取得／取得依頼投入／AI分析／配信／救済／運用）それぞれが実行ロール1本とboundary1組で動き、関数の追加で共有許可表が伸びない。
 
 ## 概念
 
 | 概念 | 主体 | 共通する到達範囲 |
 |---|---|---|
-| 外部取得 | source-dispatch、acquisition-consumer、completion-consumer | プロキシ経由の外部HTTP、取得系キュー、`vector_collect` |
+| 外部取得 | acquisition-consumer、completion-consumer | プロキシ経由の外部HTTP、取得系キューの受信、`vector_collect` |
+| 取得依頼投入 | source-dispatch | 取得キューへの送信、`vector_collect`。外部へ出ない |
 | AI分析 | curation／assessment／embedding consumer | AI資格情報、分析結果の保存、`vector_article_analysis` |
 | 配信 | Outbox relay 4本 | Outboxの読み取りと各キューへの送信、`vector_outbox_relay` |
 | 救済 | backfill各段 | DBの読み取りと期限切れ整理、各キューへの送信。外部へ出ない |
 | 運用 | auth-rate-limit-cleanupなど | 個別 |
 
-救済をAI分析や外部取得へ吸収しないのは、SQSの向き（送信）、DBの読み取り範囲、ネットワーク到達（外へ出ない）、秘密情報の要否がconsumerと異なるためである。概念の中では関数どうしの分離を持たないが、同じイメージ・同じDBロール・同じ信頼境界で動く関数の間の分離は、侵害への防御ではなく誤送信の防止でしかなく、失うものは小さい。
+救済をAI分析や外部取得へ吸収しないのは、SQSの向き（送信）、DBの読み取り範囲、ネットワーク到達（外へ出ない）、秘密情報の要否がconsumerと異なるためである。取得依頼投入を外部取得へ吸収しないのは、DBロールが同じでも信頼境界が異なるためである。外部のHTMLを処理するconsumerに、何を取得するかを決める取得キューへの送信権を持たせない。概念の中では関数どうしの分離を持たないが、同じイメージ・同じDBロール・同じ信頼境界で動く関数の間の分離は、侵害への防御ではなく誤送信の防止でしかなく、失うものは小さい。
 
 ## 切替手順
 
@@ -33,6 +34,7 @@ Status: 救済（backfill）とAI分析を実装済み（2026-09-23）、配信�
 - 救済（backfill）: 段別ロール6本・boundary 6本を `${name_prefix}-backfill-lambda`／`-scheduler` とboundary 2本へ統合。`apply_role_creation` は6,136→5,380字、`apply_pass_role` は5,148→4,448字、`apply_backfill` は4,138→3,074字（テスト用prefix）。切替後に段別の旧boundary 6本と旧schedule／groupの許可を撤去した。
 - AI分析: 関数ごとのロール3本・boundary 3本を`${name_prefix}-article-analysis-lambda`とboundary 1本へ統合し、DB接続を`vector_article_analysis`へ切り替えた（[記事単位AI分析のDBロール分離](../pipeline/article-analysis-role.md)）。`apply_role_creation`は5,632→5,276字、`apply_pass_role`は4,448→4,120字（テスト用prefix）。切替後の処理に認証・権限のエラーが無いことを確かめてから、旧boundary 3本を撤去した。
 - 配信: 汎用relayのロール（`${name_prefix}-outbox-relay-lambda`／`-scheduler`）を概念ロールとして残し、他3本をそこへ寄せる。このロールは4キューへの送信をboundary・実行ポリシー・VPC endpoint policyのすべてで既に持つため、新しいロール名の追加が要らず、切替手順の1は既存boundaryの書き換えになる。boundaryは工程を列挙せず命名規則（キュー `${name_prefix}-article-*`、関数とログ `${name_prefix}-*outbox-relay`）で書き、DLQへの送信は拒否する。実在するキュー・ログ・関数の列挙は本体の実行ポリシーが持つ。scheduleは汎用relayのgroupへまとめる。ロール8本・boundary 8本を2本ずつにし、`apply_role_creation`は4,629→3,503字、`apply_pass_role`は4,120→3,078字、`apply_outbox`は3,859→3,287字（テスト用prefix）。Consumer用policyへ逃がしていたrelayのboundary固定Denyの振り分けもなくなった。切替後に認証・権限のエラーと配信停止が無いことを確かめてから、旧ロール・旧groupを削除し、旧boundary 6本を撤去した。
+- 取得依頼投入: source-dispatchは実行ロール・Schedulerロール・boundaryが既に1組のため、統合の作業はない。
 - 外部取得: 未着手。
 
 ## Verification
