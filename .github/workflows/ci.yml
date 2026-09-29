@@ -2,11 +2,10 @@ name: CI
 
 on:
   push:
-    # develop 廃止 + feature branch への push 重複解消 (PR では pull_request trigger
-    # のみ走り、main への merge 時のみ push trigger が走る)。
+    # develop への反映は PR 時の検証で足りるため、push の検証は main だけで行う。
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 env:
   # 外部通信を行わないテスト専用の到達不能プロキシで、予期しない通信も拒否する。
