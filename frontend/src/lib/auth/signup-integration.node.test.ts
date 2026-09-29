@@ -16,10 +16,17 @@ type AuthHandler = {
   handler: (request: Request) => Promise<Response>;
 };
 
+type StoredUser = {
+  email: string;
+  emailVerified: boolean;
+  name: string;
+  role: string;
+};
+
 type TestMemoryDB = MemoryDB & {
   account: unknown[];
   session: unknown[];
-  user: unknown[];
+  user: StoredUser[];
   verification: unknown[];
 };
 
@@ -32,17 +39,15 @@ function createDatabase(): TestMemoryDB {
   } satisfies TestMemoryDB;
 }
 
-function createAuth(
-  database: TestMemoryDB,
-  disableSignUp: boolean,
-): AuthHandler {
+function createAuth(database: TestMemoryDB): AuthHandler {
   return betterAuth({
     baseURL: APP_URL,
     database: memoryAdapter(database),
     emailAndPassword: {
       enabled: true,
-      disableSignUp,
+      disableSignUp: false,
       minPasswordLength: 8,
+      maxPasswordLength: 128,
     },
     user: {
       additionalFields: {
@@ -56,6 +61,8 @@ function createAuth(
     rateLimit: { enabled: false },
     secret: SECRET,
     trustedOrigins: [APP_URL],
+    // Better Auth は NODE_ENV=test で origin 検査を既定で外すため、本番と同じく有効にする。
+    advanced: { disableOriginCheck: false },
   });
 }
 
@@ -127,40 +134,102 @@ function cookieHeaderFrom(response: Response): string {
   ).join("; ");
 }
 
-describe("public signup disabled boundary", () => {
-  it("does not expose Better Auth admin user mutation endpoints or change records", async () => {
+describe("public signup boundary", () => {
+  it("creates a user, credential account and signed-in session", async () => {
     const database = createDatabase();
-    const auth = createAuth(database, true);
-    const before = recordCounts(database);
+    const auth = createAuth(database);
 
-    for (const path of ["create-user", "set-role"]) {
-      const response = await adminRequest(auth, path);
-
-      expect(response.status).toBe(404);
-      expect(recordCounts(database)).toEqual(before);
-    }
-  });
-
-  it("rejects a schema-valid trusted-origin signup with the documented error before creating records", async () => {
-    const database = createDatabase();
-    const auth = createAuth(database, true);
-
-    const response = await signUpRequest(auth, {
+    const signUpResponse = await signUpRequest(auth, {
       email: "new-user@example.com",
-      name: "New User",
+      name: "",
       password: PASSWORD,
     });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      code: "EMAIL_PASSWORD_SIGN_UP_DISABLED",
+    expect(signUpResponse.status).toBe(200);
+    expect(recordCounts(database)).toEqual({ account: 1, session: 1, user: 1 });
+    expect(database.user[0]).toMatchObject({
+      email: "new-user@example.com",
+      emailVerified: false,
+      name: "",
+      role: "user",
     });
-    expect(recordCounts(database)).toEqual({ account: 0, session: 0, user: 0 });
+
+    const sessionResponse = await auth.handler(
+      new Request(`${APP_URL}/api/auth/get-session`, {
+        headers: {
+          cookie: cookieHeaderFrom(signUpResponse),
+          origin: APP_URL,
+        },
+      }),
+    );
+
+    expect(sessionResponse.status).toBe(200);
+    await expect(sessionResponse.json()).resolves.toMatchObject({
+      user: { email: "new-user@example.com", role: "user" },
+    });
+  });
+
+  it("ignores role and emailVerified supplied in the signup body", async () => {
+    const database = createDatabase();
+    const auth = createAuth(database);
+
+    const response = await signUpRequest(auth, {
+      email: "new-user@example.com",
+      name: "",
+      password: PASSWORD,
+      role: "admin",
+      emailVerified: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(database.user[0]).toMatchObject({
+      emailVerified: false,
+      role: "user",
+    });
+  });
+
+  it("stores the email in lowercase", async () => {
+    const database = createDatabase();
+    const auth = createAuth(database);
+
+    const response = await signUpRequest(auth, {
+      email: "Mixed.Case@Example.COM",
+      name: "",
+      password: PASSWORD,
+    });
+
+    expect(response.status).toBe(200);
+    expect(database.user[0]).toMatchObject({
+      email: "mixed.case@example.com",
+    });
+  });
+
+  it("rejects an already registered email regardless of case without creating records", async () => {
+    const database = createDatabase();
+    const auth = createAuth(database);
+    await signUpRequest(auth, {
+      email: "new-user@example.com",
+      name: "",
+      password: PASSWORD,
+    });
+    const before = recordCounts(database);
+
+    const response = await signUpRequest(auth, {
+      email: "NEW-USER@example.com",
+      name: "",
+      password: PASSWORD,
+    });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL",
+    });
+    expect(recordCounts(database)).toEqual(before);
   });
 
   it("does not create records when signup body schema validation rejects first", async () => {
     const database = createDatabase();
-    const auth = createAuth(database, true);
+    const auth = createAuth(database);
 
     const response = await signUpRequest(auth, {
       email: "new-user@example.com",
@@ -172,50 +241,58 @@ describe("public signup disabled boundary", () => {
     expect(recordCounts(database)).toEqual({ account: 0, session: 0, user: 0 });
   });
 
-  it("does not create records when origin validation rejects first", async () => {
+  it("rejects an untrusted origin without creating records", async () => {
     const database = createDatabase();
-    const auth = createAuth(database, true);
+    const auth = createAuth(database);
 
     const response = await signUpRequest(
       auth,
       {
         email: "new-user@example.com",
-        name: "New User",
+        name: "",
         password: PASSWORD,
       },
       "https://untrusted.example.com",
     );
 
-    expect(response.ok).toBe(false);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "INVALID_ORIGIN",
+    });
     expect(recordCounts(database)).toEqual({ account: 0, session: 0, user: 0 });
   });
 
-  it("keeps email/password sign-in available for an existing user", async () => {
+  it("does not expose Better Auth admin user mutation endpoints or change records", async () => {
     const database = createDatabase();
-    const signupEnabledAuth = createAuth(database, false);
+    const auth = createAuth(database);
+    const before = recordCounts(database);
 
-    const seedResponse = await signUpRequest(signupEnabledAuth, {
+    for (const path of ["create-user", "set-role"]) {
+      const response = await adminRequest(auth, path);
+
+      expect(response.status).toBe(404);
+      expect(recordCounts(database)).toEqual(before);
+    }
+  });
+
+  it("keeps email/password sign-in available for a registered user", async () => {
+    const database = createDatabase();
+    const auth = createAuth(database);
+    await signUpRequest(auth, {
       email: "existing@example.com",
-      name: "Existing User",
+      name: "",
       password: PASSWORD,
     });
 
-    expect(seedResponse.status).toBe(200);
-    expect(recordCounts(database)).toEqual({ account: 1, session: 1, user: 1 });
+    const response = await signInRequest(auth, "existing@example.com");
 
-    const signupDisabledAuth = createAuth(database, true);
-    const signInResponse = await signInRequest(
-      signupDisabledAuth,
-      "existing@example.com",
-    );
-
-    expect(signInResponse.status).toBe(200);
+    expect(response.status).toBe(200);
     expect(recordCounts(database)).toEqual({ account: 1, session: 2, user: 1 });
   });
 
   it("signs in a provisioning-shaped credential hashed by the production password export", async () => {
     const database = createDatabase();
-    const auth = createAuth(database, true);
+    const auth = createAuth(database);
     const userId = uuidv7();
     const accountId = uuidv7();
     const now = new Date("2026-07-22T00:00:00.000Z");
@@ -235,7 +312,7 @@ describe("public signup disabled boundary", () => {
         createdAt: now,
         updatedAt: now,
         role: "user",
-      });
+      } as StoredUser);
       database.account.push({
         id: accountId,
         accountId: userId,
@@ -263,35 +340,5 @@ describe("public signup disabled boundary", () => {
       consoleWarn.mockRestore();
       consoleLog.mockRestore();
     }
-  });
-
-  it("accepts a session issued before signup was disabled", async () => {
-    const database = createDatabase();
-    const signupEnabledAuth = createAuth(database, false);
-
-    const signupResponse = await signUpRequest(signupEnabledAuth, {
-      email: "existing@example.com",
-      name: "Existing User",
-      password: PASSWORD,
-    });
-
-    expect(signupResponse.status).toBe(200);
-    expect(recordCounts(database)).toEqual({ account: 1, session: 1, user: 1 });
-
-    const signupDisabledAuth = createAuth(database, true);
-    const response = await signupDisabledAuth.handler(
-      new Request(`${APP_URL}/api/auth/get-session`, {
-        headers: {
-          cookie: cookieHeaderFrom(signupResponse),
-          origin: APP_URL,
-        },
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      user: { email: "existing@example.com" },
-    });
-    expect(recordCounts(database)).toEqual({ account: 1, session: 1, user: 1 });
   });
 });
