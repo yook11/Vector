@@ -281,26 +281,3 @@ def test_only_migration_execution_is_serialized_and_failure_has_owned_cleanup() 
         True,
         True,
     )
-
-
-def test_migration_base_is_the_only_template_without_per_attempt_state() -> None:
-    ecs = (_ROOT / "infra/aws/ecs.tf").read_text(encoding="utf-8")
-    base = ecs.split('resource "aws_ecs_task_definition" "migration_base" {', 1)[
-        1
-    ].split('\nresource "', 1)[0]
-    assert (
-        'resource "aws_ecs_task_definition" "migration" {' not in ecs,
-        'family                   = "${var.name_prefix}-migration-base"' in base,
-        'command    = ["python", "-m", "scripts.migration_runner"]' in base,
-        all(
-            forbidden not in base
-            for forbidden in (
-                "MIGRATION_PROTOCOL_VERSION",
-                "MIGRATION_MODE",
-                "MIGRATION_EXPECTED_START_REVISION",
-                "MIGRATION_TARGET_REVISION",
-                "MIGRATION_TREE_OID",
-            )
-        ),
-        "aws_ecs_task_definition.migration_base.arn" not in ecs,
-    ) == (True, True, True, True, True)

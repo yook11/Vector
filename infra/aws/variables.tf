@@ -73,7 +73,7 @@ variable "frontend_domain" {
 
 variable "enable_db_bastion" {
   description = <<-EOT
-    DB への人手作業 (移行・保守) 用の一時踏み台を生やす (bastion.tf)。
+    DB への人手作業 (移行・保守) 用の一時踏み台を生やす (platform_bastion.tf)。
     既定 false = 存在しない。素の apply が撤去を兼ねるため、踏み台を
     使う作業の最中に apply するときは必ず -var enable_db_bastion=true を付ける。
   EOT

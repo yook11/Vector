@@ -2,7 +2,6 @@ locals {
   curation_consumer_name           = "${var.name_prefix}-curation-consumer"
   curation_consumer_arn            = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.curation_consumer_name}"
   curation_consumer_parameter_path = "/${var.name_prefix}/curation-consumer/gemini-api-key"
-  curation_consumer_subnet_cidr    = cidrsubnet(var.vpc_cidr, 8, 32)
 }
 
 resource "aws_sqs_queue" "curation_dlq" {
@@ -33,19 +32,6 @@ resource "aws_sqs_queue_policy" "curation_dlq" {
       Condition = { Bool = { "aws:SecureTransport" = "false" } }
     }]
   })
-}
-
-resource "aws_subnet" "curation_consumer" {
-  vpc_id                  = aws_vpc.main.id
-  availability_zone       = var.az_primary
-  cidr_block              = local.curation_consumer_subnet_cidr
-  map_public_ip_on_launch = false
-  tags                    = { Name = local.curation_consumer_name }
-}
-
-resource "aws_route_table_association" "curation_consumer" {
-  subnet_id      = aws_subnet.curation_consumer.id
-  route_table_id = aws_route_table.app.id
 }
 
 resource "aws_security_group" "curation_consumer" {

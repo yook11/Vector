@@ -68,7 +68,7 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 
 ## 段の宣言は 1 箇所
 
-`locals.tf` の `stages` が subnet と security group を生成する。棚卸しの表が
+`platform_ecs_services.tf` の `stages` が subnet と security group を生成する。棚卸しの表が
 そのまま入っており、段を増やすときに触るのはここだけ。
 
 ## ハマりどころ
@@ -175,7 +175,7 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
   `DenyRoleCreationWithoutBoundary` が拒否する。名前も boundary の対応表に無いので
   `DenyRoleCreationOutsideKnownRoles` でも拒否される。`ssm:StartSession` も
   `terraform-apply` は持たない。**CI 用の経路でこれが通らないのは fail-closed が
-  効いた結果**で、穴を開けて通すものではない (bastion.tf の注記と対)。
+  効いた結果**で、穴を開けて通すものではない (platform_bastion.tf の注記と対)。
 - **踏み台の plan / apply / SSM / 撤去は最初から最後まで admin profile だけを使う。**
   各操作の前に `infra/aws/scripts/verify-aws-profile.sh vector-admin` で実 caller を
   検証する。通常migrationは専用workflowの承認後jobで実行し、踏み台やローカルprofile
@@ -216,7 +216,7 @@ private runbookには初期構築の前提を残し、通常migrationのロー�
 
 ## egress proxy の残余
 
-許可ドメインは`locals.tf`の`egress_vendors`から`proxy.tf`の一覧へ対応する。
+許可ドメインは`platform_ecs_services.tf`の`egress_vendors`から`platform_egress_proxy.tf`の一覧へ対応する。
 `egress_allow_any_domain`は`proxy_clients`の`allow_any_domain`へ渡し、consumer専用設定も同じ属性で定義する。
 この値が`true`でもプロキシ経由は必須で、非公開IP・許可外ポートの拒否は維持する。
 アプリの送信前検証との分担と、設定検証では確認できないデプロイ後の検証項目は

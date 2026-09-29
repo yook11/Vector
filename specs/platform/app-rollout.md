@@ -25,7 +25,7 @@ backendイメージで動くものは、ECSのserviceもLambdaも同じ分担に
 
 Terraformは版の変更を追わない。ECSは`ignore_changes = [task_definition]`、Lambdaは`ignore_changes = [image_uri]`で同じ型にする。
 
-新規作成時だけは初期値が要る。Lambdaはbackendリポジトリの最新イメージをdigestで参照する（`infra/aws/registry.tf`）。作成後の最初のrolloutで他と同じ版に揃う。
+新規作成時だけは初期値が要る。Lambdaはbackendリポジトリの最新イメージをdigestで参照する（`infra/aws/platform_registry.tf`）。作成後の最初のrolloutで他と同じ版に揃う。
 
 ECSとLambdaで実装が分かれるのは、AWSのAPIが違う箇所だけとする。ロール・workflow・承認・release SHAは1つで、「Lambdaのrollout」という別の仕組みは作らない。
 

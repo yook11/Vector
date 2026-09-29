@@ -73,12 +73,42 @@ output "db_endpoint" {
   value       = aws_db_instance.this.address
 }
 
+output "db_roles_network" {
+  value = {
+    subnet_id           = aws_subnet.migration.id
+    security_group_id   = aws_security_group.db_roles.id
+    secrets_endpoint_id = aws_vpc_endpoint.db_roles_secrets.id
+  }
+}
+
 output "parameter_store_paths" {
   description = <<-EOT
     段ごとに実値を投入する path。Terraform は作らない。
     aws ssm put-parameter --type SecureString --name /vector/<段>/<key> --value ...
   EOT
   value       = { for name, _ in local.stages : name => "/${var.name_prefix}/${name}/" }
+}
+
+output "source_dispatch" {
+  value = {
+    lambda_arn            = aws_lambda_function.source_dispatch.arn
+    acquisition_queue_url = aws_sqs_queue.source_dispatch["acquisition"].url
+    failure_queues = { for key in ["scheduler_failure", "execution_failure"] : key => {
+      arn = aws_sqs_queue.source_dispatch[key].arn, url = aws_sqs_queue.source_dispatch[key].url
+    } }
+    dashboard_url = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards/dashboard/${aws_cloudwatch_dashboard.source_dispatch.dashboard_name}"
+  }
+}
+
+output "acquisition_consumer" {
+  value = {
+    lambda_arn                = aws_lambda_function.acquisition_consumer.arn
+    event_source_mapping_uuid = aws_lambda_event_source_mapping.acquisition_consumer.uuid
+    dlq_url                   = aws_sqs_queue.acquisition_dlq.url
+    dlq_arn                   = aws_sqs_queue.acquisition_dlq.arn
+    log_group                 = aws_cloudwatch_log_group.acquisition_consumer.name
+    dashboard_url             = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards/dashboard/${aws_cloudwatch_dashboard.source_dispatch.dashboard_name}"
+  }
 }
 
 output "outbox_queue_urls" {

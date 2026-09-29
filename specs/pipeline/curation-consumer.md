@@ -19,7 +19,7 @@ Status: 全スライスを実装し、本番で稼働中。旧Taskiq経路は202
 - [CurationService](../../backend/app/analysis/curation/service.py)と[Repository](../../backend/app/analysis/curation/repository.py): Signal／Noiseの保存、成功監査、Signal時のOutbox記録を所有する。Serviceは`CurationCompletion`で保存完了と保存競合を区別する（スライス2）。
 - [Assessment仕様](./assessment-consumer.md)と[Embedding仕様](./embedding-consumer.md): 正常終了と失敗伝播、借用するAIクライアント、呼び出し単位の資源管理、SQS部分バッチ応答の参照元。
 - [Outbox送信契約](./outbox-sqs-message-contract.md)と[relay実行部](../../backend/app/lambda_handlers/outbox_relay/execution.py): 保存済みイベントの検証・配送と、単一イベント種別の配送入口を提供する。
-- [Curationタスク](../../backend/app/queue/tasks/curation.py)、[救済タスク](../../backend/app/queue/tasks/backfill.py)、[ECS設定](../../infra/aws/ecs.tf): 旧Taskiq経路が残り、本番向け定義では3工程の救済が有効になる構成。
+- [Curationタスク](../../backend/app/queue/tasks/curation.py)、[救済タスク](../../backend/app/queue/tasks/backfill.py)、[ECS設定](../../infra/aws/platform_ecs_services.tf): 旧Taskiq経路が残り、本番向け定義では3工程の救済が有効になる構成。
 - [既存Curation保存テスト](../../backend/tests/analysis/curation/test_curation_service_audit.py): Signalと対応Outboxの保存、Noise・保存競合時のイベント非作成、Outbox失敗時の原子性を検証している。
 
 既存コード・仕様は現状の証拠として扱う。移行後の方針は本仕様とユーザーの合意を優先する。AWSの現在の稼働状態は確認していない。

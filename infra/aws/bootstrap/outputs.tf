@@ -6,7 +6,7 @@ output "state_bucket_name" {
 output "role_boundaries" {
   description = <<-EOT
     ロール名 -> その天井。本体スタックは ARN を名前から組み立てるので
-    (iam.tf の boundary_arns)、この output は値を渡すためのものではなく、
+    (locals.tf の boundary_arns)、この output は値を渡すためのものではなく、
     apply 後に AWS の実態 (iam get-role の PermissionsBoundary) と
     突き合わせるための期待値として使う。
   EOT

@@ -392,12 +392,12 @@ resource "aws_iam_role_policy" "apply" {
           "servicediscovery:*",
           "acm:*",
           "application-autoscaling:*",
-          # 監視・アラート基盤 (alerting.tf): topic / alarm / rule の管理。
+          # 監視・アラート基盤 (platform_alerting.tf と各単位のアラーム): topic / alarm / rule の管理。
           "sns:*",
           "cloudwatch:*",
           "events:*",
           # agent の外部検索が使う AgentCore Gateway と web-search connector
-          # (agentcore.tf)。Gateway / GatewayTarget の CRUD が要る。
+          # (agent.tf)。Gateway / GatewayTarget の CRUD が要る。
           "bedrock-agentcore:*",
           "ssm:DescribeParameters",
           "secretsmanager:DescribeSecret",
@@ -418,7 +418,7 @@ resource "aws_iam_role_policy" "apply" {
         Action   = ["route53:*", "chatbot:*"]
         Resource = "*"
       },
-      # AWS が公開する最新 AMI の ID (bastion.tf の data source が読む)。
+      # AWS が公開する最新 AMI の ID (platform_bastion.tf の data source が読む)。
       # account 部が空の ARN なので、自アカウントの parameter を落とす Deny とは
       # 重ならない。秘密を含まない値だけがこの namespace に居る。
       {
@@ -650,7 +650,7 @@ resource "aws_iam_role_policy" "rollout" {
         Effect = "Allow"
         Action = [
           # 入れ替え対象は cluster に問い合わせて数える。workflow 側に段の一覧を
-          # 持つと locals.tf と 2 箇所になり、段の追加が黙って漏れる。
+          # 持つと platform_ecs_services.tf と 2 箇所になり、段の追加が黙って漏れる。
           "ecs:ListServices",
           "ecs:DescribeServices",
           "ecs:DescribeTaskDefinition",

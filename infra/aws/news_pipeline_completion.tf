@@ -1,7 +1,6 @@
 locals {
-  completion_consumer_name        = "${var.name_prefix}-completion-consumer"
-  completion_consumer_arn         = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.completion_consumer_name}"
-  completion_consumer_subnet_cidr = cidrsubnet(var.vpc_cidr, 8, 33)
+  completion_consumer_name = "${var.name_prefix}-completion-consumer"
+  completion_consumer_arn  = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.completion_consumer_name}"
   completion_consumer_eni_actions = [
     "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
     "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
@@ -36,19 +35,6 @@ resource "aws_sqs_queue_policy" "completion_dlq" {
       Condition = { Bool = { "aws:SecureTransport" = "false" } }
     }]
   })
-}
-
-resource "aws_subnet" "completion_consumer" {
-  vpc_id                  = aws_vpc.main.id
-  availability_zone       = var.az_primary
-  cidr_block              = local.completion_consumer_subnet_cidr
-  map_public_ip_on_launch = false
-  tags                    = { Name = local.completion_consumer_name }
-}
-
-resource "aws_route_table_association" "completion_consumer" {
-  subnet_id      = aws_subnet.completion_consumer.id
-  route_table_id = aws_route_table.app.id
 }
 
 resource "aws_security_group" "completion_consumer" {

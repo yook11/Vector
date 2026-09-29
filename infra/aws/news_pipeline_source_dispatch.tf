@@ -255,14 +255,3 @@ resource "aws_cloudwatch_dashboard" "source_dispatch" {
     }]
   })
 }
-
-output "source_dispatch" {
-  value = {
-    lambda_arn            = aws_lambda_function.source_dispatch.arn
-    acquisition_queue_url = aws_sqs_queue.source_dispatch["acquisition"].url
-    failure_queues = { for key in ["scheduler_failure", "execution_failure"] : key => {
-      arn = aws_sqs_queue.source_dispatch[key].arn, url = aws_sqs_queue.source_dispatch[key].url
-    } }
-    dashboard_url = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards/dashboard/${aws_cloudwatch_dashboard.source_dispatch.dashboard_name}"
-  }
-}

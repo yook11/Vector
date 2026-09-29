@@ -3,7 +3,6 @@ locals {
   assessment_consumer_arn                = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.assessment_consumer_name}"
   assessment_consumer_parameter_path     = "/${var.name_prefix}/assessment-consumer/deepseek-api-key"
   assessment_notification_parameter_path = "/${var.name_prefix}/frontend/revalidate-bearer-secret"
-  assessment_consumer_subnet_cidr        = cidrsubnet(var.vpc_cidr, 8, 29)
 }
 
 resource "aws_sqs_queue" "assessment_dlq" {
@@ -34,19 +33,6 @@ resource "aws_sqs_queue_policy" "assessment_dlq" {
       Condition = { Bool = { "aws:SecureTransport" = "false" } }
     }]
   })
-}
-
-resource "aws_subnet" "assessment_consumer" {
-  vpc_id                  = aws_vpc.main.id
-  availability_zone       = var.az_primary
-  cidr_block              = local.assessment_consumer_subnet_cidr
-  map_public_ip_on_launch = false
-  tags                    = { Name = local.assessment_consumer_name }
-}
-
-resource "aws_route_table_association" "assessment_consumer" {
-  subnet_id      = aws_subnet.assessment_consumer.id
-  route_table_id = aws_route_table.app.id
 }
 
 resource "aws_security_group" "assessment_consumer" {

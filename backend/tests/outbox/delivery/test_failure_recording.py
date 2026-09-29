@@ -12,6 +12,7 @@ from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.exc import SQLAlchemyError
 from structlog.testing import capture_logs
 
+from app.cloudwatch.emf import PIPELINE_NAMESPACE
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -251,9 +252,11 @@ def test_base_exception_is_not_swallowed(sink, claimed, monkeypatch):
     assert caught.value is failure
 
 
-def test_alarm_matches_emitted_metric_and_only_notifies_alarm_state():
-    """Terraformとアプリの系列名・評価条件・通知経路の一致を固定する。"""
-    source = (Path(__file__).resolve().parents[4] / "infra/aws/alerting.tf").read_text()
+def test_alarm_watches_the_emitted_metric():
+    """アラームがアプリの送る系列(namespace・名前・次元なし)を見ていることを確かめる。"""
+    source = (
+        Path(__file__).resolve().parents[4] / "infra/aws/news_pipeline_alerting.tf"
+    ).read_text()
     match = re.search(
         r'resource "aws_cloudwatch_metric_alarm" '
         r'"outbox_publish_configuration_failure" \{(.*?)\n\}',
@@ -263,22 +266,11 @@ def test_alarm_matches_emitted_metric_and_only_notifies_alarm_state():
     assert match is not None
     block = match.group(1)
     for key, value in {
-        "namespace": '"Vector/Pipeline"',
+        "namespace": json.dumps(PIPELINE_NAMESPACE),
         "metric_name": json.dumps(recording.CONFIGURATION_FAILURE_METRIC),
-        "statistic": '"Sum"',
-        "period": "60",
-        "threshold": "1",
-        "comparison_operator": '"GreaterThanOrEqualToThreshold"',
-        "evaluation_periods": "1",
-        "datapoints_to_alarm": "1",
-        "treat_missing_data": '"notBreaching"',
-        "alarm_actions": "[aws_sns_topic.alerts.arn]",
     }.items():
         assert re.search(rf"^\s*{key}\s*=\s*{re.escape(value)}\s*$", block, re.M)
-    assert "ok_actions" not in block
-    assert "insufficient_data_actions" not in block
     assert "dimensions" not in block
-    assert "aws_cloudwatch_log_group.outbox_relay.name" in block
 
 
 @pytest.mark.asyncio

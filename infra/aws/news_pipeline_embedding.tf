@@ -2,7 +2,6 @@ locals {
   embedding_consumer_name           = "${var.name_prefix}-embedding-consumer"
   embedding_consumer_arn            = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.embedding_consumer_name}"
   embedding_consumer_parameter_path = "/${var.name_prefix}/embedding-consumer/gemini-api-key"
-  embedding_consumer_subnet_cidr    = cidrsubnet(var.vpc_cidr, 8, 28)
 }
 
 resource "aws_sqs_queue" "embedding_dlq" {
@@ -33,19 +32,6 @@ resource "aws_sqs_queue_policy" "embedding_dlq" {
       Condition = { Bool = { "aws:SecureTransport" = "false" } }
     }]
   })
-}
-
-resource "aws_subnet" "embedding_consumer" {
-  vpc_id                  = aws_vpc.main.id
-  availability_zone       = var.az_primary
-  cidr_block              = local.embedding_consumer_subnet_cidr
-  map_public_ip_on_launch = false
-  tags                    = { Name = local.embedding_consumer_name }
-}
-
-resource "aws_route_table_association" "embedding_consumer" {
-  subnet_id      = aws_subnet.embedding_consumer.id
-  route_table_id = aws_route_table.app.id
 }
 
 resource "aws_security_group" "embedding_consumer" {

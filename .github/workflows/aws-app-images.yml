@@ -261,7 +261,7 @@ jobs:
           set -euo pipefail
 
           # 入れ替え対象は cluster に問い合わせる。workflow に段の一覧を持つと
-          # locals.tf と 2 箇所になり、段を足したときに黙って漏れる。
+          # platform_ecs_services.tf と 2 箇所になり、段を足したときに黙って漏れる。
           # proxy だけ外すのは、image も workflow も別系統のため。
           #
           # AWS 側の失敗をここで落とすために list-services は単独で実行する。

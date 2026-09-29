@@ -69,6 +69,8 @@ locals {
     private_v4_ranges = local.non_public_ranges.v4
     private_v6_ranges = local.non_public_ranges.v6
   })
+
+  proxy_url = "http://proxy.${var.internal_namespace}:${var.proxy_port}"
 }
 
 resource "aws_cloudwatch_log_group" "proxy" {
@@ -150,7 +152,7 @@ resource "aws_service_discovery_service" "proxy" {
     routing_policy = "MULTIVALUE"
   }
 
-  # 空ブロックは round-trip しない (service_discovery.tf の注記と同じ)。
+  # 空ブロックは round-trip しない (platform_ecs_services.tf の Cloud Map の注記と同じ)。
   health_check_custom_config {
     failure_threshold = 1
   }
@@ -226,4 +228,35 @@ resource "aws_ecs_service" "proxy" {
   # 配送されない」状態になる。app 段でこのパターンが成立するのは rollout job が
   # revision を進めるからで、proxy は rollout の対象外 (backend / frontend のみ)。
   # proxy の task definition を触るのは Terraform だけなので、理由が当てはまらない。
+}
+
+resource "aws_security_group" "proxy" {
+  name        = "${var.name_prefix}-proxy"
+  description = "Egress proxy. Sole path out of the app subnets."
+  vpc_id      = aws_vpc.main.id
+}
+
+# どの宛先を許すかは proxy の allowlist が段ごとに決める。SG では port だけ。
+resource "aws_vpc_security_group_egress_rule" "proxy_to_internet" {
+  for_each = toset(["80", "443"])
+
+  security_group_id = aws_security_group.proxy.id
+  description       = "allowlisted upstreams"
+  ip_protocol       = "tcp"
+  from_port         = tonumber(each.value)
+  to_port           = tonumber(each.value)
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+# proxy も image pull と log 送信で endpoint を使う。private DNS は VPC 全域に
+# 効くので、proxy をどの subnet に置いても ecr.api / logs は endpoint の ENI に
+# 解決される。ここを開けないと proxy task 自体が起動しない。
+# (S3 のレイヤー実体は gateway endpoint 経由なのでこの規則の対象外。)
+resource "aws_vpc_security_group_ingress_rule" "endpoints_from_proxy" {
+  security_group_id            = aws_security_group.endpoints.id
+  description                  = "proxy"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.proxy.id
 }

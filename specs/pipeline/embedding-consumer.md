@@ -21,8 +21,8 @@ Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード�
 - [EmbeddingConsumer](../../backend/app/analysis/embedding/consumer.py)：検証済みpayloadの受信、開始状態の取得、60秒の業務処理、失敗後処理と例外伝播。
 - [EmbeddingRepository](../../backend/app/analysis/embedding/repository.py)：生成済み判定と、embeddingがNULLの場合だけ更新する保存処理。
 - [worker起動設定](../../backend/supervisord/analysis.conf)：embedding workerの最大同時実行数は1プロセスあたり10。
-- [relay基盤](../../infra/aws/outbox_relay.tf)：Standardキュー、relay Lambda、無効状態のScheduler。ConsumerとSQS起動トリガーは配置済み。
-- [Consumer基盤](../../infra/aws/embedding_consumer.tf)：専用サブネット・IAM・SSM経路・DLQ・通知。
+- [relay基盤](../../infra/aws/news_pipeline_outbox.tf)：Standardキュー、relay Lambda、無効状態のScheduler。ConsumerとSQS起動トリガーは配置済み。
+- [Consumer基盤](../../infra/aws/news_pipeline_embedding.tf)：専用サブネット・IAM・SSM経路・DLQ・通知。
 - [適用手順](../../infra/aws/README.md#embeddingconsumer基盤の追加スライス1)：bootstrap先行・滞留確認・秘密情報登録・後続検証。
 - AWS公式：[SQSとLambdaの接続設定](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html)、[同時実行制御](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html)、[DLQ](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)。
 

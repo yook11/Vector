@@ -71,6 +71,17 @@ locals {
     "on ~rl:* -@all +eval +zremrangebyscore +zcard +zadd +expire",
     local.valkey_common_acl,
   ])
+
+  broker_endpoint     = "${aws_elasticache_replication_group.broker.primary_endpoint_address}:${aws_elasticache_replication_group.broker.port}"
+  rate_limit_endpoint = "${aws_elasticache_replication_group.rate_limit.primary_endpoint_address}:${aws_elasticache_replication_group.rate_limit.port}"
+
+  # rediss は transit_encryption_enabled = true の帰結。username が IAM user を
+  # 名指しし、token は app が接続ごとに SigV4 署名で生成するので password 項は無い。
+  broker_redis_url = {
+    for s in local.broker_stages :
+    s => "rediss://${var.name_prefix}-${s}@${local.broker_endpoint}/0"
+  }
+  rate_limit_redis_url = "rediss://${var.name_prefix}-frontend@${local.rate_limit_endpoint}/0"
 }
 
 # ElastiCache の subnet group は RDS と違って 2 AZ を要求しない。primary AZ の
@@ -102,7 +113,7 @@ resource "aws_elasticache_parameter_group" "rate_limit" {
 }
 
 # IAM 認証なので password が存在せず、user を Terraform 管理にしても state に
-# 秘密が載らない。IAM が決めるのは「どの user として繋げるか」(iam.tf) だけで、
+# 秘密が載らない。IAM が決めるのは「どの user として繋げるか」(platform_ecs_services.tf) だけで、
 # 入った後に何ができるかは access_string が全部決める。
 resource "aws_elasticache_user" "broker" {
   for_each = local.broker_user_access
@@ -155,7 +166,7 @@ resource "aws_elasticache_replication_group" "broker" {
   engine         = "valkey"
   engine_version = var.valkey_version
   node_type      = "cache.t4g.micro"
-  # 既定値だが、ecs.tf が env の URL を組むのに参照するため明示する。
+  # 既定値だが、broker_endpoint が env の URL を組むのに参照するため明示する。
   port = 6379
 
   num_cache_clusters         = 1
@@ -203,4 +214,16 @@ resource "aws_elasticache_replication_group" "rate_limit" {
   apply_immediately        = var.apply_immediately
 
   tags = { Name = "${var.name_prefix}-rate-limit" }
+}
+
+resource "aws_security_group" "valkey_broker" {
+  name        = "${var.name_prefix}-valkey-broker"
+  description = "Valkey for taskiq broker and agent live streams. maxmemory-policy noeviction."
+  vpc_id      = aws_vpc.main.id
+}
+
+resource "aws_security_group" "valkey_rl" {
+  name        = "${var.name_prefix}-valkey-rl"
+  description = "Valkey for frontend proxy.ts rate limit. maxmemory-policy volatile-ttl."
+  vpc_id      = aws_vpc.main.id
 }

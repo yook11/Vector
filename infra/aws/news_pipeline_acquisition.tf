@@ -1,7 +1,6 @@
 locals {
-  acquisition_consumer_name        = "${var.name_prefix}-acquisition-consumer"
-  acquisition_consumer_arn         = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.acquisition_consumer_name}"
-  acquisition_consumer_subnet_cidr = cidrsubnet(var.vpc_cidr, 8, 34)
+  acquisition_consumer_name = "${var.name_prefix}-acquisition-consumer"
+  acquisition_consumer_arn  = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.acquisition_consumer_name}"
   acquisition_consumer_eni_actions = [
     "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
     "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
@@ -36,19 +35,6 @@ resource "aws_sqs_queue_policy" "acquisition_dlq" {
       Condition = { Bool = { "aws:SecureTransport" = "false" } }
     }]
   })
-}
-
-resource "aws_subnet" "acquisition_consumer" {
-  vpc_id                  = aws_vpc.main.id
-  availability_zone       = var.az_primary
-  cidr_block              = local.acquisition_consumer_subnet_cidr
-  map_public_ip_on_launch = false
-  tags                    = { Name = local.acquisition_consumer_name }
-}
-
-resource "aws_route_table_association" "acquisition_consumer" {
-  subnet_id      = aws_subnet.acquisition_consumer.id
-  route_table_id = aws_route_table.app.id
 }
 
 resource "aws_security_group" "acquisition_consumer" {
@@ -220,15 +206,4 @@ resource "aws_lambda_event_source_mapping" "acquisition_consumer" {
 
   tags       = { Consumer = local.acquisition_consumer_name }
   depends_on = [aws_iam_role_policy.acquisition_consumer]
-}
-
-output "acquisition_consumer" {
-  value = {
-    lambda_arn                = aws_lambda_function.acquisition_consumer.arn
-    event_source_mapping_uuid = aws_lambda_event_source_mapping.acquisition_consumer.uuid
-    dlq_url                   = aws_sqs_queue.acquisition_dlq.url
-    dlq_arn                   = aws_sqs_queue.acquisition_dlq.arn
-    log_group                 = aws_cloudwatch_log_group.acquisition_consumer.name
-    dashboard_url             = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards/dashboard/${aws_cloudwatch_dashboard.source_dispatch.dashboard_name}"
-  }
 }
