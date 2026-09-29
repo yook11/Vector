@@ -1,22 +1,8 @@
-"""GET /api/v1/trends のレスポンス schema。
-
-API は SSoT (Pydantic schema) → /openapi.json → frontend 型生成 の順で型を伝播
-させる (CLAUDE.md)。よって snake_case domain VO を camelCase レスポンスに
-明示的に詰め替える境界がここ。
-
-設計判断:
-- snapshot 不在 / 生成済の 2 状態を ``state`` discriminator で構造的に分離
-  (``"empty"`` には窓情報フィールドが存在しない。フロントは
-  ``data.state === "empty"`` で型 narrowing できる)。``state`` は処理の
-  ライフサイクル語ではなく consumer が判別すべき条件 (どの resource か) を表す
-- ``windowStart`` は ``windowEnd - 7 日`` を導出 (frontend が表示レンジに使う)
-- ``growthRate`` は domain 側 ``computed_field`` (hotness_score) の値を晒す
-  (hot ゲートの内部語彙を API contract に出さない)
-"""
+"""トレンドのAPI応答形式と、集計結果からの変換を定義する。"""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -90,8 +76,8 @@ def trends_from_snapshot(
     source_analysis_count: int,
 ) -> Trends:
     return Trends(
-        window_start=bundle.window_end - timedelta(days=7),
-        window_end=bundle.window_end,
+        window_start=bundle.window.window_start,
+        window_end=bundle.window.window_end,
         generated_at=generated_at,
         source_analysis_count=source_analysis_count,
         category_trends=[_to_category_trends(c) for c in bundle.category_trends],

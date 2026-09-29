@@ -132,10 +132,11 @@ async def test_trend_discovery_keeps_snapshot_already_saved_for_the_window(
 
 
 async def test_trend_discovery_leaves_snapshot_saved_by_another_worker(
-    system_database, trend_worker
+    system_database, trend_worker, monkeypatch
 ):
     """生成済みかの確認の後に別workerが保存していたら、競合として既存行を残す。"""
-    from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
+    from app.insights.trend_discovery.domain.trend import TrendWindow
+    from app.insights.trend_discovery.repository import TrendsRepository
     from app.insights.trend_discovery.service import (
         TrendDiscoveryConflict,
         TrendDiscoveryService,
@@ -148,18 +149,27 @@ async def test_trend_discovery_leaves_snapshot_saved_by_another_worker(
         title="trend-race",
         analyzed_at=datetime(2026, 9, 26, 9, tzinfo=JST),
     )
-    await seed_trends_snapshot(
-        system_database,
-        window_end=date(2026, 9, 27),
-        bundle={"marker": "別workerが保存したトレンド"},
-        source_analysis_count=1,
-        generated_at=datetime(2026, 9, 27, 0, 5, tzinfo=JST),
+    load_facts = TrendsRepository.load_ready_build_facts
+
+    async def save_from_other_worker_after_reading_facts(repository, *, window):
+        facts = await load_facts(repository, window=window)
+        await seed_trends_snapshot(
+            system_database,
+            window_end=date(2026, 9, 27),
+            bundle={"marker": "別workerが保存したトレンド"},
+            source_analysis_count=1,
+            generated_at=datetime(2026, 9, 27, 0, 5, tzinfo=JST),
+        )
+        return facts
+
+    monkeypatch.setattr(
+        TrendsRepository,
+        "load_ready_build_facts",
+        save_from_other_worker_after_reading_facts,
     )
     service = TrendDiscoveryService(trend_worker.state.session_factory)
 
-    outcome = await service.execute(
-        ReadyForTrendDiscovery(window_end=date(2026, 9, 27))
-    )
+    outcome = await service.execute(TrendWindow(window_end=date(2026, 9, 27)))
 
     assert outcome == TrendDiscoveryConflict(
         window_end=date(2026, 9, 27),

@@ -23,6 +23,7 @@ from app.insights.trend_discovery.domain.trend import (
     CategoryTrends,
     RankedMention,
     TrendsBundle,
+    TrendWindow,
 )
 from app.insights.trend_discovery.schemas import trends_from_snapshot
 from app.models.trends_snapshot import TrendsSnapshot
@@ -40,7 +41,9 @@ def _camel_bundle(window_end: date) -> dict:
         most_mentioned=(mention,),
         fastest_growing=(mention,),
     )
-    bundle = TrendsBundle(window_end=window_end, category_trends=(category_trends,))
+    bundle = TrendsBundle(
+        window=TrendWindow(window_end=window_end), category_trends=(category_trends,)
+    )
     generated_at = datetime(2026, 5, 3, 0, 0, 0, tzinfo=UTC)
     response = trends_from_snapshot(
         bundle=bundle, generated_at=generated_at, source_analysis_count=42

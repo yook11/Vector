@@ -14,6 +14,7 @@ from app.insights.trend_discovery.domain.trend import (
     RankedMention,
     RelatedMention,
     TrendsBundle,
+    TrendWindow,
 )
 from app.insights.trend_discovery.schemas import (
     empty_trends,
@@ -49,7 +50,8 @@ class TestFromSnapshot:
             fastest_growing=(mention,),
         )
         return TrendsBundle(
-            window_end=date(2026, 5, 3), category_trends=(category_trends,)
+            window=TrendWindow(window_end=date(2026, 5, 3)),
+            category_trends=(category_trends,),
         )
 
     def test_camel_case_keys(self) -> None:
@@ -88,7 +90,9 @@ class TestFromSnapshot:
         assert category_trends["fastestGrowing"][0]["name"] == "NVIDIA"
 
     def test_window_start_is_window_end_minus_seven_days(self) -> None:
-        bundle = TrendsBundle(window_end=date(2026, 4, 30), category_trends=())
+        bundle = TrendsBundle(
+            window=TrendWindow(window_end=date(2026, 4, 30)), category_trends=()
+        )
         resp = trends_from_snapshot(
             bundle=bundle,
             generated_at=datetime(2026, 4, 30, 0, 5, tzinfo=UTC),

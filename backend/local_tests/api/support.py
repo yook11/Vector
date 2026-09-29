@@ -10,6 +10,7 @@ from app.insights.trend_discovery.domain.trend import (
     CategoryTrends,
     RankedMention,
     TrendsBundle,
+    TrendWindow,
 )
 from app.insights.trend_discovery.schemas import trends_from_snapshot
 
@@ -237,7 +238,7 @@ def trends_payload(window_end: date) -> dict:
         name="NVIDIA", type="company", appearance_count=30, previous_appearance_count=5
     )
     bundle = TrendsBundle(
-        window_end=window_end,
+        window=TrendWindow(window_end=window_end),
         category_trends=(
             CategoryTrends(
                 category_id=1,

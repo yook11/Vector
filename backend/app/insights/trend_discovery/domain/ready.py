@@ -1,76 +1,46 @@
-"""ReadyForTrendDiscovery — Trend Discovery 実行可能状態の precondition 型。
+"""取得済みの事実からトレンドの生成開始条件を判定する。"""
 
-spec `specs/typed-pipeline-preconditions.md` §5 / §6.3 / §7 で確定した設計の
-Trend Discovery BC 実装。これは **入口 task (cron 駆動)** であり Stage 間
-passport ではない。
-Ready は cron 引数 (window_end) の構造化と precondition (snapshot 未生成)
-の表明を担う。
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Self
 
-`@dataclass(frozen=True, slots=True)` ではなく `BaseModel(frozen=True)` を使う
-理由: Phase 1-3 と統一し、将来の手動 enqueue 経路 (kiq に Ready を渡す) で
-taskiq の formatter (Pydantic ベース) と整合させるため (taskiq Issue #441 / #558、
-memory `feedback_taskiq_basemodel_required.md`)。本 Stage では現状 cron 駆動のみ
-だが、Phase 5 の入口 task pattern と統一するために BaseModel を採用する。
-"""
+from pydantic import BaseModel, ConfigDict, Field
 
-from __future__ import annotations
-
-from datetime import date
-from typing import Protocol
-
-import structlog
-from pydantic import BaseModel, ConfigDict
-
-logger = structlog.get_logger(__name__)
+from app.insights.trend_discovery.domain.trend import TrendWindow
 
 
-class SnapshotExistenceProtocol(Protocol):
-    """Stage F 進行判定用 Snapshot Repository contract (cheap exists 判定)。"""
+class TrendDiscoveryReadyBuildRejectionReason(StrEnum):
+    """トレンドの生成を始めない理由。"""
 
-    async def exists_for_window_end(self, window_end: date) -> bool: ...
+    ALREADY_GENERATED = "already_generated"
+    NO_ARTICLES = "no_articles"
+
+
+@dataclass(frozen=True, slots=True)
+class TrendDiscoveryReadyBuildFacts:
+    """生成済みなら記事数を取得せず、Noneで未取得を表す。"""
+
+    already_generated: bool
+    source_analysis_count: int | None
 
 
 class ReadyForTrendDiscovery(BaseModel):
-    """Trend Discovery を実行可能な状態を表す precondition 型。
-
-    入口 task の cron 引数を構造化する型として機能する (Phase 1-3 の Stage 間
-    passport とは性格が異なる)。
-
-    Invariants:
-    - ``window_end``: rolling 7d window の上限 (任意の JST 日付)
-    - frozen: 生成後は不変
-    """
+    """未生成かつ対象記事が存在する期間の、トレンド生成入力。"""
 
     model_config = ConfigDict(frozen=True)
 
-    window_end: date
+    window: TrendWindow
+    source_analysis_count: int = Field(gt=0)
 
     @classmethod
-    async def try_advance_from(
-        cls,
-        *,
-        window_end: date,
-        snapshot_repo: SnapshotExistenceProtocol,
-    ) -> ReadyForTrendDiscovery | None:
-        """Trend Discovery へ advance できるかを判定する gatekeeper。
-
-        Phase 1-3 の単一 source-Entity 引数とは異なり kwargs 経路を採る。
-        この cron 起点の処理には Ready 構築の起点となる domain Entity が存在せず、
-        入口 task で外部入力 (cron 引数) から直接構築するため。
-
-        Precondition:
-        - 同 ``window_end`` の snapshot 未生成
-
-        Returns:
-            進める場合: ``ReadyForTrendDiscovery``
-            進めない場合: ``None`` (業務正常状態、例外ではない — 既存 snapshot あり。
-            spec §4.5 Failure mode 1)
-        """
-        candidate = cls(window_end=window_end)
-        if await snapshot_repo.exists_for_window_end(window_end):
-            logger.info(
-                "trend_discovery_skipped_already_exists",
-                window_end=window_end.isoformat(),
-            )
-            return None
-        return candidate
+    def from_facts(
+        cls, *, window: TrendWindow, facts: TrendDiscoveryReadyBuildFacts
+    ) -> Self | TrendDiscoveryReadyBuildRejectionReason:
+        """DB問い合わせを行わず、生成済みを優先して開始条件を判定する。"""
+        if facts.already_generated:
+            return TrendDiscoveryReadyBuildRejectionReason.ALREADY_GENERATED
+        if facts.source_analysis_count is None:
+            raise ValueError("source_analysis_count is required for a new window")
+        if facts.source_analysis_count == 0:
+            return TrendDiscoveryReadyBuildRejectionReason.NO_ARTICLES
+        return cls(window=window, source_analysis_count=facts.source_analysis_count)
