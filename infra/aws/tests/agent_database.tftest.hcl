@@ -71,13 +71,13 @@ run "agent_connects_only_as_agent_role" {
   command = plan
 
   assert {
-    condition     = local.stage_environment["agent"].DATABASE_URL == local.backend_db_url["vector_agent"]
-    error_message = "agent段はvector_agentで接続する。"
+    condition     = local.service_environment["agent"].DATABASE_URL == local.backend_db_url["vector_agent"]
+    error_message = "agentサービスはvector_agentで接続する。"
   }
   assert {
     condition = jsondecode(aws_iam_role_policy.task["agent"].policy).Statement[0].Resource == [
       "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_agent",
     ]
-    error_message = "agent段のタスクロールはvector_agentにだけ接続できる。"
+    error_message = "agentサービスのタスクロールはvector_agentにだけ接続できる。"
   }
 }

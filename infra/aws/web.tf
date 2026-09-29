@@ -57,7 +57,7 @@ resource "aws_lb" "this" {
 
 resource "aws_lb_target_group" "frontend" {
   name        = "${var.name_prefix}-frontend"
-  port        = local.stages["frontend"].port
+  port        = local.services["frontend"].port
   protocol    = "HTTP"
   target_type = "ip"
   vpc_id      = aws_vpc.main.id

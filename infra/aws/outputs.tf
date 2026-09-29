@@ -3,12 +3,12 @@ output "vpc_id" {
 }
 
 output "app_subnet_ids" {
-  description = "段名 -> subnet ID。ECS service の network configuration が使う。"
+  description = "サービス名 -> subnet ID。ECS service の network configuration が使う。"
   value       = { for name, subnet in aws_subnet.app : name => subnet.id }
 }
 
 output "app_security_group_ids" {
-  description = "段名 -> security group ID。"
+  description = "サービス名 -> security group ID。"
   value       = { for name, sg in aws_security_group.app : name => sg.id }
 }
 
@@ -43,12 +43,12 @@ output "egress_public_ip" {
 }
 
 output "task_role_arns" {
-  description = "段名 -> task role ARN。ECS task definition の taskRoleArn。"
+  description = "サービス名 -> task role ARN。ECS task definition の taskRoleArn。"
   value       = { for name, role in aws_iam_role.task : name => role.arn }
 }
 
 output "execution_role_arns" {
-  description = "段名 -> execution role ARN。ECS task definition の executionRoleArn。"
+  description = "サービス名 -> execution role ARN。ECS task definition の executionRoleArn。"
   value       = { for name, role in aws_iam_role.execution : name => role.arn }
 }
 
@@ -83,10 +83,10 @@ output "db_roles_network" {
 
 output "parameter_store_paths" {
   description = <<-EOT
-    段ごとに実値を投入する path。Terraform は作らない。
-    aws ssm put-parameter --type SecureString --name /vector/<段>/<key> --value ...
+    サービスごとに実値を投入する path。Terraform は作らない。
+    aws ssm put-parameter --type SecureString --name /vector/<サービス>/<key> --value ...
   EOT
-  value       = { for name, _ in local.stages : name => "/${var.name_prefix}/${name}/" }
+  value       = { for name, _ in local.services : name => "/${var.name_prefix}/${name}/" }
 }
 
 output "source_dispatch" {

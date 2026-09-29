@@ -26,7 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # backend は 1 image を 6 段が command 違いで起動する。
+          # backend は 1 image を 6 サービスが command 違いで起動する。
           - image: backend
             context: backend
           - image: frontend
@@ -260,8 +260,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 入れ替え対象は cluster に問い合わせる。workflow に段の一覧を持つと
-          # platform_ecs_services.tf と 2 箇所になり、段を足したときに黙って漏れる。
+          # 入れ替え対象は cluster に問い合わせる。workflow にサービスの一覧を持つと
+          # platform_ecs_services.tf と 2 箇所になり、サービスを足したときに黙って漏れる。
           # proxy だけ外すのは、image も workflow も別系統のため。
           #
           # AWS 側の失敗をここで落とすために list-services は単独で実行する。
@@ -278,7 +278,7 @@ jobs:
             exit 1
           fi
 
-          # 1 パス目: 全段の revision を登録するだけ。ここで落ちても本番は無傷。
+          # 1 パス目: 全サービスの revision を登録するだけ。ここで落ちても本番は無傷。
           registered=""
           expected_task_definitions='{}'
           for svc in $services; do

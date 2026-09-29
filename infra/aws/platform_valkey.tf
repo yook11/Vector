@@ -78,7 +78,7 @@ locals {
   # rediss は transit_encryption_enabled = true の帰結。username が IAM user を
   # 名指しし、token は app が接続ごとに SigV4 署名で生成するので password 項は無い。
   broker_redis_url = {
-    for s in local.broker_stages :
+    for s in local.broker_services :
     s => "rediss://${var.name_prefix}-${s}@${local.broker_endpoint}/0"
   }
   rate_limit_redis_url = "rediss://${var.name_prefix}-frontend@${local.rate_limit_endpoint}/0"
@@ -140,14 +140,14 @@ resource "aws_elasticache_user" "frontend" {
   }
 }
 
-# user group の membership は「どの段がこのノードに来るか」という構造。
+# user group の membership は「どのサービスがこのノードに来るか」という構造。
 # VALKEY engine の user group に default user は要らない (REDIS engine と要件が違う)。
 resource "aws_elasticache_user_group" "broker" {
   engine        = "valkey"
   user_group_id = "${var.name_prefix}-broker"
-  # broker_stages に居るのに access string が無い段は、この参照が plan で落ちる
+  # broker_services に居るのに access string が無いサービスは、この参照が plan で落ちる
   # (fail-closed なので気づける)。
-  user_ids = [for s in local.broker_stages : aws_elasticache_user.broker[s].user_id]
+  user_ids = [for s in local.broker_services : aws_elasticache_user.broker[s].user_id]
 }
 
 resource "aws_elasticache_user_group" "rate_limit" {

@@ -71,13 +71,13 @@ run "api_connects_only_as_api_role" {
   command = plan
 
   assert {
-    condition     = local.stage_environment["api"].DATABASE_URL == local.backend_db_url["vector_api"]
-    error_message = "api段はvector_apiで接続する。"
+    condition     = local.service_environment["api"].DATABASE_URL == local.backend_db_url["vector_api"]
+    error_message = "apiサービスはvector_apiで接続する。"
   }
   assert {
     condition = jsondecode(aws_iam_role_policy.task["api"].policy).Statement[0].Resource == [
       "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_api",
     ]
-    error_message = "api段のタスクロールはvector_apiにだけ接続できる。"
+    error_message = "apiサービスのタスクロールはvector_apiにだけ接続できる。"
   }
 }

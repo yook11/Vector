@@ -1,6 +1,6 @@
 # execution role の policy が実 ARN を参照できるよう、pull 元と送り先を先に作る。
 
-# backend は 1 image を 4 段が共有する。段ごとに repo を分けても、同じ image を
+# backend は 1 image を 4 サービスが共有する。サービスごとに repo を分けても、同じ image を
 # 4 回 push することになるだけで境界は増えない。
 #
 # IMMUTABLE の帰結: deploy は毎回一意な tag (commit SHA) で push する。
@@ -46,9 +46,9 @@ data "aws_ecr_image" "backend_latest" {
 locals {
   lambda_initial_image_uri = "${aws_ecr_repository.this["backend"].repository_url}@${data.aws_ecr_image.backend_latest.image_digest}"
 
-  # image は 2 つ (backend / frontend) を段で共有する。
-  # proxy の image もここで作る (repo は image の関心事であって段の関心事ではない)。
-  images = toset(concat([for _, s in local.stages : s.image], ["proxy"]))
+  # image は 2 つ (backend / frontend) をサービスで共有する。
+  # proxy の image もここで作る (repo は image の関心事であってサービスの関心事ではない)。
+  images = toset(concat([for _, s in local.services : s.image], ["proxy"]))
 }
 
 moved {

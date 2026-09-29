@@ -16,7 +16,7 @@ resource "aws_subnet" "bastion" {
 
   vpc_id            = aws_vpc.main.id
   availability_zone = var.az_primary
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 31)
+  cidr_block        = local.subnet_cidrs["bastion"]
 
   tags = { Name = "${var.name_prefix}-bastion" }
 }
@@ -32,10 +32,10 @@ resource "aws_route_table_association" "bastion" {
 # ECS Exec を使わない決定のためで、踏み台が居る間だけここで足す。
 # agent の登録経路は常設の ssm endpoint が担う。
 #
-# SG は共有の endpoints SG ではなく専用 SG。共有 SG には app 7 段からの 443 を
-# 受け入れる規則が既にあり、相乗りすると toggle on の間だけ app 段 →
+# SG は共有の endpoints SG ではなく専用 SG。共有 SG には app 7 サービスからの 443 を
+# 受け入れる規則が既にあり、相乗りすると toggle on の間だけ app サービス →
 # ssmmessages の経路が生まれる (実害は IAM で塞がっているが、この repo の思想は
-# 「経路が存在しない」)。app 段の egress は共有 SG 宛の SG 参照なので、
+# 「経路が存在しない」)。app サービスの egress は共有 SG 宛の SG 参照なので、
 # 専用 SG の ENI には最初から届かず、app 側の規則を触らずに両方向が閉じる。
 resource "aws_vpc_endpoint" "ssmmessages" {
   count = var.enable_db_bastion ? 1 : 0
