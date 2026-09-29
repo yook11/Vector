@@ -79,7 +79,7 @@ locals {
   # bootstrap は本体の local.services を参照できないのでサービス名をここでも持つ。サービスを増やす
   # ときは、この表を apply してから本体を apply する。順序を守らないと CreateRole が
   # Deny で落ちる。天井を決めずにサービスが増えないようにするための順序。
-  role_boundary_groups = merge(local.backfill_role_boundary_groups, local.source_dispatch_role_boundary_groups, local.article_analysis_role_boundary_groups, {
+  role_boundary_groups = merge(local.backfill_role_boundary_groups, local.source_dispatch_role_boundary_groups, local.article_analysis_role_boundary_groups, local.article_fetch_role_boundary_groups, {
     Task = {
       boundary = aws_iam_policy.task_boundary.arn
       role_names = [
