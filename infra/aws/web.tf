@@ -133,3 +133,157 @@ resource "aws_route53_record" "frontend" {
     evaluate_target_health = true
   }
 }
+
+resource "aws_security_group" "alb" {
+  name        = "${var.name_prefix}-alb"
+  description = "Public entrypoint. The only path from the internet."
+  vpc_id      = aws_vpc.main.id
+}
+
+# --- 入口 -----------------------------------------------------------------
+
+resource "aws_vpc_security_group_ingress_rule" "alb_from_internet" {
+  security_group_id = aws_security_group.alb.id
+  description       = "HTTPS from the internet"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_egress_rule" "alb_to_frontend" {
+  security_group_id            = aws_security_group.alb.id
+  description                  = "ALB to frontend task"
+  ip_protocol                  = "tcp"
+  from_port                    = 3000
+  to_port                      = 3000
+  referenced_security_group_id = aws_security_group.app["frontend"].id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "frontend_from_alb" {
+  security_group_id            = aws_security_group.app["frontend"].id
+  description                  = "ALB"
+  ip_protocol                  = "tcp"
+  from_port                    = 3000
+  to_port                      = 3000
+  referenced_security_group_id = aws_security_group.alb.id
+}
+
+# backend は frontend 経由でしか到達できない (transport 層の defense in depth)。
+# application 層の BFF_JWT_SIGNING_SECRET 検証と合わせて 2 層。
+resource "aws_vpc_security_group_ingress_rule" "api_from_frontend" {
+  security_group_id            = aws_security_group.app["api"].id
+  description                  = "frontend BFF"
+  ip_protocol                  = "tcp"
+  from_port                    = 8000
+  to_port                      = 8000
+  referenced_security_group_id = aws_security_group.app["frontend"].id
+}
+
+resource "aws_vpc_security_group_egress_rule" "frontend_to_api" {
+  security_group_id            = aws_security_group.app["frontend"].id
+  description                  = "backend API"
+  ip_protocol                  = "tcp"
+  from_port                    = 8000
+  to_port                      = 8000
+  referenced_security_group_id = aws_security_group.app["api"].id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "valkey_rl_from_frontend" {
+  security_group_id            = aws_security_group.valkey_rl.id
+  description                  = "frontend proxy.ts rate limit"
+  ip_protocol                  = "tcp"
+  from_port                    = 6379
+  to_port                      = 6379
+  referenced_security_group_id = aws_security_group.app["frontend"].id
+}
+
+resource "aws_vpc_security_group_egress_rule" "frontend_to_valkey_rl" {
+  security_group_id            = aws_security_group.app["frontend"].id
+  description                  = "Valkey rate limit"
+  ip_protocol                  = "tcp"
+  from_port                    = 6379
+  to_port                      = 6379
+  referenced_security_group_id = aws_security_group.valkey_rl.id
+}
+
+# --- A7: ユーザー向けエラー (ALB 5XX) --------------------------------------
+#
+# 低トラフィックのため率ではなく絶対数で判定する。ELB_5XX (target 到達不能)
+# も合算し、frontend 全滅も同じ alarm で拾う。5XX 系メトリクスは発生時しか
+# datapoint を持たないため FILL で 0 埋めして合算する。
+
+resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
+  alarm_name          = "${var.name_prefix}-alb-5xx"
+  alarm_description   = "ユーザー向けリクエストで 5XX が発生している。frontend / api のログと直近 deploy を確認する。"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 5
+  evaluation_periods  = 1
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+
+  metric_query {
+    id = "target_5xx"
+
+    metric {
+      namespace   = "AWS/ApplicationELB"
+      metric_name = "HTTPCode_Target_5XX_Count"
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        LoadBalancer = aws_lb.this.arn_suffix
+      }
+    }
+  }
+
+  metric_query {
+    id = "elb_5xx"
+
+    metric {
+      namespace   = "AWS/ApplicationELB"
+      metric_name = "HTTPCode_ELB_5XX_Count"
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        LoadBalancer = aws_lb.this.arn_suffix
+      }
+    }
+  }
+
+  metric_query {
+    id          = "total_5xx"
+    expression  = "FILL(target_5xx, 0) + FILL(elb_5xx, 0)"
+    label       = "ALB 5XX total"
+    return_data = true
+  }
+}
+
+# --- A8: frontend 到達不能 (UnHealthyHostCount) -----------------------------
+#
+# desired 1 なので unhealthy 1 = frontend 全停止。瞬断 (再起動 1 回) では
+# 鳴らさないよう 5 分継続で判定する。
+
+resource "aws_cloudwatch_metric_alarm" "alb_unhealthy_host" {
+  alarm_name          = "${var.name_prefix}-alb-unhealthy-host"
+  alarm_description   = "frontend の health check が 5 分連続で失敗している。frontend task の状態とログを確認する。"
+  namespace           = "AWS/ApplicationELB"
+  metric_name         = "UnHealthyHostCount"
+  statistic           = "Maximum"
+  period              = 60
+  evaluation_periods  = 5
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    LoadBalancer = aws_lb.this.arn_suffix
+    TargetGroup  = aws_lb_target_group.frontend.arn_suffix
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+}

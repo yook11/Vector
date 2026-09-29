@@ -45,6 +45,10 @@ data "aws_ecr_image" "backend_latest" {
 
 locals {
   lambda_initial_image_uri = "${aws_ecr_repository.this["backend"].repository_url}@${data.aws_ecr_image.backend_latest.image_digest}"
+
+  # image は 2 つ (backend / frontend) を段で共有する。
+  # proxy の image もここで作る (repo は image の関心事であって段の関心事ではない)。
+  images = toset(concat([for _, s in local.stages : s.image], ["proxy"]))
 }
 
 moved {
@@ -72,23 +76,4 @@ resource "aws_ecr_lifecycle_policy" "this" {
       },
     ]
   })
-}
-
-# log group は Terraform が作る。
-# 帰結: task definition で awslogs-create-group を使わない。使うと execution role に
-# logs:CreateLogGroup が要り、boundary (書き込み 2 アクションのみ) で落ちる。
-resource "aws_cloudwatch_log_group" "this" {
-  for_each = local.stages
-
-  name              = "/ecs/${var.name_prefix}/${each.key}"
-  retention_in_days = var.log_retention_days
-
-  tags = { Name = "${var.name_prefix}-${each.key}" }
-}
-
-resource "aws_cloudwatch_log_group" "migration" {
-  name              = "/ecs/${var.name_prefix}/migration"
-  retention_in_days = var.log_retention_days
-
-  tags = { Name = "${var.name_prefix}-migration" }
 }

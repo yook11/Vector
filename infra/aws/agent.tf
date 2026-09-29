@@ -1,3 +1,12 @@
+locals {
+  # NO_PROXY へ入れる AgentCore Gateway の host。gateway_url は
+  # https://<host>/<path> 形式で apply 時に確定する。suffix を literal で書くと
+  # 命名規則が変わったときに proxy へ迂回して静かに失敗するため、URL から取る。
+  agentcore_gateway_host = regex(
+    "^https?://([^/]+)", aws_bedrockagentcore_gateway.web_search.gateway_url
+  )[0]
+}
+
 # AgentCore Gateway。agent の外部検索が MCP tool として web search を呼ぶ入口。
 #
 # inbound は IAM (SigV4)。呼び出し元は同一 account の ECS task role だけなので、
