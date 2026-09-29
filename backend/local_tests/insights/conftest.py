@@ -68,9 +68,12 @@ async def trend_worker(system_database, notifier, monkeypatch):
     """trend-discovery workerの資源と、2026-09-27 12:00 JSTに固定した時計。"""
     from app.insights.trend_discovery import service
 
-    monkeypatch.setattr(
-        service, "now_in_jst", lambda: datetime(2026, 9, 27, 12, 0, tzinfo=JST)
-    )
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 27, 12, 0, tzinfo=JST).astimezone(tz)
+
+    monkeypatch.setattr(service, "datetime", FixedDatetime)
     engine, session_factory = await _worker_session_factory(
         system_database, "trend_discovery"
     )

@@ -1,4 +1,4 @@
-"""公開日時でトレンドを集計し、記事ごとの要点を選定してsnapshotを保存する。"""
+"""公開日時でトレンドを集計し、集計結果を保存する。"""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_context import (
     select_related_mentions,
 )
+from app.insights.trend_discovery.domain.ready import TrendDiscoveryReadyBuildFacts
 from app.insights.trend_discovery.domain.trend import (
     MAX_KEY_POINTS_PER_MENTION,
     MIN_CURRENT,
@@ -29,23 +30,23 @@ from app.insights.trend_discovery.domain.trend import (
     MentionKey,
     RankedMention,
     RelatedMention,
+    TrendWindow,
 )
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
+from app.models.category import Category
 from app.models.trends_snapshot import TrendsSnapshot
 
 logger = structlog.get_logger(__name__)
 
-# MentionType の既知値集合 (skip 警告の type_known 判定用)。
 _VALID_MENTION_TYPES = frozenset(t.value for t in MentionType)
 
 
 def _invalid_mention_log_fields(
     error: ValidationError, *, surface: object, type_: object
 ) -> dict[str, object]:
-    """不正 mention skip 警告用の低 cardinality field (PII / 高 cardinality 回避の
-    ため生の surface / type は出さず、失敗 field 名・長さ・type 既知判定のみ)。"""
+    """不正なメンションの値をログに出さず、失敗項目・長さ・種別の妥当性だけを返す。"""
     surface_str = surface if isinstance(surface, str) else ""
     type_str = type_ if isinstance(type_, str) else ""
     return {
@@ -91,16 +92,33 @@ def _published_articles() -> Join:
     )
 
 
-# ---------------------------------------------------------------------------
-# TrendsRepository — トレンド集計の読取
-# ---------------------------------------------------------------------------
-
-
 class TrendsRepository:
-    """週次トレンド集計のための DB アクセスをカプセル化する。"""
+    """トレンド集計に必要な事実と候補を取得する。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def load_ready_build_facts(
+        self, *, window: TrendWindow
+    ) -> TrendDiscoveryReadyBuildFacts:
+        """生成済みかを読み、未生成の場合だけ公開期間内の記事数を取得する。"""
+        already_generated = await SnapshotRepository(
+            self._session
+        ).exists_for_window_end(window.window_end)
+        source_count = (
+            None
+            if already_generated
+            else await self.count_source_analyses(
+                current_start=window.current_start, current_end=window.current_end
+            )
+        )
+        return TrendDiscoveryReadyBuildFacts(
+            already_generated=already_generated, source_analysis_count=source_count
+        )
+
+    async def get_categories(self) -> tuple[Category, ...]:
+        stmt = select(Category).order_by(Category.id)
+        return tuple((await self._session.execute(stmt)).scalars().all())
 
     async def get_ranked_mentions(
         self,
@@ -110,13 +128,7 @@ class TrendsRepository:
         current_end: datetime,
         previous_start: datetime,
     ) -> tuple[RankedMention, ...]:
-        """floor (``appearance_count >= MIN_CURRENT``) を通過した全 mention を返す。
-
-        2 ランキングは母集団が異なるため、hot ゲートも並べ替えもここでは行わず
-        domain の選定関数 (``select_most_mentioned`` / ``select_fastest_growing``)
-        に委ねる。不正な legacy・drift 行は当該 1 件のみ skip + warning し、
-        window 全体を落とさない。
-        """
+        """最低出現数を満たすメンションを、現在・前期間の記事数付きで返す。"""
         current_sub = self._entity_window_subquery(
             category_id=category_id,
             window_start=current_start,
@@ -355,13 +367,8 @@ class TrendsRepository:
         )
 
 
-# ---------------------------------------------------------------------------
-# SnapshotRepository — TrendsSnapshot の永続化
-# ---------------------------------------------------------------------------
-
-
 class SnapshotSaveStatus(StrEnum):
-    """``SnapshotRepository.save`` の永続化結果。"""
+    """集計結果の保存状態。"""
 
     INSERTED = "inserted"
     CONFLICT = "conflict"
@@ -369,35 +376,31 @@ class SnapshotSaveStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SnapshotSaveResult:
-    """snapshot save の結果。"""
+    """集計結果の保存状態と保存済みデータ。"""
 
     status: SnapshotSaveStatus
     snapshot: TrendsSnapshot | None
 
 
 class SnapshotRepository:
-    """``trends_snapshots`` への CRUD をカプセル化する。
-
-    snapshot は 1 集計窓分の bundle を 1 行 1 JSONB として保存する 1 単位保存が
-    責務 (feedback_snapshot_responsibility.md)。
-    """
+    """1期間の全カテゴリ集計を1行で保存・取得する。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def find_latest(self) -> TrendsSnapshot | None:
-        """最新 (window_end DESC) の snapshot を 1 件返す (なければ None)。"""
+        """期間終了日が最も新しい集計結果を返す。"""
         stmt = (
             select(TrendsSnapshot).order_by(TrendsSnapshot.window_end.desc()).limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def find_by_window_end(self, window_end: date) -> TrendsSnapshot | None:
-        """指定 ``window_end`` の snapshot を取得する (PK lookup)。"""
+        """指定した期間終了日の集計結果を返す。"""
         return await self._session.get(TrendsSnapshot, window_end)
 
     async def exists_for_window_end(self, window_end: date) -> bool:
-        """`try_advance_from` 用 cheap exists 判定 (window_end 単位)。"""
+        """対象期間のトレンドが生成済みかを確認する。"""
         stmt = (
             select(TrendsSnapshot.window_end)
             .where(TrendsSnapshot.window_end == window_end)
@@ -406,11 +409,7 @@ class SnapshotRepository:
         return (await self._session.execute(stmt)).first() is not None
 
     async def save(self, snapshot: TrendsSnapshot) -> SnapshotSaveResult:
-        """snapshot を ``trends_snapshots`` に永続化する (commit は呼び出し側の責務)。
-
-        新規 INSERT のみで、衝突時は副作用なしに ``CONFLICT`` (``snapshot=None``)
-        を返す。
-        """
+        """既存の集計結果を上書きせず追加し、コミットは呼び出し側に委ねる。"""
         stmt = (
             pg_insert(TrendsSnapshot)
             .values(

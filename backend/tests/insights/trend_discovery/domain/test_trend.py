@@ -12,7 +12,7 @@ TrendsBundle) の不変条件と派生フィールドのテスト。
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -33,6 +33,7 @@ from app.insights.trend_discovery.domain.trend import (
     RankedMention,
     RelatedMention,
     TrendsBundle,
+    TrendWindow,
     is_hot,
     select_fastest_growing,
     select_most_mentioned,
@@ -269,21 +270,26 @@ class TestTrendsBundle:
         )
 
     def test_constructs_with_empty_category_trends(self) -> None:
-        bundle = TrendsBundle(window_end=date(2026, 5, 3), category_trends=())
-        assert bundle.window_end == date(2026, 5, 3)
+        bundle = TrendsBundle(
+            window=TrendWindow(window_end=date(2026, 5, 3)), category_trends=()
+        )
+        assert bundle.window.window_end == date(2026, 5, 3)
         assert bundle.category_trends == ()
 
     def test_constructs_with_multiple_category_trends(self) -> None:
         category_trends = (self._category_trends(1), self._category_trends(2))
         bundle = TrendsBundle(
-            window_end=date(2026, 5, 3), category_trends=category_trends
+            window=TrendWindow(window_end=date(2026, 5, 3)),
+            category_trends=category_trends,
         )
         assert len(bundle.category_trends) == 2
 
     def test_immutable_bundle(self) -> None:
-        bundle = TrendsBundle(window_end=date(2026, 5, 3), category_trends=())
+        bundle = TrendsBundle(
+            window=TrendWindow(window_end=date(2026, 5, 3)), category_trends=()
+        )
         with pytest.raises(ValidationError):
-            bundle.window_end = date(2026, 4, 27)  # type: ignore[misc]
+            bundle.window.window_end = date(2026, 4, 27)  # type: ignore[misc]
 
     def test_rejects_too_many_category_trends(self) -> None:
         """category_trends は MAX_CATEGORIES_PER_BUNDLE 件まで。"""
@@ -291,7 +297,10 @@ class TestTrendsBundle:
             self._category_trends(i) for i in range(MAX_CATEGORIES_PER_BUNDLE + 1)
         )
         with pytest.raises(ValidationError):
-            TrendsBundle(window_end=date(2026, 5, 3), category_trends=too_many)
+            TrendsBundle(
+                window=TrendWindow(window_end=date(2026, 5, 3)),
+                category_trends=too_many,
+            )
 
     def test_model_dump_round_trip(self) -> None:
         """model_dump(mode='json') → model_validate で同値に戻る (VO round-trip)。
@@ -319,7 +328,8 @@ class TestTrendsBundle:
             fastest_growing=(enriched,),
         )
         original = TrendsBundle(
-            window_end=date(2026, 5, 3), category_trends=(category_trends,)
+            window=TrendWindow(window_end=date(2026, 5, 3)),
+            category_trends=(category_trends,),
         )
         dumped = original.model_dump(mode="json")
         restored = TrendsBundle.model_validate(dumped)
@@ -449,3 +459,49 @@ class TestSelectFastestGrowing:
         # previous=1, current=9 → non-hot (上の test と同じ条件)
         pool = [_mention(f"m{i}", current=9, previous=1) for i in range(3)]
         assert select_fastest_growing(pool) == ()
+
+
+class TestTrendWindow:
+    @pytest.mark.parametrize("day", [20, 21, 25, 26])
+    def test_accepts_any_weekday(self, day):
+        """トレンドは曜日によらず毎日完了期間を定義できる。"""
+        assert TrendWindow(window_end=date(2026, 4, day)).window_end == date(
+            2026, 4, day
+        )
+
+    @pytest.mark.parametrize(
+        ("now", "expected"),
+        [
+            (datetime(2026, 4, 30, 14, 59, 59, tzinfo=UTC), date(2026, 4, 30)),
+            (datetime(2026, 4, 30, 15, 0, tzinfo=UTC), date(2026, 5, 1)),
+            (datetime(2026, 4, 30, 15, 5, tzinfo=UTC), date(2026, 5, 1)),
+            (datetime(2026, 5, 1, 14, 59, tzinfo=UTC), date(2026, 5, 1)),
+        ],
+    )
+    def test_latest_period_changes_only_at_jst_midnight(self, now, expected):
+        """UTCで渡された時刻でもJST午前0時を境界に対象日を決める。"""
+        assert TrendWindow.latest(now).window_end == expected
+
+    def test_rejects_a_current_time_without_timezone(self):
+        """タイムゾーンのない時刻から暗黙に実行環境の時差を使わない。"""
+        with pytest.raises(ValueError, match="timezone-aware"):
+            TrendWindow.latest(datetime(2026, 5, 1))
+
+    def test_current_period_is_seven_complete_days_across_year_end(self):
+        """年をまたいでも対象期間はJST午前0時で区切る7日間。"""
+        window = TrendWindow(window_end=date(2026, 1, 3))
+        assert window.window_start == date(2025, 12, 27)
+        assert window.current_start == datetime(2025, 12, 26, 15, tzinfo=UTC)
+        assert window.current_end == datetime(2026, 1, 2, 15, tzinfo=UTC)
+
+    def test_comparison_period_immediately_precedes_the_current_period(self):
+        """比較期間は現在期間の開始直前までの7日間。"""
+        window = TrendWindow(window_end=date(2026, 5, 3))
+        assert window.previous_start == datetime(2026, 4, 18, 15, tzinfo=UTC)
+        assert window.current_start == datetime(2026, 4, 25, 15, tzinfo=UTC)
+
+    def test_period_is_immutable(self):
+        """準備と集計の間に期間を書き換えられない。"""
+        window = TrendWindow(window_end=date(2026, 5, 3))
+        with pytest.raises(ValidationError):
+            window.window_end = date(2026, 5, 4)

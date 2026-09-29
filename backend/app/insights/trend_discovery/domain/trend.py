@@ -1,73 +1,71 @@
-"""トレンドの値オブジェクトと集約ルート。
-
-公開モデル:
-- ``RankedMention``: floor 通過 mention 1 件分の集計結果 (件数 + 派生 hotness_score)
-  に文脈 (key_points / related_mentions) を添えたもの
-- ``RelatedMention``: anchor mention と同一 key_point 内で一緒に語られた別の固有名
-- ``CategoryTrends`` (集約ルート): 1 カテゴリ × 1 集計窓分の 2 ランキング束
-- ``TrendsBundle`` (書込時の検証済み集約): 1 集計窓分の全カテゴリ集約
-- ``select_most_mentioned`` / ``select_fastest_growing`` / ``is_hot``: 2 ランキング
-  の選定ポリシー (しきい値定数と同じモジュールに置き SSoT を 1 箇所にする)
-
-責務:
-- 件数の下限/非負を Pydantic ``Field(ge=...)`` で構造的に強制
-  (ランタイム if より構造で守る: feedback_structural_guarantee.md)
-- 集約は ``frozen=True`` + ``tuple[...]`` 子コレクションで深く immutable
-- 検証 (上限・非負) はこの集約構築の 1 回だけ。永続化・配信は ``TrendsBundle`` の
-  dump ではなく、ここから組む ``Trends`` レスポンス payload を verbatim で扱う
-  (snapshot は 1 単位保存: feedback_snapshot_responsibility.md)
-
-集計しきい値はトレンドのドメイン知識として本モジュールに集約する
-(``config.py`` は廃止。窓 TZ のみ window 責務に同居させ ``domain/window.py`` に置く)。
-
-hotness_score (API では growthRate として晒す):
-  ``(appearance_count - previous_appearance_count)`` を
-  ``max(previous_appearance_count, SMOOTHING)`` で割る
-  - 前週 0 でも除算回避
-  - 前週 < SMOOTHING でも分母が SMOOTHING に置き換わるため burst の過大評価を抑える
-"""
+"""トレンドの集計期間・ランキング・集計結果を定義する。"""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date
-from typing import Final
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Final, Self
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_name import MentionName
 
-# hot 判定 (伸び率ランキング母集団) と noise floor のしきい値。
-# - MIN_CURRENT: floor (これ未満は noise として両ランキングから除外)
-# - MIN_PREVIOUS: hot 判定の前週最低件数 (継続トレンド側の条件)
-# - NEW_BURST_THRESHOLD: 前週 0 でも現週がこの件数以上なら burst として hot
-# - SMOOTHING: hotness_score の分母 smoothing (前週 0 除算回避 + 過大評価防止)
+TREND_TZ: Final[str] = "Asia/Tokyo"
+_WEEK: Final[timedelta] = timedelta(days=7)
+
+
+class TrendWindow(BaseModel):
+    """JSTの終了日を境界とする完了済み7日間と、その直前の比較期間。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    window_end: date
+
+    @classmethod
+    def latest(cls, now: datetime) -> Self:
+        """現在日時をJSTへ揃え、直近の完了済み期間を決める。"""
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        return cls(window_end=now.astimezone(ZoneInfo(TREND_TZ)).date())
+
+    @property
+    def window_start(self) -> date:
+        return self.window_end - _WEEK
+
+    @property
+    def current_end(self) -> datetime:
+        return datetime.combine(
+            self.window_end, time.min, tzinfo=ZoneInfo(TREND_TZ)
+        ).astimezone(UTC)
+
+    @property
+    def current_start(self) -> datetime:
+        return self.current_end - _WEEK
+
+    @property
+    def previous_start(self) -> datetime:
+        return self.current_start - _WEEK
+
+
 MIN_CURRENT: Final[int] = 5
 MIN_PREVIOUS: Final[int] = 2
 NEW_BURST_THRESHOLD: Final[int] = 10
+# 前期間の記事数が少ない場合の伸び率を抑える。
 SMOOTHING: Final[int] = 2
 
-# 各カテゴリ × 各ランキングの表示上限。生成側の truncate 値 (service.py の `[:N]`) と
-# Field(max_length=N) の SSoT を domain 側に集約する。
 TOP_N_PER_RANKING: Final[int] = 5
 MAX_CATEGORIES_PER_BUNDLE: Final[int] = 20
 
-# mention 1 件に添える文脈の上限。
-# - MAX_KEY_POINTS_PER_MENTION: 何が言われているか (key_point content) の本数
-# - MAX_RELATED_MENTIONS: 何と一緒に語られるか (related mention) の件数
-# - MIN_SHARED_ARTICLES: 1 記事だけの共起は noise として除外する閾値
 MAX_KEY_POINTS_PER_MENTION: Final[int] = 3
 MAX_RELATED_MENTIONS: Final[int] = 3
 MIN_SHARED_ARTICLES: Final[int] = 2
 
-# count フィールドの現実的な上限。anomaly 検出と response DoS 防御を兼ねる。
-# 1 カテゴリ × 1 週で 10_000 mention を超える単一 mention/topic は実運用では
-# 起こらない (生成側 SQL の集計対象 article 数自体が桁違いに少ない)。
+# 異常な集計値を検出するための上限。
 _MAX_COUNT: Final[int] = 10_000
 
-# mention の同一性キー (MentionName.match_key, MentionType.value)。
-# repository の戻り dict / service の union / 文脈選定で共通に使う。
+# 正規化した名前と種別で同一メンションを識別する。
 MentionKey = tuple[str, str]
 
 
@@ -76,13 +74,7 @@ def _hotness(current: int, previous: int) -> float:
 
 
 def is_hot(mention: RankedMention) -> bool:
-    """伸び率ランキングの母集団判定 (継続トレンド or 新規 burst)。
-
-    floor (appearance_count >= MIN_CURRENT) は ``RankedMention`` の Field 制約が
-    構造的に保証済み。前週実績ありの継続トレンド (previous >= MIN_PREVIOUS) か、
-    前週ゼロでも現週が閾値を超えた新規 burst (current >= NEW_BURST_THRESHOLD) か
-    のみを判定する。
-    """
+    """前期間の実績か今期間の急増を条件に、伸び率ランキングの対象を判定する。"""
     return (
         mention.previous_appearance_count >= MIN_PREVIOUS
         or mention.appearance_count >= NEW_BURST_THRESHOLD
@@ -90,7 +82,7 @@ def is_hot(mention: RankedMention) -> bool:
 
 
 def select_most_mentioned(pool: Iterable[RankedMention]) -> tuple[RankedMention, ...]:
-    """出現回数ランキング top N を確定する (母集団は floor 通過の全 mention)。"""
+    """最低出現数を満たした候補から、出現回数の上位を選ぶ。"""
     return tuple(
         sorted(
             pool,
@@ -100,7 +92,7 @@ def select_most_mentioned(pool: Iterable[RankedMention]) -> tuple[RankedMention,
 
 
 def select_fastest_growing(pool: Iterable[RankedMention]) -> tuple[RankedMention, ...]:
-    """伸び率ランキング top N を確定する (母集団は ``is_hot`` 通過 mention のみ)。"""
+    """継続・急増の条件を満たした候補から、伸び率の上位を選ぶ。"""
     return tuple(
         sorted(
             (m for m in pool if is_hot(m)),
@@ -110,16 +102,7 @@ def select_fastest_growing(pool: Iterable[RankedMention]) -> tuple[RankedMention
 
 
 class RelatedMention(BaseModel):
-    """anchor mention と同一 key_point 内で一緒に語られた別の固有名 1 件。
-
-    関連の強さは ``shared_article_count`` (一緒に語られた記事数) で表す。
-    「関連」という意味で名付け、共起判定の機構は名前に出さない (将来 関連の
-    出し方を変えても API 名が嘘にならないようにする)。
-
-    Invariants (Pydantic Field 制約):
-    - ``shared_article_count >= MIN_SHARED_ARTICLES`` (1 記事だけの共起は noise)
-    - frozen
-    """
+    """同じ要点内で共起したメンションと、その記事数。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -129,19 +112,7 @@ class RelatedMention(BaseModel):
 
 
 class RankedMention(BaseModel):
-    """floor 通過 mention 1 件分の集計結果 + 文脈。
-
-    出現回数ランキングと伸び率ランキングで同じ型を共有する (どちらに載るかは
-    service 側の並べ替えで決まる)。``key_points`` / ``related_mentions`` は enrich
-    前の純集計段階では空 (``default=()``) で、service が ``model_copy`` で後付けする。
-
-    Invariants (Pydantic Field 制約):
-    - ``appearance_count >= MIN_CURRENT`` (noise floor)
-    - ``previous_appearance_count >= 0``
-    - key_point は最大 ``MAX_KEY_POINTS_PER_MENTION`` 本 (content 文字列のみ)
-    - related mention は最大 ``MAX_RELATED_MENTIONS`` 件
-    - frozen
-    """
+    """出現記事数・伸び率と、要点・関連メンションを持つランキング候補。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -163,14 +134,7 @@ class RankedMention(BaseModel):
 
 
 class CategoryTrends(BaseModel):
-    """1 カテゴリ × 1 集計窓分の 2 ランキング束 (集約ルート)。
-
-    ``most_mentioned``: 出現回数降順 top5 (floor のみ通過した全 mention が母集団)。
-    ``fastest_growing``: 伸び率 (hotness) 降順 top5 (floor + hot ゲート通過 mention)。
-
-    集約配下のリストは ``tuple[...]`` で保持し、変更不可性を構造で保証する
-    (feedback_aggregate_over_individual_vo.md)。
-    """
+    """1カテゴリ・1期間の出現回数と伸び率のランキング。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -182,20 +146,11 @@ class CategoryTrends(BaseModel):
 
 
 class TrendsBundle(BaseModel):
-    """1 集計窓分の全カテゴリトレンドをまとめた書込時の検証済み集約。
-
-    上限・非負の不変条件をここで構造的に強制する (検証点はここ 1 箇所)。
-    永続化されるのはこの dump ではなく、ここから組み立てる ``Trends`` レスポンス
-    payload (camelCase) で、読取は verbatim 配信する
-    (snapshot は 1 単位保存: feedback_snapshot_responsibility.md)。
-
-    ``window_end``: rolling 7d window の上限 (半開区間
-    ``[window_end - 7d, window_end)`` の上端、JST 日付)。
-    """
+    """対象期間と全カテゴリのトレンド集計結果。"""
 
     model_config = ConfigDict(frozen=True)
 
-    window_end: date
+    window: TrendWindow
     category_trends: tuple[CategoryTrends, ...] = Field(
         max_length=MAX_CATEGORIES_PER_BUNDLE
     )

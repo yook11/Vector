@@ -1,36 +1,20 @@
-"""TrendDiscoveryService.execute の挙動テスト。
-
-検証する観点:
-- execute(ready) 正常系: TrendDiscoveryCompleted を返し snapshot を 1 行保存
-- 集計対象記事 0 件: snapshot を保存せず SkippedNoTargetArticles を返す
-- bundle 内容: camelCase payload として保存 (契約適合)。全カテゴリ 1 セクション
-  ずつ含み、出現回数 / 伸び率の 2 ランキングがそれぞれの母集団で確定する
-- source_analysis_count: window 内の analysis 件数 (全カテゴリ合算)
-- 各ランキングは TOP_N_PER_RANKING 件で truncate
-- 上位 mention に key_point / related mention の文脈が付き、両ランキングに載る
-  mention は同じ enrich 済みインスタンスを共有する
-- race 敗北 (同時 INSERT 競合): 読み戻しせず
-  TrendDiscoveryConflict を返す
-
-既存 snapshot skip は ``ReadyForTrendDiscovery.try_advance_from`` 側に移管されている。
-一方、集計対象記事 0 件は Service が ``SkippedNoTargetArticles`` として返す。
-
-集計窓は rolling 7d で半開区間 ``[window_end - 7d, window_end)`` を取る。
-window_end = 2026-04-20 のとき、window = [2026-04-13 0:00 JST, 2026-04-20 0:00 JST)。
-"""
+"""期間の準備からトレンドの集計・保存までを実DBで確認する。"""
 
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
-from app.insights.trend_discovery.domain.trend import MIN_CURRENT, TOP_N_PER_RANKING
+from app.insights.trend_discovery.domain.trend import (
+    MIN_CURRENT,
+    TOP_N_PER_RANKING,
+    TrendWindow,
+)
 from app.insights.trend_discovery.repository import (
     SnapshotRepository,
     SnapshotSaveResult,
@@ -39,6 +23,7 @@ from app.insights.trend_discovery.repository import (
 )
 from app.insights.trend_discovery.schemas import TrendsResponse
 from app.insights.trend_discovery.service import (
+    SkippedAlreadyGenerated,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
@@ -52,8 +37,8 @@ JST = ZoneInfo("Asia/Tokyo")
 WINDOW_END = date(2026, 4, 20)
 
 
-def _ready(window_end: date = WINDOW_END) -> ReadyForTrendDiscovery:
-    return ReadyForTrendDiscovery(window_end=window_end)
+def _window(window_end: date = WINDOW_END) -> TrendWindow:
+    return TrendWindow(window_end=window_end)
 
 
 def _jst(year: int, month: int, day: int, *, hour: int = 12) -> datetime:
@@ -74,11 +59,11 @@ class TestExecute:
         """window 内の対象記事が 0 件なら category 集計も snapshot 保存も行わない。"""
         service = TrendDiscoveryService(session_factory)
         with patch.object(
-            TrendDiscoveryService,
-            "_fetch_categories",
+            TrendsRepository,
+            "get_categories",
             new=AsyncMock(side_effect=AssertionError("category fetch not expected")),
         ):
-            result = await service.execute(_ready())
+            result = await service.execute(_window())
 
         assert isinstance(result, SkippedNoTargetArticles)
         assert result.window_end == WINDOW_END
@@ -109,7 +94,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        result = await service.execute(_ready())
+        result = await service.execute(_window())
 
         assert isinstance(result, TrendDiscoveryCompleted)
         assert result.window_end == WINDOW_END
@@ -140,7 +125,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -179,7 +164,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        result = await service.execute(_ready())
+        result = await service.execute(_window())
 
         assert isinstance(result, TrendDiscoveryCompleted)
         assert result.completed_category_count == len(sample_categories)
@@ -230,7 +215,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -268,7 +253,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -304,7 +289,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -346,7 +331,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -380,7 +365,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -428,7 +413,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -485,7 +470,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -516,7 +501,7 @@ class TestExecute:
         await db_session.commit()
 
         service = TrendDiscoveryService(session_factory)
-        await service.execute(_ready())
+        await service.execute(_window())
 
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
@@ -662,7 +647,7 @@ class TestRaceLoss:
                 new=AsyncMock(return_value=None),
             ) as find_by_window_end,
         ):
-            result = await service.execute(_ready())
+            result = await service.execute(_window())
 
         assert isinstance(result, TrendDiscoveryConflict)
         assert result.window_end == WINDOW_END
@@ -708,6 +693,118 @@ async def test_skips_when_only_recent_analyses_of_old_publications_exist(
         mentions=[("NVIDIA", "company")],
     )
     await db_session.commit()
-    result = await TrendDiscoveryService(session_factory).execute(_ready())
+    result = await TrendDiscoveryService(session_factory).execute(_window())
     assert isinstance(result, SkippedNoTargetArticles)
     assert await SnapshotRepository(db_session).find_by_window_end(WINDOW_END) is None
+
+
+@pytest.fixture
+def create_dependencies(monkeypatch):
+    from app.insights.trend_discovery import service as service_module
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 4, 19, 15, 5, tzinfo=UTC).astimezone(tz)
+
+    monkeypatch.setattr(service_module, "datetime", FixedDatetime)
+    audit = AsyncMock()
+    monkeypatch.setattr(
+        service_module, "append_trend_discovery_run_event_best_effort", audit
+    )
+    return TrendDiscoveryService(MagicMock()), AsyncMock(), audit
+
+
+class TestCreate:
+    @pytest.mark.asyncio
+    async def test_selects_the_latest_completed_period(self, create_dependencies):
+        """現在時刻からドメインが定義した期間を実行へ渡す。"""
+        service, notifier, _ = create_dependencies
+        service.execute = AsyncMock(
+            return_value=SkippedAlreadyGenerated(window_end=WINDOW_END)
+        )
+        await service.create(notifier)
+        service.execute.assert_awaited_once_with(TrendWindow(window_end=WINDOW_END))
+
+    @pytest.mark.asyncio
+    async def test_records_completion_after_successful_generation(
+        self, create_dependencies
+    ):
+        """成功した期間と集計件数を監査へ渡す。"""
+        from app.audit.domain.event import EventType
+        from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
+
+        service, notifier, audit = create_dependencies
+        service.execute = AsyncMock(
+            return_value=TrendDiscoveryCompleted(WINDOW_END, 42, 3)
+        )
+        await service.create(notifier)
+        audit.assert_awaited_once_with(
+            service._session_factory,
+            event_type=EventType.SUCCEEDED,
+            outcome_code=TrendDiscoveryOutcomeCode.RUN_COMPLETED,
+            window_start=date(2026, 4, 13),
+            window_end=WINDOW_END,
+            source_analysis_count=42,
+            completed_category_count=3,
+        )
+
+    @pytest.mark.asyncio
+    async def test_notifies_after_successful_generation(self, create_dependencies):
+        """保存が成功した場合だけトレンドの表示更新を通知する。"""
+        service, notifier, _ = create_dependencies
+        service.execute = AsyncMock(
+            return_value=TrendDiscoveryCompleted(WINDOW_END, 42, 3)
+        )
+        await service.create(notifier)
+        notifier.notify.assert_awaited_once_with(tags=("trends",))
+
+    @pytest.mark.asyncio
+    async def test_existing_period_does_not_audit_or_notify(self, create_dependencies):
+        """生成済みで終了した場合は成功監査や表示更新を追加しない。"""
+        service, notifier, audit = create_dependencies
+        service.execute = AsyncMock(return_value=SkippedAlreadyGenerated(WINDOW_END))
+        await service.create(notifier)
+        audit.assert_not_awaited()
+        notifier.notify.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_articles_does_not_audit_or_notify(self, create_dependencies):
+        """対象0件で終了した場合は成功監査や表示更新を追加しない。"""
+        service, notifier, audit = create_dependencies
+        service.execute = AsyncMock(return_value=SkippedNoTargetArticles(WINDOW_END))
+        await service.create(notifier)
+        audit.assert_not_awaited()
+        notifier.notify.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_save_conflict_does_not_audit_or_notify(self, create_dependencies):
+        """保存競合の敗者は成功監査や表示更新を追加しない。"""
+        service, notifier, audit = create_dependencies
+        service.execute = AsyncMock(
+            return_value=TrendDiscoveryConflict(WINDOW_END, 42, 3)
+        )
+        await service.create(notifier)
+        audit.assert_not_awaited()
+        notifier.notify.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execution_failure_is_audited_and_reraised(self, create_dependencies):
+        """準備・集計・保存を含むexecuteの失敗を監査して再送出する。"""
+        from app.audit.domain.event import EventType
+        from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
+
+        service, notifier, audit = create_dependencies
+        error = RuntimeError("execution failed")
+        service.execute = AsyncMock(side_effect=error)
+        with pytest.raises(RuntimeError, match="execution failed"):
+            await service.create(notifier)
+        audit.assert_awaited_once_with(
+            service._session_factory,
+            event_type=EventType.FAILED,
+            outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
+            window_start=date(2026, 4, 13),
+            window_end=WINDOW_END,
+            exc=error,
+        )
+        notifier.notify.assert_not_awaited()

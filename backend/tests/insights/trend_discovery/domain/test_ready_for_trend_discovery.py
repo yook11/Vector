@@ -1,75 +1,70 @@
-"""``ReadyForTrendDiscovery`` の precondition / 不変条件テスト。
-
-検証する観点:
-- ``try_advance_from`` の precondition: exists_for_window_end
-- frozen
-- 任意の JST 日付 (月曜以外) を window_end として受け入れる
-"""
-
-from __future__ import annotations
+"""取得済みの事実だけで、トレンドの開始条件を判断する。"""
 
 from datetime import date
 
 import pytest
 from pydantic import ValidationError
 
-from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
+from app.insights.trend_discovery.domain.ready import (
+    ReadyForTrendDiscovery,
+    TrendDiscoveryReadyBuildFacts,
+    TrendDiscoveryReadyBuildRejectionReason,
+)
+from app.insights.trend_discovery.domain.trend import TrendWindow
+
+WINDOW = TrendWindow(window_end=date(2026, 5, 3))
 
 
-class _FakeRepo:
-    """``SnapshotExistenceProtocol`` 互換の fake (test-only)。"""
-
-    def __init__(self, exists: bool) -> None:
-        self._exists = exists
-        self.calls: list[date] = []
-
-    async def exists_for_window_end(self, window_end: date) -> bool:
-        self.calls.append(window_end)
-        return self._exists
-
-
-# frozen + 任意日付受け入れ
-
-
-class TestStructure:
-    def test_is_frozen(self) -> None:
-        ready = ReadyForTrendDiscovery(window_end=date(2026, 5, 3))
-        with pytest.raises(ValidationError):
-            ready.window_end = date(2026, 4, 30)  # type: ignore[misc]
-
-    @pytest.mark.parametrize(
-        "any_date",
-        [
-            date(2026, 4, 20),  # monday
-            date(2026, 4, 21),  # tuesday
-            date(2026, 4, 25),  # saturday
-            date(2026, 4, 26),  # sunday
-            date(2026, 5, 3),  # sunday
-        ],
+def test_builds_ready_for_an_ungenerated_window_with_articles():
+    """未生成で記事が存在する期間だけ、生成入力を返す。"""
+    facts = TrendDiscoveryReadyBuildFacts(
+        already_generated=False, source_analysis_count=3
     )
-    def test_accepts_any_weekday(self, any_date: date) -> None:
-        """rolling 7d window では月曜縛りはない (任意の JST 日付を受け入れる)。"""
-        ready = ReadyForTrendDiscovery(window_end=any_date)
-        assert ready.window_end == any_date
+    ready = ReadyForTrendDiscovery.from_facts(window=WINDOW, facts=facts)
+    assert ready == ReadyForTrendDiscovery(window=WINDOW, source_analysis_count=3)
 
 
-class TestTryAdvanceFrom:
-    @pytest.mark.asyncio
-    async def test_returns_ready_when_snapshot_absent(self) -> None:
-        """既存 snapshot なし → Ready を返す。"""
-        repo = _FakeRepo(exists=False)
-        ready = await ReadyForTrendDiscovery.try_advance_from(
-            window_end=date(2026, 5, 3), snapshot_repo=repo
-        )
-        assert ready is not None
-        assert ready.window_end == date(2026, 5, 3)
-        assert repo.calls == [date(2026, 5, 3)]
+@pytest.mark.parametrize("count", [None, 0, 3])
+def test_already_generated_takes_priority_over_article_count(count):
+    """生成済みの期間は記事数にかかわらず開始しない。"""
+    facts = TrendDiscoveryReadyBuildFacts(
+        already_generated=True, source_analysis_count=count
+    )
+    assert (
+        ReadyForTrendDiscovery.from_facts(window=WINDOW, facts=facts)
+        is TrendDiscoveryReadyBuildRejectionReason.ALREADY_GENERATED
+    )
 
-    @pytest.mark.asyncio
-    async def test_returns_none_when_existing(self) -> None:
-        """既存 snapshot あり → None。"""
-        repo = _FakeRepo(exists=True)
-        ready = await ReadyForTrendDiscovery.try_advance_from(
-            window_end=date(2026, 5, 3), snapshot_repo=repo
-        )
-        assert ready is None
+
+def test_rejects_an_ungenerated_window_without_articles():
+    """未生成でも記事が0件なら開始しない。"""
+    facts = TrendDiscoveryReadyBuildFacts(
+        already_generated=False, source_analysis_count=0
+    )
+    assert (
+        ReadyForTrendDiscovery.from_facts(window=WINDOW, facts=facts)
+        is TrendDiscoveryReadyBuildRejectionReason.NO_ARTICLES
+    )
+
+
+def test_missing_count_for_an_ungenerated_window_is_an_error():
+    """未生成期間の件数未取得を、対象なしと誤認しない。"""
+    facts = TrendDiscoveryReadyBuildFacts(
+        already_generated=False, source_analysis_count=None
+    )
+    with pytest.raises(ValueError, match="source_analysis_count is required"):
+        ReadyForTrendDiscovery.from_facts(window=WINDOW, facts=facts)
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_ready_requires_a_positive_source_count(count):
+    """Ready自身も集計元記事数が正であることを保証する。"""
+    with pytest.raises(ValidationError):
+        ReadyForTrendDiscovery(window=WINDOW, source_analysis_count=count)
+
+
+def test_ready_is_immutable():
+    """開始判定後の集計元記事数を書き換えられない。"""
+    ready = ReadyForTrendDiscovery(window=WINDOW, source_analysis_count=3)
+    with pytest.raises(ValidationError):
+        ready.source_analysis_count = 0
