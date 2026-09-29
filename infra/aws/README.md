@@ -210,8 +210,8 @@ private runbookには初期構築の前提を残し、通常migrationのロー�
   migration 経路でしか現れない** — テストが緑でも初期構築は落ちうる。
 - **DB role は password を持たない。** `vector_app` / `vector_auth` /
   `vector_collect` とmigration ownerの`vector`はIAM認証 (`GRANT rds_iam`) を使い、
-  `db-provision.sql`にもCIにも秘密を置かない。password認証はbreak-glassの
-  `vector_master`だけに残す。
+  `db-provision.sql`にもCIにも秘密を置かない。password認証は`vector_master`だけに
+  残す（承認付きのロール作成と障害時の保守接続で使う）。
 - **migrationとアプリ反映はそれぞれ手動起動・独立承認。** migrationはexpand / contract /
   verifyを明示し、mixedはCIとrunnerで拒否する。アプリ反映は最新mainのみを対象に、
   最新ledgerのrevisionとmigration treeが一致した場合だけ進む。自動dispatchやfreezeは無い。

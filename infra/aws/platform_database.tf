@@ -1,14 +1,8 @@
 locals {
   db_endpoint = "${aws_db_instance.this.address}:${aws_db_instance.this.port}"
 
-  # IAM auth の可視的な帰結: **URL から password の項が消える**。
-  # 消えたので URL 自体が秘密でなくなり、SSM ではなく environment に置ける。
-  #
-  # 規準: **URL に secret が含まれるなら URL ごと SSM、含まれないなら env。**
-  # DATABASE も Valkey も IAM 認証で password が消えたので env。endpoint は
-  # Terraform が知っているので、変わっても URL が追従する (手動更新の余地が無い)。
-  #
-  # `sslmode=require` は db_ssl.py が verify-full に格上げする。
+  # IAM 認証で URL に秘密が含まれないため、SSM ではなく environment に置く。
+  # sslmode=require は db_ssl.py が verify-full に格上げする。
   backend_db_url = {
     for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay", "vector_auth_rate_limit_cleanup", "vector_article_analysis", "vector_backfill", "vector_api", "vector_insights", "vector_agent"]) :
     user => "postgresql+asyncpg://${user}@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
@@ -22,8 +16,7 @@ resource "aws_db_subnet_group" "this" {
   tags = { Name = "${var.name_prefix}-db" }
 }
 
-# IAM DB auth は SSL 必須。PostgreSQL 15 以降は既定で 1 だが、
-# 「誰かが既定を変えたら認証ごと壊れる」設定なので明示する。
+# IAM DB 認証は SSL 必須のため、既定値でも明示する。
 resource "aws_db_parameter_group" "this" {
   name   = "${var.name_prefix}-pg${var.postgres_major_version}"
   family = "postgres${var.postgres_major_version}"
@@ -31,8 +24,7 @@ resource "aws_db_parameter_group" "this" {
   parameter {
     name  = "rds.force_ssl"
     value = "1"
-    # static parameter のため AWS 側が pending-reboot に固定する。既定の
-    # immediate のままだと毎 plan が同じ in-place 差分を出し続ける。
+    # static parameter は AWS が pending-reboot に固定するため、合わせないと毎回差分が出る。
     apply_method = "pending-reboot"
   }
 
@@ -50,24 +42,14 @@ resource "aws_db_instance" "this" {
   db_name  = var.name_prefix
   username = "${var.name_prefix}_master"
 
-  # master password は Terraform に持たせない。AWS が Secrets Manager で管理し、
-  # 既定 7 日でローテートする。
-  #
-  # Secrets Manager を「ローテートを代行できないのに月 $3」で却下したのは
-  # 外部 API キーの話で、master password は AWS がローテートできる唯一の secret
-  # なので当てはまらない。却下理由がもともと条件付きだったということ。
-  #
-  # 帰結: MIGRATION_DATABASE_URL を master に向けると毎週腐る。
-  # migrator は専用 role を作り、master は break-glass 専用にする。
+  # password は RDS が Secrets Manager で管理し 7 日ごとにローテートするため、設定に固定値で書かない。
+  # master を使うのは承認付きのロール作成 (aws-db-roles.yml) と、障害時に踏み台経由で入る保守接続だけ。
   manage_master_user_password = true
 
-  # パスワードそのものを消す。誰が入れるかは task role の rds-db:connect が、
-  # 入った後に何ができるかは migration の GRANT が決める。
+  # 接続の可否は IAM の rds-db:connect、接続後にできることは migration の GRANT が決める。
   iam_database_authentication_enabled = true
 
-  # 冗長化の水準は RDS が決める。ここを Single-AZ にした時点で全体の可用性の
-  # 下限は 1 AZ なので、ECS task も Valkey も同じ AZ に置く。
-  # 上げるときは一斉に上げる。
+  # 全体の可用性は RDS の AZ 構成が下限になるため、ECS task と Valkey も同じ AZ に置き、Multi-AZ 化は全体で揃える。
   multi_az          = false
   availability_zone = var.az_primary
 
@@ -83,28 +65,17 @@ resource "aws_db_instance" "this" {
   backup_retention_period = var.db_backup_retention_days
   copy_tags_to_snapshot   = true
 
-  # cron を避ける。trend discovery が毎日 15:05 UTC、weekly briefing が
-  # 日曜 15:05 UTC (JST 月曜 00:05) に走る。
-  # backup = JST 04:00-04:30 / maintenance = JST 木 05:00-06:00。
+  # 定時ジョブ (毎日 15:05 UTC) と重ならない時間帯に置く。
   backup_window      = "19:00-19:30"
   maintenance_window = "wed:20:00-wed:21:00"
 
   auto_minor_version_upgrade = true
 
-  # postgres 自身のログを CloudWatch へ出す。IAM が通っても GRANT や
-  # rds.force_ssl の verify-full で落ちる経路があり、そこは app 側のログに
-  # 何も出ない (接続が確立しないため)。切り分けの唯一の材料になる。
-  # log group はここで作って retention を効かせる。RDS 任せだと
-  # 「無期限保持」で作られ、消えないログが積み上がる。
+  # 認証や SSL で接続前に落ちる失敗は app 側にログが出ないため、postgres のログで切り分ける。
   enabled_cloudwatch_logs_exports = ["postgresql"]
 
-  # 検証後に destroy する前提。定常運用に移すなら db_deletion_protection だけ
-  # 反転させれば両方切り替わる。
-  #
-  # final_snapshot_identifier は skip_final_snapshot = true のとき無視されるが、
-  # 静的に置いておかないと反転させた瞬間に destroy が
-  # 「final_snapshot_identifier is required」で失敗する。
-  # 「1 つ変えるだけ」を成立させるために先に書いておく。
+  # db_deletion_protection だけで削除保護と final snapshot が連動して切り替わる。
+  # final_snapshot_identifier は snapshot を取らない間は無視されるが、切り替え時に必須なので常に置く。
   deletion_protection       = var.db_deletion_protection
   skip_final_snapshot       = !var.db_deletion_protection
   final_snapshot_identifier = "${var.name_prefix}-db-final"
@@ -116,10 +87,7 @@ resource "aws_db_instance" "this" {
   tags = { Name = "${var.name_prefix}-db" }
 }
 
-# RDS が作る前に log group を先に置いて retention を効かせる。名前は
-# `/aws/rds/instance/<identifier>/<log type>` 固定で、RDS 側は既存があれば
-# それを使う。identifier から組み立てるため instance には依存させない
-# (依存させると destroy 時に log group が先に消えて RDS が書けなくなる)。
+# RDS に作らせると無期限保持になるため先に作り、destroy 時に先に消えないよう instance には依存させない。
 resource "aws_cloudwatch_log_group" "rds_postgresql" {
   name              = "/aws/rds/instance/${var.name_prefix}-db/postgresql"
   retention_in_days = var.log_retention_days

@@ -50,11 +50,10 @@ variable "db_backup_retention_days" {
 
 variable "db_deletion_protection" {
   description = <<-EOT
-    検証後に destroy する前提で false。定常運用に移すなら true にする。
-    skip_final_snapshot はこの値の反転に連動させてある。
+    削除保護と final snapshot を連動して切り替える。環境ごと破棄する検証用途でだけ false にする。
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "root_domain" {
