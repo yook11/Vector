@@ -16,135 +16,149 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { signIn } from "@/lib/auth/auth-client";
-import { parseLoginCallback } from "@/lib/auth/login-callback";
-import { LoginSchema } from "../schemas/auth";
+import { signUp } from "@/lib/auth/auth-client";
+import { passwordPolicy } from "@/lib/auth/auth-config";
+import { RegisterSchema } from "../schemas/auth";
 
-type LoginFieldErrors = Partial<Record<"email" | "password", string>>;
+type RegisterField = "email" | "password";
 
-type SignInFailure = "invalid_credentials" | "rate_limited" | "unavailable";
+type RegisterFieldErrors = Partial<Record<RegisterField, string>>;
 
-type LoginState =
+type SignUpFailure = "rate_limited" | "unavailable";
+
+type RegisterState =
   | { status: "idle" }
   | {
       status: "error";
-      fieldErrors: LoginFieldErrors;
-      signInFailure?: SignInFailure;
+      fieldErrors: RegisterFieldErrors;
+      signUpFailure?: SignUpFailure;
     }
   | { status: "ok" };
 
-const INITIAL_STATE: LoginState = { status: "idle" };
+const INITIAL_STATE: RegisterState = { status: "idle" };
 
-const SIGN_IN_FAILURE_MESSAGES: Record<SignInFailure, string> = {
-  invalid_credentials: "メールアドレスまたはパスワードが正しくありません。",
-  rate_limited:
-    "ログインの試行回数が上限に達しました。しばらくしてから再度お試しください。",
-  unavailable: "ログインできませんでした。時間をおいて再度お試しください。",
+// 入力欄に結び付く Better Auth の error code。422 は原因が複数あるため status では分けない。
+const SIGN_UP_FIELD_ERRORS: Record<
+  string,
+  { field: RegisterField; message: string }
+> = {
+  USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL: {
+    field: "email",
+    message: "このメールアドレスは登録済みです。",
+  },
+  INVALID_EMAIL: {
+    field: "email",
+    message: "有効なメールアドレスを入力してください。",
+  },
+  PASSWORD_TOO_SHORT: {
+    field: "password",
+    message: `パスワードは${passwordPolicy.minLength}文字以上で入力してください。`,
+  },
+  PASSWORD_TOO_LONG: {
+    field: "password",
+    message: `パスワードは${passwordPolicy.maxLength}文字以内で入力してください。`,
+  },
 };
 
-function classifySignInFailure(status: number): SignInFailure {
-  if (status === 401) return "invalid_credentials";
-  if (status === 429) return "rate_limited";
-  return "unavailable";
-}
+const SIGN_UP_FAILURE_MESSAGES: Record<SignUpFailure, string> = {
+  rate_limited:
+    "登録の試行回数が上限に達しました。しばらくしてから再度お試しください。",
+  unavailable: "登録に失敗しました。時間をおいて再度お試しください。",
+};
 
 async function action(
-  _prev: LoginState,
+  _prev: RegisterState,
   formData: FormData,
-): Promise<LoginState> {
-  const parsed = LoginSchema.safeParse(Object.fromEntries(formData));
+): Promise<RegisterState> {
+  const parsed = RegisterSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
     const { fieldErrors } = z.flattenError(parsed.error);
-    // EOP 下で Partial<Record<...>> に undefined 明示代入はできないため、
-    // 値ありフィールドのみ条件付き spread で組む。
-    const result: LoginFieldErrors = {};
+    const result: RegisterFieldErrors = {};
     if (fieldErrors.email?.[0] !== undefined)
       result.email = fieldErrors.email[0];
     if (fieldErrors.password?.[0] !== undefined)
       result.password = fieldErrors.password[0];
     return { status: "error", fieldErrors: result };
   }
-  const { error } = await signIn.email(parsed.data);
+  // name は画面にも backend にも使わないため、入力を求めず空文字で保存する。
+  const { error } = await signUp.email({ ...parsed.data, name: "" });
   if (error) {
-    // credential の内訳 (email 不在 vs password 違い) は出さず、応答の種類だけで文言を分ける。
+    const fieldError =
+      error.code === undefined ? undefined : SIGN_UP_FIELD_ERRORS[error.code];
+    if (fieldError) {
+      return {
+        status: "error",
+        fieldErrors: { [fieldError.field]: fieldError.message },
+      };
+    }
     return {
       status: "error",
       fieldErrors: {},
-      signInFailure: classifySignInFailure(error.status),
+      signUpFailure: error.status === 429 ? "rate_limited" : "unavailable",
     };
   }
   return { status: "ok" };
 }
 
-export function LoginForm({
-  returnTo = "/",
-  requiresLoginReason = false,
-  backHref = "/",
-  backLabel = "ニュースへ戻る",
-}: {
-  returnTo?: string;
-  requiresLoginReason?: boolean;
-  backHref?: string;
-  backLabel?: string;
-}) {
+export function RegisterForm() {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
   const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   useEffect(() => {
     if (state.status === "ok") {
-      router.push(parseLoginCallback(returnTo) ?? "/");
+      router.push("/");
       router.refresh();
     } else if (state.status === "error") {
-      emailRef.current?.focus();
+      const { fieldErrors } = state;
+      const focusTarget =
+        fieldErrors.password !== undefined && fieldErrors.email === undefined
+          ? passwordRef
+          : emailRef;
+      focusTarget.current?.focus();
     }
-  }, [state, router, returnTo]);
+  }, [state, router]);
 
   const isError = state.status === "error";
   const emailError = isError ? state.fieldErrors.email : undefined;
   const passwordError = isError ? state.fieldErrors.password : undefined;
-  const signInFailure = isError ? state.signInFailure : undefined;
-  const formError = signInFailure
-    ? SIGN_IN_FAILURE_MESSAGES[signInFailure]
+  const signUpFailure = isError ? state.signUpFailure : undefined;
+  const formError = signUpFailure
+    ? SIGN_UP_FAILURE_MESSAGES[signUpFailure]
     : undefined;
-  // 認証情報の不一致だけを入力誤りとして両 input を invalid にする。
-  const credentialsInvalid = signInFailure === "invalid_credentials";
-  const emailInvalid = !!emailError || credentialsInvalid;
-  const passwordInvalid = !!passwordError || credentialsInvalid;
   // 成功後もページを離れるまで送信中の表示を保ち、失敗したように見せない。
   const busy = pending || state.status === "ok";
 
   const emailDescribedBy =
-    [emailError && "email-error", formError && "login-form-error"]
+    [emailError && "register-email-error", formError && "register-form-error"]
       .filter(Boolean)
       .join(" ") || undefined;
-  const passwordDescribedBy =
-    [passwordError && "password-error", formError && "login-form-error"]
-      .filter(Boolean)
-      .join(" ") || undefined;
+  const passwordDescribedBy = [
+    "register-password-hint",
+    passwordError && "register-password-error",
+    formError && "register-form-error",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <Card className="w-full max-w-sm">
       <CardHeader>
         <CardTitle>
-          <h1>ログイン</h1>
+          <h1>新規登録</h1>
         </CardTitle>
         <CardDescription>
-          メールアドレスとパスワードでログインしてください
+          メールアドレスとパスワードでアカウントを作成します
         </CardDescription>
-        {requiresLoginReason ? (
-          <p className="text-sm text-muted-foreground" role="note">
-            この機能の利用にはログインが必要です
-          </p>
-        ) : null}
       </CardHeader>
       <form action={formAction} aria-busy={busy}>
         <CardContent className="flex flex-col gap-4">
           {formError && (
             <div
-              id="login-form-error"
+              id="register-form-error"
               role="alert"
               aria-live="polite"
               className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
@@ -166,12 +180,12 @@ export function LoginForm({
               disabled={busy}
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              aria-invalid={emailInvalid || undefined}
+              aria-invalid={emailError ? true : undefined}
               aria-describedby={emailDescribedBy}
             />
             {emailError && (
               <p
-                id="email-error"
+                id="register-email-error"
                 role="alert"
                 className="text-sm text-destructive"
               >
@@ -182,20 +196,27 @@ export function LoginForm({
           <div className="flex flex-col gap-2">
             <Label htmlFor="password">パスワード</Label>
             <Input
+              ref={passwordRef}
               id="password"
               name="password"
               type="password"
-              autoComplete="current-password"
+              autoComplete="new-password"
               required
               disabled={busy}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              aria-invalid={passwordInvalid || undefined}
+              aria-invalid={passwordError ? true : undefined}
               aria-describedby={passwordDescribedBy}
             />
+            <p
+              id="register-password-hint"
+              className="text-sm text-muted-foreground"
+            >
+              {passwordPolicy.minLength}文字以上
+            </p>
             {passwordError && (
               <p
-                id="password-error"
+                id="register-password-error"
                 role="alert"
                 className="text-sm text-destructive"
               >
@@ -210,28 +231,22 @@ export function LoginForm({
               <>
                 <Spinner data-icon="inline-start" aria-hidden="true" />
                 <span role="status" aria-live="polite" aria-atomic="true">
-                  ログイン中…
+                  登録中…
                 </span>
               </>
             ) : (
-              "ログイン"
+              "アカウントを作成"
             )}
           </Button>
           <p className="text-center text-sm text-muted-foreground">
-            アカウントをお持ちでない方は{" "}
+            アカウントをお持ちの方は{" "}
             <Link
-              href="/auth/register"
+              href="/auth/login"
               className="text-foreground underline-offset-4 hover:underline"
             >
-              新規登録
+              ログイン
             </Link>
           </p>
-          <Link
-            href={backHref}
-            className="text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
-          >
-            {backLabel}
-          </Link>
         </CardFooter>
       </form>
     </Card>

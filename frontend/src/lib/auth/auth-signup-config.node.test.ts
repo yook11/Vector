@@ -46,26 +46,26 @@ beforeEach(() => {
 });
 
 describe("Better Auth public signup configuration", () => {
-  it("runtime auth keeps signup disabled with the shared standard password policy", async () => {
+  it("runtime auth allows public signup with the shared standard password policy", async () => {
     await import("./auth");
     const options = capturedOptions();
 
     expect(options.emailAndPassword).toEqual({
       enabled: true,
-      disableSignUp: true,
+      disableSignUp: false,
       minPasswordLength: 8,
       maxPasswordLength: 128,
     });
     expect(options).not.toHaveProperty("plugins");
   });
 
-  it("CLI auth keeps the same signup and standard password policy as runtime", async () => {
+  it("CLI auth keeps the same public signup and standard password policy as runtime", async () => {
     await import("./auth.cli");
     const options = capturedOptions();
 
     expect(options.emailAndPassword).toEqual({
       enabled: true,
-      disableSignUp: true,
+      disableSignUp: false,
       minPasswordLength: 8,
       maxPasswordLength: 128,
     });

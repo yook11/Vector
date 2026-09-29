@@ -5,6 +5,8 @@
 > Status: Implemented
 >
 > 対象: frontend の Better Auth / 認証画面 / デプロイ設定
+>
+> 2026-09-29 追記: 公開登録の停止は `frontend/specs/public-signup-reopen.md` で解除した。本仕様の公開登録に関する決定と不変条件は、同仕様で置き換える。
 
 ## Problem
 

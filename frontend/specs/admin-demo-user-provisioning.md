@@ -7,6 +7,8 @@
 > 対象: frontend の Better Auth / admin UI / server-side provisioning / backend operator CLI
 >
 > 前提仕様: `frontend/specs/invite-only-public-signup-shutdown.md`
+>
+> 2026-09-29 追記: 公開signupは `frontend/specs/public-signup-reopen.md` で再開した。本仕様のうち公開signupがユーザーを作らないことに関する記述(Evidence、Invariant 1・15、Verification 7、smoke test 8、Done)は同仕様で置き換える。管理者による一般ユーザー発行の決定は変わらない。
 
 ## Problem
 

@@ -1,6 +1,7 @@
 import { expect, type Page, request, test } from "@playwright/test";
-import { Pool, type PoolClient } from "pg";
+import { Pool } from "pg";
 import { poolConfigFromUrl } from "../src/lib/auth/pool-ssl";
+import { deleteAuthUserByEmail } from "./fixtures/auth-db";
 import { USER } from "./fixtures/users";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
@@ -11,33 +12,6 @@ const AUTH_DB_MUTATION_ENABLED =
   Boolean(DATABASE_URL) && process.env.E2E_ALLOW_AUTH_DB_MUTATION === "true";
 const PROVISION_EMAIL = "e2e-admin-provisioning-concurrency@example.com";
 const PROVISION_NAME = "並行登録 E2E";
-
-async function deleteProvisioningFixture(
-  pool: Pool,
-  email: string,
-): Promise<void> {
-  const client: PoolClient = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      `DELETE FROM auth.session
-       WHERE "userId" IN (SELECT id FROM auth."user" WHERE email = $1)`,
-      [email],
-    );
-    await client.query(
-      `DELETE FROM auth.account
-       WHERE "userId" IN (SELECT id FROM auth."user" WHERE email = $1)`,
-      [email],
-    );
-    await client.query('DELETE FROM auth."user" WHERE email = $1', [email]);
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
 
 async function fillProvisioningForm(page: Page): Promise<void> {
   await page.goto("/admin/users/new");
@@ -158,7 +132,7 @@ test.describe("Admin user provisioning integration", () => {
 
     pool = new Pool(poolConfigFromUrl(DATABASE_URL));
     try {
-      await deleteProvisioningFixture(pool, PROVISION_EMAIL);
+      await deleteAuthUserByEmail(pool, PROVISION_EMAIL);
     } catch (error) {
       await pool.end();
       pool = undefined;
@@ -170,7 +144,7 @@ test.describe("Admin user provisioning integration", () => {
     if (!pool) return;
 
     try {
-      await deleteProvisioningFixture(pool, PROVISION_EMAIL);
+      await deleteAuthUserByEmail(pool, PROVISION_EMAIL);
     } finally {
       await pool.end();
       pool = undefined;
