@@ -53,8 +53,7 @@ https://github.com/user-attachments/assets/cbd9db5b-e8e9-4a3a-ad84-c1c581770f6f
 
 ## Architecture
 
-Vector は、ブラウザから直接到達できる入口を Next.js BFF に寄せ、backend API と worker 群を内部側に閉じる構成です。
-本番環境は AWS (ap-northeast-1) で動作しています。ALB を唯一の公開入口とし、frontend・API・リサーチや週次ブリーフィングなどの worker は ECS Fargate で実行します。記事の収集・分析は EventBridge Scheduler・SQS・Lambda によるイベント駆動構成です。データは RDS PostgreSQL と ElastiCache Valkey に置き、構成は Terraform (`infra/aws/`) で管理しています。
+本番環境は AWS (ap-northeast-1) で動作しています。公開入口は ALB だけで、ALB は Next.js の frontend にだけ転送します。frontend は BFF として認証を担い、backend API には frontend からしか接続できません。frontend・API・リサーチや週次ブリーフィングなどの worker は ECS Fargate で実行し、記事の収集・分析は EventBridge Scheduler・SQS・Lambda によるイベント駆動構成です。データは RDS PostgreSQL と ElastiCache Valkey に置き、構成は Terraform (`infra/aws/`) で管理しています。
 
 ### AWS全体構成
 
