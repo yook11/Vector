@@ -67,7 +67,7 @@ variables {
   slack_channel_id       = "C0123456789"
 }
 
-run "insights_connects_as_insights_role_during_switch" {
+run "insights_connects_only_as_insights_role" {
   command = plan
 
   assert {
@@ -76,9 +76,8 @@ run "insights_connects_as_insights_role_during_switch" {
   }
   assert {
     condition = jsondecode(aws_iam_role_policy.task["insights"].policy).Statement[0].Resource == [
-      "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_app",
       "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_insights",
     ]
-    error_message = "切替前のタスクが入れ替わるまで、insights段はvector_appにも接続できる。"
+    error_message = "insights段のタスクロールはvector_insightsにだけ接続できる。"
   }
 }
