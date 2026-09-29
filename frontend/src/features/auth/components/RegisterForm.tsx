@@ -242,7 +242,7 @@ export function RegisterForm() {
             アカウントをお持ちの方は{" "}
             <Link
               href="/auth/login"
-              className="text-foreground underline-offset-4 hover:underline"
+              className="whitespace-nowrap text-foreground underline-offset-4 hover:underline"
             >
               ログイン
             </Link>

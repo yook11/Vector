@@ -221,7 +221,7 @@ export function LoginForm({
             アカウントをお持ちでない方は{" "}
             <Link
               href="/auth/register"
-              className="text-foreground underline-offset-4 hover:underline"
+              className="whitespace-nowrap text-foreground underline-offset-4 hover:underline"
             >
               新規登録
             </Link>
