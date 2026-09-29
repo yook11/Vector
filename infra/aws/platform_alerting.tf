@@ -11,7 +11,7 @@ resource "aws_sns_topic" "alerts" {
   name = "${var.name_prefix}-alerts"
 }
 
-# CloudWatch alarm と EventBridge rule の発報だけを受け付ける。
+# CloudWatch alarm・EventBridge rule・Budgets の発報だけを受け付ける。
 # policy を自前で置くと default policy は置き換わるため、alarm 側の許可も明示する。
 resource "aws_sns_topic_policy" "alerts" {
   arn = aws_sns_topic.alerts.arn
@@ -38,6 +38,19 @@ resource "aws_sns_topic_policy" "alerts" {
         Condition = {
           ArnLike = {
             "aws:SourceArn" = "arn:aws:events:${var.region}:${local.account_id}:rule/${var.name_prefix}-*"
+          }
+        }
+      },
+      {
+        Sid       = "AllowBudgetsPublish"
+        Effect    = "Allow"
+        Principal = { Service = "budgets.amazonaws.com" }
+        Action    = "sns:Publish"
+        Resource  = aws_sns_topic.alerts.arn
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = local.account_id }
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:budgets::${local.account_id}:*"
           }
         }
       },

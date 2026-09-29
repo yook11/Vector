@@ -113,3 +113,33 @@ resource "aws_iam_role_policy" "agentcore_gateway_invoke" {
     ]
   })
 }
+
+# 外部検索は 1 run 最大 9 クエリ ($0.063) なので、日次枠を使い切るアカウント約 5 つ分で通知する。
+resource "aws_budgets_budget" "agentcore_daily_cost" {
+  name         = "${var.name_prefix}-agentcore-daily-cost"
+  budget_type  = "COST"
+  limit_amount = "3"
+  limit_unit   = "USD"
+  time_unit    = "DAILY"
+
+  cost_filter {
+    name   = "Service"
+    values = ["Amazon Bedrock AgentCore"]
+  }
+
+  # クレジットと相殺されると実費が 0 に見え、濫用中でも通知が出なくなる。
+  cost_types {
+    include_credit = false
+  }
+
+  notification {
+    comparison_operator       = "GREATER_THAN"
+    threshold                 = 100
+    threshold_type            = "PERCENTAGE"
+    notification_type         = "ACTUAL"
+    subscriber_sns_topic_arns = [aws_sns_topic.alerts.arn]
+  }
+
+  # topic policy が budgets の発報を許す前に通知先として登録しない。
+  depends_on = [aws_sns_topic_policy.alerts]
+}
