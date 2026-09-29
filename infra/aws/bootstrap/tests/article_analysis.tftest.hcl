@@ -57,6 +57,12 @@ override_resource {
 
 override_resource {
   override_during = plan
+  target          = aws_iam_policy.article_fetch_lambda_boundary
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-article-fetch-lambda-boundary" }
+}
+
+override_resource {
+  override_during = plan
   target          = aws_iam_policy.auth_rate_limit_cleanup_lambda_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-auth-rate-limit-cleanup-lambda-boundary" }
 }
