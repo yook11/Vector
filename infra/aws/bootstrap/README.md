@@ -249,3 +249,7 @@ inline 10,240文字／managed 6,144文字の上限を守るため、boundary固�
 `source_dispatch.tf`で投入LambdaとScheduler専用の権限境界・管理ポリシーを追加した。Lambda境界のDBユーザーは`vector_collect`、送信先は通常の取得依頼キューと実行失敗保存先に限定し、Scheduler境界は投入Lambdaの起動と専用DLQへの送信に限定する。
 
 CIの管理対象・PassRoleの双方向制約・設定復号許可へ追加し、既存の拒否条件を維持する。これらは本体applyに先行して適用する。アプリrollout権限は変更しない。AWSへの適用と実配送の検証は未実施で、停止状態の初回配備と手動確認は本体READMEの「取得依頼投入」に従う。
+
+## AgentCore日次予算の管理権限
+
+`cost_budget.tf`で、本体`agent.tf`の日次予算`vector-agentcore-daily-cost`だけを作成・更新・タグ付けできる管理ポリシーを追加し、applyロールへ取り付けた。Budgetsはglobal endpointを使うため、region条件を持つ`RegionalInfra`には入れない。本体applyに先行して適用する。

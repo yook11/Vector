@@ -77,6 +77,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | A6 | AI 利用枠の枯渇(残高切れ・日次 quota 切れ) | EMF `ai_provider_exhausted` | metric alarm |
 | A7 | ユーザーにエラーが見えている | ALB 5XX | metric alarm |
 | A8 | frontend が到達不能 | ALB UnHealthyHostCount | metric alarm |
+| A9 | AgentCore の検索費用が想定を超えている(公開登録後の濫用) | AWS Budgets 日次予算(Service = Amazon Bedrock AgentCore の実績) | Budgets 通知 |
 
 「止まっている」の検知は A1 / A2 / A3 の 3 層で役割分担する。検知原理が異なるため 1 本にまとめない。(A2 / A3 廃止後は A1 と各工程の SQS／Lambda 監視が担う)
 
@@ -164,6 +165,14 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - 根拠: desired 1 なので unhealthy 1 = frontend 全停止。瞬断(再起動 1 回)では鳴らさない。
 - A5 / A7 との重複は意図的(event 経路と symptom 経路の冗長化)。
 
+### A9: AgentCore 検索費用の日次予算超過
+
+- 症状: 外部検索(AgentCore web search、$0.007/クエリ)の費用が、通常の利用では届かない水準に達している。公開登録を使った大量アカウントによる濫用を想定する。LLM(Gemini / DeepSeek)は前払いで残高が上限になるため対象外。
+- Signal: AWS Budgets の日次コスト予算。Service = `Amazon Bedrock AgentCore` に絞り、クレジットは含めない。
+- 条件: 実績が $3/日を超えたとき。1 run は最大 9 クエリ($0.063)なので、日次枠を使い切るアカウント約 5 つ分にあたる。
+- 限界: 費用データの反映は数時間遅れ、日の区切りは UTC(JST 09:00)。通知するだけで利用は止めない。
+- アクション: 登録数と agent の利用状況を確認し、必要なら公開登録を停止する。
+
 ### 既知障害モードとのカバレッジ確認
 
 | 障害モード(実績 / 想定) | 拾う定義 | Slack で分かること |
@@ -200,6 +209,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 ## 3. 通知経路
 
 - `aws_sns_topic`(例: `vector-alerts`)1 本。全 alarm の ALARM / OK(復旧)action と EventBridge rule target を集約。severity 別 channel 分離はしない(初期は 1 channel)。
+- AWS Budgets(A9)も同じ topic に発報する。topic policy で `budgets.amazonaws.com` を許可し、自アカウントの予算からの発報に限る。
 - SNS → Amazon Q Developer in chat applications(旧 AWS Chatbot)→ Slack。追加コストなし。Slack workspace の初回 OAuth 承認だけコンソール手動(1 回きり)。
 - Slack workspace ID / channel ID は Terraform variable とし、実値は非コミット tfvars で渡す(公開 repo に焼かない)。
 - chatbot の API endpoint は ap-northeast-1 に存在しない(us-east-2 / us-west-2 / ap-southeast-1 / eu-west-1 のみ)。channel configuration リソースだけ `region = "us-east-2"` を明示する。設定は account 単位で効き、他 region の SNS topic も購読できる。deploy role の IAM 側は region 条件の無い GlobalInfra 文に `chatbot:*` を置く。

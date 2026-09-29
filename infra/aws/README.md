@@ -45,8 +45,8 @@ subnet 自体は無料なので、ECS サービスと Lambda の実行単位ご�
   (public-writable bucket への PUT は credential 不要なので、task role が空でも
   exfil 経路になる)。**S3 Gateway endpoint の endpoint policy** で ECR のレイヤー
   bucket への `s3:GetObject` に絞り、入口を持つ唯一のサービスの外向きを read 1 つに戻す。
-  この前提は Better Auth がメール送信も social provider も持たないこと (招待制、
-  検証済み) に依存する。計測 SDK を足すと壊れるが、静かに漏れるのではなく
+  この前提は Better Auth がメール送信も social provider も持たないこと (検証済み)
+  に依存する。計測 SDK を足すと壊れるが、静かに漏れるのではなく
   接続失敗で明確に壊れる。
 - **`VPC endpoint policy` が最後の 1 枚。** SG が「どのサービスに出られるか」までしか
   絞れないところで、endpoint policy が「そのサービスの何に触れるか」を絞る。
