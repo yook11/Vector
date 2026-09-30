@@ -155,7 +155,7 @@ resource "aws_iam_role_policy" "completion_consumer" {
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "completion_consumer" {
   function_name                  = local.completion_consumer_name
-  role                           = aws_iam_role.completion_consumer.arn
+  role                           = aws_iam_role.article_fetch.arn
   package_type                   = "Image"
   image_uri                      = local.lambda_initial_image_uri
   architectures                  = ["arm64"]
@@ -194,7 +194,7 @@ resource "aws_lambda_function" "completion_consumer" {
   }
 
   depends_on = [
-    aws_iam_role_policy.completion_consumer,
+    aws_iam_role_policy.article_fetch,
     aws_ecr_repository_policy.backend_lambda_pull,
     aws_route_table_association.completion_consumer,
     aws_vpc_security_group_egress_rule.completion_consumer_to_rds,
@@ -203,6 +203,8 @@ resource "aws_lambda_function" "completion_consumer" {
     aws_vpc_security_group_ingress_rule.proxy_from_completion_consumer,
     aws_vpc_security_group_egress_rule.completion_consumer_to_sqs,
     aws_vpc_security_group_ingress_rule.sqs_from_completion_consumer,
+    # 再配信の待機はendpoint経由で可視性を変えるため、endpointが実行ロールを許可してから関数を更新する。
+    aws_vpc_endpoint.outbox_sqs,
   ]
 
   lifecycle {
@@ -223,5 +225,5 @@ resource "aws_lambda_event_source_mapping" "completion_consumer" {
   }
 
   tags       = { Consumer = local.completion_consumer_name }
-  depends_on = [aws_iam_role_policy.completion_consumer]
+  depends_on = [aws_iam_role_policy.article_fetch]
 }

@@ -301,3 +301,7 @@ output "completion_outbox_relay_log_group_name" {
 output "article_analysis_role_arn" {
   value = aws_iam_role.article_analysis.arn
 }
+
+output "article_fetch_role_arn" {
+  value = aws_iam_role.article_fetch.arn
+}

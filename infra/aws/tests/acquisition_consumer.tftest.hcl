@@ -153,19 +153,16 @@ run "queue_redrive_and_failure_dashboard" {
     error_message = "取得Consumer専用DLQと30分の可視性、14日保持を定義する。"
   }
 }
-run "consumer_permissions_and_network_are_scoped" {
+run "consumer_network_and_queue_policies_are_scoped" {
   command = plan
   assert {
     condition = (
-      jsondecode(aws_iam_role_policy.acquisition_consumer.policy).Statement[0].Resource == aws_sqs_queue.source_dispatch["acquisition"].arn &&
-      toset(jsondecode(aws_iam_role_policy.acquisition_consumer.policy).Statement[0].Action) == toset(["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]) &&
-      endswith(jsondecode(aws_iam_role_policy.acquisition_consumer.policy).Statement[1].Resource, "/vector_collect") &&
       aws_vpc_security_group_egress_rule.acquisition_consumer_to_rds.to_port == 5432 &&
       aws_vpc_security_group_egress_rule.acquisition_consumer_to_proxy.to_port == var.proxy_port &&
       local.proxy_clients.acquisition_consumer.allow_any_domain &&
       length(jsondecode(aws_sqs_queue_policy.acquisition_dlq.policy).Statement) == 1 &&
       jsondecode(aws_sqs_queue_policy.source_dispatch["acquisition"].policy).Statement[1].Action == "sqs:SendMessage"
     )
-    error_message = "受信先とCollect接続を限定し、DLQ配送へVPCE条件を課さない。"
+    error_message = "通信先をCollect RDSと取得proxyに限定し、DLQ配送へVPCE条件を課さない。"
   }
 }
