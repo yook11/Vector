@@ -1,21 +1,14 @@
 """検証済み HTTP/HTTPS URL の値オブジェクト。
 
-SafeUrl は URL が安全なスキーム (http または https) を使い、
-正しい構造を持つことを保証する。検証は Pydantic の AnyHttpUrl に
-委譲するが、格納される値は元の文字列 (strip 後) で、
-正規化は行わない。
-
-加えて、ホストが IP リテラルである場合は ``PublicIpAddress`` 経由で
-public IP に該当することを保証し、private/loopback 等を構造的に拒否
-する (SSRF defense-in-depth)。DNS 名のリゾルブはここでは行わない:
-それはHTTP層 (``destination_resolution.resolve_public_host_addresses``) の責務。
+URL の形式だけを保証し、構文の解析は Pydantic の AnyHttpUrl に委譲する。
+格納される値は元の文字列 (strip 後) で、正規化は行わない。
+宛先IPの判定は持たず、``app.http`` の送信境界が送信時に行う。
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 from typing import Any, ClassVar
-from urllib.parse import urlparse
 
 from pydantic import (
     AnyHttpUrl,
@@ -24,12 +17,6 @@ from pydantic import (
     TypeAdapter,
     ValidationError,
     field_validator,
-)
-
-from app.http.destination_policy import (
-    NotAnIpAddressError,
-    NotAPublicIpError,
-    PublicIpAddress,
 )
 
 _url_adapter = TypeAdapter(AnyHttpUrl)
@@ -43,7 +30,6 @@ class SafeUrlInvalidReason(StrEnum):
     URL_EMPTY = "url_empty"
     URL_TOO_LONG = "url_too_long"
     URL_NOT_HTTP = "url_not_http"
-    HOST_NOT_PUBLIC_IP = "host_not_public_ip"
 
 
 class SafeUrlInvalidError(ValueError):
@@ -52,7 +38,7 @@ class SafeUrlInvalidError(ValueError):
     ``ValueError`` サブクラスなので ``SafeUrl`` の validator 内で raise すると
     pydantic が ``ValidationError`` にラップする (既存 ``SafeUrl(x)`` 契約維持)。
     ``CanonicalArticleUrl.from_raw`` は validator を直接呼び reason を型で取る。
-    URL 値 / IP などの input は載せず reason タグのみを監査へ流す (PII フリー)。
+    URL 値などの input は載せず reason タグのみを監査へ流す (PII フリー)。
     """
 
     MESSAGE: ClassVar[str] = "value is not a valid safe URL"
@@ -68,8 +54,6 @@ class SafeUrl(RootModel[str]):
     Invariants:
     - http または https スキームを使用
     - 有効な URL 構造 (最低でも scheme + host)
-    - ホストが IP リテラルなら ``PublicIpAddress`` として valid
-      (例: ``http://169.254.169.254/`` は拒否)
     - トリム後 1-2048 文字
     - 生成後は不変
     """
@@ -98,17 +82,6 @@ class SafeUrl(RootModel[str]):
             _url_adapter.validate_python(v)
         except ValidationError as e:
             raise SafeUrlInvalidError(reason=SafeUrlInvalidReason.URL_NOT_HTTP) from e
-        host = urlparse(v).hostname
-        if host:
-            try:
-                PublicIpAddress(host)
-            except NotAnIpAddressError:
-                # DNS 名は SafeUrl 単独では判定できない (実フェッチ層で検証)
-                pass
-            except NotAPublicIpError as e:
-                raise SafeUrlInvalidError(
-                    reason=SafeUrlInvalidReason.HOST_NOT_PUBLIC_IP
-                ) from e
         return v
 
     def __str__(self) -> str:

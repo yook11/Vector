@@ -87,7 +87,7 @@ class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
         if not original_host:
             return await super().handle_async_request(request)
 
-        # 呼び出し側がSafeUrlを使うかに依存せず、送信時にIP直書きも検証する。
+        # URL型は宛先IPを判定しないため、送信時にIP直書きを検証する。
         try:
             PublicIpAddress(original_host)
         except NotAnIpAddressError:

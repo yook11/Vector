@@ -98,48 +98,26 @@ class TestSafeUrl:
         assert repr(SafeUrl("https://example.com")) == "SafeUrl('https://example.com')"
 
 
-# SafeUrl — SSRF Defense (IP リテラル拒否)
-class TestSafeUrlBlocksPrivateIpLiterals:
-    """ホストが private/loopback/link-local/... の IP リテラルなら拒否する。
+# SafeUrl — 宛先の判定を持たない
+class TestSafeUrlLeavesDestinationToSendBoundary:
+    """ホストの宛先方針は判定せず、形式が正しければ受け付ける。
 
-    DNS 名はここでは判定不能なので拒否されない (実フェッチ層の責務)。
+    非公開IPや内部名の拒否は ``app.http`` の送信境界が送信時に行う。
     """
 
     @pytest.mark.parametrize(
         "url",
         [
-            "http://127.0.0.1/",
             "http://127.0.0.1:8000/admin",
             "http://10.0.0.1/",
-            "http://172.16.0.1/",
-            "http://192.168.1.1/",
             "http://169.254.169.254/latest/meta-data/",
-            "http://0.0.0.0/",
-            "http://224.0.0.1/",
             "http://[::1]/",
-            "http://[fe80::1]/",
-            "http://[fc00::1]/",
-        ],
-    )
-    def test_rejects_private_ip_literal(self, url: str) -> None:
-        with pytest.raises(ValidationError):
-            SafeUrl(url)
-
-    @pytest.mark.parametrize(
-        "url",
-        [
             "http://8.8.8.8/",
-            "https://1.1.1.1/dns-query",
-            "http://[2001:4860:4860::8888]/",
+            "https://backend/",
         ],
     )
-    def test_accepts_public_ip_literal(self, url: str) -> None:
-        SafeUrl(url)
-
-    def test_accepts_dns_name(self) -> None:
-        # DNS 名は SafeUrl 単独では判定しない
-        SafeUrl("https://example.com/")
-        SafeUrl("https://backend/")  # docker compose のサービス名は実フェッチ層で判定
+    def test_accepts_any_host_with_valid_format(self, url: str) -> None:
+        assert SafeUrl(url).root == url
 
 
 class TestPydanticIntegration:
@@ -209,8 +187,6 @@ class TestSafeUrlValidateReason:
             ("ftp://files.example.com", SafeUrlInvalidReason.URL_NOT_HTTP),
             ("javascript:alert(1)", SafeUrlInvalidReason.URL_NOT_HTTP),
             ("example.com", SafeUrlInvalidReason.URL_NOT_HTTP),
-            ("http://127.0.0.1/", SafeUrlInvalidReason.HOST_NOT_PUBLIC_IP),
-            ("http://169.254.169.254/", SafeUrlInvalidReason.HOST_NOT_PUBLIC_IP),
         ],
     )
     def test_validate_classifies_failure_reason(

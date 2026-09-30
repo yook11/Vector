@@ -230,8 +230,7 @@ class TestDestinationValidationBeforeSend:
         external_client: Callable[[], httpx.AsyncClient],
         captured_requests: list[httpx.Request],
     ) -> None:
-        """private IP literal を直接渡された場合も transport が拒否する
-        (defense-in-depth: SafeUrl で弾く前提だが二重保証)。"""
+        """private IP literal はURL型を通過するため、transport が送信前に拒否する。"""
         async with external_client() as client:
             with pytest.raises(HostBlockedError):
                 await client.get("http://10.0.0.1/")

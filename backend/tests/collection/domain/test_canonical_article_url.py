@@ -88,7 +88,7 @@ class TestCanonicalArticleUrlAcceptsSafeUrlInput:
 
 
 class TestCanonicalArticleUrlRejectsInvalidInput:
-    """SafeUrl invariant (構文 + SSRF) を canonical 値で再検証する。"""
+    """SafeUrl の形式の不変条件を canonical 値で再検証する。"""
 
     def test_rejects_empty(self) -> None:
         with pytest.raises(ValidationError):
@@ -97,10 +97,6 @@ class TestCanonicalArticleUrlRejectsInvalidInput:
     def test_rejects_non_http_scheme(self) -> None:
         with pytest.raises(ValidationError):
             CanonicalArticleUrl("ftp://example.com/foo")
-
-    def test_rejects_private_ip(self) -> None:
-        with pytest.raises(ValidationError):
-            CanonicalArticleUrl("http://127.0.0.1/admin")
 
     def test_rejects_non_string_non_url_type(self) -> None:
         with pytest.raises(ValidationError):
@@ -125,7 +121,6 @@ class TestCanonicalArticleUrlFromRaw:
             ("", SafeUrlInvalidReason.URL_EMPTY),
             ("ftp://example.com/foo", SafeUrlInvalidReason.URL_NOT_HTTP),
             ("example.com/foo", SafeUrlInvalidReason.URL_NOT_HTTP),
-            ("http://127.0.0.1/admin", SafeUrlInvalidReason.HOST_NOT_PUBLIC_IP),
             (
                 "https://example.com/" + "a" * (2049 - len("https://example.com/")),
                 SafeUrlInvalidReason.URL_TOO_LONG,

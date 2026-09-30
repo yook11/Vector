@@ -105,7 +105,7 @@ async def test_mapping_does_not_reject_empty_title(source: type) -> None:
 async def test_mapping_passes_raw_url_through_without_canonicalize_or_validation(
     source: type, raw_url: str
 ) -> None:
-    """canonicalize / SSRF 検証は converter の責務。写像は生 URL を素通し。"""
+    """canonicalize / URL 形式の検証は converter の責務。写像は生 URL を素通し。"""
     result = await _map(source, make_rss_entry(link=raw_url))
     assert result.url == raw_url
 

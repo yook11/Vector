@@ -492,7 +492,7 @@ async def test_search_records_a_drop_metric_for_every_intake_rejection(
     payload = [
         "not-a-mapping",
         _result(url="https://example.com/empty-title", title="  "),
-        _result(url="http://169.254.169.254/news", title="Private IP"),
+        _result(url="ftp://example.com/news", title="Bad scheme"),
         _result(url="https://example.com/valid", title="Valid"),
     ]
 
