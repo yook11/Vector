@@ -35,9 +35,9 @@ from app.shared.web_url import (
 
 
 class CanonicalArticleUrlInvalidError(Exception):
-    """canonicalize 後の値が WebUrl 不変条件を満たさず記事 URL にできなかった失敗。
+    """入力か canonical 値が WebUrl 不変条件を満たさず記事 URL にできなかった失敗。
 
-    canonicalize_url は失敗しない (冪等 transform) ため、本失敗は全て WebUrl 由来。
+    canonicalize_url は WebUrl 検証済みの値にだけ適用するので、失敗は全て WebUrl 由来。
     reason は下位 WebUrl の失敗段をそのまま運ぶ (URL の input は載せない)。
     """
 
@@ -48,11 +48,20 @@ class CanonicalArticleUrlInvalidError(Exception):
         super().__init__(f"{self.MESSAGE}: {reason}")
 
 
+def _canonical_value(raw: str) -> str:
+    """WebUrl として検証した値を canonicalize し、長さを含めて再検証して返す。
+
+    WebUrlInvalidError は ValueError サブクラスなので、validator 内では pydantic が
+    ValidationError 化する (CanonicalArticleUrl(x) 直接構築の契約を維持)。
+    """
+    return WebUrl._validate(canonicalize_url(WebUrl._validate(raw)))
+
+
 class CanonicalArticleUrl(RootModel[str]):
     """canonicalize 済みかつ WebUrl 互換である URL。
 
     Invariants:
-    - canonicalize_url 適用済 (lowercase host / tracking param strip /
+    - canonicalize_url 適用済 (pydantic の正規化 / tracking param strip /
       trailing slash / fragment 除去 / scheme 保存)
     - WebUrl の制約も canonical 値で満たす (http/https + 構文 + 長さ)
     - 生成後は不変
@@ -77,24 +86,19 @@ class CanonicalArticleUrl(RootModel[str]):
         else:
             msg = f"Expected str / WebUrl / CanonicalArticleUrl, got {type(v).__name__}"
             raise ValueError(msg)
-        canonical = canonicalize_url(raw)
-        # WebUrl の invariant (構文 + 長さ) を canonical 値で再検証し strip 済み値を
-        # 返す。WebUrlInvalidError は ValueError サブクラスなので pydantic が
-        # ValidationError 化する (CanonicalArticleUrl(x) 直接構築の契約を維持)。
-        return WebUrl._validate(canonical)
+        return _canonical_value(raw)
 
     @classmethod
     def from_raw(cls, raw: str) -> Self:
-        """生 URL を canonicalize → WebUrl 検証し、失敗時は reason 付き例外へ翻訳する。
+        """生 URL を WebUrl 検証 → canonicalize し、失敗時は reason 付き例外へ翻訳する。
 
         ``CanonicalArticleUrl(x)`` 直接構築は validator 経由で ValidationError を
         維持する (stage1 converter / ORM / テスト用)。本 factory は失敗理由を型で
         運ぶ stage2 用の経路で、``WebUrl._validate`` を pydantic 非経由で直接呼ぶ
         ため reason を型で受け取れ ``__cause__`` 連鎖も保たれる。
         """
-        canonical = canonicalize_url(raw)
         try:
-            validated = WebUrl._validate(canonical)
+            validated = _canonical_value(raw)
         except WebUrlInvalidError as exc:
             raise CanonicalArticleUrlInvalidError(reason=exc.reason) from exc
         return cls(validated)

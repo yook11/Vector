@@ -63,8 +63,22 @@ class TestCanonicalizeUrl:
         # root path の / は保持 (除去すると path 空で意味が変わる)
         assert canonicalize_url("https://example.com/") == "https://example.com/"
 
+    def test_root_only_url_gets_root_slash(self) -> None:
+        # path の無い URL も pydantic の正規化で root path の / を持つ
+        assert canonicalize_url("https://example.com") == "https://example.com/"
+
     def test_multi_trailing_slash_stripped(self) -> None:
         assert canonicalize_url("https://example.com/a///") == "https://example.com/a"
+
+    def test_default_port_omitted(self) -> None:
+        assert canonicalize_url("https://example.com:443/a") == "https://example.com/a"
+
+    def test_builds_from_pydantic_parsed_host(self) -> None:
+        # バックスラッシュは pydantic の解釈どおり path の区切りとして扱う
+        assert (
+            canonicalize_url("http://127.0.0.1\\@evil.example/a/")
+            == "http://127.0.0.1/@evil.example/a"
+        )
 
     def test_fragment_removed(self) -> None:
         # fragment は browser-only の概念、URL identity には含めない
@@ -90,6 +104,8 @@ class TestCanonicalizeUrl:
             "https://example.com/",
             "http://example.com/path?id=1",
             "HTTPS://EXAMPLE.com/A/?utm_source=x#frag",
+            "https://example.com",
+            "http://127.0.0.1\\@evil.example/a/",
         ]
         for raw in urls:
             once = canonicalize_url(raw)

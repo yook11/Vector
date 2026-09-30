@@ -60,7 +60,8 @@ async def test_create_rss_source(
     assert data["name"] == "New RSS Source"
     assert data["sourceType"] == "rss"
     assert data["endpointUrl"] == "https://example.com/rss.xml"
-    assert data["siteUrl"] == "https://example.com"
+    # 登録値は WebUrl の正規化で root path の / を持つ
+    assert data["siteUrl"] == "https://example.com/"
     assert data["isActive"] is True
 
 

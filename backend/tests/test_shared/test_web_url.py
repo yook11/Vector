@@ -2,6 +2,7 @@
 
 import json
 
+import httpx
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -19,8 +20,8 @@ class TestWebUrl:
         assert str(url) == "https://example.com/path"
 
     def test_valid_http(self) -> None:
-        url = WebUrl("http://example.com")
-        assert url.root == "http://example.com"
+        url = WebUrl("http://example.com/")
+        assert url.root == "http://example.com/"
 
     def test_valid_with_query_and_fragment(self) -> None:
         raw = "https://example.com/search?q=test&page=1#results"
@@ -28,8 +29,8 @@ class TestWebUrl:
         assert url.root == raw
 
     def test_strips_whitespace(self) -> None:
-        url = WebUrl("  https://example.com  ")
-        assert url.root == "https://example.com"
+        url = WebUrl("  https://example.com/  ")
+        assert url.root == "https://example.com/"
 
     def test_rejects_empty(self) -> None:
         with pytest.raises(ValidationError):
@@ -95,7 +96,70 @@ class TestWebUrl:
             url.root = "https://hacked.com"  # type: ignore[misc]
 
     def test_repr(self) -> None:
-        assert repr(WebUrl("https://example.com")) == "WebUrl('https://example.com')"
+        assert repr(WebUrl("https://example.com/")) == "WebUrl('https://example.com/')"
+
+
+# WebUrl — pydantic による正規化
+class TestWebUrlHoldsNormalizedValue:
+    """pydantic が解析して正規化した文字列を値として持つ。
+
+    期待値は WHATWG URL Standard の直列化 (pydantic-core が準拠) による。
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("https://Example.COM/Path", "https://example.com/Path"),
+            ("https://example.com", "https://example.com/"),
+            ("https://example.com:443/a", "https://example.com/a"),
+            ("https://example.com/a/../b", "https://example.com/b"),
+            ("https://example.com/a b", "https://example.com/a%20b"),
+            (
+                "https://example.com/news/China\u2019s",
+                "https://example.com/news/China%E2%80%99s",
+            ),
+            ("https://b\u00fccher.example/", "https://xn--bcher-kva.example/"),
+            ("http://0x7f000001/", "http://127.0.0.1/"),
+            ("http://127.0.0.1\\@evil.example/", "http://127.0.0.1/@evil.example/"),
+        ],
+    )
+    def test_holds_pydantic_normalized_value(self, raw: str, expected: str) -> None:
+        assert WebUrl(raw).root == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "https://Example.COM",
+            "https://example.com/a b?q=1#frag",
+            "http://127.0.0.1\\@evil.example/",
+        ],
+    )
+    def test_normalized_value_is_stable(self, raw: str) -> None:
+        once = WebUrl(raw)
+        assert WebUrl(once.root) == once
+
+    @pytest.mark.parametrize(
+        ("raw", "scheme", "host", "port"),
+        [
+            ("http://0x7f000001/", "http", "127.0.0.1", None),
+            ("http://127.1/", "http", "127.0.0.1", None),
+            ("http://0177.0.0.1/", "http", "127.0.0.1", None),
+            ("http://127.0.0.1\\@evil.example/", "http", "127.0.0.1", None),
+            ("http://evil.example\\@127.0.0.1/", "http", "evil.example", None),
+            ("https://b\u00fccher.example/", "https", "xn--bcher-kva.example", None),
+            ("https://Example.com:8443/x", "https", "example.com", 8443),
+        ],
+    )
+    def test_sender_interprets_same_destination(
+        self, raw: str, scheme: str, host: str, port: int | None
+    ) -> None:
+        """送信に使う httpx も、正規化した値を同じ宛先として解釈する。"""
+        sent = httpx.URL(WebUrl(raw).root)
+        assert (sent.scheme, sent.raw_host.decode("ascii"), sent.port) == (
+            scheme,
+            host,
+            port,
+        )
 
 
 # WebUrl — 宛先の判定を持たない
@@ -125,25 +189,25 @@ class TestPydanticIntegration:
         url: WebUrl
 
     def test_model_from_str(self) -> None:
-        m = self.SampleModel(url="https://example.com")
+        m = self.SampleModel(url="https://example.com/")
         assert isinstance(m.url, WebUrl)
-        assert m.url.root == "https://example.com"
+        assert m.url.root == "https://example.com/"
 
     def test_model_from_value_object(self) -> None:
-        url = WebUrl("https://example.com")
+        url = WebUrl("https://example.com/")
         m = self.SampleModel(url=url)
         assert isinstance(m.url, WebUrl)
 
     def test_model_dump_unwraps_to_str(self) -> None:
-        m = self.SampleModel(url="https://example.com")
+        m = self.SampleModel(url="https://example.com/")
         data = m.model_dump()
-        assert data == {"url": "https://example.com"}
+        assert data == {"url": "https://example.com/"}
         assert isinstance(data["url"], str)
 
     def test_model_dump_json(self) -> None:
-        m = self.SampleModel(url="https://example.com")
+        m = self.SampleModel(url="https://example.com/")
         data = json.loads(m.model_dump_json())
-        assert data["url"] == "https://example.com"
+        assert data["url"] == "https://example.com/"
 
     def test_model_rejects_invalid(self) -> None:
         with pytest.raises(ValidationError):
@@ -162,10 +226,10 @@ class TestPydanticIntegration:
             model_config = ConfigDict(from_attributes=True)
             url: WebUrl
 
-        orm_obj = OrmLike(url="https://example.com")
+        orm_obj = OrmLike(url="https://example.com/")
         m = ModelWithFromAttributes.model_validate(orm_obj)
         assert isinstance(m.url, WebUrl)
-        assert m.url.root == "https://example.com"
+        assert m.url.root == "https://example.com/"
 
 
 # WebUrl — 失敗理由 (reason) の所有テスト
@@ -184,6 +248,12 @@ class TestWebUrlValidateReason:
             ("", WebUrlInvalidReason.URL_EMPTY),
             ("   ", WebUrlInvalidReason.URL_EMPTY),
             ("https://example.com/" + "a" * 2040, WebUrlInvalidReason.URL_TOO_LONG),
+            # 入力は 270 字だが U+2019 が %E2%80%99 (9字) に展開され 2048 字を超える。
+            pytest.param(
+                "https://example.com/" + "\u2019" * 250,
+                WebUrlInvalidReason.URL_TOO_LONG,
+                id="normalized-over-max-length",
+            ),
             ("ftp://files.example.com", WebUrlInvalidReason.URL_NOT_HTTP),
             ("javascript:alert(1)", WebUrlInvalidReason.URL_NOT_HTTP),
             ("example.com", WebUrlInvalidReason.URL_NOT_HTTP),

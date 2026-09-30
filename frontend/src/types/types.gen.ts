@@ -973,7 +973,8 @@ export type WatchlistIds = {
  * Invariants:
  * - http または https スキームを使用
  * - 有効な URL 構造 (最低でも scheme + host)
- * - トリム後 1-2048 文字
+ * - 値は Pydantic が正規化した文字列で、再検証しても変わらない
+ * - 入力と正規化後の値がともに 1-2048 文字
  * - 生成後は不変
  */
 export type WebUrl = string;

@@ -43,6 +43,10 @@ class TestCanonicalArticleUrlNormalization:
         url = CanonicalArticleUrl("https://example.com/")
         assert url.root == "https://example.com/"
 
+    def test_root_only_url_gets_root_slash(self) -> None:
+        url = CanonicalArticleUrl("https://example.com")
+        assert url.root == "https://example.com/"
+
     def test_removes_fragment(self) -> None:
         url = CanonicalArticleUrl("https://example.com/foo#section")
         assert url.root == "https://example.com/foo"
@@ -124,6 +128,12 @@ class TestCanonicalArticleUrlFromRaw:
             (
                 "https://example.com/" + "a" * (2049 - len("https://example.com/")),
                 WebUrlInvalidReason.URL_TOO_LONG,
+            ),
+            # 入力の長さは追跡用パラメータを除く前に確かめる
+            pytest.param(
+                "https://example.com/a?utm_source=" + "x" * 2040,
+                WebUrlInvalidReason.URL_TOO_LONG,
+                id="too-long-before-tracking-removal",
             ),
         ],
     )
