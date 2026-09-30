@@ -1,7 +1,7 @@
 """検証済み HTTP/HTTPS URL の値オブジェクト。
 
-URL の形式だけを保証し、構文の解析は Pydantic の AnyHttpUrl に委譲する。
-格納される値は元の文字列 (strip 後) で、正規化は行わない。
+URL の形式だけを保証し、構文の解析と正規化は Pydantic の AnyHttpUrl に委譲する。
+格納される値は正規化後の文字列で、送信時の httpx も同じ宛先として解釈する。
 宛先IPの判定は持たず、``app.http`` の送信境界が送信時に行う。
 """
 
@@ -54,7 +54,8 @@ class WebUrl(RootModel[str]):
     Invariants:
     - http または https スキームを使用
     - 有効な URL 構造 (最低でも scheme + host)
-    - トリム後 1-2048 文字
+    - 値は Pydantic が正規化した文字列で、再検証しても変わらない
+    - 入力と正規化後の値がともに 1-2048 文字
     - 生成後は不変
     """
 
@@ -63,7 +64,7 @@ class WebUrl(RootModel[str]):
     @field_validator("root", mode="before")
     @classmethod
     def _validate(cls, v: Any) -> str:
-        """WebUrl の不変条件を検証し strip 済み値を返す。
+        """WebUrl の不変条件を検証し正規化した値を返す。
 
         何が起きたらどの reason を出すかを、この振る舞いの中で示す。raise する
         ``WebUrlInvalidError`` は ``ValueError`` サブクラスなので pydantic が
@@ -79,10 +80,13 @@ class WebUrl(RootModel[str]):
         if len(v) > _MAX_LENGTH:
             raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_TOO_LONG)
         try:
-            _url_adapter.validate_python(v)
+            parsed = _url_adapter.validate_python(v)
         except ValidationError as e:
             raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_NOT_HTTP) from e
-        return v
+        normalized = str(parsed)
+        if len(normalized) > _MAX_LENGTH:
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_TOO_LONG)
+        return normalized
 
     def __str__(self) -> str:
         return self.root
