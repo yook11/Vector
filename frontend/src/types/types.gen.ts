@@ -311,8 +311,8 @@ export type MentionType = 'company' | 'government' | 'academic' | 'product' | 't
 export type NewsSourceCreate = {
     name: SourceName;
     sourceType: SourceType;
-    siteUrl: SafeUrl;
-    endpointUrl: SafeUrl;
+    siteUrl: WebUrl;
+    endpointUrl: WebUrl;
 };
 
 /**
@@ -327,8 +327,8 @@ export type NewsSourceDetail = {
     id: number;
     name: SourceName;
     sourceType: SourceType;
-    siteUrl: SafeUrl;
-    endpointUrl: SafeUrl;
+    siteUrl: WebUrl;
+    endpointUrl: WebUrl;
     /**
      * Isactive
      */
@@ -382,7 +382,7 @@ export type OriginalArticleEmbed = {
      * Title
      */
     title: string;
-    url: SafeUrl;
+    url: WebUrl;
 };
 
 /**
@@ -595,7 +595,7 @@ export type ResearchExternalUrlSource = {
      * Sourceref
      */
     sourceRef: string;
-    url: SafeUrl;
+    url: WebUrl;
     /**
      * Title
      */
@@ -774,21 +774,6 @@ export type ResearchUserMessage = {
     createdAt: string;
     run: ResearchMessageRun;
 };
-
-/**
- * SafeUrl
- *
- * Pydantic によって検証された HTTP/HTTPS URL。
- *
- * Invariants:
- * - http または https スキームを使用
- * - 有効な URL 構造 (最低でも scheme + host)
- * - ホストが IP リテラルなら ``PublicIpAddress`` として valid
- * (例: ``http://169.254.169.254/`` は拒否)
- * - トリム後 1-2048 文字
- * - 生成後は不変
- */
-export type SafeUrl = string;
 
 /**
  * SortOrder
@@ -979,6 +964,19 @@ export type WatchlistIds = {
      */
     ids: Array<number>;
 };
+
+/**
+ * WebUrl
+ *
+ * Pydantic によって検証された HTTP/HTTPS URL。
+ *
+ * Invariants:
+ * - http または https スキームを使用
+ * - 有効な URL 構造 (最低でも scheme + host)
+ * - トリム後 1-2048 文字
+ * - 生成後は不変
+ */
+export type WebUrl = string;
 
 /**
  * WindowHours

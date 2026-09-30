@@ -41,7 +41,7 @@ from app.agent.runs.types import AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 from tests.agent.runs._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
@@ -73,7 +73,7 @@ def _external_result() -> AnswerQuestionResult:
         sources=[
             ExternalUrlSource(
                 source_ref="1",
-                url=SafeUrl("https://example.com/agent-source"),
+                url=WebUrl("https://example.com/agent-source"),
                 title="Agent source",
                 evidence_claim="Agent claim.",
                 source_name="Example",
@@ -183,7 +183,7 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
         sources=[
             ExternalUrlSource(
                 source_ref="1",
-                url=SafeUrl("https://example.com/secret-source-url"),
+                url=WebUrl("https://example.com/secret-source-url"),
                 title="Sensitive source title",
                 evidence_claim="Sensitive evidence claim.",
                 source_name="Example",

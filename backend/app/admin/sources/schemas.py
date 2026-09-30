@@ -5,7 +5,7 @@ from datetime import datetime
 from app.collection.sources.source_name import SourceName
 from app.models.news_source import SourceType
 from app.schemas.base import _CamelBase
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 
 class NewsSourceCreate(_CamelBase):
@@ -13,8 +13,8 @@ class NewsSourceCreate(_CamelBase):
 
     name: SourceName
     source_type: SourceType
-    site_url: SafeUrl
-    endpoint_url: SafeUrl
+    site_url: WebUrl
+    endpoint_url: WebUrl
 
 
 class NewsSourceDetail(_CamelBase):
@@ -23,8 +23,8 @@ class NewsSourceDetail(_CamelBase):
     id: int
     name: SourceName
     source_type: SourceType
-    site_url: SafeUrl
-    endpoint_url: SafeUrl
+    site_url: WebUrl
+    endpoint_url: WebUrl
     is_active: bool
     attribution_label: str | None = None
     created_at: datetime

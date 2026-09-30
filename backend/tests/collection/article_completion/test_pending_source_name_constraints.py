@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 
 @pytest.mark.asyncio
@@ -40,14 +40,14 @@ async def test_source_id_only_update_fails_with_composite_fk_violation(
     src_a = NewsSource(
         name=SourceName("Test FK Source A"),
         source_type=SourceType.RSS,
-        site_url=SafeUrl("https://fk-a.example.com"),
-        endpoint_url=SafeUrl("https://fk-a.example.com/feed"),
+        site_url=WebUrl("https://fk-a.example.com"),
+        endpoint_url=WebUrl("https://fk-a.example.com/feed"),
     )
     src_b = NewsSource(
         name=SourceName("Test FK Source B"),
         source_type=SourceType.RSS,
-        site_url=SafeUrl("https://fk-b.example.com"),
-        endpoint_url=SafeUrl("https://fk-b.example.com/feed"),
+        site_url=WebUrl("https://fk-b.example.com"),
+        endpoint_url=WebUrl("https://fk-b.example.com/feed"),
     )
     db_session.add_all([src_a, src_b])
     await db_session.flush()

@@ -23,7 +23,7 @@ class AcquisitionConversionDefect(StrEnum):
     value はそのまま audit の ``outcome_code`` に焼かれる (analysis BC の
     ``AnalyzableArticleDefect`` と同形)。URL 欠落は acquisition の取得不成立、
     非空 URL の不正は責任元 ``CanonicalArticleUrl`` の不変条件違反として分ける。
-    後者は ``SafeUrlInvalidReason`` を直接運ぶため、ここには載らない。
+    後者は ``WebUrlInvalidReason`` を直接運ぶため、ここには載らない。
     """
 
     URL_MISSING = "acquisition_conversion_url_missing"

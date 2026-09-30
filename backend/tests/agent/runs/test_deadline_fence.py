@@ -28,7 +28,7 @@ from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -124,7 +124,7 @@ def _answer_result() -> AnswerQuestionResult:
         sources=[
             ExternalUrlSource(
                 source_ref="1",
-                url=SafeUrl("https://example.com/deadline-fence"),
+                url=WebUrl("https://example.com/deadline-fence"),
                 title="Deadline fence source",
                 evidence_claim="Deadline fence evidence.",
                 source_name="Example",

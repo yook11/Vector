@@ -39,7 +39,7 @@ from app.agent.evidence_collection.external_search.metrics import (
     record_external_hit_dropped,
     record_external_hit_truncated,
 )
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 __all__ = [
     "AgentCoreWebSearchGateway",
@@ -305,9 +305,9 @@ def _hit_from_result(result: object) -> ExternalSearchHit | None:
         record_external_hit_dropped(reason="title_missing")
         return None
 
-    url = _safe_url(result.get("url"))
+    url = _web_url(result.get("url"))
     if url is None:
-        record_external_hit_dropped(reason="url_unsafe")
+        record_external_hit_dropped(reason="url_invalid")
         return None
 
     return ExternalSearchHit(
@@ -343,9 +343,9 @@ def _clipped_content(value: object) -> str | None:
     return value[:EXTERNAL_CONTENT_MAX_CHARS]
 
 
-def _safe_url(value: object) -> SafeUrl | None:
+def _web_url(value: object) -> WebUrl | None:
     try:
-        return SafeUrl.model_validate(value)
+        return WebUrl.model_validate(value)
     except ValidationError:
         return None
 

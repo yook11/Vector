@@ -23,9 +23,9 @@ from app.http.destination_policy import HostBlockedError
 from app.http.destination_resolution import HostResolutionError
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import HttpTransportFailureReason, HttpTransportStage
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
-_URL = SafeUrl("https://example.com:8443/news/article?edition=1")
+_URL = WebUrl("https://example.com:8443/news/article?edition=1")
 
 
 class BodyStream(httpx.AsyncByteStream):

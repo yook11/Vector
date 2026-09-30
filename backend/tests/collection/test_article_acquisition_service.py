@@ -67,8 +67,8 @@ def _rejection_fetched(url: str = "https://venturebeat.com/x") -> FetchedArticle
 def _url_rejection_fetched(url: str = "ftp://example.com/secret") -> FetchedArticle:
     """real convert → URL VO 失敗 (scheme 不正) の ``AcquisitionConversionRejection``。
 
-    title は揃うが SafeUrl の形式検証で ``url_not_http`` 棄却になる。
-    ``CanonicalArticleUrlInvalidError`` → ``SafeUrlInvalidError`` の cause 連鎖を
+    title は揃うが WebUrl の形式検証で ``url_not_http`` 棄却になる。
+    ``CanonicalArticleUrlInvalidError`` → ``WebUrlInvalidError`` の cause 連鎖を
     監査が辿れる (error_chain 深さ>1) ことを固定するための入力。
     """
     return FetchedArticle(
@@ -477,9 +477,9 @@ async def test_invalid_url_rejection_burns_url_vo_reason_with_cause_chain(
 ) -> None:
     """URL VO 失敗は責任元 reason を verbatim で焼き、cause 連鎖を監査に残す。
 
-    http/https 以外の URL は SafeUrl の形式検証で ``url_not_http`` に精密分類され
+    http/https 以外の URL は WebUrl の形式検証で ``url_not_http`` に精密分類され
     (旧 ``INVALID_URL`` 潰しを解消)、``CanonicalArticleUrlInvalidError`` →
-    ``SafeUrlInvalidError`` の cause が ``error_class`` / ``error_chain`` (深さ>1)
+    ``WebUrlInvalidError`` の cause が ``error_class`` / ``error_chain`` (深さ>1)
     として残る。
     """
     svc = ArticleAcquisitionService(
@@ -500,7 +500,7 @@ async def test_invalid_url_rejection_burns_url_vo_reason_with_cause_chain(
     )
     assert row.outcome_code == "url_not_http"
     assert row.error_class.endswith(".CanonicalArticleUrlInvalidError")
-    # URL VO 失敗は下位 SafeUrl 失敗を __cause__ に連鎖 → chain 深さ>1 (非空虚)。
+    # URL VO 失敗は下位 WebUrl 失敗を __cause__ に連鎖 → chain 深さ>1 (非空虚)。
     assert row.payload["error_chain"] is not None
     assert len(row.payload["error_chain"]) > 1
 

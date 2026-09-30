@@ -23,7 +23,7 @@ from app.http.error_mapping import (
     http_transport_error_from_exception,
 )
 from app.http.external import make_external_async_client
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 _USER_AGENT = "VectorBot/1.0 (+https://github.com/vector-news)"
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
@@ -105,7 +105,7 @@ async def _read_body(response: httpx.Response, *, resource: FetchResource) -> by
     return bytes(body)
 
 
-async def fetch_article_response(url: SafeUrl) -> RawResponse:
+async def fetch_article_response(url: WebUrl) -> RawResponse:
     """取得ルールを確認し、記事の応答を抽出処理へ渡せる素材として返す。"""
     article_url = str(url)
     parsed = urlsplit(article_url)

@@ -107,9 +107,9 @@ class AgentMessageSource(Base):
             "source_ref <> ''", name="ck_agent_message_sources_source_ref_not_empty"
         ),
         CheckConstraint("title <> ''", name="ck_agent_message_sources_title_not_empty"),
-        # external_url の恒常条件 (設計判断 8)。url は SafeUrl を正とし DB では
+        # external_url の恒常条件 (設計判断 8)。url は WebUrl を正とし DB では
         # scheme(大小無視)/2048 字の粗い backstop。evidence_claim(引用) 必須、
-        # analyzed_article_id は持たない。完全な SafeUrl 検証は slice 2 の SafeUrl 型。
+        # analyzed_article_id は持たない。完全な WebUrl 検証は slice 2 の WebUrl 型。
         CheckConstraint(
             "kind <> 'external_url' OR ("
             "url IS NOT NULL AND url ~* '^https?://' AND char_length(url) <= 2048 "

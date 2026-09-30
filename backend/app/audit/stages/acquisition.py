@@ -139,7 +139,7 @@ class SourceAcquisitionAuditRepository:
     ) -> None:
         """per-entry 変換不能を rejected として記録する。
 
-        ``outcome_code`` は責任元 VO の reason を verbatim で焼く (URL=SafeUrl 由来 /
+        ``outcome_code`` は責任元 VO の reason を verbatim で焼く (URL=WebUrl 由来 /
         title 欠落・想定外=acquisition 由来)。``error_class`` / ``error_chain`` は
         原因例外 ``cause`` から導く (title 欠落は cause 無しなので NULL)。
         """

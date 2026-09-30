@@ -20,7 +20,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 if TYPE_CHECKING:
     # 件数上限の正本をこのモジュールが持つため、selection側が実行時にこちらを
@@ -97,7 +97,7 @@ class ExternalSearchEvidence(BaseModel):
         min_length=1,
         max_length=EVIDENCE_WHY_SELECTED_MAX_CHARS,
     )
-    url: SafeUrl
+    url: WebUrl
     title: str = Field(min_length=1)
     content: str | None = None
     published_at: datetime | None = None

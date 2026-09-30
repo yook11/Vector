@@ -91,7 +91,7 @@ describe("NewSourceSchema", () => {
 
   describe("siteUrl / endpointUrl", () => {
     it("rejects non-http(s) schemes (defense-in-depth)", () => {
-      // backend SafeUrl も AnyHttpUrl で同等の拒否を行う
+      // backend WebUrl も AnyHttpUrl で同等の拒否を行う
       for (const bad of [
         "javascript:alert(1)",
         "data:text/html,<script>",

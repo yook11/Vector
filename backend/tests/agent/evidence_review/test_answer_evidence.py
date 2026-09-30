@@ -25,7 +25,7 @@ from app.agent.evidence_review.answer_evidence import (
 )
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
 from app.agent.evidence_review.selection import EvidenceReviewerResponse
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 from tests.agent.evidence_review._builders import (
     AS_OF,
     collected_task,
@@ -471,7 +471,7 @@ def test_answer_evidence_factory_maps_inputs_to_internal_evidence_fields() -> No
 def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> None:
     """外部ヒット・選択結果・task情報から、回答用外部Evidenceの各fieldを復元する。"""
     hit = ExternalSearchHit(
-        url=SafeUrl("https://example.com/external-story"),
+        url=WebUrl("https://example.com/external-story"),
         title="external title",
         content="external content",
         source_name="Example News",

@@ -73,7 +73,7 @@ from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 from tests.agent.runs._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
@@ -427,7 +427,7 @@ def _external_result() -> AnswerQuestionResult:
         sources=[
             ExternalUrlSource(
                 source_ref="1",
-                url=SafeUrl("https://example.com/agent-source"),
+                url=WebUrl("https://example.com/agent-source"),
                 title="Agent source",
                 evidence_claim="Agent claim.",
                 source_name="Example",

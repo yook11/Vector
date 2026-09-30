@@ -10,7 +10,7 @@ from fastapi import Query
 from pydantic import AwareDatetime, Field, StringConstraints
 
 from app.schemas.base import MAX_PER_PAGE, PaginationParams, _CamelBase
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 ResearchQuestion = Annotated[
     str,
@@ -34,7 +34,7 @@ class ResearchInternalArticleSource(_CamelBase):
 class ResearchExternalUrlSource(_CamelBase):
     kind: Literal["external_url"]
     source_ref: str
-    url: SafeUrl
+    url: WebUrl
     title: str
     source_name: str | None
     published_at: datetime | None

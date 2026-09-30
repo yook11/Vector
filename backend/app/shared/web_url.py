@@ -23,8 +23,8 @@ _url_adapter = TypeAdapter(AnyHttpUrl)
 _MAX_LENGTH = 2048
 
 
-class SafeUrlInvalidReason(StrEnum):
-    """SafeUrl 検証の失敗理由。値だけで原因が読めるよう監査に焼く粒度にする。"""
+class WebUrlInvalidReason(StrEnum):
+    """WebUrl 検証の失敗理由。値だけで原因が読めるよう監査に焼く粒度にする。"""
 
     URL_NOT_A_STRING = "url_not_a_string"
     URL_EMPTY = "url_empty"
@@ -32,23 +32,23 @@ class SafeUrlInvalidReason(StrEnum):
     URL_NOT_HTTP = "url_not_http"
 
 
-class SafeUrlInvalidError(ValueError):
-    """SafeUrl として検証できない入力。reason で失敗段を構造化する。
+class WebUrlInvalidError(ValueError):
+    """WebUrl として検証できない入力。reason で失敗段を構造化する。
 
-    ``ValueError`` サブクラスなので ``SafeUrl`` の validator 内で raise すると
-    pydantic が ``ValidationError`` にラップする (既存 ``SafeUrl(x)`` 契約維持)。
+    ``ValueError`` サブクラスなので ``WebUrl`` の validator 内で raise すると
+    pydantic が ``ValidationError`` にラップする (既存 ``WebUrl(x)`` 契約維持)。
     ``CanonicalArticleUrl.from_raw`` は validator を直接呼び reason を型で取る。
     URL 値などの input は載せず reason タグのみを監査へ流す (PII フリー)。
     """
 
-    MESSAGE: ClassVar[str] = "value is not a valid safe URL"
+    MESSAGE: ClassVar[str] = "value is not a valid web URL"
 
-    def __init__(self, *, reason: SafeUrlInvalidReason) -> None:
+    def __init__(self, *, reason: WebUrlInvalidReason) -> None:
         self.reason = reason
         super().__init__(f"{self.MESSAGE}: {reason}")
 
 
-class SafeUrl(RootModel[str]):
+class WebUrl(RootModel[str]):
     """Pydantic によって検証された HTTP/HTTPS URL。
 
     Invariants:
@@ -63,29 +63,29 @@ class SafeUrl(RootModel[str]):
     @field_validator("root", mode="before")
     @classmethod
     def _validate(cls, v: Any) -> str:
-        """SafeUrl の不変条件を検証し strip 済み値を返す。
+        """WebUrl の不変条件を検証し strip 済み値を返す。
 
         何が起きたらどの reason を出すかを、この振る舞いの中で示す。raise する
-        ``SafeUrlInvalidError`` は ``ValueError`` サブクラスなので pydantic が
-        ``ValidationError`` にラップする (``SafeUrl(x)`` の契約維持)。
+        ``WebUrlInvalidError`` は ``ValueError`` サブクラスなので pydantic が
+        ``ValidationError`` にラップする (``WebUrl(x)`` の契約維持)。
         ``CanonicalArticleUrl.from_raw`` は本 validator を直接呼び reason を型で
         受け取る (pydantic 非経由で ``__cause__`` も保たれる)。
         """
         if not isinstance(v, str):
-            raise SafeUrlInvalidError(reason=SafeUrlInvalidReason.URL_NOT_A_STRING)
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_NOT_A_STRING)
         v = v.strip()
         if not v:
-            raise SafeUrlInvalidError(reason=SafeUrlInvalidReason.URL_EMPTY)
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_EMPTY)
         if len(v) > _MAX_LENGTH:
-            raise SafeUrlInvalidError(reason=SafeUrlInvalidReason.URL_TOO_LONG)
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_TOO_LONG)
         try:
             _url_adapter.validate_python(v)
         except ValidationError as e:
-            raise SafeUrlInvalidError(reason=SafeUrlInvalidReason.URL_NOT_HTTP) from e
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_NOT_HTTP) from e
         return v
 
     def __str__(self) -> str:
         return self.root
 
     def __repr__(self) -> str:
-        return f"SafeUrl({self.root!r})"
+        return f"WebUrl({self.root!r})"

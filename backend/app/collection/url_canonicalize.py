@@ -23,7 +23,7 @@ def canonicalize_url(raw: str) -> str:
     ``analyzable_articles.source_url`` / ``incomplete_articles.url`` 共通の正規化。
     冪等: ``canonicalize_url(canonicalize_url(x)) == canonicalize_url(x)``。
     入力が空文字や scheme 欠落でも例外は投げず、urlparse の挙動に従う
-    (caller 側で SafeUrl 等の validator を経由している前提)。
+    (caller 側で WebUrl 等の validator を経由している前提)。
     """
     parsed = urlparse(raw)
 
