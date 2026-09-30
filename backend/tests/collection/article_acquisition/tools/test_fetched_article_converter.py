@@ -33,8 +33,8 @@ from app.collection.domain.article_limits import (
     ARTICLE_BODY_MAX_LENGTH,
     ARTICLE_BODY_MIN_LENGTH,
 )
-from app.collection.domain.canonical_article_url import (
-    CanonicalArticleUrlInvalidError,
+from app.collection.domain.article_url import (
+    ArticleUrlInvalidError,
 )
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
 from app.collection.sources.article_completion_policy import (
@@ -212,7 +212,7 @@ def test_invalid_url_rejection_carries_url_invalid_cause() -> None:
     連鎖する (監査が error_chain を深さ>1 で辿れる)。"""
     result = _call(url="ftp://example.com/secret")
     assert isinstance(result, AcquisitionConversionRejection)
-    assert isinstance(result.cause, CanonicalArticleUrlInvalidError)
+    assert isinstance(result.cause, ArticleUrlInvalidError)
     assert isinstance(result.cause.__cause__, ValueError)
 
 

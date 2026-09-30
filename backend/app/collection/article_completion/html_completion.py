@@ -8,7 +8,7 @@ from app.collection.domain.analyzable_article import (
     AnalyzableArticle,
     QualityTooLow,
 )
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
 
@@ -19,7 +19,7 @@ def complete_with_html(
     html: ScrapedContent,
     *,
     source_id: int,
-    source_url: CanonicalArticleUrl,
+    source_url: ArticleUrl,
 ) -> AnalyzableArticle:
     """ScrapedContent を観測値と merge し AnalyzableArticle に昇格する。"""
     obs_title = observed.title.value if observed.title is not None else None

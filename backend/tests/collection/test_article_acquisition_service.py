@@ -21,7 +21,7 @@ from app.collection.article_acquisition.reader.read_errors import (
 )
 from app.collection.article_acquisition.service import ArticleAcquisitionService
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.events import AnalyzableArticleCreated
 from app.collection.sources.article_completion_policy import (
@@ -68,7 +68,7 @@ def _url_rejection_fetched(url: str = "ftp://example.com/secret") -> FetchedArti
     """real convert → URL VO 失敗 (scheme 不正) の ``AcquisitionConversionRejection``。
 
     title は揃うが WebUrl の形式検証で ``url_not_http`` 棄却になる。
-    ``CanonicalArticleUrlInvalidError`` → ``WebUrlInvalidError`` の cause 連鎖を
+    ``ArticleUrlInvalidError`` → ``WebUrlInvalidError`` の cause 連鎖を
     監査が辿れる (error_chain 深さ>1) ことを固定するための入力。
     """
     return FetchedArticle(
@@ -238,7 +238,7 @@ async def test_pattern_h_skips_when_article_already_exists(
 
     feed 再露出時の HTML fetch 反復を抑える実用的 idempotency の検証。
     """
-    canonical = CanonicalArticleUrl("https://techcrunch.com/known")
+    canonical = ArticleUrl("https://techcrunch.com/known")
     existing = AnalyzableArticleRecord(
         original_title="Already there",
         original_content="x" * 100,
@@ -315,7 +315,7 @@ async def test_canonicalization_dedupes_tracking_query(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """canonicalize_url が tracking parameter / trailing slash を吸収する。
+    """``ArticleUrl`` の正規化が tracking parameter / trailing slash を吸収する。
 
     異なる原始 URL でも canonicalize 後が同じなら
     ``analyzable_articles.source_url UNIQUE`` で 2 度目は弾かれ ``known_url`` skip。
@@ -478,7 +478,7 @@ async def test_invalid_url_rejection_burns_url_vo_reason_with_cause_chain(
     """URL VO 失敗は責任元 reason を verbatim で焼き、cause 連鎖を監査に残す。
 
     http/https 以外の URL は WebUrl の形式検証で ``url_not_http`` に精密分類され
-    (旧 ``INVALID_URL`` 潰しを解消)、``CanonicalArticleUrlInvalidError`` →
+    (旧 ``INVALID_URL`` 潰しを解消)、``ArticleUrlInvalidError`` →
     ``WebUrlInvalidError`` の cause が ``error_class`` / ``error_chain`` (深さ>1)
     として残る。
     """
@@ -499,7 +499,7 @@ async def test_invalid_url_rejection_burns_url_vo_reason_with_cause_chain(
         .one()
     )
     assert row.outcome_code == "url_not_http"
-    assert row.error_class.endswith(".CanonicalArticleUrlInvalidError")
+    assert row.error_class.endswith(".ArticleUrlInvalidError")
     # URL VO 失敗は下位 WebUrl 失敗を __cause__ に連鎖 → chain 深さ>1 (非空虚)。
     assert row.payload["error_chain"] is not None
     assert len(row.payload["error_chain"]) > 1
@@ -706,7 +706,7 @@ async def test_known_url_observed_writes_no_succeeded(
     vb_source: NewsSource,
 ) -> None:
     """既知 URL を補完待ち経路で受けると pre-check skip され SUCCEEDED を焼かない。"""
-    canonical = CanonicalArticleUrl("https://techcrunch.com/known")
+    canonical = ArticleUrl("https://techcrunch.com/known")
     db_session.add(
         AnalyzableArticleRecord(
             original_title="Already there",

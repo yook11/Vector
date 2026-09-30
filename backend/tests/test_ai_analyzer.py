@@ -38,6 +38,7 @@ from app.analysis.curation.service import (
     CurationService,
 )
 from app.analysis.logging import create_article_analysis_logger
+from app.collection.domain.article_url import ArticleUrl
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -131,7 +132,7 @@ async def _create_article_with_extraction(
     """Stage 1 完了済みの記事（article + extraction）を作成するヘルパー。"""
     article = AnalyzableArticleRecord(
         source_id=source.id,
-        source_url=url,
+        source_url=ArticleUrl(url),
         original_title=title,
         original_content="Content.",
         published_at=datetime.now(UTC),

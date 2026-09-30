@@ -10,7 +10,7 @@ from importlib import import_module
 
 import httpx
 
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.source_name import SourceName
@@ -55,7 +55,7 @@ class PendingArticle:
 async def seed_pending(database, url, *, status="open", title="Observed target title"):
     observed = ObservedArticle.build(
         source_name=SourceName("VentureBeat"),
-        source_url=CanonicalArticleUrl(url),
+        source_url=ArticleUrl(url),
         title=title,
         body=None,
         published_at=PublishedAt(PUBLISHED_AT),

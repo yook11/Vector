@@ -19,7 +19,7 @@ from app.collection.domain.article_limits import (
     ARTICLE_TITLE_MAX_LENGTH,
     ARTICLE_TITLE_MIN_LENGTH,
 )
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.value_objects import PublishedAt
 
 logger = structlog.get_logger(__name__)
@@ -120,7 +120,7 @@ class AnalyzableArticle(BaseModel):
     )
     published_at: PublishedAt
     source_id: int = Field(gt=0)
-    source_url: CanonicalArticleUrl
+    source_url: ArticleUrl
 
     @classmethod
     def try_build(
@@ -130,7 +130,7 @@ class AnalyzableArticle(BaseModel):
         body: str | None,
         published_at: PublishedAt | None,
         source_id: int,
-        source_url: CanonicalArticleUrl,
+        source_url: ArticleUrl,
     ) -> Self | None:
         """素材から不変条件を満たすときのみ ``AnalyzableArticle`` を構築する。
 
@@ -163,7 +163,7 @@ class AnalyzableArticle(BaseModel):
         body: str | None,
         published_at: PublishedAt | None,
         source_id: int,
-        source_url: CanonicalArticleUrl,
+        source_url: ArticleUrl,
     ) -> Self | QualityTooLow:
         """揃った材料から構築を試み、品質基準に届かなければ理由を値で返す。
 

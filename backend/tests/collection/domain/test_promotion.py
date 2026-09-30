@@ -25,7 +25,7 @@ from app.collection.domain.analyzable_article import (
     AnalyzableArticle,
     AnalyzableArticleDefect,
 )
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -38,7 +38,7 @@ from app.collection.sources.article_completion_policy import (
 )
 from app.collection.sources.source_name import SourceName
 
-_URL = CanonicalArticleUrl("https://example.com/article")
+_URL = ArticleUrl("https://example.com/article")
 _OBS_PUB = PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC))
 _HTML_PUB = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 

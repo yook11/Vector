@@ -22,9 +22,9 @@ from app.collection.article_acquisition.errors import AcquisitionConversionDefec
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_TITLE_MAX_LENGTH
-from app.collection.domain.canonical_article_url import (
-    CanonicalArticleUrl,
-    CanonicalArticleUrlInvalidError,
+from app.collection.domain.article_url import (
+    ArticleUrl,
+    ArticleUrlInvalidError,
 )
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
@@ -43,7 +43,7 @@ class AcquisitionConversionRejection:
     title 欠落・想定外=``AcquisitionConversionDefect``、非空 URL 不正=
     ``WebUrlInvalidReason``)、監査は再分類せずそれを焼くだけ。``cause`` は原因例外
     を保持し監査が FQN / chain を辿れる (非空 URL 不正=
-    ``CanonicalArticleUrlInvalidError`` / 想定外=本当のバグ / 欠落=None)。
+    ``ArticleUrlInvalidError`` / 想定外=本当のバグ / 欠落=None)。
     ``raw_url`` は非空なら素の値、欠落なら ``None`` で、redact は監査側の責務。
     """
 
@@ -156,8 +156,8 @@ def convert_fetched_article(
         )
 
     try:
-        source_url = CanonicalArticleUrl.from_raw(fetched.url)
-    except CanonicalArticleUrlInvalidError as err:
+        source_url = ArticleUrl.from_raw(fetched.url)
+    except ArticleUrlInvalidError as err:
         return _reject(
             outcome_code=err.reason.value,
             fetched=fetched,

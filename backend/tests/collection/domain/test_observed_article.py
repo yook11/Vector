@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedArticleInvalidError,
@@ -37,7 +37,7 @@ _PUB = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 def _observed() -> ObservedArticle:
     return ObservedArticle(
         source_name=SourceName("TechCrunch"),
-        source_url=CanonicalArticleUrl(_URL),
+        source_url=ArticleUrl(_URL),
         title=ObservedField(value="T", origin=ObservedOrigin.feed),
         body=None,
         published_at=ObservedField(value=_PUB, origin=ObservedOrigin.sitemap),
@@ -81,7 +81,7 @@ def test_try_build_restores_authoritative_identity() -> None:
     restored = ObservedArticle.try_build(
         observed_article=observed_article,
         source_name=SourceName("TechCrunch"),
-        source_url=CanonicalArticleUrl(_URL),
+        source_url=ArticleUrl(_URL),
     )
 
     assert restored == original
@@ -93,7 +93,7 @@ def test_try_build_raises_domain_error_for_invalid_shape() -> None:
         ObservedArticle.try_build(
             observed_article={"title": {"value": "x", "origin": "invalid"}},
             source_name=SourceName("TechCrunch"),
-            source_url=CanonicalArticleUrl(_URL),
+            source_url=ArticleUrl(_URL),
         )
     assert exc_info.value.reason is ObservedArticleInvalidReason.TITLE_INVALID
 
@@ -181,7 +181,7 @@ class TestObservedArticleInvalidReason:
             ObservedArticle.try_build(
                 observed_article=None,  # type: ignore[arg-type]
                 source_name=SourceName("TechCrunch"),
-                source_url=CanonicalArticleUrl(_URL),
+                source_url=ArticleUrl(_URL),
             )
         assert (
             exc_info.value.reason
@@ -196,7 +196,7 @@ class TestObservedArticleInvalidReason:
                     "title": {"value": "x", "origin": "secret-internal-marker"}
                 },
                 source_name=SourceName("TechCrunch"),
-                source_url=CanonicalArticleUrl(_URL),
+                source_url=ArticleUrl(_URL),
             )
         assert "secret-internal-marker" not in str(exc_info.value)
         assert str(exc_info.value) == "observed article input is invalid: title_invalid"

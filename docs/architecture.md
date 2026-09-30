@@ -191,7 +191,7 @@ class AnalyzableArticle(BaseModel):
     body: str = Field(min_length=50, max_length=200_000)    # 本文は必須
     published_at: PublishedAt                                # 公開日時は必須
     source_id: int = Field(gt=0)
-    source_url: CanonicalArticleUrl
+    source_url: ArticleUrl
 
     @classmethod
     def try_build(cls, *, body: str | None, published_at: PublishedAt | None, ...) -> AnalyzableArticle | None:

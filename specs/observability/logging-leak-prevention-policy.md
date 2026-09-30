@@ -92,7 +92,7 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 | userinfo | 落とす |
 | フラグメント | 落とす |
 
-- 追跡用パラメーターの除去は、値の発生元である `CanonicalArticleUrl` の正規化に任せる。log_policy から collection の処理を参照しない。
+- 追跡用パラメーターの除去は、値の発生元である `ArticleUrl` の正規化に任せる。log_policy から collection の処理を参照しない。
 - userinfo は、URL の分解で除かれるタブ・改行を挟んでいても残さない。
 - userinfo もフラグメントもない値は、URL の表記の揃え (scheme の小文字化、タブ・改行の除去など) を除き変更しない。URL として分解できない値は `[unsupported]` にする。
 - 例: `https://user:pass@example.com/a/1?p=123#top` → `https://example.com/a/1?p=123`

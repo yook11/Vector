@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 
 
@@ -25,7 +25,7 @@ class AnalyzableArticleRepository:
         """``AnalyzableArticle`` を INSERT し新規 ``id`` を返す。
 
         ``ON CONFLICT DO NOTHING`` で並行レース / 既知 URL を吸収し、新規行が
-        作れなかった場合は ``None`` を返す。``source_url`` は ``CanonicalArticleUrl``
+        作れなかった場合は ``None`` を返す。``source_url`` は ``ArticleUrl``
         なので再正規化不要。commit は呼び出し側 (Service) が行う。
         """
         stmt = (
@@ -43,7 +43,7 @@ class AnalyzableArticleRepository:
         row = (await self._session.execute(stmt)).first()
         return row.id if row is not None else None
 
-    async def exists_by_source_url(self, source_url: CanonicalArticleUrl) -> bool:
+    async def exists_by_source_url(self, source_url: ArticleUrl) -> bool:
         """``source_url`` を持つ永続化済み行が既に存在するかを軽量確認する。
 
         補完待ち獲得の pre-check 用 (feed 再露出時に既知 URL の pending 化を回避し、

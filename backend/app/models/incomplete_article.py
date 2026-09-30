@@ -31,10 +31,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.sources.source_name import SourceName
 from app.models.base import Base
-from app.models.types import SourceNameType, WebUrlType
-from app.shared.web_url import WebUrl
+from app.models.types import ArticleUrlType, SourceNameType
 
 
 class IncompleteArticle(Base):
@@ -53,7 +53,6 @@ class IncompleteArticle(Base):
     - closed は ``ready_at`` を NULL でも値持ちでも許容 (再試行しないので無視される)
 
     ``url`` の UNIQUE が analyzable_articles と pending の cross-table dedup の物理保証
-    (caller は canonicalize 済み URL を渡すこと)。
     """
 
     __tablename__ = "incomplete_articles"
@@ -113,7 +112,7 @@ class IncompleteArticle(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    url: Mapped[WebUrl] = mapped_column(WebUrlType, nullable=False)
+    url: Mapped[ArticleUrl] = mapped_column(ArticleUrlType, nullable=False)
     source_id: Mapped[int] = mapped_column(
         ForeignKey("news_sources.id", ondelete="RESTRICT"),
     )

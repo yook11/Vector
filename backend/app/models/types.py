@@ -12,7 +12,7 @@ from sqlalchemy import String
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.sources.source_name import SourceName
 from app.shared.web_url import WebUrl
 
@@ -39,13 +39,7 @@ class SourceNameType(TypeDecorator[SourceName]):
 
 
 class WebUrlType(TypeDecorator[WebUrl]):
-    """WebUrl <-> VARCHAR(2048).
-
-    ``CanonicalArticleUrl`` も同じ列に書き込めるように bind 側で受容する。
-    canonical 値は WebUrl の不変条件を満たすため、DB 側の物理表現は変わらず、
-    Repository signature を ``CanonicalArticleUrl`` に上げても ORM 列の型は
-    WebUrl のままで透過処理できる (記事 identity の SSoT を型に寄せる目的)。
-    """
+    """WebUrl <-> VARCHAR(2048)."""
 
     impl = String(2048)
     cache_ok = True
@@ -53,17 +47,34 @@ class WebUrlType(TypeDecorator[WebUrl]):
     def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
         if value is None:
             return None
-        if isinstance(value, CanonicalArticleUrl):
-            return value.root
         if isinstance(value, WebUrl):
             return value.root
         if isinstance(value, str):
             return WebUrl(value).root
-        raise TypeError(
-            f"Expected WebUrl, CanonicalArticleUrl or str, got {type(value).__name__}"
-        )
+        raise TypeError(f"Expected WebUrl or str, got {type(value).__name__}")
 
     def process_result_value(self, value: Any, dialect: Dialect) -> WebUrl | None:
         if value is None:
             return None
         return WebUrl(value)
+
+
+class ArticleUrlType(TypeDecorator[ArticleUrl]):
+    """ArticleUrl <-> VARCHAR(2048)."""
+
+    impl = String(2048)
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, ArticleUrl):
+            return value.root
+        if isinstance(value, str):
+            return ArticleUrl(value).root
+        raise TypeError(f"Expected ArticleUrl or str, got {type(value).__name__}")
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> ArticleUrl | None:
+        if value is None:
+            return None
+        return ArticleUrl(value)

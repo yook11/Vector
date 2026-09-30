@@ -2,7 +2,7 @@
 
 Stage 1 (article_acquisition) の ``incomplete_articles`` 投入 (``status='open'``
 INSERT) の振る舞いを ``UNIQUE(url)`` と合わせて検証する。``url``
-(``CanonicalArticleUrl`` 型で canonical 性を構造保証) が記事 identity の
+(``ArticleUrl`` 型で正規化済みであることを構造保証) が記事 identity の
 唯一の authoritative。Stage 2 の claim/sweep/状態遷移は
 ``article_completion/test_repository.py`` 側で検証する。
 """
@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -33,7 +33,7 @@ def _observed(
 ) -> ObservedArticle:
     return ObservedArticle(
         source_name=source_name,
-        source_url=CanonicalArticleUrl(url),
+        source_url=ArticleUrl(url),
         title=ObservedField(value=title, origin=ObservedOrigin.feed),
         published_at=ObservedField(
             value=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
@@ -92,7 +92,7 @@ async def test_enqueue_writes_identity_in_columns_not_jsonb(
 
     Stage 1 writer 1 回呼んだ後の同一行の状態を 1 fixture で語る。
     """
-    url = CanonicalArticleUrl("https://example.com/p/url-only")
+    url = ArticleUrl("https://example.com/p/url-only")
     enqueue = IncompleteArticleRepository(db_session)
     incomplete_article_id = await enqueue.save(
         _observed(url=str(url), source_name=sample_source.name),
