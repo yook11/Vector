@@ -217,6 +217,9 @@ jobs:
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_agent') THEN
               CREATE ROLE vector_agent NOLOGIN;
             END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_investigation') THEN
+              CREATE ROLE vector_investigation NOLOGIN;
+            END IF;
           END \$\$;
           EOF
 
