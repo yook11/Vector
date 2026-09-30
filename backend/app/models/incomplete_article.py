@@ -33,8 +33,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.collection.sources.source_name import SourceName
 from app.models.base import Base
-from app.models.types import SafeUrlType, SourceNameType
-from app.shared.security.safe_url import SafeUrl
+from app.models.types import SourceNameType, WebUrlType
+from app.shared.web_url import WebUrl
 
 
 class IncompleteArticle(Base):
@@ -113,7 +113,7 @@ class IncompleteArticle(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    url: Mapped[SafeUrl] = mapped_column(SafeUrlType, nullable=False)
+    url: Mapped[WebUrl] = mapped_column(WebUrlType, nullable=False)
     source_id: Mapped[int] = mapped_column(
         ForeignKey("news_sources.id", ondelete="RESTRICT"),
     )

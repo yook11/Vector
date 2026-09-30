@@ -17,7 +17,7 @@ from pydantic import (
 )
 
 from app.agent.runs.execution import StopReason
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 __all__ = [
     "AnswerDeltaReporter",
@@ -90,7 +90,7 @@ class ExternalUrlSource(BaseModel):
 
     kind: Literal["external_url"] = "external_url"
     source_ref: str = Field(min_length=1)
-    url: SafeUrl
+    url: WebUrl
     title: str = Field(min_length=1)
     evidence_claim: NonBlankText
     published_at: datetime | None = None

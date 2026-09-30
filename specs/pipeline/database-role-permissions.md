@@ -51,6 +51,7 @@ DMLはSELECT・INSERT・UPDATE・DELETEを表す。
 | vector_agent | public.agent_runs | SELECT・UPDATE |
 | vector_agent | public.agent_messages・agent_message_sources・query_embedding_cache | SELECT・INSERT |
 | vector_agent | public.agent_user_daily_quotas | SELECT、used_count列のUPDATE |
+| vector_investigation | public内の全テーブル | SELECT |
 
 RelayのSELECT列はevent_id・event_type・schema_version・payload・occurred_at・published_at・next_attempt_at・attempt_count・lease_token・leased_until・delivery_stopped_at。
 UPDATE列はlease_token・leased_until・attempt_count・published_at・next_attempt_at・delivery_stopped_at・delivery_stop_reason。
@@ -60,7 +61,7 @@ delivery_stop_reasonは更新だけを許可する。表全体へのSELECT／UPD
 テーブル操作はDML・TRUNCATE・REFERENCES・TRIGGER・MAINTAIN、列操作はSELECT・INSERT・UPDATE・REFERENCESを照合する。
 許可一覧にない操作は禁止し、権限の再付与（GRANT OPTION）も禁止する。
 明示したCollect・Relay・記事分析・backfill・API・Insights・agentのテーブル・列が存在することも確認し、存在しない対象が収集から消えて合格することを防ぐ。
-新しいテーブルも実DBのカタログから収集するため、Auth/Appは担当schemaのDMLが必要で、Collect・Relay・記事分析・backfill・API・Insights・agentは未列挙なら禁止となる。
+新しいテーブルも実DBのカタログから収集するため、Auth/Appは担当schemaのDML、調査はpublicのSELECTが必要で、Collect・Relay・記事分析・backfill・API・Insights・agentは未列挙なら禁止となる。
 将来オブジェクトを生成するDEFAULT PRIVILEGESそのものの試験ではなく、対象コードの全migration適用後の権限を検証する。
 
 ## 採番と管理権限
@@ -75,6 +76,7 @@ delivery_stop_reasonは更新だけを許可する。表全体へのSELECT／UPD
 - API: news_sourcesに所有されるsequenceにUSAGEのみ。
 - Insights: weekly_briefings・pipeline_eventsに所有されるsequenceにUSAGEのみ。
 - agent: agent_message_sources・query_embedding_cacheに所有されるsequenceにUSAGEのみ。
+- 調査: sequence権限なし。
 - 上記以外のsequence権限とGRANT OPTIONは禁止する。
 - 各実行ロールはsuperuser・DB作成・ロール作成・RLS迂回・replicationを持たず、管理ロールvectorや他の実行ロールにSET ROLEできない。
 - public・auth内のCREATEは禁止し、許可操作のために必要なschema USAGEを確認する。

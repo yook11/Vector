@@ -9,14 +9,14 @@ from __future__ import annotations
 from sqlalchemy.orm import DeclarativeBase
 
 from app.collection.sources.source_name import SourceName
-from app.models.types import SafeUrlType, SourceNameType
-from app.shared.security.safe_url import SafeUrl
+from app.models.types import SourceNameType, WebUrlType
+from app.shared.web_url import WebUrl
 
 
 class Base(DeclarativeBase):
     """VO の type_annotation_map を備えた共通 DeclarativeBase。"""
 
     type_annotation_map = {  # noqa: RUF012
-        SafeUrl: SafeUrlType,
+        WebUrl: WebUrlType,
         SourceName: SourceNameType,
     }

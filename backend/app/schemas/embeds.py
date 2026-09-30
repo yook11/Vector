@@ -7,7 +7,7 @@
 
 from app.collection.sources.source_name import SourceName
 from app.schemas.base import _CamelBase
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 
 class NewsSourceEmbed(_CamelBase):
@@ -32,4 +32,4 @@ class OriginalArticleEmbed(_CamelBase):
     """原文記事の参照情報（詳細画面用）"""
 
     title: str
-    url: SafeUrl
+    url: WebUrl

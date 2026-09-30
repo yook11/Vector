@@ -43,11 +43,13 @@ consumer専用の設定も同じプロキシ設定内で定義する。
 
 ## 送信経路
 
+ファクトリは`mounts`・`transport`の指定を値によらず`TypeError`で拒否し、送信部品を差し替えさせない。
+
 通常の外部通信は次の順序で進む。
 
 1. 利用機能が`make_external_async_client`を生成する。
 2. `HttpSettings`が必須のプロキシ設定を検証する。
-3. 標準transportが送信直前に、IP直書きまたは`resolve_public_host_addresses`によるDNS解決結果の公開性を検証する。
+3. 標準transportが送信直前に、schemeをHTTP・HTTPSに限定し、IP直書きまたは`resolve_public_host_addresses`によるDNS解決結果の公開性を検証する。
 4. 元のホスト名をプロキシへ渡す。
 5. プロキシが自身の名前解決結果を検査し、ポート・送信元・許可ドメインの制限を適用する。
 
@@ -78,7 +80,7 @@ AWS試験のスナップショットにも、同じ相対配置でJSONを同梱�
 - `destination_resolution.HostResolutionError`は、名前解決の失敗・空の結果・IP形式でない結果を表す。
 - 標準transportはこれらを元のまま伝播させる。HTTPの失敗分類はDNS失敗を通信失敗として扱い、宛先拒否を混ぜない。
 - 例外名・メッセージ・原因連鎖は維持し、例外の完全修飾名は新しい所属モジュールに変わる。
-- `SafeUrl`は形式・文字数とIP直書きの公開性を検証する既存の型であり、DNS検証や接続先の保証を持たない。
+- `WebUrl`はURLの形式だけを保証し、宛先IPの判定は持たない。
 
 名前解決の成功条件は、結果が1件以上あり、全件が有効かつ許可されたIPであることとする。
 成功時は解決結果の順序で`PublicIpAddress`の一覧を返す。
@@ -133,12 +135,13 @@ CONNECT 403を含むプロキシ失敗は通信失敗として再試行可能に
 |---|---|
 | `test_http/test_public_ip_address.py` | IP単体の生成・形式の境界値・禁止レンジ両端の拒否・IPv4-mapped表記の拒否・表記の正規化と同一性・不変性 |
 | `test_http/test_destination_resolution.py` | OSの解決結果からIPを取得、検証済みIPの順序付き返却、混在結果の全体拒否、空・不正な結果の失敗、原因連鎖 |
-| `test_http/test_external_http.py` | DNS結果に基づく送信可否、直接接続のIP指定・Host/SNI保持、プロキシ経路、リダイレクト先検証 |
+| `test_http/test_external_http.py` | transport差し替え引数とHTTP・HTTPS以外のschemeの拒否、DNS結果に基づく送信可否、直接接続のIP指定・Host/SNI保持、プロキシ経路、リダイレクト先検証 |
 | `test_http/test_egress_proxy_config.py` | Squid設定テンプレートの非公開IP拒否ACL・レンジ参照・評価順序 |
+| [実Squidの宛先・送信元試験](../../../infra/squid/README.md) | HTTP・CONNECTの宛先制限、送信元ごとの許可、管理機能の拒否（隔離したローカル環境） |
 | `test_http/test_settings.py` | 必須のプロキシ設定と、呼び出し側からの経路上書きの拒否 |
 | `test_http/test_failure.py`・`test_http/test_error_mapping.py` | DNS失敗の分類と、宛先拒否を通信失敗に混ぜないこと |
 | `test_http/test_proxy_failure.py` | HTTPX/httpcoreを通したCONNECT拒否・通常応答・TCP障害の区別（ネットワークとTLSはモック） |
-| `test_shared/test_safe_url.py` | SafeUrlの既存契約 |
+| `test_shared/test_web_url.py` | WebUrlの形式の契約と、宛先を判定しないこと |
 | AWS試験用`test_snapshot.py` | JSONの同梱・内容保持と、保存されたTerraformからの相対参照 |
 
 DNSの単体テストはOSの名前解決またはその返答を差し替え、実DNSへ問い合わせない。
@@ -146,6 +149,7 @@ HTTPの振る舞いのテストはDNSの返答と実送信をモックし、ア�
 拒否時に送信処理へ進まないことと、送信処理へ渡すRequestを検証し、実TCP接続やTLS認証の成立までは保証しない。
 記事取得側はHTTPの例外を入力とし、IPごとの許可・拒否を繰り返さない。
 ACLの静的検証やTerraformのmock testは、実環境のSquidによる接続拒否の実測とは区別する。
+ローカルの実Squid試験は宛先・送信元・管理機能の制限を確認し、AWS上の配置・送信元の対応・ネットワーク制限は別に確認する。
 
 ## 設定の検証とデプロイ後の確認
 
@@ -163,9 +167,7 @@ Terraformのvalidateやmock testも、デプロイ済み環境の動作を保証
 目標は、対象となるすべての外部通信で、宛先方針と検証済み経路を必ず使用することである。
 今回の責務・配置整理では、次の既存動作を変更していない。
 
-- ファクトリは`mounts`をHTTPXへ委譲でき、別transportを選ぶ経路は標準transportの検証を通らない。
-- 送信境界にはHTTP/HTTPS限定の独自検証がなく、HTTPX/httpcoreに委ねている。
 - 共通クライアントを注入せずSDKを直接構築するAgent、briefing、workerのembedding等が残る。
-- SafeUrlのパーサー間の解釈差や、形式検証と公開IP判定の責務分離は後続で扱う。
+- `WebUrl`のパーサー間の解釈差は後続で扱う。
 
 したがって、標準transportの保証を、任意のファクトリ設定や全SDK通信の保証として扱わない。

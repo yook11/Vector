@@ -77,7 +77,7 @@ class ArticleCompletionConsumer:
                 source_url=source_url,
             )
             completion_policy = completion_policy_for(observed.source_name)
-            raw_response = await fetch_article_response(source_url.as_safe_url())
+            raw_response = await fetch_article_response(source_url.as_web_url())
             scraped_content = extract_html_content(raw_response)
             analyzable_article = complete_with_html(
                 observed,

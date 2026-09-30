@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import socket
 from collections.abc import Callable
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -87,6 +87,75 @@ def external_client(request: pytest.FixtureRequest) -> Callable[[], httpx.AsyncC
     return lambda: httpx.AsyncClient(transport=_PinnedDnsTransport())
 
 
+class TestTransportOverrideRejection:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("pattern", ["all://", "http://10.0.0.1"])
+    async def test_rejects_mounted_transport_before_construction(
+        self, pattern: str, captured_requests: list[httpx.Request]
+    ) -> None:
+        """宛先検証を迂回するmountsを生成前に拒否し、別transportへ送信しない。"""
+        alternate_send = Mock(return_value=httpx.Response(200))
+        with patch(
+            "app.http.external._PinnedDnsTransport", wraps=_PinnedDnsTransport
+        ) as constructor:
+            with pytest.raises(
+                TypeError, match="transport and mounts cannot be overridden"
+            ):
+                async with make_external_async_client(
+                    mounts={pattern: httpx.MockTransport(alternate_send)}
+                ) as client:
+                    await client.get("http://10.0.0.1/")
+
+        constructor.assert_not_called()
+        alternate_send.assert_not_called()
+        assert captured_requests == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_custom_transport_before_construction(
+        self, captured_requests: list[httpx.Request]
+    ) -> None:
+        """transportの直接指定を引数重複エラーに頼らず生成前に拒否する。"""
+        alternate_send = Mock(return_value=httpx.Response(200))
+        with patch(
+            "app.http.external._PinnedDnsTransport", wraps=_PinnedDnsTransport
+        ) as constructor:
+            with pytest.raises(
+                TypeError, match="transport and mounts cannot be overridden"
+            ):
+                async with make_external_async_client(
+                    transport=httpx.MockTransport(alternate_send)
+                ) as client:
+                    await client.get("http://10.0.0.1/")
+
+        constructor.assert_not_called()
+        alternate_send.assert_not_called()
+        assert captured_requests == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({"mounts": None}, id="mounts-none"),
+            pytest.param({"mounts": {}}, id="mounts-empty"),
+            pytest.param({"transport": None}, id="transport-none"),
+        ],
+    )
+    async def test_rejects_override_argument_even_without_replacement(
+        self, kwargs: dict
+    ) -> None:
+        """差し替え値が空でも引数の指定自体を生成前に拒否する。"""
+        with patch(
+            "app.http.external._PinnedDnsTransport", wraps=_PinnedDnsTransport
+        ) as constructor:
+            with pytest.raises(
+                TypeError, match="transport and mounts cannot be overridden"
+            ):
+                async with make_external_async_client(**kwargs):
+                    pass
+
+        constructor.assert_not_called()
+
+
 class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_blocks_request_to_private_host(
@@ -161,8 +230,7 @@ class TestDestinationValidationBeforeSend:
         external_client: Callable[[], httpx.AsyncClient],
         captured_requests: list[httpx.Request],
     ) -> None:
-        """private IP literal を直接渡された場合も transport が拒否する
-        (defense-in-depth: SafeUrl で弾く前提だが二重保証)。"""
+        """private IP literal はURL型を通過するため、transport が送信前に拒否する。"""
         async with external_client() as client:
             with pytest.raises(HostBlockedError):
                 await client.get("http://10.0.0.1/")
@@ -238,6 +306,24 @@ class TestDestinationValidationBeforeSend:
             async with external_client() as client:
                 with pytest.raises(HostResolutionError):
                     await client.get("https://invalid.example/")
+        assert captured_requests == []
+
+
+class TestSchemeRestrictionBeforeSend:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("url", ["ws://example.com/", "wss://example.com/"])
+    async def test_rejects_non_http_scheme_before_resolution(
+        self,
+        url: str,
+        external_client: Callable[[], httpx.AsyncClient],
+        captured_requests: list[httpx.Request],
+    ) -> None:
+        """HTTP・HTTPS以外のschemeは名前解決と送信の前に拒否する。"""
+        with _patch_resolver("8.8.8.8") as resolve:
+            async with external_client() as client:
+                with pytest.raises(httpx.UnsupportedProtocol):
+                    await client.get(url)
+        resolve.assert_not_awaited()
         assert captured_requests == []
 
 
@@ -406,6 +492,31 @@ class TestRedirectDestinationValidation:
                 with pytest.raises(HostBlockedError):
                     await client.get("https://start.example/article")
         assert redirect_requests == ["https://start.example/article"]
+
+    @pytest.mark.asyncio
+    async def test_explicit_follow_rejects_non_http_target_before_send(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """追従先のschemeがHTTP・HTTPS以外なら名前解決と送信の前に拒否する。"""
+        sent: list[str] = []
+
+        async def respond(
+            transport: httpx.AsyncHTTPTransport, request: httpx.Request
+        ) -> httpx.Response:
+            sent.append(str(request.url))
+            if len(sent) == 1:
+                return httpx.Response(
+                    302, headers={"Location": "wss://next.example/article"}
+                )
+            return httpx.Response(200, content=b"article")
+
+        monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
+        with _patch_resolver("8.8.8.8") as resolve:
+            async with make_external_async_client(follow_redirects=True) as client:
+                with pytest.raises(httpx.UnsupportedProtocol):
+                    await client.get("https://start.example/article")
+        assert sent == ["https://start.example/article"]
+        assert [call.args[0] for call in resolve.await_args_list] == ["start.example"]
 
 
 # transport の構造的保証

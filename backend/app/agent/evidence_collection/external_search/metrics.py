@@ -9,7 +9,7 @@ import logfire
 ExternalHitDropReason = Literal[
     "result_not_mapping",
     "title_missing",
-    "url_unsafe",
+    "url_invalid",
     "content_too_long",
 ]
 

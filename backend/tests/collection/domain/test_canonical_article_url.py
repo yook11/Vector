@@ -9,10 +9,10 @@ from app.collection.domain.canonical_article_url import (
     CanonicalArticleUrl,
     CanonicalArticleUrlInvalidError,
 )
-from app.shared.security.safe_url import (
-    SafeUrl,
-    SafeUrlInvalidError,
-    SafeUrlInvalidReason,
+from app.shared.web_url import (
+    WebUrl,
+    WebUrlInvalidError,
+    WebUrlInvalidReason,
 )
 
 
@@ -70,25 +70,25 @@ class TestCanonicalArticleUrlIdempotent:
         assert twice.root == "https://example.com/foo"
 
 
-class TestCanonicalArticleUrlAcceptsSafeUrlInput:
-    """SafeUrl インスタンスを入力として受け、canonical 化して保持する。
+class TestCanonicalArticleUrlAcceptsWebUrlInput:
+    """WebUrl インスタンスを入力として受け、canonical 化して保持する。
 
-    Fetcher 群が `source_url=SafeUrl(link)` のままで動作するための互換。
+    Fetcher 群が `source_url=WebUrl(link)` のままで動作するための互換。
     """
 
-    def test_accepts_safe_url_and_normalizes(self) -> None:
-        raw = SafeUrl("https://Example.com/foo/?utm_source=rss#main")
+    def test_accepts_web_url_and_normalizes(self) -> None:
+        raw = WebUrl("https://Example.com/foo/?utm_source=rss#main")
         canonical = CanonicalArticleUrl(raw)
         assert canonical.root == "https://example.com/foo"
 
-    def test_accepts_already_canonical_safe_url(self) -> None:
-        raw = SafeUrl("https://example.com/foo")
+    def test_accepts_already_canonical_web_url(self) -> None:
+        raw = WebUrl("https://example.com/foo")
         canonical = CanonicalArticleUrl(raw)
         assert canonical.root == "https://example.com/foo"
 
 
 class TestCanonicalArticleUrlRejectsInvalidInput:
-    """SafeUrl invariant (構文 + SSRF) を canonical 値で再検証する。"""
+    """WebUrl の形式の不変条件を canonical 値で再検証する。"""
 
     def test_rejects_empty(self) -> None:
         with pytest.raises(ValidationError):
@@ -97,10 +97,6 @@ class TestCanonicalArticleUrlRejectsInvalidInput:
     def test_rejects_non_http_scheme(self) -> None:
         with pytest.raises(ValidationError):
             CanonicalArticleUrl("ftp://example.com/foo")
-
-    def test_rejects_private_ip(self) -> None:
-        with pytest.raises(ValidationError):
-            CanonicalArticleUrl("http://127.0.0.1/admin")
 
     def test_rejects_non_string_non_url_type(self) -> None:
         with pytest.raises(ValidationError):
@@ -122,40 +118,39 @@ class TestCanonicalArticleUrlFromRaw:
     @pytest.mark.parametrize(
         ("raw", "expected_reason"),
         [
-            ("", SafeUrlInvalidReason.URL_EMPTY),
-            ("ftp://example.com/foo", SafeUrlInvalidReason.URL_NOT_HTTP),
-            ("example.com/foo", SafeUrlInvalidReason.URL_NOT_HTTP),
-            ("http://127.0.0.1/admin", SafeUrlInvalidReason.HOST_NOT_PUBLIC_IP),
+            ("", WebUrlInvalidReason.URL_EMPTY),
+            ("ftp://example.com/foo", WebUrlInvalidReason.URL_NOT_HTTP),
+            ("example.com/foo", WebUrlInvalidReason.URL_NOT_HTTP),
             (
                 "https://example.com/" + "a" * (2049 - len("https://example.com/")),
-                SafeUrlInvalidReason.URL_TOO_LONG,
+                WebUrlInvalidReason.URL_TOO_LONG,
             ),
         ],
     )
     def test_from_raw_classifies_reason(
-        self, raw: str, expected_reason: SafeUrlInvalidReason
+        self, raw: str, expected_reason: WebUrlInvalidReason
     ) -> None:
         with pytest.raises(CanonicalArticleUrlInvalidError) as exc_info:
             CanonicalArticleUrl.from_raw(raw)
         assert exc_info.value.reason is expected_reason
 
-    def test_from_raw_chains_safe_url_invalid_error(self) -> None:
-        # __cause__ に SafeUrlInvalidError が残り、監査 error_chain で系統が辿れる
+    def test_from_raw_chains_web_url_invalid_error(self) -> None:
+        # __cause__ に WebUrlInvalidError が残り、監査 error_chain で系統が辿れる
         with pytest.raises(CanonicalArticleUrlInvalidError) as exc_info:
             CanonicalArticleUrl.from_raw("ftp://example.com")
         cause = exc_info.value.__cause__
-        assert isinstance(cause, SafeUrlInvalidError)
-        assert cause.reason is SafeUrlInvalidReason.URL_NOT_HTTP
+        assert isinstance(cause, WebUrlInvalidError)
+        assert cause.reason is WebUrlInvalidReason.URL_NOT_HTTP
 
 
 class TestCanonicalArticleUrlBridges:
-    """SafeUrl 境界 (scraper.scrape 等) への橋渡し。"""
+    """WebUrl 境界 (scraper.scrape 等) への橋渡し。"""
 
-    def test_as_safe_url_returns_safe_url(self) -> None:
+    def test_as_web_url_returns_web_url(self) -> None:
         canonical = CanonicalArticleUrl("https://example.com/foo")
-        safe = canonical.as_safe_url()
-        assert isinstance(safe, SafeUrl)
-        assert safe.root == "https://example.com/foo"
+        web_url = canonical.as_web_url()
+        assert isinstance(web_url, WebUrl)
+        assert web_url.root == "https://example.com/foo"
 
     def test_str_returns_canonical(self) -> None:
         canonical = CanonicalArticleUrl("https://Example.com/foo/?utm_source=rss")
@@ -174,10 +169,10 @@ class TestCanonicalArticleUrlEqualityAndHashing:
         assert hash(a) == hash(b)
         assert len({a, b}) == 1
 
-    def test_not_equal_to_safe_url(self) -> None:
+    def test_not_equal_to_web_url(self) -> None:
         canonical = CanonicalArticleUrl("https://example.com/foo")
-        safe = SafeUrl("https://example.com/foo")
-        assert canonical != safe
+        web_url = WebUrl("https://example.com/foo")
+        assert canonical != web_url
 
     def test_immutable(self) -> None:
         url = CanonicalArticleUrl("https://example.com/foo")

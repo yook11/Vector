@@ -5,16 +5,16 @@ from __future__ import annotations
 from app.collection.article_acquisition.tools.url_normalizer import (
     normalize_article_url,
 )
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 
 def _norm(raw: str) -> str:
-    return str(normalize_article_url(SafeUrl(raw)))
+    return str(normalize_article_url(WebUrl(raw)))
 
 
 class TestNormalizeArticleUrl:
     def test_returns_same_object_when_no_query(self) -> None:
-        original = SafeUrl("https://example.com/article")
+        original = WebUrl("https://example.com/article")
         result = normalize_article_url(original)
         assert result is original
 
@@ -34,7 +34,7 @@ class TestNormalizeArticleUrl:
         assert result == "https://example.com/article?id=42&page=2"
 
     def test_returns_same_object_when_no_tracking_params(self) -> None:
-        original = SafeUrl("https://example.com/article?id=42&page=2")
+        original = WebUrl("https://example.com/article?id=42&page=2")
         result = normalize_article_url(original)
         assert result is original
 
