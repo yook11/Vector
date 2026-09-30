@@ -45,7 +45,7 @@ async function action(
   _prev: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  // SSoT: NewSourceSchema が SourceName / SafeUrl / SourceType の不変条件を
+  // SSoT: NewSourceSchema が SourceName / WebUrl / SourceType の不変条件を
   // 表現する。Server Action 直叩き耐性 (defense-in-depth) も同 schema が担う。
   const parseResult = NewSourceSchema.safeParse(Object.fromEntries(formData));
   if (!parseResult.success) {

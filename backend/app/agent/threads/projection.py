@@ -19,7 +19,7 @@ from app.schemas.research import (
     ResearchThreadMessage,
     ResearchUserMessage,
 )
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 
 def build_research_thread_list_item(
@@ -114,7 +114,7 @@ def _source_response(source: AgentMessageSource) -> ResearchSource:
     return ResearchExternalUrlSource(
         kind="external_url",
         source_ref=source.source_ref,
-        url=SafeUrl(source.url),
+        url=WebUrl(source.url),
         title=source.title,
         source_name=source.source_name,
         published_at=source.published_at,

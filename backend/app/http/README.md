@@ -80,7 +80,7 @@ AWS試験のスナップショットにも、同じ相対配置でJSONを同梱�
 - `destination_resolution.HostResolutionError`は、名前解決の失敗・空の結果・IP形式でない結果を表す。
 - 標準transportはこれらを元のまま伝播させる。HTTPの失敗分類はDNS失敗を通信失敗として扱い、宛先拒否を混ぜない。
 - 例外名・メッセージ・原因連鎖は維持し、例外の完全修飾名は新しい所属モジュールに変わる。
-- `SafeUrl`は形式・文字数とIP直書きの公開性を検証する既存の型であり、DNS検証や接続先の保証を持たない。
+- `WebUrl`はURLの形式だけを保証し、宛先IPの判定は持たない。
 
 名前解決の成功条件は、結果が1件以上あり、全件が有効かつ許可されたIPであることとする。
 成功時は解決結果の順序で`PublicIpAddress`の一覧を返す。
@@ -141,7 +141,7 @@ CONNECT 403を含むプロキシ失敗は通信失敗として再試行可能に
 | `test_http/test_settings.py` | 必須のプロキシ設定と、呼び出し側からの経路上書きの拒否 |
 | `test_http/test_failure.py`・`test_http/test_error_mapping.py` | DNS失敗の分類と、宛先拒否を通信失敗に混ぜないこと |
 | `test_http/test_proxy_failure.py` | HTTPX/httpcoreを通したCONNECT拒否・通常応答・TCP障害の区別（ネットワークとTLSはモック） |
-| `test_shared/test_safe_url.py` | SafeUrlの既存契約 |
+| `test_shared/test_web_url.py` | WebUrlの形式の契約と、宛先を判定しないこと |
 | AWS試験用`test_snapshot.py` | JSONの同梱・内容保持と、保存されたTerraformからの相対参照 |
 
 DNSの単体テストはOSの名前解決またはその返答を差し替え、実DNSへ問い合わせない。
@@ -168,6 +168,6 @@ Terraformのvalidateやmock testも、デプロイ済み環境の動作を保証
 今回の責務・配置整理では、次の既存動作を変更していない。
 
 - 共通クライアントを注入せずSDKを直接構築するAgent、briefing、workerのembedding等が残る。
-- SafeUrlのパーサー間の解釈差や、形式検証と公開IP判定の責務分離は後続で扱う。
+- `WebUrl`のパーサー間の解釈差は後続で扱う。
 
 したがって、標準transportの保証を、任意のファクトリ設定や全SDK通信の保証として扱わない。

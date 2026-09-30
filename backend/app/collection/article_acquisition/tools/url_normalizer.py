@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 _TRACKING_PARAMS: frozenset[str] = frozenset(
     {
@@ -35,8 +35,8 @@ _TRACKING_PARAMS: frozenset[str] = frozenset(
 )
 
 
-def normalize_article_url(url: SafeUrl) -> SafeUrl:
-    """tracking parameter を除去した ``SafeUrl`` を返す。
+def normalize_article_url(url: WebUrl) -> WebUrl:
+    """tracking parameter を除去した ``WebUrl`` を返す。
 
     残りのクエリは順序を保って保持する。
     """
@@ -51,4 +51,4 @@ def normalize_article_url(url: SafeUrl) -> SafeUrl:
 
     new_query = urlencode(filtered, doseq=True)
     rebuilt = urlunparse(parsed._replace(query=new_query))
-    return SafeUrl(rebuilt)
+    return WebUrl(rebuilt)

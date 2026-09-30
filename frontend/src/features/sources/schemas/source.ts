@@ -2,7 +2,7 @@
  * NewsSource 入力スキーマ。
  *
  * SSoT は backend の `app/schemas/news_source.py:NewsSourceCreate` (= `SourceName`
- * + `SafeUrl` + `SourceType`)。frontend の zod は SSoT 完全コピーではなく、UX
+ * + `WebUrl` + `SourceType`)。frontend の zod は SSoT 完全コピーではなく、UX
  * (入力中のフィールド単位エラー) と defense-in-depth (Server Action 直叩き耐性
  * + URL scheme allowlist) を担う。最終 invariant は backend が保証する。
  *
@@ -41,21 +41,20 @@ const SourceNameSchema = z
     "Name can only contain letters, numbers, spaces, hyphens, dots, underscores, plus signs, and slashes",
   );
 
-// SafeUrl backend invariant (`app/shared/value_objects/safe_url.py`):
+// WebUrl backend invariant (`app/shared/web_url.py`):
 // - http/https スキームのみ
 // - max 2048 chars
 // - AnyHttpUrl 構造
-// SSRF guard (private IP literal 等の構造的拒否) は backend が担う。frontend は
-// scheme allowlist + 長さ + URL 構造までを zod で表現する。
-const SafeUrlSchema = z
+// 宛先の判定は backend の送信時に行うため、frontend も形式だけを zod で表現する。
+const WebUrlSchema = z
   .url({ protocol: /^https?$/, error: "Must be a valid http(s) URL" })
   .max(2048, "URL must be at most 2048 characters");
 
 export const NewSourceSchema = z.object({
   name: SourceNameSchema,
   sourceType: SourceTypeSchema,
-  siteUrl: SafeUrlSchema,
-  endpointUrl: SafeUrlSchema,
+  siteUrl: WebUrlSchema,
+  endpointUrl: WebUrlSchema,
 });
 
 export type NewSourceInput = z.infer<typeof NewSourceSchema>;

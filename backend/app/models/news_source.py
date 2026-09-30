@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.collection.sources.source_name import SourceName
 from app.models.base import Base
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 
 class SourceType(StrEnum):
@@ -48,8 +48,8 @@ class NewsSource(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[SourceName] = mapped_column()
     source_type: Mapped[SourceType] = mapped_column(String(20))
-    site_url: Mapped[SafeUrl] = mapped_column()
-    endpoint_url: Mapped[SafeUrl] = mapped_column(unique=True)
+    site_url: Mapped[WebUrl] = mapped_column()
+    endpoint_url: Mapped[WebUrl] = mapped_column(unique=True)
     is_active: Mapped[bool] = mapped_column(server_default=sa.true())
     attribution_label: Mapped[str | None] = mapped_column(default=None)
 

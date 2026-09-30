@@ -19,7 +19,7 @@ from app.agent.threads.result_mapper import (
     build_source_rows_for_message,
 )
 from app.models.agent_message import AgentMessage
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 
 def _plan_summary(plan_type: str) -> AnswerPlanSummary:
@@ -57,7 +57,7 @@ def test_source_mapper_structures_internal_and_external_rows() -> None:
             InternalArticleSource(source_ref="1", article_id=123, title="Internal"),
             ExternalUrlSource(
                 source_ref="2",
-                url=SafeUrl("https://example.com/e"),
+                url=WebUrl("https://example.com/e"),
                 title="External",
                 evidence_claim="Claim",
             ),

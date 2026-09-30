@@ -14,7 +14,7 @@ from sqlalchemy.types import TypeDecorator
 
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.sources.source_name import SourceName
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 
 class SourceNameType(TypeDecorator[SourceName]):
@@ -38,13 +38,13 @@ class SourceNameType(TypeDecorator[SourceName]):
         return SourceName(value)
 
 
-class SafeUrlType(TypeDecorator[SafeUrl]):
-    """SafeUrl <-> VARCHAR(2048).
+class WebUrlType(TypeDecorator[WebUrl]):
+    """WebUrl <-> VARCHAR(2048).
 
     ``CanonicalArticleUrl`` も同じ列に書き込めるように bind 側で受容する。
-    canonical 値は SafeUrl の不変条件を満たすため、DB 側の物理表現は変わらず、
+    canonical 値は WebUrl の不変条件を満たすため、DB 側の物理表現は変わらず、
     Repository signature を ``CanonicalArticleUrl`` に上げても ORM 列の型は
-    SafeUrl のままで透過処理できる (記事 identity の SSoT を型に寄せる目的)。
+    WebUrl のままで透過処理できる (記事 identity の SSoT を型に寄せる目的)。
     """
 
     impl = String(2048)
@@ -55,15 +55,15 @@ class SafeUrlType(TypeDecorator[SafeUrl]):
             return None
         if isinstance(value, CanonicalArticleUrl):
             return value.root
-        if isinstance(value, SafeUrl):
+        if isinstance(value, WebUrl):
             return value.root
         if isinstance(value, str):
-            return SafeUrl(value).root
+            return WebUrl(value).root
         raise TypeError(
-            f"Expected SafeUrl, CanonicalArticleUrl or str, got {type(value).__name__}"
+            f"Expected WebUrl, CanonicalArticleUrl or str, got {type(value).__name__}"
         )
 
-    def process_result_value(self, value: Any, dialect: Dialect) -> SafeUrl | None:
+    def process_result_value(self, value: Any, dialect: Dialect) -> WebUrl | None:
         if value is None:
             return None
-        return SafeUrl(value)
+        return WebUrl(value)

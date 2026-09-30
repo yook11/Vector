@@ -41,7 +41,7 @@ class AcquisitionConversionRejection:
     per-entry raise だと source stream 全体が止まるため、棄却を値に落として
     継続させる。``outcome_code`` は責任元の reason を verbatim で運び (URL 欠落 /
     title 欠落・想定外=``AcquisitionConversionDefect``、非空 URL 不正=
-    ``SafeUrlInvalidReason``)、監査は再分類せずそれを焼くだけ。``cause`` は原因例外
+    ``WebUrlInvalidReason``)、監査は再分類せずそれを焼くだけ。``cause`` は原因例外
     を保持し監査が FQN / chain を辿れる (非空 URL 不正=
     ``CanonicalArticleUrlInvalidError`` / 想定外=本当のバグ / 欠落=None)。
     ``raw_url`` は非空なら素の値、欠落なら ``None`` で、redact は監査側の責務。

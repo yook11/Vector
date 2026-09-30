@@ -8,7 +8,7 @@ published の各境界と、profile の title policy (``html_preferred`` = 仮�
 convert は想定内に total: 変換不能 entry は raise でなく
 ``AcquisitionConversionRejection`` 値で返し、握りつぶさず理由付きで表に出す。棄却値は
 責任元 VO の reason を
-``outcome_code`` に verbatim で運ぶ (URL は ``SafeUrlInvalidReason``、title 欠落 /
+``outcome_code`` に verbatim で運ぶ (URL は ``WebUrlInvalidReason``、title 欠落 /
 想定外バグは acquisition 所有の ``AcquisitionConversionDefect``)。想定外 bug の
 値化 funnel ``unexpected_rejection`` の契約 (UNEXPECTED_ERROR + ``cause`` 保持) も
 併せて固定する。Ready の Pydantic 失敗 / tz-naive published の Observed fallback
@@ -162,11 +162,11 @@ def test_rejects_missing_url_as_acquisition_defect(url: str) -> None:
     assert result.cause is None
 
 
-def test_rejects_private_ip_url_as_host_not_public_ip() -> None:
-    """SSRF 防御 (SafeUrl): private/loopback IP は ``host_not_public_ip``。"""
+def test_accepts_private_ip_url_leaving_destination_to_fetch() -> None:
+    """非公開IPのURLは変換で棄却せず、宛先の拒否は取得時の送信境界に任せる。"""
     result = _call(url="http://127.0.0.1/secret")
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "host_not_public_ip"
+    assert isinstance(result, AnalyzableArticle)
+    assert result.source_url.root == "http://127.0.0.1/secret"
 
 
 def test_rejects_non_http_url_as_url_not_http() -> None:
@@ -208,9 +208,9 @@ def test_missing_url_takes_precedence_over_missing_title() -> None:
 
 
 def test_invalid_url_rejection_carries_url_invalid_cause() -> None:
-    """URL VO の例外を ``cause`` に保持し、その下に SafeUrl 由来 (ValueError) を
+    """URL VO の例外を ``cause`` に保持し、その下に WebUrl 由来 (ValueError) を
     連鎖する (監査が error_chain を深さ>1 で辿れる)。"""
-    result = _call(url="http://127.0.0.1/secret")
+    result = _call(url="ftp://example.com/secret")
     assert isinstance(result, AcquisitionConversionRejection)
     assert isinstance(result.cause, CanonicalArticleUrlInvalidError)
     assert isinstance(result.cause.__cause__, ValueError)

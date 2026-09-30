@@ -1,0 +1,91 @@
+"""検証済み HTTP/HTTPS URL の値オブジェクト。
+
+URL の形式だけを保証し、構文の解析は Pydantic の AnyHttpUrl に委譲する。
+格納される値は元の文字列 (strip 後) で、正規化は行わない。
+宛先IPの判定は持たず、``app.http`` の送信境界が送信時に行う。
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Any, ClassVar
+
+from pydantic import (
+    AnyHttpUrl,
+    ConfigDict,
+    RootModel,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
+
+_url_adapter = TypeAdapter(AnyHttpUrl)
+_MAX_LENGTH = 2048
+
+
+class WebUrlInvalidReason(StrEnum):
+    """WebUrl 検証の失敗理由。値だけで原因が読めるよう監査に焼く粒度にする。"""
+
+    URL_NOT_A_STRING = "url_not_a_string"
+    URL_EMPTY = "url_empty"
+    URL_TOO_LONG = "url_too_long"
+    URL_NOT_HTTP = "url_not_http"
+
+
+class WebUrlInvalidError(ValueError):
+    """WebUrl として検証できない入力。reason で失敗段を構造化する。
+
+    ``ValueError`` サブクラスなので ``WebUrl`` の validator 内で raise すると
+    pydantic が ``ValidationError`` にラップする (既存 ``WebUrl(x)`` 契約維持)。
+    ``CanonicalArticleUrl.from_raw`` は validator を直接呼び reason を型で取る。
+    URL 値などの input は載せず reason タグのみを監査へ流す (PII フリー)。
+    """
+
+    MESSAGE: ClassVar[str] = "value is not a valid web URL"
+
+    def __init__(self, *, reason: WebUrlInvalidReason) -> None:
+        self.reason = reason
+        super().__init__(f"{self.MESSAGE}: {reason}")
+
+
+class WebUrl(RootModel[str]):
+    """Pydantic によって検証された HTTP/HTTPS URL。
+
+    Invariants:
+    - http または https スキームを使用
+    - 有効な URL 構造 (最低でも scheme + host)
+    - トリム後 1-2048 文字
+    - 生成後は不変
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    @field_validator("root", mode="before")
+    @classmethod
+    def _validate(cls, v: Any) -> str:
+        """WebUrl の不変条件を検証し strip 済み値を返す。
+
+        何が起きたらどの reason を出すかを、この振る舞いの中で示す。raise する
+        ``WebUrlInvalidError`` は ``ValueError`` サブクラスなので pydantic が
+        ``ValidationError`` にラップする (``WebUrl(x)`` の契約維持)。
+        ``CanonicalArticleUrl.from_raw`` は本 validator を直接呼び reason を型で
+        受け取る (pydantic 非経由で ``__cause__`` も保たれる)。
+        """
+        if not isinstance(v, str):
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_NOT_A_STRING)
+        v = v.strip()
+        if not v:
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_EMPTY)
+        if len(v) > _MAX_LENGTH:
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_TOO_LONG)
+        try:
+            _url_adapter.validate_python(v)
+        except ValidationError as e:
+            raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_NOT_HTTP) from e
+        return v
+
+    def __str__(self) -> str:
+        return self.root
+
+    def __repr__(self) -> str:
+        return f"WebUrl({self.root!r})"

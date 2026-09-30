@@ -23,7 +23,7 @@ from app.agent.contract import (
     MISSING_ITEM_MAX_CHARS,
 )
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
-from app.shared.security.safe_url import SafeUrl
+from app.shared.web_url import WebUrl
 
 __all__ = [
     "EVIDENCE_CLAIM_MAX_CHARS",
@@ -142,7 +142,7 @@ class ExternalSearchHit(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    url: SafeUrl
+    url: WebUrl
     title: str = Field(min_length=1)
     content: str | None = Field(default=None, max_length=EXTERNAL_CONTENT_MAX_CHARS)
     published_at: datetime | None = None
