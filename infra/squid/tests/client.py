@@ -17,6 +17,8 @@ def get(url: str, proxy: str | None) -> dict:
     )
     if destination.scheme == "https":
         context = ssl.create_default_context(cafile="/tls/cert.pem")
+        # Python 3.13のcreate_default_contextで証明書とホスト名を検証する。
+        # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected  # noqa: E501
         connection = http.client.HTTPSConnection(host, port, timeout=5, context=context)
         if proxy:
             connection.set_tunnel(destination.hostname, destination.port or 443)
