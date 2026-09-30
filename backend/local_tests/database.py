@@ -35,6 +35,7 @@ Role = Literal[
     "vector_api",
     "vector_insights",
     "vector_agent",
+    "vector_investigation",
 ]
 
 
@@ -104,6 +105,7 @@ async def _prepare_dedicated_role_logins(database: SystemDatabase) -> None:
             "vector_api",
             "vector_insights",
             "vector_agent",
+            "vector_investigation",
         ):
             statement = await connection.fetchval(
                 "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', $1::text, $2::text)",
@@ -234,6 +236,7 @@ def migrated_database() -> Iterator[SystemDatabase]:
                 "vector_api": values["POSTGRES_API_PASSWORD"],
                 "vector_insights": values["POSTGRES_INSIGHTS_PASSWORD"],
                 "vector_agent": values["POSTGRES_AGENT_PASSWORD"],
+                "vector_investigation": values["POSTGRES_INVESTIGATION_PASSWORD"],
             },
         )
         asyncio.run(_prepare_dedicated_role_logins(database))

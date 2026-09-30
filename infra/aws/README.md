@@ -166,7 +166,7 @@ bootstrapの継続更新は[専用ロールの手動手順](bootstrap-access/REA
 
 ## DB 踏み台 (enable_db_bastion)
 
-RDSの初期構築・管理者保守用の一時経路で、通常migrationには使用しない。**平常時は存在せず、素の apply が
+RDSの初期構築・管理者保守と本番データの調査に使う一時経路で、通常migrationには使用しない。**平常時は存在せず、素の apply が
 撤去を兼ねる**。SSM Session Manager の port forwarding で、踏み台は public IP も
 SSH ポートも ingress 規則も持たない。踏み台という言葉が普通に指す「開いている
 入口」は、ここには無い。
@@ -189,6 +189,9 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
   後者は名前解決の側で解く。証明書の検証を落として解決しない — `db_ssl.py` は
   「検証なし TLS というモードを持たない」と宣言しており、手順書側に抜け道を
   作るとその宣言が意味を失う。
+- **調査は `vector_investigation` で接続する。** public の SELECT だけを持ち、auth は
+  読めない。timeout は接続時のセッション設定で指定する
+  ([本番データ調査のDBロール](../../specs/platform/investigation-role.md))。
 - **踏み台を使う作業の最中に apply するなら必ず var を付ける。** 素の apply は
   設計どおり土管ごと撤去する。
 - SSM のデータチャネルは数 MB/s。この DB の規模なら pg_restore に実害はない。
