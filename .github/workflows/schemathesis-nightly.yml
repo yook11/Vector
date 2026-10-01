@@ -84,8 +84,6 @@ jobs:
       # production deploy 時は stub→gemini を起動時 reject (factory 側で guard)。
       # 本物 API key を CI に置かないことで cost / supply chain 両面の表面を絞る。
       EMBEDDER_PROVIDER: stub
-      # API request は構成チェック後に queue へ積むだけで、Nightly では worker を
-      # 起動しない。外部 provider を呼ばず全 HTTP method を契約検査するための dummy。
       DEEPSEEK_API_KEY: ci-schemathesis-dummy
 
     steps:

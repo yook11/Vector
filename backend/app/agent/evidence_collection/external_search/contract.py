@@ -72,9 +72,6 @@ class ExternalSearchFailureReason(StrEnum):
     HTTP_STATUS = "external_search_http_status"
     INVALID_JSON = "external_search_invalid_json"
     INVALID_RESULTS = "external_search_invalid_results"
-    # egress proxy 段で失敗した (provider 障害ではない)。AWS では allowlist の設定ミスが
-    # ここに来る。実際の status と拒否された宛先は proxy の access log 側にある。
-    PROXY_ERROR = "external_search_proxy_error"
     # MCP が HTTP 200 のまま失敗を返した (JSON-RPC の error、または result.isError)。
     # 中身は provider の自由文なので reason には載せない。
     MCP_ERROR = "external_search_mcp_error"
