@@ -52,39 +52,33 @@ class ArticleUrlInvalidError(Exception):
         super().__init__(f"{self.MESSAGE}: {reason}")
 
 
-def _article_value(raw: object) -> str:
-    """入力の長さは追跡用パラメータを除く前に確かめる。"""
-    web_url = WebUrl.from_raw(raw)
-
-    path = web_url.path or "/"
-    if path != "/" and path.endswith("/"):
-        path = path.rstrip("/") or "/"
-
-    pairs = parse_qsl(web_url.query or "", keep_blank_values=True)
-    kept = [(k, v) for k, v in pairs if k.lower() not in _TRACKING_PARAMS]
-
-    return web_url.replace(
-        path=path, query=urlencode(kept, doseq=True) or None, fragment=None
-    ).root
-
-
 class ArticleUrl(RootModel[str]):
     model_config = ConfigDict(frozen=True)
 
     @field_validator("root", mode="before")
     @classmethod
-    def _normalize(cls, v: Any) -> str:
-        if isinstance(v, ArticleUrl):
-            return v.root
-        if isinstance(v, WebUrl):
-            v = v.root
-        return _article_value(v)
+    def _validate(cls, v: Any) -> str:
+        """入力の長さは追跡用パラメータを除く前に確かめる。"""
+        web_url = WebUrl.from_raw(v)
+
+        path = web_url.path or "/"
+        if path != "/" and path.endswith("/"):
+            path = path.rstrip("/") or "/"
+
+        pairs = parse_qsl(web_url.query or "", keep_blank_values=True)
+        kept = [
+            (key, value) for key, value in pairs if key.lower() not in _TRACKING_PARAMS
+        ]
+
+        return web_url.replace(
+            path=path, query=urlencode(kept, doseq=True) or None, fragment=None
+        ).root
 
     @classmethod
     def from_raw(cls, raw: str) -> Self:
         """失敗理由を ValidationError に包まず ArticleUrlInvalidError で送出する。"""
         try:
-            value = _article_value(raw)
+            value = cls._validate(raw)
         except WebUrlInvalidError as exc:
             raise ArticleUrlInvalidError(reason=exc.reason) from exc
         return cls.model_construct(value)

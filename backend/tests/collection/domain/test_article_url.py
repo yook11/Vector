@@ -133,26 +133,6 @@ class TestArticleUrlIdempotent:
         once = ArticleUrl(raw)
         assert ArticleUrl(str(once)) == once
 
-    def test_accepts_own_instance(self) -> None:
-        once = ArticleUrl("https://example.com/foo")
-        twice = ArticleUrl(once)
-        assert once == twice
-        assert twice.root == "https://example.com/foo"
-
-
-class TestArticleUrlAcceptsWebUrlInput:
-    """WebUrl インスタンスを入力として受け、記事 URL に正規化して保持する。"""
-
-    def test_accepts_web_url_and_normalizes(self) -> None:
-        raw = WebUrl("https://Example.com/foo/?utm_source=rss#main")
-        article_url = ArticleUrl(raw)
-        assert article_url.root == "https://example.com/foo"
-
-    def test_accepts_already_normalized_web_url(self) -> None:
-        raw = WebUrl("https://example.com/foo")
-        article_url = ArticleUrl(raw)
-        assert article_url.root == "https://example.com/foo"
-
 
 class TestArticleUrlRejectsInvalidInput:
     """WebUrl の形式の不変条件を記事 URL の値で再検証する。"""
