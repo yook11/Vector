@@ -1,7 +1,6 @@
 """External search gateway の公開契約と adapter 境界のテスト。
 
-対象は「いま配線されている gateway」= AgentCore adapter。Tavily は PR で
-外されるまで test_tavily.py が wire format を持つ。
+対象は「いま配線されている gateway」= AgentCore adapter。
 """
 
 from __future__ import annotations

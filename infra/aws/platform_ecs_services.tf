@@ -26,7 +26,6 @@ locals {
       secrets = {
         # research 開始 API の事前チェックが key の存在だけを見る。呼び出しは agent が行うので api は外へ出ない。
         DEEPSEEK_API_KEY         = "deepseek-api-key"
-        TAVILY_API_KEY           = "tavily-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"
@@ -60,14 +59,13 @@ locals {
     }
     agent = {
       needs_broker   = true
-      egress_vendors = ["deepseek", "gemini", "tavily", "logfire"], egress_allow_any_domain = false
+      egress_vendors = ["deepseek", "gemini", "logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_agent"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/agent.conf"]
       secrets = {
         GEMINI_API_KEY           = "gemini-api-key"
         DEEPSEEK_API_KEY         = "deepseek-api-key"
-        TAVILY_API_KEY           = "tavily-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"

@@ -6,7 +6,7 @@
 
 locals {
   # 宛先はコードから抽出した実ホスト。
-  #   api.deepseek.com / api.tavily.com   app 内の URL リテラル
+  #   api.deepseek.com                    app 内の URL リテラル
   #   generativelanguage.googleapis.com   google-genai SDK (Vertex ではない方)
   #   logfire-{us,eu}.pydantic.dev        logfire SDK の REGIONS[*].base_url
   #
@@ -18,7 +18,6 @@ locals {
     logfire  = ["logfire-us.pydantic.dev", "logfire-eu.pydantic.dev"]
     gemini   = ["generativelanguage.googleapis.com"]
     deepseek = ["api.deepseek.com"]
-    tavily   = ["api.tavily.com"]
   }
 
   proxy_clients = merge({

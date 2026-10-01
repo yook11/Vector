@@ -274,9 +274,6 @@ private runbookには初期構築の前提を残し、通常migrationのロー�
 
 - **S3 endpoint policy の bucket が足りるか。** `prod-<region>-starport-layer-bucket`
   以外に必要な bucket が無いかは実測で 403 を見て確かめる。
-- **agent 側の `ProxyError` 分類。** `tavily.py` の `except httpx.RequestError` は
-  collection 用の写像を通らないため、allowlist の設定ミスが run report 上
-  `status="provider_failed"` (= Tavily 障害) に化ける。
 - **proxy image を ECR に置く CI。** repository は Terraform が作るが image は無い。
   proxy が起動しないと全 egress が止まるので、初回は apply → proxy push → app push。
 

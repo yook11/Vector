@@ -87,7 +87,6 @@ jobs:
       # API request は構成チェック後に queue へ積むだけで、Nightly では worker を
       # 起動しない。外部 provider を呼ばず全 HTTP method を契約検査するための dummy。
       DEEPSEEK_API_KEY: ci-schemathesis-dummy
-      TAVILY_API_KEY: ci-schemathesis-dummy
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
