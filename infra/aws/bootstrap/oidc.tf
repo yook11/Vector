@@ -118,7 +118,7 @@ locals {
 
   # アプリ反映ではproxy・migration・管理用ロールを渡さない。
   app_role_arns = flatten([
-    for group in ["Task", "AgentTask", "Execution"] : [
+    for group in concat(keys(local.ecs_task_role_boundary_groups), ["Execution"]) : [
       for name in local.role_boundary_groups[group].role_names :
       "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${name}"
       if !contains(["${var.name_prefix}-proxy-task", "${var.name_prefix}-proxy-exec"], name)
