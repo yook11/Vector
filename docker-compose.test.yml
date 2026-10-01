@@ -10,7 +10,7 @@
 # guard を通さない直接呼び出しは禁止。
 #
 # 構造:
-# - image: 本体と同じ pgvector/pgvector:0.8.2-pg18-bookworm
+# - image: 本体と同じ PostgreSQL 17.9 / pgvector 0.8.2
 # - infra/db/init: 本体と同じ init script を mount → vector / vector_auth /
 #   vector_app / vector_collect / vector_outbox_relay / vector_auth_rate_limit_cleanup /
 #   vector_article_analysis / vector_backfill / vector_api / vector_insights / vector_agent /
@@ -27,7 +27,9 @@
 #   のため機密保護価値が低く、可読性を優先)
 services:
   db-test:
-    image: pgvector/pgvector:0.8.2-pg18-bookworm
+    image: vector-postgres:17.9-pgvector0.8.2
+    build:
+      context: ./infra/db
     environment:
       POSTGRES_USER: vector
       POSTGRES_PASSWORD: test-vector-password
@@ -46,9 +48,7 @@ services:
     volumes:
       - ./infra/db/init:/docker-entrypoint-initdb.d:ro
     tmpfs:
-      # PG18 image は major-version 別ディレクトリにデータを置くため
-      # 親 /var/lib/postgresql を tmpfs にする (docker-library/postgres#1259)。
-      - /var/lib/postgresql
+      - /var/lib/postgresql/data
     ports:
       - "127.0.0.1::5432"
     healthcheck:
