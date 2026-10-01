@@ -45,7 +45,6 @@ class TestPurposeRuleConstants:
             "openaiApiKey",
             "deepseek_api_key",
             "Deepseek-Api-Key",
-            "tavily_api_key",
             "logfire_token",
             "bff_jwt_signing_secret",
             "revalidate_bearer_secret",

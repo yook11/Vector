@@ -611,21 +611,6 @@ def test_agentcore_gateway_url_requires_region(monkeypatch: pytest.MonkeyPatch) 
         Settings(agentcore_gateway_url=_VALID_AGENTCORE_GATEWAY_URLS[0])
 
 
-def test_tavily_api_key_defaults_to_empty_secretstr() -> None:
-    """TAVILY_API_KEY 未設定なら空 SecretStr。provider 側が fail-fast する。"""
-    s = Settings()
-    assert isinstance(s.tavily_api_key, SecretStr)
-    assert s.tavily_api_key.get_secret_value() == ""
-
-
-def test_tavily_api_key_loaded_as_secretstr(monkeypatch: pytest.MonkeyPatch) -> None:
-    """設定時は SecretStr として読め、値は settings 経由で provider に渡せる。"""
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
-    s = Settings()
-    assert isinstance(s.tavily_api_key, SecretStr)
-    assert s.tavily_api_key.get_secret_value() == "tvly-test-key"
-
-
 # Redis (ElastiCache) IAM 認証。RDS IAM 認証 (上の _IAM_RUNTIME_URL 節) と同じ理由で
 # URL の password を拒否する。加えて token は user 単位で署名するため、URL に
 # username が無い設定 (RDS 側は host 必須だが Redis 側は user 必須) も矛盾として弾く。

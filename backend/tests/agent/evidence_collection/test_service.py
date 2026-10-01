@@ -316,7 +316,7 @@ async def test_external_provider_failure_keeps_internal_hits() -> None:
 async def test_time_filter_failure_still_searches_without_date_filter(
     capfire: CaptureLogfire,
 ) -> None:
-    """期間解決に失敗しても外部検索は行い、Tavilyへはdate_filterを渡さない。"""
+    """期間解決に失敗しても外部検索は行い、検索先へはdate_filterを渡さない。"""
     hits = [_hit(assessment_id=1001, title="only-internal")]
     gateway = _FakeExternalSearchGateway(
         {"nvidia supply": [_external_hit("https://example.com/a")]}

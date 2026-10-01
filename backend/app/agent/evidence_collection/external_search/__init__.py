@@ -39,14 +39,6 @@ from app.agent.evidence_collection.external_search.policy import (
 from app.agent.evidence_collection.external_search.service import (
     ExternalSearchService,
 )
-from app.agent.evidence_collection.external_search.tavily import (
-    TavilyExternalSearchGateway,
-)
-from app.agent.evidence_collection.external_search.tavily_spec import (
-    TAVILY_NEWS_SEARCH_SPEC,
-    TavilySearchCallSpec,
-    build_search_body,
-)
 from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
@@ -79,12 +71,8 @@ __all__ = [
     "MISSING_ITEM_MAX_CHARS",
     "PROVIDER_SEARCH_TIMEOUT_SECONDS",
     "QUERY_GENERATE_TIMEOUT_SECONDS",
-    "TAVILY_NEWS_SEARCH_SPEC",
-    "TavilyExternalSearchGateway",
-    "TavilySearchCallSpec",
     "TimeFilterFailureReason",
     "ExternalSearchDateFilterResolutionError",
-    "build_search_body",
     "build_tool_arguments",
     "build_tool_call_payload",
     "resolve_external_search_date_filter",

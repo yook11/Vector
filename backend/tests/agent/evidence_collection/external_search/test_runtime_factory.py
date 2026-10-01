@@ -403,7 +403,7 @@ async def test_external_search_scope_allows_close_failure_to_replace_body_error(
     body_error = RuntimeError("body failure")
     close_error = RuntimeError("search http close failure")
     search_http = _TrackedSearchClientFactory(close_error=close_error)
-    _deepseek, _tavily, _runtime, _gateway = _install_factory_dependencies(
+    _deepseek, _search_http, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
         search_http=search_http,
     )
