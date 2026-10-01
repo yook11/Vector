@@ -31,15 +31,12 @@ _NEW_SECRET_FIELD_NAMES = ["bff_jwt_signing_secret", "revalidate_bearer_secret"]
 
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """全 test で host の `.env` を遮断し、required env を baseline 値で埋める。
-
-    Pydantic Settings の `model_config.env_file` は class 定義時に評価されるため
-    モジュール変数 `_ENV_FILE` の monkeypatch だけでは効かない。`Settings.model_config`
-    dict を直接書き換えて env_file fallback を nonexistent path に向ける。
-    """
+    """実行環境の設定を遮断し、各テストに必要な基準値だけを用意する。"""
     nonexistent = tmp_path / "nonexistent.env"
     monkeypatch.setattr("app.config._ENV_FILE", nonexistent)
     monkeypatch.setitem(Settings.model_config, "env_file", str(nonexistent))
+    for field_name in Settings.model_fields:
+        monkeypatch.delenv(field_name.upper(), raising=False)
     monkeypatch.setenv("DATABASE_URL", _VALID_DATABASE_URL)
     monkeypatch.setenv("FRONTEND_URL", _VALID_FRONTEND_URL)
     monkeypatch.setenv("INTERNAL_FRONTEND_BASE_URL", _VALID_INTERNAL_FRONTEND_BASE_URL)
@@ -47,8 +44,7 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("BFF_JWT_SIGNING_SECRET", _VALID_BFF_SECRET)
     monkeypatch.setenv("REVALIDATE_BEARER_SECRET", _VALID_REVALIDATE_SECRET)
     monkeypatch.setenv("CROSSREF_CONTACT_EMAIL", _VALID_CROSSREF_CONTACT_EMAIL)
-    # host の AWS_REGION を遮断する (IAM 認証の要求検証を host 環境に依存させない)。
-    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.setenv("EGRESS_PROXY_URL", "http://proxy.vector.internal:3128")
 
 
 def test_settings_construct_with_all_required_env() -> None:
