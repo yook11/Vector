@@ -1,24 +1,6 @@
-"""DeepSeek (OpenAI SDK) 例外を AIProvider*Error に分類する共通 translator。
+"""DeepSeek (OpenAI SDK) の例外を AIProvider*Error に分類する。
 
-DeepSeek は OpenAI SDK を ``base_url=https://api.deepseek.com/beta`` 経由で利用する。
-SDK 例外 / HTTP status を provider 中立な ``AIProvider*Error`` 階層に翻訳し、adapter の
-責務を I/O 駆動に絞る (Gemini の ``translate_gemini_error`` と対称)。
-
-責任の境界:
-- ``translate_deepseek_error``: SDK exception / HTTP status を見た分類のみ。
-- finish_reason 由来の content 拒否は持ち込まない (Gemini 同様 adapter の ``_call_api``
-  責務)。
-
-reason 語彙の所有:
-- ``DeepSeekStateReason``: provider / 環境状態の具体理由 (timeout / auth / 402 等)。
-  translator の各分岐 + adapter local 検知 (未設定) に対応する。reason は audit の
-  ``failure_reason`` に焼かれる種別ラベル (PII-free)。
-
-DeepSeek 固有:
-- HTTP 402 (Insufficient Balance) は OpenAI 本家にない概念。専用 SDK 例外がないので
-  ``APIStatusError.status_code`` で判定し、``OpenAIRateLimitError`` 等より先に評価する。
-- translator 名は provider 軸 (``deepseek_``) とする
-  (OpenAI 本家にない 402 固有 semantics を含むため)。
+finish_reason による拒否の判定は、各工程の adapter が持つ。
 """
 
 from __future__ import annotations
@@ -46,18 +28,15 @@ from app.ai_providers.errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.http.destination_policy import HostBlockedError
 
 
 class DeepSeekStateReason(StrEnum):
-    """DeepSeek (OpenAI SDK) provider / 環境状態の具体理由 (PII-free な種別ラベル)。
-
-    ``translate_deepseek_error`` の各分岐 (SDK 例外種別 / HTTP status) と adapter
-    local 検知 (未設定) に対応する。値は audit の ``failure_reason`` に焼かれ、
-    ``outcome_code`` (= CODE) より細かい原因を残す。
-    """
+    """DeepSeek と通信の状態の理由。値は監査の failure_reason に残る。"""
 
     TIMEOUT = "timeout"
     CONNECTION = "connection"
+    HOST_BLOCKED = "host_blocked"
     AUTH = "auth"
     PERMISSION_DENIED = "permission_denied"
     NOT_FOUND = "not_found"
@@ -71,18 +50,19 @@ class DeepSeekStateReason(StrEnum):
 
 
 def translate_deepseek_error(exc: Exception) -> Exception:
-    """OpenAI SDK 例外を ``AIProvider*Error`` 階層に翻訳する。
+    """OpenAI SDK の例外を分類し、分類できなければ元の例外を返す。
 
-    HTTP 402 (Insufficient Balance) は専用 SDK 例外がないので
-    ``APIStatusError.status_code`` で判定し、``OpenAIRateLimitError`` 等の専用
-    サブクラスより先に評価する。
-
-    マップできなければ ``exc`` をそのまま return (caller である ``_call_once`` が
-    bare re-raise する規約)。
+    SDK の生の message は PII を含みうるので、固定の文言だけを使う。
     """
-    # network 系。SDK 生 message は provider error detail に載せない。
-    # timeout / connection を reason で区別する (APITimeoutError は
-    # APIConnectionError の subclass なので先に評価する)。
+    # SDK は送信中の例外を APIConnectionError に包むので、宛先の拒否は原因で見分ける。
+    if isinstance(exc, APIConnectionError) and isinstance(
+        exc.__cause__, HostBlockedError
+    ):
+        return AIProviderNetworkError(
+            "AIプロバイダーへの通信が宛先の方針で拒否されました",
+            reason=DeepSeekStateReason.HOST_BLOCKED,
+        )
+    # APITimeoutError は APIConnectionError の子クラスなので先に判定する。
     if isinstance(exc, APITimeoutError):
         return AIProviderNetworkError(
             "AIプロバイダーとの通信がタイムアウトしました",
@@ -119,7 +99,7 @@ def translate_deepseek_error(exc: Exception) -> Exception:
             reason=DeepSeekStateReason.NOT_FOUND,
         )
 
-    # HTTP 402 を OpenAIRateLimitError より先に評価 (DeepSeek 固有)
+    # 402 (残高不足) は専用の SDK 例外がないので、RateLimitError より先に見る。
     if isinstance(exc, APIStatusError) and exc.status_code == 402:
         return AIProviderInsufficientBalanceError(
             "AIプロバイダーの利用残高が不足しています",
@@ -155,4 +135,4 @@ def translate_deepseek_error(exc: Exception) -> Exception:
             reason=DeepSeekStateReason.SERVER_ERROR,
         )
 
-    return exc  # bare re-raise (UNKNOWN)
+    return exc

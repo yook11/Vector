@@ -37,6 +37,7 @@ from app.ai_providers.errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.http.destination_policy import HostBlockedError
 
 
 def _make_request() -> httpx.Request:
@@ -50,6 +51,13 @@ def _make_response(status_code: int) -> httpx.Response:
 def _make_status_error(status_code: int, msg: str = "x") -> APIStatusError:
     """``APIStatusError`` を最小構成で作る (status_code を任意指定)。"""
     return APIStatusError(msg, response=_make_response(status_code), body=None)
+
+
+def _connection_error_caused_by(cause: Exception) -> APIConnectionError:
+    """openai SDK と同じく、送信中の例外を ``__cause__`` に持たせて包む。"""
+    error = APIConnectionError(request=_make_request())
+    error.__cause__ = cause
+    return error
 
 
 # 全分岐 (SDK 例外種別 / HTTP status) を網羅。各行が CODE (class) と reason の両方を
@@ -69,6 +77,18 @@ def _make_status_error(status_code: int, msg: str = "x") -> APIStatusError:
             AIProviderNetworkError,
             DeepSeekStateReason.CONNECTION,
             "AIプロバイダーに接続できませんでした",
+        ),
+        (
+            lambda: _connection_error_caused_by(httpx.ConnectError("refused")),
+            AIProviderNetworkError,
+            DeepSeekStateReason.CONNECTION,
+            "AIプロバイダーに接続できませんでした",
+        ),
+        (
+            lambda: _connection_error_caused_by(HostBlockedError("private address")),
+            AIProviderNetworkError,
+            DeepSeekStateReason.HOST_BLOCKED,
+            "AIプロバイダーへの通信が宛先の方針で拒否されました",
         ),
         (
             lambda: TimeoutError("t"),
