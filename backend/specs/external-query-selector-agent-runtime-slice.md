@@ -186,8 +186,9 @@ class DeepSeekOutputBinding:
 - draftの文字列が`EvidenceSelectionResult`の完成型制約（例: 空文字禁止）を満たさない場合も、旧Selector
   adapterと同じmodel response failureとして`output_schema_mismatch`に分類し、Selector retry対象とする。
 - 分類済み例外はdefect / allowlist済みrepair hintだけを保持し、Prompt、collection goal、query、candidate、
-  URL、生のfunction arguments、SDK自由文message、API keyを保持しない。変換元例外も
-  `__context__` / `__cause__`へ残さない。
+  URL、生のfunction arguments、SDK自由文message、API keyを保持しない。応答不正の変換元例外は
+  `__context__` / `__cause__`へ残さない。既知provider errorは変換元のSDK例外を`__cause__`に残し、
+  SDK専用のログ変換ができるまで、分類済み例外をログやspanの例外記録へ直接渡さない（2026-10-02変更）。
 - Selectorには現行`previous_error`経路が存在しない。retryへ`previous_error`、repair hint、前回model outputを
   新設せず、attempt 1 / 2で同じtyped input instanceを再利用する。
 
@@ -291,7 +292,8 @@ class DeepSeekOutputBinding:
 - invalid JSON、non-object、schema mismatch、no function call、wrong function nameを合意済み3 defectへ写像する。
 - 負数`candidate_index`をoutput schema mismatchとし、workflowの範囲外index dropへ到達させない。
 - 既知SDK errorを安全なprovider errorへ変換し、未分類例外を同じinstanceで伝播する。
-- 分類済み例外のmessage / context / causeにPrompt、candidate、raw arguments、SDK message、secret sentinelがない。
+- 分類済み例外のmessageと、応答不正のcontext / causeに、Prompt、candidate、raw arguments、SDK message、
+  secret sentinelがない。既知provider errorのcauseは変換元のSDK例外であり、spanに例外eventを残さない。
 
 ### Workflow regression
 

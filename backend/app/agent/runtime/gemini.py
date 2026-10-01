@@ -90,6 +90,7 @@ class GeminiAgentRuntime:
             mode="call",
         ) as recording:
             classified_error: Exception | None = None
+            translated_cause: Exception | None = None
             try:
                 response = await self._client.models.generate_content(
                     model=agent.model.name,
@@ -102,6 +103,7 @@ class GeminiAgentRuntime:
                     _report_unclassified(recording)
                     raise
                 classified_error = translated_error
+                translated_cause = exc
             else:
                 _report_usage(
                     recording,
@@ -133,6 +135,8 @@ class GeminiAgentRuntime:
                     classified_error,
                     provider=agent.model.provider,
                 )
+                if translated_cause is not None:
+                    raise classified_error from translated_cause
                 raise classified_error
 
     def stream_text[InputT, OutputT](

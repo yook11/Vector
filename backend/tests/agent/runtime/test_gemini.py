@@ -327,12 +327,15 @@ async def test_non_stream_prompt_feedback_precedes_candidate_safety() -> None:
 
 async def test_known_gemini_failure_uses_existing_error_translation() -> None:
     """既知の Gemini 障害を既存のアプリケーション例外へ翻訳する。"""
-    client = FakeGeminiClient([TimeoutError("PROVIDER_SENTINEL_TIMEOUT_79ab")])
+    error = TimeoutError("PROVIDER_SENTINEL_TIMEOUT_79ab")
+    client = FakeGeminiClient([error])
     runtime = GeminiAgentRuntime(client=client)
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(AIProviderNetworkError) as exc_info:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
+    assert exc_info.value.__cause__ is error
+    assert "PROVIDER_SENTINEL_TIMEOUT_79ab" not in str(exc_info.value)
     assert client.models.generate_content.await_count == 1
     client.close.assert_not_awaited()
     client.aclose.assert_not_awaited()

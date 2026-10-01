@@ -180,7 +180,8 @@ async def test_negative_index_is_runtime_schema_mismatch() -> None:
 
 async def test_known_error_translates_and_unknown_keeps_identity() -> None:
     """既知障害だけを翻訳し未知例外の同一性を保つ。"""
-    known_client = FakeDeepSeekClient([TimeoutError("PROVIDER_MESSAGE_SENTINEL")])
+    known = TimeoutError("PROVIDER_MESSAGE_SENTINEL")
+    known_client = FakeDeepSeekClient([known])
     unknown = RuntimeError("UNCLASSIFIED_SENTINEL")
     unknown_client = FakeDeepSeekClient([unknown])
 
@@ -194,7 +195,7 @@ async def test_known_error_translates_and_unknown_keeps_identity() -> None:
         )
 
     assert known_raised.value.__context__ is None
-    assert known_raised.value.__cause__ is None
+    assert known_raised.value.__cause__ is known
     assert "PROVIDER_MESSAGE_SENTINEL" not in str(known_raised.value)
     assert raised.value is unknown
 

@@ -88,6 +88,7 @@ class DeepSeekAgentRuntime:
             mode="call",
         ) as recording:
             classified_error: Exception | None = None
+            translated_cause: Exception | None = None
             try:
                 response = await self._client.chat.completions.create(**request)
             except Exception as exc:
@@ -96,6 +97,7 @@ class DeepSeekAgentRuntime:
                     _report_unclassified(recording)
                     raise
                 classified_error = translated_error
+                translated_cause = exc
             else:
                 extracted = _usage_from_response(getattr(response, "usage", None))
                 if extracted is not None:
@@ -115,6 +117,8 @@ class DeepSeekAgentRuntime:
                     classified_error,
                     provider=agent.model.provider,
                 )
+                if translated_cause is not None:
+                    raise classified_error from translated_cause
                 raise classified_error
 
 
