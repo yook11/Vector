@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent import composition
 from app.agent.composition import (
     activate_gemini_agent_runtime,
+    activate_gemini_client,
 )
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.running import AnsweringPhases
@@ -21,8 +22,11 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
 )
 from app.ai_providers.errors import (
+    AIProviderConfigurationError,
     AIProviderError,
 )
+from app.ai_providers.gemini.error_translator import GeminiStateReason
+from app.ai_providers.gemini.settings import GeminiConnectionSettings
 
 
 @pytest.mark.parametrize(
@@ -69,31 +73,18 @@ class _FakeGeminiAsyncClientContext:
         return False
 
 
-class _FakeGeminiSdkClient:
-    def __init__(
-        self,
-        *,
-        client: _FakeGeminiAsyncClient,
-        lifecycle: list[str],
-    ) -> None:
-        self.aio = _FakeGeminiAsyncClientContext(
-            client=client,
-            lifecycle=lifecycle,
-        )
-
-
-class _FakeGeminiSdkClientFactory:
+class _FakeGeminiClientFactory:
     def __init__(self, lifecycle: list[str]) -> None:
         self._lifecycle = lifecycle
         self.calls: list[dict[str, object]] = []
         self.async_clients: list[_FakeGeminiAsyncClient] = []
 
-    def __call__(self, **kwargs: object) -> _FakeGeminiSdkClient:
+    def __call__(self, **kwargs: object) -> _FakeGeminiAsyncClientContext:
         self.calls.append(kwargs)
         client = _FakeGeminiAsyncClient(len(self.async_clients) + 1)
         self.async_clients.append(client)
         self._lifecycle.append(f"gemini {client.invocation} create")
-        return _FakeGeminiSdkClient(client=client, lifecycle=self._lifecycle)
+        return _FakeGeminiAsyncClientContext(client=client, lifecycle=self._lifecycle)
 
 
 class _FakeGeminiRuntime:
@@ -129,17 +120,16 @@ def _install_gemini_runtime_fakes(
     *,
     lifecycle: list[str],
     construction_error: BaseException | None = None,
-) -> _FakeGeminiSdkClientFactory:
-    from google import genai as genai_module
-
+) -> _FakeGeminiClientFactory:
     from app.agent.runtime import gemini as runtime_gemini
+    from app.ai_providers.gemini import client as gemini_client_module
 
-    client_factory = _FakeGeminiSdkClientFactory(lifecycle)
+    client_factory = _FakeGeminiClientFactory(lifecycle)
     _FakeGeminiRuntime.constructed = []
     _FakeGeminiRuntime.construction_error = construction_error
     _FakeGeminiRuntime.outcome = None
     _FakeGeminiRuntime.calls = []
-    monkeypatch.setattr(genai_module, "Client", client_factory)
+    monkeypatch.setattr(gemini_client_module, "open_gemini_client", client_factory)
     monkeypatch.setattr(runtime_gemini, "GeminiAgentRuntime", _FakeGeminiRuntime)
     monkeypatch.setattr(
         composition.settings,
@@ -149,7 +139,7 @@ def _install_gemini_runtime_fakes(
     return client_factory
 
 
-async def test_gemini_agent_runtime_scope_is_lazy_and_uses_sdk_defaults(
+async def test_gemini_agent_runtime_scope_is_lazy_and_opens_client_for_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lifecycle: list[str] = []
@@ -171,7 +161,28 @@ async def test_gemini_agent_runtime_scope_is_lazy_and_uses_sdk_defaults(
         assert lifecycle == ["gemini 1 create", "gemini 1 enter"]
 
     assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
-    assert client_factory.calls == [{"api_key": "gemini-api-key-sentinel"}]
+    # 1回の試行の上限は、工程ごとの打ち切り(最長20秒)より長い30秒にする。
+    assert client_factory.calls == [
+        {
+            "api_key": SecretStr("gemini-api-key-sentinel"),
+            "settings": GeminiConnectionSettings(read_timeout=30.0),
+        }
+    ]
+
+
+async def test_gemini_client_scope_rejects_missing_key_before_opening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lifecycle: list[str] = []
+    client_factory = _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
+    monkeypatch.setattr(composition.settings, "gemini_api_key", SecretStr(""))
+
+    with pytest.raises(AIProviderConfigurationError) as raised:
+        async with activate_gemini_client():
+            raise AssertionError("scope body must not start")
+
+    assert raised.value.reason is GeminiStateReason.NOT_CONFIGURED
+    assert client_factory.calls == []
 
 
 @pytest.mark.parametrize(
@@ -331,6 +342,9 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         "article_search_repository",
         "query_embedding_cache",
     }
+    assert internal_search_calls[0]["embedder"].kwargs == {
+        "client_scope_factory": activate_gemini_client
+    }
     assert planner_calls == [
         {
             "agent": QUESTION_PLANNER_AGENT,
@@ -485,7 +499,7 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
     monkeypatch.setattr(
         evidence_service_module, "EvidenceAnswerService", capture_evidence
     )
-    monkeypatch.setattr(embedder_module, "GeminiQueryEmbedder", lambda: object())
+    monkeypatch.setattr(embedder_module, "GeminiQueryEmbedder", lambda **_: object())
     monkeypatch.setattr(
         article_repository_module,
         "PgVectorArticleSearchRepository",

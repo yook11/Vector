@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -31,14 +32,25 @@ from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )
 from app.agent.runtime.contract import AgentRuntime
+from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.ai_providers.errors import (
     AIProviderConfigurationError,
 )
+from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.config import settings
 from app.http.internal import make_internal_async_client
 
 if TYPE_CHECKING:
+    from google.genai.client import AsyncClient
+
     from app.agent.runtime.gemini import GeminiAgentRuntime
+
+logger = structlog.get_logger(__name__)
+
+# 工程ごとの打ち切りが先に効くよう、1回の試行の上限はそれより長くする。
+_GEMINI_CONNECTION = GeminiConnectionSettings(read_timeout=30.0)
+_DEEPSEEK_CONNECTION = DeepSeekConnectionSettings(read_timeout=30.0)
+_DEEPSEEK_MAX_RETRIES = 2
 
 
 def ensure_external_search_configured() -> None:
@@ -49,20 +61,26 @@ def ensure_external_search_configured() -> None:
 
 
 @asynccontextmanager
-async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
-    api_key = settings.gemini_api_key.get_secret_value()
-    if not api_key:
+async def activate_gemini_client() -> AsyncIterator[AsyncClient]:
+    if not settings.gemini_api_key.get_secret_value():
         from app.ai_providers.gemini.error_translator import GeminiStateReason
 
         raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
 
-    from google import genai
+    from app.ai_providers.gemini.client import open_gemini_client
 
+    async with open_gemini_client(
+        api_key=settings.gemini_api_key, settings=_GEMINI_CONNECTION
+    ) as client:
+        yield client
+
+
+@asynccontextmanager
+async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
     from app.agent.runtime.gemini import GeminiAgentRuntime
 
-    async with genai.Client(api_key=api_key).aio as client:
-        runtime = GeminiAgentRuntime(client=client)
-        yield runtime
+    async with activate_gemini_client() as client:
+        yield GeminiAgentRuntime(client=client)
 
 
 def _build_answering_phases(
@@ -99,7 +117,7 @@ def _build_answering_phases(
     from app.agent.research_handoff.service import ResearchHandoffService
 
     internal_search = InternalSearchService(
-        embedder=GeminiQueryEmbedder(),
+        embedder=GeminiQueryEmbedder(client_scope_factory=activate_gemini_client),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
         query_embedding_cache=TransactionalQueryEmbeddingCache(
             session_factory=session_factory,
@@ -168,8 +186,6 @@ def build_answering_runner(
 
 @asynccontextmanager
 async def activate_external_search() -> AsyncIterator[ExternalSearch]:
-    from openai import AsyncOpenAI
-
     from app.agent.evidence_collection.external_search.agentcore import (
         AgentCoreWebSearchGateway,
     )
@@ -182,16 +198,15 @@ async def activate_external_search() -> AsyncIterator[ExternalSearch]:
     from app.agent.evidence_collection.external_search.service import (
         ExternalSearchService,
     )
-    from app.agent.runtime.deepseek import (
-        DEEPSEEK_BASE_URL,
-        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-        DeepSeekAgentRuntime,
-    )
+    from app.agent.runtime.deepseek import DEEPSEEK_BASE_URL, DeepSeekAgentRuntime
+    from app.ai_providers.deepseek.client import open_deepseek_client
 
-    async with AsyncOpenAI(
-        api_key=settings.deepseek_api_key.get_secret_value(),
+    async with open_deepseek_client(
+        api_key=settings.deepseek_api_key,
         base_url=DEEPSEEK_BASE_URL,
-        timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        settings=_DEEPSEEK_CONNECTION,
+        logger=logger,
+        max_retries=_DEEPSEEK_MAX_RETRIES,
     ) as deepseek_client:
         query_runtime = DeepSeekAgentRuntime(
             client=deepseek_client,
@@ -215,21 +230,18 @@ async def activate_external_search() -> AsyncIterator[ExternalSearch]:
 
 @asynccontextmanager
 async def activate_evidence_reviewer_runtime() -> AsyncIterator[AgentRuntime]:
-    from openai import AsyncOpenAI
-
     from app.agent.evidence_review.deepseek_binding import (
         EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
     )
-    from app.agent.runtime.deepseek import (
-        DEEPSEEK_BASE_URL,
-        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-        DeepSeekAgentRuntime,
-    )
+    from app.agent.runtime.deepseek import DEEPSEEK_BASE_URL, DeepSeekAgentRuntime
+    from app.ai_providers.deepseek.client import open_deepseek_client
 
-    async with AsyncOpenAI(
-        api_key=settings.deepseek_api_key.get_secret_value(),
+    async with open_deepseek_client(
+        api_key=settings.deepseek_api_key,
         base_url=DEEPSEEK_BASE_URL,
-        timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        settings=_DEEPSEEK_CONNECTION,
+        logger=logger,
+        max_retries=_DEEPSEEK_MAX_RETRIES,
     ) as deepseek_client:
         yield DeepSeekAgentRuntime(
             client=deepseek_client,
