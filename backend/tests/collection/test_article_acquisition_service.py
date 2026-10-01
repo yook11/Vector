@@ -196,8 +196,7 @@ async def test_pattern_r_inserts_canonicalized_article(
     )
     pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
     assert len(articles) == 1
-    # canonicalize で trailing slash 削除済
-    assert str(articles[0].source_url) == "https://venturebeat.com/a"
+    assert str(articles[0].source_url) == "https://venturebeat.com/a/"
     assert pendings == []
 
 
@@ -223,7 +222,7 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
     pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
     assert articles == []
     assert len(pendings) == 1
-    assert str(pendings[0].url) == "https://techcrunch.com/h"
+    assert str(pendings[0].url) == "https://techcrunch.com/h/"
     assert pendings[0].status == "open"
     assert pendings[0].attempt_count == 0
 
@@ -315,7 +314,7 @@ async def test_canonicalization_dedupes_tracking_query(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """``ArticleUrl`` の正規化が tracking parameter / trailing slash を吸収する。
+    """``ArticleUrl`` の正規化が tracking parameter を吸収する。
 
     異なる原始 URL でも canonicalize 後が同じなら
     ``analyzable_articles.source_url UNIQUE`` で 2 度目は弾かれ ``known_url`` skip。
@@ -324,7 +323,7 @@ async def test_canonicalization_dedupes_tracking_query(
         session_factory,
         _StubSource(
             [
-                _ready_fetched("https://venturebeat.com/a"),
+                _ready_fetched("https://venturebeat.com/a/"),
                 _ready_fetched("https://venturebeat.com/a/?utm_source=twitter"),
             ]
         ),
@@ -628,8 +627,7 @@ async def test_immediate_acquisition_writes_article_created_succeeded(
     assert row.source_id == vb_source.id
     assert row.retryability is None
     assert row.error_class is None
-    # canonicalize で trailing slash 削除済
-    assert row.payload["canonical_url"] == "https://venturebeat.com/a"
+    assert row.payload["canonical_url"] == "https://venturebeat.com/a/"
 
 
 @pytest.mark.asyncio
@@ -656,7 +654,7 @@ async def test_incomplete_observed_article_writes_incomplete_article_created_suc
     assert row.outcome_code == "incomplete_article_created"
     assert row.article_id is None  # 補完後の promote 時に採番
     assert row.retryability is None
-    assert row.payload["canonical_url"] == "https://techcrunch.com/h"
+    assert row.payload["canonical_url"] == "https://techcrunch.com/h/"
 
 
 @pytest.mark.asyncio

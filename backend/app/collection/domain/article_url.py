@@ -1,6 +1,6 @@
 """記事の同一性に使う URL。記事の2表の UNIQUE キーにそのまま使える形を保証する。
 
-WebUrl の正規化に加えて追跡用パラメータ・path 末尾の ``/``・fragment を除く。
+WebUrl の正規化に加えて追跡用パラメータと fragment を除く。
 http と https は別の URL として扱う。
 """
 
@@ -61,17 +61,17 @@ class ArticleUrl(RootModel[str]):
         """入力の長さは追跡用パラメータを除く前に確かめる。"""
         web_url = WebUrl.from_raw(v)
 
-        path = web_url.path or "/"
-        if path != "/" and path.endswith("/"):
-            path = path.rstrip("/") or "/"
-
-        pairs = parse_qsl(web_url.query or "", keep_blank_values=True)
-        kept = [
-            (key, value) for key, value in pairs if key.lower() not in _TRACKING_PARAMS
+        query_params = parse_qsl(web_url.query or "", keep_blank_values=True)
+        kept_params = [
+            (key, value)
+            for key, value in query_params
+            if key.lower() not in _TRACKING_PARAMS
         ]
 
         return web_url.replace(
-            path=path, query=urlencode(kept, doseq=True) or None, fragment=None
+            path=web_url.path or "/",
+            query=urlencode(kept_params, doseq=True) or None,
+            fragment=None,
         ).root
 
     @classmethod

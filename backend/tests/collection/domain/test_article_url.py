@@ -51,13 +51,15 @@ class TestArticleUrlNormalization:
         url = ArticleUrl("https://example.com/a?id=42&page=2")
         assert url.root == "https://example.com/a?id=42&page=2"
 
-    def test_strips_trailing_slash_on_non_root_path(self) -> None:
+    def test_keeps_trailing_slash(self) -> None:
+        # 補完はこの値で本文を取りに行くため、サイトが正とする末尾の / を残す
         url = ArticleUrl("https://example.com/foo/")
-        assert url.root == "https://example.com/foo"
+        assert url.root == "https://example.com/foo/"
 
-    def test_strips_multiple_trailing_slashes(self) -> None:
-        url = ArticleUrl("https://example.com/a///")
-        assert url.root == "https://example.com/a"
+    def test_trailing_slash_makes_distinct_url(self) -> None:
+        assert ArticleUrl("https://example.com/foo") != ArticleUrl(
+            "https://example.com/foo/"
+        )
 
     def test_keeps_root_path_slash(self) -> None:
         url = ArticleUrl("https://example.com/")
@@ -74,7 +76,7 @@ class TestArticleUrlNormalization:
     def test_builds_from_pydantic_parsed_host(self) -> None:
         # バックスラッシュは pydantic の解釈どおり path の区切りとして扱う
         url = ArticleUrl("http://127.0.0.1\\@evil.example/a/")
-        assert url.root == "http://127.0.0.1/@evil.example/a"
+        assert url.root == "http://127.0.0.1/@evil.example/a/"
 
     def test_removes_fragment(self) -> None:
         url = ArticleUrl("https://example.com/foo#section")
@@ -89,7 +91,7 @@ class TestArticleUrlNormalization:
 
     def test_combined_transformation(self) -> None:
         url = ArticleUrl("HTTPS://Example.COM/Article/?utm_source=x&id=42#section")
-        assert url.root == "https://example.com/Article?id=42"
+        assert url.root == "https://example.com/Article/?id=42"
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
@@ -102,7 +104,7 @@ class TestArticleUrlNormalization:
             # 末尾 / + fragment + tracking
             (
                 "https://example.com/a/?utm_source=x#top",
-                "https://example.com/a",
+                "https://example.com/a/",
             ),
             # 値のない query も保持する
             (
@@ -158,7 +160,7 @@ class TestArticleUrlFromRaw:
 
     def test_from_raw_normalizes_on_success(self) -> None:
         url = ArticleUrl.from_raw("https://Example.com/foo/?utm_source=rss#main")
-        assert url.root == "https://example.com/foo"
+        assert url.root == "https://example.com/foo/"
 
     @pytest.mark.parametrize(
         ("raw", "expected_reason"),
@@ -205,7 +207,7 @@ class TestArticleUrlBridges:
 
     def test_str_returns_normalized_value(self) -> None:
         article_url = ArticleUrl("https://Example.com/foo/?utm_source=rss")
-        assert str(article_url) == "https://example.com/foo"
+        assert str(article_url) == "https://example.com/foo/"
 
     def test_repr_includes_value(self) -> None:
         article_url = ArticleUrl("https://example.com/foo")
@@ -215,7 +217,7 @@ class TestArticleUrlBridges:
 class TestArticleUrlEqualityAndHashing:
     def test_equal_when_normalized_value_matches(self) -> None:
         a = ArticleUrl("https://Example.com/foo/?utm_source=rss")
-        b = ArticleUrl("https://example.com/foo")
+        b = ArticleUrl("https://example.com/foo/")
         assert a == b
         assert hash(a) == hash(b)
         assert len({a, b}) == 1
@@ -238,7 +240,7 @@ class TestPydanticIntegration:
     def test_model_from_str(self) -> None:
         m = self.SampleModel(url="https://Example.com/foo/?utm_source=rss")
         assert isinstance(m.url, ArticleUrl)
-        assert m.url.root == "https://example.com/foo"
+        assert m.url.root == "https://example.com/foo/"
 
     def test_model_from_value_object(self) -> None:
         article_url = ArticleUrl("https://example.com/foo")
