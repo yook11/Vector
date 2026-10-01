@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.genai import errors as genai_errors
@@ -16,7 +18,6 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
@@ -30,15 +31,27 @@ from app.analysis.embedding.domain.value_objects import (
 from tests.cloudwatch.records import metric_records
 
 
-def _make_embedder() -> GeminiQueryEmbedder:
-    with (
-        patch("app.agent.evidence_collection.internal_search.ai.gemini.genai.Client"),
-        patch(
-            "app.agent.evidence_collection.internal_search.ai.gemini.settings"
-        ) as mock_settings,
-    ):
-        mock_settings.gemini_api_key.get_secret_value.return_value = "test-key"
-        return GeminiQueryEmbedder()
+class _ClientScope:
+    """embed_content を差し替えた client を貸し、開閉を記録する。"""
+
+    def __init__(self, embed_content: AsyncMock) -> None:
+        self.client = MagicMock()
+        self.client.models.embed_content = embed_content
+        self.events: list[str] = []
+
+    @asynccontextmanager
+    async def __call__(self) -> AsyncIterator[MagicMock]:
+        self.events.append("open")
+        try:
+            yield self.client
+        finally:
+            self.events.append("close")
+
+
+def _make_embedder(embed_content: AsyncMock | None = None) -> GeminiQueryEmbedder:
+    return GeminiQueryEmbedder(
+        client_scope_factory=_ClientScope(embed_content or AsyncMock())
+    )
 
 
 def _make_embed_response(vectors: list[list[float] | None]) -> MagicMock:
@@ -56,18 +69,6 @@ def _api_error(
     return genai_errors.ClientError(code, response_json)
 
 
-def test_init_raises_configuration_error_when_api_key_missing() -> None:
-    with patch(
-        "app.agent.evidence_collection.internal_search.ai.gemini.settings"
-    ) as mock_settings:
-        mock_settings.gemini_api_key.get_secret_value.return_value = ""
-
-        with pytest.raises(AIProviderConfigurationError) as exc_info:
-            GeminiQueryEmbedder()
-
-    assert exc_info.value.reason is GeminiStateReason.NOT_CONFIGURED
-
-
 def test_spec_is_query_embedding_spec_singleton() -> None:
     assert GeminiQueryEmbedder.SPEC is GEMINI_QUERY_EMBEDDING_SPEC
 
@@ -80,7 +81,6 @@ def test_property_contracts_return_spec_values() -> None:
 
 
 async def test_embed_queries_uses_retrieval_query_task_type() -> None:
-    embedder = _make_embedder()
     mock_call = AsyncMock(
         return_value=_make_embed_response(
             [
@@ -89,7 +89,7 @@ async def test_embed_queries_uses_retrieval_query_task_type() -> None:
             ]
         )
     )
-    embedder._client.aio.models.embed_content = mock_call
+    embedder = _make_embedder(mock_call)
 
     result = await embedder.embed_queries(
         InternalSearchQueries(queries=("NVIDIA", "OpenAI"))
@@ -107,21 +107,43 @@ async def test_embed_queries_uses_retrieval_query_task_type() -> None:
     assert mock_call.call_args.kwargs["contents"] == ["NVIDIA", "OpenAI"]
 
 
+async def test_embed_queries_opens_and_closes_client_for_each_call() -> None:
+    scope = _ClientScope(
+        AsyncMock(return_value=_make_embed_response([[0.1] * EMBEDDING_DIMENSION]))
+    )
+    embedder = GeminiQueryEmbedder(client_scope_factory=scope)
+
+    for _ in range(2):
+        await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
+
+    assert scope.events == ["open", "close", "open", "close"]
+
+
+async def test_embed_queries_closes_client_when_provider_call_fails() -> None:
+    scope = _ClientScope(AsyncMock(side_effect=_api_error(429, "RESOURCE_EXHAUSTED")))
+    embedder = GeminiQueryEmbedder(client_scope_factory=scope)
+
+    with pytest.raises(AIProviderRateLimitedError):
+        await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
+
+    assert scope.events == ["open", "close"]
+
+
 async def test_embed_queries_skips_api_for_empty_queries() -> None:
-    embedder = _make_embedder()
-    embedder._client.aio.models.embed_content = AsyncMock()
+    scope = _ClientScope(AsyncMock())
+    embedder = GeminiQueryEmbedder(client_scope_factory=scope)
 
     result = await embedder.embed_queries(InternalSearchQueries())
 
     assert result == []
-    embedder._client.aio.models.embed_content.assert_not_called()
+    assert scope.events == []
+    scope.client.models.embed_content.assert_not_called()
 
 
 async def test_embed_queries_raises_request_invalid_when_embeddings_empty() -> None:
-    embedder = _make_embedder()
     response = MagicMock()
     response.embeddings = []
-    embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
+    embedder = _make_embedder(AsyncMock(return_value=response))
 
     with pytest.raises(AIProviderRequestInvalidError) as exc_info:
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
@@ -130,10 +152,7 @@ async def test_embed_queries_raises_request_invalid_when_embeddings_empty() -> N
 
 
 async def test_embed_queries_raises_request_invalid_when_values_missing() -> None:
-    embedder = _make_embedder()
-    embedder._client.aio.models.embed_content = AsyncMock(
-        return_value=_make_embed_response([None])
-    )
+    embedder = _make_embedder(AsyncMock(return_value=_make_embed_response([None])))
 
     with pytest.raises(AIProviderRequestInvalidError) as exc_info:
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
@@ -142,9 +161,8 @@ async def test_embed_queries_raises_request_invalid_when_values_missing() -> Non
 
 
 async def test_embed_queries_raises_request_invalid_on_count_mismatch() -> None:
-    embedder = _make_embedder()
-    embedder._client.aio.models.embed_content = AsyncMock(
-        return_value=_make_embed_response([[0.1] * EMBEDDING_DIMENSION])
+    embedder = _make_embedder(
+        AsyncMock(return_value=_make_embed_response([[0.1] * EMBEDDING_DIMENSION]))
     )
 
     with pytest.raises(AIProviderRequestInvalidError) as exc_info:
@@ -163,9 +181,8 @@ def test_delegates_timeout_to_network_error() -> None:
 
 
 async def test_embed_queries_translates_rate_limited_error() -> None:
-    embedder = _make_embedder()
-    embedder._client.aio.models.embed_content = AsyncMock(
-        side_effect=_api_error(429, "RESOURCE_EXHAUSTED")
+    embedder = _make_embedder(
+        AsyncMock(side_effect=_api_error(429, "RESOURCE_EXHAUSTED"))
     )
 
     with pytest.raises(AIProviderRateLimitedError):
@@ -201,9 +218,8 @@ async def test_embed_queries_quota_exhausted_emits_ai_provider_exhausted(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """per-day quota 超過は usage_limit_exhausted 翻訳で provider=gemini を emit。"""
-    embedder = _make_embedder()
-    embedder._client.aio.models.embed_content = AsyncMock(
-        side_effect=_resource_exhausted_error(_PER_DAY_QUOTA_ID)
+    embedder = _make_embedder(
+        AsyncMock(side_effect=_resource_exhausted_error(_PER_DAY_QUOTA_ID))
     )
 
     with pytest.raises(AIProviderUsageLimitExhaustedError):
@@ -219,9 +235,8 @@ async def test_embed_queries_per_minute_rate_limited_does_not_emit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """per-minute バーストは rate limited に翻訳され、枯渇としては emit しない。"""
-    embedder = _make_embedder()
-    embedder._client.aio.models.embed_content = AsyncMock(
-        side_effect=_resource_exhausted_error(_PER_MINUTE_QUOTA_ID)
+    embedder = _make_embedder(
+        AsyncMock(side_effect=_resource_exhausted_error(_PER_MINUTE_QUOTA_ID))
     )
 
     with pytest.raises(AIProviderRateLimitedError):

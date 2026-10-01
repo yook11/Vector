@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from typing import Final
 
 import structlog
-from google import genai
+from google.genai.client import AsyncClient
 from google.genai.types import EmbedContentConfig
 from pydantic import ValidationError
 
@@ -18,7 +20,6 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
     AIProviderError,
     AIProviderRequestInvalidError,
 )
@@ -28,21 +29,21 @@ from app.ai_providers.gemini.error_translator import (
 )
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
-from app.config import settings
 
 logger = structlog.get_logger(__name__)
 
 
 class GeminiQueryEmbedder:
-    """Gemini implementation of the internal query embedder protocol."""
+    """呼び出しごとにクライアントを借り、生成・終了と通信設定は呼び出し元に任せる。"""
 
     SPEC: Final[QueryEmbeddingCallSpec] = GEMINI_QUERY_EMBEDDING_SPEC
 
-    def __init__(self) -> None:
-        api_key = settings.gemini_api_key.get_secret_value()
-        if not api_key:
-            raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
-        self._client = genai.Client(api_key=api_key)
+    def __init__(
+        self,
+        *,
+        client_scope_factory: Callable[[], AbstractAsyncContextManager[AsyncClient]],
+    ) -> None:
+        self._client_scope_factory = client_scope_factory
 
     @property
     def model_name(self) -> str:
@@ -66,34 +67,37 @@ class GeminiQueryEmbedder:
         ]
 
     async def _embed_once(self, queries: InternalSearchQueries) -> list[list[float]]:
-        try:
-            logger.info(
-                "internal_query_embed_api_call",
-                model=self.model_name,
-                query_count=len(queries.queries),
-            )
-            vectors = await self._call_api(queries)
-            logger.info(
-                "internal_query_embed_api_success",
-                model=self.model_name,
-                query_count=len(queries.queries),
-            )
-            return vectors
-        except AIProviderError:
-            raise
-        except ValidationError as exc:
-            raise AIProviderRequestInvalidError(
-                reason=GeminiStateReason.INVALID_ARGUMENT
-            ) from exc
-        except Exception as exc:
-            translated = self._translate_error(exc)
-            if translated is exc:
+        async with self._client_scope_factory() as client:
+            try:
+                logger.info(
+                    "internal_query_embed_api_call",
+                    model=self.model_name,
+                    query_count=len(queries.queries),
+                )
+                vectors = await self._call_api(client, queries)
+                logger.info(
+                    "internal_query_embed_api_success",
+                    model=self.model_name,
+                    query_count=len(queries.queries),
+                )
+                return vectors
+            except AIProviderError:
                 raise
-            record_ai_provider_exhausted(translated, provider=self.SPEC.provider)
-            raise translated from exc
+            except ValidationError as exc:
+                raise AIProviderRequestInvalidError(
+                    reason=GeminiStateReason.INVALID_ARGUMENT
+                ) from exc
+            except Exception as exc:
+                translated = self._translate_error(exc)
+                if translated is exc:
+                    raise
+                record_ai_provider_exhausted(translated, provider=self.SPEC.provider)
+                raise translated from exc
 
-    async def _call_api(self, queries: InternalSearchQueries) -> list[list[float]]:
-        response = await self._client.aio.models.embed_content(
+    async def _call_api(
+        self, client: AsyncClient, queries: InternalSearchQueries
+    ) -> list[list[float]]:
+        response = await client.models.embed_content(
             model=self.SPEC.model,
             contents=list(queries.queries),
             config=EmbedContentConfig(

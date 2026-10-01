@@ -171,6 +171,28 @@ async def test_closes_resources_and_preserves_body_exception(
 
 
 @pytest.mark.asyncio
+async def test_sdk_retries_only_when_caller_specifies(
+    resources, make_invocation_logger
+):
+    """SDKの再試行は呼び出し側が指定した回数だけ許可し、既定では再試行しない。"""
+    _, _, _, constructor = resources
+    for max_retries in (None, 2):
+        options = {} if max_retries is None else {"max_retries": max_retries}
+        async with module.open_deepseek_client(
+            logger=make_invocation_logger(),
+            api_key=SecretStr("private"),
+            base_url="https://api.deepseek.com/beta",
+            settings=DeepSeekConnectionSettings(),
+            **options,
+        ):
+            pass
+    assert [call.kwargs["max_retries"] for call in constructor.call_args_list] == [
+        0,
+        2,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_sdk_creation_failure_closes_http(resources, make_invocation_logger):
     """SDK生成に失敗した場合も、先に作成したHTTPクライアントを解放する。"""
     failure = RuntimeError("private")

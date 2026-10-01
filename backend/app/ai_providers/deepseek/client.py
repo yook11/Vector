@@ -35,6 +35,7 @@ async def open_deepseek_client(
     base_url: str,
     settings: DeepSeekConnectionSettings,
     logger: FilteringBoundLogger,
+    max_retries: int = 0,
 ) -> AsyncIterator[AsyncOpenAI]:
     """SDKとHTTPクライアントを所有する。"""
     if not api_key.get_secret_value().strip():
@@ -64,7 +65,7 @@ async def open_deepseek_client(
             base_url=base_url,
             http_client=http_client,
             timeout=timeout,
-            max_retries=0,
+            max_retries=max_retries,
         )
         stack.push_async_callback(_close, "sdk", client.close, logger=logger)
         yield client

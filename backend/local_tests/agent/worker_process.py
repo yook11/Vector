@@ -239,7 +239,7 @@ async def main():
                 patch.object(composition, "activate_external_search", search_scope)
             )
             patches.enter_context(
-                patch.object(gemini, "GeminiQueryEmbedder", lambda: responses)
+                patch.object(gemini, "GeminiQueryEmbedder", lambda **_: responses)
             )
             patches.enter_context(
                 patch.object(broker_agent, "listen", receive_deliveries)

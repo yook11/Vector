@@ -94,6 +94,7 @@ AWS試験のスナップショットにも、同じ相対配置でJSONを同梱�
 `error_mapping`はその結果を`HttpTransportError`へ載せる。
 記事の取得工程・補完工程はどちらも共通HTTPエラーを受け取り、
 例外メッセージから独自にstatusを読み取らない。
+AIプロバイダーの変換器も`classify_httpx`で通信失敗を判定し、宛先方針による拒否と合わせてAI用の通信失敗（`AIProviderNetworkError`）へ変換する。
 
 | 発生事実 | HTTP側の扱い | 保証しないこと |
 |---|---|---|

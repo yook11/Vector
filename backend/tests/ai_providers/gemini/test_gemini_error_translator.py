@@ -29,6 +29,8 @@ from app.ai_providers.gemini.error_translator import (
     is_context_length_error,
     translate_gemini_error,
 )
+from app.http.destination_policy import HostBlockedError
+from app.http.destination_resolution import HostResolutionError
 
 
 def _client_error(
@@ -60,7 +62,7 @@ def _api_error(
 @pytest.mark.parametrize(
     "exc",
     [
-        httpx.TimeoutException("timed out"),
+        httpx.ReadTimeout("timed out"),
         httpx.ConnectError("connection refused"),
         TimeoutError("io timeout"),
         ConnectionError("conn reset"),
@@ -71,6 +73,32 @@ def test_network_errors_translate_to_network_error(exc: Exception) -> None:
     translated = translate_gemini_error(exc)
     assert isinstance(translated, AIProviderNetworkError)
     assert translated.CODE == "ai_error_network"
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_reason"),
+    [
+        (httpx.ProxyError("403 Forbidden"), GeminiStateReason.CONNECTION),
+        (httpx.ReadError("read failed"), GeminiStateReason.CONNECTION),
+        (httpx.RemoteProtocolError("bad response"), GeminiStateReason.CONNECTION),
+        (HostResolutionError("no address"), GeminiStateReason.CONNECTION),
+        (httpx.PoolTimeout("pool exhausted"), GeminiStateReason.TIMEOUT),
+        (HostBlockedError("private address"), GeminiStateReason.HOST_BLOCKED),
+    ],
+)
+def test_common_http_failures_translate_to_network_error(
+    exc: Exception, expected_reason: GeminiStateReason
+) -> None:
+    """共通の外部 HTTP クライアントで出る失敗も、通信の失敗として理由付きで変換する。"""
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, AIProviderNetworkError)
+    assert translated.reason is expected_reason
+
+
+def test_unsupported_protocol_is_not_a_network_error() -> None:
+    """http/https 以外の拒否は通信の失敗ではないので、変換せずに返す。"""
+    exc = httpx.UnsupportedProtocol("ftp is not sent")
+    assert translate_gemini_error(exc) is exc
 
 
 # ServerError (5xx) → ServiceUnavailable
@@ -370,7 +398,7 @@ def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
     "exc,expected_cls,expected_reason",
     [
         (
-            httpx.TimeoutException("t"),
+            httpx.ReadTimeout("t"),
             AIProviderNetworkError,
             GeminiStateReason.TIMEOUT,
         ),
