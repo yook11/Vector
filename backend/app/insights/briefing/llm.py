@@ -1,7 +1,7 @@
 """DeepSeek-V4 Pro による週次 briefing 生成 LLM クライアント。
 
-OpenAI SDK の AsyncOpenAI を ``base_url=https://api.deepseek.com/beta`` で
-再利用する (Stage 4 ``app/analysis/assessment/ai/deepseek.py`` と同パターン)。
+OpenAI SDK を ``base_url=https://api.deepseek.com/beta`` で使い、client は
+呼び出し元が渡す関数で生成のたびに開く。
 Function Calling + ``strict: true`` + inline flat schema で構造化出力を強制。
 
 ハルシネーション検証:
@@ -13,12 +13,14 @@ Function Calling + ``strict: true`` + inline flat schema で構造化出力を�
 - OpenAI SDK 例外は ``BriefingLlmError`` に wrap して stage marker として伝播
 - 応答 schema 不一致は ``BriefingLlmResponseInvalidError`` に wrap
   (violations に loc + 制約種別を value-free で焼き込む)
-- API key 未設定は ``BriefingConfigurationError`` で fail-fast
+- API key 未設定は composition が worker 起動時に ``BriefingConfigurationError`` で
+  fail-fast
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import date
 from typing import Any, ClassVar, Final
 
@@ -29,7 +31,6 @@ from openai.types.chat import ChatCompletionMessageFunctionToolCall
 from pydantic import ValidationError
 
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
-from app.config import settings
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
 from app.insights.briefing.domain.ready import BriefingArticle
 from app.insights.briefing.errors import (
@@ -40,7 +41,6 @@ from app.insights.briefing.errors import (
 
 logger = structlog.get_logger(__name__)
 
-_BASE_URL: Final = "https://api.deepseek.com/beta"
 _TOOL_NAME: Final = "submit_weekly_briefing"
 
 
@@ -203,12 +203,14 @@ class DeepSeekBriefingGenerator:
     """DeepSeek-V4 Pro (1M context) による週次 briefing 生成器。"""
 
     MODEL: ClassVar[str] = "deepseek-v4-pro"
+    BASE_URL: ClassVar[str] = "https://api.deepseek.com/beta"
 
-    def __init__(self) -> None:
-        api_key = settings.deepseek_api_key.get_secret_value()
-        if not api_key:
-            raise BriefingConfigurationError("DEEPSEEK_API_KEY is not configured")
-        self._client = AsyncOpenAI(api_key=api_key, base_url=_BASE_URL)
+    def __init__(
+        self,
+        *,
+        client_scope_factory: Callable[[], AbstractAsyncContextManager[AsyncOpenAI]],
+    ) -> None:
+        self._client_scope_factory = client_scope_factory
 
     async def generate(
         self,
@@ -237,31 +239,32 @@ class DeepSeekBriefingGenerator:
             week_start=week_start.isoformat(),
             article_count=len(articles),
         )
-        try:
-            resp = await self._client.chat.completions.create(
-                model=self.MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": _TOOL_NAME,
-                            "strict": True,
-                            "description": (
-                                "1 カテゴリ × 1 週の業界週次 briefing を提出する"
-                            ),
-                            "parameters": BRIEFING_TOOL_SCHEMA,
-                        },
-                    }
-                ],
-                tool_choice={"type": "function", "function": {"name": _TOOL_NAME}},
-                # DeepSeek-V4 Pro は thinking モードで起動すると tool_choice と衝突
-                # して 400 になる (内部的に reasoner 系として扱われるため)。Stage 2
-                # 分類器と同じく thinking を明示無効化する。
-                extra_body={"thinking": {"type": "disabled"}},
-            )
-        except openai.APIError as exc:
-            raise BriefingLlmError(provider_error=exc) from exc
+        async with self._client_scope_factory() as client:
+            try:
+                resp = await client.chat.completions.create(
+                    model=self.MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    tools=[
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": _TOOL_NAME,
+                                "strict": True,
+                                "description": (
+                                    "1 カテゴリ × 1 週の業界週次 briefing を提出する"
+                                ),
+                                "parameters": BRIEFING_TOOL_SCHEMA,
+                            },
+                        }
+                    ],
+                    tool_choice={"type": "function", "function": {"name": _TOOL_NAME}},
+                    # DeepSeek-V4 Pro は thinking モードで起動すると tool_choice と衝突
+                    # して 400 になる (内部的に reasoner 系として扱われるため)。Stage 2
+                    # 分類器と同じく thinking を明示無効化する。
+                    extra_body={"thinking": {"type": "disabled"}},
+                )
+            except openai.APIError as exc:
+                raise BriefingLlmError(provider_error=exc) from exc
         choice = resp.choices[0]
         tool_call = next(iter(choice.message.tool_calls or []), None)
         # tool_choice で function を強制しているので custom tool 型は来ない。

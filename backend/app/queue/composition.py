@@ -19,18 +19,48 @@ broker_agent) でのみロードされる。本契約は
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
+from typing import TYPE_CHECKING
+
 import structlog
 from taskiq import TaskiqState
 
+from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
+from app.config import settings
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+
 logger = structlog.get_logger(__name__)
+
+# タスクの打ち切り(300秒)が先に効くよう、1回の試行の上限はそれより長くする。
+_BRIEFING_DEEPSEEK_CONNECTION = DeepSeekConnectionSettings(read_timeout=600.0)
+_BRIEFING_DEEPSEEK_MAX_RETRIES = 2
 
 
 async def _wire_briefing_adapter(state: TaskiqState) -> None:
     """週次 briefing の LLM generator を worker 起動時に構築する。"""
+    from app.insights.briefing.errors import BriefingConfigurationError
+
+    if not settings.deepseek_api_key.get_secret_value():
+        raise BriefingConfigurationError("DEEPSEEK_API_KEY is not configured")
+
     # 具象 SDK の import を関数本体に遅延 (module docstring 参照)。
+    from app.ai_providers.deepseek.client import open_deepseek_client
     from app.insights.briefing.llm import DeepSeekBriefingGenerator
 
-    state.briefing_generator = DeepSeekBriefingGenerator()
+    def open_client() -> AbstractAsyncContextManager[AsyncOpenAI]:
+        return open_deepseek_client(
+            api_key=settings.deepseek_api_key,
+            base_url=DeepSeekBriefingGenerator.BASE_URL,
+            settings=_BRIEFING_DEEPSEEK_CONNECTION,
+            logger=logger,
+            max_retries=_BRIEFING_DEEPSEEK_MAX_RETRIES,
+        )
+
+    state.briefing_generator = DeepSeekBriefingGenerator(
+        client_scope_factory=open_client
+    )
     logger.info(
         "briefing_adapter_wired",
         generator=type(state.briefing_generator).__name__,
