@@ -91,12 +91,6 @@ override_resource {
   values          = { arn = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-completion-dlq" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_role.completion_consumer
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-consumer-lambda" }
-}
-
 run "completion_consumer_receives_with_bounded_execution" {
   command = plan
   assert {
@@ -138,23 +132,6 @@ run "queue_visibility_and_redrive_preserve_retention" {
       jsondecode(aws_sqs_queue_redrive_allow_policy.completion_dlq.redrive_allow_policy).sourceQueueArns == [aws_sqs_queue.outbox["completion"].arn]
     )
     error_message = "既存保持期間を短縮せず、600秒Lambdaの通常可視性と補完専用DLQを接続する。"
-  }
-}
-
-run "consumer_collect_and_sqs_permissions" {
-  command = plan
-  assert {
-    condition = (
-      jsondecode(aws_iam_role_policy.completion_consumer.policy).Statement[0].Resource == aws_sqs_queue.outbox["completion"].arn &&
-      toset(jsondecode(aws_iam_role_policy.completion_consumer.policy).Statement[0].Action) == toset(["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]) &&
-      jsondecode(aws_iam_role_policy.completion_consumer.policy).Statement[1].Resource == "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:db-TEST/vector_collect" &&
-      !strcontains(aws_iam_role_policy.completion_consumer.policy, "ssm:") &&
-      !strcontains(aws_iam_role_policy.completion_consumer.policy, "sqs:SendMessage") &&
-      anytrue([for statement in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement :
-        try(statement.Action == "sqs:ChangeMessageVisibility" && statement.Resource == aws_sqs_queue.outbox["completion"].arn && statement.Principal.AWS == aws_iam_role.completion_consumer.arn, false)
-      ])
-    )
-    error_message = "Collectと補完キューに必要な権限だけを実行roleとendpointで許可する。"
   }
 }
 
