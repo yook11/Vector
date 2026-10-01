@@ -237,8 +237,7 @@ class TestWebUrlValidateReason:
     """``WebUrl`` 検証が失敗段を ``WebUrlInvalidReason`` で分類することの所有テスト。
 
     reason は ``WebUrl(x)`` 経由だと pydantic の ValidationError ctx に潜るため、
-    検証本体 ``_validate`` を直接呼んで型で確かめる
-    (``CanonicalArticleUrl.from_raw`` が消費するのと同じ経路)。
+    公開の入口 ``from_raw`` で型として確かめる。
     """
 
     @pytest.mark.parametrize(
@@ -259,9 +258,43 @@ class TestWebUrlValidateReason:
             ("example.com", WebUrlInvalidReason.URL_NOT_HTTP),
         ],
     )
-    def test_validate_classifies_failure_reason(
+    def test_from_raw_classifies_failure_reason(
         self, raw: object, expected_reason: WebUrlInvalidReason
     ) -> None:
         with pytest.raises(WebUrlInvalidError) as exc_info:
-            WebUrl._validate(raw)
+            WebUrl.from_raw(raw)
         assert exc_info.value.reason is expected_reason
+
+    def test_from_raw_returns_normalized_web_url(self) -> None:
+        url = WebUrl.from_raw("  HTTPS://Example.COM  ")
+        assert isinstance(url, WebUrl)
+        assert url.root == "https://example.com/"
+
+
+# WebUrl — 解析済みの部品と組み立て直し
+class TestWebUrlParts:
+    """pydantic が解析した部品を渡し、部品を差し替えた WebUrl を作る。"""
+
+    def test_path_and_query(self) -> None:
+        url = WebUrl("https://example.com/a/b?x=1&y=2#top")
+        assert (url.path, url.query) == ("/a/b", "x=1&y=2")
+
+    def test_query_is_none_without_query(self) -> None:
+        assert WebUrl("https://example.com/a").query is None
+
+    def test_replace_keeps_origin_and_userinfo(self) -> None:
+        url = WebUrl("https://user:pw@example.com:8443/a/b?x=1#top")
+        replaced = url.replace(path="/c", query="y=2", fragment=None)
+        assert replaced == WebUrl("https://user:pw@example.com:8443/c?y=2")
+
+    def test_replace_sets_fragment(self) -> None:
+        url = WebUrl("https://example.com/a#top")
+        replaced = url.replace(path="/a", query=None, fragment="end")
+        assert replaced.root == "https://example.com/a#end"
+
+    def test_replace_rejects_value_over_max_length(self) -> None:
+        # 元の URL は 20 字で、差し替えた path で 2048 字を超える
+        url = WebUrl("https://example.com/")
+        with pytest.raises(WebUrlInvalidError) as exc_info:
+            url.replace(path="/" + "a" * 2040, query=None, fragment=None)
+        assert exc_info.value.reason is WebUrlInvalidReason.URL_TOO_LONG

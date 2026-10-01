@@ -5,5 +5,4 @@
 - ``article_acquisition/`` — Stage 1 (収集) 工程
 - ``article_completion/`` — Stage 2 (補完) 工程
 - ``sources/`` — 外部ソース固有の ``ArticleSource`` 群
-- ``url_canonicalize.py`` — URL 正規化純関数
 """

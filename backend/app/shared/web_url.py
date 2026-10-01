@@ -8,7 +8,7 @@ URL の形式だけを保証し、構文の解析と正規化は Pydantic の An
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
 from pydantic import (
     AnyHttpUrl,
@@ -37,7 +37,7 @@ class WebUrlInvalidError(ValueError):
 
     ``ValueError`` サブクラスなので ``WebUrl`` の validator 内で raise すると
     pydantic が ``ValidationError`` にラップする (既存 ``WebUrl(x)`` 契約維持)。
-    ``CanonicalArticleUrl.from_raw`` は validator を直接呼び reason を型で取る。
+    ``WebUrl.from_raw`` はラップせずにそのまま送出する。
     URL 値などの input は載せず reason タグのみを監査へ流す (PII フリー)。
     """
 
@@ -69,8 +69,6 @@ class WebUrl(RootModel[str]):
         何が起きたらどの reason を出すかを、この振る舞いの中で示す。raise する
         ``WebUrlInvalidError`` は ``ValueError`` サブクラスなので pydantic が
         ``ValidationError`` にラップする (``WebUrl(x)`` の契約維持)。
-        ``CanonicalArticleUrl.from_raw`` は本 validator を直接呼び reason を型で
-        受け取る (pydantic 非経由で ``__cause__`` も保たれる)。
         """
         if not isinstance(v, str):
             raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_NOT_A_STRING)
@@ -87,6 +85,35 @@ class WebUrl(RootModel[str]):
         if len(normalized) > _MAX_LENGTH:
             raise WebUrlInvalidError(reason=WebUrlInvalidReason.URL_TOO_LONG)
         return normalized
+
+    @classmethod
+    def from_raw(cls, raw: object) -> Self:
+        """失敗理由を ValidationError に包まず WebUrlInvalidError で送出する。"""
+        return cls.model_construct(cls._validate(raw))
+
+    @property
+    def path(self) -> str | None:
+        return _url_adapter.validate_python(self.root).path
+
+    @property
+    def query(self) -> str | None:
+        return _url_adapter.validate_python(self.root).query
+
+    def replace(self, *, path: str, query: str | None, fragment: str | None) -> WebUrl:
+        """組み立て直した値も検証し、失敗時は WebUrlInvalidError を送出する。"""
+        parsed = _url_adapter.validate_python(self.root)
+        rebuilt = AnyHttpUrl.build(
+            scheme=parsed.scheme,
+            username=parsed.username,
+            password=parsed.password,
+            host=parsed.host or "",
+            port=parsed.port,
+            # build は path の先頭に / を補うため、重複しないよう外して渡す。
+            path=path.removeprefix("/"),
+            query=query,
+            fragment=fragment,
+        )
+        return WebUrl.from_raw(str(rebuilt))
 
     def __str__(self) -> str:
         return self.root

@@ -22,7 +22,7 @@ from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.source_name import SourceName
 
@@ -109,7 +109,7 @@ class ObservedArticle(BaseModel):
         serialization_alias="sourceName",
         exclude=True,
     )
-    source_url: CanonicalArticleUrl = Field(exclude=True)
+    source_url: ArticleUrl = Field(exclude=True)
     title: ObservedField[str] | None = None
     body: ObservedField[str] | None = None
     published_at: ObservedField[PublishedAt] | None = Field(
@@ -123,7 +123,7 @@ class ObservedArticle(BaseModel):
         cls,
         *,
         source_name: SourceName,
-        source_url: CanonicalArticleUrl,
+        source_url: ArticleUrl,
         title: str,
         body: str | None,
         published_at: PublishedAt | None,
@@ -153,7 +153,7 @@ class ObservedArticle(BaseModel):
         *,
         observed_article: Mapping[str, Any],
         source_name: SourceName,
-        source_url: CanonicalArticleUrl,
+        source_url: ArticleUrl,
     ) -> Self:
         """永続化 payload と authoritative identity から構築する。
 

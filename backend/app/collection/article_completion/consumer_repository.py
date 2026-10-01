@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import String, delete, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.sources.source_name import SourceName
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
@@ -20,7 +21,7 @@ class RecordedIncompleteArticle:
     status: str
     source_id: int
     source_name: SourceName
-    source_url: str
+    source_url: ArticleUrl
     observed_article: dict[str, Any]
 
 
@@ -41,7 +42,7 @@ class ArticleCompletionConsumerRepository:
                         IncompleteArticle.status,
                         IncompleteArticle.source_id,
                         IncompleteArticle.source_name,
-                        IncompleteArticle.url.cast(String).label("source_url"),
+                        IncompleteArticle.url.label("source_url"),
                         IncompleteArticle.observed_article,
                     ).where(IncompleteArticle.id == incomplete_article_id)
                 )
@@ -51,7 +52,7 @@ class ArticleCompletionConsumerRepository:
         )
         return RecordedIncompleteArticle(**row) if row is not None else None
 
-    async def has_completed_article(self, source_url: str) -> bool:
+    async def has_completed_article(self, source_url: ArticleUrl) -> bool:
         stmt = select(AnalyzableArticleRecord.id).where(
             AnalyzableArticleRecord.source_url == source_url
         )

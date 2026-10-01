@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.persistence.analyzable_article_repository import (
     AnalyzableArticleRepository,
@@ -33,7 +33,7 @@ def _ready(
         body=body,
         published_at=PublishedAt(datetime(2026, 3, 1, tzinfo=UTC)),
         source_id=source_id,
-        source_url=CanonicalArticleUrl(url),
+        source_url=ArticleUrl(url),
     )
 
 
@@ -55,7 +55,7 @@ async def test_save_persists_ready_article(
     assert orm.original_title == "Ready Title"
     assert orm.original_content == "x" * 60
     assert orm.published_at == datetime(2026, 3, 1, tzinfo=UTC)
-    assert str(orm.source_url) == "https://example.com/article/save-ready"
+    assert orm.source_url == ArticleUrl("https://example.com/article/save-ready")
 
 
 @pytest.mark.asyncio
@@ -101,7 +101,7 @@ async def test_exists_by_source_url_returns_true_when_present(
     await repo.save(_ready(sample_source.id, url))
     await db_session.commit()
 
-    assert await repo.exists_by_source_url(CanonicalArticleUrl(url)) is True
+    assert await repo.exists_by_source_url(ArticleUrl(url)) is True
 
 
 @pytest.mark.asyncio
@@ -110,7 +110,7 @@ async def test_exists_by_source_url_returns_false_when_absent(
 ) -> None:
     assert (
         await AnalyzableArticleRepository(db_session).exists_by_source_url(
-            CanonicalArticleUrl("https://example.com/article/seen-false")
+            ArticleUrl("https://example.com/article/seen-false")
         )
         is False
     )

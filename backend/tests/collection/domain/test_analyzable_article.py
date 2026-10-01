@@ -27,10 +27,10 @@ from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH,
     ARTICLE_TITLE_MAX_LENGTH,
 )
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.value_objects import PublishedAt
 
-_URL = CanonicalArticleUrl("https://example.com/article")
+_URL = ArticleUrl("https://example.com/article")
 _PUB = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 _VALID_TITLE = "Valid Title"
 _VALID_BODY = "x" * (ARTICLE_BODY_MIN_LENGTH + 10)

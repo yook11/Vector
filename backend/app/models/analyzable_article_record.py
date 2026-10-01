@@ -15,8 +15,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.collection.domain.article_url import ArticleUrl
 from app.models.base import Base
-from app.models.types import WebUrlType
+from app.models.types import ArticleUrlType
 from app.shared.web_url import WebUrl
 
 if TYPE_CHECKING:
@@ -47,7 +48,7 @@ class AnalyzableArticleRecord(Base):
     source_id: Mapped[int] = mapped_column(
         ForeignKey("news_sources.id", ondelete="RESTRICT"),
     )
-    source_url: Mapped[WebUrl] = mapped_column(WebUrlType)
+    source_url: Mapped[ArticleUrl] = mapped_column(ArticleUrlType)
     original_title: Mapped[str] = mapped_column(String(500))
     original_content: Mapped[str] = mapped_column(Text())
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -66,10 +67,5 @@ class AnalyzableArticleRecord(Base):
 
     @property
     def original_url(self) -> WebUrl:
-        """API レスポンス用の便利プロパティ。
-
-        ``analyzable_articles.source_url`` は Stage 1 で正規化済の URL (NOT NULL、
-        WebUrl 型)。新経路 / 旧経路を問わず常に値があるため、
-        relationship を経由せず直接返す。
-        """
-        return self.source_url
+        """API は元記事の URL を WebUrl として返す。"""
+        return self.source_url.as_web_url()

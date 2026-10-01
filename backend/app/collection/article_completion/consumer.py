@@ -25,7 +25,6 @@ from app.collection.article_completion.metrics import (
     record_completion_processing_outcome,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.events import AnalyzableArticleCreated
 from app.collection.persistence.analyzable_article_repository import (
@@ -70,21 +69,22 @@ class ArticleCompletionConsumer:
                     await session.commit()
                     return CompletionNotRequired(reason="url_conflict")
 
-            source_url = CanonicalArticleUrl.from_raw(incomplete.source_url)
             observed = ObservedArticle.try_build(
                 observed_article=incomplete.observed_article,
                 source_name=incomplete.source_name,
-                source_url=source_url,
+                source_url=incomplete.source_url,
             )
             completion_policy = completion_policy_for(observed.source_name)
-            raw_response = await fetch_article_response(source_url.as_web_url())
+            raw_response = await fetch_article_response(
+                incomplete.source_url.as_web_url()
+            )
             scraped_content = extract_html_content(raw_response)
             analyzable_article = complete_with_html(
                 observed,
                 completion_policy,
                 scraped_content,
                 source_id=incomplete.source_id,
-                source_url=source_url,
+                source_url=incomplete.source_url,
             )
             return await self._commit_completed(incomplete, analyzable_article)
         except Exception as exc:
