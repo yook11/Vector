@@ -65,11 +65,88 @@ async def test_wire_briefing_adapter_attaches_generator_to_state() -> None:
     from app.queue.composition import _wire_briefing_adapter
 
     state = TaskiqState()
-    with patch("app.insights.briefing.llm.settings") as mock_settings:
+    with patch("app.queue.composition.settings") as mock_settings:
         mock_settings.deepseek_api_key = SecretStr("test-key")
         await _wire_briefing_adapter(state)
 
     assert isinstance(state.briefing_generator, DeepSeekBriefingGenerator)
+
+
+@pytest.mark.asyncio
+async def test_wire_briefing_adapter_rejects_missing_key_at_startup() -> None:
+    """DeepSeek のキーが無ければ、生成を待たずに worker の起動で失敗する。"""
+    from app.insights.briefing.errors import BriefingConfigurationError
+    from app.queue.composition import _wire_briefing_adapter
+
+    with (
+        patch("app.queue.composition.settings") as mock_settings,
+        pytest.raises(BriefingConfigurationError),
+    ):
+        mock_settings.deepseek_api_key = SecretStr("")
+        await _wire_briefing_adapter(TaskiqState())
+
+
+@pytest.mark.asyncio
+async def test_wired_briefing_generator_opens_client_only_when_generating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """起動時は client を開かず、生成のたびに briefing 用の接続設定で開く。"""
+    from datetime import date
+
+    import httpx
+    import openai
+
+    from app.ai_providers.deepseek import client as deepseek_client_module
+    from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
+    from app.insights.briefing.domain.ready import BriefingArticle
+    from app.insights.briefing.errors import BriefingLlmError
+    from app.queue.composition import _wire_briefing_adapter
+
+    opened: list[dict[str, Any]] = []
+    sdk = MagicMock()
+    request = httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
+    # 応答の組み立てを省くため、SDK の呼び出しは失敗させて client の開き方だけを見る。
+    sdk.chat.completions.create = AsyncMock(
+        side_effect=openai.APIError("upstream", request=request, body=None)
+    )
+
+    @asynccontextmanager
+    async def fake_open_deepseek_client(**kwargs: Any):
+        opened.append(kwargs)
+        yield sdk
+
+    monkeypatch.setattr(
+        deepseek_client_module, "open_deepseek_client", fake_open_deepseek_client
+    )
+    state = TaskiqState()
+    with patch("app.queue.composition.settings") as mock_settings:
+        mock_settings.deepseek_api_key = SecretStr("test-key")
+        await _wire_briefing_adapter(state)
+        assert opened == []
+
+        with pytest.raises(BriefingLlmError):
+            await state.briefing_generator.generate(
+                category_name="AI",
+                week_start=date(2026, 4, 20),
+                articles=[
+                    BriefingArticle(
+                        analyzed_article_id=1, translated_title="t", summary="s"
+                    )
+                ],
+            )
+
+    assert [
+        {key: value for key, value in kwargs.items() if key != "logger"}
+        for kwargs in opened
+    ] == [
+        {
+            "api_key": SecretStr("test-key"),
+            "base_url": "https://api.deepseek.com/beta",
+            # タスクの打ち切り(300秒)が先に効くよう、read はそれより長い今の値を保つ。
+            "settings": DeepSeekConnectionSettings(read_timeout=600.0),
+            "max_retries": 2,
+        }
+    ]
 
 
 class TestWorkerMaxAsyncTasksCeiling:

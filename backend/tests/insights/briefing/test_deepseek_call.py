@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import openai
@@ -20,7 +22,6 @@ from openai.types.chat.chat_completion_message_function_tool_call import (
     ChatCompletionMessageFunctionToolCall,
     Function,
 )
-from pydantic import SecretStr
 
 from app.insights.briefing.domain.briefing import (
     MAX_CHAPTERS_PER_BRIEFING,
@@ -32,6 +33,27 @@ from app.insights.briefing.errors import (
     BriefingLlmError,
     BriefingLlmResponseInvalidError,
 )
+from app.insights.briefing.llm import DeepSeekBriefingGenerator
+
+
+class _ClientScope:
+    """create を差し替えた client を貸し、開閉を記録する。"""
+
+    def __init__(self, create: AsyncMock) -> None:
+        self.client = MagicMock()
+        self.client.chat.completions.create = create
+        self.events: list[str] = []
+
+    @asynccontextmanager
+    async def __call__(self) -> AsyncIterator[MagicMock]:
+        self.events.append("open")
+        try:
+            yield self.client
+        finally:
+            self.events.append("close")
+
+
+_ARTICLES = [BriefingArticle(analyzed_article_id=1, translated_title="t", summary="s")]
 
 
 def _fake_completion_with_tool_call(arguments: dict) -> MagicMock:
@@ -72,26 +94,10 @@ async def test_disables_thinking_for_pro_model() -> None:
         )
     )
 
-    fake_client = MagicMock()
-    fake_client.chat.completions.create = create
-
-    with (
-        patch("app.insights.briefing.llm.settings") as mock_settings,
-        patch("app.insights.briefing.llm.AsyncOpenAI", return_value=fake_client),
-    ):
-        mock_settings.deepseek_api_key = SecretStr("test-key")
-        from app.insights.briefing.llm import DeepSeekBriefingGenerator
-
-        gen = DeepSeekBriefingGenerator()
-        result = await gen.generate(
-            category_name="AI",
-            week_start=date(2026, 4, 20),
-            articles=[
-                BriefingArticle(
-                    analyzed_article_id=1, translated_title="t", summary="s"
-                )
-            ],
-        )
+    gen = DeepSeekBriefingGenerator(client_scope_factory=_ClientScope(create))
+    result = await gen.generate(
+        category_name="AI", week_start=date(2026, 4, 20), articles=_ARTICLES
+    )
 
     create.assert_awaited_once()
     kwargs = create.await_args.kwargs
@@ -134,26 +140,10 @@ def test_tool_schema_required_fields_match_new_output() -> None:
 async def _generate_with_mocked_response(arguments: dict) -> None:
     """LLM 出力 mock で generate を呼ぶ共通ヘルパ (F10 振る舞い test 用)。"""
     create = AsyncMock(return_value=_fake_completion_with_tool_call(arguments))
-    fake_client = MagicMock()
-    fake_client.chat.completions.create = create
-
-    with (
-        patch("app.insights.briefing.llm.settings") as mock_settings,
-        patch("app.insights.briefing.llm.AsyncOpenAI", return_value=fake_client),
-    ):
-        mock_settings.deepseek_api_key = SecretStr("test-key")
-        from app.insights.briefing.llm import DeepSeekBriefingGenerator
-
-        gen = DeepSeekBriefingGenerator()
-        await gen.generate(
-            category_name="AI",
-            week_start=date(2026, 4, 20),
-            articles=[
-                BriefingArticle(
-                    analyzed_article_id=1, translated_title="t", summary="s"
-                )
-            ],
-        )
+    gen = DeepSeekBriefingGenerator(client_scope_factory=_ClientScope(create))
+    await gen.generate(
+        category_name="AI", week_start=date(2026, 4, 20), articles=_ARTICLES
+    )
 
 
 @pytest.mark.asyncio
@@ -242,28 +232,56 @@ async def test_generator_wraps_openai_api_error() -> None:
     """OpenAI SDK 例外は briefing marker に wrap して stage 境界へ出す。"""
     request = httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
     provider_error = openai.APIError("upstream", request=request, body=None)
-    create = AsyncMock(side_effect=provider_error)
-    fake_client = MagicMock()
-    fake_client.chat.completions.create = create
+    gen = DeepSeekBriefingGenerator(
+        client_scope_factory=_ClientScope(AsyncMock(side_effect=provider_error))
+    )
 
-    with (
-        patch("app.insights.briefing.llm.settings") as mock_settings,
-        patch("app.insights.briefing.llm.AsyncOpenAI", return_value=fake_client),
-    ):
-        mock_settings.deepseek_api_key = SecretStr("test-key")
-        from app.insights.briefing.llm import DeepSeekBriefingGenerator
-
-        gen = DeepSeekBriefingGenerator()
-        with pytest.raises(BriefingLlmError) as raised:
-            await gen.generate(
-                category_name="AI",
-                week_start=date(2026, 4, 20),
-                articles=[
-                    BriefingArticle(
-                        analyzed_article_id=1, translated_title="t", summary="s"
-                    )
-                ],
-            )
+    with pytest.raises(BriefingLlmError) as raised:
+        await gen.generate(
+            category_name="AI", week_start=date(2026, 4, 20), articles=_ARTICLES
+        )
 
     assert raised.value.provider_error is provider_error
     assert raised.value.__cause__ is provider_error
+
+
+_VALID_ARGUMENTS = {
+    "headline": "h",
+    "summary": "s",
+    "chapters": [{"heading": "見出し", "body": "本文"}],
+    "key_articles": [{"analyzed_article_id": 1, "significance": "s"}],
+    "watch_points": [{"statement": "w"}],
+}
+
+
+@pytest.mark.asyncio
+async def test_generate_opens_and_closes_client_for_each_call() -> None:
+    """client は生成のたびに開いて閉じ、呼び出しをまたいで持ち越さない。"""
+    scope = _ClientScope(
+        AsyncMock(return_value=_fake_completion_with_tool_call(_VALID_ARGUMENTS))
+    )
+    gen = DeepSeekBriefingGenerator(client_scope_factory=scope)
+
+    for _ in range(2):
+        await gen.generate(
+            category_name="AI", week_start=date(2026, 4, 20), articles=_ARTICLES
+        )
+
+    assert scope.events == ["open", "close", "open", "close"]
+
+
+@pytest.mark.asyncio
+async def test_generate_closes_client_when_provider_call_fails() -> None:
+    """SDK の呼び出しが失敗しても client を閉じる。"""
+    request = httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
+    scope = _ClientScope(
+        AsyncMock(side_effect=openai.APIError("upstream", request=request, body=None))
+    )
+    gen = DeepSeekBriefingGenerator(client_scope_factory=scope)
+
+    with pytest.raises(BriefingLlmError):
+        await gen.generate(
+            category_name="AI", week_start=date(2026, 4, 20), articles=_ARTICLES
+        )
+
+    assert scope.events == ["open", "close"]
