@@ -29,6 +29,7 @@ from app.agent.composition import (
     activate_evidence_reviewer_runtime,
     activate_external_search,
     activate_gemini_agent_runtime,
+    activate_gemini_client,
 )
 from app.agent.contract import (
     AnswerProgressEvent,
@@ -220,7 +221,7 @@ async def _probe_search(
     try:
         session_factory = caller_managed_session_factory(engine)
         internal_search = InternalSearchService(
-            embedder=GeminiQueryEmbedder(),
+            embedder=GeminiQueryEmbedder(client_scope_factory=activate_gemini_client),
             article_search_repository=PgVectorArticleSearchRepository(session_factory),
         )
         runner = AnsweringRunner(
