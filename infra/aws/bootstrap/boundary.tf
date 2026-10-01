@@ -45,26 +45,23 @@ locals {
     Resource = "*"
   }
 
-  # IAM auth の入口 2 アクション。task 系の boundary が共有する。
-  task_data_plane_statements = [
-    {
-      Sid      = "RdsIamAuth"
-      Effect   = "Allow"
-      Action   = "rds-db:connect"
-      Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:*/*"
-    },
-    # elasticache:Connect は接続先 cache と接続 user の両方の ARN に対して
-    # 評価されるため、片方だけではロールの policy が許しても認証が通らない。
-    {
-      Sid    = "ElastiCacheIamAuth"
-      Effect = "Allow"
-      Action = "elasticache:Connect"
-      Resource = [
-        "arn:aws:elasticache:${var.region}:${data.aws_caller_identity.current.account_id}:replicationgroup:${var.name_prefix}-*",
-        "arn:aws:elasticache:${var.region}:${data.aws_caller_identity.current.account_id}:user:${var.name_prefix}-*",
-      ]
-    },
-  ]
+  # ECS のアプリサービスごとの天井。null はその経路を持たないことを表す。
+  # Valkey の接続 user は本体でサービス名から付けるので、ここには接続先だけを持つ。
+  ecs_task_ceilings = {
+    frontend  = { db_user = "vector_auth", valkey_group = "rate-limit", web_search_gateway = false }
+    api       = { db_user = "vector_api", valkey_group = "broker", web_search_gateway = false }
+    insights  = { db_user = "vector_insights", valkey_group = "broker", web_search_gateway = false }
+    agent     = { db_user = "vector_agent", valkey_group = "broker", web_search_gateway = true }
+    scheduler = { db_user = null, valkey_group = "broker", web_search_gateway = false }
+    proxy     = { db_user = null, valkey_group = null, web_search_gateway = false }
+  }
+
+  ecs_task_role_boundary_groups = {
+    for service in keys(local.ecs_task_ceilings) : "${title(service)}Task" => {
+      boundary   = aws_iam_policy.ecs_task_boundary[service].arn
+      role_names = ["${var.name_prefix}-${service}-task"]
+    }
+  }
 
   # 配信の天井は工程を列挙せず命名規則で書き、relay の追加で bootstrap を変えない。
   outbox_relay_function_arn_pattern = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-*outbox-relay"
@@ -79,20 +76,7 @@ locals {
   # bootstrap は本体の local.services を参照できないのでサービス名をここでも持つ。サービスを増やす
   # ときは、この表を apply してから本体を apply する。順序を守らないと CreateRole が
   # Deny で落ちる。天井を決めずにサービスが増えないようにするための順序。
-  role_boundary_groups = merge(local.backfill_role_boundary_groups, local.source_dispatch_role_boundary_groups, local.article_analysis_role_boundary_groups, local.article_fetch_role_boundary_groups, {
-    Task = {
-      boundary = aws_iam_policy.task_boundary.arn
-      role_names = [
-        for s in ["frontend", "api", "scheduler", "insights", "proxy"] :
-        "${var.name_prefix}-${s}-task"
-      ]
-    }
-    # agent サービスだけが外部検索で gateway を呼ぶ (本体の
-    # aws_iam_role_policy.agentcore_gateway_invoke)。天井もそこだけに限定する。
-    AgentTask = {
-      boundary   = aws_iam_policy.agent_task_boundary.arn
-      role_names = ["${var.name_prefix}-agent-task"]
-    }
+  role_boundary_groups = merge(local.backfill_role_boundary_groups, local.source_dispatch_role_boundary_groups, local.article_analysis_role_boundary_groups, local.article_fetch_role_boundary_groups, local.ecs_task_role_boundary_groups, {
     MigrationTask = {
       boundary   = aws_iam_policy.migration_task_boundary.arn
       role_names = ["${var.name_prefix}-migration-task"]
@@ -146,7 +130,62 @@ locals {
 # コンテナ内のアプリケーションが使うロールの天井。
 #
 # 4 種のうち唯一、コンテナから資格情報を読み出せる。侵害の入口はアプリ自身
-# (RCE / SSRF) なので、天井が最も狭くあるべきものになる。
+# (RCE / SSRF) なので、天井が最も狭くあるべきものになる。サービスごとに分け、
+# 届く先をそのサービスの DB ユーザーと Valkey ユーザーに限る。
+resource "aws_iam_policy" "ecs_task_boundary" {
+  for_each = local.ecs_task_ceilings
+
+  name        = "${var.name_prefix}-${each.key}-task-boundary"
+  path        = "/${var.name_prefix}-ci/"
+  description = "Ceiling for the ${each.key} ECS task role (the credential reachable from inside the container)."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      each.value.db_user == null ? [] : [{
+        Sid      = "RdsIamAuth"
+        Effect   = "Allow"
+        Action   = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/${each.value.db_user}"
+      }],
+      # elasticache:Connect は接続先 cache と接続 user の両方の ARN に対して
+      # 評価されるため、片方だけではロールの policy が許しても認証が通らない。
+      each.value.valkey_group == null ? [] : [{
+        Sid    = "ElastiCacheIamAuth"
+        Effect = "Allow"
+        Action = "elasticache:Connect"
+        Resource = [
+          "arn:aws:elasticache:${var.region}:${local.account_id}:replicationgroup:${var.name_prefix}-${each.value.valkey_group}",
+          "arn:aws:elasticache:${var.region}:${local.account_id}:user:${var.name_prefix}-${each.key}",
+        ]
+      }],
+      # gateway の ID は apply 時に確定するので、天井は gateway/* で受ける。
+      # 実際にどの gateway を呼べるかは本体の policy が ARN で名指しする。
+      each.value.web_search_gateway ? [{
+        Sid      = "InvokeWebSearchGateway"
+        Effect   = "Allow"
+        Action   = "bedrock-agentcore:InvokeGateway"
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:gateway/*"
+      }] : [],
+      [
+        local.boundary_no_escalation_statement,
+        local.boundary_no_ecs_exec_statement,
+      ],
+    )
+  })
+
+  # IAM に description の更新 API は無く、変更は attach 中の boundary の再作成になるため差分を無視する。
+  lifecycle {
+    ignore_changes = [description]
+  }
+}
+
+moved {
+  from = aws_iam_policy.agent_task_boundary
+  to   = aws_iam_policy.ecs_task_boundary["agent"]
+}
+
+# 旧共通 boundary。本体で各 task role を ecs_task_boundary へ付け替えた後に撤去する。
 resource "aws_iam_policy" "task_boundary" {
   name        = "${var.name_prefix}-task-boundary"
   path        = "/${var.name_prefix}-ci/"
@@ -154,36 +193,25 @@ resource "aws_iam_policy" "task_boundary" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = concat(local.task_data_plane_statements, [
-      local.boundary_no_escalation_statement,
-      local.boundary_no_ecs_exec_statement,
-    ])
-  })
-}
-
-# agent サービスの task role だけの天井。上に gateway 呼び出しを 1 つ足したもの。
-#
-# 共通の task boundary には入れない。外部検索を持たない 7 サービスの天井まで
-# 上げる理由が無い。
-resource "aws_iam_policy" "agent_task_boundary" {
-  name        = "${var.name_prefix}-agent-task-boundary"
-  path        = "/${var.name_prefix}-ci/"
-  description = "Ceiling for the agent stage task role (task boundary plus the web-search gateway)."
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = concat(local.task_data_plane_statements, [
-      # gateway の ID は apply 時に確定するので、天井は gateway/* で受ける。
-      # 実際にどの gateway を呼べるかは本体の policy が ARN で名指しする。
+    Statement = [
       {
-        Sid      = "InvokeWebSearchGateway"
+        Sid      = "RdsIamAuth"
         Effect   = "Allow"
-        Action   = "bedrock-agentcore:InvokeGateway"
-        Resource = "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:gateway/*"
+        Action   = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:*/*"
+      },
+      {
+        Sid    = "ElastiCacheIamAuth"
+        Effect = "Allow"
+        Action = "elasticache:Connect"
+        Resource = [
+          "arn:aws:elasticache:${var.region}:${data.aws_caller_identity.current.account_id}:replicationgroup:${var.name_prefix}-*",
+          "arn:aws:elasticache:${var.region}:${data.aws_caller_identity.current.account_id}:user:${var.name_prefix}-*",
+        ]
       },
       local.boundary_no_escalation_statement,
       local.boundary_no_ecs_exec_statement,
-    ])
+    ]
   })
 }
 

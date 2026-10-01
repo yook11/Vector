@@ -99,8 +99,38 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.agent_task_boundary
+  target          = aws_iam_policy.ecs_task_boundary["agent"]
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-agent-task-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.ecs_task_boundary["frontend"]
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-frontend-task-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.ecs_task_boundary["api"]
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-api-task-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.ecs_task_boundary["insights"]
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-insights-task-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.ecs_task_boundary["scheduler"]
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-scheduler-task-boundary" }
+}
+
+override_resource {
+  override_during = plan
+  target          = aws_iam_policy.ecs_task_boundary["proxy"]
+  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-proxy-task-boundary" }
 }
 
 override_resource {

@@ -47,8 +47,7 @@ Administrator」** が通る。CI ロール自体の改変が抜けると「自�
 
 | boundary | 対象ロール | 中身 |
 |---|---|---|
-| `vector-task-boundary` | `*-task` のうち agent 以外 | rds + elasticache |
-| `vector-agent-task-boundary` | `vector-agent-task` | 上 + web search gateway |
+| `vector-<service>-task-boundary` | 同じサービスの `vector-<service>-task` | そのサービスの DB ユーザーと Valkey ユーザーだけ (agent は + web search gateway、proxy は許可なし) |
 | `vector-execution-boundary` | `*-exec` | ecr / logs / ssm / kms |
 | `vector-migration-task-boundary` | `vector-migration-task` | `vector`としてのRDS IAM接続だけ |
 | `vector-migration-execution-boundary` | `vector-migration-exec` | backend ECR pull + migration logだけ |
