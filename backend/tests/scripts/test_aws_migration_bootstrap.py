@@ -110,7 +110,10 @@ def test_approved_roles_have_separate_trust_and_no_cross_role_db_entry() -> None
     assert 'contains(["plan", "push"], each.key) ? [1] : []' in trust
     assert "Resource = local.app_role_arns" in rollout
     assert "local.managed_role_path_arn" not in rollout
-    assert 'for group in ["Task", "AgentTask", "Execution"]' in app_roles
+    assert (
+        'for group in concat(keys(local.ecs_task_role_boundary_groups), ["Execution"])'
+        in app_roles
+    )
     assert "local.role_boundary_groups[group].role_names" in app_roles
     assert (
         'if !contains(["${var.name_prefix}-proxy-task", '
