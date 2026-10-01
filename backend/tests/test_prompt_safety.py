@@ -220,9 +220,7 @@ class TestContainsInjectionBoundary:
 
 
 class TestCallerCompatibility:
-    """全 caller (gemini.py / assessment/ai/gemini.py / assessment/ai/deepseek.py /
-    briefing/llm/deepseek.py の 8 箇所) で挙動破綻しないこと。
-    """
+    """全 caller で挙動破綻しないこと。"""
 
     def test_natural_news_text_passes_through(self) -> None:
         """boundary tag / 行頭 ATX / 短い ``【...】`` を含まない通常の
