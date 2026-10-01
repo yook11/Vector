@@ -32,7 +32,6 @@ from app.ai_providers.deepseek.error_translator import translate_deepseek_error
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 
 DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com/beta"
-DEEPSEEK_CLIENT_TIMEOUT_SECONDS: Final[int] = 20
 
 
 @dataclass(frozen=True, slots=True)

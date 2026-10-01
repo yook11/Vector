@@ -16,6 +16,7 @@ from app.agent.evidence_review.deepseek_binding import (
     EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
 )
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 
 
 class _TrackedDeepSeekClient:
@@ -174,18 +175,17 @@ def _install_factory_dependencies(
     _RuntimeSpyFactory,
     _GatewaySpyFactory,
 ]:
-    import openai
-
     from app.agent.evidence_collection.external_search import (
         agentcore as agentcore_module,
     )
     from app.agent.runtime import deepseek as deepseek_module
+    from app.ai_providers.deepseek import client as deepseek_client_module
 
     deepseek = deepseek or _TrackedDeepSeekClientFactory()
     search_http = search_http or _TrackedSearchClientFactory()
     runtime = runtime or _RuntimeSpyFactory()
     gateway = gateway or _GatewaySpyFactory()
-    monkeypatch.setattr(openai, "AsyncOpenAI", deepseek)
+    monkeypatch.setattr(deepseek_client_module, "open_deepseek_client", deepseek)
     monkeypatch.setattr(composition, "make_internal_async_client", search_http)
     monkeypatch.setattr(deepseek_module, "DeepSeekAgentRuntime", runtime)
     monkeypatch.setattr(agentcore_module, "AgentCoreWebSearchGateway", gateway)
@@ -210,10 +210,7 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
     from app.agent.evidence_collection.external_search.deepseek_binding import (
         EXTERNAL_QUERY_DEEPSEEK_BINDING,
     )
-    from app.agent.runtime.deepseek import (
-        DEEPSEEK_BASE_URL,
-        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-    )
+    from app.agent.runtime.deepseek import DEEPSEEK_BASE_URL
 
     deepseek, search_http, runtime, gateway = _install_factory_dependencies(monkeypatch)
     scope = activate_external_search()
@@ -229,7 +226,11 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
         assert (
             len(deepseek.clients),
             len(search_http.clients),
-            deepseek.clients[0].kwargs,
+            {
+                key: value
+                for key, value in deepseek.clients[0].kwargs.items()
+                if key != "logger"
+            },
             external_search.query_runtime.client is deepseek.clients[0],
             external_search.query_runtime.binding is EXTERNAL_QUERY_DEEPSEEK_BINDING,
             external_search.search_gateway.client is search_http.clients[0],
@@ -237,9 +238,10 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
             1,
             1,
             {
-                "api_key": "deepseek-api-key-sentinel",
+                "api_key": SecretStr("deepseek-api-key-sentinel"),
                 "base_url": DEEPSEEK_BASE_URL,
-                "timeout": DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+                "settings": DeepSeekConnectionSettings(read_timeout=30.0),
+                "max_retries": 2,
             },
             True,
             True,
@@ -257,10 +259,7 @@ async def test_evidence_reviewer_scope_is_lazy_and_closes_its_client_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """reviewerは外部検索と資源を共有せず、自分のDeepSeek clientだけを開閉する。"""
-    from app.agent.runtime.deepseek import (
-        DEEPSEEK_BASE_URL,
-        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-    )
+    from app.agent.runtime.deepseek import DEEPSEEK_BASE_URL
 
     deepseek, search_http, runtime, _gateway = _install_factory_dependencies(
         monkeypatch
@@ -273,16 +272,21 @@ async def test_evidence_reviewer_scope_is_lazy_and_closes_its_client_once(
         assert (
             len(deepseek.clients),
             search_http.clients,
-            deepseek.clients[0].kwargs,
+            {
+                key: value
+                for key, value in deepseek.clients[0].kwargs.items()
+                if key != "logger"
+            },
             reviewer_runtime.client is deepseek.clients[0],
             reviewer_runtime.binding is EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
         ) == (
             1,
             [],
             {
-                "api_key": "deepseek-api-key-sentinel",
+                "api_key": SecretStr("deepseek-api-key-sentinel"),
                 "base_url": DEEPSEEK_BASE_URL,
-                "timeout": DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+                "settings": DeepSeekConnectionSettings(read_timeout=30.0),
+                "max_retries": 2,
             },
             True,
             True,
