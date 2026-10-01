@@ -22,7 +22,6 @@ from app.ai_providers.gemini.error_translator import (
     GeminiStateReason,
 )
 from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
-from app.analysis.assessment.ai.gemini import GeminiResponseDefect
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.consumer_failure_classification import (
     classify_assessment_failure,
@@ -189,7 +188,7 @@ def test_unexpected_failure_and_timeout_are_not_success(error) -> None:
 
 @pytest.mark.parametrize(
     "defect",
-    [*AssessmentResponseDefect, *DeepSeekResponseDefect, *GeminiResponseDefect],
+    [*AssessmentResponseDefect, *DeepSeekResponseDefect],
 )
 def test_all_response_defects_preserve_code(defect):
     error = AssessmentResponseInvalidError(defect)

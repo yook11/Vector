@@ -6,7 +6,7 @@ frozen dataclass + module singleton で凍結し、Assessor は ``SPEC`` class a
 経由でのみ参照する。
 
 ``gen_config`` は task 軸の tuning (temperature 等)、``structured_output`` は
-provider 軸の構造化出力強制機構 (Gemini JSON mode / DeepSeek Function Calling) で、
+provider 軸の構造化出力強制機構 (DeepSeek Function Calling) で、
 別軸として分離する。
 
 ``version`` はハードコードせず ``compute_call_signature`` で算出する
@@ -23,10 +23,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from app.analysis.assessment.ai.prompts import ASSESSMENT_PROMPT
-from app.analysis.assessment.ai.schema_tool import (
-    ASSESSMENT_GEMINI_SCHEMA,
-    ASSESSMENT_TOOL_SCHEMA,
-)
+from app.analysis.assessment.ai.schema_tool import ASSESSMENT_TOOL_SCHEMA
 from app.analysis.prompt_versions import compute_call_signature
 
 
@@ -59,45 +56,6 @@ class DeepSeekAssessmentSpec(AssessmentCallSpec):
     tool_name: str
     base_url: str
 
-
-# ---------------------------------------------------------------------------
-# Gemini
-# ---------------------------------------------------------------------------
-
-_GEMINI_MODEL: Final[str] = "gemini-2.5-flash-lite"
-_GEMINI_GEN_CONFIG: Final[Mapping[str, Any]] = MappingProxyType(
-    {
-        "temperature": 0.2,
-        "max_output_tokens": 1024,
-    }
-)
-# Gemini で構造化出力を強制する機構 (JSON mode)。provider 固有・tuning と別軸。
-_GEMINI_STRUCTURED_OUTPUT: Final[Mapping[str, Any]] = MappingProxyType(
-    {
-        "response_mime_type": "application/json",
-    }
-)
-_GEMINI_RESPONSE_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
-    ASSESSMENT_GEMINI_SCHEMA
-)
-_GEMINI_SYSTEM_INSTRUCTION: Final[str | None] = None
-_GEMINI_VERSION: Final[str] = compute_call_signature(
-    prompt_template=ASSESSMENT_PROMPT,
-    model=_GEMINI_MODEL,
-    gen_config={**_GEMINI_GEN_CONFIG, **_GEMINI_STRUCTURED_OUTPUT},
-    response_schema=_GEMINI_RESPONSE_SCHEMA,
-    system_instruction=_GEMINI_SYSTEM_INSTRUCTION,
-)
-
-GEMINI_ASSESSMENT_SPEC: Final[AssessmentCallSpec] = AssessmentCallSpec(
-    provider="gemini",
-    model=_GEMINI_MODEL,
-    gen_config=_GEMINI_GEN_CONFIG,
-    structured_output=_GEMINI_STRUCTURED_OUTPUT,
-    response_schema=_GEMINI_RESPONSE_SCHEMA,
-    system_instruction=_GEMINI_SYSTEM_INSTRUCTION,
-    version=_GEMINI_VERSION,
-)
 
 # ---------------------------------------------------------------------------
 # DeepSeek

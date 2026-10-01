@@ -1,5 +1,4 @@
-"""``GEMINI_ASSESSMENT_SPEC`` / ``DEEPSEEK_ASSESSMENT_SPEC`` の構造を固定する
-golden table テスト。
+"""``DEEPSEEK_ASSESSMENT_SPEC`` の構造を固定する golden table テスト。
 
 Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``version`` /
 ``gen_config`` (tuning) / ``structured_output`` (機構) / ``response_schema`` /
@@ -9,7 +8,7 @@ Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``vers
 ``version`` は ``compute_call_signature`` で算出される 8 文字 hash。値は実効 call
 config (gen_config + structured_output を含む) の deliberate な変更時のみ動くべきで、
 機構を gen_config↔structured_output で移すだけの純粋リファクタでは動いてはならない。
-そのため format (hex8) と provider 間別物性に加え、具体値を pin して意図しない回転を
+そのため format (hex8) に加え、具体値を pin して意図しない回転を
 検出する (一般則「実装出力を期待値にしない」の例外: opaque だが不変であるべき値の
 characterization guard)。意図的 rotation 時は pin 値を更新し、audit 連続性 cutover の
 意思表示を commit メッセージで残す (ADR §prompt_version の規律)。
@@ -23,66 +22,11 @@ from types import MappingProxyType
 
 import pytest
 
-from app.analysis.assessment.ai.schema_tool import (
-    ASSESSMENT_GEMINI_SCHEMA,
-    ASSESSMENT_TOOL_SCHEMA,
-)
-from app.analysis.assessment.ai.spec import (
-    DEEPSEEK_ASSESSMENT_SPEC,
-    GEMINI_ASSESSMENT_SPEC,
-)
+from app.analysis.assessment.ai.schema_tool import ASSESSMENT_TOOL_SCHEMA
+from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import assessment_category_values
 
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
-
-
-def test_gemini_provider_is_gemini() -> None:
-    assert GEMINI_ASSESSMENT_SPEC.provider == "gemini"
-
-
-def test_gemini_model_is_flash_lite_25() -> None:
-    assert GEMINI_ASSESSMENT_SPEC.model == "gemini-2.5-flash-lite"
-
-
-def test_gemini_response_schema_equals_gemini_schema() -> None:
-    assert dict(GEMINI_ASSESSMENT_SPEC.response_schema) == ASSESSMENT_GEMINI_SCHEMA
-
-
-def test_gemini_gen_config_is_mapping_proxy_and_immutable() -> None:
-    assert isinstance(GEMINI_ASSESSMENT_SPEC.gen_config, MappingProxyType)
-    with pytest.raises(TypeError):
-        GEMINI_ASSESSMENT_SPEC.gen_config["temperature"] = 0.5  # type: ignore[index]
-
-
-def test_gemini_gen_config_has_tuning_fields_only() -> None:
-    """gen_config は task 軸 tuning のみ。機構 (mime type) は structured_output へ。"""
-    assert GEMINI_ASSESSMENT_SPEC.gen_config["temperature"] == 0.2
-    assert GEMINI_ASSESSMENT_SPEC.gen_config["max_output_tokens"] == 1024
-    assert "response_mime_type" not in GEMINI_ASSESSMENT_SPEC.gen_config
-
-
-def test_gemini_structured_output_is_mapping_proxy_and_immutable() -> None:
-    assert isinstance(GEMINI_ASSESSMENT_SPEC.structured_output, MappingProxyType)
-    with pytest.raises(TypeError):
-        GEMINI_ASSESSMENT_SPEC.structured_output["response_mime_type"] = "x"  # type: ignore[index]
-
-
-def test_gemini_structured_output_forces_json_mime_type() -> None:
-    """Gemini の構造化出力強制機構は JSON mode。"""
-    assert (
-        GEMINI_ASSESSMENT_SPEC.structured_output["response_mime_type"]
-        == "application/json"
-    )
-
-
-def test_gemini_system_instruction_is_none() -> None:
-    """将来 prompt rotation で変えやすいよう golden 化。"""
-    assert GEMINI_ASSESSMENT_SPEC.system_instruction is None
-
-
-def test_gemini_spec_is_frozen() -> None:
-    with pytest.raises(FrozenInstanceError):
-        GEMINI_ASSESSMENT_SPEC.provider = "openai"  # type: ignore[misc]
 
 
 def test_deepseek_provider_is_deepseek() -> None:
@@ -99,12 +43,6 @@ def test_deepseek_response_schema_equals_tool_schema() -> None:
 
 def test_deepseek_category_enum_matches_assessment_category_values() -> None:
     assert ASSESSMENT_TOOL_SCHEMA["properties"]["category"]["enum"] == list(
-        assessment_category_values()
-    )
-
-
-def test_gemini_category_enum_matches_assessment_category_values() -> None:
-    assert ASSESSMENT_GEMINI_SCHEMA["properties"]["category"]["enum"] == list(
         assessment_category_values()
     )
 
@@ -173,32 +111,19 @@ def test_deepseek_tool_choice_matches_tool_name() -> None:
 # version 値。機構の置き場所を移すだけの純粋リファクタでは hash は不変であるべきで、
 # この pin が回転を検出する。意図的な prompt / 機構 rotation 時はこの値を更新し、
 # commit メッセージで cutover を明示する (ADR §prompt_version の規律)。
-_GEMINI_PINNED_VERSION = "efe480ff"
 _DEEPSEEK_PINNED_VERSION = "9e715824"
-
-
-def test_gemini_version_is_pinned() -> None:
-    assert GEMINI_ASSESSMENT_SPEC.version == _GEMINI_PINNED_VERSION
 
 
 def test_deepseek_version_is_pinned() -> None:
     assert DEEPSEEK_ASSESSMENT_SPEC.version == _DEEPSEEK_PINNED_VERSION
 
 
-def test_specs_have_distinct_versions() -> None:
-    """model + gen_config + schema が違うので hash も別物。"""
-    assert GEMINI_ASSESSMENT_SPEC.version != DEEPSEEK_ASSESSMENT_SPEC.version
-
-
 def test_specs_versions_are_hex8() -> None:
     """8 文字 hex の format を将来 rotation 時の guard として固定する。"""
-    assert _HEX8.fullmatch(GEMINI_ASSESSMENT_SPEC.version) is not None
     assert _HEX8.fullmatch(DEEPSEEK_ASSESSMENT_SPEC.version) is not None
 
 
 def test_response_schemas_have_no_topic_property() -> None:
     """topic は event-extraction 移行で完全削除済。Stage 4 schema に存在しない。"""
-    gemini = dict(GEMINI_ASSESSMENT_SPEC.response_schema).get("properties", {})
     deepseek = dict(DEEPSEEK_ASSESSMENT_SPEC.response_schema).get("properties", {})
-    assert "topic" not in gemini
     assert "topic" not in deepseek
