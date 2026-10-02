@@ -76,7 +76,7 @@ class TestCategoryAndExistence:
                 chapters=[],
                 key_articles=[],
                 watch_points=[],
-                model_name="deepseek-v4-pro",
+                model_name="gemini-3.8-flash",
                 input_article_count=1,
             )
         )
