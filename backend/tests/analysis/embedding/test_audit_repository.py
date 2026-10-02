@@ -16,8 +16,8 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.analysis.embedding.ai.base import BaseEmbedder
@@ -304,7 +304,7 @@ async def test_append_network_failure_without_recovery_classification(
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "failed"
-    assert ev.outcome_code == "ai_provider_transport_failed"
+    assert ev.outcome_code == "ai_provider_transport_error"
     assert ev.retryability is None
     assert ev.payload["failure_kind"] is None
     assert ev.payload["failure_action"] is None
@@ -320,9 +320,7 @@ async def test_append_configuration_failure_without_recovery_classification(
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = to_embedding_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.AUTH, status_code=401
-        )
+        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401)
     )
 
     async with session_factory() as session:
@@ -335,7 +333,7 @@ async def test_append_configuration_failure_without_recovery_classification(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "ai_provider_error_response"
+    assert ev.outcome_code == "ai_provider_response_error"
     assert ev.retryability is None
     assert ev.payload["failure_kind"] is None
     assert ev.payload["failure_action"] is None
@@ -351,8 +349,8 @@ async def test_append_input_rejection_preserves_reason_without_recovery_classifi
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = to_embedding_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.INPUT_BLOCKED, status_code=400
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.INPUT_BLOCKED, status_code=400
         )
     )
 
@@ -366,7 +364,7 @@ async def test_append_input_rejection_preserves_reason_without_recovery_classifi
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "ai_provider_error_response"
+    assert ev.outcome_code == "ai_provider_response_error"
     assert ev.retryability is None
     assert ev.payload["failure_kind"] is None
     assert ev.payload["failure_reason"] == "input_blocked"

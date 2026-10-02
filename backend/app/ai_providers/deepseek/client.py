@@ -10,8 +10,8 @@ from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.ai_providers.errors import (
-    AIProviderRequestNotSentError,
-    AIProviderRequestNotSentReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
 )
 from app.http.external import make_external_async_client
 
@@ -41,9 +41,9 @@ async def open_deepseek_client(
 ) -> AsyncIterator[AsyncOpenAI]:
     """SDKとHTTPクライアントを所有する。"""
     if not api_key.get_secret_value().strip():
-        raise AIProviderRequestNotSentError(
+        raise AIProviderNotSentError(
             "AIプロバイダーのAPIキーが設定されていません",
-            reason=AIProviderRequestNotSentReason.NOT_CONFIGURED,
+            reason=AIProviderNotSentReason.NOT_CONFIGURED,
         )
     timeout = httpx.Timeout(
         connect=settings.connect_timeout,

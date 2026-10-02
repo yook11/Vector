@@ -28,8 +28,8 @@ def test_planning_error_from_maps_provider_code() -> None:
 
     error = planning_error_from(cause)
 
-    assert error.code == "ai_provider_transport_failed"
-    assert str(error) == "ai_provider_transport_failed"
+    assert error.code == "ai_provider_transport_error"
+    assert str(error) == "ai_provider_transport_error"
 
 
 def test_planning_error_from_maps_each_response_defect() -> None:

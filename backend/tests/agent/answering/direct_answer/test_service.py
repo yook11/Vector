@@ -32,8 +32,8 @@ from app.agent.recording.direct_answer import (
 from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.http.failure import (
@@ -69,9 +69,9 @@ def _as_of() -> datetime:
     return datetime(2026, 7, 7, 9, 0, tzinfo=UTC)
 
 
-def _truncated_error() -> AIProviderGenerationError:
+def _truncated_error() -> AIProviderResultError:
     """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
-    return AIProviderGenerationError(reason=AIProviderGenerationReason.OUTPUT_TRUNCATED)
+    return AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED)
 
 
 def _request() -> AnsweringRequest:
@@ -402,7 +402,7 @@ async def test_ai_provider_error_becomes_direct_answer_error_without_retry(
     with pytest.raises(DirectAnswerError) as exc_info:
         await _service(runtime, delta_reporter=reporter).answer(_input())
 
-    assert exc_info.value.code == "ai_provider_transport_failed"
+    assert exc_info.value.code == "ai_provider_transport_error"
     assert exc_info.value.__cause__ is provider_exc
     assert len(runtime.calls) == 1
     assert reporter.aborted == [1]
@@ -413,7 +413,7 @@ async def test_ai_provider_error_becomes_direct_answer_error_without_retry(
         {
             "result": "failed",
             "attempt_count": 1,
-            "failure_code": "ai_provider_transport_failed",
+            "failure_code": "ai_provider_transport_error",
         }
     ]
 
@@ -432,7 +432,7 @@ async def test_second_truncation_raises_classified_truncation_error_after_retry(
     with pytest.raises(DirectAnswerError) as exc_info:
         await _service(runtime, delta_reporter=reporter).answer(_input())
 
-    assert exc_info.value.code == "ai_provider_generation_unusable"
+    assert exc_info.value.code == "ai_provider_result_error"
     assert exc_info.value.__cause__ is terminal_error
     assert len(runtime.calls) == 2
     metrics = collected_metrics(capfire)
@@ -440,7 +440,7 @@ async def test_second_truncation_raises_classified_truncation_error_after_retry(
         {
             "result": "failed",
             "attempt_count": 2,
-            "failure_code": "ai_provider_generation_unusable",
+            "failure_code": "ai_provider_result_error",
         }
     ]
 
@@ -708,12 +708,12 @@ async def test_classified_failure_records_failed_outcome() -> None:
     with pytest.raises(DirectAnswerError) as exc_info:
         await _service(runtime, recorder=recorder).answer(_input())
 
-    assert exc_info.value.code == "ai_provider_transport_failed"
+    assert exc_info.value.code == "ai_provider_transport_error"
     assert exc_info.value.__cause__ is error
     _assert_recorded(
         recorder,
         outcome=DirectAnswerFailed(
-            failure_code="ai_provider_transport_failed",
+            failure_code="ai_provider_transport_error",
             attempt_count=1,
         ),
         error=exc_info.value,

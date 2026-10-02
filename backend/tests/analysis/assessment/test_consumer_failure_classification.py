@@ -6,10 +6,10 @@ import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
@@ -49,58 +49,54 @@ from app.http.failure import (
             False,
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.SERVER_ERROR, status_code=503
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.SERVER_ERROR, status_code=503
             ),
             False,
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
             ),
             False,
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
             ),
             True,
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
                 status_code=402,
             ),
             True,
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.AUTH, status_code=401
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.AUTH, status_code=401
             ),
             False,
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.INVALID_REQUEST, status_code=400
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INVALID_REQUEST, status_code=400
             ),
             False,
         ),
         (
-            AIProviderGenerationError(
-                reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED),
+            False,
+        ),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_BLOCKED, status_code=400
             ),
             False,
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.INPUT_BLOCKED, status_code=400
-            ),
-            False,
-        ),
-        (
-            AIProviderGenerationError(
-                reason=AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY
-            ),
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
             False,
         ),
     ],

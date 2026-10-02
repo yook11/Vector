@@ -16,8 +16,8 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.analysis.embedding.ai.base import BaseEmbedder
@@ -261,7 +261,7 @@ async def test_execute_wraps_input_rejected_provider_error(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """``AIProviderErrorResponseError`` は Service の ACL で target-local marker に
+    """``AIProviderResponseError`` は Service の ACL で target-local marker に
     詰め替えられて raise される。
 
     Service は握らず Task 層に伝搬。DB / audit は変更されない。
@@ -275,8 +275,8 @@ async def test_execute_wraps_input_rejected_provider_error(
     analyzed_article_id = analysis.id
     article_id = article.id
 
-    original = AIProviderErrorResponseError(
-        reason=AIProviderErrorResponseReason.INPUT_BLOCKED, status_code=400
+    original = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED, status_code=400
     )
     embedder = _mock_embedder(raises=original)
     svc = EmbeddingService(session_factory)
@@ -287,7 +287,7 @@ async def test_execute_wraps_input_rejected_provider_error(
 
     # provider_error attr に元 instance が identity 付きで保持される
     assert exc_info.value.provider_error is original
-    assert exc_info.value.code == AIProviderErrorResponseError.CODE
+    assert exc_info.value.code == AIProviderResponseError.CODE
     # content 拒否は回復クラス TARGET_REJECTED → failure_kind / failure_reason
     assert exc_info.value.reason is EmbeddingFailureReason.PROVIDER_ERROR
     assert exc_info.value.provider_error.reason.value == "input_blocked"
@@ -304,14 +304,14 @@ async def test_execute_wraps_input_rejected_provider_error(
 @pytest.mark.parametrize(
     "provider_exc",
     [
-        AIProviderErrorResponseError(
+        AIProviderResponseError(
             "rate limited",
-            reason=AIProviderErrorResponseReason.RATE_LIMITED,
+            reason=AIProviderResponseReason.RATE_LIMITED,
             status_code=429,
         ),
-        AIProviderErrorResponseError(
+        AIProviderResponseError(
             "provider down",
-            reason=AIProviderErrorResponseReason.SERVER_ERROR,
+            reason=AIProviderResponseReason.SERVER_ERROR,
             status_code=503,
         ),
         AIProviderTransportError(

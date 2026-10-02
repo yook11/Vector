@@ -12,7 +12,7 @@ from app.agent.recording.types import Usage
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
+    AIProviderResultError,
 )
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent
@@ -89,13 +89,11 @@ async def test_blocked_stream_records_failed_with_code() -> None:
         attempt_number=1,
     )
 
-    with pytest.raises(AIProviderGenerationError):
+    with pytest.raises(AIProviderResultError):
         _ = [fragment async for fragment in stream]
 
     recorded = recorder.records[0]
-    assert recorded.failure == LlmAttemptFailed(
-        failure_code=AIProviderGenerationError.CODE
-    )
+    assert recorded.failure == LlmAttemptFailed(failure_code=AIProviderResultError.CODE)
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,

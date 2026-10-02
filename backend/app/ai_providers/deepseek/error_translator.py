@@ -19,10 +19,10 @@ from openai import (
 from openai import RateLimitError as OpenAIRateLimitError
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
-    AIProviderRequestNotSentError,
-    AIProviderRequestNotSentReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.http.destination_policy import HostBlockedError
@@ -57,9 +57,9 @@ def translate_deepseek_error(exc: Exception) -> Exception:
     # SDK は送信中の例外を APIConnectionError に包むので、宛先の拒否は原因で見分ける。
     if isinstance(exc, APIConnectionError):
         if isinstance(exc.__cause__, HostBlockedError):
-            return AIProviderRequestNotSentError(
+            return AIProviderNotSentError(
                 "AIプロバイダーへの通信が宛先の方針で拒否されました",
-                reason=AIProviderRequestNotSentReason.HOST_BLOCKED,
+                reason=AIProviderNotSentReason.HOST_BLOCKED,
             )
         return AIProviderTransportError(transport=_transport_failure(exc))
 
@@ -68,56 +68,56 @@ def translate_deepseek_error(exc: Exception) -> Exception:
     status_code = exc.status_code
 
     if isinstance(exc, AuthenticationError):
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーの認証に失敗しました",
-            reason=AIProviderErrorResponseReason.AUTH,
+            reason=AIProviderResponseReason.AUTH,
             status_code=status_code,
         )
     if isinstance(exc, PermissionDeniedError):
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーへのアクセス権限がありません",
-            reason=AIProviderErrorResponseReason.PERMISSION_DENIED,
+            reason=AIProviderResponseReason.PERMISSION_DENIED,
             status_code=status_code,
         )
     if isinstance(exc, NotFoundError):
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーの要求先が見つかりません",
-            reason=AIProviderErrorResponseReason.NOT_FOUND,
+            reason=AIProviderResponseReason.NOT_FOUND,
             status_code=status_code,
         )
 
     # 402 (残高不足) は専用の SDK 例外がないので、RateLimitError より先に見る。
     if status_code == 402:
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーの利用残高が不足しています",
-            reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
             status_code=status_code,
         )
 
     if isinstance(exc, OpenAIRateLimitError):
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーの呼び出し頻度の上限に達しました",
-            reason=AIProviderErrorResponseReason.RATE_LIMITED,
+            reason=AIProviderResponseReason.RATE_LIMITED,
             status_code=status_code,
         )
 
     if isinstance(exc, BadRequestError):
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーがリクエストを不正と判定しました",
-            reason=AIProviderErrorResponseReason.INVALID_REQUEST,
+            reason=AIProviderResponseReason.INVALID_REQUEST,
             status_code=status_code,
         )
     if isinstance(exc, UnprocessableEntityError):
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーがリクエストを処理できませんでした",
-            reason=AIProviderErrorResponseReason.INVALID_REQUEST,
+            reason=AIProviderResponseReason.INVALID_REQUEST,
             status_code=status_code,
         )
 
     if isinstance(exc, InternalServerError) or 500 <= status_code < 600:
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダー内部でサーバーエラーが発生しました",
-            reason=AIProviderErrorResponseReason.SERVER_ERROR,
+            reason=AIProviderResponseReason.SERVER_ERROR,
             status_code=status_code,
         )
 

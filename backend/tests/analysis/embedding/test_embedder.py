@@ -11,8 +11,8 @@ from google.genai import errors, types
 from pydantic import SecretStr
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderGenerationError,
+    AIProviderResponseError,
+    AIProviderResultError,
     AIProviderTransportError,
 )
 from app.ai_providers.gemini import client as client_module
@@ -77,7 +77,7 @@ async def test_missing_response_fields(sdk_client, ready, embeddings, reason):
     sdk_client.models.embed_content.return_value = types.EmbedContentResponse(
         embeddings=embeddings
     )
-    with pytest.raises(AIProviderGenerationError) as caught:
+    with pytest.raises(AIProviderResultError) as caught:
         await GeminiEmbedder(client=sdk_client).embed_document(ready)
     assert caught.value.reason == reason
     sdk_client.aclose.assert_not_called()
@@ -128,7 +128,7 @@ async def test_uses_first_embedding_and_can_reuse_after_failure(sdk_client, read
     [
         (
             errors.ClientError(429, {"error": {"code": 429, "message": "private"}}),
-            AIProviderErrorResponseError,
+            AIProviderResponseError,
             "rate_limited",
         ),
         (
@@ -146,17 +146,17 @@ async def test_uses_first_embedding_and_can_reuse_after_failure(sdk_client, read
                     }
                 },
             ),
-            AIProviderErrorResponseError,
+            AIProviderResponseError,
             "quota_exhausted",
         ),
         (
             errors.ServerError(503, {"error": {"code": 503}}),
-            AIProviderErrorResponseError,
+            AIProviderResponseError,
             "server_error",
         ),
         (
             errors.ClientError(401, {"error": {"code": 401}}),
-            AIProviderErrorResponseError,
+            AIProviderResponseError,
             "auth",
         ),
         (httpx.ReadTimeout("private"), AIProviderTransportError, "timeout"),

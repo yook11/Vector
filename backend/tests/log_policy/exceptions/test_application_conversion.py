@@ -290,7 +290,7 @@ def test_provider_error_keeps_message_code_and_reason() -> None:
 
     assert converted.message == "request failed"
     assert converted.error_details == {
-        "code": "ai_provider_transport_failed",
+        "code": "ai_provider_transport_error",
         "reason": "timeout",
     }
 
@@ -329,7 +329,7 @@ def test_assessment_provider_error_keeps_stage_reason_and_code() -> None:
     )
     assert converted.error_details == {
         "reason": "provider_error",
-        "code": "ai_provider_transport_failed",
+        "code": "ai_provider_transport_error",
     }
 
 

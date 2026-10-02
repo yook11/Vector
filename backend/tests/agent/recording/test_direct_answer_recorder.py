@@ -55,7 +55,7 @@ async def test_classified_failure_emits_failed_duration_and_outcome(
         async with recorder.record(agent_name="direct_answer") as recording:
             recording.report_outcome(
                 DirectAnswerFailed(
-                    failure_code="ai_provider_transport_failed",
+                    failure_code="ai_provider_transport_error",
                     attempt_count=1,
                 )
             )
@@ -70,7 +70,7 @@ async def test_classified_failure_emits_failed_duration_and_outcome(
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
         "result": "failed",
         "attempt_count": 1,
-        "failure_code": "ai_provider_transport_failed",
+        "failure_code": "ai_provider_transport_error",
     }
 
 

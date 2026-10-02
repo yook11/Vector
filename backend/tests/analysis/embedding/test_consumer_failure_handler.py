@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.analysis.embedding.consumer_failure_classification import (
@@ -82,18 +82,18 @@ async def _events(session: AsyncSession) -> list[PipelineEvent]:
             )
         ),
         to_embedding_error(
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
             )
         ),
         to_embedding_error(
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
             )
         ),
         to_embedding_error(
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
                 status_code=402,
             )
         ),
@@ -166,8 +166,8 @@ async def test_audit_failure_does_not_prevent_notification(
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
     error = to_embedding_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
         )
     )
     with capture_logs() as logs:
@@ -191,8 +191,8 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
 ) -> None:
     """通知と計測の二次障害は本文をログに漏らさず、監査と元の失敗を維持する。"""
     error = to_embedding_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE, status_code=402
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE, status_code=402
         )
     )
     with (
@@ -229,8 +229,8 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
 ) -> None:
     """監査・drop計測・ログまで失敗しても元の例外を置き換えない。"""
     error = to_embedding_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
         )
     )
     with (

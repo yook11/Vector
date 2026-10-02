@@ -6,12 +6,12 @@ import pytest
 
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
-    AIProviderRequestNotSentError,
-    AIProviderRequestNotSentReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
@@ -32,9 +32,7 @@ from app.http.failure import (
 # 分類済みの4種類それぞれの代表。
 _PROVIDER_ERROR_FACTORIES = [
     pytest.param(
-        lambda: AIProviderRequestNotSentError(
-            reason=AIProviderRequestNotSentReason.NOT_CONFIGURED
-        ),
+        lambda: AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
         id="request_not_sent",
     ),
     pytest.param(
@@ -46,16 +44,14 @@ _PROVIDER_ERROR_FACTORIES = [
         id="transport",
     ),
     pytest.param(
-        lambda: AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+        lambda: AIProviderResponseError(
+            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
             status_code=402,
         ),
         id="error_response",
     ),
     pytest.param(
-        lambda: AIProviderGenerationError(
-            reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
-        ),
+        lambda: AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED),
         id="generation",
     ),
 ]

@@ -215,7 +215,7 @@ def test_agent_response_invalid_error_marks_span_error_with_defect_error_type(
 def test_planning_error_marks_span_error_with_code_and_reraises_same_instance(
     capfire: CaptureLogfire,
 ) -> None:
-    error = PlanningError(code="ai_provider_transport_failed")
+    error = PlanningError(code="ai_provider_transport_error")
 
     with pytest.raises(PlanningError) as raised:
         with agent_phase(phase="planning", agent_name="question_planner"):

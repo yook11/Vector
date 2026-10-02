@@ -14,7 +14,7 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
+    AIProviderResultError,
     AIProviderTransportError,
 )
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
@@ -87,14 +87,12 @@ async def test_blocked_call_records_failed_with_code() -> None:
         recorder,
     )
 
-    with pytest.raises(AIProviderGenerationError):
+    with pytest.raises(AIProviderResultError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     recorded = recorder.records[0]
-    assert recorded.failure == LlmAttemptFailed(
-        failure_code=AIProviderGenerationError.CODE
-    )
-    assert isinstance(recorded.error, AIProviderGenerationError)
+    assert recorded.failure == LlmAttemptFailed(failure_code=AIProviderResultError.CODE)
+    assert isinstance(recorded.error, AIProviderResultError)
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,

@@ -128,7 +128,7 @@ async def test_classified_failure_records_status_and_failure_code(
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(**_RECORD_KWARGS) as recording:
             recording.report_outcome(
-                LlmAttemptFailed(failure_code="ai_provider_transport_failed")
+                LlmAttemptFailed(failure_code="ai_provider_transport_error")
             )
             recording.report_usage(Usage(input_tokens=11, output_tokens=7))
             raise error
@@ -144,7 +144,7 @@ async def test_classified_failure_records_status_and_failure_code(
     }
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
         **expected,
-        "failure_code": "ai_provider_transport_failed",
+        "failure_code": "ai_provider_transport_error",
     }
     duration = next(item for item in metrics if item["name"] == _DURATION_METRIC)
     assert duration["data"]["data_points"][0]["attributes"] == expected
@@ -162,7 +162,7 @@ async def test_classified_failure_records_status_and_failure_code(
     attributes = dict(span.attributes or {})
     assert "result" not in attributes
     assert attributes["status"] == "failed"
-    assert attributes["error.type"] == "ai_provider_transport_failed"
+    assert attributes["error.type"] == "ai_provider_transport_error"
     assert span.status.status_code is StatusCode.ERROR
     assert exception_events(span) == []
 
@@ -209,7 +209,7 @@ async def test_stopped_attempt_discards_reported_failure(
     with pytest.raises(asyncio.CancelledError):
         async with recorder.record(**_RECORD_KWARGS) as recording:
             recording.report_outcome(
-                LlmAttemptFailed(failure_code="ai_provider_transport_failed")
+                LlmAttemptFailed(failure_code="ai_provider_transport_error")
             )
             raise asyncio.CancelledError()
 
@@ -461,7 +461,7 @@ async def test_stream_classified_failure_has_no_exception_event(
             **{**_RECORD_KWARGS, "mode": "stream"}
         ) as recording:
             recording.report_outcome(
-                LlmAttemptFailed(failure_code="ai_provider_transport_failed")
+                LlmAttemptFailed(failure_code="ai_provider_transport_error")
             )
             raise error
 
@@ -469,7 +469,7 @@ async def test_stream_classified_failure_has_no_exception_event(
     span = tracer.spans[0]
     assert "result" not in span.attributes
     assert span.attributes["status"] == "failed"
-    assert span.attributes["error.type"] == "ai_provider_transport_failed"
+    assert span.attributes["error.type"] == "ai_provider_transport_error"
     assert span.status_code is StatusCode.ERROR
     assert span.exception_events == []
     assert span.end_calls == 1

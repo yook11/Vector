@@ -31,8 +31,8 @@ from app.agent.recording.evidence_answer import (
 from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.http.failure import (
@@ -95,9 +95,9 @@ def _evidence(ref: str = "1") -> AnswerInputEvidence:
     )
 
 
-def _truncated_error() -> AIProviderGenerationError:
+def _truncated_error() -> AIProviderResultError:
     """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
-    return AIProviderGenerationError(reason=AIProviderGenerationReason.OUTPUT_TRUNCATED)
+    return AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED)
 
 
 def _expected_draft(*, answer: str, cited_refs: list[str]) -> EvidenceAnswerDraft:
@@ -496,7 +496,7 @@ async def test_generation_failure_raises_typed_error_with_code() -> None:
         await _answer(generator)
 
     assert isinstance(exc_info.value, Exception)
-    assert exc_info.value.code == "ai_provider_transport_failed"
+    assert exc_info.value.code == "ai_provider_transport_error"
 
 
 @pytest.mark.asyncio
@@ -516,14 +516,14 @@ async def test_provider_error_raises_without_retry(
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(generator)
 
-    assert exc_info.value.code == "ai_provider_transport_failed"
+    assert exc_info.value.code == "ai_provider_transport_error"
     assert len(generator.calls) == 1
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
         {
             "result": "failed",
             "attempt_count": 1,
-            "failure_code": "ai_provider_transport_failed",
+            "failure_code": "ai_provider_transport_error",
         }
     ]
     assert _metric_attributes(metrics, _EVIDENCE_ANSWER_DURATION_METRIC) == [
@@ -808,7 +808,7 @@ async def test_provider_error_aborts_without_live_fallback() -> None:
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(generator, delta_reporter=reporter)
 
-    assert exc_info.value.code == "ai_provider_transport_failed"
+    assert exc_info.value.code == "ai_provider_transport_error"
     assert reporter.aborted == [1]
     assert reporter.reset_generations == []
     assert reporter.finished == []
@@ -887,7 +887,7 @@ async def test_provider_error_closes_stream_without_retry(
     metrics = collected_metrics(capfire)
     assert (
         _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)[0]["failure_code"]
-        == "ai_provider_transport_failed"
+        == "ai_provider_transport_error"
     )
 
 
@@ -943,14 +943,14 @@ async def test_second_truncation_raises_with_truncated_failure_code(
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(generator)
 
-    assert exc_info.value.code == "ai_provider_generation_unusable"
+    assert exc_info.value.code == "ai_provider_result_error"
     assert len(generator.calls) == 2
     metrics = collected_metrics(capfire)
     attrs = _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)
     assert len(attrs) == 1
     assert attrs[0]["attempt_count"] == 2
     assert attrs[0]["result"] == "failed"
-    assert attrs[0]["failure_code"] == "ai_provider_generation_unusable"
+    assert attrs[0]["failure_code"] == "ai_provider_result_error"
 
 
 @pytest.mark.asyncio
@@ -1019,7 +1019,7 @@ async def test_classified_failure_records_failed_outcome() -> None:
         recorder,
         error=exc_info.value,
         outcome=EvidenceAnswerFailed(
-            failure_code="ai_provider_transport_failed",
+            failure_code="ai_provider_transport_error",
             attempt_count=1,
         ),
     )
@@ -1099,7 +1099,7 @@ async def test_provider_error_records_failure_without_fallback() -> None:
     _assert_recorded(
         recorder,
         outcome=EvidenceAnswerFailed(
-            failure_code="ai_provider_transport_failed", attempt_count=1
+            failure_code="ai_provider_transport_error", attempt_count=1
         ),
         error=exc_info.value,
     )

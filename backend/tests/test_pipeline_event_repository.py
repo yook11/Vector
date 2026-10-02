@@ -140,7 +140,7 @@ async def test_append_persists_retryability(
     await repo.append(
         stage=Stage.EMBEDDING,
         event_type=EventType.FAILED,
-        outcome_code="ai_provider_transport_failed",
+        outcome_code="ai_provider_transport_error",
         payload=payload,
         article_id=article_row.id,
         retryability=Retryability.RETRYABLE,

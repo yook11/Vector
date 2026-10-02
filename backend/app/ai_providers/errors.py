@@ -52,27 +52,27 @@ class AIProviderError(ApplicationError):
         self.reason = reason
 
 
-class AIProviderRequestNotSentReason(StrEnum):
+class AIProviderNotSentReason(StrEnum):
     NOT_CONFIGURED = "not_configured"
     HOST_BLOCKED = "host_blocked"
     """宛先の方針がプロバイダーへの通信を拒否した。"""
 
 
-class AIProviderRequestNotSentError(AIProviderError):
+class AIProviderNotSentError(AIProviderError):
     """設定の不足や宛先の方針により、リクエストを送らなかった。"""
 
-    CODE: ClassVar[str] = "ai_provider_request_not_sent"
+    CODE: ClassVar[str] = "ai_provider_not_sent_error"
     DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーへのリクエストを送信しませんでした"
-    reason: AIProviderRequestNotSentReason
+    reason: AIProviderNotSentReason
 
     def __init__(
         self,
         message: str | None = None,
         *,
-        reason: AIProviderRequestNotSentReason,
+        reason: AIProviderNotSentReason,
     ) -> None:
-        if not isinstance(reason, AIProviderRequestNotSentReason):
-            raise TypeError("reason must be an AIProviderRequestNotSentReason")
+        if not isinstance(reason, AIProviderNotSentReason):
+            raise TypeError("reason must be an AIProviderNotSentReason")
         super().__init__(message, reason=reason)
 
     @property
@@ -83,7 +83,7 @@ class AIProviderRequestNotSentError(AIProviderError):
 class AIProviderTransportError(AIProviderError):
     """通信が完了せず、プロバイダーの応答を受け取れなかった。"""
 
-    CODE: ClassVar[str] = "ai_provider_transport_failed"
+    CODE: ClassVar[str] = "ai_provider_transport_error"
     DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーとの通信に失敗しました"
     reason: HttpTransportFailureReason
 
@@ -108,7 +108,7 @@ class AIProviderTransportError(AIProviderError):
         return AIProviderRecovery.MAY_RECOVER_ON_RETRY
 
 
-class AIProviderErrorResponseReason(StrEnum):
+class AIProviderResponseReason(StrEnum):
     AUTH = "auth"
     LEAKED_API_KEY = "leaked_api_key"
     PERMISSION_DENIED = "permission_denied"
@@ -124,56 +124,52 @@ class AIProviderErrorResponseReason(StrEnum):
     INPUT_BLOCKED = "input_blocked"
 
 
-_ERROR_RESPONSE_RECOVERY: dict[AIProviderErrorResponseReason, AIProviderRecovery] = {
-    AIProviderErrorResponseReason.AUTH: AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-    AIProviderErrorResponseReason.LEAKED_API_KEY: (
+_RESPONSE_RECOVERY: dict[AIProviderResponseReason, AIProviderRecovery] = {
+    AIProviderResponseReason.AUTH: AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
+    AIProviderResponseReason.LEAKED_API_KEY: (
         AIProviderRecovery.OPERATOR_ACTION_REQUIRED
     ),
-    AIProviderErrorResponseReason.PERMISSION_DENIED: (
+    AIProviderResponseReason.PERMISSION_DENIED: (
         AIProviderRecovery.OPERATOR_ACTION_REQUIRED
     ),
-    AIProviderErrorResponseReason.NOT_FOUND: (
+    AIProviderResponseReason.NOT_FOUND: AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
+    AIProviderResponseReason.FAILED_PRECONDITION: (
         AIProviderRecovery.OPERATOR_ACTION_REQUIRED
     ),
-    AIProviderErrorResponseReason.FAILED_PRECONDITION: (
+    AIProviderResponseReason.INSUFFICIENT_BALANCE: (
         AIProviderRecovery.OPERATOR_ACTION_REQUIRED
     ),
-    AIProviderErrorResponseReason.INSUFFICIENT_BALANCE: (
+    AIProviderResponseReason.INVALID_REQUEST: (
         AIProviderRecovery.OPERATOR_ACTION_REQUIRED
     ),
-    AIProviderErrorResponseReason.INVALID_REQUEST: (
-        AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-    ),
-    AIProviderErrorResponseReason.RATE_LIMITED: AIProviderRecovery.RECOVERS_AFTER_WAIT,
-    AIProviderErrorResponseReason.QUOTA_EXHAUSTED: (
-        AIProviderRecovery.RECOVERS_AFTER_WAIT
-    ),
-    AIProviderErrorResponseReason.SERVER_ERROR: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-    AIProviderErrorResponseReason.INPUT_TOO_LONG: (
+    AIProviderResponseReason.RATE_LIMITED: AIProviderRecovery.RECOVERS_AFTER_WAIT,
+    AIProviderResponseReason.QUOTA_EXHAUSTED: AIProviderRecovery.RECOVERS_AFTER_WAIT,
+    AIProviderResponseReason.SERVER_ERROR: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
+    AIProviderResponseReason.INPUT_TOO_LONG: (
         AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
     ),
-    AIProviderErrorResponseReason.INPUT_BLOCKED: (
+    AIProviderResponseReason.INPUT_BLOCKED: (
         AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
     ),
 }
 
 
-class AIProviderErrorResponseError(AIProviderError):
-    """プロバイダーが成功以外の応答を返した。"""
+class AIProviderResponseError(AIProviderError):
+    """プロバイダーが非成功応答を返した。"""
 
-    CODE: ClassVar[str] = "ai_provider_error_response"
+    CODE: ClassVar[str] = "ai_provider_response_error"
     DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーが失敗の応答を返しました"
-    reason: AIProviderErrorResponseReason
+    reason: AIProviderResponseReason
 
     def __init__(
         self,
         message: str | None = None,
         *,
-        reason: AIProviderErrorResponseReason,
+        reason: AIProviderResponseReason,
         status_code: int,
     ) -> None:
-        if not isinstance(reason, AIProviderErrorResponseReason):
-            raise TypeError("reason must be an AIProviderErrorResponseReason")
+        if not isinstance(reason, AIProviderResponseReason):
+            raise TypeError("reason must be an AIProviderResponseReason")
         if not isinstance(status_code, int) or isinstance(status_code, bool):
             raise TypeError("status_code must be an int")
         super().__init__(message, reason=reason)
@@ -181,10 +177,10 @@ class AIProviderErrorResponseError(AIProviderError):
 
     @property
     def recovery(self) -> AIProviderRecovery:
-        return _ERROR_RESPONSE_RECOVERY[self.reason]
+        return _RESPONSE_RECOVERY[self.reason]
 
 
-class AIProviderGenerationReason(StrEnum):
+class AIProviderResultReason(StrEnum):
     INPUT_BLOCKED = "input_blocked"
     OUTPUT_BLOCKED_SAFETY = "output_blocked_safety"
     OUTPUT_BLOCKED_RECITATION = "output_blocked_recitation"
@@ -200,72 +196,66 @@ class AIProviderGenerationReason(StrEnum):
     RESPONSE_UNPARSEABLE = "response_unparseable"
 
 
-_GENERATION_RECOVERY: dict[AIProviderGenerationReason, AIProviderRecovery] = {
-    AIProviderGenerationReason.INPUT_BLOCKED: (
+_RESULT_RECOVERY: dict[AIProviderResultReason, AIProviderRecovery] = {
+    AIProviderResultReason.INPUT_BLOCKED: (
         AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
     ),
-    AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY: (
+    AIProviderResultReason.OUTPUT_BLOCKED_SAFETY: (
         AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
     ),
-    AIProviderGenerationReason.OUTPUT_BLOCKED_RECITATION: (
+    AIProviderResultReason.OUTPUT_BLOCKED_RECITATION: (
         AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
     ),
-    AIProviderGenerationReason.OUTPUT_BLOCKED_BLOCKLIST: (
+    AIProviderResultReason.OUTPUT_BLOCKED_BLOCKLIST: (
         AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
     ),
-    AIProviderGenerationReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT: (
+    AIProviderResultReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT: (
         AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
     ),
-    AIProviderGenerationReason.OUTPUT_BLOCKED_SPII: (
+    AIProviderResultReason.OUTPUT_BLOCKED_SPII: (
         AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
     ),
-    AIProviderGenerationReason.OUTPUT_TRUNCATED: (
+    AIProviderResultReason.OUTPUT_TRUNCATED: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
+    AIProviderResultReason.STREAM_INCOMPLETE: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
+    AIProviderResultReason.EMBEDDINGS_EMPTY: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
+    AIProviderResultReason.EMBEDDING_VALUES_MISSING: (
         AIProviderRecovery.MAY_RECOVER_ON_RETRY
     ),
-    AIProviderGenerationReason.STREAM_INCOMPLETE: (
+    AIProviderResultReason.EMBEDDING_COUNT_MISMATCH: (
         AIProviderRecovery.MAY_RECOVER_ON_RETRY
     ),
-    AIProviderGenerationReason.EMBEDDINGS_EMPTY: (
-        AIProviderRecovery.MAY_RECOVER_ON_RETRY
-    ),
-    AIProviderGenerationReason.EMBEDDING_VALUES_MISSING: (
-        AIProviderRecovery.MAY_RECOVER_ON_RETRY
-    ),
-    AIProviderGenerationReason.EMBEDDING_COUNT_MISMATCH: (
-        AIProviderRecovery.MAY_RECOVER_ON_RETRY
-    ),
-    AIProviderGenerationReason.RESPONSE_UNPARSEABLE: (
+    AIProviderResultReason.RESPONSE_UNPARSEABLE: (
         AIProviderRecovery.MAY_RECOVER_ON_RETRY
     ),
 }
 
 
-class AIProviderGenerationError(AIProviderError):
-    """成功の応答を受け取ったが、生成結果を使えなかった。"""
+class AIProviderResultError(AIProviderError):
+    """成功応答を受け取ったが、中身を使えなかった。"""
 
-    CODE: ClassVar[str] = "ai_provider_generation_unusable"
+    CODE: ClassVar[str] = "ai_provider_result_error"
     DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの生成結果を利用できませんでした"
-    reason: AIProviderGenerationReason
+    reason: AIProviderResultReason
 
     def __init__(
         self,
         message: str | None = None,
         *,
-        reason: AIProviderGenerationReason,
+        reason: AIProviderResultReason,
     ) -> None:
-        if not isinstance(reason, AIProviderGenerationReason):
-            raise TypeError("reason must be an AIProviderGenerationReason")
+        if not isinstance(reason, AIProviderResultReason):
+            raise TypeError("reason must be an AIProviderResultReason")
         super().__init__(message, reason=reason)
 
     @property
     def recovery(self) -> AIProviderRecovery:
-        return _GENERATION_RECOVERY[self.reason]
+        return _RESULT_RECOVERY[self.reason]
 
 
 # 基底型と未知の直接サブクラスは分類済みの失敗として扱わない。
 CLASSIFIED_AI_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
-    AIProviderRequestNotSentError,
+    AIProviderNotSentError,
     AIProviderTransportError,
-    AIProviderErrorResponseError,
-    AIProviderGenerationError,
+    AIProviderResponseError,
+    AIProviderResultError,
 )

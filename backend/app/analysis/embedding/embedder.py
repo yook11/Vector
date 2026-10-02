@@ -6,8 +6,8 @@ from google.genai.client import AsyncClient
 from google.genai.types import EmbedContentConfig
 
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.analysis.embedding.ai.base import BaseEmbedder
@@ -48,13 +48,11 @@ class GeminiEmbedder(BaseEmbedder):
             ),
         )
         if not response.embeddings:
-            raise AIProviderGenerationError(
-                reason=AIProviderGenerationReason.EMBEDDINGS_EMPTY
-            )
+            raise AIProviderResultError(reason=AIProviderResultReason.EMBEDDINGS_EMPTY)
         values = response.embeddings[0].values
         if values is None:
-            raise AIProviderGenerationError(
-                reason=AIProviderGenerationReason.EMBEDDING_VALUES_MISSING
+            raise AIProviderResultError(
+                reason=AIProviderResultReason.EMBEDDING_VALUES_MISSING
             )
         return list(values)
 

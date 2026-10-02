@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 
 PYDANTIC_VALIDATION_FAILED = "answer_synthesis_pydantic_validation_failed"
@@ -25,11 +25,11 @@ class RequestRetryDisposition(StrEnum):
     UNKNOWN = "unknown"
 
 
-def is_output_truncated(exc: BaseException) -> TypeGuard[AIProviderGenerationError]:
+def is_output_truncated(exc: BaseException) -> TypeGuard[AIProviderResultError]:
     """出力が上限で打ち切られた失敗か。"""
     return (
-        isinstance(exc, AIProviderGenerationError)
-        and exc.reason is AIProviderGenerationReason.OUTPUT_TRUNCATED
+        isinstance(exc, AIProviderResultError)
+        and exc.reason is AIProviderResultReason.OUTPUT_TRUNCATED
     )
 
 

@@ -9,61 +9,61 @@ from __future__ import annotations
 from google.genai import errors as genai_errors
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
-    AIProviderGenerationReason,
-    AIProviderRequestNotSentError,
-    AIProviderRequestNotSentReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.http.destination_policy import HostBlockedError
 from app.http.failure import classify_httpx
 
-_CONFIG_REASON_MESSAGES: dict[AIProviderErrorResponseReason, str] = {
-    AIProviderErrorResponseReason.AUTH: "AIプロバイダーの認証に失敗しました",
-    AIProviderErrorResponseReason.PERMISSION_DENIED: (
+_CONFIG_REASON_MESSAGES: dict[AIProviderResponseReason, str] = {
+    AIProviderResponseReason.AUTH: "AIプロバイダーの認証に失敗しました",
+    AIProviderResponseReason.PERMISSION_DENIED: (
         "AIプロバイダーへのアクセス権限がありません"
     ),
-    AIProviderErrorResponseReason.NOT_FOUND: "AIプロバイダーの要求先が見つかりません",
-    AIProviderErrorResponseReason.FAILED_PRECONDITION: (
+    AIProviderResponseReason.NOT_FOUND: "AIプロバイダーの要求先が見つかりません",
+    AIProviderResponseReason.FAILED_PRECONDITION: (
         "AIプロバイダーの利用に必要な前提条件が満たされていません"
     ),
 }
 
 
-_FINISH_REASON_TO_GENERATION_REASON: dict[str, AIProviderGenerationReason] = {
-    "SAFETY": AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY,
-    "RECITATION": AIProviderGenerationReason.OUTPUT_BLOCKED_RECITATION,
-    "BLOCKLIST": AIProviderGenerationReason.OUTPUT_BLOCKED_BLOCKLIST,
-    "PROHIBITED_CONTENT": AIProviderGenerationReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT,
-    "SPII": AIProviderGenerationReason.OUTPUT_BLOCKED_SPII,
+_FINISH_REASON_TO_RESULT_REASON: dict[str, AIProviderResultReason] = {
+    "SAFETY": AIProviderResultReason.OUTPUT_BLOCKED_SAFETY,
+    "RECITATION": AIProviderResultReason.OUTPUT_BLOCKED_RECITATION,
+    "BLOCKLIST": AIProviderResultReason.OUTPUT_BLOCKED_BLOCKLIST,
+    "PROHIBITED_CONTENT": AIProviderResultReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT,
+    "SPII": AIProviderResultReason.OUTPUT_BLOCKED_SPII,
 }
 
 # 写像の key から作り、片方だけが更新されてずれることを防ぐ。
 OUTPUT_BLOCKED_FINISH_REASONS: frozenset[str] = frozenset(
-    _FINISH_REASON_TO_GENERATION_REASON
+    _FINISH_REASON_TO_RESULT_REASON
 )
 
 
-_STATUS_TO_CONFIG_REASON: dict[str, AIProviderErrorResponseReason] = {
-    "UNAUTHENTICATED": AIProviderErrorResponseReason.AUTH,
-    "PERMISSION_DENIED": AIProviderErrorResponseReason.PERMISSION_DENIED,
-    "NOT_FOUND": AIProviderErrorResponseReason.NOT_FOUND,
-    "FAILED_PRECONDITION": AIProviderErrorResponseReason.FAILED_PRECONDITION,
+_STATUS_TO_CONFIG_REASON: dict[str, AIProviderResponseReason] = {
+    "UNAUTHENTICATED": AIProviderResponseReason.AUTH,
+    "PERMISSION_DENIED": AIProviderResponseReason.PERMISSION_DENIED,
+    "NOT_FOUND": AIProviderResponseReason.NOT_FOUND,
+    "FAILED_PRECONDITION": AIProviderResponseReason.FAILED_PRECONDITION,
 }
 
 
 # gRPC status を持たない応答用。
-_HTTP_CODE_TO_CONFIG_REASON: dict[int, AIProviderErrorResponseReason] = {
-    401: AIProviderErrorResponseReason.AUTH,
-    403: AIProviderErrorResponseReason.PERMISSION_DENIED,
-    404: AIProviderErrorResponseReason.NOT_FOUND,
+_HTTP_CODE_TO_CONFIG_REASON: dict[int, AIProviderResponseReason] = {
+    401: AIProviderResponseReason.AUTH,
+    403: AIProviderResponseReason.PERMISSION_DENIED,
+    404: AIProviderResponseReason.NOT_FOUND,
 }
 
 
-def output_blocked_reason(finish_reason_name: str) -> AIProviderGenerationReason:
+def output_blocked_reason(finish_reason_name: str) -> AIProviderResultReason:
     """OUTPUT_BLOCKED_FINISH_REASONS の名前を拒否の理由に写す。無い名前は KeyError。"""
-    return _FINISH_REASON_TO_GENERATION_REASON[finish_reason_name]
+    return _FINISH_REASON_TO_RESULT_REASON[finish_reason_name]
 
 
 # 入力長の超過を示す文言 (Gemini の実際の応答から集めたもの)。
@@ -127,9 +127,9 @@ def translate_gemini_error(exc: Exception) -> Exception:
     応答では、SDK の版で揺れない status を優先する)。
     """
     if isinstance(exc, HostBlockedError):
-        return AIProviderRequestNotSentError(
+        return AIProviderNotSentError(
             "AIプロバイダーへの通信が宛先の方針で拒否されました",
-            reason=AIProviderRequestNotSentReason.HOST_BLOCKED,
+            reason=AIProviderNotSentReason.HOST_BLOCKED,
         )
     transport = classify_httpx(exc)
     if transport is not None:
@@ -143,24 +143,24 @@ def translate_gemini_error(exc: Exception) -> Exception:
 
     # 入力長の超過は DEADLINE_EXCEEDED (5xx) でも返るので、ServerError より先に見る。
     if _is_context_length_error(status, message):
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーが入力長の上限を超えたと判定しました",
-            reason=AIProviderErrorResponseReason.INPUT_TOO_LONG,
+            reason=AIProviderResponseReason.INPUT_TOO_LONG,
             status_code=status_code,
         )
 
     # ServerError は APIError の子クラスなので先に判定する。
     if isinstance(exc, genai_errors.ServerError):
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダー内部でサーバーエラーが発生しました",
-            reason=AIProviderErrorResponseReason.SERVER_ERROR,
+            reason=AIProviderResponseReason.SERVER_ERROR,
             status_code=status_code,
         )
 
     if "reported as leaked" in message:
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーがAPIキーの漏洩を検知しました",
-            reason=AIProviderErrorResponseReason.LEAKED_API_KEY,
+            reason=AIProviderResponseReason.LEAKED_API_KEY,
             status_code=status_code,
         )
 
@@ -168,7 +168,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
         status
     ) or _HTTP_CODE_TO_CONFIG_REASON.get(status_code)
     if config_reason is not None:
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             _CONFIG_REASON_MESSAGES[config_reason],
             reason=config_reason,
             status_code=status_code,
@@ -176,40 +176,40 @@ def translate_gemini_error(exc: Exception) -> Exception:
 
     if status_code == 400 or status == "INVALID_ARGUMENT":
         if "api key" in message:
-            return AIProviderErrorResponseError(
+            return AIProviderResponseError(
                 "AIプロバイダーの認証に失敗しました",
-                reason=AIProviderErrorResponseReason.AUTH,
+                reason=AIProviderResponseReason.AUTH,
                 status_code=status_code,
             )
         if "permission" in message:
-            return AIProviderErrorResponseError(
+            return AIProviderResponseError(
                 "AIプロバイダーへのアクセス権限がありません",
-                reason=AIProviderErrorResponseReason.PERMISSION_DENIED,
+                reason=AIProviderResponseReason.PERMISSION_DENIED,
                 status_code=status_code,
             )
         if "blocked" in message or "safety" in message:
-            return AIProviderErrorResponseError(
+            return AIProviderResponseError(
                 "AIプロバイダーが安全性の制約により入力を拒否しました",
-                reason=AIProviderErrorResponseReason.INPUT_BLOCKED,
+                reason=AIProviderResponseReason.INPUT_BLOCKED,
                 status_code=status_code,
             )
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーがリクエストの引数を不正と判定しました",
-            reason=AIProviderErrorResponseReason.INVALID_REQUEST,
+            reason=AIProviderResponseReason.INVALID_REQUEST,
             status_code=status_code,
         )
 
     # 日あたりの枯渇を確認できたときだけ枯渇とし、枯渇アラームの誤発火を避ける。
     if status_code == 429 or status == "RESOURCE_EXHAUSTED":
         if _has_per_day_quota_violation(exc):
-            return AIProviderErrorResponseError(
+            return AIProviderResponseError(
                 "AIプロバイダーの1日当たりの利用枠を使い切りました",
-                reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED,
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
                 status_code=status_code,
             )
-        return AIProviderErrorResponseError(
+        return AIProviderResponseError(
             "AIプロバイダーの呼び出し頻度の上限に達しました",
-            reason=AIProviderErrorResponseReason.RATE_LIMITED,
+            reason=AIProviderResponseReason.RATE_LIMITED,
             status_code=status_code,
         )
 

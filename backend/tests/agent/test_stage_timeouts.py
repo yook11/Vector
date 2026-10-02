@@ -23,8 +23,8 @@ from app.agent.planning.failure import PlanningError
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 from tests.agent.answering.direct_answer.test_service import _input as direct_input
 from tests.agent.answering.evidence_answer.test_service import (
@@ -102,8 +102,8 @@ class WaitingRuntime:
             if self.mode == "retry":
                 await asyncio.sleep(0.12)
                 if attempt_number == 1:
-                    raise AIProviderGenerationError(
-                        reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
+                    raise AIProviderResultError(
+                        reason=AIProviderResultReason.OUTPUT_TRUNCATED
                     )
                 yield "回答です。[[1]]"
             elif self.mode == "fragments":

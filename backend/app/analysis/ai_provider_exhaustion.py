@@ -9,17 +9,17 @@ rate limit (時間経過で回復) は対象外。kind には provider error の
 from __future__ import annotations
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
 )
 from app.cloudwatch.emf import emit_metric
 
-type ExhaustedProviderError = AIProviderErrorResponseError
+type ExhaustedProviderError = AIProviderResponseError
 
 _EXHAUSTED_REASONS = frozenset(
     {
-        AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
-        AIProviderErrorResponseReason.QUOTA_EXHAUSTED,
+        AIProviderResponseReason.INSUFFICIENT_BALANCE,
+        AIProviderResponseReason.QUOTA_EXHAUSTED,
     }
 )
 
@@ -28,10 +28,7 @@ def exhausted_provider_error(
     exc: BaseException | None,
 ) -> ExhaustedProviderError | None:
     """既存の枯渇通知に該当する例外を副作用なく取り出す。"""
-    if (
-        isinstance(exc, AIProviderErrorResponseError)
-        and exc.reason in _EXHAUSTED_REASONS
-    ):
+    if isinstance(exc, AIProviderResponseError) and exc.reason in _EXHAUSTED_REASONS:
         return exc
     return None
 

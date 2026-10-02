@@ -17,8 +17,8 @@ import pytest
 import structlog
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
@@ -100,9 +100,9 @@ class TestCallOncePassthrough:
     async def test_ai_provider_rate_limited_passes_through_unchanged(
         self, make_assessment_logger
     ) -> None:
-        original = AIProviderErrorResponseError(
+        original = AIProviderResponseError(
             "rate limited",
-            reason=AIProviderErrorResponseReason.RATE_LIMITED,
+            reason=AIProviderResponseReason.RATE_LIMITED,
             status_code=429,
         )
         cls = _StubAssessor()
@@ -111,7 +111,7 @@ class TestCallOncePassthrough:
             side_effect=AssertionError("must not be called")
         )
 
-        with pytest.raises(AIProviderErrorResponseError) as exc_info:
+        with pytest.raises(AIProviderResponseError) as exc_info:
             await cls._call_once("prompt", logger=make_assessment_logger())
 
         assert exc_info.value is original
@@ -121,8 +121,8 @@ class TestCallOncePassthrough:
     async def test_ai_provider_configuration_passes_through_unchanged(
         self, make_assessment_logger
     ) -> None:
-        original = AIProviderErrorResponseError(
-            "bad api key", reason=AIProviderErrorResponseReason.AUTH, status_code=401
+        original = AIProviderResponseError(
+            "bad api key", reason=AIProviderResponseReason.AUTH, status_code=401
         )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
@@ -130,7 +130,7 @@ class TestCallOncePassthrough:
             side_effect=AssertionError("must not be called")
         )
 
-        with pytest.raises(AIProviderErrorResponseError) as exc_info:
+        with pytest.raises(AIProviderResponseError) as exc_info:
             await cls._call_once("prompt", logger=make_assessment_logger())
 
         assert exc_info.value is original
@@ -179,8 +179,8 @@ class TestCallOncePassthrough:
         self, make_assessment_logger
     ) -> None:
         original = to_assessment_error(
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.AUTH, status_code=401
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.AUTH, status_code=401
             )
         )
         cls = _StubAssessor()

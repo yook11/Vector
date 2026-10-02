@@ -21,8 +21,8 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 )
 from app.ai_providers.errors import (
     AIProviderError,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
@@ -82,8 +82,8 @@ class GeminiQueryEmbedder:
             except AIProviderError:
                 raise
             except ValidationError as exc:
-                raise AIProviderGenerationError(
-                    reason=AIProviderGenerationReason.RESPONSE_UNPARSEABLE
+                raise AIProviderResultError(
+                    reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
                 ) from exc
             except Exception as exc:
                 translated = self._translate_error(exc)
@@ -105,19 +105,17 @@ class GeminiQueryEmbedder:
         )
         embeddings = response.embeddings
         if not embeddings:
-            raise AIProviderGenerationError(
-                reason=AIProviderGenerationReason.EMBEDDINGS_EMPTY
-            )
+            raise AIProviderResultError(reason=AIProviderResultReason.EMBEDDINGS_EMPTY)
         if len(embeddings) != len(queries.queries):
-            raise AIProviderGenerationError(
-                reason=AIProviderGenerationReason.EMBEDDING_COUNT_MISMATCH
+            raise AIProviderResultError(
+                reason=AIProviderResultReason.EMBEDDING_COUNT_MISMATCH
             )
 
         vectors: list[list[float]] = []
         for embedding in embeddings:
             if embedding.values is None:
-                raise AIProviderGenerationError(
-                    reason=AIProviderGenerationReason.EMBEDDING_VALUES_MISSING
+                raise AIProviderResultError(
+                    reason=AIProviderResultReason.EMBEDDING_VALUES_MISSING
                 )
             vectors.append(list(embedding.values))
         return vectors

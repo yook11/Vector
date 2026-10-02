@@ -21,10 +21,10 @@ from app.agent.answering.failure import (
 )
 from app.ai_providers.errors import (
     AIProviderError,
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.http.failure import (
@@ -47,9 +47,9 @@ _CLASSIFIERS: tuple[_Classifier, ...] = (
 _CLASSIFIER_IDS = ["answer_synthesis", "direct_answer"]
 
 
-def _truncated_error() -> AIProviderGenerationError:
+def _truncated_error() -> AIProviderResultError:
     """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
-    return AIProviderGenerationError(reason=AIProviderGenerationReason.OUTPUT_TRUNCATED)
+    return AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED)
 
 
 @pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
@@ -77,19 +77,15 @@ def test_output_truncated_error_is_retried_in_request(classify: _Classifier) -> 
                 HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             )
         ),
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
         ),
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.AUTH, status_code=401
+        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
         ),
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
-        ),
-        AIProviderGenerationError(
-            reason=AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY
-        ),
-        AIProviderGenerationError(reason=AIProviderGenerationReason.STREAM_INCOMPLETE),
+        AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
+        AIProviderResultError(reason=AIProviderResultReason.STREAM_INCOMPLETE),
     ],
     ids=[
         "network",

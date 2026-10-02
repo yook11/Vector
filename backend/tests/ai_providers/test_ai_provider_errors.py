@@ -7,13 +7,13 @@ import pytest
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderError,
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
     AIProviderRecovery,
-    AIProviderRequestNotSentError,
-    AIProviderRequestNotSentReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.http.failure import (
@@ -36,10 +36,10 @@ def test_base_is_application_error() -> None:
 def test_classified_errors_are_the_four_places_where_failure_is_found() -> None:
     """分類済みは、送信前・通信・失敗の応答・生成結果の4つに限る。"""
     assert set(CLASSIFIED_AI_PROVIDER_ERRORS) == {
-        AIProviderRequestNotSentError,
+        AIProviderNotSentError,
         AIProviderTransportError,
-        AIProviderErrorResponseError,
-        AIProviderGenerationError,
+        AIProviderResponseError,
+        AIProviderResultError,
     }
 
 
@@ -47,10 +47,8 @@ def test_classified_errors_are_the_four_places_where_failure_is_found() -> None:
     "error,code",
     [
         (
-            AIProviderRequestNotSentError(
-                reason=AIProviderRequestNotSentReason.NOT_CONFIGURED
-            ),
-            "ai_provider_request_not_sent",
+            AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
+            "ai_provider_not_sent_error",
         ),
         (
             AIProviderTransportError(
@@ -58,19 +56,17 @@ def test_classified_errors_are_the_four_places_where_failure_is_found() -> None:
                     HttpTransportStage.CONNECT, HttpTransportFailureReason.TIMEOUT
                 )
             ),
-            "ai_provider_transport_failed",
+            "ai_provider_transport_error",
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
             ),
-            "ai_provider_error_response",
+            "ai_provider_response_error",
         ),
         (
-            AIProviderGenerationError(
-                reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
-            ),
-            "ai_provider_generation_unusable",
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED),
+            "ai_provider_result_error",
         ),
     ],
 )
@@ -123,9 +119,9 @@ def test_base_reason_rejects_non_strenum() -> None:
 
 def test_message_is_preserved() -> None:
     """渡したメッセージを通常のExceptionと同じように保持する。"""
-    error = AIProviderErrorResponseError(
+    error = AIProviderResponseError(
         "provider diagnostic message",
-        reason=AIProviderErrorResponseReason.SERVER_ERROR,
+        reason=AIProviderResponseReason.SERVER_ERROR,
         status_code=503,
     )
     assert error.args == ("provider diagnostic message",)
@@ -135,9 +131,9 @@ def test_message_is_preserved() -> None:
 def test_message_rejects_arbitrary_objects() -> None:
     """応答などの任意オブジェクトを説明文として受け取らない。"""
     with pytest.raises(TypeError, match="message must be a string or None"):
-        AIProviderGenerationError(
+        AIProviderResultError(
             {"body": "private-response"},  # type: ignore[arg-type]
-            reason=AIProviderGenerationReason.EMBEDDINGS_EMPTY,
+            reason=AIProviderResultReason.EMBEDDINGS_EMPTY,
         )
 
 
@@ -145,9 +141,7 @@ def test_message_rejects_arbitrary_objects() -> None:
     "error,expected_message",
     [
         (
-            AIProviderRequestNotSentError(
-                reason=AIProviderRequestNotSentReason.NOT_CONFIGURED
-            ),
+            AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
             "AIプロバイダーへのリクエストを送信しませんでした",
         ),
         (
@@ -159,15 +153,13 @@ def test_message_rejects_arbitrary_objects() -> None:
             "AIプロバイダーとの通信に失敗しました",
         ),
         (
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.AUTH, status_code=401
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.AUTH, status_code=401
             ),
             "AIプロバイダーが失敗の応答を返しました",
         ),
         (
-            AIProviderGenerationError(
-                reason=AIProviderGenerationReason.STREAM_INCOMPLETE
-            ),
+            AIProviderResultError(reason=AIProviderResultReason.STREAM_INCOMPLETE),
             "AIプロバイダーの生成結果を利用できませんでした",
         ),
     ],
@@ -179,11 +171,9 @@ def test_no_message_describes_where_failure_was_found(error, expected_message) -
 
 def test_request_not_sent_requires_its_own_reason() -> None:
     """送信前の失敗は、送信前の理由だけを受け取る。"""
-    with pytest.raises(
-        TypeError, match="reason must be an AIProviderRequestNotSentReason"
-    ):
-        AIProviderRequestNotSentError(
-            reason=AIProviderGenerationReason.INPUT_BLOCKED  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="reason must be an AIProviderNotSentReason"):
+        AIProviderNotSentError(
+            reason=AIProviderResultReason.INPUT_BLOCKED  # type: ignore[arg-type]
         )
 
 
@@ -205,11 +195,9 @@ def test_transport_reason_is_the_transport_failure_reason() -> None:
 
 def test_error_response_requires_its_own_reason() -> None:
     """失敗の応答は、失敗の応答の理由だけを受け取る。"""
-    with pytest.raises(
-        TypeError, match="reason must be an AIProviderErrorResponseReason"
-    ):
-        AIProviderErrorResponseError(
-            reason=AIProviderGenerationReason.INPUT_BLOCKED,  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="reason must be an AIProviderResponseReason"):
+        AIProviderResponseError(
+            reason=AIProviderResultReason.INPUT_BLOCKED,  # type: ignore[arg-type]
             status_code=400,
         )
 
@@ -218,32 +206,32 @@ def test_error_response_requires_its_own_reason() -> None:
 def test_error_response_requires_integer_status_code(status_code) -> None:
     """失敗の応答は、HTTP status を整数で必須に持つ。"""
     with pytest.raises(TypeError, match="status_code must be an int"):
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.RATE_LIMITED,
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED,
             status_code=status_code,
         )
 
 
 def test_error_response_keeps_status_code() -> None:
     """失敗の応答は、受け取った HTTP status を保持する。"""
-    error = AIProviderErrorResponseError(
-        reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE, status_code=402
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INSUFFICIENT_BALANCE, status_code=402
     )
     assert error.status_code == 402
 
 
 def test_generation_requires_its_own_reason() -> None:
     """生成結果の失敗は、生成結果の理由だけを受け取る。"""
-    with pytest.raises(TypeError, match="reason must be an AIProviderGenerationReason"):
-        AIProviderGenerationError(
-            reason=AIProviderErrorResponseReason.INPUT_BLOCKED  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="reason must be an AIProviderResultReason"):
+        AIProviderResultError(
+            reason=AIProviderResponseReason.INPUT_BLOCKED  # type: ignore[arg-type]
         )
 
 
 def test_request_not_sent_needs_operator_action() -> None:
     """送らなかった失敗は、設定や宛先の方針を人が直すまで回復しない。"""
-    for reason in AIProviderRequestNotSentReason:
-        error = AIProviderRequestNotSentError(reason=reason)
+    for reason in AIProviderNotSentReason:
+        error = AIProviderNotSentError(reason=reason)
         assert error.recovery is AIProviderRecovery.OPERATOR_ACTION_REQUIRED
 
 
@@ -295,65 +283,65 @@ def test_transport_recovery_is_retry_except_proxy_refusal(transport, expected) -
     "reason,expected",
     [
         (
-            AIProviderErrorResponseReason.AUTH,
+            AIProviderResponseReason.AUTH,
             AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
         ),
         (
-            AIProviderErrorResponseReason.LEAKED_API_KEY,
+            AIProviderResponseReason.LEAKED_API_KEY,
             AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
         ),
         (
-            AIProviderErrorResponseReason.PERMISSION_DENIED,
+            AIProviderResponseReason.PERMISSION_DENIED,
             AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
         ),
         (
-            AIProviderErrorResponseReason.NOT_FOUND,
+            AIProviderResponseReason.NOT_FOUND,
             AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
         ),
         (
-            AIProviderErrorResponseReason.FAILED_PRECONDITION,
+            AIProviderResponseReason.FAILED_PRECONDITION,
             AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
         ),
         (
-            AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+            AIProviderResponseReason.INSUFFICIENT_BALANCE,
             AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
         ),
         (
-            AIProviderErrorResponseReason.INVALID_REQUEST,
+            AIProviderResponseReason.INVALID_REQUEST,
             AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
         ),
         (
-            AIProviderErrorResponseReason.RATE_LIMITED,
+            AIProviderResponseReason.RATE_LIMITED,
             AIProviderRecovery.RECOVERS_AFTER_WAIT,
         ),
         (
-            AIProviderErrorResponseReason.QUOTA_EXHAUSTED,
+            AIProviderResponseReason.QUOTA_EXHAUSTED,
             AIProviderRecovery.RECOVERS_AFTER_WAIT,
         ),
         (
-            AIProviderErrorResponseReason.SERVER_ERROR,
+            AIProviderResponseReason.SERVER_ERROR,
             AIProviderRecovery.MAY_RECOVER_ON_RETRY,
         ),
         (
-            AIProviderErrorResponseReason.INPUT_TOO_LONG,
+            AIProviderResponseReason.INPUT_TOO_LONG,
             AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
         ),
         (
-            AIProviderErrorResponseReason.INPUT_BLOCKED,
+            AIProviderResponseReason.INPUT_BLOCKED,
             AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
         ),
     ],
 )
 def test_error_response_recovery_follows_reason(reason, expected) -> None:
     """失敗の応答の回復の条件は、何が起きたかの理由から決まる。"""
-    error = AIProviderErrorResponseError(reason=reason, status_code=400)
+    error = AIProviderResponseError(reason=reason, status_code=400)
     assert error.recovery is expected
 
 
 def test_every_error_response_reason_has_recovery() -> None:
     """失敗の応答の理由を足したら、回復の条件も決めなければならない。"""
-    for reason in AIProviderErrorResponseReason:
-        error = AIProviderErrorResponseError(reason=reason, status_code=400)
+    for reason in AIProviderResponseReason:
+        error = AIProviderResponseError(reason=reason, status_code=400)
         assert isinstance(error.recovery, AIProviderRecovery)
 
 
@@ -361,72 +349,72 @@ def test_every_error_response_reason_has_recovery() -> None:
     "reason,expected",
     [
         (
-            AIProviderGenerationReason.INPUT_BLOCKED,
+            AIProviderResultReason.INPUT_BLOCKED,
             AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
         ),
         (
-            AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY,
+            AIProviderResultReason.OUTPUT_BLOCKED_SAFETY,
             AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
         ),
         (
-            AIProviderGenerationReason.OUTPUT_BLOCKED_RECITATION,
+            AIProviderResultReason.OUTPUT_BLOCKED_RECITATION,
             AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
         ),
         (
-            AIProviderGenerationReason.OUTPUT_BLOCKED_BLOCKLIST,
+            AIProviderResultReason.OUTPUT_BLOCKED_BLOCKLIST,
             AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
         ),
         (
-            AIProviderGenerationReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT,
+            AIProviderResultReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT,
             AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
         ),
         (
-            AIProviderGenerationReason.OUTPUT_BLOCKED_SPII,
+            AIProviderResultReason.OUTPUT_BLOCKED_SPII,
             AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
         ),
         (
-            AIProviderGenerationReason.OUTPUT_TRUNCATED,
+            AIProviderResultReason.OUTPUT_TRUNCATED,
             AIProviderRecovery.MAY_RECOVER_ON_RETRY,
         ),
         (
-            AIProviderGenerationReason.STREAM_INCOMPLETE,
+            AIProviderResultReason.STREAM_INCOMPLETE,
             AIProviderRecovery.MAY_RECOVER_ON_RETRY,
         ),
         (
-            AIProviderGenerationReason.EMBEDDINGS_EMPTY,
+            AIProviderResultReason.EMBEDDINGS_EMPTY,
             AIProviderRecovery.MAY_RECOVER_ON_RETRY,
         ),
         (
-            AIProviderGenerationReason.EMBEDDING_VALUES_MISSING,
+            AIProviderResultReason.EMBEDDING_VALUES_MISSING,
             AIProviderRecovery.MAY_RECOVER_ON_RETRY,
         ),
         (
-            AIProviderGenerationReason.EMBEDDING_COUNT_MISMATCH,
+            AIProviderResultReason.EMBEDDING_COUNT_MISMATCH,
             AIProviderRecovery.MAY_RECOVER_ON_RETRY,
         ),
         (
-            AIProviderGenerationReason.RESPONSE_UNPARSEABLE,
+            AIProviderResultReason.RESPONSE_UNPARSEABLE,
             AIProviderRecovery.MAY_RECOVER_ON_RETRY,
         ),
     ],
 )
 def test_generation_recovery_follows_reason(reason, expected) -> None:
     """生成結果の失敗の回復の条件は、何が起きたかの理由から決まる。"""
-    assert AIProviderGenerationError(reason=reason).recovery is expected
+    assert AIProviderResultError(reason=reason).recovery is expected
 
 
 def test_every_generation_reason_has_recovery() -> None:
     """生成結果の理由を足したら、回復の条件も決めなければならない。"""
-    for reason in AIProviderGenerationReason:
-        error = AIProviderGenerationError(reason=reason)
+    for reason in AIProviderResultReason:
+        error = AIProviderResultError(reason=reason)
         assert isinstance(error.recovery, AIProviderRecovery)
 
 
 def test_unknown_keyword_is_rejected() -> None:
     """未定義のキーワードを黙って捨てない。"""
     with pytest.raises(TypeError, match="unexpected keyword argument"):
-        AIProviderGenerationError(
-            reason=AIProviderGenerationReason.OUTPUT_TRUNCATED,
+        AIProviderResultError(
+            reason=AIProviderResultReason.OUTPUT_TRUNCATED,
             unrelated_attr="diagnostic",  # type: ignore[call-arg]
         )
 

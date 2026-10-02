@@ -24,7 +24,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - cron 時刻表の SSoT は `backend/app/queue/schedule.py`: dispatch_high 15 分間隔 / medium 1 時間 / low 6 時間、completion 系は毎分、backfill 系は 30 分間隔。
 - `observe_pipeline_queue_health`(`backend/app/queue/tasks/queue_health.py`)が毎分、acquisition / completion / curation の 3 stream について `oldest_outstanding_enqueue_age`(最古の未処理 entry の経過秒数)等を stage 属性付き gauge で Logfire に記録している。観測失敗時は `observation_up=0`。**assessment・embedding・dispatch の stream は観測対象外**(`PIPELINE_QUEUE_TARGETS` 固定 3 stage)。
 - queue_health は analysis サービス内の maintenance worker(`supervisord/analysis.conf`)で動く。maintenance worker は backfill 救済・retention purge も担う。
-- AI provider エラーは翻訳層で分類済み(`app/ai_providers/gemini/error_translator.py` / `app/ai_providers/deepseek/error_translator.py`): 一時的な流量制限(`AIProviderErrorResponseError` の reason `rate_limited`)と、利用枠の枯渇(`quota_exhausted` = Gemini 429 の quota/daily、`insufficient_balance` = DeepSeek 残高切れ)を区別している。
+- AI provider エラーは翻訳層で分類済み(`app/ai_providers/gemini/error_translator.py` / `app/ai_providers/deepseek/error_translator.py`): 一時的な流量制限(`AIProviderResponseError` の reason `rate_limited`)と、利用枠の枯渇(`quota_exhausted` = Gemini 429 の quota/daily、`insufficient_balance` = DeepSeek 残高切れ)を区別している。
 - 無料枠向けの事前ゲートと専用Logfireカウンタは撤去済み。実APIの429・利用枠枯渇・残高不足の分類と通知は維持する。
 - agent(Q&A)の runtime(`app/agent/runtime/gemini.py` / `deepseek.py`)も同じ翻訳層(`translate_gemini_error` / `translate_deepseek_error`)を再利用しており、枯渇系エラーの語彙は pipeline と共通。
 - 2026-06-08 incident: worker-fetch 停止(SPOF)で dispatch task が実行されず収集が途絶。dispatch が死ぬと下流 stream には何も積まれないため、下流の滞留観測では原理的に検知できない。
@@ -142,8 +142,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 ### A6: AI 利用枠の枯渇
 
 - 症状: AI provider の利用枠が尽き、以後の AI 処理が枠回復まで全て失敗する状態。一時的な rate limit とは区別する(翻訳層が既に区別済み)。
-  - `AIProviderErrorResponseError`(reason `insufficient_balance`) — DeepSeek 残高切れ。アクション: 残高チャージ。
-  - `AIProviderErrorResponseError`(reason `quota_exhausted`) — Gemini の quota / daily 枠切れ。アクション: 枠リセット待ちか tier 引き上げの判断。
+  - `AIProviderResponseError`(reason `insufficient_balance`) — DeepSeek 残高切れ。アクション: 残高チャージ。
+  - `AIProviderResponseError`(reason `quota_exhausted`) — Gemini の quota / daily 枠切れ。アクション: 枠リセット待ちか tier 引き上げの判断。
 - Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {insufficient_balance, quota_exhausted}(≤ 4 系列)。kind は provider error の `reason` をそのまま使う: audit の failure_reason と同一語彙になり、アラート後の調査を 1 つの文字列の grep で metric → 監査まで追える。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
 - 条件: Sum >= 1、period 15min、1 evaluation period。`TreatMissingData = notBreaching`(平常時はデータポイントゼロが正常)。
 - 通知は ALARM のみとし、この alarm には ok_actions を付けない。metric は枯渇エラー発生時にしか存在せず、退避機構が再試行自体を止めるため、チャージしなくても alarm は OK へ戻る = OK 復帰は残高回復を意味しない。チャージ(provider 側での対応)を済ませたかは対応した本人が把握しており、復旧通知は誤解を招くだけ。未チャージのまま退避後の再試行が再び枯渇すれば OK→ALARM の遷移が再発し、リマインダーとして再通知される。

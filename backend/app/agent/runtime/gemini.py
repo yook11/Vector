@@ -30,8 +30,8 @@ from app.agent.runtime.llm_failure import (
 )
 from app.ai_providers.errors import (
     AIProviderError,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 from app.ai_providers.gemini.error_translator import (
     OUTPUT_BLOCKED_FINISH_REASONS,
@@ -106,18 +106,18 @@ class GeminiAgentRuntime:
                     _usage_from_metadata(getattr(response, "usage_metadata", None)),
                 )
                 if _has_prompt_block(response):
-                    classified_error = AIProviderGenerationError(
-                        reason=AIProviderGenerationReason.INPUT_BLOCKED,
+                    classified_error = AIProviderResultError(
+                        reason=AIProviderResultReason.INPUT_BLOCKED,
                     )
                 else:
                     finish_reason = _finish_reason_name(response)
                     if finish_reason in OUTPUT_BLOCKED_FINISH_REASONS:
-                        classified_error = AIProviderGenerationError(
+                        classified_error = AIProviderResultError(
                             reason=output_blocked_reason(finish_reason),
                         )
                     elif finish_reason == "MAX_TOKENS":
-                        classified_error = AIProviderGenerationError(
-                            reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
+                        classified_error = AIProviderResultError(
+                            reason=AIProviderResultReason.OUTPUT_TRUNCATED
                         )
                     else:
                         try:
@@ -206,8 +206,8 @@ class GeminiAgentRuntime:
                         _usage_from_metadata(getattr(chunk, "usage_metadata", None)),
                     )
                     if _has_prompt_block(chunk):
-                        classified_error = AIProviderGenerationError(
-                            reason=AIProviderGenerationReason.INPUT_BLOCKED,
+                        classified_error = AIProviderResultError(
+                            reason=AIProviderResultReason.INPUT_BLOCKED,
                         )
                         break
 
@@ -221,13 +221,13 @@ class GeminiAgentRuntime:
                         None,
                     )
                     if blocked_reason_name is not None:
-                        classified_error = AIProviderGenerationError(
+                        classified_error = AIProviderResultError(
                             reason=output_blocked_reason(blocked_reason_name),
                         )
                         break
                     if "MAX_TOKENS" in finish_reason_names:
-                        classified_error = AIProviderGenerationError(
-                            reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
+                        classified_error = AIProviderResultError(
+                            reason=AIProviderResultReason.OUTPUT_TRUNCATED
                         )
                         break
                     terminal_reason_seen = terminal_reason_seen or bool(
@@ -239,8 +239,8 @@ class GeminiAgentRuntime:
                         yield text
 
                 if classified_error is None and not terminal_reason_seen:
-                    classified_error = AIProviderGenerationError(
-                        reason=AIProviderGenerationReason.STREAM_INCOMPLETE
+                    classified_error = AIProviderResultError(
+                        reason=AIProviderResultReason.STREAM_INCOMPLETE
                     )
             except (GeneratorExit, asyncio.CancelledError):
                 raise

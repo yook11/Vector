@@ -14,7 +14,7 @@ from google.genai.client import AsyncClient
 from google.genai.types import GenerateContentConfig, GenerateContentResponse
 from pydantic import ValidationError
 
-from app.ai_providers.errors import AIProviderGenerationError
+from app.ai_providers.errors import AIProviderResultError
 from app.ai_providers.gemini.error_translator import (
     output_blocked_reason,
     translate_gemini_error,
@@ -112,7 +112,7 @@ class GeminiCurator(BaseCurator):
         ):
             # SDK 由来の文字列は出さず、finish_reason は種別ラベルの reason で残す。
             # blocked-set 内なので finish_reason は写像に必ず存在する。
-            raise AIProviderGenerationError(reason=output_blocked_reason(finish_reason))
+            raise AIProviderResultError(reason=output_blocked_reason(finish_reason))
 
         parsed = response.parsed
         if not isinstance(parsed, GeminiCurationResponse):

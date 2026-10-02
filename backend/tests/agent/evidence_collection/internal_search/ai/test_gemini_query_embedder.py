@@ -19,9 +19,9 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResponseError,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.analysis.embedding.domain.value_objects import (
@@ -123,7 +123,7 @@ async def test_embed_queries_closes_client_when_provider_call_fails() -> None:
     scope = _ClientScope(AsyncMock(side_effect=_api_error(429, "RESOURCE_EXHAUSTED")))
     embedder = GeminiQueryEmbedder(client_scope_factory=scope)
 
-    with pytest.raises(AIProviderErrorResponseError):
+    with pytest.raises(AIProviderResponseError):
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
 
     assert scope.events == ["open", "close"]
@@ -145,19 +145,19 @@ async def test_embed_queries_raises_generation_error_when_embeddings_empty() -> 
     response.embeddings = []
     embedder = _make_embedder(AsyncMock(return_value=response))
 
-    with pytest.raises(AIProviderGenerationError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
 
-    assert exc_info.value.reason is AIProviderGenerationReason.EMBEDDINGS_EMPTY
+    assert exc_info.value.reason is AIProviderResultReason.EMBEDDINGS_EMPTY
 
 
 async def test_embed_queries_raises_generation_error_when_values_missing() -> None:
     embedder = _make_embedder(AsyncMock(return_value=_make_embed_response([None])))
 
-    with pytest.raises(AIProviderGenerationError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
 
-    assert exc_info.value.reason is AIProviderGenerationReason.EMBEDDING_VALUES_MISSING
+    assert exc_info.value.reason is AIProviderResultReason.EMBEDDING_VALUES_MISSING
 
 
 async def test_embed_queries_raises_generation_error_on_count_mismatch() -> None:
@@ -165,12 +165,12 @@ async def test_embed_queries_raises_generation_error_on_count_mismatch() -> None
         AsyncMock(return_value=_make_embed_response([[0.1] * EMBEDDING_DIMENSION]))
     )
 
-    with pytest.raises(AIProviderGenerationError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         await embedder.embed_queries(
             InternalSearchQueries(queries=("NVIDIA", "OpenAI"))
         )
 
-    assert exc_info.value.reason is AIProviderGenerationReason.EMBEDDING_COUNT_MISMATCH
+    assert exc_info.value.reason is AIProviderResultReason.EMBEDDING_COUNT_MISMATCH
 
 
 def test_delegates_timeout_to_transport_error() -> None:
@@ -185,7 +185,7 @@ async def test_embed_queries_translates_rate_limited_error() -> None:
         AsyncMock(side_effect=_api_error(429, "RESOURCE_EXHAUSTED"))
     )
 
-    with pytest.raises(AIProviderErrorResponseError):
+    with pytest.raises(AIProviderResponseError):
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
 
 
@@ -222,7 +222,7 @@ async def test_embed_queries_quota_exhausted_emits_ai_provider_exhausted(
         AsyncMock(side_effect=_resource_exhausted_error(_PER_DAY_QUOTA_ID))
     )
 
-    with pytest.raises(AIProviderErrorResponseError):
+    with pytest.raises(AIProviderResponseError):
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
 
     records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
@@ -239,7 +239,7 @@ async def test_embed_queries_per_minute_rate_limited_does_not_emit(
         AsyncMock(side_effect=_resource_exhausted_error(_PER_MINUTE_QUOTA_ID))
     )
 
-    with pytest.raises(AIProviderErrorResponseError):
+    with pytest.raises(AIProviderResponseError):
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
 
     assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

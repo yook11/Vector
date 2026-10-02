@@ -15,8 +15,8 @@ import pytest
 from google.genai.errors import APIError
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.analysis.curation.ai.gemini import GeminiCurator
@@ -47,17 +47,17 @@ def _curator() -> GeminiCurator:
 def test_context_length_pattern_maps_to_input_too_long(message: str) -> None:
     exc = _api_error("INVALID_ARGUMENT", message)
     translated = _curator()._translate_error(exc)
-    assert isinstance(translated, AIProviderErrorResponseError)
-    assert translated.CODE == "ai_provider_error_response"
-    assert translated.reason is AIProviderErrorResponseReason.INPUT_TOO_LONG
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.CODE == "ai_provider_response_error"
+    assert translated.reason is AIProviderResponseReason.INPUT_TOO_LONG
 
 
 def test_deadline_exceeded_with_context_pattern_also_maps_to_input_too_long() -> None:
     """``DEADLINE_EXCEEDED`` も同分岐 (translator の status guard で許可)。"""
     exc = _api_error("DEADLINE_EXCEEDED", "Input exceeds context length", code=504)
     translated = _curator()._translate_error(exc)
-    assert isinstance(translated, AIProviderErrorResponseError)
-    assert translated.reason is AIProviderErrorResponseReason.INPUT_TOO_LONG
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.INPUT_TOO_LONG
 
 
 # Stage 3 specific: ValidationError → CurationResponseInvalidError
@@ -95,7 +95,7 @@ def test_delegates_server_error_to_error_response() -> None:
         500, {"error": {"status": "INTERNAL", "message": "boom"}}
     )
     translated = _curator()._translate_error(exc)
-    assert isinstance(translated, AIProviderErrorResponseError)
+    assert isinstance(translated, AIProviderResponseError)
 
 
 def test_unknown_runtime_exception_returns_raw_exc() -> None:

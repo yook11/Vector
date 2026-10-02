@@ -34,8 +34,8 @@ from app.agent.running.answer_generation import (
 from app.agent.runtime.contract import AgentRuntime
 from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.ai_providers.errors import (
-    AIProviderRequestNotSentError,
-    AIProviderRequestNotSentReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
 )
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.config import settings
@@ -58,17 +58,13 @@ def ensure_external_search_configured() -> None:
     if not (
         settings.deepseek_api_key.get_secret_value() and settings.agentcore_gateway_url
     ):
-        raise AIProviderRequestNotSentError(
-            reason=AIProviderRequestNotSentReason.NOT_CONFIGURED
-        )
+        raise AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED)
 
 
 @asynccontextmanager
 async def activate_gemini_client() -> AsyncIterator[AsyncClient]:
     if not settings.gemini_api_key.get_secret_value():
-        raise AIProviderRequestNotSentError(
-            reason=AIProviderRequestNotSentReason.NOT_CONFIGURED
-        )
+        raise AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED)
 
     from app.ai_providers.gemini.client import open_gemini_client
 

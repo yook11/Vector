@@ -18,8 +18,8 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
 )
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.http.failure import (
@@ -58,9 +58,7 @@ def test_evidence_review_error_rejects_blank_code(code: str) -> None:
             id="provider-reason",
         ),
         pytest.param(
-            AIProviderGenerationError(
-                reason=AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY
-            ),
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
             "output_blocked_safety",
             id="provider-content-reason",
         ),
@@ -71,7 +69,7 @@ def test_evidence_review_error_from_maps_source_to_safe_code(
     cause: (
         AgentResponseInvalidError
         | AIProviderTransportError
-        | AIProviderGenerationError
+        | AIProviderResultError
         | TimeoutError
     ),
     expected_code: str,

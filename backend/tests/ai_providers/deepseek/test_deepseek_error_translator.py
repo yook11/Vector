@@ -26,10 +26,10 @@ from openai import RateLimitError as OpenAIRateLimitError
 
 from app.ai_providers.deepseek.error_translator import translate_deepseek_error
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
-    AIProviderRequestNotSentError,
-    AIProviderRequestNotSentReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.http.destination_policy import HostBlockedError
@@ -70,8 +70,8 @@ def test_host_blocked_cause_is_request_not_sent() -> None:
 
     translated = translate_deepseek_error(exc)
 
-    assert isinstance(translated, AIProviderRequestNotSentError)
-    assert translated.reason is AIProviderRequestNotSentReason.HOST_BLOCKED
+    assert isinstance(translated, AIProviderNotSentError)
+    assert translated.reason is AIProviderNotSentReason.HOST_BLOCKED
     assert str(translated) == "AIプロバイダーへの通信が宛先の方針で拒否されました"
 
 
@@ -171,37 +171,37 @@ def test_builtin_errors_are_not_classified(exc: Exception) -> None:
     [
         (
             lambda: AuthenticationError("k", response=_make_response(401), body=None),
-            AIProviderErrorResponseReason.AUTH,
+            AIProviderResponseReason.AUTH,
             401,
             "AIプロバイダーの認証に失敗しました",
         ),
         (
             lambda: PermissionDeniedError("d", response=_make_response(403), body=None),
-            AIProviderErrorResponseReason.PERMISSION_DENIED,
+            AIProviderResponseReason.PERMISSION_DENIED,
             403,
             "AIプロバイダーへのアクセス権限がありません",
         ),
         (
             lambda: NotFoundError("m", response=_make_response(404), body=None),
-            AIProviderErrorResponseReason.NOT_FOUND,
+            AIProviderResponseReason.NOT_FOUND,
             404,
             "AIプロバイダーの要求先が見つかりません",
         ),
         (
             lambda: _make_status_error(402, "Insufficient Balance"),
-            AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+            AIProviderResponseReason.INSUFFICIENT_BALANCE,
             402,
             "AIプロバイダーの利用残高が不足しています",
         ),
         (
             lambda: OpenAIRateLimitError("r", response=_make_response(429), body=None),
-            AIProviderErrorResponseReason.RATE_LIMITED,
+            AIProviderResponseReason.RATE_LIMITED,
             429,
             "AIプロバイダーの呼び出し頻度の上限に達しました",
         ),
         (
             lambda: BadRequestError("b", response=_make_response(400), body=None),
-            AIProviderErrorResponseReason.INVALID_REQUEST,
+            AIProviderResponseReason.INVALID_REQUEST,
             400,
             "AIプロバイダーがリクエストを不正と判定しました",
         ),
@@ -209,19 +209,19 @@ def test_builtin_errors_are_not_classified(exc: Exception) -> None:
             lambda: UnprocessableEntityError(
                 "u", response=_make_response(422), body=None
             ),
-            AIProviderErrorResponseReason.INVALID_REQUEST,
+            AIProviderResponseReason.INVALID_REQUEST,
             422,
             "AIプロバイダーがリクエストを処理できませんでした",
         ),
         (
             lambda: InternalServerError("s", response=_make_response(500), body=None),
-            AIProviderErrorResponseReason.SERVER_ERROR,
+            AIProviderResponseReason.SERVER_ERROR,
             500,
             "AIプロバイダー内部でサーバーエラーが発生しました",
         ),
         (
             lambda: _make_status_error(503, "upstream"),
-            AIProviderErrorResponseReason.SERVER_ERROR,
+            AIProviderResponseReason.SERVER_ERROR,
             503,
             "AIプロバイダー内部でサーバーエラーが発生しました",
         ),
@@ -229,14 +229,14 @@ def test_builtin_errors_are_not_classified(exc: Exception) -> None:
 )
 def test_status_error_is_error_response_with_reason_and_status(
     exc_factory,
-    expected_reason: AIProviderErrorResponseReason,
+    expected_reason: AIProviderResponseReason,
     expected_status: int,
     expected_message: str,
 ) -> None:
     """SDK例外を分類し、入力値を含まない説明・理由・HTTP status を伝える。"""
     translated = translate_deepseek_error(exc_factory())
 
-    assert isinstance(translated, AIProviderErrorResponseError)
+    assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is expected_reason
     assert translated.status_code == expected_status
     assert str(translated) == expected_message

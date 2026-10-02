@@ -17,7 +17,7 @@ from openai import APITimeoutError, AuthenticationError
 from openai import RateLimitError as OpenAIRateLimitError
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
+    AIProviderResponseError,
     AIProviderTransportError,
 )
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
@@ -41,7 +41,7 @@ def test_delegates_configuration_error() -> None:
         "bad key", response=httpx.Response(401, request=_make_request()), body=None
     )
     translated = assessor._translate_error(exc)
-    assert isinstance(translated, AIProviderErrorResponseError)
+    assert isinstance(translated, AIProviderResponseError)
 
 
 def test_delegates_rate_limited_error() -> None:
@@ -51,7 +51,7 @@ def test_delegates_rate_limited_error() -> None:
         "rate", response=httpx.Response(429, request=_make_request()), body=None
     )
     translated = assessor._translate_error(exc)
-    assert isinstance(translated, AIProviderErrorResponseError)
+    assert isinstance(translated, AIProviderResponseError)
 
 
 def test_unmappable_returns_exc_unchanged() -> None:

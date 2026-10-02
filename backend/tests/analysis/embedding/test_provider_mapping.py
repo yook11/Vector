@@ -7,12 +7,12 @@ import pytest
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderError,
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
-    AIProviderRequestNotSentError,
-    AIProviderRequestNotSentReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.analysis.embedding.errors import (
@@ -29,9 +29,7 @@ from app.http.failure import (
 # 分類済みの4種類それぞれの代表。
 _PROVIDER_ERROR_FACTORIES = [
     pytest.param(
-        lambda: AIProviderRequestNotSentError(
-            reason=AIProviderRequestNotSentReason.NOT_CONFIGURED
-        ),
+        lambda: AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
         id="request_not_sent",
     ),
     pytest.param(
@@ -43,15 +41,13 @@ _PROVIDER_ERROR_FACTORIES = [
         id="transport",
     ),
     pytest.param(
-        lambda: AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+        lambda: AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
         ),
         id="error_response",
     ),
     pytest.param(
-        lambda: AIProviderGenerationError(
-            reason=AIProviderGenerationReason.EMBEDDINGS_EMPTY
-        ),
+        lambda: AIProviderResultError(reason=AIProviderResultReason.EMBEDDINGS_EMPTY),
         id="generation",
     ),
 ]

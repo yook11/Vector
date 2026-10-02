@@ -65,8 +65,8 @@ from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
 from app.ai_providers.errors import (
     AIProviderError,
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
 )
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -2281,9 +2281,7 @@ async def test_initial_question_does_not_publish_resolved_event(
 @pytest.mark.parametrize(
     "exc",
     [
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.AUTH, status_code=401
-        ),
+        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401),
         AIProviderError(),
     ],
 )
@@ -2330,16 +2328,14 @@ def _direct_answer_error_with_private_cause() -> DirectAnswerError:
 @pytest.mark.parametrize(
     "generation_error",
     [
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.AUTH, status_code=401
-        ),
+        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401),
         AIProviderError("SHOULD_NOT_LEAK"),
         _direct_answer_error_with_private_cause(),
-        EvidenceAnswerError(code="ai_provider_transport_failed"),
+        EvidenceAnswerError(code="ai_provider_transport_error"),
         EvidenceAnswerError(code="evidence_answer_timeout"),
         DirectAnswerError(code="direct_answer_timeout"),
         AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-        PlanningError(code="ai_provider_transport_failed"),
+        PlanningError(code="ai_provider_transport_error"),
     ],
     ids=(
         "configuration",

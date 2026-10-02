@@ -7,8 +7,8 @@ import pytest
 
 from app.ai_providers.errors import (
     AIProviderError,
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
 )
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
@@ -28,8 +28,8 @@ from app.analysis.curation.service import CurationService
         (CurationFailureReason.PROVIDER_ERROR, AIProviderError()),
         (
             CurationFailureReason.RESPONSE_INVALID,
-            AIProviderErrorResponseError(
-                reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
             ),
         ),
     ],
@@ -52,9 +52,9 @@ def test_response_invalid_keeps_code_without_legacy_policy():
 
 def test_provider_error_string_does_not_expose_provider_message():
     """Serviceエラーの文字列表現へプロバイダーの自由文を出さない。"""
-    provider = AIProviderErrorResponseError(
+    provider = AIProviderResponseError(
         "private provider details",
-        reason=AIProviderErrorResponseReason.RATE_LIMITED,
+        reason=AIProviderResponseReason.RATE_LIMITED,
         status_code=429,
     )
     error = to_curation_error(provider)
@@ -93,9 +93,9 @@ async def test_service_propagates_non_provider_errors_without_opening_database(
 @pytest.mark.asyncio
 async def test_service_wraps_provider_with_same_cause():
     """プロバイダー例外を属性と原因チェーンの両方で保持する。"""
-    provider = AIProviderErrorResponseError(
+    provider = AIProviderResponseError(
         "private provider details",
-        reason=AIProviderErrorResponseReason.RATE_LIMITED,
+        reason=AIProviderResponseReason.RATE_LIMITED,
         status_code=429,
     )
     curator = MagicMock()
@@ -120,9 +120,9 @@ def test_curation_error_directly_inherits_exception():
     "error",
     [
         to_curation_error(
-            AIProviderErrorResponseError(
+            AIProviderResponseError(
                 "provider diagnostic",
-                reason=AIProviderErrorResponseReason.RATE_LIMITED,
+                reason=AIProviderResponseReason.RATE_LIMITED,
                 status_code=429,
             )
         ),

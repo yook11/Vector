@@ -30,8 +30,8 @@ from app.agent.recording.planning import (
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.http.failure import (
@@ -355,7 +355,7 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
         await service.plan(_input())
 
     assert raised.value.__cause__ is error
-    assert raised.value.code == "ai_provider_transport_failed"
+    assert raised.value.code == "ai_provider_transport_error"
     assert [call.attempt_number for call in runtime.calls] == [1]
     assert factory.exits[0][2] is raised.value
     assert _metric_attributes(collected_metrics(capfire)) == [
@@ -363,7 +363,7 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
             "result": "failed",
             "attempt_count": 1,
             "plan_type": "not_created",
-            "failure_code": "ai_provider_transport_failed",
+            "failure_code": "ai_provider_transport_error",
         }
     ]
 
@@ -386,7 +386,7 @@ async def test_classified_provider_failure_records_failed_outcome() -> None:
     _assert_recorded(
         recorder,
         outcome=PlanningFailed(
-            failure_code="ai_provider_transport_failed",
+            failure_code="ai_provider_transport_error",
             attempt_count=1,
         ),
     )
@@ -543,14 +543,12 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
                     HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
                 ),
             ),
-            "ai_provider_transport_failed",
+            "ai_provider_transport_error",
             id="provider-error",
         ),
         pytest.param(
-            AIProviderGenerationError(
-                reason=AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY
-            ),
-            "ai_provider_generation_unusable",
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
+            "ai_provider_result_error",
             id="blocked-output",
         ),
     ],

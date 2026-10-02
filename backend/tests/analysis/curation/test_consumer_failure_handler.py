@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.analysis.curation.consumer_failure_classification import (
@@ -64,8 +64,8 @@ async def test_successful_handling_records_failed_audit_and_outcome(
 ) -> None:
     """後処理が成功すれば失敗監査と処理失敗件数を残し、枯渇なら通知する。"""
     error = to_curation_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
         )
     )
     await CurationConsumerFailureHandler(session_factory).handle(
@@ -95,8 +95,8 @@ async def test_audit_failure_does_not_prevent_notification(
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
     error = to_curation_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
         )
     )
     with capture_logs() as logs:
@@ -120,8 +120,8 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
 ) -> None:
     """通知と計測の二次障害は本文をログに漏らさず、監査と元の失敗を維持する。"""
     error = to_curation_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE, status_code=402
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE, status_code=402
         )
     )
     with (
@@ -158,8 +158,8 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
 ) -> None:
     """監査・drop計測・ログまで失敗しても元の例外を置き換えない。"""
     error = to_curation_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
         )
     )
     with (
@@ -199,8 +199,8 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
         session_factory.kw["bind"], class_=CommitFails, expire_on_commit=False
     )
     error = to_curation_error(
-        AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
         )
     )
     with capture_logs() as logs:
@@ -285,7 +285,7 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     )
 
     (event,) = await _events(db_session)
-    assert event.outcome_code == "ai_provider_transport_failed"
+    assert event.outcome_code == "ai_provider_transport_error"
     assert event.retryability is None
     assert event.payload["failure_kind"] is None
     assert event.payload["failure_reason"] == HttpTransportFailureReason.TIMEOUT.value

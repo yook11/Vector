@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_providers.errors import (
-    AIProviderErrorResponseError,
-    AIProviderErrorResponseReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
     AIProviderTransportError,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
@@ -256,12 +256,12 @@ async def test_curator_call_once_passes_through_domain_error() -> None:
     curator = _create_curator()
     # AIProviderError サブクラスは _call_api 内で raise 済として透過する
     curator._call_api = AsyncMock(
-        side_effect=AIProviderErrorResponseError(
-            reason=AIProviderErrorResponseReason.SERVER_ERROR, status_code=503
+        side_effect=AIProviderResponseError(
+            reason=AIProviderResponseReason.SERVER_ERROR, status_code=503
         )
     )
 
-    with pytest.raises(AIProviderErrorResponseError):
+    with pytest.raises(AIProviderResponseError):
         await curator._call_once("test prompt")
 
 

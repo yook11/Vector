@@ -11,7 +11,7 @@ PR3 で次の流れに rewrite された:
   (provider terminal-skip ではなく recoverable)
 - arguments JSON 不正 → ``AssessmentResponseInvalidError``
 - arguments が dict でない → ``AssessmentResponseInvalidError``
-- finish_reason="length" (出力切り詰め) → ``AIProviderGenerationError``
+- finish_reason="length" (出力切り詰め) → ``AIProviderResultError``
   (tool_call 検査より前に判定し、``ARGUMENTS_NOT_JSON`` には落ちない)
 """
 
@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
-    AIProviderGenerationReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 from app.analysis.assessment.ai.deepseek import (
     DeepSeekAssessor,
@@ -152,7 +152,7 @@ class TestDeepSeekCallApiSuccess:
 class TestDeepSeekToolCallStructure:
     """tool_call 構造違反は AssessmentResponseInvalidError で raise する。
 
-    AIProviderErrorResponseError (terminal-skip) で raise しないのは、
+    AIProviderResponseError (terminal-skip) で raise しないのは、
     provider は応答したが構造が違っただけ → モデル一時的な揺らぎを「リトライ
     無駄」扱いにしないため (recoverable で cron 救済対象)。
     """
@@ -281,10 +281,10 @@ class TestDeepSeekTruncatedFinishReason:
         assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_truncated_response())
 
-        with pytest.raises(AIProviderGenerationError) as exc_info:
+        with pytest.raises(AIProviderResultError) as exc_info:
             await assessor._call_api("prompt", logger=make_assessment_logger())
 
-        assert exc_info.value.reason == AIProviderGenerationReason.OUTPUT_TRUNCATED
+        assert exc_info.value.reason == AIProviderResultReason.OUTPUT_TRUNCATED
 
     @pytest.mark.asyncio
     async def test_truncated_with_valid_json_arguments_still_raises(
@@ -298,7 +298,7 @@ class TestDeepSeekTruncatedFinishReason:
             _stub_response(arguments=args, finish_reason="length"),
         )
 
-        with pytest.raises(AIProviderGenerationError):
+        with pytest.raises(AIProviderResultError):
             await assessor._call_api("prompt", logger=make_assessment_logger())
 
 
@@ -315,7 +315,7 @@ class TestDeepSeekObservabilityLog:
         _patch_assessor_call(
             assessor, _stub_truncated_response(completion_tokens=completion_tokens)
         )
-        with pytest.raises(AIProviderGenerationError):
+        with pytest.raises(AIProviderResultError):
             await assessor.assess(
                 "PRIVATE_TITLE", "PRIVATE_SUMMARY", logger=make_assessment_logger()
             )
@@ -344,7 +344,7 @@ class TestDeepSeekObservabilityLog:
         _patch_assessor_call(
             assessor, _stub_truncated_response(completion_tokens=completion_tokens)
         )
-        with pytest.raises(AIProviderGenerationError):
+        with pytest.raises(AIProviderResultError):
             await assessor._call_api("prompt", logger=make_assessment_logger())
         record = json.loads(capsys.readouterr().out)
         assert "output_tokens" not in record
@@ -360,7 +360,7 @@ class TestDeepSeekObservabilityLog:
             DEEPSEEK_ASSESSMENT_SPEC, gen_config={"max_tokens": max_tokens}
         )
         _patch_assessor_call(assessor, _stub_truncated_response())
-        with pytest.raises(AIProviderGenerationError):
+        with pytest.raises(AIProviderResultError):
             await assessor._call_api("prompt", logger=make_assessment_logger())
         record = json.loads(capsys.readouterr().out)
         assert "max_output_tokens" not in record
@@ -371,7 +371,7 @@ class TestDeepSeekObservabilityLog:
         assessor = DeepSeekAssessor(MagicMock())
         assessor.SPEC = replace(DEEPSEEK_ASSESSMENT_SPEC, gen_config={"max_tokens": 0})
         _patch_assessor_call(assessor, _stub_truncated_response())
-        with pytest.raises(AIProviderGenerationError):
+        with pytest.raises(AIProviderResultError):
             await assessor._call_api("prompt", logger=make_assessment_logger())
         assert json.loads(capsys.readouterr().out)["max_output_tokens"] == 0
 
@@ -437,7 +437,7 @@ class TestDeepSeekObservabilityLog:
         """打ち切りを応答JSONの契約違反として重ねて記録しない。"""
         assessor = DeepSeekAssessor(MagicMock())
         _patch_assessor_call(assessor, _stub_truncated_response())
-        with pytest.raises(AIProviderGenerationError):
+        with pytest.raises(AIProviderResultError):
             await assessor._call_api("prompt", logger=make_assessment_logger())
         events = [
             json.loads(line)["event"] for line in capsys.readouterr().out.splitlines()

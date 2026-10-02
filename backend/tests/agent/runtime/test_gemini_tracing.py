@@ -22,7 +22,7 @@ import app.agent.runtime.gemini as gemini_runtime_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
-    AIProviderGenerationError,
+    AIProviderResultError,
     AIProviderTransportError,
 )
 from app.logfire.redaction import install_exception_redaction
@@ -176,7 +176,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
         [blocked_response("SAFETY", usage_metadata=_full_usage())]
     )
 
-    with pytest.raises(AIProviderGenerationError):
+    with pytest.raises(AIProviderResultError):
         await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
@@ -187,7 +187,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
     attributes = dict(span.attributes or {})
     assert attributes["status"] == "failed"
     assert "result" not in attributes
-    assert attributes["error.type"] == AIProviderGenerationError.CODE
+    assert attributes["error.type"] == AIProviderResultError.CODE
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
@@ -213,7 +213,7 @@ async def test_truncated_response_records_usage_and_is_not_succeeded(
         [finished_response("MAX_TOKENS", usage_metadata=_full_usage())]
     )
 
-    with pytest.raises(AIProviderGenerationError):
+    with pytest.raises(AIProviderResultError):
         await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
@@ -224,7 +224,7 @@ async def test_truncated_response_records_usage_and_is_not_succeeded(
     attributes = dict(span.attributes or {})
     assert "result" not in attributes
     assert attributes["status"] == "failed"
-    assert attributes["error.type"] == AIProviderGenerationError.CODE
+    assert attributes["error.type"] == AIProviderResultError.CODE
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
