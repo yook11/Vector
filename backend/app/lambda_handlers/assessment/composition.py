@@ -3,15 +3,14 @@
 import asyncio
 from contextlib import AbstractAsyncContextManager
 
-from openai import AsyncOpenAI
+from google.genai.client import AsyncClient
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
 from structlog.typing import FilteringBoundLogger
 
-from app.ai_providers.deepseek.client import open_deepseek_client
-from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
-from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
-from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
+from app.ai_providers.gemini.client import open_gemini_client
+from app.ai_providers.gemini.settings import GeminiConnectionSettings
+from app.analysis.assessment.ai.gemini import GeminiAssessor
 from app.analysis.assessment.consumer import AssessmentConsumer
 from app.analysis.assessment.repository import AssessmentRepository
 from app.aws.ssm import get_secret_parameter
@@ -44,25 +43,23 @@ def open_assessment_consumer(
             settings, password_provider=password_provider
         )
 
-    def open_client(*, api_key: SecretStr) -> AbstractAsyncContextManager[AsyncOpenAI]:
-        return open_deepseek_client(
+    def open_client(*, api_key: SecretStr) -> AbstractAsyncContextManager[AsyncClient]:
+        return open_gemini_client(
             api_key=api_key,
-            base_url=DEEPSEEK_ASSESSMENT_SPEC.base_url,
-            settings=DeepSeekConnectionSettings(),
-            logger=logger,
+            settings=GeminiConnectionSettings(read_timeout=30.0),
         )
 
     async def build_consumer(
-        *, session_factory: SessionFactory, client: AsyncOpenAI
+        *, session_factory: SessionFactory, client: AsyncClient
     ) -> AssessmentConsumer:
         async with session_factory() as session:
             await AssessmentRepository(session).assert_category_catalog_covers_enum()
-        return AssessmentConsumer(session_factory, DeepSeekAssessor(client))
+        return AssessmentConsumer(session_factory, GeminiAssessor(client=client))
 
     return open_article_analysis_consumer(
         aws_region=settings.aws_region,
         database_url=settings.database_url,
-        api_key_parameter_path=settings.deepseek_api_key_parameter_path,
+        api_key_parameter_path=settings.gemini_api_key_parameter_path,
         create_engine=create_engine,
         open_client=open_client,
         build_consumer=build_consumer,

@@ -74,11 +74,11 @@ def test_provider_dimension_is_the_caller_supplied_value(
             reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
             http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
-        provider="deepseek",
+        provider="caller-supplied-provider",
     )
 
     record = metric_records(capsys.readouterr().out, _METRIC)[0]
-    assert record["provider"] == "deepseek"
+    assert record["provider"] == "caller-supplied-provider"
 
 
 def test_rate_limited_is_recoverable_by_waiting_and_does_not_emit(

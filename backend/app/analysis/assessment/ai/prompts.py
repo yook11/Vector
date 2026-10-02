@@ -1,10 +1,14 @@
-"""Assessor 共通リソース。
+"""Stage 4 (assessment) の判定プロンプトと入力の埋め込み。
 
-プロバイダー独立な判定プロンプト (``ASSESSMENT_PROMPT``) を保持する。
-Gemini / DeepSeek の両 assessor から import される。
+call config (model / gen_config / response_schema / version / provider) は
+``GEMINI_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。
 """
 
 from __future__ import annotations
+
+from typing import ClassVar
+
+from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 ASSESSMENT_PROMPT = """\
 あなたは先端技術分野のテックニュース分類の専門家です。
@@ -74,3 +78,24 @@ type の意味:
 # Step 3 — investor_take
 投資家視点で記事のどこに注目し、なぜ重要だと感じたかを具体的に日本語で記述する。
 """
+
+
+class AssessmentPrompt:
+    """Stage 4 assessment prompt — template + render のみ。"""
+
+    TEMPLATE: ClassVar[str] = ASSESSMENT_PROMPT
+
+    # 異常に長い summary が来ても1回の入力量を抑える費用の上限。
+    MAX_SUMMARY_CHARS: ClassVar[int] = 8000
+
+    @classmethod
+    def render(cls, *, title_ja: str, summary_ja: str) -> str:
+        """sanitize 済み Stage 3 (curation) 出力を ``<untrusted_input>`` に埋めて返す。
+
+        ``summary_ja`` は ``MAX_SUMMARY_CHARS`` で切り詰めてから sanitize する。
+        """
+        truncated = summary_ja[: cls.MAX_SUMMARY_CHARS]
+        return cls.TEMPLATE.format(
+            title_ja=sanitize_for_untrusted_block(title_ja),
+            summary_ja=sanitize_for_untrusted_block(truncated),
+        )

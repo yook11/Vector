@@ -63,41 +63,24 @@ async def invoke_event(payload):
     return await invoke_sqs_record(build_sqs_record(payload))
 
 
-def deepseek_reply(*, category="ai", investor_take="投資判断", key_points=()):
+def assessment_reply(*, category="ai", investor_take="投資判断", key_points=()):
     """実SDKが読み取るHTTP応答に、テストで指定した判定内容を載せる。"""
+    text = json.dumps(
+        {
+            "category": category,
+            "investor_take": investor_take,
+            "key_points": list(key_points),
+        }
+    )
     return httpx.Response(
         200,
         json={
-            "id": "chatcmpl-test",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "test-model",
-            "choices": [
+            "candidates": [
                 {
-                    "index": 0,
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call-test",
-                                "type": "function",
-                                "function": {
-                                    "name": "assess_article",
-                                    "arguments": json.dumps(
-                                        {
-                                            "category": category,
-                                            "investor_take": investor_take,
-                                            "key_points": list(key_points),
-                                        }
-                                    ),
-                                },
-                            }
-                        ],
-                    },
+                    "content": {"role": "model", "parts": [{"text": text}]},
+                    "finishReason": "STOP",
                 }
-            ],
+            ]
         },
     )
 

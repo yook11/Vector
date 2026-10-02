@@ -26,9 +26,9 @@ class AssessmentConsumerSettings(DatabaseConnectionSettings):
     aws_region: str = Field(min_length=1)
     database_url: str = Field(repr=False)
     db_iam_auth: bool = True
-    deepseek_api_key_parameter_path: str = Field(min_length=1)
+    gemini_api_key_parameter_path: str = Field(min_length=1)
 
-    @field_validator("aws_region", "deepseek_api_key_parameter_path")
+    @field_validator("aws_region", "gemini_api_key_parameter_path")
     @classmethod
     def _reject_blank(cls, value: str) -> str:
         if not value.strip():

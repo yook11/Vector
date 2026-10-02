@@ -236,7 +236,7 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
-        provider="deepseek",
+        provider="gemini",
         logger=assessment_logger,
     )
     assert await _events(db_session) == []

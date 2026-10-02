@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai_providers.deepseek import client as deepseek_module
+from app.ai_providers.gemini import client as gemini_module
 from app.analysis.assessment.consumer import AssessmentConsumer
 from app.analysis.assessment.repository import AssessmentRepository
 from app.lambda_handlers import article_analysis_lifecycle as resource_module
@@ -23,13 +23,13 @@ from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
 from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from app.shared import revalidate
-from local_tests.assessment.support import deepseek_reply, handler_module
+from local_tests.assessment.support import assessment_reply, handler_module
 from tests.iam_fixtures import inject_test_db_signer
 
 
 @pytest.fixture
-def deepseek_response():
-    return AsyncMock(return_value=deepseek_reply())
+def gemini_response():
+    return AsyncMock(return_value=assessment_reply())
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def notification_secret():
 def assessment_runtime(
     system_database,
     monkeypatch,
-    deepseek_response,
+    gemini_response,
     notification_response,
     notification_secret,
 ):
@@ -59,7 +59,7 @@ def assessment_runtime(
             resources_module=resource_module,
         ),
         db_iam_auth=True,
-        deepseek_api_key_parameter_path="/test/deepseek-key",
+        gemini_api_key_parameter_path="/test/gemini-key",
     )
     monkeypatch.setattr(handler_module, "AssessmentConsumerSettings", lambda: settings)
     monkeypatch.setattr(
@@ -71,10 +71,10 @@ def assessment_runtime(
     def http_factory(**kwargs):
         kwargs.pop("retries")
         return httpx.AsyncClient(  # noqa: TID251
-            transport=httpx.MockTransport(deepseek_response), **kwargs
+            transport=httpx.MockTransport(gemini_response), **kwargs
         )
 
-    monkeypatch.setattr(deepseek_module, "make_external_async_client", http_factory)
+    monkeypatch.setattr(gemini_module, "make_external_async_client", http_factory)
     monkeypatch.setenv(
         "INTERNAL_FRONTEND_BASE_URL", "http://frontend.vector.internal:3000"
     )
@@ -170,7 +170,7 @@ class AiResponseGate:
 
 
 @pytest.fixture
-def gated_ai_responses(deepseek_response):
+def gated_ai_responses(gemini_response):
     pending = Queue()
     registered = []
 
@@ -183,7 +183,7 @@ def gated_ai_responses(deepseek_response):
         await wait_for_signal(gate.allow_response, "AI応答の再開指示が届かなかった")
         return gate.response
 
-    deepseek_response.side_effect = respond
+    gemini_response.side_effect = respond
 
     def register(response):
         gate = AiResponseGate(response)

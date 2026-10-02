@@ -16,8 +16,8 @@ def settings(**overrides):
             "database_url": "postgresql+asyncpg://vector_app@db.invalid:5432/vector?sslmode=require",
             "db_iam_auth": True,
             "aws_region": "ap-northeast-1",
-            "deepseek_api_key_parameter_path": (
-                "/vector/assessment-consumer/deepseek-api-key"
+            "gemini_api_key_parameter_path": (
+                "/vector/assessment-consumer/gemini-api-key"
             ),
             **overrides,
         }
@@ -35,7 +35,7 @@ def settings(**overrides):
             "database_url": "postgresql+asyncpg://vector_app:private@db.invalid/vector?sslmode=require"
         },
         {"aws_region": " "},
-        {"deepseek_api_key_parameter_path": " "},
+        {"gemini_api_key_parameter_path": " "},
     ],
 )
 def test_invalid_production_settings(overrides):
@@ -89,7 +89,7 @@ def test_engine_configuration_preserves_iam_tls(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "field", ["aws_region", "database_url", "deepseek_api_key_parameter_path"]
+    "field", ["aws_region", "database_url", "gemini_api_key_parameter_path"]
 )
 def test_required_settings_are_not_optional(monkeypatch, field):
     """必須設定が環境にも引数にも存在しない場合、準備を開始せず検証エラーにする。"""
@@ -117,18 +117,18 @@ def test_settings_read_only_assessment_inputs(monkeypatch):
         "AWS_REGION": "ap-northeast-1",
         "DATABASE_URL": "postgresql+asyncpg://vector_app@db.invalid/vector?sslmode=require",
         "DB_IAM_AUTH": "true",
-        "DEEPSEEK_API_KEY_PARAMETER_PATH": "/assessment/key",
+        "GEMINI_API_KEY_PARAMETER_PATH": "/assessment/key",
     }
     for name, value in expected.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setenv("GEMINI_API_KEY_PARAMETER_PATH", "/other/key")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "unrelated-private")
+    monkeypatch.setenv("DEEPSEEK_API_KEY_PARAMETER_PATH", "/other/key")
+    monkeypatch.setenv("GEMINI_API_KEY", "unrelated-private")
     config = AssessmentConsumerSettings()
     assert config.model_dump() == {
         "env": "production",
         "aws_region": "ap-northeast-1",
         "database_url": expected["DATABASE_URL"],
         "db_iam_auth": True,
-        "deepseek_api_key_parameter_path": "/assessment/key",
+        "gemini_api_key_parameter_path": "/assessment/key",
     }
     assert "unrelated-private" not in repr(config)
