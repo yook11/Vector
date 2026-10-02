@@ -11,6 +11,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.ai_providers.errors import (
+    AIProviderResponseError,
+    AIProviderResponseReason,
+)
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.consumer import AssessmentConsumer
@@ -22,7 +27,10 @@ from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejectionReason,
     ReadyForAssessment,
 )
-from app.analysis.assessment.errors import AssessmentResponseInvalidError
+from app.analysis.assessment.errors import (
+    AssessmentResponseInvalidError,
+    to_assessment_error,
+)
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import (
     AssessmentCompletion,
@@ -30,12 +38,14 @@ from app.analysis.assessment.service import (
 )
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.logging import create_article_analysis_logger
+from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 
 _MODULE = "app.analysis.assessment.consumer"
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -201,6 +211,12 @@ async def test_ready_facts_are_loaded_once(consumer, target, assessment_logger):
     [
         AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
         RuntimeError("private-business-error"),
+        to_assessment_error(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            )
+        ),
     ],
 )
 async def test_execution_failure_is_classified_and_reraised(
@@ -229,6 +245,68 @@ async def test_execution_failure_is_classified_and_reraised(
     )
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failure_not_recoverable_for_input_is_settled_after_handling(
+    consumer, target, assessment_logger
+):
+    """この入力では回復しないAIの失敗は、後処理のあと受信完了として返す。"""
+    provider_error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    original = to_assessment_error(provider_error)
+    consumer._service.execute.side_effect = original
+
+    result = await consumer.consume(target, logger=assessment_logger)
+
+    assert result == SettledProviderFailure(provider_error)
+    consumer._failure_handler.handle.assert_awaited_once()
+    assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
+    consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_settlement_survives_failure_handling_error(
+    consumer, target, assessment_logger
+):
+    """後処理が失敗しても、確定した受信完了を再配信に戻さない。"""
+    provider_error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_TOO_LONG,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    consumer._service.execute.side_effect = to_assessment_error(provider_error)
+    consumer._failure_handler.handle.side_effect = RuntimeError("secondary-secret")
+
+    result = await consumer.consume(target, logger=assessment_logger)
+
+    assert result == SettledProviderFailure(provider_error)
+
+
+@pytest.mark.asyncio
+async def test_classification_failure_leaves_failure_to_redelivery(
+    consumer, target, assessment_logger
+):
+    """受信完了と確定できなければ、元の例外を投げ直して再配信に任せる。"""
+    original = to_assessment_error(
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.INPUT_BLOCKED,
+            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+        )
+    )
+    consumer._service.execute.side_effect = original
+
+    with (
+        patch(
+            f"{_MODULE}.classify_assessment_failure",
+            side_effect=RuntimeError("secondary-secret"),
+        ),
+        pytest.raises(type(original)) as raised,
+    ):
+        await consumer.consume(target, logger=assessment_logger)
+
+    assert raised.value is original
 
 
 @pytest.mark.asyncio

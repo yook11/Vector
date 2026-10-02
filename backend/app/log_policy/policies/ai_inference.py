@@ -31,6 +31,7 @@ AI_INFERENCE_LOG_RULES = AI_INFERENCE_POLICY.extend(
             "message_disposition",
             "model",
             "code",
+            "failure_reason",
             "finish_reason",
             "max_output_tokens",
             "error_class",

@@ -7,9 +7,11 @@ from asyncio import timeout
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.consumer_failure_classification import (
+    EmbeddingFailureClassification,
     classify_embedding_failure,
 )
 from app.analysis.embedding.consumer_failure_handling import (
@@ -30,7 +32,7 @@ logger = structlog.get_logger(__name__)
 
 
 class EmbeddingConsumer:
-    """1イベントを正常完了させるか、後処理後に失敗を呼び出し元へ伝える。"""
+    """1イベントを正常完了させるか、後処理後に失敗を受信完了にするか呼び出し元へ伝える。"""
 
     def __init__(
         self,
@@ -44,7 +46,7 @@ class EmbeddingConsumer:
 
     async def consume(
         self, event: ArticleAssessedInScope
-    ) -> EmbeddingCompletion | EmbeddingReadyBuildRejected:
+    ) -> EmbeddingCompletion | EmbeddingReadyBuildRejected | SettledProviderFailure:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
         analyzable_article_id: int | None = None
         try:
@@ -71,6 +73,7 @@ class EmbeddingConsumer:
                         analyzable_article_id=analyzable_article_id,
                     )
         except Exception as exc:
+            failure: EmbeddingFailureClassification | None = None
             try:
                 failure = classify_embedding_failure(exc)
                 await self._failure_handler.handle(
@@ -91,6 +94,9 @@ class EmbeddingConsumer:
                 except Exception:  # noqa: S110
                     # 後処理とログが失敗しても元の処理例外を維持する。
                     pass
+            # 後処理の失敗で、確定した受信完了を再配信に戻さない。
+            if failure is not None and failure.settled is not None:
+                return failure.settled
             raise
 
         await self._failure_handler.handle_ready_build_rejected(

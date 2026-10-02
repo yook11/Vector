@@ -14,6 +14,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.embedding.consumer_failure_classification import (
     classify_embedding_failure,
 )
@@ -133,6 +134,46 @@ def test_provider_classification_preserves_existing_audit_and_notification(
 
 
 @pytest.mark.parametrize(
+    ("provider_error", "settled"),
+    [
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_BLOCKED,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
+            True,
+        ),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_TOO_LONG,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
+            True,
+        ),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            ),
+            False,
+        ),
+        (
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
+            False,
+        ),
+    ],
+)
+def test_provider_failure_is_settled_only_when_not_recoverable_for_input(
+    provider_error, settled
+) -> None:
+    """この入力では回復しないAIの失敗だけを、受信完了の対象にする。"""
+    failure = classify_embedding_failure(to_embedding_error(provider_error))
+    assert failure.settled == (
+        SettledProviderFailure(provider_error) if settled else None
+    )
+
+
+@pytest.mark.parametrize(
     ("error", "code", "kind", "retryability"),
     [
         (
@@ -156,6 +197,7 @@ def test_service_failure_reasons(error, code, kind, retryability) -> None:
     assert failure.audit.failure_kind == kind
     assert failure.audit.retryability is retryability
     assert failure.provider_exhaustion is None
+    assert failure.settled is None
 
 
 @pytest.mark.parametrize(
@@ -195,6 +237,7 @@ def test_database_failure_uses_shared_projection(error, code, retryability) -> N
     assert failure.audit.code == code
     assert failure.audit.retryability.value == retryability
     assert failure.provider_exhaustion is None
+    assert failure.settled is None
 
 
 @pytest.mark.parametrize("error", [RuntimeError("unexpected"), TimeoutError()])
@@ -204,3 +247,4 @@ def test_unexpected_failure_and_timeout_are_not_success(error) -> None:
     assert failure.audit.code == "unexpected_error"
     assert failure.audit.retryability is Retryability.UNKNOWN
     assert failure.provider_exhaustion is None
+    assert failure.settled is None

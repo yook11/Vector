@@ -4,6 +4,7 @@ import asyncio
 
 import structlog
 
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
     AssessedEventInvalidError,
@@ -102,21 +103,25 @@ async def _run_embedding(
                     SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
             else:
-                rejection_fields = (
-                    {"rejection_code": completion.reason.value}
-                    if isinstance(completion, EmbeddingReadyBuildRejected)
-                    else {}
-                )
+                outcome_fields: dict[str, object]
+                if isinstance(completion, EmbeddingReadyBuildRejected):
+                    outcome_fields = {
+                        "reason": "ready_build_rejected",
+                        "rejection_code": completion.reason.value,
+                    }
+                elif isinstance(completion, SettledProviderFailure):
+                    outcome_fields = {
+                        "reason": "provider_not_recoverable_for_input",
+                        "code": completion.provider_error.CODE,
+                        "failure_reason": completion.provider_error.reason.value,
+                    }
+                else:
+                    outcome_fields = {"reason": completion.value}
                 _log_completion(
                     message_id=record_input.message_id,
                     event_id=str(assessed_event.event_id),
                     analyzed_article_id=assessed_event.payload.analyzed_article_id,
-                    reason=(
-                        "ready_build_rejected"
-                        if isinstance(completion, EmbeddingReadyBuildRejected)
-                        else completion.value
-                    ),
-                    **rejection_fields,
+                    **outcome_fields,
                 )
         return failed_items
 

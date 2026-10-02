@@ -1,4 +1,4 @@
-"""Consumerの失敗を監査情報と枯渇通知対象へ投影する純粋関数。"""
+"""Consumerの失敗を監査情報・枯渇通知対象・受信完了の対象へ投影する純粋関数。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from app.analysis.ai_provider_exhaustion import (
     ExhaustedProviderError,
     exhausted_provider_error,
+)
+from app.analysis.ai_provider_settlement import (
+    SettledProviderFailure,
+    settled_provider_failure,
 )
 from app.analysis.assessment.errors import AssessmentError, AssessmentFailureReason
 from app.audit.failure_projection import (
@@ -19,14 +23,15 @@ from app.audit.failure_projection import (
 
 @dataclass(frozen=True, slots=True)
 class AssessmentFailureClassification:
-    """再配信の判断を含まない、失敗後処理に必要な情報。"""
+    """失敗後処理と、再配信せずに受信完了にするかの判断に必要な情報。"""
 
     audit: FailureProjection
     provider_exhaustion: ExhaustedProviderError | None = None
+    settled: SettledProviderFailure | None = None
 
 
 def classify_assessment_failure(exc: Exception) -> AssessmentFailureClassification:
-    """Serviceの失敗理由を監査情報と枯渇通知対象へ対応付ける。"""
+    """Serviceの失敗理由を監査情報・枯渇通知対象・受信完了の対象へ対応付ける。"""
     if isinstance(exc, AssessmentError):
         if exc.reason is AssessmentFailureReason.PROVIDER_ERROR:
             provider_error = exc.provider_error
@@ -41,6 +46,7 @@ def classify_assessment_failure(exc: Exception) -> AssessmentFailureClassificati
                     failure_action=None,
                 ),
                 provider_exhaustion=exhausted_provider_error(provider_error),
+                settled=settled_provider_failure(provider_error),
             )
         if exc.reason is AssessmentFailureReason.CURATION_MISSING:
             return AssessmentFailureClassification(
