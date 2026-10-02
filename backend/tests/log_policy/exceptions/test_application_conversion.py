@@ -14,7 +14,6 @@ from app.analysis.assessment.ai.parse import parse_assessment
 from app.analysis.assessment.errors import (
     AssessmentCurationMissingError,
     AssessmentResponseInvalidError,
-    to_assessment_error,
 )
 from app.analysis.curation import events as curation
 from app.collection import events as collection
@@ -312,29 +311,6 @@ def test_provider_error_without_code_does_not_invent_code() -> None:
 
     assert converted.message == "unclassified"
     assert converted.error_details == {"reason": "network_io"}
-
-
-def test_assessment_provider_error_keeps_stage_reason_and_code() -> None:
-    """工程の診断にはプロバイダー例外の本文やオブジェクトを転記しない。"""
-    provider_error = AIProviderTransportError(
-        "private-provider-response",
-        http_error=HttpTransportError(
-            failure=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-            )
-        ),
-    )
-    error = to_assessment_error(provider_error)
-
-    converted = convert_exception(error)
-
-    assert (
-        converted.message == "AIプロバイダーの処理失敗により記事を判定できませんでした"
-    )
-    assert converted.error_details == {
-        "reason": "provider_error",
-        "code": "ai_provider_transport_error",
-    }
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.consumer_failure_classification import (
     classify_assessment_failure,
 )
@@ -26,7 +27,7 @@ from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
     AssessmentReadyBuildRejectionReason,
 )
-from app.analysis.assessment.errors import to_assessment_error
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.logging import create_article_analysis_logger
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.http.errors import HttpResponseError, HttpTransportError
@@ -73,14 +74,12 @@ async def test_successful_handling_records_failed_audit_and_outcome(
     db_session, session_factory, article_id, capsys, assessment_logger
 ) -> None:
     """後処理が成功すれば失敗監査と処理失敗件数を残し、枯渇なら通知する。"""
-    error = to_assessment_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        failure=classify_assessment_failure(error),
+        projection=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -100,6 +99,33 @@ async def test_successful_handling_records_failed_audit_and_outcome(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        ),
+        AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
+    ],
+)
+async def test_failure_other_than_exhaustion_is_audited_without_notification(
+    db_session, session_factory, article_id, capsys, assessment_logger, error
+) -> None:
+    """枯渇以外の失敗は監査だけを残し、枯渇通知を出さない。"""
+    await AssessmentConsumerFailureHandler(session_factory).handle(
+        projection=classify_assessment_failure(error),
+        exc=error,
+        curation_id=123,
+        analyzable_article_id=article_id,
+        provider="gemini",
+        logger=assessment_logger,
+    )
+    assert len(await _events(db_session)) == 1
+    assert metric_records(capsys.readouterr().out, "ai_provider_exhausted") == []
+
+
+@pytest.mark.asyncio
 async def test_audit_failure_does_not_prevent_notification(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -107,14 +133,12 @@ async def test_audit_failure_does_not_prevent_notification(
     assessment_logger,
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
-    error = to_assessment_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        failure=classify_assessment_failure(error),
+        projection=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=999_999,
@@ -132,11 +156,9 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
     db_session, session_factory, article_id, assessment_logger
 ) -> None:
     """通知と計測が失敗しても監査を保存し、通知を試みる。"""
-    error = to_assessment_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
-            http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+        http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
     )
     with (
         patch(
@@ -149,7 +171,7 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
         ) as notify,
     ):
         await AssessmentConsumerFailureHandler(session_factory).handle(
-            failure=classify_assessment_failure(error),
+            projection=classify_assessment_failure(error),
             exc=error,
             curation_id=123,
             analyzable_article_id=article_id,
@@ -157,7 +179,7 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
             logger=assessment_logger,
         )
     assert len(await _events(db_session)) == 1
-    notify.assert_called_once_with(error.provider_error, provider="gemini")
+    notify.assert_called_once_with(error, provider="gemini")
 
 
 @pytest.mark.asyncio
@@ -165,11 +187,9 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
     db_session, session_factory, capsys, assessment_logger
 ) -> None:
     """監査とdrop計測が失敗しても元の例外と通知を維持する。"""
-    error = to_assessment_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     with (
         patch(
@@ -181,7 +201,7 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
             raise error
         except Exception:
             await AssessmentConsumerFailureHandler(session_factory).handle(
-                failure=classify_assessment_failure(error),
+                projection=classify_assessment_failure(error),
                 exc=error,
                 curation_id=123,
                 analyzable_article_id=999_999,
@@ -207,14 +227,12 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
     factory = async_sessionmaker(
         session_factory.kw["bind"], class_=CommitFails, expire_on_commit=False
     )
-    error = to_assessment_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     await AssessmentConsumerFailureHandler(factory).handle(
-        failure=classify_assessment_failure(error),
+        projection=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -275,18 +293,17 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     db_session, session_factory, article_id, assessment_logger
 ) -> None:
     """実DBの監査行に原因を保持し、廃止した回復分類はnullで保存する。"""
-    provider_error = AIProviderTransportError(
+    error = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
                 HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             )
         )
     )
-    error = to_assessment_error(provider_error)
-    error.__cause__ = provider_error
+    error.__cause__ = TimeoutError()
 
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        failure=classify_assessment_failure(error),
+        projection=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -299,10 +316,10 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     assert event.retryability is None
     assert event.payload["failure_kind"] is None
     assert event.payload["failure_reason"] == HttpTransportFailureReason.TIMEOUT.value
-    assert event.error_class == "app.analysis.assessment.errors.AssessmentError"
+    assert event.error_class == "app.ai_providers.errors.AIProviderTransportError"
     assert event.payload["error_chain"] == [
-        "app.analysis.assessment.errors.AssessmentError",
         "app.ai_providers.errors.AIProviderTransportError",
+        "builtins.TimeoutError",
     ]
 
 
@@ -311,14 +328,13 @@ async def test_provider_rejection_is_persisted_with_code_reason_and_cause_chain(
     db_session, session_factory, article_id, assessment_logger
 ) -> None:
     """プロバイダーの拒否は、実DBにコード・理由・原因チェーンを保存する。"""
-    provider_error = AIProviderResultError(
+    error = AIProviderResultError(
         "provider diagnostic", reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY
     )
-    error = to_assessment_error(provider_error)
-    error.__cause__ = provider_error
+    error.__cause__ = ValueError()
 
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        failure=classify_assessment_failure(error),
+        projection=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -332,6 +348,6 @@ async def test_provider_rejection_is_persisted_with_code_reason_and_cause_chain(
     assert event.payload["failure_kind"] is None
     assert event.payload["failure_reason"] == "output_blocked_safety"
     assert event.payload["error_chain"] == [
-        "app.analysis.assessment.errors.AssessmentError",
         "app.ai_providers.errors.AIProviderResultError",
+        "builtins.ValueError",
     ]

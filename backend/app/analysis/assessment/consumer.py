@@ -7,10 +7,13 @@ from asyncio import timeout
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.typing import FilteringBoundLogger
 
-from app.analysis.ai_provider_settlement import SettledProviderFailure
+from app.ai_providers.errors import AIProviderError
+from app.analysis.ai_provider_settlement import (
+    SettledProviderFailure,
+    settled_provider_failure,
+)
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.consumer_failure_classification import (
-    AssessmentFailureClassification,
     classify_assessment_failure,
 )
 from app.analysis.assessment.consumer_failure_handling import (
@@ -28,6 +31,7 @@ from app.analysis.assessment.service import (
 )
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.audit.error_fields import exception_fqn
+from app.audit.failure_projection import FailureProjection
 
 
 class AssessmentConsumer:
@@ -73,11 +77,11 @@ class AssessmentConsumer:
                         logger=logger,
                     )
         except Exception as exc:
-            failure: AssessmentFailureClassification | None = None
+            projection: FailureProjection | None = None
             try:
-                failure = classify_assessment_failure(exc)
+                projection = classify_assessment_failure(exc)
                 await self._failure_handler.handle(
-                    failure=failure,
+                    projection=projection,
                     exc=exc,
                     curation_id=event.curation_id,
                     analyzable_article_id=analyzable_article_id,
@@ -92,9 +96,11 @@ class AssessmentConsumer:
                     business_error_class=exception_fqn(exc),
                     exc_info=secondary,
                 )
-            # 後処理の失敗で、確定した受信完了を再配信に戻さない。
-            if failure is not None and failure.settled is not None:
-                return failure.settled
+            # 分類できた失敗だけを受信完了の対象にし、後処理の失敗では再配信に戻さない。
+            if projection is not None and isinstance(exc, AIProviderError):
+                settled = settled_provider_failure(exc)
+                if settled is not None:
+                    return settled
             raise
 
         await self._failure_handler.handle_ready_build_rejected(

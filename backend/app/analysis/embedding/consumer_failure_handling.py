@@ -8,12 +8,10 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
-from app.analysis.embedding.consumer_failure_classification import (
-    EmbeddingFailureClassification,
-)
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.audit.error_fields import exception_fqn
+from app.audit.failure_projection import FailureProjection
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.embedding import EmbeddingAuditRepository
 
@@ -29,7 +27,7 @@ class EmbeddingConsumerFailureHandler:
     async def handle(
         self,
         *,
-        failure: EmbeddingFailureClassification,
+        projection: FailureProjection,
         exc: Exception,
         analyzed_article_id: int,
         analyzable_article_id: int | None,
@@ -49,7 +47,7 @@ class EmbeddingConsumerFailureHandler:
                     analyzed_article_id=analyzed_article_id,
                     article_id=analyzable_article_id,
                     exc=exc,
-                    projection=failure.audit,
+                    projection=projection,
                 )
                 await session.commit()
         except Exception as audit_exc:
@@ -71,15 +69,12 @@ class EmbeddingConsumerFailureHandler:
                     "audit_dropped_metric", analyzed_article_id, exc, metric_exc
                 )
 
-        if failure.provider_exhaustion is not None:
-            try:
-                record_ai_provider_exhausted(
-                    failure.provider_exhaustion, provider=provider
-                )
-            except Exception as notification_exc:
-                self._record_secondary_failure(
-                    "notification", analyzed_article_id, exc, notification_exc
-                )
+        try:
+            record_ai_provider_exhausted(exc, provider=provider)
+        except Exception as notification_exc:
+            self._record_secondary_failure(
+                "notification", analyzed_article_id, exc, notification_exc
+            )
 
     async def handle_ready_build_rejected(
         self, *, analyzed_article_id: int, rejected: EmbeddingReadyBuildRejected
