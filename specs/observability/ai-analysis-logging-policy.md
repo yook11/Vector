@@ -46,7 +46,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 | Lambdaの失敗記録 | [Assessment](../../backend/app/lambda_handlers/assessment/failure_recorder.py)・[Curation](../../backend/app/lambda_handlers/curation/failure_recorder.py)の処理失敗ログはIDと例外型を記録し、原因文やstackを渡していない。 |
 | 処理期限 | [Assessment Consumer](../../backend/app/analysis/assessment/consumer.py)・[Curation Consumer](../../backend/app/analysis/curation/consumer.py)は業務処理全体を60秒に制限し、失敗後処理はその期限の外で行う。 |
 | 原因の分類 | [Assessment分類](../../backend/app/analysis/assessment/consumer_failure_classification.py)・[Curation分類](../../backend/app/analysis/curation/consumer_failure_classification.py)はproviderの詳細reasonを`failure_reason`へ投影する。 |
-| 内部例外 | [Assessment errors](../../backend/app/analysis/assessment/errors.py)・[Curation errors](../../backend/app/analysis/curation/errors.py)は`provider_error`と`code`を属性で保持する。文字列は標準の空文字となり、診断情報は属性・原因チェーンから取得する。 |
+| 内部例外 | [Assessment errors](../../backend/app/analysis/assessment/errors.py)・[Curation errors](../../backend/app/analysis/curation/errors.py)は工程で確定した失敗だけを表し、`code`を属性で保持する。AIプロバイダーの失敗は工程の例外に包まれず`AIProviderError`のまま伝わる。文字列は標準の空文字となり、診断情報は属性・原因チェーンから取得する。 |
 | 通信の原因 | [Gemini translator](../../backend/app/ai_providers/gemini/error_translator.py)はtimeoutとconnection等を区別する。ログ側で独自の分類を作り直す必要はない。 |
 | 検証失敗 | [Assessment parse](../../backend/app/analysis/assessment/ai/parse.py)には欠落・型違反・値違反等のdefectがあり、未知の検証失敗を元の例外として伝える経路もある。 |
 | 正常結果 | [Assessment Service](../../backend/app/analysis/assessment/service.py)には`in_scope`・`out_of_scope`・`already_assessed`、[Curation Service](../../backend/app/analysis/curation/service.py)にはsignal・noise・処理済みの区別がある。 |

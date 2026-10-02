@@ -97,6 +97,7 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 AIプロバイダーの失敗のうち、同じ入力では何度送っても結果が変わらないものは、再配信しても次の処理へ進めない。Curation・Assessment・Embeddingのすべてで、失敗を監査へ記録したうえで受信完了とし、SQSのメッセージを削除する。記事データは削除しない。
 
 - 受信完了にするかは、分析の3工程で共有する`settled_provider_failure`が、AIの例外のクラスとreasonから決める。対象は`input_too_long`（失敗の応答）と`input_blocked`（失敗の応答・生成結果）だけで、それ以外は再配信とする。
+- 3工程のServiceはAIの例外を工程の例外で包まずにそのまま伝え、Consumerは受け取ったAIの例外を`settled_provider_failure`に渡す。どの工程の失敗かはConsumerと監査のstageで表す。
 - 入力が原因と断定できない失敗（不正なリクエスト、出力の拒否・打ち切りなど）は、誤って捨てないよう再配信に任せる。人の対応が要る失敗（認証・権限・残高など）は、直したあとにDLQから再投入できるよう再配信に残す。
 - Consumerは失敗の後処理（監査・計測・枯渇通知）のあとに`SettledProviderFailure`を返す。後処理の通常の障害で受信完了を再配信に戻さない。分類そのものが失敗した場合は、元の例外を伝播して再配信する。
 - 監査・計測・枯渇通知は従来の失敗と同じに記録する。Lambda入口はこの結果のmessageIdを`batchItemFailures`へ含めず、完了ログに`code`と`failure_reason`を残す。ConsumerからSQSの削除APIを呼ばない。
