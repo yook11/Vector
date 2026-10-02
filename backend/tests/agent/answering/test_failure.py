@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -27,11 +28,14 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
 )
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _ValidationProbe(BaseModel):
@@ -73,16 +77,23 @@ def test_output_truncated_error_is_retried_in_request(classify: _Classifier) -> 
     "exc",
     [
         AIProviderTransportError(
-            transport=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             )
         ),
         AIProviderResponseError(
-            reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
-        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401),
         AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        ),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
         AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
         AIProviderResultError(reason=AIProviderResultReason.STREAM_INCOMPLETE),
@@ -160,21 +171,15 @@ def test_unclassified_exception_falls_back_to_unknown() -> None:
 
 
 @pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
-def test_bare_provider_error_remains_unclassified(classify) -> None:
-    """基底型を具体的なプロバイダー失敗へ分類しない。"""
-    attrs = classify(AIProviderError("diagnostic"))
-    assert attrs.code == "unexpected_error"
-    assert attrs.failure_reason is None
-    assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN
-
-
-@pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
 def test_unknown_direct_provider_subclass_remains_unclassified(classify) -> None:
     """独自のCODEを持つ未知の直接サブクラスも分類しない。"""
 
     class UnknownProviderError(AIProviderError):
         CODE = "unknown_provider_failure"
 
-    attrs = classify(UnknownProviderError())
+    attrs = classify(
+        UnknownProviderError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
+    )
     assert attrs.code == "unexpected_error"
+    assert attrs.failure_reason is None
     assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN

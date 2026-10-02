@@ -6,6 +6,8 @@ ValidationError / response shape / finish_reason など工程固有の判定は�
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 from google.genai import errors as genai_errors
@@ -119,7 +121,7 @@ def test_common_http_failures_keep_stage_and_reason(
     translated = translate_gemini_error(exc)
 
     assert isinstance(translated, AIProviderTransportError)
-    assert translated.transport == expected
+    assert translated.http_error.failure == expected
 
 
 @pytest.mark.parametrize(
@@ -149,7 +151,46 @@ def test_server_error_is_error_response_with_status() -> None:
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is AIProviderResponseReason.SERVER_ERROR
-    assert translated.status_code == 503
+    assert translated.http_error.status_code == 503
+
+
+def test_response_keeps_retry_after_from_sdk_response() -> None:
+    """SDK が持つ応答の Retry-After を、解釈せずに HTTP のエラーへ残す。"""
+    response = httpx.Response(
+        429,
+        headers={"Retry-After": "30"},
+        request=httpx.Request("POST", "https://generativelanguage.example.invalid"),
+    )
+    exc = genai_errors.ClientError(
+        429,
+        {"error": {"status": "RESOURCE_EXHAUSTED", "message": "msg"}},
+        response,
+    )
+
+    translated = translate_gemini_error(exc)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.http_error.retry_after == "30"
+
+
+def test_response_without_sdk_response_has_no_retry_after() -> None:
+    """SDK が応答を持たなければ、Retry-After も無いとする。"""
+    translated = translate_gemini_error(
+        _client_error(code=429, status="RESOURCE_EXHAUSTED")
+    )
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.http_error.retry_after is None
+
+
+def test_response_received_at_is_when_the_error_was_translated() -> None:
+    """受信時刻は、SDK の例外を捕まえて変換した時刻とする。"""
+    before = datetime.now(UTC)
+    translated = translate_gemini_error(_server_error(code=503))
+    after = datetime.now(UTC)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert before <= translated.http_error.received_at <= after
 
 
 def test_translator_does_not_copy_leaked_key_message() -> None:
@@ -191,7 +232,7 @@ def test_config_status_is_error_response_with_reason(
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is expected
-    assert translated.status_code == code
+    assert translated.http_error.status_code == code
 
 
 @pytest.mark.parametrize(
@@ -255,7 +296,7 @@ def test_invalid_argument_branches_by_message(
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is expected
-    assert translated.status_code == 400
+    assert translated.http_error.status_code == 400
 
 
 def test_legacy_api_error_unauthenticated_is_classified() -> None:
@@ -333,7 +374,7 @@ def test_resource_exhausted_branches_by_quota_id(
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is expected
-    assert translated.status_code == 429
+    assert translated.http_error.status_code == 429
 
 
 @pytest.mark.parametrize(
@@ -427,7 +468,7 @@ def test_context_length_with_invalid_argument_is_input_too_long(message: str) ->
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is AIProviderResponseReason.INPUT_TOO_LONG
-    assert translated.status_code == 400
+    assert translated.http_error.status_code == 400
 
 
 def test_context_length_with_deadline_exceeded_server_error_is_input_too_long() -> None:
@@ -440,7 +481,7 @@ def test_context_length_with_deadline_exceeded_server_error_is_input_too_long() 
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is AIProviderResponseReason.INPUT_TOO_LONG
-    assert translated.status_code == 504
+    assert translated.http_error.status_code == 504
 
 
 def test_context_length_message_with_unrelated_status_is_not_input_too_long() -> None:

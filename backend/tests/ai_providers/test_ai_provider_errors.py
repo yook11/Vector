@@ -1,6 +1,6 @@
-"""AIプロバイダー例外の分類・必須の事実・回復の条件の共通契約。"""
+"""AIプロバイダー例外の分類と必須の事実の共通契約。"""
 
-from enum import StrEnum
+from datetime import UTC, datetime
 
 import pytest
 
@@ -9,13 +9,13 @@ from app.ai_providers.errors import (
     AIProviderError,
     AIProviderNotSentError,
     AIProviderNotSentReason,
-    AIProviderRecovery,
     AIProviderResponseError,
     AIProviderResponseReason,
     AIProviderResultError,
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -23,14 +23,12 @@ from app.http.failure import (
 )
 from app.shared.errors import ApplicationError
 
-
-class Reason(StrEnum):
-    TIMEOUT = "timeout"
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_base_is_application_error() -> None:
     """プロバイダー例外を共通のアプリケーション例外として扱える。"""
-    assert isinstance(AIProviderError(), ApplicationError)
+    assert issubclass(AIProviderError, ApplicationError)
 
 
 def test_classified_errors_are_the_four_places_where_failure_is_found() -> None:
@@ -52,15 +50,18 @@ def test_classified_errors_are_the_four_places_where_failure_is_found() -> None:
         ),
         (
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.CONNECT, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.CONNECT, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             "ai_provider_transport_error",
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             ),
             "ai_provider_response_error",
         ),
@@ -83,16 +84,21 @@ def test_concrete_subclass_is_classified() -> None:
         pass
 
     error = TimeoutFailure(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     assert isinstance(error, CLASSIFIED_AI_PROVIDER_ERRORS)
 
 
-def test_bare_base_is_not_classified() -> None:
-    """基底型そのものを分類済みとして扱わない。"""
-    assert not isinstance(AIProviderError(), CLASSIFIED_AI_PROVIDER_ERRORS)
+def test_base_cannot_be_instantiated_directly() -> None:
+    """どこで判明したかを持たない基底型のままでは作れない。"""
+    with pytest.raises(
+        TypeError, match="AIProviderError cannot be instantiated directly"
+    ):
+        AIProviderError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
 
 
 def test_unknown_direct_subclass_is_not_classified() -> None:
@@ -101,20 +107,18 @@ def test_unknown_direct_subclass_is_not_classified() -> None:
     class UnknownFailure(AIProviderError):
         CODE = "unknown_provider_failure"
 
-    assert not isinstance(UnknownFailure(), CLASSIFIED_AI_PROVIDER_ERRORS)
+    error = UnknownFailure(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
+    assert not isinstance(error, CLASSIFIED_AI_PROVIDER_ERRORS)
 
 
-def test_base_keeps_optional_reason_and_message_contract() -> None:
-    """基底型は理由を省略でき、説明を省略すると既定の説明を使う。"""
-    error = AIProviderError()
-    assert error.reason is None
-    assert str(error) == "AIプロバイダーの処理に失敗しました"
-
-
-def test_base_reason_rejects_non_strenum() -> None:
+def test_reason_rejects_non_strenum() -> None:
     """StrEnum以外の理由を拒否する。"""
-    with pytest.raises(TypeError, match="reason must be a StrEnum member or None"):
-        AIProviderError(reason="timeout")  # type: ignore[arg-type]
+
+    class UnknownFailure(AIProviderError):
+        pass
+
+    with pytest.raises(TypeError, match="reason must be a StrEnum member"):
+        UnknownFailure(reason="timeout")  # type: ignore[arg-type]
 
 
 def test_message_is_preserved() -> None:
@@ -122,7 +126,7 @@ def test_message_is_preserved() -> None:
     error = AIProviderResponseError(
         "provider diagnostic message",
         reason=AIProviderResponseReason.SERVER_ERROR,
-        status_code=503,
+        http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
     )
     assert error.args == ("provider diagnostic message",)
     assert str(error) == "provider diagnostic message"
@@ -146,15 +150,18 @@ def test_message_rejects_arbitrary_objects() -> None:
         ),
         (
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.SEND, HttpTransportFailureReason.NETWORK_IO
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.SEND, HttpTransportFailureReason.NETWORK_IO
+                    )
                 )
             ),
             "AIプロバイダーとの通信に失敗しました",
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.AUTH, status_code=401
+                reason=AIProviderResponseReason.AUTH,
+                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
             ),
             "AIプロバイダーが失敗の応答を返しました",
         ),
@@ -169,7 +176,7 @@ def test_no_message_describes_where_failure_was_found(error, expected_message) -
     assert str(error) == expected_message
 
 
-def test_request_not_sent_requires_its_own_reason() -> None:
+def test_not_sent_requires_its_own_reason() -> None:
     """送信前の失敗は、送信前の理由だけを受け取る。"""
     with pytest.raises(TypeError, match="reason must be an AIProviderNotSentReason"):
         AIProviderNotSentError(
@@ -177,237 +184,79 @@ def test_request_not_sent_requires_its_own_reason() -> None:
         )
 
 
-def test_transport_requires_transport_failure() -> None:
-    """通信の失敗は、通信の段階と理由の値を必須で持つ。"""
-    with pytest.raises(TypeError, match="transport must be an HttpTransportFailure"):
-        AIProviderTransportError(transport="timeout")  # type: ignore[arg-type]
+@pytest.mark.parametrize(
+    "http_error",
+    [
+        HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        ),
+        HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+    ],
+)
+def test_transport_requires_http_transport_error(http_error) -> None:
+    """通信の失敗は、HTTPの通信失敗のエラーを必須で持つ。"""
+    with pytest.raises(TypeError, match="http_error must be an HttpTransportError"):
+        AIProviderTransportError(http_error=http_error)
 
 
-def test_transport_reason_is_the_transport_failure_reason() -> None:
-    """通信の失敗は独自の理由を作らず、共通HTTPの理由をそのまま使う。"""
-    transport = HttpTransportFailure(
-        HttpTransportStage.CONNECT, HttpTransportFailureReason.DNS_RESOLUTION
+def test_transport_keeps_http_error_and_uses_its_reason() -> None:
+    """通信の失敗はHTTPのエラーをそのまま持ち、独自の理由を作らない。"""
+    http_error = HttpTransportError(
+        failure=HttpTransportFailure(
+            HttpTransportStage.CONNECT, HttpTransportFailureReason.DNS_RESOLUTION
+        )
     )
-    error = AIProviderTransportError(transport=transport)
-    assert error.transport is transport
+    error = AIProviderTransportError(http_error=http_error)
+    assert error.http_error is http_error
     assert error.reason is HttpTransportFailureReason.DNS_RESOLUTION
 
 
-def test_error_response_requires_its_own_reason() -> None:
+def test_response_requires_its_own_reason() -> None:
     """失敗の応答は、失敗の応答の理由だけを受け取る。"""
     with pytest.raises(TypeError, match="reason must be an AIProviderResponseReason"):
         AIProviderResponseError(
             reason=AIProviderResultReason.INPUT_BLOCKED,  # type: ignore[arg-type]
-            status_code=400,
+            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
         )
 
 
-@pytest.mark.parametrize("status_code", ["429", True, None])
-def test_error_response_requires_integer_status_code(status_code) -> None:
-    """失敗の応答は、HTTP status を整数で必須に持つ。"""
-    with pytest.raises(TypeError, match="status_code must be an int"):
+@pytest.mark.parametrize(
+    "http_error",
+    [
+        429,
+        HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        ),
+    ],
+)
+def test_response_requires_http_response_error(http_error) -> None:
+    """失敗の応答は、HTTPの非成功応答のエラーを必須で持つ。"""
+    with pytest.raises(TypeError, match="http_error must be an HttpResponseError"):
         AIProviderResponseError(
             reason=AIProviderResponseReason.RATE_LIMITED,
-            status_code=status_code,
+            http_error=http_error,
         )
 
 
-def test_error_response_keeps_status_code() -> None:
-    """失敗の応答は、受け取った HTTP status を保持する。"""
-    error = AIProviderResponseError(
-        reason=AIProviderResponseReason.INSUFFICIENT_BALANCE, status_code=402
+def test_response_keeps_http_error() -> None:
+    """失敗の応答は、受け取った応答の事実をHTTPのエラーのまま保持する。"""
+    http_error = HttpResponseError(
+        status_code=429, received_at=_RECEIVED_AT, retry_after="30"
     )
-    assert error.status_code == 402
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.RATE_LIMITED, http_error=http_error
+    )
+    assert error.http_error is http_error
 
 
-def test_generation_requires_its_own_reason() -> None:
+def test_result_requires_its_own_reason() -> None:
     """生成結果の失敗は、生成結果の理由だけを受け取る。"""
     with pytest.raises(TypeError, match="reason must be an AIProviderResultReason"):
         AIProviderResultError(
             reason=AIProviderResponseReason.INPUT_BLOCKED  # type: ignore[arg-type]
         )
-
-
-def test_request_not_sent_needs_operator_action() -> None:
-    """送らなかった失敗は、設定や宛先の方針を人が直すまで回復しない。"""
-    for reason in AIProviderNotSentReason:
-        error = AIProviderNotSentError(reason=reason)
-        assert error.recovery is AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-
-
-@pytest.mark.parametrize(
-    "transport,expected",
-    [
-        (
-            HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-            ),
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            HttpTransportFailure(
-                HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
-            ),
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            HttpTransportFailure(
-                HttpTransportStage.CONNECT,
-                HttpTransportFailureReason.PROXY,
-                proxy_status=403,
-            ),
-            AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-        ),
-        (
-            HttpTransportFailure(
-                HttpTransportStage.CONNECT,
-                HttpTransportFailureReason.PROXY,
-                proxy_status=502,
-            ),
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            HttpTransportFailure(
-                HttpTransportStage.CONNECT, HttpTransportFailureReason.PROXY
-            ),
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-    ],
-)
-def test_transport_recovery_is_retry_except_proxy_refusal(transport, expected) -> None:
-    """通信の失敗は再試行で治りうるが、proxy の 4xx はこちらの設定による拒否である。"""
-    assert AIProviderTransportError(transport=transport).recovery is expected
-
-
-@pytest.mark.parametrize(
-    "reason,expected",
-    [
-        (
-            AIProviderResponseReason.AUTH,
-            AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-        ),
-        (
-            AIProviderResponseReason.LEAKED_API_KEY,
-            AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-        ),
-        (
-            AIProviderResponseReason.PERMISSION_DENIED,
-            AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-        ),
-        (
-            AIProviderResponseReason.NOT_FOUND,
-            AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-        ),
-        (
-            AIProviderResponseReason.FAILED_PRECONDITION,
-            AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-        ),
-        (
-            AIProviderResponseReason.INSUFFICIENT_BALANCE,
-            AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-        ),
-        (
-            AIProviderResponseReason.INVALID_REQUEST,
-            AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-        ),
-        (
-            AIProviderResponseReason.RATE_LIMITED,
-            AIProviderRecovery.RECOVERS_AFTER_WAIT,
-        ),
-        (
-            AIProviderResponseReason.QUOTA_EXHAUSTED,
-            AIProviderRecovery.RECOVERS_AFTER_WAIT,
-        ),
-        (
-            AIProviderResponseReason.SERVER_ERROR,
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            AIProviderResponseReason.INPUT_TOO_LONG,
-            AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
-        ),
-        (
-            AIProviderResponseReason.INPUT_BLOCKED,
-            AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
-        ),
-    ],
-)
-def test_error_response_recovery_follows_reason(reason, expected) -> None:
-    """失敗の応答の回復の条件は、何が起きたかの理由から決まる。"""
-    error = AIProviderResponseError(reason=reason, status_code=400)
-    assert error.recovery is expected
-
-
-def test_every_error_response_reason_has_recovery() -> None:
-    """失敗の応答の理由を足したら、回復の条件も決めなければならない。"""
-    for reason in AIProviderResponseReason:
-        error = AIProviderResponseError(reason=reason, status_code=400)
-        assert isinstance(error.recovery, AIProviderRecovery)
-
-
-@pytest.mark.parametrize(
-    "reason,expected",
-    [
-        (
-            AIProviderResultReason.INPUT_BLOCKED,
-            AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
-        ),
-        (
-            AIProviderResultReason.OUTPUT_BLOCKED_SAFETY,
-            AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
-        ),
-        (
-            AIProviderResultReason.OUTPUT_BLOCKED_RECITATION,
-            AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
-        ),
-        (
-            AIProviderResultReason.OUTPUT_BLOCKED_BLOCKLIST,
-            AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
-        ),
-        (
-            AIProviderResultReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT,
-            AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
-        ),
-        (
-            AIProviderResultReason.OUTPUT_BLOCKED_SPII,
-            AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT,
-        ),
-        (
-            AIProviderResultReason.OUTPUT_TRUNCATED,
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            AIProviderResultReason.STREAM_INCOMPLETE,
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            AIProviderResultReason.EMBEDDINGS_EMPTY,
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            AIProviderResultReason.EMBEDDING_VALUES_MISSING,
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            AIProviderResultReason.EMBEDDING_COUNT_MISMATCH,
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-        (
-            AIProviderResultReason.RESPONSE_UNPARSEABLE,
-            AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-        ),
-    ],
-)
-def test_generation_recovery_follows_reason(reason, expected) -> None:
-    """生成結果の失敗の回復の条件は、何が起きたかの理由から決まる。"""
-    assert AIProviderResultError(reason=reason).recovery is expected
-
-
-def test_every_generation_reason_has_recovery() -> None:
-    """生成結果の理由を足したら、回復の条件も決めなければならない。"""
-    for reason in AIProviderResultReason:
-        error = AIProviderResultError(reason=reason)
-        assert isinstance(error.recovery, AIProviderRecovery)
 
 
 def test_unknown_keyword_is_rejected() -> None:
@@ -424,15 +273,19 @@ def test_cause_chain_is_preserved() -> None:
     cause = TimeoutError("socket timeout")
     with pytest.raises(AIProviderTransportError) as raised:
         raise AIProviderTransportError(
-            transport=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             )
         ) from cause
     assert raised.value.__cause__ is cause
 
 
 def test_reason_enum_is_preserved_separately_from_args() -> None:
-    """基底型の理由は引数とは独立して保持する。"""
-    error = AIProviderError("request failed", reason=Reason.TIMEOUT)
-    assert error.reason is Reason.TIMEOUT
+    """理由は引数とは独立して保持する。"""
+    error = AIProviderResultError(
+        "request failed", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+    )
+    assert error.reason is AIProviderResultReason.RESPONSE_UNPARSEABLE
     assert error.args == ("request failed",)

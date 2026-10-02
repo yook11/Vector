@@ -37,6 +37,7 @@ from app.db.errors import (
     DatabaseConnectionErrorReason,
     DatabaseUnexpectedError,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -46,6 +47,8 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 from tests.cloudwatch.records import metric_records
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _HANDLER = "app.analysis.embedding.consumer_failure_handling"
 
@@ -76,25 +79,29 @@ async def _events(session: AsyncSession) -> list[PipelineEvent]:
         EmbeddingResponseInvalidError(),
         to_embedding_error(
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         ),
         to_embedding_error(
             AIProviderResponseError(
-                reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             )
         ),
         to_embedding_error(
             AIProviderResponseError(
-                reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             )
         ),
         to_embedding_error(
             AIProviderResponseError(
                 reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
-                status_code=402,
+                http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
             )
         ),
         DatabaseUnexpectedError(),
@@ -167,7 +174,8 @@ async def test_audit_failure_does_not_prevent_notification(
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
     error = to_embedding_error(
         AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         )
     )
     with capture_logs() as logs:
@@ -192,7 +200,8 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
     """通知と計測の二次障害は本文をログに漏らさず、監査と元の失敗を維持する。"""
     error = to_embedding_error(
         AIProviderResponseError(
-            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE, status_code=402
+            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+            http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
         )
     )
     with (
@@ -230,7 +239,8 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
     """監査・drop計測・ログまで失敗しても元の例外を置き換えない。"""
     error = to_embedding_error(
         AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         )
     )
     with (

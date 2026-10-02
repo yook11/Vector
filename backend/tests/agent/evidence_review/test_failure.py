@@ -22,6 +22,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -50,8 +51,10 @@ def test_evidence_review_error_rejects_blank_code(code: str) -> None:
         ),
         pytest.param(
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             "timeout",

@@ -35,6 +35,7 @@ from app.analysis.embedding.errors import (
 )
 from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.stages.embedding import EmbeddingAuditRepository
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -45,6 +46,8 @@ from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import BackfillExclusionReason
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _embedder_fake(
@@ -287,8 +290,10 @@ async def test_append_network_failure_without_recovery_classification(
     await _make_extraction(db_session, article)
     exc = to_embedding_error(
         AIProviderTransportError(
-            transport=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             )
         )
     )
@@ -320,7 +325,10 @@ async def test_append_configuration_failure_without_recovery_classification(
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = to_embedding_error(
-        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401)
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        )
     )
 
     async with session_factory() as session:
@@ -350,7 +358,8 @@ async def test_append_input_rejection_preserves_reason_without_recovery_classifi
     await _make_extraction(db_session, article)
     exc = to_embedding_error(
         AIProviderResponseError(
-            reason=AIProviderResponseReason.INPUT_BLOCKED, status_code=400
+            reason=AIProviderResponseReason.INPUT_BLOCKED,
+            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
         )
     )
 
@@ -505,8 +514,10 @@ async def test_append_failure_walks_error_chain_via_cause(
     try:
         try:
             raise AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         except AIProviderTransportError as inner:

@@ -28,6 +28,9 @@ from app.ai_providers.errors import (
     AIProviderResponseError,
     AIProviderResponseReason,
 )
+from app.http.errors import HttpResponseError
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 
@@ -133,7 +136,10 @@ async def test_organize_clamps_a_draft_that_overshoots_the_limit() -> None:
     "failure",
     [
         AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        ),
     ],
 )
 async def test_organize_keeps_the_previous_texts_when_generation_fails(

@@ -1,6 +1,7 @@
 """Curationの失敗理由と原因保持の契約を検証する。"""
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,6 +10,7 @@ from app.ai_providers.errors import (
     AIProviderError,
     AIProviderResponseError,
     AIProviderResponseReason,
+    AIProviderResultReason,
 )
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
@@ -18,6 +20,13 @@ from app.analysis.curation.errors import (
     to_curation_error,
 )
 from app.analysis.curation.service import CurationService
+from app.http.errors import HttpResponseError
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+class _UnregisteredProviderError(AIProviderError):
+    CODE = "unregistered_provider_error"
 
 
 @pytest.mark.parametrize(
@@ -25,11 +34,17 @@ from app.analysis.curation.service import CurationService
     [
         ("provider_error", None),
         (CurationFailureReason.PROVIDER_ERROR, None),
-        (CurationFailureReason.PROVIDER_ERROR, AIProviderError()),
+        (
+            CurationFailureReason.PROVIDER_ERROR,
+            _UnregisteredProviderError(
+                reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+            ),
+        ),
         (
             CurationFailureReason.RESPONSE_INVALID,
             AIProviderResponseError(
-                reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             ),
         ),
     ],
@@ -55,7 +70,7 @@ def test_provider_error_string_does_not_expose_provider_message():
     provider = AIProviderResponseError(
         "private provider details",
         reason=AIProviderResponseReason.RATE_LIMITED,
-        status_code=429,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     error = to_curation_error(provider)
     assert error.provider_error is provider
@@ -96,7 +111,7 @@ async def test_service_wraps_provider_with_same_cause():
     provider = AIProviderResponseError(
         "private provider details",
         reason=AIProviderResponseReason.RATE_LIMITED,
-        status_code=429,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     curator = MagicMock()
     curator.curate = AsyncMock(side_effect=provider)
@@ -123,7 +138,7 @@ def test_curation_error_directly_inherits_exception():
             AIProviderResponseError(
                 "provider diagnostic",
                 reason=AIProviderResponseReason.RATE_LIMITED,
-                status_code=429,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             )
         ),
         CurationResponseInvalidError(),

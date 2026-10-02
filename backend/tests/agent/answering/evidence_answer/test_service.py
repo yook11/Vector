@@ -35,6 +35,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -485,8 +486,10 @@ async def test_generation_failure_raises_typed_error_with_code() -> None:
     generator = FakeGenerator(
         [
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         ]
@@ -506,8 +509,10 @@ async def test_provider_error_raises_without_retry(
     generator = FakeGenerator(
         [
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         ]
@@ -629,8 +634,10 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
         pytest.param("根拠から確認できます。[[1]]", id="draft"),
         pytest.param(
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             id="unavailable",
@@ -711,8 +718,10 @@ async def test_outcome_metric_records_succeeded_once(
         ["根拠から確認できます。[[1]]"],
         [
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         ],
@@ -797,8 +806,10 @@ async def test_provider_error_aborts_without_live_fallback() -> None:
     generator = FakeGenerator(
         [
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         ]
@@ -862,8 +873,10 @@ async def test_provider_error_closes_stream_without_retry(
     generator = FakeGenerator(
         [
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         ]
@@ -1005,8 +1018,10 @@ async def test_classified_failure_records_failed_outcome() -> None:
     generator = FakeGenerator(
         [
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         ]
@@ -1080,8 +1095,10 @@ async def test_provider_error_records_failure_without_fallback() -> None:
     generator = FakeGenerator(
         [
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         ]

@@ -36,9 +36,7 @@ def classify_embedding_failure(exc: Exception) -> EmbeddingFailureClassification
                 audit=FailureProjection(
                     code=exc.code,
                     failure_kind=None,
-                    failure_reason=provider_error.reason.value
-                    if provider_error.reason is not None
-                    else None,
+                    failure_reason=provider_error.reason.value,
                     retryability=None,
                     failure_action=None,
                 ),

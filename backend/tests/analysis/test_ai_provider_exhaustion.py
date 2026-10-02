@@ -8,6 +8,8 @@ emit し、それ以外 (一時的 rate limit・非 provider error・None) は n
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.ai_providers.errors import (
@@ -15,7 +17,10 @@ from app.ai_providers.errors import (
     AIProviderResponseReason,
 )
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
+from app.http.errors import HttpResponseError
 from tests.cloudwatch.records import metric_records
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _METRIC = "ai_provider_exhausted"
 
@@ -26,13 +31,14 @@ _METRIC = "ai_provider_exhausted"
         (
             AIProviderResponseError(
                 reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
-                status_code=402,
+                http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
             ),
             "insufficient_balance",
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             ),
             "quota_exhausted",
         ),
@@ -65,7 +71,8 @@ def test_provider_dimension_is_the_caller_supplied_value(
     """``provider`` dimension は呼び出し側が渡した値をそのまま運ぶ。"""
     record_ai_provider_exhausted(
         AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
         provider="deepseek",
     )
@@ -80,7 +87,8 @@ def test_rate_limited_is_recoverable_by_waiting_and_does_not_emit(
     """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
     record_ai_provider_exhausted(
         AIProviderResponseError(
-            reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
         provider="gemini",
     )
@@ -93,7 +101,10 @@ def test_other_state_error_not_in_exhausted_set_does_not_emit(
 ) -> None:
     """枯渇系以外の プロバイダー例外（設定不正等） は emit しない。"""
     record_ai_provider_exhausted(
-        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        ),
         provider="gemini",
     )
 

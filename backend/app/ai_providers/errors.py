@@ -1,6 +1,6 @@
 """工程に依存しないAIプロバイダー例外の型と原因。
 
-クラスは失敗がどこで判明したか、reason は何が起きたか、recovery は回復の条件を表す。
+クラスは失敗がどこで判明したか、reason は何が起きたかを表す。
 """
 
 from __future__ import annotations
@@ -8,21 +8,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import ClassVar
 
-from app.http.failure import HttpTransportFailure, HttpTransportFailureReason
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import HttpTransportFailureReason
 from app.shared.errors import ApplicationError, ApplicationErrorValue
-
-
-class AIProviderRecovery(StrEnum):
-    """失敗から回復するために必要な条件。"""
-
-    OPERATOR_ACTION_REQUIRED = "operator_action_required"
-    """設定・残高・実装を人が直すまで、どの入力でも失敗する。"""
-    RECOVERS_AFTER_WAIT = "recovers_after_wait"
-    """流量や利用枠の制限で、時間を置けば回復する。"""
-    MAY_RECOVER_ON_RETRY = "may_recover_on_retry"
-    """一時的な障害や出力の揺らぎで、再試行すれば成功しうる。"""
-    NOT_RECOVERABLE_FOR_INPUT = "not_recoverable_for_input"
-    """この入力が原因で再試行しても成功しないが、他の入力は通る。"""
 
 
 class AIProviderError(ApplicationError):
@@ -30,24 +18,37 @@ class AIProviderError(ApplicationError):
 
     CODE: ClassVar[str]
     DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの処理に失敗しました"
-    reason: StrEnum | None
+    reason: (
+        AIProviderNotSentReason
+        | HttpTransportFailureReason
+        | AIProviderResponseReason
+        | AIProviderResultReason
+    )
 
     def __init__(
-        self, message: str | None = None, *, reason: StrEnum | None = None
+        self,
+        message: str | None = None,
+        *,
+        reason: AIProviderNotSentReason
+        | HttpTransportFailureReason
+        | AIProviderResponseReason
+        | AIProviderResultReason,
     ) -> None:
+        # どこで判明したかはサブクラスが表すので、基底のままでは作らせない。
+        if type(self) is AIProviderError:
+            raise TypeError("AIProviderError cannot be instantiated directly")
         if message is not None and not isinstance(message, str):
             raise TypeError("message must be a string or None")
-        if reason is not None and not isinstance(reason, StrEnum):
-            raise TypeError("reason must be a StrEnum member or None")
+        if not isinstance(reason, StrEnum):
+            raise TypeError("reason must be a StrEnum member")
         details: dict[str, ApplicationErrorValue] = {}
         code = getattr(type(self), "CODE", None)
         if code is not None:
             details["code"] = code
-        if reason is not None:
-            details["reason"] = reason.value
+        details["reason"] = reason.value
         super().__init__(
             self.DEFAULT_MESSAGE if message is None else message,
-            details=details or None,
+            details=details,
         )
         self.reason = reason
 
@@ -75,10 +76,6 @@ class AIProviderNotSentError(AIProviderError):
             raise TypeError("reason must be an AIProviderNotSentReason")
         super().__init__(message, reason=reason)
 
-    @property
-    def recovery(self) -> AIProviderRecovery:
-        return AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-
 
 class AIProviderTransportError(AIProviderError):
     """通信が完了せず、プロバイダーの応答を受け取れなかった。"""
@@ -88,24 +85,12 @@ class AIProviderTransportError(AIProviderError):
     reason: HttpTransportFailureReason
 
     def __init__(
-        self, message: str | None = None, *, transport: HttpTransportFailure
+        self, message: str | None = None, *, http_error: HttpTransportError
     ) -> None:
-        if not isinstance(transport, HttpTransportFailure):
-            raise TypeError("transport must be an HttpTransportFailure")
-        super().__init__(message, reason=transport.reason)
-        self.transport = transport
-
-    @property
-    def recovery(self) -> AIProviderRecovery:
-        # proxy の 4xx は、送信先の許可リストなどこちらの設定による拒否である。
-        proxy_status = self.transport.proxy_status
-        if (
-            self.transport.reason is HttpTransportFailureReason.PROXY
-            and proxy_status is not None
-            and 400 <= proxy_status < 500
-        ):
-            return AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-        return AIProviderRecovery.MAY_RECOVER_ON_RETRY
+        if not isinstance(http_error, HttpTransportError):
+            raise TypeError("http_error must be an HttpTransportError")
+        super().__init__(message, reason=http_error.failure.reason)
+        self.http_error = http_error
 
 
 class AIProviderResponseReason(StrEnum):
@@ -124,36 +109,6 @@ class AIProviderResponseReason(StrEnum):
     INPUT_BLOCKED = "input_blocked"
 
 
-_RESPONSE_RECOVERY: dict[AIProviderResponseReason, AIProviderRecovery] = {
-    AIProviderResponseReason.AUTH: AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-    AIProviderResponseReason.LEAKED_API_KEY: (
-        AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-    ),
-    AIProviderResponseReason.PERMISSION_DENIED: (
-        AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-    ),
-    AIProviderResponseReason.NOT_FOUND: AIProviderRecovery.OPERATOR_ACTION_REQUIRED,
-    AIProviderResponseReason.FAILED_PRECONDITION: (
-        AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-    ),
-    AIProviderResponseReason.INSUFFICIENT_BALANCE: (
-        AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-    ),
-    AIProviderResponseReason.INVALID_REQUEST: (
-        AIProviderRecovery.OPERATOR_ACTION_REQUIRED
-    ),
-    AIProviderResponseReason.RATE_LIMITED: AIProviderRecovery.RECOVERS_AFTER_WAIT,
-    AIProviderResponseReason.QUOTA_EXHAUSTED: AIProviderRecovery.RECOVERS_AFTER_WAIT,
-    AIProviderResponseReason.SERVER_ERROR: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-    AIProviderResponseReason.INPUT_TOO_LONG: (
-        AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
-    ),
-    AIProviderResponseReason.INPUT_BLOCKED: (
-        AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
-    ),
-}
-
-
 class AIProviderResponseError(AIProviderError):
     """プロバイダーが非成功応答を返した。"""
 
@@ -166,18 +121,14 @@ class AIProviderResponseError(AIProviderError):
         message: str | None = None,
         *,
         reason: AIProviderResponseReason,
-        status_code: int,
+        http_error: HttpResponseError,
     ) -> None:
         if not isinstance(reason, AIProviderResponseReason):
             raise TypeError("reason must be an AIProviderResponseReason")
-        if not isinstance(status_code, int) or isinstance(status_code, bool):
-            raise TypeError("status_code must be an int")
+        if not isinstance(http_error, HttpResponseError):
+            raise TypeError("http_error must be an HttpResponseError")
         super().__init__(message, reason=reason)
-        self.status_code = status_code
-
-    @property
-    def recovery(self) -> AIProviderRecovery:
-        return _RESPONSE_RECOVERY[self.reason]
+        self.http_error = http_error
 
 
 class AIProviderResultReason(StrEnum):
@@ -194,40 +145,6 @@ class AIProviderResultReason(StrEnum):
     EMBEDDING_VALUES_MISSING = "embedding_values_missing"
     EMBEDDING_COUNT_MISMATCH = "embedding_count_mismatch"
     RESPONSE_UNPARSEABLE = "response_unparseable"
-
-
-_RESULT_RECOVERY: dict[AIProviderResultReason, AIProviderRecovery] = {
-    AIProviderResultReason.INPUT_BLOCKED: (
-        AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
-    ),
-    AIProviderResultReason.OUTPUT_BLOCKED_SAFETY: (
-        AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
-    ),
-    AIProviderResultReason.OUTPUT_BLOCKED_RECITATION: (
-        AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
-    ),
-    AIProviderResultReason.OUTPUT_BLOCKED_BLOCKLIST: (
-        AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
-    ),
-    AIProviderResultReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT: (
-        AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
-    ),
-    AIProviderResultReason.OUTPUT_BLOCKED_SPII: (
-        AIProviderRecovery.NOT_RECOVERABLE_FOR_INPUT
-    ),
-    AIProviderResultReason.OUTPUT_TRUNCATED: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-    AIProviderResultReason.STREAM_INCOMPLETE: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-    AIProviderResultReason.EMBEDDINGS_EMPTY: AIProviderRecovery.MAY_RECOVER_ON_RETRY,
-    AIProviderResultReason.EMBEDDING_VALUES_MISSING: (
-        AIProviderRecovery.MAY_RECOVER_ON_RETRY
-    ),
-    AIProviderResultReason.EMBEDDING_COUNT_MISMATCH: (
-        AIProviderRecovery.MAY_RECOVER_ON_RETRY
-    ),
-    AIProviderResultReason.RESPONSE_UNPARSEABLE: (
-        AIProviderRecovery.MAY_RECOVER_ON_RETRY
-    ),
-}
 
 
 class AIProviderResultError(AIProviderError):
@@ -247,12 +164,8 @@ class AIProviderResultError(AIProviderError):
             raise TypeError("reason must be an AIProviderResultReason")
         super().__init__(message, reason=reason)
 
-    @property
-    def recovery(self) -> AIProviderRecovery:
-        return _RESULT_RECOVERY[self.reason]
 
-
-# 基底型と未知の直接サブクラスは分類済みの失敗として扱わない。
+# 未知の直接サブクラスは分類済みの失敗として扱わない。
 CLASSIFIED_AI_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
     AIProviderNotSentError,
     AIProviderTransportError,

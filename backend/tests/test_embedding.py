@@ -8,6 +8,7 @@
 """
 
 import math
+from datetime import UTC, datetime
 
 import pytest
 
@@ -22,6 +23,9 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
+from app.http.errors import HttpResponseError
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _STUB_PROVIDER = "stub"
 
@@ -78,7 +82,8 @@ class StubEmbedder(BaseEmbedder):
     def _translate_error(self, exc: Exception) -> Exception:
         if isinstance(exc, _InvalidInputSDKError):
             return AIProviderResponseError(
-                reason=AIProviderResponseReason.INPUT_BLOCKED, status_code=400
+                reason=AIProviderResponseReason.INPUT_BLOCKED,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
             )
         # マップできない例外は exc をそのまま return (bare re-raise 規約)
         return exc
@@ -148,7 +153,7 @@ async def test_embed_once_does_not_double_translate_ai_provider_error() -> None:
     pre_translated = AIProviderResponseError(
         "already translated",
         reason=AIProviderResponseReason.INVALID_REQUEST,
-        status_code=400,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
     embedder = StubEmbedder(side_effects=[pre_translated])
     with pytest.raises(AIProviderResponseError) as exc_info:

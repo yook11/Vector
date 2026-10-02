@@ -21,6 +21,7 @@ from app.agent.runtime.llm_failure import (
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -60,8 +61,10 @@ def test_llm_attempt_failed_from_uses_code_or_defect() -> None:
 
     assert llm_attempt_failed_from(
         AIProviderTransportError(
-            transport=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             )
         )
     ) == LlmAttemptFailed(failure_code=AIProviderTransportError.CODE)

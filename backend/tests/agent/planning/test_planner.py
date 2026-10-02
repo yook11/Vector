@@ -34,6 +34,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -344,8 +345,10 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
     capfire: CaptureLogfire,
 ) -> None:
     error = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     runtime = ScriptedAgentRuntime([error])
@@ -372,8 +375,10 @@ async def test_classified_provider_failure_records_failed_outcome() -> None:
     """分類済み provider 失敗は recorder へ failed を渡す。"""
 
     error = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     runtime = ScriptedAgentRuntime([error])
@@ -396,12 +401,12 @@ class _UnregisteredProviderError(AIProviderError):
     CODE = "unregistered_provider_error"
 
 
-@pytest.mark.parametrize("error_type", [AIProviderError, _UnregisteredProviderError])
-async def test_bare_provider_error_propagates_as_unclassified_without_outcome_metric(
+async def test_unregistered_provider_error_propagates_without_outcome_metric(
     capfire: CaptureLogfire,
-    error_type: type[AIProviderError],
 ) -> None:
-    error = error_type()
+    error = _UnregisteredProviderError(
+        reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+    )
     runtime = ScriptedAgentRuntime([error])
     service, factory = _service(runtime)
 
@@ -499,8 +504,10 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
     first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
     terminal_error = _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
     close_error = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     runtime = ScriptedAgentRuntime([first_error, terminal_error])
@@ -539,8 +546,10 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
         pytest.param(
             AIProviderTransportError(
                 "RAW_PROVIDER_MESSAGE_MUST_NOT_ENTER_METRICS_26e9",
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 ),
             ),
             "ai_provider_transport_error",
@@ -647,8 +656,10 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
             "enter",
             0,
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             id="classified-enter",
@@ -657,8 +668,10 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
             "exit",
             1,
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             id="classified-exit",

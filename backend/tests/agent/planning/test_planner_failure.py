@@ -12,6 +12,7 @@ from app.agent.runtime.contract import (
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -21,8 +22,10 @@ from app.http.failure import (
 
 def test_planning_error_from_maps_provider_code() -> None:
     cause = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
 

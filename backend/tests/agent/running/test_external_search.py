@@ -43,6 +43,7 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -1355,9 +1356,11 @@ async def test_query_timeout_is_classified_without_reviewer() -> None:
             query_runtime=ScriptedAgentRuntime(
                 [
                     AIProviderTransportError(
-                        transport=HttpTransportFailure(
-                            HttpTransportStage.RECEIVE,
-                            HttpTransportFailureReason.TIMEOUT,
+                        http_error=HttpTransportError(
+                            failure=HttpTransportFailure(
+                                HttpTransportStage.RECEIVE,
+                                HttpTransportFailureReason.TIMEOUT,
+                            )
                         )
                     )
                 ]

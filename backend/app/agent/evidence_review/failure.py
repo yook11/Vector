@@ -37,8 +37,7 @@ def evidence_review_error_from(
     if isinstance(cause, AgentResponseInvalidError):
         return EvidenceReviewError(code=cause.defect.value)
     if isinstance(cause, CLASSIFIED_AI_PROVIDER_ERRORS):
-        code = cause.reason.value if cause.reason is not None else cause.CODE
-        return EvidenceReviewError(code=code)
+        return EvidenceReviewError(code=cause.reason.value)
     if isinstance(cause, TimeoutError):
         return EvidenceReviewError(code=_REVIEWER_TIMEOUT)
     if isinstance(cause, ValidationError):

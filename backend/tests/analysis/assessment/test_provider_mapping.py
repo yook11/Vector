@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.ai_providers.errors import (
@@ -23,11 +25,14 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.logging import create_article_analysis_logger
 from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
 )
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 # 分類済みの4種類それぞれの代表。
 _PROVIDER_ERROR_FACTORIES = [
@@ -37,8 +42,10 @@ _PROVIDER_ERROR_FACTORIES = [
     ),
     pytest.param(
         lambda: AIProviderTransportError(
-            transport=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             )
         ),
         id="transport",
@@ -46,7 +53,7 @@ _PROVIDER_ERROR_FACTORIES = [
     pytest.param(
         lambda: AIProviderResponseError(
             reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
-            status_code=402,
+            http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
         ),
         id="error_response",
     ),

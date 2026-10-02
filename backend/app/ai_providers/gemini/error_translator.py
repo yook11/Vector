@@ -6,6 +6,9 @@ finish_reason や応答の形の検証は、各工程の adapter が持つ。
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+import httpx
 from google.genai import errors as genai_errors
 
 from app.ai_providers.errors import (
@@ -17,7 +20,10 @@ from app.ai_providers.errors import (
     AIProviderTransportError,
 )
 from app.http.destination_policy import HostBlockedError
-from app.http.failure import classify_httpx
+from app.http.error_mapping import (
+    http_response_error_from_status,
+    http_transport_error_from_exception,
+)
 
 _CONFIG_REASON_MESSAGES: dict[AIProviderResponseReason, str] = {
     AIProviderResponseReason.AUTH: "AIプロバイダーの認証に失敗しました",
@@ -131,13 +137,19 @@ def translate_gemini_error(exc: Exception) -> Exception:
             "AIプロバイダーへの通信が宛先の方針で拒否されました",
             reason=AIProviderNotSentReason.HOST_BLOCKED,
         )
-    transport = classify_httpx(exc)
-    if transport is not None:
-        return AIProviderTransportError(transport=transport)
+    transport_error = http_transport_error_from_exception(exc)
+    if transport_error is not None:
+        return AIProviderTransportError(http_error=transport_error)
     if not isinstance(exc, genai_errors.APIError):
         return exc
 
     status_code = exc.code
+    # 変換器は SDK の例外を捕まえた直後に呼ばれるので、今の時刻を受信時刻とする。
+    http_error = http_response_error_from_status(
+        status_code,
+        response=exc.response if isinstance(exc.response, httpx.Response) else None,
+        received_at=datetime.now(UTC),
+    )
     status = exc.status or ""
     message = (exc.message or str(exc)).lower()
 
@@ -146,7 +158,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
         return AIProviderResponseError(
             "AIプロバイダーが入力長の上限を超えたと判定しました",
             reason=AIProviderResponseReason.INPUT_TOO_LONG,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     # ServerError は APIError の子クラスなので先に判定する。
@@ -154,14 +166,14 @@ def translate_gemini_error(exc: Exception) -> Exception:
         return AIProviderResponseError(
             "AIプロバイダー内部でサーバーエラーが発生しました",
             reason=AIProviderResponseReason.SERVER_ERROR,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     if "reported as leaked" in message:
         return AIProviderResponseError(
             "AIプロバイダーがAPIキーの漏洩を検知しました",
             reason=AIProviderResponseReason.LEAKED_API_KEY,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     config_reason = _STATUS_TO_CONFIG_REASON.get(
@@ -171,7 +183,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
         return AIProviderResponseError(
             _CONFIG_REASON_MESSAGES[config_reason],
             reason=config_reason,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     if status_code == 400 or status == "INVALID_ARGUMENT":
@@ -179,24 +191,24 @@ def translate_gemini_error(exc: Exception) -> Exception:
             return AIProviderResponseError(
                 "AIプロバイダーの認証に失敗しました",
                 reason=AIProviderResponseReason.AUTH,
-                status_code=status_code,
+                http_error=http_error,
             )
         if "permission" in message:
             return AIProviderResponseError(
                 "AIプロバイダーへのアクセス権限がありません",
                 reason=AIProviderResponseReason.PERMISSION_DENIED,
-                status_code=status_code,
+                http_error=http_error,
             )
         if "blocked" in message or "safety" in message:
             return AIProviderResponseError(
                 "AIプロバイダーが安全性の制約により入力を拒否しました",
                 reason=AIProviderResponseReason.INPUT_BLOCKED,
-                status_code=status_code,
+                http_error=http_error,
             )
         return AIProviderResponseError(
             "AIプロバイダーがリクエストの引数を不正と判定しました",
             reason=AIProviderResponseReason.INVALID_REQUEST,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     # 日あたりの枯渇を確認できたときだけ枯渇とし、枯渇アラームの誤発火を避ける。
@@ -205,12 +217,12 @@ def translate_gemini_error(exc: Exception) -> Exception:
             return AIProviderResponseError(
                 "AIプロバイダーの1日当たりの利用枠を使い切りました",
                 reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-                status_code=status_code,
+                http_error=http_error,
             )
         return AIProviderResponseError(
             "AIプロバイダーの呼び出し頻度の上限に達しました",
             reason=AIProviderResponseReason.RATE_LIMITED,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     return exc

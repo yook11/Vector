@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.ai_providers.errors import (
@@ -20,11 +22,14 @@ from app.analysis.embedding.errors import (
     EmbeddingFailureReason,
     to_embedding_error,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
 )
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 # 分類済みの4種類それぞれの代表。
 _PROVIDER_ERROR_FACTORIES = [
@@ -34,15 +39,18 @@ _PROVIDER_ERROR_FACTORIES = [
     ),
     pytest.param(
         lambda: AIProviderTransportError(
-            transport=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             )
         ),
         id="transport",
     ),
     pytest.param(
         lambda: AIProviderResponseError(
-            reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
         id="error_response",
     ),
@@ -80,18 +88,16 @@ class TestToEmbeddingError:
 class TestToEmbeddingErrorUnregistered:
     """登録されていない ``AIProviderError`` で fail-fast。"""
 
-    def test_bare_provider_error_base_raises_type_error(self) -> None:
-        bare = AIProviderError("bare base")
-
-        with pytest.raises(TypeError, match="unmapped provider error"):
-            to_embedding_error(bare)
-
     def test_direct_ai_provider_error_subclass_raises(self) -> None:
         class _UnregisteredProviderError(AIProviderError):
             CODE = "ai_error_unregistered_for_test"
 
         with pytest.raises(TypeError, match="unmapped provider error"):
-            to_embedding_error(_UnregisteredProviderError())
+            to_embedding_error(
+                _UnregisteredProviderError(
+                    reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+                )
+            )
 
 
 @pytest.mark.parametrize("make_error", _PROVIDER_ERROR_FACTORIES)

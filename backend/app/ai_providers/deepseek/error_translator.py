@@ -5,6 +5,8 @@ finish_reason による拒否の判定は、各工程の adapter が持つ。
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -26,27 +28,36 @@ from app.ai_providers.errors import (
     AIProviderTransportError,
 )
 from app.http.destination_policy import HostBlockedError
+from app.http.error_mapping import (
+    http_response_error_from_status,
+    http_transport_error_from_exception,
+)
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
-    classify_httpx,
 )
 
 
-def _transport_failure(exc: APIConnectionError) -> HttpTransportFailure:
+def _transport_error(exc: APIConnectionError) -> HttpTransportError:
     """SDK が包んだ通信の例外を分類し、包む前の例外が不明なら段階を不明とする。"""
-    failure = (
-        classify_httpx(exc.__cause__) if isinstance(exc.__cause__, Exception) else None
+    cause = exc.__cause__
+    http_error = (
+        http_transport_error_from_exception(cause)
+        if isinstance(cause, Exception)
+        else None
     )
-    if failure is not None:
-        return failure
+    if http_error is not None:
+        return http_error
     reason = (
         HttpTransportFailureReason.TIMEOUT
         if isinstance(exc, APITimeoutError)
         else HttpTransportFailureReason.UNKNOWN
     )
-    return HttpTransportFailure(HttpTransportStage.UNKNOWN, reason)
+    return HttpTransportError(
+        failure=HttpTransportFailure(HttpTransportStage.UNKNOWN, reason)
+    )
 
 
 def translate_deepseek_error(exc: Exception) -> Exception:
@@ -61,29 +72,33 @@ def translate_deepseek_error(exc: Exception) -> Exception:
                 "AIプロバイダーへの通信が宛先の方針で拒否されました",
                 reason=AIProviderNotSentReason.HOST_BLOCKED,
             )
-        return AIProviderTransportError(transport=_transport_failure(exc))
+        return AIProviderTransportError(http_error=_transport_error(exc))
 
     if not isinstance(exc, APIStatusError):
         return exc
     status_code = exc.status_code
+    # 変換器は SDK の例外を捕まえた直後に呼ばれるので、今の時刻を受信時刻とする。
+    http_error = http_response_error_from_status(
+        status_code, response=exc.response, received_at=datetime.now(UTC)
+    )
 
     if isinstance(exc, AuthenticationError):
         return AIProviderResponseError(
             "AIプロバイダーの認証に失敗しました",
             reason=AIProviderResponseReason.AUTH,
-            status_code=status_code,
+            http_error=http_error,
         )
     if isinstance(exc, PermissionDeniedError):
         return AIProviderResponseError(
             "AIプロバイダーへのアクセス権限がありません",
             reason=AIProviderResponseReason.PERMISSION_DENIED,
-            status_code=status_code,
+            http_error=http_error,
         )
     if isinstance(exc, NotFoundError):
         return AIProviderResponseError(
             "AIプロバイダーの要求先が見つかりません",
             reason=AIProviderResponseReason.NOT_FOUND,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     # 402 (残高不足) は専用の SDK 例外がないので、RateLimitError より先に見る。
@@ -91,34 +106,34 @@ def translate_deepseek_error(exc: Exception) -> Exception:
         return AIProviderResponseError(
             "AIプロバイダーの利用残高が不足しています",
             reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     if isinstance(exc, OpenAIRateLimitError):
         return AIProviderResponseError(
             "AIプロバイダーの呼び出し頻度の上限に達しました",
             reason=AIProviderResponseReason.RATE_LIMITED,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     if isinstance(exc, BadRequestError):
         return AIProviderResponseError(
             "AIプロバイダーがリクエストを不正と判定しました",
             reason=AIProviderResponseReason.INVALID_REQUEST,
-            status_code=status_code,
+            http_error=http_error,
         )
     if isinstance(exc, UnprocessableEntityError):
         return AIProviderResponseError(
             "AIプロバイダーがリクエストを処理できませんでした",
             reason=AIProviderResponseReason.INVALID_REQUEST,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     if isinstance(exc, InternalServerError) or 500 <= status_code < 600:
         return AIProviderResponseError(
             "AIプロバイダー内部でサーバーエラーが発生しました",
             reason=AIProviderResponseReason.SERVER_ERROR,
-            status_code=status_code,
+            http_error=http_error,
         )
 
     return exc

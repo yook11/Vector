@@ -67,13 +67,13 @@ def classify_answer_synthesis_failure(
     if is_output_truncated(exc):
         return AnswerSynthesisFailureAttributes(
             code=exc.CODE,
-            failure_reason=exc.reason.value if exc.reason is not None else None,
+            failure_reason=exc.reason.value,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     if isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
         return AnswerSynthesisFailureAttributes(
             code=exc.CODE,
-            failure_reason=exc.reason.value if exc.reason is not None else None,
+            failure_reason=exc.reason.value,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
         )
     if isinstance(exc, EvidenceAnswerDraftInvalidError):
@@ -107,13 +107,13 @@ def classify_direct_answer_failure(
     if is_output_truncated(exc):
         return DirectAnswerFailureAttributes(
             code=exc.CODE,
-            failure_reason=exc.reason.value if exc.reason is not None else None,
+            failure_reason=exc.reason.value,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     if isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
         return DirectAnswerFailureAttributes(
             code=exc.CODE,
-            failure_reason=exc.reason.value if exc.reason is not None else None,
+            failure_reason=exc.reason.value,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
         )
     if isinstance(exc, DirectAnswerInvalidError):

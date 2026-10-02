@@ -36,6 +36,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -392,8 +393,10 @@ async def test_ai_provider_error_becomes_direct_answer_error_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
     provider_exc = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     runtime = ScriptedStreamingRuntime([provider_exc])
@@ -571,8 +574,10 @@ async def test_runtime_scope_exit_failure_replaces_terminal_failure_without_outc
     capfire: CaptureLogfire,
 ) -> None:
     source_error = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     close_error = RuntimeError("runtime scope exit failed")
@@ -669,8 +674,10 @@ async def test_reporter_failure_does_not_change_success(
 @pytest.mark.asyncio
 async def test_reporter_abort_failure_does_not_mask_provider_error() -> None:
     provider_exc = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     runtime = ScriptedStreamingRuntime([provider_exc])
@@ -699,8 +706,10 @@ async def test_classified_failure_records_failed_outcome() -> None:
 
     recorder = RecordingDirectAnswerRecorder()
     error = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     runtime = ScriptedStreamingRuntime([error])

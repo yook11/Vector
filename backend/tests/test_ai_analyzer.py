@@ -41,6 +41,7 @@ from app.analysis.curation.service import (
 )
 from app.analysis.logging import create_article_analysis_logger
 from app.collection.domain.article_url import ArticleUrl
+from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -49,6 +50,8 @@ from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.pipeline_event import PipelineEvent
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -257,7 +260,8 @@ async def test_curator_call_once_passes_through_domain_error() -> None:
     # AIProviderError サブクラスは _call_api 内で raise 済として透過する
     curator._call_api = AsyncMock(
         side_effect=AIProviderResponseError(
-            reason=AIProviderResponseReason.SERVER_ERROR, status_code=503
+            reason=AIProviderResponseReason.SERVER_ERROR,
+            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
         )
     )
 

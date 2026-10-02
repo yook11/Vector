@@ -64,10 +64,14 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
 from app.ai_providers.errors import (
-    AIProviderError,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
     AIProviderResponseError,
     AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
+from app.http.errors import HttpResponseError
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -82,6 +86,8 @@ from tests.agent.runs._start_run_outcomes import (
     started_attempt_epoch,
 )
 from tests.conftest import TEST_USER_ID
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 SENSITIVE_TASK_BOUNDARY_MARKERS = (
     TEST_USER_ID,
@@ -1389,7 +1395,12 @@ async def test_run_agent_answer_publishes_failed_terminal_after_commit(
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(exc=AIProviderError("provider unavailable"))
+    fake_agent = FakeAgent(
+        exc=AIProviderResponseError(
+            reason=AIProviderResponseReason.SERVER_ERROR,
+            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+        )
+    )
     FakeLiveStreamPublisher.instances = []
 
     class CommitCheckingPublisher(FakeLiveStreamPublisher):
@@ -1936,7 +1947,7 @@ async def test_provider_failure_after_delta_commits_failed_without_assistant(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = DeltaReportingAgent(
-        exc=AIProviderError(),
+        exc=AIProviderResultError(reason=AIProviderResultReason.STREAM_INCOMPLETE),
         fragments=["P" * 512],
         finish=False,
     )
@@ -2174,7 +2185,12 @@ async def test_failed_transition_loser_does_not_publish_terminal(
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(exc=AIProviderError("provider unavailable"))
+    fake_agent = FakeAgent(
+        exc=AIProviderResponseError(
+            reason=AIProviderResponseReason.SERVER_ERROR,
+            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+        )
+    )
     FakeLiveStreamPublisher.instances = []
 
     async def lose_transition(
@@ -2281,8 +2297,11 @@ async def test_initial_question_does_not_publish_resolved_event(
 @pytest.mark.parametrize(
     "exc",
     [
-        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401),
-        AIProviderError(),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        ),
+        AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
     ],
 )
 async def test_answering_runner_setup_error_marks_generation_unavailable(
@@ -2320,7 +2339,9 @@ async def test_answering_runner_setup_error_marks_generation_unavailable(
 
 def _direct_answer_error_with_private_cause() -> DirectAnswerError:
     error = DirectAnswerError(code="direct_answer_blank_response")
-    error.__cause__ = AIProviderError("SHOULD_NOT_LEAK")
+    error.__cause__ = AIProviderResultError(
+        "SHOULD_NOT_LEAK", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+    )
     return error
 
 
@@ -2328,8 +2349,13 @@ def _direct_answer_error_with_private_cause() -> DirectAnswerError:
 @pytest.mark.parametrize(
     "generation_error",
     [
-        AIProviderResponseError(reason=AIProviderResponseReason.AUTH, status_code=401),
-        AIProviderError("SHOULD_NOT_LEAK"),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        ),
+        AIProviderResultError(
+            "SHOULD_NOT_LEAK", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+        ),
         _direct_answer_error_with_private_cause(),
         EvidenceAnswerError(code="ai_provider_transport_error"),
         EvidenceAnswerError(code="evidence_answer_timeout"),
@@ -2392,7 +2418,10 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(
-        exc=AIProviderError("SHOULD_NOT_LEAK"), stage="evidence_collection"
+        exc=AIProviderResultError(
+            "SHOULD_NOT_LEAK", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+        ),
+        stage="evidence_collection",
     )
 
     def build_agent(**kwargs: object) -> FakeAgent:

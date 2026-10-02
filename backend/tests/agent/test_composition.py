@@ -22,9 +22,10 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
 )
 from app.ai_providers.errors import (
-    AIProviderError,
     AIProviderNotSentError,
     AIProviderNotSentReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 
@@ -188,7 +189,10 @@ async def test_gemini_client_scope_rejects_missing_key_before_opening(
 @pytest.mark.parametrize(
     "body_error",
     [
-        pytest.param(AIProviderError(), id="provider-error"),
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
+            id="provider-error",
+        ),
         pytest.param(
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
             id="response-error",

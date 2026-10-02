@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
@@ -30,11 +32,14 @@ from app.db.errors import (
     DatabaseConstraintErrorReason,
     DatabaseUnexpectedError,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
 )
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
@@ -42,46 +47,53 @@ from app.http.failure import (
     [
         (
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             False,
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.SERVER_ERROR, status_code=503
+                reason=AIProviderResponseReason.SERVER_ERROR,
+                http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
             ),
             False,
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.RATE_LIMITED, status_code=429
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             ),
             False,
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.QUOTA_EXHAUSTED, status_code=429
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             ),
             True,
         ),
         (
             AIProviderResponseError(
                 reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
-                status_code=402,
+                http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
             ),
             True,
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.AUTH, status_code=401
+                reason=AIProviderResponseReason.AUTH,
+                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
             ),
             False,
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.INVALID_REQUEST, status_code=400
+                reason=AIProviderResponseReason.INVALID_REQUEST,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
             ),
             False,
         ),
@@ -91,7 +103,8 @@ from app.http.failure import (
         ),
         (
             AIProviderResponseError(
-                reason=AIProviderResponseReason.INPUT_BLOCKED, status_code=400
+                reason=AIProviderResponseReason.INPUT_BLOCKED,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
             ),
             False,
         ),

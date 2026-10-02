@@ -33,6 +33,7 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
 )
 from app.analysis.embedding.service import EmbeddingCompletion, EmbeddingService
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -44,6 +45,8 @@ from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _mock_embedder(
@@ -276,7 +279,8 @@ async def test_execute_wraps_input_rejected_provider_error(
     article_id = article.id
 
     original = AIProviderResponseError(
-        reason=AIProviderResponseReason.INPUT_BLOCKED, status_code=400
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
     embedder = _mock_embedder(raises=original)
     svc = EmbeddingService(session_factory)
@@ -307,17 +311,19 @@ async def test_execute_wraps_input_rejected_provider_error(
         AIProviderResponseError(
             "rate limited",
             reason=AIProviderResponseReason.RATE_LIMITED,
-            status_code=429,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
         AIProviderResponseError(
             "provider down",
             reason=AIProviderResponseReason.SERVER_ERROR,
-            status_code=503,
+            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
         ),
         AIProviderTransportError(
             "timeout",
-            transport=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             ),
         ),
     ],

@@ -34,6 +34,7 @@ from app.analysis.assessment.service import (
     AssessmentService,
 )
 from app.analysis.logging import create_article_analysis_logger
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -53,6 +54,8 @@ from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.outbox import RejectOutboxInsert
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _AI_MODEL = "gemini-2.5-flash-lite"
 _PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
@@ -347,8 +350,10 @@ async def test_provider_transport_error_preserves_provider_cause(
     """
     provider_exc = AIProviderTransportError(
         "connection reset",
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         ),
     )
     assessor = _make_assessor(side_effect=provider_exc)
@@ -376,7 +381,9 @@ async def test_provider_configuration_error_preserves_provider_cause(
 ) -> None:
     """設定エラーも再試行分類を付けずに保持する。"""
     provider_exc = AIProviderResponseError(
-        "bad api key", reason=AIProviderResponseReason.AUTH, status_code=401
+        "bad api key",
+        reason=AIProviderResponseReason.AUTH,
+        http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
     )
     assessor = _make_assessor(side_effect=provider_exc)
 

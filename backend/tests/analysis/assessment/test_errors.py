@@ -6,6 +6,7 @@ import pytest
 
 from app.ai_providers.errors import (
     AIProviderError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
 from app.analysis.assessment.errors import (
@@ -15,6 +16,7 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     to_assessment_error,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -25,6 +27,10 @@ from app.shared.errors import ApplicationError
 
 class SampleDefect(StrEnum):
     INVALID = "assessment_test_invalid"
+
+
+class _UnregisteredProviderError(AIProviderError):
+    CODE = "unregistered_provider_error"
 
 
 @pytest.mark.parametrize(
@@ -41,7 +47,9 @@ def test_requires_reason_enum(reason):
         {"reason": AssessmentFailureReason.PROVIDER_ERROR},
         {
             "reason": AssessmentFailureReason.PROVIDER_ERROR,
-            "provider_error": AIProviderError(),
+            "provider_error": _UnregisteredProviderError(
+                reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+            ),
         },
         {
             "reason": AssessmentFailureReason.PROVIDER_ERROR,
@@ -50,8 +58,10 @@ def test_requires_reason_enum(reason):
         {
             "reason": AssessmentFailureReason.PROVIDER_ERROR,
             "provider_error": AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             "defect": SampleDefect.INVALID,
@@ -65,16 +75,20 @@ def test_requires_reason_enum(reason):
             "reason": AssessmentFailureReason.RESPONSE_INVALID,
             "defect": SampleDefect.INVALID,
             "provider_error": AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
         },
         {
             "reason": AssessmentFailureReason.CURATION_MISSING,
             "provider_error": AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
         },
@@ -116,8 +130,10 @@ def test_curation_missing_has_no_details():
         to_assessment_error(
             AIProviderTransportError(
                 "private sdk text",
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 ),
             )
         ),
@@ -144,8 +160,11 @@ def test_assessment_error_is_application_error():
             to_assessment_error(
                 AIProviderTransportError(
                     "private-provider-diagnostic",
-                    transport=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    http_error=HttpTransportError(
+                        failure=HttpTransportFailure(
+                            HttpTransportStage.RECEIVE,
+                            HttpTransportFailureReason.TIMEOUT,
+                        )
                     ),
                 )
             ),

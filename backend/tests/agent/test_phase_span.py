@@ -25,6 +25,7 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -174,8 +175,10 @@ def test_ai_provider_error_marks_span_error_with_error_type_and_reraises_same_in
     capfire: CaptureLogfire,
 ) -> None:
     error = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
 

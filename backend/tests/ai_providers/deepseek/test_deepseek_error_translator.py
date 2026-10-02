@@ -9,6 +9,8 @@ OpenAI SDK 2.32+ の status 系例外は ``response=httpx.Response(..., request=
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 from openai import (
@@ -116,7 +118,7 @@ def test_sdk_wrapped_transport_failure_keeps_stage_and_reason(
     translated = translate_deepseek_error(exc_factory())
 
     assert isinstance(translated, AIProviderTransportError)
-    assert translated.transport == expected
+    assert translated.http_error.failure == expected
 
 
 @pytest.mark.parametrize(
@@ -151,7 +153,7 @@ def test_transport_failure_without_httpx_cause_has_unknown_stage(
     translated = translate_deepseek_error(exc_factory())
 
     assert isinstance(translated, AIProviderTransportError)
-    assert translated.transport == expected
+    assert translated.http_error.failure == expected
 
 
 @pytest.mark.parametrize(
@@ -238,8 +240,31 @@ def test_status_error_is_error_response_with_reason_and_status(
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is expected_reason
-    assert translated.status_code == expected_status
+    assert translated.http_error.status_code == expected_status
     assert str(translated) == expected_message
+
+
+def test_response_keeps_retry_after_from_sdk_response() -> None:
+    """SDK が持つ応答の Retry-After を、解釈せずに HTTP のエラーへ残す。"""
+    response = httpx.Response(
+        429, headers={"Retry-After": "30"}, request=_make_request()
+    )
+    exc = OpenAIRateLimitError("r", response=response, body=None)
+
+    translated = translate_deepseek_error(exc)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.http_error.retry_after == "30"
+
+
+def test_response_received_at_is_when_the_error_was_translated() -> None:
+    """受信時刻は、SDK の例外を捕まえて変換した時刻とする。"""
+    before = datetime.now(UTC)
+    translated = translate_deepseek_error(_make_status_error(503, "upstream"))
+    after = datetime.now(UTC)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert before <= translated.http_error.received_at <= after
 
 
 def test_unmappable_returns_exc_unchanged() -> None:

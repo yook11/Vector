@@ -37,6 +37,7 @@ from app.analysis.assessment.errors import (
     to_assessment_error,
 )
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -582,8 +583,10 @@ async def test_append_classified_failure_walks_error_chain_via_cause(
         try:
             raise AIProviderTransportError(
                 "upstream provider error",
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 ),
             )
         except AIProviderTransportError as inner:

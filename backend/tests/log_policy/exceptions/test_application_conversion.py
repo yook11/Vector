@@ -19,6 +19,7 @@ from app.analysis.assessment.errors import (
 from app.analysis.curation import events as curation
 from app.collection import events as collection
 from app.collection.article_acquisition import events as acquisition
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -280,8 +281,10 @@ def test_provider_error_keeps_message_code_and_reason() -> None:
     """プロバイダー例外の明示した診断だけを共通形式へ渡す。"""
     error = AIProviderTransportError(
         "request failed",
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         ),
     )
     error.response = {"body": "private-response"}
@@ -295,20 +298,19 @@ def test_provider_error_keeps_message_code_and_reason() -> None:
     }
 
 
-def test_unclassified_provider_base_does_not_invent_code() -> None:
-    """CODE未定義の基底例外も変換でき、存在しない診断を補完しない。"""
-    converted = convert_exception(AIProviderError("unclassified"))
+def test_provider_error_without_code_does_not_invent_code() -> None:
+    """CODEを持たない例外も変換でき、存在しないcodeを補完せず理由は失わない。"""
 
-    assert converted.message == "unclassified"
-    assert converted.error_details is None
+    class UnknownProviderError(AIProviderError):
+        pass
 
-
-def test_unclassified_provider_base_keeps_explicit_reason() -> None:
-    """CODEを持たない例外でも明示した理由は失わない。"""
     converted = convert_exception(
-        AIProviderError(reason=HttpTransportFailureReason.NETWORK_IO)
+        UnknownProviderError(
+            "unclassified", reason=HttpTransportFailureReason.NETWORK_IO
+        )
     )
 
+    assert converted.message == "unclassified"
     assert converted.error_details == {"reason": "network_io"}
 
 
@@ -316,8 +318,10 @@ def test_assessment_provider_error_keeps_stage_reason_and_code() -> None:
     """工程の診断にはプロバイダー例外の本文やオブジェクトを転記しない。"""
     provider_error = AIProviderTransportError(
         "private-provider-response",
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         ),
     )
     error = to_assessment_error(provider_error)

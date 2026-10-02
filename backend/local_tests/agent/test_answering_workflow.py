@@ -13,6 +13,7 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -83,8 +84,10 @@ async def test_planning_failure_stops_downstream_processing(
         question="売上動向を調べてください",
     )
     agent_provider_responses.planning_response = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
 
@@ -164,8 +167,10 @@ async def test_internal_search_failure_does_not_stop_answering(
         question="売上動向を調べてください",
     )
     agent_provider_responses.embedding_error = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     agent_provider_responses.search_hits = []
@@ -249,8 +254,10 @@ async def test_handoff_generation_failure_does_not_fail_the_answer(
         question="売上動向を調べてください",
     )
     agent_provider_responses.handoff_response = AIProviderTransportError(
-        transport=HttpTransportFailure(
-            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
         )
     )
     answer = "売上は前年同期比10%増です。[[1]]"

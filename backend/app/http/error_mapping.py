@@ -27,3 +27,17 @@ def http_response_error_from_exception(
         received_at=received_at,
         retry_after=exc.response.headers.get("Retry-After"),
     )
+
+
+def http_response_error_from_status(
+    status_code: int,
+    *,
+    response: httpx.Response | None,
+    received_at: datetime,
+) -> HttpResponseError:
+    """HTTPStatusErrorを経ずに判明した非成功応答を保持し、応答が無ければRetry-Afterも無いものとする。"""
+    return HttpResponseError(
+        status_code=status_code,
+        received_at=received_at,
+        retry_after=None if response is None else response.headers.get("Retry-After"),
+    )

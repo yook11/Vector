@@ -11,6 +11,7 @@ PR3 で導入した:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,11 +31,14 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     to_assessment_error,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
 )
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _StubAssessor(BaseAssessor):
@@ -103,7 +107,7 @@ class TestCallOncePassthrough:
         original = AIProviderResponseError(
             "rate limited",
             reason=AIProviderResponseReason.RATE_LIMITED,
-            status_code=429,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
@@ -122,7 +126,9 @@ class TestCallOncePassthrough:
         self, make_assessment_logger
     ) -> None:
         original = AIProviderResponseError(
-            "bad api key", reason=AIProviderResponseReason.AUTH, status_code=401
+            "bad api key",
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
         )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
@@ -159,8 +165,10 @@ class TestCallOncePassthrough:
     ) -> None:
         original = to_assessment_error(
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             )
         )
@@ -180,7 +188,8 @@ class TestCallOncePassthrough:
     ) -> None:
         original = to_assessment_error(
             AIProviderResponseError(
-                reason=AIProviderResponseReason.AUTH, status_code=401
+                reason=AIProviderResponseReason.AUTH,
+                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
             )
         )
         cls = _StubAssessor()
@@ -204,8 +213,10 @@ class TestCallOnceTranslate:
         original = ConnectionError("network down")
         translated = AIProviderTransportError(
             "translated",
-            transport=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
             ),
         )
         cls = _StubAssessor()

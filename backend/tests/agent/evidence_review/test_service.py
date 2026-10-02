@@ -32,8 +32,10 @@ from app.agent.recording.evidence_review import (
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
+    AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -299,8 +301,10 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
         ),
         pytest.param(
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             "timeout",
@@ -352,8 +356,10 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
         [
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
         ]
@@ -382,11 +388,8 @@ class _UnregisteredProviderError(AIProviderError):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error_type", [AIProviderError, _UnregisteredProviderError])
-async def test_review_propagates_unclassified_provider_error(
-    error_type: type[AIProviderError],
-) -> None:
-    """基底型と未知の直接サブクラスは工程codeに変換しない。"""
+async def test_review_propagates_unclassified_provider_error() -> None:
+    """未知の直接サブクラスは工程codeに変換しない。"""
     tasks = [
         collected_task(
             task_index=0,
@@ -401,7 +404,9 @@ async def test_review_propagates_unclassified_provider_error(
         )
     ]
 
-    error = error_type()
+    error = _UnregisteredProviderError(
+        reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+    )
     runtime = ScriptedAgentRuntime([error])
 
     with pytest.raises(AIProviderError) as raised:
@@ -557,13 +562,17 @@ async def test_classified_failure_records_failure_code_and_attempt_count() -> No
     runtime = ScriptedAgentRuntime(
         [
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
             AIProviderTransportError(
-                transport=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
                 )
             ),
         ]
@@ -614,7 +623,12 @@ async def test_retry_success_records_succeeded_with_attempt_count() -> None:
         pytest.param(RuntimeError("unclassified reviewer error"), id="unknown"),
         pytest.param(asyncio.CancelledError(), id="cancellation"),
         pytest.param(GeneratorExit(), id="generator-exit"),
-        pytest.param(AIProviderError(), id="unclassified-provider"),
+        pytest.param(
+            _UnregisteredProviderError(
+                reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+            ),
+            id="unclassified-provider",
+        ),
     ],
 )
 async def test_unclassified_failure_and_cancellation_record_without_outcome(
