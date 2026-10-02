@@ -1,4 +1,4 @@
-"""Consumerの失敗を監査・監視・通知の情報へ投影する純粋関数。"""
+"""Consumerの失敗を監査・監視・通知と受信完了の情報へ投影する純粋関数。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from app.analysis.ai_provider_exhaustion import (
     ExhaustedProviderError,
     exhausted_provider_error,
+)
+from app.analysis.ai_provider_settlement import (
+    SettledProviderFailure,
+    settled_provider_failure,
 )
 from app.analysis.embedding.errors import EmbeddingError, EmbeddingFailureReason
 from app.audit.failure_projection import (
@@ -19,14 +23,15 @@ from app.audit.failure_projection import (
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingFailureClassification:
-    """再配信の判断を含まない、失敗後処理に必要な情報。"""
+    """失敗後処理と、再配信せずに受信完了にするかの判断に必要な情報。"""
 
     audit: FailureProjection
     provider_exhaustion: ExhaustedProviderError | None = None
+    settled: SettledProviderFailure | None = None
 
 
 def classify_embedding_failure(exc: Exception) -> EmbeddingFailureClassification:
-    """Serviceの失敗理由を既存の監査・監視分類へ対応付ける。"""
+    """Serviceの失敗理由を既存の監査・監視分類と受信完了の対象へ対応付ける。"""
     if isinstance(exc, EmbeddingError):
         if exc.reason is EmbeddingFailureReason.PROVIDER_ERROR:
             provider_error = exc.provider_error
@@ -41,6 +46,7 @@ def classify_embedding_failure(exc: Exception) -> EmbeddingFailureClassification
                     failure_action=None,
                 ),
                 provider_exhaustion=exhausted_provider_error(provider_error),
+                settled=settled_provider_failure(provider_error),
             )
         if exc.reason is EmbeddingFailureReason.ARTICLE_MISSING:
             return EmbeddingFailureClassification(

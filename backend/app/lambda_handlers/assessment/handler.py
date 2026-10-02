@@ -6,6 +6,7 @@ from time import perf_counter
 import structlog
 from structlog.typing import FilteringBoundLogger
 
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.service import (
     AssessmentCompletion,
@@ -163,6 +164,14 @@ async def _run_assessment(
                         "assessment_message_processing_failed",
                         operation="build_ready",
                         rejection_code=completion.reason.value,
+                        duration_ms=elapsed_ms_since(started_at_seconds),
+                        message_disposition="completed",
+                    )
+                elif isinstance(completion, SettledProviderFailure):
+                    message_logger.warning(
+                        "assessment_message_processing_failed",
+                        code=completion.provider_error.CODE,
+                        failure_reason=completion.provider_error.reason.value,
                         duration_ms=elapsed_ms_since(started_at_seconds),
                         message_disposition="completed",
                     )

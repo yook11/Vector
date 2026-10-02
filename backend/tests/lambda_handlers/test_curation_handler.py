@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
+from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.curation.domain.ready import (
     CurationReadyBuildRejected,
     CurationReadyBuildRejectionReason,
@@ -77,6 +79,7 @@ def test_batch_reports_only_failed_message_ids(wiring):
         {"messageId": "failed-first", "body": body},
         {"messageId": "already", "body": body},
         {"messageId": "rejected", "body": body},
+        {"messageId": "settled", "body": body},
         {"messageId": "saved-after", "body": body},
         {"messageId": "failed-last", "body": body},
     ]
@@ -85,19 +88,44 @@ def test_batch_reports_only_failed_message_ids(wiring):
         RuntimeError("first-failure"),
         CurationCompletion(CurationCompletionKind.ALREADY_CURATED),
         CurationReadyBuildRejected(CurationReadyBuildRejectionReason.ARTICLE_MISSING),
+        SettledProviderFailure(
+            AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
+        ),
         CurationCompletion(CurationCompletionKind.SIGNAL, 901),
         RuntimeError("last-failure"),
     ]
 
     response = module.handler({"Records": messages}, None)
 
-    assert wiring.consumer.consume.await_count == 6
+    assert wiring.consumer.consume.await_count == 7
     assert response == {
         "batchItemFailures": [
             {"itemIdentifier": "failed-first"},
             {"itemIdentifier": "failed-last"},
         ]
     }
+
+
+def test_settled_provider_failure_is_completed_with_its_classification(wiring):
+    """受信完了にしたAIの失敗は失敗一覧に含めず、どこで判明したかと理由を記録する。"""
+    wiring.consumer.consume.return_value = SettledProviderFailure(
+        AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
+    )
+
+    response = module.handler(
+        {"Records": [{"messageId": "settled", "body": valid_body()}]}, None
+    )
+
+    assert response == {"batchItemFailures": []}
+    wiring.log.info.assert_called_once_with(
+        "curation_message_completed",
+        message_id="settled",
+        event_id="00000000-0000-0000-0000-000000000001",
+        analyzable_article_id=101,
+        reason="provider_not_recoverable_for_input",
+        code="ai_provider_result_error",
+        failure_reason="input_blocked",
+    )
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):

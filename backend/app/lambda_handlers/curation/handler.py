@@ -4,6 +4,7 @@ import asyncio
 
 import structlog
 
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.curation.domain.ready import CurationReadyBuildRejected
 from app.collection.events import (
     AnalyzableArticleCreatedEvent,
@@ -100,21 +101,25 @@ async def _run_curation(
                     SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
             else:
-                rejection_fields = (
-                    {"rejection_code": completion.reason.value}
-                    if isinstance(completion, CurationReadyBuildRejected)
-                    else {}
-                )
+                outcome_fields: dict[str, object]
+                if isinstance(completion, CurationReadyBuildRejected):
+                    outcome_fields = {
+                        "reason": "ready_build_rejected",
+                        "rejection_code": completion.reason.value,
+                    }
+                elif isinstance(completion, SettledProviderFailure):
+                    outcome_fields = {
+                        "reason": "provider_not_recoverable_for_input",
+                        "code": completion.provider_error.CODE,
+                        "failure_reason": completion.provider_error.reason.value,
+                    }
+                else:
+                    outcome_fields = {"reason": completion.kind.value}
                 _log_completion(
                     message_id=record_input.message_id,
                     event_id=str(article_event.event_id),
                     analyzable_article_id=article_event.payload.analyzable_article_id,
-                    reason=(
-                        "ready_build_rejected"
-                        if isinstance(completion, CurationReadyBuildRejected)
-                        else completion.kind.value
-                    ),
-                    **rejection_fields,
+                    **outcome_fields,
                 )
         return failed_items
 

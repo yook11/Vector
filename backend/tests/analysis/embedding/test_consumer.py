@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +12,11 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from structlog.testing import capture_logs
 
+from app.ai_providers.errors import (
+    AIProviderResponseError,
+    AIProviderResponseReason,
+)
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.consumer import EmbeddingConsumer
@@ -23,12 +29,17 @@ from app.analysis.embedding.domain.ready import (
     ReadyForEmbedding,
 )
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
-from app.analysis.embedding.errors import EmbeddingResponseInvalidError
+from app.analysis.embedding.errors import (
+    EmbeddingResponseInvalidError,
+    to_embedding_error,
+)
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingCompletion
+from app.http.errors import HttpResponseError
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 
 _MODULE = "app.analysis.embedding.consumer"
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -164,7 +175,16 @@ async def test_ready_facts_are_loaded_once(consumer, target):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "original",
-    [EmbeddingResponseInvalidError(), RuntimeError("private-business-error")],
+    [
+        EmbeddingResponseInvalidError(),
+        RuntimeError("private-business-error"),
+        to_embedding_error(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            )
+        ),
+    ],
 )
 async def test_execution_failure_is_classified_and_reraised(
     consumer, target, original, article_id
@@ -188,6 +208,64 @@ async def test_execution_failure_is_classified_and_reraised(
     )
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failure_not_recoverable_for_input_is_settled_after_handling(
+    consumer, target
+):
+    """この入力では回復しないAIの失敗は、後処理のあと受信完了として返す。"""
+    provider_error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    original = to_embedding_error(provider_error)
+    consumer._service.execute.side_effect = original
+
+    result = await consumer.consume(target)
+
+    assert result == SettledProviderFailure(provider_error)
+    consumer._failure_handler.handle.assert_awaited_once()
+    assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
+    consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_settlement_survives_failure_handling_error(consumer, target):
+    """後処理が失敗しても、確定した受信完了を再配信に戻さない。"""
+    provider_error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_TOO_LONG,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    consumer._service.execute.side_effect = to_embedding_error(provider_error)
+    consumer._failure_handler.handle.side_effect = RuntimeError("secondary-secret")
+
+    result = await consumer.consume(target)
+
+    assert result == SettledProviderFailure(provider_error)
+
+
+@pytest.mark.asyncio
+async def test_classification_failure_leaves_failure_to_redelivery(consumer, target):
+    """受信完了と確定できなければ、元の例外を投げ直して再配信に任せる。"""
+    original = to_embedding_error(
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.INPUT_BLOCKED,
+            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+        )
+    )
+    consumer._service.execute.side_effect = original
+
+    with (
+        patch(
+            f"{_MODULE}.classify_embedding_failure",
+            side_effect=RuntimeError("secondary-secret"),
+        ),
+        pytest.raises(type(original)) as raised,
+    ):
+        await consumer.consume(target)
+
+    assert raised.value is original
 
 
 @pytest.mark.asyncio

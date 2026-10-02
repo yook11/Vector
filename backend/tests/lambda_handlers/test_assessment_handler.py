@@ -10,6 +10,8 @@ from unittest.mock import ANY, AsyncMock, Mock, call
 import pytest
 import structlog
 
+from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
     AssessmentReadyBuildRejectionReason,
@@ -121,6 +123,7 @@ def test_batch_reports_only_failed_message_ids(wiring):
         {"messageId": "failed-first", "body": body},
         {"messageId": "already", "body": body},
         {"messageId": "rejected", "body": body},
+        {"messageId": "settled", "body": body},
         {"messageId": "saved-after", "body": body},
         {"messageId": "failed-last", "body": body},
     ]
@@ -131,19 +134,44 @@ def test_batch_reports_only_failed_message_ids(wiring):
         AssessmentReadyBuildRejected(
             AssessmentReadyBuildRejectionReason.CURATION_MISSING
         ),
+        SettledProviderFailure(
+            AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
+        ),
         AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 901),
         RuntimeError("last-failure"),
     ]
 
     response = module.handler({"Records": messages}, None)
 
-    assert wiring.consumer.consume.await_count == 6
+    assert wiring.consumer.consume.await_count == 7
     assert response == {
         "batchItemFailures": [
             {"itemIdentifier": "failed-first"},
             {"itemIdentifier": "failed-last"},
         ]
     }
+
+
+def test_settled_provider_failure_is_completed_with_its_classification(wiring, capsys):
+    """受信完了にしたAIの失敗は失敗一覧に含めず、失敗として分類を記録する。"""
+    wiring.consumer.consume.return_value = SettledProviderFailure(
+        AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
+    )
+
+    response = module.handler(
+        {"Records": [{"messageId": "settled", "body": valid_body()}]}, None
+    )
+
+    assert response == {"batchItemFailures": []}
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    failed = next(
+        record
+        for record in records
+        if record["event"] == "assessment_message_processing_failed"
+    )
+    assert failed["code"] == "ai_provider_result_error"
+    assert failed["failure_reason"] == "input_blocked"
+    assert failed["message_disposition"] == "completed"
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):

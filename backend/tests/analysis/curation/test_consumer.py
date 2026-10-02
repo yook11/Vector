@@ -12,6 +12,11 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from structlog.testing import capture_logs
 
+from app.ai_providers.errors import (
+    AIProviderResponseError,
+    AIProviderResponseReason,
+)
+from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.consumer import CurationConsumer
 from app.analysis.curation.consumer_failure_classification import (
@@ -22,15 +27,20 @@ from app.analysis.curation.domain.ready import (
     CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
-from app.analysis.curation.errors import CurationResponseInvalidError
+from app.analysis.curation.errors import (
+    CurationResponseInvalidError,
+    to_curation_error,
+)
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationCompletion, CurationCompletionKind
 from app.collection.events import AnalyzableArticleCreated
+from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
 
 _MODULE = "app.analysis.curation.consumer"
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -176,7 +186,17 @@ async def test_ready_facts_are_loaded_once(consumer, target):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "original", [CurationResponseInvalidError(), RuntimeError("private-business-error")]
+    "original",
+    [
+        CurationResponseInvalidError(),
+        RuntimeError("private-business-error"),
+        to_curation_error(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            )
+        ),
+    ],
 )
 async def test_execution_failure_is_classified_and_reraised(consumer, target, original):
     """実行例外とDB由来記事IDを後処理へ渡し、同じ例外と原因を再送出する。"""
@@ -198,6 +218,64 @@ async def test_execution_failure_is_classified_and_reraised(consumer, target, or
     )
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failure_not_recoverable_for_input_is_settled_after_handling(
+    consumer, target
+):
+    """この入力では回復しないAIの失敗は、後処理のあと受信完了として返す。"""
+    provider_error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    original = to_curation_error(provider_error)
+    consumer._service.execute.side_effect = original
+
+    result = await consumer.consume(target)
+
+    assert result == SettledProviderFailure(provider_error)
+    consumer._failure_handler.handle.assert_awaited_once()
+    assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
+    consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_settlement_survives_failure_handling_error(consumer, target):
+    """後処理が失敗しても、確定した受信完了を再配信に戻さない。"""
+    provider_error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_TOO_LONG,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    consumer._service.execute.side_effect = to_curation_error(provider_error)
+    consumer._failure_handler.handle.side_effect = RuntimeError("secondary-secret")
+
+    result = await consumer.consume(target)
+
+    assert result == SettledProviderFailure(provider_error)
+
+
+@pytest.mark.asyncio
+async def test_classification_failure_leaves_failure_to_redelivery(consumer, target):
+    """受信完了と確定できなければ、元の例外を投げ直して再配信に任せる。"""
+    original = to_curation_error(
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.INPUT_BLOCKED,
+            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+        )
+    )
+    consumer._service.execute.side_effect = original
+
+    with (
+        patch(
+            f"{_MODULE}.classify_curation_failure",
+            side_effect=RuntimeError("secondary-secret"),
+        ),
+        pytest.raises(type(original)) as raised,
+    ):
+        await consumer.consume(target)
+
+    assert raised.value is original
 
 
 @pytest.mark.asyncio
