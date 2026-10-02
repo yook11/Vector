@@ -8,12 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.typing import FilteringBoundLogger
 
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
-from app.analysis.assessment.consumer_failure_classification import (
-    AssessmentFailureClassification,
-)
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.audit.error_fields import exception_fqn
+from app.audit.failure_projection import FailureProjection
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.assessment import AssessmentAuditRepository
 
@@ -27,7 +25,7 @@ class AssessmentConsumerFailureHandler:
     async def handle(
         self,
         *,
-        failure: AssessmentFailureClassification,
+        projection: FailureProjection,
         exc: Exception,
         curation_id: int,
         analyzable_article_id: int | None,
@@ -48,7 +46,7 @@ class AssessmentConsumerFailureHandler:
                     curation_id=curation_id,
                     article_id=analyzable_article_id,
                     exc=exc,
-                    projection=failure.audit,
+                    projection=projection,
                 )
                 await session.commit()
         except Exception as audit_exc:
@@ -66,15 +64,12 @@ class AssessmentConsumerFailureHandler:
                     "audit_dropped_metric", curation_id, exc, metric_exc, logger=logger
                 )
 
-        if failure.provider_exhaustion is not None:
-            try:
-                record_ai_provider_exhausted(
-                    failure.provider_exhaustion, provider=provider
-                )
-            except Exception as notification_exc:
-                self._record_secondary_failure(
-                    "notification", curation_id, exc, notification_exc, logger=logger
-                )
+        try:
+            record_ai_provider_exhausted(exc, provider=provider)
+        except Exception as notification_exc:
+            self._record_secondary_failure(
+                "notification", curation_id, exc, notification_exc, logger=logger
+            )
 
     async def handle_ready_build_rejected(
         self,

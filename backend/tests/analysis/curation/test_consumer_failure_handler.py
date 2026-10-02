@@ -25,7 +25,7 @@ from app.analysis.curation.domain.ready import (
     CurationReadyBuildRejected,
     CurationReadyBuildRejectionReason,
 )
-from app.analysis.curation.errors import to_curation_error
+from app.analysis.curation.errors import CurationResponseInvalidError
 from app.audit.stages.curation import CurationAuditRepository
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
@@ -66,14 +66,12 @@ async def test_successful_handling_records_failed_audit_and_outcome(
     db_session, session_factory, article_id, capsys
 ) -> None:
     """後処理が成功すれば失敗監査と処理失敗件数を残し、枯渇なら通知する。"""
-    error = to_curation_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     await CurationConsumerFailureHandler(session_factory).handle(
-        failure=classify_curation_failure(error),
+        projection=classify_curation_failure(error),
         exc=error,
         target_article_id=123,
         analyzable_article_id=article_id,
@@ -92,21 +90,45 @@ async def test_successful_handling_records_failed_audit_and_outcome(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        ),
+        CurationResponseInvalidError(),
+    ],
+)
+async def test_failure_other_than_exhaustion_is_audited_without_notification(
+    db_session, session_factory, article_id, capsys, error
+) -> None:
+    """枯渇以外の失敗は監査だけを残し、枯渇通知を出さない。"""
+    await CurationConsumerFailureHandler(session_factory).handle(
+        projection=classify_curation_failure(error),
+        exc=error,
+        target_article_id=123,
+        analyzable_article_id=article_id,
+        provider="gemini",
+    )
+    assert len(await _events(db_session)) == 1
+    assert metric_records(capsys.readouterr().out, "ai_provider_exhausted") == []
+
+
+@pytest.mark.asyncio
 async def test_audit_failure_does_not_prevent_notification(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     capsys,
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
-    error = to_curation_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     with capture_logs() as logs:
         await CurationConsumerFailureHandler(session_factory).handle(
-            failure=classify_curation_failure(error),
+            projection=classify_curation_failure(error),
             exc=error,
             target_article_id=123,
             analyzable_article_id=999_999,
@@ -124,11 +146,9 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
     db_session, session_factory, article_id
 ) -> None:
     """通知と計測の二次障害は本文をログに漏らさず、監査と元の失敗を維持する。"""
-    error = to_curation_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
-            http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+        http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
     )
     with (
         capture_logs() as logs,
@@ -142,14 +162,14 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
         ) as notify,
     ):
         await CurationConsumerFailureHandler(session_factory).handle(
-            failure=classify_curation_failure(error),
+            projection=classify_curation_failure(error),
             exc=error,
             target_article_id=123,
             analyzable_article_id=article_id,
             provider="gemini",
         )
     assert len(await _events(db_session)) == 1
-    notify.assert_called_once_with(error.provider_error, provider="gemini")
+    notify.assert_called_once_with(error, provider="gemini")
     assert {entry["operation"] for entry in logs} == {
         "processing_metric",
         "notification",
@@ -163,11 +183,9 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
     db_session, session_factory, capsys
 ) -> None:
     """監査・drop計測・ログまで失敗しても元の例外を置き換えない。"""
-    error = to_curation_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     with (
         patch(
@@ -180,7 +198,7 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
             raise error
         except Exception:
             await CurationConsumerFailureHandler(session_factory).handle(
-                failure=classify_curation_failure(error),
+                projection=classify_curation_failure(error),
                 exc=error,
                 target_article_id=123,
                 analyzable_article_id=999_999,
@@ -205,15 +223,13 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
     factory = async_sessionmaker(
         session_factory.kw["bind"], class_=CommitFails, expire_on_commit=False
     )
-    error = to_curation_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
-            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-        )
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     with capture_logs() as logs:
         await CurationConsumerFailureHandler(factory).handle(
-            failure=classify_curation_failure(error),
+            projection=classify_curation_failure(error),
             exc=error,
             target_article_id=123,
             analyzable_article_id=article_id,
@@ -276,18 +292,17 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     db_session, session_factory, article_id
 ) -> None:
     """実DBの監査行に原因を保持し、廃止した回復分類はnullで保存する。"""
-    provider_error = AIProviderTransportError(
+    error = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
                 HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             )
         )
     )
-    error = to_curation_error(provider_error)
-    error.__cause__ = provider_error
+    error.__cause__ = TimeoutError()
 
     await CurationConsumerFailureHandler(session_factory).handle(
-        failure=classify_curation_failure(error),
+        projection=classify_curation_failure(error),
         exc=error,
         target_article_id=123,
         analyzable_article_id=article_id,
@@ -299,8 +314,8 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     assert event.retryability is None
     assert event.payload["failure_kind"] is None
     assert event.payload["failure_reason"] == HttpTransportFailureReason.TIMEOUT.value
-    assert event.error_class == "app.analysis.curation.errors.CurationError"
+    assert event.error_class == "app.ai_providers.errors.AIProviderTransportError"
     assert event.payload["error_chain"] == [
-        "app.analysis.curation.errors.CurationError",
         "app.ai_providers.errors.AIProviderTransportError",
+        "builtins.TimeoutError",
     ]

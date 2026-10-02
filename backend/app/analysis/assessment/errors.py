@@ -1,20 +1,15 @@
-"""Assessmentの失敗理由とプロバイダー・応答不正の詳細。"""
+"""Assessment工程で確定した失敗理由と応答不正の詳細。"""
 
 from __future__ import annotations
 
 from enum import StrEnum
 
-from app.ai_providers.errors import (
-    CLASSIFIED_AI_PROVIDER_ERRORS,
-    AIProviderError,
-)
 from app.shared.errors import ApplicationError
 
 
 class AssessmentFailureReason(StrEnum):
     """呼び出し側の再試行方針とは独立した失敗理由。"""
 
-    PROVIDER_ERROR = "provider_error"
     RESPONSE_INVALID = "response_invalid"
     CURATION_MISSING = "curation_missing"
 
@@ -27,30 +22,20 @@ class AssessmentError(ApplicationError):
         *,
         reason: AssessmentFailureReason,
         message: str | None = None,
-        provider_error: AIProviderError | None = None,
         defect: StrEnum | None = None,
     ) -> None:
         if not isinstance(reason, AssessmentFailureReason):
             raise TypeError("reason must be an AssessmentFailureReason")
-        if reason is AssessmentFailureReason.PROVIDER_ERROR:
-            if not isinstance(provider_error, CLASSIFIED_AI_PROVIDER_ERRORS):
-                raise TypeError("provider_error must be a classified AI provider error")
-        elif provider_error is not None:
-            raise TypeError("provider_error requires PROVIDER_ERROR reason")
         if reason is AssessmentFailureReason.RESPONSE_INVALID:
             if not isinstance(defect, StrEnum):
                 raise TypeError("defect must be a StrEnum member")
         elif defect is not None:
             raise TypeError("defect requires RESPONSE_INVALID reason")
         self.reason = reason
-        self.provider_error = provider_error
         self.defect = defect
         if message is not None and not isinstance(message, str):
             raise TypeError("message must be a string or None")
         default_message = {
-            AssessmentFailureReason.PROVIDER_ERROR: (
-                "AIプロバイダーの処理失敗により記事を判定できませんでした"
-            ),
             AssessmentFailureReason.RESPONSE_INVALID: (
                 "AI応答が記事判定の契約を満たしていません"
             ),
@@ -66,8 +51,6 @@ class AssessmentError(ApplicationError):
     @property
     def code(self) -> str:
         """観測コードには原因の種別ラベルだけを用いる。"""
-        if self.provider_error is not None:
-            return self.provider_error.CODE
         if self.defect is not None:
             return self.defect.value
         return "assessment_curation_missing"
@@ -89,12 +72,3 @@ class AssessmentCurationMissingError(AssessmentError):
 
     def __init__(self) -> None:
         super().__init__(reason=AssessmentFailureReason.CURATION_MISSING)
-
-
-def to_assessment_error(exc: AIProviderError) -> AssessmentError:
-    """プロバイダー例外を保持し、Serviceの失敗理由を付与する。"""
-    if not isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
-        raise TypeError(f"unmapped provider error: {type(exc).__qualname__}")
-    return AssessmentError(
-        reason=AssessmentFailureReason.PROVIDER_ERROR, provider_error=exc
-    )

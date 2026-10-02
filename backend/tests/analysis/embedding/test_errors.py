@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 
-from app.ai_providers.errors import (
-    AIProviderResponseError,
-    AIProviderResponseReason,
-)
 from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
     EmbeddingError,
     EmbeddingFailureReason,
     EmbeddingResponseInvalidError,
-    to_embedding_error,
 )
-from app.http.errors import HttpResponseError
-
-_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class TestEmbeddingResponseInvalidError:
@@ -36,9 +26,8 @@ class TestEmbeddingResponseInvalidError:
         exc = EmbeddingResponseInvalidError()
         assert exc.reason is EmbeddingFailureReason.RESPONSE_INVALID
 
-    def test_has_no_provider_error_or_retry_policy(self) -> None:
+    def test_has_no_retry_policy(self) -> None:
         exc = EmbeddingResponseInvalidError()
-        assert exc.provider_error is None
         assert not hasattr(exc, "RETRYABILITY")
 
     def test_positional_message_rejected(self) -> None:
@@ -51,20 +40,6 @@ def test_failure_reason_rejects_untyped_values(reason):
     """自由文字列を失敗理由として受け付けない。"""
     with pytest.raises(TypeError):
         EmbeddingError(reason=reason)
-
-
-def test_provider_reason_requires_classified_provider_error():
-    """プロバイダー障害には詳細を持つ元の例外を必須とする。"""
-    with pytest.raises(TypeError):
-        EmbeddingError(reason=EmbeddingFailureReason.PROVIDER_ERROR)
-    with pytest.raises(TypeError):
-        EmbeddingError(
-            reason=EmbeddingFailureReason.ARTICLE_MISSING,
-            provider_error=AIProviderResponseError(
-                reason=AIProviderResponseReason.RATE_LIMITED,
-                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-            ),
-        )
 
 
 @pytest.mark.parametrize(
@@ -89,13 +64,6 @@ def test_embedding_error_directly_inherits_exception():
 @pytest.mark.parametrize(
     "error",
     [
-        to_embedding_error(
-            AIProviderResponseError(
-                "provider diagnostic",
-                reason=AIProviderResponseReason.RATE_LIMITED,
-                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-            )
-        ),
         EmbeddingResponseInvalidError(),
         EmbeddingAnalyzedArticleMissingError(),
     ],

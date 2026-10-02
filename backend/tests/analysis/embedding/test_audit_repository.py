@@ -28,11 +28,7 @@ from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildRejected,
     EmbeddingReadyBuildRejectionReason,
 )
-from app.analysis.embedding.errors import (
-    EmbeddingError,
-    EmbeddingResponseInvalidError,
-    to_embedding_error,
-)
+from app.analysis.embedding.errors import EmbeddingResponseInvalidError
 from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.http.errors import HttpResponseError, HttpTransportError
@@ -288,12 +284,10 @@ async def test_append_network_failure_without_recovery_classification(
     """ネットワーク障害の分類を監査へ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = to_embedding_error(
-        AIProviderTransportError(
-            http_error=HttpTransportError(
-                failure=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-                )
+    exc = AIProviderTransportError(
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             )
         )
     )
@@ -303,7 +297,7 @@ async def test_append_network_failure_without_recovery_classification(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
-            projection=classify_embedding_failure(exc).audit,
+            projection=classify_embedding_failure(exc),
         )
         await session.commit()
 
@@ -324,11 +318,9 @@ async def test_append_configuration_failure_without_recovery_classification(
     """設定不備の分類を監査へ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = to_embedding_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.AUTH,
-            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
-        )
+    exc = AIProviderResponseError(
+        reason=AIProviderResponseReason.AUTH,
+        http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
     )
 
     async with session_factory() as session:
@@ -336,7 +328,7 @@ async def test_append_configuration_failure_without_recovery_classification(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
-            projection=classify_embedding_failure(exc).audit,
+            projection=classify_embedding_failure(exc),
         )
         await session.commit()
 
@@ -356,11 +348,9 @@ async def test_append_input_rejection_preserves_reason_without_recovery_classifi
     """対象拒否の分類と理由を監査へ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = to_embedding_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.INPUT_BLOCKED,
-            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
-        )
+    exc = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
 
     async with session_factory() as session:
@@ -368,7 +358,7 @@ async def test_append_input_rejection_preserves_reason_without_recovery_classifi
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
-            projection=classify_embedding_failure(exc).audit,
+            projection=classify_embedding_failure(exc),
         )
         await session.commit()
 
@@ -396,7 +386,7 @@ async def test_append_failure_layer_2b_response_invalid(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
-            projection=classify_embedding_failure(exc).audit,
+            projection=classify_embedding_failure(exc),
         )
         await session.commit()
 
@@ -424,7 +414,7 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
-            projection=classify_embedding_failure(exc).audit,
+            projection=classify_embedding_failure(exc),
         )
         await session.commit()
 
@@ -491,7 +481,7 @@ async def test_append_failure_projects_db_exceptions(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
-            projection=classify_embedding_failure(exc).audit,
+            projection=classify_embedding_failure(exc),
         )
         await session.commit()
 
@@ -508,36 +498,37 @@ async def test_append_failure_walks_error_chain_via_cause(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """監査にService失敗と元のプロバイダー例外を残す。"""
+    """監査にAIの失敗とその原因を残す。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     try:
         try:
+            raise TimeoutError("upstream timeout")
+        except TimeoutError as inner:
             raise AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
                         HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
                     )
                 )
-            )
-        except AIProviderTransportError as inner:
-            raise to_embedding_error(inner) from inner
-    except EmbeddingError as exc:
+            ) from inner
+    except AIProviderTransportError as exc:
         async with session_factory() as session:
             await EmbeddingAuditRepository(session).append_classified_failure(
                 analyzed_article_id=1,
                 article_id=article.id,
                 exc=exc,
-                projection=classify_embedding_failure(exc).audit,
+                projection=classify_embedding_failure(exc),
             )
             await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     chain = ev.payload["error_chain"]
     assert chain is not None
-    assert len(chain) == 2
-    assert chain[0].endswith(".EmbeddingError")
-    assert chain[1].endswith(".AIProviderTransportError")
+    assert chain == [
+        "app.ai_providers.errors.AIProviderTransportError",
+        "builtins.TimeoutError",
+    ]
 
 
 @pytest.mark.asyncio
@@ -559,7 +550,7 @@ async def test_append_failure_redacts_secrets_in_error_message(
             analyzed_article_id=1,
             article_id=article.id,
             exc=exc,
-            projection=classify_embedding_failure(exc).audit,
+            projection=classify_embedding_failure(exc),
         )
         await session.commit()
 

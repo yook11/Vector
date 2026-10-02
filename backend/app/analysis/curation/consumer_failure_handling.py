@@ -8,12 +8,10 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
-from app.analysis.curation.consumer_failure_classification import (
-    CurationFailureClassification,
-)
 from app.analysis.curation.domain.ready import CurationReadyBuildRejected
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.audit.error_fields import exception_fqn
+from app.audit.failure_projection import FailureProjection
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.curation import CurationAuditRepository
 
@@ -29,7 +27,7 @@ class CurationConsumerFailureHandler:
     async def handle(
         self,
         *,
-        failure: CurationFailureClassification,
+        projection: FailureProjection,
         exc: Exception,
         target_article_id: int,
         analyzable_article_id: int | None,
@@ -49,7 +47,7 @@ class CurationConsumerFailureHandler:
                     target_article_id=target_article_id,
                     article_id=analyzable_article_id,
                     exc=exc,
-                    projection=failure.audit,
+                    projection=projection,
                 )
                 await session.commit()
         except Exception as audit_exc:
@@ -71,15 +69,12 @@ class CurationConsumerFailureHandler:
                     "audit_dropped_metric", target_article_id, exc, metric_exc
                 )
 
-        if failure.provider_exhaustion is not None:
-            try:
-                record_ai_provider_exhausted(
-                    failure.provider_exhaustion, provider=provider
-                )
-            except Exception as notification_exc:
-                self._record_secondary_failure(
-                    "notification", target_article_id, exc, notification_exc
-                )
+        try:
+            record_ai_provider_exhausted(exc, provider=provider)
+        except Exception as notification_exc:
+            self._record_secondary_failure(
+                "notification", target_article_id, exc, notification_exc
+            )
 
     async def handle_ready_build_rejected(
         self, *, target_article_id: int, rejected: CurationReadyBuildRejected

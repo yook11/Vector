@@ -19,9 +19,8 @@ class BaseAssessor(abc.ABC):
     判定結果は ``AssessmentCall`` envelope (``result`` + 監査用 raw 情報) で返す。
 
     SDK 例外は ``_translate_error`` で ``AIProvider*Error`` (Stage 中立の
-    Layer 2-A 識別 marker) に翻訳する。Stage 4 marker (``AssessmentError`` 系)
-    への詰め替えは Service 層 ACL の責務であり、本 class は ``AIProvider*Error``
-    段階で停止する (二重翻訳防止のため ``_call_once`` で素通し guard 済)。
+    Layer 2-A 識別 marker) に翻訳する。Service はこれを ``AssessmentError`` 系へ
+    包まずに伝播する (二重翻訳防止のため ``_call_once`` で素通し guard 済)。
 
     サブクラスは以下 3 つのフックを実装する:
     - ``assess``: プロンプト構築とレスポンス解析（公開 API）
@@ -106,8 +105,7 @@ class BaseAssessor(abc.ABC):
         マップ可能なら対応する ``AIProvider*Error`` 派生 instance を返す。
         マップできなければ **入力 ``exc`` をそのまま返す** (caller である
         ``_call_once`` が ``if translated is exc: raise`` の bare re-raise guard
-        で素通しする規約)。Stage 4 marker への詰め替えは Service 層 ACL の責務
-        であり、本メソッドは ``AIProvider*Error`` 段階までで停止する。
+        で素通しする規約)。
         """
         ...
 

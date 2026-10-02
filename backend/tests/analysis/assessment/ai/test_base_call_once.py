@@ -26,11 +26,7 @@ from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.result import InScope, OutOfScope
-from app.analysis.assessment.errors import (
-    AssessmentError,
-    AssessmentResponseInvalidError,
-    to_assessment_error,
-)
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -157,49 +153,6 @@ class TestCallOncePassthrough:
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await cls._call_once("prompt", logger=make_assessment_logger())
 
-        assert exc_info.value is original
-
-    @pytest.mark.asyncio
-    async def test_assessment_transport_error_passes_through(
-        self, make_assessment_logger
-    ) -> None:
-        original = to_assessment_error(
-            AIProviderTransportError(
-                http_error=HttpTransportError(
-                    failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-                    )
-                )
-            )
-        )
-        cls = _StubAssessor()
-        cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
-        cls._translate_error = MagicMock(  # type: ignore[method-assign]
-            side_effect=AssertionError("must not be called")
-        )
-
-        with pytest.raises(AssessmentError) as exc_info:
-            await cls._call_once("prompt", logger=make_assessment_logger())
-        assert exc_info.value is original
-
-    @pytest.mark.asyncio
-    async def test_assessment_configuration_error_passes_through(
-        self, make_assessment_logger
-    ) -> None:
-        original = to_assessment_error(
-            AIProviderResponseError(
-                reason=AIProviderResponseReason.AUTH,
-                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
-            )
-        )
-        cls = _StubAssessor()
-        cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
-        cls._translate_error = MagicMock(  # type: ignore[method-assign]
-            side_effect=AssertionError("must not be called")
-        )
-
-        with pytest.raises(AssessmentError) as exc_info:
-            await cls._call_once("prompt", logger=make_assessment_logger())
         assert exc_info.value is original
 
 

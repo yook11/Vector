@@ -1,4 +1,4 @@
-"""プロバイダー例外のServiceでの原因保持を検証する。"""
+"""ServiceがAI呼び出しの例外を変換せずに伝える契約を検証する。"""
 
 from __future__ import annotations
 
@@ -17,12 +17,7 @@ from app.ai_providers.errors import (
     AIProviderTransportError,
 )
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
-from app.analysis.assessment.errors import (
-    AssessmentError,
-    AssessmentFailureReason,
-    AssessmentResponseInvalidError,
-    to_assessment_error,
-)
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.logging import create_article_analysis_logger
 from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
 from app.http.errors import HttpResponseError, HttpTransportError
@@ -75,25 +70,11 @@ def assessment_logger():
 
 
 @pytest.mark.parametrize("make_error", _PROVIDER_ERROR_FACTORIES)
-def test_service_contract_retains_provider_details_without_retry_classification(
-    make_error,
-):
-    original = make_error()
-    result = to_assessment_error(original)
-    assert type(result) is AssessmentError
-    assert result.reason is AssessmentFailureReason.PROVIDER_ERROR
-    assert result.provider_error is original
-    assert result.provider_error.reason is original.reason
-    assert result.code == original.CODE
-    assert result.defect is None
-    assert not hasattr(result, "RETRYABILITY")
-
-
-@pytest.mark.parametrize("make_error", _PROVIDER_ERROR_FACTORIES)
 @pytest.mark.asyncio
-async def test_service_wraps_provider_error_before_opening_db(
+async def test_service_propagates_provider_error_before_opening_db(
     make_error, assessment_logger
 ):
+    """AIの失敗は工程の例外に包まず、同じ例外のまま伝える。"""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -109,14 +90,12 @@ async def test_service_wraps_provider_error_before_opening_db(
     ready = ReadyForAssessment(
         curation_id=1, translated_title="title", summary="summary"
     )
-    with pytest.raises(AssessmentError) as raised:
+    with pytest.raises(type(original)) as raised:
         await service.execute(
             ready, assessor, analyzable_article_id=1, logger=assessment_logger
         )
-    assert raised.value.reason is AssessmentFailureReason.PROVIDER_ERROR
-    assert raised.value.provider_error is original
-    assert raised.value.__cause__ is original
-    assert raised.value.code == original.CODE
+    assert raised.value is original
+    assert original.__cause__ is None
 
 
 @pytest.mark.parametrize(

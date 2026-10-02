@@ -11,13 +11,9 @@ from enum import StrEnum
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.embedding.errors import (
-    EmbeddingAnalyzedArticleMissingError,
-    to_embedding_error,
-)
+from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.embedding.repository import EmbeddingRepository, EmbeddingSaveState
 from app.audit.stages.embedding import EmbeddingAuditRepository
@@ -57,15 +53,11 @@ class EmbeddingService:
             保存完了はSAVED、生成済みの確認による終了はALREADY_EMBEDDED。
 
         Raises:
-            EmbeddingError: 記事不存在・応答不正・プロバイダー障害。
+            AIProviderError: 分類済みのAIの失敗。工程の例外に包まずに伝播する。
+            EmbeddingError: 記事不存在・応答不正。
             DB障害と想定外例外も、そのまま呼び出し元へ伝播する。
         """
-        try:
-            vector = await embedder.embed_document(ready)
-        except AIProviderError as exc:
-            # Stage marker に詰め替え、audit で元 provider error まで辿れるよう
-            # ``__cause__`` を保持する。
-            raise to_embedding_error(exc) from exc
+        vector = await embedder.embed_document(ready)
 
         async with self._session_factory() as session:
             repo = EmbeddingRepository(session)

@@ -321,9 +321,3 @@ class TestParseAssessmentErrorContract:
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment({})
         assert exc_info.value.code == AssessmentResponseDefect.CATEGORY_KEY_MISSING
-
-    def test_invalid_error_provider_error_is_none(self) -> None:
-        # parse 由来 (Stage 4 工程内) なので provider_error は常に None
-        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            parse_assessment({})
-        assert exc_info.value.provider_error is None
