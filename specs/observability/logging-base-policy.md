@@ -75,11 +75,11 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 | --- | --- |
 | AWS | access key ID、secret access key、session token、SigV4 署名、RDS IAM auth token、ECR login password |
 | DB / Redis | パスワード、DSN の userinfo |
-| 外部 API | Gemini / DeepSeek / Tavily / Logfire の API key、GitHub token |
+| 外部 API | Gemini / DeepSeek / Logfire の API key、GitHub token |
 | HTTP | `Authorization` / `Proxy-Authorization`、JWT、認証 cookie |
 
 - deny キーの正本は `base.py` の `CREDENTIAL_KEYS`。`password` / `passwd` / `pgpassword`、`secret` / `private_key` / `client_secret`、`token` / `access_token` / `refresh_token` / `id_token`、`api_key` / `x_api_key` / `x_goog_api_key`、`authorization` / `proxy_authorization`、`cookie` / `set_cookie`、`access_key_id` / `secret_access_key` / `session_token` と各 `aws_` 接頭辞版、`x_amz_signature` / `x_amz_credential` / `x_amz_security_token` を含む。正規化後の完全一致で、値の長さや見た目によらず落とす。
-- アプリ固有の設定名も明示 deny に含める: `gemini_api_key` / `openai_api_key` / `deepseek_api_key` / `tavily_api_key` / `logfire_token` / `bff_jwt_signing_secret` / `revalidate_bearer_secret` / `postgres_auth_password` / `postgres_app_password` / `postgres_collect_password`。`app/config.py` と `app/db/settings.py` の認証情報定義を確認済み。
+- アプリ固有の設定名も明示 deny に含める: `gemini_api_key` / `openai_api_key` / `deepseek_api_key` / `logfire_token` / `bff_jwt_signing_secret` / `revalidate_bearer_secret` / `postgres_auth_password` / `postgres_app_password` / `postgres_collect_password`。`app/config.py` と `app/db/settings.py` の認証情報定義を確認済み。
 - 値の準備: sanitizeは内容からprovider key / JWT / PEM秘密鍵 / AWS認証形式 / DSN userinfoを検出して置換し、maskは指定キーの値を内容によらず置換する。キー付き値は長さを問わず、引用符内の空白・改行・エスケープを値全体として扱う。閉じていない引用符は末尾まで伏せる。引用符なしの一般値は空白等までの単一トークン、認証ヘッダー・cookie は行末までを対象とする。任意の文字列や別名で渡された認証情報の完全検出は保証しない。パターン集は deployment-log-policy の S1/S2 表に対応し、`log_policy` がログ出力用の正本として所有する。監査 DB `error_message` 用の既存 `redact_secrets` (`app/shared/security/`) はこの step では変更せず、監査経路を本ポリシーへ寄せるかは組み込み step で判断する。
 - **含めないもの**: ARN、account ID、endpoint、host、SSM parameter path。これらは識別情報であり、基盤接続ポリシーが allow を判断する。DSN は「userinfo を伏せ host を残す」変換になるが、基底が保証するのは userinfo 部分だけである。
 

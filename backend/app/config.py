@@ -90,7 +90,6 @@ class Settings(DatabaseSettings, HttpSettings):
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
     deepseek_api_key: SecretStr = SecretStr("")
-    tavily_api_key: SecretStr = SecretStr("")
 
     # 外部検索の入口。AgentCore Gateway の MCP endpoint で、gateway ID は apply 時に
     # 確定するため URL からしか知れない。値を持つのは agent 段 (実呼び出し) と

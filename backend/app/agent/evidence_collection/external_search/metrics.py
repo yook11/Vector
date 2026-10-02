@@ -10,7 +10,6 @@ ExternalHitDropReason = Literal[
     "result_not_mapping",
     "title_missing",
     "url_invalid",
-    "content_too_long",
 ]
 
 _external_hit_dropped_counter = logfire.metric_counter(
