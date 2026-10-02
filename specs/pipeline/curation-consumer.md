@@ -92,9 +92,19 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 - 本ルールは対象の状態・内容からReadyを作れないと確定した場合に適用する。DB取得障害や想定外例外を一括してReady拒否へ変換しない。
 - Assessment／Embeddingの対象欠損はスライス1で理由付きの受信完了へ変更済み。
 
+## 全工程共通の、この入力では回復しないprovider失敗の受信完了
+
+AIプロバイダーの失敗のうち、同じ入力では何度送っても結果が変わらないものは、再配信しても次の処理へ進めない。Curation・Assessment・Embeddingのすべてで、失敗を監査へ記録したうえで受信完了とし、SQSのメッセージを削除する。記事データは削除しない。
+
+- 受信完了にするかは、分析の3工程で共有する`settled_provider_failure`が、AIの例外のクラスとreasonから決める。対象は`input_too_long`（失敗の応答）と`input_blocked`（失敗の応答・生成結果）だけで、それ以外は再配信とする。
+- 入力が原因と断定できない失敗（不正なリクエスト、出力の拒否・打ち切りなど）は、誤って捨てないよう再配信に任せる。人の対応が要る失敗（認証・権限・残高など）は、直したあとにDLQから再投入できるよう再配信に残す。
+- Consumerは失敗の後処理（監査・計測・枯渇通知）のあとに`SettledProviderFailure`を返す。後処理の通常の障害で受信完了を再配信に戻さない。分類そのものが失敗した場合は、元の例外を伝播して再配信する。
+- 監査・計測・枯渇通知は従来の失敗と同じに記録する。Lambda入口はこの結果のmessageIdを`batchItemFailures`へ含めず、完了ログに`code`と`failure_reason`を残す。ConsumerからSQSの削除APIを呼ばない。
+- backfillは未完了の記事を再投入するため、受信完了にした記事も作成から7日間はbackfill経由で再試行される。backfillの対象から外すことは扱わない。
+
 ## Curationの処理完了と受信完了
 
-Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類とする。Consumerはこれらに加えて前節の理由付きReady拒否を返せる契約とする。AIが返すSignal／Noise、DB上の処理完了、Ready拒否による受信完了は区別する。
+Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類とする。Consumerはこれらに加えて「全工程共通のReady拒否と受信完了」の理由付きReady拒否を返せる契約とする。AIが返すSignal／Noise、DB上の処理完了、Ready拒否による受信完了は区別する。
 
 | 結末 | 根拠 | AI・後続イベント |
 |---|---|---|
@@ -108,13 +118,13 @@ Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類�
 
 ## 失敗の扱い
 
-- AI入力・応答、provider、DB、期限切れ、想定外例外を失敗として伝播する。確定したReady拒否は前節の受信完了として扱う。既存のRecoverable／TerminalやTaskiqの再試行回数を新Consumerの制御に使わない。
+- AI入力・応答、provider、DB、期限切れ、想定外例外を失敗として伝播する。確定したReady拒否と、この入力では回復しないprovider失敗は、全工程共通の受信完了として扱う。既存のRecoverable／TerminalやTaskiqの再試行回数を新Consumerの制御に使わない。
 - AIによるコンテンツ拒否も例外として扱い、記事DELETEを実行しない。新Consumerは旧`CurationFailureHandler`へ委譲しない。
 - 失敗理由・元の原因を保持し、監査の分類と再配信の制御を分ける。監査上のretryabilityでSQSの成功応答へ変換しない。
 - 成功保存・成功監査・Outbox・commitの失敗は正常終了に変換しない。同じトランザクションの未確定結果はロールバックする。
 - 失敗監査を別のトランザクションで試み、必要なprovider枯渇通知などの後処理は既存Consumerの責務分担に揃える。旧メトリクスの区分・値の互換維持は要求しない。
 - 監査・ログ・終了処理の通常の二次障害で元例外を上書きしない。本文・秘密情報・SDK例外の自由文を配送診断へ追加しない。キャンセルやプロセス終了を正常終了にしない。
-- Lambda入口は個別イベント入力不正・Consumer実行失敗のmessageIdだけを`batchItemFailures`へ返す。処理済み・Ready拒否のmessageIdは含めない。初期化やバッチ構造の不正はバッチ全体の失敗として伝播する。
+- Lambda入口は個別イベント入力不正・Consumer実行失敗のmessageIdだけを`batchItemFailures`へ返す。処理済み・Ready拒否・受信完了にしたprovider失敗のmessageIdは含めない。初期化やバッチ構造の不正はバッチ全体の失敗として伝播する。
 - 新経路に独自の再試行、stage hold、日次投入上限、Redis接続を追加しない。個別失敗の再配信と最終的なDLQ移動はSQS側の設定に任せる。
 
 ## 資源管理・実行設定

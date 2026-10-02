@@ -43,7 +43,7 @@ CurationのSignal結果＋article.curated_signalをOutboxに保存
 | `OUT_OF_SCOPE` | 対象外の判定結果・成功監査をcommitできた | なし |
 | `ALREADY_ASSESSED` | 開始時または保存時に判定済みと確認できた | 追加しない |
 
-Ready構築時にCuration不存在またはReady入力制約違反が確定した場合は、理由付きの`AssessmentReadyBuildRejected`を返して受信完了とする。AI応答の契約違反、provider障害、DB障害、timeout、想定外例外は例外で伝える。正常終了の結果は永続化・処理済み確認の結末であり、AIが返す判定内容やReady拒否とは区別する。
+Ready構築時にCuration不存在またはReady入力制約違反が確定した場合は、理由付きの`AssessmentReadyBuildRejected`を返して受信完了とする。この入力では回復しないprovider障害は、失敗を記録したうえで`SettledProviderFailure`を返して受信完了とする（curation-consumer.mdの全工程共通の節）。それ以外のAI応答の契約違反、provider障害、DB障害、timeout、想定外例外は例外で伝える。正常終了の結果は永続化・処理済み確認の結末であり、AIが返す判定内容やReady拒否とは区別する。
 
 ### Ready拒否の受信完了（2026-09-13）
 
