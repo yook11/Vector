@@ -126,7 +126,7 @@ class FakeCancelStreamPublisher:
 
 @pytest.fixture(autouse=True)
 def _configured_generation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr("deepseek-test-key"))
+    monkeypatch.setattr(settings, "gemini_api_key", SecretStr("gemini-test-key"))
     monkeypatch.setattr(
         settings,
         "agentcore_gateway_url",
@@ -637,7 +637,7 @@ class TestCreateResearchResponse:
     @pytest.mark.parametrize(
         ("missing_key", "empty_value"),
         [
-            ("deepseek_api_key", SecretStr("")),
+            ("gemini_api_key", SecretStr("")),
             ("agentcore_gateway_url", None),
         ],
     )

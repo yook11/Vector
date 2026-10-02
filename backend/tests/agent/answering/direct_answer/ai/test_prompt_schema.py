@@ -148,9 +148,9 @@ def test_prompt_uses_all_context_fields_without_treating_them_as_facts() -> None
 def test_agent_declares_plain_text_gemini_role() -> None:
     assert DIRECT_ANSWER_AGENT.name == "direct_answer"
     assert DIRECT_ANSWER_AGENT.model.provider == "gemini"
-    assert DIRECT_ANSWER_AGENT.model.name == "gemini-3.1-flash-lite"
-    assert DIRECT_ANSWER_AGENT.model_settings.temperature == 0.2
-    assert DIRECT_ANSWER_AGENT.model_settings.max_output_tokens == 2048
+    assert DIRECT_ANSWER_AGENT.model.name == "gemini-3.8-flash"
+    assert DIRECT_ANSWER_AGENT.model_settings.temperature is None
+    assert DIRECT_ANSWER_AGENT.model_settings.max_output_tokens == 10240
     assert DIRECT_ANSWER_AGENT.response_schema is None
 
 

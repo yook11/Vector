@@ -17,17 +17,16 @@ from app.agent.evidence_collection.external_search.prompts import (
 )
 
 EXTERNAL_QUERY_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
-    "type": "object",
-    "additionalProperties": False,
+    "type": "OBJECT",
     "required": ["queries"],
     "properties": {
         "queries": {
-            "type": "array",
+            "type": "ARRAY",
             "description": (
                 f"1 to {EXTERNAL_TASK_QUERY_LIMIT} short English keyword "
                 "queries for external news search."
             ),
-            "items": {"type": "string"},
+            "items": {"type": "STRING"},
         },
     },
 }
@@ -42,8 +41,8 @@ EXTERNAL_QUERY_AGENT: Final[Agent[ExternalQueryGenerationInput, ExternalQueryDra
     Agent(
         name="external_query_generator",
         prompt=EXTERNAL_QUERY_PROMPT,
-        model=ModelTarget(provider="deepseek", name="deepseek-v4-flash"),
-        model_settings=ModelSettings(max_output_tokens=256),
+        model=ModelTarget(provider="gemini", name="gemini-3.5-flash-lite"),
+        model_settings=ModelSettings(max_output_tokens=1024),
         output_type=ExternalQueryDraft,
         response_schema=EXTERNAL_QUERY_RESPONSE_SCHEMA,
     )

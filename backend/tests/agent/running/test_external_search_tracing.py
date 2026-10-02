@@ -11,8 +11,8 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from google.genai.client import AsyncClient
 from logfire.testing import CaptureLogfire
-from openai import AsyncOpenAI
 from opentelemetry.trace import StatusCode
 
 from app.agent.answering.direct_answer.contract import (
@@ -31,9 +31,6 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchHit,
     ExternalSearchRequest,
 )
-from app.agent.evidence_collection.external_search.deepseek_binding import (
-    EXTERNAL_QUERY_DEEPSEEK_BINDING,
-)
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
@@ -47,9 +44,6 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 )
 from app.agent.evidence_review import EvidenceReviewService
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_review.deepseek_binding import (
-    EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-)
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningInput,
@@ -59,7 +53,7 @@ from app.agent.planning.contract import (
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.agent.runtime.deepseek import DeepSeekAgentRuntime
+from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.logfire.redaction import install_exception_redaction
@@ -69,8 +63,8 @@ from tests.agent.running._harness import (
     fixed_scope,
     run_identity,
 )
-from tests.agent.runtime._deepseek_helpers import FakeDeepSeekClient, function_response
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.runtime._helpers import FakeGeminiClient, FakeResponse
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,
@@ -91,30 +85,28 @@ _SELECTION_WHY_SENTINEL = "SELECTION_WHY_SENTINEL_7c31"
 
 def _usage() -> SimpleNamespace:
     return SimpleNamespace(
-        prompt_tokens=11,
-        completion_tokens=7,
-        prompt_tokens_details=SimpleNamespace(cached_tokens=3),
-        completion_tokens_details=SimpleNamespace(reasoning_tokens=2),
+        prompt_token_count=11,
+        candidates_token_count=7,
+        cached_content_token_count=3,
+        thoughts_token_count=2,
     )
 
 
-def _query_response() -> object:
-    return function_response(
-        function_name=EXTERNAL_QUERY_DEEPSEEK_BINDING.function_name,
-        arguments=json.dumps({"queries": [_QUERY_OUTPUT_SENTINEL]}),
-        usage=_usage(),
+def _query_response() -> FakeResponse:
+    return FakeResponse(
+        text=json.dumps({"queries": [_QUERY_OUTPUT_SENTINEL]}),
+        usage_metadata=_usage(),
     )
 
 
-def _reviewer_response(*, option_indexes: list[int] | None = None) -> object:
+def _reviewer_response(*, option_indexes: list[int] | None = None) -> FakeResponse:
     """D4-S1: 内外統合index空間で選ぶoption_indexを呼び出し側が指定する。
 
     既定の[0]は、internalヒットが空(_EmptyInternalSearch)のtaskで唯一の外部の
     選択肢(index 0)を選ぶ後方互換値。internalヒットがあるtaskは呼び出し側が明示する。
     """
-    return function_response(
-        function_name=EVIDENCE_REVIEWER_DEEPSEEK_BINDING.function_name,
-        arguments=json.dumps(
+    return FakeResponse(
+        text=json.dumps(
             {
                 "selections": [
                     {
@@ -127,7 +119,7 @@ def _reviewer_response(*, option_indexes: list[int] | None = None) -> object:
                 "missing": [],
             }
         ),
-        usage=_usage(),
+        usage_metadata=_usage(),
     )
 
 
@@ -234,8 +226,8 @@ class _Factory:
 
 def _runner(
     *,
-    query_client: FakeDeepSeekClient,
-    reviewer_client: FakeDeepSeekClient,
+    query_client: FakeGeminiClient,
+    reviewer_client: FakeGeminiClient,
     search_gateway: _FakeExternalSearchGateway | None = None,
     internal_search: object | None = None,
     evidence_answerer: object | None = None,
@@ -244,15 +236,13 @@ def _runner(
     factory = _Factory(
         ExternalScopes(
             external_search=ExternalSearchService(
-                query_runtime=DeepSeekAgentRuntime(
-                    client=cast(AsyncOpenAI, query_client),
-                    binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+                query_runtime=GeminiAgentRuntime(
+                    client=cast(AsyncClient, query_client),
                 ),
                 search_gateway=tool,
             ),
-            reviewer_runtime=DeepSeekAgentRuntime(
-                client=cast(AsyncOpenAI, reviewer_client),
-                binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
+            reviewer_runtime=GeminiAgentRuntime(
+                client=cast(AsyncClient, reviewer_client),
             ),
         )
     )
@@ -292,13 +282,12 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
     capfire: CaptureLogfire,
 ) -> None:
     raw_selector_response_sentinel = "RAW_SELECTOR_RESPONSE_SENTINEL_5d71"
-    query_client = FakeDeepSeekClient([_query_response()])
-    reviewer_client = FakeDeepSeekClient(
+    query_client = FakeGeminiClient([_query_response()])
+    reviewer_client = FakeGeminiClient(
         [
-            function_response(
-                function_name=EVIDENCE_REVIEWER_DEEPSEEK_BINDING.function_name,
-                arguments=raw_selector_response_sentinel,
-                usage=_usage(),
+            FakeResponse(
+                text=raw_selector_response_sentinel,
+                usage_metadata=_usage(),
             ),
             _reviewer_response(),
         ]
@@ -331,8 +320,8 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
     trace_dump = json.dumps(
         capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
     )
-    assert query_client.chat.completions.create.await_count == 1
-    assert reviewer_client.chat.completions.create.await_count == 2
+    assert query_client.models.generate_content.await_count == 1
+    assert reviewer_client.models.generate_content.await_count == 2
     assert [input.query for input in tool.inputs] == [_QUERY_OUTPUT_SENTINEL]
     assert len(providers) == 3
     assert set(phase_by_agent) == {
@@ -416,8 +405,8 @@ async def test_unclassified_query_error_is_redacted_and_only_error_phase(
     install_exception_redaction()
     error_sentinel = "UNCLASSIFIED_QUERY_ERROR_SENTINEL_4ea2"
     error = RuntimeError(error_sentinel)
-    query_client = FakeDeepSeekClient([error])
-    reviewer_client = FakeDeepSeekClient([_reviewer_response()])
+    query_client = FakeGeminiClient([error])
+    reviewer_client = FakeGeminiClient([_reviewer_response()])
     runner, _ = _runner(
         query_client=query_client,
         reviewer_client=reviewer_client,
@@ -459,7 +448,7 @@ async def test_unclassified_query_error_is_redacted_and_only_error_phase(
     assert external_search_span["parent"]["span_id"] == task_span["context"]["span_id"]
     assert task_span["parent"]["span_id"] == collection_span["context"]["span_id"]
     assert internal_search_span["parent"]["span_id"] == task_span["context"]["span_id"]
-    assert reviewer_client.chat.completions.create.await_count == 0
+    assert reviewer_client.models.generate_content.await_count == 0
     error_raw_spans = [
         raw_spans_by_id[span["context"]["span_id"]] for span in error_spans
     ]
@@ -651,8 +640,8 @@ async def test_evidence_run_span_reports_internal_external_counts_and_citations(
     D4-S1: internal_evidence_countはreviewerが精査採用した件数になるため、
     統合index空間(内部0,1・外部2)の全選択肢を採用するreviewer応答を使う。
     """
-    query_client = FakeDeepSeekClient([_query_response()])
-    reviewer_client = FakeDeepSeekClient([_reviewer_response(option_indexes=[0, 1, 2])])
+    query_client = FakeGeminiClient([_query_response()])
+    reviewer_client = FakeGeminiClient([_reviewer_response(option_indexes=[0, 1, 2])])
     runner, _ = _runner(
         query_client=query_client,
         reviewer_client=reviewer_client,
@@ -729,8 +718,8 @@ async def test_evidence_run_span_marks_zero_cited_explicitly_when_uncited(
     """内部hitが1件も引用されない境界で、
     internal_cited_count が不在ではなく明示的な0で付く。
     """
-    query_client = FakeDeepSeekClient([_query_response()])
-    reviewer_client = FakeDeepSeekClient([_reviewer_response(option_indexes=[0, 1, 2])])
+    query_client = FakeGeminiClient([_query_response()])
+    reviewer_client = FakeGeminiClient([_reviewer_response(option_indexes=[0, 1, 2])])
     runner, _ = _runner(
         query_client=query_client,
         reviewer_client=reviewer_client,

@@ -167,7 +167,7 @@ def research_client(
     from app.main import app
 
     # 開始APIは外部検索の設定があることだけを確かめ、実際には呼ばない。
-    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr("test-deepseek-key"))
+    monkeypatch.setattr(settings, "gemini_api_key", SecretStr("test-gemini-key"))
     monkeypatch.setattr(
         settings, "agentcore_gateway_url", "https://gateway.example.test"
     )

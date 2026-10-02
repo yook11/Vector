@@ -20,8 +20,8 @@ QUESTION_PLANNER_PROMPT = AgentPrompt[PlanningInput](
 QUESTION_PLANNER_AGENT: Agent[PlanningInput, QuestionPlanDraft] = Agent(
     name="question_planner",
     prompt=QUESTION_PLANNER_PROMPT,
-    model=ModelTarget(provider="gemini", name="gemini-2.5-flash-lite"),
-    model_settings=ModelSettings(temperature=0.1, max_output_tokens=1024),
+    model=ModelTarget(provider="gemini", name="gemini-3.5-flash-lite"),
+    model_settings=ModelSettings(max_output_tokens=1024),
     output_type=QuestionPlanDraft,
     response_schema=QUESTION_PLANNER_GEMINI_SCHEMA,
 )

@@ -111,7 +111,7 @@ def test_gemini_agent_runtime_scope_construction_keeps_provider_imports_lazy() -
 
 
 def test_external_search_scope_construction_keeps_imports_lazy() -> None:
-    """External factoryはscopeへ入るまでOpenAI SDKと具象Runtimeをloadしない。"""
+    """External factoryはscopeへ入るまでGemini SDKと具象Runtimeをloadしない。"""
     code = textwrap.dedent(
         """
         import sys
@@ -121,9 +121,9 @@ def test_external_search_scope_construction_keeps_imports_lazy() -> None:
         forbidden = sorted(
             module
             for module in sys.modules
-            if module == "openai"
-            or module.startswith("openai.")
-            or module == "app.agent.runtime.deepseek"
+            if module == "app.agent.runtime.gemini"
+            or module == "google.genai"
+            or module.startswith("google.genai.")
         )
         print("\\n".join(forbidden))
         """
