@@ -25,6 +25,7 @@ locals {
       command        = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
       secrets = {
         # research 開始 API の事前チェックが key の存在だけを見る。呼び出しは agent が行うので api は外へ出ない。
+        GEMINI_API_KEY           = "gemini-api-key"
         DEEPSEEK_API_KEY         = "deepseek-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
