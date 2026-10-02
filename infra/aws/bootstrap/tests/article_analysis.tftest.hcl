@@ -200,6 +200,7 @@ run "boundary_limits_analysis_to_its_queues_keys_logs_and_database_user" {
         { Sid = "RdsIamAuthAsArticleAnalysis", Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_article_analysis" },
         { Sid = "ReadAiProviderKeys", Effect = "Allow", Action = "ssm:GetParameter", Resource = [
           "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/curation-consumer/gemini-api-key",
+          "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/gemini-api-key",
           "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/deepseek-api-key",
           "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/embedding-consumer/gemini-api-key",
         ] },

@@ -32,7 +32,7 @@ locals {
     }, {
     assessment_consumer = {
       cidr             = local.subnet_cidrs["assessment_consumer"]
-      domains          = local.egress_vendor_domains.deepseek
+      domains          = concat(local.egress_vendor_domains.deepseek, local.egress_vendor_domains.gemini)
       allow_any_domain = false
     }
     embedding_consumer = {

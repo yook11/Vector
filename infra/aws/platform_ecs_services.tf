@@ -46,11 +46,12 @@ locals {
     }
     insights = {
       needs_broker   = true
-      egress_vendors = ["deepseek", "logfire"], egress_allow_any_domain = false
+      egress_vendors = ["deepseek", "gemini", "logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_insights"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/insights.conf"]
       secrets = {
+        GEMINI_API_KEY           = "gemini-api-key"
         DEEPSEEK_API_KEY         = "deepseek-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
