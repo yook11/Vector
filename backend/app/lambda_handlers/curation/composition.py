@@ -38,7 +38,7 @@ def open_curation_consumer(
     def open_client(*, api_key: SecretStr) -> AbstractAsyncContextManager[AsyncClient]:
         return open_gemini_client(
             api_key=api_key,
-            settings=GeminiConnectionSettings(),
+            settings=GeminiConnectionSettings(read_timeout=30.0),
         )
 
     async def build_consumer(
