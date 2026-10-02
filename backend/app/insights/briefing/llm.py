@@ -30,6 +30,7 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
 from pydantic import ValidationError
 
+from app.ai_providers.deepseek.error_translator import translate_deepseek_error
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
 from app.insights.briefing.domain.ready import BriefingArticle
@@ -222,7 +223,8 @@ class DeepSeekBriefingGenerator:
         """指定カテゴリの週次 briefing を 1 回の API 呼出で生成する。
 
         Raises:
-            BriefingLlmError: OpenAI SDK 例外を stage marker に wrap。
+            BriefingLlmError: OpenAI SDK 例外を分類した AI の例外 (分類できなければ
+                SDK 例外) を stage marker に wrap。
             BriefingLlmResponseInvalidError: schema 不一致 /
                 analyzed_article_ids ハルシネーション。
         """
@@ -264,7 +266,9 @@ class DeepSeekBriefingGenerator:
                     extra_body={"thinking": {"type": "disabled"}},
                 )
             except openai.APIError as exc:
-                raise BriefingLlmError(provider_error=exc) from exc
+                raise BriefingLlmError(
+                    provider_error=translate_deepseek_error(exc)
+                ) from exc
         choice = resp.choices[0]
         tool_call = next(iter(choice.message.tool_calls or []), None)
         # tool_choice で function を強制しているので custom tool 型は来ない。

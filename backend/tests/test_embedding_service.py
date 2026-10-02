@@ -16,12 +16,10 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.ai_providers.errors import (
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderServiceUnavailableError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
@@ -35,12 +33,20 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
 )
 from app.analysis.embedding.service import EmbeddingCompletion, EmbeddingService
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _mock_embedder(
@@ -258,7 +264,7 @@ async def test_execute_wraps_input_rejected_provider_error(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """``AIProviderInputRejectedError`` は Service の ACL で target-local marker に
+    """``AIProviderResponseError`` は Service の ACL で target-local marker に
     詰め替えられて raise される。
 
     Service は握らず Task 層に伝搬。DB / audit は変更されない。
@@ -272,8 +278,9 @@ async def test_execute_wraps_input_rejected_provider_error(
     analyzed_article_id = analysis.id
     article_id = article.id
 
-    original = AIProviderInputRejectedError(
-        reason=GeminiContentRejectionReason.INPUT_BLOCKED
+    original = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
     embedder = _mock_embedder(raises=original)
     svc = EmbeddingService(session_factory)
@@ -284,7 +291,7 @@ async def test_execute_wraps_input_rejected_provider_error(
 
     # provider_error attr に元 instance が identity 付きで保持される
     assert exc_info.value.provider_error is original
-    assert exc_info.value.code == AIProviderInputRejectedError.CODE
+    assert exc_info.value.code == AIProviderResponseError.CODE
     # content 拒否は回復クラス TARGET_REJECTED → failure_kind / failure_reason
     assert exc_info.value.reason is EmbeddingFailureReason.PROVIDER_ERROR
     assert exc_info.value.provider_error.reason.value == "input_blocked"
@@ -301,9 +308,24 @@ async def test_execute_wraps_input_rejected_provider_error(
 @pytest.mark.parametrize(
     "provider_exc",
     [
-        AIProviderRateLimitedError("rate limited"),
-        AIProviderServiceUnavailableError("provider down"),
-        AIProviderNetworkError("timeout"),
+        AIProviderResponseError(
+            "rate limited",
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        ),
+        AIProviderResponseError(
+            "provider down",
+            reason=AIProviderResponseReason.SERVER_ERROR,
+            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+        ),
+        AIProviderTransportError(
+            "timeout",
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
+        ),
     ],
 )
 async def test_execute_wraps_recoverable_provider_errors(

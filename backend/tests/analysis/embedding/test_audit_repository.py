@@ -16,11 +16,10 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.consumer_failure_classification import (
     classify_embedding_failure,
@@ -36,11 +35,19 @@ from app.analysis.embedding.errors import (
 )
 from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.stages.embedding import EmbeddingAuditRepository
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import BackfillExclusionReason
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _embedder_fake(
@@ -281,7 +288,15 @@ async def test_append_network_failure_without_recovery_classification(
     """ネットワーク障害の分類を監査へ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = to_embedding_error(AIProviderNetworkError())
+    exc = to_embedding_error(
+        AIProviderTransportError(
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            )
+        )
+    )
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_classified_failure(
@@ -294,7 +309,7 @@ async def test_append_network_failure_without_recovery_classification(
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "failed"
-    assert ev.outcome_code == "ai_error_network"
+    assert ev.outcome_code == "ai_provider_transport_error"
     assert ev.retryability is None
     assert ev.payload["failure_kind"] is None
     assert ev.payload["failure_action"] is None
@@ -309,7 +324,12 @@ async def test_append_configuration_failure_without_recovery_classification(
     """設定不備の分類を監査へ記録する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = to_embedding_error(AIProviderConfigurationError())
+    exc = to_embedding_error(
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        )
+    )
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_classified_failure(
@@ -321,7 +341,7 @@ async def test_append_configuration_failure_without_recovery_classification(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "ai_error_configuration"
+    assert ev.outcome_code == "ai_provider_response_error"
     assert ev.retryability is None
     assert ev.payload["failure_kind"] is None
     assert ev.payload["failure_action"] is None
@@ -337,7 +357,10 @@ async def test_append_input_rejection_preserves_reason_without_recovery_classifi
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = to_embedding_error(
-        AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY)
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.INPUT_BLOCKED,
+            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+        )
     )
 
     async with session_factory() as session:
@@ -350,10 +373,10 @@ async def test_append_input_rejection_preserves_reason_without_recovery_classifi
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "ai_error_input_rejected"
+    assert ev.outcome_code == "ai_provider_response_error"
     assert ev.retryability is None
     assert ev.payload["failure_kind"] is None
-    assert ev.payload["failure_reason"] == "safety"
+    assert ev.payload["failure_reason"] == "input_blocked"
     assert ev.payload["failure_action"] is None
 
 
@@ -490,8 +513,14 @@ async def test_append_failure_walks_error_chain_via_cause(
     await _make_extraction(db_session, article)
     try:
         try:
-            raise AIProviderNetworkError()
-        except AIProviderNetworkError as inner:
+            raise AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        except AIProviderTransportError as inner:
             raise to_embedding_error(inner) from inner
     except EmbeddingError as exc:
         async with session_factory() as session:
@@ -508,7 +537,7 @@ async def test_append_failure_walks_error_chain_via_cause(
     assert chain is not None
     assert len(chain) == 2
     assert chain[0].endswith(".EmbeddingError")
-    assert chain[1].endswith(".AIProviderNetworkError")
+    assert chain[1].endswith(".AIProviderTransportError")
 
 
 @pytest.mark.asyncio

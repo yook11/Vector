@@ -24,7 +24,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - cron 時刻表の SSoT は `backend/app/queue/schedule.py`: dispatch_high 15 分間隔 / medium 1 時間 / low 6 時間、completion 系は毎分、backfill 系は 30 分間隔。
 - `observe_pipeline_queue_health`(`backend/app/queue/tasks/queue_health.py`)が毎分、acquisition / completion / curation の 3 stream について `oldest_outstanding_enqueue_age`(最古の未処理 entry の経過秒数)等を stage 属性付き gauge で Logfire に記録している。観測失敗時は `observation_up=0`。**assessment・embedding・dispatch の stream は観測対象外**(`PIPELINE_QUEUE_TARGETS` 固定 3 stage)。
 - queue_health は analysis サービス内の maintenance worker(`supervisord/analysis.conf`)で動く。maintenance worker は backfill 救済・retention purge も担う。
-- AI provider エラーは翻訳層で分類済み(`app/ai_providers/gemini/error_translator.py` / `app/ai_providers/deepseek/error_translator.py`): 一時的な `AIProviderRateLimitedError` と、利用枠の枯渇である `AIProviderUsageLimitExhaustedError`(Gemini 429 の quota/daily)・`AIProviderInsufficientBalanceError`(DeepSeek 残高切れ)を区別している。
+- AI provider エラーは翻訳層で分類済み(`app/ai_providers/gemini/error_translator.py` / `app/ai_providers/deepseek/error_translator.py`): 一時的な流量制限(`AIProviderResponseError` の reason `rate_limited`)と、利用枠の枯渇(`quota_exhausted` = Gemini 429 の quota/daily、`insufficient_balance` = DeepSeek 残高切れ)を区別している。
 - 無料枠向けの事前ゲートと専用Logfireカウンタは撤去済み。実APIの429・利用枠枯渇・残高不足の分類と通知は維持する。
 - agent(Q&A)の runtime(`app/agent/runtime/gemini.py` / `deepseek.py`)も同じ翻訳層(`translate_gemini_error` / `translate_deepseek_error`)を再利用しており、枯渇系エラーの語彙は pipeline と共通。
 - 2026-06-08 incident: worker-fetch 停止(SPOF)で dispatch task が実行されず収集が途絶。dispatch が死ぬと下流 stream には何も積まれないため、下流の滞留観測では原理的に検知できない。
@@ -142,14 +142,14 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 ### A6: AI 利用枠の枯渇
 
 - 症状: AI provider の利用枠が尽き、以後の AI 処理が枠回復まで全て失敗する状態。一時的な rate limit とは区別する(翻訳層が既に区別済み)。
-  - `AIProviderInsufficientBalanceError` — DeepSeek 残高切れ。アクション: 残高チャージ。
-  - `AIProviderUsageLimitExhaustedError` — Gemini の quota / daily 枠切れ。アクション: 枠リセット待ちか tier 引き上げの判断。
-- Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {ai_error_insufficient_balance, ai_error_usage_limit_exhausted}(≤ 4 系列)。kind は provider error の `CODE` をそのまま使う: stage hold の reason 値・audit の outcome_code と同一語彙になり、アラート後の調査を 1 つの文字列の grep で metric → 監査 → hold まで追える。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
+  - `AIProviderResponseError`(reason `insufficient_balance`) — DeepSeek 残高切れ。アクション: 残高チャージ。
+  - `AIProviderResponseError`(reason `quota_exhausted`) — Gemini の quota / daily 枠切れ。アクション: 枠リセット待ちか tier 引き上げの判断。
+- Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {insufficient_balance, quota_exhausted}(≤ 4 系列)。kind は provider error の `reason` をそのまま使う: audit の failure_reason と同一語彙になり、アラート後の調査を 1 つの文字列の grep で metric → 監査まで追える。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
 - 条件: Sum >= 1、period 15min、1 evaluation period。`TreatMissingData = notBreaching`(平常時はデータポイントゼロが正常)。
 - 通知は ALARM のみとし、この alarm には ok_actions を付けない。metric は枯渇エラー発生時にしか存在せず、退避機構が再試行自体を止めるため、チャージしなくても alarm は OK へ戻る = OK 復帰は残高回復を意味しない。チャージ(provider 側での対応)を済ませたかは対応した本人が把握しており、復旧通知は誤解を招くだけ。未チャージのまま退避後の再試行が再び枯渇すれば OK→ALARM の遷移が再発し、リマインダーとして再通知される。
 - スコープは analysis 3 工程(curation / assessment / embedding)と agent(Q&A)の provider 呼び出しの両方。agent runtime は同じ翻訳層を再利用しているため語彙は共通。emit point は analysis 側 = 各 stage の failure handling 境界、agent 側 = runtime の分類確定境界(`classified_error` 確定点)+ internal query embedding の翻訳確定点(runtime を経由しない唯一の provider 呼び出し経路のため個別に emit する)。
 - Gemini の 429 は message が per-minute バーストと per-day 枯渇で同文言のため、構造化 details(QuotaFailure)に per-day violation を確認できた場合だけ枯渇に分類する(positive allowlist)。判定不能な envelope(details 欠損・不正・未知 quotaId)は rate limited に倒す非対称方針: 誤ページの回避を優先し、analysis 側の取りこぼしは A2 がバックストップする。agent(Q&A)は A2 の対象外のため、未知形式 envelope の枯渇は取りこぼしが残る — これは設計判断として受け入れる。
-- insights(trend_discovery / briefing)は provider error 翻訳層を通らない実装(SDK 例外を自前 error に包む)のため A6 の対象外。枯渇が分類されない盲点として認識済みで、翻訳層経由へ寄せる改修は別タスク。
+- insights は A6 の対象外。trend_discovery は翻訳層を通らず、briefing は翻訳層を通るが枯渇の打点を出していない。盲点として認識済みで、打点の追加は別タスク。
 - stage / surface(pipeline・agent 別)の dimension は持たせない: 残高チャージ・枠回復というアクションは provider 単位で同一であり、どこが最初に踏んだかはアクションに影響しない。系列数は {kind, provider} の ≤ 4 のまま。
 - 実測で 1 件発火がノイジーなら閾値を 3/15min へ調整。
 
@@ -184,8 +184,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | Embedding Consumer 障害 | Lambda／DLQ監視・A4 embedding | 新SQS経路を確認 |
 | maintenance worker 死 | A3(missing) | 観測と救済が止まった |
 | Valkey(broker)全面障害 | A3(up=0、約 5 分)+ A1 | broker 障害と推定可能 |
-| DeepSeek 残高切れ | A6(ai_error_insufficient_balance) | チャージが必要 |
-| Gemini 日次 quota 切れ | A6(ai_error_usage_limit_exhausted) | 枠リセット待ち判断 |
+| DeepSeek 残高切れ | A6(insufficient_balance) | チャージが必要 |
+| Gemini 日次 quota 切れ | A6(quota_exhausted) | 枠リセット待ち判断 |
 | DeepSeek 不正 JSON 大量失敗(実績) | A4 | 失敗率と工程 |
 | 一時的 rate limit / gate pacing | 鳴らさない(滞留すれば A2) | — |
 | api 停止 | A7(SSR 経由 5XX), A5 | — |

@@ -19,6 +19,7 @@ from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.failure import (
     RequestRetryDisposition,
     classify_direct_answer_failure,
+    is_output_truncated,
 )
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
@@ -46,10 +47,7 @@ from app.agent.runtime.contract import (
     StreamingAgentRuntime,
     StreamingAgentRuntimeScopeFactory,
 )
-from app.ai_providers.errors import (
-    AIProviderError,
-    AIProviderOutputTruncatedError,
-)
+from app.ai_providers.errors import AIProviderError
 
 __all__ = ["DirectAnswerService"]
 
@@ -126,9 +124,7 @@ class DirectAnswerService:
                                         and attempt_number < _MAX_ATTEMPTS
                                     )
                                     if retriable:
-                                        if isinstance(
-                                            cause, AIProviderOutputTruncatedError
-                                        ):
+                                        if is_output_truncated(cause):
                                             input = replace(
                                                 input, previous_output_truncated=True
                                             )

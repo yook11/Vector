@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.ai_providers.errors import (
-    AIProviderRateLimitedError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
 )
 from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
@@ -14,6 +17,9 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
     to_embedding_error,
 )
+from app.http.errors import HttpResponseError
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class TestEmbeddingResponseInvalidError:
@@ -54,7 +60,10 @@ def test_provider_reason_requires_classified_provider_error():
     with pytest.raises(TypeError):
         EmbeddingError(
             reason=EmbeddingFailureReason.ARTICLE_MISSING,
-            provider_error=AIProviderRateLimitedError(),
+            provider_error=AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            ),
         )
 
 
@@ -80,7 +89,13 @@ def test_embedding_error_directly_inherits_exception():
 @pytest.mark.parametrize(
     "error",
     [
-        to_embedding_error(AIProviderRateLimitedError("provider diagnostic")),
+        to_embedding_error(
+            AIProviderResponseError(
+                "provider diagnostic",
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            )
+        ),
         EmbeddingResponseInvalidError(),
         EmbeddingAnalyzedArticleMissingError(),
     ],

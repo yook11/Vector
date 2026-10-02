@@ -17,9 +17,8 @@ from openai import APITimeoutError, AuthenticationError
 from openai import RateLimitError as OpenAIRateLimitError
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
+    AIProviderResponseError,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 
@@ -28,11 +27,11 @@ def _make_request() -> httpx.Request:
     return httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
 
 
-def test_delegates_network_error() -> None:
+def test_delegates_transport_error() -> None:
     """SDKの通信timeoutを共通のプロバイダー通信エラーへ変換する。"""
     assessor = DeepSeekAssessor(MagicMock())
     translated = assessor._translate_error(APITimeoutError(request=_make_request()))
-    assert isinstance(translated, AIProviderNetworkError)
+    assert isinstance(translated, AIProviderTransportError)
 
 
 def test_delegates_configuration_error() -> None:
@@ -42,7 +41,7 @@ def test_delegates_configuration_error() -> None:
         "bad key", response=httpx.Response(401, request=_make_request()), body=None
     )
     translated = assessor._translate_error(exc)
-    assert isinstance(translated, AIProviderConfigurationError)
+    assert isinstance(translated, AIProviderResponseError)
 
 
 def test_delegates_rate_limited_error() -> None:
@@ -52,7 +51,7 @@ def test_delegates_rate_limited_error() -> None:
         "rate", response=httpx.Response(429, request=_make_request()), body=None
     )
     translated = assessor._translate_error(exc)
-    assert isinstance(translated, AIProviderRateLimitedError)
+    assert isinstance(translated, AIProviderResponseError)
 
 
 def test_unmappable_returns_exc_unchanged() -> None:

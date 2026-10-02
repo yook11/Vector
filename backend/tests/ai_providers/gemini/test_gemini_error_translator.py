@@ -1,36 +1,32 @@
 """``app.ai_providers.gemini.error_translator`` の golden table テスト。
 
-analysis pipeline 内で共有される SDK 例外 → ``AIProvider*Error`` 分類を検証する。
-ValidationError / response shape / finish_reason など stage 固有の判定は対象外。
-
-``is_context_length_error`` は status guard (INVALID_ARGUMENT / DEADLINE_EXCEEDED)
-を持つため、無関係 status の APIError に偶然 pattern が混入しても誤分類しない
-ことを negative test で担保する。
+工程で共有される SDK 例外 → ``AIProvider*Error`` 分類を検証する。
+ValidationError / response shape / finish_reason など工程固有の判定は対象外。
 """
 
 from __future__ import annotations
+
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 from google.genai import errors as genai_errors
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
-    is_context_length_error,
-    translate_gemini_error,
-)
+from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.http.destination_policy import HostBlockedError
 from app.http.destination_resolution import HostResolutionError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 
 
 def _client_error(
@@ -56,61 +52,145 @@ def _api_error(
     return genai_errors.APIError(code, response_json)
 
 
-# Network 系 (httpx + builtin)
+# 送信前・通信
+
+
+def test_host_blocked_is_request_not_sent() -> None:
+    """宛先の方針による拒否は、通信の失敗ではなく送らなかった失敗とする。"""
+    translated = translate_gemini_error(HostBlockedError("private address"))
+
+    assert isinstance(translated, AIProviderNotSentError)
+    assert translated.reason is AIProviderNotSentReason.HOST_BLOCKED
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (
+            httpx.ReadTimeout("timed out"),
+            HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            ),
+        ),
+        (
+            httpx.ConnectError("connection refused"),
+            HttpTransportFailure(
+                HttpTransportStage.CONNECT, HttpTransportFailureReason.NETWORK_IO
+            ),
+        ),
+        (
+            httpx.PoolTimeout("pool exhausted"),
+            HttpTransportFailure(
+                HttpTransportStage.PREPARATION, HttpTransportFailureReason.TIMEOUT
+            ),
+        ),
+        (
+            httpx.ProxyError("403 Forbidden"),
+            HttpTransportFailure(
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.PROXY,
+                proxy_status=403,
+            ),
+        ),
+        (
+            httpx.ReadError("read failed"),
+            HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.NETWORK_IO
+            ),
+        ),
+        (
+            httpx.RemoteProtocolError("bad response"),
+            HttpTransportFailure(
+                HttpTransportStage.RECEIVE,
+                HttpTransportFailureReason.PROTOCOL_VIOLATION,
+            ),
+        ),
+        (
+            HostResolutionError("no address"),
+            HttpTransportFailure(
+                HttpTransportStage.PREPARATION,
+                HttpTransportFailureReason.DNS_RESOLUTION,
+            ),
+        ),
+    ],
+)
+def test_common_http_failures_keep_stage_and_reason(
+    exc: Exception, expected: HttpTransportFailure
+) -> None:
+    """共通HTTPの分類結果を、段階と理由ごと通信の失敗に載せる。"""
+    translated = translate_gemini_error(exc)
+
+    assert isinstance(translated, AIProviderTransportError)
+    assert translated.http_error.failure == expected
 
 
 @pytest.mark.parametrize(
     "exc",
     [
-        httpx.ReadTimeout("timed out"),
-        httpx.ConnectError("connection refused"),
         TimeoutError("io timeout"),
         ConnectionError("conn reset"),
-        OSError("dns failure"),
+        OSError("no such file"),
     ],
 )
-def test_network_errors_translate_to_network_error(exc: Exception) -> None:
-    translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderNetworkError)
-    assert translated.CODE == "ai_error_network"
+def test_builtin_errors_are_not_classified(exc: Exception) -> None:
+    """HTTP の事実を持たない組み込みの例外は、通信の失敗と決めつけずに返す。"""
+    assert translate_gemini_error(exc) is exc
 
 
-@pytest.mark.parametrize(
-    ("exc", "expected_reason"),
-    [
-        (httpx.ProxyError("403 Forbidden"), GeminiStateReason.CONNECTION),
-        (httpx.ReadError("read failed"), GeminiStateReason.CONNECTION),
-        (httpx.RemoteProtocolError("bad response"), GeminiStateReason.CONNECTION),
-        (HostResolutionError("no address"), GeminiStateReason.CONNECTION),
-        (httpx.PoolTimeout("pool exhausted"), GeminiStateReason.TIMEOUT),
-        (HostBlockedError("private address"), GeminiStateReason.HOST_BLOCKED),
-    ],
-)
-def test_common_http_failures_translate_to_network_error(
-    exc: Exception, expected_reason: GeminiStateReason
-) -> None:
-    """共通の外部 HTTP クライアントで出る失敗も、通信の失敗として理由付きで変換する。"""
-    translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderNetworkError)
-    assert translated.reason is expected_reason
-
-
-def test_unsupported_protocol_is_not_a_network_error() -> None:
+def test_unsupported_protocol_is_not_a_transport_error() -> None:
     """http/https 以外の拒否は通信の失敗ではないので、変換せずに返す。"""
     exc = httpx.UnsupportedProtocol("ftp is not sent")
     assert translate_gemini_error(exc) is exc
 
 
-# ServerError (5xx) → ServiceUnavailable
+# 失敗の応答
 
 
-def test_server_error_translates_to_service_unavailable() -> None:
-    translated = translate_gemini_error(_server_error())
-    assert isinstance(translated, AIProviderServiceUnavailableError)
-    assert translated.CODE == "ai_error_service_unavailable"
+def test_server_error_is_error_response_with_status() -> None:
+    translated = translate_gemini_error(_server_error(code=503))
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.SERVER_ERROR
+    assert translated.http_error.status_code == 503
 
 
-# Leaked API key → ConfigurationError
+def test_response_keeps_retry_after_from_sdk_response() -> None:
+    """SDK が持つ応答の Retry-After を、解釈せずに HTTP のエラーへ残す。"""
+    response = httpx.Response(
+        429,
+        headers={"Retry-After": "30"},
+        request=httpx.Request("POST", "https://generativelanguage.example.invalid"),
+    )
+    exc = genai_errors.ClientError(
+        429,
+        {"error": {"status": "RESOURCE_EXHAUSTED", "message": "msg"}},
+        response,
+    )
+
+    translated = translate_gemini_error(exc)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.http_error.retry_after == "30"
+
+
+def test_response_without_sdk_response_has_no_retry_after() -> None:
+    """SDK が応答を持たなければ、Retry-After も無いとする。"""
+    translated = translate_gemini_error(
+        _client_error(code=429, status="RESOURCE_EXHAUSTED")
+    )
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.http_error.retry_after is None
+
+
+def test_response_received_at_is_when_the_error_was_translated() -> None:
+    """受信時刻は、SDK の例外を捕まえて変換した時刻とする。"""
+    before = datetime.now(UTC)
+    translated = translate_gemini_error(_server_error(code=503))
+    after = datetime.now(UTC)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert before <= translated.http_error.received_at <= after
 
 
 def test_translator_does_not_copy_leaked_key_message() -> None:
@@ -123,107 +203,113 @@ def test_translator_does_not_copy_leaked_key_message() -> None:
 
     translated = translate_gemini_error(exc)
 
-    assert isinstance(translated, AIProviderConfigurationError)
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.LEAKED_API_KEY
     assert "AIza" not in str(translated)
     assert "github.com" not in str(translated)
     assert str(translated) == "AIプロバイダーがAPIキーの漏洩を検知しました"
-    assert translated.CODE == "ai_error_configuration"
-
-
-# 設定系 status / HTTP code → ConfigurationError
 
 
 @pytest.mark.parametrize(
-    "code,status",
+    "code,status,expected",
     [
-        (401, "UNAUTHENTICATED"),
-        (403, "PERMISSION_DENIED"),
-        (404, "NOT_FOUND"),
-        (400, "FAILED_PRECONDITION"),  # status 優先評価の確認
+        (401, "UNAUTHENTICATED", AIProviderResponseReason.AUTH),
+        (403, "PERMISSION_DENIED", AIProviderResponseReason.PERMISSION_DENIED),
+        (404, "NOT_FOUND", AIProviderResponseReason.NOT_FOUND),
+        (
+            400,
+            "FAILED_PRECONDITION",
+            AIProviderResponseReason.FAILED_PRECONDITION,
+        ),
     ],
 )
-def test_config_status_translates_to_configuration_error(
-    code: int, status: str
+def test_config_status_is_error_response_with_reason(
+    code: int, status: str, expected: AIProviderResponseReason
 ) -> None:
     exc = _client_error(code=code, status=status, message="config issue")
+
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderConfigurationError)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is expected
+    assert translated.http_error.status_code == code
 
 
-@pytest.mark.parametrize("code", [401, 403, 404])
-def test_config_http_code_without_status_translates_to_configuration_error(
-    code: int,
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        (401, AIProviderResponseReason.AUTH),
+        (403, AIProviderResponseReason.PERMISSION_DENIED),
+        (404, AIProviderResponseReason.NOT_FOUND),
+    ],
+)
+def test_config_http_code_without_status(
+    code: int, expected: AIProviderResponseReason
 ) -> None:
-    """status が空でも HTTP code (401/403/404) で ConfigurationError に振る。"""
+    """status が空でも HTTP code (401/403/404) で設定系の理由に振る。"""
     exc = _client_error(code=code, status="", message="config")
+
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderConfigurationError)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is expected
 
 
 def test_failed_precondition_with_code_400_evaluates_status_first() -> None:
-    """``code=400`` と ``status=FAILED_PRECONDITION`` が同居しても status 優先。
-
-    INVALID_ARGUMENT 分岐より前に設定系 status を評価することを構造的に固定。
-    gRPC status は API semantics で安定、HTTP code は SDK 差分で揺れる。
-    """
+    """``code=400`` と ``status=FAILED_PRECONDITION`` が同居しても status 優先。"""
     exc = _client_error(
         code=400,
         status="FAILED_PRECONDITION",
         message="model not enabled in this region",
     )
+
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderConfigurationError)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.FAILED_PRECONDITION
 
 
-# INVALID_ARGUMENT / code=400 → 3-way 分岐
-
-
+@pytest.mark.parametrize("status", ["INVALID_ARGUMENT", ""])
 @pytest.mark.parametrize(
     "message,expected",
     [
-        ("API key not valid", AIProviderConfigurationError),
-        ("permission denied for model", AIProviderConfigurationError),
-        ("request blocked by safety filter", AIProviderInputRejectedError),
-        ("blocked content", AIProviderInputRejectedError),
-        ("malformed request body", AIProviderRequestInvalidError),
+        ("API key not valid", AIProviderResponseReason.AUTH),
+        (
+            "permission denied for model",
+            AIProviderResponseReason.PERMISSION_DENIED,
+        ),
+        (
+            "request blocked by safety filter",
+            AIProviderResponseReason.INPUT_BLOCKED,
+        ),
+        ("blocked content", AIProviderResponseReason.INPUT_BLOCKED),
+        ("malformed request body", AIProviderResponseReason.INVALID_REQUEST),
     ],
 )
-def test_invalid_argument_status_3way_branch(message: str, expected: type) -> None:
-    exc = _client_error(code=400, status="INVALID_ARGUMENT", message=message)
+def test_invalid_argument_branches_by_message(
+    status: str, message: str, expected: AIProviderResponseReason
+) -> None:
+    """``status`` が空でも ``code=400`` だけで同じ分岐に入る。"""
+    exc = _client_error(code=400, status=status, message=message)
+
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, expected)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is expected
+    assert translated.http_error.status_code == 400
 
 
-@pytest.mark.parametrize(
-    "message,expected",
-    [
-        ("API key not valid", AIProviderConfigurationError),
-        ("request blocked by safety filter", AIProviderInputRejectedError),
-        ("malformed request body", AIProviderRequestInvalidError),
-    ],
-)
-def test_code_400_without_status_3way_branch(message: str, expected: type) -> None:
-    """``status`` 空でも ``code=400`` だけで同じ 3-way 分岐に入る。"""
-    exc = _client_error(code=400, status="", message=message)
+def test_legacy_api_error_unauthenticated_is_classified() -> None:
+    """``APIError`` 直接でも分類が成立する。"""
+    exc = _api_error(code=401, status="UNAUTHENTICATED", message="invalid key")
+
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, expected)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.AUTH
 
 
-def test_input_blocked_translation_preserves_reason() -> None:
-    error = _client_error(
-        code=400,
-        status="INVALID_ARGUMENT",
-        message="request blocked by safety filter",
-    )
-
-    translated = translate_gemini_error(error)
-
-    assert isinstance(translated, AIProviderInputRejectedError)
-    assert translated.CODE == "ai_error_input_rejected"
-    assert translated.reason is GeminiContentRejectionReason.INPUT_BLOCKED
-
-
-# RESOURCE_EXHAUSTED / code=429 → 2-way 分岐 (usage limit vs rate)
+# RESOURCE_EXHAUSTED / code=429 → 流量制限か利用枠の枯渇か
 #
 # Gemini の 429 は per-minute バーストでも per-day 枯渇でも message が同一文言
 # (実際のレスポンス例) のため、以下の fixture は全ケースで message を固定し、
@@ -268,47 +354,27 @@ def _resource_exhausted_error(
     return genai_errors.ClientError(429, response_json)
 
 
+@pytest.mark.parametrize("status", ["RESOURCE_EXHAUSTED", ""])
 @pytest.mark.parametrize(
     "quota_ids,expected",
     [
-        ((), AIProviderRateLimitedError),
-        ((_PER_MINUTE_QUOTA_ID,), AIProviderRateLimitedError),
-        ((_PER_DAY_QUOTA_ID,), AIProviderUsageLimitExhaustedError),
+        ((), AIProviderResponseReason.RATE_LIMITED),
+        ((_PER_MINUTE_QUOTA_ID,), AIProviderResponseReason.RATE_LIMITED),
+        ((_PER_DAY_QUOTA_ID,), AIProviderResponseReason.QUOTA_EXHAUSTED),
+        (("SomeOtherLimit-FreeTier",), AIProviderResponseReason.RATE_LIMITED),
     ],
 )
-def test_resource_exhausted_status_2way_branch(
-    quota_ids: tuple[str, ...], expected: type
+def test_resource_exhausted_branches_by_quota_id(
+    status: str, quota_ids: tuple[str, ...], expected: AIProviderResponseReason
 ) -> None:
-    """同一 message のまま details の quotaId だけで分岐する。"""
-    exc = _resource_exhausted_error(quota_ids=quota_ids)
+    """同一 message のまま details の quotaId だけで分岐する。status 空でも同じ。"""
+    exc = _resource_exhausted_error(status=status, quota_ids=quota_ids)
+
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, expected)
 
-
-def test_code_429_without_status_routes_to_rate_or_quota() -> None:
-    """``status`` 空でも ``code=429`` で同じ details ベース分岐に入る。"""
-    quota_exc = _resource_exhausted_error(status="", quota_ids=(_PER_DAY_QUOTA_ID,))
-    rate_exc = _resource_exhausted_error(status="", quota_ids=())
-    assert isinstance(
-        translate_gemini_error(quota_exc),
-        AIProviderUsageLimitExhaustedError,
-    )
-    assert isinstance(translate_gemini_error(rate_exc), AIProviderRateLimitedError)
-
-
-# 3e: positive allowlist の詳細契約 — details 構造だけで分類する (message は無関係)
-
-
-def test_resource_exhausted_per_minute_quota_only_classifies_as_rate_limited() -> None:
-    exc = _resource_exhausted_error(quota_ids=(_PER_MINUTE_QUOTA_ID,))
-    translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderRateLimitedError)
-
-
-def test_resource_exhausted_per_day_quota_only_classifies_as_exhausted() -> None:
-    exc = _resource_exhausted_error(quota_ids=(_PER_DAY_QUOTA_ID,))
-    translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderUsageLimitExhaustedError)
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is expected
+    assert translated.http_error.status_code == 429
 
 
 @pytest.mark.parametrize(
@@ -322,20 +388,16 @@ def test_resource_exhausted_per_day_quota_only_classifies_as_exhausted() -> None
     ],
     ids=["single_quota_failure_item", "multiple_quota_failure_items"],
 )
-def test_resource_exhausted_mixed_violations_prioritizes_usage_limit_exhausted(
+def test_resource_exhausted_mixed_violations_prioritizes_quota_exhausted(
     details: list[dict],
 ) -> None:
-    """per-day と per-minute が混在しても per-day が 1 件あれば usage limit 優先。"""
+    """per-day と per-minute が混在しても per-day が 1 件あれば枯渇とする。"""
     exc = _resource_exhausted_error(details=details)
-    translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderUsageLimitExhaustedError)
 
-
-def test_resource_exhausted_without_details_classifies_as_rate_limited() -> None:
-    """details 欠損 (SDK が返さない/剥落) は rate limited に倒す。"""
-    exc = _resource_exhausted_error(quota_ids=())
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderRateLimitedError)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.QUOTA_EXHAUSTED
 
 
 @pytest.mark.parametrize(
@@ -355,150 +417,100 @@ def test_resource_exhausted_without_details_classifies_as_rate_limited() -> None
         "error_details_dict",
     ],
 )
-def test_resource_exhausted_malformed_details_classifies_as_rate_limited(
+def test_resource_exhausted_malformed_details_is_rate_limited(
     malformed_details: object,
 ) -> None:
-    """details / error.details が不正形なら rate limited に倒す。"""
+    """details / error.details が不正形なら流量制限に倒す。"""
     exc = _resource_exhausted_error(quota_ids=())
     object.__setattr__(exc, "details", malformed_details)
-    translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderRateLimitedError)
 
-
-def test_resource_exhausted_unknown_quota_id_classifies_as_rate_limited() -> None:
-    """per-day を含まない未知 quotaId は rate limited に倒す。"""
-    exc = _resource_exhausted_error(quota_ids=("SomeOtherLimit-FreeTier",))
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderRateLimitedError)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.RATE_LIMITED
 
 
 @pytest.mark.parametrize("flat_envelope", [False, True], ids=["wrapped", "flat"])
-def test_resource_exhausted_per_day_quota_classifies_regardless_of_envelope_shape(
+def test_resource_exhausted_per_day_quota_regardless_of_envelope_shape(
     flat_envelope: bool,
 ) -> None:
     """``{"error": {...}}`` 形と flat 形の両方で per-day violation を検出する。"""
     exc = _resource_exhausted_error(
         quota_ids=(_PER_DAY_QUOTA_ID,), flat_envelope=flat_envelope
     )
+
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderUsageLimitExhaustedError)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.QUOTA_EXHAUSTED
 
 
-def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
-    """``APIError`` 直接でも分類が成立する。"""
-    exc = _api_error(code=401, status="UNAUTHENTICATED", message="invalid key")
+# 入力長の超過: status guard と文言の一致
+
+
+_CONTEXT_LENGTH_MESSAGES = [
+    "Input exceeds context length of 1048576 tokens.",
+    "ERROR: context_length_exceeded",
+    "request exceeds the maximum number of tokens allowed",
+    "input exceeds the maximum input token count",
+    "this exceeds the model's context length",
+    "this exceeds the model's maximum context length",
+    "input is too long for this model",
+    "Input EXCEEDS CONTEXT LENGTH",
+]
+
+
+@pytest.mark.parametrize("message", _CONTEXT_LENGTH_MESSAGES)
+def test_context_length_with_invalid_argument_is_input_too_long(message: str) -> None:
+    exc = _client_error(code=400, status="INVALID_ARGUMENT", message=message)
+
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, AIProviderConfigurationError)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.INPUT_TOO_LONG
+    assert translated.http_error.status_code == 400
 
 
-# 各分岐が原因詳細 reason を自己記述する (起きた箇所が reason を上げる)
+def test_context_length_with_deadline_exceeded_server_error_is_input_too_long() -> None:
+    """5xx の DEADLINE_EXCEEDED でも、入力長の超過はサーバーエラーより先に判定する。"""
+    exc = _server_error(
+        code=504, status="DEADLINE_EXCEEDED", message="Input exceeds context length"
+    )
 
-
-@pytest.mark.parametrize(
-    "exc,expected_cls,expected_reason",
-    [
-        (
-            httpx.ReadTimeout("t"),
-            AIProviderNetworkError,
-            GeminiStateReason.TIMEOUT,
-        ),
-        (
-            httpx.ConnectError("c"),
-            AIProviderNetworkError,
-            GeminiStateReason.CONNECTION,
-        ),
-        (TimeoutError("t"), AIProviderNetworkError, GeminiStateReason.TIMEOUT),
-        (ConnectionError("c"), AIProviderNetworkError, GeminiStateReason.CONNECTION),
-        (OSError("dns"), AIProviderNetworkError, GeminiStateReason.CONNECTION),
-        (
-            _server_error(),
-            AIProviderServiceUnavailableError,
-            GeminiStateReason.SERVER_ERROR,
-        ),
-        (
-            _client_error(
-                code=400,
-                status="INVALID_ARGUMENT",
-                message=(
-                    "API key AIza... has been reported as leaked at "
-                    "https://github.com/foo"
-                ),
-            ),
-            AIProviderConfigurationError,
-            GeminiStateReason.LEAKED_API_KEY,
-        ),
-        (
-            _client_error(code=401, status="UNAUTHENTICATED"),
-            AIProviderConfigurationError,
-            GeminiStateReason.AUTH,
-        ),
-        (
-            _client_error(code=403, status="PERMISSION_DENIED"),
-            AIProviderConfigurationError,
-            GeminiStateReason.PERMISSION_DENIED,
-        ),
-        (
-            _client_error(code=404, status="NOT_FOUND"),
-            AIProviderConfigurationError,
-            GeminiStateReason.NOT_FOUND,
-        ),
-        (
-            _client_error(code=400, status="FAILED_PRECONDITION"),
-            AIProviderConfigurationError,
-            GeminiStateReason.FAILED_PRECONDITION,
-        ),
-        (
-            _client_error(
-                code=400, status="INVALID_ARGUMENT", message="API key not valid"
-            ),
-            AIProviderConfigurationError,
-            GeminiStateReason.AUTH,
-        ),
-        (
-            _client_error(
-                code=400, status="INVALID_ARGUMENT", message="permission denied"
-            ),
-            AIProviderConfigurationError,
-            GeminiStateReason.PERMISSION_DENIED,
-        ),
-        (
-            _client_error(
-                code=400,
-                status="INVALID_ARGUMENT",
-                message="request blocked by safety filter",
-            ),
-            AIProviderInputRejectedError,
-            GeminiContentRejectionReason.INPUT_BLOCKED,
-        ),
-        (
-            _client_error(
-                code=400, status="INVALID_ARGUMENT", message="malformed request"
-            ),
-            AIProviderRequestInvalidError,
-            GeminiStateReason.INVALID_ARGUMENT,
-        ),
-        (
-            _resource_exhausted_error(quota_ids=(_PER_DAY_QUOTA_ID,)),
-            AIProviderUsageLimitExhaustedError,
-            GeminiStateReason.QUOTA_EXHAUSTED,
-        ),
-        (
-            _resource_exhausted_error(quota_ids=()),
-            AIProviderRateLimitedError,
-            GeminiStateReason.RATE_LIMITED,
-        ),
-    ],
-)
-def test_translation_carries_reason(
-    exc: Exception, expected_cls: type, expected_reason: object
-) -> None:
-    """各分岐が CODE (class) に加え原因詳細 reason を自己記述する。"""
     translated = translate_gemini_error(exc)
-    assert isinstance(translated, expected_cls)
-    assert translated.reason is expected_reason  # type: ignore[attr-defined]
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.INPUT_TOO_LONG
+    assert translated.http_error.status_code == 504
 
 
-# Unknown → return exc (identity 保持)
+def test_context_length_message_with_unrelated_status_is_not_input_too_long() -> None:
+    """status guard が無関係 status を弾く — 文言が一致しても入力長の超過にしない。"""
+    exc = _client_error(
+        code=429,
+        status="RESOURCE_EXHAUSTED",
+        message="input exceeds context length somehow",
+    )
+
+    translated = translate_gemini_error(exc)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.RATE_LIMITED
+
+
+def test_invalid_argument_without_message_is_invalid_request() -> None:
+    """message が None の APIError でも落ちずに分類する。"""
+    exc = _client_error(code=400, status="INVALID_ARGUMENT", message="")
+    # SDK は空 message を None として保持しうるため、属性を直接 None に書き換える
+    object.__setattr__(exc, "message", None)
+
+    translated = translate_gemini_error(exc)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.INVALID_REQUEST
+
+
+# 分類できない例外は同じ instance を返す
 
 
 def test_unknown_exception_returns_same_instance() -> None:
@@ -511,70 +523,3 @@ def test_unknown_api_status_returns_same_instance() -> None:
     """既知 status いずれにも該当しない APIError も identity 保持で返す。"""
     exc = _client_error(code=418, status="TEAPOT", message="weird")
     assert translate_gemini_error(exc) is exc
-
-
-# is_context_length_error: status guard と pattern matching
-
-
-_CONTEXT_LENGTH_MESSAGES = [
-    "Input exceeds context length of 1048576 tokens.",
-    "ERROR: context_length_exceeded",
-    "request exceeds the maximum number of tokens allowed",
-    "input exceeds the maximum input token count",
-    "this exceeds the model's context length",
-    "this exceeds the model's maximum context length",
-    "input is too long for this model",
-]
-
-
-@pytest.mark.parametrize("message", _CONTEXT_LENGTH_MESSAGES)
-def test_is_context_length_error_positive_invalid_argument(message: str) -> None:
-    exc = _client_error(code=400, status="INVALID_ARGUMENT", message=message)
-    assert is_context_length_error(exc) is True
-
-
-def test_is_context_length_error_positive_deadline_exceeded() -> None:
-    exc = _client_error(
-        code=504,
-        status="DEADLINE_EXCEEDED",
-        message="Input exceeds context length",
-    )
-    assert is_context_length_error(exc) is True
-
-
-def test_is_context_length_error_is_case_insensitive() -> None:
-    exc = _client_error(
-        code=400, status="INVALID_ARGUMENT", message="Input EXCEEDS CONTEXT LENGTH"
-    )
-    assert is_context_length_error(exc) is True
-
-
-def test_is_context_length_error_negative_unrelated_status_with_matching_message() -> (
-    None
-):
-    """status guard が無関係 status を弾く証跡 — pattern 一致しても False。"""
-    exc = _client_error(
-        code=429,
-        status="RESOURCE_EXHAUSTED",
-        message="input exceeds context length somehow",
-    )
-    assert is_context_length_error(exc) is False
-
-
-def test_is_context_length_error_negative_invalid_argument_no_pattern() -> None:
-    exc = _client_error(
-        code=400, status="INVALID_ARGUMENT", message="malformed request body"
-    )
-    assert is_context_length_error(exc) is False
-
-
-def test_is_context_length_error_negative_non_sdk_exception() -> None:
-    assert is_context_length_error(ValueError("anything")) is False
-
-
-def test_is_context_length_error_negative_none_message() -> None:
-    """message が None の APIError でも False (NoneType crash しない)。"""
-    exc = _client_error(code=400, status="INVALID_ARGUMENT", message="")
-    # SDK は空 message を None として保持しうるため、属性を直接 None に書き換える
-    object.__setattr__(exc, "message", None)
-    assert is_context_length_error(exc) is False

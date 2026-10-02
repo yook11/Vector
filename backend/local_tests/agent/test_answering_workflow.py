@@ -10,7 +10,15 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchFailureReason,
     ExternalSearchProviderError,
 )
-from app.ai_providers.errors import AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderTransportError,
+)
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import run_agent_answer
 from local_tests.agent.support import (
@@ -75,7 +83,13 @@ async def test_planning_failure_stops_downstream_processing(
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )
-    agent_provider_responses.planning_response = AIProviderNetworkError()
+    agent_provider_responses.planning_response = AIProviderTransportError(
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        )
+    )
 
     with patch.object(
         EvidenceCollectionService,
@@ -152,7 +166,13 @@ async def test_internal_search_failure_does_not_stop_answering(
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )
-    agent_provider_responses.embedding_error = AIProviderNetworkError()
+    agent_provider_responses.embedding_error = AIProviderTransportError(
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        )
+    )
     agent_provider_responses.search_hits = []
     answer = "根拠を取得できなかったため、売上動向は確認できませんでした。"
     agent_provider_responses.answer = answer
@@ -233,7 +253,13 @@ async def test_handoff_generation_failure_does_not_fail_the_answer(
         user_id=agent_user_id,
         question="売上動向を調べてください",
     )
-    agent_provider_responses.handoff_response = AIProviderNetworkError()
+    agent_provider_responses.handoff_response = AIProviderTransportError(
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        )
+    )
     answer = "売上は前年同期比10%増です。[[1]]"
     agent_provider_responses.answer = answer
 

@@ -2,24 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInputRejectedError,
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-    AIProviderUsageLimitExhaustedError,
-)
-from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
@@ -39,49 +32,84 @@ from app.db.errors import (
     DatabaseConstraintErrorReason,
     DatabaseUnexpectedError,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
     ("provider_error", "notified"),
     [
         (
-            AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT),
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
             False,
         ),
         (
-            AIProviderServiceUnavailableError(),
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.SERVER_ERROR,
+                http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+            ),
             False,
         ),
         (
-            AIProviderRateLimitedError(),
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            ),
             False,
         ),
         (
-            AIProviderUsageLimitExhaustedError(),
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            ),
             True,
         ),
         (
-            AIProviderInsufficientBalanceError(),
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+                http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
+            ),
             True,
         ),
         (
-            AIProviderConfigurationError(),
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.AUTH,
+                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+            ),
             False,
         ),
         (
-            AIProviderRequestInvalidError(),
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INVALID_REQUEST,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
             False,
         ),
         (
-            AIProviderOutputTruncatedError(),
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED),
             False,
         ),
         (
-            AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY),
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_BLOCKED,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
             False,
         ),
         (
-            AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
             False,
         ),
     ],
@@ -199,18 +227,3 @@ def test_all_response_defects_preserve_code(defect):
     assert failure.audit.retryability is Retryability.RETRYABLE
     assert not hasattr(failure, "outcome")
     assert failure.provider_exhaustion is None
-
-
-@pytest.mark.parametrize(
-    "error_type", [AIProviderInputRejectedError, AIProviderOutputBlockedError]
-)
-def test_rejection_without_reason_has_nullable_audit_details(error_type) -> None:
-    """理由を省略した拒否でも監査コードを保持し、詳細を補完しない。"""
-    provider = error_type("provider diagnostic")
-    error = to_assessment_error(provider)
-    failure = classify_assessment_failure(error)
-    assert failure.audit.code == provider.CODE
-    assert failure.audit.failure_reason is None
-    assert failure.audit.failure_kind is None
-    assert failure.audit.retryability is None
-    assert error.provider_error is provider

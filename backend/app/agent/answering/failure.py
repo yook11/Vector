@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
-    AIProviderOutputTruncatedError,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 
 PYDANTIC_VALIDATION_FAILED = "answer_synthesis_pydantic_validation_failed"
@@ -21,6 +23,14 @@ class RequestRetryDisposition(StrEnum):
     RETRY_IN_REQUEST = "retry_in_request"
     DO_NOT_RETRY_IN_REQUEST = "do_not_retry_in_request"
     UNKNOWN = "unknown"
+
+
+def is_output_truncated(exc: BaseException) -> TypeGuard[AIProviderResultError]:
+    """出力が上限で打ち切られた失敗か。"""
+    return (
+        isinstance(exc, AIProviderResultError)
+        and exc.reason is AIProviderResultReason.OUTPUT_TRUNCATED
+    )
 
 
 class AnswerSynthesisFailureAttributes(BaseModel):
@@ -54,16 +64,16 @@ def classify_answer_synthesis_failure(
 
     # 打ち切りだけはrequest内でretryする。同じ入力でも書き方次第で収まるため。
     # 打ち切りは分類済み例外にも含まれるため、先に判定する。
-    if isinstance(exc, AIProviderOutputTruncatedError):
+    if is_output_truncated(exc):
         return AnswerSynthesisFailureAttributes(
             code=exc.CODE,
-            failure_reason=exc.reason.value if exc.reason is not None else None,
+            failure_reason=exc.reason.value,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     if isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
         return AnswerSynthesisFailureAttributes(
             code=exc.CODE,
-            failure_reason=exc.reason.value if exc.reason is not None else None,
+            failure_reason=exc.reason.value,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
         )
     if isinstance(exc, EvidenceAnswerDraftInvalidError):
@@ -94,16 +104,16 @@ def classify_direct_answer_failure(
 
     # 打ち切りだけはrequest内でretryする。同じ入力でも書き方次第で収まるため。
     # 打ち切りは分類済み例外にも含まれるため、先に判定する。
-    if isinstance(exc, AIProviderOutputTruncatedError):
+    if is_output_truncated(exc):
         return DirectAnswerFailureAttributes(
             code=exc.CODE,
-            failure_reason=exc.reason.value if exc.reason is not None else None,
+            failure_reason=exc.reason.value,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     if isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
         return DirectAnswerFailureAttributes(
             code=exc.CODE,
-            failure_reason=exc.reason.value if exc.reason is not None else None,
+            failure_reason=exc.reason.value,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
         )
     if isinstance(exc, DirectAnswerInvalidError):

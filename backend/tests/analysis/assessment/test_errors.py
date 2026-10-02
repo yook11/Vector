@@ -4,7 +4,11 @@ from enum import StrEnum
 
 import pytest
 
-from app.ai_providers.errors import AIProviderError, AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderError,
+    AIProviderResultReason,
+    AIProviderTransportError,
+)
 from app.analysis.assessment.errors import (
     AssessmentCurationMissingError,
     AssessmentError,
@@ -12,11 +16,21 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     to_assessment_error,
 )
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.shared.errors import ApplicationError
 
 
 class SampleDefect(StrEnum):
     INVALID = "assessment_test_invalid"
+
+
+class _UnregisteredProviderError(AIProviderError):
+    CODE = "unregistered_provider_error"
 
 
 @pytest.mark.parametrize(
@@ -33,7 +47,9 @@ def test_requires_reason_enum(reason):
         {"reason": AssessmentFailureReason.PROVIDER_ERROR},
         {
             "reason": AssessmentFailureReason.PROVIDER_ERROR,
-            "provider_error": AIProviderError(),
+            "provider_error": _UnregisteredProviderError(
+                reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+            ),
         },
         {
             "reason": AssessmentFailureReason.PROVIDER_ERROR,
@@ -41,7 +57,13 @@ def test_requires_reason_enum(reason):
         },
         {
             "reason": AssessmentFailureReason.PROVIDER_ERROR,
-            "provider_error": AIProviderNetworkError(),
+            "provider_error": AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
             "defect": SampleDefect.INVALID,
         },
         {"reason": AssessmentFailureReason.RESPONSE_INVALID},
@@ -52,11 +74,23 @@ def test_requires_reason_enum(reason):
         {
             "reason": AssessmentFailureReason.RESPONSE_INVALID,
             "defect": SampleDefect.INVALID,
-            "provider_error": AIProviderNetworkError(),
+            "provider_error": AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
         },
         {
             "reason": AssessmentFailureReason.CURATION_MISSING,
-            "provider_error": AIProviderNetworkError(),
+            "provider_error": AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
         },
         {
             "reason": AssessmentFailureReason.CURATION_MISSING,
@@ -93,7 +127,16 @@ def test_curation_missing_has_no_details():
 @pytest.mark.parametrize(
     "exc",
     [
-        to_assessment_error(AIProviderNetworkError("private sdk text")),
+        to_assessment_error(
+            AIProviderTransportError(
+                "private sdk text",
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                ),
+            )
+        ),
         AssessmentResponseInvalidError(SampleDefect.INVALID),
         AssessmentCurationMissingError(),
     ],
@@ -114,7 +157,17 @@ def test_assessment_error_is_application_error():
     "error,expected_message",
     [
         (
-            to_assessment_error(AIProviderNetworkError("private-provider-diagnostic")),
+            to_assessment_error(
+                AIProviderTransportError(
+                    "private-provider-diagnostic",
+                    http_error=HttpTransportError(
+                        failure=HttpTransportFailure(
+                            HttpTransportStage.RECEIVE,
+                            HttpTransportFailureReason.TIMEOUT,
+                        )
+                    ),
+                )
+            ),
             "AIプロバイダーの処理失敗により記事を判定できませんでした",
         ),
         (

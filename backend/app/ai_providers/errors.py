@@ -1,10 +1,15 @@
-"""工程に依存しないAIプロバイダー例外の型と原因。"""
+"""工程に依存しないAIプロバイダー例外の型と原因。
+
+クラスは失敗がどこで判明したか、reason は何が起きたかを表す。
+"""
 
 from __future__ import annotations
 
 from enum import StrEnum
 from typing import ClassVar
 
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import HttpTransportFailureReason
 from app.shared.errors import ApplicationError, ApplicationErrorValue
 
 
@@ -13,116 +18,157 @@ class AIProviderError(ApplicationError):
 
     CODE: ClassVar[str]
     DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの処理に失敗しました"
-    reason: StrEnum | None
+    reason: (
+        AIProviderNotSentReason
+        | HttpTransportFailureReason
+        | AIProviderResponseReason
+        | AIProviderResultReason
+    )
 
     def __init__(
-        self, message: str | None = None, *, reason: StrEnum | None = None
+        self,
+        message: str | None = None,
+        *,
+        reason: AIProviderNotSentReason
+        | HttpTransportFailureReason
+        | AIProviderResponseReason
+        | AIProviderResultReason,
     ) -> None:
+        # どこで判明したかはサブクラスが表すので、基底のままでは作らせない。
+        if type(self) is AIProviderError:
+            raise TypeError("AIProviderError cannot be instantiated directly")
         if message is not None and not isinstance(message, str):
             raise TypeError("message must be a string or None")
-        if reason is not None and not isinstance(reason, StrEnum):
-            raise TypeError("reason must be a StrEnum member or None")
+        if not isinstance(reason, StrEnum):
+            raise TypeError("reason must be a StrEnum member")
         details: dict[str, ApplicationErrorValue] = {}
         code = getattr(type(self), "CODE", None)
         if code is not None:
             details["code"] = code
-        if reason is not None:
-            details["reason"] = reason.value
+        details["reason"] = reason.value
         super().__init__(
             self.DEFAULT_MESSAGE if message is None else message,
-            details=details or None,
+            details=details,
         )
         self.reason = reason
 
 
-class AIProviderInputRejectedError(AIProviderError):
-    """provider が入力を明示的に拒否した。
-
-    policy 違反 / token 超過 / 入力 safety block 等。``reason`` が具体 (input_blocked
-    / context_length / safety 等) を運ぶ。
-    """
-
-    CODE: ClassVar[str] = "ai_error_input_rejected"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーが入力を拒否しました"
+class AIProviderNotSentReason(StrEnum):
+    NOT_CONFIGURED = "not_configured"
+    HOST_BLOCKED = "host_blocked"
+    """宛先の方針がプロバイダーへの通信を拒否した。"""
 
 
-class AIProviderOutputBlockedError(AIProviderError):
-    """provider が応答を blocked-by-safety / recitation 等で抑制した。
+class AIProviderNotSentError(AIProviderError):
+    """設定の不足や宛先の方針により、リクエストを送らなかった。"""
 
-    ``reason`` が finish_reason 由来の具体 (safety / recitation / blocklist /
-    prohibited_content / spii) を運ぶ。
-    """
+    CODE: ClassVar[str] = "ai_provider_not_sent_error"
+    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーへのリクエストを送信しませんでした"
+    reason: AIProviderNotSentReason
 
-    CODE: ClassVar[str] = "ai_error_output_blocked"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーが応答の出力を抑止しました"
-
-
-class AIProviderConfigurationError(AIProviderError):
-    """API key 不正 / model 名不正 / endpoint misconfig 等。運用者対応で復旧。"""
-
-    CODE: ClassVar[str] = "ai_error_configuration"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの設定または利用条件が不正です"
-
-
-class AIProviderRequestInvalidError(AIProviderError):
-    """request 構造が provider 仕様に合致しない。"""
-
-    CODE: ClassVar[str] = "ai_error_request_invalid"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーへのリクエストが不正です"
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: AIProviderNotSentReason,
+    ) -> None:
+        if not isinstance(reason, AIProviderNotSentReason):
+            raise TypeError("reason must be an AIProviderNotSentReason")
+        super().__init__(message, reason=reason)
 
 
-class AIProviderInsufficientBalanceError(AIProviderError):
-    """残高不足 (DeepSeek HTTP 402 等)。アダプター差し替え or 課金で復旧。"""
+class AIProviderTransportError(AIProviderError):
+    """通信が完了せず、プロバイダーの応答を受け取れなかった。"""
 
-    CODE: ClassVar[str] = "ai_error_insufficient_balance"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの利用残高が不足しています"
-
-
-class AIProviderRateLimitedError(AIProviderError):
-    """rate limit (HTTP 429 / RESOURCE_EXHAUSTED)。"""
-
-    CODE: ClassVar[str] = "ai_error_rate_limited"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの呼び出し頻度の上限に達しました"
-
-
-class AIProviderUsageLimitExhaustedError(AIProviderError):
-    """provider / account / project / model の利用枠を使い切った。時間経過等で復旧。"""
-
-    CODE: ClassVar[str] = "ai_error_usage_limit_exhausted"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの利用枠を使い切りました"
-
-
-class AIProviderServiceUnavailableError(AIProviderError):
-    """provider 一時障害 (HTTP 5xx)。"""
-
-    CODE: ClassVar[str] = "ai_error_service_unavailable"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーのサービスを利用できません"
-
-
-class AIProviderNetworkError(AIProviderError):
-    """通信障害 (timeout / connection refused / DNS 失敗等)。"""
-
-    CODE: ClassVar[str] = "ai_error_network"
+    CODE: ClassVar[str] = "ai_provider_transport_error"
     DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーとの通信に失敗しました"
+    reason: HttpTransportFailureReason
+
+    def __init__(
+        self, message: str | None = None, *, http_error: HttpTransportError
+    ) -> None:
+        if not isinstance(http_error, HttpTransportError):
+            raise TypeError("http_error must be an HttpTransportError")
+        super().__init__(message, reason=http_error.failure.reason)
+        self.http_error = http_error
 
 
-class AIProviderOutputTruncatedError(AIProviderError):
-    """finish_reason が MAX_TOKENS で出力が打ち切られた。書き方次第で収まりうる。"""
+class AIProviderResponseReason(StrEnum):
+    AUTH = "auth"
+    LEAKED_API_KEY = "leaked_api_key"
+    PERMISSION_DENIED = "permission_denied"
+    NOT_FOUND = "not_found"
+    FAILED_PRECONDITION = "failed_precondition"
+    INSUFFICIENT_BALANCE = "insufficient_balance"
+    INVALID_REQUEST = "invalid_request"
+    RATE_LIMITED = "rate_limited"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    """日あたりなど、時間で戻る利用枠を使い切った。"""
+    SERVER_ERROR = "server_error"
+    INPUT_TOO_LONG = "input_too_long"
+    INPUT_BLOCKED = "input_blocked"
 
-    CODE: ClassVar[str] = "ai_error_output_truncated"
-    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの応答が途中で打ち切られました"
+
+class AIProviderResponseError(AIProviderError):
+    """プロバイダーが非成功応答を返した。"""
+
+    CODE: ClassVar[str] = "ai_provider_response_error"
+    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーが失敗の応答を返しました"
+    reason: AIProviderResponseReason
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: AIProviderResponseReason,
+        http_error: HttpResponseError,
+    ) -> None:
+        if not isinstance(reason, AIProviderResponseReason):
+            raise TypeError("reason must be an AIProviderResponseReason")
+        if not isinstance(http_error, HttpResponseError):
+            raise TypeError("http_error must be an HttpResponseError")
+        super().__init__(message, reason=reason)
+        self.http_error = http_error
 
 
-# 基底型と未知の直接サブクラスは分類済みの失敗として扱わない。
+class AIProviderResultReason(StrEnum):
+    INPUT_BLOCKED = "input_blocked"
+    OUTPUT_BLOCKED_SAFETY = "output_blocked_safety"
+    OUTPUT_BLOCKED_RECITATION = "output_blocked_recitation"
+    OUTPUT_BLOCKED_BLOCKLIST = "output_blocked_blocklist"
+    OUTPUT_BLOCKED_PROHIBITED_CONTENT = "output_blocked_prohibited_content"
+    OUTPUT_BLOCKED_SPII = "output_blocked_spii"
+    OUTPUT_TRUNCATED = "output_truncated"
+    STREAM_INCOMPLETE = "stream_incomplete"
+    """ストリームが終了の理由を受け取らずに終わった。"""
+    EMBEDDINGS_EMPTY = "embeddings_empty"
+    EMBEDDING_VALUES_MISSING = "embedding_values_missing"
+    EMBEDDING_COUNT_MISMATCH = "embedding_count_mismatch"
+    RESPONSE_UNPARSEABLE = "response_unparseable"
+
+
+class AIProviderResultError(AIProviderError):
+    """成功応答を受け取ったが、中身を使えなかった。"""
+
+    CODE: ClassVar[str] = "ai_provider_result_error"
+    DEFAULT_MESSAGE: ClassVar[str] = "AIプロバイダーの生成結果を利用できませんでした"
+    reason: AIProviderResultReason
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: AIProviderResultReason,
+    ) -> None:
+        if not isinstance(reason, AIProviderResultReason):
+            raise TypeError("reason must be an AIProviderResultReason")
+        super().__init__(message, reason=reason)
+
+
+# 未知の直接サブクラスは分類済みの失敗として扱わない。
 CLASSIFIED_AI_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
-    AIProviderInputRejectedError,
-    AIProviderOutputBlockedError,
-    AIProviderConfigurationError,
-    AIProviderRequestInvalidError,
-    AIProviderInsufficientBalanceError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
-    AIProviderServiceUnavailableError,
-    AIProviderNetworkError,
-    AIProviderOutputTruncatedError,
+    AIProviderNotSentError,
+    AIProviderTransportError,
+    AIProviderResponseError,
+    AIProviderResultError,
 )

@@ -16,7 +16,7 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.consumer_failure_classification import (
@@ -37,6 +37,12 @@ from app.analysis.assessment.errors import (
     to_assessment_error,
 )
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import (
     AnalyzedArticleRecord as AnalyzedArticleRecordORM,
@@ -575,8 +581,15 @@ async def test_append_classified_failure_walks_error_chain_via_cause(
     extraction = await _make_extraction(db_session, article)
     try:
         try:
-            raise AIProviderNetworkError("upstream provider error")
-        except AIProviderNetworkError as inner:
+            raise AIProviderTransportError(
+                "upstream provider error",
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                ),
+            )
+        except AIProviderTransportError as inner:
             raise to_assessment_error(inner) from inner
     except AssessmentError as service_error:
         exc = service_error
@@ -594,7 +607,7 @@ async def test_append_classified_failure_walks_error_chain_via_cause(
     assert chain is not None
     assert chain == [
         "app.analysis.assessment.errors.AssessmentError",
-        "app.ai_providers.errors.AIProviderNetworkError",
+        "app.ai_providers.errors.AIProviderTransportError",
     ]
 
 

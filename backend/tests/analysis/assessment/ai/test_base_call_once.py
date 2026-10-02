@@ -11,15 +11,16 @@ PR3 で導入した:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import structlog
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
@@ -30,6 +31,14 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     to_assessment_error,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _StubAssessor(BaseAssessor):
@@ -95,14 +104,18 @@ class TestCallOncePassthrough:
     async def test_ai_provider_rate_limited_passes_through_unchanged(
         self, make_assessment_logger
     ) -> None:
-        original = AIProviderRateLimitedError("rate limited")
+        original = AIProviderResponseError(
+            "rate limited",
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
         )
 
-        with pytest.raises(AIProviderRateLimitedError) as exc_info:
+        with pytest.raises(AIProviderResponseError) as exc_info:
             await cls._call_once("prompt", logger=make_assessment_logger())
 
         assert exc_info.value is original
@@ -112,14 +125,18 @@ class TestCallOncePassthrough:
     async def test_ai_provider_configuration_passes_through_unchanged(
         self, make_assessment_logger
     ) -> None:
-        original = AIProviderConfigurationError("bad api key")
+        original = AIProviderResponseError(
+            "bad api key",
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
         )
 
-        with pytest.raises(AIProviderConfigurationError) as exc_info:
+        with pytest.raises(AIProviderResponseError) as exc_info:
             await cls._call_once("prompt", logger=make_assessment_logger())
 
         assert exc_info.value is original
@@ -143,10 +160,18 @@ class TestCallOncePassthrough:
         assert exc_info.value is original
 
     @pytest.mark.asyncio
-    async def test_assessment_network_error_passes_through(
+    async def test_assessment_transport_error_passes_through(
         self, make_assessment_logger
     ) -> None:
-        original = to_assessment_error(AIProviderNetworkError())
+        original = to_assessment_error(
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
@@ -161,7 +186,12 @@ class TestCallOncePassthrough:
     async def test_assessment_configuration_error_passes_through(
         self, make_assessment_logger
     ) -> None:
-        original = to_assessment_error(AIProviderConfigurationError())
+        original = to_assessment_error(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.AUTH,
+                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+            )
+        )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
@@ -181,12 +211,19 @@ class TestCallOnceTranslate:
         self, make_assessment_logger
     ) -> None:
         original = ConnectionError("network down")
-        translated = AIProviderNetworkError("translated")
+        translated = AIProviderTransportError(
+            "translated",
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
+        )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(return_value=translated)  # type: ignore[method-assign]
 
-        with pytest.raises(AIProviderNetworkError) as exc_info:
+        with pytest.raises(AIProviderTransportError) as exc_info:
             await cls._call_once("prompt", logger=make_assessment_logger())
 
         assert exc_info.value is translated

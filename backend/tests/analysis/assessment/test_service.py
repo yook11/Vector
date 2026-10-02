@@ -12,8 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderNetworkError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.base import BaseAssessor
@@ -33,6 +34,12 @@ from app.analysis.assessment.service import (
     AssessmentService,
 )
 from app.analysis.logging import create_article_analysis_logger
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import (
     AnalyzedArticleRecord as AnalyzedArticleRecordORM,
@@ -47,6 +54,8 @@ from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.outbox import RejectOutboxInsert
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _AI_MODEL = "gemini-2.5-flash-lite"
 _PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
@@ -330,16 +339,23 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
 
 
 @pytest.mark.asyncio
-async def test_provider_network_error_preserves_provider_cause(
+async def test_provider_transport_error_preserves_provider_cause(
     session_factory: async_sessionmaker[AsyncSession],
     assessment_logger,
 ) -> None:
-    """``AIProviderNetworkError`` → ``AssessmentError`` で wrap。
+    """``AIProviderTransportError`` → ``AssessmentError`` で wrap。
 
     ``__cause__`` に元 ``AIProvider*Error`` が紐付くこと (PR5 の
     ``extract_error_chain`` が 2 段以上を error_chain 列に記録できる前提)。
     """
-    provider_exc = AIProviderNetworkError("connection reset")
+    provider_exc = AIProviderTransportError(
+        "connection reset",
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        ),
+    )
     assessor = _make_assessor(side_effect=provider_exc)
 
     ready = ReadyForAssessment(
@@ -364,7 +380,11 @@ async def test_provider_configuration_error_preserves_provider_cause(
     assessment_logger,
 ) -> None:
     """設定エラーも再試行分類を付けずに保持する。"""
-    provider_exc = AIProviderConfigurationError("bad api key")
+    provider_exc = AIProviderResponseError(
+        "bad api key",
+        reason=AIProviderResponseReason.AUTH,
+        http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+    )
     assessor = _make_assessor(side_effect=provider_exc)
 
     ready = ReadyForAssessment(

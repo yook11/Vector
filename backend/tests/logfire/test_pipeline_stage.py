@@ -283,7 +283,7 @@ def test_span_omits_absent_failure_classification(capfire, monkeypatch) -> None:
         failure_kind=None,
         retryability=None,
         failure_action=None,
-        code="ai_error_network",
+        code="ai_provider_transport_error",
     )
     monkeypatch.setattr(failure_attrs, "project_failure", lambda exc: projection)
 
@@ -294,4 +294,4 @@ def test_span_omits_absent_failure_classification(capfire, monkeypatch) -> None:
     attrs = pipeline_stage_attrs(capfire)
     assert "failure_kind" not in attrs
     assert "retryability" not in attrs
-    assert attrs["code"] == "ai_error_network"
+    assert attrs["code"] == "ai_provider_transport_error"

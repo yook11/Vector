@@ -22,10 +22,11 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
 )
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderError,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
-from app.ai_providers.gemini.error_translator import GeminiStateReason
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 
 
@@ -177,18 +178,21 @@ async def test_gemini_client_scope_rejects_missing_key_before_opening(
     client_factory = _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
     monkeypatch.setattr(composition.settings, "gemini_api_key", SecretStr(""))
 
-    with pytest.raises(AIProviderConfigurationError) as raised:
+    with pytest.raises(AIProviderNotSentError) as raised:
         async with activate_gemini_client():
             raise AssertionError("scope body must not start")
 
-    assert raised.value.reason is GeminiStateReason.NOT_CONFIGURED
+    assert raised.value.reason is AIProviderNotSentReason.NOT_CONFIGURED
     assert client_factory.calls == []
 
 
 @pytest.mark.parametrize(
     "body_error",
     [
-        pytest.param(AIProviderError(), id="provider-error"),
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
+            id="provider-error",
+        ),
         pytest.param(
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
             id="response-error",

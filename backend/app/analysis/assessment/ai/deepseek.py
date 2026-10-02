@@ -19,12 +19,10 @@ from typing import Final
 from openai import AsyncOpenAI
 from structlog.typing import FilteringBoundLogger
 
-from app.ai_providers.deepseek.error_translator import (
-    DeepSeekStateReason,
-    translate_deepseek_error,
-)
+from app.ai_providers.deepseek.error_translator import translate_deepseek_error
 from app.ai_providers.errors import (
-    AIProviderOutputTruncatedError,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
@@ -141,12 +139,12 @@ class DeepSeekAssessor(BaseAssessor):
         if finish_reason == "length":
             logger.warning(
                 "assessment_deepseek_output_truncated",
-                reason=DeepSeekStateReason.OUTPUT_TOKEN_LIMIT_REACHED.value,
+                reason=AIProviderResultReason.OUTPUT_TRUNCATED.value,
                 **usage_fields,
             )
-            raise AIProviderOutputTruncatedError(
+            raise AIProviderResultError(
                 "AI応答が出力トークン数の上限に達して打ち切られました",
-                reason=DeepSeekStateReason.OUTPUT_TOKEN_LIMIT_REACHED,
+                reason=AIProviderResultReason.OUTPUT_TRUNCATED,
             )
 
         try:

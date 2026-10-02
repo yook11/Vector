@@ -30,8 +30,17 @@ from app.agent.recording.evidence_review import (
     EvidenceReviewSucceeded,
 )
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
-from app.ai_providers.errors import AIProviderError, AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderError,
+    AIProviderResultReason,
+    AIProviderTransportError,
+)
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.evidence_review._builders import (
     AS_OF,
     collected_task,
@@ -291,14 +300,15 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
             id="runtime-defect",
         ),
         pytest.param(
-            AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT),
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
             "timeout",
             id="provider-reason",
-        ),
-        pytest.param(
-            AIProviderNetworkError(),
-            "ai_error_network",
-            id="provider-code",
         ),
         # asyncio.wait_for相当のtimeout分類。
         pytest.param(TimeoutError(), "reviewer_timeout", id="timeout"),
@@ -345,7 +355,13 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
     runtime = ScriptedAgentRuntime(
         [
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
-            AIProviderNetworkError(),
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
         ]
     )
 
@@ -356,12 +372,12 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
     )
 
     assert isinstance(result, EvidenceRunFailed)
-    assert result.failure_code == "ai_error_network"
+    assert result.failure_code == "timeout"
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     _assert_recorded(
         recorder,
         outcome=EvidenceReviewFailed(
-            failure_code="ai_error_network",
+            failure_code="timeout",
             attempt_count=2,
         ),
     )
@@ -372,11 +388,8 @@ class _UnregisteredProviderError(AIProviderError):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error_type", [AIProviderError, _UnregisteredProviderError])
-async def test_review_propagates_unclassified_provider_error(
-    error_type: type[AIProviderError],
-) -> None:
-    """基底型と未知の直接サブクラスは工程codeに変換しない。"""
+async def test_review_propagates_unclassified_provider_error() -> None:
+    """未知の直接サブクラスは工程codeに変換しない。"""
     tasks = [
         collected_task(
             task_index=0,
@@ -391,7 +404,9 @@ async def test_review_propagates_unclassified_provider_error(
         )
     ]
 
-    error = error_type()
+    error = _UnregisteredProviderError(
+        reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+    )
     runtime = ScriptedAgentRuntime([error])
 
     with pytest.raises(AIProviderError) as raised:
@@ -546,8 +561,20 @@ async def test_classified_failure_records_failure_code_and_attempt_count() -> No
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime(
         [
-            AIProviderNetworkError(),
-            AIProviderNetworkError(),
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
         ]
     )
 
@@ -561,7 +588,7 @@ async def test_classified_failure_records_failure_code_and_attempt_count() -> No
     _assert_recorded(
         recorder,
         outcome=EvidenceReviewFailed(
-            failure_code="ai_error_network",
+            failure_code="timeout",
             attempt_count=2,
         ),
     )
@@ -596,7 +623,12 @@ async def test_retry_success_records_succeeded_with_attempt_count() -> None:
         pytest.param(RuntimeError("unclassified reviewer error"), id="unknown"),
         pytest.param(asyncio.CancelledError(), id="cancellation"),
         pytest.param(GeneratorExit(), id="generator-exit"),
-        pytest.param(AIProviderError(), id="unclassified-provider"),
+        pytest.param(
+            _UnregisteredProviderError(
+                reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+            ),
+            id="unclassified-provider",
+        ),
     ],
 )
 async def test_unclassified_failure_and_cancellation_record_without_outcome(

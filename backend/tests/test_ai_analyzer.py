@@ -3,14 +3,16 @@
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
-    AIProviderServiceUnavailableError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
@@ -39,6 +41,7 @@ from app.analysis.curation.service import (
 )
 from app.analysis.logging import create_article_analysis_logger
 from app.collection.domain.article_url import ArticleUrl
+from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -47,6 +50,8 @@ from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.pipeline_event import PipelineEvent
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -244,18 +249,23 @@ async def test_curator_call_once_succeeds() -> None:
 
 async def test_curator_call_once_translates_sdk_error() -> None:
     curator = _create_curator()
-    curator._call_api = AsyncMock(side_effect=ConnectionError("timeout"))
+    curator._call_api = AsyncMock(side_effect=httpx.ConnectError("timeout"))
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(AIProviderTransportError):
         await curator._call_once("test prompt")
 
 
 async def test_curator_call_once_passes_through_domain_error() -> None:
     curator = _create_curator()
     # AIProviderError サブクラスは _call_api 内で raise 済として透過する
-    curator._call_api = AsyncMock(side_effect=AIProviderServiceUnavailableError())
+    curator._call_api = AsyncMock(
+        side_effect=AIProviderResponseError(
+            reason=AIProviderResponseReason.SERVER_ERROR,
+            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+        )
+    )
 
-    with pytest.raises(AIProviderServiceUnavailableError):
+    with pytest.raises(AIProviderResponseError):
         await curator._call_once("test prompt")
 
 

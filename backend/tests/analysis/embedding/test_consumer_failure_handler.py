@@ -11,10 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
 from app.analysis.embedding.consumer_failure_classification import (
     classify_embedding_failure,
@@ -38,10 +37,18 @@ from app.db.errors import (
     DatabaseConnectionErrorReason,
     DatabaseUnexpectedError,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 from tests.cloudwatch.records import metric_records
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _HANDLER = "app.analysis.embedding.consumer_failure_handling"
 
@@ -70,10 +77,33 @@ async def _events(session: AsyncSession) -> list[PipelineEvent]:
     [
         EmbeddingAnalyzedArticleMissingError(),
         EmbeddingResponseInvalidError(),
-        to_embedding_error(AIProviderNetworkError()),
-        to_embedding_error(AIProviderRateLimitedError()),
-        to_embedding_error(AIProviderUsageLimitExhaustedError()),
-        to_embedding_error(AIProviderInsufficientBalanceError()),
+        to_embedding_error(
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        ),
+        to_embedding_error(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            )
+        ),
+        to_embedding_error(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            )
+        ),
+        to_embedding_error(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+                http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
+            )
+        ),
         DatabaseUnexpectedError(),
         RuntimeError("Authorization: Bearer test-secret-do-not-record"),
     ],
@@ -129,7 +159,7 @@ async def test_records_classification_without_changing_original_error(
     notices = metric_records(output, "ai_provider_exhausted")
     if failure.provider_exhaustion is not None:
         assert len(notices) == 1
-        assert notices[0]["kind"] == failure.audit.code
+        assert notices[0]["kind"] == failure.audit.failure_reason
         assert notices[0]["provider"] == "gemini"
     else:
         assert notices == []
@@ -142,7 +172,12 @@ async def test_audit_failure_does_not_prevent_notification(
     capsys,
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
-    error = to_embedding_error(AIProviderUsageLimitExhaustedError())
+    error = to_embedding_error(
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        )
+    )
     with capture_logs() as logs:
         await EmbeddingConsumerFailureHandler(session_factory).handle(
             failure=classify_embedding_failure(error),
@@ -163,7 +198,12 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
     db_session, session_factory, article_id
 ) -> None:
     """通知と計測の二次障害は本文をログに漏らさず、監査と元の失敗を維持する。"""
-    error = to_embedding_error(AIProviderInsufficientBalanceError())
+    error = to_embedding_error(
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+            http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
+        )
+    )
     with (
         capture_logs() as logs,
         patch(
@@ -197,7 +237,12 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
     db_session, session_factory, capsys
 ) -> None:
     """監査・drop計測・ログまで失敗しても元の例外を置き換えない。"""
-    error = to_embedding_error(AIProviderUsageLimitExhaustedError())
+    error = to_embedding_error(
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        )
+    )
     with (
         patch(
             f"{_HANDLER}.record_audit_dropped", side_effect=RuntimeError("drop failed")

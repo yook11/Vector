@@ -355,7 +355,7 @@ async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code
 
     意図的な組合せ: stage=backfill_curate (curation 救済の保守動作) +
     payload.kind=curation。content 拒否の drop (stage=curation / failed /
-    outcome_code=ai_error_*) とは全軸が異なる。
+    outcome_code=ai_provider_*) とは全軸が異なる。
     """
     from app.audit.stages.curation import CurationOutcomeCode
 

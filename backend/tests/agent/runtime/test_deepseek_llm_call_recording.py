@@ -5,13 +5,17 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from openai import APITimeoutError
 
 from app.agent.recording.types import Usage
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
-from app.ai_providers.errors import AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderTransportError,
+)
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._deepseek_helpers import (
     FakeDeepSeekClient,
@@ -89,14 +93,18 @@ async def test_translated_provider_error_records_failed_with_code() -> None:
     """翻訳済み障害は分類済み失敗と CODE で閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
-    runtime = _runtime([TimeoutError("timeout")], recorder)
+    error = APITimeoutError(
+        request=httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
+    )
+    error.__cause__ = httpx.ReadTimeout("timeout")
+    runtime = _runtime([error], recorder)
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(AIProviderTransportError):
         await runtime.call(make_agent(), object(), attempt_number=1)
 
     recorded = recorder.records[0]
     assert recorded.failure == LlmAttemptFailed(
-        failure_code=AIProviderNetworkError.CODE
+        failure_code=AIProviderTransportError.CODE
     )
 
 

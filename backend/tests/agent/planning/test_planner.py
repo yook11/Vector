@@ -30,10 +30,16 @@ from app.agent.recording.planning import (
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
+    AIProviderResultError,
+    AIProviderResultReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.recording._fakes import RecordingPlanningRecorder
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
@@ -338,7 +344,13 @@ async def test_terminal_response_defect_records_failed_outcome() -> None:
 async def test_classified_provider_failure_does_not_retry_and_records_not_created(
     capfire: CaptureLogfire,
 ) -> None:
-    error = AIProviderNetworkError()
+    error = AIProviderTransportError(
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        )
+    )
     runtime = ScriptedAgentRuntime([error])
     service, factory = _service(runtime)
 
@@ -346,7 +358,7 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
         await service.plan(_input())
 
     assert raised.value.__cause__ is error
-    assert raised.value.code == "ai_error_network"
+    assert raised.value.code == "ai_provider_transport_error"
     assert [call.attempt_number for call in runtime.calls] == [1]
     assert factory.exits[0][2] is raised.value
     assert _metric_attributes(collected_metrics(capfire)) == [
@@ -354,7 +366,7 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
             "result": "failed",
             "attempt_count": 1,
             "plan_type": "not_created",
-            "failure_code": "ai_error_network",
+            "failure_code": "ai_provider_transport_error",
         }
     ]
 
@@ -362,7 +374,13 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
 async def test_classified_provider_failure_records_failed_outcome() -> None:
     """分類済み provider 失敗は recorder へ failed を渡す。"""
 
-    error = AIProviderNetworkError()
+    error = AIProviderTransportError(
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        )
+    )
     runtime = ScriptedAgentRuntime([error])
     recorder = RecordingPlanningRecorder()
     service, _factory = _service(runtime, recorder=recorder)
@@ -373,7 +391,7 @@ async def test_classified_provider_failure_records_failed_outcome() -> None:
     _assert_recorded(
         recorder,
         outcome=PlanningFailed(
-            failure_code="ai_error_network",
+            failure_code="ai_provider_transport_error",
             attempt_count=1,
         ),
     )
@@ -383,12 +401,12 @@ class _UnregisteredProviderError(AIProviderError):
     CODE = "unregistered_provider_error"
 
 
-@pytest.mark.parametrize("error_type", [AIProviderError, _UnregisteredProviderError])
-async def test_bare_provider_error_propagates_as_unclassified_without_outcome_metric(
+async def test_unregistered_provider_error_propagates_without_outcome_metric(
     capfire: CaptureLogfire,
-    error_type: type[AIProviderError],
 ) -> None:
-    error = error_type()
+    error = _UnregisteredProviderError(
+        reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+    )
     runtime = ScriptedAgentRuntime([error])
     service, factory = _service(runtime)
 
@@ -485,7 +503,13 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
 ) -> None:
     first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
     terminal_error = _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
-    close_error = AIProviderNetworkError()
+    close_error = AIProviderTransportError(
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        )
+    )
     runtime = ScriptedAgentRuntime([first_error, terminal_error])
     factory = RecordingPlannerRuntimeScopeFactory(
         [runtime],
@@ -498,7 +522,7 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
         recorder=recorder,
     )
 
-    with pytest.raises(AIProviderNetworkError) as raised:
+    with pytest.raises(AIProviderTransportError) as raised:
         await service.plan(_input())
 
     assert raised.value is close_error
@@ -520,13 +544,20 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
     ("error", "expected_failure_code"),
     [
         pytest.param(
-            AIProviderNetworkError("RAW_PROVIDER_MESSAGE_MUST_NOT_ENTER_METRICS_26e9"),
-            "ai_error_network",
+            AIProviderTransportError(
+                "RAW_PROVIDER_MESSAGE_MUST_NOT_ENTER_METRICS_26e9",
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                ),
+            ),
+            "ai_provider_transport_error",
             id="provider-error",
         ),
         pytest.param(
-            AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
-            "ai_error_output_blocked",
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
+            "ai_provider_result_error",
             id="blocked-output",
         ),
     ],
@@ -621,8 +652,30 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
             RuntimeError("planner runtime scope exit failed"),
             id="runtime-exit",
         ),
-        pytest.param("enter", 0, AIProviderNetworkError(), id="classified-enter"),
-        pytest.param("exit", 1, AIProviderNetworkError(), id="classified-exit"),
+        pytest.param(
+            "enter",
+            0,
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
+            id="classified-enter",
+        ),
+        pytest.param(
+            "exit",
+            1,
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
+            id="classified-exit",
+        ),
     ],
 )
 async def test_all_runtime_scope_failures_propagate_without_plan_or_metric(

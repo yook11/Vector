@@ -32,7 +32,7 @@ from app.agent.recording.internal_search import (
     InternalSearchFailed,
     InternalSearchSucceeded,
 )
-from app.ai_providers.errors import AIProviderError
+from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.analysis.embedding.domain.value_objects import (
@@ -405,7 +405,9 @@ class TestInternalSearchService:
     ) -> None:
         warning = Mock()
         monkeypatch.setattr(service_module.logger, "warning", warning)
-        provider_error = AIProviderError("SECRET provider message")
+        provider_error = AIProviderResultError(
+            "SECRET provider message", reason=AIProviderResultReason.EMBEDDINGS_EMPTY
+        )
         service = InternalSearchService(
             embedder=FakeInternalQueryEmbedder(error=provider_error),
             article_search_repository=FakeArticleVectorSearchRepository({}),
