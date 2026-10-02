@@ -2,7 +2,7 @@
 
 非 AI を実行しない taskiq プロセス (scheduler / collect の dispatch・collection /
 trend_discovery) と API プロセスの module import は、起動時に重い
-AI SDK (``openai`` + ``google.genai``、実測 ~133MB) を import してはならない。
+AI SDK (``google.genai``) を import してはならない。
 SDK は AI を実行する worker の compose 関数本体 (broker_briefing / broker_agent)、
 または API の
 request-scoped factory 内でのみロードされる設計 (``app/queue/composition.py``
@@ -50,10 +50,7 @@ def _ai_sdk_modules_loaded_after(import_stmt: str) -> set[str]:
         loaded = sorted(
             m
             for m in sys.modules
-            if m == "openai"
-            or m.startswith("openai.")
-            or m == "google.genai"
-            or m.startswith("google.genai")
+            if m == "google.genai" or m.startswith("google.genai")
         )
         print("\\n".join(loaded))
         """
@@ -71,10 +68,10 @@ def _ai_sdk_modules_loaded_after(import_stmt: str) -> set[str]:
 
 @pytest.mark.parametrize("surface", sorted(_NON_AI_IMPORT_SURFACES))
 def test_non_ai_process_import_does_not_load_ai_sdk(surface: str) -> None:
-    """非 AI プロセスの import で openai / google.genai がロードされないこと。
+    """非 AI プロセスの import で google.genai がロードされないこと。
 
     SDK の import-time ロードを構造的に禁じる。回帰すると当該プロセスが待機中も
-    ~133MB の AI SDK を常駐させ OOM 余地を作る。
+    重い AI SDK を常駐させ OOM 余地を作る。
     """
     loaded = _ai_sdk_modules_loaded_after(_NON_AI_IMPORT_SURFACES[surface])
     assert loaded == set(), (

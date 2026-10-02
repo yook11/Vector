@@ -204,10 +204,7 @@ for stage in ['curation', 'assessment', 'embedding']:
     cls(**{f'sqs_article_{stage}_queue_url': 'https://sqs.invalid/queue'})
 assert 'app.config' not in sys.modules
 assert not any(m.startswith(('app.queue', 'taskiq')) for m in sys.modules)
-assert not any(
-    m.startswith(('app.ai_providers.gemini', 'app.ai_providers.deepseek'))
-    for m in sys.modules
-)
+assert not any(m.startswith('app.ai_providers.gemini') for m in sys.modules)
 """
     result = subprocess.run(  # noqa: S603 — 固定した検証コードのみ実行する。
         [sys.executable, "-c", code],

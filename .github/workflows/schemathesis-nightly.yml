@@ -84,7 +84,7 @@ jobs:
       # production deploy 時は stub→gemini を起動時 reject (factory 側で guard)。
       # 本物 API key を CI に置かないことで cost / supply chain 両面の表面を絞る。
       EMBEDDER_PROVIDER: stub
-      DEEPSEEK_API_KEY: ci-schemathesis-dummy
+      GEMINI_API_KEY: ci-schemathesis-dummy
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0

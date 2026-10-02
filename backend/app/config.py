@@ -88,8 +88,6 @@ class Settings(DatabaseSettings, HttpSettings):
     # AI アダプターの選択は env ではなく各 composition の wiring で hardcode する。
     # 切替はコード変更 + 再デプロイで行うため、ここに provider 名は持たない。
     gemini_api_key: SecretStr = SecretStr("")
-    openai_api_key: SecretStr = SecretStr("")
-    deepseek_api_key: SecretStr = SecretStr("")
 
     # 外部検索の入口。AgentCore Gateway の MCP endpoint で、gateway ID は apply 時に
     # 確定するため URL からしか知れない。値を持つのは agent 段 (実呼び出し) と
