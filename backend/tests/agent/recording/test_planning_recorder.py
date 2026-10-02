@@ -55,7 +55,7 @@ async def test_classified_failure_emits_failed_duration_and_outcome(
         async with recorder.record(agent_name="question_planner") as recording:
             recording.report_outcome(
                 PlanningFailed(
-                    failure_code="ai_error_network",
+                    failure_code="ai_provider_transport_failed",
                     attempt_count=1,
                 )
             )
@@ -71,7 +71,7 @@ async def test_classified_failure_emits_failed_duration_and_outcome(
         "result": "failed",
         "attempt_count": 1,
         "plan_type": "not_created",
-        "failure_code": "ai_error_network",
+        "failure_code": "ai_provider_transport_failed",
     }
 
 

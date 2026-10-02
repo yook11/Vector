@@ -30,8 +30,15 @@ from app.agent.recording.evidence_review import (
     EvidenceReviewSucceeded,
 )
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
-from app.ai_providers.errors import AIProviderError, AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderError,
+    AIProviderTransportError,
+)
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.evidence_review._builders import (
     AS_OF,
     collected_task,
@@ -291,14 +298,13 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
             id="runtime-defect",
         ),
         pytest.param(
-            AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT),
+            AIProviderTransportError(
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
             "timeout",
             id="provider-reason",
-        ),
-        pytest.param(
-            AIProviderNetworkError(),
-            "ai_error_network",
-            id="provider-code",
         ),
         # asyncio.wait_for相当のtimeout分類。
         pytest.param(TimeoutError(), "reviewer_timeout", id="timeout"),
@@ -345,7 +351,11 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
     runtime = ScriptedAgentRuntime(
         [
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
-            AIProviderNetworkError(),
+            AIProviderTransportError(
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
         ]
     )
 
@@ -356,12 +366,12 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
     )
 
     assert isinstance(result, EvidenceRunFailed)
-    assert result.failure_code == "ai_error_network"
+    assert result.failure_code == "timeout"
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     _assert_recorded(
         recorder,
         outcome=EvidenceReviewFailed(
-            failure_code="ai_error_network",
+            failure_code="timeout",
             attempt_count=2,
         ),
     )
@@ -546,8 +556,16 @@ async def test_classified_failure_records_failure_code_and_attempt_count() -> No
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime(
         [
-            AIProviderNetworkError(),
-            AIProviderNetworkError(),
+            AIProviderTransportError(
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
+            AIProviderTransportError(
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
         ]
     )
 
@@ -561,7 +579,7 @@ async def test_classified_failure_records_failure_code_and_attempt_count() -> No
     _assert_recorded(
         recorder,
         outcome=EvidenceReviewFailed(
-            failure_code="ai_error_network",
+            failure_code="timeout",
             attempt_count=2,
         ),
     )

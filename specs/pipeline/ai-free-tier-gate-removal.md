@@ -26,7 +26,7 @@ Status: Implemented（2026-09-09）
 - `rate_limit_policy`を設定・adapterから削除し、3工程の基底interfaceを`provider: str`へ置き換える。
 - 未使用だったquery embeddingのpolicy公開も削除する。
 - ゲート専用ログ・`vector.analysis.rate_limit_gate_skipped`・span resultの`rate_limited`を新規出力しない。
-- 実APIエラーの`AIProviderRateLimitedError`と、処理済み・競合の`skipped`は維持する。
+- 実APIエラーの流量制限(`AIProviderErrorResponseError`の`rate_limited`)と、処理済み・競合の`skipped`は維持する。
 
 ## Non-goals
 

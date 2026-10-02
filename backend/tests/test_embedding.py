@@ -12,10 +12,9 @@ import math
 import pytest
 
 from app.ai_providers.errors import (
-    AIProviderInputRejectedError,
-    AIProviderRequestInvalidError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
@@ -78,8 +77,8 @@ class StubEmbedder(BaseEmbedder):
 
     def _translate_error(self, exc: Exception) -> Exception:
         if isinstance(exc, _InvalidInputSDKError):
-            return AIProviderInputRejectedError(
-                reason=GeminiContentRejectionReason.INPUT_BLOCKED
+            return AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.INPUT_BLOCKED, status_code=400
             )
         # マップできない例外は exc をそのまま return (bare re-raise 規約)
         return exc
@@ -126,7 +125,7 @@ async def test_embed_once_translates_sdk_error() -> None:
     AIProvider*Error は class 識別のみで検証する。
     """
     embedder = StubEmbedder(side_effects=[_InvalidInputSDKError("bad input")])
-    with pytest.raises(AIProviderInputRejectedError):
+    with pytest.raises(AIProviderErrorResponseError):
         await embedder.embed_document(_ready())
     assert len(embedder._calls) == 1
 
@@ -146,9 +145,13 @@ async def test_embed_once_passes_through_unmapped_exception() -> None:
 @pytest.mark.asyncio
 async def test_embed_once_does_not_double_translate_ai_provider_error() -> None:
     """``AIProviderError`` 階層は ``_translate_error`` を経由せず素通し。"""
-    pre_translated = AIProviderRequestInvalidError("already translated")
+    pre_translated = AIProviderErrorResponseError(
+        "already translated",
+        reason=AIProviderErrorResponseReason.INVALID_REQUEST,
+        status_code=400,
+    )
     embedder = StubEmbedder(side_effects=[pre_translated])
-    with pytest.raises(AIProviderRequestInvalidError) as exc_info:
+    with pytest.raises(AIProviderErrorResponseError) as exc_info:
         await embedder.embed_document(_ready())
     assert exc_info.value is pre_translated
 

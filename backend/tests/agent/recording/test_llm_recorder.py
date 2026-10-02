@@ -18,7 +18,14 @@ from app.agent.runtime.llm_failure import (
     LlmAttemptFailed,
     llm_attempt_failed_from,
 )
-from app.ai_providers.errors import AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderTransportError,
+)
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.runtime._tracing_helpers import (
     exception_events,
     one_provider_attempt_span,
@@ -51,9 +58,13 @@ def test_failed_outcome_rejects_empty_failure_code() -> None:
 def test_llm_attempt_failed_from_uses_code_or_defect() -> None:
     """分類済み失敗は CODE / defect を failure_code にする。"""
 
-    assert llm_attempt_failed_from(AIProviderNetworkError()) == LlmAttemptFailed(
-        failure_code=AIProviderNetworkError.CODE
-    )
+    assert llm_attempt_failed_from(
+        AIProviderTransportError(
+            transport=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        )
+    ) == LlmAttemptFailed(failure_code=AIProviderTransportError.CODE)
     assert llm_attempt_failed_from(
         AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     ) == LlmAttemptFailed(failure_code=AgentResponseDefect.RESPONSE_NOT_JSON)
@@ -116,7 +127,9 @@ async def test_classified_failure_records_status_and_failure_code(
     error = RuntimeError("classified by runtime")
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(**_RECORD_KWARGS) as recording:
-            recording.report_outcome(LlmAttemptFailed(failure_code="ai_error_network"))
+            recording.report_outcome(
+                LlmAttemptFailed(failure_code="ai_provider_transport_failed")
+            )
             recording.report_usage(Usage(input_tokens=11, output_tokens=7))
             raise error
 
@@ -131,7 +144,7 @@ async def test_classified_failure_records_status_and_failure_code(
     }
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
         **expected,
-        "failure_code": "ai_error_network",
+        "failure_code": "ai_provider_transport_failed",
     }
     duration = next(item for item in metrics if item["name"] == _DURATION_METRIC)
     assert duration["data"]["data_points"][0]["attributes"] == expected
@@ -149,7 +162,7 @@ async def test_classified_failure_records_status_and_failure_code(
     attributes = dict(span.attributes or {})
     assert "result" not in attributes
     assert attributes["status"] == "failed"
-    assert attributes["error.type"] == "ai_error_network"
+    assert attributes["error.type"] == "ai_provider_transport_failed"
     assert span.status.status_code is StatusCode.ERROR
     assert exception_events(span) == []
 
@@ -195,7 +208,9 @@ async def test_stopped_attempt_discards_reported_failure(
     recorder = LogfireLlmCallRecorder()
     with pytest.raises(asyncio.CancelledError):
         async with recorder.record(**_RECORD_KWARGS) as recording:
-            recording.report_outcome(LlmAttemptFailed(failure_code="ai_error_network"))
+            recording.report_outcome(
+                LlmAttemptFailed(failure_code="ai_provider_transport_failed")
+            )
             raise asyncio.CancelledError()
 
     metrics = collected_metrics(capfire)
@@ -445,14 +460,16 @@ async def test_stream_classified_failure_has_no_exception_event(
         async with LogfireLlmCallRecorder().record(
             **{**_RECORD_KWARGS, "mode": "stream"}
         ) as recording:
-            recording.report_outcome(LlmAttemptFailed(failure_code="ai_error_network"))
+            recording.report_outcome(
+                LlmAttemptFailed(failure_code="ai_provider_transport_failed")
+            )
             raise error
 
     assert raised.value is error
     span = tracer.spans[0]
     assert "result" not in span.attributes
     assert span.attributes["status"] == "failed"
-    assert span.attributes["error.type"] == "ai_error_network"
+    assert span.attributes["error.type"] == "ai_provider_transport_failed"
     assert span.status_code is StatusCode.ERROR
     assert span.exception_events == []
     assert span.end_calls == 1

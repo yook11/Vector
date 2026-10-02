@@ -43,7 +43,7 @@ def _stmt_error(cls: type[Exception]) -> Exception:
 class _CodedNonDbError(Exception):
     """``.code`` を持つが SQLAlchemy 例外でない非 DB 例外 (AI marker 模倣)。"""
 
-    code = "ai_error_network"
+    code = "ai_provider_transport_failed"
 
 
 @pytest.mark.parametrize(

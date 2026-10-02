@@ -9,16 +9,27 @@ from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
-from app.ai_providers.errors import AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderTransportError,
+)
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 
 
 def test_planning_error_from_maps_provider_code() -> None:
-    cause = AIProviderNetworkError()
+    cause = AIProviderTransportError(
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
+    )
 
     error = planning_error_from(cause)
 
-    assert error.code == "ai_error_network"
-    assert str(error) == "ai_error_network"
+    assert error.code == "ai_provider_transport_failed"
+    assert str(error) == "ai_provider_transport_failed"
 
 
 def test_planning_error_from_maps_each_response_defect() -> None:

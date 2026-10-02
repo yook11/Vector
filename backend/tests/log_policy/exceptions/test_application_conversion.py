@@ -5,8 +5,10 @@ from dataclasses import asdict
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
-from app.ai_providers.errors import AIProviderError, AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderError,
+    AIProviderTransportError,
+)
 from app.analysis.assessment import events as assessment
 from app.analysis.assessment.ai.parse import parse_assessment
 from app.analysis.assessment.errors import (
@@ -17,6 +19,11 @@ from app.analysis.assessment.errors import (
 from app.analysis.curation import events as curation
 from app.collection import events as collection
 from app.collection.article_acquisition import events as acquisition
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.log_policy.exceptions.conversion import convert_exception
 
 pytestmark = pytest.mark.unit
@@ -271,21 +278,21 @@ def test_invalid_issue_does_not_return_partial_diagnostics() -> None:
 
 def test_provider_error_keeps_message_code_and_reason() -> None:
     """プロバイダー例外の明示した診断だけを共通形式へ渡す。"""
-    error = AIProviderNetworkError("request failed", reason=DeepSeekStateReason.TIMEOUT)
+    error = AIProviderTransportError(
+        "request failed",
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        ),
+    )
     error.response = {"body": "private-response"}
 
     converted = convert_exception(error)
 
     assert converted.message == "request failed"
-    assert converted.error_details == {"code": "ai_error_network", "reason": "timeout"}
-
-
-def test_provider_error_without_reason_keeps_only_code() -> None:
-    """具体的な理由がなければ、通信失敗の説明とcodeだけを渡す。"""
-    converted = convert_exception(AIProviderNetworkError())
-
-    assert converted.message == "AIプロバイダーとの通信に失敗しました"
-    assert converted.error_details == {"code": "ai_error_network"}
+    assert converted.error_details == {
+        "code": "ai_provider_transport_failed",
+        "reason": "timeout",
+    }
 
 
 def test_unclassified_provider_base_does_not_invent_code() -> None:
@@ -299,16 +306,19 @@ def test_unclassified_provider_base_does_not_invent_code() -> None:
 def test_unclassified_provider_base_keeps_explicit_reason() -> None:
     """CODEを持たない例外でも明示した理由は失わない。"""
     converted = convert_exception(
-        AIProviderError(reason=DeepSeekStateReason.CONNECTION)
+        AIProviderError(reason=HttpTransportFailureReason.NETWORK_IO)
     )
 
-    assert converted.error_details == {"reason": "connection"}
+    assert converted.error_details == {"reason": "network_io"}
 
 
 def test_assessment_provider_error_keeps_stage_reason_and_code() -> None:
     """工程の診断にはプロバイダー例外の本文やオブジェクトを転記しない。"""
-    provider_error = AIProviderNetworkError(
-        "private-provider-response", reason=DeepSeekStateReason.TIMEOUT
+    provider_error = AIProviderTransportError(
+        "private-provider-response",
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        ),
     )
     error = to_assessment_error(provider_error)
 
@@ -319,7 +329,7 @@ def test_assessment_provider_error_keeps_stage_reason_and_code() -> None:
     )
     assert converted.error_details == {
         "reason": "provider_error",
-        "code": "ai_error_network",
+        "code": "ai_provider_transport_failed",
     }
 
 

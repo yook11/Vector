@@ -7,8 +7,8 @@ import pytest
 from pydantic import SecretStr
 
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
-    AIProviderServiceUnavailableError,
+    AIProviderErrorResponseError,
+    AIProviderTransportError,
 )
 from app.ai_providers.gemini import client as module
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
@@ -70,9 +70,9 @@ async def test_curator_uses_borrowed_sdk_with_shared_timeout_and_no_retry(
         curator = GeminiCurator(client=client)
         if outcome in ("timeout", "unavailable"):
             error_type = (
-                AIProviderNetworkError
+                AIProviderTransportError
                 if outcome == "timeout"
-                else AIProviderServiceUnavailableError
+                else AIProviderErrorResponseError
             )
             with pytest.raises(error_type):
                 await curator.curate(title="Title", content="Body")

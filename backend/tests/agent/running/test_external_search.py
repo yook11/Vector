@@ -40,8 +40,14 @@ from app.agent.planning.contract import (
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
-from app.ai_providers.errors import AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderTransportError,
+)
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.running._harness import (
     AS_OF,
     ExternalScopes,
@@ -1347,7 +1353,14 @@ async def test_query_timeout_is_classified_without_reviewer() -> None:
         tasks=[_task("timeout")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime(
-                [AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)]
+                [
+                    AIProviderTransportError(
+                        transport=HttpTransportFailure(
+                            HttpTransportStage.RECEIVE,
+                            HttpTransportFailureReason.TIMEOUT,
+                        )
+                    )
+                ]
             ),
             reviewer_runtime=reviewer_runtime,
             gateway=_FakeExternalSearchGateway(),

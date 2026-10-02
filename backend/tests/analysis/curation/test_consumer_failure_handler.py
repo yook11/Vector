@@ -11,11 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiStateReason
 from app.analysis.curation.consumer_failure_classification import (
     classify_curation_failure,
 )
@@ -28,6 +27,11 @@ from app.analysis.curation.domain.ready import (
 )
 from app.analysis.curation.errors import to_curation_error
 from app.audit.stages.curation import CurationAuditRepository
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -59,7 +63,11 @@ async def test_successful_handling_records_failed_audit_and_outcome(
     db_session, session_factory, article_id, capsys
 ) -> None:
     """後処理が成功すれば失敗監査と処理失敗件数を残し、枯渇なら通知する。"""
-    error = to_curation_error(AIProviderUsageLimitExhaustedError())
+    error = to_curation_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        )
+    )
     await CurationConsumerFailureHandler(session_factory).handle(
         failure=classify_curation_failure(error),
         exc=error,
@@ -86,7 +94,11 @@ async def test_audit_failure_does_not_prevent_notification(
     capsys,
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
-    error = to_curation_error(AIProviderUsageLimitExhaustedError())
+    error = to_curation_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        )
+    )
     with capture_logs() as logs:
         await CurationConsumerFailureHandler(session_factory).handle(
             failure=classify_curation_failure(error),
@@ -107,7 +119,11 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
     db_session, session_factory, article_id
 ) -> None:
     """通知と計測の二次障害は本文をログに漏らさず、監査と元の失敗を維持する。"""
-    error = to_curation_error(AIProviderInsufficientBalanceError())
+    error = to_curation_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE, status_code=402
+        )
+    )
     with (
         capture_logs() as logs,
         patch(
@@ -141,7 +157,11 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
     db_session, session_factory, capsys
 ) -> None:
     """監査・drop計測・ログまで失敗しても元の例外を置き換えない。"""
-    error = to_curation_error(AIProviderUsageLimitExhaustedError())
+    error = to_curation_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        )
+    )
     with (
         patch(
             f"{_HANDLER}.record_audit_dropped", side_effect=RuntimeError("drop failed")
@@ -178,7 +198,11 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
     factory = async_sessionmaker(
         session_factory.kw["bind"], class_=CommitFails, expire_on_commit=False
     )
-    error = to_curation_error(AIProviderUsageLimitExhaustedError())
+    error = to_curation_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        )
+    )
     with capture_logs() as logs:
         await CurationConsumerFailureHandler(factory).handle(
             failure=classify_curation_failure(error),
@@ -244,7 +268,11 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     db_session, session_factory, article_id
 ) -> None:
     """実DBの監査行に原因を保持し、廃止した回復分類はnullで保存する。"""
-    provider_error = AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT)
+    provider_error = AIProviderTransportError(
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
+    )
     error = to_curation_error(provider_error)
     error.__cause__ = provider_error
 
@@ -257,12 +285,12 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     )
 
     (event,) = await _events(db_session)
-    assert event.outcome_code == "ai_error_network"
+    assert event.outcome_code == "ai_provider_transport_failed"
     assert event.retryability is None
     assert event.payload["failure_kind"] is None
-    assert event.payload["failure_reason"] == GeminiStateReason.TIMEOUT.value
+    assert event.payload["failure_reason"] == HttpTransportFailureReason.TIMEOUT.value
     assert event.error_class == "app.analysis.curation.errors.CurationError"
     assert event.payload["error_chain"] == [
         "app.analysis.curation.errors.CurationError",
-        "app.ai_providers.errors.AIProviderNetworkError",
+        "app.ai_providers.errors.AIProviderTransportError",
     ]

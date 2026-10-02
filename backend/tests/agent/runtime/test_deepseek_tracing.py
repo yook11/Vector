@@ -9,14 +9,17 @@ import json
 from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
 from logfire.testing import CaptureLogfire
-from openai import AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI
 from opentelemetry.trace import SpanKind, StatusCode
 
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
-from app.ai_providers.errors import AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderTransportError,
+)
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.runtime._deepseek_helpers import (
     FakeDeepSeekClient,
@@ -175,9 +178,13 @@ async def test_classified_provider_error_records_safe_span_without_exception_eve
 ) -> None:
     """分類済み provider 障害を例外 event なしの安全な span として残す。"""
     sentinel = "PROVIDER_ERROR_SENTINEL_267e"
-    client = FakeDeepSeekClient([TimeoutError(sentinel)])
+    error = APITimeoutError(
+        request=httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
+    )
+    error.__cause__ = httpx.ReadTimeout(sentinel)
+    client = FakeDeepSeekClient([error])
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(AIProviderTransportError):
         await DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, client), binding=make_binding()
         ).call(make_agent(), object(), attempt_number=1)
@@ -186,7 +193,7 @@ async def test_classified_provider_error_records_safe_span_without_exception_eve
     attributes = dict(span.attributes or {})
     assert "result" not in attributes
     assert attributes["status"] == "failed"
-    assert attributes["error.type"] == AIProviderNetworkError.CODE
+    assert attributes["error.type"] == AIProviderTransportError.CODE
     assert not any(key.startswith("gen_ai.usage.") for key in attributes)
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")

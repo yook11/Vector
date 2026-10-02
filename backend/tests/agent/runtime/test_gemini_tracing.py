@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from google.genai.client import AsyncClient
 from logfire.testing import CaptureLogfire
@@ -21,9 +22,8 @@ import app.agent.runtime.gemini as gemini_runtime_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
+    AIProviderGenerationError,
+    AIProviderTransportError,
 )
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.runtime._helpers import (
@@ -176,7 +176,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
         [blocked_response("SAFETY", usage_metadata=_full_usage())]
     )
 
-    with pytest.raises(AIProviderOutputBlockedError):
+    with pytest.raises(AIProviderGenerationError):
         await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
@@ -187,7 +187,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
     attributes = dict(span.attributes or {})
     assert attributes["status"] == "failed"
     assert "result" not in attributes
-    assert attributes["error.type"] == AIProviderOutputBlockedError.CODE
+    assert attributes["error.type"] == AIProviderGenerationError.CODE
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
@@ -213,7 +213,7 @@ async def test_truncated_response_records_usage_and_is_not_succeeded(
         [finished_response("MAX_TOKENS", usage_metadata=_full_usage())]
     )
 
-    with pytest.raises(AIProviderOutputTruncatedError):
+    with pytest.raises(AIProviderGenerationError):
         await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
@@ -224,7 +224,7 @@ async def test_truncated_response_records_usage_and_is_not_succeeded(
     attributes = dict(span.attributes or {})
     assert "result" not in attributes
     assert attributes["status"] == "failed"
-    assert attributes["error.type"] == AIProviderOutputTruncatedError.CODE
+    assert attributes["error.type"] == AIProviderGenerationError.CODE
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
@@ -337,9 +337,9 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
     capfire: CaptureLogfire,
 ) -> None:
     """分類済み provider 障害では使用量と例外 event を記録しない。"""
-    client = FakeGeminiClient([TimeoutError("PROVIDER_ERROR_SENTINEL_267e")])
+    client = FakeGeminiClient([httpx.ReadTimeout("PROVIDER_ERROR_SENTINEL_267e")])
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(AIProviderTransportError):
         await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
@@ -350,7 +350,7 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
     attributes = dict(span.attributes or {})
     assert "result" not in attributes
     assert attributes["status"] == "failed"
-    assert attributes["error.type"] == AIProviderNetworkError.CODE
+    assert attributes["error.type"] == AIProviderTransportError.CODE
     assert not any(key.startswith("gen_ai.usage.") for key in attributes)
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")

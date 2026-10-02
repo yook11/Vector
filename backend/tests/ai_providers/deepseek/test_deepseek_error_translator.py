@@ -1,8 +1,7 @@
 """``app.ai_providers.deepseek.error_translator`` の golden table テスト。
 
 DeepSeek (OpenAI SDK) の SDK 例外 / HTTP status → ``AIProvider*Error`` 分類を検証する。
-各分岐は CODE (class) に加え DeepSeek 状態の ``reason`` を自己記述し、catch-all は
-``return exc`` (bare re-raise guard 規約) する。
+分類できない例外は ``return exc`` (bare re-raise guard 規約) する。
 
 OpenAI SDK 2.32+ の status 系例外は ``response=httpx.Response(..., request=...)``
 が必須 (``request`` 同梱必要)。helper を経由して構築する。
@@ -25,19 +24,20 @@ from openai import (
 )
 from openai import RateLimitError as OpenAIRateLimitError
 
-from app.ai_providers.deepseek.error_translator import (
-    DeepSeekStateReason,
-    translate_deepseek_error,
-)
+from app.ai_providers.deepseek.error_translator import translate_deepseek_error
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+    AIProviderRequestNotSentError,
+    AIProviderRequestNotSentReason,
+    AIProviderTransportError,
 )
 from app.http.destination_policy import HostBlockedError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 
 
 def _make_request() -> httpx.Request:
@@ -53,137 +53,193 @@ def _make_status_error(status_code: int, msg: str = "x") -> APIStatusError:
     return APIStatusError(msg, response=_make_response(status_code), body=None)
 
 
-def _connection_error_caused_by(cause: Exception) -> APIConnectionError:
+def _wrapped_by_sdk(error: APIConnectionError, cause: Exception) -> APIConnectionError:
     """openai SDK と同じく、送信中の例外を ``__cause__`` に持たせて包む。"""
-    error = APIConnectionError(request=_make_request())
     error.__cause__ = cause
     return error
 
 
-# 全分岐 (SDK 例外種別 / HTTP status) を網羅。各行が CODE (class) と reason の両方を
-# 固定するので、分類の正本テストはここ 1 本。__init__ の NOT_CONFIGURED は translator
-# 分岐外 (adapter 検知) なので本テーブルには含めない。
+# 送信前・通信
+
+
+def test_host_blocked_cause_is_request_not_sent() -> None:
+    """宛先の方針による拒否は、通信の失敗ではなく送らなかった失敗とする。"""
+    exc = _wrapped_by_sdk(
+        APIConnectionError(request=_make_request()), HostBlockedError("private")
+    )
+
+    translated = translate_deepseek_error(exc)
+
+    assert isinstance(translated, AIProviderRequestNotSentError)
+    assert translated.reason is AIProviderRequestNotSentReason.HOST_BLOCKED
+    assert str(translated) == "AIプロバイダーへの通信が宛先の方針で拒否されました"
+
+
 @pytest.mark.parametrize(
-    "exc_factory,expected_cls,expected_reason,expected_message",
+    "exc_factory,expected",
+    [
+        (
+            lambda: _wrapped_by_sdk(
+                APITimeoutError(request=_make_request()),
+                httpx.ReadTimeout("timed out"),
+            ),
+            HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            ),
+        ),
+        (
+            lambda: _wrapped_by_sdk(
+                APIConnectionError(request=_make_request()),
+                httpx.ConnectError("refused"),
+            ),
+            HttpTransportFailure(
+                HttpTransportStage.CONNECT, HttpTransportFailureReason.NETWORK_IO
+            ),
+        ),
+        (
+            lambda: _wrapped_by_sdk(
+                APIConnectionError(request=_make_request()),
+                httpx.ProxyError("403 Forbidden"),
+            ),
+            HttpTransportFailure(
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.PROXY,
+                proxy_status=403,
+            ),
+        ),
+    ],
+)
+def test_sdk_wrapped_transport_failure_keeps_stage_and_reason(
+    exc_factory, expected: HttpTransportFailure
+) -> None:
+    """SDK が包んだ httpx の例外を共通HTTPで分類し、段階と理由を残す。"""
+    translated = translate_deepseek_error(exc_factory())
+
+    assert isinstance(translated, AIProviderTransportError)
+    assert translated.transport == expected
+
+
+@pytest.mark.parametrize(
+    "exc_factory,expected",
     [
         (
             lambda: APITimeoutError(request=_make_request()),
-            AIProviderNetworkError,
-            DeepSeekStateReason.TIMEOUT,
-            "AIプロバイダーとの通信がタイムアウトしました",
+            HttpTransportFailure(
+                HttpTransportStage.UNKNOWN, HttpTransportFailureReason.TIMEOUT
+            ),
         ),
         (
             lambda: APIConnectionError(request=_make_request()),
-            AIProviderNetworkError,
-            DeepSeekStateReason.CONNECTION,
-            "AIプロバイダーに接続できませんでした",
+            HttpTransportFailure(
+                HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
+            ),
         ),
         (
-            lambda: _connection_error_caused_by(httpx.ConnectError("refused")),
-            AIProviderNetworkError,
-            DeepSeekStateReason.CONNECTION,
-            "AIプロバイダーに接続できませんでした",
+            lambda: _wrapped_by_sdk(
+                APIConnectionError(request=_make_request()), RuntimeError("other")
+            ),
+            HttpTransportFailure(
+                HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
+            ),
         ),
-        (
-            lambda: _connection_error_caused_by(HostBlockedError("private address")),
-            AIProviderNetworkError,
-            DeepSeekStateReason.HOST_BLOCKED,
-            "AIプロバイダーへの通信が宛先の方針で拒否されました",
-        ),
-        (
-            lambda: TimeoutError("t"),
-            AIProviderNetworkError,
-            DeepSeekStateReason.TIMEOUT,
-            "AIプロバイダーとの通信がタイムアウトしました",
-        ),
-        (
-            lambda: ConnectionError("c"),
-            AIProviderNetworkError,
-            DeepSeekStateReason.CONNECTION,
-            "AIプロバイダーに接続できませんでした",
-        ),
-        (
-            lambda: OSError("dns"),
-            AIProviderNetworkError,
-            DeepSeekStateReason.CONNECTION,
-            "AIプロバイダーに接続できませんでした",
-        ),
+    ],
+)
+def test_transport_failure_without_httpx_cause_has_unknown_stage(
+    exc_factory, expected: HttpTransportFailure
+) -> None:
+    """包む前の例外を分類できなければ、段階を断定しない。"""
+    translated = translate_deepseek_error(exc_factory())
+
+    assert isinstance(translated, AIProviderTransportError)
+    assert translated.transport == expected
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [TimeoutError("t"), ConnectionError("c"), OSError("no such file")],
+)
+def test_builtin_errors_are_not_classified(exc: Exception) -> None:
+    """SDK は通信の例外を包むので、包まれていない組み込みの例外は分類せずに返す。"""
+    assert translate_deepseek_error(exc) is exc
+
+
+# 失敗の応答
+
+
+@pytest.mark.parametrize(
+    "exc_factory,expected_reason,expected_status,expected_message",
+    [
         (
             lambda: AuthenticationError("k", response=_make_response(401), body=None),
-            AIProviderConfigurationError,
-            DeepSeekStateReason.AUTH,
+            AIProviderErrorResponseReason.AUTH,
+            401,
             "AIプロバイダーの認証に失敗しました",
         ),
         (
             lambda: PermissionDeniedError("d", response=_make_response(403), body=None),
-            AIProviderConfigurationError,
-            DeepSeekStateReason.PERMISSION_DENIED,
+            AIProviderErrorResponseReason.PERMISSION_DENIED,
+            403,
             "AIプロバイダーへのアクセス権限がありません",
         ),
         (
             lambda: NotFoundError("m", response=_make_response(404), body=None),
-            AIProviderConfigurationError,
-            DeepSeekStateReason.NOT_FOUND,
+            AIProviderErrorResponseReason.NOT_FOUND,
+            404,
             "AIプロバイダーの要求先が見つかりません",
         ),
         (
             lambda: _make_status_error(402, "Insufficient Balance"),
-            AIProviderInsufficientBalanceError,
-            DeepSeekStateReason.INSUFFICIENT_BALANCE,
+            AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+            402,
             "AIプロバイダーの利用残高が不足しています",
         ),
         (
             lambda: OpenAIRateLimitError("r", response=_make_response(429), body=None),
-            AIProviderRateLimitedError,
-            DeepSeekStateReason.RATE_LIMITED,
+            AIProviderErrorResponseReason.RATE_LIMITED,
+            429,
             "AIプロバイダーの呼び出し頻度の上限に達しました",
         ),
         (
             lambda: BadRequestError("b", response=_make_response(400), body=None),
-            AIProviderRequestInvalidError,
-            DeepSeekStateReason.BAD_REQUEST,
+            AIProviderErrorResponseReason.INVALID_REQUEST,
+            400,
             "AIプロバイダーがリクエストを不正と判定しました",
         ),
         (
             lambda: UnprocessableEntityError(
                 "u", response=_make_response(422), body=None
             ),
-            AIProviderRequestInvalidError,
-            DeepSeekStateReason.UNPROCESSABLE,
+            AIProviderErrorResponseReason.INVALID_REQUEST,
+            422,
             "AIプロバイダーがリクエストを処理できませんでした",
         ),
         (
             lambda: InternalServerError("s", response=_make_response(500), body=None),
-            AIProviderServiceUnavailableError,
-            DeepSeekStateReason.SERVER_ERROR,
+            AIProviderErrorResponseReason.SERVER_ERROR,
+            500,
             "AIプロバイダー内部でサーバーエラーが発生しました",
         ),
         (
             lambda: _make_status_error(503, "upstream"),
-            AIProviderServiceUnavailableError,
-            DeepSeekStateReason.SERVER_ERROR,
+            AIProviderErrorResponseReason.SERVER_ERROR,
+            503,
             "AIプロバイダー内部でサーバーエラーが発生しました",
         ),
     ],
 )
-def test_translation_carries_code_reason_and_explanation(
-    exc_factory, expected_cls: type, expected_reason: object, expected_message: str
+def test_status_error_is_error_response_with_reason_and_status(
+    exc_factory,
+    expected_reason: AIProviderErrorResponseReason,
+    expected_status: int,
+    expected_message: str,
 ) -> None:
-    """SDK例外を分類し、入力値を含まない説明と理由を伝える。"""
+    """SDK例外を分類し、入力値を含まない説明・理由・HTTP status を伝える。"""
     translated = translate_deepseek_error(exc_factory())
-    assert isinstance(translated, expected_cls)
-    assert translated.reason is expected_reason  # type: ignore[attr-defined]
+
+    assert isinstance(translated, AIProviderErrorResponseError)
+    assert translated.reason is expected_reason
+    assert translated.status_code == expected_status
     assert str(translated) == expected_message
-
-
-def test_402_is_evaluated_before_rate_limited() -> None:
-    """HTTP 402 は ``OpenAIRateLimitError`` より先に評価される (DeepSeek 固有順序)。
-
-    402 は専用 SDK 例外がなく ``APIStatusError`` で来るため、429 系の前段に置かないと
-    InsufficientBalance が RateLimited に丸められる。
-    """
-    translated = translate_deepseek_error(_make_status_error(402, "Insufficient"))
-    assert isinstance(translated, AIProviderInsufficientBalanceError)
 
 
 def test_unmappable_returns_exc_unchanged() -> None:

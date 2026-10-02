@@ -10,12 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_providers.errors import (
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiStateReason
 from app.analysis.assessment.consumer_failure_classification import (
     classify_assessment_failure,
 )
@@ -29,6 +29,11 @@ from app.analysis.assessment.domain.ready import (
 from app.analysis.assessment.errors import to_assessment_error
 from app.analysis.logging import create_article_analysis_logger
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -65,7 +70,11 @@ async def test_successful_handling_records_failed_audit_and_outcome(
     db_session, session_factory, article_id, capsys, assessment_logger
 ) -> None:
     """後処理が成功すれば失敗監査と処理失敗件数を残し、枯渇なら通知する。"""
-    error = to_assessment_error(AIProviderUsageLimitExhaustedError())
+    error = to_assessment_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        )
+    )
     await AssessmentConsumerFailureHandler(session_factory).handle(
         failure=classify_assessment_failure(error),
         exc=error,
@@ -94,7 +103,11 @@ async def test_audit_failure_does_not_prevent_notification(
     assessment_logger,
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
-    error = to_assessment_error(AIProviderUsageLimitExhaustedError())
+    error = to_assessment_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        )
+    )
     await AssessmentConsumerFailureHandler(session_factory).handle(
         failure=classify_assessment_failure(error),
         exc=error,
@@ -114,7 +127,11 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
     db_session, session_factory, article_id, assessment_logger
 ) -> None:
     """通知と計測が失敗しても監査を保存し、通知を試みる。"""
-    error = to_assessment_error(AIProviderInsufficientBalanceError())
+    error = to_assessment_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE, status_code=402
+        )
+    )
     with (
         patch(
             f"{_HANDLER}.record_assessment_processing_outcome",
@@ -142,7 +159,11 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
     db_session, session_factory, capsys, assessment_logger
 ) -> None:
     """監査とdrop計測が失敗しても元の例外と通知を維持する。"""
-    error = to_assessment_error(AIProviderUsageLimitExhaustedError())
+    error = to_assessment_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        )
+    )
     with (
         patch(
             f"{_HANDLER}.record_audit_dropped", side_effect=RuntimeError("drop failed")
@@ -179,7 +200,11 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
     factory = async_sessionmaker(
         session_factory.kw["bind"], class_=CommitFails, expire_on_commit=False
     )
-    error = to_assessment_error(AIProviderUsageLimitExhaustedError())
+    error = to_assessment_error(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        )
+    )
     await AssessmentConsumerFailureHandler(factory).handle(
         failure=classify_assessment_failure(error),
         exc=error,
@@ -242,7 +267,11 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     db_session, session_factory, article_id, assessment_logger
 ) -> None:
     """実DBの監査行に原因を保持し、廃止した回復分類はnullで保存する。"""
-    provider_error = AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT)
+    provider_error = AIProviderTransportError(
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
+    )
     error = to_assessment_error(provider_error)
     error.__cause__ = provider_error
 
@@ -256,23 +285,25 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     )
 
     (event,) = await _events(db_session)
-    assert event.outcome_code == "ai_error_network"
+    assert event.outcome_code == "ai_provider_transport_failed"
     assert event.retryability is None
     assert event.payload["failure_kind"] is None
-    assert event.payload["failure_reason"] == GeminiStateReason.TIMEOUT.value
+    assert event.payload["failure_reason"] == HttpTransportFailureReason.TIMEOUT.value
     assert event.error_class == "app.analysis.assessment.errors.AssessmentError"
     assert event.payload["error_chain"] == [
         "app.analysis.assessment.errors.AssessmentError",
-        "app.ai_providers.errors.AIProviderNetworkError",
+        "app.ai_providers.errors.AIProviderTransportError",
     ]
 
 
 @pytest.mark.asyncio
-async def test_rejection_without_reason_is_persisted_with_nullable_audit_details(
+async def test_provider_rejection_is_persisted_with_code_reason_and_cause_chain(
     db_session, session_factory, article_id, assessment_logger
 ) -> None:
-    """理由なしの拒否でも実DBにコードと原因チェーンを保存する。"""
-    provider_error = AIProviderOutputBlockedError("provider diagnostic")
+    """プロバイダーの拒否は、実DBにコード・理由・原因チェーンを保存する。"""
+    provider_error = AIProviderGenerationError(
+        "provider diagnostic", reason=AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY
+    )
     error = to_assessment_error(provider_error)
     error.__cause__ = provider_error
 
@@ -286,11 +317,11 @@ async def test_rejection_without_reason_is_persisted_with_nullable_audit_details
     )
 
     (event,) = await _events(db_session)
-    assert event.outcome_code == "ai_error_output_blocked"
+    assert event.outcome_code == "ai_provider_generation_unusable"
     assert event.retryability is None
     assert event.payload["failure_kind"] is None
-    assert event.payload["failure_reason"] is None
+    assert event.payload["failure_reason"] == "output_blocked_safety"
     assert event.payload["error_chain"] == [
         "app.analysis.assessment.errors.AssessmentError",
-        "app.ai_providers.errors.AIProviderOutputBlockedError",
+        "app.ai_providers.errors.AIProviderGenerationError",
     ]

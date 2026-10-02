@@ -57,7 +57,7 @@ async def test_classified_failure_emits_completed_duration_and_failed_outcome(
     ) as recording:
         recording.report_outcome(
             EvidenceReviewFailed(
-                failure_code="ai_error_network",
+                failure_code="ai_provider_transport_failed",
                 attempt_count=2,
             )
         )
@@ -70,7 +70,7 @@ async def test_classified_failure_emits_completed_duration_and_failed_outcome(
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
         "result": "failed",
         "attempt_count": 2,
-        "failure_code": "ai_error_network",
+        "failure_code": "ai_provider_transport_failed",
     }
     assert sum_counter_for_result(metrics, _OUTCOME_METRIC, "failed") == 1
 

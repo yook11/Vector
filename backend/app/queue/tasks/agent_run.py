@@ -64,10 +64,7 @@ from app.agent.runtime.contract import AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
 from app.agent.threads.repository import AgentThreadRepository
-from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderError,
-)
+from app.ai_providers.errors import AIProviderError
 from app.queue.brokers import broker_agent
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.schedule import CRON_AGENT_RUN_SWEEP
@@ -221,7 +218,6 @@ async def run_agent_answer(
             )
         return
     except (
-        AIProviderConfigurationError,
         AIProviderError,
         AgentResponseInvalidError,
         DirectAnswerError,

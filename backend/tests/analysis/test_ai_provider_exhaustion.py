@@ -11,10 +11,8 @@ from __future__ import annotations
 import pytest
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInsufficientBalanceError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
 )
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from tests.cloudwatch.records import metric_records
@@ -23,18 +21,30 @@ _METRIC = "ai_provider_exhausted"
 
 
 @pytest.mark.parametrize(
-    "exc",
+    ("exc", "kind"),
     [
-        AIProviderInsufficientBalanceError(),
-        AIProviderUsageLimitExhaustedError(),
+        (
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+                status_code=402,
+            ),
+            "insufficient_balance",
+        ),
+        (
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+            ),
+            "quota_exhausted",
+        ),
     ],
-    ids=["insufficient_balance", "usage_limit_exhausted"],
+    ids=["insufficient_balance", "quota_exhausted"],
 )
-def test_exhausted_provider_error_emits_metric_with_code_as_kind(
-    exc: AIProviderInsufficientBalanceError | AIProviderUsageLimitExhaustedError,
+def test_exhausted_provider_error_emits_metric_with_reason_as_kind(
+    exc: AIProviderErrorResponseError,
+    kind: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """枯渇系 2 クラスは CODE を ``kind`` にした 1 打点を Count=1 で emit する。"""
+    """枯渇の 2 理由は reason を ``kind`` にした 1 打点を Count=1 で emit する。"""
     record_ai_provider_exhausted(exc, provider="gemini")
 
     records = metric_records(capsys.readouterr().out, _METRIC)
@@ -45,7 +55,7 @@ def test_exhausted_provider_error_emits_metric_with_code_as_kind(
     assert metric_def["Dimensions"] == [["kind", "provider"]]
     assert metric_def["Metrics"] == [{"Name": _METRIC, "Unit": "Count"}]
     assert record[_METRIC] == 1
-    assert record["kind"] == exc.CODE
+    assert record["kind"] == kind
     assert record["provider"] == "gemini"
 
 
@@ -54,7 +64,10 @@ def test_provider_dimension_is_the_caller_supplied_value(
 ) -> None:
     """``provider`` dimension は呼び出し側が渡した値をそのまま運ぶ。"""
     record_ai_provider_exhausted(
-        AIProviderUsageLimitExhaustedError(), provider="deepseek"
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        ),
+        provider="deepseek",
     )
 
     record = metric_records(capsys.readouterr().out, _METRIC)[0]
@@ -65,7 +78,12 @@ def test_rate_limited_is_recoverable_by_waiting_and_does_not_emit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
-    record_ai_provider_exhausted(AIProviderRateLimitedError(), provider="gemini")
+    record_ai_provider_exhausted(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+        ),
+        provider="gemini",
+    )
 
     assert metric_records(capsys.readouterr().out, _METRIC) == []
 
@@ -74,7 +92,12 @@ def test_other_state_error_not_in_exhausted_set_does_not_emit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """枯渇系以外の プロバイダー例外（設定不正等） は emit しない。"""
-    record_ai_provider_exhausted(AIProviderConfigurationError(), provider="gemini")
+    record_ai_provider_exhausted(
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.AUTH, status_code=401
+        ),
+        provider="gemini",
+    )
 
     assert metric_records(capsys.readouterr().out, _METRIC) == []
 

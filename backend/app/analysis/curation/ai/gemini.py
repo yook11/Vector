@@ -14,13 +14,8 @@ from google.genai.client import AsyncClient
 from google.genai.types import GenerateContentConfig, GenerateContentResponse
 from pydantic import ValidationError
 
-from app.ai_providers.errors import (
-    AIProviderInputRejectedError,
-    AIProviderOutputBlockedError,
-)
+from app.ai_providers.errors import AIProviderGenerationError
 from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
-    is_context_length_error,
     output_blocked_reason,
     translate_gemini_error,
 )
@@ -115,13 +110,9 @@ class GeminiCurator(BaseCurator):
             finish_reason is not None
             and finish_reason in _POLICY_BLOCKED_FINISH_REASONS
         ):
-            # finish_reason は audit 軸として CODE (ai_error_output_blocked) +
-            # reason (safety / recitation 等) で残す。SDK 由来の文字列は __str__ に
-            # 出さない (reason は PII-free な種別ラベル)。blocked-set 内なので
-            # finish_reason は写像に必ず存在する。
-            raise AIProviderOutputBlockedError(
-                reason=output_blocked_reason(finish_reason)
-            )
+            # SDK 由来の文字列は出さず、finish_reason は種別ラベルの reason で残す。
+            # blocked-set 内なので finish_reason は写像に必ず存在する。
+            raise AIProviderGenerationError(reason=output_blocked_reason(finish_reason))
 
         parsed = response.parsed
         if not isinstance(parsed, GeminiCurationResponse):
@@ -151,24 +142,9 @@ class GeminiCurator(BaseCurator):
         )
 
     def _translate_error(self, exc: Exception) -> Exception:
-        """SDK / Pydantic 例外を Layer 2 例外階層に翻訳する。
-
-        Stage 3 specific:
-
-        - ``ValidationError``: schema validation 失敗 (Layer 2-B、retryable)。
-        - 入力長超過 (``INVALID_ARGUMENT`` + context-length message):
-          ``AIProviderInputRejectedError`` として、Stage 4/5 と違うバリエーション
-          (=「入力が長すぎる」semantics) を保持する。
-
-        その他の SDK 例外分類は ``translate_gemini_error`` に委譲する。
-        """
+        """Pydantic の検証失敗は応答不正とし、SDK 例外は共通の変換器に委ねる。"""
         if isinstance(exc, ValidationError):
             # Phase 4: 旧 message 引数廃止 (PII 含有経路)。Pydantic の詳細は
             # __cause__ 連鎖と structlog 経路で別途残せる。
             return CurationResponseInvalidError()
-        if is_context_length_error(exc):
-            # CODE (= ai_error_input_rejected) + reason (context_length) で識別。
-            return AIProviderInputRejectedError(
-                reason=GeminiContentRejectionReason.CONTEXT_LENGTH
-            )
         return translate_gemini_error(exc)

@@ -21,12 +21,10 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 )
 from app.ai_providers.errors import (
     AIProviderError,
-    AIProviderRequestInvalidError,
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
 )
-from app.ai_providers.gemini.error_translator import (
-    GeminiStateReason,
-    translate_gemini_error,
-)
+from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
@@ -84,8 +82,8 @@ class GeminiQueryEmbedder:
             except AIProviderError:
                 raise
             except ValidationError as exc:
-                raise AIProviderRequestInvalidError(
-                    reason=GeminiStateReason.INVALID_ARGUMENT
+                raise AIProviderGenerationError(
+                    reason=AIProviderGenerationReason.RESPONSE_UNPARSEABLE
                 ) from exc
             except Exception as exc:
                 translated = self._translate_error(exc)
@@ -107,19 +105,19 @@ class GeminiQueryEmbedder:
         )
         embeddings = response.embeddings
         if not embeddings:
-            raise AIProviderRequestInvalidError(
-                reason=GeminiStateReason.EMPTY_EMBEDDINGS
+            raise AIProviderGenerationError(
+                reason=AIProviderGenerationReason.EMBEDDINGS_EMPTY
             )
         if len(embeddings) != len(queries.queries):
-            raise AIProviderRequestInvalidError(
-                reason=GeminiStateReason.EMBEDDING_COUNT_MISMATCH
+            raise AIProviderGenerationError(
+                reason=AIProviderGenerationReason.EMBEDDING_COUNT_MISMATCH
             )
 
         vectors: list[list[float]] = []
         for embedding in embeddings:
             if embedding.values is None:
-                raise AIProviderRequestInvalidError(
-                    reason=GeminiStateReason.MISSING_VALUES
+                raise AIProviderGenerationError(
+                    reason=AIProviderGenerationReason.EMBEDDING_VALUES_MISSING
                 )
             vectors.append(list(embedding.values))
         return vectors

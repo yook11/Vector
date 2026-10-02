@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from app.ai_providers.errors import (
-    AIProviderRateLimitedError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
 )
 from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
@@ -54,7 +55,9 @@ def test_provider_reason_requires_classified_provider_error():
     with pytest.raises(TypeError):
         EmbeddingError(
             reason=EmbeddingFailureReason.ARTICLE_MISSING,
-            provider_error=AIProviderRateLimitedError(),
+            provider_error=AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+            ),
         )
 
 
@@ -80,7 +83,13 @@ def test_embedding_error_directly_inherits_exception():
 @pytest.mark.parametrize(
     "error",
     [
-        to_embedding_error(AIProviderRateLimitedError("provider diagnostic")),
+        to_embedding_error(
+            AIProviderErrorResponseError(
+                "provider diagnostic",
+                reason=AIProviderErrorResponseReason.RATE_LIMITED,
+                status_code=429,
+            )
+        ),
         EmbeddingResponseInvalidError(),
         EmbeddingAnalyzedArticleMissingError(),
     ],

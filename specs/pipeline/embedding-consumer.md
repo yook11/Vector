@@ -593,7 +593,7 @@ Done: 毎回のキー取得、同一呼び出し内の接続再利用、終了�
 
 `app/analysis/embedding/embedder.py`に新しい`GeminiEmbedder(*, client: google.genai.client.AsyncClient)`を追加した。旧GeminiEmbedderを継承・呼び出しせず、既存BaseEmbedder契約のサブクラスとしてConsumerに渡せる。共通クライアントの生成・終了、APIキー取得、通信設定、再試行は呼び出し元の責務とする。
 
-モデル・次元・task type・prefixは既存のGEMINI_EMBEDDING_SPECを使う。借用した非同期クライアントでembed_contentを一度呼び、空応答はEMPTY_EMBEDDINGS、先頭のvalues欠落はMISSING_VALUESとして既存のAIProviderRequestInvalidErrorへ変換する。複数応答では既存契約どおり先頭を使用する。数値配列はBaseEmbedderとEmbeddingVectorを通して次元・有限性・許容範囲を検証する。
+モデル・次元・task type・prefixは既存のGEMINI_EMBEDDING_SPECを使う。借用した非同期クライアントでembed_contentを一度呼び、空応答はEMBEDDINGS_EMPTY、先頭のvalues欠落はEMBEDDING_VALUES_MISSINGとしてAIProviderGenerationErrorへ変換する。複数応答では既存契約どおり先頭を使用する。数値配列はBaseEmbedderとEmbeddingVectorを通して次元・有限性・許容範囲を検証する。
 
 API例外は既存translate_gemini_errorへ委譲し、未分類例外とキャンセルは伝播する。監査・計測・通知を追加せず、Consumer・Serviceの既存処理を利用する。既存GeminiEmbedder・Taskiq・Consumerの本番配線は変更していない。SSM・DBの組み立てとLambda接続は後続、旧実装の削除は移行後に扱う。
 

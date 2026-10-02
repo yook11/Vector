@@ -13,7 +13,10 @@ from pydantic import SecretStr
 
 from app.ai_providers.deepseek import client as module
 from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
-from app.ai_providers.errors import AIProviderConfigurationError
+from app.ai_providers.errors import (
+    AIProviderRequestNotSentError,
+    AIProviderRequestNotSentReason,
+)
 from app.analysis.logging import create_article_analysis_logger
 
 
@@ -125,8 +128,8 @@ def resources(monkeypatch):
 async def test_empty_key_rejected_before_creation(
     resources, key, make_invocation_logger
 ):
-    """空または空白だけのAPIキーでは、HTTP・SDKの資源を生成せず設定エラーにする。"""
-    with pytest.raises(AIProviderConfigurationError):
+    """空または空白だけのAPIキーでは、HTTP・SDKの資源を生成せず送信前に止める。"""
+    with pytest.raises(AIProviderRequestNotSentError) as raised:
         async with module.open_deepseek_client(
             logger=make_invocation_logger(),
             api_key=SecretStr(key),
@@ -134,6 +137,7 @@ async def test_empty_key_rejected_before_creation(
             settings=DeepSeekConnectionSettings(),
         ):
             pytest.fail("must not yield")
+    assert raised.value.reason is AIProviderRequestNotSentReason.NOT_CONFIGURED
     resources[2].assert_not_called()
     resources[3].assert_not_called()
 

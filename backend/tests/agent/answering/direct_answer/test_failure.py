@@ -8,10 +8,10 @@ from app.agent.answering.direct_answer.failure import DirectAnswerError
 
 
 def test_direct_answer_error_keeps_non_empty_code() -> None:
-    error = DirectAnswerError(code="ai_error_network")
+    error = DirectAnswerError(code="ai_provider_transport_failed")
 
-    assert error.code == "ai_error_network"
-    assert str(error) == "ai_error_network"
+    assert error.code == "ai_provider_transport_failed"
+    assert str(error) == "ai_provider_transport_failed"
 
 
 def test_direct_answer_error_rejects_empty_code() -> None:

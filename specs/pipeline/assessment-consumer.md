@@ -150,7 +150,7 @@ Invariants: 判定モデル・プロンプト・strict function calling・応答
 
 - `DeepSeekConnectionSettings`はfrozen・slots付きdataclass。接続3秒・読み取り30秒・書き込み10秒・プール待ち3秒を既定値とし、正の有限数だけ受け付ける。秘密情報・モデル仕様は含めない。
 - `open_deepseek_client(api_key, base_url, settings)`はasync context manager。既存の外部HTTPファクトリを使用し、SDK・HTTPの再試行を0回にする。SDKへ同じtimeoutを明示する。HTTPの読み取り上限はチャンク待ち時間であり、Consumerの業務処理全体60秒とは別の制限。
-- SDK生成失敗でもHTTPを回収し、SDK終了後にHTTPが未解放なら回収を試みる。診断は資源名と例外クラスだけを記録する。空・空白だけのAPIキーは生成前に`AIProviderConfigurationError(NOT_CONFIGURED)`とする。
+- SDK生成失敗でもHTTPを回収し、SDK終了後にHTTPが未解放なら回収を試みる。診断は資源名と例外クラスだけを記録する。空・空白だけのAPIキーは生成前に`AIProviderRequestNotSentError(NOT_CONFIGURED)`とする。
 - `DeepSeekAssessor(client)`へ変更。`base_url`は既存の`DEEPSEEK_ASSESSMENT_SPEC`を配線側から渡し、定義を重複させない。
 - 既存Taskiqはワーカー起動時に準備し、終了時・起動途中の失敗時に解放する。比較スクリプトは比較処理の間だけ所有する。SDKの遅延importを維持する。
 

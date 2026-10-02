@@ -8,16 +8,15 @@ from inspect import signature
 
 import httpx
 import pytest
-from openai import APIStatusError
+from openai import APIStatusError, APITimeoutError
 from openai import RateLimitError as OpenAIRateLimitError
 
 from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime, DeepSeekOutputBinding
 from app.ai_providers.errors import (
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
+    AIProviderErrorResponseError,
+    AIProviderTransportError,
 )
 from tests.agent.runtime._deepseek_helpers import (
     DataclassRuntimeOutput,
@@ -180,12 +179,15 @@ async def test_negative_index_is_runtime_schema_mismatch() -> None:
 
 async def test_known_error_translates_and_unknown_keeps_identity() -> None:
     """既知障害だけを翻訳し未知例外の同一性を保つ。"""
-    known = TimeoutError("PROVIDER_MESSAGE_SENTINEL")
+    known = APITimeoutError(
+        request=httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
+    )
+    known.__cause__ = httpx.ReadTimeout("PROVIDER_MESSAGE_SENTINEL")
     known_client = FakeDeepSeekClient([known])
     unknown = RuntimeError("UNCLASSIFIED_SENTINEL")
     unknown_client = FakeDeepSeekClient([unknown])
 
-    with pytest.raises(AIProviderNetworkError) as known_raised:
+    with pytest.raises(AIProviderTransportError) as known_raised:
         await DeepSeekAgentRuntime(client=known_client, binding=make_binding()).call(
             make_agent(), object(), attempt_number=1
         )
@@ -265,12 +267,12 @@ async def test_call_http_402_emits_ai_provider_exhausted(
     client = FakeDeepSeekClient([error])
     runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
 
-    with pytest.raises(AIProviderInsufficientBalanceError):
+    with pytest.raises(AIProviderErrorResponseError):
         await runtime.call(make_agent(), object(), attempt_number=1)
 
     records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
-    assert records[0]["kind"] == AIProviderInsufficientBalanceError.CODE
+    assert records[0]["kind"] == "insufficient_balance"
     assert records[0]["provider"] == "deepseek"
 
 
@@ -282,7 +284,7 @@ async def test_call_plain_rate_limited_sdk_error_does_not_emit(
     client = FakeDeepSeekClient([error])
     runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
 
-    with pytest.raises(AIProviderRateLimitedError):
+    with pytest.raises(AIProviderErrorResponseError):
         await runtime.call(make_agent(), object(), attempt_number=1)
 
     assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

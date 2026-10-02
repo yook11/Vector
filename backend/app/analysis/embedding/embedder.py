@@ -5,11 +5,11 @@ from typing import Final
 from google.genai.client import AsyncClient
 from google.genai.types import EmbedContentConfig
 
-from app.ai_providers.errors import AIProviderRequestInvalidError
-from app.ai_providers.gemini.error_translator import (
-    GeminiStateReason,
-    translate_gemini_error,
+from app.ai_providers.errors import (
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
 )
+from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC, EmbeddingCallSpec
 
@@ -48,12 +48,14 @@ class GeminiEmbedder(BaseEmbedder):
             ),
         )
         if not response.embeddings:
-            raise AIProviderRequestInvalidError(
-                reason=GeminiStateReason.EMPTY_EMBEDDINGS
+            raise AIProviderGenerationError(
+                reason=AIProviderGenerationReason.EMBEDDINGS_EMPTY
             )
         values = response.embeddings[0].values
         if values is None:
-            raise AIProviderRequestInvalidError(reason=GeminiStateReason.MISSING_VALUES)
+            raise AIProviderGenerationError(
+                reason=AIProviderGenerationReason.EMBEDDING_VALUES_MISSING
+            )
         return list(values)
 
     def _translate_error(self, exc: Exception) -> Exception:

@@ -5,20 +5,14 @@ from __future__ import annotations
 import pytest
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderError,
-    AIProviderInputRejectedError,
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-    AIProviderUsageLimitExhaustedError,
-)
-from app.ai_providers.gemini.error_translator import (
-    GeminiStateReason,
+    CLASSIFIED_AI_PROVIDER_ERRORS,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
+    AIProviderRequestNotSentError,
+    AIProviderRequestNotSentReason,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.errors import (
@@ -29,22 +23,47 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.logging import create_article_analysis_logger
 from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
-
-# 代表 reason (mapper は値そのものを failure_reason に運ぶ。種別は不問)。
-_STATE_REASON = GeminiStateReason.TIMEOUT
-
-_PROVIDER_ERRORS = (
-    AIProviderNetworkError,
-    AIProviderOutputTruncatedError,
-    AIProviderServiceUnavailableError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
-    AIProviderConfigurationError,
-    AIProviderRequestInvalidError,
-    AIProviderInsufficientBalanceError,
-    AIProviderInputRejectedError,
-    AIProviderOutputBlockedError,
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
 )
+
+# 分類済みの4種類それぞれの代表。
+_PROVIDER_ERROR_FACTORIES = [
+    pytest.param(
+        lambda: AIProviderRequestNotSentError(
+            reason=AIProviderRequestNotSentReason.NOT_CONFIGURED
+        ),
+        id="request_not_sent",
+    ),
+    pytest.param(
+        lambda: AIProviderTransportError(
+            transport=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        ),
+        id="transport",
+    ),
+    pytest.param(
+        lambda: AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+            status_code=402,
+        ),
+        id="error_response",
+    ),
+    pytest.param(
+        lambda: AIProviderGenerationError(
+            reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
+        ),
+        id="generation",
+    ),
+]
+
+
+def test_cases_cover_all_classified_provider_errors() -> None:
+    covered = {type(case.values[0]()) for case in _PROVIDER_ERROR_FACTORIES}
+    assert covered == set(CLASSIFIED_AI_PROVIDER_ERRORS)
 
 
 @pytest.fixture
@@ -52,16 +71,11 @@ def assessment_logger():
     return create_article_analysis_logger().bind(stage="assessment")
 
 
-def _instantiate(exc_type: type[AIProviderError]) -> AIProviderError:
-    """変換先でも保持される任意の理由を付与する。"""
-    return exc_type(reason=_STATE_REASON)
-
-
-@pytest.mark.parametrize("exc_type", _PROVIDER_ERRORS)
+@pytest.mark.parametrize("make_error", _PROVIDER_ERROR_FACTORIES)
 def test_service_contract_retains_provider_details_without_retry_classification(
-    exc_type,
+    make_error,
 ):
-    original = _instantiate(exc_type)
+    original = make_error()
     result = to_assessment_error(original)
     assert type(result) is AssessmentError
     assert result.reason is AssessmentFailureReason.PROVIDER_ERROR
@@ -72,10 +86,10 @@ def test_service_contract_retains_provider_details_without_retry_classification(
     assert not hasattr(result, "RETRYABILITY")
 
 
-@pytest.mark.parametrize("exc_type", _PROVIDER_ERRORS)
+@pytest.mark.parametrize("make_error", _PROVIDER_ERROR_FACTORIES)
 @pytest.mark.asyncio
 async def test_service_wraps_provider_error_before_opening_db(
-    exc_type, assessment_logger
+    make_error, assessment_logger
 ):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -86,7 +100,7 @@ async def test_service_wraps_provider_error_before_opening_db(
     def no_session():
         raise AssertionError("AI失敗時はDBを開かない")
 
-    original = _instantiate(exc_type)
+    original = make_error()
     assessor = SimpleNamespace(assess=AsyncMock(side_effect=original))
     service = AssessmentService(no_session)
     ready = ReadyForAssessment(

@@ -229,7 +229,7 @@ def test_failure_payload_fields_keeps_absent_classification_and_action_none() ->
         failure_kind=None,
         retryability=None,
         failure_action=None,
-        code="ai_error_network",
+        code="ai_provider_transport_failed",
     )
 
     assert failure_payload_fields(projection) == {

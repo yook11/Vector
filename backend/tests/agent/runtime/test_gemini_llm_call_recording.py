@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.agent.recording.types import Usage
@@ -13,8 +14,8 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
+    AIProviderGenerationError,
+    AIProviderTransportError,
 )
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._helpers import (
@@ -86,14 +87,14 @@ async def test_blocked_call_records_failed_with_code() -> None:
         recorder,
     )
 
-    with pytest.raises(AIProviderOutputBlockedError):
+    with pytest.raises(AIProviderGenerationError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     recorded = recorder.records[0]
     assert recorded.failure == LlmAttemptFailed(
-        failure_code=AIProviderOutputBlockedError.CODE
+        failure_code=AIProviderGenerationError.CODE
     )
-    assert isinstance(recorded.error, AIProviderOutputBlockedError)
+    assert isinstance(recorded.error, AIProviderGenerationError)
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -121,14 +122,14 @@ async def test_translated_provider_error_records_failed_with_code() -> None:
     """翻訳済み provider 障害は分類済み失敗と CODE で閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
-    runtime = _runtime([TimeoutError("timeout")], recorder)
+    runtime = _runtime([httpx.ReadTimeout("timeout")], recorder)
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(AIProviderTransportError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     recorded = recorder.records[0]
     assert recorded.failure == LlmAttemptFailed(
-        failure_code=AIProviderNetworkError.CODE
+        failure_code=AIProviderTransportError.CODE
     )
     assert recorded.usage is None
 

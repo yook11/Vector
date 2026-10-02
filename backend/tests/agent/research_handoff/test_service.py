@@ -24,7 +24,10 @@ from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.research_handoff.handoff import ORGANIZED_TEXT_MAX_CHARS
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.ai_providers.errors import AIProviderConfigurationError
+from app.ai_providers.errors import (
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+)
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 
@@ -130,7 +133,9 @@ async def test_organize_clamps_a_draft_that_overshoots_the_limit() -> None:
     "failure",
     [
         AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-        AIProviderConfigurationError(),
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.AUTH, status_code=401
+        ),
     ],
 )
 async def test_organize_keeps_the_previous_texts_when_generation_fails(

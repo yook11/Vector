@@ -6,20 +6,11 @@ import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInputRejectedError,
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-    AIProviderUsageLimitExhaustedError,
-)
-from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
@@ -39,49 +30,77 @@ from app.db.errors import (
     DatabaseConstraintErrorReason,
     DatabaseUnexpectedError,
 )
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 
 
 @pytest.mark.parametrize(
     ("provider_error", "notified"),
     [
         (
-            AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT),
+            AIProviderTransportError(
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
             False,
         ),
         (
-            AIProviderServiceUnavailableError(),
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.SERVER_ERROR, status_code=503
+            ),
             False,
         ),
         (
-            AIProviderRateLimitedError(),
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+            ),
             False,
         ),
         (
-            AIProviderUsageLimitExhaustedError(),
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+            ),
             True,
         ),
         (
-            AIProviderInsufficientBalanceError(),
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.INSUFFICIENT_BALANCE,
+                status_code=402,
+            ),
             True,
         ),
         (
-            AIProviderConfigurationError(),
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.AUTH, status_code=401
+            ),
             False,
         ),
         (
-            AIProviderRequestInvalidError(),
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.INVALID_REQUEST, status_code=400
+            ),
             False,
         ),
         (
-            AIProviderOutputTruncatedError(),
+            AIProviderGenerationError(
+                reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
+            ),
             False,
         ),
         (
-            AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY),
+            AIProviderErrorResponseError(
+                reason=AIProviderErrorResponseReason.INPUT_BLOCKED, status_code=400
+            ),
             False,
         ),
         (
-            AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
+            AIProviderGenerationError(
+                reason=AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY
+            ),
             False,
         ),
     ],
@@ -199,18 +218,3 @@ def test_all_response_defects_preserve_code(defect):
     assert failure.audit.retryability is Retryability.RETRYABLE
     assert not hasattr(failure, "outcome")
     assert failure.provider_exhaustion is None
-
-
-@pytest.mark.parametrize(
-    "error_type", [AIProviderInputRejectedError, AIProviderOutputBlockedError]
-)
-def test_rejection_without_reason_has_nullable_audit_details(error_type) -> None:
-    """理由を省略した拒否でも監査コードを保持し、詳細を補完しない。"""
-    provider = error_type("provider diagnostic")
-    error = to_assessment_error(provider)
-    failure = classify_assessment_failure(error)
-    assert failure.audit.code == provider.CODE
-    assert failure.audit.failure_reason is None
-    assert failure.audit.failure_kind is None
-    assert failure.audit.retryability is None
-    assert error.provider_error is provider

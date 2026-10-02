@@ -3,14 +3,16 @@
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
-    AIProviderServiceUnavailableError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
@@ -244,18 +246,22 @@ async def test_curator_call_once_succeeds() -> None:
 
 async def test_curator_call_once_translates_sdk_error() -> None:
     curator = _create_curator()
-    curator._call_api = AsyncMock(side_effect=ConnectionError("timeout"))
+    curator._call_api = AsyncMock(side_effect=httpx.ConnectError("timeout"))
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(AIProviderTransportError):
         await curator._call_once("test prompt")
 
 
 async def test_curator_call_once_passes_through_domain_error() -> None:
     curator = _create_curator()
     # AIProviderError サブクラスは _call_api 内で raise 済として透過する
-    curator._call_api = AsyncMock(side_effect=AIProviderServiceUnavailableError())
+    curator._call_api = AsyncMock(
+        side_effect=AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.SERVER_ERROR, status_code=503
+        )
+    )
 
-    with pytest.raises(AIProviderServiceUnavailableError):
+    with pytest.raises(AIProviderErrorResponseError):
         await curator._call_once("test prompt")
 
 

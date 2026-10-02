@@ -20,18 +20,17 @@ from app.agent.answering.failure import (
     classify_direct_answer_failure,
 )
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
     AIProviderError,
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
 )
 
 
@@ -48,11 +47,9 @@ _CLASSIFIERS: tuple[_Classifier, ...] = (
 _CLASSIFIER_IDS = ["answer_synthesis", "direct_answer"]
 
 
-def _truncated_error() -> AIProviderOutputTruncatedError:
+def _truncated_error() -> AIProviderGenerationError:
     """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
-    return AIProviderOutputTruncatedError(
-        reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
-    )
+    return AIProviderGenerationError(reason=AIProviderGenerationReason.OUTPUT_TRUNCATED)
 
 
 @pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
@@ -75,11 +72,24 @@ def test_output_truncated_error_is_retried_in_request(classify: _Classifier) -> 
 @pytest.mark.parametrize(
     "exc",
     [
-        AIProviderNetworkError(),
-        AIProviderRateLimitedError(),
-        AIProviderConfigurationError(),
-        AIProviderUsageLimitExhaustedError(),
-        AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
+        AIProviderTransportError(
+            transport=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        ),
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.RATE_LIMITED, status_code=429
+        ),
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.AUTH, status_code=401
+        ),
+        AIProviderErrorResponseError(
+            reason=AIProviderErrorResponseReason.QUOTA_EXHAUSTED, status_code=429
+        ),
+        AIProviderGenerationError(
+            reason=AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY
+        ),
+        AIProviderGenerationError(reason=AIProviderGenerationReason.STREAM_INCOMPLETE),
     ],
     ids=[
         "network",
@@ -87,6 +97,7 @@ def test_output_truncated_error_is_retried_in_request(classify: _Classifier) -> 
         "configuration",
         "usage_limit",
         "output_blocked_content_error",
+        "stream_incomplete",
     ],
 )
 def test_other_provider_errors_stay_do_not_retry_in_request(
@@ -95,7 +106,7 @@ def test_other_provider_errors_stay_do_not_retry_in_request(
 ) -> None:
     """打ち切り以外のプロバイダー例外の再試行判断を維持する。
 
-    通信障害と打ち切りを具体的な例外型で区別する。
+    回復の条件が再試行でも、打ち切りの理由でなければrequest内では再試行しない。
     """
     attrs = classify(exc)
 
@@ -150,21 +161,6 @@ def test_unclassified_exception_falls_back_to_unknown() -> None:
     assert attrs.code == "unexpected_error"
     assert attrs.failure_reason is None
     assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN
-
-
-@pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
-@pytest.mark.parametrize(
-    "error_type", [AIProviderInputRejectedError, AIProviderOutputBlockedError]
-)
-def test_rejection_without_reason_keeps_code_and_no_retry(classify, error_type) -> None:
-    """理由を省略した拒否でも具体的なコードと再試行判断を維持する。"""
-    attrs = classify(error_type())
-    assert attrs.code == error_type.CODE
-    assert attrs.failure_reason is None
-    assert (
-        attrs.request_retry_disposition
-        is RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST
-    )
 
 
 @pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)

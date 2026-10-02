@@ -4,13 +4,21 @@ from enum import StrEnum
 
 import pytest
 
-from app.ai_providers.errors import AIProviderError, AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderError,
+    AIProviderTransportError,
+)
 from app.analysis.assessment.errors import (
     AssessmentCurationMissingError,
     AssessmentError,
     AssessmentFailureReason,
     AssessmentResponseInvalidError,
     to_assessment_error,
+)
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
 )
 from app.shared.errors import ApplicationError
 
@@ -41,7 +49,11 @@ def test_requires_reason_enum(reason):
         },
         {
             "reason": AssessmentFailureReason.PROVIDER_ERROR,
-            "provider_error": AIProviderNetworkError(),
+            "provider_error": AIProviderTransportError(
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
             "defect": SampleDefect.INVALID,
         },
         {"reason": AssessmentFailureReason.RESPONSE_INVALID},
@@ -52,11 +64,19 @@ def test_requires_reason_enum(reason):
         {
             "reason": AssessmentFailureReason.RESPONSE_INVALID,
             "defect": SampleDefect.INVALID,
-            "provider_error": AIProviderNetworkError(),
+            "provider_error": AIProviderTransportError(
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
         },
         {
             "reason": AssessmentFailureReason.CURATION_MISSING,
-            "provider_error": AIProviderNetworkError(),
+            "provider_error": AIProviderTransportError(
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
         },
         {
             "reason": AssessmentFailureReason.CURATION_MISSING,
@@ -93,7 +113,14 @@ def test_curation_missing_has_no_details():
 @pytest.mark.parametrize(
     "exc",
     [
-        to_assessment_error(AIProviderNetworkError("private sdk text")),
+        to_assessment_error(
+            AIProviderTransportError(
+                "private sdk text",
+                transport=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                ),
+            )
+        ),
         AssessmentResponseInvalidError(SampleDefect.INVALID),
         AssessmentCurationMissingError(),
     ],
@@ -114,7 +141,14 @@ def test_assessment_error_is_application_error():
     "error,expected_message",
     [
         (
-            to_assessment_error(AIProviderNetworkError("private-provider-diagnostic")),
+            to_assessment_error(
+                AIProviderTransportError(
+                    "private-provider-diagnostic",
+                    transport=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    ),
+                )
+            ),
             "AIプロバイダーの処理失敗により記事を判定できませんでした",
         ),
         (

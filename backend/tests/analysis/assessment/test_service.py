@@ -12,8 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderNetworkError,
+    AIProviderErrorResponseError,
+    AIProviderErrorResponseReason,
+    AIProviderTransportError,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.base import BaseAssessor
@@ -33,6 +34,11 @@ from app.analysis.assessment.service import (
     AssessmentService,
 )
 from app.analysis.logging import create_article_analysis_logger
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import (
     AnalyzedArticleRecord as AnalyzedArticleRecordORM,
@@ -330,16 +336,21 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
 
 
 @pytest.mark.asyncio
-async def test_provider_network_error_preserves_provider_cause(
+async def test_provider_transport_error_preserves_provider_cause(
     session_factory: async_sessionmaker[AsyncSession],
     assessment_logger,
 ) -> None:
-    """``AIProviderNetworkError`` → ``AssessmentError`` で wrap。
+    """``AIProviderTransportError`` → ``AssessmentError`` で wrap。
 
     ``__cause__`` に元 ``AIProvider*Error`` が紐付くこと (PR5 の
     ``extract_error_chain`` が 2 段以上を error_chain 列に記録できる前提)。
     """
-    provider_exc = AIProviderNetworkError("connection reset")
+    provider_exc = AIProviderTransportError(
+        "connection reset",
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        ),
+    )
     assessor = _make_assessor(side_effect=provider_exc)
 
     ready = ReadyForAssessment(
@@ -364,7 +375,9 @@ async def test_provider_configuration_error_preserves_provider_cause(
     assessment_logger,
 ) -> None:
     """設定エラーも再試行分類を付けずに保持する。"""
-    provider_exc = AIProviderConfigurationError("bad api key")
+    provider_exc = AIProviderErrorResponseError(
+        "bad api key", reason=AIProviderErrorResponseReason.AUTH, status_code=401
+    )
     assessor = _make_assessor(side_effect=provider_exc)
 
     ready = ReadyForAssessment(

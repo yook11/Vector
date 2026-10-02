@@ -11,12 +11,9 @@ from google.genai import errors, types
 from pydantic import SecretStr
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderErrorResponseError,
+    AIProviderGenerationError,
+    AIProviderTransportError,
 )
 from app.ai_providers.gemini import client as client_module
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
@@ -71,16 +68,16 @@ async def test_request_and_valid_vector(sdk_client, ready):
 @pytest.mark.parametrize(
     "embeddings,reason",
     [
-        (None, "empty_embeddings"),
-        ([], "empty_embeddings"),
-        ([types.ContentEmbedding()], "missing_values"),
+        (None, "embeddings_empty"),
+        ([], "embeddings_empty"),
+        ([types.ContentEmbedding()], "embedding_values_missing"),
     ],
 )
 async def test_missing_response_fields(sdk_client, ready, embeddings, reason):
     sdk_client.models.embed_content.return_value = types.EmbedContentResponse(
         embeddings=embeddings
     )
-    with pytest.raises(AIProviderRequestInvalidError) as caught:
+    with pytest.raises(AIProviderGenerationError) as caught:
         await GeminiEmbedder(client=sdk_client).embed_document(ready)
     assert caught.value.reason == reason
     sdk_client.aclose.assert_not_called()
@@ -131,7 +128,7 @@ async def test_uses_first_embedding_and_can_reuse_after_failure(sdk_client, read
     [
         (
             errors.ClientError(429, {"error": {"code": 429, "message": "private"}}),
-            AIProviderRateLimitedError,
+            AIProviderErrorResponseError,
             "rate_limited",
         ),
         (
@@ -149,21 +146,21 @@ async def test_uses_first_embedding_and_can_reuse_after_failure(sdk_client, read
                     }
                 },
             ),
-            AIProviderUsageLimitExhaustedError,
+            AIProviderErrorResponseError,
             "quota_exhausted",
         ),
         (
             errors.ServerError(503, {"error": {"code": 503}}),
-            AIProviderServiceUnavailableError,
+            AIProviderErrorResponseError,
             "server_error",
         ),
         (
             errors.ClientError(401, {"error": {"code": 401}}),
-            AIProviderConfigurationError,
+            AIProviderErrorResponseError,
             "auth",
         ),
-        (httpx.ReadTimeout("private"), AIProviderNetworkError, "timeout"),
-        (httpx.ConnectError("private"), AIProviderNetworkError, "connection"),
+        (httpx.ReadTimeout("private"), AIProviderTransportError, "timeout"),
+        (httpx.ConnectError("private"), AIProviderTransportError, "network_io"),
     ],
 )
 async def test_provider_error_mapping(sdk_client, ready, error, expected, reason):

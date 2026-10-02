@@ -6,20 +6,18 @@ import json
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from google.genai import errors as genai_errors
 
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderErrorResponseError,
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from tests.agent.runtime._helpers import (
     FakeGeminiClient,
     FakeResponse,
@@ -248,22 +246,25 @@ async def test_unknown_extra_field_location_is_collapsed_to_fixed_placeholder() 
 @pytest.mark.parametrize(
     ("finish_reason", "expected_reason"),
     [
-        ("SAFETY", GeminiContentRejectionReason.SAFETY),
-        ("RECITATION", GeminiContentRejectionReason.RECITATION),
-        ("BLOCKLIST", GeminiContentRejectionReason.BLOCKLIST),
-        ("PROHIBITED_CONTENT", GeminiContentRejectionReason.PROHIBITED_CONTENT),
-        ("SPII", GeminiContentRejectionReason.SPII),
+        ("SAFETY", AIProviderGenerationReason.OUTPUT_BLOCKED_SAFETY),
+        ("RECITATION", AIProviderGenerationReason.OUTPUT_BLOCKED_RECITATION),
+        ("BLOCKLIST", AIProviderGenerationReason.OUTPUT_BLOCKED_BLOCKLIST),
+        (
+            "PROHIBITED_CONTENT",
+            AIProviderGenerationReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT,
+        ),
+        ("SPII", AIProviderGenerationReason.OUTPUT_BLOCKED_SPII),
     ],
 )
 async def test_blocked_finish_reason_maps_to_existing_provider_error(
     finish_reason: str,
-    expected_reason: GeminiContentRejectionReason,
+    expected_reason: AIProviderGenerationReason,
 ) -> None:
     """拒否理由を既存の provider エラー語彙へ対応付ける。"""
     client = FakeGeminiClient([blocked_response(finish_reason)])
     runtime = GeminiAgentRuntime(client=client)
 
-    with pytest.raises(AIProviderOutputBlockedError) as exc_info:
+    with pytest.raises(AIProviderGenerationError) as exc_info:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value.reason is expected_reason
@@ -283,12 +284,12 @@ async def test_call_max_tokens_finish_reason_is_truncated_even_with_valid_json()
     client = FakeGeminiClient([finished_response("MAX_TOKENS")])
     runtime = GeminiAgentRuntime(client=client)
 
-    with pytest.raises(AIProviderOutputTruncatedError) as exc_info:
+    with pytest.raises(AIProviderGenerationError) as exc_info:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    assert exc_info.value.CODE == "ai_error_output_truncated"
+    assert exc_info.value.CODE == "ai_provider_generation_unusable"
     assert exc_info.value.reason is not None
-    assert exc_info.value.reason.value == "output_token_limit_reached"
+    assert exc_info.value.reason is AIProviderGenerationReason.OUTPUT_TRUNCATED
     assert client.models.generate_content.await_count == 1
     client.close.assert_not_awaited()
     client.aclose.assert_not_awaited()
@@ -318,20 +319,20 @@ async def test_non_stream_prompt_feedback_precedes_candidate_safety() -> None:
     client = FakeGeminiClient([response])
     runtime = GeminiAgentRuntime(client=client)
 
-    with pytest.raises(AIProviderInputRejectedError) as exc_info:
+    with pytest.raises(AIProviderGenerationError) as exc_info:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    assert exc_info.value.reason is GeminiContentRejectionReason.INPUT_BLOCKED
+    assert exc_info.value.reason is AIProviderGenerationReason.INPUT_BLOCKED
     assert client.models.generate_content.await_count == 1
 
 
 async def test_known_gemini_failure_uses_existing_error_translation() -> None:
     """既知の Gemini 障害を既存のアプリケーション例外へ翻訳する。"""
-    error = TimeoutError("PROVIDER_SENTINEL_TIMEOUT_79ab")
+    error = httpx.ReadTimeout("PROVIDER_SENTINEL_TIMEOUT_79ab")
     client = FakeGeminiClient([error])
     runtime = GeminiAgentRuntime(client=client)
 
-    with pytest.raises(AIProviderNetworkError) as exc_info:
+    with pytest.raises(AIProviderTransportError) as exc_info:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value.__cause__ is error
@@ -455,12 +456,12 @@ async def test_call_quota_exhausted_sdk_error_emits_ai_provider_exhausted(
     client = FakeGeminiClient([_quota_exhausted_sdk_error()])
     runtime = GeminiAgentRuntime(client=client)
 
-    with pytest.raises(AIProviderUsageLimitExhaustedError):
+    with pytest.raises(AIProviderErrorResponseError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
-    assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
+    assert records[0]["kind"] == "quota_exhausted"
     assert records[0]["provider"] == "gemini"
 
 
@@ -471,7 +472,7 @@ async def test_call_plain_rate_limited_sdk_error_does_not_emit(
     client = FakeGeminiClient([_rate_limited_sdk_error()])
     runtime = GeminiAgentRuntime(client=client)
 
-    with pytest.raises(AIProviderRateLimitedError):
+    with pytest.raises(AIProviderErrorResponseError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

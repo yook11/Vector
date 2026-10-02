@@ -134,7 +134,7 @@ resource "aws_iam_role_policy" "chatbot" {
 
 resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
   alarm_name          = "${var.name_prefix}-ai-provider-exhausted"
-  alarm_description   = "AI provider の利用枠が枯渇した。insufficient_balance (DeepSeek) は残高チャージ、usage_limit_exhausted (Gemini) は枠リセット待ちか tier 引き上げを判断する。"
+  alarm_description   = "AI provider の利用枠が枯渇した。insufficient_balance (DeepSeek) は残高チャージ、quota_exhausted (Gemini) は枠リセット待ちか tier 引き上げを判断する。"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   evaluation_periods  = 1
@@ -206,9 +206,74 @@ resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
     }
   }
 
+  # 旧い kind (provider error の CODE) は、新しい kind を出すアプリの反映を確認してから外す。
+  metric_query {
+    id = "reason_balance_deepseek"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "ai_provider_exhausted"
+      period      = 900
+      stat        = "Sum"
+
+      dimensions = {
+        kind     = "insufficient_balance"
+        provider = "deepseek"
+      }
+    }
+  }
+
+  metric_query {
+    id = "reason_balance_gemini"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "ai_provider_exhausted"
+      period      = 900
+      stat        = "Sum"
+
+      dimensions = {
+        kind     = "insufficient_balance"
+        provider = "gemini"
+      }
+    }
+  }
+
+  metric_query {
+    id = "reason_quota_deepseek"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "ai_provider_exhausted"
+      period      = 900
+      stat        = "Sum"
+
+      dimensions = {
+        kind     = "quota_exhausted"
+        provider = "deepseek"
+      }
+    }
+  }
+
+  metric_query {
+    id = "reason_quota_gemini"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "ai_provider_exhausted"
+      period      = 900
+      stat        = "Sum"
+
+      dimensions = {
+        kind     = "quota_exhausted"
+        provider = "gemini"
+      }
+    }
+  }
+
   metric_query {
     id          = "exhausted_total"
-    expression  = "SUM([FILL(balance_deepseek, 0), FILL(balance_gemini, 0), FILL(quota_deepseek, 0), FILL(quota_gemini, 0)])"
+    expression  = "SUM([FILL(balance_deepseek, 0), FILL(balance_gemini, 0), FILL(quota_deepseek, 0), FILL(quota_gemini, 0), FILL(reason_balance_deepseek, 0), FILL(reason_balance_gemini, 0), FILL(reason_quota_deepseek, 0), FILL(reason_quota_gemini, 0)])"
     label       = "ai_provider_exhausted total"
     return_data = true
   }

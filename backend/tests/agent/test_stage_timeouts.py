@@ -22,7 +22,10 @@ from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.failure import PlanningError
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.ai_providers.errors import AIProviderOutputTruncatedError
+from app.ai_providers.errors import (
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
+)
 from tests.agent.answering.direct_answer.test_service import _input as direct_input
 from tests.agent.answering.evidence_answer.test_service import (
     RecordingDeltaReporter,
@@ -99,7 +102,9 @@ class WaitingRuntime:
             if self.mode == "retry":
                 await asyncio.sleep(0.12)
                 if attempt_number == 1:
-                    raise AIProviderOutputTruncatedError()
+                    raise AIProviderGenerationError(
+                        reason=AIProviderGenerationReason.OUTPUT_TRUNCATED
+                    )
                 yield "回答です。[[1]]"
             elif self.mode == "fragments":
                 while True:

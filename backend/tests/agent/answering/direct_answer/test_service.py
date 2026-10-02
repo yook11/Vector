@@ -32,10 +32,15 @@ from app.agent.recording.direct_answer import (
 from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
-    AIProviderOutputTruncatedError,
+    AIProviderGenerationError,
+    AIProviderGenerationReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiStateReason
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.recording._fakes import RecordingDirectAnswerRecorder
 from tests.agent.running._harness import (
     AllowAnswerGenerationStart,
@@ -64,11 +69,9 @@ def _as_of() -> datetime:
     return datetime(2026, 7, 7, 9, 0, tzinfo=UTC)
 
 
-def _truncated_error() -> AIProviderOutputTruncatedError:
+def _truncated_error() -> AIProviderGenerationError:
     """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
-    return AIProviderOutputTruncatedError(
-        reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
-    )
+    return AIProviderGenerationError(reason=AIProviderGenerationReason.OUTPUT_TRUNCATED)
 
 
 def _request() -> AnsweringRequest:
@@ -388,14 +391,18 @@ async def test_blank_twice_raises_invalid_after_observation(
 async def test_ai_provider_error_becomes_direct_answer_error_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
-    provider_exc = AIProviderNetworkError()
+    provider_exc = AIProviderTransportError(
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
+    )
     runtime = ScriptedStreamingRuntime([provider_exc])
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(DirectAnswerError) as exc_info:
         await _service(runtime, delta_reporter=reporter).answer(_input())
 
-    assert exc_info.value.code == "ai_error_network"
+    assert exc_info.value.code == "ai_provider_transport_failed"
     assert exc_info.value.__cause__ is provider_exc
     assert len(runtime.calls) == 1
     assert reporter.aborted == [1]
@@ -406,7 +413,7 @@ async def test_ai_provider_error_becomes_direct_answer_error_without_retry(
         {
             "result": "failed",
             "attempt_count": 1,
-            "failure_code": "ai_error_network",
+            "failure_code": "ai_provider_transport_failed",
         }
     ]
 
@@ -425,7 +432,7 @@ async def test_second_truncation_raises_classified_truncation_error_after_retry(
     with pytest.raises(DirectAnswerError) as exc_info:
         await _service(runtime, delta_reporter=reporter).answer(_input())
 
-    assert exc_info.value.code == "ai_error_output_truncated"
+    assert exc_info.value.code == "ai_provider_generation_unusable"
     assert exc_info.value.__cause__ is terminal_error
     assert len(runtime.calls) == 2
     metrics = collected_metrics(capfire)
@@ -433,7 +440,7 @@ async def test_second_truncation_raises_classified_truncation_error_after_retry(
         {
             "result": "failed",
             "attempt_count": 2,
-            "failure_code": "ai_error_output_truncated",
+            "failure_code": "ai_provider_generation_unusable",
         }
     ]
 
@@ -563,7 +570,11 @@ async def test_runtime_scope_exit_failure_discards_completed_outcome(
 async def test_runtime_scope_exit_failure_replaces_terminal_failure_without_outcome(
     capfire: CaptureLogfire,
 ) -> None:
-    source_error = AIProviderNetworkError()
+    source_error = AIProviderTransportError(
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
+    )
     close_error = RuntimeError("runtime scope exit failed")
     runtime = ScriptedStreamingRuntime([source_error])
 
@@ -657,7 +668,11 @@ async def test_reporter_failure_does_not_change_success(
 
 @pytest.mark.asyncio
 async def test_reporter_abort_failure_does_not_mask_provider_error() -> None:
-    provider_exc = AIProviderNetworkError()
+    provider_exc = AIProviderTransportError(
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
+    )
     runtime = ScriptedStreamingRuntime([provider_exc])
     reporter = RecordingDeltaReporter(fail_on=frozenset({"abort"}))
 
@@ -683,18 +698,22 @@ async def test_classified_failure_records_failed_outcome() -> None:
     """分類済み失敗は recorder へ失敗結論を1回渡す。"""
 
     recorder = RecordingDirectAnswerRecorder()
-    error = AIProviderNetworkError()
+    error = AIProviderTransportError(
+        transport=HttpTransportFailure(
+            HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+        )
+    )
     runtime = ScriptedStreamingRuntime([error])
 
     with pytest.raises(DirectAnswerError) as exc_info:
         await _service(runtime, recorder=recorder).answer(_input())
 
-    assert exc_info.value.code == "ai_error_network"
+    assert exc_info.value.code == "ai_provider_transport_failed"
     assert exc_info.value.__cause__ is error
     _assert_recorded(
         recorder,
         outcome=DirectAnswerFailed(
-            failure_code="ai_error_network",
+            failure_code="ai_provider_transport_failed",
             attempt_count=1,
         ),
         error=exc_info.value,
