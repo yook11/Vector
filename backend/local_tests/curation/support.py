@@ -1,3 +1,4 @@
+# ruff: noqa: S101
 """Curationの記事準備と、実入口・管理接続からの保存結果の観測を共有する。"""
 
 import asyncio
@@ -63,10 +64,34 @@ def build_sqs_record(payload):
     return {"messageId": str(payload.analyzable_article_id), "body": message.body}
 
 
+async def invoke_sqs_record(record):
+    return await asyncio.to_thread(handler_module.handler, {"Records": [record]}, None)
+
+
 async def invoke_event(payload):
-    return await asyncio.to_thread(
-        handler_module.handler, {"Records": [build_sqs_record(payload)]}, None
-    )
+    return await invoke_sqs_record(build_sqs_record(payload))
+
+
+async def wait_for_blocked_connection(database, blocker_pid, invocations):
+    """指定の接続に遮られた実CurationのSQLがロック待ちになるまで待つ。"""
+    deadline = asyncio.get_running_loop().time() + 3
+    async with database.connect("vector_article_analysis") as connection:
+        while True:
+            assert all(not task.done() for task in invocations), (
+                "ロック待ちになる前に処理が終了した"
+            )
+            pid = await connection.fetchval(
+                "SELECT pid FROM pg_stat_activity WHERE datname=current_database() "
+                "AND application_name='vector-curation-consumer' "
+                "AND wait_event_type='Lock' AND $1::integer=ANY(pg_blocking_pids(pid))",
+                blocker_pid,
+            )
+            if pid is not None:
+                return pid
+            assert asyncio.get_running_loop().time() < deadline, (
+                "保存がロック待ちにならなかった"
+            )
+            await asyncio.sleep(0.02)
 
 
 @dataclass(frozen=True)
