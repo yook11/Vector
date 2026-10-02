@@ -14,13 +14,11 @@ from typing import assert_never
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.typing import FilteringBoundLogger
 
-from app.ai_providers.errors import AIProviderError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import InScope, OutOfScope
-from app.analysis.assessment.errors import to_assessment_error
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
@@ -75,15 +73,11 @@ class AssessmentService:
         logger: FilteringBoundLogger,
     ) -> AssessmentCompletion:
         """判定結果のcommitまたは重複保存の見送りを正常終了として返す。"""
-        try:
-            call = await assessor.assess(
-                title_ja=ready.translated_title,
-                summary_ja=ready.summary,
-                logger=logger,
-            )
-        except AIProviderError as exc:
-            # 元のプロバイダー例外を原因チェーンにも保持する。
-            raise to_assessment_error(exc) from exc
+        call = await assessor.assess(
+            title_ja=ready.translated_title,
+            summary_ja=ready.summary,
+            logger=logger,
+        )
 
         curation_id = ready.curation_id
 

@@ -110,7 +110,6 @@ async def test_embed_document_wraps_vo_violation_in_layer_2b_marker() -> None:
     with pytest.raises(EmbeddingResponseInvalidError) as exc_info:
         await embedder.embed_document(_ready())
     assert exc_info.value.code == "embedding_response_invalid"
-    assert exc_info.value.provider_error is None
     # __cause__ に Pydantic ValidationError が紐付く (audit chain forensics)
     assert exc_info.value.__cause__ is not None
 

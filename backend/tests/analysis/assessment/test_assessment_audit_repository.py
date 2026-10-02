@@ -32,10 +32,6 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.errors import (
-    AssessmentError,
-    to_assessment_error,
-)
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.http.errors import HttpTransportError
 from app.http.failure import (
@@ -490,7 +486,7 @@ async def test_append_classified_failure_unknown_exception_maps_to_unknown(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_classified_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            projection=classify_assessment_failure(exc),
             article_id=article.id,
             exc=exc,
         )
@@ -557,7 +553,7 @@ async def test_append_classified_failure_projects_db_exceptions(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_classified_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            projection=classify_assessment_failure(exc),
             article_id=article.id,
             exc=exc,
         )
@@ -576,11 +572,13 @@ async def test_append_classified_failure_walks_error_chain_via_cause(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Assessment・プロバイダーの原因チェーンを監査へ保存する。"""
+    """AIの失敗とその原因のチェーンを監査へ保存する。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     try:
         try:
+            raise TimeoutError("upstream timeout")
+        except TimeoutError as inner:
             raise AIProviderTransportError(
                 "upstream provider error",
                 http_error=HttpTransportError(
@@ -588,15 +586,13 @@ async def test_append_classified_failure_walks_error_chain_via_cause(
                         HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
                     )
                 ),
-            )
-        except AIProviderTransportError as inner:
-            raise to_assessment_error(inner) from inner
-    except AssessmentError as service_error:
-        exc = service_error
+            ) from inner
+    except AIProviderTransportError as provider_error:
+        exc = provider_error
         async with session_factory() as session:
             await AssessmentAuditRepository(session).append_classified_failure(
                 curation_id=extraction.id,
-                projection=classify_assessment_failure(exc).audit,
+                projection=classify_assessment_failure(exc),
                 article_id=article.id,
                 exc=exc,
             )
@@ -606,8 +602,8 @@ async def test_append_classified_failure_walks_error_chain_via_cause(
     chain = ev.payload["error_chain"]
     assert chain is not None
     assert chain == [
-        "app.analysis.assessment.errors.AssessmentError",
         "app.ai_providers.errors.AIProviderTransportError",
+        "builtins.TimeoutError",
     ]
 
 
@@ -628,7 +624,7 @@ async def test_append_classified_failure_redacts_secrets_in_error_message(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_classified_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            projection=classify_assessment_failure(exc),
             article_id=article.id,
             exc=exc,
         )
@@ -655,7 +651,7 @@ async def test_append_classified_failure_omits_raw_response_attr(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_classified_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            projection=classify_assessment_failure(exc),
             article_id=article.id,
             exc=exc,
         )
@@ -682,7 +678,7 @@ async def test_append_classified_failure_records_curation_id_in_payload(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_classified_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            projection=classify_assessment_failure(exc),
             article_id=article.id,
             exc=exc,
         )

@@ -4,33 +4,17 @@ from enum import StrEnum
 
 import pytest
 
-from app.ai_providers.errors import (
-    AIProviderError,
-    AIProviderResultReason,
-    AIProviderTransportError,
-)
 from app.analysis.assessment.errors import (
     AssessmentCurationMissingError,
     AssessmentError,
     AssessmentFailureReason,
     AssessmentResponseInvalidError,
-    to_assessment_error,
-)
-from app.http.errors import HttpTransportError
-from app.http.failure import (
-    HttpTransportFailure,
-    HttpTransportFailureReason,
-    HttpTransportStage,
 )
 from app.shared.errors import ApplicationError
 
 
 class SampleDefect(StrEnum):
     INVALID = "assessment_test_invalid"
-
-
-class _UnregisteredProviderError(AIProviderError):
-    CODE = "unregistered_provider_error"
 
 
 @pytest.mark.parametrize(
@@ -44,53 +28,10 @@ def test_requires_reason_enum(reason):
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"reason": AssessmentFailureReason.PROVIDER_ERROR},
-        {
-            "reason": AssessmentFailureReason.PROVIDER_ERROR,
-            "provider_error": _UnregisteredProviderError(
-                reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
-            ),
-        },
-        {
-            "reason": AssessmentFailureReason.PROVIDER_ERROR,
-            "provider_error": ValueError("private"),
-        },
-        {
-            "reason": AssessmentFailureReason.PROVIDER_ERROR,
-            "provider_error": AIProviderTransportError(
-                http_error=HttpTransportError(
-                    failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-                    )
-                )
-            ),
-            "defect": SampleDefect.INVALID,
-        },
         {"reason": AssessmentFailureReason.RESPONSE_INVALID},
         {
             "reason": AssessmentFailureReason.RESPONSE_INVALID,
             "defect": "private response",
-        },
-        {
-            "reason": AssessmentFailureReason.RESPONSE_INVALID,
-            "defect": SampleDefect.INVALID,
-            "provider_error": AIProviderTransportError(
-                http_error=HttpTransportError(
-                    failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-                    )
-                )
-            ),
-        },
-        {
-            "reason": AssessmentFailureReason.CURATION_MISSING,
-            "provider_error": AIProviderTransportError(
-                http_error=HttpTransportError(
-                    failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-                    )
-                )
-            ),
         },
         {
             "reason": AssessmentFailureReason.CURATION_MISSING,
@@ -108,7 +49,6 @@ def test_response_invalid_preserves_defect():
     assert exc.reason is AssessmentFailureReason.RESPONSE_INVALID
     assert exc.defect is SampleDefect.INVALID
     assert exc.code == SampleDefect.INVALID.value
-    assert exc.provider_error is None
 
 
 def test_response_invalid_rejects_free_text():
@@ -120,23 +60,12 @@ def test_curation_missing_has_no_details():
     exc = AssessmentCurationMissingError()
     assert exc.reason is AssessmentFailureReason.CURATION_MISSING
     assert exc.code == "assessment_curation_missing"
-    assert exc.provider_error is None
     assert exc.defect is None
 
 
 @pytest.mark.parametrize(
     "exc",
     [
-        to_assessment_error(
-            AIProviderTransportError(
-                "private sdk text",
-                http_error=HttpTransportError(
-                    failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-                    )
-                ),
-            )
-        ),
         AssessmentResponseInvalidError(SampleDefect.INVALID),
         AssessmentCurationMissingError(),
     ],
@@ -145,7 +74,6 @@ def test_core_errors_are_independent_of_task_classification(exc):
     assert isinstance(exc, AssessmentError)
     for attr in ("RETRYABILITY", "FAILURE_ACTION", "failure_kind", "failure_reason"):
         assert not hasattr(exc, attr)
-    assert "private sdk text" not in str(exc)
 
 
 def test_assessment_error_is_application_error():
@@ -157,30 +85,14 @@ def test_assessment_error_is_application_error():
     "error,expected_message",
     [
         (
-            to_assessment_error(
-                AIProviderTransportError(
-                    "private-provider-diagnostic",
-                    http_error=HttpTransportError(
-                        failure=HttpTransportFailure(
-                            HttpTransportStage.RECEIVE,
-                            HttpTransportFailureReason.TIMEOUT,
-                        )
-                    ),
-                )
-            ),
-            "AIプロバイダーの処理失敗により記事を判定できませんでした",
-        ),
-        (
             AssessmentResponseInvalidError(SampleDefect.INVALID),
             "AI応答が記事判定の契約を満たしていません",
         ),
         (AssessmentCurationMissingError(), "判定対象のCurationが存在しません"),
     ],
 )
-def test_assessment_error_describes_failure_without_copying_provider_text(
-    error, expected_message
-):
-    """工程の失敗を説明し、プロバイダーの任意メッセージは転記しない。"""
+def test_assessment_error_describes_failure(error, expected_message):
+    """工程の失敗を固定文で説明する。"""
     assert str(error) == expected_message
 
 

@@ -1,4 +1,4 @@
-"""Curationの失敗理由と原因保持の契約を検証する。"""
+"""Curationの失敗理由と、Serviceが例外を変換せずに伝える契約を検証する。"""
 
 import asyncio
 from datetime import UTC, datetime
@@ -7,17 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.ai_providers.errors import (
-    AIProviderError,
     AIProviderResponseError,
     AIProviderResponseReason,
-    AIProviderResultReason,
 )
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
     CurationError,
     CurationFailureReason,
     CurationResponseInvalidError,
-    to_curation_error,
 )
 from app.analysis.curation.service import CurationService
 from app.http.errors import HttpResponseError
@@ -25,34 +22,10 @@ from app.http.errors import HttpResponseError
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-class _UnregisteredProviderError(AIProviderError):
-    CODE = "unregistered_provider_error"
-
-
-@pytest.mark.parametrize(
-    "reason, provider",
-    [
-        ("provider_error", None),
-        (CurationFailureReason.PROVIDER_ERROR, None),
-        (
-            CurationFailureReason.PROVIDER_ERROR,
-            _UnregisteredProviderError(
-                reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
-            ),
-        ),
-        (
-            CurationFailureReason.RESPONSE_INVALID,
-            AIProviderResponseError(
-                reason=AIProviderResponseReason.RATE_LIMITED,
-                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-            ),
-        ),
-    ],
-)
-def test_invalid_error_combinations_are_rejected(reason, provider):
-    """原因と失敗理由の矛盾を構築時に拒否する。"""
+def test_untyped_reason_is_rejected():
+    """失敗理由はenumの値だけを受け付ける。"""
     with pytest.raises(TypeError):
-        CurationError(reason=reason, provider_error=provider)
+        CurationError(reason="response_invalid")
 
 
 def test_response_invalid_keeps_code_without_legacy_policy():
@@ -60,39 +33,26 @@ def test_response_invalid_keeps_code_without_legacy_policy():
     error = CurationResponseInvalidError()
     assert error.reason is CurationFailureReason.RESPONSE_INVALID
     assert error.code == "extraction_response_invalid"
-    assert error.provider_error is None
     assert not hasattr(error, "RETRYABILITY")
     assert not hasattr(error, "FAILURE_ACTION")
-
-
-def test_provider_error_string_does_not_expose_provider_message():
-    """Serviceエラーの文字列表現へプロバイダーの自由文を出さない。"""
-    provider = AIProviderResponseError(
-        "private provider details",
-        reason=AIProviderResponseReason.RATE_LIMITED,
-        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-    )
-    error = to_curation_error(provider)
-    assert error.provider_error is provider
-    assert error.reason is CurationFailureReason.PROVIDER_ERROR
-    assert error.code == provider.CODE
-    assert "private" not in str(error)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "original",
     [
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        ),
         CurationResponseInvalidError(),
         RuntimeError("unexpected"),
         TimeoutError(),
         asyncio.CancelledError(),
     ],
 )
-async def test_service_propagates_non_provider_errors_without_opening_database(
-    original,
-):
-    """AI呼び出しの非プロバイダー例外を変換せず、DBを開かずに伝播する。"""
+async def test_service_propagates_ai_call_errors_without_opening_database(original):
+    """AI呼び出しの例外はAIの失敗も含めて変換せず、DBを開かずに伝播する。"""
     session_factory = MagicMock()
     curator = MagicMock()
     curator.curate = AsyncMock(side_effect=original)
@@ -105,47 +65,14 @@ async def test_service_propagates_non_provider_errors_without_opening_database(
     session_factory.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_service_wraps_provider_with_same_cause():
-    """プロバイダー例外を属性と原因チェーンの両方で保持する。"""
-    provider = AIProviderResponseError(
-        "private provider details",
-        reason=AIProviderResponseReason.RATE_LIMITED,
-        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-    )
-    curator = MagicMock()
-    curator.curate = AsyncMock(side_effect=provider)
-    session_factory = MagicMock()
-    ready = ReadyForCuration(
-        analyzable_article_id=42, original_title="title", original_content="body"
-    )
-    with pytest.raises(CurationError) as raised:
-        await CurationService(session_factory).execute(ready, curator)
-    assert raised.value.provider_error is provider
-    assert raised.value.__cause__ is provider
-    session_factory.assert_not_called()
-
-
 def test_curation_error_directly_inherits_exception():
     """工程例外はログ固有の基底クラスへ依存しない。"""
     assert CurationError.__bases__ == (Exception,)
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        to_curation_error(
-            AIProviderResponseError(
-                "provider diagnostic",
-                reason=AIProviderResponseReason.RATE_LIMITED,
-                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-            )
-        ),
-        CurationResponseInvalidError(),
-    ],
-)
-def test_curation_error_uses_standard_empty_message(error):
+def test_curation_error_uses_standard_empty_message():
     """メッセージ未指定の例外文字列をcodeで補完しない。"""
+    error = CurationResponseInvalidError()
     assert error.args == ()
     assert str(error) == ""
 

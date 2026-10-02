@@ -40,7 +40,7 @@ class BaseEmbedder(abc.ABC):
     のため、AI 境界として 2 種のエラーを構造保証する:
 
     - SDK 例外 → ``AIProvider*Error`` 階層 (Layer 2-A、``_translate_error`` で翻訳)。
-      Stage 5 marker への詰め替えは Service 層 ACL の責務
+      Service は工程の例外に包まずに伝播する
     - ``embed_document`` の戻り値が VO 構造制約 (768 dim + 有限性 + サニティ範囲)
       を満たさない場合 → ``EmbeddingResponseInvalidError`` (Layer 2-B) として
       本 class 内で詰め替えて raise (下流での再検証を不要にする)

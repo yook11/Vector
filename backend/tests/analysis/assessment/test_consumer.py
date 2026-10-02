@@ -27,10 +27,7 @@ from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejectionReason,
     ReadyForAssessment,
 )
-from app.analysis.assessment.errors import (
-    AssessmentResponseInvalidError,
-    to_assessment_error,
-)
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import (
     AssessmentCompletion,
@@ -211,11 +208,9 @@ async def test_ready_facts_are_loaded_once(consumer, target, assessment_logger):
     [
         AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
         RuntimeError("private-business-error"),
-        to_assessment_error(
-            AIProviderResponseError(
-                reason=AIProviderResponseReason.RATE_LIMITED,
-                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-            )
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
     ],
 )
@@ -236,7 +231,7 @@ async def test_execution_failure_is_classified_and_reraised(
     assert raised.value is original
     assert raised.value.__cause__ is cause
     consumer._failure_handler.handle.assert_awaited_once_with(
-        failure=classify_assessment_failure(original),
+        projection=classify_assessment_failure(original),
         exc=original,
         curation_id=target.curation_id,
         analyzable_article_id=target.analyzable_article_id,
@@ -252,16 +247,15 @@ async def test_failure_not_recoverable_for_input_is_settled_after_handling(
     consumer, target, assessment_logger
 ):
     """この入力では回復しないAIの失敗は、後処理のあと受信完了として返す。"""
-    provider_error = AIProviderResponseError(
+    original = AIProviderResponseError(
         reason=AIProviderResponseReason.INPUT_BLOCKED,
         http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
-    original = to_assessment_error(provider_error)
     consumer._service.execute.side_effect = original
 
     result = await consumer.consume(target, logger=assessment_logger)
 
-    assert result == SettledProviderFailure(provider_error)
+    assert result == SettledProviderFailure(original)
     consumer._failure_handler.handle.assert_awaited_once()
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
@@ -276,7 +270,7 @@ async def test_settlement_survives_failure_handling_error(
         reason=AIProviderResponseReason.INPUT_TOO_LONG,
         http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
-    consumer._service.execute.side_effect = to_assessment_error(provider_error)
+    consumer._service.execute.side_effect = provider_error
     consumer._failure_handler.handle.side_effect = RuntimeError("secondary-secret")
 
     result = await consumer.consume(target, logger=assessment_logger)
@@ -289,11 +283,9 @@ async def test_classification_failure_leaves_failure_to_redelivery(
     consumer, target, assessment_logger
 ):
     """受信完了と確定できなければ、元の例外を投げ直して再配信に任せる。"""
-    original = to_assessment_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.INPUT_BLOCKED,
-            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
-        )
+    original = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
     consumer._service.execute.side_effect = original
 
@@ -325,7 +317,7 @@ async def test_ready_read_failure_does_not_substitute_event_id(
         with pytest.raises(DBAPIError) as raised:
             await consumer.consume(target, logger=assessment_logger)
         consumer._failure_handler.handle.assert_awaited_once_with(
-            failure=classify_assessment_failure(raised.value),
+            projection=classify_assessment_failure(raised.value),
             exc=raised.value,
             curation_id=target.curation_id,
             analyzable_article_id=None,

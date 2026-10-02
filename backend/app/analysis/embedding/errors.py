@@ -1,13 +1,8 @@
-"""Embeddingの業務上の失敗理由とプロバイダー例外の保持。"""
+"""Embedding工程で確定した業務上の失敗理由。"""
 
 from __future__ import annotations
 
 from enum import StrEnum
-
-from app.ai_providers.errors import (
-    CLASSIFIED_AI_PROVIDER_ERRORS,
-    AIProviderError,
-)
 
 
 class EmbeddingFailureReason(StrEnum):
@@ -15,34 +10,20 @@ class EmbeddingFailureReason(StrEnum):
 
     ARTICLE_MISSING = "article_missing"
     RESPONSE_INVALID = "response_invalid"
-    PROVIDER_ERROR = "provider_error"
 
 
 class EmbeddingError(Exception):
-    """失敗理由と元のプロバイダー例外を呼び出し元へ伝える。"""
+    """Embedding工程で確定した失敗理由を呼び出し元へ伝える。"""
 
-    def __init__(
-        self,
-        *,
-        reason: EmbeddingFailureReason,
-        provider_error: AIProviderError | None = None,
-    ) -> None:
+    def __init__(self, *, reason: EmbeddingFailureReason) -> None:
         if not isinstance(reason, EmbeddingFailureReason):
             raise TypeError("reason must be an EmbeddingFailureReason")
-        if reason is EmbeddingFailureReason.PROVIDER_ERROR:
-            if not isinstance(provider_error, CLASSIFIED_AI_PROVIDER_ERRORS):
-                raise TypeError("provider_error must be a classified AI provider error")
-        elif provider_error is not None:
-            raise TypeError("provider_error requires PROVIDER_ERROR reason")
         super().__init__()
         self.reason = reason
-        self.provider_error = provider_error
 
     @property
     def code(self) -> str:
         """既存の観測コードを失敗理由から導出する。"""
-        if self.provider_error is not None:
-            return self.provider_error.CODE
         if self.reason is EmbeddingFailureReason.ARTICLE_MISSING:
             return "embedding_analyzed_article_missing"
         return "embedding_response_invalid"
@@ -60,12 +41,3 @@ class EmbeddingResponseInvalidError(EmbeddingError):
 
     def __init__(self) -> None:
         super().__init__(reason=EmbeddingFailureReason.RESPONSE_INVALID)
-
-
-def to_embedding_error(exc: AIProviderError) -> EmbeddingError:
-    """プロバイダー例外を保持し、Serviceの失敗理由を付与する。"""
-    if not isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
-        raise TypeError(f"unmapped provider error: {type(exc).__qualname__}")
-    return EmbeddingError(
-        reason=EmbeddingFailureReason.PROVIDER_ERROR, provider_error=exc
-    )

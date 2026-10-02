@@ -27,10 +27,7 @@ from app.analysis.curation.domain.ready import (
     CurationReadyBuildRejectionReason,
     ReadyForCuration,
 )
-from app.analysis.curation.errors import (
-    CurationResponseInvalidError,
-    to_curation_error,
-)
+from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationCompletion, CurationCompletionKind
 from app.collection.events import AnalyzableArticleCreated
@@ -190,11 +187,9 @@ async def test_ready_facts_are_loaded_once(consumer, target):
     [
         CurationResponseInvalidError(),
         RuntimeError("private-business-error"),
-        to_curation_error(
-            AIProviderResponseError(
-                reason=AIProviderResponseReason.RATE_LIMITED,
-                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
-            )
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
         ),
     ],
 )
@@ -210,7 +205,7 @@ async def test_execution_failure_is_classified_and_reraised(consumer, target, or
     assert raised.value is original
     assert raised.value.__cause__ is cause
     consumer._failure_handler.handle.assert_awaited_once_with(
-        failure=classify_curation_failure(original),
+        projection=classify_curation_failure(original),
         exc=original,
         target_article_id=target.analyzable_article_id,
         analyzable_article_id=target.analyzable_article_id,
@@ -225,16 +220,15 @@ async def test_failure_not_recoverable_for_input_is_settled_after_handling(
     consumer, target
 ):
     """この入力では回復しないAIの失敗は、後処理のあと受信完了として返す。"""
-    provider_error = AIProviderResponseError(
+    original = AIProviderResponseError(
         reason=AIProviderResponseReason.INPUT_BLOCKED,
         http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
-    original = to_curation_error(provider_error)
     consumer._service.execute.side_effect = original
 
     result = await consumer.consume(target)
 
-    assert result == SettledProviderFailure(provider_error)
+    assert result == SettledProviderFailure(original)
     consumer._failure_handler.handle.assert_awaited_once()
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
@@ -247,7 +241,7 @@ async def test_settlement_survives_failure_handling_error(consumer, target):
         reason=AIProviderResponseReason.INPUT_TOO_LONG,
         http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
-    consumer._service.execute.side_effect = to_curation_error(provider_error)
+    consumer._service.execute.side_effect = provider_error
     consumer._failure_handler.handle.side_effect = RuntimeError("secondary-secret")
 
     result = await consumer.consume(target)
@@ -258,11 +252,9 @@ async def test_settlement_survives_failure_handling_error(consumer, target):
 @pytest.mark.asyncio
 async def test_classification_failure_leaves_failure_to_redelivery(consumer, target):
     """受信完了と確定できなければ、元の例外を投げ直して再配信に任せる。"""
-    original = to_curation_error(
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.INPUT_BLOCKED,
-            http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
-        )
+    original = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
     consumer._service.execute.side_effect = original
 
@@ -294,7 +286,7 @@ async def test_ready_read_failure_does_not_substitute_event_id(
         with pytest.raises(DBAPIError) as raised:
             await consumer.consume(target)
         consumer._failure_handler.handle.assert_awaited_once_with(
-            failure=classify_curation_failure(raised.value),
+            projection=classify_curation_failure(raised.value),
             exc=raised.value,
             target_article_id=target.analyzable_article_id,
             analyzable_article_id=None,
