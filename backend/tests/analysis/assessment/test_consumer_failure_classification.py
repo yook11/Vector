@@ -1,11 +1,11 @@
-"""Consumerの失敗分類が副作用やTaskiqの制御を持たないことを検証する。"""
+"""Consumerの失敗から、再配信に任せるか受信完了にするかの判断を検証する。"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+from sqlalchemy.exc import OperationalError
 
 from app.ai_providers.errors import (
     AIProviderNotSentError,
@@ -16,22 +16,21 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
-from app.analysis.assessment.ai.gemini import GeminiResponseDefect
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.consumer_failure_classification import (
+    NoRetryAssessment,
+    RetryAssessment,
     classify_assessment_failure,
 )
 from app.analysis.assessment.errors import (
     AssessmentCurationMissingError,
     AssessmentResponseInvalidError,
 )
-from app.audit.failure_projection import FailureProjection, Retryability
 from app.db.errors import (
     DatabaseConnectionError,
     DatabaseConnectionErrorReason,
     DatabaseConstraintError,
     DatabaseConstraintErrorReason,
-    DatabaseUnexpectedError,
 )
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
@@ -44,14 +43,43 @@ _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
-    ("error", "code", "failure_reason"),
+    "error",
     [
-        (
-            AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
-            "ai_provider_not_sent_error",
-            "not_configured",
+        pytest.param(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_TOO_LONG,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
+            id="input_too_long",
         ),
-        (
+        pytest.param(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_BLOCKED,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
+            id="input_blocked_response",
+        ),
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED),
+            id="input_blocked_result",
+        ),
+        pytest.param(AssessmentCurationMissingError(), id="curation_missing"),
+    ],
+)
+def test_failure_unrecoverable_by_redelivery_is_not_retried(error, capsys) -> None:
+    """同じ入力では変わらない失敗と対象がない失敗は、元の例外のまま受信完了にする。"""
+    assert classify_assessment_failure(error) == NoRetryAssessment(error)
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(
+            AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
+            id="ai_not_configured",
+        ),
+        pytest.param(
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
@@ -59,127 +87,44 @@ _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
                     )
                 )
             ),
-            "ai_provider_transport_error",
-            "timeout",
+            id="ai_transport_timeout",
         ),
-        (
+        pytest.param(
             AIProviderResponseError(
                 reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
                 http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
             ),
-            "ai_provider_response_error",
-            "quota_exhausted",
+            id="ai_quota_exhausted",
         ),
-        (
-            AIProviderResponseError(
-                reason=AIProviderResponseReason.INPUT_BLOCKED,
-                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
-            ),
-            "ai_provider_response_error",
-            "input_blocked",
-        ),
-        (
+        pytest.param(
             AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED),
-            "ai_provider_result_error",
-            "output_truncated",
+            id="ai_output_truncated",
         ),
-    ],
-)
-def test_ai_failure_is_projected_from_class_code_and_reason(
-    error, code, failure_reason, capsys
-) -> None:
-    """AIの失敗は包まれずに届き、クラスのcodeとreasonだけを監査へ写す。"""
-    assert classify_assessment_failure(error) == FailureProjection(
-        code=code,
-        failure_kind=None,
-        failure_reason=failure_reason,
-        retryability=None,
-        failure_action=None,
-    )
-    assert capsys.readouterr().out == ""
-
-
-@pytest.mark.parametrize(
-    ("error", "code", "kind", "retryability"),
-    [
-        (
-            AssessmentCurationMissingError(),
-            "assessment_curation_missing",
-            "target_missing",
-            Retryability.NON_RETRYABLE,
-        ),
-        (
+        pytest.param(
             AssessmentResponseInvalidError(
                 AssessmentResponseDefect.CATEGORY_KEY_MISSING
             ),
-            "assessment_response_category_key_missing",
-            "ai_response_invalid",
-            Retryability.RETRYABLE,
+            id="response_invalid",
         ),
-    ],
-)
-def test_service_failure_reasons(error, code, kind, retryability) -> None:
-    """Service由来の理由をTaskiq例外に変換せず分類する。"""
-    projection = classify_assessment_failure(error)
-    assert projection.code == code
-    assert projection.failure_kind == kind
-    assert projection.retryability is retryability
-
-
-@pytest.mark.parametrize(
-    ("error", "code", "retryability"),
-    [
-        (
+        pytest.param(
             DatabaseConnectionError(
                 reason=DatabaseConnectionErrorReason.CONNECTION_LOST
             ),
-            "db_runtime_error",
-            "retryable",
+            id="db_connection_lost",
         ),
-        (
+        pytest.param(
             DatabaseConstraintError(
                 reason=DatabaseConstraintErrorReason.FOREIGN_KEY_VIOLATION
             ),
-            "db_constraint_error",
-            "non_retryable",
+            id="db_constraint",
         ),
-        (DatabaseUnexpectedError(), "db_unknown_error", "unknown"),
-        (OperationalError("query", {}, Exception()), "db_runtime_error", "retryable"),
-        (
-            IntegrityError("query", {}, Exception()),
-            "db_constraint_error",
-            "non_retryable",
+        pytest.param(
+            OperationalError("query", {}, Exception()), id="sqlalchemy_operational"
         ),
-        (
-            ProgrammingError("query", {}, Exception()),
-            "db_query_or_schema_error",
-            "non_retryable",
-        ),
+        pytest.param(RuntimeError("unexpected"), id="unexpected"),
+        pytest.param(TimeoutError(), id="timeout"),
     ],
 )
-def test_database_failure_uses_shared_projection(error, code, retryability) -> None:
-    """共有DB例外と生のSQLAlchemy例外を既存監査分類へ対応付ける。"""
-    projection = classify_assessment_failure(error)
-    assert projection.code == code
-    assert projection.retryability.value == retryability
-
-
-@pytest.mark.parametrize("error", [RuntimeError("unexpected"), TimeoutError()])
-def test_unexpected_failure_and_timeout_are_not_success(error) -> None:
-    """想定外例外と時間切れを成功や再配信の抑止に変換しない。"""
-    projection = classify_assessment_failure(error)
-    assert projection.code == "unexpected_error"
-    assert projection.retryability is Retryability.UNKNOWN
-
-
-@pytest.mark.parametrize(
-    "defect",
-    [*AssessmentResponseDefect, *GeminiResponseDefect],
-)
-def test_all_response_defects_preserve_code(defect):
-    error = AssessmentResponseInvalidError(defect)
-    projection = classify_assessment_failure(error)
-    assert projection.code == defect.value
-    assert projection.failure_kind == "ai_response_invalid"
-    assert projection.failure_reason is None
-    assert projection.retryability is Retryability.RETRYABLE
+def test_failure_that_may_recover_or_is_unknown_is_retried(error) -> None:
+    """回復しうる失敗と、DB障害・想定外・時間切れは再配信に任せる。"""
+    assert classify_assessment_failure(error) == RetryAssessment(error)

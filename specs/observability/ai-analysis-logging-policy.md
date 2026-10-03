@@ -180,8 +180,8 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | DBで分析済みと確認 | `completed` | `outcome=already_assessed` | `completed` |
 | Curation欠損 | `failed` | `rejection_code=assessment_ready_build_blocked_curation_missing` | `completed` |
 | 分析入力の条件不成立 | `failed` | `rejection_code=assessment_ready_build_blocked_input_invalid` | `completed` |
-| この入力では回復しないprovider失敗 | `failed` | `code` / `failure_reason`（例: `ai_provider_response_error` / `input_too_long`） | `completed` |
-| 既存契約でバッチ失敗応答に含める入力不正・処理例外 | `failed` | 既存の入力診断または例外診断 | `batch_item_failure` |
+| 再試行しない失敗（この入力では回復しないprovider失敗、Curation欠損の工程例外） | `failed` | `code`、providerなら`failure_reason`（例: `ai_provider_response_error` / `input_too_long`） | `completed` |
+| 入力不正、再試行する失敗、Consumerから伝播した例外 | `failed` | 既存の入力診断または例外診断 | `batch_item_failure` |
 
 ログは業務処理の成否を表し、`message_disposition`はhandlerが決定したSQS応答への扱いを表す。前提不成立を失敗として記録しても、既存の受信完了・再配信・監査・メトリクスの動作は変えない。既存の拒否値をそのまま使い、ログのために例外化しない。
 
@@ -190,7 +190,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | 共通 | `event` / `timestamp` / `level` / `log_policy` / `service` / `environment` / `stage`。`stage=assessment`、`log_policy=ai_inference`。 |
 | 開始 | `request_id` / `message_id`。`request_id`はLambda context、`message_id`は検証済みSQSレコード由来。 |
 | 完了 | `request_id` / `message_id`、検証・取得済みの`event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id`、`outcome` / `duration_ms` / `message_disposition`。 |
-| 失敗 | 取得済みの相関ID・対象ID、確定できる`operation`、`duration_ms` / `message_disposition`。前提不成立なら`rejection_code`、受信完了にしたprovider失敗なら`code` / `failure_reason`、例外なら既存の`exc_info`変換による診断項目。 |
+| 失敗 | 取得済みの相関ID・対象ID、確定できる`operation`、`duration_ms` / `message_disposition`。前提不成立なら`rejection_code`、再試行しない失敗なら`code`と、providerなら`failure_reason`、例外なら既存の`exc_info`変換による診断項目。 |
 
 未取得の項目は省略し、未検証の入力からIDを補完しない。`operation`は失敗した処理が確定している場合だけ記録する。`duration_ms`は`perf_counter()`で測ったメッセージ開始から終端直前までの経過時間をミリ秒で表す。
 
@@ -287,7 +287,7 @@ Consumer全体の期限切れを、providerのread timeoutとして表示しな�
 
 ### 4.3 対処と二次障害
 
-provider例外には回復分類・retryabilityを持たせない。DB障害などの`retryability=retryable`も再試行を実行した記録ではない。SQSバッチ失敗応答に含めた時点では「失敗項目として報告した」と記録し、将来の再配信完了まで断定しない。
+provider例外には回復分類・retryabilityを持たせない。分析の3工程の失敗監査はretryabilityを記録せず、工程がとった扱いを`failure_action`（`retry`／`no_retry`）に記録する。これも再試行を実行した記録ではない。SQSバッチ失敗応答に含めた時点では「失敗項目として報告した」と記録し、将来の再配信完了まで断定しない。
 
 保存済み、rollback済み、保存結果不明も区別する。commit中の通信断等で結果が不明なら、ログの都合で未保存と決めない。
 

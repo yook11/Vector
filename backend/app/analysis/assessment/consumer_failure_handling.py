@@ -8,16 +8,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.typing import FilteringBoundLogger
 
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
+from app.analysis.assessment.consumer_failure_classification import (
+    NoRetryAssessment,
+    RetryAssessment,
+)
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.audit.error_fields import exception_fqn
-from app.audit.failure_projection import FailureProjection
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.assessment import AssessmentAuditRepository
 
 
 class AssessmentConsumerFailureHandler:
-    """各後処理を独立して試み、元の失敗の伝播は呼び出し元に委ねる。"""
+    """各後処理を独立して試み、Consumerが決めた失敗の扱いは変えない。"""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -25,7 +28,7 @@ class AssessmentConsumerFailureHandler:
     async def handle(
         self,
         *,
-        projection: FailureProjection,
+        failure: RetryAssessment | NoRetryAssessment,
         exc: Exception,
         curation_id: int,
         analyzable_article_id: int | None,
@@ -42,11 +45,13 @@ class AssessmentConsumerFailureHandler:
 
         try:
             async with self._session_factory() as session:
-                await AssessmentAuditRepository(session).append_classified_failure(
+                await AssessmentAuditRepository(session).append_failure(
                     curation_id=curation_id,
                     article_id=analyzable_article_id,
                     exc=exc,
-                    projection=projection,
+                    failure_action=(
+                        "retry" if isinstance(failure, RetryAssessment) else "no_retry"
+                    ),
                 )
                 await session.commit()
         except Exception as audit_exc:

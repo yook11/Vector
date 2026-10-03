@@ -10,7 +10,10 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
-from app.analysis.ai_provider_settlement import SettledProviderFailure
+from app.analysis.curation.consumer_failure_classification import (
+    NoRetryCuration,
+    RetryCuration,
+)
 from app.analysis.curation.domain.ready import (
     CurationReadyBuildRejected,
     CurationReadyBuildRejectionReason,
@@ -72,14 +75,15 @@ def wiring(monkeypatch):
 
 
 def test_batch_reports_only_failed_message_ids(wiring):
-    """成功したメッセージを含めず、失敗したIDだけを入力順で返す。"""
+    """成功と再試行しない失敗を含めず、再試行する失敗と例外のIDだけを入力順で返す。"""
     body = valid_body()
     messages = [
         {"messageId": "saved-before", "body": body},
         {"messageId": "failed-first", "body": body},
         {"messageId": "already", "body": body},
         {"messageId": "rejected", "body": body},
-        {"messageId": "settled", "body": body},
+        {"messageId": "not-retried", "body": body},
+        {"messageId": "retried", "body": body},
         {"messageId": "saved-after", "body": body},
         {"messageId": "failed-last", "body": body},
     ]
@@ -87,45 +91,72 @@ def test_batch_reports_only_failed_message_ids(wiring):
         CurationCompletion(CurationCompletionKind.SIGNAL, 901),
         RuntimeError("first-failure"),
         CurationCompletion(CurationCompletionKind.ALREADY_CURATED),
-        CurationReadyBuildRejected(CurationReadyBuildRejectionReason.ARTICLE_MISSING),
-        SettledProviderFailure(
+        NoRetryCuration(
+            CurationReadyBuildRejected(
+                CurationReadyBuildRejectionReason.ARTICLE_MISSING
+            )
+        ),
+        NoRetryCuration(
             AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
         ),
+        RetryCuration(RuntimeError("decided-retry")),
         CurationCompletion(CurationCompletionKind.SIGNAL, 901),
         RuntimeError("last-failure"),
     ]
 
     response = module.handler({"Records": messages}, None)
 
-    assert wiring.consumer.consume.await_count == 7
+    assert wiring.consumer.consume.await_count == 8
     assert response == {
         "batchItemFailures": [
             {"itemIdentifier": "failed-first"},
+            {"itemIdentifier": "retried"},
             {"itemIdentifier": "failed-last"},
         ]
     }
 
 
-def test_settled_provider_failure_is_completed_with_its_classification(wiring):
-    """受信完了にしたAIの失敗は失敗一覧に含めず、どこで判明したかと理由を記録する。"""
-    wiring.consumer.consume.return_value = SettledProviderFailure(
+def test_failure_not_retried_is_completed_with_its_classification(wiring):
+    """再試行しないAIの失敗は失敗一覧に含めず、どこで判明したかと理由を記録する。"""
+    wiring.consumer.consume.return_value = NoRetryCuration(
         AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
     )
 
     response = module.handler(
-        {"Records": [{"messageId": "settled", "body": valid_body()}]}, None
+        {"Records": [{"messageId": "not-retried", "body": valid_body()}]}, None
     )
 
     assert response == {"batchItemFailures": []}
     wiring.log.info.assert_called_once_with(
         "curation_message_completed",
-        message_id="settled",
+        message_id="not-retried",
         event_id="00000000-0000-0000-0000-000000000001",
         analyzable_article_id=101,
-        reason="provider_not_recoverable_for_input",
+        reason="failure_not_retried",
         code="ai_provider_result_error",
         failure_reason="input_blocked",
     )
+
+
+def test_retry_decision_is_reported_like_a_processing_failure(wiring):
+    """Consumerが再試行と決めた失敗は、例外と同じ記録で失敗一覧に載せる。"""
+    wiring.consumer.consume.return_value = RetryCuration(
+        RuntimeError("private-exception")
+    )
+
+    response = module.handler(
+        {"Records": [{"messageId": "retried", "body": valid_body()}]}, None
+    )
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "retried"}]}
+    wiring.log.warning.assert_called_once_with(
+        "curation_message_failed",
+        message_id="retried",
+        event_id="00000000-0000-0000-0000-000000000001",
+        analyzable_article_id=101,
+        error_class="builtins.RuntimeError",
+    )
+    wiring.log.info.assert_not_called()
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):
@@ -461,7 +492,9 @@ async def test_processing_cancellation_leaves_borrowed_scope(wiring):
 )
 def test_ready_build_rejection_logs_only_its_reason(wiring, reason):
     """拒否結果は分析成功と区別して、安全な理由コードを記録する。"""
-    wiring.consumer.consume.return_value = CurationReadyBuildRejected(reason)
+    wiring.consumer.consume.return_value = NoRetryCuration(
+        CurationReadyBuildRejected(reason)
+    )
     response = module.handler(
         {"Records": [{"messageId": "rejected", "body": valid_body()}]}, None
     )

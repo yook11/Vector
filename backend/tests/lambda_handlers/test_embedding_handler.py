@@ -10,12 +10,16 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
-from app.analysis.ai_provider_settlement import SettledProviderFailure
 from app.analysis.assessment.events import ArticleAssessedInScope
+from app.analysis.embedding.consumer_failure_classification import (
+    NoRetryEmbedding,
+    RetryEmbedding,
+)
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildRejected,
     EmbeddingReadyBuildRejectionReason,
 )
+from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.service import EmbeddingCompletion
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
 from app.lambda_handlers.sqs.records import SqsRecord
@@ -68,14 +72,15 @@ def wiring(monkeypatch):
 
 
 def test_batch_reports_only_failed_message_ids(wiring):
-    """成功したメッセージを含めず、失敗したIDだけを入力順で返す。"""
+    """成功と再試行しない失敗を含めず、再試行する失敗と例外のIDだけを入力順で返す。"""
     body = valid_body()
     messages = [
         {"messageId": "saved-before", "body": body},
         {"messageId": "failed-first", "body": body},
         {"messageId": "already", "body": body},
         {"messageId": "rejected", "body": body},
-        {"messageId": "settled", "body": body},
+        {"messageId": "not-retried", "body": body},
+        {"messageId": "retried", "body": body},
         {"messageId": "saved-after", "body": body},
         {"messageId": "failed-last", "body": body},
     ]
@@ -83,47 +88,86 @@ def test_batch_reports_only_failed_message_ids(wiring):
         EmbeddingCompletion.SAVED,
         RuntimeError("first-failure"),
         EmbeddingCompletion.ALREADY_EMBEDDED,
-        EmbeddingReadyBuildRejected(
-            EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
+        NoRetryEmbedding(
+            EmbeddingReadyBuildRejected(
+                EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING
+            )
         ),
-        SettledProviderFailure(
+        NoRetryEmbedding(
             AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
         ),
+        RetryEmbedding(RuntimeError("decided-retry")),
         EmbeddingCompletion.SAVED,
         RuntimeError("last-failure"),
     ]
 
     response = module.handler({"Records": messages}, None)
 
-    assert wiring.consumer.consume.await_count == 7
+    assert wiring.consumer.consume.await_count == 8
     assert response == {
         "batchItemFailures": [
             {"itemIdentifier": "failed-first"},
+            {"itemIdentifier": "retried"},
             {"itemIdentifier": "failed-last"},
         ]
     }
 
 
-def test_settled_provider_failure_is_completed_with_its_classification(wiring):
-    """受信完了にしたAIの失敗は失敗一覧に含めず、どこで判明したかと理由を記録する。"""
-    wiring.consumer.consume.return_value = SettledProviderFailure(
-        AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
-    )
+@pytest.mark.parametrize(
+    ("cause", "classification"),
+    [
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED),
+            {"code": "ai_provider_result_error", "failure_reason": "input_blocked"},
+            id="ai_input_blocked",
+        ),
+        pytest.param(
+            EmbeddingAnalyzedArticleMissingError(),
+            {"code": "embedding_analyzed_article_missing"},
+            id="article_missing",
+        ),
+    ],
+)
+def test_failure_not_retried_is_completed_with_its_classification(
+    wiring, cause, classification
+):
+    """再試行しない失敗は失敗一覧に含めず、codeと、AIの失敗なら理由を記録する。"""
+    wiring.consumer.consume.return_value = NoRetryEmbedding(cause)
 
     response = module.handler(
-        {"Records": [{"messageId": "settled", "body": valid_body()}]}, None
+        {"Records": [{"messageId": "not-retried", "body": valid_body()}]}, None
     )
 
     assert response == {"batchItemFailures": []}
     wiring.log.info.assert_called_once_with(
         "embedding_message_completed",
-        message_id="settled",
+        message_id="not-retried",
         event_id="00000000-0000-0000-0000-000000000001",
         analyzed_article_id=101,
-        reason="provider_not_recoverable_for_input",
-        code="ai_provider_result_error",
-        failure_reason="input_blocked",
+        reason="failure_not_retried",
+        **classification,
     )
+
+
+def test_retry_decision_is_reported_like_a_processing_failure(wiring):
+    """Consumerが再試行と決めた失敗は、例外と同じ記録で失敗一覧に載せる。"""
+    wiring.consumer.consume.return_value = RetryEmbedding(
+        RuntimeError("private-exception")
+    )
+
+    response = module.handler(
+        {"Records": [{"messageId": "retried", "body": valid_body()}]}, None
+    )
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "retried"}]}
+    wiring.log.warning.assert_called_once_with(
+        "embedding_message_failed",
+        message_id="retried",
+        event_id="00000000-0000-0000-0000-000000000001",
+        analyzed_article_id=101,
+        error_class="builtins.RuntimeError",
+    )
+    wiring.log.info.assert_not_called()
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):
@@ -452,7 +496,9 @@ async def test_control_exception_stops_batch(wiring, interruption):
 )
 def test_ready_build_rejection_logs_only_its_reason(wiring, reason):
     """拒否結果は分析成功と区別して、安全な理由コードを記録する。"""
-    wiring.consumer.consume.return_value = EmbeddingReadyBuildRejected(reason)
+    wiring.consumer.consume.return_value = NoRetryEmbedding(
+        EmbeddingReadyBuildRejected(reason)
+    )
     response = module.handler(
         {"Records": [{"messageId": "rejected", "body": valid_body()}]}, None
     )

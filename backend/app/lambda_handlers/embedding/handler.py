@@ -4,12 +4,14 @@ import asyncio
 
 import structlog
 
-from app.analysis.ai_provider_settlement import SettledProviderFailure
+from app.ai_providers.errors import AIProviderError
 from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
     AssessedEventInvalidError,
 )
+from app.analysis.embedding.consumer_failure_classification import RetryEmbedding
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
+from app.analysis.embedding.service import EmbeddingCompletion
 from app.lambda_handlers.embedding.composition import open_embedding_consumer
 from app.lambda_handlers.embedding.failure_recorder import (
     EmbeddingLambdaFailureRecorder,
@@ -94,8 +96,10 @@ async def _run_embedding(
             try:
                 completion = await consumer.consume(assessed_event.payload)
             except Exception as exc:
+                completion = RetryEmbedding(exc)
+            if isinstance(completion, RetryEmbedding):
                 failure_recorder.record_message_failure(
-                    exc,
+                    completion.error,
                     message_id=record_input.message_id,
                     assessed_event=assessed_event,
                 )
@@ -104,19 +108,24 @@ async def _run_embedding(
                 )
             else:
                 outcome_fields: dict[str, object]
-                if isinstance(completion, EmbeddingReadyBuildRejected):
+                if isinstance(completion, EmbeddingCompletion):
+                    outcome_fields = {"reason": completion.value}
+                elif isinstance(completion.cause, EmbeddingReadyBuildRejected):
                     outcome_fields = {
                         "reason": "ready_build_rejected",
-                        "rejection_code": completion.reason.value,
+                        "rejection_code": completion.cause.reason.value,
                     }
-                elif isinstance(completion, SettledProviderFailure):
+                elif isinstance(completion.cause, AIProviderError):
                     outcome_fields = {
-                        "reason": "provider_not_recoverable_for_input",
-                        "code": completion.provider_error.CODE,
-                        "failure_reason": completion.provider_error.reason.value,
+                        "reason": "failure_not_retried",
+                        "code": completion.cause.CODE,
+                        "failure_reason": completion.cause.reason.value,
                     }
                 else:
-                    outcome_fields = {"reason": completion.value}
+                    outcome_fields = {
+                        "reason": "failure_not_retried",
+                        "code": completion.cause.code,
+                    }
                 _log_completion(
                     message_id=record_input.message_id,
                     event_id=str(assessed_event.event_id),

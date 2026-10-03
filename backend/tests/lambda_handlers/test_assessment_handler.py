@@ -11,11 +11,15 @@ import pytest
 import structlog
 
 from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
-from app.analysis.ai_provider_settlement import SettledProviderFailure
+from app.analysis.assessment.consumer_failure_classification import (
+    NoRetryAssessment,
+    RetryAssessment,
+)
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
     AssessmentReadyBuildRejectionReason,
 )
+from app.analysis.assessment.errors import AssessmentCurationMissingError
 from app.analysis.assessment.service import (
     AssessmentCompletion,
     AssessmentCompletionKind,
@@ -116,14 +120,15 @@ def test_handler_outputs_json_without_global_logging_configuration(
 
 
 def test_batch_reports_only_failed_message_ids(wiring):
-    """成功したメッセージを含めず、失敗したIDだけを入力順で返す。"""
+    """成功と再試行しない失敗を含めず、再試行する失敗と例外のIDだけを入力順で返す。"""
     body = valid_body()
     messages = [
         {"messageId": "saved-before", "body": body},
         {"messageId": "failed-first", "body": body},
         {"messageId": "already", "body": body},
         {"messageId": "rejected", "body": body},
-        {"messageId": "settled", "body": body},
+        {"messageId": "not-retried", "body": body},
+        {"messageId": "retried", "body": body},
         {"messageId": "saved-after", "body": body},
         {"messageId": "failed-last", "body": body},
     ]
@@ -131,35 +136,54 @@ def test_batch_reports_only_failed_message_ids(wiring):
         AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 901),
         RuntimeError("first-failure"),
         AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED),
-        AssessmentReadyBuildRejected(
-            AssessmentReadyBuildRejectionReason.CURATION_MISSING
+        NoRetryAssessment(
+            AssessmentReadyBuildRejected(
+                AssessmentReadyBuildRejectionReason.CURATION_MISSING
+            )
         ),
-        SettledProviderFailure(
+        NoRetryAssessment(
             AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
         ),
+        RetryAssessment(RuntimeError("decided-retry")),
         AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 901),
         RuntimeError("last-failure"),
     ]
 
     response = module.handler({"Records": messages}, None)
 
-    assert wiring.consumer.consume.await_count == 7
+    assert wiring.consumer.consume.await_count == 8
     assert response == {
         "batchItemFailures": [
             {"itemIdentifier": "failed-first"},
+            {"itemIdentifier": "retried"},
             {"itemIdentifier": "failed-last"},
         ]
     }
 
 
-def test_settled_provider_failure_is_completed_with_its_classification(wiring, capsys):
-    """受信完了にしたAIの失敗は失敗一覧に含めず、失敗として分類を記録する。"""
-    wiring.consumer.consume.return_value = SettledProviderFailure(
-        AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
-    )
+@pytest.mark.parametrize(
+    ("cause", "classification"),
+    [
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED),
+            {"code": "ai_provider_result_error", "failure_reason": "input_blocked"},
+            id="ai_input_blocked",
+        ),
+        pytest.param(
+            AssessmentCurationMissingError(),
+            {"code": "assessment_curation_missing"},
+            id="curation_missing",
+        ),
+    ],
+)
+def test_failure_not_retried_is_completed_with_its_classification(
+    wiring, capsys, cause, classification
+):
+    """再試行しない失敗は失敗一覧に含めず、codeと、AIの失敗なら理由を記録する。"""
+    wiring.consumer.consume.return_value = NoRetryAssessment(cause)
 
     response = module.handler(
-        {"Records": [{"messageId": "settled", "body": valid_body()}]}, None
+        {"Records": [{"messageId": "not-retried", "body": valid_body()}]}, None
     )
 
     assert response == {"batchItemFailures": []}
@@ -169,9 +193,32 @@ def test_settled_provider_failure_is_completed_with_its_classification(wiring, c
         for record in records
         if record["event"] == "assessment_message_processing_failed"
     )
-    assert failed["code"] == "ai_provider_result_error"
-    assert failed["failure_reason"] == "input_blocked"
+    assert {
+        key: failed[key] for key in ("code", "failure_reason") if key in failed
+    } == classification
     assert failed["message_disposition"] == "completed"
+
+
+def test_retry_decision_is_reported_like_a_processing_failure(wiring, capsys):
+    """Consumerが再試行と決めた失敗は、例外と同じ記録で失敗一覧に載せる。"""
+    wiring.consumer.consume.return_value = RetryAssessment(
+        RuntimeError("private-exception")
+    )
+
+    response = module.handler(
+        {"Records": [{"messageId": "retried", "body": valid_body()}]}, None
+    )
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "retried"}]}
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    failed = next(
+        record
+        for record in records
+        if record["event"] == "assessment_message_processing_failed"
+    )
+    assert failed["level"] == "error"
+    assert failed["message_disposition"] == "batch_item_failure"
+    assert "code" not in failed
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):
@@ -433,7 +480,9 @@ async def test_processing_cancellation_leaves_borrowed_scope(wiring):
 )
 def test_ready_build_rejection_is_not_reported_as_batch_failure(wiring, reason):
     """前提不成立は再処理を要求せず、失敗一覧に含めない。"""
-    wiring.consumer.consume.return_value = AssessmentReadyBuildRejected(reason)
+    wiring.consumer.consume.return_value = NoRetryAssessment(
+        AssessmentReadyBuildRejected(reason)
+    )
     response = module.handler(
         {"Records": [{"messageId": "rejected", "body": valid_body()}]}, None
     )
