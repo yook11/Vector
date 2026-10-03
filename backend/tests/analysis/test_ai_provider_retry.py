@@ -1,4 +1,4 @@
-"""この入力では回復しないAIの失敗だけを受信完了にする判断。"""
+"""同じ入力では結果が変わらないAIの失敗の判断。"""
 
 from datetime import UTC, datetime
 
@@ -14,10 +14,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
-from app.analysis.ai_provider_settlement import (
-    SettledProviderFailure,
-    settled_provider_failure,
-)
+from app.analysis.ai_provider_retry import is_unrecoverable_for_input
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -42,12 +39,9 @@ _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
         AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED),
     ],
 )
-def test_not_recoverable_for_input_is_settled(provider_error) -> None:
-    """同じ入力では変わらない失敗は、元の例外を持ったまま受信完了にする。"""
-    settled = settled_provider_failure(provider_error)
-
-    assert settled == SettledProviderFailure(provider_error)
-    assert settled.provider_error is provider_error
+def test_failure_caused_by_input_is_unrecoverable(provider_error) -> None:
+    """入力の長さや内容で拒否された失敗は、同じ入力では回復しない。"""
+    assert is_unrecoverable_for_input(provider_error) is True
 
 
 @pytest.mark.parametrize(
@@ -105,17 +99,17 @@ def test_not_recoverable_for_input_is_settled(provider_error) -> None:
         ),
     ],
 )
-def test_other_failures_are_left_to_redelivery(provider_error) -> None:
-    """入力が原因と断定できない失敗は、受信完了にせず再配信に任せる。"""
-    assert settled_provider_failure(provider_error) is None
+def test_failure_not_attributable_to_input_may_recover(provider_error) -> None:
+    """入力が原因と断定できない失敗は、回復しないとは判断しない。"""
+    assert is_unrecoverable_for_input(provider_error) is False
 
 
-def test_unclassified_subclass_is_left_to_redelivery() -> None:
-    """分類済みでない失敗は、reason が入力の拒否でも受信完了にしない。"""
+def test_unclassified_subclass_may_recover() -> None:
+    """分類済みでない失敗は、reason が入力の拒否でも回復しないとは判断しない。"""
 
     class _UnregisteredProviderError(AIProviderError):
         CODE = "unregistered_provider_error"
 
     error = _UnregisteredProviderError(reason=AIProviderResultReason.INPUT_BLOCKED)
 
-    assert settled_provider_failure(error) is None
+    assert is_unrecoverable_for_input(error) is False
