@@ -1,6 +1,6 @@
 locals {
   operations_role_arn = "arn:aws:iam::${local.account_id}:role/vector-operations"
-  deploy_sso_role     = "arn:aws:iam::${local.account_id}:role/${local.sso_path}/AWSReservedSSO_VectorDeploy_*"
+  readonly_sso_role   = "arn:aws:iam::${local.account_id}:role/${local.sso_path}/AWSReservedSSO_ReadOnly_*"
   operations_queue_names = [
     "vector-source-acquisition",
     "vector-article-completion",
@@ -20,11 +20,11 @@ resource "aws_iam_role" "operations" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Sid       = "VectorDeployOnly"
+      Sid       = "ReadOnlyToOperations"
       Effect    = "Allow"
       Action    = "sts:AssumeRole"
       Principal = { AWS = "arn:aws:iam::${local.account_id}:root" }
-      Condition = { ArnLike = { "aws:PrincipalArn" = local.deploy_sso_role } }
+      Condition = { ArnLike = { "aws:PrincipalArn" = local.readonly_sso_role } }
     }]
   })
   lifecycle {
@@ -78,8 +78,8 @@ output "operations_role_arn" {
   value = local.operations_role_arn
 }
 
-output "deploy_operations_assume_statement" {
-  description = "VectorDeployの既存inline policyへ追加するstatementであり、全体を置換しない。"
+output "readonly_operations_assume_statement" {
+  description = "ReadOnlyの既存inline policyへ追加するstatementであり、全体を置換しない。"
   value = {
     Sid      = "AssumeVectorOperations"
     Effect   = "Allow"
