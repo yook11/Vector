@@ -27,9 +27,13 @@ from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
     AssessmentReadyBuildRejectionReason,
 )
-from app.analysis.assessment.errors import AssessmentResponseInvalidError
+from app.analysis.assessment.errors import (
+    AssessmentCurationMissingError,
+    AssessmentResponseInvalidError,
+)
 from app.analysis.logging import create_article_analysis_logger
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -79,7 +83,7 @@ async def test_successful_handling_records_failed_audit_and_outcome(
         http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        projection=classify_assessment_failure(error),
+        failure=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -114,7 +118,7 @@ async def test_failure_other_than_exhaustion_is_audited_without_notification(
 ) -> None:
     """枯渇以外の失敗は監査だけを残し、枯渇通知を出さない。"""
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        projection=classify_assessment_failure(error),
+        failure=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -138,7 +142,7 @@ async def test_audit_failure_does_not_prevent_notification(
         http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        projection=classify_assessment_failure(error),
+        failure=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=999_999,
@@ -171,7 +175,7 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
         ) as notify,
     ):
         await AssessmentConsumerFailureHandler(session_factory).handle(
-            projection=classify_assessment_failure(error),
+            failure=classify_assessment_failure(error),
             exc=error,
             curation_id=123,
             analyzable_article_id=article_id,
@@ -201,7 +205,7 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
             raise error
         except Exception:
             await AssessmentConsumerFailureHandler(session_factory).handle(
-                projection=classify_assessment_failure(error),
+                failure=classify_assessment_failure(error),
                 exc=error,
                 curation_id=123,
                 analyzable_article_id=999_999,
@@ -232,7 +236,7 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
         http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
     await AssessmentConsumerFailureHandler(factory).handle(
-        projection=classify_assessment_failure(error),
+        failure=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -303,7 +307,7 @@ async def test_provider_audit_preserves_cause_without_recovery_classification(
     error.__cause__ = TimeoutError()
 
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        projection=classify_assessment_failure(error),
+        failure=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -334,7 +338,7 @@ async def test_provider_rejection_is_persisted_with_code_reason_and_cause_chain(
     error.__cause__ = ValueError()
 
     await AssessmentConsumerFailureHandler(session_factory).handle(
-        projection=classify_assessment_failure(error),
+        failure=classify_assessment_failure(error),
         exc=error,
         curation_id=123,
         analyzable_article_id=article_id,
@@ -351,3 +355,84 @@ async def test_provider_rejection_is_persisted_with_code_reason_and_cause_chain(
         "app.ai_providers.errors.AIProviderResultError",
         "builtins.ValueError",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "code", "failure_kind", "failure_reason", "failure_action"),
+    [
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_BLOCKED,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
+            "ai_provider_response_error",
+            None,
+            "input_blocked",
+            "no_retry",
+        ),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            ),
+            "ai_provider_response_error",
+            None,
+            "rate_limited",
+            "retry",
+        ),
+        (
+            AssessmentCurationMissingError(),
+            "assessment_curation_missing",
+            "target_missing",
+            None,
+            "no_retry",
+        ),
+        (
+            AssessmentResponseInvalidError(
+                AssessmentResponseDefect.CATEGORY_KEY_MISSING
+            ),
+            "assessment_response_category_key_missing",
+            "ai_response_invalid",
+            None,
+            "retry",
+        ),
+        (
+            DatabaseConnectionError(
+                reason=DatabaseConnectionErrorReason.CONNECTION_LOST
+            ),
+            "db_runtime_error",
+            "db_runtime",
+            None,
+            "retry",
+        ),
+        (RuntimeError("unexpected"), "unexpected_error", "unknown", None, "retry"),
+    ],
+)
+async def test_audit_records_failure_and_decision_without_retryability(
+    db_session,
+    session_factory,
+    article_id,
+    assessment_logger,
+    error,
+    code,
+    failure_kind,
+    failure_reason,
+    failure_action,
+) -> None:
+    """監査には失敗の分類とConsumerが決めた扱いを記録し、再試行可否の推測は書かない。"""
+    await AssessmentConsumerFailureHandler(session_factory).handle(
+        failure=classify_assessment_failure(error),
+        exc=error,
+        curation_id=123,
+        analyzable_article_id=article_id,
+        provider="gemini",
+        logger=assessment_logger,
+    )
+
+    (event,) = await _events(db_session)
+    assert event.outcome_code == code
+    assert event.retryability is None
+    assert event.payload["failure_kind"] == failure_kind
+    assert event.payload["failure_reason"] == failure_reason
+    assert event.payload["failure_action"] == failure_action

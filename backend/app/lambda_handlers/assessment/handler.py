@@ -6,7 +6,8 @@ from time import perf_counter
 import structlog
 from structlog.typing import FilteringBoundLogger
 
-from app.analysis.ai_provider_settlement import SettledProviderFailure
+from app.ai_providers.errors import AIProviderError
+from app.analysis.assessment.consumer_failure_classification import RetryAssessment
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.service import (
     AssessmentCompletion,
@@ -140,50 +141,55 @@ async def _run_assessment(
                     curated_event.payload, logger=message_logger
                 )
             except Exception as exc:
+                completion = RetryAssessment(exc)
+            if isinstance(completion, RetryAssessment):
                 message_logger.error(
                     "assessment_message_processing_failed",
                     duration_ms=elapsed_ms_since(started_at_seconds),
                     message_disposition="batch_item_failure",
-                    exc_info=exc,
+                    exc_info=completion.error,
                 )
                 failed_items.append(
                     SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
-            else:
-                if (
-                    isinstance(completion, AssessmentCompletion)
-                    and completion.kind is AssessmentCompletionKind.IN_SCOPE
-                ):
+            elif isinstance(completion, AssessmentCompletion):
+                if completion.kind is AssessmentCompletionKind.IN_SCOPE:
                     with structlog.contextvars.bound_contextvars(
                         message_id=record_input.message_id,
                         event_id=str(curated_event.event_id),
                     ):
                         await notifier.notify_article_list_updated()
-                if isinstance(completion, AssessmentReadyBuildRejected):
-                    message_logger.warning(
-                        "assessment_message_processing_failed",
-                        operation="build_ready",
-                        rejection_code=completion.reason.value,
-                        duration_ms=elapsed_ms_since(started_at_seconds),
-                        message_disposition="completed",
+                if completion.analyzed_article_id is not None:
+                    message_logger = message_logger.bind(
+                        analyzed_article_id=completion.analyzed_article_id
                     )
-                elif isinstance(completion, SettledProviderFailure):
-                    message_logger.warning(
-                        "assessment_message_processing_failed",
-                        code=completion.provider_error.CODE,
-                        failure_reason=completion.provider_error.reason.value,
-                        duration_ms=elapsed_ms_since(started_at_seconds),
-                        message_disposition="completed",
-                    )
-                else:
-                    if completion.analyzed_article_id is not None:
-                        message_logger = message_logger.bind(
-                            analyzed_article_id=completion.analyzed_article_id
-                        )
-                    message_logger.info(
-                        "assessment_message_processing_completed",
-                        outcome=completion.kind.value,
-                        duration_ms=elapsed_ms_since(started_at_seconds),
-                        message_disposition="completed",
-                    )
+                message_logger.info(
+                    "assessment_message_processing_completed",
+                    outcome=completion.kind.value,
+                    duration_ms=elapsed_ms_since(started_at_seconds),
+                    message_disposition="completed",
+                )
+            elif isinstance(completion.cause, AssessmentReadyBuildRejected):
+                message_logger.warning(
+                    "assessment_message_processing_failed",
+                    operation="build_ready",
+                    rejection_code=completion.cause.reason.value,
+                    duration_ms=elapsed_ms_since(started_at_seconds),
+                    message_disposition="completed",
+                )
+            elif isinstance(completion.cause, AIProviderError):
+                message_logger.warning(
+                    "assessment_message_processing_failed",
+                    code=completion.cause.CODE,
+                    failure_reason=completion.cause.reason.value,
+                    duration_ms=elapsed_ms_since(started_at_seconds),
+                    message_disposition="completed",
+                )
+            else:
+                message_logger.warning(
+                    "assessment_message_processing_failed",
+                    code=completion.cause.code,
+                    duration_ms=elapsed_ms_since(started_at_seconds),
+                    message_disposition="completed",
+                )
         return failed_items
