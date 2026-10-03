@@ -7,10 +7,12 @@ ValidationError / response shape / finish_reason など工程固有の判定は�
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import httpx
 import pytest
 from google.genai import errors as genai_errors
+from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
     AIProviderNotSentError,
@@ -443,6 +445,148 @@ def test_resource_exhausted_per_day_quota_regardless_of_envelope_shape(
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is AIProviderResponseReason.QUOTA_EXHAUSTED
+
+
+# 429 の観測ログ: 再試行の時刻を決める材料 (待ち時間・枠の種類・ヘッダーの有無)
+
+
+def _retry_info_detail(retry_delay: str) -> dict:
+    return {
+        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+        "retryDelay": retry_delay,
+    }
+
+
+def _resource_exhausted_logs(logs: list[dict]) -> list[dict]:
+    return [entry for entry in logs if entry["event"] == "gemini_resource_exhausted"]
+
+
+@pytest.mark.parametrize(
+    "details,expected",
+    [
+        (
+            [
+                _quota_failure_detail(_PER_MINUTE_QUOTA_ID),
+                _retry_info_detail("19s"),
+            ],
+            {
+                "event": "gemini_resource_exhausted",
+                "log_level": "warning",
+                "reason": "rate_limited",
+                "retry_delay": "19s",
+                "quota_ids": [_PER_MINUTE_QUOTA_ID],
+                "retry_after_header": False,
+            },
+        ),
+        (
+            [
+                _retry_info_detail("34s"),
+                _quota_failure_detail(_PER_DAY_QUOTA_ID),
+            ],
+            {
+                "event": "gemini_resource_exhausted",
+                "log_level": "warning",
+                "reason": "quota_exhausted",
+                "retry_delay": "34s",
+                "quota_ids": [_PER_DAY_QUOTA_ID],
+                "retry_after_header": False,
+            },
+        ),
+    ],
+    ids=["per_minute", "per_day"],
+)
+def test_resource_exhausted_logs_retry_delay_and_quota_ids(
+    details: list[dict], expected: dict
+) -> None:
+    """429 では分類した理由と、本文の待ち時間・quotaId を1行だけ記録する。"""
+    with capture_logs() as logs:
+        translate_gemini_error(_resource_exhausted_error(details=details))
+
+    assert _resource_exhausted_logs(logs) == [expected]
+
+
+def test_resource_exhausted_log_records_retry_after_header() -> None:
+    """Retry-After ヘッダーが付いていたかを、本文の有無と別に記録する。"""
+    response = httpx.Response(
+        429,
+        headers={"Retry-After": "30"},
+        request=httpx.Request("POST", "https://generativelanguage.example.invalid"),
+    )
+    exc = genai_errors.ClientError(
+        429,
+        {"error": {"status": "RESOURCE_EXHAUSTED", "message": "msg"}},
+        response,
+    )
+
+    with capture_logs() as logs:
+        translate_gemini_error(exc)
+
+    assert _resource_exhausted_logs(logs) == [
+        {
+            "event": "gemini_resource_exhausted",
+            "log_level": "warning",
+            "reason": "rate_limited",
+            "retry_delay": None,
+            "quota_ids": [],
+            "retry_after_header": True,
+        }
+    ]
+
+
+def test_resource_exhausted_log_omits_values_of_unexpected_shape() -> None:
+    """既知の形でない待ち時間と quotaId はログに出さず、分類には使い続ける。"""
+    details = [
+        _quota_failure_detail("contact admin@example.com PerDay", _PER_MINUTE_QUOTA_ID),
+        _retry_info_detail("in about a minute"),
+    ]
+
+    with capture_logs() as logs:
+        translated = translate_gemini_error(_resource_exhausted_error(details=details))
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.QUOTA_EXHAUSTED
+    assert _resource_exhausted_logs(logs) == [
+        {
+            "event": "gemini_resource_exhausted",
+            "log_level": "warning",
+            "reason": "quota_exhausted",
+            "retry_delay": None,
+            "quota_ids": [_PER_MINUTE_QUOTA_ID],
+            "retry_after_header": False,
+        }
+    ]
+
+
+def test_resource_exhausted_log_failure_keeps_classification() -> None:
+    """観測ログの出力に失敗しても、分類の結果を変えない。"""
+    exc = _resource_exhausted_error(quota_ids=(_PER_DAY_QUOTA_ID,))
+
+    with patch(
+        "app.ai_providers.gemini.error_translator.logger.warning",
+        side_effect=RuntimeError("log failed"),
+    ):
+        translated = translate_gemini_error(exc)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.QUOTA_EXHAUSTED
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _server_error(code=503),
+        _client_error(code=400, status="INVALID_ARGUMENT", message="malformed"),
+    ],
+    ids=["server_error", "invalid_argument"],
+)
+def test_other_error_responses_do_not_log_resource_exhausted(
+    exc: genai_errors.APIError,
+) -> None:
+    """429 以外の失敗の応答では、観測ログを出さない。"""
+    with capture_logs() as logs:
+        translate_gemini_error(exc)
+
+    assert _resource_exhausted_logs(logs) == []
 
 
 # 入力長の超過: status guard と文言の一致
