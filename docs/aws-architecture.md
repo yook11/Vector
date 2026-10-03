@@ -63,7 +63,7 @@
 - app / dataのルートテーブルに`0.0.0.0/0`はない。proxy subnetのデフォルトルートだけがNAT Gatewayを向き、public subnetはInternet Gatewayを向く。
 - NAT Gatewayは1つ、`available`。アプリの外部HTTP通信は許可された送信元からSquidへ進み、NAT・IGWを経由する。宛先の許可範囲は[proxy設定](../infra/aws/platform_egress_proxy.tf)で管理する。
 - VPC Endpointは8つ、すべて`available`。Interface型がECR API、ECR DKR、CloudWatch Logs、SSM、AgentCore Gateway、SQS、Secrets Managerの7つ。Gateway型はS3の1つ。
-- AgentCoreのWeb検索はPrivateLinkを使う。Gemini・DeepSeekなどの外部AI API呼び出しはproxy経由であり、経路が異なる。
+- AgentCoreのWeb検索はPrivateLinkを使う。Geminiなどの外部AI API呼び出しはproxy経由であり、経路が異なる。
 - 公開入口のSG、各段からRDS・Valkey・proxy・endpointへのSG参照を照合した。IAM・SG・endpoint policyの全権限監査や、許可・拒否の実通信テストは今回の確認範囲に含めていない。
 - このVPC内のEC2インスタンスは0件。DB保守の一時タスクやTerraform管理基盤などは、README用の全体図では省略している。
 

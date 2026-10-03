@@ -4,6 +4,8 @@
 Status: Implemented
 Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log_policy/leak_prevention.py)、項目別サニタイズの対応表と `sanitize_article_url` を [sanitize.py](../../backend/app/log_policy/sanitize.py) に実装済み。実際のポリシーでの `sanitize` の有効化は後続とする。
 
+> 2026-10-03: 生成モデルを Gemini に統一し、DeepSeek を外した（#529）。DeepSeek キーの形式による検出とその試験を削除し、`CREDENTIAL_KEYS` からも config.py に無くなった `deepseek_api_key`・`openai_api_key` を外した。Evidence の DeepSeek の記述は当時の記録。
+
 [共通基底ポリシー](./logging-base-policy.md)と[項目別サニタイズのログポリシー](./logging-sanitization-policy.md)の後続として、全文字列に適用している処理を情報漏洩防止として定義し直し、項目別サニタイズとの責務を分ける差分仕様。文字列内部の処理とサニタイズの対象は本書を優先する。
 
 ## Problem
@@ -52,7 +54,6 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 | --- | --- | --- | --- |
 | `private_key` | `redact_private_key_blocks` | `-----BEGIN [種別 ]PRIVATE KEY-----` から対応する END 行まで。END 行がなければ末尾まで | ブロック全体 |
 | `gemini_api_key` | `redact_gemini_api_keys` | `AIza` と英数字・`_`・`-` の35文字 | 一致部分 |
-| `deepseek_api_key` | `redact_deepseek_api_keys` | 前後が英数字でない `sk-` と16進小文字32文字 | 一致部分 |
 | `logfire_token` | `redact_logfire_tokens` | `pylf_v1_`・英小文字2文字・`_`・英数字1文字以上 | 一致部分 |
 | `aws_access_key_id` | `redact_aws_access_key_ids` | 前後が英大文字・数字でない `AKIA` / `ASIA` と英大文字・数字16文字 | 一致部分 |
 | `url_userinfo` | `redact_url_userinfo` | 英字を含む scheme に続く `://` から `@` までの userinfo | userinfo だけを置換し、scheme と接続先を残す |
@@ -101,7 +102,7 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 
 | 対象 | 置き場所 |
 | --- | --- |
-| 漏洩防止の種類ごとの検出境界 | `tests/log_policy/leak_prevention/test_<種類>.py` (`test_private_key`・`test_gemini`・`test_deepseek`・`test_logfire`・`test_aws`・`test_url`・`test_jwt`・`test_assignments`) |
+| 漏洩防止の種類ごとの検出境界 | `tests/log_policy/leak_prevention/test_<種類>.py` (`test_private_key`・`test_gemini`・`test_logfire`・`test_aws`・`test_url`・`test_jwt`・`test_assignments`) |
 | 漏洩防止の入口 (全種類の適用・通常文の保持・切り詰めない) | `tests/log_policy/leak_prevention/test_prevent_credential_leaks.py` |
 | 項目別サニタイズの共通入口と `sanitize_article_url` | `tests/log_policy/test_sanitize.py` |
 | 漏洩防止の適用箇所 (値・ネストのキー・例外・診断・サニタイズ後の値) | `test_processor.py` の `TestLeakPrevention`。上限・一度だけの処理・失敗時は各モジュールのテストに残す |

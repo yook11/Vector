@@ -853,7 +853,7 @@
         <mxCell id="e213" parent="internet" value="外部ニュース / AI API" vertex="1" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;overflow=visible;spacing=0;fontFamily=Arial;fontSize=20;fontColor=#172B46;fontStyle=1;">
           <mxGeometry x="18" y="17" width="315" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="e214" parent="internet" value="Gemini / DeepSeek / Logfire など" vertex="1" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;overflow=visible;spacing=0;fontFamily=Arial;fontSize=16;fontColor=#526477;fontStyle=0;">
+        <mxCell id="e214" parent="internet" value="Gemini / Logfire など" vertex="1" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;overflow=visible;spacing=0;fontFamily=Arial;fontSize=16;fontColor=#526477;fontStyle=0;">
           <mxGeometry x="18" y="47" width="315" height="26" as="geometry" />
         </mxCell>
         <mxCell id="e215" parent="1" value="GitHub Actions → ECR → ECS / Lambda" vertex="1" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;overflow=visible;spacing=0;fontFamily=Arial;fontSize=17;fontColor=#172B46;fontStyle=1;">
