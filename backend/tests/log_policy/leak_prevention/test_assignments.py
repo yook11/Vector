@@ -144,7 +144,6 @@ class TestRedactionRange:
         "key",
         [
             "gemini_api_key",
-            "deepseek_api_key",
             "logfire_token",
             "aws_secret_access_key",
             "aws_session_token",

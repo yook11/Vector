@@ -28,8 +28,6 @@ CREDENTIAL_KEYS = frozenset(
         "token",
         "api_key",
         "gemini_api_key",
-        "openai_api_key",
-        "deepseek_api_key",
         "logfire_token",
         "bff_jwt_signing_secret",
         "revalidate_bearer_secret",
