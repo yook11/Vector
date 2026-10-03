@@ -1,10 +1,7 @@
-"""``GeminiCurator._translate_error`` の Stage 3 specific 翻訳テスト。
+"""``GeminiCurator._translate_error`` の Stage 3 翻訳テスト。
 
-Stage 3 が translator delegation 前に挟む独自分岐:
-
-- Pydantic ``ValidationError`` → ``CurationResponseInvalidError`` (Layer 2-B)
-- context-length 超過の ``INVALID_ARGUMENT`` → ``AIProviderInputRejectedError``
-  (Stage 4/5 の RequestInvalid と違う「入力が長すぎる」semantics)
+Stage 3 が translator delegation 前に挟む独自分岐は、Pydantic ``ValidationError``
+→ ``CurationResponseInvalidError`` (Layer 2-B) だけである。
 
 SDK 例外分類の網羅は
 ``tests/ai_providers/gemini/test_gemini_error_translator.py`` に集約。
@@ -13,15 +10,15 @@ SDK 例外分類の網羅は
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from google.genai.errors import APIError
 
 from app.ai_providers.errors import (
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderServiceUnavailableError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.curation.errors import CurationResponseInvalidError
 
@@ -37,7 +34,7 @@ def _curator() -> GeminiCurator:
     return GeminiCurator.__new__(GeminiCurator)
 
 
-# Stage 3 specific: context-length → InputRejected
+# 入力長の超過は共通の変換器が判定し、Stage 3 の経路でも同じ理由になる
 
 
 @pytest.mark.parametrize(
@@ -47,21 +44,20 @@ def _curator() -> GeminiCurator:
         "Input EXCEEDS CONTEXT LENGTH",
     ],
 )
-def test_context_length_pattern_maps_to_input_rejected(message: str) -> None:
-    """context-length 超過は DROP_ARTICLE 対象 (Stage 3 のみがこの判定を持つ)。"""
+def test_context_length_pattern_maps_to_input_too_long(message: str) -> None:
     exc = _api_error("INVALID_ARGUMENT", message)
     translated = _curator()._translate_error(exc)
-    assert isinstance(translated, AIProviderInputRejectedError)
-    assert translated.CODE == "ai_error_input_rejected"
-    assert translated.reason is GeminiContentRejectionReason.CONTEXT_LENGTH
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.CODE == "ai_provider_response_error"
+    assert translated.reason is AIProviderResponseReason.INPUT_TOO_LONG
 
 
-def test_deadline_exceeded_with_context_pattern_also_maps_to_input_rejected() -> None:
+def test_deadline_exceeded_with_context_pattern_also_maps_to_input_too_long() -> None:
     """``DEADLINE_EXCEEDED`` も同分岐 (translator の status guard で許可)。"""
     exc = _api_error("DEADLINE_EXCEEDED", "Input exceeds context length", code=504)
     translated = _curator()._translate_error(exc)
-    assert isinstance(translated, AIProviderInputRejectedError)
-    assert translated.reason is GeminiContentRejectionReason.CONTEXT_LENGTH
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.INPUT_TOO_LONG
 
 
 # Stage 3 specific: ValidationError → CurationResponseInvalidError
@@ -85,21 +81,21 @@ def test_validation_error_maps_to_response_invalid() -> None:
 # Smoke: translator delegation が経路として効いている (網羅は translator test 側)
 
 
-def test_delegates_timeout_to_network_error() -> None:
-    """PR3 で Stage 3 も network 分類するようになった証跡 (従来は unmapped)。"""
-    translated = _curator()._translate_error(TimeoutError("read timeout"))
-    assert isinstance(translated, AIProviderNetworkError)
+def test_delegates_timeout_to_transport_error() -> None:
+    """Stage 3 も共通の変換器で通信の失敗に分類する。"""
+    translated = _curator()._translate_error(httpx.ReadTimeout("read timeout"))
+    assert isinstance(translated, AIProviderTransportError)
 
 
-def test_delegates_server_error_to_service_unavailable() -> None:
-    """5xx は translator 経由で ServiceUnavailable に分類される。"""
+def test_delegates_server_error_to_error_response() -> None:
+    """5xx は translator 経由で失敗の応答に分類される。"""
     from google.genai import errors as genai_errors
 
     exc = genai_errors.ServerError(
         500, {"error": {"status": "INTERNAL", "message": "boom"}}
     )
     translated = _curator()._translate_error(exc)
-    assert isinstance(translated, AIProviderServiceUnavailableError)
+    assert isinstance(translated, AIProviderResponseError)
 
 
 def test_unknown_runtime_exception_returns_raw_exc() -> None:

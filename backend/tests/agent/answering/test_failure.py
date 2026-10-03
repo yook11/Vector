@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -20,19 +21,21 @@ from app.agent.answering.failure import (
     classify_direct_answer_failure,
 )
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
     AIProviderError,
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
 )
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _ValidationProbe(BaseModel):
@@ -48,11 +51,9 @@ _CLASSIFIERS: tuple[_Classifier, ...] = (
 _CLASSIFIER_IDS = ["answer_synthesis", "direct_answer"]
 
 
-def _truncated_error() -> AIProviderOutputTruncatedError:
+def _truncated_error() -> AIProviderResultError:
     """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
-    return AIProviderOutputTruncatedError(
-        reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
-    )
+    return AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED)
 
 
 @pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
@@ -75,11 +76,27 @@ def test_output_truncated_error_is_retried_in_request(classify: _Classifier) -> 
 @pytest.mark.parametrize(
     "exc",
     [
-        AIProviderNetworkError(),
-        AIProviderRateLimitedError(),
-        AIProviderConfigurationError(),
-        AIProviderUsageLimitExhaustedError(),
-        AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
+        AIProviderTransportError(
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            )
+        ),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        ),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.AUTH,
+            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        ),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        ),
+        AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
+        AIProviderResultError(reason=AIProviderResultReason.STREAM_INCOMPLETE),
     ],
     ids=[
         "network",
@@ -87,6 +104,7 @@ def test_output_truncated_error_is_retried_in_request(classify: _Classifier) -> 
         "configuration",
         "usage_limit",
         "output_blocked_content_error",
+        "stream_incomplete",
     ],
 )
 def test_other_provider_errors_stay_do_not_retry_in_request(
@@ -95,7 +113,7 @@ def test_other_provider_errors_stay_do_not_retry_in_request(
 ) -> None:
     """打ち切り以外のプロバイダー例外の再試行判断を維持する。
 
-    通信障害と打ち切りを具体的な例外型で区別する。
+    回復の条件が再試行でも、打ち切りの理由でなければrequest内では再試行しない。
     """
     attrs = classify(exc)
 
@@ -153,36 +171,15 @@ def test_unclassified_exception_falls_back_to_unknown() -> None:
 
 
 @pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
-@pytest.mark.parametrize(
-    "error_type", [AIProviderInputRejectedError, AIProviderOutputBlockedError]
-)
-def test_rejection_without_reason_keeps_code_and_no_retry(classify, error_type) -> None:
-    """理由を省略した拒否でも具体的なコードと再試行判断を維持する。"""
-    attrs = classify(error_type())
-    assert attrs.code == error_type.CODE
-    assert attrs.failure_reason is None
-    assert (
-        attrs.request_retry_disposition
-        is RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST
-    )
-
-
-@pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
-def test_bare_provider_error_remains_unclassified(classify) -> None:
-    """基底型を具体的なプロバイダー失敗へ分類しない。"""
-    attrs = classify(AIProviderError("diagnostic"))
-    assert attrs.code == "unexpected_error"
-    assert attrs.failure_reason is None
-    assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN
-
-
-@pytest.mark.parametrize("classify", _CLASSIFIERS, ids=_CLASSIFIER_IDS)
 def test_unknown_direct_provider_subclass_remains_unclassified(classify) -> None:
     """独自のCODEを持つ未知の直接サブクラスも分類しない。"""
 
     class UnknownProviderError(AIProviderError):
         CODE = "unknown_provider_failure"
 
-    attrs = classify(UnknownProviderError())
+    attrs = classify(
+        UnknownProviderError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
+    )
     assert attrs.code == "unexpected_error"
+    assert attrs.failure_reason is None
     assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN

@@ -5,7 +5,7 @@
 - `vector.embedding.processing_outcome`とCloudWatch EMFの`processing_outcome{stage=embedding,result}`を維持し、resultは`succeeded`／`failed`の2値とする。
 - Consumerの失敗はprovider・DB・その他の原因によらず`failed`として1回記録する。分類関数のoutcomeと`is_infra_provider_error`は削除する。成功時の計測点、Ready拒否・冪等skipの扱いは変更しない。
 - 成功率は`succeeded / (succeeded + failed)`。従来infra_errorとして除外していた失敗も失敗率に含まれる。CloudWatchの計算式・閾値・評価窓は変更しない。
-- provider例外の回復分類と拒否kindは廃止する。監査のfailure_kind・retryabilityはnullとし、CODE・reason・例外情報を維持する。枯渇通知は具体的な例外型で判定する。
+- provider例外の回復分類と拒否kindは廃止する。監査のfailure_kind・retryabilityはnullとし、CODE・reason・例外情報を維持する。枯渇通知は失敗の応答のreason(`insufficient_balance` / `quota_exhausted`)で判定する。
 - Curationもinfra_errorを語彙から削除する。記事収集側のinfra_error分類は対象外。
 - 検証はprovider・DB失敗のfailed計測、成功のsucceeded計測、計測回数、監査のnull値と原因情報、枯渇通知の維持を確認する。
 

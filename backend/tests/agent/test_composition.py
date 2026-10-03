@@ -14,6 +14,7 @@ from app.agent import composition
 from app.agent.composition import (
     activate_gemini_agent_runtime,
     activate_gemini_client,
+    ensure_agent_worker_configured,
 )
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.running import AnsweringPhases
@@ -22,10 +23,11 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
 )
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderError,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResultError,
+    AIProviderResultReason,
 )
-from app.ai_providers.gemini.error_translator import GeminiStateReason
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 
 
@@ -170,6 +172,46 @@ async def test_gemini_agent_runtime_scope_is_lazy_and_opens_client_for_agent(
     ]
 
 
+_GATEWAY_URL = "https://gw-test.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com"
+
+
+@pytest.mark.parametrize(
+    ("gemini_api_key", "gateway_url", "missing"),
+    [
+        ("", _GATEWAY_URL, "GEMINI_API_KEY"),
+        ("gemini-test-key", None, "AGENTCORE_GATEWAY_URL"),
+        ("", None, "GEMINI_API_KEY, AGENTCORE_GATEWAY_URL"),
+    ],
+)
+def test_agent_worker_refuses_to_start_without_external_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    gemini_api_key: str,
+    gateway_url: str | None,
+    missing: str,
+) -> None:
+    """run が使う外部接続の設定が欠けていれば、欠けた設定名を示して起動を止める。"""
+    monkeypatch.setattr(
+        composition.settings, "gemini_api_key", SecretStr(gemini_api_key)
+    )
+    monkeypatch.setattr(composition.settings, "agentcore_gateway_url", gateway_url)
+
+    with pytest.raises(RuntimeError) as raised:
+        ensure_agent_worker_configured()
+
+    assert str(raised.value) == f"agent worker requires {missing}"
+
+
+def test_agent_worker_starts_when_external_settings_are_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        composition.settings, "gemini_api_key", SecretStr("gemini-test-key")
+    )
+    monkeypatch.setattr(composition.settings, "agentcore_gateway_url", _GATEWAY_URL)
+
+    ensure_agent_worker_configured()
+
+
 async def test_gemini_client_scope_rejects_missing_key_before_opening(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -177,18 +219,21 @@ async def test_gemini_client_scope_rejects_missing_key_before_opening(
     client_factory = _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
     monkeypatch.setattr(composition.settings, "gemini_api_key", SecretStr(""))
 
-    with pytest.raises(AIProviderConfigurationError) as raised:
+    with pytest.raises(AIProviderNotSentError) as raised:
         async with activate_gemini_client():
             raise AssertionError("scope body must not start")
 
-    assert raised.value.reason is GeminiStateReason.NOT_CONFIGURED
+    assert raised.value.reason is AIProviderNotSentReason.NOT_CONFIGURED
     assert client_factory.calls == []
 
 
 @pytest.mark.parametrize(
     "body_error",
     [
-        pytest.param(AIProviderError(), id="provider-error"),
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
+            id="provider-error",
+        ),
         pytest.param(
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
             id="response-error",
@@ -305,11 +350,6 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
             evidence_calls.append(kwargs)
             super().__init__(**kwargs)
 
-    monkeypatch.setattr(
-        composition,
-        "ensure_external_search_configured",
-        lambda: None,
-    )
     monkeypatch.setattr(planning_service, "QuestionPlanningService", _PlannerSpy)
     monkeypatch.setattr(direct_service, "DirectAnswerService", _DirectSpy)
     monkeypatch.setattr(evidence_service, "EvidenceAnswerService", _EvidenceSpy)
@@ -393,11 +433,6 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
     session_factory = object()
     internal_search_calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr(
-        composition,
-        "ensure_external_search_configured",
-        lambda: None,
-    )
     for module, name in (
         (embedding_gemini, "GeminiQueryEmbedder"),
         (article_repository, "PgVectorArticleSearchRepository"),
@@ -490,11 +525,6 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
         captured["evidence"] = kwargs
         return object()
 
-    monkeypatch.setattr(
-        composition,
-        "ensure_external_search_configured",
-        lambda: None,
-    )
     monkeypatch.setattr(direct_service_module, "DirectAnswerService", capture_direct)
     monkeypatch.setattr(
         evidence_service_module, "EvidenceAnswerService", capture_evidence

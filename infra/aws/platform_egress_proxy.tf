@@ -6,7 +6,6 @@
 
 locals {
   # 宛先はコードから抽出した実ホスト。
-  #   api.deepseek.com                    app 内の URL リテラル
   #   generativelanguage.googleapis.com   google-genai SDK (Vertex ではない方)
   #   logfire-{us,eu}.pydantic.dev        logfire SDK の REGIONS[*].base_url
   #
@@ -15,9 +14,8 @@ locals {
   # ダッシュボード**で、送信先ではない。正しい値は logfire/_internal/auth.py の
   # REGIONS。token の region で us / eu が決まるので両方入れる。
   egress_vendor_domains = {
-    logfire  = ["logfire-us.pydantic.dev", "logfire-eu.pydantic.dev"]
-    gemini   = ["generativelanguage.googleapis.com"]
-    deepseek = ["api.deepseek.com"]
+    logfire = ["logfire-us.pydantic.dev", "logfire-eu.pydantic.dev"]
+    gemini  = ["generativelanguage.googleapis.com"]
   }
 
   proxy_clients = merge({
@@ -32,7 +30,7 @@ locals {
     }, {
     assessment_consumer = {
       cidr             = local.subnet_cidrs["assessment_consumer"]
-      domains          = local.egress_vendor_domains.deepseek
+      domains          = local.egress_vendor_domains.gemini
       allow_any_domain = false
     }
     embedding_consumer = {

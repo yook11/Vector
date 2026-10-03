@@ -7,7 +7,7 @@ locals {
   article_analysis_log_group_arns  = [for stage in local.article_analysis_stages : "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.name_prefix}-${stage}-consumer:*"]
   article_analysis_ai_key_arns = [
     "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/curation-consumer/gemini-api-key",
-    "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/assessment-consumer/deepseek-api-key",
+    "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/assessment-consumer/gemini-api-key",
     "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/embedding-consumer/gemini-api-key",
   ]
   article_analysis_role_boundary_groups = {

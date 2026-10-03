@@ -18,7 +18,6 @@ _PRIVATE_KEY = re.compile(
     re.DOTALL,
 )
 _GEMINI_API_KEY = re.compile(r"AIza[A-Za-z0-9_\-]{35}")
-_DEEPSEEK_API_KEY = re.compile(r"(?<![A-Za-z0-9])sk-[0-9a-f]{32}(?![A-Za-z0-9])")
 _LOGFIRE_TOKEN = re.compile(r"pylf_v1_[a-z]{2}_[A-Za-z0-9]+")
 _AWS_ACCESS_KEY_ID = re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")
 # scheme から探すと長い英字列で戻り読みするため、:// を先に取り左を確認する。
@@ -40,11 +39,6 @@ def redact_private_key_blocks(text: str) -> str:
 def redact_gemini_api_keys(text: str) -> str:
     """Gemini API キーの形式に一致する部分を置き換え、周囲の文を残す。"""
     return _GEMINI_API_KEY.sub("[redacted:gemini_api_key]", text)
-
-
-def redact_deepseek_api_keys(text: str) -> str:
-    """DeepSeek API キーの形式に一致する部分を置き換え、周囲の文を残す。"""
-    return _DEEPSEEK_API_KEY.sub("[redacted:deepseek_api_key]", text)
 
 
 def redact_logfire_tokens(text: str) -> str:
@@ -128,7 +122,6 @@ def prevent_credential_leaks(text: str) -> str:
     """範囲が形式で決まる検出を先に適用し、最後にキー名の後ろを末尾まで置き換える。"""
     text = redact_private_key_blocks(text)
     text = redact_gemini_api_keys(text)
-    text = redact_deepseek_api_keys(text)
     text = redact_logfire_tokens(text)
     text = redact_aws_access_key_ids(text)
     text = redact_url_userinfo(text)

@@ -11,10 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
 from app.analysis.embedding.consumer_failure_classification import (
     classify_embedding_failure,
@@ -28,9 +27,7 @@ from app.analysis.embedding.domain.ready import (
 )
 from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
-    EmbeddingError,
     EmbeddingResponseInvalidError,
-    to_embedding_error,
 )
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.db.errors import (
@@ -38,10 +35,18 @@ from app.db.errors import (
     DatabaseConnectionErrorReason,
     DatabaseUnexpectedError,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 from tests.cloudwatch.records import metric_records
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _HANDLER = "app.analysis.embedding.consumer_failure_handling"
 
@@ -66,32 +71,120 @@ async def _events(session: AsyncSession) -> list[PipelineEvent]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "error",
+    ("error", "code", "failure_kind", "failure_reason", "failure_action", "notified"),
     [
-        EmbeddingAnalyzedArticleMissingError(),
-        EmbeddingResponseInvalidError(),
-        to_embedding_error(AIProviderNetworkError()),
-        to_embedding_error(AIProviderRateLimitedError()),
-        to_embedding_error(AIProviderUsageLimitExhaustedError()),
-        to_embedding_error(AIProviderInsufficientBalanceError()),
-        DatabaseUnexpectedError(),
-        RuntimeError("Authorization: Bearer test-secret-do-not-record"),
+        (
+            EmbeddingAnalyzedArticleMissingError(),
+            "embedding_analyzed_article_missing",
+            "target_missing",
+            None,
+            "no_retry",
+            False,
+        ),
+        (
+            EmbeddingResponseInvalidError(),
+            "embedding_response_invalid",
+            "ai_response_invalid",
+            None,
+            "retry",
+            False,
+        ),
+        (
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
+            "ai_provider_transport_error",
+            None,
+            "timeout",
+            "retry",
+            False,
+        ),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.RATE_LIMITED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            ),
+            "ai_provider_response_error",
+            None,
+            "rate_limited",
+            "retry",
+            False,
+        ),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            ),
+            "ai_provider_response_error",
+            None,
+            "quota_exhausted",
+            "retry",
+            True,
+        ),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+                http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
+            ),
+            "ai_provider_response_error",
+            None,
+            "insufficient_balance",
+            "retry",
+            True,
+        ),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_TOO_LONG,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
+            "ai_provider_response_error",
+            None,
+            "input_too_long",
+            "no_retry",
+            False,
+        ),
+        (
+            DatabaseUnexpectedError(),
+            "db_unknown_error",
+            "db_unknown",
+            None,
+            "retry",
+            False,
+        ),
+        (
+            RuntimeError("Authorization: Bearer test-secret-do-not-record"),
+            "unexpected_error",
+            "unknown",
+            None,
+            "retry",
+            False,
+        ),
     ],
 )
-async def test_records_classification_without_changing_original_error(
-    db_session, session_factory, article_id, error, capsys
+async def test_records_failure_and_decision_without_changing_original_error(
+    db_session,
+    session_factory,
+    article_id,
+    error,
+    code,
+    failure_kind,
+    failure_reason,
+    failure_action,
+    notified,
+    capsys,
 ) -> None:
     """監査・失敗件数・必要な枯渇通知を記録し、元の例外をそのまま返せる。"""
-    if isinstance(error, EmbeddingError) and error.provider_error is not None:
-        error.__cause__ = error.provider_error
-    failure = classify_embedding_failure(error)
     cause = error.__cause__
     with pytest.raises(type(error)) as raised:
         try:
             raise error
         except Exception as caught:
             result = await EmbeddingConsumerFailureHandler(session_factory).handle(
-                failure=failure,
+                failure=classify_embedding_failure(caught),
                 exc=caught,
                 analyzed_article_id=123,
                 analyzable_article_id=article_id,
@@ -105,31 +198,24 @@ async def test_records_classification_without_changing_original_error(
     assert len(events) == 1
     event = events[0]
     assert event.event_type == "failed"
-    assert event.outcome_code == failure.audit.code
-    assert event.retryability == (
-        failure.audit.retryability.value
-        if failure.audit.retryability is not None
-        else None
-    )
-    assert event.payload["failure_kind"] == failure.audit.failure_kind
-    assert event.payload["failure_reason"] == failure.audit.failure_reason
+    assert event.outcome_code == code
+    assert event.retryability is None
+    assert event.payload["failure_kind"] == failure_kind
+    assert event.payload["failure_reason"] == failure_reason
+    assert event.payload["failure_action"] == failure_action
     assert event.payload["analyzed_article_id"] == 123
     assert event.article_id == article_id
     assert event.error_class == f"{type(error).__module__}.{type(error).__qualname__}"
     assert event.payload["error_chain"][0] == event.error_class
-    if cause is not None:
-        assert event.payload["error_chain"][1] == (
-            f"{type(cause).__module__}.{type(cause).__qualname__}"
-        )
     assert "test-secret-do-not-record" not in str(event.payload)
     output = capsys.readouterr().out
     outcomes = metric_records(output, "processing_outcome")
     assert len(outcomes) == 1
     assert outcomes[0]["result"] == "failed"
     notices = metric_records(output, "ai_provider_exhausted")
-    if failure.provider_exhaustion is not None:
+    if notified:
         assert len(notices) == 1
-        assert notices[0]["kind"] == failure.audit.code
+        assert notices[0]["kind"] == failure_reason
         assert notices[0]["provider"] == "gemini"
     else:
         assert notices == []
@@ -142,7 +228,10 @@ async def test_audit_failure_does_not_prevent_notification(
     capsys,
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
-    error = to_embedding_error(AIProviderUsageLimitExhaustedError())
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+    )
     with capture_logs() as logs:
         await EmbeddingConsumerFailureHandler(session_factory).handle(
             failure=classify_embedding_failure(error),
@@ -163,7 +252,10 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
     db_session, session_factory, article_id
 ) -> None:
     """通知と計測の二次障害は本文をログに漏らさず、監査と元の失敗を維持する。"""
-    error = to_embedding_error(AIProviderInsufficientBalanceError())
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+        http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
+    )
     with (
         capture_logs() as logs,
         patch(
@@ -183,7 +275,7 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
             provider="gemini",
         )
     assert len(await _events(db_session)) == 1
-    notify.assert_called_once_with(error.provider_error, provider="gemini")
+    notify.assert_called_once_with(error, provider="gemini")
     assert {entry["operation"] for entry in logs} == {
         "processing_metric",
         "notification",
@@ -197,7 +289,10 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
     db_session, session_factory, capsys
 ) -> None:
     """監査・drop計測・ログまで失敗しても元の例外を置き換えない。"""
-    error = to_embedding_error(AIProviderUsageLimitExhaustedError())
+    error = AIProviderResponseError(
+        reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+        http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+    )
     with (
         patch(
             f"{_HANDLER}.record_audit_dropped", side_effect=RuntimeError("drop failed")
@@ -270,10 +365,9 @@ async def test_database_failure_audit_preserves_classification_with_null_message
         reason=DatabaseConnectionErrorReason.CONNECTION_LOST
     )
     error.__cause__ = cause
-    failure = classify_embedding_failure(error)
 
     await EmbeddingConsumerFailureHandler(session_factory).handle(
-        failure=failure,
+        failure=classify_embedding_failure(error),
         exc=error,
         analyzed_article_id=123,
         analyzable_article_id=article_id,
@@ -283,8 +377,9 @@ async def test_database_failure_audit_preserves_classification_with_null_message
     (event,) = await _events(db_session)
     assert event.payload["error_message"] is None
     assert event.outcome_code == "db_runtime_error"
-    assert event.retryability == "retryable"
-    assert event.payload["failure_kind"] == failure.audit.failure_kind
+    assert event.retryability is None
+    assert event.payload["failure_kind"] == "db_runtime"
+    assert event.payload["failure_action"] == "retry"
     assert event.error_class == "app.db.errors.DatabaseConnectionError"
     assert event.payload["error_chain"] == [
         "app.db.errors.DatabaseConnectionError",

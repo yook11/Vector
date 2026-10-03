@@ -391,7 +391,7 @@ class TestSubtask:
         ctx = _ctx_with_session_factory()
         service = MagicMock()
         service.execute = AsyncMock()
-        service._llm.MODEL = "deepseek-v4-pro"
+        service._llm.MODEL = "gemini-3.8-flash"
 
         with (
             _patch_facts(None),
@@ -429,7 +429,7 @@ class TestSubtaskFailureAudit:
         ctx = _ctx_with_session_factory(retries=retries, max_retries=max_retries)
         service = MagicMock()
         service.execute = AsyncMock(side_effect=exc)
-        service._llm.MODEL = "deepseek-v4-pro"
+        service._llm.MODEL = "gemini-3.8-flash"
 
         with (
             _patch_facts(_facts()),
@@ -449,7 +449,7 @@ class TestSubtaskFailureAudit:
 
     @pytest.mark.asyncio
     async def test_records_failure_then_reraises_middle_attempt(self) -> None:
-        exc = BriefingConfigurationError("DEEPSEEK_API_KEY missing")
+        exc = BriefingConfigurationError("GEMINI_API_KEY missing")
         # 非最終試行: _retries=0 < max_retries-1=1 → retry_exhausted=None
         _, append_failure = await self._run_with_exc(exc, retries=0, max_retries=2)
 
@@ -458,12 +458,12 @@ class TestSubtaskFailureAudit:
             category_id=1,
             exc=exc,
             retry_exhausted=None,
-            ai_model="deepseek-v4-pro",
+            ai_model="gemini-3.8-flash",
         )
 
     @pytest.mark.asyncio
     async def test_records_failure_with_retry_exhausted_on_last_attempt(self) -> None:
-        exc = BriefingConfigurationError("DEEPSEEK_API_KEY missing")
+        exc = BriefingConfigurationError("GEMINI_API_KEY missing")
         # 最終試行: _retries=max_retries-1=1
         _, append_failure = await self._run_with_exc(exc, retries=1, max_retries=2)
 

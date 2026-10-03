@@ -9,6 +9,8 @@ from structlog.typing import FilteringBoundLogger
 
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.consumer_failure_classification import (
+    NoRetryAssessment,
+    RetryAssessment,
     classify_assessment_failure,
 )
 from app.analysis.assessment.consumer_failure_handling import (
@@ -29,7 +31,7 @@ from app.audit.error_fields import exception_fqn
 
 
 class AssessmentConsumer:
-    """1イベントを正常完了させるか、後処理後に失敗を呼び出し元へ伝える。"""
+    """1イベントの正常完了か、後処理を終えた失敗を再試行するかを呼び出し元へ伝える。"""
 
     def __init__(
         self,
@@ -43,7 +45,7 @@ class AssessmentConsumer:
 
     async def consume(
         self, event: ArticleCuratedSignal, *, logger: FilteringBoundLogger
-    ) -> AssessmentCompletion | AssessmentReadyBuildRejected:
+    ) -> AssessmentCompletion | NoRetryAssessment | RetryAssessment:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
         analyzable_article_id: int | None = None
         try:
@@ -71,8 +73,8 @@ class AssessmentConsumer:
                         logger=logger,
                     )
         except Exception as exc:
+            failure = classify_assessment_failure(exc)
             try:
-                failure = classify_assessment_failure(exc)
                 await self._failure_handler.handle(
                     failure=failure,
                     exc=exc,
@@ -89,9 +91,9 @@ class AssessmentConsumer:
                     business_error_class=exception_fqn(exc),
                     exc_info=secondary,
                 )
-            raise
+            return failure
 
         await self._failure_handler.handle_ready_build_rejected(
             curation_id=event.curation_id, rejected=rejected, logger=logger
         )
-        return rejected
+        return NoRetryAssessment(rejected)

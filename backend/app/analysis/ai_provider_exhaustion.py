@@ -2,20 +2,25 @@
 
 枯渇 (残高切れ・利用枠消尽) は残高チャージ等の運用者対応が必須の事象。発生の
 たびに素直に 1 打点 emit し、通知の重複抑制は alarm の状態遷移に委ねる。一時的
-rate limit (時間経過で回復) は対象外。kind には provider CODE をそのまま使い、
-audit outcome_code と同一語彙で突き合わせられるようにする。
+rate limit (時間経過で回復) は対象外。kind には provider error の reason をそのまま
+使い、audit の failure_reason と同一語彙で突き合わせられるようにする。
 """
 
 from __future__ import annotations
 
 from app.ai_providers.errors import (
-    AIProviderInsufficientBalanceError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
 )
 from app.cloudwatch.emf import emit_metric
 
-type ExhaustedProviderError = (
-    AIProviderInsufficientBalanceError | AIProviderUsageLimitExhaustedError
+type ExhaustedProviderError = AIProviderResponseError
+
+_EXHAUSTED_REASONS = frozenset(
+    {
+        AIProviderResponseReason.INSUFFICIENT_BALANCE,
+        AIProviderResponseReason.QUOTA_EXHAUSTED,
+    }
 )
 
 
@@ -23,9 +28,7 @@ def exhausted_provider_error(
     exc: BaseException | None,
 ) -> ExhaustedProviderError | None:
     """既存の枯渇通知に該当する例外を副作用なく取り出す。"""
-    if isinstance(
-        exc, AIProviderInsufficientBalanceError | AIProviderUsageLimitExhaustedError
-    ):
+    if isinstance(exc, AIProviderResponseError) and exc.reason in _EXHAUSTED_REASONS:
         return exc
     return None
 
@@ -41,7 +44,7 @@ def record_ai_provider_exhausted(exc: BaseException | None, *, provider: str) ->
         return
     emit_metric(
         "ai_provider_exhausted",
-        dimensions={"kind": exhausted.CODE, "provider": provider},
+        dimensions={"kind": exhausted.reason.value, "provider": provider},
         value=1,
         unit="Count",
     )

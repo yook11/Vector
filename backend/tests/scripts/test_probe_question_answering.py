@@ -124,7 +124,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "RunIdentity",
         "RunInput",
         "activate_external_search",
-        "activate_evidence_reviewer_runtime",
+        "activate_gemini_agent_runtime",
         "create_cli_engine",
         "caller_managed_session_factory",
         "EvidenceCollectionService",
@@ -343,7 +343,7 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     assert isinstance(reviewer, ast.Call)
     reviewer_scope = _keyword_value(reviewer, "runtime_scope_factory")
     assert isinstance(reviewer_scope, ast.Name)
-    assert reviewer_scope.id == "activate_evidence_reviewer_runtime"
+    assert reviewer_scope.id == "activate_gemini_agent_runtime"
     evidence_answerer = _keyword_value(phase, "evidence_answerer")
     assert isinstance(evidence_answerer, ast.Call)
     assert _call_name(evidence_answerer) == "EvidenceAnswerService"
@@ -381,7 +381,6 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     assert "InternalSearchService" not in names
     assert "activate_external_search" not in names
     assert "build_external_search_service" not in names
-    assert "DEEPSEEK_API_KEY" not in text
     assert "AGENTCORE_GATEWAY_URL" not in text
     assert "planned_mode" not in text
     assert "result.retrieval" not in text

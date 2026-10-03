@@ -16,12 +16,10 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.ai_providers.errors import (
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderServiceUnavailableError,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
@@ -30,17 +28,23 @@ from app.analysis.embedding.domain.value_objects import (
 )
 from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
-    EmbeddingError,
-    EmbeddingFailureReason,
     EmbeddingResponseInvalidError,
 )
 from app.analysis.embedding.service import EmbeddingCompletion, EmbeddingService
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _mock_embedder(
@@ -252,17 +256,13 @@ async def test_execute_shortcircuits_when_already_persisted(
 
 
 @pytest.mark.asyncio
-async def test_execute_wraps_input_rejected_provider_error(
+async def test_execute_propagates_input_rejected_provider_error(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """``AIProviderInputRejectedError`` は Service の ACL で target-local marker に
-    詰め替えられて raise される。
-
-    Service は握らず Task 層に伝搬。DB / audit は変更されない。
-    """
+    """AIの失敗は工程の例外に包まず同じ例外のまま伝搬し、DBは変更されない。"""
     article = await _build_article(
         db_session, sample_source, url="https://example.com/input-rejected"
     )
@@ -272,24 +272,19 @@ async def test_execute_wraps_input_rejected_provider_error(
     analyzed_article_id = analysis.id
     article_id = article.id
 
-    original = AIProviderInputRejectedError(
-        reason=GeminiContentRejectionReason.INPUT_BLOCKED
+    original = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
     )
     embedder = _mock_embedder(raises=original)
     svc = EmbeddingService(session_factory)
     ready = _make_ready(analyzed_article_id=analyzed_article_id)
 
-    with pytest.raises(EmbeddingError) as exc_info:
+    with pytest.raises(AIProviderResponseError) as exc_info:
         await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
-    # provider_error attr に元 instance が identity 付きで保持される
-    assert exc_info.value.provider_error is original
-    assert exc_info.value.code == AIProviderInputRejectedError.CODE
-    # content 拒否は回復クラス TARGET_REJECTED → failure_kind / failure_reason
-    assert exc_info.value.reason is EmbeddingFailureReason.PROVIDER_ERROR
-    assert exc_info.value.provider_error.reason.value == "input_blocked"
-    # __cause__ に元 provider error が紐付く (audit error_chain 連鎖)
-    assert exc_info.value.__cause__ is original
+    assert exc_info.value is original
+    assert exc_info.value.__cause__ is None
 
     db_session.expire_all()
     refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
@@ -301,21 +296,34 @@ async def test_execute_wraps_input_rejected_provider_error(
 @pytest.mark.parametrize(
     "provider_exc",
     [
-        AIProviderRateLimitedError("rate limited"),
-        AIProviderServiceUnavailableError("provider down"),
-        AIProviderNetworkError("timeout"),
+        AIProviderResponseError(
+            "rate limited",
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        ),
+        AIProviderResponseError(
+            "provider down",
+            reason=AIProviderResponseReason.SERVER_ERROR,
+            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+        ),
+        AIProviderTransportError(
+            "timeout",
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            ),
+        ),
     ],
 )
-async def test_execute_wraps_recoverable_provider_errors(
+async def test_execute_propagates_recoverable_provider_errors(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
     provider_exc: Exception,
 ) -> None:
-    """Rate / Service / Network は Service の ACL で
-    ``EmbeddingError`` に元の例外を保持して呼び出し元へ伝搬する。
-    """
+    """Rate / Service / Network も工程の例外に包まず呼び出し元へ伝搬する。"""
     article = await _build_article(
         db_session,
         sample_source,
@@ -331,11 +339,10 @@ async def test_execute_wraps_recoverable_provider_errors(
     svc = EmbeddingService(session_factory)
     ready = _make_ready(analyzed_article_id=analyzed_article_id)
 
-    with pytest.raises(EmbeddingError) as exc_info:
+    with pytest.raises(type(provider_exc)) as exc_info:
         await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
-    assert exc_info.value.provider_error is provider_exc
-    assert exc_info.value.__cause__ is provider_exc
+    assert exc_info.value is provider_exc
 
 
 # Layer 2-B: embedder 境界が raise した EmbeddingResponseInvalidError は
@@ -373,7 +380,6 @@ async def test_execute_propagates_response_invalid_from_embedder(
 
     assert exc_info.value is response_invalid
     assert exc_info.value.code == "embedding_response_invalid"
-    assert exc_info.value.provider_error is None
 
     db_session.expire_all()
     refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)

@@ -9,12 +9,10 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai_providers.errors import AIProviderError
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
-from app.analysis.curation.errors import to_curation_error
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
@@ -70,13 +68,10 @@ class CurationService:
         curator: BaseCurator,
     ) -> CurationCompletion:
         """結果のcommitまたは重複保存の見送りを正常終了として返す。"""
-        try:
-            envelope = await curator.curate(
-                title=ready.original_title,
-                content=ready.original_content,
-            )
-        except AIProviderError as exc:
-            raise to_curation_error(exc) from exc
+        envelope = await curator.curate(
+            title=ready.original_title,
+            content=ready.original_content,
+        )
 
         async with self._session_factory() as session:
             match envelope:

@@ -3,24 +3,26 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar
+from typing import ClassVar, Literal, assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai_providers.errors import AIProviderError
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
     ReadyForAssessment,
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
+from app.analysis.assessment.errors import AssessmentError, AssessmentFailureReason
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import AssessmentPayload, BasePipelineEventPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
     FailureProjection,
-    Retryability,
-    failure_action_value,
+    project_db_failure,
+    unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
 from app.models.backfill_exclusion import BackfillExclusionReason
@@ -140,20 +142,21 @@ class AssessmentAuditRepository:
             article_id=rejected.analyzable_article_id,
         )
 
-    # --- Consumerが分類した失敗の監査 ------------------------------------
+    # --- Consumerが扱いを決めた失敗の監査 --------------------------------
 
-    async def append_classified_failure(
+    async def append_failure(
         self,
         *,
         curation_id: int,
         article_id: int | None,
         exc: Exception,
-        projection: FailureProjection,
+        failure_action: Literal["retry", "no_retry"],
     ) -> None:
-        """Consumerの分類と元例外を、ReadyやAI生応答を要求せず記録する。"""
+        """元例外とConsumerが決めた扱いを、ReadyやAI生応答を要求せず記録する。"""
+        projection = _project_failure(exc)
         payload = AssessmentPayload(
             failure_kind=projection.failure_kind,
-            failure_action=failure_action_value(projection),
+            failure_action=failure_action,
             failure_reason=projection.failure_reason,
             curation_id=curation_id,
             error_message=error_message_of(exc),
@@ -165,7 +168,6 @@ class AssessmentAuditRepository:
             payload=payload,
             article_id=article_id,
             error_class=exception_fqn(exc),
-            retryability=projection.retryability,
         )
 
     # --- internal helpers -------------------------------------------------
@@ -179,7 +181,6 @@ class AssessmentAuditRepository:
         article_id: int | None = None,
         source_id: int | None = None,
         error_class: str | None = None,
-        retryability: Retryability | None = None,
     ) -> None:
         await self._events.append(
             stage=self.STAGE,
@@ -189,7 +190,6 @@ class AssessmentAuditRepository:
             article_id=article_id,
             source_id=source_id,
             error_class=error_class,
-            retryability=retryability,
         )
 
     async def _append_backfill_event(
@@ -201,7 +201,6 @@ class AssessmentAuditRepository:
         article_id: int | None = None,
         source_id: int | None = None,
         error_class: str | None = None,
-        retryability: Retryability | None = None,
     ) -> None:
         await self._events.append(
             stage=self.BACKFILL_STAGE,
@@ -211,5 +210,31 @@ class AssessmentAuditRepository:
             article_id=article_id,
             source_id=source_id,
             error_class=error_class,
-            retryability=retryability,
         )
+
+
+def _project_failure(exc: Exception) -> FailureProjection:
+    """Consumerの失敗を監査の分類へ写す。"""
+    if isinstance(exc, AIProviderError):
+        return FailureProjection(
+            code=exc.CODE,
+            failure_kind=None,
+            failure_reason=exc.reason.value,
+            retryability=None,
+            failure_action=None,
+        )
+    if isinstance(exc, AssessmentError):
+        match exc.reason:
+            case AssessmentFailureReason.CURATION_MISSING:
+                failure_kind = "target_missing"
+            case AssessmentFailureReason.RESPONSE_INVALID:
+                failure_kind = "ai_response_invalid"
+            case _:
+                assert_never(exc.reason)
+        return FailureProjection(
+            code=exc.code,
+            failure_kind=failure_kind,
+            retryability=None,
+            failure_action=None,
+        )
+    return project_db_failure(exc) or unknown_failure_projection()

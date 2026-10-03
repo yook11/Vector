@@ -1,7 +1,7 @@
 """Question-answering workflow composition.
 
-The API process only performs the lightweight configuration check; worker tasks
-call the builder when they actually execute an agent run.
+The agent worker checks its configuration at startup; worker tasks call the
+builder when they actually execute an agent run.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -31,10 +30,9 @@ from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )
-from app.agent.runtime.contract import AgentRuntime
-from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
 )
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.config import settings
@@ -45,27 +43,28 @@ if TYPE_CHECKING:
 
     from app.agent.runtime.gemini import GeminiAgentRuntime
 
-logger = structlog.get_logger(__name__)
-
 # 工程ごとの打ち切りが先に効くよう、1回の試行の上限はそれより長くする。
 _GEMINI_CONNECTION = GeminiConnectionSettings(read_timeout=30.0)
-_DEEPSEEK_CONNECTION = DeepSeekConnectionSettings(read_timeout=30.0)
-_DEEPSEEK_MAX_RETRIES = 2
 
 
-def ensure_external_search_configured() -> None:
-    if not (
-        settings.deepseek_api_key.get_secret_value() and settings.agentcore_gateway_url
-    ):
-        raise AIProviderConfigurationError()
+def ensure_agent_worker_configured() -> None:
+    """run が使う外部接続の設定を worker の起動時に確かめ、欠けていれば起動させない。"""
+    missing = [
+        name
+        for name, value in (
+            ("GEMINI_API_KEY", settings.gemini_api_key.get_secret_value()),
+            ("AGENTCORE_GATEWAY_URL", settings.agentcore_gateway_url),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"agent worker requires {', '.join(missing)}")
 
 
 @asynccontextmanager
 async def activate_gemini_client() -> AsyncIterator[AsyncClient]:
     if not settings.gemini_api_key.get_secret_value():
-        from app.ai_providers.gemini.error_translator import GeminiStateReason
-
-        raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
+        raise AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED)
 
     from app.ai_providers.gemini.client import open_gemini_client
 
@@ -92,8 +91,6 @@ def _build_answering_phases(
     delta_reporter: AnswerDeltaReporter | None = None,
     progress: AnswerProgressReporter | None = None,
 ) -> AnsweringPhases:
-    ensure_external_search_configured()
-
     from app.agent.answering.direct_answer.service import DirectAnswerService
     from app.agent.answering.evidence_answer.service import EvidenceAnswerService
     from app.agent.evidence_collection.internal_search.ai.gemini import (
@@ -136,7 +133,7 @@ def _build_answering_phases(
         ),
         reviewer=EvidenceReviewService(
             agent=EVIDENCE_REVIEWER_AGENT,
-            runtime_scope_factory=activate_evidence_reviewer_runtime,
+            runtime_scope_factory=activate_gemini_agent_runtime,
         ),
         direct_answerer=DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
@@ -192,26 +189,11 @@ async def activate_external_search() -> AsyncIterator[ExternalSearch]:
     from app.agent.evidence_collection.external_search.agentcore_spec import (
         AGENTCORE_WEB_SEARCH_SPEC,
     )
-    from app.agent.evidence_collection.external_search.deepseek_binding import (
-        EXTERNAL_QUERY_DEEPSEEK_BINDING,
-    )
     from app.agent.evidence_collection.external_search.service import (
         ExternalSearchService,
     )
-    from app.agent.runtime.deepseek import DEEPSEEK_BASE_URL, DeepSeekAgentRuntime
-    from app.ai_providers.deepseek.client import open_deepseek_client
 
-    async with open_deepseek_client(
-        api_key=settings.deepseek_api_key,
-        base_url=DEEPSEEK_BASE_URL,
-        settings=_DEEPSEEK_CONNECTION,
-        logger=logger,
-        max_retries=_DEEPSEEK_MAX_RETRIES,
-    ) as deepseek_client:
-        query_runtime = DeepSeekAgentRuntime(
-            client=deepseek_client,
-            binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
-        )
+    async with activate_gemini_agent_runtime() as query_runtime:
         # gateway は自 AWS アカウントの resource なので内部宛 client を使う。
         # 外部宛 factory は egress proxy を強制注入するため、署名済みリクエストが
         # proxy へ迂回して失敗する。
@@ -226,24 +208,3 @@ async def activate_external_search() -> AsyncIterator[ExternalSearch]:
                     client=search_client,
                 ),
             )
-
-
-@asynccontextmanager
-async def activate_evidence_reviewer_runtime() -> AsyncIterator[AgentRuntime]:
-    from app.agent.evidence_review.deepseek_binding import (
-        EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-    )
-    from app.agent.runtime.deepseek import DEEPSEEK_BASE_URL, DeepSeekAgentRuntime
-    from app.ai_providers.deepseek.client import open_deepseek_client
-
-    async with open_deepseek_client(
-        api_key=settings.deepseek_api_key,
-        base_url=DEEPSEEK_BASE_URL,
-        settings=_DEEPSEEK_CONNECTION,
-        logger=logger,
-        max_retries=_DEEPSEEK_MAX_RETRIES,
-    ) as deepseek_client:
-        yield DeepSeekAgentRuntime(
-            client=deepseek_client,
-            binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-        )

@@ -52,7 +52,7 @@ async def test_append_generation_completed_records_succeeded_row(
             week_start=date(2026, 4, 20),
             category_id=ai_category.id,
             article_count=7,
-            ai_model="deepseek-v4-pro",
+            ai_model="gemini-3.8-flash",
         )
         await session.commit()
 
@@ -66,7 +66,7 @@ async def test_append_generation_completed_records_succeeded_row(
     assert ev.payload["category_id"] == ai_category.id
     assert ev.payload["category_slug"] == "ai"
     assert ev.payload["article_count"] == 7
-    assert ev.payload["ai_model"] == "deepseek-v4-pro"
+    assert ev.payload["ai_model"] == "gemini-3.8-flash"
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_append_generation_input_empty_records_rejected_row(
     ),
     [
         (
-            lambda: BriefingConfigurationError("DEEPSEEK_API_KEY missing"),
+            lambda: BriefingConfigurationError("GEMINI_API_KEY missing"),
             "briefing_generation_llm_configuration_invalid",
             "non_retryable",
             "configuration",
@@ -166,7 +166,7 @@ async def test_append_failure_projects_generation_exceptions(
                 category_id=ai_category.id,
                 exc=exc,
                 retry_exhausted=None,
-                ai_model="deepseek-v4-pro",
+                ai_model="gemini-3.8-flash",
             )
         else:
             await repo.append_failure(
@@ -174,7 +174,7 @@ async def test_append_failure_projects_generation_exceptions(
                 category_id=ai_category.id,
                 exc=exc,
                 retry_exhausted=None,
-                ai_model="deepseek-v4-pro",
+                ai_model="gemini-3.8-flash",
             )
         await session.commit()
 
@@ -186,7 +186,7 @@ async def test_append_failure_projects_generation_exceptions(
     assert ev.error_class.endswith(type(exc).__qualname__)
     assert ev.payload["failure_kind"] == expected_failure_kind
     assert ev.payload["failure_action"] == expected_failure_action
-    assert ev.payload["ai_model"] == "deepseek-v4-pro"
+    assert ev.payload["ai_model"] == "gemini-3.8-flash"
 
 
 @pytest.mark.asyncio
@@ -202,7 +202,7 @@ async def test_append_failure_records_retry_exhausted_only_when_true(
             category_id=ai_category.id,
             exc=RuntimeError("last retry boom"),
             retry_exhausted=True,
-            ai_model="deepseek-v4-pro",
+            ai_model="gemini-3.8-flash",
         )
         await session.commit()
 
@@ -229,7 +229,7 @@ async def test_append_failure_walks_error_chain_via_cause(
                 category_id=ai_category.id,
                 exc=exc,
                 retry_exhausted=None,
-                ai_model="deepseek-v4-pro",
+                ai_model="gemini-3.8-flash",
             )
             await session.commit()
 
@@ -258,7 +258,7 @@ async def test_append_failure_redacts_secrets_in_error_message(
             category_id=ai_category.id,
             exc=exc,
             retry_exhausted=None,
-            ai_model="deepseek-v4-pro",
+            ai_model="gemini-3.8-flash",
         )
         await session.commit()
 
@@ -392,7 +392,7 @@ async def test_repository_does_not_commit(
             week_start=date(2026, 4, 20),
             category_id=ai_category.id,
             article_count=1,
-            ai_model="deepseek-v4-pro",
+            ai_model="gemini-3.8-flash",
         )
 
     rows = (await db_session.execute(select(PipelineEvent))).scalars().all()

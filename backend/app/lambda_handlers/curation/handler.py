@@ -4,7 +4,9 @@ import asyncio
 
 import structlog
 
+from app.analysis.curation.consumer_failure_classification import RetryCuration
 from app.analysis.curation.domain.ready import CurationReadyBuildRejected
+from app.analysis.curation.service import CurationCompletion
 from app.collection.events import (
     AnalyzableArticleCreatedEvent,
     AnalyzableEventInvalidError,
@@ -93,28 +95,36 @@ async def _run_curation(
             try:
                 completion = await consumer.consume(article_event.payload)
             except Exception as exc:
+                completion = RetryCuration(exc)
+            if isinstance(completion, RetryCuration):
                 failure_recorder.record_message_failure(
-                    exc, message_id=record_input.message_id, article_event=article_event
+                    completion.error,
+                    message_id=record_input.message_id,
+                    article_event=article_event,
                 )
                 failed_items.append(
                     SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                 )
             else:
-                rejection_fields = (
-                    {"rejection_code": completion.reason.value}
-                    if isinstance(completion, CurationReadyBuildRejected)
-                    else {}
-                )
+                outcome_fields: dict[str, object]
+                if isinstance(completion, CurationCompletion):
+                    outcome_fields = {"reason": completion.kind.value}
+                elif isinstance(completion.cause, CurationReadyBuildRejected):
+                    outcome_fields = {
+                        "reason": "ready_build_rejected",
+                        "rejection_code": completion.cause.reason.value,
+                    }
+                else:
+                    outcome_fields = {
+                        "reason": "failure_not_retried",
+                        "code": completion.cause.CODE,
+                        "failure_reason": completion.cause.reason.value,
+                    }
                 _log_completion(
                     message_id=record_input.message_id,
                     event_id=str(article_event.event_id),
                     analyzable_article_id=article_event.payload.analyzable_article_id,
-                    reason=(
-                        "ready_build_rejected"
-                        if isinstance(completion, CurationReadyBuildRejected)
-                        else completion.kind.value
-                    ),
-                    **rejection_fields,
+                    **outcome_fields,
                 )
         return failed_items
 

@@ -15,7 +15,6 @@ _PEM_BLOCK = (
     + "PRIVATE KEY-----\nsynthetic-private-body\n-----END PRIVATE KEY-----"
 )
 _GEMINI_KEY = "AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
-_DEEPSEEK_KEY = "sk-" + "0123456789abcdef0123456789abcdef"
 _LOGFIRE_TOKEN = "pylf_v1_us_" + "SyntheticToken0123456789"
 
 
@@ -29,11 +28,6 @@ _LOGFIRE_TOKEN = "pylf_v1_us_" + "SyntheticToken0123456789"
             f"key {_GEMINI_KEY} leaked",
             "key [redacted:gemini_api_key] leaked",
             id="gemini_api_key",
-        ),
-        pytest.param(
-            f"key {_DEEPSEEK_KEY} rejected",
-            "key [redacted:deepseek_api_key] rejected",
-            id="deepseek_api_key",
         ),
         pytest.param(
             f"token {_LOGFIRE_TOKEN} rejected",

@@ -11,10 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderNetworkError,
-)
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
@@ -24,7 +20,6 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.errors import AssessmentError, AssessmentFailureReason
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.assessment.service import (
@@ -327,61 +322,6 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
             (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
         )
     assert outbox_events == []
-
-
-@pytest.mark.asyncio
-async def test_provider_network_error_preserves_provider_cause(
-    session_factory: async_sessionmaker[AsyncSession],
-    assessment_logger,
-) -> None:
-    """``AIProviderNetworkError`` → ``AssessmentError`` で wrap。
-
-    ``__cause__`` に元 ``AIProvider*Error`` が紐付くこと (PR5 の
-    ``extract_error_chain`` が 2 段以上を error_chain 列に記録できる前提)。
-    """
-    provider_exc = AIProviderNetworkError("connection reset")
-    assessor = _make_assessor(side_effect=provider_exc)
-
-    ready = ReadyForAssessment(
-        curation_id=1,
-        translated_title="t",
-        summary="s",
-    )
-    svc = AssessmentService(session_factory)
-
-    with pytest.raises(AssessmentError) as excinfo:
-        await svc.execute(
-            ready, assessor, analyzable_article_id=1, logger=assessment_logger
-        )
-    assert excinfo.value.__cause__ is provider_exc
-    assert excinfo.value.provider_error is provider_exc
-    assert excinfo.value.code == provider_exc.CODE
-
-
-@pytest.mark.asyncio
-async def test_provider_configuration_error_preserves_provider_cause(
-    session_factory: async_sessionmaker[AsyncSession],
-    assessment_logger,
-) -> None:
-    """設定エラーも再試行分類を付けずに保持する。"""
-    provider_exc = AIProviderConfigurationError("bad api key")
-    assessor = _make_assessor(side_effect=provider_exc)
-
-    ready = ReadyForAssessment(
-        curation_id=1,
-        translated_title="t",
-        summary="s",
-    )
-    svc = AssessmentService(session_factory)
-
-    with pytest.raises(AssessmentError) as excinfo:
-        await svc.execute(
-            ready, assessor, analyzable_article_id=1, logger=assessment_logger
-        )
-    assert excinfo.value.__cause__ is provider_exc
-    assert excinfo.value.provider_error is provider_exc
-    assert excinfo.value.code == provider_exc.CODE
-    assert excinfo.value.reason is AssessmentFailureReason.PROVIDER_ERROR
 
 
 @pytest.mark.asyncio

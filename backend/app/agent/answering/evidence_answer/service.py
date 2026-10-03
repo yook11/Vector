@@ -24,6 +24,7 @@ from app.agent.answering.evidence_answer.validation import (
 from app.agent.answering.failure import (
     RequestRetryDisposition,
     classify_answer_synthesis_failure,
+    is_output_truncated,
 )
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
@@ -50,10 +51,7 @@ from app.agent.runtime.contract import (
     StreamingAgentRuntime,
     StreamingAgentRuntimeScopeFactory,
 )
-from app.ai_providers.errors import (
-    AIProviderError,
-    AIProviderOutputTruncatedError,
-)
+from app.ai_providers.errors import AIProviderError
 
 __all__ = ["EvidenceAnswerService"]
 
@@ -133,7 +131,7 @@ class EvidenceAnswerService:
                                     await self._start_revision(
                                         generation=attempt_number + 1
                                     )
-                                    if isinstance(exc, AIProviderOutputTruncatedError):
+                                    if is_output_truncated(exc):
                                         input = replace(
                                             input, previous_output_truncated=True
                                         )

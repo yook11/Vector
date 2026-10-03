@@ -23,9 +23,6 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalQueryGenerationInput,
 )
-from app.agent.evidence_collection.external_search.deepseek_binding import (
-    EXTERNAL_QUERY_DEEPSEEK_BINDING,
-)
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 
 
@@ -88,9 +85,9 @@ def test_query_agent_declares_stable_model_version_output_and_immutable_schema()
 
     assert isinstance(query_agent, Agent)
     assert query_agent.name == "external_query_generator"
-    assert query_agent.model.provider == "deepseek"
-    assert query_agent.model.name == "deepseek-v4-flash"
-    assert query_agent.model_settings.max_output_tokens == 256
+    assert query_agent.model.provider == "gemini"
+    assert query_agent.model.name == "gemini-3.5-flash-lite"
+    assert query_agent.model_settings.max_output_tokens == 1024
     assert query_agent.output_type is ExternalQueryDraft
     assert not any(
         hasattr(query_agent, forbidden)
@@ -111,29 +108,18 @@ def test_query_agent_declares_stable_model_version_output_and_immutable_schema()
 
 def test_query_agent_holds_the_complete_model_visible_response_schema() -> None:
     assert _plain_schema(EXTERNAL_QUERY_AGENT.response_schema) == {
-        "type": "object",
-        "additionalProperties": False,
+        "type": "OBJECT",
         "required": ["queries"],
         "properties": {
             "queries": {
-                "type": "array",
+                "type": "ARRAY",
                 "description": (
                     "1 to 3 short English keyword queries for external news search."
                 ),
-                "items": {"type": "string"},
+                "items": {"type": "STRING"},
             }
         },
     }
-
-
-def test_deepseek_binding_keeps_only_stable_transport_identity() -> None:
-    query_binding = EXTERNAL_QUERY_DEEPSEEK_BINDING
-
-    assert query_binding.function_name == "generate_search_queries"
-    assert query_binding.description == "Return the declared external query draft."
-    assert not hasattr(query_binding, "schema")
-    assert not hasattr(query_binding, "instructions")
-    assert not hasattr(query_binding, "rules")
 
 
 def test_query_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_data() -> (

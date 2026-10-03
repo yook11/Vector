@@ -107,7 +107,7 @@ run "consumer_receives_assessment_queue_with_embedding_limits" {
         ENV                                     = "production"
         DATABASE_URL                            = local.backend_db_url["vector_article_analysis"]
         DB_IAM_AUTH                             = "true"
-        DEEPSEEK_API_KEY_PARAMETER_PATH         = "/slice-test/assessment-consumer/deepseek-api-key"
+        GEMINI_API_KEY_PARAMETER_PATH           = "/slice-test/assessment-consumer/gemini-api-key"
         EGRESS_PROXY_URL                        = local.proxy_url
         INTERNAL_FRONTEND_BASE_URL              = "http://frontend.vector.internal:3000"
         REVALIDATE_BEARER_SECRET_PARAMETER_PATH = "/slice-test/frontend/revalidate-bearer-secret"
@@ -156,7 +156,7 @@ run "consumer_network_and_permissions_are_scoped" {
       !contains(values(local.app_subnet_cidrs), aws_subnet.assessment_consumer.cidr_block) &&
       aws_subnet.assessment_consumer.cidr_block != aws_subnet.embedding_consumer.cidr_block &&
       aws_route_table_association.assessment_consumer.route_table_id == aws_route_table.app.id &&
-      local.proxy_clients.assessment_consumer.domains == ["api.deepseek.com"] &&
+      local.proxy_clients.assessment_consumer.domains == ["generativelanguage.googleapis.com"] &&
       local.proxy_clients.assessment_consumer.cidr == aws_subnet.assessment_consumer.cidr_block &&
       !local.proxy_clients.assessment_consumer.allow_any_domain &&
       strcontains(local.squid_conf, "http_access allow src_assessment_consumer dst_assessment_consumer") &&
@@ -164,7 +164,7 @@ run "consumer_network_and_permissions_are_scoped" {
         contains(endpoint.security_group_ids, aws_security_group.assessment_consumer_ssm.id) == (key == "ssm")
       ])
     )
-    error_message = "専用private subnetからDeepSeek・SSMへだけ接続する。"
+    error_message = "専用private subnetからGemini・SSMへだけ接続する。"
   }
   assert {
     condition = alltrue([for pair in [

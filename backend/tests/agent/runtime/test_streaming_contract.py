@@ -7,6 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx
 import pytest
 from google.genai import errors as genai_errors
 from google.genai.client import AsyncClient
@@ -30,30 +31,15 @@ from opentelemetry.trace import (
 
 import app.agent.recording.llm as llm_recording_module
 import app.ai_providers.gemini.error_translator as gemini_error_translator_module
-from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderResponseError,
+    AIProviderResultError,
+    AIProviderResultReason,
+    AIProviderTransportError,
 )
 from app.ai_providers.gemini.error_translator import (
     OUTPUT_BLOCKED_FINISH_REASONS,
-    GeminiContentRejectionReason,
-    GeminiStateReason,
-)
-from tests.agent.runtime._deepseek_helpers import (
-    FakeDeepSeekClient,
-    make_binding,
-)
-from tests.agent.runtime._deepseek_helpers import (
-    make_agent as make_deepseek_agent,
-)
-from tests.agent.runtime._deepseek_helpers import (
-    success_response as deepseek_success_response,
 )
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent, success_response
 from tests.cloudwatch.records import metric_records
@@ -433,7 +419,7 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
-    with pytest.raises(AIProviderInputRejectedError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         _ = [
             fragment
             async for fragment in runtime.stream_text(
@@ -443,11 +429,11 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
             )
         ]
 
-    assert exc_info.value.reason is GeminiContentRejectionReason.INPUT_BLOCKED
+    assert exc_info.value.reason is AIProviderResultReason.INPUT_BLOCKED
     span = tracer.spans[0]
     assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
-    assert span.attributes["error.type"] == AIProviderInputRejectedError.CODE
+    assert span.attributes["error.type"] == AIProviderResultError.CODE
     assert span.attributes["gen_ai.usage.output_tokens"] == 7
     assert span.status_code is StatusCode.ERROR
     assert span.status_description is None
@@ -459,17 +445,20 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
 @pytest.mark.parametrize(
     ("finish_reason", "expected_reason"),
     [
-        ("SAFETY", GeminiContentRejectionReason.SAFETY),
-        ("RECITATION", GeminiContentRejectionReason.RECITATION),
-        ("BLOCKLIST", GeminiContentRejectionReason.BLOCKLIST),
-        ("PROHIBITED_CONTENT", GeminiContentRejectionReason.PROHIBITED_CONTENT),
-        ("SPII", GeminiContentRejectionReason.SPII),
+        ("SAFETY", AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
+        ("RECITATION", AIProviderResultReason.OUTPUT_BLOCKED_RECITATION),
+        ("BLOCKLIST", AIProviderResultReason.OUTPUT_BLOCKED_BLOCKLIST),
+        (
+            "PROHIBITED_CONTENT",
+            AIProviderResultReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT,
+        ),
+        ("SPII", AIProviderResultReason.OUTPUT_BLOCKED_SPII),
     ],
 )
 async def test_blocked_finish_reason_records_blocked_outcome_without_event(
     monkeypatch: pytest.MonkeyPatch,
     finish_reason: str,
-    expected_reason: GeminiContentRejectionReason,
+    expected_reason: AIProviderResultReason,
 ) -> None:
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
@@ -478,7 +467,7 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
-    with pytest.raises(AIProviderOutputBlockedError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         _ = [
             fragment
             async for fragment in runtime.stream_text(
@@ -492,7 +481,7 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
     span = tracer.spans[0]
     assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
-    assert span.attributes["error.type"] == AIProviderOutputBlockedError.CODE
+    assert span.attributes["error.type"] == AIProviderResultError.CODE
     assert span.status_code is StatusCode.ERROR
     assert span.exception_events == []
     assert sdk_stream.close_calls == 1
@@ -504,13 +493,13 @@ def test_output_blocked_finish_reasons_matches_content_rejection_mapping_keys() 
 
     5個の finish_reason 文字列をここへ複製すると、写像側だけを更新した際に
     テストが検知できず「片方に足すと他方が食い違う」状態を許してしまう。
-    両者を直接比較することで、写像 (``_FINISH_REASON_TO_CONTENT_REASON``) が
+    両者を直接比較することで、写像 (``_FINISH_REASON_TO_RESULT_REASON``) が
     唯一の SSoT であることを保証する。
     """
     blocked_finish_reasons = OUTPUT_BLOCKED_FINISH_REASONS
     assert isinstance(blocked_finish_reasons, frozenset)
     mapping_keys = frozenset(
-        gemini_error_translator_module._FINISH_REASON_TO_CONTENT_REASON
+        gemini_error_translator_module._FINISH_REASON_TO_RESULT_REASON
     )
     assert blocked_finish_reasons == mapping_keys
 
@@ -525,7 +514,7 @@ async def test_max_tokens_finish_reason_raises_classified_truncation_error(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
-    with pytest.raises(AIProviderOutputTruncatedError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         _ = [
             fragment
             async for fragment in runtime.stream_text(
@@ -536,15 +525,13 @@ async def test_max_tokens_finish_reason_raises_classified_truncation_error(
         ]
 
     error = exc_info.value
-    assert not isinstance(error, AIProviderOutputBlockedError)
-    assert error.CODE == "ai_error_output_truncated"
-    assert isinstance(error.reason, GeminiStateReason)
-    assert error.reason.value == "output_token_limit_reached"
+    assert error.CODE == "ai_provider_result_error"
+    assert error.reason is AIProviderResultReason.OUTPUT_TRUNCATED
 
     span = tracer.spans[0]
     assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
-    assert span.attributes["error.type"] == "ai_error_output_truncated"
+    assert span.attributes["error.type"] == "ai_provider_result_error"
     assert span.status_code is StatusCode.ERROR
     assert sdk_stream.close_calls == 1
     assert span.end_calls == 1
@@ -567,7 +554,7 @@ async def test_max_tokens_after_partial_fragment_yield_still_raises_classified_e
     )
 
     fragments: list[str] = []
-    with pytest.raises(AIProviderOutputTruncatedError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         async for fragment in runtime.stream_text(
             make_agent(response_schema=None),
             "typed input",
@@ -577,15 +564,13 @@ async def test_max_tokens_after_partial_fragment_yield_still_raises_classified_e
 
     assert fragments == ["partial answer"]
     error = exc_info.value
-    assert not isinstance(error, AIProviderOutputBlockedError)
-    assert error.CODE == "ai_error_output_truncated"
-    assert isinstance(error.reason, GeminiStateReason)
-    assert error.reason.value == "output_token_limit_reached"
+    assert error.CODE == "ai_provider_result_error"
+    assert error.reason is AIProviderResultReason.OUTPUT_TRUNCATED
 
     span = tracer.spans[0]
     assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
-    assert span.attributes["error.type"] == "ai_error_output_truncated"
+    assert span.attributes["error.type"] == "ai_provider_result_error"
     assert sdk_stream.close_calls == 1
     assert span.end_calls == 1
 
@@ -600,7 +585,7 @@ async def test_stream_without_terminal_reason_is_truncated_and_closed_once(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
-    with pytest.raises(AIProviderNetworkError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         _ = [
             fragment
             async for fragment in runtime.stream_text(
@@ -610,11 +595,11 @@ async def test_stream_without_terminal_reason_is_truncated_and_closed_once(
             )
         ]
 
-    assert exc_info.value.reason is GeminiStateReason.STREAM_TRUNCATED
+    assert exc_info.value.reason is AIProviderResultReason.STREAM_INCOMPLETE
     span = tracer.spans[0]
     assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
-    assert span.attributes["error.type"] == AIProviderNetworkError.CODE
+    assert span.attributes["error.type"] == AIProviderResultError.CODE
     assert span.status_code is StatusCode.ERROR
     assert sdk_stream.close_calls == 1
     assert span.end_calls == 1
@@ -625,11 +610,11 @@ async def test_translated_provider_error_preserves_cause_after_cleanup(
 ) -> None:
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
-    source_error = TimeoutError("PROVIDER_TIMEOUT_SENTINEL")
+    source_error = httpx.ReadTimeout("PROVIDER_TIMEOUT_SENTINEL")
     client = FakeGeminiClient([], streams=[source_error])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
 
-    with pytest.raises(AIProviderNetworkError) as exc_info:
+    with pytest.raises(AIProviderTransportError) as exc_info:
         await runtime.stream_text(
             make_agent(response_schema=None),
             "typed input",
@@ -640,7 +625,7 @@ async def test_translated_provider_error_preserves_cause_after_cleanup(
     assert exc_info.value.__cause__ is source_error
     assert span.attributes["status"] == "failed"
     assert "result" not in span.attributes
-    assert span.attributes["error.type"] == AIProviderNetworkError.CODE
+    assert span.attributes["error.type"] == AIProviderTransportError.CODE
     assert span.exception_events == []
     assert span.end_calls == 1
 
@@ -875,21 +860,12 @@ async def test_cancelled_sdk_close_preserves_usage_and_ends_span_once(
     assert span.end_calls == 1
 
 
-@pytest.mark.parametrize("runtime_name", ["gemini", "deepseek"])
-async def test_non_streaming_runtime_rejects_schema_none_before_renderer_and_provider(
-    runtime_name: str,
-) -> None:
+async def test_call_rejects_schema_none_before_renderer_and_provider() -> None:
     renderer_error = RuntimeError("RENDERER_MUST_NOT_RUN")
-    if runtime_name == "gemini":
-        client = FakeGeminiClient([success_response()])
-        runtime: Any = GeminiAgentRuntime(client=cast(AsyncClient, client))
-        agent = make_agent(response_schema=None)
-        provider_call = client.models.generate_content
-    else:
-        client = FakeDeepSeekClient([deepseek_success_response()])
-        runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
-        agent = replace(make_deepseek_agent(), response_schema=None)
-        provider_call = client.chat.completions.create
+    client = FakeGeminiClient([success_response()])
+    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    agent = make_agent(response_schema=None)
+    provider_call = client.models.generate_content
     assert agent.response_schema is None
     agent = replace(
         agent,
@@ -949,7 +925,7 @@ async def test_stream_text_quota_exhausted_sdk_error_emits_ai_provider_exhausted
     client = FakeGeminiClient([], streams=[_quota_exhausted_sdk_error()])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
 
-    with pytest.raises(AIProviderUsageLimitExhaustedError):
+    with pytest.raises(AIProviderResponseError):
         await runtime.stream_text(
             make_agent(response_schema=None),
             "typed input",
@@ -958,7 +934,7 @@ async def test_stream_text_quota_exhausted_sdk_error_emits_ai_provider_exhausted
 
     records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
-    assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
+    assert records[0]["kind"] == "quota_exhausted"
     assert records[0]["provider"] == "gemini"
 
 
@@ -972,7 +948,7 @@ async def test_stream_text_plain_rate_limited_sdk_error_does_not_emit(
     client = FakeGeminiClient([], streams=[_rate_limited_sdk_error()])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
 
-    with pytest.raises(AIProviderRateLimitedError):
+    with pytest.raises(AIProviderResponseError):
         await runtime.stream_text(
             make_agent(response_schema=None),
             "typed input",

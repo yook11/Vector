@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.consumer_failure_classification import (
+    NoRetryCuration,
+    RetryCuration,
     classify_curation_failure,
 )
 from app.analysis.curation.consumer_failure_handling import (
@@ -31,7 +33,7 @@ logger = structlog.get_logger(__name__)
 
 
 class CurationConsumer:
-    """1イベントを正常完了させるか、後処理後に失敗を呼び出し元へ伝える。"""
+    """1イベントの正常完了か、後処理を終えた失敗を再試行するかを呼び出し元へ伝える。"""
 
     def __init__(
         self,
@@ -45,7 +47,7 @@ class CurationConsumer:
 
     async def consume(
         self, event: AnalyzableArticleCreated
-    ) -> CurationCompletion | CurationReadyBuildRejected:
+    ) -> CurationCompletion | NoRetryCuration | RetryCuration:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
         analyzable_article_id: int | None = None
         try:
@@ -67,8 +69,8 @@ class CurationConsumer:
                 else:
                     return await self._service.execute(build_result, self._curator)
         except Exception as exc:
+            failure = classify_curation_failure(exc)
             try:
-                failure = classify_curation_failure(exc)
                 await self._failure_handler.handle(
                     failure=failure,
                     exc=exc,
@@ -85,11 +87,11 @@ class CurationConsumer:
                         secondary_error_class=exception_fqn(secondary),
                     )
                 except Exception:  # noqa: S110
-                    # 後処理とログが失敗しても元の処理例外を維持する。
+                    # 後処理とログが失敗しても決めた扱いを維持する。
                     pass
-            raise
+            return failure
 
         await self._failure_handler.handle_ready_build_rejected(
             target_article_id=event.analyzable_article_id, rejected=rejected
         )
-        return rejected
+        return NoRetryCuration(rejected)

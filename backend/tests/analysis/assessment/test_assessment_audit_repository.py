@@ -16,12 +16,9 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
+    AIProviderTransportError,
 )
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.consumer_failure_classification import (
-    classify_assessment_failure,
-)
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
     AssessmentReadyBuildRejectionReason,
@@ -32,11 +29,13 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.errors import (
-    AssessmentError,
-    to_assessment_error,
-)
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import (
     AnalyzedArticleRecord as AnalyzedArticleRecordORM,
@@ -471,7 +470,7 @@ async def test_append_backfill_assessment_aged_out_records_rejected(
 
 
 @pytest.mark.asyncio
-async def test_append_classified_failure_unknown_exception_maps_to_unknown(
+async def test_append_failure_unknown_exception_maps_to_unknown(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -482,9 +481,9 @@ async def test_append_classified_failure_unknown_exception_maps_to_unknown(
     exc = RuntimeError("boom")
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_classified_failure(
+        await AssessmentAuditRepository(session).append_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            failure_action="retry",
             article_id=article.id,
             exc=exc,
         )
@@ -492,9 +491,9 @@ async def test_append_classified_failure_unknown_exception_maps_to_unknown(
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "unexpected_error"
-    assert ev.retryability == "unknown"
+    assert ev.retryability is None
     assert ev.payload["failure_kind"] == "unknown"
-    assert ev.payload["failure_action"] is None
+    assert ev.payload["failure_action"] == "retry"
 
 
 @pytest.mark.asyncio
@@ -502,7 +501,6 @@ async def test_append_classified_failure_unknown_exception_maps_to_unknown(
     (
         "exc_factory",
         "expected_outcome_code",
-        "expected_retryability",
         "expected_failure_kind",
     ),
     [
@@ -511,36 +509,31 @@ async def test_append_classified_failure_unknown_exception_maps_to_unknown(
         (
             lambda: OperationalError("SELECT 1", {}, Exception("conn reset")),
             "db_runtime_error",
-            "retryable",
             "db_runtime",
         ),
         (
             lambda: IntegrityError("INSERT", {}, Exception("unique violation")),
             "db_constraint_error",
-            "non_retryable",
             "db_constraint",
         ),
         (
             lambda: ProgrammingError("SELECT bad", {}, Exception("no such column")),
             "db_query_or_schema_error",
-            "non_retryable",
             "db_query_or_schema",
         ),
         (
             lambda: InvalidRequestError("detached instance"),
             "db_unknown_error",
-            "unknown",
             "db_unknown",
         ),
     ],
 )
-async def test_append_classified_failure_projects_db_exceptions(
+async def test_append_failure_projects_db_exceptions(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     exc_factory: object,
     expected_outcome_code: str,
-    expected_retryability: str,
     expected_failure_kind: str,
 ) -> None:
     """SQLAlchemy DB 例外を failure projection に分類する。"""
@@ -549,9 +542,9 @@ async def test_append_classified_failure_projects_db_exceptions(
     exc = exc_factory()  # type: ignore[operator]
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_classified_failure(
+        await AssessmentAuditRepository(session).append_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            failure_action="retry",
             article_id=article.id,
             exc=exc,
         )
@@ -559,31 +552,38 @@ async def test_append_classified_failure_projects_db_exceptions(
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == expected_outcome_code
-    assert ev.retryability == expected_retryability
+    assert ev.retryability is None
     assert ev.payload["failure_kind"] == expected_failure_kind
-    assert ev.payload["failure_action"] is None
+    assert ev.payload["failure_action"] == "retry"
 
 
 @pytest.mark.asyncio
-async def test_append_classified_failure_walks_error_chain_via_cause(
+async def test_append_failure_walks_error_chain_via_cause(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Assessment・プロバイダーの原因チェーンを監査へ保存する。"""
+    """AIの失敗とその原因のチェーンを監査へ保存する。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     try:
         try:
-            raise AIProviderNetworkError("upstream provider error")
-        except AIProviderNetworkError as inner:
-            raise to_assessment_error(inner) from inner
-    except AssessmentError as service_error:
-        exc = service_error
+            raise TimeoutError("upstream timeout")
+        except TimeoutError as inner:
+            raise AIProviderTransportError(
+                "upstream provider error",
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                ),
+            ) from inner
+    except AIProviderTransportError as provider_error:
+        exc = provider_error
         async with session_factory() as session:
-            await AssessmentAuditRepository(session).append_classified_failure(
+            await AssessmentAuditRepository(session).append_failure(
                 curation_id=extraction.id,
-                projection=classify_assessment_failure(exc).audit,
+                failure_action="retry",
                 article_id=article.id,
                 exc=exc,
             )
@@ -593,13 +593,13 @@ async def test_append_classified_failure_walks_error_chain_via_cause(
     chain = ev.payload["error_chain"]
     assert chain is not None
     assert chain == [
-        "app.analysis.assessment.errors.AssessmentError",
-        "app.ai_providers.errors.AIProviderNetworkError",
+        "app.ai_providers.errors.AIProviderTransportError",
+        "builtins.TimeoutError",
     ]
 
 
 @pytest.mark.asyncio
-async def test_append_classified_failure_redacts_secrets_in_error_message(
+async def test_append_failure_redacts_secrets_in_error_message(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -613,9 +613,9 @@ async def test_append_classified_failure_redacts_secrets_in_error_message(
     )
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_classified_failure(
+        await AssessmentAuditRepository(session).append_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            failure_action="retry",
             article_id=article.id,
             exc=exc,
         )
@@ -628,7 +628,7 @@ async def test_append_classified_failure_redacts_secrets_in_error_message(
 
 
 @pytest.mark.asyncio
-async def test_append_classified_failure_omits_raw_response_attr(
+async def test_append_failure_omits_raw_response_attr(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -640,9 +640,9 @@ async def test_append_classified_failure_omits_raw_response_attr(
     exc.raw_response = "x" * 5000
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_classified_failure(
+        await AssessmentAuditRepository(session).append_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            failure_action="retry",
             article_id=article.id,
             exc=exc,
         )
@@ -653,7 +653,7 @@ async def test_append_classified_failure_omits_raw_response_attr(
 
 
 @pytest.mark.asyncio
-async def test_append_classified_failure_records_curation_id_in_payload(
+async def test_append_failure_records_curation_id_in_payload(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -667,9 +667,9 @@ async def test_append_classified_failure_records_curation_id_in_payload(
     exc = RuntimeError("boom")
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_classified_failure(
+        await AssessmentAuditRepository(session).append_failure(
             curation_id=extraction.id,
-            projection=classify_assessment_failure(exc).audit,
+            failure_action="retry",
             article_id=article.id,
             exc=exc,
         )

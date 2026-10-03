@@ -1,4 +1,4 @@
-"""Consumer自身の判定・委譲・期限・例外伝播を検証する。"""
+"""Consumer自身の判定・委譲・期限・再試行の判断を検証する。"""
 
 from __future__ import annotations
 
@@ -11,11 +11,16 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.ai_providers.errors import (
+    AIProviderResponseError,
+    AIProviderResponseReason,
+)
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.consumer import AssessmentConsumer
 from app.analysis.assessment.consumer_failure_classification import (
-    classify_assessment_failure,
+    NoRetryAssessment,
+    RetryAssessment,
 )
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildRejected,
@@ -30,12 +35,14 @@ from app.analysis.assessment.service import (
 )
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.logging import create_article_analysis_logger
+from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 
 _MODULE = "app.analysis.assessment.consumer"
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -67,7 +74,7 @@ async def target(db_session, sample_source, sample_categories):
 @pytest.fixture
 def consumer(session_factory):
     assessor = MagicMock(spec=BaseAssessor)
-    assessor.provider = "deepseek"
+    assessor.provider = "gemini"
     consumer = AssessmentConsumer(session_factory, assessor)
     with (
         patch.object(consumer._service, "execute", new_callable=AsyncMock),
@@ -150,7 +157,7 @@ async def test_already_assessed_skips_execution_and_postprocessing(
 async def test_rejection_is_passed_unchanged_to_postprocessing(
     consumer, target, reason, assessment_logger
 ):
-    """構築拒否はServiceを呼ばず、同じ拒否値を監査処理と呼び出し元へ渡す。"""
+    """構築拒否はServiceを呼ばず、同じ拒否値を監査処理へ渡し再試行しない。"""
     rejected = AssessmentReadyBuildRejected(
         reason,
         None
@@ -160,7 +167,8 @@ async def test_rejection_is_passed_unchanged_to_postprocessing(
     with patch.object(ReadyForAssessment, "from_facts", return_value=rejected):
         result = await consumer.consume(target, logger=assessment_logger)
 
-    assert result is rejected
+    assert result == NoRetryAssessment(rejected)
+    assert result.cause is rejected
     handler = consumer._failure_handler.handle_ready_build_rejected
     handler.assert_awaited_once_with(
         curation_id=target.curation_id, rejected=rejected, logger=assessment_logger
@@ -201,34 +209,106 @@ async def test_ready_facts_are_loaded_once(consumer, target, assessment_logger):
     [
         AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
         RuntimeError("private-business-error"),
+        AIProviderResponseError(
+            reason=AIProviderResponseReason.RATE_LIMITED,
+            http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+        ),
     ],
 )
-async def test_execution_failure_is_classified_and_reraised(
+async def test_execution_failure_is_handled_and_left_to_retry(
     consumer, target, original, assessment_logger
 ):
-    """実行例外とDB由来記事IDを後処理へ渡し、同じ例外と原因を再送出する。"""
+    """実行例外とDB由来記事IDを後処理へ渡し、同じ例外と原因を持ったまま再試行に回す。"""
     cause = ValueError("private-cause")
     original.__cause__ = cause
     consumer._service.execute.side_effect = original
 
-    with pytest.raises(type(original)) as raised:
-        await consumer.consume(
-            target.model_copy(update={"analyzable_article_id": 999_999}),
-            logger=assessment_logger,
-        )
+    result = await consumer.consume(
+        target.model_copy(update={"analyzable_article_id": 999_999}),
+        logger=assessment_logger,
+    )
 
-    assert raised.value is original
-    assert raised.value.__cause__ is cause
+    assert result == RetryAssessment(original)
+    assert result.error is original
+    assert original.__cause__ is cause
     consumer._failure_handler.handle.assert_awaited_once_with(
-        failure=classify_assessment_failure(original),
+        failure=RetryAssessment(original),
         exc=original,
         curation_id=target.curation_id,
         analyzable_article_id=target.analyzable_article_id,
-        provider="deepseek",
+        provider="gemini",
         logger=assessment_logger,
     )
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failure_unrecoverable_for_input_is_not_retried_after_handling(
+    consumer, target, assessment_logger
+):
+    """この入力では回復しないAIの失敗は、後処理のあと再試行しない失敗として返す。"""
+    original = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    consumer._service.execute.side_effect = original
+
+    result = await consumer.consume(target, logger=assessment_logger)
+
+    assert result == NoRetryAssessment(original)
+    consumer._failure_handler.handle.assert_awaited_once_with(
+        failure=NoRetryAssessment(original),
+        exc=original,
+        curation_id=target.curation_id,
+        analyzable_article_id=target.analyzable_article_id,
+        provider="gemini",
+        logger=assessment_logger,
+    )
+    consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_decision_survives_failure_handling_error(
+    consumer, target, assessment_logger
+):
+    """後処理が失敗しても、決めた扱いを変えない。"""
+    provider_error = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_TOO_LONG,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    consumer._service.execute.side_effect = provider_error
+    consumer._failure_handler.handle.side_effect = RuntimeError("secondary-secret")
+
+    result = await consumer.consume(target, logger=assessment_logger)
+
+    assert result == NoRetryAssessment(provider_error)
+
+
+@pytest.mark.asyncio
+async def test_classification_failure_propagates_for_redelivery(
+    consumer, target, assessment_logger
+):
+    """扱いを決められなければ、その例外を伝えて再配信に任せ、元の例外を原因に残す。"""
+    original = AIProviderResponseError(
+        reason=AIProviderResponseReason.INPUT_BLOCKED,
+        http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+    )
+    consumer._service.execute.side_effect = original
+    classification_error = RuntimeError("classification-bug")
+
+    with (
+        patch(
+            f"{_MODULE}.classify_assessment_failure",
+            side_effect=classification_error,
+        ),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        await consumer.consume(target, logger=assessment_logger)
+
+    assert raised.value is classification_error
+    assert raised.value.__context__ is original
+    consumer._failure_handler.handle.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -244,14 +324,15 @@ async def test_ready_read_failure_does_not_substitute_event_id(
     )
     try:
         consumer._session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        with pytest.raises(DBAPIError) as raised:
-            await consumer.consume(target, logger=assessment_logger)
+        result = await consumer.consume(target, logger=assessment_logger)
+        assert isinstance(result, RetryAssessment)
+        assert isinstance(result.error, DBAPIError)
         consumer._failure_handler.handle.assert_awaited_once_with(
-            failure=classify_assessment_failure(raised.value),
-            exc=raised.value,
+            failure=result,
+            exc=result.error,
             curation_id=target.curation_id,
             analyzable_article_id=None,
-            provider="deepseek",
+            provider="gemini",
             logger=assessment_logger,
         )
         consumer._service.execute.assert_not_awaited()
@@ -265,7 +346,7 @@ async def test_ready_read_failure_does_not_substitute_event_id(
 async def test_business_timeout_ends_before_failure_handling(
     consumer, target, phase, assessment_logger
 ):
-    """取得・実行中の期限切れを伝播し、後処理はタイマー解除後に呼ぶ。"""
+    """取得・実行中の期限切れは再試行に回し、後処理はタイマー解除後に呼ぶ。"""
     business_timeout = asyncio.timeout(None)
     load_facts = AssessmentRepository.load_ready_build_facts
 
@@ -289,12 +370,13 @@ async def test_business_timeout_ends_before_failure_handling(
     with (
         patch(f"{_MODULE}.timeout", return_value=business_timeout),
         patch.object(AssessmentRepository, "load_ready_build_facts", new=observe_read),
-        pytest.raises(TimeoutError) as raised,
     ):
-        await consumer.consume(target, logger=assessment_logger)
+        result = await consumer.consume(target, logger=assessment_logger)
 
+    assert isinstance(result, RetryAssessment)
+    assert isinstance(result.error, TimeoutError)
     consumer._failure_handler.handle.assert_awaited_once()
-    assert consumer._failure_handler.handle.await_args.kwargs["exc"] is raised.value
+    assert consumer._failure_handler.handle.await_args.kwargs["exc"] is result.error
     if phase == "read":
         consumer._service.execute.assert_not_awaited()
 
@@ -319,39 +401,32 @@ async def test_rejection_handling_runs_after_business_timeout(
             logger=assessment_logger,
         )
 
-    assert result == AssessmentReadyBuildRejected(
-        AssessmentReadyBuildRejectionReason.CURATION_MISSING
+    assert result == NoRetryAssessment(
+        AssessmentReadyBuildRejected(
+            AssessmentReadyBuildRejectionReason.CURATION_MISSING
+        )
     )
     consumer._failure_handler.handle_ready_build_rejected.assert_awaited_once()
     consumer._failure_handler.handle.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["classification", "handler"])
 async def test_secondary_failure_preserves_original(
-    consumer, target, operation, assessment_logger
+    consumer, target, assessment_logger
 ):
-    """分類・後処理の障害で元の実行例外を置き換えない。"""
+    """後処理の障害で、元の実行例外と決めた扱いを置き換えない。"""
     original = AssessmentResponseInvalidError(
         AssessmentResponseDefect.CATEGORY_KEY_MISSING
     )
     consumer._service.execute.side_effect = original
-    boundary = (
-        patch(
-            f"{_MODULE}.classify_assessment_failure",
-            side_effect=RuntimeError("secondary-secret"),
-        )
-        if operation == "classification"
-        else patch.object(
-            consumer._failure_handler,
-            "handle",
-            side_effect=RuntimeError("secondary-secret"),
-        )
-    )
-    with boundary, pytest.raises(type(original)) as raised:
-        await consumer.consume(target, logger=assessment_logger)
+    with patch.object(
+        consumer._failure_handler,
+        "handle",
+        side_effect=RuntimeError("secondary-secret"),
+    ):
+        result = await consumer.consume(target, logger=assessment_logger)
 
-    assert raised.value is original
+    assert result == RetryAssessment(original)
 
 
 @pytest.mark.asyncio

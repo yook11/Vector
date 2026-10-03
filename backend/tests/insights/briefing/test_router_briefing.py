@@ -70,7 +70,7 @@ def _briefing(
         watch_points=watch_points
         if watch_points is not None
         else [{"statement": "今後どこを見るべきか"}],
-        model_name="deepseek-v4-pro",
+        model_name="gemini-3.8-flash",
         input_article_count=1,
     )
 
@@ -143,7 +143,7 @@ class TestGetBriefing:
                     chapters=[{"heading": "h", "body": "b"}],
                     key_articles=[],
                     watch_points=[{"statement": "w"}],
-                    model_name="deepseek-v4-pro",
+                    model_name="gemini-3.8-flash",
                     input_article_count=1,
                 )
             )
@@ -449,7 +449,7 @@ class TestListBriefings:
             chapters=[{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
             key_articles=[{"analyzed_article_id": 1, "significance": "なぜ重要か"}],
             watch_points=[{"statement": "今後どこを見るべきか"}],
-            model_name="deepseek-v4-pro",
+            model_name="gemini-3.8-flash",
             input_article_count=1,
         )
         db_session.add(briefing)
@@ -493,7 +493,7 @@ class TestListBriefings:
                     chapters=[{"heading": "h", "body": "b"}],
                     key_articles=[],
                     watch_points=[{"statement": "w"}],
-                    model_name="deepseek-v4-pro",
+                    model_name="gemini-3.8-flash",
                     input_article_count=1,
                 )
             )
@@ -571,7 +571,7 @@ class TestBriefingResponseSizeGuard:
             watch_points=watch_points
             if watch_points is not None
             else [{"statement": "w"}],
-            model_name="deepseek-v4-pro",
+            model_name="gemini-3.8-flash",
             input_article_count=1,
         )
 

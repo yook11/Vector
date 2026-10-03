@@ -31,10 +31,16 @@ from app.agent.recording.evidence_answer import (
 from app.agent.runs.execution import Continue, Stop, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
-    AIProviderOutputTruncatedError,
+    AIProviderResultError,
+    AIProviderResultReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiStateReason
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.recording._fakes import RecordingEvidenceAnswerRecorder
 from tests.agent.running._harness import (
     AllowAnswerGenerationStart,
@@ -90,11 +96,9 @@ def _evidence(ref: str = "1") -> AnswerInputEvidence:
     )
 
 
-def _truncated_error() -> AIProviderOutputTruncatedError:
+def _truncated_error() -> AIProviderResultError:
     """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
-    return AIProviderOutputTruncatedError(
-        reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
-    )
+    return AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED)
 
 
 def _expected_draft(*, answer: str, cited_refs: list[str]) -> EvidenceAnswerDraft:
@@ -479,32 +483,52 @@ async def test_blank_answer_raises_draft_invalid_not_pydantic_code() -> None:
 @pytest.mark.asyncio
 async def test_generation_failure_raises_typed_error_with_code() -> None:
     """生成不能は回答draftと別の型で表し、failure_codeだけを持つ。"""
-    generator = FakeGenerator([AIProviderNetworkError()])
+    generator = FakeGenerator(
+        [
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        ]
+    )
 
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(generator)
 
     assert isinstance(exc_info.value, Exception)
-    assert exc_info.value.code == "ai_error_network"
+    assert exc_info.value.code == "ai_provider_transport_error"
 
 
 @pytest.mark.asyncio
 async def test_provider_error_raises_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
-    generator = FakeGenerator([AIProviderNetworkError()])
+    generator = FakeGenerator(
+        [
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        ]
+    )
 
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(generator)
 
-    assert exc_info.value.code == "ai_error_network"
+    assert exc_info.value.code == "ai_provider_transport_error"
     assert len(generator.calls) == 1
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
         {
             "result": "failed",
             "attempt_count": 1,
-            "failure_code": "ai_error_network",
+            "failure_code": "ai_provider_transport_error",
         }
     ]
     assert _metric_attributes(metrics, _EVIDENCE_ANSWER_DURATION_METRIC) == [
@@ -608,7 +632,16 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
     "stream_outcome",
     [
         pytest.param("根拠から確認できます。[[1]]", id="draft"),
-        pytest.param(AIProviderNetworkError(), id="unavailable"),
+        pytest.param(
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
+            id="unavailable",
+        ),
     ],
 )
 async def test_runtime_scope_exit_failure_discards_selected_outcome(
@@ -683,7 +716,15 @@ async def test_outcome_metric_records_succeeded_once(
     "outcomes",
     [
         ["根拠から確認できます。[[1]]"],
-        [AIProviderNetworkError()],
+        [
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        ],
     ],
     ids=["succeeded", "failed"],
 )
@@ -762,13 +803,23 @@ async def test_two_retryable_failures_abort_without_starting_another_generation(
 @pytest.mark.asyncio
 async def test_provider_error_aborts_without_live_fallback() -> None:
     """生成不能では下書きを中断し、新しいgenerationを開始しない。"""
-    generator = FakeGenerator([AIProviderNetworkError()])
+    generator = FakeGenerator(
+        [
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        ]
+    )
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(generator, delta_reporter=reporter)
 
-    assert exc_info.value.code == "ai_error_network"
+    assert exc_info.value.code == "ai_provider_transport_error"
     assert reporter.aborted == [1]
     assert reporter.reset_generations == []
     assert reporter.finished == []
@@ -819,7 +870,17 @@ async def test_reporter_is_not_part_of_final_draft_correctness(
 async def test_provider_error_closes_stream_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
-    generator = FakeGenerator([AIProviderNetworkError()])
+    generator = FakeGenerator(
+        [
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        ]
+    )
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(EvidenceAnswerError):
@@ -839,7 +900,7 @@ async def test_provider_error_closes_stream_without_retry(
     metrics = collected_metrics(capfire)
     assert (
         _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)[0]["failure_code"]
-        == "ai_error_network"
+        == "ai_provider_transport_error"
     )
 
 
@@ -895,14 +956,14 @@ async def test_second_truncation_raises_with_truncated_failure_code(
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(generator)
 
-    assert exc_info.value.code == "ai_error_output_truncated"
+    assert exc_info.value.code == "ai_provider_result_error"
     assert len(generator.calls) == 2
     metrics = collected_metrics(capfire)
     attrs = _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC)
     assert len(attrs) == 1
     assert attrs[0]["attempt_count"] == 2
     assert attrs[0]["result"] == "failed"
-    assert attrs[0]["failure_code"] == "ai_error_output_truncated"
+    assert attrs[0]["failure_code"] == "ai_provider_result_error"
 
 
 @pytest.mark.asyncio
@@ -954,7 +1015,17 @@ async def test_classified_failure_records_failed_outcome() -> None:
     """分類済み生成失敗はRecorderへ失敗結論を1回渡す。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
-    generator = FakeGenerator([AIProviderNetworkError()])
+    generator = FakeGenerator(
+        [
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        ]
+    )
 
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(generator, recorder=recorder)
@@ -963,7 +1034,7 @@ async def test_classified_failure_records_failed_outcome() -> None:
         recorder,
         error=exc_info.value,
         outcome=EvidenceAnswerFailed(
-            failure_code="ai_error_network",
+            failure_code="ai_provider_transport_error",
             attempt_count=1,
         ),
     )
@@ -1021,7 +1092,17 @@ async def test_provider_error_records_failure_without_fallback() -> None:
     """生成不能後は再生成せず、生成失敗を通知する。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
-    generator = FakeGenerator([AIProviderNetworkError()])
+    generator = FakeGenerator(
+        [
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            )
+        ]
+    )
 
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(
@@ -1034,7 +1115,9 @@ async def test_provider_error_records_failure_without_fallback() -> None:
 
     _assert_recorded(
         recorder,
-        outcome=EvidenceAnswerFailed(failure_code="ai_error_network", attempt_count=1),
+        outcome=EvidenceAnswerFailed(
+            failure_code="ai_provider_transport_error", attempt_count=1
+        ),
         error=exc_info.value,
     )
 

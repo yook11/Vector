@@ -92,9 +92,9 @@ def test_agent_declares_plain_text_role_with_wider_output_budget() -> None:
     ) == (
         "evidence_answer",
         "gemini",
-        "gemini-3.1-flash-lite",
-        0.2,
-        8192,
+        "gemini-3.8-flash",
+        None,
+        16384,
         "v10",
         EvidenceAnswerDraft,
         None,

@@ -9,6 +9,7 @@ from app.http.destination_policy import HostBlockedError
 from app.http.destination_resolution import HostResolutionError
 from app.http.error_mapping import (
     http_response_error_from_exception,
+    http_response_error_from_status,
     http_transport_error_from_exception,
 )
 from app.http.failure import (
@@ -149,3 +150,46 @@ def test_response_conversion_preserves_recorded_receive_time() -> None:
     result = http_response_error_from_exception(caught.value, received_at=received_at)
 
     assert result.received_at == received_at
+
+
+def test_status_conversion_keeps_given_status_and_receive_time() -> None:
+    """SDK が解釈した status と、呼び出し側が記録した受信時刻をそのまま保持する。"""
+    received_at = datetime(2026, 9, 13, 12, 0, 2, tzinfo=UTC)
+
+    result = http_response_error_from_status(
+        503, response=None, received_at=received_at
+    )
+
+    assert (result.status_code, result.received_at) == (503, received_at)
+
+
+@pytest.mark.parametrize("retry_after", [None, "", "60", "later"])
+def test_status_conversion_preserves_retry_after_from_response(
+    retry_after: str | None,
+) -> None:
+    """応答があれば、待機指示を解釈せずに伝える。"""
+    headers = {} if retry_after is None else {"Retry-After": retry_after}
+    response = httpx.Response(
+        429,
+        headers=headers,
+        request=httpx.Request("POST", "https://example.invalid/generate"),
+    )
+
+    result = http_response_error_from_status(
+        429,
+        response=response,
+        received_at=datetime(2026, 9, 13, 12, 0, 2, tzinfo=UTC),
+    )
+
+    assert result.retry_after == retry_after
+
+
+def test_status_conversion_without_response_has_no_retry_after() -> None:
+    """応答が無ければ、待機指示も無いとする。"""
+    result = http_response_error_from_status(
+        429,
+        response=None,
+        received_at=datetime(2026, 9, 13, 12, 0, 2, tzinfo=UTC),
+    )
+
+    assert result.retry_after is None

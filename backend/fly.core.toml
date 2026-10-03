@@ -55,7 +55,7 @@ primary_region = 'nrt'
 # (#712) で一律引き上げた値を、遅延 AI SDK import (#714) の本番反映後に実測した
 # 物理 RSS (fly ssh `/proc/meminfo` の Total-Available) に基づき右サイズする。
 # 実測 working set (idle, deploy 直後):
-# - worker-insights ~484MB: trend(SDK-free)+briefing(deepseek/openai)同居 → 768MB。
+# - worker-insights ~484MB: trend(SDK-free)+briefing(gemini)同居 → 768MB。
 # - worker-agent: user-facing Q&A agent。768MB 始まりで deploy 後 RSS 実測。
 # - scheduler ~200MB級: 4 cron scheduler を 1 プロセスに統合 (SDK-free, full import 1 回)。
 #   実装は app/queue/scheduler_entrypoint.py / supervisord/scheduler.conf。

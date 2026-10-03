@@ -41,10 +41,6 @@ class TestPurposeRuleConstants:
         [
             "gemini_api_key",
             "GEMINI_API_KEY",
-            "openai_api_key",
-            "openaiApiKey",
-            "deepseek_api_key",
-            "Deepseek-Api-Key",
             "logfire_token",
             "bff_jwt_signing_secret",
             "revalidate_bearer_secret",

@@ -4,6 +4,8 @@ Status: Assessment Lambda・relay・通知・カテゴリー初期化を実装�
 
 > 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
 
+> 2026-10-03: 生成モデルを Gemini に統一し、DeepSeek を外した（#529）。本文の DeepSeek の記述は当時の記録。今の判定は `GeminiAssessor`（gemini-3.5-flash-lite）で、通信設定（読み取り30秒・SDK・HTTP の再試行0回）は変わらない。
+
 ## Problem
 
 Curationの完了イベントからAssessmentを実行し、対象内の判定結果をEmbeddingへつなぐ。イベント駆動に移したEmbeddingの責務分担を基準にする。既存AssessmentのRecoverable／Terminal、Taskiq retry、hold、backfillの方針は、新Consumerの設計根拠にしない。
@@ -43,7 +45,7 @@ CurationのSignal結果＋article.curated_signalをOutboxに保存
 | `OUT_OF_SCOPE` | 対象外の判定結果・成功監査をcommitできた | なし |
 | `ALREADY_ASSESSED` | 開始時または保存時に判定済みと確認できた | 追加しない |
 
-Ready構築時にCuration不存在またはReady入力制約違反が確定した場合は、理由付きの`AssessmentReadyBuildRejected`を返して受信完了とする。AI応答の契約違反、provider障害、DB障害、timeout、想定外例外は例外で伝える。正常終了の結果は永続化・処理済み確認の結末であり、AIが返す判定内容やReady拒否とは区別する。
+Ready構築時にCuration不存在またはReady入力制約違反が確定した場合は、理由付きの`AssessmentReadyBuildRejected`を持つ`NoRetryAssessment`を返して受信完了とする。実行中の失敗は、curation-consumer.mdの「全工程共通の、再試行しない失敗」の表に従い、失敗を記録したうえで`NoRetryAssessment`か`RetryAssessment`を返す。正常終了の結果は永続化・処理済み確認の結末であり、AIが返す判定内容やReady拒否とは区別する。
 
 ### Ready拒否の受信完了（2026-09-13）
 
@@ -126,9 +128,9 @@ Problem: 正常終了・失敗理由の契約を、Taskiqに依存しないイ�
 - `AssessmentConsumer(session_factory, assessor)`は借用したAssessorを使い、`consume(ArticleCuratedSignal) -> AssessmentCompletion`を提供する。クライアントの生成・終了は担当しない。
 - 業務処理の上限は60秒とする。既存の`curation_id`照会を1回だけ行い、取得したDB由来の記事IDを保持して読み取りセッションを閉じ、`ReadyForAssessment.from_facts`とServiceへ進む。イベントの記事IDは補完・照合に使わない。
 - 開始時の対象内／対象外判定済みは`ALREADY_ASSESSED`を返し、AI・保存・成功監査・Outbox・成功メトリクスを追加しない。Curation不存在は原因付きの`AssessmentCurationMissingError`とする。Ready検証失敗でも取得済みのDB由来IDを失敗監査へ渡し、未取得なら`article_id=None`とする。
-- `AssessmentFailureClassification`は監査用`FailureProjection`と任意の枯渇通知対象を持ち、`outcome`は持たない。プロバイダーのCODE・reasonを保持し、監査のfailure_kind・retryabilityはnullとする。枯渇判定は共通関数を使う。応答不正は詳細codeと`ai_response_invalid`、不存在は`assessment_curation_missing`と`target_missing`、DBは共通DB投影、timeout・その他はunknown投影とする。
+- `classify_assessment_failure`は副作用のない関数で、`RetryAssessment`か`NoRetryAssessment`を返す。監査の失敗属性は監査の層が元の例外から作る（providerはCODE・reason、応答不正は詳細codeと`ai_response_invalid`、不存在は`assessment_curation_missing`と`target_missing`、DBは共通DB投影、timeout・その他はunknown投影）。retryabilityは記録せず、`failure_action`に`retry`／`no_retry`を記録する。枯渇判定は共通関数を使う。
 - 新AssessmentConsumerではDB・プロバイダー・その他の失敗を一律`processing_outcome{result=failed}`として計測し、`infra_error`区分を使わない。失敗率には原因を問わず処理失敗を含め、詳細は監査の型・コードで識別する。記事収集側の計測契約は変更しない。
-- 監査のretryabilityは観測情報だけに使い、失敗はすべて元例外のまま呼び出し元へ返す。ConsumerにTaskiq分類、hold、独自再試行は持ち込まない。
+- 失敗は元例外を持つ`RetryAssessment`／`NoRetryAssessment`として呼び出し元へ返す。ConsumerにTaskiq分類、hold、独自再試行は持ち込まない。
 - 失敗後処理は60秒の外で、処理メトリクス・別セッションでの失敗監査commit・必要なプロバイダー枯渇通知を順番に独立して試みる。監査失敗時はaudit droppedを計測する。通常の二次例外や診断ログ障害で元例外を置き換えず、後続の処理を継続する。外部キャンセルは抑止しない。
 - `AssessmentAuditRepository.append_classified_failure`はReadyを要求せず、分類を再計算せずに`FAILED`を記録する。既存の制限・マスキングを通したメッセージと原因チェーンを保存し、入力本文・AI生応答は収集しない。旧Taskiq用監査は維持する。
 
@@ -150,7 +152,7 @@ Invariants: 判定モデル・プロンプト・strict function calling・応答
 
 - `DeepSeekConnectionSettings`はfrozen・slots付きdataclass。接続3秒・読み取り30秒・書き込み10秒・プール待ち3秒を既定値とし、正の有限数だけ受け付ける。秘密情報・モデル仕様は含めない。
 - `open_deepseek_client(api_key, base_url, settings)`はasync context manager。既存の外部HTTPファクトリを使用し、SDK・HTTPの再試行を0回にする。SDKへ同じtimeoutを明示する。HTTPの読み取り上限はチャンク待ち時間であり、Consumerの業務処理全体60秒とは別の制限。
-- SDK生成失敗でもHTTPを回収し、SDK終了後にHTTPが未解放なら回収を試みる。診断は資源名と例外クラスだけを記録する。空・空白だけのAPIキーは生成前に`AIProviderConfigurationError(NOT_CONFIGURED)`とする。
+- SDK生成失敗でもHTTPを回収し、SDK終了後にHTTPが未解放なら回収を試みる。診断は資源名と例外クラスだけを記録する。空・空白だけのAPIキーは生成前に`AIProviderNotSentError(NOT_CONFIGURED)`とする。
 - `DeepSeekAssessor(client)`へ変更。`base_url`は既存の`DEEPSEEK_ASSESSMENT_SPEC`を配線側から渡し、定義を重複させない。
 - 既存Taskiqはワーカー起動時に準備し、終了時・起動途中の失敗時に解放する。比較スクリプトは比較処理の間だけ所有する。SDKの遅延importを維持する。
 
@@ -188,7 +190,7 @@ Done: 設定の読み取り範囲、Engine設定、資源の生成・終了順�
 - 新規の対象内保存時だけ後続イベントを記録する。配送成功をAssessmentの正常終了条件には含めない。
 - 冪等性は`curation_id`単位で保証し、対象内と対象外が同時に確定しない。重複実行で結果・成功監査・Outboxを重複させない。AI呼び出しの一回性は保証しない。
 - AI応答待ちにDBセッションや保存用ロックを保持しない。保存時の不存在はエラーとする。
-- 処理エラーはすべてSQSへ失敗として返す。失敗分類は監査・計測・通知に使い、Consumer内の再配信判断には使わない。
+- 再試行する失敗と、Consumerが判断できずに伝播した例外をSQSへ失敗として返す。再試行しない失敗は記録したうえで受信完了とする。
 - 再配信・上限到達後のDLQ移動はSQSに任せる。Consumer内で再配信待ちのsleep、独自backoff、hold、DLQへの直接送信を行わない。
 - 業務処理の時間上限と失敗後処理の実行範囲を分ける。失敗後処理の通常例外で元のエラーを置き換えず、他の後処理を継続する。
 - 初期化失敗はLambda呼び出し全体の失敗、識別可能な個別メッセージの失敗は部分バッチ応答とする。通常の終了処理・診断出力の失敗で確定済みの結果を変更しない。外部キャンセルやプロセス終了は抑止しない。

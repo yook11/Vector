@@ -75,7 +75,7 @@ class BaseCurator(abc.ABC):
             Generic envelope。
 
         Raises:
-            AIProviderError: Serviceで原因を保持したCurationErrorへ変換する。
+            AIProviderError: 分類済みのAIの失敗。Serviceは包まずに伝播する。
             CurationError: 応答不正など、Curation工程で確定した失敗を伝播する。
         """
         ...

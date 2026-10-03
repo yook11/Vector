@@ -1,8 +1,7 @@
-"""DeepSeek-V4 Pro による週次 briefing 生成 LLM クライアント。
+"""Gemini 3.8 Flash による週次 briefing 生成 LLM クライアント。
 
-OpenAI SDK を ``base_url=https://api.deepseek.com/beta`` で使い、client は
-呼び出し元が渡す関数で生成のたびに開く。
-Function Calling + ``strict: true`` + inline flat schema で構造化出力を強制。
+client は呼び出し元が渡す関数で生成のたびに開く。``response_schema`` で構造化
+出力を要求し、記事群を横断して整理させるため thinking を high にする。
 
 ハルシネーション検証:
 - ``WeeklyBriefingContent.from_llm_payload`` (input_ids 必須の factory) で
@@ -10,8 +9,12 @@ Function Calling + ``strict: true`` + inline flat schema で構造化出力を�
   (``app/insights/briefing/domain/briefing.py``)。
 
 例外:
-- OpenAI SDK 例外は ``BriefingLlmError`` に wrap して stage marker として伝播
-- 応答 schema 不一致は ``BriefingLlmResponseInvalidError`` に wrap
+- SDK 例外は分類した AI の例外 (分類できなければ SDK 例外) を ``BriefingLlmError``
+  に wrap して stage marker として伝播
+- 入力ブロック・出力拒否・出力上限での打ち切りも ``AIProviderResultError`` として
+  ``BriefingLlmError`` に wrap
+- 応答 schema 不一致 (JSON として読めない応答を含む) は
+  ``BriefingLlmResponseInvalidError`` に wrap
   (violations に loc + 制約種別を value-free で焼き込む)
 - API key 未設定は composition が worker 起動時に ``BriefingConfigurationError`` で
   fail-fast
@@ -24,24 +27,32 @@ from contextlib import AbstractAsyncContextManager
 from datetime import date
 from typing import Any, ClassVar, Final
 
-import openai
 import structlog
-from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageFunctionToolCall
+from google.genai import errors as genai_errors
+from google.genai.client import AsyncClient
+from google.genai.types import (
+    GenerateContentConfig,
+    GenerateContentResponse,
+    ThinkingConfig,
+    ThinkingLevel,
+)
 from pydantic import ValidationError
 
+from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
+from app.ai_providers.gemini.error_translator import (
+    OUTPUT_BLOCKED_FINISH_REASONS,
+    output_blocked_reason,
+    translate_gemini_error,
+)
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
 from app.insights.briefing.domain.ready import BriefingArticle
 from app.insights.briefing.errors import (
-    BriefingConfigurationError,
     BriefingLlmError,
     BriefingLlmResponseInvalidError,
 )
 
 logger = structlog.get_logger(__name__)
-
-_TOOL_NAME: Final = "submit_weekly_briefing"
 
 
 def _contract_violations(exc: ValidationError) -> list[str]:
@@ -116,38 +127,34 @@ BRIEFING_PROMPT = """\
 """
 
 
-# DeepSeek strict mode は $ref/$defs を enforce しないので inline flat schema を
-# 手書きする (Stage 2 と同じ事情)。subset 外制約 (minLength 等) は受信後に
-# WeeklyBriefingContent.model_validate で再検証する。
-BRIEFING_TOOL_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
+# 長さ・件数の上限は受信後に WeeklyBriefingContent で再検証する。
+BRIEFING_GEMINI_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
     "required": ["headline", "summary", "chapters", "key_articles", "watch_points"],
     "properties": {
         "headline": {
-            "type": "string",
+            "type": "STRING",
             "description": "今週を一言で表す見出し (一覧表示用、短く)",
         },
         "summary": {
-            "type": "string",
+            "type": "STRING",
             "description": ("今週の総括リード (headline 直後の数文、日本語)"),
         },
         "chapters": {
-            "type": "array",
+            "type": "ARRAY",
             "description": (
                 "本文を話題ごとに章立て (見出し + 本文、章数は内容量に応じて、日本語)"
             ),
             "items": {
-                "type": "object",
-                "additionalProperties": False,
+                "type": "OBJECT",
                 "required": ["heading", "body"],
                 "properties": {
                     "heading": {
-                        "type": "string",
+                        "type": "STRING",
                         "description": "章の内容を端的に表す短い見出し (日本語)",
                     },
                     "body": {
-                        "type": "string",
+                        "type": "STRING",
                         "description": (
                             "章の本文 (ストーリー仕立てで読みやすく、日本語)"
                         ),
@@ -156,21 +163,20 @@ BRIEFING_TOOL_SCHEMA: dict[str, Any] = {
             },
         },
         "key_articles": {
-            "type": "array",
+            "type": "ARRAY",
             "description": (
                 "特に重要な記事を重要度順に (最大 5 件、同じ記事を複数回挙げない)"
             ),
             "items": {
-                "type": "object",
-                "additionalProperties": False,
+                "type": "OBJECT",
                 "required": ["analyzed_article_id", "significance"],
                 "properties": {
                     "analyzed_article_id": {
-                        "type": "integer",
+                        "type": "INTEGER",
                         "description": "入力に存在する分析済み記事の id (捏造しない)",
                     },
                     "significance": {
-                        "type": "string",
+                        "type": "STRING",
                         "description": (
                             "なぜ重要か / 何を示しているかを簡潔に (日本語)"
                         ),
@@ -179,15 +185,14 @@ BRIEFING_TOOL_SCHEMA: dict[str, Any] = {
             },
         },
         "watch_points": {
-            "type": "array",
+            "type": "ARRAY",
             "description": "今後どこを見るべきか (1〜3 件、予測でなく観察すべき論点)",
             "items": {
-                "type": "object",
-                "additionalProperties": False,
+                "type": "OBJECT",
                 "required": ["statement"],
                 "properties": {
                     "statement": {
-                        "type": "string",
+                        "type": "STRING",
                         "description": (
                             "観察すべき問い・論点を簡潔に (予測・推奨でない、日本語)"
                         ),
@@ -199,16 +204,44 @@ BRIEFING_TOOL_SCHEMA: dict[str, Any] = {
 }
 
 
-class DeepSeekBriefingGenerator:
-    """DeepSeek-V4 Pro (1M context) による週次 briefing 生成器。"""
+_GENERATION_CONFIG: Final[GenerateContentConfig] = GenerateContentConfig(
+    response_mime_type="application/json",
+    response_schema=BRIEFING_GEMINI_SCHEMA,
+    thinking_config=ThinkingConfig(thinking_level=ThinkingLevel.HIGH),
+    # thinking (high) も出力上限に含まれるため、本文の出力に十分な余裕を持たせる。
+    max_output_tokens=32768,
+)
 
-    MODEL: ClassVar[str] = "deepseek-v4-pro"
-    BASE_URL: ClassVar[str] = "https://api.deepseek.com/beta"
+
+def _provider_result_error(
+    response: GenerateContentResponse,
+) -> AIProviderResultError | None:
+    """入力ブロック・出力拒否・打ち切りを、本文の検証より先に AI の失敗として返す。"""
+    prompt_feedback = response.prompt_feedback
+    if prompt_feedback is not None and prompt_feedback.block_reason is not None:
+        return AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED)
+    candidates = response.candidates or []
+    finish = candidates[0].finish_reason if candidates else None
+    finish_reason = getattr(finish, "name", None)
+    if finish_reason in OUTPUT_BLOCKED_FINISH_REASONS:
+        return AIProviderResultError(reason=output_blocked_reason(finish_reason))
+    if finish_reason == "MAX_TOKENS":
+        return AIProviderResultError(
+            "AI応答が出力トークン数の上限に達して打ち切られました",
+            reason=AIProviderResultReason.OUTPUT_TRUNCATED,
+        )
+    return None
+
+
+class GeminiBriefingGenerator:
+    """Gemini 3.8 Flash (thinking high) による週次 briefing 生成器。"""
+
+    MODEL: ClassVar[str] = "gemini-3.8-flash"
 
     def __init__(
         self,
         *,
-        client_scope_factory: Callable[[], AbstractAsyncContextManager[AsyncOpenAI]],
+        client_scope_factory: Callable[[], AbstractAsyncContextManager[AsyncClient]],
     ) -> None:
         self._client_scope_factory = client_scope_factory
 
@@ -222,7 +255,8 @@ class DeepSeekBriefingGenerator:
         """指定カテゴリの週次 briefing を 1 回の API 呼出で生成する。
 
         Raises:
-            BriefingLlmError: OpenAI SDK 例外を stage marker に wrap。
+            BriefingLlmError: SDK 例外を分類した AI の例外 (分類できなければ SDK 例外)、
+                または応答の入力ブロック・出力拒否・打ち切りを stage marker に wrap。
             BriefingLlmResponseInvalidError: schema 不一致 /
                 analyzed_article_ids ハルシネーション。
         """
@@ -241,46 +275,23 @@ class DeepSeekBriefingGenerator:
         )
         async with self._client_scope_factory() as client:
             try:
-                resp = await client.chat.completions.create(
+                response = await client.models.generate_content(
                     model=self.MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    tools=[
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": _TOOL_NAME,
-                                "strict": True,
-                                "description": (
-                                    "1 カテゴリ × 1 週の業界週次 briefing を提出する"
-                                ),
-                                "parameters": BRIEFING_TOOL_SCHEMA,
-                            },
-                        }
-                    ],
-                    tool_choice={"type": "function", "function": {"name": _TOOL_NAME}},
-                    # DeepSeek-V4 Pro は thinking モードで起動すると tool_choice と衝突
-                    # して 400 になる (内部的に reasoner 系として扱われるため)。Stage 2
-                    # 分類器と同じく thinking を明示無効化する。
-                    extra_body={"thinking": {"type": "disabled"}},
+                    contents=prompt,
+                    config=_GENERATION_CONFIG,
                 )
-            except openai.APIError as exc:
-                raise BriefingLlmError(provider_error=exc) from exc
-        choice = resp.choices[0]
-        tool_call = next(iter(choice.message.tool_calls or []), None)
-        # tool_choice で function を強制しているので custom tool 型は来ない。
-        # SDK の union を function tool に narrow し ``.function`` を型確定させる。
-        if (
-            not isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
-            or tool_call.function.name != _TOOL_NAME
-        ):
-            raise BriefingConfigurationError(
-                f"DeepSeek did not return {_TOOL_NAME} tool_call "
-                f"(finish_reason={choice.finish_reason})"
-            )
+            except Exception as exc:
+                translated = translate_gemini_error(exc)
+                if translated is exc and not isinstance(exc, genai_errors.APIError):
+                    raise
+                raise BriefingLlmError(provider_error=translated) from exc
+        provider_result_error = _provider_result_error(response)
+        if provider_result_error is not None:
+            raise BriefingLlmError(provider_error=provider_result_error)
         input_ids = {a.analyzed_article_id for a in articles}
         try:
             return WeeklyBriefingContent.from_llm_payload(
-                tool_call.function.arguments, input_ids=input_ids
+                response.text or "", input_ids=input_ids
             )
         except ValidationError as exc:
             raise BriefingLlmResponseInvalidError(

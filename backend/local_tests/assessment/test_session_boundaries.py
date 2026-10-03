@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
-from local_tests.assessment.support import deepseek_reply, invoke_event, seed_curation
+from local_tests.assessment.support import assessment_reply, invoke_event, seed_curation
 
 
 @pytest.mark.asyncio
@@ -14,7 +14,7 @@ async def test_read_session_is_returned_while_waiting_for_ai(
 ):
     """AI応答の待機中は、貸出接続も実DBのトランザクションも残らない。"""
     target = await seed_curation(system_database, "https://example.com/ai-wait")
-    gate = gated_ai_responses(deepseek_reply())
+    gate = gated_ai_responses(assessment_reply())
     invocation = asyncio.create_task(invoke_event(target))
     try:
         await gate.wait_requested()

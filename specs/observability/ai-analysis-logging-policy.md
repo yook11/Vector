@@ -46,7 +46,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 | Lambdaの失敗記録 | [Assessment](../../backend/app/lambda_handlers/assessment/failure_recorder.py)・[Curation](../../backend/app/lambda_handlers/curation/failure_recorder.py)の処理失敗ログはIDと例外型を記録し、原因文やstackを渡していない。 |
 | 処理期限 | [Assessment Consumer](../../backend/app/analysis/assessment/consumer.py)・[Curation Consumer](../../backend/app/analysis/curation/consumer.py)は業務処理全体を60秒に制限し、失敗後処理はその期限の外で行う。 |
 | 原因の分類 | [Assessment分類](../../backend/app/analysis/assessment/consumer_failure_classification.py)・[Curation分類](../../backend/app/analysis/curation/consumer_failure_classification.py)はproviderの詳細reasonを`failure_reason`へ投影する。 |
-| 内部例外 | [Assessment errors](../../backend/app/analysis/assessment/errors.py)・[Curation errors](../../backend/app/analysis/curation/errors.py)は`provider_error`と`code`を属性で保持する。文字列は標準の空文字となり、診断情報は属性・原因チェーンから取得する。 |
+| 内部例外 | [Assessment errors](../../backend/app/analysis/assessment/errors.py)・[Curation errors](../../backend/app/analysis/curation/errors.py)は工程で確定した失敗だけを表し、`code`を属性で保持する。AIプロバイダーの失敗は工程の例外に包まれず`AIProviderError`のまま伝わる。文字列は標準の空文字となり、診断情報は属性・原因チェーンから取得する。 |
 | 通信の原因 | [Gemini translator](../../backend/app/ai_providers/gemini/error_translator.py)はtimeoutとconnection等を区別する。ログ側で独自の分類を作り直す必要はない。 |
 | 検証失敗 | [Assessment parse](../../backend/app/analysis/assessment/ai/parse.py)には欠落・型違反・値違反等のdefectがあり、未知の検証失敗を元の例外として伝える経路もある。 |
 | 正常結果 | [Assessment Service](../../backend/app/analysis/assessment/service.py)には`in_scope`・`out_of_scope`・`already_assessed`、[Curation Service](../../backend/app/analysis/curation/service.py)にはsignal・noise・処理済みの区別がある。 |
@@ -180,7 +180,8 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | DBで分析済みと確認 | `completed` | `outcome=already_assessed` | `completed` |
 | Curation欠損 | `failed` | `rejection_code=assessment_ready_build_blocked_curation_missing` | `completed` |
 | 分析入力の条件不成立 | `failed` | `rejection_code=assessment_ready_build_blocked_input_invalid` | `completed` |
-| 既存契約でバッチ失敗応答に含める入力不正・処理例外 | `failed` | 既存の入力診断または例外診断 | `batch_item_failure` |
+| 再試行しない失敗（この入力では回復しないprovider失敗、Curation欠損の工程例外） | `failed` | `code`、providerなら`failure_reason`（例: `ai_provider_response_error` / `input_too_long`） | `completed` |
+| 入力不正、再試行する失敗、Consumerから伝播した例外 | `failed` | 既存の入力診断または例外診断 | `batch_item_failure` |
 
 ログは業務処理の成否を表し、`message_disposition`はhandlerが決定したSQS応答への扱いを表す。前提不成立を失敗として記録しても、既存の受信完了・再配信・監査・メトリクスの動作は変えない。既存の拒否値をそのまま使い、ログのために例外化しない。
 
@@ -189,7 +190,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | 共通 | `event` / `timestamp` / `level` / `log_policy` / `service` / `environment` / `stage`。`stage=assessment`、`log_policy=ai_inference`。 |
 | 開始 | `request_id` / `message_id`。`request_id`はLambda context、`message_id`は検証済みSQSレコード由来。 |
 | 完了 | `request_id` / `message_id`、検証・取得済みの`event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id`、`outcome` / `duration_ms` / `message_disposition`。 |
-| 失敗 | 取得済みの相関ID・対象ID、確定できる`operation`、`duration_ms` / `message_disposition`。前提不成立なら`rejection_code`、例外なら既存の`exc_info`変換による診断項目。 |
+| 失敗 | 取得済みの相関ID・対象ID、確定できる`operation`、`duration_ms` / `message_disposition`。前提不成立なら`rejection_code`、再試行しない失敗なら`code`と、providerなら`failure_reason`、例外なら既存の`exc_info`変換による診断項目。 |
 
 未取得の項目は省略し、未検証の入力からIDを補完しない。`operation`は失敗した処理が確定している場合だけ記録する。`duration_ms`は`perf_counter()`で測ったメッセージ開始から終端直前までの経過時間をミリ秒で表す。
 
@@ -215,6 +216,8 @@ handlerは検証済みイベント・対象IDをbindした`message_logger`をCon
 Repositoryの起動時・保存時のカテゴリ整合性チェックは維持し、直接ログは削除する。`CategoryEnumDatabaseMismatchError`の既存メッセージが持つ不足カテゴリを、初期化・メッセージ失敗境界の`exc_info`経由で記録する。専用の`details`やRepositoryへのロガー引数は追加しない。
 
 ### 3.3.3 AssessmentのAI呼び出しとDeepSeek cleanup
+
+> 2026-10-03: 生成モデルを Gemini に統一し、DeepSeek を外した（#529）。本節の DeepSeek の記述は当時の記録。今のイベント名は `assessment_gemini_output_truncated`（`reason=output_truncated`）と `assessment_gemini_response_defect`。`output_tokens` は thinking を含む出力トークン数、`finish_reason` は Gemini の終了理由名で記録する。DeepSeek クライアントの cleanup ログ（`deepseek_client_cleanup_failed`）はなくなった。
 
 Serviceから渡すメッセージ用ロガーを、DeepSeek・Gemini両方の`assess` / `_call_once` / `_call_api`が必須キーワード引数`logger: FilteringBoundLogger`で受け取る。`_call_once`でモデルをbindした派生ロガーを作り、開始・成功の記録と`_call_api`へ渡す。インスタンス属性には保持しない。compositionは`open_deepseek_client`へ呼び出し単位のロガーを渡し、cleanupにはメッセージ情報を持ち込まない。
 
@@ -284,7 +287,7 @@ Consumer全体の期限切れを、providerのread timeoutとして表示しな�
 
 ### 4.3 対処と二次障害
 
-provider例外には回復分類・retryabilityを持たせない。DB障害などの`retryability=retryable`も再試行を実行した記録ではない。SQSバッチ失敗応答に含めた時点では「失敗項目として報告した」と記録し、将来の再配信完了まで断定しない。
+provider例外には回復分類・retryabilityを持たせない。分析の3工程の失敗監査はretryabilityを記録せず、工程がとった扱いを`failure_action`（`retry`／`no_retry`）に記録する。これも再試行を実行した記録ではない。SQSバッチ失敗応答に含めた時点では「失敗項目として報告した」と記録し、将来の再配信完了まで断定しない。
 
 保存済み、rollback済み、保存結果不明も区別する。commit中の通信断等で結果が不明なら、ログの都合で未保存と決めない。
 

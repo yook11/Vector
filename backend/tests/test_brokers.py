@@ -61,20 +61,20 @@ async def test_wire_briefing_adapter_attaches_generator_to_state() -> None:
     briefing の AI provider 選択も composition root で hardcode する設計 (Pure DI) を
     構造的に保証する (analysis と同じ集約点)。
     """
-    from app.insights.briefing.llm import DeepSeekBriefingGenerator
+    from app.insights.briefing.llm import GeminiBriefingGenerator
     from app.queue.composition import _wire_briefing_adapter
 
     state = TaskiqState()
     with patch("app.queue.composition.settings") as mock_settings:
-        mock_settings.deepseek_api_key = SecretStr("test-key")
+        mock_settings.gemini_api_key = SecretStr("test-key")
         await _wire_briefing_adapter(state)
 
-    assert isinstance(state.briefing_generator, DeepSeekBriefingGenerator)
+    assert isinstance(state.briefing_generator, GeminiBriefingGenerator)
 
 
 @pytest.mark.asyncio
 async def test_wire_briefing_adapter_rejects_missing_key_at_startup() -> None:
-    """DeepSeek のキーが無ければ、生成を待たずに worker の起動で失敗する。"""
+    """Gemini のキーが無ければ、生成を待たずに worker の起動で失敗する。"""
     from app.insights.briefing.errors import BriefingConfigurationError
     from app.queue.composition import _wire_briefing_adapter
 
@@ -82,7 +82,7 @@ async def test_wire_briefing_adapter_rejects_missing_key_at_startup() -> None:
         patch("app.queue.composition.settings") as mock_settings,
         pytest.raises(BriefingConfigurationError),
     ):
-        mock_settings.deepseek_api_key = SecretStr("")
+        mock_settings.gemini_api_key = SecretStr("")
         await _wire_briefing_adapter(TaskiqState())
 
 
@@ -93,34 +93,34 @@ async def test_wired_briefing_generator_opens_client_only_when_generating(
     """起動時は client を開かず、生成のたびに briefing 用の接続設定で開く。"""
     from datetime import date
 
-    import httpx
-    import openai
+    from google.genai import errors as genai_errors
 
-    from app.ai_providers.deepseek import client as deepseek_client_module
-    from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
+    from app.ai_providers.gemini import client as gemini_client_module
+    from app.ai_providers.gemini.settings import GeminiConnectionSettings
     from app.insights.briefing.domain.ready import BriefingArticle
     from app.insights.briefing.errors import BriefingLlmError
     from app.queue.composition import _wire_briefing_adapter
 
     opened: list[dict[str, Any]] = []
     sdk = MagicMock()
-    request = httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
     # 応答の組み立てを省くため、SDK の呼び出しは失敗させて client の開き方だけを見る。
-    sdk.chat.completions.create = AsyncMock(
-        side_effect=openai.APIError("upstream", request=request, body=None)
+    sdk.models.generate_content = AsyncMock(
+        side_effect=genai_errors.ServerError(
+            500, {"error": {"status": "INTERNAL", "message": "upstream"}}
+        )
     )
 
     @asynccontextmanager
-    async def fake_open_deepseek_client(**kwargs: Any):
+    async def fake_open_gemini_client(**kwargs: Any):
         opened.append(kwargs)
         yield sdk
 
     monkeypatch.setattr(
-        deepseek_client_module, "open_deepseek_client", fake_open_deepseek_client
+        gemini_client_module, "open_gemini_client", fake_open_gemini_client
     )
     state = TaskiqState()
     with patch("app.queue.composition.settings") as mock_settings:
-        mock_settings.deepseek_api_key = SecretStr("test-key")
+        mock_settings.gemini_api_key = SecretStr("test-key")
         await _wire_briefing_adapter(state)
         assert opened == []
 
@@ -135,18 +135,29 @@ async def test_wired_briefing_generator_opens_client_only_when_generating(
                 ],
             )
 
-    assert [
-        {key: value for key, value in kwargs.items() if key != "logger"}
-        for kwargs in opened
-    ] == [
+    assert opened == [
         {
             "api_key": SecretStr("test-key"),
-            "base_url": "https://api.deepseek.com/beta",
             # タスクの打ち切り(300秒)が先に効くよう、read はそれより長い今の値を保つ。
-            "settings": DeepSeekConnectionSettings(read_timeout=600.0),
-            "max_retries": 2,
+            "settings": GeminiConnectionSettings(read_timeout=600.0),
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_agent_worker_startup_stops_when_external_settings_are_missing() -> None:
+    """agent worker は設定が欠けていれば起動処理で失敗し、run の受信へ進まない。"""
+    from app.queue.composition import _prepare_agent_worker
+
+    with (
+        patch("app.agent.composition.settings") as mock_settings,
+        pytest.raises(RuntimeError, match="GEMINI_API_KEY"),
+    ):
+        mock_settings.gemini_api_key = SecretStr("")
+        mock_settings.agentcore_gateway_url = (
+            "https://gw-test.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com"
+        )
+        await _prepare_agent_worker(TaskiqState())
 
 
 class TestWorkerMaxAsyncTasksCeiling:

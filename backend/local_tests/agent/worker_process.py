@@ -230,11 +230,11 @@ async def main():
             patches.enter_context(
                 patch.object(broker_agent, "_ack_generator", observe_ack)
             )
-            for name in (
-                "activate_gemini_agent_runtime",
-                "activate_evidence_reviewer_runtime",
-            ):
-                patches.enter_context(patch.object(composition, name, runtime_scope))
+            patches.enter_context(
+                patch.object(
+                    composition, "activate_gemini_agent_runtime", runtime_scope
+                )
+            )
             patches.enter_context(
                 patch.object(composition, "activate_external_search", search_scope)
             )

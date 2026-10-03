@@ -26,7 +26,6 @@ from app.agent.answering.evidence_answer.contract import (
 )
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.composition import (
-    activate_evidence_reviewer_runtime,
     activate_external_search,
     activate_gemini_agent_runtime,
     activate_gemini_client,
@@ -207,7 +206,6 @@ async def _probe_search(
     target_time_window: TargetTimeWindow | None,
 ) -> None:
     _require_secret("AGENTCORE_GATEWAY_URL", settings.agentcore_gateway_url or "")
-    _require_secret("DEEPSEEK_API_KEY", settings.deepseek_api_key.get_secret_value())
     _require_secret("GEMINI_API_KEY", settings.gemini_api_key.get_secret_value())
 
     as_of = datetime.now(UTC)
@@ -234,7 +232,7 @@ async def _probe_search(
                 ),
                 reviewer=EvidenceReviewService(
                     agent=EVIDENCE_REVIEWER_AGENT,
-                    runtime_scope_factory=activate_evidence_reviewer_runtime,
+                    runtime_scope_factory=activate_gemini_agent_runtime,
                 ),
                 evidence_answerer=EvidenceAnswerService(
                     agent=EVIDENCE_ANSWER_AGENT,

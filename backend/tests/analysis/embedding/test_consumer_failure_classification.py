@@ -1,193 +1,124 @@
-"""Consumerの失敗分類が副作用やTaskiqの制御を持たないことを検証する。"""
+"""Consumerの失敗から、再配信に任せるか受信完了にするかの判断を検証する。"""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
-from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+from sqlalchemy.exc import OperationalError
 
 from app.ai_providers.errors import (
-    AIProviderConfigurationError,
-    AIProviderInputRejectedError,
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderOutputTruncatedError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-    AIProviderUsageLimitExhaustedError,
-)
-from app.ai_providers.gemini.error_translator import (
-    GeminiContentRejectionReason,
-    GeminiStateReason,
+    AIProviderNotSentError,
+    AIProviderNotSentReason,
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderResultError,
+    AIProviderResultReason,
+    AIProviderTransportError,
 )
 from app.analysis.embedding.consumer_failure_classification import (
+    NoRetryEmbedding,
+    RetryEmbedding,
     classify_embedding_failure,
 )
 from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
     EmbeddingResponseInvalidError,
-    to_embedding_error,
 )
-from app.audit.failure_projection import Retryability
 from app.db.errors import (
     DatabaseConnectionError,
     DatabaseConnectionErrorReason,
     DatabaseConstraintError,
     DatabaseConstraintErrorReason,
-    DatabaseUnexpectedError,
 )
+from app.http.errors import HttpResponseError, HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
+
+_RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
-    ("provider_error", "notified"),
+    "error",
     [
-        (
-            AIProviderNetworkError(reason=GeminiStateReason.TIMEOUT),
-            False,
+        pytest.param(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_TOO_LONG,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
+            id="input_too_long",
         ),
-        (
-            AIProviderServiceUnavailableError(),
-            False,
+        pytest.param(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.INPUT_BLOCKED,
+                http_error=HttpResponseError(status_code=400, received_at=_RECEIVED_AT),
+            ),
+            id="input_blocked_response",
         ),
-        (
-            AIProviderRateLimitedError(),
-            False,
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED),
+            id="input_blocked_result",
         ),
-        (
-            AIProviderUsageLimitExhaustedError(),
-            True,
-        ),
-        (
-            AIProviderInsufficientBalanceError(),
-            True,
-        ),
-        (
-            AIProviderConfigurationError(),
-            False,
-        ),
-        (
-            AIProviderRequestInvalidError(),
-            False,
-        ),
-        (
-            AIProviderOutputTruncatedError(),
-            False,
-        ),
-        (
-            AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY),
-            False,
-        ),
-        (
-            AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
-            False,
-        ),
+        pytest.param(EmbeddingAnalyzedArticleMissingError(), id="article_missing"),
     ],
 )
-def test_provider_classification_preserves_existing_audit_and_notification(
-    provider_error, notified, capsys
-) -> None:
-    """全provider分類で監査コード・原因詳細・枯渇通知対象を維持する。"""
-    error = to_embedding_error(provider_error)
-    failure = classify_embedding_failure(error)
-    assert failure.audit.code == provider_error.CODE
-    assert failure.audit.failure_kind is None
-    assert failure.audit.retryability is None
-    assert failure.audit.failure_reason == (
-        provider_error.reason.value if provider_error.reason is not None else None
-    )
-    assert failure.audit.failure_action is None
-    assert failure.provider_exhaustion is (provider_error if notified else None)
-    assert classify_embedding_failure(error) == failure
-    assert not hasattr(failure, "reraise")
-    assert error.__cause__ is None
+def test_failure_unrecoverable_by_redelivery_is_not_retried(error, capsys) -> None:
+    """同じ入力では変わらない失敗と対象がない失敗は、元の例外のまま受信完了にする。"""
+    assert classify_embedding_failure(error) == NoRetryEmbedding(error)
     assert capsys.readouterr().out == ""
 
 
 @pytest.mark.parametrize(
-    ("error", "code", "kind", "retryability"),
+    "error",
     [
-        (
-            EmbeddingAnalyzedArticleMissingError(),
-            "embedding_analyzed_article_missing",
-            "target_missing",
-            Retryability.NON_RETRYABLE,
+        pytest.param(
+            AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
+            id="ai_not_configured",
         ),
-        (
-            EmbeddingResponseInvalidError(),
-            "embedding_response_invalid",
-            "ai_response_invalid",
-            Retryability.RETRYABLE,
+        pytest.param(
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
+            id="ai_transport_timeout",
         ),
-    ],
-)
-def test_service_failure_reasons(error, code, kind, retryability) -> None:
-    """Service由来の理由をTaskiq例外に変換せず分類する。"""
-    failure = classify_embedding_failure(error)
-    assert failure.audit.code == code
-    assert failure.audit.failure_kind == kind
-    assert failure.audit.retryability is retryability
-    assert failure.provider_exhaustion is None
-
-
-@pytest.mark.parametrize(
-    ("error", "code", "retryability"),
-    [
-        (
+        pytest.param(
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
+                http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
+            ),
+            id="ai_quota_exhausted",
+        ),
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED),
+            id="ai_output_truncated",
+        ),
+        pytest.param(EmbeddingResponseInvalidError(), id="response_invalid"),
+        pytest.param(
             DatabaseConnectionError(
                 reason=DatabaseConnectionErrorReason.CONNECTION_LOST
             ),
-            "db_runtime_error",
-            "retryable",
+            id="db_connection_lost",
         ),
-        (
+        pytest.param(
             DatabaseConstraintError(
                 reason=DatabaseConstraintErrorReason.FOREIGN_KEY_VIOLATION
             ),
-            "db_constraint_error",
-            "non_retryable",
+            id="db_constraint",
         ),
-        (DatabaseUnexpectedError(), "db_unknown_error", "unknown"),
-        (OperationalError("query", {}, Exception()), "db_runtime_error", "retryable"),
-        (
-            IntegrityError("query", {}, Exception()),
-            "db_constraint_error",
-            "non_retryable",
+        pytest.param(
+            OperationalError("query", {}, Exception()), id="sqlalchemy_operational"
         ),
-        (
-            ProgrammingError("query", {}, Exception()),
-            "db_query_or_schema_error",
-            "non_retryable",
-        ),
+        pytest.param(RuntimeError("unexpected"), id="unexpected"),
+        pytest.param(TimeoutError(), id="timeout"),
     ],
 )
-def test_database_failure_uses_shared_projection(error, code, retryability) -> None:
-    """共有DB例外と生のSQLAlchemy例外を既存監査分類へ対応付ける。"""
-    failure = classify_embedding_failure(error)
-    assert failure.audit.code == code
-    assert failure.audit.retryability.value == retryability
-    assert failure.provider_exhaustion is None
-
-
-@pytest.mark.parametrize("error", [RuntimeError("unexpected"), TimeoutError()])
-def test_unexpected_failure_and_timeout_are_not_success(error) -> None:
-    """想定外例外と時間切れを成功や再配信の抑止に変換しない。"""
-    failure = classify_embedding_failure(error)
-    assert failure.audit.code == "unexpected_error"
-    assert failure.audit.retryability is Retryability.UNKNOWN
-    assert failure.provider_exhaustion is None
-
-
-@pytest.mark.parametrize(
-    "error_type", [AIProviderInputRejectedError, AIProviderOutputBlockedError]
-)
-def test_rejection_without_reason_has_nullable_audit_details(error_type) -> None:
-    """理由を省略した拒否でも監査コードを保持し、詳細を補完しない。"""
-    provider = error_type("provider diagnostic")
-    error = to_embedding_error(provider)
-    failure = classify_embedding_failure(error)
-    assert failure.audit.code == provider.CODE
-    assert failure.audit.failure_reason is None
-    assert failure.audit.failure_kind is None
-    assert failure.audit.retryability is None
-    assert error.provider_error is provider
+def test_failure_that_may_recover_or_is_unknown_is_retried(error) -> None:
+    """回復しうる失敗と、DB障害・想定外・時間切れは再配信に任せる。"""
+    assert classify_embedding_failure(error) == RetryEmbedding(error)

@@ -21,8 +21,8 @@ RESEARCH_HANDOFF_PROMPT = AgentPrompt[ResearchHandoffInput](
 RESEARCH_HANDOFF_AGENT: Agent[ResearchHandoffInput, ResearchHandoffDraft] = Agent(
     name="research_handoff",
     prompt=RESEARCH_HANDOFF_PROMPT,
-    model=ModelTarget(provider="gemini", name="gemini-2.5-flash-lite"),
-    model_settings=ModelSettings(temperature=0.1, max_output_tokens=1024),
+    model=ModelTarget(provider="gemini", name="gemini-3.5-flash-lite"),
+    model_settings=ModelSettings(max_output_tokens=1024),
     output_type=ResearchHandoffDraft,
     response_schema=RESEARCH_HANDOFF_GEMINI_SCHEMA,
 )

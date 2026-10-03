@@ -39,7 +39,7 @@ from app.queue.brokers import (
     broker_briefing,
 )
 from app.queue.composition import (
-    _warm_agent_sdk_imports,
+    _prepare_agent_worker,
     _wire_briefing_adapter,
 )
 from app.queue.deadline_schedule import create_deadline_schedule_source
@@ -182,7 +182,7 @@ _register_worker_lifecycle(
         "agent",
         redis_factory=create_worker_agent_live_client,
         redis_attr="agent_live_redis",
-        compose=_warm_agent_sdk_imports,
+        compose=_prepare_agent_worker,
     ),
 )
 

@@ -22,7 +22,15 @@ from app.agent.contract import AnswerGenerationStopped
 from app.agent.phase_span import agent_phase
 from app.agent.planning.failure import PlanningError
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.ai_providers.errors import AIProviderNetworkError
+from app.ai_providers.errors import (
+    AIProviderTransportError,
+)
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,
@@ -166,9 +174,15 @@ def test_cancellation_is_unclassified_and_passes_through(
 def test_ai_provider_error_marks_span_error_with_error_type_and_reraises_same_instance(
     capfire: CaptureLogfire,
 ) -> None:
-    error = AIProviderNetworkError()
+    error = AIProviderTransportError(
+        http_error=HttpTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+            )
+        )
+    )
 
-    with pytest.raises(AIProviderNetworkError) as raised:
+    with pytest.raises(AIProviderTransportError) as raised:
         with agent_phase(
             phase="evidence_collection", agent_name="external_query_generator"
         ):
@@ -204,7 +218,7 @@ def test_agent_response_invalid_error_marks_span_error_with_defect_error_type(
 def test_planning_error_marks_span_error_with_code_and_reraises_same_instance(
     capfire: CaptureLogfire,
 ) -> None:
-    error = PlanningError(code="ai_error_network")
+    error = PlanningError(code="ai_provider_transport_error")
 
     with pytest.raises(PlanningError) as raised:
         with agent_phase(phase="planning", agent_name="question_planner"):

@@ -82,7 +82,7 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 | Assessment | 対象Curationの欠損、翻訳タイトル・要約のReady入力制約違反 | 対象内または対象外の判定が保存済み |
 | Embedding | 対象分析済み記事の欠損、埋め込み入力テキストのReady入力制約違反 | ベクトルが保存済み |
 
-- 各工程のReady側は、不変の`ReadyBuildRejected`値で拒否理由とDB由来記事IDを返す。`ReadyBuildBlockedError`と別の拒否結果を併存させず、ConsumerはReady側から受け取った同じ値を監査へ渡し、受信完了結果として返す。工程間で扱いを揃えるための汎用Consumerや共通基底クラスは要求しない。
+- 各工程のReady側は、不変の`ReadyBuildRejected`値で拒否理由とDB由来記事IDを返す。`ReadyBuildBlockedError`と別の拒否結果を併存させず、ConsumerはReady側から受け取った同じ値を監査へ渡し、その値を持つ再試行しない失敗（`NoRetry*`）として返す。工程間で扱いを揃えるための汎用Consumerや共通基底クラスは要求しない。
 - 処理済みの理由もReady側の同じ拒否値で伝え、Consumerが既存の処理済みCompletionへ対応付ける。処理済みの監査・成功計測を追加しない。
 - Readyモデル生成時の入力検証エラーだけを拒否へ対応付ける。Curationの本文上限超過は既存の`CONTENT_TOO_LARGE`、その他は`INPUT_INVALID`とし、入力制約やEmbeddingテキスト生成ルールを変えない。
 - 拒否監査は`REJECTED`と理由コードを記録し、本文・入力値・検証例外を保存しない。対象欠損では記事IDを補完せず、入力不正ではDB由来IDを使う。通常の監査障害は安全なログとaudit-dropped計測へ退避し、拒否を再配信に戻さない。
@@ -92,9 +92,30 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 - 本ルールは対象の状態・内容からReadyを作れないと確定した場合に適用する。DB取得障害や想定外例外を一括してReady拒否へ変換しない。
 - Assessment／Embeddingの対象欠損はスライス1で理由付きの受信完了へ変更済み。
 
+## 全工程共通の、再試行しない失敗
+
+再配信しても結果が変わらない失敗は、次の処理へ進めないため再配信しない。Curation・Assessment・Embeddingのすべてで、失敗を記録したうえで受信完了とし、SQSのメッセージを削除する。記事データは削除しない。
+
+- Consumerの戻り値は、成功（`*Completion`）、再試行しない失敗（`NoRetry*`）、再試行する失敗（`Retry*`）の3つとする。`NoRetry*`は原因（Ready拒否・AIの例外・工程の例外）を、`Retry*`は元の例外をそのまま持つ。取得Consumerの`RetryAcquisition`／`NoRetryAcquisition`と同じ形にする。
+- 扱いは各工程の`classify_*_failure`が次の表で決める。AIの例外の判断は、3工程で共有する`is_unrecoverable_for_input`に任せる。
+
+| 失敗 | 扱い |
+|---|---|
+| Ready拒否（「全工程共通のReady拒否と受信完了」） | 再試行しない |
+| AIの`input_too_long`（失敗の応答）、`input_blocked`（失敗の応答・生成結果） | 再試行しない |
+| 工程の例外の対象なし（Assessmentの`CURATION_MISSING`、Embeddingの保存時の`ARTICLE_MISSING`） | 再試行しない |
+| それ以外のAIの例外（未知のサブクラスを含む）、応答不正、DB障害、期限切れ、想定外 | 再試行する |
+
+- 入力が原因と断定できない失敗（不正なリクエスト、出力の拒否・打ち切りなど）は、誤って捨てないよう再試行に任せる。人の対応が要る失敗（認証・権限・残高など）は、直したあとにDLQから再投入できるよう再試行に残す。
+- 3工程のServiceはAIの例外を工程の例外で包まずにそのまま伝える。どの工程の失敗かはConsumerと監査のstageで表す。
+- 分類関数は後処理の外で呼び、必ずどちらかを返す。Consumerは失敗の後処理（監査・計測・枯渇通知）のあとに判断をそのまま返し、後処理の通常の障害で判断を変えない。分類関数そのものが例外を出した場合は、その例外が伝播して再配信になる。
+- 失敗の監査には、工程がとった扱いを`failure_action`（`retry`／`no_retry`）として記録し、`retryability`は記録しない。監査上の分類から扱いを導出しない。
+- Lambda入口は、`Retry*`とConsumerから伝播した例外のmessageIdだけを`batchItemFailures`へ含め、`Retry*`の記録は例外と同じにする。`NoRetry*`の失敗はログに`code`と、AIの失敗なら`failure_reason`を残す。ConsumerからSQSの削除APIを呼ばない。
+- backfillは未完了の記事を再投入するため、受信完了にした記事も作成から7日間はbackfill経由で再試行される。backfillの対象から外すことは扱わない。
+
 ## Curationの処理完了と受信完了
 
-Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類とする。Consumerはこれらに加えて前節の理由付きReady拒否を返せる契約とする。AIが返すSignal／Noise、DB上の処理完了、Ready拒否による受信完了は区別する。
+Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類とする。Consumerはこれらに加えて、「全工程共通の、再試行しない失敗」の`NoRetryCuration`と`RetryCuration`を返す。AIが返すSignal／Noise、DB上の処理完了、Ready拒否による受信完了は区別する。
 
 | 結末 | 根拠 | AI・後続イベント |
 |---|---|---|
@@ -104,17 +125,17 @@ Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類�
 
 `SIGNAL`には保存したcuration_idを持たせる。IDまたはNoneだけの戻り値で、Noise保存・処理済み・失敗を混同しない。Repositoryの保存ID／競合時None／例外の契約は維持し、Serviceが正常終了型へ対応付ける。
 
-記事欠損・本文上限超過などのReady拒否は、Serviceの実行前にConsumerが受信完了へ対応付ける。`SIGNAL`・`NOISE`・`ALREADY_CURATED`のいずれかに置き換えたり、Serviceの成功結果を合成したりしない。
+記事欠損・本文上限超過などのReady拒否は、Serviceの実行前にConsumerが`NoRetryCuration`へ対応付ける。`SIGNAL`・`NOISE`・`ALREADY_CURATED`のいずれかに置き換えたり、Serviceの成功結果を合成したりしない。
 
 ## 失敗の扱い
 
-- AI入力・応答、provider、DB、期限切れ、想定外例外を失敗として伝播する。確定したReady拒否は前節の受信完了として扱う。既存のRecoverable／TerminalやTaskiqの再試行回数を新Consumerの制御に使わない。
+- AI入力・応答、provider、DB、期限切れ、想定外例外を失敗として扱い、「全工程共通の、再試行しない失敗」の表で再試行するかを決める。既存のRecoverable／TerminalやTaskiqの再試行回数を新Consumerの制御に使わない。
 - AIによるコンテンツ拒否も例外として扱い、記事DELETEを実行しない。新Consumerは旧`CurationFailureHandler`へ委譲しない。
-- 失敗理由・元の原因を保持し、監査の分類と再配信の制御を分ける。監査上のretryabilityでSQSの成功応答へ変換しない。
+- 失敗理由・元の原因を保持し、監査の分類と再配信の制御を分ける。監査上の分類からSQSの応答を導出しない。
 - 成功保存・成功監査・Outbox・commitの失敗は正常終了に変換しない。同じトランザクションの未確定結果はロールバックする。
 - 失敗監査を別のトランザクションで試み、必要なprovider枯渇通知などの後処理は既存Consumerの責務分担に揃える。旧メトリクスの区分・値の互換維持は要求しない。
 - 監査・ログ・終了処理の通常の二次障害で元例外を上書きしない。本文・秘密情報・SDK例外の自由文を配送診断へ追加しない。キャンセルやプロセス終了を正常終了にしない。
-- Lambda入口は個別イベント入力不正・Consumer実行失敗のmessageIdだけを`batchItemFailures`へ返す。処理済み・Ready拒否のmessageIdは含めない。初期化やバッチ構造の不正はバッチ全体の失敗として伝播する。
+- Lambda入口は個別イベント入力不正、`RetryCuration`、Consumerから伝播した例外のmessageIdだけを`batchItemFailures`へ返す。処理済みと`NoRetryCuration`のmessageIdは含めない。初期化やバッチ構造の不正はバッチ全体の失敗として伝播する。
 - 新経路に独自の再試行、stage hold、日次投入上限、Redis接続を追加しない。個別失敗の再配信と最終的なDLQ移動はSQS側の設定に任せる。
 
 ## 資源管理・実行設定

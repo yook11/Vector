@@ -17,12 +17,17 @@ from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
-from app.ai_providers.deepseek.error_translator import DeepSeekStateReason
 from app.ai_providers.errors import (
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
+    AIProviderResultError,
+    AIProviderResultReason,
+    AIProviderTransportError,
 )
-from app.ai_providers.gemini.error_translator import GeminiContentRejectionReason
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.evidence_review._builders import AS_OF
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
@@ -45,18 +50,19 @@ def test_evidence_review_error_rejects_blank_code(code: str) -> None:
             id="runtime-defect",
         ),
         pytest.param(
-            AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT),
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
             "timeout",
             id="provider-reason",
         ),
         pytest.param(
-            AIProviderNetworkError(),
-            "ai_error_network",
-            id="provider-code",
-        ),
-        pytest.param(
-            AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
-            "safety",
+            AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
+            "output_blocked_safety",
             id="provider-content-reason",
         ),
         pytest.param(TimeoutError("SECRET_TIMEOUT_MESSAGE"), "reviewer_timeout"),
@@ -65,8 +71,8 @@ def test_evidence_review_error_rejects_blank_code(code: str) -> None:
 def test_evidence_review_error_from_maps_source_to_safe_code(
     cause: (
         AgentResponseInvalidError
-        | AIProviderNetworkError
-        | AIProviderOutputBlockedError
+        | AIProviderTransportError
+        | AIProviderResultError
         | TimeoutError
     ),
     expected_code: str,

@@ -28,8 +28,8 @@ def test_provider_is_gemini() -> None:
     assert GEMINI_CURATION_SPEC.provider == "gemini"
 
 
-def test_model_is_flash_lite_25() -> None:
-    assert GEMINI_CURATION_SPEC.model == "gemini-2.5-flash-lite"
+def test_model_is_flash_lite_35() -> None:
+    assert GEMINI_CURATION_SPEC.model == "gemini-3.5-flash-lite"
 
 
 def test_response_schema_is_gemini_extraction_response() -> None:
@@ -39,13 +39,14 @@ def test_response_schema_is_gemini_extraction_response() -> None:
 def test_gen_config_is_mapping_proxy_and_immutable() -> None:
     assert isinstance(GEMINI_CURATION_SPEC.gen_config, MappingProxyType)
     with pytest.raises(TypeError):
-        GEMINI_CURATION_SPEC.gen_config["temperature"] = 0.5  # type: ignore[index]
+        GEMINI_CURATION_SPEC.gen_config["max_output_tokens"] = 1  # type: ignore[index]
 
 
-def test_gen_config_has_required_fields() -> None:
-    assert GEMINI_CURATION_SPEC.gen_config["temperature"] == 0.2
-    assert GEMINI_CURATION_SPEC.gen_config["max_output_tokens"] == 2048
-    assert GEMINI_CURATION_SPEC.gen_config["response_mime_type"] == "application/json"
+def test_gen_config_leaves_temperature_to_the_gemini_3_default() -> None:
+    assert dict(GEMINI_CURATION_SPEC.gen_config) == {
+        "max_output_tokens": 2048,
+        "response_mime_type": "application/json",
+    }
 
 
 def test_system_instruction_is_none() -> None:

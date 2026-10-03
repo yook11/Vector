@@ -15,7 +15,7 @@ from local_tests.assessment.support import (
 async def test_missing_unused_category_prevents_article_processing(
     system_database,
     assessment_runtime,
-    deepseek_response,
+    gemini_response,
     notification_response,
 ):
     """AIが使う予定のないカテゴリーの不足でも、記事処理を開始しない。"""
@@ -29,7 +29,7 @@ async def test_missing_unused_category_prevents_article_processing(
         await invoke_event(target)
 
     assert caught.value.missing == {"computing"}
-    deepseek_response.assert_not_awaited()
+    gemini_response.assert_not_awaited()
     notification_response.assert_not_awaited()
     saved = await fetch_stored_assessment(system_database, target.curation_id)
     assert saved.in_scope == saved.out_of_scope == saved.audits == saved.outbox == []
@@ -37,7 +37,7 @@ async def test_missing_unused_category_prevents_article_processing(
 
 @pytest.mark.asyncio
 async def test_catalog_read_failure_prevents_article_processing(
-    system_database, assessment_runtime, deepseek_response, notification_response
+    system_database, assessment_runtime, gemini_response, notification_response
 ):
     """カテゴリーを読めないDB障害でも、記事処理を開始しない。"""
     target = await seed_curation(
@@ -51,7 +51,7 @@ async def test_catalog_read_failure_prevents_article_processing(
     with pytest.raises(DatabaseUnexpectedError):
         await invoke_event(target)
 
-    deepseek_response.assert_not_awaited()
+    gemini_response.assert_not_awaited()
     notification_response.assert_not_awaited()
     async with system_database.connect("vector") as connection:
         counts = await connection.fetchrow(
@@ -70,12 +70,12 @@ async def test_catalog_read_failure_prevents_article_processing(
 
 @pytest.mark.asyncio
 async def test_next_invocation_rechecks_catalog_after_success(
-    system_database, assessment_runtime, deepseek_response, notification_response
+    system_database, assessment_runtime, gemini_response, notification_response
 ):
     """前回の検証成功をキャッシュせず、次の呼び出しでも不足を検知する。"""
     target = await seed_curation(system_database, "https://example.com/recheck-catalog")
     assert await invoke_event(target) == {"batchItemFailures": []}
-    deepseek_response.reset_mock()
+    gemini_response.reset_mock()
     notification_response.reset_mock()
     async with system_database.connect("vector") as connection:
         await connection.execute("DELETE FROM categories WHERE slug='computing'")
@@ -84,5 +84,5 @@ async def test_next_invocation_rechecks_catalog_after_success(
         await invoke_event(target)
 
     assert caught.value.missing == {"computing"}
-    deepseek_response.assert_not_awaited()
+    gemini_response.assert_not_awaited()
     notification_response.assert_not_awaited()

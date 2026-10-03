@@ -419,7 +419,7 @@ async def start_agent_workers(database, log_directory):
             "CROSSREF_CONTACT_EMAIL": "crossref-contact@example.invalid",
             "FRONTEND_URL": "http://localhost:3000",
             "INTERNAL_FRONTEND_BASE_URL": "http://localhost:3000",
-            "DEEPSEEK_API_KEY": "local-test",
+            "GEMINI_API_KEY": "local-test",
             "AGENTCORE_GATEWAY_URL": "https://test.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
         }
         processes = {}
