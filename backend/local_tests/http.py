@@ -2,7 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 
-import httpx
+import httpx2
 
 
 class StubHttp:
@@ -10,17 +10,17 @@ class StubHttp:
 
     def __init__(
         self,
-        respond: Callable[[httpx.Request], Awaitable[httpx.Response]],
+        respond: Callable[[httpx2.Request], Awaitable[httpx2.Response]],
     ):
         self._respond = respond
-        self.requests: list[httpx.Request] = []
+        self.requests: list[httpx2.Request] = []
 
-    async def _handle(self, request: httpx.Request) -> httpx.Response:
+    async def _handle(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         return await self._respond(request)
 
-    def create_client(self, **kwargs) -> httpx.AsyncClient:  # noqa: TID251
-        return httpx.AsyncClient(  # noqa: TID251
-            transport=httpx.MockTransport(self._handle),
+    def create_client(self, **kwargs) -> httpx2.AsyncClient:  # noqa: TID251
+        return httpx2.AsyncClient(  # noqa: TID251
+            transport=httpx2.MockTransport(self._handle),
             **kwargs,
         )

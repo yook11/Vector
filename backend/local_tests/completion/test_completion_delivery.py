@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
-import httpx
+import httpx2
 import pytest
 
 from app.lambda_handlers import article_fetch_lifecycle
@@ -94,7 +94,7 @@ async def test_failed_messages_are_returned_and_later_article_completes(
     )
 
     page_response.side_effect = [
-        httpx.Response(429, headers={"Retry-After": "120"}),
+        httpx2.Response(429, headers={"Retry-After": "120"}),
         article_response("Successfully completed article"),
     ]
     batch = {
@@ -132,7 +132,7 @@ async def test_committed_closed_article_is_acknowledged(
 ):
     """403でclosedを確定した記事は、再配信対象に含めない。"""
     article = await seed_pending(system_database, "https://example.com/forbidden")
-    page_response.return_value = httpx.Response(403)
+    page_response.return_value = httpx2.Response(403)
 
     response = await asyncio.to_thread(
         delivery_runtime.handler,
@@ -225,7 +225,7 @@ async def test_redelivery_completes_previously_retryable_article(
     """再試行対象と返した同じメッセージを再受信すると完成まで進められる。"""
     target = await seed_pending(system_database, "https://example.com/redelivery")
     batch = {"Records": [message("retry", target)]}
-    page_response.return_value = httpx.Response(429, headers={"Retry-After": "120"})
+    page_response.return_value = httpx2.Response(429, headers={"Retry-After": "120"})
     assert await asyncio.to_thread(
         delivery_runtime.handler, batch, delivery_runtime.context
     ) == {"batchItemFailures": [{"itemIdentifier": "retry"}]}
@@ -251,7 +251,7 @@ async def test_failed_close_commit_is_reported_for_redelivery(
 ):
     """closedの実DB確定失敗では未完成行を残し、受信完了にしない。"""
     target = await seed_pending(system_database, "https://example.com/close-failure")
-    page_response.return_value = httpx.Response(403)
+    page_response.return_value = httpx2.Response(403)
     with control_commit(target, phase="closed", fail=True) as fault:
         response = await asyncio.to_thread(
             delivery_runtime.handler,
@@ -315,7 +315,7 @@ async def test_http_retry_time_reaches_visibility_and_partial_response(
     """実Consumerの429待機時刻が可視性変更へ届いても再配信対象を維持する。"""
     target = await seed_pending(system_database, "https://example.com/wait")
     retry_time = delivery_runtime.now + timedelta(minutes=10)
-    page_response.return_value = httpx.Response(
+    page_response.return_value = httpx2.Response(
         429, headers={"Retry-After": format_datetime(retry_time, usegmt=True)}
     )
     response = await asyncio.to_thread(
@@ -342,7 +342,7 @@ async def test_visibility_failure_keeps_article_open_for_redelivery(
 ):
     """可視性変更の障害で実DBの記事をclosed化せず再配信対象にする。"""
     target = await seed_pending(system_database, "https://example.com/wait-failure")
-    page_response.return_value = httpx.Response(429, headers={"Retry-After": "120"})
+    page_response.return_value = httpx2.Response(429, headers={"Retry-After": "120"})
     delivery_runtime.sqs.change_message_visibility.side_effect = RuntimeError(
         "private-sqs"
     )
@@ -386,7 +386,7 @@ async def test_sqs_cleanup_failure_preserves_delivery_response(
 ):
     """待機設定後のクライアント解放障害でもDB結果と再配信応答を保つ。"""
     target = await seed_pending(system_database, "https://example.com/wait-cleanup")
-    page_response.return_value = httpx.Response(429, headers={"Retry-After": "120"})
+    page_response.return_value = httpx2.Response(429, headers={"Retry-After": "120"})
     delivery_runtime.sqs.close.side_effect = RuntimeError("private-close")
     response = await asyncio.to_thread(
         delivery_runtime.handler,
@@ -426,9 +426,9 @@ async def test_acquired_incomplete_article_reaches_completion_through_relay(
     monkeypatch.setattr(
         rss_reader,
         "make_external_async_client",
-        lambda **kwargs: httpx.AsyncClient(  # noqa: TID251
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, text=feed)
+        lambda **kwargs: httpx2.AsyncClient(  # noqa: TID251
+            transport=httpx2.MockTransport(
+                lambda request: httpx2.Response(200, text=feed)
             ),
             **kwargs,
         ),

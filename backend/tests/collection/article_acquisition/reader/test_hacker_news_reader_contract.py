@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2
 import pytest
 
 from app.collection.article_acquisition.reader.algolia_hn_reader import (
@@ -39,11 +39,11 @@ def _raw_hits() -> list[dict[str, Any]]:
     return list(raw["hits"])
 
 
-def _response(status_code: int, content: bytes) -> httpx.Response:
-    return httpx.Response(
+def _response(status_code: int, content: bytes) -> httpx2.Response:
+    return httpx2.Response(
         status_code=status_code,
         content=content,
-        request=httpx.Request("GET", "https://hn.algolia.com/api/v1/search_by_date"),
+        request=httpx2.Request("GET", "https://hn.algolia.com/api/v1/search_by_date"),
     )
 
 
@@ -58,7 +58,7 @@ async def _reader_entries() -> list[HackerNewsEntry]:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 
@@ -89,7 +89,7 @@ async def _raise_through(status_code: int) -> None:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 
@@ -115,7 +115,7 @@ async def _fetch_body(content: bytes) -> list[HackerNewsEntry]:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 

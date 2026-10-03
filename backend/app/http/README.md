@@ -12,6 +12,7 @@
 | `destination_resolution.py` | DNS解決と、その結果への共通方針の適用 | 解決結果に非公開IPが含まれれば拒否する。実際の接続先は保証しない |
 | `external.py` | 標準transportによる送信時の適用 | IP直書きを再検証し、DNS名には解決・検証を適用する。呼び出し側の事前検証に依存しない |
 | `settings.py` | 外部クライアントのプロキシ経路の確定 | 必須のプロキシURLを内部namespaceに限定する。設定不備はtransport生成前に拒否する |
+| `tls.py` | TLSの接続相手を検証する基準 | external・internalの両方でcertifiの一覧を使い、httpsのプロキシとのTLSにも同じ一覧を使う。httpx2既定のOSの証明書ストアは使わず、呼び出し側の`verify`指定は上書きする |
 | プロキシ | 自身が解決した接続先の検査と、実行単位ごとの制限 | 非公開IP・ポート・許可ドメインをACLで制限する |
 | 利用機能 | 失敗の意味づけ | 宛先拒否やDNS失敗を、記事取得失敗などへ変換する |
 
@@ -55,7 +56,7 @@ consumer専用の設定も同じプロキシ設定内で定義する。
 
 アプリとプロキシのDNS解決結果が同じとは限らないため、プロキシ側の非公開IP拒否が必要になる。
 通常経路でアプリは接続先をIPへ書き換えず、アプリで検証したIPへの接続を保証するわけではない。
-httpcoreのCONNECTトンネルは`sni_hostname`を引き継がないため、IPへの書換えはTLSのホスト名検証を壊す。
+プロキシは元のホスト名で許可ドメインを判定するため、プロキシ経路ではIPに書き換えない。
 
 既存の`_PinnedDnsTransport`をプロキシなしで構築した場合は、検証した最初のIPへ接続先を固定し、
 HostヘッダーとTLS SNIを元のホスト名に保つ。
@@ -112,7 +113,7 @@ AIプロバイダーの変換器も、通信失敗を`http_transport_error_from_
 
 ### プロキシについて観測できる範囲
 
-HTTPSのCONNECTが非2xxなら、導入済みHTTPX/httpcoreは`ProxyError`を返す。
+HTTPSのCONNECTが非2xxなら、HTTPX2/httpcore2は`ProxyError`を返す。
 例外に構造化statusがないため、共通分類器がメッセージ先頭の3桁を読み取り、読めなければ`None`を保持する。
 HTTP転送では403も通常の応答として返り得るため、statusや`X-Squid-Error`等のヘッダーだけでプロキシ拒否へ変換しない。
 CONNECT成功後に受け取った403も、CONNECTそのものの拒否とは区別する。
@@ -120,7 +121,7 @@ CONNECT成功後に受け取った403も、CONNECTそのものの拒否とは区
 プロキシのTCP接続が失敗した場合は`ConnectError`になることがあり、必ず`ProxyError`になるとは限らない。
 現在の分類器は経路情報を受け取らないため、この場合は`CONNECT / NETWORK_IO`など確認できた事実だけを保持する。
 経路を識別する情報の追加や、通常応答の生成元を確定する仕組みは今回の共通化に含めない。
-機構の違いは[HTTPXのプロキシ説明](https://www.python-httpx.org/advanced/proxies/)と
+機構の違いは、HTTPX2が引き継いだ[HTTPXのプロキシ説明](https://www.python-httpx.org/advanced/proxies/)と
 [例外定義](https://www.python-httpx.org/exceptions/)を参照する。
 
 ### 利用機能の既存判断
@@ -141,7 +142,8 @@ CONNECT 403を含むプロキシ失敗は通信失敗として再試行可能に
 | [実Squidの宛先・送信元試験](../../../infra/squid/README.md) | HTTP・CONNECTの宛先制限、送信元ごとの許可、管理機能の拒否（隔離したローカル環境） |
 | `test_http/test_settings.py` | 必須のプロキシ設定と、呼び出し側からの経路上書きの拒否 |
 | `test_http/test_failure.py`・`test_http/test_error_mapping.py` | DNS失敗の分類と、宛先拒否を通信失敗に混ぜないこと |
-| `test_http/test_proxy_failure.py` | HTTPX/httpcoreを通したCONNECT拒否・通常応答・TCP障害の区別（ネットワークとTLSはモック） |
+| `test_http/test_proxy_failure.py` | HTTPX2/httpcore2を通したCONNECT拒否・通常応答・TCP障害の区別（ネットワークとTLSはモック） |
+| `test_http/test_tls_verification.py` | external・internalのTLSがcertifiの一覧で接続相手を検証し、呼び出し側の`verify`指定で外れないこと |
 | `test_shared/test_web_url.py` | WebUrlの形式の契約と、宛先を判定しないこと |
 | AWS試験用`test_snapshot.py` | JSONの同梱・内容保持と、保存されたTerraformからの相対参照 |
 

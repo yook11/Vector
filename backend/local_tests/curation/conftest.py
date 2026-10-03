@@ -7,7 +7,7 @@ from queue import Empty, Queue
 from threading import Event
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import text
@@ -47,8 +47,8 @@ def curation_runtime(system_database, monkeypatch, gemini_response):
 
     def http_factory(**kwargs):
         kwargs.pop("retries")
-        return httpx.AsyncClient(  # noqa: TID251
-            transport=httpx.MockTransport(gemini_response), **kwargs
+        return httpx2.AsyncClient(  # noqa: TID251
+            transport=httpx2.MockTransport(gemini_response), **kwargs
         )
 
     monkeypatch.setattr(gemini_module, "make_external_async_client", http_factory)
@@ -61,7 +61,7 @@ async def wait_for_signal(signal, message):
 
 @dataclass
 class AiResponseGate:
-    response: httpx.Response
+    response: httpx2.Response
     requested: Event = field(default_factory=Event)
     allow_response: Event = field(default_factory=Event)
 

@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 
 from app.collection.article_acquisition.tools.source_http import (
@@ -21,19 +21,19 @@ from app.http.failure import (
 _URL = "https://example.com/feed"
 
 
-def _client(*, response: httpx.Response | None = None, error: Exception | None = None):
-    client = AsyncMock(spec=httpx.AsyncClient)
+def _client(*, response: httpx2.Response | None = None, error: Exception | None = None):
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.get = AsyncMock(return_value=response, side_effect=error)
     return client
 
 
 def _response(
     status_code: int, headers: dict[str, str] | None = None
-) -> httpx.Response:
-    return httpx.Response(
+) -> httpx2.Response:
+    return httpx2.Response(
         status_code=status_code,
         headers=headers,
-        request=httpx.Request("GET", _URL),
+        request=httpx2.Request("GET", _URL),
     )
 
 
@@ -57,14 +57,14 @@ async def test_unsuccessful_response_keeps_status_retry_after_and_receipt() -> N
     assert caught.value.retry_after == " 120 "
     assert caught.value.received_at.tzinfo is UTC
     assert before <= caught.value.received_at <= after
-    assert isinstance(caught.value.__cause__, httpx.HTTPStatusError)
+    assert isinstance(caught.value.__cause__, httpx2.HTTPStatusError)
 
 
 @pytest.mark.parametrize(
     ("error", "failure"),
     [
         (
-            httpx.ReadTimeout("private-detail"),
+            httpx2.ReadTimeout("private-detail"),
             HttpTransportFailure(
                 HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             ),
@@ -90,7 +90,7 @@ async def test_transport_failure_becomes_common_transport_error(
 
 @pytest.mark.parametrize(
     "error",
-    [HostBlockedError(), httpx.UnsupportedProtocol("private-detail")],
+    [HostBlockedError(), httpx2.UnsupportedProtocol("private-detail")],
 )
 async def test_destination_block_and_unclassified_failure_propagate_unchanged(
     error: Exception,

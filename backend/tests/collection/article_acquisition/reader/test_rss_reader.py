@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2
 import pytest
 
 from app.collection.article_acquisition.reader.read_errors import (
@@ -72,28 +72,28 @@ def _mock_response(
     text: str = "",
     content: bytes | None = None,
     headers: dict[str, str] | None = None,
-) -> httpx.Response:
+) -> httpx2.Response:
     if content is not None:
-        return httpx.Response(
+        return httpx2.Response(
             status_code=status_code,
             content=content,
             headers=headers or {},
-            request=httpx.Request("GET", _ENDPOINT),
+            request=httpx2.Request("GET", _ENDPOINT),
         )
-    return httpx.Response(
+    return httpx2.Response(
         status_code=status_code,
         text=text,
         headers=headers or {},
-        request=httpx.Request("GET", _ENDPOINT),
+        request=httpx2.Request("GET", _ENDPOINT),
     )
 
 
-def _patch_safe_client(response_or_exc: httpx.Response | Exception) -> Any:
+def _patch_safe_client(response_or_exc: httpx2.Response | Exception) -> Any:
     """``make_external_async_client`` を fake ``async with`` context に差し替える。"""
 
     @asynccontextmanager
     async def _fake_safe_client(**_kwargs: Any) -> Any:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         if isinstance(response_or_exc, Exception):
             client.get = AsyncMock(side_effect=response_or_exc)
         else:

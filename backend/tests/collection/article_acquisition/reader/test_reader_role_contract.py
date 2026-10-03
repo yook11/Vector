@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2
 import pytest
 
 from app.collection.article_acquisition.reader.algolia_hn_reader import HackerNewsReader
@@ -129,15 +129,15 @@ async def _run(m: _Mechanism) -> object:
     bytes 取り出し / parse は機構実装の本物が動く。
     """
     raw = (_FIXTURES_DIR / m.fixture).read_bytes()
-    response = httpx.Response(
+    response = httpx2.Response(
         status_code=200,
         content=raw,
-        request=httpx.Request("GET", _URL),
+        request=httpx2.Request("GET", _URL),
     )
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 

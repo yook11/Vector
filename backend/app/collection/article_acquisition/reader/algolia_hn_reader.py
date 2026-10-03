@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar
 
-import httpx
+import httpx2
 import structlog
 
 from app.collection.article_acquisition.reader.read_errors import (
@@ -21,7 +21,7 @@ from app.http.external import make_external_async_client
 logger = structlog.get_logger(__name__)
 
 _USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
-_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+_HTTP_TIMEOUT = httpx2.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +88,6 @@ class HackerNewsReader:
 
         async with make_external_async_client(
             headers={"User-Agent": _USER_AGENT},
-            verify=True,
             timeout=_HTTP_TIMEOUT,
         ) as client:
             response = await get_source_response(

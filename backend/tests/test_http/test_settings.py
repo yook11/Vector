@@ -2,6 +2,7 @@
 
 from unittest.mock import Mock
 
+import httpx2
 import pytest
 from pydantic import ValidationError
 
@@ -47,7 +48,10 @@ async def test_factory_reads_environment_each_time_without_cache(monkeypatch):
     for value in ("http://proxy.vector.internal:3128", "https://proxy.vector.internal"):
         monkeypatch.setenv("EGRESS_PROXY_URL", value)
         async with external.make_external_async_client():
-            assert constructor.call_args.kwargs["proxy"] == value
+            proxy = constructor.call_args.kwargs["proxy"]
+            # httpsのプロキシは、検証contextを持つProxyとして渡る。
+            proxy_url = proxy.url if isinstance(proxy, httpx2.Proxy) else proxy
+            assert proxy_url == value
     assert constructor.call_count == 2
     monkeypatch.setenv("EGRESS_PROXY_URL", "http://untrusted.invalid")
     with pytest.raises(ValidationError):

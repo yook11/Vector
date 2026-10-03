@@ -4,7 +4,7 @@ import asyncio
 import json
 from threading import Event
 
-import httpx
+import httpx2
 import pytest
 
 from app.analysis.assessment import consumer as consumer_module
@@ -178,7 +178,7 @@ async def test_http_failure_records_failure_and_next_article_succeeds(
 ):
     """SDK通信失敗を失敗監査・応答へ反映し、次の記事を正常に処理できる。"""
     target = await seed_curation(system_database, "https://example.com/http-error")
-    gemini_response.side_effect = httpx.ConnectError("test connection failure")
+    gemini_response.side_effect = httpx2.ConnectError("test connection failure")
 
     response = await invoke_event(target)
 
@@ -270,7 +270,7 @@ async def test_notification_observes_committed_article(
     async def observe(request):
         saved = await fetch_stored_assessment(system_database, target.curation_id)
         observed_articles.extend(saved.in_scope)
-        return httpx.Response(200, json={"ok": True})
+        return httpx2.Response(200, json={"ok": True})
 
     notification_response.side_effect = observe
     await invoke_event(target)
@@ -282,7 +282,7 @@ async def test_notification_observes_committed_article(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failure",
-    [httpx.Response(500), httpx.ConnectError("notification unavailable")],
+    [httpx2.Response(500), httpx2.ConnectError("notification unavailable")],
     ids=["http-500", "network-unavailable"],
 )
 async def test_notification_failure_preserves_saved_article_and_success_response(

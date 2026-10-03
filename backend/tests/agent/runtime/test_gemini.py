@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
-import httpx
+import httpx2
 import pytest
 from google.genai import errors as genai_errors
 
@@ -328,7 +328,7 @@ async def test_non_stream_prompt_feedback_precedes_candidate_safety() -> None:
 
 async def test_known_gemini_failure_uses_existing_error_translation() -> None:
     """既知の Gemini 障害を既存のアプリケーション例外へ翻訳する。"""
-    error = httpx.ReadTimeout("PROVIDER_SENTINEL_TIMEOUT_79ab")
+    error = httpx2.ReadTimeout("PROVIDER_SENTINEL_TIMEOUT_79ab")
     client = FakeGeminiClient([error])
     runtime = GeminiAgentRuntime(client=client)
 

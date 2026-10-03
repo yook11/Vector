@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-import httpx
+import httpx2
 import pytest
 
 from app.analysis.embedding.service import EmbeddingCompletion
@@ -28,7 +28,7 @@ async def test_redelivered_event_completes_without_overwriting_saved_embedding(
     first_vector = [(index - 384) / 512 for index in range(768)]
     # 重複配送で誤って上書きすると気づけるように、初回とは異なるAI応答を用意する。
     redelivered_vector = [-value for value in first_vector]
-    gemini_response.return_value = httpx.Response(
+    gemini_response.return_value = httpx2.Response(
         200, json={"embeddings": [{"values": first_vector}]}
     )
 
@@ -44,7 +44,7 @@ async def test_redelivered_event_completes_without_overwriting_saved_embedding(
         first_vector, abs=0.001
     )
 
-    gemini_response.return_value = httpx.Response(
+    gemini_response.return_value = httpx2.Response(
         200, json={"embeddings": [{"values": redelivered_vector}]}
     )
 

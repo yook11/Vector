@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from html import escape
 from importlib import import_module
 
-import httpx
+import httpx2
 
 from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
@@ -36,7 +36,7 @@ def article_response(marker="Target discovery"):
         "during three separate observation periods. These measurements will help "
         "the team evaluate its next generation of sensors and plan further studies."
     )
-    return httpx.Response(
+    return httpx2.Response(
         200,
         headers={"Content-Type": "text/html; charset=utf-8"},
         text=f"<html><head><title>HTML title</title></head><body>"

@@ -5,11 +5,12 @@ import json
 from dataclasses import dataclass, field
 from unittest.mock import AsyncMock
 
-import httpcore
+import httpcore2
 import httpx
+import httpx2
 import pytest
 from google.genai import errors, types
-from httpcore._backends.auto import AutoBackend
+from httpcore2._backends.auto import AutoBackend
 from pydantic import SecretStr
 
 from app.agent import composition
@@ -20,6 +21,12 @@ from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.embedding.embedder import GeminiEmbedder
 from tests.agent.runtime._helpers import RuntimeOutput, make_agent
+from tests.test_http._proxy_exchange import (
+    PROXY_URL,
+    PUBLIC_ADDRESS,
+    ProxyExchange,
+    install_proxy_exchange,
+)
 
 _MODEL = "gemini-test-model"
 _TEXT = "synthetic user request"
@@ -32,34 +39,11 @@ _GENERATED = {
 
 
 @dataclass
-class ResponseBody:
-    chunks: tuple[bytes, ...] = ()
-    closed: bool = False
-    waiting: asyncio.Event = field(default_factory=asyncio.Event)
-    resume: asyncio.Event | None = None
-
-    async def __aiter__(self):
-        for chunk in self.chunks:
-            yield chunk
-        if self.resume is not None:
-            self.waiting.set()
-            await self.resume.wait()
-
-    async def aclose(self):
-        self.closed = True
-
-
-@dataclass
-class Exchange:
-    status: int = 200
+class SdkExchange(ProxyExchange):
     headers: list[tuple[bytes, bytes]] = field(
         default_factory=lambda: [(b"content-type", b"application/json")]
     )
-    body: ResponseBody = field(default_factory=ResponseBody)
-    requests: list[httpcore.Request] = field(default_factory=list)
-    request_bodies: list[dict] = field(default_factory=list)
-    clients: list[httpx.AsyncClient] = field(default_factory=list)
-    error: Exception | None = None
+    clients: list[httpx2.AsyncClient] = field(default_factory=list)
 
     def respond_json(self, payload):
         self.body.chunks = (json.dumps(payload).encode(),)
@@ -70,19 +54,18 @@ class Exchange:
             f"data: {json.dumps(payload)}\n\n".encode() for payload in payloads
         )
 
+    def request_json(self, index):
+        return json.loads(self.request_bodies[index])
+
 
 @pytest.fixture
 def exchange(monkeypatch):
-    """DNSとproxy送受信を模擬し、注入client以外からの送信を拒否する。"""
-    result = Exchange()
+    """DNSとproxy送受信を模擬し、注入したHTTPX2 client以外からの送信を拒否する。"""
+    result = SdkExchange()
     result.respond_json(_GENERATED)
-    monkeypatch.setenv("EGRESS_PROXY_URL", "http://proxy.vector.internal:3128")
-    monkeypatch.setattr(
-        "app.http.destination_resolution._resolve_host",
-        AsyncMock(return_value=["93.184.216.34"]),
-    )
+    install_proxy_exchange(monkeypatch, result)
     original_factory = module.make_external_async_client
-    original_send = httpx.AsyncClient.send
+    original_send = httpx2.AsyncClient.send
 
     def factory(**kwargs):
         client = original_factory(**kwargs)
@@ -96,20 +79,15 @@ def exchange(monkeypatch):
     def reject_sync_send(*args, **kwargs):
         pytest.fail("SDK attempted synchronous HTTP I/O")
 
-    async def respond(self, request):
-        result.requests.append(request)
-        raw = b"".join([part async for part in request.stream])
-        result.request_bodies.append(json.loads(raw))
-        if result.error is not None:
-            raise result.error
-        return httpcore.Response(
-            result.status, headers=result.headers, content=result.body
-        )
+    async def reject_legacy_send(*args, **kwargs):
+        pytest.fail("SDK sent through the legacy httpx client")
 
     monkeypatch.setattr(module, "make_external_async_client", factory)
-    monkeypatch.setattr(httpx.AsyncClient, "send", send_only_injected)
+    monkeypatch.setattr(httpx2.AsyncClient, "send", send_only_injected)
+    monkeypatch.setattr(httpx2.Client, "send", reject_sync_send)
+    # SDKは旧httpxにも依存するため、そちらから送信していないことも確かめる。
+    monkeypatch.setattr(httpx.AsyncClient, "send", reject_legacy_send)
     monkeypatch.setattr(httpx.Client, "send", reject_sync_send)
-    monkeypatch.setattr(httpcore.AsyncHTTPProxy, "handle_async_request", respond)
     return result
 
 
@@ -144,7 +122,7 @@ async def test_generation_sends_declared_model_prompt_and_options(exchange):
     assert request.method == b"POST"
     assert request.url.host == b"generativelanguage.googleapis.com"
     assert request.url.target == b"/v1beta/models/gemini-test-model:generateContent"
-    body = exchange.request_bodies[0]
+    body = exchange.request_json(0)
     assert body["contents"] == [{"role": "user", "parts": [{"text": _TEXT}]}]
     assert body["systemInstruction"]["parts"] == [
         {"text": "synthetic system instruction"}
@@ -189,7 +167,7 @@ async def test_runtime_structured_output_survives_sdk_serialization(exchange):
             make_agent(), "input", attempt_number=1
         )
     assert output == RuntimeOutput(result="accepted", tags=["sdk"])
-    config = exchange.request_bodies[0]["generationConfig"]
+    config = exchange.request_json(0)["generationConfig"]
     assert config["responseMimeType"] == "application/json"
     assert config["responseSchema"] == {
         "type": "OBJECT",
@@ -214,7 +192,7 @@ async def test_embedder_sends_document_spec_and_decodes_vector(exchange):
         exchange.requests[0].url.target
         == b"/v1beta/models/gemini-embedding-001:batchEmbedContents"
     )
-    assert exchange.request_bodies[0]["requests"] == [
+    assert exchange.request_json(0)["requests"] == [
         {
             "model": "models/gemini-embedding-001",
             "content": {"parts": [{"text": "synthetic document"}], "role": "user"},
@@ -269,7 +247,7 @@ async def test_runtime_scope_exit_closes_connection_after_early_stream_exit(
     events = [
         f"data: {json.dumps(payload)}\n\n".encode() for payload in (first, _GENERATED)
     ]
-    network = httpcore.AsyncMockStream(
+    network = httpcore2.AsyncMockStream(
         [
             b"HTTP/1.1 200 Connection established\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
@@ -284,9 +262,9 @@ async def test_runtime_scope_exit_closes_connection_after_early_stream_exit(
     monkeypatch.setattr(AutoBackend, "connect_tcp", connect)
     monkeypatch.setattr(
         "app.http.destination_resolution._resolve_host",
-        AsyncMock(return_value=["93.184.216.34"]),
+        AsyncMock(return_value=[PUBLIC_ADDRESS]),
     )
-    monkeypatch.setenv("EGRESS_PROXY_URL", "http://proxy.vector.internal:3128")
+    monkeypatch.setenv("EGRESS_PROXY_URL", PROXY_URL)
     monkeypatch.setattr(
         composition.settings, "gemini_api_key", SecretStr("synthetic-test-key")
     )
@@ -352,7 +330,7 @@ async def test_http_429_preserves_response_retry_after_and_rate_classification(
         with pytest.raises(errors.ClientError) as caught:
             await _generate(client)
     error = caught.value
-    assert isinstance(error.response, httpx.Response)
+    assert isinstance(error.response, httpx2.Response)
     assert error.response.status_code == error.code == 429
     assert error.status == "RESOURCE_EXHAUSTED"
     translated = translate_gemini_error(error)
@@ -401,7 +379,7 @@ async def test_non_json_503_remains_server_failure_without_retry(exchange):
     async with _open_client() as client:
         with pytest.raises(errors.ServerError) as caught:
             await _generate(client)
-    assert isinstance(caught.value.response, httpx.Response)
+    assert isinstance(caught.value.response, httpx2.Response)
     assert caught.value.response.status_code == 503
     translated = translate_gemini_error(caught.value)
     assert isinstance(translated, AIProviderResponseError)
@@ -461,10 +439,10 @@ async def test_sse_api_error_keeps_http_status_separate_from_api_code(exchange):
 @pytest.mark.asyncio
 async def test_timeout_object_survives_sdk_without_retry(exchange):
     """受信timeoutをSDKが包み直したり再試行したりしない。"""
-    failure = httpx.ReadTimeout("synthetic timeout")
+    failure = httpx2.ReadTimeout("synthetic timeout")
     exchange.error = failure
     async with _open_client() as client:
-        with pytest.raises(httpx.ReadTimeout) as caught:
+        with pytest.raises(httpx2.ReadTimeout) as caught:
             await _generate(client)
     assert caught.value is failure
     assert len(exchange.requests) == 1
@@ -475,11 +453,11 @@ async def test_timeout_object_survives_sdk_without_retry(exchange):
 async def test_connection_error_keeps_original_cause_without_retry(exchange):
     """接続失敗の元の例外と原因をSDKが保持する。"""
     cause = OSError("synthetic connection failure")
-    failure = httpx.ConnectError("synthetic connect error")
+    failure = httpx2.ConnectError("synthetic connect error")
     failure.__cause__ = cause
     exchange.error = failure
     async with _open_client() as client:
-        with pytest.raises(httpx.ConnectError) as caught:
+        with pytest.raises(httpx2.ConnectError) as caught:
             await _generate(client)
     assert caught.value is failure
     assert caught.value.__cause__ is cause

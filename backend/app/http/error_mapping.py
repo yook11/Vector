@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-import httpx
+import httpx2
 
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import classify_httpx
@@ -17,7 +17,7 @@ def http_transport_error_from_exception(exc: Exception) -> HttpTransportError | 
 
 
 def http_response_error_from_exception(
-    exc: httpx.HTTPStatusError,
+    exc: httpx2.HTTPStatusError,
     *,
     received_at: datetime,
 ) -> HttpResponseError:
@@ -32,7 +32,7 @@ def http_response_error_from_exception(
 def http_response_error_from_status(
     status_code: int,
     *,
-    response: httpx.Response | None,
+    response: httpx2.Response | None,
     received_at: datetime,
 ) -> HttpResponseError:
     """HTTPStatusErrorを経ずに判明した非成功応答を保持し、応答が無ければRetry-Afterも無いものとする。"""

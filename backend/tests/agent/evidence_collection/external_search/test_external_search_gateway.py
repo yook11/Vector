@@ -9,7 +9,7 @@ import asyncio
 import json
 from collections.abc import Sequence
 
-import httpx
+import httpx2
 import logfire
 import pytest
 from logfire.testing import CaptureLogfire
@@ -52,7 +52,7 @@ def _search_request(
 
 
 class FakeGatewayHttpClient:
-    def __init__(self, outcomes: Sequence[httpx.Response | BaseException]) -> None:
+    def __init__(self, outcomes: Sequence[httpx2.Response | BaseException]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[tuple[str, object, bytes]] = []
 
@@ -62,7 +62,7 @@ class FakeGatewayHttpClient:
         *,
         headers: object,
         content: bytes,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         self.calls.append((url, headers, content))
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, BaseException):
@@ -81,7 +81,7 @@ class BlockingGatewayHttpClient:
         *,
         headers: object,
         content: bytes,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         self.started.set()
         try:
             await asyncio.Event().wait()
@@ -91,7 +91,7 @@ class BlockingGatewayHttpClient:
         raise AssertionError("unreachable")
 
 
-class StaticAsyncByteStream(httpx.AsyncByteStream):
+class StaticAsyncByteStream(httpx2.AsyncByteStream):
     def __init__(self, content: bytes) -> None:
         self._content = content
 
@@ -107,9 +107,9 @@ def _gateway(client: object) -> AgentCoreWebSearchGateway:
     )
 
 
-def _mcp_response(results: list[object]) -> httpx.Response:
+def _mcp_response(results: list[object]) -> httpx2.Response:
     """MCP の二重 JSON 応答。tool 出力は content[0].text に JSON 文字列で載る。"""
-    return httpx.Response(
+    return httpx2.Response(
         200,
         json={
             "jsonrpc": "2.0",
@@ -176,11 +176,11 @@ async def test_successful_call_has_one_safe_client_span_in_answer_trace(
         "access_key": _ACCESS_KEY_SENTINEL,
         "secret": _SECRET_KEY_SENTINEL,
     }
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             headers={"content-type": "application/json"},
             stream=StaticAsyncByteStream(
@@ -219,7 +219,7 @@ async def test_successful_call_has_one_safe_client_span_in_answer_trace(
         )
 
     monkeypatch.setenv("LOGFIRE_HTTPX_CAPTURE_ALL", "true")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
         logfire.instrument_httpx(
             client,
             capture_all=False,
@@ -294,7 +294,7 @@ async def test_classified_failure_uses_closed_reason_without_exception_event(
     }
     gateway = _gateway(
         FakeGatewayHttpClient(
-            [httpx.Response(429, json={"error": sentinels["response"]})]
+            [httpx2.Response(429, json={"error": sentinels["response"]})]
         )
     )
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx  # noqa: TID251 (テスト内 mock 構築のため、実通信なし)
+import httpx2
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
@@ -257,7 +257,7 @@ class TestNotifierIntegration:
         """
         captured: list[tuple[str, str, str, bytes]] = []
 
-        async def handler(request: httpx.Request) -> httpx.Response:
+        async def handler(request: httpx2.Request) -> httpx2.Response:
             captured.append(
                 (
                     request.method,
@@ -266,18 +266,18 @@ class TestNotifierIntegration:
                     request.read(),
                 )
             )
-            return httpx.Response(500, json={"error": "boom"})
+            return httpx2.Response(500, json={"error": "boom"})
 
-        transport = httpx.MockTransport(handler)
-        original_init = httpx.AsyncClient.__init__
+        transport = httpx2.MockTransport(handler)
+        original_init = httpx2.AsyncClient.__init__
 
         def patched_init(
-            self: httpx.AsyncClient, *args: object, **kwargs: object
+            self: httpx2.AsyncClient, *args: object, **kwargs: object
         ) -> None:
             kwargs["transport"] = transport
             original_init(self, *args, **kwargs)
 
-        monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+        monkeypatch.setattr(httpx2.AsyncClient, "__init__", patched_init)
 
         notifier = FrontendRevalidateNotifier(
             frontend_base_url="http://frontend:3000",

@@ -5,7 +5,7 @@ import ssl
 from contextlib import closing
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2
 import pytest
 from botocore import exceptions as botocore_errors
 from botocore.awsrequest import AWSPreparedRequest
@@ -29,22 +29,22 @@ R = HttpTransportFailureReason
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
-        (httpx.PoolTimeout("timeout"), HttpTransportFailure(S.PREPARATION, R.TIMEOUT)),
+        (httpx2.PoolTimeout("timeout"), HttpTransportFailure(S.PREPARATION, R.TIMEOUT)),
         (
             HostResolutionError("failed"),
             HttpTransportFailure(S.PREPARATION, R.DNS_RESOLUTION),
         ),
-        (httpx.ConnectTimeout("timeout"), HttpTransportFailure(S.CONNECT, R.TIMEOUT)),
-        (httpx.ConnectError("failed"), HttpTransportFailure(S.CONNECT, R.NETWORK_IO)),
-        (httpx.WriteTimeout("timeout"), HttpTransportFailure(S.SEND, R.TIMEOUT)),
-        (httpx.WriteError("failed"), HttpTransportFailure(S.SEND, R.NETWORK_IO)),
-        (httpx.ReadTimeout("timeout"), HttpTransportFailure(S.RECEIVE, R.TIMEOUT)),
-        (httpx.ReadError("failed"), HttpTransportFailure(S.RECEIVE, R.NETWORK_IO)),
+        (httpx2.ConnectTimeout("timeout"), HttpTransportFailure(S.CONNECT, R.TIMEOUT)),
+        (httpx2.ConnectError("failed"), HttpTransportFailure(S.CONNECT, R.NETWORK_IO)),
+        (httpx2.WriteTimeout("timeout"), HttpTransportFailure(S.SEND, R.TIMEOUT)),
+        (httpx2.WriteError("failed"), HttpTransportFailure(S.SEND, R.NETWORK_IO)),
+        (httpx2.ReadTimeout("timeout"), HttpTransportFailure(S.RECEIVE, R.TIMEOUT)),
+        (httpx2.ReadError("failed"), HttpTransportFailure(S.RECEIVE, R.NETWORK_IO)),
         (
-            httpx.RemoteProtocolError("failed"),
+            httpx2.RemoteProtocolError("failed"),
             HttpTransportFailure(S.RECEIVE, R.PROTOCOL_VIOLATION),
         ),
-        (httpx.CloseError("failed"), HttpTransportFailure(S.UNKNOWN, R.NETWORK_IO)),
+        (httpx2.CloseError("failed"), HttpTransportFailure(S.UNKNOWN, R.NETWORK_IO)),
     ],
 )
 def test_httpx_transport_failures(
@@ -57,10 +57,10 @@ def test_httpx_transport_failures(
 @pytest.mark.parametrize(
     "exc",
     [
-        httpx.TimeoutException("unspecified"),
-        httpx.NetworkError("unspecified"),
-        httpx.ProtocolError("unspecified"),
-        httpx.TransportError("unspecified"),
+        httpx2.TimeoutException("unspecified"),
+        httpx2.NetworkError("unspecified"),
+        httpx2.ProtocolError("unspecified"),
+        httpx2.TransportError("unspecified"),
     ],
 )
 def test_httpx_parent_transport_errors_are_unknown(exc: Exception) -> None:
@@ -106,7 +106,7 @@ def test_httpx_proxy_status_is_metadata_only(
     message: str, proxy_status: int | None
 ) -> None:
     """proxyのstatusによって段階や理由を変えない。"""
-    assert classify_httpx(httpx.ProxyError(message)) == HttpTransportFailure(
+    assert classify_httpx(httpx2.ProxyError(message)) == HttpTransportFailure(
         S.CONNECT, R.PROXY, proxy_status=proxy_status
     )
 
@@ -119,12 +119,12 @@ def test_httpx_proxy_status_is_metadata_only(
         OSError("not necessarily network"),
         TimeoutError("unspecified operation"),
         HostBlockedError("policy"),
-        httpx.LocalProtocolError("bad request"),
-        httpx.UnsupportedProtocol("ftp"),
-        httpx.InvalidURL("bad URL"),
-        httpx.DecodingError("bad encoding"),
-        httpx.TooManyRedirects("redirects"),
-        httpx.RequestError("unspecified"),
+        httpx2.LocalProtocolError("bad request"),
+        httpx2.UnsupportedProtocol("ftp"),
+        httpx2.InvalidURL("bad URL"),
+        httpx2.DecodingError("bad encoding"),
+        httpx2.TooManyRedirects("redirects"),
+        httpx2.RequestError("unspecified"),
         botocore_errors.ReadTimeoutError(endpoint_url="https://example.invalid"),
     ],
 )
@@ -136,10 +136,10 @@ def test_httpx_does_not_classify_non_transport_errors(exc: Exception) -> None:
 @pytest.mark.parametrize("status", [403, 429, 500, 503])
 def test_http_status_errors_remain_outside_transport(status: int) -> None:
     """応答済みのHTTPエラーは呼び出し側に判断を残す。"""
-    response = httpx.Response(
-        status, request=httpx.Request("GET", "https://example.invalid")
+    response = httpx2.Response(
+        status, request=httpx2.Request("GET", "https://example.invalid")
     )
-    with pytest.raises(httpx.HTTPStatusError) as caught:
+    with pytest.raises(httpx2.HTTPStatusError) as caught:
         response.raise_for_status()
     assert classify_httpx(caught.value) is None
 
@@ -147,14 +147,14 @@ def test_http_status_errors_remain_outside_transport(status: int) -> None:
 async def test_httpx_real_transport_classifies_dns_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """実際のhttpcoreとhttpxのラップを通してDNS失敗を識別する。"""
+    """実際のhttpcore2とhttpx2のラップを通してDNS失敗を識別する。"""
     monkeypatch.setattr(
         "anyio.connect_tcp", AsyncMock(side_effect=socket.gaierror("DNS failed"))
     )
-    async with httpx.AsyncHTTPTransport() as transport:
-        with pytest.raises(httpx.ConnectError) as caught:
+    async with httpx2.AsyncHTTPTransport() as transport:
+        with pytest.raises(httpx2.ConnectError) as caught:
             await transport.handle_async_request(
-                httpx.Request("GET", "https://example.invalid")
+                httpx2.Request("GET", "https://example.invalid")
             )
     assert classify_httpx(caught.value) == HttpTransportFailure(
         S.CONNECT, R.DNS_RESOLUTION
@@ -164,23 +164,23 @@ async def test_httpx_real_transport_classifies_dns_failure(
 async def test_httpx_real_transport_classifies_tls_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """実際のhttpcoreとhttpxのラップを通してTLS失敗を識別する。"""
+    """実際のhttpcore2とhttpx2のラップを通してTLS失敗を識別する。"""
     monkeypatch.setattr("anyio.connect_tcp", AsyncMock(return_value=AsyncMock()))
     monkeypatch.setattr(
         "anyio.streams.tls.TLSStream.wrap",
         AsyncMock(side_effect=ssl.SSLError("TLS failed")),
     )
-    async with httpx.AsyncHTTPTransport() as transport:
-        with pytest.raises(httpx.ConnectError) as caught:
+    async with httpx2.AsyncHTTPTransport() as transport:
+        with pytest.raises(httpx2.ConnectError) as caught:
             await transport.handle_async_request(
-                httpx.Request("GET", "https://example.invalid")
+                httpx2.Request("GET", "https://example.invalid")
             )
     assert classify_httpx(caught.value) == HttpTransportFailure(S.CONNECT, R.TLS)
 
 
 def test_connection_cause_takes_precedence_over_unrelated_context() -> None:
     """明示的な原因があるときに別の処理で発生したcontextを採用しない。"""
-    exc = httpx.ConnectError("failed")
+    exc = httpx2.ConnectError("failed")
     exc.__cause__ = ConnectionRefusedError("refused")
     exc.__context__ = socket.gaierror("unrelated DNS")
     assert classify_httpx(exc) == HttpTransportFailure(S.CONNECT, R.NETWORK_IO)
@@ -188,7 +188,7 @@ def test_connection_cause_takes_precedence_over_unrelated_context() -> None:
 
 def test_connection_cause_cycle_terminates_without_mutating_exception() -> None:
     """循環する原因チェーンでも終了し、元の例外を変更しない。"""
-    exc = httpx.ConnectError("failed")
+    exc = httpx2.ConnectError("failed")
     inner = OSError("failed")
     exc.__cause__ = inner
     inner.__context__ = exc
@@ -256,7 +256,7 @@ def test_botocore_parent_transport_errors_are_unknown(exc: Exception) -> None:
         ValueError("invalid"),
         RuntimeError("bug"),
         OSError("unspecified"),
-        httpx.ReadTimeout("other library"),
+        httpx2.ReadTimeout("other library"),
     ],
 )
 def test_botocore_does_not_classify_non_transport_errors(exc: Exception) -> None:

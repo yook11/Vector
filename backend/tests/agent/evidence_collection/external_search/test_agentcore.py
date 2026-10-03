@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, get_args
 
-import httpx
+import httpx2
 import pytest
 from botocore.exceptions import NoCredentialsError
 from logfire.testing import CaptureLogfire
@@ -125,30 +125,30 @@ def _envelope(inner: object, *, is_error: bool = False) -> dict[str, object]:
     }
 
 
-def _response(results: list[object], *, is_error: bool = False) -> httpx.Response:
-    return httpx.Response(
+def _response(results: list[object], *, is_error: bool = False) -> httpx2.Response:
+    return httpx2.Response(
         200, json=_envelope({"id": "probe", "results": results}, is_error=is_error)
     )
 
 
-def _mock_client(handler: Any) -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+def _mock_client(handler: Any) -> httpx2.AsyncClient:
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
 
 
 class _StubClient:
     """post の返り値だけを決める最小の client。
 
-    outcome が例外なら raise する。httpx.MockTransport では表現できない
+    outcome が例外なら raise する。httpx2.MockTransport では表現できない
     「transport より手前で失敗する」ケース用。
     """
 
-    def __init__(self, outcome: httpx.Response | BaseException) -> None:
+    def __init__(self, outcome: httpx2.Response | BaseException) -> None:
         self._outcome = outcome
         self.calls: list[tuple[str, dict[str, str], bytes]] = []
 
     async def post(
         self, url: str, *, headers: dict[str, str], content: bytes
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         self.calls.append((url, dict(headers), content))
         if isinstance(self._outcome, BaseException):
             raise self._outcome
@@ -160,9 +160,9 @@ class _StubClient:
 
 @pytest.mark.asyncio
 async def test_search_posts_signed_mcp_tool_call() -> None:
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return _response([_result()])
 
@@ -206,9 +206,9 @@ async def test_signature_covers_the_body_and_url_that_are_sent(
         return original(url=url, body=body, region=region)
 
     monkeypatch.setattr(agentcore_module, "_sign", spy)
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return _response([])
 
@@ -260,9 +260,9 @@ async def test_search_maps_half_open_range_to_inclusive_published_date_filter(
     なので末尾は end_date の前日。先頭を 1 日広げるのは、期間が JST で解決される
     のに filter が UTC で、開始日の JST 午前が漏れるため。
     """
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return _response([])
 
@@ -278,9 +278,9 @@ async def test_search_maps_half_open_range_to_inclusive_published_date_filter(
 @pytest.mark.asyncio
 async def test_search_clamps_max_results_to_provider_limit() -> None:
     """inputSchema の上限 (1-25、probe 2026-08-30) を超えて要求しない。"""
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return _response([])
 
@@ -319,7 +319,9 @@ async def test_search_wraps_non_2xx_without_leaking_body_or_credentials(
 ) -> None:
     body = {"message": f"body mentions {RESPONSE_BODY_SENTINEL}"}
 
-    async with _mock_client(lambda _: httpx.Response(status_code, json=body)) as client:
+    async with _mock_client(
+        lambda _: httpx2.Response(status_code, json=body)
+    ) as client:
         with pytest.raises(ExternalSearchProviderError) as raised:
             await _search(_gateway(client), query="q", limit=1)
 
@@ -333,7 +335,7 @@ async def test_search_wraps_non_2xx_without_leaking_body_or_credentials(
 
 @pytest.mark.asyncio
 async def test_search_classifies_transport_failure_as_http_error() -> None:
-    client = _StubClient(httpx.ConnectError("boom"))
+    client = _StubClient(httpx2.ConnectError("boom"))
 
     with pytest.raises(ExternalSearchProviderError) as raised:
         await _search(_gateway(client), query="q", limit=1)
@@ -348,7 +350,7 @@ async def test_search_classifies_client_timeout_as_http_error() -> None:
     service の wait_for で外側から切られると provider_failed しか残らないため、
     client 側の timeout を先に効かせる契約になっている。
     """
-    client = _StubClient(httpx.ReadTimeout("slow"))
+    client = _StubClient(httpx2.ReadTimeout("slow"))
 
     with pytest.raises(ExternalSearchProviderError) as raised:
         await _search(_gateway(client), query="q", limit=1)
@@ -358,7 +360,7 @@ async def test_search_classifies_client_timeout_as_http_error() -> None:
 
 @pytest.mark.asyncio
 async def test_search_classifies_non_json_body_as_invalid_json() -> None:
-    async with _mock_client(lambda _: httpx.Response(200, text="not json")) as client:
+    async with _mock_client(lambda _: httpx2.Response(200, text="not json")) as client:
         with pytest.raises(ExternalSearchProviderError) as raised:
             await _search(_gateway(client), query="q", limit=1)
 
@@ -394,7 +396,7 @@ async def test_search_classifies_mcp_level_failure_as_mcp_error(
     JSON-RPC の error と tool の isError は経路が違うが、呼び出し側から
     できることは同じ。provider の自由文は reason に載せない。
     """
-    async with _mock_client(lambda _: httpx.Response(200, json=payload)) as client:
+    async with _mock_client(lambda _: httpx2.Response(200, json=payload)) as client:
         with pytest.raises(ExternalSearchProviderError) as raised:
             await _search(_gateway(client), query="q", limit=1)
 
@@ -432,7 +434,7 @@ async def test_search_classifies_mcp_level_failure_as_mcp_error(
 async def test_search_classifies_malformed_payload_as_invalid_results(
     payload: dict[str, object],
 ) -> None:
-    async with _mock_client(lambda _: httpx.Response(200, json=payload)) as client:
+    async with _mock_client(lambda _: httpx2.Response(200, json=payload)) as client:
         with pytest.raises(ExternalSearchProviderError) as raised:
             await _search(_gateway(client), query="q", limit=1)
 
@@ -633,7 +635,7 @@ async def test_recorded_response_maps_every_result_to_a_hit() -> None:
     """
     raw = (_FIXTURES_DIR / _FIXTURE).read_bytes()
 
-    async with _mock_client(lambda _: httpx.Response(200, content=raw)) as client:
+    async with _mock_client(lambda _: httpx2.Response(200, content=raw)) as client:
         hits = await _search(_gateway(client), query="q", limit=25)
 
     recorded = _recorded_results()
@@ -647,7 +649,7 @@ async def test_recorded_response_yields_a_date_for_every_result() -> None:
     """実値の publishedDate が全件パースできること (書式は probe で 30/30 一致)。"""
     raw = (_FIXTURES_DIR / _FIXTURE).read_bytes()
 
-    async with _mock_client(lambda _: httpx.Response(200, content=raw)) as client:
+    async with _mock_client(lambda _: httpx2.Response(200, content=raw)) as client:
         hits = await _search(_gateway(client), query="q", limit=25)
 
     assert all(hit.published_at is not None for hit in hits)
@@ -663,7 +665,7 @@ async def test_recorded_response_truncates_only_the_oversized_results(
     """切り詰めの発生件数を標本から導出する。"""
     raw = (_FIXTURES_DIR / _FIXTURE).read_bytes()
 
-    async with _mock_client(lambda _: httpx.Response(200, content=raw)) as client:
+    async with _mock_client(lambda _: httpx2.Response(200, content=raw)) as client:
         hits = await _search(_gateway(client), query="q", limit=25)
 
     expected_truncations = sum(

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2
 import pytest
 from google.genai.client import AsyncClient
 from logfire.testing import CaptureLogfire
@@ -337,7 +337,7 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
     capfire: CaptureLogfire,
 ) -> None:
     """分類済み provider 障害では使用量と例外 event を記録しない。"""
-    client = FakeGeminiClient([httpx.ReadTimeout("PROVIDER_ERROR_SENTINEL_267e")])
+    client = FakeGeminiClient([httpx2.ReadTimeout("PROVIDER_ERROR_SENTINEL_267e")])
 
     with pytest.raises(AIProviderTransportError):
         await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(

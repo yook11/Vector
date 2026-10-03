@@ -7,7 +7,7 @@ from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
@@ -94,15 +94,15 @@ def runtime(monkeypatch, test_database_url):
         if isinstance(outcome, BaseException):
             raise outcome
         if outcome == "timeout":
-            raise httpx.ReadTimeout("private-ai-timeout", request=request)
+            raise httpx2.ReadTimeout("private-ai-timeout", request=request)
         if outcome == "blocked":
-            return httpx.Response(
+            return httpx2.Response(
                 200, json={"candidates": [{"finishReason": "SAFETY"}]}
             )
         body = json.dumps(
             {"relevance": outcome, "title_ja": "タイトル", "summary_ja": "要約"}
         )
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "candidates": [
@@ -116,7 +116,7 @@ def runtime(monkeypatch, test_database_url):
 
     def open_http(**kwargs):
         assert kwargs.pop("retries") == 0
-        client = httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs)
+        client = httpx2.AsyncClient(transport=httpx2.MockTransport(respond), **kwargs)
         if state.cleanup_failure:
             close = client.aclose
 

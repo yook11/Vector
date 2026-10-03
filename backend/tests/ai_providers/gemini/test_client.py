@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2
 import pytest
 from google.genai import errors
 from pydantic import SecretStr
@@ -45,11 +45,11 @@ async def test_real_sdk_uses_timeout_and_never_retries(monkeypatch, outcome):
     def respond(request):
         requests.append(request)
         if outcome == "timeout":
-            raise httpx.ReadTimeout("private", request=request)
+            raise httpx2.ReadTimeout("private", request=request)
         if outcome == "connect":
-            raise httpx.ConnectError("private", request=request)
+            raise httpx2.ConnectError("private", request=request)
         if outcome != 200:
-            return httpx.Response(
+            return httpx2.Response(
                 outcome,
                 json={
                     "error": {
@@ -59,12 +59,12 @@ async def test_real_sdk_uses_timeout_and_never_retries(monkeypatch, outcome):
                     }
                 },
             )
-        return httpx.Response(200, json={"embeddings": [{"values": [0.1, 0.2]}]})
+        return httpx2.Response(200, json={"embeddings": [{"values": [0.1, 0.2]}]})
 
     def factory(**kwargs):
         assert kwargs.pop("retries") == 0
         assert kwargs["follow_redirects"] is False
-        client = httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs)
+        client = httpx2.AsyncClient(transport=httpx2.MockTransport(respond), **kwargs)
         clients.append(client)
         return client
 
@@ -80,7 +80,7 @@ async def test_real_sdk_uses_timeout_and_never_retries(monkeypatch, outcome):
             assert result.embeddings[0].values == [0.1, 0.2]
         else:
             with pytest.raises(
-                (errors.APIError, httpx.TimeoutException, httpx.ConnectError)
+                (errors.APIError, httpx2.TimeoutException, httpx2.ConnectError)
             ):
                 await client.models.embed_content(
                     model="gemini-embedding-001", contents="text"
@@ -98,7 +98,7 @@ async def test_real_sdk_uses_timeout_and_never_retries(monkeypatch, outcome):
 
 @pytest.fixture
 def resources(monkeypatch):
-    http = Mock(spec=httpx.AsyncClient)
+    http = Mock(spec=httpx2.AsyncClient)
     http.aclose = AsyncMock()
     aio = SimpleNamespace(aclose=AsyncMock())
     sdk = SimpleNamespace(aio=aio, close=Mock())
@@ -220,7 +220,7 @@ async def test_real_factory_and_sdk_scope_with_custom_settings(monkeypatch):
 
     async def respond(self, request):
         sent.append(request)
-        return httpx.Response(200, json={"embeddings": [{"values": [0.5]}]})
+        return httpx2.Response(200, json={"embeddings": [{"values": [0.5]}]})
 
     def factory(**kwargs):
         client = original(**kwargs)

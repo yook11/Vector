@@ -7,7 +7,7 @@ from queue import Empty, Queue
 from threading import Event
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import text
@@ -34,7 +34,7 @@ def gemini_response():
 
 @pytest.fixture
 def notification_response():
-    return AsyncMock(return_value=httpx.Response(200, json={"ok": True}))
+    return AsyncMock(return_value=httpx2.Response(200, json={"ok": True}))
 
 
 @pytest.fixture
@@ -70,8 +70,8 @@ def assessment_runtime(
 
     def http_factory(**kwargs):
         kwargs.pop("retries")
-        return httpx.AsyncClient(  # noqa: TID251
-            transport=httpx.MockTransport(gemini_response), **kwargs
+        return httpx2.AsyncClient(  # noqa: TID251
+            transport=httpx2.MockTransport(gemini_response), **kwargs
         )
 
     monkeypatch.setattr(gemini_module, "make_external_async_client", http_factory)
@@ -89,8 +89,8 @@ def assessment_runtime(
     monkeypatch.setattr(
         revalidate,
         "make_internal_async_client",
-        lambda **kwargs: httpx.AsyncClient(  # noqa: TID251
-            transport=httpx.MockTransport(notification_response), **kwargs
+        lambda **kwargs: httpx2.AsyncClient(  # noqa: TID251
+            transport=httpx2.MockTransport(notification_response), **kwargs
         ),
     )
 
@@ -158,7 +158,7 @@ async def wait_for_signal(signal, message):
 
 @dataclass
 class AiResponseGate:
-    response: httpx.Response
+    response: httpx2.Response
     requested: Event = field(default_factory=Event)
     allow_response: Event = field(default_factory=Event)
 

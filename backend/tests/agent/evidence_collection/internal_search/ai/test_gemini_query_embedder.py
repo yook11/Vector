@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2
 import pytest
 from google.genai import errors as genai_errors
 
@@ -175,7 +175,7 @@ async def test_embed_queries_raises_generation_error_on_count_mismatch() -> None
 
 def test_delegates_timeout_to_transport_error() -> None:
     embedder = _make_embedder()
-    result = embedder._translate_error(httpx.ReadTimeout("deadline"))
+    result = embedder._translate_error(httpx2.ReadTimeout("deadline"))
 
     assert isinstance(result, AIProviderTransportError)
 

@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2
 import pytest
 from google.genai import errors as genai_errors
 from google.genai.types import (
@@ -264,7 +264,7 @@ async def test_generator_wraps_classified_sdk_error() -> None:
 @pytest.mark.asyncio
 async def test_generator_wraps_transport_error() -> None:
     """通信の失敗も AI の例外にして briefing marker に wrap する。"""
-    error = httpx.ReadTimeout("read timeout")
+    error = httpx2.ReadTimeout("read timeout")
 
     with pytest.raises(BriefingLlmError) as raised:
         await _generate(error)

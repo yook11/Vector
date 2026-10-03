@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
-import httpx
+import httpx2
 
 from app.collection.article_completion.content import RawResponse
 from app.collection.article_completion.errors import (
@@ -34,12 +34,12 @@ _ARTICLE_TIMEOUT_SECONDS = 30.0
 
 @asynccontextmanager
 async def _open_response(
-    client: httpx.AsyncClient,  # noqa: TID251
+    client: httpx2.AsyncClient,  # noqa: TID251
     url: str,
     *,
     resource: FetchResource,
     timeout_seconds: float,
-) -> AsyncIterator[httpx.Response]:
+) -> AsyncIterator[httpx2.Response]:
     """応答待ちと本文受信に共通の期限をかけ、通信の事実を変換する。"""
     deadline = asyncio.timeout(timeout_seconds)
     try:
@@ -55,12 +55,12 @@ async def _open_response(
                     ):
                         try:
                             response.raise_for_status()
-                        except httpx.HTTPStatusError as exc:
+                        except httpx2.HTTPStatusError as exc:
                             raise http_response_error_from_exception(
                                 exc, received_at=received_at
                             ) from exc
                     yield response
-            except (httpx.HTTPError, HostResolutionError) as exc:
+            except (httpx2.HTTPError, HostResolutionError) as exc:
                 mapped = http_transport_error_from_exception(exc)
                 if mapped is None:
                     raise
@@ -73,7 +73,7 @@ async def _open_response(
         ) from exc
 
 
-async def _read_body(response: httpx.Response, *, resource: FetchResource) -> bytes:
+async def _read_body(response: httpx2.Response, *, resource: FetchResource) -> bytes:
     """上限を超えたチャンクを保持せず、展開後の本文量を制限する。"""
     content_length = response.headers.get("content-length")
     if content_length is not None:

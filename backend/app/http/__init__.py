@@ -12,13 +12,14 @@ submodule:
 - ``internal`` — 自 AWS アカウントに作った resource や自 deployment のコンテナ宛。
   宛先は設定層が確定させるので検証せず、egress proxy も経由しない。
 
-``httpx.AsyncClient`` をこの 2 つ以外の場所で構築しない (``pyproject.toml`` の
+``httpx2.AsyncClient`` をこの 2 つ以外の場所で構築しない (``pyproject.toml`` の
 ``TID251`` で禁止する)。片方を選ぶことが宛先の分類を宣言することになる。
+旧 ``httpx`` は使わない (同じく ``TID251`` で禁止する)。
 処理ごとのドメイン制限はプロキシ設定が持ち、保証範囲と未統一の経路はREADMEに記す。
 
 re-export はしない。利用側は submodule をフルパスで import する
 (``from app.http.internal import make_internal_async_client`` 等)。
-``import httpx`` は絶対 import のため、この package が標準ライブラリの ``http`` を
+``import httpx2`` は絶対 import のため、この package が標準ライブラリの ``http`` を
 shadow することはない。
 """
 

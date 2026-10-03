@@ -2,7 +2,7 @@
 
 import json
 
-import httpx
+import httpx2
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -154,7 +154,7 @@ class TestWebUrlHoldsNormalizedValue:
         self, raw: str, scheme: str, host: str, port: int | None
     ) -> None:
         """送信に使う httpx も、正規化した値を同じ宛先として解釈する。"""
-        sent = httpx.URL(WebUrl(raw).root)
+        sent = httpx2.URL(WebUrl(raw).root)
         assert (sent.scheme, sent.raw_host.decode("ascii"), sent.port) == (
             scheme,
             host,

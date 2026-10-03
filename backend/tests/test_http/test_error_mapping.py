@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-import httpx
+import httpx2
 import pytest
 
 from app.http.destination_policy import HostBlockedError
@@ -23,13 +23,13 @@ from app.http.failure import (
     ("exc", "expected"),
     [
         (
-            httpx.ConnectError("connection failed"),
+            httpx2.ConnectError("connection failed"),
             HttpTransportFailure(
                 HttpTransportStage.CONNECT, HttpTransportFailureReason.NETWORK_IO
             ),
         ),
         (
-            httpx.ReadTimeout("response timed out"),
+            httpx2.ReadTimeout("response timed out"),
             HttpTransportFailure(
                 HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             ),
@@ -42,7 +42,7 @@ from app.http.failure import (
             ),
         ),
         (
-            httpx.ProxyError("403 Forbidden"),
+            httpx2.ProxyError("403 Forbidden"),
             HttpTransportFailure(
                 HttpTransportStage.CONNECT,
                 HttpTransportFailureReason.PROXY,
@@ -63,7 +63,7 @@ def test_transport_conversion_preserves_failure_facts(
 
 def test_unspecified_transport_failure_remains_unknown() -> None:
     """通信失敗と分かるが詳細不明な例外では段階も理由も断定しない。"""
-    result = http_transport_error_from_exception(httpx.TransportError("unspecified"))
+    result = http_transport_error_from_exception(httpx2.TransportError("unspecified"))
 
     assert result is not None
     assert result.failure == HttpTransportFailure(
@@ -77,7 +77,7 @@ def test_unspecified_transport_failure_remains_unknown() -> None:
         ValueError("unexpected value"),
         TimeoutError("unspecified operation"),
         HostBlockedError("destination denied"),
-        httpx.LocalProtocolError("invalid request"),
+        httpx2.LocalProtocolError("invalid request"),
     ],
 )
 def test_non_transport_errors_remain_unconverted(exc: Exception) -> None:
@@ -87,10 +87,10 @@ def test_non_transport_errors_remain_unconverted(exc: Exception) -> None:
 
 def test_response_refusal_is_not_a_transport_failure() -> None:
     """通常の403応答をproxy接続拒否へ誤変換しない。"""
-    response = httpx.Response(
-        403, request=httpx.Request("GET", "https://example.invalid/article")
+    response = httpx2.Response(
+        403, request=httpx2.Request("GET", "https://example.invalid/article")
     )
-    with pytest.raises(httpx.HTTPStatusError) as caught:
+    with pytest.raises(httpx2.HTTPStatusError) as caught:
         response.raise_for_status()
 
     assert http_transport_error_from_exception(caught.value) is None
@@ -99,10 +99,10 @@ def test_response_refusal_is_not_a_transport_failure() -> None:
 @pytest.mark.parametrize("status_code", [302, 403, 429, 503])
 def test_response_conversion_preserves_received_status(status_code: int) -> None:
     """応答の生成元を断定せず、受信したステータスを伝える。"""
-    response = httpx.Response(
-        status_code, request=httpx.Request("GET", "https://example.invalid/article")
+    response = httpx2.Response(
+        status_code, request=httpx2.Request("GET", "https://example.invalid/article")
     )
-    with pytest.raises(httpx.HTTPStatusError) as caught:
+    with pytest.raises(httpx2.HTTPStatusError) as caught:
         response.raise_for_status()
 
     result = http_response_error_from_exception(
@@ -121,12 +121,12 @@ def test_response_conversion_preserves_retry_after_without_interpretation(
 ) -> None:
     """待機指示の欠如・空値・日時・不正値を勝手に解釈せず伝える。"""
     headers = {} if retry_after is None else {"rEtRy-AfTeR": retry_after}
-    response = httpx.Response(
+    response = httpx2.Response(
         503,
         headers=headers,
-        request=httpx.Request("GET", "https://example.invalid/article"),
+        request=httpx2.Request("GET", "https://example.invalid/article"),
     )
-    with pytest.raises(httpx.HTTPStatusError) as caught:
+    with pytest.raises(httpx2.HTTPStatusError) as caught:
         response.raise_for_status()
 
     result = http_response_error_from_exception(
@@ -139,12 +139,12 @@ def test_response_conversion_preserves_retry_after_without_interpretation(
 def test_response_conversion_preserves_recorded_receive_time() -> None:
     """受信時刻を変換時の現在時刻や再試行予定時刻で置き換えない。"""
     received_at = datetime(2026, 9, 13, 12, 0, 2, tzinfo=UTC)
-    response = httpx.Response(
+    response = httpx2.Response(
         429,
         headers={"Retry-After": "60"},
-        request=httpx.Request("GET", "https://example.invalid/article"),
+        request=httpx2.Request("GET", "https://example.invalid/article"),
     )
-    with pytest.raises(httpx.HTTPStatusError) as caught:
+    with pytest.raises(httpx2.HTTPStatusError) as caught:
         response.raise_for_status()
 
     result = http_response_error_from_exception(caught.value, received_at=received_at)
@@ -169,10 +169,10 @@ def test_status_conversion_preserves_retry_after_from_response(
 ) -> None:
     """応答があれば、待機指示を解釈せずに伝える。"""
     headers = {} if retry_after is None else {"Retry-After": retry_after}
-    response = httpx.Response(
+    response = httpx2.Response(
         429,
         headers=headers,
-        request=httpx.Request("POST", "https://example.invalid/generate"),
+        request=httpx2.Request("POST", "https://example.invalid/generate"),
     )
 
     result = http_response_error_from_status(

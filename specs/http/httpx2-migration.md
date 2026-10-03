@@ -73,8 +73,9 @@ APIキーは合成値で、Gemini APIへは送信していない。
 2. 共通HTTP層とアプリ通信のRequest/Response/Timeout/例外をHTTPX2へ揃える。
 3. `open_gemini_client`から、共通ファクトリが作るHTTPX2クライアントを既存の `httpx_async_client=` へ渡す。
 4. SDKの依存として旧HTTPXは残す。全プロセスのimport差し替えやSDKのforkは導入しない。
-5. ASGI/TestClient用の旧HTTPXは残せる。Gemini SDKも未注入の同期clientを旧HTTPXで内部生成するが、アプリは非同期clientだけを使う。appの静的な旧HTTPX importをlintで禁止し、実SDKの非同期呼び出しが注入したHTTPX2 clientを使う契約試験で送信経路を保証する。
+5. ASGI/TestClient用の旧HTTPXは残せる。Gemini SDKも未注入の同期clientを旧HTTPXで内部生成するが、アプリは非同期clientだけを使う。appの静的な旧HTTPX importをlintで禁止し、実SDKの非同期呼び出しが注入したHTTPX2 clientを使う契約試験で送信経路を保証する。旧HTTPXは本番の直接依存から外し、API試験（ASGI）用にdevグループへ明示する。API試験の道具をHTTPX2へ替え、devからも外すのはPR Cの直後の別PRとする。
 6. TypeSafe側は後続タスクでHTTPX2 clientを直接注入する。型の中継は不要になるが、SDK 0.7.2による `httpx2.RequestError` の捕捉・再分類・causeの再生成は発生する。`LocalProtocolError` がConnectionErrorへ包まれること、DNS/OSErrorのerrnoやrequest属性が失われることを改めて変換仕様・契約試験で扱う。直接注入だけでは元の例外分類・属性の保持を保証しない。
+7. TLSの接続相手はexternal・internalとも`certifi`の一覧で検証し（`app/http/tls.py`）、HTTPX2既定のOSの証明書ストアへは移さない。実行イメージのdigest固定でOS側の一覧は更新が遅れ（確認時はca-certificates 20250419、certifiは2026.6.17）、手元・CI・本番で一覧も変わるため、ライブラリの差し替えと同時に検証基準を変えない。
 
 ## Invariants
 
@@ -86,7 +87,7 @@ APIキーは合成値で、Gemini APIへは送信していない。
 - 記事補完の `_read_body` にある10MiBの本文制限を維持する。取得経路すべてに総量制限があるという前提は置かない。HTTPX2の中間バッファ制限は、本文全体の量を制限しない。
 - 正常・失敗・キャンセル時のクライアント/streamの資源解放を維持する。
 - 計測でheaders、request body、response bodyを取得しない。HTTPX2への変更後も外向き通信のspanが得られることを実測する。
-- 証明書検証を無効化しない。HTTPX2の既定がOS trust storeへ変わるため、ECSと同じbackendイメージを使うLambda（取得・補完・評価等）の両方で、CA設定・TLS・Logfireのspan・対象処理の成功率を確認する。
+- 証明書検証を無効化しない。検証基準は移行前と同じcertifiの一覧に固定する。反映後はECSと同じbackendイメージを使うLambda（取得・補完・評価等）の両方で、TLS・Logfireのspan・対象処理の成功率を確認する。
 
 ## Non-goals
 
@@ -177,14 +178,27 @@ SDKが使わない同期クライアントやASGIテストから旧HTTPXの存�
 
 ### PR C: 共通HTTPと利用側をHTTPX2へ切り替える
 
-- `backend/pyproject.toml` / `backend/uv.lock`：HTTPX2を追加し、アプリの直接依存を更新する。旧HTTPXはSDK/テスト用に残る。
-- `backend/app/http/{external,internal,failure,error_mapping}.py`：型・transport・例外判定をHTTPX2へ揃える。
+#### 実装内容
+
+- `backend/pyproject.toml` / `backend/uv.lock`：`httpx2>=2.12.0,<3`と`certifi`を直接依存に加え、`httpx`は本番の直接依存からdevグループへ移す。lockの追加はhttpx2 2.13.1・httpcore2 2.13.1・truststore 0.10.4（とemscripten専用のhttpx2-jsfetch）だけで、既存パッケージの更新はない。旧HTTPXはgoogle-genaiの依存として本番イメージに残る。
+- `backend/app/http/{external,internal,failure,error_mapping}.py`：型・transport・例外判定をHTTPX2へ揃える。関数名`classify_httpx`等は同じ概念として維持する。`tls.py`でcertifiの検証contextを作り、両factoryは`verify`を常にそれへ上書きする。プロキシがhttpsならプロキシとのTLSにも同じcontextを渡す（httpcore2の既定はtruststore）。readerとraw HTTPの冗長な`verify=True`は外す。
 - `backend/app/ai_providers/gemini/{client,error_translator}.py`：HTTPX2 client注入と応答型の判定を同時に移す。
-- collectionのreader、raw/source HTTP、article_fetch、AgentCore通信、関連scriptとmockテストを同じ型へ移す。ASGIテストの旧HTTPXは機械的に置換しない。
-- `flake8-tidy-imports.banned-api` でappの旧 `httpx` モジュール参照を禁止する。HTTPX2の直接 `AsyncClient` 構築禁止も維持する。既存factoryのTID251ファイル全体免除を狭め、旧HTTPX禁止まで解除しないようにする。許可はHTTPX2の正規の構築・型参照に必要な行へ限定する。lint違反の小さな入力で、旧HTTPXのimport/from importと正規factoryの検出条件を確かめる。
-- `backend/tests/ai_providers/gemini/test_client.py`と`test_sdk_contract.py`の実SDK試験を再利用する。旧HTTPX送信を失敗させた状態でも、生成・embedding・SSEが注入HTTPX2 transportを通ること、送信1回・timeout・429のRetry-After・元の通信例外・キャンセル・closeを独立したケースで検証する。
-- HTTPX2導入後の実span生成を再確認する。PR Aで旧HTTPXのspanが出ることだけでは、PR Cの計測を証明しない。
-- 圧縮応答は上限超過後に受信し続けず、本文保持量と展開中間バッファの両方が制限されることを、OOMを起こさない小さな入力で試験する。
+- collectionのreader、raw/source HTTP、article_fetch、AgentCore通信と、それらのmockテスト・`local_tests`を同じ型へ移す。API試験（ASGI）の旧HTTPXは置換しない。
+- `flake8-tidy-imports.banned-api`で旧`httpx`モジュール全体と`httpx2.AsyncClient`の直接参照を禁止する。factoryのTID251ファイル全体免除は外し、構築と返り値型の行だけ`noqa`にする。標準入力で、旧HTTPXのimport/from importと`httpx2.AsyncClient`の構築が検出され、型・例外の参照とfactoryの行が検出されないことを確かめた。
+- Logfireの計測試験の後片付けで、旧HTTPXとHTTPX2の両方の計測を解除する（`logfire.instrument_httpx()`は両方を計測する）。
+- `tests/test_http/_proxy_exchange.py`に、DNSの返答とhttpcore2のproxy送受信の差し替えをまとめ、`test_sdk_contract.py`と`test_httpx_instrumentation.py`が共有する。SDK契約試験は旧HTTPXの`AsyncClient.send`/`Client.send`も失敗させ、生成・embedding・SSEが注入したHTTPX2 clientだけを通ることを確かめる。
+- `tests/test_http/test_tls_verification.py`で、external・internalのTLS開始に渡るcontextがtruststoreではなくcertifiの一覧（118件）を読んだものであることを確かめる。externalは呼び出し側が`verify=False`を渡しても上書きされ、httpsのプロキシではプロキシとのTLSも同じ一覧で検証する。certifiの指定を外すといずれも失敗する。
+- `test_article_fetch.py`に、本文上限を64KiBにして展開後32MiBの二重gzipを流し、tracemallocの最大値が8MiB未満であることを確かめる試験を加えた。旧HTTPXでは最大100.8MBを確保して失敗し、HTTPX2では通る。
+- 途中終了したstreamの接続が利用範囲の終了時に閉じる試験は、httpcore2の模擬接続へ移して維持する。打ち切り直後の応答解放は別課題のまま。
+
+#### 検証状況（2026-10-03）
+
+- `uv lock --check` / `uv pip check`、appと変更した試験のruff check / formatが通過。appとscriptsに旧HTTPX・旧httpcoreのimportは残っていない。
+- 全体unit: `uv run --frozen --no-env-file pytest tests/ -x -q -m unit`で6,653件が通過（integration 1,209件を除外）。
+- DB integration: 変更したintegration試験（`tests/lambda_handlers/test_curation_handler_integration.py`）を`make test-integration`で実行し5件が通過。
+- local_tests: acquisition・assessment・completion・curation・embeddingで103件が通過（skipなし）。
+- integration・local_testsは、httpsのプロキシとLogfire計測の後片付けを直す前に実行した。この2点はfactoryを差し替える両試験の経路とDBに触れないため再実行していない。
+- PR CI・セキュリティチェックの結果は当該PRのchecksへ記録する。本番反映後のTLS・span・成功率の確認は未実施。
 
 ### 送信境界と実行環境の検証
 

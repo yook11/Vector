@@ -9,7 +9,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, Mock
 
-import httpx  # noqa: TID251 (テスト内 mock 構築のため、実通信なし)
+import httpx2
 import pytest
 import structlog
 from pydantic import SecretStr
@@ -30,15 +30,15 @@ def _notifier(*, secret_provider=None) -> FrontendRevalidateNotifier:
 
 
 def _patch_transport(
-    monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport
+    monkeypatch: pytest.MonkeyPatch, transport: httpx2.MockTransport
 ) -> None:
-    original_init = httpx.AsyncClient.__init__
+    original_init = httpx2.AsyncClient.__init__
 
     def patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         kwargs["transport"] = transport
         original_init(self, *args, **kwargs)
 
-    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+    monkeypatch.setattr(httpx2.AsyncClient, "__init__", patched_init)
 
 
 class TestNotify:
@@ -48,13 +48,13 @@ class TestNotify:
     ) -> None:
         captured: dict = {}
 
-        async def handler(request: httpx.Request) -> httpx.Response:
+        async def handler(request: httpx2.Request) -> httpx2.Response:
             captured["url"] = str(request.url)
             captured["headers"] = dict(request.headers)
             captured["body"] = request.read()
-            return httpx.Response(200, json={"ok": True})
+            return httpx2.Response(200, json={"ok": True})
 
-        _patch_transport(monkeypatch, httpx.MockTransport(handler))
+        _patch_transport(monkeypatch, httpx2.MockTransport(handler))
 
         await _notifier().notify(tags=["trends", "briefing:list"])
 
@@ -69,10 +69,10 @@ class TestNotify:
     async def test_does_not_raise_on_http_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(500, json={"error": "boom"})
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            return httpx2.Response(500, json={"error": "boom"})
 
-        _patch_transport(monkeypatch, httpx.MockTransport(handler))
+        _patch_transport(monkeypatch, httpx2.MockTransport(handler))
 
         # 例外は出ない (warn 降格)
         await _notifier().notify(tags=["trends"])
@@ -81,10 +81,10 @@ class TestNotify:
     async def test_does_not_raise_on_network_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def handler(request: httpx.Request) -> httpx.Response:
-            raise httpx.ConnectError("connection refused")
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            raise httpx2.ConnectError("connection refused")
 
-        _patch_transport(monkeypatch, httpx.MockTransport(handler))
+        _patch_transport(monkeypatch, httpx2.MockTransport(handler))
 
         await _notifier().notify(tags=["trends"])
 
@@ -122,16 +122,16 @@ async def test_http_failure_log_identifies_notification_operation(monkeypatch, c
     """HTTP失敗の記録は秘密取得と区別し、応答本文や内部URLを出さない。"""
 
     async def respond(request):
-        return httpx.Response(500, text="PRIVATE_RESPONSE")
+        return httpx2.Response(500, text="PRIVATE_RESPONSE")
 
-    _patch_transport(monkeypatch, httpx.MockTransport(respond))
+    _patch_transport(monkeypatch, httpx2.MockTransport(respond))
     await _notifier().notify(tags=["articles:list"])
 
     output = capsys.readouterr().out
     record = json.loads(output)
     assert record["event"] == "frontend_revalidate_failed"
     assert record["operation"] == "notify"
-    assert record["error_class"] == "httpx.HTTPStatusError"
+    assert record["error_class"] == "httpx2.HTTPStatusError"
     assert record["level"] == "warning"
     assert "PRIVATE_RESPONSE" not in output
     assert "http://frontend:3000" not in output
@@ -142,9 +142,9 @@ async def test_success_log_uses_cache_revalidation_policy(monkeypatch, capsys):
     """成功時も通知専用ポリシーで更新対象をJSONへ記録する。"""
 
     async def respond(request):
-        return httpx.Response(200)
+        return httpx2.Response(200)
 
-    _patch_transport(monkeypatch, httpx.MockTransport(respond))
+    _patch_transport(monkeypatch, httpx2.MockTransport(respond))
     await _notifier().notify(tags=["articles:list"])
 
     record = json.loads(capsys.readouterr().out)

@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -249,7 +249,7 @@ async def test_curator_call_once_succeeds() -> None:
 
 async def test_curator_call_once_translates_sdk_error() -> None:
     curator = _create_curator()
-    curator._call_api = AsyncMock(side_effect=httpx.ConnectError("timeout"))
+    curator._call_api = AsyncMock(side_effect=httpx2.ConnectError("timeout"))
 
     with pytest.raises(AIProviderTransportError):
         await curator._call_once("test prompt")
