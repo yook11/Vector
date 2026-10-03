@@ -1,8 +1,8 @@
 # HTTPX2への移行
 
 更新日: 2026-10-03
-状態: PR Aの計測依存更新と実spanの回帰試験を実装。PR B/Cは未実施。検証状況はPR A節に記載する。
-作業ブランチ: `codex/httpx2-migration`
+状態: PR Aはマージ済み。PR BのSDK更新と契約試験は実装・ローカル検証済み。PR Cは未実施。各PR節に検証状況を記載する。
+作業ブランチ: PR Bは `codex/gemini-sdk-upgrade`（PR Aマージ後のmainから分岐）
 
 ## Problem
 
@@ -130,9 +130,50 @@ SDKが使わない同期クライアントやASGIテストから旧HTTPXの存�
 
 ### PR B: Gemini SDKを更新（旧HTTPXを維持）
 
-- `google-genai`を2.28.0へ更新し、旧HTTPX注入のままで既存の生成・embedding・stream・失敗・timeout・closeを検証する。
-- `error_translator.py` の `isinstance(exc.response, httpx.Response)` はこの段階では維持する。response/header/Retry-Afterの取得とAIProvider分類の回帰を確認する。
-- 検討中の `specs/observability/gemini-sdk-exception-conversion-examples.md` は2.10.0を前提にしている。2.28.0で例外属性・SSE内エラー・ログ変換の前提を再確認し、旧版の観測を最新版の保証にしない。本PRでログ変換案の実装まで広げない。
+#### Work Definition
+
+- Problem: HTTPX2を注入できるSDKへ更新し、HTTPライブラリ変更とSDK変更の回帰を切り分ける。
+- Evidence: 公式配布物の依存・例外実装、共通client factory、runtime、embedding、既存の分類器と計測試験を照合する。
+- Invariants: 公開API・設定・model・prompt・出力形式・例外分類・timeout・SDK試行数1回を維持し、利用範囲を抜けるとHTTP接続を解放する。
+- Non-goals: HTTPX2導入、TypeSafe接続、ログ変換の再設計、stream途中終了直後の応答解放の修正、インフラ変更、本番デプロイ。
+- Done: 依存更新、実SDKの契約試験、全体unit・integration、PRのCIとセキュリティチェックが通ること。
+
+#### 実装内容
+
+- `google-genai>=2.28.0,<3`を宣言し、lockでは`google-genai==2.28.0`と`google-auth==2.56.0`を採用する。SDKが`google-auth[requests]>=2.56.0,<3`を要求するため、既存の推移依存だけを更新する。
+- パッケージの追加・削除はなく、バージョン変更はこの2件のみ。旧HTTPX 0.28.1、httpcore 1.0.9、PR AのLogfire・OTelと他の既存依存は維持する。lockのPython 3.14境界のresolution markerはresolverが生成したもの。
+- 本番コードは変更しない。`error_translator.py`の旧HTTPX応答判定、Retry-Afterの保持、AIProvider分類を既存のまま検証する。
+- `backend/tests/ai_providers/gemini/test_sdk_contract.py`に実SDKの16件を追加する。通常生成・構造化出力・embedding・SSE・HTTPエラー・通信例外を独立したケースとして確認する。
+- 通常の契約試験はDNSとhttpcoreのproxy送受信を模擬し、`open_gemini_client`、共通transport、SDKの変換を実行する。注入したclient以外のHTTPX送信と同期送信は拒否する。
+- 途中終了の接続解放は、本番compositionのruntimeを使い、DNSとTCP/TLSの入出力だけを模擬する。実際のproxy CONNECT・HTTP/1.1・接続プールを通して、利用範囲を抜けたときネットワークstreamのcloseが呼ばれることを確認する。実ネットワーク・TLS認証・本番環境の検証ではない。
+- SDKクライアントのclose失敗で元の結果を変えないこと、初期化途中の失敗時の回収、計測とログの保護は既存試験を再利用する。
+
+#### 例外の観測と残存課題
+
+| 応答・失敗 | SDK 2.10.0 / 2.28.0で確認する契約 |
+| --- | --- |
+| HTTP 429 | `ClientError`が旧HTTPXのResponseとRetry-Afterを保持し、流量制限として分類される |
+| 日次quotaのHTTP 429 | 構造化quotaIdが保持され、利用枠の枯渇として分類される |
+| 非JSONのHTTP 503 | `ServerError`となり、サーバー失敗として分類される |
+| HTTP 200の不正JSON | `JSONDecodeError`が未分類のまま伝播する |
+| 不正JSONを含むSSE | `UnknownApiResponseError`が`JSONDecodeError`を原因として保持し、未分類のまま伝播する |
+| SSE内のAPI code 429 | SDK例外のAPI codeは429、応答のHTTP statusは200として別々に観測できる |
+| ReadTimeout / ConnectError | 元の例外オブジェクトと原因をSDKが保持し、再試行しない |
+
+- 現行変換器はSSE内のAPI codeをHTTP statusとして扱う場合があり、この区別の修正は本PRに含めない。検討中の`specs/observability/gemini-sdk-exception-conversion-examples.md`も変更せず、2.10.0の観測と今回の2.28.0の証拠を区別する。
+- streamを途中で`aclose()`した直後のHTTP応答解放は、両SDKで成立しなかった。これは更新前からの制約であり、2026-10-03の合意により修正は別課題とし、PR Bでは利用範囲終了時の接続解放を完了条件とする。
+- 再現するには契約試験の`exchange`で未完了・完了のSSEを順に返し、runtimeから1つ目だけ受信して`await stream.aclose()`する。clientの利用範囲内で`assert exchange.body.closed`を行うと失敗する。応答bodyのcloseを2秒待っても完了しなかった。試験内でGCを強制したり、SDK内部を修正したりはしていない。
+- 利用範囲終了時の接続解放試験は途中終了直後の応答解放を保証せず、SDKの応答オブジェクトがいつ回収されるかや本番の継続的なメモリ増加も未確認。
+
+#### 検証状況（2026-10-03）
+
+- SDK 2.10.0 / google-auth 2.49.2とSDK 2.28.0 / google-auth 2.56.0の両方で、最終版の追加契約試験16件が通過。両環境ともHTTPX 0.28.1 / httpcore 1.0.9を使用する。
+- `uv lock --check` / `uv pip check`、appと追加試験のlint / formatが通過。lockのパッケージ比較でも更新はgoogle-genaiとgoogle-authの2件だけ。
+- 全体unit: `uv run --frozen --no-env-file pytest tests/ -m 'not integration' -x -q`で6,619件が通過（integration 1,209件を除外）。Gemini client・分類器・runtime・embedding・Logfire・ログ保護の既存試験を含む。
+- DB integration: `COMPOSE_DISABLE_ENV_FILE=true UV_FROZEN=true UV_NO_ENV_FILE=true make test-integration PYTEST_ARGS='-x -q'`で1,209件が通過。専用PostgreSQL/Redisとnetworkの回収も完了。
+- Starletteの旧HTTPX、feedparserの互換マッピング、テスト内のLogfire未設定・伝播contextに関する警告は残る。機能やマスキングを無効化して回避していない。
+- PR CI・セキュリティチェックの結果は当該PRのchecksへ記録し、上のローカル検証とは区別する。
+- Gemini実API呼出し・デプロイ・本番観測は未実施。
 
 ### PR C: 共通HTTPと利用側をHTTPX2へ切り替える
 
@@ -141,7 +182,7 @@ SDKが使わない同期クライアントやASGIテストから旧HTTPXの存�
 - `backend/app/ai_providers/gemini/{client,error_translator}.py`：HTTPX2 client注入と応答型の判定を同時に移す。
 - collectionのreader、raw/source HTTP、article_fetch、AgentCore通信、関連scriptとmockテストを同じ型へ移す。ASGIテストの旧HTTPXは機械的に置換しない。
 - `flake8-tidy-imports.banned-api` でappの旧 `httpx` モジュール参照を禁止する。HTTPX2の直接 `AsyncClient` 構築禁止も維持する。既存factoryのTID251ファイル全体免除を狭め、旧HTTPX禁止まで解除しないようにする。許可はHTTPX2の正規の構築・型参照に必要な行へ限定する。lint違反の小さな入力で、旧HTTPXのimport/from importと正規factoryの検出条件を確かめる。
-- `backend/tests/ai_providers/gemini/test_client.py` の実SDK試験を再利用する。旧HTTPX送信を失敗させた状態でも、生成・embedding・SSEが注入HTTPX2 transportを通ること、送信1回・timeout・429のRetry-After・元の通信例外・キャンセル・closeを独立したケースで検証する。
+- `backend/tests/ai_providers/gemini/test_client.py`と`test_sdk_contract.py`の実SDK試験を再利用する。旧HTTPX送信を失敗させた状態でも、生成・embedding・SSEが注入HTTPX2 transportを通ること、送信1回・timeout・429のRetry-After・元の通信例外・キャンセル・closeを独立したケースで検証する。
 - HTTPX2導入後の実span生成を再確認する。PR Aで旧HTTPXのspanが出ることだけでは、PR Cの計測を証明しない。
 - 圧縮応答は上限超過後に受信し続けず、本文保持量と展開中間バッファの両方が制限されることを、OOMを起こさない小さな入力で試験する。
 
