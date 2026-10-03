@@ -24,8 +24,6 @@ locals {
       cpu            = 256, memory = 512, port = 8000, singleton = false
       command        = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
       secrets = {
-        # 旧版の research 開始 API の事前チェックだけが存在を見る。新しい版の反映後に外す。
-        DEEPSEEK_API_KEY         = "deepseek-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"
@@ -46,13 +44,12 @@ locals {
     }
     insights = {
       needs_broker   = true
-      egress_vendors = ["deepseek", "gemini", "logfire"], egress_allow_any_domain = false
+      egress_vendors = ["gemini", "logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_insights"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/insights.conf"]
       secrets = {
         GEMINI_API_KEY           = "gemini-api-key"
-        DEEPSEEK_API_KEY         = "deepseek-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"
@@ -60,13 +57,12 @@ locals {
     }
     agent = {
       needs_broker   = true
-      egress_vendors = ["deepseek", "gemini", "logfire"], egress_allow_any_domain = false
+      egress_vendors = ["gemini", "logfire"], egress_allow_any_domain = false
       image          = "backend", db_users = ["vector_agent"]
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/agent.conf"]
       secrets = {
         GEMINI_API_KEY           = "gemini-api-key"
-        DEEPSEEK_API_KEY         = "deepseek-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"
@@ -122,7 +118,7 @@ locals {
       # AgentCore Gateway は PrivateLink 経由の内部宛先。
       local.agentcore_gateway_host,
     ])
-    # 外向き proxy の使われ方は 3 通り。SDK (DeepSeek / Gemini / Logfire) は HTTPS_PROXY を読み、
+    # 外向き proxy の使われ方は 3 通り。SDK (Gemini / Logfire) は HTTPS_PROXY を読み、
     # backend の第三者宛 client は EGRESS_PROXY_URL を明示で使い、内部宛 client は proxy を通さない。
     # frontend にも入るが Node は既定で読まない。読むライブラリを入れたら service_environment へ移す。
     HTTPS_PROXY      = local.proxy_url
@@ -147,8 +143,6 @@ locals {
     api = {
       DATABASE_URL = local.backend_db_url["vector_api"]
       REDIS_URL    = local.broker_redis_url["api"]
-      # 旧版の research 開始 API の事前チェックだけが存在を見る。新しい版の反映後に外す (api に IAM 権限も PrivateLink も与えない)。
-      AGENTCORE_GATEWAY_URL = aws_bedrockagentcore_gateway.web_search.gateway_url
     }
     # scheduler は DB に接続しないが、Settings が database_url を必須とするため値だけ渡す (task role に rds-db:connect は無い)。
     scheduler = {

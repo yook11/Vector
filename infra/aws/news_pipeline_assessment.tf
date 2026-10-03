@@ -3,8 +3,6 @@ locals {
   assessment_consumer_arn                = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.assessment_consumer_name}"
   assessment_consumer_parameter_path     = "/${var.name_prefix}/assessment-consumer/gemini-api-key"
   assessment_notification_parameter_path = "/${var.name_prefix}/frontend/revalidate-bearer-secret"
-  # Geminiへ切り替えたコードが本番に反映されたら消す。
-  assessment_consumer_deepseek_parameter_path = "/${var.name_prefix}/assessment-consumer/deepseek-api-key"
 }
 
 resource "aws_sqs_queue" "assessment_dlq" {
@@ -173,7 +171,6 @@ resource "aws_lambda_function" "assessment_consumer" {
       DATABASE_URL                            = local.backend_db_url["vector_article_analysis"]
       DB_IAM_AUTH                             = "true"
       GEMINI_API_KEY_PARAMETER_PATH           = local.assessment_consumer_parameter_path
-      DEEPSEEK_API_KEY_PARAMETER_PATH         = local.assessment_consumer_deepseek_parameter_path
       EGRESS_PROXY_URL                        = local.proxy_url
       INTERNAL_FRONTEND_BASE_URL              = local.internal_frontend_url
       REVALIDATE_BEARER_SECRET_PARAMETER_PATH = local.assessment_notification_parameter_path

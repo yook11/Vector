@@ -143,7 +143,6 @@ run "execution_policy_allows_only_article_analysis_resources" {
         { Sid = "ReadAiProviderKeys", Effect = "Allow", Action = "ssm:GetParameter", Resource = [
           "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/curation-consumer/gemini-api-key",
           "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/gemini-api-key",
-          "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/assessment-consumer/deepseek-api-key",
           "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/embedding-consumer/gemini-api-key",
         ] },
         { Sid = "ReadFrontendNotificationKey", Effect = "Allow", Action = "ssm:GetParameter", Resource = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/slice-test/frontend/revalidate-bearer-secret" },
