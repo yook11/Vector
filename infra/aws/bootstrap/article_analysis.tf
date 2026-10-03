@@ -8,7 +8,6 @@ locals {
   article_analysis_ai_key_arns = [
     "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/curation-consumer/gemini-api-key",
     "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/assessment-consumer/gemini-api-key",
-    "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/assessment-consumer/deepseek-api-key",
     "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.name_prefix}/embedding-consumer/gemini-api-key",
   ]
   article_analysis_role_boundary_groups = {

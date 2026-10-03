@@ -5,6 +5,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 2026-09 更新: A2(工程別の滞留)と A3(観測の死活)は、データ源の queue_health を動かしていた ECS analysis サービスの撤去に伴い廃止した。パイプラインの観測はログ・メトリクス整備(CloudWatch)へ移す。以下の A2 / A3 の記述は設計経緯として残す。
 
+2026-10-03 更新: 生成モデルを Gemini に統一し、DeepSeek を外した(#529)。Evidence の DeepSeek の記述は当時の記録。
+
 ---
 
 ## Work Definition
@@ -142,15 +144,15 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 ### A6: AI 利用枠の枯渇
 
 - 症状: AI provider の利用枠が尽き、以後の AI 処理が枠回復まで全て失敗する状態。一時的な rate limit とは区別する(翻訳層が既に区別済み)。
-  - `AIProviderResponseError`(reason `insufficient_balance`) — DeepSeek 残高切れ。アクション: 残高チャージ。
+  - `AIProviderResponseError`(reason `insufficient_balance`) — 残高切れ。今の翻訳層は出さないが、監視には残す。アクション: 残高チャージ。
   - `AIProviderResponseError`(reason `quota_exhausted`) — Gemini の quota / daily 枠切れ。アクション: 枠リセット待ちか tier 引き上げの判断。
-- Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {insufficient_balance, quota_exhausted}(≤ 4 系列)。kind は provider error の `reason` をそのまま使う: audit の failure_reason と同一語彙になり、アラート後の調査を 1 つの文字列の grep で metric → 監査まで追える。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
+- Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {insufficient_balance, quota_exhausted}、provider は gemini だけ(≤ 2 系列)。kind は provider error の `reason` をそのまま使う: audit の failure_reason と同一語彙になり、アラート後の調査を 1 つの文字列の grep で metric → 監査まで追える。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
 - 条件: Sum >= 1、period 15min、1 evaluation period。`TreatMissingData = notBreaching`(平常時はデータポイントゼロが正常)。
 - 通知は ALARM のみとし、この alarm には ok_actions を付けない。metric は枯渇エラー発生時にしか存在せず、退避機構が再試行自体を止めるため、チャージしなくても alarm は OK へ戻る = OK 復帰は残高回復を意味しない。チャージ(provider 側での対応)を済ませたかは対応した本人が把握しており、復旧通知は誤解を招くだけ。未チャージのまま退避後の再試行が再び枯渇すれば OK→ALARM の遷移が再発し、リマインダーとして再通知される。
 - スコープは analysis 3 工程(curation / assessment / embedding)と agent(Q&A)の provider 呼び出しの両方。agent runtime は同じ翻訳層を再利用しているため語彙は共通。emit point は analysis 側 = 各 stage の failure handling 境界、agent 側 = runtime の分類確定境界(`classified_error` 確定点)+ internal query embedding の翻訳確定点(runtime を経由しない唯一の provider 呼び出し経路のため個別に emit する)。
 - Gemini の 429 は message が per-minute バーストと per-day 枯渇で同文言のため、構造化 details(QuotaFailure)に per-day violation を確認できた場合だけ枯渇に分類する(positive allowlist)。判定不能な envelope(details 欠損・不正・未知 quotaId)は rate limited に倒す非対称方針: 誤ページの回避を優先し、analysis 側の取りこぼしは A2 がバックストップする。agent(Q&A)は A2 の対象外のため、未知形式 envelope の枯渇は取りこぼしが残る — これは設計判断として受け入れる。
 - insights は A6 の対象外。trend_discovery は翻訳層を通らず、briefing は翻訳層を通るが枯渇の打点を出していない。盲点として認識済みで、打点の追加は別タスク。
-- stage / surface(pipeline・agent 別)の dimension は持たせない: 残高チャージ・枠回復というアクションは provider 単位で同一であり、どこが最初に踏んだかはアクションに影響しない。系列数は {kind, provider} の ≤ 4 のまま。
+- stage / surface(pipeline・agent 別)の dimension は持たせない: 残高チャージ・枠回復というアクションは provider 単位で同一であり、どこが最初に踏んだかはアクションに影響しない。系列数は {kind, provider} の ≤ 2 のまま。
 - 実測で 1 件発火がノイジーなら閾値を 3/15min へ調整。
 
 ### A7: ALB 5XX
@@ -167,7 +169,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 ### A9: AgentCore 検索費用の日次予算超過
 
-- 症状: 外部検索(AgentCore web search、$0.007/クエリ)の費用が、通常の利用では届かない水準に達している。公開登録を使った大量アカウントによる濫用を想定する。LLM(Gemini / DeepSeek)は前払いで残高が上限になるため対象外。
+- 症状: 外部検索(AgentCore web search、$0.007/クエリ)の費用が、通常の利用では届かない水準に達している。公開登録を使った大量アカウントによる濫用を想定する。LLM(Gemini)は前払いで残高が上限になるため対象外。
 - Signal: AWS Budgets の日次コスト予算。Service = `Amazon Bedrock AgentCore` に絞り、クレジットは含めない。
 - 条件: 実績が $3/日を超えたとき。1 run は最大 9 クエリ($0.063)なので、日次枠を使い切るアカウント約 5 つ分にあたる。
 - 限界: 費用データの反映は数時間遅れ、日の区切りは UTC(JST 09:00)。通知するだけで利用は止めない。
@@ -184,9 +186,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | Embedding Consumer 障害 | Lambda／DLQ監視・A4 embedding | 新SQS経路を確認 |
 | maintenance worker 死 | A3(missing) | 観測と救済が止まった |
 | Valkey(broker)全面障害 | A3(up=0、約 5 分)+ A1 | broker 障害と推定可能 |
-| DeepSeek 残高切れ | A6(insufficient_balance) | チャージが必要 |
 | Gemini 日次 quota 切れ | A6(quota_exhausted) | 枠リセット待ち判断 |
-| DeepSeek 不正 JSON 大量失敗(実績) | A4 | 失敗率と工程 |
+| AI 応答の不正 JSON 大量失敗(実績) | A4 | 失敗率と工程 |
 | 一時的 rate limit / gate pacing | 鳴らさない(滞留すれば A2) | — |
 | api 停止 | A7(SSR 経由 5XX), A5 | — |
 | frontend 停止 | A8, A7, A5 | — |

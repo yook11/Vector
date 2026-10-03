@@ -40,7 +40,7 @@ resource "aws_iam_role_policy" "article_analysis" {
         Effect = "Allow"
         Action = "ssm:GetParameter"
         Resource = [
-          for path in [local.curation_consumer_parameter_path, local.assessment_consumer_parameter_path, local.assessment_consumer_deepseek_parameter_path, local.embedding_consumer_parameter_path] :
+          for path in [local.curation_consumer_parameter_path, local.assessment_consumer_parameter_path, local.embedding_consumer_parameter_path] :
           "arn:aws:ssm:${var.region}:${local.account_id}:parameter${path}"
         ]
       },

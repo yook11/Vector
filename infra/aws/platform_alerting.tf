@@ -121,10 +121,9 @@ resource "aws_iam_role_policy" "chatbot" {
 #
 # 残高チャージ式運用のため、枯渇 (残高切れ・per-day quota 切れ) は運用者対応が
 # 必須の事象。退避機構 (stage hold 6h) は対応時間を稼ぐだけで回復させない。
-# kind × provider の全系列を FILL で 0 埋めして合算する (平常時は全系列が
-# 存在しないのが正常。現状の翻訳層が生成するのは insufficient_balance×deepseek
-# と usage_limit_exhausted×gemini の 2 組だが、将来の組を黙って見逃さないよう
-# 4 組とも監視する)。
+# kind の全系列を FILL で 0 埋めして合算する (平常時は全系列が存在しないのが
+# 正常。provider は gemini だけで、残高切れを生成する翻訳層は今は無いが、
+# 将来の組を黙って見逃さないよう両方の kind を監視する)。
 #
 # ok_actions を意図的に付けない: metric は枯渇発生時にしか存在せず、退避機構が
 # 再試行自体を止めるため、チャージしなくても alarm は OK へ戻る = OK 復帰は
@@ -134,29 +133,13 @@ resource "aws_iam_role_policy" "chatbot" {
 
 resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
   alarm_name          = "${var.name_prefix}-ai-provider-exhausted"
-  alarm_description   = "AI provider の利用枠が枯渇した。insufficient_balance (DeepSeek) は残高チャージ、quota_exhausted (Gemini) は枠リセット待ちか tier 引き上げを判断する。"
+  alarm_description   = "AI provider (Gemini) の利用枠が枯渇した。quota_exhausted は枠リセット待ちか tier 引き上げ、insufficient_balance は残高チャージを判断する。"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   evaluation_periods  = 1
   treat_missing_data  = "notBreaching"
 
   alarm_actions = [aws_sns_topic.alerts.arn]
-
-  metric_query {
-    id = "balance_deepseek"
-
-    metric {
-      namespace   = "Vector/Pipeline"
-      metric_name = "ai_provider_exhausted"
-      period      = 900
-      stat        = "Sum"
-
-      dimensions = {
-        kind     = "ai_error_insufficient_balance"
-        provider = "deepseek"
-      }
-    }
-  }
 
   metric_query {
     id = "balance_gemini"
@@ -170,22 +153,6 @@ resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
       dimensions = {
         kind     = "ai_error_insufficient_balance"
         provider = "gemini"
-      }
-    }
-  }
-
-  metric_query {
-    id = "quota_deepseek"
-
-    metric {
-      namespace   = "Vector/Pipeline"
-      metric_name = "ai_provider_exhausted"
-      period      = 900
-      stat        = "Sum"
-
-      dimensions = {
-        kind     = "ai_error_usage_limit_exhausted"
-        provider = "deepseek"
       }
     }
   }
@@ -208,22 +175,6 @@ resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
 
   # 旧い kind (provider error の CODE) は、新しい kind を出すアプリの反映を確認してから外す。
   metric_query {
-    id = "reason_balance_deepseek"
-
-    metric {
-      namespace   = "Vector/Pipeline"
-      metric_name = "ai_provider_exhausted"
-      period      = 900
-      stat        = "Sum"
-
-      dimensions = {
-        kind     = "insufficient_balance"
-        provider = "deepseek"
-      }
-    }
-  }
-
-  metric_query {
     id = "reason_balance_gemini"
 
     metric {
@@ -235,22 +186,6 @@ resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
       dimensions = {
         kind     = "insufficient_balance"
         provider = "gemini"
-      }
-    }
-  }
-
-  metric_query {
-    id = "reason_quota_deepseek"
-
-    metric {
-      namespace   = "Vector/Pipeline"
-      metric_name = "ai_provider_exhausted"
-      period      = 900
-      stat        = "Sum"
-
-      dimensions = {
-        kind     = "quota_exhausted"
-        provider = "deepseek"
       }
     }
   }
@@ -273,7 +208,7 @@ resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
 
   metric_query {
     id          = "exhausted_total"
-    expression  = "SUM([FILL(balance_deepseek, 0), FILL(balance_gemini, 0), FILL(quota_deepseek, 0), FILL(quota_gemini, 0), FILL(reason_balance_deepseek, 0), FILL(reason_balance_gemini, 0), FILL(reason_quota_deepseek, 0), FILL(reason_quota_gemini, 0)])"
+    expression  = "SUM([FILL(balance_gemini, 0), FILL(quota_gemini, 0), FILL(reason_balance_gemini, 0), FILL(reason_quota_gemini, 0)])"
     label       = "ai_provider_exhausted total"
     return_data = true
   }

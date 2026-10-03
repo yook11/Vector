@@ -454,7 +454,7 @@
 <text data-width="79" data-id="e211" x="1166" y="2088" font-family="Arial, Hiragino Sans, Noto Sans JP, sans-serif" font-size="20" font-weight="700" fill="#172B46" text-anchor="start">IGW</text>
 <rect x="1366" y="2051" width="345" height="73" rx="12" fill="#FFFFFF" stroke="#CED9E4" stroke-width="1.5"/>
 <text data-width="315" data-id="e213" x="1384" y="2088" font-family="Arial, Hiragino Sans, Noto Sans JP, sans-serif" font-size="20" font-weight="700" fill="#172B46" text-anchor="start">外部ニュース / AI API</text>
-<text data-width="315" data-id="e214" x="1384" y="2114" font-family="Arial, Hiragino Sans, Noto Sans JP, sans-serif" font-size="16" font-weight="400" fill="#526477" text-anchor="start">Gemini / DeepSeek / Logfire など</text>
+<text data-width="315" data-id="e214" x="1384" y="2114" font-family="Arial, Hiragino Sans, Noto Sans JP, sans-serif" font-size="16" font-weight="400" fill="#526477" text-anchor="start">Gemini / Logfire など</text>
 <text data-width="500" data-id="e215" x="294" y="2206" font-family="Arial, Hiragino Sans, Noto Sans JP, sans-serif" font-size="17" font-weight="700" fill="#172B46" text-anchor="start">GitHub Actions → ECR → ECS / Lambda</text>
 <ns0:svg xmlns:ns0="http://www.w3.org/2000/svg" width="35" height="35" viewBox="0 0 80 80" version="1.1" x="240" y="2189">
     <ns0:title>Icon-Architecture/64/Arch_Amazon-Elastic-Container-Registry_64</ns0:title>
