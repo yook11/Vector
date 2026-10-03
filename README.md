@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/cbd9db5b-e8e9-4a3a-ad84-c1c581770f6f
 | 記事処理 | EventBridge Scheduler・AWS Lambda・Amazon SQS・Transactional Outbox |
 | その他の非同期処理 | taskiq (worker / scheduler)・ElastiCache Valkey (queue / レート制限) |
 | データ | Amazon RDS for PostgreSQL・pgvector (768次元ベクトル検索) |
-| AI | Gemini (翻訳・要約・リサーチ計画・回答生成・Embedding)・DeepSeek (重要度・背景の分析・検索クエリ生成・根拠精査) |
+| AI | Gemini (翻訳・要約・重要度と背景の分析・リサーチ計画・検索クエリ生成・根拠精査・回答生成・週次ブリーフィング・Embedding) |
 | 外部検索 | Amazon Bedrock AgentCore Gateway (Web Search) |
 | 基盤・可観測性 | AWS ECS Fargate (ap-northeast-1)・Terraform・Docker Compose・Logfire (OpenTelemetry)・GitHub Actions |
 
@@ -138,7 +138,7 @@ flowchart TB
     COMP -->|"本文を取得できず<br/>分析できる記事にならない"| END1(["分析へ進めずに終了"])
     ANALYZABLE -->|"article.analyzable_created"| CUR["整形 (Gemini)<br/>日本語に翻訳・要約し<br/>明らかに無関係な<br/>記事を除く"]
     CUR -->|"Noise<br/>投資判断にも世界情勢の<br/>理解にも役立たない"| END2(["保存して終了"])
-    CUR -->|"Signal<br/>article.curated_signal"| ASSESS["分析 (DeepSeek)<br/>重要度・背景を分析し<br/>定義した12カテゴリに<br/>当たるかを判定"]
+    CUR -->|"Signal<br/>article.curated_signal"| ASSESS["分析 (Gemini)<br/>重要度・背景を分析し<br/>定義した12カテゴリに<br/>当たるかを判定"]
     ASSESS -->|"対象外<br/>投資判断に役立つ出来事が<br/>ない、またはカテゴリ外"| END3(["保存して終了"])
     ASSESS -->|"対象内<br/>article.assessed_in_scope"| EMB["Embedding (Gemini)<br/>関連記事を探すための<br/>ベクトルを生成して保存"]
 
@@ -159,7 +159,7 @@ flowchart TB
 
 ## Getting Started
 
-ローカルでは Docker Compose で起動できます。Gemini / DeepSeek の API key と、各種 secret の設定が必要です。
+ローカルでは Docker Compose で起動できます。Gemini の API key と、各種 secret の設定が必要です。
 
 ```bash
 cp .env.example .env

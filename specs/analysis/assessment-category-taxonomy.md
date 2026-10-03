@@ -157,7 +157,7 @@ return InScope(
 - `assessment_category_values()` が `InScopeCategory` 全値を定義順で含む。
 - `assessment_category_values()` の末尾が `"out_of_scope"`。
 - `assessment_category_values()` に重複がない。
-- DeepSeek / Gemini schema の category enum が `assessment_category_values()` と一致する。
+- Gemini schema の category enum が `assessment_category_values()` と一致する。
 - `parse_assessment()` が `out_of_scope` を `OutOfScope` にする。
 - `parse_assessment()` が各 `InScopeCategory` 値を `InScope` にする。
 - `parse_assessment()` が unknown category を `CATEGORY_UNKNOWN_VALUE` にする。

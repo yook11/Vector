@@ -217,6 +217,8 @@ Repositoryの起動時・保存時のカテゴリ整合性チェックは維持�
 
 ### 3.3.3 AssessmentのAI呼び出しとDeepSeek cleanup
 
+> 2026-10-03: 生成モデルを Gemini に統一し、DeepSeek を外した（#529）。本節の DeepSeek の記述は当時の記録。今のイベント名は `assessment_gemini_output_truncated`（`reason=output_truncated`）と `assessment_gemini_response_defect`。`output_tokens` は thinking を含む出力トークン数、`finish_reason` は Gemini の終了理由名で記録する。DeepSeek クライアントの cleanup ログ（`deepseek_client_cleanup_failed`）はなくなった。
+
 Serviceから渡すメッセージ用ロガーを、DeepSeek・Gemini両方の`assess` / `_call_once` / `_call_api`が必須キーワード引数`logger: FilteringBoundLogger`で受け取る。`_call_once`でモデルをbindした派生ロガーを作り、開始・成功の記録と`_call_api`へ渡す。インスタンス属性には保持しない。compositionは`open_deepseek_client`へ呼び出し単位のロガーを渡し、cleanupにはメッセージ情報を持ち込まない。
 
 | イベント | レベル | 記録内容・タイミング |
