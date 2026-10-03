@@ -151,39 +151,6 @@ resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
       stat        = "Sum"
 
       dimensions = {
-        kind     = "ai_error_insufficient_balance"
-        provider = "gemini"
-      }
-    }
-  }
-
-  metric_query {
-    id = "quota_gemini"
-
-    metric {
-      namespace   = "Vector/Pipeline"
-      metric_name = "ai_provider_exhausted"
-      period      = 900
-      stat        = "Sum"
-
-      dimensions = {
-        kind     = "ai_error_usage_limit_exhausted"
-        provider = "gemini"
-      }
-    }
-  }
-
-  # 旧い kind (provider error の CODE) は、新しい kind を出すアプリの反映を確認してから外す。
-  metric_query {
-    id = "reason_balance_gemini"
-
-    metric {
-      namespace   = "Vector/Pipeline"
-      metric_name = "ai_provider_exhausted"
-      period      = 900
-      stat        = "Sum"
-
-      dimensions = {
         kind     = "insufficient_balance"
         provider = "gemini"
       }
@@ -191,7 +158,7 @@ resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
   }
 
   metric_query {
-    id = "reason_quota_gemini"
+    id = "quota_gemini"
 
     metric {
       namespace   = "Vector/Pipeline"
@@ -208,7 +175,7 @@ resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
 
   metric_query {
     id          = "exhausted_total"
-    expression  = "SUM([FILL(balance_gemini, 0), FILL(quota_gemini, 0), FILL(reason_balance_gemini, 0), FILL(reason_quota_gemini, 0)])"
+    expression  = "SUM([FILL(balance_gemini, 0), FILL(quota_gemini, 0)])"
     label       = "ai_provider_exhausted total"
     return_data = true
   }

@@ -203,7 +203,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 - `oldest_outstanding_enqueue_age` — dimension `stage` × 3(acquisition / completion / curation)。queue_health の毎分観測を Logfire gauge と EMF の二重 sink にする。仕事が無いときは 0 を emit(既存の `_age_or_zero` と同じ)。
 - `observation_up` — dimension `stage` × 4。既存セマンティクス(成功 1 / 失敗 0)のまま二重 sink。
 - `processing_outcome` — dimension `stage` × `result`(12 系列: completion 3 + curation 4 + assessment 3 + embedding 2)。emit point・分類境界は既存 Logfire metric `vector.{stage}.processing_outcome{result}` と同一(`record_*_processing_outcome` 内の二重 sink)。分類ロジックは 1 か所、sink が 2 つ。stage dimension は `observation_up` / `oldest_outstanding_enqueue_age` と同じパターン。
-- `ai_provider_exhausted` — dimension `kind` × `provider`(≤ 4 系列)。emit point は A6 の通り。
+- `ai_provider_exhausted` — dimension `kind` × `provider`(≤ 2 系列)。emit point は A6 の通り。
 - 実装方式: EMF は公開安定仕様の JSON 形式なので、依存追加せず stdout へ 1 行 JSON を書く薄い helper を第一候補とする(`aws-embedded-metrics` 採用は依存追加になるため Ask First 対象)。書式は公式仕様で確認済み: root の `_aws.Timestamp`(epoch ミリ秒)+ `_aws.CloudWatchMetrics[]`(Namespace / Dimensions / Metrics)、metric・dimension の値は root 直下に置く。StorageResolution は既定の 60 秒でよい。
 - 抽出経路: PutLogEvents 経由なら特別なヘッダー不要と公式に明記されており、awslogs ドライバは PutLogEvents で配送するため、stdout → 自動抽出が成立する。ただし「ECS + awslogs」の組み合わせを一文で明記した公式ページは無いため、Step 2 のデプロイ後に `AWS/Logs` namespace の EMF エラーメトリクスで実地確認する。
 
@@ -223,7 +223,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 
 ## 4. コスト概算
 
-- 本カタログのカスタムメトリクスは15系列(processing_outcome 11 + ai_provider_exhausted 4)。age 3・observation_up 3 は queue 観測の撤去(2026-09)で、dispatch_run 3 は取得依頼投入の移行(2026-09-21)で、completion の infra_error は旧補完経路の撤去(2026-09-25)で emit を停止した。
+- 本カタログのカスタムメトリクスは13系列(processing_outcome 11 + ai_provider_exhausted 2)。age 3・observation_up 3 は queue 観測の撤去(2026-09)で、dispatch_run 3 は取得依頼投入の移行(2026-09-21)で、completion の infra_error は旧補完経路の撤去(2026-09-25)で emit を停止した。
 - 本カタログのalarmは8本(A1×2, A4×3, A6×1, A7×1, A8×1)。A2×3・A3×1 は 2026-09 に、A4 の completion は 2026-09-23 に廃止。
 - SQS／Lambda固有の監視は各工程の定義を参照する。費用は実際の利用量と料金で確認する。Logfireのtraceは維持する。
 
