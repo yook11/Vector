@@ -25,7 +25,8 @@ dependencies = [
     "uvicorn[standard]>=0.50.2,<1",
     "redis>=8.0.1,<9",
     "supervisor>=4.2,<5",
-    "logfire[fastapi,httpx,sqlalchemy,system-metrics]>=4.37.0",
+    "logfire[fastapi,httpx,sqlalchemy,system-metrics]>=4.39.0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
     "psutil>=7.2.2",
     # RDS IAM 認証の auth token 署名のみに使う。ローカル署名で I/O が無く、呼び出しも
     # 接続ごとの低頻度なので、非同期化は asyncio.to_thread で足りる。aiobotocore は
