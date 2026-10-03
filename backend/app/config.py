@@ -90,8 +90,7 @@ class Settings(DatabaseSettings, HttpSettings):
     gemini_api_key: SecretStr = SecretStr("")
 
     # 外部検索の入口。AgentCore Gateway の MCP endpoint で、gateway ID は apply 時に
-    # 確定するため URL からしか知れない。値を持つのは agent 段 (実呼び出し) と
-    # api 段 (research 開始 API の設定プリフライト) だけ。
+    # 確定するため URL からしか知れない。値を使うのは agent 段 (実呼び出し) だけ。
     agentcore_gateway_url: str | None = None
 
     # ニュース取得

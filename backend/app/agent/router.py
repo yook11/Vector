@@ -25,7 +25,6 @@ from fastapi import (
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.composition import ensure_external_search_configured
 from app.agent.live_updates.sse import (
     AgentRunQueuedSseConnection,
     AgentRunSseCapacity,
@@ -69,7 +68,6 @@ from app.agent.runs.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
-from app.ai_providers.errors import AIProviderError
 from app.db.fastapi import get_caller_managed_session
 from app.dependencies import (
     CurrentUser,
@@ -89,7 +87,6 @@ router = APIRouter(prefix="/api/v1/research", tags=["research"])
 
 logger = structlog.get_logger(__name__)
 
-_GENERATION_UNAVAILABLE_DETAIL = "Answer generation is temporarily unavailable"
 _ACTIVE_RUN_DETAIL = "A run is already in progress for this thread"
 _RUN_ALREADY_COMPLETED_DETAIL = "Run already completed"
 _THREAD_NOT_FOUND_DETAIL = "Research thread not found"
@@ -134,7 +131,7 @@ def get_agent_run_sse_timing() -> AgentRunSseTiming:
     response_model=ResearchRunStartResponse,
     responses={
         status.HTTP_503_SERVICE_UNAVAILABLE: {
-            "description": "Answer generation is temporarily unavailable"
+            "description": "Failed to enqueue research run"
         },
         status.HTTP_409_CONFLICT: {"description": _ACTIVE_RUN_DETAIL},
         status.HTTP_404_NOT_FOUND: {"description": _THREAD_NOT_FOUND_DETAIL},
@@ -155,11 +152,6 @@ async def create_research_response(
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     enqueuer: Annotated[AgentRunEnqueuer, Depends(get_agent_run_enqueuer)],
 ) -> ResearchRunStartResponse | JSONResponse:
-    try:
-        ensure_external_search_configured()
-    except AIProviderError as exc:
-        raise _generation_unavailable() from exc
-
     repo = AgentRunCreationRepository(session)
     try:
         async with session.begin():
@@ -518,13 +510,6 @@ async def get_research_run(
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return response
-
-
-def _generation_unavailable() -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=_GENERATION_UNAVAILABLE_DETAIL,
-    )
 
 
 def _parse_sse_run_id(value: str) -> UUID:

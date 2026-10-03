@@ -144,6 +144,22 @@ async def test_wired_briefing_generator_opens_client_only_when_generating(
     ]
 
 
+@pytest.mark.asyncio
+async def test_agent_worker_startup_stops_when_external_settings_are_missing() -> None:
+    """agent worker は設定が欠けていれば起動処理で失敗し、run の受信へ進まない。"""
+    from app.queue.composition import _prepare_agent_worker
+
+    with (
+        patch("app.agent.composition.settings") as mock_settings,
+        pytest.raises(RuntimeError, match="GEMINI_API_KEY"),
+    ):
+        mock_settings.gemini_api_key = SecretStr("")
+        mock_settings.agentcore_gateway_url = (
+            "https://gw-test.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com"
+        )
+        await _prepare_agent_worker(TaskiqState())
+
+
 class TestWorkerMaxAsyncTasksCeiling:
     """全 worker が ``--max-async-tasks`` を明示し、各値が pool cap 以下に収まる。
 

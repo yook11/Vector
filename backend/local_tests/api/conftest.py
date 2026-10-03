@@ -7,7 +7,6 @@ from uuid import uuid4
 import httpx
 import jwt
 import pytest
-from pydantic import SecretStr
 from sqlalchemy import text
 
 from app.agent.live_updates.sse import AgentRunSseCapacity
@@ -158,19 +157,11 @@ def deadline_scheduler():
 
 
 @pytest.fixture
-def research_client(
-    api_client, live_redis, run_enqueuer, deadline_scheduler, monkeypatch
-):
+def research_client(api_client, live_redis, run_enqueuer, deadline_scheduler):
     """Redis側の依存を記録用に差し替え、リサーチのAPIを呼べる状態にする。"""
     from app.agent.router import get_agent_run_sse_capacity
-    from app.config import settings
     from app.main import app
 
-    # 開始APIは外部検索の設定があることだけを確かめ、実際には呼ばない。
-    monkeypatch.setattr(settings, "gemini_api_key", SecretStr("test-gemini-key"))
-    monkeypatch.setattr(
-        settings, "agentcore_gateway_url", "https://gateway.example.test"
-    )
     transport = AgentLiveTransport(live_redis)
     capacity = AgentRunSseCapacity()
     app.dependency_overrides.update(

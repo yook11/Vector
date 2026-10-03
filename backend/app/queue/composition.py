@@ -62,13 +62,17 @@ async def _wire_briefing_adapter(state: TaskiqState) -> None:
     )
 
 
-async def _warm_agent_sdk_imports(state: TaskiqState) -> None:
-    """agent run が使う AI SDK を listener 開始前にロードする。
+async def _prepare_agent_worker(state: TaskiqState) -> None:
+    """agent run に必要な設定を確かめ、AI SDK を listener 開始前にロードする。
 
+    設定の欠落は、run を受け取ってから失敗させず worker の起動で止める。
     run 中の遅延 import は 0.25 vCPU の event loop を数秒塞ぎ、listener の
     blocking read が socket_timeout を超えて worker ごと落ちるため、run 経路の
     重い SDK (Gemini) をここで済ませる。
     """
+    from app.agent.composition import ensure_agent_worker_configured
+
+    ensure_agent_worker_configured()
     # 具象 SDK の import を関数本体に遅延 (module docstring 参照)。
     import google.genai  # noqa: F401
 

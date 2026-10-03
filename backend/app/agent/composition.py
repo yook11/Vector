@@ -1,7 +1,7 @@
 """Question-answering workflow composition.
 
-The API process only performs the lightweight configuration check; worker tasks
-call the builder when they actually execute an agent run.
+The agent worker checks its configuration at startup; worker tasks call the
+builder when they actually execute an agent run.
 """
 
 from __future__ import annotations
@@ -47,11 +47,18 @@ if TYPE_CHECKING:
 _GEMINI_CONNECTION = GeminiConnectionSettings(read_timeout=30.0)
 
 
-def ensure_external_search_configured() -> None:
-    if not (
-        settings.gemini_api_key.get_secret_value() and settings.agentcore_gateway_url
-    ):
-        raise AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED)
+def ensure_agent_worker_configured() -> None:
+    """run が使う外部接続の設定を worker の起動時に確かめ、欠けていれば起動させない。"""
+    missing = [
+        name
+        for name, value in (
+            ("GEMINI_API_KEY", settings.gemini_api_key.get_secret_value()),
+            ("AGENTCORE_GATEWAY_URL", settings.agentcore_gateway_url),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"agent worker requires {', '.join(missing)}")
 
 
 @asynccontextmanager
@@ -84,8 +91,6 @@ def _build_answering_phases(
     delta_reporter: AnswerDeltaReporter | None = None,
     progress: AnswerProgressReporter | None = None,
 ) -> AnsweringPhases:
-    ensure_external_search_configured()
-
     from app.agent.answering.direct_answer.service import DirectAnswerService
     from app.agent.answering.evidence_answer.service import EvidenceAnswerService
     from app.agent.evidence_collection.internal_search.ai.gemini import (

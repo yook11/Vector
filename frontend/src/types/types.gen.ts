@@ -1615,7 +1615,7 @@ export type CreateResearchResponseErrors = {
      */
     429: ResearchDailyRequestLimitExceededResponse;
     /**
-     * Answer generation is temporarily unavailable
+     * Failed to enqueue research run
      */
     503: unknown;
 };

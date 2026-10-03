@@ -24,8 +24,7 @@ locals {
       cpu            = 256, memory = 512, port = 8000, singleton = false
       command        = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
       secrets = {
-        # research 開始 API の事前チェックが key の存在だけを見る。呼び出しは agent が行うので api は外へ出ない。
-        GEMINI_API_KEY           = "gemini-api-key"
+        # 旧版の research 開始 API の事前チェックだけが存在を見る。新しい版の反映後に外す。
         DEEPSEEK_API_KEY         = "deepseek-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
@@ -148,7 +147,7 @@ locals {
     api = {
       DATABASE_URL = local.backend_db_url["vector_api"]
       REDIS_URL    = local.broker_redis_url["api"]
-      # 事前チェックが存在を見るだけで、呼び出しは agent が行う (api に IAM 権限も PrivateLink も与えない)。
+      # 旧版の research 開始 API の事前チェックだけが存在を見る。新しい版の反映後に外す (api に IAM 権限も PrivateLink も与えない)。
       AGENTCORE_GATEWAY_URL = aws_bedrockagentcore_gateway.web_search.gateway_url
     }
     # scheduler は DB に接続しないが、Settings が database_url を必須とするため値だけ渡す (task role に rds-db:connect は無い)。
