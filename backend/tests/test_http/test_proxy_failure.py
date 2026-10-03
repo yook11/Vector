@@ -1,10 +1,10 @@
-"""接続先だけをモックし、HTTPX・httpcoreを通したプロキシ失敗の観測範囲を検証する。"""
+"""接続先だけをモックし、HTTPX2・httpcore2を通したプロキシ失敗の観測範囲を検証する。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
-import httpcore
-import httpx
+import httpcore2
+import httpx2
 import pytest
 
 from app.http.error_mapping import (
@@ -28,8 +28,8 @@ _RECEIVED_AT = datetime(2026, 9, 23, tzinfo=UTC)
 def _install_proxy_stream(monkeypatch: pytest.MonkeyPatch, *responses: bytes) -> None:
     """HTTPのパースと例外変換を実装に任せ、ネットワークの読み書きだけ差し替える。"""
     monkeypatch.setattr(
-        "httpcore.AnyIOBackend.connect_tcp",
-        AsyncMock(return_value=httpcore.AsyncMockStream(list(responses))),
+        "httpcore2.AnyIOBackend.connect_tcp",
+        AsyncMock(return_value=httpcore2.AsyncMockStream(list(responses))),
     )
 
 
@@ -40,8 +40,8 @@ async def test_connect_forbidden_preserves_proxy_status(
     _install_proxy_stream(
         monkeypatch, b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"
     )
-    async with httpx.AsyncClient(proxy=_PROXY, trust_env=False) as client:
-        with pytest.raises(httpx.ProxyError) as caught:
+    async with httpx2.AsyncClient(proxy=_PROXY, trust_env=False) as client:
+        with pytest.raises(httpx2.ProxyError) as caught:
             await client.get("https://example.invalid/article")
 
     mapped = http_transport_error_from_exception(caught.value)
@@ -59,8 +59,8 @@ async def test_connect_unavailable_preserves_proxy_status(
         monkeypatch,
         b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
     )
-    async with httpx.AsyncClient(proxy=_PROXY, trust_env=False) as client:
-        with pytest.raises(httpx.ProxyError) as caught:
+    async with httpx2.AsyncClient(proxy=_PROXY, trust_env=False) as client:
+        with pytest.raises(httpx2.ProxyError) as caught:
             await client.get("https://example.invalid/article")
 
     mapped = http_transport_error_from_exception(caught.value)
@@ -79,9 +79,9 @@ async def test_forwarded_forbidden_response_is_not_assumed_proxy_refusal(
         b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n"
         b"X-Squid-Error: ERR_ACCESS_DENIED 0\r\n\r\n",
     )
-    async with httpx.AsyncClient(proxy=_PROXY, trust_env=False) as client:
+    async with httpx2.AsyncClient(proxy=_PROXY, trust_env=False) as client:
         response = await client.get("http://example.invalid/article")
-        with pytest.raises(httpx.HTTPStatusError) as caught:
+        with pytest.raises(httpx2.HTTPStatusError) as caught:
             response.raise_for_status()
 
     assert http_transport_error_from_exception(caught.value) is None
@@ -98,9 +98,9 @@ async def test_forbidden_response_after_tunnel_is_not_proxy_refusal(
         b"HTTP/1.1 200 Connection Established\r\n\r\n",
         b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
     )
-    async with httpx.AsyncClient(proxy=_PROXY, trust_env=False) as client:
+    async with httpx2.AsyncClient(proxy=_PROXY, trust_env=False) as client:
         response = await client.get("https://example.invalid/article")
-        with pytest.raises(httpx.HTTPStatusError) as caught:
+        with pytest.raises(httpx2.HTTPStatusError) as caught:
             response.raise_for_status()
 
     assert http_transport_error_from_exception(caught.value) is None
@@ -115,8 +115,8 @@ async def test_proxy_tcp_failure_has_no_refusal_status(
     monkeypatch.setattr(
         "anyio.connect_tcp", AsyncMock(side_effect=ConnectionRefusedError("refused"))
     )
-    async with httpx.AsyncClient(proxy=_PROXY, trust_env=False) as client:
-        with pytest.raises(httpx.ConnectError) as caught:
+    async with httpx2.AsyncClient(proxy=_PROXY, trust_env=False) as client:
+        with pytest.raises(httpx2.ConnectError) as caught:
             await client.get("https://example.invalid/article")
 
     mapped = http_transport_error_from_exception(caught.value)

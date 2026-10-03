@@ -7,7 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
-import httpx
+import httpx2
 import pytest
 from google.genai import errors as genai_errors
 from google.genai.client import AsyncClient
@@ -610,7 +610,7 @@ async def test_translated_provider_error_preserves_cause_after_cleanup(
 ) -> None:
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
-    source_error = httpx.ReadTimeout("PROVIDER_TIMEOUT_SENTINEL")
+    source_error = httpx2.ReadTimeout("PROVIDER_TIMEOUT_SENTINEL")
     client = FakeGeminiClient([], streams=[source_error])
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
 

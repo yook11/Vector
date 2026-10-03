@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2
 import pytest
 
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
@@ -80,15 +80,15 @@ async def _reader_entries(fixture: str) -> list[RssEntry]:
     feedparser / decode / Entry 抽出は Reader 内部で本物が動く。
     """
     raw = (_FIXTURES_DIR / fixture).read_bytes()
-    response = httpx.Response(
+    response = httpx2.Response(
         status_code=200,
         content=raw,
-        request=httpx.Request("GET", "https://example.com/feed"),
+        request=httpx2.Request("GET", "https://example.com/feed"),
     )
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 

@@ -19,7 +19,7 @@ from time import struct_time
 from typing import Any, Literal
 
 import feedparser
-import httpx
+import httpx2
 import structlog
 
 from app.collection.article_acquisition.reader.read_errors import (
@@ -36,7 +36,7 @@ ParseMode = Literal["text", "bytes"]
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
 )
-_DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+_DEFAULT_TIMEOUT = httpx2.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -169,7 +169,7 @@ class RssReader:
         source_name: str,
         parse_mode: ParseMode = "text",
         user_agent: str = _DEFAULT_USER_AGENT,
-        timeout: httpx.Timeout = _DEFAULT_TIMEOUT,
+        timeout: httpx2.Timeout = _DEFAULT_TIMEOUT,
     ) -> list[RssEntry]:
         """HTTP GET → feedparser → ``list[RssEntry]`` まで完結する。
 
@@ -211,11 +211,10 @@ class RssReader:
         endpoint_url: str,
         parse_mode: ParseMode,
         user_agent: str,
-        timeout: httpx.Timeout,
+        timeout: httpx2.Timeout,
     ) -> str | bytes:
         async with make_external_async_client(
             headers={"User-Agent": user_agent},
-            verify=True,
             timeout=timeout,
         ) as client:
             response = await get_source_response(client, endpoint_url)

@@ -2,7 +2,7 @@
 
 from functools import partial
 
-import httpx
+import httpx2
 import pytest
 
 from local_tests.completion import concurrent_processing
@@ -49,7 +49,7 @@ class TestFirstCommittedCompletionIsPreserved:
     def later_response(self, request):
         if request.param == 200:
             return article_response("Later content")
-        return httpx.Response(request.param)
+        return httpx2.Response(request.param)
 
     async def test_redelivery_keeps_first_article_audit_and_outbox(
         self,
@@ -131,7 +131,7 @@ class TestFirstCommittedCompletionIsPreserved:
 
         first_result, later_result = await run_completion_race(
             pending_article,
-            first_response=httpx.Response(403),
+            first_response=httpx2.Response(403),
             second_response=later_response,
             first_commit_phase="closed",
         )

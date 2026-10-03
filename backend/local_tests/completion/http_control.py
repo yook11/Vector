@@ -5,12 +5,12 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass, field
 
-import httpx
+import httpx2
 
 
 @dataclass
 class ResponseGate:
-    response: httpx.Response
+    response: httpx2.Response
     requested: asyncio.Event = field(default_factory=asyncio.Event)
     released: asyncio.Event = field(default_factory=asyncio.Event)
 

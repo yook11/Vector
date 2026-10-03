@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2
 import pytest
 
 from app.collection.article_acquisition.reader.crossref_reader import (
@@ -42,11 +42,11 @@ def _raw_items() -> list[dict[str, Any]]:
     return list(raw["message"]["items"])
 
 
-def _response(status_code: int, content: bytes) -> httpx.Response:
-    return httpx.Response(
+def _response(status_code: int, content: bytes) -> httpx2.Response:
+    return httpx2.Response(
         status_code=status_code,
         content=content,
-        request=httpx.Request("GET", "https://api.crossref.org/works"),
+        request=httpx2.Request("GET", "https://api.crossref.org/works"),
     )
 
 
@@ -61,7 +61,7 @@ async def _reader_entries() -> list[CrossrefEntry]:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 
@@ -93,7 +93,7 @@ async def _raise_through(status_code: int) -> None:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 
@@ -119,7 +119,7 @@ async def _fetch_body(content: bytes) -> list[CrossrefEntry]:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 
@@ -204,7 +204,7 @@ async def test_reader_tools_injects_contact_without_real_network(
     @asynccontextmanager
     async def _fake_safe_client(**kwargs: Any) -> AsyncIterator[Any]:
         captured_headers.update(kwargs["headers"])
-        client = AsyncMock(spec=httpx.AsyncClient)
+        client = AsyncMock(spec=httpx2.AsyncClient)
         client.get = AsyncMock(return_value=response)
         yield client
 

@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 from google.genai import errors, types
 from pydantic import SecretStr
@@ -159,8 +159,8 @@ async def test_uses_first_embedding_and_can_reuse_after_failure(sdk_client, read
             AIProviderResponseError,
             "auth",
         ),
-        (httpx.ReadTimeout("private"), AIProviderTransportError, "timeout"),
-        (httpx.ConnectError("private"), AIProviderTransportError, "network_io"),
+        (httpx2.ReadTimeout("private"), AIProviderTransportError, "timeout"),
+        (httpx2.ConnectError("private"), AIProviderTransportError, "network_io"),
     ],
 )
 async def test_provider_error_mapping(sdk_client, ready, error, expected, reason):
@@ -190,11 +190,11 @@ async def test_common_client_real_sdk_and_embedder(monkeypatch, ready):
 
     def respond(request):
         requests.append(request)
-        return httpx.Response(200, json={"embeddings": [{"values": [0.2] * 768}]})
+        return httpx2.Response(200, json={"embeddings": [{"values": [0.2] * 768}]})
 
     def factory(**kwargs):
         assert kwargs.pop("retries") == 0
-        http = httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs)
+        http = httpx2.AsyncClient(transport=httpx2.MockTransport(respond), **kwargs)
         http_clients.append(http)
         return http
 

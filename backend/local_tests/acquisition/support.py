@@ -3,12 +3,12 @@
 import json
 from html import escape
 
-import httpx
+import httpx2
 
 
-def rss_article_response(*, title: str, url: str, body: str | None) -> httpx.Response:
+def rss_article_response(*, title: str, url: str, body: str | None) -> httpx2.Response:
     description = f"<description>{escape(body)}</description>" if body else ""
-    return httpx.Response(
+    return httpx2.Response(
         200,
         text=(
             '<rss version="2.0"><channel><title>VentureBeat</title><item>'

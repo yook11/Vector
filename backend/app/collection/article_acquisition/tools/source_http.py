@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
-import httpx
+import httpx2
 
 from app.http.destination_resolution import HostResolutionError
 from app.http.error_mapping import (
@@ -15,15 +15,15 @@ from app.http.error_mapping import (
 
 
 async def get_source_response(
-    client: httpx.AsyncClient,  # noqa: TID251
+    client: httpx2.AsyncClient,  # noqa: TID251
     url: str,
     *,
     params: Mapping[str, str | int] | None = None,
-) -> httpx.Response:
+) -> httpx2.Response:
     """成功応答を返し、宛先拒否と通信失敗と確認できない例外は元のまま伝える。"""
     try:
         response = await client.get(url, params=params)
-    except (httpx.HTTPError, HostResolutionError) as exc:
+    except (httpx2.HTTPError, HostResolutionError) as exc:
         mapped = http_transport_error_from_exception(exc)
         if mapped is None:
             raise
@@ -31,6 +31,6 @@ async def get_source_response(
     received_at = datetime.now(UTC)
     try:
         response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
+    except httpx2.HTTPStatusError as exc:
         raise http_response_error_from_exception(exc, received_at=received_at) from exc
     return response

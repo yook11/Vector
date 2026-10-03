@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from functools import partial
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy import text
 
@@ -98,7 +98,7 @@ def http_boundary(monkeypatch, completion_settings, page_response):
 
     async def respond(request):
         if request.url.path == "/robots.txt":
-            return httpx.Response(200, text="User-agent: *\nAllow: /\n")
+            return httpx2.Response(200, text="User-agent: *\nAllow: /\n")
         return await page_response(request)
 
     http = StubHttp(respond)

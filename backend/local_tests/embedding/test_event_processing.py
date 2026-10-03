@@ -4,7 +4,7 @@ import asyncio
 import json
 from threading import Event
 
-import httpx
+import httpx2
 import pytest
 
 from app.analysis.embedding import consumer as consumer_module
@@ -34,7 +34,7 @@ async def test_event_saves_embedding_for_the_target_article(
 
     async def respond(request):
         sent_ai_request_bodies.append(json.loads(request.content))
-        return httpx.Response(200, json={"embeddings": [{"values": expected_vector}]})
+        return httpx2.Response(200, json={"embeddings": [{"values": expected_vector}]})
 
     gemini_response.side_effect = respond
     response = await invoke_event(target)
@@ -105,7 +105,7 @@ async def test_http_failure_preserves_unsaved_article_and_allows_retry(
     next_article = await seed_article(
         system_database, "https://example.com/after-network-failure"
     )
-    gemini_response.side_effect = httpx.ConnectError("test connection failure")
+    gemini_response.side_effect = httpx2.ConnectError("test connection failure")
 
     response = await invoke_event(failed_article)
     gemini_response.assert_awaited()

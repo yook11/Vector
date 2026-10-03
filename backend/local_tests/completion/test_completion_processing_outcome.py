@@ -2,7 +2,7 @@
 
 import asyncio
 
-import httpx
+import httpx2
 import pytest
 
 from local_tests.completion.support import (
@@ -62,7 +62,7 @@ class TestDecidedResultIsRecordedOnce:
         pending_article = await seed_pending(
             system_database, "https://example.com/outcome-rate-limited"
         )
-        page_response.return_value = httpx.Response(429)
+        page_response.return_value = httpx2.Response(429)
 
         result = await completion_consumer.consume(pending_article.id)
 
@@ -77,7 +77,7 @@ class TestDecidedResultIsRecordedOnce:
         pending_article = await seed_pending(
             system_database, "https://example.com/outcome-forbidden"
         )
-        page_response.return_value = httpx.Response(403)
+        page_response.return_value = httpx2.Response(403)
 
         result = await completion_consumer.consume(pending_article.id)
 
@@ -97,7 +97,7 @@ class TestDecidedResultIsRecordedOnce:
         pending_article = await seed_pending(
             system_database, "https://example.com/outcome-close-rollback"
         )
-        page_response.return_value = httpx.Response(403)
+        page_response.return_value = httpx2.Response(403)
         with control_commit(pending_article, phase="closed", fail=True) as fault:
             result = await completion_consumer.consume(pending_article.id)
 
@@ -118,7 +118,7 @@ class TestDecidedResultIsRecordedOnce:
         pending_article = await seed_pending(
             system_database, "https://example.com/outcome-audit-failed"
         )
-        page_response.return_value = httpx.Response(403)
+        page_response.return_value = httpx2.Response(403)
         with control_commit(pending_article, phase="failure_audit", fail=True) as fault:
             result = await completion_consumer.consume(pending_article.id)
 
@@ -156,7 +156,7 @@ class TestUndecidedResultIsNotRecorded:
     def fetched_response(self, request):
         if request.param == 200:
             return article_response()
-        return httpx.Response(request.param)
+        return httpx2.Response(request.param)
 
     async def test_missing_article_is_not_recorded(
         self, system_database, completion_consumer, capsys

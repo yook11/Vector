@@ -2,11 +2,12 @@
 
 import asyncio
 import gzip
+import tracemalloc
 from collections.abc import AsyncIterator, Iterable
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-import httpx
+import httpx2
 import pytest
 
 from app.collection.article_completion import article_fetch
@@ -28,7 +29,7 @@ from app.shared.web_url import WebUrl
 _URL = WebUrl("https://example.com:8443/news/article?edition=1")
 
 
-class BodyStream(httpx.AsyncByteStream):
+class BodyStream(httpx2.AsyncByteStream):
     """読み込まれたチャンクと解放を観測できる応答本文。"""
 
     def __init__(self, chunks: Iterable[bytes]) -> None:
@@ -62,13 +63,15 @@ class DripStream(BodyStream):
 
 @pytest.fixture
 def install_client(monkeypatch):
-    """実HTTPXの応答処理を使い、送信先だけをテスト内で制御する。"""
+    """実HTTPX2の応答処理を使い、送信先だけをテスト内で制御する。"""
 
     def install(handler):
         clients = []
 
         def factory(**kwargs):
-            client = httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
+            client = httpx2.AsyncClient(
+                transport=httpx2.MockTransport(handler), **kwargs
+            )
             clients.append(client)
             return client
 
@@ -102,9 +105,9 @@ async def test_allowed_fetch_returns_response(
     def handler(request):
         requests.append(str(request.url))
         if request.url.path == "/robots.txt":
-            return httpx.Response(robots_status, stream=robots_stream)
+            return httpx2.Response(robots_status, stream=robots_stream)
         headers = {"content-type": content_type} if content_type else {}
-        return httpx.Response(200, headers=headers, stream=BodyStream([body]))
+        return httpx2.Response(200, headers=headers, stream=BodyStream([body]))
 
     install_client(handler)
     result = await article_fetch.fetch_article_response(_URL)
@@ -126,7 +129,7 @@ async def test_robots_disallow_stops_article_fetch(install_client) -> None:
 
     def handler(request):
         paths.append(request.url.path)
-        return httpx.Response(200, content=b"User-agent: *\nDisallow: /news/")
+        return httpx2.Response(200, content=b"User-agent: *\nDisallow: /news/")
 
     install_client(handler)
     with pytest.raises(RobotsDisallowedError):
@@ -148,8 +151,8 @@ async def test_response_failure_is_preserved_without_reading_body(
     def handler(request):
         paths.append(request.url.path)
         if resource == FetchResource.ARTICLE_PAGE and request.url.path == "/robots.txt":
-            return httpx.Response(404)
-        return httpx.Response(
+            return httpx2.Response(404)
+        return httpx2.Response(
             status,
             headers={"Retry-After": " 60 ", "Location": "/elsewhere"},
             stream=stream,
@@ -162,7 +165,7 @@ async def test_response_failure_is_preserved_without_reading_body(
     assert caught.value.status_code == status
     assert caught.value.retry_after == " 60 "
     assert before <= caught.value.received_at <= datetime.now(UTC)
-    assert isinstance(caught.value.__cause__, httpx.HTTPStatusError)
+    assert isinstance(caught.value.__cause__, httpx2.HTTPStatusError)
     assert paths == (
         ["/robots.txt"]
         if resource == FetchResource.ROBOTS_TXT
@@ -175,7 +178,7 @@ async def test_response_failure_is_preserved_without_reading_body(
 async def test_robots_timeout_is_transport_failure(install_client) -> None:
     """robots確認の通信タイムアウトを保持し、記事取得へ進まない。"""
     paths = []
-    original = httpx.ReadTimeout("no response")
+    original = httpx2.ReadTimeout("no response")
 
     def handler(request):
         paths.append(request.url.path)
@@ -238,9 +241,9 @@ async def test_received_size_limit_cannot_be_bypassed(
 
     def handler(request):
         if request.url.path == "/robots.txt":
-            return httpx.Response(404)
+            return httpx2.Response(404)
         headers = {"Content-Length": content_length} if content_length else {}
-        return httpx.Response(200, headers=headers, stream=stream)
+        return httpx2.Response(200, headers=headers, stream=stream)
 
     install_client(handler)
     with pytest.raises(ResponseSizeLimitExceededError) as caught:
@@ -259,8 +262,8 @@ async def test_body_at_size_limit_is_accepted(install_client, monkeypatch) -> No
 
     def handler(request):
         if request.url.path == "/robots.txt":
-            return httpx.Response(404)
-        return httpx.Response(200, stream=BodyStream([body]))
+            return httpx2.Response(404)
+        return httpx2.Response(200, stream=BodyStream([body]))
 
     install_client(handler)
     assert (await article_fetch.fetch_article_response(_URL)).content == body
@@ -270,7 +273,7 @@ async def test_declared_size_limit_stops_before_body(install_client) -> None:
     """robotsのContent-Length超過でも本文を受信せず中断する。"""
     stream = BodyStream([b"unread body"])
     install_client(
-        lambda request: httpx.Response(
+        lambda request: httpx2.Response(
             200,
             headers={"Content-Length": str(10 * 1024 * 1024 + 1)},
             stream=stream,
@@ -294,8 +297,8 @@ async def test_compressed_body_is_limited_after_decompression(
 
     def handler(request):
         if request.url.path == "/robots.txt":
-            return httpx.Response(404)
-        return httpx.Response(
+            return httpx2.Response(404)
+        return httpx2.Response(
             200,
             headers={
                 "Content-Encoding": "gzip",
@@ -311,6 +314,35 @@ async def test_compressed_body_is_limited_after_decompression(
     assert stream.closed
 
 
+async def test_nested_compression_keeps_decoding_memory_bounded(
+    install_client, monkeypatch
+) -> None:
+    """多重圧縮の小さな応答でも、展開途中のメモリが展開後の全量に比例しない。"""
+    monkeypatch.setattr(article_fetch, "_MAX_RESPONSE_BYTES", 64 * 1024)
+    decoded_bytes = 32 * 1024 * 1024
+    compressed = gzip.compress(gzip.compress(b"\0" * decoded_bytes))
+    stream = BodyStream([compressed])
+
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx2.Response(404)
+        return httpx2.Response(
+            200, headers={"Content-Encoding": "gzip, gzip"}, stream=stream
+        )
+
+    install_client(handler)
+    tracemalloc.start()
+    try:
+        with pytest.raises(ResponseSizeLimitExceededError) as caught:
+            await article_fetch.fetch_article_response(_URL)
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert caught.value.size_basis == ResponseSizeBasis.RECEIVED_DECODED_BODY
+    # まとめて展開する実装は全量(32MiB)以上を確保するため、その1/4を境界にする。
+    assert peak_bytes < decoded_bytes // 4
+
+
 async def test_continuous_receive_expires_and_releases_resources(
     install_client, monkeypatch
 ) -> None:
@@ -320,8 +352,8 @@ async def test_continuous_receive_expires_and_releases_resources(
 
     def handler(request):
         if request.url.path == "/robots.txt":
-            return httpx.Response(404)
-        return httpx.Response(200, stream=stream)
+            return httpx2.Response(404)
+        return httpx2.Response(200, stream=stream)
 
     clients = install_client(handler)
     with pytest.raises(FetchDeadlineExceededError) as caught:
@@ -338,7 +370,7 @@ async def test_external_cancellation_propagates_and_releases_resources(
 ) -> None:
     """呼び出し元のキャンセルを期限超過に変換せず、接続を解放する。"""
     stream = DripStream()
-    clients = install_client(lambda request: httpx.Response(200, stream=stream))
+    clients = install_client(lambda request: httpx2.Response(200, stream=stream))
     task = asyncio.create_task(article_fetch.fetch_article_response(_URL))
     await stream.started.wait()
     task.cancel()

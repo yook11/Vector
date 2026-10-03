@@ -10,7 +10,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
+import httpx2
 import structlog
 from google.genai import errors as genai_errors
 
@@ -212,7 +212,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
     # 変換器は SDK の例外を捕まえた直後に呼ばれるので、今の時刻を受信時刻とする。
     http_error = http_response_error_from_status(
         status_code,
-        response=exc.response if isinstance(exc.response, httpx.Response) else None,
+        response=exc.response if isinstance(exc.response, httpx2.Response) else None,
         received_at=datetime.now(UTC),
     )
     status = exc.status or ""

@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 
-import httpx
+import httpx2
 import pytest
 
 from app.agent.recording.types import Usage
@@ -120,7 +120,7 @@ async def test_translated_provider_error_records_failed_with_code() -> None:
     """翻訳済み provider 障害は分類済み失敗と CODE で閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
-    runtime = _runtime([httpx.ReadTimeout("timeout")], recorder)
+    runtime = _runtime([httpx2.ReadTimeout("timeout")], recorder)
 
     with pytest.raises(AIProviderTransportError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)

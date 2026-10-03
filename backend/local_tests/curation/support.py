@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from importlib import import_module
 from uuid import uuid4
 
-import httpx
+import httpx2
 
 from app.collection.events import AnalyzableArticleCreated
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
@@ -38,7 +38,7 @@ def curation_reply(*, relevance, title_ja, summary_ja):
     text = json.dumps(
         {"relevance": relevance, "title_ja": title_ja, "summary_ja": summary_ja}
     )
-    return httpx.Response(
+    return httpx2.Response(
         200,
         json={
             "candidates": [

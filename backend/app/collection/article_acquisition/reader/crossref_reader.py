@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-import httpx
+import httpx2
 import structlog
 
 from app.collection.article_acquisition.reader.read_errors import (
@@ -20,7 +20,7 @@ from app.http.external import make_external_async_client
 
 logger = structlog.get_logger(__name__)
 
-_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+_HTTP_TIMEOUT = httpx2.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 # JATS prefix (<jats:p>) と HTML tag を一括で剥がす
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -168,7 +168,6 @@ class CrossrefReader:
 
         async with make_external_async_client(
             headers={"User-Agent": self._user_agent, "Accept": "application/json"},
-            verify=True,
             timeout=_HTTP_TIMEOUT,
         ) as client:
             response = await get_source_response(
