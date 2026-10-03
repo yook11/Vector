@@ -13,6 +13,7 @@ install を呼ぶテストと呼ばないテストの間で redactor は持ち�
 
 from __future__ import annotations
 
+import httpx2
 import logfire
 import pytest
 from fastapi import FastAPI
@@ -21,7 +22,6 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, ValidationError
-from starlette.testclient import TestClient
 
 from app.audit.domain.event import Stage
 from app.logfire.redaction import (
@@ -154,7 +154,10 @@ def test_worker_validation_error_input_redacted(capfire: CaptureLogfire) -> None
 # (A) fastapi server span — instrument_fastapi の生 OTel span も redact される
 
 
-def test_fastapi_server_span_exception_redacted(capfire: CaptureLogfire) -> None:
+@pytest.mark.asyncio
+async def test_fastapi_server_span_exception_redacted(
+    capfire: CaptureLogfire,
+) -> None:
     """未処理例外を持つ全 span の exception event が redact され PII が残らない。"""
     install_exception_redaction()
     app = FastAPI()
@@ -164,8 +167,14 @@ def test_fastapi_server_span_exception_redacted(capfire: CaptureLogfire) -> None
     def boom() -> None:  # noqa: ANN202
         raise ValueError(_MESSAGE)
 
-    with TestClient(app, raise_server_exceptions=False) as test_client:
-        response = test_client.get("/boom")
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://testserver",
+        ) as test_client,
+    ):
+        response = await test_client.get("/boom")
     assert response.status_code == 500
 
     exc_spans = [s for s in capfire.exporter.exported_spans if _exception_event(s)]

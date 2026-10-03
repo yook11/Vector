@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 from fastapi import FastAPI, Request
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy import event
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession

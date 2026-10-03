@@ -1,6 +1,6 @@
 """GET /api/v1/admin/pipeline/health のルーターテスト (認可 + レスポンス形)。"""
 
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 
 from app.audit.domain.event import Stage
 

@@ -1,6 +1,6 @@
 # backend/tests/ — テストガイド
 
-バックエンドの全テストをここに配置する。pytest + pytest-asyncio + httpx (AsyncClient) を使用。
+バックエンドの全テストをここに配置する。pytest + pytest-asyncio + httpx2 (AsyncClient) を使用。
 
 ## テストルール
 
@@ -15,10 +15,10 @@
 - `session_factory`: Service クラステスト用の `async_sessionmaker`
 - `test_database_url`: 現在の pytest worker 専用テスト DB URL
 - `db_session`: テスト用 AsyncSession (`expire_on_commit=False`)
-- `client`: DI でセッション差し替え済みの未認証 httpx.AsyncClient
+- `client`: DI でセッション差し替え済みの未認証 httpx2.AsyncClient
 - `auth_headers`: 通常ユーザー用 BFF プロキシ認証ヘッダー
-- `authed_client`: 通常ユーザー認証済み httpx.AsyncClient
-- `admin_client`: 管理者 (role=admin) 認証済み httpx.AsyncClient
+- `authed_client`: 通常ユーザー認証済み httpx2.AsyncClient
+- `admin_client`: 管理者 (role=admin) 認証済み httpx2.AsyncClient
 - `sample_categories`: Category 3件 (ai / computing / semiconductor)
 - `sample_source`: RSS ニュースソース
 - `sample_hn_source`: Hacker News API ソース

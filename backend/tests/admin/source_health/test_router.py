@@ -1,7 +1,7 @@
 """GET /api/v1/admin/sources/health のルーターテスト (認可 / 検証 / レスポンス形)。"""
 
 import pytest
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 
 from app.models.news_source import NewsSource
 

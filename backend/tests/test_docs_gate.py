@@ -10,12 +10,13 @@ app.config / app.main を reload して env を切替える。
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx2
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -80,30 +81,44 @@ def _stub_api_producers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_module, "_API_PRODUCER_BROKERS", tuple(producers))
 
 
+@asynccontextmanager
+async def _serve(app: FastAPI) -> AsyncIterator[httpx2.AsyncClient]:
+    """起動・終了処理を通したアプリを、ネットワークなしで呼ぶclientを返す。"""
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client
+
+
 @pytest.mark.unit
-def test_docs_endpoints_enabled_in_development(
+@pytest.mark.asyncio
+async def test_docs_endpoints_enabled_in_development(
     reload_app_with_env: Callable[[str], FastAPI],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = reload_app_with_env("development")
     _stub_api_producers(monkeypatch)
-    with TestClient(app) as client:
-        assert client.get("/docs").status_code == 200
-        assert client.get("/redoc").status_code == 200
-        assert client.get("/openapi.json").status_code == 200
+    async with _serve(app) as client:
+        assert (await client.get("/docs")).status_code == 200
+        assert (await client.get("/redoc")).status_code == 200
+        assert (await client.get("/openapi.json")).status_code == 200
 
 
 @pytest.mark.unit
-def test_docs_endpoints_disabled_in_production(
+@pytest.mark.asyncio
+async def test_docs_endpoints_disabled_in_production(
     reload_app_with_env: Callable[[str], FastAPI],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = reload_app_with_env("production")
     _stub_api_producers(monkeypatch)
-    with TestClient(app) as client:
-        assert client.get("/docs").status_code == 404
-        assert client.get("/redoc").status_code == 404
-        assert client.get("/openapi.json").status_code == 404
+    async with _serve(app) as client:
+        assert (await client.get("/docs")).status_code == 404
+        assert (await client.get("/redoc")).status_code == 404
+        assert (await client.get("/openapi.json")).status_code == 404
 
 
 # OpenAPI operation の HTTP method 集合
