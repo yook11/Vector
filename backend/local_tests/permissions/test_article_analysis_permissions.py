@@ -41,7 +41,7 @@ async def test_article_analysis_has_only_analysis_table_permissions(system_datab
 
 
 async def test_article_analysis_has_only_analysis_column_permissions(system_database):
-    """表単位の許可に加え、embedding列の更新とRETURNING用の列だけを扱える。"""
+    """表単位の許可に加え、embedding列の更新、排他トリガーの行ロック、RETURNING用の列だけを扱える。"""
     async with system_database.connect(ROLE) as connection:
         columns = await read_table_columns(connection)
         actual = await read_column_permissions(connection)
@@ -50,6 +50,7 @@ async def test_article_analysis_has_only_analysis_column_permissions(system_data
         ("public", "analyzable_articles", "SELECT"): columns[
             ("public", "analyzable_articles")
         ],
+        ("public", "analyzable_articles", "UPDATE"): {"id"},
         ("public", "categories", "SELECT"): columns[("public", "categories")],
         ("public", "article_curations", "SELECT"): columns[
             ("public", "article_curations")
@@ -57,6 +58,7 @@ async def test_article_analysis_has_only_analysis_column_permissions(system_data
         ("public", "article_curations", "INSERT"): columns[
             ("public", "article_curations")
         ],
+        ("public", "article_curations", "UPDATE"): {"id"},
         ("public", "curation_noises", "SELECT"): columns[("public", "curation_noises")],
         ("public", "curation_noises", "INSERT"): columns[("public", "curation_noises")],
         ("public", "analyzed_articles", "SELECT"): columns[
