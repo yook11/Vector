@@ -4,7 +4,12 @@ import asyncio
 
 import pytest
 
-from app.analysis.assessment.service import AssessmentCompletionKind
+from app.analysis.assessment.consumer_failure_classification import RetryAssessment
+from app.analysis.assessment.service import (
+    AssessmentCompletion,
+    AssessmentCompletionKind,
+)
+from app.db.errors import DatabaseConstraintError
 from local_tests.assessment.support import (
     assessment_reply,
     build_sqs_record,
@@ -71,7 +76,18 @@ async def test_concurrent_opposite_results_persist_only_leader_result(
         {"batchItemFailures": []},
         {"batchItemFailures": [{"itemIdentifier": record["messageId"]}]},
     ]
-    assert [result.kind for result in completion_results] == [leader_completion]
+    completions = [
+        result
+        for result in completion_results
+        if isinstance(result, AssessmentCompletion)
+    ]
+    retries = [
+        result for result in completion_results if isinstance(result, RetryAssessment)
+    ]
+    assert len(completion_results) == 2
+    assert [result.kind for result in completions] == [leader_completion]
+    assert len(retries) == 1
+    assert isinstance(retries[0].error, DatabaseConstraintError)
     stored = await fetch_stored_assessment(system_database, target.curation_id)
     saved = stored.in_scope + stored.out_of_scope
     assert len(saved) == 1
