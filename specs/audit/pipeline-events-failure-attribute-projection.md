@@ -1,5 +1,7 @@
 # pipeline_events 失敗属性 projection 仕様
 
+> 2026-10-03追記: Curation／Assessment／Embeddingの失敗監査はretryabilityを記録せず（null）、Consumerが決めた扱いを`payload.failure_action`に`retry`／`no_retry`で記録する（取得工程と同じ）。監査の失敗属性は各工程の監査リポジトリが元の例外から作る。DB schemaと過去の監査行は変更しない。
+
 > 2026-09-21追記: 以下の`VectorDomainError`継承を用いた例は廃止前の設計記録である。現在の工程例外は通常の`Exception`を基底とし、監査は型・保持属性・原因チェーンを参照する。メッセージ未指定時の`payload.error_message`はnullとなるが、既存の監査分類とDBスキーマは維持する。
 
 > 2026-09-20更新: AIプロバイダーの回復分類は廃止した。Assessment／Curation／Embeddingのprovider失敗は、failure_kind・retryabilityをnullで保存し、CODE・reason・例外情報は保持する。共有projectionはこの2項目のNoneを許容する。DB等の既存分類、DB schema、過去の監査行は変更しない。以下の旧分類に関する記述はprovider失敗には適用しない。

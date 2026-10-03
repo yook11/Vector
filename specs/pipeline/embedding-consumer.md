@@ -33,8 +33,8 @@ Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード�
 - 保存完了とは、ベクトルと成功監査のトランザクションをコミットできたことを指す。
 - 「例外なくreturnした」ことだけを根拠にSQSへ成功を返さない。
 - 開始時に生成済み、または別の実行が先に保存したことを確認できた場合は対応完了とする。
-- 開始時の対象欠損・Ready入力制約違反は、理由付き拒否として受信完了にする。Ready成立後の実行・保存時の不存在は失敗とする。
-- 初期実装では、想定内か想定外かを問わず処理失敗をSQSへ返す。失敗記録だけでメッセージを処理済みにしない。
+- 開始時の対象欠損・Ready入力制約違反は、理由付き拒否として受信完了にする。Ready成立後の保存時の不存在も、失敗を記録したうえで受信完了にする。
+- 処理失敗は、curation-consumer.mdの「全工程共通の、再試行しない失敗」の表で再試行しないと決めたものだけを受信完了にし、それ以外はSQSへ返す。
 - consumer内部で再配信待ちのsleep、独自の段階的バックオフ、DLQへの直接送信をしない。
 - 冪等性の業務上の判定対象は`analyzed_article_id`であり、SQSメッセージIDやevent_idだけでTaskiqとの重複を判定しない。
 - 通知・ログ・監査の秘匿を維持し、メッセージ本文やSDK例外の自由文を無制限に記録しない。
@@ -113,7 +113,7 @@ _run_embeddingは失敗したメッセージのIDをSqsBatchItemIdentifierに格
 | 開始時点ですでに生成済み | 想定内の終了 | 対応完了として削除対象 |
 | 他の実行が先に保存し、自分の更新が不要 | 生成済みを確認して想定内の終了 | 対応完了として削除対象 |
 | 開始時に対象記事が存在しない、またはReady入力制約違反 | Ready構築拒否の理由を記録 | 受信完了、失敗一覧へ含めない |
-| AI処理中に対象記事が削除され、保存できない | 対象記事不存在の失敗を記録 | SQSへ失敗を返す |
+| AI処理中に対象記事が削除され、保存できない | 対象記事不存在の失敗を記録 | 受信完了、失敗一覧へ含めない |
 | 入力不正・未対応のイベント、実APIの拒否・429・通信障害・5xx | 失敗を記録 | SQSへ失敗を返す |
 | 利用枠枯渇・残高不足・設定不備 | 失敗を記録し、既存の該当する通知を維持 | SQSへ失敗を返す |
 | DB処理・コミットの失敗、処理時間上限到達、想定外例外 | 失敗として扱う | SQSへ失敗を返す。強制終了時も成功応答しない |
@@ -185,10 +185,10 @@ consumerでは両者を区別し、生成済みを確認できた場合だけ対
 
 分類関数とConsumer用ハンドラーを実装し、Consumer本体から開始時の取得・Ready構築・Service実行中の失敗を接続する。入力イベントの検証・SQS応答は入口部品へ接続し、Lambda起動関数の組み立ては後続とする。
 
-- `classify_embedding_failure(exc)`は副作用のない関数で、監査用の`FailureProjection`を返す。枯渇通知・受信完了の判断・`outcome`は持たない。
-- AIの例外はクラスのCODEとreasonから、Serviceの失敗はreasonから直接分類し、Taskiq用のRecoverable／Terminalには変換しない。DB例外は共有のDB分類を使う。想定外例外と通常のTimeoutErrorは`unexpected_error`／`unknown`として失敗に分類する。
-- provider失敗の監査ではfailure_kind・retryabilityをnullとし、CODE・reason・例外情報を保持する。DB障害などの既存監査分類は維持するが、再配信の判断には使用しない。
-- `EmbeddingConsumerFailureHandler.handle()`は監査の失敗属性、元の例外、分析記事ID、記事ID、providerを受け取り、失敗件数の計測・失敗監査・必要な枯渇通知をそれぞれ試みる。計測結果はDB・provider障害も含め一律`failed`とする。戻り値はNoneで、処理全体の成功を示す値ではない。
+- `classify_embedding_failure(exc)`は副作用のない関数で、`RetryEmbedding`か`NoRetryEmbedding`を返す。枯渇通知・`outcome`は持たない。
+- 監査の失敗属性は監査の層が元の例外から作る。AIの例外はクラスのCODEとreason、Serviceの失敗はreasonから直接分類し、Taskiq用のRecoverable／Terminalには変換しない。DB例外は共有のDB分類を使う。想定外例外と通常のTimeoutErrorは`unexpected_error`／`unknown`とする。
+- 失敗の監査はretryabilityを記録せず、`failure_action`に`retry`／`no_retry`を記録する。provider失敗のfailure_kindはnullとし、CODE・reason・例外情報を保持する。
+- `EmbeddingConsumerFailureHandler.handle()`は判断（`RetryEmbedding`／`NoRetryEmbedding`）、元の例外、分析記事ID、記事ID、providerを受け取り、失敗件数の計測・失敗監査・必要な枯渇通知をそれぞれ試みる。計測結果はDB・provider障害も含め一律`failed`とする。戻り値はNoneで、処理全体の成功を示す値ではない。
 - 監査は元の例外のerror_class・error_chainを保持し、既存のpayload組み立てと秘匿処理を再利用する。枯渇通知は元の例外を既存の`ai_provider_exhausted`の判定に渡し、残高不足・利用枠枯渇のみを対象とする。通常の429は枯渇通知の対象外。
 - 後処理の通常の例外は捕捉し、処理名・記事ID・例外クラスだけを二次障害ログに記録する。例外本文やトレースバックは出さない。監査失敗時は既存の監査drop計測も試みる。ログ出力自体の失敗でも残りの後処理を継続する。
 - 元の例外の再送出は後続のConsumerの責務であり、ハンドラー内では再送出も成功への変換も行わない。キャンセルやプロセス終了を通常の二次障害として抑止しない。
