@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pydantic import SecretStr
 
+from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.logging import create_article_analysis_logger
 from app.lambda_handlers import article_analysis_lifecycle as lifecycle
 
@@ -18,8 +19,11 @@ pytestmark = pytest.mark.unit
 @pytest.fixture(params=["assessment", "embedding", "curation"])
 def wiring(request, monkeypatch):
     stage = request.param
-    provider = "deepseek" if stage == "assessment" else "gemini"
-    provider_title = "DeepSeek" if stage == "assessment" else "Gemini"
+    connection_settings = {
+        "assessment": GeminiConnectionSettings(read_timeout=30.0),
+        "embedding": GeminiConnectionSettings(),
+        "curation": GeminiConnectionSettings(read_timeout=30.0),
+    }[stage]
     module = import_module(f"app.lambda_handlers.{stage}.composition")
     settings_type = getattr(module, f"{stage.title()}ConsumerSettings")
     settings = settings_type(
@@ -27,7 +31,7 @@ def wiring(request, monkeypatch):
         aws_region="ap-northeast-1",
         database_url="postgresql+asyncpg://vector_app@db.invalid/vector",
         db_iam_auth=True,
-        **{f"{provider}_api_key_parameter_path": f"/{stage}/key"},
+        gemini_api_key_parameter_path=f"/{stage}/key",
     )
     rds = Mock()
     session = Mock()
@@ -61,7 +65,7 @@ def wiring(request, monkeypatch):
         yield sdk_client
 
     client_factory = Mock(side_effect=open_client)
-    monkeypatch.setattr(module, f"open_{provider}_client", client_factory)
+    monkeypatch.setattr(module, "open_gemini_client", client_factory)
     open_consumer = getattr(module, f"open_{stage}_consumer")
     log = None
     if stage == "assessment":
@@ -81,8 +85,7 @@ def wiring(request, monkeypatch):
     result = SimpleNamespace(
         module=module,
         stage=stage,
-        provider=provider,
-        provider_title=provider_title,
+        connection_settings=connection_settings,
         settings=settings,
         secret=secret,
         factory=factory,
@@ -110,13 +113,8 @@ async def test_passes_stage_configuration_to_delayed_factories(wiring):
         assert callable(wiring.create_engine.call_args.kwargs["password_provider"])
         expected = dict(
             api_key=SecretStr("test-key"),
-            settings=getattr(
-                wiring.module, f"{wiring.provider_title}ConnectionSettings"
-            )(),
+            settings=wiring.connection_settings,
         )
-        if wiring.stage == "assessment":
-            expected["base_url"] = wiring.module.DEEPSEEK_ASSESSMENT_SPEC.base_url
-            expected["logger"] = wiring.log
         wiring.open_client.assert_called_once_with(**expected)
 
 
@@ -160,12 +158,12 @@ async def test_initialization_diagnostics_preserve_stage_identity(
     else:
         name = {
             "ai": {
-                "assessment": "DeepSeekAssessor",
+                "assessment": "GeminiAssessor",
                 "embedding": "GeminiEmbedder",
                 "curation": "GeminiCurator",
             }[wiring.stage],
             "consumer": f"{wiring.stage.title()}Consumer",
-            "client_settings": f"{wiring.provider_title}ConnectionSettings",
+            "client_settings": type(wiring.connection_settings).__name__,
         }[dependency]
         monkeypatch.setattr(wiring.module, name, Mock(side_effect=original))
     with pytest.raises(RuntimeError) as caught:

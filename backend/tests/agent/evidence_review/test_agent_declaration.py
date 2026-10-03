@@ -1,4 +1,4 @@
-"""Evidence Reviewer Agent の宣言・Prompt・transport binding の契約(D4-S1)。
+"""Evidence Reviewer Agent の宣言・Prompt の契約(D4-S1)。
 
 Reviewerへ渡す入力型そのものの契約はtest_preparation.pyが持ち、ここでは
 その入力をAgent宣言とpromptがどう扱うかだけを見る。
@@ -12,9 +12,6 @@ from typing import Any
 from app.agent.contract import EVIDENCE_REVIEW_MISSING_LIMIT
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
-from app.agent.evidence_review.deepseek_binding import (
-    EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-)
 from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from tests.agent.evidence_review._builders import (
     AS_OF,
@@ -37,12 +34,12 @@ def test_evidence_reviewer_agent_pins_model_and_output_settings() -> None:
     reviewer_agent = EVIDENCE_REVIEWER_AGENT
 
     assert reviewer_agent.name == "evidence_reviewer"
-    assert reviewer_agent.model.provider == "deepseek"
-    assert reviewer_agent.model.name == "deepseek-v4-flash"
+    assert reviewer_agent.model.provider == "gemini"
+    assert reviewer_agent.model.name == "gemini-3.8-flash"
     # S2: 採用15件×(claim/why_selected各300字+JSON構文) + missing 8件×200字の
-    # 概算11,400字を保守側1.0 token/字で見積り、約1.4倍の余裕を取った値
-    # (仕様「選別結果の復元」、deepseek-v4-flashの最大出力384K tokenと非競合)。
-    assert reviewer_agent.model_settings.max_output_tokens == 16384
+    # 概算11,400字を保守側1.0 token/字で見積もった16384に、出力上限に含まれる
+    # thinking (既定 medium) の分を足した値(仕様「選別結果の復元」)。
+    assert reviewer_agent.model_settings.max_output_tokens == 24576
     assert reviewer_agent.output_type is EvidenceReviewerDraft
 
 
@@ -54,38 +51,31 @@ def test_evidence_reviewer_agent_pins_output_json_schema() -> None:
     schema = _plain_schema(EVIDENCE_REVIEWER_AGENT.response_schema)
 
     assert schema == {
-        "type": "object",
-        "additionalProperties": False,
+        "type": "OBJECT",
         "required": ["selections", "missing"],
         "properties": {
             "selections": {
-                "type": "array",
+                "type": "ARRAY",
                 "description": "選択肢をindexで参照する採用リスト。",
                 "maxItems": selection_limit,
                 "items": {
-                    "type": "object",
-                    "additionalProperties": False,
+                    "type": "OBJECT",
                     "required": ["option_index", "claim", "why_selected"],
                     "properties": {
-                        "option_index": {"type": "integer", "minimum": 0},
-                        "claim": {"type": "string"},
-                        "why_selected": {"type": "string"},
+                        "option_index": {"type": "INTEGER", "minimum": 0},
+                        "claim": {"type": "STRING"},
+                        "why_selected": {"type": "STRING"},
                     },
                 },
             },
             "missing": {
-                "type": "array",
+                "type": "ARRAY",
                 "description": "Run全体で確認できなかった点。",
                 "maxItems": missing_limit,
-                "items": {"type": "string"},
+                "items": {"type": "STRING"},
             },
         },
     }
-
-
-def test_evidence_reviewer_pins_deepseek_output_function_name() -> None:
-    """モデルが出力JSONを入れるfunction名をreview_evidenceに固定する。"""
-    assert EVIDENCE_REVIEWER_DEEPSEEK_BINDING.function_name == "review_evidence"
 
 
 def test_evidence_reviewer_prompt_assembly_sanitizes_research_goal() -> None:

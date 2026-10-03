@@ -92,14 +92,9 @@ def agent_provider_responses(monkeypatch):
         yield ExternalSearchService(query_runtime=responses, search_gateway=responses)
 
     monkeypatch.setattr(composition, "activate_gemini_agent_runtime", runtime_scope)
-    monkeypatch.setattr(
-        composition, "activate_evidence_reviewer_runtime", runtime_scope
-    )
     monkeypatch.setattr(composition, "activate_external_search", search_scope)
     monkeypatch.setattr(gemini, "GeminiQueryEmbedder", lambda **_: responses)
-    monkeypatch.setattr(
-        composition.settings, "deepseek_api_key", SecretStr("local-test")
-    )
+    monkeypatch.setattr(composition.settings, "gemini_api_key", SecretStr("local-test"))
     monkeypatch.setattr(
         composition.settings, "agentcore_gateway_url", "https://agent.example.test"
     )

@@ -48,7 +48,7 @@ def _llm_mock(
     chapter_body: str = "今週の流れ",
 ) -> MagicMock:
     llm = MagicMock()
-    llm.MODEL = "deepseek-v4-pro"
+    llm.MODEL = "gemini-3.8-flash"
     llm.generate = AsyncMock(
         return_value=WeeklyBriefingContent(
             headline=headline,
@@ -117,7 +117,7 @@ class TestExecute:
         assert saved.summary == "SUMMARY"
         assert saved.chapters == [{"heading": "資金とインフラ", "body": "BODY"}]
         assert saved.input_article_count == 1
-        assert saved.model_name == "deepseek-v4-pro"
+        assert saved.model_name == "gemini-3.8-flash"
         # key_articles の永続形は {analyzed_article_id, significance} (新形)。
         # _llm_mock の KeyArticle ID がそのまま永続化される。
         assert saved.key_articles == [
@@ -145,7 +145,7 @@ class TestExecute:
             chapters=[],
             key_articles=[],
             watch_points=[],
-            model_name="deepseek-v4-pro",
+            model_name="gemini-3.8-flash",
             input_article_count=1,
         )
         db_session.add(winner_row)
@@ -180,7 +180,7 @@ class TestExecute:
         ai_category: Category,
     ) -> None:
         llm = MagicMock()
-        llm.MODEL = "deepseek-v4-pro"
+        llm.MODEL = "gemini-3.8-flash"
         llm.generate = AsyncMock(side_effect=RuntimeError("LLM failed"))
         service = WeeklyBriefingService(
             _factory_for(db_session), llm, NullRevalidateNotifier()
@@ -227,7 +227,7 @@ class TestNotifierIntegration:
             chapters=[],
             key_articles=[],
             watch_points=[],
-            model_name="deepseek-v4-pro",
+            model_name="gemini-3.8-flash",
             input_article_count=1,
         )
         db_session.add(winner_row)
@@ -352,7 +352,7 @@ class TestAuditIntegration:
         assert ev.payload["category_id"] == ai_category.id
         assert ev.payload["category_slug"] == "ai"
         assert ev.payload["article_count"] == 1
-        assert ev.payload["ai_model"] == "deepseek-v4-pro"
+        assert ev.payload["ai_model"] == "gemini-3.8-flash"
 
     @pytest.mark.asyncio
     async def test_does_not_write_succeeded_audit_on_race_loss(
@@ -374,7 +374,7 @@ class TestAuditIntegration:
             chapters=[],
             key_articles=[],
             watch_points=[],
-            model_name="deepseek-v4-pro",
+            model_name="gemini-3.8-flash",
             input_article_count=1,
         )
         db_session.add(winner_row)

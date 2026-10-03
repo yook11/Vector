@@ -1,6 +1,6 @@
 """カテゴリ単位の週次 LLM 解説 (briefing) の ORM モデル。
 
-DeepSeek-V4 Pro が生成した ``WeeklyBriefingContent`` を 1 行 1 ブリーフィングとして
+LLM が生成した ``WeeklyBriefingContent`` を 1 行 1 ブリーフィングとして
 保持する。``chapters`` (BriefingChapter のリスト) / ``key_articles`` (KeyArticle の
 リスト) / ``watch_points`` (WatchPoint のリスト) をそれぞれ JSONB に格納し、
 検索/監査属性 (``headline`` / ``summary`` / ``model_name`` / ``input_article_count``)

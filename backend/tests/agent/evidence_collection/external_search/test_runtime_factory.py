@@ -1,4 +1,4 @@
-"""External search / evidence reviewer の資源scopeの境界契約。"""
+"""External search の資源scopeの境界契約。"""
 
 from __future__ import annotations
 
@@ -8,18 +8,12 @@ import pytest
 from pydantic import SecretStr
 
 from app.agent import composition
-from app.agent.composition import (
-    activate_evidence_reviewer_runtime,
-    activate_external_search,
-)
-from app.agent.evidence_review.deepseek_binding import (
-    EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-)
+from app.agent.composition import activate_external_search
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.ai_providers.deepseek.settings import DeepSeekConnectionSettings
+from app.ai_providers.gemini.settings import GeminiConnectionSettings
 
 
-class _TrackedDeepSeekClient:
+class _TrackedGeminiClient:
     def __init__(
         self,
         *,
@@ -31,7 +25,7 @@ class _TrackedDeepSeekClient:
         self.enter_count = 0
         self.close_count = 0
 
-    async def __aenter__(self) -> _TrackedDeepSeekClient:
+    async def __aenter__(self) -> _TrackedGeminiClient:
         self.enter_count += 1
         return self
 
@@ -50,13 +44,13 @@ class _TrackedDeepSeekClient:
             raise self._close_error
 
 
-class _TrackedDeepSeekClientFactory:
+class _TrackedGeminiClientFactory:
     def __init__(self, *, close_error: BaseException | None = None) -> None:
         self._close_error = close_error
-        self.clients: list[_TrackedDeepSeekClient] = []
+        self.clients: list[_TrackedGeminiClient] = []
 
-    def __call__(self, **kwargs: object) -> _TrackedDeepSeekClient:
-        client = _TrackedDeepSeekClient(
+    def __call__(self, **kwargs: object) -> _TrackedGeminiClient:
+        client = _TrackedGeminiClient(
             kwargs=kwargs,
             close_error=self._close_error,
         )
@@ -126,21 +120,20 @@ class _TrackedSearchClientFactory:
 
 
 class _RuntimeSpy:
-    def __init__(self, *, client: object, binding: object) -> None:
+    def __init__(self, *, client: object) -> None:
         self.client = client
-        self.binding = binding
 
 
 class _RuntimeSpyFactory:
     def __init__(self, *, fail_on_construction: int | None = None) -> None:
         self._fail_on_construction = fail_on_construction
-        self.calls: list[tuple[object, object]] = []
+        self.calls: list[object] = []
 
-    def __call__(self, *, client: object, binding: object) -> _RuntimeSpy:
-        self.calls.append((client, binding))
+    def __call__(self, *, client: object) -> _RuntimeSpy:
+        self.calls.append(client)
         if len(self.calls) == self._fail_on_construction:
             raise RuntimeError(f"runtime construction {len(self.calls)} failed")
-        return _RuntimeSpy(client=client, binding=binding)
+        return _RuntimeSpy(client=client)
 
 
 class _GatewaySpy:
@@ -165,12 +158,12 @@ class _GatewaySpyFactory:
 def _install_factory_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    deepseek: _TrackedDeepSeekClientFactory | None = None,
+    gemini: _TrackedGeminiClientFactory | None = None,
     search_http: _TrackedSearchClientFactory | None = None,
     runtime: _RuntimeSpyFactory | None = None,
     gateway: _GatewaySpyFactory | None = None,
 ) -> tuple[
-    _TrackedDeepSeekClientFactory,
+    _TrackedGeminiClientFactory,
     _TrackedSearchClientFactory,
     _RuntimeSpyFactory,
     _GatewaySpyFactory,
@@ -178,21 +171,21 @@ def _install_factory_dependencies(
     from app.agent.evidence_collection.external_search import (
         agentcore as agentcore_module,
     )
-    from app.agent.runtime import deepseek as deepseek_module
-    from app.ai_providers.deepseek import client as deepseek_client_module
+    from app.agent.runtime import gemini as gemini_runtime_module
+    from app.ai_providers.gemini import client as gemini_client_module
 
-    deepseek = deepseek or _TrackedDeepSeekClientFactory()
+    gemini = gemini or _TrackedGeminiClientFactory()
     search_http = search_http or _TrackedSearchClientFactory()
     runtime = runtime or _RuntimeSpyFactory()
     gateway = gateway or _GatewaySpyFactory()
-    monkeypatch.setattr(deepseek_client_module, "open_deepseek_client", deepseek)
+    monkeypatch.setattr(gemini_client_module, "open_gemini_client", gemini)
     monkeypatch.setattr(composition, "make_internal_async_client", search_http)
-    monkeypatch.setattr(deepseek_module, "DeepSeekAgentRuntime", runtime)
+    monkeypatch.setattr(gemini_runtime_module, "GeminiAgentRuntime", runtime)
     monkeypatch.setattr(agentcore_module, "AgentCoreWebSearchGateway", gateway)
     monkeypatch.setattr(
         composition.settings,
-        "deepseek_api_key",
-        SecretStr("deepseek-api-key-sentinel"),
+        "gemini_api_key",
+        SecretStr("gemini-api-key-sentinel"),
     )
     monkeypatch.setattr(
         composition.settings,
@@ -200,22 +193,17 @@ def _install_factory_dependencies(
         "https://gw-sentinel.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
     )
     monkeypatch.setattr(composition.settings, "aws_region", "ap-northeast-1")
-    return deepseek, search_http, runtime, gateway
+    return gemini, search_http, runtime, gateway
 
 
 @pytest.mark.asyncio
 async def test_external_search_scope_is_lazy_and_closes_each_client_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.agent.evidence_collection.external_search.deepseek_binding import (
-        EXTERNAL_QUERY_DEEPSEEK_BINDING,
-    )
-    from app.agent.runtime.deepseek import DEEPSEEK_BASE_URL
-
-    deepseek, search_http, runtime, gateway = _install_factory_dependencies(monkeypatch)
+    gemini, search_http, runtime, gateway = _install_factory_dependencies(monkeypatch)
     scope = activate_external_search()
 
-    assert (deepseek.clients, search_http.clients, runtime.calls, gateway.calls) == (
+    assert (gemini.clients, search_http.clients, runtime.calls, gateway.calls) == (
         [],
         [],
         [],
@@ -224,75 +212,26 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
 
     async with scope as external_search:
         assert (
-            len(deepseek.clients),
+            len(gemini.clients),
             len(search_http.clients),
-            {
-                key: value
-                for key, value in deepseek.clients[0].kwargs.items()
-                if key != "logger"
-            },
-            external_search.query_runtime.client is deepseek.clients[0],
-            external_search.query_runtime.binding is EXTERNAL_QUERY_DEEPSEEK_BINDING,
+            gemini.clients[0].kwargs,
+            external_search.query_runtime.client is gemini.clients[0],
             external_search.search_gateway.client is search_http.clients[0],
         ) == (
             1,
             1,
             {
-                "api_key": SecretStr("deepseek-api-key-sentinel"),
-                "base_url": DEEPSEEK_BASE_URL,
-                "settings": DeepSeekConnectionSettings(read_timeout=30.0),
-                "max_retries": 2,
-            },
-            True,
-            True,
-            True,
-        )
-
-    assert (deepseek.clients[0].close_count, search_http.clients[0].close_count) == (
-        1,
-        1,
-    )
-
-
-@pytest.mark.asyncio
-async def test_evidence_reviewer_scope_is_lazy_and_closes_its_client_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """reviewerは外部検索と資源を共有せず、自分のDeepSeek clientだけを開閉する。"""
-    from app.agent.runtime.deepseek import DEEPSEEK_BASE_URL
-
-    deepseek, search_http, runtime, _gateway = _install_factory_dependencies(
-        monkeypatch
-    )
-    scope = activate_evidence_reviewer_runtime()
-
-    assert (deepseek.clients, runtime.calls) == ([], [])
-
-    async with scope as reviewer_runtime:
-        assert (
-            len(deepseek.clients),
-            search_http.clients,
-            {
-                key: value
-                for key, value in deepseek.clients[0].kwargs.items()
-                if key != "logger"
-            },
-            reviewer_runtime.client is deepseek.clients[0],
-            reviewer_runtime.binding is EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-        ) == (
-            1,
-            [],
-            {
-                "api_key": SecretStr("deepseek-api-key-sentinel"),
-                "base_url": DEEPSEEK_BASE_URL,
-                "settings": DeepSeekConnectionSettings(read_timeout=30.0),
-                "max_retries": 2,
+                "api_key": SecretStr("gemini-api-key-sentinel"),
+                "settings": GeminiConnectionSettings(read_timeout=30.0),
             },
             True,
             True,
         )
 
-    assert deepseek.clients[0].close_count == 1
+    assert (gemini.clients[0].close_count, search_http.clients[0].close_count) == (
+        1,
+        1,
+    )
 
 
 @pytest.mark.asyncio
@@ -312,9 +251,7 @@ async def test_external_search_scope_closes_acquired_clients_for_every_exit(
     monkeypatch: pytest.MonkeyPatch,
     body_error: BaseException | None,
 ) -> None:
-    deepseek, search_http, _runtime, _gateway = _install_factory_dependencies(
-        monkeypatch
-    )
+    gemini, search_http, _runtime, _gateway = _install_factory_dependencies(monkeypatch)
 
     if body_error is None:
         async with activate_external_search():
@@ -325,7 +262,7 @@ async def test_external_search_scope_closes_acquired_clients_for_every_exit(
                 raise body_error
         assert raised.value is body_error
 
-    assert (deepseek.clients[0].close_count, search_http.clients[0].close_count) == (
+    assert (gemini.clients[0].close_count, search_http.clients[0].close_count) == (
         1,
         1,
     )
@@ -333,7 +270,7 @@ async def test_external_search_scope_closes_acquired_clients_for_every_exit(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stage", "expected_deepseek_closes", "expected_search_closes"),
+    ("stage", "expected_gemini_closes", "expected_search_closes"),
     [
         pytest.param("query-runtime", 1, 0, id="query-runtime"),
         pytest.param("search-http-entry", 1, 0, id="search-http-entry"),
@@ -343,7 +280,7 @@ async def test_external_search_scope_closes_acquired_clients_for_every_exit(
 async def test_external_search_scope_closes_only_acquired_clients_on_failure(
     monkeypatch: pytest.MonkeyPatch,
     stage: str,
-    expected_deepseek_closes: int,
+    expected_gemini_closes: int,
     expected_search_closes: int,
 ) -> None:
     runtime = _RuntimeSpyFactory(
@@ -357,7 +294,7 @@ async def test_external_search_scope_closes_only_acquired_clients_on_failure(
     gateway_error = (
         RuntimeError("gateway construction failed") if stage == "gateway" else None
     )
-    deepseek, search_http, _runtime, _gateway = _install_factory_dependencies(
+    gemini, search_http, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
         search_http=search_http,
         runtime=runtime,
@@ -369,18 +306,18 @@ async def test_external_search_scope_closes_only_acquired_clients_on_failure(
             raise AssertionError("scope body must not run")
 
     assert (
-        deepseek.clients[0].close_count,
+        gemini.clients[0].close_count,
         sum(client.close_count for client in search_http.clients),
-    ) == (expected_deepseek_closes, expected_search_closes)
+    ) == (expected_gemini_closes, expected_search_closes)
 
 
 @pytest.mark.asyncio
-async def test_external_search_scope_attempts_deepseek_close_when_http_close_fails(
+async def test_external_search_scope_attempts_gemini_close_when_http_close_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     close_error = RuntimeError("search http close failure")
     search_http = _TrackedSearchClientFactory(close_error=close_error)
-    deepseek, search_http, _runtime, _gateway = _install_factory_dependencies(
+    gemini, search_http, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
         search_http=search_http,
     )
@@ -391,7 +328,7 @@ async def test_external_search_scope_attempts_deepseek_close_when_http_close_fai
 
     assert (
         raised.value is close_error,
-        deepseek.clients[0].close_count,
+        gemini.clients[0].close_count,
         search_http.clients[0].close_count,
     ) == (True, 1, 1)
 
@@ -403,7 +340,7 @@ async def test_external_search_scope_allows_close_failure_to_replace_body_error(
     body_error = RuntimeError("body failure")
     close_error = RuntimeError("search http close failure")
     search_http = _TrackedSearchClientFactory(close_error=close_error)
-    _deepseek, _search_http, _runtime, _gateway = _install_factory_dependencies(
+    _gemini, _search_http, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
         search_http=search_http,
     )
@@ -422,9 +359,7 @@ async def test_external_search_scope_allows_close_failure_to_replace_body_error(
 async def test_external_search_scope_creates_fresh_clients_for_each_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deepseek, search_http, _runtime, _gateway = _install_factory_dependencies(
-        monkeypatch
-    )
+    gemini, search_http, _runtime, _gateway = _install_factory_dependencies(monkeypatch)
 
     async with activate_external_search() as first:
         pass
@@ -434,6 +369,6 @@ async def test_external_search_scope_creates_fresh_clients_for_each_activation(
     assert (
         first.query_runtime.client is not second.query_runtime.client,
         first.search_gateway.client is not second.search_gateway.client,
-        [client.close_count for client in deepseek.clients],
+        [client.close_count for client in gemini.clients],
         [client.close_count for client in search_http.clients],
     ) == (True, True, [1, 1], [1, 1])

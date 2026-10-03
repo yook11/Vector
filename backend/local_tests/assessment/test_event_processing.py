@@ -10,7 +10,7 @@ import pytest
 from app.analysis.assessment import consumer as consumer_module
 from app.analysis.curation.events import ArticleCuratedSignal
 from local_tests.assessment.support import (
-    deepseek_reply,
+    assessment_reply,
     fetch_stored_assessment,
     invoke_event,
     seed_curation,
@@ -20,7 +20,7 @@ from local_tests.assessment.support import (
 
 @pytest.mark.asyncio
 async def test_in_scope_assessment_completes_successfully(
-    system_database, assessment_runtime, deepseek_response, notification_response
+    system_database, assessment_runtime, gemini_response, notification_response
 ):
     """対象内の結果・成功監査・後続Outboxを保存し、記事一覧の更新を通知する。"""
     other = await seed_curation(
@@ -41,7 +41,7 @@ async def test_in_scope_assessment_completes_successfully(
             "mentions": [{"surface": "製品A", "type": "product"}],
         }
     ]
-    deepseek_response.return_value = deepseek_reply(
+    gemini_response.return_value = assessment_reply(
         category="semiconductor",
         investor_take="対象記事への投資判断",
         key_points=expected_key_points,
@@ -57,10 +57,10 @@ async def test_in_scope_assessment_completes_successfully(
     }
 
     # AIへ渡った本文が、イベントで指定した記事のものかを確認する。
-    deepseek_response.assert_awaited_once()
-    ai_request = deepseek_response.await_args.args[0]
+    gemini_response.assert_awaited_once()
+    ai_request = gemini_response.await_args.args[0]
     ai_request_body = json.loads(ai_request.content)
-    assessment_input = ai_request_body["messages"][0]["content"]
+    assessment_input = ai_request_body["contents"][0]["parts"][0]["text"]
     assert "対象記事だけの要約" in assessment_input
     assert "別記事だけの要約" not in assessment_input
 
@@ -113,14 +113,14 @@ async def test_in_scope_assessment_completes_successfully(
 async def test_out_of_scope_event_saves_result_without_outbox(
     system_database,
     assessment_runtime,
-    deepseek_response,
+    gemini_response,
     notification_response,
     notification_secret,
 ):
     """対象外結果と成功監査だけを確定し、Embedding向けOutboxを発行しない。"""
     target = await seed_curation(system_database, "https://example.com/out-of-scope")
     points = [{"content": "投資対象外の催し", "mentions": []}]
-    deepseek_response.return_value = deepseek_reply(
+    gemini_response.return_value = assessment_reply(
         category="out_of_scope", investor_take="対象外とする理由", key_points=points
     )
 
@@ -174,11 +174,11 @@ async def test_database_failure_rolls_back_result_audit_and_outbox(
 
 @pytest.mark.asyncio
 async def test_http_failure_records_failure_and_next_article_succeeds(
-    system_database, assessment_runtime, deepseek_response
+    system_database, assessment_runtime, gemini_response
 ):
     """SDK通信失敗を失敗監査・応答へ反映し、次の記事を正常に処理できる。"""
     target = await seed_curation(system_database, "https://example.com/http-error")
-    deepseek_response.side_effect = httpx.ConnectError("test connection failure")
+    gemini_response.side_effect = httpx.ConnectError("test connection failure")
 
     response = await invoke_event(target)
 
@@ -188,7 +188,7 @@ async def test_http_failure_records_failure_and_next_article_succeeds(
     stored = await fetch_stored_assessment(system_database, target.curation_id)
     assert [audit["event_type"] for audit in stored.audits] == ["failed"]
 
-    deepseek_response.side_effect = None
+    gemini_response.side_effect = None
     next_target = await seed_curation(
         system_database, "https://example.com/after-http-error"
     )

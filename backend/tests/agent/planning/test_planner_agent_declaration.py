@@ -64,8 +64,8 @@ def test_planner_agent_declares_two_plan_schema_and_stable_model() -> None:
     assert isinstance(agent, Agent)
     assert agent.name == "question_planner"
     assert agent.model.provider == "gemini"
-    assert agent.model.name == "gemini-2.5-flash-lite"
-    assert agent.model_settings.temperature == 0.1
+    assert agent.model.name == "gemini-3.5-flash-lite"
+    assert agent.model_settings.temperature is None
     assert agent.model_settings.max_output_tokens == 1024
     assert agent.output_type is QuestionPlanDraft
 

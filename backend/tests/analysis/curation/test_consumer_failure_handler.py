@@ -233,7 +233,7 @@ async def test_audit_commit_failure_rolls_back_and_still_notifies(
             exc=error,
             target_article_id=123,
             analyzable_article_id=article_id,
-            provider="deepseek",
+            provider="gemini",
         )
     assert await _events(db_session) == []
     assert "commit-secret" not in str(logs)

@@ -124,16 +124,6 @@ class FakeCancelStreamPublisher:
             raise RuntimeError("Redis unavailable")
 
 
-@pytest.fixture(autouse=True)
-def _configured_generation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr("deepseek-test-key"))
-    monkeypatch.setattr(
-        settings,
-        "agentcore_gateway_url",
-        "https://gw-test.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
-    )
-
-
 @pytest.fixture
 async def research_client(
     auth_headers: dict[str, str],
@@ -634,33 +624,20 @@ class TestCreateResearchResponse:
         assert run.error_code is None
         assert "SHOULD_NOT_LEAK" not in response.text
 
-    @pytest.mark.parametrize(
-        ("missing_key", "empty_value"),
-        [
-            ("deepseek_api_key", SecretStr("")),
-            ("agentcore_gateway_url", None),
-        ],
-    )
-    async def test_key_missing_fails_fast_without_persisting_run(
+    async def test_accepts_run_without_checking_ai_configuration(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
-        db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
-        missing_key: str,
-        empty_value: object,
     ) -> None:
+        """開始 API は AI の設定を見ない。設定の確認は agent worker の起動時に行う。"""
         client, fake_enqueue = research_client
-        monkeypatch.setattr(settings, missing_key, empty_value)
+        monkeypatch.setattr(settings, "gemini_api_key", SecretStr(""))
+        monkeypatch.setattr(settings, "agentcore_gateway_url", None)
 
         response = await client.post(_RESPONSES_URL, json={"question": "NVIDIA は？"})
 
-        assert response.status_code == 503
-        assert response.json() == {
-            "detail": "Answer generation is temporarily unavailable"
-        }
-        assert fake_enqueue.calls == []
-        runs = (await db_session.execute(select(AgentRun))).scalars().all()
-        assert runs == []
+        assert response.status_code == 202
+        assert fake_enqueue.calls == [UUID(response.json()["runId"])]
 
     async def test_requires_auth(
         self,

@@ -31,7 +31,6 @@ from opentelemetry.trace import (
 
 import app.agent.recording.llm as llm_recording_module
 import app.ai_providers.gemini.error_translator as gemini_error_translator_module
-from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
     AIProviderResponseError,
@@ -41,16 +40,6 @@ from app.ai_providers.errors import (
 )
 from app.ai_providers.gemini.error_translator import (
     OUTPUT_BLOCKED_FINISH_REASONS,
-)
-from tests.agent.runtime._deepseek_helpers import (
-    FakeDeepSeekClient,
-    make_binding,
-)
-from tests.agent.runtime._deepseek_helpers import (
-    make_agent as make_deepseek_agent,
-)
-from tests.agent.runtime._deepseek_helpers import (
-    success_response as deepseek_success_response,
 )
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent, success_response
 from tests.cloudwatch.records import metric_records
@@ -871,21 +860,12 @@ async def test_cancelled_sdk_close_preserves_usage_and_ends_span_once(
     assert span.end_calls == 1
 
 
-@pytest.mark.parametrize("runtime_name", ["gemini", "deepseek"])
-async def test_non_streaming_runtime_rejects_schema_none_before_renderer_and_provider(
-    runtime_name: str,
-) -> None:
+async def test_call_rejects_schema_none_before_renderer_and_provider() -> None:
     renderer_error = RuntimeError("RENDERER_MUST_NOT_RUN")
-    if runtime_name == "gemini":
-        client = FakeGeminiClient([success_response()])
-        runtime: Any = GeminiAgentRuntime(client=cast(AsyncClient, client))
-        agent = make_agent(response_schema=None)
-        provider_call = client.models.generate_content
-    else:
-        client = FakeDeepSeekClient([deepseek_success_response()])
-        runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
-        agent = replace(make_deepseek_agent(), response_schema=None)
-        provider_call = client.chat.completions.create
+    client = FakeGeminiClient([success_response()])
+    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    agent = make_agent(response_schema=None)
+    provider_call = client.models.generate_content
     assert agent.response_schema is None
     agent = replace(
         agent,

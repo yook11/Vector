@@ -24,7 +24,6 @@ dependencies = [
     "taskiq-redis>=1.0,<2",
     "uvicorn[standard]>=0.50.2,<1",
     "redis>=8.0.1,<9",
-    "openai>=2.44.0",
     "supervisor>=4.2,<5",
     "logfire[fastapi,httpx,sqlalchemy,system-metrics]>=4.37.0",
     "psutil>=7.2.2",

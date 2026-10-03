@@ -6,8 +6,8 @@ import pytest
 
 from app.analysis.assessment.service import AssessmentCompletionKind
 from local_tests.assessment.support import (
+    assessment_reply,
     build_sqs_record,
-    deepseek_reply,
     fetch_stored_assessment,
     invoke_sqs_record,
     seed_curation,
@@ -20,7 +20,7 @@ from local_tests.assessment.support import (
 async def test_redelivery_preserves_first_result_audit_and_outbox(
     system_database,
     assessment_runtime,
-    deepseek_response,
+    gemini_response,
     notification_response,
     notification_secret,
     category,
@@ -28,7 +28,7 @@ async def test_redelivery_preserves_first_result_audit_and_outbox(
     """再配送で異なるAI応答を用意しても初回の結果・監査・Outboxを上書きせず正常終了する。"""
     target = await seed_curation(system_database, "https://example.com/redelivery")
     record = build_sqs_record(target)
-    deepseek_response.return_value = deepseek_reply(
+    gemini_response.return_value = assessment_reply(
         category=category, investor_take="初回の判断"
     )
 
@@ -38,7 +38,7 @@ async def test_redelivery_preserves_first_result_audit_and_outbox(
     assert (first.in_scope + first.out_of_scope)[0]["investor_take"] == "初回の判断"
     assert len(first.audits) == 1
     assert len(first.outbox) == (1 if category == "ai" else 0)
-    deepseek_response.return_value = deepseek_reply(
+    gemini_response.return_value = assessment_reply(
         category=category, investor_take="再配送時の異なる判断"
     )
 
@@ -74,10 +74,10 @@ async def test_concurrent_saves_keep_leader_result_after_unique_constraint_wait(
     target = await seed_curation(system_database, "https://example.com/concurrent")
     record = build_sqs_record(target)
     leader = gated_ai_responses(
-        deepseek_reply(category=category, investor_take="先行側の判断")
+        assessment_reply(category=category, investor_take="先行側の判断")
     )
     follower = gated_ai_responses(
-        deepseek_reply(category=category, investor_take="後続側の異なる判断")
+        assessment_reply(category=category, investor_take="後続側の異なる判断")
     )
     invocations = []
     try:

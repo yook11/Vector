@@ -4,7 +4,7 @@
 「なぜ失敗したか」は失敗を検知した場所が所有する defect enum の値が運ぶ:
 
 - ``parse.py`` → ``AssessmentResponseDefect`` (内容の schema 違反、provider 非依存)
-- ``deepseek.py`` → ``DeepSeekResponseDefect`` (envelope 契約違反)
+- ``gemini.py`` → ``GeminiResponseDefect`` (応答本文の契約違反)
 
 完成段 ``test_analyzable_article_defect_code_contract.py`` と同形: enum.value が
 そのまま audit に焼かれる自己記述コードであることを構造的に保証する。各 enum は
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
+from app.analysis.assessment.ai.gemini import GeminiResponseDefect
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 
 
@@ -28,12 +28,12 @@ def test_parse_defect_value_follows_namespace(
     assert member.value == f"assessment_response_{member.name.lower()}"
 
 
-@pytest.mark.parametrize("member", list(DeepSeekResponseDefect))
-def test_deepseek_defect_value_follows_namespace(
-    member: DeepSeekResponseDefect,
+@pytest.mark.parametrize("member", list(GeminiResponseDefect))
+def test_gemini_defect_value_follows_namespace(
+    member: GeminiResponseDefect,
 ) -> None:
-    """deepseek 所有 defect は ``assessment_response_deepseek_{name}``。"""
-    assert member.value == f"assessment_response_deepseek_{member.name.lower()}"
+    """gemini 所有 defect は ``assessment_response_gemini_{name}``。"""
+    assert member.value == f"assessment_response_gemini_{member.name.lower()}"
 
 
 def test_defect_values_are_unique_across_sites() -> None:
@@ -44,6 +44,6 @@ def test_defect_values_are_unique_across_sites() -> None:
     """
     all_values = [
         *(m.value for m in AssessmentResponseDefect),
-        *(m.value for m in DeepSeekResponseDefect),
+        *(m.value for m in GeminiResponseDefect),
     ]
     assert len(all_values) == len(set(all_values))

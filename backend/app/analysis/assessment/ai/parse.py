@@ -1,11 +1,10 @@
 """Stage 4 ACL: AI 応答 dict → ``AssessmentResult`` の parse 関数。
 
-Gemini / DeepSeek の SDK text response を ``json.loads`` した dict を受け取り、
-ドメイン型 (``InScope`` | ``OutOfScope``) に詰め替える。本関数が AI 出力の
-ドメイン境界を 1 箇所に集約する (``category == OUT_OF_SCOPE`` 分岐含む)。
+SDK の text response を ``json.loads`` した dict を受け取り、ドメイン型
+(``InScope`` | ``OutOfScope``) に詰め替える。本関数が AI 出力のドメイン境界を
+1 箇所に集約する (``category == OUT_OF_SCOPE`` 分岐含む)。
 
-provider 非依存 — Gemini / DeepSeek の両 assessor から共通で呼ばれる前提で
-provider 固有の SDK 例外翻訳は各 assessor 実装側 (``gemini.py`` / ``deepseek.py``)
+provider 非依存 — SDK 例外翻訳と応答本文の解釈は assessor 実装側 (``gemini.py``)
 に分離する。
 
 設計詳細: ``specs/pipeline-events-stage4-assessment.md`` §Assessor 公開型
@@ -38,7 +37,7 @@ class AssessmentResponseDefect(StrEnum):
     raise 点と 1:1 対応し、写像漏れが原理的に起きない。
 
     中身 (AI 生成値 = PII) は焼かず、どの field がどう違反したかの種別ラベルだけを
-    残す。provider envelope の違反 (非 JSON / tool_call 欠落等) は各 adapter が別の
+    残す。provider envelope の違反 (非 JSON 等) は各 adapter が別の
     enum で所有する (parse は payload dict を受け取った後の内容違反のみ扱う)。
     """
 

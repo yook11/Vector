@@ -1,18 +1,11 @@
-"""Stage 4 Assessor 群の call spec を SSoT として保持する。
+"""Stage 4 GeminiAssessor の call spec を SSoT として保持する。
 
-Prompt (本文 / sanitize / truncate) と Spec (API call config / version /
-rate policy / DeepSeek 固有の tool_name / base_url) を分離する。Spec は
-frozen dataclass + module singleton で凍結し、Assessor は ``SPEC`` class attr
+Prompt (本文 / sanitize / truncate) と Spec (API call config / version) を分離する。
+Spec は frozen dataclass + module singleton で凍結し、Assessor は ``SPEC`` class attr
 経由でのみ参照する。
-
-``gen_config`` は task 軸の tuning (temperature 等)、``structured_output`` は
-provider 軸の構造化出力強制機構 (DeepSeek Function Calling) で、
-別軸として分離する。
 
 ``version`` はハードコードせず ``compute_call_signature`` で算出する
 (ADR ``docs/observability/pipeline-events-design.md`` §prompt_version の規律)。
-hash 入力の gen_config は実効 config ``{**gen_config, **structured_output}`` を渡す
-(tuning と機構の置き場所を分けても hash は不変、機構そのものを変えれば hash は回る)。
 """
 
 from __future__ import annotations
@@ -23,86 +16,45 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from app.analysis.assessment.ai.prompts import ASSESSMENT_PROMPT
-from app.analysis.assessment.ai.schema_tool import ASSESSMENT_TOOL_SCHEMA
+from app.analysis.assessment.ai.schema_tool import ASSESSMENT_GEMINI_SCHEMA
 from app.analysis.prompt_versions import compute_call_signature
 
 
 @dataclass(frozen=True, slots=True)
-class AssessmentCallSpec:
-    """Stage 4 Assessor の 1 回の API call に必要な共通 spec。
-
-    ``gen_config`` は task 軸の生成 tuning、``structured_output`` は provider 軸の
-    構造化出力強制機構。adapter は両者を SDK call に splat する。
-    """
+class GeminiAssessmentSpec:
+    """Stage 4 GeminiAssessor の 1 回の API call に必要な全 spec。"""
 
     provider: str
     model: str
     gen_config: Mapping[str, Any]
-    structured_output: Mapping[str, Any]
     response_schema: Mapping[str, Any]
     system_instruction: str | None
     version: str
 
 
-@dataclass(frozen=True, slots=True)
-class DeepSeekAssessmentSpec(AssessmentCallSpec):
-    """DeepSeek 固有の Function Calling 設定 + 接続 endpoint を加えた spec。
-
-    - ``tool_name``: Function Calling の関数名 (tool_choice + tools.function.name
-      で参照、prompt 本文の概念ではなく call config なので Spec 側に置く)。
-    - ``base_url``: OpenAI SDK 共用のための ``AsyncOpenAI(base_url=...)`` 値。
-    """
-
-    tool_name: str
-    base_url: str
-
-
-# ---------------------------------------------------------------------------
-# DeepSeek
-# ---------------------------------------------------------------------------
-
-_DEEPSEEK_MODEL: Final[str] = "deepseek-v4-flash"
-_DEEPSEEK_TOOL_NAME: Final[str] = "assess_article"
-_DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com/beta"
-# 512 は flat 3 フィールド schema 時代の値で、key_points 化後は出力が収まらず
-# 切り詰めが慢性化した (2026-08 実測: 失敗の全件が finish_reason=length)。
-_DEEPSEEK_GEN_CONFIG: Final[Mapping[str, Any]] = MappingProxyType(
+_MODEL: Final[str] = "gemini-3.5-flash-lite"
+# thinking (既定 minimal) も出力上限に含まれるため、key_points の出力に余裕を持たせる。
+_GEN_CONFIG: Final[Mapping[str, Any]] = MappingProxyType(
     {
-        "max_tokens": 1536,
+        "max_output_tokens": 4096,
+        "response_mime_type": "application/json",
     }
 )
-# DeepSeek で構造化出力を強制する機構 (Function Calling + thinking 無効)。
-# tool_choice が forced tool、thinking 無効で reasoning trace を出さず envelope を
-# 確定させる。両者で 1 個のクリーンな構造化出力を強制する provider 固有軸。
-_DEEPSEEK_STRUCTURED_OUTPUT: Final[Mapping[str, Any]] = MappingProxyType(
-    {
-        "tool_choice": {
-            "type": "function",
-            "function": {"name": _DEEPSEEK_TOOL_NAME},
-        },
-        "extra_body": {"thinking": {"type": "disabled"}},
-    }
-)
-_DEEPSEEK_RESPONSE_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
-    ASSESSMENT_TOOL_SCHEMA
-)
-_DEEPSEEK_SYSTEM_INSTRUCTION: Final[str | None] = None
-_DEEPSEEK_VERSION: Final[str] = compute_call_signature(
+_RESPONSE_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(ASSESSMENT_GEMINI_SCHEMA)
+_SYSTEM_INSTRUCTION: Final[str | None] = None
+_VERSION: Final[str] = compute_call_signature(
     prompt_template=ASSESSMENT_PROMPT,
-    model=_DEEPSEEK_MODEL,
-    gen_config={**_DEEPSEEK_GEN_CONFIG, **_DEEPSEEK_STRUCTURED_OUTPUT},
-    response_schema=_DEEPSEEK_RESPONSE_SCHEMA,
-    system_instruction=_DEEPSEEK_SYSTEM_INSTRUCTION,
+    model=_MODEL,
+    gen_config=_GEN_CONFIG,
+    response_schema=_RESPONSE_SCHEMA,
+    system_instruction=_SYSTEM_INSTRUCTION,
 )
 
-DEEPSEEK_ASSESSMENT_SPEC: Final[DeepSeekAssessmentSpec] = DeepSeekAssessmentSpec(
-    provider="deepseek",
-    model=_DEEPSEEK_MODEL,
-    gen_config=_DEEPSEEK_GEN_CONFIG,
-    structured_output=_DEEPSEEK_STRUCTURED_OUTPUT,
-    response_schema=_DEEPSEEK_RESPONSE_SCHEMA,
-    system_instruction=_DEEPSEEK_SYSTEM_INSTRUCTION,
-    version=_DEEPSEEK_VERSION,
-    tool_name=_DEEPSEEK_TOOL_NAME,
-    base_url=_DEEPSEEK_BASE_URL,
+GEMINI_ASSESSMENT_SPEC: Final[GeminiAssessmentSpec] = GeminiAssessmentSpec(
+    provider="gemini",
+    model=_MODEL,
+    gen_config=_GEN_CONFIG,
+    response_schema=_RESPONSE_SCHEMA,
+    system_instruction=_SYSTEM_INSTRUCTION,
+    version=_VERSION,
 )

@@ -16,7 +16,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
-from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
+from app.analysis.assessment.ai.gemini import GeminiResponseDefect
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.consumer_failure_classification import (
     classify_assessment_failure,
@@ -174,7 +174,7 @@ def test_unexpected_failure_and_timeout_are_not_success(error) -> None:
 
 @pytest.mark.parametrize(
     "defect",
-    [*AssessmentResponseDefect, *DeepSeekResponseDefect],
+    [*AssessmentResponseDefect, *GeminiResponseDefect],
 )
 def test_all_response_defects_preserve_code(defect):
     error = AssessmentResponseInvalidError(defect)

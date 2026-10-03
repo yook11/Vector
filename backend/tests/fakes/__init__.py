@@ -6,6 +6,6 @@ hardcode する。CI / Schemathesis 等で外部 API を避けたいテストで
 
 stub を ``app/`` から切り出すことで、production 階層に「テスト時にしか
 使われない実装」が混在しなくなり、Stage 4 Assessor / Stage 6 Extractor と
-同じパッケージ規約 (production には Gemini / DeepSeek などの本番実装のみ、
+同じパッケージ規約 (production には Gemini などの本番実装のみ、
 stub は ``tests/``) に揃う。
 """

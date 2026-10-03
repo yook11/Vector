@@ -74,7 +74,7 @@ async def target(db_session, sample_source, sample_categories):
 @pytest.fixture
 def consumer(session_factory):
     assessor = MagicMock(spec=BaseAssessor)
-    assessor.provider = "deepseek"
+    assessor.provider = "gemini"
     consumer = AssessmentConsumer(session_factory, assessor)
     with (
         patch.object(consumer._service, "execute", new_callable=AsyncMock),
@@ -235,7 +235,7 @@ async def test_execution_failure_is_classified_and_reraised(
         exc=original,
         curation_id=target.curation_id,
         analyzable_article_id=target.analyzable_article_id,
-        provider="deepseek",
+        provider="gemini",
         logger=assessment_logger,
     )
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
@@ -321,7 +321,7 @@ async def test_ready_read_failure_does_not_substitute_event_id(
             exc=raised.value,
             curation_id=target.curation_id,
             analyzable_article_id=None,
-            provider="deepseek",
+            provider="gemini",
             logger=assessment_logger,
         )
         consumer._service.execute.assert_not_awaited()
