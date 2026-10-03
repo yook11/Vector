@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 
-import httpx
+import httpx2
 import structlog
 from google import genai
 from google.genai.client import AsyncClient
@@ -49,14 +49,14 @@ async def open_gemini_client(
     """SDKとHTTPクライアントを所有し、呼び出し間では共有しない。"""
     if not api_key.get_secret_value().strip():
         raise ValueError("Gemini API key must not be empty")
-    timeout = httpx.Timeout(
+    timeout = httpx2.Timeout(
         connect=settings.connect_timeout,
         read=settings.read_timeout,
         write=settings.write_timeout,
         pool=settings.pool_timeout,
     )
 
-    async def apply_timeout(request: httpx.Request) -> None:
+    async def apply_timeout(request: httpx2.Request) -> None:
         # SDKの要求単位の指定より、この接続に宣言された上限を優先する。
         request.extensions["timeout"] = timeout.as_dict()
 

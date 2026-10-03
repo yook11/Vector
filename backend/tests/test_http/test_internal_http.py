@@ -6,7 +6,7 @@ redirect を追わないこと、timeout が届くこと。実 HTTP は出さな
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 
 from app.http.internal import make_internal_async_client
@@ -29,7 +29,7 @@ class TestEgressProxyIsNotUsed:
         async with make_internal_async_client(timeout=5.0) as client:
             assert client._mounts == {}
             for url in ("https://internal.example/x", "http://internal.example/x"):
-                assert client._transport_for_url(httpx.URL(url)) is client._transport
+                assert client._transport_for_url(httpx2.URL(url)) is client._transport
 
     @pytest.mark.asyncio
     async def test_env_proxy_would_be_mounted_without_the_factory(
@@ -38,7 +38,7 @@ class TestEgressProxyIsNotUsed:
         """上のテストが httpx の既定を確認しているだけではないことの対照。"""
         monkeypatch.setenv("HTTPS_PROXY", "http://proxy.vector.internal:3128")
 
-        async with httpx.AsyncClient(timeout=5.0) as client:  # noqa: TID251
+        async with httpx2.AsyncClient(timeout=5.0) as client:  # noqa: TID251
             assert client._mounts != {}
 
 
@@ -51,4 +51,4 @@ class TestClientShape:
     @pytest.mark.asyncio
     async def test_timeout_is_applied(self) -> None:
         async with make_internal_async_client(timeout=1.5) as client:
-            assert client.timeout == httpx.Timeout(1.5)
+            assert client.timeout == httpx2.Timeout(1.5)

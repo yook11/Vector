@@ -7,12 +7,15 @@ dependencies = [
     "asyncpg>=0.30,<1",
     "awslambdaric>=4.0.2,<5; sys_platform == 'linux'",
     "bcrypt>=4.0,<6",
+    # 外部通信のTLSは、httpx2既定のOSの証明書ストアではなくcertifiの一覧で検証する。
+    "certifi>=2026.6.17",
     "email-validator>=2.0,<3",
     "fastapi>=0.139.0,<1",
     "feedparser>=6.0,<7",
     "google-genai>=2.28.0,<3",
     "greenlet>=3.5.3",
-    "httpx>=0.28,<1",
+    # 2.12.0で圧縮応答の展開中のメモリが制限された。
+    "httpx2>=2.12.0,<3",
     "lxml>=6.1.1,<7",
     "trafilatura>=2.1.0,<3",
     "pydantic-settings>=2.14.1,<3",
@@ -41,6 +44,8 @@ dependencies = [
 # (red-team C6 chain 防御)。
 [dependency-groups]
 dev = [
+    # API試験がアプリをネットワークなしで呼ぶASGI clientとしてだけ使う。
+    "httpx>=0.28,<1",
     "pytest>=9.1.1,<10",
     "pytest-asyncio>=1.4.0,<2",
     "pytest-xdist>=3.8.0,<4",
@@ -55,15 +60,12 @@ line-length = 88
 select = ["E", "F", "I", "UP", "S", "FAST", "TID"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"httpx.AsyncClient".msg = "Pick a client by destination: app.http.external.make_external_async_client for third-party destinations, app.http.internal.make_internal_async_client for resources we own. Direct httpx.AsyncClient declares neither."
+"httpx".msg = "Use httpx2 through app.http factories. The old httpx remains only as a dependency of SDKs and API test tooling."
+"httpx2.AsyncClient".msg = "Pick a client by destination: app.http.external.make_external_async_client for third-party destinations, app.http.internal.make_internal_async_client for resources we own. Direct httpx2.AsyncClient declares neither."
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S311", "TID251"]
 "local_tests/**/test_*.py" = ["S101"]
-# 宛先を宣言する正規の構築口はこの 2 つだけ。glob で免除すると、後から
-# app/http/ に置かれたファイルまで黙って抜け道になる。
-"app/http/external.py" = ["TID251"]
-"app/http/internal.py" = ["TID251"]
 # fetcher は呼び出し側 (Service) から AsyncClient を受け取って使う側なので、
 # 型ヒントとしての参照のみ。本ファイル群で AsyncClient を直接構築することはない。
 "app/collection/fetchers/**" = ["TID251"]

@@ -11,7 +11,7 @@ import ssl
 from dataclasses import dataclass
 from enum import StrEnum
 
-import httpx
+import httpx2
 from botocore import exceptions as botocore_errors
 
 from app.http.destination_resolution import HostResolutionError
@@ -72,8 +72,8 @@ class HttpTransportFailure:
 _PROXY_REFUSAL_STATUS = re.compile(r"^(\d{3})\b")
 
 
-def _connect_failure_reason(exc: httpx.ConnectError) -> HttpTransportFailureReason:
-    """httpcoreによる多段ラップの内側から接続失敗の原因を読む。"""
+def _connect_failure_reason(exc: httpx2.ConnectError) -> HttpTransportFailureReason:
+    """httpcore2による多段ラップの内側から接続失敗の原因を読む。"""
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
@@ -82,7 +82,7 @@ def _connect_failure_reason(exc: httpx.ConnectError) -> HttpTransportFailureReas
             return HttpTransportFailureReason.DNS_RESOLUTION
         if isinstance(current, ssl.SSLError):
             return HttpTransportFailureReason.TLS
-        # httpcoreのraise from Noneでcauseが消えても元の原因はcontextに残る。
+        # httpcore2のraise from Noneでcauseが消えても元の原因はcontextに残る。
         current = (
             current.__cause__ if current.__cause__ is not None else current.__context__
         )
@@ -90,7 +90,7 @@ def _connect_failure_reason(exc: httpx.ConnectError) -> HttpTransportFailureReas
 
 
 def classify_httpx(exc: Exception) -> HttpTransportFailure | None:
-    """httpxとDNS事前検証の通信失敗を分類し、対象外の例外にはNoneを返す。
+    """HTTPX2とDNS事前検証の通信失敗を分類し、対象外の例外にはNoneを返す。
 
     RemoteProtocolErrorをRECEIVEとするのはHTTP/1.1経路の前提で、
     HTTP/2を有効にする場合は送信中のGOAWAY等を含めて段階を再確認する。
@@ -100,53 +100,53 @@ def classify_httpx(exc: Exception) -> HttpTransportFailure | None:
         return HttpTransportFailure(
             HttpTransportStage.PREPARATION, HttpTransportFailureReason.DNS_RESOLUTION
         )
-    if isinstance(exc, httpx.LocalProtocolError | httpx.UnsupportedProtocol):
+    if isinstance(exc, httpx2.LocalProtocolError | httpx2.UnsupportedProtocol):
         return None
-    if isinstance(exc, httpx.PoolTimeout):
+    if isinstance(exc, httpx2.PoolTimeout):
         return HttpTransportFailure(
             HttpTransportStage.PREPARATION, HttpTransportFailureReason.TIMEOUT
         )
-    if isinstance(exc, httpx.ConnectTimeout):
+    if isinstance(exc, httpx2.ConnectTimeout):
         return HttpTransportFailure(
             HttpTransportStage.CONNECT, HttpTransportFailureReason.TIMEOUT
         )
-    if isinstance(exc, httpx.WriteTimeout):
+    if isinstance(exc, httpx2.WriteTimeout):
         return HttpTransportFailure(
             HttpTransportStage.SEND, HttpTransportFailureReason.TIMEOUT
         )
-    if isinstance(exc, httpx.ReadTimeout):
+    if isinstance(exc, httpx2.ReadTimeout):
         return HttpTransportFailure(
             HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
         )
-    if isinstance(exc, httpx.ConnectError):
+    if isinstance(exc, httpx2.ConnectError):
         return HttpTransportFailure(
             HttpTransportStage.CONNECT, _connect_failure_reason(exc)
         )
-    if isinstance(exc, httpx.ProxyError):
-        # httpcoreのCONNECT拒否は構造化statusを持たず、メッセージ先頭に3桁で現れる。
+    if isinstance(exc, httpx2.ProxyError):
+        # httpcore2のCONNECT拒否は構造化statusを持たず、メッセージ先頭に3桁で現れる。
         match = _PROXY_REFUSAL_STATUS.match(str(exc))
         return HttpTransportFailure(
             HttpTransportStage.CONNECT,
             HttpTransportFailureReason.PROXY,
             proxy_status=int(match.group(1)) if match else None,
         )
-    if isinstance(exc, httpx.RemoteProtocolError):
+    if isinstance(exc, httpx2.RemoteProtocolError):
         return HttpTransportFailure(
             HttpTransportStage.RECEIVE, HttpTransportFailureReason.PROTOCOL_VIOLATION
         )
-    if isinstance(exc, httpx.WriteError):
+    if isinstance(exc, httpx2.WriteError):
         return HttpTransportFailure(
             HttpTransportStage.SEND, HttpTransportFailureReason.NETWORK_IO
         )
-    if isinstance(exc, httpx.ReadError):
+    if isinstance(exc, httpx2.ReadError):
         return HttpTransportFailure(
             HttpTransportStage.RECEIVE, HttpTransportFailureReason.NETWORK_IO
         )
-    if isinstance(exc, httpx.CloseError):
+    if isinstance(exc, httpx2.CloseError):
         return HttpTransportFailure(
             HttpTransportStage.UNKNOWN, HttpTransportFailureReason.NETWORK_IO
         )
-    if isinstance(exc, httpx.TransportError):
+    if isinstance(exc, httpx2.TransportError):
         return HttpTransportFailure(
             HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
         )

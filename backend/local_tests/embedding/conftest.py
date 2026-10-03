@@ -7,7 +7,7 @@ from queue import Empty, Queue
 from threading import Event
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import select, text
@@ -67,7 +67,7 @@ def database_error_after_update(monkeypatch):
 @pytest.fixture
 def gemini_response():
     return AsyncMock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200, json={"embeddings": [{"values": [0.2] * EMBEDDING_DIMENSION}]}
         )
     )
@@ -95,8 +95,8 @@ def embedding_runtime(system_database, monkeypatch, gemini_response):
 
     def http_factory(**kwargs):
         kwargs.pop("retries")
-        return httpx.AsyncClient(  # noqa: TID251
-            transport=httpx.MockTransport(gemini_response), **kwargs
+        return httpx2.AsyncClient(  # noqa: TID251
+            transport=httpx2.MockTransport(gemini_response), **kwargs
         )
 
     monkeypatch.setattr(gemini_module, "make_external_async_client", http_factory)
@@ -136,7 +136,7 @@ def gated_ai_responses(gemini_response):
             pytest.fail("用意したゲート数を超えてAI生成が呼ばれた")
         gate.requested.set()
         await _wait_for_signal(gate.allow_response, "AI応答の再開指示が届かなかった")
-        return httpx.Response(200, json={"embeddings": [{"values": gate.vector}]})
+        return httpx2.Response(200, json={"embeddings": [{"values": gate.vector}]})
 
     gemini_response.side_effect = respond
 

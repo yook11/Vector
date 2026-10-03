@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy.exc import DBAPIError
 
@@ -184,14 +184,16 @@ class TestCompletionFailurePreservesDecisionAndState:
         pending_article = await seed_pending(
             system_database, "https://example.com/rate-limited"
         )
-        page_response.return_value = httpx.Response(429, headers={"Retry-After": "120"})
+        page_response.return_value = httpx2.Response(
+            429, headers={"Retry-After": "120"}
+        )
 
         result = await completion_consumer.consume(pending_article.id)
 
         assert isinstance(result, consumer_contract().CompletionFailed)
         assert isinstance(result.error, HttpResponseError)
         assert result.error.status_code == 429
-        assert isinstance(result.error.__cause__, httpx.HTTPStatusError)
+        assert isinstance(result.error.__cause__, httpx2.HTTPStatusError)
         assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
         assert result.decision.retry_at is not None
         assert result.decision.retry_at.value == result.error.received_at + timedelta(
@@ -211,7 +213,7 @@ class TestCompletionFailurePreservesDecisionAndState:
         pending_article = await seed_pending(
             system_database, "https://example.com/forbidden"
         )
-        page_response.return_value = httpx.Response(403)
+        page_response.return_value = httpx2.Response(403)
 
         result = await completion_consumer.consume(pending_article.id)
 
@@ -233,7 +235,7 @@ class TestCompletionFailurePreservesDecisionAndState:
         pending_article = await seed_pending(
             system_database, "https://example.com/close-rollback"
         )
-        page_response.return_value = httpx.Response(403)
+        page_response.return_value = httpx2.Response(403)
         with control_commit(pending_article, phase="closed", fail=True) as fault:
             result = await completion_consumer.consume(pending_article.id)
 
@@ -255,7 +257,9 @@ class TestCompletionFailurePreservesDecisionAndState:
         pending_article = await seed_pending(
             system_database, "https://example.com/audit-retry"
         )
-        page_response.return_value = httpx.Response(429, headers={"Retry-After": "120"})
+        page_response.return_value = httpx2.Response(
+            429, headers={"Retry-After": "120"}
+        )
         with control_commit(pending_article, phase="failure_audit", fail=True) as fault:
             result = await completion_consumer.consume(pending_article.id)
 
@@ -282,7 +286,9 @@ class TestCompletionFailurePreservesDecisionAndState:
         pending_article = await seed_pending(
             system_database, "https://example.com/audit-closed"
         )
-        page_response.return_value = httpx.Response(403, headers={"Retry-After": "120"})
+        page_response.return_value = httpx2.Response(
+            403, headers={"Retry-After": "120"}
+        )
         with control_commit(pending_article, phase="failure_audit", fail=True) as fault:
             result = await completion_consumer.consume(pending_article.id)
 

@@ -10,7 +10,7 @@ import socket
 from collections.abc import Callable
 from unittest.mock import AsyncMock, Mock, patch
 
-import httpx
+import httpx2
 import pytest
 
 from app.http.destination_policy import HostBlockedError
@@ -36,19 +36,19 @@ def _patch_resolver(*addrs: str | Exception):
 @pytest.fixture
 def captured_requests(
     monkeypatch: pytest.MonkeyPatch,
-) -> list[httpx.Request]:
+) -> list[httpx2.Request]:
     """``AsyncHTTPTransport.handle_async_request`` を short-circuit し、
     transport 通過後の Request を捕捉する。実 HTTP は出さない。
     """
-    sink: list[httpx.Request] = []
+    sink: list[httpx2.Request] = []
 
     async def _capture(
-        self: httpx.AsyncHTTPTransport, request: httpx.Request
-    ) -> httpx.Response:
+        self: httpx2.AsyncHTTPTransport, request: httpx2.Request
+    ) -> httpx2.Response:
         sink.append(request)
-        return httpx.Response(200, content=b"ok")
+        return httpx2.Response(200, content=b"ok")
 
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", _capture)
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", _capture)
     return sink
 
 
@@ -66,35 +66,35 @@ def redirect_requests(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     sent: list[str] = []
 
     async def respond(
-        self: httpx.AsyncHTTPTransport, request: httpx.Request
-    ) -> httpx.Response:
+        self: httpx2.AsyncHTTPTransport, request: httpx2.Request
+    ) -> httpx2.Response:
         sent.append(str(request.url))
         if len(sent) == 1:
-            return httpx.Response(
+            return httpx2.Response(
                 302, headers={"Location": "https://next.example/article"}
             )
-        return httpx.Response(200, content=b"article")
+        return httpx2.Response(200, content=b"article")
 
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", respond)
     return sent
 
 
 @pytest.fixture(params=["configured-proxy", "direct-transport"])
-def external_client(request: pytest.FixtureRequest) -> Callable[[], httpx.AsyncClient]:
+def external_client(request: pytest.FixtureRequest) -> Callable[[], httpx2.AsyncClient]:
     """通常のプロキシ経路と既存transportの直接接続で送信前の検証を確認する。"""
     if request.param == "configured-proxy":
         return make_external_async_client
-    return lambda: httpx.AsyncClient(transport=_PinnedDnsTransport())
+    return lambda: httpx2.AsyncClient(transport=_PinnedDnsTransport())
 
 
 class TestTransportOverrideRejection:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("pattern", ["all://", "http://10.0.0.1"])
     async def test_rejects_mounted_transport_before_construction(
-        self, pattern: str, captured_requests: list[httpx.Request]
+        self, pattern: str, captured_requests: list[httpx2.Request]
     ) -> None:
         """宛先検証を迂回するmountsを生成前に拒否し、別transportへ送信しない。"""
-        alternate_send = Mock(return_value=httpx.Response(200))
+        alternate_send = Mock(return_value=httpx2.Response(200))
         with patch(
             "app.http.external._PinnedDnsTransport", wraps=_PinnedDnsTransport
         ) as constructor:
@@ -102,7 +102,7 @@ class TestTransportOverrideRejection:
                 TypeError, match="transport and mounts cannot be overridden"
             ):
                 async with make_external_async_client(
-                    mounts={pattern: httpx.MockTransport(alternate_send)}
+                    mounts={pattern: httpx2.MockTransport(alternate_send)}
                 ) as client:
                     await client.get("http://10.0.0.1/")
 
@@ -112,10 +112,10 @@ class TestTransportOverrideRejection:
 
     @pytest.mark.asyncio
     async def test_rejects_custom_transport_before_construction(
-        self, captured_requests: list[httpx.Request]
+        self, captured_requests: list[httpx2.Request]
     ) -> None:
         """transportの直接指定を引数重複エラーに頼らず生成前に拒否する。"""
-        alternate_send = Mock(return_value=httpx.Response(200))
+        alternate_send = Mock(return_value=httpx2.Response(200))
         with patch(
             "app.http.external._PinnedDnsTransport", wraps=_PinnedDnsTransport
         ) as constructor:
@@ -123,7 +123,7 @@ class TestTransportOverrideRejection:
                 TypeError, match="transport and mounts cannot be overridden"
             ):
                 async with make_external_async_client(
-                    transport=httpx.MockTransport(alternate_send)
+                    transport=httpx2.MockTransport(alternate_send)
                 ) as client:
                     await client.get("http://10.0.0.1/")
 
@@ -160,8 +160,8 @@ class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_blocks_request_to_private_host(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """禁止IPへ解決されたホストは送信前に拒否する。"""
         with _patch_resolver("10.0.0.1"):
@@ -173,8 +173,8 @@ class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_blocks_request_to_loopback(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """ループバックへ解決されたホストに送信しない。"""
         with _patch_resolver("127.0.0.1"):
@@ -186,8 +186,8 @@ class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_blocks_request_to_link_local(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """メタデータIPへ解決されたホストに送信しない。"""
         with _patch_resolver("169.254.169.254"):
@@ -201,8 +201,8 @@ class TestDestinationValidationBeforeSend:
     async def test_allows_request_to_public_host(
         self,
         address: str,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """公開IPの検証を通過したリクエストを送信処理へ渡す。"""
         with _patch_resolver(address):
@@ -214,8 +214,8 @@ class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_propagates_host_resolution_error(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """DNS失敗を伝播し、送信処理には進まない。"""
         with _patch_resolver(socket.gaierror("name unknown")):
@@ -227,8 +227,8 @@ class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_blocks_private_ip_literal(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """private IP literal はURL型を通過するため、transport が送信前に拒否する。"""
         async with external_client() as client:
@@ -239,8 +239,8 @@ class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_passes_public_ip_literal_without_resolve(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """public IP literal は DNS resolve せず通過。"""
         with patch(
@@ -262,8 +262,8 @@ class TestDestinationValidationBeforeSend:
     )
     async def test_mixed_resolution_never_reaches_send(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
         addresses: list[str],
     ) -> None:
         """公開IPも返る場合に禁止IPを無視して送信へ進まない。"""
@@ -276,8 +276,8 @@ class TestDestinationValidationBeforeSend:
     @pytest.mark.asyncio
     async def test_empty_resolution_never_reaches_send(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """IPを取得できなかった場合は送信へ進まず解決失敗を伝える。"""
         with _patch_resolver():
@@ -297,8 +297,8 @@ class TestDestinationValidationBeforeSend:
     )
     async def test_invalid_resolution_never_reaches_send(
         self,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
         addresses: list[str],
     ) -> None:
         """不正なIPが混ざる場合は一部の公開IPだけで送信へ進まない。"""
@@ -315,13 +315,13 @@ class TestSchemeRestrictionBeforeSend:
     async def test_rejects_non_http_scheme_before_resolution(
         self,
         url: str,
-        external_client: Callable[[], httpx.AsyncClient],
-        captured_requests: list[httpx.Request],
+        external_client: Callable[[], httpx2.AsyncClient],
+        captured_requests: list[httpx2.Request],
     ) -> None:
         """HTTP・HTTPS以外のschemeは名前解決と送信の前に拒否する。"""
         with _patch_resolver("8.8.8.8") as resolve:
             async with external_client() as client:
-                with pytest.raises(httpx.UnsupportedProtocol):
+                with pytest.raises(httpx2.UnsupportedProtocol):
                     await client.get(url)
         resolve.assert_not_awaited()
         assert captured_requests == []
@@ -332,11 +332,11 @@ class TestDirectConnectionDestination:
 
     @pytest.mark.asyncio
     async def test_pins_to_first_resolved_ip(
-        self, captured_requests: list[httpx.Request]
+        self, captured_requests: list[httpx2.Request]
     ) -> None:
         """複数の検証済みIPのうち先頭を送信先に指定する。"""
         with _patch_resolver("1.1.1.1", "8.8.8.8") as resolve:
-            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
+            async with httpx2.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com/feed.xml")
 
         assert len(captured_requests) == 1
@@ -345,42 +345,42 @@ class TestDirectConnectionDestination:
 
     @pytest.mark.asyncio
     async def test_preserves_host_header_for_routing(
-        self, captured_requests: list[httpx.Request]
+        self, captured_requests: list[httpx2.Request]
     ) -> None:
         """Host header は元 host を維持 (HTTP virtual host routing 用)。"""
         with _patch_resolver("8.8.8.8"):
-            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
+            async with httpx2.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com/path")
         assert captured_requests[0].headers["Host"] == "example.com"
 
     @pytest.mark.asyncio
     async def test_sets_sni_hostname_extension_for_tls_verify(
-        self, captured_requests: list[httpx.Request]
+        self, captured_requests: list[httpx2.Request]
     ) -> None:
         """送信処理へ渡すTLS SNIの指定には元のホスト名を保持する。"""
         with _patch_resolver("8.8.8.8"):
-            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
+            async with httpx2.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com/")
         assert captured_requests[0].extensions.get("sni_hostname") == "example.com"
 
     @pytest.mark.asyncio
     async def test_pins_to_ipv6_resolved_ip(
-        self, captured_requests: list[httpx.Request]
+        self, captured_requests: list[httpx2.Request]
     ) -> None:
         """IPv6 host も pin される (httpx が ``[ip]`` 形式に自動 bracket)。"""
         with _patch_resolver("2001:4860:4860::8888"):
-            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
+            async with httpx2.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com/")
         assert captured_requests[0].url.host == "2001:4860:4860::8888"
         assert captured_requests[0].headers["Host"] == "example.com"
 
     @pytest.mark.asyncio
     async def test_preserves_path_and_query_after_pin(
-        self, captured_requests: list[httpx.Request]
+        self, captured_requests: list[httpx2.Request]
     ) -> None:
         """URL host を IP に書換えても path / query / port は維持する。"""
         with _patch_resolver("8.8.8.8"):
-            async with httpx.AsyncClient(transport=_PinnedDnsTransport()) as client:
+            async with httpx2.AsyncClient(transport=_PinnedDnsTransport()) as client:
                 await client.get("https://example.com:8443/api/v1?x=1&y=2")
         url = captured_requests[0].url
         assert url.host == "8.8.8.8"
@@ -397,7 +397,7 @@ class TestEgressProxyRouting:
 
     @pytest.mark.asyncio
     async def test_keeps_original_host_when_routed_through_proxy(
-        self, egress_proxy: str, captured_requests: list[httpx.Request]
+        self, egress_proxy: str, captured_requests: list[httpx2.Request]
     ) -> None:
         """複数IPの検証後も、プロキシへ渡す宛先は元のホスト名を保持する。"""
         with _patch_resolver("8.8.8.8", "2001:4860:4860::8888"):
@@ -410,7 +410,7 @@ class TestEgressProxyRouting:
 
     @pytest.mark.asyncio
     async def test_omits_sni_hostname_when_routed_through_proxy(
-        self, egress_proxy: str, captured_requests: list[httpx.Request]
+        self, egress_proxy: str, captured_requests: list[httpx2.Request]
     ) -> None:
         """host を書き換えないので SNI の上書きも不要 (CONNECT で無視される)。"""
         with _patch_resolver("8.8.8.8"):
@@ -420,7 +420,7 @@ class TestEgressProxyRouting:
 
     @pytest.mark.asyncio
     async def test_caller_cannot_route_through_its_own_proxy(
-        self, egress_proxy: str, captured_requests: list[httpx.Request]
+        self, egress_proxy: str, captured_requests: list[httpx2.Request]
     ) -> None:
         """呼び出し側の指定があっても設定されたプロキシでtransportを生成する。"""
         with (
@@ -501,19 +501,19 @@ class TestRedirectDestinationValidation:
         sent: list[str] = []
 
         async def respond(
-            transport: httpx.AsyncHTTPTransport, request: httpx.Request
-        ) -> httpx.Response:
+            transport: httpx2.AsyncHTTPTransport, request: httpx2.Request
+        ) -> httpx2.Response:
             sent.append(str(request.url))
             if len(sent) == 1:
-                return httpx.Response(
+                return httpx2.Response(
                     302, headers={"Location": "wss://next.example/article"}
                 )
-            return httpx.Response(200, content=b"article")
+            return httpx2.Response(200, content=b"article")
 
-        monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
+        monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", respond)
         with _patch_resolver("8.8.8.8") as resolve:
             async with make_external_async_client(follow_redirects=True) as client:
-                with pytest.raises(httpx.UnsupportedProtocol):
+                with pytest.raises(httpx2.UnsupportedProtocol):
                     await client.get("https://start.example/article")
         assert sent == ["https://start.example/article"]
         assert [call.args[0] for call in resolve.await_args_list] == ["start.example"]

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from importlib import import_module
 from uuid import uuid4
 
-import httpx
+import httpx2
 
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.outbox.publishing.curated_signal import build_curated_signal_message
@@ -72,7 +72,7 @@ def assessment_reply(*, category="ai", investor_take="投資判断", key_points=
             "key_points": list(key_points),
         }
     )
-    return httpx.Response(
+    return httpx2.Response(
         200,
         json={
             "candidates": [

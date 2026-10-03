@@ -2,7 +2,7 @@
 
 import json
 
-import httpx
+import httpx2
 import pytest
 from pydantic import SecretStr
 
@@ -29,9 +29,9 @@ async def test_curator_uses_borrowed_sdk_with_shared_timeout_and_no_retry(
     def respond(request):
         requests.append(request)
         if outcome == "timeout":
-            raise httpx.ReadTimeout("private-timeout", request=request)
+            raise httpx2.ReadTimeout("private-timeout", request=request)
         if outcome == "unavailable":
-            return httpx.Response(
+            return httpx2.Response(
                 503,
                 json={
                     "error": {
@@ -44,7 +44,7 @@ async def test_curator_uses_borrowed_sdk_with_shared_timeout_and_no_retry(
         text = json.dumps(
             {"relevance": outcome, "title_ja": "タイトル", "summary_ja": "要約"}
         )
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "candidates": [
@@ -59,7 +59,7 @@ async def test_curator_uses_borrowed_sdk_with_shared_timeout_and_no_retry(
     def factory(**kwargs):
         assert kwargs.pop("retries") == 0
         assert kwargs["follow_redirects"] is False
-        client = httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs)
+        client = httpx2.AsyncClient(transport=httpx2.MockTransport(respond), **kwargs)
         clients.append(client)
         return client
 

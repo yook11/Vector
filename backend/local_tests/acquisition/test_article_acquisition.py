@@ -2,7 +2,7 @@
 
 from unittest.mock import Mock
 
-import httpx
+import httpx2
 import pytest
 from structlog.testing import capture_logs
 
@@ -223,7 +223,7 @@ async def test_retryable_fetch_failure_is_redelivered_and_can_recover(
     system_database, invoke_acquisition, source_id, rss_response
 ):
     """再試行で変わりうる取得失敗は監査に残してSQSへ返し、再配送で回復できる。"""
-    rss_response.side_effect = httpx.ReadTimeout("private-fetch-detail")
+    rss_response.side_effect = httpx2.ReadTimeout("private-fetch-detail")
     assert await invoke_acquisition(source_id) == {
         "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
     }
@@ -251,7 +251,7 @@ async def test_non_retryable_fetch_failure_is_acknowledged_until_next_request(
     system_database, invoke_acquisition, source_id, rss_response
 ):
     """再試行しても変わらない取得失敗は監査に残して受信完了し、次の依頼で回復できる。"""
-    rss_response.side_effect = [httpx.Response(404)]
+    rss_response.side_effect = [httpx2.Response(404)]
     assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
     assert await load_stored_events(system_database) == []
     failures = await load_acquisition_failures(system_database, source_id)
@@ -305,7 +305,7 @@ async def test_audit_and_diagnostic_failures_preserve_original_fetch_failure(
     """監査保存と退避ログが失敗しても、元の取得例外で再配送を要求する。"""
     from app.collection.article_acquisition import failure_recording
 
-    rss_response.side_effect = httpx.ReadTimeout("private-fetch-detail")
+    rss_response.side_effect = httpx2.ReadTimeout("private-fetch-detail")
     audit_log = Mock()
     audit_log.exception.side_effect = RuntimeError("private-diagnostic-detail")
     monkeypatch.setattr(failure_recording, "logger", audit_log)

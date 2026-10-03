@@ -16,7 +16,7 @@ from functools import lru_cache
 from typing import Any, Final, Protocol, cast
 from urllib.parse import urlparse
 
-import httpx
+import httpx2
 import logfire
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import SpanKind, StatusCode
@@ -79,7 +79,7 @@ class AgentCoreHttpClient(Protocol):
         *,
         headers: Mapping[str, str],
         content: bytes,
-    ) -> httpx.Response: ...
+    ) -> httpx2.Response: ...
 
 
 class AgentCoreWebSearchGateway:
@@ -146,7 +146,7 @@ class AgentCoreWebSearchGateway:
                 hits.append(hit)
         return hits[: request.limit]
 
-    async def _post_tool_call(self, request: ExternalSearchRequest) -> httpx.Response:
+    async def _post_tool_call(self, request: ExternalSearchRequest) -> httpx2.Response:
         payload = build_tool_call_payload(
             build_tool_arguments(
                 self.SPEC,
@@ -167,7 +167,7 @@ class AgentCoreWebSearchGateway:
             response = await self._client.post(
                 self._mcp_url, headers=headers, content=body
             )
-        except httpx.RequestError:
+        except httpx2.RequestError:
             transport_failure = ExternalSearchFailureReason.HTTP_ERROR
 
         if transport_failure is not None:
@@ -236,7 +236,7 @@ async def _signed_headers(*, url: str, body: bytes, region: str) -> dict[str, st
         ) from exc
 
 
-def _results_from_response(response: httpx.Response) -> list[object]:
+def _results_from_response(response: httpx2.Response) -> list[object]:
     """二重 JSON を解いて results を取り出す。
 
     MCP は tool の出力を ``result.content[0].text`` に **JSON 文字列として**

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2
 from google.genai import errors as genai_errors
 
 from app.ai_providers.errors import (
@@ -26,7 +26,7 @@ def _assessor() -> GeminiAssessor:
 
 def test_delegates_transport_error() -> None:
     """SDKの通信timeoutを共通のプロバイダー通信エラーへ変換する。"""
-    translated = _assessor()._translate_error(httpx.ReadTimeout("read timeout"))
+    translated = _assessor()._translate_error(httpx2.ReadTimeout("read timeout"))
     assert isinstance(translated, AIProviderTransportError)
 
 

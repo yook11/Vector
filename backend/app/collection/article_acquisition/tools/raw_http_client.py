@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-import httpx
+import httpx2
 
 from app.collection.article_acquisition.tools.source_http import get_source_response
 from app.http.external import make_external_async_client
@@ -12,7 +12,7 @@ from app.http.external import make_external_async_client
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
 )
-_DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+_DEFAULT_TIMEOUT = httpx2.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 
 class RawHttpClient:
@@ -25,7 +25,7 @@ class RawHttpClient:
         *,
         accept: str,
         user_agent: str = _DEFAULT_USER_AGENT,
-        timeout: httpx.Timeout = _DEFAULT_TIMEOUT,
+        timeout: httpx2.Timeout = _DEFAULT_TIMEOUT,
     ) -> None:
         self._accept = accept
         self._user_agent = user_agent
@@ -39,7 +39,6 @@ class RawHttpClient:
         """
         async with make_external_async_client(
             headers={"User-Agent": self._user_agent, "Accept": self._accept},
-            verify=True,
             timeout=self._timeout,
         ) as client:
             response = await get_source_response(client, url)

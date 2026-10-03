@@ -10,7 +10,7 @@ SDK 例外分類の網羅は
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 from google.genai.errors import APIError
 
@@ -83,7 +83,7 @@ def test_validation_error_maps_to_response_invalid() -> None:
 
 def test_delegates_timeout_to_transport_error() -> None:
     """Stage 3 も共通の変換器で通信の失敗に分類する。"""
-    translated = _curator()._translate_error(httpx.ReadTimeout("read timeout"))
+    translated = _curator()._translate_error(httpx2.ReadTimeout("read timeout"))
     assert isinstance(translated, AIProviderTransportError)
 
 

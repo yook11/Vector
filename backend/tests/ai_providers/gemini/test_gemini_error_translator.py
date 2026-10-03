@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import patch
 
-import httpx
+import httpx2
 import pytest
 from google.genai import errors as genai_errors
 from structlog.testing import capture_logs
@@ -69,25 +69,25 @@ def test_host_blocked_is_request_not_sent() -> None:
     ("exc", "expected"),
     [
         (
-            httpx.ReadTimeout("timed out"),
+            httpx2.ReadTimeout("timed out"),
             HttpTransportFailure(
                 HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             ),
         ),
         (
-            httpx.ConnectError("connection refused"),
+            httpx2.ConnectError("connection refused"),
             HttpTransportFailure(
                 HttpTransportStage.CONNECT, HttpTransportFailureReason.NETWORK_IO
             ),
         ),
         (
-            httpx.PoolTimeout("pool exhausted"),
+            httpx2.PoolTimeout("pool exhausted"),
             HttpTransportFailure(
                 HttpTransportStage.PREPARATION, HttpTransportFailureReason.TIMEOUT
             ),
         ),
         (
-            httpx.ProxyError("403 Forbidden"),
+            httpx2.ProxyError("403 Forbidden"),
             HttpTransportFailure(
                 HttpTransportStage.CONNECT,
                 HttpTransportFailureReason.PROXY,
@@ -95,13 +95,13 @@ def test_host_blocked_is_request_not_sent() -> None:
             ),
         ),
         (
-            httpx.ReadError("read failed"),
+            httpx2.ReadError("read failed"),
             HttpTransportFailure(
                 HttpTransportStage.RECEIVE, HttpTransportFailureReason.NETWORK_IO
             ),
         ),
         (
-            httpx.RemoteProtocolError("bad response"),
+            httpx2.RemoteProtocolError("bad response"),
             HttpTransportFailure(
                 HttpTransportStage.RECEIVE,
                 HttpTransportFailureReason.PROTOCOL_VIOLATION,
@@ -141,7 +141,7 @@ def test_builtin_errors_are_not_classified(exc: Exception) -> None:
 
 def test_unsupported_protocol_is_not_a_transport_error() -> None:
     """http/https 以外の拒否は通信の失敗ではないので、変換せずに返す。"""
-    exc = httpx.UnsupportedProtocol("ftp is not sent")
+    exc = httpx2.UnsupportedProtocol("ftp is not sent")
     assert translate_gemini_error(exc) is exc
 
 
@@ -158,10 +158,10 @@ def test_server_error_is_error_response_with_status() -> None:
 
 def test_response_keeps_retry_after_from_sdk_response() -> None:
     """SDK が持つ応答の Retry-After を、解釈せずに HTTP のエラーへ残す。"""
-    response = httpx.Response(
+    response = httpx2.Response(
         429,
         headers={"Retry-After": "30"},
-        request=httpx.Request("POST", "https://generativelanguage.example.invalid"),
+        request=httpx2.Request("POST", "https://generativelanguage.example.invalid"),
     )
     exc = genai_errors.ClientError(
         429,
@@ -507,10 +507,10 @@ def test_resource_exhausted_logs_retry_delay_and_quota_ids(
 
 def test_resource_exhausted_log_records_retry_after_header() -> None:
     """Retry-After ヘッダーが付いていたかを、本文の有無と別に記録する。"""
-    response = httpx.Response(
+    response = httpx2.Response(
         429,
         headers={"Retry-After": "30"},
-        request=httpx.Request("POST", "https://generativelanguage.example.invalid"),
+        request=httpx2.Request("POST", "https://generativelanguage.example.invalid"),
     )
     exc = genai_errors.ClientError(
         429,
