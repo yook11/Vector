@@ -17,12 +17,24 @@ run "operations_scope" {
   command = plan
   assert {
     condition = (
-      jsondecode(aws_iam_role.operations.assume_role_policy).Statement[0].Condition.ArnLike["aws:PrincipalArn"] ==
-      "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/ap-northeast-1/AWSReservedSSO_VectorDeploy_*" &&
+      jsondecode(aws_iam_role.operations.assume_role_policy).Statement == [{
+        Sid       = "ReadOnlyToOperations"
+        Effect    = "Allow"
+        Action    = "sts:AssumeRole"
+        Principal = { AWS = "arn:aws:iam::123456789012:root" }
+        Condition = { ArnLike = {
+          "aws:PrincipalArn" = "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/ap-northeast-1/AWSReservedSSO_ReadOnly_*"
+        } }
+      }] &&
       aws_iam_role.operations.max_session_duration == 3600 &&
-      output.deploy_operations_assume_statement.Resource == output.operations_role_arn
+      output.readonly_operations_assume_statement == {
+        Sid      = "AssumeVectorOperations"
+        Effect   = "Allow"
+        Action   = "sts:AssumeRole"
+        Resource = output.operations_role_arn
+      }
     )
-    error_message = "デプロイSSOから1時間の運用セッションだけを発行する。"
+    error_message = "同一アカウントのReadOnly SSOだけを信頼し、1時間の運用セッションと対象ロール限定の引受許可を定義する。"
   }
   assert {
     condition = (
