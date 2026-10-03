@@ -75,7 +75,7 @@ flowchart TB
     end
 
     News[("外部ニュース源<br/>~45 sources")]
-    AI[("AI Provider<br/>Gemini / DeepSeek")]
+    AI[("AI Provider<br/>Gemini")]
 
     Browser -->|HTTPS| FE
     FE -->|内部API 呼び出し| CORE
