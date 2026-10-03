@@ -44,8 +44,6 @@ dependencies = [
 # (red-team C6 chain 防御)。
 [dependency-groups]
 dev = [
-    # API試験がアプリをネットワークなしで呼ぶASGI clientとしてだけ使う。
-    "httpx>=0.28,<1",
     "pytest>=9.1.1,<10",
     "pytest-asyncio>=1.4.0,<2",
     "pytest-xdist>=3.8.0,<4",

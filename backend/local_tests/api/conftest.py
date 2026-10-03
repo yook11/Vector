@@ -4,7 +4,7 @@ import time
 from types import SimpleNamespace
 from uuid import uuid4
 
-import httpx
+import httpx2
 import jwt
 import pytest
 from sqlalchemy import text
@@ -81,8 +81,8 @@ async def api_client(api_settings, api_engine, monkeypatch):
         raising=False,
     )
     try:
-        async with httpx.AsyncClient(  # noqa: TID251
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        async with httpx2.AsyncClient(  # noqa: TID251
+            transport=httpx2.ASGITransport(app=app), base_url="http://test"
         ) as client:
             yield client
     finally:

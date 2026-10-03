@@ -19,10 +19,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx2
 import logfire
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from logfire.testing import CaptureLogfire
 from pydantic import BaseModel, Field
 
@@ -161,7 +161,17 @@ class _ItemsBody(BaseModel):
     q: str = Field(min_length=1, max_length=10)
 
 
-def test_validation_error_span_drops_rejected_input(capfire: CaptureLogfire) -> None:
+def _asgi_client(app: FastAPI) -> httpx2.AsyncClient:
+    """アプリをネットワークなしで呼び、起動・終了処理は通さない。"""
+    return httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+    )
+
+
+@pytest.mark.asyncio
+async def test_validation_error_span_drops_rejected_input(
+    capfire: CaptureLogfire,
+) -> None:
     """instrument_fastapi 経由でも sanitize が経路上効いていることを実検証。
 
     capfire fixture は ``logfire.configure(send_to_logfire=False, ...)`` を
@@ -184,8 +194,8 @@ def test_validation_error_span_drops_rejected_input(capfire: CaptureLogfire) -> 
     )
 
     sensitive = "sensitive_long_query_xxxxxxxxxxxxxxxxxxxxxxxxx"
-    client = TestClient(app)
-    resp = client.post("/items", json={"q": sensitive})
+    async with _asgi_client(app) as client:
+        resp = await client.post("/items", json={"q": sensitive})
     assert resp.status_code == 422
 
     # 捕捉した span を JSON 化して全文検索: 送信値が **1 つも** 現れない。
@@ -196,7 +206,8 @@ def test_validation_error_span_drops_rejected_input(capfire: CaptureLogfire) -> 
     )
 
 
-def test_excluded_urls_suppresses_health_span_but_not_items_span(
+@pytest.mark.asyncio
+async def test_excluded_urls_suppresses_health_span_but_not_items_span(
     capfire: CaptureLogfire,
 ) -> None:
     """excluded_urls に指定した URL パターンのリクエストは span を生成しない。
@@ -225,9 +236,9 @@ def test_excluded_urls_suppresses_health_span_but_not_items_span(
         extra_spans=False,
     )
 
-    client = TestClient(app)
-    assert client.get("/api/v1/health").status_code == 200
-    assert client.get("/api/v1/items").status_code == 200
+    async with _asgi_client(app) as client:
+        assert (await client.get("/api/v1/health")).status_code == 200
+        assert (await client.get("/api/v1/items")).status_code == 200
 
     dumped = json.dumps(capfire.exporter.exported_spans_as_dict(), default=str)
     # 対照: /api/v1/items は span として捕捉されている (除外機能の非空虚性確認)。

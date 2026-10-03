@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import event as sa_event
 from sqlalchemy import false, func, select, update

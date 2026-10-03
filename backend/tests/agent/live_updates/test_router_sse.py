@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import redis.asyncio as aioredis
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from starlette.datastructures import State
 from starlette.requests import Request
 

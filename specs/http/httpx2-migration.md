@@ -200,6 +200,13 @@ SDKが使わない同期クライアントやASGIテストから旧HTTPXの存�
 - integration・local_testsは、httpsのプロキシとLogfire計測の後片付けを直す前に実行した。この2点はfactoryを差し替える両試験の経路とDBに触れないため再実行していない。
 - PR CI・セキュリティチェックの結果は当該PRのchecksへ記録する。本番反映後のTLS・span・成功率の確認は未実施。
 
+### PR D: API試験の道具をHTTPX2へ替える
+
+- API試験（ASGI）のclient fixture、router試験、`local_tests/api`の`httpx`を`httpx2`へ替え、devグループから`httpx`を外す。lockの変化はVector本体のdev依存の2行だけで、旧HTTPXはgoogle-genaiの依存として残る。
+- Starlette/FastAPIの`TestClient`は旧HTTPXに依存するため使わない。`TestClient`を使っていた3ファイルは`httpx2.ASGITransport`で呼び、`with TestClient(app)`で起動・終了処理を通していた試験は`app.router.lifespan_context(app)`で同じ処理を通す。
+- `test_sdk_contract.py`だけは、SDKが旧HTTPXから送信していないことを確かめるため旧HTTPXをimportする。
+- 検証（2026-10-03）: 変更した試験のruff check / format、全体unit 6,653件、DB integration 1,209件（`tests/`全体）、`local_tests/api` 44件が通過。
+
 ### 送信境界と実行環境の検証
 
 - HTTP/HTTPS proxy、宛先拒否、proxy停止時の直通fallbackなし、Host/SNI、証明書検証を実接続で確認する。
