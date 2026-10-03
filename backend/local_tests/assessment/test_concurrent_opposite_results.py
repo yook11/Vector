@@ -6,8 +6,8 @@ import pytest
 
 from app.analysis.assessment.service import AssessmentCompletionKind
 from local_tests.assessment.support import (
+    assessment_reply,
     build_sqs_record,
-    deepseek_reply,
     fetch_stored_assessment,
     invoke_sqs_record,
     seed_curation,
@@ -37,10 +37,10 @@ async def test_concurrent_opposite_results_persist_only_leader_result(
     target = await seed_curation(system_database, "https://example.com/opposite")
     record = build_sqs_record(target)
     leader = gated_ai_responses(
-        deepseek_reply(category=leader_category, investor_take="先行側の判断")
+        assessment_reply(category=leader_category, investor_take="先行側の判断")
     )
     follower = gated_ai_responses(
-        deepseek_reply(category=follower_category, investor_take="後続側の判断")
+        assessment_reply(category=follower_category, investor_take="後続側の判断")
     )
     invocations = []
     try:
