@@ -4,6 +4,8 @@ Status: Draft v0.1 (不変条件群とmodule traceは棚卸し済み / 各PR対�
 Scope: `backend/tests/agent/` の test module 62ファイル + runtime共有helper 4ファイル + worker経路
 Date: 2026-07-20
 
+> 2026-10-03: 生成モデルを Gemini に統一し、DeepSeek を外した（#529）。本文の DeepSeek の記述は当時の記録。DeepSeek の runtime と試験は削除したので、`RT-DS` 系（`RT-DS-01`〜`RT-DS-05`）と `OBS-RT-DS-01` は廃止した。
+
 ## 目的
 
 テスト再設計で、意図された保証を理由なく失わず、偶然の実装詳細を保証として固定しないための

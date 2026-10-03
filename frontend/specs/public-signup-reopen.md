@@ -29,7 +29,7 @@
 | メール送信 | 送信手段はない。`emailVerified`は全ユーザー`false`で、参照している箇所もない |
 | 登録の速度制限 | Better Authの`/sign-up/email`はIPあたり60秒に5回で、DBに保存する。本番は`CLIENT_IP_TRUST=alb-xff-last`でIPを解決する |
 | LLM利用の上限 | researchは1ユーザーにつきJSTの1日10回まで。全体の上限はない |
-| 費用 | Gemini / DeepSeekは前払い制。AgentCore web searchはAWS課金で、1 runは最大9クエリ（$0.063）、1ユーザー1日で最大$0.63。AgentCoreだけを対象にした日次予算$3の通知を設定済み（#500） |
+| 費用 | Geminiは前払い制。AgentCore web searchはAWS課金で、1 runは最大9クエリ（$0.063）、1ユーザー1日で最大$0.63。AgentCoreだけを対象にした日次予算$3の通知を設定済み（#500） |
 | 他ユーザーのデータ | ユーザー所有のデータはすべてJWTのsubで絞っており、IDORは見つかっていない |
 | 登録UI | `/auth/register`は招待制の案内ページ。ログイン画面には招待制のAlertがあり、登録リンクはない。旧`RegisterForm`は#41で削除済み |
 
