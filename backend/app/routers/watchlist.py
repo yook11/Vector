@@ -2,22 +2,16 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db.fastapi import EntryManagedSession
 from app.dependencies import CurrentUser, get_current_user
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
-from app.schemas.articles import PaginatedArticleResponse
+from app.schemas.articles import ArticleId, PaginatedArticleResponse
 from app.schemas.base import PaginationParams
 from app.schemas.watchlist import WatchlistIds
 from app.services.watchlist import WatchlistService
-
-# article_id は PostgreSQL INTEGER (int32)。OverflowError 由来の 500 leak を
-# 構造的に閉塞するため上限を path level で明示する (router/articles.py の
-# _ArticleId と同型)。
-_INT32_MAX = 2_147_483_647
-_ArticleId = Annotated[int, Path(ge=1, le=_INT32_MAX)]
 
 router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
 
@@ -64,7 +58,7 @@ async def list_articles_in_watchlist(
     },
 )
 async def add_to_watchlist(
-    article_id: _ArticleId,
+    article_id: ArticleId,
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> Response:
     """記事をウォッチリストに入れる。新しく追加したら 201、登録済みなら 204 を返す。"""
@@ -79,7 +73,7 @@ async def add_to_watchlist(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def remove_from_watchlist(
-    article_id: _ArticleId,
+    article_id: ArticleId,
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> None:
     """記事をウォッチリストから外す。登録されていなくても 204 を返す。"""

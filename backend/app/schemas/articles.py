@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Query
+from fastapi import Path, Query
 from pydantic import Field
 
 if TYPE_CHECKING:
@@ -25,6 +25,18 @@ from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 class SortOrder(StrEnum):
     ASC = "asc"
     DESC = "desc"
+
+
+# ---------------------------------------------------------------------------
+# パスパラメータ
+# ---------------------------------------------------------------------------
+
+
+_INT32_MAX = 2_147_483_647
+
+# 記事 ID 列は integer (int4) のため、範囲外の値は asyncpg の OverflowError より前に
+# 422 で弾く (#545)。
+ArticleId = Annotated[int, Path(ge=1, le=_INT32_MAX)]
 
 
 # ---------------------------------------------------------------------------

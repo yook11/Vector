@@ -196,6 +196,13 @@ class TestAddToWatchlist:
         resp = await authed_client.put("/api/v1/me/watchlist/99999")
         assert resp.status_code == 404
 
+    async def test_add_with_overflowing_id_returns_422(
+        self, authed_client: AsyncClient
+    ) -> None:
+        """integer (int4) の上限 + 1 の ID は、DB に問い合わせる前に 422 で弾く。"""
+        resp = await authed_client.put("/api/v1/me/watchlist/2147483648")
+        assert resp.status_code == 422
+
 
 @pytest.mark.asyncio
 class TestRemoveFromWatchlist:
@@ -218,6 +225,13 @@ class TestRemoveFromWatchlist:
         """登録されていない記事を DELETE しても 204 を返す。"""
         resp = await authed_client.delete("/api/v1/me/watchlist/99999")
         assert resp.status_code == 204
+
+    async def test_remove_with_overflowing_id_returns_422(
+        self, authed_client: AsyncClient
+    ) -> None:
+        """integer (int4) の上限 + 1 の ID は、DB に問い合わせる前に 422 で弾く。"""
+        resp = await authed_client.delete("/api/v1/me/watchlist/2147483648")
+        assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
