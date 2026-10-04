@@ -1,17 +1,14 @@
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { WatchlistButton } from "@/features/watchlist";
 import type { ArticleBrief } from "@/types/types.gen";
-import { PaperArticleCard } from "./PaperArticleCard";
+import { ArticleCard } from "./ArticleCard";
 
-interface DashboardPaperArticleListProps {
+interface ArticleListProps {
   items: ArticleBrief[];
   watchedIds: Set<number>;
 }
 
-export function DashboardPaperArticleList({
-  items,
-  watchedIds,
-}: DashboardPaperArticleListProps) {
+export function ArticleList({ items, watchedIds }: ArticleListProps) {
   if (items.length === 0) {
     return (
       <div className="border-b border-[var(--vector-rule)] py-16">
@@ -26,7 +23,7 @@ export function DashboardPaperArticleList({
   return (
     <div className="grid grid-cols-1 gap-x-12 gap-y-[30px] md:grid-cols-2">
       {items.map((article) => (
-        <PaperArticleCard
+        <ArticleCard
           key={article.id}
           article={article}
           actionSlot={

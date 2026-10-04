@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ArticleQuery } from "@/types";
-import { buildDashboardCategoryHref } from "./paper-hrefs";
+import { buildDashboardCategoryHref } from "./dashboard-hrefs";
 
 describe("buildDashboardCategoryHref", () => {
   it("resets page and keeps sortOrder/perPage when changing category", () => {

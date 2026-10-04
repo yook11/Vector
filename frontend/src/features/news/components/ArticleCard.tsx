@@ -8,17 +8,14 @@ import {
   PaperKicker,
 } from "@/components/paper";
 import type { ArticleBrief } from "@/types/types.gen";
-import { getArticleSourceLabel } from "./article-paper";
+import { getArticleSourceLabel } from "./article-display";
 
-interface PaperArticleCardProps {
+interface ArticleCardProps {
   actionSlot?: ReactNode;
   article: ArticleBrief;
 }
 
-export function PaperArticleCard({
-  actionSlot,
-  article,
-}: PaperArticleCardProps) {
+export function ArticleCard({ actionSlot, article }: ArticleCardProps) {
   const sourceLabel = getArticleSourceLabel(article);
   const source = getSourceBadge(article.source.name);
   const kicker = getCategoryKicker(article.category.slug);

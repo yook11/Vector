@@ -3,7 +3,7 @@ import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PageNavigationProvider } from "@/components/layout/PageNavigation";
 import type { ArticleBrief } from "@/types/types.gen";
-import { PaperArticleCard } from "./PaperArticleCard";
+import { ArticleCard } from "./ArticleCard";
 
 const mocks = vi.hoisted(() => ({
   pendingByHref: new Map<string, boolean>(),
@@ -59,7 +59,7 @@ const article = {
   publishedAt: "2026-07-24T00:00:00Z",
 } as unknown as ArticleBrief;
 
-describe("PaperArticleCard navigation lifecycle", () => {
+describe("ArticleCard navigation lifecycle", () => {
   beforeEach(() => {
     mocks.pendingByHref.clear();
   });
@@ -67,7 +67,7 @@ describe("PaperArticleCard navigation lifecycle", () => {
   it("記事detailへの遷移中はglobal pendingを開始し、settleで解除する", async () => {
     const tree = () => (
       <PageNavigationProvider>
-        <PaperArticleCard article={article} />
+        <ArticleCard article={article} />
       </PageNavigationProvider>
     );
     const view = render(tree());

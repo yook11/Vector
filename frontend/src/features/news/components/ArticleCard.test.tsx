@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { ArticleBrief } from "@/types/types.gen";
-import { PaperArticleCard } from "./PaperArticleCard";
+import { ArticleCard } from "./ArticleCard";
 
 // types.gen.ts は未再生成で summary を持つ旧スキーマのまま。
 // 新契約 (keyPoints / summaryPreview) を as unknown as ArticleBrief でキャストして
@@ -35,10 +35,10 @@ function makeArticle(
   };
 }
 
-describe("PaperArticleCard — 構造", () => {
+describe("ArticleCard — 構造", () => {
   it("タイトルリンクが /news/{id} の href を持つ", () => {
     render(
-      <PaperArticleCard
+      <ArticleCard
         article={makeArticle() as unknown as ArticleBrief}
         actionSlot={<button type="button">保存</button>}
       />,
@@ -55,7 +55,7 @@ describe("PaperArticleCard — 構造", () => {
   });
 });
 
-describe("PaperArticleCard — keyPoints 表示分岐", () => {
+describe("ArticleCard — keyPoints 表示分岐", () => {
   it("keyPoints が3件・summaryPreview: null のとき各 keyPoint テキストが表示される", () => {
     // invariant: keyPoints が非空なら各 content が document に存在する
     const points = [
@@ -64,7 +64,7 @@ describe("PaperArticleCard — keyPoints 表示分岐", () => {
       "ゼロデイ公開から平均4.5日で攻撃が始まる",
     ];
     render(
-      <PaperArticleCard
+      <ArticleCard
         article={
           makeArticle({
             keyPoints: points,
@@ -88,7 +88,7 @@ describe("PaperArticleCard — keyPoints 表示分岐", () => {
     const keyPoint = "AIによる脆弱性の悪用が加速している";
     const sentinel = "SENTINEL_PREVIEW_TEXT_SHOULD_NOT_APPEAR";
     render(
-      <PaperArticleCard
+      <ArticleCard
         article={
           makeArticle({
             keyPoints: [keyPoint],
@@ -107,7 +107,7 @@ describe("PaperArticleCard — keyPoints 表示分岐", () => {
     const preview =
       "AIによる脆弱性悪用のスピードが加速しており、企業のパッチ対応が追いついていない状況が続く。";
     render(
-      <PaperArticleCard
+      <ArticleCard
         article={
           makeArticle({
             keyPoints: [],

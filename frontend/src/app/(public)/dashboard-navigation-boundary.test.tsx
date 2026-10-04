@@ -45,7 +45,7 @@ vi.mock("@/features/auth", () => ({
 
 vi.mock("@/features/news", () => ({
   ArticleListUpdateNotice: () => <aside>新着確認</aside>,
-  DashboardArticleListSkeleton: () => <p>記事を更新中…</p>,
+  ArticleListSkeleton: () => <p>記事を更新中…</p>,
   DashboardMasthead: ({
     themeSlot,
     userMenuSlot,
@@ -59,15 +59,15 @@ vi.mock("@/features/news", () => ({
       {userMenuSlot}
     </header>
   ),
-  DashboardPaperArticleList: () => (
+  ArticleList: () => (
     <section data-testid="dashboard-article-results">記事結果</section>
   ),
   getArticles: mocks.getArticles,
   getCategories: mocks.getCategories,
   getLatestArticleDate: () => null,
-  PaperNewsControls: () => <button type="button">表示設定</button>,
-  PaperNewsPagination: () => <nav>記事ページ</nav>,
-  PaperNewsResultSummary: () => (
+  ArticleListControls: () => <button type="button">表示設定</button>,
+  ArticlePagination: () => <nav>記事ページ</nav>,
+  ArticleListSummary: () => (
     <p data-testid="dashboard-result-summary">検索結果</p>
   ),
   parseArticleQuery: () => ({ query: {} }),

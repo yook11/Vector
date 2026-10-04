@@ -5,9 +5,9 @@ const bar =
 
 /**
  * カテゴリ・並び替えの再取得中に出すプレースホルダ。
- * DashboardPaperArticleList と同じ 2 カラムグリッドで PaperArticleCard の骨格を写す。
+ * ArticleList と同じ 2 カラムグリッドで ArticleCard の骨格を写す。
  */
-export function DashboardArticleListSkeleton({
+export function ArticleListSkeleton({
   label = "記事を更新中…",
 }: {
   label?: string;

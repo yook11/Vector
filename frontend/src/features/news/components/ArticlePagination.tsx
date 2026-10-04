@@ -4,15 +4,15 @@ import { Loader2Icon } from "lucide-react";
 import { useUpdateSearchParams } from "@/lib/search-params/client";
 import { cn } from "@/lib/utils/cn";
 
-interface PaperNewsPaginationProps {
+interface ArticlePaginationProps {
   page: number;
   totalPages: number;
 }
 
-export function PaperNewsPagination({
+export function ArticlePagination({
   page,
   totalPages,
-}: PaperNewsPaginationProps) {
+}: ArticlePaginationProps) {
   const { updateSearchParams, isPending } = useUpdateSearchParams();
 
   if (totalPages <= 1) return null;

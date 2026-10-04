@@ -39,15 +39,15 @@ vi.mock("@/features/auth", () => ({
 
 vi.mock("@/features/news", () => ({
   ArticleListUpdateNotice: () => null,
-  DashboardArticleListSkeleton: () => null,
+  ArticleListSkeleton: () => null,
   DashboardMasthead: () => null,
-  DashboardPaperArticleList: () => null,
+  ArticleList: () => null,
   getArticles: mocks.getArticles,
   getCategories: mocks.getCategories,
   getLatestArticleDate: vi.fn(),
-  PaperNewsControls: () => null,
-  PaperNewsPagination: () => null,
-  PaperNewsResultSummary: () => null,
+  ArticleListControls: () => null,
+  ArticlePagination: () => null,
+  ArticleListSummary: () => null,
   parseArticleQuery: mocks.parseArticleQuery,
 }));
 

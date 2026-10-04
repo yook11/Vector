@@ -1,6 +1,6 @@
 import { WatchlistButton } from "@/features/watchlist";
 import type { ArticleBrief } from "@/types/types.gen";
-import { PaperArticleCard } from "./PaperArticleCard";
+import { ArticleCard } from "./ArticleCard";
 
 interface RelatedArticlesProps {
   articles: ArticleBrief[];
@@ -27,7 +27,7 @@ export function RelatedArticles({
       </div>
       <div className="grid grid-cols-1 gap-x-12 gap-y-8 md:grid-cols-2">
         {articles.map((article) => (
-          <PaperArticleCard
+          <ArticleCard
             key={article.id}
             article={article}
             actionSlot={

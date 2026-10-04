@@ -1,18 +1,18 @@
 import type { Category } from "@/types/types.gen";
 import type { getArticles } from "../api/get-articles";
 
-interface PaperNewsResultSummaryProps {
+interface ArticleListSummaryProps {
   selectedCategorySlug?: string;
   categories: Category[];
   articlesPromise: ReturnType<typeof getArticles>;
 }
 
 /** フィルタバー左の結果サマリ「<カテゴリ> · 全 N件」。total は cached getArticles を共用。 */
-export async function PaperNewsResultSummary({
+export async function ArticleListSummary({
   articlesPromise,
   categories,
   selectedCategorySlug,
-}: PaperNewsResultSummaryProps) {
+}: ArticleListSummaryProps) {
   const { total } = await articlesPromise;
   // 未知 slug (rename 後の stale URL 等) は内部 slug を露出させず、存在しないカテゴリとして示す。
   const categoryName =
