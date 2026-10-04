@@ -45,7 +45,7 @@ export const getArticle = <ThrowOnError extends boolean = false>(options: Option
 /**
  * List Categories
  *
- * 全カテゴリをネストされたキーワードと記事件数付きで一覧取得する。
+ * 全カテゴリと、直近 24 時間に分析された記事数を返す。
  *
  * レスポンスはユーザー非依存。BFF 経由証明を必須とし backend 直叩きを閉じるが、
  * ログイン検証 (login gate) は BFF/Next.js が担うため user は要求しない。

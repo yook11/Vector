@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.category import Category
 
-SIDEBAR_RECENT_WINDOW = timedelta(hours=24)
+ARTICLE_COUNT_WINDOW = timedelta(hours=24)
 
 
 class CategoryRepository:
@@ -27,16 +27,16 @@ class CategoryRepository:
     ) -> list[Row[tuple[int, int]]]:
         """カテゴリごとの直近 24 時間に分類された記事数を取得する.
 
-        (category_id, recent_count) の行を返す.
+        (category_id, article_count) の行を返す.
         24 時間以内の分類がないカテゴリは結果に含まれない（呼び出し側で 0 を補完する）.
         複合インデックス ix_analyzed_articles_category_id_analyzed_at が
         左端 + range で効く.
         """
-        cutoff = datetime.now(UTC) - SIDEBAR_RECENT_WINDOW
+        cutoff = datetime.now(UTC) - ARTICLE_COUNT_WINDOW
         stmt = (
             select(
                 AnalyzedArticleRecord.category_id,
-                func.count(AnalyzedArticleRecord.id).label("recent_count"),
+                func.count(AnalyzedArticleRecord.id).label("article_count"),
             )
             .where(AnalyzedArticleRecord.analyzed_at > cutoff)
             .group_by(AnalyzedArticleRecord.category_id)

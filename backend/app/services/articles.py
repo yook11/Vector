@@ -11,7 +11,8 @@ from app.schemas.articles import (
     ArticleListParams,
     PaginatedArticleResponse,
 )
-from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed, OriginalArticleEmbed
+from app.schemas.category import Category
+from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
 _KEY_POINT_MAX = 3
 _KEY_POINT_LEN = 250
@@ -45,7 +46,7 @@ def build_brief(analysis: AnalyzedArticleRecord) -> ArticleBrief:
         translated_title=analysis.translated_title,
         key_points=key_points,
         summary_preview=summary_preview,
-        category=CategoryEmbed(
+        category=Category(
             slug=analysis.category.slug,
             name=analysis.category.name,
         ),
@@ -82,7 +83,7 @@ def build_detail(analysis: AnalyzedArticleRecord) -> ArticleDetail:
         investor_take=analysis.investor_take,
         key_points=extract_key_point_contents(analysis.key_points),
         analyzed_at=analysis.analyzed_at,
-        category=CategoryEmbed(
+        category=Category(
             slug=analysis.category.slug,
             name=analysis.category.name,
         ),

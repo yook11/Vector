@@ -227,8 +227,8 @@ watch_points: list[
 category からの id 撤去 / titleJa → translatedTitle / state "ready" → "briefing" /
 生成型名の変更) は許容で合意済み。
 
-関連の別スコープ決定: `CategoryDetail` → `CategoryBrief` rename は
-[`category-brief-rename.md`](../news/category-brief-rename.md) に分離 (briefing 実装と独立に実行可能)。
+関連の別スコープ決定: カテゴリ一覧 API の型名は
+[`category-schema-naming.md`](../news/category-schema-naming.md) に分離。
 
 ## 未決
 

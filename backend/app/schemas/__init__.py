@@ -4,8 +4,9 @@ from app.schemas.articles import (
     PaginatedArticleResponse,
 )
 from app.schemas.category import (
-    CategoryDetail,
-    CategoryDetailList,
+    Category,
+    CategoryStats,
+    CategoryStatsList,
 )
 from app.schemas.embeds import (
     OriginalArticleEmbed,
@@ -14,8 +15,9 @@ from app.schemas.embeds import (
 __all__ = [
     "ArticleBrief",
     "ArticleDetail",
-    "CategoryDetail",
-    "CategoryDetailList",
+    "Category",
+    "CategoryStats",
+    "CategoryStatsList",
     "OriginalArticleEmbed",
     "PaginatedArticleResponse",
 ]

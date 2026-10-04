@@ -58,24 +58,3 @@ export function useUpdateSearchParams() {
 
   return { updateSearchParams, isPending };
 }
-
-/**
- * `useUpdateSearchParams` の navigate を行わない版。`<Link href={...}>` を
- * 構築する場面 (CategorySidebar 等) で利用。
- */
-export function useBuildSearchParamsHref() {
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-
-  return useCallback(
-    (updates: ParamUpdates): string => {
-      const next = applyUpdates(
-        new URLSearchParams(searchParams?.toString() ?? ""),
-        updates,
-      );
-      const qs = next.toString();
-      return qs ? `${pathname}?${qs}` : pathname;
-    },
-    [pathname, searchParams],
-  );
-}

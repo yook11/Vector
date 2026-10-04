@@ -1,9 +1,9 @@
-import type { CategoryDetail } from "@/types/types.gen";
+import type { Category } from "@/types/types.gen";
 import type { getArticles } from "../api/get-articles";
 
 interface PaperNewsResultSummaryProps {
   activeCategory?: string;
-  categories: CategoryDetail[];
+  categories: Category[];
   articlesPromise: ReturnType<typeof getArticles>;
 }
 

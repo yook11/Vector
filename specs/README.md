@@ -91,7 +91,7 @@ API契約の正本はFastAPIのPydantic schema、DB変更の正本はAlembic mig
 | Collection | [Stage 2 title extraction](./collection/stage2-title-extraction.md) | Implemented |
 | Insights | [Briefing schema naming](./insights/briefing-schema-naming.md) | Implemented |
 | News | [Article card key points](./news/article-card-key-points.md) | Implemented |
-| News | [CategoryBrief rename](./news/category-brief-rename.md) | Accepted |
+| News | [Category schema naming](./news/category-schema-naming.md) | Implemented |
 | Observability | [アプリケーションログの概念別ポリシーとCloudWatch集約](./observability/application-logging-policy.md) | Accepted |
 | Observability | [AI分析のログポリシー](./observability/ai-analysis-logging-policy.md) | Accepted |
 | Observability | [アプリケーションログの共通基底ポリシー](./observability/logging-base-policy.md) | Partially implemented |

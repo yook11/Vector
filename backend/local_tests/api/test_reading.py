@@ -134,7 +134,10 @@ async def test_category_list_counts_recently_analyzed_articles(
     response = await api_client.get("/api/v1/categories", headers=bff_headers)
 
     assert response.status_code == 200
-    counts = {item["slug"]: item["recentCount"] for item in response.json()["items"]}
+    counts = {
+        item["category"]["slug"]: item["articleCount24h"]
+        for item in response.json()["items"]
+    }
     assert counts[category.slug] == 1
     assert sum(counts.values()) == 1
 

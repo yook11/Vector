@@ -129,7 +129,7 @@ async function DashboardContent({
   return (
     <>
       <DashboardMasthead
-        categories={categoriesData.items}
+        categoryStats={categoriesData.items}
         currentQuery={filters}
         dateSlot={
           <Suspense
@@ -168,7 +168,7 @@ async function DashboardContent({
           >
             <PaperNewsResultSummary
               articlesPromise={articlesPromise}
-              categories={categoriesData.items}
+              categories={categoriesData.items.map((stats) => stats.category)}
               {...categoryProps}
             />
           </Suspense>

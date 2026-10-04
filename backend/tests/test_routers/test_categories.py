@@ -31,7 +31,7 @@ class TestListCategories:
         data = resp.json()
         assert len(data["items"]) == 3
 
-        slugs = [item["slug"] for item in data["items"]]
+        slugs = [item["category"]["slug"] for item in data["items"]]
         assert "ai" in slugs
         assert "computing" in slugs
         assert "semiconductor" in slugs
@@ -43,7 +43,9 @@ class TestListCategories:
     ) -> None:
         resp = await bff_client.get("/api/v1/categories")
         items = resp.json()["items"]
-        name_map = {item["slug"]: item["name"] for item in items}
+        name_map = {
+            item["category"]["slug"]: item["category"]["name"] for item in items
+        }
         assert name_map["ai"] == "AI"
         assert name_map["computing"] == "次世代コンピューティング"
 
@@ -54,7 +56,7 @@ class TestListCategories:
     ) -> None:
         resp = await bff_client.get("/api/v1/categories")
         items = resp.json()["items"]
-        slugs = [item["slug"] for item in items]
+        slugs = [item["category"]["slug"] for item in items]
         assert slugs == sorted(slugs)
 
     async def test_requires_bff_proof(self, client: AsyncClient) -> None:
@@ -69,18 +71,17 @@ class TestListCategories:
     ) -> None:
         resp = await bff_client.get("/api/v1/categories")
         item = resp.json()["items"][0]
-        assert "id" not in item
-        assert "slug" in item
-        assert "name" in item
+        assert set(item) == {"category", "articleCount24h"}
+        assert set(item["category"]) == {"slug", "name"}
 
-    async def test_recent_count_includes_recent_analysis(
+    async def test_article_count_24h_includes_recent_analysis(
         self,
         bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[Category],
         sample_source: NewsSource,
     ) -> None:
-        """直近 24 時間に分類された記事は recentCount に含まれる。"""
+        """直近 24 時間に分類された記事は articleCount24h に含まれる。"""
         url = "https://example.com/tf"
         article = AnalyzableArticleRecord(
             source_id=sample_source.id,
@@ -110,17 +111,20 @@ class TestListCategories:
 
         resp = await bff_client.get("/api/v1/categories")
         items = resp.json()["items"]
-        ai_cat = next(i for i in items if i["slug"] == "ai")
-        assert ai_cat["recentCount"] == 1
+        ai_stats = next(i for i in items if i["category"]["slug"] == "ai")
+        assert ai_stats == {
+            "category": {"slug": "ai", "name": "AI"},
+            "articleCount24h": 1,
+        }
 
-    async def test_recent_count_excludes_old_analysis(
+    async def test_article_count_24h_excludes_old_analysis(
         self,
         bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[Category],
         sample_source: NewsSource,
     ) -> None:
-        """24 時間より前に分類された記事は recentCount に含まれない。"""
+        """24 時間より前に分類された記事は articleCount24h に含まれない。"""
         url = "https://example.com/tf-old"
         article = AnalyzableArticleRecord(
             source_id=sample_source.id,
@@ -151,5 +155,8 @@ class TestListCategories:
 
         resp = await bff_client.get("/api/v1/categories")
         items = resp.json()["items"]
-        ai_cat = next(i for i in items if i["slug"] == "ai")
-        assert ai_cat["recentCount"] == 0
+        ai_stats = next(i for i in items if i["category"]["slug"] == "ai")
+        assert ai_stats == {
+            "category": {"slug": "ai", "name": "AI"},
+            "articleCount24h": 0,
+        }
