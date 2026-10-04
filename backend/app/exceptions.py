@@ -13,14 +13,6 @@ class NotFoundError(Exception):
         super().__init__(detail)
 
 
-class DuplicateError(Exception):
-    """ユニーク制約違反になる → 409。"""
-
-    def __init__(self, detail: str) -> None:
-        self.detail = detail
-        super().__init__(detail)
-
-
 class ReferenceNotFoundError(Exception):
     """参照先のエンティティが存在しない → 400。"""
 

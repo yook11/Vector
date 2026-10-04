@@ -21,7 +21,7 @@ export async function addToWatchlistCore(
 ): Promise<void> {
   await fetcher({
     throwOnError: true,
-    body: { articleId },
+    path: { article_id: articleId },
   });
 }
 

@@ -26,11 +26,10 @@ from app.db.engine import (
 )
 from app.db.session import caller_managed_session_factory
 from app.exception_handlers import (
-    duplicate_handler,
     invalid_query_handler,
     not_found_handler,
 )
-from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
+from app.exceptions import InvalidQueryError, NotFoundError
 from app.insights.briefing.router import router as briefing_router
 from app.insights.trend_discovery.router import (
     router as trends_router,
@@ -216,7 +215,6 @@ app.add_middleware(
 
 # 例外ハンドラ
 app.add_exception_handler(NotFoundError, not_found_handler)
-app.add_exception_handler(DuplicateError, duplicate_handler)
 app.add_exception_handler(InvalidQueryError, invalid_query_handler)
 
 # ルーター登録

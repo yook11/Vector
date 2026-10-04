@@ -931,18 +931,6 @@ export type ValidationError = {
 };
 
 /**
- * WatchlistCreate
- *
- * POST /api/v1/me/watchlist のリクエストボディ。
- */
-export type WatchlistCreate = {
-    /**
-     * Articleid
-     */
-    articleId: number;
-};
-
-/**
  * WatchlistIds
  *
  * GET /api/v1/me/watchlist/ids のレスポンス。
@@ -1365,43 +1353,6 @@ export type ListArticlesInWatchlistResponses = {
 
 export type ListArticlesInWatchlistResponse = ListArticlesInWatchlistResponses[keyof ListArticlesInWatchlistResponses];
 
-export type AddToWatchlistData = {
-    body: WatchlistCreate;
-    headers?: {
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-    };
-    path?: never;
-    query?: never;
-    url: '/api/v1/me/watchlist';
-};
-
-export type AddToWatchlistErrors = {
-    /**
-     * Bad request
-     */
-    400: unknown;
-    /**
-     * News article not found
-     */
-    404: unknown;
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type AddToWatchlistError = AddToWatchlistErrors[keyof AddToWatchlistErrors];
-
-export type AddToWatchlistResponses = {
-    /**
-     * Successful Response
-     */
-    201: unknown;
-};
-
 export type RemoveFromWatchlistData = {
     body?: never;
     headers?: {
@@ -1426,10 +1377,6 @@ export type RemoveFromWatchlistErrors = {
      */
     400: unknown;
     /**
-     * Watchlist item not found
-     */
-    404: unknown;
-    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1445,6 +1392,54 @@ export type RemoveFromWatchlistResponses = {
 };
 
 export type RemoveFromWatchlistResponse = RemoveFromWatchlistResponses[keyof RemoveFromWatchlistResponses];
+
+export type AddToWatchlistData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path: {
+        /**
+         * Article Id
+         */
+        article_id: number;
+    };
+    query?: never;
+    url: '/api/v1/me/watchlist/{article_id}';
+};
+
+export type AddToWatchlistErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * News article not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type AddToWatchlistError = AddToWatchlistErrors[keyof AddToWatchlistErrors];
+
+export type AddToWatchlistResponses = {
+    /**
+     * Added to the watchlist
+     */
+    201: unknown;
+    /**
+     * Article is already in the watchlist
+     */
+    204: void;
+};
+
+export type AddToWatchlistResponse = AddToWatchlistResponses[keyof AddToWatchlistResponses];
 
 export type GetTrendsData = {
     body?: never;

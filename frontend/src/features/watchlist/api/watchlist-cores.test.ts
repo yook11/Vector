@@ -20,28 +20,28 @@ const okResponse = (status = 204) =>
   });
 
 describe("addToWatchlistCore", () => {
-  it("addToWatchlist sdk fn を body { articleId } + throwOnError で呼ぶ", async () => {
-    const fn = vi.fn().mockReturnValue(okResponse(204));
+  it("addToWatchlist sdk fn を path { article_id } + throwOnError で呼び、body は付けない (PUT)", async () => {
+    const fn = vi.fn().mockReturnValue(okResponse(201));
     await addToWatchlistCore(123, fn as unknown as typeof addToWatchlistSdk);
 
     expect(fn).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledWith({
       throwOnError: true,
-      body: { articleId: 123 },
+      path: { article_id: 123 },
     });
   });
 
   it("articleId の数値をそのまま渡す (coerce しない)", async () => {
-    const fn = vi.fn().mockReturnValue(okResponse(204));
+    const fn = vi.fn().mockReturnValue(okResponse(201));
     await addToWatchlistCore(0, fn as unknown as typeof addToWatchlistSdk);
     expect(fn).toHaveBeenCalledWith({
       throwOnError: true,
-      body: { articleId: 0 },
+      path: { article_id: 0 },
     });
   });
 
   it("fetcher の reject を伝搬する", async () => {
-    const error = new Error("Conflict");
+    const error = new Error("Not Found");
     const fn = vi.fn().mockRejectedValue(error);
     await expect(
       addToWatchlistCore(1, fn as unknown as typeof addToWatchlistSdk),

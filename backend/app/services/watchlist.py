@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from app.exceptions import DuplicateError, NotFoundError
+from app.exceptions import NotFoundError
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse
@@ -33,17 +33,11 @@ class WatchlistService:
         """ユーザーがウォッチ中の article_id を新しい順に返す。"""
         return await self.repo.list_ids(user_id)
 
-    async def add_to_watchlist(self, user_id: UUID, article_id: int) -> None:
+    async def add_to_watchlist(self, user_id: UUID, article_id: int) -> bool:
+        """新しく追加したときだけ True を返す。登録済みなら何もしない。"""
         if not await self.article_repo.exists_analyzed(article_id):
             raise NotFoundError("News article not found")
-
-        if await self.repo.is_watched(user_id, article_id):
-            # 公開 detail は exception_handlers の allowlist 形式に揃える。
-            raise DuplicateError("Watchlist entry already exists")
-
-        await self.repo.watch(user_id, article_id)
+        return await self.repo.watch(user_id, article_id)
 
     async def remove_from_watchlist(self, user_id: UUID, article_id: int) -> None:
-        if not await self.repo.is_watched(user_id, article_id):
-            raise NotFoundError("Watchlist item not found")
         await self.repo.unwatch(user_id, article_id)

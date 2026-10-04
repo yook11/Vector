@@ -12,14 +12,13 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette import status
 
-from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
+from app.exceptions import InvalidQueryError, NotFoundError
 
 logger = structlog.get_logger(__name__)
 
-# NotFoundError / DuplicateError の detail は公開レスポンスに出るため、
+# NotFoundError の detail は公開レスポンスに出るため、
 # allowlist 形式だけを通し、内部 ID や DB 構造 hint の混入を防ぐ。
 _NOT_FOUND_DETAIL_RE = re.compile(r"^[A-Z][A-Za-z ]{1,40} not found$")
-_DUPLICATE_DETAIL_RE = re.compile(r"^[A-Z][A-Za-z ]{1,40} already exists$")
 
 
 def _safe_detail(raw_detail: str, allow_re: re.Pattern[str], fallback: str) -> str:
@@ -43,14 +42,6 @@ async def not_found_handler(_request: Request, exc: NotFoundError) -> JSONRespon
     detail = _safe_detail(exc.detail, _NOT_FOUND_DETAIL_RE, "Resource not found")
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
-        content={"detail": detail},
-    )
-
-
-async def duplicate_handler(_request: Request, exc: DuplicateError) -> JSONResponse:
-    detail = _safe_detail(exc.detail, _DUPLICATE_DETAIL_RE, "Resource already exists")
-    return JSONResponse(
-        status_code=status.HTTP_409_CONFLICT,
         content={"detail": detail},
     )
 
