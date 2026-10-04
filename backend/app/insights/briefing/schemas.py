@@ -38,7 +38,8 @@ from app.insights.briefing.domain.briefing import (
     MAX_WATCH_POINTS_PER_BRIEFING,
 )
 from app.schemas.base import _CamelBase
-from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed
+from app.schemas.category import Category
+from app.schemas.embeds import NewsSourceEmbed
 
 # 記事 embed 1 件分の表示用文字列上限。翻訳タイトル / URL が対象。
 _MAX_ARTICLE_TITLE_LEN: Final[int] = 500
@@ -84,7 +85,7 @@ class BriefingDetail(_CamelBase):
     state: Literal["briefing"] = "briefing"
     week_start: date
     generated_at: datetime
-    category: CategoryEmbed
+    category: Category
     headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
     summary: str = Field(max_length=MAX_BRIEFING_SUMMARY_LEN)
     chapters: list[_BriefingChapter] = Field(max_length=MAX_CHAPTERS_PER_BRIEFING)
@@ -100,7 +101,7 @@ class EmptyBriefing(_CamelBase):
     """指定カテゴリに briefing 未生成の状態。"""
 
     state: Literal["empty"] = "empty"
-    category: CategoryEmbed
+    category: Category
 
 
 BriefingResponse = Annotated[
@@ -125,7 +126,7 @@ class BriefingSummary(_CamelBase):
 class BriefingListItem(_CamelBase):
     """一覧 1 行: カテゴリ + 最新 briefing 参照 (未生成は None)。"""
 
-    category: CategoryEmbed
+    category: Category
     latest: BriefingSummary | None
 
 

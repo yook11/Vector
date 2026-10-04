@@ -34,7 +34,8 @@ from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
-from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed
+from app.schemas import category as category_schema
+from app.schemas.embeds import NewsSourceEmbed
 from app.services.articles import extract_key_point_contents
 
 # F10: DB に直書きされた巨大 key_articles で記事取得が膨らまないよう、
@@ -44,8 +45,8 @@ _KEY_ARTICLES_COUNT_GUARD: TypeAdapter[list[object]] = TypeAdapter(
 )
 
 
-def _to_category(category: Category) -> CategoryEmbed:
-    return CategoryEmbed(slug=category.slug, name=category.name)
+def _to_category(category: Category) -> category_schema.Category:
+    return category_schema.Category(slug=category.slug, name=category.name)
 
 
 class BriefingQueryService:

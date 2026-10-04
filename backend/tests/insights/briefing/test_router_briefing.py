@@ -117,7 +117,7 @@ class TestGetBriefing:
         body = resp.json()
         assert body["state"] == "empty"
         assert body["category"]["slug"] == "ai"
-        # category は共有 CategoryEmbed (slug + name のみ、id は契約から撤去済)
+        # category は共有 Category (slug + name のみ、id は契約から撤去済)
         assert "id" not in body["category"]
 
     @pytest.mark.asyncio

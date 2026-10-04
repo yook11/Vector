@@ -31,7 +31,7 @@ export type ArticleBrief = {
      * Summarypreview
      */
     summaryPreview: string | null;
-    category: CategoryEmbed;
+    category: Category;
     source: NewsSourceEmbed;
     /**
      * Publishedat
@@ -69,7 +69,7 @@ export type ArticleDetail = {
      * Analyzedat
      */
     analyzedAt: string;
-    category: CategoryEmbed;
+    category: Category;
     source: NewsSourceEmbed;
     /**
      * Publishedat
@@ -96,7 +96,7 @@ export type BriefingDetail = {
      * Generatedat
      */
     generatedAt: string;
-    category: CategoryEmbed;
+    category: Category;
     /**
      * Headline
      */
@@ -125,7 +125,7 @@ export type BriefingDetail = {
  * 一覧 1 行: カテゴリ + 最新 briefing 参照 (未生成は None)。
  */
 export type BriefingListItem = {
-    category: CategoryEmbed;
+    category: Category;
     latest: BriefingSummary | null;
 };
 
@@ -173,13 +173,13 @@ export type BriefingSummary = {
 };
 
 /**
- * CategoryDetail
+ * Category
  *
- * カテゴリ詳細。
+ * カテゴリの参照情報（表示・絞り込み用）。
  *
- * recentCount は直近 24 時間に AI 分類が完了した記事数。
+ * name は表示用、slug は絞り込みキー。id は持たない（表示と絞り込みに不要）。
  */
-export type CategoryDetail = {
+export type Category = {
     /**
      * Slug
      */
@@ -188,41 +188,33 @@ export type CategoryDetail = {
      * Name
      */
     name: string;
-    /**
-     * Recentcount
-     */
-    recentCount?: number;
 };
 
 /**
- * CategoryDetailList
+ * CategoryStats
  *
- * カテゴリ詳細一覧エンドポイント用のラッパー。
+ * カテゴリについての集計値。
+ *
+ * 件数は記事の公開日時ではなく、分析が終わった時刻 (analyzed_at) で数える。
  */
-export type CategoryDetailList = {
+export type CategoryStats = {
+    category: Category;
+    /**
+     * Articlecount24H
+     */
+    articleCount24h: number;
+};
+
+/**
+ * CategoryStatsList
+ *
+ * GET /api/v1/categories のレスポンス。
+ */
+export type CategoryStatsList = {
     /**
      * Items
      */
-    items: Array<CategoryDetail>;
-};
-
-/**
- * CategoryEmbed
- *
- * 記事に紐づくカテゴリの参照情報（カード表示・絞り込み用）。
- *
- * name は表示用、slug は絞り込みキー。id は持たない（表示と絞り込みに不要）。
- * サイドバー用の集計付き CategoryDetail とは役割が異なる。
- */
-export type CategoryEmbed = {
-    /**
-     * Slug
-     */
-    slug: string;
-    /**
-     * Name
-     */
-    name: string;
+    items: Array<CategoryStats>;
 };
 
 /**
@@ -235,7 +227,7 @@ export type EmptyBriefing = {
      * State
      */
     state?: 'empty';
-    category: CategoryEmbed;
+    category: Category;
 };
 
 /**
@@ -1289,7 +1281,7 @@ export type ListCategoriesResponses = {
     /**
      * Successful Response
      */
-    200: CategoryDetailList;
+    200: CategoryStatsList;
 };
 
 export type ListCategoriesResponse = ListCategoriesResponses[keyof ListCategoriesResponses];

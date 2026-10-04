@@ -122,7 +122,9 @@ test("保存後の通知で、条件別の記事一覧とカテゴリー件数�
     } else if (url.pathname === "/api/v1/categories") {
       res.end(
         JSON.stringify({
-          items: [{ slug: "ai", name: "AI", recentCount: revision }],
+          items: [
+            { category: { slug: "ai", name: "AI" }, articleCount24h: revision },
+          ],
         }),
       );
     } else {
@@ -274,7 +276,7 @@ async function SnapshotContent({ searchParams }: { searchParams: Promise<Record<
     <p data-testid="revision">{revision}</p>
     <Suspense fallback={<p>記事を更新中…</p>}><Articles articlesPromise={articlesPromise} /></Suspense>
     <Link href="/away">別画面へ</Link>
-    <p data-testid="category-count">{categories.items[0]?.recentCount ?? 0}</p>
+    <p data-testid="category-count">{categories.items[0]?.articleCount24h ?? 0}</p>
   </main>;
 }
 async function Articles({ articlesPromise }: { articlesPromise: ReturnType<typeof getArticles> }) {
@@ -392,7 +394,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   for (const query of queries) {
     const cached = await snapshot(query);
     assert.equal(cached.articles.items[0].id, 1);
-    assert.equal(cached.categories.items[0].recentCount, 1);
+    assert.equal(cached.categories.items[0].articleCount24h, 1);
   }
   assert.deepEqual(reads, initialReads, "通知前は実際にキャッシュが使われる");
   assert.equal((await notify(secret, ["briefing:list", "trends"])).status, 200);
@@ -414,7 +416,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     const fresh = await snapshot(query);
     assert.equal(fresh.revision, notifiedRevision);
     assert.equal(fresh.articles.items[0].id, 2);
-    assert.equal(fresh.categories.items[0].recentCount, 2);
+    assert.equal(fresh.categories.items[0].articleCount24h, 2);
   }
   const refreshedReads = new Map(reads);
   for (const query of queries) await snapshot(query);

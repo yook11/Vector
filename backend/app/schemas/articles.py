@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 
 from app.models.category import CATEGORY_SLUG_PATTERN
 from app.schemas.base import PaginationParams, _CamelBase
-from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed, OriginalArticleEmbed
+from app.schemas.category import Category
+from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -70,7 +71,7 @@ class ArticleBrief(_CamelBase):
     # key_points が空のときだけ summary を300字以内で返すフォールバック。
     # default 無し = required・nullable で、null でもキーを省略しない。
     summary_preview: str | None
-    category: CategoryEmbed
+    category: Category
     source: NewsSourceEmbed
     # 元記事の公開日時。分析工程に進む記事は必ず持つ (DB NOT NULL + ドメイン不変条件)。
     published_at: datetime
@@ -87,7 +88,7 @@ class ArticleDetail(_CamelBase):
     # API 非公開。旧行 (NULL) や key_point 無し行では空配列になる。
     key_points: list[str] = Field(default_factory=list)
     analyzed_at: datetime
-    category: CategoryEmbed
+    category: Category
     source: NewsSourceEmbed
     published_at: datetime
     original: OriginalArticleEmbed

@@ -7,12 +7,12 @@ import { NavPendingDot } from "@/components/layout/NavPendingDot";
 import { NAV_ICONS, type NavItem } from "@/components/layout/nav-items";
 import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import type { ArticleQuery } from "@/types";
-import type { CategoryDetail } from "@/types/types.gen";
+import type { CategoryStats } from "@/types/types.gen";
 import { buildDashboardCategoryHref } from "./paper-hrefs";
 
 interface DashboardMastheadProps {
   activeCategory?: string;
-  categories: CategoryDetail[];
+  categoryStats: CategoryStats[];
   currentQuery: ArticleQuery;
   dateSlot: ReactNode;
   navItems: NavItem[];
@@ -22,7 +22,7 @@ interface DashboardMastheadProps {
 
 export function DashboardMasthead({
   activeCategory,
-  categories,
+  categoryStats,
   currentQuery,
   dateSlot,
   navItems,
@@ -33,10 +33,10 @@ export function DashboardMasthead({
     query: currentQuery,
   });
   const isAll = activeCategory === undefined;
-  // 凡例はバッジが1つも出ないとき (全カテゴリ recentCount 0/未設定) は説明対象が
-  // 無いので隠す。CategoryNavLink のバッジ表示条件と揃える。
-  const showCountLegend = categories.some(
-    (category) => (category.recentCount ?? 0) > 0,
+  // 凡例はバッジが1つも出ないとき (全カテゴリ 0 件) は説明対象が無いので隠す。
+  // CategoryNavLink のバッジ表示条件と揃える。
+  const showCountLegend = categoryStats.some(
+    (stats) => stats.articleCount24h > 0,
   );
 
   return (
@@ -143,22 +143,18 @@ export function DashboardMasthead({
           style={{ fontFamily: "var(--font-vector-maru)" }}
         >
           <CategoryNavLink href={allHref} active={isAll} label="すべて" />
-          {categories.map((category) => {
+          {categoryStats.map((stats) => {
             const href = buildDashboardCategoryHref({
-              category: category.slug,
+              category: stats.category.slug,
               query: currentQuery,
             });
-            const recentCountProps =
-              category.recentCount !== undefined
-                ? { recentCount: category.recentCount }
-                : {};
             return (
               <CategoryNavLink
-                key={category.slug}
+                key={stats.category.slug}
                 href={href}
-                active={activeCategory === category.slug}
-                label={category.name}
-                {...recentCountProps}
+                active={activeCategory === stats.category.slug}
+                label={stats.category.name}
+                articleCount24h={stats.articleCount24h}
               />
             );
           })}
@@ -171,18 +167,18 @@ export function DashboardMasthead({
 
 interface CategoryNavLinkProps {
   active: boolean;
+  articleCount24h?: number;
   href: string;
   label: string;
-  recentCount?: number;
 }
 
 function CategoryNavLink({
   active,
+  articleCount24h,
   href,
   label,
-  recentCount,
 }: CategoryNavLinkProps) {
-  const hasRecentCount = recentCount !== undefined && recentCount > 0;
+  const hasArticleCount = articleCount24h !== undefined && articleCount24h > 0;
 
   return (
     <Link
@@ -196,7 +192,7 @@ function CategoryNavLink({
       }
     >
       {label}
-      {hasRecentCount && (
+      {hasArticleCount && (
         <span
           className={
             active
@@ -205,7 +201,7 @@ function CategoryNavLink({
           }
           style={{ fontFamily: "var(--font-vector-sans)" }}
         >
-          {recentCount}
+          {articleCount24h}
         </span>
       )}
       <NavPendingDot />

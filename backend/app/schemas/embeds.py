@@ -1,7 +1,7 @@
 """他の API レスポンスに埋め込まれる軽量スキーマ群。
 
 これらのクラスはトップレベルの API レスポンスにはならない。
-常に親レスポンススキーマ（NewsBrief, CategoryDetail など）内に
+常に親レスポンススキーマ（ArticleBrief, BriefingDetail など）内に
 ネストされて利用される。
 """
 
@@ -15,17 +15,6 @@ class NewsSourceEmbed(_CamelBase):
 
     name: SourceName
     attribution_label: str | None = None
-
-
-class CategoryEmbed(_CamelBase):
-    """記事に紐づくカテゴリの参照情報（カード表示・絞り込み用）。
-
-    name は表示用、slug は絞り込みキー。id は持たない（表示と絞り込みに不要）。
-    サイドバー用の集計付き CategoryDetail とは役割が異なる。
-    """
-
-    slug: str
-    name: str
 
 
 class OriginalArticleEmbed(_CamelBase):

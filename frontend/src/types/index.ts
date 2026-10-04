@@ -7,7 +7,6 @@
  * 本ファイルの責務:
  * - StripNull narrowing: backend が optional + nullable で表現するキーを frontend
  *   側で `null` を剥がして optional のみに揃える
- * - Pick narrowing: 大型 schema から component で必要な field のみ抽出
  * - discriminated union 再構築: `Annotated[Union, Field(discriminator)]` alias は
  *   openapi.json で oneOf に展開されるが Python alias 名は component schema 化
  *   されないため frontend 側で組み直す (`TrendsResponse`。briefing は zod parse
@@ -19,7 +18,6 @@
 import type {
   EmptyTrends as _EmptyTrends,
   Trends as _Trends,
-  CategoryDetail,
   CategoryTrends,
   ListArticlesData,
   MentionType,
@@ -35,12 +33,6 @@ type StripNull<T> = { [K in keyof T]: Exclude<T[K], null> };
 
 /** Query parameters for GET /articles (article listing). */
 export type ArticleQuery = StripNull<NonNullable<ListArticlesData["query"]>>;
-
-// ---------------------------------------------------------------------------
-// Pick narrowing
-// ---------------------------------------------------------------------------
-
-export type CategoryBrief = Pick<CategoryDetail, "slug" | "name">;
 
 export type { CategoryTrends, MentionType, RankedMention, RelatedMention };
 
