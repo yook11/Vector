@@ -11,7 +11,6 @@ import type { CategoryStats } from "@/types/types.gen";
 import { buildDashboardCategoryHref } from "./paper-hrefs";
 
 interface DashboardMastheadProps {
-  activeCategory?: string;
   categoryStats: CategoryStats[];
   currentQuery: ArticleQuery;
   dateSlot: ReactNode;
@@ -21,7 +20,6 @@ interface DashboardMastheadProps {
 }
 
 export function DashboardMasthead({
-  activeCategory,
   categoryStats,
   currentQuery,
   dateSlot,
@@ -32,7 +30,8 @@ export function DashboardMasthead({
   const allHref = buildDashboardCategoryHref({
     query: currentQuery,
   });
-  const isAll = activeCategory === undefined;
+  const selectedCategorySlug = currentQuery.category;
+  const isAll = selectedCategorySlug === undefined;
   // 凡例はバッジが1つも出ないとき (全カテゴリ 0 件) は説明対象が無いので隠す。
   // CategoryNavLink のバッジ表示条件と揃える。
   const showCountLegend = categoryStats.some(
@@ -152,7 +151,7 @@ export function DashboardMasthead({
               <CategoryNavLink
                 key={stats.category.slug}
                 href={href}
-                active={activeCategory === stats.category.slug}
+                active={selectedCategorySlug === stats.category.slug}
                 label={stats.category.name}
                 articleCount24h={stats.articleCount24h}
               />

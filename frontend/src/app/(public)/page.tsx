@@ -123,8 +123,6 @@ async function DashboardContent({
 
   // フィルタ変更のたびに key で再マウントして、記事領域だけで再取得を伝える。
   const sectionKey = `${filters.category ?? "all"}|${filters.sortOrder ?? "desc"}|${filters.perPage ?? ""}|${filters.page ?? 1}`;
-  const categoryProps =
-    filters.category !== undefined ? { activeCategory: filters.category } : {};
 
   return (
     <>
@@ -152,7 +150,6 @@ async function DashboardContent({
             emailClassName="text-[var(--vector-ink-muted)]"
           />
         }
-        {...categoryProps}
       />
 
       <PageNavigationContent>
@@ -169,7 +166,7 @@ async function DashboardContent({
             <PaperNewsResultSummary
               articlesPromise={articlesPromise}
               categories={categoriesData.items.map((stats) => stats.category)}
-              {...categoryProps}
+              selectedCategorySlug={filters.category}
             />
           </Suspense>
           <PaperNewsControls />
