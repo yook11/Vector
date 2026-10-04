@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.db.fastapi import EntryManagedSession
 from app.dependencies import require_bff_request
@@ -10,20 +10,13 @@ from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     ArticleBrief,
     ArticleDetail,
+    ArticleId,
     ArticleListParams,
     PaginatedArticleResponse,
 )
 from app.services.articles import ArticleService
 
 router = APIRouter(prefix="/api/v1/articles", tags=["articles"])
-
-# `AnalyzedArticleRecord.id` は SQLAlchemy Mapped[int] = INTEGER
-# (PostgreSQL int4, 32bit)。
-# 上限を明示しないと Schemathesis 等が int64 域の値を投げてきたとき asyncpg が
-# OverflowError → 500 を leak する。OpenAPI に上限が露出することで Schemathesis 側も
-# 範囲内の値しか生成しなくなる。
-_INT32_MAX = 2_147_483_647
-_ArticleId = Annotated[int, Path(ge=1, le=_INT32_MAX)]
 
 
 def get_article_service(
@@ -52,7 +45,7 @@ async def list_articles(
     dependencies=[Depends(require_bff_request)],
 )
 async def get_similar_articles(
-    article_id: _ArticleId,
+    article_id: ArticleId,
     service: Annotated[ArticleService, Depends(get_article_service)],
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> list[ArticleBrief]:
@@ -66,7 +59,7 @@ async def get_similar_articles(
     dependencies=[Depends(require_bff_request)],
 )
 async def get_article(
-    article_id: _ArticleId,
+    article_id: ArticleId,
     service: Annotated[ArticleService, Depends(get_article_service)],
 ) -> ArticleDetail:
     """単一記事を完全な分析情報付きで取得する。"""
