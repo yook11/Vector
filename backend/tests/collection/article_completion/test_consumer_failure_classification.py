@@ -18,11 +18,11 @@ from app.collection.article_completion.errors import (
     ArticleExtractionEmptyError,
     FetchDeadlineExceededError,
     FetchResource,
-    ResponseSizeBasis,
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticleDefect as Defect
+from app.collection.response_size import ResponseSizeBasis
 from app.collection.retry_at import RetryAt
 from app.http.destination_policy import HostBlockedError
 from app.http.errors import HttpResponseError, HttpTransportError

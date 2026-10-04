@@ -8,7 +8,11 @@ from typing import assert_never
 
 import structlog
 
-from app.collection.article_acquisition.errors import RssFeedErrors, RssFeedFailure
+from app.collection.article_acquisition.errors import (
+    ResponseSizeLimitExceededError,
+    RssFeedErrors,
+    RssFeedFailure,
+)
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
@@ -72,8 +76,11 @@ class RssFetcher:
                 HttpTransportError,
                 HostBlockedError,
                 UnreadableResponseError,
+                ResponseSizeLimitExceededError,
             ) as exc:
-                if isinstance(exc, UnreadableResponseError):
+                if isinstance(
+                    exc, UnreadableResponseError | ResponseSizeLimitExceededError
+                ):
                     code: str | None = exc.CODE
                 else:
                     fetch_failure = classify_external_fetch_failure(

@@ -99,6 +99,7 @@ SDKが使わない同期クライアントやASGIテストから旧HTTPXの存�
 `raw_http_client.py:46` のsitemap/HTML一覧取得は本文を全量保持する。実際には共通の `get_source_response` が `await client.get(...)` を行った時点で読み込みが完了しており、`.content` を参照する前に総量が割り当てられる。
 同じ取得口を使う `rss_reader.py`、`algolia_hn_reader.py`、`crossref_reader.py` にも応答本文の総量制限がない。取得対象の制御はそれぞれ異なるが、HTTPX2への変更だけでは総量によるメモリ枯渇を防げない。
 これらの本文上限・超過時のドメイン動作の新設は本移行PRの範囲外とし、別の是正作業として追跡する。本移行完了を「全取得経路のOOM対策完了」とは扱わない。
+2026-10-04: 共通の `get_source_response` で10MiBの本文上限を設けて解消した（[取得工程の仕様](../collection/acquisition-common-http-errors.md#http呼び出しの契約)を参照）。
 
 ## 実装範囲と順序
 

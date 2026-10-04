@@ -9,6 +9,7 @@ from typing import ClassVar
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
+from app.collection.response_size import ResponseSizeBasis
 from app.http.destination_policy import HostBlockedError
 from app.http.errors import HttpResponseError, HttpTransportError
 
@@ -31,6 +32,27 @@ class AcquisitionConversionDefect(StrEnum):
     UNEXPECTED_ERROR = "acquisition_conversion_unexpected_error"
 
 
+class ResponseSizeLimitExceededError(Exception):
+    """取得先の応答本文が上限を超え、受信を中断した事実を保持する。"""
+
+    CODE: ClassVar[str] = "source_response_size_limit_exceeded"
+
+    def __init__(
+        self,
+        *,
+        limit_bytes: int,
+        observed_bytes: int,
+        size_basis: ResponseSizeBasis,
+    ) -> None:
+        super().__init__(
+            f"{self.CODE}: observed={observed_bytes} limit={limit_bytes}"
+            f" basis={size_basis.value}"
+        )
+        self.limit_bytes = limit_bytes
+        self.observed_bytes = observed_bytes
+        self.size_basis = size_basis
+
+
 @dataclass(frozen=True, slots=True)
 class RssFeedFailure:
     """取得に失敗したフィードと元の例外を保持する。"""
@@ -41,6 +63,7 @@ class RssFeedFailure:
         | HttpTransportError
         | HostBlockedError
         | UnreadableResponseError
+        | ResponseSizeLimitExceededError
     )
 
 

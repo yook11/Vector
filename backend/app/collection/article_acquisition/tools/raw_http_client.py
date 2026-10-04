@@ -35,7 +35,8 @@ class RawHttpClient:
         """1 URL を GET し ``bytes`` を返す。
 
         Raises:
-            HttpResponseError / HttpTransportError / HostBlockedError: 取得の失敗。
+            HttpResponseError / HttpTransportError / HostBlockedError /
+                ResponseSizeLimitExceededError: 取得の失敗。
         """
         async with make_external_async_client(
             headers={"User-Agent": self._user_agent, "Accept": self._accept},

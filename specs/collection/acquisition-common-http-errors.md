@@ -19,10 +19,10 @@ Status: Implemented
 
 `get_source_response(client, url, *, params=None)`（`article_acquisition/tools/source_http.py`）が4か所のGETを担う。
 
-- 成功応答を返す。応答受信直後・status確認前にUTCの受信時刻を記録し、非成功応答は`HttpResponseError`（status・受信時刻・生のRetry-After）にする。
+- 成功応答の本文を10MiBまで受け取り、本文と復号に使う符号化方式を返す。申告されたContent-Lengthか展開後に読んだ量が上限を超えたら受信を中断し、`ResponseSizeLimitExceededError`にする。応答受信直後・status確認前にUTCの受信時刻を記録し、非成功応答は`HttpResponseError`（status・受信時刻・生のRetry-After）にする。
 - 通信失敗は`HttpTransportError`（段階・理由）にし、元の例外を原因に残す。
 - 宛先拒否`HostBlockedError`と、通信失敗と確認できない例外は元のまま伝える。
-- clientの生成・ヘッダー・timeout・本文の読み方は各readerが持つ。
+- clientの生成・ヘッダー・timeoutは各readerが持つ。本文の受け取りと上限はこの関数が持つ。
 
 ## 取得のエラー
 
@@ -36,6 +36,7 @@ Status: Implemented
 |---|---|---|---|---|
 | `HttpResponseError`・`HttpTransportError`・`HostBlockedError` | 外部取得の失敗判断のcode | 判断が再試行可能ならretryable、不可ならnon_retryable | `external_fetch` | `http_status`（応答）、`reason_code`（通信失敗の理由）。`error_message`なし |
 | `UnreadableResponseError` | `reason.value`（`read_*`） | non_retryable | `unreadable_response` | `read_format`・`read_field`・`read_parser_position`、PII-freeの既定メッセージ |
+| `ResponseSizeLimitExceededError` | `source_response_size_limit_exceeded` | non_retryable | `response_size_limit_exceeded` | 数値と根拠だけの定型メッセージ |
 | `RssFeedErrors` | `rss_feed_errors` | どれか1つのフィードが再試行可能ならretryable | `rss_feeds` | `feed_failures`の各要素に`code`・`http_status`・`reason_code` |
 | DB障害 | 従来どおり | 従来どおり | 従来どおり | 従来どおり |
 | その他 | `unexpected_error` | unknown | `unknown` | 従来どおり |

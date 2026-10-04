@@ -13,10 +13,10 @@ from app.collection.article_completion.content import RawResponse
 from app.collection.article_completion.errors import (
     FetchDeadlineExceededError,
     FetchResource,
-    ResponseSizeBasis,
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
+from app.collection.response_size import ResponseSizeBasis
 from app.http.destination_resolution import HostResolutionError
 from app.http.error_mapping import (
     http_response_error_from_exception,

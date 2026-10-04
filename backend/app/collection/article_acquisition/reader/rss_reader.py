@@ -175,7 +175,8 @@ class RssReader:
 
         Raises:
             UnreadableResponseError: 空 body / bozo かつ entries 空 (feed 構造破損)。
-            HttpResponseError / HttpTransportError / HostBlockedError: 取得の失敗。
+            HttpResponseError / HttpTransportError / HostBlockedError /
+                ResponseSizeLimitExceededError: 取得の失敗。
         """
         raw = await self._fetch_raw(
             endpoint_url=endpoint_url,

@@ -27,7 +27,10 @@ from app.collection.article_acquisition.consumer_failure_classification import (
     NoRetryAcquisition,
     RetryAcquisition,
 )
-from app.collection.article_acquisition.errors import RssFeedErrors
+from app.collection.article_acquisition.errors import (
+    ResponseSizeLimitExceededError,
+    RssFeedErrors,
+)
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
 )
@@ -208,6 +211,13 @@ def _project_failure(exc: Exception, *, now: datetime) -> FailureProjection:
             failure_action=None,
             code=exc.CODE,
         )
+    if isinstance(exc, ResponseSizeLimitExceededError):
+        return FailureProjection(
+            failure_kind="response_size_limit_exceeded",
+            retryability=Retryability.NON_RETRYABLE,
+            failure_action=None,
+            code=exc.CODE,
+        )
     fetch_failure = classify_external_fetch_failure(exc, now=now)
     if fetch_failure is not None:
         return FailureProjection(
@@ -256,12 +266,15 @@ def _error_message(exc: BaseException) -> str | None:
 
     共通HTTPエラーと宛先拒否は自由文を載せず、事実は構造化列に残す。読取失敗は
     PII-free な既定メッセージを採り、explicit message に載りうる secret を漏らさない。
+    本文の上限超過は数値と根拠だけの定型メッセージを採る。
     それ以外 (DB / 想定外) は ``str(exc)`` に退避する。
     """
     if isinstance(exc, HttpResponseError | HttpTransportError | HostBlockedError):
         return None
     if isinstance(exc, UnreadableResponseError):
         return redacted_audit_message(exc._default_message())  # noqa: SLF001 (PII-free 既定の意図的利用)
+    if isinstance(exc, ResponseSizeLimitExceededError):
+        return str(exc)
     return redacted_audit_message(str(exc))
 
 

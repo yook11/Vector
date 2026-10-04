@@ -272,6 +272,28 @@ async def test_non_retryable_fetch_failure_is_acknowledged_until_next_request(
     assert len(await load_stored_events(system_database)) == 1
 
 
+async def test_oversized_feed_is_acknowledged_as_size_limit_failure(
+    system_database, invoke_acquisition, source_id, rss_response
+):
+    """上限(10MiB)を超えるフィードは再配信せず、上限超過として監査に残す。"""
+    rss_response.return_value = httpx2.Response(
+        200, content=b"x" * (10 * 1024 * 1024 + 1)
+    )
+    assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
+    assert await load_stored_events(system_database) == []
+    failures = await load_acquisition_failures(system_database, source_id)
+    assert len(failures) == 1
+    assert failures[0]["outcome_code"] == "rss_feed_errors"
+    assert failures[0]["retryability"] == "non_retryable"
+    assert failures[0]["payload"]["failure_action"] == "no_retry"
+    feed_failure = failures[0]["payload"]["feed_failures"][0]
+    assert feed_failure["code"] == "source_response_size_limit_exceeded"
+    assert feed_failure["error_message"] == (
+        "source_response_size_limit_exceeded: observed=10485761 limit=10485760"
+        " basis=declared_content_length"
+    )
+
+
 async def test_save_failure_rolls_back_articles_and_commits_failure_audit(
     system_database, invoke_acquisition, source_id, rss_response
 ):
