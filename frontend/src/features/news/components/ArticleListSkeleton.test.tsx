@@ -1,11 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { DashboardArticleListSkeleton } from "./DashboardArticleListSkeleton";
+import { ArticleListSkeleton } from "./ArticleListSkeleton";
 
-describe("DashboardArticleListSkeleton", () => {
+describe("ArticleListSkeleton", () => {
   it("shows a live update message and hides the decorative grid from assistive tech", () => {
-    const { container } = render(<DashboardArticleListSkeleton />);
+    const { container } = render(<ArticleListSkeleton />);
 
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("記事を更新中…");

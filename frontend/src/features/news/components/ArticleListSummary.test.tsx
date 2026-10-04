@@ -1,11 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { PaperNewsResultSummary } from "./PaperNewsResultSummary";
+import { ArticleListSummary } from "./ArticleListSummary";
 
-describe("PaperNewsResultSummary", () => {
+describe("ArticleListSummary", () => {
   it("カテゴリを選んでいなければ「すべて」と件数を表示する", async () => {
     render(
-      await PaperNewsResultSummary({
+      await ArticleListSummary({
         articlesPromise: Promise.resolve({
           items: [],
           total: 42,
@@ -23,7 +23,7 @@ describe("PaperNewsResultSummary", () => {
 
   it("選んだカテゴリが一覧にあればその名前を表示する", async () => {
     render(
-      await PaperNewsResultSummary({
+      await ArticleListSummary({
         articlesPromise: Promise.resolve({
           items: [],
           total: 5,
@@ -45,7 +45,7 @@ describe("PaperNewsResultSummary", () => {
 
   it("選んだカテゴリが一覧になければ slug を出さずに「存在しないカテゴリ」と表示する", async () => {
     const { container } = render(
-      await PaperNewsResultSummary({
+      await ArticleListSummary({
         articlesPromise: Promise.resolve({
           items: [],
           total: 0,

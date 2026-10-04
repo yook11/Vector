@@ -9,16 +9,16 @@ import {
 } from "@/components/paper";
 import { UserMenu } from "@/features/auth";
 import {
+  ArticleList,
+  ArticleListControls,
+  ArticleListSkeleton,
+  ArticleListSummary,
   ArticleListUpdateNotice,
-  DashboardArticleListSkeleton,
+  ArticlePagination,
   DashboardMasthead,
-  DashboardPaperArticleList,
   getArticles,
   getCategories,
   getLatestArticleDate,
-  PaperNewsControls,
-  PaperNewsPagination,
-  PaperNewsResultSummary,
   parseArticleQuery,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
@@ -98,7 +98,7 @@ function DashboardInitialSkeleton() {
         <div className={`h-9 w-28 ${bar}`} />
       </section>
       <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
-        <DashboardArticleListSkeleton label="記事を更新中…" />
+        <ArticleListSkeleton label="記事を更新中…" />
       </main>
     </>
   );
@@ -163,13 +163,13 @@ async function DashboardContent({
               />
             }
           >
-            <PaperNewsResultSummary
+            <ArticleListSummary
               articlesPromise={articlesPromise}
               categories={categoriesData.items.map((stats) => stats.category)}
               selectedCategorySlug={filters.category}
             />
           </Suspense>
-          <PaperNewsControls />
+          <ArticleListControls />
         </section>
 
         <ArticleListUpdateNotice displayedRevision={articleListRevision} />
@@ -177,7 +177,7 @@ async function DashboardContent({
         <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
           <Suspense
             key={sectionKey}
-            fallback={<DashboardArticleListSkeleton label="記事を更新中…" />}
+            fallback={<ArticleListSkeleton label="記事を更新中…" />}
           >
             <DashboardArticleSection
               articlesPromise={articlesPromise}
@@ -219,11 +219,8 @@ async function DashboardArticleSection({
   ]);
   return (
     <>
-      <DashboardPaperArticleList
-        items={newsData.items}
-        watchedIds={watchedIds}
-      />
-      <PaperNewsPagination
+      <ArticleList items={newsData.items} watchedIds={watchedIds} />
+      <ArticlePagination
         page={newsData.page}
         totalPages={newsData.totalPages}
       />

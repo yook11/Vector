@@ -9,11 +9,11 @@ vi.mock("@/features/watchlist", () => ({
   WatchlistButton: mocks.WatchlistButton,
 }));
 
-import { DashboardPaperArticleList } from "./DashboardPaperArticleList";
+import { ArticleList } from "./ArticleList";
 
-describe("DashboardPaperArticleList", () => {
+describe("ArticleList", () => {
   it("renders the paper empty state inside the list area", () => {
-    render(<DashboardPaperArticleList items={[]} watchedIds={new Set()} />);
+    render(<ArticleList items={[]} watchedIds={new Set()} />);
 
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("記事がありません");

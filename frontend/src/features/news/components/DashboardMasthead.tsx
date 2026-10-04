@@ -8,7 +8,7 @@ import { NAV_ICONS, type NavItem } from "@/components/layout/nav-items";
 import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import type { ArticleQuery } from "@/types";
 import type { CategoryStats } from "@/types/types.gen";
-import { buildDashboardCategoryHref } from "./paper-hrefs";
+import { buildDashboardCategoryHref } from "./dashboard-hrefs";
 
 interface DashboardMastheadProps {
   categoryStats: CategoryStats[];

@@ -15,7 +15,7 @@ import {
   PER_PAGE_OPTIONS,
 } from "../per-page";
 
-export function PaperNewsControls() {
+export function ArticleListControls() {
   const searchParams = useSearchParams() ?? new URLSearchParams();
   const { updateSearchParams, isPending } = useUpdateSearchParams();
   const rawSortOrder = searchParams.get("sortOrder");

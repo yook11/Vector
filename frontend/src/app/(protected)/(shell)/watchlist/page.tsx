@@ -8,11 +8,11 @@ import {
 import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
 import {
-  DashboardArticleListSkeleton,
-  DashboardPaperArticleList,
+  ArticleList,
+  ArticleListSkeleton,
+  ArticlePagination,
   DEFAULT_PER_PAGE,
   isPerPageOption,
-  PaperNewsPagination,
   type PerPageOption,
   PerPageSelect,
   parseArticleQuery,
@@ -65,8 +65,8 @@ async function WatchlistContent({
 
   return (
     <>
-      <DashboardPaperArticleList items={data.items} watchedIds={watchedIds} />
-      <PaperNewsPagination page={data.page} totalPages={data.totalPages} />
+      <ArticleList items={data.items} watchedIds={watchedIds} />
+      <ArticlePagination page={data.page} totalPages={data.totalPages} />
     </>
   );
 }
@@ -96,7 +96,7 @@ function PerPageControlPlaceholder() {
 }
 
 function WatchlistSkeleton() {
-  return <DashboardArticleListSkeleton label="ウォッチリストを読み込み中…" />;
+  return <ArticleListSkeleton label="ウォッチリストを読み込み中…" />;
 }
 
 export default async function WatchlistPage({
