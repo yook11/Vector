@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import httpx2
 import pytest
@@ -67,9 +67,10 @@ async def _reader_entries(content: bytes) -> list[HtmlListingEntry]:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx2.AsyncClient)
-        client.get = AsyncMock(return_value=response)
-        yield client
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda _request: response)
+        ) as client:
+            yield client
 
     with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         return await HtmlListingReader().fetch(
@@ -103,9 +104,10 @@ async def _raise_through(status_code: int) -> None:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx2.AsyncClient)
-        client.get = AsyncMock(return_value=response)
-        yield client
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda _request: response)
+        ) as client:
+            yield client
 
     with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         await HtmlListingReader().fetch(

@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.collection.article_acquisition.errors import RssFeedErrors
+from app.collection.article_acquisition.errors import (
+    ResponseSizeLimitExceededError,
+    RssFeedErrors,
+)
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
@@ -43,7 +46,7 @@ def classify_acquisition_failure(
         ):
             return RetryAcquisition(exc)
         return NoRetryAcquisition(exc)
-    if isinstance(exc, UnreadableResponseError):
+    if isinstance(exc, UnreadableResponseError | ResponseSizeLimitExceededError):
         return NoRetryAcquisition(exc)
     match classify_external_fetch_failure(exc, now=now):
         case RetryableFetchFailure():

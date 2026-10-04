@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import httpx2
 import pytest
@@ -61,9 +61,10 @@ async def _reader_entries() -> list[CrossrefEntry]:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx2.AsyncClient)
-        client.get = AsyncMock(return_value=response)
-        yield client
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda _request: response)
+        ) as client:
+            yield client
 
     with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         return await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
@@ -93,9 +94,10 @@ async def _raise_through(status_code: int) -> None:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx2.AsyncClient)
-        client.get = AsyncMock(return_value=response)
-        yield client
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda _request: response)
+        ) as client:
+            yield client
 
     with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
@@ -119,9 +121,10 @@ async def _fetch_body(content: bytes) -> list[CrossrefEntry]:
 
     @asynccontextmanager
     async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
-        client = AsyncMock(spec=httpx2.AsyncClient)
-        client.get = AsyncMock(return_value=response)
-        yield client
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda _request: response)
+        ) as client:
+            yield client
 
     with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         return await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
@@ -204,9 +207,10 @@ async def test_reader_tools_injects_contact_without_real_network(
     @asynccontextmanager
     async def _fake_safe_client(**kwargs: Any) -> AsyncIterator[Any]:
         captured_headers.update(kwargs["headers"])
-        client = AsyncMock(spec=httpx2.AsyncClient)
-        client.get = AsyncMock(return_value=response)
-        yield client
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda _request: response)
+        ) as client:
+            yield client
 
     with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
         await ReaderTools().crossref.fetch_works(

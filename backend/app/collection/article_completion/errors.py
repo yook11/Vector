@@ -6,6 +6,7 @@ from enum import StrEnum
 from typing import ClassVar
 
 from app.collection.domain.analyzable_article import AnalyzableArticleDefect
+from app.collection.response_size import ResponseSizeBasis
 
 
 class ArticleCompletionError(Exception):
@@ -79,13 +80,6 @@ class FetchResource(StrEnum):
 
     ROBOTS_TXT = "robots_txt"
     ARTICLE_PAGE = "article_page"
-
-
-class ResponseSizeBasis(StrEnum):
-    """上限超過を確認したサイズの根拠。"""
-
-    DECLARED_CONTENT_LENGTH = "declared_content_length"
-    RECEIVED_DECODED_BODY = "received_decoded_body"
 
 
 class RobotsDisallowedError(ArticleCompletionError):

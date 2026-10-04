@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, call
 import pytest
 from structlog.testing import capture_logs
 
-from app.collection.article_acquisition.errors import RssFeedErrors
+from app.collection.article_acquisition.errors import (
+    ResponseSizeLimitExceededError,
+    RssFeedErrors,
+)
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.article_acquisition.reader.read_errors import (
@@ -16,6 +19,7 @@ from app.collection.article_acquisition.reader.read_errors import (
 )
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
+from app.collection.response_size import ResponseSizeBasis
 from app.collection.sources.definitions.cornell import CornellChronicleSource
 from app.collection.sources.definitions.nasa import NASASource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
@@ -104,6 +108,16 @@ async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
                 response_format="feed",
             ),
             "read_malformed_content",
+            None,
+            None,
+        ),
+        (
+            ResponseSizeLimitExceededError(
+                limit_bytes=10 * 1024 * 1024,
+                observed_bytes=10 * 1024 * 1024 + 1,
+                size_basis=ResponseSizeBasis.DECLARED_CONTENT_LENGTH,
+            ),
+            "source_response_size_limit_exceeded",
             None,
             None,
         ),

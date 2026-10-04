@@ -76,7 +76,8 @@ class HackerNewsReader:
         """直近 ``window_seconds`` 内に投稿された ``points > min_points`` story を取得。
 
         Raises:
-            HttpResponseError / HttpTransportError / HostBlockedError: 取得の失敗。
+            HttpResponseError / HttpTransportError / HostBlockedError /
+                ResponseSizeLimitExceededError: 取得の失敗。
             UnreadableResponseError: 応答を構造化できない。
         """
         since = int(time.time()) - window_seconds
@@ -100,7 +101,7 @@ class HackerNewsReader:
                     response_format="json",
                 )
             try:
-                data = response.json()
+                data = json.loads(response.content)
             except json.JSONDecodeError as e:
                 raise UnreadableResponseError(
                     reason=UnreadableResponseReason.MALFORMED_CONTENT,

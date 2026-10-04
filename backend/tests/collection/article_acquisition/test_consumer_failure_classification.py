@@ -9,11 +9,16 @@ from app.collection.article_acquisition.consumer_failure_classification import (
     RetryAcquisition,
     classify_acquisition_failure,
 )
-from app.collection.article_acquisition.errors import RssFeedErrors, RssFeedFailure
+from app.collection.article_acquisition.errors import (
+    ResponseSizeLimitExceededError,
+    RssFeedErrors,
+    RssFeedFailure,
+)
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
+from app.collection.response_size import ResponseSizeBasis
 from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
 from app.http.destination_policy import HostBlockedError
 from app.http.errors import HttpResponseError, HttpTransportError
@@ -29,6 +34,14 @@ _NOW = datetime(2026, 9, 26, 12, tzinfo=UTC)
 def _read_error() -> UnreadableResponseError:
     return UnreadableResponseError(
         reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
+    )
+
+
+def _size_error() -> ResponseSizeLimitExceededError:
+    return ResponseSizeLimitExceededError(
+        limit_bytes=1024,
+        observed_bytes=1025,
+        size_basis=ResponseSizeBasis.RECEIVED_DECODED_BODY,
     )
 
 
@@ -78,6 +91,10 @@ def test_failure_that_may_change_or_is_not_understood_is_redelivered(
         pytest.param(_response_error(403), id="non_retryable_response"),
         pytest.param(HostBlockedError("private IP literal"), id="host_blocked"),
         pytest.param(_read_error(), id="unreadable_response"),
+        pytest.param(_size_error(), id="response_size_limit_exceeded"),
+        pytest.param(
+            _feeds(_size_error(), _response_error(404)), id="rss_size_and_no_retry"
+        ),
         pytest.param(
             _feeds(_read_error(), _response_error(404)), id="rss_all_no_retry"
         ),

@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx2
 import pytest
@@ -93,12 +93,15 @@ def _patch_safe_client(response_or_exc: httpx2.Response | Exception) -> Any:
 
     @asynccontextmanager
     async def _fake_safe_client(**_kwargs: Any) -> Any:
-        client = AsyncMock(spec=httpx2.AsyncClient)
-        if isinstance(response_or_exc, Exception):
-            client.get = AsyncMock(side_effect=response_or_exc)
-        else:
-            client.get = AsyncMock(return_value=response_or_exc)
-        yield client
+        def handler(_request: httpx2.Request) -> httpx2.Response:
+            if isinstance(response_or_exc, Exception):
+                raise response_or_exc
+            return response_or_exc
+
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(handler)
+        ) as client:
+            yield client
 
     return patch(f"{_MOD}.make_external_async_client", _fake_safe_client)
 

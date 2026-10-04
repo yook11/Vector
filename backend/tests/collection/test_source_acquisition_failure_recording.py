@@ -16,7 +16,11 @@ from app.collection.article_acquisition.consumer_failure_classification import (
     NoRetryAcquisition,
     RetryAcquisition,
 )
-from app.collection.article_acquisition.errors import RssFeedErrors, RssFeedFailure
+from app.collection.article_acquisition.errors import (
+    ResponseSizeLimitExceededError,
+    RssFeedErrors,
+    RssFeedFailure,
+)
 from app.collection.article_acquisition.failure_recording import (
     ArticleAcquisitionFailureRecorder,
 )
@@ -27,6 +31,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
+from app.collection.response_size import ResponseSizeBasis
 from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
 from app.http.destination_policy import HostBlockedError
 from app.http.errors import HttpResponseError, HttpTransportError
@@ -221,6 +226,47 @@ async def test_read_failure_writes_reason_outcome_and_read_payload(
     assert ev.payload["read_format"] == "json"
     assert ev.payload["read_field"] == "items"
     assert ev.payload["read_parser_position"] is None
+    assert ev.payload["http_status"] is None
+    assert ev.payload["reason_code"] is None
+
+
+@pytest.mark.asyncio
+async def test_response_size_limit_records_numbers_without_retry(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """本文の上限超過は再試行不可として記録し、上限・確認した量・根拠だけを残す。"""
+    source_id = sample_source.id
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
+
+    await recorder.record_source_failure(
+        source_id=source_id,
+        source_name="Anthropic",
+        failure=NoRetryAcquisition(
+            ResponseSizeLimitExceededError(
+                limit_bytes=10485760,
+                observed_bytes=10485761,
+                size_basis=ResponseSizeBasis.DECLARED_CONTENT_LENGTH,
+            )
+        ),
+    )
+
+    await db_session.rollback()
+    events = await _fetch_acquisition_events(db_session, source_id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.event_type == "failed"
+    assert ev.outcome_code == "source_response_size_limit_exceeded"
+    assert ev.retryability == "non_retryable"
+    assert ev.error_class is not None
+    assert ev.error_class.endswith(".ResponseSizeLimitExceededError")
+    assert ev.payload["failure_kind"] == "response_size_limit_exceeded"
+    assert ev.payload["failure_action"] == "no_retry"
+    assert ev.payload["error_message"] == (
+        "source_response_size_limit_exceeded: observed=10485761 limit=10485760"
+        " basis=declared_content_length"
+    )
     assert ev.payload["http_status"] is None
     assert ev.payload["reason_code"] is None
 
