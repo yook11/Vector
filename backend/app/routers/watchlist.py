@@ -23,28 +23,32 @@ router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
 
 
 def get_watchlist_service(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
     session: EntryManagedSession,
 ) -> WatchlistService:
-    return WatchlistService(WatchlistRepository(session), ArticleRepository(session))
+    """ログイン中のユーザーに紐づいた WatchlistService を用意する。未ログインは 401。"""
+    return WatchlistService(
+        user.id,
+        WatchlistRepository(session),
+        ArticleRepository(session),
+    )
 
 
 @router.get("/watchlist/ids")
 async def list_watchlist_ids(
-    user: Annotated[CurrentUser, Depends(get_current_user)],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> WatchlistIds:
     """ウォッチ中の article_id 集合を返す (per-user, cache 不可)。"""
-    ids = await service.list_ids(user.id)
+    ids = await service.list_ids()
     return WatchlistIds(ids=ids)
 
 
 @router.get("/watchlist")
 async def list_articles_in_watchlist(
     pagination: Annotated[PaginationParams, Query()],
-    user: Annotated[CurrentUser, Depends(get_current_user)],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> PaginatedArticleResponse:
-    return await service.list_articles_in_watchlist(user.id, pagination)
+    return await service.list_articles_in_watchlist(pagination)
 
 
 @router.put(
@@ -61,11 +65,10 @@ async def list_articles_in_watchlist(
 )
 async def add_to_watchlist(
     article_id: _ArticleId,
-    user: Annotated[CurrentUser, Depends(get_current_user)],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> Response:
     """記事をウォッチリストに入れる。新しく追加したら 201、登録済みなら 204 を返す。"""
-    added = await service.add_to_watchlist(user.id, article_id)
+    added = await service.add_to_watchlist(article_id)
     return Response(
         status_code=status.HTTP_201_CREATED if added else status.HTTP_204_NO_CONTENT
     )
@@ -77,8 +80,7 @@ async def add_to_watchlist(
 )
 async def remove_from_watchlist(
     article_id: _ArticleId,
-    user: Annotated[CurrentUser, Depends(get_current_user)],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> None:
     """記事をウォッチリストから外す。登録されていなくても 204 を返す。"""
-    await service.remove_from_watchlist(user.id, article_id)
+    await service.remove_from_watchlist(article_id)
