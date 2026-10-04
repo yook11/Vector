@@ -2,24 +2,24 @@ import type { Category } from "@/types/types.gen";
 import type { getArticles } from "../api/get-articles";
 
 interface PaperNewsResultSummaryProps {
-  activeCategory?: string;
+  selectedCategorySlug?: string;
   categories: Category[];
   articlesPromise: ReturnType<typeof getArticles>;
 }
 
 /** フィルタバー左の結果サマリ「<カテゴリ> · 全 N件」。total は cached getArticles を共用。 */
 export async function PaperNewsResultSummary({
-  activeCategory,
   articlesPromise,
   categories,
+  selectedCategorySlug,
 }: PaperNewsResultSummaryProps) {
   const { total } = await articlesPromise;
-  // 未知 slug (rename 後の stale URL 等) は内部 slug を露出させず「すべて」に倒す。
+  // 未知 slug (rename 後の stale URL 等) は内部 slug を露出させず、存在しないカテゴリとして示す。
   const categoryName =
-    activeCategory === undefined
+    selectedCategorySlug === undefined
       ? "すべて"
-      : (categories.find((category) => category.slug === activeCategory)
-          ?.name ?? "すべて");
+      : (categories.find((category) => category.slug === selectedCategorySlug)
+          ?.name ?? "存在しないカテゴリ");
 
   return (
     <span
