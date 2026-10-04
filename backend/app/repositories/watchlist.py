@@ -1,6 +1,7 @@
 from uuid import UUID
 
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analyzed_article_record import AnalyzedArticleRecord
@@ -58,27 +59,23 @@ class WatchlistRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def is_watched(self, user_id: UUID, article_id: int) -> bool:
-        """ユーザーが当該記事を既にウォッチ中かを判定する."""
-        stmt = select(
-            exists().where(
-                WatchlistEntry.user_id == user_id,
-                WatchlistEntry.analyzed_article_id == article_id,
-            )
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one()
+    async def watch(self, user_id: UUID, article_id: int) -> bool:
+        """ユーザーのウォッチリストに記事を追加する.
 
-    async def watch(self, user_id: UUID, article_id: int) -> None:
-        """ユーザーのウォッチリストに記事を追加する."""
-        entry = WatchlistEntry(user_id=user_id, analyzed_article_id=article_id)
-        self.session.add(entry)
+        同時に追加されても主キー重複にしないよう衝突は無視し、
+        新しく追加したときだけ True を返す.
+        """
+        stmt = (
+            pg_insert(WatchlistEntry)
+            .values(user_id=user_id, analyzed_article_id=article_id)
+            .on_conflict_do_nothing(index_elements=["user_id", "analyzed_article_id"])
+            .returning(WatchlistEntry.analyzed_article_id)
+        )
+        row = (await self.session.execute(stmt)).first()
+        return row is not None
 
     async def unwatch(self, user_id: UUID, article_id: int) -> None:
-        """ユーザーのウォッチリストから記事を削除する.
-
-        存在チェックは呼び出し側の責務とする.
-        """
+        """ユーザーのウォッチリストから記事を削除する. 未登録なら何もしない."""
         stmt = delete(WatchlistEntry).where(
             WatchlistEntry.user_id == user_id,
             WatchlistEntry.analyzed_article_id == article_id,

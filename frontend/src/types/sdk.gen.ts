@@ -65,21 +65,18 @@ export const listWatchlistIds = <ThrowOnError extends boolean = false>(options?:
 export const listArticlesInWatchlist = <ThrowOnError extends boolean = false>(options?: Options<ListArticlesInWatchlistData, ThrowOnError>): RequestResult<ListArticlesInWatchlistResponses, ListArticlesInWatchlistErrors, ThrowOnError> => (options?.client ?? client).get<ListArticlesInWatchlistResponses, ListArticlesInWatchlistErrors, ThrowOnError>({ url: '/api/v1/me/watchlist', ...options });
 
 /**
- * Add To Watchlist
- */
-export const addToWatchlist = <ThrowOnError extends boolean = false>(options: Options<AddToWatchlistData, ThrowOnError>): RequestResult<AddToWatchlistResponses, AddToWatchlistErrors, ThrowOnError> => (options.client ?? client).post<AddToWatchlistResponses, AddToWatchlistErrors, ThrowOnError>({
-    url: '/api/v1/me/watchlist',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
-
-/**
  * Remove From Watchlist
+ *
+ * 記事をウォッチリストから外す。登録されていなくても 204 を返す。
  */
 export const removeFromWatchlist = <ThrowOnError extends boolean = false>(options: Options<RemoveFromWatchlistData, ThrowOnError>): RequestResult<RemoveFromWatchlistResponses, RemoveFromWatchlistErrors, ThrowOnError> => (options.client ?? client).delete<RemoveFromWatchlistResponses, RemoveFromWatchlistErrors, ThrowOnError>({ url: '/api/v1/me/watchlist/{article_id}', ...options });
+
+/**
+ * Add To Watchlist
+ *
+ * 記事をウォッチリストに入れる。新しく追加したら 201、登録済みなら 204 を返す。
+ */
+export const addToWatchlist = <ThrowOnError extends boolean = false>(options: Options<AddToWatchlistData, ThrowOnError>): RequestResult<AddToWatchlistResponses, AddToWatchlistErrors, ThrowOnError> => (options.client ?? client).put<AddToWatchlistResponses, AddToWatchlistErrors, ThrowOnError>({ url: '/api/v1/me/watchlist/{article_id}', ...options });
 
 /**
  * Get Trends

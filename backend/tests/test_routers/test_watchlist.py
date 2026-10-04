@@ -112,10 +112,7 @@ class TestListWatchlist:
         sample_article: AnalyzedArticleRecord,
         sample_categories: list[Category],
     ) -> None:
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
+        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
 
         resp = await authed_client.get("/api/v1/me/watchlist")
         assert resp.status_code == 200
@@ -141,14 +138,8 @@ class TestListWatchlist:
         sample_article: AnalyzedArticleRecord,
         second_article: AnalyzedArticleRecord,
     ) -> None:
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": second_article.id},
-        )
+        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
+        await authed_client.put(f"/api/v1/me/watchlist/{second_article.id}")
 
         resp = await authed_client.get("/api/v1/me/watchlist?perPage=1&page=1")
         data = resp.json()
@@ -179,36 +170,30 @@ class TestAddToWatchlist:
         authed_client: AsyncClient,
         sample_article: AnalyzedArticleRecord,
     ) -> None:
-        resp = await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
+        """未登録の記事を PUT すると 201 で、ウォッチリストに入る。"""
+        resp = await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
         assert resp.status_code == 201
 
-    async def test_add_duplicate_409(
+        resp = await authed_client.get("/api/v1/me/watchlist/ids")
+        assert resp.json() == {"ids": [sample_article.id]}
+
+    async def test_add_already_watched_returns_204(
         self,
         authed_client: AsyncClient,
         sample_article: AnalyzedArticleRecord,
     ) -> None:
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
-        resp = await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
-        assert resp.status_code == 409
-        # red-team chain θ-1: detail は allowlist 通過 form で固定。
-        assert resp.json() == {"detail": "Watchlist entry already exists"}
+        """登録済みの記事をもう一度 PUT しても 204 で、ウォッチは1件のまま。"""
+        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
+        resp = await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
+        assert resp.status_code == 204
+
+        resp = await authed_client.get("/api/v1/me/watchlist/ids")
+        assert resp.json() == {"ids": [sample_article.id]}
 
     async def test_add_nonexistent_article_404(
         self, authed_client: AsyncClient
     ) -> None:
-        resp = await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": 99999},
-        )
+        resp = await authed_client.put("/api/v1/me/watchlist/99999")
         assert resp.status_code == 404
 
 
@@ -219,10 +204,7 @@ class TestRemoveFromWatchlist:
         authed_client: AsyncClient,
         sample_article: AnalyzedArticleRecord,
     ) -> None:
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
+        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
         resp = await authed_client.delete(f"/api/v1/me/watchlist/{sample_article.id}")
         assert resp.status_code == 204
 
@@ -230,9 +212,12 @@ class TestRemoveFromWatchlist:
         resp = await authed_client.get("/api/v1/me/watchlist")
         assert resp.json()["total"] == 0
 
-    async def test_remove_not_found(self, authed_client: AsyncClient) -> None:
+    async def test_remove_not_watched_returns_204(
+        self, authed_client: AsyncClient
+    ) -> None:
+        """登録されていない記事を DELETE しても 204 を返す。"""
         resp = await authed_client.delete("/api/v1/me/watchlist/99999")
-        assert resp.status_code == 404
+        assert resp.status_code == 204
 
 
 @pytest.mark.asyncio
@@ -248,14 +233,8 @@ class TestListWatchlistIds:
         sample_article: AnalyzedArticleRecord,
         second_article: AnalyzedArticleRecord,
     ) -> None:
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": second_article.id},
-        )
+        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
+        await authed_client.put(f"/api/v1/me/watchlist/{second_article.id}")
 
         resp = await authed_client.get("/api/v1/me/watchlist/ids")
         assert resp.status_code == 200
@@ -275,10 +254,7 @@ class TestArticlesNoIsWatched:
         sample_article: AnalyzedArticleRecord,
     ) -> None:
         """Pattern B: per-user フラグは記事スキーマに含まない (cache 安全のため)。"""
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
+        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
 
         resp = await authed_client.get("/api/v1/articles")
         items = resp.json()["items"]
@@ -290,10 +266,7 @@ class TestArticlesNoIsWatched:
         authed_client: AsyncClient,
         sample_article: AnalyzedArticleRecord,
     ) -> None:
-        await authed_client.post(
-            "/api/v1/me/watchlist",
-            json={"articleId": sample_article.id},
-        )
+        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
 
         resp = await authed_client.get(f"/api/v1/articles/{sample_article.id}")
         assert resp.status_code == 200

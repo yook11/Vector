@@ -32,8 +32,8 @@ async def test_watching_article_saves_entry_for_user(
     """記事をウォッチすると、その利用者のウォッチとして保存される。"""
     article_id = await _seed_article(system_database, "watched")
 
-    response = await api_client.post(
-        "/api/v1/me/watchlist", json={"articleId": article_id}, headers=user_headers
+    response = await api_client.put(
+        f"/api/v1/me/watchlist/{article_id}", headers=user_headers
     )
 
     assert response.status_code == 201
