@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ getArticles: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  getArticles: vi.fn(),
+  getWatchlistIds: vi.fn(),
+}));
 vi.mock("./get-articles", () => ({ getArticles: mocks.getArticles }));
+vi.mock("@/features/watchlist/server", () => ({
+  getWatchlistIds: mocks.getWatchlistIds,
+}));
 vi.mock("@/lib/cache/article-list-revision", () => ({
   getArticleListRevision: () => "revision-a",
 }));
@@ -12,6 +18,7 @@ beforeEach(() => {
   mocks.getArticles
     .mockReset()
     .mockResolvedValue({ items: [], nextCursor: null });
+  mocks.getWatchlistIds.mockReset().mockResolvedValue(new Set());
 });
 
 describe("記事一覧の続きの読み込み", () => {
@@ -22,6 +29,20 @@ describe("記事一覧の続きの読み込み", () => {
       { category: "ai", cursor: "eyJpZCI6MX0" },
       "revision-a",
     );
+  });
+
+  it("続きの記事の ID でウォッチ状態を問い合わせ、記事と一緒に返す", async () => {
+    const list = {
+      items: [{ id: 12 }, { id: 11 }],
+      nextCursor: "eyJpZCI6MTF9",
+    };
+    mocks.getArticles.mockResolvedValue(list);
+    mocks.getWatchlistIds.mockResolvedValue(new Set([11]));
+
+    const loaded = await loadMoreArticles("ai", "eyJpZCI6MX0");
+
+    expect(mocks.getWatchlistIds).toHaveBeenCalledWith([12, 11]);
+    expect(loaded).toEqual({ list, watchedIds: new Set([11]) });
   });
 
   it("カテゴリが無ければカーソルだけを渡す", async () => {

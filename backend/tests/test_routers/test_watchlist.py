@@ -295,7 +295,9 @@ class TestAddToWatchlist:
         resp = await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
         assert resp.status_code == 201
 
-        resp = await authed_client.get("/api/v1/me/watchlist/ids")
+        resp = await authed_client.get(
+            "/api/v1/me/watchlist/ids", params={"articleIds": sample_article.id}
+        )
         assert resp.json() == {"ids": [sample_article.id]}
 
     async def test_add_already_watched_returns_204(
@@ -308,7 +310,9 @@ class TestAddToWatchlist:
         resp = await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
         assert resp.status_code == 204
 
-        resp = await authed_client.get("/api/v1/me/watchlist/ids")
+        resp = await authed_client.get(
+            "/api/v1/me/watchlist/ids", params={"articleIds": sample_article.id}
+        )
         assert resp.json() == {"ids": [sample_article.id]}
 
     async def test_add_nonexistent_article_404(
@@ -357,27 +361,91 @@ class TestRemoveFromWatchlist:
 
 @pytest.mark.asyncio
 class TestListWatchlistIds:
-    async def test_empty_returns_empty_ids(self, authed_client: AsyncClient) -> None:
-        resp = await authed_client.get("/api/v1/me/watchlist/ids")
+    async def test_returns_watched_ids_among_given_articles(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+        sample_article: AnalyzedArticleRecord,
+    ) -> None:
+        """渡した記事のうちウォッチ中のものを記事 ID の昇順で返す。
+
+        未ウォッチの記事と存在しない記事は含めない。
+        """
+        at = datetime(2026, 1, 1, tzinfo=UTC)
+        watched = await _watch_new_articles(
+            db_session,
+            sample_source,
+            sample_categories[0].id,
+            [at, at + timedelta(minutes=1)],
+        )
+
+        resp = await authed_client.get(
+            "/api/v1/me/watchlist/ids",
+            params={"articleIds": [*watched[::-1], sample_article.id, 99999]},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ids": watched}
+
+    async def test_other_users_watches_are_not_returned(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """他のユーザーがウォッチした記事は、自分のウォッチとして返らない。"""
+        theirs = await _watch_new_articles(
+            db_session,
+            sample_source,
+            sample_categories[0].id,
+            [datetime(2026, 1, 1, tzinfo=UTC)],
+            user_id=TEST_ADMIN_ID,
+        )
+
+        resp = await authed_client.get(
+            "/api/v1/me/watchlist/ids", params={"articleIds": theirs}
+        )
+
         assert resp.status_code == 200
         assert resp.json() == {"ids": []}
 
-    async def test_returns_ids_newest_first(
-        self,
-        authed_client: AsyncClient,
-        sample_article: AnalyzedArticleRecord,
-        second_article: AnalyzedArticleRecord,
+    async def test_accepts_up_to_one_load_of_articles(
+        self, authed_client: AsyncClient
     ) -> None:
-        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
-        await authed_client.put(f"/api/v1/me/watchlist/{second_article.id}")
+        """1回に表示する24件までの記事 ID を受け付ける。"""
+        resp = await authed_client.get(
+            "/api/v1/me/watchlist/ids", params={"articleIds": list(range(1, 25))}
+        )
 
-        resp = await authed_client.get("/api/v1/me/watchlist/ids")
         assert resp.status_code == 200
-        # 後に追加した second_article が先頭
-        assert resp.json() == {"ids": [second_article.id, sample_article.id]}
+        assert resp.json() == {"ids": []}
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            pytest.param({}, id="articleIds なし"),
+            pytest.param({"articleIds": list(range(1, 26))}, id="25件"),
+            pytest.param({"articleIds": [0]}, id="0"),
+            pytest.param({"articleIds": [2147483648]}, id="int4 の上限 + 1"),
+            pytest.param({"articleIds": ["abc"]}, id="数字でない"),
+        ],
+    )
+    async def test_invalid_article_ids_return_422(
+        self, authed_client: AsyncClient, params: dict[str, object]
+    ) -> None:
+        """記事 ID の欠落・件数の超過・範囲外は、DB に問い合わせる前に 422 で弾く。"""
+        resp = await authed_client.get("/api/v1/me/watchlist/ids", params=params)
+
+        assert resp.status_code == 422
+        assert {tuple(error["loc"][:2]) for error in resp.json()["detail"]} == {
+            ("query", "articleIds")
+        }
 
     async def test_unauthenticated_returns_401(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/me/watchlist/ids")
+        resp = await client.get("/api/v1/me/watchlist/ids", params={"articleIds": 1})
         assert resp.status_code == 401
 
 

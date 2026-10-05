@@ -12,6 +12,8 @@ import { removeFromWatchlist } from "../api/remove-from-watchlist";
 interface WatchlistButtonProps {
   articleId: number;
   isWatched: boolean;
+  /** 操作が成功したら新しい状態を知らせる。サーバーが描き直さない一覧が自分の状態を更新するために使う。 */
+  onWatchedChange?: (isWatched: boolean) => void;
   className?: string;
   iconClassName?: string;
 }
@@ -19,6 +21,7 @@ interface WatchlistButtonProps {
 export function WatchlistButton({
   articleId,
   isWatched,
+  onWatchedChange,
   className,
   iconClassName,
 }: WatchlistButtonProps) {
@@ -36,6 +39,7 @@ export function WatchlistButton({
         } else {
           await removeFromWatchlist(articleId);
         }
+        startTransition(() => onWatchedChange?.(next));
       } catch (err) {
         // throw 時は React が optimistic state を base に自動 revert する。
         // 401 (未認証) は requireSessionForAction が redirect throw する経路に

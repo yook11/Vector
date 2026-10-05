@@ -40,30 +40,27 @@ async def test_watching_article_saves_entry_for_user(
     assert await watched_article_ids(system_database, user_id) == [article_id]
 
 
-async def test_watchlist_ids_are_newest_first(
+async def test_watchlist_ids_are_only_watched_among_given_articles(
     api_client, user_headers, user_id, system_database
 ):
-    """ID一覧は、ウォッチ中の記事だけを新しくウォッチした順に返す。"""
-    older = await _seed_article(system_database, "older")
-    newer = await _seed_article(system_database, "newer")
-    await _seed_article(system_database, "unwatched")
+    """ID一覧は、渡した記事のうちウォッチ中のものだけを返す。"""
+    watched = await _seed_article(system_database, "watched")
+    unwatched = await _seed_article(system_database, "unwatched")
     await watch(
         system_database,
         user_id=user_id,
-        article_id=older,
+        article_id=watched,
         watched_at=datetime(2026, 9, 20, tzinfo=UTC),
     )
-    await watch(
-        system_database,
-        user_id=user_id,
-        article_id=newer,
-        watched_at=datetime(2026, 9, 21, tzinfo=UTC),
+
+    response = await api_client.get(
+        "/api/v1/me/watchlist/ids",
+        params={"articleIds": [watched, unwatched]},
+        headers=user_headers,
     )
 
-    response = await api_client.get("/api/v1/me/watchlist/ids", headers=user_headers)
-
     assert response.status_code == 200
-    assert response.json() == {"ids": [newer, older]}
+    assert response.json() == {"ids": [watched]}
 
 
 async def test_watchlist_returns_watched_articles_newest_first(

@@ -4,11 +4,11 @@ import { cacheTags } from "@/lib/cache/tags";
 import { listWatchlistIds } from "@/types/sdk.gen";
 
 /**
- * 認証済 user の watched article ID 集合を取得する。
+ * 渡した記事のうち、認証済み user がウォッチ中の記事 ID 集合を取得する。
  *
  * ウォッチ状態は記事リソースに含めず独立リソースとして取得する。
  * `/articles` 系 response は user 非依存のまま cache し、render 時に Set lookup で
- * merge する。未ログインは空 Set を返す。
+ * merge する。未ログイン、または記事が無いときは問い合わせずに空 Set を返す。
  *
  * cache 戦略: `next.tags: [cacheTags.watchlistMe]` で server data cache に
  * 乗せ、Server Action 後の `updateTag(cacheTags.watchlistMe)` で immediate
@@ -17,10 +17,14 @@ import { listWatchlistIds } from "@/types/sdk.gen";
  * `Authorization` header (HS256 JWT) が Next.js data cache の cache key に
  * 含まれることで担保。
  */
-export async function getWatchlistIds(): Promise<Set<number>> {
+export async function getWatchlistIds(
+  articleIds: readonly number[],
+): Promise<Set<number>> {
+  if (articleIds.length === 0) return new Set();
   const session = await getCurrentSession();
   if (!session) return new Set();
   const { data } = await listWatchlistIds({
+    query: { articleIds: [...articleIds] },
     throwOnError: true,
     next: { tags: [cacheTags.watchlistMe] },
   });

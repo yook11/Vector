@@ -45,7 +45,6 @@ export default async function DashboardPage({
   // 独立した request は最初にまとめて開始し、カテゴリ待ちで外枠を止めない。
   const categoriesPromise = getCategories(articleListRevision);
   const articlesPromise = getArticles(filters, articleListRevision);
-  const watchedIdsPromise = getWatchlistIds();
 
   return (
     <PaperSurface>
@@ -58,7 +57,6 @@ export default async function DashboardPage({
             categoriesPromise={categoriesPromise}
             filters={filters}
             navItems={navItems}
-            watchedIdsPromise={watchedIdsPromise}
           />
         </Suspense>
       </div>
@@ -109,14 +107,12 @@ async function DashboardContent({
   categoriesPromise,
   filters,
   navItems,
-  watchedIdsPromise,
 }: {
   articlesPromise: ReturnType<typeof getArticles>;
   articleListRevision: string;
   categoriesPromise: ReturnType<typeof getCategories>;
   filters: ArticleQuery;
   navItems: ReturnType<typeof getNavItems>;
-  watchedIdsPromise: ReturnType<typeof getWatchlistIds>;
 }) {
   const categoriesData = await categoriesPromise;
 
@@ -170,7 +166,6 @@ async function DashboardContent({
               articlesPromise={articlesPromise}
               articleListRevision={articleListRevision}
               category={filters.category}
-              watchedIdsPromise={watchedIdsPromise}
             />
           </Suspense>
         </main>
@@ -199,23 +194,21 @@ async function DashboardArticleSection({
   articlesPromise,
   articleListRevision,
   category,
-  watchedIdsPromise,
 }: {
   articlesPromise: ReturnType<typeof getArticles>;
   articleListRevision: string;
   category: string | undefined;
-  watchedIdsPromise: ReturnType<typeof getWatchlistIds>;
 }) {
-  const [newsData, watchedIds] = await Promise.all([
-    articlesPromise,
-    watchedIdsPromise,
-  ]);
+  const newsData = await articlesPromise;
+  const watchedIds = await getWatchlistIds(
+    newsData.items.map((article) => article.id),
+  );
   return (
     // 「一覧を更新」で revision が変わったら、読み込んだ続きを捨てて先頭から出す。
     <LoadMoreArticleList
       key={articleListRevision}
       initialList={newsData}
-      watchedIds={watchedIds}
+      initialWatchedIds={watchedIds}
       loadMore={loadMoreArticles.bind(null, category ?? null)}
       emptyState={
         <div className="border-b border-[var(--vector-rule)] py-16">

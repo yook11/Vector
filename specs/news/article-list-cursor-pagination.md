@@ -35,6 +35,7 @@ Status: Implemented
 - 失敗したら「読み込めませんでした」と「もう一度読み込む」を出す。1回以上読み込んで最後に達したら「これ以上の記事はありません」を出す。
 - 読み込んだ続きは、新しい遷移 (リンク・push / replace) で捨てて先頭から出し、戻る/進む・Server Action 後の再描画では保つ (`useRouter().bfcacheId` を key にする)。ダッシュボードはカテゴリの変更と「一覧を更新」(revision の変化) でも先頭から出す。
 - ウォッチ状態は全ウォッチ ID (`getWatchlistIds`) で判定する。ウォッチの操作後にサーバーが取り直すので、足した記事のボタンも正しく切り替わる。ウォッチリストで解除した記事は、読み込み済みの一覧からすぐ外す。
+  - 2026-10-05: [watch-state-for-displayed-articles.md](watch-state-for-displayed-articles.md) で、問い合わせを表示中の記事に絞った。
 - 一覧の上の帯はカテゴリ名だけを出す (`ArticleListHeading`)。並び順と表示件数の選択は廃止する。
 - `@/features/watchlist` はブラウザ側からも読める内容 (`WatchlistButton`・Server Action) だけにし、サーバー専用の取得関数は `@/features/watchlist/server` に分ける。
 

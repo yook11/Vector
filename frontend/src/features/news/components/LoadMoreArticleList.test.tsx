@@ -11,15 +11,23 @@ vi.mock("next/navigation", async (importOriginal) => ({
   useRouter: () => ({ bfcacheId: "navigation-1" }),
 }));
 
+// 押すと操作が成功したものとして、切り替えた状態を知らせる。
 vi.mock("@/features/watchlist", () => ({
   WatchlistButton: ({
     articleId,
     isWatched,
+    onWatchedChange,
   }: {
     articleId: number;
     isWatched: boolean;
+    onWatchedChange?: (isWatched: boolean) => void;
   }) => (
-    <span data-testid={`watch-${articleId}`}>
+    // biome-ignore lint/a11y/useKeyWithClickEvents: 試験用の代役
+    // biome-ignore lint/a11y/noStaticElementInteractions: 試験用の代役
+    <span
+      data-testid={`watch-${articleId}`}
+      onClick={() => onWatchedChange?.(!isWatched)}
+    >
       {isWatched ? "ウォッチ中" : "未ウォッチ"}
     </span>
   ),
@@ -52,7 +60,7 @@ describe("LoadMoreArticleList", () => {
     render(
       <LoadMoreArticleList
         initialList={{ items: [article(2, "記事2")], nextCursor: "cursor-1" }}
-        watchedIds={new Set()}
+        initialWatchedIds={new Set()}
         loadMore={vi.fn()}
         emptyState={emptyState}
       />,
@@ -66,13 +74,16 @@ describe("LoadMoreArticleList", () => {
 
   it("「さらに読み込む」を押すと、カーソルを渡して続きを下に足す", async () => {
     const loadMore = vi.fn().mockResolvedValue({
-      items: [article(1, "記事1")],
-      nextCursor: "cursor-2",
-    } satisfies AnalyzedArticlePreviewList);
+      list: {
+        items: [article(1, "記事1")],
+        nextCursor: "cursor-2",
+      } satisfies AnalyzedArticlePreviewList,
+      watchedIds: new Set(),
+    });
     render(
       <LoadMoreArticleList
         initialList={{ items: [article(2, "記事2")], nextCursor: "cursor-1" }}
-        watchedIds={new Set()}
+        initialWatchedIds={new Set()}
         loadMore={loadMore}
         emptyState={emptyState}
       />,
@@ -90,13 +101,14 @@ describe("LoadMoreArticleList", () => {
   });
 
   it("続きを最後まで読むと、ボタンを消して末尾に達したことを示す", async () => {
-    const loadMore = vi
-      .fn()
-      .mockResolvedValue({ items: [article(1, "記事1")], nextCursor: null });
+    const loadMore = vi.fn().mockResolvedValue({
+      list: { items: [article(1, "記事1")], nextCursor: null },
+      watchedIds: new Set(),
+    });
     render(
       <LoadMoreArticleList
         initialList={{ items: [article(2, "記事2")], nextCursor: "cursor-1" }}
-        watchedIds={new Set()}
+        initialWatchedIds={new Set()}
         loadMore={loadMore}
         emptyState={emptyState}
       />,
@@ -114,7 +126,7 @@ describe("LoadMoreArticleList", () => {
     render(
       <LoadMoreArticleList
         initialList={{ items: [article(2, "記事2")], nextCursor: null }}
-        watchedIds={new Set()}
+        initialWatchedIds={new Set()}
         loadMore={vi.fn()}
         emptyState={emptyState}
       />,
@@ -132,13 +144,13 @@ describe("LoadMoreArticleList", () => {
       .fn()
       .mockRejectedValueOnce(new Error("backend unavailable"))
       .mockResolvedValueOnce({
-        items: [article(1, "記事1")],
-        nextCursor: null,
+        list: { items: [article(1, "記事1")], nextCursor: null },
+        watchedIds: new Set(),
       });
     render(
       <LoadMoreArticleList
         initialList={{ items: [article(2, "記事2")], nextCursor: "cursor-1" }}
-        watchedIds={new Set()}
+        initialWatchedIds={new Set()}
         loadMore={loadMore}
         emptyState={emptyState}
       />,
@@ -158,14 +170,18 @@ describe("LoadMoreArticleList", () => {
     expect(screen.queryByText("読み込めませんでした")).not.toBeInTheDocument();
   });
 
-  it("ウォッチ状態は渡されたウォッチ ID で決まり、続きの記事にも反映される", async () => {
-    const loadMore = vi
-      .fn()
-      .mockResolvedValue({ items: [article(1, "記事1")], nextCursor: null });
+  it("最初の記事は渡されたウォッチ ID で、足した記事は読み込みで得たウォッチ状態で表示する", async () => {
+    const loadMore = vi.fn().mockResolvedValue({
+      list: { items: [article(1, "記事1")], nextCursor: null },
+      watchedIds: new Set([1]),
+    });
     render(
       <LoadMoreArticleList
-        initialList={{ items: [article(2, "記事2")], nextCursor: "cursor-1" }}
-        watchedIds={new Set([1])}
+        initialList={{
+          items: [article(3, "記事3"), article(2, "記事2")],
+          nextCursor: "cursor-1",
+        }}
+        initialWatchedIds={new Set([3])}
         loadMore={loadMore}
         emptyState={emptyState}
       />,
@@ -175,34 +191,49 @@ describe("LoadMoreArticleList", () => {
       screen.getByRole("button", { name: "さらに読み込む" }),
     );
 
+    expect(screen.getByTestId("watch-3")).toHaveTextContent("ウォッチ中");
     expect(screen.getByTestId("watch-2")).toHaveTextContent("未ウォッチ");
     expect(screen.getByTestId("watch-1")).toHaveTextContent("ウォッチ中");
   });
 
-  it("showsOnlyWatched では、ウォッチから外れた記事を読み込み済みの一覧から外す", () => {
-    const initialList = {
-      items: [article(2, "記事2"), article(1, "記事1")],
-      nextCursor: null,
-    };
-    const { rerender } = render(
+  it("足した記事のウォッチを切り替えると、その記事の表示が切り替わる", async () => {
+    const loadMore = vi.fn().mockResolvedValue({
+      list: { items: [article(1, "記事1")], nextCursor: null },
+      watchedIds: new Set([1]),
+    });
+    render(
       <LoadMoreArticleList
-        initialList={initialList}
-        watchedIds={new Set([1, 2])}
+        initialList={{ items: [article(2, "記事2")], nextCursor: "cursor-1" }}
+        initialWatchedIds={new Set()}
+        loadMore={loadMore}
+        emptyState={emptyState}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "さらに読み込む" }),
+    );
+
+    await userEvent.click(screen.getByTestId("watch-1"));
+
+    expect(titles()).toEqual(["記事2", "記事1"]);
+    expect(screen.getByTestId("watch-1")).toHaveTextContent("未ウォッチ");
+  });
+
+  it("showsOnlyWatched では、ウォッチを外した記事を読み込み済みの一覧から外す", async () => {
+    render(
+      <LoadMoreArticleList
+        initialList={{
+          items: [article(2, "記事2"), article(1, "記事1")],
+          nextCursor: null,
+        }}
+        initialWatchedIds={new Set([1, 2])}
         loadMore={vi.fn()}
         emptyState={emptyState}
         showsOnlyWatched
       />,
     );
 
-    rerender(
-      <LoadMoreArticleList
-        initialList={initialList}
-        watchedIds={new Set([1])}
-        loadMore={vi.fn()}
-        emptyState={emptyState}
-        showsOnlyWatched
-      />,
-    );
+    await userEvent.click(screen.getByTestId("watch-2"));
 
     expect(titles()).toEqual(["記事1"]);
   });
@@ -211,7 +242,7 @@ describe("LoadMoreArticleList", () => {
     render(
       <LoadMoreArticleList
         initialList={{ items: [], nextCursor: null }}
-        watchedIds={new Set()}
+        initialWatchedIds={new Set()}
         loadMore={vi.fn()}
         emptyState={emptyState}
       />,
@@ -227,7 +258,7 @@ describe("LoadMoreArticleList", () => {
     render(
       <LoadMoreArticleList
         initialList={legacyResponse}
-        watchedIds={new Set()}
+        initialWatchedIds={new Set()}
         loadMore={vi.fn()}
         emptyState={emptyState}
       />,

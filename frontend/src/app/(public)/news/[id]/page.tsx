@@ -52,18 +52,19 @@ export async function generateMetadata({
 
 async function RelatedArticlesAsync({
   articlesPromise,
-  watchedIds,
 }: {
   articlesPromise: Promise<AnalyzedArticlePreview[]>;
-  watchedIds: Set<number>;
 }) {
   // Related articles are a progressive enhancement: failure must not break
   // the page, but we still log so embed/index regressions stay visible.
   let articles: AnalyzedArticlePreview[] = [];
+  let watchedIds = new Set<number>();
   try {
-    articles = await articlesPromise;
+    const similar = await articlesPromise;
+    watchedIds = await getWatchlistIds(similar.map((article) => article.id));
+    articles = similar;
   } catch (err) {
-    console.error("Failed to load similar articles", err);
+    console.error("Failed to load related articles", err);
   }
   return <RelatedArticles articles={articles} watchedIds={watchedIds} />;
 }
@@ -127,6 +128,7 @@ async function NewsDetailContent({
 }: {
   articlePromise: Promise<AnalyzedArticle | null>;
   similarPromise: Promise<AnalyzedArticlePreview[]>;
+  /** 本文の記事のウォッチ状態。関連記事の分は関連記事を取ってから問い合わせる。 */
   watchedIdsPromise: Promise<Set<number>>;
 }) {
   const article = await articlePromise;
@@ -139,10 +141,7 @@ async function NewsDetailContent({
     <main className="relative z-10 mx-auto max-w-[1180px] px-5 pb-20 sm:px-8 lg:px-10">
       <NewsDetail article={article} isWatched={watchedIds.has(article.id)} />
       <Suspense fallback={<RelatedArticlesSkeleton />}>
-        <RelatedArticlesAsync
-          articlesPromise={similarPromise}
-          watchedIds={watchedIds}
-        />
+        <RelatedArticlesAsync articlesPromise={similarPromise} />
       </Suspense>
     </main>
   );
@@ -164,7 +163,7 @@ export default async function NewsPage({ params }: NewsPageProps) {
   // watchlist 側の失敗を 404 と誤認しうる)。
   const articlePromise = getArticleById(articleId);
   const similarPromise = getSimilarArticles(articleId, 5);
-  const watchedIdsPromise = getWatchlistIds();
+  const watchedIdsPromise = getWatchlistIds([articleId]);
 
   return (
     <PaperSurface>

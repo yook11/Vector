@@ -41,7 +41,7 @@ backend ドメインに揃えた機能境界 (`auth` / `news` / `watchlist` / `d
 2. features を外から使う側は必ず Public API (`@/features/<name>`、サーバー専用は `@/features/<name>/server`) を経由
 3. features 名は backend ドメインに揃える (UI 露出のない `ingestion` は frontend に作らない)
 
-**例外**: `features/news` から `features/watchlist` への一方向参照のみ許可 (NewsList が `WatchlistButton` を compose する役割のため。逆方向は不可)。
+**例外**: `features/news` から `features/watchlist` への一方向参照のみ許可 (`WatchlistButton` を compose し、記事の続きを読み込むときにウォッチ状態も取る役割のため。サーバー専用の `@/features/watchlist/server` を含む。逆方向は不可)。
 
 ## 禁止事項（NEVER）
 

@@ -4,16 +4,25 @@ from fastapi import Query
 from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict
 from pydantic.dataclasses import dataclass
 
-from app.schemas.articles import ArticleId
+from app.schemas.articles import ARTICLE_LIST_LIMIT, ArticleId
 from app.schemas.base import _CamelBase
 from app.schemas.cursor import CURSOR_JSON_SCHEMA, CursorPosition
+
+
+class WatchlistIdsParams(BaseModel):
+    """GET /api/v1/me/watchlist/ids のクエリパラメータ。上限は1回に表示する件数。"""
+
+    article_ids: Annotated[
+        list[ArticleId],
+        Query(alias="articleIds", min_length=1, max_length=ARTICLE_LIST_LIMIT),
+    ]
 
 
 class WatchlistIds(_CamelBase):
     """GET /api/v1/me/watchlist/ids のレスポンス。
 
-    記事リソースから per-user フラグを切り離し、frontend が render 時に
-    Set lookup で merge するための per-user メンバーシップ ID 集合。
+    渡した記事のうちウォッチ中のものの ID。記事のレスポンスはユーザーに依存させず、
+    frontend が表示時にこの集合と突き合わせる。
     """
 
     ids: list[int]

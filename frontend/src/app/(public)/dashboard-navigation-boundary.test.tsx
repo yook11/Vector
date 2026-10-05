@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getCategories: vi.fn(),
   getWatchlistIds: vi.fn(),
   getCurrentSession: vi.fn(),
+  articleListProps: vi.fn(),
 }));
 
 vi.mock("@/components/layout/nav-items", () => ({
@@ -59,10 +60,15 @@ vi.mock("@/features/news", () => ({
       {userMenuSlot}
     </header>
   ),
-  LoadMoreArticleList: () => (
-    <section data-testid="dashboard-article-results">記事結果</section>
-  ),
-  loadMoreArticles: () => Promise.resolve({ items: [], nextCursor: null }),
+  LoadMoreArticleList: (props: unknown) => {
+    mocks.articleListProps(props);
+    return <section data-testid="dashboard-article-results">記事結果</section>;
+  },
+  loadMoreArticles: () =>
+    Promise.resolve({
+      list: { items: [], nextCursor: null },
+      watchedIds: new Set(),
+    }),
   getArticles: mocks.getArticles,
   getCategories: mocks.getCategories,
   getLatestArticleDate: () => null,
@@ -141,6 +147,29 @@ describe("Dashboard page navigation outlet", () => {
     );
     expect(outlet).toContainElement(
       screen.getByTestId("page-navigation-overlay"),
+    );
+  });
+});
+
+describe("Dashboard のウォッチ状態", () => {
+  it("最初の記事の ID でウォッチ状態を問い合わせ、一覧に渡す", async () => {
+    mocks.getCurrentSession.mockResolvedValue({ user: { role: "user" } });
+    mocks.getCategories.mockResolvedValue({ items: [] });
+    mocks.getArticles.mockResolvedValue({
+      items: [{ id: 3 }, { id: 2 }],
+      nextCursor: null,
+    });
+    mocks.getWatchlistIds.mockResolvedValue(new Set([3]));
+
+    const page = await DashboardPage({
+      searchParams: Promise.resolve({}),
+    });
+    render(await resolveServerTree(page));
+    await screen.findByTestId("dashboard-article-results");
+
+    expect(mocks.getWatchlistIds).toHaveBeenCalledWith([3, 2]);
+    expect(mocks.articleListProps).toHaveBeenCalledWith(
+      expect.objectContaining({ initialWatchedIds: new Set([3]) }),
     );
   });
 });

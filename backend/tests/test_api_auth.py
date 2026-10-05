@@ -175,7 +175,7 @@ def watchlist_user_ids(api_app: FastAPI) -> list[str]:
         user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     ):
         user_ids.append(str(user.id))
-        return SimpleNamespace(list_ids=AsyncMock(return_value=[]))
+        return SimpleNamespace(list_watched_ids=AsyncMock(return_value=[]))
 
     api_app.dependency_overrides[get_watchlist_service] = service
     return user_ids
@@ -193,7 +193,9 @@ async def test_watchlist_reuses_authentication_within_request(
     monkeypatch.setattr(jwt, "decode", decode)
     monkeypatch.setattr(dependencies, "_user_from_claims", user_from_claims)
 
-    response = await api_client.get("/api/v1/me/watchlist/ids", headers=auth_headers)
+    response = await api_client.get(
+        "/api/v1/me/watchlist/ids", params={"articleIds": 1}, headers=auth_headers
+    )
 
     assert response.status_code == 200
     decode.assert_called_once()
@@ -237,7 +239,9 @@ async def test_authentication_is_not_shared_between_requests(
     for user_id in [TEST_USER_ID, TEST_ADMIN_ID]:
         token = make_internal_jwt(user_id)
         response = await api_client.get(
-            "/api/v1/me/watchlist/ids", headers={"Authorization": f"Bearer {token}"}
+            "/api/v1/me/watchlist/ids",
+            params={"articleIds": 1},
+            headers={"Authorization": f"Bearer {token}"},
         )
         assert response.status_code == 200
     assert decode.call_count == 2
