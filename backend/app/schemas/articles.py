@@ -13,7 +13,8 @@ from app.models.category import CATEGORY_SLUG_PATTERN
 from app.schemas.base import _CamelBase
 from app.schemas.category import Category
 from app.schemas.cursor import CURSOR_JSON_SCHEMA, CursorPosition
-from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
+from app.schemas.news_source import NewsSource
+from app.shared.web_url import WebUrl
 
 # 記事一覧・ウォッチリストが1回に返す件数。
 ARTICLE_LIST_LIMIT = 24
@@ -90,9 +91,16 @@ class AnalyzedArticlePreview(_CamelBase):
     # default 無し = required・nullable で、null でもキーを省略しない。
     summary_preview: str | None
     category: Category
-    source: NewsSourceEmbed
+    source: NewsSource
     # 元記事の公開日時。分析工程に進む記事は必ず持つ (DB NOT NULL + ドメイン不変条件)。
     published_at: datetime
+
+
+class OriginalArticle(_CamelBase):
+    """分析の元になった原文記事。"""
+
+    title: str
+    url: WebUrl
 
 
 class AnalyzedArticle(_CamelBase):
@@ -107,9 +115,9 @@ class AnalyzedArticle(_CamelBase):
     key_points: list[str] = Field(default_factory=list)
     analyzed_at: datetime
     category: Category
-    source: NewsSourceEmbed
+    source: NewsSource
     published_at: datetime
-    original: OriginalArticleEmbed
+    original: OriginalArticle
 
 
 class AnalyzedArticlePreviewList(_CamelBase):

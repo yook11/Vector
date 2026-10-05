@@ -32,7 +32,7 @@ export const BriefingListResponseSchema = z.object({
   items: z.array(BriefingListItemSchema),
 });
 
-const NewsSourceEmbedSchema = z.object({
+const NewsSourceSchema = z.object({
   name: z.string(),
   attributionLabel: z.string().nullable(),
 });
@@ -41,7 +41,7 @@ const BriefingArticleEmbedSchema = z.object({
   // /news/{id} 記事詳細の公開 id (AnalyzedArticle.id と同じ id 空間)
   id: z.number(),
   translatedTitle: z.string(),
-  source: NewsSourceEmbedSchema,
+  source: NewsSourceSchema,
   url: z.string(),
   // 元記事の公開日時 (Article.published_at)。DB NOT NULL。
   publishedAt: z.iso.datetime({ offset: true }),

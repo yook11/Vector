@@ -2,15 +2,14 @@ from app.schemas.articles import (
     AnalyzedArticle,
     AnalyzedArticlePreview,
     AnalyzedArticlePreviewList,
+    OriginalArticle,
 )
 from app.schemas.category import (
     Category,
     CategoryStats,
     CategoryStatsList,
 )
-from app.schemas.embeds import (
-    OriginalArticleEmbed,
-)
+from app.schemas.news_source import NewsSource
 
 __all__ = [
     "AnalyzedArticle",
@@ -19,5 +18,6 @@ __all__ = [
     "Category",
     "CategoryStats",
     "CategoryStatsList",
-    "OriginalArticleEmbed",
+    "NewsSource",
+    "OriginalArticle",
 ]

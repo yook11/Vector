@@ -35,12 +35,12 @@ export type AnalyzedArticle = {
      */
     analyzedAt: string;
     category: Category;
-    source: NewsSourceEmbed;
+    source: NewsSource;
     /**
      * Publishedat
      */
     publishedAt: string;
-    original: OriginalArticleEmbed;
+    original: OriginalArticle;
 };
 
 /**
@@ -71,7 +71,7 @@ export type AnalyzedArticlePreview = {
      */
     summaryPreview: string | null;
     category: Category;
-    source: NewsSourceEmbed;
+    source: NewsSource;
     /**
      * Publishedat
      */
@@ -312,6 +312,21 @@ export type MentionName = string;
 export type MentionType = 'company' | 'government' | 'academic' | 'product' | 'technology' | 'person';
 
 /**
+ * NewsSource
+ *
+ * 読者に見せるニュースソース。
+ *
+ * 管理用の項目 (取得 URL・有効/無効など) は持たない。
+ */
+export type NewsSource = {
+    name: SourceName;
+    /**
+     * Attributionlabel
+     */
+    attributionLabel?: string | null;
+};
+
+/**
  * NewsSourceCreate
  *
  * POST /api/v1/admin/sources のリクエストボディ。
@@ -368,24 +383,11 @@ export type NewsSourceDetailList = {
 };
 
 /**
- * NewsSourceEmbed
+ * OriginalArticle
  *
- * ニュースソースの基本参照情報（フィルタ・表示用）
+ * 分析の元になった原文記事。
  */
-export type NewsSourceEmbed = {
-    name: SourceName;
-    /**
-     * Attributionlabel
-     */
-    attributionLabel?: string | null;
-};
-
-/**
- * OriginalArticleEmbed
- *
- * 原文記事の参照情報（詳細画面用）
- */
-export type OriginalArticleEmbed = {
+export type OriginalArticle = {
     /**
      * Title
      */
@@ -968,7 +970,7 @@ export type BriefingArticleEmbed = {
      * Translatedtitle
      */
     translatedTitle: string;
-    source: NewsSourceEmbed;
+    source: NewsSource;
     /**
      * Url
      */

@@ -39,7 +39,7 @@ from app.insights.briefing.domain.briefing import (
 )
 from app.schemas.base import _CamelBase
 from app.schemas.category import Category
-from app.schemas.embeds import NewsSourceEmbed
+from app.schemas.news_source import NewsSource
 
 # 記事 embed 1 件分の表示用文字列上限。翻訳タイトル / URL が対象。
 _MAX_ARTICLE_TITLE_LEN: Final[int] = 500
@@ -62,7 +62,7 @@ class _BriefingArticleEmbed(_CamelBase):
 
     id: int
     translated_title: str = Field(max_length=_MAX_ARTICLE_TITLE_LEN)
-    source: NewsSourceEmbed
+    source: NewsSource
     url: str = Field(max_length=_MAX_URL_LEN)
     # 元記事の公開日時 (AnalyzableArticleRecord.published_at)。DB NOT NULL。
     published_at: datetime

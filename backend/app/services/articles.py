@@ -12,9 +12,10 @@ from app.schemas.articles import (
     AnalyzedArticlePreviewList,
     ArticleListParams,
     ArticleListPosition,
+    OriginalArticle,
 )
 from app.schemas.category import Category
-from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
+from app.schemas.news_source import NewsSource
 
 _KEY_POINT_MAX = 3
 _KEY_POINT_LEN = 250
@@ -54,7 +55,7 @@ def build_analyzed_article_preview(
             slug=analysis.category.slug,
             name=analysis.category.name,
         ),
-        source=NewsSourceEmbed(
+        source=NewsSource(
             name=a.news_source.name,
             attribution_label=a.news_source.attribution_label,
         ),
@@ -91,12 +92,12 @@ def build_analyzed_article(analysis: AnalyzedArticleRecord) -> AnalyzedArticle:
             slug=analysis.category.slug,
             name=analysis.category.name,
         ),
-        source=NewsSourceEmbed(
+        source=NewsSource(
             name=a.news_source.name,
             attribution_label=a.news_source.attribution_label,
         ),
         published_at=a.published_at,
-        original=OriginalArticleEmbed(
+        original=OriginalArticle(
             title=a.original_title,
             url=a.original_url,
         ),
