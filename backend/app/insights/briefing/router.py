@@ -12,7 +12,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path
 
 from app.db.fastapi import EntryManagedSession
-from app.dependencies import require_bff_request
 from app.insights.briefing.query import BriefingQueryService
 from app.insights.briefing.schemas import BriefingListResponse, BriefingResponse
 from app.models.category import CATEGORY_SLUG_PATTERN
@@ -26,7 +25,7 @@ def get_briefing_query_service(
     return BriefingQueryService(session)
 
 
-@router.get("", dependencies=[Depends(require_bff_request)])
+@router.get("")
 async def list_briefings(
     service: Annotated[BriefingQueryService, Depends(get_briefing_query_service)],
 ) -> BriefingListResponse:
@@ -40,7 +39,6 @@ async def list_briefings(
 
 @router.get(
     "/{category_slug}",
-    dependencies=[Depends(require_bff_request)],
     responses={404: {"description": "category not found"}},
 )
 async def get_latest_briefing(

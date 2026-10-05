@@ -19,7 +19,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.db.fastapi import EntryManagedSession
-from app.dependencies import require_bff_request
 from app.insights.trend_discovery.query import TrendsQueryService
 from app.insights.trend_discovery.schemas import (
     Trends,
@@ -39,7 +38,6 @@ def get_trends_query_service(
 @router.get(
     "",
     response_model=TrendsResponse,
-    dependencies=[Depends(require_bff_request)],
 )
 async def get_trends(
     service: Annotated[TrendsQueryService, Depends(get_trends_query_service)],

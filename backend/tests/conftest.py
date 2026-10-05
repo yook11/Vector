@@ -136,7 +136,7 @@ def make_bff_jwt() -> str:
     """user-less な BFF 経由証明 JWT を発行する (sub/role 無し)。
 
     本番 frontend の ``buildBffRequestHeaders`` と対称で、iss/aud/exp/iat のみ
-    署名する。require_bff_request は通すが get_current_user / get_admin_user は
+    署名する。require_bff_request は通すが、ユーザー・管理者の認証では
     sub/role 欠落で 401 になる、という非対称をテストするための fixture。
     """
     now = int(time.time())
@@ -358,7 +358,7 @@ async def bff_client(
     """user-less BFF 経由証明ヘッダーを付与済みの httpx AsyncClient を提供する。
 
     require_bff_request を満たす共有 read endpoint 用。user 非依存なので sub/role
-    を持たず、watchlist / admin など get_current_user 系では 401 になる。
+    を持たず、watchlist / admin など require_authenticated_user 系では 401 になる。
     """
 
     async def override_session() -> AsyncGenerator[AsyncSession]:

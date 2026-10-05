@@ -108,7 +108,8 @@ const INTERNAL_JWT_SIGNING_KEY = new TextEncoder().encode(
 const INTERNAL_JWT_ALGORITHM = "HS256";
 const INTERNAL_JWT_TTL = "60s";
 // iss / aud は backend (`backend/app/dependencies.py`) と同じ literal を要求。
-// secret 漏洩時に「Vector の文脈で署名された JWT」を強制する二重防御。
+// 発行元・利用先の異なる JWT の受け入れを防ぐ。
+// 署名鍵を持つ攻撃者は iss / aud も指定できるため、鍵漏洩への防御にはならない。
 const INTERNAL_JWT_ISSUER = "vector-bff";
 const INTERNAL_JWT_AUDIENCE = "vector-backend";
 
@@ -117,7 +118,8 @@ const INTERNAL_JWT_AUDIENCE = "vector-backend";
  *
  * Better Auth セッションから `user.id` / `user.role` を取り出し HS256 で署名。
  * backend は同じ BFF_JWT_SIGNING_SECRET で検証する (`backend/app/dependencies.py`)。
- * 有効期限を 60 秒に絞ることで、secret 漏洩時の悪用ウィンドウを構造的に短縮する。
+ * 発行から60秒の有効期限は、漏洩した個々の JWT の再利用可能期間を短くする。
+ * 署名鍵が漏洩した場合は鍵を交換し、検証側で旧鍵の受け入れを停止する必要がある。
  */
 export async function buildInternalAuthHeaders(
   session: Session,
