@@ -58,6 +58,18 @@ mock_provider "aws" {
   }
 }
 
+override_resource {
+  target          = aws_security_group.bastion[0]
+  override_during = plan
+  values          = { id = "sg-00000000000000001" }
+}
+
+override_resource {
+  target          = aws_security_group.outbox_sqs_endpoint
+  override_during = plan
+  values          = { id = "sg-00000000000000002" }
+}
+
 variables {
   name_prefix            = "slice-test"
   root_domain            = "example.com"
@@ -108,5 +120,71 @@ run "redrive_preserves_direct_send_boundary" {
       policy.Statement[1].Condition.StringNotEqualsIfExists["aws:CalledViaLast"] == "sqs.amazonaws.com"
     ])
     error_message = "TLSと直接送信のVPC制限を維持し、SQS代理呼び出しだけを例外にする。"
+  }
+}
+
+run "operations_endpoint_scope" {
+  command = plan
+  assert {
+    condition = (
+      jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[0].Principal.AWS == "arn:aws:iam::123456789012:role/vector-operations" &&
+      jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[0].Resource == local.operations_dlq_arns &&
+      length(local.operations_dlq_arns) == 5 &&
+      toset(jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[0].Action) == toset([
+        "sqs:StartMessageMoveTask", "sqs:CancelMessageMoveTask", "sqs:ListMessageMoveTasks",
+        "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl",
+      ]) &&
+      jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[1].Principal.AWS == "arn:aws:iam::123456789012:role/vector-operations" &&
+      jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[1].Resource == local.operations_source_arns &&
+      length(local.operations_source_arns) == 5 &&
+      toset(jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[1].Action) == toset(["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"])
+    )
+    error_message = "VPCEの運用許可は対象5組に限定し、通常キューの受信・削除は許可しない。"
+  }
+}
+
+run "bastion_disabled_has_no_temporary_sqs_path" {
+  command = plan
+  variables { enable_db_bastion = false }
+  assert {
+    condition = (
+      length(aws_instance.bastion) == 0 &&
+      length(aws_vpc_security_group_egress_rule.bastion_to_sqs) == 0 &&
+      length(aws_vpc_security_group_ingress_rule.sqs_from_bastion) == 0 &&
+      length(aws_vpc_endpoint.ssmmessages) == 0 &&
+      output.bastion_instance_id == null
+    )
+    error_message = "踏み台を無効にすると一時接続経路も撤去される。"
+  }
+}
+
+run "bastion_enabled_is_ssm_only" {
+  command = plan
+  variables { enable_db_bastion = true }
+  assert {
+    condition = (
+      length(aws_instance.bastion) == 1 &&
+      aws_instance.bastion[0].associate_public_ip_address == false &&
+      aws_instance.bastion[0].metadata_options[0].http_tokens == "required" &&
+      aws_instance.bastion[0].tags["vector:session-purpose"] == "sqs-redrive" &&
+      aws_iam_role_policy_attachment.bastion_ssm[0].policy_arn == "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" &&
+      aws_instance.bastion[0].iam_instance_profile == aws_iam_instance_profile.bastion[0].name
+    )
+    error_message = "EC2はSSM専用のロールと運用タグを持ち、公開入口を持たない。"
+  }
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].referenced_security_group_id == aws_security_group.outbox_sqs_endpoint.id &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].security_group_id == aws_security_group.bastion[0].id &&
+      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].security_group_id == aws_security_group.outbox_sqs_endpoint.id &&
+      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].referenced_security_group_id == aws_security_group.bastion[0].id &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].ip_protocol == "tcp" &&
+      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].ip_protocol == "tcp" &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].from_port == 443 &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].to_port == 443 &&
+      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].from_port == 443 &&
+      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].to_port == 443
+    )
+    error_message = "一時踏み台とSQS endpoint間のTCP443だけを追加する。"
   }
 }

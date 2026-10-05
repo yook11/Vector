@@ -1,13 +1,5 @@
-# DB への人手作業 (移行・保守) のための一時踏み台。平常時は存在しない
-# (enable_db_bastion = false が既定で、素の apply が撤去を兼ねる)。
-#
-# RDS は public IP もインターネット経路も持たないため、psql / alembic /
-# pg_restore を届ける手段がこの toggle 以外に存在しない。経路は
-# SSM Session Manager の port forwarding で、踏み台は public IP も
-# SSH ポートも持たず、ingress 規則ゼロ (SSM は踏み台側からの外向き接続)。
-#
-# RDS SG / endpoints SG へ開ける穴もこの file の conditional resource なので、
-# toggle を戻せば穴ごと消える。使い方と手順上の罠は README の「DB 踏み台」節。
+# DB保守・DLQ運用で共有する一時踏み台は、enable_db_bastion=falseで接続経路ごと撤去する。
+# DB接続は既存管理者権限、SQS接続は運用ロールと固定SSMドキュメントで認可する。
 
 # 専用 subnet を rt-data (local 経路のみ) に紐づける。app subnet に間借りすると
 # 「subnet = egress proxy の権限単位」の身元が混ざるため分ける。
@@ -98,6 +90,28 @@ resource "aws_vpc_security_group_egress_rule" "bastion_to_ssmmessages" {
   from_port                    = 443
   to_port                      = 443
   referenced_security_group_id = aws_security_group.ssmmessages_endpoint[0].id
+}
+
+resource "aws_vpc_security_group_egress_rule" "bastion_to_sqs" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  security_group_id            = aws_security_group.bastion[0].id
+  referenced_security_group_id = aws_security_group.outbox_sqs_endpoint.id
+  description                  = "SQS operations tunnel"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+}
+
+resource "aws_vpc_security_group_ingress_rule" "sqs_from_bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  security_group_id            = aws_security_group.outbox_sqs_endpoint.id
+  referenced_security_group_id = aws_security_group.bastion[0].id
+  description                  = "Temporary bastion"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
 }
 
 resource "aws_vpc_security_group_egress_rule" "bastion_to_rds" {
@@ -201,5 +215,8 @@ resource "aws_instance" "bastion" {
     ignore_changes = [ami]
   }
 
-  tags = { Name = "${var.name_prefix}-bastion" }
+  tags = {
+    Name                     = "${var.name_prefix}-bastion"
+    "vector:session-purpose" = "sqs-redrive"
+  }
 }

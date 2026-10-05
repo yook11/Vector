@@ -1,4 +1,13 @@
 locals {
+  operations_role_arn = "arn:aws:iam::${local.account_id}:role/vector-operations"
+  operations_source_arns = concat(
+    [aws_sqs_queue.source_dispatch["acquisition"].arn],
+    [for queue in aws_sqs_queue.outbox : queue.arn],
+  )
+  operations_dlq_arns = [
+    aws_sqs_queue.acquisition_dlq.arn, aws_sqs_queue.completion_dlq.arn,
+    aws_sqs_queue.curation_dlq.arn, aws_sqs_queue.assessment_dlq.arn, aws_sqs_queue.embedding_dlq.arn,
+  ]
   outbox_queue_stages = toset([
     "completion", "curation", "assessment", "embedding",
   ])
@@ -77,6 +86,23 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = concat([
+      {
+        Sid       = "OperationsRedriveDlqs"
+        Effect    = "Allow"
+        Principal = { AWS = local.operations_role_arn }
+        Action = [
+          "sqs:StartMessageMoveTask", "sqs:CancelMessageMoveTask", "sqs:ListMessageMoveTasks",
+          "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl",
+        ]
+        Resource = local.operations_dlq_arns
+      },
+      {
+        Sid       = "OperationsSendToSourceQueues"
+        Effect    = "Allow"
+        Principal = { AWS = local.operations_role_arn }
+        Action    = ["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"]
+        Resource  = local.operations_source_arns
+      },
       {
         Effect    = "Allow"
         Principal = { AWS = aws_iam_role.source_dispatch.arn }

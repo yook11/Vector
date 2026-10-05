@@ -66,6 +66,9 @@ jobs:
               - 'backend/**'
               - 'infra/aws/scripts/**'
             aws_smoke:
+              - 'infra/aws/scripts/dlq-redrive.py'
+              - 'infra/aws/scripts/sqs_operations/**'
+              - 'infra/aws/scripts/tests/**'
               - 'infra/aws-test/**'
               - 'infra/aws/templates/squid.conf.tftpl'
               - 'backend/app/http/non_public_ranges.json'
@@ -182,9 +185,12 @@ jobs:
 
       - name: Check smoke scripts and run offline unit tests
         run: |
-          backend/.venv/bin/ruff check infra/aws-test/scripts
-          backend/.venv/bin/ruff format --check infra/aws-test/scripts
+          backend/.venv/bin/ruff check infra/aws-test/scripts infra/aws-test/dlq-redrive infra/aws/scripts/sqs_operations infra/aws/scripts/dlq-redrive.py infra/aws/scripts/tests
+          backend/.venv/bin/ruff format --check infra/aws-test/scripts infra/aws-test/dlq-redrive infra/aws/scripts/sqs_operations infra/aws/scripts/dlq-redrive.py infra/aws/scripts/tests
           backend/.venv/bin/python -m unittest discover -s infra/aws-test/scripts/tests -v
+          backend/.venv/bin/python -m unittest discover -s infra/aws-test/dlq-redrive -p 'test_*.py' -v
+          backend/.venv/bin/python -m unittest discover -s infra/aws/scripts/tests -v
+          bash -n infra/aws/scripts/verify-aws-profile.sh
 
       - name: Install Terraform
         env:
@@ -202,7 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           terraform fmt -check -recursive infra/aws-test
-          for module in bootstrap smoke; do
+          for module in bootstrap smoke dlq-redrive; do
             terraform -chdir="infra/aws-test/$module" init -backend=false -input=false -lockfile=readonly
             terraform -chdir="infra/aws-test/$module" validate
             terraform -chdir="infra/aws-test/$module" test -no-color

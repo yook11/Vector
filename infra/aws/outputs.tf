@@ -64,7 +64,7 @@ output "ecr_repository_urls" {
 }
 
 output "bastion_instance_id" {
-  description = "DB 踏み台の instance ID (enable_db_bastion=false のときは null)。"
+  description = "DB保守・DLQ運用の一時踏み台の instance ID (enable_db_bastion=false のときは null)。"
   value       = one(aws_instance.bastion[*].id)
 }
 

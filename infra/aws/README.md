@@ -164,9 +164,9 @@ bootstrapの継続更新は[専用ロールの手動手順](bootstrap-access/REA
   Fly と同じ判断を引き継いだ既知の受容 (root は redirect するので健全性の指標に
   ならない)。cascade を避けたいなら DB に触らない専用 endpoint が要る。
 
-## DB 踏み台 (enable_db_bastion)
+## DB保守・DLQ運用の一時踏み台 (enable_db_bastion)
 
-RDSの初期構築・管理者保守用の一時経路で、通常migrationには使用しない。**平常時は存在せず、素の apply が
+RDSの初期構築・管理者保守と、運用ロールによるDLQ再投入で共有する一時経路で、通常migrationには使用しない。**平常時は存在せず、素の apply が
 撤去を兼ねる**。SSM Session Manager の port forwarding で、踏み台は public IP も
 SSH ポートも ingress 規則も持たない。踏み台という言葉が普通に指す「開いている
 入口」は、ここには無い。
@@ -180,7 +180,7 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
   `DenyRoleCreationOutsideKnownRoles` でも拒否される。`ssm:StartSession` も
   `terraform-apply` は持たない。**CI 用の経路でこれが通らないのは fail-closed が
   効いた結果**で、穴を開けて通すものではない (platform_bastion.tf の注記と対)。
-- **踏み台の plan / apply / SSM / 撤去は最初から最後まで admin profile だけを使う。**
+- **踏み台の plan / apply / 撤去とDB用SSM接続はadmin profileを使う。**
   各操作の前に `infra/aws/scripts/verify-aws-profile.sh vector-admin` で実 caller を
   検証する。通常migrationは専用workflowの承認後jobで実行し、踏み台やローカルprofile
   へ切り替える代替経路は用意しない。
@@ -189,6 +189,7 @@ SSH ポートも ingress 規則も持たない。踏み台という言葉が普�
   後者は名前解決の側で解く。証明書の検証を落として解決しない — `db_ssl.py` は
   「検証なし TLS というモードを持たない」と宣言しており、手順書側に抜け道を
   作るとその宣言が意味を失う。
+- **DLQ用SSM接続はReadOnlyから引き受けた`vector-operations`を使う。** 固定SQS宛先documentと運用タグで限定し、EC2へSQS権限を付けない。[DLQ運用手順](bootstrap-access/OPERATIONS.md)に従う。
 - **踏み台を使う作業の最中に apply するなら必ず var を付ける。** 素の apply は
   設計どおり土管ごと撤去する。
 - SSM のデータチャネルは数 MB/s。この DB の規模なら pg_restore に実害はない。
