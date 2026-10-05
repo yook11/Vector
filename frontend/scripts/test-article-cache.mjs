@@ -113,10 +113,7 @@ test("保存後の通知で、条件別の記事一覧とカテゴリー件数�
               publishedAt: "2026-09-09T00:00:00Z",
             },
           ],
-          total: articleRevision,
-          page: Number(url.searchParams.get("page") ?? 1),
-          perPage: 20,
-          totalPages: articleRevision,
+          nextCursor: null,
         }),
       );
     } else if (url.pathname === "/api/v1/categories") {
@@ -246,7 +243,7 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const revision = getArticleListRevision();
   const [articles, categories] = await Promise.all([
-    getArticles({ page: Number(params.get("page") ?? 1), category: params.get("category") ?? "ai" }, revision),
+    getArticles({ category: params.get("category") ?? "ai", ...(params.get("cursor") ? { cursor: params.get("cursor") ?? undefined } : {}) }, revision),
     getCategories(revision),
   ]);
   return Response.json({ revision, articles, categories });
@@ -269,7 +266,7 @@ export default function SnapshotPage({ searchParams }: { searchParams: Promise<R
 async function SnapshotContent({ searchParams }: { searchParams: Promise<Record<string, string>> }) {
   const params = await searchParams;
   const revision = getArticleListRevision();
-  const articlesPromise = getArticles({ page: Number(params.page ?? 1), category: params.category ?? "ai", sortOrder: params.sortOrder === "asc" ? "asc" : "desc", perPage: Number(params.perPage ?? 20) }, revision);
+  const articlesPromise = getArticles({ category: params.category ?? "ai", ...(params.cursor ? { cursor: params.cursor } : {}) }, revision);
   const categories = await getCategories(revision);
   return <main>
     <ArticleListUpdateNotice displayedRevision={revision} />
@@ -371,9 +368,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }
 
   const queries = [
-    "page=1&category=ai",
-    "page=2&category=ai",
-    "page=1&category=computing",
+    "category=ai",
+    "category=ai&cursor=next-1",
+    "category=computing",
   ];
   for (const query of queries)
     assert.equal((await snapshot(query)).articles.items[0].id, 1);
@@ -434,7 +431,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       response.url().endsWith("/api/news/revision"),
     );
     await page.goto(
-      `${base}/snapshot?page=2&category=computing&sortOrder=asc&perPage=10`,
+      `${base}/snapshot?category=computing&cursor=next-1`,
     );
     await expect(page.getByTestId("article")).toHaveText("article-2");
     await initialPoll;
@@ -449,7 +446,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     assert.equal(await page.getByTestId("category-count").textContent(), "3");
     assert.match(
       page.url(),
-      /page=2&category=computing&sortOrder=asc&perPage=10$/,
+      /category=computing&cursor=next-1$/,
     );
     await expect(page.getByRole("button", { name: "更新中…" })).toHaveCount(0);
 
@@ -530,7 +527,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     await expect(page.getByTestId("article")).toHaveText("article-7");
     assert.match(
       page.url(),
-      /page=2&category=computing&sortOrder=asc&perPage=10$/,
+      /category=computing&cursor=next-1$/,
     );
     assert.deepEqual(pageErrors, [], "未処理のブラウザエラーがない");
     await browser.close();

@@ -7,90 +7,44 @@ import {
 } from "@/components/layout/PageNavigation";
 import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
-import {
-  ArticleList,
-  ArticleListSkeleton,
-  ArticlePagination,
-  DEFAULT_PER_PAGE,
-  isPerPageOption,
-  type PerPageOption,
-  PerPageSelect,
-  parseArticleQuery,
-} from "@/features/news";
-import { getWatchlist } from "@/features/watchlist";
+import { ArticleListSkeleton, LoadMoreArticleList } from "@/features/news";
+import { loadMoreWatchlist } from "@/features/watchlist";
+import { getWatchlist, getWatchlistIds } from "@/features/watchlist/server";
 import { requireSession } from "@/lib/auth/guards";
-import type { SearchParams } from "@/lib/types/route";
 
 export const metadata: Metadata = {
   title: "Watchlist | Vector",
 };
 
-interface WatchlistPageProps {
-  searchParams: Promise<SearchParams>;
-}
-
-async function WatchlistContent({
-  searchParams,
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
+async function WatchlistContent() {
   // DAL gate (多重防御): getWatchlist は authed client で既に fail-closed だが、
   // 401 を踏む前に login へ誘導し、将来 'use cache' 化された際の漏洩も防ぐ。
   await requireSession();
-  const raw = await searchParams;
-  const { query } = parseArticleQuery(raw);
-  const page = query.page ?? 1;
-  const perPage = query.perPage;
-  const data = await getWatchlist(page, perPage);
-
-  if (data.items.length === 0) {
-    return (
-      <EmptyState
-        title="ウォッチした記事がありません"
-        description={
-          <>
-            <PendingAwareLink href="/" className="underline">
-              ダッシュボード
-            </PendingAwareLink>{" "}
-            で記事をブックマークすると、ここに表示されます。
-          </>
-        }
-      />
-    );
-  }
-
-  // /watchlist 配下の記事は全件 watched が定義上自明なので、追加 fetch を
-  // せず item ID から直接 Set を作る。
-  const watchedIds = new Set(data.items.map((a) => a.id));
+  // 解除した記事を読み込み済みの一覧から外せるよう、操作のたびに取り直されるウォッチ ID を渡す。
+  const [data, watchedIds] = await Promise.all([
+    getWatchlist(),
+    getWatchlistIds(),
+  ]);
 
   return (
-    <>
-      <ArticleList items={data.items} watchedIds={watchedIds} />
-      <ArticlePagination page={data.page} totalPages={data.totalPages} />
-    </>
-  );
-}
-
-async function PerPageControl({
-  searchParams,
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
-  const raw = await searchParams;
-  const { query } = parseArticleQuery(raw);
-  const perPage = query.perPage;
-  const value: PerPageOption =
-    perPage !== undefined && isPerPageOption(String(perPage))
-      ? (String(perPage) as PerPageOption)
-      : DEFAULT_PER_PAGE;
-  return <PerPageSelect current={value} />;
-}
-
-function PerPageControlPlaceholder() {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block h-9 w-28 rounded-md bg-[color-mix(in_oklab,var(--vector-ink)_10%,transparent)]"
+    <LoadMoreArticleList
+      initialList={data}
+      watchedIds={watchedIds}
+      loadMore={loadMoreWatchlist}
+      showsOnlyWatched
+      emptyState={
+        <EmptyState
+          title="ウォッチした記事がありません"
+          description={
+            <>
+              <PendingAwareLink href="/" className="underline">
+                ダッシュボード
+              </PendingAwareLink>{" "}
+              で記事をブックマークすると、ここに表示されます。
+            </>
+          }
+        />
+      }
     />
   );
 }
@@ -99,9 +53,7 @@ function WatchlistSkeleton() {
   return <ArticleListSkeleton label="ウォッチリストを読み込み中…" />;
 }
 
-export default async function WatchlistPage({
-  searchParams,
-}: WatchlistPageProps) {
+export default async function WatchlistPage() {
   await requireSession();
 
   return (
@@ -126,12 +78,9 @@ export default async function WatchlistPage({
                   ウォッチリスト
                 </h1>
               </div>
-              <Suspense fallback={<PerPageControlPlaceholder />}>
-                <PerPageControl searchParams={searchParams} />
-              </Suspense>
             </header>
             <Suspense fallback={<WatchlistSkeleton />}>
-              <WatchlistContent searchParams={searchParams} />
+              <WatchlistContent />
             </Suspense>
           </main>
         </PageNavigationContent>

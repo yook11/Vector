@@ -27,9 +27,7 @@ export function DashboardMasthead({
   themeSlot,
   userMenuSlot,
 }: DashboardMastheadProps) {
-  const allHref = buildDashboardCategoryHref({
-    query: currentQuery,
-  });
+  const allHref = buildDashboardCategoryHref({});
   const selectedCategorySlug = currentQuery.category;
   const isAll = selectedCategorySlug === undefined;
   // 凡例はバッジが1つも出ないとき (全カテゴリ 0 件) は説明対象が無いので隠す。
@@ -145,7 +143,6 @@ export function DashboardMasthead({
           {categoryStats.map((stats) => {
             const href = buildDashboardCategoryHref({
               category: stats.category.slug,
-              query: currentQuery,
             });
             return (
               <CategoryNavLink

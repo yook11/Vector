@@ -10,9 +10,9 @@ from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     AnalyzedArticle,
     AnalyzedArticlePreview,
+    AnalyzedArticlePreviewList,
     ArticleId,
     ArticleListParams,
-    PaginatedArticleResponse,
 )
 from app.services.articles import ArticleService
 
@@ -29,8 +29,8 @@ def get_article_service(
 async def list_articles(
     params: Annotated[ArticleListParams, Query()],
     service: Annotated[ArticleService, Depends(get_article_service)],
-) -> PaginatedArticleResponse:
-    """分析済み記事をフィルタとページネーション付きで一覧取得する。
+) -> AnalyzedArticlePreviewList:
+    """分析済み記事を新しい順に1回分取得する。続きは nextCursor を cursor に渡して取る。
 
     レスポンスは user 非依存。per-user の watchlist 状態は
     GET /api/v1/me/watchlist/ids で別取得し frontend で merge する。

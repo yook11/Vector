@@ -59,21 +59,20 @@ vi.mock("@/features/news", () => ({
       {userMenuSlot}
     </header>
   ),
-  ArticleList: () => (
+  LoadMoreArticleList: () => (
     <section data-testid="dashboard-article-results">記事結果</section>
   ),
+  loadMoreArticles: () => Promise.resolve({ items: [], nextCursor: null }),
   getArticles: mocks.getArticles,
   getCategories: mocks.getCategories,
   getLatestArticleDate: () => null,
-  ArticleListControls: () => <button type="button">表示設定</button>,
-  ArticlePagination: () => <nav>記事ページ</nav>,
-  ArticleListSummary: () => (
-    <p data-testid="dashboard-result-summary">検索結果</p>
+  ArticleListHeading: () => (
+    <p data-testid="dashboard-result-heading">すべて</p>
   ),
   parseArticleQuery: () => ({ query: {} }),
 }));
 
-vi.mock("@/features/watchlist", () => ({
+vi.mock("@/features/watchlist/server", () => ({
   getWatchlistIds: mocks.getWatchlistIds,
 }));
 
@@ -111,12 +110,8 @@ describe("Dashboard page navigation outlet", () => {
   it("masthead controlsをbusy overlay外に保ち、result outletだけを内包する", async () => {
     mocks.getCurrentSession.mockResolvedValue({ user: { role: "user" } });
     mocks.getCategories.mockResolvedValue({ items: [] });
-    mocks.getArticles.mockResolvedValue({
-      items: [],
-      page: 1,
-      totalPages: 1,
-    });
-    mocks.getWatchlistIds.mockResolvedValue([]);
+    mocks.getArticles.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.getWatchlistIds.mockResolvedValue(new Set());
 
     const page = await DashboardPage({
       searchParams: Promise.resolve({}),
@@ -139,7 +134,7 @@ describe("Dashboard page navigation outlet", () => {
       expect.soft(persistentControl.closest("[aria-busy='true']")).toBeNull();
     }
     expect(outlet).toContainElement(
-      screen.getByTestId("dashboard-result-summary"),
+      screen.getByTestId("dashboard-result-heading"),
     );
     expect(outlet).toContainElement(
       screen.getByTestId("dashboard-article-results"),

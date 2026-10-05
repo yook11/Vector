@@ -79,6 +79,22 @@ export type AnalyzedArticlePreview = {
 };
 
 /**
+ * AnalyzedArticlePreviewList
+ *
+ * 記事一覧・ウォッチリストの1回分と、続きの位置。
+ */
+export type AnalyzedArticlePreviewList = {
+    /**
+     * Items
+     */
+    items: Array<AnalyzedArticlePreview>;
+    /**
+     * Nextcursor
+     */
+    nextCursor: string | null;
+};
+
+/**
  * BriefingDetail
  *
  * briefing 生成済の状態。
@@ -375,34 +391,6 @@ export type OriginalArticleEmbed = {
      */
     title: string;
     url: WebUrl;
-};
-
-/**
- * PaginatedArticleResponse
- *
- * 記事のページネーション付きリスト。
- */
-export type PaginatedArticleResponse = {
-    /**
-     * Items
-     */
-    items: Array<AnalyzedArticlePreview>;
-    /**
-     * Total
-     */
-    total: number;
-    /**
-     * Page
-     */
-    page: number;
-    /**
-     * Perpage
-     */
-    perPage: number;
-    /**
-     * Totalpages
-     */
-    totalPages: number;
 };
 
 /**
@@ -768,11 +756,6 @@ export type ResearchUserMessage = {
 };
 
 /**
- * SortOrder
- */
-export type SortOrder = 'asc' | 'desc';
-
-/**
  * SourceHealthItem
  *
  * 1 ニュースソースの health スナップショット。
@@ -1104,20 +1087,15 @@ export type ListArticlesData = {
     path?: never;
     query?: {
         /**
-         * Page
-         */
-        page?: number;
-        /**
-         * Perpage
-         */
-        perPage?: number;
-        /**
          * Category
          *
          * Outbound primary filter key. Accepts a category slug.
          */
         category?: string | null;
-        sortOrder?: SortOrder;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
     };
     url: '/api/v1/articles';
 };
@@ -1139,7 +1117,7 @@ export type ListArticlesResponses = {
     /**
      * Successful Response
      */
-    200: PaginatedArticleResponse;
+    200: AnalyzedArticlePreviewList;
 };
 
 export type ListArticlesResponse = ListArticlesResponses[keyof ListArticlesResponses];
@@ -1320,13 +1298,9 @@ export type ListArticlesInWatchlistData = {
     path?: never;
     query?: {
         /**
-         * Page
+         * Cursor
          */
-        page?: number;
-        /**
-         * Perpage
-         */
-        perPage?: number;
+        cursor?: string | null;
     };
     url: '/api/v1/me/watchlist';
 };
@@ -1348,7 +1322,7 @@ export type ListArticlesInWatchlistResponses = {
     /**
      * Successful Response
      */
-    200: PaginatedArticleResponse;
+    200: AnalyzedArticlePreviewList;
 };
 
 export type ListArticlesInWatchlistResponse = ListArticlesInWatchlistResponses[keyof ListArticlesInWatchlistResponses];

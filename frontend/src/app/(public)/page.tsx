@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { EmptyState } from "@/components/feedback/EmptyState";
 import { getNavItems } from "@/components/layout/nav-items";
 import { PageNavigationContent } from "@/components/layout/PageNavigation";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
@@ -9,19 +10,18 @@ import {
 } from "@/components/paper";
 import { UserMenu } from "@/features/auth";
 import {
-  ArticleList,
-  ArticleListControls,
+  ArticleListHeading,
   ArticleListSkeleton,
-  ArticleListSummary,
   ArticleListUpdateNotice,
-  ArticlePagination,
   DashboardMasthead,
   getArticles,
   getCategories,
   getLatestArticleDate,
+  LoadMoreArticleList,
+  loadMoreArticles,
   parseArticleQuery,
 } from "@/features/news";
-import { getWatchlistIds } from "@/features/watchlist";
+import { getWatchlistIds } from "@/features/watchlist/server";
 import { getCurrentSession } from "@/lib/auth/guards";
 import { narrowRole } from "@/lib/auth/role";
 import { getArticleListRevision } from "@/lib/cache/article-list-revision";
@@ -95,7 +95,6 @@ function DashboardInitialSkeleton() {
         className="relative z-10 mx-5 mb-7 flex items-center justify-between border-b border-[var(--vector-ink)] pb-3.5 sm:mx-8 lg:mx-10"
       >
         <div className={`h-5 w-36 ${bar}`} />
-        <div className={`h-9 w-28 ${bar}`} />
       </section>
       <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
         <ArticleListSkeleton label="記事を更新中…" />
@@ -121,8 +120,8 @@ async function DashboardContent({
 }) {
   const categoriesData = await categoriesPromise;
 
-  // フィルタ変更のたびに key で再マウントして、記事領域だけで再取得を伝える。
-  const sectionKey = `${filters.category ?? "all"}|${filters.sortOrder ?? "desc"}|${filters.perPage ?? ""}|${filters.page ?? 1}`;
+  // カテゴリ変更のたびに key で再マウントして、記事領域だけで再取得を伝える。
+  const sectionKey = filters.category ?? "all";
 
   return (
     <>
@@ -154,22 +153,10 @@ async function DashboardContent({
 
       <PageNavigationContent>
         <section className="relative z-10 mx-5 mb-7 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--vector-ink)] pb-3.5 sm:mx-8 lg:mx-10">
-          <Suspense
-            key={sectionKey}
-            fallback={
-              <span
-                aria-hidden="true"
-                className="h-5 w-36 rounded-sm bg-[color-mix(in_oklab,var(--vector-ink)_10%,transparent)]"
-              />
-            }
-          >
-            <ArticleListSummary
-              articlesPromise={articlesPromise}
-              categories={categoriesData.items.map((stats) => stats.category)}
-              selectedCategorySlug={filters.category}
-            />
-          </Suspense>
-          <ArticleListControls />
+          <ArticleListHeading
+            categories={categoriesData.items.map((stats) => stats.category)}
+            selectedCategorySlug={filters.category}
+          />
         </section>
 
         <ArticleListUpdateNotice displayedRevision={articleListRevision} />
@@ -181,6 +168,8 @@ async function DashboardContent({
           >
             <DashboardArticleSection
               articlesPromise={articlesPromise}
+              articleListRevision={articleListRevision}
+              category={filters.category}
               watchedIdsPromise={watchedIdsPromise}
             />
           </Suspense>
@@ -208,9 +197,13 @@ async function MastheadDate({
 
 async function DashboardArticleSection({
   articlesPromise,
+  articleListRevision,
+  category,
   watchedIdsPromise,
 }: {
   articlesPromise: ReturnType<typeof getArticles>;
+  articleListRevision: string;
+  category: string | undefined;
   watchedIdsPromise: ReturnType<typeof getWatchlistIds>;
 }) {
   const [newsData, watchedIds] = await Promise.all([
@@ -218,12 +211,20 @@ async function DashboardArticleSection({
     watchedIdsPromise,
   ]);
   return (
-    <>
-      <ArticleList items={newsData.items} watchedIds={watchedIds} />
-      <ArticlePagination
-        page={newsData.page}
-        totalPages={newsData.totalPages}
-      />
-    </>
+    // 「一覧を更新」で revision が変わったら、読み込んだ続きを捨てて先頭から出す。
+    <LoadMoreArticleList
+      key={articleListRevision}
+      initialList={newsData}
+      watchedIds={watchedIds}
+      loadMore={loadMoreArticles.bind(null, category ?? null)}
+      emptyState={
+        <div className="border-b border-[var(--vector-rule)] py-16">
+          <EmptyState
+            title="記事がありません"
+            description="カテゴリを変えて、もう一度確認してください。"
+          />
+        </div>
+      }
+    />
   );
 }

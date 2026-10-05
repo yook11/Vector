@@ -6,10 +6,12 @@ from app.exceptions import NotFoundError
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
+    ARTICLE_LIST_LIMIT,
     AnalyzedArticle,
     AnalyzedArticlePreview,
+    AnalyzedArticlePreviewList,
     ArticleListParams,
-    PaginatedArticleResponse,
+    ArticleListPosition,
 )
 from app.schemas.category import Category
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
@@ -108,13 +110,20 @@ class ArticleService:
     async def list_articles(
         self,
         query: ArticleListParams,
-    ) -> PaginatedArticleResponse:
-        """ニュース閲覧用に分析済み記事を一覧取得する。"""
-        analyses, total = await self.repo.fetch_articles(query)
-        return PaginatedArticleResponse.create(
-            items=[build_analyzed_article_preview(a) for a in analyses],
-            total=total,
-            pagination=query,
+    ) -> AnalyzedArticlePreviewList:
+        """ニュース閲覧用に分析済み記事を1回分取得する。1件多く読んで続きの有無を判定する。"""
+        analyses = await self.repo.fetch_articles(query, limit=ARTICLE_LIST_LIMIT + 1)
+        page = analyses[:ARTICLE_LIST_LIMIT]
+        next_cursor = None
+        if len(analyses) > ARTICLE_LIST_LIMIT:
+            last = page[-1]
+            next_cursor = ArticleListPosition(
+                published_at=last.curation.analyzable_article.published_at,
+                id=last.id,
+            ).to_cursor()
+        return AnalyzedArticlePreviewList(
+            items=[build_analyzed_article_preview(a) for a in page],
+            next_cursor=next_cursor,
         )
 
     async def get_article(self, article_id: int) -> AnalyzedArticle:

@@ -323,8 +323,8 @@
               "options": {
                 "patterns": [
                   {
-                    "group": ["@/features/*/**"],
-                    "message": "features 配下は Public API '@/features/<name>' 経由のみ。内部実装への deep import は禁止。"
+                    "group": ["@/features/*/**", "!@/features/*/server"],
+                    "message": "features 配下は Public API '@/features/<name>' (サーバー専用は '@/features/<name>/server') 経由のみ。内部実装への deep import は禁止。"
                   }
                 ]
               }

@@ -11,7 +11,7 @@ vi.mock("@/features/news", () => ({
   NewsDetail: () => null,
   RelatedArticles: () => null,
 }));
-vi.mock("@/features/watchlist", () => ({ getWatchlistIds: mocks.ids }));
+vi.mock("@/features/watchlist/server", () => ({ getWatchlistIds: mocks.ids }));
 vi.mock("@/components/layout/PageNavigation", () => ({
   PageNavigationContent: () => null,
 }));
