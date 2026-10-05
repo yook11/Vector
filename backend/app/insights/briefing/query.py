@@ -35,7 +35,7 @@ from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
 from app.schemas import category as category_schema
-from app.schemas.embeds import NewsSourceEmbed
+from app.schemas import news_source as news_source_schema
 from app.services.articles import extract_key_point_contents
 
 # F10: DB に直書きされた巨大 key_articles で記事取得が膨らまないよう、
@@ -183,7 +183,7 @@ class BriefingQueryService:
             row.id: _BriefingArticleEmbed(
                 id=row.id,
                 translated_title=row.translated_title,
-                source=NewsSourceEmbed(
+                source=news_source_schema.NewsSource(
                     name=row.name,
                     attribution_label=row.attribution_label,
                 ),
