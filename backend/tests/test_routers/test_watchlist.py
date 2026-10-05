@@ -14,7 +14,6 @@ from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.watchlist_entry import WatchlistEntry
 from app.schemas.articles import ArticleListPosition
-from app.schemas.cursor import encode_cursor
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
 
@@ -251,11 +250,9 @@ class TestListWatchlist:
         [
             pytest.param("not base64!", id="base64 の文字以外を含む"),
             pytest.param(
-                encode_cursor(
-                    ArticleListPosition(
-                        published_at=datetime(2026, 1, 1, tzinfo=UTC), id=1
-                    )
-                ),
+                ArticleListPosition(
+                    published_at=datetime(2026, 1, 1, tzinfo=UTC), id=1
+                ).to_cursor(),
                 id="記事一覧のカーソル",
             ),
         ],

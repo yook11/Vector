@@ -4,7 +4,6 @@ from app.exceptions import NotFoundError
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import ARTICLE_LIST_LIMIT, AnalyzedArticlePreviewList
-from app.schemas.cursor import encode_cursor
 from app.schemas.watchlist import WatchlistParams, WatchlistPosition
 from app.services.articles import build_analyzed_article_preview
 
@@ -32,9 +31,9 @@ class WatchlistService:
         next_cursor = None
         if len(rows) > ARTICLE_LIST_LIMIT:
             last, watched_at = page[-1]
-            next_cursor = encode_cursor(
-                WatchlistPosition(watched_at=watched_at, article_id=last.id)
-            )
+            next_cursor = WatchlistPosition(
+                watched_at=watched_at, article_id=last.id
+            ).to_cursor()
         return AnalyzedArticlePreviewList(
             items=[build_analyzed_article_preview(a) for a, _ in page],
             next_cursor=next_cursor,

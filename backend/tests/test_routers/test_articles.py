@@ -12,7 +12,6 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
-from app.schemas.cursor import encode_cursor
 from app.schemas.watchlist import WatchlistPosition
 
 
@@ -215,11 +214,9 @@ class TestListArticles:
             pytest.param("not base64!", id="base64 の文字以外を含む"),
             pytest.param("bm90IGpzb24", id="JSON でない"),
             pytest.param(
-                encode_cursor(
-                    WatchlistPosition(
-                        watched_at=datetime(2026, 1, 1, tzinfo=UTC), article_id=1
-                    )
-                ),
+                WatchlistPosition(
+                    watched_at=datetime(2026, 1, 1, tzinfo=UTC), article_id=1
+                ).to_cursor(),
                 id="ウォッチリストのカーソル",
             ),
             pytest.param("A" * 257, id="257 字"),

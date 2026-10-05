@@ -14,7 +14,6 @@ from app.schemas.articles import (
     ArticleListPosition,
 )
 from app.schemas.category import Category
-from app.schemas.cursor import encode_cursor
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
 _KEY_POINT_MAX = 3
@@ -118,12 +117,10 @@ class ArticleService:
         next_cursor = None
         if len(analyses) > ARTICLE_LIST_LIMIT:
             last = page[-1]
-            next_cursor = encode_cursor(
-                ArticleListPosition(
-                    published_at=last.curation.analyzable_article.published_at,
-                    id=last.id,
-                )
-            )
+            next_cursor = ArticleListPosition(
+                published_at=last.curation.analyzable_article.published_at,
+                id=last.id,
+            ).to_cursor()
         return AnalyzedArticlePreviewList(
             items=[build_analyzed_article_preview(a) for a in page],
             next_cursor=next_cursor,

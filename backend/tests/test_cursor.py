@@ -7,7 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.articles import ArticleListParams, ArticleListPosition
-from app.schemas.cursor import encode_cursor
 from app.schemas.watchlist import WatchlistPosition
 
 
@@ -23,7 +22,7 @@ def test_encoded_position_reads_back_with_microseconds_and_timezone() -> None:
         id=42,
     )
 
-    params = ArticleListParams(cursor=encode_cursor(position))
+    params = ArticleListParams(cursor=position.to_cursor())
 
     assert params.cursor == position
     assert params.cursor.published_at == datetime(
@@ -36,7 +35,7 @@ def test_cursor_is_url_safe_without_padding() -> None:
         published_at=datetime(2026, 10, 5, tzinfo=UTC), id=2_147_483_647
     )
 
-    cursor = encode_cursor(position)
+    cursor = position.to_cursor()
 
     assert cursor.replace("-", "").replace("_", "").isalnum()
 
@@ -67,11 +66,9 @@ def test_cursor_is_url_safe_without_padding() -> None:
             id="id が記事 ID の上限を超える",
         ),
         pytest.param(
-            encode_cursor(
-                WatchlistPosition(
-                    watched_at=datetime(2026, 10, 5, tzinfo=UTC), article_id=1
-                )
-            ),
+            WatchlistPosition(
+                watched_at=datetime(2026, 10, 5, tzinfo=UTC), article_id=1
+            ).to_cursor(),
             id="ウォッチリストのカーソル",
         ),
         pytest.param("A" * 257, id="257 字"),

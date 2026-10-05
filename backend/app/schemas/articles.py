@@ -12,7 +12,7 @@ from pydantic.dataclasses import dataclass
 from app.models.category import CATEGORY_SLUG_PATTERN
 from app.schemas.base import _CamelBase
 from app.schemas.category import Category
-from app.schemas.cursor import CURSOR_JSON_SCHEMA, cursor_decoder
+from app.schemas.cursor import CURSOR_JSON_SCHEMA, CursorPosition
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
 # 記事一覧・ウォッチリストが1回に返す件数。
@@ -23,11 +23,11 @@ ARTICLE_LIST_LIMIT = 24
 # ---------------------------------------------------------------------------
 
 
-# 記事 ID 列は integer (int4) のため、範囲外の値は asyncpg の OverflowError より前に
-# 422 で弾く (#545)。カーソルに入る記事 ID も同じ上限で検証する。
-ARTICLE_ID_MAX = 2_147_483_647
+_INT32_MAX = 2_147_483_647
 
-ArticleId = Annotated[int, Path(ge=1, le=ARTICLE_ID_MAX)]
+# 記事 ID 列は integer (int4) のため、範囲外の値は asyncpg の OverflowError より前に
+# 422 で弾く (#545)。
+ArticleId = Annotated[int, Path(ge=1, le=_INT32_MAX)]
 
 
 # ---------------------------------------------------------------------------
@@ -42,16 +42,16 @@ _CATEGORY_QUERY_DESCRIPTION = "Outbound primary filter key. Accepts a category s
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class ArticleListPosition:
+class ArticleListPosition(CursorPosition):
     """記事一覧の並び (公開日時の新しい順、同時刻は ID の大きい順) 上の位置。"""
 
     published_at: AwareDatetime
-    id: Annotated[int, Field(ge=1, le=ARTICLE_ID_MAX)]
+    id: ArticleId
 
 
 ArticleListCursor = Annotated[
     ArticleListPosition,
-    BeforeValidator(cursor_decoder(ArticleListPosition)),
+    BeforeValidator(ArticleListPosition.from_cursor),
     CURSOR_JSON_SCHEMA,
 ]
 
