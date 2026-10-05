@@ -57,26 +57,21 @@ async def test_trend_discovery_saves_snapshot_of_mentions_in_last_seven_days(
     category_trends = next(
         trends
         for trends in snapshots[0]["bundle"]["categoryTrends"]
-        if trends["categoryId"] == category.id
+        if trends["category"]["slug"] == category.slug
     )
-    assert [
-        {
-            "name": mention["name"],
-            "appearanceCount": mention["appearanceCount"],
-            "relatedMentions": mention["relatedMentions"],
-        }
-        for mention in category_trends["mostMentioned"]
-    ] == [
+    # 要点は公開日時の新しい3記事から選ぶ。
+    assert category_trends["mentionTrends"] == [
         {
             "name": "NVIDIA",
-            "appearanceCount": 5,
-            "relatedMentions": [
+            "type": "company",
+            "articleVolume": {"count": 5, "previousWeekCount": 0, "rank": 1},
+            "growth": {"rate": 2.5, "rank": None},
+            "keyPoints": list(reversed(key_point_contents[-3:])),
+            "mentionedWith": [
                 {"name": "TSMC", "type": "company", "sharedArticleCount": 2}
             ],
         }
     ]
-    key_points = category_trends["mostMentioned"][0]["keyPoints"]
-    assert key_points == list(reversed(key_point_contents[-3:]))
     assert await insights_events(system_database) == [
         {
             "stage": "trend_discovery",
@@ -135,7 +130,7 @@ async def test_trend_discovery_leaves_snapshot_saved_by_another_worker(
     system_database, trend_worker, monkeypatch
 ):
     """生成済みかの確認の後に別workerが保存していたら、競合として既存行を残す。"""
-    from app.insights.trend_discovery.domain.trend import TrendWindow
+    from app.insights.trend_discovery.domain.trend import TrendWeeks
     from app.insights.trend_discovery.repository import TrendsRepository
     from app.insights.trend_discovery.service import (
         TrendDiscoveryConflict,
@@ -151,8 +146,8 @@ async def test_trend_discovery_leaves_snapshot_saved_by_another_worker(
     )
     load_facts = TrendsRepository.load_ready_build_facts
 
-    async def save_from_other_worker_after_reading_facts(repository, *, window):
-        facts = await load_facts(repository, window=window)
+    async def save_from_other_worker_after_reading_facts(repository, *, weeks):
+        facts = await load_facts(repository, weeks=weeks)
         await seed_trends_snapshot(
             system_database,
             window_end=date(2026, 9, 27),
@@ -169,11 +164,11 @@ async def test_trend_discovery_leaves_snapshot_saved_by_another_worker(
     )
     service = TrendDiscoveryService(trend_worker.state.session_factory)
 
-    outcome = await service.execute(TrendWindow(window_end=date(2026, 9, 27)))
+    outcome = await service.execute(TrendWeeks(snapshot_date=date(2026, 9, 27)))
 
     assert outcome == TrendDiscoveryConflict(
-        window_end=date(2026, 9, 27),
-        source_analysis_count=1,
+        snapshot_date=date(2026, 9, 27),
+        analyzed_article_count=1,
         completed_category_count=len(categories),
     )
     assert await trends_snapshots(system_database) == [

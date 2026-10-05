@@ -1,17 +1,16 @@
 """TrendsRepository の集計 SQL 境界条件テスト。
 
 検証対象:
-- ``get_ranked_mentions``: floor (current >= MIN_CURRENT) を通過した mention の
-  pool を current/previous 件数つきで返す (hot ゲート・並べ替えは service の責務
-  なのでここでは掛けない)。
-- ``get_mention_key_points``: 指定 mention の現週 key_point content を記事レベル
+- ``get_mention_candidates``: 週の記事数 >= MIN_CANDIDATE_COUNT の名前を、週と
+  前週の記事数つきで返す (伸び率の条件・順位付けは domain の責務なので掛けない)。
+- ``get_mention_key_points``: 指定 mention の週の key_point content を記事レベル
   重複なく最大3本。
-- ``get_related_mentions``: 指定 mention と同一 key_point 内で共起した別 mention を
+- ``get_co_mentions``: 指定 mention と同一 key_point 内で一緒に出た別の名前を
   共起記事数 >= MIN_SHARED_ARTICLES で top3。
-- ``count_source_analyses``: 現週の analysis 件数。
+- ``count_analyzed_articles``: 週に公開された分析済み記事の件数。
 
 境界として:
-- 期間境界 (current_start ちょうど含む / current_end ちょうど除外)
+- 週の境界 (初日 0:00 JST ちょうど含む / 最終日の翌日 0:00 JST ちょうど除外)
 - カテゴリ filter
 - DISTINCT assessment.id (同一 assessment 内の重複 mention を 1 カウントに)
 - ``key_points IS NULL`` 行を集計対象外にする (PR 1 デプロイ前の旧行)
@@ -19,7 +18,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -29,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
 from app.insights.trend_discovery.domain.mention_name import MentionName
-from app.insights.trend_discovery.domain.trend import MIN_CURRENT
+from app.insights.trend_discovery.domain.trend import MIN_CANDIDATE_COUNT, TrendWeeks
 from app.insights.trend_discovery.repository import (
     TrendsRepository,
     _match_key_expr,
@@ -47,13 +46,14 @@ def _jst(year: int, month: int, day: int, *, hour: int = 12) -> datetime:
     return datetime(year, month, day, hour, tzinfo=JST)
 
 
-# 基準週: 2026-04-13 (月) 00:00 JST から 2026-04-20 (月) 00:00 JST
+# 基準週: 2026-04-13 (月) から 2026-04-19 (日)。公開日時は 04-13 00:00 JST から
+# 04-20 00:00 JST まで。
+WEEKS = TrendWeeks(snapshot_date=date(2026, 4, 20))
 WEEK_START = _jst(2026, 4, 13, hour=0)
 WEEK_END = WEEK_START + WEEK
-PREV_START = WEEK_START - WEEK
 
 
-class TestGetRankedMentions:
+class TestGetMentionCandidates:
     @pytest.mark.asyncio
     async def test_returns_continued_trend_mention(
         self,
@@ -61,7 +61,7 @@ class TestGetRankedMentions:
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """current >= MIN_CURRENT は current/previous 件数つきで pool に入る。"""
+        """週の記事数 >= MIN_CANDIDATE_COUNT は週と前週の記事数つきで候補に入る。"""
         cat = sample_categories[0]
         for i in range(5):
             await seed_analysis(
@@ -77,18 +77,13 @@ class TestGetRankedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert len(results) == 1
         trend = results[0]
         assert str(trend.name) == "NVIDIA"
         assert str(trend.type) == "company"
-        assert trend.appearance_count == 5
-        assert trend.previous_appearance_count == 2
+        assert trend.count == 5
+        assert trend.previous_week_count == 2
 
     @pytest.mark.asyncio
     async def test_includes_floor_passing_without_hot_gate(
@@ -97,11 +92,10 @@ class TestGetRankedMentions:
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """current >= MIN_CURRENT なら previous<2 かつ current<burst でも pool に入る。
+        """週の記事数が下限以上なら、伸び率で順位を付けない名前も候補に入る。
 
-        旧 ``get_trending_entities`` は hot ゲート (previous>=2 OR current>=burst) を
-        SQL WHERE で掛けていた。pool は出現回数ランキングの母集団でもあるため hot
-        ゲートを外し、floor だけで残す (hot 判定は service の伸び率ランキング側)。
+        候補は記事数の順位の母集団でもあるため、伸び率の条件 (前週2件以上 or
+        週10件以上) は掛けず、下限だけで残す (伸び率の条件は domain の順位付け側)。
         """
         cat = sample_categories[0]
         for i in range(7):
@@ -117,25 +111,20 @@ class TestGetRankedMentions:
         )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert len(results) == 1
         assert str(results[0].name) == "Edge"
-        assert results[0].appearance_count == 7
-        assert results[0].previous_appearance_count == 1
+        assert results[0].count == 7
+        assert results[0].previous_week_count == 1
 
     @pytest.mark.asyncio
-    async def test_excludes_below_min_current(
+    async def test_excludes_below_min_candidate_count(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """current < MIN_CURRENT (=5) は floor で除外。"""
+        """週の記事数 < MIN_CANDIDATE_COUNT (=5) は候補から除外。"""
         cat = sample_categories[0]
         for i in range(4):
             await seed_analysis(
@@ -145,12 +134,7 @@ class TestGetRankedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert results == ()
 
     @pytest.mark.asyncio
@@ -171,12 +155,7 @@ class TestGetRankedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=target.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=target.id, weeks=WEEKS)
         assert results == ()
 
     @pytest.mark.asyncio
@@ -186,7 +165,7 @@ class TestGetRankedMentions:
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """current_start は含み、current_end は含まない (半開区間)。"""
+        """週の初日 0:00 JST は含み、最終日の翌日 0:00 JST は含まない (半開区間)。"""
         cat = sample_categories[0]
         await seed_analysis(
             category_id=cat.id,
@@ -206,16 +185,9 @@ class TestGetRankedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert len(results) == 1
-        assert (
-            results[0].appearance_count == 10
-        )  # 11 件中 current_end ちょうどの 1 件は除外
+        assert results[0].count == 10  # 11 件中 最終日の翌日 0:00 ちょうどの 1 件は除外
 
     @pytest.mark.asyncio
     async def test_distinct_assessment_dedupes(
@@ -234,14 +206,9 @@ class TestGetRankedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert len(results) == 1
-        assert results[0].appearance_count == 5  # 重複でなく assessment 数
+        assert results[0].count == 5  # 重複でなく assessment 数
 
     @pytest.mark.asyncio
     async def test_groups_case_insensitively(
@@ -270,15 +237,10 @@ class TestGetRankedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert len(results) == 1
         trend = results[0]
-        assert trend.appearance_count == 5
+        assert trend.count == 5
         assert str(trend.name).lower() == "nvidia"
         assert str(trend.name) in {"NVIDIA", "Nvidia"}  # casing 保持
 
@@ -290,12 +252,7 @@ class TestGetRankedMentions:
     ) -> None:
         cat = sample_categories[0]
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert results == ()
 
     @pytest.mark.asyncio
@@ -315,12 +272,7 @@ class TestGetRankedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert results == ()
 
     @pytest.mark.asyncio
@@ -340,12 +292,7 @@ class TestGetRankedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert results == ()
 
 
@@ -387,8 +334,7 @@ class TestGetMentionKeyPoints:
         repo = TrendsRepository(db_session)
         result = await repo.get_mention_key_points(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
         assert result[_NVIDIA_KEY] == ("newest", "middle", "oldest")
@@ -427,8 +373,7 @@ class TestGetMentionKeyPoints:
         repo = TrendsRepository(db_session)
         result = await repo.get_mention_key_points(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
         assert result[_NVIDIA_KEY] == ("primary", "near-dup", "distinct")
@@ -455,8 +400,7 @@ class TestGetMentionKeyPoints:
         repo = TrendsRepository(db_session)
         result = await repo.get_mention_key_points(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
         contents = result[_NVIDIA_KEY]
@@ -490,8 +434,7 @@ class TestGetMentionKeyPoints:
         repo = TrendsRepository(db_session)
         result = await repo.get_mention_key_points(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
         assert result[_NVIDIA_KEY] == ("legacy-a", "legacy-b")
@@ -517,8 +460,7 @@ class TestGetMentionKeyPoints:
         repo = TrendsRepository(db_session)
         result = await repo.get_mention_key_points(
             category_id=target.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
         assert result == {}
@@ -542,14 +484,13 @@ class TestGetMentionKeyPoints:
         repo = TrendsRepository(db_session)
         result = await repo.get_mention_key_points(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[],
         )
         assert result == {}
 
 
-class TestGetRelatedMentions:
+class TestGetCoMentions:
     @pytest.mark.asyncio
     async def test_returns_co_mention_above_min_shared(
         self,
@@ -567,16 +508,15 @@ class TestGetRelatedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
-        related = result[_NVIDIA_KEY]
-        assert len(related) == 1
-        assert str(related[0].name) == "OpenAI"
-        assert related[0].shared_article_count == 2
+        co_mentions = result[_NVIDIA_KEY]
+        assert len(co_mentions) == 1
+        assert str(co_mentions[0].name) == "OpenAI"
+        assert co_mentions[0].shared_article_count == 2
 
     @pytest.mark.asyncio
     async def test_excludes_single_co_occurrence(
@@ -594,10 +534,9 @@ class TestGetRelatedMentions:
         )
 
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
         assert result == {}
@@ -622,10 +561,9 @@ class TestGetRelatedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
         assert result == {}
@@ -651,10 +589,9 @@ class TestGetRelatedMentions:
             )
 
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
         names = {str(r.name) for r in result[_NVIDIA_KEY]}
@@ -681,15 +618,14 @@ class TestGetRelatedMentions:
                 hour += 1
 
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
-        related = result[_NVIDIA_KEY]
+        co_mentions = result[_NVIDIA_KEY]
         # OpenAI(4) > Google(3) > {Anthropic,Meta}(2) は match_key 昇順で Anthropic。
-        assert [(str(r.name), r.shared_article_count) for r in related] == [
+        assert [(str(r.name), r.shared_article_count) for r in co_mentions] == [
             ("OpenAI", 4),
             ("Google", 3),
             ("Anthropic", 2),
@@ -716,20 +652,19 @@ class TestGetRelatedMentions:
         )
 
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
-        related = result[_NVIDIA_KEY]
-        assert len(related) == 1
-        assert related[0].shared_article_count == 2
-        assert str(related[0].name).lower() == "openai"
-        assert str(related[0].name) in {"OpenAI", "openai"}  # casing 保持
+        co_mentions = result[_NVIDIA_KEY]
+        assert len(co_mentions) == 1
+        assert co_mentions[0].shared_article_count == 2
+        assert str(co_mentions[0].name).lower() == "openai"
+        assert str(co_mentions[0].name) in {"OpenAI", "openai"}  # casing 保持
 
 
-class TestCountSourceAnalyses:
+class TestCountAnalyzedArticles:
     @pytest.mark.asyncio
     async def test_counts_all_categories_in_window(
         self,
@@ -737,7 +672,7 @@ class TestCountSourceAnalyses:
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """``count_source_analyses`` は全カテゴリ合算で数える (snapshot メタ情報用)。"""
+        """週の分析済み記事は全カテゴリ合算で数える (snapshot メタ情報用)。"""
         await seed_analysis(
             category_id=sample_categories[0].id,
             analyzed_at=_jst(2026, 4, 14),
@@ -753,9 +688,7 @@ class TestCountSourceAnalyses:
         )
 
         repo = TrendsRepository(db_session)
-        count = await repo.count_source_analyses(
-            current_start=WEEK_START, current_end=WEEK_END
-        )
+        count = await repo.count_analyzed_articles(week=WEEKS.week)
         assert count == 2
 
     @pytest.mark.asyncio
@@ -764,9 +697,7 @@ class TestCountSourceAnalyses:
         db_session: AsyncSession,
     ) -> None:
         repo = TrendsRepository(db_session)
-        count = await repo.count_source_analyses(
-            current_start=WEEK_START, current_end=WEEK_END
-        )
+        count = await repo.count_analyzed_articles(week=WEEKS.week)
         assert count == 0
 
 
@@ -781,7 +712,7 @@ class TestWhitespaceNameKeyNormalization:
 
     書込側 (normalize_mention_surface / MentionName) と同じ collapse 規則で名寄せ
     することを固定する。これが外れると enrich の IN フィルタが外れ keyPoints /
-    relatedMentions が silent に空になり、appearance_count も表記揺れで分裂する。
+    mentionedWith が silent に空になり、記事数も表記揺れで分裂する。
     """
 
     @pytest.mark.parametrize("surface", ["Open  AI", "Open\tAI", "Open\nAI"])
@@ -803,14 +734,13 @@ class TestWhitespaceNameKeyNormalization:
         repo = TrendsRepository(db_session)
         result = await repo.get_mention_key_points(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_OPEN_AI_KEY],
         )
         assert result.get(_OPEN_AI_KEY) == ("kp body",)
 
     @pytest.mark.asyncio
-    async def test_related_populates_for_internal_whitespace_anchor(
+    async def test_co_mentions_populate_for_internal_whitespace_anchor(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
@@ -825,19 +755,18 @@ class TestWhitespaceNameKeyNormalization:
                 mentions=[("Open  AI", "company"), ("NVIDIA", "company")],
             )
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_OPEN_AI_KEY],
         )
-        related = result.get(_OPEN_AI_KEY, ())
-        assert len(related) == 1
-        assert str(related[0].name) == "NVIDIA"
-        assert related[0].shared_article_count == 2
+        co_mentions = result.get(_OPEN_AI_KEY, ())
+        assert len(co_mentions) == 1
+        assert str(co_mentions[0].name) == "NVIDIA"
+        assert co_mentions[0].shared_article_count == 2
 
     @pytest.mark.asyncio
-    async def test_ranked_count_not_split_by_whitespace_variants(
+    async def test_candidate_count_not_split_by_whitespace_variants(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
@@ -845,10 +774,10 @@ class TestWhitespaceNameKeyNormalization:
     ) -> None:
         """同一エンティティの表記揺れは 1 group に merge し count を分裂させない。"""
         cat = sample_categories[0]
-        # double-space と single-space を分けて seed。合算が floor (MIN_CURRENT) に
-        # 達するため、merge されなければ各群とも floor 未満で pool から落ちる。
+        # double-space と single-space を分けて seed。合算が下限 (MIN_CANDIDATE_COUNT)
+        # に達するため、merge されなければ各群とも下限未満で候補から落ちる。
         double_n = 3
-        single_n = MIN_CURRENT - double_n
+        single_n = MIN_CANDIDATE_COUNT - double_n
         for hour in range(double_n):
             await seed_analysis(
                 category_id=cat.id,
@@ -862,15 +791,10 @@ class TestWhitespaceNameKeyNormalization:
                 mentions=[("Open AI", "company")],
             )
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert len(results) == 1
         assert str(results[0].name) == "Open AI"
-        assert results[0].appearance_count == double_n + single_n
+        assert results[0].count == double_n + single_n
 
     @pytest.mark.asyncio
     async def test_whitespace_variants_excluded_as_self_pair(
@@ -888,13 +812,12 @@ class TestWhitespaceNameKeyNormalization:
                 mentions=[("Open AI", "company"), ("Open  AI", "company")],
             )
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_OPEN_AI_KEY],
         )
-        # 両表記は同一名寄せキー → 自己ペア → related に自分自身が出ない。
+        # 両表記は同一名寄せキー → 自己ペア → 一緒に語られた名前に自分自身が出ない。
         assert _OPEN_AI_KEY not in result
 
 
@@ -947,84 +870,74 @@ class TestMatchKeyParity:
         assert actual == expected
 
 
-# #8 不正 mention データで window 全体を落とさない (related + ranking 両方を防御)
+# #8 不正 mention データで週全体を落とさない (候補と一緒に語られた名前の両方を防御)
 
 
 class TestInvalidMentionDataDoesNotCrashWindow:
     """enum 外 type / 空 surface の legacy・drift 行が混ざっても、当該 1 件のみ skip し
 
-    ranking / related の組み立てが ValidationError を呼び出し元へ伝播させない
+    候補と一緒に語られた名前の組み立てが ValidationError を呼び出し元へ伝播させない
     (伝播すると 1 カテゴリの不正行で全カテゴリ snapshot 生成が落ちる)。
     """
 
     @pytest.mark.asyncio
-    async def test_ranked_skips_invalid_type_keeps_valid(
+    async def test_candidates_skip_invalid_type_keep_valid(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """enum 外 type の mention は pool から除外し、正常 mention は残す。"""
+        """enum 外 type の mention は候補から除外し、正常 mention は残す。"""
         cat = sample_categories[0]
-        for hour in range(MIN_CURRENT):
+        for hour in range(MIN_CANDIDATE_COUNT):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=hour),
                 mentions=[("NVIDIA", "company")],
             )
-        for hour in range(MIN_CURRENT):
+        for hour in range(MIN_CANDIDATE_COUNT):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 15, hour=hour),
                 mentions=[("BadCo", "startup")],  # enum 外 type (drift 行)
             )
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert {str(r.name) for r in results} == {"NVIDIA"}
 
     @pytest.mark.asyncio
-    async def test_ranked_skips_empty_surface_keeps_valid(
+    async def test_candidates_skip_empty_surface_keep_valid(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """空 surface (MentionName 検証で落ちる legacy 行) は pool から除外する。"""
+        """空 surface (MentionName 検証で落ちる legacy 行) は候補から除外する。"""
         cat = sample_categories[0]
-        for hour in range(MIN_CURRENT):
+        for hour in range(MIN_CANDIDATE_COUNT):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=hour),
                 mentions=[("NVIDIA", "company")],
             )
-        for hour in range(MIN_CURRENT):
+        for hour in range(MIN_CANDIDATE_COUNT):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 15, hour=hour),
                 mentions=[("", "company")],  # 空 surface (legacy 行)
             )
         repo = TrendsRepository(db_session)
-        results = await repo.get_ranked_mentions(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
+        results = await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         assert {str(r.name) for r in results} == {"NVIDIA"}
 
     @pytest.mark.asyncio
-    async def test_related_skips_invalid_co_mention_keeps_valid(
+    async def test_co_mentions_skip_invalid_type_keep_valid(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """enum 外 type の共起相手は related から除外し、正常な相手は残す。"""
+        """enum 外 type の共起相手は除外し、正常な相手は残す。"""
         cat = sample_categories[0]
         for hour in range(2):
             await seed_analysis(
@@ -1037,17 +950,16 @@ class TestInvalidMentionDataDoesNotCrashWindow:
                 ],
             )
         repo = TrendsRepository(db_session)
-        result = await repo.get_related_mentions(
+        result = await repo.get_co_mentions(
             category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
+            week=WEEKS.week,
             mention_keys=[_NVIDIA_KEY],
         )
-        related = result.get(_NVIDIA_KEY, ())
-        assert {str(r.name) for r in related} == {"OpenAI"}
+        co_mentions = result.get(_NVIDIA_KEY, ())
+        assert {str(r.name) for r in co_mentions} == {"OpenAI"}
 
     @pytest.mark.asyncio
-    async def test_ranked_skip_emits_low_cardinality_warning(
+    async def test_candidate_skip_emits_low_cardinality_warning(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
@@ -1060,7 +972,7 @@ class TestInvalidMentionDataDoesNotCrashWindow:
         固定する。生 surface / type (PII・高 cardinality) は焼かないことも合わせて縛る。
         """
         cat = sample_categories[0]
-        for hour in range(MIN_CURRENT):
+        for hour in range(MIN_CANDIDATE_COUNT):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 15, hour=hour),
@@ -1068,14 +980,9 @@ class TestInvalidMentionDataDoesNotCrashWindow:
             )
         repo = TrendsRepository(db_session)
         with capture_logs() as logs:
-            await repo.get_ranked_mentions(
-                category_id=cat.id,
-                current_start=WEEK_START,
-                current_end=WEEK_END,
-                previous_start=PREV_START,
-            )
+            await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
         skips = [
-            e for e in logs if e["event"] == "trend_ranked_mention_skipped_invalid"
+            e for e in logs if e["event"] == "trend_mention_candidate_skipped_invalid"
         ]
         assert len(skips) == 1
         event = skips[0]
@@ -1088,13 +995,13 @@ class TestInvalidMentionDataDoesNotCrashWindow:
         assert "startup" not in event.values()
 
     @pytest.mark.asyncio
-    async def test_related_skip_emits_low_cardinality_warning(
+    async def test_co_mention_skip_emits_low_cardinality_warning(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """related の skip も同じ failure-visibility の warning を出す。"""
+        """一緒に語られた名前の skip も同じ failure-visibility の warning を出す。"""
         cat = sample_categories[0]
         for hour in range(2):
             await seed_analysis(
@@ -1108,15 +1015,12 @@ class TestInvalidMentionDataDoesNotCrashWindow:
             )
         repo = TrendsRepository(db_session)
         with capture_logs() as logs:
-            await repo.get_related_mentions(
+            await repo.get_co_mentions(
                 category_id=cat.id,
-                current_start=WEEK_START,
-                current_end=WEEK_END,
+                week=WEEKS.week,
                 mention_keys=[_NVIDIA_KEY],
             )
-        skips = [
-            e for e in logs if e["event"] == "trend_related_mention_skipped_invalid"
-        ]
+        skips = [e for e in logs if e["event"] == "trend_co_mention_skipped_invalid"]
         assert len(skips) == 1
         event = skips[0]
         assert event["log_level"] == "warning"

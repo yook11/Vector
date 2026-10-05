@@ -1,13 +1,12 @@
-"""Trend Discovery 集約 (RankedMention / RelatedMention / CategoryTrends /
-TrendsBundle) の不変条件と派生フィールドのテスト。
+"""トレンドの集約 (MentionCandidate / MentionTrend / CoMention / CategoryTrends /
+TrendsBundle) と、週 (TrendWeeks) ・順位付け (rank_mention_trends) のテスト。
 
 責務:
 - VO 単体: 件数下限・文脈件数上限を構造的に強制する
-- 集約ルート (CategoryTrends / TrendsBundle): immutable な tuple で
-  子リストを保持し、各ランキングを top N に構造的に制限し、永続化形 (model_dump)
-  と一致する
-- hotness_score: ``(current - previous) / max(previous, SMOOTHING)`` で
-  smoothing を適用 (前週 0 でも除算回避、burst を過大評価しすぎない)
+- 伸び率: ``(count - previous_week_count) / max(previous_week_count, SMOOTHING)``
+- 順位: 候補全体で同じ値は同じ順位 (1, 2, 2, 4)。どちらかの順位が上位に入った
+  名前だけを、上位の境目の同点も含めて返す
+- 週: スナップショットの日付の前日までの7日間と、その直前の7日間
 """
 
 from __future__ import annotations
@@ -21,326 +20,351 @@ from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_name import MentionName
 from app.insights.trend_discovery.domain.trend import (
     MAX_CATEGORIES_PER_BUNDLE,
+    MAX_CO_MENTIONS,
     MAX_KEY_POINTS_PER_MENTION,
-    MAX_RELATED_MENTIONS,
-    MIN_CURRENT,
-    MIN_PREVIOUS,
+    MIN_CANDIDATE_COUNT,
+    MIN_PREVIOUS_WEEK_COUNT,
     MIN_SHARED_ARTICLES,
     NEW_BURST_THRESHOLD,
     SMOOTHING,
     TOP_N_PER_RANKING,
     CategoryTrends,
-    RankedMention,
-    RelatedMention,
+    CoMention,
+    MentionArticleVolume,
+    MentionCandidate,
+    MentionGrowth,
+    MentionTrend,
     TrendsBundle,
-    TrendWindow,
-    is_hot,
-    select_fastest_growing,
-    select_most_mentioned,
+    TrendWeeks,
+    Week,
+    rank_mention_trends,
 )
 
 
-def _names(
-    name: str = "NVIDIA", type_: str = "company"
-) -> tuple[MentionName, MentionType]:
-    return MentionName(name), MentionType(type_)
-
-
-def _mention(
-    name: str = "NVIDIA", *, current: int = 10, previous: int = 3
-) -> RankedMention:
-    n, t = _names(name)
-    return RankedMention(
-        name=n, type=t, appearance_count=current, previous_appearance_count=previous
+def _candidate(
+    name: str = "NVIDIA", *, count: int = 10, previous_week_count: int = 3
+) -> MentionCandidate:
+    return MentionCandidate(
+        name=MentionName(name),
+        type=MentionType.COMPANY,
+        count=count,
+        previous_week_count=previous_week_count,
     )
 
 
-class TestRankedMention:
-    def test_constructs_with_valid_counts(self) -> None:
-        name, type_ = _names()
-        trend = RankedMention(
-            name=name, type=type_, appearance_count=10, previous_appearance_count=3
-        )
-        assert trend.name == name
-        assert trend.type == type_
-        assert trend.appearance_count == 10
-        assert trend.previous_appearance_count == 3
+def _trend(name: str = "NVIDIA") -> MentionTrend:
+    return MentionTrend(
+        name=MentionName(name),
+        type=MentionType.COMPANY,
+        article_volume=MentionArticleVolume(count=10, previous_week_count=3, rank=1),
+        growth=MentionGrowth(rate=2.333, rank=1),
+    )
 
-    def test_context_defaults_empty(self) -> None:
-        """enrich 前の純集計段階では key_points / related_mentions は空。"""
-        trend = _mention()
-        assert trend.key_points == ()
-        assert trend.related_mentions == ()
 
-    def test_rejects_current_below_min(self) -> None:
-        """appearance_count < MIN_CURRENT は構造的に reject。"""
-        name, type_ = _names()
+def _co_mention(name: str = "OpenAI", shared: int = 3) -> CoMention:
+    return CoMention(
+        name=MentionName(name),
+        type=MentionType.COMPANY,
+        shared_article_count=shared,
+    )
+
+
+def _ranks(trends: tuple[MentionTrend, ...]) -> dict[str, tuple[int, int | None]]:
+    return {t.name.root: (t.article_volume.rank, t.growth.rank) for t in trends}
+
+
+class TestMentionCandidate:
+    def test_rejects_count_below_min(self) -> None:
+        """週の記事数が MIN_CANDIDATE_COUNT 未満の名前は候補にならない。"""
         with pytest.raises(ValidationError):
-            RankedMention(
-                name=name,
-                type=type_,
-                appearance_count=MIN_CURRENT - 1,
-                previous_appearance_count=0,
-            )
+            _candidate(count=MIN_CANDIDATE_COUNT - 1, previous_week_count=0)
 
-    def test_accepts_current_at_min(self) -> None:
-        name, type_ = _names()
-        trend = RankedMention(
-            name=name,
-            type=type_,
-            appearance_count=MIN_CURRENT,
-            previous_appearance_count=0,
-        )
-        assert trend.appearance_count == MIN_CURRENT
+    def test_accepts_count_at_min(self) -> None:
+        candidate = _candidate(count=MIN_CANDIDATE_COUNT, previous_week_count=0)
+        assert candidate.count == MIN_CANDIDATE_COUNT
 
-    def test_rejects_negative_previous(self) -> None:
-        name, type_ = _names()
+    def test_rejects_negative_previous_week_count(self) -> None:
         with pytest.raises(ValidationError):
-            RankedMention(
-                name=name, type=type_, appearance_count=10, previous_appearance_count=-1
-            )
-
-    def test_accepts_previous_zero(self) -> None:
-        """新規 burst (previous=0) は許容。hot 判定は集計側で行う。"""
-        name, type_ = _names()
-        trend = RankedMention(
-            name=name, type=type_, appearance_count=20, previous_appearance_count=0
-        )
-        assert trend.previous_appearance_count == 0
-
-    def test_rejects_too_many_key_points(self) -> None:
-        """key_points は MAX_KEY_POINTS_PER_MENTION 本まで。"""
-        name, type_ = _names()
-        with pytest.raises(ValidationError):
-            RankedMention(
-                name=name,
-                type=type_,
-                appearance_count=10,
-                previous_appearance_count=3,
-                key_points=tuple(
-                    f"kp {i}" for i in range(MAX_KEY_POINTS_PER_MENTION + 1)
-                ),
-            )
-
-    def test_rejects_too_many_related_mentions(self) -> None:
-        """related_mentions は MAX_RELATED_MENTIONS 件まで。"""
-        name, type_ = _names()
-        related = tuple(
-            RelatedMention(
-                name=MentionName(f"peer {i}"),
-                type=MentionType.COMPANY,
-                shared_article_count=MIN_SHARED_ARTICLES,
-            )
-            for i in range(MAX_RELATED_MENTIONS + 1)
-        )
-        with pytest.raises(ValidationError):
-            RankedMention(
-                name=name,
-                type=type_,
-                appearance_count=10,
-                previous_appearance_count=3,
-                related_mentions=related,
-            )
+            _candidate(count=10, previous_week_count=-1)
 
     def test_immutable(self) -> None:
-        trend = _mention()
+        candidate = _candidate()
         with pytest.raises(ValidationError):
-            trend.appearance_count = 99  # type: ignore[misc]
+            candidate.count = 99  # type: ignore[misc]
 
-    def test_hotness_score_uses_smoothing_when_previous_is_zero(self) -> None:
-        """previous_appearance_count=0 のとき分母は SMOOTHING (除算回避)。"""
-        name, type_ = _names()
-        trend = RankedMention(
-            name=name, type=type_, appearance_count=10, previous_appearance_count=0
+    def test_growth_rate_uses_smoothing_when_previous_week_is_zero(self) -> None:
+        """前週0件のとき分母は SMOOTHING (除算回避)。"""
+        assert _candidate(count=10, previous_week_count=0).growth_rate == (
+            pytest.approx((10 - 0) / SMOOTHING)
         )
-        assert trend.hotness_score == pytest.approx((10 - 0) / SMOOTHING)
 
-    def test_hotness_score_uses_previous_when_above_smoothing(self) -> None:
-        """previous_appearance_count > SMOOTHING なら分母は前週件数そのもの。"""
-        name, type_ = _names()
-        trend = RankedMention(
-            name=name, type=type_, appearance_count=20, previous_appearance_count=5
+    def test_growth_rate_uses_previous_week_when_above_smoothing(self) -> None:
+        """前週の記事数が SMOOTHING を超えるなら分母は前週の記事数そのもの。"""
+        assert _candidate(count=20, previous_week_count=5).growth_rate == (
+            pytest.approx((20 - 5) / 5)
         )
-        assert trend.hotness_score == pytest.approx((20 - 5) / 5)
 
-    def test_hotness_score_uses_smoothing_when_previous_below_smoothing(
+    def test_growth_rate_uses_smoothing_when_previous_week_below_smoothing(
         self,
     ) -> None:
-        """previous_appearance_count < SMOOTHING なら分母は SMOOTHING。"""
-        name, type_ = _names()
-        # SMOOTHING = 2 を前提
-        trend = RankedMention(
-            name=name, type=type_, appearance_count=10, previous_appearance_count=1
+        assert _candidate(count=10, previous_week_count=1).growth_rate == (
+            pytest.approx((10 - 1) / SMOOTHING)
         )
-        assert trend.hotness_score == pytest.approx((10 - 1) / SMOOTHING)
+
+    def test_previous_week_at_min_is_growth_ranked(self) -> None:
+        """前週 MIN_PREVIOUS_WEEK_COUNT(2) 件の継続は伸び率で順位を付ける。"""
+        candidate = _candidate(
+            count=MIN_CANDIDATE_COUNT, previous_week_count=MIN_PREVIOUS_WEEK_COUNT
+        )
+        assert candidate.is_growth_ranked is True
+
+    def test_small_previous_week_without_burst_is_not_growth_ranked(self) -> None:
+        """前週1件・週9件は継続 (前週2件以上) も急増 (週10件以上) も満たさない。"""
+        assert _candidate(count=9, previous_week_count=1).is_growth_ranked is False
+
+    def test_zero_previous_week_at_burst_threshold_is_growth_ranked(self) -> None:
+        candidate = _candidate(count=NEW_BURST_THRESHOLD, previous_week_count=0)
+        assert candidate.is_growth_ranked is True
+
+    def test_zero_previous_week_below_burst_threshold_is_not_growth_ranked(
+        self,
+    ) -> None:
+        candidate = _candidate(count=NEW_BURST_THRESHOLD - 1, previous_week_count=0)
+        assert candidate.is_growth_ranked is False
 
 
-class TestRelatedMention:
+class TestCoMention:
     def test_constructs_at_min_shared(self) -> None:
-        related = RelatedMention(
-            name=MentionName("OpenAI"),
-            type=MentionType.COMPANY,
-            shared_article_count=MIN_SHARED_ARTICLES,
+        assert _co_mention(shared=MIN_SHARED_ARTICLES).shared_article_count == (
+            MIN_SHARED_ARTICLES
         )
-        assert related.shared_article_count == MIN_SHARED_ARTICLES
 
     def test_rejects_below_min_shared(self) -> None:
-        """共起 1 記事 (< MIN_SHARED_ARTICLES) は noise として構造的に reject。"""
+        """一緒に出た記事が1件 (< MIN_SHARED_ARTICLES) の名前は noise として除く。"""
         with pytest.raises(ValidationError):
-            RelatedMention(
-                name=MentionName("OpenAI"),
-                type=MentionType.COMPANY,
-                shared_article_count=MIN_SHARED_ARTICLES - 1,
-            )
+            _co_mention(shared=MIN_SHARED_ARTICLES - 1)
 
     def test_immutable(self) -> None:
-        related = RelatedMention(
-            name=MentionName("OpenAI"),
-            type=MentionType.COMPANY,
-            shared_article_count=MIN_SHARED_ARTICLES,
-        )
+        co_mention = _co_mention()
         with pytest.raises(ValidationError):
-            related.shared_article_count = 99  # type: ignore[misc]
+            co_mention.shared_article_count = 99  # type: ignore[misc]
+
+
+class TestMentionTrend:
+    def test_context_defaults_empty(self) -> None:
+        """要点と一緒に語られた名前を付ける前は空。"""
+        trend = _trend()
+        assert (trend.key_points, trend.mentioned_with) == ((), ())
+
+    def test_rejects_too_many_key_points(self) -> None:
+        with pytest.raises(ValidationError):
+            MentionTrend.model_validate(
+                {
+                    **_trend().model_dump(),
+                    "key_points": tuple(
+                        f"kp {i}" for i in range(MAX_KEY_POINTS_PER_MENTION + 1)
+                    ),
+                }
+            )
+
+    def test_rejects_too_many_co_mentions(self) -> None:
+        with pytest.raises(ValidationError):
+            MentionTrend.model_validate(
+                {
+                    **_trend().model_dump(),
+                    "mentioned_with": tuple(
+                        _co_mention(f"peer {i}").model_dump()
+                        for i in range(MAX_CO_MENTIONS + 1)
+                    ),
+                }
+            )
+
+    def test_growth_rank_can_be_missing(self) -> None:
+        """伸び率で順位を付けない名前は growth.rank が None。"""
+        assert MentionGrowth(rate=1.0, rank=None).rank is None
+
+    def test_rejects_rank_below_one(self) -> None:
+        with pytest.raises(ValidationError):
+            MentionArticleVolume(count=10, previous_week_count=3, rank=0)
+
+
+class TestRankMentionTrends:
+    def test_same_count_shares_the_article_volume_rank(self) -> None:
+        """記事数 20, 15, 15, 12 の順位は 1, 2, 2, 4。"""
+        trends = rank_mention_trends(
+            [
+                _candidate("A", count=20, previous_week_count=20),
+                _candidate("B", count=15, previous_week_count=15),
+                _candidate("C", count=15, previous_week_count=15),
+                _candidate("D", count=12, previous_week_count=12),
+            ]
+        )
+        assert {k: v[0] for k, v in _ranks(trends).items()} == {
+            "A": 1,
+            "B": 2,
+            "C": 2,
+            "D": 4,
+        }
+
+    def test_same_growth_rate_shares_the_growth_rank(self) -> None:
+        """伸び率 (20-4)/4 = (10-2)/2 = 4.0 は同じ順位、(8-4)/4 = 1.0 はその次の次。"""
+        trends = rank_mention_trends(
+            [
+                _candidate("High", count=20, previous_week_count=4),
+                _candidate("Low", count=10, previous_week_count=2),
+                _candidate("Slow", count=8, previous_week_count=4),
+            ]
+        )
+        assert {k: v[1] for k, v in _ranks(trends).items()} == {
+            "High": 1,
+            "Low": 1,
+            "Slow": 3,
+        }
+
+    def test_includes_every_name_tied_at_the_boundary(self) -> None:
+        """記事数5位に3つが並ぶと、伸び率で6位の F・G も記事数5位として載る。"""
+        # (週, 前週): 伸び率は A 2.0, B 1.5, C 1.0, D 0.5, E 0.25, F・G 0.0
+        counts = {
+            "A": (30, 10),
+            "B": (25, 10),
+            "C": (20, 10),
+            "D": (15, 10),
+            "E": (10, 8),
+            "F": (10, 10),
+            "G": (10, 10),
+        }
+        trends = rank_mention_trends(
+            [
+                _candidate(n, count=c, previous_week_count=p)
+                for n, (c, p) in counts.items()
+            ]
+        )
+        assert _ranks(trends) == {
+            "A": (1, 1),
+            "B": (2, 2),
+            "C": (3, 3),
+            "D": (4, 4),
+            "E": (5, 5),
+            "F": (5, 6),
+            "G": (5, 6),
+        }
+
+    def test_growth_rank_is_none_when_not_growth_ranked(self) -> None:
+        """前週1件・週9件の名前は記事数で上位でも伸び率の順位を持たない。"""
+        trends = rank_mention_trends(
+            [_candidate("Quiet", count=9, previous_week_count=1)]
+        )
+        assert _ranks(trends) == {"Quiet": (1, None)}
+
+    def test_excludes_names_outside_both_rankings(self) -> None:
+        """記事数6位で伸び率の順位も持たない名前は載らない。"""
+        steady = {"A": 30, "B": 25, "C": 20, "D": 15, "E": 12}
+        candidates = [
+            _candidate(n, count=c, previous_week_count=c) for n, c in steady.items()
+        ]
+        candidates.append(_candidate("Small", count=9, previous_week_count=1))
+        trends = rank_mention_trends(candidates)
+        assert "Small" not in _ranks(trends)
+
+    def test_includes_names_ranked_only_by_growth(self) -> None:
+        """記事数6位でも伸び率が上位なら、その記事数の順位のまま載る。"""
+        steady = {"A": 30, "B": 25, "C": 20, "D": 15, "E": 12}
+        candidates = [
+            _candidate(n, count=c, previous_week_count=c) for n, c in steady.items()
+        ]
+        candidates.append(_candidate("Rising", count=8, previous_week_count=2))
+        trends = rank_mention_trends(candidates)
+        assert _ranks(trends)["Rising"] == (6, 1)
+
+    def test_orders_by_article_volume_rank_then_name(self) -> None:
+        trends = rank_mention_trends(
+            [
+                _candidate("zeta", count=10, previous_week_count=10),
+                _candidate("Alpha", count=10, previous_week_count=10),
+                _candidate("Top", count=20, previous_week_count=20),
+            ]
+        )
+        assert [t.name.root for t in trends] == ["Top", "Alpha", "zeta"]
+
+    def test_keeps_counts_and_growth_rate(self) -> None:
+        (trend,) = rank_mention_trends(
+            [_candidate("NVIDIA", count=12, previous_week_count=4)]
+        )
+        assert (trend.article_volume, trend.growth) == (
+            MentionArticleVolume(count=12, previous_week_count=4, rank=1),
+            MentionGrowth(rate=(12 - 4) / 4, rank=1),
+        )
+
+    def test_empty_candidates_return_empty_tuple(self) -> None:
+        assert rank_mention_trends([]) == ()
 
 
 class TestCategoryTrends:
-    def _make(
-        self,
-        *,
-        most_mentioned: tuple[RankedMention, ...] = (),
-        fastest_growing: tuple[RankedMention, ...] = (),
-    ) -> CategoryTrends:
-        return CategoryTrends(
-            category_id=1,
-            category_slug="ai_ml",
-            category_name="AI・ML",
-            most_mentioned=most_mentioned,
-            fastest_growing=fastest_growing,
+    def test_accepts_more_names_than_top_n_when_tied(self) -> None:
+        """同点で上位が増えるため、件数の上限は持たない。"""
+        trends = tuple(_trend(f"m{i}") for i in range(TOP_N_PER_RANKING + 2))
+        category_trends = CategoryTrends(
+            category_slug="ai_ml", category_name="AI・ML", mention_trends=trends
         )
-
-    def test_constructs_with_empty_rankings(self) -> None:
-        category_trends = self._make()
-        assert category_trends.category_id == 1
-        assert category_trends.category_slug == "ai_ml"
-        assert category_trends.category_name == "AI・ML"
-        assert category_trends.most_mentioned == ()
-        assert category_trends.fastest_growing == ()
-
-    def test_constructs_with_populated_rankings(self) -> None:
-        appearance = _mention("Appears")
-        growth = _mention("Grows")
-        category_trends = self._make(
-            most_mentioned=(appearance,), fastest_growing=(growth,)
-        )
-        assert category_trends.most_mentioned == (appearance,)
-        assert category_trends.fastest_growing == (growth,)
-
-    def test_rejects_most_mentioned_over_top_n(self) -> None:
-        """most_mentioned は TOP_N_PER_RANKING 件まで。"""
-        too_many = tuple(_mention(f"m{i}") for i in range(TOP_N_PER_RANKING + 1))
-        with pytest.raises(ValidationError):
-            self._make(most_mentioned=too_many)
-
-    def test_rejects_fastest_growing_over_top_n(self) -> None:
-        """fastest_growing は TOP_N_PER_RANKING 件まで。"""
-        too_many = tuple(_mention(f"m{i}") for i in range(TOP_N_PER_RANKING + 1))
-        with pytest.raises(ValidationError):
-            self._make(fastest_growing=too_many)
+        assert len(category_trends.mention_trends) == TOP_N_PER_RANKING + 2
 
     def test_immutable_aggregate(self) -> None:
-        category_trends = self._make()
+        category_trends = CategoryTrends(
+            category_slug="ai_ml", category_name="AI・ML", mention_trends=()
+        )
         with pytest.raises(ValidationError):
-            category_trends.category_id = 99  # type: ignore[misc]
-
-    def test_rankings_are_tuples(self) -> None:
-        """ランキングは tuple で永続化される (immutability を構造で保証)。"""
-        category_trends = self._make()
-        assert isinstance(category_trends.most_mentioned, tuple)
-        assert isinstance(category_trends.fastest_growing, tuple)
+            category_trends.category_slug = "other"  # type: ignore[misc]
 
 
 class TestTrendsBundle:
-    def _category_trends(self, category_id: int = 1) -> CategoryTrends:
+    def _category_trends(self, slug: str = "ai_ml") -> CategoryTrends:
         return CategoryTrends(
-            category_id=category_id,
-            category_slug="ai_ml",
-            category_name="AI・ML",
-            most_mentioned=(),
-            fastest_growing=(),
+            category_slug=slug, category_name="AI・ML", mention_trends=()
         )
-
-    def test_constructs_with_empty_category_trends(self) -> None:
-        bundle = TrendsBundle(
-            window=TrendWindow(window_end=date(2026, 5, 3)), category_trends=()
-        )
-        assert bundle.window.window_end == date(2026, 5, 3)
-        assert bundle.category_trends == ()
-
-    def test_constructs_with_multiple_category_trends(self) -> None:
-        category_trends = (self._category_trends(1), self._category_trends(2))
-        bundle = TrendsBundle(
-            window=TrendWindow(window_end=date(2026, 5, 3)),
-            category_trends=category_trends,
-        )
-        assert len(bundle.category_trends) == 2
-
-    def test_immutable_bundle(self) -> None:
-        bundle = TrendsBundle(
-            window=TrendWindow(window_end=date(2026, 5, 3)), category_trends=()
-        )
-        with pytest.raises(ValidationError):
-            bundle.window.window_end = date(2026, 4, 27)  # type: ignore[misc]
 
     def test_rejects_too_many_category_trends(self) -> None:
         """category_trends は MAX_CATEGORIES_PER_BUNDLE 件まで。"""
         too_many = tuple(
-            self._category_trends(i) for i in range(MAX_CATEGORIES_PER_BUNDLE + 1)
+            self._category_trends(f"c{i}") for i in range(MAX_CATEGORIES_PER_BUNDLE + 1)
         )
         with pytest.raises(ValidationError):
             TrendsBundle(
-                window=TrendWindow(window_end=date(2026, 5, 3)),
+                weeks=TrendWeeks(snapshot_date=date(2026, 5, 3)),
                 category_trends=too_many,
             )
 
     def test_model_dump_round_trip(self) -> None:
-        """model_dump(mode='json') → model_validate で同値に戻る (VO round-trip)。
+        """model_dump(mode='json') → model_validate で同値に戻る。
 
         永続化される実体は TrendsBundle の dump ではなく Trends レスポンス payload
         (camelCase) であることに注意。この round-trip はドメイン VO の不変条件検証。
         """
-        enriched = _mention("NVIDIA").model_copy(
+        enriched = _trend().model_copy(
             update={
                 "key_points": ("AI chip demand surges",),
-                "related_mentions": (
-                    RelatedMention(
-                        name=MentionName("OpenAI"),
-                        type=MentionType.COMPANY,
-                        shared_article_count=3,
-                    ),
-                ),
+                "mentioned_with": (_co_mention(),),
             }
         )
-        category_trends = CategoryTrends(
-            category_id=1,
-            category_slug="ai_ml",
-            category_name="AI・ML",
-            most_mentioned=(enriched,),
-            fastest_growing=(enriched,),
-        )
         original = TrendsBundle(
-            window=TrendWindow(window_end=date(2026, 5, 3)),
-            category_trends=(category_trends,),
+            weeks=TrendWeeks(snapshot_date=date(2026, 5, 3)),
+            category_trends=(
+                CategoryTrends(
+                    category_slug="ai_ml",
+                    category_name="AI・ML",
+                    mention_trends=(enriched,),
+                ),
+            ),
         )
-        dumped = original.model_dump(mode="json")
-        restored = TrendsBundle.model_validate(dumped)
-        assert restored == original
+        assert TrendsBundle.model_validate(original.model_dump(mode="json")) == (
+            original
+        )
 
 
 class TestDomainConstants:
     """集計しきい値が想定値であることを pin する (仕様値のドリフト検出)。"""
 
-    def test_min_current_is_five(self) -> None:
-        assert MIN_CURRENT == 5
+    def test_min_candidate_count_is_five(self) -> None:
+        assert MIN_CANDIDATE_COUNT == 5
 
     def test_smoothing_is_two(self) -> None:
         assert SMOOTHING == 2
@@ -352,121 +376,13 @@ class TestDomainConstants:
         assert TOP_N_PER_RANKING == 5
 
 
-class TestIsHot:
-    """is_hot の hot/non-hot 境界条件。
-
-    floor (appearance_count >= MIN_CURRENT) は RankedMention の Field 制約で
-    構造的に保証済みなので、ここでは継続トレンドと新規 burst の閾値境界だけを確認する。
-    """
-
-    def test_previous_at_min_previous_is_hot(self) -> None:
-        """previous == MIN_PREVIOUS(2) の継続トレンドは hot。"""
-        m = _mention(current=MIN_CURRENT, previous=MIN_PREVIOUS)
-        assert is_hot(m) is True
-
-    def test_previous_below_min_previous_without_burst_is_not_hot(self) -> None:
-        """previous=1, current=9 は継続トレンド条件 (previous >= 2) も
-        burst 条件 (current >= NEW_BURST_THRESHOLD=10) も満たさないので non-hot。"""
-        m = _mention(current=9, previous=1)
-        assert is_hot(m) is False
-
-    def test_zero_previous_at_burst_threshold_is_hot(self) -> None:
-        """previous=0 かつ current == NEW_BURST_THRESHOLD(10) は burst として hot。"""
-        m = _mention(current=NEW_BURST_THRESHOLD, previous=0)
-        assert is_hot(m) is True
-
-    def test_zero_previous_below_burst_threshold_is_not_hot(self) -> None:
-        """previous=0 かつ current < NEW_BURST_THRESHOLD(10) は non-hot。"""
-        # current=9 は MIN_CURRENT(5) >= を満たすが burst 閾値には届かない
-        m = _mention(current=NEW_BURST_THRESHOLD - 1, previous=0)
-        assert is_hot(m) is False
-
-
-class TestSelectMostMentioned:
-    """select_most_mentioned の順序と truncate の不変条件。"""
-
-    def test_tie_break_by_hotness_score_when_appearance_count_equal(self) -> None:
-        """appearance_count 同値のとき hotness_score 降順で tie-break される。"""
-        # hotness_score = (current - previous) / max(previous, SMOOTHING=2)
-        # high: (10 - 0) / 2 = 5.0  low: (10 - 8) / 8 = 0.25
-        high_hotness = _mention("High", current=10, previous=0)
-        low_hotness = _mention("Low", current=10, previous=8)
-        result = select_most_mentioned([low_hotness, high_hotness])
-        assert result[0] == high_hotness
-        assert result[1] == low_hotness
-
-    def test_tie_break_by_match_key_when_appearance_count_and_hotness_equal(
-        self,
-    ) -> None:
-        """appearance_count と hotness_score が同値のとき name.match_key 昇順。"""
-        # current / previous が同じなら hotness_score も同値
-        m_z = _mention("Zebra", current=10, previous=5)
-        m_a = _mention("Apple", current=10, previous=5)
-        result = select_most_mentioned([m_z, m_a])
-        # match_key = lower, "apple" < "zebra"
-        assert result[0] == m_a
-        assert result[1] == m_z
-
-    def test_truncates_to_top_n(self) -> None:
-        """TOP_N_PER_RANKING + 1 件の pool は TOP_N_PER_RANKING 件に truncate。"""
-        pool = [
-            _mention(f"m{i}", current=MIN_CURRENT + i)
-            for i in range(TOP_N_PER_RANKING + 1)
-        ]
-        result = select_most_mentioned(pool)
-        assert len(result) == TOP_N_PER_RANKING
-
-    def test_empty_pool_returns_empty_tuple(self) -> None:
-        """空 pool は空 tuple を返す。"""
-        assert select_most_mentioned([]) == ()
-
-
-class TestSelectFastestGrowing:
-    """select_fastest_growing の hot フィルタ・順序・truncate の不変条件。"""
-
-    def test_tie_break_chain_hotness_then_appearance_then_match_key(self) -> None:
-        """hotness_score 同値 → appearance_count 降順 → match_key 昇順の tie-break。"""
-        # 全て previous=0 かつ current=10 → hotness_score = 10/2 = 5.0 で同値
-        # appearance_count = current なので同値 → match_key で決まる
-        m_z = _mention("Zebra", current=NEW_BURST_THRESHOLD, previous=0)
-        m_a = _mention("Apple", current=NEW_BURST_THRESHOLD, previous=0)
-        result = select_fastest_growing([m_z, m_a])
-        assert result[0] == m_a
-        assert result[1] == m_z
-
-    def test_tie_break_appearance_count_when_hotness_equal(self) -> None:
-        """hotness_score 同値のとき appearance_count 降順が優先される。"""
-        # hotness = (current - prev) / max(prev, 2)
-        # high_count: (20 - 4) / 4 = 4.0  low_count: (10 - 2) / 2 = 4.0 → 同値
-        # appearance_count は high_count=20 > low_count=10
-        high_count = _mention("AAA", current=20, previous=4)
-        low_count = _mention("ZZZ", current=10, previous=2)
-        result = select_fastest_growing([low_count, high_count])
-        assert result[0] == high_count
-        assert result[1] == low_count
-
-    def test_non_hot_mention_excluded_regardless_of_appearance_count(self) -> None:
-        """non-hot (previous=1, current=9) は appearance_count が高くても除外される。"""
-        # previous=1 < MIN_PREVIOUS=2, current=9 < NEW_BURST_THRESHOLD=10 → non-hot
-        non_hot = _mention("NonHot", current=9, previous=1)
-        hot = _mention("Hot", current=NEW_BURST_THRESHOLD, previous=0)
-        result = select_fastest_growing([non_hot, hot])
-        assert non_hot not in result
-        assert hot in result
-
-    def test_all_non_hot_returns_empty_tuple(self) -> None:
-        """全員 non-hot のとき空 tuple を返す。"""
-        # previous=1, current=9 → non-hot (上の test と同じ条件)
-        pool = [_mention(f"m{i}", current=9, previous=1) for i in range(3)]
-        assert select_fastest_growing(pool) == ()
-
-
-class TestTrendWindow:
+class TestTrendWeeks:
     @pytest.mark.parametrize("day", [20, 21, 25, 26])
-    def test_accepts_any_weekday(self, day):
-        """トレンドは曜日によらず毎日完了期間を定義できる。"""
-        assert TrendWindow(window_end=date(2026, 4, day)).window_end == date(
-            2026, 4, day
+    def test_week_ends_the_day_before_on_any_weekday(self, day):
+        """週は曜日によらず、スナップショットの日付の前日を最終日にする。"""
+        weeks = TrendWeeks(snapshot_date=date(2026, 4, day))
+        assert weeks.week == Week(
+            start=date(2026, 4, day - 7), end=date(2026, 4, day - 1)
         )
 
     @pytest.mark.parametrize(
@@ -478,30 +394,37 @@ class TestTrendWindow:
             (datetime(2026, 5, 1, 14, 59, tzinfo=UTC), date(2026, 5, 1)),
         ],
     )
-    def test_latest_period_changes_only_at_jst_midnight(self, now, expected):
-        """UTCで渡された時刻でもJST午前0時を境界に対象日を決める。"""
-        assert TrendWindow.latest(now).window_end == expected
+    def test_latest_snapshot_date_changes_only_at_jst_midnight(self, now, expected):
+        """UTCで渡された時刻でもJST午前0時を境界にスナップショットの日付を決める。"""
+        assert TrendWeeks.latest(now).snapshot_date == expected
 
     def test_rejects_a_current_time_without_timezone(self):
         """タイムゾーンのない時刻から暗黙に実行環境の時差を使わない。"""
         with pytest.raises(ValueError, match="timezone-aware"):
-            TrendWindow.latest(datetime(2026, 5, 1))
+            TrendWeeks.latest(datetime(2026, 5, 1))
 
-    def test_current_period_is_seven_complete_days_across_year_end(self):
-        """年をまたいでも対象期間はJST午前0時で区切る7日間。"""
-        window = TrendWindow(window_end=date(2026, 1, 3))
-        assert window.window_start == date(2025, 12, 27)
-        assert window.current_start == datetime(2025, 12, 26, 15, tzinfo=UTC)
-        assert window.current_end == datetime(2026, 1, 2, 15, tzinfo=UTC)
+    def test_week_is_seven_days_across_year_end(self):
+        """年をまたいでも週はJST午前0時で区切る7日間で、最終日を含む。"""
+        week = TrendWeeks(snapshot_date=date(2026, 1, 3)).week
+        assert (week.start, week.end) == (date(2025, 12, 27), date(2026, 1, 2))
 
-    def test_comparison_period_immediately_precedes_the_current_period(self):
-        """比較期間は現在期間の開始直前までの7日間。"""
-        window = TrendWindow(window_end=date(2026, 5, 3))
-        assert window.previous_start == datetime(2026, 4, 18, 15, tzinfo=UTC)
-        assert window.current_start == datetime(2026, 4, 25, 15, tzinfo=UTC)
+    def test_published_range_is_jst_midnight_half_open(self):
+        """公開日時は初日の0時 (含む) から最終日の翌日0時 (含まない) まで。"""
+        week = TrendWeeks(snapshot_date=date(2026, 1, 3)).week
+        assert (week.published_from, week.published_before) == (
+            datetime(2025, 12, 26, 15, tzinfo=UTC),
+            datetime(2026, 1, 2, 15, tzinfo=UTC),
+        )
 
-    def test_period_is_immutable(self):
-        """準備と集計の間に期間を書き換えられない。"""
-        window = TrendWindow(window_end=date(2026, 5, 3))
+    def test_previous_week_immediately_precedes_the_week(self):
+        """前週は週の初日の前日までの7日間。"""
+        weeks = TrendWeeks(snapshot_date=date(2026, 5, 3))
+        assert weeks.previous_week == Week(
+            start=date(2026, 4, 19), end=date(2026, 4, 25)
+        )
+
+    def test_weeks_are_immutable(self):
+        """準備と集計の間に週を書き換えられない。"""
+        weeks = TrendWeeks(snapshot_date=date(2026, 5, 3))
         with pytest.raises(ValidationError):
-            window.window_end = date(2026, 5, 4)
+            weeks.snapshot_date = date(2026, 5, 4)  # type: ignore[misc]

@@ -15,36 +15,31 @@ beforeEach(() => {
 });
 
 describe("getTrendsViewModel", () => {
-  it("empty state は state='empty' で透過する", async () => {
-    mocks.getTrends.mockResolvedValue({ state: "empty" });
+  it("未生成の null はそのまま透過する", async () => {
+    mocks.getTrends.mockResolvedValue(null);
     const result = await getTrendsViewModel();
-    expect(result).toEqual({ state: "empty" });
+    expect(result).toBeNull();
   });
 
-  it("trends state は categoryTrends 等のフィールドを保持して透過する", async () => {
+  it("トレンドは categoryTrends 等のフィールドを保持して透過する", async () => {
     const trends = {
-      state: "trends" as const,
-      windowStart: "2026-04-26",
-      windowEnd: "2026-05-03",
+      week: { start: "2026-04-26", end: "2026-05-02" },
+      previousWeek: { start: "2026-04-19", end: "2026-04-25" },
       generatedAt: "2026-05-03T06:00:00Z",
-      sourceAnalysisCount: 42,
+      analyzedArticleCount: 42,
       categoryTrends: [
         {
-          categoryId: 1,
-          categorySlug: "ai",
-          categoryName: "AI",
-          mostMentioned: [
+          category: { slug: "ai", name: "AI" },
+          mentionTrends: [
             {
               name: "NVIDIA",
               type: "company" as const,
-              appearanceCount: 30,
-              previousAppearanceCount: 5,
-              growthRate: 5.0,
+              articleVolume: { count: 30, previousWeekCount: 5, rank: 1 },
+              growth: { rate: 5.0, rank: 1 },
               keyPoints: [],
-              relatedMentions: [],
+              mentionedWith: [],
             },
           ],
-          fastestGrowing: [],
         },
       ],
     };
@@ -54,7 +49,7 @@ describe("getTrendsViewModel", () => {
   });
 
   it("getTrends を 1 度だけ呼ぶ", async () => {
-    mocks.getTrends.mockResolvedValue({ state: "empty" });
+    mocks.getTrends.mockResolvedValue(null);
     await getTrendsViewModel();
     expect(mocks.getTrends).toHaveBeenCalledTimes(1);
   });

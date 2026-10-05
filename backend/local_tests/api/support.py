@@ -8,9 +8,11 @@ from uuid import UUID
 
 from app.insights.trend_discovery.domain.trend import (
     CategoryTrends,
-    RankedMention,
+    MentionArticleVolume,
+    MentionGrowth,
+    MentionTrend,
     TrendsBundle,
-    TrendWindow,
+    TrendWeeks,
 )
 from app.insights.trend_discovery.schemas import trends_from_snapshot
 
@@ -232,27 +234,26 @@ async def seed_briefing(
         )
 
 
-def trends_payload(window_end: date) -> dict:
+def trends_payload(snapshot_date: date) -> dict:
     """製品のトレンドの型から、APIが返す形の保存内容を作る。"""
-    mention = RankedMention(
-        name="NVIDIA", type="company", appearance_count=30, previous_appearance_count=5
+    trend = MentionTrend(
+        name="NVIDIA",
+        type="company",
+        article_volume=MentionArticleVolume(count=30, previous_week_count=5, rank=1),
+        growth=MentionGrowth(rate=5.0, rank=1),
     )
     bundle = TrendsBundle(
-        window=TrendWindow(window_end=window_end),
+        weeks=TrendWeeks(snapshot_date=snapshot_date),
         category_trends=(
             CategoryTrends(
-                category_id=1,
-                category_slug="ai",
-                category_name="AI",
-                most_mentioned=(mention,),
-                fastest_growing=(mention,),
+                category_slug="ai", category_name="AI", mention_trends=(trend,)
             ),
         ),
     )
     response = trends_from_snapshot(
         bundle=bundle,
         generated_at=_TRENDS_GENERATED_AT,
-        source_analysis_count=42,
+        analyzed_article_count=42,
     )
     return response.model_dump(mode="json", by_alias=True)
 

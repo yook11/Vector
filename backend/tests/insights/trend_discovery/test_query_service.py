@@ -12,25 +12,27 @@ from datetime import UTC, date, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.trend_discovery.domain.trend import TrendsBundle, TrendWindow
+from app.insights.trend_discovery.domain.trend import TrendsBundle, TrendWeeks
 from app.insights.trend_discovery.query import TrendsQueryService
 from app.insights.trend_discovery.schemas import trends_from_snapshot
 from app.models.trends_snapshot import TrendsSnapshot
 
 
-def _snapshot(window_end: date, *, source_analysis_count: int = 10) -> TrendsSnapshot:
+def _snapshot(snapshot_date: date, *, article_count: int = 10) -> TrendsSnapshot:
     """camelCase API payload で snapshot を組み立てる (service と同じ経路)。"""
-    bundle = TrendsBundle(window=TrendWindow(window_end=window_end), category_trends=())
+    bundle = TrendsBundle(
+        weeks=TrendWeeks(snapshot_date=snapshot_date), category_trends=()
+    )
     generated_at = datetime(2026, 5, 3, 0, 0, 0, tzinfo=UTC)
     payload = trends_from_snapshot(
         bundle=bundle,
         generated_at=generated_at,
-        source_analysis_count=source_analysis_count,
+        analyzed_article_count=article_count,
     ).model_dump(mode="json", by_alias=True)
     return TrendsSnapshot(
-        window_end=window_end,
+        window_end=snapshot_date,
         bundle=payload,
-        source_analysis_count=source_analysis_count,
+        source_analysis_count=article_count,
         generated_at=generated_at,
     )
 
