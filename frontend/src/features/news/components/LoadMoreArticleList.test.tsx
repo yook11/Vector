@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -160,15 +160,20 @@ describe("LoadMoreArticleList", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "さらに読み込む" }),
     );
-    expect(screen.getByText("読み込めませんでした")).toBeInTheDocument();
+    expect(await screen.findByText("読み込めませんでした")).toBeInTheDocument();
 
     await userEvent.click(
       await screen.findByRole("button", { name: "もう一度読み込む" }),
     );
 
+    // 失敗の表示は再試行の遷移が終わってから消えるため、記事が足された後も待つ。
+    await waitFor(() => {
+      expect(
+        screen.queryByText("読み込めませんでした"),
+      ).not.toBeInTheDocument();
+    });
     expect(loadMore.mock.calls).toEqual([["cursor-1"], ["cursor-1"]]);
     expect(titles()).toEqual(["記事2", "記事1"]);
-    expect(screen.queryByText("読み込めませんでした")).not.toBeInTheDocument();
   });
 
   it("最初の記事は渡されたウォッチ ID で、足した記事は読み込みで得たウォッチ状態で表示する", async () => {
