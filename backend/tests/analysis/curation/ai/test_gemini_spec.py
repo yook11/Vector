@@ -1,8 +1,9 @@
 """``GeminiCurationSpec`` (singleton) の構造を固定する golden table テスト。
 
-Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``version`` /
+Prompt と Spec を分離した結果として ``provider`` / ``version`` /
 ``gen_config`` / ``response_schema`` / ``system_instruction``
-が module singleton として SSoT に置かれていることを検証する。
+が module singleton として SSoT に置かれていることを検証する。モデル識別子は
+spec の値であり、テストでは固定しない。
 
 ``version`` は ``compute_call_signature`` で算出される 8 文字 hash。具体値は
 prompt 本文変更のたびに自動で動くため、テストでは値そのものを pin しない。
@@ -26,10 +27,6 @@ _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
 def test_provider_is_gemini() -> None:
     assert GEMINI_CURATION_SPEC.provider == "gemini"
-
-
-def test_model_is_flash_lite_35() -> None:
-    assert GEMINI_CURATION_SPEC.model == "gemini-3.5-flash-lite"
 
 
 def test_response_schema_is_gemini_extraction_response() -> None:

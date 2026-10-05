@@ -32,7 +32,7 @@ class GeminiAssessmentSpec:
     version: str
 
 
-_MODEL: Final[str] = "gemini-3.5-flash-lite"
+_MODEL: Final[str] = "gemini-3.8-flash"
 # thinking (既定 minimal) も出力上限に含まれるため、key_points の出力に余裕を持たせる。
 _GEN_CONFIG: Final[Mapping[str, Any]] = MappingProxyType(
     {

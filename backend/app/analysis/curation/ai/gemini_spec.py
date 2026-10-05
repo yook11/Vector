@@ -27,7 +27,7 @@ from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.prompt_versions import compute_call_signature
 
-_MODEL: Final[str] = "gemini-3.5-flash-lite"
+_MODEL: Final[str] = "gemini-3.8-flash"
 _GEN_CONFIG: Final[Mapping[str, Any]] = MappingProxyType(
     {
         "max_output_tokens": 2048,
