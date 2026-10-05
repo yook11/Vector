@@ -117,7 +117,8 @@ describe("Dashboard initial loading shell", () => {
     expect.soft(settled).toBe(true);
     expect.soft(mocks.getCategories).toHaveBeenCalledTimes(1);
     expect.soft(mocks.getArticles).toHaveBeenCalledTimes(1);
-    expect.soft(mocks.getWatchlistIds).toHaveBeenCalledTimes(1);
+    // ウォッチ状態は記事の ID が分かってから問い合わせる。
+    expect.soft(mocks.getWatchlistIds).not.toHaveBeenCalled();
     expect.soft(mocks.getCategories).toHaveBeenCalledWith("revision-a");
     expect.soft(mocks.getArticles).toHaveBeenCalledWith({}, "revision-a");
   });

@@ -78,6 +78,7 @@
                       "@/features/news",
                       "@/features/news/**",
                       "@/features/watchlist/**",
+                      "!@/features/watchlist/server",
                       "@/features/sources",
                       "@/features/sources/**",
                       "@/features/auth",
@@ -89,7 +90,7 @@
                       "@/features/pipeline-status",
                       "@/features/pipeline-status/**"
                     ],
-                    "message": "features/news 内は自 feature を相対 import で参照すること。他 feature への import は禁止 (Public API・deep とも)。例外として features/watchlist のみ Public API '@/features/watchlist' 経由の compose を許可 (NewsList→WatchlistButton、一方向のみ)。"
+                    "message": "features/news 内は自 feature を相対 import で参照すること。他 feature への import は禁止 (Public API・deep とも)。例外として features/watchlist のみ Public API '@/features/watchlist' / '@/features/watchlist/server' 経由の参照を許可 (WatchlistButton の compose と、続きの読み込みでのウォッチ状態の取得。一方向のみ)。"
                   }
                 ]
               }

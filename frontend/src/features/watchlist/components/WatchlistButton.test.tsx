@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Component, type ReactNode } from "react";
+import { Component, type ReactNode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Server Action は **相対 path** で mock する。`@/features/watchlist/api/...` の
@@ -119,6 +119,54 @@ describe("WatchlistButton — 楽観的 toggle (mid-flight)", () => {
     expect(mocks.addToWatchlist).not.toHaveBeenCalled();
 
     resolveRemove();
+  });
+});
+
+describe("WatchlistButton — 操作結果を呼び出し側へ知らせる", () => {
+  // サーバーが描き直さない一覧と同じく、知らせを受けて自分で状態を持つ呼び出し側。
+  function ListLikeParent({ initial }: { initial: boolean }) {
+    const [isWatched, setIsWatched] = useState(initial);
+    return (
+      <WatchlistButton
+        articleId={5}
+        isWatched={isWatched}
+        onWatchedChange={setIsWatched}
+      />
+    );
+  }
+
+  it("成功すると新しい状態を知らせ、操作の後も切り替えた表示のまま戻らない", async () => {
+    mocks.addToWatchlist.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<ListLikeParent initial={false} />);
+
+    await user.click(getButton());
+
+    await waitFor(() => {
+      expect(getButton()).toBeEnabled();
+    });
+    expect(getButton()).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("失敗すると知らせず、元の表示に戻る", async () => {
+    mocks.removeFromWatchlist.mockRejectedValue(new Error("Network down"));
+    const onWatchedChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <WatchlistButton
+        articleId={5}
+        isWatched={true}
+        onWatchedChange={onWatchedChange}
+      />,
+    );
+
+    await user.click(getButton());
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledTimes(1);
+    });
+    expect(onWatchedChange).not.toHaveBeenCalled();
+    expect(getButton()).toHaveAttribute("aria-pressed", "true");
   });
 });
 

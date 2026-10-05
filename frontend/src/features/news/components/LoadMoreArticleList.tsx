@@ -10,8 +10,13 @@ import { ArticleList } from "./ArticleList";
 
 interface LoadMoreArticleListProps {
   initialList: AnalyzedArticlePreviewList;
-  watchedIds: Set<number>;
-  loadMore: (cursor: string) => Promise<AnalyzedArticlePreviewList>;
+  /** initialList のうちウォッチ済みの記事 ID。 */
+  initialWatchedIds: Set<number>;
+  /** 続きの記事と、そのうちウォッチ済みの記事 ID を返す。 */
+  loadMore: (cursor: string) => Promise<{
+    list: AnalyzedArticlePreviewList;
+    watchedIds: Set<number>;
+  }>;
   emptyState: ReactNode;
   /** ウォッチリスト用。読み込んだ後にウォッチを外した記事を出さない。 */
   showsOnlyWatched?: boolean;
@@ -27,12 +32,13 @@ export function LoadMoreArticleList(props: LoadMoreArticleListProps) {
 
 function LoadedArticles({
   initialList,
-  watchedIds,
+  initialWatchedIds,
   loadMore,
   emptyState,
   showsOnlyWatched = false,
 }: LoadMoreArticleListProps) {
   const [items, setItems] = useState(initialList.items);
+  const [watchedIds, setWatchedIds] = useState(initialWatchedIds);
   // 反映中に旧 backend の応答 (nextCursor 無し) を受けても「続きなし」として扱う。
   const [nextCursor, setNextCursor] = useState(initialList.nextCursor ?? null);
   const [hasLoadedMore, setHasLoadedMore] = useState(false);
@@ -43,6 +49,16 @@ function LoadedArticles({
     ? items.filter((article) => watchedIds.has(article.id))
     : items;
 
+  // 一覧の状態はサーバーから最初に一度だけ受け取るため、ウォッチの操作結果はここで反映する。
+  function handleWatchedChange(articleId: number, isWatched: boolean) {
+    setWatchedIds((current) => {
+      const next = new Set(current);
+      if (isWatched) next.add(articleId);
+      else next.delete(articleId);
+      return next;
+    });
+  }
+
   function handleLoadMore() {
     if (nextCursor === null) return;
     const cursor = nextCursor;
@@ -50,8 +66,9 @@ function LoadedArticles({
       setFailed(false);
       try {
         const next = await loadMore(cursor);
-        setItems((current) => [...current, ...next.items]);
-        setNextCursor(next.nextCursor ?? null);
+        setItems((current) => [...current, ...next.list.items]);
+        setWatchedIds((current) => new Set([...current, ...next.watchedIds]));
+        setNextCursor(next.list.nextCursor ?? null);
         setHasLoadedMore(true);
       } catch (err) {
         // 未ログインの redirect は握り潰さず Next.js の遷移に渡す。
@@ -66,7 +83,11 @@ function LoadedArticles({
 
   return (
     <>
-      <ArticleList items={visibleItems} watchedIds={watchedIds} />
+      <ArticleList
+        items={visibleItems}
+        watchedIds={watchedIds}
+        onWatchedChange={handleWatchedChange}
+      />
       <div
         aria-live="polite"
         className="flex flex-col items-center gap-2 pt-8 pb-2 text-[12px] tracking-[0.12em] text-[var(--vector-ink-muted)]"

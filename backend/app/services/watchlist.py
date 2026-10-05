@@ -39,9 +39,9 @@ class WatchlistService:
             next_cursor=next_cursor,
         )
 
-    async def list_ids(self) -> list[int]:
-        """ユーザーがウォッチ中の article_id を新しい順に返す。"""
-        return await self.repo.list_ids(self.user_id)
+    async def list_watched_ids(self, article_ids: list[int]) -> list[int]:
+        """渡した記事のうち、ウォッチ中のものの ID を返す。"""
+        return await self.repo.fetch_watched_ids(self.user_id, article_ids)
 
     async def add_to_watchlist(self, article_id: int) -> bool:
         """新しく追加したときだけ True を返す。登録済みなら何もしない。"""

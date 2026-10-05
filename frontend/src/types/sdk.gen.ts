@@ -55,9 +55,9 @@ export const listCategories = <ThrowOnError extends boolean = false>(options?: O
 /**
  * List Watchlist Ids
  *
- * ウォッチ中の article_id 集合を返す (per-user, cache 不可)。
+ * 渡した記事のうち、ウォッチ中のものの ID を返す。
  */
-export const listWatchlistIds = <ThrowOnError extends boolean = false>(options?: Options<ListWatchlistIdsData, ThrowOnError>): RequestResult<ListWatchlistIdsResponses, ListWatchlistIdsErrors, ThrowOnError> => (options?.client ?? client).get<ListWatchlistIdsResponses, ListWatchlistIdsErrors, ThrowOnError>({ url: '/api/v1/me/watchlist/ids', ...options });
+export const listWatchlistIds = <ThrowOnError extends boolean = false>(options: Options<ListWatchlistIdsData, ThrowOnError>): RequestResult<ListWatchlistIdsResponses, ListWatchlistIdsErrors, ThrowOnError> => (options.client ?? client).get<ListWatchlistIdsResponses, ListWatchlistIdsErrors, ThrowOnError>({ url: '/api/v1/me/watchlist/ids', ...options });
 
 /**
  * List Articles In Watchlist

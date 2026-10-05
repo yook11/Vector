@@ -918,8 +918,8 @@ export type ValidationError = {
  *
  * GET /api/v1/me/watchlist/ids のレスポンス。
  *
- * 記事リソースから per-user フラグを切り離し、frontend が render 時に
- * Set lookup で merge するための per-user メンバーシップ ID 集合。
+ * 渡した記事のうちウォッチ中のものの ID。記事のレスポンスはユーザーに依存させず、
+ * frontend が表示時にこの集合と突き合わせる。
  */
 export type WatchlistIds = {
     /**
@@ -1261,7 +1261,12 @@ export type ListWatchlistIdsData = {
         authorization?: string | null;
     };
     path?: never;
-    query?: never;
+    query: {
+        /**
+         * Articleids
+         */
+        articleIds: Array<number>;
+    };
     url: '/api/v1/me/watchlist/ids';
 };
 

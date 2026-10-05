@@ -51,12 +51,17 @@ class WatchlistRepository:
         result = await self.session.execute(stmt)
         return [(analysis, watched_at) for analysis, watched_at in result.unique()]
 
-    async def list_ids(self, user_id: UUID) -> list[int]:
-        """ユーザーがウォッチ中の analyzed_article_id を新しい順に返す."""
+    async def fetch_watched_ids(
+        self, user_id: UUID, article_ids: list[int]
+    ) -> list[int]:
+        """渡した記事のうち、ユーザーがウォッチ中のものの ID を昇順で返す."""
         stmt = (
             select(WatchlistEntry.analyzed_article_id)
-            .where(WatchlistEntry.user_id == user_id)
-            .order_by(WatchlistEntry.created_at.desc())
+            .where(
+                WatchlistEntry.user_id == user_id,
+                WatchlistEntry.analyzed_article_id.in_(article_ids),
+            )
+            .order_by(WatchlistEntry.analyzed_article_id)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

@@ -9,7 +9,7 @@ import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
 import { ArticleListSkeleton, LoadMoreArticleList } from "@/features/news";
 import { loadMoreWatchlist } from "@/features/watchlist";
-import { getWatchlist, getWatchlistIds } from "@/features/watchlist/server";
+import { getWatchlist } from "@/features/watchlist/server";
 import { requireSession } from "@/lib/auth/guards";
 
 export const metadata: Metadata = {
@@ -20,16 +20,12 @@ async function WatchlistContent() {
   // DAL gate (多重防御): getWatchlist は authed client で既に fail-closed だが、
   // 401 を踏む前に login へ誘導し、将来 'use cache' 化された際の漏洩も防ぐ。
   await requireSession();
-  // 解除した記事を読み込み済みの一覧から外せるよう、操作のたびに取り直されるウォッチ ID を渡す。
-  const [data, watchedIds] = await Promise.all([
-    getWatchlist(),
-    getWatchlistIds(),
-  ]);
+  const data = await getWatchlist();
 
   return (
     <LoadMoreArticleList
       initialList={data}
-      watchedIds={watchedIds}
+      initialWatchedIds={new Set(data.items.map((article) => article.id))}
       loadMore={loadMoreWatchlist}
       showsOnlyWatched
       emptyState={

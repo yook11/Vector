@@ -26,6 +26,19 @@ describe("ウォッチリストの続きの読み込み", () => {
     expect(mocks.getWatchlist).toHaveBeenCalledWith("eyJpZCI6MX0");
   });
 
+  it("返す記事はすべてウォッチ済みとして、その ID を一緒に返す", async () => {
+    const list = {
+      items: [{ id: 12 }, { id: 11 }],
+      nextCursor: null,
+    };
+    mocks.getWatchlist.mockResolvedValue(list);
+
+    expect(await loadMoreWatchlist("eyJpZCI6MX0")).toEqual({
+      list,
+      watchedIds: new Set([12, 11]),
+    });
+  });
+
   it("未ログインなら backend を呼ばない", async () => {
     mocks.requireSession.mockRejectedValue(new Error("NEXT_REDIRECT"));
 

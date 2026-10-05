@@ -9,7 +9,7 @@ from app.dependencies import AuthenticatedUser, require_authenticated_user
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import AnalyzedArticlePreviewList, ArticleId
-from app.schemas.watchlist import WatchlistIds, WatchlistParams
+from app.schemas.watchlist import WatchlistIds, WatchlistIdsParams, WatchlistParams
 from app.services.watchlist import WatchlistService
 
 router = APIRouter(
@@ -33,10 +33,11 @@ def get_watchlist_service(
 
 @router.get("/watchlist/ids")
 async def list_watchlist_ids(
+    params: Annotated[WatchlistIdsParams, Query()],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> WatchlistIds:
-    """ウォッチ中の article_id 集合を返す (per-user, cache 不可)。"""
-    ids = await service.list_ids()
+    """渡した記事のうち、ウォッチ中のものの ID を返す。"""
+    ids = await service.list_watched_ids(params.article_ids)
     return WatchlistIds(ids=ids)
 
 
