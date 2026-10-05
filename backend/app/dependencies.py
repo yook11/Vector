@@ -11,12 +11,12 @@ from opentelemetry import trace
 from app.config import settings
 
 # BFF (Next.js) と backend (FastAPI) 間の内部 API 認証は HS256 JWT で行う。
-# BFF が Better Auth セッションから user_id / role を取り出して短期 JWT に署名し、
-# backend は同じ secret で検証する。BFF_JWT_SIGNING_SECRET 漏洩時の悪用ウィンドウを
-# JWT 有効期限 (~60 秒) に限定するための構造。
+# BFF が署名した短期 JWT を、backend は同じ secret で検証する。
+# 発行から60秒の有効期限は、漏洩した個々の JWT の再利用可能期間を短くする。
+# 署名鍵が漏洩した場合は鍵を交換し、検証側で旧鍵の受け入れを停止する必要がある。
 _JWT_ALGORITHM = "HS256"
-# iss / aud は frontend (`frontend/src/lib/api/internal-config.ts`) と同じ
-# literal を要求し、Vector 向けに署名された JWT だけを受け付ける。
+# iss / aud は frontend と揃え、発行元・利用先の異なる JWT の受け入れを防ぐ。
+# 署名鍵を持つ攻撃者は iss / aud も指定できるため、鍵漏洩への防御にはならない。
 _JWT_ISSUER = "vector-bff"
 _JWT_AUDIENCE = "vector-backend"
 
