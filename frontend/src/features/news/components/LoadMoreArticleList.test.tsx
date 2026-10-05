@@ -93,11 +93,12 @@ describe("LoadMoreArticleList", () => {
       screen.getByRole("button", { name: "さらに読み込む" }),
     );
 
+    // 読み込み中の表示が外れるのは記事を足した後の描画なので、ボタンが戻るまで待つ。
+    expect(
+      await screen.findByRole("button", { name: "さらに読み込む" }),
+    ).toBeInTheDocument();
     expect(loadMore).toHaveBeenCalledWith("cursor-1");
     expect(titles()).toEqual(["記事2", "記事1"]);
-    expect(
-      screen.getByRole("button", { name: "さらに読み込む" }),
-    ).toBeInTheDocument();
   });
 
   it("続きを最後まで読むと、ボタンを消して末尾に達したことを示す", async () => {
@@ -162,7 +163,7 @@ describe("LoadMoreArticleList", () => {
     expect(screen.getByText("読み込めませんでした")).toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "もう一度読み込む" }),
+      await screen.findByRole("button", { name: "もう一度読み込む" }),
     );
 
     expect(loadMore.mock.calls).toEqual([["cursor-1"], ["cursor-1"]]);
