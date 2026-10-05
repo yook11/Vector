@@ -14,8 +14,8 @@ import {
 import { getWatchlistIds } from "@/features/watchlist";
 import { PositiveIdParamSchema } from "@/lib/validation/id";
 import type {
-  ArticleBrief,
-  ArticleDetail as ArticleDetailData,
+  AnalyzedArticle,
+  AnalyzedArticlePreview,
 } from "@/types/types.gen";
 
 interface NewsPageProps {
@@ -54,12 +54,12 @@ async function RelatedArticlesAsync({
   articlesPromise,
   watchedIds,
 }: {
-  articlesPromise: Promise<ArticleBrief[]>;
+  articlesPromise: Promise<AnalyzedArticlePreview[]>;
   watchedIds: Set<number>;
 }) {
   // Related articles are a progressive enhancement: failure must not break
   // the page, but we still log so embed/index regressions stay visible.
-  let articles: ArticleBrief[] = [];
+  let articles: AnalyzedArticlePreview[] = [];
   try {
     articles = await articlesPromise;
   } catch (err) {
@@ -125,8 +125,8 @@ async function NewsDetailContent({
   similarPromise,
   watchedIdsPromise,
 }: {
-  articlePromise: Promise<ArticleDetailData | null>;
-  similarPromise: Promise<ArticleBrief[]>;
+  articlePromise: Promise<AnalyzedArticle | null>;
+  similarPromise: Promise<AnalyzedArticlePreview[]>;
   watchedIdsPromise: Promise<Set<number>>;
 }) {
   const article = await articlePromise;

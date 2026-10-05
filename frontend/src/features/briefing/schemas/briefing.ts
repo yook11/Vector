@@ -38,7 +38,7 @@ const NewsSourceEmbedSchema = z.object({
 });
 
 const BriefingArticleEmbedSchema = z.object({
-  // /news/{id} 記事詳細の公開 id (ArticleBrief.id と同じ id 空間)
+  // /news/{id} 記事詳細の公開 id (AnalyzedArticle.id と同じ id 空間)
   id: z.number(),
   translatedTitle: z.string(),
   source: NewsSourceEmbedSchema,

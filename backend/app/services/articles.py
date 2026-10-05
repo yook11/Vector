@@ -6,8 +6,8 @@ from app.exceptions import NotFoundError
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
-    ArticleBrief,
-    ArticleDetail,
+    AnalyzedArticle,
+    AnalyzedArticlePreview,
     ArticleListParams,
     PaginatedArticleResponse,
 )
@@ -26,8 +26,10 @@ def _truncate(text: str, limit: int) -> str:
     return text[: limit - 1] + "…"
 
 
-def build_brief(analysis: AnalyzedArticleRecord) -> ArticleBrief:
-    """一覧カード用 brief を構築する。
+def build_analyzed_article_preview(
+    analysis: AnalyzedArticleRecord,
+) -> AnalyzedArticlePreview:
+    """一覧用の AnalyzedArticlePreview を構築する。
 
     key_points 非空 ⟺ summary_preview is None の相互排他をここで構造的に
     保証する (無言カードを作らない)。判定は extract 後の表示可能 content
@@ -41,7 +43,7 @@ def build_brief(analysis: AnalyzedArticleRecord) -> ArticleBrief:
     summary_preview = (
         None if key_points else _truncate(analysis.summary, _SUMMARY_PREVIEW_LEN)
     )
-    return ArticleBrief(
+    return AnalyzedArticlePreview(
         id=analysis.id,
         translated_title=analysis.translated_title,
         key_points=key_points,
@@ -74,9 +76,9 @@ def extract_key_point_contents(key_points: list[dict[str, Any]] | None) -> list[
     ]
 
 
-def build_detail(analysis: AnalyzedArticleRecord) -> ArticleDetail:
+def build_analyzed_article(analysis: AnalyzedArticleRecord) -> AnalyzedArticle:
     a = analysis.curation.analyzable_article
-    return ArticleDetail(
+    return AnalyzedArticle(
         id=analysis.id,
         translated_title=analysis.translated_title,
         summary=analysis.summary,
@@ -110,20 +112,22 @@ class ArticleService:
         """ニュース閲覧用に分析済み記事を一覧取得する。"""
         analyses, total = await self.repo.fetch_articles(query)
         return PaginatedArticleResponse.create(
-            items=[build_brief(a) for a in analyses],
+            items=[build_analyzed_article_preview(a) for a in analyses],
             total=total,
             pagination=query,
         )
 
-    async def get_article(self, article_id: int) -> ArticleDetail:
+    async def get_article(self, article_id: int) -> AnalyzedArticle:
         analysis = await self.repo.fetch_one_analyzed(article_id)
         if analysis is None:
             raise NotFoundError("News article not found")
-        return build_detail(analysis)
+        return build_analyzed_article(analysis)
 
-    async def get_similar(self, article_id: int, limit: int) -> list[ArticleBrief]:
+    async def get_similar(
+        self, article_id: int, limit: int
+    ) -> list[AnalyzedArticlePreview]:
         """意味的に類似する記事を検索する。"""
         if not await self.repo.exists_analyzed(article_id):
             raise NotFoundError("News article not found")
         analyses = await self.repo.fetch_similar_to(article_id, limit)
-        return [build_brief(a) for a in analyses]
+        return [build_analyzed_article_preview(a) for a in analyses]

@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PageNavigationProvider } from "@/components/layout/PageNavigation";
-import type { ArticleBrief } from "@/types/types.gen";
+import type { AnalyzedArticlePreview } from "@/types/types.gen";
 import { ArticleCard } from "./ArticleCard";
 
 const mocks = vi.hoisted(() => ({
@@ -57,7 +57,7 @@ const article = {
   category: { name: "AI", slug: "ai" },
   source: { attributionLabel: "Vector", name: "Vector" },
   publishedAt: "2026-07-24T00:00:00Z",
-} as unknown as ArticleBrief;
+} as unknown as AnalyzedArticlePreview;
 
 describe("ArticleCard navigation lifecycle", () => {
   beforeEach(() => {

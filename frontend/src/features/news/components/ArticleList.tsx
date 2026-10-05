@@ -1,10 +1,10 @@
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { WatchlistButton } from "@/features/watchlist";
-import type { ArticleBrief } from "@/types/types.gen";
+import type { AnalyzedArticlePreview } from "@/types/types.gen";
 import { ArticleCard } from "./ArticleCard";
 
 interface ArticleListProps {
-  items: ArticleBrief[];
+  items: AnalyzedArticlePreview[];
   watchedIds: Set<number>;
 }
 

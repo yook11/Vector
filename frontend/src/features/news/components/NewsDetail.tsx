@@ -9,10 +9,10 @@ import {
 } from "@/components/paper";
 import { WatchlistButton } from "@/features/watchlist";
 import { sanitizeUrl } from "@/lib/utils/sanitize-url";
-import type { ArticleDetail as ArticleDetailData } from "@/types/types.gen";
+import type { AnalyzedArticle } from "@/types/types.gen";
 
 interface NewsDetailProps {
-  article: ArticleDetailData;
+  article: AnalyzedArticle;
   /** Pattern B: ウォッチ状態は record の外から注入する。 */
   isWatched: boolean;
 }

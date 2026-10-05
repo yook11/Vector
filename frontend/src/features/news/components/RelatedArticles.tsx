@@ -1,9 +1,9 @@
 import { WatchlistButton } from "@/features/watchlist";
-import type { ArticleBrief } from "@/types/types.gen";
+import type { AnalyzedArticlePreview } from "@/types/types.gen";
 import { ArticleCard } from "./ArticleCard";
 
 interface RelatedArticlesProps {
-  articles: ArticleBrief[];
+  articles: AnalyzedArticlePreview[];
   /** Pattern B: 親 page から渡される watched ID 集合。 */
   watchedIds: Set<number>;
 }

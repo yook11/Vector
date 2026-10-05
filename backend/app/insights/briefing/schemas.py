@@ -57,7 +57,7 @@ class _BriefingArticleEmbed(_CamelBase):
     """``keyArticles[].article`` に埋め込む参照記事 (読み出し時 join)。
 
     記事側の現在の事実を運ぶ。``id`` は ``/news/{id}`` 記事詳細の公開 id
-    (``ArticleBrief.id`` と同じ id 空間)。
+    (``AnalyzedArticle.id`` と同じ id 空間)。
     """
 
     id: int

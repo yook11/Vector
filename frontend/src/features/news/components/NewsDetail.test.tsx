@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ArticleDetail } from "@/types/types.gen";
+import type { AnalyzedArticle } from "@/types/types.gen";
 
 vi.mock("@/features/watchlist", () => ({
   WatchlistButton: () => null,
@@ -8,7 +8,7 @@ vi.mock("@/features/watchlist", () => ({
 
 import { NewsDetail } from "./NewsDetail";
 
-const article: ArticleDetail = {
+const article: AnalyzedArticle = {
   id: 42,
   translatedTitle: "テラデータ、AI投資のため従業員の昇給を見送り",
   summary: "第一段落のリード文。\n\n第二段落の本文。",
