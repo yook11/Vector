@@ -1,7 +1,7 @@
 """他の API レスポンスに埋め込まれる軽量スキーマ群。
 
 これらのクラスはトップレベルの API レスポンスにはならない。
-常に親レスポンススキーマ（ArticleBrief, BriefingDetail など）内に
+常に親レスポンススキーマ（AnalyzedArticlePreview, BriefingDetail など）内に
 ネストされて利用される。
 """
 

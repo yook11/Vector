@@ -2,7 +2,7 @@ import { cacheLife } from "next/cache";
 import { ApiError } from "@/lib/api/error";
 import { publicClient } from "@/lib/api/hey-api-interceptors";
 import { getArticle } from "@/types/sdk.gen";
-import type { ArticleDetail } from "@/types/types.gen";
+import type { AnalyzedArticle } from "@/types/types.gen";
 
 /**
  * 記事詳細取得 (response は user 非依存)。
@@ -16,7 +16,7 @@ import type { ArticleDetail } from "@/types/types.gen";
  */
 export async function getArticleById(
   id: number,
-): Promise<ArticleDetail | null> {
+): Promise<AnalyzedArticle | null> {
   "use cache";
   cacheLife("hours");
   try {

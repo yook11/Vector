@@ -12,7 +12,7 @@
  *   されないため frontend 側で組み直す (`TrendsResponse`。briefing は zod parse
  *   経由で消費されるため本ファイルでは組み直さない)
  *
- * 単純 re-export (ArticleBrief / ArticleDetail / NewsSourceDetail 等) は本ファイル
+ * 単純 re-export (AnalyzedArticlePreview / AnalyzedArticle / NewsSourceDetail 等) は本ファイル
  * から撤廃済 (PR-H3)。利用側は `@/types/types.gen` から直接 import する。
  */
 import type {

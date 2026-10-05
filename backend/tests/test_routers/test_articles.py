@@ -688,8 +688,9 @@ class TestSimilarArticles:
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
-        # 類似記事も build_brief を共有する。素の配列 envelope が新 brief 契約
-        # (keyPoints 搭載 / summary 全文不在 / 相互排他) を載せることを確認する。
+        # 類似記事も build_analyzed_article_preview を共有する。素の配列 envelope が
+        # preview 契約 (keyPoints 搭載 / summary 全文不在 / 相互排他) を載せることを
+        # 確認する。
         cat_id = sample_categories[0].id
         source = await _create_article(
             db_session, sample_source, url="https://example.com/src-brief"

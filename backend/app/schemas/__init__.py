@@ -1,6 +1,6 @@
 from app.schemas.articles import (
-    ArticleBrief,
-    ArticleDetail,
+    AnalyzedArticle,
+    AnalyzedArticlePreview,
     PaginatedArticleResponse,
 )
 from app.schemas.category import (
@@ -13,8 +13,8 @@ from app.schemas.embeds import (
 )
 
 __all__ = [
-    "ArticleBrief",
-    "ArticleDetail",
+    "AnalyzedArticlePreview",
+    "AnalyzedArticle",
     "Category",
     "CategoryStats",
     "CategoryStatsList",

@@ -51,6 +51,7 @@ props 引き回し → `KeyArticleBlock.tsx` で get + `article &&` ガード)�
 2. **記事表現は repo の三語彙に従う。** Brief (一覧トップレベル、`ArticleBrief`) /
    Detail (詳細トップレベル、`ArticleDetail`) / Embed (他レスポンスへの埋め込み、
    `schemas/embeds.py`)。
+   - 2026-10-05: 記事の表現名は [analyzed-article-schema-naming.md](../news/analyzed-article-schema-naming.md) で `AnalyzedArticle` / `AnalyzedArticlePreview` に置き換えた。
 3. **出口契約は JSONB・組み立て手順の鏡像である義務がない。** 利用側の概念形で返す。
 
 ## 決定済み (2026-06-10 合意)

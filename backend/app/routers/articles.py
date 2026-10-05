@@ -8,8 +8,8 @@ from app.db.fastapi import EntryManagedSession
 from app.dependencies import require_bff_request
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
-    ArticleBrief,
-    ArticleDetail,
+    AnalyzedArticle,
+    AnalyzedArticlePreview,
     ArticleId,
     ArticleListParams,
     PaginatedArticleResponse,
@@ -48,7 +48,7 @@ async def get_similar_articles(
     article_id: ArticleId,
     service: Annotated[ArticleService, Depends(get_article_service)],
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
-) -> list[ArticleBrief]:
+) -> list[AnalyzedArticlePreview]:
     """指定記事に最も類似した記事を返す。"""
     return await service.get_similar(article_id, limit)
 
@@ -61,6 +61,6 @@ async def get_similar_articles(
 async def get_article(
     article_id: ArticleId,
     service: Annotated[ArticleService, Depends(get_article_service)],
-) -> ArticleDetail:
+) -> AnalyzedArticle:
     """単一記事を完全な分析情報付きで取得する。"""
     return await service.get_article(article_id)

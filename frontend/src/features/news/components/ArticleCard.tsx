@@ -7,12 +7,12 @@ import {
   kickerCssVars,
   PaperKicker,
 } from "@/components/paper";
-import type { ArticleBrief } from "@/types/types.gen";
+import type { AnalyzedArticlePreview } from "@/types/types.gen";
 import { getArticleSourceLabel } from "./article-display";
 
 interface ArticleCardProps {
   actionSlot?: ReactNode;
-  article: ArticleBrief;
+  article: AnalyzedArticlePreview;
 }
 
 export function ArticleCard({ actionSlot, article }: ArticleCardProps) {
@@ -67,7 +67,7 @@ export function ArticleCard({ actionSlot, article }: ArticleCardProps) {
           ))}
         </ul>
       ) : (
-        // summaryPreview は keyPoints 空時のみ非 null を build_brief が保証 (DB CHECK summary != '')。
+        // summaryPreview は keyPoints 空時のみ非 null を build_analyzed_article_preview が保証 (DB CHECK summary != '')。
         <p
           className="mb-4 line-clamp-3 text-[13.5px] font-medium leading-[1.86] text-[var(--vector-ink-soft)]"
           style={{ fontFamily: "var(--font-vector-serif)" }}

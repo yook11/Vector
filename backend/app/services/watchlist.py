@@ -5,7 +5,7 @@ from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse
 from app.schemas.base import PaginationParams
-from app.services.articles import build_brief
+from app.services.articles import build_analyzed_article_preview
 
 
 class WatchlistService:
@@ -27,7 +27,7 @@ class WatchlistService:
             self.user_id, pagination
         )
         return PaginatedArticleResponse.create(
-            items=[build_brief(a) for a in analyses],
+            items=[build_analyzed_article_preview(a) for a in analyses],
             total=total,
             pagination=pagination,
         )

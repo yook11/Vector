@@ -121,7 +121,8 @@ class TestListWatchlist:
         item = data["items"][0]
         assert item["id"] == sample_article.id
         assert item["translatedTitle"] == "テスト記事"
-        # ArticleBrief 契約: summary 全文は返さず keyPoints / summaryPreview を返す。
+        # AnalyzedArticlePreview 契約: summary 全文は返さず
+        # keyPoints / summaryPreview を返す。
         # fixture は key_points 未指定 (空) のため summaryPreview にフォールバック。
         assert "summary" not in item
         assert item["keyPoints"] == []
@@ -129,7 +130,7 @@ class TestListWatchlist:
         assert item["source"]["name"] == "Test Tech Source"
         # watchlist 経路も brief の eager load を共有し category を返す
         assert item["category"]["slug"] == str(sample_categories[0].slug)
-        # Pattern B: ArticleBrief から isWatched は削除済み
+        # Pattern B: AnalyzedArticlePreview から isWatched は削除済み
         assert "isWatched" not in item
 
     async def test_pagination(

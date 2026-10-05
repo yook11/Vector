@@ -66,8 +66,8 @@ class ArticleListParams(PaginationParams):
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 
 
-class ArticleBrief(_CamelBase):
-    """GET /api/v1/articles — 一覧カード用
+class AnalyzedArticlePreview(_CamelBase):
+    """一覧用に分析済み記事を切り詰めた表現。要点の全件などは AnalyzedArticle が持つ。
 
     per-user の watchlist 状態はこのスキーマには含めない。frontend は
     GET /api/v1/me/watchlist/ids を別途取得し render 時に Set lookup で
@@ -77,7 +77,8 @@ class ArticleBrief(_CamelBase):
 
     id: int
     translated_title: str
-    # 一覧カードの主表示。content のみ最大3件・各250字以内 (build_brief が保証)。
+    # 一覧カードの主表示。content のみ最大3件・各250字以内
+    # (build_analyzed_article_preview が保証)。
     # default 無し = required。空でも [] を必ず返し、欠落を契約違反にする。
     key_points: list[str]
     # key_points が空のときだけ summary を300字以内で返すフォールバック。
@@ -89,8 +90,8 @@ class ArticleBrief(_CamelBase):
     published_at: datetime
 
 
-class ArticleDetail(_CamelBase):
-    """GET /api/v1/articles/{id} — 詳細画面用"""
+class AnalyzedArticle(_CamelBase):
+    """分析済み記事について公開する情報をすべて持つ表現 (GET /api/v1/articles/{id})。"""
 
     id: int
     translated_title: str
@@ -109,7 +110,7 @@ class ArticleDetail(_CamelBase):
 class PaginatedArticleResponse(_CamelBase):
     """記事のページネーション付きリスト。"""
 
-    items: list[ArticleBrief]
+    items: list[AnalyzedArticlePreview]
     total: int
     page: int
     per_page: int
@@ -118,7 +119,7 @@ class PaginatedArticleResponse(_CamelBase):
     @classmethod
     def create(
         cls,
-        items: list[ArticleBrief],
+        items: list[AnalyzedArticlePreview],
         total: int,
         pagination: PaginationParams,
     ) -> PaginatedArticleResponse:

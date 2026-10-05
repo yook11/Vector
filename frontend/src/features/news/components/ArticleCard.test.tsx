@@ -1,19 +1,19 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { ArticleBrief } from "@/types/types.gen";
+import type { AnalyzedArticlePreview } from "@/types/types.gen";
 import { ArticleCard } from "./ArticleCard";
 
 // types.gen.ts は未再生成で summary を持つ旧スキーマのまま。
-// 新契約 (keyPoints / summaryPreview) を as unknown as ArticleBrief でキャストして
+// 新契約 (keyPoints / summaryPreview) を as unknown as AnalyzedArticlePreview でキャストして
 // ターゲット契約を先行エンコードする (Red-first)。
-type ArticleBriefNew = Omit<ArticleBrief, "summary"> & {
+type AnalyzedArticlePreviewNew = Omit<AnalyzedArticlePreview, "summary"> & {
   keyPoints: string[];
   summaryPreview: string | null;
 };
 
 function makeArticle(
-  overrides: Partial<ArticleBriefNew> = {},
-): ArticleBriefNew {
+  overrides: Partial<AnalyzedArticlePreviewNew> = {},
+): AnalyzedArticlePreviewNew {
   return {
     id: 101,
     translatedTitle: "Claude Mythosが明らかにした遅延問題",
@@ -39,7 +39,7 @@ describe("ArticleCard — 構造", () => {
   it("タイトルリンクが /news/{id} の href を持つ", () => {
     render(
       <ArticleCard
-        article={makeArticle() as unknown as ArticleBrief}
+        article={makeArticle() as unknown as AnalyzedArticlePreview}
         actionSlot={<button type="button">保存</button>}
       />,
     );
@@ -69,7 +69,7 @@ describe("ArticleCard — keyPoints 表示分岐", () => {
           makeArticle({
             keyPoints: points,
             summaryPreview: null,
-          }) as unknown as ArticleBrief
+          }) as unknown as AnalyzedArticlePreview
         }
       />,
     );
@@ -93,7 +93,7 @@ describe("ArticleCard — keyPoints 表示分岐", () => {
           makeArticle({
             keyPoints: [keyPoint],
             summaryPreview: sentinel,
-          }) as unknown as ArticleBrief
+          }) as unknown as AnalyzedArticlePreview
         }
       />,
     );
@@ -112,7 +112,7 @@ describe("ArticleCard — keyPoints 表示分岐", () => {
           makeArticle({
             keyPoints: [],
             summaryPreview: preview,
-          }) as unknown as ArticleBrief
+          }) as unknown as AnalyzedArticlePreview
         }
       />,
     );

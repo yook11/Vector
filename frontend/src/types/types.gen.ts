@@ -5,46 +5,11 @@ export type ClientOptions = {
 };
 
 /**
- * ArticleBrief
+ * AnalyzedArticle
  *
- * GET /api/v1/articles — 一覧カード用
- *
- * per-user の watchlist 状態はこのスキーマには含めない。frontend は
- * GET /api/v1/me/watchlist/ids を別途取得し render 時に Set lookup で
- * merge する (Pattern B)。これにより /articles レスポンスは user 非依存
- * となり HTTP cache/CDN 上で安全に共有できる。
+ * 分析済み記事について公開する情報をすべて持つ表現 (GET /api/v1/articles/{id})。
  */
-export type ArticleBrief = {
-    /**
-     * Id
-     */
-    id: number;
-    /**
-     * Translatedtitle
-     */
-    translatedTitle: string;
-    /**
-     * Keypoints
-     */
-    keyPoints: Array<string>;
-    /**
-     * Summarypreview
-     */
-    summaryPreview: string | null;
-    category: Category;
-    source: NewsSourceEmbed;
-    /**
-     * Publishedat
-     */
-    publishedAt: string;
-};
-
-/**
- * ArticleDetail
- *
- * GET /api/v1/articles/{id} — 詳細画面用
- */
-export type ArticleDetail = {
+export type AnalyzedArticle = {
     /**
      * Id
      */
@@ -76,6 +41,41 @@ export type ArticleDetail = {
      */
     publishedAt: string;
     original: OriginalArticleEmbed;
+};
+
+/**
+ * AnalyzedArticlePreview
+ *
+ * 一覧用に分析済み記事を切り詰めた表現。要点の全件などは AnalyzedArticle が持つ。
+ *
+ * per-user の watchlist 状態はこのスキーマには含めない。frontend は
+ * GET /api/v1/me/watchlist/ids を別途取得し render 時に Set lookup で
+ * merge する (Pattern B)。これにより /articles レスポンスは user 非依存
+ * となり HTTP cache/CDN 上で安全に共有できる。
+ */
+export type AnalyzedArticlePreview = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Translatedtitle
+     */
+    translatedTitle: string;
+    /**
+     * Keypoints
+     */
+    keyPoints: Array<string>;
+    /**
+     * Summarypreview
+     */
+    summaryPreview: string | null;
+    category: Category;
+    source: NewsSourceEmbed;
+    /**
+     * Publishedat
+     */
+    publishedAt: string;
 };
 
 /**
@@ -386,7 +386,7 @@ export type PaginatedArticleResponse = {
     /**
      * Items
      */
-    items: Array<ArticleBrief>;
+    items: Array<AnalyzedArticlePreview>;
     /**
      * Total
      */
@@ -974,7 +974,7 @@ export type WindowHours = 24 | 48 | 72 | 168;
  * ``keyArticles[].article`` に埋め込む参照記事 (読み出し時 join)。
  *
  * 記事側の現在の事実を運ぶ。``id`` は ``/news/{id}`` 記事詳細の公開 id
- * (``ArticleBrief.id`` と同じ id 空間)。
+ * (``AnalyzedArticle.id`` と同じ id 空間)。
  */
 export type BriefingArticleEmbed = {
     /**
@@ -1190,7 +1190,7 @@ export type GetSimilarArticlesResponses = {
      *
      * Successful Response
      */
-    200: Array<ArticleBrief>;
+    200: Array<AnalyzedArticlePreview>;
 };
 
 export type GetSimilarArticlesResponse = GetSimilarArticlesResponses[keyof GetSimilarArticlesResponses];
@@ -1234,7 +1234,7 @@ export type GetArticleResponses = {
     /**
      * Successful Response
      */
-    200: ArticleDetail;
+    200: AnalyzedArticle;
 };
 
 export type GetArticleResponse = GetArticleResponses[keyof GetArticleResponses];
