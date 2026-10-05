@@ -10,7 +10,11 @@ from app.schemas.cursor import CURSOR_JSON_SCHEMA, CursorPosition
 
 
 class WatchlistIdsParams(BaseModel):
-    """GET /api/v1/me/watchlist/ids のクエリパラメータ。上限は1回に表示する件数。"""
+    """GET /api/v1/me/watchlist/ids のクエリパラメータ。
+
+    問い合わせるのは記事一覧の1回の取得分なので、その上限 (ARTICLE_LIST_LIMIT) を
+    超える数の記事 ID は受け付けない。
+    """
 
     article_ids: Annotated[
         list[ArticleId],
