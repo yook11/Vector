@@ -3,7 +3,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.db.fastapi import EntryManagedSession
-from app.dependencies import require_bff_request
 from app.repositories.category import CategoryRepository
 from app.schemas.category import CategoryStatsList
 from app.services.category import CategoryService
@@ -17,7 +16,7 @@ def get_category_service(
     return CategoryService(CategoryRepository(session))
 
 
-@router.get("", dependencies=[Depends(require_bff_request)])
+@router.get("")
 async def list_categories(
     service: Annotated[CategoryService, Depends(get_category_service)],
 ) -> CategoryStatsList:

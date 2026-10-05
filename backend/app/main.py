@@ -4,7 +4,7 @@ from typing import Any
 
 import logfire
 import structlog
-from fastapi import FastAPI, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, FastAPI, Request, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from sqlalchemy import text
@@ -25,6 +25,7 @@ from app.db.engine import (
     create_api_engine,
 )
 from app.db.session import caller_managed_session_factory
+from app.dependencies import require_bff_request
 from app.exception_handlers import (
     invalid_query_handler,
     not_found_handler,
@@ -217,14 +218,16 @@ app.add_middleware(
 app.add_exception_handler(NotFoundError, not_found_handler)
 app.add_exception_handler(InvalidQueryError, invalid_query_handler)
 
-# ルーター登録
-app.include_router(articles.router)
-app.include_router(categories.router)
-app.include_router(watchlist.router)
-app.include_router(trends_router)
-app.include_router(briefing_router)
-app.include_router(research_router)
-app.include_router(admin_router)
+# 業務 API は共通の入口で BFF の署名を検証する。
+api_router = APIRouter(dependencies=[Depends(require_bff_request)])
+api_router.include_router(articles.router)
+api_router.include_router(categories.router)
+api_router.include_router(watchlist.router)
+api_router.include_router(trends_router)
+api_router.include_router(briefing_router)
+api_router.include_router(research_router)
+api_router.include_router(admin_router)
+app.include_router(api_router)
 
 
 @app.get("/api/v1/health")

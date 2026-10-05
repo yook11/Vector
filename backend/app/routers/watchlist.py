@@ -5,18 +5,22 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db.fastapi import EntryManagedSession
-from app.dependencies import CurrentUser, get_current_user
+from app.dependencies import AuthenticatedUser, require_authenticated_user
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import AnalyzedArticlePreviewList, ArticleId
 from app.schemas.watchlist import WatchlistIds, WatchlistParams
 from app.services.watchlist import WatchlistService
 
-router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
+router = APIRouter(
+    prefix="/api/v1/me",
+    tags=["watchlist"],
+    dependencies=[Depends(require_authenticated_user)],
+)
 
 
 def get_watchlist_service(
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     session: EntryManagedSession,
 ) -> WatchlistService:
     """ログイン中のユーザーに紐づいた WatchlistService を用意する。未ログインは 401。"""

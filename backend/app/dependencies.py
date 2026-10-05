@@ -27,7 +27,7 @@ class UserRole(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentUser:
+class AuthenticatedUser:
     """BFF が署名した内部 JWT の claim から構築する軽量なユーザー表現。"""
 
     id: UUID
@@ -69,31 +69,35 @@ def _decode_internal_jwt(authorization: str | None) -> dict[str, object] | None:
         return None
 
 
-def _user_from_claims(payload: dict[str, object]) -> CurrentUser | None:
-    """JWT claim から CurrentUser を組み立てる。claim 不正なら None。"""
+def _user_from_claims(payload: dict[str, object]) -> AuthenticatedUser | None:
+    """JWT claim から AuthenticatedUser を組み立てる。claim 不正なら None。"""
     sub = payload.get("sub")
     role = payload.get("role")
     if not isinstance(sub, str) or not isinstance(role, str):
         return None
     try:
-        return CurrentUser(id=UUID(sub), role=UserRole(role))
+        return AuthenticatedUser(id=UUID(sub), role=UserRole(role))
     except ValueError:
         return None
 
 
-async def get_current_user(
+async def require_bff_request(
     authorization: Annotated[str | None, Header()] = None,
-) -> CurrentUser:
-    """`Authorization: Bearer <jwt>` を検証し CurrentUser を返す。
-
-    BFF が HS256 で署名した短期 JWT を期待する。署名不正・期限切れ・
-    claim 不正 (sub/role 欠落 or 値不正) はいずれも 401。"""
+) -> dict[str, object]:
+    """ユーザー情報の有無によらず BFF の署名を検証し、検証済み claims を返す。"""
     payload = _decode_internal_jwt(authorization)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
+    return payload
+
+
+async def require_authenticated_user(
+    payload: Annotated[dict[str, object], Depends(require_bff_request)],
+) -> AuthenticatedUser:
+    """BFF が証明したユーザーを要求し、sub または role が不正なら 401 を返す。"""
     user = _user_from_claims(payload)
     if user is None:
         raise HTTPException(
@@ -107,30 +111,13 @@ async def get_current_user(
     return user
 
 
-async def get_admin_user(
-    current_user: Annotated[CurrentUser, Depends(get_current_user)],
-) -> CurrentUser:
+async def require_admin_user(
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
+) -> AuthenticatedUser:
     """現在のユーザーが admin ロールを持つことを要求する。持たない場合は 403。"""
-    if current_user.role != UserRole.ADMIN:
+    if user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
         )
-    return current_user
-
-
-async def require_bff_request(
-    authorization: Annotated[str | None, Header()] = None,
-) -> None:
-    """BFF が署名した内部 JWT (sig/iss/aud/exp/iat) を検証する guard。
-
-    これは「認証」ではなく BFF 経由証明であり、「正規 BFF から来た」ことだけを
-    保証する。ログイン済みかは保証しない (sub/role は要求しない)。user 非依存の
-    共有 read endpoint が backend 直叩きを閉じるために使う。login ゲートは
-    BFF/Next.js の route guard、user/admin の検証は get_current_user /
-    get_admin_user が担う。"""
-    if _decode_internal_jwt(authorization) is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
+    return user

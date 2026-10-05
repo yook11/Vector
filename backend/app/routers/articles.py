@@ -5,7 +5,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.db.fastapi import EntryManagedSession
-from app.dependencies import require_bff_request
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     AnalyzedArticle,
@@ -25,7 +24,7 @@ def get_article_service(
     return ArticleService(ArticleRepository(session))
 
 
-@router.get("", dependencies=[Depends(require_bff_request)])
+@router.get("")
 async def list_articles(
     params: Annotated[ArticleListParams, Query()],
     service: Annotated[ArticleService, Depends(get_article_service)],
@@ -42,7 +41,6 @@ async def list_articles(
     "/{article_id}/similar",
     summary="pgvector のコサイン距離で意味的に類似した記事を検索する",
     responses={404: {"description": "News article not found"}},
-    dependencies=[Depends(require_bff_request)],
 )
 async def get_similar_articles(
     article_id: ArticleId,
@@ -56,7 +54,6 @@ async def get_similar_articles(
 @router.get(
     "/{article_id}",
     responses={404: {"description": "News article not found"}},
-    dependencies=[Depends(require_bff_request)],
 )
 async def get_article(
     article_id: ArticleId,

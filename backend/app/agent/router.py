@@ -70,8 +70,8 @@ from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
 from app.db.fastapi import get_caller_managed_session
 from app.dependencies import (
-    CurrentUser,
-    get_current_user,
+    AuthenticatedUser,
+    require_authenticated_user,
 )
 from app.schemas.research import (
     PaginatedResearchThreadResponse,
@@ -83,7 +83,11 @@ from app.schemas.research import (
     ResearchThreadListParams,
 )
 
-router = APIRouter(prefix="/api/v1/research", tags=["research"])
+router = APIRouter(
+    prefix="/api/v1/research",
+    tags=["research"],
+    dependencies=[Depends(require_authenticated_user)],
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -147,7 +151,7 @@ async def create_research_response(
     deadline_scheduler: Annotated[
         AgentDeadlineScheduler, Depends(get_agent_deadline_scheduler)
     ],
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     # commit→kiq→failed の 2 tx を切るため、入口管理の UoW は使わない。
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     enqueuer: Annotated[AgentRunEnqueuer, Depends(get_agent_run_enqueuer)],
@@ -245,7 +249,7 @@ async def create_research_response(
 )
 async def list_research_threads(
     pagination: Annotated[ResearchThreadListParams, Query()],
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> PaginatedResearchThreadResponse:
     repo = AgentThreadRepository(session)
@@ -262,7 +266,7 @@ async def list_research_threads(
 )
 async def get_research_thread(
     thread_id: UUID,
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
 ) -> ResearchThreadDetail:
@@ -287,7 +291,7 @@ async def get_research_thread(
 )
 async def delete_research_thread(
     thread_id: UUID,
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> Response:
     repo = AgentThreadRepository(session)
@@ -312,7 +316,7 @@ async def delete_research_thread(
 )
 async def cancel_research_run(
     run_id: UUID,
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
 ) -> Response:
@@ -388,7 +392,7 @@ async def stream_research_run_events(
         float,
         Depends(get_agent_run_sse_request_started_at),
     ],
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
     capacity: Annotated[AgentRunSseCapacity, Depends(get_agent_run_sse_capacity)],
     timing: Annotated[AgentRunSseTiming, Depends(get_agent_run_sse_timing)],
@@ -502,7 +506,7 @@ async def stream_research_run_events(
 )
 async def get_research_run(
     run_id: UUID,
-    user: Annotated[CurrentUser, Depends(get_current_user)],
+    user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> ResearchRunResponse:
     repo = AgentRunPresentationRepository(session)

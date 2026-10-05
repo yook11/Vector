@@ -184,7 +184,7 @@ async def test_bff_proof_without_user_rejected(
 ) -> None:
     """BFF 経由証明だけ (sub/role 無し) では admin endpoint は 401。
 
-    get_admin_user は get_current_user を経由するため、user 不在の時点で 401。
+    管理者の検証はユーザー認証を経由するため、ユーザー情報がなければ 401。
     """
     response = await bff_client.get("/api/v1/admin/sources")
     assert response.status_code == 401
