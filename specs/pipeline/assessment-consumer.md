@@ -4,7 +4,7 @@ Status: Assessment Lambda・relay・通知・カテゴリー初期化を実装�
 
 > 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
 
-> 2026-10-03: 生成モデルを Gemini に統一し、DeepSeek を外した（#529）。本文の DeepSeek の記述は当時の記録。今の判定は `GeminiAssessor`（gemini-3.5-flash-lite）で、通信設定（読み取り30秒・SDK・HTTP の再試行0回）は変わらない。
+> 2026-10-03: 生成モデルを Gemini に統一し、DeepSeek を外した（#529）。本文の DeepSeek の記述は当時の記録。今の判定は `GeminiAssessor`（gemini-3.8-flash）で、通信設定（読み取り30秒・SDK・HTTP の再試行0回）は変わらない。
 
 ## Problem
 

@@ -1,8 +1,9 @@
 """``GEMINI_ASSESSMENT_SPEC`` の構造を固定する golden table テスト。
 
-Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``version`` /
+Prompt と Spec を分離した結果として ``provider`` / ``version`` /
 ``gen_config`` / ``response_schema`` / ``system_instruction`` が module singleton
-として SSoT に置かれていることを検証する。
+として SSoT に置かれていることを検証する。モデル識別子は spec の値であり、
+テストでは固定しない。
 
 ``version`` は ``compute_call_signature`` で算出される 8 文字 hash。値は call config の
 deliberate な変更時のみ動くべきなので、format (hex8) に加え具体値を pin して意図しない
@@ -28,10 +29,6 @@ _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
 def test_provider_is_gemini() -> None:
     assert GEMINI_ASSESSMENT_SPEC.provider == "gemini"
-
-
-def test_model_is_flash_lite_35() -> None:
-    assert GEMINI_ASSESSMENT_SPEC.model == "gemini-3.5-flash-lite"
 
 
 def test_response_schema_equals_gemini_schema() -> None:
@@ -66,9 +63,8 @@ def test_spec_is_frozen() -> None:
         GEMINI_ASSESSMENT_SPEC.model = "other"  # type: ignore[misc]
 
 
-# DeepSeek から gemini-3.5-flash-lite への切り替え (モデル・生成設定・schema の変更) で
-# 意図的に回転させた値。
-_PINNED_VERSION = "22cb52d2"
+# gemini-3.8-flash への切り替えで意図的に回転させた値。
+_PINNED_VERSION = "60fa2790"
 
 
 def test_version_is_pinned() -> None:

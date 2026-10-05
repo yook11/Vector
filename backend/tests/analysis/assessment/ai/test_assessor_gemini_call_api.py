@@ -96,7 +96,7 @@ class TestGeminiCallApiSuccess:
         assert call.raw_response == text
         assert call.raw_category == "ai"
         assert call.prompt_version == GEMINI_ASSESSMENT_SPEC.version
-        assert call.model_name == "gemini-3.5-flash-lite"
+        assert call.model_name == GEMINI_ASSESSMENT_SPEC.model
 
     @pytest.mark.asyncio
     async def test_out_of_scope_round_trip(self, make_assessment_logger) -> None:
@@ -120,7 +120,7 @@ class TestGeminiCallApiSuccess:
         kwargs = assessor._client.models.generate_content.await_args.kwargs
         config = kwargs["config"]
         assert (kwargs["model"], kwargs["contents"]) == (
-            "gemini-3.5-flash-lite",
+            GEMINI_ASSESSMENT_SPEC.model,
             "PROMPT_SENTINEL",
         )
         assert config.max_output_tokens == 4096
@@ -258,7 +258,7 @@ class TestGeminiObservabilityLog:
         assert record["max_output_tokens"] == 4096
         assert record["reason"] == "output_truncated"
         assert record["message_id"] == "message-001"
-        assert record["model"] == "gemini-3.5-flash-lite"
+        assert record["model"] == GEMINI_ASSESSMENT_SPEC.model
         assert record["level"] == "warning"
         assert "PRIVATE_" not in output
         assert _records(output, "assessment_gemini_response_defect") == []
