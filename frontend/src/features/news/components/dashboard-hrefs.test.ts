@@ -1,37 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type { ArticleQuery } from "@/types";
 import { buildDashboardCategoryHref } from "./dashboard-hrefs";
 
 describe("buildDashboardCategoryHref", () => {
-  it("resets page and keeps sortOrder/perPage when changing category", () => {
-    const query: ArticleQuery = {
-      category: "ai",
-      page: 3,
-      perPage: 48,
-      sortOrder: "asc",
-    };
-
-    expect(buildDashboardCategoryHref({ category: "security", query })).toBe(
-      "/?category=security&sortOrder=asc&perPage=48",
+  it("links to the selected category", () => {
+    expect(buildDashboardCategoryHref({ category: "security" })).toBe(
+      "/?category=security",
     );
   });
 
-  it("omits category and page for the all-category link", () => {
-    const query: ArticleQuery = {
-      category: "space",
-      page: 2,
-      perPage: 24,
-      sortOrder: "desc",
-    };
-
-    expect(buildDashboardCategoryHref({ query })).toBe(
-      "/?sortOrder=desc&perPage=24",
-    );
+  it("links to the pathname for the all-category link", () => {
+    expect(buildDashboardCategoryHref({})).toBe("/");
   });
 
-  it("returns the pathname when no preserved params remain", () => {
+  it("keeps a custom pathname", () => {
     expect(
-      buildDashboardCategoryHref({ pathname: "/newsroom", query: {} }),
-    ).toBe("/newsroom");
+      buildDashboardCategoryHref({ category: "ai", pathname: "/newsroom" }),
+    ).toBe("/newsroom?category=ai");
   });
 });

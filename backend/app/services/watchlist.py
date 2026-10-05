@@ -3,8 +3,9 @@ from uuid import UUID
 from app.exceptions import NotFoundError
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
-from app.schemas.articles import PaginatedArticleResponse
-from app.schemas.base import PaginationParams
+from app.schemas.articles import ARTICLE_LIST_LIMIT, AnalyzedArticlePreviewList
+from app.schemas.cursor import encode_cursor
+from app.schemas.watchlist import WatchlistParams, WatchlistPosition
 from app.services.articles import build_analyzed_article_preview
 
 
@@ -21,15 +22,22 @@ class WatchlistService:
 
     async def list_articles_in_watchlist(
         self,
-        pagination: PaginationParams,
-    ) -> PaginatedArticleResponse:
-        analyses, total = await self.repo.fetch_watched_articles(
-            self.user_id, pagination
+        params: WatchlistParams,
+    ) -> AnalyzedArticlePreviewList:
+        """ウォッチ中の記事を1回分取得する。1件多く読んで続きの有無を判定する。"""
+        rows = await self.repo.fetch_watched_articles(
+            self.user_id, params.cursor, limit=ARTICLE_LIST_LIMIT + 1
         )
-        return PaginatedArticleResponse.create(
-            items=[build_analyzed_article_preview(a) for a in analyses],
-            total=total,
-            pagination=pagination,
+        page = rows[:ARTICLE_LIST_LIMIT]
+        next_cursor = None
+        if len(rows) > ARTICLE_LIST_LIMIT:
+            last, watched_at = page[-1]
+            next_cursor = encode_cursor(
+                WatchlistPosition(watched_at=watched_at, article_id=last.id)
+            )
+        return AnalyzedArticlePreviewList(
+            items=[build_analyzed_article_preview(a) for a, _ in page],
+            next_cursor=next_cursor,
         )
 
     async def list_ids(self) -> list[int]:

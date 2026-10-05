@@ -11,7 +11,7 @@ import {
   NewsDetail,
   RelatedArticles,
 } from "@/features/news";
-import { getWatchlistIds } from "@/features/watchlist";
+import { getWatchlistIds } from "@/features/watchlist/server";
 import { PositiveIdParamSchema } from "@/lib/validation/id";
 import type {
   AnalyzedArticle,

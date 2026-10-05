@@ -3,40 +3,31 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 from fastapi import Path, Query
-from pydantic import Field
-
-if TYPE_CHECKING:
-    from app.schemas.base import PaginationParams
+from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic.dataclasses import dataclass
 
 from app.models.category import CATEGORY_SLUG_PATTERN
-from app.schemas.base import PaginationParams, _CamelBase
+from app.schemas.base import _CamelBase
 from app.schemas.category import Category
+from app.schemas.cursor import CURSOR_JSON_SCHEMA, cursor_decoder
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
-
-
-class SortOrder(StrEnum):
-    ASC = "asc"
-    DESC = "desc"
-
+# 記事一覧・ウォッチリストが1回に返す件数。
+ARTICLE_LIST_LIMIT = 24
 
 # ---------------------------------------------------------------------------
 # パスパラメータ
 # ---------------------------------------------------------------------------
 
 
-_INT32_MAX = 2_147_483_647
-
 # 記事 ID 列は integer (int4) のため、範囲外の値は asyncpg の OverflowError より前に
-# 422 で弾く (#545)。
-ArticleId = Annotated[int, Path(ge=1, le=_INT32_MAX)]
+# 422 で弾く (#545)。カーソルに入る記事 ID も同じ上限で検証する。
+ARTICLE_ID_MAX = 2_147_483_647
+
+ArticleId = Annotated[int, Path(ge=1, le=ARTICLE_ID_MAX)]
 
 
 # ---------------------------------------------------------------------------
@@ -50,11 +41,25 @@ ArticleId = Annotated[int, Path(ge=1, le=_INT32_MAX)]
 _CATEGORY_QUERY_DESCRIPTION = "Outbound primary filter key. Accepts a category slug."
 
 
-class ArticleListParams(PaginationParams):
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class ArticleListPosition:
+    """記事一覧の並び (公開日時の新しい順、同時刻は ID の大きい順) 上の位置。"""
+
+    published_at: AwareDatetime
+    id: Annotated[int, Field(ge=1, le=ARTICLE_ID_MAX)]
+
+
+ArticleListCursor = Annotated[
+    ArticleListPosition,
+    BeforeValidator(cursor_decoder(ArticleListPosition)),
+    CURSOR_JSON_SCHEMA,
+]
+
+
+class ArticleListParams(BaseModel):
     """記事一覧（ニュース閲覧）用のクエリパラメータ。
 
-    page/per_page は PaginationParams から継承する。
-    category の形式が不正なら 422 レスポンスを返す。
+    category やカーソルの形式が不正なら 422 レスポンスを返す。
     ルーターでは Annotated[ArticleListParams, Query()] として受け取り、
     Service / Repository レイヤーへそのまま受け渡す。
     """
@@ -63,7 +68,7 @@ class ArticleListParams(PaginationParams):
         str | None,
         Query(pattern=CATEGORY_SLUG_PATTERN, description=_CATEGORY_QUERY_DESCRIPTION),
     ] = None
-    sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
+    cursor: Annotated[ArticleListCursor | None, Query()] = None
 
 
 class AnalyzedArticlePreview(_CamelBase):
@@ -107,26 +112,10 @@ class AnalyzedArticle(_CamelBase):
     original: OriginalArticleEmbed
 
 
-class PaginatedArticleResponse(_CamelBase):
-    """記事のページネーション付きリスト。"""
+class AnalyzedArticlePreviewList(_CamelBase):
+    """記事一覧・ウォッチリストの1回分と、続きの位置。"""
 
     items: list[AnalyzedArticlePreview]
-    total: int
-    page: int
-    per_page: int
-    total_pages: int
-
-    @classmethod
-    def create(
-        cls,
-        items: list[AnalyzedArticlePreview],
-        total: int,
-        pagination: PaginationParams,
-    ) -> PaginatedArticleResponse:
-        return cls(
-            items=items,
-            total=total,
-            page=pagination.page,
-            per_page=pagination.per_page,
-            total_pages=pagination.total_pages(total),
-        )
+    # 続きを取るときにそのまま cursor に渡す。null なら続きはない。
+    # default 無し = required・nullable で、null でもキーを省略しない。
+    next_cursor: str | None

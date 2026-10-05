@@ -41,17 +41,16 @@ vi.mock("@/features/news", () => ({
   ArticleListUpdateNotice: () => null,
   ArticleListSkeleton: () => null,
   DashboardMasthead: () => null,
-  ArticleList: () => null,
   getArticles: mocks.getArticles,
   getCategories: mocks.getCategories,
   getLatestArticleDate: vi.fn(),
-  ArticleListControls: () => null,
-  ArticlePagination: () => null,
-  ArticleListSummary: () => null,
+  ArticleListHeading: () => null,
+  LoadMoreArticleList: () => null,
+  loadMoreArticles: vi.fn(),
   parseArticleQuery: mocks.parseArticleQuery,
 }));
 
-vi.mock("@/features/watchlist", () => ({
+vi.mock("@/features/watchlist/server", () => ({
   getWatchlistIds: mocks.getWatchlistIds,
 }));
 

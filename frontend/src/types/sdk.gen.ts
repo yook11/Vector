@@ -21,7 +21,7 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 /**
  * List Articles
  *
- * 分析済み記事をフィルタとページネーション付きで一覧取得する。
+ * 分析済み記事を新しい順に1回分取得する。続きは nextCursor を cursor に渡して取る。
  *
  * レスポンスは user 非依存。per-user の watchlist 状態は
  * GET /api/v1/me/watchlist/ids で別取得し frontend で merge する。
@@ -61,6 +61,8 @@ export const listWatchlistIds = <ThrowOnError extends boolean = false>(options?:
 
 /**
  * List Articles In Watchlist
+ *
+ * ウォッチ中の記事を新しく入れた順に1回分取得する。続きは nextCursor で取る。
  */
 export const listArticlesInWatchlist = <ThrowOnError extends boolean = false>(options?: Options<ListArticlesInWatchlistData, ThrowOnError>): RequestResult<ListArticlesInWatchlistResponses, ListArticlesInWatchlistErrors, ThrowOnError> => (options?.client ?? client).get<ListArticlesInWatchlistResponses, ListArticlesInWatchlistErrors, ThrowOnError>({ url: '/api/v1/me/watchlist', ...options });
 

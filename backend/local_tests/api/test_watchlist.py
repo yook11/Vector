@@ -90,8 +90,8 @@ async def test_watchlist_returns_watched_articles_newest_first(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 2
     assert [item["id"] for item in body["items"]] == [newer, older]
+    assert body["nextCursor"] is None
 
 
 async def test_unwatching_article_removes_entry(

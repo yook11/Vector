@@ -1,6 +1,7 @@
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,7 +9,7 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.watchlist_entry import WatchlistEntry
 from app.repositories.articles import article_eager_options_brief
-from app.schemas.base import PaginationParams
+from app.schemas.watchlist import WatchlistPosition
 
 
 class WatchlistRepository:
@@ -18,14 +19,15 @@ class WatchlistRepository:
     async def fetch_watched_articles(
         self,
         user_id: UUID,
-        pagination: PaginationParams,
-    ) -> tuple[list[AnalyzedArticleRecord], int]:
-        """ウォッチ中の記事（分析済みのみ）をページングで取得する.
+        after: WatchlistPosition | None,
+        limit: int,
+    ) -> list[tuple[AnalyzedArticleRecord, datetime]]:
+        """ウォッチ中の記事（分析済みのみ）を、位置より後からウォッチの新しい順に取得する.
 
-        (analyses, total_count) を返す.
+        各記事とウォッチした時刻の組を返す.
         """
-        base = (
-            select(AnalyzedArticleRecord)
+        stmt = (
+            select(AnalyzedArticleRecord, WatchlistEntry.created_at)
             .join(AnalyzedArticleRecord.curation)
             .join(ArticleCuration.analyzable_article)
             .join(
@@ -33,21 +35,21 @@ class WatchlistRepository:
                 WatchlistEntry.analyzed_article_id == AnalyzedArticleRecord.id,
             )
             .where(WatchlistEntry.user_id == user_id)
+            .options(*article_eager_options_brief())
         )
 
-        count_stmt = select(func.count()).select_from(base.subquery())
-        total = (await self.session.execute(count_stmt)).scalar_one()
+        if after is not None:
+            stmt = stmt.where(
+                tuple_(WatchlistEntry.created_at, WatchlistEntry.analyzed_article_id)
+                < tuple_(after.watched_at, after.article_id)
+            )
 
-        stmt = (
-            base.options(*article_eager_options_brief())
-            .order_by(WatchlistEntry.created_at.desc())
-            .offset(pagination.offset)
-            .limit(pagination.limit)
-        )
+        stmt = stmt.order_by(
+            WatchlistEntry.created_at.desc(),
+            WatchlistEntry.analyzed_article_id.desc(),
+        ).limit(limit)
         result = await self.session.execute(stmt)
-        analyses = list(result.unique().scalars().all())
-
-        return analyses, total
+        return [(analysis, watched_at) for analysis, watched_at in result.unique()]
 
     async def list_ids(self, user_id: UUID) -> list[int]:
         """ユーザーがウォッチ中の analyzed_article_id を新しい順に返す."""

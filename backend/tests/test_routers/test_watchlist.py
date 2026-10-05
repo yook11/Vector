@@ -1,6 +1,7 @@
 """/api/v1/me/watchlist ルーターエンドポイントのテスト。"""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import pytest
 from httpx2 import AsyncClient
@@ -11,6 +12,10 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
+from app.models.watchlist_entry import WatchlistEntry
+from app.schemas.articles import ArticleListPosition
+from app.schemas.cursor import encode_cursor
+from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
 
 async def _build_article_with_analysis(
@@ -53,6 +58,38 @@ async def _build_article_with_analysis(
     await db_session.refresh(analysis)
     await db_session.refresh(article, ["curation"])
     return article, analysis
+
+
+async def _watch_new_articles(
+    db_session: AsyncSession,
+    source: NewsSource,
+    category_id: int,
+    watched_at: list[datetime],
+    *,
+    user_id: str = TEST_USER_ID,
+) -> list[int]:
+    """ウォッチ時刻ごとに分析済み記事を作ってウォッチし、作った順の記事 ID を返す。"""
+    ids = []
+    for at in watched_at:
+        _, analysis = await _build_article_with_analysis(
+            db_session,
+            source,
+            category_id,
+            url=f"https://example.com/{uuid4()}",
+            title="Watched",
+            translated_title="ウォッチ記事",
+            summary="要約",
+            investor_take="見解",
+            published_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(
+            WatchlistEntry(
+                user_id=UUID(user_id), analyzed_article_id=analysis.id, created_at=at
+            )
+        )
+        ids.append(analysis.id)
+    await db_session.commit()
+    return ids
 
 
 @pytest.fixture
@@ -100,11 +137,10 @@ async def second_article(
 @pytest.mark.asyncio
 class TestListWatchlist:
     async def test_empty_list(self, authed_client: AsyncClient) -> None:
+        """ウォッチが無いと、空の一覧と「続きなし」が返る。"""
         resp = await authed_client.get("/api/v1/me/watchlist")
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["items"] == []
-        assert data["total"] == 0
+        assert resp.json() == {"items": [], "nextCursor": None}
 
     async def test_returns_watchlist_items(
         self,
@@ -117,8 +153,8 @@ class TestListWatchlist:
         resp = await authed_client.get("/api/v1/me/watchlist")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 1
-        item = data["items"][0]
+        assert data["nextCursor"] is None
+        [item] = data["items"]
         assert item["id"] == sample_article.id
         assert item["translatedTitle"] == "テスト記事"
         # AnalyzedArticlePreview 契約: summary 全文は返さず
@@ -133,20 +169,107 @@ class TestListWatchlist:
         # Pattern B: AnalyzedArticlePreview から isWatched は削除済み
         assert "isWatched" not in item
 
-    async def test_pagination(
+    async def test_continues_from_cursor_in_watch_order(
         self,
         authed_client: AsyncClient,
-        sample_article: AnalyzedArticleRecord,
-        second_article: AnalyzedArticleRecord,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
-        await authed_client.put(f"/api/v1/me/watchlist/{sample_article.id}")
-        await authed_client.put(f"/api/v1/me/watchlist/{second_article.id}")
+        """25件ウォッチすると新しく入れた順に24件と続きが返り、続きで残りの1件が返る。"""
+        start = datetime(2026, 1, 1, tzinfo=UTC)
+        ids = await _watch_new_articles(
+            db_session,
+            sample_source,
+            sample_categories[0].id,
+            [start + timedelta(minutes=i) for i in range(25)],
+        )
+        newest_first = ids[::-1]
 
-        resp = await authed_client.get("/api/v1/me/watchlist?perPage=1&page=1")
-        data = resp.json()
-        assert data["total"] == 2
-        assert len(data["items"]) == 1
-        assert data["totalPages"] == 2
+        first = (await authed_client.get("/api/v1/me/watchlist")).json()
+        rest = (
+            await authed_client.get(
+                "/api/v1/me/watchlist", params={"cursor": first["nextCursor"]}
+            )
+        ).json()
+
+        assert [item["id"] for item in first["items"]] == newest_first[:24]
+        assert first["nextCursor"] is not None
+        assert [item["id"] for item in rest["items"]] == newest_first[24:]
+        assert rest["nextCursor"] is None
+
+    async def test_same_watch_time_continues_without_gap_or_duplicate(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """ウォッチ時刻が同じ記事が境目をまたいでも、続きは重複も欠けもなく返る。"""
+        same_time = datetime(2026, 1, 1, tzinfo=UTC)
+        ids = await _watch_new_articles(
+            db_session, sample_source, sample_categories[0].id, [same_time] * 26
+        )
+
+        first = (await authed_client.get("/api/v1/me/watchlist")).json()
+        rest = (
+            await authed_client.get(
+                "/api/v1/me/watchlist", params={"cursor": first["nextCursor"]}
+            )
+        ).json()
+
+        returned = [item["id"] for item in first["items"] + rest["items"]]
+        assert returned == sorted(ids, reverse=True)
+        assert rest["nextCursor"] is None
+
+    async def test_other_users_watches_are_not_returned(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """他のユーザーがウォッチした記事は、自分のウォッチリストに入らない。"""
+        at = datetime(2026, 1, 1, tzinfo=UTC)
+        mine = await _watch_new_articles(
+            db_session, sample_source, sample_categories[0].id, [at]
+        )
+        await _watch_new_articles(
+            db_session,
+            sample_source,
+            sample_categories[0].id,
+            [at + timedelta(minutes=1)],
+            user_id=TEST_ADMIN_ID,
+        )
+
+        resp = await authed_client.get("/api/v1/me/watchlist")
+
+        assert [item["id"] for item in resp.json()["items"]] == mine
+
+    @pytest.mark.parametrize(
+        "cursor",
+        [
+            pytest.param("not base64!", id="base64 の文字以外を含む"),
+            pytest.param(
+                encode_cursor(
+                    ArticleListPosition(
+                        published_at=datetime(2026, 1, 1, tzinfo=UTC), id=1
+                    )
+                ),
+                id="記事一覧のカーソル",
+            ),
+        ],
+    )
+    async def test_unreadable_cursor_returns_422(
+        self, authed_client: AsyncClient, cursor: str
+    ) -> None:
+        """読めないカーソルは DB に問い合わせる前に 422 で弾く。"""
+        resp = await authed_client.get(
+            "/api/v1/me/watchlist", params={"cursor": cursor}
+        )
+        assert resp.status_code == 422
+        [error] = resp.json()["detail"]
+        assert error["loc"] == ["query", "cursor"]
 
     async def test_missing_auth_headers(self, client: AsyncClient) -> None:
         """Authorization ヘッダーが無い場合は 401 (BFF JWT 未提示)。"""
@@ -218,7 +341,7 @@ class TestRemoveFromWatchlist:
 
         # 削除されたことを確認
         resp = await authed_client.get("/api/v1/me/watchlist")
-        assert resp.json()["total"] == 0
+        assert resp.json()["items"] == []
 
     async def test_remove_not_watched_returns_204(
         self, authed_client: AsyncClient

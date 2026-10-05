@@ -8,9 +8,8 @@ from app.db.fastapi import EntryManagedSession
 from app.dependencies import CurrentUser, get_current_user
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
-from app.schemas.articles import ArticleId, PaginatedArticleResponse
-from app.schemas.base import PaginationParams
-from app.schemas.watchlist import WatchlistIds
+from app.schemas.articles import AnalyzedArticlePreviewList, ArticleId
+from app.schemas.watchlist import WatchlistIds, WatchlistParams
 from app.services.watchlist import WatchlistService
 
 router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
@@ -39,10 +38,11 @@ async def list_watchlist_ids(
 
 @router.get("/watchlist")
 async def list_articles_in_watchlist(
-    pagination: Annotated[PaginationParams, Query()],
+    params: Annotated[WatchlistParams, Query()],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
-) -> PaginatedArticleResponse:
-    return await service.list_articles_in_watchlist(pagination)
+) -> AnalyzedArticlePreviewList:
+    """ウォッチ中の記事を新しく入れた順に1回分取得する。続きは nextCursor で取る。"""
+    return await service.list_articles_in_watchlist(params)
 
 
 @router.put(

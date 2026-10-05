@@ -1,6 +1,7 @@
 """/api/v1/articles ルーターエンドポイントのテスト。"""
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from httpx2 import AsyncClient
@@ -11,6 +12,8 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
+from app.schemas.cursor import encode_cursor
+from app.schemas.watchlist import WatchlistPosition
 
 
 async def _create_article(
@@ -65,6 +68,23 @@ async def _create_analysis(
     return analysis
 
 
+async def _create_analyzed_articles(
+    session: AsyncSession,
+    source: NewsSource,
+    category_id: int,
+    published_at: list[datetime],
+) -> list[int]:
+    """公開日時ごとに分析済み記事を作り、作った順の記事 ID を返す。"""
+    ids = []
+    for at in published_at:
+        article = await _create_article(
+            session, source, url=f"https://example.com/{uuid4()}", published_at=at
+        )
+        analysis = await _create_analysis(session, article, category_id=category_id)
+        ids.append(analysis.id)
+    return ids
+
+
 @pytest.mark.asyncio
 class TestListArticles:
     async def test_requires_bff_proof(self, client: AsyncClient) -> None:
@@ -73,13 +93,10 @@ class TestListArticles:
         assert resp.status_code == 401
 
     async def test_empty_list(self, bff_client: AsyncClient) -> None:
+        """記事が無いと、空の一覧と「続きなし」が返る。"""
         resp = await bff_client.get("/api/v1/articles")
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["items"] == []
-        assert data["total"] == 0
-        assert data["page"] == 1
-        assert data["totalPages"] == 0
+        assert resp.json() == {"items": [], "nextCursor": None}
 
     async def test_returns_analyzed_articles(
         self,
@@ -103,45 +120,142 @@ class TestListArticles:
         resp = await bff_client.get("/api/v1/articles")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 2
         assert len(data["items"]) == 2
+        assert data["nextCursor"] is None
 
-    async def test_pagination(
+    async def test_continues_from_cursor_in_published_order(
         self,
         bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
-        cat_id = sample_categories[0].id
-        for i in range(5):
-            article = await _create_article(
-                db_session, sample_source, url=f"https://example.com/{i}"
-            )
-            await _create_analysis(db_session, article, category_id=cat_id)
+        """25件あると新しい順に24件と続きのカーソルが返り、続きで残りの1件が返る。"""
+        start = datetime(2026, 1, 1, tzinfo=UTC)
+        ids = await _create_analyzed_articles(
+            db_session,
+            sample_source,
+            sample_categories[0].id,
+            [start + timedelta(minutes=i) for i in range(25)],
+        )
+        newest_first = ids[::-1]
 
-        resp = await bff_client.get("/api/v1/articles?page=1&perPage=2")
-        data = resp.json()
-        assert data["total"] == 5
-        assert len(data["items"]) == 2
-        assert data["page"] == 1
-        assert data["perPage"] == 2
-        assert data["totalPages"] == 3
+        first = (await bff_client.get("/api/v1/articles")).json()
+        rest = (
+            await bff_client.get(
+                "/api/v1/articles", params={"cursor": first["nextCursor"]}
+            )
+        ).json()
+
+        assert [item["id"] for item in first["items"]] == newest_first[:24]
+        assert first["nextCursor"] is not None
+        assert [item["id"] for item in rest["items"]] == newest_first[24:]
+        assert rest["nextCursor"] is None
+
+    async def test_same_published_time_continues_without_gap_or_duplicate(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """公開日時が同じ記事が境目をまたいでも、続きは重複も欠けもなく返る。"""
+        same_time = datetime(2026, 1, 1, tzinfo=UTC)
+        ids = await _create_analyzed_articles(
+            db_session, sample_source, sample_categories[0].id, [same_time] * 26
+        )
+
+        first = (await bff_client.get("/api/v1/articles")).json()
+        rest = (
+            await bff_client.get(
+                "/api/v1/articles", params={"cursor": first["nextCursor"]}
+            )
+        ).json()
+
+        returned = [item["id"] for item in first["items"] + rest["items"]]
+        assert returned == sorted(ids, reverse=True)
+        assert rest["nextCursor"] is None
+
+    async def test_cursor_continues_within_category(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """カテゴリを指定すると、続きもそのカテゴリの記事だけが返る。"""
+        start = datetime(2026, 1, 1, tzinfo=UTC)
+        ai_ids = await _create_analyzed_articles(
+            db_session,
+            sample_source,
+            sample_categories[0].id,
+            [start + timedelta(minutes=2 * i) for i in range(25)],
+        )
+        await _create_analyzed_articles(
+            db_session,
+            sample_source,
+            sample_categories[1].id,
+            [start + timedelta(minutes=2 * i + 1) for i in range(3)],
+        )
+
+        first = (await bff_client.get("/api/v1/articles?category=ai")).json()
+        rest = (
+            await bff_client.get(
+                "/api/v1/articles",
+                params={"category": "ai", "cursor": first["nextCursor"]},
+            )
+        ).json()
+
+        assert [item["id"] for item in first["items"] + rest["items"]] == ai_ids[::-1]
+        assert rest["nextCursor"] is None
 
     @pytest.mark.parametrize(
-        "query",
+        "cursor",
         [
-            "page=0",
-            "page=10001",
-            "perPage=0",
-            "perPage=101",
+            pytest.param("not base64!", id="base64 の文字以外を含む"),
+            pytest.param("bm90IGpzb24", id="JSON でない"),
+            pytest.param(
+                encode_cursor(
+                    WatchlistPosition(
+                        watched_at=datetime(2026, 1, 1, tzinfo=UTC), article_id=1
+                    )
+                ),
+                id="ウォッチリストのカーソル",
+            ),
+            pytest.param("A" * 257, id="257 字"),
         ],
     )
-    async def test_invalid_pagination_returns_422(
-        self, bff_client: AsyncClient, query: str
+    async def test_unreadable_cursor_returns_422(
+        self, bff_client: AsyncClient, cursor: str
     ) -> None:
-        resp = await bff_client.get(f"/api/v1/articles?{query}")
+        """読めないカーソルは DB に問い合わせる前に 422 で弾く。"""
+        resp = await bff_client.get("/api/v1/articles", params={"cursor": cursor})
         assert resp.status_code == 422
+        [error] = resp.json()["detail"]
+        assert error["loc"] == ["query", "cursor"]
+
+    async def test_retired_paging_params_are_ignored(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """廃止した page / perPage / sortOrder を付けても、新しい順の先頭が返る。"""
+        start = datetime(2026, 1, 1, tzinfo=UTC)
+        ids = await _create_analyzed_articles(
+            db_session,
+            sample_source,
+            sample_categories[0].id,
+            [start, start + timedelta(minutes=1)],
+        )
+
+        resp = await bff_client.get(
+            "/api/v1/articles", params={"page": 2, "perPage": 1, "sortOrder": "asc"}
+        )
+
+        assert resp.status_code == 200
+        assert [item["id"] for item in resp.json()["items"]] == ids[::-1]
 
     async def test_sort_by_published_at_desc(
         self,
@@ -173,7 +287,7 @@ class TestListArticles:
             db_session, newer, category_id=cat_id, translated_title="新しい記事"
         )
 
-        resp = await bff_client.get("/api/v1/articles?sortOrder=desc")
+        resp = await bff_client.get("/api/v1/articles")
         items = resp.json()["items"]
         assert items[0]["translatedTitle"] == "新しい記事"
         assert items[1]["translatedTitle"] == "古い記事"
@@ -190,8 +304,7 @@ class TestListArticles:
         await _create_analysis(db_session, a, category_id=cat_id)
         resp = await bff_client.get("/api/v1/articles")
         data = resp.json()
-        assert "totalPages" in data
-        assert "perPage" in data
+        assert "nextCursor" in data
         item = data["items"][0]
         assert "translatedTitle" in item
         assert "keyPoints" in item
@@ -244,7 +357,7 @@ class TestListArticles:
         await _create_analysis(db_session, article, category_id=cat_id)
         resp = await bff_client.get("/api/v1/articles?impactLevel=high")
         assert resp.status_code == 200
-        assert resp.json()["total"] == 1
+        assert len(resp.json()["items"]) == 1
 
     async def test_date_sort_tiebreaker_uses_id_desc(
         self,
@@ -331,8 +444,7 @@ class TestListArticles:
         resp = await bff_client.get("/api/v1/articles?category=ai")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 1
-        assert data["items"][0]["translatedTitle"] == "AI 記事"
+        assert [item["translatedTitle"] for item in data["items"]] == ["AI 記事"]
 
     async def test_brief_has_summary_preview_key_always_present(
         self,

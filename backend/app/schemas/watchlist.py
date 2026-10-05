@@ -1,4 +1,12 @@
+from typing import Annotated
+
+from fastapi import Query
+from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic.dataclasses import dataclass
+
+from app.schemas.articles import ARTICLE_ID_MAX
 from app.schemas.base import _CamelBase
+from app.schemas.cursor import CURSOR_JSON_SCHEMA, cursor_decoder
 
 
 class WatchlistIds(_CamelBase):
@@ -9,3 +17,27 @@ class WatchlistIds(_CamelBase):
     """
 
     ids: list[int]
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class WatchlistPosition:
+    """ウォッチリストの並び上の位置。
+
+    並びはウォッチした時刻の新しい順で、同時刻は記事 ID の大きい順。
+    """
+
+    watched_at: AwareDatetime
+    article_id: Annotated[int, Field(ge=1, le=ARTICLE_ID_MAX)]
+
+
+WatchlistCursor = Annotated[
+    WatchlistPosition,
+    BeforeValidator(cursor_decoder(WatchlistPosition)),
+    CURSOR_JSON_SCHEMA,
+]
+
+
+class WatchlistParams(BaseModel):
+    """ウォッチリスト一覧のクエリパラメータ。カーソルの形式が不正なら 422 を返す。"""
+
+    cursor: Annotated[WatchlistCursor | None, Query()] = None

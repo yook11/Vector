@@ -31,14 +31,14 @@ Server Components + URL searchParams で管理。グローバル状態管理ラ�
   - `client` (singleton): auth + error interceptor 付き。auth-required endpoint で per-call client なしに使う
   - `publicClient`: user session は読まないが BFF 経由証明 (user-less JWT) を付ける。`"use cache"` 内 user 非依存 endpoint で `{ client: publicClient }` を per-call 渡す (cookies/headers 読取を踏まないため。backend の require_bff_request が検証)
 - mutation はすべて Server Action 化済み。Client Component からの直接 fetch は不要
-- 利用側は Public API (`@/features/<name>`) からのみ import (deep path 禁止)
+- 利用側は Public API (`@/features/<name>`) からのみ import (deep path 禁止)。サーバー専用の関数 (`server-only` を読むもの) は `@/features/<name>/server` に分け、`@/features/<name>` はブラウザ側からも読める内容だけにする
 
 ## features 構造ルール
 
 backend ドメインに揃えた機能境界 (`auth` / `news` / `watchlist` / `digest` / `briefing` / `sources`)。
 
 1. features 同士の直接 import は禁止 (Biome `noRestrictedImports` で構造的に強制)
-2. features を外から使う側は必ず Public API (`@/features/<name>`) を経由
+2. features を外から使う側は必ず Public API (`@/features/<name>`、サーバー専用は `@/features/<name>/server`) を経由
 3. features 名は backend ドメインに揃える (UI 露出のない `ingestion` は frontend に作らない)
 
 **例外**: `features/news` から `features/watchlist` への一方向参照のみ許可 (NewsList が `WatchlistButton` を compose する役割のため。逆方向は不可)。

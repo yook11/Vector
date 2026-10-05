@@ -44,8 +44,8 @@ async def test_article_list_filtered_by_category(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 1
     assert [item["id"] for item in body["items"]] == [article_id]
+    assert body["nextCursor"] is None
 
 
 async def test_article_detail_returns_requested_article(

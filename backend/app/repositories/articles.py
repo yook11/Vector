@@ -1,6 +1,6 @@
 """記事向けの読み取り専用クエリ（一覧/詳細/類似）。"""
 
-from sqlalchemy import exists, func, select, true
+from sqlalchemy import exists, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager, defer, load_only, selectinload
 
@@ -9,7 +9,7 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
-from app.schemas.articles import ArticleListParams, SortOrder
+from app.schemas.articles import ArticleListParams
 
 
 def article_eager_options_brief() -> list:
@@ -73,39 +73,37 @@ class ArticleRepository:
     async def fetch_articles(
         self,
         query: ArticleListParams,
-    ) -> tuple[list[AnalyzedArticleRecord], int]:
-        """ニュース閲覧用にページング済みの記事一覧を取得する."""
+        limit: int,
+    ) -> list[AnalyzedArticleRecord]:
+        """ニュース閲覧用に、カーソルの位置より後の記事を新しい順に取得する."""
         stmt = (
             select(AnalyzedArticleRecord)
             .join(AnalyzedArticleRecord.curation)
             .join(ArticleCuration.analyzable_article)
             .options(*article_eager_options_brief())
         )
-        count_stmt = select(func.count()).select_from(AnalyzedArticleRecord)
 
-        # フィルタ
         if query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
-            category_filter = AnalyzedArticleRecord.category_id.in_(cat_id_sub)
-            stmt = stmt.where(category_filter)
-            count_stmt = count_stmt.where(category_filter)
+            stmt = stmt.where(AnalyzedArticleRecord.category_id.in_(cat_id_sub))
 
-        # 総件数
-        total = (await self.session.execute(count_stmt)).scalar_one()
+        if query.cursor is not None:
+            # 行比較は2表にまたがり索引の開始位置にならないため、published_at の範囲を
+            # 併記して idx_analyzable_articles_published をカーソルの位置から読ませる。
+            stmt = stmt.where(
+                AnalyzableArticleRecord.published_at <= query.cursor.published_at,
+                tuple_(AnalyzableArticleRecord.published_at, AnalyzedArticleRecord.id)
+                < tuple_(query.cursor.published_at, query.cursor.id),
+            )
 
-        # ソート。published_at は NOT NULL (ドメイン不変条件 + DB 制約)。
-        order = (
-            AnalyzableArticleRecord.published_at.desc()
-            if query.sort_order == SortOrder.DESC
-            else AnalyzableArticleRecord.published_at.asc()
-        )
-        stmt = stmt.order_by(order, AnalyzedArticleRecord.id.desc())
-
-        # ページング
-        stmt = stmt.offset(query.offset).limit(query.limit)
+        # published_at は NOT NULL (ドメイン不変条件 + DB 制約)。
+        stmt = stmt.order_by(
+            AnalyzableArticleRecord.published_at.desc(),
+            AnalyzedArticleRecord.id.desc(),
+        ).limit(limit)
 
         result = await self.session.execute(stmt)
-        return list(result.unique().scalars().all()), total
+        return list(result.unique().scalars().all())
 
     async def fetch_one_analyzed(self, article_id: int) -> AnalyzedArticleRecord | None:
         """分析情報を eager load した単一記事を取得する.
