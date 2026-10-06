@@ -9,7 +9,7 @@ export function TrendsEmptyState() {
         className="text-[16px] font-bold text-[var(--vector-ink)]"
         style={{ fontFamily: "var(--font-vector-serif)" }}
       >
-        該当するワードはありません
+        トレンドはまだ生成されていません
       </p>
       <p
         className="text-[12.5px] italic text-[var(--vector-ink-muted)]"

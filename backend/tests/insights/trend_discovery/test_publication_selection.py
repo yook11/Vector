@@ -7,7 +7,7 @@ from sqlalchemy import event
 
 from app.insights.trend_discovery.repository import TrendsRepository
 
-from .test_repository_trends import WEEK_END, WEEK_START
+from .test_repository_trends import WEEK_END, WEEK_START, WEEKS
 
 NVIDIA = ("nvidia", "company")
 OPENAI = ("openai", "company")
@@ -16,8 +16,7 @@ OPENAI = ("openai", "company")
 async def key_points(session, category, keys=(NVIDIA,)):
     return await TrendsRepository(session).get_mention_key_points(
         category_id=category.id,
-        current_start=WEEK_START,
-        current_end=WEEK_END,
+        week=WEEKS.week,
         mention_keys=keys,
     )
 
@@ -256,10 +255,10 @@ async def test_key_points_respect_publication_window(
 
 
 @pytest.mark.asyncio
-async def test_ranking_counts_current_and_previous_publication_windows(
+async def test_candidates_count_week_and_previous_week_by_publication(
     db_session, sample_categories, seed_analysis
 ):
-    """分析日時によらず公開日時で現在・前期間・対象外を分ける。"""
+    """分析日時によらず公開日時で週・前週・対象外を分ける。"""
     category = sample_categories[0]
     for published_at in (
         [WEEK_START] * 5
@@ -275,22 +274,17 @@ async def test_ranking_counts_current_and_previous_publication_windows(
             published_at=published_at,
             mentions=[NVIDIA],
         )
-    result = await TrendsRepository(db_session).get_ranked_mentions(
-        category_id=category.id,
-        current_start=WEEK_START,
-        current_end=WEEK_END,
-        previous_start=WEEK_START - timedelta(days=7),
+    result = await TrendsRepository(db_session).get_mention_candidates(
+        category_id=category.id, weeks=WEEKS
     )
-    assert [
-        (item.appearance_count, item.previous_appearance_count) for item in result
-    ] == [(5, 2)]
+    assert [(item.count, item.previous_week_count) for item in result] == [(5, 2)]
 
 
 @pytest.mark.asyncio
-async def test_related_mentions_count_only_publications_in_current_window(
+async def test_co_mentions_count_only_publications_in_the_week(
     db_session, sample_categories, seed_analysis
 ):
-    """共起数も分析日時によらず現在の公開期間だけを数える。"""
+    """共起数も分析日時によらず週に公開された記事だけを数える。"""
     category = sample_categories[0]
     for published_at in (
         WEEK_START,
@@ -304,11 +298,8 @@ async def test_related_mentions_count_only_publications_in_current_window(
             published_at=published_at,
             mentions=[NVIDIA, OPENAI],
         )
-    result = await TrendsRepository(db_session).get_related_mentions(
-        category_id=category.id,
-        current_start=WEEK_START,
-        current_end=WEEK_END,
-        mention_keys=[NVIDIA],
+    result = await TrendsRepository(db_session).get_co_mentions(
+        category_id=category.id, week=WEEKS.week, mention_keys=[NVIDIA]
     )
     assert [
         (item.name.match_key, item.shared_article_count) for item in result[NVIDIA]
@@ -316,10 +307,10 @@ async def test_related_mentions_count_only_publications_in_current_window(
 
 
 @pytest.mark.asyncio
-async def test_source_count_uses_publication_window_without_requiring_points(
+async def test_analyzed_article_count_uses_the_week_without_requiring_points(
     db_session, sample_categories, seed_analysis
 ):
-    """集計元記事数は要点なしの記事も含め、公開期間だけで絞る。"""
+    """週の分析済み記事数は要点なしの記事も含め、公開日時だけで絞る。"""
     category = sample_categories[0]
     for published_at in (
         WEEK_START,
@@ -333,9 +324,5 @@ async def test_source_count_uses_publication_window_without_requiring_points(
             published_at=published_at,
         )
     assert (
-        await TrendsRepository(db_session).count_source_analyses(
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-        )
-        == 2
+        await TrendsRepository(db_session).count_analyzed_articles(week=WEEKS.week) == 2
     )

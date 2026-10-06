@@ -247,18 +247,6 @@ export type EmptyBriefing = {
 };
 
 /**
- * EmptyTrends
- *
- * snapshot 未生成の状態 (窓情報フィールドは存在しない)。
- */
-export type EmptyTrends = {
-    /**
-     * State
-     */
-    state?: 'empty';
-};
-
-/**
  * FailureReason
  *
  * 選択窓内の outcome code 別失敗・棄却件数。
@@ -858,29 +846,19 @@ export type Stage = 'dispatch' | 'acquisition' | 'completion' | 'curation' | 'as
 /**
  * Trends
  *
- * snapshot 生成済の状態。
+ * 1つの週のトレンド (保存したスナップショットの内容)。
  */
 export type Trends = {
-    /**
-     * State
-     */
-    state?: 'trends';
-    /**
-     * Windowstart
-     */
-    windowStart: string;
-    /**
-     * Windowend
-     */
-    windowEnd: string;
+    week: DateRange;
+    previousWeek: DateRange;
     /**
      * Generatedat
      */
     generatedAt: string;
     /**
-     * Sourceanalysiscount
+     * Analyzedarticlecount
      */
-    sourceAnalysisCount: number;
+    analyzedArticleCount: number;
     /**
      * Categorytrends
      */
@@ -1016,66 +994,87 @@ export type BriefingKeyArticle = {
  * _CategoryTrends
  */
 export type CategoryTrends = {
+    category: Category;
     /**
-     * Categoryid
+     * Mentiontrends
      */
-    categoryId: number;
-    /**
-     * Categoryslug
-     */
-    categorySlug: string;
-    /**
-     * Categoryname
-     */
-    categoryName: string;
-    /**
-     * Mostmentioned
-     */
-    mostMentioned: Array<RankedMention>;
-    /**
-     * Fastestgrowing
-     */
-    fastestGrowing: Array<RankedMention>;
+    mentionTrends: Array<MentionTrend>;
 };
 
 /**
- * _RankedMention
+ * _CoMention
  */
-export type RankedMention = {
-    name: MentionName;
-    type: MentionType;
-    /**
-     * Appearancecount
-     */
-    appearanceCount: number;
-    /**
-     * Previousappearancecount
-     */
-    previousAppearanceCount: number;
-    /**
-     * Growthrate
-     */
-    growthRate: number;
-    /**
-     * Keypoints
-     */
-    keyPoints: Array<string>;
-    /**
-     * Relatedmentions
-     */
-    relatedMentions: Array<RelatedMention>;
-};
-
-/**
- * _RelatedMention
- */
-export type RelatedMention = {
+export type CoMention = {
     name: MentionName;
     type: MentionType;
     /**
      * Sharedarticlecount
      */
     sharedArticleCount: number;
+};
+
+/**
+ * _DateRange
+ */
+export type DateRange = {
+    /**
+     * Start
+     */
+    start: string;
+    /**
+     * End
+     */
+    end: string;
+};
+
+/**
+ * _MentionArticleVolume
+ */
+export type MentionArticleVolume = {
+    /**
+     * Count
+     */
+    count: number;
+    /**
+     * Previousweekcount
+     */
+    previousWeekCount: number;
+    /**
+     * Rank
+     */
+    rank: number;
+};
+
+/**
+ * _MentionGrowth
+ */
+export type MentionGrowth = {
+    /**
+     * Rate
+     */
+    rate: number;
+    /**
+     * Rank
+     */
+    rank: number | null;
+};
+
+/**
+ * _MentionTrend
+ */
+export type MentionTrend = {
+    name: MentionName;
+    type: MentionType;
+    articleVolume: MentionArticleVolume;
+    growth: MentionGrowth;
+    /**
+     * Keypoints
+     */
+    keyPoints: Array<string>;
+    /**
+     * Mentionedwith
+     */
+    mentionedWith: Array<CoMention>;
 };
 
 export type ListArticlesData = {
@@ -1454,11 +1453,7 @@ export type GetTrendsResponses = {
      *
      * Successful Response
      */
-    200: ({
-        state: 'trends';
-    } & Trends) | ({
-        state: 'empty';
-    } & EmptyTrends);
+    200: Trends | null;
 };
 
 export type GetTrendsResponse = GetTrendsResponses[keyof GetTrendsResponses];

@@ -19,12 +19,9 @@ from app.insights.trend_discovery.domain.ready import (
 )
 from app.insights.trend_discovery.domain.trend import (
     CategoryTrends,
-    MentionKey,
-    RankedMention,
     TrendsBundle,
-    TrendWindow,
-    select_fastest_growing,
-    select_most_mentioned,
+    TrendWeeks,
+    rank_mention_trends,
 )
 from app.insights.trend_discovery.repository import (
     SnapshotRepository,
@@ -46,24 +43,24 @@ TRENDS_REVALIDATE_TAGS: tuple[str, ...] = ("trends",)
 class TrendDiscoveryCompleted:
     """トレンドの集計結果を保存した。"""
 
-    window_end: date
-    source_analysis_count: int
+    snapshot_date: date
+    analyzed_article_count: int
     completed_category_count: int
 
 
 @dataclass(frozen=True, slots=True)
 class SkippedAlreadyGenerated:
-    """同じ期間の生成結果が保存済みのため開始しなかった。"""
+    """同じ日付のスナップショットが保存済みのため開始しなかった。"""
 
-    window_end: date
+    snapshot_date: date
 
 
 @dataclass(frozen=True, slots=True)
 class SkippedNoTargetArticles:
     """対象の分析済み記事がないため生成しなかった。"""
 
-    window_end: date
-    source_analysis_count: int = 0
+    snapshot_date: date
+    analyzed_article_count: int = 0
     completed_category_count: int | None = None
 
 
@@ -71,8 +68,8 @@ class SkippedNoTargetArticles:
 class TrendDiscoveryConflict:
     """同時実行した別のワーカーが先に保存したため、保存しなかった。"""
 
-    window_end: date
-    source_analysis_count: int
+    snapshot_date: date
+    analyzed_article_count: int
     completed_category_count: int
 
 
@@ -92,16 +89,16 @@ class TrendDiscoveryService:
 
     async def create(self, notifier: RevalidateNotifier) -> None:
         """直近の完了済み7日間のトレンドを作成する。"""
-        window = TrendWindow.latest(datetime.now(UTC))
+        weeks = TrendWeeks.latest(datetime.now(UTC))
         try:
-            outcome = await self.execute(window)
+            outcome = await self.execute(weeks)
         except Exception as exc:
             await append_trend_discovery_run_event_best_effort(
                 self._session_factory,
                 event_type=EventType.FAILED,
                 outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
-                window_start=window.window_start,
-                window_end=window.window_end,
+                window_start=weeks.week.start,
+                window_end=weeks.snapshot_date,
                 exc=exc,
             )
             raise
@@ -109,20 +106,20 @@ class TrendDiscoveryService:
         if isinstance(outcome, SkippedAlreadyGenerated):
             logger.info(
                 "trend_discovery_task_skipped_already_exists",
-                window_end=outcome.window_end.isoformat(),
+                window_end=outcome.snapshot_date.isoformat(),
             )
             return
         if isinstance(outcome, SkippedNoTargetArticles):
             logger.info(
                 "trend_discovery_task_skipped_no_target_articles",
-                window_end=outcome.window_end.isoformat(),
+                window_end=outcome.snapshot_date.isoformat(),
             )
             return
         if isinstance(outcome, TrendDiscoveryConflict):
             logger.info(
                 "trend_discovery_task_conflict",
-                window_end=outcome.window_end.isoformat(),
-                source_analysis_count=outcome.source_analysis_count,
+                window_end=outcome.snapshot_date.isoformat(),
+                source_analysis_count=outcome.analyzed_article_count,
                 category_count=outcome.completed_category_count,
             )
             return
@@ -131,31 +128,29 @@ class TrendDiscoveryService:
             self._session_factory,
             event_type=EventType.SUCCEEDED,
             outcome_code=TrendDiscoveryOutcomeCode.RUN_COMPLETED,
-            window_start=window.window_start,
-            window_end=outcome.window_end,
-            source_analysis_count=outcome.source_analysis_count,
+            window_start=weeks.week.start,
+            window_end=outcome.snapshot_date,
+            source_analysis_count=outcome.analyzed_article_count,
             completed_category_count=outcome.completed_category_count,
         )
 
         logger.info(
             "trend_discovery_task_completed",
-            window_end=outcome.window_end.isoformat(),
-            source_analysis_count=outcome.source_analysis_count,
+            window_end=outcome.snapshot_date.isoformat(),
+            source_analysis_count=outcome.analyzed_article_count,
             category_count=outcome.completed_category_count,
         )
         await notifier.notify(tags=TRENDS_REVALIDATE_TAGS)
 
-    async def execute(self, window: TrendWindow) -> TrendDiscoveryOutcome:
-        """準備から保存までを同じセッションで扱い、開始条件を満たした期間を集計する。"""
+    async def execute(self, weeks: TrendWeeks) -> TrendDiscoveryOutcome:
+        """準備から保存までを同じセッションで扱い、開始条件を満たした週を集計する。"""
         async with self._session_factory() as session:
-            facts = await TrendsRepository(session).load_ready_build_facts(
-                window=window
-            )
-            ready = ReadyForTrendDiscovery.from_facts(window=window, facts=facts)
+            facts = await TrendsRepository(session).load_ready_build_facts(weeks=weeks)
+            ready = ReadyForTrendDiscovery.from_facts(weeks=weeks, facts=facts)
             if ready is TrendDiscoveryReadyBuildRejectionReason.ALREADY_GENERATED:
-                return SkippedAlreadyGenerated(window_end=window.window_end)
+                return SkippedAlreadyGenerated(snapshot_date=weeks.snapshot_date)
             if ready is TrendDiscoveryReadyBuildRejectionReason.NO_ARTICLES:
-                return SkippedNoTargetArticles(window_end=window.window_end)
+                return SkippedNoTargetArticles(snapshot_date=weeks.snapshot_date)
             outcome = await self._generate(session, ready)
             await session.commit()
             return outcome
@@ -163,46 +158,42 @@ class TrendDiscoveryService:
     async def _generate(
         self, session: AsyncSession, ready: ReadyForTrendDiscovery
     ) -> TrendDiscoveryCompleted | TrendDiscoveryConflict:
-        """開始条件を満たした期間を集計し、既存行を上書きせず保存する。"""
-        window = ready.window
+        """開始条件を満たした週を集計し、既存行を上書きせず保存する。"""
+        weeks = ready.weeks
         trends_repo = TrendsRepository(session)
         categories = await trends_repo.get_categories()
         category_trends_list: list[CategoryTrends] = []
         for cat in categories:
             category_trends_list.append(
                 await self._build_category_trends(
-                    trends_repo,
-                    category=cat,
-                    current_start=window.current_start,
-                    current_end=window.current_end,
-                    previous_start=window.previous_start,
+                    trends_repo, category=cat, weeks=weeks
                 )
             )
         category_trends = tuple(category_trends_list)
         completed_category_count = len(category_trends)
-        bundle = TrendsBundle(window=window, category_trends=category_trends)
+        bundle = TrendsBundle(weeks=weeks, category_trends=category_trends)
         generated_at = datetime.now(UTC)
         response = trends_from_snapshot(
             bundle=bundle,
             generated_at=generated_at,
-            source_analysis_count=ready.source_analysis_count,
+            analyzed_article_count=ready.analyzed_article_count,
         )
         snapshot = TrendsSnapshot(
-            window_end=window.window_end,
+            window_end=weeks.snapshot_date,
             bundle=response.model_dump(mode="json", by_alias=True),
-            source_analysis_count=ready.source_analysis_count,
+            source_analysis_count=ready.analyzed_article_count,
             generated_at=generated_at,
         )
         save_result = await SnapshotRepository(session).save(snapshot)
         if save_result.status == SnapshotSaveStatus.CONFLICT:
             return TrendDiscoveryConflict(
-                window_end=window.window_end,
-                source_analysis_count=ready.source_analysis_count,
+                snapshot_date=weeks.snapshot_date,
+                analyzed_article_count=ready.analyzed_article_count,
                 completed_category_count=completed_category_count,
             )
         return TrendDiscoveryCompleted(
-            window_end=window.window_end,
-            source_analysis_count=ready.source_analysis_count,
+            snapshot_date=weeks.snapshot_date,
+            analyzed_article_count=ready.analyzed_article_count,
             completed_category_count=completed_category_count,
         )
 
@@ -211,54 +202,30 @@ class TrendDiscoveryService:
         trends_repo: TrendsRepository,
         *,
         category: Category,
-        current_start: datetime,
-        current_end: datetime,
-        previous_start: datetime,
+        weeks: TrendWeeks,
     ) -> CategoryTrends:
-        """上位メンションを補足し、両ランキングで同じメンションの情報を共有する。"""
-        pool = await trends_repo.get_ranked_mentions(
-            category_id=category.id,
-            current_start=current_start,
-            current_end=current_end,
-            previous_start=previous_start,
+        """候補に順位を付け、公開する名前にだけ要点と一緒に語られた名前を付ける。"""
+        candidates = await trends_repo.get_mention_candidates(
+            category_id=category.id, weeks=weeks
         )
-        most_mentioned = select_most_mentioned(pool)
-        fastest_growing = select_fastest_growing(pool)
-
-        union: dict[MentionKey, RankedMention] = {}
-        for mention in (*most_mentioned, *fastest_growing):
-            union.setdefault((mention.name.match_key, mention.type.value), mention)
-        mention_keys = list(union.keys())
-
+        mention_trends = rank_mention_trends(candidates)
+        mention_keys = [(t.name.match_key, t.type.value) for t in mention_trends]
         key_points = await trends_repo.get_mention_key_points(
-            category_id=category.id,
-            current_start=current_start,
-            current_end=current_end,
-            mention_keys=mention_keys,
+            category_id=category.id, week=weeks.week, mention_keys=mention_keys
         )
-        related = await trends_repo.get_related_mentions(
-            category_id=category.id,
-            current_start=current_start,
-            current_end=current_end,
-            mention_keys=mention_keys,
+        co_mentions = await trends_repo.get_co_mentions(
+            category_id=category.id, week=weeks.week, mention_keys=mention_keys
         )
-        enriched = {
-            key: mention.model_copy(
-                update={
-                    "key_points": key_points.get(key, ()),
-                    "related_mentions": related.get(key, ()),
-                }
-            )
-            for key, mention in union.items()
-        }
-
-        def _with_context(mention: RankedMention) -> RankedMention:
-            return enriched[(mention.name.match_key, mention.type.value)]
-
         return CategoryTrends(
-            category_id=category.id,
             category_slug=category.slug,
             category_name=category.name,
-            most_mentioned=tuple(_with_context(m) for m in most_mentioned),
-            fastest_growing=tuple(_with_context(m) for m in fastest_growing),
+            mention_trends=tuple(
+                trend.model_copy(
+                    update={
+                        "key_points": key_points.get(key, ()),
+                        "mentioned_with": co_mentions.get(key, ()),
+                    }
+                )
+                for trend, key in zip(mention_trends, mention_keys, strict=True)
+            ),
         )

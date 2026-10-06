@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from enum import StrEnum
 from typing import Any
 
@@ -19,18 +19,17 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.selectable import Join, TableValuedAlias
 
 from app.analysis.assessment.domain.result import MentionType
-from app.insights.trend_discovery.domain.mention_context import (
-    select_related_mentions,
-)
+from app.insights.trend_discovery.domain.mention_context import select_co_mentions
 from app.insights.trend_discovery.domain.ready import TrendDiscoveryReadyBuildFacts
 from app.insights.trend_discovery.domain.trend import (
     MAX_KEY_POINTS_PER_MENTION,
-    MIN_CURRENT,
+    MIN_CANDIDATE_COUNT,
     MIN_SHARED_ARTICLES,
+    CoMention,
+    MentionCandidate,
     MentionKey,
-    RankedMention,
-    RelatedMention,
-    TrendWindow,
+    TrendWeeks,
+    Week,
 )
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
@@ -99,94 +98,80 @@ class TrendsRepository:
         self._session = session
 
     async def load_ready_build_facts(
-        self, *, window: TrendWindow
+        self, *, weeks: TrendWeeks
     ) -> TrendDiscoveryReadyBuildFacts:
-        """生成済みかを読み、未生成の場合だけ公開期間内の記事数を取得する。"""
+        """生成済みかを読み、未生成の場合だけ週に公開された記事数を取得する。"""
         already_generated = await SnapshotRepository(
             self._session
-        ).exists_for_window_end(window.window_end)
-        source_count = (
+        ).exists_for_snapshot_date(weeks.snapshot_date)
+        article_count = (
             None
             if already_generated
-            else await self.count_source_analyses(
-                current_start=window.current_start, current_end=window.current_end
-            )
+            else await self.count_analyzed_articles(week=weeks.week)
         )
         return TrendDiscoveryReadyBuildFacts(
-            already_generated=already_generated, source_analysis_count=source_count
+            already_generated=already_generated, analyzed_article_count=article_count
         )
 
     async def get_categories(self) -> tuple[Category, ...]:
         stmt = select(Category).order_by(Category.id)
         return tuple((await self._session.execute(stmt)).scalars().all())
 
-    async def get_ranked_mentions(
-        self,
-        *,
-        category_id: int,
-        current_start: datetime,
-        current_end: datetime,
-        previous_start: datetime,
-    ) -> tuple[RankedMention, ...]:
-        """最低出現数を満たすメンションを、現在・前期間の記事数付きで返す。"""
-        current_sub = self._entity_window_subquery(
-            category_id=category_id,
-            window_start=current_start,
-            window_end=current_end,
-            label="current",
+    async def get_mention_candidates(
+        self, *, category_id: int, weeks: TrendWeeks
+    ) -> tuple[MentionCandidate, ...]:
+        """週に最低記事数以上で登場した名前を、週と前週の記事数付きで返す。"""
+        week_sub = self._mention_counts_subquery(
+            category_id=category_id, week=weeks.week, label="week"
         )
-        previous_sub = self._entity_window_subquery(
-            category_id=category_id,
-            window_start=previous_start,
-            window_end=current_start,
-            label="previous",
+        previous_week_sub = self._mention_counts_subquery(
+            category_id=category_id, week=weeks.previous_week, label="previous_week"
         )
-        previous_appearance = func.coalesce(previous_sub.c.cnt, 0)
+        previous_week_count = func.coalesce(previous_week_sub.c.cnt, 0)
         stmt = (
             select(
-                current_sub.c.display_name,
-                current_sub.c.type,
-                current_sub.c.cnt.label("appearance_count"),
-                previous_appearance.label("previous_appearance_count"),
+                week_sub.c.display_name,
+                week_sub.c.type,
+                week_sub.c.cnt.label("week_count"),
+                previous_week_count.label("previous_week_count"),
             )
-            .select_from(current_sub)
+            .select_from(week_sub)
             .outerjoin(
-                previous_sub,
+                previous_week_sub,
                 and_(
-                    previous_sub.c.match_key == current_sub.c.match_key,
-                    previous_sub.c.type == current_sub.c.type,
+                    previous_week_sub.c.match_key == week_sub.c.match_key,
+                    previous_week_sub.c.type == week_sub.c.type,
                 ),
             )
-            .where(current_sub.c.cnt >= MIN_CURRENT)
+            .where(week_sub.c.cnt >= MIN_CANDIDATE_COUNT)
         )
         rows = (await self._session.execute(stmt)).all()
-        ranked: list[RankedMention] = []
+        candidates: list[MentionCandidate] = []
         for row in rows:
             try:
-                ranked.append(
-                    RankedMention(
+                candidates.append(
+                    MentionCandidate(
                         name=row.display_name,
                         type=row.type,
-                        appearance_count=row.appearance_count,
-                        previous_appearance_count=row.previous_appearance_count,
+                        count=row.week_count,
+                        previous_week_count=row.previous_week_count,
                     )
                 )
             except ValidationError as exc:
                 logger.warning(
-                    "trend_ranked_mention_skipped_invalid",
+                    "trend_mention_candidate_skipped_invalid",
                     category_id=category_id,
                     **_invalid_mention_log_fields(
                         exc, surface=row.display_name, type_=row.type
                     ),
                 )
-        return tuple(ranked)
+        return tuple(candidates)
 
     async def get_mention_key_points(
         self,
         *,
         category_id: int,
-        current_start: datetime,
-        current_end: datetime,
+        week: Week,
         mention_keys: Sequence[MentionKey],
     ) -> dict[MentionKey, tuple[str, ...]]:
         """公開日時の新しい最大3記事から、そのメンションの最初の有効な要点を返す。"""
@@ -218,8 +203,8 @@ class TrendsRepository:
             .join(mentions, sa.true())
             .where(
                 AnalyzedArticleRecord.category_id == category_id,
-                AnalyzableArticleRecord.published_at >= current_start,
-                AnalyzableArticleRecord.published_at < current_end,
+                AnalyzableArticleRecord.published_at >= week.published_from,
+                AnalyzableArticleRecord.published_at < week.published_before,
                 sa.tuple_(match_key, mention_type).in_(mention_keys),
                 func.jsonb_typeof(points.c.value["content"]) == "string",
                 content.op("~")("[^[:space:]]"),
@@ -255,94 +240,85 @@ class TrendsRepository:
             contents.setdefault((row.match_key, row.type), []).append(row.content)
         return {key: tuple(values) for key, values in contents.items()}
 
-    async def get_related_mentions(
+    async def get_co_mentions(
         self,
         *,
         category_id: int,
-        current_start: datetime,
-        current_end: datetime,
+        week: Week,
         mention_keys: Sequence[MentionKey],
-    ) -> dict[MentionKey, tuple[RelatedMention, ...]]:
-        """公開期間内の同じ要点で共起した別メンションを記事数順に返す。"""
+    ) -> dict[MentionKey, tuple[CoMention, ...]]:
+        """週に公開された記事の同じ要点で一緒に出てきた別の名前を記事数順に返す。"""
         if not mention_keys:
             return {}
         points = _json_array_elements(AnalyzedArticleRecord.key_points, "points")
         anchors = _json_array_elements(points.c.value["mentions"], "anchors")
-        related_mentions = _json_array_elements(points.c.value["mentions"], "related")
+        co_mentions = _json_array_elements(points.c.value["mentions"], "co_mentions")
         anchor_key = _match_key_expr(anchors.c.value)
         anchor_type = anchors.c.value["type"].astext
-        related_key = _match_key_expr(related_mentions.c.value)
-        related_type = related_mentions.c.value["type"].astext
+        co_mention_key = _match_key_expr(co_mentions.c.value)
+        co_mention_type = co_mentions.c.value["type"].astext
         shared_count = func.count(sa.distinct(AnalyzedArticleRecord.id))
         stmt = (
             select(
                 anchor_key.label("anchor_key"),
                 anchor_type.label("anchor_type"),
-                func.min(related_mentions.c.value["surface"].astext).label(
-                    "related_name"
+                func.min(co_mentions.c.value["surface"].astext).label(
+                    "co_mention_name"
                 ),
-                related_type.label("related_type"),
+                co_mention_type.label("co_mention_type"),
                 shared_count.label("shared_article_count"),
             )
             .select_from(_published_articles())
             .join(points, sa.true())
             .join(anchors, sa.true())
-            .join(related_mentions, sa.true())
+            .join(co_mentions, sa.true())
             .where(
                 AnalyzedArticleRecord.category_id == category_id,
-                AnalyzableArticleRecord.published_at >= current_start,
-                AnalyzableArticleRecord.published_at < current_end,
+                AnalyzableArticleRecord.published_at >= week.published_from,
+                AnalyzableArticleRecord.published_at < week.published_before,
                 sa.tuple_(anchor_key, anchor_type).in_(mention_keys),
-                sa.tuple_(related_key, related_type)
+                sa.tuple_(co_mention_key, co_mention_type)
                 != sa.tuple_(anchor_key, anchor_type),
             )
-            .group_by(anchor_key, anchor_type, related_key, related_type)
+            .group_by(anchor_key, anchor_type, co_mention_key, co_mention_type)
             .having(shared_count >= MIN_SHARED_ARTICLES)
         )
         rows = (await self._session.execute(stmt)).all()
-        pairs: list[tuple[MentionKey, RelatedMention]] = []
+        pairs: list[tuple[MentionKey, CoMention]] = []
         for row in rows:
             try:
-                related = RelatedMention(
-                    name=row.related_name,
-                    type=row.related_type,
+                co_mention = CoMention(
+                    name=row.co_mention_name,
+                    type=row.co_mention_type,
                     shared_article_count=row.shared_article_count,
                 )
             except ValidationError as exc:
                 logger.warning(
-                    "trend_related_mention_skipped_invalid",
+                    "trend_co_mention_skipped_invalid",
                     category_id=category_id,
                     **_invalid_mention_log_fields(
-                        exc, surface=row.related_name, type_=row.related_type
+                        exc, surface=row.co_mention_name, type_=row.co_mention_type
                     ),
                 )
                 continue
-            pairs.append(((row.anchor_key, row.anchor_type), related))
-        return select_related_mentions(pairs)
+            pairs.append(((row.anchor_key, row.anchor_type), co_mention))
+        return select_co_mentions(pairs)
 
-    async def count_source_analyses(
-        self, *, current_start: datetime, current_end: datetime
-    ) -> int:
-        """期間内に公開された分析済み記事を、要点の有無によらず数える。"""
+    async def count_analyzed_articles(self, *, week: Week) -> int:
+        """週に公開された分析済み記事を、要点の有無によらず数える。"""
         stmt = (
             select(func.count(AnalyzedArticleRecord.id))
             .select_from(_published_articles())
             .where(
-                AnalyzableArticleRecord.published_at >= current_start,
-                AnalyzableArticleRecord.published_at < current_end,
+                AnalyzableArticleRecord.published_at >= week.published_from,
+                AnalyzableArticleRecord.published_at < week.published_before,
             )
         )
         return (await self._session.execute(stmt)).scalar_one()
 
     @staticmethod
-    def _entity_window_subquery(
-        *,
-        category_id: int,
-        window_start: datetime,
-        window_end: datetime,
-        label: str,
-    ):
-        """期間内に公開された記事をメンションごとに重複なく数える。"""
+    def _mention_counts_subquery(*, category_id: int, week: Week, label: str):
+        """週に公開された記事を名前ごとに重複なく数える。"""
         points = _json_array_elements(AnalyzedArticleRecord.key_points, "points")
         mentions = _json_array_elements(points.c.value["mentions"], "mentions")
         match_key = _match_key_expr(mentions.c.value)
@@ -359,8 +335,8 @@ class TrendsRepository:
             .join(mentions, sa.true())
             .where(
                 AnalyzedArticleRecord.category_id == category_id,
-                AnalyzableArticleRecord.published_at >= window_start,
-                AnalyzableArticleRecord.published_at < window_end,
+                AnalyzableArticleRecord.published_at >= week.published_from,
+                AnalyzableArticleRecord.published_at < week.published_before,
             )
             .group_by(match_key, mention_type)
             .subquery(label)
@@ -383,27 +359,30 @@ class SnapshotSaveResult:
 
 
 class SnapshotRepository:
-    """1期間の全カテゴリ集計を1行で保存・取得する。"""
+    """1つの週の全カテゴリ集計を1行で保存・取得する。
+
+    スナップショットの日付は ``window_end`` 列に保存する。
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def find_latest(self) -> TrendsSnapshot | None:
-        """期間終了日が最も新しい集計結果を返す。"""
+        """スナップショットの日付が最も新しい集計結果を返す。"""
         stmt = (
             select(TrendsSnapshot).order_by(TrendsSnapshot.window_end.desc()).limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def find_by_window_end(self, window_end: date) -> TrendsSnapshot | None:
-        """指定した期間終了日の集計結果を返す。"""
-        return await self._session.get(TrendsSnapshot, window_end)
+    async def find_by_snapshot_date(self, snapshot_date: date) -> TrendsSnapshot | None:
+        """指定した日付のスナップショットを返す。"""
+        return await self._session.get(TrendsSnapshot, snapshot_date)
 
-    async def exists_for_window_end(self, window_end: date) -> bool:
-        """対象期間のトレンドが生成済みかを確認する。"""
+    async def exists_for_snapshot_date(self, snapshot_date: date) -> bool:
+        """指定した日付のスナップショットが生成済みかを確認する。"""
         stmt = (
             select(TrendsSnapshot.window_end)
-            .where(TrendsSnapshot.window_end == window_end)
+            .where(TrendsSnapshot.window_end == snapshot_date)
             .limit(1)
         )
         return (await self._session.execute(stmt)).first() is not None

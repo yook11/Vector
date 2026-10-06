@@ -83,7 +83,7 @@ export const addToWatchlist = <ThrowOnError extends boolean = false>(options: Op
 /**
  * Get Trends
  *
- * 最新窓の trends snapshot を返す (なければ state="empty")。
+ * 最新の trends snapshot を返す (なければ null)。
  *
  * 保存済み bundle を ``Trends`` schema で再検証する。現行 contract に合わない
  * (旧 shape 等) 場合は ``ValidationError`` が伝播し FastAPI が 500 を返す。

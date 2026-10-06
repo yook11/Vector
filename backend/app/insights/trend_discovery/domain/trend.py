@@ -1,4 +1,4 @@
-"""トレンドの集計期間・ランキング・集計結果を定義する。"""
+"""トレンドの集計期間・順位・集計結果を定義する。"""
 
 from __future__ import annotations
 
@@ -7,59 +7,79 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Final, Self
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_name import MentionName
 
 TREND_TZ: Final[str] = "Asia/Tokyo"
-_WEEK: Final[timedelta] = timedelta(days=7)
+_WEEK_DAYS: Final[int] = 7
 
 
-class TrendWindow(BaseModel):
-    """JSTの終了日を境界とする完了済み7日間と、その直前の比較期間。"""
+def _jst_midnight(day: date) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=ZoneInfo(TREND_TZ)).astimezone(UTC)
+
+
+class Week(BaseModel):
+    """JSTの初日から最終日までの7日間。"""
 
     model_config = ConfigDict(frozen=True)
 
-    window_end: date
+    start: date
+    end: date
+
+    @property
+    def published_from(self) -> datetime:
+        """公開日時の下限 (含む)。"""
+        return _jst_midnight(self.start)
+
+    @property
+    def published_before(self) -> datetime:
+        """公開日時の上限 (含まない)。"""
+        return _jst_midnight(self.end + timedelta(days=1))
+
+
+def _week_before(day: date) -> Week:
+    return Week(start=day - timedelta(days=_WEEK_DAYS), end=day - timedelta(days=1))
+
+
+class TrendWeeks(BaseModel):
+    """スナップショットの日付 (JST) から決まる、集計する週とその前週。
+
+    週はスナップショットの日付の前日までの7日間で、暦の週ではない。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    snapshot_date: date
 
     @classmethod
     def latest(cls, now: datetime) -> Self:
-        """現在日時をJSTへ揃え、直近の完了済み期間を決める。"""
+        """現在日時をJSTへ揃え、直近の完了済みの週を決める。"""
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
-        return cls(window_end=now.astimezone(ZoneInfo(TREND_TZ)).date())
+        return cls(snapshot_date=now.astimezone(ZoneInfo(TREND_TZ)).date())
 
     @property
-    def window_start(self) -> date:
-        return self.window_end - _WEEK
+    def week(self) -> Week:
+        return _week_before(self.snapshot_date)
 
     @property
-    def current_end(self) -> datetime:
-        return datetime.combine(
-            self.window_end, time.min, tzinfo=ZoneInfo(TREND_TZ)
-        ).astimezone(UTC)
-
-    @property
-    def current_start(self) -> datetime:
-        return self.current_end - _WEEK
-
-    @property
-    def previous_start(self) -> datetime:
-        return self.current_start - _WEEK
+    def previous_week(self) -> Week:
+        return _week_before(self.week.start)
 
 
-MIN_CURRENT: Final[int] = 5
-MIN_PREVIOUS: Final[int] = 2
+MIN_CANDIDATE_COUNT: Final[int] = 5
+MIN_PREVIOUS_WEEK_COUNT: Final[int] = 2
 NEW_BURST_THRESHOLD: Final[int] = 10
-# 前期間の記事数が少ない場合の伸び率を抑える。
+# 前週の記事数が少ない場合の伸び率を抑える。
 SMOOTHING: Final[int] = 2
 
 TOP_N_PER_RANKING: Final[int] = 5
 MAX_CATEGORIES_PER_BUNDLE: Final[int] = 20
 
 MAX_KEY_POINTS_PER_MENTION: Final[int] = 3
-MAX_RELATED_MENTIONS: Final[int] = 3
+MAX_CO_MENTIONS: Final[int] = 3
 MIN_SHARED_ARTICLES: Final[int] = 2
 
 # 異常な集計値を検出するための上限。
@@ -69,40 +89,53 @@ _MAX_COUNT: Final[int] = 10_000
 MentionKey = tuple[str, str]
 
 
-def _hotness(current: int, previous: int) -> float:
-    return (current - previous) / max(previous, SMOOTHING)
+class MentionCandidate(BaseModel):
+    """週に最低記事数以上で登場し、順位を付ける対象になる名前。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: MentionName
+    type: MentionType
+    count: int = Field(ge=MIN_CANDIDATE_COUNT, le=_MAX_COUNT)
+    previous_week_count: int = Field(ge=0, le=_MAX_COUNT)
+
+    @property
+    def growth_rate(self) -> float:
+        return (self.count - self.previous_week_count) / max(
+            self.previous_week_count, SMOOTHING
+        )
+
+    @property
+    def is_growth_ranked(self) -> bool:
+        """前週の実績か週の急増があるときだけ、伸び率で順位を付ける。"""
+        return (
+            self.previous_week_count >= MIN_PREVIOUS_WEEK_COUNT
+            or self.count >= NEW_BURST_THRESHOLD
+        )
 
 
-def is_hot(mention: RankedMention) -> bool:
-    """前期間の実績か今期間の急増を条件に、伸び率ランキングの対象を判定する。"""
-    return (
-        mention.previous_appearance_count >= MIN_PREVIOUS
-        or mention.appearance_count >= NEW_BURST_THRESHOLD
-    )
+class MentionArticleVolume(BaseModel):
+    """名前が要点に出てきた記事の数と、その順位。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    count: int = Field(ge=MIN_CANDIDATE_COUNT, le=_MAX_COUNT)
+    previous_week_count: int = Field(ge=0, le=_MAX_COUNT)
+    rank: int = Field(ge=1)
 
 
-def select_most_mentioned(pool: Iterable[RankedMention]) -> tuple[RankedMention, ...]:
-    """最低出現数を満たした候補から、出現回数の上位を選ぶ。"""
-    return tuple(
-        sorted(
-            pool,
-            key=lambda m: (-m.appearance_count, -m.hotness_score, m.name.match_key),
-        )[:TOP_N_PER_RANKING]
-    )
+class MentionGrowth(BaseModel):
+    """前週からの伸び率と、その順位。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    rate: float
+    # 伸び率で順位を付ける条件を満たさない名前は None。
+    rank: int | None = Field(ge=1)
 
 
-def select_fastest_growing(pool: Iterable[RankedMention]) -> tuple[RankedMention, ...]:
-    """継続・急増の条件を満たした候補から、伸び率の上位を選ぶ。"""
-    return tuple(
-        sorted(
-            (m for m in pool if is_hot(m)),
-            key=lambda m: (-m.hotness_score, -m.appearance_count, m.name.match_key),
-        )[:TOP_N_PER_RANKING]
-    )
-
-
-class RelatedMention(BaseModel):
-    """同じ要点内で共起したメンションと、その記事数。"""
+class CoMention(BaseModel):
+    """同じ要点に一緒に出てきた名前と、その記事数。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -111,46 +144,81 @@ class RelatedMention(BaseModel):
     shared_article_count: int = Field(ge=MIN_SHARED_ARTICLES, le=_MAX_COUNT)
 
 
-class RankedMention(BaseModel):
-    """出現記事数・伸び率と、要点・関連メンションを持つランキング候補。"""
+class MentionTrend(BaseModel):
+    """名前1つの週のトレンド。"""
 
     model_config = ConfigDict(frozen=True)
 
     name: MentionName
     type: MentionType
-    appearance_count: int = Field(ge=MIN_CURRENT, le=_MAX_COUNT)
-    previous_appearance_count: int = Field(ge=0, le=_MAX_COUNT)
+    article_volume: MentionArticleVolume
+    growth: MentionGrowth
     key_points: tuple[str, ...] = Field(
         default=(), max_length=MAX_KEY_POINTS_PER_MENTION
     )
-    related_mentions: tuple[RelatedMention, ...] = Field(
-        default=(), max_length=MAX_RELATED_MENTIONS
+    mentioned_with: tuple[CoMention, ...] = Field(
+        default=(), max_length=MAX_CO_MENTIONS
     )
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def hotness_score(self) -> float:
-        return _hotness(self.appearance_count, self.previous_appearance_count)
+
+def rank_mention_trends(
+    candidates: Iterable[MentionCandidate],
+) -> tuple[MentionTrend, ...]:
+    """候補全体で記事数と伸び率の順位を付け、どちらかが上位に入った名前を返す。
+
+    同じ値は同じ順位 (1, 2, 2, 4) にし、上位の境目で同点の名前はすべて含める。
+    """
+    pool = tuple(candidates)
+    counts = [c.count for c in pool]
+    growth_rates = [c.growth_rate for c in pool if c.is_growth_ranked]
+    trends: list[MentionTrend] = []
+    for candidate in pool:
+        volume_rank = 1 + sum(1 for count in counts if count > candidate.count)
+        growth_rank = (
+            1 + sum(1 for rate in growth_rates if rate > candidate.growth_rate)
+            if candidate.is_growth_ranked
+            else None
+        )
+        if volume_rank > TOP_N_PER_RANKING and (
+            growth_rank is None or growth_rank > TOP_N_PER_RANKING
+        ):
+            continue
+        trends.append(
+            MentionTrend(
+                name=candidate.name,
+                type=candidate.type,
+                article_volume=MentionArticleVolume(
+                    count=candidate.count,
+                    previous_week_count=candidate.previous_week_count,
+                    rank=volume_rank,
+                ),
+                growth=MentionGrowth(rate=candidate.growth_rate, rank=growth_rank),
+            )
+        )
+    return tuple(
+        sorted(
+            trends,
+            key=lambda t: (t.article_volume.rank, t.name.match_key, t.type.value),
+        )
+    )
 
 
 class CategoryTrends(BaseModel):
-    """1カテゴリ・1期間の出現回数と伸び率のランキング。"""
+    """1カテゴリの週のトレンド。"""
 
     model_config = ConfigDict(frozen=True)
 
-    category_id: int
     category_slug: str
     category_name: str
-    most_mentioned: tuple[RankedMention, ...] = Field(max_length=TOP_N_PER_RANKING)
-    fastest_growing: tuple[RankedMention, ...] = Field(max_length=TOP_N_PER_RANKING)
+    mention_trends: tuple[MentionTrend, ...]
 
 
 class TrendsBundle(BaseModel):
-    """対象期間と全カテゴリのトレンド集計結果。"""
+    """集計した週と、全カテゴリのトレンド。"""
 
     model_config = ConfigDict(frozen=True)
 
-    window: TrendWindow
+    weeks: TrendWeeks
     category_trends: tuple[CategoryTrends, ...] = Field(
         max_length=MAX_CATEGORIES_PER_BUNDLE
     )

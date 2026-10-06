@@ -17,7 +17,7 @@ async function TrendsContent() {
   await connection();
   const data = await getTrendsViewModel();
 
-  if (data.state === "empty") {
+  if (data === null) {
     return <TrendsEmptyState />;
   }
   return <TrendsView data={data} />;

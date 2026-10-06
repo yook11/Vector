@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MentionType } from "@/types";
+import type { MentionType } from "@/types/types.gen";
 import { MENTION_TYPE_META } from "./display";
 
 describe("MENTION_TYPE_META", () => {

@@ -1,5 +1,5 @@
 import { formatDate } from "@/lib/date";
-import type { Trends } from "@/types";
+import type { Trends } from "@/types/types.gen";
 
 interface TrendsMastheadProps {
   data: Trends;
@@ -38,9 +38,9 @@ export function TrendsMasthead({ data }: TrendsMastheadProps) {
         className="mt-3 text-[12px] italic text-[var(--vector-ink-muted)] tracking-[0.04em]"
         style={{ fontFamily: "var(--font-vector-display)" }}
       >
-        {formatDate(data.windowStart)} – {formatDate(data.windowEnd)}
+        {formatDate(data.week.start)} – {formatDate(data.week.end)}
         {" / "}
-        {data.sourceAnalysisCount} 件の記事から集計
+        {data.analyzedArticleCount} 件の記事から集計
         {" / "}
         最終更新 {formatDate(data.generatedAt, { withTime: true })}
       </p>

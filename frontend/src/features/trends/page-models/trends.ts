@@ -1,4 +1,4 @@
-import type { TrendsResponse } from "@/types";
+import type { Trends } from "@/types/types.gen";
 import { getTrends } from "../api/get-trends";
 
 /**
@@ -8,11 +8,11 @@ import { getTrends } from "../api/get-trends";
  * page.tsx の async fetch + 分岐判定を pure async 関数に切り出して、
  * vitest の rsc (node) project から直接 unit test 可能にする。
  *
- * 現状は API 側で discriminated union を返すため identity transform に近いが、
+ * 現状は API の応答 (トレンドか、未生成なら null) をそのまま返す identity transform だが、
  * page-model 経路を確立することで将来の display 整形 (formatDate 等) や
  * 補助 fetch を加えても test 経路が変わらない構造になる。
  */
-export type TrendsViewModel = TrendsResponse;
+export type TrendsViewModel = Trends | null;
 
 export async function getTrendsViewModel(): Promise<TrendsViewModel> {
   return getTrends();

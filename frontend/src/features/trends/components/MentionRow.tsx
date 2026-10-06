@@ -2,23 +2,21 @@
 
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
-import type { RankedMention } from "@/types";
-import { MENTION_TYPE_META } from "../display";
+import type { MentionTrend } from "@/types/types.gen";
+import { type ColumnMode, MENTION_TYPE_META } from "../display";
 import { GrowthTag } from "./GrowthTag";
 import { TypeBadge } from "./TypeBadge";
 
-type ColumnMode = "count" | "growth";
-
 interface MentionRowProps {
   rank: number;
-  mention: RankedMention;
+  mention: MentionTrend;
   mode: ColumnMode;
 }
 
 /** 固有名1行。クリックで展開(要点+共起)する client component。 */
 export function MentionRow({ rank, mention, mode }: MentionRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const isNew = mention.previousAppearanceCount === 0;
+  const isNew = mention.articleVolume.previousWeekCount === 0;
 
   return (
     <li className="border-b border-[var(--vector-line)] last:border-b-0">
@@ -56,7 +54,7 @@ export function MentionRow({ rank, mention, mode }: MentionRowProps) {
                 className="text-[15px] font-bold tabular-nums text-[var(--vector-ink)] leading-none"
                 style={{ fontFamily: "var(--font-vector-display)" }}
               >
-                {mention.appearanceCount}
+                {mention.articleVolume.count}
                 <span
                   className="text-[10px] font-normal ml-0.5 text-[var(--vector-ink-muted)]"
                   style={{ fontFamily: "var(--font-vector-maru)" }}
@@ -66,22 +64,22 @@ export function MentionRow({ rank, mention, mode }: MentionRowProps) {
               </span>
               <div className="flex items-center gap-1.5">
                 <GrowthTag
-                  growthRate={mention.growthRate}
-                  previousAppearanceCount={mention.previousAppearanceCount}
+                  growthRate={mention.growth.rate}
+                  previousWeekCount={mention.articleVolume.previousWeekCount}
                 />
                 <span
                   className="text-[10px] text-[var(--vector-ink-muted)] tabular-nums"
                   style={{ fontFamily: "var(--font-vector-maru)" }}
                 >
-                  前週 {mention.previousAppearanceCount}
+                  前週 {mention.articleVolume.previousWeekCount}
                 </span>
               </div>
             </>
           ) : (
             <>
               <GrowthTag
-                growthRate={mention.growthRate}
-                previousAppearanceCount={mention.previousAppearanceCount}
+                growthRate={mention.growth.rate}
+                previousWeekCount={mention.articleVolume.previousWeekCount}
               />
               <div className="flex items-center gap-1.5">
                 {isNew && (
@@ -96,8 +94,8 @@ export function MentionRow({ rank, mention, mode }: MentionRowProps) {
                   className="text-[10px] text-[var(--vector-ink-muted)] tabular-nums"
                   style={{ fontFamily: "var(--font-vector-maru)" }}
                 >
-                  {mention.previousAppearanceCount} → {mention.appearanceCount}
-                  件
+                  {mention.articleVolume.previousWeekCount} →{" "}
+                  {mention.articleVolume.count}件
                 </span>
               </div>
             </>
@@ -118,7 +116,7 @@ export function MentionRow({ rank, mention, mode }: MentionRowProps) {
   );
 }
 
-function MentionDetail({ mention }: { mention: RankedMention }) {
+function MentionDetail({ mention }: { mention: MentionTrend }) {
   return (
     <div className="grid gap-4 pb-4 px-0 md:grid-cols-2 border-t border-[var(--vector-line)] pt-3 mt-0">
       {/* 左: 要点 */}
@@ -164,7 +162,7 @@ function MentionDetail({ mention }: { mention: RankedMention }) {
         >
           一緒に語られた
         </p>
-        {mention.relatedMentions.length === 0 ? (
+        {mention.mentionedWith.length === 0 ? (
           <p
             className="text-[12.5px] text-[var(--vector-ink-muted)] italic"
             style={{ fontFamily: "var(--font-vector-display)" }}
@@ -173,11 +171,11 @@ function MentionDetail({ mention }: { mention: RankedMention }) {
           </p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {mention.relatedMentions.map((rel) => {
-              const meta = MENTION_TYPE_META[rel.type];
+            {mention.mentionedWith.map((coMention) => {
+              const meta = MENTION_TYPE_META[coMention.type];
               return (
                 <span
-                  key={`${rel.type}:${rel.name}`}
+                  key={`${coMention.type}:${coMention.name}`}
                   className="inline-flex items-center gap-1.5 rounded border border-[var(--vector-line)] px-2 py-1"
                 >
                   <span
@@ -189,13 +187,13 @@ function MentionDetail({ mention }: { mention: RankedMention }) {
                     className="text-[12px] text-[var(--vector-ink-soft)]"
                     style={{ fontFamily: "var(--font-vector-serif)" }}
                   >
-                    {rel.name}
+                    {coMention.name}
                   </span>
                   <span
                     className="text-[10.5px] italic text-[var(--vector-ink-muted)] tabular-nums"
                     style={{ fontFamily: "var(--font-vector-display)" }}
                   >
-                    {rel.sharedArticleCount}件
+                    {coMention.sharedArticleCount}件
                   </span>
                 </span>
               );
