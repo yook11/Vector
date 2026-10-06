@@ -3,112 +3,113 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Annotated, Literal
-
-from pydantic import Field
 
 from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_name import MentionName
 from app.insights.trend_discovery.domain.trend import (
     CategoryTrends,
-    RankedMention,
-    RelatedMention,
+    CoMention,
+    MentionTrend,
     TrendsBundle,
+    Week,
 )
 from app.schemas.base import _CamelBase
+from app.schemas.category import Category
 
 
-class _RelatedMention(_CamelBase):
+class _DateRange(_CamelBase):
+    start: date
+    # 最終日 (含む)。
+    end: date
+
+
+class _CoMention(_CamelBase):
     name: MentionName
     type: MentionType
     shared_article_count: int
 
 
-class _RankedMention(_CamelBase):
+class _MentionArticleVolume(_CamelBase):
+    count: int
+    previous_week_count: int
+    rank: int
+
+
+class _MentionGrowth(_CamelBase):
+    rate: float
+    rank: int | None
+
+
+class _MentionTrend(_CamelBase):
     name: MentionName
     type: MentionType
-    appearance_count: int
-    previous_appearance_count: int
-    growth_rate: float
+    article_volume: _MentionArticleVolume
+    growth: _MentionGrowth
     key_points: list[str]
-    related_mentions: list[_RelatedMention]
+    mentioned_with: list[_CoMention]
 
 
 class _CategoryTrends(_CamelBase):
-    category_id: int
-    category_slug: str
-    category_name: str
-    most_mentioned: list[_RankedMention]
-    fastest_growing: list[_RankedMention]
+    category: Category
+    mention_trends: list[_MentionTrend]
 
 
 class Trends(_CamelBase):
-    """snapshot 生成済の状態。"""
+    """1つの週のトレンド (保存したスナップショットの内容)。"""
 
-    state: Literal["trends"] = "trends"
-    window_start: date
-    window_end: date
+    week: _DateRange
+    previous_week: _DateRange
     generated_at: datetime
-    source_analysis_count: int
+    analyzed_article_count: int
     category_trends: list[_CategoryTrends]
-
-
-class EmptyTrends(_CamelBase):
-    """snapshot 未生成の状態 (窓情報フィールドは存在しない)。"""
-
-    state: Literal["empty"] = "empty"
-
-
-TrendsResponse = Annotated[
-    Trends | EmptyTrends,
-    Field(discriminator="state"),
-]
-
-
-def empty_trends() -> EmptyTrends:
-    return EmptyTrends()
 
 
 def trends_from_snapshot(
     *,
     bundle: TrendsBundle,
     generated_at: datetime,
-    source_analysis_count: int,
+    analyzed_article_count: int,
 ) -> Trends:
     return Trends(
-        window_start=bundle.window.window_start,
-        window_end=bundle.window.window_end,
+        week=_to_date_range(bundle.weeks.week),
+        previous_week=_to_date_range(bundle.weeks.previous_week),
         generated_at=generated_at,
-        source_analysis_count=source_analysis_count,
+        analyzed_article_count=analyzed_article_count,
         category_trends=[_to_category_trends(c) for c in bundle.category_trends],
     )
 
 
+def _to_date_range(week: Week) -> _DateRange:
+    return _DateRange(start=week.start, end=week.end)
+
+
 def _to_category_trends(category_trends: CategoryTrends) -> _CategoryTrends:
     return _CategoryTrends(
-        category_id=category_trends.category_id,
-        category_slug=category_trends.category_slug,
-        category_name=category_trends.category_name,
-        most_mentioned=[_to_mention(m) for m in category_trends.most_mentioned],
-        fastest_growing=[_to_mention(m) for m in category_trends.fastest_growing],
+        category=Category(
+            slug=category_trends.category_slug, name=category_trends.category_name
+        ),
+        mention_trends=[_to_mention_trend(t) for t in category_trends.mention_trends],
     )
 
 
-def _to_mention(m: RankedMention) -> _RankedMention:
-    return _RankedMention(
-        name=m.name,
-        type=m.type,
-        appearance_count=m.appearance_count,
-        previous_appearance_count=m.previous_appearance_count,
-        growth_rate=m.hotness_score,
-        key_points=list(m.key_points),
-        related_mentions=[_to_related(r) for r in m.related_mentions],
+def _to_mention_trend(trend: MentionTrend) -> _MentionTrend:
+    return _MentionTrend(
+        name=trend.name,
+        type=trend.type,
+        article_volume=_MentionArticleVolume(
+            count=trend.article_volume.count,
+            previous_week_count=trend.article_volume.previous_week_count,
+            rank=trend.article_volume.rank,
+        ),
+        growth=_MentionGrowth(rate=trend.growth.rate, rank=trend.growth.rank),
+        key_points=list(trend.key_points),
+        mentioned_with=[_to_co_mention(c) for c in trend.mentioned_with],
     )
 
 
-def _to_related(r: RelatedMention) -> _RelatedMention:
-    return _RelatedMention(
-        name=r.name,
-        type=r.type,
-        shared_article_count=r.shared_article_count,
+def _to_co_mention(co_mention: CoMention) -> _CoMention:
+    return _CoMention(
+        name=co_mention.name,
+        type=co_mention.type,
+        shared_article_count=co_mention.shared_article_count,
     )

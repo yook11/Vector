@@ -1,8 +1,7 @@
-"""TrendsResponse schema の期待動作。
+"""Trends schema の期待動作。
 
-API レスポンスの keys は camelCase に揃える (Vector 全体規約)。snapshot 不在時の
-「空状態」と生成済の「trends 状態」を ``state`` discriminator で構造的に分けて
-表現できることをテスト境界で固定する。
+API レスポンスの keys は camelCase に揃える (Vector 全体規約)。集計結果から
+週・カテゴリ・名前のトレンドへの変換をテスト境界で固定する。
 """
 
 from __future__ import annotations
@@ -11,94 +10,88 @@ from datetime import UTC, date, datetime
 
 from app.insights.trend_discovery.domain.trend import (
     CategoryTrends,
-    RankedMention,
-    RelatedMention,
+    CoMention,
+    MentionArticleVolume,
+    MentionGrowth,
+    MentionTrend,
     TrendsBundle,
-    TrendWindow,
+    TrendWeeks,
 )
-from app.insights.trend_discovery.schemas import (
-    empty_trends,
-    trends_from_snapshot,
-)
-
-
-class TestEmptyState:
-    def test_absent_snapshot_serializes_with_state_empty(self) -> None:
-        """snapshot 不在時は state="empty" のみで他フィールドは出力されない。"""
-        resp = empty_trends()
-        dumped = resp.model_dump(mode="json", by_alias=True)
-        assert dumped == {"state": "empty"}
+from app.insights.trend_discovery.schemas import trends_from_snapshot
 
 
 class TestFromSnapshot:
-    def _bundle(self) -> TrendsBundle:
-        mention = RankedMention(
+    def test_publishes_weeks_category_and_mention_trends(self) -> None:
+        """カテゴリは Category の形、名前は記事数と伸びのまとまりで出す。"""
+        trend = MentionTrend(
             name="NVIDIA",
             type="company",
-            appearance_count=30,
-            previous_appearance_count=5,
+            article_volume=MentionArticleVolume(
+                count=30, previous_week_count=5, rank=1
+            ),
+            growth=MentionGrowth(rate=5.0, rank=None),
             key_points=("AI chip demand surges",),
-            related_mentions=(
-                RelatedMention(name="OpenAI", type="company", shared_article_count=4),
+            mentioned_with=(
+                CoMention(name="OpenAI", type="company", shared_article_count=4),
             ),
         )
-        category_trends = CategoryTrends(
-            category_id=1,
-            category_slug="ai",
-            category_name="AI",
-            most_mentioned=(mention,),
-            fastest_growing=(mention,),
+        bundle = TrendsBundle(
+            weeks=TrendWeeks(snapshot_date=date(2026, 5, 3)),
+            category_trends=(
+                CategoryTrends(
+                    category_slug="ai", category_name="AI", mention_trends=(trend,)
+                ),
+            ),
         )
-        return TrendsBundle(
-            window=TrendWindow(window_end=date(2026, 5, 3)),
-            category_trends=(category_trends,),
-        )
-
-    def test_camel_case_keys(self) -> None:
-        bundle = self._bundle()
         resp = trends_from_snapshot(
             bundle=bundle,
             generated_at=datetime(2026, 5, 3, 0, 5, tzinfo=UTC),
-            source_analysis_count=328,
+            analyzed_article_count=328,
         )
-        dumped = resp.model_dump(mode="json", by_alias=True)
-        assert dumped["state"] == "trends"
-        assert dumped["windowEnd"] == "2026-05-03"
-        assert dumped["windowStart"] == "2026-04-26"
-        assert dumped["generatedAt"] is not None
-        assert dumped["sourceAnalysisCount"] == 328
+        assert resp.model_dump(mode="json", by_alias=True) == {
+            "week": {"start": "2026-04-26", "end": "2026-05-02"},
+            "previousWeek": {"start": "2026-04-19", "end": "2026-04-25"},
+            "generatedAt": "2026-05-03T00:05:00Z",
+            "analyzedArticleCount": 328,
+            "categoryTrends": [
+                {
+                    "category": {"slug": "ai", "name": "AI"},
+                    "mentionTrends": [
+                        {
+                            "name": "NVIDIA",
+                            "type": "company",
+                            "articleVolume": {
+                                "count": 30,
+                                "previousWeekCount": 5,
+                                "rank": 1,
+                            },
+                            "growth": {"rate": 5.0, "rank": None},
+                            "keyPoints": ["AI chip demand surges"],
+                            "mentionedWith": [
+                                {
+                                    "name": "OpenAI",
+                                    "type": "company",
+                                    "sharedArticleCount": 4,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
 
-        category_trends = dumped["categoryTrends"][0]
-        assert category_trends["categoryId"] == 1
-        assert category_trends["categorySlug"] == "ai"
-        assert category_trends["categoryName"] == "AI"
-
-        mention = category_trends["mostMentioned"][0]
-        assert mention["name"] == "NVIDIA"
-        assert mention["type"] == "company"
-        assert mention["appearanceCount"] == 30
-        assert mention["previousAppearanceCount"] == 5
-        assert mention["growthRate"] == 5.0  # (30-5)/max(5,2)
-        assert mention["keyPoints"] == ["AI chip demand surges"]
-
-        related = mention["relatedMentions"][0]
-        assert related["name"] == "OpenAI"
-        assert related["type"] == "company"
-        assert related["sharedArticleCount"] == 4
-
-        # 同一 mention が両ランキングに載るケースを camelCase 構造で固定する。
-        assert category_trends["fastestGrowing"][0]["name"] == "NVIDIA"
-
-    def test_window_start_is_window_end_minus_seven_days(self) -> None:
+    def test_week_end_is_the_last_day_before_the_snapshot_date(self) -> None:
+        """週の end は最終日で、スナップショットの日付 (翌日) ではない。"""
         bundle = TrendsBundle(
-            window=TrendWindow(window_end=date(2026, 4, 30)), category_trends=()
+            weeks=TrendWeeks(snapshot_date=date(2026, 4, 30)), category_trends=()
         )
         resp = trends_from_snapshot(
             bundle=bundle,
             generated_at=datetime(2026, 4, 30, 0, 5, tzinfo=UTC),
-            source_analysis_count=0,
+            analyzed_article_count=0,
         )
         dumped = resp.model_dump(mode="json", by_alias=True)
-        assert dumped["state"] == "trends"
-        assert dumped["windowEnd"] == "2026-04-30"
-        assert dumped["windowStart"] == "2026-04-23"
+        assert (dumped["week"], dumped["previousWeek"]) == (
+            {"start": "2026-04-23", "end": "2026-04-29"},
+            {"start": "2026-04-16", "end": "2026-04-22"},
+        )

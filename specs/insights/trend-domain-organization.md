@@ -11,6 +11,7 @@
 ## 責務
 
 - `domain/trend.py`: `TrendWindow`がJSTの終了日を持ち、対象期間・比較期間を導出する。現在日時は呼び出し側から受け取る。`TrendsBundle`はこの期間と全カテゴリの集計結果を持つ。
+  - 2026-10-06: [trend-representation.md](trend-representation.md) で、`TrendWindow` を `TrendWeeks`(週と前週)に改め、API の期間を `week` / `previousWeek`(`end` は最終日)にした。
 - `domain/ready.py`: 取得済みの事実から「生成済み」「対象記事なし」「開始可能」を判定する。Readyは期間と正の集計元記事数を持ち、DBやログ出力を持たない。
 - `repository.py`: 生成済みか、公開期間内の分析済み記事数、カテゴリを取得する。生成済みなら記事数は問い合わせず、未取得をNoneで表す。
 - `service.py`: 現在日時の取得、準備、集計、保存、監査・通知を順に行う。executeで事実を取得してReadyを構築し、開始可能な場合だけ_generateへ渡す。準備から保存まで同じセッションを使用するが、分離レベルや入力全体の固定は変更しない。

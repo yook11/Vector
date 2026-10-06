@@ -4,15 +4,12 @@ import { formatGrowthRate } from "@/lib/format/percent";
 interface GrowthTagProps {
   growthRate: number;
   /** 前週件数が 0 なら新登場扱い(burst 強調)。 */
-  previousAppearanceCount: number;
+  previousWeekCount: number;
 }
 
 /** 伸び率を矢印+%で示す純コンポーネント。新登場(burst)は強調表示。 */
-export function GrowthTag({
-  growthRate,
-  previousAppearanceCount,
-}: GrowthTagProps) {
-  const isBurst = previousAppearanceCount === 0;
+export function GrowthTag({ growthRate, previousWeekCount }: GrowthTagProps) {
+  const isBurst = previousWeekCount === 0;
   const isPositive = growthRate >= 0;
 
   // burst か正成長 → accent-ink、負成長 → 赤系

@@ -1,8 +1,8 @@
 """SnapshotRepository の永続化挙動テスト。
 
 検証する観点:
-- ``find_latest`` / ``find_by_window_end`` の基本挙動
-- ``exists_for_window_end``: 不在 / 存在の cheap 判定
+- ``find_latest`` / ``find_by_snapshot_date`` の基本挙動
+- ``exists_for_snapshot_date``: 不在 / 存在の cheap 判定
 - ``save``: 新規で INSERTED / 衝突で CONFLICT (副作用なし)
 - 並行 save (asyncio.gather): 1 つは INSERTED / 1 つは CONFLICT
 """
@@ -74,35 +74,35 @@ class TestFindByWindowEnd:
         await repo.save(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
 
-        found = await repo.find_by_window_end(date(2026, 5, 3))
+        found = await repo.find_by_snapshot_date(date(2026, 5, 3))
         assert found is not None
         assert found.window_end == date(2026, 5, 3)
 
     @pytest.mark.asyncio
     async def test_returns_none_when_missing(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
-        assert await repo.find_by_window_end(date(2026, 5, 3)) is None
+        assert await repo.find_by_snapshot_date(date(2026, 5, 3)) is None
 
 
 class TestExistsForWindowEnd:
     @pytest.mark.asyncio
     async def test_returns_false_when_missing(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
-        assert await repo.exists_for_window_end(date(2026, 5, 3)) is False
+        assert await repo.exists_for_snapshot_date(date(2026, 5, 3)) is False
 
     @pytest.mark.asyncio
     async def test_returns_true_after_save(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
         await repo.save(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
-        assert await repo.exists_for_window_end(date(2026, 5, 3)) is True
+        assert await repo.exists_for_snapshot_date(date(2026, 5, 3)) is True
 
     @pytest.mark.asyncio
     async def test_returns_false_for_other_date(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
         await repo.save(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
-        assert await repo.exists_for_window_end(date(2026, 5, 2)) is False
+        assert await repo.exists_for_snapshot_date(date(2026, 5, 2)) is False
 
 
 # save
@@ -145,7 +145,7 @@ class TestSave:
         )
         await db_session.commit()
 
-        existing = await repo.find_by_window_end(date(2026, 5, 3))
+        existing = await repo.find_by_snapshot_date(date(2026, 5, 3))
         assert existing is not None
         assert existing.source_analysis_count == 10
         assert existing.bundle["marker"] == "first"
@@ -182,4 +182,4 @@ class TestConcurrentSave:
         # 永続化された snapshot は 1 件のみ
         async with session_factory() as session:
             repo = SnapshotRepository(session)
-            assert await repo.exists_for_window_end(target_window_end) is True
+            assert await repo.exists_for_snapshot_date(target_window_end) is True

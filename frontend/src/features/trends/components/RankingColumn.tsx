@@ -1,11 +1,10 @@
-import type { RankedMention } from "@/types";
+import type { MentionTrend } from "@/types/types.gen";
+import { type ColumnMode, columnMentionTrends } from "../display";
 import { MentionRow } from "./MentionRow";
-
-type ColumnMode = "count" | "growth";
 
 interface RankingColumnProps {
   mode: ColumnMode;
-  mentions: RankedMention[];
+  mentionTrends: MentionTrend[];
 }
 
 const COLUMN_META: Record<
@@ -15,7 +14,7 @@ const COLUMN_META: Record<
   count: {
     en: "Most mentioned",
     ja: "言及数上位",
-    note: "出現回数順",
+    note: "記事数順",
   },
   growth: {
     en: "Fastest growing",
@@ -25,8 +24,9 @@ const COLUMN_META: Record<
 };
 
 /** ランキング1カラム(ColumnHead + 行リスト)。 */
-export function RankingColumn({ mode, mentions }: RankingColumnProps) {
+export function RankingColumn({ mode, mentionTrends }: RankingColumnProps) {
   const meta = COLUMN_META[mode];
+  const rows = columnMentionTrends(mode, mentionTrends);
 
   return (
     <div className="flex flex-col">
@@ -55,7 +55,7 @@ export function RankingColumn({ mode, mentions }: RankingColumnProps) {
       </div>
 
       {/* 行リスト */}
-      {mentions.length === 0 ? (
+      {rows.length === 0 ? (
         <p
           className="py-4 text-[12.5px] italic text-[var(--vector-ink-muted)]"
           style={{ fontFamily: "var(--font-vector-display)" }}
@@ -64,11 +64,11 @@ export function RankingColumn({ mode, mentions }: RankingColumnProps) {
         </p>
       ) : (
         <ul>
-          {mentions.map((mention, idx) => (
+          {rows.map(({ rank, trend }) => (
             <MentionRow
-              key={`${mention.type}:${mention.name}`}
-              rank={idx + 1}
-              mention={mention}
+              key={`${trend.type}:${trend.name}`}
+              rank={rank}
+              mention={trend}
               mode={mode}
             />
           ))}

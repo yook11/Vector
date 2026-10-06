@@ -1,4 +1,4 @@
-import type { Trends } from "@/types";
+import type { Trends } from "@/types/types.gen";
 import { CategorySection } from "./CategorySection";
 import { TrendsMasthead } from "./TrendsMasthead";
 
@@ -17,7 +17,7 @@ export function TrendsView({ data }: TrendsViewProps) {
 
       <div className="flex flex-col gap-12">
         {data.categoryTrends.map((category) => (
-          <CategorySection key={category.categoryId} category={category} />
+          <CategorySection key={category.category.slug} category={category} />
         ))}
       </div>
     </div>

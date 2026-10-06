@@ -3,15 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type {
   CategoryTrends,
-  RankedMention,
-  RelatedMention,
+  CoMention,
+  MentionTrend,
   Trends,
-} from "@/types";
+} from "@/types/types.gen";
 
-function makeRelated(
+function makeCoMention(
   name: string,
-  overrides: Partial<RelatedMention> = {},
-): RelatedMention {
+  overrides: Partial<CoMention> = {},
+): CoMention {
   return {
     name,
     type: "company",
@@ -20,88 +20,104 @@ function makeRelated(
   };
 }
 
-function makeMention(
+/** 既定では記事数の列だけに出る (記事数1位、伸び率の順位なし)。 */
+function makeTrend(
   name: string,
-  overrides: Partial<RankedMention> = {},
-): RankedMention {
+  overrides: {
+    type?: MentionTrend["type"];
+    count?: number;
+    previousWeekCount?: number;
+    articleRank?: number;
+    rate?: number;
+    growthRank?: number | null;
+    keyPoints?: string[];
+    mentionedWith?: CoMention[];
+  } = {},
+): MentionTrend {
   return {
     name,
-    type: "company",
-    appearanceCount: 20,
-    previousAppearanceCount: 10,
-    growthRate: 1.0,
-    keyPoints: [],
-    relatedMentions: [],
-    ...overrides,
+    type: overrides.type ?? "company",
+    articleVolume: {
+      count: overrides.count ?? 20,
+      previousWeekCount: overrides.previousWeekCount ?? 10,
+      rank: overrides.articleRank ?? 1,
+    },
+    growth: {
+      rate: overrides.rate ?? 1.0,
+      rank: overrides.growthRank ?? null,
+    },
+    keyPoints: overrides.keyPoints ?? [],
+    mentionedWith: overrides.mentionedWith ?? [],
   };
 }
 
 function makeCategory(
   slug: string,
   name: string,
-  overrides: Partial<CategoryTrends> = {},
+  mentionTrends: MentionTrend[] = [],
 ): CategoryTrends {
-  return {
-    categoryId: Math.floor(Math.random() * 10000),
-    categorySlug: slug,
-    categoryName: name,
-    mostMentioned: [],
-    fastestGrowing: [],
-    ...overrides,
-  };
+  return { category: { slug, name }, mentionTrends };
 }
 
 /** 最小限の Trends サンプルデータ。各テストが必要なフィールドだけ上書きする。 */
 function makeTrends(overrides: Partial<Trends> = {}): Trends {
   return {
-    state: "trends",
-    windowStart: "2026-04-26",
-    windowEnd: "2026-05-03",
+    week: { start: "2026-04-26", end: "2026-05-02" },
+    previousWeek: { start: "2026-04-19", end: "2026-04-25" },
     generatedAt: "2026-05-03T06:00:00Z",
-    sourceAnalysisCount: 158,
+    analyzedArticleCount: 158,
     categoryTrends: [],
     ...overrides,
   };
 }
 
+/** カテゴリ内の、行がある列ごとの行の文字列。列は記事数・伸び率の順に並ぶ。 */
+function listedRows(categoryName: string): string[][] {
+  const section = screen.getByRole("region", { name: categoryName });
+  return within(section)
+    .getAllByRole("list")
+    .map((list) =>
+      within(list)
+        .getAllByRole("button")
+        .map((button) => button.textContent ?? ""),
+    );
+}
+
 import { TrendsView } from "./TrendsView";
 
 describe("TrendsView — マストヘッド", () => {
-  it("sourceAnalysisCount が表示される", () => {
-    render(<TrendsView data={makeTrends({ sourceAnalysisCount: 158 })} />);
-    expect(screen.getByText(/158/)).toBeInTheDocument();
+  it("analyzedArticleCount が表示される", () => {
+    render(<TrendsView data={makeTrends({ analyzedArticleCount: 158 })} />);
+    expect(screen.getByText(/158 件の記事から集計/)).toBeInTheDocument();
   });
 
-  it("windowStart / windowEnd 由来の期間が表示される", () => {
+  it("週は初日から最終日までで表示される", () => {
     render(
       <TrendsView
-        data={makeTrends({
-          windowStart: "2026-04-26",
-          windowEnd: "2026-05-03",
-        })}
+        data={makeTrends({ week: { start: "2026-04-26", end: "2026-05-02" } })}
       />,
     );
-    // formatDate("2026-04-26") → 日本語日付文字列の一部が含まれる
-    expect(screen.getByText(/2026/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/2026年4月26日 – 2026年5月2日/),
+    ).toBeInTheDocument();
   });
 
   it("最終更新(generatedAt)が表示される", () => {
     render(
       <TrendsView data={makeTrends({ generatedAt: "2026-05-03T06:00:00Z" })} />,
     );
-    // "最終更新" ラベルが出る
     expect(screen.getByText(/最終更新/)).toBeInTheDocument();
   });
 });
 
 describe("TrendsView — カテゴリ", () => {
-  it("複数カテゴリの categoryName が見出しに出る", () => {
+  it("複数カテゴリの name が見出しに出る", () => {
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI & 機械学習", { categoryId: 1 }),
-            makeCategory("computing", "コンピューティング", { categoryId: 2 }),
+            makeCategory("ai", "AI & 機械学習"),
+            makeCategory("computing", "コンピューティング"),
           ],
         })}
       />,
@@ -115,8 +131,8 @@ describe("TrendsView — カテゴリ", () => {
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", { categoryId: 1 }),
-            makeCategory("computing", "Computing", { categoryId: 2 }),
+            makeCategory("ai", "AI"),
+            makeCategory("computing", "Computing"),
           ],
         })}
       />,
@@ -126,120 +142,149 @@ describe("TrendsView — カテゴリ", () => {
   });
 });
 
-describe("TrendsView — 2ランキングラベル", () => {
-  it("言及数上位・急上昇ワード ラベルが各カテゴリに出る", () => {
+describe("TrendsView — 2つの列", () => {
+  it("言及数上位・急上昇ワードのラベルと、記事数順の説明が各カテゴリに出る", () => {
     render(
       <TrendsView
-        data={makeTrends({
-          categoryTrends: [makeCategory("ai", "AI", { categoryId: 1 })],
-        })}
+        data={makeTrends({ categoryTrends: [makeCategory("ai", "AI")] })}
       />,
     );
     expect(screen.getByText("言及数上位")).toBeInTheDocument();
     expect(screen.getByText("急上昇ワード")).toBeInTheDocument();
+    expect(screen.getByText("記事数順")).toBeInTheDocument();
   });
 
-  it("mostMentioned の並び順がそのまま行順に反映される(1..N)", () => {
-    const mentions = [
-      makeMention("Alpha", { appearanceCount: 30 }),
-      makeMention("Beta", { appearanceCount: 20 }),
-      makeMention("Gamma", { appearanceCount: 10 }),
-    ];
+  it("記事数の列は記事数の順位で並び、同じ順位は名前順になる", () => {
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: mentions,
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("Gamma", { articleRank: 2 }),
+              makeTrend("Beta", { articleRank: 2 }),
+              makeTrend("Alpha", { articleRank: 1 }),
+            ]),
           ],
         })}
       />,
     );
-    // カテゴリ section を scope に順位ボタンを取得
-    const section = screen.getByRole("region", { name: "AI" });
-    const buttons = within(section).getAllByRole("button", {
-      expanded: false,
-    });
-    // "言及数上位" 列の buttons は最初の 3 個
-    const rankButtons = buttons.slice(0, 3);
-    expect(rankButtons[0]).toHaveTextContent("Alpha");
-    expect(rankButtons[1]).toHaveTextContent("Beta");
-    expect(rankButtons[2]).toHaveTextContent("Gamma");
+    // 伸び率の順位を持たないので、行があるのは記事数の列だけ。
+    const [count] = listedRows("AI");
+    expect(count).toEqual([
+      expect.stringMatching(/^1Alpha/),
+      expect.stringMatching(/^2Beta/),
+      expect.stringMatching(/^2Gamma/),
+    ]);
   });
 
-  it("fastestGrowing の並び順がそのまま行順に反映される", () => {
-    const mentions = [
-      makeMention("Fast1", { growthRate: 5.0 }),
-      makeMention("Fast2", { growthRate: 2.0 }),
-    ];
+  it("伸び率の列は伸び率の順位で並び、順位のない名前は出ない", () => {
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              fastestGrowing: mentions,
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("Steady", { articleRank: 1, growthRank: null }),
+              makeTrend("Fast2", { articleRank: 3, growthRank: 2 }),
+              makeTrend("Fast1", { articleRank: 2, growthRank: 1 }),
+            ]),
           ],
         })}
       />,
     );
-    const section = screen.getByRole("region", { name: "AI" });
-    const buttons = within(section).getAllByRole("button");
-    // fastestGrowing 列のみなので buttons[0], buttons[1] がそのまま
-    expect(buttons[0]).toHaveTextContent("Fast1");
-    expect(buttons[1]).toHaveTextContent("Fast2");
+    const [, growth] = listedRows("AI");
+    expect(growth).toEqual([
+      expect.stringMatching(/^1Fast1/),
+      expect.stringMatching(/^2Fast2/),
+    ]);
+  });
+
+  it("どちらの列も5位以内の名前だけを出す", () => {
+    render(
+      <TrendsView
+        data={makeTrends({
+          categoryTrends: [
+            makeCategory("ai", "AI", [
+              makeTrend("Top", { articleRank: 1, growthRank: 6 }),
+              makeTrend("Rising", { articleRank: 6, growthRank: 1 }),
+            ]),
+          ],
+        })}
+      />,
+    );
+    expect(listedRows("AI")).toEqual([
+      [expect.stringMatching(/^1Top/)],
+      [expect.stringMatching(/^1Rising/)],
+    ]);
+  });
+
+  it("両方の列で上位の名前は、両方の列に出る", () => {
+    render(
+      <TrendsView
+        data={makeTrends({
+          categoryTrends: [
+            makeCategory("ai", "AI", [
+              makeTrend("SharedEntity", { articleRank: 1, growthRank: 1 }),
+            ]),
+          ],
+        })}
+      />,
+    );
+    expect(screen.getAllByText("SharedEntity")).toHaveLength(2);
+  });
+
+  it("列に出す名前がなければ「該当するワードはありません」", () => {
+    render(
+      <TrendsView
+        data={makeTrends({
+          categoryTrends: [
+            makeCategory("ai", "AI", [
+              makeTrend("CountOnly", { articleRank: 1, growthRank: null }),
+            ]),
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("該当するワードはありません")).toBeInTheDocument();
   });
 });
 
 describe("TrendsView — 行の表示内容", () => {
-  it("mention の name・種別バッジ日本語・appearanceCount・previousAppearanceCount が出る", () => {
+  it("name・種別バッジ日本語・週と前週の記事数が出る", () => {
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [
-                makeMention("OpenAI", {
-                  type: "company",
-                  appearanceCount: 42,
-                  previousAppearanceCount: 17,
-                  growthRate: 1.47,
-                }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("OpenAI", {
+                type: "company",
+                count: 42,
+                previousWeekCount: 17,
+                rate: 1.47,
+              }),
+            ]),
           ],
         })}
       />,
     );
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
-    // TypeBadge が type=company → "企業"
     expect(screen.getAllByText("企業").length).toBeGreaterThan(0);
     expect(screen.getByText("42")).toBeInTheDocument();
-    // 前週表示("前週 17")
     expect(screen.getByText(/前週\s*17/)).toBeInTheDocument();
   });
 
-  it("growthRate は data の値をそのまま整形する(prev/now から再計算しない)", () => {
-    // appearanceCount=30, previousAppearanceCount=5 から単純計算すると +500%
-    // だが growthRate=9.99 を渡すので "+999%" が表示されるべき
+  it("growth.rate は data の値をそのまま整形する(記事数から再計算しない)", () => {
+    // 30 件・前週 5 件から単純計算すると +500% だが、rate=9.99 なので "+999%"
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [
-                makeMention("TestCorp", {
-                  appearanceCount: 30,
-                  previousAppearanceCount: 5,
-                  growthRate: 9.99,
-                }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("TestCorp", {
+                count: 30,
+                previousWeekCount: 5,
+                rate: 9.99,
+              }),
+            ]),
           ],
         })}
       />,
@@ -248,17 +293,18 @@ describe("TrendsView — 行の表示内容", () => {
     expect(screen.queryByText("+500%")).not.toBeInTheDocument();
   });
 
-  it("previousAppearanceCount===0 の mention に「新登場」が出る", () => {
+  it("前週0件の名前に「新登場」が出る", () => {
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              fastestGrowing: [
-                makeMention("NewComer", { previousAppearanceCount: 0 }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("NewComer", {
+                previousWeekCount: 0,
+                articleRank: 6,
+                growthRank: 1,
+              }),
+            ]),
           ],
         })}
       />,
@@ -266,17 +312,18 @@ describe("TrendsView — 行の表示内容", () => {
     expect(screen.getByText("新登場")).toBeInTheDocument();
   });
 
-  it("previousAppearanceCount>0 の mention に「新登場」は出ない", () => {
+  it("前週が1件以上の名前に「新登場」は出ない", () => {
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              fastestGrowing: [
-                makeMention("OldComer", { previousAppearanceCount: 5 }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("OldComer", {
+                previousWeekCount: 5,
+                articleRank: 6,
+                growthRank: 1,
+              }),
+            ]),
           ],
         })}
       />,
@@ -284,20 +331,14 @@ describe("TrendsView — 行の表示内容", () => {
     expect(screen.queryByText("新登場")).not.toBeInTheDocument();
   });
 
-  it("growthRate<0 の mention で U+2212 付き負の伸び率が出る", () => {
+  it("growth.rate<0 の名前で U+2212 付き負の伸び率が出る", () => {
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [
-                makeMention("Declining", {
-                  growthRate: -0.13,
-                  previousAppearanceCount: 10,
-                }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("Declining", { rate: -0.13, previousWeekCount: 10 }),
+            ]),
           ],
         })}
       />,
@@ -308,20 +349,17 @@ describe("TrendsView — 行の表示内容", () => {
 });
 
 describe("TrendsView — 展開パネル", () => {
-  it("初期状態で keyPoints / relatedMentions は非表示", () => {
+  it("初期状態で keyPoints / mentionedWith は非表示", () => {
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [
-                makeMention("NVIDIA", {
-                  keyPoints: ["GPU 需要が急増"],
-                  relatedMentions: [makeRelated("AMD")],
-                }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("NVIDIA", {
+                keyPoints: ["GPU 需要が急増"],
+                mentionedWith: [makeCoMention("AMD")],
+              }),
+            ]),
           ],
         })}
       />,
@@ -330,29 +368,25 @@ describe("TrendsView — 展開パネル", () => {
     expect(screen.queryByText("AMD")).not.toBeInTheDocument();
   });
 
-  it("行をクリックすると keyPoints と relatedMentions が表示される", async () => {
+  it("行をクリックすると keyPoints と mentionedWith が表示される", async () => {
     const user = userEvent.setup();
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [
-                makeMention("NVIDIA", {
-                  keyPoints: ["GPU 需要が急増", "データセンター向け好調"],
-                  relatedMentions: [
-                    makeRelated("AMD", { sharedArticleCount: 7 }),
-                  ],
-                }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("NVIDIA", {
+                keyPoints: ["GPU 需要が急増", "データセンター向け好調"],
+                mentionedWith: [
+                  makeCoMention("AMD", { sharedArticleCount: 7 }),
+                ],
+              }),
+            ]),
           ],
         })}
       />,
     );
-    const button = screen.getByRole("button", { expanded: false });
-    await user.click(button);
+    await user.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByText("GPU 需要が急増")).toBeInTheDocument();
     expect(screen.getByText("データセンター向け好調")).toBeInTheDocument();
     expect(screen.getByText("AMD")).toBeInTheDocument();
@@ -365,41 +399,31 @@ describe("TrendsView — 展開パネル", () => {
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [
-                makeMention("NVIDIA", {
-                  keyPoints: ["要点A"],
-                  relatedMentions: [],
-                }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("NVIDIA", { keyPoints: ["要点A"] }),
+            ]),
           ],
         })}
       />,
     );
-    const button = screen.getByRole("button", { expanded: false });
-    await user.click(button);
+    await user.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByText("要点A")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { expanded: true }));
     expect(screen.queryByText("要点A")).not.toBeInTheDocument();
   });
 
-  it("keyPoints 空の mention を展開すると「要点は登録されていません」", async () => {
+  it("keyPoints 空の名前を展開すると「要点は登録されていません」", async () => {
     const user = userEvent.setup();
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [
-                makeMention("NoPoints", {
-                  keyPoints: [],
-                  relatedMentions: [makeRelated("Other")],
-                }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("NoPoints", {
+                keyPoints: [],
+                mentionedWith: [makeCoMention("Other")],
+              }),
+            ]),
           ],
         })}
       />,
@@ -408,50 +432,20 @@ describe("TrendsView — 展開パネル", () => {
     expect(screen.getByText("要点は登録されていません")).toBeInTheDocument();
   });
 
-  it("relatedMentions 空の mention を展開すると「共起した固有名はありません」", async () => {
+  it("mentionedWith 空の名前を展開すると「共起した固有名はありません」", async () => {
     const user = userEvent.setup();
     render(
       <TrendsView
         data={makeTrends({
           categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [
-                makeMention("NoRelated", {
-                  keyPoints: ["何か要点"],
-                  relatedMentions: [],
-                }),
-              ],
-            }),
+            makeCategory("ai", "AI", [
+              makeTrend("NoCoMention", { keyPoints: ["何か要点"] }),
+            ]),
           ],
         })}
       />,
     );
     await user.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByText("共起した固有名はありません")).toBeInTheDocument();
-  });
-});
-
-describe("TrendsView — key 衝突なし", () => {
-  it("同一 mention が mostMentioned と fastestGrowing 両方に載っても壊れず両方描画される", () => {
-    const sharedMention = makeMention("SharedEntity", {
-      type: "technology",
-      growthRate: 2.0,
-    });
-    render(
-      <TrendsView
-        data={makeTrends({
-          categoryTrends: [
-            makeCategory("ai", "AI", {
-              categoryId: 1,
-              mostMentioned: [sharedMention],
-              fastestGrowing: [sharedMention],
-            }),
-          ],
-        })}
-      />,
-    );
-    // 同一 name が両カラムに出るので 2 箇所
-    expect(screen.getAllByText("SharedEntity")).toHaveLength(2);
   });
 });

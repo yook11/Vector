@@ -1,4 +1,4 @@
-import type { MentionType } from "@/types";
+import type { MentionType } from "@/types/types.gen";
 import { MENTION_TYPE_META } from "../display";
 
 interface TypeBadgeProps {
