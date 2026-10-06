@@ -1,4 +1,13 @@
 mock_provider "aws" {
+  mock_data "aws_ami" {
+    defaults = { id = "ami-00000000000000001", architecture = "arm64", root_device_name = "/dev/xvda" }
+  }
+  mock_data "aws_network_interface" {
+    defaults = { id = "eni-00000000000000001", vpc_id = "vpc-00000000000000001", subnet_id = "subnet-00000000000000001", security_groups = ["sg-00000000000000001"] }
+  }
+  mock_resource "aws_iam_role" { defaults = { arn = "arn:aws:iam::123456789012:role/test-role" } }
+  mock_resource "aws_iam_instance_profile" { defaults = { arn = "arn:aws:iam::123456789012:instance-profile/test" } }
+
   override_during = plan
   mock_data "aws_caller_identity" {
     defaults = {
@@ -9,6 +18,7 @@ mock_provider "aws" {
 }
 
 variables {
+  bastion_network     = { vpc_id = "vpc-00000000000000001", subnet_id = "subnet-00000000000000001", security_group_id = "sg-00000000000000001", network_interface_id = "eni-00000000000000001" }
   expected_account_id = "123456789012"
   hosted_zone_id      = "Z0123456789EXAMPLE"
 }

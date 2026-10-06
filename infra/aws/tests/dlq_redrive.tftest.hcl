@@ -59,7 +59,7 @@ mock_provider "aws" {
 }
 
 override_resource {
-  target          = aws_security_group.bastion[0]
+  target          = aws_security_group.bastion
   override_during = plan
   values          = { id = "sg-00000000000000001" }
 }
@@ -143,48 +143,19 @@ run "operations_endpoint_scope" {
   }
 }
 
-run "bastion_disabled_has_no_temporary_sqs_path" {
+run "bastion_network_is_permanent" {
   command = plan
-  variables { enable_db_bastion = false }
   assert {
     condition = (
-      length(aws_instance.bastion) == 0 &&
-      length(aws_vpc_security_group_egress_rule.bastion_to_sqs) == 0 &&
-      length(aws_vpc_security_group_ingress_rule.sqs_from_bastion) == 0 &&
-      length(aws_vpc_endpoint.ssmmessages) == 0 &&
-      output.bastion_instance_id == null
+      aws_network_interface.bastion.subnet_id == aws_subnet.bastion.id &&
+      toset(aws_network_interface.bastion.security_groups) == toset([aws_security_group.bastion.id]) &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs.referenced_security_group_id == aws_security_group.outbox_sqs_endpoint.id &&
+      aws_vpc_security_group_ingress_rule.sqs_from_bastion.referenced_security_group_id == aws_security_group.bastion.id &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs.from_port == 443 &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs.to_port == 443 &&
+      aws_vpc_security_group_egress_rule.bastion_to_rds.from_port == 5432 &&
+      aws_vpc_endpoint.ssmmessages.private_dns_enabled
     )
-    error_message = "踏み台を無効にすると一時接続経路も撤去される。"
-  }
-}
-
-run "bastion_enabled_is_ssm_only" {
-  command = plan
-  variables { enable_db_bastion = true }
-  assert {
-    condition = (
-      length(aws_instance.bastion) == 1 &&
-      aws_instance.bastion[0].associate_public_ip_address == false &&
-      aws_instance.bastion[0].metadata_options[0].http_tokens == "required" &&
-      aws_instance.bastion[0].tags["vector:session-purpose"] == "sqs-redrive" &&
-      aws_iam_role_policy_attachment.bastion_ssm[0].policy_arn == "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" &&
-      aws_instance.bastion[0].iam_instance_profile == aws_iam_instance_profile.bastion[0].name
-    )
-    error_message = "EC2はSSM専用のロールと運用タグを持ち、公開入口を持たない。"
-  }
-  assert {
-    condition = (
-      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].referenced_security_group_id == aws_security_group.outbox_sqs_endpoint.id &&
-      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].security_group_id == aws_security_group.bastion[0].id &&
-      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].security_group_id == aws_security_group.outbox_sqs_endpoint.id &&
-      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].referenced_security_group_id == aws_security_group.bastion[0].id &&
-      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].ip_protocol == "tcp" &&
-      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].ip_protocol == "tcp" &&
-      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].from_port == 443 &&
-      aws_vpc_security_group_egress_rule.bastion_to_sqs[0].to_port == 443 &&
-      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].from_port == 443 &&
-      aws_vpc_security_group_ingress_rule.sqs_from_bastion[0].to_port == 443
-    )
-    error_message = "一時踏み台とSQS endpoint間のTCP443だけを追加する。"
+    error_message = "固定ENIとSSM/SQS/DBの既存境界を持つ常設基盤を維持する。"
   }
 }

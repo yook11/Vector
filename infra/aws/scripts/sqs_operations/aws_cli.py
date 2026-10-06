@@ -99,7 +99,7 @@ class AwsCli:
         return env
 
     def command(self, service, operation, **arguments):
-        if service not in {"sqs", "ssm", "sts"}:
+        if service not in {"sqs", "ssm", "sts", "ec2"}:
             raise ValueError("未対応のAWSサービスです。")
         command = [
             "aws",

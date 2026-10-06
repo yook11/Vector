@@ -2,7 +2,7 @@
 
 ## 作業定義
 
-- Problem: ReadOnlyで調査した本人が、既存の一時踏み台を経由して限定運用ロールでDLQを再投入できるようにする。
+- Problem: ReadOnlyで調査した本人が、固定Automationから一時踏み台を作成・利用・撤去し、限定運用ロールでDLQを再投入できるようにする。
 - Evidence: IAM・SQSキュー・VPCE・踏み台のTerraform、隔離アカウントの[既存実測](../../aws-test/dlq-redrive/VPCE_RESULTS.md)、AWS公式の[再投入権限](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html)と[SSM認可](https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-restrict-access-examples.html)。
 - Invariants: 本番ReadOnlyだけを信頼し、最大1時間、対象5組のARN、固定SQS宛先、TLSと指定VPCE制限、EC2はSSM専用権限を維持する。
 - Non-goals: DB権限の変更、CI管理権限の拡大、アプリ変更、既存smoke全体の置き換え、Scheduler/Lambda失敗イベントの独自再投入。
@@ -10,12 +10,12 @@
 
 ## 責任と認証
 
-管理者で一時踏み台作成 → ReadOnlyで原因調査 → `vector-operations`へAssumeRoleして再投入 → ReadOnlyでConsumerの処理結果確認 → 管理者で踏み台撤去。
+ReadOnlyで原因調査 → `vector-operations`へAssumeRole → 固定手順で踏み台作成 → DLQ再投入 → ReadOnlyでConsumerの処理結果確認 → 運用ロールで踏み台撤去。
 
 | 操作 | 使用する権限 |
 |---|---|
 | ロール・SSMドキュメントの管理 | `vector-admin`、既存bootstrap-accessのstate |
-| 一時踏み台の作成・撤去 | `vector-admin`、既存本番インフラのstate |
+| 一時踏み台の作成・撤去 | `vector-ops`、承認された数値版Automationのみ |
 | ログ・処理済み状態の調査 | 既存ReadOnly (`default`) |
 | 固定SQS接続、再投入・状態確認・停止 | `vector-ops` (`vector-operations`) |
 | EC2内のSSM Agent | `AmazonSSMManagedInstanceCore`のみ |
@@ -24,7 +24,7 @@
 SSMドキュメント`vector-sqs-tunnel`は`SQS東京:443`への転送だけを許可する。
 対象EC2は同じアカウント・東京の`vector:session-purpose=sqs-redrive`タグで限定するため、再作成でIDが変わってもIAMを更新しない。
 運用ロールにタグ変更、シェル、汎用転送、DB接続、IAM管理は付与しない。DB作業は既存の管理者用手順を継続する。
-ロール・SSMドキュメントは常設し、EC2と追加通信規則は`enable_db_bastion=false`で撤去する。
+ネットワーク・エンドポイント・専用ENI・IAM・Launch Template・SSMドキュメントは常設する。日常の撤去対象はEC2とroot EBSだけで、時間による自動撤去は行わない。
 
 ReadOnlyの権限はAssumeRole後に引き継がれない。SSMセッション終了権限はAWSが付ける所有者タグと`${aws:userid}`で限定する。
 同じロール・同じrole session nameは同じ所有者として扱われるため、この手順は現行の個人運用を前提とする。
@@ -52,10 +52,10 @@ Scheduler失敗DLQとLambda非同期失敗キューはSQS標準再投入の対�
 
 ## 初回導入
 
-1. 最新mainと適用済み状態を照合する。管理者は既存bootstrap-accessのstateとtfvarsを使い、planで送信条件の削除・固定SSMドキュメント・限定SSM権限を確認して適用する。
-2. ReadOnlyの既存inline policyに`readonly_operations_assume_statement`があることを確認する。追加が必要なら`NoSecretValues`など既存statementを保持して追加し、Permission Setを再プロビジョニングする。既存の許可を重複追加しない。
-3. 運用ロールの存在を確認してから、通常インフラの承認済み反映経路でSQS endpoint policyを更新する。初回は踏み台無効のまま、既存アプリの許可に差分がないことを確認する。
-4. ReadOnlyからの引受成功、VectorDeployからの拒否を本番で確認する。過去のmergeやテストアカウントの結果だけで本番反映済みとは扱わない。
+初回の状態移行・管理者適用は[Bastion移行手順](BASTION_MIGRATION.md)に従う。
+ReadOnlyの既存inline policyに`readonly_operations_assume_statement`があることを確認する。
+既存の`NoSecretValues`などを保持し、Permission Set全体を置き換えない。
+本番適用と実メッセージの再投入は個別に結果を記録する。
 
 AWS CLI v2、Python 3、Session Manager pluginをPCに用意し、profileを設定する。
 
@@ -73,16 +73,25 @@ ReadOnlyの信頼条件はPermission Setの割当先全員に適用される。�
 
 ## 毎回の運用
 
-### 1. 管理者で一時踏み台を作成
+### 1. 運用ロールで一時踏み台を作成
 
-既存private runbookに従い、`verify-aws-profile.sh vector-admin`でcallerを確認する。
-本番インフラの既存state・tfvarsを使用し、`enable_db_bastion=true`のplanを保存・確認して適用する。
-`terraform output -raw bastion_instance_id`の値を操作者へ渡し、SSMがOnlineになるまで待つ。
-運用ロールにはTerraform stateの読み取り権限を与えない。
+```bash
+aws sso login --profile default
+infra/aws/scripts/verify-aws-profile.sh vector-ops
+python3 infra/aws/scripts/bastion.py create
+python3 infra/aws/scripts/bastion.py status
+```
 
-作業中は通常のインフラapplyと時間を重ねない。既定値falseのapplyは踏み台を撤去する。
-やむを得ず別applyが必要なら作業を終了して先に撤去する。
-途中失敗は作成済みリソース・ログ・残りのplanを照合し、元のapplyを無条件に繰り返さない。
+CLIは対象アカウント・東京・実callerを確認し、公開された数値版を明示して固定手順を開始する。
+既存の正常な踏み台があれば同じIDを返す。作成中はSSM Onlineを最大10分待ち、削除中・停止中・想定外の機体は新規作成に切り替えない。
+資格情報の期限切れ・CLI終了・待機期限到達でもAutomationは続行する。表示した実行IDで追跡する。
+
+```bash
+python3 infra/aws/scripts/bastion.py status --execution-id <EXECUTION_ID>
+```
+
+開始応答を受け取れず実行IDが不明なら、表示された要求IDと開始時刻を管理者に渡し、CloudTrailのStartAutomationExecutionとSSM実行履歴を照合する。
+同じ操作を新しい要求として繰り返さない。運用ロールにTerraform stateの読み取り権限は与えない。
 
 ### 2. ReadOnlyで原因と復旧対象を確認
 
@@ -92,7 +101,7 @@ DLQ件数は未処理件数と同義ではない。対象DLQ全体の移送を�
 
 ### 3. 運用ロールで接続・操作
 
-以下はリポジトリのルートから実行する。`<INSTANCE_ID>`を管理者から受け取った値に置き換える。
+以下はリポジトリのルートから実行する。`<INSTANCE_ID>`を`bastion.py create/status`で取得した値に置き換える。
 
 ```bash
 aws sso login --profile default
@@ -116,15 +125,26 @@ CLIは資格情報・本文・AWSの生エラーを表示せず、終了時にpr
 終了済みタスクではTaskHandleが返らない場合があるため、source・destination・開始時刻・状態でも照合する。
 資格情報の期限切れや終了失敗時は、表示されたSessionIdを管理者が確認して終了する。
 
-### 4. ReadOnlyで結果確認、管理者で撤去
+### 4. ReadOnlyで結果確認、運用ロールで撤去
 
 タスク完了と移動件数に加え、Consumerの保存成功・再失敗・対象記事の処理状態をReadOnlyで確認する。
 キャンセルは移動済みのメッセージを元へ戻さない。DLQが空でも処理成功とは判断しない。
-実行中タスクとSSMセッションがないことを確認し、管理者が`enable_db_bastion=false`の削除planを確認して適用する。
-EC2・root EBS・一時SG規則・ssmmessages endpointが撤去され、常設SQS endpointと運用ロールが残ることを確認する。
+SSMセッションを終了してから、明示した機体を撤去する。SSM接続が残っていれば手順は拒否する。
+
+```bash
+python3 infra/aws/scripts/bastion.py destroy --instance-id <INSTANCE_ID>
+python3 infra/aws/scripts/bastion.py status
+```
+
+撤去完了は対象EC2の終了・root EBS削除・そのEC2からのENI解放まで確認する。
+後続の別作成が同じENIを取得しても、その後継機を削除しない。通常操作に強制撤去はない。
+削除失敗時は実行IDとEC2 IDを残し、管理者が実リソース・SSM実行履歴を照合してから復旧する。
+EC2がない間もInterface endpointと専用private IPv4など常設基盤は残り、endpoint料金は続く。
 
 ## 検証の区別
 
 Terraform mockとCLI単体テストはCIで実行し、AWSリソースを作成しない。
 実AWS試験は別アカウントの[DLQ検証環境](../../aws-test/dlq-redrive/README.md)でダミーだけを使用する。[運用構成の実測結果](../../aws-test/dlq-redrive/OPERATIONS_RESULTS.md)を参照。
 本番適用、本番ReadOnlyの入口、本番Consumerの処理成功はそれぞれ別の証拠として記録する。
+
+固定Automationの追加検証は[隔離環境](../../aws-test/bastion-automation/README.md)と[実測結果](../../aws-test/bastion-automation/RESULTS.md)を参照する。

@@ -211,3 +211,9 @@ CLIで取得できる同じ専用ロールの有効な一時資格情報をプ�
 [KMS alias条件](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html#conditions-kms-resource-aliases)。
 path単位のpolicy管理と取り付け条件は[AWSのIAMアクセス制御](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_controlling.html)、
 wildcardが子pathも含む仕様は[Resource要素](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_resource.html)を参照する。
+
+## 一時踏み台の固定Automation
+
+通常インフラの`bastion_network`出力を入力し、EC2 SSM role/profile・固定Launch Template・Automation実行ロール・作成／撤去runbookを管理する。
+初回は[移行手順](BASTION_MIGRATION.md)に従って既存IAMのstateを移管する。日常操作は[運用手順](OPERATIONS.md)を使う。
+AMIとrunbook数値版はこの管理者Terraformで更新し、運用ロールに編集や直接EC2作成は委譲しない。

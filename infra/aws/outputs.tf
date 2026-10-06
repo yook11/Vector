@@ -63,9 +63,14 @@ output "ecr_repository_urls" {
   value = { for name, repo in aws_ecr_repository.this : name => repo.repository_url }
 }
 
-output "bastion_instance_id" {
-  description = "DB保守・DLQ運用の一時踏み台の instance ID (enable_db_bastion=false のときは null)。"
-  value       = one(aws_instance.bastion[*].id)
+output "bastion_network" {
+  description = "管理者用Terraformへ渡す常設踏み台基盤であり、EC2 IDは運用CLIで取得する。"
+  value = {
+    vpc_id               = aws_vpc.main.id
+    subnet_id            = aws_subnet.bastion.id
+    security_group_id    = aws_security_group.bastion.id
+    network_interface_id = aws_network_interface.bastion.id
+  }
 }
 
 output "db_endpoint" {
