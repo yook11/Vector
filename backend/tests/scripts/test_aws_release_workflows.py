@@ -67,37 +67,52 @@ def test_app_test_jobs_run_only_on_pull_request() -> None:
     ) == (True,) * 13
 
 
-def test_bootstrap_access_ci_runs_mock_tests_without_aws_credentials() -> None:
+def test_production_infrastructure_ci_runs_without_aws_credentials() -> None:
+    """本番向けの設定・運用コードだけをAWS資格情報なしで検証する。"""
     jobs = _load_workflow(_CI_WORKFLOW)["jobs"]
     filter_step = next(
         step for step in jobs["changes"]["steps"] if step.get("id") == "filter"
     )
     filters = yaml.safe_load(filter_step["with"]["filters"])
-    job = jobs["terraform-bootstrap-access"]
+    job = jobs["terraform-tests"]
     commands = "\n".join(step.get("run", "") for step in job["steps"])
 
     assert all(
-        any(fnmatchcase(path, pattern) for pattern in filters["bootstrap_access"])
+        any(fnmatchcase(path, pattern) for pattern in filters["terraform"])
         for path in (
             "infra/aws/bootstrap-access/permissions.tf",
             "infra/aws/bootstrap-access/tests/access.tftest.hcl",
             "infra/aws/bootstrap/oidc.tf",
+            "infra/aws/platform_bastion.tf",
+            "infra/aws/scripts/sqs_operations/bastion.py",
+            "infra/modules/bastion-automation/documents.tf",
         )
     )
     assert (
-        jobs["changes"]["outputs"]["bootstrap_access"]
-        == "${{ steps.filter.outputs.bootstrap_access }}"
+        jobs["changes"]["outputs"]["terraform"]
+        == "${{ steps.filter.outputs.terraform }}"
     )
-    assert "needs.changes.outputs.bootstrap_access == 'true'" in job["if"]
+    assert "needs.changes.outputs.terraform == 'true'" in job["if"]
     assert "needs.changes.outputs.ci == 'true'" in job["if"]
     assert "github.event_name == 'pull_request'" in job["if"]
-    assert job["defaults"]["run"]["working-directory"] == "infra/aws/bootstrap-access"
+    assert job.get("defaults", {}).get("run", {}).get("working-directory", ".") == "."
     assert job["permissions"] == {"contents": "read"}
     assert "configure-aws-credentials" not in str(job)
     assert "secrets." not in str(job)
-    assert "terraform init -backend=false -input=false -lockfile=readonly" in commands
-    assert "terraform validate" in commands
-    assert "terraform test -no-color" in commands
+    assert "aws-smoke" not in jobs
+    assert "infra/aws-test" not in commands
+    assert (
+        "for module in infra/aws infra/aws/bootstrap infra/aws/bootstrap-access "
+        "infra/modules/bastion-automation; do"
+    ) in commands
+    assert (
+        'terraform -chdir="$module" init -backend=false -input=false -lockfile=readonly'
+        in commands
+    )
+    assert 'terraform -chdir="$module" validate' in commands
+    assert 'terraform -chdir="$module" test -no-color' in commands
+    assert "unittest discover -s infra/aws/scripts/tests -v" in commands
+    assert "unittest discover -s infra/modules/bastion-automation/tests -v" in commands
     assert job.get("continue-on-error", "false") == "false"
 
 
@@ -105,17 +120,16 @@ def test_bootstrap_access_ci_runs_mock_tests_without_aws_credentials() -> None:
     ("terraform_result", "expected_exit"),
     [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)],
 )
-def test_ci_gate_rejects_failed_bootstrap_access_tests(
+def test_ci_gate_rejects_failed_terraform_tests(
     terraform_result: str, expected_exit: int
 ) -> None:
+    """集約後の本番インフラ検証が失敗した場合もCI gateを失敗させる。"""
     gate = _load_workflow(_CI_WORKFLOW)["jobs"]["ci-gate"]
-    assert "terraform-bootstrap-access" in gate["needs"]
+    assert "terraform-tests" in gate["needs"]
     script = next(step["run"] for step in gate["steps"] if "run" in step)
     rendered = re.sub(
         r"\$\{\{ needs\.([a-z0-9_-]+)\.result \}\}",
-        lambda match: (
-            terraform_result if match[1] == "terraform-bootstrap-access" else "success"
-        ),
+        lambda match: terraform_result if match[1] == "terraform-tests" else "success",
         script,
     )
     assert "${{" not in rendered

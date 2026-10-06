@@ -60,9 +60,6 @@ resource "aws_iam_role_policy" "operations" {
         Effect   = "Allow"
         Action   = "sqs:SendMessage"
         Resource = local.operations_queue_arns
-        Condition = {
-          StringEquals = { "aws:CalledViaLast" = "sqs.amazonaws.com" }
-        }
       },
       {
         Sid      = "ObservePipelineQueues"
@@ -86,4 +83,73 @@ output "readonly_operations_assume_statement" {
     Action   = "sts:AssumeRole"
     Resource = local.operations_role_arn
   }
+}
+
+resource "aws_ssm_document" "sqs_tunnel" {
+  name            = "vector-sqs-tunnel"
+  document_type   = "Session"
+  document_format = "JSON"
+  content = jsonencode({
+    schemaVersion = "1.0"
+    description   = "Forward only to the Tokyo SQS endpoint"
+    sessionType   = "Port"
+    parameters = {
+      localPortNumber = {
+        type           = "String"
+        default        = "18443"
+        allowedPattern = "^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+      }
+    }
+    properties = {
+      host            = "sqs.ap-northeast-1.amazonaws.com"
+      portNumber      = "443"
+      localPortNumber = "{{ localPortNumber }}"
+      type            = "LocalPortForwarding"
+    }
+  })
+}
+
+resource "aws_iam_role_policy" "operations_tunnel" {
+  name = "sqs-tunnel"
+  role = aws_iam_role.operations.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "StartTaggedBastionSession"
+        Effect   = "Allow"
+        Action   = "ssm:StartSession"
+        Resource = "arn:aws:ec2:ap-northeast-1:${local.account_id}:instance/*"
+        Condition = {
+          StringEquals = { "ssm:resourceTag/vector:session-purpose" = "sqs-redrive" }
+          BoolIfExists = { "ssm:SessionDocumentAccessCheck" = "true" }
+        }
+      },
+      {
+        Sid      = "UseFixedSqsDocument"
+        Effect   = "Allow"
+        Action   = "ssm:StartSession"
+        Resource = aws_ssm_document.sqs_tunnel.arn
+      },
+      {
+        Sid      = "OpenOwnSessionChannel"
+        Effect   = "Allow"
+        Action   = "ssmmessages:OpenDataChannel"
+        Resource = "arn:aws:ssm:ap-northeast-1:${local.account_id}:session/$${aws:userid}-*"
+      },
+      {
+        Sid      = "TerminateOwnSession"
+        Effect   = "Allow"
+        Action   = "ssm:TerminateSession"
+        Resource = "arn:aws:ssm:ap-northeast-1:${local.account_id}:session/*"
+        Condition = {
+          StringEquals = { "ssm:resourceTag/aws:ssmmessages:session-id" = "$${aws:userid}" }
+        }
+      }
+    ]
+  })
+}
+
+output "sqs_tunnel_document_name" {
+  value = aws_ssm_document.sqs_tunnel.name
 }
