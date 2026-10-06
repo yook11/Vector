@@ -3,11 +3,8 @@
 #
 # This script runs once when the db volume is first initialized
 # (Postgres docker-entrypoint-initdb.d mechanism).
-# For existing dev volumes, run the equivalent SQL manually:
-#   docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "CREATE ROLE vector_auth    WITH LOGIN PASSWORD '...'"
-#   docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "CREATE ROLE vector_app     WITH LOGIN PASSWORD '...'"
-#   docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "CREATE ROLE vector_collect WITH LOGIN PASSWORD '...'"
-#   docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "CREATE ROLE vector_outbox_relay NOLOGIN"
+# For existing dev volumes, re-run the same script (it is idempotent):
+#   docker compose exec db sh /docker-entrypoint-initdb.d/01_create_app_users.sh
 # then run `alembic upgrade head` to apply GRANT migration.
 
 set -e
@@ -27,6 +24,21 @@ if [ -z "$POSTGRES_COLLECT_PASSWORD" ]; then
   exit 1
 fi
 
+if [ -z "$POSTGRES_API_PASSWORD" ]; then
+  echo "ERROR: POSTGRES_API_PASSWORD is not set" >&2
+  exit 1
+fi
+
+if [ -z "$POSTGRES_INSIGHTS_PASSWORD" ]; then
+  echo "ERROR: POSTGRES_INSIGHTS_PASSWORD is not set" >&2
+  exit 1
+fi
+
+if [ -z "$POSTGRES_AGENT_PASSWORD" ]; then
+  echo "ERROR: POSTGRES_AGENT_PASSWORD is not set" >&2
+  exit 1
+fi
+
 # psql の :'variable' 置換は dollar-quoted block (DO $$ ... $$) の内側では
 # 効かない (psql が $$ 以下を opaque な string literal として扱うため)。
 # よって \gexec で「SQL を生成 → 実行」の 2 段階パターンを使い、:'variable'
@@ -36,6 +48,9 @@ psql -v ON_ERROR_STOP=1 \
      -v auth_password="$POSTGRES_AUTH_PASSWORD" \
      -v app_password="$POSTGRES_APP_PASSWORD" \
      -v collect_password="$POSTGRES_COLLECT_PASSWORD" \
+     -v api_password="$POSTGRES_API_PASSWORD" \
+     -v insights_password="$POSTGRES_INSIGHTS_PASSWORD" \
+     -v agent_password="$POSTGRES_AGENT_PASSWORD" \
      --username "$POSTGRES_USER" \
      --dbname "$POSTGRES_DB" <<-'EOSQL'
 SELECT format('CREATE ROLE vector_auth WITH LOGIN PASSWORD %L', :'auth_password')
@@ -70,6 +85,13 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_agent')
 \gexec
 SELECT 'CREATE ROLE vector_investigation NOLOGIN'
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_investigation')
+\gexec
+-- 開発環境の api・insights・agent は本番と同じロールで接続するため、既存 volume でも再実行でログインできるようにする。
+SELECT format('ALTER ROLE vector_api WITH LOGIN PASSWORD %L', :'api_password')
+\gexec
+SELECT format('ALTER ROLE vector_insights WITH LOGIN PASSWORD %L', :'insights_password')
+\gexec
+SELECT format('ALTER ROLE vector_agent WITH LOGIN PASSWORD %L', :'agent_password')
 \gexec
 EOSQL
 

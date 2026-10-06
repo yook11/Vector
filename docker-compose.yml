@@ -3,16 +3,17 @@
 # ===========================================
 
 # --- Shared worker config (anchor only, not a service) ---
+# DATABASE_URL は本番と同じロールで接続するため各 worker で指定する。
+x-worker-environment: &worker-environment
+  AUTH_RETENTION_DATABASE_URL: postgresql+asyncpg://vector_auth:${POSTGRES_AUTH_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
+  REDIS_URL: redis://redis:6379/0
+
 x-worker-base: &worker-base
   build:
     context: ./backend
     dockerfile: Dockerfile
   env_file:
     - .env
-  environment:
-    - DATABASE_URL=postgresql+asyncpg://vector_app:${POSTGRES_APP_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
-    - AUTH_RETENTION_DATABASE_URL=postgresql+asyncpg://vector_auth:${POSTGRES_AUTH_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
-    - REDIS_URL=redis://redis:6379/0
   volumes:
     - ./backend/app:/app/app
   depends_on:
@@ -202,8 +203,8 @@ services:
     env_file:
       - .env
     environment:
-      # application runtime: vector_app (public.* DML + auth.user REFERENCES)
-      - DATABASE_URL=postgresql+asyncpg://vector_app:${POSTGRES_APP_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
+      # application runtime: 本番の api と同じ vector_api
+      - DATABASE_URL=postgresql+asyncpg://vector_api:${POSTGRES_API_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
       # alembic migration / pytest: vector (table owner) で接続
       - MIGRATION_DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
       - REDIS_URL=redis://redis:6379/0
@@ -246,10 +247,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required; set a strong value in .env}
       POSTGRES_DB: ${POSTGRES_DB:-vector}
       # red-team AUTH-N4: application-level role passwords. init script で
-      # vector_auth / vector_app / vector_collect role を作るときに psql に渡す。
+      # ログインできる role を作るときに psql に渡す。
       POSTGRES_AUTH_PASSWORD: ${POSTGRES_AUTH_PASSWORD:?POSTGRES_AUTH_PASSWORD is required for vector_auth role}
       POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required for vector_app role}
       POSTGRES_COLLECT_PASSWORD: ${POSTGRES_COLLECT_PASSWORD:?POSTGRES_COLLECT_PASSWORD is required for vector_collect role}
+      POSTGRES_API_PASSWORD: ${POSTGRES_API_PASSWORD:?POSTGRES_API_PASSWORD is required for vector_api role}
+      POSTGRES_INSIGHTS_PASSWORD: ${POSTGRES_INSIGHTS_PASSWORD:?POSTGRES_INSIGHTS_PASSWORD is required for vector_insights role}
+      POSTGRES_AGENT_PASSWORD: ${POSTGRES_AGENT_PASSWORD:?POSTGRES_AGENT_PASSWORD is required for vector_agent role}
     volumes:
       # PG18の既存volumeを保持し、PG17には別volumeを使う。
       - pgdata17:/var/lib/postgresql/data
@@ -328,17 +332,27 @@ services:
   worker-insights:
     <<: *worker-base
     init: true
+    environment:
+      <<: *worker-environment
+      DATABASE_URL: postgresql+asyncpg://vector_insights:${POSTGRES_INSIGHTS_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
     command: supervisord -n -c /app/supervisord/insights.conf
 
   worker-agent:
     <<: *worker-base
     init: true
+    environment:
+      <<: *worker-environment
+      DATABASE_URL: postgresql+asyncpg://vector_agent:${POSTGRES_AGENT_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
     command: supervisord -n -c /app/supervisord/agent.conf
 
   # --- taskiq scheduler (trend discovery + briefing + agent を 1 container に同居) ---
   scheduler:
     <<: *worker-base
     init: true
+    environment:
+      <<: *worker-environment
+      # scheduler は DB に接続しないが、Settings が database_url を必須とするため値だけ渡す。
+      DATABASE_URL: postgresql+asyncpg://vector_app:${POSTGRES_APP_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
     command: supervisord -n -c /app/supervisord/scheduler.conf
     networks:
       - internal
