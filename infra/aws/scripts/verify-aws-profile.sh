@@ -22,6 +22,11 @@ case "$profile" in
     display_role='AWSReservedSSO_ReadOnly_<SUFFIX>'
     login_profile='default'
     ;;
+  vector-ops)
+    expected_role='vector-operations'
+    display_role="$expected_role"
+    login_profile='default'
+    ;;
   vector-deploy)
     expected_regex='^AWSReservedSSO_VectorDeploy_[[:xdigit:]]+$'
     display_role='AWSReservedSSO_VectorDeploy_<SUFFIX>'

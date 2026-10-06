@@ -114,7 +114,7 @@ Semgrepはテスト環境にも適用し、次の2件だけ対象リソースの
 - RDSのバックアップ保持推奨：試験データは再生成し、削除後の復旧を目的としないため保持0日・最終スナップショットなしを維持する。
 - LambdaのX-Ray Active tracing推奨：実行ログとDBの保存結果で試験を確認し、`PassThrough`を明示する。X-Rayの送信権限は追加しない。
 
-## 今回行う静的検証
+## PR作成前の検証
 
 以下はAWSバックエンドへ接続せず、設備も作らない。Terraform `>= 1.11`、AWS provider `~> 6.0`を使用する。
 
@@ -133,16 +133,17 @@ terraform -chdir=infra/aws-test/smoke test
 backend/.venv/bin/python -m unittest discover -s infra/aws-test/scripts/tests -v
 ```
 検証対象はアカウント入力とSSO信頼先の整合、state保護、SGの既存／作成時IAM条件、全設備の必須タグ、IAMパス・権限境界、ログ名と許可ARN、ENI待機の依存関係、通信・SQS・保持設定。
-CIの`AWS smoke (unit + Terraform mock)`は関連変更時に専用Pythonテスト・Ruff・Terraformモックテストを実行し、CI gateへ集約する。
+このスモーク環境と実行スクリプトの検証はCIの対象外とする。関連する変更では、PR作成前に上記のローカル検証と必要な実AWS試験を行い、対象コード・結果・資源の撤去確認を記録する。
+CIの`Terraform / operations tests`は本番Terraformの設定・権限と本番運用コードの重要な単体テストを実行する。
 
-providerのlockを更新するときは、CIのLinux AMD64と開発用macOS ARM64のハッシュを公式レジストリから取得して保存する。
+providerのlockを更新するときは、検証に使うLinux AMD64とmacOS ARM64のハッシュを公式レジストリから取得して保存する。
 
 ```sh
 terraform -chdir=infra/aws-test/bootstrap providers lock -platform=linux_amd64 -platform=darwin_arm64
 terraform -chdir=infra/aws-test/smoke providers lock -platform=linux_amd64 -platform=darwin_arm64
 ```
 
-署名の確認とlock差分のコミット後、CIの`init -lockfile=readonly`・`validate`・モックテストまで確認する。既存のmacOSキャッシュでの合格だけではLinuxの展開済みproviderの検証を保証できない。
+署名の確認とlock差分のコミット後、検証環境で`init -lockfile=readonly`・`validate`・モックテストまで確認する。既存のmacOSキャッシュでの合格だけではLinuxの展開済みproviderの検証を保証できない。
 
 provider/backendのアカウント制限や実際のIAM評価、プロキシ疎通、EC2起動成功はモックの合格だけでは保証できない。
 

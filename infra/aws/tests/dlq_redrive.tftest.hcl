@@ -58,6 +58,18 @@ mock_provider "aws" {
   }
 }
 
+override_resource {
+  target          = aws_security_group.bastion
+  override_during = plan
+  values          = { id = "sg-00000000000000001" }
+}
+
+override_resource {
+  target          = aws_security_group.outbox_sqs_endpoint
+  override_during = plan
+  values          = { id = "sg-00000000000000002" }
+}
+
 variables {
   name_prefix            = "slice-test"
   root_domain            = "example.com"
@@ -108,5 +120,42 @@ run "redrive_preserves_direct_send_boundary" {
       policy.Statement[1].Condition.StringNotEqualsIfExists["aws:CalledViaLast"] == "sqs.amazonaws.com"
     ])
     error_message = "TLSと直接送信のVPC制限を維持し、SQS代理呼び出しだけを例外にする。"
+  }
+}
+
+run "operations_endpoint_scope" {
+  command = plan
+  assert {
+    condition = (
+      jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[0].Principal.AWS == "arn:aws:iam::123456789012:role/vector-operations" &&
+      jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[0].Resource == local.operations_dlq_arns &&
+      length(local.operations_dlq_arns) == 5 &&
+      toset(jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[0].Action) == toset([
+        "sqs:StartMessageMoveTask", "sqs:CancelMessageMoveTask", "sqs:ListMessageMoveTasks",
+        "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl",
+      ]) &&
+      jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[1].Principal.AWS == "arn:aws:iam::123456789012:role/vector-operations" &&
+      jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[1].Resource == local.operations_source_arns &&
+      length(local.operations_source_arns) == 5 &&
+      toset(jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement[1].Action) == toset(["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"])
+    )
+    error_message = "VPCEの運用許可は対象5組に限定し、通常キューの受信・削除は許可しない。"
+  }
+}
+
+run "bastion_network_is_permanent" {
+  command = plan
+  assert {
+    condition = (
+      aws_network_interface.bastion.subnet_id == aws_subnet.bastion.id &&
+      toset(aws_network_interface.bastion.security_groups) == toset([aws_security_group.bastion.id]) &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs.referenced_security_group_id == aws_security_group.outbox_sqs_endpoint.id &&
+      aws_vpc_security_group_ingress_rule.sqs_from_bastion.referenced_security_group_id == aws_security_group.bastion.id &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs.from_port == 443 &&
+      aws_vpc_security_group_egress_rule.bastion_to_sqs.to_port == 443 &&
+      aws_vpc_security_group_egress_rule.bastion_to_rds.from_port == 5432 &&
+      aws_vpc_endpoint.ssmmessages.private_dns_enabled
+    )
+    error_message = "固定ENIとSSM/SQS/DBの既存境界を持つ常設基盤を維持する。"
   }
 }
