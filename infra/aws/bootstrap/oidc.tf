@@ -9,8 +9,6 @@ locals {
   curation_consumer_lambda_arn       = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-curation-consumer"
   completion_consumer_lambda_arn     = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-completion-consumer"
   acquisition_consumer_lambda_arn    = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-acquisition-consumer"
-  completion_consumer_role_arn       = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-completion-consumer-lambda"
-  acquisition_consumer_role_arn      = "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-acquisition-consumer-lambda"
   curation_outbox_relay_lambda_arn   = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-curation-outbox-relay"
   completion_outbox_relay_lambda_arn = "arn:aws:lambda:${var.region}:${local.account_id}:function:${var.name_prefix}-completion-outbox-relay"
   curation_dlq_arn                   = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-article-curation-dlq"
@@ -39,8 +37,6 @@ locals {
     Lambda = {
       arns = concat([local.backfill_lambda_role_arn, local.article_analysis_lambda_role_arn, local.article_fetch_lambda_role_arn], [local.source_dispatch_lambda_role_arn,
         "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda",
-        local.completion_consumer_role_arn,
-        local.acquisition_consumer_role_arn,
         local.auth_rate_limit_cleanup_lambda_role_arn,
       ])
       service = "lambda.amazonaws.com"
@@ -154,7 +150,7 @@ locals {
   ]
   inline_boundary_pairing_statements = [
     for key, statement in local.boundary_pairing_statements_by_group : statement
-    if !contains(setunion(local.outbox_boundary_groups, toset(keys(local.backfill_role_boundary_groups)), toset(keys(local.source_dispatch_role_boundary_groups)), toset(["AcquisitionConsumerLambda", "CompletionConsumerLambda", "AuthRateLimitCleanupLambda", "AuthRateLimitCleanupScheduler"])), key)
+    if !contains(setunion(local.outbox_boundary_groups, toset(keys(local.backfill_role_boundary_groups)), toset(keys(local.source_dispatch_role_boundary_groups)), toset(["AuthRateLimitCleanupLambda", "AuthRateLimitCleanupScheduler"])), key)
   ]
 
   # CI が assume できるロール。name は「何をするロールか」で付ける

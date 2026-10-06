@@ -259,11 +259,6 @@ override_resource {
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-agentcore-gateway-boundary" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.completion_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-completion-consumer-lambda-boundary" }
-}
 
 run "role_creation_guards_survive_policy_relocation" {
   command = plan
