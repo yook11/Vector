@@ -1,5 +1,7 @@
 # SSM踏み台・SQS VPCE経由の再投入検証（2026-10-04 JST）
 
+> 過去の実測記録。本文の手順・ファイル名・テスト件数は検証当時のもの。検証環境と実行スクリプトは保守対象から外し、結果をここへ移した。当時のコードはGitコミット `16aaaadf35dcf68a67990d728a9e1e13f9fdffb8` の `infra/aws-test/dlq-redrive` に記録されている。
+
 ## 結論
 
 PC上でAssumeRoleした運用ロールの一時資格情報を使い、SSMトンネル → EC2 → SQS Interface endpoint経由で再投入が成功した。
@@ -32,7 +34,7 @@ IAMのSendMessageを対象キューに限定して条件を外し、キュー側
 
 現行IAMのCalledViaLast条件は、VPC内から開始する場合も障害になる。
 CalledViaLastのキュー例外で成功したため、ViaAWSServiceへ変更する必要性は今回の結果からはない。
-公開経路の前回結果は[RESULTS.md](RESULTS.md)を参照。
+公開経路の前回結果は[公開経路の実測](DLQ_PUBLIC_RESULTS.md)を参照。
 
 ## SSMの実測
 

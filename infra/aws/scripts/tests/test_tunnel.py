@@ -1,13 +1,13 @@
 import socket
 import socketserver
-import subprocess
+from pathlib import Path
+import sys
 import threading
 import unittest
-from unittest.mock import patch
 from urllib.parse import urlsplit
 
-import probe
-from tunnel import HOST, connect_proxy
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from sqs_operations.tunnel import HOST, connect_proxy  # noqa: E402
 
 
 class EchoHandler(socketserver.BaseRequestHandler):
@@ -70,39 +70,6 @@ class TunnelTests(unittest.TestCase):
                 )
                 self.assertIn(b"431", client.recv(4096))
         self.assertEqual(self.upstream.accepted, 0)
-
-    def test_sqs_proxy_cannot_be_bypassed_by_inherited_no_proxy(self):
-        completed = subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
-        with (
-            patch.dict(
-                probe.os.environ,
-                {"https_proxy": "http://untrusted:80", "no_proxy": "*"},
-            ),
-            patch.object(probe.subprocess, "run", return_value=completed) as run,
-        ):
-            probe.aws(
-                "test",
-                "sqs",
-                "get-queue-attributes",
-                proxy_url="http://127.0.0.1:18444",
-            )
-        env = run.call_args.kwargs["env"]
-        self.assertEqual(env["HTTPS_PROXY"], "http://127.0.0.1:18444")
-        self.assertEqual(env["NO_PROXY"], "")
-        self.assertNotIn("https_proxy", env)
-        self.assertNotIn("no_proxy", env)
-        self.assertNotIn("--no-verify-ssl", run.call_args.args[0])
-
-    def test_credentials_calls_cannot_use_sqs_proxy(self):
-        with patch.object(probe.subprocess, "run") as run:
-            with self.assertRaises(ValueError):
-                probe.aws(
-                    "test",
-                    "sts",
-                    "get-caller-identity",
-                    proxy_url="http://127.0.0.1:18444",
-                )
-            run.assert_not_called()
 
 
 if __name__ == "__main__":

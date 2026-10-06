@@ -3,7 +3,7 @@
 ## 作業定義
 
 - Problem: ReadOnlyで調査した本人が、固定Automationから一時踏み台を作成・利用・撤去し、限定運用ロールでDLQを再投入できるようにする。
-- Evidence: IAM・SQSキュー・VPCE・踏み台のTerraform、隔離アカウントの[既存実測](../../aws-test/dlq-redrive/VPCE_RESULTS.md)、AWS公式の[再投入権限](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html)と[SSM認可](https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-restrict-access-examples.html)。
+- Evidence: IAM・SQSキュー・VPCE・踏み台のTerraform、隔離アカウントの[既存実測](verification/DLQ_VPCE_RESULTS.md)、AWS公式の[再投入権限](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html)と[SSM認可](https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-restrict-access-examples.html)。
 - Invariants: 本番ReadOnlyだけを信頼し、最大1時間、対象5組のARN、固定SQS宛先、TLSと指定VPCE制限、EC2はSSM専用権限を維持する。
 - Non-goals: DB権限の変更、CI管理権限の拡大、アプリ変更、既存smoke全体の置き換え、Scheduler/Lambda失敗イベントの独自再投入。
 - Done: コード・手順・オフライン／隔離AWSの検証結果がレビュー可能になる。本番適用と実メッセージの再投入結果は別途記録する。
@@ -143,8 +143,18 @@ EC2がない間もInterface endpointと専用private IPv4など常設基盤は�
 
 ## 検証の区別
 
-Terraform mockとCLI単体テストはCIで実行し、AWSリソースを作成しない。
-実AWS試験は別アカウントの[DLQ検証環境](../../aws-test/dlq-redrive/README.md)でダミーだけを使用する。[運用構成の実測結果](../../aws-test/dlq-redrive/OPERATIONS_RESULTS.md)を参照。
-本番適用、本番ReadOnlyの入口、本番Consumerの処理成功はそれぞれ別の証拠として記録する。
+CIの`Terraform / operations tests`ではAWSリソースを作成せず、本番コードの次の重要な条件を検証する。
 
-固定Automationの追加検証は[隔離環境](../../aws-test/bastion-automation/README.md)と[実測結果](../../aws-test/bastion-automation/RESULTS.md)を参照する。
+- Terraform mock: 固定起動設定、許可する操作と対象、SSM・SQS・DBの接続境界。
+- Python単体: 対象外操作と重複実行の拒否、既存機・後継機の誤削除防止、結果不明時の再試行抑止、失敗時のID保持と接続の後片付け。
+- ローカルソケット試験: SQSだけへのCONNECT許可、他の宛先・HTTPメソッド・過大なヘッダーの拒否、TLSのバイト列を変更しない転送。
+
+実AWS検証は別アカウントのダミー資源で実施し、検証資源を撤去済み。単発検証のTerraform環境・実行スクリプト・それら専用のテストは維持せず、実測結果と制約を残す。
+
+- [公開経路での権限比較](verification/DLQ_PUBLIC_RESULTS.md)
+- [VPCエンドポイント経由の権限比較](verification/DLQ_VPCE_RESULTS.md)
+- [運用ロール・固定トンネル・DLQ操作](verification/DLQ_OPERATIONS_RESULTS.md)
+- [固定Automationによる作成・撤去](verification/BASTION_AUTOMATION_RESULTS.md)
+
+IAM・通信経路・作成撤去処理を変更した際は、PR作成前に影響する成功条件と拒否条件を別アカウントで再確認し、実施日・対象コード・結果・残存資源の確認を記録する。過去の実測は変更後のAWS動作を保証しない。
+本番適用、本番ReadOnlyの入口、本番Consumerの処理成功はそれぞれ別の証拠として記録する。

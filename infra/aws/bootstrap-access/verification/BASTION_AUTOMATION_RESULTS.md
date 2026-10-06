@@ -1,5 +1,7 @@
 # 固定SSM Automationの実測結果
 
+> 過去の実測記録。本文の手順・ファイル名・テスト件数は検証当時のもの。検証環境と実行スクリプトは保守対象から外し、結果をここへ移した。当時のコードはGitコミット `16aaaadf35dcf68a67990d728a9e1e13f9fdffb8` の `infra/aws-test/bastion-automation` に記録されている。
+
 ## 検証対象
 
 - 実施日: 2026-10-06（日本時間）。別アカウント `733360597472`、東京。
@@ -105,6 +107,6 @@
 5. Interactiveは開始自体をIAMで拒否した証拠ではない。実行を進める権限がないためEC2操作は起きない。終了は開始者と同じidentityが必要だったため、テストの当該実行だけにStopAutomationExecutionを一時許可し、同じrole session nameの資格情報を更新してCancelした。権限解除を確認済み。本番ポリシーには追加していない。
 6. EC2 DescribeとGetAutomationExecutionの参照範囲は同一アカウント・東京。CLIは固定runbookの必要なID・状態だけを表示するが、CLIの表示制限はIAM境界ではない。
 7. destroyのSSM接続確認と直後の新規接続は原子的な排他ではない。撤去前に作業終了を揃える。自動的な時間制限や強制撤去は追加していない。
-8. 初回の本番state移管・既存IAM import・本番planは未実施。[初回移行手順](../../aws/bootstrap-access/BASTION_MIGRATION.md)に従い、実リソースと両stateを照合して別途行う。
+8. 初回の本番state移管・既存IAM import・本番planは未実施。[初回移行手順](../BASTION_MIGRATION.md)に従い、実リソースと両stateを照合して別途行う。
 
 [AWSの数値版制限](https://docs.aws.amazon.com/systems-manager/latest/userguide/automation-setup-identity-based-policies.html#automation-setup-identity-based-policies-example2)と[Interactive実行仕様](https://docs.aws.amazon.com/systems-manager/latest/userguide/automation-working-executing-manually.html)を参照した。上記の拒否・成功結果は文書からの推測ではなく、このfixtureでの実測である。
