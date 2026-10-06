@@ -349,13 +349,10 @@ data "aws_iam_policy_document" "ecs_tasks_trust" {
 resource "aws_iam_role" "task" {
   for_each = local.services
 
-  name               = "${var.name_prefix}-${each.key}-task"
-  path               = "/${var.name_prefix}/"
-  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_trust.json
-
-  # agent サービスだけ天井が違う。この task role だけが web search の gateway を呼ぶ
-  # (agent.tf の aws_iam_role_policy.agentcore_gateway_invoke)。
-  permissions_boundary = local.boundary_arns[each.key == "agent" ? "agent-task" : "task"]
+  name                 = "${var.name_prefix}-${each.key}-task"
+  path                 = "/${var.name_prefix}/"
+  assume_role_policy   = data.aws_iam_policy_document.ecs_tasks_trust.json
+  permissions_boundary = local.boundary_arns["${each.key}-task"]
 }
 
 resource "aws_iam_role_policy" "task" {

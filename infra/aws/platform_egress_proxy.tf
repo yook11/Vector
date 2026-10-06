@@ -83,7 +83,7 @@ resource "aws_iam_role" "proxy_task" {
   name                 = "${var.name_prefix}-proxy-task"
   path                 = "/${var.name_prefix}/"
   assume_role_policy   = data.aws_iam_policy_document.ecs_tasks_trust.json
-  permissions_boundary = local.boundary_arns["task"]
+  permissions_boundary = local.boundary_arns["proxy-task"]
 }
 
 resource "aws_iam_role" "proxy_exec" {
