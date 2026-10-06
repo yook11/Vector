@@ -10,8 +10,12 @@ locals {
   # 名前を変えるときは bootstrap 側と両方直す (不一致なら apply が NoSuchEntity で落ちる)。
   boundary_arns = {
     for kind in [
-      "task",
+      "frontend-task",
+      "api-task",
+      "scheduler-task",
+      "insights-task",
       "agent-task",
+      "proxy-task",
       "execution",
       "migration-task",
       "migration-execution",
