@@ -117,7 +117,7 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
       },
       {
         Effect    = "Allow"
-        Principal = { AWS = [aws_iam_role.completion_consumer.arn, aws_iam_role.article_fetch.arn] }
+        Principal = { AWS = aws_iam_role.article_fetch.arn }
         Action    = "sqs:ChangeMessageVisibility"
         Resource  = aws_sqs_queue.outbox["completion"].arn
       },

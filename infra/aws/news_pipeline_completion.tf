@@ -1,10 +1,6 @@
 locals {
   completion_consumer_name = "${var.name_prefix}-completion-consumer"
   completion_consumer_arn  = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.completion_consumer_name}"
-  completion_consumer_eni_actions = [
-    "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
-    "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
-  ]
 }
 
 resource "aws_sqs_queue" "completion_dlq" {
@@ -94,61 +90,6 @@ resource "aws_vpc_security_group_ingress_rule" "sqs_from_completion_consumer" {
 resource "aws_cloudwatch_log_group" "completion_consumer" {
   name              = "/aws/lambda/${local.completion_consumer_name}"
   retention_in_days = var.log_retention_days
-}
-
-resource "aws_iam_role" "completion_consumer" {
-  name                 = "${local.completion_consumer_name}-lambda"
-  path                 = "/${var.name_prefix}/"
-  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.completion_consumer_name}-lambda-boundary"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "completion_consumer" {
-  name = "completion-consumer"
-  role = aws_iam_role.completion_consumer.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ConsumeCompletionEvents"
-        Effect   = "Allow"
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]
-        Resource = aws_sqs_queue.outbox["completion"].arn
-      },
-      {
-        Sid      = "RdsIamAuthAsCollect"
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_collect"
-      },
-      {
-        Sid      = "WriteConsumerLogs"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "${aws_cloudwatch_log_group.completion_consumer.arn}:*"
-      },
-      {
-        Sid      = "ManageLambdaNetworkInterfaces"
-        Effect   = "Allow"
-        Action   = local.completion_consumer_eni_actions
-        Resource = "*"
-      },
-      {
-        Sid       = "DenyEniOperationsFromFunctionCode"
-        Effect    = "Deny"
-        Action    = local.completion_consumer_eni_actions
-        Resource  = "*"
-        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.completion_consumer_arn } }
-      },
-    ]
-  })
 }
 
 # CloudWatch Logsと既存EMFを使い、X-Rayは追加しない。

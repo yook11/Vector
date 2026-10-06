@@ -263,10 +263,6 @@ output "completion_consumer_security_group_id" {
   value = aws_security_group.completion_consumer.id
 }
 
-output "completion_consumer_role_arn" {
-  value = aws_iam_role.completion_consumer.arn
-}
-
 output "completion_consumer_log_group_name" {
   value = aws_cloudwatch_log_group.completion_consumer.name
 }

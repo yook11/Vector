@@ -1,10 +1,6 @@
 locals {
   acquisition_consumer_name = "${var.name_prefix}-acquisition-consumer"
   acquisition_consumer_arn  = "arn:aws:lambda:${var.region}:${local.account_id}:function:${local.acquisition_consumer_name}"
-  acquisition_consumer_eni_actions = [
-    "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
-    "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
-  ]
 }
 
 resource "aws_sqs_queue" "acquisition_dlq" {
@@ -78,61 +74,6 @@ resource "aws_vpc_security_group_ingress_rule" "proxy_from_acquisition_consumer"
 resource "aws_cloudwatch_log_group" "acquisition_consumer" {
   name              = "/aws/lambda/${local.acquisition_consumer_name}"
   retention_in_days = var.log_retention_days
-}
-
-resource "aws_iam_role" "acquisition_consumer" {
-  name                 = "${local.acquisition_consumer_name}-lambda"
-  path                 = "/${var.name_prefix}/"
-  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.acquisition_consumer_name}-lambda-boundary"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "acquisition_consumer" {
-  name = "acquisition-consumer"
-  role = aws_iam_role.acquisition_consumer.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ConsumeAcquisitionEvents"
-        Effect   = "Allow"
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-        Resource = aws_sqs_queue.source_dispatch["acquisition"].arn
-      },
-      {
-        Sid      = "RdsIamAuthAsCollect"
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/vector_collect"
-      },
-      {
-        Sid      = "WriteConsumerLogs"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "${aws_cloudwatch_log_group.acquisition_consumer.arn}:*"
-      },
-      {
-        Sid      = "ManageLambdaNetworkInterfaces"
-        Effect   = "Allow"
-        Action   = local.acquisition_consumer_eni_actions
-        Resource = "*"
-      },
-      {
-        Sid       = "DenyEniOperationsFromFunctionCode"
-        Effect    = "Deny"
-        Action    = local.acquisition_consumer_eni_actions
-        Resource  = "*"
-        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.acquisition_consumer_arn } }
-      },
-    ]
-  })
 }
 
 # CloudWatch Logsと既存EMFを使い、X-Rayは追加しない。

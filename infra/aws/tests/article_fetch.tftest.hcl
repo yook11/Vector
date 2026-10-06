@@ -75,12 +75,6 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_role.completion_consumer
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-consumer-lambda" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_sqs_queue.source_dispatch["acquisition"]
   values          = { arn = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-source-acquisition" }
 }
@@ -157,21 +151,18 @@ run "execution_policy_allows_only_article_fetch_resources" {
   }
 }
 
-run "endpoint_lets_fetch_roles_extend_completion_visibility" {
+run "endpoint_lets_fetch_role_extend_completion_visibility" {
   command = plan
   assert {
     condition = [
       for s in jsondecode(aws_vpc_endpoint.outbox_sqs.policy).Statement : s
       if s.Action == "sqs:ChangeMessageVisibility"
       ] == [{
-        Effect = "Allow"
-        Principal = { AWS = [
-          "arn:aws:iam::123456789012:role/slice-test/slice-test-completion-consumer-lambda",
-          "arn:aws:iam::123456789012:role/slice-test/slice-test-article-fetch-lambda",
-        ] }
-        Action   = "sqs:ChangeMessageVisibility"
-        Resource = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-completion"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::123456789012:role/slice-test/slice-test-article-fetch-lambda" }
+        Action    = "sqs:ChangeMessageVisibility"
+        Resource  = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-completion"
     }]
-    error_message = "切替中も補完の再配信待機が止まらないよう、endpointは旧ロールと共通ロールの両方に補完キューの可視性変更だけを許可する。"
+    error_message = "endpointは共通ロールに補完キューの可視性変更だけを許可する。"
   }
 }
