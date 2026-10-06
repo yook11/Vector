@@ -15,7 +15,7 @@ CLI_VERSION="${BETTER_AUTH_CLI_VERSION:-1.4.22}"
 
 cd "$(dirname "$0")/.."
 
-echo "==> 1/5 db を起動 (init script で vector_auth / vector_app role 作成)"
+echo "==> 1/5 db を起動 (init script で application role 作成)"
 docker compose up -d --wait db
 
 echo "==> 2/5 auth schema 作成 + vector_auth に一時 CREATE 権限付与"

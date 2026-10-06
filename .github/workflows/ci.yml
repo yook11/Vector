@@ -472,10 +472,10 @@ jobs:
           --health-retries 5
 
     env:
-      # red-team AUTH-N4: application 接続は vector_app (public.* DML) / vector_auth
-      # (auth.* DML) に分離。alembic / pytest fixture は migration role (vector) で
+      # red-team AUTH-N4: backend は本番の api と同じ vector_api、frontend は vector_auth
+      # (auth.* DML) で接続する。alembic / seed は migration role (vector) で
       # 動かすため MIGRATION_DATABASE_URL を別経路で渡す。
-      DATABASE_URL: postgresql+asyncpg://vector_app:ci3333333333333333333333333333333333333333333333333333333333333333@localhost:5432/vector
+      DATABASE_URL: postgresql+asyncpg://vector_api:ci7777777777777777777777777777777777777777777777777777777777777777@localhost:5432/vector
       MIGRATION_DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
       REDIS_URL: redis://localhost:6379/0
       # frontend (Better Auth + 内部 API プロキシ)。runtime 接続は vector_auth、
@@ -493,7 +493,7 @@ jobs:
       REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
       BETTER_AUTH_SECRET: ci1111111111111111111111111111111111111111111111111111111111111111
       POSTGRES_AUTH_PASSWORD: ci2222222222222222222222222222222222222222222222222222222222222222
-      POSTGRES_APP_PASSWORD: ci3333333333333333333333333333333333333333333333333333333333333333
+      POSTGRES_API_PASSWORD: ci7777777777777777777777777777777777777777777777777777777777777777
       # vector_collect は alembic z14_grant_collect_role の GRANT 対象。role が
       # 不在だと migration が hard-fail するため、CI でも作成して password を渡す。
       POSTGRES_COLLECT_PASSWORD: ci6666666666666666666666666666666666666666666666666666666666666666
@@ -586,7 +586,8 @@ jobs:
       # (infra/db/init/01_create_app_users.sh) が docker entrypoint init で作るが、
       # GitHub Actions の service container は initdb.d を ignore するため、
       # ここで psql 経由で idempotent に role を作成する。
-      - name: Create application Postgres roles (vector_auth, vector_app, vector_collect)
+      # vector_app は migration の GRANT 先として作るだけで、どのサービスも接続しないため NOLOGIN にする。
+      - name: Create application Postgres roles (vector_auth, vector_api, vector_collect)
         env:
           PGPASSWORD: vector
         run: |
@@ -597,7 +598,7 @@ jobs:
               CREATE ROLE vector_auth WITH LOGIN PASSWORD '${{ env.POSTGRES_AUTH_PASSWORD }}';
             END IF;
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_app') THEN
-              CREATE ROLE vector_app  WITH LOGIN PASSWORD '${{ env.POSTGRES_APP_PASSWORD }}';
+              CREATE ROLE vector_app NOLOGIN;
             END IF;
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_collect') THEN
               CREATE ROLE vector_collect WITH LOGIN PASSWORD '${{ env.POSTGRES_COLLECT_PASSWORD }}';
@@ -615,7 +616,7 @@ jobs:
               CREATE ROLE vector_backfill NOLOGIN;
             END IF;
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_api') THEN
-              CREATE ROLE vector_api NOLOGIN;
+              CREATE ROLE vector_api WITH LOGIN PASSWORD '${{ env.POSTGRES_API_PASSWORD }}';
             END IF;
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_insights') THEN
               CREATE ROLE vector_insights NOLOGIN;
