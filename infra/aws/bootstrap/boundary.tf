@@ -100,14 +100,6 @@ locals {
       boundary   = aws_iam_policy.outbox_relay_scheduler_boundary.arn
       role_names = ["${var.name_prefix}-outbox-relay-scheduler"]
     }
-    CompletionConsumerLambda = {
-      boundary   = aws_iam_policy.completion_consumer_lambda_boundary.arn
-      role_names = ["${var.name_prefix}-completion-consumer-lambda"]
-    }
-    AcquisitionConsumerLambda = {
-      boundary   = aws_iam_policy.acquisition_consumer_lambda_boundary.arn
-      role_names = ["${var.name_prefix}-acquisition-consumer-lambda"]
-    }
     AuthRateLimitCleanupLambda = {
       boundary   = aws_iam_policy.auth_rate_limit_cleanup_lambda_boundary.arn
       role_names = ["${var.name_prefix}-auth-rate-limit-cleanup-lambda"]

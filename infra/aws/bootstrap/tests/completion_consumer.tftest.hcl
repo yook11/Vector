@@ -31,45 +31,20 @@ variables {
 }
 
 
-# 専用ロールは専用boundaryに固定し、既存の権限昇格拒否を維持する。
-run "completion_roles_have_specific_boundaries" {
-  command = plan
-  assert {
-    condition = (
-      local.role_boundary_groups.CompletionConsumerLambda.role_names == ["slice-test-completion-consumer-lambda"] &&
-      local.role_boundary_groups.CompletionConsumerLambda.boundary == aws_iam_policy.completion_consumer_lambda_boundary.arn &&
-      contains(jsondecode(aws_iam_policy.completion_consumer_lambda_boundary.policy).Statement, local.boundary_no_escalation_statement)
-    )
-    error_message = "Completion Consumerのロールと権限境界を対応させ、権限昇格を禁止する。"
-  }
-  assert {
-    condition = (
-      { for s in jsondecode(aws_iam_policy.completion_consumer_lambda_boundary.policy).Statement : s.Sid => s.Resource if contains(["ConsumeCompletionEvents", "RdsIamAuthAsCollect"], s.Sid) } == {
-        ConsumeCompletionEvents = "arn:aws:sqs:ap-northeast-1:123456789012:slice-test-article-completion"
-        RdsIamAuthAsCollect     = "arn:aws:rds-db:ap-northeast-1:123456789012:dbuser:*/vector_collect"
-      }
-    )
-    error_message = "Consumerの天井を補完キューとvector_collectに限定する。"
-  }
-}
-
 run "ci_limits_completion_management_to_its_function_and_tag" {
   command = plan
   assert {
     condition = (
       aws_iam_role_policy_attachment.apply_completion_consumer.role == aws_iam_role.ci["apply"].name &&
       aws_iam_role_policy_attachment.apply_completion_consumer.policy_arn == aws_iam_policy.apply_completion_consumer.arn &&
-      contains(local.managed_role_arns, local.completion_consumer_role_arn) &&
-      !contains(local.app_role_arns, local.completion_consumer_role_arn) &&
       [for s in jsondecode(aws_iam_policy.apply_completion_consumer.policy).Statement : s.Resource if s.Sid == "ManageCompletionFunction"] == [local.completion_consumer_lambda_arn] &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_completion_consumer.policy).Statement :
         !contains(["CreateCompletionMapping", "ManageCompletionMapping"], s.Sid) ? true :
         s.Condition.ArnEquals["lambda:FunctionArn"] == local.completion_consumer_lambda_arn &&
         values(s.Condition.StringEquals) == ["slice-test-completion-consumer"]
-      ]) &&
-      [for s in jsondecode(aws_iam_policy.completion_consumer_lambda_boundary.policy).Statement : s.Condition.ArnEquals["lambda:SourceFunctionArn"] if s.Sid == "DenyEniOperationsFromFunctionCode"] == [local.completion_consumer_lambda_arn]
+      ])
     )
-    error_message = "Completionの管理対象を関数・タグで限定し、関数コードからのENI操作を拒否する。"
+    error_message = "Completionの管理対象を関数・タグで限定する。"
   }
 }
 

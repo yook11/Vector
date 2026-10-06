@@ -31,11 +31,6 @@ variables {
 }
 
 # 許可表の容量を実際のARN長で測るため、全boundaryのARNを本番と同じ形にする。
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.acquisition_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-acquisition-consumer-lambda-boundary" }
-}
 
 override_resource {
   override_during = plan
@@ -121,11 +116,6 @@ override_resource {
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-chatbot-boundary" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.completion_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-completion-consumer-lambda-boundary" }
-}
 
 override_resource {
   override_during = plan

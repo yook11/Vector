@@ -45,7 +45,6 @@ run "ci_manages_assessment_without_broadening_mapping_access" {
         aws_iam_policy.lambda_config_readback.policy,
         aws_iam_policy.apply_curation_consumer.policy,
         aws_iam_policy.apply_completion_consumer.policy,
-        aws_iam_policy.completion_consumer_lambda_boundary.policy,
       ] : length(policy) <= 6144]) &&
       aws_iam_role_policy_attachment.apply_assessment_consumer.role == aws_iam_role.ci["apply"].name &&
       contains(local.managed_pipeline_queue_arns, local.assessment_dlq_arn)
@@ -175,9 +174,4 @@ override_resource {
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-agentcore-gateway-boundary" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.completion_consumer_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-completion-consumer-lambda-boundary" }
-}
 

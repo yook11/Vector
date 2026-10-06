@@ -32,17 +32,12 @@ variables {
 
 
 
-run "acquisition_permissions_are_bounded" {
+run "ci_manages_only_the_acquisition_function_and_mapping" {
   command = plan
   assert {
     condition = (
-      local.role_boundary_groups["AcquisitionConsumerLambda"].boundary == aws_iam_policy.acquisition_consumer_lambda_boundary.arn &&
-      contains(local.outbox_service_roles.Lambda.arns, local.acquisition_consumer_role_arn) &&
       contains(local.lambda_config_function_arns, local.acquisition_consumer_lambda_arn) &&
       contains(local.managed_pipeline_queue_arns, local.acquisition_dlq_arn) &&
-      jsondecode(aws_iam_policy.acquisition_consumer_lambda_boundary.policy).Statement[0].Resource == local.source_dispatch_queue_arns["acquisition"] &&
-      toset(jsondecode(aws_iam_policy.acquisition_consumer_lambda_boundary.policy).Statement[0].Action) == toset(["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]) &&
-      endswith(jsondecode(aws_iam_policy.acquisition_consumer_lambda_boundary.policy).Statement[1].Resource, "/vector_collect") &&
       jsondecode(aws_iam_policy.apply_acquisition_consumer.policy).Statement[0].Resource == local.acquisition_consumer_lambda_arn &&
       alltrue([for s in jsondecode(aws_iam_policy.apply_acquisition_consumer.policy).Statement :
         !contains(["CreateAcquisitionMapping", "ManageAcquisitionMapping"], s.Sid) ? true : s.Condition.ArnEquals["lambda:FunctionArn"] == local.acquisition_consumer_lambda_arn
@@ -51,6 +46,6 @@ run "acquisition_permissions_are_bounded" {
       length(aws_iam_policy.apply_pass_role.policy) <= 6144 &&
       length(aws_iam_role_policy.apply.policy) <= 10240
     )
-    error_message = "専用境界・管理対象・PassRoleを限定し、IAM容量上限を守る。"
+    error_message = "管理対象を取得のLambdaとmappingに限定し、IAM容量上限を守る。"
   }
 }

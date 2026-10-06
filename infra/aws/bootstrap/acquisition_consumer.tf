@@ -1,54 +1,3 @@
-locals {
-  acquisition_consumer_eni_actions = [
-    "ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets",
-    "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses",
-  ]
-}
-
-resource "aws_iam_policy" "acquisition_consumer_lambda_boundary" {
-  name        = "${var.name_prefix}-acquisition-consumer-lambda-boundary"
-  path        = "/${var.name_prefix}-ci/"
-  description = "Ceiling for the acquisition consumer Lambda execution role."
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ConsumeAcquisitionEvents"
-        Effect   = "Allow"
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-        Resource = "arn:aws:sqs:${var.region}:${local.account_id}:${var.name_prefix}-source-acquisition"
-      },
-      {
-        Sid      = "RdsIamAuthAsCollect"
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:*/vector_collect"
-      },
-      {
-        Sid      = "WriteConsumerLogs"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.name_prefix}-acquisition-consumer:*"
-      },
-      {
-        Sid      = "ManageLambdaNetworkInterfaces"
-        Effect   = "Allow"
-        Action   = local.acquisition_consumer_eni_actions
-        Resource = "*"
-      },
-      {
-        Sid       = "DenyEniOperationsFromFunctionCode"
-        Effect    = "Deny"
-        Action    = local.acquisition_consumer_eni_actions
-        Resource  = "*"
-        Condition = { ArnEquals = { "lambda:SourceFunctionArn" = local.acquisition_consumer_lambda_arn } }
-      },
-      local.boundary_no_escalation_statement,
-    ]
-  })
-}
-
 resource "aws_iam_policy" "apply_acquisition_consumer" {
   name        = "${var.name_prefix}-ci-apply-acquisition-consumer"
   path        = "/${var.name_prefix}-ci/"
@@ -56,7 +5,7 @@ resource "aws_iam_policy" "apply_acquisition_consumer" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = concat([
+    Statement = [
       {
         Sid    = "ManageAcquisitionFunction"
         Effect = "Allow"
@@ -119,7 +68,7 @@ resource "aws_iam_policy" "apply_acquisition_consumer" {
           "ForAllValues:StringEquals" = { "aws:TagKeys" = ["Project", "ManagedBy"] }
         }
       },
-    ], [local.boundary_pairing_statements_by_group["AcquisitionConsumerLambda"]])
+    ]
   })
 }
 

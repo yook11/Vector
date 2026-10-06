@@ -215,8 +215,6 @@ run "passrole_allows_only_pipeline_lambda_roles" {
         toset(s.NotResource) == toset([
           "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-lambda",
           local.source_dispatch_lambda_role_arn,
-          local.completion_consumer_role_arn,
-          local.acquisition_consumer_role_arn,
           local.auth_rate_limit_cleanup_lambda_role_arn,
           "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-lambda",
           "arn:aws:iam::123456789012:role/slice-test/slice-test-article-analysis-lambda",
@@ -228,8 +226,6 @@ run "passrole_allows_only_pipeline_lambda_roles" {
         toset(s.Resource) == toset([
           "arn:aws:iam::123456789012:role/slice-test/slice-test-outbox-relay-lambda",
           local.source_dispatch_lambda_role_arn,
-          local.completion_consumer_role_arn,
-          local.acquisition_consumer_role_arn,
           local.auth_rate_limit_cleanup_lambda_role_arn,
           "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-lambda",
           "arn:aws:iam::123456789012:role/slice-test/slice-test-article-analysis-lambda",
