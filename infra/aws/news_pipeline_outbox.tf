@@ -125,7 +125,7 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
         Effect    = "Allow"
         Principal = { AWS = aws_iam_role.backfill.arn }
         Action    = "sqs:SendMessage"
-        Resource  = [for stage in keys(local.backfill_stages) : aws_sqs_queue.outbox[stage].arn]
+        Resource  = [for stage in local.backfill_stages : aws_sqs_queue.outbox[stage].arn]
       },
     ])
   })
