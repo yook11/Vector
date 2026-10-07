@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-import httpx2
 import structlog
 
 from app.collection.article_acquisition.reader.read_errors import (
@@ -16,11 +15,8 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseReason,
 )
 from app.collection.article_acquisition.tools.source_http import get_source_response
-from app.http.external import make_external_async_client
 
 logger = structlog.get_logger(__name__)
-
-_HTTP_TIMEOUT = httpx2.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 # JATS prefix (<jats:p>) と HTML tag を一括で剥がす
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -167,27 +163,26 @@ class CrossrefReader:
             "order": "desc",
         }
 
-        async with make_external_async_client(
-            headers={"User-Agent": self._user_agent, "Accept": "application/json"},
-            timeout=_HTTP_TIMEOUT,
-        ) as client:
-            response = await get_source_response(
-                client, self._endpoint_url, params=params
-            )
+        response = await get_source_response(
+            self._endpoint_url,
+            params=params,
+            accept="application/json",
+            user_agent=self._user_agent,
+        )
 
-            if not response.content.strip():
-                raise UnreadableResponseError(
-                    reason=UnreadableResponseReason.EMPTY_BODY,
-                    response_format="json",
-                )
-            try:
-                data = json.loads(response.content)
-            except json.JSONDecodeError as e:
-                raise UnreadableResponseError(
-                    reason=UnreadableResponseReason.MALFORMED_CONTENT,
-                    response_format="json",
-                    parser_position=f"{e.lineno}:{e.colno}",
-                ) from e
+        if not response.content.strip():
+            raise UnreadableResponseError(
+                reason=UnreadableResponseReason.EMPTY_BODY,
+                response_format="json",
+            )
+        try:
+            data = json.loads(response.content)
+        except json.JSONDecodeError as e:
+            raise UnreadableResponseError(
+                reason=UnreadableResponseReason.MALFORMED_CONTENT,
+                response_format="json",
+                parser_position=f"{e.lineno}:{e.colno}",
+            ) from e
 
         # envelope shape を確定してから抽出 (接続成功でも構造化できなければ
         # read 失敗。absent key は寛容に空へ、present だが型違いは unreadable)。

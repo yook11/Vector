@@ -29,7 +29,7 @@ from app.http.errors import HttpResponseError
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
-_MOD = "app.collection.article_acquisition.reader.algolia_hn_reader"
+_HTTP = "app.collection.article_acquisition.tools.source_http"
 _FIXTURE = "hacker_news_hits.json"
 
 
@@ -63,7 +63,7 @@ async def _reader_entries() -> list[HackerNewsEntry]:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         return await HackerNewsReader().search_recent_stories(
             source_name="hn-reader-contract",
             min_points=0,
@@ -95,7 +95,7 @@ async def _raise_through(status_code: int) -> None:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         await HackerNewsReader().search_recent_stories(
             source_name="hn-reader-contract",
             min_points=0,
@@ -122,7 +122,7 @@ async def _fetch_body(content: bytes) -> list[HackerNewsEntry]:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         return await HackerNewsReader().search_recent_stories(
             source_name="hn-reader-contract",
             min_points=0,

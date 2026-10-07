@@ -9,11 +9,11 @@ from local_tests.http import StubHttp
 
 @pytest.fixture
 def rss_response(monkeypatch):
-    from app.collection.article_acquisition.reader import rss_reader
+    from app.collection.article_acquisition.tools import source_http
 
     response = AsyncMock()
     http = StubHttp(response)
-    monkeypatch.setattr(rss_reader, "make_external_async_client", http.create_client)
+    monkeypatch.setattr(source_http, "make_external_async_client", http.create_client)
     return response
 
 

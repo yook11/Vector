@@ -40,7 +40,7 @@ from app.http.errors import HttpResponseError
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
 # SitemapReader は RawHttpClient を wrap するため transport seam は
 # raw_http_client モジュールに在る (普遍オラクルと同じ patch 対象)。
-_MOD = "app.collection.article_acquisition.tools.raw_http_client"
+_HTTP = "app.collection.article_acquisition.tools.source_http"
 _FIXTURE = "anthropic_sitemap.xml"
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 _URL = "https://www.anthropic.com/sitemap.xml"
@@ -72,7 +72,7 @@ async def _reader_entries(content: bytes) -> list[SitemapEntry]:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         return await SitemapReader().fetch(
             url=_URL, source_name="sitemap-reader-contract"
         )
@@ -129,7 +129,7 @@ async def _raise_through(status_code: int) -> None:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         await SitemapReader().fetch(url=_URL, source_name="sitemap-reader-contract")
 
 
