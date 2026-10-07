@@ -166,11 +166,11 @@ override_resource {
   values          = { id = "sg-00000000000000010" }
 }
 
-run "first_deployment_enables_all_four_stages" {
+run "first_deployment_places_all_four_stages" {
   command = plan
   assert {
-    condition     = toset(keys(aws_lambda_function.backfill)) == toset(["curation", "assessment", "embedding", "completion"]) && alltrue([for schedule in aws_scheduler_schedule.backfill : schedule.state == "ENABLED"])
-    error_message = "4工程の初回配置は全工程を有効にする。"
+    condition     = toset(keys(aws_lambda_function.backfill)) == toset(["curation", "assessment", "embedding", "completion"])
+    error_message = "4工程のLambdaを配置する。"
   }
   assert {
     condition = alltrue([for stage, function in aws_lambda_function.backfill :
@@ -190,15 +190,13 @@ run "first_deployment_enables_all_four_stages" {
   }
 }
 
-run "scheduled_invocations_keep_offsets_and_target_pairings" {
+run "only_completion_is_scheduled" {
   command = plan
   assert {
     condition = { for stage, schedule in aws_scheduler_schedule.backfill : stage => schedule.schedule_expression } == {
-      curation   = "cron(0,30 * * * ? *)"
-      assessment = "cron(5,35 * * * ? *)"
-      embedding  = "cron(10,40 * * * ? *)"
       completion = "cron(15,45 * * * ? *)"
       } && alltrue([for stage, schedule in aws_scheduler_schedule.backfill :
+        schedule.state == "ENABLED" &&
         schedule.schedule_expression_timezone == "UTC" &&
         schedule.flexible_time_window[0].mode == "OFF" &&
         schedule.target[0].input == "{}" &&
@@ -206,21 +204,22 @@ run "scheduled_invocations_keep_offsets_and_target_pairings" {
         schedule.target[0].role_arn == aws_iam_role.backfill_scheduler.arn &&
         schedule.group_name == aws_scheduler_schedule_group.backfill.name
     ]) && aws_scheduler_schedule_group.backfill.name == "slice-test-backfill"
-    error_message = "UTCで30分間隔と工程別offsetを保ち、共通groupと共通Schedulerロールで対応するLambdaを起動する。"
+    error_message = "定期起動は補完だけとし、UTCの30分間隔で、共通groupと共通Schedulerロールから補完のLambdaを起動する。"
   }
 }
 
 run "both_retry_layers_expire_after_sixty_seconds_without_error_retries" {
   command = plan
   assert {
-    condition = alltrue([for stage, schedule in aws_scheduler_schedule.backfill :
+    condition = alltrue([for schedule in aws_scheduler_schedule.backfill :
       schedule.target[0].retry_policy[0].maximum_retry_attempts == 0 &&
       schedule.target[0].retry_policy[0].maximum_event_age_in_seconds == 60 &&
-      aws_lambda_function_event_invoke_config.backfill[stage].maximum_retry_attempts == 0 &&
-      aws_lambda_function_event_invoke_config.backfill[stage].maximum_event_age_in_seconds == 60 &&
-      aws_lambda_function_event_invoke_config.backfill[stage].function_name == aws_lambda_function.backfill[stage].function_name &&
-      length(schedule.target[0].dead_letter_config) == 0 &&
-      length(aws_lambda_function_event_invoke_config.backfill[stage].destination_config) == 0
+      length(schedule.target[0].dead_letter_config) == 0
+      ]) && alltrue([for stage, config in aws_lambda_function_event_invoke_config.backfill :
+      config.maximum_retry_attempts == 0 &&
+      config.maximum_event_age_in_seconds == 60 &&
+      config.function_name == aws_lambda_function.backfill[stage].function_name &&
+      length(config.destination_config) == 0
     ])
     error_message = "Scheduler配送とLambda関数エラーの再試行を0回・有効期間60秒にする。"
   }

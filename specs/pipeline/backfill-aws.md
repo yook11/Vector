@@ -1,6 +1,7 @@
 # 工程別backfillのAWS構成（スライス3）
 
 > 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
+> 2026-10-07: 分析3工程の定期起動を外した。「分析3工程の定期起動の停止」を参照する。
 
 ## Work Definition
 
@@ -14,9 +15,9 @@
 
 | 工程 | 関数名 | handler末尾 | UTC cron |
 |---|---|---|---|
-| curation | `${name_prefix}-curation-backfill` | `curation_handler` | `cron(0,30 * * * ? *)` |
-| assessment | `${name_prefix}-assessment-backfill` | `assessment_handler` | `cron(5,35 * * * ? *)` |
-| embedding | `${name_prefix}-embedding-backfill` | `embedding_handler` | `cron(10,40 * * * ? *)` |
+| curation | `${name_prefix}-curation-backfill` | `curation_handler` | なし |
+| assessment | `${name_prefix}-assessment-backfill` | `assessment_handler` | なし |
+| embedding | `${name_prefix}-embedding-backfill` | `embedding_handler` | なし |
 | completion | `${name_prefix}-completion-backfill` | `completion_handler` | `cron(15,45 * * * ? *)` |
 
 handlerのパッケージは `app.lambda_handlers.backfill`。backend ECRイメージをarm64・512MB・120秒・予約同時実行数1で利用する。既存relayのprivate subnetとsecurity groupを再利用し、RDSは `vector_backfill` のIAM認証、自工程のSQS送信だけを許可する。環境変数はproduction、DB接続、IAM認証、自工程のキューと有効設定のみで、AWSリージョンはLambdaの標準環境変数を使用する。
@@ -64,6 +65,21 @@ CIの既存Terraform検証jobで、bootstrap-access・bootstrap・本体のbacke
 5. 問題があれば対象工程を `disabled` にして旧経路を継続する。
 
 カスタムmetric送信設定と旧経路の撤去は実環境確認後の別スライスとする。
+
+## 分析3工程の定期起動の停止（2026-10-07）
+
+- **Problem**: curation・投資判定・embeddingのbackfillは、Taskiqで再試行を使い切った記事を拾うために入れた。今は失敗した記事がSQSのDLQに残るため、定期起動は次の無駄だけを生んでいる。再試行しないと決めた記事を7日間送り直す。通常の再配信と重なってAIを重ねて呼ぶ。原因が直らないまま送り直した複製がDLQに溜まる。
+- **Evidence**: 2026-09-14〜10-06の送り直しはcuration 3,200件・投資判定4,003件・embedding 71件で、10/3以降は0件だった。本文上限超過の1記事を420回送り直した。DeepSeek残高不足の3日間は4,003件を送り直し、失敗が19,912回、投資判定のDLQが3,942件増えた。応答不正の1記事は複製で95回失敗した後に成功し、複製18件がDLQに残った。Outboxの送信停止は直近30日で0件だった。
+- **Invariants**:
+  - 3工程のLambda・実行ロール・非同期実行設定・環境変数は変えず、scheduleだけを外す。
+  - 補完のbackfillは30分間隔の定期起動を続ける。
+  - Consumer・relay・DB・backfill本体のコードは変えない。
+- **Non-goals**: backfill本体とLambdaの撤去、DLQアラームの削除、分析Consumerの呼び出し回数のアラーム、Outboxの再開操作、IAM・boundary・bootstrapの変更、補完のbackfillの変更。
+- **Done**: 補完のscheduleだけを残す構成をTerraformで定義し、mockテストで確かめる。適用後、3工程のbackfillの定期起動が止まり、補完のbackfillが動き続けていることを確認する。
+
+### 止まった記事の扱い
+
+- Consumerで失敗が続いた記事はDLQに残る。原因を直したあと、DLQのredriveで元のキューへ戻す。DLQのメッセージは最初の送信から14日で消える。
 
 ## 一次資料
 

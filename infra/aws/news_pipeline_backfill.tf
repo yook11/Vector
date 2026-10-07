@@ -1,19 +1,10 @@
 locals {
-  backfill_stages = {
-    curation = {
-      schedule = "cron(0,30 * * * ? *)"
-    }
-    assessment = {
-      schedule = "cron(5,35 * * * ? *)"
-    }
-    embedding = {
-      schedule = "cron(10,40 * * * ? *)"
-    }
-    completion = {
-      schedule = "cron(15,45 * * * ? *)"
-    }
+  backfill_stages = toset(["curation", "assessment", "embedding", "completion"])
+  # 分析3工程は失敗した記事をDLQからredriveで戻すため、定期起動するのは補完だけにする。
+  backfill_schedules = {
+    completion = "cron(15,45 * * * ? *)"
   }
-  backfill_names = { for stage in keys(local.backfill_stages) : stage => "${var.name_prefix}-${stage}-backfill" }
+  backfill_names = { for stage in local.backfill_stages : stage => "${var.name_prefix}-${stage}-backfill" }
   backfill_arns  = { for stage, name in local.backfill_names : stage => "arn:aws:lambda:${var.region}:${local.account_id}:function:${name}" }
   # 救済(backfill)は段共通のロールで動く。段を足すときは backfill_stages に加えるだけで、ロールと boundary は増えない。
   backfill_role_name = "${var.name_prefix}-backfill"
@@ -54,12 +45,12 @@ resource "aws_iam_role_policy" "backfill" {
       {
         Effect   = "Allow"
         Action   = "sqs:SendMessage"
-        Resource = [for stage in keys(local.backfill_stages) : aws_sqs_queue.outbox[stage].arn]
+        Resource = [for stage in local.backfill_stages : aws_sqs_queue.outbox[stage].arn]
       },
       {
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = [for stage in keys(local.backfill_stages) : "${aws_cloudwatch_log_group.backfill[stage].arn}:*"]
+        Resource = [for stage in local.backfill_stages : "${aws_cloudwatch_log_group.backfill[stage].arn}:*"]
       },
       {
         Effect   = "Allow"
@@ -164,12 +155,12 @@ resource "aws_iam_role_policy" "backfill_scheduler" {
 }
 
 resource "aws_scheduler_schedule" "backfill" {
-  for_each = local.backfill_stages
+  for_each = local.backfill_schedules
 
   name                         = local.backfill_names[each.key]
   group_name                   = aws_scheduler_schedule_group.backfill.name
   state                        = "ENABLED"
-  schedule_expression          = each.value.schedule
+  schedule_expression          = each.value
   schedule_expression_timezone = "UTC"
 
   flexible_time_window {

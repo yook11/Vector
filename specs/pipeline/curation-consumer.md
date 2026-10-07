@@ -111,7 +111,7 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 - 分類関数は後処理の外で呼び、必ずどちらかを返す。Consumerは失敗の後処理（監査・計測・枯渇通知）のあとに判断をそのまま返し、後処理の通常の障害で判断を変えない。分類関数そのものが例外を出した場合は、その例外が伝播して再配信になる。
 - 失敗の監査には、工程がとった扱いを`failure_action`（`retry`／`no_retry`）として記録し、`retryability`は記録しない。監査上の分類から扱いを導出しない。
 - Lambda入口は、`Retry*`とConsumerから伝播した例外のmessageIdだけを`batchItemFailures`へ含め、`Retry*`の記録は例外と同じにする。`NoRetry*`の失敗はログに`code`と、AIの失敗なら`failure_reason`を残す。ConsumerからSQSの削除APIを呼ばない。
-- backfillは未完了の記事を再投入するため、受信完了にした記事も作成から7日間はbackfill経由で再試行される。backfillの対象から外すことは扱わない。
+- 受信完了にした記事は再投入しない。分析3工程のbackfillは定期起動しない（[工程別backfillのAWS構成](./backfill-aws.md)）。
 
 ## Curationの処理完了と受信完了
 
