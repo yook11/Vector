@@ -394,7 +394,7 @@ Invariants: 既存Embeddingの資源アドレスと入口を維持する。Asses
 Non-goals: AWSへのapply、秘密値の登録、実AWSスモーク、Taskiq停止、DB schema・権限の変更。
 Done: Consumer・relay・SQS/DLQ・IAM・ネットワーク・CIの定義が接続され、fmt・validate・モックproviderのplanテストと関連スクリプトの検証が通ること。
 
-設定はEmbeddingを基準とする。Consumerはarm64・1,024MB・120秒・予約同時実行10、SQS受信は1件・待機窓0秒・最大同時実行10・ReportBatchItemFailuresを使う。業務上限60秒は変更しない。元キューは保持4日・可視性720秒・5回で専用DLQへ移動し、DLQは14日保持・既存SNSへの滞留通知を使う。専用relayは512MB・120秒・予約同時実行1・1分間隔とする。
+設定はEmbeddingを基準とする。Consumerはarm64・1,024MB・120秒・予約同時実行10、SQS受信は1件・待機窓0秒・最大同時実行10・ReportBatchItemFailuresを使う。業務上限60秒は変更しない。元キューは保持4日・可視性720秒・5回で専用DLQへ移動し、DLQは14日保持とする。通知は元キューの処理停止で行う（[CloudWatchアラート](../observability/cloudwatch-alerting.md)）。専用relayは512MB・120秒・予約同時実行1・1分間隔とする。
 
 DeepSeekキーの参照先は`/<prefix>/assessment-consumer/deepseek-api-key`とし、Terraformは秘密値を作成・保持しない。Consumer用private subnetは既存と重複しないindex 29を使い、RDS・SSM・DeepSeek専用proxy経路へ接続する。relayは既存relayのDB・SQS向けネットワークを共有し、専用実行ロールとSchedulerロールを持つ。
 

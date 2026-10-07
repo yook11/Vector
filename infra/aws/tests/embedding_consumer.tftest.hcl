@@ -174,26 +174,28 @@ run "consumer_network_is_private_and_gemini_only" {
   }
 }
 
-run "dlq_notification_without_consumer_activation" {
+run "stall_notification_uses_sent_and_deleted_counts" {
   command = plan
 
   assert {
     condition = (
       aws_cloudwatch_log_group.embedding_consumer.retention_in_days == var.log_retention_days &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.namespace == "AWS/SQS" &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.metric_name == "ApproximateNumberOfMessagesVisible" &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.dimensions.QueueName == aws_sqs_queue.embedding_dlq.name &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.statistic == "Maximum" &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.period == 60 &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.evaluation_periods == 1 &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.datapoints_to_alarm == 1 &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.threshold == 1 &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.comparison_operator == "GreaterThanOrEqualToThreshold" &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.treat_missing_data == "notBreaching" &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.alarm_actions == toset([aws_sns_topic.alerts.arn]) &&
-      aws_cloudwatch_metric_alarm.embedding_dlq_not_empty.ok_actions == toset([aws_sns_topic.alerts.arn])
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].alarm_name == "${local.embedding_consumer_name}-stalled" &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].threshold == 1 &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].comparison_operator == "GreaterThanOrEqualToThreshold" &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].evaluation_periods == 2 &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].datapoints_to_alarm == 2 &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].treat_missing_data == "notBreaching" &&
+      toset([for query in aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].metric_query : query.metric[0].metric_name if length(query.metric) > 0]) == toset(["NumberOfMessagesSent", "NumberOfMessagesDeleted"]) &&
+      alltrue([for query in aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].metric_query : length(query.metric) == 0 ? true :
+        query.metric[0].namespace == "AWS/SQS" && query.metric[0].period == 3600 && query.metric[0].stat == "Sum" &&
+        query.metric[0].dimensions.QueueName == aws_sqs_queue.outbox["embedding"].name
+      ]) &&
+      [for query in aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].metric_query : query.expression if query.return_data == true] == ["IF(FILL(sent, 0) > 0 AND FILL(deleted, 0) == 0, 1, 0)"] &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].alarm_actions == toset([aws_sns_topic.alerts.arn]) &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["embedding"].ok_actions == toset([aws_sns_topic.alerts.arn])
     )
-    error_message = "DLQ滞留通知だけを既存SNSへ接続し、初回構築でrelayを起動しない。"
+    error_message = "元キューに届いたのに処理を終えたものが無い1時間が2時間続いたら、既存SNSへ通知する。"
   }
 }
 

@@ -128,7 +128,7 @@ bootstrapの継続更新は[専用ロールの手動手順](bootstrap-access/REA
 - サブネットはprimary AZのCIDR index 28で、既存のappルートテーブルに接続する。Consumer SGの送信先はRDS:5432、proxy:`proxy_port`、SSM endpoint:443だけ。
 - SSMの専用SGは既存SSM endpointだけに追加する。新しいNAT・endpoint・Redis経路は作らない。後続のSSMクライアント設定では、SSMのprivate endpointを外向きHTTP proxyへ送らない。
 - 元キューは保持4日・可視性720秒・受信上限5回、DLQは保持14日。StandardキューのDLQ保持期限は元の投入時刻を基準とし、元キューでの期限切れはDLQ移動ではなく削除となる。
-- `embedding-consumer-dlq-not-empty`アラームはDLQの可視メッセージが1件以上のときに既存SNS経由で通知する。Maximum・60秒・1評価期間で判定し、欠測は正常扱い。ALARM/OKへの遷移を通知し、メッセージ単位の通知・繰り返し通知は行わない。OKは原因解消や処理成功の保証ではない。
+- `embedding-consumer-stalled`アラームは、元キューに届いたのに処理を終えて消えたものが無い1時間が2時間続いたときに既存SNS経由で通知する。DLQの件数では通知しない。
 - 自動停止と自動再投入は実装しない。障害が続く場合は後続で作るSQSトリガーを手動で無効化し、原因解消後に有効化する。既存backfill holdではLambdaを停止できない。
 - DLQの手動再投入は対象・現在の記事状態を確認して行う。既存元キューの送信元endpoint制限を維持しているため、コンソールからのredriveがそのまま使えるとは扱わず、経路と操作権限を含む実行手順をスライス4で確定する。
 - Lambdaのイメージ取得、関数管理権限、SSM取得コード、メモリ、SQSトリガーはスライス3で追加する。実接続・再配信・DLQ移動・通知配送は有効化時に検証する。

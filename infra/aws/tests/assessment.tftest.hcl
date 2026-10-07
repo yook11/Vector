@@ -124,8 +124,8 @@ run "consumer_receives_assessment_queue_with_embedding_limits" {
   }
 }
 
-# 失敗メッセージは専用DLQへ移し、既存SNSで滞留を通知する。
-run "assessment_redrive_and_dlq_notification" {
+# 失敗メッセージは専用DLQへ移し、処理の停止を既存SNSで通知する。
+run "assessment_redrive_and_stall_notification" {
   command = plan
   assert {
     condition = (
@@ -138,11 +138,13 @@ run "assessment_redrive_and_dlq_notification" {
       aws_sqs_queue.assessment_dlq.message_retention_seconds == 1209600 &&
       aws_sqs_queue.assessment_dlq.sqs_managed_sse_enabled &&
       jsondecode(aws_sqs_queue_redrive_allow_policy.assessment_dlq.redrive_allow_policy).sourceQueueArns == [aws_sqs_queue.outbox["assessment"].arn] &&
-      aws_cloudwatch_metric_alarm.assessment_dlq_not_empty.dimensions.QueueName == aws_sqs_queue.assessment_dlq.name &&
-      aws_cloudwatch_metric_alarm.assessment_dlq_not_empty.threshold == 1 &&
-      aws_cloudwatch_metric_alarm.assessment_dlq_not_empty.alarm_actions == toset([aws_sns_topic.alerts.arn])
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["assessment"].alarm_name == "${local.assessment_consumer_name}-stalled" &&
+      alltrue([for query in aws_cloudwatch_metric_alarm.consumer_processing_stalled["assessment"].metric_query : length(query.metric) == 0 ? true :
+        query.metric[0].dimensions.QueueName == aws_sqs_queue.outbox["assessment"].name
+      ]) &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["assessment"].alarm_actions == toset([aws_sns_topic.alerts.arn])
     )
-    error_message = "Assessmentの再配信・専用DLQ・滞留通知を接続する。"
+    error_message = "Assessmentの再配信・専用DLQ・処理停止の通知を接続する。"
   }
 }
 

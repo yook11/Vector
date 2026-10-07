@@ -124,8 +124,8 @@ run "consumer_receives_curation_queue_with_embedding_limits" {
   }
 }
 
-# 失敗メッセージは専用DLQへ移し、既存SNSで滞留を通知する。
-run "curation_redrive_and_dlq_notification" {
+# 失敗メッセージは専用DLQへ移し、処理の停止を既存SNSで通知する。
+run "curation_redrive_and_stall_notification" {
   command = plan
   assert {
     condition = (
@@ -138,11 +138,13 @@ run "curation_redrive_and_dlq_notification" {
       aws_sqs_queue.curation_dlq.message_retention_seconds == 1209600 &&
       aws_sqs_queue.curation_dlq.sqs_managed_sse_enabled &&
       jsondecode(aws_sqs_queue_redrive_allow_policy.curation_dlq.redrive_allow_policy).sourceQueueArns == [aws_sqs_queue.outbox["curation"].arn] &&
-      aws_cloudwatch_metric_alarm.curation_dlq_not_empty.dimensions.QueueName == aws_sqs_queue.curation_dlq.name &&
-      aws_cloudwatch_metric_alarm.curation_dlq_not_empty.threshold == 1 &&
-      aws_cloudwatch_metric_alarm.curation_dlq_not_empty.alarm_actions == toset([aws_sns_topic.alerts.arn])
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["curation"].alarm_name == "${local.curation_consumer_name}-stalled" &&
+      alltrue([for query in aws_cloudwatch_metric_alarm.consumer_processing_stalled["curation"].metric_query : length(query.metric) == 0 ? true :
+        query.metric[0].dimensions.QueueName == aws_sqs_queue.outbox["curation"].name
+      ]) &&
+      aws_cloudwatch_metric_alarm.consumer_processing_stalled["curation"].alarm_actions == toset([aws_sns_topic.alerts.arn])
     )
-    error_message = "Curationの再配信・専用DLQ・滞留通知を接続する。"
+    error_message = "Curationの再配信・専用DLQ・処理停止の通知を接続する。"
   }
 }
 
