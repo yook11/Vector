@@ -159,12 +159,6 @@ override_resource {
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-source-dispatch-scheduler-boundary" }
 }
 
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.task_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-task-boundary" }
-}
-
 run "shared_role_requires_article_analysis_boundary" {
   command = plan
   assert {

@@ -172,41 +172,6 @@ resource "aws_iam_policy" "ecs_task_boundary" {
   }
 }
 
-moved {
-  from = aws_iam_policy.agent_task_boundary
-  to   = aws_iam_policy.ecs_task_boundary["agent"]
-}
-
-# 旧共通 boundary。本体で各 task role を ecs_task_boundary へ付け替えた後に撤去する。
-resource "aws_iam_policy" "task_boundary" {
-  name        = "${var.name_prefix}-task-boundary"
-  path        = "/${var.name_prefix}-ci/"
-  description = "Ceiling for ECS task roles (the credential reachable from inside the container)."
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "RdsIamAuth"
-        Effect   = "Allow"
-        Action   = "rds-db:connect"
-        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:*/*"
-      },
-      {
-        Sid    = "ElastiCacheIamAuth"
-        Effect = "Allow"
-        Action = "elasticache:Connect"
-        Resource = [
-          "arn:aws:elasticache:${var.region}:${data.aws_caller_identity.current.account_id}:replicationgroup:${var.name_prefix}-*",
-          "arn:aws:elasticache:${var.region}:${data.aws_caller_identity.current.account_id}:user:${var.name_prefix}-*",
-        ]
-      },
-      local.boundary_no_escalation_statement,
-      local.boundary_no_ecs_exec_statement,
-    ]
-  })
-}
-
 resource "aws_iam_policy" "migration_task_boundary" {
   name        = "${var.name_prefix}-migration-task-boundary"
   path        = "/${var.name_prefix}-ci/"
