@@ -64,7 +64,7 @@ from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssRe
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
 
 # transport を差し替える対象モジュール (Reader 実装の所在)。
-_MOD = "app.collection.article_acquisition.reader.rss_reader"
+_HTTP = "app.collection.article_acquisition.tools.source_http"
 
 # feed の「形」の代表。各標本が特定 property の失敗モードを実際に踏む:
 #   nist_rss.xml          RSS 2.0 / <title> に &amp;       -> 平文化を非空虚に
@@ -93,7 +93,7 @@ async def _reader_entries(fixture: str) -> list[RssEntry]:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         # parse_mode="bytes": feedparser に encoding sniff を委ね Shift_JIS も通す
         return await RssReader().fetch(
             endpoint_url="https://example.com/feed",

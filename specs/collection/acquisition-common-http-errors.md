@@ -17,12 +17,12 @@ Status: Implemented
 
 ## HTTP呼び出しの契約
 
-`get_source_response(client, url, *, params=None)`（`article_acquisition/tools/source_http.py`）が4か所のGETを担う。
+`get_source_response(url, *, params=None, accept=None, user_agent=既定値)`（`article_acquisition/tools/source_http.py`）が4か所のGETを担う。
 
 - 成功応答の本文を10MiBまで受け取り、本文と復号に使う符号化方式を返す。申告されたContent-Lengthか展開後に読んだ量が上限を超えたら受信を中断し、`ResponseSizeLimitExceededError`にする。応答受信直後・status確認前にUTCの受信時刻を記録し、非成功応答は`HttpResponseError`（status・受信時刻・生のRetry-After）にする。
 - 通信失敗は`HttpTransportError`（段階・理由）にし、元の例外を原因に残す。
 - 宛先拒否`HostBlockedError`と、通信失敗と確認できない例外は元のまま伝える。
-- clientの生成・ヘッダー・timeoutは各readerが持つ。本文の受け取りと上限はこの関数が持つ。
+- clientの生成、timeout、既定のUser-Agent、本文の受け取りと上限はこの関数が持つ。readerが渡すのは、URL・query・Accept・宛先固有のUser-Agent（Crossrefの連絡先）だけとする。
 
 ## 取得のエラー
 

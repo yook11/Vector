@@ -26,6 +26,7 @@ from app.collection.article_acquisition.reader.rss_reader import (
 from app.http.errors import HttpResponseError
 
 _MOD = "app.collection.article_acquisition.reader.rss_reader"
+_HTTP = "app.collection.article_acquisition.tools.source_http"
 
 _ENDPOINT = "https://example.com/feed.xml"
 _SOURCE = "Test Source"
@@ -103,7 +104,7 @@ def _patch_safe_client(response_or_exc: httpx2.Response | Exception) -> Any:
         ) as client:
             yield client
 
-    return patch(f"{_MOD}.make_external_async_client", _fake_safe_client)
+    return patch(f"{_HTTP}.make_external_async_client", _fake_safe_client)
 
 
 class TestNormalizeEntry:

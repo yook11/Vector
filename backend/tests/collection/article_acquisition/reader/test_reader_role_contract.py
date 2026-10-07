@@ -34,14 +34,14 @@ _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
 
 _URL = "https://example.com/feed"
 _NAME = "reader-role-contract"
+_HTTP = "app.collection.article_acquisition.tools.source_http"
 
 
 @dataclass(frozen=True)
 class _Mechanism:
-    """1 機構分の fixture、patch 対象 module、Reader 呼び出し。"""
+    """1 機構分の fixture と Reader 呼び出し。"""
 
     name: str
-    module: str  # make_external_async_client を import している = patch 対象
     fixture: str  # 録画した実 transport バイト列
     invoke: Callable[[], Awaitable[object]]
 
@@ -49,7 +49,6 @@ class _Mechanism:
 _MECHANISMS: list[_Mechanism] = [
     _Mechanism(
         name="rss",
-        module="app.collection.article_acquisition.reader.rss_reader",
         fixture="nist_rss.xml",
         invoke=lambda: RssReader().fetch(
             endpoint_url=_URL, source_name=_NAME, parse_mode="bytes"
@@ -57,7 +56,6 @@ _MECHANISMS: list[_Mechanism] = [
     ),
     _Mechanism(
         name="hacker_news",
-        module="app.collection.article_acquisition.reader.algolia_hn_reader",
         fixture="hacker_news_hits.json",
         invoke=lambda: HackerNewsReader().search_recent_stories(
             source_name=_NAME,
@@ -68,7 +66,6 @@ _MECHANISMS: list[_Mechanism] = [
     ),
     _Mechanism(
         name="crossref",
-        module="app.collection.article_acquisition.reader.crossref_reader",
         fixture="mdpi_crossref.json",
         invoke=lambda: CrossrefReader(
             contact_email="crossref-contact@example.invalid"
@@ -80,15 +77,12 @@ _MECHANISMS: list[_Mechanism] = [
         ),
     ),
     _Mechanism(
-        # SitemapReader は RawHttpClient を包むため patch 対象は raw_http_client。
         name="raw_sitemap",
-        module="app.collection.article_acquisition.tools.raw_http_client",
         fixture="anthropic_sitemap.xml",
         invoke=lambda: SitemapReader().fetch(url=_URL, source_name=_NAME),
     ),
     _Mechanism(
         name="raw_html_listing",
-        module="app.collection.article_acquisition.tools.raw_http_client",
         fixture="ornl_listing.html",
         # detail_link_xpath は Source 宣言値。fixture は ORNL の実 listing
         # なのでこの値で抽出する (HN min_points 等と同じ機構別 invoke 引数)。
@@ -142,7 +136,7 @@ async def _run(m: _Mechanism) -> object:
         ) as client:
             yield client
 
-    with patch(f"{m.module}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         return await m.invoke()
 
 

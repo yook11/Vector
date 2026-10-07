@@ -409,8 +409,8 @@ async def test_acquired_incomplete_article_reaches_completion_through_relay(
     monkeypatch,
 ):
     """取得が確定した未完成イベントを実Relay・Consumer経由で完成記事へ進める。"""
-    from app.collection.article_acquisition.reader import rss_reader
     from app.collection.article_acquisition.service import ArticleAcquisitionService
+    from app.collection.article_acquisition.tools import source_http
     from app.collection.sources.definitions.venturebeat import VentureBeatSource
     from app.lambda_handlers.outbox_relay import completion_handler
     from tests.outbox.completion_runtime import (
@@ -424,7 +424,7 @@ async def test_acquired_incomplete_article_reaches_completion_through_relay(
     <pubDate>{format_datetime(datetime.now(UTC), usegmt=True)}</pubDate></item>
     </channel></rss>"""
     monkeypatch.setattr(
-        rss_reader,
+        source_http,
         "make_external_async_client",
         lambda **kwargs: httpx2.AsyncClient(  # noqa: TID251
             transport=httpx2.MockTransport(

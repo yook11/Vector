@@ -31,7 +31,7 @@ from app.http.errors import HttpResponseError
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
-_MOD = "app.collection.article_acquisition.reader.crossref_reader"
+_HTTP = "app.collection.article_acquisition.tools.source_http"
 _FIXTURE = "mdpi_crossref.json"
 _CONTACT_EMAIL = "crossref-contact@example.invalid"
 
@@ -66,7 +66,7 @@ async def _reader_entries() -> list[CrossrefEntry]:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         return await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
@@ -99,7 +99,7 @@ async def _raise_through(status_code: int) -> None:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
@@ -126,7 +126,7 @@ async def _fetch_body(content: bytes) -> list[CrossrefEntry]:
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         return await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
@@ -212,7 +212,7 @@ async def test_reader_tools_injects_contact_without_real_network(
         ) as client:
             yield client
 
-    with patch(f"{_MOD}.make_external_async_client", _fake_safe_client):
+    with patch(f"{_HTTP}.make_external_async_client", _fake_safe_client):
         await ReaderTools().crossref.fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",

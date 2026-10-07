@@ -1,6 +1,6 @@
 """RSS / Atom / RDF feed の取得 + 正規化道具。
 
-HTTP 取得・SSRF guard・feedparser 呼び出し・error 翻訳・title 平文化を担い、
+HTTP 取得・feedparser 呼び出し・error 翻訳・title 平文化を担い、
 正規化済の ``RssEntry`` を返す。body 系 (``summary`` / ``content_encoded``) は
 raw HTML のまま返し、body picker / footer 除去等は呼び出し側の責務。
 Shift_JIS など XML 宣言で encoding を持つ feed は ``parse_mode="bytes"`` を選び
@@ -19,7 +19,6 @@ from time import struct_time
 from typing import Any, Literal
 
 import feedparser
-import httpx2
 import structlog
 
 from app.collection.article_acquisition.reader.read_errors import (
@@ -27,16 +26,10 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseReason,
 )
 from app.collection.article_acquisition.tools.source_http import get_source_response
-from app.http.external import make_external_async_client
 
 logger = structlog.get_logger(__name__)
 
 ParseMode = Literal["text", "bytes"]
-
-_DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
-)
-_DEFAULT_TIMEOUT = httpx2.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -157,10 +150,7 @@ def normalize_entry(entry: dict[str, Any]) -> RssEntry:
 
 
 class RssReader:
-    """HTTP + feedparser parse + 正規化を行う無状態クライアント。
-
-    SSRF guard 入り client を内部で組み立てる (外部注入不可)。
-    """
+    """HTTP + feedparser parse + 正規化を行う無状態クライアント。"""
 
     async def fetch(
         self,
@@ -168,8 +158,6 @@ class RssReader:
         endpoint_url: str,
         source_name: str,
         parse_mode: ParseMode = "text",
-        user_agent: str = _DEFAULT_USER_AGENT,
-        timeout: httpx2.Timeout = _DEFAULT_TIMEOUT,
     ) -> list[RssEntry]:
         """HTTP GET → feedparser → ``list[RssEntry]`` まで完結する。
 
@@ -178,12 +166,8 @@ class RssReader:
             HttpResponseError / HttpTransportError / HostBlockedError /
                 ResponseSizeLimitExceededError: 取得の失敗。
         """
-        raw = await self._fetch_raw(
-            endpoint_url=endpoint_url,
-            parse_mode=parse_mode,
-            user_agent=user_agent,
-            timeout=timeout,
-        )
+        response = await get_source_response(endpoint_url)
+        raw = response.content if parse_mode == "bytes" else response.text
         if not raw.strip():
             raise UnreadableResponseError(
                 reason=UnreadableResponseReason.EMPTY_BODY, response_format="feed"
@@ -205,18 +189,3 @@ class RssReader:
                 raise error from bozo_exception
             raise error
         return [normalize_entry(entry) for entry in feed.entries]
-
-    async def _fetch_raw(
-        self,
-        *,
-        endpoint_url: str,
-        parse_mode: ParseMode,
-        user_agent: str,
-        timeout: httpx2.Timeout,
-    ) -> str | bytes:
-        async with make_external_async_client(
-            headers={"User-Agent": user_agent},
-            timeout=timeout,
-        ) as client:
-            response = await get_source_response(client, endpoint_url)
-            return response.content if parse_mode == "bytes" else response.text

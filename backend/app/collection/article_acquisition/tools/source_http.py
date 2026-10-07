@@ -1,4 +1,4 @@
-"""取得先へのGETで、本文を上限内で受け取り、非成功応答と通信失敗を共通HTTPエラーとして伝える。"""
+"""取得先へのGETの接続設定と本文の上限を1か所で持ち、失敗を共通HTTPエラーとして伝える。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,10 @@ from app.http.error_mapping import (
     http_response_error_from_exception,
     http_transport_error_from_exception,
 )
+from app.http.external import make_external_async_client
 
+_USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
+_TIMEOUT = httpx2.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 # 正常な応答より十分大きく、異常な応答だけを拒む上限。
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 _CHUNK_BYTES = 64 * 1024
@@ -35,30 +38,35 @@ class SourceResponse:
 
 
 async def get_source_response(
-    client: httpx2.AsyncClient,  # noqa: TID251
     url: str,
     *,
     params: Mapping[str, str | int] | None = None,
+    accept: str | None = None,
+    user_agent: str = _USER_AGENT,
 ) -> SourceResponse:
     """成功応答の本文を返し、宛先拒否と通信失敗と確認できない例外は元のまま伝える。"""
-    try:
-        async with client.stream("GET", url, params=params) as response:
-            received_at = datetime.now(UTC)
-            try:
-                response.raise_for_status()
-            except httpx2.HTTPStatusError as exc:
-                raise http_response_error_from_exception(
-                    exc, received_at=received_at
-                ) from exc
-            return SourceResponse(
-                content=await _read_body(response),
-                encoding=response.encoding or "utf-8",
-            )
-    except (httpx2.HTTPError, HostResolutionError) as exc:
-        mapped = http_transport_error_from_exception(exc)
-        if mapped is None:
-            raise
-        raise mapped from exc
+    headers = {"User-Agent": user_agent}
+    if accept is not None:
+        headers["Accept"] = accept
+    async with make_external_async_client(headers=headers, timeout=_TIMEOUT) as client:
+        try:
+            async with client.stream("GET", url, params=params) as response:
+                received_at = datetime.now(UTC)
+                try:
+                    response.raise_for_status()
+                except httpx2.HTTPStatusError as exc:
+                    raise http_response_error_from_exception(
+                        exc, received_at=received_at
+                    ) from exc
+                return SourceResponse(
+                    content=await _read_body(response),
+                    encoding=response.encoding or "utf-8",
+                )
+        except (httpx2.HTTPError, HostResolutionError) as exc:
+            mapped = http_transport_error_from_exception(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
 
 
 async def _read_body(response: httpx2.Response) -> bytes:
