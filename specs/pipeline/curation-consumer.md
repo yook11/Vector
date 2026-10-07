@@ -330,7 +330,7 @@ Problemは、実装済みのCuration Consumerとrelayを既存GitHub ActionsのT
 | Consumer | `${name_prefix}-curation-consumer`、arm64、1,024MB、120秒、予約同時実行10、`app.lambda_handlers.curation.handler.handler` |
 | relay | `${name_prefix}-curation-outbox-relay`、arm64、512MB、120秒、予約同時実行1、`app.lambda_handlers.outbox_relay.curation_handler` |
 | 元キュー | 既存`outbox["curation"]`を維持、保持4日、可視性720秒、maxReceiveCount=5 |
-| DLQ | `${name_prefix}-article-curation-dlq`、保持14日、元キューだけのredriveを許可、可視メッセージ1件以上で既存SNSへ通知 |
+| DLQ | `${name_prefix}-article-curation-dlq`、保持14日、元キューだけのredriveを許可。通知は元キューの処理停止で行う（[CloudWatchアラート](../observability/cloudwatch-alerting.md)） |
 | 受信 | バッチ1、待機0秒、最大同時実行10、`ReportBatchItemFailures` |
 | Scheduler | 専用グループ・実行ロール、1分間隔 |
 

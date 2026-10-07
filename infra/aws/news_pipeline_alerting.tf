@@ -141,6 +141,57 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_failure_rate" {
   }
 }
 
+# --- 分析Consumerの処理停止 ---------------------------------------------------
+#
+# 元キューにメッセージが届いたのに処理を終えて消えたものが無い1時間が、2時間続いたら発火する。
+# 新着の無い時間帯は届いた数が0なので鳴らない。
+
+locals {
+  consumer_processing_stalled_alarms = {
+    curation   = local.curation_consumer_name
+    assessment = local.assessment_consumer_name
+    embedding  = local.embedding_consumer_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "consumer_processing_stalled" {
+  for_each = local.consumer_processing_stalled_alarms
+
+  alarm_name          = "${each.value}-stalled"
+  alarm_description   = "「${each.key}」のキューにメッセージが届いているのに、処理を終えたものが2時間続けて0件。Lambdaの呼び出し・エラーとSQS受信接続 (event source mapping) の状態、/aws/lambda/${each.value} のログを確認する。"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+
+  dynamic "metric_query" {
+    for_each = { sent = "NumberOfMessagesSent", deleted = "NumberOfMessagesDeleted" }
+
+    content {
+      id = metric_query.key
+
+      metric {
+        namespace   = "AWS/SQS"
+        metric_name = metric_query.value
+        period      = 3600
+        stat        = "Sum"
+        dimensions  = { QueueName = aws_sqs_queue.outbox[each.key].name }
+      }
+    }
+  }
+
+  metric_query {
+    id          = "stalled"
+    expression  = "IF(FILL(sent, 0) > 0 AND FILL(deleted, 0) == 0, 1, 0)"
+    label       = "hours with messages sent but none deleted"
+    return_data = true
+  }
+}
+
 # 停止の発生件数であり設定の修復完了は分からないため、復旧通知は送らない。
 resource "aws_cloudwatch_metric_alarm" "outbox_publish_configuration_failure" {
   alarm_name          = "${var.name_prefix}-outbox-publish-configuration-failure"

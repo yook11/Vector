@@ -99,23 +99,6 @@ resource "aws_cloudwatch_log_group" "curation_consumer" {
   retention_in_days = var.log_retention_days
 }
 
-resource "aws_cloudwatch_metric_alarm" "curation_dlq_not_empty" {
-  alarm_name          = "${local.curation_consumer_name}-dlq-not-empty"
-  alarm_description   = "CurationのDLQに未対応メッセージがある。原因を確認し、必要ならSQSトリガーを手動停止する。自動停止・再投入は行わない。"
-  namespace           = "AWS/SQS"
-  metric_name         = "ApproximateNumberOfMessagesVisible"
-  dimensions          = { QueueName = aws_sqs_queue.curation_dlq.name }
-  statistic           = "Maximum"
-  period              = 60
-  evaluation_periods  = 1
-  datapoints_to_alarm = 1
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  threshold           = 1
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-  ok_actions          = [aws_sns_topic.alerts.arn]
-}
-
 # CloudWatch Logsと既存EMFを使い、X-Rayは追加しない。
 # nosemgrep: terraform.aws.security.aws-lambda-x-ray-tracing-not-active.aws-lambda-x-ray-tracing-not-active
 resource "aws_lambda_function" "curation_consumer" {

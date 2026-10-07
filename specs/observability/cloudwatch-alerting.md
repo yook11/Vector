@@ -7,6 +7,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 2026-10-03 更新: 生成モデルを Gemini に統一し、DeepSeek を外した(#529)。Evidence の DeepSeek の記述は当時の記録。
 
+2026-10-07 更新: 分析3工程の DLQ 1件アラームを外し、元キューの処理停止アラームに置き換えた。末尾の「分析Consumerの処理停止」を参照する。
+
 ---
 
 ## Work Definition
@@ -283,3 +285,13 @@ relay接続、本番適用、AWSでのEMF抽出・Alarm遷移・Slack到達確�
 ローカル検証結果（スライス③）: backend lint・format成功、全単体5,616件成功、integration 1,220件成功・22件skip。
 変更したalerting.tfのformat checkと、隔離したTF_DATA_DIRでのinit -backend=false -lockfile=readonly・validateは成功（既存の非推奨警告あり）。
 Terraform全体のformat checkは、変更対象外のoutbox_relay.tfとローカルterraform.tfvarsの未整形で不合格。この2ファイルは変更していない。
+
+## 分析Consumerの処理停止（2026-10-07）
+
+- Problem: 分析3工程のDLQアラームは可視メッセージが1件以上で鳴るため、たまたま5回失敗した1件でも鳴り、2026-09中旬から鳴り続けていた。DLQのredriveは行われず、9月のcurationのDLQ 2,618件は期限で消えた。一方、Consumerが呼ばれない障害を知らせていたのはこのアラームだけだった。
+- Evidence: 2026-09-17〜19のcurationと2026-09-16のembeddingでは、Lambdaが呼ばれないまま、SQSの受信は送信の約5倍、削除は0だった。元キューの`ApproximateAgeOfOldestMessage`は3回受信したメッセージを除くため、最大36分で頭打ちになった。2026-09-14〜10-07の分析3工程で、届いたのに1件も消えない1時間が2時間続いたのは、上の2件、2026-09-25〜26の投資判定のAI残高不足、2026-09-15の投資判定の全件失敗の4件だけだった。
+- Invariants:
+  - 分析3工程それぞれに、元キューの`NumberOfMessagesSent`と`NumberOfMessagesDeleted`のSum（1時間）を使い、届いた数が1以上で消えた数が0の1時間が2時間続いたら既存SNSへ通知する。欠測は通知しない。
+  - DLQの件数では通知しない。DLQの中身は、障害の通知を受けて原因を直したあとにredriveするか判断する場所として扱う。
+- Non-goals: 補完・取得のConsumerの通知（補完はRetry-Afterで最大11時間メッセージを残し、取得は既存のA1が担う）、失敗率アラームの変更、DLQのダッシュボード、Lambdaのevent source mapping指標の有効化。
+- Done: DLQアラーム3本を削除し、処理停止アラーム3本をTerraformで定義してmockテストで確かめる。同じ式を本番の過去3週間の指標で評価し、上の4件だけで条件を満たすことを確かめる。

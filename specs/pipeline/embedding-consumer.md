@@ -613,7 +613,7 @@ API例外は既存translate_gemini_errorへ委譲し、未分類例外とキャ�
 
 Consumer専用サブネットはprimary AZのCIDR index 28とし、appルートテーブルを使用する。専用SGはRDS・proxy・SSMだけに接続し、proxyはGeminiのみ許可する。実行ロールとboundaryは[AI分析](../platform/iam-role-consolidation.md)の共通ロールと共通boundaryとし、分析キューの受信・`vector_article_analysis`での接続・AIキーの読取・ログ・LambdaのENI管理に限定する。CIのDLQ管理権限とrelayの送信権限は分離する。
 
-DLQ滞留通知は`ApproximateNumberOfMessagesVisible`のMaximum・60秒・1評価期間・1件以上・欠測正常で判定し、ALARM/OK遷移を既存SNSへ送る。自動停止・自動再投入は行わない。障害時は後続のSQSトリガーを手動停止・再開する。
+DLQの件数では通知せず、元キューの処理停止で通知する（[CloudWatchアラート](../observability/cloudwatch-alerting.md)）。自動停止・自動再投入は行わない。障害時は後続のSQSトリガーを手動停止・再開する。
 
 Consumer本体とLambda起動関数は実装済み。スライス3.4でLambda関数・無効状態のSQSトリガーのTerraform定義を追加したが、AWSには未適用。スライス2に先行して、共通Serviceの保存時行ロックと記事不存在・生成済みの区別を実装した。Serviceは正常終了時に`EmbeddingCompletion.SAVED`または`EmbeddingCompletion.ALREADY_EMBEDDED`を返す。Service実行中の失敗分類関数とConsumer用の後処理ハンドラーも実装済み。開始時の失敗もConsumer用ハンドラーへ接続した。SQSの入力検証・Consumer呼び出し・部分バッチ応答も処理部品として接続済み。依存を組み立てるLambda起動関数は3.3で接続済み。
 
