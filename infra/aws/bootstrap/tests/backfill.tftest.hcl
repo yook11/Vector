@@ -177,12 +177,6 @@ run "backfill_policies_stay_within_iam_size_limits" {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.task_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-task-boundary" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_policy.ecs_task_boundary["agent"]
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-agent-task-boundary" }
 }
