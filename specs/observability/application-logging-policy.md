@@ -79,8 +79,8 @@ AWSランタイムのシステムログやOS・proxy・DBサービス自体の�
 ポリシーの正本を記録基盤内に置き、共通規則と処理目的ごとの許可項目・値制約・変換規則を定義する。識別子は基底の`LogPolicy`を使い、bounded context名ごとに別の識別子を作らない。
 
 - `external_content_fetch`: 記事取得・本文補完のURL、HTTP結果、抽出結果、失敗診断。目的別allowは未定義。
-- `ai_inference`: 記事のAI分析の相関情報・結果・失敗診断。初期対象のCurationとAssessmentは一つの完成済みルールを使い、stage属性で区別する。項目・出所・保護方法は[AI分析ポリシー](./ai-analysis-logging-policy.md)を正本とする。
-- Embedding・Agent等への適用は、対象情報と責務を確認してから定義する。AI利用という理由だけで同じポリシーを無条件に適用しない。
+- `ai_inference`: 記事のAI分析の相関情報・結果・失敗診断。Curation・Assessment・Embeddingは一つの完成済みルールを使い、stage属性で区別する。項目・出所・保護方法は[AI分析ポリシー](./ai-analysis-logging-policy.md)を正本とする。
+- Embeddingは2026-10-08に接続した（[AI分析ポリシー §3.3.4](./ai-analysis-logging-policy.md)）。Agent等への適用は、対象情報と責務を確認してから定義する。AI利用という理由だけで同じポリシーを無条件に適用しない。
 - `cache_revalidation`: キャッシュ更新通知の対象・処理箇所・相関情報。§2.4に定義する。
 - `infrastructure`: 秘密情報取得の資源終了ログを§2.4の限定したルールへ接続済み。インフラ全般の項目を許可した状態ではない。
 - `user_interaction` / `pipeline_control`: 基底に識別子を定義済み。目的別allowと適用経路は別途定義する。
