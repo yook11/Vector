@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import Any
 
 import httpx2
 import structlog
@@ -22,6 +21,7 @@ from app.ai_providers.errors import (
     AIProviderResultReason,
     AIProviderTransportError,
 )
+from app.ai_providers.gemini.error_details import read_response_error_details
 from app.http.destination_policy import HostBlockedError
 from app.http.error_mapping import (
     http_response_error_from_status,
@@ -96,58 +96,10 @@ def _is_context_length_error(status: str, message: str) -> bool:
     return any(pat in message for pat in _CONTEXT_LENGTH_PATTERNS)
 
 
-_QUOTA_FAILURE_TYPE = "type.googleapis.com/google.rpc.QuotaFailure"
-_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo"
-
 # ログには、応答の任意の文字列を持ち込まないよう既知の形の値だけを出す。
-_LOGGABLE_QUOTA_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+# quotaId の形は、AI分析ログ仕様の識別子（provider_code）の規則に揃える。
+_LOGGABLE_QUOTA_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 _LOGGABLE_RETRY_DELAY = re.compile(r"[0-9]{1,6}(\.[0-9]{1,9})?s")
-
-
-def _error_detail_items(exc: genai_errors.APIError) -> list[dict[str, Any]]:
-    """本文の構造化 details の要素を取り出し、形が不正なら空にする。
-
-    details は ``{"error": {...}}`` と平らな形の両方がありうる。project ID などを
-    含みうるので、まるごとはログに出さない。
-    """
-    details = getattr(exc, "details", None)
-    if not isinstance(details, dict):
-        return []
-    error = details.get("error", details)
-    if not isinstance(error, dict):
-        return []
-    items = error.get("details")
-    if not isinstance(items, list):
-        return []
-    return [item for item in items if isinstance(item, dict)]
-
-
-def _quota_ids(items: list[dict[str, Any]]) -> list[str]:
-    """QuotaFailure の違反から quotaId を取り出す。"""
-    quota_ids: list[str] = []
-    for item in items:
-        if item.get("@type") != _QUOTA_FAILURE_TYPE:
-            continue
-        violations = item.get("violations")
-        if not isinstance(violations, list):
-            continue
-        for violation in violations:
-            if isinstance(violation, dict):
-                quota_id = violation.get("quotaId")
-                if isinstance(quota_id, str):
-                    quota_ids.append(quota_id)
-    return quota_ids
-
-
-def _retry_delay(items: list[dict[str, Any]]) -> str | None:
-    """RetryInfo の再試行までの待ち時間 (例 ``"53s"``) を取り出す。"""
-    for item in items:
-        if item.get("@type") != _RETRY_INFO_TYPE:
-            continue
-        retry_delay = item.get("retryDelay")
-        if isinstance(retry_delay, str):
-            return retry_delay
-    return None
 
 
 def _has_per_day_quota_violation(quota_ids: list[str]) -> bool:
@@ -162,12 +114,11 @@ def _has_per_day_quota_violation(quota_ids: list[str]) -> bool:
 def _record_resource_exhausted(
     reason: AIProviderResponseReason,
     *,
-    items: list[dict[str, Any]],
+    retry_delay: str | None,
     quota_ids: list[str],
     retry_after_header: bool,
 ) -> None:
     """再試行の時刻を決める材料として、429 の待ち時間と枠の種類を記録する。"""
-    retry_delay = _retry_delay(items)
     try:
         logger.warning(
             "gemini_resource_exhausted",
@@ -278,8 +229,12 @@ def translate_gemini_error(exc: Exception) -> Exception:
 
     # 日あたりの枯渇を確認できたときだけ枯渇とし、枯渇アラームの誤発火を避ける。
     if status_code == 429 or status == "RESOURCE_EXHAUSTED":
-        items = _error_detail_items(exc)
-        quota_ids = _quota_ids(items)
+        response_details = read_response_error_details(exc)
+        quota_ids = [
+            violation.quota_id
+            for violation in response_details.quota_violations
+            if violation.quota_id is not None
+        ]
         if _has_per_day_quota_violation(quota_ids):
             translated = AIProviderResponseError(
                 "AIプロバイダーの1日当たりの利用枠を使い切りました",
@@ -294,7 +249,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
             )
         _record_resource_exhausted(
             translated.reason,
-            items=items,
+            retry_delay=response_details.retry_delay,
             quota_ids=quota_ids,
             retry_after_header=http_error.retry_after is not None,
         )

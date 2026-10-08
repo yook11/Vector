@@ -557,6 +557,25 @@ def test_resource_exhausted_log_omits_values_of_unexpected_shape() -> None:
     ]
 
 
+def test_resource_exhausted_log_keeps_quota_id_in_identifier_shape() -> None:
+    """英数字と _ . : - だけの quotaId は、識別子の形として記録する。"""
+    details = [_quota_failure_detail("quota.v1:per-minute_project")]
+
+    with capture_logs() as logs:
+        translate_gemini_error(_resource_exhausted_error(details=details))
+
+    assert _resource_exhausted_logs(logs) == [
+        {
+            "event": "gemini_resource_exhausted",
+            "log_level": "warning",
+            "reason": "rate_limited",
+            "retry_delay": None,
+            "quota_ids": ["quota.v1:per-minute_project"],
+            "retry_after_header": False,
+        }
+    ]
+
+
 def test_resource_exhausted_log_failure_keeps_classification() -> None:
     """観測ログの出力に失敗しても、分類の結果を変えない。"""
     exc = _resource_exhausted_error(quota_ids=(_PER_DAY_QUOTA_ID,))

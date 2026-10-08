@@ -89,7 +89,7 @@ Implementation: 実装済み。
 
 ## error_details
 
-- 例外の種類ごとに型で形を決める。SQL例外は `PostgresErrorDetails`、イベントの検証エラーは `EventValidationDetails`、アプリの例外は `ApplicationError.details` とする。
+- 例外の種類ごとに型で形を決める。SQL例外は `PostgresErrorDetails`、Gemini SDK例外は `GeminiErrorDetails`、イベントの検証エラーは `EventValidationDetails`、アプリの例外は `ApplicationError.details` とする。
 - `ApplicationErrorValue` を `str | int | float | bool | None` に絞る。構造を持つ診断情報が必要な例外には、専用の変換と `TypedDict` を用意する。
 
 ## 上限
