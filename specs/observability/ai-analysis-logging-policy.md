@@ -11,7 +11,7 @@ Implementation: Partially implemented。Assessmentの入口・終端、初期化
 
 変更状況: mask・sanitize と文字列内の認証情報の置換は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。本書で sanitize を既知形式の秘密の検出とする記述は旧契約。
 
-原因チェーンの形式と例外の上限・予算は[例外の変換と値の検査の責任分担](./logging-exception-conversion-policy.md)を優先する。SDK固有の原因構造もその形式に合わせる。
+原因チェーンの形式と例外の上限・予算は[例外の変換と値の検査の責任分担](./logging-exception-conversion-policy.md)を優先する。SDK固有の原因構造もその形式に合わせる。Gemini SDK例外の原因文と診断項目は[Gemini SDK例外のログ変換](./gemini-sdk-exception-log-conversion.md)を優先する。
 
 ## Problem
 
@@ -98,7 +98,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | --- | --- |
 | 設定・クライアント・Consumer等の構築 | 失敗した構築処理、設定項目名、例外文、stack。設定値全体は出さない。 |
 | 対象データの読み込み・入力構築 | 対象ID、取得・構築のどちらか、必要な前提の欠落、型・検証上の不整合。 |
-| AI通信 | provider/model、HTTP statusやprovider code、timeout/connection等のreason、保護後の原因文。 |
+| AI通信 | provider/model、HTTP statusやprovider code、timeout/connection等のreason。SDK例外の原因文は固定の文とし、応答の説明文は残さない。 |
 | 応答解析・検証 | JSON解析・構造検証・業務上の構築のどこか、失敗field・defect・期待する型や制約。 |
 | 結果保存・commit | 保存とcommitのどちらか、SQLSTATE、制約名、DBの原因説明、保存結果が確定しているか。 |
 | 想定外のコード不具合 | TypeError、AttributeError、assertion等の例外型・原因文・呼び出しstack。既知の業務例外だけに限定しない。 |
@@ -133,7 +133,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `reason`, `field`, `record_index` | SQS・イベント入力不正の既存reason、宣言されたfield、0始まりのレコード位置。Assessmentの保存見送りでは固定値`reason=concurrent_write`、DeepSeek応答の打ち切りでは`reason=output_token_limit_reached`も許可する。正常終端の結果は`outcome`、前提不成立は`rejection_code`を使い、例外自由文には再利用しない。 |
 | `code`, `failure_reason` | 既存の例外から取得する。providerの詳細reasonや応答defectを汎用の失敗codeに潰さない。 |
 | `failure_kind`, `retryability` | DB障害など既存の非provider分類に値がある場合のみ記録する。providerの回復分類は廃止し、代替分類やunknownで埋めない。 |
-| `http_status`, `provider_code`, `finish_reason` | 既知SDKの対応属性から取得するstatus/code/終了理由。statusは100〜599の整数。codeは整数または128文字以内の英数字・`_` / `.` / `:` / `-`からなる識別子、終了理由はAssessmentでは§3.3.3の既知値だけを許可する。status/codeは形式が有効なら新しい値も残し、既存分類へ無理に対応付けない。status/codeの形式外の説明文は保護後の`error_message`へ残す要件とし、SDK専用変換は後続で実装する。 |
+| `http_status`, `provider_code`, `finish_reason` | 既知SDKの対応属性から取得するstatus/code/終了理由。statusは100〜599の整数。codeは整数または128文字以内の英数字・`_` / `.` / `:` / `-`からなる識別子、終了理由はAssessmentでは§3.3.3の既知値だけを許可する。status/codeは形式が有効なら新しい値も残し、既存分類へ無理に対応付けない。形式外の値は省略し、説明文へ戻さない。 |
 | `error_class`, `error_message`, `frames` | `exc_info`から基底が抽出する外側の例外情報。DeepSeek cleanupでは`exc_info`を渡さず、`error_class`だけを例外型の完全修飾名から明示する。`frames`は`file` / `function` / `line`のみ。外側の原因文が短いcodeでも内側の診断を省略する理由にしない。 |
 | `causes` | 原因の構造化リスト。各要素は例外情報、取得済みの`code` / `failure_reason` / `http_status` / `provider_code` / `error_details`、子の`causes` / `exceptions`のみ。外側と同じ例外構造を使い、取得元を示す`relation`ラベルは付けない。各例外を同じ保護経路に通す。 |
 | `exceptions` | ExceptionGroupのメンバー。各要素は外側と同じ例外構造を持ち、原因と同じ総数予算を使う。上限で残りを省略した場合は末尾に`[limit]`を置く。 |
@@ -235,7 +235,7 @@ Serviceから渡すメッセージ用ロガーを、DeepSeek・Gemini両方の`a
 
 受け渡しはService・Assessor・compositionの既存テストで確認する。DeepSeekの項目変換とcleanupの出力は実際の目的ポリシー・processor・JSON標準出力で確認し、ログ全体の完全一致は使わない。マスク・共通例外変換・ログ障害保護・SQS応答はそれぞれの既存テストに任せる。
 
-Assessment handlerの`setup_lambda_logging()`呼び出しは削除済みで、各目的別ロガーがJSON標準出力を構成する。共通関数本体と他工程の呼び出しは維持する。HTTP・AI SDK例外の専用変換は後続とし、handler等の既存終端ログが記録する原因連鎖には入力値が残る可能性がある。この接続を例外全体の保護完了とは扱わない。
+Assessment handlerの`setup_lambda_logging()`呼び出しは削除済みで、各目的別ロガーがJSON標準出力を構成する。共通関数本体と他工程の呼び出しは維持する。Gemini SDK例外は専用の変換で保護する。HTTP例外の専用変換は後続とし、handler等の既存終端ログが記録する原因連鎖には入力値が残る可能性がある。この接続を例外全体の保護完了とは扱わない。
 
 検証結果: 関連単体テスト587件が成功（DB統合85件は選択対象外）。続くGeminiの公開`assess`経由へのテスト更新後も対象11件が成功した。変更したPython 16ファイルのRuff lint・format確認、DB利用ケースとローカルAssessmentテストを含む539件の収集確認が成功。全体・DB統合・実AI呼び出し・デプロイは実施していない。比較用スクリプトの呼び出しも必須logger引数へ対応させたが、実行はしていない。
 
@@ -268,7 +268,7 @@ Pythonのcause/contextは基底が抽出する。既存の`provider_error`のよ
 
 原因抽出は外側を含め最大32例外、外側から最大8段の関係までとし、ExceptionGroupのメンバーを含む全枝で予算を共有する。同じ参照の再登場も数え、現在の経路に戻る参照を循環として止める。直接causeを優先し、`provider_error`が同じ例外を指す場合は重複させない。contextは明示causeがなく、抑制されていない場合だけ辿る。原因は`causes`、グループのメンバーは`exceptions`へ格納する。上限・循環で省略した枝はそれぞれ`[limit]` / `[cycle]`で示し、メンバーの残りの省略は配列末尾の`[limit]`で示す。各frameの上限と最終ログの共有予算は基底を維持する。共有予算を超えれば基底の固定イベントになるため、原因連鎖を追加した出力で予算を検証し、保持できない代表ケースを未対応のまま完了扱いしない。
 
-SDK例外のrequest/response bodyを含む表現は、既知の診断message・status・codeだけを抽出する。SQL例外の内側にあるdriver例外は、外側のSQL例外ノードの`error_details`へ診断属性を集約する。原因文は外側のパラメーター保護文脈で保護し、内部driverを別ノードへ再出力しない。SQLAlchemy例外だけを保護してから`orig`を通常の`str()`で再出力する迂回を認めない。未知の形式で混入部分を分離できなければ、その原因文を省略し、型・frame・分類・他の原因を残す。
+SDK例外のrequest/response bodyを含む表現は、応答の説明文を使わず、固定の文と、識別子・数値の診断だけを抽出する。SQL例外の内側にあるdriver例外は、外側のSQL例外ノードの`error_details`へ診断属性を集約する。原因文は外側のパラメーター保護文脈で保護し、内部driverを別ノードへ再出力しない。SQLAlchemy例外だけを保護してから`orig`を通常の`str()`で再出力する迂回を認めない。未知の形式で混入部分を分離できなければ、その原因文を省略し、型・frame・分類・他の原因を残す。
 
 SQLパラメーターや本文だけを除去できる場合は、その部分を除いて説明を残す。安全に分離できない部分を省略した場合も、他の原因説明・型・分類・frame・相関情報は保持する。未知の例外型という理由だけで全文を消さない。任意自由文の秘密・本文を完全検出できるという保証は置かず、既知の混入形式を共通変換とテストで扱う。
 

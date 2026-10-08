@@ -162,7 +162,7 @@ SDKが使わない同期クライアントやASGIテストから旧HTTPXの存�
 | SSE内のAPI code 429 | SDK例外のAPI codeは429、応答のHTTP statusは200として別々に観測できる |
 | ReadTimeout / ConnectError | 元の例外オブジェクトと原因をSDKが保持し、再試行しない |
 
-- 現行変換器はSSE内のAPI codeをHTTP statusとして扱う場合があり、この区別の修正は本PRに含めない。検討中の`specs/observability/gemini-sdk-exception-conversion-examples.md`も変更せず、2.10.0の観測と今回の2.28.0の証拠を区別する。
+- 現行変換器はSSE内のAPI codeをHTTP statusとして扱う場合があり、この区別の修正は本PRに含めない。検討中の`specs/observability/gemini-sdk-exception-log-conversion.md`も変更せず、2.10.0の観測と今回の2.28.0の証拠を区別する。
 - streamを途中で`aclose()`した直後のHTTP応答解放は、両SDKで成立しなかった。これは更新前からの制約であり、2026-10-03の合意により修正は別課題とし、PR Bでは利用範囲終了時の接続解放を完了条件とする。
 - 再現するには契約試験の`exchange`で未完了・完了のSSEを順に返し、runtimeから1つ目だけ受信して`await stream.aclose()`する。clientの利用範囲内で`assert exchange.body.closed`を行うと失敗する。応答bodyのcloseを2秒待っても完了しなかった。試験内でGCを強制したり、SDK内部を修正したりはしていない。
 - 利用範囲終了時の接続解放試験は途中終了直後の応答解放を保証せず、SDKの応答オブジェクトがいつ回収されるかや本番の継続的なメモリ増加も未確認。

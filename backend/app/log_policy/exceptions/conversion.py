@@ -1,5 +1,7 @@
 """例外の種類を判定し、各担当の変換関数へ振り分ける共通入口。"""
 
+import sys
+
 from pydantic import ValidationError
 from sqlalchemy.exc import StatementError
 
@@ -20,11 +22,24 @@ def convert_exception(exc: BaseException) -> ConvertedException:
         return convert_event_validation_exception(exc)
     if isinstance(exc, StatementError) or is_postgres_error(exc):
         return convert_sql_exception(exc)
+    if _is_gemini_sdk_error(exc):
+        # 非AIプロセスにSDKを持ち込まないよう、SDKの例外が来たときだけ読み込む。
+        from app.log_policy.exceptions.gemini import convert_gemini_exception
+
+        return convert_gemini_exception(exc)
     if isinstance(exc, ValidationError):
         return convert_validation_exception(exc)
     if isinstance(exc, ApplicationError):
         return convert_application_error(exc)
     return _convert_standard_exception(exc)
+
+
+def _is_gemini_sdk_error(exc: BaseException) -> bool:
+    """SDKを読み込んでいない処理には、SDKの例外も存在しない。"""
+    errors = sys.modules.get("google.genai.errors")
+    return errors is not None and isinstance(
+        exc, (errors.APIError, errors.UnknownApiResponseError)
+    )
 
 
 def _convert_standard_exception(exc: BaseException) -> ConvertedException:
