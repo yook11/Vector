@@ -19,6 +19,7 @@ from app.analysis.embedding.domain.value_objects import (
 )
 from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.service import EmbeddingService
+from app.analysis.logging import create_article_analysis_logger
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -85,6 +86,7 @@ async def _execute(
         ready,
         _make_embedder(),
         analyzable_article_id=article_id,
+        logger=create_article_analysis_logger().bind(stage="embedding"),
     )
 
 

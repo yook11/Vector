@@ -23,6 +23,7 @@ from app.analysis.curation.service import (
     CurationCompletionKind,
     CurationService,
 )
+from app.analysis.logging import create_article_analysis_logger
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
@@ -33,6 +34,11 @@ from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_res
 from tests.outbox import RejectOutboxInsert
 
 _PROCESSING_OUTCOME_METRIC = "vector.curation.processing_outcome"
+
+
+@pytest.fixture
+def curation_logger():
+    return create_article_analysis_logger().bind(stage="curation")
 
 
 def _signal_envelope(*, raw: str = '{"relevance":"signal"}') -> CurationCall[Signal]:
@@ -114,13 +120,16 @@ async def test_signal_outcome_writes_curated_signal_audit_with_outcome_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    curation_logger,
 ) -> None:
     """signal Outcome 経路で succeeded / outcome_code=curated_signal が焼かれる。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = CurationService(session_factory)
 
-    result = await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
+    result = await svc.execute(
+        ready, _curator(return_envelope=_signal_envelope()), logger=curation_logger
+    )
 
     # signal 勝者 → Service は新規 article_extractions.id を返す
     assert result.kind is CurationCompletionKind.SIGNAL
@@ -146,13 +155,16 @@ async def test_noise_outcome_writes_curated_noise_audit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    curation_logger,
 ) -> None:
     """noise Outcome 経路で succeeded / outcome_code=curated_noise が焼かれる。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = CurationService(session_factory)
 
-    result = await svc.execute(ready, _curator(return_envelope=_noise_envelope()))
+    result = await svc.execute(
+        ready, _curator(return_envelope=_noise_envelope()), logger=curation_logger
+    )
 
     # noise 勝者 → Service は None (Stage 4 chain しない、Task 層 short return 対象)
     assert result == CurationCompletion(CurationCompletionKind.NOISE)
@@ -169,6 +181,7 @@ async def test_response_invalid_error_passes_through_without_service_audit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    curation_logger,
 ) -> None:
     """Layer 2-B 例外は Service が catch せずそのまま raise する (Task 層責務)。"""
     article = await _make_article(db_session, sample_source)
@@ -179,6 +192,7 @@ async def test_response_invalid_error_passes_through_without_service_audit(
         await svc.execute(
             ready,
             _curator(side_effect=CurationResponseInvalidError()),
+            logger=curation_logger,
         )
 
     # Service は audit を焼かない (失敗経路は task 層末尾の inline audit 責務、PR4)
@@ -195,13 +209,16 @@ async def test_signal_emits_processing_outcome_signal(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     capfire: CaptureLogfire,
+    curation_logger,
 ) -> None:
     """signal 保存 + commit 後に processing_outcome{result=signal} が +1 される。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = CurationService(session_factory)
 
-    await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
+    await svc.execute(
+        ready, _curator(return_envelope=_signal_envelope()), logger=curation_logger
+    )
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "signal") == 1
@@ -214,13 +231,16 @@ async def test_noise_emits_processing_outcome_noise(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     capfire: CaptureLogfire,
+    curation_logger,
 ) -> None:
     """noise 保存 + commit 後に processing_outcome{result=noise} が +1 される。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = CurationService(session_factory)
 
-    await svc.execute(ready, _curator(return_envelope=_noise_envelope()))
+    await svc.execute(
+        ready, _curator(return_envelope=_noise_envelope()), logger=curation_logger
+    )
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "noise") == 1
@@ -233,6 +253,7 @@ async def test_race_loss_does_not_emit_processing_outcome(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     capfire: CaptureLogfire,
+    curation_logger,
 ) -> None:
     """楽観ロック敗北 (commit 未到達) では processing_outcome を emit しない。"""
     article = await _make_article(db_session, sample_source)
@@ -243,7 +264,9 @@ async def test_race_loss_does_not_emit_processing_outcome(
         "app.analysis.curation.repository.CurationRepository.save_signal",
         new=AsyncMock(return_value=None),
     ):
-        await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
+        await svc.execute(
+            ready, _curator(return_envelope=_signal_envelope()), logger=curation_logger
+        )
 
     metrics = collected_metrics(capfire)
     for result in ("signal", "noise", "rejected", "failed"):
@@ -255,13 +278,16 @@ async def test_signal_persists_matching_outbox_event(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    curation_logger,
 ) -> None:
     """Signalの保存結果と対応する契約バージョンのイベントを同時に確定する。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
 
     completion = await CurationService(session_factory).execute(
-        ready, _curator(return_envelope=_signal_envelope())
+        ready,
+        _curator(return_envelope=_signal_envelope()),
+        logger=curation_logger,
     )
 
     async with session_factory() as reader:
@@ -289,13 +315,16 @@ async def test_noise_writes_no_outbox_event(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    curation_logger,
 ) -> None:
     """Noiseは後続Assessmentを起動しないためイベントを作らない。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
 
     await CurationService(session_factory).execute(
-        ready, _curator(return_envelope=_noise_envelope())
+        ready,
+        _curator(return_envelope=_noise_envelope()),
+        logger=curation_logger,
     )
 
     async with session_factory() as reader:
@@ -308,6 +337,7 @@ async def test_signal_race_loss_writes_no_outbox_event(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    curation_logger,
 ) -> None:
     """Signal保存の競合敗北では勝者と重複するイベントを作らない。"""
     article = await _make_article(db_session, sample_source)
@@ -318,7 +348,9 @@ async def test_signal_race_loss_writes_no_outbox_event(
         new=AsyncMock(return_value=None),
     ):
         await CurationService(session_factory).execute(
-            ready, _curator(return_envelope=_signal_envelope())
+            ready,
+            _curator(return_envelope=_signal_envelope()),
+            logger=curation_logger,
         )
 
     async with session_factory() as reader:
@@ -332,6 +364,7 @@ async def test_outbox_insert_failure_rolls_back_signal_and_audit(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     reject_outbox_insert: RejectOutboxInsert,
+    curation_logger,
 ) -> None:
     """Outboxの失敗でSignal結果と成功監査も原子的に取り消す。"""
     article = await _make_article(db_session, sample_source)
@@ -340,7 +373,9 @@ async def test_outbox_insert_failure_rolls_back_signal_and_audit(
 
     with pytest.raises(IntegrityError, match=constraint_name):
         await CurationService(session_factory).execute(
-            ready, _curator(return_envelope=_signal_envelope())
+            ready,
+            _curator(return_envelope=_signal_envelope()),
+            logger=curation_logger,
         )
 
     async with session_factory() as reader:
@@ -380,14 +415,18 @@ async def test_outbox_insert_failure_rolls_back_signal_and_audit(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("envelope_factory", [_signal_envelope, _noise_envelope])
 async def test_existing_save_returns_already_curated_without_duplicate_effects(
-    db_session, session_factory, sample_source, envelope_factory
+    db_session, session_factory, sample_source, envelope_factory, curation_logger
 ):
     """保存済み行との競合は処理済み完了となり、監査とOutboxを重複させない。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     service = CurationService(session_factory)
-    first = await service.execute(ready, _curator(return_envelope=envelope_factory()))
-    second = await service.execute(ready, _curator(return_envelope=envelope_factory()))
+    first = await service.execute(
+        ready, _curator(return_envelope=envelope_factory()), logger=curation_logger
+    )
+    second = await service.execute(
+        ready, _curator(return_envelope=envelope_factory()), logger=curation_logger
+    )
 
     async with session_factory() as reader:
         audits = await _fetch_curation_events(reader, article.id)
@@ -407,7 +446,12 @@ async def test_existing_save_returns_already_curated_without_duplicate_effects(
 @pytest.mark.parametrize("envelope_factory", [_signal_envelope, _noise_envelope])
 @pytest.mark.parametrize("failure_at", ["save", "audit", "commit"])
 async def test_persistence_failures_propagate_and_roll_back_all_results(
-    db_session, session_factory, sample_source, envelope_factory, failure_at
+    db_session,
+    session_factory,
+    sample_source,
+    envelope_factory,
+    failure_at,
+    curation_logger,
 ):
     """保存・監査・commitの失敗は完了値に変換せず、同一取引の全書き込みを戻す。"""
     article = await _make_article(db_session, sample_source)
@@ -432,7 +476,9 @@ async def test_persistence_failures_propagate_and_roll_back_all_results(
             IntegrityError if failure_at == "save" else RuntimeError
         ) as raised:
             await CurationService(session_factory).execute(
-                ready, _curator(return_envelope=envelope_factory())
+                ready,
+                _curator(return_envelope=envelope_factory()),
+                logger=curation_logger,
             )
         if failure_at != "save":
             assert raised.value is failure

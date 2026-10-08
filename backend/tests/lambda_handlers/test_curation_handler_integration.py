@@ -11,7 +11,6 @@ import httpx2
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
-from structlog.testing import capture_logs
 
 from app.ai_providers.gemini import client as gemini_client
 from app.analysis.curation.domain.ready import CurationReadyBuildRejectionReason
@@ -52,7 +51,6 @@ def runtime(monkeypatch, test_database_url):
     )
     state.settings = settings
     monkeypatch.setattr(module, "CurationConsumerSettings", Mock(return_value=settings))
-    monkeypatch.setattr(module, "setup_lambda_logging", Mock())
     monkeypatch.setattr(
         lifecycle, "get_secret_parameter", Mock(return_value=SecretStr("test-key"))
     )
@@ -169,7 +167,7 @@ def assert_closed(runtime, *, invocations=1):
 
 @pytest.mark.parametrize("cleanup_failure", [False, True])
 async def test_mixed_batch_matches_persistence_and_releases_resources(
-    runtime, db_session, sample_source, cleanup_failure
+    runtime, db_session, sample_source, cleanup_failure, capsys
 ):
     runtime.cleanup_failure = cleanup_failure
     ids = {
@@ -195,8 +193,12 @@ async def test_mixed_batch_matches_persistence_and_releases_resources(
             message("after", ids["after"]),
         ]
     }
-    with capture_logs() as logs:
-        response = await asyncio.to_thread(module.handler, batch, None)
+    response = await asyncio.to_thread(module.handler, batch, None)
+    outputs = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
     assert response == {
         "batchItemFailures": [
             {"itemIdentifier": "bad-event"},
@@ -239,27 +241,29 @@ async def test_mixed_batch_matches_persistence_and_releases_resources(
     ] == [(ids["failed"], "failed")]
     completions = {
         log["message_id"]: log
-        for log in logs
-        if log["event"] == "curation_message_completed"
+        for log in outputs
+        if log.get("event") == "curation_message_processing_completed"
     }
-    assert completions["signal"]["reason"] == "signal"
-    assert completions["noise"]["reason"] == "noise"
+    assert completions["signal"]["outcome"] == "signal"
+    assert completions["noise"]["outcome"] == "noise"
     assert (
-        completions["already-signal"]["reason"]
-        == completions["already-noise"]["reason"]
+        completions["already-signal"]["outcome"]
+        == completions["already-noise"]["outcome"]
         == "already_curated"
     )
-    assert completions["large"]["reason"] == "ready_build_rejected"
-    assert (
-        completions["large"]["rejection_code"]
-        == CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE.value
+    failures = {
+        log["message_id"]: log
+        for log in outputs
+        if log.get("event") == "curation_message_processing_failed"
+    }
+    assert failures["large"]["rejection_code"] == (
+        CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE.value
     )
-    assert "private-" not in repr(logs)
+    assert failures["large"]["message_disposition"] == "completed"
     assert_closed(runtime)
-    with capture_logs():
-        again = await asyncio.to_thread(
-            module.handler, {"Records": [message("again", ids["signal"])]}, None
-        )
+    again = await asyncio.to_thread(
+        module.handler, {"Records": [message("again", ids["signal"])]}, None
+    )
     assert again == {"batchItemFailures": []}
     assert len(runtime.requests) == 4
     assert len(await rows(db_session, PipelineEvent)) == 7

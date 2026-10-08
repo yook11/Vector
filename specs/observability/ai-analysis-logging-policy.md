@@ -3,7 +3,7 @@
 作成: 2026-09-17
 更新: 2026-09-25（本文などの禁止をdenyだけで扱い、maskを外す）
 Status: Accepted
-Implementation: Partially implemented。Assessmentの入口・終端、初期化・バッチ不正・共有ライフサイクルのcleanupをAI目的ポリシーへ接続済み。Consumer・Service・失敗後処理も同じメッセージ用ロガーへ接続済みで、Repositoryの重複ログは例外記録へ集約した。AssessmentのAI呼び出しと共有DeepSeekクライアントのcleanupも接続済み。通知処理内部とSSM cleanupは記事分析とは別の目的ポリシーへ接続済み（[上位仕様§2.4](./application-logging-policy.md#24-キャッシュ更新通知秘密情報取得2026-09-22)）。Curation・Embedding・エージェントの業務ログへの適用は未移行。HTTP・AI SDK例外の入力値保護は未対応。追加診断・保護要件、AWS適用とCloudWatch到達確認は後続工程とする。
+Implementation: Partially implemented。Assessmentの入口・終端、初期化・バッチ不正・共有ライフサイクルのcleanupをAI目的ポリシーへ接続済み。Consumer・Service・失敗後処理も同じメッセージ用ロガーへ接続済みで、Repositoryの重複ログは例外記録へ集約した。AssessmentのAI呼び出しと共有DeepSeekクライアントのcleanupも接続済み。通知処理内部とSSM cleanupは記事分析とは別の目的ポリシーへ接続済み（[上位仕様§2.4](./application-logging-policy.md#24-キャッシュ更新通知秘密情報取得2026-09-22)）。Curation・Embeddingも同じ形で接続済み（2026-10-08、§3.3.4）。共通コードのモジュールロガー3つとエージェントの業務ログは未移行。HTTP例外の入力値保護は未対応（Gemini SDK例外は専用の変換で保護済み）。追加診断・保護要件、AWS適用とCloudWatch到達確認は後続工程とする。
 
 上位仕様: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)
 基底の正本: [アプリケーションログの共通基底ポリシー](./logging-base-policy.md)
@@ -69,13 +69,13 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 ## Non-goals
 
 - 分析結果の内容や品質をログから閲覧・評価する機能、本文の別保存先の新設。
-- Agentのユーザー質問、週次分析、Embedding等への一括適用。初期対象は記事のAssessmentとCurationとし、追加適用時に必要情報を確認する。
+- Agentのユーザー質問、週次分析等への一括適用。初期対象は記事のAssessmentとCurationとし、追加適用時に必要情報を確認する（Embeddingは2026-10-08に追加適用した）。
 - 再試行戦略・timeout設定・例外分類・業務結果の変更、新しい計測サービスや依存の導入。
 - 今回の定義変更でのhandler・structlog設定・例外変換・SQS応答・監査・メトリクスの変更、AWS操作、Issue更新。
 
 ## 1. ポリシーの単位と責任
 
-識別子は既存の`LogPolicy.AI_INFERENCE`に揃え、出力を`log_policy=ai_inference`とする。`analysis`という別識別子や入力用の`policy`フィールドは新設しない。各loggerは完成済みの同じAI分析ルールを構築時に保持し、`stage=assessment`または`stage=curation`で工程を区別する。初期化、実行、失敗後処理、cleanupまで同じポリシーを適用する。
+識別子は既存の`LogPolicy.AI_INFERENCE`に揃え、出力を`log_policy=ai_inference`とする。`analysis`という別識別子や入力用の`policy`フィールドは新設しない。各loggerは完成済みの同じAI分析ルールを構築時に保持し、`stage=assessment` / `curation` / `embedding`で工程を区別する。初期化、実行、失敗後処理、cleanupまで同じポリシーを適用する。
 
 `stage`は業務工程、`operation`はその中で実行していた処理を表す。現在初期化ログの`stage`へ渡している`settings`等は、接続時に`operation`として扱い、同じ名前に別の意味を持たせない。
 
@@ -123,7 +123,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | 項目名 | 出所・値の契約 |
 | --- | --- |
 | `service`, `environment` | 実行側の固定識別子・設定層の環境名。AI用追加allow。入力payloadからコピーしない。 |
-| `stage` | `assessment` / `curation`。初期化とcleanupも工程を維持する。 |
+| `stage` | `assessment` / `curation` / `embedding`。初期化とcleanupも工程を維持する。 |
 | `operation` | §3.3のコード所有の処理名。失敗を記録している場所ではなく、失敗が発生した処理を示す。 |
 | `request_id`, `message_id`, `event_id`, `trace_id`, `span_id` | Lambda context、SQSの検証済み識別子、検証済みイベント、tracer由来。任意payload中の同名項目は採用しない。 |
 | `analyzable_article_id`, `curation_id`, `analyzed_article_id`, `noise_id` | 取得・保存結果から得た正の整数。読み込み前でも検証済みイベントで確定したIDは記録できる。 |
@@ -160,7 +160,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 - 識別子は`log_policy=ai_inference`、モデルは`model`、時間は`*_ms` / `*_seconds`、使用量は`input_tokens` / `output_tokens`へ統一する。業務モデル・監査DBの属性名はログの命名に合わせて改名しない。
 - `operation`の初期語彙は`settings` / `resources` / `ai_client` / `consumer` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `audit` / `notification` / `processing_metric` / `audit_dropped_metric` / `failure_handling` / `cleanup`とする。`consumer`は既存のConsumer構築を表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
 - 既存の`stage=settings/resources/ai_client/consumer`は`operation`へ移す。正常終端の`reason`は`outcome`へ移す。二次障害の`audit_error_class` / `secondary_error_class`は`exc_info`由来の`error_class`へ揃える。
-- Assessmentのメッセージ単位のeventは§3.3.1へ統一する。Assessment handlerは旧イベント名から切り替え済み。Curationへの適用も後続とし、AI呼び出しの既存`assessor_api_call/success`・`curator_api_call/success`は業務メッセージとは別の単位として扱う。eventにID・例外文を埋め込まない。
+- メッセージ単位のeventは§3.3.1の形へ統一する。Assessment handlerは旧イベント名から切り替え済みで、Curation・Embeddingも2026-10-08に切り替えた（§3.3.4）。AI呼び出しの`assessor_api_call/success`・`curator_api_call/success`・`embedder_api_call/success`は業務メッセージとは別の単位として扱う。eventにID・例外文を埋め込まない。
 
 ### 3.3.1 Assessmentの開始・完了・失敗ログ
 
@@ -238,6 +238,20 @@ Serviceから渡すメッセージ用ロガーを、DeepSeek・Gemini両方の`a
 Assessment handlerの`setup_lambda_logging()`呼び出しは削除済みで、各目的別ロガーがJSON標準出力を構成する。共通関数本体と他工程の呼び出しは維持する。Gemini SDK例外は専用の変換で保護する。HTTP例外の専用変換は後続とし、handler等の既存終端ログが記録する原因連鎖には入力値が残る可能性がある。この接続を例外全体の保護完了とは扱わない。
 
 検証結果: 関連単体テスト587件が成功（DB統合85件は選択対象外）。続くGeminiの公開`assess`経由へのテスト更新後も対象11件が成功した。変更したPython 16ファイルのRuff lint・format確認、DB利用ケースとローカルAssessmentテストを含む539件の収集確認が成功。全体・DB統合・実AI呼び出し・デプロイは実施していない。比較用スクリプトの呼び出しも必須logger引数へ対応させたが、実行はしていない。
+
+### 3.3.4 Curation・Embeddingへの適用（2026-10-08）
+
+§3.3.1〜3.3.3の形をCuration・Embeddingにも適用する。handlerは`stage=curation` / `embedding`の目的別ロガーを作り、Lambda共通設定は呼ばない。検証済みイベントから束縛するIDは、Curationが`event_id` / `analyzable_article_id`、Embeddingが`event_id` / `curation_id` / `analyzed_article_id`。Consumer・Service・失敗後処理・AI呼び出しは、同じメッセージ用ロガーを必須キーワード引数`logger`で受け取る。
+
+| 場面 | イベント | 記録内容 |
+| --- | --- | --- |
+| 開始・完了・失敗 | `{stage}_message_processing_started` / `_completed` / `_failed` | §3.3.1と同じ。`outcome`はCurationが`signal` / `noise` / `already_curated`（signalは保存した`curation_id`を追加）、Embeddingが`saved` / `already_embedded`。 |
+| 初期化・バッチ不正・cleanup | `{stage}_initialization_failed` / `_sqs_input_invalid` / `_resources_cleanup_failed` | `operation`（cleanupは`resource`も）と`exc_info`。 |
+| 保存 | `{stage}_result_saved` / `_result_save_skipped` | 保存は`outcome`（Curationのsignalは`curation_id`も）、同時処理による見送りは`reason=concurrent_write`。 |
+| 二次障害 | §3.3.2と同じ4イベント | 対象IDはCurationが`analyzable_article_id`、Embeddingが`analyzed_article_id`。 |
+| AI呼び出し | `curator_api_call/success` / `embedder_api_call/success` | モデルを束縛したロガーから`model`。 |
+
+`noise_id`と保存ログの`model`は出さない（Assessmentの保存ログと同じ）。共通コードのモジュールロガー（`gemini_resource_exhausted`・`gemini_client_cleanup_failed`・`audit_injection_boundary_detected`）はこの接続に含めず、Assessmentと同じくJSONの全体設定なしで出力される。工程例外（`CurationError`・`EmbeddingError`）は`ApplicationError`ではないため、`exc_info`の診断は例外型と空の説明になる。
 
 ### 3.4 禁止・サニタイズ
 
@@ -357,6 +371,11 @@ provider例外には回復分類・retryabilityを持たせない。分析の3�
 - [共通ラッパー](../../backend/app/log_policy/bound_logger.py)の`ApplicationBoundLogger`を`wrapper_class`に指定し、`logger.info/warning/error`からprocessor・JSON化・出力までの`Exception`を捕捉する。生データによるfallbackや再帰的な再記録は行わず、`bind()`後も同じ保護を維持する。位置引数による文字列展開は保護範囲外とし、イベント名とキーワード項目で記録する。`BaseException`は抑止しない。ライフサイクル用の記録クラスには共有インターフェースの初期化・cleanupの2メソッドだけを残す。
 - SQS応答・通知順序・監査・メトリクス・資源の所有権は維持する。Consumer・Service・失敗後処理の内部ログは§3.3.2へ接続済み。AssessmentのAI呼び出しと共有DeepSeekクライアント内部のcleanupは§3.3.3へ接続済み。通知処理内部とSSM cleanupは上位仕様§2.4の専用ルールを使用する。他工程・エージェントの業務ログ接続は後続とする。
 
+### Curation・Embeddingの接続（2026-10-08）
+
+- §3.3.4の形で、handler・composition・Consumer・Service・失敗後処理・AI呼び出しを同じメッセージ用ロガーへ接続した。両handlerの`setup_lambda_logging()`呼び出しは削除した。
+- 検証: 変更範囲の単体テスト1,676件（Lambda handler・Curation・Embedding・Assessment・ログ方針・AIプロバイダー・SDK遅延読み込み）とDB統合151件が成功した。変更ファイルとappのRuff lint・format確認、`local_tests/{curation,embedding}`の11件の収集も成功した。全体テスト・local_testsの実行・AWS適用は行っていない。
+
 以下の表は2026-09-21の定義時点における全体の差分整理であり、上記の部分接続以外は後続工程とする。
 
 | 境界 | 実装済み | 接続・追加が必要な内容 |
@@ -429,7 +448,7 @@ Assessmentのログ定義（2026-09-21）:
 - [x] 業務上の失敗とSQS応答への扱いを分離し、前提不成立を正常結果に含めない。
 - [x] 目的別allowと既存の定義テストの期待値を更新し、基底・deny・mask・実行経路を維持した。
 - [x] Assessmentの入口・終端と資源管理のログを共通チェーンへ接続した（2026-09-22）。
-- [ ] AWS適用とCloudWatch到達は未確認。内部ログ・他工程は後続で移行する。
+- [ ] AWS適用とCloudWatch到達は未確認。共通コードのモジュールロガーとエージェントは後続で移行する。
 
 方針の整合・項目決定（2026-09-20）:
 

@@ -94,7 +94,7 @@ Lambdaの実行ログ・DB接続先・認証情報・Terraform stateを公開PR�
 
 - relayのCloudWatchロググループ `/aws/lambda/vector-outbox-relay` とLambdaのInvocations・Errors・Duration・Throttlesで、定期起動とDB接続の成否を確認する。`outbox_delivery_stopped`・`outbox_failure_recording_failed` と既存の `outbox_publish_configuration_failure` を確認し、設定不備が続けば停止する。
 - embeddingキューのNumberOfMessagesSent・NumberOfMessagesReceived・NumberOfMessagesDeleted、ApproximateNumberOfMessagesVisible・NotVisible・AgeOfOldestMessageで送信・受信・滞留を確認する。1回の確保は最大10件だが、再試行や重複起動を含めた厳密な毎分10件の上限ではない。
-- `/aws/lambda/vector-embedding-consumer` の `embedding_message_completed`・`embedding_message_failed`・`embedding_initialization_failed`・`embedding_message_input_invalid` を確認する。検証済みevent_id・分析記事IDで処理を関連付け、完了理由が保存か生成済みかも確認する。成功監査・保存結果の確認は既存のDB参照経路が利用できる時点で行い、未確認ならその旨を記録する。
+- `/aws/lambda/vector-embedding-consumer` の `embedding_message_processing_started`・`embedding_message_processing_completed`・`embedding_message_processing_failed`・`embedding_initialization_failed` を確認する。検証済みevent_id・分析記事IDで処理を関連付け、完了の `outcome` が保存（`saved`）か生成済み（`already_embedded`）かも確認する。成功監査・保存結果の確認は既存のDB参照経路が利用できる時点で行い、未確認ならその旨を記録する。
 - ConsumerのErrorsだけで部分バッチ応答の失敗を判定しない。処理時間・スロットリング・DLQ件数と通知・RDSのCPU/接続数/空きメモリ等も確認する。再配信・DLQ移動・Taskiq併用は実際に観測した結果を残し、発生していなければ未検証とする。
 - キューが空、Lambdaが正常終了、またはログがないという事実だけで全件配信・保存成功としない。送信が観測できなければ、実際の起動・エラーとOutboxの配信可能イベントの有無を切り分ける。本文・APIキー・DB URL・生のTerraform stateを確認記録へ貼らない。
 

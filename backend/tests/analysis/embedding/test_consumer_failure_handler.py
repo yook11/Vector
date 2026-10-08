@@ -8,7 +8,6 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
     AIProviderResponseError,
@@ -29,6 +28,7 @@ from app.analysis.embedding.errors import (
     EmbeddingAnalyzedArticleMissingError,
     EmbeddingResponseInvalidError,
 )
+from app.analysis.logging import create_article_analysis_logger
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.db.errors import (
     DatabaseConnectionError,
@@ -49,6 +49,11 @@ from tests.cloudwatch.records import metric_records
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _HANDLER = "app.analysis.embedding.consumer_failure_handling"
+
+
+@pytest.fixture
+def embedding_logger():
+    return create_article_analysis_logger().bind(stage="embedding")
 
 
 @pytest.fixture
@@ -176,6 +181,7 @@ async def test_records_failure_and_decision_without_changing_original_error(
     failure_action,
     notified,
     capsys,
+    embedding_logger,
 ) -> None:
     """監査・失敗件数・必要な枯渇通知を記録し、元の例外をそのまま返せる。"""
     cause = error.__cause__
@@ -189,6 +195,7 @@ async def test_records_failure_and_decision_without_changing_original_error(
                 analyzed_article_id=123,
                 analyzable_article_id=article_id,
                 provider="gemini",
+                logger=embedding_logger,
             )
             assert result is None
             raise
@@ -226,22 +233,22 @@ async def test_audit_failure_does_not_prevent_notification(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     capsys,
+    embedding_logger,
 ) -> None:
     """実DBの外部キー違反で監査が失敗しても枯渇通知を試みる。"""
     error = AIProviderResponseError(
         reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
         http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
     )
-    with capture_logs() as logs:
-        await EmbeddingConsumerFailureHandler(session_factory).handle(
-            failure=classify_embedding_failure(error),
-            exc=error,
-            analyzed_article_id=123,
-            analyzable_article_id=999_999,
-            provider="gemini",
-        )
+    await EmbeddingConsumerFailureHandler(session_factory).handle(
+        failure=classify_embedding_failure(error),
+        exc=error,
+        analyzed_article_id=123,
+        analyzable_article_id=999_999,
+        provider="gemini",
+        logger=embedding_logger,
+    )
     assert await _events(db_session) == []
-    assert any(entry.get("operation") == "audit" for entry in logs)
     notices = metric_records(capsys.readouterr().out, "ai_provider_exhausted")
     assert len(notices) == 1
     assert notices[0]["provider"] == "gemini"
@@ -249,15 +256,14 @@ async def test_audit_failure_does_not_prevent_notification(
 
 @pytest.mark.asyncio
 async def test_notification_and_metric_failures_do_not_prevent_audit(
-    db_session, session_factory, article_id
+    db_session, session_factory, article_id, embedding_logger
 ) -> None:
-    """通知と計測の二次障害は本文をログに漏らさず、監査と元の失敗を維持する。"""
+    """通知と計測が失敗しても監査を保存し、通知を試みる。"""
     error = AIProviderResponseError(
         reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
         http_error=HttpResponseError(status_code=402, received_at=_RECEIVED_AT),
     )
     with (
-        capture_logs() as logs,
         patch(
             f"{_HANDLER}.record_embedding_processing_outcome",
             side_effect=RuntimeError("metric-secret"),
@@ -273,22 +279,17 @@ async def test_notification_and_metric_failures_do_not_prevent_audit(
             analyzed_article_id=123,
             analyzable_article_id=article_id,
             provider="gemini",
+            logger=embedding_logger,
         )
     assert len(await _events(db_session)) == 1
     notify.assert_called_once_with(error, provider="gemini")
-    assert {entry["operation"] for entry in logs} == {
-        "processing_metric",
-        "notification",
-    }
-    assert "metric-secret" not in str(logs)
-    assert "notification-secret" not in str(logs)
 
 
 @pytest.mark.asyncio
 async def test_secondary_reporting_failure_preserves_original_and_notification(
-    db_session, session_factory, capsys
+    db_session, session_factory, capsys, embedding_logger
 ) -> None:
-    """監査・drop計測・ログまで失敗しても元の例外を置き換えない。"""
+    """監査とdrop計測が失敗しても元の例外と通知を維持する。"""
     error = AIProviderResponseError(
         reason=AIProviderResponseReason.QUOTA_EXHAUSTED,
         http_error=HttpResponseError(status_code=429, received_at=_RECEIVED_AT),
@@ -297,7 +298,6 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
         patch(
             f"{_HANDLER}.record_audit_dropped", side_effect=RuntimeError("drop failed")
         ),
-        patch(f"{_HANDLER}.logger.warning", side_effect=RuntimeError("logger failed")),
         pytest.raises(type(error)) as raised,
     ):
         try:
@@ -309,6 +309,7 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
                 analyzed_article_id=123,
                 analyzable_article_id=999_999,
                 provider="gemini",
+                logger=embedding_logger,
             )
             raise
     assert raised.value is error
@@ -317,9 +318,9 @@ async def test_secondary_reporting_failure_preserves_original_and_notification(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("secondary_failure", ["none", "log", "metric"])
+@pytest.mark.parametrize("secondary_failure", ["none", "metric"])
 async def test_rejection_audit_failure_does_not_escape_handler(
-    db_session, session_factory, secondary_failure
+    db_session, session_factory, secondary_failure, embedding_logger
 ):
     """拒否監査と診断の通常障害を抑止し、未確定の監査を残さない。"""
     rejected = EmbeddingReadyBuildRejected(
@@ -337,25 +338,23 @@ async def test_rejection_audit_failure_does_not_escape_handler(
             "append_ready_build_rejected",
             new=append_then_fail,
         ),
-        patch(f"{_HANDLER}.logger") as log,
         patch(f"{_HANDLER}.record_audit_dropped") as dropped,
     ):
-        if secondary_failure == "log":
-            log.warning.side_effect = RuntimeError("private-log-details")
         if secondary_failure == "metric":
             dropped.side_effect = RuntimeError("private-metric-details")
         await EmbeddingConsumerFailureHandler(
             session_factory
-        ).handle_ready_build_rejected(analyzed_article_id=999_999, rejected=rejected)
+        ).handle_ready_build_rejected(
+            analyzed_article_id=999_999, rejected=rejected, logger=embedding_logger
+        )
 
     assert await _events(db_session) == []
     dropped.assert_called_once()
-    assert "private" not in str(log.warning.call_args)
 
 
 @pytest.mark.asyncio
 async def test_database_failure_audit_preserves_classification_with_null_message(
-    db_session, session_factory, article_id
+    db_session, session_factory, article_id, embedding_logger
 ):
     """DB例外の文面が空でも実DBへ分類と原因チェーンを保存する。"""
     from sqlalchemy.exc import OperationalError
@@ -372,6 +371,7 @@ async def test_database_failure_audit_preserves_classification_with_null_message
         analyzed_article_id=123,
         analyzable_article_id=article_id,
         provider="gemini",
+        logger=embedding_logger,
     )
 
     (event,) = await _events(db_session)

@@ -21,6 +21,12 @@ from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.analysis.embedding.embedder import GeminiEmbedder
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
+from app.analysis.logging import create_article_analysis_logger
+
+
+@pytest.fixture
+def embedding_logger():
+    return create_article_analysis_logger().bind(stage="embedding")
 
 
 @pytest.fixture
@@ -45,9 +51,9 @@ def sdk_client():
 
 
 @pytest.mark.asyncio
-async def test_request_and_valid_vector(sdk_client, ready):
+async def test_request_and_valid_vector(sdk_client, ready, embedding_logger):
     embedder = GeminiEmbedder(client=sdk_client)
-    result = await embedder.embed_document(ready)
+    result = await embedder.embed_document(ready, logger=embedding_logger)
     assert result.to_list() == [0.2] * EMBEDDING_DIMENSION
     assert (
         embedder.model_name,
@@ -73,12 +79,16 @@ async def test_request_and_valid_vector(sdk_client, ready):
         ([types.ContentEmbedding()], "embedding_values_missing"),
     ],
 )
-async def test_missing_response_fields(sdk_client, ready, embeddings, reason):
+async def test_missing_response_fields(
+    sdk_client, ready, embeddings, reason, embedding_logger
+):
     sdk_client.models.embed_content.return_value = types.EmbedContentResponse(
         embeddings=embeddings
     )
     with pytest.raises(AIProviderResultError) as caught:
-        await GeminiEmbedder(client=sdk_client).embed_document(ready)
+        await GeminiEmbedder(client=sdk_client).embed_document(
+            ready, logger=embedding_logger
+        )
     assert caught.value.reason == reason
     sdk_client.aclose.assert_not_called()
 
@@ -95,17 +105,21 @@ async def test_missing_response_fields(sdk_client, ready, embeddings, reason):
         [10001.0] * 768,
     ],
 )
-async def test_invalid_vector(sdk_client, ready, values):
+async def test_invalid_vector(sdk_client, ready, values, embedding_logger):
     sdk_client.models.embed_content.return_value = types.EmbedContentResponse(
         embeddings=[types.ContentEmbedding(values=values)]
     )
     with pytest.raises(EmbeddingResponseInvalidError):
-        await GeminiEmbedder(client=sdk_client).embed_document(ready)
+        await GeminiEmbedder(client=sdk_client).embed_document(
+            ready, logger=embedding_logger
+        )
     sdk_client.aclose.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_uses_first_embedding_and_can_reuse_after_failure(sdk_client, ready):
+async def test_uses_first_embedding_and_can_reuse_after_failure(
+    sdk_client, ready, embedding_logger
+):
     embedder = GeminiEmbedder(client=sdk_client)
     sdk_client.models.embed_content.side_effect = [
         RuntimeError("private"),
@@ -117,8 +131,10 @@ async def test_uses_first_embedding_and_can_reuse_after_failure(sdk_client, read
         ),
     ]
     with pytest.raises(RuntimeError):
-        await embedder.embed_document(ready)
-    assert (await embedder.embed_document(ready)).to_list() == [0.3] * 768
+        await embedder.embed_document(ready, logger=embedding_logger)
+    assert (
+        await embedder.embed_document(ready, logger=embedding_logger)
+    ).to_list() == [0.3] * 768
     sdk_client.aclose.assert_not_called()
 
 
@@ -163,10 +179,14 @@ async def test_uses_first_embedding_and_can_reuse_after_failure(sdk_client, read
         (httpx2.ConnectError("private"), AIProviderTransportError, "network_io"),
     ],
 )
-async def test_provider_error_mapping(sdk_client, ready, error, expected, reason):
+async def test_provider_error_mapping(
+    sdk_client, ready, error, expected, reason, embedding_logger
+):
     sdk_client.models.embed_content.side_effect = error
     with pytest.raises(expected) as caught:
-        await GeminiEmbedder(client=sdk_client).embed_document(ready)
+        await GeminiEmbedder(client=sdk_client).embed_document(
+            ready, logger=embedding_logger
+        )
     assert caught.value.reason == reason
     assert caught.value.__cause__ is error
     sdk_client.models.embed_content.assert_awaited_once()
@@ -175,16 +195,22 @@ async def test_provider_error_mapping(sdk_client, ready, error, expected, reason
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [RuntimeError("private"), asyncio.CancelledError()])
-async def test_unknown_error_and_cancellation_propagate(sdk_client, ready, error):
+async def test_unknown_error_and_cancellation_propagate(
+    sdk_client, ready, error, embedding_logger
+):
     sdk_client.models.embed_content.side_effect = error
     with pytest.raises(type(error)) as caught:
-        await GeminiEmbedder(client=sdk_client).embed_document(ready)
+        await GeminiEmbedder(client=sdk_client).embed_document(
+            ready, logger=embedding_logger
+        )
     assert caught.value is error
     sdk_client.aclose.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_common_client_real_sdk_and_embedder(monkeypatch, ready):
+async def test_common_client_real_sdk_and_embedder(
+    monkeypatch, ready, embedding_logger
+):
     requests = []
     http_clients = []
 
@@ -202,7 +228,9 @@ async def test_common_client_real_sdk_and_embedder(monkeypatch, ready):
     async with client_module.open_gemini_client(
         api_key=SecretStr("test-key"), settings=GeminiConnectionSettings()
     ) as sdk_client:
-        result = await GeminiEmbedder(client=sdk_client).embed_document(ready)
+        result = await GeminiEmbedder(client=sdk_client).embed_document(
+            ready, logger=embedding_logger
+        )
         assert len(result) == 768
         assert not http_clients[0].is_closed
     assert http_clients[0].is_closed

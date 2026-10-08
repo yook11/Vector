@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.typing import FilteringBoundLogger
 
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
@@ -17,8 +17,6 @@ from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.embedding.repository import EmbeddingRepository, EmbeddingSaveState
 from app.audit.stages.embedding import EmbeddingAuditRepository
-
-logger = structlog.get_logger(__name__)
 
 
 class EmbeddingCompletion(StrEnum):
@@ -43,6 +41,7 @@ class EmbeddingService:
         embedder: BaseEmbedder,
         *,
         analyzable_article_id: int,
+        logger: FilteringBoundLogger,
     ) -> EmbeddingCompletion:
         """Ready 型を入力に埋め込みベクトルを生成し永続化する。
 
@@ -57,7 +56,7 @@ class EmbeddingService:
             EmbeddingError: 記事不存在・応答不正。
             DB障害と想定外例外も、そのまま呼び出し元へ伝播する。
         """
-        vector = await embedder.embed_document(ready)
+        vector = await embedder.embed_document(ready, logger=logger)
 
         async with self._session_factory() as session:
             repo = EmbeddingRepository(session)
@@ -66,7 +65,8 @@ class EmbeddingService:
                 raise EmbeddingAnalyzedArticleMissingError()
             if state is EmbeddingSaveState.EMBEDDED:
                 logger.info(
-                    "embedding_concurrent_write",
+                    "embedding_result_save_skipped",
+                    reason="concurrent_write",
                     analyzed_article_id=ready.analyzed_article_id,
                 )
                 return EmbeddingCompletion.ALREADY_EMBEDDED
@@ -85,9 +85,9 @@ class EmbeddingService:
             await session.commit()
 
         logger.info(
-            "embedding_completed",
+            "embedding_result_saved",
+            outcome="saved",
             analyzed_article_id=ready.analyzed_article_id,
-            model=embedder.model_name,
         )
         record_embedding_processing_outcome("succeeded")
         return EmbeddingCompletion.SAVED

@@ -17,9 +17,15 @@ from app.analysis.curation.errors import (
     CurationResponseInvalidError,
 )
 from app.analysis.curation.service import CurationService
+from app.analysis.logging import create_article_analysis_logger
 from app.http.errors import HttpResponseError
 
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+@pytest.fixture
+def curation_logger():
+    return create_article_analysis_logger().bind(stage="curation")
 
 
 def test_untyped_reason_is_rejected():
@@ -51,7 +57,9 @@ def test_response_invalid_keeps_code_without_legacy_policy():
         asyncio.CancelledError(),
     ],
 )
-async def test_service_propagates_ai_call_errors_without_opening_database(original):
+async def test_service_propagates_ai_call_errors_without_opening_database(
+    original, curation_logger
+):
     """AI呼び出しの例外はAIの失敗も含めて変換せず、DBを開かずに伝播する。"""
     session_factory = MagicMock()
     curator = MagicMock()
@@ -60,7 +68,9 @@ async def test_service_propagates_ai_call_errors_without_opening_database(origin
         analyzable_article_id=42, original_title="title", original_content="body"
     )
     with pytest.raises(type(original)) as raised:
-        await CurationService(session_factory).execute(ready, curator)
+        await CurationService(session_factory).execute(
+            ready, curator, logger=curation_logger
+        )
     assert raised.value is original
     session_factory.assert_not_called()
 

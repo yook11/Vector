@@ -66,22 +66,14 @@ def wiring(request, monkeypatch):
 
     client_factory = Mock(side_effect=open_client)
     monkeypatch.setattr(module, "open_gemini_client", client_factory)
-    open_consumer = getattr(module, f"open_{stage}_consumer")
-    log = None
-    if stage == "assessment":
+    open_stage_consumer = getattr(module, f"open_{stage}_consumer")
 
-        def open_consumer(settings):
-            result.log = create_article_analysis_logger().bind(
-                stage=stage, request_id="request-001"
-            )
-            return module.open_assessment_consumer(
-                settings,
-                logger=result.log,
-            )
+    def open_consumer(settings):
+        result.log = create_article_analysis_logger().bind(
+            stage=stage, request_id="request-001"
+        )
+        return open_stage_consumer(settings, logger=result.log)
 
-    else:
-        log = Mock()
-        monkeypatch.setattr(module, "logger", log)
     result = SimpleNamespace(
         module=module,
         stage=stage,
@@ -92,7 +84,6 @@ def wiring(request, monkeypatch):
         sdk_client=sdk_client,
         create_engine=create_engine,
         open_client=client_factory,
-        log=log,
         open=open_consumer,
     )
     return result
@@ -170,17 +161,10 @@ async def test_initialization_diagnostics_preserve_stage_identity(
         async with wiring.open(wiring.settings):
             pytest.fail("初期化失敗時に貸し出してはいけない")
     assert caught.value is original
-    if wiring.stage == "assessment":
-        log_entry = json.loads(capsys.readouterr().out)
-        assert log_entry["event"] == "assessment_initialization_failed"
-        assert log_entry["stage"] == "assessment"
-        assert log_entry["operation"] == expected_stage
-        assert log_entry["level"] == "error"
-        assert log_entry["error_class"] == "builtins.RuntimeError"
-        assert log_entry["error_message"] == "private-initialization"
-    else:
-        wiring.log.warning.assert_called_once_with(
-            f"{wiring.stage}_initialization_failed",
-            stage=expected_stage,
-            error_class="builtins.RuntimeError",
-        )
+    log_entry = json.loads(capsys.readouterr().out)
+    assert log_entry["event"] == f"{wiring.stage}_initialization_failed"
+    assert log_entry["stage"] == wiring.stage
+    assert log_entry["operation"] == expected_stage
+    assert log_entry["level"] == "error"
+    assert log_entry["error_class"] == "builtins.RuntimeError"
+    assert log_entry["error_message"] == "private-initialization"

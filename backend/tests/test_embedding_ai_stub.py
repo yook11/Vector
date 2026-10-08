@@ -12,42 +12,48 @@ import pytest
 
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
+from app.analysis.logging import create_article_analysis_logger
 from tests.fakes.stub_embedder import StubEmbedder
 
 
+@pytest.fixture
+def embedding_logger():
+    return create_article_analysis_logger().bind(stage="embedding")
+
+
 def _ready(text: str) -> ReadyForEmbedding:
-    return ReadyForEmbedding(
-        analyzed_article_id=1, text_for_embedding=text
-    )
+    return ReadyForEmbedding(analyzed_article_id=1, text_for_embedding=text)
 
 
 @pytest.mark.asyncio
-async def test_stub_embedder_returns_768_dim_vector() -> None:
+async def test_stub_embedder_returns_768_dim_vector(embedding_logger) -> None:
     embedder = StubEmbedder()
-    vector = await embedder.embed_document(_ready("test query"))
+    vector = await embedder.embed_document(
+        _ready("test query"), logger=embedding_logger
+    )
     assert isinstance(vector, EmbeddingVector)
     assert len(vector.to_list()) == 768
 
 
 @pytest.mark.asyncio
-async def test_stub_embedder_is_deterministic_per_text() -> None:
+async def test_stub_embedder_is_deterministic_per_text(embedding_logger) -> None:
     embedder = StubEmbedder()
-    v1 = await embedder.embed_document(_ready("test query"))
-    v2 = await embedder.embed_document(_ready("test query"))
+    v1 = await embedder.embed_document(_ready("test query"), logger=embedding_logger)
+    v2 = await embedder.embed_document(_ready("test query"), logger=embedding_logger)
     assert v1.to_list() == v2.to_list()
 
 
 @pytest.mark.asyncio
-async def test_stub_embedder_differs_per_text() -> None:
+async def test_stub_embedder_differs_per_text(embedding_logger) -> None:
     embedder = StubEmbedder()
-    v1 = await embedder.embed_document(_ready("first"))
-    v2 = await embedder.embed_document(_ready("second"))
+    v1 = await embedder.embed_document(_ready("first"), logger=embedding_logger)
+    v2 = await embedder.embed_document(_ready("second"), logger=embedding_logger)
     assert v1.to_list() != v2.to_list()
 
 
 @pytest.mark.asyncio
-async def test_stub_embedder_returns_unit_norm_vector() -> None:
+async def test_stub_embedder_returns_unit_norm_vector(embedding_logger) -> None:
     embedder = StubEmbedder()
-    vector = await embedder.embed_document(_ready("anything"))
+    vector = await embedder.embed_document(_ready("anything"), logger=embedding_logger)
     norm = math.sqrt(sum(v * v for v in vector.to_list()))
     assert math.isclose(norm, 1.0, abs_tol=1e-6)

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import abc
 
-import structlog
 from pydantic import ValidationError
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
@@ -23,8 +23,6 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingResponseInvalidError,
 )
-
-logger = structlog.get_logger(__name__)
 
 
 class BaseEmbedder(abc.ABC):
@@ -80,7 +78,9 @@ class BaseEmbedder(abc.ABC):
 
     # -- 公開 API（具象） -------------------------------------------------
 
-    async def embed_document(self, ready: ReadyForEmbedding) -> EmbeddingVector:
+    async def embed_document(
+        self, ready: ReadyForEmbedding, *, logger: FilteringBoundLogger
+    ) -> EmbeddingVector:
         """Ready 型を入力に単一ドキュメントを埋め込み、永続化可能な VO で返す。
 
         VO 構造制約 (768 dim + 有限性 + サニティ範囲) を満たすことを型レベルで
@@ -89,7 +89,7 @@ class BaseEmbedder(abc.ABC):
         text = ready.text_for_embedding
         prefix = self.document_prefix
         prefixed = f"{prefix}{text}" if prefix else text
-        raw = await self._embed_once(prefixed)
+        raw = await self._embed_once(prefixed, logger=logger)
         return self._to_vector(raw)
 
     @staticmethod
@@ -108,7 +108,9 @@ class BaseEmbedder(abc.ABC):
 
     # -- 単発呼び出し ----------------------------------------------------
 
-    async def _embed_once(self, text: str) -> list[float]:
+    async def _embed_once(
+        self, text: str, *, logger: FilteringBoundLogger
+    ) -> list[float]:
         """1 回の API call。SDK 例外を ``AIProvider*Error`` 階層に翻訳して raise。
 
         例外処理:
@@ -118,10 +120,11 @@ class BaseEmbedder(abc.ABC):
           ``raise`` (from なし、UNKNOWN として catch-all 経路へ)
         - 翻訳された場合のみ ``raise translated from exc`` で原因連鎖
         """
+        call_logger = logger.bind(model=self.model_name)
         try:
-            logger.info("embed_api_call", model=self.model_name)
+            call_logger.info("embedder_api_call")
             vector = await self._call_api(text)
-            logger.info("embed_api_success", model=self.model_name)
+            call_logger.info("embedder_api_success")
             return vector
         except (AIProviderError, EmbeddingError):
             # 既に階層内の例外は二重翻訳しない。
