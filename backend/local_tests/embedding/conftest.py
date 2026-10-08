@@ -200,8 +200,8 @@ def completion_results(monkeypatch):
     results: list[EmbeddingCompletion] = []
     original_consume = EmbeddingConsumer.consume
 
-    async def observe(self, event):
-        result = await original_consume(self, event)
+    async def observe(self, event, *, logger):
+        result = await original_consume(self, event, logger=logger)
         results.append(result)
         return result
 
