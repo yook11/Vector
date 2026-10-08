@@ -14,14 +14,20 @@ from app.ai_providers.gemini import client as module
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.curation.domain import Noise, Signal
+from app.analysis.logging import create_article_analysis_logger
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def curation_logger():
+    return create_article_analysis_logger().bind(stage="curation")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["signal", "noise", "timeout", "unavailable"])
 async def test_curator_uses_borrowed_sdk_with_shared_timeout_and_no_retry(
-    monkeypatch, outcome
+    monkeypatch, outcome, curation_logger
 ):
     requests = []
     clients = []
@@ -75,9 +81,13 @@ async def test_curator_uses_borrowed_sdk_with_shared_timeout_and_no_retry(
                 else AIProviderResponseError
             )
             with pytest.raises(error_type):
-                await curator.curate(title="Title", content="Body")
+                await curator.curate(
+                    title="Title", content="Body", logger=curation_logger
+                )
         else:
-            call = await curator.curate(title="Title", content="Body")
+            call = await curator.curate(
+                title="Title", content="Body", logger=curation_logger
+            )
             assert isinstance(call.result, Signal if outcome == "signal" else Noise)
             assert call.model_name == curator.model_name
             assert call.prompt_version == curator.prompt_version

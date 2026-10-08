@@ -368,7 +368,7 @@ BASH
 
 **監視と判断**
 
-ロググループ`/aws/lambda/vector-embedding-consumer`で`embedding_initialization_failed`、`embedding_message_input_invalid`、`embedding_message_failed`、`embedding_message_completed`と既存の処理結果計測を確認する。LambdaのErrors・Duration・Throttles・ConcurrentExecutions、元キューの可視件数・処理中件数・最古メッセージ経過時間、DLQ件数と既存の滞留アラーム、RDSのCPU・接続数・空きメモリを確認する。新しいメトリクスやアラームは追加しない。
+ロググループ`/aws/lambda/vector-embedding-consumer`で`embedding_initialization_failed`、`embedding_message_processing_started`、`embedding_message_processing_failed`、`embedding_message_processing_completed`と既存の処理結果計測を確認する。LambdaのErrors・Duration・Throttles・ConcurrentExecutions、元キューの可視件数・処理中件数・最古メッセージ経過時間、DLQ件数と既存の滞留アラーム、RDSのCPU・接続数・空きメモリを確認する。新しいメトリクスやアラームは追加しない。
 
 部分バッチ応答の失敗はLambdaのErrorsだけでは判断しない。relay停止中かつキューが空なら実行がないことを異常とせず、受信有効化だけで実処理を検証済みとしない。既存Taskiqは並行稼働を維持する。
 

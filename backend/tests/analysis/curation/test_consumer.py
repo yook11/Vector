@@ -10,7 +10,6 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
     AIProviderResponseError,
@@ -30,6 +29,7 @@ from app.analysis.curation.domain.ready import (
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationCompletion, CurationCompletionKind
+from app.analysis.logging import create_article_analysis_logger
 from app.collection.events import AnalyzableArticleCreated
 from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
@@ -38,6 +38,11 @@ from app.models.curation_noise import CurationNoise
 
 _MODULE = "app.analysis.curation.consumer"
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+@pytest.fixture
+def curation_logger():
+    return create_article_analysis_logger().bind(stage="curation")
 
 
 @pytest.fixture
@@ -81,12 +86,12 @@ def consumer(session_factory):
     ],
 )
 async def test_ready_is_delegated_and_service_completion_returned(
-    consumer, target, completion
+    consumer, target, completion, curation_logger
 ):
     """Ready成立時はServiceへ入力を渡し、その完了値をそのまま返す。"""
     consumer._service.execute.return_value = completion
 
-    result = await consumer.consume(target)
+    result = await consumer.consume(target, logger=curation_logger)
 
     consumer._service.execute.assert_awaited_once_with(
         ReadyForCuration(
@@ -95,6 +100,7 @@ async def test_ready_is_delegated_and_service_completion_returned(
             original_content="content",
         ),
         consumer._curator,
+        logger=curation_logger,
     )
     assert result is completion
     consumer._failure_handler.handle.assert_not_awaited()
@@ -104,7 +110,7 @@ async def test_ready_is_delegated_and_service_completion_returned(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", [ArticleCuration, CurationNoise])
 async def test_already_curated_skips_execution_and_postprocessing(
-    db_session, consumer, target, model
+    db_session, consumer, target, model, curation_logger
 ):
     """Signal・Noise保存済みならServiceも後処理も呼ばず処理済みを返す。"""
     db_session.add(
@@ -116,7 +122,7 @@ async def test_already_curated_skips_execution_and_postprocessing(
     )
     await db_session.commit()
 
-    result = await consumer.consume(target)
+    result = await consumer.consume(target, logger=curation_logger)
 
     assert result == CurationCompletion(CurationCompletionKind.ALREADY_CURATED)
     consumer._service.execute.assert_not_awaited()
@@ -134,7 +140,7 @@ async def test_already_curated_skips_execution_and_postprocessing(
     ],
 )
 async def test_rejection_is_passed_unchanged_to_postprocessing(
-    consumer, target, reason
+    consumer, target, reason, curation_logger
 ):
     """構築拒否はServiceを呼ばず、同じ拒否値を監査処理へ渡し再試行しない。"""
     rejected = CurationReadyBuildRejected(
@@ -144,13 +150,15 @@ async def test_rejection_is_passed_unchanged_to_postprocessing(
         else target.analyzable_article_id,
     )
     with patch.object(ReadyForCuration, "from_facts", return_value=rejected):
-        result = await consumer.consume(target)
+        result = await consumer.consume(target, logger=curation_logger)
 
     assert result == NoRetryCuration(rejected)
     assert result.cause is rejected
     handler = consumer._failure_handler.handle_ready_build_rejected
     handler.assert_awaited_once_with(
-        target_article_id=target.analyzable_article_id, rejected=rejected
+        target_article_id=target.analyzable_article_id,
+        rejected=rejected,
+        logger=curation_logger,
     )
     assert handler.await_args.kwargs["rejected"] is rejected
     consumer._service.execute.assert_not_awaited()
@@ -158,7 +166,7 @@ async def test_rejection_is_passed_unchanged_to_postprocessing(
 
 
 @pytest.mark.asyncio
-async def test_ready_facts_are_loaded_once(consumer, target):
+async def test_ready_facts_are_loaded_once(consumer, target, curation_logger):
     """イベントで指定された記事のDB事実を一度だけ取得してReady判定へ渡す。"""
     load_facts = CurationRepository.load_ready_build_facts
     facts_read = []
@@ -174,7 +182,7 @@ async def test_ready_facts_are_loaded_once(consumer, target):
             ReadyForCuration, "from_facts", wraps=ReadyForCuration.from_facts
         ) as build,
     ):
-        await consumer.consume(target)
+        await consumer.consume(target, logger=curation_logger)
 
     assert len(facts_read) == 1
     assert facts_read[0][0] == target.analyzable_article_id
@@ -195,14 +203,14 @@ async def test_ready_facts_are_loaded_once(consumer, target):
     ],
 )
 async def test_execution_failure_is_handled_and_left_to_retry(
-    consumer, target, original
+    consumer, target, original, curation_logger
 ):
     """実行例外とDB由来記事IDを後処理へ渡し、同じ例外と原因を持ったまま再試行に回す。"""
     cause = ValueError("private-cause")
     original.__cause__ = cause
     consumer._service.execute.side_effect = original
 
-    result = await consumer.consume(target)
+    result = await consumer.consume(target, logger=curation_logger)
 
     assert result == RetryCuration(original)
     assert result.error is original
@@ -213,6 +221,7 @@ async def test_execution_failure_is_handled_and_left_to_retry(
         target_article_id=target.analyzable_article_id,
         analyzable_article_id=target.analyzable_article_id,
         provider="gemini",
+        logger=curation_logger,
     )
     assert consumer._failure_handler.handle.await_args.kwargs["exc"] is original
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
@@ -220,7 +229,7 @@ async def test_execution_failure_is_handled_and_left_to_retry(
 
 @pytest.mark.asyncio
 async def test_failure_unrecoverable_for_input_is_not_retried_after_handling(
-    consumer, target
+    consumer, target, curation_logger
 ):
     """この入力では回復しないAIの失敗は、後処理のあと再試行しない失敗として返す。"""
     original = AIProviderResponseError(
@@ -229,7 +238,7 @@ async def test_failure_unrecoverable_for_input_is_not_retried_after_handling(
     )
     consumer._service.execute.side_effect = original
 
-    result = await consumer.consume(target)
+    result = await consumer.consume(target, logger=curation_logger)
 
     assert result == NoRetryCuration(original)
     consumer._failure_handler.handle.assert_awaited_once()
@@ -239,12 +248,15 @@ async def test_failure_unrecoverable_for_input_is_not_retried_after_handling(
         "target_article_id": target.analyzable_article_id,
         "analyzable_article_id": target.analyzable_article_id,
         "provider": "gemini",
+        "logger": curation_logger,
     }
     consumer._failure_handler.handle_ready_build_rejected.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_decision_survives_failure_handling_error(consumer, target):
+async def test_decision_survives_failure_handling_error(
+    consumer, target, curation_logger
+):
     """後処理が失敗しても、決めた扱いを変えない。"""
     provider_error = AIProviderResponseError(
         reason=AIProviderResponseReason.INPUT_TOO_LONG,
@@ -253,13 +265,15 @@ async def test_decision_survives_failure_handling_error(consumer, target):
     consumer._service.execute.side_effect = provider_error
     consumer._failure_handler.handle.side_effect = RuntimeError("secondary-secret")
 
-    result = await consumer.consume(target)
+    result = await consumer.consume(target, logger=curation_logger)
 
     assert result == NoRetryCuration(provider_error)
 
 
 @pytest.mark.asyncio
-async def test_classification_failure_propagates_for_redelivery(consumer, target):
+async def test_classification_failure_propagates_for_redelivery(
+    consumer, target, curation_logger
+):
     """扱いを決められなければ、その例外を伝えて再配信に任せ、元の例外を原因に残す。"""
     original = AIProviderResponseError(
         reason=AIProviderResponseReason.INPUT_BLOCKED,
@@ -275,7 +289,7 @@ async def test_classification_failure_propagates_for_redelivery(consumer, target
         ),
         pytest.raises(RuntimeError) as raised,
     ):
-        await consumer.consume(target)
+        await consumer.consume(target, logger=curation_logger)
 
     assert raised.value is classification_error
     assert raised.value.__context__ is original
@@ -284,7 +298,7 @@ async def test_classification_failure_propagates_for_redelivery(consumer, target
 
 @pytest.mark.asyncio
 async def test_ready_read_failure_does_not_substitute_event_id(
-    db_session, test_database_url, consumer, target
+    db_session, test_database_url, consumer, target, curation_logger
 ):
     """DB事実の取得失敗では、探索IDを監査の記事IDへ補完しない。"""
     await db_session.execute(
@@ -295,7 +309,7 @@ async def test_ready_read_failure_does_not_substitute_event_id(
     )
     try:
         consumer._session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        result = await consumer.consume(target)
+        result = await consumer.consume(target, logger=curation_logger)
         assert isinstance(result, RetryCuration)
         assert isinstance(result.error, DBAPIError)
         consumer._failure_handler.handle.assert_awaited_once_with(
@@ -304,6 +318,7 @@ async def test_ready_read_failure_does_not_substitute_event_id(
             target_article_id=target.analyzable_article_id,
             analyzable_article_id=None,
             provider="gemini",
+            logger=curation_logger,
         )
         consumer._service.execute.assert_not_awaited()
     finally:
@@ -313,12 +328,14 @@ async def test_ready_read_failure_does_not_substitute_event_id(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["read", "execute"])
-async def test_business_timeout_ends_before_failure_handling(consumer, target, phase):
+async def test_business_timeout_ends_before_failure_handling(
+    consumer, target, phase, curation_logger
+):
     """取得・実行中の期限切れは再試行に回し、後処理はタイマー解除後に呼ぶ。"""
     business_timeout = asyncio.timeout(None)
     load_facts = CurationRepository.load_ready_build_facts
 
-    async def expire(*args):
+    async def expire(*args, **kwargs):
         business_timeout.reschedule(asyncio.get_running_loop().time())
         await asyncio.Event().wait()
 
@@ -339,7 +356,7 @@ async def test_business_timeout_ends_before_failure_handling(consumer, target, p
         patch(f"{_MODULE}.timeout", return_value=business_timeout),
         patch.object(CurationRepository, "load_ready_build_facts", new=observe_read),
     ):
-        result = await consumer.consume(target)
+        result = await consumer.consume(target, logger=curation_logger)
 
     assert isinstance(result, RetryCuration)
     assert isinstance(result.error, TimeoutError)
@@ -350,7 +367,9 @@ async def test_business_timeout_ends_before_failure_handling(consumer, target, p
 
 
 @pytest.mark.asyncio
-async def test_rejection_handling_runs_after_business_timeout(consumer):
+async def test_rejection_handling_runs_after_business_timeout(
+    consumer, curation_logger
+):
     """拒否確定後の監査は業務タイマーを解除してから実行する。"""
     business_timeout = asyncio.timeout(None)
 
@@ -363,7 +382,8 @@ async def test_rejection_handling_runs_after_business_timeout(consumer):
     )
     with patch(f"{_MODULE}.timeout", return_value=business_timeout):
         result = await consumer.consume(
-            AnalyzableArticleCreated(analyzable_article_id=999_999)
+            AnalyzableArticleCreated(analyzable_article_id=999_999),
+            logger=curation_logger,
         )
 
     assert result == NoRetryCuration(
@@ -374,42 +394,33 @@ async def test_rejection_handling_runs_after_business_timeout(consumer):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["handler", "handler_and_logger"])
-async def test_secondary_failure_preserves_original(consumer, target, operation):
-    """後処理・診断の障害で、元の実行例外と決めた扱いを置き換えない。"""
+async def test_secondary_failure_preserves_original(consumer, target, curation_logger):
+    """後処理の障害で、元の実行例外と決めた扱いを置き換えない。"""
     original = CurationResponseInvalidError()
     consumer._service.execute.side_effect = original
-    with (
-        capture_logs() as logs,
-        patch.object(
-            consumer._failure_handler,
-            "handle",
-            side_effect=RuntimeError("secondary-secret"),
-        ),
+    with patch.object(
+        consumer._failure_handler,
+        "handle",
+        side_effect=RuntimeError("secondary-secret"),
     ):
-        if operation == "handler_and_logger":
-            with patch(
-                f"{_MODULE}.logger.warning", side_effect=RuntimeError("log-secret")
-            ):
-                result = await consumer.consume(target)
-        else:
-            result = await consumer.consume(target)
+        result = await consumer.consume(target, logger=curation_logger)
 
     assert result == RetryCuration(original)
-    assert "secondary-secret" not in str(logs)
 
 
 @pytest.mark.asyncio
-async def test_cancellation_bypasses_failure_handling(consumer, target):
+async def test_cancellation_bypasses_failure_handling(
+    consumer, target, curation_logger
+):
     """実行中の外部キャンセルは失敗後処理を呼ばず伝播する。"""
     started = asyncio.Event()
 
-    async def wait_cancel(*args):
+    async def wait_cancel(*args, **kwargs):
         started.set()
         await asyncio.Event().wait()
 
     consumer._service.execute.side_effect = wait_cancel
-    task = asyncio.create_task(consumer.consume(target))
+    task = asyncio.create_task(consumer.consume(target, logger=curation_logger))
     try:
         async with asyncio.timeout(5):
             await started.wait()
@@ -427,7 +438,9 @@ async def test_cancellation_bypasses_failure_handling(consumer, target):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["ready_rejection", "execution_failure"])
-async def test_postprocessing_cancellation_propagates(consumer, target, phase):
+async def test_postprocessing_cancellation_propagates(
+    consumer, target, phase, curation_logger
+):
     """後処理からのキャンセルを通常の二次障害として抑止しない。"""
     cancelled = asyncio.CancelledError()
     if phase == "ready_rejection":
@@ -439,6 +452,6 @@ async def test_postprocessing_cancellation_propagates(consumer, target, phase):
         consumer._failure_handler.handle.side_effect = cancelled
 
     with pytest.raises(asyncio.CancelledError) as raised:
-        await consumer.consume(event)
+        await consumer.consume(event, logger=curation_logger)
 
     assert raised.value is cancelled

@@ -2,10 +2,10 @@
 
 from contextlib import AbstractAsyncContextManager
 
-import structlog
 from google.genai.client import AsyncClient
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.gemini.client import open_gemini_client
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
@@ -22,11 +22,11 @@ from app.lambda_handlers.embedding.failure_recorder import (
 )
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 
-logger = structlog.get_logger(__name__)
-
 
 def open_embedding_consumer(
     settings: EmbeddingConsumerSettings,
+    *,
+    logger: FilteringBoundLogger,
 ) -> AbstractAsyncContextManager[EmbeddingConsumer]:
     """工程別の生成関数を渡し、資源の準備・終了順序を共通側へ委ねる。"""
 

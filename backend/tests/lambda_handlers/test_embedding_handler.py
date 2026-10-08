@@ -1,13 +1,15 @@
-"""Embedding入口の入力の受け渡し・失敗範囲・処理順を確認する。"""
+"""Embedding入口の入力の受け渡し・失敗範囲・処理順と、開始・終端のログを確認する。"""
 
 import asyncio
 import json
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from importlib import import_module
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import ANY, AsyncMock, Mock, call
 
 import pytest
+import structlog
 
 from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
 from app.analysis.assessment.events import ArticleAssessedInScope
@@ -21,11 +23,14 @@ from app.analysis.embedding.domain.ready import (
 )
 from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.service import EmbeddingCompletion
+from app.analysis.logging import create_article_analysis_logger
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
 from app.lambda_handlers.sqs.records import SqsRecord
 
 module = import_module("app.lambda_handlers.embedding.handler")
 pytestmark = pytest.mark.unit
+
+_CONTEXT = SimpleNamespace(aws_request_id="request-001")
 
 
 def valid_body(*, curation_id=11, analyzed_article_id=101):
@@ -47,15 +52,15 @@ def valid_body(*, curation_id=11, analyzed_article_id=101):
 def wiring(monkeypatch):
     state = SimpleNamespace(
         order=[],
-        settings=object(),
+        settings=SimpleNamespace(aws_region="ap-northeast-1", env="test"),
         consumer=SimpleNamespace(
             consume=AsyncMock(return_value=EmbeddingCompletion.SAVED)
         ),
-        log=Mock(),
+        log=create_article_analysis_logger().bind(stage="embedding"),
     )
 
     @asynccontextmanager
-    async def open_consumer(settings):
+    async def open_consumer(settings, *, logger):
         state.order.append("open")
         try:
             yield state.consumer
@@ -66,9 +71,353 @@ def wiring(monkeypatch):
     monkeypatch.setattr(module, "open_embedding_consumer", state.open)
     state.settings_factory = Mock(return_value=state.settings)
     monkeypatch.setattr(module, "EmbeddingConsumerSettings", state.settings_factory)
-    monkeypatch.setattr(module, "logger", state.log)
-    monkeypatch.setattr(module, "setup_lambda_logging", Mock())
     return state
+
+
+@pytest.fixture
+def read_logs(capsys) -> Callable[[], list[dict[str, object]]]:
+    """出力されたログを、実行ごとに変わる時刻・経過時間・発生位置を除いて返す。"""
+
+    def _read() -> list[dict[str, object]]:
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        for log in logs:
+            del log["timestamp"]
+            log.pop("duration_ms", None)
+            log.pop("frames", None)
+        return logs
+
+    return _read
+
+
+def test_handler_outputs_json_without_global_logging_configuration(
+    wiring, monkeypatch, capsys
+):
+    """グローバル設定を使用・変更せず、目的別ロガーからJSONを出力する。"""
+    configure = structlog.configure
+    original_config = structlog.get_config().copy()
+
+    def reject_global_processor(logger, method_name, event_dict):
+        raise AssertionError("global processor must not be used")
+
+    try:
+        configure(processors=[reject_global_processor])
+        global_config = structlog.get_config().copy()
+        configure_spy = Mock(wraps=configure)
+        with monkeypatch.context() as scoped:
+            scoped.setattr(structlog, "configure", configure_spy)
+
+            module.handler(
+                {"Records": [{"messageId": "message-001", "body": valid_body()}]},
+                _CONTEXT,
+            )
+
+            configure_spy.assert_not_called()
+            assert structlog.get_config() == global_config
+
+        records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        completed = next(
+            record
+            for record in records
+            if record["event"] == "embedding_message_processing_completed"
+        )
+        assert completed["log_policy"] == "ai_inference"
+        assert completed["message_id"] == "message-001"
+    finally:
+        configure(**original_config)
+
+
+@pytest.mark.parametrize(
+    ("completion", "outcome"),
+    [
+        pytest.param(EmbeddingCompletion.SAVED, "saved", id="saved"),
+        pytest.param(
+            EmbeddingCompletion.ALREADY_EMBEDDED,
+            "already_embedded",
+            id="already_embedded",
+        ),
+    ],
+)
+def test_completion_is_logged_after_start_with_its_outcome(
+    wiring, read_logs, completion, outcome
+):
+    """正常完了は開始と完了を1件ずつ出し、完了に結果と受信完了の扱いを記録する。"""
+    wiring.consumer.consume.return_value = completion
+
+    module.handler(
+        {"Records": [{"messageId": "completed", "body": valid_body()}]}, _CONTEXT
+    )
+
+    assert read_logs() == [
+        {
+            "event": "embedding_message_processing_started",
+            "level": "info",
+            "log_policy": "ai_inference",
+            "service": "article_analysis",
+            "stage": "embedding",
+            "request_id": "request-001",
+            "environment": "test",
+            "message_id": "completed",
+        },
+        {
+            "event": "embedding_message_processing_completed",
+            "level": "info",
+            "log_policy": "ai_inference",
+            "service": "article_analysis",
+            "stage": "embedding",
+            "request_id": "request-001",
+            "environment": "test",
+            "message_id": "completed",
+            "event_id": "00000000-0000-0000-0000-000000000001",
+            "curation_id": 11,
+            "analyzed_article_id": 101,
+            "outcome": outcome,
+            "message_disposition": "completed",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING,
+        EmbeddingReadyBuildRejectionReason.INPUT_INVALID,
+    ],
+)
+def test_ready_build_rejection_is_logged_as_failure_completed(
+    wiring, read_logs, reason
+):
+    """前提不成立は失敗として拒否理由を記録し、受信完了として失敗一覧に含めない。"""
+    wiring.consumer.consume.return_value = NoRetryEmbedding(
+        EmbeddingReadyBuildRejected(reason)
+    )
+
+    response = module.handler(
+        {"Records": [{"messageId": "rejected", "body": valid_body()}]}, _CONTEXT
+    )
+
+    assert response == {"batchItemFailures": []}
+    assert read_logs()[-1] == {
+        "event": "embedding_message_processing_failed",
+        "level": "warning",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "stage": "embedding",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "rejected",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "curation_id": 11,
+        "analyzed_article_id": 101,
+        "operation": "build_ready",
+        "rejection_code": reason.value,
+        "message_disposition": "completed",
+    }
+
+
+@pytest.mark.parametrize(
+    ("cause", "classification"),
+    [
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED),
+            {"code": "ai_provider_result_error", "failure_reason": "input_blocked"},
+            id="ai_input_blocked",
+        ),
+        pytest.param(
+            EmbeddingAnalyzedArticleMissingError(),
+            {"code": "embedding_analyzed_article_missing"},
+            id="article_missing",
+        ),
+    ],
+)
+def test_failure_not_retried_is_logged_as_failure_completed(
+    wiring, read_logs, cause, classification
+):
+    """再試行しない失敗は、codeと、AIの失敗なら理由を記録し、失敗一覧に含めない。"""
+    wiring.consumer.consume.return_value = NoRetryEmbedding(cause)
+
+    response = module.handler(
+        {"Records": [{"messageId": "not-retried", "body": valid_body()}]}, _CONTEXT
+    )
+
+    assert response == {"batchItemFailures": []}
+    assert read_logs()[-1] == {
+        "event": "embedding_message_processing_failed",
+        "level": "warning",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "stage": "embedding",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "not-retried",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "curation_id": 11,
+        "analyzed_article_id": 101,
+        "message_disposition": "completed",
+        **classification,
+    }
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        pytest.param(RetryEmbedding(RuntimeError("decided-retry")), id="retry"),
+        pytest.param(RuntimeError("decided-retry"), id="raised"),
+    ],
+)
+def test_retried_failure_is_logged_with_its_exception(wiring, read_logs, outcome):
+    """再試行と決めた失敗と伝播した例外は、例外の診断を記録して失敗一覧に載せる。"""
+    wiring.consumer.consume.side_effect = [outcome]
+
+    response = module.handler(
+        {"Records": [{"messageId": "retried", "body": valid_body()}]}, _CONTEXT
+    )
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "retried"}]}
+    assert read_logs()[-1] == {
+        "event": "embedding_message_processing_failed",
+        "level": "error",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "stage": "embedding",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "retried",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "curation_id": 11,
+        "analyzed_article_id": 101,
+        "message_disposition": "batch_item_failure",
+        "error_class": "builtins.RuntimeError",
+        "error_message": "decided-retry",
+    }
+
+
+@pytest.mark.parametrize(
+    ("invalid_message", "failure"),
+    [
+        pytest.param(
+            {"messageId": "invalid"},
+            {
+                "operation": "parse_message",
+                "error_class": "app.lambda_handlers.sqs.errors.SqsInputError",
+                "error_message": "SQS input validation failed: missing_required_field",
+                "error_details": {"reason": "missing_required_field", "field": "body"},
+            },
+            id="missing-body",
+        ),
+        pytest.param(
+            {"messageId": "invalid", "body": "private-invalid-json"},
+            {
+                "operation": "parse_message",
+                "error_class": (
+                    "app.lambda_handlers.sqs.errors.SqsMessageJsonInvalidError"
+                ),
+                "error_message": "SQS message JSON parsing failed",
+                "error_details": {"reason": "invalid_json"},
+            },
+            id="invalid-json",
+        ),
+        pytest.param(
+            {"messageId": "invalid", "body": valid_body(analyzed_article_id=0)},
+            {
+                "operation": "validate_event",
+                "error_class": (
+                    "app.analysis.assessment.events.AssessedEventInvalidError"
+                ),
+                "error_message": "Validation failed: invalid_payload",
+                "error_details": {
+                    "kind": "application_validation",
+                    "reason": "invalid_payload",
+                    "issues": [
+                        {
+                            "field": "payload.analyzed_article_id",
+                            "code": "invalid_value",
+                        }
+                    ],
+                },
+            },
+            id="invalid-event",
+        ),
+    ],
+)
+def test_invalid_message_is_logged_without_previous_event(
+    wiring, read_logs, invalid_message, failure
+):
+    """本文・イベント不正は失敗した処理と検証の診断を記録し、直前のイベントIDを持ち越さない。"""
+    messages = [{"messageId": "saved", "body": valid_body()}, invalid_message]
+
+    module.handler({"Records": messages}, _CONTEXT)
+
+    assert read_logs()[-1] == {
+        "event": "embedding_message_processing_failed",
+        "level": "warning",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "stage": "embedding",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "invalid",
+        "message_disposition": "batch_item_failure",
+        **failure,
+    }
+
+
+def test_settings_failure_is_logged_and_aborts_entire_batch(wiring, read_logs):
+    """設定失敗は個別応答にせず、settingsの処理として記録して元の例外を伝える。"""
+    original = RuntimeError("private-settings")
+    wiring.settings_factory.side_effect = original
+
+    with pytest.raises(RuntimeError) as caught:
+        module.handler(
+            {"Records": [{"messageId": "unprocessed", "body": valid_body()}]},
+            _CONTEXT,
+        )
+
+    assert caught.value is original
+    wiring.open.assert_not_called()
+    assert read_logs() == [
+        {
+            "event": "embedding_initialization_failed",
+            "level": "error",
+            "log_policy": "ai_inference",
+            "service": "article_analysis",
+            "stage": "embedding",
+            "request_id": "request-001",
+            "operation": "settings",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "private-settings",
+        }
+    ]
+
+
+def test_invalid_message_id_is_logged_and_rejects_batch(wiring, read_logs):
+    """後続のIDが欠けていたら、入力不正を記録し、先行分も処理せずバッチ全体を失敗にする。"""
+    body = valid_body()
+    messages = [{"messageId": "valid", "body": body}, {"body": body}]
+
+    with pytest.raises(SqsInputError):
+        module.handler({"Records": messages}, _CONTEXT)
+
+    wiring.consumer.consume.assert_not_awaited()
+    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
+    assert wiring.order == ["open", "close"]
+    assert read_logs() == [
+        {
+            "event": "embedding_sqs_input_invalid",
+            "level": "warning",
+            "log_policy": "ai_inference",
+            "service": "article_analysis",
+            "stage": "embedding",
+            "request_id": "request-001",
+            "environment": "test",
+            "error_class": "app.lambda_handlers.sqs.errors.SqsInputError",
+            "error_message": "SQS input validation failed: missing_required_field",
+            "error_details": {
+                "reason": "missing_required_field",
+                "field": "messageId",
+                "record_index": 1,
+            },
+        }
+    ]
 
 
 def test_batch_reports_only_failed_message_ids(wiring):
@@ -113,65 +462,8 @@ def test_batch_reports_only_failed_message_ids(wiring):
     }
 
 
-@pytest.mark.parametrize(
-    ("cause", "classification"),
-    [
-        pytest.param(
-            AIProviderResultError(reason=AIProviderResultReason.INPUT_BLOCKED),
-            {"code": "ai_provider_result_error", "failure_reason": "input_blocked"},
-            id="ai_input_blocked",
-        ),
-        pytest.param(
-            EmbeddingAnalyzedArticleMissingError(),
-            {"code": "embedding_analyzed_article_missing"},
-            id="article_missing",
-        ),
-    ],
-)
-def test_failure_not_retried_is_completed_with_its_classification(
-    wiring, cause, classification
-):
-    """再試行しない失敗は失敗一覧に含めず、codeと、AIの失敗なら理由を記録する。"""
-    wiring.consumer.consume.return_value = NoRetryEmbedding(cause)
-
-    response = module.handler(
-        {"Records": [{"messageId": "not-retried", "body": valid_body()}]}, None
-    )
-
-    assert response == {"batchItemFailures": []}
-    wiring.log.info.assert_called_once_with(
-        "embedding_message_completed",
-        message_id="not-retried",
-        event_id="00000000-0000-0000-0000-000000000001",
-        analyzed_article_id=101,
-        reason="failure_not_retried",
-        **classification,
-    )
-
-
-def test_retry_decision_is_reported_like_a_processing_failure(wiring):
-    """Consumerが再試行と決めた失敗は、例外と同じ記録で失敗一覧に載せる。"""
-    wiring.consumer.consume.return_value = RetryEmbedding(
-        RuntimeError("private-exception")
-    )
-
-    response = module.handler(
-        {"Records": [{"messageId": "retried", "body": valid_body()}]}, None
-    )
-
-    assert response == {"batchItemFailures": [{"itemIdentifier": "retried"}]}
-    wiring.log.warning.assert_called_once_with(
-        "embedding_message_failed",
-        message_id="retried",
-        event_id="00000000-0000-0000-0000-000000000001",
-        analyzed_article_id=101,
-        error_class="builtins.RuntimeError",
-    )
-    wiring.log.info.assert_not_called()
-
-
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):
-    """異なる入力のpayloadを、バッチで共有するConsumerへそのまま渡す。"""
+    """各payloadとそのメッセージの相関情報を持つロガーをConsumerへ渡す。"""
     messages = [
         {
             "messageId": "first",
@@ -183,234 +475,36 @@ def test_each_payload_is_passed_to_the_shared_consumer(wiring):
         },
     ]
 
-    module.handler({"Records": messages}, None)
+    module.handler({"Records": messages}, SimpleNamespace(aws_request_id="request-1"))
 
-    wiring.open.assert_called_once_with(wiring.settings)
+    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
     assert wiring.consumer.consume.await_args_list == [
-        call(ArticleAssessedInScope(curation_id=11, analyzed_article_id=101)),
-        call(ArticleAssessedInScope(curation_id=22, analyzed_article_id=202)),
-    ]
-
-
-def test_empty_batch_completes_without_consumption(wiring):
-    """空バッチはConsumerを実行せず、空の失敗一覧を返す。"""
-    response = module.handler({"Records": []}, None)
-
-    assert response == {"batchItemFailures": []}
-    wiring.consumer.consume.assert_not_awaited()
-    wiring.open.assert_called_once_with(wiring.settings)
-
-
-def test_invalid_message_id_rejects_batch_before_consumption(wiring):
-    """後続のIDが欠けていたら、先行分も処理せずバッチ全体を失敗にする。"""
-    body = valid_body()
-    messages = [{"messageId": "valid", "body": body}, {"body": body}]
-
-    with pytest.raises(SqsInputError):
-        module.handler({"Records": messages}, None)
-
-    wiring.consumer.consume.assert_not_awaited()
-    wiring.open.assert_called_once_with(wiring.settings)
-    wiring.log.warning.assert_called_once_with(
-        "embedding_sqs_input_invalid",
-        reason="missing_required_field",
-        field="messageId",
-        record_index=1,
-    )
-
-
-@pytest.mark.parametrize(
-    "invalid_message",
-    [
-        pytest.param({"messageId": "invalid"}, id="missing-body"),
-        pytest.param({"messageId": "invalid", "body": "not-json"}, id="invalid-json"),
-        pytest.param(
-            {"messageId": "invalid", "body": valid_body(curation_id=0)},
-            id="invalid-event",
+        call(
+            ArticleAssessedInScope(curation_id=11, analyzed_article_id=101), logger=ANY
         ),
-    ],
-)
-def test_invalid_message_does_not_prevent_following_message(wiring, invalid_message):
-    """本文・イベント不正はそのメッセージだけの失敗とし、後続を処理する。"""
-    messages = [invalid_message, {"messageId": "following", "body": valid_body()}]
-
-    response = module.handler({"Records": messages}, None)
-
-    assert response == {"batchItemFailures": [{"itemIdentifier": "invalid"}]}
-    wiring.consumer.consume.assert_awaited_once_with(
-        ArticleAssessedInScope(curation_id=11, analyzed_article_id=101)
-    )
-
-
-@pytest.mark.parametrize(
-    "completion,reason",
-    [
-        (EmbeddingCompletion.SAVED, "saved"),
-        (EmbeddingCompletion.ALREADY_EMBEDDED, "already_embedded"),
-    ],
-)
-def test_completion_is_successful_with_its_reason(wiring, completion, reason):
-    """Consumerの正常完了は失敗一覧に入れず、完了理由を記録する。"""
-    wiring.consumer.consume.return_value = completion
-
-    response = module.handler(
-        {"Records": [{"messageId": "completed", "body": valid_body()}]}, None
-    )
-
-    assert response == {"batchItemFailures": []}
-    wiring.log.info.assert_called_once_with(
-        "embedding_message_completed",
-        message_id="completed",
-        event_id="00000000-0000-0000-0000-000000000001",
-        analyzed_article_id=101,
-        reason=reason,
-    )
-
-
-def test_message_logging_failure_does_not_change_batch_result(wiring):
-    """成功・失敗の診断が壊れても、各メッセージの処理結果を変えない。"""
-    body = valid_body()
-    messages = [
-        {"messageId": "failed", "body": body},
-        {"messageId": "following", "body": body},
-    ]
-    wiring.consumer.consume.side_effect = [
-        RuntimeError("processing-failed"),
-        EmbeddingCompletion.SAVED,
-    ]
-    wiring.log.warning.side_effect = RuntimeError("warning-failed")
-    wiring.log.info.side_effect = RuntimeError("info-failed")
-
-    response = module.handler({"Records": messages}, None)
-
-    assert response == {"batchItemFailures": [{"itemIdentifier": "failed"}]}
-    assert wiring.consumer.consume.await_count == 2
-
-
-def test_input_logging_failure_does_not_replace_batch_error(wiring):
-    """入力不正の診断が壊れても、バッチ検証の失敗をそのまま伝える。"""
-    wiring.log.warning.side_effect = RuntimeError("logging-failed")
-
-    with pytest.raises(SqsInputError):
-        module.handler({"Records": [{"body": valid_body()}]}, None)
-
-    wiring.consumer.consume.assert_not_awaited()
-
-
-def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
-    """想定外の解析障害も、そのメッセージだけの失敗として後続を処理する。"""
-    body = valid_body()
-    parsed_body = SqsRecord(message_id="id", body=body).parse_json()
-    parsed = module.ArticleAssessedInScopeEvent.from_input(parsed_body)
-    monkeypatch.setattr(
-        SqsRecord,
-        "parse_json",
-        Mock(side_effect=[RuntimeError("private-parser"), parsed_body]),
-    )
-    messages = [
-        {"messageId": "parse-failed", "body": body},
-        {"messageId": "following", "body": body},
+        call(
+            ArticleAssessedInScope(curation_id=22, analyzed_article_id=202), logger=ANY
+        ),
     ]
 
-    response = module.handler({"Records": messages}, None)
-
-    assert response == {"batchItemFailures": [{"itemIdentifier": "parse-failed"}]}
-    wiring.consumer.consume.assert_awaited_once_with(parsed.payload)
-    wiring.log.warning.assert_called_once_with(
-        "embedding_message_failed",
-        message_id="parse-failed",
-        error_class="builtins.RuntimeError",
-    )
-
-
-def test_invalid_event_does_not_reuse_previous_event_in_diagnostics(wiring):
-    """解析できないメッセージの診断に、直前のイベント情報や本文を混入させない。"""
-    messages = [
-        {"messageId": "saved", "body": valid_body()},
-        {"messageId": "invalid", "body": "private-invalid-json"},
-    ]
-
-    module.handler({"Records": messages}, None)
-
-    wiring.log.warning.assert_called_once_with(
-        "embedding_message_input_invalid",
-        message_id="invalid",
-        reason="invalid_json",
-        issues=[],
-    )
-
-
-def test_processing_failure_log_uses_only_verified_identifiers(wiring):
-    """処理失敗の診断には検証済みの識別子を載せ、例外の自由文を残さない。"""
-    wiring.consumer.consume.side_effect = RuntimeError("private-exception")
-
-    module.handler({"Records": [{"messageId": "failed", "body": valid_body()}]}, None)
-
-    wiring.log.warning.assert_called_once_with(
-        "embedding_message_failed",
-        message_id="failed",
-        event_id="00000000-0000-0000-0000-000000000001",
-        analyzed_article_id=101,
-        error_class="builtins.RuntimeError",
-    )
-
-
-def test_initialization_log_failure_preserves_original_exception(wiring):
-    """初期化失敗の診断が壊れても、元の例外を置き換えない。"""
-    original = RuntimeError("settings-failed")
-    wiring.settings_factory.side_effect = original
-    wiring.log.warning.side_effect = RuntimeError("log-failed")
-
-    with pytest.raises(RuntimeError) as caught:
-        module.handler({"Records": []}, None)
-
-    assert caught.value is original
-
-
-@pytest.mark.asyncio
-async def test_processing_cancellation_leaves_borrowed_scopes(wiring):
-    """処理中キャンセルでも、準備した資源の利用範囲を閉じて伝播する。"""
-    wiring.consumer.consume.side_effect = asyncio.CancelledError()
-
-    with pytest.raises(asyncio.CancelledError):
-        await module._run_embedding(
-            {"Records": [{"messageId": "cancelled", "body": valid_body()}]},
-            wiring.settings,
+    for invocation, message in zip(
+        wiring.consumer.consume.await_args_list, messages, strict=True
+    ):
+        payload = invocation.args[0]
+        context = structlog.get_context(invocation.kwargs["logger"])
+        assert (
+            context.items()
+            >= {
+                "service": "article_analysis",
+                "stage": "embedding",
+                "environment": "test",
+                "request_id": "request-1",
+                "message_id": message["messageId"],
+                "event_id": json.loads(message["body"])["event_id"],
+                "curation_id": payload.curation_id,
+                "analyzed_article_id": payload.analyzed_article_id,
+            }.items()
         )
-
-    assert wiring.order == ["open", "close"]
-
-
-def test_settings_failure_aborts_entire_batch(wiring):
-    """設定失敗は個別応答にせず、settings段階を記録して元の例外を伝える。"""
-    original = RuntimeError("private-settings")
-    wiring.settings_factory.side_effect = original
-
-    with pytest.raises(RuntimeError) as caught:
-        module.handler(
-            {"Records": [{"messageId": "unprocessed", "body": valid_body()}]}, None
-        )
-
-    assert caught.value is original
-    wiring.open.assert_not_called()
-    wiring.log.warning.assert_called_once_with(
-        "embedding_initialization_failed",
-        stage="settings",
-        error_class="builtins.RuntimeError",
-    )
-
-
-def test_composition_failure_is_not_recorded_again(wiring):
-    """compositionが担当する初期化失敗を、入口で二重記録せず伝播する。"""
-    original = RuntimeError("composition-failed")
-    wiring.open.side_effect = original
-
-    with pytest.raises(RuntimeError) as caught:
-        module.handler({"Records": []}, None)
-
-    assert caught.value is original
-    wiring.consumer.consume.assert_not_awaited()
-    wiring.log.warning.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -428,17 +522,52 @@ async def test_messages_finish_sequentially_in_input_order(wiring):
     ]
     steps = []
 
-    async def consume(payload):
-        steps.append(("start", payload.curation_id))
+    async def consume(payload, *, logger):
+        steps.append(("start", payload.analyzed_article_id))
         await asyncio.sleep(0)
-        steps.append(("end", payload.curation_id))
+        steps.append(("end", payload.analyzed_article_id))
         return EmbeddingCompletion.SAVED
 
     wiring.consumer.consume.side_effect = consume
 
-    await module._run_embedding({"Records": messages}, wiring.settings)
+    await module._run_embedding(
+        {"Records": messages}, wiring.settings, logger=wiring.log
+    )
 
-    assert steps == [("start", 11), ("end", 11), ("start", 22), ("end", 22)]
+    assert steps == [("start", 101), ("end", 101), ("start", 202), ("end", 202)]
+
+
+def test_empty_batch_completes_without_consumption(wiring):
+    """空バッチはConsumerを実行せず、空の失敗一覧を返す。"""
+    response = module.handler({"Records": []}, None)
+
+    assert response == {"batchItemFailures": []}
+    wiring.consumer.consume.assert_not_awaited()
+    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
+    assert wiring.order == ["open", "close"]
+
+
+@pytest.mark.parametrize(
+    "invalid_message",
+    [
+        pytest.param({"messageId": "invalid"}, id="missing-body"),
+        pytest.param({"messageId": "invalid", "body": "not-json"}, id="invalid-json"),
+        pytest.param(
+            {"messageId": "invalid", "body": valid_body(analyzed_article_id=0)},
+            id="invalid-event",
+        ),
+    ],
+)
+def test_invalid_message_does_not_prevent_following_message(wiring, invalid_message):
+    """本文・イベント不正はそのメッセージだけの失敗とし、後続を処理する。"""
+    messages = [invalid_message, {"messageId": "following", "body": valid_body()}]
+
+    response = module.handler({"Records": messages}, None)
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "invalid"}]}
+    wiring.consumer.consume.assert_awaited_once_with(
+        ArticleAssessedInScope(curation_id=11, analyzed_article_id=101), logger=ANY
+    )
 
 
 def test_duplicate_id_is_rejected_before_reading_bodies(wiring):
@@ -466,12 +595,33 @@ def test_failed_message_id_is_not_trimmed(wiring):
     assert response == {"batchItemFailures": [{"itemIdentifier": " failed "}]}
 
 
+def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
+    """想定外の解析障害も、そのメッセージだけの失敗として後続を処理する。"""
+    body = valid_body()
+    parsed_body = SqsRecord(message_id="id", body=body).parse_json()
+    parsed = module.ArticleAssessedInScopeEvent.from_input(parsed_body)
+    monkeypatch.setattr(
+        SqsRecord,
+        "parse_json",
+        Mock(side_effect=[RuntimeError("private-parser"), parsed_body]),
+    )
+    messages = [
+        {"messageId": "parse-failed", "body": body},
+        {"messageId": "following", "body": body},
+    ]
+
+    response = module.handler({"Records": messages}, None)
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "parse-failed"}]}
+    wiring.consumer.consume.assert_awaited_once_with(parsed.payload, logger=ANY)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "interruption", [asyncio.CancelledError(), KeyboardInterrupt(), SystemExit()]
 )
-async def test_control_exception_stops_batch(wiring, interruption):
-    """キャンセル・終了要求は個別失敗に変換せず、後続処理を止めて伝播する。"""
+async def test_control_exception_stops_batch(wiring, read_logs, interruption):
+    """キャンセル・終了要求は個別失敗に変換せず、終端を記録せずに後続処理を止めて伝播する。"""
     wiring.consumer.consume.side_effect = interruption
     body = valid_body()
     messages = [
@@ -480,75 +630,73 @@ async def test_control_exception_stops_batch(wiring, interruption):
     ]
 
     with pytest.raises(type(interruption)) as caught:
-        await module._run_embedding({"Records": messages}, wiring.settings)
+        await module._run_embedding(
+            {"Records": messages},
+            wiring.settings,
+            logger=create_article_analysis_logger().bind(stage="embedding"),
+        )
 
     assert caught.value is interruption
     wiring.consumer.consume.assert_awaited_once()
-    wiring.log.warning.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    "reason",
-    [
-        EmbeddingReadyBuildRejectionReason.ANALYZED_ARTICLE_MISSING,
-        EmbeddingReadyBuildRejectionReason.INPUT_INVALID,
-    ],
-)
-def test_ready_build_rejection_logs_only_its_reason(wiring, reason):
-    """拒否結果は分析成功と区別して、安全な理由コードを記録する。"""
-    wiring.consumer.consume.return_value = NoRetryEmbedding(
-        EmbeddingReadyBuildRejected(reason)
-    )
-    response = module.handler(
-        {"Records": [{"messageId": "rejected", "body": valid_body()}]}, None
-    )
-    assert response == {"batchItemFailures": []}
-    fields = wiring.log.info.call_args.kwargs
-    assert fields["reason"] == "ready_build_rejected"
-    assert fields["rejection_code"] == reason.value
-
-
-def test_contract_failure_log_contains_only_declared_details(wiring):
-    """工程の検証詳細を記録し、未知項目名や本文をログへ出さない。"""
-    data = json.loads(valid_body())
-    data["payload"]["private-field"] = "private-value"
-    module.handler(
-        {
-            "Records": [
-                {
-                    "messageId": "invalid",
-                    "body": json.dumps(data),
-                    "receiptHandle": "private-receipt",
-                }
-            ]
-        },
-        None,
-    )
-
-    wiring.log.warning.assert_called_once_with(
-        "embedding_message_input_invalid",
-        message_id="invalid",
-        reason="invalid_payload",
-        issues=[{"field": "payload", "code": "unknown_field"}],
-    )
-
-
-def test_validation_log_failure_preserves_redelivery(wiring):
-    """JSON・イベント検証のログ障害でも再配信対象を維持する。"""
-    wiring.log.warning.side_effect = RuntimeError("private-log")
-    data = json.loads(valid_body())
-    data["schema_version"] = 2
-    messages = [
-        {"messageId": "json", "body": "private-json"},
-        {"messageId": "event", "body": json.dumps(data)},
-        {"messageId": "following", "body": valid_body()},
+    assert [log["event"] for log in read_logs()] == [
+        "embedding_message_processing_started"
     ]
 
-    response = module.handler({"Records": messages}, None)
 
-    assert response == {
-        "batchItemFailures": [
-            {"itemIdentifier": "json"},
-            {"itemIdentifier": "event"},
-        ]
+def test_composition_failure_is_not_recorded_again(wiring, read_logs):
+    """compositionが担当する初期化失敗を、入口で二重記録せず伝播する。"""
+    original = RuntimeError("composition-failed")
+    wiring.open.side_effect = original
+
+    with pytest.raises(RuntimeError) as caught:
+        module.handler({"Records": []}, None)
+
+    assert caught.value is original
+    wiring.consumer.consume.assert_not_awaited()
+    assert read_logs() == []
+
+
+@pytest.mark.asyncio
+async def test_processing_cancellation_leaves_borrowed_scope(wiring):
+    """処理中キャンセルでも、Consumerの利用範囲を閉じて伝播する。"""
+    wiring.consumer.consume.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await module._run_embedding(
+            {"Records": [{"messageId": "cancelled", "body": valid_body()}]},
+            wiring.settings,
+            logger=wiring.log,
+        )
+
+    assert wiring.order == ["open", "close"]
+
+
+def test_shared_logging_context_is_scoped_to_invocation(wiring):
+    """呼び出しの相関情報を資源の準備・解放まで共有し、呼び出し元へ持ち越さない。"""
+    snapshots = {}
+
+    @asynccontextmanager
+    async def open_consumer(settings, *, logger):
+        snapshots["initialization"] = structlog.contextvars.get_contextvars()
+        try:
+            yield wiring.consumer
+        finally:
+            snapshots["cleanup"] = structlog.contextvars.get_contextvars()
+
+    wiring.open.side_effect = open_consumer
+    with structlog.contextvars.bound_contextvars(request_id="outer-request"):
+        outer_context = structlog.contextvars.get_contextvars()
+        module.handler(
+            {"Records": [{"messageId": "message-001", "body": valid_body()}]},
+            SimpleNamespace(aws_request_id="request-001"),
+        )
+        assert structlog.contextvars.get_contextvars() == outer_context
+
+    invocation = {
+        "service": "article_analysis",
+        "stage": "embedding",
+        "environment": "test",
+        "request_id": "request-001",
     }
+    assert snapshots["initialization"] == invocation
+    assert snapshots["cleanup"] == invocation

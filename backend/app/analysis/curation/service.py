@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import assert_never
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.typing import FilteringBoundLogger
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
@@ -18,8 +18,6 @@ from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
 from app.audit.stages.curation import CurationAuditRepository
 from app.models.outbox_event import OutboxEvent
-
-logger = structlog.get_logger(__name__)
 
 # outcome_code (pipeline_events) — stage 'curation' と語彙整合 (assessed_* と対称)。
 _CURATED_SIGNAL_CODE = "curated_signal"
@@ -66,11 +64,14 @@ class CurationService:
         self,
         ready: ReadyForCuration,
         curator: BaseCurator,
+        *,
+        logger: FilteringBoundLogger,
     ) -> CurationCompletion:
         """結果のcommitまたは重複保存の見送りを正常終了として返す。"""
         envelope = await curator.curate(
             title=ready.original_title,
             content=ready.original_content,
+            logger=logger,
         )
 
         async with self._session_factory() as session:
@@ -82,7 +83,8 @@ class CurationService:
                     if curation_id is None:
                         # race lost — 勝者 task が audit を焼く
                         logger.info(
-                            "curate_race_loss_signal",
+                            "curation_result_save_skipped",
+                            reason="concurrent_write",
                             analyzable_article_id=ready.analyzable_article_id,
                         )
                         return CurationCompletion(
@@ -106,9 +108,10 @@ class CurationService:
                     )
                     await session.commit()
                     logger.info(
-                        "curation_completed",
-                        analyzable_article_id=ready.analyzable_article_id,
+                        "curation_result_saved",
+                        outcome="signal",
                         curation_id=curation_id,
+                        analyzable_article_id=ready.analyzable_article_id,
                     )
                     record_curation_processing_outcome("signal")
                     return CurationCompletion(
@@ -122,7 +125,8 @@ class CurationService:
                     if noise_id is None:
                         # race lost — 勝者 task が audit を焼く
                         logger.info(
-                            "curate_race_loss_noise",
+                            "curation_result_save_skipped",
+                            reason="concurrent_write",
                             analyzable_article_id=ready.analyzable_article_id,
                         )
                         return CurationCompletion(
@@ -135,9 +139,9 @@ class CurationService:
                     )
                     await session.commit()
                     logger.info(
-                        "curate_persisted_noise",
+                        "curation_result_saved",
+                        outcome="noise",
                         analyzable_article_id=ready.analyzable_article_id,
-                        noise_id=noise_id,
                     )
                     record_curation_processing_outcome("noise")
                     return CurationCompletion(CurationCompletionKind.NOISE)

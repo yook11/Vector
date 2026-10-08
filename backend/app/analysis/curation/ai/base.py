@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import abc
 
-import structlog
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.errors import AIProviderError
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.errors import CurationError
-
-logger = structlog.get_logger(__name__)
 
 
 class BaseCurator(abc.ABC):
@@ -60,6 +58,8 @@ class BaseCurator(abc.ABC):
         self,
         title: str,
         content: str,
+        *,
+        logger: FilteringBoundLogger,
     ) -> CurationCall[Signal] | CurationCall[Noise]:
         """記事を読み、relevance 判定 + 翻訳要約を行って構造化データを返す。
 
@@ -102,7 +102,7 @@ class BaseCurator(abc.ABC):
     # -- 単発呼び出し --
 
     async def _call_once(
-        self, prompt: str
+        self, prompt: str, *, logger: FilteringBoundLogger
     ) -> CurationCall[Signal] | CurationCall[Noise]:
         """プロバイダー API を 1 回呼び出し、例外を Layer 2 階層に変換する。
 
@@ -110,10 +110,11 @@ class BaseCurator(abc.ABC):
         translated from exc`` を避け、bare re-raise する (``__cause__`` の
         自己参照を避けて stacktrace の正常性を保つ)。
         """
+        call_logger = logger.bind(model=self.model_name)
         try:
-            logger.info("curator_api_call", model=self.model_name)
+            call_logger.info("curator_api_call")
             envelope = await self._call_api(prompt)
-            logger.info("curator_api_success", model=self.model_name)
+            call_logger.info("curator_api_success")
             return envelope
         except (AIProviderError, CurationError):
             # 既に Layer 2 に翻訳済 (_call_api 内で raise された)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from asyncio import timeout
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.typing import FilteringBoundLogger
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.consumer_failure_classification import (
@@ -29,8 +29,6 @@ from app.analysis.curation.service import (
 from app.audit.error_fields import exception_fqn
 from app.collection.events import AnalyzableArticleCreated
 
-logger = structlog.get_logger(__name__)
-
 
 class CurationConsumer:
     """1イベントの正常完了か、後処理を終えた失敗を再試行するかを呼び出し元へ伝える。"""
@@ -46,7 +44,7 @@ class CurationConsumer:
         self._failure_handler = CurationConsumerFailureHandler(session_factory)
 
     async def consume(
-        self, event: AnalyzableArticleCreated
+        self, event: AnalyzableArticleCreated, *, logger: FilteringBoundLogger
     ) -> CurationCompletion | NoRetryCuration | RetryCuration:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
         analyzable_article_id: int | None = None
@@ -67,7 +65,9 @@ class CurationConsumer:
                         )
                     rejected = build_result
                 else:
-                    return await self._service.execute(build_result, self._curator)
+                    return await self._service.execute(
+                        build_result, self._curator, logger=logger
+                    )
         except Exception as exc:
             failure = classify_curation_failure(exc)
             try:
@@ -77,21 +77,21 @@ class CurationConsumer:
                     target_article_id=event.analyzable_article_id,
                     analyzable_article_id=analyzable_article_id,
                     provider=self._curator.provider,
+                    logger=logger,
                 )
             except Exception as secondary:
-                try:
-                    logger.warning(
-                        "curation_consumer_failure_processing_failed",
-                        target_article_id=event.analyzable_article_id,
-                        business_error_class=exception_fqn(exc),
-                        secondary_error_class=exception_fqn(secondary),
-                    )
-                except Exception:  # noqa: S110
-                    # 後処理とログが失敗しても決めた扱いを維持する。
-                    pass
+                logger.warning(
+                    "curation_consumer_failure_processing_failed",
+                    operation="failure_handling",
+                    analyzable_article_id=event.analyzable_article_id,
+                    business_error_class=exception_fqn(exc),
+                    exc_info=secondary,
+                )
             return failure
 
         await self._failure_handler.handle_ready_build_rejected(
-            target_article_id=event.analyzable_article_id, rejected=rejected
+            target_article_id=event.analyzable_article_id,
+            rejected=rejected,
+            logger=logger,
         )
         return NoRetryCuration(rejected)

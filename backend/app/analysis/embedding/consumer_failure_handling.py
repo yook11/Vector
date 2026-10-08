@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.typing import FilteringBoundLogger
 
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.embedding.consumer_failure_classification import (
@@ -17,8 +17,6 @@ from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.embedding import EmbeddingAuditRepository
-
-logger = structlog.get_logger(__name__)
 
 
 class EmbeddingConsumerFailureHandler:
@@ -35,13 +33,14 @@ class EmbeddingConsumerFailureHandler:
         analyzed_article_id: int,
         analyzable_article_id: int | None,
         provider: str,
+        logger: FilteringBoundLogger,
     ) -> None:
         """通常の二次障害で元の処理例外を置き換えず、後処理だけを実行する。"""
         try:
             record_embedding_processing_outcome("failed")
         except Exception as metric_exc:
             self._record_secondary_failure(
-                "processing_metric", analyzed_article_id, exc, metric_exc
+                "processing_metric", analyzed_article_id, exc, metric_exc, logger=logger
             )
 
         try:
@@ -56,33 +55,41 @@ class EmbeddingConsumerFailureHandler:
                 )
                 await session.commit()
         except Exception as audit_exc:
-            try:
-                logger.warning(
-                    "embedding_consumer_failure_audit_dropped",
-                    operation="audit",
-                    analyzed_article_id=analyzed_article_id,
-                    business_error_class=exception_fqn(exc),
-                    secondary_error_class=exception_fqn(audit_exc),
-                )
-            except Exception:  # noqa: S110
-                # ログの障害でdrop計測と通知を止めない。
-                pass
+            logger.warning(
+                "embedding_consumer_failure_audit_dropped",
+                operation="audit",
+                analyzed_article_id=analyzed_article_id,
+                business_error_class=exception_fqn(exc),
+                exc_info=audit_exc,
+            )
             try:
                 record_audit_dropped(EmbeddingAuditRepository.STAGE)
             except Exception as metric_exc:
                 self._record_secondary_failure(
-                    "audit_dropped_metric", analyzed_article_id, exc, metric_exc
+                    "audit_dropped_metric",
+                    analyzed_article_id,
+                    exc,
+                    metric_exc,
+                    logger=logger,
                 )
 
         try:
             record_ai_provider_exhausted(exc, provider=provider)
         except Exception as notification_exc:
             self._record_secondary_failure(
-                "notification", analyzed_article_id, exc, notification_exc
+                "notification",
+                analyzed_article_id,
+                exc,
+                notification_exc,
+                logger=logger,
             )
 
     async def handle_ready_build_rejected(
-        self, *, analyzed_article_id: int, rejected: EmbeddingReadyBuildRejected
+        self,
+        *,
+        analyzed_article_id: int,
+        rejected: EmbeddingReadyBuildRejected,
+        logger: FilteringBoundLogger,
     ) -> None:
         """理由記録の通常障害で、確定した受信完了を再配信へ戻さない。"""
         try:
@@ -92,16 +99,13 @@ class EmbeddingConsumerFailureHandler:
                 )
                 await session.commit()
         except Exception as audit_exc:
-            try:
-                logger.warning(
-                    "embedding_ready_build_rejected_audit_dropped",
-                    analyzed_article_id=analyzed_article_id,
-                    reason=rejected.reason.value,
-                    audit_error_class=exception_fqn(audit_exc),
-                )
-            except Exception:  # noqa: S110
-                # 診断ログの障害でも受信完了を維持する。
-                pass
+            logger.warning(
+                "embedding_ready_build_rejected_audit_dropped",
+                analyzed_article_id=analyzed_article_id,
+                operation="audit",
+                rejection_code=rejected.reason.value,
+                exc_info=audit_exc,
+            )
             try:
                 record_audit_dropped(EmbeddingAuditRepository.STAGE)
             except Exception:  # noqa: S110
@@ -114,16 +118,14 @@ class EmbeddingConsumerFailureHandler:
         analyzed_article_id: int,
         original: Exception,
         secondary: Exception,
+        *,
+        logger: FilteringBoundLogger,
     ) -> None:
-        """二次障害は例外本文やトレースバックを出さずに記録する。"""
-        try:
-            logger.warning(
-                "embedding_consumer_failure_handling_failed",
-                operation=operation,
-                analyzed_article_id=analyzed_article_id,
-                business_error_class=exception_fqn(original),
-                secondary_error_class=exception_fqn(secondary),
-            )
-        except Exception:  # noqa: S110
-            # ログ出力自体の障害でも元の例外と残りの後処理を優先する。
-            pass
+        """二次例外の診断を共通変換へ渡し、元の業務例外型を添える。"""
+        logger.warning(
+            "embedding_consumer_failure_handling_failed",
+            operation=operation,
+            analyzed_article_id=analyzed_article_id,
+            business_error_class=exception_fqn(original),
+            exc_info=secondary,
+        )

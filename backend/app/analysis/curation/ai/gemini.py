@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Final
 
-import structlog
 from google.genai.client import AsyncClient
 from google.genai.types import GenerateContentConfig, GenerateContentResponse
 from pydantic import ValidationError
+from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.errors import AIProviderResultError
 from app.ai_providers.gemini.error_translator import (
@@ -30,8 +30,6 @@ from app.analysis.curation.ai.parse import parse_curation
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.errors import CurationResponseInvalidError
-
-logger = structlog.get_logger(__name__)
 
 # プロバイダーの出力拒否を分類し、処理方針は呼び出し元へ委ねる。
 _POLICY_BLOCKED_FINISH_REASONS: frozenset[str] = frozenset(
@@ -87,10 +85,12 @@ class GeminiCurator(BaseCurator):
         self,
         title: str,
         content: str,
+        *,
+        logger: FilteringBoundLogger,
     ) -> CurationCall[Signal] | CurationCall[Noise]:
         """プロンプトを構築し API を呼び出して envelope を返す。"""
         prompt = GeminiCurationPrompt.render(title=title, content=content)
-        return await self._call_once(prompt)
+        return await self._call_once(prompt, logger=logger)
 
     async def _call_api(
         self, prompt: str

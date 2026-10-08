@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from asyncio import timeout
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.typing import FilteringBoundLogger
 
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.embedding.ai.base import BaseEmbedder
@@ -28,8 +28,6 @@ from app.analysis.embedding.service import (
 )
 from app.audit.error_fields import exception_fqn
 
-logger = structlog.get_logger(__name__)
-
 
 class EmbeddingConsumer:
     """1イベントの正常完了か、後処理を終えた失敗を再試行するかを呼び出し元へ伝える。"""
@@ -45,7 +43,7 @@ class EmbeddingConsumer:
         self._failure_handler = EmbeddingConsumerFailureHandler(session_factory)
 
     async def consume(
-        self, event: ArticleAssessedInScope
+        self, event: ArticleAssessedInScope, *, logger: FilteringBoundLogger
     ) -> EmbeddingCompletion | NoRetryEmbedding | RetryEmbedding:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
         analyzable_article_id: int | None = None
@@ -71,6 +69,7 @@ class EmbeddingConsumer:
                         ready,
                         self._embedder,
                         analyzable_article_id=analyzable_article_id,
+                        logger=logger,
                     )
         except Exception as exc:
             failure = classify_embedding_failure(exc)
@@ -81,21 +80,21 @@ class EmbeddingConsumer:
                     analyzed_article_id=event.analyzed_article_id,
                     analyzable_article_id=analyzable_article_id,
                     provider=self._embedder.provider,
+                    logger=logger,
                 )
             except Exception as secondary:
-                try:
-                    logger.warning(
-                        "embedding_consumer_failure_processing_failed",
-                        analyzed_article_id=event.analyzed_article_id,
-                        business_error_class=exception_fqn(exc),
-                        secondary_error_class=exception_fqn(secondary),
-                    )
-                except Exception:  # noqa: S110
-                    # 後処理とログが失敗しても決めた扱いを維持する。
-                    pass
+                logger.warning(
+                    "embedding_consumer_failure_processing_failed",
+                    operation="failure_handling",
+                    analyzed_article_id=event.analyzed_article_id,
+                    business_error_class=exception_fqn(exc),
+                    exc_info=secondary,
+                )
             return failure
 
         await self._failure_handler.handle_ready_build_rejected(
-            analyzed_article_id=event.analyzed_article_id, rejected=rejected
+            analyzed_article_id=event.analyzed_article_id,
+            rejected=rejected,
+            logger=logger,
         )
         return NoRetryEmbedding(rejected)
