@@ -97,7 +97,6 @@ class AssessmentService:
                         logger.info(
                             "assessment_result_save_skipped",
                             reason="concurrent_write",
-                            curation_id=curation_id,
                         )
                         return AssessmentCompletion(
                             AssessmentCompletionKind.ALREADY_ASSESSED
@@ -124,7 +123,6 @@ class AssessmentService:
                         "assessment_result_saved",
                         outcome="in_scope",
                         analyzed_article_id=analyzed_article_id,
-                        curation_id=curation_id,
                     )
                     record_assessment_processing_outcome("in_scope")
                     return AssessmentCompletion(
@@ -141,7 +139,6 @@ class AssessmentService:
                         logger.info(
                             "assessment_result_save_skipped",
                             reason="concurrent_write",
-                            curation_id=curation_id,
                         )
                         return AssessmentCompletion(
                             AssessmentCompletionKind.ALREADY_ASSESSED
@@ -156,7 +153,6 @@ class AssessmentService:
                     logger.info(
                         "assessment_result_saved",
                         outcome="out_of_scope",
-                        curation_id=curation_id,
                     )
                     record_assessment_processing_outcome("out_of_scope")
                     # Stage 5 chain なし

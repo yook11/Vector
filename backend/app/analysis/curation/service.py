@@ -85,7 +85,6 @@ class CurationService:
                         logger.info(
                             "curation_result_save_skipped",
                             reason="concurrent_write",
-                            analyzable_article_id=ready.analyzable_article_id,
                         )
                         return CurationCompletion(
                             CurationCompletionKind.ALREADY_CURATED
@@ -111,7 +110,6 @@ class CurationService:
                         "curation_result_saved",
                         outcome="signal",
                         curation_id=curation_id,
-                        analyzable_article_id=ready.analyzable_article_id,
                     )
                     record_curation_processing_outcome("signal")
                     return CurationCompletion(
@@ -127,7 +125,6 @@ class CurationService:
                         logger.info(
                             "curation_result_save_skipped",
                             reason="concurrent_write",
-                            analyzable_article_id=ready.analyzable_article_id,
                         )
                         return CurationCompletion(
                             CurationCompletionKind.ALREADY_CURATED
@@ -141,7 +138,6 @@ class CurationService:
                     logger.info(
                         "curation_result_saved",
                         outcome="noise",
-                        analyzable_article_id=ready.analyzable_article_id,
                     )
                     record_curation_processing_outcome("noise")
                     return CurationCompletion(CurationCompletionKind.NOISE)

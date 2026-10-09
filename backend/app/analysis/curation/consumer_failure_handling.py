@@ -40,7 +40,7 @@ class CurationConsumerFailureHandler:
             record_curation_processing_outcome("failed")
         except Exception as metric_exc:
             self._record_secondary_failure(
-                "processing_metric", target_article_id, exc, metric_exc, logger=logger
+                "processing_metric", exc, metric_exc, logger=logger
             )
 
         try:
@@ -58,7 +58,6 @@ class CurationConsumerFailureHandler:
             logger.warning(
                 "curation_consumer_failure_audit_dropped",
                 operation="audit",
-                analyzable_article_id=target_article_id,
                 business_error_class=exception_fqn(exc),
                 exc_info=audit_exc,
             )
@@ -67,7 +66,6 @@ class CurationConsumerFailureHandler:
             except Exception as metric_exc:
                 self._record_secondary_failure(
                     "audit_dropped_metric",
-                    target_article_id,
                     exc,
                     metric_exc,
                     logger=logger,
@@ -77,7 +75,7 @@ class CurationConsumerFailureHandler:
             record_ai_provider_exhausted(exc, provider=provider)
         except Exception as notification_exc:
             self._record_secondary_failure(
-                "notification", target_article_id, exc, notification_exc, logger=logger
+                "notification", exc, notification_exc, logger=logger
             )
 
     async def handle_ready_build_rejected(
@@ -97,7 +95,6 @@ class CurationConsumerFailureHandler:
         except Exception as audit_exc:
             logger.warning(
                 "curation_ready_build_rejected_audit_dropped",
-                analyzable_article_id=target_article_id,
                 operation="audit",
                 rejection_code=rejected.reason.value,
                 exc_info=audit_exc,
@@ -111,7 +108,6 @@ class CurationConsumerFailureHandler:
     @staticmethod
     def _record_secondary_failure(
         operation: Literal["processing_metric", "audit_dropped_metric", "notification"],
-        target_article_id: int,
         original: Exception,
         secondary: Exception,
         *,
@@ -121,7 +117,6 @@ class CurationConsumerFailureHandler:
         logger.warning(
             "curation_consumer_failure_handling_failed",
             operation=operation,
-            analyzable_article_id=target_article_id,
             business_error_class=exception_fqn(original),
             exc_info=secondary,
         )

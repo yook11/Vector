@@ -40,7 +40,7 @@ class AssessmentConsumerFailureHandler:
             record_assessment_processing_outcome("failed")
         except Exception as metric_exc:
             self._record_secondary_failure(
-                "processing_metric", curation_id, exc, metric_exc, logger=logger
+                "processing_metric", exc, metric_exc, logger=logger
             )
 
         try:
@@ -58,7 +58,6 @@ class AssessmentConsumerFailureHandler:
             logger.warning(
                 "assessment_consumer_failure_audit_dropped",
                 operation="audit",
-                curation_id=curation_id,
                 business_error_class=exception_fqn(exc),
                 exc_info=audit_exc,
             )
@@ -66,14 +65,14 @@ class AssessmentConsumerFailureHandler:
                 record_audit_dropped(AssessmentAuditRepository.STAGE)
             except Exception as metric_exc:
                 self._record_secondary_failure(
-                    "audit_dropped_metric", curation_id, exc, metric_exc, logger=logger
+                    "audit_dropped_metric", exc, metric_exc, logger=logger
                 )
 
         try:
             record_ai_provider_exhausted(exc, provider=provider)
         except Exception as notification_exc:
             self._record_secondary_failure(
-                "notification", curation_id, exc, notification_exc, logger=logger
+                "notification", exc, notification_exc, logger=logger
             )
 
     async def handle_ready_build_rejected(
@@ -93,7 +92,6 @@ class AssessmentConsumerFailureHandler:
         except Exception as audit_exc:
             logger.warning(
                 "assessment_ready_build_rejected_audit_dropped",
-                curation_id=curation_id,
                 operation="audit",
                 rejection_code=rejected.reason.value,
                 exc_info=audit_exc,
@@ -107,7 +105,6 @@ class AssessmentConsumerFailureHandler:
     @staticmethod
     def _record_secondary_failure(
         operation: Literal["processing_metric", "audit_dropped_metric", "notification"],
-        curation_id: int,
         original: Exception,
         secondary: Exception,
         *,
@@ -117,7 +114,6 @@ class AssessmentConsumerFailureHandler:
         logger.warning(
             "assessment_consumer_failure_handling_failed",
             operation=operation,
-            curation_id=curation_id,
             business_error_class=exception_fqn(original),
             exc_info=secondary,
         )

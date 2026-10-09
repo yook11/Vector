@@ -6,7 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from app.db import engine as engine_module
-from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
+from app.lambda_handlers.assessment.settings import (
+    AssessmentConsumerSettings,
+    AssessmentLambdaSettings,
+)
 
 
 def settings(**overrides):
@@ -132,3 +135,48 @@ def test_settings_read_only_assessment_inputs(monkeypatch):
         "gemini_api_key_parameter_path": "/assessment/key",
     }
     assert "unrelated-private" not in repr(config)
+
+
+def _set_consumer_environment(monkeypatch):
+    for name, value in {
+        "ENV": "test",
+        "AWS_REGION": "ap-northeast-1",
+        "DATABASE_URL": "postgresql+asyncpg://vector_app@db.invalid/vector?sslmode=require",
+        "DB_IAM_AUTH": "true",
+        "GEMINI_API_KEY_PARAMETER_PATH": "/assessment/key",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_lambda_settings_read_consumer_and_notification_settings(monkeypatch):
+    """Lambdaの設定はConsumerと保存後通知の設定を合わせて読み、環境名はConsumerの設定から取る。"""
+    _set_consumer_environment(monkeypatch)
+    monkeypatch.setenv("INTERNAL_FRONTEND_BASE_URL", "http://frontend.invalid:3000")
+    monkeypatch.setenv(
+        "REVALIDATE_BEARER_SECRET_PARAMETER_PATH", "/assessment/revalidate"
+    )
+
+    loaded = AssessmentLambdaSettings.load()
+
+    assert loaded.consumer.model_dump() == {
+        "env": "test",
+        "aws_region": "ap-northeast-1",
+        "database_url": "postgresql+asyncpg://vector_app@db.invalid/vector?sslmode=require",
+        "db_iam_auth": True,
+        "gemini_api_key_parameter_path": "/assessment/key",
+    }
+    assert loaded.notification.model_dump() == {
+        "internal_frontend_base_url": "http://frontend.invalid:3000",
+        "revalidate_bearer_secret_parameter_path": "/assessment/revalidate",
+    }
+    assert loaded.env == "test"
+
+
+def test_lambda_settings_require_notification_settings(monkeypatch):
+    """保存後通知の設定が欠けていれば、Consumerの設定が揃っていても読み込みを失敗にする。"""
+    _set_consumer_environment(monkeypatch)
+    monkeypatch.delenv("INTERNAL_FRONTEND_BASE_URL", raising=False)
+    monkeypatch.delenv("REVALIDATE_BEARER_SECRET_PARAMETER_PATH", raising=False)
+
+    with pytest.raises(ValidationError):
+        AssessmentLambdaSettings.load()

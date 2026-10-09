@@ -40,6 +40,9 @@ def logger_with_cache_revalidation_policy(configure_chain):
         ("request_id", "request-001"),
         ("message_id", "message-001"),
         ("event_id", "event-001"),
+        ("analyzable_article_id", 101),
+        ("curation_id", 11),
+        ("analyzed_article_id", 901),
         ("tags", ["articles:list", "articles:categories"]),
         ("operation", "get_secret"),
         ("operation", "notify"),
@@ -61,7 +64,6 @@ def test_notification_field_is_output(
     "excluded_field",
     [
         "model",
-        "curation_id",
         "frontend_base_url",
         "revalidate_bearer_secret",
         "response",

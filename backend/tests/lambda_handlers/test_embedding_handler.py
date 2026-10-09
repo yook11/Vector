@@ -56,11 +56,12 @@ def wiring(monkeypatch):
         consumer=SimpleNamespace(
             consume=AsyncMock(return_value=EmbeddingCompletion.SAVED)
         ),
-        log=create_article_analysis_logger().bind(stage="embedding"),
+        log=create_article_analysis_logger(),
+        failure_recorder=Mock(),
     )
 
     @asynccontextmanager
-    async def open_consumer(settings, *, logger):
+    async def open_consumer(settings, *, failure_recorder):
         state.order.append("open")
         try:
             yield state.consumer
@@ -398,7 +399,7 @@ def test_invalid_message_id_is_logged_and_rejects_batch(wiring, read_logs):
         module.handler({"Records": messages}, _CONTEXT)
 
     wiring.consumer.consume.assert_not_awaited()
-    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
+    wiring.open.assert_called_once_with(wiring.settings, failure_recorder=ANY)
     assert wiring.order == ["open", "close"]
     assert read_logs() == [
         {
@@ -463,7 +464,7 @@ def test_batch_reports_only_failed_message_ids(wiring):
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):
-    """各payloadとそのメッセージの相関情報を持つロガーをConsumerへ渡す。"""
+    """各payloadを、そのメッセージの相関情報だけを置いた文脈でConsumerへ渡す。"""
     messages = [
         {
             "messageId": "first",
@@ -474,10 +475,17 @@ def test_each_payload_is_passed_to_the_shared_consumer(wiring):
             "body": valid_body(curation_id=22, analyzed_article_id=202),
         },
     ]
+    contexts = []
+
+    async def consume(payload, *, logger):
+        contexts.append(structlog.contextvars.get_contextvars())
+        return EmbeddingCompletion.SAVED
+
+    wiring.consumer.consume.side_effect = consume
 
     module.handler({"Records": messages}, SimpleNamespace(aws_request_id="request-1"))
 
-    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
+    wiring.open.assert_called_once_with(wiring.settings, failure_recorder=ANY)
     assert wiring.consumer.consume.await_args_list == [
         call(
             ArticleAssessedInScope(curation_id=11, analyzed_article_id=101), logger=ANY
@@ -486,25 +494,28 @@ def test_each_payload_is_passed_to_the_shared_consumer(wiring):
             ArticleAssessedInScope(curation_id=22, analyzed_article_id=202), logger=ANY
         ),
     ]
-
-    for invocation, message in zip(
-        wiring.consumer.consume.await_args_list, messages, strict=True
-    ):
-        payload = invocation.args[0]
-        context = structlog.get_context(invocation.kwargs["logger"])
-        assert (
-            context.items()
-            >= {
-                "service": "article_analysis",
-                "stage": "embedding",
-                "environment": "test",
-                "request_id": "request-1",
-                "message_id": message["messageId"],
-                "event_id": json.loads(message["body"])["event_id"],
-                "curation_id": payload.curation_id,
-                "analyzed_article_id": payload.analyzed_article_id,
-            }.items()
-        )
+    assert contexts == [
+        {
+            "service": "article_analysis",
+            "stage": "embedding",
+            "environment": "test",
+            "request_id": "request-1",
+            "message_id": "first",
+            "event_id": "00000000-0000-0000-0000-000000000001",
+            "curation_id": 11,
+            "analyzed_article_id": 101,
+        },
+        {
+            "service": "article_analysis",
+            "stage": "embedding",
+            "environment": "test",
+            "request_id": "request-1",
+            "message_id": "second",
+            "event_id": "00000000-0000-0000-0000-000000000001",
+            "curation_id": 22,
+            "analyzed_article_id": 202,
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -531,7 +542,10 @@ async def test_messages_finish_sequentially_in_input_order(wiring):
     wiring.consumer.consume.side_effect = consume
 
     await module._run_embedding(
-        {"Records": messages}, wiring.settings, logger=wiring.log
+        {"Records": messages},
+        wiring.settings,
+        logger=wiring.log,
+        failure_recorder=wiring.failure_recorder,
     )
 
     assert steps == [("start", 101), ("end", 101), ("start", 202), ("end", 202)]
@@ -543,7 +557,7 @@ def test_empty_batch_completes_without_consumption(wiring):
 
     assert response == {"batchItemFailures": []}
     wiring.consumer.consume.assert_not_awaited()
-    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
+    wiring.open.assert_called_once_with(wiring.settings, failure_recorder=ANY)
     assert wiring.order == ["open", "close"]
 
 
@@ -633,7 +647,8 @@ async def test_control_exception_stops_batch(wiring, read_logs, interruption):
         await module._run_embedding(
             {"Records": messages},
             wiring.settings,
-            logger=create_article_analysis_logger().bind(stage="embedding"),
+            logger=create_article_analysis_logger(),
+            failure_recorder=wiring.failure_recorder,
         )
 
     assert caught.value is interruption
@@ -666,6 +681,7 @@ async def test_processing_cancellation_leaves_borrowed_scope(wiring):
             {"Records": [{"messageId": "cancelled", "body": valid_body()}]},
             wiring.settings,
             logger=wiring.log,
+            failure_recorder=wiring.failure_recorder,
         )
 
     assert wiring.order == ["open", "close"]
@@ -676,7 +692,7 @@ def test_shared_logging_context_is_scoped_to_invocation(wiring):
     snapshots = {}
 
     @asynccontextmanager
-    async def open_consumer(settings, *, logger):
+    async def open_consumer(settings, *, failure_recorder):
         snapshots["initialization"] = structlog.contextvars.get_contextvars()
         try:
             yield wiring.consumer

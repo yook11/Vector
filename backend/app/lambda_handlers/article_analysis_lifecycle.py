@@ -9,6 +9,7 @@ from botocore.config import Config
 from botocore.session import Session
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from structlog.typing import FilteringBoundLogger
 
 from app.aws.ssm import get_secret_parameter
 from app.db.iam import build_iam_password_provider
@@ -18,10 +19,27 @@ type SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 type IamPasswordProvider = Callable[[], Awaitable[str]]
 
 
-class ArticleAnalysisLifecycleRecorder(Protocol):
-    def record_initialization_failure(self, stage: str, error: Exception) -> None: ...
+class ArticleAnalysisLifecycleRecorder:
+    """初期化と資源解放の失敗を、工程名を接頭辞にしたイベントで記録する。"""
 
-    def record_cleanup_failure(self, resource: str, error: Exception) -> None: ...
+    def __init__(self, logger: FilteringBoundLogger, *, stage: str) -> None:
+        self._logger = logger
+        self._stage = stage
+
+    def record_initialization_failure(self, operation: str, error: Exception) -> None:
+        self._logger.error(
+            f"{self._stage}_initialization_failed",
+            operation=operation,
+            exc_info=error,
+        )
+
+    def record_cleanup_failure(self, resource: str, error: Exception) -> None:
+        self._logger.error(
+            f"{self._stage}_resources_cleanup_failed",
+            operation="cleanup",
+            resource=resource,
+            exc_info=error,
+        )
 
 
 class EngineFactory(Protocol):
@@ -71,7 +89,7 @@ async def open_article_analysis_consumer[ConsumerT, ClientT](
 ) -> AsyncIterator[ConsumerT]:
     """準備済みConsumerを借用させ、利用終了後に所有資源を解放する。"""
     async with AsyncExitStack() as stack:
-        stage = "resources"
+        operation = "resources"
         try:
             api_key = await asyncio.to_thread(
                 get_secret_parameter, region=aws_region, path=api_key_parameter_path
@@ -91,14 +109,14 @@ async def open_article_analysis_consumer[ConsumerT, ClientT](
             stack.push_async_callback(_dispose_engine, engine.dispose, failure_recorder)
             session_factory = caller_managed_session_factory(engine)
 
-            stage = "ai_client"
+            operation = "ai_client"
             client = await stack.enter_async_context(open_client(api_key=api_key))
-            stage = "consumer"
+            operation = "consumer"
             consumer = await build_consumer(
                 session_factory=session_factory, client=client
             )
         except Exception as exc:
-            failure_recorder.record_initialization_failure(stage, exc)
+            failure_recorder.record_initialization_failure(operation, exc)
             raise
 
         yield consumer

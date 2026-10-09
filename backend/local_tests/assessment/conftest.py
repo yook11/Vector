@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass, field
 from queue import Empty, Queue
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx2
@@ -19,7 +20,11 @@ from app.analysis.assessment.consumer import AssessmentConsumer
 from app.analysis.assessment.repository import AssessmentRepository
 from app.lambda_handlers import article_analysis_lifecycle as resource_module
 from app.lambda_handlers.assessment import composition
-from app.lambda_handlers.assessment.settings import AssessmentConsumerSettings
+from app.lambda_handlers.assessment.settings import (
+    AssessmentConsumerSettings,
+    AssessmentLambdaSettings,
+    AssessmentNotificationSettings,
+)
 from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from app.shared import revalidate
@@ -61,7 +66,15 @@ def assessment_runtime(
         db_iam_auth=True,
         gemini_api_key_parameter_path="/test/gemini-key",
     )
-    monkeypatch.setattr(handler_module, "AssessmentConsumerSettings", lambda: settings)
+    monkeypatch.setattr(
+        handler_module,
+        "AssessmentLambdaSettings",
+        SimpleNamespace(
+            load=lambda: AssessmentLambdaSettings(
+                consumer=settings, notification=AssessmentNotificationSettings()
+            )
+        ),
+    )
     monkeypatch.setattr(
         resource_module,
         "get_secret_parameter",

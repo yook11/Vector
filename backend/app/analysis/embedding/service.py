@@ -67,7 +67,6 @@ class EmbeddingService:
                 logger.info(
                     "embedding_result_save_skipped",
                     reason="concurrent_write",
-                    analyzed_article_id=ready.analyzed_article_id,
                 )
                 return EmbeddingCompletion.ALREADY_EMBEDDED
             saved = await repo.save(
@@ -87,7 +86,6 @@ class EmbeddingService:
         logger.info(
             "embedding_result_saved",
             outcome="saved",
-            analyzed_article_id=ready.analyzed_article_id,
         )
         record_embedding_processing_outcome("succeeded")
         return EmbeddingCompletion.SAVED
