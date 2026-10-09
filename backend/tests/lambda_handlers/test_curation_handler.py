@@ -355,6 +355,32 @@ def test_invalid_message_is_logged_without_previous_event(
     }
 
 
+def test_unexpected_parser_failure_is_logged_as_error(wiring, read_logs, monkeypatch):
+    """入力不正でない解析障害は、入力不正と区別してERRORで記録する。"""
+    monkeypatch.setattr(
+        SqsRecord, "parse_json", Mock(side_effect=RuntimeError("parser-failed"))
+    )
+
+    module.handler(
+        {"Records": [{"messageId": "parse-failed", "body": valid_body()}]}, _CONTEXT
+    )
+
+    assert read_logs()[-1] == {
+        "event": "curation_message_processing_failed",
+        "level": "error",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "stage": "curation",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "parse-failed",
+        "operation": "parse_message",
+        "message_disposition": "batch_item_failure",
+        "error_class": "builtins.RuntimeError",
+        "error_message": "parser-failed",
+    }
+
+
 def test_settings_failure_is_logged_and_aborts_entire_batch(wiring, read_logs):
     """設定失敗は個別応答にせず、settingsの処理として記録して元の例外を伝える。"""
     original = RuntimeError("private-settings")
