@@ -19,9 +19,9 @@ class EventReader[EventT]:
 
     parse_event: Callable[[object], EventT]
 
-    def read(self, record_input: SqsRecordInput) -> EventT | EventReadFailed:
+    def read(self, message_record: SqsRecordInput) -> EventT | EventReadFailed:
         """本文・JSON・イベント契約のどこで失敗しても、原因の例外を値で返す。"""
         try:
-            return self.parse_event(record_input.to_record().parse_json())
+            return self.parse_event(message_record.to_record().parse_json())
         except Exception as exc:
             return EventReadFailed(exc)
