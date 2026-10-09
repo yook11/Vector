@@ -21,6 +21,7 @@ from app.lambda_handlers.article_analysis_lifecycle import (
 )
 from app.lambda_handlers.curation.composition import open_curation_consumer
 from app.lambda_handlers.curation.settings import CurationConsumerSettings
+from app.lambda_handlers.event_reader import EventReader, EventReadFailed
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
@@ -66,53 +67,36 @@ async def _run_curation(
             )
             raise
 
+        event_reader = EventReader(AnalyzableArticleCreatedEvent.from_input)
         failed_items: list[SqsBatchItemIdentifier] = []
+
         for record_input in record_batch.records:
             with bound_contextvars(message_id=record_input.message_id):
                 started_at_seconds = perf_counter()
                 logger.info("curation_message_processing_started")
-                try:
-                    record = record_input.to_record()
-                    parsed_body = record.parse_json()
-                    article_event = AnalyzableArticleCreatedEvent.from_input(
-                        parsed_body
-                    )
-                except (SqsInputError, SqsMessageJsonInvalidError) as exc:
-                    logger.warning(
+
+                read_result = event_reader.read(record_input)
+
+                if isinstance(read_result, EventReadFailed):
+                    match read_result.error:
+                        case SqsInputError() | SqsMessageJsonInvalidError():
+                            log_failure, operation = logger.warning, "parse_message"
+                        case AnalyzableEventInvalidError():
+                            log_failure, operation = logger.warning, "validate_event"
+                        case _:
+                            log_failure, operation = logger.error, "parse_message"
+                    log_failure(
                         "curation_message_processing_failed",
-                        operation="parse_message",
+                        operation=operation,
                         duration_ms=elapsed_ms_since(started_at_seconds),
                         message_disposition="batch_item_failure",
-                        exc_info=exc,
+                        exc_info=read_result.error,
                     )
                     failed_items.append(
                         SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
                     )
                     continue
-                except AnalyzableEventInvalidError as exc:
-                    logger.warning(
-                        "curation_message_processing_failed",
-                        operation="validate_event",
-                        duration_ms=elapsed_ms_since(started_at_seconds),
-                        message_disposition="batch_item_failure",
-                        exc_info=exc,
-                    )
-                    failed_items.append(
-                        SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
-                    )
-                    continue
-                except Exception as exc:
-                    logger.error(
-                        "curation_message_processing_failed",
-                        operation="parse_message",
-                        duration_ms=elapsed_ms_since(started_at_seconds),
-                        message_disposition="batch_item_failure",
-                        exc_info=exc,
-                    )
-                    failed_items.append(
-                        SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
-                    )
-                    continue
+                article_event = read_result
 
                 with bound_contextvars(
                     event_id=str(article_event.event_id),
