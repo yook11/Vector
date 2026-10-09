@@ -87,7 +87,6 @@ class AssessmentConsumer:
                 logger.warning(
                     "assessment_consumer_failure_processing_failed",
                     operation="failure_handling",
-                    curation_id=event.curation_id,
                     business_error_class=exception_fqn(exc),
                     exc_info=secondary,
                 )

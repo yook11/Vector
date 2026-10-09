@@ -40,7 +40,7 @@ class EmbeddingConsumerFailureHandler:
             record_embedding_processing_outcome("failed")
         except Exception as metric_exc:
             self._record_secondary_failure(
-                "processing_metric", analyzed_article_id, exc, metric_exc, logger=logger
+                "processing_metric", exc, metric_exc, logger=logger
             )
 
         try:
@@ -58,7 +58,6 @@ class EmbeddingConsumerFailureHandler:
             logger.warning(
                 "embedding_consumer_failure_audit_dropped",
                 operation="audit",
-                analyzed_article_id=analyzed_article_id,
                 business_error_class=exception_fqn(exc),
                 exc_info=audit_exc,
             )
@@ -67,7 +66,6 @@ class EmbeddingConsumerFailureHandler:
             except Exception as metric_exc:
                 self._record_secondary_failure(
                     "audit_dropped_metric",
-                    analyzed_article_id,
                     exc,
                     metric_exc,
                     logger=logger,
@@ -78,7 +76,6 @@ class EmbeddingConsumerFailureHandler:
         except Exception as notification_exc:
             self._record_secondary_failure(
                 "notification",
-                analyzed_article_id,
                 exc,
                 notification_exc,
                 logger=logger,
@@ -101,7 +98,6 @@ class EmbeddingConsumerFailureHandler:
         except Exception as audit_exc:
             logger.warning(
                 "embedding_ready_build_rejected_audit_dropped",
-                analyzed_article_id=analyzed_article_id,
                 operation="audit",
                 rejection_code=rejected.reason.value,
                 exc_info=audit_exc,
@@ -115,7 +111,6 @@ class EmbeddingConsumerFailureHandler:
     @staticmethod
     def _record_secondary_failure(
         operation: Literal["processing_metric", "audit_dropped_metric", "notification"],
-        analyzed_article_id: int,
         original: Exception,
         secondary: Exception,
         *,
@@ -125,7 +120,6 @@ class EmbeddingConsumerFailureHandler:
         logger.warning(
             "embedding_consumer_failure_handling_failed",
             operation=operation,
-            analyzed_article_id=analyzed_article_id,
             business_error_class=exception_fqn(original),
             exc_info=secondary,
         )

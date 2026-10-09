@@ -69,10 +69,10 @@ def wiring(request, monkeypatch):
     open_stage_consumer = getattr(module, f"open_{stage}_consumer")
 
     def open_consumer(settings):
-        result.log = create_article_analysis_logger().bind(
-            stage=stage, request_id="request-001"
+        recorder = lifecycle.ArticleAnalysisLifecycleRecorder(
+            create_article_analysis_logger(), stage=stage
         )
-        return open_stage_consumer(settings, logger=result.log)
+        return open_stage_consumer(settings, failure_recorder=recorder)
 
     result = SimpleNamespace(
         module=module,
@@ -130,7 +130,7 @@ async def test_builds_real_consumer_with_borrowed_dependencies(wiring):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "dependency,expected_stage",
+    "dependency,expected_operation",
     [
         ("secret", "resources"),
         ("open_client", "ai_client"),
@@ -140,7 +140,7 @@ async def test_builds_real_consumer_with_borrowed_dependencies(wiring):
     ],
 )
 async def test_initialization_diagnostics_preserve_stage_identity(
-    wiring, monkeypatch, capsys, dependency, expected_stage
+    wiring, monkeypatch, capsys, dependency, expected_operation
 ):
     """工程固有の診断名を維持し、AI準備の診断段階を共通名で記録する。"""
     original = RuntimeError("private-initialization")
@@ -163,8 +163,7 @@ async def test_initialization_diagnostics_preserve_stage_identity(
     assert caught.value is original
     log_entry = json.loads(capsys.readouterr().out)
     assert log_entry["event"] == f"{wiring.stage}_initialization_failed"
-    assert log_entry["stage"] == wiring.stage
-    assert log_entry["operation"] == expected_stage
+    assert log_entry["operation"] == expected_operation
     assert log_entry["level"] == "error"
     assert log_entry["error_class"] == "builtins.RuntimeError"
     assert log_entry["error_message"] == "private-initialization"

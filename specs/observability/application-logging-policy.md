@@ -28,7 +28,7 @@ structlogのcontextへ処理の事実を追加し、概念ごとのポリシー�
 | --- | --- |
 | API・worker | [setup.py](../../backend/app/logfire/setup.py)がstructlogを設定し、Logfire転送後にproductionではJSONへ整形する。共通の許可項目選択はない。 |
 | Lambda | [logging.py](../../backend/app/lambda_handlers/logging.py)に別のstructlog設定があり、JSONをstdoutへ出す。 |
-| Assessment失敗 | [failure_recorder.py](../../backend/app/lambda_handlers/assessment/failure_recorder.py)の処理失敗ログはIDと例外型を保持するが、原因説明を渡していない。 |
+| Assessment失敗 | 処理失敗ログ（当時の`failure_recorder.py`。2026-10-09に[共有ライフサイクル](../../backend/app/lambda_handlers/article_analysis_lifecycle.py)の記録クラスへ統合）はIDと例外型を保持するが、原因説明を渡していない。 |
 | 例外の内部表現 | [AI provider errors](../../backend/app/ai_providers/errors.py)はreasonを保持しても文字列に含めない場合があり、任意引数を捨てる契約もある。出力側の変更だけで失われた情報は復元できない。 |
 | Logfire例外 | [redaction.py](../../backend/app/logfire/redaction.py)と[既存テスト](../../backend/tests/logfire/test_exception_redaction.py)はmessage・stacktrace・status description等の一律置換を契約にしている。 |
 | URL・自由文 | [scraper.py](../../backend/app/collection/article_completion/scraper.py)には記事URLと例外文を直接記録する経路がある。 |
@@ -130,7 +130,7 @@ loggerの構築時に、コードが所有する完成済みルールを結び�
 | キャッシュ更新通知 | `cache_revalidation` / `CACHE_REVALIDATION_LOG_RULES` | `tags` / `operation` / `error_class` |
 | 秘密情報取得 | `infrastructure` / `SECRET_ACCESS_LOG_RULES` | `operation` / `resource` / `error_class` |
 
-両ルールとも`service` / `environment` / `stage` / `request_id` / `message_id` / `event_id`をallowに持つ。基底の認証情報denyを継承し、基底項目と自動生成の`log_policy`は重複定義しない。モデル・使用量・記事IDは追加しない。`tags`はアプリが組み立てるキャッシュタグのリストで、任意の外部入力を許可するものではない。タグの意味は呼び出し側が所有し、ポリシーはタグの業務検証を複製しない。
+両ルールとも`service` / `environment` / `stage` / `request_id` / `message_id` / `event_id`と、記事分析の相関情報として`analyzable_article_id` / `curation_id` / `analyzed_article_id`（2026-10-09に追加）をallowに持つ。基底の認証情報denyを継承し、基底項目と自動生成の`log_policy`は重複定義しない。モデル・使用量は追加しない。`tags`はアプリが組み立てるキャッシュタグのリストで、任意の外部入力を許可するものではない。タグの意味は呼び出し側が所有し、ポリシーはタグの業務検証を複製しない。
 
 | イベント | level | 出力する診断 |
 | --- | --- | --- |
@@ -142,7 +142,7 @@ loggerの構築時に、コードが所有する完成済みルールを結び�
 
 [共通のJSONロガー構築口](../../backend/app/log_policy/runtime.py)は既存の`create_policy_logger`・`build_processors`・`ApplicationBoundLogger`・`JSONRenderer`・`WriteLoggerFactory`を明示する。INFO以上を出力し、グローバルstructlog設定に依存しない。記事分析ロガーもこの構築口を使う。通常の出力障害は共通ラッパーで捕捉し、通知・SSMに同じ保護を再実装しない。
 
-Assessmentは呼び出し境界で`service` / `stage` / 有効な`request_id` / 設定取得後の`environment`をcontextvarsへ束縛し、既存のfinallyで外側のcontextを復元する。通知中だけ検証済みの`message_id` / `event_id`を追加し、通知終了時に解除・復元する。SSMの`asyncio.to_thread`にも現在のcontextが伝わるため、AIキー取得時は呼び出し情報、通知キー取得時は通知中の相関情報が残る。メッセージ情報を後のライフサイクルcleanupへ持ち越さない。
+記事分析の3工程は呼び出し境界で`service` / `stage` / 有効な`request_id` / 設定取得後の`environment`をcontextvarsへ束縛し、終了時に外側のcontextを復元する。各メッセージの処理中は`message_id`と、検証済みイベントの`event_id`・記事IDを追加し、そのメッセージの処理を終えると解除・復元する（2026-10-09）。SSMの`asyncio.to_thread`にも現在のcontextが伝わるため、AIキー取得時は呼び出し情報、通知キー取得時はそのメッセージの相関情報が残る。メッセージ情報を後のライフサイクルcleanupへ持ち越さない。
 
 共有部品の既存呼び出し元も、この専用ポリシーによるJSON出力になる。呼び出しAPIは維持するが、Assessment以外の入口で相関情報を追加する作業は含めない。Assessment handlerの`setup_lambda_logging()`のimportと呼び出しは削除済み。共通関数本体と他工程の呼び出しは維持する。共通変換を通る既存終端例外のHTTP・SDK由来入力値の保護完了も、この接続の完了条件には含めない。
 

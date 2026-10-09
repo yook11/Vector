@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
@@ -40,3 +41,22 @@ class AssessmentConsumerSettings(DatabaseConnectionSettings):
         if not self.db_iam_auth:
             raise ValueError("Consumer requires RDS IAM authentication")
         return self
+
+
+@dataclass(frozen=True, slots=True)
+class AssessmentLambdaSettings:
+    """Consumerと保存後通知の設定を、Lambda起動時の1回の読み込みとして扱う。"""
+
+    consumer: AssessmentConsumerSettings
+    notification: AssessmentNotificationSettings
+
+    @property
+    def env(self) -> str:
+        return self.consumer.env
+
+    @classmethod
+    def load(cls) -> Self:
+        return cls(
+            consumer=AssessmentConsumerSettings(),  # type: ignore[call-arg]
+            notification=AssessmentNotificationSettings(),  # type: ignore[call-arg]
+        )

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from importlib import import_module
 from types import SimpleNamespace
@@ -53,6 +54,7 @@ def wiring(monkeypatch):
     state = SimpleNamespace(
         order=[],
         settings=SimpleNamespace(aws_region="ap-northeast-1", env="test"),
+        notification_settings=object(),
         consumer=SimpleNamespace(
             consume=AsyncMock(
                 return_value=AssessmentCompletion(
@@ -60,11 +62,12 @@ def wiring(monkeypatch):
                 )
             )
         ),
-        log=create_article_analysis_logger().bind(stage="assessment"),
+        log=create_article_analysis_logger(),
+        failure_recorder=Mock(),
     )
 
     @asynccontextmanager
-    async def open_consumer(settings, *, logger):
+    async def open_consumer(settings, *, failure_recorder):
         state.order.append("open")
         try:
             yield state.consumer
@@ -73,13 +76,35 @@ def wiring(monkeypatch):
 
     state.open = Mock(side_effect=open_consumer)
     monkeypatch.setattr(module, "open_assessment_consumer", state.open)
-    state.settings_factory = Mock(return_value=state.settings)
-    monkeypatch.setattr(module, "AssessmentConsumerSettings", state.settings_factory)
-    state.notifier = SimpleNamespace(notify_article_list_updated=AsyncMock())
-    monkeypatch.setattr(
-        module, "build_article_list_notifier", Mock(return_value=state.notifier)
+    state.settings_factory = Mock(
+        return_value=SimpleNamespace(
+            consumer=state.settings,
+            notification=state.notification_settings,
+            env=state.settings.env,
+        )
     )
+    monkeypatch.setattr(
+        module, "AssessmentLambdaSettings", SimpleNamespace(load=state.settings_factory)
+    )
+    state.notifier = SimpleNamespace(notify_article_list_updated=AsyncMock())
+    state.build_notifier = Mock(return_value=state.notifier)
+    monkeypatch.setattr(module, "build_article_list_notifier", state.build_notifier)
     return state
+
+
+@pytest.fixture
+def read_logs(capsys) -> Callable[[], list[dict[str, object]]]:
+    """出力されたログを、実行ごとに変わる時刻・経過時間・発生位置を除いて返す。"""
+
+    def _read() -> list[dict[str, object]]:
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        for log in logs:
+            del log["timestamp"]
+            log.pop("duration_ms", None)
+            log.pop("frames", None)
+        return logs
+
+    return _read
 
 
 def test_handler_outputs_json_without_global_logging_configuration(
@@ -222,7 +247,7 @@ def test_retry_decision_is_reported_like_a_processing_failure(wiring, capsys):
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):
-    """各payloadとそのメッセージの相関情報を持つロガーをConsumerへ渡す。"""
+    """各payloadを、そのメッセージの相関情報だけを置いた文脈でConsumerへ渡す。"""
     messages = [
         {
             "messageId": "first",
@@ -233,10 +258,20 @@ def test_each_payload_is_passed_to_the_shared_consumer(wiring):
             "body": valid_body(curation_id=22, analyzable_article_id=202),
         },
     ]
+    contexts = []
+
+    async def consume(payload, *, logger):
+        contexts.append(structlog.contextvars.get_contextvars())
+        return AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
+
+    wiring.consumer.consume.side_effect = consume
 
     module.handler({"Records": messages}, SimpleNamespace(aws_request_id="request-1"))
 
-    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
+    wiring.open.assert_called_once_with(wiring.settings, failure_recorder=ANY)
+    wiring.build_notifier.assert_called_once_with(
+        wiring.notification_settings, aws_region="ap-northeast-1"
+    )
     assert wiring.consumer.consume.await_args_list == [
         call(
             ArticleCuratedSignal(curation_id=11, analyzable_article_id=101), logger=ANY
@@ -245,25 +280,28 @@ def test_each_payload_is_passed_to_the_shared_consumer(wiring):
             ArticleCuratedSignal(curation_id=22, analyzable_article_id=202), logger=ANY
         ),
     ]
-
-    for invocation, message in zip(
-        wiring.consumer.consume.await_args_list, messages, strict=True
-    ):
-        payload = invocation.args[0]
-        context = structlog.get_context(invocation.kwargs["logger"])
-        assert (
-            context.items()
-            >= {
-                "service": "article_analysis",
-                "stage": "assessment",
-                "environment": "test",
-                "request_id": "request-1",
-                "message_id": message["messageId"],
-                "event_id": json.loads(message["body"])["event_id"],
-                "curation_id": payload.curation_id,
-                "analyzable_article_id": payload.analyzable_article_id,
-            }.items()
-        )
+    assert contexts == [
+        {
+            "service": "article_analysis",
+            "stage": "assessment",
+            "environment": "test",
+            "request_id": "request-1",
+            "message_id": "first",
+            "event_id": "00000000-0000-0000-0000-000000000001",
+            "curation_id": 11,
+            "analyzable_article_id": 101,
+        },
+        {
+            "service": "article_analysis",
+            "stage": "assessment",
+            "environment": "test",
+            "request_id": "request-1",
+            "message_id": "second",
+            "event_id": "00000000-0000-0000-0000-000000000001",
+            "curation_id": 22,
+            "analyzable_article_id": 202,
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -290,7 +328,11 @@ async def test_messages_finish_sequentially_in_input_order(wiring):
     wiring.consumer.consume.side_effect = consume
 
     await module._run_assessment(
-        {"Records": messages}, wiring.settings, wiring.notifier, logger=wiring.log
+        {"Records": messages},
+        wiring.settings,
+        wiring.notifier,
+        logger=wiring.log,
+        failure_recorder=wiring.failure_recorder,
     )
 
     assert steps == [("start", 11), ("end", 11), ("start", 22), ("end", 22)]
@@ -302,7 +344,7 @@ def test_empty_batch_completes_without_consumption(wiring):
 
     assert response == {"batchItemFailures": []}
     wiring.consumer.consume.assert_not_awaited()
-    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
+    wiring.open.assert_called_once_with(wiring.settings, failure_recorder=ANY)
     assert wiring.order == ["open", "close"]
 
 
@@ -315,7 +357,7 @@ def test_invalid_message_id_rejects_batch_before_consumption(wiring):
         module.handler({"Records": messages}, None)
 
     wiring.consumer.consume.assert_not_awaited()
-    wiring.open.assert_called_once_with(wiring.settings, logger=ANY)
+    wiring.open.assert_called_once_with(wiring.settings, failure_recorder=ANY)
     assert wiring.order == ["open", "close"]
 
 
@@ -422,25 +464,44 @@ async def test_control_exception_stops_batch(wiring, interruption):
 
     with pytest.raises(type(interruption)) as caught:
         await module._run_assessment(
-            {"Records": messages}, wiring.settings, wiring.notifier, logger=wiring.log
+            {"Records": messages},
+            wiring.settings,
+            wiring.notifier,
+            logger=wiring.log,
+            failure_recorder=wiring.failure_recorder,
         )
 
     assert caught.value is interruption
     wiring.consumer.consume.assert_awaited_once()
 
 
-def test_settings_failure_aborts_entire_batch(wiring):
-    """設定失敗は個別応答にせず、settings段階を記録して元の例外を伝える。"""
+def test_settings_failure_is_logged_and_aborts_entire_batch(wiring, read_logs):
+    """設定（Consumerと通知）の読み込みの失敗は個別応答にせず、settingsの処理として記録して元の例外を伝える。"""
     original = RuntimeError("private-settings")
     wiring.settings_factory.side_effect = original
 
     with pytest.raises(RuntimeError) as caught:
         module.handler(
-            {"Records": [{"messageId": "unprocessed", "body": valid_body()}]}, None
+            {"Records": [{"messageId": "unprocessed", "body": valid_body()}]},
+            SimpleNamespace(aws_request_id="request-001"),
         )
 
     assert caught.value is original
     wiring.open.assert_not_called()
+    wiring.build_notifier.assert_not_called()
+    assert read_logs() == [
+        {
+            "event": "assessment_initialization_failed",
+            "level": "error",
+            "log_policy": "ai_inference",
+            "service": "article_analysis",
+            "stage": "assessment",
+            "request_id": "request-001",
+            "operation": "settings",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "private-settings",
+        }
+    ]
 
 
 def test_composition_failure_preserves_original_exception(wiring):
@@ -466,6 +527,7 @@ async def test_processing_cancellation_leaves_borrowed_scope(wiring):
             wiring.settings,
             wiring.notifier,
             logger=wiring.log,
+            failure_recorder=wiring.failure_recorder,
         )
 
     assert wiring.order == ["open", "close"]
@@ -490,11 +552,11 @@ def test_ready_build_rejection_is_not_reported_as_batch_failure(wiring, reason):
 
 
 def test_shared_logging_context_is_scoped_to_invocation_and_notification(wiring):
-    """通知中だけメッセージの相関情報を共有し、cleanupと呼び出し元へ持ち越さない。"""
+    """メッセージの相関情報を通知まで共有し、cleanupと呼び出し元へ持ち越さない。"""
     snapshots = {}
 
     @asynccontextmanager
-    async def open_consumer(settings, *, logger):
+    async def open_consumer(settings, *, failure_recorder):
         snapshots["initialization"] = structlog.contextvars.get_contextvars()
         try:
             yield wiring.consumer
@@ -526,4 +588,6 @@ def test_shared_logging_context_is_scoped_to_invocation_and_notification(wiring)
         **invocation,
         "message_id": "message-001",
         "event_id": "00000000-0000-0000-0000-000000000001",
+        "curation_id": 11,
+        "analyzable_article_id": 101,
     }

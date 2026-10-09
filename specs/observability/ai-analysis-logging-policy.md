@@ -43,7 +43,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 
 | 対象 | 確認した事実 |
 | --- | --- |
-| Lambdaの失敗記録 | [Assessment](../../backend/app/lambda_handlers/assessment/failure_recorder.py)・[Curation](../../backend/app/lambda_handlers/curation/failure_recorder.py)の処理失敗ログはIDと例外型を記録し、原因文やstackを渡していない。 |
+| Lambdaの失敗記録 | Assessment・Curationの処理失敗ログ（当時の各工程の`failure_recorder.py`。2026-10-09に[共有ライフサイクル](../../backend/app/lambda_handlers/article_analysis_lifecycle.py)の記録クラスへ統合）はIDと例外型を記録し、原因文やstackを渡していない。 |
 | 処理期限 | [Assessment Consumer](../../backend/app/analysis/assessment/consumer.py)・[Curation Consumer](../../backend/app/analysis/curation/consumer.py)は業務処理全体を60秒に制限し、失敗後処理はその期限の外で行う。 |
 | 原因の分類 | [Assessment分類](../../backend/app/analysis/assessment/consumer_failure_classification.py)・[Curation分類](../../backend/app/analysis/curation/consumer_failure_classification.py)はproviderの詳細reasonを`failure_reason`へ投影する。 |
 | 内部例外 | [Assessment errors](../../backend/app/analysis/assessment/errors.py)・[Curation errors](../../backend/app/analysis/curation/errors.py)は工程で確定した失敗だけを表し、`code`を属性で保持する。AIプロバイダーの失敗は工程の例外に包まれず`AIProviderError`のまま伝わる。文字列は標準の空文字となり、診断情報は属性・原因チェーンから取得する。 |
@@ -200,7 +200,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 
 ### 3.3.2 Assessment内部の記録
 
-handlerは検証済みイベント・対象IDをbindした`message_logger`をConsumerへ渡す。Consumerの`consume`、Serviceの`execute`、失敗後処理の`handle` / `handle_ready_build_rejected`は必須キーワード引数`logger: FilteringBoundLogger`で受け取り、同じロガーを引き継ぐ。メッセージ用ロガーをインスタンス属性に保存せず、内部で別のロガーを構築しない。
+相関情報はcontextvarsに置く。呼び出しの間は`service` / `stage` / `request_id` / `environment`を置く。メッセージの間は`message_id`と、検証済みイベントの`event_id`・入力の記事IDを置き、`bound_contextvars`でその範囲を抜けると戻す（2026-10-09）。Consumerの`consume`、Serviceの`execute`、失敗後処理の`handle` / `handle_ready_build_rejected`は、必須キーワード引数`logger: FilteringBoundLogger`で記事分析のロガーを受け取り、同じロガーを引き継ぐ。このロガーは方針と出力先を担い、相関情報は束縛しない。インスタンス属性に保存せず、内部で別のロガーを構築しない。ログ1行の事実と、保存で初めて分かる結果のID（Assessmentの`analyzed_article_id`、Curationの`curation_id`）は、書くときに渡す。
 
 | 場面 | イベント・レベル | 記録内容 |
 | --- | --- | --- |
@@ -219,7 +219,7 @@ Repositoryの起動時・保存時のカテゴリ整合性チェックは維持�
 
 > 2026-10-03: 生成モデルを Gemini に統一し、DeepSeek を外した（#529）。本節の DeepSeek の記述は当時の記録。今のイベント名は `assessment_gemini_output_truncated`（`reason=output_truncated`）と `assessment_gemini_response_defect`。`output_tokens` は thinking を含む出力トークン数、`finish_reason` は Gemini の終了理由名で記録する。DeepSeek クライアントの cleanup ログ（`deepseek_client_cleanup_failed`）はなくなった。
 
-Serviceから渡すメッセージ用ロガーを、DeepSeek・Gemini両方の`assess` / `_call_once` / `_call_api`が必須キーワード引数`logger: FilteringBoundLogger`で受け取る。`_call_once`でモデルをbindした派生ロガーを作り、開始・成功の記録と`_call_api`へ渡す。インスタンス属性には保持しない。compositionは`open_deepseek_client`へ呼び出し単位のロガーを渡し、cleanupにはメッセージ情報を持ち込まない。
+Serviceから渡す記事分析のロガーを、DeepSeek・Gemini両方の`assess` / `_call_once` / `_call_api`が必須キーワード引数`logger: FilteringBoundLogger`で受け取る。`_call_once`でモデルをbindした派生ロガーを作り、開始・成功の記録と`_call_api`へ渡す。インスタンス属性には保持しない。compositionは`open_deepseek_client`へ呼び出し単位のロガーを渡し、cleanupにはメッセージ情報を持ち込まない。
 
 | イベント | レベル | 記録内容・タイミング |
 | --- | --- | --- |
@@ -241,7 +241,7 @@ Assessment handlerの`setup_lambda_logging()`呼び出しは削除済みで、�
 
 ### 3.3.4 Curation・Embeddingへの適用（2026-10-08）
 
-§3.3.1〜3.3.3の形をCuration・Embeddingにも適用する。handlerは`stage=curation` / `embedding`の目的別ロガーを作り、Lambda共通設定は呼ばない。検証済みイベントから束縛するIDは、Curationが`event_id` / `analyzable_article_id`、Embeddingが`event_id` / `curation_id` / `analyzed_article_id`。Consumer・Service・失敗後処理・AI呼び出しは、同じメッセージ用ロガーを必須キーワード引数`logger`で受け取る。
+§3.3.1〜3.3.3の形をCuration・Embeddingにも適用する。handlerは共通の呼び出し入口で、`stage=curation` / `embedding`の呼び出し文脈と記事分析のロガーを用意し、Lambda共通設定は呼ばない。メッセージの間contextvarsに置く入力の記事IDは、Curationが`analyzable_article_id`、Embeddingが`curation_id` / `analyzed_article_id`（Assessmentは`curation_id` / `analyzable_article_id`）。Consumer・Service・失敗後処理・AI呼び出しは、同じ記事分析のロガーを必須キーワード引数`logger`で受け取る。
 
 | 場面 | イベント | 記録内容 |
 | --- | --- | --- |
@@ -375,6 +375,13 @@ provider例外には回復分類・retryabilityを持たせない。分析の3�
 
 - §3.3.4の形で、handler・composition・Consumer・Service・失敗後処理・AI呼び出しを同じメッセージ用ロガーへ接続した。両handlerの`setup_lambda_logging()`呼び出しは削除した。
 - 検証: 変更範囲の単体テスト1,676件（Lambda handler・Curation・Embedding・Assessment・ログ方針・AIプロバイダー・SDK遅延読み込み）とDB統合151件が成功した。変更ファイルとappのRuff lint・format確認、`local_tests/{curation,embedding}`の11件の収集も成功した。全体テスト・local_testsの実行・AWS適用は行っていない。
+
+### 呼び出し文脈と初期化失敗の記録の共通化（2026-10-09）
+
+- [呼び出しの入口](../../backend/app/lambda_handlers/article_analysis_invocation.py)の`open_article_analysis_invocation`が、3工程共通で呼び出し元のcontextvarsの退避・復元、呼び出し単位の相関情報、記事分析のロガー、設定の読み込みを担う。設定の読み込みの失敗も`{stage}_initialization_failed`（`operation=settings`）として記録する。Assessmentは保存後通知の設定も同じ読み込みに含める。
+- 初期化と資源解放の失敗は、[共有ライフサイクル](../../backend/app/lambda_handlers/article_analysis_lifecycle.py)の`ArticleAnalysisLifecycleRecorder`（工程名を受け取る1クラス）が記録する。工程ごとの記録クラスは削除した。
+- 相関情報はcontextvarsだけに置き、引数のロガーには束縛しない（§3.3.2）。内部ログで入力の記事IDを重ねて渡すのはやめた。
+- 検証: 変更範囲の単体テスト1,693件とDB統合239件、`local_tests/`の全483件が成功した。変更ファイルとappのRuff lint・format確認も成功した。全体テスト・AWS適用は行っていない。
 
 以下の表は2026-09-21の定義時点における全体の差分整理であり、上記の部分接続以外は後続工程とする。
 

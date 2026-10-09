@@ -5,7 +5,6 @@ from contextlib import AbstractAsyncContextManager
 from google.genai.client import AsyncClient
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
-from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.gemini.client import open_gemini_client
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
@@ -13,12 +12,10 @@ from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.curation.consumer import CurationConsumer
 from app.db.engine import create_curation_consumer_engine
 from app.lambda_handlers.article_analysis_lifecycle import (
+    ArticleAnalysisLifecycleRecorder,
     IamPasswordProvider,
     SessionFactory,
     open_article_analysis_consumer,
-)
-from app.lambda_handlers.curation.failure_recorder import (
-    CurationLambdaFailureRecorder,
 )
 from app.lambda_handlers.curation.settings import CurationConsumerSettings
 
@@ -26,7 +23,7 @@ from app.lambda_handlers.curation.settings import CurationConsumerSettings
 def open_curation_consumer(
     settings: CurationConsumerSettings,
     *,
-    logger: FilteringBoundLogger,
+    failure_recorder: ArticleAnalysisLifecycleRecorder,
 ) -> AbstractAsyncContextManager[CurationConsumer]:
     """工程別の生成関数を渡し、資源の準備・終了順序を共通側へ委ねる。"""
 
@@ -53,5 +50,5 @@ def open_curation_consumer(
         create_engine=create_engine,
         open_client=open_client,
         build_consumer=build_consumer,
-        failure_recorder=CurationLambdaFailureRecorder(logger),
+        failure_recorder=failure_recorder,
     )

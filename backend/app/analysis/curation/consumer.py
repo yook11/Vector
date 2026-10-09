@@ -83,7 +83,6 @@ class CurationConsumer:
                 logger.warning(
                     "curation_consumer_failure_processing_failed",
                     operation="failure_handling",
-                    analyzable_article_id=event.analyzable_article_id,
                     business_error_class=exception_fqn(exc),
                     exc_info=secondary,
                 )

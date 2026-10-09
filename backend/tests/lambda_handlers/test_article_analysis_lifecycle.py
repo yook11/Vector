@@ -1,6 +1,7 @@
 """記事単位AI分析の資源所有と初期化・終了の境界を確認する。"""
 
 import asyncio
+import json
 import threading
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pydantic import SecretStr
 
+from app.analysis.logging import create_article_analysis_logger
 from app.aws import ssm
 from app.db import iam
 from app.lambda_handlers import article_analysis_lifecycle as module
@@ -293,3 +295,55 @@ async def test_cancelled_ssm_thread_closes_its_client(lifecycle, monkeypatch):
     assert await asyncio.to_thread(closed.wait, 2)
     sdk.close.assert_called_once()
     lifecycle.session.create_client.assert_not_called()
+
+
+@pytest.fixture
+def read_log(capsys):
+    """出力されたログ1件を、実行ごとに変わる時刻と発生位置を除いて返す。"""
+
+    def _read():
+        log = json.loads(capsys.readouterr().out)
+        del log["timestamp"]
+        log.pop("frames", None)
+        return log
+
+    return _read
+
+
+def test_recorder_logs_initialization_failure_under_stage_name(read_log):
+    """初期化の失敗は、工程名を接頭辞にしたイベントに、失敗した段階と例外の診断を記録する。"""
+    recorder = module.ArticleAnalysisLifecycleRecorder(
+        create_article_analysis_logger(), stage="curation"
+    )
+
+    recorder.record_initialization_failure("ai_client", RuntimeError("client failed"))
+
+    assert read_log() == {
+        "event": "curation_initialization_failed",
+        "level": "error",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "operation": "ai_client",
+        "error_class": "builtins.RuntimeError",
+        "error_message": "client failed",
+    }
+
+
+def test_recorder_logs_cleanup_failure_with_resource(read_log):
+    """解放の失敗は、工程名を接頭辞にしたイベントに、解放できなかった資源と例外の診断を記録する。"""
+    recorder = module.ArticleAnalysisLifecycleRecorder(
+        create_article_analysis_logger(), stage="curation"
+    )
+
+    recorder.record_cleanup_failure("engine", RuntimeError("dispose failed"))
+
+    assert read_log() == {
+        "event": "curation_resources_cleanup_failed",
+        "level": "error",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "operation": "cleanup",
+        "resource": "engine",
+        "error_class": "builtins.RuntimeError",
+        "error_message": "dispose failed",
+    }

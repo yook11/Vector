@@ -6,7 +6,6 @@ from contextlib import AbstractAsyncContextManager
 from google.genai.client import AsyncClient
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
-from structlog.typing import FilteringBoundLogger
 
 from app.ai_providers.gemini.client import open_gemini_client
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
@@ -16,12 +15,10 @@ from app.analysis.assessment.repository import AssessmentRepository
 from app.aws.ssm import get_secret_parameter
 from app.db.engine import create_assessment_consumer_engine
 from app.lambda_handlers.article_analysis_lifecycle import (
+    ArticleAnalysisLifecycleRecorder,
     IamPasswordProvider,
     SessionFactory,
     open_article_analysis_consumer,
-)
-from app.lambda_handlers.assessment.failure_recorder import (
-    AssessmentLambdaFailureRecorder,
 )
 from app.lambda_handlers.assessment.notification import ArticleListUpdateNotifier
 from app.lambda_handlers.assessment.settings import (
@@ -34,7 +31,7 @@ from app.shared.revalidate import FrontendRevalidateNotifier
 def open_assessment_consumer(
     settings: AssessmentConsumerSettings,
     *,
-    logger: FilteringBoundLogger,
+    failure_recorder: ArticleAnalysisLifecycleRecorder,
 ) -> AbstractAsyncContextManager[AssessmentConsumer]:
     """工程別の生成関数を渡し、資源の準備・終了順序を共通側へ委ねる。"""
 
@@ -63,13 +60,14 @@ def open_assessment_consumer(
         create_engine=create_engine,
         open_client=open_client,
         build_consumer=build_consumer,
-        failure_recorder=AssessmentLambdaFailureRecorder(logger),
+        failure_recorder=failure_recorder,
     )
 
 
-def build_article_list_notifier(*, aws_region: str) -> ArticleListUpdateNotifier:
+def build_article_list_notifier(
+    settings: AssessmentNotificationSettings, *, aws_region: str
+) -> ArticleListUpdateNotifier:
     """通知先を先に確定し、認証キーは保存後の通知時に取得する。"""
-    settings = AssessmentNotificationSettings()  # type: ignore[call-arg]
 
     async def secret_provider() -> SecretStr:
         return await asyncio.to_thread(

@@ -86,7 +86,6 @@ class EmbeddingConsumer:
                 logger.warning(
                     "embedding_consumer_failure_processing_failed",
                     operation="failure_handling",
-                    analyzed_article_id=event.analyzed_article_id,
                     business_error_class=exception_fqn(exc),
                     exc_info=secondary,
                 )
