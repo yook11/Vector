@@ -2,8 +2,8 @@
 
 import asyncio
 from collections.abc import Callable
-from datetime import UTC, datetime
-from typing import Any, assert_never
+from datetime import UTC, datetime, timedelta
+from typing import assert_never
 
 import structlog
 
@@ -22,6 +22,10 @@ from app.lambda_handlers.completion.composition import open_completion_resources
 from app.lambda_handlers.completion.failure_recorder import (
     CompletionLambdaFailureRecorder,
 )
+from app.lambda_handlers.completion.processing_time_limit import (
+    LambdaContext,
+    ProcessingTimeLimit,
+)
 from app.lambda_handlers.completion.redelivery_wait import (
     RedeliveryWait,
     apply_redelivery_waits,
@@ -39,10 +43,8 @@ from app.lambda_handlers.sqs.response import (
 
 logger = structlog.get_logger(__name__)
 
-MIN_ARTICLE_REMAINING_MILLIS = 60_000
 
-
-def handler(sqs_event: object, context: Any) -> RedeliveryResponse:
+def handler(sqs_event: object, context: LambdaContext) -> RedeliveryResponse:
     """設定と資源を呼び出し単位で準備し、再配信させるメッセージだけを返す。"""
     setup_lambda_logging()
     try:
@@ -66,7 +68,7 @@ async def _run_completion(
     sqs_event: object,
     settings: CompletionConsumerSettings,
     *,
-    context: Any,
+    context: LambdaContext,
     now: Callable[[], datetime],
 ) -> RedeliveryResponse:
     """全IDを検証してから本文・補完結果を個別の配送応答へ対応付ける。"""
@@ -81,8 +83,13 @@ async def _run_completion(
         redelivery_message_ids: list[str] = []
         waits: list[RedeliveryWait] = []
 
+        # 応答と後始末を間に合わせるため、
+        # 記事の処理を始めてよいのはLambdaの制限時間の60秒前までとする。
+        article_start_limit = ProcessingTimeLimit(
+            context, before_lambda_limit=timedelta(seconds=60)
+        )
         for index, message in enumerate(message_batch.messages):
-            if context.get_remaining_time_in_millis() < MIN_ARTICLE_REMAINING_MILLIS:
+            if article_start_limit.is_exceeded():
                 for unstarted in message_batch.messages[index:]:
                     redelivery_message_ids.append(unstarted.message_id)
                     recorder.record_unstarted(message_id=unstarted.message_id)

@@ -5,12 +5,15 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
 
 from app.collection.retry_at import RetryAt
 from app.lambda_handlers.completion.composition import SqsMessageVisibilityClient
 from app.lambda_handlers.completion.failure_recorder import (
     CompletionLambdaFailureRecorder,
+)
+from app.lambda_handlers.completion.processing_time_limit import (
+    LambdaContext,
+    ProcessingTimeLimit,
 )
 from app.lambda_handlers.sqs.received_message import (
     ReceivedMessage,
@@ -18,7 +21,6 @@ from app.lambda_handlers.sqs.received_message import (
 )
 
 MAX_VISIBILITY_SECONDS = 39_600
-MIN_VISIBILITY_REMAINING_MILLIS = 20_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,17 +36,21 @@ async def apply_redelivery_waits(
     *,
     sqs_client: SqsMessageVisibilityClient,
     queue_url: str,
-    context: Any,
+    context: LambdaContext,
     now: Callable[[], datetime],
     recorder: CompletionLambdaFailureRecorder,
 ) -> None:
     """記事処理後に逐次設定し、設定結果によって配送応答を変更しない。"""
+    # 応答を間に合わせるため、待機を設定してよいのはLambdaの制限時間の20秒前までとする。
+    visibility_change_limit = ProcessingTimeLimit(
+        context, before_lambda_limit=timedelta(seconds=20)
+    )
     for index, wait in enumerate(waits):
         remaining = wait.retry_at.remaining(now())
         if remaining == timedelta():
             recorder.record_redelivery_wait(wait, result="expired")
             continue
-        if context.get_remaining_time_in_millis() < MIN_VISIBILITY_REMAINING_MILLIS:
+        if visibility_change_limit.is_exceeded():
             for unstarted in waits[index:]:
                 recorder.record_redelivery_wait(unstarted, result="insufficient_time")
             break
