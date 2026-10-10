@@ -8,7 +8,7 @@ from app.collection.sources.acquisition_request import (
     AcquisitionRequestInvalidError,
     acquisition_request_from_message,
 )
-from app.lambda_handlers.sqs.records import SqsRecord
+from app.lambda_handlers.sqs.received_message import ReceivedMessage
 
 
 def message(**updates):
@@ -26,7 +26,7 @@ def test_source_id_requires_positive_integer(source_id):
     """受信側でもソースIDを補完・型変換しない。"""
     with pytest.raises(AcquisitionRequestInvalidError):
         acquisition_request_from_message(
-            SqsRecord(
+            ReceivedMessage(
                 message_id="id", body=json.dumps(message(source_id=source_id))
             ).parse_json()
         )

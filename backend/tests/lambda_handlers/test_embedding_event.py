@@ -12,7 +12,7 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
     AssessedEventInvalidError,
 )
-from app.lambda_handlers.sqs.records import SqsRecord
+from app.lambda_handlers.sqs.received_message import ReceivedMessage
 
 pytestmark = pytest.mark.unit
 
@@ -31,7 +31,7 @@ def data():
 def test_parser_restores_typed_event(data):
     """受信本文から、Consumerへ渡す型付きイベントを復元する。"""
     event = ArticleAssessedInScopeEvent.from_input(
-        SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+        ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
     )
 
     assert isinstance(event, ArticleAssessedInScopeEvent)
@@ -47,7 +47,7 @@ def test_json_root_must_be_an_object(body):
     """JSONのルートがオブジェクトでなければ共有契約の構造不正として返す。"""
     with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(
-            SqsRecord(message_id="id", body=body).parse_json()
+            ReceivedMessage(message_id="id", body=body).parse_json()
         )
     assert caught.value.invalid.reason.value == "invalid_envelope"
 
@@ -69,7 +69,7 @@ def test_shared_rejection_preserves_reason_and_details(data, changes):
 
     with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(
-            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+            ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
         )
 
     assert caught.value.invalid.reason.value == shared.value.invalid.reason.value
@@ -82,7 +82,7 @@ def test_shared_rejection_does_not_retain_input_or_exception_chain(data):
 
     with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(
-            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+            ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
         )
 
     assert caught.value.__cause__ is None
@@ -101,6 +101,6 @@ def test_contract_failure_is_not_wrapped(data, monkeypatch):
     monkeypatch.setattr(ArticleAssessedInScopeEvent, "from_input", reject)
     with pytest.raises(AssessedEventInvalidError) as caught:
         ArticleAssessedInScopeEvent.from_input(
-            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+            ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
         )
     assert caught.value is original.value

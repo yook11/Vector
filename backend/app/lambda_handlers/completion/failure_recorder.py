@@ -171,7 +171,7 @@ class CompletionLambdaFailureRecorder:
         error: Exception | None = None,
     ) -> None:
         fields: dict[str, object] = {
-            "message_id": wait.message_id,
+            "message_id": wait.message.message_id,
             "retry_at": wait.retry_at.value.isoformat(),
             "result": result,
             "requested_seconds": requested_seconds,

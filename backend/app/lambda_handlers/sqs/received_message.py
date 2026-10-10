@@ -1,4 +1,4 @@
-"""SQSレコード群の構造を検証し、本文を個別に取り出す。"""
+"""SQSイベントから受信メッセージを作り、本文と受信ハンドルは1件ずつ使うときに検証する。"""
 
 import json
 from dataclasses import dataclass, field
@@ -12,31 +12,31 @@ from app.lambda_handlers.sqs.errors import (
 
 
 @dataclass(frozen=True, slots=True)
-class SqsRecordInput:
-    """IDを確認済みで、本文はまだ検証していない受信データ。"""
+class ReceivedMessage:
+    """IDで1件を特定できる受信メッセージで、本文と受信ハンドルは使うときに検証する。"""
 
     message_id: str
     body: object = field(repr=False)
-    body_present: bool
+    body_present: bool = True
     receipt_handle: object = field(default=None, repr=False)
     receipt_handle_present: bool = False
 
     @classmethod
-    def from_lambda_record(cls, record: object, *, record_index: int) -> Self:
+    def from_sqs_record(cls, sqs_record: object, *, record_index: int) -> Self:
         """本文の検証より先に、失敗応答に使うIDを確定する。"""
-        if not isinstance(record, dict):
+        if not isinstance(sqs_record, dict):
             raise SqsInputError(
                 reason=SqsInputReason.INVALID_TYPE,
                 field="record",
                 record_index=record_index,
             )
-        if "messageId" not in record:
+        if "messageId" not in sqs_record:
             raise SqsInputError(
                 reason=SqsInputReason.MISSING_REQUIRED_FIELD,
                 field="messageId",
                 record_index=record_index,
             )
-        message_id = record["messageId"]
+        message_id = sqs_record["messageId"]
         if not isinstance(message_id, str):
             reason = SqsInputReason.INVALID_TYPE
         elif not message_id.strip():
@@ -44,40 +44,21 @@ class SqsRecordInput:
         else:
             return cls(
                 message_id,
-                record.get("body"),
-                "body" in record,
-                record.get("receiptHandle"),
-                "receiptHandle" in record,
+                sqs_record.get("body"),
+                "body" in sqs_record,
+                sqs_record.get("receiptHandle"),
+                "receiptHandle" in sqs_record,
             )
         raise SqsInputError(reason=reason, field="messageId", record_index=record_index)
 
-    def to_record(self) -> "SqsRecord":
-        """本文の存在と文字列型を検証して、解析可能なレコードを返す。"""
-        if not self.body_present:
-            reason = SqsInputReason.MISSING_REQUIRED_FIELD
-        elif not isinstance(self.body, str):
-            reason = SqsInputReason.INVALID_TYPE
-        else:
-            return SqsRecord(
-                message_id=self.message_id,
-                body=self.body,
-                receipt_handle=self.receipt_handle,
-                receipt_handle_present=self.receipt_handle_present,
-            )
-        raise SqsInputError(reason=reason, field="body")
-
-
-@dataclass(frozen=True, slots=True)
-class SqsRecord:
-    """本文の文字列型を検証済みのSQSレコード。"""
-
-    message_id: str
-    body: str = field(repr=False)
-    receipt_handle: object = field(default=None, repr=False)
-    receipt_handle_present: bool = False
-
     def parse_json(self) -> object:
-        """イベント契約を解釈せず、本文をJSONとして解析する。"""
+        """本文の存在と文字列型を検証し、イベント契約を解釈せずJSONとして解析する。"""
+        if not self.body_present:
+            raise SqsInputError(
+                reason=SqsInputReason.MISSING_REQUIRED_FIELD, field="body"
+            )
+        if not isinstance(self.body, str):
+            raise SqsInputError(reason=SqsInputReason.INVALID_TYPE, field="body")
         try:
             return json.loads(
                 self.body,
@@ -103,35 +84,35 @@ class SqsRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class SqsRecordBatch:
-    """今回受信した、IDの検証を終えたレコードのまとまり。"""
+class ReceivedMessageBatch:
+    """今回受信した、IDの検証を終えたメッセージのまとまり。"""
 
-    records: tuple[SqsRecordInput, ...]
+    messages: tuple[ReceivedMessage, ...]
 
     @classmethod
-    def from_lambda_event(cls, lambda_event: object) -> Self:
-        """一覧の構造とID重複を検証し、本文検証は各レコードの処理に委ねる。"""
-        if not isinstance(lambda_event, dict):
+    def from_sqs_event(cls, sqs_event: object) -> Self:
+        """一覧の構造とID重複を検証し、本文検証は各メッセージの処理に委ねる。"""
+        if not isinstance(sqs_event, dict):
             raise SqsInputError(reason=SqsInputReason.INVALID_TYPE, field="event")
-        if "Records" not in lambda_event:
+        if "Records" not in sqs_event:
             raise SqsInputError(
                 reason=SqsInputReason.MISSING_REQUIRED_FIELD, field="Records"
             )
-        if not isinstance(lambda_event["Records"], list):
+        if not isinstance(sqs_event["Records"], list):
             raise SqsInputError(reason=SqsInputReason.INVALID_TYPE, field="Records")
-        records = []
+        messages = []
         seen: set[str] = set()
-        for index, value in enumerate(lambda_event["Records"]):
-            record = SqsRecordInput.from_lambda_record(value, record_index=index)
-            if record.message_id in seen:
+        for index, sqs_record in enumerate(sqs_event["Records"]):
+            message = ReceivedMessage.from_sqs_record(sqs_record, record_index=index)
+            if message.message_id in seen:
                 raise SqsInputError(
                     reason=SqsInputReason.DUPLICATE_MESSAGE_ID,
                     field="messageId",
                     record_index=index,
                 )
-            seen.add(record.message_id)
-            records.append(record)
-        return cls(records=tuple(records))
+            seen.add(message.message_id)
+            messages.append(message)
+        return cls(messages=tuple(messages))
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

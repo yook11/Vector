@@ -13,7 +13,7 @@ from app.lambda_handlers.completion.failure_recorder import (
     CompletionLambdaFailureRecorder,
 )
 from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.records import SqsRecord
+from app.lambda_handlers.sqs.received_message import ReceivedMessage
 
 MAX_VISIBILITY_SECONDS = 39_600
 MIN_VISIBILITY_REMAINING_MILLIS = 20_000
@@ -23,14 +23,13 @@ MIN_VISIBILITY_REMAINING_MILLIS = 20_000
 class RedeliveryWait:
     """指定メッセージの再配信を元の時刻まで待たせる指示。"""
 
-    message_id: str
+    message: ReceivedMessage
     retry_at: RetryAt
 
 
 async def apply_redelivery_waits(
     waits: Sequence[RedeliveryWait],
     *,
-    records: Sequence[SqsRecord],
     sqs_client: SqsMessageVisibilityClient,
     queue_url: str,
     context: Any,
@@ -38,7 +37,6 @@ async def apply_redelivery_waits(
     recorder: CompletionLambdaFailureRecorder,
 ) -> None:
     """記事処理後に逐次設定し、設定結果によって配送応答を変更しない。"""
-    records_by_id = {record.message_id: record for record in records}
     for index, wait in enumerate(waits):
         remaining = wait.retry_at.remaining(now())
         if remaining == timedelta():
@@ -49,7 +47,7 @@ async def apply_redelivery_waits(
                 recorder.record_redelivery_wait(unstarted, result="insufficient_time")
             break
         try:
-            receipt_handle = records_by_id[wait.message_id].receipt_handle_text()
+            receipt_handle = wait.message.receipt_handle_text()
         except SqsInputError as exc:
             recorder.record_redelivery_wait(
                 wait, result="invalid_receipt_handle", reason=exc.reason.value

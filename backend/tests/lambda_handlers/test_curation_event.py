@@ -11,7 +11,7 @@ from app.collection.events import (
     AnalyzableArticleCreatedEvent,
     AnalyzableEventInvalidError,
 )
-from app.lambda_handlers.sqs.records import SqsRecord
+from app.lambda_handlers.sqs.received_message import ReceivedMessage
 
 pytestmark = pytest.mark.unit
 
@@ -30,7 +30,7 @@ def data():
 def test_parser_returns_whole_event_and_consumer_payload(data):
     """本文からイベント全体を復元し、Consumerが借用する既存payload型を保持する。"""
     event = AnalyzableArticleCreatedEvent.from_input(
-        SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+        ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
     )
     assert isinstance(event, AnalyzableArticleCreatedEvent)
     assert event.model_dump(mode="json") == data
@@ -41,7 +41,7 @@ def test_valid_json_with_wrong_root_uses_event_contract():
     """JSONとして正しい配列は解析不正にせず、共有契約の構造不正として返す。"""
     with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
-            SqsRecord(message_id="id", body="[]").parse_json()
+            ReceivedMessage(message_id="id", body="[]").parse_json()
         )
     assert caught.value.invalid.reason == "invalid_envelope"
 
@@ -64,7 +64,7 @@ def test_shared_rejection_preserves_reason_and_details_without_exception_chain(
         AnalyzableArticleCreatedEvent.from_input(data)
     with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
-            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+            ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
         )
     error = caught.value
     assert error.invalid.reason.value == shared.value.invalid.reason.value
@@ -86,7 +86,7 @@ def test_unexpected_failure_and_process_exit_pass_through(data, monkeypatch, ori
     monkeypatch.setattr(AnalyzableArticleCreatedEvent, "from_input", fail)
     with pytest.raises(type(original)) as caught:
         AnalyzableArticleCreatedEvent.from_input(
-            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+            ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
         )
     assert caught.value is original
 
@@ -102,6 +102,6 @@ def test_contract_failure_is_not_wrapped(data, monkeypatch):
     monkeypatch.setattr(AnalyzableArticleCreatedEvent, "from_input", reject)
     with pytest.raises(AnalyzableEventInvalidError) as caught:
         AnalyzableArticleCreatedEvent.from_input(
-            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+            ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
         )
     assert caught.value is original.value
