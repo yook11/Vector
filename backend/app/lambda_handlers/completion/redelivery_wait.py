@@ -11,9 +11,9 @@ from app.lambda_handlers.completion.composition import SqsMessageVisibilityClien
 from app.lambda_handlers.completion.failure_recorder import (
     CompletionLambdaFailureRecorder,
 )
-from app.lambda_handlers.completion.processing_time_limit import (
+from app.lambda_handlers.completion.processing_start_deadline import (
     LambdaContext,
-    ProcessingTimeLimit,
+    ProcessingStartDeadline,
 )
 from app.lambda_handlers.sqs.received_message import (
     ReceivedMessage,
@@ -42,7 +42,7 @@ async def apply_redelivery_waits(
 ) -> None:
     """記事処理後に逐次設定し、設定結果によって配送応答を変更しない。"""
     # 応答を間に合わせるため、待機を設定してよいのはLambdaの制限時間の20秒前までとする。
-    visibility_change_limit = ProcessingTimeLimit(
+    visibility_change_start_deadline = ProcessingStartDeadline(
         context, before_lambda_limit=timedelta(seconds=20)
     )
     for index, wait in enumerate(waits):
@@ -50,7 +50,7 @@ async def apply_redelivery_waits(
         if remaining == timedelta():
             recorder.record_redelivery_wait(wait, result="expired")
             continue
-        if visibility_change_limit.is_exceeded():
+        if visibility_change_start_deadline.has_passed():
             for unstarted in waits[index:]:
                 recorder.record_redelivery_wait(unstarted, result="insufficient_time")
             break

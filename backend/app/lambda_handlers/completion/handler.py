@@ -22,15 +22,16 @@ from app.lambda_handlers.completion.composition import open_completion_resources
 from app.lambda_handlers.completion.failure_recorder import (
     CompletionLambdaFailureRecorder,
 )
-from app.lambda_handlers.completion.processing_time_limit import (
+from app.lambda_handlers.completion.processing_start_deadline import (
     LambdaContext,
-    ProcessingTimeLimit,
+    ProcessingStartDeadline,
 )
 from app.lambda_handlers.completion.redelivery_wait import (
     RedeliveryWait,
     apply_redelivery_waits,
 )
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
+from app.lambda_handlers.event_reader import EventReader, EventReadFailed
 from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.received_message import (
     ReceivedMessageBatch,
@@ -80,53 +81,61 @@ async def _run_completion(
             recorder.record_invalid_message_batch(exc)
             raise
 
+        event_reader = EventReader(IncompleteArticleRecordedEvent.from_input)
         redelivery_message_ids: list[str] = []
         waits: list[RedeliveryWait] = []
 
         # 応答と後始末を間に合わせるため、
         # 記事の処理を始めてよいのはLambdaの制限時間の60秒前までとする。
-        article_start_limit = ProcessingTimeLimit(
+        processing_start_deadline = ProcessingStartDeadline(
             context, before_lambda_limit=timedelta(seconds=60)
         )
         for index, message in enumerate(message_batch.messages):
-            if article_start_limit.is_exceeded():
+            if processing_start_deadline.has_passed():
                 for unstarted in message_batch.messages[index:]:
                     redelivery_message_ids.append(unstarted.message_id)
                     recorder.record_unstarted(message_id=unstarted.message_id)
                 break
 
-            article_event = None
-            try:
-                parsed_body = message.parse_json()
-                article_event = IncompleteArticleRecordedEvent.from_input(parsed_body)
-                completion = await resources.consumer.consume(
-                    article_event.payload.incomplete_article_id
-                )
-                match completion:
-                    case CompletionSucceeded() | CompletionNotRequired():
-                        pass
-                    case CompletionFailed(decision=CloseArticleCompletion()):
-                        pass
-                    case CompletionFailed(
-                        decision=RetryArticleCompletion(retry_at=retry_at)
-                    ):
-                        if retry_at is not None:
-                            waits.append(RedeliveryWait(message, retry_at))
-                        redelivery_message_ids.append(message.message_id)
-                    case _:
-                        assert_never(completion)
-            except Exception as exc:
-                recorder.record_processing_error(
-                    exc, message_id=message.message_id, article_event=article_event
-                )
-                redelivery_message_ids.append(message.message_id)
-                continue
+            match event_reader.read(message):
+                case EventReadFailed() as read_failed:
+                    recorder.record_read_failed(
+                        read_failed, message_id=message.message_id
+                    )
+                    redelivery_message_ids.append(message.message_id)
 
-            recorder.record_completion(
-                completion,
-                message_id=message.message_id,
-                article_event=article_event,
-            )
+                case IncompleteArticleRecordedEvent() as article_event:
+                    try:
+                        completion_result = await resources.consumer.consume(
+                            article_event.payload.incomplete_article_id
+                        )
+                    except Exception as exc:
+                        recorder.record_message_failure(
+                            exc,
+                            message_id=message.message_id,
+                            article_event=article_event,
+                        )
+                        redelivery_message_ids.append(message.message_id)
+                        continue
+
+                    match completion_result:
+                        case CompletionSucceeded() | CompletionNotRequired():
+                            pass
+                        case CompletionFailed(decision=CloseArticleCompletion()):
+                            pass
+                        case CompletionFailed(
+                            decision=RetryArticleCompletion(retry_at=retry_at)
+                        ):
+                            if retry_at is not None:
+                                waits.append(RedeliveryWait(message, retry_at))
+                            redelivery_message_ids.append(message.message_id)
+                        case _:
+                            assert_never(completion_result)
+                    recorder.record_completion(
+                        completion_result,
+                        message_id=message.message_id,
+                        article_event=article_event,
+                    )
         await apply_redelivery_waits(
             waits,
             sqs_client=resources.sqs_client,

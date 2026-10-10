@@ -80,8 +80,8 @@ Evidence: 取得・補完・Curation・Assessment・Embeddingの5工程がSqsRec
 - `record_input.to_record()`が本文の欠落・型不正を`SqsInputError`で拒否する。JSON文字列として正しいかはレコードの成立条件に含めない。
 - `parsed_body = record.parse_json()`がJSON構文、全階層の重複キー、NaN・Infinity・-Infinityを検査する。解析失敗は本文と元例外チェーンを持たない`SqsMessageJsonInvalidError`とし、ApplicationErrorの固定診断理由`invalid_json`を保持する。
 - JSONルートはオブジェクトに限定しない。イベント型の`from_input(parsed_body)`がイベント契約を検証する。取得工程は既存の`acquisition_request_from_message(parsed_body)`へ渡す。
-- 工程別のevent.pyと取得工程のmessage.pyを廃止した。分析3工程（Curation・Assessment・Embedding）のhandlerは`EventReader`に契約の検証入口（`from_input`）を渡してレコードを読み、取得・補完のhandlerは共通メソッドと契約の検証入口を直接呼ぶ。
-- 補完の可視性変更には、個別に構築済みのレコードを渡す。本文不正・未着手のレコードから待機指示は生成せず、receiptHandleは従来どおり操作時に検証する。
+- 工程別のevent.pyと取得工程のmessage.pyを廃止した。分析3工程（Curation・Assessment・Embedding）と補完のhandlerは`EventReader`に契約の検証入口（`from_input`）を渡してメッセージを読み、取得のhandlerは共通メソッドと契約の検証入口を直接呼ぶ。
+- 補完の再配信待機は受信メッセージそのものを持ち、receiptHandleは従来どおり操作時に検証する。本文不正・未着手のメッセージから待機指示は生成しない。
 
 Invariants: 全IDの事前検証、本文・JSON・イベント不正の個別再配信、入力順の逐次実行、キャンセル伝播、工程別診断と通知、補完の残り時間と可視性変更を維持する。
 

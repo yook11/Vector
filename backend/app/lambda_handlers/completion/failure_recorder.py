@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         IncompleteArticleRecordedEvent,
     )
     from app.lambda_handlers.completion.redelivery_wait import RedeliveryWait
+    from app.lambda_handlers.event_reader import EventReadFailed
 
 
 class CompletionLambdaFailureRecorder:
@@ -36,29 +37,20 @@ class CompletionLambdaFailureRecorder:
     def __init__(self, logger: BoundLogger) -> None:
         self._logger = logger
 
-    def record_processing_error(
-        self,
-        error: Exception,
-        *,
-        message_id: str,
-        article_event: IncompleteArticleRecordedEvent | None,
+    def record_read_failed(
+        self, read_failed: EventReadFailed, *, message_id: str
     ) -> None:
-        """本文解析前の入力不正と、検証後の配送障害を区別して記録する。"""
-        if article_event is not None:
-            self.record_message_failure(
-                error, message_id=message_id, article_event=article_event
-            )
-            return
-        match error:
+        """本文・JSON・イベント契約のどこで読めなかったかを区別して記録する。"""
+        match read_failed.error:
             case ReceivedMessageInvalidError(
                 reason=ReceivedMessageInvalidReason.INVALID_JSON
             ):
                 self.record_invalid_json(message_id=message_id)
-            case ReceivedMessageInvalidError():
+            case ReceivedMessageInvalidError() as error:
                 self.record_invalid_body(error, message_id=message_id)
-            case IncompleteArticleEventInvalidError():
+            case IncompleteArticleEventInvalidError() as error:
                 self.record_invalid_event(error, message_id=message_id)
-            case _:
+            case error:
                 self.record_message_failure(error, message_id=message_id)
 
     def record_completion(
