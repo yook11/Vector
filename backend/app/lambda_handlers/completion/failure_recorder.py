@@ -17,7 +17,11 @@ from app.collection.article_completion.consumer_failure_classification import (
     CloseArticleCompletion,
     RetryArticleCompletion,
 )
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessageBatchInvalidError,
+    ReceivedMessageInvalidError,
+    ReceivedMessageInvalidReason,
+)
 
 if TYPE_CHECKING:
     from app.collection.article_acquisition.events import (
@@ -46,10 +50,12 @@ class CompletionLambdaFailureRecorder:
             )
             return
         match error:
-            case SqsInputError():
-                self.record_invalid_body(error, message_id=message_id)
-            case SqsMessageJsonInvalidError():
+            case ReceivedMessageInvalidError(
+                reason=ReceivedMessageInvalidReason.INVALID_JSON
+            ):
                 self.record_invalid_json(message_id=message_id)
+            case ReceivedMessageInvalidError():
+                self.record_invalid_body(error, message_id=message_id)
             case IncompleteArticleEventInvalidError():
                 self.record_invalid_event(error, message_id=message_id)
             case _:
@@ -98,7 +104,9 @@ class CompletionLambdaFailureRecorder:
             # 診断障害で元の配送結果を置き換えない。
             pass
 
-    def record_invalid_sqs_input(self, error: SqsInputError) -> None:
+    def record_invalid_message_batch(
+        self, error: ReceivedMessageBatchInvalidError
+    ) -> None:
         self._record(
             "completion_sqs_input_invalid",
             reason=error.reason.value,
@@ -106,7 +114,9 @@ class CompletionLambdaFailureRecorder:
             record_index=error.record_index,
         )
 
-    def record_invalid_body(self, error: SqsInputError, *, message_id: str) -> None:
+    def record_invalid_body(
+        self, error: ReceivedMessageInvalidError, *, message_id: str
+    ) -> None:
         self._record(
             "completion_message_input_invalid",
             message_id=message_id,

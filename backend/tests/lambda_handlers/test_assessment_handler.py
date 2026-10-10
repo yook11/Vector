@@ -27,8 +27,11 @@ from app.analysis.assessment.service import (
 )
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.logging import create_article_analysis_logger
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessage,
+    ReceivedMessageBatchInvalidError,
+    ReceivedMessageBatchInvalidReason,
+)
 
 module = import_module("app.lambda_handlers.assessment.handler")
 pytestmark = pytest.mark.unit
@@ -353,7 +356,7 @@ def test_invalid_message_id_rejects_batch_before_consumption(wiring):
     body = valid_body()
     messages = [{"messageId": "valid", "body": body}, {"body": body}]
 
-    with pytest.raises(SqsInputError):
+    with pytest.raises(ReceivedMessageBatchInvalidError):
         module.handler({"Records": messages}, None)
 
     wiring.consumer.consume.assert_not_awaited()
@@ -391,10 +394,10 @@ def test_duplicate_id_is_rejected_before_reading_bodies(wiring):
         {"messageId": "duplicate", "body": valid_body()},
     ]
 
-    with pytest.raises(SqsInputError) as caught:
+    with pytest.raises(ReceivedMessageBatchInvalidError) as caught:
         module.handler({"Records": messages}, None)
 
-    assert caught.value.reason is SqsInputReason.DUPLICATE_MESSAGE_ID
+    assert caught.value.reason is ReceivedMessageBatchInvalidReason.DUPLICATE_MESSAGE_ID
     wiring.consumer.consume.assert_not_awaited()
 
 

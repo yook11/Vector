@@ -11,7 +11,7 @@ from app.analysis.embedding.consumer_failure_classification import (
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
 from app.analysis.embedding.service import EmbeddingCompletion
 from app.lambda_handlers.event_reader import EventReadFailed
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
+from app.lambda_handlers.sqs.received_message import ReceivedMessageInvalidError
 
 
 class EmbeddingMessageRecorder:
@@ -30,7 +30,7 @@ class EmbeddingMessageRecorder:
             duration_ms=duration_ms, message_disposition="batch_item_failure"
         )
         match read_failed.error:
-            case SqsInputError() | SqsMessageJsonInvalidError() as error:
+            case ReceivedMessageInvalidError() as error:
                 logger.warning(
                     "embedding_message_processing_failed",
                     operation="parse_message",

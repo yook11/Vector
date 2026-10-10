@@ -6,8 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
-from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessageBatch,
+    ReceivedMessageBatchInvalidError,
+    ReceivedMessageBatchInvalidReason,
+    ReceivedMessageInvalidError,
+    ReceivedMessageInvalidReason,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -38,10 +43,10 @@ def test_missing_body_is_rejected_when_reading_message():
         {"Records": [{"messageId": "missing-body"}]}
     )
 
-    with pytest.raises(SqsInputError) as caught:
+    with pytest.raises(ReceivedMessageInvalidError) as caught:
         message_batch.messages[0].parse_json()
 
-    assert caught.value.reason is SqsInputReason.MISSING_REQUIRED_FIELD
+    assert caught.value.reason is ReceivedMessageInvalidReason.MISSING_REQUIRED_FIELD
     assert caught.value.field == "body"
 
 
@@ -56,15 +61,15 @@ def test_non_string_body_does_not_prevent_following_message(body):
             ]
         }
     )
-    with pytest.raises(SqsInputError) as caught:
+    with pytest.raises(ReceivedMessageInvalidError) as caught:
         message_batch.messages[0].parse_json()
-    assert caught.value.reason is SqsInputReason.INVALID_TYPE
+    assert caught.value.reason is ReceivedMessageInvalidReason.INVALID_TYPE
     assert caught.value.field == "body"
     assert message_batch.messages[1].parse_json() == {"usable": True}
 
 
 def test_duplicate_id_precedes_invalid_body_and_error_does_not_expose_input():
-    with pytest.raises(SqsInputError) as caught:
+    with pytest.raises(ReceivedMessageBatchInvalidError) as caught:
         ReceivedMessageBatch.from_sqs_event(
             {
                 "Records": [
@@ -73,8 +78,7 @@ def test_duplicate_id_precedes_invalid_body_and_error_does_not_expose_input():
                 ]
             }
         )
-    assert caught.value.CODE == "sqs_input_invalid"
-    assert caught.value.reason is SqsInputReason.DUPLICATE_MESSAGE_ID
+    assert caught.value.reason is ReceivedMessageBatchInvalidReason.DUPLICATE_MESSAGE_ID
     assert caught.value.field == "messageId"
     assert caught.value.record_index == 1
     assert "private-" not in str(caught.value)
@@ -109,7 +113,7 @@ def test_received_message_loads_without_embedding_or_application_settings():
 )
 def test_invalid_delivery_structure_is_rejected(event):
     """配送構造が不正なら、入力値を保持しない検証例外として拒否する。"""
-    with pytest.raises(SqsInputError) as caught:
+    with pytest.raises(ReceivedMessageBatchInvalidError) as caught:
         ReceivedMessageBatch.from_sqs_event(event)
 
     assert "private-input" not in str(caught.value)
@@ -130,7 +134,7 @@ def test_invalid_message_id_reports_record_position(invalid_record):
     """不正なレコードの位置を示し、バッチとして受け付けない。"""
     messages = [{"messageId": "valid", "body": "body"}, invalid_record]
 
-    with pytest.raises(SqsInputError) as caught:
+    with pytest.raises(ReceivedMessageBatchInvalidError) as caught:
         ReceivedMessageBatch.from_sqs_event({"Records": messages})
 
     assert caught.value.record_index == 1
@@ -139,10 +143,10 @@ def test_invalid_message_id_reports_record_position(invalid_record):
 @pytest.mark.parametrize(
     "handle,reason",
     [
-        (None, SqsInputReason.INVALID_TYPE),
-        (123, SqsInputReason.INVALID_TYPE),
-        ("", SqsInputReason.EMPTY_RECEIPT_HANDLE),
-        (" \t", SqsInputReason.EMPTY_RECEIPT_HANDLE),
+        (None, ReceivedMessageInvalidReason.INVALID_TYPE),
+        (123, ReceivedMessageInvalidReason.INVALID_TYPE),
+        ("", ReceivedMessageInvalidReason.EMPTY_RECEIPT_HANDLE),
+        (" \t", ReceivedMessageInvalidReason.EMPTY_RECEIPT_HANDLE),
     ],
 )
 def test_receipt_handle_validation_is_deferred(handle, reason):
@@ -150,7 +154,7 @@ def test_receipt_handle_validation_is_deferred(handle, reason):
     batch = ReceivedMessageBatch.from_sqs_event(
         {"Records": [{"messageId": "id", "body": "{}", "receiptHandle": handle}]}
     )
-    with pytest.raises(SqsInputError) as caught:
+    with pytest.raises(ReceivedMessageInvalidError) as caught:
         batch.messages[0].receipt_handle_text()
     assert caught.value.reason is reason
     assert caught.value.field == "receiptHandle"
@@ -161,9 +165,9 @@ def test_missing_receipt_handle_is_distinct_from_invalid_type():
     batch = ReceivedMessageBatch.from_sqs_event(
         {"Records": [{"messageId": "id", "body": "{}"}]}
     )
-    with pytest.raises(SqsInputError) as caught:
+    with pytest.raises(ReceivedMessageInvalidError) as caught:
         batch.messages[0].receipt_handle_text()
-    assert caught.value.reason is SqsInputReason.MISSING_REQUIRED_FIELD
+    assert caught.value.reason is ReceivedMessageInvalidReason.MISSING_REQUIRED_FIELD
 
 
 def test_receipt_handle_preserves_original_text():

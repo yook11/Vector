@@ -10,7 +10,7 @@ from app.analysis.curation.domain.ready import CurationReadyBuildRejected
 from app.analysis.curation.service import CurationCompletion
 from app.collection.events import AnalyzableEventInvalidError
 from app.lambda_handlers.event_reader import EventReadFailed
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
+from app.lambda_handlers.sqs.received_message import ReceivedMessageInvalidError
 
 
 class CurationMessageRecorder:
@@ -29,7 +29,7 @@ class CurationMessageRecorder:
             duration_ms=duration_ms, message_disposition="batch_item_failure"
         )
         match read_failed.error:
-            case SqsInputError() | SqsMessageJsonInvalidError() as error:
+            case ReceivedMessageInvalidError() as error:
                 logger.warning(
                     "curation_message_processing_failed",
                     operation="parse_message",

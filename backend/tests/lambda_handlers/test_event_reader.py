@@ -3,8 +3,10 @@
 import pytest
 
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessage,
+    ReceivedMessageInvalidReason,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -25,18 +27,26 @@ def test_parsed_body_is_passed_to_parser_and_its_event_returned():
 
 
 @pytest.mark.parametrize(
-    ("record", "error_class"),
+    ("record", "reason"),
     [
-        pytest.param({"messageId": "id"}, SqsInputError, id="missing-body"),
-        pytest.param({"messageId": "id", "body": 1}, SqsInputError, id="non-str-body"),
+        pytest.param(
+            {"messageId": "id"},
+            ReceivedMessageInvalidReason.MISSING_REQUIRED_FIELD,
+            id="missing-body",
+        ),
+        pytest.param(
+            {"messageId": "id", "body": 1},
+            ReceivedMessageInvalidReason.INVALID_TYPE,
+            id="non-str-body",
+        ),
         pytest.param(
             {"messageId": "id", "body": "{"},
-            SqsMessageJsonInvalidError,
+            ReceivedMessageInvalidReason.INVALID_JSON,
             id="invalid-json",
         ),
     ],
 )
-def test_body_and_json_failures_are_returned_as_read_failure(record, error_class):
+def test_body_and_json_failures_are_returned_as_read_failure(record, reason):
     """本文とJSONの不正は解析関数を呼ばずに、その例外を持つ読み取り失敗として返す。"""
 
     def parse_event(data: object) -> object:
@@ -44,10 +54,8 @@ def test_body_and_json_failures_are_returned_as_read_failure(record, error_class
 
     read_result = EventReader(parse_event).read(_received_message(record))
 
-    assert (type(read_result), type(getattr(read_result, "error", None))) == (
-        EventReadFailed,
-        error_class,
-    )
+    assert isinstance(read_result, EventReadFailed)
+    assert getattr(read_result.error, "reason", None) is reason
 
 
 def test_parser_exception_is_returned_as_read_failure():

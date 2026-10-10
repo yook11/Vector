@@ -18,8 +18,10 @@ from app.lambda_handlers.curation.composition import open_curation_consumer
 from app.lambda_handlers.curation.message_recorder import CurationMessageRecorder
 from app.lambda_handlers.curation.settings import CurationConsumerSettings
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessageBatch,
+    ReceivedMessageBatchInvalidError,
+)
 from app.lambda_handlers.sqs.response import (
     RedeliveryResponse,
     redelivery_response,
@@ -60,7 +62,7 @@ async def _run_curation(
         try:
             message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
 
-        except SqsInputError as exc:
+        except ReceivedMessageBatchInvalidError as exc:
             logger.warning(
                 "curation_sqs_input_invalid",
                 exc_info=exc,
