@@ -196,7 +196,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 
 処理情報のallowは`service` / `environment` / `stage` / `operation` / `request_id` / `message_id` / `event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id` / `outcome` / `rejection_code` / `duration_ms` / `message_disposition`。cleanup資源の識別には追加の`resource`を使う。内部ログでは`reason` / `business_error_class` / `code` / `finish_reason` / `max_output_tokens` / `error_class`もallowへ追加する。既存の`model` / `input_tokens` / `output_tokens`を維持する。基底5項目は継承し、processorが生成する`log_policy`と例外診断項目は目的別allowへ重複登録しない。ただし`error_class`はDeepSeek cleanupで明示するため登録する。
 
-例外の分類・抽出・構造は既存処理に任せ、今回新設しない。`SqsInputError`と`AssessmentMessageJsonInvalidError`は`ApplicationError`として明示した診断を共通変換へ渡し、イベント検証例外も`exc_info`で渡す。本文10項目と認証情報のdenyを維持し、§3.2の残りのallow、§3.4の追加保護、URL変換等の未実装要件をこの定義変更の完了に含めない。
+例外の分類・抽出・構造は既存処理に任せ、今回新設しない。`ReceivedMessageBatchInvalidError`と`ReceivedMessageInvalidError`は`ApplicationError`として明示した診断を共通変換へ渡し、イベント検証例外も`exc_info`で渡す。本文10項目と認証情報のdenyを維持し、§3.2の残りのallow、§3.4の追加保護、URL変換等の未実装要件をこの定義変更の完了に含めない。
 
 ### 3.3.2 Assessment内部の記録
 
