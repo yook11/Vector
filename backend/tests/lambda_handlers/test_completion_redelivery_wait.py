@@ -1,4 +1,4 @@
-"""補完の再配信待機をSQS操作へ接続する条件を確認する。"""
+"""補完の再配信待機をSQSの可視性秒数へ変換し、SQS操作へ接続する条件を、SQSクライアントとログをモックにして確認する。"""
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -12,7 +12,8 @@ from app.lambda_handlers.completion.failure_recorder import (
 )
 from app.lambda_handlers.completion.redelivery_wait import (
     RedeliveryMessage,
-    apply_redelivery_waits,
+    VisibilityTimeout,
+    apply_visibility_timeouts,
 )
 from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
 
@@ -45,7 +46,7 @@ def delivery():
 
 
 async def apply(state, waits):
-    await apply_redelivery_waits(
+    await apply_visibility_timeouts(
         waits,
         sqs_client=state.sqs,
         queue_url="configured-queue",
@@ -55,31 +56,38 @@ async def apply(state, waits):
     )
 
 
-@pytest.mark.asyncio
+# 39,600秒は配送上の上限の11時間。
 @pytest.mark.parametrize(
-    "seconds,expected,capped",
+    "seconds,expected",
     [
-        (0.000001, 1, False),
-        (39_600, 39_600, False),
-        (39_600.1, 39_600, True),
-        (86_400, 39_600, True),
+        (0, None),
+        (0.000001, VisibilityTimeout(seconds=1, capped=False)),
+        (39_600, VisibilityTimeout(seconds=39_600, capped=False)),
+        (39_600.1, VisibilityTimeout(seconds=39_600, capped=True)),
+        (86_400, VisibilityTimeout(seconds=39_600, capped=True)),
     ],
 )
-async def test_visibility_rounds_up_and_caps_without_changing_retry_time(
-    delivery, seconds, expected, capped
-):
-    """SQS秒数だけを切り上げ・制限し、元の時刻を保持する。"""
-    retry = RetryAt(delivery.now + timedelta(seconds=seconds))
+def test_visibility_timeout_rounds_up_and_caps_remaining_time(seconds, expected):
+    """retry_atまでの残り時間を整数秒へ切り上げて上限で切り、期限を迎えていればNoneにする。"""
+    now = datetime(2026, 9, 14, tzinfo=UTC)
+    retry = RetryAt(now + timedelta(seconds=seconds))
+    assert VisibilityTimeout.until(retry, now) == expected
+
+
+@pytest.mark.asyncio
+async def test_capped_visibility_keeps_original_retry_time(delivery):
+    """上限で切った秒数をSQSへ要求し、記録する待機時刻は元のretry_atのまま残す。"""
+    retry = RetryAt(delivery.now + timedelta(seconds=86_400))
     await apply(delivery, [RedeliveryMessage(delivery.first, retry)])
     delivery.sqs.change_message_visibility.assert_called_once_with(
         QueueUrl="configured-queue",
         ReceiptHandle=" private-first ",
-        VisibilityTimeout=expected,
+        VisibilityTimeout=39_600,
     )
     fields = delivery.log.warning.call_args.kwargs
     assert fields["retry_at"] == retry.value.isoformat()
-    assert fields["requested_seconds"] == fields["applied_seconds"] == expected
-    assert fields["capped"] is capped
+    assert fields["requested_seconds"] == fields["applied_seconds"] == 39_600
+    assert fields["capped"] is True
 
 
 @pytest.mark.asyncio

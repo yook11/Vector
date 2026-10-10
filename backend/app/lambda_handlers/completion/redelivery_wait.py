@@ -5,6 +5,7 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Self
 
 from app.collection.retry_at import RetryAt
 from app.lambda_handlers.completion.composition import SqsMessageVisibilityClient
@@ -20,6 +21,7 @@ from app.lambda_handlers.sqs.received_message import (
     ReceivedMessageInvalidError,
 )
 
+# SQSの可視性は受信から12時間までのため、Lambdaの実行時間を残して11時間で切る。
 MAX_VISIBILITY_SECONDS = 39_600
 
 
@@ -31,7 +33,27 @@ class RedeliveryMessage:
     retry_at: RetryAt | None = None
 
 
-async def apply_redelivery_waits(
+@dataclass(frozen=True, slots=True)
+class VisibilityTimeout:
+    """再試行時刻までの残り時間に配送上の上限を適用した、SQSへ可視性変更を要求する整数秒。"""
+
+    seconds: int
+    capped: bool
+
+    @classmethod
+    def until(cls, retry_at: RetryAt, now: datetime) -> Self | None:
+        """指定時刻から残り秒数を切り上げ、再試行時刻を迎えていれば可視性を変更しないためNoneを返す。"""
+        remaining = retry_at.remaining(now)
+        if remaining == timedelta():
+            return None
+        seconds = math.ceil(remaining.total_seconds())
+        return cls(
+            seconds=min(seconds, MAX_VISIBILITY_SECONDS),
+            capped=seconds > MAX_VISIBILITY_SECONDS,
+        )
+
+
+async def apply_visibility_timeouts(
     redelivery_messages: Sequence[RedeliveryMessage],
     *,
     sqs_client: SqsMessageVisibilityClient,
@@ -51,57 +73,39 @@ async def apply_redelivery_waits(
         if redelivery_message.retry_at is not None
     ]
     for wait_position, (message, retry_at) in enumerate(waits):
-        remaining = retry_at.remaining(now())
-        if remaining == timedelta():
-            recorder.record_redelivery_wait(
-                retry_at, message_id=message.message_id, result="expired"
-            )
+        visibility_timeout = VisibilityTimeout.until(retry_at, now())
+        if visibility_timeout is None:
+            recorder.record_retry_at_passed(retry_at, message_id=message.message_id)
             continue
         if visibility_change_start_deadline.has_passed():
             for unstarted_message, unstarted_retry_at in waits[wait_position:]:
-                recorder.record_redelivery_wait(
-                    unstarted_retry_at,
-                    message_id=unstarted_message.message_id,
-                    result="insufficient_time",
+                recorder.record_visibility_change_unstarted(
+                    unstarted_retry_at, message_id=unstarted_message.message_id
                 )
             break
+
         try:
             receipt_handle = message.receipt_handle_text()
         except ReceivedMessageInvalidError as exc:
-            recorder.record_redelivery_wait(
-                retry_at,
-                message_id=message.message_id,
-                result="invalid_receipt_handle",
-                reason=exc.reason.value,
+            recorder.record_receipt_handle_invalid(
+                retry_at, exc, message_id=message.message_id
             )
             continue
-        seconds = math.ceil(remaining.total_seconds())
-        requested_seconds = min(seconds, MAX_VISIBILITY_SECONDS)
-        capped = seconds > MAX_VISIBILITY_SECONDS
+
         try:
             await _change_visibility(
                 sqs_client,
                 queue_url=queue_url,
                 receipt_handle=receipt_handle,
-                seconds=requested_seconds,
+                seconds=visibility_timeout.seconds,
             )
         except Exception as exc:
-            recorder.record_redelivery_wait(
-                retry_at,
-                message_id=message.message_id,
-                result="failed",
-                requested_seconds=requested_seconds,
-                capped=capped,
-                error=exc,
+            recorder.record_visibility_change_failed(
+                retry_at, visibility_timeout, exc, message_id=message.message_id
             )
         else:
-            recorder.record_redelivery_wait(
-                retry_at,
-                message_id=message.message_id,
-                result="applied",
-                requested_seconds=requested_seconds,
-                applied_seconds=requested_seconds,
-                capped=capped,
+            recorder.record_visibility_changed(
+                retry_at, visibility_timeout, message_id=message.message_id
             )
 
 
