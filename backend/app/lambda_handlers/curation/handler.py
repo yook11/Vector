@@ -19,7 +19,7 @@ from app.lambda_handlers.curation.message_recorder import CurationMessageRecorde
 from app.lambda_handlers.curation.settings import CurationConsumerSettings
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
 from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.records import SqsRecordBatch
+from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
 from app.lambda_handlers.sqs.response import (
     RedeliveryResponse,
     redelivery_response,
@@ -27,14 +27,14 @@ from app.lambda_handlers.sqs.response import (
 from app.shared.time import elapsed_ms_since
 
 
-def handler(lambda_event: object, context: object) -> RedeliveryResponse:
+def handler(sqs_event: object, context: object) -> RedeliveryResponse:
     """呼び出しの文脈と設定を用意し、資源解放まで同じロガーを渡す。"""
     with open_article_analysis_invocation(
         "curation", context, CurationConsumerSettings
     ) as invocation:
         return asyncio.run(
             _run_curation(
-                lambda_event,
+                sqs_event,
                 invocation.settings,
                 logger=invocation.logger,
                 failure_recorder=invocation.failure_recorder,
@@ -43,7 +43,7 @@ def handler(lambda_event: object, context: object) -> RedeliveryResponse:
 
 
 async def _run_curation(
-    lambda_event: object,
+    sqs_event: object,
     settings: CurationConsumerSettings,
     *,
     logger: FilteringBoundLogger,
@@ -58,7 +58,7 @@ async def _run_curation(
         # 失敗はメッセージIDで1件ずつ返すため、
         # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
-            message_record_batch = SqsRecordBatch.from_lambda_event(lambda_event)
+            message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
 
         except SqsInputError as exc:
             logger.warning(
@@ -71,18 +71,18 @@ async def _run_curation(
         message_recorder = CurationMessageRecorder(logger)
         redelivery_message_ids: list[str] = []
 
-        for message_record in message_record_batch.records:
-            with bound_contextvars(message_id=message_record.message_id):
+        for message in message_batch.messages:
+            with bound_contextvars(message_id=message.message_id):
                 started_at_seconds = perf_counter()
                 message_recorder.record_started()
 
-                match event_reader.read(message_record):
+                match event_reader.read(message):
                     case EventReadFailed() as read_failed:
                         message_recorder.record_read_failed(
                             read_failed,
                             duration_ms=elapsed_ms_since(started_at_seconds),
                         )
-                        redelivery_message_ids.append(message_record.message_id)
+                        redelivery_message_ids.append(message.message_id)
 
                     case AnalyzableArticleCreatedEvent() as article_event:
                         with bound_contextvars(
@@ -100,5 +100,5 @@ async def _run_curation(
                                 duration_ms=elapsed_ms_since(started_at_seconds),
                             )
                             if isinstance(consume_result, RetryCuration):
-                                redelivery_message_ids.append(message_record.message_id)
+                                redelivery_message_ids.append(message.message_id)
         return redelivery_response(redelivery_message_ids)

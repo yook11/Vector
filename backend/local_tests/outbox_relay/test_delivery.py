@@ -18,7 +18,7 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from app.lambda_handlers.sqs.records import SqsRecord
+from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from app.models.outbox_event import OutboxEvent
 from app.outbox.publishing.errors import PublishError, PublishTransportError
 from app.outbox.publishing.publisher import (
@@ -424,7 +424,9 @@ async def test_invalid_event_is_stopped_and_valid_event_is_delivered(
         entries = kwargs["Entries"]
         assert len(entries) == 1
         event = ArticleAssessedInScopeEvent.from_input(
-            SqsRecord(message_id="id", body=entries[0]["MessageBody"]).parse_json()
+            ReceivedMessage(
+                message_id="id", body=entries[0]["MessageBody"]
+            ).parse_json()
         )
         assert event.event_id == good.event_id
         assert event.payload.model_dump() == good.before["payload"]

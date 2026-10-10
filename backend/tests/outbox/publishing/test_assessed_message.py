@@ -10,7 +10,7 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
     AssessedEventInvalidError,
 )
-from app.lambda_handlers.sqs.records import SqsRecord
+from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.publisher import EventEnvelope
 
@@ -64,7 +64,7 @@ def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
         payload=data["payload"],
     )
     event = ArticleAssessedInScopeEvent.from_input(
-        SqsRecord(
+        ReceivedMessage(
             message_id="id",
             body=build_assessed_in_scope_message(
                 EventEnvelope(
@@ -103,7 +103,7 @@ def test_sender_and_receiver_share_validation_details(data, changes):
     data.update(changes)
     with pytest.raises(AssessedEventInvalidError) as received:
         ArticleAssessedInScopeEvent.from_input(
-            SqsRecord(message_id="id", body=json.dumps(data)).parse_json()
+            ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
         )
     with pytest.raises(PublishEventInvalidError) as caught:
         build_assessed_in_scope_message(

@@ -24,7 +24,7 @@ from app.lambda_handlers.acquisition.settings import AcquisitionConsumerSettings
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
 from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
-from app.lambda_handlers.sqs.records import SqsRecordBatch
+from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
 from app.lambda_handlers.sqs.response import (
     RedeliveryResponse,
     redelivery_response,
@@ -41,10 +41,10 @@ def _record(**fields: object) -> None:
         pass
 
 
-def handler(lambda_event: object, context: object) -> RedeliveryResponse:
+def handler(sqs_event: object, context: object) -> RedeliveryResponse:
     setup_lambda_logging()
     try:
-        batch = SqsRecordBatch.from_lambda_event(lambda_event)
+        message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
         settings = AcquisitionConsumerSettings()  # type: ignore[call-arg]
     except Exception as exc:
         ArticleFetchLifecycleRecorder(
@@ -52,7 +52,7 @@ def handler(lambda_event: object, context: object) -> RedeliveryResponse:
         ).record_initialization_failure("input_or_settings", exc)
         raise RuntimeError("acquisition_initialization_failed") from None
     try:
-        return asyncio.run(_run(batch, settings))
+        return asyncio.run(_run(message_batch, settings))
     except Exception as exc:
         ArticleFetchLifecycleRecorder(
             logger, operation="acquisition"
@@ -61,17 +61,16 @@ def handler(lambda_event: object, context: object) -> RedeliveryResponse:
 
 
 async def _run(
-    batch: SqsRecordBatch, settings: AcquisitionConsumerSettings
+    message_batch: ReceivedMessageBatch, settings: AcquisitionConsumerSettings
 ) -> RedeliveryResponse:
     redelivery_message_ids: list[str] = []
     async with open_acquisition_consumer(settings) as consumer:
-        for record_input in batch.records:
+        for message in message_batch.messages:
             started = monotonic()
-            fields: dict[str, object] = {"message_id": record_input.message_id}
+            fields: dict[str, object] = {"message_id": message.message_id}
             disposition = "completed"
             try:
-                record = record_input.to_record()
-                parsed_body = record.parse_json()
+                parsed_body = message.parse_json()
                 request = acquisition_request_from_message(parsed_body)
                 fields.update(
                     request_id=request.request_id, source_id=request.source_id
@@ -114,5 +113,5 @@ async def _run(
                 fields["duration_seconds"] = monotonic() - started
                 _record(**fields)
             if disposition == "batch_item_failure":
-                redelivery_message_ids.append(record_input.message_id)
+                redelivery_message_ids.append(message.message_id)
     return redelivery_response(redelivery_message_ids)

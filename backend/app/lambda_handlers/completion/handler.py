@@ -29,7 +29,7 @@ from app.lambda_handlers.completion.redelivery_wait import (
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
 from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.records import SqsRecord, SqsRecordBatch
+from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
 from app.lambda_handlers.sqs.response import (
     RedeliveryResponse,
     redelivery_response,
@@ -40,7 +40,7 @@ logger = structlog.get_logger(__name__)
 MIN_ARTICLE_REMAINING_MILLIS = 60_000
 
 
-def handler(lambda_event: object, context: Any) -> RedeliveryResponse:
+def handler(sqs_event: object, context: Any) -> RedeliveryResponse:
     """設定と資源を呼び出し単位で準備し、再配信させるメッセージだけを返す。"""
     setup_lambda_logging()
     try:
@@ -52,7 +52,7 @@ def handler(lambda_event: object, context: Any) -> RedeliveryResponse:
         raise
     return asyncio.run(
         _run_completion(
-            lambda_event,
+            sqs_event,
             settings,
             context=context,
             now=lambda: datetime.now(UTC),
@@ -61,7 +61,7 @@ def handler(lambda_event: object, context: Any) -> RedeliveryResponse:
 
 
 async def _run_completion(
-    lambda_event: object,
+    sqs_event: object,
     settings: CompletionConsumerSettings,
     *,
     context: Any,
@@ -71,25 +71,22 @@ async def _run_completion(
     recorder = CompletionLambdaFailureRecorder(logger)
     async with open_completion_resources(settings) as resources:
         try:
-            batch = SqsRecordBatch.from_lambda_event(lambda_event)
+            message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
         except SqsInputError as exc:
             recorder.record_invalid_sqs_input(exc)
             raise
 
         redelivery_message_ids: list[str] = []
         waits: list[RedeliveryWait] = []
-        validated_records: list[SqsRecord] = []
-        for index, record_input in enumerate(batch.records):
+        for index, message in enumerate(message_batch.messages):
             if context.get_remaining_time_in_millis() < MIN_ARTICLE_REMAINING_MILLIS:
-                for unstarted in batch.records[index:]:
+                for unstarted in message_batch.messages[index:]:
                     redelivery_message_ids.append(unstarted.message_id)
                     recorder.record_unstarted(message_id=unstarted.message_id)
                 break
             article_event = None
             try:
-                record = record_input.to_record()
-                validated_records.append(record)
-                parsed_body = record.parse_json()
+                parsed_body = message.parse_json()
                 article_event = IncompleteArticleRecordedEvent.from_input(parsed_body)
                 completion = await resources.consumer.consume(
                     article_event.payload.incomplete_article_id
@@ -103,27 +100,24 @@ async def _run_completion(
                         decision=RetryArticleCompletion(retry_at=retry_at)
                     ):
                         if retry_at is not None:
-                            waits.append(
-                                RedeliveryWait(record_input.message_id, retry_at)
-                            )
-                        redelivery_message_ids.append(record_input.message_id)
+                            waits.append(RedeliveryWait(message, retry_at))
+                        redelivery_message_ids.append(message.message_id)
                     case _:
                         assert_never(completion)
             except Exception as exc:
                 recorder.record_processing_error(
-                    exc, message_id=record_input.message_id, article_event=article_event
+                    exc, message_id=message.message_id, article_event=article_event
                 )
-                redelivery_message_ids.append(record_input.message_id)
+                redelivery_message_ids.append(message.message_id)
                 continue
 
             recorder.record_completion(
                 completion,
-                message_id=record_input.message_id,
+                message_id=message.message_id,
                 article_event=article_event,
             )
         await apply_redelivery_waits(
             waits,
-            records=validated_records,
             sqs_client=resources.sqs_client,
             queue_url=settings.sqs_article_completion_queue_url,
             context=context,

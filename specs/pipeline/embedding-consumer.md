@@ -76,7 +76,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 発行元のpayload検証・Outbox保存を維持し、relayのSQS publisherで保存済みの5項目を`ArticleAssessedInScopeEvent`として検証する。共通型はUUID・タイムゾーン付き日時・対象イベント種別・整数バージョン1・型付きpayloadを保証し、未知項目や数値文字列・真偽値・小数から整数への変換を拒否する。UUIDと日時のJSON文字列は明示的に復元する。記事存在やID同士の対応のDB照合は行わない。
 
-受信データは`record_input.to_record()`で本文の文字列型を検証し、`record.parse_json()`の解析結果を`ArticleAssessedInScopeEvent.from_input(parsed_body)`へ渡して同じ共通型に復元する。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
+受信メッセージは`EventReader(ArticleAssessedInScopeEvent.from_input)`で読み、`ReceivedMessage.parse_json()`で本文の文字列型を検証してJSONとして解析した結果を同じ共通型に復元する。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
 
 不正本文は`EmbeddingEventInvalidError`で伝える。理由はJSON解析の`invalid_json`、外側の構造・項目型の`invalid_envelope`、対象外種別の`unsupported_event_type`、未対応版の`unsupported_schema_version`、payload内部の`invalid_payload`の順で優先する。payload自体の欠落や非オブジェクトは外側の構造不正に含む。共有のassessed_event_validation_failureは、大分類と重複のない不変の検証詳細を返す。詳細は既知の項目名と固定コードだけとし、未知キーはeventまたはpayloadのunknown_fieldへ置き換える。本文・入力値・検証自由文を属性や原因・contextに保持せず、本文解析関数内ではログ・監査・通知を行わない。JSON解析失敗はinvalid_jsonと空の詳細一覧で返す。
 

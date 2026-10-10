@@ -14,7 +14,7 @@ from app.lambda_handlers.completion.redelivery_wait import (
     RedeliveryWait,
     apply_redelivery_waits,
 )
-from app.lambda_handlers.sqs.records import SqsRecordBatch
+from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def delivery():
         sqs=Mock(),
         log=Mock(),
     )
-    state.records = SqsRecordBatch.from_lambda_event(
+    state.first, state.second = ReceivedMessageBatch.from_sqs_event(
         {
             "Records": [
                 {
@@ -40,15 +40,13 @@ def delivery():
                 },
             ]
         }
-    ).records
-    state.records = tuple(record.to_record() for record in state.records)
+    ).messages
     return state
 
 
 async def apply(state, waits):
     await apply_redelivery_waits(
         waits,
-        records=state.records,
         sqs_client=state.sqs,
         queue_url="configured-queue",
         context=state.context,
@@ -72,7 +70,7 @@ async def test_visibility_rounds_up_and_caps_without_changing_retry_time(
 ):
     """SQS秒数だけを切り上げ・制限し、元の時刻を保持する。"""
     retry = RetryAt(delivery.now + timedelta(seconds=seconds))
-    await apply(delivery, [RedeliveryWait("first", retry)])
+    await apply(delivery, [RedeliveryWait(delivery.first, retry)])
     delivery.sqs.change_message_visibility.assert_called_once_with(
         QueueUrl="configured-queue",
         ReceiptHandle=" private-first ",
@@ -87,7 +85,7 @@ async def test_visibility_rounds_up_and_caps_without_changing_retry_time(
 @pytest.mark.asyncio
 async def test_expired_wait_is_not_sent(delivery):
     """設定時点で期限を迎えた待機をSQSへ送らない。"""
-    await apply(delivery, [RedeliveryWait("first", RetryAt(delivery.now))])
+    await apply(delivery, [RedeliveryWait(delivery.first, RetryAt(delivery.now))])
     delivery.sqs.change_message_visibility.assert_not_called()
     assert delivery.log.warning.call_args.kwargs["result"] == "expired"
 
@@ -102,7 +100,8 @@ async def test_wait_is_recalculated_after_previous_operation(delivery):
 
     delivery.sqs.change_message_visibility.side_effect = advance
     await apply(
-        delivery, [RedeliveryWait("first", retry), RedeliveryWait("second", retry)]
+        delivery,
+        [RedeliveryWait(delivery.first, retry), RedeliveryWait(delivery.second, retry)],
     )
     assert [
         c.kwargs["VisibilityTimeout"]
@@ -119,7 +118,8 @@ async def test_failed_wait_does_not_prevent_next_wait(delivery):
         {},
     ]
     await apply(
-        delivery, [RedeliveryWait("first", retry), RedeliveryWait("second", retry)]
+        delivery,
+        [RedeliveryWait(delivery.first, retry), RedeliveryWait(delivery.second, retry)],
     )
     fields = [c.kwargs for c in delivery.log.warning.call_args_list]
     assert [f["result"] for f in fields] == ["failed", "applied"]
@@ -135,7 +135,11 @@ async def test_visibility_start_boundary(delivery, millis, expected):
     delivery.context.get_remaining_time_in_millis.return_value = millis
     await apply(
         delivery,
-        [RedeliveryWait("first", RetryAt(delivery.now + timedelta(seconds=120)))],
+        [
+            RedeliveryWait(
+                delivery.first, RetryAt(delivery.now + timedelta(seconds=120))
+            )
+        ],
     )
     assert delivery.sqs.change_message_visibility.call_count == expected
 
@@ -146,7 +150,8 @@ async def test_insufficient_time_stops_remaining_waits(delivery):
     delivery.context.get_remaining_time_in_millis.side_effect = [20_000, 19_999]
     retry = RetryAt(delivery.now + timedelta(seconds=120))
     await apply(
-        delivery, [RedeliveryWait("first", retry), RedeliveryWait("second", retry)]
+        delivery,
+        [RedeliveryWait(delivery.first, retry), RedeliveryWait(delivery.second, retry)],
     )
     assert delivery.sqs.change_message_visibility.call_count == 1
     assert delivery.log.warning.call_args.kwargs["result"] == "insufficient_time"
@@ -156,7 +161,7 @@ async def test_insufficient_time_stops_remaining_waits(delivery):
 @pytest.mark.asyncio
 async def test_invalid_receipt_skips_only_its_wait(delivery):
     """receiptHandle不正は当該設定だけを省略する。"""
-    delivery.records = SqsRecordBatch.from_lambda_event(
+    delivery.first, delivery.second = ReceivedMessageBatch.from_sqs_event(
         {
             "Records": [
                 {
@@ -167,11 +172,11 @@ async def test_invalid_receipt_skips_only_its_wait(delivery):
                 {"messageId": "second", "body": "{}", "receiptHandle": "valid"},
             ]
         }
-    ).records
-    delivery.records = tuple(record.to_record() for record in delivery.records)
+    ).messages
     retry = RetryAt(delivery.now + timedelta(seconds=120))
     await apply(
-        delivery, [RedeliveryWait("first", retry), RedeliveryWait("second", retry)]
+        delivery,
+        [RedeliveryWait(delivery.first, retry), RedeliveryWait(delivery.second, retry)],
     )
     assert delivery.sqs.change_message_visibility.call_args_list == [
         call(QueueUrl="configured-queue", ReceiptHandle="valid", VisibilityTimeout=120)
@@ -189,6 +194,7 @@ async def test_logging_failure_does_not_stop_waits(delivery):
     delivery.log.warning.side_effect = RuntimeError("private-log")
     retry = RetryAt(delivery.now + timedelta(seconds=120))
     await apply(
-        delivery, [RedeliveryWait("first", retry), RedeliveryWait("second", retry)]
+        delivery,
+        [RedeliveryWait(delivery.first, retry), RedeliveryWait(delivery.second, retry)],
     )
     assert delivery.sqs.change_message_visibility.call_count == 2

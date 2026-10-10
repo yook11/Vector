@@ -28,7 +28,7 @@ from app.analysis.assessment.service import (
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.logging import create_article_analysis_logger
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsInputReason
-from app.lambda_handlers.sqs.records import SqsRecord
+from app.lambda_handlers.sqs.received_message import ReceivedMessage
 
 module = import_module("app.lambda_handlers.assessment.handler")
 pytestmark = pytest.mark.unit
@@ -431,10 +431,10 @@ def test_completion_is_not_reported_as_batch_failure(wiring, completion):
 def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
     """想定外の解析障害も、そのメッセージだけの失敗として後続を処理する。"""
     body = valid_body()
-    parsed_body = SqsRecord(message_id="id", body=body).parse_json()
+    parsed_body = ReceivedMessage(message_id="id", body=body).parse_json()
     parsed = module.ArticleCuratedSignalEvent.from_input(parsed_body)
     monkeypatch.setattr(
-        SqsRecord,
+        ReceivedMessage,
         "parse_json",
         Mock(side_effect=[RuntimeError("private-parser"), parsed_body]),
     )
