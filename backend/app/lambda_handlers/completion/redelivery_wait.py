@@ -12,8 +12,10 @@ from app.lambda_handlers.completion.composition import SqsMessageVisibilityClien
 from app.lambda_handlers.completion.failure_recorder import (
     CompletionLambdaFailureRecorder,
 )
-from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessage,
+    ReceivedMessageInvalidError,
+)
 
 MAX_VISIBILITY_SECONDS = 39_600
 MIN_VISIBILITY_REMAINING_MILLIS = 20_000
@@ -48,7 +50,7 @@ async def apply_redelivery_waits(
             break
         try:
             receipt_handle = wait.message.receipt_handle_text()
-        except SqsInputError as exc:
+        except ReceivedMessageInvalidError as exc:
             recorder.record_redelivery_wait(
                 wait, result="invalid_receipt_handle", reason=exc.reason.value
             )

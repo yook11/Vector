@@ -11,7 +11,7 @@ from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.service import AssessmentCompletion
 from app.analysis.curation.events import CuratedEventInvalidError
 from app.lambda_handlers.event_reader import EventReadFailed
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
+from app.lambda_handlers.sqs.received_message import ReceivedMessageInvalidError
 
 
 class AssessmentMessageRecorder:
@@ -30,7 +30,7 @@ class AssessmentMessageRecorder:
             duration_ms=duration_ms, message_disposition="batch_item_failure"
         )
         match read_failed.error:
-            case SqsInputError() | SqsMessageJsonInvalidError() as error:
+            case ReceivedMessageInvalidError() as error:
                 logger.warning(
                     "assessment_message_processing_failed",
                     operation="parse_message",

@@ -29,8 +29,10 @@ from app.lambda_handlers.assessment.settings import (
     AssessmentLambdaSettings,
 )
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessageBatch,
+    ReceivedMessageBatchInvalidError,
+)
 from app.lambda_handlers.sqs.response import (
     RedeliveryResponse,
     redelivery_response,
@@ -74,7 +76,7 @@ async def _run_assessment(
         # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
             message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
-        except SqsInputError as exc:
+        except ReceivedMessageBatchInvalidError as exc:
             logger.warning(
                 "assessment_sqs_input_invalid",
                 exc_info=exc,

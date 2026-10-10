@@ -23,8 +23,10 @@ from app.lambda_handlers.acquisition.composition import open_acquisition_consume
 from app.lambda_handlers.acquisition.settings import AcquisitionConsumerSettings
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
 from app.lambda_handlers.logging import setup_lambda_logging
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
-from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessageBatch,
+    ReceivedMessageInvalidError,
+)
 from app.lambda_handlers.sqs.response import (
     RedeliveryResponse,
     redelivery_response,
@@ -97,8 +99,7 @@ async def _run(
                     exc,
                     (
                         AcquisitionRequestInvalidError,
-                        SqsMessageJsonInvalidError,
-                        SqsInputError,
+                        ReceivedMessageInvalidError,
                     ),
                 ):
                     code = "invalid_request"

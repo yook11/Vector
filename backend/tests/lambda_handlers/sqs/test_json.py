@@ -4,8 +4,11 @@ import traceback
 
 import pytest
 
-from app.lambda_handlers.sqs.errors import SqsMessageJsonInvalidError
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessage,
+    ReceivedMessageInvalidError,
+    ReceivedMessageInvalidReason,
+)
 from app.shared.errors import ApplicationError
 
 pytestmark = pytest.mark.unit
@@ -34,7 +37,7 @@ def test_invalid_syntax_does_not_retain_body_or_original_exception(body):
     """構文不正の本文と元の解析例外を診断用例外へ保持しない。"""
     record = ReceivedMessage(message_id="id", body=body)
 
-    with pytest.raises(SqsMessageJsonInvalidError) as caught:
+    with pytest.raises(ReceivedMessageInvalidError) as caught:
         record.parse_json()
 
     assert caught.value.__context__ is None
@@ -54,7 +57,7 @@ def test_duplicate_keys_are_rejected_at_any_depth(body):
     """同名キーを上書きせず、階層を問わずJSON不正として拒否する。"""
     record = ReceivedMessage(message_id="id", body=body)
 
-    with pytest.raises(SqsMessageJsonInvalidError) as caught:
+    with pytest.raises(ReceivedMessageInvalidError) as caught:
         record.parse_json()
 
     assert caught.value.__context__ is None
@@ -66,7 +69,7 @@ def test_nonstandard_root_numbers_are_rejected(constant):
     """JSONルートの非標準数値定数を受け入れない。"""
     record = ReceivedMessage(message_id="id", body=constant)
 
-    with pytest.raises(SqsMessageJsonInvalidError):
+    with pytest.raises(ReceivedMessageInvalidError):
         record.parse_json()
 
 
@@ -77,7 +80,7 @@ def test_nested_nonstandard_numbers_are_rejected(constant):
         message_id="id", body='{"payload":{"value":' + constant + "}}"
     )
 
-    with pytest.raises(SqsMessageJsonInvalidError):
+    with pytest.raises(ReceivedMessageInvalidError):
         record.parse_json()
 
 
@@ -85,7 +88,7 @@ def test_deep_json_is_reported_without_original_exception():
     """深いネストによる解析失敗を入力を持たないJSON不正へ変換する。"""
     record = ReceivedMessage(message_id="id", body="[" * 10_000 + "0" + "]" * 10_000)
 
-    with pytest.raises(SqsMessageJsonInvalidError) as caught:
+    with pytest.raises(ReceivedMessageInvalidError) as caught:
         record.parse_json()
 
     assert caught.value.__context__ is None
@@ -93,9 +96,13 @@ def test_deep_json_is_reported_without_original_exception():
 
 
 def test_json_error_preserves_application_error_diagnostics():
-    """共通ログ基盤には固定メッセージとJSON不正の理由だけを渡す。"""
-    error = SqsMessageJsonInvalidError()
+    """共通ログ基盤には固定メッセージと、本文のJSON不正という理由だけを渡す。"""
+    record = ReceivedMessage(message_id="id", body="{")
 
-    assert isinstance(error, ApplicationError)
-    assert str(error) == "SQS message JSON parsing failed"
-    assert error.details == {"reason": "invalid_json"}
+    with pytest.raises(ReceivedMessageInvalidError) as caught:
+        record.parse_json()
+
+    assert isinstance(caught.value, ApplicationError)
+    assert caught.value.reason is ReceivedMessageInvalidReason.INVALID_JSON
+    assert str(caught.value) == "Received message validation failed: invalid_json"
+    assert caught.value.details == {"reason": "invalid_json", "field": "body"}

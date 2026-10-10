@@ -28,8 +28,10 @@ from app.lambda_handlers.completion.redelivery_wait import (
 )
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
 from app.lambda_handlers.logging import setup_lambda_logging
-from app.lambda_handlers.sqs.errors import SqsInputError
-from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
+from app.lambda_handlers.sqs.received_message import (
+    ReceivedMessageBatch,
+    ReceivedMessageBatchInvalidError,
+)
 from app.lambda_handlers.sqs.response import (
     RedeliveryResponse,
     redelivery_response,
@@ -72,18 +74,20 @@ async def _run_completion(
     async with open_completion_resources(settings) as resources:
         try:
             message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
-        except SqsInputError as exc:
-            recorder.record_invalid_sqs_input(exc)
+        except ReceivedMessageBatchInvalidError as exc:
+            recorder.record_invalid_message_batch(exc)
             raise
 
         redelivery_message_ids: list[str] = []
         waits: list[RedeliveryWait] = []
+
         for index, message in enumerate(message_batch.messages):
             if context.get_remaining_time_in_millis() < MIN_ARTICLE_REMAINING_MILLIS:
                 for unstarted in message_batch.messages[index:]:
                     redelivery_message_ids.append(unstarted.message_id)
                     recorder.record_unstarted(message_id=unstarted.message_id)
                 break
+
             article_event = None
             try:
                 parsed_body = message.parse_json()
