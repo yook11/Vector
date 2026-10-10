@@ -21,18 +21,18 @@ from app.lambda_handlers.event_reader import EventReader, EventReadFailed
 from app.lambda_handlers.sqs.errors import SqsInputError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
-    SqsBatchFailureResponse,
-    SqsBatchItemIdentifier,
+    RedeliveryResponse,
+    redelivery_response,
 )
 from app.shared.time import elapsed_ms_since
 
 
-def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:
+def handler(lambda_event: object, context: object) -> RedeliveryResponse:
     """呼び出しの文脈と設定を用意し、資源解放まで同じロガーを渡す。"""
     with open_article_analysis_invocation(
         "embedding", context, EmbeddingConsumerSettings
     ) as invocation:
-        failed_items = asyncio.run(
+        return asyncio.run(
             _run_embedding(
                 lambda_event,
                 invocation.settings,
@@ -40,7 +40,6 @@ def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:
                 failure_recorder=invocation.failure_recorder,
             )
         )
-    return SqsBatchFailureResponse(batchItemFailures=failed_items)
 
 
 async def _run_embedding(
@@ -49,7 +48,7 @@ async def _run_embedding(
     *,
     logger: FilteringBoundLogger,
     failure_recorder: ArticleAnalysisLifecycleRecorder,
-) -> list[SqsBatchItemIdentifier]:
+) -> RedeliveryResponse:
     """バッチの各メッセージを順に処理し、再配信させるメッセージのIDだけを返す。"""
     async with open_embedding_consumer(
         settings, failure_recorder=failure_recorder
@@ -67,7 +66,7 @@ async def _run_embedding(
 
         event_reader = EventReader(ArticleAssessedInScopeEvent.from_input)
         message_recorder = EmbeddingMessageRecorder(logger)
-        failed_items: list[SqsBatchItemIdentifier] = []
+        redelivery_message_ids: list[str] = []
 
         for message_record in message_record_batch.records:
             with bound_contextvars(message_id=message_record.message_id):
@@ -80,11 +79,7 @@ async def _run_embedding(
                             read_failed,
                             duration_ms=elapsed_ms_since(started_at_seconds),
                         )
-                        failed_items.append(
-                            SqsBatchItemIdentifier(
-                                itemIdentifier=message_record.message_id
-                            )
-                        )
+                        redelivery_message_ids.append(message_record.message_id)
 
                     case ArticleAssessedInScopeEvent() as assessed_event:
                         with bound_contextvars(
@@ -103,9 +98,5 @@ async def _run_embedding(
                                 duration_ms=elapsed_ms_since(started_at_seconds),
                             )
                             if isinstance(consume_result, RetryEmbedding):
-                                failed_items.append(
-                                    SqsBatchItemIdentifier(
-                                        itemIdentifier=message_record.message_id
-                                    )
-                                )
-        return failed_items
+                                redelivery_message_ids.append(message_record.message_id)
+        return redelivery_response(redelivery_message_ids)

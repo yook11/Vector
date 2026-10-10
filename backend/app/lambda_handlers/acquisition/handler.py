@@ -1,4 +1,4 @@
-"""取得依頼を処理し、失敗したメッセージだけをSQSへ返す。"""
+"""取得依頼を処理し、再配信させるメッセージだけをSQSへ返す。"""
 
 import asyncio
 from time import monotonic
@@ -26,8 +26,8 @@ from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
-    SqsBatchFailureResponse,
-    SqsBatchItemIdentifier,
+    RedeliveryResponse,
+    redelivery_response,
 )
 
 logger = structlog.get_logger(__name__)
@@ -41,7 +41,7 @@ def _record(**fields: object) -> None:
         pass
 
 
-def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:
+def handler(lambda_event: object, context: object) -> RedeliveryResponse:
     setup_lambda_logging()
     try:
         batch = SqsRecordBatch.from_lambda_event(lambda_event)
@@ -62,8 +62,8 @@ def handler(lambda_event: object, context: object) -> SqsBatchFailureResponse:
 
 async def _run(
     batch: SqsRecordBatch, settings: AcquisitionConsumerSettings
-) -> SqsBatchFailureResponse:
-    failures: list[SqsBatchItemIdentifier] = []
+) -> RedeliveryResponse:
+    redelivery_message_ids: list[str] = []
     async with open_acquisition_consumer(settings) as consumer:
         for record_input in batch.records:
             started = monotonic()
@@ -114,7 +114,5 @@ async def _run(
                 fields["duration_seconds"] = monotonic() - started
                 _record(**fields)
             if disposition == "batch_item_failure":
-                failures.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
-                )
-    return SqsBatchFailureResponse(batchItemFailures=failures)
+                redelivery_message_ids.append(record_input.message_id)
+    return redelivery_response(redelivery_message_ids)
