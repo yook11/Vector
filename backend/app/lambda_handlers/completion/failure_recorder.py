@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         IncompleteArticleRecordedEvent,
     )
     from app.collection.retry_at import RetryAt
+    from app.lambda_handlers.completion.redelivery_wait import VisibilityTimeout
     from app.lambda_handlers.event_reader import EventReadFailed
 
 
@@ -161,7 +162,64 @@ class CompletionLambdaFailureRecorder:
             reason="insufficient_time",
         )
 
-    def record_redelivery_wait(
+    def record_retry_at_passed(self, retry_at: RetryAt, *, message_id: str) -> None:
+        self._record_redelivery_wait(retry_at, message_id=message_id, result="expired")
+
+    def record_visibility_change_unstarted(
+        self, retry_at: RetryAt, *, message_id: str
+    ) -> None:
+        self._record_redelivery_wait(
+            retry_at, message_id=message_id, result="insufficient_time"
+        )
+
+    def record_receipt_handle_invalid(
+        self,
+        retry_at: RetryAt,
+        error: ReceivedMessageInvalidError,
+        *,
+        message_id: str,
+    ) -> None:
+        self._record_redelivery_wait(
+            retry_at,
+            message_id=message_id,
+            result="invalid_receipt_handle",
+            reason=error.reason.value,
+        )
+
+    def record_visibility_change_failed(
+        self,
+        retry_at: RetryAt,
+        visibility_timeout: VisibilityTimeout,
+        error: Exception,
+        *,
+        message_id: str,
+    ) -> None:
+        self._record_redelivery_wait(
+            retry_at,
+            message_id=message_id,
+            result="failed",
+            requested_seconds=visibility_timeout.seconds,
+            capped=visibility_timeout.capped,
+            error_class=exception_fqn(error),
+        )
+
+    def record_visibility_changed(
+        self,
+        retry_at: RetryAt,
+        visibility_timeout: VisibilityTimeout,
+        *,
+        message_id: str,
+    ) -> None:
+        self._record_redelivery_wait(
+            retry_at,
+            message_id=message_id,
+            result="applied",
+            requested_seconds=visibility_timeout.seconds,
+            applied_seconds=visibility_timeout.seconds,
+            capped=visibility_timeout.capped,
+        )
+
+    def _record_redelivery_wait(
         self,
         retry_at: RetryAt,
         *,
@@ -170,22 +228,18 @@ class CompletionLambdaFailureRecorder:
         requested_seconds: int | None = None,
         applied_seconds: int | None = None,
         capped: bool | None = None,
-        reason: str | None = None,
-        error: Exception | None = None,
+        **extra_fields: object,
     ) -> None:
-        fields: dict[str, object] = {
-            "message_id": message_id,
-            "retry_at": retry_at.value.isoformat(),
-            "result": result,
-            "requested_seconds": requested_seconds,
-            "applied_seconds": applied_seconds,
-            "capped": capped,
-        }
-        if reason is not None:
-            fields["reason"] = reason
-        if error is not None:
-            fields["error_class"] = exception_fqn(error)
-        self._record("completion_redelivery_wait", **fields)
+        self._record(
+            "completion_redelivery_wait",
+            message_id=message_id,
+            retry_at=retry_at.value.isoformat(),
+            result=result,
+            requested_seconds=requested_seconds,
+            applied_seconds=applied_seconds,
+            capped=capped,
+            **extra_fields,
+        )
 
     def _record(self, event: str, **fields: object) -> None:
         try:

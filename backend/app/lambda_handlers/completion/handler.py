@@ -28,7 +28,7 @@ from app.lambda_handlers.completion.processing_start_deadline import (
 )
 from app.lambda_handlers.completion.redelivery_wait import (
     RedeliveryMessage,
-    apply_redelivery_waits,
+    apply_visibility_timeouts,
 )
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
@@ -135,7 +135,7 @@ async def _run_completion(
                         message_id=message.message_id,
                         article_event=article_event,
                     )
-        await apply_redelivery_waits(
+        await apply_visibility_timeouts(
             redelivery_messages,
             sqs_client=resources.sqs_client,
             queue_url=settings.sqs_article_completion_queue_url,
