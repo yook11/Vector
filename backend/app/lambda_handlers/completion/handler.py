@@ -87,7 +87,7 @@ async def _run_completion(
                     redelivery_message_ids.append(unstarted.message_id)
                     recorder.record_unstarted(message_id=unstarted.message_id)
                 break
-                
+
             article_event = None
             try:
                 parsed_body = message.parse_json()
