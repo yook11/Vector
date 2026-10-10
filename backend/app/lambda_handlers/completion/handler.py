@@ -27,7 +27,7 @@ from app.lambda_handlers.completion.processing_start_deadline import (
     ProcessingStartDeadline,
 )
 from app.lambda_handlers.completion.redelivery_wait import (
-    RedeliveryWait,
+    RedeliveryMessage,
     apply_redelivery_waits,
 )
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
@@ -82,18 +82,17 @@ async def _run_completion(
             raise
 
         event_reader = EventReader(IncompleteArticleRecordedEvent.from_input)
-        redelivery_message_ids: list[str] = []
-        waits: list[RedeliveryWait] = []
+        redelivery_messages: list[RedeliveryMessage] = []
 
         # 応答と後始末を間に合わせるため、
         # 記事の処理を始めてよいのはLambdaの制限時間の60秒前までとする。
         processing_start_deadline = ProcessingStartDeadline(
             context, before_lambda_limit=timedelta(seconds=60)
         )
-        for index, message in enumerate(message_batch.messages):
+        for message_position, message in enumerate(message_batch.messages):
             if processing_start_deadline.has_passed():
-                for unstarted in message_batch.messages[index:]:
-                    redelivery_message_ids.append(unstarted.message_id)
+                for unstarted in message_batch.messages[message_position:]:
+                    redelivery_messages.append(RedeliveryMessage(unstarted))
                     recorder.record_unstarted(message_id=unstarted.message_id)
                 break
 
@@ -102,7 +101,7 @@ async def _run_completion(
                     recorder.record_read_failed(
                         read_failed, message_id=message.message_id
                     )
-                    redelivery_message_ids.append(message.message_id)
+                    redelivery_messages.append(RedeliveryMessage(message))
 
                 case IncompleteArticleRecordedEvent() as article_event:
                     try:
@@ -115,7 +114,7 @@ async def _run_completion(
                             message_id=message.message_id,
                             article_event=article_event,
                         )
-                        redelivery_message_ids.append(message.message_id)
+                        redelivery_messages.append(RedeliveryMessage(message))
                         continue
 
                     match completion_result:
@@ -126,9 +125,9 @@ async def _run_completion(
                         case CompletionFailed(
                             decision=RetryArticleCompletion(retry_at=retry_at)
                         ):
-                            if retry_at is not None:
-                                waits.append(RedeliveryWait(message, retry_at))
-                            redelivery_message_ids.append(message.message_id)
+                            redelivery_messages.append(
+                                RedeliveryMessage(message, retry_at)
+                            )
                         case _:
                             assert_never(completion_result)
                     recorder.record_completion(
@@ -137,11 +136,16 @@ async def _run_completion(
                         article_event=article_event,
                     )
         await apply_redelivery_waits(
-            waits,
+            redelivery_messages,
             sqs_client=resources.sqs_client,
             queue_url=settings.sqs_article_completion_queue_url,
             context=context,
             now=now,
             recorder=recorder,
         )
-        return redelivery_response(redelivery_message_ids)
+        return redelivery_response(
+            [
+                redelivery_message.message.message_id
+                for redelivery_message in redelivery_messages
+            ]
+        )
