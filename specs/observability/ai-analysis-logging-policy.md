@@ -366,7 +366,7 @@ provider例外には回復分類・retryabilityを持たせない。分析の3�
 
 - [AI記事分析ロガー](../../backend/app/analysis/logging.py)は、既存の目的ルール・factory・processor・JSON標準出力を明示して構築する。各呼び出しで生成し、グローバル設定から独立させる。AssessmentではLambda共通設定を呼ばず、グローバルstructlog設定も変更しない。ロガー引数の受け渡しとcontextvarsの束縛・復元は維持する。
 - `service=article_analysis`、`stage=assessment`を付け、Lambda contextに有効な文字列があれば`request_id`、設定取得後は`settings.env`から`environment`を付ける。取得前の項目は省略する。呼び出し元のcontextvarsは退避・クリアし、`finally`で復元する。各メッセージの識別情報は派生ロガーに束縛する。
-- handlerは§3.3.1の開始・終端を直接記録する。`operation`は本文取得・解析に`parse_message`、イベント契約違反に`validate_event`、前提不成立に`build_ready`を使う。Consumer内部の失敗箇所は推測せず省略する。
+- 工程ごとの記録係（`lambda_handlers/{stage}/message_recorder.py`）が§3.3.1の開始・終端を記録し、handlerは処理の結果を渡す。`operation`は本文取得・解析に`parse_message`、イベント契約違反に`validate_event`、前提不成立に`build_ready`を使う。Consumer内部の失敗箇所は推測せず省略する。
 - 初期化は`assessment_initialization_failed`（ERROR）、バッチ不正は`assessment_sqs_input_invalid`（WARNING）、資源cleanupは`assessment_resources_cleanup_failed`（ERROR）を維持する。初期化箇所は`operation`、cleanupは`operation=cleanup`と`resource`に記録する。
 - [共通ラッパー](../../backend/app/log_policy/bound_logger.py)の`ApplicationBoundLogger`を`wrapper_class`に指定し、`logger.info/warning/error`からprocessor・JSON化・出力までの`Exception`を捕捉する。生データによるfallbackや再帰的な再記録は行わず、`bind()`後も同じ保護を維持する。位置引数による文字列展開は保護範囲外とし、イベント名とキーワード項目で記録する。`BaseException`は抑止しない。ライフサイクル用の記録クラスには共有インターフェースの初期化・cleanupの2メソッドだけを残す。
 - SQS応答・通知順序・監査・メトリクス・資源の所有権は維持する。Consumer・Service・失敗後処理の内部ログは§3.3.2へ接続済み。AssessmentのAI呼び出しと共有DeepSeekクライアント内部のcleanupは§3.3.3へ接続済み。通知処理内部とSSM cleanupは上位仕様§2.4の専用ルールを使用する。他工程・エージェントの業務ログ接続は後続とする。
