@@ -92,7 +92,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 有効なmessageIdは加工せず保持し、入力順に1件ずつbodyを検証してConsumerへpayloadを渡す。使用しないSQSフィールドは許容する。bodyの欠落・非文字列・本文不正・Consumerの通常例外は個別失敗として後続処理を続ける。ConsumerはEmbeddingCompletionのSAVED・ALREADY_EMBEDDED、またはReady側のEmbeddingReadyBuildRejectedを返し、ハンドラーはその契約に従って結果を記録する。キャンセル・プロセス終了は伝播する。
 
-_run_embeddingは失敗したメッセージのIDをSqsBatchItemIdentifierに格納し、入力順のlist[SqsBatchItemIdentifier]として返す。公開handlerはそのfailed_itemsをSqsBatchFailureResponseのbatchItemFailuresに含める。全件成功・空のRecordsは`{"batchItemFailures": []}`、失敗時は`{"batchItemFailures": [{"itemIdentifier": "失敗したmessageId"}]}`とする。複数件という理由では拒否せず、内部並列処理は追加しない。
+_run_embeddingは再配信させるメッセージのIDを入力順に集め、redelivery_responseでAWSの部分バッチ応答（RedeliveryResponse）にして返す。全件成功・空のRecordsは`{"batchItemFailures": []}`、再配信させるときは`{"batchItemFailures": [{"itemIdentifier": "再配信させるmessageId"}]}`とする。複数件という理由では拒否せず、内部並列処理は追加しない。
 
 ログは次の固定イベントを用い、通常のログ障害で結果や後続処理を変更しない。
 

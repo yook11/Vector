@@ -31,8 +31,8 @@ from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.errors import SqsInputError
 from app.lambda_handlers.sqs.records import SqsRecord, SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
-    SqsBatchFailureResponse,
-    SqsBatchItemIdentifier,
+    RedeliveryResponse,
+    redelivery_response,
 )
 
 logger = structlog.get_logger(__name__)
@@ -40,8 +40,8 @@ logger = structlog.get_logger(__name__)
 MIN_ARTICLE_REMAINING_MILLIS = 60_000
 
 
-def handler(lambda_event: object, context: Any) -> SqsBatchFailureResponse:
-    """設定と資源を呼び出し単位で準備し、失敗した項目だけを返す。"""
+def handler(lambda_event: object, context: Any) -> RedeliveryResponse:
+    """設定と資源を呼び出し単位で準備し、再配信させるメッセージだけを返す。"""
     setup_lambda_logging()
     try:
         settings = CompletionConsumerSettings()  # type: ignore[call-arg]
@@ -50,7 +50,7 @@ def handler(lambda_event: object, context: Any) -> SqsBatchFailureResponse:
             logger, operation="completion"
         ).record_initialization_failure("settings", exc)
         raise
-    failed_items = asyncio.run(
+    return asyncio.run(
         _run_completion(
             lambda_event,
             settings,
@@ -58,7 +58,6 @@ def handler(lambda_event: object, context: Any) -> SqsBatchFailureResponse:
             now=lambda: datetime.now(UTC),
         )
     )
-    return SqsBatchFailureResponse(batchItemFailures=failed_items)
 
 
 async def _run_completion(
@@ -67,7 +66,7 @@ async def _run_completion(
     *,
     context: Any,
     now: Callable[[], datetime],
-) -> list[SqsBatchItemIdentifier]:
+) -> RedeliveryResponse:
     """全IDを検証してから本文・補完結果を個別の配送応答へ対応付ける。"""
     recorder = CompletionLambdaFailureRecorder(logger)
     async with open_completion_resources(settings) as resources:
@@ -77,15 +76,13 @@ async def _run_completion(
             recorder.record_invalid_sqs_input(exc)
             raise
 
-        failed_items: list[SqsBatchItemIdentifier] = []
+        redelivery_message_ids: list[str] = []
         waits: list[RedeliveryWait] = []
         validated_records: list[SqsRecord] = []
         for index, record_input in enumerate(batch.records):
             if context.get_remaining_time_in_millis() < MIN_ARTICLE_REMAINING_MILLIS:
                 for unstarted in batch.records[index:]:
-                    failed_items.append(
-                        SqsBatchItemIdentifier(itemIdentifier=unstarted.message_id)
-                    )
+                    redelivery_message_ids.append(unstarted.message_id)
                     recorder.record_unstarted(message_id=unstarted.message_id)
                 break
             article_event = None
@@ -109,20 +106,14 @@ async def _run_completion(
                             waits.append(
                                 RedeliveryWait(record_input.message_id, retry_at)
                             )
-                        failed_items.append(
-                            SqsBatchItemIdentifier(
-                                itemIdentifier=record_input.message_id
-                            )
-                        )
+                        redelivery_message_ids.append(record_input.message_id)
                     case _:
                         assert_never(completion)
             except Exception as exc:
                 recorder.record_processing_error(
                     exc, message_id=record_input.message_id, article_event=article_event
                 )
-                failed_items.append(
-                    SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
-                )
+                redelivery_message_ids.append(record_input.message_id)
                 continue
 
             recorder.record_completion(
@@ -139,4 +130,4 @@ async def _run_completion(
             now=now,
             recorder=recorder,
         )
-        return failed_items
+        return redelivery_response(redelivery_message_ids)
