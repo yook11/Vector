@@ -6,17 +6,12 @@ from time import perf_counter
 from structlog.contextvars import bound_contextvars
 from structlog.typing import FilteringBoundLogger
 
-from app.ai_providers.errors import AIProviderError
 from app.analysis.assessment.consumer_failure_classification import RetryAssessment
-from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.service import (
     AssessmentCompletion,
     AssessmentCompletionKind,
 )
-from app.analysis.curation.events import (
-    ArticleCuratedSignalEvent,
-    CuratedEventInvalidError,
-)
+from app.analysis.curation.events import ArticleCuratedSignalEvent
 from app.lambda_handlers.article_analysis_invocation import (
     open_article_analysis_invocation,
 )
@@ -27,12 +22,14 @@ from app.lambda_handlers.assessment.composition import (
     build_article_list_notifier,
     open_assessment_consumer,
 )
+from app.lambda_handlers.assessment.message_recorder import AssessmentMessageRecorder
 from app.lambda_handlers.assessment.notification import ArticleListUpdateNotifier
 from app.lambda_handlers.assessment.settings import (
     AssessmentConsumerSettings,
     AssessmentLambdaSettings,
 )
-from app.lambda_handlers.sqs.errors import SqsInputError, SqsMessageJsonInvalidError
+from app.lambda_handlers.event_reader import EventReader, EventReadFailed
+from app.lambda_handlers.sqs.errors import SqsInputError
 from app.lambda_handlers.sqs.records import SqsRecordBatch
 from app.lambda_handlers.sqs.response import (
     SqsBatchFailureResponse,
@@ -70,12 +67,14 @@ async def _run_assessment(
     logger: FilteringBoundLogger,
     failure_recorder: ArticleAnalysisLifecycleRecorder,
 ) -> list[SqsBatchItemIdentifier]:
-    """資源を管理して各レコードの開始と結果を記録し、失敗した識別子を返す。"""
+    """バッチの各メッセージを順に処理し、再配信させるメッセージのIDだけを返す。"""
     async with open_assessment_consumer(
         settings, failure_recorder=failure_recorder
     ) as consumer:
+        # 失敗はメッセージIDで1件ずつ返すため、
+        # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
-            record_batch = SqsRecordBatch.from_lambda_event(lambda_event)
+            message_record_batch = SqsRecordBatch.from_lambda_event(lambda_event)
         except SqsInputError as exc:
             logger.warning(
                 "assessment_sqs_input_invalid",
@@ -83,112 +82,53 @@ async def _run_assessment(
             )
             raise
 
+        event_reader = EventReader(ArticleCuratedSignalEvent.from_input)
+        message_recorder = AssessmentMessageRecorder(logger)
         failed_items: list[SqsBatchItemIdentifier] = []
-        for record_input in record_batch.records:
-            with bound_contextvars(message_id=record_input.message_id):
-                started_at_seconds = perf_counter()
-                logger.info("assessment_message_processing_started")
-                try:
-                    record = record_input.to_record()
-                    parsed_body = record.parse_json()
-                    curated_event = ArticleCuratedSignalEvent.from_input(parsed_body)
-                except (SqsInputError, SqsMessageJsonInvalidError) as exc:
-                    logger.warning(
-                        "assessment_message_processing_failed",
-                        operation="parse_message",
-                        duration_ms=elapsed_ms_since(started_at_seconds),
-                        message_disposition="batch_item_failure",
-                        exc_info=exc,
-                    )
-                    failed_items.append(
-                        SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
-                    )
-                    continue
-                except CuratedEventInvalidError as exc:
-                    logger.warning(
-                        "assessment_message_processing_failed",
-                        operation="validate_event",
-                        duration_ms=elapsed_ms_since(started_at_seconds),
-                        message_disposition="batch_item_failure",
-                        exc_info=exc,
-                    )
-                    failed_items.append(
-                        SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
-                    )
-                    continue
-                except Exception as exc:
-                    logger.error(
-                        "assessment_message_processing_failed",
-                        operation="parse_message",
-                        duration_ms=elapsed_ms_since(started_at_seconds),
-                        message_disposition="batch_item_failure",
-                        exc_info=exc,
-                    )
-                    failed_items.append(
-                        SqsBatchItemIdentifier(itemIdentifier=record_input.message_id)
-                    )
-                    continue
 
-                with bound_contextvars(
-                    event_id=str(curated_event.event_id),
-                    curation_id=curated_event.payload.curation_id,
-                    analyzable_article_id=curated_event.payload.analyzable_article_id,
-                ):
-                    try:
-                        completion = await consumer.consume(
-                            curated_event.payload, logger=logger
-                        )
-                    except Exception as exc:
-                        completion = RetryAssessment(exc)
-                    if isinstance(completion, RetryAssessment):
-                        logger.error(
-                            "assessment_message_processing_failed",
+        for message_record in message_record_batch.records:
+            with bound_contextvars(message_id=message_record.message_id):
+                started_at_seconds = perf_counter()
+                message_recorder.record_started()
+
+                match event_reader.read(message_record):
+                    case EventReadFailed() as read_failed:
+                        message_recorder.record_read_failed(
+                            read_failed,
                             duration_ms=elapsed_ms_since(started_at_seconds),
-                            message_disposition="batch_item_failure",
-                            exc_info=completion.error,
                         )
                         failed_items.append(
                             SqsBatchItemIdentifier(
-                                itemIdentifier=record_input.message_id
+                                itemIdentifier=message_record.message_id
                             )
                         )
-                    elif isinstance(completion, AssessmentCompletion):
-                        if completion.kind is AssessmentCompletionKind.IN_SCOPE:
-                            await notifier.notify_article_list_updated()
-                        completion_logger = (
-                            logger
-                            if completion.analyzed_article_id is None
-                            else logger.bind(
-                                analyzed_article_id=completion.analyzed_article_id
+
+                    case ArticleCuratedSignalEvent() as curated_event:
+                        with bound_contextvars(
+                            event_id=str(curated_event.event_id),
+                            curation_id=curated_event.payload.curation_id,
+                            analyzable_article_id=curated_event.payload.analyzable_article_id,
+                        ):
+                            try:
+                                consume_result = await consumer.consume(
+                                    curated_event.payload, logger=logger
+                                )
+                            except Exception as exc:
+                                consume_result = RetryAssessment(exc)
+                            if (
+                                isinstance(consume_result, AssessmentCompletion)
+                                and consume_result.kind
+                                is AssessmentCompletionKind.IN_SCOPE
+                            ):
+                                await notifier.notify_article_list_updated()
+                            message_recorder.record_consumed(
+                                consume_result,
+                                duration_ms=elapsed_ms_since(started_at_seconds),
                             )
-                        )
-                        completion_logger.info(
-                            "assessment_message_processing_completed",
-                            outcome=completion.kind.value,
-                            duration_ms=elapsed_ms_since(started_at_seconds),
-                            message_disposition="completed",
-                        )
-                    elif isinstance(completion.cause, AssessmentReadyBuildRejected):
-                        logger.warning(
-                            "assessment_message_processing_failed",
-                            operation="build_ready",
-                            rejection_code=completion.cause.reason.value,
-                            duration_ms=elapsed_ms_since(started_at_seconds),
-                            message_disposition="completed",
-                        )
-                    elif isinstance(completion.cause, AIProviderError):
-                        logger.warning(
-                            "assessment_message_processing_failed",
-                            code=completion.cause.CODE,
-                            failure_reason=completion.cause.reason.value,
-                            duration_ms=elapsed_ms_since(started_at_seconds),
-                            message_disposition="completed",
-                        )
-                    else:
-                        logger.warning(
-                            "assessment_message_processing_failed",
-                            code=completion.cause.code,
-                            duration_ms=elapsed_ms_since(started_at_seconds),
-                            message_disposition="completed",
-                        )
+                            if isinstance(consume_result, RetryAssessment):
+                                failed_items.append(
+                                    SqsBatchItemIdentifier(
+                                        itemIdentifier=message_record.message_id
+                                    )
+                                )
         return failed_items

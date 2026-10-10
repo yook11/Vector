@@ -50,12 +50,14 @@ async def _run_curation(
     logger: FilteringBoundLogger,
     failure_recorder: ArticleAnalysisLifecycleRecorder,
 ) -> list[SqsBatchItemIdentifier]:
-    """資源を管理して各レコードの開始と結果を記録し、失敗した識別子を返す。"""
+    """バッチの各メッセージを順に処理し、再配信させるメッセージのIDだけを返す。"""
 
     async with open_curation_consumer(
         settings,
         failure_recorder=failure_recorder,
     ) as consumer:
+        # 失敗はメッセージIDで1件ずつ返すため、
+        # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
             message_record_batch = SqsRecordBatch.from_lambda_event(lambda_event)
 
