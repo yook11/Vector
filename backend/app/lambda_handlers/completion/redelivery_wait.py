@@ -24,15 +24,15 @@ MAX_VISIBILITY_SECONDS = 39_600
 
 
 @dataclass(frozen=True, slots=True)
-class RedeliveryWait:
-    """指定メッセージの再配信を元の時刻まで待たせる指示。"""
+class RedeliveryMessage:
+    """再配信させるメッセージで、retry_atがなければキューの通常の可視性で再配信される。"""
 
     message: ReceivedMessage
-    retry_at: RetryAt
+    retry_at: RetryAt | None = None
 
 
 async def apply_redelivery_waits(
-    waits: Sequence[RedeliveryWait],
+    redelivery_messages: Sequence[RedeliveryMessage],
     *,
     sqs_client: SqsMessageVisibilityClient,
     queue_url: str,
@@ -40,25 +40,39 @@ async def apply_redelivery_waits(
     now: Callable[[], datetime],
     recorder: CompletionLambdaFailureRecorder,
 ) -> None:
-    """記事処理後に逐次設定し、設定結果によって配送応答を変更しない。"""
+    """retry_atのあるメッセージだけを記事処理後に逐次設定し、設定結果によって配送応答を変更しない。"""
     # 応答を間に合わせるため、待機を設定してよいのはLambdaの制限時間の20秒前までとする。
     visibility_change_start_deadline = ProcessingStartDeadline(
         context, before_lambda_limit=timedelta(seconds=20)
     )
-    for index, wait in enumerate(waits):
-        remaining = wait.retry_at.remaining(now())
+    waits = [
+        (redelivery_message.message, redelivery_message.retry_at)
+        for redelivery_message in redelivery_messages
+        if redelivery_message.retry_at is not None
+    ]
+    for wait_position, (message, retry_at) in enumerate(waits):
+        remaining = retry_at.remaining(now())
         if remaining == timedelta():
-            recorder.record_redelivery_wait(wait, result="expired")
+            recorder.record_redelivery_wait(
+                retry_at, message_id=message.message_id, result="expired"
+            )
             continue
         if visibility_change_start_deadline.has_passed():
-            for unstarted in waits[index:]:
-                recorder.record_redelivery_wait(unstarted, result="insufficient_time")
+            for unstarted_message, unstarted_retry_at in waits[wait_position:]:
+                recorder.record_redelivery_wait(
+                    unstarted_retry_at,
+                    message_id=unstarted_message.message_id,
+                    result="insufficient_time",
+                )
             break
         try:
-            receipt_handle = wait.message.receipt_handle_text()
+            receipt_handle = message.receipt_handle_text()
         except ReceivedMessageInvalidError as exc:
             recorder.record_redelivery_wait(
-                wait, result="invalid_receipt_handle", reason=exc.reason.value
+                retry_at,
+                message_id=message.message_id,
+                result="invalid_receipt_handle",
+                reason=exc.reason.value,
             )
             continue
         seconds = math.ceil(remaining.total_seconds())
@@ -73,7 +87,8 @@ async def apply_redelivery_waits(
             )
         except Exception as exc:
             recorder.record_redelivery_wait(
-                wait,
+                retry_at,
+                message_id=message.message_id,
                 result="failed",
                 requested_seconds=requested_seconds,
                 capped=capped,
@@ -81,7 +96,8 @@ async def apply_redelivery_waits(
             )
         else:
             recorder.record_redelivery_wait(
-                wait,
+                retry_at,
+                message_id=message.message_id,
                 result="applied",
                 requested_seconds=requested_seconds,
                 applied_seconds=requested_seconds,

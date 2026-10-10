@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from app.collection.article_acquisition.events import (
         IncompleteArticleRecordedEvent,
     )
-    from app.lambda_handlers.completion.redelivery_wait import RedeliveryWait
+    from app.collection.retry_at import RetryAt
     from app.lambda_handlers.event_reader import EventReadFailed
 
 
@@ -163,8 +163,9 @@ class CompletionLambdaFailureRecorder:
 
     def record_redelivery_wait(
         self,
-        wait: RedeliveryWait,
+        retry_at: RetryAt,
         *,
+        message_id: str,
         result: str,
         requested_seconds: int | None = None,
         applied_seconds: int | None = None,
@@ -173,8 +174,8 @@ class CompletionLambdaFailureRecorder:
         error: Exception | None = None,
     ) -> None:
         fields: dict[str, object] = {
-            "message_id": wait.message.message_id,
-            "retry_at": wait.retry_at.value.isoformat(),
+            "message_id": message_id,
+            "retry_at": retry_at.value.isoformat(),
             "result": result,
             "requested_seconds": requested_seconds,
             "applied_seconds": applied_seconds,
