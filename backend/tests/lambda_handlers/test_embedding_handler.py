@@ -1,4 +1,4 @@
-"""Embedding入口の入力の受け渡し・失敗範囲・処理順と、開始・終端のログを確認する。"""
+"""Consumerをモックにし、Embedding入口の配送判断・処理順と実ロガーの出力を確認する。"""
 
 import asyncio
 import json
@@ -261,16 +261,9 @@ def test_failure_not_retried_is_logged_as_failure_completed(
     }
 
 
-@pytest.mark.parametrize(
-    "outcome",
-    [
-        pytest.param(RetryEmbedding(RuntimeError("decided-retry")), id="retry"),
-        pytest.param(RuntimeError("decided-retry"), id="raised"),
-    ],
-)
-def test_retried_failure_is_logged_with_its_exception(wiring, read_logs, outcome):
-    """再試行と決めた失敗と伝播した例外は、例外の診断を記録して失敗一覧に載せる。"""
-    wiring.consumer.consume.side_effect = [outcome]
+def test_retried_failure_is_logged_with_its_exception(wiring, read_logs):
+    """Consumerが再試行と決めた結果は、例外の診断を記録して失敗一覧に載せる。"""
+    wiring.consumer.consume.return_value = RetryEmbedding(RuntimeError("decided-retry"))
 
     response = module.handler(
         {"Records": [{"messageId": "retried", "body": valid_body()}]}, _CONTEXT
@@ -292,6 +285,36 @@ def test_retried_failure_is_logged_with_its_exception(wiring, read_logs, outcome
         "message_disposition": "batch_item_failure",
         "error_class": "builtins.RuntimeError",
         "error_message": "decided-retry",
+    }
+
+
+def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
+    wiring, read_logs
+):
+    """結果を受け取れなかった例外は、Consumer呼び出しの失敗として記録し再配信する。"""
+    wiring.consumer.consume.side_effect = RuntimeError("consume-raised")
+
+    response = module.handler(
+        {"Records": [{"messageId": "raised", "body": valid_body()}]}, _CONTEXT
+    )
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "raised"}]}
+    assert read_logs()[-1] == {
+        "event": "embedding_message_processing_failed",
+        "level": "error",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "stage": "embedding",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "raised",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "curation_id": 11,
+        "analyzed_article_id": 101,
+        "operation": "consume",
+        "message_disposition": "batch_item_failure",
+        "error_class": "builtins.RuntimeError",
+        "error_message": "consume-raised",
     }
 
 

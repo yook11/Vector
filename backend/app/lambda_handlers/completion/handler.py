@@ -3,19 +3,12 @@
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import assert_never
 
 import structlog
 
 from app.collection.article_acquisition.events import IncompleteArticleRecordedEvent
 from app.collection.article_completion.consumer import (
-    CompletionFailed,
-    CompletionNotRequired,
-    CompletionSucceeded,
-)
-from app.collection.article_completion.consumer_failure_classification import (
-    CloseArticleCompletion,
-    RetryArticleCompletion,
+    RetryCompletion,
 )
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
 from app.lambda_handlers.completion.composition import open_completion_resources
@@ -117,19 +110,10 @@ async def _run_completion(
                         redelivery_messages.append(RedeliveryMessage(message))
                         continue
 
-                    match completion_result:
-                        case CompletionSucceeded() | CompletionNotRequired():
-                            pass
-                        case CompletionFailed(decision=CloseArticleCompletion()):
-                            pass
-                        case CompletionFailed(
-                            decision=RetryArticleCompletion(retry_at=retry_at)
-                        ):
-                            redelivery_messages.append(
-                                RedeliveryMessage(message, retry_at)
-                            )
-                        case _:
-                            assert_never(completion_result)
+                    if isinstance(completion_result, RetryCompletion):
+                        redelivery_messages.append(
+                            RedeliveryMessage(message, completion_result.retry_at)
+                        )
                     recorder.record_completion(
                         completion_result,
                         message_id=message.message_id,

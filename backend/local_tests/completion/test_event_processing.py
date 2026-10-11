@@ -12,7 +12,6 @@ from local_tests.completion.support import (
     PUBLISHED_AT,
     article_response,
     consumer_contract,
-    decision_contract,
     delete_pending,
     seed_completed,
     seed_pending,
@@ -38,8 +37,8 @@ class TestArticlesNotRequiringCompletion:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionNotRequired)
-        assert result.reason == "missing"
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert result.cause == "missing"
         assert http_boundary.requests == []
         assert (
             await stored_completion(system_database, pending_article)
@@ -59,8 +58,8 @@ class TestArticlesNotRequiringCompletion:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionNotRequired)
-        assert result.reason == "closed"
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert result.cause == "closed"
         assert http_boundary.requests == []
         assert (
             await stored_completion(system_database, pending_article)
@@ -82,8 +81,8 @@ class TestArticlesNotRequiringCompletion:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionNotRequired)
-        assert result.reason == "url_conflict"
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert result.cause == "url_conflict"
         stored_after_processing = await stored_completion(
             system_database, pending_article
         )
@@ -151,12 +150,9 @@ class TestCompletionIsCommittedAtomically:
 
         assert fault.error is not None
         assert fault.state == {"status": None, "articles": 1, "audits": 1, "outbox": 1}
-        assert isinstance(failed_result, consumer_contract().CompletionFailed)
+        assert isinstance(failed_result, consumer_contract().RetryCompletion)
         assert isinstance(failed_result.error, DatabaseError)
         assert failed_result.error.__cause__ is fault.error
-        assert isinstance(
-            failed_result.decision, decision_contract().RetryArticleCompletion
-        )
         stored_after_failure = await stored_completion(system_database, pending_article)
         assert stored_after_failure.pending is not None
         assert stored_after_failure.pending["status"] != "closed"
@@ -190,13 +186,12 @@ class TestCompletionFailurePreservesDecisionAndState:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionFailed)
+        assert isinstance(result, consumer_contract().RetryCompletion)
         assert isinstance(result.error, HttpResponseError)
         assert result.error.status_code == 429
         assert isinstance(result.error.__cause__, httpx2.HTTPStatusError)
-        assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
-        assert result.decision.retry_at is not None
-        assert result.decision.retry_at.value == result.error.received_at + timedelta(
+        assert result.retry_at is not None
+        assert result.retry_at.value == result.error.received_at + timedelta(
             seconds=120
         )
         stored = await stored_completion(system_database, pending_article)
@@ -217,10 +212,9 @@ class TestCompletionFailurePreservesDecisionAndState:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionFailed)
-        assert isinstance(result.error, HttpResponseError)
-        assert result.error.status_code == 403
-        assert isinstance(result.decision, decision_contract().CloseArticleCompletion)
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert isinstance(result.cause, HttpResponseError)
+        assert result.cause.status_code == 403
         stored = await stored_completion(system_database, pending_article)
         assert stored.pending is not None
         assert stored.pending["status"] == "closed"
@@ -240,9 +234,8 @@ class TestCompletionFailurePreservesDecisionAndState:
             result = await completion_consumer.consume(pending_article.id)
 
         assert fault.error is not None
-        assert isinstance(result, consumer_contract().CompletionFailed)
+        assert isinstance(result, consumer_contract().RetryCompletion)
         assert isinstance(result.error, DatabaseError)
-        assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
         stored = await stored_completion(system_database, pending_article)
         assert stored.pending is not None
         assert stored.pending["status"] != "closed"
@@ -264,12 +257,11 @@ class TestCompletionFailurePreservesDecisionAndState:
             result = await completion_consumer.consume(pending_article.id)
 
         assert fault.error is not None
-        assert isinstance(result, consumer_contract().CompletionFailed)
+        assert isinstance(result, consumer_contract().RetryCompletion)
         assert isinstance(result.error, HttpResponseError)
         assert result.error.status_code == 429
-        assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
-        assert result.decision.retry_at is not None
-        assert result.decision.retry_at.value == result.error.received_at + timedelta(
+        assert result.retry_at is not None
+        assert result.retry_at.value == result.error.received_at + timedelta(
             seconds=120
         )
         stored_after_failure = await stored_completion(system_database, pending_article)
@@ -293,10 +285,9 @@ class TestCompletionFailurePreservesDecisionAndState:
             result = await completion_consumer.consume(pending_article.id)
 
         assert fault.error is not None
-        assert isinstance(result, consumer_contract().CompletionFailed)
-        assert isinstance(result.error, HttpResponseError)
-        assert result.error.status_code == 403
-        assert isinstance(result.decision, decision_contract().CloseArticleCompletion)
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert isinstance(result.cause, HttpResponseError)
+        assert result.cause.status_code == 403
         stored_after_failure = await stored_completion(system_database, pending_article)
         assert stored_after_failure.pending is not None
         assert stored_after_failure.pending["status"] == "closed"
@@ -318,12 +309,11 @@ class TestCompletionFailurePreservesDecisionAndState:
 
         result = await consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionFailed)
+        assert isinstance(result, consumer_contract().RetryCompletion)
         assert isinstance(result.error, DatabaseError)
         assert isinstance(result.error.__cause__, DBAPIError)
-        assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
-        assert result.decision.code == "unknown"
-        assert result.decision.requires_investigation
+        assert result.code == "unknown"
+        assert result.requires_investigation
         assert http_boundary.requests == []
         after = await stored_completion(system_database, pending_article)
         assert after.pending == before.pending

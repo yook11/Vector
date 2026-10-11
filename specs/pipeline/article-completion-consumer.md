@@ -164,7 +164,7 @@ HTTPの通信失敗・エラー応答は`app/http/`の全工程共通エラー�
 
 - 構築拒否は`UNMAPPED_VALIDATION_ERROR`を含むか`unmapped`が非空なら、既知の理由が混在していても再試行を優先する。`defects`が空の場合も調査対象として再試行する。
 - robotsの404は取得処理で記事取得へ進むため、この分類へ届かない。robotsの403はHTTP拒否であり、robotsルールによる明示的禁止に変換しない。
-- 戻り値は`RetryArticleCompletion | CloseArticleCompletion`を直接記述し、外側の型やユニオンの別名は作らない。どちらも不変で`code`と`requires_investigation`を持ち、再試行の結果だけが`retry_at`（`RetryAt | None`）を持つ。対処は結果型で区別し、actionフィールドは持たない。HTTP起因の失敗は外部取得の失敗判断の`code`、補完固有のエラーは既存CODE、分類対象外は`unknown`とする。
+- 戻り値は`RetryCompletion | NoRetryCompletion`を直接記述し、外側の型やユニオンの別名は作らない。どちらも不変で、分類した元例外を再試行側は`error`、再試行不要側は`cause`に保持し、`code`と`requires_investigation`を持つ。再試行の結果だけが`retry_at`（`RetryAt | None`）を持つ。対処は結果型で区別し、actionフィールドは持たない。HTTP起因の失敗は外部取得の失敗判断の`code`、補完固有のエラーは既存CODE、分類対象外は`unknown`とする。失敗分類が返す`NoRetryCompletion`は終了の判断であり、ConsumerはDBのclosed確定後に呼び出し元へ返す。
 - 元例外・原因チェーン・構築拒否の詳細を変更せず、呼び出し側が保持する。調査対象は即時通知の指示ではなく、出力や緊急度の判断は後続処理が所有する。
 - キャンセル・プロセス終了は対象外とし、呼び出し側は通常のExceptionだけを渡す。正常な処理済み・競合・対象行なし・closed済みは扱わない。
 - DB更新・SQS操作・監査・ログ・通知はこの関数内で行わず、旧Taskiqには接続しない。
@@ -176,7 +176,7 @@ HTTP応答の判断の根拠は[外部取得の失敗判断](../collection/exter
 
 ### Retry-Afterの確定した解釈
 
-Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetch-failure-classification.md#retry-afterの解釈)へ移した（2026-09-26）。補完工程は判断が返した`retry_at`をそのまま`RetryArticleCompletion`へ渡す。配送側は元のretry_atを保持したまま個別待機を最大11時間へ制限し、長い指示より早い再試行を許容する。設定失敗を尊重済みとは扱わない。
+Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetch-failure-classification.md#retry-afterの解釈)へ移した（2026-09-26）。補完工程は判断が返した`retry_at`をそのまま`RetryCompletion`へ渡す。配送側は元のretry_atを保持したまま個別待機を最大11時間へ制限し、長い指示より早い再試行を許容する。設定失敗を尊重済みとは扱わない。
 
 ### 最初のスライスの完了条件
 
@@ -266,7 +266,11 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 
 ## ConsumerとDB確定の実装境界
 
-`ArticleCompletionConsumer(session_factory).consume(incomplete_article_id)`は、既存のcaller管理セッションを受け取り、`CompletionSucceeded | CompletionNotRequired | CompletionFailed`を返す。結果型は不変で、追加処理不要はmissing・closed・superseded・url_conflictの理由を保持する。失敗は元のExceptionと`RetryArticleCompletion | CloseArticleCompletion`を保持し、受信完了・SQS再配信を直接実行しない。
+`ArticleCompletionConsumer(session_factory).consume(incomplete_article_id)`は、caller管理セッションのfactoryを受け取り、`CompletionSucceeded | RetryCompletion | NoRetryCompletion`を返す。結果型は`consumer_result.py`に置く不変の3型とし、Consumerは受信完了・SQS再配信を直接実行しない。
+
+- `CompletionSucceeded`は保存した完成記事のIDを保持する。
+- `RetryCompletion`は元のExceptionを`error`に、失敗の分類コード・調査要否・任意の待機時刻を`code`・`requires_investigation`・`retry_at`に保持する。`retry_at=None`でも再配信し、追加の可視性変更だけを省略する。
+- `NoRetryCompletion`は、補完不要なら`cause`にmissing・closed・superseded・url_conflictを保持し、`code=None`とする。失敗による終了なら`cause`に元のException、`code`に失敗の分類コードを保持し、調査要否も残す。補完不要と失敗による終了は同じ配送判断でも診断・計測では区別し、補完不要をfailedとして記録しない。
 
 新経路専用RepositoryはID・状態・ソース情報・URL・観測値だけを読み、試行番号とleaseを実行条件にしない。行なし・closedはHTTPも監査も実行しない。同URLの完成記事が見つかった場合は非closedの未完成行だけを削除・commitし、url_conflictとして既存結果を採用する。入力構築と取得・抽出・構築は読取セッションを閉じてから行う。
 

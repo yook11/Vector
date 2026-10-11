@@ -1,4 +1,4 @@
-"""補完Consumerの1回の処理で確定した成功・失敗だけを処理結果として記録する。"""
+"""実DBとHTTPスタブで、補完Consumerの確定した成功・失敗だけを計測することを確認する。"""
 
 import asyncio
 
@@ -8,7 +8,6 @@ import pytest
 from local_tests.completion.support import (
     article_response,
     consumer_contract,
-    decision_contract,
     delete_pending,
     seed_completed,
     seed_pending,
@@ -52,7 +51,7 @@ class TestDecidedResultIsRecordedOnce:
             result = await completion_consumer.consume(pending_article.id)
 
         assert fault.error is not None
-        assert isinstance(result, consumer_contract().CompletionFailed)
+        assert isinstance(result, consumer_contract().RetryCompletion)
         assert completion_outcomes(capsys.readouterr().out) == ["failed"]
 
     async def test_retryable_failure_is_recorded_as_failed(
@@ -66,8 +65,7 @@ class TestDecidedResultIsRecordedOnce:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionFailed)
-        assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
+        assert isinstance(result, consumer_contract().RetryCompletion)
         assert completion_outcomes(capsys.readouterr().out) == ["failed"]
 
     async def test_closed_failure_is_recorded_as_failed(
@@ -81,8 +79,7 @@ class TestDecidedResultIsRecordedOnce:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionFailed)
-        assert isinstance(result.decision, decision_contract().CloseArticleCompletion)
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
         assert completion_outcomes(capsys.readouterr().out) == ["failed"]
 
     async def test_failed_close_commit_is_recorded_once_as_failed(
@@ -102,8 +99,7 @@ class TestDecidedResultIsRecordedOnce:
             result = await completion_consumer.consume(pending_article.id)
 
         assert fault.error is not None
-        assert isinstance(result, consumer_contract().CompletionFailed)
-        assert isinstance(result.decision, decision_contract().RetryArticleCompletion)
+        assert isinstance(result, consumer_contract().RetryCompletion)
         assert completion_outcomes(capsys.readouterr().out) == ["failed"]
 
     async def test_failure_audit_error_keeps_failed_record(
@@ -123,7 +119,7 @@ class TestDecidedResultIsRecordedOnce:
             result = await completion_consumer.consume(pending_article.id)
 
         assert fault.error is not None
-        assert isinstance(result, consumer_contract().CompletionFailed)
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
         assert completion_outcomes(capsys.readouterr().out) == ["failed"]
 
     async def test_initial_database_failure_is_recorded_as_failed(
@@ -139,7 +135,7 @@ class TestDecidedResultIsRecordedOnce:
 
         result = await consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionFailed)
+        assert isinstance(result, consumer_contract().RetryCompletion)
         assert completion_outcomes(capsys.readouterr().out) == ["failed"]
 
 
@@ -169,8 +165,8 @@ class TestUndecidedResultIsNotRecorded:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionNotRequired)
-        assert result.reason == "missing"
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert result.cause == "missing"
         assert completion_outcomes(capsys.readouterr().out) == []
 
     async def test_closed_article_is_not_recorded(
@@ -183,8 +179,8 @@ class TestUndecidedResultIsNotRecorded:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionNotRequired)
-        assert result.reason == "closed"
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert result.cause == "closed"
         assert completion_outcomes(capsys.readouterr().out) == []
 
     async def test_existing_article_is_not_recorded(
@@ -198,8 +194,8 @@ class TestUndecidedResultIsNotRecorded:
 
         result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(result, consumer_contract().CompletionNotRequired)
-        assert result.reason == "url_conflict"
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert result.cause == "url_conflict"
         assert completion_outcomes(capsys.readouterr().out) == []
 
     async def test_article_finished_elsewhere_during_fetch_is_not_recorded(
@@ -227,6 +223,6 @@ class TestUndecidedResultIsNotRecorded:
                 asyncio.gather(consuming, return_exceptions=True), 15
             )
 
-        assert isinstance(result, consumer_contract().CompletionNotRequired)
-        assert result.reason == "superseded"
+        assert isinstance(result, consumer_contract().NoRetryCompletion)
+        assert result.cause == "superseded"
         assert completion_outcomes(capsys.readouterr().out) == []

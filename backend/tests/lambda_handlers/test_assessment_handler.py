@@ -1,4 +1,4 @@
-"""Assessment入口の入力の受け渡し・失敗範囲・処理順を確認する。"""
+"""Consumerをモックにし、Assessment入口の配送判断・処理順と実ロガーの出力を確認する。"""
 
 import asyncio
 import json
@@ -228,7 +228,7 @@ def test_failure_not_retried_is_completed_with_its_classification(
 
 
 def test_retry_decision_is_reported_like_a_processing_failure(wiring, capsys):
-    """Consumerが再試行と決めた失敗は、例外と同じ記録で失敗一覧に載せる。"""
+    """Consumerが再試行と決めた結果は、例外の診断を記録して失敗一覧に載せる。"""
     wiring.consumer.consume.return_value = RetryAssessment(
         RuntimeError("private-exception")
     )
@@ -247,6 +247,38 @@ def test_retry_decision_is_reported_like_a_processing_failure(wiring, capsys):
     assert failed["level"] == "error"
     assert failed["message_disposition"] == "batch_item_failure"
     assert "code" not in failed
+    assert "operation" not in failed
+
+
+def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
+    wiring, read_logs
+):
+    """結果を受け取れなかった例外は、Consumer呼び出しの失敗として記録し再配信する。"""
+    wiring.consumer.consume.side_effect = RuntimeError("consume-raised")
+
+    response = module.handler(
+        {"Records": [{"messageId": "raised", "body": valid_body()}]},
+        SimpleNamespace(aws_request_id="request-001"),
+    )
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "raised"}]}
+    assert read_logs()[-1] == {
+        "event": "assessment_message_processing_failed",
+        "level": "error",
+        "log_policy": "ai_inference",
+        "service": "article_analysis",
+        "stage": "assessment",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "raised",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "curation_id": 11,
+        "analyzable_article_id": 101,
+        "operation": "consume",
+        "message_disposition": "batch_item_failure",
+        "error_class": "builtins.RuntimeError",
+        "error_message": "consume-raised",
+    }
 
 
 def test_each_payload_is_passed_to_the_shared_consumer(wiring):

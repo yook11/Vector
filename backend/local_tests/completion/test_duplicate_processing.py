@@ -1,4 +1,4 @@
-"""重複受信と並行処理が先に確定した補完結果を変えないことを確認する。"""
+"""実DBとHTTPスタブで、重複受信と並行処理が先に確定した補完結果を変えないことを確認する。"""
 
 from functools import partial
 
@@ -72,8 +72,8 @@ class TestFirstCommittedCompletionIsPreserved:
 
         redelivery_result = await completion_consumer.consume(pending_article.id)
 
-        assert isinstance(redelivery_result, consumer_contract().CompletionNotRequired)
-        assert redelivery_result.reason == "missing"
+        assert isinstance(redelivery_result, consumer_contract().NoRetryCompletion)
+        assert redelivery_result.cause == "missing"
         assert len(http_boundary.requests) == requests_before_redelivery
         assert (
             await stored_completion(system_database, pending_article)
@@ -100,8 +100,8 @@ class TestFirstCommittedCompletionIsPreserved:
         )
 
         assert isinstance(first_result, contract.CompletionSucceeded)
-        assert isinstance(later_result, contract.CompletionNotRequired)
-        assert later_result.reason == "superseded"
+        assert isinstance(later_result, contract.NoRetryCompletion)
+        assert later_result.cause == "superseded"
         stored_after_competition = await stored_completion(
             system_database, pending_article
         )
@@ -136,9 +136,10 @@ class TestFirstCommittedCompletionIsPreserved:
             first_commit_phase="closed",
         )
 
-        assert isinstance(first_result, contract.CompletionFailed)
-        assert isinstance(later_result, contract.CompletionNotRequired)
-        assert later_result.reason == "superseded"
+        assert isinstance(first_result, contract.NoRetryCompletion)
+        assert isinstance(first_result.cause, Exception)
+        assert isinstance(later_result, contract.NoRetryCompletion)
+        assert later_result.cause == "superseded"
         stored_after_competition = await stored_completion(
             system_database, pending_article
         )

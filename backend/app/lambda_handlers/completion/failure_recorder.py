@@ -9,13 +9,9 @@ from structlog.stdlib import BoundLogger
 from app.audit.error_fields import exception_fqn
 from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
 from app.collection.article_completion.consumer import (
-    CompletionFailed,
-    CompletionNotRequired,
     CompletionSucceeded,
-)
-from app.collection.article_completion.consumer_failure_classification import (
-    CloseArticleCompletion,
-    RetryArticleCompletion,
+    NoRetryCompletion,
+    RetryCompletion,
 )
 from app.lambda_handlers.sqs.received_message import (
     ReceivedMessageBatchInvalidError,
@@ -56,7 +52,7 @@ class CompletionLambdaFailureRecorder:
 
     def record_completion(
         self,
-        completion: CompletionSucceeded | CompletionNotRequired | CompletionFailed,
+        completion: CompletionSucceeded | RetryCompletion | NoRetryCompletion,
         *,
         message_id: str,
         article_event: IncompleteArticleRecordedEvent,
@@ -71,25 +67,25 @@ class CompletionLambdaFailureRecorder:
             match completion:
                 case CompletionSucceeded(analyzable_article_id=article_id):
                     fields.update(result="succeeded", analyzable_article_id=article_id)
-                case CompletionNotRequired(reason=reason):
-                    fields.update(result="not_required", reason=reason)
-                case CompletionFailed(decision=decision):
+                case RetryCompletion(
+                    code=code,
+                    retry_at=retry_at,
+                    requires_investigation=investigate,
+                ):
                     fields.update(
-                        code=decision.code,
-                        requires_investigation=decision.requires_investigation,
+                        result="retry",
+                        code=code,
+                        retry_at=retry_at.value.isoformat() if retry_at else None,
+                        requires_investigation=investigate,
                     )
-                    match decision:
-                        case RetryArticleCompletion(retry_at=retry_at):
-                            fields.update(
-                                result="retry",
-                                retry_at=retry_at.value.isoformat()
-                                if retry_at
-                                else None,
-                            )
-                        case CloseArticleCompletion():
-                            fields["result"] = "closed"
-                        case _:
-                            assert_never(decision)
+                case NoRetryCompletion(
+                    cause=Exception(), code=code, requires_investigation=investigate
+                ):
+                    fields.update(
+                        result="closed", code=code, requires_investigation=investigate
+                    )
+                case NoRetryCompletion(cause=reason):
+                    fields.update(result="not_required", reason=reason)
                 case _:
                     assert_never(completion)
             self._logger.info("completion_message_processed", **fields)

@@ -15,9 +15,9 @@ from app.collection.article_completion.consumer_repository import (
     RecordedIncompleteArticle,
 )
 from app.collection.article_completion.consumer_result import (
-    CompletionFailed,
-    CompletionNotRequired,
     CompletionSucceeded,
+    NoRetryCompletion,
+    RetryCompletion,
 )
 from app.collection.article_completion.html_completion import complete_with_html
 from app.collection.article_completion.html_extraction import extract_html_content
@@ -35,9 +35,9 @@ from app.models.outbox_event import OutboxEvent
 
 __all__ = [
     "ArticleCompletionConsumer",
-    "CompletionFailed",
-    "CompletionNotRequired",
     "CompletionSucceeded",
+    "RetryCompletion",
+    "NoRetryCompletion",
 ]
 
 
@@ -53,21 +53,21 @@ class ArticleCompletionConsumer:
 
     async def consume(
         self, incomplete_article_id: int
-    ) -> CompletionSucceeded | CompletionNotRequired | CompletionFailed:
+    ) -> CompletionSucceeded | RetryCompletion | NoRetryCompletion:
         incomplete: RecordedIncompleteArticle | None = None
         try:
             async with self._session_factory() as session:
                 repository = ArticleCompletionConsumerRepository(session)
                 incomplete = await repository.load(incomplete_article_id)
                 if incomplete is None:
-                    return CompletionNotRequired(reason="missing")
+                    return NoRetryCompletion(cause="missing")
                 if incomplete.status == "closed":
-                    return CompletionNotRequired(reason="closed")
+                    return NoRetryCompletion(cause="closed")
                 if await repository.has_completed_article(incomplete.source_url):
                     if not await repository.delete_nonclosed(incomplete_article_id):
-                        return CompletionNotRequired(reason="superseded")
+                        return NoRetryCompletion(cause="superseded")
                     await session.commit()
-                    return CompletionNotRequired(reason="url_conflict")
+                    return NoRetryCompletion(cause="url_conflict")
 
             observed = ObservedArticle.try_build(
                 observed_article=incomplete.observed_article,
@@ -98,19 +98,19 @@ class ArticleCompletionConsumer:
         self,
         incomplete: RecordedIncompleteArticle,
         analyzable_article: AnalyzableArticle,
-    ) -> CompletionSucceeded | CompletionNotRequired:
+    ) -> CompletionSucceeded | NoRetryCompletion:
         async with self._session_factory() as session:
             deleted = await ArticleCompletionConsumerRepository(
                 session
             ).delete_nonclosed(incomplete.incomplete_article_id)
             if not deleted:
-                return CompletionNotRequired(reason="superseded")
+                return NoRetryCompletion(cause="superseded")
             article_id = await AnalyzableArticleRepository(session).save(
                 analyzable_article
             )
             if article_id is None:
                 await session.commit()
-                return CompletionNotRequired(reason="url_conflict")
+                return NoRetryCompletion(cause="url_conflict")
 
             await ArticleCompletionAuditRepository(session).append_consumer_succeeded(
                 incomplete_article_id=incomplete.incomplete_article_id,

@@ -96,7 +96,13 @@ async def _run_curation(
                                     article_event.payload, logger=logger
                                 )
                             except Exception as exc:
-                                consume_result = RetryCuration(exc)
+                                # Consumerから結果を受け取れなかった場合は再配信する。
+                                message_recorder.record_consume_failed(
+                                    exc,
+                                    duration_ms=elapsed_ms_since(started_at_seconds),
+                                )
+                                redelivery_message_ids.append(message.message_id)
+                                continue
                             message_recorder.record_consumed(
                                 consume_result,
                                 duration_ms=elapsed_ms_since(started_at_seconds),

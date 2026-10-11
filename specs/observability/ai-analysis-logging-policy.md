@@ -158,7 +158,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 ### 3.3 命名と記録単位
 
 - 識別子は`log_policy=ai_inference`、モデルは`model`、時間は`*_ms` / `*_seconds`、使用量は`input_tokens` / `output_tokens`へ統一する。業務モデル・監査DBの属性名はログの命名に合わせて改名しない。
-- `operation`の初期語彙は`settings` / `resources` / `ai_client` / `consumer` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `audit` / `notification` / `processing_metric` / `audit_dropped_metric` / `failure_handling` / `cleanup`とする。`consumer`は既存のConsumer構築を表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
+- `operation`の語彙は`settings` / `resources` / `ai_client` / `consumer` / `consume` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `audit` / `notification` / `processing_metric` / `audit_dropped_metric` / `failure_handling` / `cleanup`とする。`consumer`は既存のConsumer構築、`consume`はCuration・Assessment・Embeddingで結果を受け取れずに例外が伝播したConsumer呼び出しを表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
 - 既存の`stage=settings/resources/ai_client/consumer`は`operation`へ移す。正常終端の`reason`は`outcome`へ移す。二次障害の`audit_error_class` / `secondary_error_class`は`exc_info`由来の`error_class`へ揃える。
 - メッセージ単位のeventは§3.3.1の形へ統一する。Assessment handlerは旧イベント名から切り替え済みで、Curation・Embeddingも2026-10-08に切り替えた（§3.3.4）。AI呼び出しの`assessor_api_call/success`・`curator_api_call/success`・`embedder_api_call/success`は業務メッセージとは別の単位として扱う。eventにID・例外文を埋め込まない。
 
