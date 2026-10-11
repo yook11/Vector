@@ -90,13 +90,13 @@ async def test_unclassified_validation_failure_keeps_article_open(
     system_database, completion_consumer, monkeypatch
 ):
     """未分類の検証失敗は元のValidationErrorを包んで再試行し、記事を終了しない。"""
-    from app.collection.article_completion import html_completion
+    from app.collection.article_completion import article_completer
 
     class ArticleWithTitleConstraint(AnalyzableArticle):
         title: str = Field(pattern="^Allowed")
 
     monkeypatch.setattr(
-        html_completion, "AnalyzableArticle", ArticleWithTitleConstraint
+        article_completer, "AnalyzableArticle", ArticleWithTitleConstraint
     )
     article = await seed_pending(system_database, "https://example.com/validation")
 

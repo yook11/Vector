@@ -1,5 +1,6 @@
-"""取得済みHTMLから素材を抽出し、新経路用の失敗を伝える。"""
+"""取得済みHTMLから記事の項目を抽出し、補完器へ渡す抽出結果か失敗の理由を伝える。"""
 
+import html
 import re
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -7,7 +8,10 @@ from enum import StrEnum
 import trafilatura
 from trafilatura.settings import Document as TrafilaturaDocument
 
-from app.collection.article_completion.content import RawResponse, ScrapedContent
+from app.collection.article_completion.article_completer import ExtractedContent
+from app.collection.article_completion.content import RawResponse
+from app.collection.domain.article_limits import ARTICLE_TITLE_MAX_LENGTH
+from app.collection.domain.value_objects import PublishedAt
 from app.shared.errors import ApplicationError, ApplicationErrorValue
 
 
@@ -38,6 +42,7 @@ _META_CHARSET_RE = re.compile(
 )
 _META_HTTP_EQUIV_CHARSET_RE = re.compile(rb"charset\s*=\s*([^\s\"';>]+)", re.IGNORECASE)
 _SNIFF_BYTES = 2048
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def _decode_html_response(raw: RawResponse) -> str:
@@ -59,8 +64,26 @@ def _decode_html_response(raw: RawResponse) -> str:
     return raw.decoded_text
 
 
-def extract_html_content(raw: RawResponse) -> ScrapedContent:
-    """HTMLを抽出素材に変換し、失敗した処理の理由と元の原因を伝える。"""
+def _strip_html_tags(text: str | None) -> str | None:
+    """scrape した title 文字列から HTML タグを除去し entity を decode する。"""
+    if text is None:
+        return None
+    cleaned = _HTML_TAG_RE.sub("", text)
+    return html.unescape(cleaned).strip()
+
+
+def _to_extracted_content(document: TrafilaturaDocument) -> ExtractedContent:
+    """抽出値を整形し、完成記事の品質判定は補完器に委ねる。"""
+    cleaned_title = _strip_html_tags(document.title)
+    return ExtractedContent(
+        title=cleaned_title[:ARTICLE_TITLE_MAX_LENGTH] if cleaned_title else None,
+        body=document.text.strip() if document.text is not None else "",
+        published_at=PublishedAt.parse(document.date),
+    )
+
+
+def extract_html_content(raw: RawResponse) -> ExtractedContent:
+    """HTMLを抽出結果に変換し、失敗した処理の理由と元の原因を伝える。"""
     media_type = (raw.content_type or "").split(";", 1)[0].strip().lower()
     if media_type != "text/html":
         raise HtmlExtractionError(
@@ -115,11 +138,7 @@ def extract_html_content(raw: RawResponse) -> ScrapedContent:
         )
 
     try:
-        return ScrapedContent.from_extraction(
-            raw_title=result.title,
-            stripped_body=result.text if result.text is not None else "",
-            raw_date=result.date,
-        )
+        return _to_extracted_content(result)
     except HtmlExtractionError:
         raise
     except Exception as exc:

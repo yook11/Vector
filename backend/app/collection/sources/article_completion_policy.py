@@ -11,9 +11,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import assert_never
-
-from app.collection.domain.value_objects import PublishedAt
 
 
 class CompletableField(StrEnum):
@@ -39,39 +36,6 @@ class FieldCompletionRule(StrEnum):
     html_required = "html_required"
     html_preferred = "html_preferred"
     observed_preferred = "observed_preferred"
-
-
-def _resolve[V](
-    rule: FieldCompletionRule, observed: V | None, html: V | None
-) -> V | None:
-    """rule に従い観測値と HTML 値を 1 フィールド分 merge する。
-
-    - ``html_required``: HTML を正本とし観測値は無視 (HTML 欠でも fallback しない)。
-    - ``html_preferred``: HTML があれば優先、なければ観測値。
-    - ``observed_preferred``: 観測値があれば優先、なければ HTML。
-    """
-    match rule:
-        case FieldCompletionRule.html_required:
-            return html
-        case FieldCompletionRule.html_preferred:
-            return html if html else observed
-        case FieldCompletionRule.observed_preferred:
-            return observed if observed else html
-        case _:
-            assert_never(rule)
-
-
-@dataclass(frozen=True, slots=True)
-class ResolvedFields:
-    """policy が観測値と HTML 値を merge した後の各 field 確定値 (構築前材料)。
-
-    construct はしない。``None`` でも値のまま返し、構築可否は
-    ``AnalyzableArticle`` が判定する (本型は写像の出力であって不変条件ではない)。
-    """
-
-    title: str | None
-    body: str | None
-    published_at: PublishedAt | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,36 +64,6 @@ class ArticleCompletionPolicy:
         を残す。
         """
         return any(p is FieldCompletionRule.html_preferred for p in self.rules.values())
-
-    def resolve(
-        self,
-        *,
-        observed_title: str | None,
-        html_title: str | None,
-        observed_body: str | None,
-        html_body: str | None,
-        observed_published_at: PublishedAt | None,
-        html_published_at: PublishedAt | None,
-    ) -> ResolvedFields:
-        """観測値と HTML 値を per-field rule で merge し ``ResolvedFields`` を返す。
-
-        「どの源を各 field の正本にするか」の写像であり、construct はしない。
-        ``published_at`` が両源 ``None`` でも ``None`` を載せて返すだけで、完成可否
-        (失敗証拠化) は呼び出し側 (``complete_with_html``) の責務。受けるのは
-        primitive 値で、``ScrapedContent`` / ``ObservedArticle`` 型に依存しない
-        (import 循環回避)。
-        """
-        return ResolvedFields(
-            title=_resolve(
-                self.rules[CompletableField.title], observed_title, html_title
-            ),
-            body=_resolve(self.rules[CompletableField.body], observed_body, html_body),
-            published_at=_resolve(
-                self.rules[CompletableField.published_at],
-                observed_published_at,
-                html_published_at,
-            ),
-        )
 
 
 # 大多数のソース: title/published_at は観測 (RSS) を正本に、body のみ HTML 必須。

@@ -6,6 +6,7 @@ from contextlib import AbstractAsyncContextManager
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.stages.completion import ArticleCompletionAuditRepository
+from app.collection.article_completion.article_completer import complete_article
 from app.collection.article_completion.article_fetch import fetch_article_response
 from app.collection.article_completion.consumer_failure_handling import (
     ArticleCompletionConsumerFailureHandler,
@@ -20,7 +21,6 @@ from app.collection.article_completion.consumer_result import (
     RetryCompletion,
 )
 from app.collection.article_completion.errors import ArticleCompletionError
-from app.collection.article_completion.html_completion import complete_with_html
 from app.collection.article_completion.html_extraction import extract_html_content
 from app.collection.article_completion.metrics import (
     record_completion_processing_outcome,
@@ -79,13 +79,12 @@ class ArticleCompletionConsumer:
             raw_response = await fetch_article_response(
                 incomplete.source_url.as_web_url()
             )
-            scraped_content = extract_html_content(raw_response)
-            analyzable_article = complete_with_html(
+            extracted = extract_html_content(raw_response)
+            analyzable_article = complete_article(
                 observed,
+                extracted,
                 completion_policy,
-                scraped_content,
                 source_id=incomplete.source_id,
-                source_url=incomplete.source_url,
             )
             return await self._commit_completed(incomplete, analyzable_article)
         except Exception as exc:
