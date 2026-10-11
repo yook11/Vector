@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.collection.article_completion.content import ScrapedContent
-from app.collection.article_completion.errors import ArticleCompletionRejectedError
+from app.collection.article_completion.errors import ArticleBuildRejectedError
 from app.collection.domain.analyzable_article import (
     AnalyzableArticle,
     QualityTooLow,
@@ -43,7 +43,5 @@ def complete_with_html(
         source_url=source_url,
     )
     if isinstance(built, QualityTooLow):
-        raise ArticleCompletionRejectedError(
-            defects=built.defects, unmapped=built.unmapped
-        )
+        raise ArticleBuildRejectedError(built)
     return built

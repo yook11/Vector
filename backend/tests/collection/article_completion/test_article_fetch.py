@@ -1,4 +1,4 @@
-"""新しい記事取得の許可判定・受信制限・失敗境界を検証する。"""
+"""HTTPをモックし、DBを使わずに記事取得の許可判定・受信制限・失敗境界を検証する。"""
 
 import asyncio
 import gzip
@@ -18,7 +18,6 @@ from app.collection.article_completion.errors import (
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
-from app.collection.response_size import ResponseSizeBasis
 from app.http import external
 from app.http.destination_policy import HostBlockedError
 from app.http.destination_resolution import HostResolutionError
@@ -248,9 +247,12 @@ async def test_received_size_limit_cannot_be_bypassed(
     install_client(handler)
     with pytest.raises(ResponseSizeLimitExceededError) as caught:
         await article_fetch.fetch_article_response(_URL)
-    assert caught.value.size_basis == ResponseSizeBasis.RECEIVED_DECODED_BODY
-    assert caught.value.observed_bytes == 128 * 1024
-    assert caught.value.limit_bytes == 64 * 1024
+    assert caught.value.details == {
+        "resource": "article_page",
+        "limit_bytes": 64 * 1024,
+        "observed_bytes": 128 * 1024,
+        "size_basis": "received_decoded_body",
+    }
     assert stream.read_count == 2
     assert stream.closed
 
@@ -281,8 +283,12 @@ async def test_declared_size_limit_stops_before_body(install_client) -> None:
     )
     with pytest.raises(ResponseSizeLimitExceededError) as caught:
         await article_fetch.fetch_article_response(_URL)
-    assert caught.value.resource == FetchResource.ROBOTS_TXT
-    assert caught.value.size_basis == ResponseSizeBasis.DECLARED_CONTENT_LENGTH
+    assert caught.value.details == {
+        "resource": "robots_txt",
+        "limit_bytes": 10 * 1024 * 1024,
+        "observed_bytes": 10 * 1024 * 1024 + 1,
+        "size_basis": "declared_content_length",
+    }
     assert stream.read_count == 0
     assert stream.closed
 
@@ -310,7 +316,7 @@ async def test_compressed_body_is_limited_after_decompression(
     install_client(handler)
     with pytest.raises(ResponseSizeLimitExceededError) as caught:
         await article_fetch.fetch_article_response(_URL)
-    assert caught.value.size_basis == ResponseSizeBasis.RECEIVED_DECODED_BODY
+    assert caught.value.details["size_basis"] == "received_decoded_body"
     assert stream.closed
 
 
@@ -338,7 +344,7 @@ async def test_nested_compression_keeps_decoding_memory_bounded(
         _, peak_bytes = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert caught.value.size_basis == ResponseSizeBasis.RECEIVED_DECODED_BODY
+    assert caught.value.details["size_basis"] == "received_decoded_body"
     # まとめて展開する実装は全量(32MiB)以上を確保するため、その1/4を境界にする。
     assert peak_bytes < decoded_bytes // 4
 
@@ -358,8 +364,10 @@ async def test_continuous_receive_expires_and_releases_resources(
     clients = install_client(handler)
     with pytest.raises(FetchDeadlineExceededError) as caught:
         await article_fetch.fetch_article_response(_URL)
-    assert caught.value.resource == FetchResource.ARTICLE_PAGE
-    assert caught.value.limit_seconds == 0.05
+    assert caught.value.details == {
+        "resource": "article_page",
+        "limit_seconds": 0.05,
+    }
     assert stream.read_count > 1
     assert stream.closed
     assert clients[0].is_closed

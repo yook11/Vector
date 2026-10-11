@@ -1,97 +1,42 @@
-"""本文抽出と記事完成に固有の失敗を伝える新経路用エラー。"""
-
-from __future__ import annotations
+"""補完工程の失敗と、その原因になった取得・抽出・構築の例外を表す。"""
 
 from enum import StrEnum
 from typing import ClassVar
 
-from app.collection.domain.analyzable_article import AnalyzableArticleDefect
+from app.collection.domain.analyzable_article import QualityTooLow
 from app.collection.response_size import ResponseSizeBasis
+from app.shared.errors import ApplicationError
 
 
-class ArticleCompletionError(Exception):
-    """補完固有の発生事実を表し、再試行や終了は判断しない。"""
-
-    CODE: ClassVar[str] = "article_completion_error"
-
-
-class ArticleContentTypeError(ArticleCompletionError):
-    """HTML抽出の入力として扱えなかったContent-Typeを保持する。"""
-
-    CODE: ClassVar[str] = "article_content_type_error"
-
-    def __init__(self, *, content_type: str | None) -> None:
-        super().__init__()
-        self.content_type = content_type
+class ArticleCompletionError(ApplicationError):
+    def __init__(self, *, cause: Exception) -> None:
+        super().__init__("記事の補完工程で失敗しました")
+        self.cause = cause
+        self.__cause__ = cause
 
 
-class ArticleExtractionEmptyError(ArticleCompletionError):
-    """抽出処理は終了したが、抽出結果が得られなかった。"""
+class ArticleBuildRejectedError(ApplicationError):
+    CODE: ClassVar[str] = "article_invalid"
 
-    CODE: ClassVar[str] = "article_extraction_empty"
-
-
-class ArticleExtractionCrashReason(StrEnum):
-    """抽出結果の欠如と区別すべき、抽出処理そのものの異常。"""
-
-    EXCEPTION = "exception"
-    UNEXPECTED_RESULT = "unexpected_result"
-
-
-class ArticleExtractionCrashedError(ArticleCompletionError):
-    """抽出の異常種別を保持し、元の例外は変換側が例外チェーンで伝える。"""
-
-    CODE: ClassVar[str] = "article_extraction_crashed"
-
-    def __init__(self, *, reason: ArticleExtractionCrashReason) -> None:
-        super().__init__()
-        self.reason = reason
-
-
-class ArticleContentQualityError(ArticleCompletionError):
-    """品質判定時の観測値を保持し、本文断片は持たない。"""
-
-    CODE: ClassVar[str] = "article_content_quality_error"
-
-    def __init__(self, *, body_length: int, title_present: bool) -> None:
-        super().__init__()
-        self.body_length = body_length
-        self.title_present = title_present
-
-
-class ArticleCompletionRejectedError(ArticleCompletionError):
-    """記事の構築拒否の理由と未分類の詳細を保持し、品質を再判定しない。"""
-
-    CODE: ClassVar[str] = "article_completion_rejected"
-
-    def __init__(
-        self,
-        *,
-        defects: tuple[AnalyzableArticleDefect, ...],
-        unmapped: tuple[str, ...] = (),
-    ) -> None:
-        super().__init__()
-        self.defects = defects
-        self.unmapped = unmapped
+    def __init__(self, rejection: QualityTooLow) -> None:
+        super().__init__("記事が分析に必要な条件を満たしません")
+        self.rejection = rejection
 
 
 class FetchResource(StrEnum):
-    """制限に達したときに取得していたリソース。"""
-
     ROBOTS_TXT = "robots_txt"
     ARTICLE_PAGE = "article_page"
 
 
-class RobotsDisallowedError(ArticleCompletionError):
-    """robotsのルールで対象記事の取得が明示的に禁止された。"""
+class RobotsDisallowedError(ApplicationError):
+    CODE: ClassVar[str] = "robots_disallowed"
 
-    CODE: ClassVar[str] = "article_robots_disallowed"
+    def __init__(self) -> None:
+        super().__init__("robots.txtが記事の取得を禁止しています")
 
 
-class ResponseSizeLimitExceededError(ArticleCompletionError):
-    """応答サイズの上限と、超過を確認した時点の事実を保持する。"""
-
-    CODE: ClassVar[str] = "article_response_size_limit_exceeded"
+class ResponseSizeLimitExceededError(ApplicationError):
+    CODE: ClassVar[str] = "response_too_large"
 
     def __init__(
         self,
@@ -101,19 +46,28 @@ class ResponseSizeLimitExceededError(ArticleCompletionError):
         observed_bytes: int,
         size_basis: ResponseSizeBasis,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            "応答がサイズの上限を超えました",
+            details={
+                "resource": resource.value,
+                "limit_bytes": limit_bytes,
+                "observed_bytes": observed_bytes,
+                "size_basis": size_basis.value,
+            },
+        )
         self.resource = resource
         self.limit_bytes = limit_bytes
         self.observed_bytes = observed_bytes
         self.size_basis = size_basis
 
 
-class FetchDeadlineExceededError(ArticleCompletionError):
-    """通信の停滞とは別に、取得全体の制限時間を超えた事実を保持する。"""
-
-    CODE: ClassVar[str] = "article_fetch_deadline_exceeded"
+class FetchDeadlineExceededError(ApplicationError):
+    CODE: ClassVar[str] = "fetch_deadline_exceeded"
 
     def __init__(self, *, resource: FetchResource, limit_seconds: float) -> None:
-        super().__init__()
+        super().__init__(
+            "取得が制限時間内に終わりませんでした",
+            details={"resource": resource.value, "limit_seconds": limit_seconds},
+        )
         self.resource = resource
         self.limit_seconds = limit_seconds

@@ -128,7 +128,7 @@ Consumerは未完成記事IDを受け取り、完成・追加処理不要・補�
 
 エラーは「何が起きたか」を伝え、`retryable`・再試行方針・工程が決めた再試行時刻を持たない。補完工程のハンドラーがエラーを受け取り、再試行可否・待機時間・`closed`化を判断する。
 
-エラーのフィールドと意味はエラー側の契約とし、ログ基盤に依存せず、工程名を付けるためだけに共通HTTPエラーを補完エラーで包み直さない。工程ハンドラーが工程情報を補い、ログ・監査・メトリクス等の出力側が項目と形式を明示的に選択する。全フィールド・文字列表現・原因例外をそのまま送信する前提にしない。
+エラーのフィールドと意味はエラー側の契約とし、ログ基盤に依存しない。Consumerは工程の失敗を`ArticleCompletionError`で包み、`cause`と`__cause__`に同じ元例外を保持する。HTML抽出の失敗は`html_extraction.py`が所有する`HtmlExtractionError`で説明し、抽出器等の元例外も原因としてつなぐ。ログ・監査・メトリクス等の出力側が項目と形式を明示的に選択し、全フィールド・文字列表現・原因例外をそのまま送信しない。
 
 通信失敗と確認できて詳細不明な場合は共通の通信分類`UNKNOWN`とする。通信失敗か不明な通常例外や既知の宛先拒否はHTTP変換の対象外とし、元のまま工程ハンドラーへ伝える。最終的に未分類の通常例外は工程側で扱い、キャンセル・プロセス終了は通常失敗へ変換しない。
 
@@ -157,14 +157,15 @@ HTTPの通信失敗・エラー応答は`app/http/`の全工程共通エラー�
 | HttpResponseError、HttpTransportError、HostBlockedError | 外部取得の失敗判断に従う | 再試行可能なら再試行、再試行不可なら終了。code・retry_at・調査対象は判断の値をそのまま使う |
 | FetchDeadlineExceededError | 再試行 | 取得全体の期限切れ |
 | RobotsDisallowedError | 終了 | robotsルールによる明示的な拒否 |
-| ResponseSizeLimitExceededError、ArticleContentTypeError | 終了 | 現在の取得・抽出条件では扱えない |
-| ArticleExtractionEmptyError、ArticleContentQualityError | 終了 | 抽出結果なし・品質不足。品質判定の新規接続は行わない |
-| 既知の理由だけのArticleCompletionRejectedError | 終了 | 完成記事の条件不足 |
-| ArticleExtractionCrashedError、未分類の構築拒否、その他の通常例外 | 再試行 | 調査対象。DB例外等の専用分類は今回追加しない |
+| ResponseSizeLimitExceededError | 終了 | 現在の取得条件では扱えない |
+| HtmlExtractionErrorのCONTENT_TYPE_UNSUPPORTED・RESULT_EMPTY | 終了 | HTMLとして扱えない応答・抽出結果なし |
+| ArticleBuildRejectedError | 終了 | 完成記事の条件不足をrejection.defectsに保持する |
+| HtmlExtractionErrorのEXTRACTOR_RAISED・RESULT_TYPE_MISMATCH・HTML_DECODE_FAILED・MATERIAL_CONVERSION_FAILED | 再試行 | 抽出器・戻り値の型・デコード・素材整形の失敗として調査対象にする |
+| 未分類のValidationError、その他の通常例外 | 再試行 | 調査対象。DB例外等の専用分類は今回追加しない |
 
-- 構築拒否は`UNMAPPED_VALIDATION_ERROR`を含むか`unmapped`が非空なら、既知の理由が混在していても再試行を優先する。`defects`が空の場合も調査対象として再試行する。
+- 既知の完成条件違反だけを`QualityTooLow`とし、空でない`defects`を保持する。未分類の検証失敗は`ValidationError`のまま伝播し、構築拒否に含めない。
 - robotsの404は取得処理で記事取得へ進むため、この分類へ届かない。robotsの403はHTTP拒否であり、robotsルールによる明示的禁止に変換しない。
-- 戻り値は`RetryCompletion | NoRetryCompletion`を直接記述し、外側の型やユニオンの別名は作らない。どちらも不変で、分類した元例外を再試行側は`error`、再試行不要側は`cause`に保持し、`code`と`requires_investigation`を持つ。再試行の結果だけが`retry_at`（`RetryAt | None`）を持つ。対処は結果型で区別し、actionフィールドは持たない。HTTP起因の失敗は外部取得の失敗判断の`code`、補完固有のエラーは既存CODE、分類対象外は`unknown`とする。失敗分類が返す`NoRetryCompletion`は終了の判断であり、ConsumerはDBのclosed確定後に呼び出し元へ返す。
+- 戻り値は`RetryCompletion | NoRetryCompletion`を直接記述し、外側の型やユニオンの別名は作らない。どちらも不変で、工程例外を再試行側は`error`、再試行不要側は`cause`に保持し、`code`と`requires_investigation`を持つ。再試行の結果だけが`retry_at`（`RetryAt | None`）を持つ。対処は結果型で区別し、actionフィールドは持たない。HTTP起因の失敗は外部取得の失敗判断の`code`、HTML抽出は`reason.value`、他の補完固有エラーは既存CODE、未分類の検証失敗は`validation_error`、分類対象外は`unknown`とする。失敗分類が返す`NoRetryCompletion`は終了の判断であり、ConsumerはDBのclosed確定後に呼び出し元へ返す。
 - 元例外・原因チェーン・構築拒否の詳細を変更せず、呼び出し側が保持する。調査対象は即時通知の指示ではなく、出力や緊急度の判断は後続処理が所有する。
 - キャンセル・プロセス終了は対象外とし、呼び出し側は通常のExceptionだけを渡す。正常な処理済み・競合・対象行なし・closed済みは扱わない。
 - DB更新・SQS操作・監査・ログ・通知はこの関数内で行わず、旧Taskiqには接続しない。
@@ -214,12 +215,14 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 取得済みの`RawResponse`から同期関数`extract_html_content()`で`ScrapedContent`を返す。HTTP取得・再試行・保存は担当せず、旧Taskiqからは呼び出さない。
 
 - `RawResponse`と`ScrapedContent`は補完パッケージ内の`content.py`で共有し、旧`scraper.py`経由のimportも維持する。`content_type`は欠如を`None`で表せる。
-- 入力はパラメーターを除去し、前後空白・大文字小文字を正規化したメディアタイプが`text/html`の応答に限る。欠如・JSON・PDF・XHTML等は元の値を保持した`ArticleContentTypeError`とする。
+- 入力はパラメーターを除去し、前後空白・大文字小文字を正規化したメディアタイプが`text/html`の応答に限る。欠如・JSON・PDF・XHTML等は`HtmlExtractionError`の理由`CONTENT_TYPE_UNSUPPORTED`で伝え、元のContent-Typeを診断情報に保持する。
 - HTTP charset指定があれば`decoded_text`を使う。指定がなければ先頭2,048バイトのHTML内charset指定を試し、指定なし・デコード失敗時は`decoded_text`へ戻る。新しい抽出処理自体はログを出力しない。
 - Trafilaturaの精度優先・コメント除外・表抽出・メタデータ・日時抽出設定は維持する。新経路の重複除去は無効にし、別記事・過去試行の履歴を理由に素材を除外しない。記事内の文章の繰り返しは許容し、独自のキャッシュ管理は追加しない。戻り値と例外は[公式の抽出API](https://trafilatura.readthedocs.io/en/latest/corefunctions.html#bare-extraction)に沿って境界で扱う。
-- 抽出結果`None`は`ArticleExtractionEmptyError`、Document以外は`ArticleExtractionCrashedError(UNEXPECTED_RESULT)`とする。抽出器が投げた通常例外だけを`ArticleExtractionCrashedError(EXCEPTION)`へ変換し、元例外をチェーンする。周辺処理の想定外例外・キャンセル・プロセス終了はそのまま伝播する。
+- `HtmlExtractionError`と`HtmlExtractionFailureReason`は`html_extraction.py`に定義する。例外は具体的な理由・固定の説明文・選択した診断情報を持ち、再試行属性や`unavailable`・`unexpected`等の中間分類を持たない。
+- 抽出結果`None`は理由`RESULT_EMPTY`、Document以外は`RESULT_TYPE_MISMATCH`とする。抽出器の通常例外は`EXTRACTOR_RAISED`、デコード中の通常例外は`HTML_DECODE_FAILED`、素材整形中の通常例外は`MATERIAL_CONVERSION_FAILED`として元例外をチェーンする。既存のHTML抽出エラーは重ねて包まず、キャンセル・プロセス終了はそのまま伝播する。
+- 理由コードはそれぞれ`content_type_unsupported`・`extraction_empty`・`extraction_result_unexpected`・`extraction_failed`・`html_decode_failed`・`extraction_material_conversion_failed`とする。結果なしから本文の不存在やサイト構造等を推測せず、抽出器から結果が得られなかった事実だけを伝える。
 - `ScrapedContent`は不変の素材であり、タイトル・公開日時の欠如を許容する。本文欠如は空文字にする。`from_extraction()`でタイトルのタグ除去・entity変換・前後空白除去・500文字への切り詰め、本文の前後空白除去、既存の日時変換を行い、空タイトルは`None`にする。
-- タイトル必須・本文50文字以上等は素材の生成時に判定しない。ソース別の採用方針で観測値と統合した後、既存の`AnalyzableArticle.build_or_reject()`で完成条件を判定する。`ArticleContentQualityError`はこの抽出処理では使わない。
+- タイトル必須・本文50文字以上等は素材の生成時に判定しない。ソース別の採用方針で観測値と統合した後、既存の`AnalyzableArticle.build_or_reject()`で完成条件を判定する。
 - 共有素材の変更に伴い、旧スクレイパーも短い本文・タイトル欠落で品質不足の早期終了をせず、統合・構築へ進む。旧経路の失敗記録も抽出品質不足から構築拒否へ移り得る。旧エラー型・ハンドラーは残し、新しい抽出エラーを旧経路へ接続しない。
 
 ソース別にHTML補完を通す必要があるか、JSON/APIで補完すべきかの整理はイベント駆動化後に行う。工程側の判断とService・Consumerへの接続は後続タスクとする。
@@ -229,9 +232,8 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 `html_completion.py`の同期関数`complete_with_html(observed, completion_policy, html, *, source_id, source_url)`は、既存の観測値と`ScrapedContent`を受け取り、完成した`AnalyzableArticle`を返す。DBの状態や試行回数を持つ`ReadyForArticleCompletion`には依存しない。対象行の存在・非closedの確認は後続の呼び出し側が担当する。
 
 - 既存の`ArticleCompletionPolicy.resolve()`で値を統合し、`AnalyzableArticle.build_or_reject()`で構築する。値の優先順位・欠如時の扱い・完成条件をこの関数で再定義しない。
-- `QualityTooLow`だけを`ArticleCompletionRejectedError`へ変換して投げる。`defects`と`unmapped`の順序・内容・重複をそのまま保持する。`unmapped`の既定値は空tupleとする。
-- `UNMAPPED_VALIDATION_ERROR`は分類できなかった検証結果として保持し、処理中の想定外例外と混同しない。構築結果は例外ではないため、原因例外や疑似的な例外チェーンを生成しない。
-- 統合・構築で投げられたその他の例外は捕捉せず伝播する。新関数と新エラーは再試行判断・ログ出力を追加しない。既存の構築処理内にある未分類検証のログは維持する。
+- `QualityTooLow`だけを`ArticleBuildRejectedError`へ変換して投げ、`rejection`に同じ構築拒否の値を保持する。構築結果は例外ではないため、原因例外や疑似的な例外チェーンを生成しない。
+- 未分類の検証失敗や、統合・構築で投げられたその他の例外は捕捉せず伝播する。この関数とエラーは再試行判断・ログ出力を持たない。
 - 旧`completer.py`の処理は呼ばず、旧Taskiqの戻り値・接続は維持する。HTTP・DB・SQS操作、監査・保存・再試行判断と新経路への接続は後続タスクとする。
 
 ## 新経路のHTTP取得契約

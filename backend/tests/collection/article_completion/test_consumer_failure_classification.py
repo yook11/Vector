@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from app.collection.article_completion.consumer_failure_classification import (
     classify_completion_failure,
@@ -12,18 +13,19 @@ from app.collection.article_completion.consumer_result import (
     RetryCompletion,
 )
 from app.collection.article_completion.errors import (
-    ArticleCompletionRejectedError,
-    ArticleContentQualityError,
-    ArticleContentTypeError,
-    ArticleExtractionCrashedError,
-    ArticleExtractionCrashReason,
-    ArticleExtractionEmptyError,
+    ArticleBuildRejectedError,
+    ArticleCompletionError,
     FetchDeadlineExceededError,
     FetchResource,
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
+from app.collection.article_completion.html_extraction import (
+    HtmlExtractionError,
+    HtmlExtractionFailureReason,
+)
 from app.collection.domain.analyzable_article import AnalyzableArticleDefect as Defect
+from app.collection.domain.analyzable_article import QualityTooLow
 from app.collection.response_size import ResponseSizeBasis
 from app.collection.retry_at import RetryAt
 from app.http.destination_policy import HostBlockedError
@@ -101,62 +103,55 @@ def test_external_fetch_judgement_becomes_completion_decision(
     investigate: bool,
 ) -> None:
     """外部取得の判断を、元例外・コード・待機時刻・調査対象を保って補完の結果へ写す。"""
-    result = classify_completion_failure(exc, now=_NOW)
+    error = ArticleCompletionError(cause=exc)
+    result = classify_completion_failure(error, now=_NOW)
 
     assert isinstance(result, expected_type)
     assert result.code == code
     assert result.requires_investigation is investigate
     if isinstance(result, RetryCompletion):
-        assert result.error is exc
+        assert result.error is error
         assert result.retry_at == retry_at
     else:
-        assert result.cause is exc
+        assert result.cause is error
 
 
 @pytest.mark.parametrize(
-    "exc",
+    ("exc", "code"),
     [
-        RobotsDisallowedError(),
-        ResponseSizeLimitExceededError(
-            resource=FetchResource.ARTICLE_PAGE,
-            limit_bytes=1024,
-            observed_bytes=1025,
-            size_basis=ResponseSizeBasis.RECEIVED_DECODED_BODY,
+        (RobotsDisallowedError(), "robots_disallowed"),
+        (
+            ResponseSizeLimitExceededError(
+                resource=FetchResource.ARTICLE_PAGE,
+                limit_bytes=1024,
+                observed_bytes=1025,
+                size_basis=ResponseSizeBasis.RECEIVED_DECODED_BODY,
+            ),
+            "response_too_large",
         ),
-        ArticleContentTypeError(content_type="application/json"),
-        ArticleExtractionEmptyError(),
-        ArticleContentQualityError(body_length=0, title_present=False),
-        ArticleCompletionRejectedError(defects=(Defect.BODY_TOO_SHORT,)),
+        (
+            ArticleBuildRejectedError(QualityTooLow(defects=(Defect.BODY_TOO_SHORT,))),
+            "article_invalid",
+        ),
     ],
 )
-def test_known_completion_rejection_closes(exc: Exception) -> None:
-    """確認済みの取得禁止や補完条件不足だけを終了へ進める。"""
-    decision = classify_completion_failure(exc, now=_NOW)
-    assert isinstance(decision, NoRetryCompletion)
-    assert decision.cause is exc
-    assert decision.requires_investigation is False
+def test_known_completion_rejection_closes(exc: Exception, code: str) -> None:
+    """確認済みの取得禁止や記事の条件不足は、原因の型から終了へ進める。"""
+    error = ArticleCompletionError(cause=exc)
+    decision = classify_completion_failure(error, now=_NOW)
+    assert decision == NoRetryCompletion(cause=error, code=code)
 
 
-@pytest.mark.parametrize(
-    ("defects", "unmapped"),
-    [
-        ((Defect.BODY_TOO_SHORT, Defect.UNMAPPED_VALIDATION_ERROR), ()),
-        ((Defect.BODY_TOO_SHORT,), ("source_url:new_constraint",)),
-        ((), ()),
-    ],
-)
-def test_uncertain_build_rejection_preserves_reasons_and_retries(
-    defects: tuple[Defect, ...], unmapped: tuple[str, ...]
-) -> None:
-    """未分類が混在する構築拒否は情報を失わず、終了より調査と再試行を優先する。"""
-    exc = ArticleCompletionRejectedError(defects=defects, unmapped=unmapped)
-    decision = classify_completion_failure(exc, now=_NOW)
-    assert isinstance(decision, RetryCompletion)
-    assert decision.error is exc
-    assert decision.requires_investigation is True
-    assert decision.code == "article_completion_rejected"
-    assert exc.defects is defects
-    assert exc.unmapped is unmapped
+def test_unclassified_validation_error_requires_investigation() -> None:
+    """未分類のValidationErrorは記事の構築拒否と区別し、原因を保って再試行する。"""
+    cause = ValidationError.from_exception_data(
+        "AnalyzableArticle", [{"type": "missing", "loc": ("new_field",), "input": {}}]
+    )
+    error = ArticleCompletionError(cause=cause)
+    assert classify_completion_failure(error, now=_NOW) == RetryCompletion(
+        error=error, code="validation_error", requires_investigation=True
+    )
+    assert error.cause is cause
 
 
 @pytest.mark.parametrize(
@@ -166,22 +161,8 @@ def test_uncertain_build_rejection_preserves_reasons_and_retries(
             FetchDeadlineExceededError(
                 resource=FetchResource.ROBOTS_TXT, limit_seconds=10
             ),
-            "article_fetch_deadline_exceeded",
+            "fetch_deadline_exceeded",
             False,
-        ),
-        (
-            ArticleExtractionCrashedError(
-                reason=ArticleExtractionCrashReason.EXCEPTION
-            ),
-            "article_extraction_crashed",
-            True,
-        ),
-        (
-            ArticleExtractionCrashedError(
-                reason=ArticleExtractionCrashReason.UNEXPECTED_RESULT
-            ),
-            "article_extraction_crashed",
-            True,
         ),
         (TypeError("unexpected implementation failure"), "unknown", True),
     ],
@@ -195,10 +176,93 @@ def test_execution_failure_preserves_cause_and_retries(
         raise exc from cause
     except Exception as original:
         traceback = original.__traceback__
-        decision = classify_completion_failure(original, now=_NOW)
+        error = ArticleCompletionError(cause=original)
+        decision = classify_completion_failure(error, now=_NOW)
         assert isinstance(decision, RetryCompletion)
-        assert decision.error is original
+        assert decision.error is error
+        assert decision.error.cause is original
         assert decision.code == code
         assert decision.requires_investigation is investigate
         assert original.__cause__ is cause
         assert original.__traceback__ is traceback
+
+
+def test_unsupported_content_type_finishes_completion() -> None:
+    """HTML以外の応答による抽出失敗は原因を保持して終了する。"""
+    error = ArticleCompletionError(
+        cause=HtmlExtractionError(
+            reason=HtmlExtractionFailureReason.CONTENT_TYPE_UNSUPPORTED,
+            message="HTMLではありません",
+            details={"content_type": "application/pdf"},
+        )
+    )
+    assert classify_completion_failure(error, now=_NOW) == NoRetryCompletion(
+        cause=error, code="content_type_unsupported"
+    )
+
+
+def test_empty_extraction_finishes_completion() -> None:
+    """抽出結果なしは記事の素材を得られなかった理由を保持して終了する。"""
+    error = ArticleCompletionError(
+        cause=HtmlExtractionError(
+            reason=HtmlExtractionFailureReason.RESULT_EMPTY,
+            message="素材が得られませんでした",
+        )
+    )
+    assert classify_completion_failure(error, now=_NOW) == NoRetryCompletion(
+        cause=error, code="extraction_empty"
+    )
+
+
+def test_extractor_exception_retries_completion() -> None:
+    """抽出器の実行失敗は原因を保持して調査対象の再試行にする。"""
+    error = ArticleCompletionError(
+        cause=HtmlExtractionError(
+            reason=HtmlExtractionFailureReason.EXTRACTOR_RAISED,
+            message="抽出器で例外が発生しました",
+        )
+    )
+    assert classify_completion_failure(error, now=_NOW) == RetryCompletion(
+        error=error, code="extraction_failed", requires_investigation=True
+    )
+
+
+def test_extraction_result_type_mismatch_retries_completion() -> None:
+    """抽出器の戻り値が契約と違う場合は調査対象の再試行にする。"""
+    error = ArticleCompletionError(
+        cause=HtmlExtractionError(
+            reason=HtmlExtractionFailureReason.RESULT_TYPE_MISMATCH,
+            message="Document型ではありません",
+        )
+    )
+    assert classify_completion_failure(error, now=_NOW) == RetryCompletion(
+        error=error, code="extraction_result_unexpected", requires_investigation=True
+    )
+
+
+def test_html_decode_failure_retries_completion() -> None:
+    """HTMLのデコード失敗は発生箇所を保持して調査対象の再試行にする。"""
+    error = ArticleCompletionError(
+        cause=HtmlExtractionError(
+            reason=HtmlExtractionFailureReason.HTML_DECODE_FAILED,
+            message="HTMLのデコードに失敗しました",
+        )
+    )
+    assert classify_completion_failure(error, now=_NOW) == RetryCompletion(
+        error=error, code="html_decode_failed", requires_investigation=True
+    )
+
+
+def test_extraction_material_conversion_failure_retries_completion() -> None:
+    """抽出素材の整形失敗は発生箇所を保持して調査対象の再試行にする。"""
+    error = ArticleCompletionError(
+        cause=HtmlExtractionError(
+            reason=HtmlExtractionFailureReason.MATERIAL_CONVERSION_FAILED,
+            message="抽出素材の整形に失敗しました",
+        )
+    )
+    assert classify_completion_failure(error, now=_NOW) == RetryCompletion(
+        error=error,
+        code="extraction_material_conversion_failed",
+        requires_investigation=True,
+    )

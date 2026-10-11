@@ -1,4 +1,4 @@
-"""``AnalyzableArticle.build_or_reject`` の業務不変条件テスト。
+"""実Pydanticモデルを使い、DB・外部通信なしで記事の構築条件を検証する。
 
 route 2 (完成段) 用 smart constructor の正本テスト。``try_build`` (route 1,
 ``Self | None``) と異なり、構築不能の理由を ``QualityTooLow`` の defect 集合として
@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import Field, ValidationError
 
 from app.collection.domain.analyzable_article import (
     AnalyzableArticle,
@@ -119,8 +120,43 @@ def test_build_or_reject_collects_multiple_defects_in_field_order() -> None:
     )
 
 
-def test_build_or_reject_records_no_unmapped_for_known_violations() -> None:
-    """既知の不変条件違反は写像に乗り、``unmapped`` は空のまま。"""
-    result = _build(body=None)
-    assert isinstance(result, QualityTooLow)
-    assert result.unmapped == ()
+class ArticleWithTitleConstraint(AnalyzableArticle):
+    title: str = Field(pattern="^Allowed")
+
+
+def test_unclassified_validation_error_is_not_a_build_rejection() -> None:
+    """未分類の制約違反は入力と検証内容を保ったValidationErrorとして伝播する。"""
+    with pytest.raises(ValidationError) as caught:
+        ArticleWithTitleConstraint.build_or_reject(
+            title=_VALID_TITLE,
+            body=_VALID_BODY,
+            published_at=_PUB,
+            source_id=1,
+            source_url=_URL,
+        )
+    issue = caught.value.errors()[0]
+    assert issue["loc"] == ("title",)
+    assert issue["type"] == "string_pattern_mismatch"
+    assert issue["input"] == _VALID_TITLE
+
+
+def test_mixed_validation_errors_preserve_known_and_unknown_issues() -> None:
+    """既知と未分類の違反が混在しても元のValidationErrorに全件を残す。"""
+    with pytest.raises(ValidationError) as caught:
+        ArticleWithTitleConstraint.build_or_reject(
+            title=_VALID_TITLE,
+            body=None,
+            published_at=_PUB,
+            source_id=1,
+            source_url=_URL,
+        )
+    assert [(issue["loc"], issue["type"]) for issue in caught.value.errors()] == [
+        (("title",), "string_pattern_mismatch"),
+        (("body",), "string_type"),
+    ]
+
+
+def test_build_rejection_requires_at_least_one_defect() -> None:
+    """理由のない構築拒否を作らせず、確定した拒否だけを表す。"""
+    with pytest.raises(ValueError, match="構築拒否には理由が必要"):
+        QualityTooLow(defects=())

@@ -1,79 +1,84 @@
-"""新経路の失敗から、補完工程の再試行・終了と待機時刻を決める。"""
-
-from __future__ import annotations
+"""補完工程の原因と具体的な理由から再試行・終了と待機時刻を決める。"""
 
 from datetime import datetime
+from typing import assert_never
+
+from pydantic import ValidationError
 
 from app.collection.article_completion.consumer_result import (
     NoRetryCompletion,
     RetryCompletion,
 )
 from app.collection.article_completion.errors import (
-    ArticleCompletionRejectedError,
-    ArticleContentQualityError,
-    ArticleContentTypeError,
-    ArticleExtractionCrashedError,
-    ArticleExtractionEmptyError,
+    ArticleBuildRejectedError,
+    ArticleCompletionError,
     FetchDeadlineExceededError,
     ResponseSizeLimitExceededError,
     RobotsDisallowedError,
 )
-from app.collection.domain.analyzable_article import AnalyzableArticleDefect
+from app.collection.article_completion.html_extraction import (
+    HtmlExtractionError,
+    HtmlExtractionFailureReason,
+)
 from app.collection.external_fetch_failure import (
     NonRetryableFetchFailure,
     RetryableFetchFailure,
     classify_external_fetch_failure,
 )
+from app.http.destination_policy import HostBlockedError
+from app.http.errors import HttpResponseError, HttpTransportError
 
 
 def classify_completion_failure(
-    exc: Exception, *, now: datetime
+    exc: ArticleCompletionError, *, now: datetime
 ) -> RetryCompletion | NoRetryCompletion:
-    """発生事実を変更せず、補完工程として必要な対処を返す。"""
-    match classify_external_fetch_failure(exc, now=now):
-        case RetryableFetchFailure(
-            code=code, retry_at=retry_at, requires_investigation=investigate
+    match exc:
+        case ArticleCompletionError(
+            cause=HttpResponseError()
+            | HttpTransportError()
+            | HostBlockedError() as cause
         ):
+            match classify_external_fetch_failure(cause, now=now):
+                case RetryableFetchFailure(
+                    code=code, retry_at=retry_at, requires_investigation=investigate
+                ):
+                    return RetryCompletion(
+                        error=exc,
+                        code=code,
+                        retry_at=retry_at,
+                        requires_investigation=investigate,
+                    )
+                case NonRetryableFetchFailure(code=code):
+                    return NoRetryCompletion(cause=exc, code=code)
+        case ArticleCompletionError(
+            cause=ArticleBuildRejectedError()
+            | RobotsDisallowedError()
+            | ResponseSizeLimitExceededError() as cause
+        ):
+            return NoRetryCompletion(cause=exc, code=cause.CODE)
+        case ArticleCompletionError(cause=FetchDeadlineExceededError() as cause):
+            return RetryCompletion(error=exc, code=cause.CODE)
+        case ArticleCompletionError(cause=HtmlExtractionError(reason=reason)):
+            match reason:
+                case (
+                    HtmlExtractionFailureReason.CONTENT_TYPE_UNSUPPORTED
+                    | HtmlExtractionFailureReason.RESULT_EMPTY
+                ):
+                    return NoRetryCompletion(cause=exc, code=reason.value)
+                case (
+                    HtmlExtractionFailureReason.EXTRACTOR_RAISED
+                    | HtmlExtractionFailureReason.RESULT_TYPE_MISMATCH
+                    | HtmlExtractionFailureReason.HTML_DECODE_FAILED
+                    | HtmlExtractionFailureReason.MATERIAL_CONVERSION_FAILED
+                ):
+                    return RetryCompletion(
+                        error=exc, code=reason.value, requires_investigation=True
+                    )
+                case _:
+                    assert_never(reason)
+        case ArticleCompletionError(cause=ValidationError()):
             return RetryCompletion(
-                error=exc,
-                code=code,
-                retry_at=retry_at,
-                requires_investigation=investigate,
+                error=exc, code="validation_error", requires_investigation=True
             )
-        case NonRetryableFetchFailure(code=code):
-            return NoRetryCompletion(cause=exc, code=code)
-        case None:
-            pass
-
-    if isinstance(exc, ArticleCompletionRejectedError):
-        investigate = (
-            not exc.defects
-            or bool(exc.unmapped)
-            or AnalyzableArticleDefect.UNMAPPED_VALIDATION_ERROR in exc.defects
-        )
-        if investigate:
-            return RetryCompletion(
-                error=exc, code=exc.CODE, requires_investigation=True
-            )
-        return NoRetryCompletion(cause=exc, code=exc.CODE)
-
-    if isinstance(
-        exc,
-        (
-            RobotsDisallowedError,
-            ResponseSizeLimitExceededError,
-            ArticleContentTypeError,
-            ArticleExtractionEmptyError,
-            ArticleContentQualityError,
-        ),
-    ):
-        return NoRetryCompletion(cause=exc, code=exc.CODE)
-
-    if isinstance(exc, (FetchDeadlineExceededError, ArticleExtractionCrashedError)):
-        return RetryCompletion(
-            error=exc,
-            code=exc.CODE,
-            requires_investigation=isinstance(exc, ArticleExtractionCrashedError),
-        )
 
     return RetryCompletion(error=exc, code="unknown", requires_investigation=True)

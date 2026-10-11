@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, assert_never
 
 from structlog.stdlib import BoundLogger
 
+from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import exception_fqn
 from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
 from app.collection.article_completion.consumer import (
@@ -13,6 +14,11 @@ from app.collection.article_completion.consumer import (
     NoRetryCompletion,
     RetryCompletion,
 )
+from app.collection.article_completion.errors import (
+    ArticleBuildRejectedError,
+    ArticleCompletionError,
+)
+from app.collection.article_completion.html_extraction import HtmlExtractionError
 from app.lambda_handlers.sqs.received_message import (
     ReceivedMessageBatchInvalidError,
     ReceivedMessageInvalidError,
@@ -26,6 +32,25 @@ if TYPE_CHECKING:
     from app.collection.retry_at import RetryAt
     from app.lambda_handlers.completion.redelivery_wait import VisibilityTimeout
     from app.lambda_handlers.event_reader import EventReadFailed
+
+
+def _completion_failure_fields(error: Exception) -> dict[str, object]:
+    fields: dict[str, object] = {"error_chain": extract_error_chain(error)}
+    match error:
+        case ArticleCompletionError(cause=HtmlExtractionError() as cause):
+            fields.update(
+                failure_kind="html_extraction",
+                reason_code=cause.reason.value,
+            )
+            content_type = (cause.details or {}).get("content_type")
+            if isinstance(content_type, str):
+                fields["content_type"] = content_type
+        case ArticleCompletionError(cause=ArticleBuildRejectedError() as cause):
+            fields.update(
+                failure_kind="article_build",
+                defects=[defect.value for defect in cause.rejection.defects],
+            )
+    return fields
 
 
 class CompletionLambdaFailureRecorder:
@@ -68,6 +93,7 @@ class CompletionLambdaFailureRecorder:
                 case CompletionSucceeded(analyzable_article_id=article_id):
                     fields.update(result="succeeded", analyzable_article_id=article_id)
                 case RetryCompletion(
+                    error=error,
                     code=code,
                     retry_at=retry_at,
                     requires_investigation=investigate,
@@ -78,12 +104,16 @@ class CompletionLambdaFailureRecorder:
                         retry_at=retry_at.value.isoformat() if retry_at else None,
                         requires_investigation=investigate,
                     )
+                    fields.update(_completion_failure_fields(error))
                 case NoRetryCompletion(
-                    cause=Exception(), code=code, requires_investigation=investigate
+                    cause=Exception() as error,
+                    code=code,
+                    requires_investigation=investigate,
                 ):
                     fields.update(
                         result="closed", code=code, requires_investigation=investigate
                     )
+                    fields.update(_completion_failure_fields(error))
                 case NoRetryCompletion(cause=reason):
                     fields.update(result="not_required", reason=reason)
                 case _:

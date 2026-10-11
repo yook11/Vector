@@ -1,12 +1,13 @@
-"""新経路の統合・記事構築と拒否情報の伝播。"""
+"""実モデルと実ポリシーを使い、DB・外部通信なしで記事構築と拒否情報の伝播を検証する。"""
 
 from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from app.collection.article_completion.content import ScrapedContent
-from app.collection.article_completion.errors import ArticleCompletionRejectedError
+from app.collection.article_completion.errors import ArticleBuildRejectedError
 from app.collection.article_completion.html_completion import complete_with_html
 from app.collection.domain.analyzable_article import (
     AnalyzableArticle,
@@ -79,35 +80,25 @@ def test_known_build_rejection_preserves_defect() -> None:
         source_url=_URL,
     )
     html = ScrapedContent(title="Title", body=_BODY, published_at=None)
-    with pytest.raises(ArticleCompletionRejectedError) as caught:
+    with pytest.raises(ArticleBuildRejectedError) as caught:
         complete_with_html(observed, DEFAULT_POLICY, html, source_id=7, source_url=_URL)
-    assert caught.value.defects == (AnalyzableArticleDefect.PUBLISHED_AT_MISSING,)
-    assert caught.value.unmapped == ()
+    assert caught.value.rejection == QualityTooLow(
+        defects=(AnalyzableArticleDefect.PUBLISHED_AT_MISSING,)
+    )
 
 
-def test_rejection_preserves_all_defects_and_unmapped(
-    observed: ObservedArticle,
-) -> None:
-    """構築結果の複数理由と未分類詳細を順序や重複も含めて保持する。"""
-    quality = QualityTooLow(
-        defects=(
-            AnalyzableArticleDefect.UNMAPPED_VALIDATION_ERROR,
-            AnalyzableArticleDefect.PUBLISHED_AT_MISSING,
-            AnalyzableArticleDefect.UNMAPPED_VALIDATION_ERROR,
-        ),
-        unmapped=(
-            "title:unexpected_title_validation",
-            "body:unexpected_body_validation",
-        ),
+def test_unclassified_validation_error_propagates(observed: ObservedArticle) -> None:
+    """構築時の未分類の検証エラーは元の例外のまま伝播する。"""
+    original = ValidationError.from_exception_data(
+        "AnalyzableArticle", [{"type": "missing", "loc": ("new_field",), "input": {}}]
     )
     html = ScrapedContent(title="Title", body=_BODY, published_at=None)
     with (
-        patch.object(AnalyzableArticle, "build_or_reject", return_value=quality),
-        pytest.raises(ArticleCompletionRejectedError) as caught,
+        patch.object(AnalyzableArticle, "build_or_reject", side_effect=original),
+        pytest.raises(ValidationError) as caught,
     ):
         complete_with_html(observed, DEFAULT_POLICY, html, source_id=7, source_url=_URL)
-    assert caught.value.defects == quality.defects
-    assert caught.value.unmapped == quality.unmapped
+    assert caught.value is original
 
 
 @pytest.mark.parametrize(

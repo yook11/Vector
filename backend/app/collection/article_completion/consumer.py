@@ -19,6 +19,7 @@ from app.collection.article_completion.consumer_result import (
     NoRetryCompletion,
     RetryCompletion,
 )
+from app.collection.article_completion.errors import ArticleCompletionError
 from app.collection.article_completion.html_completion import complete_with_html
 from app.collection.article_completion.html_extraction import extract_html_content
 from app.collection.article_completion.metrics import (
@@ -89,7 +90,7 @@ class ArticleCompletionConsumer:
             return await self._commit_completed(incomplete, analyzable_article)
         except Exception as exc:
             return await self._failure_handler.handle(
-                exc,
+                ArticleCompletionError(cause=exc),
                 incomplete_article_id=incomplete_article_id,
                 incomplete=incomplete,
             )
