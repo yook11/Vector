@@ -60,12 +60,12 @@ def test_extracts_material_from_real_html(encoding: str) -> None:
 
 @pytest.mark.parametrize(
     ("title", "text", "expected_title", "expected_body"),
-    [(None, " Short ", None, "Short"), (" <b> </b> ", None, None, "")],
+    [(None, " Short ", None, "Short"), (" <b> </b> ", None, None, None)],
 )
 def test_returns_partial_material(
     raw, title, text, expected_title, expected_body
 ) -> None:
-    """項目が不足したDocumentも整形した素材として返す。"""
+    """項目が不足したDocumentも整形して返し、取れなかったタイトル・本文はNoneにする。"""
     with patch(
         "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
         return_value=Document(title=title, text=text, date=None),

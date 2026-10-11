@@ -73,11 +73,12 @@ def _strip_html_tags(text: str | None) -> str | None:
 
 
 def _to_extracted_content(document: TrafilaturaDocument) -> ExtractedContent:
-    """抽出値を整形し、完成記事の品質判定は補完器に委ねる。"""
+    """抽出値を整形して空の項目をNoneとし、完成記事の品質判定は補完器に委ねる。"""
     cleaned_title = _strip_html_tags(document.title)
+    body = (document.text or "").strip()
     return ExtractedContent(
         title=cleaned_title[:ARTICLE_TITLE_MAX_LENGTH] if cleaned_title else None,
-        body=document.text.strip() if document.text is not None else "",
+        body=body or None,
         published_at=PublishedAt.parse(document.date),
     )
 
