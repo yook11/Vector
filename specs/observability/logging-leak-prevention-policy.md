@@ -29,7 +29,7 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 | `deny` | 項目ごと出さないもの | 項目名 | 項目を削除する |
 | `mask` | 項目の存在は残すが値は不要なもの | 項目名 | 値全体を `***` にする |
 | `sanitize` | 調査のために残したいが、そのままでは出せないもの | 項目名とその項目の意味 | 調査に必要な部分だけを残した値 |
-| 情報漏洩防止 | 絶対に出してはいけない認証情報 | 文字列の内容 | 該当部分を `[redacted:<種類>]` にする |
+| 情報漏洩防止 | 絶対に出してはいけない認証情報と内部の宛先 | 文字列の内容 | 該当部分を `[redacted:<種類>]` にする |
 
 `deny`・`mask`・`sanitize` はポリシーで項目を指定する。情報漏洩防止はポリシーで指定せず、出力するすべての文字列に適用する補助の保護であり、主な保護は `allow`・`deny`・`mask` が担う。
 
@@ -48,7 +48,7 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 
 ## 情報漏洩防止
 
-`backend/app/log_policy/leak_prevention.py` が所有する。入口 `prevent_credential_leaks(text)` が下表の順に種類ごとの関数を呼び、合成と順序を所有する。値準備と診断は入口だけを呼ぶ。ポリシーの `mask` 集合は受け取らない。
+`backend/app/log_policy/leak_prevention.py` が所有する。入口 `prevent_leaks(text)` が、認証情報の検出 `prevent_credential_leaks(text)` と内部の宛先の検出 `redact_internal_destinations(text)` (`internal_destination.py`) を呼ぶ。`prevent_credential_leaks` は下表の認証情報の種類を表の順に呼び、合成と順序を所有する。値準備と診断は入口だけを呼ぶ。ポリシーの `mask` 集合は受け取らない。
 
 | 種類 | 関数 | 検出条件 | 置換 |
 | --- | --- | --- | --- |
@@ -59,6 +59,10 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 | `url_userinfo` | `redact_url_userinfo` | 英字を含む scheme に続く `://` から `@` までの userinfo | userinfo だけを置換し、scheme と接続先を残す |
 | `jwt` | `redact_jwts` | 先頭2区画が `eyJ` で始まり後続文字を持つ3区画の base64url | `eyJ` の位置から3区画 |
 | `credential` | `redact_credential_assignments` | 正規化後に `CREDENTIAL_KEYS` と完全一致するキー名と、閉じ引用符・`=` または `:`。AWS署名付きクエリの認証パラメーター (`X-Amz-Signature` / `X-Amz-Credential` / `X-Amz-Security-Token`) もキー名として扱う | キー名と区切りを残し、その後ろを末尾まで置換する |
+| `internal_url` | `redact_internal_destinations` | host が非公開IP (IPv4-mapped IPv6・zone 付きを含む) または `localhost`・`*.localhost` のURL。percent-encoding と全角文字を戻してから判定する | URL全体 |
+| `ambiguous_url` | `redact_internal_destinations` | 解析できないURLと、整数だけでできた host (`2130706433`・`0x7f.0.0.1`・`010.0.0.1` など) のURL | URL全体 |
+| `internal_ip` | `redact_internal_destinations` | URLでない文に現れた非公開IP | アドレスだけを置換し、port や文末の記号を残す |
+| `internal_host` | `redact_internal_destinations` | URLでない文に現れた `localhost`・`*.localhost` | 一致部分 |
 
 - 置換表記は常に `[redacted:<種類>]` とし、種類名は上表の値を使う。固定の接頭辞や元の値の一部は残さない。
 - キー名を目印にする検出は、値の終端を推測せず、区切りの後ろを文字列の末尾まで置き換える。後ろが空なら変更しない。最初の一致で残りをすべて覆う。
@@ -102,7 +106,7 @@ Implementation: 情報漏洩防止を [leak_prevention.py](../../backend/app/log
 
 | 対象 | 置き場所 |
 | --- | --- |
-| 漏洩防止の種類ごとの検出境界 | `tests/log_policy/leak_prevention/test_<種類>.py` (`test_private_key`・`test_gemini`・`test_logfire`・`test_aws`・`test_url`・`test_jwt`・`test_assignments`) |
+| 漏洩防止の種類ごとの検出境界 | `tests/log_policy/leak_prevention/test_<種類>.py` (`test_private_key`・`test_gemini`・`test_logfire`・`test_aws`・`test_url`・`test_jwt`・`test_assignments`・`test_internal_destination`) |
 | 漏洩防止の入口 (全種類の適用・通常文の保持・切り詰めない) | `tests/log_policy/leak_prevention/test_prevent_credential_leaks.py` |
 | 項目別サニタイズの共通入口と `sanitize_article_url` | `tests/log_policy/test_sanitize.py` |
 | 漏洩防止の適用箇所 (値・ネストのキー・例外・診断・サニタイズ後の値) | `test_processor.py` の `TestLeakPrevention`。上限・一度だけの処理・失敗時は各モジュールのテストに残す |

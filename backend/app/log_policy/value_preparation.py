@@ -8,7 +8,7 @@ from typing import Any
 from app.log_policy.base import BASE_MASK, normalize_key
 from app.log_policy.budget import TEXT_LIMIT, LogEventBudget
 from app.log_policy.diagnostics import LogProcessingDiagnostics
-from app.log_policy.leak_prevention import prevent_credential_leaks
+from app.log_policy.leak_prevention import prevent_leaks
 from app.log_policy.sanitize import sanitize_field_value
 
 DEPTH_LIMIT = 10
@@ -159,7 +159,7 @@ class LogValuePreparer:
         if type(value) is dict:
             prepared_dictionary: dict[str, Any] = {}
             for key, child_value in value.items():
-                prepared_key = prevent_credential_leaks(key)
+                prepared_key = prevent_leaks(key)
                 prepared_dictionary[prepared_key] = self.prepare_text_values(
                     child_value, field_name=key
                 )
@@ -177,5 +177,5 @@ class LogValuePreparer:
                     return sanitized_value
                 value = sanitized_value
         if type(value) is str:
-            return prevent_credential_leaks(value)
+            return prevent_leaks(value)
         return value

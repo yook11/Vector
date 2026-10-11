@@ -210,12 +210,12 @@ service等はプロセス単位、request/message ID等は処理単位、例外�
 
 初期対象は外部記事のHTTP(S) URLとする。通常の公開host・path・記事識別用queryは残し、URLやqueryを一律に削除しない。
 
-- 非公開IP、loopback、link-local、IPv6の内部アドレス等を含む宛先はURL全体を`[redacted]`へ置換する。IPv4-mapped IPv6は埋め込みIPv4の分類に従う。`localhost`と設定・出所から内部と判明しているhostも同様とする。
+- 非公開IP、loopback、link-local、IPv6の内部アドレス等を含む宛先はURL全体を`[redacted:internal_url]`へ置換する。IPv4-mapped IPv6は埋め込みIPv4の分類に従う。`localhost`と設定・出所から内部と判明しているhostも同様とする。
 - IPの分類基準は[既存の非公開IP方針](../../backend/app/http/destination_policy.py)と[レンジの正本](../../backend/app/http/non_public_ranges.json)を参照する。ログ側で別のCIDR一覧を作らない。
 - ログ出力のためにDNS解決や通信を行わない。任意の独自ドメインが内部へ解決されることまで、ログの文字列処理で検出済みとは扱わない。
 - URL内のuserinfo、認証query、署名付きURLなどの資格情報は共通規則で保護する。署名付きURL等の認証用複合値は全体を置換する。
 - 認識した個人情報・非公開共有token等も公開記事URLとして素通ししない。通常の公開記事URLと異なる用途には、その概念の規則を追加する。
-- 解釈が曖昧なURLや不正なエンコードで安全に処理できない場合は、原文にfallbackせず当該URLを省略する。
+- 解釈が曖昧なURLや不正なエンコードで安全に処理できない場合は、原文にfallbackせず当該URLを`[redacted:ambiguous_url]`へ置換する。
 - 内部IP等はURL属性だけでなく、例外文へ同じ値が現れた場合も保護する。生値を含む省略理由を出さない。
 
 ここでの「弾く」はログへの出力を除く意味であり、記事取得の可否やHTTP通信の宛先方針を変更するものではない。

@@ -1,4 +1,4 @@
-"""出力する文字列に紛れた既知の種類の認証情報を、種別付きの表記へ置き換える。
+"""出力する文字列に紛れた既知の種類の認証情報と内部の宛先を、種別付きの表記へ置き換える。
 
 allow・deny・mask・サニタイズを通った後に最後にかける補助の保護で、
 列挙した種類以外は検出しない。パターン集は deployment-log-policy の
@@ -11,6 +11,7 @@ import re
 from collections import deque
 
 from app.log_policy.base import CREDENTIAL_KEYS, normalize_key
+from app.log_policy.internal_destination import redact_internal_destinations
 
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----.*?"
@@ -127,3 +128,8 @@ def prevent_credential_leaks(text: str) -> str:
     text = redact_url_userinfo(text)
     text = redact_jwts(text)
     return redact_credential_assignments(text)
+
+
+def prevent_leaks(text: str) -> str:
+    """出力するすべての文字列から、認証情報と内部の宛先を置き換える。"""
+    return redact_internal_destinations(prevent_credential_leaks(text))

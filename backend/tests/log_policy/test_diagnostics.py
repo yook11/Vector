@@ -154,9 +154,7 @@ class TestPreparedFields:
         from unittest.mock import Mock
 
         redact = Mock(return_value="redacted")
-        monkeypatch.setattr(
-            "app.log_policy.diagnostics.prevent_credential_leaks", redact
-        )
+        monkeypatch.setattr("app.log_policy.diagnostics.prevent_leaks", redact)
         diagnostics = LogProcessingDiagnostics()
         key = "x" * TEXT_LIMIT
         diagnostics.record_top_level_denied(key)
@@ -173,9 +171,7 @@ class TestPreparedFields:
         from unittest.mock import Mock
 
         redact = Mock()
-        monkeypatch.setattr(
-            "app.log_policy.diagnostics.prevent_credential_leaks", redact
-        )
+        monkeypatch.setattr("app.log_policy.diagnostics.prevent_leaks", redact)
         diagnostics = LogProcessingDiagnostics()
         diagnostics.record_top_level_denied("x" * (TEXT_LIMIT + 1))
         budget = LogEventBudget()
@@ -192,9 +188,7 @@ class TestPreparedFields:
         from unittest.mock import Mock
 
         redact = Mock()
-        monkeypatch.setattr(
-            "app.log_policy.diagnostics.prevent_credential_leaks", redact
-        )
+        monkeypatch.setattr("app.log_policy.diagnostics.prevent_leaks", redact)
         diagnostics = LogProcessingDiagnostics()
         diagnostics.record_top_level_denied("token=first")
         diagnostics.record_top_level_denied("password=second")
@@ -210,9 +204,7 @@ class TestPreparedFields:
         from unittest.mock import Mock
 
         redact = Mock()
-        monkeypatch.setattr(
-            "app.log_policy.diagnostics.prevent_credential_leaks", redact
-        )
+        monkeypatch.setattr("app.log_policy.diagnostics.prevent_leaks", redact)
         diagnostics = LogProcessingDiagnostics()
         diagnostics.record_top_level_denied("token=first")
         diagnostics.record_top_level_denied("password=second")

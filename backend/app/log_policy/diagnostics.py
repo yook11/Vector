@@ -3,7 +3,7 @@
 from typing import Any
 
 from app.log_policy.budget import TEXT_LIMIT, LogEventBudget
-from app.log_policy.leak_prevention import prevent_credential_leaks
+from app.log_policy.leak_prevention import prevent_leaks
 
 
 class LogProcessingDiagnostics:
@@ -52,7 +52,7 @@ class LogProcessingDiagnostics:
             if len(key) > TEXT_LIMIT:
                 prepared_keys.append("[limit]")
                 continue
-            prepared_keys.append(prevent_credential_leaks(key))
+            prepared_keys.append(prevent_leaks(key))
         diagnostic_fields["_denied_keys"] = prepared_keys
         return diagnostic_fields
 
