@@ -7,7 +7,7 @@ import structlog
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
-from app.collection.article_acquisition.consumer_failure_classification import (
+from app.collection.article_acquisition.consumer_result import (
     NoRetryAcquisition,
     RetryAcquisition,
 )
@@ -88,7 +88,9 @@ class ArticleAcquisitionFailureRecorder:
         failure: RetryAcquisition | NoRetryAcquisition,
     ) -> None:
         """best-effort failure audit。失敗時は redacted log に退避する。"""
-        exc = failure.error
+        exc = failure.error if isinstance(failure, RetryAcquisition) else failure.cause
+        if not isinstance(exc, Exception):
+            raise ValueError("取得不要の結果を失敗監査へ記録できません")
         try:
             async with self._session_factory() as session:
                 await SourceAcquisitionAuditRepository(session).append_failure(

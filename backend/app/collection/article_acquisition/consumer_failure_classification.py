@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 
+from app.collection.article_acquisition.consumer_result import (
+    NoRetryAcquisition,
+    RetryAcquisition,
+)
 from app.collection.article_acquisition.errors import (
     ResponseSizeLimitExceededError,
     RssFeedErrors,
@@ -17,20 +20,6 @@ from app.collection.external_fetch_failure import (
     RetryableFetchFailure,
     classify_external_fetch_failure,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class RetryAcquisition:
-    """SQS の再配信に任せる取得の失敗。"""
-
-    error: Exception
-
-
-@dataclass(frozen=True, slots=True)
-class NoRetryAcquisition:
-    """再試行しても変わらないため受信完了にし、次の定期投入に任せる取得の失敗。"""
-
-    error: Exception
 
 
 def classify_acquisition_failure(

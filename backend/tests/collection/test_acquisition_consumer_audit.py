@@ -12,10 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition.consumer import (
-    AcquisitionSucceeded,
     ArticleAcquisitionConsumer,
 )
-from app.collection.article_acquisition.consumer_failure_classification import (
+from app.collection.article_acquisition.consumer_result import (
+    AcquisitionSucceeded,
     NoRetryAcquisition,
     RetryAcquisition,
 )
@@ -249,11 +249,12 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
         assert result == AcquisitionSucceeded(1)
     else:
         assert isinstance(result, expected_failure[scenario][0])
+        error = result.error if isinstance(result, RetryAcquisition) else result.cause
         if scenario == "selection_failed":
-            assert result.error is selection_error
-            assert result.error.__cause__ is cause
+            assert error is selection_error
+            assert error.__cause__ is cause
         else:
-            assert isinstance(result.error, RssFeedErrors)
+            assert isinstance(error, RssFeedErrors)
     assert reader.await_count == 2
 
     article_ids = (

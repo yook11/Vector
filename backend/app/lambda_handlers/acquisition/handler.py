@@ -1,46 +1,33 @@
 """取得依頼を処理し、再配信させるメッセージだけをSQSへ返す。"""
 
 import asyncio
-from time import monotonic
+from time import perf_counter
 
 import structlog
 
-from app.audit.error_fields import exception_fqn
-from app.collection.article_acquisition.consumer import AcquisitionSucceeded
-from app.collection.article_acquisition.consumer_failure_classification import (
-    NoRetryAcquisition,
+from app.collection.article_acquisition.consumer_result import (
     RetryAcquisition,
 )
-from app.collection.article_acquisition.errors import AcquisitionSourceInvalidError
-from app.collection.article_acquisition.source_resolution import (
-    AcquisitionNotRequired,
-)
 from app.collection.sources.acquisition_request import (
-    AcquisitionRequestInvalidError,
+    SourceAcquisitionRequest,
     acquisition_request_from_message,
 )
 from app.lambda_handlers.acquisition.composition import open_acquisition_consumer
+from app.lambda_handlers.acquisition.message_recorder import AcquisitionMessageRecorder
 from app.lambda_handlers.acquisition.settings import AcquisitionConsumerSettings
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
+from app.lambda_handlers.event_reader import EventReader, EventReadFailed
 from app.lambda_handlers.logging import setup_lambda_logging
 from app.lambda_handlers.sqs.received_message import (
     ReceivedMessageBatch,
-    ReceivedMessageInvalidError,
 )
 from app.lambda_handlers.sqs.response import (
     RedeliveryResponse,
     redelivery_response,
 )
+from app.shared.time import elapsed_ms_since
 
 logger = structlog.get_logger(__name__)
-
-
-def _record(**fields: object) -> None:
-    try:
-        logger.info("acquisition_message_processed", **fields)
-    except Exception:  # noqa: S110
-        # 診断障害で配送結果を変えない。
-        pass
 
 
 def handler(sqs_event: object, context: object) -> RedeliveryResponse:
@@ -67,52 +54,38 @@ async def _run(
 ) -> RedeliveryResponse:
     redelivery_message_ids: list[str] = []
     async with open_acquisition_consumer(settings) as consumer:
+        event_reader = EventReader(acquisition_request_from_message)
+        message_recorder = AcquisitionMessageRecorder(logger)
         for message in message_batch.messages:
-            started = monotonic()
-            fields: dict[str, object] = {"message_id": message.message_id}
-            disposition = "completed"
-            try:
-                parsed_body = message.parse_json()
-                request = acquisition_request_from_message(parsed_body)
-                fields.update(
-                    request_id=request.request_id, source_id=request.source_id
-                )
-                result = await consumer.consume(request)
-                match result:
-                    case AcquisitionSucceeded(created_count=created_count):
-                        fields.update(result="acquired", created_count=created_count)
-                    case AcquisitionNotRequired(reason=reason):
-                        fields.update(result=reason, created_count=0)
-                    case (
-                        RetryAcquisition(error=error) | NoRetryAcquisition(error=error)
-                    ):
-                        fields.update(
-                            result="failed",
-                            code="processing_failed",
-                            error_class=exception_fqn(error),
+            started_at_seconds = perf_counter()
+            match event_reader.read(message):
+                case EventReadFailed() as read_failed:
+                    message_recorder.record_read_failed(
+                        read_failed,
+                        message_id=message.message_id,
+                        duration_ms=elapsed_ms_since(started_at_seconds),
+                    )
+                    redelivery_message_ids.append(message.message_id)
+
+                case SourceAcquisitionRequest() as request:
+                    try:
+                        result = await consumer.consume(request)
+                    except Exception as exc:
+                        # Consumerから結果を受け取れなかった場合は再配信する。
+                        message_recorder.record_consume_failed(
+                            exc,
+                            message_id=message.message_id,
+                            request=request,
+                            duration_ms=elapsed_ms_since(started_at_seconds),
                         )
-                if isinstance(result, RetryAcquisition):
-                    disposition = "batch_item_failure"
-            except Exception as exc:
-                code = "processing_failed"
-                if isinstance(
-                    exc,
-                    (
-                        AcquisitionRequestInvalidError,
-                        ReceivedMessageInvalidError,
-                    ),
-                ):
-                    code = "invalid_request"
-                elif isinstance(exc, AcquisitionSourceInvalidError):
-                    code = "source_not_registered"
-                fields.update(
-                    result="failed", code=code, error_class=exception_fqn(exc)
-                )
-                disposition = "batch_item_failure"
-            finally:
-                fields["message_disposition"] = disposition
-                fields["duration_seconds"] = monotonic() - started
-                _record(**fields)
-            if disposition == "batch_item_failure":
-                redelivery_message_ids.append(message.message_id)
+                        redelivery_message_ids.append(message.message_id)
+                        continue
+                    if isinstance(result, RetryAcquisition):
+                        redelivery_message_ids.append(message.message_id)
+                    message_recorder.record_consumed(
+                        result,
+                        message_id=message.message_id,
+                        request=request,
+                        duration_ms=elapsed_ms_since(started_at_seconds),
+                    )
     return redelivery_response(redelivery_message_ids)
