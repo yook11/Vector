@@ -1,4 +1,4 @@
-"""取得記事の充足状態に応じた保存先と後続イベントを確認する。"""
+"""実DBとHTTP応答のスタブで、取得記事の保存・後続イベント・配送判断を確認する。"""
 
 from unittest.mock import Mock
 
@@ -112,7 +112,7 @@ async def test_redelivery_of_incomplete_article_does_not_repeat_event(
 async def test_inactive_source_is_acknowledged_without_fetch(
     system_database, invoke_acquisition, source_id, rss_response
 ):
-    """開始前に無効化されたソースは再配信せず取得を終える。"""
+    """開始前に無効化されたソースは取得不要として受信完了し、失敗監査を残さない。"""
     async with system_database.connect("vector") as db:
         await db.execute(
             "UPDATE news_sources SET is_active=false WHERE id=$1", source_id
@@ -124,12 +124,13 @@ async def test_inactive_source_is_acknowledged_without_fetch(
         log["event"] == "acquisition_message_processed" and log["result"] == "inactive"
         for log in logs
     )
+    assert await load_acquisition_failures(system_database, source_id) == []
 
 
 async def test_deleted_source_is_acknowledged_without_fetch(
     system_database, invoke_acquisition, source_id, rss_response
 ):
-    """開始前に削除されたソースは再配信せず取得を終える。"""
+    """開始前に削除されたソースは取得不要として受信完了し、失敗監査を残さない。"""
     async with system_database.connect("vector") as db:
         await db.execute("DELETE FROM news_sources WHERE id=$1", source_id)
     with capture_logs() as logs:
@@ -139,6 +140,7 @@ async def test_deleted_source_is_acknowledged_without_fetch(
         log["event"] == "acquisition_message_processed" and log["result"] == "missing"
         for log in logs
     )
+    assert await load_acquisition_failures(system_database, source_id) == []
 
 
 async def test_inactive_source_with_invalid_name_is_not_resolved(

@@ -5,9 +5,11 @@ from datetime import UTC, datetime
 import pytest
 
 from app.collection.article_acquisition.consumer_failure_classification import (
+    classify_acquisition_failure,
+)
+from app.collection.article_acquisition.consumer_result import (
     NoRetryAcquisition,
     RetryAcquisition,
-    classify_acquisition_failure,
 )
 from app.collection.article_acquisition.errors import (
     ResponseSizeLimitExceededError,

@@ -23,7 +23,7 @@ from app.audit.failure_projection import (
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
-from app.collection.article_acquisition.consumer_failure_classification import (
+from app.collection.article_acquisition.consumer_result import (
     NoRetryAcquisition,
     RetryAcquisition,
 )
@@ -111,7 +111,9 @@ class SourceAcquisitionAuditRepository:
         failure: RetryAcquisition | NoRetryAcquisition,
     ) -> None:
         """source 全体の acquisition 失敗と、取得工程が決めた後始末を記録する。"""
-        exc = failure.error
+        exc = failure.error if isinstance(failure, RetryAcquisition) else failure.cause
+        if not isinstance(exc, Exception):
+            raise ValueError("取得不要の結果を失敗監査へ記録できません")
         now = datetime.now(UTC)
         projection = _project_failure(exc, now=now)
         payload = AcquisitionPayload(
