@@ -23,12 +23,6 @@ def consumer_contract():
     return import_module("app.collection.article_completion.consumer")
 
 
-def decision_contract():
-    return import_module(
-        "app.collection.article_completion.consumer_failure_classification"
-    )
-
-
 def article_response(marker="Target discovery"):
     content = escape(
         f"{marker}. Researchers published new measurements from their orbital "

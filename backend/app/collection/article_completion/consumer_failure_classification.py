@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 
+from app.collection.article_completion.consumer_result import (
+    NoRetryCompletion,
+    RetryCompletion,
+)
 from app.collection.article_completion.errors import (
     ArticleCompletionRejectedError,
     ArticleContentQualityError,
@@ -21,40 +24,24 @@ from app.collection.external_fetch_failure import (
     RetryableFetchFailure,
     classify_external_fetch_failure,
 )
-from app.collection.retry_at import RetryAt
-
-
-@dataclass(frozen=True, slots=True)
-class RetryArticleCompletion:
-    """補完を再試行する判断と、追加で待機が必要な時刻を表す。"""
-
-    code: str
-    retry_at: RetryAt | None = None
-    """再試行可能なUTC日時で、指定なし・無効・0秒・期限経過済みならNone。"""
-    requires_investigation: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class CloseArticleCompletion:
-    """補完を終了する判断と、その理由の識別情報を表す。"""
-
-    code: str
-    requires_investigation: bool = False
 
 
 def classify_completion_failure(
     exc: Exception, *, now: datetime
-) -> RetryArticleCompletion | CloseArticleCompletion:
+) -> RetryCompletion | NoRetryCompletion:
     """発生事実を変更せず、補完工程として必要な対処を返す。"""
     match classify_external_fetch_failure(exc, now=now):
         case RetryableFetchFailure(
             code=code, retry_at=retry_at, requires_investigation=investigate
         ):
-            return RetryArticleCompletion(
-                code=code, retry_at=retry_at, requires_investigation=investigate
+            return RetryCompletion(
+                error=exc,
+                code=code,
+                retry_at=retry_at,
+                requires_investigation=investigate,
             )
         case NonRetryableFetchFailure(code=code):
-            return CloseArticleCompletion(code=code)
+            return NoRetryCompletion(cause=exc, code=code)
         case None:
             pass
 
@@ -65,8 +52,10 @@ def classify_completion_failure(
             or AnalyzableArticleDefect.UNMAPPED_VALIDATION_ERROR in exc.defects
         )
         if investigate:
-            return RetryArticleCompletion(code=exc.CODE, requires_investigation=True)
-        return CloseArticleCompletion(code=exc.CODE)
+            return RetryCompletion(
+                error=exc, code=exc.CODE, requires_investigation=True
+            )
+        return NoRetryCompletion(cause=exc, code=exc.CODE)
 
     if isinstance(
         exc,
@@ -78,12 +67,13 @@ def classify_completion_failure(
             ArticleContentQualityError,
         ),
     ):
-        return CloseArticleCompletion(code=exc.CODE)
+        return NoRetryCompletion(cause=exc, code=exc.CODE)
 
     if isinstance(exc, (FetchDeadlineExceededError, ArticleExtractionCrashedError)):
-        return RetryArticleCompletion(
+        return RetryCompletion(
+            error=exc,
             code=exc.CODE,
             requires_investigation=isinstance(exc, ArticleExtractionCrashedError),
         )
 
-    return RetryArticleCompletion(code="unknown", requires_investigation=True)
+    return RetryCompletion(error=exc, code="unknown", requires_investigation=True)

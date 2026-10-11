@@ -1,4 +1,4 @@
-"""補完handlerの個別失敗・全体失敗と配送診断を確認する。"""
+"""Consumer・SQSをモックにし、補完handlerの配送判断と診断を確認する。"""
 
 import asyncio
 import json
@@ -11,13 +11,9 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from app.collection.article_completion.consumer import (
-    CompletionFailed,
-    CompletionNotRequired,
     CompletionSucceeded,
-)
-from app.collection.article_completion.consumer_failure_classification import (
-    CloseArticleCompletion,
-    RetryArticleCompletion,
+    NoRetryCompletion,
+    RetryCompletion,
 )
 from app.collection.retry_at import RetryAt
 from app.lambda_handlers.sqs.received_message import ReceivedMessageBatchInvalidError
@@ -75,7 +71,7 @@ def runtime(monkeypatch):
 @pytest.mark.parametrize("reason", ["missing", "closed", "superseded", "url_conflict"])
 def test_all_not_required_reasons_acknowledge(runtime, reason):
     """処理不要の理由によらず受信完了にする。"""
-    runtime.consumer.consume.return_value = CompletionNotRequired(reason=reason)
+    runtime.consumer.consume.return_value = NoRetryCompletion(cause=reason)
     assert module.handler({"Records": [record()]}, runtime.context) == {
         "batchItemFailures": []
     }
@@ -83,8 +79,8 @@ def test_all_not_required_reasons_acknowledge(runtime, reason):
 
 def test_retry_decision_returns_message_for_redelivery(runtime):
     """Consumerの再試行判断は、当該メッセージの再配信になる。"""
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError("test failure"), RetryArticleCompletion("retry")
+    runtime.consumer.consume.return_value = RetryCompletion(
+        RuntimeError("test failure"), "retry"
     )
     batch = {"Records": [record("retry-message", article_id=101)]}
 
@@ -95,8 +91,8 @@ def test_retry_decision_returns_message_for_redelivery(runtime):
 
 def test_closed_decision_acknowledges_message(runtime):
     """Consumerがclosed確定を返したメッセージは受信完了になる。"""
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError("test failure"), CloseArticleCompletion("closed")
+    runtime.consumer.consume.return_value = NoRetryCompletion(
+        RuntimeError("test failure"), "closed"
     )
 
     response = module.handler(
@@ -274,22 +270,22 @@ def test_success_log_identifies_completed_article(runtime):
     }
 
 
-def test_not_required_log_retains_reason(runtime):
+@pytest.mark.parametrize("reason", ["missing", "closed", "superseded", "url_conflict"])
+def test_not_required_log_retains_reason(runtime, reason):
     """処理不要のログにはConsumerが返した理由を記録する。"""
-    runtime.consumer.consume.return_value = CompletionNotRequired("superseded")
+    runtime.consumer.consume.return_value = NoRetryCompletion(cause=reason)
 
-    module.handler({"Records": [record("superseded")]}, runtime.context)
+    module.handler({"Records": [record("not-required")]}, runtime.context)
 
     fields = runtime.log.info.call_args.kwargs
     assert fields["result"] == "not_required"
-    assert fields["reason"] == "superseded"
+    assert fields["reason"] == reason
 
 
 def test_closed_log_exposes_decision_without_original_exception(runtime):
     """closedのログは判断codeと調査要否を記録し、元例外の自由文を出さない。"""
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError("private-header"),
-        CloseArticleCompletion("stop", requires_investigation=True),
+    runtime.consumer.consume.return_value = NoRetryCompletion(
+        RuntimeError("private-header"), "stop", requires_investigation=True
     )
 
     module.handler({"Records": [record("closed")]}, runtime.context)
@@ -304,9 +300,11 @@ def test_closed_log_exposes_decision_without_original_exception(runtime):
 def test_retry_log_preserves_original_time_and_safe_decision(runtime):
     """再試行ログは判断の元時刻を保持し、元例外の自由文を出さない。"""
     retry_at = RetryAt(datetime(2026, 9, 15, tzinfo=UTC))
-    runtime.consumer.consume.return_value = CompletionFailed(
+    runtime.consumer.consume.return_value = RetryCompletion(
         RuntimeError("private-header"),
-        RetryArticleCompletion("retry", retry_at=retry_at, requires_investigation=True),
+        "retry",
+        retry_at=retry_at,
+        requires_investigation=True,
     )
 
     module.handler({"Records": [record("retry")]}, runtime.context)
@@ -366,8 +364,8 @@ def test_success_log_failure_does_not_change_acknowledgement(runtime):
 def test_retry_log_failure_does_not_change_redelivery(runtime):
     """再試行ログの出力失敗でも再配信対象を維持する。"""
     runtime.log.info.side_effect = RuntimeError("private-log")
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError("private-error"), RetryArticleCompletion("retry")
+    runtime.consumer.consume.return_value = RetryCompletion(
+        RuntimeError("private-error"), "retry"
     )
 
     response = module.handler({"Records": [record("retry")]}, runtime.context)
@@ -463,9 +461,7 @@ def test_waits_are_applied_after_all_article_processing(runtime):
 
     async def consume(article_id):
         if article_id == 101:
-            return CompletionFailed(
-                RuntimeError(), RetryArticleCompletion("retry", retry)
-            )
+            return RetryCompletion(RuntimeError(), "retry", retry)
         runtime.sqs.change_message_visibility.assert_not_called()
         runtime.now += timedelta(seconds=30)
         return CompletionSucceeded(902)
@@ -484,9 +480,8 @@ def test_waits_are_applied_after_all_article_processing(runtime):
 
 def test_wait_clock_failure_is_invocation_failure(runtime):
     """待機段階で残り時間を取得できない場合も全体失敗にする。"""
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError(),
-        RetryArticleCompletion("retry", RetryAt(runtime.now + timedelta(seconds=120))),
+    runtime.consumer.consume.return_value = RetryCompletion(
+        RuntimeError(), "retry", RetryAt(runtime.now + timedelta(seconds=120))
     )
     runtime.context.get_remaining_time_in_millis.side_effect = [
         60_000,
@@ -499,9 +494,8 @@ def test_wait_clock_failure_is_invocation_failure(runtime):
 @pytest.mark.parametrize("sqs_error", [None, RuntimeError("private-sqs")])
 def test_wait_outcome_never_removes_retry_failure(runtime, sqs_error):
     """可視性変更の成否によらず対象を再配信として返す。"""
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError(),
-        RetryArticleCompletion("retry", RetryAt(runtime.now + timedelta(seconds=120))),
+    runtime.consumer.consume.return_value = RetryCompletion(
+        RuntimeError(), "retry", RetryAt(runtime.now + timedelta(seconds=120))
     )
     runtime.sqs.change_message_visibility.side_effect = sqs_error
     assert module.handler({"Records": [record(" retry ")]}, runtime.context) == {
@@ -520,9 +514,8 @@ async def test_cancelled_communication_finishes_before_resource_release(
     started = asyncio.Event()
     finish = threading.Event()
     loop = asyncio.get_running_loop()
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError(),
-        RetryArticleCompletion("retry", RetryAt(runtime.now + timedelta(seconds=120))),
+    runtime.consumer.consume.return_value = RetryCompletion(
+        RuntimeError(), "retry", RetryAt(runtime.now + timedelta(seconds=120))
     )
 
     def send(**kwargs):
@@ -559,9 +552,8 @@ async def test_cancelled_communication_finishes_before_resource_release(
 
 def test_unstarted_tail_still_allows_wait_for_processed_retry(runtime):
     """記事開始を打ち切った後も予算内なら先行記事の待機を設定する。"""
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError(),
-        RetryArticleCompletion("retry", RetryAt(runtime.now + timedelta(seconds=120))),
+    runtime.consumer.consume.return_value = RetryCompletion(
+        RuntimeError(), "retry", RetryAt(runtime.now + timedelta(seconds=120))
     )
     runtime.context.get_remaining_time_in_millis.side_effect = [60_000, 59_999, 20_000]
     response = module.handler(
@@ -578,9 +570,8 @@ def test_unstarted_tail_still_allows_wait_for_processed_retry(runtime):
 
 def test_skipped_wait_keeps_retry_in_response(runtime):
     """待機設定の時間不足を受信完了へ変換しない。"""
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError(),
-        RetryArticleCompletion("retry", RetryAt(runtime.now + timedelta(seconds=120))),
+    runtime.consumer.consume.return_value = RetryCompletion(
+        RuntimeError(), "retry", RetryAt(runtime.now + timedelta(seconds=120))
     )
     runtime.context.get_remaining_time_in_millis.side_effect = [60_000, 19_999]
     response = module.handler({"Records": [record("retry")]}, runtime.context)
@@ -591,9 +582,8 @@ def test_skipped_wait_keeps_retry_in_response(runtime):
 def test_wait_logging_failure_preserves_response(runtime):
     """待機結果の診断障害で再配信対象を増減させない。"""
     runtime.log.warning.side_effect = RuntimeError("private-log")
-    runtime.consumer.consume.return_value = CompletionFailed(
-        RuntimeError(),
-        RetryArticleCompletion("retry", RetryAt(runtime.now + timedelta(seconds=120))),
+    runtime.consumer.consume.return_value = RetryCompletion(
+        RuntimeError(), "retry", RetryAt(runtime.now + timedelta(seconds=120))
     )
     assert module.handler({"Records": [record()]}, runtime.context) == {
         "batchItemFailures": [{"itemIdentifier": "message"}],

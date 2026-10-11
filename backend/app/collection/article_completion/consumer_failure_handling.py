@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.consumer_failure_classification import (
-    CloseArticleCompletion,
     classify_completion_failure,
 )
 from app.collection.article_completion.consumer_repository import (
@@ -16,8 +15,8 @@ from app.collection.article_completion.consumer_repository import (
     RecordedIncompleteArticle,
 )
 from app.collection.article_completion.consumer_result import (
-    CompletionFailed,
-    CompletionNotRequired,
+    NoRetryCompletion,
+    RetryCompletion,
 )
 from app.collection.article_completion.metrics import (
     record_completion_processing_outcome,
@@ -39,23 +38,22 @@ class ArticleCompletionConsumerFailureHandler:
         *,
         incomplete_article_id: int,
         incomplete: RecordedIncompleteArticle | None,
-    ) -> CompletionFailed | CompletionNotRequired:
+    ) -> RetryCompletion | NoRetryCompletion:
         now = datetime.now(UTC)
         decision = classify_completion_failure(exc, now=now)
-        if isinstance(decision, CloseArticleCompletion):
+        if isinstance(decision, NoRetryCompletion):
             try:
                 async with self._session_factory() as session:
                     closed = await ArticleCompletionConsumerRepository(
                         session
                     ).close_nonclosed(incomplete_article_id, now=now)
                     if not closed:
-                        return CompletionNotRequired(reason="superseded")
+                        return NoRetryCompletion(cause="superseded")
                     await session.commit()
             except Exception as close_error:
                 exc = close_error
                 decision = classify_completion_failure(exc, now=datetime.now(UTC))
 
-        result = CompletionFailed(error=exc, decision=decision)
         try:
             record_completion_processing_outcome("failed")
         except Exception:  # noqa: S110
@@ -76,4 +74,4 @@ class ArticleCompletionConsumerFailureHandler:
         except Exception:  # noqa: S110
             # 失敗監査の障害は元の例外・待機時刻・確定済みclosedを変えない。
             pass
-        return result
+        return decision

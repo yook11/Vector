@@ -45,19 +45,20 @@ payloadの両IDは正の整数として検証する。Consumerへは`incomplete_
 | 入力・Consumerの結果 | 配送の扱い |
 |---|---|
 | CompletionSucceeded | 失敗一覧へ含めず受信完了 |
-| CompletionNotRequired（全reason） | 失敗一覧へ含めず受信完了 |
-| CompletionFailed + CloseArticleCompletion | closed等の確定をConsumerに委ね、失敗一覧へ含めず受信完了 |
-| CompletionFailed + RetryArticleCompletion | messageIdをbatchItemFailuresへ含める |
+| NoRetryCompletion（補完不要の理由または終了を決めた例外を保持） | 必要なclosed確定をConsumerに委ね、失敗一覧へ含めず受信完了 |
+| RetryCompletion | messageIdをbatchItemFailuresへ含める |
 | 本文・イベントの検証失敗 | 当該messageIdを失敗一覧へ含め、Consumerを呼ばない |
 | 個別処理で配送側の通常例外 | 当該messageIdを失敗一覧へ含める |
 | 初期化失敗、一覧の構造不正、ID欠如・重複などで失敗一覧を安全に作れない | 呼び出し全体を失敗させる |
 | 時間不足による未着手 | 未着手の全messageIdを失敗一覧へ含める |
 
+Consumerの結果を失敗と判断の二段に包まず、配送側は`RetryCompletion`を再配信へ写す。`NoRetryCompletion`の`cause`が補完不要の理由なら配送診断は`result=not_required`とreason、例外なら`result=closed`と分類コード・調査要否を記録する。元例外の自由文は出力しない。
+
 部分バッチ応答には`ReportBatchItemFailures`を設定する。不正イベントから記事をclosedにせず、配送側でHTTP分類やDBの確定をやり直さない。受信完了はLambdaの成功した部分応答に任せ、独自のメッセージ削除を追加しない。
 
 ## Retry-Afterの配送契約
 
-工程分類が返した`RetryArticleCompletion.retry_at`だけを使い、生のヘッダーを配送側で再解釈しない。元例外・判断結果・元のretry_atは変更しない。
+工程分類が返した`RetryCompletion.retry_at`だけを使い、生のヘッダーを配送側で再解釈しない。元例外・判断結果・元のretry_atは変更しない。
 
 1. retry_atがなく、または設定時点で経過済みなら可視性を変更せず、通常の再配信設定に任せる。
 2. 未来のretry_atがあれば、その時点からの残り秒数を切り上げ、最大39,600秒で`ChangeMessageVisibility`を要求する。

@@ -1,12 +1,9 @@
-"""補完の確定結果として、成功・追加処理が不要な理由・失敗後の判断を伝える。"""
+"""補完の成功または再試行の要否を、原因と待機時刻を保って伝える。"""
 
 from dataclasses import dataclass
 from typing import Literal
 
-from app.collection.article_completion.consumer_failure_classification import (
-    CloseArticleCompletion,
-    RetryArticleCompletion,
-)
+from app.collection.retry_at import RetryAt
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,15 +14,21 @@ class CompletionSucceeded:
 
 
 @dataclass(frozen=True, slots=True)
-class CompletionNotRequired:
-    """今回の記事補完を進める必要がなくなった理由を保持する。"""
+class RetryCompletion:
+    """再配信に任せる補完の失敗と、追加で待機が必要な時刻を保持する。"""
 
-    reason: Literal["missing", "closed", "superseded", "url_conflict"]
+    error: Exception
+    code: str
+    retry_at: RetryAt | None = None
+    """追加の待機指定がなければ通常の再配信に任せる。"""
+    requires_investigation: bool = False
 
 
 @dataclass(frozen=True, slots=True)
-class CompletionFailed:
-    """補完の元例外と、状態の確定を反映した工程判断を保持する。"""
+class NoRetryCompletion:
+    """受信完了にできる補完不要の理由または終了を決めた例外を保持する。"""
 
-    error: Exception
-    decision: RetryArticleCompletion | CloseArticleCompletion
+    cause: Literal["missing", "closed", "superseded", "url_conflict"] | Exception
+    code: str | None = None
+    """失敗の分類コードを保持し、補完不要の場合はNoneとする。"""
+    requires_investigation: bool = False

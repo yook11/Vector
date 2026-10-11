@@ -48,6 +48,14 @@ class CurationMessageRecorder:
                     exc_info=error,
                 )
 
+    def record_consume_failed(self, error: Exception, *, duration_ms: float) -> None:
+        self._logger.bind(duration_ms=duration_ms).error(
+            "curation_message_processing_failed",
+            operation="consume",
+            message_disposition="batch_item_failure",
+            exc_info=error,
+        )
+
     def record_consumed(
         self,
         consume_result: CurationCompletion | NoRetryCuration | RetryCuration,

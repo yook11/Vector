@@ -13,9 +13,9 @@ from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import exception_fqn
 from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
-from app.collection.article_completion.consumer_failure_classification import (
-    CloseArticleCompletion,
-    RetryArticleCompletion,
+from app.collection.article_completion.consumer_result import (
+    NoRetryCompletion,
+    RetryCompletion,
 )
 from app.collection.article_completion.errors import (
     ArticleCompletionRejectedError,
@@ -69,10 +69,12 @@ class ArticleCompletionAuditRepository:
         source_id: int | None,
         source_name: str | None,
         exc: Exception,
-        decision: RetryArticleCompletion | CloseArticleCompletion,
+        decision: RetryCompletion | NoRetryCompletion,
     ) -> None:
         """工程判断と選択した原因情報だけを監査へ写し、例外の自由文は出力しない。"""
-        retry = isinstance(decision, RetryArticleCompletion)
+        if decision.code is None:
+            raise ValueError("補完不要の結果を失敗監査へ記録できません")
+        retry = isinstance(decision, RetryCompletion)
         reason_code: str | None = None
         if isinstance(exc, HttpTransportError):
             reason_code = exc.failure.reason.value
