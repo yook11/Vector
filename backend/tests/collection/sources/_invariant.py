@@ -19,7 +19,7 @@ Ready / Observed を選びうるため、type 集合の検証を 2 段階で行�
 - ``assert_passport_types_include`` — ``must_include`` の各型を最低 1 件含む
   (= 主経路 / 副経路が壊れていないこと)
 
-``ObservedArticle`` の永続化不変条件は free function ``complete_with_html``
+``ObservedArticle`` の永続化不変条件は補完器 ``complete_article``
 (profile 駆動) で固定する: ``DEFAULT_POLICY`` + HTML 取得値で
 ``AnalyzableArticle`` に昇格できる = Stage 2 を通せば analyzable_articles に焼ける、
 という業務不変条件。
@@ -36,8 +36,10 @@ from app.collection.article_acquisition.fetched_article_converter import (
 )
 from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
-from app.collection.article_completion.content import ScrapedContent
-from app.collection.article_completion.html_completion import complete_with_html
+from app.collection.article_completion.article_completer import (
+    ExtractedContent,
+    complete_article,
+)
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
@@ -98,7 +100,7 @@ def assert_passports_persistable(
     """全 passport が永続化不変条件を満たすこと。
 
     AnalyzableArticle: Pydantic 構築が成功している = 5 fields 通過済。
-    ObservedArticle: HTML 取得値で ``complete_with_html`` (``DEFAULT_POLICY``)
+    ObservedArticle: HTML 取得値で ``complete_article`` (``DEFAULT_POLICY``)
     が AnalyzableArticle を返せる (= Stage 2 を通せば永続化できる中間状態)。
 
     ``html_published_at`` 省略時は default を入れる (Pattern H が published_at を
@@ -109,16 +111,15 @@ def assert_passports_persistable(
         if isinstance(item, AnalyzableArticle):
             continue
         assert isinstance(item, ObservedArticle)
-        promoted = complete_with_html(
+        promoted = complete_article(
             item,
-            DEFAULT_POLICY,
-            ScrapedContent(
+            ExtractedContent(
                 title="HTML Title",
                 body=html_body,
                 published_at=pub,
             ),
+            DEFAULT_POLICY,
             source_id=1,
-            source_url=item.source_url,
         )
         assert isinstance(promoted, AnalyzableArticle), (
             f"ObservedArticle could not be promoted to AnalyzableArticle: {promoted}"

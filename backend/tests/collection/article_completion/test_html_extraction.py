@@ -1,17 +1,21 @@
 """実HTMLとモック抽出器を使い、DB・外部通信なしで抽出と失敗境界を検証する。"""
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
 from trafilatura.settings import Document
 
-from app.collection.article_completion.content import RawResponse, ScrapedContent
+from app.collection.article_completion.article_completer import ExtractedContent
+from app.collection.article_completion.content import RawResponse
 from app.collection.article_completion.html_extraction import (
     HtmlExtractionError,
     HtmlExtractionFailureReason,
     extract_html_content,
 )
+from app.collection.domain.article_limits import ARTICLE_TITLE_MAX_LENGTH
+from app.collection.domain.value_objects import PublishedAt
 
 
 @pytest.fixture
@@ -56,20 +60,63 @@ def test_extracts_material_from_real_html(encoding: str) -> None:
 
 @pytest.mark.parametrize(
     ("title", "text", "expected_title", "expected_body"),
-    [(None, " Short ", None, "Short"), (" <b> </b> ", None, None, "")],
+    [(None, " Short ", None, "Short"), (" <b> </b> ", None, None, None)],
 )
 def test_returns_partial_material(
     raw, title, text, expected_title, expected_body
 ) -> None:
-    """項目が不足したDocumentも整形した素材として返す。"""
+    """項目が不足したDocumentも整形して返し、取れなかったタイトル・本文はNoneにする。"""
     with patch(
         "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
         return_value=Document(title=title, text=text, date=None),
     ):
         result = extract_html_content(raw)
-    assert result == ScrapedContent(
+    assert result == ExtractedContent(
         title=expected_title, body=expected_body, published_at=None
     )
+
+
+@pytest.mark.parametrize(
+    ("document", "expected"),
+    [
+        pytest.param(
+            Document(title="  <b>Bold &amp; Title</b>  ", text=" Body ", date=None),
+            ExtractedContent(title="Bold & Title", body="Body", published_at=None),
+            id="title_markup",
+        ),
+        pytest.param(
+            Document(
+                title="t" * (ARTICLE_TITLE_MAX_LENGTH + 10), text="Body", date=None
+            ),
+            ExtractedContent(
+                title="t" * ARTICLE_TITLE_MAX_LENGTH, body="Body", published_at=None
+            ),
+            id="title_over_limit",
+        ),
+        pytest.param(
+            Document(title="Title", text="Body", date="2026-03-15T10:30:00"),
+            ExtractedContent(
+                title="Title",
+                body="Body",
+                published_at=PublishedAt(datetime(2026, 3, 15, 10, 30, tzinfo=UTC)),
+            ),
+            id="parseable_date",
+        ),
+        pytest.param(
+            Document(title="Title", text="Body", date="not-a-date"),
+            ExtractedContent(title="Title", body="Body", published_at=None),
+            id="unparseable_date",
+        ),
+    ],
+)
+def test_formats_extracted_values(raw, document, expected) -> None:
+    """タイトルのタグ・entity・空白と長さ、本文の空白、公開日時の文字列を整形して返す。"""
+    with patch(
+        "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
+        return_value=document,
+    ):
+        result = extract_html_content(raw)
+    assert result == expected
 
 
 @pytest.mark.parametrize(
@@ -165,7 +212,10 @@ def test_material_conversion_failure_preserves_cause(raw) -> None:
             "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
             return_value=Document(title="Title", text="body", date=None),
         ),
-        patch.object(ScrapedContent, "from_extraction", side_effect=original),
+        patch(
+            "app.collection.article_completion.html_extraction._to_extracted_content",
+            side_effect=original,
+        ),
         pytest.raises(HtmlExtractionError) as caught,
     ):
         extract_html_content(raw)
@@ -210,7 +260,10 @@ def test_material_conversion_cancellation_and_exit_propagate(raw, original) -> N
             "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
             return_value=Document(title="Title", text="body", date=None),
         ),
-        patch.object(ScrapedContent, "from_extraction", side_effect=original),
+        patch(
+            "app.collection.article_completion.html_extraction._to_extracted_content",
+            side_effect=original,
+        ),
         pytest.raises(type(original)) as caught,
     ):
         extract_html_content(raw)

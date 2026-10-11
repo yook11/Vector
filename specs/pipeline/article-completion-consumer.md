@@ -212,16 +212,16 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 
 ## HTML抽出と素材の契約
 
-取得済みの`RawResponse`から同期関数`extract_html_content()`で`ScrapedContent`を返す。HTTP取得・再試行・保存は担当せず、旧Taskiqからは呼び出さない。
+取得済みの`RawResponse`から同期関数`extract_html_content()`で抽出結果`ExtractedContent`を返す。HTTP取得・再試行・保存は担当せず、旧Taskiqからは呼び出さない。
 
-- `RawResponse`と`ScrapedContent`は補完パッケージ内の`content.py`で共有し、旧`scraper.py`経由のimportも維持する。`content_type`は欠如を`None`で表せる。
+- `RawResponse`は`content.py`、`ExtractedContent`は補完器の`article_completer.py`に置き、抽出器は補完器が受け取る型を返す。`content_type`は欠如を`None`で表せる。
 - 入力はパラメーターを除去し、前後空白・大文字小文字を正規化したメディアタイプが`text/html`の応答に限る。欠如・JSON・PDF・XHTML等は`HtmlExtractionError`の理由`CONTENT_TYPE_UNSUPPORTED`で伝え、元のContent-Typeを診断情報に保持する。
 - HTTP charset指定があれば`decoded_text`を使う。指定がなければ先頭2,048バイトのHTML内charset指定を試し、指定なし・デコード失敗時は`decoded_text`へ戻る。新しい抽出処理自体はログを出力しない。
 - Trafilaturaの精度優先・コメント除外・表抽出・メタデータ・日時抽出設定は維持する。新経路の重複除去は無効にし、別記事・過去試行の履歴を理由に素材を除外しない。記事内の文章の繰り返しは許容し、独自のキャッシュ管理は追加しない。戻り値と例外は[公式の抽出API](https://trafilatura.readthedocs.io/en/latest/corefunctions.html#bare-extraction)に沿って境界で扱う。
 - `HtmlExtractionError`と`HtmlExtractionFailureReason`は`html_extraction.py`に定義する。例外は具体的な理由・固定の説明文・選択した診断情報を持ち、再試行属性や`unavailable`・`unexpected`等の中間分類を持たない。
 - 抽出結果`None`は理由`RESULT_EMPTY`、Document以外は`RESULT_TYPE_MISMATCH`とする。抽出器の通常例外は`EXTRACTOR_RAISED`、デコード中の通常例外は`HTML_DECODE_FAILED`、素材整形中の通常例外は`MATERIAL_CONVERSION_FAILED`として元例外をチェーンする。既存のHTML抽出エラーは重ねて包まず、キャンセル・プロセス終了はそのまま伝播する。
 - 理由コードはそれぞれ`content_type_unsupported`・`extraction_empty`・`extraction_result_unexpected`・`extraction_failed`・`html_decode_failed`・`extraction_material_conversion_failed`とする。結果なしから本文の不存在やサイト構造等を推測せず、抽出器から結果が得られなかった事実だけを伝える。
-- `ScrapedContent`は不変の素材であり、タイトル・公開日時の欠如を許容する。本文欠如は空文字にする。`from_extraction()`でタイトルのタグ除去・entity変換・前後空白除去・500文字への切り詰め、本文の前後空白除去、既存の日時変換を行い、空タイトルは`None`にする。
+- `ExtractedContent`は不変の抽出結果であり、抽出できなかったタイトル・本文・公開日時を`None`で表す。抽出器内でタイトルのタグ除去・entity変換・前後空白除去・500文字への切り詰め、本文の前後空白除去、既存の日時変換を行い、空のタイトル・本文は`None`にする。
 - タイトル必須・本文50文字以上等は素材の生成時に判定しない。ソース別の採用方針で観測値と統合した後、既存の`AnalyzableArticle.build_or_reject()`で完成条件を判定する。
 - 共有素材の変更に伴い、旧スクレイパーも短い本文・タイトル欠落で品質不足の早期終了をせず、統合・構築へ進む。旧経路の失敗記録も抽出品質不足から構築拒否へ移り得る。旧エラー型・ハンドラーは残し、新しい抽出エラーを旧経路へ接続しない。
 
@@ -229,9 +229,9 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 
 ## 記事の統合・構築の契約
 
-`html_completion.py`の同期関数`complete_with_html(observed, completion_policy, html, *, source_id, source_url)`は、既存の観測値と`ScrapedContent`を受け取り、完成した`AnalyzableArticle`を返す。DBの状態や試行回数を持つ`ReadyForArticleCompletion`には依存しない。対象行の存在・非closedの確認は後続の呼び出し側が担当する。
+`article_completer.py`の同期関数`complete_article(observed, extracted, completion_policy, *, source_id)`は、既存の観測値と`ExtractedContent`を受け取り、完成した`AnalyzableArticle`を返す。`source_url`は観測値から取る。DBの状態や試行回数を持つ`ReadyForArticleCompletion`には依存しない。対象行の存在・非closedの確認は後続の呼び出し側が担当する。
 
-- 既存の`ArticleCompletionPolicy.resolve()`で値を統合し、`AnalyzableArticle.build_or_reject()`で構築する。値の優先順位・欠如時の扱い・完成条件をこの関数で再定義しない。
+- `ArticleCompletionPolicy`が宣言した項目ごとのルールをこの関数で適用して値を統合し、`AnalyzableArticle.build_or_reject()`で構築する。完成条件をこの関数で再定義しない。
 - `QualityTooLow`だけを`ArticleBuildRejectedError`へ変換して投げ、`rejection`に同じ構築拒否の値を保持する。構築結果は例外ではないため、原因例外や疑似的な例外チェーンを生成しない。
 - 未分類の検証失敗や、統合・構築で投げられたその他の例外は捕捉せず伝播する。この関数とエラーは再試行判断・ログ出力を持たない。
 - 旧`completer.py`の処理は呼ばず、旧Taskiqの戻り値・接続は維持する。HTTP・DB・SQS操作、監査・保存・再試行判断と新経路への接続は後続タスクとする。
@@ -316,7 +316,7 @@ Evidence: 新Consumerは本番で成功・closedを確定し、処理結果も�
 
 - 旧Taskiqの3タスク、補完Streamの購読と監視、旧Ready・Service・試行番号付きRepository・旧スクレイパー・旧失敗分類と、その監査・メトリクス・テストを削除する。
 - 新Consumerの結果型`CompletionSucceeded`は`consumer_result.py`へ移す。
-- 記事完成のドメイン不変条件とソース別の昇格確認は、新経路の`complete_with_html`で検証する。
+- 記事完成のドメイン不変条件とソース別の昇格確認は、補完器`complete_article`で検証する。
 - `processing_outcome`の語彙から`infra_error`を、Logfireから`vector.completion.lease_swept`を外す。
 - 撤去時に`running`で残る行は、closedでない行として救済が再投入し、新経路で処理する。
 
