@@ -199,7 +199,7 @@ class TestInspectionOrder:
                 side_effect=AssertionError("must not sanitize a masked field"),
             ),
             patch(
-                "app.log_policy.value_preparation.prevent_credential_leaks",
+                "app.log_policy.value_preparation.prevent_leaks",
                 side_effect=AssertionError("must not redact a mask marker"),
             ),
         ):
@@ -310,11 +310,11 @@ class TestInspectionOrder:
 
     def test_successful_field_redacts_each_text_once(self) -> None:
         """検査段階で情報漏洩防止を実行せず、成功後に辞書のキーと値の各文字列を一度だけ処理する。"""
-        from app.log_policy.leak_prevention import prevent_credential_leaks
+        from app.log_policy.leak_prevention import prevent_leaks
 
         with patch(
-            "app.log_policy.value_preparation.prevent_credential_leaks",
-            wraps=prevent_credential_leaks,
+            "app.log_policy.value_preparation.prevent_leaks",
+            wraps=prevent_leaks,
         ) as redact:
             preparer = LogValuePreparer(BASE_DENY)
             field_value = {"password=synthetic": "token=synthetic"}
@@ -334,14 +334,14 @@ class TestTextLimits:
 
     def test_text_at_limit_is_preserved_and_redacted_once(self) -> None:
         """単一上限ちょうどの文字列は全文を計上し、一度だけ情報漏洩防止へ渡す。"""
-        from app.log_policy.leak_prevention import prevent_credential_leaks
+        from app.log_policy.leak_prevention import prevent_leaks
 
         text = "あ" * TEXT_LIMIT
         preparer = LogValuePreparer(BASE_DENY)
 
         with patch(
-            "app.log_policy.value_preparation.prevent_credential_leaks",
-            wraps=prevent_credential_leaks,
+            "app.log_policy.value_preparation.prevent_leaks",
+            wraps=prevent_leaks,
         ) as redact:
             prepared_value = preparer.prepare_field_value(text)
 
@@ -352,9 +352,7 @@ class TestTextLimits:
     def test_text_above_limit_is_replaced_without_leak_prevention(self) -> None:
         """上限をまたぐ秘密を含む文字列は、原文の文字数を加算せず情報漏洩防止も適用せず、断片を残さず置換する。"""
         budget = LogEventBudget(counted_text_chars=100)
-        with patch(
-            "app.log_policy.value_preparation.prevent_credential_leaks"
-        ) as redact:
+        with patch("app.log_policy.value_preparation.prevent_leaks") as redact:
             preparer = LogValuePreparer(BASE_DENY, budget=budget)
             # 合成値を分割し、秘密検出ツールの規則に一致させない。
             field_value = (
@@ -381,13 +379,13 @@ class TestTextLimits:
 
     def test_nested_long_text_is_not_passed_to_leak_prevention(self) -> None:
         """長すぎる文字列だけ置換し、原文を情報漏洩防止へ渡さず正常な兄弟だけ処理する。"""
-        from app.log_policy.leak_prevention import prevent_credential_leaks
+        from app.log_policy.leak_prevention import prevent_leaks
 
         text = "x" * (TEXT_LIMIT + 1)
         payload = {"first": "password=synthetic", "nested": [text]}
         with patch(
-            "app.log_policy.value_preparation.prevent_credential_leaks",
-            wraps=prevent_credential_leaks,
+            "app.log_policy.value_preparation.prevent_leaks",
+            wraps=prevent_leaks,
         ) as redact:
             preparer = LogValuePreparer(BASE_DENY)
             field_value = payload
@@ -447,9 +445,7 @@ class TestSharedBudget:
         budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 1)
         preparer = LogValuePreparer(BASE_DENY, budget=budget)
 
-        with patch(
-            "app.log_policy.value_preparation.prevent_credential_leaks"
-        ) as redact:
+        with patch("app.log_policy.value_preparation.prevent_leaks") as redact:
             with pytest.raises(LogBudgetExceeded, match="^value_count$"):
                 preparer.prepare_field_value(["token=first", "password=second"])
 
@@ -479,9 +475,7 @@ class TestSharedBudget:
         )
         preparer = LogValuePreparer(BASE_DENY, budget=budget)
 
-        with patch(
-            "app.log_policy.value_preparation.prevent_credential_leaks"
-        ) as redact:
+        with patch("app.log_policy.value_preparation.prevent_leaks") as redact:
             with pytest.raises(LogBudgetExceeded, match="^text_total$"):
                 preparer.prepare_field_value(["token=first", "password=second"])
 

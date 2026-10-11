@@ -468,6 +468,56 @@ class TestLeakPrevention:
             "connection to postgresql://[redacted:url_userinfo]@db:5432/v refused"
         )
 
+    def test_internal_url_inside_allowed_text_is_redacted(
+        self, configure_chain
+    ) -> None:
+        """許可した自由文に混入した内部宛先のURLを置き換え、原因文は残す。"""
+        capture = configure_chain()
+        logger = policy_logger("test", _INFRA_RULES)
+        logger.warning(
+            "fetch_failed",
+            error_message="Client error '403 Forbidden' for url 'http://10.0.0.5/a'",
+        )
+        assert capture.entries[0]["error_message"] == (
+            "Client error '403 Forbidden' for url '[redacted:internal_url]'"
+        )
+
+    def test_internal_address_in_exception_chain_is_redacted(self) -> None:
+        """ライブラリの例外の原因文に出た内部IPを、原因の連鎖まで置き換える。"""
+        failure = RuntimeError("database unavailable")
+        failure.__cause__ = OSError(
+            "Multiple exceptions: [Errno 61] Connect call failed ('127.0.0.1', 5433), "
+            "[Errno 61] Connect call failed ('::1', 5433, 0, 0)"
+        )
+
+        output = LogPolicyProcessor()(
+            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+            "error",
+            {"event": "failed", "exc_info": failure},
+        )
+
+        assert output == {
+            "event": "failed",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "database unavailable",
+            "frames": [],
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "builtins.OSError",
+                        "error_message": (
+                            "Multiple exceptions: [Errno 61] Connect call failed "
+                            "('[redacted:internal_ip]', 5433), [Errno 61] Connect call "
+                            "failed ('[redacted:internal_ip]', 5433, 0, 0)"
+                        ),
+                        "frames": [],
+                    },
+                }
+            ],
+        }
+
     def test_event_string_is_redacted(self, configure_chain) -> None:
         """event 文字列に混入した credential も置換される。"""
         capture = configure_chain()
@@ -1072,7 +1122,7 @@ class TestProcessingFailures:
         def fail(text):
             raise ValueError("synthetic-private-key")
 
-        monkeypatch.setattr("app.log_policy.diagnostics.prevent_credential_leaks", fail)
+        monkeypatch.setattr("app.log_policy.diagnostics.prevent_leaks", fail)
         prepared_event = LogPolicyProcessor()(
             PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
             "info",
@@ -1091,9 +1141,7 @@ class TestProcessingFailures:
         def fail(*_, **__):
             raise ValueError(_SECRET)
 
-        monkeypatch.setattr(
-            "app.log_policy.value_preparation.prevent_credential_leaks", fail
-        )
+        monkeypatch.setattr("app.log_policy.value_preparation.prevent_leaks", fail)
         output = LogPolicyProcessor()(
             PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
             "error",
@@ -1112,9 +1160,7 @@ class TestProcessingFailures:
         def fail(*_, **__):
             raise ValueError(_SECRET)
 
-        monkeypatch.setattr(
-            "app.log_policy.value_preparation.prevent_credential_leaks", fail
-        )
+        monkeypatch.setattr("app.log_policy.value_preparation.prevent_leaks", fail)
         processed_methods = []
         original = LogPolicyProcessor.__call__
 
