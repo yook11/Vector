@@ -220,7 +220,7 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 - Trafilaturaの精度優先・コメント除外・表抽出・メタデータ・日時抽出設定は維持する。新経路の重複除去は無効にし、別記事・過去試行の履歴を理由に素材を除外しない。記事内の文章の繰り返しは許容し、独自のキャッシュ管理は追加しない。戻り値と例外は[公式の抽出API](https://trafilatura.readthedocs.io/en/latest/corefunctions.html#bare-extraction)に沿って境界で扱う。
 - `HtmlExtractionError`と`HtmlExtractionFailureReason`は`html_extraction.py`に定義する。例外は具体的な理由・固定の説明文・選択した診断情報を持ち、再試行属性や`unavailable`・`unexpected`等の中間分類を持たない。
 - 抽出結果`None`は理由`RESULT_EMPTY`、Document以外は`RESULT_TYPE_MISMATCH`とする。抽出器の通常例外は`EXTRACTOR_RAISED`、デコード中の通常例外は`HTML_DECODE_FAILED`、素材整形中の通常例外は`MATERIAL_CONVERSION_FAILED`として元例外をチェーンする。既存のHTML抽出エラーは重ねて包まず、キャンセル・プロセス終了はそのまま伝播する。
-- 理由コードはそれぞれ`content_type_unsupported`・`extraction_empty`・`extraction_result_unexpected`・`extraction_failed`・`html_decode_failed`・`extraction_material_conversion_failed`で、既存4種類のコードを維持する。結果なしから本文の不存在やサイト構造等を推測せず、抽出器から結果が得られなかった事実だけを伝える。
+- 理由コードはそれぞれ`content_type_unsupported`・`extraction_empty`・`extraction_result_unexpected`・`extraction_failed`・`html_decode_failed`・`extraction_material_conversion_failed`とする。結果なしから本文の不存在やサイト構造等を推測せず、抽出器から結果が得られなかった事実だけを伝える。
 - `ScrapedContent`は不変の素材であり、タイトル・公開日時の欠如を許容する。本文欠如は空文字にする。`from_extraction()`でタイトルのタグ除去・entity変換・前後空白除去・500文字への切り詰め、本文の前後空白除去、既存の日時変換を行い、空タイトルは`None`にする。
 - タイトル必須・本文50文字以上等は素材の生成時に判定しない。ソース別の採用方針で観測値と統合した後、既存の`AnalyzableArticle.build_or_reject()`で完成条件を判定する。
 - 共有素材の変更に伴い、旧スクレイパーも短い本文・タイトル欠落で品質不足の早期終了をせず、統合・構築へ進む。旧経路の失敗記録も抽出品質不足から構築拒否へ移り得る。旧エラー型・ハンドラーは残し、新しい抽出エラーを旧経路へ接続しない。
