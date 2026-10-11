@@ -18,6 +18,7 @@ from app.collection.article_completion.consumer_result import (
     NoRetryCompletion,
     RetryCompletion,
 )
+from app.collection.article_completion.errors import ArticleCompletionError
 from app.collection.article_completion.metrics import (
     record_completion_processing_outcome,
 )
@@ -34,7 +35,7 @@ class ArticleCompletionConsumerFailureHandler:
 
     async def handle(
         self,
-        exc: Exception,
+        exc: ArticleCompletionError,
         *,
         incomplete_article_id: int,
         incomplete: RecordedIncompleteArticle | None,
@@ -51,7 +52,7 @@ class ArticleCompletionConsumerFailureHandler:
                         return NoRetryCompletion(cause="superseded")
                     await session.commit()
             except Exception as close_error:
-                exc = close_error
+                exc = ArticleCompletionError(cause=close_error)
                 decision = classify_completion_failure(exc, now=datetime.now(UTC))
 
         try:

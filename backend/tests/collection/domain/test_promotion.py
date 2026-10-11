@@ -6,10 +6,11 @@
 - title ``html_preferred``: HTML title が正本になる (旧 anthropic/ornl)
 - title ``observed_preferred``: 観測 title が常勝 (旧 default。観測常在のため)
 - published_at ``observed_preferred``: 観測優先 / HTML fallback / 両欠は
-  ``ArticleCompletionRejectedError`` (必須 Field 違反として拒否する)
+  ``ArticleBuildRejectedError`` (必須 Field 違反として拒否する)
 - **観測 body があっても ``html_required`` のとき完成 body は HTML 由来**
   (取れた事実を全部保存しても merge は不変 = forward-compat の核)
-- ``AnalyzableArticle`` invariant 違反は ``ArticleCompletionRejectedError`` で拒否する
+- ``AnalyzableArticle`` invariant 違反は ``ArticleBuildRejectedError``
+  で拒否する
 """
 
 from __future__ import annotations
@@ -19,11 +20,12 @@ from datetime import UTC, datetime
 import pytest
 
 from app.collection.article_completion.content import ScrapedContent
-from app.collection.article_completion.errors import ArticleCompletionRejectedError
+from app.collection.article_completion.errors import ArticleBuildRejectedError
 from app.collection.article_completion.html_completion import complete_with_html
 from app.collection.domain.analyzable_article import (
     AnalyzableArticle,
     AnalyzableArticleDefect,
+    QualityTooLow,
 )
 from app.collection.domain.article_url import ArticleUrl
 from app.collection.domain.observed_article import (
@@ -114,10 +116,13 @@ def test_published_at_falls_back_to_html_when_observed_absent() -> None:
 
 def test_published_at_missing_both_fails_as_invariant_rejected() -> None:
     """published_at が観測 / HTML 両欠 → 必須 Field 違反として
-    ``ArticleCompletionRejectedError`` で拒否する (title/body/source_id と同種)。"""
-    with pytest.raises(ArticleCompletionRejectedError) as caught:
+    ``ArticleBuildRejectedError`` で拒否する
+    (title/body/source_id と同種)。"""
+    with pytest.raises(ArticleBuildRejectedError) as caught:
         _promote(_observed(published=None), DEFAULT_POLICY, _html(published=None))
-    assert caught.value.defects == (AnalyzableArticleDefect.PUBLISHED_AT_MISSING,)
+    assert caught.value.rejection == QualityTooLow(
+        defects=(AnalyzableArticleDefect.PUBLISHED_AT_MISSING,)
+    )
 
 
 def test_observed_body_is_ignored_when_body_html_required() -> None:
@@ -135,6 +140,8 @@ def test_observed_body_is_ignored_when_body_html_required() -> None:
 
 def test_analyzable_invariant_violation_wrapped_as_invariant_rejected() -> None:
     """``AnalyzableArticle`` の Field invariant 違反は名前付きの拒否理由で伝える。"""
-    with pytest.raises(ArticleCompletionRejectedError) as caught:
+    with pytest.raises(ArticleBuildRejectedError) as caught:
         _promote(_observed(), DEFAULT_POLICY, _html(), source_id=0)
-    assert caught.value.defects == (AnalyzableArticleDefect.SOURCE_ID_INVALID,)
+    assert caught.value.rejection == QualityTooLow(
+        defects=(AnalyzableArticleDefect.SOURCE_ID_INVALID,)
+    )

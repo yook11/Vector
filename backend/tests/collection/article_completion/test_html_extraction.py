@@ -1,4 +1,4 @@
-"""新経路のHTML抽出と、抽出器との失敗境界。"""
+"""実HTMLとモック抽出器を使い、DB・外部通信なしで抽出と失敗境界を検証する。"""
 
 import asyncio
 from unittest.mock import patch
@@ -7,13 +7,11 @@ import pytest
 from trafilatura.settings import Document
 
 from app.collection.article_completion.content import RawResponse, ScrapedContent
-from app.collection.article_completion.errors import (
-    ArticleContentTypeError,
-    ArticleExtractionCrashedError,
-    ArticleExtractionCrashReason,
-    ArticleExtractionEmptyError,
+from app.collection.article_completion.html_extraction import (
+    HtmlExtractionError,
+    HtmlExtractionFailureReason,
+    extract_html_content,
 )
-from app.collection.article_completion.html_extraction import extract_html_content
 
 
 @pytest.fixture
@@ -95,9 +93,13 @@ def test_rejects_non_html_with_original_content_type(content_type) -> None:
         content=b"{}",
         decoded_text="{}",
     )
-    with pytest.raises(ArticleContentTypeError) as caught:
+    with pytest.raises(HtmlExtractionError) as caught:
         extract_html_content(raw)
-    assert caught.value.content_type == content_type
+    assert caught.value.reason is HtmlExtractionFailureReason.CONTENT_TYPE_UNSUPPORTED
+    assert caught.value.details == {
+        "content_type": content_type,
+        "reason": "content_type_unsupported",
+    }
 
 
 def test_no_result_is_extraction_empty(raw) -> None:
@@ -107,22 +109,23 @@ def test_no_result_is_extraction_empty(raw) -> None:
             "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
             return_value=None,
         ),
-        pytest.raises(ArticleExtractionEmptyError),
+        pytest.raises(HtmlExtractionError) as caught,
     ):
         extract_html_content(raw)
+    assert caught.value.reason is HtmlExtractionFailureReason.RESULT_EMPTY
 
 
-def test_unexpected_result_is_extraction_crash(raw) -> None:
-    """Document以外の結果は想定外結果として伝える。"""
+def test_non_document_result_reports_type_mismatch(raw) -> None:
+    """Document以外の結果は戻り値の型不一致として伝える。"""
     with (
         patch(
             "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
             return_value={"text": "body"},
         ),
-        pytest.raises(ArticleExtractionCrashedError) as caught,
+        pytest.raises(HtmlExtractionError) as caught,
     ):
         extract_html_content(raw)
-    assert caught.value.reason == ArticleExtractionCrashReason.UNEXPECTED_RESULT
+    assert caught.value.reason is HtmlExtractionFailureReason.RESULT_TYPE_MISMATCH
 
 
 def test_parser_exception_preserves_cause(raw) -> None:
@@ -133,10 +136,10 @@ def test_parser_exception_preserves_cause(raw) -> None:
             "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
             side_effect=original,
         ),
-        pytest.raises(ArticleExtractionCrashedError) as caught,
+        pytest.raises(HtmlExtractionError) as caught,
     ):
         extract_html_content(raw)
-    assert caught.value.reason == ArticleExtractionCrashReason.EXCEPTION
+    assert caught.value.reason is HtmlExtractionFailureReason.EXTRACTOR_RAISED
     assert caught.value.__cause__ is original
 
 
@@ -154,8 +157,8 @@ def test_cancellation_and_exit_propagate(raw, original) -> None:
     assert caught.value is original
 
 
-def test_material_conversion_exception_propagates(raw) -> None:
-    """抽出器の呼び出し外で起きた例外は抽出異常に変換しない。"""
+def test_material_conversion_failure_preserves_cause(raw) -> None:
+    """素材整形で起きた例外は整形失敗の理由と元の原因を保って伝える。"""
     original = RuntimeError("material conversion failed")
     with (
         patch(
@@ -163,7 +166,69 @@ def test_material_conversion_exception_propagates(raw) -> None:
             return_value=Document(title="Title", text="body", date=None),
         ),
         patch.object(ScrapedContent, "from_extraction", side_effect=original),
-        pytest.raises(RuntimeError) as caught,
+        pytest.raises(HtmlExtractionError) as caught,
+    ):
+        extract_html_content(raw)
+    assert caught.value.reason is HtmlExtractionFailureReason.MATERIAL_CONVERSION_FAILED
+    assert caught.value.__cause__ is original
+
+
+def test_decode_failure_preserves_cause(raw) -> None:
+    """デコード中の例外は文字列変換の失敗理由と元の原因を保って伝える。"""
+    original = RuntimeError("decode failed")
+    with (
+        patch(
+            "app.collection.article_completion.html_extraction._decode_html_response",
+            side_effect=original,
+        ),
+        pytest.raises(HtmlExtractionError) as caught,
+    ):
+        extract_html_content(raw)
+    assert caught.value.reason is HtmlExtractionFailureReason.HTML_DECODE_FAILED
+    assert caught.value.__cause__ is original
+
+
+@pytest.mark.parametrize("original", [asyncio.CancelledError(), SystemExit(1)])
+def test_decode_cancellation_and_exit_propagate(raw, original) -> None:
+    """デコード中のキャンセルとプロセス終了はHTML抽出エラーに変換しない。"""
+    with (
+        patch(
+            "app.collection.article_completion.html_extraction._decode_html_response",
+            side_effect=original,
+        ),
+        pytest.raises(type(original)) as caught,
+    ):
+        extract_html_content(raw)
+    assert caught.value is original
+
+
+@pytest.mark.parametrize("original", [asyncio.CancelledError(), SystemExit(1)])
+def test_material_conversion_cancellation_and_exit_propagate(raw, original) -> None:
+    """素材整形中のキャンセルとプロセス終了はHTML抽出エラーに変換しない。"""
+    with (
+        patch(
+            "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
+            return_value=Document(title="Title", text="body", date=None),
+        ),
+        patch.object(ScrapedContent, "from_extraction", side_effect=original),
+        pytest.raises(type(original)) as caught,
+    ):
+        extract_html_content(raw)
+    assert caught.value is original
+
+
+def test_existing_html_extraction_error_is_not_wrapped_again(raw) -> None:
+    """既に理由を持つHTML抽出エラーは同じオブジェクトのまま伝播する。"""
+    original = HtmlExtractionError(
+        reason=HtmlExtractionFailureReason.EXTRACTOR_RAISED,
+        message="抽出器内の処理で失敗しました",
+    )
+    with (
+        patch(
+            "app.collection.article_completion.html_extraction.trafilatura.bare_extraction",
+            side_effect=original,
+        ),
+        pytest.raises(HtmlExtractionError) as caught,
     ):
         extract_html_content(raw)
     assert caught.value is original

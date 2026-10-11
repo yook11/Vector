@@ -166,6 +166,7 @@ PR作成前の最終検証（2026-09-14）: handlerの配送判断とrecorderの
 配送の診断はLambdaの構造化JSONログからCloudWatch Logsへ出し、ConsumerのDB監査とは分ける。
 
 - 検証できたmessage ID・event ID・未完成記事ID、工程名、処理結果・正常終了理由、判断code、requires_investigationを明示的に選ぶ。
+- 工程の失敗は`error_chain`に原因連鎖の型名を記録する。HTML抽出は`failure_kind=html_extraction`と`reason_code`、文字列のContent-Typeがある場合は`content_type`を記録する。構築拒否は`failure_kind=article_build`と全`defects`を記録する。同じ項目をConsumerの失敗監査にも残し、例外の自由文や未選択の診断情報は転記しない。
 - 待機の元のretry_at、要求した秒数、API成功時に設定できた秒数、上限適用の有無、設定失敗を区別する。
 - 入力不正、初期化・解放・可視性変更の失敗、時間不足による未着手を区別する。
 - 本文・イベント全体・生のヘッダー・receiptHandle・資格情報・例外の自由文は出さない。必要な例外情報は型名と選択した安定コードに限る。

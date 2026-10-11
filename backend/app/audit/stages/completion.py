@@ -18,9 +18,10 @@ from app.collection.article_completion.consumer_result import (
     RetryCompletion,
 )
 from app.collection.article_completion.errors import (
-    ArticleCompletionRejectedError,
-    ArticleExtractionCrashedError,
+    ArticleBuildRejectedError,
+    ArticleCompletionError,
 )
+from app.collection.article_completion.html_extraction import HtmlExtractionError
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.http.errors import HttpResponseError, HttpTransportError
 
@@ -68,18 +69,27 @@ class ArticleCompletionAuditRepository:
         incomplete_article_id: int,
         source_id: int | None,
         source_name: str | None,
-        exc: Exception,
+        exc: ArticleCompletionError,
         decision: RetryCompletion | NoRetryCompletion,
     ) -> None:
         """工程判断と選択した原因情報だけを監査へ写し、例外の自由文は出力しない。"""
         if decision.code is None:
             raise ValueError("補完不要の結果を失敗監査へ記録できません")
         retry = isinstance(decision, RetryCompletion)
+        cause = exc.cause
         reason_code: str | None = None
-        if isinstance(exc, HttpTransportError):
-            reason_code = exc.failure.reason.value
-        elif isinstance(exc, ArticleExtractionCrashedError):
-            reason_code = exc.reason.value
+        failure_kind: str | None = None
+        content_type: str | None = None
+        if isinstance(cause, HttpTransportError):
+            reason_code = cause.failure.reason.value
+        elif isinstance(cause, HtmlExtractionError):
+            failure_kind = "html_extraction"
+            reason_code = cause.reason.value
+            observed_content_type = (cause.details or {}).get("content_type")
+            if isinstance(observed_content_type, str):
+                content_type = observed_content_type
+        elif isinstance(cause, ArticleBuildRejectedError):
+            failure_kind = "article_build"
         await self._append_event(
             event_type=EventType.FAILED if retry else EventType.REJECTED,
             outcome_code=decision.code,
@@ -87,14 +97,16 @@ class ArticleCompletionAuditRepository:
                 incomplete_article_id=incomplete_article_id,
                 source_name=source_name,
                 failure_action="retry" if retry else "close",
+                failure_kind=failure_kind,
                 error_chain=extract_error_chain(exc),
                 reason_code=reason_code,
-                http_status=exc.status_code
-                if isinstance(exc, HttpResponseError)
+                content_type=content_type,
+                http_status=cause.status_code
+                if isinstance(cause, HttpResponseError)
                 else None,
                 defects=(
-                    [defect.value for defect in exc.defects]
-                    if isinstance(exc, ArticleCompletionRejectedError)
+                    [defect.value for defect in cause.rejection.defects]
+                    if isinstance(cause, ArticleBuildRejectedError)
                     else None
                 ),
             ),
