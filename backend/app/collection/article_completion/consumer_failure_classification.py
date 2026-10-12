@@ -25,7 +25,7 @@ from app.collection.external_fetch_failure import (
     RetryableFetchFailure,
     classify_external_fetch_failure,
 )
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
 
 
@@ -36,7 +36,7 @@ def classify_completion_failure(
         case ArticleCompletionError(
             cause=HttpResponseError()
             | HttpTransportError()
-            | HostBlockedError() as cause
+            | DestinationRejectedError() as cause
         ):
             match classify_external_fetch_failure(cause, now=now):
                 case RetryableFetchFailure(

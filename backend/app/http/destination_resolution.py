@@ -6,16 +6,22 @@ import asyncio
 import socket
 
 from app.http.destination_policy import (
-    HostBlockedError,
-    HostBlockedReason,
+    DestinationRejectedError,
+    DestinationRejectedReason,
     NonPublicIpAddress,
     PublicIpAddress,
     classify_ip_address,
 )
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 
-
-class HostResolutionError(Exception):
-    """名前解決で有効なIP一覧を取得できなかった。"""
+_DNS_RESOLUTION_FAILURE = HttpTransportFailure(
+    HttpTransportStage.PREPARATION, HttpTransportFailureReason.DNS_RESOLUTION
+)
 
 
 async def _resolve_host(host: str) -> list[str]:
@@ -38,8 +44,9 @@ async def resolve_public_host_addresses(host: str) -> tuple[PublicIpAddress, ...
         DNS解決結果の順序を保持した、1件以上の検証済みアドレスのタプル。
 
     Raises:
-        HostBlockedError: いずれかの解決結果が public でない。
-        HostResolutionError: DNS解決に失敗したか、結果が空またはIP形式でない。
+        DestinationRejectedError: いずれかの解決結果が public でない。
+        HttpTransportError: DNS解決に失敗した。
+        RuntimeError: 解決結果が空またはIP形式でない。
 
     Note:
         本関数は名前解決結果を検証し、実際の接続先は保証しない。
@@ -47,27 +54,26 @@ async def resolve_public_host_addresses(host: str) -> tuple[PublicIpAddress, ...
         プロキシ自身が解決した接続先に非公開IP拒否を適用する。
     """
     try:
-        resolved = await _resolve_host(host)
+        dns_resolved_ips = await _resolve_host(host)
     except socket.gaierror as e:
-        msg = f"DNS resolution failed for host: {host}: {e}"
-        raise HostResolutionError(msg) from e
+        raise HttpTransportError(failure=_DNS_RESOLUTION_FAILURE) from e
 
-    if not resolved:
-        msg = f"DNS resolution returned no addresses for host: {host}"
-        raise HostResolutionError(msg)
+    # getaddrinfoは成功時に1件以上の数値IPを返すため、
+    # 空やIPでない結果は通信失敗ではなく前提の崩れとして扱う。
+    if not dns_resolved_ips:
+        raise RuntimeError("名前解決が成功したのに結果が空でした")
 
-    addrs: list[PublicIpAddress] = []
-    for addr in resolved:
-        match classify_ip_address(addr):
+    public_ips: list[PublicIpAddress] = []
+    for dns_resolved_ip in dns_resolved_ips:
+        match classify_ip_address(dns_resolved_ip):
             case PublicIpAddress() as public:
-                addrs.append(public)
+                public_ips.append(public)
             case NonPublicIpAddress():
-                raise HostBlockedError(
-                    reason=HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+                raise DestinationRejectedError(
+                    reason=DestinationRejectedReason.RESOLVED_TO_NON_PUBLIC,
                     host=host,
-                    address=addr,
+                    address=dns_resolved_ip,
                 )
             case None:
-                msg = f"DNS resolution returned an invalid address for host: {host}"
-                raise HostResolutionError(msg)
-    return tuple(addrs)
+                raise RuntimeError("名前解決の結果にIPとして読めない値がありました")
+    return tuple(public_ips)

@@ -13,8 +13,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx2
 import pytest
 
-from app.http.destination_policy import HostBlockedError, HostBlockedReason
-from app.http.destination_resolution import HostResolutionError
+from app.http.destination_policy import (
+    DestinationRejectedError,
+    DestinationRejectedReason,
+)
+from app.http.errors import HttpTransportError
 from app.http.external import (
     _PinnedDnsTransport,
     make_external_async_client,
@@ -166,7 +169,7 @@ class TestDestinationValidationBeforeSend:
         """禁止IPへ解決されたホストは送信前に拒否する。"""
         with _patch_resolver("10.0.0.1"):
             async with external_client() as client:
-                with pytest.raises(HostBlockedError):
+                with pytest.raises(DestinationRejectedError):
                     await client.get("http://internal.example/")
         assert captured_requests == []
 
@@ -179,7 +182,7 @@ class TestDestinationValidationBeforeSend:
         """ループバックへ解決されたホストに送信しない。"""
         with _patch_resolver("127.0.0.1"):
             async with external_client() as client:
-                with pytest.raises(HostBlockedError):
+                with pytest.raises(DestinationRejectedError):
                     await client.get("http://localhost-alias.example.com/")
         assert captured_requests == []
 
@@ -192,7 +195,7 @@ class TestDestinationValidationBeforeSend:
         """メタデータIPへ解決されたホストに送信しない。"""
         with _patch_resolver("169.254.169.254"):
             async with external_client() as client:
-                with pytest.raises(HostBlockedError):
+                with pytest.raises(DestinationRejectedError):
                     await client.get("http://metadata-alias.example/")
         assert captured_requests == []
 
@@ -212,15 +215,15 @@ class TestDestinationValidationBeforeSend:
         assert len(captured_requests) == 1
 
     @pytest.mark.asyncio
-    async def test_propagates_host_resolution_error(
+    async def test_propagates_dns_failure_as_transport_error(
         self,
         external_client: Callable[[], httpx2.AsyncClient],
         captured_requests: list[httpx2.Request],
     ) -> None:
-        """DNS失敗を伝播し、送信処理には進まない。"""
+        """DNS失敗を通信エラーとしてそのまま伝え、送信処理には進まない。"""
         with _patch_resolver(socket.gaierror("name unknown")):
             async with external_client() as client:
-                with pytest.raises(HostResolutionError):
+                with pytest.raises(HttpTransportError):
                     await client.get("https://nonexistent.invalid/")
         assert captured_requests == []
 
@@ -232,11 +235,11 @@ class TestDestinationValidationBeforeSend:
     ) -> None:
         """非公開IPの直書きは、transportが送信前にIP直書きとして拒否する。"""
         async with external_client() as client:
-            with pytest.raises(HostBlockedError) as caught:
+            with pytest.raises(DestinationRejectedError) as caught:
                 await client.get("http://10.0.0.1/")
         assert captured_requests == []
         assert (caught.value.reason, caught.value.host, caught.value.address) == (
-            HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
             "10.0.0.1",
             "10.0.0.1",
         )
@@ -274,7 +277,7 @@ class TestDestinationValidationBeforeSend:
         """公開IPも返る場合に禁止IPを無視して送信へ進まない。"""
         with _patch_resolver(*addresses):
             async with external_client() as client:
-                with pytest.raises(HostBlockedError):
+                with pytest.raises(DestinationRejectedError):
                     await client.get("https://mixed.example/")
         assert captured_requests == []
 
@@ -284,10 +287,10 @@ class TestDestinationValidationBeforeSend:
         external_client: Callable[[], httpx2.AsyncClient],
         captured_requests: list[httpx2.Request],
     ) -> None:
-        """IPを取得できなかった場合は送信へ進まず解決失敗を伝える。"""
+        """IPを取得できなかった場合は送信へ進まない。"""
         with _patch_resolver():
             async with external_client() as client:
-                with pytest.raises(HostResolutionError):
+                with pytest.raises(RuntimeError):
                     await client.get("https://empty.example/")
         assert captured_requests == []
 
@@ -309,7 +312,7 @@ class TestDestinationValidationBeforeSend:
         """不正なIPが混ざる場合は一部の公開IPだけで送信へ進まない。"""
         with _patch_resolver(*addresses):
             async with external_client() as client:
-                with pytest.raises(HostResolutionError):
+                with pytest.raises(RuntimeError):
                     await client.get("https://invalid.example/")
         assert captured_requests == []
 
@@ -494,7 +497,7 @@ class TestRedirectDestinationValidation:
             new=AsyncMock(side_effect=[["8.8.8.8"], ["10.0.0.1"]]),
         ):
             async with make_external_async_client(follow_redirects=True) as client:
-                with pytest.raises(HostBlockedError):
+                with pytest.raises(DestinationRejectedError):
                     await client.get("https://start.example/article")
         assert redirect_requests == ["https://start.example/article"]
 

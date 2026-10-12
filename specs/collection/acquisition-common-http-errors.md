@@ -21,20 +21,20 @@ Status: Implemented
 
 - 成功応答の本文を10MiBまで受け取り、本文と復号に使う符号化方式を返す。申告されたContent-Lengthか展開後に読んだ量が上限を超えたら受信を中断し、`ResponseSizeLimitExceededError`にする。応答受信直後・status確認前にUTCの受信時刻を記録し、非成功応答は`HttpResponseError`（status・受信時刻・生のRetry-After）にする。
 - 通信失敗は`HttpTransportError`（段階・理由）にし、元の例外を原因に残す。
-- 宛先拒否`HostBlockedError`と、通信失敗と確認できない例外は元のまま伝える。
+- 宛先拒否`DestinationRejectedError`と、通信失敗と確認できない例外は元のまま伝える。
 - clientの生成、timeout、既定のUser-Agent、本文の受け取りと上限はこの関数が持つ。readerが渡すのは、URL・query・Accept・宛先固有のUser-Agent（Crossrefの連絡先）だけとする。
 
 ## 取得のエラー
 
 - `AcquisitionError`・`AcquisitionReadError`・`map_origin_to_acquisition`を撤去し、取得・読取の失敗は発生した例外のまま伝える。
-- `RssFeedErrors`はフィードごとの失敗（`HttpResponseError`・`HttpTransportError`・`HostBlockedError`・`UnreadableResponseError`）を保持するだけとし、再試行可否を持たない。
+- `RssFeedErrors`はフィードごとの失敗（`HttpResponseError`・`HttpTransportError`・`DestinationRejectedError`・`UnreadableResponseError`）を保持するだけとし、再試行可否を持たない。
 - 読取失敗`UnreadableResponseError`は取得工程のエラーとして維持する。
 
 ## 監査の記録
 
 | 例外 | outcome_code | retryability | failure_kind | payload |
 |---|---|---|---|---|
-| `HttpResponseError`・`HttpTransportError`・`HostBlockedError` | 外部取得の失敗判断のcode | 判断が再試行可能ならretryable、不可ならnon_retryable | `external_fetch` | `http_status`（応答）、`reason_code`（通信失敗の理由）。`error_message`なし |
+| `HttpResponseError`・`HttpTransportError`・`DestinationRejectedError` | 外部取得の失敗判断のcode | 判断が再試行可能ならretryable、不可ならnon_retryable | `external_fetch` | `http_status`（応答）、`reason_code`（通信失敗の理由）。`error_message`なし |
 | `UnreadableResponseError` | `reason.value`（`read_*`） | non_retryable | `unreadable_response` | `read_format`・`read_field`・`read_parser_position`、PII-freeの既定メッセージ |
 | `ResponseSizeLimitExceededError` | `source_response_size_limit_exceeded` | non_retryable | `response_size_limit_exceeded` | 数値と根拠だけの定型メッセージ |
 | `RssFeedErrors` | `rss_feed_errors` | どれか1つのフィードが再試行可能ならretryable | `rss_feeds` | `feed_failures`の各要素に`code`・`http_status`・`reason_code` |

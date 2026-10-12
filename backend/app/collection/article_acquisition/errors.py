@@ -10,7 +10,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
 from app.collection.response_size import ResponseSizeBasis
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
 
 
@@ -61,7 +61,7 @@ class RssFeedFailure:
     error: (
         HttpResponseError
         | HttpTransportError
-        | HostBlockedError
+        | DestinationRejectedError
         | UnreadableResponseError
         | ResponseSizeLimitExceededError
     )

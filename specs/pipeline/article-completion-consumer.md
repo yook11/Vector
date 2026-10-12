@@ -154,7 +154,7 @@ HTTPの通信失敗・エラー応答は`app/http/`の全工程共通エラー�
 
 | 原因 | 対処 | 調査対象・補足 |
 |---|---|---|
-| HttpResponseError、HttpTransportError、HostBlockedError | 外部取得の失敗判断に従う | 再試行可能なら再試行、再試行不可なら終了。code・retry_at・調査対象は判断の値をそのまま使う |
+| HttpResponseError、HttpTransportError、DestinationRejectedError | 外部取得の失敗判断に従う | 再試行可能なら再試行、再試行不可なら終了。code・retry_at・調査対象は判断の値をそのまま使う |
 | FetchDeadlineExceededError | 再試行 | 取得全体の期限切れ |
 | RobotsDisallowedError | 終了 | robotsルールによる明示的な拒否 |
 | ResponseSizeLimitExceededError | 終了 | 現在の取得条件では扱えない |
@@ -245,7 +245,7 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 - robots・記事とも10MiBを上限とし、上限ちょうどは受け入れる。ステータス判定後、解釈できる非負整数のContent-Lengthが超過していれば本文を読まず拒否する。欠如・不正値・過小申告時も、64KiB単位で渡される圧縮展開後の本文を累積確認し、超過チャンクを保持せず受信を中断する。
 - サイズ超過は`ResponseSizeLimitExceededError`が、`resource`（`ROBOTS_TXT` / `ARTICLE_PAGE`）・上限・確認したサイズ・`size_basis`（`DECLARED_CONTENT_LENGTH` / `RECEIVED_DECODED_BODY`）を保持する。`resource`は原因ではなく取得していたもの、`size_basis`は申告値か受信・展開後の実測値かという判定の根拠を表す。中断時のサイズを最終的な全体サイズとは扱わず、本文上限をSDKの一時展開を含むプロセス全体の厳密なメモリ上限とはしない。
 - 通信待ち時間と取得全体の期限は、robotsが10秒、記事が30秒とする。記事の期限はrobots確認後に開始する。`asyncio.timeout()`で接続準備・応答待ち・本文受信を囲み、自身の期限切れだけを`FetchDeadlineExceededError`（取得していた`resource`・制限秒数）へ変換する。期限で受信を中断して資源を解放するが、後始末を含む厳密な実時間上限とはしない。ルール解析・HTML抽出・記事構築・DB保存は取得期限に含めない。
-- HTTPXの通信失敗は既存変換を使って`HttpTransportError`へ渡し、元例外をチェーンする。ヘッダー受信直後・ステータス検証前にUTC時刻を記録し、HTTP応答のstatus・生のRetry-Afterを保持する。HostBlockedError・対象外例外・外部キャンセルはそのまま伝播する。
+- HTTPXの通信失敗は既存変換を使って`HttpTransportError`へ渡し、元例外をチェーンする。ヘッダー受信直後・ステータス検証前にUTC時刻を記録し、HTTP応答のstatus・生のRetry-Afterを保持する。DestinationRejectedError・対象外例外・外部キャンセルはそのまま伝播する。
 - 受信成功時は元のContent-TypeとHTTP charset指定、圧縮展開済みの本文を保持し、HTTPXが選んだ文字コードと置換処理でデコードする。HTML内charsetとContent-Typeの受け入れ判定は、既存のHTML抽出処理が担当する。
 
 取得エラーは`CODE`と発生事実だけを持ち、再試行判断・ログ出力・本文断片を持たない。抽出・構築との接続、工程判断、監査・DB・SQS・Consumerへの接続は後続タスクとする。

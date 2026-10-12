@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import socket
 from unittest.mock import AsyncMock
 
 import httpcore2
@@ -13,9 +14,19 @@ from pydantic import SecretStr
 
 from app.agent import composition
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.ai_providers.errors import AIProviderResponseError, AIProviderResponseReason
+from app.ai_providers.errors import (
+    AIProviderResponseError,
+    AIProviderResponseReason,
+    AIProviderTransportError,
+)
 from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.analysis.embedding.embedder import GeminiEmbedder
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
+)
 from tests.agent.runtime._helpers import RuntimeOutput, make_agent
 from tests.ai_providers.gemini._sdk_exchange import install_sdk_exchange
 from tests.ai_providers.gemini._sdk_exchange import (
@@ -406,3 +417,27 @@ async def test_connection_error_keeps_original_cause_without_retry(exchange):
     assert caught.value is failure
     assert caught.value.__cause__ is cause
     assert len(exchange.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_dns_failure_reaches_translator_as_transport_failure(
+    exchange, monkeypatch
+):
+    """送信前の名前解決の失敗をSDKが包み直さず、変換器が通信の失敗として扱う。"""
+    cause = socket.gaierror("synthetic name resolution failure")
+    monkeypatch.setattr(
+        "app.http.destination_resolution._resolve_host", AsyncMock(side_effect=cause)
+    )
+    async with _open_client() as client:
+        with pytest.raises(HttpTransportError) as caught:
+            await _generate(client)
+    assert (caught.value.failure, caught.value.__cause__, exchange.requests) == (
+        HttpTransportFailure(
+            HttpTransportStage.PREPARATION, HttpTransportFailureReason.DNS_RESOLUTION
+        ),
+        cause,
+        [],
+    )
+    translated = translate_gemini_error(caught.value)
+    assert isinstance(translated, AIProviderTransportError)
+    assert translated.http_error is caught.value

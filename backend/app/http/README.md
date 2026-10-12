@@ -77,8 +77,8 @@ AWS試験のスナップショットにも、同じ相対配置でJSONを同梱�
 同じIPについて「プロキシの非公開レンジ拒否 ⊆ アプリの拒否」を維持し、拒否集合の完全一致は要求しない。
 この関係はドメイン・ポート制限を含むプロキシの全拒否条件や、両者のDNS解決結果の一致を意味しない。
 
-- `destination_policy.HostBlockedError`は、IP直書きまたはDNS解決結果の方針上の拒否を表す。
-- `destination_resolution.HostResolutionError`は、名前解決の失敗・空の結果・IP形式でない結果を表す。
+- `destination_policy.DestinationRejectedError`は、IP直書きまたはDNS解決結果の方針上の拒否を表す。
+- 名前解決の失敗は、`destination_resolution`が`HttpTransportError`（`PREPARATION / DNS_RESOLUTION`）で伝える。成功したのに空・IP形式でない結果は前提の崩れとして`RuntimeError`で止め、通信失敗に混ぜない。
 - 標準transportはこれらを元のまま伝播させる。HTTPの失敗分類はDNS失敗を通信失敗として扱い、宛先拒否を混ぜない。
 - IP判定は例外を投げず、宛先拒否・解決失敗への変換は判定結果を受けた呼び出し元が行う。
 - `WebUrl`はURLの形式だけを保証し、宛先IPの判定は持たない。値はpydanticが正規化した文字列で、送信時も同じ文字列を使う。
@@ -100,8 +100,8 @@ AIプロバイダーの変換器も、通信失敗を`http_transport_error_from_
 | 発生事実 | HTTP側の扱い | 保証しないこと |
 |---|---|---|
 | IP形式不正・非公開IP | `classify_ip_address`が`PublicIpAddress`・`NonPublicIpAddress`・`None`で返し、失敗への変換は呼び出し元が行う | DNS名をIPとして解析できないことを、URL不正や通信失敗とはしない |
-| アプリの宛先方針による拒否 | 送信境界・DNS検証が`HostBlockedError`で伝える | プロキシから拒否応答が返ったとはしない |
-| 事前のDNS解決失敗・空または不正な解決結果 | `HostResolutionError`を`PREPARATION / DNS_RESOLUTION`へ分類する | 方針による拒否とはしない |
+| アプリの宛先方針による拒否 | 送信境界・DNS検証が`DestinationRejectedError`で伝える | プロキシから拒否応答が返ったとはしない |
+| 事前のDNS解決失敗 | `destination_resolution`が`HttpTransportError`（`PREPARATION / DNS_RESOLUTION`）を投げる | 方針による拒否とはしない |
 | 接続中のDNS・TLS・TCP障害 | 確認できた原因を`CONNECT`段階の理由へ分類する | 例外だけで接続相手がプロキシか取得先かを推測しない |
 | プロキシ接続・CONNECT失敗 | `ProxyError`を`CONNECT / PROXY`とし、読めたstatusを`proxy_status`へ保持する | 403だけで拒否したACLや再試行可否を決めない |
 | 通常のHTTP非成功応答 | `HttpResponseError`へstatus・受信時刻・生のRetry-Afterを保持する | 応答の生成元が取得先か中継プロキシかをstatusだけで断定しない |
@@ -109,7 +109,7 @@ AIプロバイダーの変換器も、通信失敗を`http_transport_error_from_
 
 `http_transport_error_from_exception`は例外を返す関数であり、自動で送信処理全体を包むものではない。
 呼び出し側が捕捉する範囲を決め、変換した例外を`raise mapped from exc`で伝えて原因連鎖を保持する。
-`HostBlockedError`は通信障害の分類対象外として維持し、エラーを一つの共通基底へまとめるための移動は行わない。
+`DestinationRejectedError`は通信障害の分類対象外として維持し、エラーを一つの共通基底へまとめるための移動は行わない。
 
 ### プロキシについて観測できる範囲
 
@@ -141,7 +141,7 @@ CONNECT 403を含むプロキシ失敗は通信失敗として再試行可能に
 | `test_http/test_egress_proxy_config.py` | Squid設定テンプレートの非公開IP拒否ACL・レンジ参照・評価順序 |
 | [実Squidの宛先・送信元試験](../../../infra/squid/README.md) | HTTP・CONNECTの宛先制限、送信元ごとの許可、管理機能の拒否（隔離したローカル環境） |
 | `test_http/test_settings.py` | 必須のプロキシ設定と、呼び出し側からの経路上書きの拒否 |
-| `test_http/test_failure.py`・`test_http/test_error_mapping.py` | DNS失敗の分類と、宛先拒否を通信失敗に混ぜないこと |
+| `test_http/test_failure.py`・`test_http/test_error_mapping.py` | HTTPX2の失敗の分類と、宛先拒否を通信失敗に混ぜないこと |
 | `test_http/test_proxy_failure.py` | HTTPX2/httpcore2を通したCONNECT拒否・通常応答・TCP障害の区別（ネットワークとTLSはモック） |
 | `test_http/test_tls_verification.py` | external・internalのTLSがcertifiの一覧で接続相手を検証し、呼び出し側の`verify`指定で外れないこと |
 | `test_shared/test_web_url.py` | WebUrlの形式の契約と、宛先を判定しないこと |

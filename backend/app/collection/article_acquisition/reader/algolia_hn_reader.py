@@ -71,7 +71,7 @@ class HackerNewsReader:
         """直近 ``window_seconds`` 内に投稿された ``points > min_points`` story を取得。
 
         Raises:
-            HttpResponseError / HttpTransportError / HostBlockedError /
+            HttpResponseError / HttpTransportError / DestinationRejectedError /
                 ResponseSizeLimitExceededError: 取得の失敗。
             UnreadableResponseError: 応答を構造化できない。
         """

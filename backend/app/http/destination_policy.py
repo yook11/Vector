@@ -73,15 +73,17 @@ def _is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
-class HostBlockedReason(StrEnum):
+class DestinationRejectedReason(StrEnum):
     RESOLVED_TO_NON_PUBLIC = "resolved_to_non_public"
     NON_PUBLIC_IP_LITERAL = "non_public_ip_literal"
 
 
-class HostBlockedError(ApplicationError):
+class DestinationRejectedError(ApplicationError):
     """IP直書きまたはDNS解決結果が外部通信の宛先方針で拒否された。"""
 
-    def __init__(self, *, reason: HostBlockedReason, host: str, address: str) -> None:
+    def __init__(
+        self, *, reason: DestinationRejectedReason, host: str, address: str
+    ) -> None:
         # 拒否したhostとIPは内部の宛先を示しうるため、説明文と診断情報へ入れない。
         super().__init__(
             "宛先が外部通信の方針で拒否されました", details={"reason": reason.value}

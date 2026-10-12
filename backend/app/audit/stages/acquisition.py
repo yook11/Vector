@@ -41,7 +41,7 @@ from app.collection.external_fetch_failure import (
     RetryableFetchFailure,
     classify_external_fetch_failure,
 )
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.shared.security.redaction import redact_secrets
 
@@ -271,7 +271,9 @@ def _error_message(exc: BaseException) -> str | None:
     本文の上限超過は数値と根拠だけの定型メッセージを採る。
     それ以外 (DB / 想定外) は ``str(exc)`` に退避する。
     """
-    if isinstance(exc, HttpResponseError | HttpTransportError | HostBlockedError):
+    if isinstance(
+        exc, HttpResponseError | HttpTransportError | DestinationRejectedError
+    ):
         return None
     if isinstance(exc, UnreadableResponseError):
         return redacted_audit_message(exc._default_message())  # noqa: SLF001 (PII-free 既定の意図的利用)

@@ -14,8 +14,6 @@ from enum import StrEnum
 import httpx2
 from botocore import exceptions as botocore_errors
 
-from app.http.destination_resolution import HostResolutionError
-
 
 class HttpTransportStage(StrEnum):
     """通信失敗が起きた段階で、送信側か受信側かはここから読む。"""
@@ -90,16 +88,12 @@ def _connect_failure_reason(exc: httpx2.ConnectError) -> HttpTransportFailureRea
 
 
 def classify_httpx(exc: Exception) -> HttpTransportFailure | None:
-    """HTTPX2とDNS事前検証の通信失敗を分類し、対象外の例外にはNoneを返す。
+    """HTTPX2の通信失敗を分類し、対象外の例外にはNoneを返す。
 
     RemoteProtocolErrorをRECEIVEとするのはHTTP/1.1経路の前提で、
     HTTP/2を有効にする場合は送信中のGOAWAY等を含めて段階を再確認する。
     通常の応答statusや例外文中のホスト名から、プロキシ障害や拒否理由を推測しない。
     """
-    if isinstance(exc, HostResolutionError):
-        return HttpTransportFailure(
-            HttpTransportStage.PREPARATION, HttpTransportFailureReason.DNS_RESOLUTION
-        )
     if isinstance(exc, httpx2.LocalProtocolError | httpx2.UnsupportedProtocol):
         return None
     if isinstance(exc, httpx2.PoolTimeout):

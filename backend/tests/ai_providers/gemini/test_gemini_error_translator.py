@@ -22,8 +22,11 @@ from app.ai_providers.errors import (
     AIProviderTransportError,
 )
 from app.ai_providers.gemini.error_translator import translate_gemini_error
-from app.http.destination_policy import HostBlockedError, HostBlockedReason
-from app.http.destination_resolution import HostResolutionError
+from app.http.destination_policy import (
+    DestinationRejectedError,
+    DestinationRejectedReason,
+)
+from app.http.errors import HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -57,11 +60,11 @@ def _api_error(
 # 送信前・通信
 
 
-def test_host_blocked_is_request_not_sent() -> None:
+def test_destination_rejected_is_request_not_sent() -> None:
     """宛先の方針による拒否は、通信の失敗ではなく送らなかった失敗とする。"""
     translated = translate_gemini_error(
-        HostBlockedError(
-            reason=HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+        DestinationRejectedError(
+            reason=DestinationRejectedReason.RESOLVED_TO_NON_PUBLIC,
             host="internal.example",
             address="10.0.0.1",
         )
@@ -113,13 +116,6 @@ def test_host_blocked_is_request_not_sent() -> None:
                 HttpTransportFailureReason.PROTOCOL_VIOLATION,
             ),
         ),
-        (
-            HostResolutionError("no address"),
-            HttpTransportFailure(
-                HttpTransportStage.PREPARATION,
-                HttpTransportFailureReason.DNS_RESOLUTION,
-            ),
-        ),
     ],
 )
 def test_common_http_failures_keep_stage_and_reason(
@@ -130,6 +126,20 @@ def test_common_http_failures_keep_stage_and_reason(
 
     assert isinstance(translated, AIProviderTransportError)
     assert translated.http_error.failure == expected
+
+
+def test_common_transport_error_is_carried_as_is() -> None:
+    """送信前の名前解決が投げた共通の通信エラーは、同じ例外のまま通信の失敗に載せる。"""
+    original = HttpTransportError(
+        failure=HttpTransportFailure(
+            HttpTransportStage.PREPARATION, HttpTransportFailureReason.DNS_RESOLUTION
+        )
+    )
+
+    translated = translate_gemini_error(original)
+
+    assert isinstance(translated, AIProviderTransportError)
+    assert translated.http_error is original
 
 
 @pytest.mark.parametrize(

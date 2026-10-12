@@ -13,8 +13,10 @@ from app.collection.article_acquisition.tools.source_http import (
     get_source_response,
 )
 from app.collection.response_size import ResponseSizeBasis
-from app.http.destination_policy import HostBlockedError, HostBlockedReason
-from app.http.destination_resolution import HostResolutionError
+from app.http.destination_policy import (
+    DestinationRejectedError,
+    DestinationRejectedReason,
+)
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -160,13 +162,6 @@ async def test_unsuccessful_response_keeps_status_retry_after_and_receipt(
                 HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             ),
         ),
-        (
-            HostResolutionError("private-detail"),
-            HttpTransportFailure(
-                HttpTransportStage.PREPARATION,
-                HttpTransportFailureReason.DNS_RESOLUTION,
-            ),
-        ),
     ],
 )
 async def test_transport_failure_becomes_common_transport_error(
@@ -178,6 +173,21 @@ async def test_transport_failure_becomes_common_transport_error(
         await get_source_response(_URL)
     assert caught.value.failure == failure
     assert caught.value.__cause__ is error
+
+
+async def test_common_transport_error_from_transport_is_not_wrapped_again(
+    serve,
+) -> None:
+    """送信前の名前解決が投げた通信エラーは、包み直さず同じ例外のまま伝える。"""
+    original = HttpTransportError(
+        failure=HttpTransportFailure(
+            HttpTransportStage.PREPARATION, HttpTransportFailureReason.DNS_RESOLUTION
+        )
+    )
+    serve(_fail(original))
+    with pytest.raises(HttpTransportError) as caught:
+        await get_source_response(_URL)
+    assert caught.value is original
 
 
 async def test_failure_while_receiving_body_becomes_common_transport_error(
@@ -198,8 +208,8 @@ async def test_failure_while_receiving_body_becomes_common_transport_error(
 @pytest.mark.parametrize(
     "error",
     [
-        HostBlockedError(
-            reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+        DestinationRejectedError(
+            reason=DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
             host="10.0.0.1",
             address="10.0.0.1",
         ),

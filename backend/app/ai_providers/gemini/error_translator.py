@@ -22,11 +22,12 @@ from app.ai_providers.errors import (
     AIProviderTransportError,
 )
 from app.ai_providers.gemini.error_details import read_response_error_details
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import DestinationRejectedError
 from app.http.error_mapping import (
     http_response_error_from_status,
     http_transport_error_from_exception,
 )
+from app.http.errors import HttpTransportError
 
 logger = structlog.get_logger(__name__)
 
@@ -148,11 +149,14 @@ def translate_gemini_error(exc: Exception) -> Exception:
     INVALID_ARGUMENT の判定より先に見る (code=400 と FAILED_PRECONDITION が同居する
     応答では、SDK の版で揺れない status を優先する)。
     """
-    if isinstance(exc, HostBlockedError):
+    if isinstance(exc, DestinationRejectedError):
         return AIProviderNotSentError(
             "AIプロバイダーへの通信が宛先の方針で拒否されました",
             reason=AIProviderNotSentReason.HOST_BLOCKED,
         )
+    # 送信前の名前解決の失敗は、SDKを通っても共通の通信エラーのまま届く。
+    if isinstance(exc, HttpTransportError):
+        return AIProviderTransportError(http_error=exc)
     transport_error = http_transport_error_from_exception(exc)
     if transport_error is not None:
         return AIProviderTransportError(http_error=transport_error)

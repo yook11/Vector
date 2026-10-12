@@ -106,7 +106,7 @@ from app.collection.sources.definitions.spacenews import SpaceNewsSource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.definitions.the_register import TheRegisterSource
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpError
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
@@ -449,7 +449,10 @@ async def test_collect_yields_in_scope_count(
     )
     try:
         yielded = [fa async for fa in fetch_articles(source, case.tools)]
-    except (HttpError, HostBlockedError) as exc:  # pragma: no cover — fixture 不整合
+    except (
+        HttpError,
+        DestinationRejectedError,
+    ) as exc:  # pragma: no cover — fixture 不整合
         pytest.fail(f"unexpected fetch error from fake transport: {exc!r}")
     assert len(yielded) == expected, (
         f"R7/R8 violation for {source.name}: collect yielded {len(yielded)} "
