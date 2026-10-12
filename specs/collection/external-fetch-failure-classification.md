@@ -33,7 +33,7 @@ Status: Implemented
   - `RetryableFetchFailure`: 時間を置けば結果が変わりうる。`code`・`retry_at`（`RetryAt | None`）・`requires_investigation`を持つ。
   - `NonRetryableFetchFailure`: 今の要求では取得できず、再試行しても結果が変わらない。`code`を持つ。
   - `None`: HTTP起因の失敗ではなく、工程が判断する。
-- `code`は`HttpResponseError`・`HttpTransportError`の既存CODE（`http_response_error`・`http_transport_error`）とし、`HostBlockedError`は`host_blocked`とする。
+- `code`は`HttpResponseError`・`HttpTransportError`の既存CODE（`http_response_error`・`http_transport_error`）とし、`DestinationRejectedError`は`host_blocked`とする。
 - 調査対象は、取得先の拒否ではなく環境側の問題か、分類が確かでないことを示す。即時通知の指示ではなく、出力や緊急度は工程と後続処理が判断する。
 - 元例外・原因チェーン・生のRetry-Afterを変更しない。
 
@@ -48,7 +48,7 @@ Status: Implemented
 | 3xx | 再試行不可 | リダイレクト非追従方針を維持 |
 | HttpResponseErrorに入った1xx・2xx・範囲外 | 再試行可能 | 調査対象。成功への読み替えは行わない |
 | HttpTransportError | 再試行可能 | 通信の段階または理由がUNKNOWN、proxy_statusが407・511なら調査対象 |
-| HostBlockedError | 再試行不可 | 明示的な宛先保護による拒否 |
+| DestinationRejectedError | 再試行不可 | 明示的な宛先保護による拒否 |
 
 - `proxy_status`は通信失敗の事実であり、取得先のHTTP応答の判断へ流用しない。プロキシ接続時の403だけで再試行不可にしない。
 - HTTPの根拠: [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-15)、[RFC 6585](https://www.rfc-editor.org/rfc/rfc6585.html)、[RFC 8470の425](https://www.rfc-editor.org/rfc/rfc8470.html#section-5.2)。

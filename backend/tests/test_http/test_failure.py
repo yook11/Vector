@@ -12,8 +12,10 @@ from botocore.awsrequest import AWSPreparedRequest
 from botocore.httpsession import URLLib3Session
 from urllib3 import exceptions as urllib3_errors
 
-from app.http.destination_policy import HostBlockedError, HostBlockedReason
-from app.http.destination_resolution import HostResolutionError
+from app.http.destination_policy import (
+    DestinationRejectedError,
+    DestinationRejectedReason,
+)
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -30,10 +32,6 @@ R = HttpTransportFailureReason
     ("exc", "expected"),
     [
         (httpx2.PoolTimeout("timeout"), HttpTransportFailure(S.PREPARATION, R.TIMEOUT)),
-        (
-            HostResolutionError("failed"),
-            HttpTransportFailure(S.PREPARATION, R.DNS_RESOLUTION),
-        ),
         (httpx2.ConnectTimeout("timeout"), HttpTransportFailure(S.CONNECT, R.TIMEOUT)),
         (httpx2.ConnectError("failed"), HttpTransportFailure(S.CONNECT, R.NETWORK_IO)),
         (httpx2.WriteTimeout("timeout"), HttpTransportFailure(S.SEND, R.TIMEOUT)),
@@ -118,8 +116,8 @@ def test_httpx_proxy_status_is_metadata_only(
         RuntimeError("bug"),
         OSError("not necessarily network"),
         TimeoutError("unspecified operation"),
-        HostBlockedError(
-            reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+        DestinationRejectedError(
+            reason=DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
             host="10.0.0.1",
             address="10.0.0.1",
         ),

@@ -7,14 +7,19 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.http.destination_policy import (
-    HostBlockedError,
-    HostBlockedReason,
+    DestinationRejectedError,
+    DestinationRejectedReason,
     PublicIpAddress,
 )
 from app.http.destination_resolution import (
-    HostResolutionError,
     _resolve_host,
     resolve_public_host_addresses,
+)
+from app.http.errors import HttpTransportError
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
 )
 
 
@@ -77,7 +82,7 @@ class TestResolvedHostAddresses:
             "app.http.destination_resolution._resolve_host",
             new=AsyncMock(return_value=["10.0.0.1"]),
         ):
-            with pytest.raises(HostBlockedError) as caught:
+            with pytest.raises(DestinationRejectedError) as caught:
                 await resolve_public_host_addresses("internal.example")
 
         error = caught.value
@@ -87,7 +92,7 @@ class TestResolvedHostAddresses:
             error.address,
             str(error),
         ) == (
-            HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+            DestinationRejectedReason.RESOLVED_TO_NON_PUBLIC,
             "internal.example",
             "10.0.0.1",
             "宛先が外部通信の方針で拒否されました",
@@ -111,37 +116,44 @@ class TestResolvedHostAddresses:
             "app.http.destination_resolution._resolve_host",
             new=AsyncMock(return_value=addresses),
         ):
-            with pytest.raises(HostBlockedError):
+            with pytest.raises(DestinationRejectedError):
                 await resolve_public_host_addresses("multihomed.example")
 
 
 class TestHostResolutionFailure:
     @pytest.mark.asyncio
     async def test_dns_failure_preserves_original_cause(self, monkeypatch) -> None:
-        """OSの名前解決失敗を宛先拒否と区別し、原因を保持する。"""
+        """OSの名前解決失敗は通信準備段階のDNS失敗として伝え、元の例外を原因に残す。"""
         origin = socket.gaierror("Name or service not known")
         monkeypatch.setattr(
             asyncio.get_running_loop(), "getaddrinfo", AsyncMock(side_effect=origin)
         )
 
-        with pytest.raises(HostResolutionError) as caught:
+        with pytest.raises(HttpTransportError) as caught:
             await resolve_public_host_addresses("nonexistent.invalid")
 
-        assert str(caught.value) == (
-            "DNS resolution failed for host: nonexistent.invalid: "
-            "Name or service not known"
+        assert (caught.value.failure, caught.value.__cause__) == (
+            HttpTransportFailure(
+                HttpTransportStage.PREPARATION,
+                HttpTransportFailureReason.DNS_RESOLUTION,
+            ),
+            origin,
         )
-        assert caught.value.__cause__ is origin
 
     @pytest.mark.asyncio
-    async def test_empty_result_is_resolution_failure(self) -> None:
-        """IPを取得できない結果を検証成功として返さない。"""
+    async def test_empty_result_is_unexpected_state(self) -> None:
+        """空の解決結果は通信失敗に分類せず、ホスト名を出さない想定外の状態として伝える。"""
         with patch(
             "app.http.destination_resolution._resolve_host",
             new=AsyncMock(return_value=[]),
         ):
-            with pytest.raises(HostResolutionError):
+            with pytest.raises(RuntimeError) as caught:
                 await resolve_public_host_addresses("empty.example")
+
+        assert (type(caught.value), str(caught.value)) == (
+            RuntimeError,
+            "名前解決が成功したのに結果が空でした",
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -152,13 +164,18 @@ class TestHostResolutionFailure:
             pytest.param(["not-an-ip", "8.8.8.8"], id="invalid-before-public"),
         ],
     )
-    async def test_invalid_result_is_resolution_failure(
+    async def test_invalid_result_is_unexpected_state(
         self, addresses: list[str]
     ) -> None:
-        """IPではない結果を読み飛ばさず、解決の失敗として伝える。"""
+        """IPではない結果を読み飛ばさず、値を出さない想定外の状態として伝える。"""
         with patch(
             "app.http.destination_resolution._resolve_host",
             new=AsyncMock(return_value=addresses),
         ):
-            with pytest.raises(HostResolutionError):
+            with pytest.raises(RuntimeError) as caught:
                 await resolve_public_host_addresses("invalid.example")
+
+        assert (type(caught.value), str(caught.value)) == (
+            RuntimeError,
+            "名前解決の結果にIPとして読めない値がありました",
+        )

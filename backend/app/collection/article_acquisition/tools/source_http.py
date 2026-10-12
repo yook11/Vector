@@ -10,7 +10,6 @@ import httpx2
 
 from app.collection.article_acquisition.errors import ResponseSizeLimitExceededError
 from app.collection.response_size import ResponseSizeBasis
-from app.http.destination_resolution import HostResolutionError
 from app.http.error_mapping import (
     http_response_error_from_exception,
     http_transport_error_from_exception,
@@ -62,7 +61,7 @@ async def get_source_response(
                     content=await _read_body(response),
                     encoding=response.encoding or "utf-8",
                 )
-        except (httpx2.HTTPError, HostResolutionError) as exc:
+        except httpx2.HTTPError as exc:
             mapped = http_transport_error_from_exception(exc)
             if mapped is None:
                 raise

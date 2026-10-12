@@ -15,7 +15,7 @@ class RawHttpClient:
         """1 URL を GET し ``bytes`` を返す。
 
         Raises:
-            HttpResponseError / HttpTransportError / HostBlockedError /
+            HttpResponseError / HttpTransportError / DestinationRejectedError /
                 ResponseSizeLimitExceededError: 取得の失敗。
         """
         response = await get_source_response(url, accept=self._accept)

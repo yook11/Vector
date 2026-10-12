@@ -24,7 +24,7 @@ Status: Implemented
 
 | 失敗 | 判断 |
 |---|---|
-| HTTP起因（`HttpResponseError`・`HttpTransportError`・`HostBlockedError`） | 外部取得の失敗判断が再試行可能なら`RetryAcquisition`、不可なら`NoRetryAcquisition` |
+| HTTP起因（`HttpResponseError`・`HttpTransportError`・`DestinationRejectedError`） | 外部取得の失敗判断が再試行可能なら`RetryAcquisition`、不可なら`NoRetryAcquisition` |
 | `UnreadableResponseError` | `NoRetryAcquisition` |
 | `RssFeedErrors` | どれか1つのフィードが`RetryAcquisition`なら`RetryAcquisition`、それ以外は`NoRetryAcquisition` |
 | DB障害・その他 | `RetryAcquisition` |

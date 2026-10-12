@@ -17,7 +17,6 @@ from app.collection.article_completion.errors import (
     RobotsDisallowedError,
 )
 from app.collection.response_size import ResponseSizeBasis
-from app.http.destination_resolution import HostResolutionError
 from app.http.error_mapping import (
     http_response_error_from_exception,
     http_transport_error_from_exception,
@@ -60,7 +59,7 @@ async def _open_response(
                                 exc, received_at=received_at
                             ) from exc
                     yield response
-            except (httpx2.HTTPError, HostResolutionError) as exc:
+            except httpx2.HTTPError as exc:
                 mapped = http_transport_error_from_exception(exc)
                 if mapped is None:
                     raise

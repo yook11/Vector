@@ -27,7 +27,7 @@ from app.collection.sources.rss_hooks import (
     RequiresSelection,
     RequiresUrlTransform,
 )
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
 
 logger = structlog.get_logger(__name__)
@@ -74,7 +74,7 @@ class RssFetcher:
             except (
                 HttpResponseError,
                 HttpTransportError,
-                HostBlockedError,
+                DestinationRejectedError,
                 UnreadableResponseError,
                 ResponseSizeLimitExceededError,
             ) as exc:

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
 from app.collection.retry_at import RetryAt
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import HttpTransportFailureReason, HttpTransportStage
 
@@ -83,7 +83,7 @@ def classify_external_fetch_failure(
             ),
         )
 
-    if isinstance(exc, HostBlockedError):
+    if isinstance(exc, DestinationRejectedError):
         return NonRetryableFetchFailure(code="host_blocked")
 
     return None

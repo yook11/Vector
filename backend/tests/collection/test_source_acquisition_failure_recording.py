@@ -33,7 +33,10 @@ from app.collection.article_acquisition.reader.read_errors import (
 )
 from app.collection.response_size import ResponseSizeBasis
 from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
-from app.http.destination_policy import HostBlockedError, HostBlockedReason
+from app.http.destination_policy import (
+    DestinationRejectedError,
+    DestinationRejectedReason,
+)
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -152,7 +155,7 @@ async def test_transport_failure_records_reason_as_retryable(
 
 
 @pytest.mark.asyncio
-async def test_host_blocked_records_without_exception_message(
+async def test_destination_rejected_records_without_exception_message(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -165,8 +168,8 @@ async def test_host_blocked_records_without_exception_message(
         source_id=source_id,
         source_name="VentureBeat",
         failure=NoRetryAcquisition(
-            HostBlockedError(
-                reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            DestinationRejectedError(
+                reason=DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
                 host="10.0.0.1",
                 address="10.0.0.1",
             )

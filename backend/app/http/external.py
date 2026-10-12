@@ -9,7 +9,8 @@ IP直書きは ``destination_policy``、DNS名は ``destination_resolution`` で
 HostとTLS SNIは元のホスト名を保持するが、ファクトリには直接接続へのfallbackはない。
 標準transportはHTTP・HTTPS以外を送信せず、リダイレクト先も検証し、追従の既定値はFalseとする。
 
-``HostBlockedError`` と ``HostResolutionError`` は元のまま利用機能へ伝播する。
+``DestinationRejectedError`` と、DNS解決の失敗を表す ``HttpTransportError`` は
+元のまま利用機能へ伝播する。
 ファクトリは ``mounts``・``transport`` の指定を拒否し、送信部品の差し替えを許可しない。
 """
 
@@ -20,8 +21,8 @@ from typing import Any
 import httpx2
 
 from app.http.destination_policy import (
-    HostBlockedError,
-    HostBlockedReason,
+    DestinationRejectedError,
+    DestinationRejectedReason,
     NonPublicIpAddress,
     PublicIpAddress,
     classify_ip_address,
@@ -94,8 +95,8 @@ class _PinnedDnsTransport(httpx2.AsyncHTTPTransport):
             case PublicIpAddress():
                 return await super().handle_async_request(request)
             case NonPublicIpAddress():
-                raise HostBlockedError(
-                    reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+                raise DestinationRejectedError(
+                    reason=DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
                     host=original_host,
                     address=original_host,
                 )

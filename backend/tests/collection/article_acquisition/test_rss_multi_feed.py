@@ -24,7 +24,10 @@ from app.collection.sources.definitions.cornell import CornellChronicleSource
 from app.collection.sources.definitions.nasa import NASASource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.rss_acquisition import RssSource
-from app.http.destination_policy import HostBlockedError, HostBlockedReason
+from app.http.destination_policy import (
+    DestinationRejectedError,
+    DestinationRejectedReason,
+)
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -102,8 +105,8 @@ async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
             "timeout",
         ),
         (
-            HostBlockedError(
-                reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            DestinationRejectedError(
+                reason=DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
                 host="10.0.0.1",
                 address="10.0.0.1",
             ),

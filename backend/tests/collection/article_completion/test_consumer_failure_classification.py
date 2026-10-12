@@ -28,7 +28,10 @@ from app.collection.domain.analyzable_article import AnalyzableArticleDefect as 
 from app.collection.domain.analyzable_article import QualityTooLow
 from app.collection.response_size import ResponseSizeBasis
 from app.collection.retry_at import RetryAt
-from app.http.destination_policy import HostBlockedError, HostBlockedReason
+from app.http.destination_policy import (
+    DestinationRejectedError,
+    DestinationRejectedReason,
+)
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -86,8 +89,8 @@ _NOW = _RECEIVED + timedelta(seconds=30)
             id="non_retryable_response",
         ),
         pytest.param(
-            HostBlockedError(
-                reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            DestinationRejectedError(
+                reason=DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
                 host="10.0.0.1",
                 address="10.0.0.1",
             ),

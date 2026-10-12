@@ -152,7 +152,7 @@ class CrossrefReader:
         """per-ISSN + ``from-pub-date`` で新着順に recent works を取得。
 
         Raises:
-            HttpResponseError / HttpTransportError / HostBlockedError /
+            HttpResponseError / HttpTransportError / DestinationRejectedError /
                 ResponseSizeLimitExceededError: 取得の失敗。
             UnreadableResponseError: 応答を構造化できない。
         """

@@ -24,7 +24,10 @@ from app.collection.domain.analyzable_article import (
     AnalyzableArticleDefect,
     QualityTooLow,
 )
-from app.http.destination_policy import HostBlockedError, HostBlockedReason
+from app.http.destination_policy import (
+    DestinationRejectedError,
+    DestinationRejectedReason,
+)
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -402,8 +405,8 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
             id="http_response_error",
         ),
         pytest.param(
-            HostBlockedError(
-                reason=HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+            DestinationRejectedError(
+                reason=DestinationRejectedReason.RESOLVED_TO_NON_PUBLIC,
                 host="internal.example",
                 address="10.0.0.1",
             ),
@@ -412,7 +415,7 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
                 "error_details": {"reason": "resolved_to_non_public"},
                 "cause_is_aggregated": False,
             },
-            id="host_blocked_error",
+            id="destination_rejected_error",
         ),
         pytest.param(
             ArticleBuildRejectedError(
