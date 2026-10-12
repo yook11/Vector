@@ -22,7 +22,7 @@ from app.ai_providers.errors import (
     AIProviderTransportError,
 )
 from app.ai_providers.gemini.error_translator import translate_gemini_error
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.destination_resolution import HostResolutionError
 from app.http.failure import (
     HttpTransportFailure,
@@ -59,7 +59,13 @@ def _api_error(
 
 def test_host_blocked_is_request_not_sent() -> None:
     """宛先の方針による拒否は、通信の失敗ではなく送らなかった失敗とする。"""
-    translated = translate_gemini_error(HostBlockedError("private address"))
+    translated = translate_gemini_error(
+        HostBlockedError(
+            reason=HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+            host="internal.example",
+            address="10.0.0.1",
+        )
+    )
 
     assert isinstance(translated, AIProviderNotSentError)
     assert translated.reason is AIProviderNotSentReason.HOST_BLOCKED

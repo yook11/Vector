@@ -21,9 +21,10 @@ import httpx2
 
 from app.http.destination_policy import (
     HostBlockedError,
-    NotAnIpAddressError,
-    NotAPublicIpError,
+    HostBlockedReason,
+    NonPublicIpAddress,
     PublicIpAddress,
+    classify_ip_address,
 )
 from app.http.destination_resolution import resolve_public_host_addresses
 from app.http.settings import HttpSettings
@@ -89,16 +90,18 @@ class _PinnedDnsTransport(httpx2.AsyncHTTPTransport):
             return await super().handle_async_request(request)
 
         # URL型は宛先IPを判定しないため、送信時にIP直書きを検証する。
-        try:
-            PublicIpAddress(original_host)
-        except NotAnIpAddressError:
-            # DNS名は解決結果へIP方針を適用し、接続先の固定は経路に従う。
-            pass
-        except NotAPublicIpError as e:
-            msg = f"host is non-public IP literal: {original_host}"
-            raise HostBlockedError(msg) from e
-        else:
-            return await super().handle_async_request(request)
+        match classify_ip_address(original_host):
+            case PublicIpAddress():
+                return await super().handle_async_request(request)
+            case NonPublicIpAddress():
+                raise HostBlockedError(
+                    reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+                    host=original_host,
+                    address=original_host,
+                )
+            case None:
+                # DNS名は解決結果へIP方針を適用し、接続先の固定は経路に従う。
+                pass
 
         addrs = await resolve_public_host_addresses(original_host)
         if self._pins_connection:

@@ -1,6 +1,7 @@
 """アプリで定義した例外の診断情報を、共通のログ形式へ変換する契約。"""
 
 from dataclasses import asdict
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -18,7 +19,13 @@ from app.analysis.assessment.errors import (
 from app.analysis.curation import events as curation
 from app.collection import events as collection
 from app.collection.article_acquisition import events as acquisition
-from app.http.errors import HttpTransportError
+from app.collection.article_completion.errors import ArticleBuildRejectedError
+from app.collection.domain.analyzable_article import (
+    AnalyzableArticleDefect,
+    QualityTooLow,
+)
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
+from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -357,3 +364,77 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
         "reason": "curation_missing",
         "code": "assessment_curation_missing",
     }
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        pytest.param(
+            HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.CONNECT,
+                    HttpTransportFailureReason.PROXY,
+                    proxy_status=407,
+                )
+            ),
+            {
+                "message": "HTTP通信で応答を受け取れませんでした",
+                "error_details": {
+                    "stage": "connect",
+                    "reason": "proxy",
+                    "proxy_status": 407,
+                },
+                "cause_is_aggregated": False,
+            },
+            id="http_transport_error",
+        ),
+        pytest.param(
+            HttpResponseError(
+                status_code=429,
+                received_at=datetime(2026, 10, 12, tzinfo=UTC),
+                retry_after="120",
+            ),
+            {
+                "message": "HTTPの非成功応答を受け取りました",
+                "error_details": {"status_code": 429},
+                "cause_is_aggregated": False,
+            },
+            id="http_response_error",
+        ),
+        pytest.param(
+            HostBlockedError(
+                reason=HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+                host="internal.example",
+                address="10.0.0.1",
+            ),
+            {
+                "message": "宛先が外部通信の方針で拒否されました",
+                "error_details": {"reason": "resolved_to_non_public"},
+                "cause_is_aggregated": False,
+            },
+            id="host_blocked_error",
+        ),
+        pytest.param(
+            ArticleBuildRejectedError(
+                QualityTooLow(
+                    defects=(
+                        AnalyzableArticleDefect.BODY_MISSING,
+                        AnalyzableArticleDefect.PUBLISHED_AT_MISSING,
+                    )
+                )
+            ),
+            {
+                "message": "記事が分析に必要な条件を満たしません",
+                "error_details": {
+                    "defects": "analyzable_article_body_missing,"
+                    "analyzable_article_published_at_missing"
+                },
+                "cause_is_aggregated": False,
+            },
+            id="article_build_rejected_error",
+        ),
+    ],
+)
+def test_fetch_and_build_errors_keep_description_and_facts(error, expected) -> None:
+    """通信・宛先拒否・記事の構築拒否は、固定の説明文と調査に使う事実を渡し、宛先と生のRetry-Afterは渡さない。"""
+    assert asdict(convert_exception(error)) == expected

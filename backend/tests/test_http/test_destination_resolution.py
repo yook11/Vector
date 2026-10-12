@@ -8,8 +8,7 @@ import pytest
 
 from app.http.destination_policy import (
     HostBlockedError,
-    NotAnIpAddressError,
-    NotAPublicIpError,
+    HostBlockedReason,
     PublicIpAddress,
 )
 from app.http.destination_resolution import (
@@ -72,8 +71,8 @@ class TestResolvedHostAddresses:
         )
 
     @pytest.mark.asyncio
-    async def test_host_rejection_preserves_policy_cause(self) -> None:
-        """宛先拒否へ変換しても非公開IP判定の原因を保持する。"""
+    async def test_host_rejection_keeps_destination_in_attributes(self) -> None:
+        """非公開IPへ解決されたホストの拒否は、ホストと解決先を文面に出さず属性に残す。"""
         with patch(
             "app.http.destination_resolution._resolve_host",
             new=AsyncMock(return_value=["10.0.0.1"]),
@@ -81,10 +80,18 @@ class TestResolvedHostAddresses:
             with pytest.raises(HostBlockedError) as caught:
                 await resolve_public_host_addresses("internal.example")
 
-        assert str(caught.value) == (
-            "host resolves to non-public address: internal.example -> 10.0.0.1"
+        error = caught.value
+        assert (
+            error.reason,
+            error.host,
+            error.address,
+            str(error),
+        ) == (
+            HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+            "internal.example",
+            "10.0.0.1",
+            "宛先が外部通信の方針で拒否されました",
         )
-        assert isinstance(caught.value.__cause__, NotAPublicIpError)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -148,12 +155,10 @@ class TestHostResolutionFailure:
     async def test_invalid_result_is_resolution_failure(
         self, addresses: list[str]
     ) -> None:
-        """不正な結果を読み飛ばさず、IP解析失敗を原因として伝える。"""
+        """IPではない結果を読み飛ばさず、解決の失敗として伝える。"""
         with patch(
             "app.http.destination_resolution._resolve_host",
             new=AsyncMock(return_value=addresses),
         ):
-            with pytest.raises(HostResolutionError) as caught:
+            with pytest.raises(HostResolutionError):
                 await resolve_public_host_addresses("invalid.example")
-
-        assert isinstance(caught.value.__cause__, NotAnIpAddressError)

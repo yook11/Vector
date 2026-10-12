@@ -8,7 +8,7 @@
 
 | 担当 | 責任 | 保証の範囲 |
 |---|---|---|
-| `destination_policy.py` | 外部通信の最終宛先に許可するIPの共通方針 | `PublicIpAddress`で解析と公開性を検証する。DNS解決や送信は行わない |
+| `destination_policy.py` | 外部通信の最終宛先に許可するIPの共通方針 | `classify_ip_address`で公開IP・非公開IP・IPではない、のいずれかに判定する。DNS解決や送信は行わない |
 | `destination_resolution.py` | DNS解決と、その結果への共通方針の適用 | 解決結果に非公開IPが含まれれば拒否する。実際の接続先は保証しない |
 | `external.py` | 標準transportによる送信時の適用 | IP直書きを再検証し、DNS名には解決・検証を適用する。呼び出し側の事前検証に依存しない |
 | `settings.py` | 外部クライアントのプロキシ経路の確定 | 必須のプロキシURLを内部namespaceに限定する。設定不備はtransport生成前に拒否する |
@@ -80,13 +80,13 @@ AWS試験のスナップショットにも、同じ相対配置でJSONを同梱�
 - `destination_policy.HostBlockedError`は、IP直書きまたはDNS解決結果の方針上の拒否を表す。
 - `destination_resolution.HostResolutionError`は、名前解決の失敗・空の結果・IP形式でない結果を表す。
 - 標準transportはこれらを元のまま伝播させる。HTTPの失敗分類はDNS失敗を通信失敗として扱い、宛先拒否を混ぜない。
-- 例外名・メッセージ・原因連鎖は維持し、例外の完全修飾名は新しい所属モジュールに変わる。
+- IP判定は例外を投げず、宛先拒否・解決失敗への変換は判定結果を受けた呼び出し元が行う。
 - `WebUrl`はURLの形式だけを保証し、宛先IPの判定は持たない。値はpydanticが正規化した文字列で、送信時も同じ文字列を使う。
 
 名前解決の成功条件は、結果が1件以上あり、全件が有効かつ許可されたIPであることとする。
 成功時は解決結果の順序で`PublicIpAddress`の一覧を返す。
 禁止IPが混在すれば全体を拒否し、IP形式でない結果も読み飛ばさない。
-空・不正な結果を解決失敗へ変更しても、既存のDNS例外・宛先拒否のメッセージと原因連鎖は維持する。
+OSの名前解決の失敗は、元の例外を原因に保持する。
 
 ## エラーの共通契約と変換責任
 
@@ -99,7 +99,7 @@ AIプロバイダーの変換器も、通信失敗を`http_transport_error_from_
 
 | 発生事実 | HTTP側の扱い | 保証しないこと |
 |---|---|---|
-| IP形式不正・非公開IP | `NotAnIpAddressError`・`NotAPublicIpError`はIP解析・判定の内部契約 | DNS名をIPとして解析できないことを、URL不正や通信失敗とはしない |
+| IP形式不正・非公開IP | `classify_ip_address`が`PublicIpAddress`・`NonPublicIpAddress`・`None`で返し、失敗への変換は呼び出し元が行う | DNS名をIPとして解析できないことを、URL不正や通信失敗とはしない |
 | アプリの宛先方針による拒否 | 送信境界・DNS検証が`HostBlockedError`で伝える | プロキシから拒否応答が返ったとはしない |
 | 事前のDNS解決失敗・空または不正な解決結果 | `HostResolutionError`を`PREPARATION / DNS_RESOLUTION`へ分類する | 方針による拒否とはしない |
 | 接続中のDNS・TLS・TCP障害 | 確認できた原因を`CONNECT`段階の理由へ分類する | 例外だけで接続相手がプロキシか取得先かを推測しない |
@@ -135,8 +135,8 @@ CONNECT 403を含むプロキシ失敗は通信失敗として再試行可能に
 
 | テスト | 所有する保証 |
 |---|---|
-| `test_http/test_public_ip_address.py` | IP単体の生成・形式の境界値・禁止レンジ両端の拒否・IPv4-mapped表記の拒否・表記の正規化と同一性・不変性 |
-| `test_http/test_destination_resolution.py` | OSの解決結果からIPを取得、検証済みIPの順序付き返却、混在結果の全体拒否、空・不正な結果の失敗、原因連鎖 |
+| `test_http/test_public_ip_address.py` | IPの判定（公開・非公開・IPではない）・形式の境界値・禁止レンジ両端・IPv4-mapped表記・公開IP型の生成制限・表記の正規化と同一性・不変性 |
+| `test_http/test_destination_resolution.py` | OSの解決結果からIPを取得、検証済みIPの順序付き返却、混在結果の全体拒否、空・不正な結果の失敗、DNS失敗の原因保持 |
 | `test_http/test_external_http.py` | transport差し替え引数とHTTP・HTTPS以外のschemeの拒否、DNS結果に基づく送信可否、直接接続のIP指定・Host/SNI保持、プロキシ経路、リダイレクト先検証 |
 | `test_http/test_egress_proxy_config.py` | Squid設定テンプレートの非公開IP拒否ACL・レンジ参照・評価順序 |
 | [実Squidの宛先・送信元試験](../../../infra/squid/README.md) | HTTP・CONNECTの宛先制限、送信元ごとの許可、管理機能の拒否（隔離したローカル環境） |

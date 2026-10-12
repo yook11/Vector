@@ -10,7 +10,7 @@ from app.collection.external_fetch_failure import (
     classify_external_fetch_failure,
 )
 from app.collection.retry_at import RetryAt
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -89,7 +89,12 @@ def test_transport_failure_is_not_read_as_origin_rejection(
 def test_host_blocked_by_destination_policy_cannot_fetch() -> None:
     """宛先保護による拒否は再試行しても変わらない失敗と判断する。"""
     assert classify_external_fetch_failure(
-        HostBlockedError(), now=_NOW
+        HostBlockedError(
+            reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            host="10.0.0.1",
+            address="10.0.0.1",
+        ),
+        now=_NOW,
     ) == NonRetryableFetchFailure(code="host_blocked")
 
 

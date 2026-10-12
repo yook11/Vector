@@ -33,7 +33,7 @@ from app.collection.article_acquisition.reader.read_errors import (
 )
 from app.collection.response_size import ResponseSizeBasis
 from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -157,7 +157,7 @@ async def test_host_blocked_records_without_exception_message(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """宛先拒否は再試行不可として記録し、宛先やsecretを含みうる自由文を載せない。"""
+    """宛先拒否は再試行不可として記録し、拒否した宛先を監査に載せない。"""
     source_id = sample_source.id
     recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
@@ -166,8 +166,9 @@ async def test_host_blocked_records_without_exception_message(
         source_name="VentureBeat",
         failure=NoRetryAcquisition(
             HostBlockedError(
-                "host is non-public IP literal: 10.0.0.1 "
-                "Bearer sk-live-SSRFSECRETvalue123"
+                reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+                host="10.0.0.1",
+                address="10.0.0.1",
             )
         ),
     )
@@ -181,7 +182,6 @@ async def test_host_blocked_records_without_exception_message(
     assert ev.payload["failure_action"] == "no_retry"
     assert ev.payload["error_message"] is None
     assert "10.0.0.1" not in str(ev.payload)
-    assert "SSRFSECRET" not in str(ev.payload)
 
 
 @pytest.mark.asyncio
@@ -442,9 +442,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     source_id = sample_source.id
     recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
-    business_exc = HostBlockedError(
-        "blocked Authorization: Bearer sk-live-BUSINESSSECRETabc"
-    )
+    business_exc = ValueError("blocked Authorization: Bearer sk-live-BUSINESSSECRETabc")
 
     with (
         patch(
@@ -470,7 +468,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["source_id"] == source_id
-    assert drop["business_error_class"].endswith(".HostBlockedError")
+    assert drop["business_error_class"].endswith(".ValueError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

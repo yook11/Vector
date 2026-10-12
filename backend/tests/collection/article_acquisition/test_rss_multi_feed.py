@@ -24,7 +24,7 @@ from app.collection.sources.definitions.cornell import CornellChronicleSource
 from app.collection.sources.definitions.nasa import NASASource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.rss_acquisition import RssSource
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -101,7 +101,16 @@ async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
             None,
             "timeout",
         ),
-        (HostBlockedError("private IP literal"), "host_blocked", None, None),
+        (
+            HostBlockedError(
+                reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+                host="10.0.0.1",
+                address="10.0.0.1",
+            ),
+            "host_blocked",
+            None,
+            None,
+        ),
         (
             UnreadableResponseError(
                 reason=UnreadableResponseReason.MALFORMED_CONTENT,

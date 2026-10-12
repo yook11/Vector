@@ -12,7 +12,7 @@ from botocore.awsrequest import AWSPreparedRequest
 from botocore.httpsession import URLLib3Session
 from urllib3 import exceptions as urllib3_errors
 
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.destination_resolution import HostResolutionError
 from app.http.failure import (
     HttpTransportFailure,
@@ -118,7 +118,11 @@ def test_httpx_proxy_status_is_metadata_only(
         RuntimeError("bug"),
         OSError("not necessarily network"),
         TimeoutError("unspecified operation"),
-        HostBlockedError("policy"),
+        HostBlockedError(
+            reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            host="10.0.0.1",
+            address="10.0.0.1",
+        ),
         httpx2.LocalProtocolError("bad request"),
         httpx2.UnsupportedProtocol("ftp"),
         httpx2.InvalidURL("bad URL"),

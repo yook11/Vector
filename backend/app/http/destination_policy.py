@@ -10,7 +10,10 @@ from __future__ import annotations
 import ipaddress
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
+
+from app.shared.errors import ApplicationError
 
 _RANGES_FILE = Path(__file__).with_name("non_public_ranges.json")
 
@@ -50,21 +53,42 @@ def _in_non_public_range(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> b
     return any(ip in network for network in networks)
 
 
-class NotAnIpAddressError(Exception):
-    """文字列が IP アドレスとしてパースできない (DNS 名等)。"""
+def _parse_ip(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """括弧で囲まれたIPv6も読み、IPとして読めなければNoneを返す。"""
+    try:
+        return ipaddress.ip_address(text.strip("[]"))
+    except ValueError:
+        return None
 
 
-class NotAPublicIpError(Exception):
-    """IP は valid だが SSRF 防御方針上 public ではない。
+def _is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+        or _in_non_public_range(ip)
+    )
 
-    ``ipaddress`` のフラグ (private / loopback / link-local / reserved /
-    multicast / unspecified) のいずれか、または ``non_public_ranges.json`` の
-    レンジに該当するアドレス。
-    """
+
+class HostBlockedReason(StrEnum):
+    RESOLVED_TO_NON_PUBLIC = "resolved_to_non_public"
+    NON_PUBLIC_IP_LITERAL = "non_public_ip_literal"
 
 
-class HostBlockedError(Exception):
+class HostBlockedError(ApplicationError):
     """IP直書きまたはDNS解決結果が外部通信の宛先方針で拒否された。"""
+
+    def __init__(self, *, reason: HostBlockedReason, host: str, address: str) -> None:
+        # 拒否したhostとIPは内部の宛先を示しうるため、説明文と診断情報へ入れない。
+        super().__init__(
+            "宛先が外部通信の方針で拒否されました", details={"reason": reason.value}
+        )
+        self.reason = reason
+        self.host = host
+        self.address = address
 
 
 class PublicIpAddress:
@@ -86,31 +110,19 @@ class PublicIpAddress:
     ``str(addr)`` で標準化された IP 表記が得られる
     (例: ``2001:db8::0001`` → ``2001:db8::1``)。
 
+    文字列の判定には ``classify_ip_address`` を使う。
+
     Raises:
-        NotAnIpAddressError: 入力が IP として parse できない。
-        NotAPublicIpError: IP だが内部レンジに属する。
+        ValueError: 公開IPではない値から生成しようとした。
     """
 
     __slots__ = ("_value",)
 
     def __init__(self, addr: str) -> None:
-        candidate = addr.strip("[]")
-        try:
-            ip = ipaddress.ip_address(candidate)
-        except ValueError as e:
-            msg = f"not an IP address: {addr}"
-            raise NotAnIpAddressError(msg) from e
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-            or _in_non_public_range(ip)
-        ):
-            msg = f"not a public IP: {addr}"
-            raise NotAPublicIpError(msg)
+        ip = _parse_ip(addr)
+        # 型が公開IPであることを保証するため、判定を経ない生成も同じ方針で拒否する。
+        if ip is None or _is_non_public(ip):
+            raise ValueError("公開IPアドレスではない値からは生成できません")
         # constructor 内では object.__setattr__ で _value を初期化し、
         # 以降は本クラスの __setattr__ でブロックする (frozen 風の挙動)。
         object.__setattr__(self, "_value", str(ip))
@@ -136,3 +148,20 @@ class PublicIpAddress:
 
     def __hash__(self) -> int:
         return hash(self._value)
+
+
+@dataclass(frozen=True, slots=True)
+class NonPublicIpAddress:
+    """IPとして読めるが、外部通信の宛先方針で非公開とするアドレスの標準表記。"""
+
+    value: str
+
+
+def classify_ip_address(text: str) -> PublicIpAddress | NonPublicIpAddress | None:
+    """文字列がIPとして読めれば公開か非公開かを返し、読めなければNoneを返す。"""
+    ip = _parse_ip(text)
+    if ip is None:
+        return None
+    if _is_non_public(ip):
+        return NonPublicIpAddress(str(ip))
+    return PublicIpAddress(str(ip))

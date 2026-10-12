@@ -19,7 +19,7 @@ from app.collection.article_completion.errors import (
     RobotsDisallowedError,
 )
 from app.http import external
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.destination_resolution import HostResolutionError
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import HttpTransportFailureReason, HttpTransportStage
@@ -194,7 +194,11 @@ async def test_robots_timeout_is_transport_failure(install_client) -> None:
 
 async def test_destination_policy_rejection_propagates(monkeypatch) -> None:
     """標準transportの宛先保護を通り、拒否を通信失敗へ変換しない。"""
-    original = HostBlockedError("destination denied")
+    original = HostBlockedError(
+        reason=HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+        host="internal.example",
+        address="10.0.0.1",
+    )
 
     async def reject(host):
         raise original

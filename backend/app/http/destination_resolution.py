@@ -7,9 +7,10 @@ import socket
 
 from app.http.destination_policy import (
     HostBlockedError,
-    NotAnIpAddressError,
-    NotAPublicIpError,
+    HostBlockedReason,
+    NonPublicIpAddress,
     PublicIpAddress,
+    classify_ip_address,
 )
 
 
@@ -57,12 +58,16 @@ async def resolve_public_host_addresses(host: str) -> tuple[PublicIpAddress, ...
 
     addrs: list[PublicIpAddress] = []
     for addr in resolved:
-        try:
-            addrs.append(PublicIpAddress(addr))
-        except NotAPublicIpError as e:
-            msg = f"host resolves to non-public address: {host} -> {addr}"
-            raise HostBlockedError(msg) from e
-        except NotAnIpAddressError as e:
-            msg = f"DNS resolution returned an invalid address for host: {host}"
-            raise HostResolutionError(msg) from e
+        match classify_ip_address(addr):
+            case PublicIpAddress() as public:
+                addrs.append(public)
+            case NonPublicIpAddress():
+                raise HostBlockedError(
+                    reason=HostBlockedReason.RESOLVED_TO_NON_PUBLIC,
+                    host=host,
+                    address=addr,
+                )
+            case None:
+                msg = f"DNS resolution returned an invalid address for host: {host}"
+                raise HostResolutionError(msg)
     return tuple(addrs)
