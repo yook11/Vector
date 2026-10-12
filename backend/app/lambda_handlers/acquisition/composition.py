@@ -48,7 +48,7 @@ async def open_acquisition_consumer(
         create_engine=create_engine,
         build_consumer=build_consumer,
         failure_recorder=ArticleFetchLifecycleRecorder(
-            structlog.get_logger(__name__), operation="acquisition"
+            structlog.get_logger(__name__), stage="acquisition"
         ),
     ) as consumer:
         yield consumer

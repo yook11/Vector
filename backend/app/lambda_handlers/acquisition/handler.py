@@ -37,14 +37,14 @@ def handler(sqs_event: object, context: object) -> RedeliveryResponse:
         settings = AcquisitionConsumerSettings()  # type: ignore[call-arg]
     except Exception as exc:
         ArticleFetchLifecycleRecorder(
-            logger, operation="acquisition"
+            logger, stage="acquisition"
         ).record_initialization_failure("input_or_settings", exc)
         raise RuntimeError("acquisition_initialization_failed") from None
     try:
         return asyncio.run(_run(message_batch, settings))
     except Exception as exc:
         ArticleFetchLifecycleRecorder(
-            logger, operation="acquisition"
+            logger, stage="acquisition"
         ).record_initialization_failure("resources", exc)
         raise RuntimeError("acquisition_resources_failed") from None
 

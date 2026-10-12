@@ -1,7 +1,9 @@
-"""Consumer・SQSをモックにし、補完handlerの配送判断と診断を確認する。"""
+"""Consumer・SQSをモックにし、補完handlerの配送判断と実ロガーの出力を確認する。"""
 
 import asyncio
 import json
+import sys
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
@@ -15,8 +17,13 @@ from app.collection.article_completion.consumer import (
     NoRetryCompletion,
     RetryCompletion,
 )
+from app.collection.article_completion.errors import ArticleCompletionError
 from app.collection.retry_at import RetryAt
+from app.http.errors import HttpResponseError
+from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
 from app.lambda_handlers.sqs.received_message import ReceivedMessageBatchInvalidError
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from tests.collection.test_incomplete_article_recorded_event import valid_event
 
 module = import_module("app.lambda_handlers.completion.handler")
@@ -39,19 +46,20 @@ def runtime(monkeypatch):
             consume=AsyncMock(return_value=CompletionSucceeded(901))
         ),
         settings=SimpleNamespace(
-            sqs_article_completion_queue_url="https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion"
+            env="test",
+            sqs_article_completion_queue_url="https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion",
         ),
         context=SimpleNamespace(
-            get_remaining_time_in_millis=Mock(return_value=600_000)
+            aws_request_id="request-001",
+            get_remaining_time_in_millis=Mock(return_value=600_000),
         ),
         sqs=Mock(),
         now=datetime(2026, 9, 14, tzinfo=UTC),
-        log=Mock(),
         released=False,
     )
 
     @asynccontextmanager
-    async def open_resources(settings):
+    async def open_resources(settings, *, failure_recorder):
         try:
             yield SimpleNamespace(consumer=state.consumer, sqs_client=state.sqs)
         finally:
@@ -60,12 +68,39 @@ def runtime(monkeypatch):
     monkeypatch.setattr(module, "open_completion_resources", open_resources)
     state.settings_factory = Mock(return_value=state.settings)
     monkeypatch.setattr(module, "CompletionConsumerSettings", state.settings_factory)
-    monkeypatch.setattr(module, "logger", state.log)
-    monkeypatch.setattr(module, "setup_lambda_logging", Mock())
     clock = Mock(wraps=datetime)
     clock.now.side_effect = lambda tz: state.now.astimezone(tz)
     monkeypatch.setattr(module, "datetime", clock)
     return state
+
+
+@pytest.fixture
+def read_logs(capsys) -> Callable[[], list[dict[str, object]]]:
+    """出力されたログを、実行ごとに変わる時刻・経過時間・発生位置を除いて返す。"""
+
+    def _read() -> list[dict[str, object]]:
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        for log in logs:
+            del log["timestamp"]
+            log.pop("duration_ms", None)
+            log.pop("frames", None)
+        return logs
+
+    return _read
+
+
+@pytest.fixture
+def broken_output(monkeypatch):
+    """ログの書き込みが毎回失敗する標準出力へ差し替える。"""
+
+    class BrokenOutput:
+        def write(self, text):
+            raise OSError("private-log")
+
+        def flush(self):
+            raise OSError("private-log")
+
+    monkeypatch.setattr(sys, "stdout", BrokenOutput())
 
 
 @pytest.mark.parametrize("reason", ["missing", "closed", "superseded", "url_conflict"])
@@ -236,7 +271,7 @@ def test_resource_initialization_failure_fails_invocation(runtime, monkeypatch):
     """初期化失敗を個別メッセージの失敗応答へ変換しない。"""
 
     @asynccontextmanager
-    async def fail(settings):
+    async def fail(settings, *, failure_recorder):
         raise RuntimeError("private-init")
         yield
 
@@ -255,85 +290,188 @@ def test_cancellation_propagates_and_releases_resources(runtime):
     assert runtime.released
 
 
-def test_success_log_identifies_completed_article(runtime):
-    """成功ログには検証済みのイベントと完成記事の識別子を記録する。"""
+def test_success_log_identifies_completed_article(runtime, read_logs):
+    """補完して保存したメッセージは、完成記事のIDと受信完了の扱いを完了ログに記録する。"""
     runtime.consumer.consume.return_value = CompletionSucceeded(901)
 
     module.handler({"Records": [record("success", 101)]}, runtime.context)
 
-    assert runtime.log.info.call_args.kwargs == {
+    assert read_logs()[-1] == {
+        "event": "completion_message_processing_completed",
+        "level": "info",
+        "log_policy": "external_content_fetch",
+        "service": "article_fetch",
+        "stage": "completion",
+        "request_id": "request-001",
+        "environment": "test",
         "message_id": "success",
-        "event_id": valid_event()["event_id"],
+        "event_id": "00000000-0000-0000-0000-000000000001",
         "incomplete_article_id": 101,
+        "source_id": 7,
+        "outcome": "succeeded",
         "analyzable_article_id": 901,
-        "result": "succeeded",
+        "message_disposition": "completed",
     }
 
 
 @pytest.mark.parametrize("reason", ["missing", "closed", "superseded", "url_conflict"])
-def test_not_required_log_retains_reason(runtime, reason):
-    """処理不要のログにはConsumerが返した理由を記録する。"""
+def test_not_required_log_retains_reason(runtime, read_logs, reason):
+    """処理が不要だったメッセージは、Consumerが返した理由を完了ログのoutcomeに記録する。"""
     runtime.consumer.consume.return_value = NoRetryCompletion(cause=reason)
 
     module.handler({"Records": [record("not-required")]}, runtime.context)
 
-    fields = runtime.log.info.call_args.kwargs
-    assert fields["result"] == "not_required"
-    assert fields["reason"] == reason
+    assert read_logs()[-1] == {
+        "event": "completion_message_processing_completed",
+        "level": "info",
+        "log_policy": "external_content_fetch",
+        "service": "article_fetch",
+        "stage": "completion",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "not-required",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "incomplete_article_id": 101,
+        "source_id": 7,
+        "outcome": reason,
+        "message_disposition": "completed",
+    }
 
 
-def test_closed_log_exposes_decision_without_original_exception(runtime):
-    """closedのログは判断codeと調査要否を記録し、元例外の自由文を出さない。"""
+def test_closed_log_keeps_decision_and_cause_facts(runtime, read_logs):
+    """再試行しない失敗は、判断のcodeと受信完了の扱いに、原因の説明と診断情報を添えて記録する。"""
     runtime.consumer.consume.return_value = NoRetryCompletion(
-        RuntimeError("private-header"), "stop", requires_investigation=True
+        ArticleCompletionError(
+            cause=HttpResponseError(
+                status_code=404, received_at=datetime(2026, 9, 14, tzinfo=UTC)
+            )
+        ),
+        "http_response_error",
     )
 
     module.handler({"Records": [record("closed")]}, runtime.context)
 
-    fields = runtime.log.info.call_args.kwargs
-    assert fields["result"] == "closed"
-    assert fields["code"] == "stop"
-    assert fields["requires_investigation"] is True
-    assert "private" not in repr(runtime.log.mock_calls)
+    assert read_logs()[-1] == {
+        "event": "completion_message_processing_failed",
+        "level": "warning",
+        "log_policy": "external_content_fetch",
+        "service": "article_fetch",
+        "stage": "completion",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "closed",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "incomplete_article_id": 101,
+        "source_id": 7,
+        "code": "http_response_error",
+        "requires_investigation": False,
+        "message_disposition": "completed",
+        "error_class": (
+            "app.collection.article_completion.errors.ArticleCompletionError"
+        ),
+        "error_message": "記事の補完工程で失敗しました",
+        "related_exceptions": [
+            {
+                "parent": None,
+                "relation": "cause",
+                "exception": {
+                    "error_class": "app.http.errors.HttpResponseError",
+                    "error_message": "HTTPの非成功応答を受け取りました",
+                    "frames": [],
+                    "error_details": {"status_code": 404},
+                },
+            }
+        ],
+    }
 
 
-def test_retry_log_preserves_original_time_and_safe_decision(runtime):
-    """再試行ログは判断の元時刻を保持し、元例外の自由文を出さない。"""
+def test_retry_log_preserves_original_time_and_decision(runtime, read_logs):
+    """再試行する失敗は、判断の元時刻と再配信の扱いを、原因の診断情報とともに記録する。"""
     retry_at = RetryAt(datetime(2026, 9, 15, tzinfo=UTC))
     runtime.consumer.consume.return_value = RetryCompletion(
-        RuntimeError("private-header"),
-        "retry",
+        ArticleCompletionError(
+            cause=HttpResponseError(
+                status_code=503,
+                received_at=datetime(2026, 9, 14, tzinfo=UTC),
+                retry_after="86400",
+            )
+        ),
+        "http_response_error",
         retry_at=retry_at,
-        requires_investigation=True,
     )
 
     module.handler({"Records": [record("retry")]}, runtime.context)
 
-    fields = runtime.log.info.call_args.kwargs
-    assert fields["result"] == "retry"
-    assert fields["code"] == "retry"
-    assert fields["retry_at"] == retry_at.value.isoformat()
-    assert fields["requires_investigation"] is True
-    assert "private" not in repr(runtime.log.mock_calls)
+    # 再試行の記録の後に、再配信の待機のログが続く。
+    failed = [
+        log
+        for log in read_logs()
+        if log["event"] == "completion_message_processing_failed"
+    ]
+    assert failed == [
+        {
+            "event": "completion_message_processing_failed",
+            "level": "warning",
+            "log_policy": "external_content_fetch",
+            "service": "article_fetch",
+            "stage": "completion",
+            "request_id": "request-001",
+            "environment": "test",
+            "message_id": "retry",
+            "event_id": "00000000-0000-0000-0000-000000000001",
+            "incomplete_article_id": 101,
+            "source_id": 7,
+            "code": "http_response_error",
+            "requires_investigation": False,
+            "retry_at": "2026-09-15T00:00:00+00:00",
+            "message_disposition": "batch_item_failure",
+            "error_class": (
+                "app.collection.article_completion.errors.ArticleCompletionError"
+            ),
+            "error_message": "記事の補完工程で失敗しました",
+            "related_exceptions": [
+                {
+                    "parent": None,
+                    "relation": "cause",
+                    "exception": {
+                        "error_class": "app.http.errors.HttpResponseError",
+                        "error_message": "HTTPの非成功応答を受け取りました",
+                        "frames": [],
+                        "error_details": {"status_code": 503},
+                    },
+                }
+            ],
+        }
+    ]
 
 
-def test_message_failure_log_does_not_expose_exception_text(runtime):
-    """配送例外のログは識別子と例外型だけを出し、自由文を含めない。"""
-    runtime.consumer.consume.side_effect = RuntimeError("private-exception")
+def test_consumer_exception_is_logged_as_call_failure(runtime, read_logs):
+    """Consumerから結果を受け取れなかった例外は、呼び出しの失敗として再配信の扱いとともに記録する。"""
+    runtime.consumer.consume.side_effect = RuntimeError("consume-raised")
 
     module.handler({"Records": [record("failed")]}, runtime.context)
 
-    assert set(runtime.log.warning.call_args.kwargs) == {
-        "message_id",
-        "event_id",
-        "incomplete_article_id",
-        "error_class",
+    assert read_logs()[-1] == {
+        "event": "completion_message_processing_failed",
+        "level": "error",
+        "log_policy": "external_content_fetch",
+        "service": "article_fetch",
+        "stage": "completion",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "failed",
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "incomplete_article_id": 101,
+        "source_id": 7,
+        "operation": "consume",
+        "message_disposition": "batch_item_failure",
+        "error_class": "builtins.RuntimeError",
+        "error_message": "consume-raised",
     }
-    assert "private" not in repr(runtime.log.mock_calls)
 
 
-def test_invalid_event_log_does_not_expose_body_or_receipt(runtime):
-    """入力不正のログに本文・未知の項目名・receiptHandleを出さない。"""
+def test_invalid_event_log_does_not_expose_body_or_receipt(runtime, read_logs):
+    """契約違反のイベントは検証の理由と項目だけを記録し、本文の値・未知の項目名・receiptHandleを出さない。"""
     invalid = valid_event()
     invalid["payload"]["private-key"] = "private-value"
     batch = {
@@ -348,22 +486,39 @@ def test_invalid_event_log_does_not_expose_body_or_receipt(runtime):
 
     module.handler(batch, runtime.context)
 
-    assert runtime.log.warning.call_args.kwargs["reason"] == "invalid_payload"
-    assert "private" not in repr(runtime.log.mock_calls)
+    assert read_logs()[-1] == {
+        "event": "completion_message_processing_failed",
+        "level": "error",
+        "log_policy": "external_content_fetch",
+        "service": "article_fetch",
+        "stage": "completion",
+        "request_id": "request-001",
+        "environment": "test",
+        "message_id": "invalid",
+        "operation": "validate_event",
+        "message_disposition": "batch_item_failure",
+        "error_class": (
+            "app.collection.article_acquisition.events."
+            "IncompleteArticleEventInvalidError"
+        ),
+        "error_message": "Validation failed: invalid_payload",
+        "error_details": {
+            "kind": "application_validation",
+            "reason": "invalid_payload",
+            "issues": [{"field": "payload", "code": "unknown_field"}],
+        },
+    }
 
 
-def test_success_log_failure_does_not_change_acknowledgement(runtime):
+def test_success_log_failure_does_not_change_acknowledgement(runtime, broken_output):
     """成功ログの出力失敗でも受信完了を維持する。"""
-    runtime.log.info.side_effect = RuntimeError("private-log")
-
     response = module.handler({"Records": [record("saved")]}, runtime.context)
 
     assert response == {"batchItemFailures": []}
 
 
-def test_retry_log_failure_does_not_change_redelivery(runtime):
+def test_retry_log_failure_does_not_change_redelivery(runtime, broken_output):
     """再試行ログの出力失敗でも再配信対象を維持する。"""
-    runtime.log.info.side_effect = RuntimeError("private-log")
     runtime.consumer.consume.return_value = RetryCompletion(
         RuntimeError("private-error"), "retry"
     )
@@ -373,9 +528,8 @@ def test_retry_log_failure_does_not_change_redelivery(runtime):
     assert response == {"batchItemFailures": [{"itemIdentifier": "retry"}]}
 
 
-def test_invalid_input_log_failure_does_not_change_redelivery(runtime):
+def test_invalid_input_log_failure_does_not_change_redelivery(runtime, broken_output):
     """入力不正ログの出力失敗でも再配信対象を維持する。"""
-    runtime.log.warning.side_effect = RuntimeError("private-log")
     batch = {"Records": [{"messageId": "invalid", "body": "private-body"}]}
 
     response = module.handler(batch, runtime.context)
@@ -383,9 +537,8 @@ def test_invalid_input_log_failure_does_not_change_redelivery(runtime):
     assert response == {"batchItemFailures": [{"itemIdentifier": "invalid"}]}
 
 
-def test_contract_validation_log_failure_preserves_redelivery(runtime):
+def test_contract_validation_log_failure_preserves_redelivery(runtime, broken_output):
     """イベント契約違反のログ障害でも再配信対象を維持する。"""
-    runtime.log.warning.side_effect = RuntimeError("private-log")
     data = valid_event()
     data["schema_version"] = 2
     response = module.handler(
@@ -421,7 +574,7 @@ def test_unstarted_messages_keep_input_order_after_previous_failure(runtime):
     runtime.consumer.consume.assert_awaited_once_with(101)
 
 
-def test_insufficient_time_precedes_body_parsing(runtime):
+def test_insufficient_time_precedes_body_parsing(runtime, read_logs):
     """最初から時間不足なら本文不正として解析しない。"""
     runtime.context.get_remaining_time_in_millis.return_value = 59_999
     response = module.handler(
@@ -431,10 +584,10 @@ def test_insufficient_time_precedes_body_parsing(runtime):
         {"itemIdentifier": "first"},
         {"itemIdentifier": "next"},
     ]
-    assert all(
-        c.args[0] == "completion_message_unstarted"
-        for c in runtime.log.warning.call_args_list
-    )
+    assert [log["event"] for log in read_logs()] == [
+        "completion_message_unstarted",
+        "completion_message_unstarted",
+    ]
 
 
 def test_all_ids_are_checked_before_remaining_time(runtime):
@@ -526,12 +679,15 @@ async def test_cancelled_communication_finishes_before_resource_release(
             raise communication_error
 
     runtime.sqs.change_message_visibility.side_effect = send
+    logger = create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES)
     task = asyncio.create_task(
         module._run_completion(
             {"Records": [record(), record("second", 102)]},
             runtime.settings,
             context=runtime.context,
             now=lambda: runtime.now,
+            logger=logger,
+            failure_recorder=ArticleFetchLifecycleRecorder(logger, stage="completion"),
         )
     )
     try:
@@ -579,9 +735,8 @@ def test_skipped_wait_keeps_retry_in_response(runtime):
     runtime.sqs.change_message_visibility.assert_not_called()
 
 
-def test_wait_logging_failure_preserves_response(runtime):
+def test_wait_logging_failure_preserves_response(runtime, broken_output):
     """待機結果の診断障害で再配信対象を増減させない。"""
-    runtime.log.warning.side_effect = RuntimeError("private-log")
     runtime.consumer.consume.return_value = RetryCompletion(
         RuntimeError(), "retry", RetryAt(runtime.now + timedelta(seconds=120))
     )
@@ -590,9 +745,8 @@ def test_wait_logging_failure_preserves_response(runtime):
     }
 
 
-def test_unstarted_logging_failure_preserves_all_unstarted_ids(runtime):
+def test_unstarted_logging_failure_preserves_all_unstarted_ids(runtime, broken_output):
     """未着手の診断障害でも未着手分をすべて再配信にする。"""
-    runtime.log.warning.side_effect = RuntimeError("private-log")
     runtime.context.get_remaining_time_in_millis.return_value = 59_999
     assert module.handler(
         {"Records": [record("first"), record("second", 102)]}, runtime.context
