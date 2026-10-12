@@ -1,11 +1,7 @@
 locals {
   backfill_stages = toset(["curation", "assessment", "embedding", "completion"])
-  # 分析3工程は失敗した記事をDLQからredriveで戻すため、定期起動するのは補完だけにする。
-  backfill_schedules = {
-    completion = "cron(15,45 * * * ? *)"
-  }
-  backfill_names = { for stage in local.backfill_stages : stage => "${var.name_prefix}-${stage}-backfill" }
-  backfill_arns  = { for stage, name in local.backfill_names : stage => "arn:aws:lambda:${var.region}:${local.account_id}:function:${name}" }
+  backfill_names  = { for stage in local.backfill_stages : stage => "${var.name_prefix}-${stage}-backfill" }
+  backfill_arns   = { for stage, name in local.backfill_names : stage => "arn:aws:lambda:${var.region}:${local.account_id}:function:${name}" }
   # 救済(backfill)は段共通のロールで動く。段を足すときは backfill_stages に加えるだけで、ロールと boundary は増えない。
   backfill_role_name = "${var.name_prefix}-backfill"
 }
@@ -117,68 +113,6 @@ resource "aws_lambda_function" "backfill" {
   lifecycle {
     ignore_changes = [image_uri]
   }
-}
-
-resource "aws_scheduler_schedule_group" "backfill" {
-  name = local.backfill_role_name
-}
-
-resource "aws_iam_role" "backfill_scheduler" {
-  name                 = "${local.backfill_role_name}-scheduler"
-  path                 = "/${var.name_prefix}/"
-  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.name_prefix}-ci/${local.backfill_role_name}-scheduler-boundary"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "scheduler.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-      Condition = {
-        StringEquals = { "aws:SourceAccount" = local.account_id }
-        ArnEquals    = { "aws:SourceArn" = aws_scheduler_schedule_group.backfill.arn }
-      }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "backfill_scheduler" {
-  name = "invoke-backfill"
-  role = aws_iam_role.backfill_scheduler.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "lambda:InvokeFunction"
-      Resource = values(local.backfill_arns)
-    }]
-  })
-}
-
-resource "aws_scheduler_schedule" "backfill" {
-  for_each = local.backfill_schedules
-
-  name                         = local.backfill_names[each.key]
-  group_name                   = aws_scheduler_schedule_group.backfill.name
-  state                        = "ENABLED"
-  schedule_expression          = each.value
-  schedule_expression_timezone = "UTC"
-
-  flexible_time_window {
-    mode = "OFF"
-  }
-
-  target {
-    arn      = aws_lambda_function.backfill[each.key].arn
-    role_arn = aws_iam_role.backfill_scheduler.arn
-    input    = "{}"
-
-    retry_policy {
-      maximum_retry_attempts       = 0
-      maximum_event_age_in_seconds = 60
-    }
-  }
-
-  depends_on = [aws_iam_role_policy.backfill_scheduler, aws_lambda_function_event_invoke_config.backfill]
 }
 
 resource "aws_lambda_function_event_invoke_config" "backfill" {

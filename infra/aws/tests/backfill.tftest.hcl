@@ -74,16 +74,6 @@ override_resource {
 }
 override_resource {
   override_during = plan
-  target          = aws_iam_role.backfill_scheduler
-  values          = { arn = "arn:aws:iam::123456789012:role/slice-test/slice-test-backfill-scheduler" }
-}
-override_resource {
-  override_during = plan
-  target          = aws_scheduler_schedule_group.backfill
-  values          = { arn = "arn:aws:scheduler:ap-northeast-1:123456789012:schedule-group/slice-test-backfill" }
-}
-override_resource {
-  override_during = plan
   target          = aws_lambda_function.backfill["curation"]
   values          = { arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:slice-test-curation-backfill" }
 }
@@ -190,38 +180,16 @@ run "first_deployment_places_all_four_stages" {
   }
 }
 
-run "only_completion_is_scheduled" {
+run "async_invocation_expires_after_sixty_seconds_without_error_retries" {
   command = plan
   assert {
-    condition = { for stage, schedule in aws_scheduler_schedule.backfill : stage => schedule.schedule_expression } == {
-      completion = "cron(15,45 * * * ? *)"
-      } && alltrue([for stage, schedule in aws_scheduler_schedule.backfill :
-        schedule.state == "ENABLED" &&
-        schedule.schedule_expression_timezone == "UTC" &&
-        schedule.flexible_time_window[0].mode == "OFF" &&
-        schedule.target[0].input == "{}" &&
-        schedule.target[0].arn == aws_lambda_function.backfill[stage].arn &&
-        schedule.target[0].role_arn == aws_iam_role.backfill_scheduler.arn &&
-        schedule.group_name == aws_scheduler_schedule_group.backfill.name
-    ]) && aws_scheduler_schedule_group.backfill.name == "slice-test-backfill"
-    error_message = "定期起動は補完だけとし、UTCの30分間隔で、共通groupと共通Schedulerロールから補完のLambdaを起動する。"
-  }
-}
-
-run "both_retry_layers_expire_after_sixty_seconds_without_error_retries" {
-  command = plan
-  assert {
-    condition = alltrue([for schedule in aws_scheduler_schedule.backfill :
-      schedule.target[0].retry_policy[0].maximum_retry_attempts == 0 &&
-      schedule.target[0].retry_policy[0].maximum_event_age_in_seconds == 60 &&
-      length(schedule.target[0].dead_letter_config) == 0
-      ]) && alltrue([for stage, config in aws_lambda_function_event_invoke_config.backfill :
+    condition = alltrue([for stage, config in aws_lambda_function_event_invoke_config.backfill :
       config.maximum_retry_attempts == 0 &&
       config.maximum_event_age_in_seconds == 60 &&
       config.function_name == aws_lambda_function.backfill[stage].function_name &&
       length(config.destination_config) == 0
     ])
-    error_message = "Scheduler配送とLambda関数エラーの再試行を0回・有効期間60秒にする。"
+    error_message = "Lambda関数エラーの再試行を0回・有効期間60秒にする。"
   }
 }
 
@@ -263,21 +231,5 @@ run "execution_role_and_endpoint_allow_only_backfill_queues" {
       anytrue([for statement in jsondecode(policy.policy).Statement : try(statement.Effect == "Deny" && statement.Action == "sqs:SendMessage" && statement.Condition.StringNotEquals["aws:sourceVpce"] == aws_vpc_endpoint.outbox_sqs.id, false)])
     ])
     error_message = "既存キューのendpoint外からの送信拒否を維持する。"
-  }
-}
-
-run "scheduler_trust_and_invocation_are_backfill_scoped" {
-  command = plan
-  assert {
-    condition = (
-      aws_iam_role.backfill_scheduler.name == "slice-test-backfill-scheduler" &&
-      aws_iam_role.backfill_scheduler.permissions_boundary == "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-scheduler-boundary" &&
-      jsondecode(aws_iam_role.backfill_scheduler.assume_role_policy).Statement == [{
-        Effect    = "Allow", Principal = { Service = "scheduler.amazonaws.com" }, Action = "sts:AssumeRole",
-        Condition = { StringEquals = { "aws:SourceAccount" = "123456789012" }, ArnEquals = { "aws:SourceArn" = aws_scheduler_schedule_group.backfill.arn } }
-      }] &&
-      jsondecode(aws_iam_role_policy.backfill_scheduler.policy).Statement == [{ Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [for stage in ["assessment", "completion", "curation", "embedding"] : local.backfill_arns[stage]] }]
-    )
-    error_message = "Schedulerの信頼元をaccountと共通groupに、呼び出しをbackfillの4関数に限定する。"
   }
 }

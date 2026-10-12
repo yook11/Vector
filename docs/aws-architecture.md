@@ -14,7 +14,7 @@
 - 各区画のRDSは、すべて上段と同じDBを再掲している。収集起動による対象ソースの参照、記事処理による結果・後続イベントの保存、Outbox Relayによる未配送イベントの参照を示す。①・②の参照矢印はいずれもLambdaからRDSへの問い合わせを表し、RDSがLambdaを直接起動する意味ではない。保存側のRDSには工程ごとの結果テーブルとOutboxを示し、工程の結果を保存したうえで、次工程が必要な場合だけOutboxへイベントを同時に記録する。
 - LambdaはVPCに接続する。関数の実行環境自体をECSと同じサブネット内に配置している、という意味ではない。
 - 記事取得用のSQS・Lambdaは個別に示し、後続4工程のSQS・Lambdaと4つのOutbox Relayはそれぞれ集約して表示している。後続イベントが必要な処理では、結果とイベントをRDSの同一トランザクションで記録し、Relayが次工程のSQSへ配送する。②の受け渡しを工程ごとに繰り返す。
-- EventBridge Schedulerから直接起動するのは、収集対象選択、Outbox Relay、backfill、認証レート制限データの清掃。記事処理の5つのConsumerはSQSのイベントソースマッピングから起動する。
+- EventBridge Schedulerから直接起動するのは、収集対象選択、Outbox Relay、認証レート制限データの清掃。記事処理の5つのConsumerはSQSのイベントソースマッピングから起動する。
 - 処理用キューに設定されたDLQへの移動、収集起動・実行の失敗先、対象外記事や重複記事などの分岐、backfillからSQSへの再投入経路は、全体図では簡略化している。
 
 ## 実リソースの確認結果
@@ -25,9 +25,9 @@
 |---|---|---|
 | 公開入口 | Route 53の公開ドメインからALBへのAlias。ACM証明書は`ISSUED`。HTTP 80はHTTPSへ転送、HTTPS 443はfrontendへ転送。frontendの3000番ポートのターゲットは`healthy` | Route 53 / ACM / ELBv2 API、[web.tf](../infra/aws/web.tf) |
 | ECS | `frontend`、`api`、`scheduler`、`insights`、`agent`、`proxy`の6サービス。すべてFargate / ARM64、desired 1・running 1・pending 0。すべてpublic IP無効 | ECS API、[locals.tf](../infra/aws/locals.tf)、[platform_ecs_services.tf](../infra/aws/platform_ecs_services.tf)、[platform_egress_proxy.tf](../infra/aws/platform_egress_proxy.tf) |
-| Lambda | 15関数。収集対象選択1、記事処理Consumer 5、Outbox Relay 4、backfill 4（定期起動は補完だけ）、認証レート制限データ清掃1。すべてコンテナイメージ形式、VPC接続 | Lambda API、`infra/aws/news_pipeline_*.tf`、[news_pipeline_outbox_relays.tf](../infra/aws/news_pipeline_outbox_relays.tf)、[news_pipeline_backfill.tf](../infra/aws/news_pipeline_backfill.tf)、[web_auth_rate_limit_cleanup.tf](../infra/aws/web_auth_rate_limit_cleanup.tf) |
+| Lambda | 15関数。収集対象選択1、記事処理Consumer 5、Outbox Relay 4、backfill 4（定期起動なし）、認証レート制限データ清掃1。すべてコンテナイメージ形式、VPC接続 | Lambda API、`infra/aws/news_pipeline_*.tf`、[news_pipeline_outbox_relays.tf](../infra/aws/news_pipeline_outbox_relays.tf)、[news_pipeline_backfill.tf](../infra/aws/news_pipeline_backfill.tf)、[web_auth_rate_limit_cleanup.tf](../infra/aws/web_auth_rate_limit_cleanup.tf) |
 | SQS | 12キュー。処理用5、各工程のDLQ 5、収集起動・実行の失敗用2。5つの処理用キューは受信回数5回のredrive policyを持ち、それぞれのConsumerとのイベントソースマッピングは`Enabled` | SQS / Lambda API、[news_pipeline_source_dispatch.tf](../infra/aws/news_pipeline_source_dispatch.tf)、[news_pipeline_outbox.tf](../infra/aws/news_pipeline_outbox.tf) |
-| EventBridge Scheduler | 9スケジュール、すべて`ENABLED`。収集頻度別3、毎分のOutbox Relay 4、補完のbackfill 1、認証レート制限データ清掃1 | Scheduler API、[news_pipeline_source_dispatch.tf](../infra/aws/news_pipeline_source_dispatch.tf)、[news_pipeline_backfill.tf](../infra/aws/news_pipeline_backfill.tf) |
+| EventBridge Scheduler | 8スケジュール、すべて`ENABLED`。収集頻度別3、毎分のOutbox Relay 4、認証レート制限データ清掃1 | Scheduler API、[news_pipeline_source_dispatch.tf](../infra/aws/news_pipeline_source_dispatch.tf)、[news_pipeline_backfill.tf](../infra/aws/news_pipeline_backfill.tf) |
 | RDS | `vector-db`、PostgreSQL 17.9、`db.t4g.small`、Single-AZ、`ap-northeast-1a`、非公開、IAM認証有効、`available` | RDS API、[platform_database.tf](../infra/aws/platform_database.tf) |
 | Valkey | `vector-broker`と`vector-rate-limit`の2系統。各`cache.t4g.micro`、primary 1ノード、`ap-northeast-1a`、自動フェイルオーバー無効、通信暗号化有効、`available` | ElastiCache API、[platform_valkey.tf](../infra/aws/platform_valkey.tf) |
 | Web検索 | AgentCore Gatewayと`web-search`ターゲットがともに`READY`。管理されたWeb検索コネクターを利用 | AgentCore Control API、[agent.tf](../infra/aws/agent.tf) |
