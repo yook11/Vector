@@ -27,7 +27,7 @@ def resources(monkeypatch):
     create_engine = Mock(return_value=engine)
     build_consumer = Mock(side_effect=lambda **kwargs: object())
     logger = Mock()
-    recorder = lifecycle.ArticleFetchLifecycleRecorder(logger, operation="completion")
+    recorder = lifecycle.ArticleFetchLifecycleRecorder(logger, stage="completion")
     arguments = dict(
         aws_region="ap-northeast-1",
         database_url="postgresql+asyncpg://vector_collect@db.invalid/vector?sslmode=require",
@@ -139,14 +139,15 @@ async def test_cleanup_and_logging_failures_preserve_outcome(resources, original
 
 @pytest.mark.asyncio
 async def test_initialization_diagnostic_does_not_expose_exception_text(resources):
-    """初期化診断は例外型だけを出力し、機密を含み得る自由文を出さない。"""
+    """初期化診断は失敗した箇所と例外型だけを出力し、機密を含み得る自由文を出さない。"""
     resources.build_consumer.side_effect = RuntimeError("private initialization")
     with pytest.raises(RuntimeError):
         async with resources.open():
             pass
-    call = resources.logger.warning.call_args
-    assert call.kwargs["error_class"] == "builtins.RuntimeError"
-    assert "private" not in repr(call)
+    assert resources.logger.error.call_args == (
+        ("completion_initialization_failed",),
+        {"operation": "consumer", "error_class": "builtins.RuntimeError"},
+    )
 
 
 @pytest.mark.asyncio
@@ -161,14 +162,18 @@ async def test_sqs_initialization_failure_releases_fetch_resources(
     session = Mock()
     session.create_client.side_effect = original
     monkeypatch.setattr(composition, "Session", Mock(return_value=session))
-    monkeypatch.setattr(composition, "logger", resources.logger)
     settings = CompletionConsumerSettings(
         sqs_article_completion_queue_url="https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion",
         database_url="postgresql+asyncpg://vector_collect@db.invalid/vector?sslmode=require",
         aws_region="ap-northeast-1",
     )
     with pytest.raises(RuntimeError) as caught:
-        async with composition.open_completion_resources(settings):
+        async with composition.open_completion_resources(
+            settings,
+            failure_recorder=lifecycle.ArticleFetchLifecycleRecorder(
+                resources.logger, stage="completion"
+            ),
+        ):
             pytest.fail("配送資源がなければ起動しない")
     assert caught.value is original
     resources.engine.dispose.assert_awaited_once()
@@ -188,7 +193,6 @@ async def test_sqs_cleanup_failure_preserves_result_and_releases_database(
     session = Mock()
     session.create_client.return_value = sqs
     monkeypatch.setattr(composition, "Session", Mock(return_value=session))
-    monkeypatch.setattr(composition, "logger", resources.logger)
     resources.logger.warning.side_effect = RuntimeError("private logging")
     settings = CompletionConsumerSettings(
         sqs_article_completion_queue_url="https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion",
@@ -197,7 +201,12 @@ async def test_sqs_cleanup_failure_preserves_result_and_releases_database(
     )
     original = RuntimeError("consumer result")
     with pytest.raises(RuntimeError) as caught:
-        async with composition.open_completion_resources(settings):
+        async with composition.open_completion_resources(
+            settings,
+            failure_recorder=lifecycle.ArticleFetchLifecycleRecorder(
+                resources.logger, stage="completion"
+            ),
+        ):
             raise original
     assert caught.value is original
     sqs.close.assert_called_once()
@@ -222,12 +231,21 @@ class RejectApplicationSettings(importlib.abc.MetaPathFinder):
             raise AssertionError("completion must not import application settings")
 
 sys.meta_path.insert(0, RejectApplicationSettings())
+from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
 from app.lambda_handlers.completion.composition import open_completion_resources
 from app.lambda_handlers.completion.handler import handler
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 async def run():
-    async with open_completion_resources(CompletionConsumerSettings()) as resources:
+    recorder = ArticleFetchLifecycleRecorder(
+        create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES),
+        stage="completion",
+    )
+    async with open_completion_resources(
+        CompletionConsumerSettings(), failure_recorder=recorder
+    ) as resources:
         assert callable(resources.consumer.consume)
         assert callable(resources.sqs_client.change_message_visibility)
 asyncio.run(run())

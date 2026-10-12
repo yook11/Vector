@@ -8,6 +8,7 @@ from botocore.config import Config
 from botocore.session import Session
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from structlog.stdlib import BoundLogger
+from structlog.typing import FilteringBoundLogger
 
 from app.audit.error_fields import exception_fqn
 from app.db.iam import build_iam_password_provider
@@ -29,25 +30,31 @@ class ConsumerFactory[ConsumerT](Protocol):
 class ArticleFetchLifecycleRecorder:
     """工程名を添えた診断だけを出し、通常の出力障害を利用側へ返さない。"""
 
-    def __init__(self, logger: BoundLogger, *, operation: str) -> None:
+    def __init__(
+        self, logger: BoundLogger | FilteringBoundLogger, *, stage: str
+    ) -> None:
         self._logger = logger
-        self._operation = operation
+        self._stage = stage
 
-    def record_initialization_failure(self, stage: str, error: Exception) -> None:
-        self._record(
-            "initialization_failed", stage=stage, error_class=exception_fqn(error)
-        )
+    def record_initialization_failure(self, operation: str, error: Exception) -> None:
+        # 取得のロガーは例外の文面を保護しないため、例外は型名だけを渡す。
+        try:
+            self._logger.error(
+                f"{self._stage}_initialization_failed",
+                operation=operation,
+                error_class=exception_fqn(error),
+            )
+        except Exception:  # noqa: S110
+            # 診断の失敗で元の処理結果を変更しない。
+            pass
 
     def record_cleanup_failure(self, resource: str, error: Exception) -> None:
-        self._record(
-            "resources_cleanup_failed",
-            resource=resource,
-            error_class=exception_fqn(error),
-        )
-
-    def _record(self, event: str, **fields: object) -> None:
         try:
-            self._logger.warning(f"{self._operation}_{event}", **fields)
+            self._logger.warning(
+                f"{self._stage}_resources_cleanup_failed",
+                resource=resource,
+                error_class=exception_fqn(error),
+            )
         except Exception:  # noqa: S110
             # 診断の失敗で元の処理結果を変更しない。
             pass
@@ -82,10 +89,10 @@ async def open_article_fetch_consumer[ConsumerT](
 ) -> AsyncIterator[ConsumerT]:
     """HTTPの前提を検証し、呼び出し専用のDB資源で工程を組み立てる。"""
     async with AsyncExitStack() as stack:
-        stage = "http_settings"
+        operation = "http_settings"
         try:
             HttpSettings()
-            stage = "resources"
+            operation = "resources"
             rds = Session().create_client(
                 "rds",
                 region_name=aws_region,
@@ -100,9 +107,9 @@ async def open_article_fetch_consumer[ConsumerT](
             engine = create_engine(password_provider=provider)
             stack.push_async_callback(_dispose_engine, engine.dispose, failure_recorder)
             session_factory = caller_managed_session_factory(engine)
-            stage = "consumer"
+            operation = "consumer"
             consumer = build_consumer(session_factory=session_factory)
         except Exception as exc:
-            failure_recorder.record_initialization_failure(stage, exc)
+            failure_recorder.record_initialization_failure(operation, exc)
             raise
         yield consumer

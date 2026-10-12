@@ -9,9 +9,7 @@ from typing import Self
 
 from app.collection.retry_at import RetryAt
 from app.lambda_handlers.completion.composition import SqsMessageVisibilityClient
-from app.lambda_handlers.completion.failure_recorder import (
-    CompletionLambdaFailureRecorder,
-)
+from app.lambda_handlers.completion.message_recorder import CompletionMessageRecorder
 from app.lambda_handlers.completion.processing_start_deadline import (
     LambdaContext,
     ProcessingStartDeadline,
@@ -60,7 +58,7 @@ async def apply_visibility_timeouts(
     queue_url: str,
     context: LambdaContext,
     now: Callable[[], datetime],
-    recorder: CompletionLambdaFailureRecorder,
+    recorder: CompletionMessageRecorder,
 ) -> None:
     """retry_atのあるメッセージだけを記事処理後に逐次設定し、設定結果によって配送応答を変更しない。"""
     # 応答を間に合わせるため、待機を設定してよいのはLambdaの制限時間の20秒前までとする。

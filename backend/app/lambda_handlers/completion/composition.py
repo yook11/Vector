@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
-import structlog
 from botocore.config import Config
 from botocore.session import Session
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -19,8 +18,6 @@ from app.lambda_handlers.article_fetch_lifecycle import (
     open_article_fetch_consumer,
 )
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
-
-logger = structlog.get_logger(__name__)
 
 
 class SqsMessageVisibilityClient(Protocol):
@@ -46,9 +43,10 @@ class CompletionResources:
 @asynccontextmanager
 async def open_completion_resources(
     settings: CompletionConsumerSettings,
+    *,
+    failure_recorder: ArticleFetchLifecycleRecorder,
 ) -> AsyncIterator[CompletionResources]:
     """SQSの寿命を配送側で管理し、補完Consumerには持ち込まない。"""
-    recorder = ArticleFetchLifecycleRecorder(logger, operation="completion")
 
     def create_engine(*, password_provider: IamPasswordProvider) -> AsyncEngine:
         return create_article_fetch_engine(
@@ -65,7 +63,7 @@ async def open_completion_resources(
         database_url=settings.database_url,
         create_engine=create_engine,
         build_consumer=build_consumer,
-        failure_recorder=recorder,
+        failure_recorder=failure_recorder,
     ) as consumer:
         try:
             sqs = Session().create_client(
@@ -80,7 +78,7 @@ async def open_completion_resources(
                 ),
             )
         except Exception as exc:
-            recorder.record_initialization_failure("sqs", exc)
+            failure_recorder.record_initialization_failure("sqs", exc)
             raise
         try:
             yield CompletionResources(consumer=consumer, sqs_client=sqs)
@@ -88,4 +86,4 @@ async def open_completion_resources(
             try:
                 sqs.close()
             except Exception as exc:
-                recorder.record_cleanup_failure("sqs", exc)
+                failure_recorder.record_cleanup_failure("sqs", exc)

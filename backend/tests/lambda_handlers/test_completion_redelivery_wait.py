@@ -1,5 +1,8 @@
-"""補完の再配信待機をSQSの可視性秒数へ変換し、SQS操作へ接続する条件を、SQSクライアントとログをモックにして確認する。"""
+"""補完の再配信待機をSQSの可視性秒数へ変換し、SQS操作へ接続する条件を、SQSクライアントをモックにし実ロガーの出力で確認する。"""
 
+import json
+import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock, call
@@ -7,15 +10,29 @@ from unittest.mock import Mock, call
 import pytest
 
 from app.collection.retry_at import RetryAt
-from app.lambda_handlers.completion.failure_recorder import (
-    CompletionLambdaFailureRecorder,
-)
+from app.lambda_handlers.completion.message_recorder import CompletionMessageRecorder
 from app.lambda_handlers.completion.redelivery_wait import (
     RedeliveryMessage,
     VisibilityTimeout,
     apply_visibility_timeouts,
 )
 from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
+
+
+@pytest.fixture
+def read_logs(capsys) -> Callable[[], list[dict[str, object]]]:
+    """出力されたログを、実行ごとに変わる時刻と発生位置を除いて返す。"""
+
+    def _read() -> list[dict[str, object]]:
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        for log in logs:
+            del log["timestamp"]
+            log.pop("frames", None)
+        return logs
+
+    return _read
 
 
 @pytest.fixture
@@ -24,7 +41,6 @@ def delivery():
         now=datetime(2026, 9, 14, tzinfo=UTC),
         context=SimpleNamespace(get_remaining_time_in_millis=Mock(return_value=20_000)),
         sqs=Mock(),
-        log=Mock(),
     )
     state.first, state.second = ReceivedMessageBatch.from_sqs_event(
         {
@@ -52,7 +68,9 @@ async def apply(state, waits):
         queue_url="configured-queue",
         context=state.context,
         now=lambda: state.now,
-        recorder=CompletionLambdaFailureRecorder(state.log),
+        recorder=CompletionMessageRecorder(
+            create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES)
+        ),
     )
 
 
@@ -75,7 +93,7 @@ def test_visibility_timeout_rounds_up_and_caps_remaining_time(seconds, expected)
 
 
 @pytest.mark.asyncio
-async def test_capped_visibility_keeps_original_retry_time(delivery):
+async def test_capped_visibility_keeps_original_retry_time(delivery, read_logs):
     """上限で切った秒数をSQSへ要求し、記録する待機時刻は元のretry_atのまま残す。"""
     retry = RetryAt(delivery.now + timedelta(seconds=86_400))
     await apply(delivery, [RedeliveryMessage(delivery.first, retry)])
@@ -84,18 +102,35 @@ async def test_capped_visibility_keeps_original_retry_time(delivery):
         ReceiptHandle=" private-first ",
         VisibilityTimeout=39_600,
     )
-    fields = delivery.log.warning.call_args.kwargs
-    assert fields["retry_at"] == retry.value.isoformat()
-    assert fields["requested_seconds"] == fields["applied_seconds"] == 39_600
-    assert fields["capped"] is True
+    assert read_logs() == [
+        {
+            "event": "completion_redelivery_wait",
+            "level": "info",
+            "log_policy": "external_content_fetch",
+            "message_id": "first",
+            "retry_at": "2026-09-15T00:00:00+00:00",
+            "result": "applied",
+            "visibility_timeout_seconds": 39_600,
+            "capped": True,
+        }
+    ]
 
 
 @pytest.mark.asyncio
-async def test_expired_wait_is_not_sent(delivery):
+async def test_expired_wait_is_not_sent(delivery, read_logs):
     """設定時点で期限を迎えた待機をSQSへ送らない。"""
     await apply(delivery, [RedeliveryMessage(delivery.first, RetryAt(delivery.now))])
     delivery.sqs.change_message_visibility.assert_not_called()
-    assert delivery.log.warning.call_args.kwargs["result"] == "expired"
+    assert read_logs() == [
+        {
+            "event": "completion_redelivery_wait",
+            "level": "warning",
+            "log_policy": "external_content_fetch",
+            "message_id": "first",
+            "retry_at": "2026-09-14T00:00:00+00:00",
+            "result": "expired",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -138,11 +173,11 @@ async def test_wait_is_recalculated_after_previous_operation(delivery):
 
 
 @pytest.mark.asyncio
-async def test_failed_wait_does_not_prevent_next_wait(delivery):
-    """通常の設定失敗の後も次の待機設定へ進む。"""
+async def test_failed_wait_does_not_prevent_next_wait(delivery, read_logs):
+    """通常の設定失敗の後も次の待機設定へ進み、失敗は設定しようとした秒数と原因を記録する。"""
     retry = RetryAt(delivery.now + timedelta(seconds=120))
     delivery.sqs.change_message_visibility.side_effect = [
-        RuntimeError("private-error"),
+        RuntimeError("SQS request failed"),
         {},
     ]
     await apply(
@@ -152,11 +187,30 @@ async def test_failed_wait_does_not_prevent_next_wait(delivery):
             RedeliveryMessage(delivery.second, retry),
         ],
     )
-    fields = [c.kwargs for c in delivery.log.warning.call_args_list]
-    assert [f["result"] for f in fields] == ["failed", "applied"]
-    assert fields[0]["applied_seconds"] is None
-    assert fields[0]["requested_seconds"] == 120
-    assert "private" not in repr(delivery.log.mock_calls)
+    assert read_logs() == [
+        {
+            "event": "completion_redelivery_wait",
+            "level": "warning",
+            "log_policy": "external_content_fetch",
+            "message_id": "first",
+            "retry_at": "2026-09-14T00:02:00+00:00",
+            "result": "failed",
+            "visibility_timeout_seconds": 120,
+            "capped": False,
+            "error_class": "builtins.RuntimeError",
+            "error_message": "SQS request failed",
+        },
+        {
+            "event": "completion_redelivery_wait",
+            "level": "info",
+            "log_policy": "external_content_fetch",
+            "message_id": "second",
+            "retry_at": "2026-09-14T00:02:00+00:00",
+            "result": "applied",
+            "visibility_timeout_seconds": 120,
+            "capped": False,
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -176,7 +230,7 @@ async def test_visibility_start_boundary(delivery, millis, expected):
 
 
 @pytest.mark.asyncio
-async def test_insufficient_time_stops_remaining_waits(delivery):
+async def test_insufficient_time_stops_remaining_waits(delivery, read_logs):
     """途中の時間不足は残りの待機設定を打ち切り記録する。"""
     delivery.context.get_remaining_time_in_millis.side_effect = [20_000, 19_999]
     retry = RetryAt(delivery.now + timedelta(seconds=120))
@@ -188,12 +242,18 @@ async def test_insufficient_time_stops_remaining_waits(delivery):
         ],
     )
     assert delivery.sqs.change_message_visibility.call_count == 1
-    assert delivery.log.warning.call_args.kwargs["result"] == "insufficient_time"
-    assert delivery.log.warning.call_args.kwargs["message_id"] == "second"
+    assert read_logs()[-1] == {
+        "event": "completion_redelivery_wait",
+        "level": "warning",
+        "log_policy": "external_content_fetch",
+        "message_id": "second",
+        "retry_at": "2026-09-14T00:02:00+00:00",
+        "result": "insufficient_time",
+    }
 
 
 @pytest.mark.asyncio
-async def test_invalid_receipt_skips_only_its_wait(delivery):
+async def test_invalid_receipt_skips_only_its_wait(delivery, read_logs):
     """receiptHandle不正は当該設定だけを省略する。"""
     delivery.first, delivery.second = ReceivedMessageBatch.from_sqs_event(
         {
@@ -218,17 +278,33 @@ async def test_invalid_receipt_skips_only_its_wait(delivery):
     assert delivery.sqs.change_message_visibility.call_args_list == [
         call(QueueUrl="configured-queue", ReceiptHandle="valid", VisibilityTimeout=120)
     ]
-    assert (
-        delivery.log.warning.call_args_list[0].kwargs["result"]
-        == "invalid_receipt_handle"
-    )
-    assert "private" not in repr(delivery.log.mock_calls)
+    assert read_logs()[0] == {
+        "event": "completion_redelivery_wait",
+        "level": "error",
+        "log_policy": "external_content_fetch",
+        "message_id": "first",
+        "retry_at": "2026-09-14T00:02:00+00:00",
+        "result": "invalid_receipt_handle",
+        "error_class": (
+            "app.lambda_handlers.sqs.received_message.ReceivedMessageInvalidError"
+        ),
+        "error_message": "Received message validation failed: invalid_type",
+        "error_details": {"reason": "invalid_type", "field": "receiptHandle"},
+    }
 
 
 @pytest.mark.asyncio
-async def test_logging_failure_does_not_stop_waits(delivery):
+async def test_logging_failure_does_not_stop_waits(delivery, monkeypatch):
     """診断障害が後続の待機設定を妨げない。"""
-    delivery.log.warning.side_effect = RuntimeError("private-log")
+
+    class BrokenOutput:
+        def write(self, text):
+            raise OSError("private-log")
+
+        def flush(self):
+            raise OSError("private-log")
+
+    monkeypatch.setattr(sys, "stdout", BrokenOutput())
     retry = RetryAt(delivery.now + timedelta(seconds=120))
     await apply(
         delivery,
