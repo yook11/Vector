@@ -2,6 +2,7 @@
 
 > 2026-09-20: digest入力と`*_state`入力は廃止した。以下は構築時の記録で、現在の扱いは[app rollout](../platform/app-rollout.md)を参照する。
 > 2026-10-07: 分析3工程の定期起動を外した。「分析3工程の定期起動の停止」を参照する。
+> 2026-10-12: 補完の定期起動も外し、救済を定期起動する工程はなくなった。
 
 ## Work Definition
 
@@ -18,7 +19,7 @@
 | curation | `${name_prefix}-curation-backfill` | `curation_handler` | なし |
 | assessment | `${name_prefix}-assessment-backfill` | `assessment_handler` | なし |
 | embedding | `${name_prefix}-embedding-backfill` | `embedding_handler` | なし |
-| completion | `${name_prefix}-completion-backfill` | `completion_handler` | `cron(15,45 * * * ? *)` |
+| completion | `${name_prefix}-completion-backfill` | `completion_handler` | なし |
 
 handlerのパッケージは `app.lambda_handlers.backfill`。backend ECRイメージをarm64・512MB・120秒・予約同時実行数1で利用する。既存relayのprivate subnetとsecurity groupを再利用し、RDSは `vector_backfill` のIAM認証、自工程のSQS送信だけを許可する。環境変数はproduction、DB接続、IAM認証、自工程のキューと有効設定のみで、AWSリージョンはLambdaの標準環境変数を使用する。
 
