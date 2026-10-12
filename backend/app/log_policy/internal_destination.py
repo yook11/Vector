@@ -10,9 +10,9 @@ import unicodedata
 from urllib.parse import unquote, urlsplit
 
 from app.http.destination_policy import (
-    NotAnIpAddressError,
-    NotAPublicIpError,
+    NonPublicIpAddress,
     PublicIpAddress,
+    classify_ip_address,
 )
 
 _SCHEME_START = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -34,13 +34,13 @@ def _is_internal_ip(text: str) -> bool | None:
     """非公開IPならTrue、公開IPならFalse、IPとして読めなければNoneを返す。"""
     if len(text) > _MAX_ADDRESS_LENGTH:
         return None
-    try:
-        PublicIpAddress(text)
-    except NotAPublicIpError:
-        return True
-    except NotAnIpAddressError:
-        return None
-    return False
+    match classify_ip_address(text):
+        case NonPublicIpAddress():
+            return True
+        case PublicIpAddress():
+            return False
+        case None:
+            return None
 
 
 def _is_localhost(host: str) -> bool:

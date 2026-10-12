@@ -22,7 +22,7 @@ from app.collection.article_acquisition.reader.read_errors import (
 )
 from app.collection.response_size import ResponseSizeBasis
 from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
     HttpTransportFailure,
@@ -91,7 +91,14 @@ def test_failure_that_may_change_or_is_not_understood_is_redelivered(
     "exc",
     [
         pytest.param(_response_error(403), id="non_retryable_response"),
-        pytest.param(HostBlockedError("private IP literal"), id="host_blocked"),
+        pytest.param(
+            HostBlockedError(
+                reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+                host="10.0.0.1",
+                address="10.0.0.1",
+            ),
+            id="host_blocked",
+        ),
         pytest.param(_read_error(), id="unreadable_response"),
         pytest.param(_size_error(), id="response_size_limit_exceeded"),
         pytest.param(

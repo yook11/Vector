@@ -37,7 +37,7 @@ from app.collection.sources.acquisition_request import (
 )
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.errors import HttpResponseError
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
@@ -227,7 +227,11 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
             status_code=503, received_at=datetime(2026, 9, 26, tzinfo=UTC)
         )
         if scenario == "all_failed_retryable"
-        else HostBlockedError("blocked")
+        else HostBlockedError(
+            reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            host="10.0.0.1",
+            address="10.0.0.1",
+        )
     )
     reader = AsyncMock(
         side_effect=(

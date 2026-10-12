@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import httpx2
 import pytest
 
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.destination_resolution import HostResolutionError
 from app.http.error_mapping import (
     http_response_error_from_exception,
@@ -76,7 +76,11 @@ def test_unspecified_transport_failure_remains_unknown() -> None:
     [
         ValueError("unexpected value"),
         TimeoutError("unspecified operation"),
-        HostBlockedError("destination denied"),
+        HostBlockedError(
+            reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            host="10.0.0.1",
+            address="10.0.0.1",
+        ),
         httpx2.LocalProtocolError("invalid request"),
     ],
 )

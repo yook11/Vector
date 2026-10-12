@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx2
 import pytest
 
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.destination_resolution import HostResolutionError
 from app.http.external import (
     _PinnedDnsTransport,
@@ -230,11 +230,16 @@ class TestDestinationValidationBeforeSend:
         external_client: Callable[[], httpx2.AsyncClient],
         captured_requests: list[httpx2.Request],
     ) -> None:
-        """private IP literal はURL型を通過するため、transport が送信前に拒否する。"""
+        """非公開IPの直書きは、transportが送信前にIP直書きとして拒否する。"""
         async with external_client() as client:
-            with pytest.raises(HostBlockedError):
+            with pytest.raises(HostBlockedError) as caught:
                 await client.get("http://10.0.0.1/")
         assert captured_requests == []
+        assert (caught.value.reason, caught.value.host, caught.value.address) == (
+            HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            "10.0.0.1",
+            "10.0.0.1",
+        )
 
     @pytest.mark.asyncio
     async def test_passes_public_ip_literal_without_resolve(

@@ -13,7 +13,7 @@ from app.collection.article_acquisition.tools.source_http import (
     get_source_response,
 )
 from app.collection.response_size import ResponseSizeBasis
-from app.http.destination_policy import HostBlockedError
+from app.http.destination_policy import HostBlockedError, HostBlockedReason
 from app.http.destination_resolution import HostResolutionError
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
@@ -197,7 +197,14 @@ async def test_failure_while_receiving_body_becomes_common_transport_error(
 
 @pytest.mark.parametrize(
     "error",
-    [HostBlockedError(), httpx2.UnsupportedProtocol("private-detail")],
+    [
+        HostBlockedError(
+            reason=HostBlockedReason.NON_PUBLIC_IP_LITERAL,
+            host="10.0.0.1",
+            address="10.0.0.1",
+        ),
+        httpx2.UnsupportedProtocol("private-detail"),
+    ],
 )
 async def test_destination_block_and_unclassified_failure_propagate_unchanged(
     serve, error: Exception
