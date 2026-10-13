@@ -1,7 +1,6 @@
-"""SQS送信で起きた事実を分類し、呼び出し元の再送方針は持たない。"""
+"""SQS送信で起きた事実を分類し、送り直してよい失敗かを判定して伝える。"""
 
 import re
-from dataclasses import dataclass
 from enum import StrEnum
 
 from botocore.exceptions import (
@@ -13,8 +12,10 @@ from botocore.exceptions import (
 
 from app.http.failure import (
     HttpTransportFailure,
+    HttpTransportFailureReason,
     classify_botocore,
 )
+from app.shared.errors import ApplicationError
 
 
 class SqsSendFailureKind(StrEnum):
@@ -29,18 +30,46 @@ class SqsSendFailureKind(StrEnum):
     UNEXPECTED = "unexpected"
 
 
-@dataclass(frozen=True, slots=True)
-class SqsSendFailure:
-    kind: SqsSendFailureKind
-    service_code: str | None = None
-    exception_type: str | None = None
-    transport: HttpTransportFailure | None = None
+def _is_retryable(
+    kind: SqsSendFailureKind, transport: HttpTransportFailure | None
+) -> bool:
+    if kind in (SqsSendFailureKind.THROTTLED, SqsSendFailureKind.SERVICE_UNAVAILABLE):
+        return True
+    if kind is not SqsSendFailureKind.TRANSPORT or transport is None:
+        return False
+    if transport.reason is HttpTransportFailureReason.PROXY:
+        status = transport.proxy_status
+        return status is None or status == 429 or 500 <= status <= 599
+    return transport.reason in {
+        HttpTransportFailureReason.TIMEOUT,
+        HttpTransportFailureReason.DNS_RESOLUTION,
+        HttpTransportFailureReason.NETWORK_IO,
+        HttpTransportFailureReason.PROTOCOL_VIOLATION,
+        HttpTransportFailureReason.UNKNOWN,
+    }
 
 
-class SqsSendError(Exception):
-    def __init__(self, failure: SqsSendFailure) -> None:
-        super().__init__()
-        self.failure = failure
+class MessageSendError(ApplicationError):
+    """送れなかった事実と送り直してよいかを持ち、回数と待ち方は呼び出し元が決める。"""
+
+    def __init__(
+        self,
+        kind: SqsSendFailureKind,
+        *,
+        service_code: str | None = None,
+        exception_type: str | None = None,
+        transport: HttpTransportFailure | None = None,
+    ) -> None:
+        super().__init__(
+            "メッセージを送信できませんでした",
+            details={
+                "failure_kind": kind.value,
+                "service_code": service_code,
+                "exception_type": exception_type,
+                "transport_reason": transport.reason.value if transport else None,
+            },
+        )
+        self.retryable = _is_retryable(kind, transport)
 
 
 # 既存SQS送信の対応表に合わせ、既知の拒否理由はHTTP statusより優先する。
@@ -86,10 +115,10 @@ _THROTTLED_CODES = frozenset(
 _UNAVAILABLE_CODES = frozenset({"InternalFailure", "ServiceUnavailable"})
 
 
-def classify_sqs_send_failure(exc: Exception) -> SqsSendFailure:
+def to_message_send_error(exc: Exception) -> MessageSendError:
     """自由文を保持せず、SDK例外を通信・サービス・設定の事実へ変換する。"""
-    if isinstance(exc, SqsSendError):
-        return exc.failure
+    if isinstance(exc, MessageSendError):
+        return exc
     exception_type = type(exc).__name__
     kind = SqsSendFailureKind.UNEXPECTED
     if isinstance(exc, (NoCredentialsError, PartialCredentialsError, NoRegionError)):
@@ -116,13 +145,13 @@ def classify_sqs_send_failure(exc: Exception) -> SqsSendFailure:
             kind = SqsSendFailureKind.SERVICE_UNAVAILABLE
         else:
             kind = SqsSendFailureKind.UNKNOWN_SERVICE_ERROR
-        return SqsSendFailure(kind, service_code=code, exception_type=exception_type)
+        return MessageSendError(kind, service_code=code, exception_type=exception_type)
     else:
         transport = classify_botocore(exc)
         if transport is not None:
-            return SqsSendFailure(
+            return MessageSendError(
                 SqsSendFailureKind.TRANSPORT,
                 exception_type=exception_type,
                 transport=transport,
             )
-    return SqsSendFailure(kind, exception_type=exception_type)
+    return MessageSendError(kind, exception_type=exception_type)
