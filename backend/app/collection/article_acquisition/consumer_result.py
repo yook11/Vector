@@ -16,6 +16,8 @@ class RetryAcquisition:
     """SQSの再配信に任せる取得の失敗を保持する。"""
 
     error: Exception
+    code: str
+    requires_investigation: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,3 +25,6 @@ class NoRetryAcquisition:
     """受信完了にできる取得不要の理由または再試行しない失敗を保持する。"""
 
     cause: Literal["inactive", "missing"] | Exception
+    code: str | None = None
+    """失敗の分類コードを保持し、取得不要の場合はNoneとする。"""
+    requires_investigation: bool = False

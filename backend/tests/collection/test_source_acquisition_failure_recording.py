@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -10,7 +11,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.consumer_result import (
     NoRetryAcquisition,
@@ -138,7 +138,8 @@ async def test_transport_failure_records_reason_as_retryable(
                 failure=HttpTransportFailure(
                     HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
                 )
-            )
+            ),
+            code="http_transport_error",
         ),
     )
 
@@ -322,7 +323,9 @@ async def test_rss_feed_errors_record_every_feed_and_any_retryable(
                         ),
                     ),
                 ]
-            )
+            ),
+            code="rss_feed_errors",
+            requires_investigation=True,
         ),
     )
 
@@ -369,7 +372,7 @@ async def test_unexpected_error_records_unknown_audit(
     result = await recorder.record_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
-        failure=RetryAcquisition(RuntimeError("boom")),
+        failure=RetryAcquisition(RuntimeError("boom"), code="unknown"),
     )
 
     assert result is None
@@ -398,7 +401,8 @@ async def test_database_failure_records_retryability(
         source_id=sample_source.id,
         source_name="VentureBeat",
         failure=RetryAcquisition(
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT)
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+            code="unknown",
         ),
     )
 
@@ -431,7 +435,7 @@ async def test_cancellation_during_failure_audit_propagates(
         await recorder.record_source_failure(
             source_id=sample_source.id,
             source_name="VentureBeat",
-            failure=RetryAcquisition(RuntimeError("original failure")),
+            failure=RetryAcquisition(RuntimeError("original failure"), code="unknown"),
         )
 
 
@@ -440,19 +444,17 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """audit Repository が落ちても recorder は完走し redacted log に退避する。"""
+    """監査の保存が落ちても記録係は完走し、業務の例外型と、秘密を伏せた監査の例外をログに残す。"""
     source_id = sample_source.id
     recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
     business_exc = ValueError("blocked Authorization: Bearer sk-live-BUSINESSSECRETabc")
 
-    with (
-        patch(
-            "app.collection.article_acquisition.failure_recording.SourceAcquisitionAuditRepository"
-        ) as mock_audit_cls,
-        capture_logs() as cap,
-    ):
+    with patch(
+        "app.collection.article_acquisition.failure_recording.SourceAcquisitionAuditRepository"
+    ) as mock_audit_cls:
         mock_audit_cls.return_value.append_failure = AsyncMock(
             side_effect=RuntimeError(
                 "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
@@ -466,15 +468,25 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
 
     assert result is None
     drops = [
-        e for e in cap if e.get("event") == "source_acquisition_failure_audit_dropped"
+        log
+        for log in map(json.loads, capsys.readouterr().out.splitlines())
+        if log["event"] == "source_acquisition_failure_audit_dropped"
     ]
-    assert drops, "fallback ログが emit されていない"
-    drop = drops[-1]
-    assert drop["source_id"] == source_id
-    assert drop["business_error_class"].endswith(".ValueError")
-    assert drop["audit_error_class"].endswith(".RuntimeError")
-    assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
-    assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
+    for drop in drops:
+        del drop["timestamp"]
+        del drop["frames"]
+    assert drops == [
+        {
+            "event": "source_acquisition_failure_audit_dropped",
+            "level": "warning",
+            "log_policy": "external_content_fetch",
+            "operation": "audit",
+            "source_id": source_id,
+            "business_error_class": "builtins.ValueError",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "audit db down Authorization: [redacted:credential]",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -509,22 +521,15 @@ async def test_conversion_rejection_writes_rejected_audit(
 async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """変換棄却 audit が落ちても例外を外へ出さず redacted log に退避する。
-
-    棄却値の観測スナップショットは PII-free なので business 側に free-text は焼かず
-    ``business_outcome_code`` のみを残す (secret 混入経路が構造的に消える)。redaction
-    の witness は audit 例外 (落ちた監査 DB から漏れうる secret) の方で保つ。
-    """
+    """変換棄却の監査が落ちても例外を外へ出さず、棄却の理由と、秘密を伏せた監査の例外をログに残す。"""
     recorder = ArticleAcquisitionFailureRecorder(session_factory)
     rejection = _conversion_rejection()
 
-    with (
-        patch(
-            "app.collection.article_acquisition.failure_recording.SourceAcquisitionAuditRepository"
-        ) as mock_audit_cls,
-        capture_logs() as cap,
-    ):
+    with patch(
+        "app.collection.article_acquisition.failure_recording.SourceAcquisitionAuditRepository"
+    ) as mock_audit_cls:
         mock_audit_cls.return_value.append_conversion_rejected = AsyncMock(
             side_effect=RuntimeError(
                 "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
@@ -534,13 +539,24 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
         await recorder.record_conversion_rejected(sample_source.id, rejection)
 
     drops = [
-        e for e in cap if e.get("event") == "fetched_article_conversion_audit_dropped"
+        log
+        for log in map(json.loads, capsys.readouterr().out.splitlines())
+        if log["event"] == "fetched_article_conversion_audit_dropped"
     ]
-    assert drops, "conversion rejection fallback ログが emit されていない"
-    drop = drops[-1]
-    assert drop["source_id"] == sample_source.id
-    assert drop["business_outcome_code"] == "acquisition_conversion_title_missing"
-    # title 欠落は cause 無し → business_error_class は None。
-    assert drop["business_error_class"] is None
-    assert drop["audit_error_class"].endswith(".RuntimeError")
-    assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
+    for drop in drops:
+        del drop["timestamp"]
+        del drop["frames"]
+    # title 欠落は原因の例外を持たないため、業務の例外型はnullになる。
+    assert drops == [
+        {
+            "event": "fetched_article_conversion_audit_dropped",
+            "level": "warning",
+            "log_policy": "external_content_fetch",
+            "operation": "audit",
+            "source_id": sample_source.id,
+            "business_outcome_code": "acquisition_conversion_title_missing",
+            "business_error_class": None,
+            "error_class": "builtins.RuntimeError",
+            "error_message": "audit db down Authorization: [redacted:credential]",
+        }
+    ]

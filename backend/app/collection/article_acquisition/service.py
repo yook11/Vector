@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-import structlog
-
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.events import (
     IncompleteArticleRecorded,
@@ -35,8 +33,6 @@ from app.collection.persistence.analyzable_article_repository import (
 from app.collection.sources.article_source import AcquirableSource
 from app.db.session import SessionFactory
 from app.models.outbox_event import OutboxEvent
-
-logger = structlog.get_logger(__name__)
 
 
 class ArticleAcquisitionService:
@@ -140,11 +136,5 @@ class ArticleAcquisitionService:
         )
         record_acquisition_outcome(
             AcquisitionEntryOutcome.OBSERVED, count=observed_count
-        )
-
-        logger.info(
-            "acquire_source_completed",
-            source_id=source_id,
-            persisted_count=len(persisted_ids),
         )
         return persisted_ids

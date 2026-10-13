@@ -64,54 +64,100 @@ def _feeds(*errors: Exception) -> RssFeedErrors:
 
 
 @pytest.mark.parametrize(
-    "exc",
+    ("exc", "code", "requires_investigation"),
     [
-        pytest.param(_response_error(503), id="retryable_response"),
+        pytest.param(
+            _response_error(503), "http_response_error", False, id="retryable_response"
+        ),
         pytest.param(
             HttpTransportError(
                 failure=HttpTransportFailure(
                     HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
                 )
             ),
+            "http_transport_error",
+            False,
             id="transport_failure",
         ),
-        pytest.param(_feeds(_read_error(), _response_error(429)), id="rss_any_retry"),
+        pytest.param(
+            HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
+                )
+            ),
+            "http_transport_error",
+            True,
+            id="unclassified_transport_failure",
+        ),
+        pytest.param(
+            _feeds(_read_error(), _response_error(429)),
+            "rss_feed_errors",
+            True,
+            id="rss_any_retry",
+        ),
+        pytest.param(
+            _feeds(_response_error(503), _response_error(429)),
+            "rss_feed_errors",
+            False,
+            id="rss_all_temporary",
+        ),
         pytest.param(
             DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+            "unknown",
+            True,
             id="database_failure",
         ),
-        pytest.param(RuntimeError("unexpected"), id="unexpected_failure"),
+        pytest.param(
+            RuntimeError("unexpected"), "unknown", True, id="unexpected_failure"
+        ),
     ],
 )
 def test_failure_that_may_change_or_is_not_understood_is_redelivered(
-    exc: Exception,
+    exc: Exception, code: str, requires_investigation: bool
 ) -> None:
-    """再試行で変わりうる失敗と、DB障害・想定外の失敗は再配信する。"""
-    assert classify_acquisition_failure(exc, now=_NOW) == RetryAcquisition(exc)
+    """再試行で変わりうる失敗と、DB障害・想定外の失敗は、分類のcodeと調査要否とともに再配信する。"""
+    assert classify_acquisition_failure(exc, now=_NOW) == RetryAcquisition(
+        exc, code=code, requires_investigation=requires_investigation
+    )
 
 
 @pytest.mark.parametrize(
-    "exc",
+    ("exc", "code"),
     [
-        pytest.param(_response_error(403), id="non_retryable_response"),
+        pytest.param(
+            _response_error(403), "http_response_error", id="non_retryable_response"
+        ),
         pytest.param(
             DestinationRejectedError(
                 reason=DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
                 host="10.0.0.1",
                 address="10.0.0.1",
             ),
+            "host_blocked",
             id="host_blocked",
         ),
-        pytest.param(_read_error(), id="unreadable_response"),
-        pytest.param(_size_error(), id="response_size_limit_exceeded"),
+        pytest.param(_read_error(), "read_malformed_content", id="unreadable_response"),
         pytest.param(
-            _feeds(_size_error(), _response_error(404)), id="rss_size_and_no_retry"
+            _size_error(),
+            "source_response_size_limit_exceeded",
+            id="response_size_limit_exceeded",
         ),
         pytest.param(
-            _feeds(_read_error(), _response_error(404)), id="rss_all_no_retry"
+            _feeds(_size_error(), _response_error(404)),
+            "rss_feed_errors",
+            id="rss_size_and_no_retry",
+        ),
+        pytest.param(
+            _feeds(_read_error(), _response_error(404)),
+            "rss_feed_errors",
+            id="rss_all_no_retry",
         ),
     ],
 )
-def test_failure_that_retry_cannot_change_is_not_redelivered(exc: Exception) -> None:
-    """再試行しても変わらない失敗は再配信せず、次の定期投入に任せる。"""
-    assert classify_acquisition_failure(exc, now=_NOW) == NoRetryAcquisition(exc)
+def test_failure_that_retry_cannot_change_is_not_redelivered(
+    exc: Exception, code: str
+) -> None:
+    """再試行しても変わらない失敗は取得元を人が直す必要があるため、調査対象として受信完了にする。"""
+    assert classify_acquisition_failure(exc, now=_NOW) == NoRetryAcquisition(
+        exc, code=code, requires_investigation=True
+    )

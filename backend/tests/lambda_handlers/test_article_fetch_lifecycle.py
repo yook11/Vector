@@ -13,8 +13,28 @@ from pydantic import ValidationError
 from app.lambda_handlers import article_fetch_lifecycle as lifecycle
 from app.lambda_handlers.completion import composition
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def broken_recorder(monkeypatch) -> lifecycle.ArticleFetchLifecycleRecorder:
+    """書き込みが毎回失敗する標準出力へ、実際のロガーで記録する記録係を作る。"""
+
+    class BrokenOutput:
+        def write(self, text):
+            raise OSError("private logging")
+
+        def flush(self):
+            raise OSError("private logging")
+
+    monkeypatch.setattr(sys, "stdout", BrokenOutput())
+    return lifecycle.ArticleFetchLifecycleRecorder(
+        create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES),
+        stage="completion",
+    )
 
 
 @pytest.fixture
@@ -42,6 +62,7 @@ def resources(monkeypatch):
         build_consumer=build_consumer,
         logger=logger,
         session=session,
+        arguments=arguments,
         open=lambda: lifecycle.open_article_fetch_consumer(**arguments),
     )
 
@@ -115,11 +136,13 @@ async def test_external_cancellation_releases_resources(resources):
 @pytest.mark.parametrize(
     "original", [None, RuntimeError("original"), asyncio.CancelledError()]
 )
-async def test_cleanup_and_logging_failures_preserve_outcome(resources, original):
+async def test_cleanup_and_logging_failures_preserve_outcome(
+    resources, broken_recorder, original
+):
     """解放と診断の通常例外は利用結果を置換せず、残りの資源も解放する。"""
     resources.engine.dispose.side_effect = RuntimeError("private cleanup")
     resources.rds.close.side_effect = RuntimeError("private cleanup")
-    resources.logger.warning.side_effect = RuntimeError("private logging")
+    resources.arguments["failure_recorder"] = broken_recorder
 
     async def use():
         async with resources.open():
@@ -138,15 +161,18 @@ async def test_cleanup_and_logging_failures_preserve_outcome(resources, original
 
 
 @pytest.mark.asyncio
-async def test_initialization_diagnostic_does_not_expose_exception_text(resources):
-    """初期化診断は失敗した箇所と例外型だけを出力し、機密を含み得る自由文を出さない。"""
-    resources.build_consumer.side_effect = RuntimeError("private initialization")
+async def test_initialization_diagnostic_passes_failed_operation_and_exception(
+    resources,
+):
+    """初期化の失敗は、失敗した箇所と元の例外をログ方針の変換へ渡す。"""
+    original = RuntimeError("initialization failed")
+    resources.build_consumer.side_effect = original
     with pytest.raises(RuntimeError):
         async with resources.open():
             pass
     assert resources.logger.error.call_args == (
         ("completion_initialization_failed",),
-        {"operation": "consumer", "error_class": "builtins.RuntimeError"},
+        {"operation": "consumer", "exc_info": original},
     )
 
 
@@ -182,7 +208,7 @@ async def test_sqs_initialization_failure_releases_fetch_resources(
 
 @pytest.mark.asyncio
 async def test_sqs_cleanup_failure_preserves_result_and_releases_database(
-    resources, monkeypatch
+    resources, broken_recorder, monkeypatch
 ):
     """配送側の解放・診断が失敗しても利用結果を保ち、DB資源も解放する。"""
     monkeypatch.setattr(
@@ -193,7 +219,6 @@ async def test_sqs_cleanup_failure_preserves_result_and_releases_database(
     session = Mock()
     session.create_client.return_value = sqs
     monkeypatch.setattr(composition, "Session", Mock(return_value=session))
-    resources.logger.warning.side_effect = RuntimeError("private logging")
     settings = CompletionConsumerSettings(
         sqs_article_completion_queue_url="https://sqs.ap-northeast-1.amazonaws.com/123456789012/completion",
         database_url="postgresql+asyncpg://vector_collect@db.invalid/vector?sslmode=require",
@@ -202,10 +227,7 @@ async def test_sqs_cleanup_failure_preserves_result_and_releases_database(
     original = RuntimeError("consumer result")
     with pytest.raises(RuntimeError) as caught:
         async with composition.open_completion_resources(
-            settings,
-            failure_recorder=lifecycle.ArticleFetchLifecycleRecorder(
-                resources.logger, stage="completion"
-            ),
+            settings, failure_recorder=broken_recorder
         ):
             raise original
     assert caught.value is original

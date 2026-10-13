@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import structlog
-
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
@@ -19,9 +17,8 @@ from app.collection.article_acquisition.metrics import (
     record_acquisition_outcome,
 )
 from app.db.session import SessionFactory
-from app.shared.security.redaction import redact_secrets
-
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 
 class ArticleAcquisitionFailureRecorder:
@@ -66,15 +63,15 @@ class ArticleAcquisitionFailureRecorder:
                 )
                 await audit_session.commit()
         except Exception as audit_exc:
-            logger.exception(
+            create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).warning(
                 "fetched_article_conversion_audit_dropped",
+                operation="audit",
                 source_id=source_id,
                 business_outcome_code=rej.outcome_code,
                 business_error_class=(
                     exception_fqn(rej.cause) if rej.cause is not None else None
                 ),
-                audit_error_class=(exception_fqn(audit_exc)),
-                audit_error_message=redact_secrets(str(audit_exc))[:500],
+                exc_info=audit_exc,
             )
             record_audit_dropped(SourceAcquisitionAuditRepository.STAGE)
             return
@@ -87,7 +84,7 @@ class ArticleAcquisitionFailureRecorder:
         source_name: str | None,
         failure: RetryAcquisition | NoRetryAcquisition,
     ) -> None:
-        """best-effort failure audit。失敗時は redacted log に退避する。"""
+        """best-effort failure audit。失敗時は監査の例外をログに退避する。"""
         exc = failure.error if isinstance(failure, RetryAcquisition) else failure.cause
         if not isinstance(exc, Exception):
             raise ValueError("取得不要の結果を失敗監査へ記録できません")
@@ -100,12 +97,12 @@ class ArticleAcquisitionFailureRecorder:
                 )
                 await session.commit()
         except Exception as audit_exc:
-            logger.exception(
+            # 業務の例外は終端ログに出るため、ここでは型名だけを添える。
+            create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).warning(
                 "source_acquisition_failure_audit_dropped",
+                operation="audit",
                 source_id=source_id,
-                business_error_class=(exception_fqn(exc)),
-                business_error_message=redact_secrets(str(exc))[:500],
-                audit_error_class=(exception_fqn(audit_exc)),
-                audit_error_message=redact_secrets(str(audit_exc))[:500],
+                business_error_class=exception_fqn(exc),
+                exc_info=audit_exc,
             )
             record_audit_dropped(SourceAcquisitionAuditRepository.STAGE)

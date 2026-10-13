@@ -16,8 +16,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import structlog
-
 from app.collection.article_acquisition.errors import AcquisitionConversionDefect
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.domain.analyzable_article import AnalyzableArticle
@@ -30,8 +28,8 @@ from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.source_metadata import SourceMetadata
 from app.collection.sources.source_name import SourceName
-
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +67,7 @@ def _reject(
     has_published_at = fetched.published_at is not None
     raw_url = fetched.url if fetched.url.strip() else None
 
-    logger.info(
+    create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).warning(
         "article_conversion_rejected",
         source_name=str(source_name),
         outcome_code=outcome_code,
@@ -98,14 +96,14 @@ def unexpected_rejection(
     値化する funnel。
 
     precondition 通過後の invariant 違反 (= ありえない筈の bug) が ``convert`` から
-    漏れたとき、stream orchestrator (service) がこれを呼んで値化する。stack trace は
-    ``logger.exception`` で残し、本当のバグである ``cause`` を保持して監査が FQN /
+    漏れたとき、stream orchestrator (service) がこれを呼んで値化する。原因の例外と
+    発生位置はログに残し、本当のバグである ``cause`` を保持して監査が FQN /
     chain を辿れるようにする (``except`` 節内から呼ばれる前提)。
     """
-    logger.exception(
+    create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).error(
         "fetched_article_conversion_unexpected",
         source_name=str(source.name),
-        error_class=f"{type(cause).__module__}.{type(cause).__qualname__}",
+        exc_info=cause,
     )
     return AcquisitionConversionRejection(
         outcome_code=AcquisitionConversionDefect.UNEXPECTED_ERROR.value,
@@ -176,9 +174,9 @@ def convert_fetched_article(
             source_url=source_url,
         )
         if article is not None:
-            logger.info(
+            create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).info(
                 "fetched_article_converted",
-                type="analyzable",
+                article_type="analyzable",
                 source_name=str(source_name),
                 body_length=len(article.body),
             )
@@ -192,9 +190,9 @@ def convert_fetched_article(
         published_at=published_at,
         origin=origin,
     )
-    logger.info(
+    create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).info(
         "fetched_article_converted",
-        type="observed",
+        article_type="observed",
         source_name=str(source_name),
         has_title=observed.title is not None,
         title_origin=str(observed.title.origin) if observed.title else None,
