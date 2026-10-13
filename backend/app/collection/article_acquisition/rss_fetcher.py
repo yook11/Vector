@@ -6,8 +6,6 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import assert_never
 
-import structlog
-
 from app.collection.article_acquisition.errors import (
     ResponseSizeLimitExceededError,
     RssFeedErrors,
@@ -29,8 +27,8 @@ from app.collection.sources.rss_hooks import (
 )
 from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
-
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -61,6 +59,7 @@ class RssFetcher:
         self._reader = reader
 
     async def fetch(self, source: RssSource) -> AsyncIterator[FetchedArticle]:
+        logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
         acquisition = source.acquisition
         entries: list[RssEntry] = []
         failures: list[RssFeedFailure] = []
@@ -89,24 +88,17 @@ class RssFetcher:
                     code = fetch_failure.code if fetch_failure is not None else None
                 logger.warning(
                     "source_feed_fetch_failed",
-                    source=str(source.name),
-                    feed=feed_url,
+                    source_name=str(source.name),
+                    feed_url=feed_url,
                     code=code,
-                    http_status=(
-                        exc.status_code if isinstance(exc, HttpResponseError) else None
-                    ),
-                    reason_code=(
-                        exc.failure.reason.value
-                        if isinstance(exc, HttpTransportError)
-                        else None
-                    ),
+                    exc_info=exc,
                 )
                 failures.append(RssFeedFailure(feed_url=feed_url, error=exc))
                 continue
             logger.info(
                 "source_feed_fetched",
-                source=str(source.name),
-                feed=feed_url,
+                source_name=str(source.name),
+                feed_url=feed_url,
                 entries_count=len(fetched),
             )
             entries.extend(fetched)

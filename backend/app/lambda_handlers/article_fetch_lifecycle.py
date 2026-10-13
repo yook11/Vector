@@ -7,10 +7,8 @@ from typing import Protocol
 from botocore.config import Config
 from botocore.session import Session
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from structlog.stdlib import BoundLogger
 from structlog.typing import FilteringBoundLogger
 
-from app.audit.error_fields import exception_fqn
 from app.db.iam import build_iam_password_provider
 from app.db.session import caller_managed_session_factory
 from app.http.settings import HttpSettings
@@ -28,36 +26,25 @@ class ConsumerFactory[ConsumerT](Protocol):
 
 
 class ArticleFetchLifecycleRecorder:
-    """工程名を添えた診断だけを出し、通常の出力障害を利用側へ返さない。"""
+    """初期化と資源解放の失敗を、工程名を接頭辞にしたイベントで記録する。"""
 
-    def __init__(
-        self, logger: BoundLogger | FilteringBoundLogger, *, stage: str
-    ) -> None:
+    def __init__(self, logger: FilteringBoundLogger, *, stage: str) -> None:
         self._logger = logger
         self._stage = stage
 
     def record_initialization_failure(self, operation: str, error: Exception) -> None:
-        # 取得のロガーは例外の文面を保護しないため、例外は型名だけを渡す。
-        try:
-            self._logger.error(
-                f"{self._stage}_initialization_failed",
-                operation=operation,
-                error_class=exception_fqn(error),
-            )
-        except Exception:  # noqa: S110
-            # 診断の失敗で元の処理結果を変更しない。
-            pass
+        self._logger.error(
+            f"{self._stage}_initialization_failed",
+            operation=operation,
+            exc_info=error,
+        )
 
     def record_cleanup_failure(self, resource: str, error: Exception) -> None:
-        try:
-            self._logger.warning(
-                f"{self._stage}_resources_cleanup_failed",
-                resource=resource,
-                error_class=exception_fqn(error),
-            )
-        except Exception:  # noqa: S110
-            # 診断の失敗で元の処理結果を変更しない。
-            pass
+        self._logger.warning(
+            f"{self._stage}_resources_cleanup_failed",
+            resource=resource,
+            exc_info=error,
+        )
 
 
 def _close_rds(

@@ -1,11 +1,12 @@
 """複数フィードの巡回・失敗隔離・候補選択を共通取得入口から検証する。"""
 
+import json
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, call
 
 import pytest
-from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.errors import (
     ResponseSizeLimitExceededError,
@@ -60,39 +61,55 @@ async def _collect(
     return [item async for item in fetch_articles(source, ReaderTools(rss=reader))]
 
 
+@pytest.fixture
+def read_logs(capsys) -> Callable[[], list[dict[str, object]]]:
+    """出力されたログを、実行ごとに変わる時刻と発生位置を除いて返す。"""
+
+    def _read() -> list[dict[str, object]]:
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        for log in logs:
+            del log["timestamp"]
+            log.pop("frames", None)
+        return logs
+
+    return _read
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["text", "bytes"])
 async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
-    mode: str,
+    mode: str, read_logs
 ) -> None:
     class OrderedSource(Source):
         acquisition = replace(Source.acquisition, parse_mode=mode)
 
     reader = AsyncMock(spec=RssReader)
     reader.fetch.side_effect = [[_ENTRY, replace(_ENTRY, title="second")], [], [_ENTRY]]
-    with capture_logs() as logs:
-        result = await _collect(reader, OrderedSource)
+    result = await _collect(reader, OrderedSource)
     assert [a.title for a in result] == ["first", "second", "first"]
     assert reader.fetch.await_args_list == [
         call(endpoint_url=url, source_name=str(Source.name), parse_mode=mode)
         for url in _FEEDS
     ]
-    success = [log for log in logs if log["event"] == "source_feed_fetched"]
-    assert [(log["feed"], log["entries_count"]) for log in success] == list(
+    success = [log for log in read_logs() if log["event"] == "source_feed_fetched"]
+    assert [(log["feed_url"], log["entries_count"]) for log in success] == list(
         zip(_FEEDS, [2, 0, 1], strict=True)
     )
-    assert all(log["source"] == str(Source.name) for log in success)
+    assert all(log["source_name"] == str(Source.name) for log in success)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "code", "http_status", "reason_code"),
+    ("error", "code", "exception_fields"),
     [
         (
             HttpResponseError(status_code=503, received_at=_RECEIVED),
             "http_response_error",
-            503,
-            None,
+            {
+                "error_class": "app.http.errors.HttpResponseError",
+                "error_message": "HTTPの非成功応答を受け取りました",
+                "error_details": {"status_code": 503},
+            },
         ),
         (
             HttpTransportError(
@@ -101,8 +118,15 @@ async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
                 )
             ),
             "http_transport_error",
-            None,
-            "timeout",
+            {
+                "error_class": "app.http.errors.HttpTransportError",
+                "error_message": "HTTP通信で応答を受け取れませんでした",
+                "error_details": {
+                    "stage": "receive",
+                    "reason": "timeout",
+                    "proxy_status": None,
+                },
+            },
         ),
         (
             DestinationRejectedError(
@@ -111,8 +135,11 @@ async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
                 address="10.0.0.1",
             ),
             "host_blocked",
-            None,
-            None,
+            {
+                "error_class": "app.http.destination_policy.DestinationRejectedError",
+                "error_message": "宛先が外部通信の方針で拒否されました",
+                "error_details": {"reason": "non_public_ip_literal"},
+            },
         ),
         (
             UnreadableResponseError(
@@ -120,8 +147,13 @@ async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
                 response_format="feed",
             ),
             "read_malformed_content",
-            None,
-            None,
+            {
+                "error_class": (
+                    "app.collection.article_acquisition.reader.read_errors."
+                    "UnreadableResponseError"
+                ),
+                "error_message": "read_malformed_content: feed",
+            },
         ),
         (
             ResponseSizeLimitExceededError(
@@ -130,36 +162,44 @@ async def test_traversal_preserves_feed_and_entry_order_without_implicit_dedup(
                 size_basis=ResponseSizeBasis.DECLARED_CONTENT_LENGTH,
             ),
             "source_response_size_limit_exceeded",
-            None,
-            None,
+            {
+                "error_class": (
+                    "app.collection.article_acquisition.errors."
+                    "ResponseSizeLimitExceededError"
+                ),
+                "error_message": (
+                    "source_response_size_limit_exceeded: observed=10485761"
+                    " limit=10485760 basis=declared_content_length"
+                ),
+            },
         ),
     ],
 )
 async def test_partial_failure_is_logged_and_other_feeds_continue(
-    error: Exception, code: str, http_status: int | None, reason_code: str | None
+    error: Exception, code: str, exception_fields: dict[str, object], read_logs
 ) -> None:
+    """一部のフィードの失敗は、取得元とフィードと分類のcodeに、変換した原因を添えて記録し、残りのフィードを続ける。"""
     reader = AsyncMock(spec=RssReader)
     reader.fetch.side_effect = [[_ENTRY], error, [_ENTRY]]
-    with capture_logs() as logs:
-        result = await _collect(reader)
+    result = await _collect(reader)
     assert len(result) == 2
     assert reader.fetch.await_count == 3
-    failed = [log for log in logs if log["event"] == "source_feed_fetch_failed"]
+    failed = [log for log in read_logs() if log["event"] == "source_feed_fetch_failed"]
     assert failed == [
-        dict(
-            event="source_feed_fetch_failed",
-            source=str(Source.name),
-            feed=_FEEDS[1],
-            code=code,
-            http_status=http_status,
-            reason_code=reason_code,
-            log_level="warning",
-        )
+        {
+            "event": "source_feed_fetch_failed",
+            "level": "warning",
+            "log_policy": "external_content_fetch",
+            "source_name": str(Source.name),
+            "feed_url": _FEEDS[1],
+            "code": code,
+            **exception_fields,
+        }
     ]
 
 
 @pytest.mark.asyncio
-async def test_all_failures_preserve_every_exception_and_cause() -> None:
+async def test_all_failures_preserve_every_exception_and_cause(read_logs) -> None:
     reader = AsyncMock(spec=RssReader)
     cause = ValueError("parser cause")
     first = UnreadableResponseError(
@@ -172,12 +212,13 @@ async def test_all_failures_preserve_every_exception_and_cause() -> None:
         HttpResponseError(status_code=503, received_at=_RECEIVED),
     ]
     reader.fetch.side_effect = errors
-    with capture_logs() as logs, pytest.raises(RssFeedErrors) as caught:
+    with pytest.raises(RssFeedErrors) as caught:
         await _collect(reader)
     assert [failure.feed_url for failure in caught.value.failures] == list(_FEEDS)
     assert [failure.error for failure in caught.value.failures] == errors
     assert caught.value.failures[0].error.__cause__ is cause
     assert reader.fetch.await_count == 3
+    logs = read_logs()
     assert len([log for log in logs if log["event"] == "source_feed_fetch_failed"]) == 3
 
 
@@ -192,9 +233,9 @@ async def test_successful_empty_feed_counts_as_success(empty_only: bool) -> None
 
 
 @pytest.mark.asyncio
-async def test_unexpected_reader_failure_stops_before_later_feeds_and_selection() -> (
-    None
-):
+async def test_unexpected_reader_failure_stops_before_later_feeds_and_selection(
+    read_logs,
+) -> None:
     class MustNotSelect(Source):
         @staticmethod
         def select(entries: list[RssEntry]) -> list[RssEntry]:
@@ -203,11 +244,13 @@ async def test_unexpected_reader_failure_stops_before_later_feeds_and_selection(
     reader = AsyncMock(spec=RssReader)
     error = RuntimeError("reader bug")
     reader.fetch.side_effect = [[_ENTRY], error, [_ENTRY]]
-    with capture_logs() as logs, pytest.raises(RuntimeError) as caught:
+    with pytest.raises(RuntimeError) as caught:
         await _collect(reader, MustNotSelect)
     assert caught.value is error
     assert reader.fetch.await_count == 2
-    assert not [log for log in logs if log["event"] == "source_feed_fetch_failed"]
+    assert not [
+        log for log in read_logs() if log["event"] == "source_feed_fetch_failed"
+    ]
 
 
 @pytest.mark.asyncio
@@ -271,7 +314,7 @@ async def test_selection_runs_once_after_scope_and_controls_mapping_order(
     ],
 )
 async def test_selection_exception_is_not_caught_as_feed_failure(
-    error: Exception,
+    error: Exception, read_logs
 ) -> None:
     cause = ValueError("cause")
 
@@ -282,12 +325,14 @@ async def test_selection_exception_is_not_caught_as_feed_failure(
 
     reader = AsyncMock(spec=RssReader)
     reader.fetch.return_value = [_ENTRY]
-    with capture_logs() as logs, pytest.raises(type(error)) as caught:
+    with pytest.raises(type(error)) as caught:
         await _collect(reader, FailingSource)
     assert caught.value is error
     assert caught.value.__cause__ is cause
     assert reader.fetch.await_count == 3
-    assert not [log for log in logs if log["event"] == "source_feed_fetch_failed"]
+    assert not [
+        log for log in read_logs() if log["event"] == "source_feed_fetch_failed"
+    ]
 
 
 @pytest.mark.asyncio

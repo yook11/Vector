@@ -12,6 +12,7 @@ from app.collection.article_acquisition.reader.read_errors import (
 from app.collection.response_size import ResponseSizeBasis
 from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
+from app.shared.errors import ApplicationError
 
 
 class AcquisitionSourceInvalidError(Exception):
@@ -67,14 +68,18 @@ class RssFeedFailure:
     )
 
 
-class RssFeedErrors(Exception):
+class RssFeedErrors(ApplicationError):
     """フィードごとの取得失敗をまとめ、投げる条件は取得側に任せる。"""
 
     CODE: ClassVar[str] = "rss_feed_errors"
 
     def __init__(self, failures: list[RssFeedFailure]) -> None:
-        super().__init__()
         if not failures:
             raise ValueError("RSS feed failures must not be empty")
+        # フィードのURLと各原因は、フィードごとの失敗ログに出す。
+        super().__init__(
+            "すべてのフィードの取得に失敗しました",
+            details={"failure_count": len(failures)},
+        )
         self.failures = tuple(failures)
         self.failure_count = len(self.failures)

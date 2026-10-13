@@ -3,7 +3,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.collection.article_acquisition.consumer import ArticleAcquisitionConsumer
@@ -22,6 +21,8 @@ from app.lambda_handlers.article_fetch_lifecycle import (
 @asynccontextmanager
 async def open_acquisition_consumer(
     settings: AcquisitionConsumerSettings,
+    *,
+    failure_recorder: ArticleFetchLifecycleRecorder,
 ) -> AsyncIterator[ArticleAcquisitionConsumer]:
     def create_engine(*, password_provider: IamPasswordProvider) -> AsyncEngine:
         return create_article_fetch_engine(
@@ -47,8 +48,6 @@ async def open_acquisition_consumer(
         database_url=settings.database_url,
         create_engine=create_engine,
         build_consumer=build_consumer,
-        failure_recorder=ArticleFetchLifecycleRecorder(
-            structlog.get_logger(__name__), stage="acquisition"
-        ),
+        failure_recorder=failure_recorder,
     ) as consumer:
         yield consumer

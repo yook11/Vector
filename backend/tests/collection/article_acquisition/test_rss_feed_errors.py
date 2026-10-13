@@ -13,6 +13,7 @@ from app.http.errors import HttpResponseError
 
 
 def test_failures_are_kept_as_given_without_raw_details_in_message() -> None:
+    """各フィードの元の例外を保持し、説明と診断情報にはURLや本文を入れず件数だけを残す。"""
     secret = "sk-" + "x" * 24
     failures = [
         RssFeedFailure(
@@ -34,8 +35,10 @@ def test_failures_are_kept_as_given_without_raw_details_in_message() -> None:
     assert error.failures == tuple(failures)
     failures.clear()
     assert error.failure_count == 2
-    assert secret not in str(error)
-    assert "https://" not in str(error)
+    assert (str(error), error.details) == (
+        "すべてのフィードの取得に失敗しました",
+        {"failure_count": 2},
+    )
 
 
 def test_empty_error_collection_is_rejected() -> None:

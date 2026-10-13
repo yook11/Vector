@@ -1,10 +1,10 @@
 """実DBとHTTP応答のスタブで、取得記事の保存・後続イベント・配送判断を確認する。"""
 
+import json
 from unittest.mock import Mock
 
 import httpx2
 import pytest
-from structlog.testing import capture_logs
 
 from local_tests.acquisition.support import (
     load_acquisition_failures,
@@ -15,6 +15,16 @@ from local_tests.acquisition.support import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+def read_logs(capsys: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
+    """標準出力のJSONのうち、イベント名を持つログだけを返す。"""
+    records = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+    return [record for record in records if "event" in record]
 
 
 async def test_complete_article_is_saved_with_created_event(
@@ -110,41 +120,41 @@ async def test_redelivery_of_incomplete_article_does_not_repeat_event(
 
 
 async def test_inactive_source_is_acknowledged_without_fetch(
-    system_database, invoke_acquisition, source_id, rss_response
+    system_database, invoke_acquisition, source_id, rss_response, capsys
 ):
     """開始前に無効化されたソースは取得不要として受信完了し、失敗監査を残さない。"""
     async with system_database.connect("vector") as db:
         await db.execute(
             "UPDATE news_sources SET is_active=false WHERE id=$1", source_id
         )
-    with capture_logs() as logs:
-        assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
+    assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
     rss_response.assert_not_awaited()
     assert any(
-        log["event"] == "acquisition_message_processed" and log["result"] == "inactive"
-        for log in logs
+        log["event"] == "acquisition_message_processing_completed"
+        and log["outcome"] == "inactive"
+        for log in read_logs(capsys)
     )
     assert await load_acquisition_failures(system_database, source_id) == []
 
 
 async def test_deleted_source_is_acknowledged_without_fetch(
-    system_database, invoke_acquisition, source_id, rss_response
+    system_database, invoke_acquisition, source_id, rss_response, capsys
 ):
     """開始前に削除されたソースは取得不要として受信完了し、失敗監査を残さない。"""
     async with system_database.connect("vector") as db:
         await db.execute("DELETE FROM news_sources WHERE id=$1", source_id)
-    with capture_logs() as logs:
-        assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
+    assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
     rss_response.assert_not_awaited()
     assert any(
-        log["event"] == "acquisition_message_processed" and log["result"] == "missing"
-        for log in logs
+        log["event"] == "acquisition_message_processing_completed"
+        and log["outcome"] == "missing"
+        for log in read_logs(capsys)
     )
     assert await load_acquisition_failures(system_database, source_id) == []
 
 
 async def test_inactive_source_with_invalid_name_is_not_resolved(
-    system_database, invoke_acquisition, source_id, rss_response
+    system_database, invoke_acquisition, source_id, rss_response, capsys
 ):
     """無効ソースは名前が不正でも取得不要として正常終了する。"""
     async with system_database.connect("vector") as db:
@@ -152,30 +162,32 @@ async def test_inactive_source_with_invalid_name_is_not_resolved(
             "UPDATE news_sources SET name='!!!', is_active=false WHERE id=$1",
             source_id,
         )
-    with capture_logs() as logs:
-        assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
+    assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
     rss_response.assert_not_awaited()
     assert any(
-        log["event"] == "acquisition_message_processed" and log["result"] == "inactive"
-        for log in logs
+        log["event"] == "acquisition_message_processing_completed"
+        and log["outcome"] == "inactive"
+        for log in read_logs(capsys)
     )
 
 
 async def test_active_source_with_invalid_name_is_failed_without_fetch(
-    system_database, invoke_acquisition, source_id, rss_response
+    system_database, invoke_acquisition, source_id, rss_response, capsys
 ):
     """有効ソースの不正名はDB読み取り障害と区別し、登録不正として再配送する。"""
     async with system_database.connect("vector") as db:
         await db.execute("UPDATE news_sources SET name='!!!' WHERE id=$1", source_id)
-    with capture_logs() as logs:
-        assert await invoke_acquisition(source_id) == {
-            "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
-        }
+    assert await invoke_acquisition(source_id) == {
+        "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
+    }
     rss_response.assert_not_awaited()
     assert any(
-        log["event"] == "acquisition_message_processed"
-        and log["code"] == "source_not_registered"
-        for log in logs
+        log["event"] == "acquisition_message_processing_failed"
+        and log["operation"] == "consume"
+        and log["error_class"]
+        == "app.collection.article_acquisition.errors.AcquisitionSourceInvalidError"
+        and log["error_message"] == "source_not_registered"
+        for log in read_logs(capsys)
     )
 
 
@@ -324,31 +336,36 @@ async def test_save_failure_rolls_back_articles_and_commits_failure_audit(
 
 
 async def test_audit_and_diagnostic_failures_preserve_original_fetch_failure(
-    system_database, invoke_acquisition, source_id, rss_response, monkeypatch
+    system_database, invoke_acquisition, source_id, rss_response, monkeypatch, capsys
 ):
     """監査保存と退避ログが失敗しても、元の取得例外で再配送を要求する。"""
     from app.collection.article_acquisition import failure_recording
 
     rss_response.side_effect = httpx2.ReadTimeout("private-fetch-detail")
     audit_log = Mock()
-    audit_log.exception.side_effect = RuntimeError("private-diagnostic-detail")
-    monkeypatch.setattr(failure_recording, "logger", audit_log)
+    audit_log.warning.side_effect = RuntimeError("private-diagnostic-detail")
+    monkeypatch.setattr(
+        failure_recording, "create_policy_json_logger", lambda *args: audit_log
+    )
     async with system_database.connect("vector") as db:
         await db.execute("REVOKE INSERT ON pipeline_events FROM vector_collect")
     try:
-        with capture_logs() as logs:
-            response = await invoke_acquisition(source_id)
+        response = await invoke_acquisition(source_id)
     finally:
         async with system_database.connect("vector") as db:
             await db.execute("GRANT INSERT ON pipeline_events TO vector_collect")
 
-    audit_log.exception.assert_called_once()
+    audit_log.warning.assert_called_once()
     assert response == {
         "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
     }
-    processed = [log for log in logs if log["event"] == "acquisition_message_processed"]
-    assert len(processed) == 1
-    assert processed[0]["error_class"] == (
+    failed = [
+        log
+        for log in read_logs(capsys)
+        if log["event"] == "acquisition_message_processing_failed"
+    ]
+    assert len(failed) == 1
+    assert failed[0]["error_class"] == (
         "app.collection.article_acquisition.errors.RssFeedErrors"
     )
 

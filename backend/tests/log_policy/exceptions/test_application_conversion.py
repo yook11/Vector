@@ -19,6 +19,7 @@ from app.analysis.assessment.errors import (
 from app.analysis.curation import events as curation
 from app.collection import events as collection
 from app.collection.article_acquisition import events as acquisition
+from app.collection.article_acquisition.errors import RssFeedErrors, RssFeedFailure
 from app.collection.article_completion.errors import ArticleBuildRejectedError
 from app.collection.domain.analyzable_article import (
     AnalyzableArticleDefect,
@@ -436,8 +437,34 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
             },
             id="article_build_rejected_error",
         ),
+        pytest.param(
+            RssFeedErrors(
+                [
+                    RssFeedFailure(
+                        feed_url="https://example.com/feed",
+                        error=HttpResponseError(
+                            status_code=503,
+                            received_at=datetime(2026, 10, 12, tzinfo=UTC),
+                        ),
+                    ),
+                    RssFeedFailure(
+                        feed_url="https://example.com/other",
+                        error=HttpResponseError(
+                            status_code=404,
+                            received_at=datetime(2026, 10, 12, tzinfo=UTC),
+                        ),
+                    ),
+                ]
+            ),
+            {
+                "message": "すべてのフィードの取得に失敗しました",
+                "error_details": {"failure_count": 2},
+                "cause_is_aggregated": False,
+            },
+            id="rss_feed_errors",
+        ),
     ],
 )
 def test_fetch_and_build_errors_keep_description_and_facts(error, expected) -> None:
-    """通信・宛先拒否・記事の構築拒否は、固定の説明文と調査に使う事実を渡し、宛先と生のRetry-Afterは渡さない。"""
+    """通信・宛先拒否・記事の構築拒否・全フィードの失敗は、固定の説明文と調査に使う事実を渡し、宛先と生のRetry-Afterは渡さない。"""
     assert asdict(convert_exception(error)) == expected

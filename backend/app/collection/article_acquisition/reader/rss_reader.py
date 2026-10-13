@@ -19,15 +19,12 @@ from time import struct_time
 from typing import Any, Literal
 
 import feedparser
-import structlog
 
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
 from app.collection.article_acquisition.tools.source_http import get_source_response
-
-logger = structlog.get_logger(__name__)
 
 ParseMode = Literal["text", "bytes"]
 
@@ -175,11 +172,6 @@ class RssReader:
         feed = await asyncio.to_thread(feedparser.parse, raw)
         if feed.bozo and not feed.entries:
             bozo_exception = feed.bozo_exception
-            logger.warning(
-                "rss_feed_parse_error",
-                source=source_name,
-                error_type=type(bozo_exception).__qualname__,
-            )
             error = UnreadableResponseError(
                 reason=UnreadableResponseReason.MALFORMED_CONTENT,
                 response_format="feed",

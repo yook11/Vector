@@ -8,15 +8,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-import structlog
-
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
 from app.collection.article_acquisition.tools.source_http import get_source_response
-
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 # JATS prefix (<jats:p>) と HTML tag を一括で剥がす
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -208,5 +206,7 @@ class CrossrefReader:
             )
         items: list[dict[str, Any]] = items_raw
         if not items:
-            logger.info("crossref_no_new_items", source=source_name)
+            create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).info(
+                "crossref_no_new_items", source_name=source_name
+            )
         return [normalize_item(item) for item in items]

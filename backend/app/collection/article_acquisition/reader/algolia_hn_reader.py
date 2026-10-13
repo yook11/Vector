@@ -8,15 +8,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar
 
-import structlog
-
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
 from app.collection.article_acquisition.tools.source_http import get_source_response
-
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,5 +113,7 @@ class HackerNewsReader:
             )
         hits: list[dict[str, Any]] = hits_raw
         if not hits:
-            logger.info("hn_no_new_stories", source=source_name)
+            create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).info(
+                "hn_no_new_stories", source_name=source_name
+            )
         return [normalize_hit(hit) for hit in hits]

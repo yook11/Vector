@@ -36,7 +36,6 @@ def invoke_acquisition(system_database, monkeypatch):
 
     from app.collection.sources.acquisition_request import SourceAcquisitionSchedule
     from app.lambda_handlers import article_fetch_lifecycle
-    from app.lambda_handlers.acquisition import handler as entrypoint
     from app.lambda_handlers.acquisition.handler import handler
     from tests.iam_fixtures import inject_test_db_signer
 
@@ -54,7 +53,6 @@ def invoke_acquisition(system_database, monkeypatch):
         "CROSSREF_CONTACT_EMAIL": "crossref-contact@example.invalid",
     }.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr(entrypoint, "setup_lambda_logging", lambda: None)
 
     async def invoke(source_id, *, cadence="high"):
         schedule = SourceAcquisitionSchedule.model_validate(
