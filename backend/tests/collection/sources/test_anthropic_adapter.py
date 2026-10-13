@@ -5,7 +5,7 @@
 - fixture sitemap から収集 → 変換経路で永続化 passport が yield
 - 収集スコープ ``is_collectable_anthropic_url`` (``/news/`` のみ・対象外 ≠
   変換失敗)。``MAX_ENTRIES`` cap / lastmod 降順
-- ``to_fetched_article`` が in-scope entry に対し total (None/raise しない)
+- ``to_raw_article`` が in-scope entry に対し total (None/raise しない)
 - 全 passport は ``ObservedArticle`` (``HTML_TITLE_POLICY``)
 - ``RawHttpClient`` の取得失敗 (共通HTTPエラー) は ``collect`` を素通しする
 
@@ -21,14 +21,14 @@ from pathlib import Path
 
 import pytest
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.sitemap_reader import SitemapEntry
 from app.collection.article_acquisition.tools.raw_http_client import RawHttpClient
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.definitions.anthropic import (
     AnthropicSource,
     is_collectable_anthropic_url,
-    to_fetched_article,
+    to_raw_article,
 )
 from app.http.errors import HttpResponseError
 from tests.collection.sources._fixture_tools import fixture_tools
@@ -115,7 +115,7 @@ async def test_all_passports_are_incomplete_for_html_title() -> None:
 def test_scope_does_not_govern_lastmod() -> None:
     """スコープ述語は lastmod を見ない (lastmod 欠落でも in-scope)。
 
-    これが ``to_fetched_article`` の totality 検証 (下記) の前提。
+    これが ``to_raw_article`` の totality 検証 (下記) の前提。
     """
     entry = SitemapEntry(loc="https://www.anthropic.com/news/x", lastmod=None)
     assert is_collectable_anthropic_url(entry) is True
@@ -123,15 +123,15 @@ def test_scope_does_not_govern_lastmod() -> None:
 
 def test_mapping_is_total_on_in_scope_missing_lastmod() -> None:
     """in-scope だが lastmod 欠落の entry に写像は None/raise せず
-    ``FetchedArticle`` を返す (total)。
+    ``RawArticle`` を返す (total)。
 
-    converter/fetcher テストは ``FetchedArticle`` を直接与え sitemap 写像を
+    converter/fetcher テストは ``RawArticle`` を直接与え sitemap 写像を
     通らないため、sitemap シームの totality はここでしか pin できない。
     """
-    fa = to_fetched_article(
+    fa = to_raw_article(
         SitemapEntry(loc="https://www.anthropic.com/news/x", lastmod=None)
     )
-    assert isinstance(fa, FetchedArticle)
+    assert isinstance(fa, RawArticle)
     assert fa.url == "https://www.anthropic.com/news/x"
     assert fa.published_at is None
 

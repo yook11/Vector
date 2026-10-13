@@ -12,10 +12,12 @@ from app.collection.article_acquisition.events import (
 from app.collection.article_acquisition.failure_recording import (
     ArticleAcquisitionFailureRecorder,
 )
+from app.collection.article_acquisition.fetched_article import (
+    FetchedArticle,
+    FetchedArticleTitleMissingError,
+)
 from app.collection.article_acquisition.fetched_article_converter import (
-    AcquisitionConversionRejection,
     convert_fetched_article,
-    unexpected_rejection,
 )
 from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.article_acquisition.metrics import (
@@ -25,6 +27,7 @@ from app.collection.article_acquisition.metrics import (
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.article_url import ArticleUrlInvalidError
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.events import AnalyzableArticleCreated
 from app.collection.persistence.analyzable_article_repository import (
@@ -32,6 +35,8 @@ from app.collection.persistence.analyzable_article_repository import (
 )
 from app.collection.sources.article_source import AcquirableSource
 from app.db.session import SessionFactory
+from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.models.outbox_event import OutboxEvent
 
 
@@ -59,16 +64,45 @@ class ArticleAcquisitionService:
             observed_count = 0
             tools = self._tools_factory()
 
-            async for fetched in fetch_articles(self._source, tools):
+            async for raw_article in fetch_articles(self._source, tools):
                 try:
                     outcome = convert_fetched_article(
-                        fetched, source=self._source, source_id=source_id
+                        FetchedArticle.from_raw(raw_article),
+                        source=self._source,
+                        source_id=source_id,
                     )
+                except (ArticleUrlInvalidError, FetchedArticleTitleMissingError) as exc:
+                    create_policy_json_logger(
+                        __name__, EXTERNAL_CONTENT_LOG_RULES
+                    ).warning(
+                        "article_conversion_rejected",
+                        source_name=source_name,
+                        exc_info=exc,
+                    )
+                    # 棄却の件数は別トランザクションの監査commit後に計上する。
+                    await self._failure_recorder.record_conversion_rejected(
+                        source_id=source_id,
+                        source_name=source_name,
+                        raw_article=raw_article,
+                        error=exc,
+                    )
+                    continue
                 except Exception as exc:
                     # entry 単位の変換 bug は source 全体を止めず rejected に畳む。
-                    outcome = unexpected_rejection(
-                        fetched, source=self._source, cause=exc
+                    create_policy_json_logger(
+                        __name__, EXTERNAL_CONTENT_LOG_RULES
+                    ).error(
+                        "fetched_article_conversion_unexpected",
+                        source_name=source_name,
+                        exc_info=exc,
                     )
+                    await self._failure_recorder.record_conversion_rejected(
+                        source_id=source_id,
+                        source_name=source_name,
+                        raw_article=raw_article,
+                        error=exc,
+                    )
+                    continue
                 match outcome:
                     case AnalyzableArticle() as ready:
                         analyzable_article_id = await article_repo.save(ready)
@@ -119,11 +153,6 @@ class ArticleAcquisitionService:
                                 ),
                                 payload=event.model_dump(mode="json"),
                             )
-                        )
-                    case AcquisitionConversionRejection() as rej:
-                        # 棄却の件数は別トランザクションの監査commit後に計上する。
-                        await self._failure_recorder.record_conversion_rejected(
-                            source_id, rej
                         )
 
             await session.commit()

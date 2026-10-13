@@ -1,119 +1,17 @@
-"""``FetchedArticle`` → 「何ができたか」への総変換 (純粋関数)。
+"""``FetchedArticle`` → 「何ができたか」への変換 (純粋関数)。
 
-per-source 責務は body / published を信用できる形で渡せるかのみ。Ready 昇格 /
-Observed 保留 / 変換不能(棄却) の最終分岐を ``convert_fetched_article`` に集約し、
-想定内の 3 結末すべてに対して total にする (棄却も raise せず
-``AcquisitionConversionRejection`` 値で返す)。
-
-``AnalyzableArticle`` 不成立は想定内の正常系 (Ready 候補 ⊆ Observed 候補)。
-precondition (title / URL) を満たさない entry は棄却となる。棄却理由の判定と
-ログ出力は ``_reject`` に集約する。想定外 bug (precondition 通過後の invariant
-違反) は本関数では catch せず素通りさせ、stream orchestrator (service) が
-``unexpected_rejection`` で値化する。
+Ready 昇格 / Observed 保留の最終分岐を ``convert_fetched_article`` に集約する。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from app.collection.article_acquisition.errors import AcquisitionConversionDefect
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.article_limits import ARTICLE_TITLE_MAX_LENGTH
-from app.collection.domain.article_url import (
-    ArticleUrl,
-    ArticleUrlInvalidError,
-)
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.source_metadata import SourceMetadata
-from app.collection.sources.source_name import SourceName
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
-
-
-@dataclass(frozen=True, slots=True)
-class AcquisitionConversionRejection:
-    """stream 境界で変換不能 entry を表す値。
-
-    per-entry raise だと source stream 全体が止まるため、棄却を値に落として
-    継続させる。``outcome_code`` は責任元の reason を verbatim で運び (URL 欠落 /
-    title 欠落・想定外=``AcquisitionConversionDefect``、非空 URL 不正=
-    ``WebUrlInvalidReason``)、監査は再分類せずそれを焼くだけ。``cause`` は原因例外
-    を保持し監査が FQN / chain を辿れる (非空 URL 不正=
-    ``ArticleUrlInvalidError`` / 想定外=本当のバグ / 欠落=None)。
-    ``raw_url`` は非空なら素の値、欠落なら ``None`` で、redact は監査側の責務。
-    """
-
-    outcome_code: str
-    source_name: str | None
-    raw_url: str | None
-    has_title: bool
-    body_length: int | None
-    has_published_at: bool
-    cause: Exception | None
-
-
-def _reject(
-    *,
-    outcome_code: str,
-    fetched: FetchedArticle,
-    source_name: SourceName,
-    cause: Exception | None = None,
-) -> AcquisitionConversionRejection:
-    """観測スナップショット取得 + 構造化ログ + 値化の集約点。"""
-    has_title = bool(fetched.title)
-    body_length = len(fetched.body) if fetched.body is not None else None
-    has_published_at = fetched.published_at is not None
-    raw_url = fetched.url if fetched.url.strip() else None
-
-    create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).warning(
-        "article_conversion_rejected",
-        source_name=str(source_name),
-        outcome_code=outcome_code,
-        has_title=has_title,
-        body_length=body_length,
-        has_published_at=has_published_at,
-    )
-    return AcquisitionConversionRejection(
-        outcome_code=outcome_code,
-        source_name=str(source_name),
-        raw_url=raw_url,
-        has_title=has_title,
-        body_length=body_length,
-        has_published_at=has_published_at,
-        cause=cause,
-    )
-
-
-def unexpected_rejection(
-    fetched: FetchedArticle,
-    *,
-    source: SourceMetadata,
-    cause: Exception,
-) -> AcquisitionConversionRejection:
-    """想定外 bug を ``UNEXPECTED_ERROR`` の ``AcquisitionConversionRejection`` に
-    値化する funnel。
-
-    precondition 通過後の invariant 違反 (= ありえない筈の bug) が ``convert`` から
-    漏れたとき、stream orchestrator (service) がこれを呼んで値化する。原因の例外と
-    発生位置はログに残し、本当のバグである ``cause`` を保持して監査が FQN /
-    chain を辿れるようにする (``except`` 節内から呼ばれる前提)。
-    """
-    create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).error(
-        "fetched_article_conversion_unexpected",
-        source_name=str(source.name),
-        exc_info=cause,
-    )
-    return AcquisitionConversionRejection(
-        outcome_code=AcquisitionConversionDefect.UNEXPECTED_ERROR.value,
-        source_name=str(source.name),
-        raw_url=fetched.url or None,
-        has_title=bool(fetched.title),
-        body_length=len(fetched.body) if fetched.body else None,
-        has_published_at=fetched.published_at is not None,
-        cause=cause,
-    )
 
 
 def convert_fetched_article(
@@ -121,57 +19,26 @@ def convert_fetched_article(
     *,
     source: SourceMetadata,
     source_id: int,
-) -> AnalyzableArticle | ObservedArticle | AcquisitionConversionRejection:
-    """1 ``FetchedArticle`` を「何ができたか」に変換する (想定内に total)。
-
-    URL は後続アクセス、title は Observed として受け付けるための最低条件。
-    不在 / 不正なら獲得型は成立し得ないため、Phase 0 で precondition として
-    棄却する。残りの正規化と Ready / Observed の構築はこの通過を前提に進む。
+) -> AnalyzableArticle | ObservedArticle:
+    """1 ``FetchedArticle`` を「何ができたか」に変換する。
 
     Returns:
         ``AnalyzableArticle`` — body + published_at が揃い品質ゲート通過。
         ``ObservedArticle`` — title + URL は揃うが Ready 不成立 (取れた事実を
         全保存)。
-        ``AcquisitionConversionRejection`` — title / URL precondition を満たさない棄却
-        (raise せず値で返す)。
     """
     source_name = source.name
     origin = source.observed_origin
-
-    if not fetched.url.strip():
-        return _reject(
-            outcome_code=AcquisitionConversionDefect.URL_MISSING.value,
-            fetched=fetched,
-            source_name=source_name,
-        )
-
-    title = fetched.title.strip()[:ARTICLE_TITLE_MAX_LENGTH]
-    if not title:
-        return _reject(
-            outcome_code=AcquisitionConversionDefect.TITLE_MISSING.value,
-            fetched=fetched,
-            source_name=source_name,
-        )
-
-    try:
-        source_url = ArticleUrl.from_raw(fetched.url)
-    except ArticleUrlInvalidError as err:
-        return _reject(
-            outcome_code=err.reason.value,
-            fetched=fetched,
-            source_name=source_name,
-            cause=err,
-        )
 
     published_at = PublishedAt.from_datetime(fetched.published_at)
 
     if not source.completion_policy.requires_html_completion():
         article = AnalyzableArticle.try_build(
-            title=title,
+            title=fetched.title,
             body=fetched.body,
             published_at=published_at,
             source_id=source_id,
-            source_url=source_url,
+            source_url=fetched.url,
         )
         if article is not None:
             create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).info(
@@ -184,8 +51,8 @@ def convert_fetched_article(
 
     observed = ObservedArticle.build(
         source_name=source_name,
-        source_url=source_url,
-        title=title,
+        source_url=fetched.url,
+        title=fetched.title,
         body=fetched.body,
         published_at=published_at,
         origin=origin,

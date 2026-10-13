@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
@@ -40,8 +40,8 @@ class MICSource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
-        return FetchedArticle(
+    def map_entry(cls, entry: RssEntry) -> RawArticle:
+        return RawArticle(
             title=entry.title,
             url=entry.link,
             body=None,

@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import ClassVar
 from urllib.parse import urljoin, urlparse
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.html_listing_reader import (
     HtmlListingEntry,
 )
@@ -69,14 +69,14 @@ def is_collectable_ornl_url(entry: HtmlListingEntry) -> bool:
     return urlparse(_absolute_url(entry)).path not in _EXCLUDED_PATHS
 
 
-def to_fetched_article(entry: HtmlListingEntry) -> FetchedArticle:
-    """in-scope な ``HtmlListingEntry`` → ``FetchedArticle`` の純粋 total 写像。
+def to_raw_article(entry: HtmlListingEntry) -> RawArticle:
+    """in-scope な ``HtmlListingEntry`` → ``RawArticle`` の純粋 total 写像。
 
     title は URL slug (listing に title が無いため)。listing は lastmod を
     持たないため ``published_at=None`` (HTML 抽出側で確定)。
     """
     url = _absolute_url(entry)
-    return FetchedArticle(
+    return RawArticle(
         title=_slug_from_url(url) or _SOURCE_NAME,
         url=url,
         body=None,
@@ -130,5 +130,5 @@ class ORNLSource(BaseArticleSource):
         return result
 
     @classmethod
-    def map_entry(cls, entry: HtmlListingEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: HtmlListingEntry) -> RawArticle:
+        return to_raw_article(entry)

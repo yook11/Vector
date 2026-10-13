@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.algolia_hn_reader import HackerNewsEntry
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
@@ -51,9 +51,9 @@ class HackerNewsSource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: HackerNewsEntry) -> FetchedArticle:
+    def map_entry(cls, entry: HackerNewsEntry) -> RawArticle:
         """HN hit は外部サイトを指すため body は HTML 抽出に委ねる (None)。"""
-        return FetchedArticle(
+        return RawArticle(
             title=entry.title or "",
             url=entry.url or "",
             body=None,

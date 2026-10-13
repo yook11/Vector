@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 from urllib.parse import urlparse
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.sitemap_reader import SitemapEntry
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
@@ -49,13 +49,13 @@ def is_collectable_anthropic_url(entry: SitemapEntry) -> bool:
     return urlparse(entry.loc).path.startswith(_NEWS_PATH_PREFIX)
 
 
-def to_fetched_article(entry: SitemapEntry) -> FetchedArticle:
-    """in-scope な ``SitemapEntry`` → ``FetchedArticle`` の純粋 total 写像。
+def to_raw_article(entry: SitemapEntry) -> RawArticle:
+    """in-scope な ``SitemapEntry`` → ``RawArticle`` の純粋 total 写像。
 
     title は URL slug (sitemap に title が無いため)。slug 空は source 名に
     fallback。drop / None を返さず素通し (converter が可視化)。
     """
-    return FetchedArticle(
+    return RawArticle(
         title=_slug_from_url(entry.loc) or _SOURCE_NAME,
         url=entry.loc,
         body=None,
@@ -96,5 +96,5 @@ class AnthropicSource(BaseArticleSource):
         return ordered[: cls.MAX_ENTRIES]
 
     @classmethod
-    def map_entry(cls, entry: SitemapEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: SitemapEntry) -> RawArticle:
+        return to_raw_article(entry)

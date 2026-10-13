@@ -9,13 +9,11 @@ from app.collection.article_acquisition.consumer_result import (
     NoRetryAcquisition,
     RetryAcquisition,
 )
-from app.collection.article_acquisition.fetched_article_converter import (
-    AcquisitionConversionRejection,
-)
 from app.collection.article_acquisition.metrics import (
     AcquisitionEntryOutcome,
     record_acquisition_outcome,
 )
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.db.session import SessionFactory
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
@@ -43,8 +41,11 @@ class ArticleAcquisitionFailureRecorder:
 
     async def record_conversion_rejected(
         self,
+        *,
         source_id: int,
-        rej: AcquisitionConversionRejection,
+        source_name: str,
+        raw_article: RawArticle,
+        error: Exception,
     ) -> None:
         """entry 単位の変換棄却を別 session で best-effort 監査し metric も出す。
 
@@ -59,18 +60,18 @@ class ArticleAcquisitionFailureRecorder:
                     audit_session
                 ).append_conversion_rejected(
                     source_id=source_id,
-                    rejection=rej,
+                    source_name=source_name,
+                    raw_article=raw_article,
+                    error=error,
                 )
                 await audit_session.commit()
         except Exception as audit_exc:
+            # 業務の例外は棄却時のログに出るため、ここでは型名だけを添える。
             create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).warning(
                 "fetched_article_conversion_audit_dropped",
                 operation="audit",
                 source_id=source_id,
-                business_outcome_code=rej.outcome_code,
-                business_error_class=(
-                    exception_fqn(rej.cause) if rej.cause is not None else None
-                ),
+                business_error_class=exception_fqn(error),
                 exc_info=audit_exc,
             )
             record_audit_dropped(SourceAcquisitionAuditRepository.STAGE)

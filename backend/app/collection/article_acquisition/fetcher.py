@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.rss_fetcher import RssFetcher
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.sources.article_source import AcquirableSource
@@ -11,7 +11,7 @@ from app.collection.sources.rss_acquisition import RssAcquisition, RssSource
 
 async def fetch_articles[T](
     source: AcquirableSource[T], tools: ReaderTools
-) -> AsyncIterator[FetchedArticle]:
+) -> AsyncIterator[RawArticle]:
     if isinstance(source, RssSource):
         if not isinstance(source.acquisition, RssAcquisition):
             raise TypeError("unsupported acquisition declaration")

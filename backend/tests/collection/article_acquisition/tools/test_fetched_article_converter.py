@@ -1,18 +1,8 @@
 """``convert_fetched_article`` のユニットテスト (DB 非依存)。
 
-``FetchedArticle`` 入力を ``AnalyzableArticle`` / ``ObservedArticle`` / 棄却
-(``AcquisitionConversionRejection``) に変換する分岐契約を検証する。title / URL / body /
-published の各境界と、profile の title policy (``html_preferred`` = 仮タイトル)
-による Ready gate を網羅し、``convert_fetched_article`` の判定順を固定する。
-
-convert は想定内に total: 変換不能 entry は raise でなく
-``AcquisitionConversionRejection`` 値で返し、握りつぶさず理由付きで表に出す。棄却値は
-責任元 VO の reason を
-``outcome_code`` に verbatim で運ぶ (URL は ``WebUrlInvalidReason``、title 欠落 /
-想定外バグは acquisition 所有の ``AcquisitionConversionDefect``)。想定外 bug の
-値化 funnel ``unexpected_rejection`` の契約 (UNEXPECTED_ERROR + ``cause`` 保持) も
-併せて固定する。Ready の Pydantic 失敗 / tz-naive published の Observed fallback
-は **結果不変** (byte 等価) であることを引き続き固定する。
+受け付け済みの ``FetchedArticle`` を ``AnalyzableArticle`` / ``ObservedArticle`` に
+変換する分岐契約を検証する。body / published の各境界と、profile の title policy
+(``html_preferred`` = 仮タイトル) による Ready gate を網羅する。
 """
 
 from __future__ import annotations
@@ -20,21 +10,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 from typing import ClassVar
 
-import pytest
-
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetched_article_converter import (
-    AcquisitionConversionRejection,
     convert_fetched_article,
-    unexpected_rejection,
 )
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MAX_LENGTH,
     ARTICLE_BODY_MIN_LENGTH,
-)
-from app.collection.domain.article_url import (
-    ArticleUrlInvalidError,
 )
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
 from app.collection.sources.article_completion_policy import (
@@ -81,7 +65,7 @@ def _source(
 def _call(*, profile: ArticleCompletionPolicy = DEFAULT_POLICY, **overrides):
     args = {**_BASE_FETCHED, **overrides}
     return convert_fetched_article(
-        FetchedArticle(**args),
+        FetchedArticle.from_raw(RawArticle(**args)),
         source=_source(profile=profile),
         source_id=1,
     )
@@ -138,88 +122,10 @@ def test_accepts_non_utc_published() -> None:
     assert isinstance(result, AnalyzableArticle)
 
 
-@pytest.mark.parametrize("title", ["", "   ", "\n\t  "])
-def test_rejects_missing_title_when_title_is_empty(title: str) -> None:
-    result = _call(title=title)
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "acquisition_conversion_title_missing"
-    assert result.cause is None  # acquisition 方針違反であり VO 例外ではない
-
-
-def test_trims_title_whitespace_and_caps_500_chars() -> None:
-    long_title = "  " + ("a" * 600) + "  "
-    result = _call(title=long_title)
-    assert isinstance(result, AnalyzableArticle)
-    assert result.title == "a" * 500
-
-
-@pytest.mark.parametrize("url", ["", "   ", "\n\t  "])
-def test_rejects_missing_url_as_acquisition_defect(url: str) -> None:
-    """空 URL は取得不成立として acquisition 固有の reason で棄却する。"""
-    result = _call(url=url)
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "acquisition_conversion_url_missing"
-    assert result.cause is None
-
-
-def test_accepts_private_ip_url_leaving_destination_to_fetch() -> None:
-    """非公開IPのURLは変換で棄却せず、宛先の拒否は取得時の送信境界に任せる。"""
-    result = _call(url="http://127.0.0.1/secret")
-    assert isinstance(result, AnalyzableArticle)
-    assert result.source_url.root == "http://127.0.0.1/secret"
-
-
-def test_rejects_non_http_url_as_url_not_http() -> None:
-    result = _call(url="javascript:alert(1)")
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "url_not_http"
-
-
-def test_rejects_overlong_url_as_url_too_long() -> None:
-    """2048 字超の URL は ``url_too_long`` に精密分類される (旧 INVALID_URL 潰し)。"""
-    result = _call(url="https://example.com/" + "a" * 2050)
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "url_too_long"
-
-
-def test_rejection_carries_structured_observation_fields() -> None:
-    """棄却値は FetchedArticle の観測スナップショットを構造化保持する。"""
-    result = _call(url="javascript:alert(1)", body=_VALID_BODY)
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "url_not_http"
-    assert result.source_name == str(_SOURCE_NAME)
-    assert result.raw_url == "javascript:alert(1)"
-    assert result.has_title is True
-    assert result.body_length == len(_VALID_BODY)
-    assert result.has_published_at is True
-
-
-@pytest.mark.parametrize("url", ["", "   ", "\n\t  "])
-def test_missing_url_rejection_reports_absent_raw_url(url: str) -> None:
-    result = _call(url=url)
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.raw_url is None
-
-
-def test_missing_url_takes_precedence_over_missing_title() -> None:
-    result = _call(url="", title="")
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "acquisition_conversion_url_missing"
-
-
-def test_invalid_url_rejection_carries_url_invalid_cause() -> None:
-    """URL VO の例外を ``cause`` に保持し、その下に WebUrl 由来 (ValueError) を
-    連鎖する (監査が error_chain を深さ>1 で辿れる)。"""
-    result = _call(url="ftp://example.com/secret")
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert isinstance(result.cause, ArticleUrlInvalidError)
-    assert isinstance(result.cause.__cause__, ValueError)
-
-
 def test_stamps_origin_on_observed_facts() -> None:
     """``observed_origin`` が ``ObservedField.origin`` に stamp される (audit)。"""
     result = convert_fetched_article(
-        FetchedArticle(**{**_BASE_FETCHED, "body": None}),
+        FetchedArticle.from_raw(RawArticle(**{**_BASE_FETCHED, "body": None})),
         source=_source(origin=ObservedOrigin.sitemap),
         source_id=1,
     )
@@ -268,39 +174,3 @@ def test_any_html_preferred_field_requires_html_completion_even_with_valid_body_
     assert isinstance(_call(profile=body_html_preferred), ObservedArticle)
     assert isinstance(_call(profile=DEFAULT_POLICY), AnalyzableArticle)
     assert isinstance(_call(profile=HTML_TITLE_POLICY), ObservedArticle)
-
-
-# ── 想定外 bug の値化 funnel ``unexpected_rejection`` ───────────────────────
-
-
-def test_unexpected_rejection_funnels_to_unexpected_error_reason() -> None:
-    """想定外 bug は ``UNEXPECTED_ERROR`` の ``AcquisitionConversionRejection`` に
-    値化される。"""
-    result = unexpected_rejection(
-        FetchedArticle(**_BASE_FETCHED),
-        source=_source(),
-        cause=RuntimeError("post-precondition invariant violation"),
-    )
-    assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "acquisition_conversion_unexpected_error"
-
-
-def test_unexpected_rejection_keeps_origin_cause() -> None:
-    """原因例外を ``cause`` に保持し監査が本当のバグの FQN / chain を辿れる。"""
-    cause = RuntimeError("boom")
-    result = unexpected_rejection(
-        FetchedArticle(**_BASE_FETCHED), source=_source(), cause=cause
-    )
-    assert result.cause is cause
-
-
-def test_unexpected_rejection_carries_structured_observation_fields() -> None:
-    """観測スナップショット (source_name / raw_url / has_title 等) を構造化保持する。"""
-    result = unexpected_rejection(
-        FetchedArticle(**_BASE_FETCHED), source=_source(), cause=RuntimeError("x")
-    )
-    assert result.source_name == str(_SOURCE_NAME)
-    assert result.raw_url == _VALID_URL
-    assert result.has_title is True
-    assert result.body_length == len(_VALID_BODY)
-    assert result.has_published_at is True

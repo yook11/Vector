@@ -5,15 +5,15 @@ classmethod になった。固定する固有不変条件:
 
 - fixture の ``<content:encoded>`` に WordPress 固定 footer
   ("... appeared first on Microsoft Research.") が付くが、yield される
-  ``FetchedArticle.body`` には footer が残らない (footer regex strip の移植証明)
+  ``RawArticle.body`` には footer が残らない (footer regex strip の移植証明)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.sources.definitions.microsoft_research import (
     MicrosoftResearchSource,
 )
@@ -24,7 +24,7 @@ _FIXTURE = "microsoft_research_rss.xml"
 _FOOTER_MARKER = "appeared first on Microsoft Research"
 
 
-async def _collect() -> list[FetchedArticle]:
+async def _collect() -> list[RawArticle]:
     tools = fixture_tools(rss_fixture=_FIXTURE)
     return [item async for item in fetch_articles(MicrosoftResearchSource, tools)]
 

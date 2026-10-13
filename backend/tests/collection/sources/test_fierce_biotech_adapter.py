@@ -14,15 +14,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.sources.definitions.fierce_biotech import FierceBiotechSource
 from tests.collection.sources._fixture_tools import fixture_tools
 
 _FIXTURE = "fierce_biotech_rss.xml"
 
 
-async def _collect() -> list[FetchedArticle]:
+async def _collect() -> list[RawArticle]:
     tools = fixture_tools(rss_fixture=_FIXTURE)
     return [item async for item in fetch_articles(FierceBiotechSource, tools)]
 

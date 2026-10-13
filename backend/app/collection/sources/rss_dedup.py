@@ -2,7 +2,7 @@
 
 1 記事が複数 feed/category に tag され feed 横断で URL 重複が起きるため、
 ``select`` 段で非空 link の重複を除く。**空 link は dedup 対象外**で全て残し、
-converter の ``MISSING_URL`` 監査経路へ届ける (implicit drop 禁止 =
+``url_empty`` の棄却として監査へ届ける (implicit drop 禁止 =
 failure-visibility)。
 """
 

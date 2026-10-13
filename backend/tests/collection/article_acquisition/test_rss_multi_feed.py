@@ -12,8 +12,8 @@ from app.collection.article_acquisition.errors import (
     ResponseSizeLimitExceededError,
     RssFeedErrors,
 )
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
@@ -55,9 +55,7 @@ class Source(TechCrunchSource):
     acquisition = replace(TechCrunchSource.acquisition, feeds=_FEEDS)
 
 
-async def _collect(
-    reader: RssReader, source: RssSource = Source
-) -> list[FetchedArticle]:
+async def _collect(reader: RssReader, source: RssSource = Source) -> list[RawArticle]:
     return [item async for item in fetch_articles(source, ReaderTools(rss=reader))]
 
 

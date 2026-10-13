@@ -2,15 +2,15 @@
 
 P2-D で identity / 補完方針は ``XxxSource`` の ``ClassVar``、取得手順は
 ``collect(tools)`` classmethod になった。fixture を ``ReaderTools.rss`` 差し替え
-(``fixture_tools``) 経由で食わせ、Source の ``FetchedArticle`` field 内容と、
+(``fixture_tools``) 経由で食わせ、Source の ``RawArticle`` field 内容と、
 収集 → 変換の本番経路の passport 出力を検証する (identity 固定は
 test_source_adapter_profiles に集約)。
 """
 
 from __future__ import annotations
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
 from app.collection.domain.observed_article import ObservedArticle
@@ -19,7 +19,7 @@ from tests.collection.sources._fixture_tools import fixture_tools
 from tests.collection.sources._invariant import FetchItem, drive_source
 
 
-async def _collect_fetched(fixture: str) -> list[FetchedArticle]:
+async def _collect_fetched(fixture: str) -> list[RawArticle]:
     tools = fixture_tools(rss_fixture=fixture)
     return [item async for item in fetch_articles(VentureBeatSource, tools)]
 
@@ -33,8 +33,8 @@ async def _passports(fixture: str) -> list[FetchItem]:
 async def test_collect_yields_fetched_articles_with_body_from_full_rss() -> None:
     items = await _collect_fetched("venturebeat_rss.xml")
 
-    assert items, "full fixture must yield at least one FetchedArticle"
-    assert all(isinstance(item, FetchedArticle) for item in items)
+    assert items, "full fixture must yield at least one RawArticle"
+    assert all(isinstance(item, RawArticle) for item in items)
     assert any(
         item.body is not None and len(item.body) >= ARTICLE_BODY_MIN_LENGTH
         for item in items

@@ -24,13 +24,15 @@ from app.collection.article_acquisition.errors import (
 from app.collection.article_acquisition.failure_recording import (
     ArticleAcquisitionFailureRecorder,
 )
-from app.collection.article_acquisition.fetched_article_converter import (
-    AcquisitionConversionRejection,
+from app.collection.article_acquisition.fetched_article import (
+    FetchedArticleTitleMissingError,
 )
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
+from app.collection.domain.article_url import ArticleUrlInvalidError
 from app.collection.response_size import ResponseSizeBasis
 from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
 from app.http.destination_policy import (
@@ -45,6 +47,7 @@ from app.http.failure import (
 )
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from app.shared.web_url import WebUrlInvalidReason
 
 
 async def _fetch_acquisition_events(
@@ -64,16 +67,13 @@ async def _fetch_acquisition_events(
     return list(rows)
 
 
-def _conversion_rejection() -> AcquisitionConversionRejection:
-    """title 欠落の棄却値 (acquisition 所有の reason、cause 無し)。"""
-    return AcquisitionConversionRejection(
-        outcome_code="acquisition_conversion_title_missing",
-        source_name="VentureBeat",
-        raw_url="https://venturebeat.com/rejected",
-        has_title=True,
-        body_length=42,
-        has_published_at=False,
-        cause=None,
+def _title_missing_raw_article() -> RawArticle:
+    """空白だけの title で、変換が title 欠落として棄却する記事。"""
+    return RawArticle(
+        title="   ",
+        url="https://venturebeat.com/rejected",
+        body="x" * 42,
+        published_at=None,
     )
 
 
@@ -495,11 +495,16 @@ async def test_conversion_rejection_writes_rejected_audit(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """entry 単位の変換棄却 → rejected audit。source failure とは分けて扱う。"""
+    """title 欠落の例外を渡すと、理由と記事の状態を持つ rejected 行が残る。"""
     source_id = sample_source.id
     recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
-    await recorder.record_conversion_rejected(source_id, _conversion_rejection())
+    await recorder.record_conversion_rejected(
+        source_id=source_id,
+        source_name="VentureBeat",
+        raw_article=_title_missing_raw_article(),
+        error=FetchedArticleTitleMissingError(),
+    )
 
     await db_session.rollback()
     events = await _fetch_acquisition_events(db_session, source_id)
@@ -508,13 +513,70 @@ async def test_conversion_rejection_writes_rejected_audit(
     assert ev.event_type == "rejected"
     assert ev.outcome_code == "acquisition_conversion_title_missing"
     assert ev.retryability is None
-    # title 欠落は責任元 VO 例外を持たない (acquisition 方針違反)。
-    # cause 無し → error_class は NULL。
-    assert ev.error_class is None
-    assert ev.payload["source_name"] == "VentureBeat"
-    assert ev.payload["conversion_has_title"] is True
-    assert ev.payload["conversion_body_length"] == 42
-    assert ev.payload["conversion_has_published_at"] is False
+    assert ev.error_class == (
+        "app.collection.article_acquisition.fetched_article.FetchedArticleTitleMissingError"
+    )
+    assert {
+        key: value
+        for key, value in ev.payload.items()
+        if key == "source_name" or key.startswith("conversion_")
+    } == {
+        "source_name": "VentureBeat",
+        "conversion_raw_url": "https://venturebeat.com/rejected",
+        "conversion_has_title": True,
+        "conversion_body_length": 42,
+        "conversion_has_published_at": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_conversion_rejection_with_blank_url_records_no_raw_url(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """空白だけの URL で棄却された記事は、監査の元の URL を空として残す。"""
+    source_id = sample_source.id
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
+
+    await recorder.record_conversion_rejected(
+        source_id=source_id,
+        source_name="VentureBeat",
+        raw_article=RawArticle(
+            title="Has Title", url="   ", body=None, published_at=None
+        ),
+        error=ArticleUrlInvalidError(reason=WebUrlInvalidReason.URL_EMPTY),
+    )
+
+    await db_session.rollback()
+    events = await _fetch_acquisition_events(db_session, source_id)
+    assert [(ev.outcome_code, ev.payload["conversion_raw_url"]) for ev in events] == [
+        ("url_empty", None)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unexpected_conversion_error_records_unexpected_outcome(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """想定外の例外で棄却された記事は、想定外のコードと元の例外の型で監査される。"""
+    source_id = sample_source.id
+    recorder = ArticleAcquisitionFailureRecorder(session_factory)
+
+    await recorder.record_conversion_rejected(
+        source_id=source_id,
+        source_name="VentureBeat",
+        raw_article=_title_missing_raw_article(),
+        error=RuntimeError("post-precondition invariant violation"),
+    )
+
+    await db_session.rollback()
+    events = await _fetch_acquisition_events(db_session, source_id)
+    assert [(ev.outcome_code, ev.error_class) for ev in events] == [
+        ("acquisition_conversion_unexpected_error", "builtins.RuntimeError")
+    ]
 
 
 @pytest.mark.asyncio
@@ -523,9 +585,8 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
     sample_source: NewsSource,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """変換棄却の監査が落ちても例外を外へ出さず、棄却の理由と、秘密を伏せた監査の例外をログに残す。"""
+    """変換棄却の監査が落ちても例外を外へ出さず、棄却の例外型と、秘密を伏せた監査の例外をログに残す。"""
     recorder = ArticleAcquisitionFailureRecorder(session_factory)
-    rejection = _conversion_rejection()
 
     with patch(
         "app.collection.article_acquisition.failure_recording.SourceAcquisitionAuditRepository"
@@ -536,7 +597,12 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
             )
         )
 
-        await recorder.record_conversion_rejected(sample_source.id, rejection)
+        await recorder.record_conversion_rejected(
+            source_id=sample_source.id,
+            source_name="VentureBeat",
+            raw_article=_title_missing_raw_article(),
+            error=FetchedArticleTitleMissingError(),
+        )
 
     drops = [
         log
@@ -546,7 +612,6 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
     for drop in drops:
         del drop["timestamp"]
         del drop["frames"]
-    # title 欠落は原因の例外を持たないため、業務の例外型はnullになる。
     assert drops == [
         {
             "event": "fetched_article_conversion_audit_dropped",
@@ -554,8 +619,10 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
             "log_policy": "external_content_fetch",
             "operation": "audit",
             "source_id": sample_source.id,
-            "business_outcome_code": "acquisition_conversion_title_missing",
-            "business_error_class": None,
+            "business_error_class": (
+                "app.collection.article_acquisition.fetched_article."
+                "FetchedArticleTitleMissingError"
+            ),
             "error_class": "builtins.RuntimeError",
             "error_message": "audit db down Authorization: [redacted:credential]",
         }

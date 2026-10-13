@@ -5,7 +5,7 @@
 - fixture HTML listing から収集 → 変換経路で永続化 passport が yield
 - 収集スコープ ``is_collectable_ornl_url`` (``EXCLUDED_PATHS`` 除外・対象外 ≠
   変換失敗)。同 listing 内 URL dedup / ``MAX_ENTRIES`` cap
-- ``to_fetched_article`` が in-scope entry に対し total (None/raise しない)
+- ``to_raw_article`` が in-scope entry に対し total (None/raise しない)
 - 全 passport は ``ObservedArticle`` / ``published_at=None``
 - ``RawHttpClient`` の取得失敗 (共通HTTPエラー) は ``collect`` を素通しする
 
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.html_listing_reader import (
     HtmlListingEntry,
 )
@@ -30,7 +30,7 @@ from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.definitions.ornl import (
     ORNLSource,
     is_collectable_ornl_url,
-    to_fetched_article,
+    to_raw_article,
 )
 from app.http.errors import HttpResponseError
 from tests.collection.sources._fixture_tools import fixture_tools
@@ -127,20 +127,20 @@ async def test_all_passports_are_incomplete() -> None:
 def test_scope_does_not_govern_slug() -> None:
     """スコープ述語は slug を見ない (slug 空でも in-scope)。
 
-    これが ``to_fetched_article`` の totality 検証 (下記) の前提。
+    これが ``to_raw_article`` の totality 検証 (下記) の前提。
     """
     assert is_collectable_ornl_url(HtmlListingEntry(href="/news/x")) is True
 
 
 def test_mapping_is_total_on_in_scope_entry() -> None:
-    """in-scope entry に写像は None/raise せず ``FetchedArticle`` を返す
+    """in-scope entry に写像は None/raise せず ``RawArticle`` を返す
     (total)。相対 href → 絶対 URL は Source 純写像。
 
-    converter/fetcher テストは ``FetchedArticle`` を直接与え listing 写像を
+    converter/fetcher テストは ``RawArticle`` を直接与え listing 写像を
     通らないため、listing シームの totality はここでしか pin できない。
     """
-    fa = to_fetched_article(HtmlListingEntry(href="/news/x"))
-    assert isinstance(fa, FetchedArticle)
+    fa = to_raw_article(HtmlListingEntry(href="/news/x"))
+    assert isinstance(fa, RawArticle)
     assert fa.url == "https://www.ornl.gov/news/x"
     assert fa.published_at is None
 

@@ -31,7 +31,7 @@ Issue: [#295](https://github.com/yook11/Vector/issues/295)
 
 ## Invariants
 
-- `FetchedArticle(title: str, url: str, body: str | None, published_at: datetime | None)`の出口契約を維持する。
+- `RawArticle(title: str, url: str, body: str | None, published_at: datetime | None)`の出口契約を維持する。
 - 既存の収集対象、取得順、選択・重複除去、本文採用、URL・日時変換の結果を維持する。
 - ソース名、取得頻度、観測origin、本文補完方針を維持する。補完方針の参照に通信やReader生成を必要としない。
 - 空title・空URL・日時欠落・短い本文を写像で棄却しない。品質判定、URLの安全性検証・正規化は既存の後段へ渡す。
@@ -53,7 +53,7 @@ Issue: [#295](https://github.com/yook11/Vector/issues/295)
 | --- | --- |
 | ソースクラス | 共通属性とRSS取得設定を宣言し、必要な場合だけ固有関数を定義する |
 | RSS Reader | 単一フィードの安全なHTTP取得・解析・`RssEntry`への変換 |
-| RSS Fetcher | 宣言に従った巡回、候補の結合、任意関数の適用、本文採用・平文化、`FetchedArticle`への共通写像 |
+| RSS Fetcher | 宣言に従った巡回、候補の結合、任意関数の適用、本文採用・平文化、`RawArticle`への共通写像 |
 | 共通取得入口 | ソースの取得契約に対応する経路へ明示的に委譲する |
 | 既存取り込みサービス | 出口を受け取り、検証・保存・監査・後段処理へ進める |
 
@@ -131,7 +131,7 @@ class MicrosoftResearchSource:
 2. `in_scope`で対象候補を選ぶ。
 3. `select`を候補列に適用する。
 4. 候補ごとにURL変換、日時解決、本文採用・平文化・本文後処理を行う。
-5. 共通写像で`FetchedArticle`を出力する。
+5. 共通写像で`RawArticle`を出力する。
 
 - 空の`feeds`は宣言不備として実行前に検出する。
 - 複数フィードは既存どおり逐次取得。一部の通信・読取失敗は記録して続行する。

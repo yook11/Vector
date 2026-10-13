@@ -4,6 +4,8 @@ Status: Implemented
 
 > 2026-09-26: `AcquisitionReadError`と取得失敗側の分類は撤去した。読取失敗`UnreadableResponseError`と変換棄却の契約は有効。取得失敗の監査は[取得工程の共通HTTPエラーへの移行](./acquisition-common-http-errors.md)を参照する。
 
+> 2026-10-13: 変換棄却の値`AcquisitionConversionRejection`は撤去した。取得材料`RawArticle`は`FetchedArticle.from_raw`で受け付け、`ArticleUrlInvalidError`(空URLは`url_empty`)・`FetchedArticleTitleMissingError`を送出する。serviceが記事ごとに捕まえて記録し、監査の`outcome_code`は例外から導く。
+
 ## 目的
 
 collection BC stage1 (`article_acquisition`) の失敗型を、ドメインの 2 活動
@@ -22,10 +24,10 @@ PR #687で導入したread originの自己記述化を前提とする。現行�
 | 失敗 | 範囲 | 形 | 理由 |
 |---|---|---|---|
 | read 失敗 | source 全体 | **例外** | source を読めない → stream を中断・unwind |
-| conversion 棄却 | entry 単位 | **値** | 1 件棄却で source を止めない → 継続 |
+| conversion 棄却 | entry 単位 | **例外** | service が記事ごとに捕まえ、source を止めない |
 
-例外 vs 値の非対称は **abort 意味論**から来る正当な差(値を例外にすると per-entry
-継続が壊れる)。DB エラー / 想定外 bug は横断的 infra 失敗で本 spec の対象外。
+どちらも例外で表す。read は source を中断し、conversion は service が記事ごとに捕まえて継続する。
+DB エラー / 想定外 bug は横断的 infra 失敗で本 spec の対象外。
 
 ## 命名(確定)
 
@@ -125,7 +127,7 @@ fetch_retry_after_seconds: float | None = None
    audit 語彙(Stage/Retryability)を import しないための層分離。
 4. **error_message は `origin._default_message()`**(`str(origin)` ではない)。explicit
    message の PII(例: SSRF の secret 文字列)を**構造的に排除**(default は scalar 合成のみ)。
-5. **例外(read) vs 値(conversion) の非対称は意図的**。統一しない。
+5. (2026-10-13 撤回) conversion も例外にし、継続は service の記事ごとの捕捉が担う。
 6. **`AcquisitionError` 基底は維持**(他段規約 + 単一 catch 型)。
 7. **fetch specifics は status/reason/retry_after の 3 つだけ列にする**。長い尾
    (redirect_count / bytes / content_type)は error_message のテキストに乗せ、列は作らない
