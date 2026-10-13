@@ -14,8 +14,8 @@ from typing import ClassVar
 
 import pytest
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
@@ -27,13 +27,13 @@ from app.http.errors import HttpResponseError
 _TOOLS = ReaderTools()
 
 
-def _fa(title: str) -> FetchedArticle:
-    return FetchedArticle(
+def _fa(title: str) -> RawArticle:
+    return RawArticle(
         title=title, url=f"https://e.test/{title}", body=None, published_at=None
     )
 
 
-async def _drain(source: object) -> list[FetchedArticle]:
+async def _drain(source: object) -> list[RawArticle]:
     return [fa async for fa in fetch_articles(source, _TOOLS)]  # type: ignore[arg-type]
 
 
@@ -56,7 +56,7 @@ class _OrderSource(BaseArticleSource):
         return list(reversed(entries))
 
     @classmethod
-    def map_entry(cls, entry: str) -> FetchedArticle:
+    def map_entry(cls, entry: str) -> RawArticle:
         return _fa(entry)
 
 
@@ -77,7 +77,7 @@ class _DefaultsSource(BaseArticleSource):
         return ["x", "y"]
 
     @classmethod
-    def map_entry(cls, entry: str) -> FetchedArticle:
+    def map_entry(cls, entry: str) -> RawArticle:
         return _fa(entry)
 
 
@@ -102,7 +102,7 @@ class _FailingReadSource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: str) -> FetchedArticle:
+    def map_entry(cls, entry: str) -> RawArticle:
         return _fa(entry)
 
 
@@ -122,7 +122,7 @@ class _UnreadableReadSource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: str) -> FetchedArticle:
+    def map_entry(cls, entry: str) -> RawArticle:
         return _fa(entry)
 
 
@@ -140,7 +140,7 @@ class _BuggyReadSource(BaseArticleSource):
         raise RuntimeError("contract violation")
 
     @classmethod
-    def map_entry(cls, entry: str) -> FetchedArticle:
+    def map_entry(cls, entry: str) -> RawArticle:
         return _fa(entry)
 
 

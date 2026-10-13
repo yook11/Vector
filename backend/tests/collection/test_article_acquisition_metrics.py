@@ -18,8 +18,8 @@ from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import Stage
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.metrics import AcquisitionEntryOutcome
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.service import ArticleAcquisitionService
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
@@ -38,25 +38,25 @@ _ALLOWED_OUTCOME_RESULTS = {outcome.value for outcome in AcquisitionEntryOutcome
 
 
 # ---------------------------------------------------------------------------
-# FetchedArticle builders (パターン別)
+# RawArticle builders (パターン別)
 # ---------------------------------------------------------------------------
 
 
-def _ready_fetched(url: str) -> FetchedArticle:
+def _ready_fetched(url: str) -> RawArticle:
     """analyzable 経路: body + title + published 全て揃い。"""
-    return FetchedArticle(
+    return RawArticle(
         title="Test Title", url=url, body="x" * 100, published_at=_PUBLISHED
     )
 
 
-def _pending_fetched(url: str) -> FetchedArticle:
+def _pending_fetched(url: str) -> RawArticle:
     """observed 経路: body=None で Ready 不成立。"""
-    return FetchedArticle(title="TC Title", url=url, body=None, published_at=_PUBLISHED)
+    return RawArticle(title="TC Title", url=url, body=None, published_at=_PUBLISHED)
 
 
-def _rejection_fetched(url: str = "https://venturebeat.com/x") -> FetchedArticle:
+def _rejection_fetched(url: str = "https://venturebeat.com/x") -> RawArticle:
     """rejected 経路: title が空白文字のみで MISSING_TITLE 棄却になる。"""
-    return FetchedArticle(title="   ", url=url, body="x" * 42, published_at=None)
+    return RawArticle(title="   ", url=url, body="x" * 42, published_at=None)
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def _rejection_fetched(url: str = "https://venturebeat.com/x") -> FetchedArticle
 
 
 class _StubSource(BaseArticleSource):
-    """FetchedArticle を直接注入する ArticleSource 構造的 fake。"""
+    """RawArticle を直接注入する ArticleSource 構造的 fake。"""
 
     name: ClassVar[SourceName] = SourceName("VentureBeat")
     endpoint_url: ClassVar[str] = "https://venturebeat.com/feed/"
@@ -73,13 +73,13 @@ class _StubSource(BaseArticleSource):
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
     fetch_cadence: ClassVar[FetchCadence] = FetchCadence.HIGH
 
-    def __init__(self, items: list[FetchedArticle]) -> None:
+    def __init__(self, items: list[RawArticle]) -> None:
         self._items = items
 
-    async def read(self, tools: ReaderTools) -> list[FetchedArticle]:  # noqa: ARG002
+    async def read(self, tools: ReaderTools) -> list[RawArticle]:  # noqa: ARG002
         return self._items
 
-    def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
+    def map_entry(self, entry: RawArticle) -> RawArticle:
         return entry
 
 

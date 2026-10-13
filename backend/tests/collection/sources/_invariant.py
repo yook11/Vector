@@ -5,11 +5,11 @@
 名や tags の中身など、ソース次第で変動する値の枚挙は書かない
 (memory `feedback_test_invariants_over_change_tracking.md`)。
 
-Fetcher が yield するのは ``AnalyzableArticle | ObservedArticle`` の passport
-と、変換不能 entry の ``AcquisitionConversionRejection`` 値。per-source 不変条件は
+``drive_source`` が返すのは ``AnalyzableArticle | ObservedArticle`` の passport
+と、変換不能 entry で送出された棄却の例外。per-source 不変条件は
 「変換成功した passport」の業務性質を固定する関心なので、本 helper は
-``AcquisitionConversionRejection`` を ``passports_only`` で分離してから assert する
-(棄却の値化 / 監査自体の検証は converter / fetcher / service テストの責務)。
+棄却の例外を ``passports_only`` で分離してから assert する
+(棄却の理由 / 監査自体の検証は converter / fetcher / service テストの責務)。
 
 passport builder への切替以降は同じ Fetcher でも entry ごとに
 Ready / Observed を選びうるため、type 集合の検証を 2 段階で行う:
@@ -30,17 +30,22 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
+from app.collection.article_acquisition.fetched_article import (
+    FetchedArticle,
+    FetchedArticleTitleMissingError,
+)
 from app.collection.article_acquisition.fetched_article_converter import (
-    AcquisitionConversionRejection,
     convert_fetched_article,
 )
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.article_completion.article_completer import (
     ExtractedContent,
     complete_article,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.article_url import ArticleUrlInvalidError
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
@@ -49,7 +54,20 @@ from app.collection.sources.article_source import AcquirableSource
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 
 Passport = AnalyzableArticle | ObservedArticle
-FetchItem = AnalyzableArticle | ObservedArticle | AcquisitionConversionRejection
+ConversionRejection = ArticleUrlInvalidError | FetchedArticleTitleMissingError
+FetchItem = AnalyzableArticle | ObservedArticle | ConversionRejection
+
+
+def convert_or_rejection(
+    raw_article: RawArticle, *, source: AcquirableSource, source_id: int
+) -> FetchItem:
+    """棄却の例外は値として返し、変換結果の並びから消えないようにする。"""
+    try:
+        return convert_fetched_article(
+            FetchedArticle.from_raw(raw_article), source=source, source_id=source_id
+        )
+    except (ArticleUrlInvalidError, FetchedArticleTitleMissingError) as exc:
+        return exc
 
 
 async def drive_source(
@@ -60,27 +78,25 @@ async def drive_source(
 ) -> list[FetchItem]:
     """本番経路 (収集 → 変換) を駆動して「何ができたか」の列を返す test harness。
 
-    旧 ``ArticleFetcher`` を置換する。``convert_fetched_article`` が total 化
-    したため、per-source テストは ``fetch_articles`` engine の各 ``FetchedArticle``
-    を本物の converter に通すだけで passport / 棄却の列が得られる (想定外 bug の
-    値化は service の責務なので harness は素通しする)。
+    旧 ``ArticleFetcher`` を置換する。per-source テストは ``fetch_articles``
+    engine の各 ``RawArticle`` を本物の受け付けと converter に通すだけで passport /
+    棄却の列が得られる (想定外 bug の記録は service の責務なので harness は
+    素通しする)。
     """
     return [
-        convert_fetched_article(fetched, source=source, source_id=source_id)
-        async for fetched in fetch_articles(source, tools)
+        convert_or_rejection(raw_article, source=source, source_id=source_id)
+        async for raw_article in fetch_articles(source, tools)
     ]
 
 
 def passports_only(items: Iterable[FetchItem]) -> list[Passport]:
-    """fetch stream から ``AcquisitionConversionRejection`` を分離し passport のみ返す。
+    """fetch stream から棄却の例外を分離し passport のみ返す。
 
-    per-source 不変条件は変換成功分の業務性質を固定する関心。棄却の値化 /
+    per-source 不変条件は変換成功分の業務性質を固定する関心。棄却の理由 /
     監査の検証は converter / fetcher / service テストが担うため、ここでは
     分離するだけ。
     """
-    return [
-        item for item in items if not isinstance(item, AcquisitionConversionRejection)
-    ]
+    return [item for item in items if isinstance(item, Passport)]
 
 
 def assert_at_least_one_passport(items: Iterable[FetchItem]) -> None:

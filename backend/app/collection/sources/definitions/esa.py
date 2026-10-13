@@ -5,17 +5,17 @@ ESA/Hubble / ESA/Webb は同じ Djangoplicity News module で、RSS は同形式
 ``<author>`` / ``<media:*>`` は出ない)。本文は RSS に無く HTML 詳細ページ
 側にあるため ``body=None`` で渡す。
 
-写像 (``to_fetched_article``) は純粋 total で degenerate (空 title / 空
-link / published 不在) を drop せず素通しし、converter が ``MISSING_TITLE``
-/ ``MISSING_URL`` として可視化する (failure-visibility)。500 字 cap は
-converter の ``ARTICLE_TITLE_MAX_LENGTH`` 一元、写像は複製しない。
+写像 (``to_raw_article``) は純粋 total で degenerate (空 title / 空
+link / published 不在) を drop せず素通しし、``FetchedArticle.from_raw`` が
+title 欠落 / ``url_empty`` として可視化する (failure-visibility)。500 字 cap は
+``FetchedArticle.from_raw`` の ``ARTICLE_TITLE_MAX_LENGTH`` 一元、写像は複製しない。
 """
 
 from __future__ import annotations
 
 from typing import ClassVar
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
@@ -28,13 +28,13 @@ from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.source_name import SourceName
 
 
-def to_fetched_article(entry: RssEntry) -> FetchedArticle:
-    """``RssEntry`` → ``FetchedArticle`` の純粋 total 写像。
+def to_raw_article(entry: RssEntry) -> RawArticle:
+    """``RssEntry`` → ``RawArticle`` の純粋 total 写像。
 
     Pattern H のため ``body`` は RSS 本文を採らず ``None`` 固定 (HTML 詳細
     ページ側で補完する)。
     """
-    return FetchedArticle(
+    return RawArticle(
         title=entry.title,
         url=entry.link,
         body=None,
@@ -72,8 +72,8 @@ class ESAHubbleSource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: RssEntry) -> RawArticle:
+        return to_raw_article(entry)
 
 
 class ESAWebbSource(BaseArticleSource):
@@ -92,5 +92,5 @@ class ESAWebbSource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: RssEntry) -> RawArticle:
+        return to_raw_article(entry)

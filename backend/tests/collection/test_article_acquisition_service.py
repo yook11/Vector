@@ -15,6 +15,7 @@ from app.collection.article_acquisition.events import (
     IncompleteArticleRecorded,
 )
 from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
@@ -42,60 +43,58 @@ from tests.outbox import RejectOutboxInsert
 _PUBLISHED = datetime(2026, 4, 30, tzinfo=UTC)
 
 
-def _ready_fetched(url: str) -> FetchedArticle:
+def _ready_fetched(url: str) -> RawArticle:
     """real convert → ``AnalyzableArticle`` (body + published 揃い, DEFAULT_POLICY)。"""
-    return FetchedArticle(
+    return RawArticle(
         title="Test Title", url=url, body="x" * 100, published_at=_PUBLISHED
     )
 
 
-def _pending_fetched(url: str) -> FetchedArticle:
+def _pending_fetched(url: str) -> RawArticle:
     """real convert → ``ObservedArticle`` (body=None で Ready 不成立)。"""
-    return FetchedArticle(title="TC Title", url=url, body=None, published_at=_PUBLISHED)
+    return RawArticle(title="TC Title", url=url, body=None, published_at=_PUBLISHED)
 
 
-def _rejection_fetched(url: str = "https://venturebeat.com/x") -> FetchedArticle:
-    """real convert → ``MISSING_TITLE`` の ``AcquisitionConversionRejection``。
+def _rejection_fetched(url: str = "https://venturebeat.com/x") -> RawArticle:
+    """real convert → title 欠落の ``FetchedArticleTitleMissingError``。
 
     title は whitespace: ``bool(title)`` は True (= ``has_title`` True) だが
-    strip 後は空で MISSING_TITLE 棄却になる。body 42 / published None で
+    strip 後は空で title 欠落の棄却になる。body 42 / published None で
     audit payload の構造化 field を固定する。
     """
-    return FetchedArticle(title="   ", url=url, body="x" * 42, published_at=None)
+    return RawArticle(title="   ", url=url, body="x" * 42, published_at=None)
 
 
-def _url_rejection_fetched(url: str = "ftp://example.com/secret") -> FetchedArticle:
-    """real convert → URL VO 失敗 (scheme 不正) の ``AcquisitionConversionRejection``。
+def _url_rejection_fetched(url: str = "ftp://example.com/secret") -> RawArticle:
+    """real convert → URL VO 失敗 (scheme 不正) の ``ArticleUrlInvalidError``。
 
     title は揃うが WebUrl の形式検証で ``url_not_http`` 棄却になる。
     ``ArticleUrlInvalidError`` → ``WebUrlInvalidError`` の cause 連鎖を
     監査が辿れる (error_chain 深さ>1) ことを固定するための入力。
     """
-    return FetchedArticle(
+    return RawArticle(
         title="Has Title", url=url, body="x" * 42, published_at=_PUBLISHED
     )
 
 
-def _missing_url_fetched() -> FetchedArticle:
-    """real convert → URL 欠落の ``AcquisitionConversionRejection``。"""
-    return FetchedArticle(
-        title="Has Title", url="", body="x" * 42, published_at=_PUBLISHED
-    )
+def _missing_url_fetched() -> RawArticle:
+    """real convert → 空 URL (``url_empty``) の ``ArticleUrlInvalidError``。"""
+    return RawArticle(title="Has Title", url="", body="x" * 42, published_at=_PUBLISHED)
 
 
-def _bug_fetched(url: str) -> FetchedArticle:
+def _bug_fetched(url: str) -> RawArticle:
     """convert を monkeypatch で raise させる対象 entry (URL で識別)。"""
-    return FetchedArticle(
+    return RawArticle(
         title="Bug Title", url=url, body="x" * 100, published_at=_PUBLISHED
     )
 
 
 class _StubSource(BaseArticleSource):
-    """``FetchedArticle`` を直接注入する ``ArticleSource`` 構造的 fake。
+    """``RawArticle`` を直接注入する ``ArticleSource`` 構造的 fake。
 
     identity / 補完方針は本物の RSS source 相当 (feed + DEFAULT_POLICY) に
-    固定し、``read`` は注入された ``FetchedArticle`` 列をそのまま返す
-    (Entry 型 = ``FetchedArticle``、``map_entry`` は恒等、in_scope/select は
+    固定し、``read`` は注入された ``RawArticle`` 列をそのまま返す
+    (Entry 型 = ``RawArticle``、``map_entry`` は恒等、in_scope/select は
     ``BaseArticleSource`` の default)。
     """
 
@@ -105,16 +104,16 @@ class _StubSource(BaseArticleSource):
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
     fetch_cadence: ClassVar[FetchCadence] = FetchCadence.HIGH
 
-    def __init__(self, items: list[FetchedArticle]) -> None:
+    def __init__(self, items: list[RawArticle]) -> None:
         self._items = items
 
     async def read(
         self,
         tools: ReaderTools,  # noqa: ARG002
-    ) -> list[FetchedArticle]:
+    ) -> list[RawArticle]:
         return self._items
 
-    def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
+    def map_entry(self, entry: RawArticle) -> RawArticle:
         return entry
 
 
@@ -133,10 +132,10 @@ class _RaisingReadSource(BaseArticleSource):
     async def read(
         self,
         tools: ReaderTools,  # noqa: ARG002
-    ) -> list[FetchedArticle]:
+    ) -> list[RawArticle]:
         raise self._exc
 
-    def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
+    def map_entry(self, entry: RawArticle) -> RawArticle:
         return entry
 
 
@@ -147,14 +146,14 @@ class _ReadOrderRecordingSource(_StubSource):
     順序不変条件を観測するための fake。``read`` は親と同じく注入列を返す。
     """
 
-    def __init__(self, items: list[FetchedArticle], timeline: list[str]) -> None:
+    def __init__(self, items: list[RawArticle], timeline: list[str]) -> None:
         super().__init__(items)
         self._timeline = timeline
 
     async def read(
         self,
         tools: ReaderTools,
-    ) -> list[FetchedArticle]:
+    ) -> list[RawArticle]:
         self._timeline.append("read")
         return await super().read(tools)
 
@@ -432,21 +431,21 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
     assert row.outcome_code == "acquisition_conversion_title_missing"
     assert row.retryability is None
     assert row.source_id == vb_source.id
-    # title 欠落は責任元 VO 例外を持たない (acquisition 方針違反)。
-    # cause 無し → error_class は NULL。
-    assert row.error_class is None
+    assert row.error_class == (
+        "app.collection.article_acquisition.fetched_article.FetchedArticleTitleMissingError"
+    )
     assert row.payload["conversion_has_title"] is True
     assert row.payload["conversion_body_length"] == 42
     assert row.payload["conversion_has_published_at"] is False
 
 
 @pytest.mark.asyncio
-async def test_missing_url_rejection_burns_acquisition_defect_without_cause(
+async def test_missing_url_rejection_burns_url_empty_reason(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """URL 欠落は acquisition 固有 reason で監査し、URL VO 例外を持たない。"""
+    """URL 欠落は記事 URL の ``url_empty`` と URL 不正の例外型で監査する。"""
     svc = ArticleAcquisitionService(
         session_factory,
         _StubSource([_missing_url_fetched()]),
@@ -463,8 +462,8 @@ async def test_missing_url_rejection_burns_acquisition_defect_without_cause(
         .scalars()
         .one()
     )
-    assert row.outcome_code == "acquisition_conversion_url_missing"
-    assert row.error_class is None
+    assert row.outcome_code == "url_empty"
+    assert row.error_class.endswith(".ArticleUrlInvalidError")
     assert row.payload["conversion_has_title"] is True
 
 
@@ -511,7 +510,7 @@ async def test_unexpected_convert_bug_is_valued_and_stream_continues(
     vb_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """convert が想定外 bug を raise しても service が値化し source を止めない。
+    """convert が想定外 bug を raise しても service が記録し source を止めない。
 
     bug entry は握りつぶされず ``UNEXPECTED_ERROR`` として別 tx で監査され
     (``payload`` を SQL drill-down できる)、前後の R / H は通常どおり永続化
@@ -521,7 +520,7 @@ async def test_unexpected_convert_bug_is_valued_and_stream_continues(
     real_convert = service_module.convert_fetched_article
 
     def _flaky_convert(fetched: FetchedArticle, *, source: object, source_id: int):  # noqa: ANN202
-        if fetched.url == "https://venturebeat.com/bug":
+        if str(fetched.url) == "https://venturebeat.com/bug":
             raise RuntimeError("post-precondition invariant violation")
         return real_convert(fetched, source=source, source_id=source_id)
 

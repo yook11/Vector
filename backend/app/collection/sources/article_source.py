@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar, Protocol, TypeVar, runtime_checkable
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.sources.rss_acquisition import RssSource
 from app.collection.sources.source_metadata import SourceMetadata
@@ -35,8 +35,8 @@ class ArticleSource(SourceMetadata, Protocol[T]):
         ...
 
     @classmethod
-    def map_entry(cls, entry: T) -> FetchedArticle:
-        """Entry → ``FetchedArticle`` の写像 (total)。"""
+    def map_entry(cls, entry: T) -> RawArticle:
+        """Entry → ``RawArticle`` の写像 (total)。"""
         ...
 
 

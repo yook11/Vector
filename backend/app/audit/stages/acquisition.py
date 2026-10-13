@@ -28,15 +28,18 @@ from app.collection.article_acquisition.consumer_result import (
     RetryAcquisition,
 )
 from app.collection.article_acquisition.errors import (
+    AcquisitionConversionDefect,
     ResponseSizeLimitExceededError,
     RssFeedErrors,
 )
-from app.collection.article_acquisition.fetched_article_converter import (
-    AcquisitionConversionRejection,
+from app.collection.article_acquisition.fetched_article import (
+    FetchedArticleTitleMissingError,
 )
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
+from app.collection.domain.article_url import ArticleUrlInvalidError
 from app.collection.external_fetch_failure import (
     RetryableFetchFailure,
     classify_external_fetch_failure,
@@ -140,31 +143,29 @@ class SourceAcquisitionAuditRepository:
         self,
         *,
         source_id: int | None,
-        rejection: AcquisitionConversionRejection,
+        source_name: str,
+        raw_article: RawArticle,
+        error: Exception,
     ) -> None:
-        """per-entry 変換不能を rejected として記録する。
-
-        ``outcome_code`` は責任元 VO の reason を verbatim で焼く (URL=WebUrl 由来 /
-        title 欠落・想定外=acquisition 由来)。``error_class`` / ``error_chain`` は
-        原因例外 ``cause`` から導く (title 欠落は cause 無しなので NULL)。
-        """
-        cause = rejection.cause
+        """per-entry 変換不能を、棄却の例外と受け付け前の材料の状態から記録する。"""
         payload = AcquisitionPayload(
-            source_name=rejection.source_name,
-            error_chain=extract_error_chain(cause) if cause is not None else None,
+            source_name=source_name,
+            error_chain=extract_error_chain(error),
             conversion_raw_url=(
-                redact_secrets(rejection.raw_url) if rejection.raw_url else None
+                redact_secrets(raw_article.url) if raw_article.url.strip() else None
             ),
-            conversion_has_title=rejection.has_title,
-            conversion_body_length=rejection.body_length,
-            conversion_has_published_at=rejection.has_published_at,
+            conversion_has_title=bool(raw_article.title),
+            conversion_body_length=(
+                len(raw_article.body) if raw_article.body is not None else None
+            ),
+            conversion_has_published_at=raw_article.published_at is not None,
         )
         await self._append_event(
             event_type=EventType.REJECTED,
-            outcome_code=rejection.outcome_code,
+            outcome_code=_conversion_outcome_code(error),
             payload=payload,
             source_id=source_id,
-            error_class=exception_fqn(cause) if cause is not None else None,
+            error_class=exception_fqn(error),
         )
 
     async def _append_event(
@@ -188,6 +189,15 @@ class SourceAcquisitionAuditRepository:
             error_class=error_class,
             retryability=retryability,
         )
+
+
+def _conversion_outcome_code(error: Exception) -> str:
+    """棄却の例外が持つ理由を使い、理由を持たない例外は想定外として記録する。"""
+    if isinstance(error, ArticleUrlInvalidError):
+        return error.reason.value
+    if isinstance(error, FetchedArticleTitleMissingError):
+        return AcquisitionConversionDefect.TITLE_MISSING.value
+    return AcquisitionConversionDefect.UNEXPECTED_ERROR.value
 
 
 def _project_failure(exc: Exception, *, now: datetime) -> FailureProjection:

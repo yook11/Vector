@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.sources.definitions.fierce_biotech import FierceBiotechSource
@@ -34,7 +34,7 @@ _ENTRY = RssEntry(
 )
 
 
-async def _collect(source: RssSource, *entries: RssEntry) -> list[FetchedArticle]:
+async def _collect(source: RssSource, *entries: RssEntry) -> list[RawArticle]:
     reader = AsyncMock(spec=RssReader)
     reader.fetch.return_value = list(entries)
     return [item async for item in fetch_articles(source, ReaderTools(rss=reader))]
@@ -114,7 +114,7 @@ async def test_hooks_run_in_order_and_filtered_entries_are_not_transformed() -> 
     )
     assert trace == ["scope:Title", "scope:drop", "url", "date", "body"]
     assert result == [
-        FetchedArticle("Title", "https://example.com/transformed", None, None)
+        RawArticle("Title", "https://example.com/transformed", None, None)
     ]
 
 

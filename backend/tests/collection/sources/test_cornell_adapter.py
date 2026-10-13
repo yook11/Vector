@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.sources.definitions.cornell import (
     CornellChronicleSource,
@@ -60,7 +60,7 @@ class _EmptyLinkParser:
         return [_entry(""), _entry(f"{endpoint_url}#article")]
 
 
-async def _collect(parser: object) -> list[FetchedArticle]:
+async def _collect(parser: object) -> list[RawArticle]:
     tools = fixture_tools(rss=parser)
     return [item async for item in fetch_articles(CornellChronicleSource, tools)]
 
@@ -83,8 +83,8 @@ async def test_empty_link_entry_passes_through_for_audit() -> None:
     """空 link entry は drop されず素通し、Pattern H で ``body`` は ``None``。
 
     空 link は dedup key にならないため全 feed 分が yield される。値欠落の
-    implicit drop は failure-visibility 違反 (converter 層の
-    ``AcquisitionConversionRejection (acquisition_conversion_url_missing)``
+    implicit drop は failure-visibility 違反 (受け付けの
+    ``ArticleUrlInvalidError (url_empty)``
     監査経路を逃れる)。
     """
     items = await _collect(_EmptyLinkParser())

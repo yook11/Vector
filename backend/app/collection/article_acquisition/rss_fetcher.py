@@ -11,7 +11,7 @@ from app.collection.article_acquisition.errors import (
     RssFeedErrors,
     RssFeedFailure,
 )
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
@@ -58,7 +58,7 @@ class RssFetcher:
     def __init__(self, reader: RssReader) -> None:
         self._reader = reader
 
-    async def fetch(self, source: RssSource) -> AsyncIterator[FetchedArticle]:
+    async def fetch(self, source: RssSource) -> AsyncIterator[RawArticle]:
         logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
         acquisition = source.acquisition
         entries: list[RssEntry] = []
@@ -124,7 +124,7 @@ class RssFetcher:
                 body = _plain_body(body)
                 if isinstance(source, RequiresBodyTransform):
                     body = source.transform_body(body)
-            yield FetchedArticle(
+            yield RawArticle(
                 title=entry.title,
                 url=url,
                 body=body or None,

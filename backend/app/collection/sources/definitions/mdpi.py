@@ -9,9 +9,9 @@ Source が宣言し引数で渡す。``from-pub-date`` の ``lookback_days`` 窓
 journal-article のみ。corrections / editorials・非 CC BY・実体の薄い abstract・
 日付不明は **ソースが意図的に採らない対象外データ** であって変換失敗でも
 構造的非記事でもない (spec 第4責務 = 収集スコープ宣言。対象外を
-``AcquisitionConversionRejection`` 化も converter 移設もしない)。スコープ通過後の
-degenerate (DOI 欠落 / 空 title) は写像で握りつぶさず素通しし converter が
-``MISSING_URL`` / ``MISSING_TITLE`` として可視化する。
+変換の棄却にも converter 移設もしない)。スコープ通過後の
+degenerate (DOI 欠落 / 空 title) は写像で握りつぶさず素通しし
+``FetchedArticle.from_raw`` が ``url_empty`` / title 欠落として可視化する。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.crossref_reader import CrossrefEntry
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
@@ -58,13 +58,13 @@ def is_collectable_mdpi_work(entry: CrossrefEntry) -> bool:
     )
 
 
-def to_fetched_article(entry: CrossrefEntry) -> FetchedArticle:
-    """in-scope な ``CrossrefEntry`` → ``FetchedArticle`` の純粋 total 写像。
+def to_raw_article(entry: CrossrefEntry) -> RawArticle:
+    """in-scope な ``CrossrefEntry`` → ``RawArticle`` の純粋 total 写像。
 
     source_url は DOI の canonical resolver。DOI 欠落 / 空 title の degenerate
     は drop せず素通し、converter が可視化する (failure-visibility)。
     """
-    return FetchedArticle(
+    return RawArticle(
         title=entry.title,
         url=f"https://doi.org/{entry.doi}" if entry.doi else "",
         body=entry.body,
@@ -115,8 +115,8 @@ class MDPIMaterialsSource(BaseArticleSource):
         return is_collectable_mdpi_work(entry)
 
     @classmethod
-    def map_entry(cls, entry: CrossrefEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: CrossrefEntry) -> RawArticle:
+        return to_raw_article(entry)
 
 
 class MDPIEnergiesSource(BaseArticleSource):
@@ -138,8 +138,8 @@ class MDPIEnergiesSource(BaseArticleSource):
         return is_collectable_mdpi_work(entry)
 
     @classmethod
-    def map_entry(cls, entry: CrossrefEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: CrossrefEntry) -> RawArticle:
+        return to_raw_article(entry)
 
 
 class MDPISensorsSource(BaseArticleSource):
@@ -161,8 +161,8 @@ class MDPISensorsSource(BaseArticleSource):
         return is_collectable_mdpi_work(entry)
 
     @classmethod
-    def map_entry(cls, entry: CrossrefEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: CrossrefEntry) -> RawArticle:
+        return to_raw_article(entry)
 
 
 class MDPINanomaterialsSource(BaseArticleSource):
@@ -184,5 +184,5 @@ class MDPINanomaterialsSource(BaseArticleSource):
         return is_collectable_mdpi_work(entry)
 
     @classmethod
-    def map_entry(cls, entry: CrossrefEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: CrossrefEntry) -> RawArticle:
+        return to_raw_article(entry)

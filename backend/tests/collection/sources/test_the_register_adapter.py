@@ -4,22 +4,22 @@ P2-D で identity / 補完方針は ``ClassVar``、取得手順は ``collect(too
 classmethod になった。固定する固有不変条件:
 
 - ``<link href>`` が redirector (``go.theregister.com/feed/...``) の entry が
-  fixture に含まれるが、yield される ``FetchedArticle.url`` は実 host へ展開され
+  fixture に含まれるが、yield される ``RawArticle.url`` は実 host へ展開され
   ``go.theregister.com/feed/`` を一切含まない (redirector 正規化の移植証明)
 - Pattern H のため ``body`` は ``None``
 """
 
 from __future__ import annotations
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.sources.definitions.the_register import TheRegisterSource
 from tests.collection.sources._fixture_tools import fixture_tools
 
 _FIXTURE = "the_register_atom.xml"
 
 
-async def _collect() -> list[FetchedArticle]:
+async def _collect() -> list[RawArticle]:
     tools = fixture_tools(rss_fixture=_FIXTURE)
     return [item async for item in fetch_articles(TheRegisterSource, tools)]
 

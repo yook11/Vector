@@ -4,17 +4,18 @@
 
 - ``is_collectable_mdpi_work`` の収集スコープ真理値表 (spec 第4責務 =
   Source のスコープ宣言述語。対象外 ≠ 変換失敗 ≠ 構造的非記事。
-  ``AcquisitionConversionRejection`` 化も converter 移設もしない)。**scope 規則の SSoT
+  変換の棄却にも converter 移設もしない)。**scope 規則の SSoT
   はここ**。CC BY 4.0 / journal-article のみ採るという法務・選別ルールは
   converter も 系統A invariants も持たないため、純粋述語の真理値表として
   ここが唯一の不変条件所有点。
-- ``to_fetched_article`` が in-scope な degenerate (DOI 欠落) を握りつぶさず
-  **total** に ``FetchedArticle(url="")`` を出し、fetcher 経路で
-  ``AcquisitionConversionRejection`` として可視化される (spec「写像で None/drop/skip
+- ``to_raw_article`` が in-scope な degenerate (DOI 欠落) を握りつぶさず
+  **total** に ``RawArticle(url="")`` を出し、fetcher 経路で
+  ``url_empty`` の ``ArticleUrlInvalidError`` として可視化される
+  (spec「写像で None/drop/skip
   しない」は写像ごとに pin が要る — converter/fetcher テストは
-  ``FetchedArticle`` を直接与え MDPI 写像を通らないため、ここでしか
+  ``RawArticle`` を直接与え MDPI 写像を通らないため、ここでしか
   MDPI シームの totality を pin できない)。
-- ``to_fetched_article`` が source_url を DOI canonical resolver にする写像
+- ``to_raw_article`` が source_url を DOI canonical resolver にする写像
 - collect が documented な in-scope 件数より over-filter しない
 - ``works()`` には注入 ``issn`` / ``from_pub_date`` / ``rows`` (既定 20) が渡る
 - ``CrossrefReader`` の取得失敗 (共通HTTPエラー) は ``collect`` を素通しする
@@ -23,8 +24,8 @@ passport 業務不変条件 (at_least_one / 型許容 / 主経路型 / 永続化
 parametrized ``test_non_rss_adapters_invariants.py`` [MDPI*] が 系統A
 シートベルトとして所有 (scope 述語が旧 ``mdpi_items`` の Cat A 除外を byte
 不変に再現するため自然生存)。degenerate の棄却 *理由*
-(``acquisition_conversion_url_missing`` 等) は converter 層
-(``test_fetched_article_converter.py``) が機構非依存 SSoT として
+(``url_empty`` 等) は ``FetchedArticle`` 層
+(``test_fetched_article.py``) が機構非依存 SSoT として
 所有し、本ファイルは理由を再検証せず「MDPI 写像が total で可視化に到達する」
 リンクのみ pin する。旧 ``test_*_dropped`` (``assert items == []``) /
 ``count == 1`` / ``yields_passports_from_fixture`` は spec が意図的に壊す
@@ -42,20 +43,18 @@ from typing import Any
 
 import pytest
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
-from app.collection.article_acquisition.fetched_article_converter import (
-    AcquisitionConversionRejection,
-)
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.crossref_reader import (
     CrossrefEntry,
     CrossrefReader,
     normalize_item,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.article_url import ArticleUrlInvalidError
 from app.collection.sources.definitions.mdpi import (
     MDPIMaterialsSource,
     is_collectable_mdpi_work,
-    to_fetched_article,
+    to_raw_article,
 )
 from app.http.errors import HttpResponseError
 from tests.collection.sources._fixture_tools import fixture_tools
@@ -194,7 +193,7 @@ def test_scope_does_not_govern_doi() -> None:
     """発見オラクル: scope 述語は DOI を見ない (DOI 欠落でも in-scope)。
 
     DOI 欠落 in-scope = 「scope は通るが degenerate」Cat B 標本。これが
-    ``to_fetched_article`` の totality 検証 (下記) の前提。``to_fetched_article``
+    ``to_raw_article`` の totality 検証 (下記) の前提。``to_raw_article``
     が「DOI 無ければ skip」と最適化したり、述語が DOI を gate し始めたら
     この行か下記が Red になる。
     """
@@ -206,13 +205,13 @@ def test_scope_does_not_govern_doi() -> None:
 
 def test_mapping_is_total_on_in_scope_degenerate() -> None:
     """in-scope だが DOI 欠落の entry に対し写像は None/raise/skip せず
-    ``FetchedArticle(url="")`` を返す (total)。
+    ``RawArticle(url="")`` を返す (total)。
 
-    converter/fetcher テストは ``FetchedArticle`` を直接与え MDPI 写像を
+    converter/fetcher テストは ``RawArticle`` を直接与え MDPI 写像を
     通らないため、MDPI シームの totality はここでしか pin できない。
     """
-    fa = to_fetched_article(replace(_in_scope_base(), doi=None))
-    assert isinstance(fa, FetchedArticle)
+    fa = to_raw_article(replace(_in_scope_base(), doi=None))
+    assert isinstance(fa, RawArticle)
     assert fa.url == ""  # 握りつぶさず空 URL を素通し (converter が可視化)
 
 
@@ -220,7 +219,7 @@ def test_mapping_is_total_on_in_scope_degenerate() -> None:
 async def test_in_scope_degenerate_surfaces_as_rejection_without_stopping_stream() -> (
     None
 ):
-    """DOI 欠落 in-scope は黙って消えず ``AcquisitionConversionRejection`` として現れ、
+    """DOI 欠落 in-scope は黙って消えず ``ArticleUrlInvalidError`` として現れ、
     他の in-scope は ``AnalyzableArticle`` のまま stream が止まらない。
 
     旧 ``test_missing_doi_dropped`` (``assert items == []``) が凍結していた
@@ -231,9 +230,7 @@ async def test_in_scope_degenerate_surfaces_as_rejection_without_stopping_stream
     del no_doi["DOI"]
     items = await _drive(_FakeCrossrefClient([valid, no_doi]))
     assert any(isinstance(i, AnalyzableArticle) for i in items)  # valid 健在
-    assert any(
-        isinstance(i, AcquisitionConversionRejection) for i in items
-    )  # degenerate 可視
+    assert any(isinstance(i, ArticleUrlInvalidError) for i in items)  # degenerate 可視
     assert len(items) == 2  # stream が止まらず両方到達 (片方 raise で停止しない)
 
 
@@ -242,7 +239,7 @@ async def test_in_scope_degenerate_surfaces_as_rejection_without_stopping_stream
 
 @pytest.mark.asyncio
 async def test_doi_url_used_as_source_url() -> None:
-    """``to_fetched_article`` 写像: source_url は DOI canonical resolver。"""
+    """``to_raw_article`` 写像: source_url は DOI canonical resolver。"""
     items = await _drive(_FakeCrossrefClient(_items()))
     assert items
     for item in items:

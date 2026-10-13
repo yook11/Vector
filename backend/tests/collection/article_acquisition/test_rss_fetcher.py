@@ -9,12 +9,12 @@ import feedparser
 import pytest
 
 from app.collection.article_acquisition.errors import RssFeedErrors
-from app.collection.article_acquisition.fetched_article import FetchedArticle
-from app.collection.article_acquisition.fetched_article_converter import (
-    AcquisitionConversionRejection,
-    convert_fetched_article,
+from app.collection.article_acquisition.fetched_article import (
+    FetchedArticle,
+    FetchedArticleTitleMissingError,
 )
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
@@ -25,6 +25,7 @@ from app.collection.article_acquisition.reader.rss_reader import (
     normalize_entry,
 )
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
+from app.collection.domain.article_url import ArticleUrlInvalidError
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.definitions.openai import OpenAISource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
@@ -32,6 +33,7 @@ from app.collection.sources.rss_acquisition import (
     RssSource,
 )
 from app.http.errors import HttpResponseError
+from tests.collection.sources._invariant import convert_or_rejection
 
 _PUBLISHED = datetime(2026, 5, 1, tzinfo=UTC)
 _ENTRY = RssEntry(
@@ -90,7 +92,7 @@ async def test_declaration_controls_request_and_preserves_materials(
     reader.fetch.return_value = entries
     result = [item async for item in fetch_articles(source, ReaderTools(rss=reader))]
     assert result == [
-        FetchedArticle(title=e.title, url=e.link, body=None, published_at=e.published)
+        RawArticle(title=e.title, url=e.link, body=None, published_at=e.published)
         for e in entries
     ]
     reader.fetch.assert_awaited_once_with(
@@ -110,32 +112,26 @@ async def test_fixture_reaches_completion_as_observed_articles(
     reader.fetch.return_value = entries
     fetched = [a async for a in fetch_articles(source, ReaderTools(rss=reader))]
     assert len(fetched) == len(entries) > 0
-    converted = [
-        convert_fetched_article(a, source=source, source_id=1) for a in fetched
-    ]
+    converted = [convert_or_rejection(a, source=source, source_id=1) for a in fetched]
     observed = [a for a in converted if isinstance(a, ObservedArticle)]
-    rejected = [a for a in converted if isinstance(a, AcquisitionConversionRejection)]
+    rejected = [a for a in converted if isinstance(a, FetchedArticleTitleMissingError)]
     expected_counts = {"techcrunch_rss.xml": (2, 1), "openai_rss.xml": (3, 0)}
     assert (len(observed), len(rejected)) == expected_counts[fixture]
     assert len(observed) + len(rejected) == len(converted)
-    assert all(
-        a.outcome_code == "acquisition_conversion_title_missing" for a in rejected
-    )
     assert all(a.body is None for a in fetched)
 
 
 @pytest.mark.asyncio
-async def test_missing_identity_is_visible_to_converter() -> None:
+async def test_missing_identity_is_rejected_on_acceptance() -> None:
     reader = AsyncMock(spec=RssReader)
     reader.fetch.return_value = [replace(_ENTRY, link="")]
     fetched = [
         a async for a in fetch_articles(TechCrunchSource, ReaderTools(rss=reader))
     ]
     assert len(fetched) == 1
-    assert isinstance(
-        convert_fetched_article(fetched[0], source=TechCrunchSource, source_id=1),
-        AcquisitionConversionRejection,
-    )
+    with pytest.raises(ArticleUrlInvalidError) as excinfo:
+        FetchedArticle.from_raw(fetched[0])
+    assert excinfo.value.reason.value == "url_empty"
 
 
 @pytest.mark.asyncio

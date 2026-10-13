@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.rss_reader import RssEntry, RssReader
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.article_limits import ARTICLE_BODY_MAX_LENGTH
 from app.collection.sources.definitions.esa import (
-    to_fetched_article as esa_to_fetched_article,
+    to_raw_article as esa_to_raw_article,
 )
 from app.collection.sources.definitions.the_register import TheRegisterSource
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
@@ -41,7 +41,7 @@ def make_rss_entry(**overrides: object) -> RssEntry:
     return RssEntry(**(base | overrides))
 
 
-async def _map(source: RssSource, entry: RssEntry) -> FetchedArticle:
+async def _map(source: RssSource, entry: RssEntry) -> RawArticle:
     reader = AsyncMock(spec=RssReader)
     reader.fetch.return_value = [entry]
     items = [item async for item in fetch_articles(source, ReaderTools(rss=reader))]
@@ -79,16 +79,16 @@ async def test_venturebeat_returns_none_body_when_both_sources_empty() -> None:
     """body 候補が無くても None を返すだけで raise / drop しない。"""
     entry = make_rss_entry(content_encoded=None, summary=None)
     result = await _map(VentureBeatSource, entry)
-    assert isinstance(result, FetchedArticle)
+    assert isinstance(result, RawArticle)
     assert result.body is None
 
 
 @pytest.mark.parametrize("source", _SOURCES)
 @pytest.mark.asyncio
 async def test_mapping_does_not_reject_empty_title(source: type) -> None:
-    """空 title は写像で裁かず空 str のまま FetchedArticle に載る。"""
+    """空 title は写像で裁かず空 str のまま RawArticle に載る。"""
     result = await _map(source, make_rss_entry(title=""))
-    assert isinstance(result, FetchedArticle)
+    assert isinstance(result, RawArticle)
     assert result.title == ""
 
 
@@ -185,11 +185,11 @@ async def test_the_register_maps_body_to_none_even_when_summary_present() -> Non
 async def test_the_register_does_not_drop_empty_link() -> None:
     """空 link でも写像は drop / raise せず空 url のまま素通す。
 
-    空 link の棄却 (acquisition_conversion_url_missing 可視化) は converter の
+    空 link の棄却 (url_empty 可視化) は ``FetchedArticle.from_raw`` の
     責務であり、写像が握り潰すと故障が監査されないため写像は裁かない。
     """
     result = await _map(TheRegisterSource, make_rss_entry(link=""))
-    assert isinstance(result, FetchedArticle)
+    assert isinstance(result, RawArticle)
     assert result.url == ""
 
 
@@ -199,15 +199,15 @@ def test_esa_djangoplicity_passes_empty_title_through() -> None:
     空 title の棄却 (MISSING_TITLE 可視化) は converter の責務であり、
     写像が握り潰すと故障が監査されないため写像は裁かない。
     """
-    result = esa_to_fetched_article(make_rss_entry(title=""))
-    assert isinstance(result, FetchedArticle)
+    result = esa_to_raw_article(make_rss_entry(title=""))
+    assert isinstance(result, RawArticle)
     assert result.title == ""
 
 
 def test_esa_djangoplicity_does_not_truncate_long_title() -> None:
     """500 字 cap は converter 一元、写像は per-source 複製しない。"""
     long_title = "x" * 1000
-    result = esa_to_fetched_article(make_rss_entry(title=long_title))
+    result = esa_to_raw_article(make_rss_entry(title=long_title))
     assert len(result.title) == 1000
 
 
@@ -216,7 +216,7 @@ def test_esa_djangoplicity_maps_body_to_none_regardless_of_feed_body() -> None:
     entry = make_rss_entry(
         content_encoded="<p>" + "x" * 500 + "</p>", summary="<p>" + "y" * 500 + "</p>"
     )
-    assert esa_to_fetched_article(entry).body is None
+    assert esa_to_raw_article(entry).body is None
 
 
 @pytest.mark.parametrize("source", _SOURCES)
@@ -230,8 +230,8 @@ async def test_mapping_is_pure_same_entry_same_result(source: type) -> None:
 @pytest.mark.parametrize("source", _SOURCES)
 @pytest.mark.asyncio
 async def test_mapping_is_total_on_degenerate_entry(source: type) -> None:
-    """全欠落 Entry でも raise せず FetchedArticle を返す (total)。"""
+    """全欠落 Entry でも raise せず RawArticle を返す (total)。"""
     entry = make_rss_entry(
         title="", link="", summary=None, content_encoded=None, published=None, guid=None
     )
-    assert isinstance((await _map(source, entry)), FetchedArticle)
+    assert isinstance((await _map(source, entry)), RawArticle)

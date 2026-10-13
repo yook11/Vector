@@ -13,7 +13,7 @@ import html
 import re
 from typing import ClassVar
 
-from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
@@ -47,9 +47,9 @@ def _pick_body(entry: RssEntry) -> str:
     return content_encoded if len(content_encoded) >= len(summary) else summary
 
 
-def to_fetched_article(entry: RssEntry) -> FetchedArticle:
-    """``RssEntry`` → ``FetchedArticle`` の純粋 total 写像 (abstract を body 採用)。"""
-    return FetchedArticle(
+def to_raw_article(entry: RssEntry) -> RawArticle:
+    """``RssEntry`` → ``RawArticle`` の純粋 total 写像 (abstract を body 採用)。"""
+    return RawArticle(
         title=entry.title,
         url=entry.link,
         body=_strip_html(_pick_body(entry)) or None,
@@ -89,8 +89,8 @@ class FrontiersAISource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: RssEntry) -> RawArticle:
+        return to_raw_article(entry)
 
 
 class FrontiersRoboticsAISource(BaseArticleSource):
@@ -111,8 +111,8 @@ class FrontiersRoboticsAISource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: RssEntry) -> RawArticle:
+        return to_raw_article(entry)
 
 
 class FrontiersEnergyResearchSource(BaseArticleSource):
@@ -133,8 +133,8 @@ class FrontiersEnergyResearchSource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: RssEntry) -> RawArticle:
+        return to_raw_article(entry)
 
 
 class FrontiersMaterialsSource(BaseArticleSource):
@@ -153,5 +153,5 @@ class FrontiersMaterialsSource(BaseArticleSource):
         )
 
     @classmethod
-    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
-        return to_fetched_article(entry)
+    def map_entry(cls, entry: RssEntry) -> RawArticle:
+        return to_raw_article(entry)
