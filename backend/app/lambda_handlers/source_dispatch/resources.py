@@ -11,12 +11,9 @@ from botocore.config import Config
 from botocore.session import Session
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.aws.sqs.message_sender import create_sqs_client
+from app.aws.sqs.message_sender import create_sqs_client, open_sqs_message_sender
 from app.collection.article_acquisition.acquisition_dispatch import (
     SourceAcquisitionDispatcher,
-)
-from app.collection.article_acquisition.sqs_acquisition_sender import (
-    open_acquisition_sender,
 )
 from app.collection.sources.dispatch import SourceDispatchService
 from app.db.engine import create_source_dispatch_engine
@@ -76,7 +73,7 @@ async def open_source_dispatcher(
                 dispatch_service=SourceDispatchService(
                     async_sessionmaker(engine, expire_on_commit=False)
                 ),
-                sender_factory=lambda: open_acquisition_sender(
+                sender_factory=lambda: open_sqs_message_sender(
                     client_factory=lambda: create_sqs_client(
                         session=Session(), region=settings.aws_region
                     ),

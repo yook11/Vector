@@ -11,12 +11,11 @@ from botocore.config import Config
 from botocore.session import Session
 
 from app.aws.sqs.errors import (
-    SqsSendError,
-    SqsSendFailure,
+    MessageSendError,
     SqsSendFailureKind,
-    classify_sqs_send_failure,
+    to_message_send_error,
 )
-from app.aws.sqs.send_response import SqsSendResponse
+from app.aws.sqs.outgoing_message import OutgoingSqsMessage
 
 logger = structlog.get_logger(__name__)
 
@@ -48,14 +47,14 @@ class SqsMessageSender:
         self._queue_url = queue_url
 
     def _send(self, body: str) -> None:
+        message = OutgoingSqsMessage(body)
         try:
-            raw_response = self._client.send_message(
-                QueueUrl=self._queue_url, MessageBody=body
+            response = self._client.send_message(
+                QueueUrl=self._queue_url, MessageBody=message.body
             )
         except Exception as exc:
-            raise SqsSendError(classify_sqs_send_failure(exc)) from None
-        response = SqsSendResponse.from_response(raw_response)
-        response.verify_body(body)
+            raise to_message_send_error(exc) from None
+        message.verify(response)
 
     async def send(self, body: str) -> None:
         task = asyncio.create_task(asyncio.to_thread(self._send, body))
@@ -89,7 +88,7 @@ async def open_sqs_message_sender(
 ) -> AsyncIterator[SqsMessageSender]:
     """1回の送信処理で使うクライアントを取得し、キャンセル時も回収する。"""
     if not queue_url.strip():
-        raise SqsSendError(SqsSendFailure(SqsSendFailureKind.CONFIGURATION))
+        raise MessageSendError(SqsSendFailureKind.CONFIGURATION)
     task = asyncio.create_task(asyncio.to_thread(client_factory))
     try:
         client = await asyncio.shield(task)
@@ -102,7 +101,7 @@ async def open_sqs_message_sender(
             await _close_client(client)
         raise
     except Exception as exc:
-        raise SqsSendError(classify_sqs_send_failure(exc)) from None
+        raise to_message_send_error(exc) from None
     try:
         yield SqsMessageSender(client=client, queue_url=queue_url)
     finally:
