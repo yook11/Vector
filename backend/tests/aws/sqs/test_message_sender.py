@@ -1,6 +1,7 @@
 """SQS通信の終了失敗と外部キャンセルの境界を検証する。"""
 
 import asyncio
+import sys
 import threading
 from hashlib import md5
 from unittest.mock import Mock
@@ -13,7 +14,13 @@ from app.aws.sqs.message_sender import open_sqs_message_sender
 @pytest.mark.asyncio
 async def test_cleanup_and_diagnostic_failure_preserve_send_success(monkeypatch):
     """終了処理とその診断が失敗しても、確定した送信成功を失敗に戻さない。"""
-    from app.aws.sqs import message_sender as sqs_sender
+
+    class BrokenOutput:
+        def write(self, text):
+            raise OSError("private-log")
+
+        def flush(self):
+            raise OSError("private-log")
 
     client = Mock()
     client.send_message.return_value = {
@@ -21,9 +28,7 @@ async def test_cleanup_and_diagnostic_failure_preserve_send_success(monkeypatch)
         "MD5OfMessageBody": md5(b"{}", usedforsecurity=False).hexdigest(),
     }
     client.close.side_effect = RuntimeError("private-cleanup-error")
-    monkeypatch.setattr(
-        sqs_sender, "logger", Mock(warning=Mock(side_effect=RuntimeError))
-    )
+    monkeypatch.setattr(sys, "stdout", BrokenOutput())
     async with open_sqs_message_sender(
         client_factory=lambda: client, queue_url="queue"
     ) as sender:

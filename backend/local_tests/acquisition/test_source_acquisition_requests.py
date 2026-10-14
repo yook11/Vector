@@ -9,11 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 from botocore.exceptions import ClientError, ReadTimeoutError
-from structlog.testing import capture_logs
 
 from app.lambda_handlers.source_dispatch import handler as entrypoint
 from app.lambda_handlers.source_dispatch import resources
-from app.lambda_handlers.source_dispatch.failure import SourceDispatchLambdaError
 from tests.iam_fixtures import inject_test_db_signer
 
 QUEUE_URL = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/source-acquisitions"
@@ -44,6 +42,24 @@ def expected_request(source_id):
 
 def send_failed_logs(logs):
     return [log for log in logs if log["event"] == "source_acquisition_send_failed"]
+
+
+def dispatch_failed_logs(logs):
+    return [log for log in logs if log["event"] == "source_dispatch_failed"]
+
+
+@pytest.fixture
+def read_logs(capsys):
+    """標準出力の文字列と、そのうちイベント名を持つJSONログを返す。"""
+
+    def _read():
+        output = capsys.readouterr().out
+        records = [
+            json.loads(line) for line in output.splitlines() if line.startswith("{")
+        ]
+        return output, [record for record in records if "event" in record]
+
+    return _read
 
 
 class ScriptedSqsClient:
@@ -141,7 +157,6 @@ def start_dispatch(system_database, monkeypatch):
         "SQS_SOURCE_ACQUISITION_QUEUE_URL": QUEUE_URL,
     }.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr(entrypoint, "setup_lambda_logging", lambda: None)
 
     def start(actions):
         scripted = {key: deque(value) for key, value in actions.items()}
@@ -173,13 +188,13 @@ def start_dispatch(system_database, monkeypatch):
 
 
 async def test_dispatch_selects_active_registered_sources_for_the_schedule(
-    acquisition_sources, start_dispatch
+    acquisition_sources, start_dispatch, read_logs
 ):
     """投入は、実行開始時点のDBで有効かつ登録済みで、予定回の頻度と一致するソースだけに行う。"""
     sources = acquisition_sources
     runtime = start_dispatch({sources.high: [None], sources.other_high: [None]})
-    with capture_logs() as logs:
-        await runtime.invoke()
+    await runtime.invoke()
+    _, logs = read_logs()
     assert runtime.sent_source_ids == [sources.high, sources.other_high]
     assert sources.medium not in runtime.sent_source_ids
     assert sources.unregistered not in runtime.sent_source_ids
@@ -190,22 +205,22 @@ async def test_dispatch_selects_active_registered_sources_for_the_schedule(
 
 
 async def test_dispatch_skips_sqs_when_no_matching_source(
-    acquisition_sources, start_dispatch, deactivate_source
+    acquisition_sources, start_dispatch, deactivate_source, read_logs
 ):
     """一致する対象がなければ送信せず、SQSクライアントも開かない。"""
     sources = acquisition_sources
     await deactivate_source(sources.high)
     await deactivate_source(sources.other_high)
     runtime = start_dispatch({})
-    with capture_logs() as logs:
-        await runtime.invoke()
+    await runtime.invoke()
+    _, logs = read_logs()
     assert runtime.sent_source_ids == []
     assert any(log["event"] == "dispatch_source_unknown" for log in logs)
     assert runtime.sqs_clients == []
 
 
 async def test_invalid_source_name_does_not_stop_other_dispatch_targets(
-    system_database, acquisition_sources, start_dispatch
+    system_database, acquisition_sources, start_dispatch, read_logs
 ):
     """DB上の不正名を個別の棄却にし、登録済みソースの投入を継続する。"""
     sources = acquisition_sources
@@ -214,8 +229,8 @@ async def test_invalid_source_name_does_not_stop_other_dispatch_targets(
             "UPDATE news_sources SET name='!!!' WHERE id=$1", sources.unregistered
         )
     runtime = start_dispatch({sources.high: [None], sources.other_high: [None]})
-    with capture_logs() as logs:
-        await runtime.invoke()
+    await runtime.invoke()
+    _, logs = read_logs()
     assert runtime.sent_source_ids == [sources.high, sources.other_high]
     assert any(
         log["event"] == "dispatch_source_name_invalid"
@@ -225,7 +240,7 @@ async def test_invalid_source_name_does_not_stop_other_dispatch_targets(
 
 
 async def test_retryable_failure_is_resent_until_accepted(
-    acquisition_sources, start_dispatch
+    acquisition_sources, start_dispatch, read_logs
 ):
     """成功済みは再送せず、失敗した依頼だけを同じ本文で送り直して受付する。"""
     sources = acquisition_sources
@@ -239,8 +254,8 @@ async def test_retryable_failure_is_resent_until_accepted(
             ],
         }
     )
-    with capture_logs() as logs:
-        await runtime.invoke()
+    await runtime.invoke()
+    _, logs = read_logs()
     assert runtime.sent_source_ids == [
         sources.high,
         sources.other_high,
@@ -254,7 +269,7 @@ async def test_retryable_failure_is_resent_until_accepted(
 
 
 async def test_unsent_requests_fail_after_three_attempts(
-    acquisition_sources, start_dispatch
+    acquisition_sources, start_dispatch, read_logs
 ):
     """回復可能でも3回で打ち切り、未送信を残して投入失敗にする。"""
     sources = acquisition_sources
@@ -264,24 +279,33 @@ async def test_unsent_requests_fail_after_three_attempts(
             sources.other_high: [service_error("RequestThrottled") for _ in range(3)],
         }
     )
-    with capture_logs() as logs, pytest.raises(SourceDispatchLambdaError) as caught:
+    with pytest.raises(RuntimeError) as caught:
         await runtime.invoke()
+    output, logs = read_logs()
     assert runtime.sent_source_ids == [
         sources.high,
         sources.other_high,
         sources.other_high,
         sources.other_high,
     ]
-    assert caught.value.phase == "dispatch"
-    assert caught.value.error_class.endswith(".AcquisitionDispatchError")
+    assert [
+        (log["operation"], log["error_class"]) for log in dispatch_failed_logs(logs)
+    ] == [
+        (
+            "dispatch",
+            "app.collection.article_acquisition.acquisition_dispatch."
+            "AcquisitionDispatchError",
+        )
+    ]
     failures = send_failed_logs(logs)
     assert len(failures) == 1
     assert (
-        failures[0]["request_id"] == expected_request(sources.other_high)["request_id"]
+        failures[0]["acquisition_request_id"]
+        == expected_request(sources.other_high)["request_id"]
     )
     assert failures[0]["attempts"] == 3
-    assert failures[0]["service_code"] == "RequestThrottled"
-    assert "private-sdk-message" not in repr(logs)
+    assert failures[0]["error_details"]["service_code"] == "RequestThrottled"
+    assert "private-sdk-message" not in output
     assert caught.value.__suppress_context__ is True
 
 
@@ -305,7 +329,7 @@ async def test_unsent_requests_fail_after_three_attempts(
     ],
 )
 async def test_non_retryable_failure_does_not_stop_other_sources(
-    acquisition_sources, start_dispatch, failure, expected_kind
+    acquisition_sources, start_dispatch, read_logs, failure, expected_kind
 ):
     """再送しない失敗が残っても他の依頼は完了し、最後に投入失敗にする。"""
     sources = acquisition_sources
@@ -315,19 +339,30 @@ async def test_non_retryable_failure_does_not_stop_other_sources(
             sources.other_high: [service_error("ServiceUnavailable", 503), None],
         }
     )
-    with capture_logs() as logs, pytest.raises(SourceDispatchLambdaError) as caught:
+    with pytest.raises(RuntimeError):
         await runtime.invoke()
+    output, logs = read_logs()
     assert runtime.sent_source_ids == [
         sources.high,
         sources.other_high,
         sources.other_high,
     ]
-    assert caught.value.phase == "dispatch"
-    assert caught.value.error_class.endswith(".AcquisitionDispatchError")
+    assert [
+        (log["operation"], log["error_class"]) for log in dispatch_failed_logs(logs)
+    ] == [
+        (
+            "dispatch",
+            "app.collection.article_acquisition.acquisition_dispatch."
+            "AcquisitionDispatchError",
+        )
+    ]
     failures = send_failed_logs(logs)
     assert len(failures) == 1
-    assert failures[0]["request_id"] == expected_request(sources.high)["request_id"]
+    assert (
+        failures[0]["acquisition_request_id"]
+        == expected_request(sources.high)["request_id"]
+    )
     assert failures[0]["attempts"] == 1
-    assert failures[0]["failure_kind"] == expected_kind
-    assert "private-sdk-message" not in repr(logs)
-    assert QUEUE_URL not in repr(logs)
+    assert failures[0]["error_details"]["failure_kind"] == expected_kind
+    assert "private-sdk-message" not in output
+    assert QUEUE_URL not in output

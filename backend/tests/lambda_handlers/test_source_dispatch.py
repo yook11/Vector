@@ -1,19 +1,22 @@
-"""予定回の入口での拒否・DB障害・実行資源の回収を検証する。"""
+"""予定回の入口での拒否・DB障害・実行資源の回収を、AWS・DBをモックにし実ロガーの出力で検証する。"""
 
 import asyncio
+import json
+import sys
 import threading
 import traceback
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.exc import OperationalError
-from structlog.testing import capture_logs
 
 from app.collection.sources.dispatch import SourceDispatchService
-from app.lambda_handlers.source_dispatch import failure, resources
 from app.lambda_handlers.source_dispatch import handler as entrypoint
-from app.lambda_handlers.source_dispatch.failure import SourceDispatchLambdaError
+from app.lambda_handlers.source_dispatch import resources
+from app.lambda_handlers.source_dispatch.recorder import SourceDispatchRecorder
 from app.lambda_handlers.source_dispatch.settings import SourceDispatchSettings
+from app.log_policy.policies.pipeline_control import PIPELINE_CONTROL_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 SCHEDULE = {"cadence": "high", "scheduled_at": "2026-09-13T01:00:00Z"}
 
@@ -28,7 +31,6 @@ def source_dispatch_env(monkeypatch):
         "SQS_SOURCE_ACQUISITION_QUEUE_URL": "https://sqs.invalid/acquisition",
     }.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setattr(entrypoint, "setup_lambda_logging", lambda: None)
 
 
 @pytest.fixture
@@ -43,21 +45,35 @@ def dispatch_resources(source_dispatch_env, monkeypatch):
     return SourceDispatchSettings(), session, rds, engine
 
 
-def test_invalid_schedule_stops_before_settings_and_resources(monkeypatch):
+@pytest.fixture
+def read_failed_logs(capsys):
+    """標準出力のJSONログから、実行の失敗を記録した行だけを返す。"""
+
+    def _read():
+        output = capsys.readouterr().out
+        logs = [json.loads(line) for line in output.splitlines()]
+        return output, [log for log in logs if log["event"] == "source_dispatch_failed"]
+
+    return _read
+
+
+def test_invalid_schedule_stops_before_settings_and_resources(
+    monkeypatch, read_failed_logs
+):
     """不正な予定回は設定も資源も取得せず、入力値を含まない例外にする。"""
     settings = Mock()
     open_resources = Mock()
     monkeypatch.setattr(entrypoint, "SourceDispatchSettings", settings)
     monkeypatch.setattr(entrypoint, "open_source_dispatcher", open_resources)
-    monkeypatch.setattr(entrypoint, "setup_lambda_logging", lambda: None)
     invalid_input = {**SCHEDULE, "private-input-value": "private-input-value"}
-    with capture_logs() as logs, pytest.raises(SourceDispatchLambdaError) as caught:
+    with pytest.raises(RuntimeError) as caught:
         entrypoint.handler(invalid_input, None)
-    assert caught.value.phase == "input"
+    output, failed = read_failed_logs()
+    assert [log["operation"] for log in failed] == ["validate_event"]
     assert "private-input-value" not in "".join(
         traceback.format_exception(caught.value)
     )
-    assert "private-input-value" not in repr(logs)
+    assert "private-input-value" not in output
     settings.assert_not_called()
     open_resources.assert_not_called()
 
@@ -75,7 +91,7 @@ def test_invalid_schedule_stops_before_settings_and_resources(monkeypatch):
     ],
 )
 def test_invalid_settings_stop_before_opening_resources(
-    source_dispatch_env, monkeypatch, name, value
+    source_dispatch_env, monkeypatch, read_failed_logs, name, value
 ):
     """不足した接続設定やIAM条件違反では資源を取得せず、安全にエラー終了する。"""
     if value is None:
@@ -84,41 +100,46 @@ def test_invalid_settings_stop_before_opening_resources(
         monkeypatch.setenv(name, value)
     open_resources = Mock()
     monkeypatch.setattr(entrypoint, "open_source_dispatcher", open_resources)
-    with capture_logs() as logs, pytest.raises(SourceDispatchLambdaError) as caught:
+    with pytest.raises(RuntimeError) as caught:
         entrypoint.handler(SCHEDULE, None)
-    assert caught.value.phase == "settings"
+    output, failed = read_failed_logs()
+    assert [log["operation"] for log in failed] == ["settings"]
     assert "private-password" not in "".join(traceback.format_exception(caught.value))
-    assert "private-password" not in repr(logs)
+    assert "private-password" not in output
     open_resources.assert_not_called()
 
 
 def test_database_failure_reaches_lambda_without_opening_sender(
-    dispatch_resources, monkeypatch
+    dispatch_resources, monkeypatch, read_failed_logs
 ):
     """対象選定のDB障害を正常結果に変換せず、送信を開始しない。"""
     _, session, _, _ = dispatch_resources
     error = OperationalError(None, None, RuntimeError("private-database-error"))
     monkeypatch.setattr(SourceDispatchService, "select", AsyncMock(side_effect=error))
-    with capture_logs() as logs, pytest.raises(SourceDispatchLambdaError) as caught:
+    with pytest.raises(RuntimeError) as caught:
         entrypoint.handler(SCHEDULE, None)
-    assert caught.value.phase == "dispatch"
-    assert caught.value.error_class == "sqlalchemy.exc.OperationalError"
+    _, failed = read_failed_logs()
+    assert [(log["operation"], log["error_class"]) for log in failed] == [
+        ("dispatch", "sqlalchemy.exc.OperationalError")
+    ]
     assert [call.args[0] for call in session.create_client.call_args_list] == ["rds"]
-    assert "private-database-error" not in repr(logs)
     assert "private-database-error" not in "".join(
         traceback.format_exception(caught.value)
     )
 
 
-def test_resource_initialization_failure_closes_acquired_client(dispatch_resources):
+def test_resource_initialization_failure_closes_acquired_client(
+    dispatch_resources, read_failed_logs
+):
     """Engine準備で止まった場合にも、取得済みRDSクライアントを回収する。"""
     _, _, rds, _ = dispatch_resources
     resources.create_source_dispatch_engine.side_effect = RuntimeError(
         "private-init-error"
     )
-    with capture_logs(), pytest.raises(SourceDispatchLambdaError) as caught:
+    with pytest.raises(RuntimeError):
         entrypoint.handler(SCHEDULE, None)
-    assert caught.value.phase == "resources"
+    _, failed = read_failed_logs()
+    assert [log["operation"] for log in failed] == ["resources"]
     rds.close.assert_called_once()
 
 
@@ -130,8 +151,19 @@ async def test_cleanup_and_log_failure_preserve_success(
     settings, _, rds, engine = dispatch_resources
     engine.dispose.side_effect = RuntimeError("private-dispose-error")
     rds.close.side_effect = RuntimeError("private-close-error")
-    monkeypatch.setattr(failure, "logger", Mock(warning=Mock(side_effect=RuntimeError)))
-    async with resources.open_source_dispatcher(settings):
+
+    class BrokenOutput:
+        def write(self, text):
+            raise OSError("private-log")
+
+        def flush(self):
+            raise OSError("private-log")
+
+    monkeypatch.setattr(sys, "stdout", BrokenOutput())
+    recorder = SourceDispatchRecorder(
+        create_policy_json_logger("article_fetch", PIPELINE_CONTROL_LOG_RULES)
+    )
+    async with resources.open_source_dispatcher(settings, recorder=recorder):
         pass
     engine.dispose.assert_awaited_once()
     rds.close.assert_called_once()
@@ -144,8 +176,10 @@ async def test_cleanup_failure_preserves_original_failure(dispatch_resources):
     original = RuntimeError("original-failure")
     engine.dispose.side_effect = RuntimeError("dispose-failure")
     rds.close.side_effect = RuntimeError("close-failure")
-    with capture_logs(), pytest.raises(RuntimeError) as caught:
-        async with resources.open_source_dispatcher(settings):
+    with pytest.raises(RuntimeError) as caught:
+        async with resources.open_source_dispatcher(
+            settings, recorder=SourceDispatchRecorder(Mock())
+        ):
             raise original
     assert caught.value is original
     engine.dispose.assert_awaited_once()
@@ -170,7 +204,9 @@ async def test_cancellation_during_initialization_recovers_rds_client(
     session.create_client.side_effect = create_client
 
     async def run():
-        async with resources.open_source_dispatcher(settings):
+        async with resources.open_source_dispatcher(
+            settings, recorder=SourceDispatchRecorder(Mock())
+        ):
             pytest.fail("cancelled initialization must not start dispatch")
 
     task = asyncio.create_task(run())

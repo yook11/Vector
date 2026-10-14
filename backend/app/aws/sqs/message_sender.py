@@ -5,7 +5,6 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Protocol
 
-import structlog
 from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.session import Session
@@ -16,8 +15,8 @@ from app.aws.sqs.errors import (
     to_message_send_error,
 )
 from app.aws.sqs.outgoing_message import OutgoingSqsMessage
-
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.pipeline_control import PIPELINE_CONTROL_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 
 class SqsClient(Protocol):
@@ -73,13 +72,9 @@ async def _close_client(client: SqsClient) -> None:
     try:
         await asyncio.to_thread(client.close)
     except Exception as exc:
-        try:
-            logger.warning(
-                "sqs_send_client_cleanup_failed",
-                exception_type=type(exc).__name__,
-            )
-        except Exception:  # noqa: S110 — 診断の失敗で送信結果を変更しない。
-            pass
+        create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES).warning(
+            "sqs_send_client_cleanup_failed", exc_info=exc
+        )
 
 
 @asynccontextmanager
