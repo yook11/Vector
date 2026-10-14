@@ -7,8 +7,6 @@ from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass
 
-import structlog
-
 from app.aws.sqs.errors import MessageSendError
 from app.aws.sqs.message_sender import SqsMessageSender
 from app.collection.article_acquisition.acquisition_retry import (
@@ -20,12 +18,22 @@ from app.collection.sources.acquisition_request import (
     SourceAcquisitionSchedule,
 )
 from app.collection.sources.dispatch import SourceDispatchService
+from app.log_policy.policies.pipeline_control import PIPELINE_CONTROL_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
+from app.shared.errors import ApplicationError
 
-logger = structlog.get_logger(__name__)
 
+class AcquisitionDispatchError(ApplicationError):
+    """送れなかった件数を持ち、再試行してよい失敗だけなら調査不要とする。"""
 
-class AcquisitionDispatchError(Exception):
-    pass
+    def __init__(
+        self, *, target_count: int, failed_count: int, requires_investigation: bool
+    ) -> None:
+        super().__init__(
+            "取得依頼を送信できなかったものがあります",
+            details={"target_count": target_count, "failed_count": failed_count},
+        )
+        self.requires_investigation = requires_investigation
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,18 +41,6 @@ class _SendFailure:
     request: SourceAcquisitionRequest
     attempts: int
     error: MessageSendError
-
-
-def _record_failure(failure: _SendFailure) -> None:
-    try:
-        logger.error(
-            "source_acquisition_send_failed",
-            request_id=failure.request.request_id,
-            attempts=failure.attempts,
-            **(failure.error.details or {}),
-        )
-    except Exception:  # noqa: S110 — 診断の失敗で投入失敗を上書きしない。
-        pass
 
 
 class SourceAcquisitionDispatcher:
@@ -61,11 +57,12 @@ class SourceAcquisitionDispatcher:
         self._sleep = sleep
         self._jitter = jitter
 
-    async def dispatch(self, schedule: SourceAcquisitionSchedule) -> None:
+    async def dispatch(self, schedule: SourceAcquisitionSchedule) -> int:
         targets = await self._dispatch_service.select(schedule.cadence)
         to_send = [schedule.create_request(target.id) for target in targets]
+        target_count = len(to_send)
         if not to_send:
-            return
+            return 0
         failures: list[_SendFailure] = []
         async with AsyncExitStack() as resources:
             try:
@@ -91,6 +88,21 @@ class SourceAcquisitionDispatcher:
                     if not to_send:
                         break
         if failures:
+            logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
             for failure in failures:
-                _record_failure(failure)
-            raise AcquisitionDispatchError
+                # 再試行してよい失敗を回数で諦めただけなら想定内として warning にする。
+                (logger.warning if failure.error.retryable else logger.error)(
+                    "source_acquisition_send_failed",
+                    acquisition_request_id=failure.request.request_id,
+                    source_id=failure.request.source_id,
+                    attempts=failure.attempts,
+                    exc_info=failure.error,
+                )
+            raise AcquisitionDispatchError(
+                target_count=target_count,
+                failed_count=len(failures),
+                requires_investigation=any(
+                    not failure.error.retryable for failure in failures
+                ),
+            )
+        return target_count

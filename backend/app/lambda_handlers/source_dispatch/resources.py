@@ -18,7 +18,7 @@ from app.collection.article_acquisition.acquisition_dispatch import (
 from app.collection.sources.dispatch import SourceDispatchService
 from app.db.engine import create_source_dispatch_engine
 from app.db.iam import build_iam_password_provider
-from app.lambda_handlers.source_dispatch.failure import record_cleanup_failure
+from app.lambda_handlers.source_dispatch.recorder import SourceDispatchRecorder
 from app.lambda_handlers.source_dispatch.settings import SourceDispatchSettings
 
 
@@ -30,15 +30,17 @@ def _create_rds_client(region: str) -> BaseClient:
     )
 
 
-async def _close_rds(client: BaseClient) -> None:
+async def _close_rds(client: BaseClient, recorder: SourceDispatchRecorder) -> None:
     try:
         await asyncio.to_thread(client.close)
     except Exception as exc:
-        record_cleanup_failure("rds", exc)
+        recorder.record_cleanup_failure("rds", exc)
 
 
 @asynccontextmanager
-async def _open_rds_client(region: str) -> AsyncIterator[BaseClient]:
+async def _open_rds_client(
+    region: str, recorder: SourceDispatchRecorder
+) -> AsyncIterator[BaseClient]:
     task = asyncio.create_task(asyncio.to_thread(_create_rds_client, region))
     try:
         client = await asyncio.shield(task)
@@ -49,19 +51,19 @@ async def _open_rds_client(region: str) -> AsyncIterator[BaseClient]:
         except Exception:  # noqa: S110 — 初期化失敗よりキャンセルを優先する。
             pass
         else:
-            await _close_rds(client)
+            await _close_rds(client, recorder)
         raise
     try:
         yield client
     finally:
-        await _close_rds(client)
+        await _close_rds(client, recorder)
 
 
 @asynccontextmanager
 async def open_source_dispatcher(
-    settings: SourceDispatchSettings,
+    settings: SourceDispatchSettings, *, recorder: SourceDispatchRecorder
 ) -> AsyncIterator[SourceAcquisitionDispatcher]:
-    async with _open_rds_client(settings.aws_region) as rds:
+    async with _open_rds_client(settings.aws_region, recorder) as rds:
         provider = build_iam_password_provider(
             settings.database_url,
             region=settings.aws_region,
@@ -86,4 +88,4 @@ async def open_source_dispatcher(
             try:
                 await engine.dispose()
             except Exception as exc:
-                record_cleanup_failure("engine", exc)
+                recorder.record_cleanup_failure("engine", exc)
