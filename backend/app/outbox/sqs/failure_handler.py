@@ -2,7 +2,7 @@ from uuid import UUID
 
 import structlog
 
-from app.aws.sqs.errors import SqsResponseInvalidError
+from app.aws.sqs.outgoing_message import SqsResponseInvalidError
 from app.outbox.publishing.errors import PublishCleanupError
 
 logger = structlog.get_logger(__name__)

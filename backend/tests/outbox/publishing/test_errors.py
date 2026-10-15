@@ -207,8 +207,10 @@ def test_response_invalid_keeps_detail_without_raw_values_at_logfire_export(capf
     """応答違反を共通例外へ変換した後も、Logfireへ応答の自由文を渡さない。"""
     import logfire
 
-    from app.aws.sqs.errors import SqsResponseInvalidError
-    from app.aws.sqs.outgoing_message import OutgoingSqsMessage
+    from app.aws.sqs.outgoing_message import (
+        OutgoingSqsMessage,
+        SqsResponseInvalidError,
+    )
     from app.logfire.redaction import install_exception_redaction
     from app.outbox.publishing.errors import PublishPhase
     from app.outbox.sqs.error_mapping import publish_error_from_exception
@@ -227,7 +229,7 @@ def test_response_invalid_keeps_detail_without_raw_values_at_logfire_export(capf
                 ) from exc
     assert vars(caught.value) == {}
     assert caught.value.__cause__.details == {
-        "reason": "invalid_checksum_format",
+        "reason": "invalid_format",
         "field": "body_checksum",
     }
     spans = capfire.exporter.exported_spans

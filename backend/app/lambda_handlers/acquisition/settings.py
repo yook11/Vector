@@ -15,7 +15,6 @@ class AcquisitionConsumerSettings(DatabaseConnectionSettings):
 
     env: Literal["development", "test", "production"] = "production"
     aws_region: str = Field(min_length=1)
-    database_url: str = Field(repr=False)
     db_iam_auth: bool = True
     crossref_contact_email: EmailStr | Literal["crossref-contact@example.invalid"]
 

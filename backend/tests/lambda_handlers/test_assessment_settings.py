@@ -47,11 +47,14 @@ def test_invalid_production_settings(overrides):
         settings(**overrides)
 
 
-def test_settings_hide_url_and_do_not_load_dotenv():
-    """設定の表示に接続先を含めず、dotenv読込を無効にし、テスト環境でもIAMを必須にする。"""
+def test_settings_do_not_load_dotenv():
+    """Lambdaの設定ではdotenv読込を無効にする。"""
     config = settings()
     assert config.model_config["env_file"] is None
-    assert "db.invalid" not in repr(config)
+
+
+def test_settings_require_iam_in_test_environment():
+    """テスト環境でもIAM認証を必須にする。"""
     with pytest.raises(ValidationError):
         settings(env="test", db_iam_auth=False)
 

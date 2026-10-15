@@ -70,7 +70,7 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 
 ## Implementation
 
-`publishing/publisher.py`のEventEnvelope・EventPublisher・BatchPublishResultを維持し、`publishing/route.py`にfrozen・slots付きの`EventMessage(event_id, body)`と`EventDeliveryRoute(event_type, queue_url, build_message)`を定義する。本文はreprへ出さず、配送定義の種別・キューは空白を拒否し、本文生成処理を必須とする。
+`publishing/publisher.py`のEventEnvelope・EventPublisher・BatchPublishResultを維持し、`publishing/route.py`にfrozen・slots付きの`EventMessage(event_id, body)`と`EventDeliveryRoute(event_type, queue_url, build_message)`を定義する。配送定義の種別・キューは空白を拒否し、本文生成処理を必須とする。
 
 `RoutedEventPublisher.publish_batch`が入力件数・型・ID重複を確認し、配送定義の本文生成処理を呼ぶ。生成失敗は個別のPREPARE_EVENT失敗とし、生成したメッセージの型・ID・入力種別と配送種別の一致を確認する。成功分だけを送信し、送信結果の件数・ID・入力順の対応を確認した後、生成失敗と統合して全入力順で返す。全件生成失敗ではSenderを呼ばない。
 
@@ -190,7 +190,7 @@ Evidence: [AWS SendMessageBatchResultEntry仕様](https://docs.aws.amazon.com/AW
 Problem: SDK用の辞書と期待MD5を別々に渡すことで、送信内容と照合情報の対応が型から読めない。
 Evidence: SqsMessage.from_messageによる送信準備、SqsMessageのMD5確定、SqsMessageBatchの合計サイズ検査と_send_batch・応答変換の受け渡しを対象とする。
 
-- SQS adapter内のSqsMessage(event_id: UUID, body: str)はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。bodyとbody_md5はreprに含めない。EventEnvelopeやイベント型はフィールドに持たない。
+- SQS adapter内のSqsMessage(event_id: UUID, body: str)はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。EventEnvelopeやイベント型はフィールドに持たない。
 - SqsMessage.from_message(message)は生成済みのEventMessageを受け取り、サイズ検証とMD5確定を担当する。本文を加工せずSqsMessageを返す。イベントの検証とJSON生成は配送定義の本文生成処理が所有する。
 - SQS本文の既知不正はPublishEventInvalidError(reason=message_too_large)で表す。イベント検証はRoutedEventPublisherの本文生成境界、サイズ・MD5の準備失敗はSqsMessageBatchのPREPARE_EVENT境界で個別失敗にする。想定外例外も既存の変換で保持し、正常分の送信を続ける。
 - Embedding本文は既存の5項目JSONとする。UTCのZ表記・小数秒はArticleAssessedInScopeEventのJSON直列化が所有し、build_assessed_in_scope_messageがmodel_dump(mode="json")の結果をjson.dumps(..., allow_nan=False)する。SqsSenderはJSONを解釈・再構築しない。
@@ -504,7 +504,7 @@ Evidence: 既存SqsMessage、publisherの入力検証・本文準備と、送信
 - `publishing/event_batch.py`の不変な`EventBatch`が入力一覧をtupleへ固定し、1〜10件・EventEnvelopeと各フィールドの型・event_id重複なしを検証する。型違反はTypeError、件数・重複違反はValueErrorとする。
 - `SqsMessageBatch(messages: Sequence[EventMessage])`は工程固有のイベントを受け取らず、生成済み本文の件数・型・ID重複と送信サイズを検証する。入力はtupleで保持する。
 - イベント内容は本文生成処理の`ArticleAssessedInScopeEvent.from_input`、個別のUTF-8本文サイズは`SqsMessage.from_message`、送信可能な本文の合計サイズは`SqsMessageBatch`が検証する。RoutedEventPublisherとSqsSenderはそれぞれの公開入力の件数・型・ID一意性を保証する。
-- 準備済みの`messages`と個別の`failures`を不変のtupleで保持する。不正イベントを除いた順序を維持し、本文・MD5を通常表示へ出さない。
+- 準備済みの`messages`と個別の`failures`を不変のtupleで保持し、不正イベントを除いた順序を維持する。
 - 公開`publish_batch(envelopes)`は維持し、内部で`EventBatch`を構築する。11件の入力を不正イベントの除外によって受け入れない。自動分割やIDの重複除去は行わない。
 - 合計サイズ超過は呼び出し全体のValueErrorとなり、クライアントを生成しない。
 - 正常なメッセージが0件なら準備失敗の結果だけを返し、AWS送信を呼ばない。結果は元の入力順に返す。

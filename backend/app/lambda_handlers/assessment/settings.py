@@ -25,7 +25,6 @@ class AssessmentConsumerSettings(DatabaseConnectionSettings):
 
     env: Literal["development", "test", "production"] = "production"
     aws_region: str = Field(min_length=1)
-    database_url: str = Field(repr=False)
     db_iam_auth: bool = True
     gemini_api_key_parameter_path: str = Field(min_length=1)
 

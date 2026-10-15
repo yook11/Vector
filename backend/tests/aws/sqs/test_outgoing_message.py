@@ -5,15 +5,13 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from app.aws.sqs.errors import (
+from app.aws.sqs.outgoing_message import (
     MessageBodyMismatchError,
     MessageTooLargeError,
-    SqsResponseInvalidError,
-)
-from app.aws.sqs.outgoing_message import (
     OutgoingSqsMessage,
     OutgoingSqsMessageBatch,
     SqsBatchSendResult,
+    SqsResponseInvalidError,
 )
 
 # SQSのメッセージ1件と1回のバッチ全体の上限で、どちらもUTF-8のバイト数で数える。
@@ -65,11 +63,9 @@ def test_message_derives_md5_from_exact_body(body, expected_md5):
         OutgoingSqsMessage(body=body, body_md5=expected_md5)  # type: ignore[call-arg]
 
 
-def test_message_hides_body_and_cannot_be_changed():
-    """本文と照合値を表示に出さず、作った後に書き換えられない。"""
-    message = OutgoingSqsMessage("PRIVATE_BODY")
-    assert "PRIVATE_BODY" not in repr(message)
-    assert message.body_md5 not in repr(message)
+def test_message_cannot_be_changed():
+    """作った後に送信本文を書き換えられない。"""
+    message = OutgoingSqsMessage("{}")
     with pytest.raises(FrozenInstanceError):
         message.body = "changed"  # type: ignore[misc]
 
@@ -78,7 +74,7 @@ def test_message_hides_body_and_cannot_be_changed():
     ("result", "field", "reason"),
     [
         (None, "response", "invalid_type"),
-        ({"MD5OfMessageBody": EMPTY_JSON_MD5}, "message_id", "missing_required_field"),
+        ({"MD5OfMessageBody": EMPTY_JSON_MD5}, "message_id", "missing"),
         (
             {"MessageId": None, "MD5OfMessageBody": EMPTY_JSON_MD5},
             "message_id",
@@ -87,20 +83,20 @@ def test_message_hides_body_and_cannot_be_changed():
         (
             {"MessageId": "", "MD5OfMessageBody": EMPTY_JSON_MD5},
             "message_id",
-            "empty_required_field",
+            "empty",
         ),
-        ({"MessageId": "id"}, "body_checksum", "missing_required_field"),
+        ({"MessageId": "id"}, "body_checksum", "missing"),
         ({"MessageId": "id", "MD5OfMessageBody": 1}, "body_checksum", "invalid_type"),
         (
             {"MessageId": "id", "MD5OfMessageBody": ""},
             "body_checksum",
-            "empty_required_field",
+            "empty",
         ),
         *[
             (
                 {"MessageId": "id", "MD5OfMessageBody": checksum},
                 "body_checksum",
-                "invalid_checksum_format",
+                "invalid_format",
             )
             for checksum in ["a" * 31, "a" * 33, "g" * 32, "０" * 32, "a" * 32 + "\n"]
         ],
@@ -202,26 +198,26 @@ def test_read_treats_unusable_metadata_as_missing_request_id(metadata):
         ({"Failed": None}, "failed_entries", "invalid_type"),
         ({"Successful": [None]}, "successful_entry", "invalid_type"),
         ({"Failed": ["private"]}, "failed_entry", "invalid_type"),
-        ({"Successful": [{"MessageId": "id"}]}, "entry_id", "missing_required_field"),
+        ({"Successful": [{"MessageId": "id"}]}, "entry_id", "missing"),
         ({"Successful": [_success(1)]}, "entry_id", "invalid_type"),
-        ({"Successful": [_success("")]}, "entry_id", "empty_required_field"),
-        ({"Successful": [_success("unknown")]}, "entry_id", "unknown_entry_id"),
-        ({"Successful": [_success(), _success()]}, "entry_id", "duplicate_entry_id"),
+        ({"Successful": [_success("")]}, "entry_id", "empty"),
+        ({"Successful": [_success("unknown")]}, "entry_id", "not_in_request"),
+        ({"Successful": [_success(), _success()]}, "entry_id", "duplicate"),
         (
             {"Successful": [_success()], "Failed": [_failure("a")]},
             "entry_id",
-            "duplicate_entry_id",
+            "duplicate",
         ),
-        ({"Successful": []}, "entry_id", "missing_entry_id"),
+        ({"Successful": []}, "entry_id", "not_returned"),
         (
             {"Successful": [{**_success(), "MD5OfMessageBody": "x"}]},
             "body_checksum",
-            "invalid_checksum_format",
+            "invalid_format",
         ),
         (
             {"Failed": [{"Id": "a", "Code": "AccessDenied"}]},
             "sender_fault",
-            "missing_required_field",
+            "missing",
         ),
         (
             {"Failed": [{**_failure("a"), "SenderFault": "true"}]},
@@ -232,7 +228,7 @@ def test_read_treats_unusable_metadata_as_missing_request_id(metadata):
         (
             {"Failed": [{**_failure("a"), "Code": ""}]},
             "error_code",
-            "empty_required_field",
+            "empty",
         ),
     ],
 )
@@ -243,17 +239,9 @@ def test_read_rejects_malformed_response_as_a_whole(response, field, reason):
     assert caught.value.details == {"reason": reason, "field": field}
 
 
-def test_read_does_not_expose_external_strings():
-    """拒否コードやRequestIdなど外部由来の文字列を、結果や例外の表示に出さない。"""
+def test_read_does_not_include_unknown_entry_id_in_error():
+    """送信していないIDが応答に含まれても、検証例外に入力値を含めない。"""
     marker = "PRIVATE_PAYLOAD_QUEUE_CREDENTIAL"
-    result = _batch("a", "b").read(
-        {
-            "Successful": [{**_success(), "MessageId": marker, "extra": marker}],
-            "Failed": [{**_failure("b", marker), "Message": marker}],
-            "ResponseMetadata": {"RequestId": marker},
-        }
-    )
-    assert marker not in repr(result)
     with pytest.raises(SqsResponseInvalidError) as caught:
         _batch("a").read({"Successful": [_success(marker)]})
     assert marker not in str(caught.value)

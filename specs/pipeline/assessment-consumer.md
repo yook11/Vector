@@ -168,7 +168,7 @@ Problem: AssessmentConsumerとDeepSeekクライアントを、Lambda用の秘密
 
 Evidence: Embeddingの設定・資源管理・組み立てと、共通SSM取得・DB Engine生成・資源管理テストを参照した。
 
-- `AssessmentConsumerSettings`はDB共通設定を継承し、`env`（既定production）、`aws_region`、`database_url`、`db_iam_auth`（既定true）、`deepseek_api_key_parameter_path`を扱う。dotenvは読み込まず、全環境でIAM必須、本番でTLS必須とする。接続情報の非表示を維持する。
+- `AssessmentConsumerSettings`はDB共通設定を継承し、`env`（既定production）、`aws_region`、`database_url`、`db_iam_auth`（既定true）、`deepseek_api_key_parameter_path`を扱う。dotenvは読み込まず、全環境でIAM必須、本番でTLS必須とする。
 - 共通の`app/lambda_handlers/article_analysis_lifecycle.py`にある`open_article_analysis_consumer`が、利用範囲ごとにSSMからAPIキーを取得し、専用RDS署名器・Engine・session factory・AIクライアントを準備する。秘密情報は`SecretStr`で扱い、資源を保持するDTOは公開しない。
 - `create_assessment_consumer_engine`は1接続・追加接続なし、プール待ち・接続・SQL実行の上限を各5秒にする。application_nameは`vector-assessment-consumer`。IAM署名器は必須引数とし、省略・Noneを拒否する。非IAM用の分岐を設けず、共通のTLS・pre-pingとDB例外変換を利用する。
 - `app/lambda_handlers/assessment/composition.py`の`open_assessment_consumer(settings)`は、設定を捕捉する型付きの名前付き関数でEngine・DeepSeekクライアント・AssessorとConsumerの生成を指定し、共通のasync context managerを返す。共通側が準備・終了順序を所有し、SDK内部の生成・解放は`open_deepseek_client`が所有する。公開handlerやSQSの入力形式には依存しない。

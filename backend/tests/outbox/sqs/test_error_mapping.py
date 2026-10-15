@@ -16,7 +16,7 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
-from app.aws.sqs.errors import (
+from app.aws.sqs.outgoing_message import (
     SqsResponseField,
     SqsResponseInvalidError,
     SqsResponseInvalidReason,
@@ -412,7 +412,7 @@ def test_classifier_process_exit_is_not_converted(monkeypatch):
 
 def _response_invalid():
     return SqsResponseInvalidError(
-        reason=SqsResponseInvalidReason.UNKNOWN_ENTRY_ID,
+        reason=SqsResponseInvalidReason.NOT_IN_REQUEST,
         field=SqsResponseField.ENTRY_ID,
     )
 
@@ -451,6 +451,9 @@ def test_response_violation_mapping_failure_retains_original(monkeypatch):
     assert isinstance(error, PublishUnexpectedError)
     assert error.phase is PublishPhase.CLASSIFY_FAILURE
     assert error.classification_exception_type == "builtins.RuntimeError"
-    assert error.original_exception_type == "app.aws.sqs.errors.SqsResponseInvalidError"
+    assert (
+        error.original_exception_type
+        == "app.aws.sqs.outgoing_message.SqsResponseInvalidError"
+    )
     assert error.__cause__ is original
     assert "PRIVATE" not in str(error)
