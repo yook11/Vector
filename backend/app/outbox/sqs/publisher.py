@@ -7,15 +7,11 @@ from botocore.client import BaseClient
 from botocore.session import Session
 
 from app.aws.sqs.outgoing_message import (
+    AcceptedSqsMessage,
     OutgoingSqsMessageBatch,
     SqsResponseInvalidError,
 )
-from app.outbox.publishing.errors import (
-    PublishError,
-    PublishIntegrityError,
-    PublishIntegrityReason,
-    PublishPhase,
-)
+from app.outbox.publishing.errors import PublishError, PublishPhase
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
     PublishFailed,
@@ -26,7 +22,6 @@ from app.outbox.sqs.client import create_sqs_client
 from app.outbox.sqs.error_mapping import (
     publish_cleanup_error_from_exception,
     publish_error_from_exception,
-    publish_error_from_sqs_entry,
 )
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.message_batch import SqsMessageBatch
@@ -129,28 +124,17 @@ class SqsSender:
             return failed_results(batch, error=error)
 
         try:
-            sent = outgoing.read(response)
+            sent = outgoing.verify(response)
             results: dict[UUID, PublishSucceeded | PublishFailed] = {}
             for message in batch.sendable:
-                entry_id = str(message.event_id)
-                if entry_id in sent.rejected_codes:
-                    results[message.event_id] = PublishFailed(
-                        message.event_id,
-                        publish_error_from_sqs_entry(
-                            code=sent.rejected_codes[entry_id],
-                            request_id=sent.request_id,
-                        ),
-                    )
-                elif entry_id in sent.body_mismatched:
-                    results[message.event_id] = PublishFailed(
-                        message.event_id,
-                        PublishIntegrityError(
-                            reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH,
-                            request_id=sent.request_id,
-                        ),
-                    )
-                else:
+                outcome = sent[str(message.event_id)]
+                if isinstance(outcome, AcceptedSqsMessage):
                     results[message.event_id] = PublishSucceeded(message.event_id)
+                else:
+                    results[message.event_id] = PublishFailed(
+                        message.event_id,
+                        publish_error_from_exception(outcome, phase=PublishPhase.SEND),
+                    )
             return results
         except Exception as exc:
             if isinstance(exc, SqsResponseInvalidError):

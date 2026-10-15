@@ -94,7 +94,7 @@ class PublishServiceError(PublishError):
         self,
         *,
         reason: PublishServiceReason,
-        service_error_code: str,
+        service_error_code: str | None,
         status_code: int | None,
         request_id: str | None = None,
     ) -> None:
@@ -140,12 +140,9 @@ class PublishIntegrityError(PublishError):
         "送信本文と、送信先が受け取った本文のチェックサムが一致しません。"
     )
 
-    def __init__(
-        self, *, reason: PublishIntegrityReason, request_id: str | None = None
-    ) -> None:
+    def __init__(self, *, reason: PublishIntegrityReason) -> None:
         super().__init__()
         self.reason = reason
-        self.request_id = request_id
 
 
 class PublishResponseInvalidError(PublishError):

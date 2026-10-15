@@ -149,25 +149,20 @@ def test_publish_exception_chain_is_redacted_at_logfire_export(
             assert marker not in str(event.attributes)
 
 
-def test_integrity_error_preserves_reason_and_diagnostics():
-    """本文不一致の識別情報と、保持する調査情報をまとめて確認する。"""
+def test_integrity_error_keeps_only_its_reason():
+    """本文不一致は固定のコードと理由だけを持つ。"""
     from app.outbox.publishing.errors import (
         PublishIntegrityError,
         PublishIntegrityReason,
     )
 
-    error = PublishIntegrityError(
-        reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH, request_id="request-id"
-    )
+    error = PublishIntegrityError(reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH)
     assert isinstance(error, PublishError)
     assert {"code": error.CODE, "reason": error.reason.value} == {
         "code": "publish_integrity_error",
         "reason": "body_checksum_mismatch",
     }
-    assert vars(error) == {
-        "reason": PublishIntegrityReason.BODY_CHECKSUM_MISMATCH,
-        "request_id": "request-id",
-    }
+    assert vars(error) == {"reason": PublishIntegrityReason.BODY_CHECKSUM_MISMATCH}
 
 
 def test_integrity_error_keeps_fixed_message_as_attribute():
@@ -178,9 +173,7 @@ def test_integrity_error_keeps_fixed_message_as_attribute():
     )
 
     marker = "PRIVATE_BODY_QUEUE_CREDENTIAL"
-    error = PublishIntegrityError(
-        reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH, request_id=marker
-    )
+    error = PublishIntegrityError(reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH)
     error.__cause__ = RuntimeError(marker)
     assert (
         error.MESSAGE

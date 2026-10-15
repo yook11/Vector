@@ -5,12 +5,13 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from app.aws.sqs.errors import SqsServiceError
 from app.aws.sqs.outgoing_message import (
+    AcceptedSqsMessage,
     MessageBodyMismatchError,
     MessageTooLargeError,
     OutgoingSqsMessage,
     OutgoingSqsMessageBatch,
-    SqsBatchSendResult,
     SqsResponseInvalidError,
 )
 
@@ -24,8 +25,8 @@ def _batch(*ids):
     return OutgoingSqsMessageBatch({id_: OutgoingSqsMessage("{}") for id_ in ids})
 
 
-def _success(id_="a", checksum=EMPTY_JSON_MD5):
-    return {"Id": id_, "MessageId": "message-id", "MD5OfMessageBody": checksum}
+def _success(id_="a", checksum=EMPTY_JSON_MD5, message_id="message-id"):
+    return {"Id": id_, "MessageId": message_id, "MD5OfMessageBody": checksum}
 
 
 def _failure(id_="b", code="AccessDenied"):
@@ -113,10 +114,10 @@ def test_verify_reports_which_field_was_invalid(result, field, reason):
     ("checksum", "mismatch"), [(EMPTY_JSON_MD5.upper(), False), (OTHER_MD5, True)]
 )
 def test_verify_compares_checksum_with_sent_body(checksum, mismatch):
-    """大文字小文字を区別せずMD5を比べ、正しい形で値が違うときだけ本文不一致にする。"""
+    """大文字小文字を区別せずMD5を比べ、一致すればSQSが振ったIDで受付を返し、違えば本文不一致にする。"""
     result = {"MessageId": "id", "MD5OfMessageBody": checksum}
     if not mismatch:
-        OutgoingSqsMessage("{}").verify(result)
+        assert OutgoingSqsMessage("{}").verify(result) == AcceptedSqsMessage("id")
         return
     with pytest.raises(MessageBodyMismatchError) as caught:
         OutgoingSqsMessage("{}").verify(result)
@@ -150,43 +151,40 @@ def test_batch_entries_keep_ids_bodies_and_order():
     ]
 
 
-def test_read_matches_entries_by_id_regardless_of_response_order():
-    """応答の並びが送信順と違っても、IDで突き合わせて本文の異なるメッセージを取り違えない。"""
+def test_verify_matches_entries_by_id_and_returns_them_in_sent_order():
+    """応答の並びが送信順と違っても、IDで突き合わせて送った順に各IDの受付を返す。"""
     batch = OutgoingSqsMessageBatch(
         {"a": OutgoingSqsMessage("{}"), "b": OutgoingSqsMessage("abc")}
     )
     response = {
-        "Successful": [_success("b", OTHER_MD5), _success("a", EMPTY_JSON_MD5)],
-        "ResponseMetadata": {"RequestId": "request-id"},
+        "Successful": [
+            _success("b", OTHER_MD5, message_id="sqs-b"),
+            _success("a", EMPTY_JSON_MD5, message_id="sqs-a"),
+        ],
     }
     before = deepcopy(response)
-    assert batch.read(response) == SqsBatchSendResult(
-        body_mismatched=frozenset(), rejected_codes={}, request_id="request-id"
-    )
+    assert list(batch.verify(response).items()) == [
+        ("a", AcceptedSqsMessage("sqs-a")),
+        ("b", AcceptedSqsMessage("sqs-b")),
+    ]
     assert response == before
 
 
-def test_read_keeps_mismatch_and_rejection_to_their_own_ids():
-    """本文不一致と拒否は、そのIDのメッセージだけの結果にする。"""
-    batch = _batch("a", "b", "c")
-    response = {
-        "Successful": [_success("a"), _success("c", OTHER_MD5)],
-        "Failed": [_failure("b", "RequestThrottled")],
-    }
-    assert batch.read(response) == SqsBatchSendResult(
-        body_mismatched=frozenset({"c"}),
-        rejected_codes={"b": "RequestThrottled"},
-        request_id=None,
+def test_verify_keeps_mismatch_and_rejection_to_their_own_ids():
+    """本文不一致とSQSの拒否は、そのIDの失敗として値で返し、ほかのIDの受付を失わない。"""
+    results = _batch("a", "b", "c").verify(
+        {
+            "Successful": [_success("a"), _success("c", OTHER_MD5)],
+            "Failed": [_failure("b", "RequestThrottled")],
+        }
     )
-
-
-@pytest.mark.parametrize("metadata", [None, "private", {}, {"RequestId": 1}])
-def test_read_treats_unusable_metadata_as_missing_request_id(metadata):
-    """調査用のRequestIdが読めなくても、受付の結果は失わない。"""
-    response = {"Successful": [_success()], "ResponseMetadata": metadata}
-    assert _batch("a").read(response) == SqsBatchSendResult(
-        body_mismatched=frozenset(), rejected_codes={}, request_id=None
+    assert results["a"] == AcceptedSqsMessage("message-id")
+    assert isinstance(results["b"], SqsServiceError)
+    assert (results["b"].reason, results["b"].service_code) == (
+        "throttled",
+        "RequestThrottled",
     )
+    assert isinstance(results["c"], MessageBodyMismatchError)
 
 
 @pytest.mark.parametrize(
@@ -232,17 +230,17 @@ def test_read_treats_unusable_metadata_as_missing_request_id(metadata):
         ),
     ],
 )
-def test_read_rejects_malformed_response_as_a_whole(response, field, reason):
+def test_verify_rejects_malformed_response_as_a_whole(response, field, reason):
     """形やIDの対応が1か所でも不正なら、どこがどう不正かを持たせてまとまり全体を応答不正にする。"""
     with pytest.raises(SqsResponseInvalidError) as caught:
-        _batch("a").read(response)
+        _batch("a").verify(response)
     assert caught.value.details == {"reason": reason, "field": field}
 
 
-def test_read_does_not_include_unknown_entry_id_in_error():
+def test_verify_does_not_include_unknown_entry_id_in_error():
     """送信していないIDが応答に含まれても、検証例外に入力値を含めない。"""
     marker = "PRIVATE_PAYLOAD_QUEUE_CREDENTIAL"
     with pytest.raises(SqsResponseInvalidError) as caught:
-        _batch("a").read({"Successful": [_success(marker)]})
+        _batch("a").verify({"Successful": [_success(marker)]})
     assert marker not in str(caught.value)
     assert marker not in repr(caught.value.details)

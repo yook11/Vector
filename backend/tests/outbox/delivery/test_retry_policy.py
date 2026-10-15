@@ -276,16 +276,14 @@ def test_decisions_are_immutable(result):
 
 
 @pytest.mark.parametrize("attempt", [1, 4, 5, 6, 100])
-def test_integrity_failure_stops_without_reinterpreting_request_id(attempt):
-    """本文不一致は試行回数にかかわらず停止し、診断情報を判断へ混入させない。"""
+def test_integrity_failure_stops_regardless_of_attempt(attempt):
+    """本文不一致は試行回数にかかわらず停止し、失敗の値を書き換えない。"""
     from app.outbox.publishing.errors import (
         PublishIntegrityError,
         PublishIntegrityReason,
     )
 
-    error = PublishIntegrityError(
-        reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH, request_id="private"
-    )
+    error = PublishIntegrityError(reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH)
     before = vars(error).copy()
     assert decide_publish_retry(
         error, attempt_count=attempt, jitter=0.5

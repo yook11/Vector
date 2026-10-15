@@ -5,7 +5,11 @@ import pytest
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
-from app.aws.sqs.errors import SqsServiceError, to_message_send_error
+from app.aws.sqs.errors import (
+    SqsServiceError,
+    to_message_send_error,
+    to_sqs_service_error,
+)
 
 
 def _client_error(code, status):
@@ -61,6 +65,30 @@ def test_status_is_used_only_for_unknown_codes(code, status, reason):
         reason,
         code,
     )
+
+
+@pytest.mark.parametrize(
+    ("code", "reason", "service_code"),
+    [
+        ("BatchEntryIdsNotDistinct", "request_rejected", "BatchEntryIdsNotDistinct"),
+        ("RequestThrottled", "throttled", "RequestThrottled"),
+        ("FutureError", "unknown", "FutureError"),
+        ("A" * 128, "unknown", "A" * 128),
+        ("A" * 129, "unknown", None),
+        ("Access Denied", "unknown", None),
+        (None, "unknown", None),
+    ],
+)
+def test_code_without_status_is_translated_by_code_alone(code, reason, service_code):
+    """statusのないコード(まとめ送信の項目ごとの拒否)も同じ理由へ翻訳し、形の不正なコードは持たない。"""
+    error = to_sqs_service_error(code)
+    assert (error.reason, error.service_code) == (reason, service_code)
+
+
+def test_malformed_code_with_server_status_is_service_unavailable():
+    """形の不正なコードは未知のコードとして扱い、5xxならSQS側の障害とみなす。"""
+    error = to_sqs_service_error("Access Denied", status_code=503)
+    assert (error.reason, error.service_code) == ("service_unavailable", None)
 
 
 def test_real_sdk_client_error_is_translated_without_sdk_message():
