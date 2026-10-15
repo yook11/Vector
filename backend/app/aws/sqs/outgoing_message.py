@@ -1,21 +1,73 @@
-"""SQSへ送る本文と照合用のMD5を持ち、SQSが本文どおりに受け付けたかを照合する。"""
+"""SQSへ送る本文と照合用のMD5を持ち、SQSが本文どおりに受け付けたかを検証する。"""
 
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from hashlib import md5
 from types import MappingProxyType
 
-from app.aws.sqs.errors import (
-    MessageBodyMismatchError,
-    MessageTooLargeError,
-    SqsResponseField,
-    SqsResponseInvalidError,
-    SqsResponseInvalidReason,
-)
+from app.aws.sqs.errors import MessageSendError
 
 # SQSのメッセージ1件と、SendMessageBatch 1回分の本文合計の上限(UTF-8のバイト数)。
 MAX_MESSAGE_BYTES = 1_048_576
+
+
+class SqsResponseField(StrEnum):
+    """SQS応答のどの部分に問題があるかを表す。"""
+
+    RESPONSE = "response"
+    SUCCESSFUL_ENTRIES = "successful_entries"
+    FAILED_ENTRIES = "failed_entries"
+    SUCCESSFUL_ENTRY = "successful_entry"
+    FAILED_ENTRY = "failed_entry"
+    ENTRY_ID = "entry_id"
+    MESSAGE_ID = "message_id"
+    BODY_CHECKSUM = "body_checksum"
+    ERROR_CODE = "error_code"
+    SENDER_FAULT = "sender_fault"
+
+
+class SqsResponseInvalidReason(StrEnum):
+    """SQSの応答の項目またはIDの、検証条件を満たさなかった理由を表す。"""
+
+    # 値の形の違反。
+    INVALID_TYPE = "invalid_type"
+    MISSING = "missing"
+    EMPTY = "empty"
+    INVALID_FORMAT = "invalid_format"
+    # 送ったIDとの対応の違反で、項目は常にentry_idになる。
+    UNKNOWN = "unknown"
+    DUPLICATED = "duplicated"
+    NOT_RETURNED = "not_returned"
+
+
+class MessageTooLargeError(MessageSendError):
+    """本文がSQSの1件の上限を超えていて、送る前に止めた。"""
+
+    def __init__(self) -> None:
+        super().__init__("メッセージの本文が送信できる大きさを超えています")
+
+
+class SqsResponseInvalidError(MessageSendError):
+    """SQSの応答の形式または送ったIDとの対応が不正で、受け付けたかを確かめられない。"""
+
+    def __init__(
+        self, *, reason: SqsResponseInvalidReason, field: SqsResponseField
+    ) -> None:
+        super().__init__(
+            "SQSの応答を検証できませんでした",
+            details={"reason": reason.value, "field": field.value},
+        )
+        self.reason = reason
+        self.field = field
+
+
+class MessageBodyMismatchError(MessageSendError):
+    """SQSが受け取った本文のMD5が、送った本文のMD5と一致しない。"""
+
+    def __init__(self) -> None:
+        super().__init__("SQSが受け取った本文が送信した本文と一致しません")
 
 
 def _required_string(
@@ -23,7 +75,7 @@ def _required_string(
 ) -> str:
     if key not in fields:
         raise SqsResponseInvalidError(
-            reason=SqsResponseInvalidReason.MISSING_REQUIRED_FIELD, field=field
+            reason=SqsResponseInvalidReason.MISSING, field=field
         )
     value = fields[key]
     if not isinstance(value, str):
@@ -32,7 +84,7 @@ def _required_string(
         )
     if not value:
         raise SqsResponseInvalidError(
-            reason=SqsResponseInvalidReason.EMPTY_REQUIRED_FIELD, field=field
+            reason=SqsResponseInvalidReason.EMPTY, field=field
         )
     return value
 
@@ -64,7 +116,7 @@ class OutgoingSqsMessage:
         )
         if re.fullmatch(r"[0-9a-fA-F]{32}", checksum) is None:
             raise SqsResponseInvalidError(
-                reason=SqsResponseInvalidReason.INVALID_CHECKSUM_FORMAT,
+                reason=SqsResponseInvalidReason.INVALID_FORMAT,
                 field=SqsResponseField.BODY_CHECKSUM,
             )
         if checksum.lower() != self.body_md5:
@@ -144,7 +196,7 @@ class OutgoingSqsMessageBatch:
             entry_id = self._claim_id(entry, seen)
             if "SenderFault" not in entry:
                 raise SqsResponseInvalidError(
-                    reason=SqsResponseInvalidReason.MISSING_REQUIRED_FIELD,
+                    reason=SqsResponseInvalidReason.MISSING,
                     field=SqsResponseField.SENDER_FAULT,
                 )
             if type(entry["SenderFault"]) is not bool:
@@ -157,7 +209,7 @@ class OutgoingSqsMessageBatch:
             )
         if seen != self.messages.keys():
             raise SqsResponseInvalidError(
-                reason=SqsResponseInvalidReason.MISSING_ENTRY_ID,
+                reason=SqsResponseInvalidReason.NOT_RETURNED,
                 field=SqsResponseField.ENTRY_ID,
             )
         metadata = response.get("ResponseMetadata")
@@ -172,12 +224,12 @@ class OutgoingSqsMessageBatch:
         entry_id = _required_string(entry, "Id", SqsResponseField.ENTRY_ID)
         if entry_id not in self.messages:
             raise SqsResponseInvalidError(
-                reason=SqsResponseInvalidReason.UNKNOWN_ENTRY_ID,
+                reason=SqsResponseInvalidReason.UNKNOWN,
                 field=SqsResponseField.ENTRY_ID,
             )
         if entry_id in seen:
             raise SqsResponseInvalidError(
-                reason=SqsResponseInvalidReason.DUPLICATE_ENTRY_ID,
+                reason=SqsResponseInvalidReason.DUPLICATED,
                 field=SqsResponseField.ENTRY_ID,
             )
         seen.add(entry_id)

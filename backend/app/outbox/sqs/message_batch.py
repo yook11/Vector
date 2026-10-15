@@ -3,8 +3,11 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.aws.sqs.errors import MessageTooLargeError
-from app.aws.sqs.outgoing_message import OutgoingSqsMessage, OutgoingSqsMessageBatch
+from app.aws.sqs.outgoing_message import (
+    MessageTooLargeError,
+    OutgoingSqsMessage,
+    OutgoingSqsMessageBatch,
+)
 from app.outbox.publishing.error_mapping import publish_preparation_error_from_exception
 from app.outbox.publishing.errors import (
     PublishEventInvalidError,

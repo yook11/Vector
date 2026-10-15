@@ -8,7 +8,7 @@ from botocore.exceptions import (
     PartialCredentialsError,
 )
 
-from app.aws.sqs.errors import SqsResponseInvalidError
+from app.aws.sqs.outgoing_message import SqsResponseInvalidError
 from app.http.failure import classify_botocore
 from app.outbox.publishing.errors import (
     PublishCleanupError,

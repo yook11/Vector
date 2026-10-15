@@ -6,8 +6,10 @@ from uuid import UUID
 from botocore.client import BaseClient
 from botocore.session import Session
 
-from app.aws.sqs.errors import SqsResponseInvalidError
-from app.aws.sqs.outgoing_message import OutgoingSqsMessageBatch
+from app.aws.sqs.outgoing_message import (
+    OutgoingSqsMessageBatch,
+    SqsResponseInvalidError,
+)
 from app.outbox.publishing.errors import (
     PublishError,
     PublishIntegrityError,

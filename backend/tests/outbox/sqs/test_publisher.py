@@ -14,7 +14,7 @@ from botocore.credentials import ReadOnlyCredentials
 from botocore.exceptions import ClientError, HTTPClientError, ReadTimeoutError
 from botocore.stub import Stubber
 
-from app.aws.sqs.errors import SqsResponseInvalidError
+from app.aws.sqs.outgoing_message import SqsResponseInvalidError
 from app.outbox.publishing.errors import (
     PublishCleanupError,
     PublishConfigurationError,
@@ -388,12 +388,12 @@ def test_malformed_response_invalidates_all_sent_results(envelope, case):
             "root": ("invalid_type", "response"),
             "list": ("invalid_type", "failed_entries"),
             "entry": ("invalid_type", "failed_entry"),
-            "missing": ("missing_entry_id", "entry_id"),
-            "unknown": ("unknown_entry_id", "entry_id"),
-            "duplicate": ("duplicate_entry_id", "entry_id"),
-            "overlap": ("duplicate_entry_id", "entry_id"),
-            "message_id": ("empty_required_field", "message_id"),
-            "md5": ("missing_required_field", "body_checksum"),
+            "missing": ("not_returned", "entry_id"),
+            "unknown": ("not_in_request", "entry_id"),
+            "duplicate": ("duplicate", "entry_id"),
+            "overlap": ("duplicate", "entry_id"),
+            "message_id": ("empty", "message_id"),
+            "md5": ("missing", "body_checksum"),
             "code": ("invalid_type", "error_code"),
             "sender_fault": ("invalid_type", "sender_fault"),
         }
@@ -717,9 +717,9 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
     diagnostic, cleanup = cleanup_log.call_args_list
     assert diagnostic.args == ("outbox_sqs_response_invalid",)
     assert diagnostic.kwargs == {
-        "error_reason": "invalid_checksum_format"
+        "error_reason": "invalid_format"
         if case == "bad_checksum"
-        else "unknown_entry_id",
+        else "not_in_request",
         "response_field": "body_checksum" if case == "bad_checksum" else "entry_id",
         "event_ids": [str(envelope.event_id)],
     }
@@ -789,7 +789,7 @@ def test_invalid_response_diagnostic_is_once_per_sent_batch(
         assert isinstance(result.results[index].error, PublishResponseInvalidError)
     cleanup_log.assert_called_once_with(
         "outbox_sqs_response_invalid",
-        error_reason="unknown_entry_id",
+        error_reason="not_in_request",
         response_field="entry_id",
         event_ids=[str(event.event_id) for event in events],
     )

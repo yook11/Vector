@@ -315,7 +315,7 @@ async def test_unsent_requests_fail_after_three_attempts(
         pytest.param(
             service_error("AccessDenied", 503),
             "app.aws.sqs.errors.SqsServiceError",
-            {"reason": "request_rejected", "service_code": "AccessDenied"},
+            {"reason": "access_denied", "service_code": "AccessDenied"},
             id="known-rejection-before-status",
         ),
         pytest.param(
@@ -326,13 +326,13 @@ async def test_unsent_requests_fail_after_three_attempts(
         ),
         pytest.param(
             {},
-            "app.aws.sqs.errors.SqsResponseInvalidError",
-            {"reason": "missing_required_field", "field": "message_id"},
+            "app.aws.sqs.outgoing_message.SqsResponseInvalidError",
+            {"reason": "missing", "field": "message_id"},
             id="missing-response-fields",
         ),
         pytest.param(
             {"MessageId": "id", "MD5OfMessageBody": "0" * 32},
-            "app.aws.sqs.errors.MessageBodyMismatchError",
+            "app.aws.sqs.outgoing_message.MessageBodyMismatchError",
             None,
             id="body-mismatch",
         ),
