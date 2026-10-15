@@ -10,8 +10,7 @@ from botocore.config import Config
 from botocore.session import Session
 
 from app.aws.sqs.errors import (
-    MessageSendError,
-    SqsSendFailureKind,
+    MessageSendConfigurationError,
     to_message_send_error,
 )
 from app.aws.sqs.outgoing_message import OutgoingSqsMessage
@@ -83,7 +82,7 @@ async def open_sqs_message_sender(
 ) -> AsyncIterator[SqsMessageSender]:
     """1回の送信処理で使うクライアントを取得し、キャンセル時も回収する。"""
     if not queue_url.strip():
-        raise MessageSendError(SqsSendFailureKind.CONFIGURATION)
+        raise MessageSendConfigurationError()
     task = asyncio.create_task(asyncio.to_thread(client_factory))
     try:
         client = await asyncio.shield(task)

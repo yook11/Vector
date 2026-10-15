@@ -6,8 +6,12 @@ from uuid import UUID
 from botocore.client import BaseClient
 from botocore.session import Session
 
+from app.aws.sqs.errors import SqsResponseInvalidError
+from app.aws.sqs.outgoing_message import OutgoingSqsMessageBatch
 from app.outbox.publishing.errors import (
     PublishError,
+    PublishIntegrityError,
+    PublishIntegrityReason,
     PublishPhase,
 )
 from app.outbox.publishing.publisher import (
@@ -16,15 +20,14 @@ from app.outbox.publishing.publisher import (
     PublishSucceeded,
 )
 from app.outbox.publishing.route import EventMessage
-from app.outbox.sqs.batch_response import results_from_sqs_batch_response
 from app.outbox.sqs.client import create_sqs_client
 from app.outbox.sqs.error_mapping import (
     publish_cleanup_error_from_exception,
     publish_error_from_exception,
+    publish_error_from_sqs_entry,
 )
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.message_batch import SqsMessageBatch
-from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
 
 
 def failed_results(
@@ -35,7 +38,7 @@ def failed_results(
     """指定された送信対象に、分類済みの失敗を結び付ける。"""
     return {
         message.event_id: PublishFailed(message.event_id, error)
-        for message in batch.messages
+        for message in batch.sendable
     }
 
 
@@ -73,7 +76,7 @@ class SqsSender:
             raise ValueError("queue URL must not be blank")
         batch = SqsMessageBatch(messages)
         failures.extend(batch.failures)
-        if batch.messages:
+        if batch.outgoing is not None:
             try:
                 client = self._client_factory()
             except Exception as exc:
@@ -81,7 +84,9 @@ class SqsSender:
                 failures.extend(failed_results(batch, error=error).values())
             else:
                 try:
-                    sent_results = self._send_messages(client, batch, queue_url)
+                    sent_results = self._send_messages(
+                        client, batch, batch.outgoing, queue_url
+                    )
                 finally:
                     try:
                         client.close()
@@ -106,28 +111,50 @@ class SqsSender:
         )
 
     def _send_messages(
-        self, client: BaseClient, batch: SqsMessageBatch, queue_url: str
+        self,
+        client: BaseClient,
+        batch: SqsMessageBatch,
+        outgoing: OutgoingSqsMessageBatch,
+        queue_url: str,
     ) -> Mapping[UUID, PublishSucceeded | PublishFailed]:
         """送信全体の失敗と応答内の個別結果を、それぞれの対象に反映する。"""
         try:
             response = client.send_message_batch(
-                QueueUrl=queue_url,
-                Entries=[
-                    {"Id": str(message.event_id), "MessageBody": message.body}
-                    for message in batch.messages
-                ],
+                QueueUrl=queue_url, Entries=outgoing.entries()
             )
         except Exception as exc:
             error = publish_error_from_exception(exc, phase=PublishPhase.SEND)
             return failed_results(batch, error=error)
 
         try:
-            return results_from_sqs_batch_response(response, batch=batch)
+            sent = outgoing.read(response)
+            results: dict[UUID, PublishSucceeded | PublishFailed] = {}
+            for message in batch.sendable:
+                entry_id = str(message.event_id)
+                if entry_id in sent.rejected_codes:
+                    results[message.event_id] = PublishFailed(
+                        message.event_id,
+                        publish_error_from_sqs_entry(
+                            code=sent.rejected_codes[entry_id],
+                            request_id=sent.request_id,
+                        ),
+                    )
+                elif entry_id in sent.body_mismatched:
+                    results[message.event_id] = PublishFailed(
+                        message.event_id,
+                        PublishIntegrityError(
+                            reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH,
+                            request_id=sent.request_id,
+                        ),
+                    )
+                else:
+                    results[message.event_id] = PublishSucceeded(message.event_id)
+            return results
         except Exception as exc:
-            if isinstance(exc, InvalidSqsBatchResponse):
+            if isinstance(exc, SqsResponseInvalidError):
                 self._failure_handler.handle_invalid_response(
                     error=exc,
-                    event_ids=tuple(message.event_id for message in batch.messages),
+                    event_ids=tuple(message.event_id for message in batch.sendable),
                 )
             error = publish_error_from_exception(exc, phase=PublishPhase.SEND)
             return failed_results(batch, error=error)

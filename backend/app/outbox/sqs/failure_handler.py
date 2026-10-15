@@ -2,8 +2,8 @@ from uuid import UUID
 
 import structlog
 
+from app.aws.sqs.errors import SqsResponseInvalidError
 from app.outbox.publishing.errors import PublishCleanupError
-from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
 
 logger = structlog.get_logger(__name__)
 
@@ -12,7 +12,7 @@ class SqsPublishFailureHandler:
     """SQS送信の診断を記録し、通常の出力障害を送信結果へ戻さない。"""
 
     def handle_invalid_response(
-        self, *, error: InvalidSqsBatchResponse, event_ids: tuple[UUID, ...]
+        self, *, error: SqsResponseInvalidError, event_ids: tuple[UUID, ...]
     ) -> None:
         try:
             logger.warning(

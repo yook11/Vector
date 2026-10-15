@@ -20,7 +20,6 @@ from app.outbox.publishing.publisher import (
     EventEnvelope,
 )
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
-from app.outbox.sqs.message import SqsMessage
 from tests.outbox.routing_support import (
     make_embedding_publisher,
 )
@@ -128,7 +127,7 @@ def test_input_count_is_checked_before_excluding_invalid_events(envelope, monkey
     events = [replace(envelope, event_id=UUID(int=index)) for index in range(11)]
     events[0] = replace(events[0], event_type="unsupported")
     prepare = Mock(side_effect=AssertionError("preparation must not run"))
-    monkeypatch.setattr(SqsMessage, "from_message", prepare)
+    monkeypatch.setattr("app.outbox.sqs.message_batch.OutgoingSqsMessage", prepare)
     sender, _, factory = _sender()
     with pytest.raises(ValueError):
         sender.publish_batch(events)

@@ -16,6 +16,11 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
+from app.aws.sqs.errors import (
+    SqsResponseField,
+    SqsResponseInvalidError,
+    SqsResponseInvalidReason,
+)
 from app.http.failure import HttpTransportFailureReason, HttpTransportStage
 from app.outbox.publishing.errors import (
     PublishCleanupError,
@@ -24,7 +29,6 @@ from app.outbox.publishing.errors import (
     PublishError,
     PublishPhase,
     PublishResponseInvalidError,
-    PublishResponseInvalidReason,
     PublishServiceError,
     PublishServiceReason,
     PublishTransportError,
@@ -37,7 +41,6 @@ from app.outbox.sqs.error_mapping import (
     publish_error_from_exception,
     publish_error_from_sqs_entry,
 )
-from app.outbox.sqs.response_errors import SqsResponseField
 
 CASES = [
     ("throttled", "RequestThrottled KmsThrottled ThrottlingException"),
@@ -407,17 +410,19 @@ def test_classifier_process_exit_is_not_converted(monkeypatch):
     assert caught.value is exit_error
 
 
-@pytest.mark.parametrize("reason", list(PublishResponseInvalidReason))
-def test_response_violation_keeps_sqs_field_only_in_cause(reason):
-    """検出済みの応答違反を想定外へ落とさず、共通契約と原因を保持する。"""
-    from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
+def _response_invalid():
+    return SqsResponseInvalidError(
+        reason=SqsResponseInvalidReason.UNKNOWN_ENTRY_ID,
+        field=SqsResponseField.ENTRY_ID,
+    )
 
-    original = InvalidSqsBatchResponse(reason=reason, field=SqsResponseField.ENTRY_ID)
+
+def test_response_violation_keeps_sqs_detail_only_in_cause():
+    """検出済みの応答違反を想定外へ落とさず、SQSの不正箇所は原因の例外にだけ残す。"""
+    original = _response_invalid()
     error = publish_error_from_exception(original, phase=PublishPhase.SEND)
     assert isinstance(error, PublishResponseInvalidError)
-    assert error.reason is reason
-    assert not hasattr(error, "field")
-    assert original.field is SqsResponseField.ENTRY_ID
+    assert vars(error) == {}
     assert error.__cause__ is original
     assert publish_error_from_exception(error, phase=PublishPhase.SEND) is error
 
@@ -427,12 +432,7 @@ def test_response_violation_keeps_sqs_field_only_in_cause(reason):
 )
 def test_response_violation_outside_send_remains_unexpected(phase):
     """送信以外の境界で発生した応答違反を送信先の応答として解釈しない。"""
-    from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
-
-    original = InvalidSqsBatchResponse(
-        reason=PublishResponseInvalidReason.INVALID_TYPE,
-        field=SqsResponseField.RESPONSE,
-    )
+    original = _response_invalid()
     error = publish_error_from_exception(original, phase=phase)
     assert isinstance(error, PublishUnexpectedError)
     assert error.phase is phase
@@ -440,13 +440,8 @@ def test_response_violation_outside_send_remains_unexpected(phase):
 
 
 def test_response_violation_mapping_failure_retains_original(monkeypatch):
-    """応答違反の変換自体が失敗しても、元の理由と分類例外型を失わない。"""
-    from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
-
-    original = InvalidSqsBatchResponse(
-        reason=PublishResponseInvalidReason.INVALID_TYPE,
-        field=SqsResponseField.RESPONSE,
-    )
+    """応答違反の変換自体が失敗しても、元の例外と分類例外型を失わない。"""
+    original = _response_invalid()
     monkeypatch.setattr(
         mapping,
         "PublishResponseInvalidError",
@@ -456,10 +451,6 @@ def test_response_violation_mapping_failure_retains_original(monkeypatch):
     assert isinstance(error, PublishUnexpectedError)
     assert error.phase is PublishPhase.CLASSIFY_FAILURE
     assert error.classification_exception_type == "builtins.RuntimeError"
-    assert (
-        error.original_exception_type
-        == "app.outbox.sqs.response_errors.InvalidSqsBatchResponse"
-    )
+    assert error.original_exception_type == "app.aws.sqs.errors.SqsResponseInvalidError"
     assert error.__cause__ is original
-    assert original.reason is PublishResponseInvalidReason.INVALID_TYPE
     assert "PRIVATE" not in str(error)

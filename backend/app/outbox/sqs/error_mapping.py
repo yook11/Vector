@@ -8,6 +8,7 @@ from botocore.exceptions import (
     PartialCredentialsError,
 )
 
+from app.aws.sqs.errors import SqsResponseInvalidError
 from app.http.failure import classify_botocore
 from app.outbox.publishing.errors import (
     PublishCleanupError,
@@ -21,7 +22,6 @@ from app.outbox.publishing.errors import (
     PublishTransportError,
     PublishUnexpectedError,
 )
-from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
 
 _SERVICE_CODES = {
     PublishServiceReason.THROTTLED: (
@@ -196,8 +196,8 @@ def _classify_exception(exc: Exception, *, phase: PublishPhase) -> PublishError 
     elif phase is PublishPhase.INITIALIZE:
         return _configuration_error_from_sdk_exception(exc)
     elif phase is PublishPhase.SEND:
-        if isinstance(exc, InvalidSqsBatchResponse):
-            return PublishResponseInvalidError(reason=exc.reason)
+        if isinstance(exc, SqsResponseInvalidError):
+            return PublishResponseInvalidError()
         return _publish_error_from_sqs_exception(exc)
     return None
 

@@ -37,7 +37,6 @@ from app.outbox.publishing.errors import (
     PublishIntegrityReason,
     PublishPhase,
     PublishResponseInvalidError,
-    PublishResponseInvalidReason,
     PublishServiceError,
     PublishServiceReason,
     PublishTransportError,
@@ -103,13 +102,7 @@ CASES = [
         )
         for phase in PublishPhase
     ],
-    *[
-        (
-            PublishResponseInvalidError(reason=reason),
-            False,
-        )
-        for reason in PublishResponseInvalidReason
-    ],
+    (PublishResponseInvalidError(), False),
     (PublishError(), False),
     (
         PublishIntegrityError(
@@ -162,7 +155,7 @@ def test_all_reasons_log_stops_and_only_six_reasons_emit_metric(
         assert log["transport_stage"] == error.failure.stage.value
         assert log["transport_reason"] == error.failure.reason.value
     elif isinstance(error, PublishResponseInvalidError):
-        assert log["error_reason"] == error.reason.value
+        assert "error_reason" not in log
         assert "response_field" not in log
         assert "original_exception_type" not in log
     elif isinstance(error, PublishUnexpectedError):
@@ -335,9 +328,7 @@ async def test_handler_composition_records_only_committed_stops(
                 reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH
             )
         elif failure_kind == "response_invalid":
-            error = PublishResponseInvalidError(
-                reason=PublishResponseInvalidReason.MISSING_ENTRY_ID,
-            )
+            error = PublishResponseInvalidError()
         else:
             error = CASES[0][0]
         result = await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
@@ -371,7 +362,7 @@ async def test_handler_composition_records_only_committed_stops(
         assert "自動再試行を停止しました" in stop["error_message"]
     if failure_kind == "response_invalid" and mode == "committed":
         stop = next(log for log in logs if log["event"] == "outbox_delivery_stopped")
-        assert stop["error_reason"] == "missing_entry_id"
+        assert "error_reason" not in stop
         assert "response_field" not in stop
         assert not stop["requires_configuration_fix"]
 

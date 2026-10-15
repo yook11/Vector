@@ -26,7 +26,6 @@ from app.outbox.publishing.errors import (
     PublishEventInvalidReason,
     PublishPhase,
     PublishResponseInvalidError,
-    PublishResponseInvalidReason,
     PublishServiceError,
     PublishServiceReason,
     PublishTransportError,
@@ -294,11 +293,10 @@ def test_integrity_failure_stops_without_reinterpreting_request_id(attempt):
     assert vars(error) == before
 
 
-@pytest.mark.parametrize("reason", list(PublishResponseInvalidReason))
 @pytest.mark.parametrize("attempt", [1, 5, 6])
-def test_response_invalid_stops_without_retry_limit_reclassification(reason, attempt):
+def test_response_invalid_stops_without_retry_limit_reclassification(attempt):
     """受付の成否を確認できない応答違反は、回数によらず明示的に停止する。"""
-    error = PublishResponseInvalidError(reason=reason)
+    error = PublishResponseInvalidError()
     assert decide_publish_retry(
         error, attempt_count=attempt, jitter=0.5
     ) == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
