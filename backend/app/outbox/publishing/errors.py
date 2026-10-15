@@ -44,18 +44,6 @@ class PublishIntegrityReason(StrEnum):
     BODY_CHECKSUM_MISMATCH = "body_checksum_mismatch"
 
 
-class PublishResponseInvalidReason(StrEnum):
-    """応答の形式または送信対象との対応を確認できない理由。"""
-
-    INVALID_TYPE = "invalid_type"
-    MISSING_REQUIRED_FIELD = "missing_required_field"
-    EMPTY_REQUIRED_FIELD = "empty_required_field"
-    INVALID_CHECKSUM_FORMAT = "invalid_checksum_format"
-    UNKNOWN_ENTRY_ID = "unknown_entry_id"
-    DUPLICATE_ENTRY_ID = "duplicate_entry_id"
-    MISSING_ENTRY_ID = "missing_entry_id"
-
-
 class PublishServiceReason(StrEnum):
     """送信先の応答から分かる、実装に依存しない失敗理由。"""
 
@@ -164,10 +152,6 @@ class PublishResponseInvalidError(PublishError):
     """応答を検証できない失敗で、送信先が未受付とは断定しない。"""
 
     CODE: ClassVar[str] = "publish_response_invalid"
-
-    def __init__(self, *, reason: PublishResponseInvalidReason) -> None:
-        super().__init__()
-        self.reason = reason
 
 
 class PublishUnexpectedError(PublishError):

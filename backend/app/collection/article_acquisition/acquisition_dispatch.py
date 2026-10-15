@@ -11,6 +11,7 @@ from app.aws.sqs.errors import MessageSendError
 from app.aws.sqs.message_sender import SqsMessageSender
 from app.collection.article_acquisition.acquisition_retry import (
     MAX_ACQUISITION_SEND_ATTEMPTS,
+    is_transient_send_failure,
     should_retry_acquisition_send,
 )
 from app.collection.sources.acquisition_request import (
@@ -91,7 +92,11 @@ class SourceAcquisitionDispatcher:
             logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
             for failure in failures:
                 # 再試行してよい失敗を回数で諦めただけなら想定内として warning にする。
-                (logger.warning if failure.error.retryable else logger.error)(
+                (
+                    logger.warning
+                    if is_transient_send_failure(failure.error)
+                    else logger.error
+                )(
                     "source_acquisition_send_failed",
                     acquisition_request_id=failure.request.request_id,
                     source_id=failure.request.source_id,
@@ -102,7 +107,7 @@ class SourceAcquisitionDispatcher:
                 target_count=target_count,
                 failed_count=len(failures),
                 requires_investigation=any(
-                    not failure.error.retryable for failure in failures
+                    not is_transient_send_failure(failure.error) for failure in failures
                 ),
             )
         return target_count

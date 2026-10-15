@@ -15,7 +15,6 @@ from app.outbox.publishing.errors import (
     PublishEventInvalidError,
     PublishEventInvalidReason,
     PublishResponseInvalidError,
-    PublishResponseInvalidReason,
     PublishServiceError,
     PublishServiceReason,
     PublishTransportError,
@@ -192,46 +191,44 @@ def test_integrity_error_keeps_fixed_message_as_attribute():
     assert marker not in repr(error)
 
 
-@pytest.mark.parametrize("reason", list(PublishResponseInvalidReason))
-def test_response_invalid_error_exposes_only_fixed_diagnostics(reason):
-    """共通の違反理由だけを公開し、SQSの項目や原因文面を表示しない。"""
-    error = PublishResponseInvalidError(reason=reason)
+def test_response_invalid_error_exposes_only_fixed_diagnostics():
+    """固定のコードだけを公開し、SQSの不正箇所や原因文面を表示しない。"""
+    error = PublishResponseInvalidError()
     error.__cause__ = ValueError("PRIVATE_BODY_QUEUE_CREDENTIAL")
     assert isinstance(error, PublishError)
     assert error.CODE == "publish_response_invalid"
-    assert vars(error) == {"reason": reason}
+    assert vars(error) == {}
     assert error.args == ()
     assert "PRIVATE" not in str(error)
     assert "PRIVATE" not in repr(error)
 
 
-def test_response_invalid_keeps_reason_without_raw_values_at_logfire_export(capfire):
+def test_response_invalid_keeps_detail_without_raw_values_at_logfire_export(capfire):
     """応答違反を共通例外へ変換した後も、Logfireへ応答の自由文を渡さない。"""
     import logfire
 
+    from app.aws.sqs.errors import SqsResponseInvalidError
+    from app.aws.sqs.outgoing_message import OutgoingSqsMessage
     from app.logfire.redaction import install_exception_redaction
     from app.outbox.publishing.errors import PublishPhase
-    from app.outbox.sqs.batch_response import decode_sqs_batch_response
     from app.outbox.sqs.error_mapping import publish_error_from_exception
-    from app.outbox.sqs.response_errors import InvalidSqsBatchResponse, SqsResponseField
 
     install_exception_redaction()
     marker = "PRIVATE_BODY_QUEUE_CREDENTIAL"
     with pytest.raises(PublishResponseInvalidError) as caught:
         with logfire.span("publish_response_invalid_test"):
             try:
-                decode_sqs_batch_response(
-                    {"Successful": [{"MD5OfMessageBody": marker}]}
+                OutgoingSqsMessage("{}").verify(
+                    {"MessageId": "id", "MD5OfMessageBody": marker}
                 )
-            except InvalidSqsBatchResponse as exc:
+            except SqsResponseInvalidError as exc:
                 raise publish_error_from_exception(
                     exc, phase=PublishPhase.SEND
                 ) from exc
-    assert caught.value.reason is PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT
-    assert not hasattr(caught.value, "field")
-    assert vars(caught.value.__cause__) == {
-        "reason": PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT,
-        "field": SqsResponseField.BODY_CHECKSUM,
+    assert vars(caught.value) == {}
+    assert caught.value.__cause__.details == {
+        "reason": "invalid_checksum_format",
+        "field": "body_checksum",
     }
     spans = capfire.exporter.exported_spans
     assert spans

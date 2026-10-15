@@ -14,6 +14,7 @@ from botocore.credentials import ReadOnlyCredentials
 from botocore.exceptions import ClientError, HTTPClientError, ReadTimeoutError
 from botocore.stub import Stubber
 
+from app.aws.sqs.errors import SqsResponseInvalidError
 from app.outbox.publishing.errors import (
     PublishCleanupError,
     PublishConfigurationError,
@@ -37,9 +38,7 @@ from app.outbox.sqs import failure_handler as failure_handler_module
 from app.outbox.sqs import publisher as publisher_module
 from app.outbox.sqs.error_mapping import SqsBatchEntryError
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
-from app.outbox.sqs.message import SqsMessage
 from app.outbox.sqs.publisher import SqsSender
-from app.outbox.sqs.response_errors import InvalidSqsBatchResponse
 
 QUEUE_URL = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/article-embedding"
 
@@ -101,8 +100,7 @@ def _sender(*, response=None, error=None, close_error=None):
 @pytest.fixture
 def small_message_limit(monkeypatch):
     """短い本文で個別・合計サイズの境界へ到達できる上限を使う。"""
-    monkeypatch.setattr("app.outbox.sqs.message.MAX_MESSAGE_BYTES", LIMIT)
-    monkeypatch.setattr("app.outbox.sqs.message_batch.MAX_MESSAGE_BYTES", LIMIT)
+    monkeypatch.setattr("app.aws.sqs.outgoing_message.MAX_MESSAGE_BYTES", LIMIT)
 
 
 def _sized(envelope, size):
@@ -399,14 +397,10 @@ def test_malformed_response_invalidates_all_sent_results(envelope, case):
             "code": ("invalid_type", "error_code"),
             "sender_fault": ("invalid_type", "sender_fault"),
         }
-        assert (
-            outcome.error.reason.value,
-            outcome.error.__cause__.field.value,
-        ) == expected[case]
-        assert isinstance(outcome.error.__cause__, InvalidSqsBatchResponse)
-        assert outcome.error.__cause__.reason is outcome.error.reason
-        assert not hasattr(outcome.error, "field")
-        assert outcome.error.__cause__.args == ()
+        cause = outcome.error.__cause__
+        assert isinstance(cause, SqsResponseInvalidError)
+        assert (cause.reason.value, cause.field.value) == expected[case]
+        assert vars(outcome.error) == {}
     client.close.assert_called_once()
 
 
@@ -506,7 +500,9 @@ def test_preparation_unexpected_failure_is_local(envelope, monkeypatch):
     """本文の送信準備で発生した想定外例外を個別失敗にする。"""
     sender, _, factory = _sender()
     exc = RuntimeError("private")
-    monkeypatch.setattr(SqsMessage, "from_message", Mock(side_effect=exc))
+    monkeypatch.setattr(
+        "app.outbox.sqs.message_batch.OutgoingSqsMessage", Mock(side_effect=exc)
+    )
     error = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results[0].error
     assert error.phase is PublishPhase.PREPARE_EVENT
     assert error.__cause__ is exc
@@ -643,7 +639,7 @@ def test_checksum_calculation_failure_is_local_before_send(
     hash_call = Mock(
         side_effect=[exc, md5(_body(second).encode("utf-8"), usedforsecurity=False)]
     )
-    monkeypatch.setattr("app.outbox.sqs.message.md5", hash_call)
+    monkeypatch.setattr("app.aws.sqs.outgoing_message.md5", hash_call)
     sender, client, factory = _sender(response={"Successful": [_success(second)]})
     result = sender.send_batch(
         queue_url=QUEUE_URL,
@@ -707,8 +703,6 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
     envelope, case, cleanup_log
 ):
     """応答違反を全送信対象へ反映し、送信前の不正と終了失敗を上書きしない。"""
-    from app.outbox.publishing.errors import PublishResponseInvalidReason
-
     marker = "PRIVATE_BODY_QUEUE_CREDENTIAL"
     invalid = replace(envelope, event_id=UUID(int=2), body="x" * (1024 * 1024 + 1))
     entry = _success(envelope)
@@ -719,16 +713,13 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
     assert isinstance(result.results[0].error, PublishEventInvalidError)
     error = result.results[1].error
     assert isinstance(error, PublishResponseInvalidError)
-    assert error.reason is (
-        PublishResponseInvalidReason.INVALID_CHECKSUM_FORMAT
-        if case == "bad_checksum"
-        else PublishResponseInvalidReason.UNKNOWN_ENTRY_ID
-    )
     assert cleanup_log.call_count == 2
     diagnostic, cleanup = cleanup_log.call_args_list
     assert diagnostic.args == ("outbox_sqs_response_invalid",)
     assert diagnostic.kwargs == {
-        "error_reason": error.reason.value,
+        "error_reason": "invalid_checksum_format"
+        if case == "bad_checksum"
+        else "unknown_entry_id",
         "response_field": "body_checksum" if case == "bad_checksum" else "entry_id",
         "event_ids": [str(envelope.event_id)],
     }
@@ -796,7 +787,6 @@ def test_invalid_response_diagnostic_is_once_per_sent_batch(
     assert isinstance(result.results[1].error, PublishEventInvalidError)
     for index in (0, 2):
         assert isinstance(result.results[index].error, PublishResponseInvalidError)
-        assert result.results[index].error.reason.value == "unknown_entry_id"
     cleanup_log.assert_called_once_with(
         "outbox_sqs_response_invalid",
         error_reason="unknown_entry_id",
@@ -858,7 +848,7 @@ def test_publisher_passes_diagnostics_to_injected_failure_handler(envelope):
     handler.handle_invalid_response.assert_called_once()
     diagnostic = handler.handle_invalid_response.call_args.kwargs
     assert diagnostic["event_ids"] == (envelope.event_id,)
-    assert isinstance(diagnostic["error"], InvalidSqsBatchResponse)
+    assert isinstance(diagnostic["error"], SqsResponseInvalidError)
     handler.handle_cleanup_failure.assert_called_once()
     cleanup = handler.handle_cleanup_failure.call_args.args[0]
     assert isinstance(cleanup, PublishCleanupError)

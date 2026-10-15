@@ -310,26 +310,41 @@ async def test_unsent_requests_fail_after_three_attempts(
 
 
 @pytest.mark.parametrize(
-    "failure, expected_kind",
+    "failure, expected_class, expected_details",
     [
         pytest.param(
             service_error("AccessDenied", 503),
-            "request_rejected",
+            "app.aws.sqs.errors.SqsServiceError",
+            {"reason": "request_rejected", "service_code": "AccessDenied"},
             id="known-rejection-before-status",
         ),
         pytest.param(
-            service_error("NewServiceError"), "unknown_service_error", id="unknown-code"
+            service_error("NewServiceError"),
+            "app.aws.sqs.errors.SqsServiceError",
+            {"reason": "unknown", "service_code": "NewServiceError"},
+            id="unknown-code",
         ),
-        pytest.param({}, "invalid_response", id="missing-response-fields"),
+        pytest.param(
+            {},
+            "app.aws.sqs.errors.SqsResponseInvalidError",
+            {"reason": "missing_required_field", "field": "message_id"},
+            id="missing-response-fields",
+        ),
         pytest.param(
             {"MessageId": "id", "MD5OfMessageBody": "0" * 32},
-            "body_mismatch",
+            "app.aws.sqs.errors.MessageBodyMismatchError",
+            None,
             id="body-mismatch",
         ),
     ],
 )
 async def test_non_retryable_failure_does_not_stop_other_sources(
-    acquisition_sources, start_dispatch, read_logs, failure, expected_kind
+    acquisition_sources,
+    start_dispatch,
+    read_logs,
+    failure,
+    expected_class,
+    expected_details,
 ):
     """再送しない失敗が残っても他の依頼は完了し、最後に投入失敗にする。"""
     sources = acquisition_sources
@@ -363,6 +378,9 @@ async def test_non_retryable_failure_does_not_stop_other_sources(
         == expected_request(sources.high)["request_id"]
     )
     assert failures[0]["attempts"] == 1
-    assert failures[0]["error_details"]["failure_kind"] == expected_kind
+    assert (failures[0]["error_class"], failures[0].get("error_details")) == (
+        expected_class,
+        expected_details,
+    )
     assert "private-sdk-message" not in output
     assert QUEUE_URL not in output

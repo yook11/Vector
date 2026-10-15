@@ -12,7 +12,6 @@ from app.outbox.publishing.errors import (
     PublishError,
     PublishEventInvalidError,
     PublishIntegrityError,
-    PublishResponseInvalidError,
     PublishServiceError,
     PublishServiceReason,
     PublishTransportError,
@@ -74,8 +73,6 @@ def record_publish_failure(
             error,
             PublishConfigurationError | PublishServiceError | PublishEventInvalidError,
         ):
-            fields["error_reason"] = error.reason.value
-        elif isinstance(error, PublishResponseInvalidError):
             fields["error_reason"] = error.reason.value
         elif isinstance(error, PublishIntegrityError):
             fields.update(
