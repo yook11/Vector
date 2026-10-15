@@ -37,8 +37,8 @@ class SqsResponseInvalidReason(StrEnum):
     EMPTY = "empty"
     INVALID_FORMAT = "invalid_format"
     # 送ったIDとの対応の違反で、項目は常にentry_idになる。
-    UNKNOWN = "unknown"
-    DUPLICATED = "duplicated"
+    NOT_IN_REQUEST = "not_in_request"
+    DUPLICATE = "duplicate"
     NOT_RETURNED = "not_returned"
 
 
@@ -224,12 +224,12 @@ class OutgoingSqsMessageBatch:
         entry_id = _required_string(entry, "Id", SqsResponseField.ENTRY_ID)
         if entry_id not in self.messages:
             raise SqsResponseInvalidError(
-                reason=SqsResponseInvalidReason.UNKNOWN,
+                reason=SqsResponseInvalidReason.NOT_IN_REQUEST,
                 field=SqsResponseField.ENTRY_ID,
             )
         if entry_id in seen:
             raise SqsResponseInvalidError(
-                reason=SqsResponseInvalidReason.DUPLICATED,
+                reason=SqsResponseInvalidReason.DUPLICATE,
                 field=SqsResponseField.ENTRY_ID,
             )
         seen.add(entry_id)
