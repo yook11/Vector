@@ -63,11 +63,9 @@ def test_message_derives_md5_from_exact_body(body, expected_md5):
         OutgoingSqsMessage(body=body, body_md5=expected_md5)  # type: ignore[call-arg]
 
 
-def test_message_hides_body_and_cannot_be_changed():
-    """本文と照合値を表示に出さず、作った後に書き換えられない。"""
-    message = OutgoingSqsMessage("PRIVATE_BODY")
-    assert "PRIVATE_BODY" not in repr(message)
-    assert message.body_md5 not in repr(message)
+def test_message_cannot_be_changed():
+    """作った後に送信本文を書き換えられない。"""
+    message = OutgoingSqsMessage("{}")
     with pytest.raises(FrozenInstanceError):
         message.body = "changed"  # type: ignore[misc]
 
@@ -241,17 +239,9 @@ def test_read_rejects_malformed_response_as_a_whole(response, field, reason):
     assert caught.value.details == {"reason": reason, "field": field}
 
 
-def test_read_does_not_expose_external_strings():
-    """拒否コードやRequestIdなど外部由来の文字列を、結果や例外の表示に出さない。"""
+def test_read_does_not_include_unknown_entry_id_in_error():
+    """送信していないIDが応答に含まれても、検証例外に入力値を含めない。"""
     marker = "PRIVATE_PAYLOAD_QUEUE_CREDENTIAL"
-    result = _batch("a", "b").read(
-        {
-            "Successful": [{**_success(), "MessageId": marker, "extra": marker}],
-            "Failed": [{**_failure("b", marker), "Message": marker}],
-            "ResponseMetadata": {"RequestId": marker},
-        }
-    )
-    assert marker not in repr(result)
     with pytest.raises(SqsResponseInvalidError) as caught:
         _batch("a").read({"Successful": [_success(marker)]})
     assert marker not in str(caught.value)

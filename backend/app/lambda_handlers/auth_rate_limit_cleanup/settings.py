@@ -15,7 +15,6 @@ class AuthRateLimitCleanupSettings(DatabaseConnectionSettings):
     model_config = SettingsConfigDict(env_file=None, hide_input_in_errors=True)
 
     env: Literal["production", "test"] = "production"
-    database_url: str = Field(repr=False)
     db_iam_auth: bool = True
     aws_region: str = Field(min_length=1)
 

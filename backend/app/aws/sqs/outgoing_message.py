@@ -93,8 +93,8 @@ def _required_string(
 class OutgoingSqsMessage:
     """送る本文から期待するMD5を確定し、SQSが受け付けたと返した項目がその本文かを照合する。"""
 
-    body: str = field(repr=False)
-    body_md5: str = field(init=False, repr=False)
+    body: str
+    body_md5: str = field(init=False)
 
     def __post_init__(self) -> None:
         encoded = self.body.encode("utf-8")
@@ -128,8 +128,8 @@ class SqsBatchSendResult:
     """送ったIDごとの結果で、どちらにも含まれないIDはSQSが本文どおりに受け付けた。"""
 
     body_mismatched: frozenset[str]
-    rejected_codes: Mapping[str, str] = field(repr=False)
-    request_id: str | None = field(repr=False)
+    rejected_codes: Mapping[str, str]
+    request_id: str | None
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,7 +15,6 @@ class CompletionConsumerSettings(DatabaseConnectionSettings):
 
     env: Literal["development", "test", "production"] = "production"
     aws_region: str = Field(min_length=1)
-    database_url: str = Field(repr=False)
     db_iam_auth: bool = True
     sqs_article_completion_queue_url: str = Field(min_length=1)
 

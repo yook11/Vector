@@ -68,7 +68,7 @@ class ReceivedMessage:
     """IDで1件を特定できる受信メッセージで、本文と受信ハンドルは使うときに検証する。"""
 
     message_id: str
-    body: object = field(repr=False)
+    body: object
     body_present: bool = True
     receipt_handle: object = field(default=None, repr=False)
     receipt_handle_present: bool = False

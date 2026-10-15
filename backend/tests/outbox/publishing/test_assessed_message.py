@@ -38,7 +38,6 @@ def test_builder_keeps_exact_existing_json_and_event_id(envelope):
         '"payload": {"curation_id": 123, "analyzed_article_id": 456}}'
     )
     assert build_assessed_in_scope_message(envelope) == message
-    assert message.body not in repr(message)
 
 
 @pytest.fixture

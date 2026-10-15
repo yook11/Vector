@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
@@ -51,7 +51,7 @@ class PublishFailed:
     """イベント単位の送信失敗で、再試行や停止の判断は含めない。"""
 
     event_id: UUID
-    error: PublishError = field(repr=False)
+    error: PublishError
 
     def __post_init__(self) -> None:
         if not isinstance(self.event_id, UUID):

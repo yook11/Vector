@@ -77,9 +77,8 @@ def test_all_oversized_messages_leave_nothing_to_send(monkeypatch):
     assert (batch.sendable, batch.outgoing) == ((), None)
 
 
-def test_batch_is_immutable_and_hides_body():
-    """本文を表示に漏らさず、構築後のバッチを書き換えられない。"""
-    batch = SqsMessageBatch([message(body="PRIVATE")])
-    assert "PRIVATE" not in repr(batch)
+def test_batch_is_immutable():
+    """構築後のバッチを書き換えられない。"""
+    batch = SqsMessageBatch([message()])
     with pytest.raises(FrozenInstanceError):
         batch.sendable = ()
