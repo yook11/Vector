@@ -1,6 +1,4 @@
-"""IP判定の結果(公開・非公開・IPではない)と、公開IPの値型の表記・同一性・不変性を検証する。"""
-
-import ipaddress
+"""実DB・外部通信なしでIP判定と、公開IPの値型の表記・同一性・不変性を検証する。"""
 
 import pytest
 
@@ -15,11 +13,10 @@ from app.http.destination_policy import (
 def _prohibited_range_boundary_cases():
     """JSONに列挙された範囲から両端の入力を作り、単一アドレスは一度だけ検証する。"""
     cases = []
-    for cidr in (*NON_PUBLIC_RANGES.v4, *NON_PUBLIC_RANGES.v6):
-        network = ipaddress.ip_network(cidr)
-        cases.append(pytest.param(str(network[0]), id=f"{cidr}:start"))
+    for network in (*NON_PUBLIC_RANGES.v4, *NON_PUBLIC_RANGES.v6):
+        cases.append(pytest.param(str(network[0]), id=f"{network}:start"))
         if network.num_addresses > 1:
-            cases.append(pytest.param(str(network[-1]), id=f"{cidr}:end"))
+            cases.append(pytest.param(str(network[-1]), id=f"{network}:end"))
     return cases
 
 
