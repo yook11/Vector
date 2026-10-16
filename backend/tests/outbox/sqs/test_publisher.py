@@ -14,6 +14,7 @@ from botocore.credentials import ReadOnlyCredentials
 from botocore.exceptions import ClientError, HTTPClientError, ReadTimeoutError
 from botocore.stub import Stubber
 
+from app.aws.sqs.errors import SqsServiceError
 from app.aws.sqs.outgoing_message import SqsResponseInvalidError
 from app.outbox.publishing.errors import (
     PublishCleanupError,
@@ -36,7 +37,6 @@ from app.outbox.publishing.publisher import (
 from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs import failure_handler as failure_handler_module
 from app.outbox.sqs import publisher as publisher_module
-from app.outbox.sqs.error_mapping import SqsBatchEntryError
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.publisher import SqsSender
 
@@ -148,8 +148,8 @@ def test_batch_success_preserves_body_and_input_order_on_resend(envelope, count)
     assert events == original
 
 
-def test_partial_failure_keeps_success_and_batch_request_id(envelope):
-    """HTTP 200の部分失敗に個別statusを捏造せず、request IDだけを引き継ぐ。"""
+def test_partial_failure_keeps_success_without_entry_diagnostics(envelope):
+    """HTTP 200の部分失敗に、項目にないstatusやまとめ全体のRequestIdを付けない。"""
     second = replace(envelope, event_id=UUID(int=2))
     sender, client, _ = _sender(
         response={
@@ -164,7 +164,7 @@ def test_partial_failure_keeps_success_and_batch_request_id(envelope):
     assert isinstance(failed.error, PublishServiceError)
     assert failed.error.reason is PublishServiceReason.ACCESS_DENIED
     assert failed.error.status_code is None
-    assert failed.error.request_id == "request-id"
+    assert failed.error.request_id is None
     assert succeeded == PublishSucceeded(second.event_id)
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
@@ -301,16 +301,14 @@ def test_whole_request_classifier_failure_keeps_both_types(envelope, monkeypatch
 
 def test_entry_classifier_failure_preserves_other_results(envelope, monkeypatch):
     """応答対応付けの完了後は、個別の分類障害を該当イベントに限定する。"""
-    from app.outbox.sqs.error_mapping import _service_error_from_sqs_code
+    from app.outbox.sqs.error_mapping import _publish_service_error
 
-    def classify(**kwargs):
-        if kwargs["code"] == "Bad":
+    def classify(error, **kwargs):
+        if error.service_code == "Bad":
             raise ValueError("private")
-        return _service_error_from_sqs_code(**kwargs)
+        return _publish_service_error(error, **kwargs)
 
-    monkeypatch.setattr(
-        "app.outbox.sqs.error_mapping._service_error_from_sqs_code", classify
-    )
+    monkeypatch.setattr("app.outbox.sqs.error_mapping._publish_service_error", classify)
     events = [replace(envelope, event_id=UUID(int=i)) for i in [1, 2, 3]]
     sender, _, _ = _sender(
         response={
@@ -325,11 +323,9 @@ def test_entry_classifier_failure_preserves_other_results(envelope, monkeypatch)
     assert result.results[0] == PublishSucceeded(events[0].event_id)
     error = result.results[1].error
     assert error.phase is PublishPhase.CLASSIFY_FAILURE
-    assert isinstance(error.__cause__, SqsBatchEntryError)
-    assert error.__cause__.code == "Bad"
-    assert error.original_exception_type == (
-        "app.outbox.sqs.error_mapping.SqsBatchEntryError"
-    )
+    assert isinstance(error.__cause__, SqsServiceError)
+    assert error.__cause__.service_code == "Bad"
+    assert error.original_exception_type == "app.aws.sqs.errors.SqsServiceError"
     assert error.classification_exception_type == "builtins.ValueError"
     assert result.results[2].error.reason is PublishServiceReason.THROTTLED
 
@@ -687,7 +683,6 @@ def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(
     assert (
         result.results[1].error.reason is PublishIntegrityReason.BODY_CHECKSUM_MISMATCH
     )
-    assert result.results[1].error.request_id == "request-id"
     assert result.results[2].error.reason is PublishServiceReason.THROTTLED
     cleanup_log.assert_called_once_with(
         "outbox_publish_cleanup_failed",

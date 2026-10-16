@@ -138,6 +138,23 @@ _REASON_BY_CODE = {
 }
 
 
+def to_sqs_service_error(
+    code: str | None, *, status_code: int | None = None
+) -> SqsServiceError:
+    """SQSが返したエラーコードを何が起きたかの理由へ翻訳し、形の不正なコードは持たない。"""
+    if code is not None and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", code) is None:
+        code = None
+    reason = _REASON_BY_CODE.get(code) if code is not None else None
+    if reason is None:
+        # 既知のコードはstatusより優先し、未知のコードだけ5xxをSQS側の障害とみなす。
+        reason = (
+            SqsServiceErrorReason.SERVICE_UNAVAILABLE
+            if status_code is not None and 500 <= status_code <= 599
+            else SqsServiceErrorReason.UNKNOWN
+        )
+    return SqsServiceError(reason=reason, service_code=code)
+
+
 def to_message_send_error(exc: Exception) -> MessageSendError:
     """自由文を保持せず、SDK例外を起きたことごとの送信失敗へ変換する。"""
     if isinstance(exc, MessageSendError):
@@ -148,24 +165,13 @@ def to_message_send_error(exc: Exception) -> MessageSendError:
     if isinstance(exc, ClientError) and exc.operation_name == "SendMessage":
         response = exc.response if isinstance(exc.response, dict) else {}
         error = response.get("Error")
-        raw_code = error.get("Code") if isinstance(error, dict) else None
-        code = (
-            raw_code
-            if isinstance(raw_code, str)
-            and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", raw_code)
-            else None
-        )
+        code = error.get("Code") if isinstance(error, dict) else None
         metadata = response.get("ResponseMetadata")
         status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
-        reason = _REASON_BY_CODE.get(code) if code is not None else None
-        if reason is None:
-            # 既知のコードはstatusより優先し、未知のコードだけ5xxをSQS側の障害とみなす。
-            reason = (
-                SqsServiceErrorReason.SERVICE_UNAVAILABLE
-                if type(status) is int and 500 <= status <= 599
-                else SqsServiceErrorReason.UNKNOWN
-            )
-        return SqsServiceError(reason=reason, service_code=code)
+        return to_sqs_service_error(
+            code if isinstance(code, str) else None,
+            status_code=status if type(status) is int else None,
+        )
     transport = classify_botocore(exc)
     if transport is not None:
         return MessageSendTransportError(

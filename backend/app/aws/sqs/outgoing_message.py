@@ -7,7 +7,7 @@ from enum import StrEnum
 from hashlib import md5
 from types import MappingProxyType
 
-from app.aws.sqs.errors import MessageSendError
+from app.aws.sqs.errors import MessageSendError, to_sqs_service_error
 
 # SQSのメッセージ1件と、SendMessageBatch 1回分の本文合計の上限(UTF-8のバイト数)。
 MAX_MESSAGE_BYTES = 1_048_576
@@ -90,6 +90,13 @@ def _required_string(
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptedSqsMessage:
+    """SQSに受け付けられ、SQSが受け取った本文が送った本文と一致したメッセージ。"""
+
+    message_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class OutgoingSqsMessage:
     """送る本文から期待するMD5を確定し、SQSが受け付けたと返した項目がその本文かを照合する。"""
 
@@ -104,13 +111,13 @@ class OutgoingSqsMessage:
             self, "body_md5", md5(encoded, usedforsecurity=False).hexdigest()
         )
 
-    def verify(self, result: object) -> None:
+    def verify(self, result: object) -> AcceptedSqsMessage:
         if not isinstance(result, dict):
             raise SqsResponseInvalidError(
                 reason=SqsResponseInvalidReason.INVALID_TYPE,
                 field=SqsResponseField.RESPONSE,
             )
-        _required_string(result, "MessageId", SqsResponseField.MESSAGE_ID)
+        message_id = _required_string(result, "MessageId", SqsResponseField.MESSAGE_ID)
         checksum = _required_string(
             result, "MD5OfMessageBody", SqsResponseField.BODY_CHECKSUM
         )
@@ -121,15 +128,7 @@ class OutgoingSqsMessage:
             )
         if checksum.lower() != self.body_md5:
             raise MessageBodyMismatchError()
-
-
-@dataclass(frozen=True, slots=True)
-class SqsBatchSendResult:
-    """送ったIDごとの結果で、どちらにも含まれないIDはSQSが本文どおりに受け付けた。"""
-
-    body_mismatched: frozenset[str]
-    rejected_codes: Mapping[str, str]
-    request_id: str | None
+        return AcceptedSqsMessage(message_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +154,9 @@ class OutgoingSqsMessageBatch:
             for entry_id, message in self.messages.items()
         ]
 
-    def read(self, response: object) -> SqsBatchSendResult:
+    def verify(
+        self, response: object
+    ) -> Mapping[str, AcceptedSqsMessage | MessageSendError]:
         if not isinstance(response, dict):
             raise SqsResponseInvalidError(
                 reason=SqsResponseInvalidReason.INVALID_TYPE,
@@ -174,7 +175,7 @@ class OutgoingSqsMessageBatch:
                 field=SqsResponseField.FAILED_ENTRIES,
             )
         seen: set[str] = set()
-        body_mismatched: set[str] = set()
+        results: dict[str, AcceptedSqsMessage | MessageSendError] = {}
         for entry in successful:
             if not isinstance(entry, dict):
                 raise SqsResponseInvalidError(
@@ -183,10 +184,9 @@ class OutgoingSqsMessageBatch:
                 )
             entry_id = self._claim_id(entry, seen)
             try:
-                self.messages[entry_id].verify(entry)
-            except MessageBodyMismatchError:
-                body_mismatched.add(entry_id)
-        rejected_codes: dict[str, str] = {}
+                results[entry_id] = self.messages[entry_id].verify(entry)
+            except MessageBodyMismatchError as mismatch:
+                results[entry_id] = mismatch
         for entry in failed:
             if not isinstance(entry, dict):
                 raise SqsResponseInvalidError(
@@ -204,20 +204,16 @@ class OutgoingSqsMessageBatch:
                     reason=SqsResponseInvalidReason.INVALID_TYPE,
                     field=SqsResponseField.SENDER_FAULT,
                 )
-            rejected_codes[entry_id] = _required_string(
-                entry, "Code", SqsResponseField.ERROR_CODE
+            results[entry_id] = to_sqs_service_error(
+                _required_string(entry, "Code", SqsResponseField.ERROR_CODE)
             )
         if seen != self.messages.keys():
             raise SqsResponseInvalidError(
                 reason=SqsResponseInvalidReason.NOT_RETURNED,
                 field=SqsResponseField.ENTRY_ID,
             )
-        metadata = response.get("ResponseMetadata")
-        request_id = metadata.get("RequestId") if isinstance(metadata, dict) else None
-        return SqsBatchSendResult(
-            body_mismatched=frozenset(body_mismatched),
-            rejected_codes=MappingProxyType(rejected_codes),
-            request_id=request_id if isinstance(request_id, str) else None,
+        return MappingProxyType(
+            {entry_id: results[entry_id] for entry_id in self.messages}
         )
 
     def _claim_id(self, entry: Mapping[str, object], seen: set[str]) -> str:

@@ -105,9 +105,7 @@ CASES = [
     (PublishResponseInvalidError(), False),
     (PublishError(), False),
     (
-        PublishIntegrityError(
-            reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH, request_id=PRIVATE
-        ),
+        PublishIntegrityError(reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH),
         False,
     ),
 ]
@@ -371,9 +369,7 @@ def test_integrity_failure_message_is_fixed_and_private_diagnostics_are_excluded
     claimed, capsys
 ):
     """本文不一致の説明は固定文とし、機密情報を記録しない。"""
-    error = PublishIntegrityError(
-        reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH, request_id=PRIVATE
-    )
+    error = PublishIntegrityError(reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH)
     error.__cause__ = RuntimeError(PRIVATE)
     error.MESSAGE = PRIVATE
     with capture_logs() as logs:
@@ -390,7 +386,6 @@ def test_integrity_failure_message_is_fixed_and_private_diagnostics_are_excluded
     assert logs[0]["error_reason"] == "body_checksum_mismatch"
     assert logs[0]["error_code"] == "publish_integrity_error"
     assert PRIVATE not in json.dumps(logs)
-    assert "request_id" not in logs[0]
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,9 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
+from app.aws.sqs.errors import SqsServiceError, SqsServiceErrorReason
 from app.aws.sqs.outgoing_message import (
+    MessageBodyMismatchError,
     SqsResponseField,
     SqsResponseInvalidError,
     SqsResponseInvalidReason,
@@ -27,6 +29,8 @@ from app.outbox.publishing.errors import (
     PublishConfigurationError,
     PublishConfigurationReason,
     PublishError,
+    PublishIntegrityError,
+    PublishIntegrityReason,
     PublishPhase,
     PublishResponseInvalidError,
     PublishServiceError,
@@ -36,45 +40,63 @@ from app.outbox.publishing.errors import (
 )
 from app.outbox.sqs import error_mapping as mapping
 from app.outbox.sqs.error_mapping import (
-    SqsBatchEntryError,
     publish_cleanup_error_from_exception,
     publish_error_from_exception,
-    publish_error_from_sqs_entry,
 )
 
-CASES = [
-    ("throttled", "RequestThrottled KmsThrottled ThrottlingException"),
-    ("authentication_failed", "InvalidClientTokenId MissingAuthenticationToken"),
+# SQSの理由と送信の失敗の理由は同じ分け方で、SQSの未知だけを送信の未分類に写す。
+SERVICE_REASONS = [
+    (SqsServiceErrorReason.THROTTLED, PublishServiceReason.THROTTLED),
     (
-        "access_denied",
-        "AccessDenied AccessDeniedException NotAuthorized "
-        "KmsAccessDenied OptInRequired",
+        SqsServiceErrorReason.SERVICE_UNAVAILABLE,
+        PublishServiceReason.SERVICE_UNAVAILABLE,
     ),
-    ("destination_not_found", "QueueDoesNotExist"),
     (
-        "request_rejected",
-        "InvalidAddress InvalidMessageContents UnsupportedOperation InvalidAction "
-        "InvalidParameterCombination InvalidParameterValue InvalidQueryParameter "
-        "MalformedQueryString MissingAction MissingParameter ValidationError "
-        "BatchEntryIdsNotDistinct BatchRequestTooLong EmptyBatchRequest "
-        "InvalidBatchEntryId TooManyEntriesInBatchRequest",
+        SqsServiceErrorReason.AUTHENTICATION_FAILED,
+        PublishServiceReason.AUTHENTICATION_FAILED,
     ),
-    ("security_rejected", "InvalidSecurity IncompleteSignature"),
-    ("request_expired", "RequestExpired"),
+    (SqsServiceErrorReason.ACCESS_DENIED, PublishServiceReason.ACCESS_DENIED),
     (
-        "encryption_error",
-        "KmsDisabled KmsInvalidState KmsNotFound KmsOptInRequired KmsInvalidKeyUsage",
+        SqsServiceErrorReason.DESTINATION_NOT_FOUND,
+        PublishServiceReason.DESTINATION_NOT_FOUND,
     ),
-    ("service_unavailable", "InternalFailure ServiceUnavailable"),
+    (SqsServiceErrorReason.REQUEST_REJECTED, PublishServiceReason.REQUEST_REJECTED),
+    (SqsServiceErrorReason.SECURITY_REJECTED, PublishServiceReason.SECURITY_REJECTED),
+    (SqsServiceErrorReason.REQUEST_EXPIRED, PublishServiceReason.REQUEST_EXPIRED),
+    (SqsServiceErrorReason.ENCRYPTION_ERROR, PublishServiceReason.ENCRYPTION_ERROR),
+    (SqsServiceErrorReason.UNKNOWN, PublishServiceReason.UNCLASSIFIED),
 ]
 
 
+def test_every_sqs_service_reason_has_a_publish_reason():
+    """SQSの理由をすべて送信の失敗の理由へ写し、写し先のない理由を残さない。"""
+    assert [sqs for sqs, _ in SERVICE_REASONS] == list(SqsServiceErrorReason)
+
+
+@pytest.mark.parametrize(("reason", "expected"), SERVICE_REASONS)
+def test_sqs_rejection_becomes_publish_service_error(reason, expected):
+    """SQSが拒否した理由を同じ意味の送信の理由へ写し、元のコードと原因を保つ。"""
+    original = SqsServiceError(reason=reason, service_code="Code")
+    error = publish_error_from_exception(original, phase=PublishPhase.SEND)
+    assert isinstance(error, PublishServiceError)
+    assert (
+        error.reason,
+        error.service_error_code,
+        error.status_code,
+        error.request_id,
+    ) == (expected, "Code", None, None)
+    assert error.__cause__ is original
+
+
 @pytest.mark.parametrize(
-    ("reason", "code"),
-    [(reason, code) for reason, codes in CASES for code in codes.split()],
+    ("code", "reason"),
+    [
+        ("AccessDenied", PublishServiceReason.ACCESS_DENIED),
+        ("RequestThrottled", PublishServiceReason.THROTTLED),
+    ],
 )
-def test_known_codes_take_precedence_over_status(reason: str, code: str) -> None:
-    """既知のコードはHTTP statusによる推測より優先する。"""
+def test_known_codes_take_precedence_over_status(code, reason) -> None:
+    """呼び出し全体の失敗では既知のコードをstatusより優先し、statusとRequestIdを保つ。"""
     failure = publish_error_from_exception(
         ClientError(
             {
@@ -86,10 +108,29 @@ def test_known_codes_take_precedence_over_status(reason: str, code: str) -> None
         phase=PublishPhase.SEND,
     )
     assert isinstance(failure, PublishServiceError)
-    assert failure.reason == reason
+    assert failure.reason is reason
     assert failure.service_error_code == code
     assert failure.status_code == 503
     assert failure.request_id == "request-id"
+
+
+def test_malformed_but_present_code_is_unclassified_without_keeping_it() -> None:
+    """呼び出し全体の失敗のコードが形として不正なら、理由を推測せずコードも持たない。"""
+    failure = publish_error_from_exception(
+        ClientError(
+            {
+                "Error": {"Code": "Access Denied"},
+                "ResponseMetadata": {"HTTPStatusCode": 403},
+            },
+            "SendMessageBatch",
+        ),
+        phase=PublishPhase.SEND,
+    )
+    assert isinstance(failure, PublishServiceError)
+    assert (failure.reason, failure.service_error_code) == (
+        PublishServiceReason.UNCLASSIFIED,
+        None,
+    )
 
 
 @pytest.mark.parametrize("status", [400, 403, 404, 429, 500, 503, None])
@@ -189,70 +230,48 @@ def test_transport_classification_preserves_delivery_uncertainty(
     assert failure.failure.request_may_have_reached_server is reached
 
 
-@pytest.mark.parametrize(
-    ("reason", "code"),
-    [(reason, code) for reason, codes in CASES for code in codes.split()],
-)
-def test_entry_codes_share_service_reasons_without_http_status(reason, code):
-    """個別応答でも共通reasonを使い、個別に存在しないstatusを補わない。"""
-    error = publish_error_from_sqs_entry(code=code, request_id="batch")
-    assert isinstance(error, PublishServiceError)
-    assert error.reason == reason
-    assert error.service_error_code == code
-    assert error.status_code is None
-    assert error.request_id == "batch"
+def test_body_mismatch_becomes_integrity_failure():
+    """SQSが受け取った本文の不一致を、受付済みの可能性を残す整合性の失敗にする。"""
+    original = MessageBodyMismatchError()
+    error = publish_error_from_exception(original, phase=PublishPhase.SEND)
+    assert isinstance(error, PublishIntegrityError)
+    assert error.reason is PublishIntegrityReason.BODY_CHECKSUM_MISMATCH
+    assert error.__cause__ is original
 
 
-@pytest.mark.parametrize("request_id", [None, "PRIVATE_REQUEST_ID"])
-def test_unknown_entry_code_keeps_diagnostics_without_exposing_them(request_id):
-    """個別応答の未知コードは想定外例外と区別し、調査情報を通常表示しない。"""
-    error = publish_error_from_sqs_entry(
-        code="PRIVATE_UNKNOWN_CODE", request_id=request_id
-    )
-    assert isinstance(error, PublishServiceError)
-    assert error.reason is PublishServiceReason.UNCLASSIFIED
-    assert error.service_error_code == "PRIVATE_UNKNOWN_CODE"
-    assert error.request_id == request_id
-    assert error.status_code is None
-    assert "PRIVATE" not in str(error)
-    assert "PRIVATE" not in repr(error)
-
-
-def test_entry_classifier_failure_keeps_cause_and_classifier_type(monkeypatch):
-    """分類処理の障害を変換入口で受け止め、個別応答の調査情報を失わない。"""
+def test_rejection_mapping_failure_keeps_cause_and_classifier_type(monkeypatch):
+    """SQSの拒否の変換が壊れても、元の拒否と分類例外の型を失わない。"""
     monkeypatch.setattr(
         mapping,
-        "_service_error_from_sqs_code",
+        "_publish_service_error",
         Mock(side_effect=ValueError("PRIVATE_CLASSIFIER")),
     )
-    error = publish_error_from_sqs_entry(
-        code="PRIVATE_CODE", request_id="PRIVATE_REQUEST_ID"
+    original = SqsServiceError(
+        reason=SqsServiceErrorReason.ACCESS_DENIED, service_code="AccessDenied"
     )
+    error = publish_error_from_exception(original, phase=PublishPhase.SEND)
     assert isinstance(error, PublishUnexpectedError)
-    assert error.phase is PublishPhase.CLASSIFY_FAILURE
-    assert error.original_exception_type == (
-        "app.outbox.sqs.error_mapping.SqsBatchEntryError"
-    )
-    assert error.classification_exception_type == "builtins.ValueError"
-    assert isinstance(error.__cause__, SqsBatchEntryError)
-    assert error.__cause__.code == "PRIVATE_CODE"
-    assert error.__cause__.request_id == "PRIVATE_REQUEST_ID"
-    assert error.__cause__.args == ()
-    for exception in (error, error.__cause__):
-        assert "PRIVATE" not in str(exception)
-        assert "PRIVATE" not in repr(exception)
+    assert vars(error) == {
+        "original_exception_type": "app.aws.sqs.errors.SqsServiceError",
+        "phase": PublishPhase.CLASSIFY_FAILURE,
+        "classification_exception_type": "builtins.ValueError",
+    }
+    assert error.__cause__ is original
+    assert "PRIVATE" not in str(error)
+    assert "PRIVATE" not in repr(error)
 
 
 @pytest.mark.parametrize(
     "exit_error", [KeyboardInterrupt(), SystemExit(), CancelledError()]
 )
-def test_entry_classifier_exit_is_not_converted(exit_error, monkeypatch):
-    """個別応答の分類中もキャンセルやプロセス終了を送信失敗へ変換しない。"""
-    monkeypatch.setattr(
-        mapping, "_service_error_from_sqs_code", Mock(side_effect=exit_error)
+def test_rejection_mapping_exit_is_not_converted(exit_error, monkeypatch):
+    """SQSの拒否の変換中も、キャンセルやプロセス終了を送信失敗へ変換しない。"""
+    monkeypatch.setattr(mapping, "_publish_service_error", Mock(side_effect=exit_error))
+    original = SqsServiceError(
+        reason=SqsServiceErrorReason.THROTTLED, service_code="RequestThrottled"
     )
     with pytest.raises(type(exit_error)) as caught:
-        publish_error_from_sqs_entry(code="RequestThrottled", request_id=None)
+        publish_error_from_exception(original, phase=PublishPhase.SEND)
     assert caught.value is exit_error
 
 
