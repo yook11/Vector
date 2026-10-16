@@ -91,7 +91,7 @@ def _required_string(
 
 @dataclass(frozen=True, slots=True)
 class AcceptedSqsMessage:
-    """SQSが本文どおりに受け付けたメッセージと、SQSが振ったID。"""
+    """SQSに受け付けられ、SQSが受け取った本文が送った本文と一致したメッセージ。"""
 
     message_id: str
 
