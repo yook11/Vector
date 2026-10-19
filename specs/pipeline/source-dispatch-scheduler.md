@@ -119,7 +119,7 @@ SQSのMessageIdとLambdaの実行IDを業務上の取得依頼IDには使わな�
 
 - 無効・削除済みソースは現在の状態を確認して取得せず正常終了する。有効だが未登録・不正なソースは失敗にする。cadenceによる選定はやり直さない。
 - 既存の取得サービスへ保存・監査・Outboxを委譲する。URLの一意制約と新規保存時だけのイベント生成を維持する。
-- 取得失敗は[取得失敗の再配信と受信完了](../collection/acquisition-failure-redelivery.md)に従い、再試行で変わりうる失敗とDB障害・想定外の失敗をSQSへ返し、再試行しても変わらない失敗は受信完了にして次の定期投入に任せる（2026-09-26に変更）。アプリで取得全体を再試行しない。
+- 取得失敗は[取得失敗の再配信と受信完了](../collection/acquisition-failure-redelivery.md)に従い、再試行で変わりうる失敗（再試行で解消しうるDB障害を含む）と想定外の失敗をSQSへ返し、再試行しても変わらない失敗は受信完了にして次の定期投入に任せる（2026-09-26に変更）。アプリで取得全体を再試行しない。
 - Standardキューの可視性1,800秒、最大受信5回、Consumer専用DLQ、元キュー・DLQの保持14日。Lambdaは300秒・1,024MB・arm64、バッチ1件・待機0秒、予約同時実行5・受信最大同時実行5。
 - `ReportBatchItemFailures`を使う。返信用メッセージIDを確定できない入力と呼び出しの初期化障害は全体失敗にする。SQS起動へLambda非同期再試行設定は付けない。
 
@@ -197,13 +197,13 @@ Done: 合意した配送シナリオと境界の検証、既存チェックが�
 
 ### 実装契約
 
-- SQSの送信・受付結果・SDK例外の解釈は`app/aws/sqs`が所有する。取得依頼側は`SourceAcquisitionSender`という送信契約に依存し、収集側の`SqsSourceAcquisitionSender`が変換した`SourceAcquisitionSendError`を受けて`acquisition_retry`で再送を判断する。投入工程・再送判断・送信アダプターは`collection/article_acquisition`に置く。SQS固有の分類を解釈するのは送信アダプターだけとし、工程には再送の扱いと安全な診断情報を渡す。収集側ではSDK例外やAWSコードを解釈せず、SQS側は収集ドメインをimportしない。既存のOutbox送信とLambda受信の配置・契約は変更しない。
-- `SourceAcquisitionDispatcher.dispatch(schedule)`は呼び出すたびにDBで対象を選び、`schedule.create_request(source.id)`で不変の依頼を生成する。正常時の戻り値はNone。対象0件はSDKクライアントを生成せず終了し、除外理由は既存の選定診断に残す。
-- `app.aws.sqs.message_sender.SqsMessageSender.send(body)`はSendMessageを1回呼ぶ（SDK内部の最大3試行を含む）。応答は`SqsSendResponse.from_response(raw_response)`で形式を検証した送信応答へ変換し、`response.verify_body(body)`で送信本文と照合する。送信応答の型は非空のMessageIdと32桁の十六進MD5を持つ不変の型とし、応答不正と本文不一致を区別する。SQSレコードによるConsumerへの処理依頼とは別の通信上の概念である。
-- 命名はSDKへ本文を渡す`SqsMessageSender`と、SendMessageの応答を表す`SqsSendResponse`に分ける。応答型は送信する業務メッセージの形式を定義せず、検証後もSender内部で扱う。
+- SQSの送信・受付結果・SDK例外の解釈は`app/aws/sqs`が所有し、送れなかった失敗を起きたことごとの`MessageSendError`で返す。投入工程の`SourceAcquisitionDispatcher`は`SqsMessageSender`に依存し、`acquisition_retry`が`MessageSendError`の型とreasonから再送を判断する。投入工程と再送判断は`collection/article_acquisition`に置く。収集側ではSDK例外やAWSコードを解釈せず、SQS側は収集ドメインをimportしない。既存のOutbox送信とLambda受信の配置・契約は変更しない。
+- `SourceAcquisitionDispatcher.dispatch(schedule)`は呼び出すたびにDBで対象を選び、`schedule.create_request(source.id)`で不変の依頼を生成する。正常時は送信した件数を返す。対象0件はSDKクライアントを生成せず終了し、除外理由は既存の選定診断に残す。
+- `app.aws.sqs.message_sender.SqsMessageSender.send(body)`はSendMessageを1回呼ぶ（SDK内部の最大3試行を含む）。送る本文は`OutgoingSqsMessage`がMD5とともに持ち、`verify(response)`で応答の形式と本文の一致を確かめる。応答不正(`SqsResponseInvalidError`)と本文不一致(`MessageBodyMismatchError`)を区別する。SQSレコードによるConsumerへの処理依頼とは別の通信上の概念である。
+- 命名はSDKへ本文を渡す`SqsMessageSender`と、送る本文と応答の照合を持つ`OutgoingSqsMessage`に分ける。`OutgoingSqsMessage`は送信する業務メッセージの形式を定義しない。
 - `app.aws.sqs.message_sender.create_sqs_client(session, region)`は接続3秒・応答待ち5秒、standard・初回込み最大3回を設定する。キューURLは投入側から1つ渡す。既存クライアント設定は変更しない。
-- `open_acquisition_sender`をsender_factoryとして注入し、内部で`open_sqs_message_sender`を利用する。クライアント生成時のSQS例外も工程側の例外へ変換する。クライアントの生成・通信・解放はスレッドへ移し、イベントループを塞がない。外部キャンセル時は進行中のSDK操作を回収してから解放し、キャンセルを伝播する。
-- `app.aws.sqs.errors.SqsSendFailure`は発生事実のみを保持し、`SqsSourceAcquisitionSender`が工程側の`AcquisitionSendFailure`へ変換する。`should_retry_acquisition_send`は変換済みの再送区分と試行回数だけで判断する。共通のclassify_botocoreで通信障害を分類する。
+- `open_sqs_message_sender`をsender_factoryとして注入する。クライアント生成時の例外も`MessageSendError`へ変換する。クライアントの生成・通信・解放はスレッドへ移し、イベントループを塞がない。外部キャンセル時は進行中のSDK操作を回収してから解放し、キャンセルを伝播する。
+- `app.aws.sqs.errors`の`MessageSendError`の各サブクラスは発生事実だけを持つ。`should_retry_acquisition_send`はその型・reasonと試行回数で判断する。通信障害は共通のclassify_botocoreで分類する。
 - 通信timeout・DNS・network_io・protocol_violation・通信分類内のunknown、SQSのthrottled・service_unavailableを再送する。proxyはstatusなし・429・5xxを再送し、TLSとその他のproxy拒否は再送しない。
 - 既知のSQS拒否コードはHTTP statusより優先する。未分類5xxはサービス障害、それ以外の未知コードは調査対象とする。設定・資格情報不足、既知の拒否、応答不正・本文不一致、想定外の例外はアプリ内で再送しない。
 - 初回込み最大3回を依頼ごとに適用し、再送ラウンド前に一度だけ0〜1秒・0〜2秒待つ。待機と乱数は注入可能。再送中は対象を選び直さない。

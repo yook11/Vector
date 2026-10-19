@@ -74,7 +74,7 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 
 `RoutedEventPublisher.publish_batch`が入力件数・型・ID重複を確認し、配送定義の本文生成処理を呼ぶ。生成失敗は個別のPREPARE_EVENT失敗とし、生成したメッセージの型・ID・入力種別と配送種別の一致を確認する。成功分だけを送信し、送信結果の件数・ID・入力順の対応を確認した後、生成失敗と統合して全入力順で返す。全件生成失敗ではSenderを呼ばない。
 
-`SqsSender.from_session(session, region)`が共通送信部品を構築し、`send_batch(queue_url=..., messages=...)`で生成済みのEventMessageを受け取る。EventEnvelopeや各工程のイベント型・キュー対応を参照しない。`SqsMessage.from_message`は本文を変更せず、サイズ検証とMD5計算だけを担当する。SqsMessageBatchは1〜10件・型・ID重複・個別と合計サイズを検証する。個別サイズ超過は除外して正常分を送り、合計超過などのバッチ違反は送信前に拒否する。旧SqsEventPublisherと旧from_eventの互換名は設けない。
+`SqsSender.from_session(session, region)`が共通送信部品を構築し、`send_batch(queue_url=..., messages=...)`で生成済みのEventMessageを受け取る。EventEnvelopeや各工程のイベント型・キュー対応を参照しない。`app/aws/sqs`の`OutgoingSqsMessage`は本文を変更せず、サイズ検証とMD5計算だけを担当する。SqsMessageBatchは1〜10件・型・ID重複・個別と合計サイズを検証する。個別サイズ超過は除外して正常分を送り、合計超過などのバッチ違反は送信前に拒否する。旧SqsEventPublisherと旧from_eventの互換名は設けない。
 
 3工程のrelayとLambda入口をコード上で接続済みである。`curation_handler`は`CurationOutboxRelaySettings.sqs_article_curation_queue_url`を使い、`build_analyzable_created_message`が共通Envelopeによる検証と本文生成を担う。CurationのAWS上での実行検証、本番適用・定期起動の有効化は未実施。
 
@@ -154,12 +154,12 @@ publish_batchは成功・失敗のリストを先に用意し、準備失敗・�
 - Successful/Failedは省略時に空リストとして扱い、存在する場合はリストであることを要求する。
 - 応答内のIDが送信対象と一致し、各IDが成功・失敗を通してちょうど1回現れることを分類前に検証する。
 - 成功はId/MessageIdの非空文字列と32桁のASCII十六進文字列のMD5OfMessageBody、失敗はId/Codeの非空文字列とboolのSenderFaultを要求する。応答を型へ変換し、ID照合後に送信本文のMD5と比較する。
-- 構造・対応付け違反は理由と項目を持つInvalidSqsBatchResponseを原因とするPublishResponseInvalidErrorにし、送信対象すべてへ反映する。未受付と断定しない。
-- 個別失敗のCodeを全体SDK例外と同じ対応表で分類する。個別status_codeはNone、request_idは全体metadataから取得し、欠損・型違反ならNoneとする。
+- 構造・対応付け違反は理由と項目を持つ`SqsResponseInvalidError`を原因とするPublishResponseInvalidErrorにし、送信対象すべてへ反映する。未受付と断定しない。
+- 個別失敗のCodeを全体SDK例外と同じ`to_sqs_service_error`で分類する。個別失敗のstatus_codeとrequest_idはNoneとする。
 - SenderFaultだけで再試行を判断せず、未知の個別コードはunclassifiedにする。HTTP 200を個別失敗のstatusとして扱わない。
 - BatchEntryIdsNotDistinct・BatchRequestTooLong・EmptyBatchRequest・InvalidBatchEntryId・TooManyEntriesInBatchRequestをrequest_rejectedへ追加する。
 - 対応付けが正常な個別応答の分類処理だけが失敗した場合は、そのイベントをclassify_failureのPublishUnexpectedErrorにする。他の受付成功・失敗は維持する。
-- 個別分類失敗の原因は自由文を含まないSqsBatchEntryErrorとし、Code/request IDを診断用に保持する。元原因型と分類処理例外型を保持し、SDK Messageは取り込まない。
+- 個別分類失敗の原因は個別失敗の`SqsServiceError`とし、元原因型と分類処理例外型を保持する。SDK Messageは取り込まない。
 - closeの通常例外はSQS Publisher内でPublishCleanupErrorへ変換し、warningのoutbox_publish_cleanup_failedを結果返却前に記録する。ログ項目はerror_codeとoriginal_exception_typeだけとし、本文・Queue URL・資格情報・SDK自由文・例外チェーンを出さない。診断変換・ログ出力の通常例外も先行する受付結果・失敗やキャンセルを上書きしない。closeの再試行や通知メトリクスは追加しない。
 - BaseExceptionは包括しない。Relayはcleanupを受け取らず、イベントの再試行policyへ渡さない。
 
@@ -176,28 +176,26 @@ Evidence: [AWS SendMessageBatchResultEntry仕様](https://docs.aws.amazon.com/AW
 
 ### 形式検証とID照合
 
-- SQS adapter内のfrozen dataclassとしてSqsSuccessfulEntry(id, message_id, md5_of_message_body)、SqsFailedEntry(id, code, sender_fault)、SqsBatchResponse(successful, failed, request_id)を定義する。
-- decode_sqs_batch_responseは未検証のSDK応答をobjectとして受け、必須項目と値の形式を検証してからSqsBatchResponseへ変換する。successful/failedはtupleにし、外部の辞書やリストを後続処理へ持ち込まない。
-- 個別エントリも_decode_successful_entry・_decode_failed_entryで形式検証して内部型へ変換する。decode成功は形式が正しいことを表し、送信IDとの対応や本文MD5の一致は後続の照合で確認する。
+- `app/aws/sqs`の`OutgoingSqsMessageBatch.verify(response)`は未検証のSDK応答をobjectとして受け、応答全体と各エントリの必須項目・値の形式を検証する。外部の辞書やリストを後続処理へ持ち込まず、送ったIDごとに`AcceptedSqsMessage`か`MessageSendError`を返す。
 - decodeへの命名整理のローカル検証（2026-09-08）: 検証条件と既存テストの期待値を維持し、lint・format、全単体テスト5,863件、専用Composeプロジェクトvector-test-sqs-decode-89gntqnでDB integration test 1,226件成功・22件skipを確認した。
 - MD5は32桁のASCII十六進文字列を要求し、小文字へ正規化する。その他の必須項目・省略可能な一覧とmetadataの扱いは既存契約を維持する。
 - SDKのMessageや未使用項目は保持しない。応答型のreprに外部由来の文字列やチェックサムを展開しない。
-- validate_sqs_batch_event_idsは形式検証済みの応答と送信ID集合を受け取り、未知・重複・欠落を拒否する。
-- MD5形式不正を含む形式違反とID違反は、InvalidSqsBatchResponseを原因とするPublishResponseInvalidErrorとして送信対象全体へ反映する。
+- 同じ`verify`が各エントリのIDを送信ID集合と照合し、未知・重複・欠落を拒否する。
+- MD5形式不正を含む形式違反とID違反は、`SqsResponseInvalidError`を原因とするPublishResponseInvalidErrorとして送信対象全体へ反映する。
 
 ### 送信メッセージの型
 
 Problem: SDK用の辞書と期待MD5を別々に渡すことで、送信内容と照合情報の対応が型から読めない。
 Evidence: SqsMessage.from_messageによる送信準備、SqsMessageのMD5確定、SqsMessageBatchの合計サイズ検査と_send_batch・応答変換の受け渡しを対象とする。
 
-- SQS adapter内のSqsMessage(event_id: UUID, body: str)はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。EventEnvelopeやイベント型はフィールドに持たない。
-- SqsMessage.from_message(message)は生成済みのEventMessageを受け取り、サイズ検証とMD5確定を担当する。本文を加工せずSqsMessageを返す。イベントの検証とJSON生成は配送定義の本文生成処理が所有する。
+- `app/aws/sqs`の`OutgoingSqsMessage(body)`はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。event_idは`OutgoingSqsMessageBatch`のキーとして持ち、EventEnvelopeやイベント型はフィールドに持たない。
+- `SqsMessageBatch`は生成済みのEventMessageごとに`OutgoingSqsMessage`を作り、サイズ検証とMD5確定をそこへ任せる。本文は加工しない。イベントの検証とJSON生成は配送定義の本文生成処理が所有する。
 - SQS本文の既知不正はPublishEventInvalidError(reason=message_too_large)で表す。イベント検証はRoutedEventPublisherの本文生成境界、サイズ・MD5の準備失敗はSqsMessageBatchのPREPARE_EVENT境界で個別失敗にする。想定外例外も既存の変換で保持し、正常分の送信を続ける。
 - Embedding本文は既存の5項目JSONとする。UTCのZ表記・小数秒はArticleAssessedInScopeEventのJSON直列化が所有し、build_assessed_in_scope_messageがmodel_dump(mode="json")の結果をjson.dumps(..., allow_nan=False)する。SqsSenderはJSONを解釈・再構築しない。
-- 1件上限の定数はSqsMessage側が持ち、SqsMessageBatchの本文合計サイズ検査も同じ定数を使う。バッチ件数・重複ID・フィールド型・合計サイズは個別メッセージ準備の外とする。
+- 1件上限の定数`MAX_MESSAGE_BYTES`は`app/aws/sqs`側が持ち、`OutgoingSqsMessageBatch`の本文合計サイズ検査も同じ定数を使う。バッチ件数・重複ID・フィールド型・合計サイズは個別メッセージ準備の外とする。
 - RoutedEventPublisherはEventBatchからEventMessageを生成し、SqsSenderへ渡す。SqsSenderはSqsMessageBatchを構築する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
 - SDK呼び出しの直前にだけ各メッセージをId/MessageBodyの辞書へ変換する。body_md5はSDKへ送信しない。
-- results_from_sqs_batch_responseも同じSqsMessageBatchを受け取り、IDで対応するメッセージを探して照合する。照合対象はEventEnvelopeではなく、送ったSqsMessageとする。
+- 応答の照合は同じ`OutgoingSqsMessageBatch`の`verify`が行い、IDで対応する送ったメッセージと照合する。照合対象はEventEnvelopeではなく、送った`OutgoingSqsMessage`とする。
 
 Invariants: 本文・MD5計算・件数/サイズ制限・個別結果・送信回数・資格情報・終了処理の契約を維持する。
 Non-goals: failure handlerの追加、例外処理全体の再設計、DB/relay/通知/インフラの変更は行わない。
@@ -207,14 +205,14 @@ Verification（2026-09-08）: lint・format check、全単体テスト5,802件�
 
 ### 本文照合と共通失敗
 
-- MessageBodyに渡す文字列を一度構築し、SqsMessageが構築時にそのUTF-8バイト列からhashlib.md5(..., usedforsecurity=False).hexdigest()を計算する。JSONの再構築や文字列の正規化は行わない。
-- event_id・body・body_md5をSqsMessageにまとめて応答変換へ渡し、ID照合を通過した成功エントリのMD5を同じメッセージのbody_md5と比較する。失敗エントリは既存の共通コード分類へ渡す。
-- 応答変換は応答全体の検証・ID照合・結果の集約を担い、SQS側の_verify_sqs_body_checksumが本文照合によるPublishSucceededまたはPublishFailedの判定を担う。任意のrequest_idは診断用であり、照合の成否に影響しない。
+- MessageBodyに渡す文字列を一度構築し、`OutgoingSqsMessage`が構築時にそのUTF-8バイト列からhashlib.md5(..., usedforsecurity=False).hexdigest()を計算する。JSONの再構築や文字列の正規化は行わない。
+- ID照合を通過した成功エントリのMD5を、同じIDの`OutgoingSqsMessage`のbody_md5と比較する。失敗エントリは既存の共通コード分類へ渡す。
+- `OutgoingSqsMessageBatch.verify`が応答全体の検証・ID照合・本文照合を担い、IDごとに`AcceptedSqsMessage`か`MessageSendError`を返す。publisherはそれをPublishSucceededまたはPublishFailedへ写す。
 - 計算失敗はそのイベントのprepare_eventのPublishUnexpectedErrorとし、他の正常イベントの送信を妨げない。
 - 正常な形式のMD5が不一致なら、そのイベントだけをPublishFailed(event_id, PublishIntegrityError)にする。他イベントの結果と独立した終了失敗の診断は維持する。
 - PublishIntegrityErrorのCODEはpublish_integrity_error、PublishIntegrityReasonはBODY_CHECKSUM_MISMATCH=body_checksum_mismatchとする。
 - 共通型の固定説明文は「送信本文と、送信先が受け取った本文のチェックサムが一致しません。」とし、AWS依存・再試行方針を含めない。
-- 例外はreasonと任意のrequest_idだけを保持し、本文・期待MD5・受信MD5・生応答を保持しない。request IDは例外文面とreprに含めない。
+- 例外はreasonだけを保持し、本文・期待MD5・受信MD5・生応答を保持しない。
 - policyは明示的にNonRetryable(NON_RETRYABLE_FAILURE)を返す。5回目以降もretry_exhaustedに上書きせず、DBの停止理由表現は変更しない。
 
 ### 停止ログ
@@ -481,12 +479,12 @@ Done: 既存テストを専用型の契約に同期し、結果維持・再試�
 Problem: 個別応答の分類処理失敗を応答処理側が包んでいたため、PublishErrorへの変換責務が分散していた。
 Evidence: 既存のAWSコード対応表、例外の段階別分類、部分成功・分類処理失敗・終了失敗のテストを使用する。
 
-- sqs/error_mapping.pyが変換を所有し、公開入口はpublish_error_from_exception(exc, phase)とpublish_error_from_sqs_entry(code, request_id)とする。
+- sqs/error_mapping.pyが変換を所有し、公開入口はpublish_error_from_exception(exc, phase)とする。個別失敗も`app/aws/sqs`の`SqsServiceError`として同じ入口で変換する。
 - 例外からの入口はSDK例外と処理中の通常例外を受け、既存PublishErrorの同一性・発生段階・元の原因を維持する。
-- 個別失敗の入口は形式検証済みのCode/request IDを受け、既存対応表のPublishServiceErrorまたは分類処理失敗のPublishUnexpectedErrorを返す。status_codeはNone、未知コードはunclassifiedとする。
+- 個別失敗の`SqsServiceError`は`_PUBLISH_SERVICE_REASONS`でPublishServiceErrorの同じ意味の理由へ写し、分類処理の失敗はPublishUnexpectedErrorにする。status_codeとrequest_idはNone、未知コードはunclassifiedとする。
 - 両入口の通常の戻り値はPublishErrorとし、Noneを返さない。設定・SDK例外・サービスコード別の分類関数は内部関数にし、内部分類のNoneは例外からの入口で想定外へ変換する。
-- 個別分類処理の通常例外はclassify_failureとし、元の個別失敗情報と分類処理例外型を保持する。SqsBatchEntryErrorを変換モジュールへ移し、診断上の完全修飾型名はapp.outbox.sqs.error_mapping.SqsBatchEntryErrorとする。互換用の別名は設けない。
-- sqs/batch_response.pyは形式検証・ID照合・本文比較とイベントへの結果の対応付けを担当し、個別失敗の分類を公開入口へ委譲する。チェックサム不一致を検出した箇所でのPublishIntegrityError生成は維持する。
+- 個別分類処理の通常例外はclassify_failureとし、元の個別失敗(`SqsServiceError`)と分類処理例外型を保持する。
+- 形式検証・ID照合・本文比較は`app/aws/sqs`の`OutgoingSqsMessageBatch.verify`、イベントへの結果の対応付けは`SqsSender._send_messages`が担当し、個別失敗の分類を公開入口へ委譲する。本文不一致の`MessageBodyMismatchError`はPublishIntegrityErrorへ変換する。
 - 終了失敗は別入口publish_cleanup_error_from_exceptionでPublishCleanupErrorへ変換し、送信失敗とは分離する。
 
 Invariants: 分類結果・部分成功・原因情報・自由文の秘匿を維持し、BaseExceptionを捕捉しない。
@@ -503,14 +501,14 @@ Evidence: 既存SqsMessage、publisherの入力検証・本文準備と、送信
 
 - `publishing/event_batch.py`の不変な`EventBatch`が入力一覧をtupleへ固定し、1〜10件・EventEnvelopeと各フィールドの型・event_id重複なしを検証する。型違反はTypeError、件数・重複違反はValueErrorとする。
 - `SqsMessageBatch(messages: Sequence[EventMessage])`は工程固有のイベントを受け取らず、生成済み本文の件数・型・ID重複と送信サイズを検証する。入力はtupleで保持する。
-- イベント内容は本文生成処理の`ArticleAssessedInScopeEvent.from_input`、個別のUTF-8本文サイズは`SqsMessage.from_message`、送信可能な本文の合計サイズは`SqsMessageBatch`が検証する。RoutedEventPublisherとSqsSenderはそれぞれの公開入力の件数・型・ID一意性を保証する。
+- イベント内容は本文生成処理の`ArticleAssessedInScopeEvent.from_input`、個別のUTF-8本文サイズは`OutgoingSqsMessage`、送信可能な本文の合計サイズは`OutgoingSqsMessageBatch`が検証する。RoutedEventPublisherとSqsSenderはそれぞれの公開入力の件数・型・ID一意性を保証する。
 - 準備済みの`messages`と個別の`failures`を不変のtupleで保持し、不正イベントを除いた順序を維持する。
 - 公開`publish_batch(envelopes)`は維持し、内部で`EventBatch`を構築する。11件の入力を不正イベントの除外によって受け入れない。自動分割やIDの重複除去は行わない。
 - 合計サイズ超過は呼び出し全体のValueErrorとなり、クライアントを生成しない。
 - 正常なメッセージが0件なら準備失敗の結果だけを返し、AWS送信を呼ばない。結果は元の入力順に返す。
-- _send_batch・_send_messages・failed_results・results_from_sqs_batch_responseはSqsMessageBatchを受け取り、batch.messagesを使用する。SDK用Entriesは送信直前に作り、送信先はpublisherが保持する。
+- _send_messages・failed_resultsはSqsMessageBatchを受け取り、batch.sendableを使用する。SDK用Entriesは送信直前に作り、送信先はpublisherが保持する。
 
-Invariants: EventEnvelope・SqsMessage・本文形式を変更せず、単一SDK試行・入力順の結果・部分成功・終了失敗の分離を維持する。
+Invariants: EventEnvelope・`OutgoingSqsMessage`・本文形式を変更せず、単一SDK試行・入力順の結果・部分成功・終了失敗の分離を維持する。
 Non-goals: 自動分割、送信先や公開APIの追加、DB・relay・通知・再試行policyの変更は行わない。
 Done: バッチ構築時の不変条件と、既存の送信・応答照合の契約を単体テストとDB integration testで保証する。
 
@@ -525,17 +523,17 @@ SqsMessageBatchのローカル検証（2026-09-08）: lint・format、全単体�
 Problem: decodeとID照合で検出した違反が同じ想定外エラーになり、何が不正だったかを呼び出し元で確認できなかった。
 Evidence: 既存の応答形式検証・ID照合・本文MD5比較、エラーマッピング、停止policy、停止確定後の記録を対象とする。
 
-- PublishResponseInvalidError(CODE=publish_response_invalid)はPublishErrorを継承し、共通のreasonだけを保持する。SQS固有のfieldは持たず、CODEとreasonは属性として保持する。メッセージは自動補完しない。
-- PublishResponseInvalidReasonはinvalid_type、missing_required_field、empty_required_field、invalid_checksum_format、unknown_entry_id、duplicate_entry_id、missing_entry_idとする。項目が存在してNoneならinvalid_type、キー自体の欠落ならmissing_required_field、必須文字列が空ならempty_required_fieldとする。
-- SQS側のsqs/response_errors.pyに定義するSqsResponseFieldはresponse、successful_entries、failed_entries、successful_entry、failed_entry、entry_id、message_id、body_checksum、error_code、sender_faultとする。実際のID、本文、チェックサム、SDK自由文、request IDは取り込まない。
-- InvalidSqsBatchResponseをsqs/response_errors.pyに置き、decode・ID照合が共有するPublishResponseInvalidReasonとSQS固有のSqsResponseFieldを指定して送出する。旧PublishResponseFieldの互換名は設けない。応答検証とマッピングの循環依存を作らず、違反理由を二重定義しない。
-- publish_error_from_exceptionのsend境界でPublishResponseInvalidErrorへ変換し、共通エラーにはreasonを保持し、SQSの診断詳細は元の例外をcauseとして維持する。共通のポリシーと記録処理はcause内のSQS情報を参照しない。その他の段階で発生した場合は既存どおり想定外とする。
+- PublishResponseInvalidError(CODE=publish_response_invalid)はPublishErrorを継承し、理由を持たない。違反の理由と項目は原因の`SqsResponseInvalidError`が持つ。メッセージは自動補完しない。
+- `app/aws/sqs/outgoing_message.py`の`SqsResponseInvalidReason`は、値の形の違反のinvalid_type・missing・empty・invalid_formatと、送ったIDとの対応の違反のnot_in_request・duplicate・not_returnedとする。項目が存在して文字列でない(Noneを含む)ならinvalid_type、キー自体の欠落ならmissing、必須文字列が空ならemptyとする。
+- `app/aws/sqs/outgoing_message.py`の`SqsResponseField`はresponse、successful_entries、failed_entries、successful_entry、failed_entry、entry_id、message_id、body_checksum、error_code、sender_faultとする。実際のID、本文、チェックサム、SDK自由文、request IDは取り込まない。
+- 応答の検証は`SqsResponseInvalidError`に`SqsResponseInvalidReason`と`SqsResponseField`を指定して送出する。違反理由を二重定義しない。
+- publish_error_from_exceptionのsend境界でPublishResponseInvalidErrorへ変換し、SQSの診断詳細は元の例外をcauseとして維持する。共通のポリシーと記録処理はcause内のSQS情報を参照しない。その他の段階で発生した場合は既存どおり想定外とする。
 - 形式・ID対応の違反は送信対象全件を失敗とし、受付されなかったとは断定しない。正常形式のMD5が送信本文と異なる場合は、既存のPublishIntegrityErrorとして該当イベントだけに反映する。
 - 変換処理自体の通常例外は既存のclassify_failureのPublishUnexpectedErrorとし、元原因と分類処理例外型を保持する。
-- 全reasonを自動再試行の対象外とし、停止区分はunexpected_failureからnon_retryable_failureへ変更する。元の違反理由は入力のPublishErrorに保持する。
-- SQS Publisherは応答検証のInvalidSqsBatchResponseを捕捉した際、共通エラーへの変換前にoutbox_sqs_response_invalidをwarningで送信バッチにつき1回記録する。error_reasonとresponse_fieldは列挙値、event_idsは実際に送信したバッチのイベントIDを送信順に文字列リストで保持する。送信前に除外したイベントや応答に混入した外部IDは含めない。
+- 全reasonを自動再試行の対象外とし、停止区分はunexpected_failureからnon_retryable_failureへ変更する。元の違反理由は原因の`SqsResponseInvalidError`に保持する。
+- SQS Publisherは応答検証の`SqsResponseInvalidError`を捕捉した際、共通エラーへの変換前にoutbox_sqs_response_invalidをwarningで送信バッチにつき1回記録する。error_reasonとresponse_fieldは列挙値、event_idsは実際に送信したバッチのイベントIDを送信順に文字列リストで保持する。送信前に除外したイベントや応答に混入した外部IDは含めない。
 - 診断には本文・チェックサム・Queue URL・資格情報・SDK自由文・例外チェーンを出さない。通常のログ出力失敗は既存の結果・例外変換へ影響させず、再試行や追加メトリクスを発生させない。BaseExceptionは包括しない。正常応答や正常形式のMD5不一致では応答不正の診断を出さない。
-- 共通の停止確定後のログにはerror_codeとerror_reasonを記録し、response_fieldは持たせない。SQSの検出時診断と確定後の停止ログはevent_idで関連付ける。設定修復アラームの対象6理由は変更しない。
+- 共通の停止確定後のログにはerror_codeを記録し、error_reasonとresponse_fieldは持たせない。SQSの検出時診断と確定後の停止ログはevent_idで関連付ける。設定修復アラームの対象6理由は変更しない。
 
 Invariants: 応答を受け入れる条件、必須項目の検証順、metadata欠損の扱い、本文・入力順・単一SDK試行・既存の部分成功・終了失敗の分離・BaseExceptionの伝播を維持する。
 Non-goals: DB schema・relay・通知経路・AWS設定・依存の変更、自動再試行の追加は行わない。
@@ -573,7 +571,7 @@ Non-goals: 本番適用、Scheduler有効化、AWSへの実送信、Slack到達�
 
 Embedding用の`build_assessed_in_scope_message`はイベント単位の本文生成で`ArticleAssessedInScopeEvent.from_input`を呼び、送受信共通の契約を検証する。発行元のpayload検証・Outbox保存と、relayからpublisherへの境界としての汎用のEventEnvelopeは維持する。対応版は整数の1、payloadは正の整数のcuration_id・analyzed_article_idだけを持つ既存のArticleAssessedInScopeとする。
 
-共通型の検証に成功したイベントは`model_dump(mode="json")`と`json.dumps(..., allow_nan=False)`で既存形式の本文へ変換し、EventMessageへ保持する。本文のUTC表現は共通型のJSON直列化が所有し、SqsMessageは生成済み本文のサイズ検証・MD5計算を担当する。未知版やpayload不正は本文構築より前に拒否する。publisherの呼び出し型・重複IDの違反は既存どおり呼び出し全体の例外、契約違反はイベント単位のPublishFailedとする。
+共通型の検証に成功したイベントは`model_dump(mode="json")`と`json.dumps(..., allow_nan=False)`で既存形式の本文へ変換し、EventMessageへ保持する。本文のUTC表現は共通型のJSON直列化が所有し、`OutgoingSqsMessage`は生成済み本文のサイズ検証・MD5計算を担当する。未知版やpayload不正は本文構築より前に拒否する。publisherの呼び出し型・重複IDの違反は既存どおり呼び出し全体の例外、契約違反はイベント単位のPublishFailedとする。
 
 共通型の違反をPublishEventInvalidErrorへ変換する際は入力値を含む検証例外を原因・contextに保持しない。既存の配信失敗ハンドラーはnon_retryable_failureとして対象Outbox行だけを停止する。正常イベントは送信を継続し、全件不正ならAWSクライアントを生成しない。SQS受信後の再配信とDLQ処理は、この送信前の停止とは独立する。
 

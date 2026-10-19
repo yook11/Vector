@@ -27,7 +27,8 @@ Status: Implemented
 | HTTP起因（`HttpResponseError`・`HttpTransportError`・`DestinationRejectedError`） | 外部取得の失敗判断が再試行可能なら`RetryAcquisition`、不可なら`NoRetryAcquisition` |
 | `UnreadableResponseError` | `NoRetryAcquisition` |
 | `RssFeedErrors` | どれか1つのフィードが`RetryAcquisition`なら`RetryAcquisition`、それ以外は`NoRetryAcquisition` |
-| DB障害・その他 | `RetryAcquisition` |
+| DB障害 | DB層の分類で再試行により解消しうるなら`RetryAcquisition`、解消しないなら調査要の`NoRetryAcquisition` |
+| その他 | `RetryAcquisition` |
 
 - Consumerは取得処理の失敗の判断結果をそのまま返し、handlerは`RetryAcquisition`だけを`batchItemFailures`に入れる。
 - ソース解決の失敗（有効だが未登録のソース・DB読み取り失敗）と不正な依頼は、従来どおり送出して再配信する。

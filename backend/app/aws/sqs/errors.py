@@ -37,16 +37,17 @@ class MessageSendTransportError(MessageSendError):
     """通信が完了しなかった失敗で、SQSが受け付けたかは断定しない。"""
 
     def __init__(self, *, failure: HttpTransportFailure, exception_type: str) -> None:
+        self.failure = failure
+        self.exception_type = exception_type
         super().__init__(
             "メッセージの送信で通信が完了しませんでした",
             details={
-                "stage": failure.stage.value,
-                "reason": failure.reason.value,
-                "proxy_status": failure.proxy_status,
-                "exception_type": exception_type,
+                "stage": self.failure.stage.value,
+                "reason": self.failure.reason.value,
+                "proxy_status": self.failure.proxy_status,
+                "exception_type": self.exception_type,
             },
         )
-        self.failure = failure
 
 
 class SqsServiceError(MessageSendError):
@@ -55,21 +56,24 @@ class SqsServiceError(MessageSendError):
     def __init__(
         self, *, reason: SqsServiceErrorReason, service_code: str | None
     ) -> None:
-        super().__init__(
-            "SQSがエラーを返し、メッセージを送信できませんでした",
-            details={"reason": reason.value, "service_code": service_code},
-        )
         self.reason = reason
         self.service_code = service_code
+        super().__init__(
+            "SQSがエラーを返し、メッセージを送信できませんでした",
+            details={"reason": self.reason.value, "service_code": self.service_code},
+        )
 
 
 class MessageSendConfigurationError(MessageSendError):
     """資格情報・リージョン・送信先のキューなど、送信に必要な設定がない。"""
 
     def __init__(self, *, exception_type: str | None = None) -> None:
+        self.exception_type = exception_type
         super().__init__(
             "メッセージの送信に必要な設定がありません",
-            details={"exception_type": exception_type} if exception_type else None,
+            details=(
+                {"exception_type": self.exception_type} if self.exception_type else None
+            ),
         )
 
 
@@ -77,9 +81,10 @@ class MessageSendUnexpectedError(MessageSendError):
     """どの分類にも当たらない例外で送れなかった。"""
 
     def __init__(self, *, exception_type: str) -> None:
+        self.exception_type = exception_type
         super().__init__(
             "想定外の理由でメッセージを送信できませんでした",
-            details={"exception_type": exception_type},
+            details={"exception_type": self.exception_type},
         )
 
 
