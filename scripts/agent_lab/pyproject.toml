@@ -3,6 +3,6 @@ name = "agent-lab"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
-    "claude-agent-sdk>=0.1.66",
+    "claude-agent-sdk>=0.2.168",
     "rich>=15.0.0",
 ]
