@@ -29,6 +29,7 @@ from app.models.outbox_event import OutboxEvent
 from app.models.pipeline_event import PipelineEvent
 from app.shared import revalidate
 from local_tests.assessment.support import assessment_reply, handler_module
+from local_tests.database_failure import cancel_statement
 from tests.iam_fixtures import inject_test_db_signer
 
 
@@ -154,7 +155,7 @@ def database_error_before_commit(monkeypatch):
             ).one()
             observation.pending_counts.append(tuple(counts))
             try:
-                await session.execute(text("SELECT 1 / 0"))
+                await cancel_statement(session)
             except DBAPIError as exc:
                 observation.errors.append(exc)
                 raise

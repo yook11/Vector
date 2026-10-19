@@ -205,7 +205,7 @@ class TestPgVectorArticleSearchRepository:
     @pytest.mark.parametrize(
         "error",
         [
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.QUERY_CANCELED),
             DatabaseConnectionError(
                 reason=DatabaseConnectionErrorReason.CONNECTION_FAILED
             ),

@@ -9,6 +9,8 @@ from app.ai_providers.errors import AIProviderError
 from app.analysis.ai_provider_retry import is_unrecoverable_for_input
 from app.analysis.curation.domain.ready import CurationReadyBuildRejected
 from app.analysis.curation.errors import CurationError, CurationFailureReason
+from app.db.errors import DatabaseError
+from app.db.retry_prospect import is_resolvable_by_retry
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,11 +24,11 @@ class RetryCuration:
 class NoRetryCuration:
     """再配信しても変わらないため受信完了にする Curation の失敗。"""
 
-    cause: CurationReadyBuildRejected | AIProviderError
+    cause: CurationReadyBuildRejected | AIProviderError | DatabaseError
 
 
 def classify_curation_failure(exc: Exception) -> RetryCuration | NoRetryCuration:
-    """同じ入力では変わらない失敗だけを受信完了にし、DB障害・想定外は再配信する。"""
+    """同じ入力では変わらない失敗と解消しないDBの失敗を受信完了にし、想定外は再配信する。"""
     if isinstance(exc, AIProviderError):
         if is_unrecoverable_for_input(exc):
             return NoRetryCuration(exc)
@@ -37,4 +39,8 @@ def classify_curation_failure(exc: Exception) -> RetryCuration | NoRetryCuration
                 return RetryCuration(exc)
             case _:
                 assert_never(exc.reason)
+    if isinstance(exc, DatabaseError):
+        if is_resolvable_by_retry(exc):
+            return RetryCuration(exc)
+        return NoRetryCuration(exc)
     return RetryCuration(exc)

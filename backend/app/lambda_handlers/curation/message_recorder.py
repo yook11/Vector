@@ -9,6 +9,7 @@ from app.analysis.curation.consumer_failure_classification import (
 from app.analysis.curation.domain.ready import CurationReadyBuildRejected
 from app.analysis.curation.service import CurationCompletion
 from app.collection.events import AnalyzableEventInvalidError
+from app.db.errors import DatabaseError
 from app.lambda_handlers.event_reader import EventReadFailed
 from app.lambda_handlers.sqs.received_message import ReceivedMessageInvalidError
 
@@ -88,6 +89,13 @@ class CurationMessageRecorder:
                     operation="build_ready",
                     rejection_code=reason.value,
                     message_disposition="completed",
+                )
+            case NoRetryCuration(cause=DatabaseError() as cause):
+                logger.error(
+                    "curation_message_processing_failed",
+                    code="database_error",
+                    message_disposition="completed",
+                    exc_info=cause,
                 )
             case NoRetryCuration(cause=cause):
                 logger.warning(

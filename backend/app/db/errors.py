@@ -5,13 +5,18 @@ from __future__ import annotations
 from enum import StrEnum
 
 __all__ = [
+    "DatabaseCachedStatementInvalidError",
     "DatabaseConnectionError",
     "DatabaseConnectionErrorReason",
     "DatabaseConstraintError",
     "DatabaseConstraintErrorReason",
+    "DatabaseDataError",
     "DatabaseError",
+    "DatabaseSyntaxOrAccessError",
     "DatabaseTimeoutError",
     "DatabaseTimeoutErrorReason",
+    "DatabaseTransactionConflictError",
+    "DatabaseTransactionConflictErrorReason",
     "DatabaseUnexpectedError",
 ]
 
@@ -23,7 +28,14 @@ class DatabaseConnectionErrorReason(StrEnum):
 
 class DatabaseTimeoutErrorReason(StrEnum):
     LOCK_TIMEOUT = "lock_timeout"
-    STATEMENT_TIMEOUT = "statement_timeout"
+    # statement_timeout による取り消しと、外からの取り消しを区別できない。
+    QUERY_CANCELED = "query_canceled"
+    POOL_TIMEOUT = "pool_timeout"
+
+
+class DatabaseTransactionConflictErrorReason(StrEnum):
+    DEADLOCK = "deadlock"
+    SERIALIZATION_FAILURE = "serialization_failure"
 
 
 class DatabaseConstraintErrorReason(StrEnum):
@@ -31,6 +43,8 @@ class DatabaseConstraintErrorReason(StrEnum):
     FOREIGN_KEY_VIOLATION = "foreign_key_violation"
     NOT_NULL_VIOLATION = "not_null_violation"
     CHECK_VIOLATION = "check_violation"
+    # 制約を特定しない汎用の違反で、Vector では排他トリガーが出す。
+    INTEGRITY_CONSTRAINT_VIOLATION = "integrity_constraint_violation"
     UNCLASSIFIED_CONSTRAINT = "unclassified_constraint"
 
 
@@ -56,13 +70,25 @@ class DatabaseConnectionError(DatabaseError):
 
 
 class DatabaseTimeoutError(DatabaseError):
-    """データベースの待ちが尽きた。"""
+    """データベースの待ちが尽きた、または実行中の文が取り消された。"""
 
     reason: DatabaseTimeoutErrorReason
 
     def __init__(self, *, reason: DatabaseTimeoutErrorReason) -> None:
         if not isinstance(reason, DatabaseTimeoutErrorReason):
             raise TypeError("reason must be a DatabaseTimeoutErrorReason")
+        super().__init__()
+        self.reason = reason
+
+
+class DatabaseTransactionConflictError(DatabaseError):
+    """同時に走ったトランザクションとぶつかり、こちらのトランザクションが取り消された。"""
+
+    reason: DatabaseTransactionConflictErrorReason
+
+    def __init__(self, *, reason: DatabaseTransactionConflictErrorReason) -> None:
+        if not isinstance(reason, DatabaseTransactionConflictErrorReason):
+            raise TypeError("reason must be a DatabaseTransactionConflictErrorReason")
         super().__init__()
         self.reason = reason
 
@@ -79,5 +105,17 @@ class DatabaseConstraintError(DatabaseError):
         self.reason = reason
 
 
+class DatabaseCachedStatementInvalidError(DatabaseError):
+    """接続に保存していた準備済みの文が、ほかの接続のスキーマ変更で使えなくなった。"""
+
+
+class DatabaseSyntaxOrAccessError(DatabaseError):
+    """SQL の誤り、存在しないオブジェクトの参照、権限の不足が起きた。"""
+
+
+class DatabaseDataError(DatabaseError):
+    """SQL で扱った値が不正だった。"""
+
+
 class DatabaseUnexpectedError(DatabaseError):
-    """接続・タイムアウト・制約のどれにも分類できないデータベースエラー。"""
+    """どの種類にも分類できないデータベースエラー。"""

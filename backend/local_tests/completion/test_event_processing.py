@@ -20,6 +20,7 @@ from local_tests.completion.support import (
     seed_pending,
     stored_completion,
 )
+from local_tests.database_failure import divide_by_zero
 
 
 @pytest.mark.asyncio
@@ -231,12 +232,14 @@ class TestCompletionFailurePreservesDecisionAndState:
     async def test_failed_close_commit_returns_retry_and_leaves_row_open(
         self, system_database, completion_consumer, page_response, control_commit
     ):
-        """終了対象のHTTP失敗でもclosedの確定に失敗したら、終了結果を返さない。"""
+        """終了対象のHTTP失敗で、closedの確定が再試行で解消しないDB障害になっても、終了結果を返さない。"""
         pending_article = await seed_pending(
             system_database, "https://example.com/close-rollback"
         )
         page_response.return_value = httpx2.Response(403)
-        with control_commit(pending_article, phase="closed", fail=True) as fault:
+        with control_commit(
+            pending_article, phase="closed", fail=True, failure=divide_by_zero
+        ) as fault:
             result = await completion_consumer.consume(pending_article.id)
 
         assert fault.error is not None
@@ -322,8 +325,8 @@ class TestCompletionFailurePreservesDecisionAndState:
         assert isinstance(result.error, ArticleCompletionError)
         assert isinstance(result.error.cause, DatabaseError)
         assert isinstance(result.error.cause.__cause__, DBAPIError)
-        assert result.code == "unknown"
-        assert result.requires_investigation
+        assert result.code == "database_error"
+        assert not result.requires_investigation
         assert http_boundary.requests == []
         after = await stored_completion(system_database, pending_article)
         assert after.pending == before.pending

@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock
 
 import httpx2
 import pytest
-from sqlalchemy import text
 
 from app.db.engine import _create_engine
 from app.db.session import caller_managed_session_factory
 from local_tests.completion.commit_control import hold_commit
 from local_tests.completion.http_control import GatedResponses
 from local_tests.completion.support import article_response, consumer_contract
+from local_tests.database_failure import cancel_statement
 from local_tests.http import StubHttp
 
 
@@ -26,7 +26,7 @@ def first_read_failure_sessions(completion_sessions):
         async with completion_sessions() as session:
             if first_read:
                 first_read = False
-                await session.execute(text("SELECT 1 / 0"))
+                await cancel_statement(session)
             yield session
 
     return open_session

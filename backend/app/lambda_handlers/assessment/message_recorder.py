@@ -10,6 +10,7 @@ from app.analysis.assessment.consumer_failure_classification import (
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.service import AssessmentCompletion
 from app.analysis.curation.events import CuratedEventInvalidError
+from app.db.errors import DatabaseError
 from app.lambda_handlers.event_reader import EventReadFailed
 from app.lambda_handlers.sqs.received_message import ReceivedMessageInvalidError
 
@@ -98,6 +99,13 @@ class AssessmentMessageRecorder:
                     code=cause.CODE,
                     failure_reason=cause.reason.value,
                     message_disposition="completed",
+                )
+            case NoRetryAssessment(cause=DatabaseError() as cause):
+                logger.error(
+                    "assessment_message_processing_failed",
+                    code="database_error",
+                    message_disposition="completed",
+                    exc_info=cause,
                 )
             case NoRetryAssessment(cause=cause):
                 logger.warning(

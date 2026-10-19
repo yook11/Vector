@@ -3,7 +3,7 @@
 import pytest
 
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
-from app.db.errors import DatabaseUnexpectedError
+from app.db.errors import DatabaseSyntaxOrAccessError
 from local_tests.assessment.support import (
     fetch_stored_assessment,
     invoke_event,
@@ -48,7 +48,7 @@ async def test_catalog_read_failure_prevents_article_processing(
             "REVOKE SELECT ON categories FROM vector_article_analysis"
         )
 
-    with pytest.raises(DatabaseUnexpectedError):
+    with pytest.raises(DatabaseSyntaxOrAccessError):
         await invoke_event(target)
 
     gemini_response.assert_not_awaited()

@@ -20,12 +20,14 @@ from app.collection.external_fetch_failure import (
     RetryableFetchFailure,
     classify_external_fetch_failure,
 )
+from app.db.errors import DatabaseError
+from app.db.retry_prospect import is_resolvable_by_retry
 
 
 def classify_acquisition_failure(
     exc: Exception, *, now: datetime
 ) -> RetryAcquisition | NoRetryAcquisition:
-    """再試行で変わりうる失敗と、DB障害・想定外の失敗だけを再配信する。"""
+    """再試行で変わりうる失敗と想定外の失敗だけを再配信する。"""
     # 再試行で変わらない失敗は取得元全体が届かなくなるので、人が直す対象とする。
     if isinstance(exc, RssFeedErrors):
         feeds = [
@@ -42,6 +44,12 @@ def classify_acquisition_failure(
         )
     if isinstance(exc, UnreadableResponseError | ResponseSizeLimitExceededError):
         return NoRetryAcquisition(exc, code=exc.CODE, requires_investigation=True)
+    if isinstance(exc, DatabaseError):
+        if is_resolvable_by_retry(exc):
+            return RetryAcquisition(exc, code="database_error")
+        return NoRetryAcquisition(
+            exc, code="database_error", requires_investigation=True
+        )
     match classify_external_fetch_failure(exc, now=now):
         case RetryableFetchFailure(code=code, requires_investigation=investigate):
             return RetryAcquisition(exc, code=code, requires_investigation=investigate)

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import Executable, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -16,6 +17,8 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     OutOfScope,
 )
+from app.db.errors import DatabaseConstraintError, DatabaseConstraintErrorReason
+from app.db.translate import translate_database_error
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
@@ -104,7 +107,7 @@ class AssessmentRepository:
         self,
         article: InScopeAnalyzedArticle,
     ) -> int | None:
-        """in-scope assessment を保存し、既存行に負けた場合は ``None`` を返す。"""
+        """in-scope assessment を保存し、既存の判定に負けた場合は ``None`` を返す。"""
         in_scope = article.assessment_result
         category_id = await self._get_category_id_by_slug(in_scope.category.value)
         if category_id is None:
@@ -126,10 +129,7 @@ class AssessmentRepository:
             .on_conflict_do_nothing(index_elements=["curation_id"])
             .returning(AnalyzedArticleRecord.id)
         )
-        row = (await self._session.execute(stmt)).first()
-        if row is None:
-            return None
-        return row.id
+        return await self._insert_returning_id(stmt)
 
     async def save_out_of_scope(
         self,
@@ -137,7 +137,7 @@ class AssessmentRepository:
         *,
         ready: ReadyForAssessment,
     ) -> int | None:
-        """out-of-scope assessment を保存し、既存行に負けた場合は ``None`` を返す。"""
+        """out-of-scope assessment を保存し、既存の判定に負ければ ``None`` を返す。"""
         out_of_scope = call.result
         stmt = (
             pg_insert(OutOfScopeArticleRecord)
@@ -151,10 +151,22 @@ class AssessmentRepository:
             .on_conflict_do_nothing(index_elements=["curation_id"])
             .returning(OutOfScopeArticleRecord.id)
         )
-        row = (await self._session.execute(stmt)).first()
-        if row is None:
-            return None
-        return row.id
+        return await self._insert_returning_id(stmt)
+
+    async def _insert_returning_id(self, stmt: Executable) -> int | None:
+        """同じ curation の判定がすでに保存されていれば ``None`` を返す。"""
+        try:
+            async with self._session.begin_nested():
+                return (await self._session.execute(stmt)).scalar()
+        except IntegrityError as exc:
+            match translate_database_error(exc):
+                case DatabaseConstraintError(
+                    reason=DatabaseConstraintErrorReason.INTEGRITY_CONSTRAINT_VIOLATION
+                ):
+                    # 反対側の結果が先にあると、排他トリガーが汎用の23000で拒否する。
+                    return None
+                case _:
+                    raise
 
     async def _get_category_id_by_slug(self, slug: str) -> int | None:
         """カテゴリ slug から ID を取得する (Repository 内部使用)。"""

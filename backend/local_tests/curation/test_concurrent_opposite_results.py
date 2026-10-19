@@ -27,7 +27,7 @@ async def test_concurrent_opposite_results_persist_only_leader_result(
     leader_relevance,
     follower_relevance,
 ):
-    """signalとnoiseを同時に保存しても、先に処理した結果だけが永続化され、後から処理した結果は永続化されない。"""
+    """signalとnoiseを同時に保存しても、先に処理した結果だけが永続化され、後から処理した側は再配信せずに終わる。"""
     target = await seed_article(
         system_database,
         "https://example.com/opposite",
@@ -74,10 +74,7 @@ async def test_concurrent_opposite_results_persist_only_leader_result(
             15,
         )
 
-    assert responses == [
-        {"batchItemFailures": []},
-        {"batchItemFailures": [{"itemIdentifier": record["messageId"]}]},
-    ]
+    assert responses == [{"batchItemFailures": []}, {"batchItemFailures": []}]
     stored = await fetch_stored_curation(system_database, target.analyzable_article_id)
     saved = stored.curations + stored.noises
     assert len(saved) == 1

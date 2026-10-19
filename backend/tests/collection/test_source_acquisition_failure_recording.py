@@ -401,7 +401,7 @@ async def test_database_failure_records_retryability(
         source_id=sample_source.id,
         source_name="VentureBeat",
         failure=RetryAcquisition(
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.QUERY_CANCELED),
             code="unknown",
         ),
     )
