@@ -55,12 +55,12 @@ class SqsResponseInvalidError(MessageSendError):
     def __init__(
         self, *, reason: SqsResponseInvalidReason, field: SqsResponseField
     ) -> None:
-        super().__init__(
-            "SQSの応答を検証できませんでした",
-            details={"reason": reason.value, "field": field.value},
-        )
         self.reason = reason
         self.field = field
+        super().__init__(
+            "SQSの応答を検証できませんでした",
+            details={"reason": self.reason.value, "field": self.field.value},
+        )
 
 
 class MessageBodyMismatchError(MessageSendError):

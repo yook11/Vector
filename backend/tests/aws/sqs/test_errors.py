@@ -2,13 +2,26 @@
 
 import botocore.session
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    EndpointConnectionError,
+    NoCredentialsError,
+    ParamValidationError,
+)
 from botocore.stub import Stubber
 
 from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendTransportError,
+    MessageSendUnexpectedError,
     SqsServiceError,
     to_message_send_error,
     to_sqs_service_error,
+)
+from app.http.failure import (
+    HttpTransportFailure,
+    HttpTransportFailureReason,
+    HttpTransportStage,
 )
 
 
@@ -122,3 +135,53 @@ def test_real_sdk_client_error_is_translated_without_sdk_message():
     )
     assert "private-sdk-message" not in str(error)
     assert "private-sdk-message" not in repr(error.details)
+
+
+def test_sdk_connection_failure_keeps_transport_facts_as_attributes():
+    """SDKの接続失敗は、通信の段階・理由と例外の型名を属性に持ち、同じ値をdetailsに出す。"""
+    error = to_message_send_error(
+        EndpointConnectionError(endpoint_url="https://sqs.invalid")
+    )
+
+    assert type(error) is MessageSendTransportError
+    assert (error.failure, error.exception_type, error.details) == (
+        HttpTransportFailure(
+            HttpTransportStage.CONNECT, HttpTransportFailureReason.NETWORK_IO
+        ),
+        "EndpointConnectionError",
+        {
+            "stage": "connect",
+            "reason": "network_io",
+            "proxy_status": None,
+            "exception_type": "EndpointConnectionError",
+        },
+    )
+
+
+def test_missing_credentials_keep_exception_type_as_attribute():
+    """資格情報がないSDK例外は設定の不足になり、例外の型名を属性とdetailsの両方に持つ。"""
+    error = to_message_send_error(NoCredentialsError())
+
+    assert type(error) is MessageSendConfigurationError
+    assert (error.exception_type, error.details) == (
+        "NoCredentialsError",
+        {"exception_type": "NoCredentialsError"},
+    )
+
+
+def test_configuration_failure_without_sdk_exception_has_no_exception_type():
+    """SDK例外を伴わない設定の不足は、例外の型名を持たずdetailsも出さない。"""
+    error = MessageSendConfigurationError()
+
+    assert (error.exception_type, error.details) == (None, None)
+
+
+def test_unclassified_sdk_exception_keeps_exception_type_as_attribute():
+    """どの分類にも当たらないSDK例外は想定外の失敗になり、例外の型名を属性とdetailsの両方に持つ。"""
+    error = to_message_send_error(ParamValidationError(report="private-report"))
+
+    assert type(error) is MessageSendUnexpectedError
+    assert (error.exception_type, error.details) == (
+        "ParamValidationError",
+        {"exception_type": "ParamValidationError"},
+    )
