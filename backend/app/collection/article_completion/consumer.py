@@ -5,7 +5,6 @@ from contextlib import AbstractAsyncContextManager
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.article_completer import complete_article
 from app.collection.article_completion.article_fetch import fetch_article_response
 from app.collection.article_completion.consumer_failure_handling import (
@@ -55,7 +54,6 @@ class ArticleCompletionConsumer:
     async def consume(
         self, incomplete_article_id: int
     ) -> CompletionSucceeded | RetryCompletion | NoRetryCompletion:
-        incomplete: RecordedIncompleteArticle | None = None
         try:
             async with self._session_factory() as session:
                 repository = ArticleCompletionConsumerRepository(session)
@@ -91,7 +89,6 @@ class ArticleCompletionConsumer:
             return await self._failure_handler.handle(
                 ArticleCompletionError(cause=exc),
                 incomplete_article_id=incomplete_article_id,
-                incomplete=incomplete,
             )
 
     async def _commit_completed(
@@ -112,12 +109,6 @@ class ArticleCompletionConsumer:
                 await session.commit()
                 return NoRetryCompletion(cause="url_conflict")
 
-            await ArticleCompletionAuditRepository(session).append_consumer_succeeded(
-                incomplete_article_id=incomplete.incomplete_article_id,
-                source_id=incomplete.source_id,
-                analyzable_article_id=article_id,
-                article=analyzable_article,
-            )
             event = AnalyzableArticleCreated(analyzable_article_id=article_id)
             session.add(
                 OutboxEvent(

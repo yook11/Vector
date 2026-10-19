@@ -107,12 +107,7 @@ async def has_active_collection_transaction(database):
 class StoredCompletion:
     pending: dict | None
     articles: list[dict]
-    audits: list[dict]
     outbox: list[dict]
-
-    @property
-    def successes(self):
-        return [row for row in self.audits if row["event_type"] == "succeeded"]
 
 
 def decoded(rows):
@@ -136,17 +131,6 @@ async def stored_completion(database, target):
             "FROM analyzable_articles WHERE source_url=$1 ORDER BY id",
             target.url,
         )
-        audits = await db.fetch(
-            "SELECT id, article_id, event_type, outcome_code, payload "
-            "FROM pipeline_events WHERE stage='completion' "
-            "AND (payload->>'canonical_url'=$1 "
-            "OR (payload->>'incomplete_article_id')::bigint=$2 "
-            "OR article_id IN (SELECT id FROM analyzable_articles "
-            "WHERE source_url=$1)) "
-            "ORDER BY id",
-            target.url,
-            target.id,
-        )
         outbox = await db.fetch(
             "SELECT event_id, event_type, schema_version, payload FROM outbox_events "
             "WHERE event_type='article.analyzable_created' "
@@ -158,7 +142,6 @@ async def stored_completion(database, target):
     return StoredCompletion(
         dict(pending) if pending is not None else None,
         decoded(articles),
-        decoded(audits),
         decoded(outbox),
     )
 

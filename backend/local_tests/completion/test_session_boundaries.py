@@ -44,7 +44,7 @@ class TestHttpWaitReleasesDatabaseResources:
         gated_pages,
         http_clients,
     ):
-        """HTTP待機中の外部キャンセルを伝播し、接続を解放して未完成行と監査を変えない。"""
+        """HTTP待機中の外部キャンセルを伝播し、接続を解放して未完成行を変えない。"""
         pending_article = await seed_pending(
             system_database, "https://example.com/cancelled"
         )

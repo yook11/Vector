@@ -154,7 +154,7 @@ async def test_embedding_excludes_aged_out_analysis_and_delivers_saved_assessmen
 async def test_completion_closes_aged_out_row_and_delivers_saved_incomplete_article(
     system_database, delivery
 ):
-    """期限切れの未完成行をclosedにして監査し、期間内の未完成行だけを配送する。"""
+    """期限切れの未完成行をclosedにし、期間内の未完成行だけを配送する。"""
     aged_id = await seed_incomplete_article(
         system_database, "https://example.com/completion-aged", AGED_CREATED_AT
     )
@@ -182,11 +182,9 @@ async def test_completion_closes_aged_out_row_and_delivers_saved_incomplete_arti
     assert tuple(closed) == ("closed", None)
     audits = await read_audit_events(system_database)
     assert [audit[:4] for audit in audits] == [
-        ("completion", "rejected", "backfill_completion_aged_out", None),
         ("completion", "succeeded", "backfill_item_enqueued", None),
     ]
-    assert audits[0].payload["incomplete_article_id"] == aged_id
-    assert audits[1].payload["target_id"] == incomplete_id
+    assert audits[0].payload["target_id"] == incomplete_id
 
 
 @pytest.mark.asyncio

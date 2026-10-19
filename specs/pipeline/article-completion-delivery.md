@@ -77,7 +77,7 @@ receiptHandleは現在の配送から取得し、Queue URLは信頼できる設�
 
 ## 残り時間と資源管理
 
-各記事を開始する直前にLambda contextの残り実行時間を確認する。60秒未満なら新しい記事を開始せず、未着手分を失敗一覧へ追加して待機設定・応答・資源解放へ進む。時間不足そのものを記事の補完拒否として監査・closed化しない。
+各記事を開始する直前にLambda contextの残り実行時間を確認する。60秒未満なら新しい記事を開始せず、未着手分を失敗一覧へ追加して待機設定・応答・資源解放へ進む。時間不足そのものを記事の補完拒否としてclosed化しない。
 
 呼び出し単位で必要な設定を検証し、RDS IAM認証・Collect用DBエンジン・セッション生成関数・SQSクライアントを用意する。HTTPクライアントは既存どおり記事取得ごとに生成し、robotsと記事で共有して閉じる。取得中にDB接続・トランザクションを保持しない。
 
@@ -163,10 +163,10 @@ PR作成前の最終検証（2026-09-14）: handlerの配送判断とrecorderの
 
 ## 配送側の記録
 
-配送の診断はLambdaの構造化JSONログからCloudWatch Logsへ出し、ConsumerのDB監査とは分ける。
+配送の診断はLambdaの構造化JSONログからCloudWatch Logsへ出す。
 
 - 検証できたmessage ID・event ID・未完成記事ID、工程名、処理結果・正常終了理由、判断code、requires_investigationを明示的に選ぶ。
-- 工程の失敗は`error_chain`に原因連鎖の型名を記録する。HTML抽出は`failure_kind=html_extraction`と`reason_code`、文字列のContent-Typeがある場合は`content_type`を記録する。構築拒否は`failure_kind=article_build`と全`defects`を記録する。同じ項目をConsumerの失敗監査にも残し、例外の自由文や未選択の診断情報は転記しない。
+- 工程の失敗は`error_chain`に原因連鎖の型名を記録する。HTML抽出は`failure_kind=html_extraction`と`reason_code`、文字列のContent-Typeがある場合は`content_type`を記録する。構築拒否は`failure_kind=article_build`と全`defects`を記録する。例外の自由文や未選択の診断情報は転記しない。
 - 待機の元のretry_at、要求した秒数、API成功時に設定できた秒数、上限適用の有無、設定失敗を区別する。
 - 入力不正、初期化・解放・可視性変更の失敗、時間不足による未着手を区別する。
 - 本文・イベント全体・生のヘッダー・receiptHandle・資格情報・例外の自由文は出さない。必要な例外情報は型名と選択した安定コードに限る。

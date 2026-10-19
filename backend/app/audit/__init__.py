@@ -8,12 +8,10 @@ payload snapshot 規律を受け取って監査行へ写像する。
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import (
-    AcquisitionPayload,
     AssessmentPayload,
     BackfillPayload,
     BasePipelineEventPayload,
     BriefingPayload,
-    CompletionPayload,
     CurationPayload,
     DispatchPayload,
     EmbeddingPayload,
@@ -22,12 +20,10 @@ from app.audit.domain.payloads import (
 from app.audit.repository import PipelineEventRepository
 
 __all__ = [
-    "AcquisitionPayload",
     "AssessmentPayload",
     "BackfillPayload",
     "BasePipelineEventPayload",
     "BriefingPayload",
-    "CompletionPayload",
     "CurationPayload",
     "DispatchPayload",
     "EmbeddingPayload",

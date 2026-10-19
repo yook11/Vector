@@ -4,10 +4,9 @@
 本 module は「何が起きたか (reason)」と安全文脈 (response_format / field /
 parser_position) を
 扱い、retry 可否 / scheduling / action は段が持つ (読取失敗は実質すべて terminal
-なので取得の監査は ``NON_RETRYABLE`` として記録する。retryable 属性は持たない)。
+なので取得は再試行しない。retryable 属性は持たない)。
 
-各 reason の value はそのまま audit ``outcome_code`` に焼かれる (``acquisition_
-conversion`` の ``AcquisitionConversionDefect`` と同じ「値 = コード」パターン)。
+各 reason の value はそのまま取得の失敗の ``code`` になる。
 ``_default_message`` は PII-free: reason / response_format / field / parser_position
 の安全値のみを合成し、上流の生バイト・生値は一切載せない (raw を渡せる引数が
 constructor に存在しないのが第一の構造保証)。
@@ -19,7 +18,7 @@ from enum import StrEnum
 
 
 class UnreadableResponseReason(StrEnum):
-    """読取失敗の原因 (自己記述コード)。value がそのまま ``outcome_code``。
+    """読取失敗の原因 (自己記述コード)。value がそのまま失敗の ``code``。
 
     parse / structure は説明上のグループにすぎず (型でも属性でもない)、分類は
     この 4 reason が担う。format (xml/json/feed) は CODE に焼かず安全文脈に持つ
@@ -39,7 +38,7 @@ class UnreadableResponseError(Exception):
 
     共通HTTPエラーと対称の origin error。
     ``reason`` (何が起きたか) と安全文脈を instance に持ち、``CODE`` は
-    reason.value を公開する (取得の監査が outcome_code に使う)。``__str__`` は
+    reason.value を公開する (取得の失敗判断が code に使う)。``__str__`` は
     明示 message があればそれ、無ければ PII-free な ``_default_message`` を返す。
     """
 
@@ -60,7 +59,7 @@ class UnreadableResponseError(Exception):
 
     @property
     def CODE(self) -> str:  # noqa: N802 (fetch family の ClassVar ``CODE`` と同名 API)
-        """reason.value を outcome_code として公開する (per-instance)。"""
+        """reason.value を失敗の code として公開する (per-instance)。"""
         return self.reason.value
 
     def __str__(self) -> str:

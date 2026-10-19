@@ -1,4 +1,4 @@
-"""``ArticleAcquisitionService`` の取得・変換・保存・監査テスト。"""
+"""``ArticleAcquisitionService`` の取得・変換・保存テスト。"""
 
 from __future__ import annotations
 
@@ -37,7 +37,6 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.outbox_event import OutboxEvent
-from app.models.pipeline_event import PipelineEvent
 from tests.outbox import RejectOutboxInsert
 
 _PUBLISHED = datetime(2026, 4, 30, tzinfo=UTC)
@@ -58,28 +57,10 @@ def _pending_fetched(url: str) -> RawArticle:
 def _rejection_fetched(url: str = "https://venturebeat.com/x") -> RawArticle:
     """real convert → title 欠落の ``FetchedArticleTitleMissingError``。
 
-    title は whitespace: ``bool(title)`` は True (= ``has_title`` True) だが
-    strip 後は空で title 欠落の棄却になる。body 42 / published None で
-    audit payload の構造化 field を固定する。
+    title は whitespace: ``bool(title)`` は True だが strip 後は空で title 欠落の
+    棄却になる。
     """
     return RawArticle(title="   ", url=url, body="x" * 42, published_at=None)
-
-
-def _url_rejection_fetched(url: str = "ftp://example.com/secret") -> RawArticle:
-    """real convert → URL VO 失敗 (scheme 不正) の ``ArticleUrlInvalidError``。
-
-    title は揃うが WebUrl の形式検証で ``url_not_http`` 棄却になる。
-    ``ArticleUrlInvalidError`` → ``WebUrlInvalidError`` の cause 連鎖を
-    監査が辿れる (error_chain 深さ>1) ことを固定するための入力。
-    """
-    return RawArticle(
-        title="Has Title", url=url, body="x" * 42, published_at=_PUBLISHED
-    )
-
-
-def _missing_url_fetched() -> RawArticle:
-    """real convert → 空 URL (``url_empty``) の ``ArticleUrlInvalidError``。"""
-    return RawArticle(title="Has Title", url="", body="x" * 42, published_at=_PUBLISHED)
 
 
 def _bug_fetched(url: str) -> RawArticle:
@@ -366,16 +347,12 @@ async def test_mixed_ready_pending_route_independently(
 
 
 @pytest.mark.asyncio
-async def test_conversion_rejection_audited_without_stopping_source(
+async def test_conversion_rejection_does_not_stop_source(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """棄却を挟んでも他 entry は永続化され source は止まらない。
-
-    棄却は握りつぶさず別 tx で ``pipeline_events`` に焼かれ、後続の R / H は
-    通常どおり永続化される (1 件不良で source 全体が落ちない)。
-    """
+    """棄却を挟んでも他 entry は永続化され source は止まらない。"""
     svc = ArticleAcquisitionService(
         session_factory,
         _StubSource(
@@ -399,124 +376,13 @@ async def test_conversion_rejection_audited_without_stopping_source(
 
 
 @pytest.mark.asyncio
-async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-) -> None:
-    """棄却監査は別 session に commit 済の REJECTED 行として残る。
-
-    ``stage='acquisition'`` / ``event_type='rejected'`` 固定、``outcome_code`` は
-    責任元の reason を verbatim で運ぶ (title 欠落は acquisition 所有の
-    ``acquisition_conversion_title_missing``)。観測スナップショットは
-    ``payload.conversion_*`` 構造化列で SQL drill-down できる。
-    """
-    svc = ArticleAcquisitionService(
-        session_factory,
-        _StubSource([_rejection_fetched()]),
-    )
-
-    await svc.execute(vb_source.id)
-
-    row = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.event_type == "rejected")
-            )
-        )
-        .scalars()
-        .one()
-    )
-    assert row.stage == "acquisition"
-    assert row.outcome_code == "acquisition_conversion_title_missing"
-    assert row.retryability is None
-    assert row.source_id == vb_source.id
-    assert row.error_class == (
-        "app.collection.article_acquisition.fetched_article.FetchedArticleTitleMissingError"
-    )
-    assert row.payload["conversion_has_title"] is True
-    assert row.payload["conversion_body_length"] == 42
-    assert row.payload["conversion_has_published_at"] is False
-
-
-@pytest.mark.asyncio
-async def test_missing_url_rejection_burns_url_empty_reason(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-) -> None:
-    """URL 欠落は記事 URL の ``url_empty`` と URL 不正の例外型で監査する。"""
-    svc = ArticleAcquisitionService(
-        session_factory,
-        _StubSource([_missing_url_fetched()]),
-    )
-
-    await svc.execute(vb_source.id)
-
-    row = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.event_type == "rejected")
-            )
-        )
-        .scalars()
-        .one()
-    )
-    assert row.outcome_code == "url_empty"
-    assert row.error_class.endswith(".ArticleUrlInvalidError")
-    assert row.payload["conversion_has_title"] is True
-
-
-@pytest.mark.asyncio
-async def test_invalid_url_rejection_burns_url_vo_reason_with_cause_chain(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-) -> None:
-    """URL VO 失敗は責任元 reason を verbatim で焼き、cause 連鎖を監査に残す。
-
-    http/https 以外の URL は WebUrl の形式検証で ``url_not_http`` に精密分類され
-    (旧 ``INVALID_URL`` 潰しを解消)、``ArticleUrlInvalidError`` →
-    ``WebUrlInvalidError`` の cause が ``error_class`` / ``error_chain`` (深さ>1)
-    として残る。
-    """
-    svc = ArticleAcquisitionService(
-        session_factory,
-        _StubSource([_url_rejection_fetched()]),
-    )
-
-    await svc.execute(vb_source.id)
-
-    row = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.event_type == "rejected")
-            )
-        )
-        .scalars()
-        .one()
-    )
-    assert row.outcome_code == "url_not_http"
-    assert row.error_class.endswith(".ArticleUrlInvalidError")
-    # URL VO 失敗は下位 WebUrl 失敗を __cause__ に連鎖 → chain 深さ>1 (非空虚)。
-    assert row.payload["error_chain"] is not None
-    assert len(row.payload["error_chain"]) > 1
-
-
-@pytest.mark.asyncio
 async def test_unexpected_convert_bug_is_valued_and_stream_continues(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """convert が想定外 bug を raise しても service が記録し source を止めない。
-
-    bug entry は握りつぶされず ``UNEXPECTED_ERROR`` として別 tx で監査され
-    (``payload`` を SQL drill-down できる)、前後の R / H は通常どおり永続化
-    される (1 件の bug で source 全体が落ちない = stream resilience は
-    orchestrator の責務)。
-    """
+    """convert が想定外 bug を raise しても、前後の entry は永続化される。"""
     real_convert = service_module.convert_fetched_article
 
     def _flaky_convert(fetched: FetchedArticle, *, source: object, source_id: int):  # noqa: ANN202
@@ -542,34 +408,6 @@ async def test_unexpected_convert_bug_is_valued_and_stream_continues(
     assert len(article_ids) == 1  # bug を挟んでも R は永続化
     pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
     assert len(pendings) == 1  # bug 後の H も止まらず投入
-
-    rows = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(
-                    PipelineEvent.outcome_code
-                    == "acquisition_conversion_unexpected_error"
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 1
-    # error_class は本当のバグ (cause) 由来 — 再分類器でラップしない。
-    assert rows[0].error_class.endswith(".RuntimeError")
-
-
-async def _succeeded_events(db_session: AsyncSession) -> list[PipelineEvent]:
-    return list(
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.event_type == "succeeded")
-            )
-        )
-        .scalars()
-        .all()
-    )
 
 
 @pytest.mark.asyncio
@@ -599,74 +437,12 @@ async def test_source_read_failure_propagates_without_rewrapping(
 
 
 @pytest.mark.asyncio
-async def test_immediate_acquisition_writes_article_created_succeeded(
+async def test_redelivered_full_content_records_single_created_event(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """即時獲得成功は SUCCEEDED/article_created を同一 tx で 1 行焼く。
-
-    ``article_id`` は採番済み新規行 (execute 戻り値と一致)、``canonical_url`` は
-    canonicalize 済み値、``retryability`` / ``error_class`` は collection 成功なので
-    NULL。
-    """
-    svc = ArticleAcquisitionService(
-        session_factory,
-        _StubSource([_ready_fetched("https://venturebeat.com/a/")]),
-    )
-
-    article_ids = await svc.execute(vb_source.id)
-
-    rows = await _succeeded_events(db_session)
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.stage == "acquisition"
-    assert row.outcome_code == "article_created"
-    assert row.article_id == article_ids[0]  # 採番済み新規行 id
-    assert row.source_id == vb_source.id
-    assert row.retryability is None
-    assert row.error_class is None
-    assert row.payload["canonical_url"] == "https://venturebeat.com/a/"
-
-
-@pytest.mark.asyncio
-async def test_incomplete_observed_article_writes_incomplete_article_created_succeeded(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-) -> None:
-    """補完待ち投入成功は SUCCEEDED/incomplete_article_created を焼く。
-
-    ``article_id`` はこの段ではまだ無い (後段 completion の promote 時に採番)。
-    """
-    svc = ArticleAcquisitionService(
-        session_factory,
-        _StubSource([_pending_fetched("https://techcrunch.com/h/")]),
-    )
-
-    article_ids = await svc.execute(vb_source.id)
-    assert article_ids == []  # 補完待ち経路は cron poller 駆動
-
-    rows = await _succeeded_events(db_session)
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.outcome_code == "incomplete_article_created"
-    assert row.article_id is None  # 補完後の promote 時に採番
-    assert row.retryability is None
-    assert row.payload["canonical_url"] == "https://techcrunch.com/h/"
-
-
-@pytest.mark.asyncio
-async def test_redelivered_full_content_writes_single_succeeded(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-) -> None:
-    """同 URL 再掲は ON CONFLICT で skip され、SUCCEEDED は初回 1 件のみ (bounded)。
-
-    成功 witness は新規 URL 初回のみ発火し、定常的な重複再掲は非記録。2 件 yield して
-    1 件しか焼かれないことで「件数ぶん焼く」naive 実装と区別する (非空虚)。
-    """
+    """同 URL 再掲は ON CONFLICT で skip され、記事作成イベントは初回 1 件だけ残る。"""
     svc = ArticleAcquisitionService(
         session_factory,
         _StubSource(
@@ -679,9 +455,6 @@ async def test_redelivered_full_content_writes_single_succeeded(
 
     await svc.execute(vb_source.id)
 
-    rows = await _succeeded_events(db_session)
-    assert len(rows) == 1  # 2 度目は ON CONFLICT → 非記録
-    assert rows[0].outcome_code == "article_created"
     outbox_events = (
         (
             await db_session.execute(
@@ -697,12 +470,12 @@ async def test_redelivered_full_content_writes_single_succeeded(
 
 
 @pytest.mark.asyncio
-async def test_known_url_observed_writes_no_succeeded(
+async def test_known_url_observed_records_no_event(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """既知 URL を補完待ち経路で受けると pre-check skip され SUCCEEDED を焼かない。"""
+    """既知 URL を補完待ち経路で受けると pre-check skip され、イベントを記録しない。"""
     canonical = ArticleUrl("https://techcrunch.com/known")
     db_session.add(
         AnalyzableArticleRecord(
@@ -721,7 +494,6 @@ async def test_known_url_observed_writes_no_succeeded(
     )
     await svc.execute(vb_source.id)
 
-    assert await _succeeded_events(db_session) == []  # pre-check skip は非記録
     outbox_events = (
         (await db_session.execute(select(OutboxEvent.event_id))).scalars().all()
     )
@@ -803,13 +575,13 @@ async def test_incomplete_article_persists_matching_outbox_event(
 
 
 @pytest.mark.asyncio
-async def test_acquired_outbox_failure_rolls_back_article_and_audit(
+async def test_acquired_outbox_failure_rolls_back_article(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
     reject_outbox_insert: RejectOutboxInsert,
 ) -> None:
-    """即時獲得イベントの失敗で記事と成功監査も取り消す。"""
+    """即時獲得イベントの失敗で記事も取り消す。"""
     constraint_name = await reject_outbox_insert(AnalyzableArticleCreated.EVENT_TYPE)
     svc = ArticleAcquisitionService(
         session_factory,
@@ -823,36 +595,23 @@ async def test_acquired_outbox_failure_rolls_back_article_and_audit(
         articles = (
             (await reader.execute(select(AnalyzableArticleRecord.id))).scalars().all()
         )
-        audit_events = (
-            (
-                await reader.execute(
-                    select(PipelineEvent.id).where(
-                        PipelineEvent.stage == "acquisition",
-                        PipelineEvent.event_type == "succeeded",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
         outbox_events = (
             (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
         )
     assert {
         "articles": articles,
-        "audit_events": audit_events,
         "outbox_events": outbox_events,
-    } == {"articles": [], "audit_events": [], "outbox_events": []}
+    } == {"articles": [], "outbox_events": []}
 
 
 @pytest.mark.asyncio
-async def test_incomplete_outbox_failure_rolls_back_pending_and_audit(
+async def test_incomplete_outbox_failure_rolls_back_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
     reject_outbox_insert: RejectOutboxInsert,
 ) -> None:
-    """補完待ちイベントの失敗でpendingと成功監査も取り消す。"""
+    """補完待ちイベントの失敗でpendingも取り消す。"""
     constraint_name = await reject_outbox_insert(IncompleteArticleRecorded.EVENT_TYPE)
     svc = ArticleAcquisitionService(
         session_factory,
@@ -866,95 +625,10 @@ async def test_incomplete_outbox_failure_rolls_back_pending_and_audit(
         pending_articles = (
             (await reader.execute(select(IncompleteArticleORM.id))).scalars().all()
         )
-        audit_events = (
-            (
-                await reader.execute(
-                    select(PipelineEvent.id).where(
-                        PipelineEvent.stage == "acquisition",
-                        PipelineEvent.event_type == "succeeded",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
         outbox_events = (
             (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
         )
     assert {
         "pending_articles": pending_articles,
-        "audit_events": audit_events,
         "outbox_events": outbox_events,
-    } == {"pending_articles": [], "audit_events": [], "outbox_events": []}
-
-
-@pytest.mark.asyncio
-async def test_source_batch_outbox_failure_keeps_separate_rejection_audit(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-    reject_outbox_insert: RejectOutboxInsert,
-) -> None:
-    """source一括rollbackでも別transactionの変換棄却監査は保持する。"""
-    constraint_name = await reject_outbox_insert(IncompleteArticleRecorded.EVENT_TYPE)
-    svc = ArticleAcquisitionService(
-        session_factory,
-        _StubSource(
-            [
-                _ready_fetched("https://venturebeat.com/batch-ready"),
-                _rejection_fetched("https://venturebeat.com/batch-rejected"),
-                _pending_fetched("https://techcrunch.com/batch-pending"),
-            ]
-        ),
-    )
-
-    with pytest.raises(IntegrityError, match=constraint_name):
-        await svc.execute(vb_source.id)
-
-    async with session_factory() as reader:
-        articles = (
-            (await reader.execute(select(AnalyzableArticleRecord.id))).scalars().all()
-        )
-        pending_articles = (
-            (await reader.execute(select(IncompleteArticleORM.id))).scalars().all()
-        )
-        succeeded_audits = (
-            (
-                await reader.execute(
-                    select(PipelineEvent.id).where(
-                        PipelineEvent.stage == "acquisition",
-                        PipelineEvent.event_type == "succeeded",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        rejected_audits = (
-            (
-                await reader.execute(
-                    select(PipelineEvent.id).where(
-                        PipelineEvent.stage == "acquisition",
-                        PipelineEvent.event_type == "rejected",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        outbox_events = (
-            (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
-        )
-    assert {
-        "articles": articles,
-        "pending_articles": pending_articles,
-        "succeeded_audits": succeeded_audits,
-        "rejected_audit_count": len(rejected_audits),
-        "outbox_events": outbox_events,
-    } == {
-        "articles": [],
-        "pending_articles": [],
-        "succeeded_audits": [],
-        "rejected_audit_count": 1,
-        "outbox_events": [],
-    }
+    } == {"pending_articles": [], "outbox_events": []}

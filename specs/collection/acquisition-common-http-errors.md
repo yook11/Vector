@@ -30,21 +30,6 @@ Status: Implemented
 - `RssFeedErrors`はフィードごとの失敗（`HttpResponseError`・`HttpTransportError`・`DestinationRejectedError`・`UnreadableResponseError`）を保持するだけとし、再試行可否を持たない。
 - 読取失敗`UnreadableResponseError`は取得工程のエラーとして維持する。
 
-## 監査の記録
-
-| 例外 | outcome_code | retryability | failure_kind | payload |
-|---|---|---|---|---|
-| `HttpResponseError`・`HttpTransportError`・`DestinationRejectedError` | 外部取得の失敗判断のcode | 判断が再試行可能ならretryable、不可ならnon_retryable | `external_fetch` | `http_status`（応答）、`reason_code`（通信失敗の理由）。`error_message`なし |
-| `UnreadableResponseError` | `reason.value`（`read_*`） | non_retryable | `unreadable_response` | `read_format`・`read_field`・`read_parser_position`、PII-freeの既定メッセージ |
-| `ResponseSizeLimitExceededError` | `source_response_size_limit_exceeded` | non_retryable | `response_size_limit_exceeded` | 数値と根拠だけの定型メッセージ |
-| `RssFeedErrors` | `rss_feed_errors` | どれか1つのフィードが再試行可能ならretryable | `rss_feeds` | `feed_failures`の各要素に`code`・`http_status`・`reason_code` |
-| DB障害 | 従来どおり | 従来どおり | 従来どおり | 従来どおり |
-| その他 | `unexpected_error` | unknown | `unknown` | 従来どおり |
-
-- 再試行可否は外部取得の失敗判断から導き、判断表を取得側で再定義しない。
-- 共通HTTPエラーと宛先拒否は自由文を載せず、生のRetry-Afterも記録しない。
-- `fetch_reason`・`fetch_retry_after_seconds`を撤去し、通信失敗の理由は補完と同じ`reason_code`列に残す。
-
 ## フィード失敗のログ
 
 `source_feed_fetch_failed`は`source`・`feed`・`code`・`http_status`・`reason_code`を出す。`code`はHTTP起因なら外部取得の失敗判断のcode、読取失敗は`reason.value`とする。一部のフィードだけが失敗しソースが成功した場合、このログがフィードの失敗の唯一の記録になる。
@@ -60,10 +45,9 @@ Status: Implemented
 
 1. 再配信の挙動と、取得成功時の保存・監査・Outboxを変えない。
 2. エラーは事実だけを持ち、`retryable`・`RETRYABILITY`・`FAILURE_KIND`を持たない。共通HTTPエラーを取得工程のエラーで包み直さない。
-3. 監査の再試行可否は外部取得の失敗判断から導く。
-4. `failure_kind`の値（`external_fetch`・`unreadable_response`・`rss_feeds`）を維持する。
-5. 分類できない例外を通信障害へ丸めない。
-6. 監査・ログに本文・生のRetry-After・例外の自由文を新たに出さない。
+3. 取得の再試行可否は外部取得の失敗判断から導く。
+4. 分類できない例外を通信障害へ丸めない。
+5. ログに本文・生のRetry-After・例外の自由文を新たに出さない。
 
 ## Non-goals
 

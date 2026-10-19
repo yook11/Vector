@@ -49,7 +49,6 @@ EXTERNAL_CONTENT_LOG_RULES = EXTERNAL_CONTENT_POLICY.extend(
             "has_published_at",
             "published_at_origin",
             "business_outcome_code",
-            "business_error_class",
         }
     ),
 )

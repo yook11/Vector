@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,80 +42,6 @@ class BackfillPayload(BasePipelineEventPayload):
     target_id: int | None = None
     # daily_max は budget exhausted event 専用の「停止の閾値」(B 級 config snapshot)。
     daily_max: int | None = None
-
-
-class RssFeedFailurePayload(BaseModel):
-    """元の例外を安全な監査情報へ写したフィード単位の失敗。"""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    feed_url: str
-    code: str
-    error_class: str
-    error_message: str | None = None
-    error_chain: list[str]
-    http_status: int | None = None
-    reason_code: str | None = None
-
-
-class AcquisitionPayload(BasePipelineEventPayload):
-    """Stage 1 acquisition payload。"""
-
-    kind: Literal["acquisition"] = "acquisition"
-    feed_failures: list[RssFeedFailurePayload] | None = None
-    failure_kind: str | None = None
-    failure_action: str | None = None
-
-    # acquisition / completion をまたぐ canonical URL key。
-    canonical_url: str | None = None
-
-    http_status: int | None = None
-    final_url: str | None = None
-    response_size: int | None = None
-    content_type: str | None = None
-    body_head: str | None = None
-
-    # 通信失敗の理由 (HttpTransportFailureReason)。補完の reason_code と同じ語彙。
-    reason_code: str | None = None
-
-    # read 失敗 (reader 構造化不能) の specifics。outcome_code = reason.value とは別に
-    # どの形式 / どのフィールド / どの位置で落ちたかを残す。
-    read_format: str | None = None
-    read_field: str | None = None
-    read_parser_position: str | None = None
-
-    conversion_raw_url: str | None = None
-    conversion_has_title: bool | None = None
-    conversion_body_length: int | None = None
-    conversion_has_published_at: bool | None = None
-
-
-class CompletionPayload(BasePipelineEventPayload):
-    """Stage 2 completion payload。"""
-
-    kind: Literal["completion"] = "completion"
-    failure_kind: str | None = None
-    failure_action: str | None = None
-    incomplete_article_id: int | None = None
-    incomplete_article_status: str | None = None
-    canonical_url: str | None = None
-    # completion の claim / retry 制御に由来する snapshot。
-    attempt_count: int | None = None
-    scraper_class: str | None = None
-    reason_code: str | None = None
-    # 構築拒否の具体的な理由を、工程のoutcome_codeとは別に保存する。
-    defects: list[str] | None = None
-    body_length: int | None = None
-    quality_gate_metric: dict[str, Any] | None = None
-    http_status: int | None = None
-    final_url: str | None = None
-    response_size: int | None = None
-    content_type: str | None = None
-    body_head: str | None = None
-    # body_head に prompt-injection 境界タグを検出した行だけ True。
-    injection_markers_present: bool | None = None
-    # retry 上限に到達して諦めた行だけ True。
-    retry_exhausted: bool | None = None
 
 
 class CurationPayload(BasePipelineEventPayload):
@@ -209,8 +135,6 @@ class TrendDiscoveryPayload(BasePipelineEventPayload):
 PipelineEventPayload = Annotated[
     DispatchPayload
     | BackfillPayload
-    | AcquisitionPayload
-    | CompletionPayload
     | CurationPayload
     | AssessmentPayload
     | EmbeddingPayload

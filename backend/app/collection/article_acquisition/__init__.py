@@ -6,5 +6,5 @@
 - ``fetched_article`` — 収集対象として受け付けた記事
 - ``tools`` — stateless I/O 道具箱 (HTTP / RSS / Crossref / HN)
 - ``service`` — 収集→変換→永続化ユースケース (唯一のオーケストレータ)
-- 失敗ハンドリング層 (marker / handler / audit)
+- 失敗ハンドリング層 (marker / handler)
 """

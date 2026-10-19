@@ -13,7 +13,6 @@ from app.analysis.curation.events import ArticleCuratedSignal
 from app.backfill.targets import BackfillEventTarget, BackfillTarget
 from app.collection.article_acquisition.events import IncompleteArticleRecorded
 from app.collection.events import AnalyzableArticleCreated
-from app.collection.sources.source_name import SourceName
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -361,7 +360,7 @@ class PipelineBacklog:
         target_id: int,
         *,
         created_before: datetime,
-    ) -> tuple[int, SourceName] | None:
+    ) -> int | None:
         """行ロック後の新しい照会で期限切れと未完了を再確認する。"""
         locked = await self._session.scalar(
             select(IncompleteArticle.id)
@@ -371,11 +370,10 @@ class PipelineBacklog:
         if locked is None:
             return None
         stmt = self._completion_pending(
-            select(IncompleteArticle.source_id, IncompleteArticle.source_name),
+            select(IncompleteArticle.id),
             created_before=created_before,
         ).where(IncompleteArticle.id == target_id)
-        row = (await self._session.execute(stmt)).tuples().one_or_none()
-        return None if row is None else (row[0], row[1])
+        return await self._session.scalar(stmt)
 
     async def count_incomplete_articles_pending_completion(
         self,

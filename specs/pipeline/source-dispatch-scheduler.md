@@ -118,7 +118,7 @@ SQSのMessageIdとLambdaの実行IDを業務上の取得依頼IDには使わな�
 確定（2026-09-15）: 同じ依頼の再取得を許容し、取得依頼の処理済み記録は設けない。
 
 - 無効・削除済みソースは現在の状態を確認して取得せず正常終了する。有効だが未登録・不正なソースは失敗にする。cadenceによる選定はやり直さない。
-- 既存の取得サービスへ保存・監査・Outboxを委譲する。URLの一意制約と新規保存時だけのイベント生成を維持する。
+- 既存の取得サービスへ保存・Outboxを委譲する。URLの一意制約と新規保存時だけのイベント生成を維持する。
 - 取得失敗は[取得失敗の再配信と受信完了](../collection/acquisition-failure-redelivery.md)に従い、再試行で変わりうる失敗（再試行で解消しうるDB障害を含む）と想定外の失敗をSQSへ返し、再試行しても変わらない失敗は受信完了にして次の定期投入に任せる（2026-09-26に変更）。アプリで取得全体を再試行しない。
 - Standardキューの可視性1,800秒、最大受信5回、Consumer専用DLQ、元キュー・DLQの保持14日。Lambdaは300秒・1,024MB・arm64、バッチ1件・待機0秒、予約同時実行5・受信最大同時実行5。
 - `ReportBatchItemFailures`を使う。返信用メッセージIDを確定できない入力と呼び出しの初期化障害は全体失敗にする。SQS起動へLambda非同期再試行設定は付けない。
@@ -299,8 +299,8 @@ Done: Consumer・AWS定義・CI・重要な振る舞いのテストと既存回�
 - ソースのDB読み取りは`SourceRepository`へ集約する。投入側の`SourceDispatchService`は有効ソースの登録状態・cadenceから対象を選定し、受信側の`resolve_acquisition_source()`は現在の有効状態と登録定義から取得対象を解決する。いずれも読み取りセッションを閉じてから判定し、DB障害は伝播する。
 - `ArticleAcquisitionConsumer.consume()`は取得対象の解決結果に従い、`ArticleAcquisitionService.execute(source_id)`を呼び、`AcquisitionSucceeded | RetryAcquisition | NoRetryAcquisition`を返す。無効・削除済みは理由を持つ`NoRetryAcquisition`とし、失敗監査や終了状態は保存せず、再配送時には再確認する。
 - 開始前の確認後にソースが変更されても開始済み処理は中断しない。cadenceの再選定や依頼の古さによる破棄はしない。フィード部分失敗・記事拒否の既存契約を維持し、サービス全体の失敗を再配送に対応付ける。
-- 取得サービスの失敗は配送方式に依存しない`ArticleAcquisitionFailureRecorder.record_source_failure()`で別セッションへ監査する。SQSのConsumerは分類した再配信要否を元例外とともに結果型で返し、Taskiqのタスク入口は取得エラーを結果として返してDB障害・想定外例外を再送出する。監査・診断の通常障害で元の取得失敗を置き換えず、キャンセルは伝播する。
-- 変換棄却もRecorderの`record_conversion_rejected()`で別セッションに記録し、commit成功後だけ棄却メトリクスを計上する。取得監査は取得エラーとDBエラーの分類を使い、Redis例外の分類やTaskiq・アプリ全体の設定を読み込まない。
+- SQSのConsumerは分類した再配信要否を元例外とともに結果型で返し、Taskiqのタスク入口は取得エラーを結果として返してDB障害・想定外例外を再送出する。キャンセルは伝播する。
+- 変換棄却は棄却のログを出した時点で棄却メトリクスを計上する。取得の失敗判断は取得エラーとDBエラーの分類を使い、Redis例外の分類やTaskiq・アプリ全体の設定を読み込まない。
 - `AcquisitionConsumerSettings`と補完工程の共通ライフサイクルを使用し、呼び出しごとのRDS IAM署名・TLS・NullPool・HTTPプロキシ方針を維持する。`ReaderTools`には連絡先を設定した`CrossrefReader`を明示注入し、アプリ全体の設定や不要な秘密情報を読み込まない。Taskiq側の生成方法は変更しない。
 - 診断`acquisition_message_processed`は`AcquisitionMessageRecorder`がSQSメッセージID・検証済み取得依頼ID・ソースID・結果・所要時間（`duration_ms`）・安全な失敗コード／例外型を記録する。時間計測は`perf_counter()`と共通の`elapsed_ms_since()`を使う。結果が返らなかった呼び出し例外は`operation=consume`で区別する。不正本文や例外自由文は新設ログへ出さない。ログ・解放の通常障害で確定結果を変えず、キャンセルは伝播する。
 

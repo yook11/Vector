@@ -187,7 +187,6 @@ async def test_existing_article_is_preserved_and_message_is_acknowledged(
     after = await stored_completion(system_database, article)
     assert after.pending is None
     assert after.articles == before.articles
-    assert after.audits == before.audits
     assert after.outbox == before.outbox
 
 
@@ -239,7 +238,7 @@ async def test_redelivery_completes_previously_retryable_article(
     ) == {"batchItemFailures": []}
     after = await stored_completion(system_database, target)
     assert after.pending is None
-    assert len(after.articles) == len(after.successes) == len(after.outbox) == 1
+    assert len(after.articles) == len(after.outbox) == 1
 
 
 @pytest.mark.asyncio
@@ -262,7 +261,7 @@ async def test_failed_close_commit_is_reported_for_redelivery(
     assert response == {"batchItemFailures": [{"itemIdentifier": "failed"}]}
     stored = await stored_completion(system_database, target)
     assert stored.pending["status"] == "open"
-    assert stored.articles == stored.successes == stored.outbox == []
+    assert stored.articles == stored.outbox == []
 
 
 @pytest.mark.asyncio
@@ -355,7 +354,7 @@ async def test_visibility_failure_keeps_article_open_for_redelivery(
     assert response == {"batchItemFailures": [{"itemIdentifier": "failed-wait"}]}
     stored = await stored_completion(system_database, target)
     assert stored.pending["status"] == "open"
-    assert stored.articles == stored.successes == stored.outbox == []
+    assert stored.articles == stored.outbox == []
 
 
 @pytest.mark.asyncio
@@ -363,7 +362,7 @@ async def test_insufficient_time_preserves_unstarted_article(
     system_database,
     delivery_runtime,
 ):
-    """先行記事の確定後に時間不足なら、未着手記事と監査を変更しない。"""
+    """先行記事の確定後に時間不足なら、未着手記事を変更しない。"""
     first = await seed_pending(system_database, "https://example.com/started")
     unstarted = await seed_pending(system_database, "https://example.com/unstarted")
     before = await stored_completion(system_database, unstarted)

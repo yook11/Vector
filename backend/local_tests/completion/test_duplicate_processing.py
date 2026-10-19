@@ -51,14 +51,14 @@ class TestFirstCommittedCompletionIsPreserved:
             return article_response("Later content")
         return httpx2.Response(request.param)
 
-    async def test_redelivery_keeps_first_article_audit_and_outbox(
+    async def test_redelivery_keeps_first_article_and_outbox(
         self,
         completion_consumer,
         system_database,
         page_response,
         http_boundary,
     ):
-        """完成後の再受信はHTTPを追加せず、初回の記事・監査・Outboxを保持する。"""
+        """完成後の再受信はHTTPを追加せず、初回の記事・Outboxを保持する。"""
         pending_article = await seed_pending(
             system_database, "https://example.com/redelivery"
         )
@@ -86,7 +86,7 @@ class TestFirstCommittedCompletionIsPreserved:
         run_completion_race,
         later_response,
     ):
-        """先に完成した記事を後続処理が変更せず、成功監査とOutboxも増やさない。"""
+        """先に完成した記事を後続処理が変更せず、Outboxも増やさない。"""
         pending_article = await seed_pending(
             system_database, "https://example.com/completed-first"
         )
@@ -114,7 +114,6 @@ class TestFirstCommittedCompletionIsPreserved:
             "Later content"
             not in stored_after_competition.articles[0]["original_content"]
         )
-        assert len(stored_after_competition.successes) == 1
         assert len(stored_after_competition.outbox) == 1
 
     async def test_later_completion_keeps_first_closed_state(
@@ -123,7 +122,7 @@ class TestFirstCommittedCompletionIsPreserved:
         run_completion_race,
         later_response,
     ):
-        """先にclosedになった記事を後続処理が完成させず、失敗監査も増やさない。"""
+        """先にclosedになった記事を後続処理が完成させない。"""
         pending_article = await seed_pending(
             system_database, "https://example.com/closed-first"
         )
@@ -146,6 +145,4 @@ class TestFirstCommittedCompletionIsPreserved:
         assert stored_after_competition.pending is not None
         assert stored_after_competition.pending["status"] == "closed"
         assert stored_after_competition.articles == []
-        assert stored_after_competition.successes == []
         assert stored_after_competition.outbox == []
-        assert len(stored_after_competition.audits) == 1

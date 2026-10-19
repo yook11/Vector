@@ -1,16 +1,12 @@
-"""1 source 分の記事取得・変換・保存・監査をまとめる application service。"""
+"""1 source 分の記事取得・変換・保存をまとめる application service。"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.events import (
     IncompleteArticleRecorded,
-)
-from app.collection.article_acquisition.failure_recording import (
-    ArticleAcquisitionFailureRecorder,
 )
 from app.collection.article_acquisition.fetched_article import (
     FetchedArticle,
@@ -52,13 +48,11 @@ class ArticleAcquisitionService:
         self._session_factory = session_factory
         self._source = source
         self._tools_factory = tools_factory
-        self._failure_recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
     async def execute(self, source_id: int) -> list[int]:
         async with self._session_factory() as session:
             article_repo = AnalyzableArticleRepository(session)
             incomplete_repo = IncompleteArticleRepository(session)
-            audit = SourceAcquisitionAuditRepository(session)
             source_name = str(self._source.name)
             persisted_ids: list[int] = []
             observed_count = 0
@@ -79,12 +73,8 @@ class ArticleAcquisitionService:
                         source_name=source_name,
                         exc_info=exc,
                     )
-                    # 棄却の件数は別トランザクションの監査commit後に計上する。
-                    await self._failure_recorder.record_conversion_rejected(
-                        source_id=source_id,
-                        source_name=source_name,
-                        raw_article=raw_article,
-                        error=exc,
+                    record_acquisition_outcome(
+                        AcquisitionEntryOutcome.REJECTED, count=1
                     )
                     continue
                 except Exception as exc:
@@ -96,11 +86,8 @@ class ArticleAcquisitionService:
                         source_name=source_name,
                         exc_info=exc,
                     )
-                    await self._failure_recorder.record_conversion_rejected(
-                        source_id=source_id,
-                        source_name=source_name,
-                        raw_article=raw_article,
-                        error=exc,
+                    record_acquisition_outcome(
+                        AcquisitionEntryOutcome.REJECTED, count=1
                     )
                     continue
                 match outcome:
@@ -109,12 +96,6 @@ class ArticleAcquisitionService:
                         if analyzable_article_id is None:
                             continue
                         persisted_ids.append(analyzable_article_id)
-                        await audit.append_article_created(
-                            source_id=source_id,
-                            source_name=source_name,
-                            analyzable_article_id=analyzable_article_id,
-                            canonical_url=str(ready.source_url),
-                        )
                         event = AnalyzableArticleCreated(
                             analyzable_article_id=analyzable_article_id,
                         )
@@ -136,11 +117,6 @@ class ArticleAcquisitionService:
                         if incomplete_id is None:
                             continue
                         observed_count += 1
-                        await audit.append_incomplete_article_created(
-                            source_id=source_id,
-                            source_name=source_name,
-                            canonical_url=str(observed.source_url),
-                        )
                         event = IncompleteArticleRecorded(
                             source_id=source_id,
                             incomplete_article_id=incomplete_id,
@@ -157,9 +133,7 @@ class ArticleAcquisitionService:
 
             await session.commit()
 
-        # analyzable/observed の監査は本 session と同一 tx。commit 成功後にだけ計上し
-        # 監査行と件数を揃える (dedup skip は continue で非計数、run 失敗時は rollback
-        # され未 emit)。rejected は別 tx 監査のため Recorder が計上する。
+        # rollback された保存を数えないよう、commit 成功後にだけ計上する。
         record_acquisition_outcome(
             AcquisitionEntryOutcome.ANALYZABLE, count=len(persisted_ids)
         )
