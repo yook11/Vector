@@ -4,12 +4,10 @@ import asyncio
 
 import pytest
 
-from app.analysis.assessment.consumer_failure_classification import RetryAssessment
 from app.analysis.assessment.service import (
     AssessmentCompletion,
     AssessmentCompletionKind,
 )
-from app.db.errors import DatabaseConstraintError
 from local_tests.assessment.support import (
     assessment_reply,
     build_sqs_record,
@@ -38,7 +36,7 @@ async def test_concurrent_opposite_results_persist_only_leader_result(
     follower_category,
     leader_completion,
 ):
-    """対象内と対象外を同時に保存しても、先に処理した結果だけが永続化され、後から処理した結果は永続化されない。"""
+    """対象内と対象外を同時に保存しても、先に処理した結果だけが永続化され、後から処理した側は再配信せずに終わる。"""
     target = await seed_curation(system_database, "https://example.com/opposite")
     record = build_sqs_record(target)
     leader = gated_ai_responses(
@@ -72,22 +70,13 @@ async def test_concurrent_opposite_results_persist_only_leader_result(
             15,
         )
 
-    assert responses == [
-        {"batchItemFailures": []},
-        {"batchItemFailures": [{"itemIdentifier": record["messageId"]}]},
-    ]
-    completions = [
-        result
+    assert responses == [{"batchItemFailures": []}, {"batchItemFailures": []}]
+    assert [
+        result.kind
         for result in completion_results
         if isinstance(result, AssessmentCompletion)
-    ]
-    retries = [
-        result for result in completion_results if isinstance(result, RetryAssessment)
-    ]
+    ] == [leader_completion, AssessmentCompletionKind.ALREADY_ASSESSED]
     assert len(completion_results) == 2
-    assert [result.kind for result in completions] == [leader_completion]
-    assert len(retries) == 1
-    assert isinstance(retries[0].error, DatabaseConstraintError)
     stored = await fetch_stored_assessment(system_database, target.curation_id)
     saved = stored.in_scope + stored.out_of_scope
     assert len(saved) == 1

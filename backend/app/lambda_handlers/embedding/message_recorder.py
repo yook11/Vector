@@ -10,6 +10,7 @@ from app.analysis.embedding.consumer_failure_classification import (
 )
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
 from app.analysis.embedding.service import EmbeddingCompletion
+from app.db.errors import DatabaseError
 from app.lambda_handlers.event_reader import EventReadFailed
 from app.lambda_handlers.sqs.received_message import ReceivedMessageInvalidError
 
@@ -90,6 +91,13 @@ class EmbeddingMessageRecorder:
                     code=cause.CODE,
                     failure_reason=cause.reason.value,
                     message_disposition="completed",
+                )
+            case NoRetryEmbedding(cause=DatabaseError() as cause):
+                logger.error(
+                    "embedding_message_processing_failed",
+                    code="database_error",
+                    message_disposition="completed",
+                    exc_info=cause,
                 )
             case NoRetryEmbedding(cause=cause):
                 logger.warning(

@@ -8,6 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from local_tests.database_failure import cancel_statement
+
 
 async def transaction_state(session, target):
     # flush後の同一接続で、取り消す前に保存操作が成立していたことを確認する。
@@ -47,7 +49,7 @@ class CommitControl:
 
 
 @contextmanager
-def hold_commit(monkeypatch, target, *, phase, fail=False):
+def hold_commit(monkeypatch, target, *, phase, fail=False, failure=cancel_statement):
     control = CommitControl()
     commit = AsyncSession.commit
 
@@ -65,7 +67,7 @@ def hold_commit(monkeypatch, target, *, phase, fail=False):
             control.reached.set()
             if fail:
                 try:
-                    await session.execute(text("SELECT 1 / 0"))
+                    await failure(session)
                 except DBAPIError as exc:
                     control.error = exc
                     raise

@@ -285,7 +285,7 @@ async def test_outbox_failure_rolls_back_signal_and_continues_noise(
             {"Records": [message("failed", signal_id), message("noise", noise_id)]},
             None,
         )
-        assert response == {"batchItemFailures": [{"itemIdentifier": "failed"}]}
+        assert response == {"batchItemFailures": []}
         assert await rows(db_session, ArticleCuration) == []
         assert await rows(db_session, OutboxEvent) == []
         assert len(await rows(db_session, CurationNoise)) == 1

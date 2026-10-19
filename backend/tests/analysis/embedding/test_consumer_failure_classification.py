@@ -30,6 +30,7 @@ from app.db.errors import (
     DatabaseConnectionErrorReason,
     DatabaseConstraintError,
     DatabaseConstraintErrorReason,
+    DatabaseSyntaxOrAccessError,
 )
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import (
@@ -107,12 +108,6 @@ def test_failure_unrecoverable_by_redelivery_is_not_retried(error, capsys) -> No
             id="db_connection_lost",
         ),
         pytest.param(
-            DatabaseConstraintError(
-                reason=DatabaseConstraintErrorReason.FOREIGN_KEY_VIOLATION
-            ),
-            id="db_constraint",
-        ),
-        pytest.param(
             OperationalError("query", {}, Exception()), id="sqlalchemy_operational"
         ),
         pytest.param(RuntimeError("unexpected"), id="unexpected"),
@@ -120,5 +115,22 @@ def test_failure_unrecoverable_by_redelivery_is_not_retried(error, capsys) -> No
     ],
 )
 def test_failure_that_may_recover_or_is_unknown_is_retried(error) -> None:
-    """回復しうる失敗と、DB障害・想定外・時間切れは再配信に任せる。"""
+    """回復しうる失敗と、解消しうるDB障害・想定外・時間切れは再配信に任せる。"""
     assert classify_embedding_failure(error) == RetryEmbedding(error)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(
+            DatabaseConstraintError(
+                reason=DatabaseConstraintErrorReason.FOREIGN_KEY_VIOLATION
+            ),
+            id="db_constraint",
+        ),
+        pytest.param(DatabaseSyntaxOrAccessError(), id="db_privilege"),
+    ],
+)
+def test_database_failure_retry_cannot_resolve_is_not_retried(error) -> None:
+    """再試行で解消しないDBの失敗は、元の例外を持ったまま受信完了にする。"""
+    assert classify_embedding_failure(error) == NoRetryEmbedding(error)

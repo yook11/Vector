@@ -28,6 +28,12 @@ from app.collection.domain.analyzable_article import AnalyzableArticleDefect as 
 from app.collection.domain.analyzable_article import QualityTooLow
 from app.collection.response_size import ResponseSizeBasis
 from app.collection.retry_at import RetryAt
+from app.db.errors import (
+    DatabaseConnectionError,
+    DatabaseConnectionErrorReason,
+    DatabaseConstraintError,
+    DatabaseConstraintErrorReason,
+)
 from app.http.destination_policy import (
     DestinationRejectedError,
     DestinationRejectedReason,
@@ -171,6 +177,13 @@ def test_unclassified_validation_error_requires_investigation() -> None:
             "fetch_deadline_exceeded",
             False,
         ),
+        (
+            DatabaseConnectionError(
+                reason=DatabaseConnectionErrorReason.CONNECTION_LOST
+            ),
+            "database_error",
+            False,
+        ),
         (TypeError("unexpected implementation failure"), "unknown", True),
     ],
 )
@@ -192,6 +205,18 @@ def test_execution_failure_preserves_cause_and_retries(
         assert decision.requires_investigation is investigate
         assert original.__cause__ is cause
         assert original.__traceback__ is traceback
+
+
+def test_database_failure_retry_cannot_resolve_finishes_completion() -> None:
+    """再試行で解消しないDBの失敗は、原因を保持して調査対象として終了する。"""
+    error = ArticleCompletionError(
+        cause=DatabaseConstraintError(
+            reason=DatabaseConstraintErrorReason.FOREIGN_KEY_VIOLATION
+        )
+    )
+    assert classify_completion_failure(error, now=_NOW) == NoRetryCompletion(
+        cause=error, code="database_error", requires_investigation=True
+    )
 
 
 def test_unsupported_content_type_finishes_completion() -> None:

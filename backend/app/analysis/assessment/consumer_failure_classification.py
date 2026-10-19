@@ -9,6 +9,8 @@ from app.ai_providers.errors import AIProviderError
 from app.analysis.ai_provider_retry import is_unrecoverable_for_input
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.errors import AssessmentError, AssessmentFailureReason
+from app.db.errors import DatabaseError
+from app.db.retry_prospect import is_resolvable_by_retry
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,13 +24,15 @@ class RetryAssessment:
 class NoRetryAssessment:
     """再配信しても変わらないため受信完了にする Assessment の失敗。"""
 
-    cause: AssessmentReadyBuildRejected | AIProviderError | AssessmentError
+    cause: (
+        AssessmentReadyBuildRejected | AIProviderError | AssessmentError | DatabaseError
+    )
 
 
 def classify_assessment_failure(
     exc: Exception,
 ) -> RetryAssessment | NoRetryAssessment:
-    """同じ入力では変わらない失敗だけを受信完了にし、DB障害・想定外は再配信する。"""
+    """同じ入力では変わらない失敗と解消しないDBの失敗を受信完了にし、想定外は再配信する。"""
     if isinstance(exc, AIProviderError):
         if is_unrecoverable_for_input(exc):
             return NoRetryAssessment(exc)
@@ -41,4 +45,8 @@ def classify_assessment_failure(
                 return RetryAssessment(exc)
             case _:
                 assert_never(exc.reason)
+    if isinstance(exc, DatabaseError):
+        if is_resolvable_by_retry(exc):
+            return RetryAssessment(exc)
+        return NoRetryAssessment(exc)
     return RetryAssessment(exc)

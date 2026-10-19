@@ -25,6 +25,8 @@ from app.collection.external_fetch_failure import (
     RetryableFetchFailure,
     classify_external_fetch_failure,
 )
+from app.db.errors import DatabaseError
+from app.db.retry_prospect import is_resolvable_by_retry
 from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
 
@@ -76,6 +78,12 @@ def classify_completion_failure(
                     )
                 case _:
                     assert_never(reason)
+        case ArticleCompletionError(cause=DatabaseError() as cause):
+            if is_resolvable_by_retry(cause):
+                return RetryCompletion(error=exc, code="database_error")
+            return NoRetryCompletion(
+                cause=exc, code="database_error", requires_investigation=True
+            )
         case ArticleCompletionError(cause=ValidationError()):
             return RetryCompletion(
                 error=exc, code="validation_error", requires_investigation=True

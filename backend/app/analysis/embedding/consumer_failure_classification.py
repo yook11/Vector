@@ -9,6 +9,8 @@ from app.ai_providers.errors import AIProviderError
 from app.analysis.ai_provider_retry import is_unrecoverable_for_input
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejected
 from app.analysis.embedding.errors import EmbeddingError, EmbeddingFailureReason
+from app.db.errors import DatabaseError
+from app.db.retry_prospect import is_resolvable_by_retry
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,11 +24,13 @@ class RetryEmbedding:
 class NoRetryEmbedding:
     """再配信しても変わらないため受信完了にする Embedding の失敗。"""
 
-    cause: EmbeddingReadyBuildRejected | AIProviderError | EmbeddingError
+    cause: (
+        EmbeddingReadyBuildRejected | AIProviderError | EmbeddingError | DatabaseError
+    )
 
 
 def classify_embedding_failure(exc: Exception) -> RetryEmbedding | NoRetryEmbedding:
-    """同じ入力では変わらない失敗だけを受信完了にし、DB障害・想定外は再配信する。"""
+    """同じ入力では変わらない失敗と解消しないDBの失敗を受信完了にし、想定外は再配信する。"""
     if isinstance(exc, AIProviderError):
         if is_unrecoverable_for_input(exc):
             return NoRetryEmbedding(exc)
@@ -39,4 +43,8 @@ def classify_embedding_failure(exc: Exception) -> RetryEmbedding | NoRetryEmbedd
                 return RetryEmbedding(exc)
             case _:
                 assert_never(exc.reason)
+    if isinstance(exc, DatabaseError):
+        if is_resolvable_by_retry(exc):
+            return RetryEmbedding(exc)
+        return NoRetryEmbedding(exc)
     return RetryEmbedding(exc)

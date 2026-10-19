@@ -112,7 +112,7 @@ def _with_cause(error: Exception, cause: Exception) -> Exception:
             DbErrorClassification("db_runtime_error", DbErrorCause.RUNTIME),
         ),
         (
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.QUERY_CANCELED),
             DbErrorClassification("db_runtime_error", DbErrorCause.RUNTIME),
         ),
         (

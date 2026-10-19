@@ -54,6 +54,13 @@ class ArticleCompletionConsumerFailureHandler:
             except Exception as close_error:
                 exc = ArticleCompletionError(cause=close_error)
                 decision = classify_completion_failure(exc, now=datetime.now(UTC))
+                # closed未確定で受信完了にすると、行が開いたままメッセージが消える。
+                if isinstance(decision, NoRetryCompletion):
+                    decision = RetryCompletion(
+                        error=exc,
+                        code=decision.code or "unknown",
+                        requires_investigation=True,
+                    )
 
         try:
             record_completion_processing_outcome("failed")

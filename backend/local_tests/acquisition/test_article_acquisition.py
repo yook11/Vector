@@ -320,9 +320,7 @@ async def test_save_failure_rolls_back_articles_and_commits_failure_audit(
     async with system_database.connect("vector") as db:
         await db.execute("REVOKE INSERT ON outbox_events FROM vector_collect")
     try:
-        assert await invoke_acquisition(source_id) == {
-            "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
-        }
+        assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
     finally:
         async with system_database.connect("vector") as db:
             await db.execute("GRANT INSERT ON outbox_events TO vector_collect")
@@ -331,7 +329,7 @@ async def test_save_failure_rolls_back_articles_and_commits_failure_audit(
     assert await load_stored_events(system_database) == []
     failures = await load_acquisition_failures(system_database, source_id)
     assert len(failures) == 1
-    assert failures[0]["error_class"] == "app.db.errors.DatabaseUnexpectedError"
+    assert failures[0]["error_class"] == "app.db.errors.DatabaseSyntaxOrAccessError"
     assert failures[0]["payload"]["source_name"] == "VentureBeat"
 
 

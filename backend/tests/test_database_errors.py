@@ -12,6 +12,8 @@ from app.db.errors import (
     DatabaseError,
     DatabaseTimeoutError,
     DatabaseTimeoutErrorReason,
+    DatabaseTransactionConflictError,
+    DatabaseTransactionConflictErrorReason,
 )
 
 
@@ -27,20 +29,31 @@ def test_reason_values_name_what_happened() -> None:
     }
     assert {member.value for member in DatabaseTimeoutErrorReason} == {
         "lock_timeout",
-        "statement_timeout",
+        "query_canceled",
+        "pool_timeout",
+    }
+    assert {member.value for member in DatabaseTransactionConflictErrorReason} == {
+        "deadlock",
+        "serialization_failure",
     }
     assert {member.value for member in DatabaseConstraintErrorReason} == {
         "unique_violation",
         "foreign_key_violation",
         "not_null_violation",
         "check_violation",
+        "integrity_constraint_violation",
         "unclassified_constraint",
     }
 
 
 @pytest.mark.parametrize(
     "cls",
-    [DatabaseConnectionError, DatabaseTimeoutError, DatabaseConstraintError],
+    [
+        DatabaseConnectionError,
+        DatabaseTimeoutError,
+        DatabaseTransactionConflictError,
+        DatabaseConstraintError,
+    ],
 )
 def test_reasoned_errors_reject_non_enum_reason(cls: type[DatabaseError]) -> None:
     with pytest.raises(TypeError, match="reason must be"):

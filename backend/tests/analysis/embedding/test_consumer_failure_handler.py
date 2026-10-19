@@ -157,7 +157,7 @@ async def _events(session: AsyncSession) -> list[PipelineEvent]:
             "db_unknown_error",
             "db_unknown",
             None,
-            "retry",
+            "no_retry",
             False,
         ),
         (

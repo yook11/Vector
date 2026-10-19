@@ -21,6 +21,7 @@ from app.analysis.embedding.service import EmbeddingCompletion
 from app.lambda_handlers import article_analysis_lifecycle as resource_module
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 from app.models.analyzed_article_record import AnalyzedArticleRecord
+from local_tests.database_failure import cancel_statement
 from tests.iam_fixtures import inject_test_db_signer
 
 handler_module = import_module("app.lambda_handlers.embedding.handler")
@@ -54,7 +55,7 @@ def database_error_after_update(monkeypatch):
             (analyzed_article_id, saved, has_embedding)
         )
         try:
-            await self._session.execute(text("SELECT 1 / 0"))
+            await cancel_statement(self._session)
         except DBAPIError as exc:
             observation.database_errors.append(exc)
             raise

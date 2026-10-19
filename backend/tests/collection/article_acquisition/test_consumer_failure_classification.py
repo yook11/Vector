@@ -21,7 +21,13 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseReason,
 )
 from app.collection.response_size import ResponseSizeBasis
-from app.db.errors import DatabaseTimeoutError, DatabaseTimeoutErrorReason
+from app.db.errors import (
+    DatabaseConstraintError,
+    DatabaseConstraintErrorReason,
+    DatabaseSyntaxOrAccessError,
+    DatabaseTimeoutError,
+    DatabaseTimeoutErrorReason,
+)
 from app.http.destination_policy import (
     DestinationRejectedError,
     DestinationRejectedReason,
@@ -102,10 +108,10 @@ def _feeds(*errors: Exception) -> RssFeedErrors:
             id="rss_all_temporary",
         ),
         pytest.param(
-            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.STATEMENT_TIMEOUT),
-            "unknown",
-            True,
-            id="database_failure",
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.QUERY_CANCELED),
+            "database_error",
+            False,
+            id="database_resolvable_failure",
         ),
         pytest.param(
             RuntimeError("unexpected"), "unknown", True, id="unexpected_failure"
@@ -115,7 +121,7 @@ def _feeds(*errors: Exception) -> RssFeedErrors:
 def test_failure_that_may_change_or_is_not_understood_is_redelivered(
     exc: Exception, code: str, requires_investigation: bool
 ) -> None:
-    """再試行で変わりうる失敗と、DB障害・想定外の失敗は、分類のcodeと調査要否とともに再配信する。"""
+    """再試行で変わりうる失敗と、解消しうるDB障害・想定外の失敗は、分類のcodeと調査要否とともに再配信する。"""
     assert classify_acquisition_failure(exc, now=_NOW) == RetryAcquisition(
         exc, code=code, requires_investigation=requires_investigation
     )
@@ -151,6 +157,16 @@ def test_failure_that_may_change_or_is_not_understood_is_redelivered(
             _feeds(_read_error(), _response_error(404)),
             "rss_feed_errors",
             id="rss_all_no_retry",
+        ),
+        pytest.param(
+            DatabaseConstraintError(
+                reason=DatabaseConstraintErrorReason.UNIQUE_VIOLATION
+            ),
+            "database_error",
+            id="database_constraint",
+        ),
+        pytest.param(
+            DatabaseSyntaxOrAccessError(), "database_error", id="database_privilege"
         ),
     ],
 )
