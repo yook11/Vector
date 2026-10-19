@@ -170,4 +170,4 @@ make test-integration PYTEST_ARGS="tests/collection/test_source_acquisition_fail
 
 ## 例外の標準化（2026-09-21）
 
-`AcquisitionError`・`AcquisitionDispatchError`・`SourceAcquisitionSendError`は通常の`Exception`を直接継承する。失敗情報は`origin`・`failures`・`failure_count`・`failure`・`unsent`に保持し、既存の監査分類と再送判断を維持する。既存コンストラクターがメッセージを渡さない例外は空文字となり、型名や件数による文面の補完は行わない。取得元の既定メッセージから作る監査の詳細は維持する。
+取得依頼の投入の失敗は`ApplicationError`を継承する`AcquisitionDispatchError`で表し、送信対象の件数と送れなかった件数を`details`に、人の調査が要るかを`requires_investigation`に持つ。取得元の既定メッセージから作る監査の詳細は維持する。
