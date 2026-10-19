@@ -1,4 +1,4 @@
-"""補完の失敗判断に従って終了を確定し、失敗監査を別に保存する。"""
+"""補完の失敗判断に従って終了を確定する。"""
 
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -6,13 +6,11 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.consumer_failure_classification import (
     classify_completion_failure,
 )
 from app.collection.article_completion.consumer_repository import (
     ArticleCompletionConsumerRepository,
-    RecordedIncompleteArticle,
 )
 from app.collection.article_completion.consumer_result import (
     NoRetryCompletion,
@@ -25,7 +23,7 @@ from app.collection.article_completion.metrics import (
 
 
 class ArticleCompletionConsumerFailureHandler:
-    """監査の二次障害で元の失敗と確定済み状態を置き換えない。"""
+    """計測の二次障害で元の失敗と確定済み状態を置き換えない。"""
 
     def __init__(
         self,
@@ -38,7 +36,6 @@ class ArticleCompletionConsumerFailureHandler:
         exc: ArticleCompletionError,
         *,
         incomplete_article_id: int,
-        incomplete: RecordedIncompleteArticle | None,
     ) -> RetryCompletion | NoRetryCompletion:
         now = datetime.now(UTC)
         decision = classify_completion_failure(exc, now=now)
@@ -65,21 +62,6 @@ class ArticleCompletionConsumerFailureHandler:
         try:
             record_completion_processing_outcome("failed")
         except Exception:  # noqa: S110
-            # 計測の障害は監査と同じく元の結果を変えない。
-            pass
-        try:
-            async with self._session_factory() as session:
-                await ArticleCompletionAuditRepository(session).append_consumer_failed(
-                    incomplete_article_id=incomplete_article_id,
-                    source_id=incomplete.source_id if incomplete is not None else None,
-                    source_name=(
-                        str(incomplete.source_name) if incomplete is not None else None
-                    ),
-                    exc=exc,
-                    decision=decision,
-                )
-                await session.commit()
-        except Exception:  # noqa: S110
-            # 失敗監査の障害は元の例外・待機時刻・確定済みclosedを変えない。
+            # 計測の障害は元の結果を変えない。
             pass
         return decision

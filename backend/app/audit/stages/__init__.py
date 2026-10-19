@@ -3,8 +3,6 @@
 各 stage の audit row 組み立て (payload shape の SSoT) を集約する。
 
 - ``dispatch`` — acquisition task fan-out
-- ``acquisition`` — Stage 1 (article_acquisition)
-- ``completion`` — Stage 2 (article_completion)
 - ``curation`` — Stage 3 (curation)
 - ``assessment`` — Stage 4 (assessment)
 - ``embedding`` — Stage 5 (embedding)

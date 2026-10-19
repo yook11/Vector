@@ -92,19 +92,18 @@ class TestArticlesNotRequiringCompletion:
         )
         assert stored_after_processing.pending is None
         assert stored_after_processing.articles == stored_before_processing.articles
-        assert stored_after_processing.audits == stored_before_processing.audits
         assert stored_after_processing.outbox == stored_before_processing.outbox
 
 
 @pytest.mark.asyncio
 class TestCompletionIsCommittedAtomically:
-    """完成記事・未完成行削除・成功監査・Outboxをまとめて確定または取り消す。"""
+    """完成記事・未完成行削除・Outboxをまとめて確定または取り消す。"""
 
     @pytest.mark.parametrize("state", ["open", "running"])
     async def test_eligible_article_commits_completion_and_event(
         self, system_database, completion_consumer, http_boundary, state
     ):
-        """非closedの対象だけを完成させ、未完成行削除・成功監査・Outboxを確定する。"""
+        """非closedの対象だけを完成させ、未完成行削除・Outboxを確定する。"""
         unrelated_article = await seed_pending(
             system_database, "https://example.com/other"
         )
@@ -127,8 +126,6 @@ class TestCompletionIsCommittedAtomically:
         assert article["original_title"] == pending_article.title
         assert "Target discovery" in article["original_content"]
         assert article["published_at"] == PUBLISHED_AT
-        assert len(stored.successes) == 1
-        assert stored.successes[0]["article_id"] == article["id"]
         assert len(stored.outbox) == 1
         assert stored.outbox[0]["schema_version"] == 1
         assert stored.outbox[0]["payload"] == {"analyzable_article_id": article["id"]}
@@ -145,7 +142,7 @@ class TestCompletionIsCommittedAtomically:
     async def test_database_failure_rolls_back_all_completion_writes(
         self, system_database, completion_consumer, control_commit
     ):
-        """4操作の実行後にDB障害を起こして全てを戻し、同じ記事を再処理できる。"""
+        """3操作の実行後にDB障害を起こして全てを戻し、同じ記事を再処理できる。"""
         pending_article = await seed_pending(
             system_database, "https://example.com/rollback"
         )
@@ -153,7 +150,7 @@ class TestCompletionIsCommittedAtomically:
             failed_result = await completion_consumer.consume(pending_article.id)
 
         assert fault.error is not None
-        assert fault.state == {"status": None, "articles": 1, "audits": 1, "outbox": 1}
+        assert fault.state == {"status": None, "articles": 1, "outbox": 1}
         assert isinstance(failed_result, consumer_contract().RetryCompletion)
         assert isinstance(failed_result.error, ArticleCompletionError)
         assert isinstance(failed_result.error.cause, DatabaseError)
@@ -162,7 +159,6 @@ class TestCompletionIsCommittedAtomically:
         assert stored_after_failure.pending is not None
         assert stored_after_failure.pending["status"] != "closed"
         assert stored_after_failure.articles == []
-        assert stored_after_failure.successes == []
         assert stored_after_failure.outbox == []
 
         retry_result = await completion_consumer.consume(pending_article.id)
@@ -170,13 +166,12 @@ class TestCompletionIsCommittedAtomically:
         stored_after_retry = await stored_completion(system_database, pending_article)
         assert stored_after_retry.pending is None
         assert len(stored_after_retry.articles) == 1
-        assert len(stored_after_retry.successes) == 1
         assert len(stored_after_retry.outbox) == 1
 
 
 @pytest.mark.asyncio
 class TestCompletionFailurePreservesDecisionAndState:
-    """補完失敗の判断とDB状態を対応させ、監査の二次障害でも元の判断を維持する。"""
+    """補完失敗の判断とDB状態を対応させる。"""
 
     async def test_retryable_http_failure_returns_error_and_wait_without_closing(
         self, system_database, completion_consumer, page_response
@@ -204,7 +199,6 @@ class TestCompletionFailurePreservesDecisionAndState:
         assert stored.pending is not None
         assert stored.pending["status"] != "closed"
         assert stored.articles == []
-        assert stored.successes == []
         assert stored.outbox == []
 
     async def test_permanent_failure_commits_closed_before_returning(
@@ -226,7 +220,6 @@ class TestCompletionFailurePreservesDecisionAndState:
         assert stored.pending is not None
         assert stored.pending["status"] == "closed"
         assert stored.articles == []
-        assert stored.successes == []
         assert stored.outbox == []
 
     async def test_failed_close_commit_returns_retry_and_leaves_row_open(
@@ -250,62 +243,7 @@ class TestCompletionFailurePreservesDecisionAndState:
         assert stored.pending is not None
         assert stored.pending["status"] != "closed"
         assert stored.articles == []
-        assert stored.successes == []
         assert stored.outbox == []
-
-    async def test_failure_audit_error_keeps_retry_decision_and_wait(
-        self, system_database, completion_consumer, page_response, control_commit
-    ):
-        """失敗監査を保存できなくても元のHTTP失敗と再試行時刻を維持し、closedにしない。"""
-        pending_article = await seed_pending(
-            system_database, "https://example.com/audit-retry"
-        )
-        page_response.return_value = httpx2.Response(
-            429, headers={"Retry-After": "120"}
-        )
-        with control_commit(pending_article, phase="failure_audit", fail=True) as fault:
-            result = await completion_consumer.consume(pending_article.id)
-
-        assert fault.error is not None
-        assert isinstance(result, consumer_contract().RetryCompletion)
-        assert isinstance(result.error, ArticleCompletionError)
-        assert isinstance(result.error.cause, HttpResponseError)
-        assert result.error.cause.status_code == 429
-        assert result.retry_at is not None
-        assert result.retry_at.value == result.error.cause.received_at + timedelta(
-            seconds=120
-        )
-        stored_after_failure = await stored_completion(system_database, pending_article)
-        assert stored_after_failure.pending is not None
-        assert stored_after_failure.pending["status"] != "closed"
-        assert stored_after_failure.articles == []
-        assert stored_after_failure.audits == []
-        assert stored_after_failure.outbox == []
-
-    async def test_failure_audit_error_keeps_committed_closed_state(
-        self, system_database, completion_consumer, page_response, control_commit
-    ):
-        """失敗監査を保存できなくても元のHTTP失敗と終了判断・確定済みclosedを維持する。"""
-        pending_article = await seed_pending(
-            system_database, "https://example.com/audit-closed"
-        )
-        page_response.return_value = httpx2.Response(
-            403, headers={"Retry-After": "120"}
-        )
-        with control_commit(pending_article, phase="failure_audit", fail=True) as fault:
-            result = await completion_consumer.consume(pending_article.id)
-
-        assert fault.error is not None
-        assert isinstance(result, consumer_contract().NoRetryCompletion)
-        assert isinstance(result.cause, ArticleCompletionError)
-        assert isinstance(result.cause.cause, HttpResponseError)
-        assert result.cause.cause.status_code == 403
-        stored_after_failure = await stored_completion(system_database, pending_article)
-        assert stored_after_failure.pending is not None
-        assert stored_after_failure.pending["status"] == "closed"
-        assert stored_after_failure.articles == []
-        assert stored_after_failure.audits == []
-        assert stored_after_failure.outbox == []
 
     async def test_initial_database_failure_does_not_become_missing_or_closed(
         self, system_database, first_read_failure_sessions, http_boundary
@@ -330,4 +268,4 @@ class TestCompletionFailurePreservesDecisionAndState:
         assert http_boundary.requests == []
         after = await stored_completion(system_database, pending_article)
         assert after.pending == before.pending
-        assert after.articles == after.successes == after.outbox == []
+        assert after.articles == after.outbox == []

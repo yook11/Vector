@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 import structlog
 
 from app.audit.stages.assessment import AssessmentAuditRepository
-from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.audit.stages.curation import CurationAuditRepository
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.backfill.metrics import age_delete_batch_size_histogram, age_deleted_counter
@@ -159,16 +158,8 @@ async def close_aged_out_completions(
             )
             if locked is None:
                 continue
-            source_id, source_name = locked
             await ArticleCompletionConsumerRepository(session).close_nonclosed(
                 incomplete_article_id, now=datetime.now(UTC)
-            )
-            await ArticleCompletionAuditRepository(
-                session
-            ).append_backfill_completion_aged_out(
-                incomplete_article_id=incomplete_article_id,
-                source_id=source_id,
-                source_name=str(source_name),
             )
         closed += 1
     if closed:

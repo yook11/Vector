@@ -19,10 +19,8 @@ _AUDIT_STAGE_DIR = _APP / "audit" / "stages"
 _AUDIT_STAGE_REPOSITORY_FILES = [
     _AUDIT_STAGE_DIR / name
     for name in (
-        "acquisition.py",
         "assessment.py",
         "briefing.py",
-        "completion.py",
         "curation.py",
         "embedding.py",
         "trend_discovery.py",
@@ -30,9 +28,6 @@ _AUDIT_STAGE_REPOSITORY_FILES = [
 ]
 
 _EXPECTED_REPOSITORY_STAGE_CONSTANTS = {
-    "acquisition.py": {
-        "SourceAcquisitionAuditRepository": {"STAGE": "ACQUISITION"},
-    },
     "assessment.py": {
         "AssessmentAuditRepository": {
             "STAGE": "ASSESSMENT",
@@ -41,9 +36,6 @@ _EXPECTED_REPOSITORY_STAGE_CONSTANTS = {
     },
     "briefing.py": {
         "BriefingAuditRepository": {"STAGE": "BRIEFING"},
-    },
-    "completion.py": {
-        "ArticleCompletionAuditRepository": {"STAGE": "COMPLETION"},
     },
     "curation.py": {
         "CurationAuditRepository": {
@@ -63,7 +55,6 @@ _EXPECTED_REPOSITORY_STAGE_CONSTANTS = {
 }
 
 _RAW_STAGE_KEYWORD_TARGETS = {
-    _APP / "audit" / "stages" / "completion.py": {"completion"},
     _APP / "audit" / "stages" / "curation.py": {"curation"},
 }
 

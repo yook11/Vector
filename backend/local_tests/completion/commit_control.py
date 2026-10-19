@@ -21,7 +21,6 @@ async def transaction_state(session, target):
                     "WHERE id=:id) AS status, "
                     "(SELECT count(*) FROM analyzable_articles "
                     "WHERE source_url=:url) AS articles, "
-                    "(SELECT count(id) FROM pipeline_events) AS audits, "
                     "(SELECT count(event_id) FROM outbox_events) AS outbox"
                 ),
                 {"id": target.id, "url": target.url},
@@ -58,8 +57,7 @@ def hold_commit(monkeypatch, target, *, phase, fail=False, failure=cancel_statem
         state = await transaction_state(session, target)
         matched = {
             "completed": state["status"] is None and state["articles"] == 1,
-            "closed": state["status"] == "closed" and state["audits"] == 0,
-            "failure_audit": state["audits"] > 0 and state["articles"] == 0,
+            "closed": state["status"] == "closed",
         }[phase]
         if matched and control.state is None:
             control.state = state

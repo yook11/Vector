@@ -1,4 +1,4 @@
-"""取得の失敗監査をタスクキューなしで利用できることを確認する。"""
+"""取得の入口をタスクキューなしで読み込めることを確かめる (unit, subprocess)。"""
 
 import subprocess
 import sys
@@ -9,8 +9,8 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def test_acquisition_failure_recording_loads_without_task_queue_or_settings() -> None:
-    """取得入口とRecorderはRedis・Taskiq・全体設定を読み込まない。"""
+def test_acquisition_handler_loads_without_task_queue_or_settings() -> None:
+    """取得の入口はRedis・Taskiq・全体設定を読み込まない。"""
     code = """
 import importlib.abc
 import sys
@@ -25,9 +25,6 @@ class RejectQueueDependencies(importlib.abc.MetaPathFinder):
             raise AssertionError("acquisition loaded " + fullname)
 
 sys.meta_path.insert(0, RejectQueueDependencies())
-from app.collection.article_acquisition.failure_recording import (
-    ArticleAcquisitionFailureRecorder,
-)
 from app.lambda_handlers.acquisition.handler import handler
 
 assert callable(handler)

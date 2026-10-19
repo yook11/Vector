@@ -102,26 +102,6 @@ class TestDecidedResultIsRecordedOnce:
         assert isinstance(result, consumer_contract().RetryCompletion)
         assert completion_outcomes(capsys.readouterr().out) == ["failed"]
 
-    async def test_failure_audit_error_keeps_failed_record(
-        self,
-        system_database,
-        completion_consumer,
-        page_response,
-        control_commit,
-        capsys,
-    ):
-        """失敗監査を保存できなくても、failedの記録は残す。"""
-        pending_article = await seed_pending(
-            system_database, "https://example.com/outcome-audit-failed"
-        )
-        page_response.return_value = httpx2.Response(403)
-        with control_commit(pending_article, phase="failure_audit", fail=True) as fault:
-            result = await completion_consumer.consume(pending_article.id)
-
-        assert fault.error is not None
-        assert isinstance(result, consumer_contract().NoRetryCompletion)
-        assert completion_outcomes(capsys.readouterr().out) == ["failed"]
-
     async def test_initial_database_failure_is_recorded_as_failed(
         self, system_database, first_read_failure_sessions, capsys
     ):

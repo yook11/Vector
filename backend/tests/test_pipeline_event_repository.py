@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import (
-    AcquisitionPayload,
+    DispatchPayload,
     EmbeddingPayload,
 )
 from app.audit.failure_projection import Retryability
@@ -67,27 +67,18 @@ async def article_row(
 async def test_append_inserts_row_with_payload_roundtrip(
     db_session: AsyncSession, source_row: NewsSource
 ) -> None:
-    """``AcquisitionPayload`` (failure-style snapshot) の DB roundtrip。
-
-    成功側 audit 撤去後、``AcquisitionPayload`` は failure path 専用に
-    なったので Task 例外パスでの書込形態 (``event_type=FAILED`` +
-    ``outcome_code=permanent_fetch_error`` + HTTP snapshot) で検証する。
-    """
+    """失敗の payload を書き込むと、同じ値を JSONB から読み戻せる。"""
     repo = PipelineEventRepository(db_session)
-    payload = AcquisitionPayload(
-        http_status=403,
-        final_url="https://venturebeat.com/feed/",
-        response_size=1024,
-        content_type="text/html",
-        body_head="Forbidden",
-        error_message="upstream returned 403",
+    payload = EmbeddingPayload(
+        ai_model="gemini-embedding-001",
+        error_message="upstream returned 503",
         error_chain=["httpx.HTTPStatusError"],
     )
 
     await repo.append(
-        stage=Stage.ACQUISITION,
+        stage=Stage.EMBEDDING,
         event_type=EventType.FAILED,
-        outcome_code="permanent_fetch_error",
+        outcome_code="embedding_failed",
         payload=payload,
         source_id=source_row.id,
     )
@@ -96,14 +87,13 @@ async def test_append_inserts_row_with_payload_roundtrip(
     rows = (await db_session.execute(select(PipelineEvent))).scalars().all()
     assert len(rows) == 1
     row = rows[0]
-    assert row.stage == "acquisition"
+    assert row.stage == "embedding"
     assert row.event_type == "failed"
-    assert row.outcome_code == "permanent_fetch_error"
+    assert row.outcome_code == "embedding_failed"
     assert row.source_id == source_row.id
-    assert row.payload["kind"] == "acquisition"
-    assert row.payload["http_status"] == 403
-    assert row.payload["final_url"] == "https://venturebeat.com/feed/"
-    assert row.payload["error_message"] == "upstream returned 403"
+    assert row.payload["kind"] == "embedding"
+    assert row.payload["ai_model"] == "gemini-embedding-001"
+    assert row.payload["error_message"] == "upstream returned 503"
     assert row.payload["error_chain"] == ["httpx.HTTPStatusError"]
     assert row.retryability is None
 
@@ -160,7 +150,7 @@ async def test_append_with_no_ids_leaves_both_null(
         stage=Stage.DISPATCH,
         event_type=EventType.SKIPPED,
         outcome_code="no_active_sources",
-        payload=AcquisitionPayload(),  # 共通基底だけ使う
+        payload=DispatchPayload(),
     )
     await db_session.commit()
 
@@ -237,7 +227,7 @@ async def test_append_inside_span_writes_otel_trace_id(
             stage=Stage.DISPATCH,
             event_type=EventType.SKIPPED,
             outcome_code="no_active_sources",
-            payload=AcquisitionPayload(),
+            payload=DispatchPayload(),
         )
         await db_session.commit()
 
@@ -266,7 +256,7 @@ async def test_append_outside_span_writes_null_trace_id(
         stage=Stage.DISPATCH,
         event_type=EventType.SKIPPED,
         outcome_code="no_active_sources",
-        payload=AcquisitionPayload(),
+        payload=DispatchPayload(),
     )
     await db_session.commit()
 
@@ -284,7 +274,7 @@ async def test_retryability_check_constraint(db_session: AsyncSession) -> None:
         stage=Stage.DISPATCH,
         event_type=EventType.SKIPPED,
         outcome_code="test_null_retryability",
-        payload=AcquisitionPayload(),
+        payload=DispatchPayload(),
     )
     await db_session.commit()
 
@@ -293,7 +283,7 @@ async def test_retryability_check_constraint(db_session: AsyncSession) -> None:
             stage=Stage.CURATION,
             event_type=EventType.FAILED,
             outcome_code=f"test_{retryability.value}",
-            payload=AcquisitionPayload(),
+            payload=DispatchPayload(),
             retryability=retryability,
         )
     await db_session.commit()

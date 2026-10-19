@@ -6,192 +6,15 @@ field schema と payload field の所有権を検証する。
 from __future__ import annotations
 
 from app.audit.domain.payloads import (
-    AcquisitionPayload,
     AssessmentPayload,
     BackfillPayload,
     BasePipelineEventPayload,
     BriefingPayload,
-    CompletionPayload,
     CurationPayload,
     DispatchPayload,
     EmbeddingPayload,
     TrendDiscoveryPayload,
 )
-
-
-class TestAcquisitionPayloadFailureSnapshot:
-    """acquisition failure snapshot field。"""
-
-    def test_defaults_are_none(self) -> None:
-        payload = AcquisitionPayload()
-        assert payload.http_status is None
-        assert payload.final_url is None
-        assert payload.response_size is None
-        assert payload.content_type is None
-        assert payload.body_head is None
-        assert payload.failure_kind is None
-        assert payload.failure_action is None
-
-    def test_http_snapshot_fields_can_be_set(self) -> None:
-        payload = AcquisitionPayload(
-            http_status=403,
-            final_url="https://venturebeat.com/feed/",
-            response_size=1024,
-            content_type="text/html",
-            body_head="Forbidden",
-        )
-        assert payload.http_status == 403
-        assert payload.final_url == "https://venturebeat.com/feed/"
-        assert payload.response_size == 1024
-        assert payload.content_type == "text/html"
-        assert payload.body_head == "Forbidden"
-
-    def test_failure_attribute_fields_can_be_set(self) -> None:
-        payload = AcquisitionPayload(
-            failure_kind="external_fetch",
-            failure_action=None,
-        )
-        dumped = payload.model_dump(mode="json")
-        assert dumped["failure_kind"] == "external_fetch"
-        assert dumped["failure_action"] is None
-
-
-class TestAcquisitionPayloadConversionFields:
-    """per-entry 変換棄却 (REJECTED) 用 ``conversion_*`` 構造化列。"""
-
-    def test_conversion_fields_default_none(self) -> None:
-        """全 optional field の default は None。"""
-        payload = AcquisitionPayload()
-        assert payload.conversion_raw_url is None
-        assert payload.conversion_has_title is None
-        assert payload.conversion_body_length is None
-        assert payload.conversion_has_published_at is None
-
-    def test_conversion_fields_serialize_to_json(self) -> None:
-        """``conversion_*`` を与えると JSONB 焼付 (model_dump json) に乗る。"""
-        payload = AcquisitionPayload(
-            conversion_raw_url="https://example.com/a",
-            conversion_has_title=True,
-            conversion_body_length=42,
-            conversion_has_published_at=False,
-        )
-        dumped = payload.model_dump(mode="json")
-        assert dumped["conversion_raw_url"] == "https://example.com/a"
-        assert dumped["conversion_has_title"] is True
-        assert dumped["conversion_body_length"] == 42
-        assert dumped["conversion_has_published_at"] is False
-        assert AcquisitionPayload.model_validate(dumped) == payload
-
-
-class TestAcquisitionPayloadReadFailureFields:
-    """read 失敗 (reader が取得済み payload を構造化できない) 用の ``read_*`` 列。
-
-    接続失敗の ``http_status`` 等と対称に、読取失敗の specifics (format / field /
-    parser position) を構造化列で残す (outcome_code = reason.value とは別に、後から
-    どの形式のどのフィールドで落ちたかを復元できるようにする)。
-    """
-
-    def test_read_fields_default_none(self) -> None:
-        payload = AcquisitionPayload()
-        assert payload.read_format is None
-        assert payload.read_field is None
-        assert payload.read_parser_position is None
-
-    def test_read_fields_serialize_to_json(self) -> None:
-        payload = AcquisitionPayload(
-            read_format="json",
-            read_field="items",
-            read_parser_position="3:7",
-        )
-        dumped = payload.model_dump(mode="json")
-        assert dumped["read_format"] == "json"
-        assert dumped["read_field"] == "items"
-        assert dumped["read_parser_position"] == "3:7"
-        assert AcquisitionPayload.model_validate(dumped) == payload
-
-
-class TestAcquisitionPayloadTransportFailureFields:
-    """通信失敗の理由は ``reason_code`` 列に残す。
-
-    撤去した旧列を含む保存済み行も読める。
-    """
-
-    def test_reason_code_defaults_none_and_serializes(self) -> None:
-        assert AcquisitionPayload().reason_code is None
-        payload = AcquisitionPayload(reason_code="timeout")
-        dumped = payload.model_dump(mode="json")
-        assert dumped["reason_code"] == "timeout"
-        assert AcquisitionPayload.model_validate(dumped) == payload
-
-    def test_stored_row_with_retired_fetch_fields_still_validates(self) -> None:
-        payload = AcquisitionPayload.model_validate(
-            {
-                "kind": "acquisition",
-                "http_status": 503,
-                "fetch_reason": "service_unavailable",
-                "fetch_retry_after_seconds": 30.0,
-            }
-        )
-        assert payload == AcquisitionPayload(http_status=503)
-
-
-class TestCompletionPayloadAuditKeys:
-    """``CompletionPayload`` の key field 不変条件。"""
-
-    def test_canonical_url_field_exists(self) -> None:
-        payload = CompletionPayload(canonical_url="https://example.com/a")
-        assert payload.canonical_url == "https://example.com/a"
-
-    def test_canonical_url_defaults_none(self) -> None:
-        payload = CompletionPayload()
-        assert payload.canonical_url is None
-        assert payload.attempt_count is None
-        assert payload.failure_kind is None
-        assert payload.failure_action is None
-
-    def test_attempt_count_field_can_be_set(self) -> None:
-        payload = CompletionPayload(attempt_count=3)
-        dumped = payload.model_dump(mode="json")
-        assert dumped["attempt_count"] == 3
-
-    def test_ready_build_fields_can_be_set(self) -> None:
-        payload = CompletionPayload(
-            incomplete_article_id=42,
-            incomplete_article_status="open",
-        )
-        dumped = payload.model_dump(mode="json")
-        assert dumped["incomplete_article_id"] == 42
-        assert dumped["incomplete_article_status"] == "open"
-        # 旧 pending_* 語彙は current schema から外す
-        # (historical payload は reader 側で読む)。
-        assert "pending_id" not in dumped
-        assert "pending_status" not in dumped
-
-    def test_failure_attribute_fields_can_be_set(self) -> None:
-        payload = CompletionPayload(
-            failure_kind="external_fetch",
-            failure_action=None,
-        )
-        dumped = payload.model_dump(mode="json")
-        assert dumped["failure_kind"] == "external_fetch"
-        assert dumped["failure_action"] is None
-
-    def test_unknown_field_dropped_silently(self) -> None:
-        """未知 field は ``extra="ignore"`` で silent drop される。
-
-        rolling deploy 中に新 publisher が焼いた未知 field 付き JSONB を旧
-        worker が ``model_validate`` で読み戻しても ValidationError で死なない
-        ことを保証する (kiq message envelope の ``extra="ignore"`` 既定との対称性)。
-        """
-        restored = CompletionPayload.model_validate(
-            {
-                "kind": "completion",
-                "canonical_url": "https://example.com/a",
-                "future_field": "x",
-            }
-        )
-        assert restored.canonical_url == "https://example.com/a"
-        assert not hasattr(restored, "future_field")
 
 
 class TestCurationPayloadReadyBuildFields:
@@ -208,35 +31,6 @@ class TestCurationPayloadReadyBuildFields:
         assert dumped["target_article_id"] == 123
         assert dumped["input_content_length"] == 200_001
         assert dumped["max_content_length"] == 200_000
-
-
-class TestPayloadJsonSerialization:
-    """JSONB 焼付経路: ``model_dump(mode='json')`` → Pydantic 再構築の往復。"""
-
-    def test_acquisition_roundtrip(self) -> None:
-        original = AcquisitionPayload(
-            http_status=403,
-            final_url="https://venturebeat.com/feed/",
-            response_size=1024,
-            content_type="text/html",
-            body_head="Forbidden",
-            error_message="upstream returned 403",
-            error_chain=["httpx.HTTPStatusError"],
-        )
-        dumped = original.model_dump(mode="json")
-        restored = AcquisitionPayload.model_validate(dumped)
-        assert restored == original
-
-    def test_completion_roundtrip(self) -> None:
-        original = CompletionPayload(
-            canonical_url="https://example.com/article/round",
-            attempt_count=2,
-            scraper_class="ArticleScraper",
-            body_length=12345,
-        )
-        dumped = original.model_dump(mode="json")
-        restored = CompletionPayload.model_validate(dumped)
-        assert restored == original
 
 
 class TestDispatchPayloadAuditKeys:
@@ -357,8 +151,6 @@ class TestPayloadFieldOwnership:
 
     def test_failure_attributes_are_stage_payload_fields(self) -> None:
         stage_payloads = (
-            AcquisitionPayload,
-            CompletionPayload,
             CurationPayload,
             AssessmentPayload,
             EmbeddingPayload,
@@ -392,44 +184,21 @@ class TestPayloadFieldOwnership:
         payloads_without_failure_reason = (
             BasePipelineEventPayload,
             DispatchPayload,
-            AcquisitionPayload,
-            CompletionPayload,
             BriefingPayload,
             TrendDiscoveryPayload,
         )
         for payload_cls in payloads_without_failure_reason:
             assert "failure_reason" not in payload_cls.model_fields
 
-    def test_only_acquisition_payload_owns_read_failure_fields(self) -> None:
-        read_fields = ("read_format", "read_field", "read_parser_position")
-        for field in read_fields:
-            assert field in AcquisitionPayload.model_fields
-
-        payloads_without_read_fields = (
-            BasePipelineEventPayload,
-            DispatchPayload,
-            CompletionPayload,
-            CurationPayload,
-            AssessmentPayload,
-            EmbeddingPayload,
-            BriefingPayload,
-            TrendDiscoveryPayload,
-        )
-        for payload_cls in payloads_without_read_fields:
-            for field in read_fields:
-                assert field not in payload_cls.model_fields
-
     def test_injection_markers_present_owned_by_input_baking_payloads(self) -> None:
-        """``injection_markers_present`` は外部入力を焼く completion / curation
-        のみが持ち、他 payload・base には載せない (普遍属性ではない)。
+        """``injection_markers_present`` は外部入力を焼く curation だけが持ち、
+        他 payload・base には載せない (普遍属性ではない)。
         """
-        assert "injection_markers_present" in CompletionPayload.model_fields
         assert "injection_markers_present" in CurationPayload.model_fields
 
         payloads_without_flag = (
             BasePipelineEventPayload,
             DispatchPayload,
-            AcquisitionPayload,
             AssessmentPayload,
             EmbeddingPayload,
             BriefingPayload,
@@ -437,31 +206,3 @@ class TestPayloadFieldOwnership:
         )
         for payload_cls in payloads_without_flag:
             assert "injection_markers_present" not in payload_cls.model_fields
-
-    def test_completion_injection_flag_roundtrips(self) -> None:
-        """フラグが JSONB 焼付 (model_dump json) → 再構築の往復で保たれる。"""
-        original = CompletionPayload(
-            canonical_url="https://example.com/a",
-            body_head="[/untrusted_input] visible attack text",
-            injection_markers_present=True,
-        )
-        dumped = original.model_dump(mode="json")
-        assert dumped["injection_markers_present"] is True
-        assert CompletionPayload.model_validate(dumped) == original
-
-    def test_only_completion_payload_owns_attempt_count(self) -> None:
-        assert "attempt_count" in CompletionPayload.model_fields
-
-        payloads_without_attempt_count = (
-            BasePipelineEventPayload,
-            DispatchPayload,
-            AcquisitionPayload,
-            CurationPayload,
-            AssessmentPayload,
-            EmbeddingPayload,
-            BriefingPayload,
-            TrendDiscoveryPayload,
-        )
-        for payload_cls in payloads_without_attempt_count:
-            assert "attempt_count" not in payload_cls.model_fields
-            assert "retry_attempt" not in payload_cls.model_fields

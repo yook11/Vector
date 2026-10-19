@@ -1,13 +1,11 @@
 """実DBとHTTP応答のスタブで、取得記事の保存・後続イベント・配送判断を確認する。"""
 
 import json
-from unittest.mock import Mock
 
 import httpx2
 import pytest
 
 from local_tests.acquisition.support import (
-    load_acquisition_failures,
     load_completed_articles,
     load_incomplete_articles,
     load_stored_events,
@@ -122,7 +120,7 @@ async def test_redelivery_of_incomplete_article_does_not_repeat_event(
 async def test_inactive_source_is_acknowledged_without_fetch(
     system_database, invoke_acquisition, source_id, rss_response, capsys
 ):
-    """開始前に無効化されたソースは取得不要として受信完了し、失敗監査を残さない。"""
+    """開始前に無効化されたソースは取得不要として受信完了する。"""
     async with system_database.connect("vector") as db:
         await db.execute(
             "UPDATE news_sources SET is_active=false WHERE id=$1", source_id
@@ -134,13 +132,12 @@ async def test_inactive_source_is_acknowledged_without_fetch(
         and log["outcome"] == "inactive"
         for log in read_logs(capsys)
     )
-    assert await load_acquisition_failures(system_database, source_id) == []
 
 
 async def test_deleted_source_is_acknowledged_without_fetch(
     system_database, invoke_acquisition, source_id, rss_response, capsys
 ):
-    """開始前に削除されたソースは取得不要として受信完了し、失敗監査を残さない。"""
+    """開始前に削除されたソースは取得不要として受信完了する。"""
     async with system_database.connect("vector") as db:
         await db.execute("DELETE FROM news_sources WHERE id=$1", source_id)
     assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
@@ -150,7 +147,6 @@ async def test_deleted_source_is_acknowledged_without_fetch(
         and log["outcome"] == "missing"
         for log in read_logs(capsys)
     )
-    assert await load_acquisition_failures(system_database, source_id) == []
 
 
 async def test_inactive_source_with_invalid_name_is_not_resolved(
@@ -236,21 +232,12 @@ async def test_source_lookup_releases_database_connection_before_http(
 async def test_retryable_fetch_failure_is_redelivered_and_can_recover(
     system_database, invoke_acquisition, source_id, rss_response
 ):
-    """再試行で変わりうる取得失敗は監査に残してSQSへ返し、再配送で回復できる。"""
+    """再試行で変わりうる取得失敗はSQSへ返し、再配送で回復できる。"""
     rss_response.side_effect = httpx2.ReadTimeout("private-fetch-detail")
     assert await invoke_acquisition(source_id) == {
         "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
     }
     assert await load_stored_events(system_database) == []
-    failures = await load_acquisition_failures(system_database, source_id)
-    assert len(failures) == 1
-    assert failures[0]["outcome_code"] == "rss_feed_errors"
-    assert failures[0]["retryability"] == "retryable"
-    assert failures[0]["payload"]["failure_action"] == "retry"
-    assert failures[0]["payload"]["source_name"] == "VentureBeat"
-    feed_failure = failures[0]["payload"]["feed_failures"][0]
-    assert feed_failure["code"] == "http_transport_error"
-    assert feed_failure["reason_code"] == "timeout"
     rss_response.side_effect = None
     rss_response.return_value = rss_article_response(
         title="Recovered article",
@@ -264,18 +251,10 @@ async def test_retryable_fetch_failure_is_redelivered_and_can_recover(
 async def test_non_retryable_fetch_failure_is_acknowledged_until_next_request(
     system_database, invoke_acquisition, source_id, rss_response
 ):
-    """再試行しても変わらない取得失敗は監査に残して受信完了し、次の依頼で回復できる。"""
+    """再試行しても変わらない取得失敗は受信完了し、次の依頼で回復できる。"""
     rss_response.side_effect = [httpx2.Response(404)]
     assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
     assert await load_stored_events(system_database) == []
-    failures = await load_acquisition_failures(system_database, source_id)
-    assert len(failures) == 1
-    assert failures[0]["outcome_code"] == "rss_feed_errors"
-    assert failures[0]["retryability"] == "non_retryable"
-    assert failures[0]["payload"]["failure_action"] == "no_retry"
-    feed_failure = failures[0]["payload"]["feed_failures"][0]
-    assert feed_failure["code"] == "http_response_error"
-    assert feed_failure["http_status"] == 404
     rss_response.side_effect = None
     rss_response.return_value = rss_article_response(
         title="Recovered article",
@@ -287,31 +266,25 @@ async def test_non_retryable_fetch_failure_is_acknowledged_until_next_request(
 
 
 async def test_oversized_feed_is_acknowledged_as_size_limit_failure(
-    system_database, invoke_acquisition, source_id, rss_response
+    system_database, invoke_acquisition, source_id, rss_response, capsys
 ):
-    """上限(10MiB)を超えるフィードは再配信せず、上限超過として監査に残す。"""
+    """上限(10MiB)を超えるフィードは再配信せず、上限超過の失敗として受信完了する。"""
     rss_response.return_value = httpx2.Response(
         200, content=b"x" * (10 * 1024 * 1024 + 1)
     )
     assert await invoke_acquisition(source_id) == {"batchItemFailures": []}
     assert await load_stored_events(system_database) == []
-    failures = await load_acquisition_failures(system_database, source_id)
-    assert len(failures) == 1
-    assert failures[0]["outcome_code"] == "rss_feed_errors"
-    assert failures[0]["retryability"] == "non_retryable"
-    assert failures[0]["payload"]["failure_action"] == "no_retry"
-    feed_failure = failures[0]["payload"]["feed_failures"][0]
-    assert feed_failure["code"] == "source_response_size_limit_exceeded"
-    assert feed_failure["error_message"] == (
-        "source_response_size_limit_exceeded: observed=10485761 limit=10485760"
-        " basis=declared_content_length"
-    )
+    assert [
+        log["code"]
+        for log in read_logs(capsys)
+        if log["event"] == "source_feed_fetch_failed"
+    ] == ["source_response_size_limit_exceeded"]
 
 
-async def test_save_failure_rolls_back_articles_and_commits_failure_audit(
+async def test_save_failure_rolls_back_articles(
     system_database, invoke_acquisition, source_id, rss_response
 ):
-    """保存失敗のトランザクションを取り消しても、別セッションの失敗監査は残る。"""
+    """保存失敗のトランザクションを取り消し、記事も後続イベントも残さない。"""
     rss_response.return_value = rss_article_response(
         title="Outbox write fails",
         url="https://venturebeat.com/outbox-write-fails",
@@ -327,45 +300,6 @@ async def test_save_failure_rolls_back_articles_and_commits_failure_audit(
 
     assert await load_completed_articles(system_database) == []
     assert await load_stored_events(system_database) == []
-    failures = await load_acquisition_failures(system_database, source_id)
-    assert len(failures) == 1
-    assert failures[0]["error_class"] == "app.db.errors.DatabaseSyntaxOrAccessError"
-    assert failures[0]["payload"]["source_name"] == "VentureBeat"
-
-
-async def test_audit_and_diagnostic_failures_preserve_original_fetch_failure(
-    system_database, invoke_acquisition, source_id, rss_response, monkeypatch, capsys
-):
-    """監査保存と退避ログが失敗しても、元の取得例外で再配送を要求する。"""
-    from app.collection.article_acquisition import failure_recording
-
-    rss_response.side_effect = httpx2.ReadTimeout("private-fetch-detail")
-    audit_log = Mock()
-    audit_log.warning.side_effect = RuntimeError("private-diagnostic-detail")
-    monkeypatch.setattr(
-        failure_recording, "create_policy_json_logger", lambda *args: audit_log
-    )
-    async with system_database.connect("vector") as db:
-        await db.execute("REVOKE INSERT ON pipeline_events FROM vector_collect")
-    try:
-        response = await invoke_acquisition(source_id)
-    finally:
-        async with system_database.connect("vector") as db:
-            await db.execute("GRANT INSERT ON pipeline_events TO vector_collect")
-
-    audit_log.warning.assert_called_once()
-    assert response == {
-        "batchItemFailures": [{"itemIdentifier": "acquisition-message"}]
-    }
-    failed = [
-        log
-        for log in read_logs(capsys)
-        if log["event"] == "acquisition_message_processing_failed"
-    ]
-    assert len(failed) == 1
-    assert failed[0]["error_class"] == (
-        "app.collection.article_acquisition.errors.RssFeedErrors"
-    )
 
 
 async def test_unregistered_source_is_failed_until_definition_is_repaired(

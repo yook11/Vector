@@ -12,7 +12,7 @@ Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マー�
 
 - [取得イベント](../../backend/app/collection/article_acquisition/events.py)と[取得サービス](../../backend/app/collection/article_acquisition/service.py): 未完成記事の保存と同時に`article.incomplete_recorded`をOutboxへ記録する。現在のpayloadは`source_id`と`incomplete_article_id`。
 - [補完タスク](../../backend/app/queue/tasks/completion.py)と[Ready](../../backend/app/collection/article_completion/ready.py): 定期処理が対象を`running`へ変更して投入し、Readyもその状態を要求する。再投入と期限切れleaseの回復は定期処理が担当する。
-- [Repository](../../backend/app/collection/article_completion/repository.py)と[Service](../../backend/app/collection/article_completion/service.py): 試行番号と`running`条件で更新を限定し、完成記事・未完成行の削除・成功監査・Outboxを同じトランザクションで確定する。
+- [Repository](../../backend/app/collection/article_completion/repository.py)と[Service](../../backend/app/collection/article_completion/service.py): 試行番号と`running`条件で更新を限定し、完成記事・未完成行の削除・Outboxを同じトランザクションで確定する。
 - [失敗処理](../../backend/app/collection/article_completion/failure_handling.py)と[再試行定義](../../backend/app/collection/article_completion/retry_policy.py): 現行は失敗理由に応じて`open`への差戻し・次回時刻設定、または`closed`への遷移を行う。
 - [失敗分類](../../backend/app/collection/article_completion/scrape_failure.py): 通信の失敗原因と本文抽出の失敗を保持するが、再試行方針は現行DBスケジュールに結び付いている。
 - [補完ポリシー](../../backend/app/collection/sources/article_completion_policy.py)と[Completer](../../backend/app/collection/article_completion/completer.py): ソース別に観測値とHTMLからの値を採用し、完成記事の品質条件を検証する。
@@ -32,7 +32,7 @@ Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マー�
 7. 救済の再投入は、未完成行のうち`closed`ではないものをSQSへ送る。
 8. 受信時にも対象行が存在し、`closed`ではないことを確認する。行がない、または`closed`ならHTTP取得を行わず受信完了にする。
 9. 再試行する失敗では行を残し、`closed`にせず、SQSの再配信に任せる。再試行する意味のない失敗では`closed`への更新をcommitしてから受信完了にする。
-10. 補完成功では、完成記事の保存・未完成行の削除・成功監査・後続Outboxを同じトランザクションでcommitしてから受信完了にする。
+10. 補完成功では、完成記事の保存・未完成行の削除・後続Outboxを同じトランザクションでcommitしてから受信完了にする。
 
 ## 全体フローと引き継ぐ責務
 
@@ -42,7 +42,7 @@ Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マー�
   → Lambda → 補完Consumer → DBの対象行を確認
       ├─ 行なし / closed: HTTP取得を行わず受信完了
       └─ 行あり・closedではない: 入力構築 → HTML取得・抽出 → 記事を完成
-          ├─ 成功: 完成記事・未完成行削除・成功監査・Outboxをcommit → 受信完了
+          ├─ 成功: 完成記事・未完成行削除・Outboxをcommit → 受信完了
           │    → 記事完成イベントからキュレーションのイベント経路
           ├─ 競合で先に完了・closed確定: 上書きせず受信完了
           ├─ 再試行する失敗: 行を残しclosedにせずSQS再配信
@@ -53,16 +53,16 @@ Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マー�
 - 完成時はキュレーション移行で定義する共通の記事完成イベントへ接続する。補完ConsumerからキュレーションのTaskiqタスクを直接投入しない。
 - Lambda入口はSQS形式、部分バッチ応答、接続・資源の生成終了を担当する。Consumer・ServiceにはSQSのreceipt handle等を持ち込まない。
 - 重複除去以外のHTML抽出設定、フィールドの採用ルール、完成記事の品質条件、外部通信の既存の保護を維持する。品質判定は観測値との統合後に行う。外部通信中にDB接続・トランザクションを保持しない。
-- 完成記事の保存・未完成行の削除・成功監査・Outboxは同じトランザクションで確定し、失敗した場合はロールバックする。commit成功後に受信完了とし、競合した処理は後続イベントを追加しない。
-- 失敗理由・元の原因を保持し、監査の分類とSQSへの応答判断を分ける。受信完了を記事完成成功と混同しない。
+- 完成記事の保存・未完成行の削除・Outboxは同じトランザクションで確定し、失敗した場合はロールバックする。commit成功後に受信完了とし、競合した処理は後続イベントを追加しない。
+- 失敗理由・元の原因を保持する。受信完了を記事完成成功と混同しない。
 
-### Consumer接続時の戻り値と失敗監査
+### Consumer接続時の戻り値
 
 Consumerは未完成記事IDを受け取り、完成・追加処理不要・補完失敗を区別する。補完失敗は例外を投げ直す代わりに、元例外と工程の判断結果を一緒に返す。再試行の結果を返すことは、SQSの受信完了を意味しない。
 
-- 再試行する失敗は、行を閉じずに元例外と待機時刻を返す。失敗監査の保存障害で元の結果を置き換えない。
-- 終了する失敗はclosed確定後に失敗結果を返す。失敗監査はclosedの確定後に行い、監査の障害で確定済みclosedを再試行へ戻さない。closedの確定自体が失敗した場合はDB障害の再試行結果を返す。
-- 同じURLの完成記事が別経路ですでに保存されていた場合は、既存記事を維持して対応する未完成行を削除し、追加処理不要とする。新たな成功監査やOutboxは追加しない。
+- 再試行する失敗は、行を閉じずに元例外と待機時刻を返す。
+- 終了する失敗はclosed確定後に失敗結果を返す。closedの確定自体が失敗した場合はDB障害の再試行結果を返す。
+- 同じURLの完成記事が別経路ですでに保存されていた場合は、既存記事を維持して対応する未完成行を削除し、追加処理不要とする。新たなOutboxは追加しない。
 
 接続の保証は[補完ローカルテスト](../../backend/local_tests/README.md#completionのconsumer接続テストファースト)に先行して定義する。Consumer本体を接続し、先行17ケースに初回DB照会障害と外部キャンセルの2ケースを加えた19ケースで検証する。
 
@@ -90,7 +90,7 @@ Consumerは未完成記事IDを受け取り、完成・追加処理不要・補�
 | 受信時に行があり、`closed`ではない | DBの事実から入力を構築して補完へ進む | 実行結果に応じて決める |
 | 再試行する失敗 | 行を残し、`closed`にしない | 再配信対象 |
 | 再試行する意味のない失敗 | `closed`への更新をcommitする | commit後に受信完了 |
-| 補完成功 | 完成記事・未完成行削除・成功監査・後続Outboxを同時にcommitする | commit後に受信完了 |
+| 補完成功 | 完成記事・未完成行削除・後続Outboxを同時にcommitする | commit後に受信完了 |
 | 確定時に先行処理による削除・`closed`確定が判明 | 上書きせず、後続イベントを追加しない | 受信完了 |
 
 - 救済対象の選択後に記事が完成・`closed`になり得るため、通常投入・救済投入のどちらも受信時の確認を通す。
@@ -120,7 +120,7 @@ Consumerは未完成記事IDを受け取り、完成・追加処理不要・補�
 
 - 完成、処理済み、競合で先行処理を採用した結果は正常終了とする。補完拒否・取得や保存の実行障害は失敗として扱う。
 - 正常終了は「今回完成した」と「追加処理が不要だった」を区別する。型は既存AIと同様に不変の結果値とし、完成時だけ新規保存した正の`analyzable_article_id`を持つ案とする。
-- 行なし、既に`closed`、先行処理との競合、完成記事のURL競合は追加処理不要として終了できるが、その理由を区別する。行なしから完成済みを推測したり、今回完成していない記事の成功監査・Outboxを生成したりしない。
+- 行なし、既に`closed`、先行処理との競合、完成記事のURL競合は追加処理不要として終了できるが、その理由を区別する。行なしから完成済みを推測したり、今回完成していない記事のOutboxを生成したりしない。
 - 今回の補完拒否は失敗であり、`closed`をcommitしてSQSへ受信完了を返しても正常な記事完成へ分類し直さない。後の重複受信で既存の`closed`を確認する場合は、追加処理不要として終了する。
 - 正常終了・失敗と、SQSの受信完了・再配信は別の軸とする。失敗をすべてSQS再配信へ送る契約にはしない。
 
@@ -128,7 +128,7 @@ Consumerは未完成記事IDを受け取り、完成・追加処理不要・補�
 
 エラーは「何が起きたか」を伝え、`retryable`・再試行方針・工程が決めた再試行時刻を持たない。補完工程のハンドラーがエラーを受け取り、再試行可否・待機時間・`closed`化を判断する。
 
-エラーのフィールドと意味はエラー側の契約とし、ログ基盤に依存しない。Consumerは工程の失敗を`ArticleCompletionError`で包み、`cause`と`__cause__`に同じ元例外を保持する。HTML抽出の失敗は`html_extraction.py`が所有する`HtmlExtractionError`で説明し、抽出器等の元例外も原因としてつなぐ。ログ・監査・メトリクス等の出力側が項目と形式を明示的に選択し、全フィールド・文字列表現・原因例外をそのまま送信しない。
+エラーのフィールドと意味はエラー側の契約とし、ログ基盤に依存しない。Consumerは工程の失敗を`ArticleCompletionError`で包み、`cause`と`__cause__`に同じ元例外を保持する。HTML抽出の失敗は`html_extraction.py`が所有する`HtmlExtractionError`で説明し、抽出器等の元例外も原因としてつなぐ。ログ・メトリクス等の出力側が項目と形式を明示的に選択し、全フィールド・文字列表現・原因例外をそのまま送信しない。
 
 通信失敗と確認できて詳細不明な場合は共通の通信分類`UNKNOWN`とする。通信失敗か不明な通常例外や既知の宛先拒否はHTTP変換の対象外とし、元のまま工程ハンドラーへ伝える。最終的に未分類の通常例外は工程側で扱い、キャンセル・プロセス終了は通常失敗へ変換しない。
 
@@ -187,7 +187,7 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 
 確定した契約と実装スライスは[記事補完のSQS・Lambda配送仕様](./article-completion-delivery.md)を正本とする。Lambdaは最大10分、最大10件を逐次処理し、残り60秒未満なら次の記事を開始せず未着手分を再配信対象とする。1件全体の期限は追加しない。
 
-再試行は部分バッチ失敗一覧で返し、有効なretry_atがあればreceiptHandleを使って可視性を変更する。元のretry_atを維持し、実際の個別待機を最大11時間へ制限する。待機変更が失敗しても受信完了にしない。配送診断はCloudWatch向け構造化ログへ出し、DB監査・記事の状態判断と分ける。
+再試行は部分バッチ失敗一覧で返し、有効なretry_atがあればreceiptHandleを使って可視性を変更する。元のretry_atを維持し、実際の個別待機を最大11時間へ制限する。待機変更が失敗しても受信完了にしない。配送診断はCloudWatch向け構造化ログへ出し、記事の状態判断と分ける。
 
 起動時の不要な設定依存を解消し、抽出結果が別記事・過去試行のキャッシュに依存しないようにする。起動と資源管理、抽出の独立、入力とConsumer接続、待機と残り時間、AWS接続の順に実装・検証する。救済と旧経路の切替は別途扱う。
 
@@ -200,7 +200,7 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 
 ## Invariants
 
-1. 完成記事の保存・未完成行の削除・成功監査・Outboxは同時に確定し、そのcommit後に受信完了にする。
+1. 完成記事の保存・未完成行の削除・Outboxは同時に確定し、そのcommit後に受信完了にする。
 2. 重複配送・HTTP取得を許容し、先に確定した完成・`closed`を後続の競合処理が上書きしない。
 3. 再配信と受信完了の判断は失敗理由に基づき、詳細は実装時に根拠とともに定義する。
 4. DLQへの移動からDB状態を自動更新しない。
@@ -274,13 +274,11 @@ Retry-Afterの解釈は[外部取得の失敗判断](../collection/external-fetc
 - `RetryCompletion`は元のExceptionを`error`に、失敗の分類コード・調査要否・任意の待機時刻を`code`・`requires_investigation`・`retry_at`に保持する。`retry_at=None`でも再配信し、追加の可視性変更だけを省略する。
 - `NoRetryCompletion`は、補完不要なら`cause`にmissing・closed・superseded・url_conflictを保持し、`code=None`とする。失敗による終了なら`cause`に元のException、`code`に失敗の分類コードを保持し、調査要否も残す。補完不要と失敗による終了は同じ配送判断でも診断・計測では区別し、補完不要をfailedとして記録しない。
 
-新経路専用RepositoryはID・状態・ソース情報・URL・観測値だけを読み、試行番号とleaseを実行条件にしない。行なし・closedはHTTPも監査も実行しない。同URLの完成記事が見つかった場合は非closedの未完成行だけを削除・commitし、url_conflictとして既存結果を採用する。入力構築と取得・抽出・構築は読取セッションを閉じてから行う。
+新経路専用RepositoryはID・状態・ソース情報・URL・観測値だけを読み、試行番号とleaseを実行条件にしない。行なし・closedはHTTPを実行しない。同URLの完成記事が見つかった場合は非closedの未完成行だけを削除・commitし、url_conflictとして既存結果を採用する。入力構築と取得・抽出・構築は読取セッションを閉じてから行う。
 
-保存時はIDと非closedを条件に未完成行をDELETEし、削除できなければsupersededとする。削除後に既存の完成記事RepositoryでINSERTし、新規保存の場合だけ成功監査（article_completed）と記事完成Outboxを追加して一括commitする。URL競合は未完成行の削除だけを確定する。終了も同じ非closed条件のUPDATEでclosed・leased_until=None・updated_atを設定し、更新できなければsupersededとする。旧Ready・Service・試行番号付きRepositoryの実行処理は呼び出さない。
+保存時はIDと非closedを条件に未完成行をDELETEし、削除できなければsupersededとする。削除後に既存の完成記事RepositoryでINSERTし、新規保存の場合だけ記事完成Outboxを追加して一括commitする。URL競合は未完成行の削除だけを確定する。終了も同じ非closed条件のUPDATEでclosed・leased_until=None・updated_atを設定し、更新できなければsupersededとする。旧Ready・Service・試行番号付きRepositoryの実行処理は呼び出さない。
 
-失敗ハンドラーがUTC現在時刻を既存分類へ渡す。再試行では行の状態・ready_at・lease・attempt_countを変更しない。closed確定の障害は既存のセッション境界でDB例外へ変換してから再分類し、再分類の結果が終了でも再試行結果を返す。失敗監査は別トランザクションとし、その二次障害で元例外・待機時刻・確定済みclosedを変更しない。通常Exceptionだけを扱い、外部キャンセルを失敗結果へ変換しない。
-
-監査は既存CompletionPayloadを使い、再試行をfailed、終了をrejected、outcome_codeを判断code、retryabilityを工程判断に合わせる。対象ID・既知のソース情報・例外型と原因チェーンの型名・HTTPステータス・定義された通信／抽出理由・構築defectsを明示的に選ぶ。自由文・本文・生のヘッダーを追加出力せず、未分類の構築詳細と待機／調査情報は元例外と結果値に保持する。監査schema、エラー定義、失敗分類表は変更しない。
+失敗ハンドラーがUTC現在時刻を既存分類へ渡す。再試行では行の状態・ready_at・lease・attempt_countを変更しない。closed確定の障害は既存のセッション境界でDB例外へ変換してから再分類し、再分類の結果が終了でも再試行結果を返す。通常Exceptionだけを扱い、外部キャンセルを失敗結果へ変換しない。
 
 今回の完了条件は19ケースを含むローカルテスト全体、単体、DB統合、lint・formatの成功と一時環境の削除である。配送ハンドラーの結果変換、Retry-Afterの可視性制御、救済投入、旧経路との切替・デプロイは後続タスクとする。Consumer実装時点では抽出器のプロセス内キャッシュの寿命を変更していない。配送スライス2では、重複除去を無効にして別記事・過去試行に依存しない抽出とし、補完ローカルテストのキャッシュリセットも不要にする。
 
@@ -292,12 +290,12 @@ Problem: 補完の新経路は`processing_outcome`を送出せず、completion�
 Evidence: `record_completion_processing_outcome`を呼ぶのは旧経路のService・失敗処理・タスクだけである。他の3工程はConsumerの成功確定点と失敗処理で送出している。
 
 - Consumerの1回の処理につき、成功はsucceeded、失敗はfailedを1件送出し、処理不要は送出しない。
-- 成功は完成記事・未完成行削除・成功監査・Outboxのcommit後に数え、commitの失敗はfailedとする。
+- 成功は完成記事・未完成行削除・Outboxのcommit後に数え、commitの失敗はfailedとする。
 - 失敗は再試行・終了の判断や原因によらずfailedとし、新経路ではinfra_errorを使わない。終了はclosedの確定後に数え、supersededになった場合は数えない。
 - 記事ではなく処理の回数を数える。再配信・救済による同じ記事の処理もそれぞれ数えるため、再試行が続く記事があると成功率は実態より低く見える。
-- 失敗率のアラームは設けない。失敗の大半は外部サイトの拒否で、率が上がっても取れる対処がない。成功率はメトリクスで確認し、原因はログの`completion_message_processed`と監査で追う。
+- 失敗率のアラームは設けない。失敗の大半は外部サイトの拒否で、率が上がっても取れる対処がない。成功率はメトリクスで確認し、原因はログの`completion_message_processed`で追う。
 
-Invariants: 失敗処理での計測の障害は、監査と同じく元の例外・待機時刻・確定済みclosedを変えない。メトリクス名・dimension・値は変更しない。
+Invariants: 失敗処理での計測の障害は、元の例外・待機時刻・確定済みclosedを変えない。メトリクス名・dimension・値は変更しない。
 
 Non-goals: 旧経路の撤去とinfra_errorの語彙からの削除、失敗理由・判断のdimension追加、Consumerの停止検知。
 

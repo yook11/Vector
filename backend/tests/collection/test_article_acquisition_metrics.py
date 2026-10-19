@@ -17,7 +17,6 @@ import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.audit.domain.event import Stage
 from app.collection.article_acquisition.metrics import AcquisitionEntryOutcome
 from app.collection.article_acquisition.raw_article import RawArticle
 from app.collection.article_acquisition.service import ArticleAcquisitionService
@@ -281,52 +280,3 @@ async def test_outcome_attributes_conform_to_declared_vocabulary(
         "vector.acquisition.outcome",
         allowed={"result": _ALLOWED_OUTCOME_RESULTS},
     )
-
-
-class _FailingConversionAuditRepo:
-    """append_conversion_rejected が必ず raise する監査リポジトリ stub。"""
-
-    STAGE: ClassVar[Stage] = Stage.ACQUISITION
-
-    def __init__(self, *_: Any, **__: Any) -> None: ...
-
-    async def append_conversion_rejected(self, **__: Any) -> None:
-        raise RuntimeError("conversion audit insert boom")
-
-
-@pytest.mark.asyncio
-async def test_outcome_rejected_not_emitted_when_audit_dropped(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-    capfire: CaptureLogfire,
-) -> None:
-    """rejected の best-effort 監査が drop したら outcome{rejected} を計上しない。
-
-    ``record_conversion_rejected`` の監査 commit が失敗すると pipeline_events 行は
-    残らない。metric を監査に揃えるため、この場合 rejected counter は increment
-    しない (監査成否に関係なく +1 する旧実装を落とす非空虚オラクル)。analyzable 1 件を
-    併投入し metric dump を非空にする (capfire は zero-metric で crash するため)。
-    """
-    monkeypatch.setattr(
-        "app.collection.article_acquisition.failure_recording."
-        "SourceAcquisitionAuditRepository",
-        _FailingConversionAuditRepo,
-    )
-    svc = ArticleAcquisitionService(
-        session_factory,
-        _StubSource(
-            [
-                _ready_fetched("https://venturebeat.com/ok/"),
-                _rejection_fetched(),
-            ]
-        ),
-    )
-
-    await svc.execute(vb_source.id)
-
-    metrics = capfire.get_collected_metrics()
-    # analyzable は通常どおり計上され (stream は止まらない)、rejected は監査 drop で 0。
-    assert _sum_for_result(metrics, "vector.acquisition.outcome", "analyzable") == 1
-    assert _sum_for_result(metrics, "vector.acquisition.outcome", "rejected") == 0

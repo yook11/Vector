@@ -1,4 +1,4 @@
-"""取得 Consumer 経由の保存・取り消し・失敗監査を実 DB で確かめる。"""
+"""取得 Consumer 経由の保存・取り消し・失敗の結果を実 DB で確かめる。"""
 
 from __future__ import annotations
 
@@ -46,7 +46,6 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.outbox_event import OutboxEvent
-from app.models.pipeline_event import PipelineEvent
 
 
 @pytest.fixture
@@ -73,14 +72,14 @@ def _request(source: NewsSource) -> SourceAcquisitionRequest:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("body", ["Full article body. " * 30, "Short summary."])
-async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
+async def test_later_rss_hook_failure_rolls_back_and_preserves_cause(
     body: str,
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """先行候補の実DB保存を取り消し、固有関数の失敗原因だけを監査に残す。"""
+    """先行候補の実DB保存を取り消し、固有関数の失敗と原因を再配信の結果に残す。"""
     saved_ids: list[int] = []
     cause = ValueError("invalid footer")
     error = RuntimeError("body transform failed")
@@ -157,22 +156,6 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
             )
         )
     ).all()
-    events = (
-        await db_session.scalars(
-            select(PipelineEvent).where(PipelineEvent.source_id == vb_source.id)
-        )
-    ).all()
-    assert len(events) == 1
-    row = events[0]
-    assert row.event_type == "failed"
-    assert row.outcome_code == "unexpected_error"
-    assert row.error_class == "builtins.RuntimeError"
-    assert row.payload["failure_action"] == "retry"
-    assert row.payload["error_message"] == "body transform failed"
-    assert row.payload["error_chain"] == [
-        "builtins.RuntimeError",
-        "builtins.ValueError",
-    ]
 
 
 @pytest.mark.asyncio
@@ -180,14 +163,14 @@ async def test_later_rss_hook_failure_rolls_back_and_preserves_audit_cause(
     "scenario",
     ["partial_success", "all_failed", "all_failed_retryable", "selection_failed"],
 )
-async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
+async def test_multi_feed_acquisition_preserves_persistence_and_failure(
     scenario: str,
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """部分成功は保存し、取得・選択の全体失敗は未保存のまま原因を監査する。"""
+    """部分成功は保存し、取得・選択の全体失敗は未保存のまま失敗として返す。"""
     cause = ValueError("parse cause")
     read_error = UnreadableResponseError(
         reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
@@ -248,14 +231,14 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
     consumer = ArticleAcquisitionConsumer(session_factory, ReaderTools)
     result = await consumer.consume(_request(vb_source))
     expected_failure = {
-        "all_failed": (NoRetryAcquisition, "no_retry"),
-        "all_failed_retryable": (RetryAcquisition, "retry"),
-        "selection_failed": (RetryAcquisition, "retry"),
+        "all_failed": NoRetryAcquisition,
+        "all_failed_retryable": RetryAcquisition,
+        "selection_failed": RetryAcquisition,
     }
     if scenario == "partial_success":
         assert result == AcquisitionSucceeded(1)
     else:
-        assert isinstance(result, expected_failure[scenario][0])
+        assert isinstance(result, expected_failure[scenario])
         error = result.error if isinstance(result, RetryAcquisition) else result.cause
         if scenario == "selection_failed":
             assert error is selection_error
@@ -279,49 +262,11 @@ async def test_multi_feed_acquisition_preserves_persistence_and_failure_audit(
         )
     ).all()
     outbox = (await db_session.scalars(select(OutboxEvent.event_type))).all()
-    events = (
-        await db_session.scalars(
-            select(PipelineEvent).where(PipelineEvent.source_id == vb_source.id)
-        )
-    ).all()
     if scenario == "partial_success":
         assert len(article_ids) == len(incomplete_ids) == 1
         assert sorted(outbox) == [
             "article.analyzable_created",
             "article.incomplete_recorded",
         ]
-        assert sorted(row.outcome_code for row in events) == [
-            "article_created",
-            "incomplete_article_created",
-        ]
     else:
         assert not article_ids and not incomplete_ids and not outbox
-        assert len(events) == 1
-        row = events[0]
-        assert row.event_type == "failed"
-        assert row.outcome_code == (
-            "rss_feed_errors" if all_failed else "unexpected_error"
-        )
-        assert row.payload["failure_action"] == expected_failure[scenario][1]
-        if all_failed:
-            assert row.error_class.endswith(".RssFeedErrors")
-            assert row.retryability == (
-                "retryable" if scenario == "all_failed_retryable" else "non_retryable"
-            )
-            failures = row.payload["feed_failures"]
-            assert [f["feed_url"] for f in failures] == list(
-                MultiSource.acquisition.feeds
-            )
-            assert [(f["code"], f["http_status"]) for f in failures] == (
-                [("read_malformed_content", None), ("http_response_error", 503)]
-                if scenario == "all_failed_retryable"
-                else [("read_malformed_content", None), ("host_blocked", None)]
-            )
-            assert failures[0]["error_chain"][-1] == "builtins.ValueError"
-            assert failures[0]["error_class"].endswith(".UnreadableResponseError")
-            assert failures[1]["error_class"].endswith(
-                f".{type(second_error).__name__}"
-            )
-        else:
-            assert row.payload["error_chain"][-1] == "builtins.ValueError"
-            assert row.payload["feed_failures"] is None

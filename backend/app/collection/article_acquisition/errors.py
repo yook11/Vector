@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import ClassVar
 
 from app.collection.article_acquisition.reader.read_errors import (
@@ -17,18 +16,6 @@ from app.shared.errors import ApplicationError
 
 class AcquisitionSourceInvalidError(Exception):
     """有効なソースを登録済みの取得定義へ解決できない。"""
-
-
-class AcquisitionConversionDefect(StrEnum):
-    """acquisition がスコープ所有する変換棄却理由 (自己記述コード)。
-
-    value はそのまま audit の ``outcome_code`` に焼かれる (analysis BC の
-    ``AnalyzableArticleDefect`` と同形)。URL の不正 (空を含む) は責任元
-    ``ArticleUrl`` の ``WebUrlInvalidReason`` を直接運ぶため、ここには載らない。
-    """
-
-    TITLE_MISSING = "acquisition_conversion_title_missing"
-    UNEXPECTED_ERROR = "acquisition_conversion_unexpected_error"
 
 
 class ResponseSizeLimitExceededError(Exception):

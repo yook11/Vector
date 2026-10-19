@@ -11,9 +11,6 @@ from app.collection.article_acquisition.consumer_result import (
     NoRetryAcquisition,
     RetryAcquisition,
 )
-from app.collection.article_acquisition.failure_recording import (
-    ArticleAcquisitionFailureRecorder,
-)
 from app.collection.article_acquisition.service import ArticleAcquisitionService
 from app.collection.article_acquisition.source_resolution import (
     AcquisitionNotRequired,
@@ -30,7 +27,6 @@ class ArticleAcquisitionConsumer:
     ) -> None:
         self._session_factory = session_factory
         self._tools_factory = tools_factory
-        self._failure_recorder = ArticleAcquisitionFailureRecorder(session_factory)
 
     async def consume(
         self, request: SourceAcquisitionRequest
@@ -46,11 +42,5 @@ class ArticleAcquisitionConsumer:
         try:
             ids = await service.execute(source_id=request.source_id)
         except Exception as exc:
-            failure = classify_acquisition_failure(exc, now=datetime.now(UTC))
-            await self._failure_recorder.record_source_failure(
-                source_id=request.source_id,
-                source_name=str(source.name),
-                failure=failure,
-            )
-            return failure
+            return classify_acquisition_failure(exc, now=datetime.now(UTC))
         return AcquisitionSucceeded(len(ids))

@@ -7,7 +7,6 @@ import pytest
 from sqlalchemy import func, select
 
 from app.audit.stages.assessment import AssessmentAuditRepository
-from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.audit.stages.curation import CurationAuditRepository
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.backfill.cleanup import (
@@ -86,7 +85,12 @@ async def test_concurrent_cleanup_commits_only_once(
         timeout=10,
     )
     assert sorted(result) == [0, 1]
-    assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 1
+    # 補完の整理は監査を書かないので、監査が一度だけ残ることは補完以外で確かめる。
+    if stage != "completion":
+        assert (
+            await db_session.scalar(select(func.count()).select_from(PipelineEvent))
+            == 1
+        )
 
 
 @pytest.mark.asyncio
@@ -200,12 +204,6 @@ async def test_cleanup_waits_for_uncommitted_completion(
             exclude_aged_out_embeddings,
             EmbeddingAuditRepository,
             "append_backfill_embedding_aged_out",
-        ),
-        (
-            "completion",
-            close_aged_out_completions,
-            ArticleCompletionAuditRepository,
-            "append_backfill_completion_aged_out",
         ),
     ],
 )
@@ -326,10 +324,10 @@ async def test_cleanup_obeys_per_run_limit(
 
 
 @pytest.mark.asyncio
-async def test_completion_aged_out_closes_row_with_audit(
+async def test_completion_aged_out_closes_row(
     db_session, session_factory, sample_source, sample_categories
 ):
-    """期限切れの未完成行は削除せずclosedにし、打ち切りの監査を同じ取引で残す。"""
+    """期限切れの未完成行は削除せずclosedにし、二度目の整理では対象にしない。"""
     target = await seed_target(
         db_session,
         sample_source,
@@ -341,10 +339,4 @@ async def test_completion_aged_out_closes_row_with_audit(
     incomplete = await db_session.get(IncompleteArticle, target.target_id)
     assert incomplete.status == "closed"
     assert incomplete.leased_until is None
-    event = (await db_session.execute(select(PipelineEvent))).scalar_one()
-    assert event.stage == "completion"
-    assert event.outcome_code == "backfill_completion_aged_out"
-    assert event.source_id == sample_source.id
-    assert event.payload["incomplete_article_id"] == target.target_id
-    assert event.payload["source_name"] == str(sample_source.name)
     assert await close_aged_out_completions(session_factory, created_before=CUTOFF) == 0
