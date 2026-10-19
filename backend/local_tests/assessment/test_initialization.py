@@ -32,7 +32,7 @@ async def test_missing_unused_category_prevents_article_processing(
     gemini_response.assert_not_awaited()
     notification_response.assert_not_awaited()
     saved = await fetch_stored_assessment(system_database, target.curation_id)
-    assert saved.in_scope == saved.out_of_scope == saved.audits == saved.outbox == []
+    assert saved.in_scope == saved.out_of_scope == saved.outbox == []
 
 
 @pytest.mark.asyncio
@@ -58,14 +58,12 @@ async def test_catalog_read_failure_prevents_article_processing(
             "SELECT "
             "(SELECT count(*) FROM analyzed_articles WHERE curation_id=$1), "
             "(SELECT count(*) FROM out_of_scope_articles WHERE curation_id=$1), "
-            "(SELECT count(*) FROM pipeline_events WHERE stage='assessment' "
-            "AND (payload->>'curation_id')::integer=$1), "
             "(SELECT count(*) FROM outbox_events "
             "WHERE event_type='article.assessed_in_scope' "
             "AND (payload->>'curation_id')::integer=$1)",
             target.curation_id,
         )
-    assert tuple(counts) == (0, 0, 0, 0)
+    assert tuple(counts) == (0, 0, 0)
 
 
 @pytest.mark.asyncio

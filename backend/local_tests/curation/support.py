@@ -98,12 +98,11 @@ async def wait_for_blocked_connection(database, blocker_pid, invocations):
 class StoredCuration:
     curations: list[dict]
     noises: list[dict]
-    audits: list[dict]
     outbox_payloads: list[dict]
 
 
 async def fetch_stored_curation(database, analyzable_article_id):
-    """管理接続から、対象記事の結果・監査・Outboxの確定済み内容を取得する。"""
+    """管理接続から、対象記事の結果・Outboxの確定済み内容を取得する。"""
     async with database.connect("vector") as connection:
         curations = await connection.fetch(
             "SELECT id, translated_title, summary FROM article_curations "
@@ -115,11 +114,6 @@ async def fetch_stored_curation(database, analyzable_article_id):
             "WHERE analyzable_article_id=$1 ORDER BY id",
             analyzable_article_id,
         )
-        audits = await connection.fetch(
-            "SELECT event_type, outcome_code FROM pipeline_events "
-            "WHERE stage='curation' AND article_id=$1 ORDER BY id",
-            analyzable_article_id,
-        )
         outbox = await connection.fetch(
             "SELECT payload FROM outbox_events "
             "WHERE event_type='article.curated_signal' "
@@ -129,6 +123,5 @@ async def fetch_stored_curation(database, analyzable_article_id):
     return StoredCuration(
         curations=[dict(row) for row in curations],
         noises=[dict(row) for row in noises],
-        audits=[dict(row) for row in audits],
         outbox_payloads=[json.loads(row["payload"]) for row in outbox],
     )

@@ -3,14 +3,7 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable
 from pathlib import Path
-from typing import get_type_hints
-
-import pytest
-
-from app.audit.domain.event import Stage
-from app.audit.injection_signal import record_injection_boundary_detected
 
 _ROOT = Path(__file__).resolve().parents[3]
 _APP = _ROOT / "backend" / "app"
@@ -19,43 +12,18 @@ _AUDIT_STAGE_DIR = _APP / "audit" / "stages"
 _AUDIT_STAGE_REPOSITORY_FILES = [
     _AUDIT_STAGE_DIR / name
     for name in (
-        "assessment.py",
         "briefing.py",
-        "curation.py",
-        "embedding.py",
         "trend_discovery.py",
     )
 ]
 
 _EXPECTED_REPOSITORY_STAGE_CONSTANTS = {
-    "assessment.py": {
-        "AssessmentAuditRepository": {
-            "STAGE": "ASSESSMENT",
-            "BACKFILL_STAGE": "BACKFILL_ASSESS",
-        },
-    },
     "briefing.py": {
         "BriefingAuditRepository": {"STAGE": "BRIEFING"},
-    },
-    "curation.py": {
-        "CurationAuditRepository": {
-            "STAGE": "CURATION",
-            "BACKFILL_STAGE": "BACKFILL_CURATE",
-        },
-    },
-    "embedding.py": {
-        "EmbeddingAuditRepository": {
-            "STAGE": "EMBEDDING",
-            "BACKFILL_STAGE": "BACKFILL_EMBED",
-        },
     },
     "trend_discovery.py": {
         "TrendDiscoveryAuditRepository": {"STAGE": "TREND_DISCOVERY"},
     },
-}
-
-_RAW_STAGE_KEYWORD_TARGETS = {
-    _APP / "audit" / "stages" / "curation.py": {"curation"},
 }
 
 
@@ -222,30 +190,5 @@ def test_failure_append_path_does_not_read_projection_stage() -> None:
                 and node.value.id == "projection"
             ):
                 violations.append(f"{path.relative_to(_ROOT)}:{node.lineno}")
-
-    assert not violations
-
-
-@pytest.mark.parametrize(
-    "helper",
-    [record_injection_boundary_detected],
-)
-def test_observability_stage_helpers_accept_stage_enum(
-    helper: Callable[..., object],
-) -> None:
-    assert get_type_hints(helper)["stage"] is Stage
-
-
-def test_targeted_observability_paths_do_not_use_raw_string_stage_keywords() -> None:
-    violations: list[str] = []
-    for path, raw_values in _RAW_STAGE_KEYWORD_TARGETS.items():
-        for node in ast.walk(_parse(path)):
-            if not isinstance(node, ast.keyword) or node.arg != "stage":
-                continue
-            if isinstance(node.value, ast.Constant) and node.value.value in raw_values:
-                violations.append(
-                    f"{path.relative_to(_ROOT)}:{node.value.lineno} "
-                    f"stage={node.value.value!r}"
-                )
 
     assert not violations

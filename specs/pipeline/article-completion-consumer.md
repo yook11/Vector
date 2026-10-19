@@ -17,7 +17,7 @@ Status: 共通HTTP・補完固有エラーの定義はPR #356で実装・マー�
 - [失敗分類](../../backend/app/collection/article_completion/scrape_failure.py): 通信の失敗原因と本文抽出の失敗を保持するが、再試行方針は現行DBスケジュールに結び付いている。
 - [補完ポリシー](../../backend/app/collection/sources/article_completion_policy.py)と[Completer](../../backend/app/collection/article_completion/completer.py): ソース別に観測値とHTMLからの値を採用し、完成記事の品質条件を検証する。
 - [保存テスト](../../backend/tests/collection/article_completion/test_service.py)と[Repositoryテスト](../../backend/tests/collection/article_completion/test_repository.py): 保存競合、古い試行の更新拒否、Outbox失敗時のロールバック等の証拠。
-- [キュレーション仕様](./curation-consumer.md)、[Assessment仕様](./assessment-consumer.md)、[Embedding仕様](./embedding-consumer.md): 配送、Consumer、資源管理、監査、部分バッチ応答の参照元。
+- [キュレーション仕様](./curation-consumer.md)、[Assessment仕様](./assessment-consumer.md)、[Embedding仕様](./embedding-consumer.md): 配送、Consumer、資源管理、部分バッチ応答の参照元。
 
 既存コードは現状の証拠であり、移行後の仕様を自動的に決めるものではない。稼働中のAWS環境は本整理では確認していない。
 

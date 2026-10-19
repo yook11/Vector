@@ -49,7 +49,6 @@ from app.models.category import Category
 from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
-from app.models.pipeline_event import PipelineEvent
 
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -343,16 +342,13 @@ async def test_extraction_creates_extraction(
     assert persisted.translated_title == "量子ブレイクスルー"
 
 
-async def test_extraction_race_loser_returns_none_and_skips_audit(
+async def test_extraction_race_loser_keeps_existing_extraction(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
     curation_logger,
 ) -> None:
-    """race 敗北 (既存 extraction あり) は ``None`` を返し audit / chain を焼かない。
-
-    敗者 task は既存 row を上書きせず、audit も二重記録しない。
-    """
+    """race 敗北 (既存 extraction あり) は処理済みを返し、既存 row を上書きしない。"""
     article, existing = await _create_article_with_extraction(
         db_session, sample_source, url="https://example.com/race", title="Race"
     )
@@ -391,21 +387,6 @@ async def test_extraction_race_loser_returns_none_and_skips_audit(
     ).scalar_one()
     assert persisted.id == existing_id
     assert persisted.translated_title != "重複側"
-
-    # 敗者 Service は audit を焼かない (勝者 task が焼く責務)
-    audit_rows = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(
-                    PipelineEvent.article_id == article_id,
-                    PipelineEvent.stage == "curation",
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert len(list(audit_rows)) == 0
 
 
 async def test_extraction_routes_noise_to_extraction_noises_table(

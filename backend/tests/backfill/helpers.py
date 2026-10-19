@@ -123,11 +123,3 @@ async def target_exists(session, target, stage) -> bool:
     if stage == "completion":
         return await session.get(IncompleteArticle, target.target_id) is not None
     return await session.get(AnalyzableArticleRecord, target.article_id) is not None
-
-
-async def target_is_pending(session, target, stage) -> bool:
-    """整理の対象行が救済対象のまま残っているかを返す。"""
-    if stage == "completion":
-        incomplete = await session.get(IncompleteArticle, target.target_id)
-        return incomplete is not None and incomplete.status != "closed"
-    return await target_exists(session, target, stage)

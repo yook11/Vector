@@ -21,7 +21,6 @@ class BackfillExclusionReason(StrEnum):
     """backfill 除外理由。
 
     DB native ENUM は使わず、Python StrEnum + DB CHECK 制約で値を管理する。
-    pipeline_events.outcome_code もこの値を参照し、監査コードとの SSoT を揃える。
     """
 
     ASSESSMENT_AGED_OUT = "backfill_assessment_aged_out"

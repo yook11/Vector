@@ -41,21 +41,18 @@ class CurationConsumer:
         self._session_factory = session_factory
         self._curator = curator
         self._service = CurationService(session_factory)
-        self._failure_handler = CurationConsumerFailureHandler(session_factory)
+        self._failure_handler = CurationConsumerFailureHandler()
 
     async def consume(
         self, event: AnalyzableArticleCreated, *, logger: FilteringBoundLogger
     ) -> CurationCompletion | NoRetryCuration | RetryCuration:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
-        analyzable_article_id: int | None = None
         try:
             async with timeout(60):
                 async with self._session_factory() as session:
                     facts = await CurationRepository(session).load_ready_build_facts(
                         event.analyzable_article_id
                     )
-                    if facts is not None:
-                        analyzable_article_id = facts.analyzable_article_id
 
                 build_result = ReadyForCuration.from_facts(facts)
                 if isinstance(build_result, CurationReadyBuildRejected):
@@ -63,19 +60,15 @@ class CurationConsumer:
                         return CurationCompletion(
                             CurationCompletionKind.ALREADY_CURATED
                         )
-                    rejected = build_result
-                else:
-                    return await self._service.execute(
-                        build_result, self._curator, logger=logger
-                    )
+                    return NoRetryCuration(build_result)
+                return await self._service.execute(
+                    build_result, self._curator, logger=logger
+                )
         except Exception as exc:
             failure = classify_curation_failure(exc)
             try:
                 await self._failure_handler.handle(
-                    failure=failure,
                     exc=exc,
-                    target_article_id=event.analyzable_article_id,
-                    analyzable_article_id=analyzable_article_id,
                     provider=self._curator.provider,
                     logger=logger,
                 )
@@ -87,10 +80,3 @@ class CurationConsumer:
                     exc_info=secondary,
                 )
             return failure
-
-        await self._failure_handler.handle_ready_build_rejected(
-            target_article_id=event.analyzable_article_id,
-            rejected=rejected,
-            logger=logger,
-        )
-        return NoRetryCuration(rejected)

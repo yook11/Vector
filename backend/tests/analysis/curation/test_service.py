@@ -1,4 +1,4 @@
-"""Curationの完了結果と、結果・成功監査・Outboxの原子性を実DBで検証する。"""
+"""Curationの完了結果と、結果・Outboxの原子性を実DBで検証する。"""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 from app.models.outbox_event import OutboxEvent
-from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.outbox import RejectOutboxInsert
 
@@ -101,83 +100,8 @@ async def _ready(article: AnalyzableArticleRecord) -> ReadyForCuration:
     )
 
 
-async def _fetch_curation_events(
-    db_session: AsyncSession, article_id: int
-) -> list[PipelineEvent]:
-    stmt = (
-        select(PipelineEvent)
-        .where(
-            PipelineEvent.article_id == article_id,
-            PipelineEvent.stage == "curation",
-        )
-        .order_by(PipelineEvent.id)
-    )
-    return list((await db_session.execute(stmt)).scalars().all())
-
-
 @pytest.mark.asyncio
-async def test_signal_outcome_writes_curated_signal_audit_with_outcome_code(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    curation_logger,
-) -> None:
-    """signal Outcome 経路で succeeded / outcome_code=curated_signal が焼かれる。"""
-    article = await _make_article(db_session, sample_source)
-    ready = await _ready(article)
-    svc = CurationService(session_factory)
-
-    result = await svc.execute(
-        ready, _curator(return_envelope=_signal_envelope()), logger=curation_logger
-    )
-
-    # signal 勝者 → Service は新規 article_extractions.id を返す
-    assert result.kind is CurationCompletionKind.SIGNAL
-    assert result.curation_id > 0
-    events = await _fetch_curation_events(db_session, article.id)
-    assert len(events) == 1
-    ev = events[0]
-    assert ev.event_type == "succeeded"
-    assert ev.outcome_code == "curated_signal"
-    assert ev.retryability is None
-    assert ev.source_id == sample_source.id
-    payload = ev.payload
-    assert payload["ai_model"] == GEMINI_CURATION_SPEC.model
-    assert payload["prompt_version"] == GEMINI_CURATION_SPEC.version
-    assert payload["ai_raw_response"]
-    assert payload["input_content_length"] == len(article.original_content)
-    # PR1-a: raw_relevance は envelope.raw_relevance から焼かれる (Stage 4 対称)
-    assert payload["raw_relevance"] == "signal"
-
-
-@pytest.mark.asyncio
-async def test_noise_outcome_writes_curated_noise_audit(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    curation_logger,
-) -> None:
-    """noise Outcome 経路で succeeded / outcome_code=curated_noise が焼かれる。"""
-    article = await _make_article(db_session, sample_source)
-    ready = await _ready(article)
-    svc = CurationService(session_factory)
-
-    result = await svc.execute(
-        ready, _curator(return_envelope=_noise_envelope()), logger=curation_logger
-    )
-
-    # noise 勝者 → Service は None (Stage 4 chain しない、Task 層 short return 対象)
-    assert result == CurationCompletion(CurationCompletionKind.NOISE)
-    events = await _fetch_curation_events(db_session, article.id)
-    assert len(events) == 1
-    ev = events[0]
-    assert ev.event_type == "succeeded"
-    assert ev.outcome_code == "curated_noise"
-    assert ev.retryability is None
-
-
-@pytest.mark.asyncio
-async def test_response_invalid_error_passes_through_without_service_audit(
+async def test_response_invalid_error_passes_through(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
@@ -194,10 +118,6 @@ async def test_response_invalid_error_passes_through_without_service_audit(
             _curator(side_effect=CurationResponseInvalidError()),
             logger=curation_logger,
         )
-
-    # Service は audit を焼かない (失敗経路は task 層末尾の inline audit 責務、PR4)
-    events = await _fetch_curation_events(db_session, article.id)
-    assert len(events) == 0
 
 
 # processing_outcome emit — commit 後に signal/noise、race loss は emit しない
@@ -359,14 +279,14 @@ async def test_signal_race_loss_writes_no_outbox_event(
 
 
 @pytest.mark.asyncio
-async def test_outbox_insert_failure_rolls_back_signal_and_audit(
+async def test_outbox_insert_failure_rolls_back_signal(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     reject_outbox_insert: RejectOutboxInsert,
     curation_logger,
 ) -> None:
-    """Outboxの失敗でSignal結果と成功監査も原子的に取り消す。"""
+    """Outboxの失敗でSignal結果も原子的に取り消す。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     constraint_name = await reject_outbox_insert(ArticleCuratedSignal.EVENT_TYPE)
@@ -390,26 +310,13 @@ async def test_outbox_insert_failure_rolls_back_signal_and_audit(
             .scalars()
             .all()
         )
-        audit_events = (
-            (
-                await reader.execute(
-                    select(PipelineEvent.id).where(
-                        PipelineEvent.article_id == article.id,
-                        PipelineEvent.stage == "curation",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
         outbox_events = (
             (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
         )
     assert {
         "curations": curations,
-        "audit_events": audit_events,
         "outbox_events": outbox_events,
-    } == {"curations": [], "audit_events": [], "outbox_events": []}
+    } == {"curations": [], "outbox_events": []}
 
 
 @pytest.mark.asyncio
@@ -417,7 +324,7 @@ async def test_outbox_insert_failure_rolls_back_signal_and_audit(
 async def test_existing_save_returns_already_curated_without_duplicate_effects(
     db_session, session_factory, sample_source, envelope_factory, curation_logger
 ):
-    """保存済み行との競合は処理済み完了となり、監査とOutboxを重複させない。"""
+    """保存済み行との競合は処理済み完了となり、結果とOutboxを重複させない。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     service = CurationService(session_factory)
@@ -429,12 +336,10 @@ async def test_existing_save_returns_already_curated_without_duplicate_effects(
     )
 
     async with session_factory() as reader:
-        audits = await _fetch_curation_events(reader, article.id)
         outbox = (await reader.scalars(select(OutboxEvent))).all()
         signals = (await reader.scalars(select(ArticleCuration))).all()
         noises = (await reader.scalars(select(CurationNoise))).all()
     assert second == CurationCompletion(CurationCompletionKind.ALREADY_CURATED)
-    assert len(audits) == 1
     if first.kind is CurationCompletionKind.SIGNAL:
         assert (len(signals), len(noises), len(outbox)) == (1, 0, 1)
         assert signals[0].id == first.curation_id == outbox[0].payload["curation_id"]
@@ -444,7 +349,7 @@ async def test_existing_save_returns_already_curated_without_duplicate_effects(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("envelope_factory", [_signal_envelope, _noise_envelope])
-@pytest.mark.parametrize("failure_at", ["save", "audit", "commit"])
+@pytest.mark.parametrize("failure_at", ["save", "commit"])
 async def test_persistence_failures_propagate_and_roll_back_all_results(
     db_session,
     session_factory,
@@ -453,7 +358,7 @@ async def test_persistence_failures_propagate_and_roll_back_all_results(
     failure_at,
     curation_logger,
 ):
-    """保存・監査・commitの失敗は完了値に変換せず、同一取引の全書き込みを戻す。"""
+    """保存・commitの失敗は完了値に変換せず、同一取引の全書き込みを戻す。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     failure = RuntimeError("injected persistence failure")
@@ -465,8 +370,6 @@ async def test_persistence_failures_propagate_and_roll_back_all_results(
     event_name = None
     if failure_at == "save":
         ready = ready.model_copy(update={"analyzable_article_id": article.id + 1000})
-    elif failure_at == "audit":
-        target, event_name = PipelineEvent, "before_insert"
     else:
         target, event_name = db_session.bind.sync_engine, "commit"
     if target is not None:
@@ -489,6 +392,6 @@ async def test_persistence_failures_propagate_and_roll_back_all_results(
     async with session_factory() as reader:
         remaining = {
             model.__tablename__: (await reader.scalars(select(model))).all()
-            for model in (ArticleCuration, CurationNoise, PipelineEvent, OutboxEvent)
+            for model in (ArticleCuration, CurationNoise, OutboxEvent)
         }
     assert remaining == {name: [] for name in remaining}

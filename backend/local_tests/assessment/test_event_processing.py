@@ -22,7 +22,7 @@ from local_tests.assessment.support import (
 async def test_in_scope_assessment_completes_successfully(
     system_database, assessment_runtime, gemini_response, notification_response
 ):
-    """対象内の結果・成功監査・後続Outboxを保存し、記事一覧の更新を通知する。"""
+    """対象内の結果・後続Outboxを保存し、記事一覧の更新を通知する。"""
     other = await seed_curation(
         system_database,
         "https://example.com/other",
@@ -78,16 +78,6 @@ async def test_in_scope_assessment_completes_successfully(
     }
     assert saved.out_of_scope == []
 
-    assert len(saved.audits) == 1
-    success_audit = saved.audits[0]
-    assert {
-        "event_type": success_audit["event_type"],
-        "article_id": success_audit["article_id"],
-    } == {
-        "event_type": "succeeded",
-        "article_id": target.analyzable_article_id,
-    }
-
     assert len(saved.outbox) == 1
     outbox_event = saved.outbox[0]
     assert {
@@ -101,11 +91,10 @@ async def test_in_scope_assessment_completes_successfully(
         },
     }
 
-    # 処理対象ではない記事には、結果・監査・Outboxを追加しない。
+    # 処理対象ではない記事には、結果・Outboxを追加しない。
     unchanged = await fetch_stored_assessment(system_database, other.curation_id)
     assert unchanged.in_scope == []
     assert unchanged.out_of_scope == []
-    assert unchanged.audits == []
     assert unchanged.outbox == []
 
 
@@ -117,7 +106,7 @@ async def test_out_of_scope_event_saves_result_without_outbox(
     notification_response,
     notification_secret,
 ):
-    """対象外結果と成功監査だけを確定し、Embedding向けOutboxを発行しない。"""
+    """対象外結果だけを確定し、Embedding向けOutboxを発行しない。"""
     target = await seed_curation(system_database, "https://example.com/out-of-scope")
     points = [{"content": "投資対象外の催し", "mentions": []}]
     gemini_response.return_value = assessment_reply(
@@ -137,37 +126,31 @@ async def test_out_of_scope_event_saves_result_without_outbox(
         "investor_take": "対象外とする理由",
         "key_points": points,
     }
-    assert len(saved.audits) == 1
-    assert saved.audits[0]["event_type"] == "succeeded"
-    assert saved.audits[0]["article_id"] == target.analyzable_article_id
     assert saved.outbox == []
     notification_response.assert_not_awaited()
     notification_secret.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_database_failure_rolls_back_result_audit_and_outbox(
+async def test_database_failure_rolls_back_result_and_outbox(
     system_database,
     assessment_runtime,
     database_error_before_commit,
     notification_response,
     notification_secret,
 ):
-    """3種類の実INSERT後のDB障害で全てを戻し、失敗監査だけを別トランザクションで確定する。"""
+    """2種類の実INSERT後のDB障害で全てを戻し、再配信を求める。"""
     target = await seed_curation(system_database, "https://example.com/rollback")
 
     response = await invoke_event(target)
 
-    assert database_error_before_commit.pending_counts == [(1, 1, 1)]
+    assert database_error_before_commit.pending_counts == [(1, 1)]
     assert len(database_error_before_commit.errors) == 1
     assert response == {
         "batchItemFailures": [{"itemIdentifier": str(target.curation_id)}]
     }
     saved = await fetch_stored_assessment(system_database, target.curation_id)
     assert saved.in_scope == saved.out_of_scope == saved.outbox == []
-    assert len(saved.audits) == 1
-    assert saved.audits[0]["event_type"] == "failed"
-    assert saved.audits[0]["article_id"] == target.analyzable_article_id
     notification_response.assert_not_awaited()
     notification_secret.assert_not_called()
 
@@ -176,7 +159,7 @@ async def test_database_failure_rolls_back_result_audit_and_outbox(
 async def test_http_failure_records_failure_and_next_article_succeeds(
     system_database, assessment_runtime, gemini_response
 ):
-    """SDK通信失敗を失敗監査・応答へ反映し、次の記事を正常に処理できる。"""
+    """SDK通信失敗を応答へ反映して何も保存せず、次の記事を正常に処理できる。"""
     target = await seed_curation(system_database, "https://example.com/http-error")
     gemini_response.side_effect = httpx2.ConnectError("test connection failure")
 
@@ -186,7 +169,7 @@ async def test_http_failure_records_failure_and_next_article_succeeds(
         "batchItemFailures": [{"itemIdentifier": str(target.curation_id)}]
     }
     stored = await fetch_stored_assessment(system_database, target.curation_id)
-    assert [audit["event_type"] for audit in stored.audits] == ["failed"]
+    assert stored.in_scope == stored.out_of_scope == stored.outbox == []
 
     gemini_response.side_effect = None
     next_target = await seed_curation(
@@ -244,7 +227,6 @@ async def test_database_wait_timeout_rolls_back_and_allows_retry(
                     and not stored.out_of_scope
                     and not stored.outbox
                 )
-                assert [audit["event_type"] for audit in stored.audits] == ["failed"]
             finally:
                 try:
                     await transaction.rollback()
@@ -300,7 +282,6 @@ async def test_notification_failure_preserves_saved_article_and_success_response
     assert response == {"batchItemFailures": []}
     saved = await fetch_stored_assessment(system_database, target.curation_id)
     assert len(saved.in_scope) == 1
-    assert [audit["event_type"] for audit in saved.audits] == ["succeeded"]
     assert len(saved.outbox) == 1
 
 
@@ -323,7 +304,6 @@ async def test_notification_secret_failure_preserves_saved_article_and_success_r
     assert response == {"batchItemFailures": []}
     saved = await fetch_stored_assessment(system_database, target.curation_id)
     assert len(saved.in_scope) == 1
-    assert [audit["event_type"] for audit in saved.audits] == ["succeeded"]
     assert len(saved.outbox) == 1
 
 

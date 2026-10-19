@@ -31,7 +31,7 @@ from app.analysis.assessment.errors import AssessmentResponseInvalidError
 class AssessmentResponseDefect(StrEnum):
     """parse が検知する「内容の schema 違反」種別 (自己記述コード、provider 非依存)。
 
-    value はそのまま audit の ``outcome_code`` に焼かれる (完成段
+    value はそのままログの ``code`` に出る (完成段
     ``AnalyzableArticleDefect`` と同形)。失敗を検知した parse がその語彙を所有し、
     ``AssessmentResponseInvalidError(defect)`` に載せて投げる。各 member は下の
     raise 点と 1:1 対応し、写像漏れが原理的に起きない。

@@ -1,4 +1,4 @@
-"""CurationのAI判定と、結果・監査・Outboxの原子的な保存を担う。"""
+"""CurationのAI判定と、結果・Outboxの原子的な保存を担う。"""
 
 from __future__ import annotations
 
@@ -16,12 +16,7 @@ from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.events import ArticleCuratedSignal
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
-from app.audit.stages.curation import CurationAuditRepository
 from app.models.outbox_event import OutboxEvent
-
-# outcome_code (pipeline_events) — stage 'curation' と語彙整合 (assessed_* と対称)。
-_CURATED_SIGNAL_CODE = "curated_signal"
-_CURATED_NOISE_CODE = "curated_noise"
 
 
 class CurationCompletionKind(StrEnum):
@@ -81,7 +76,6 @@ class CurationService:
                         envelope, analyzable_article_id=ready.analyzable_article_id
                     )
                     if curation_id is None:
-                        # race lost — 勝者 task が audit を焼く
                         logger.info(
                             "curation_result_save_skipped",
                             reason="concurrent_write",
@@ -89,11 +83,6 @@ class CurationService:
                         return CurationCompletion(
                             CurationCompletionKind.ALREADY_CURATED
                         )
-                    await CurationAuditRepository(session).append_signal(
-                        ready=ready,
-                        envelope=envelope,
-                        code=_CURATED_SIGNAL_CODE,
-                    )
                     event = ArticleCuratedSignal(
                         analyzable_article_id=ready.analyzable_article_id,
                         curation_id=curation_id,
@@ -121,7 +110,6 @@ class CurationService:
                         envelope, analyzable_article_id=ready.analyzable_article_id
                     )
                     if noise_id is None:
-                        # race lost — 勝者 task が audit を焼く
                         logger.info(
                             "curation_result_save_skipped",
                             reason="concurrent_write",
@@ -129,11 +117,6 @@ class CurationService:
                         return CurationCompletion(
                             CurationCompletionKind.ALREADY_CURATED
                         )
-                    await CurationAuditRepository(session).append_noise(
-                        ready=ready,
-                        envelope=envelope,
-                        code=_CURATED_NOISE_CODE,
-                    )
                     await session.commit()
                     logger.info(
                         "curation_result_saved",

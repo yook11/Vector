@@ -2,7 +2,7 @@
 
 各工程の best-effort 監査 (``*_audit_dropped`` ログを残して握り潰す経路) で、書き込み
 自体が失敗した回数を stage 別 counter で記録する。個別調査用の structured log は各 drop
-site 側に残し、本 module は「率」の集計に純化する (``injection_signal.py`` と同方針)。
+site 側に残し、本 module は「率」の集計に純化する。
 attributes は cardinality 爆発を避け stage のみとし、article_id / URL は載せない (I3)。
 """
 

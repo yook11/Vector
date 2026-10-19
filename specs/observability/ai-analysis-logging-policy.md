@@ -3,7 +3,7 @@
 作成: 2026-09-17
 更新: 2026-09-25（本文などの禁止をdenyだけで扱い、maskを外す）
 Status: Accepted
-Implementation: Partially implemented。Assessmentの入口・終端、初期化・バッチ不正・共有ライフサイクルのcleanupをAI目的ポリシーへ接続済み。Consumer・Service・失敗後処理も同じメッセージ用ロガーへ接続済みで、Repositoryの重複ログは例外記録へ集約した。AssessmentのAI呼び出しと共有DeepSeekクライアントのcleanupも接続済み。通知処理内部とSSM cleanupは記事分析とは別の目的ポリシーへ接続済み（[上位仕様§2.4](./application-logging-policy.md#24-キャッシュ更新通知秘密情報取得2026-09-22)）。Curation・Embeddingも同じ形で接続済み（2026-10-08、§3.3.4）。共通コードのモジュールロガー3つとエージェントの業務ログは未移行。HTTP例外の入力値保護は未対応（Gemini SDK例外は専用の変換で保護済み）。追加診断・保護要件、AWS適用とCloudWatch到達確認は後続工程とする。
+Implementation: Partially implemented。Assessmentの入口・終端、初期化・バッチ不正・共有ライフサイクルのcleanupをAI目的ポリシーへ接続済み。Consumer・Service・失敗後処理も同じメッセージ用ロガーへ接続済みで、Repositoryの重複ログは例外記録へ集約した。AssessmentのAI呼び出しと共有DeepSeekクライアントのcleanupも接続済み。通知処理内部とSSM cleanupは記事分析とは別の目的ポリシーへ接続済み（[上位仕様§2.4](./application-logging-policy.md#24-キャッシュ更新通知秘密情報取得2026-09-22)）。Curation・Embeddingも同じ形で接続済み（2026-10-08、§3.3.4）。共通コードのモジュールロガー2つとエージェントの業務ログは未移行。HTTP例外の入力値保護は未対応（Gemini SDK例外は専用の変換で保護済み）。追加診断・保護要件、AWS適用とCloudWatch到達確認は後続工程とする。
 
 上位仕様: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)
 基底の正本: [アプリケーションログの共通基底ポリシー](./logging-base-policy.md)
@@ -102,7 +102,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | 応答解析・検証 | JSON解析・構造検証・業務上の構築のどこか、失敗field・defect・期待する型や制約。 |
 | 結果保存・commit | 保存とcommitのどちらか、SQLSTATE、制約名、DBの原因説明、保存結果が確定しているか。 |
 | 想定外のコード不具合 | TypeError、AttributeError、assertion等の例外型・原因文・呼び出しstack。既知の業務例外だけに限定しない。 |
-| 監査・通知・metric・cleanup | 元の失敗との関係、二次障害のoperation・原因・stack、業務結果への実際の影響。 |
+| 通知・metric・cleanup | 元の失敗との関係、二次障害のoperation・原因・stack、業務結果への実際の影響。 |
 
 同じ例外型でも別の原因を識別できることを要件とする。例えばtimeoutとconnection、認証失敗と権限不足、入力の欠落と型違反を区別する。既存分類にない事実を無理に既知codeへ当てはめない。
 
@@ -158,7 +158,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 ### 3.3 命名と記録単位
 
 - 識別子は`log_policy=ai_inference`、モデルは`model`、時間は`*_ms` / `*_seconds`、使用量は`input_tokens` / `output_tokens`へ統一する。業務モデル・監査DBの属性名はログの命名に合わせて改名しない。
-- `operation`の語彙は`settings` / `resources` / `ai_client` / `consumer` / `consume` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `audit` / `notification` / `processing_metric` / `audit_dropped_metric` / `failure_handling` / `cleanup`とする。`consumer`は既存のConsumer構築、`consume`はCuration・Assessment・Embeddingで結果を受け取れずに例外が伝播したConsumer呼び出しを表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
+- `operation`の語彙は`settings` / `resources` / `ai_client` / `consumer` / `consume` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `notification` / `processing_metric` / `failure_handling` / `cleanup`とする。`consumer`は既存のConsumer構築、`consume`はCuration・Assessment・Embeddingで結果を受け取れずに例外が伝播したConsumer呼び出しを表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
 - 既存の`stage=settings/resources/ai_client/consumer`は`operation`へ移す。正常終端の`reason`は`outcome`へ移す。二次障害の`audit_error_class` / `secondary_error_class`は`exc_info`由来の`error_class`へ揃える。
 - メッセージ単位のeventは§3.3.1の形へ統一する。Assessment handlerは旧イベント名から切り替え済みで、Curation・Embeddingも2026-10-08に切り替えた（§3.3.4）。AI呼び出しの`assessor_api_call/success`・`curator_api_call/success`・`embedder_api_call/success`は業務メッセージとは別の単位として扱う。eventにID・例外文を埋め込まない。
 
@@ -172,7 +172,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `assessment_message_processing_completed` | 判定の保存完了または処理済みを確認し、そのメッセージの業務結果とSQS応答への扱いが確定した時点。 | INFO |
 | `assessment_message_processing_failed` | 前提不成立または処理中の失敗について、業務結果とSQS応答への扱いが確定した時点。 | 前提不成立・契約上の入力不正はWARNING、処理例外はERROR |
 
-処理開始後に結果を捕捉できたメッセージは、開始1回と完了または失敗1回を基本とする。初期化失敗・バッチ全体の入力不正・監査や通知の二次障害・cleanup失敗は、既存の別の記録境界に残す。キャンセルや強制終了について終端を捏造しない。
+処理開始後に結果を捕捉できたメッセージは、開始1回と完了または失敗1回を基本とする。初期化失敗・バッチ全体の入力不正・通知の二次障害・cleanup失敗は、既存の別の記録境界に残す。キャンセルや強制終了について終端を捏造しない。
 
 | 状況 | 終端イベントの末尾 | 結果・理由 | `message_disposition` |
 | --- | --- | --- | --- |
@@ -183,7 +183,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | 再試行しない失敗（この入力では回復しないprovider失敗、Curation欠損の工程例外） | `failed` | `code`、providerなら`failure_reason`（例: `ai_provider_response_error` / `input_too_long`） | `completed` |
 | 入力不正、再試行する失敗、Consumerから伝播した例外 | `failed` | 既存の入力診断または例外診断 | `batch_item_failure` |
 
-ログは業務処理の成否を表し、`message_disposition`はhandlerが決定したSQS応答への扱いを表す。前提不成立を失敗として記録しても、既存の受信完了・再配信・監査・メトリクスの動作は変えない。既存の拒否値をそのまま使い、ログのために例外化しない。
+ログは業務処理の成否を表し、`message_disposition`はhandlerが決定したSQS応答への扱いを表す。前提不成立を失敗として記録しても、既存の受信完了・再配信・メトリクスの動作は変えない。既存の拒否値をそのまま使い、ログのために例外化しない。
 
 | 対象 | 出力項目 |
 | --- | --- |
@@ -200,18 +200,16 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 
 ### 3.3.2 Assessment内部の記録
 
-相関情報はcontextvarsに置く。呼び出しの間は`service` / `stage` / `request_id` / `environment`を置く。メッセージの間は`message_id`と、検証済みイベントの`event_id`・入力の記事IDを置き、`bound_contextvars`でその範囲を抜けると戻す（2026-10-09）。Consumerの`consume`、Serviceの`execute`、失敗後処理の`handle` / `handle_ready_build_rejected`は、必須キーワード引数`logger: FilteringBoundLogger`で記事分析のロガーを受け取り、同じロガーを引き継ぐ。このロガーは方針と出力先を担い、相関情報は束縛しない。インスタンス属性に保存せず、内部で別のロガーを構築しない。ログ1行の事実と、保存で初めて分かる結果のID（Assessmentの`analyzed_article_id`、Curationの`curation_id`）は、書くときに渡す。
+相関情報はcontextvarsに置く。呼び出しの間は`service` / `stage` / `request_id` / `environment`を置く。メッセージの間は`message_id`と、検証済みイベントの`event_id`・入力の記事IDを置き、`bound_contextvars`でその範囲を抜けると戻す（2026-10-09）。Consumerの`consume`、Serviceの`execute`、失敗後処理の`handle`は、必須キーワード引数`logger: FilteringBoundLogger`で記事分析のロガーを受け取り、同じロガーを引き継ぐ。このロガーは方針と出力先を担い、相関情報は束縛しない。インスタンス属性に保存せず、内部で別のロガーを構築しない。ログ1行の事実と、保存で初めて分かる結果のID（Assessmentの`analyzed_article_id`、Curationの`curation_id`）は、書くときに渡す。
 
 | 場面 | イベント・レベル | 記録内容 |
 | --- | --- | --- |
 | 保存commit成功 | `assessment_result_saved` / INFO | `outcome=in_scope`または`out_of_scope`。対象内のみ保存した`analyzed_article_id`を追加する。 |
 | 同時処理による保存見送り | `assessment_result_save_skipped` / INFO | `reason=concurrent_write`。 |
 | 失敗後処理全体の障害 | `assessment_consumer_failure_processing_failed` / WARNING | `operation=failure_handling`、`business_error_class`、二次例外の`exc_info`。 |
-| 失敗監査の保存障害 | `assessment_consumer_failure_audit_dropped` / WARNING | `operation=audit`、`business_error_class`、二次例外の`exc_info`。 |
-| 前提不成立の監査保存障害 | `assessment_ready_build_rejected_audit_dropped` / WARNING | `operation=audit`、`rejection_code`、二次例外の`exc_info`。元の業務例外型は付けない。 |
-| 計測・通知の障害 | `assessment_consumer_failure_handling_failed` / WARNING | 既存の`processing_metric` / `audit_dropped_metric` / `notification`を`operation`とし、`business_error_class`と二次例外の`exc_info`を渡す。 |
+| 計測・通知の障害 | `assessment_consumer_failure_handling_failed` / WARNING | 既存の`processing_metric` / `notification`を`operation`とし、`business_error_class`と二次例外の`exc_info`を渡す。 |
 
-相関情報はhandlerから引き継ぐ。内部ログにはメッセージ全体の`duration_ms`や`message_disposition`を追加しない。通常のログ障害は共通ラッパーで捕捉し、監査・通知・メトリクスの実行順序や元の例外伝播は維持する。前提不成立の監査drop計測失敗を抑止する既存処理も維持する。
+相関情報はhandlerから引き継ぐ。内部ログにはメッセージ全体の`duration_ms`や`message_disposition`を追加しない。通常のログ障害は共通ラッパーで捕捉し、通知・メトリクスの実行順序や元の例外伝播は維持する。
 
 Repositoryの起動時・保存時のカテゴリ整合性チェックは維持し、直接ログは削除する。`CategoryEnumDatabaseMismatchError`の既存メッセージが持つ不足カテゴリを、初期化・メッセージ失敗境界の`exc_info`経由で記録する。専用の`details`やRepositoryへのロガー引数は追加しない。
 
@@ -248,10 +246,10 @@ Assessment handlerの`setup_lambda_logging()`呼び出しは削除済みで、�
 | 開始・完了・失敗 | `{stage}_message_processing_started` / `_completed` / `_failed` | §3.3.1と同じ。`outcome`はCurationが`signal` / `noise` / `already_curated`（signalは保存した`curation_id`を追加）、Embeddingが`saved` / `already_embedded`。 |
 | 初期化・バッチ不正・cleanup | `{stage}_initialization_failed` / `_sqs_input_invalid` / `_resources_cleanup_failed` | `operation`（cleanupは`resource`も）と`exc_info`。 |
 | 保存 | `{stage}_result_saved` / `_result_save_skipped` | 保存は`outcome`（Curationのsignalは`curation_id`も）、同時処理による見送りは`reason=concurrent_write`。 |
-| 二次障害 | §3.3.2と同じ4イベント | 対象IDはCurationが`analyzable_article_id`、Embeddingが`analyzed_article_id`。 |
+| 二次障害 | §3.3.2と同じ2イベント | 対象IDはCurationが`analyzable_article_id`、Embeddingが`analyzed_article_id`。 |
 | AI呼び出し | `curator_api_call/success` / `embedder_api_call/success` | モデルを束縛したロガーから`model`。 |
 
-`noise_id`と保存ログの`model`は出さない（Assessmentの保存ログと同じ）。共通コードのモジュールロガー（`gemini_resource_exhausted`・`gemini_client_cleanup_failed`・`audit_injection_boundary_detected`）はこの接続に含めず、Assessmentと同じくJSONの全体設定なしで出力される。工程例外（`CurationError`・`EmbeddingError`）は`ApplicationError`ではないため、`exc_info`の診断は例外型と空の説明になる。
+`noise_id`と保存ログの`model`は出さない（Assessmentの保存ログと同じ）。共通コードのモジュールロガー（`gemini_resource_exhausted`・`gemini_client_cleanup_failed`）はこの接続に含めず、Assessmentと同じくJSONの全体設定なしで出力される。工程例外（`CurationError`・`EmbeddingError`）は`ApplicationError`ではないため、`exc_info`の診断は例外型と空の説明になる。
 
 ### 3.4 禁止・サニタイズ
 
@@ -301,13 +299,13 @@ Consumer全体の期限切れを、providerのread timeoutとして表示しな�
 
 ### 4.3 対処と二次障害
 
-provider例外には回復分類・retryabilityを持たせない。分析の3工程の失敗監査はretryabilityを記録せず、工程がとった扱いを`failure_action`（`retry`／`no_retry`）に記録する。これも再試行を実行した記録ではない。SQSバッチ失敗応答に含めた時点では「失敗項目として報告した」と記録し、将来の再配信完了まで断定しない。
+provider例外には回復分類・retryabilityを持たせない。SQSバッチ失敗応答に含めた時点では「失敗項目として報告した」と記録し、将来の再配信完了まで断定しない。
 
 保存済み、rollback済み、保存結果不明も区別する。commit中の通信断等で結果が不明なら、ログの都合で未保存と決めない。
 
-元の分析失敗と監査・通知・cleanup等の二次障害は、それぞれの原因文・stack・operationを関連付けて残す。二次障害が元の例外や成功済みの業務結果を置き換えない。ログ自体の失敗は上位仕様の最小診断へ退避し、再帰的に同じloggerを呼ばない。
+元の分析失敗と通知・cleanup等の二次障害は、それぞれの原因文・stack・operationを関連付けて残す。二次障害が元の例外や成功済みの業務結果を置き換えない。ログ自体の失敗は上位仕様の最小診断へ退避し、再帰的に同じloggerを呼ばない。
 
-一次障害の詳細はメッセージ失敗ログに、二次障害の詳細はその処理境界の別ログに残し、取得済みのrequest/message/event/記事IDで結ぶ。二次障害ログは元の例外があれば`business_error_class`を伴い、二次例外の型は共通変換の`error_class`へ記録する。`operation`は失敗した監査・通知等を示す。cleanup等で元の業務例外が存在しない場合は捏造しない。記録障害は共通ラッパーで捕捉する。Assessmentの保存後ログとAI呼び出し内部・DeepSeek cleanupは共通ラッパーへ接続済みとする。
+一次障害の詳細はメッセージ失敗ログに、二次障害の詳細はその処理境界の別ログに残し、取得済みのrequest/message/event/記事IDで結ぶ。二次障害ログは元の例外があれば`business_error_class`を伴い、二次例外の型は共通変換の`error_class`へ記録する。`operation`は失敗した通知等を示す。cleanup等で元の業務例外が存在しない場合は捏造しない。記録障害は共通ラッパーで捕捉する。Assessmentの保存後ログとAI呼び出し内部・DeepSeek cleanupは共通ラッパーへ接続済みとする。
 
 ## 5. 正常時の記録と除外情報
 
@@ -353,7 +351,6 @@ provider例外には回復分類・retryabilityを持たせない。分析の3�
 | Consumer全体の期限が保存中に切れる | 処理全体のdeadline、保存operation、有効な期限、保存状態、stack | provider read timeoutという誤分類 |
 | categoryの型が不正 | 応答検証operation、category、既存の型違反defect、期待する型 | 実際に生成された値、応答全体 |
 | DB制約違反にSQLパラメーターが含まれる | SQLSTATE、制約名、保護後の原因文、対象ID、stack | パラメーター値、行データ |
-| 分析失敗後、監査保存も失敗 | 元の分析原因と監査側の原因、それぞれのoperation・stack、相関ID | 元の失敗を消した監査エラーだけの記録 |
 | 正常にout_of_scopeと判断 | 正常終端、out_of_scope、時間、対象ID、取得済み使用量 | 生成された判定理由の本文 |
 
 ## Implementation

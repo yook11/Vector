@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedding.ai.base import BaseEmbedder
@@ -25,7 +23,6 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
-from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _METRIC = "vector.embedding.processing_outcome"
@@ -128,26 +125,21 @@ async def test_commit_failure_does_not_emit_succeeded(
     embedding_article: tuple[AnalyzedArticleRecord, int],
     capfire: CaptureLogfire,
 ) -> None:
-    """監査INSERTの主キー競合でcommitが失敗すると、ベクトルもロールバックする。"""
+    """commitが失敗すると、ベクトルもロールバックして成功を計上しない。"""
     analysis, article_id = embedding_article
     analysis_id = analysis.id
-    # 明示IDでsequenceを進めず、Serviceのcommit時に実DBの制約違反を発生させる。
-    db_session.add(
-        PipelineEvent(
-            id=1,
-            stage="embedding",
-            event_type="succeeded",
-            outcome_code="existing_event",
-            payload={},
-        )
-    )
-    await db_session.commit()
-    with pytest.raises(IntegrityError):
+    boom = RuntimeError("commit failed")
+    with (
+        patch(
+            "sqlalchemy.ext.asyncio.AsyncSession.commit",
+            new=AsyncMock(side_effect=boom),
+        ),
+        pytest.raises(RuntimeError, match="commit failed"),
+    ):
         await _execute(session_factory, analysis_id, article_id)
     db_session.expire_all()
     stored = await db_session.get(AnalyzedArticleRecord, analysis_id)
     assert stored is not None and stored.embedding is None
-    assert len((await db_session.execute(select(PipelineEvent))).scalars().all()) == 1
     for result in _ALL_RESULTS:
         assert sum_counter_for_result(collected_metrics(capfire), _METRIC, result) == 0
 

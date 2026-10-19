@@ -17,7 +17,7 @@ from local_tests.assessment.support import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("category", ["ai", "out_of_scope"])
-async def test_redelivery_preserves_first_result_audit_and_outbox(
+async def test_redelivery_preserves_first_result_and_outbox(
     system_database,
     assessment_runtime,
     gemini_response,
@@ -25,7 +25,7 @@ async def test_redelivery_preserves_first_result_audit_and_outbox(
     notification_secret,
     category,
 ):
-    """再配送で異なるAI応答を用意しても初回の結果・監査・Outboxを上書きせず正常終了する。"""
+    """再配送で異なるAI応答を用意しても初回の結果・Outboxを上書きせず正常終了する。"""
     target = await seed_curation(system_database, "https://example.com/redelivery")
     record = build_sqs_record(target)
     gemini_response.return_value = assessment_reply(
@@ -36,7 +36,6 @@ async def test_redelivery_preserves_first_result_audit_and_outbox(
     first = await fetch_stored_assessment(system_database, target.curation_id)
     assert len(first.in_scope + first.out_of_scope) == 1
     assert (first.in_scope + first.out_of_scope)[0]["investor_take"] == "初回の判断"
-    assert len(first.audits) == 1
     assert len(first.outbox) == (1 if category == "ai" else 0)
     gemini_response.return_value = assessment_reply(
         category=category, investor_take="再配送時の異なる判断"
@@ -114,6 +113,4 @@ async def test_concurrent_saves_keep_leader_result_after_unique_constraint_wait(
     stored = await fetch_stored_assessment(system_database, target.curation_id)
     assert len(stored.in_scope + stored.out_of_scope) == 1
     assert (stored.in_scope + stored.out_of_scope)[0]["investor_take"] == "先行側の判断"
-    assert len(stored.audits) == 1
-    assert stored.audits[0]["event_type"] == "succeeded"
     assert len(stored.outbox) == (1 if category == "ai" else 0)

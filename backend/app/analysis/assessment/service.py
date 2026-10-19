@@ -1,8 +1,8 @@
 """AssessmentService — Stage 4 の AI 判定と永続化境界。
 
-``ReadyForAssessment`` が precondition を、明示引数 ``analyzable_article_id`` が
-監査主語を保証するため、Service は AI 呼び出し、結果別の保存、audit + commit だけを
-担う。重複保存を見送った場合は audit / commit せず ``ALREADY_ASSESSED`` を返す。
+``ReadyForAssessment`` が precondition を保証するため、Service は AI 呼び出し、結果別の
+保存、commit だけを担う。重複保存を見送った場合は commit せず ``ALREADY_ASSESSED`` を
+返す。
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
-from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.outbox_event import OutboxEvent
 
 
@@ -58,7 +57,7 @@ class AssessmentService:
     """1 record の判定と永続化を行うアトミックなユースケース。
 
     Ready 経由の翻訳済み title / summary だけを判定し、原文は読まない。
-    ``AssessmentCall`` は保存・監査へそのまま渡し、DB を下流の SSoT とする。
+    ``AssessmentCall`` は保存へそのまま渡し、DB を下流の SSoT とする。
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -92,7 +91,7 @@ class AssessmentService:
                     analyzed_article_id = await AssessmentRepository(
                         session
                     ).save_in_scope(article)
-                    # 楽観的ロック敗北時は、勝者だけが audit / commit する。
+                    # 楽観的ロック敗北時は、勝者だけが commit する。
                     if analyzed_article_id is None:
                         logger.info(
                             "assessment_result_save_skipped",
@@ -101,12 +100,7 @@ class AssessmentService:
                         return AssessmentCompletion(
                             AssessmentCompletionKind.ALREADY_ASSESSED
                         )
-                    # 結果・audit・Outboxを同一トランザクションで確定する。
-                    await AssessmentAuditRepository(session).append_in_scope(
-                        ready=ready,
-                        call=call,
-                        article_id=analyzable_article_id,
-                    )
+                    # 結果・Outboxを同一トランザクションで確定する。
                     event = ArticleAssessedInScope(
                         curation_id=curation_id,
                         analyzed_article_id=analyzed_article_id,
@@ -134,7 +128,7 @@ class AssessmentService:
                     out_of_scope_article_id = await AssessmentRepository(
                         session
                     ).save_out_of_scope(call, ready=ready)
-                    # 楽観的ロック敗北時は、勝者だけが audit / commit する。
+                    # 楽観的ロック敗北時は、勝者だけが commit する。
                     if out_of_scope_article_id is None:
                         logger.info(
                             "assessment_result_save_skipped",
@@ -143,12 +137,6 @@ class AssessmentService:
                         return AssessmentCompletion(
                             AssessmentCompletionKind.ALREADY_ASSESSED
                         )
-                    # 業務 INSERT + audit を同一 tx で commit
-                    await AssessmentAuditRepository(session).append_out_of_scope(
-                        ready=ready,
-                        call=call,
-                        article_id=analyzable_article_id,
-                    )
                     await session.commit()
                     logger.info(
                         "assessment_result_saved",

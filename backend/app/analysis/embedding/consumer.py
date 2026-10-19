@@ -40,21 +40,18 @@ class EmbeddingConsumer:
         self._session_factory = session_factory
         self._embedder = embedder
         self._service = EmbeddingService(session_factory)
-        self._failure_handler = EmbeddingConsumerFailureHandler(session_factory)
+        self._failure_handler = EmbeddingConsumerFailureHandler()
 
     async def consume(
         self, event: ArticleAssessedInScope, *, logger: FilteringBoundLogger
     ) -> EmbeddingCompletion | NoRetryEmbedding | RetryEmbedding:
         """業務処理を60秒に制限し、失敗後処理は期限の外で実行する。"""
-        analyzable_article_id: int | None = None
         try:
             async with timeout(60):
                 async with self._session_factory() as session:
                     facts = await EmbeddingRepository(session).load_ready_build_facts(
                         event.analyzed_article_id
                     )
-                    if facts is not None:
-                        analyzable_article_id = facts.analyzable_article_id
 
                 build_result = ReadyForEmbedding.from_facts(
                     event.analyzed_article_id, facts
@@ -62,23 +59,19 @@ class EmbeddingConsumer:
                 if isinstance(build_result, EmbeddingReadyBuildRejected):
                     if build_result.reason.is_idempotent_skip:
                         return EmbeddingCompletion.ALREADY_EMBEDDED
-                    rejected = build_result
-                else:
-                    ready, analyzable_article_id = build_result
-                    return await self._service.execute(
-                        ready,
-                        self._embedder,
-                        analyzable_article_id=analyzable_article_id,
-                        logger=logger,
-                    )
+                    return NoRetryEmbedding(build_result)
+                ready, analyzable_article_id = build_result
+                return await self._service.execute(
+                    ready,
+                    self._embedder,
+                    analyzable_article_id=analyzable_article_id,
+                    logger=logger,
+                )
         except Exception as exc:
             failure = classify_embedding_failure(exc)
             try:
                 await self._failure_handler.handle(
-                    failure=failure,
                     exc=exc,
-                    analyzed_article_id=event.analyzed_article_id,
-                    analyzable_article_id=analyzable_article_id,
                     provider=self._embedder.provider,
                     logger=logger,
                 )
@@ -90,10 +83,3 @@ class EmbeddingConsumer:
                     exc_info=secondary,
                 )
             return failure
-
-        await self._failure_handler.handle_ready_build_rejected(
-            analyzed_article_id=event.analyzed_article_id,
-            rejected=rejected,
-            logger=logger,
-        )
-        return NoRetryEmbedding(rejected)

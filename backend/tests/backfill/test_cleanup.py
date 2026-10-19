@@ -4,11 +4,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
 
-from app.audit.stages.assessment import AssessmentAuditRepository
-from app.audit.stages.curation import CurationAuditRepository
-from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.backfill.cleanup import (
     close_aged_out_completions,
     delete_aged_out_curations,
@@ -17,17 +13,11 @@ from app.backfill.cleanup import (
 )
 from app.backfill.repository import PipelineBacklog
 from app.models.analyzable_article_record import AnalyzableArticleRecord
-from app.models.backfill_exclusion import (
-    AssessmentBackfillExclusion,
-    EmbeddingBackfillExclusion,
-)
 from app.models.incomplete_article import IncompleteArticle
-from app.models.pipeline_event import PipelineEvent
 from tests.backfill.helpers import (
     complete_target,
     seed_target,
     target_exists,
-    target_is_pending,
 )
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
@@ -60,7 +50,7 @@ async def test_concurrent_cleanup_commits_only_once(
     cleanup,
     selection,
 ):
-    """同じ候補を抽出した二実行でも整理と監査を一度だけ確定する。"""
+    """同じ候補を抽出した二実行でも整理を一度だけ確定する。"""
     await seed_target(
         db_session,
         sample_source,
@@ -85,12 +75,6 @@ async def test_concurrent_cleanup_commits_only_once(
         timeout=10,
     )
     assert sorted(result) == [0, 1]
-    # 補完の整理は監査を書かないので、監査が一度だけ残ることは補完以外で確かめる。
-    if stage != "completion":
-        assert (
-            await db_session.scalar(select(func.count()).select_from(PipelineEvent))
-            == 1
-        )
 
 
 @pytest.mark.asyncio
@@ -136,7 +120,6 @@ async def test_completion_between_selection_and_lock_is_preserved(
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
     assert await target_exists(db_session, target, stage)
-    assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 0
 
 
 @pytest.mark.asyncio
@@ -180,75 +163,6 @@ async def test_cleanup_waits_for_uncommitted_completion(
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
     assert await target_exists(db_session, target, stage)
-    assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("stage", "cleanup", "audit_class", "audit_method"),
-    [
-        (
-            "curation",
-            delete_aged_out_curations,
-            CurationAuditRepository,
-            "append_backfill_curation_aged_out",
-        ),
-        (
-            "assessment",
-            exclude_aged_out_assessments,
-            AssessmentAuditRepository,
-            "append_backfill_assessment_aged_out",
-        ),
-        (
-            "embedding",
-            exclude_aged_out_embeddings,
-            EmbeddingAuditRepository,
-            "append_backfill_embedding_aged_out",
-        ),
-    ],
-)
-async def test_audit_failure_rolls_back_cleanup(
-    db_session,
-    session_factory,
-    sample_source,
-    sample_categories,
-    monkeypatch,
-    stage,
-    cleanup,
-    audit_class,
-    audit_method,
-):
-    """監査INSERT後の障害でも監査と整理の両方をrollbackする。"""
-    target = await seed_target(
-        db_session,
-        sample_source,
-        sample_categories[0],
-        stage,
-        CUTOFF - timedelta(days=1),
-    )
-    original = getattr(audit_class, audit_method)
-
-    async def fail_after_audit(self, **kwargs):
-        await original(self, **kwargs)
-        raise RuntimeError("audit failed")
-
-    monkeypatch.setattr(audit_class, audit_method, fail_after_audit)
-    with pytest.raises(RuntimeError, match="audit failed"):
-        await cleanup(session_factory, created_before=CUTOFF)
-    assert await target_is_pending(db_session, target, stage)
-    assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 0
-    assert (
-        await db_session.scalar(
-            select(func.count()).select_from(AssessmentBackfillExclusion)
-        )
-        == 0
-    )
-    assert (
-        await db_session.scalar(
-            select(func.count()).select_from(EmbeddingBackfillExclusion)
-        )
-        == 0
-    )
 
 
 @pytest.mark.asyncio
@@ -263,7 +177,7 @@ async def test_expired_selection_rechecks_disappeared_target(
     cleanup,
     selection,
 ):
-    """抽出後に対象が削除されても整理件数と監査を増やさない。"""
+    """抽出後に対象が削除されても整理件数を増やさない。"""
     from sqlalchemy import delete
 
     target = await seed_target(
@@ -294,7 +208,6 @@ async def test_expired_selection_rechecks_disappeared_target(
 
     monkeypatch.setattr(PipelineBacklog, selection, remove_after_selection)
     assert await cleanup(session_factory, created_before=CUTOFF) == 0
-    assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 0
 
 
 @pytest.mark.asyncio

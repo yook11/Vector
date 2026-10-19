@@ -1,12 +1,9 @@
-"""期限切れの未完了データと監査を一記事ずつ原子的に整理する。"""
+"""期限切れの未完了データを一記事ずつ原子的に整理する。"""
 
 from datetime import UTC, datetime
 
 import structlog
 
-from app.audit.stages.assessment import AssessmentAuditRepository
-from app.audit.stages.curation import CurationAuditRepository
-from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.backfill.metrics import age_delete_batch_size_histogram, age_deleted_counter
 from app.backfill.policy import (
     ASSESSMENTS_LIMIT,
@@ -51,9 +48,6 @@ async def delete_aged_out_curations(
             )
             if article_id is None:
                 continue
-            await CurationAuditRepository(session).append_backfill_curation_aged_out(
-                analyzable_article_id=article_id,
-            )
             await AnalyzableArticleRepository(session).delete_by_id(article_id)
         deleted += 1
     age_delete_batch_size_histogram.record(deleted, attributes={"stage": "curation"})
@@ -77,23 +71,17 @@ async def exclude_aged_out_assessments(
     excluded = 0
     for curation_id in ids:
         async with session_factory() as session, session.begin():
-            article_id = await PipelineBacklog(session).lock_aged_out_assessment(
+            locked = await PipelineBacklog(session).lock_aged_out_assessment(
                 curation_id,
                 created_before=created_before,
             )
-            if article_id is None:
+            if locked is None:
                 continue
             session.add(
                 AssessmentBackfillExclusion(
                     curation_id=curation_id,
                     reason_code=BackfillExclusionReason.ASSESSMENT_AGED_OUT.value,
                 )
-            )
-            await AssessmentAuditRepository(
-                session
-            ).append_backfill_assessment_aged_out(
-                curation_id=curation_id,
-                analyzable_article_id=article_id,
             )
         excluded += 1
     if excluded:
@@ -115,21 +103,17 @@ async def exclude_aged_out_embeddings(
     excluded = 0
     for analyzed_article_id in ids:
         async with session_factory() as session, session.begin():
-            article_id = await PipelineBacklog(session).lock_aged_out_embedding(
+            locked = await PipelineBacklog(session).lock_aged_out_embedding(
                 analyzed_article_id,
                 created_before=created_before,
             )
-            if article_id is None:
+            if locked is None:
                 continue
             session.add(
                 EmbeddingBackfillExclusion(
                     analyzed_article_id=analyzed_article_id,
                     reason_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
                 )
-            )
-            await EmbeddingAuditRepository(session).append_backfill_embedding_aged_out(
-                analyzed_article_id=analyzed_article_id,
-                analyzable_article_id=article_id,
             )
         excluded += 1
     if excluded:

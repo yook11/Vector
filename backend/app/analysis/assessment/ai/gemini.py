@@ -49,7 +49,7 @@ class GeminiResponseDefect(StrEnum):
 
     JSON として読めない・object でない応答は parse に渡す前の違反で、parse が扱う
     「内容の schema 違反」とは別レイヤ。検知場所である本 adapter が語彙を所有し、
-    value はそのまま audit の ``outcome_code`` に焼かれる。
+    value はそのままログの ``code`` に出る。
     """
 
     NOT_JSON = "assessment_response_gemini_not_json"

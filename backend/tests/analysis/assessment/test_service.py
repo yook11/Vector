@@ -1,4 +1,4 @@
-"""AssessmentServiceの正常終了・原因保持・保存と成功監査の原子性を検証する。"""
+"""AssessmentServiceの正常終了・原因保持・保存とOutboxの原子性を検証する。"""
 
 from __future__ import annotations
 
@@ -39,7 +39,6 @@ from app.models.out_of_scope_article_record import (
     OutOfScopeArticleRecord as OutOfScopeArticleRecordORM,
 )
 from app.models.outbox_event import OutboxEvent
-from app.models.pipeline_event import PipelineEvent
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.outbox import RejectOutboxInsert
 
@@ -131,71 +130,6 @@ def _make_assessor(
     return mock
 
 
-async def _fetch_assessment_events(
-    db_session: AsyncSession, article_id: int
-) -> list[PipelineEvent]:
-    stmt = (
-        select(PipelineEvent)
-        .where(
-            PipelineEvent.article_id == article_id,
-            PipelineEvent.stage == "assessment",
-        )
-        .order_by(PipelineEvent.id)
-    )
-    return list((await db_session.execute(stmt)).scalars().all())
-
-
-@pytest.mark.asyncio
-async def test_in_scope_success_records_audit(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    sample_categories: list[Category],
-    assessment_logger,
-) -> None:
-    """``_handle_in_scope`` 成功で ``outcome_code=assessed_in_scope`` の audit 1 行。
-
-    監査主語は execute の明示引数 ``analyzable_article_id`` だけで決まることを、
-    ready/curation の記事とは別の実在記事 id を渡して独立に確認する。
-    """
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    # ready/curation の記事とは別の実在記事を監査主語に渡す (FK 充足のため実在 id)
-    subject_article = await _make_article(
-        db_session, sample_source, url="https://e.com/subject"
-    )
-    assert subject_article.id != article.id
-    # InScopeCategory.AI が catalog に存在する slug "ai" になることを前提
-    assessor = _make_assessor(
-        return_envelope=_in_scope_call(category=InScopeCategory.AI)
-    )
-
-    svc = AssessmentService(session_factory)
-    result = await svc.execute(
-        _ready(extraction),
-        assessor,
-        analyzable_article_id=subject_article.id,
-        logger=assessment_logger,
-    )
-    assert result.kind is AssessmentCompletionKind.IN_SCOPE
-    assert result.analyzed_article_id is not None
-    assert result.analyzed_article_id > 0
-
-    # 監査主語は明示引数 (subject_article) 側。ready/curation の記事では引けない
-    assert await _fetch_assessment_events(db_session, article.id) == []
-    events = await _fetch_assessment_events(db_session, subject_article.id)
-    assert len(events) == 1
-    ev = events[0]
-    assert ev.event_type == "succeeded"
-    assert ev.outcome_code == "assessed_in_scope"
-    assert ev.retryability is None
-    payload = ev.payload
-    assert payload["curation_id"] == extraction.id
-    assert payload["investor_take"] == "bullish"
-    assert payload["ai_model"] == _AI_MODEL
-    assert payload["category_slug"] == "ai"
-
-
 @pytest.mark.asyncio
 async def test_in_scope_success_passes_snapshot_to_repository(
     db_session: AsyncSession,
@@ -229,19 +163,15 @@ async def test_in_scope_success_passes_snapshot_to_repository(
     assert saved_article.summary == extraction.summary
     assert saved_article.assessment_result == call.result
 
-    events = await _fetch_assessment_events(db_session, article.id)
-    assert len(events) == 1
-    assert events[0].outcome_code == "assessed_in_scope"
-
 
 @pytest.mark.asyncio
-async def test_out_of_scope_success_records_audit(
+async def test_out_of_scope_success_persists_snapshot(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     assessment_logger,
 ) -> None:
-    """out-of-scope 成功で ``outcome_code=assessed_out_of_scope`` の audit 1 行。"""
+    """out-of-scope 成功で、Stage 3 由来の snapshot を保存する。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
@@ -255,18 +185,6 @@ async def test_out_of_scope_success_records_audit(
     )
     assert result == AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
 
-    events = await _fetch_assessment_events(db_session, article.id)
-    assert len(events) == 1
-    ev = events[0]
-    assert ev.event_type == "succeeded"
-    assert ev.outcome_code == "assessed_out_of_scope"
-    assert ev.retryability is None
-    payload = ev.payload
-    assert payload["curation_id"] == extraction.id
-    # PR #447 対称化追従: investor_take は本体 DB と一致 (非 None)
-    assert payload.get("investor_take") == "not relevant"
-    # in-scope 固有 field のみ None (category_slug)
-    assert payload.get("category_slug") is None
     # 本体 DB (out_of_scope_articles) に Stage 3 由来 snapshot が永続化されている
     persisted = (
         await db_session.execute(
@@ -280,14 +198,14 @@ async def test_out_of_scope_success_records_audit(
 
 
 @pytest.mark.asyncio
-async def test_race_lost_does_not_record_audit_or_outbox_event(
+async def test_race_lost_does_not_add_outbox_event(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
     assessment_logger,
 ) -> None:
-    """実DBの重複スキップは処理済みとなり、成功監査とOutboxを追加しない。"""
+    """実DBの重複スキップは処理済みとなり、Outboxを追加しない。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     # 勝者 row を先に焼いておく (本 test は敗者経路)
@@ -314,8 +232,6 @@ async def test_race_lost_does_not_record_audit_or_outbox_event(
     )
 
     assert result == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
-    events = await _fetch_assessment_events(db_session, article.id)
-    assert len(events) == 0
 
     async with session_factory() as reader:
         outbox_events = (
@@ -356,45 +272,14 @@ async def test_unknown_category_raises_enum_db_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_unknown_category_does_not_record_audit_in_service(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    assessment_logger,
-) -> None:
-    """``CategoryEnumDatabaseMismatchError`` 経路でも Service が audit を焼かない
-    (失敗 audit は Task 層末尾の inline audit ブロックが別 session で焼く責務)。
-    """
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    assessor = _make_assessor(
-        return_envelope=_in_scope_call(category=InScopeCategory.AI)
-    )
-
-    svc = AssessmentService(session_factory)
-    with pytest.raises(CategoryEnumDatabaseMismatchError):
-        await svc.execute(
-            _ready(extraction),
-            assessor,
-            analyzable_article_id=article.id,
-            logger=assessment_logger,
-        )
-
-    events = await _fetch_assessment_events(db_session, article.id)
-    assert len(events) == 0
-
-
-@pytest.mark.asyncio
-async def test_audit_rolled_back_when_commit_fails(
+async def test_result_rolled_back_when_commit_fails(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
     assessment_logger,
 ) -> None:
-    """``session.commit`` が raise すると業務 INSERT も audit も両方残らない
-    (同 session 同 tx の原子性)。
-    """
+    """``session.commit`` が raise すると業務 INSERT は残らない。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     assessor = _make_assessor(
@@ -402,7 +287,7 @@ async def test_audit_rolled_back_when_commit_fails(
     )
 
     svc = AssessmentService(session_factory)
-    # AsyncSession.commit() を patch して、append_in_scope の後に raise
+    # AsyncSession.commit() を patch して、保存の後に raise
     boom = RuntimeError("commit failed")
     with patch(
         "sqlalchemy.ext.asyncio.AsyncSession.commit",
@@ -416,9 +301,6 @@ async def test_audit_rolled_back_when_commit_fails(
                 logger=assessment_logger,
             )
 
-    # audit も業務 analyzed_articles も両方ゼロ (同 tx で rollback)
-    events = await _fetch_assessment_events(db_session, article.id)
-    assert len(events) == 0
     rows = (
         (
             await db_session.execute(
@@ -434,20 +316,20 @@ async def test_audit_rolled_back_when_commit_fails(
 
 
 @pytest.mark.asyncio
-async def test_out_of_scope_race_lost_does_not_record_audit(
+async def test_out_of_scope_race_lost_keeps_winner_row(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     assessment_logger,
 ) -> None:
-    """out-of-scope 経路の race lost でも audit は焼かれない。"""
+    """out-of-scope 経路の race lost では、先に保存した行を変えない。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     # 勝者を先に焼く
     winner = OutOfScopeArticleRecordORM(
         curation_id=extraction.id,
-        translated_title="title",
-        summary="summary text",
+        translated_title="winner title",
+        summary="winner summary",
         investor_take="not relevant",
     )
     db_session.add(winner)
@@ -463,8 +345,16 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     )
 
     assert result == AssessmentCompletion(AssessmentCompletionKind.ALREADY_ASSESSED)
-    events = await _fetch_assessment_events(db_session, article.id)
-    assert len(events) == 0
+    async with session_factory() as reader:
+        rows = (
+            await reader.execute(
+                select(
+                    OutOfScopeArticleRecordORM.translated_title,
+                    OutOfScopeArticleRecordORM.summary,
+                ).where(OutOfScopeArticleRecordORM.curation_id == extraction.id)
+            )
+        ).all()
+    assert [tuple(row) for row in rows] == [("winner title", "winner summary")]
 
 
 # processing_outcome emit — commit 後に in_scope/out_of_scope、race loss は emit しない
@@ -602,8 +492,6 @@ async def test_in_scope_persists_result_and_matching_outbox_event(
         }
         assert event.schema_version == ArticleAssessedInScope.SCHEMA_VERSION
 
-    assert len(await _fetch_assessment_events(db_session, article.id)) == 1
-
 
 @pytest.mark.asyncio
 async def test_outbox_insert_failure_rolls_back_in_scope_result(
@@ -639,26 +527,13 @@ async def test_outbox_insert_failure_rolls_back_in_scope_result(
             .scalars()
             .all()
         )
-        audit_events = (
-            (
-                await reader.execute(
-                    select(PipelineEvent.id).where(
-                        PipelineEvent.article_id == article.id,
-                        PipelineEvent.stage == "assessment",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
         outbox_events = (
             (await reader.execute(select(OutboxEvent.event_id))).scalars().all()
         )
     assert {
         "results": results,
-        "audit_events": audit_events,
         "outbox_events": outbox_events,
-    } == {"results": [], "audit_events": [], "outbox_events": []}
+    } == {"results": [], "outbox_events": []}
 
 
 @pytest.mark.asyncio
@@ -692,7 +567,6 @@ async def test_out_of_scope_writes_no_outbox_event(
     assert events == []
 
     assert completion == AssessmentCompletion(AssessmentCompletionKind.OUT_OF_SCOPE)
-    assert len(await _fetch_assessment_events(db_session, article.id)) == 1
 
 
 @pytest.mark.asyncio

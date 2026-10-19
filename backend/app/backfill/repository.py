@@ -258,7 +258,7 @@ class PipelineBacklog:
         if locked is None:
             return None
         stmt = self._assessment_pending(
-            select(AnalyzableArticleRecord.id),
+            select(ArticleCuration.id),
             created_before=created_before,
         ).where(ArticleCuration.id == target_id)
         return await self._session.scalar(stmt)
@@ -316,7 +316,7 @@ class PipelineBacklog:
         if locked is None:
             return None
         stmt = self._embedding_pending(
-            select(AnalyzableArticleRecord.id),
+            select(AnalyzedArticleRecord.id),
             created_before=created_before,
         ).where(AnalyzedArticleRecord.id == target_id)
         return await self._session.scalar(stmt)

@@ -34,9 +34,6 @@ class FailureProjection:
     retryability: Retryability | None
     failure_action: FailureAction | None
     code: str
-    # 原因詳細 (failure_kind = ファミリー / code = 具体 CODE とは別軸)。
-    # marker が instance 値で持てば焼く。持たない marker (db / catch-all 等) は None。
-    failure_reason: str | None = None
 
 
 class FailurePayloadFields(TypedDict):
@@ -92,8 +89,6 @@ def project_marker_failure(exc: BaseException) -> FailureProjection | None:
     """自前 marker 例外を失敗属性へ投影する。
 
     ``failure_kind`` は instance 値を優先し classvar ``FAILURE_KIND`` に fallback する。
-    ``failure_reason`` は instance 値を持つ
-    marker だけが焼く。
     """
     failure_kind = _failure_kind_of_marker(exc)
     retryability = getattr(exc, "RETRYABILITY", None)
@@ -115,7 +110,6 @@ def project_marker_failure(exc: BaseException) -> FailureProjection | None:
         retryability=retryability,
         failure_action=failure_action,
         code=code,
-        failure_reason=_failure_reason_of_marker(exc),
     )
 
 
@@ -216,12 +210,4 @@ def _failure_kind_of_marker(exc: BaseException) -> str | None:
     class_kind = getattr(exc, "FAILURE_KIND", None)
     if isinstance(class_kind, str) and class_kind:
         return class_kind
-    return None
-
-
-def _failure_reason_of_marker(exc: BaseException) -> str | None:
-    """marker が持つ原因詳細 (instance ``failure_reason``)。持たない marker は None。"""
-    reason = getattr(exc, "failure_reason", None)
-    if isinstance(reason, str) and reason:
-        return reason
     return None
