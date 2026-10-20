@@ -22,7 +22,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.config import settings
 from app.insights.briefing.domain.briefing import (
@@ -111,7 +110,7 @@ async def generate_briefing_for_category(
     ctx: Context = TaskiqDepends(),
 ) -> None:
     """1 カテゴリ × 1 週の briefing を生成する。失敗は raise する。"""
-    with pipeline_stage_span(Stage.BRIEFING, op="generate_briefing_for_category"):
+    with pipeline_stage_span("briefing", op="generate_briefing_for_category"):
         session_factory: async_sessionmaker[AsyncSession] = ctx.state.session_factory
         notifier = FrontendRevalidateNotifier.from_settings(settings)
         # generator は composition root が broker_briefing 起動時に state へ wire する

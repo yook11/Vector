@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import Field
 
-from app.audit.domain.event import Stage
+from app.models.pipeline_event import Stage
 from app.schemas.base import _CamelBase
 
 # ``_CamelBase`` の to_camel は ``..._24h`` を ``...24H`` (大文字 H) に変換する

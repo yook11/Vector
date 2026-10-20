@@ -1,15 +1,13 @@
 """パイプライン監査イベント (append-only)。
 
-詳細は ``docs/observability/pipeline-events-design.md`` 参照。
-
-- 全 11 Stage × 4 EventType を 1 行 = 1 イベントで表現
-- 業務 tx と同一トランザクション (成功/skip パス) または別 session (例外パス) で書込
-- ``payload`` は Pydantic Discriminated Union (``app/audit/domain/payloads.py``)
+書き込みは撤去済みで、管理画面が過去の行を読むためにだけ残す。
+全 11 Stage × 4 EventType を 1 行 = 1 イベントで表現する。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
@@ -27,6 +25,36 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+
+
+class Stage(StrEnum):
+    """パイプラインの 11 Stage。
+
+    BRIEFING は週次 LLM ブリーフィング生成 (``app/insights/briefing/``)。
+    TREND_DISCOVERY は rolling 7d の trend discovery run
+    (``app/insights/trend_discovery/``)。
+    """
+
+    DISPATCH = "dispatch"
+    ACQUISITION = "acquisition"
+    COMPLETION = "completion"
+    CURATION = "curation"
+    ASSESSMENT = "assessment"
+    EMBEDDING = "embedding"
+    BACKFILL_CURATE = "backfill_curate"
+    BACKFILL_ASSESS = "backfill_assess"
+    BACKFILL_EMBED = "backfill_embed"
+    BRIEFING = "briefing"
+    TREND_DISCOVERY = "trend_discovery"
+
+
+class EventType(StrEnum):
+    """``event_type`` 列の値。CHECK 制約と一致させる。"""
+
+    SUCCEEDED = "succeeded"
+    SKIPPED = "skipped"
+    REJECTED = "rejected"
+    FAILED = "failed"
 
 
 class PipelineEvent(Base):

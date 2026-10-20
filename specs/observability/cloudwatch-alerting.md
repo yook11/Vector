@@ -253,7 +253,6 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 - 通知先 Slack channel は既存のものを使うか新設するか(実値は tfvars 側)。
 - A2 / A4 / A6 の閾値は初期値であり、本番実測 2〜4 週間後に見直す前提でよいか。
 - broker Valkey の maxmemory policy が eviction を許す設定の場合、eviction = queue メッセージの silent loss(実害)なので `Evictions > 0` alarm を 1 本追加する。noeviction なら書き込み失敗として A1 に出るため不要。実装時に policy を確認して判断。
-- `vector.audit.dropped` 急増の扱い: 初期アラートからは除外した(実害が間接的)。dashboard spec 側で扱う想定でよいか。
 
 ## OutboxのSQS送信設定不備（スライス③）
 

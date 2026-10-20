@@ -1,8 +1,7 @@
-"""Briefing error class の失敗分類属性テスト。"""
+"""Briefing error class の CODE とメッセージのテスト。"""
 
 from __future__ import annotations
 
-from app.audit.failure_projection import Retryability
 from app.insights.briefing.errors import (
     BriefingConfigurationError,
     BriefingError,
@@ -11,37 +10,28 @@ from app.insights.briefing.errors import (
 )
 
 
-def test_briefing_llm_configuration_invalid_classvars_are_ssot() -> None:
+def test_briefing_llm_configuration_invalid_code() -> None:
     assert not hasattr(BriefingError, "STAGE")
     assert (
         BriefingConfigurationError.CODE
         == "briefing_generation_llm_configuration_invalid"
     )
-    assert BriefingConfigurationError.FAILURE_KIND == "configuration"
-    assert BriefingConfigurationError.RETRYABILITY is Retryability.NON_RETRYABLE
-    assert BriefingConfigurationError.FAILURE_ACTION is None
 
 
-def test_briefing_llm_provider_call_failed_classvars_are_ssot() -> None:
+def test_briefing_llm_provider_call_failed_code() -> None:
     provider_error = RuntimeError("upstream")
     exc = BriefingLlmError(provider_error=provider_error)
 
     assert not hasattr(exc, "STAGE")
     assert exc.CODE == "briefing_generation_llm_provider_call_failed"
-    assert exc.FAILURE_KIND == "llm_error"
-    assert exc.RETRYABILITY is Retryability.RETRYABLE
-    assert exc.FAILURE_ACTION is None
     assert exc.provider_error is provider_error
 
 
-def test_briefing_llm_response_contract_invalid_classvars_are_ssot() -> None:
+def test_briefing_llm_response_contract_invalid_code() -> None:
     exc = BriefingLlmResponseInvalidError()
 
     assert not hasattr(exc, "STAGE")
     assert exc.CODE == "briefing_generation_llm_response_contract_invalid"
-    assert exc.FAILURE_KIND == "response_invalid"
-    assert exc.RETRYABILITY is Retryability.NON_RETRYABLE
-    assert exc.FAILURE_ACTION is None
 
 
 def test_briefing_llm_response_invalid_no_violations_str_is_code_only() -> None:

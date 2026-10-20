@@ -7,7 +7,6 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.audit.domain.event import EventType, Stage
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -18,7 +17,7 @@ from app.models.backfill_exclusion import (
 from app.models.curation_noise import CurationNoise
 from app.models.incomplete_article import IncompleteArticle
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
-from app.models.pipeline_event import PipelineEvent
+from app.models.pipeline_event import EventType, PipelineEvent, Stage
 
 # completion queue とみなす incomplete_articles の状態 (CHECK 制約と一致)。
 _QUEUE_STATUSES: tuple[str, ...] = ("open", "running")

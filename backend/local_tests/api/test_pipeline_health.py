@@ -15,7 +15,7 @@ from app.admin.pipeline_health.schemas import (
     PipelineStageHealth,
 )
 from app.admin.pipeline_health.service import PipelineHealthService
-from app.audit.domain.event import Stage
+from app.models.pipeline_event import Stage
 from local_tests.api.support import (
     SeededCategory,
     SeededSource,

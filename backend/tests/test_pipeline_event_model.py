@@ -11,9 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.audit.domain.event import EventType, Stage
-from app.audit.failure_projection import Retryability
-from app.models.pipeline_event import PipelineEvent
+from app.models.pipeline_event import EventType, PipelineEvent, Stage
 
 
 def test_stage_strenum_matches_check_constraint() -> None:
@@ -40,11 +38,6 @@ def test_stage_strenum_matches_check_constraint() -> None:
 def test_event_type_strenum_matches_check_constraint() -> None:
     expected = {"succeeded", "skipped", "rejected", "failed"}
     assert {e.value for e in EventType} == expected
-
-
-def test_retryability_strenum_matches_check_constraint() -> None:
-    expected = {"retryable", "non_retryable", "unknown"}
-    assert {r.value for r in Retryability} == expected
 
 
 def test_pipeline_event_top_level_columns_match_current_contract() -> None:
@@ -79,13 +72,14 @@ async def test_retryability_check_constraint(db_session: AsyncSession) -> None:
             payload={},
         )
     )
-    for retryability in Retryability:
+    # 許可値は ck_pipeline_events_retryability (app/models/pipeline_event.py)。
+    for retryability in ("retryable", "non_retryable", "unknown"):
         db_session.add(
             PipelineEvent(
                 stage=Stage.CURATION.value,
                 event_type=EventType.FAILED.value,
-                outcome_code=f"test_{retryability.value}",
-                retryability=retryability.value,
+                outcome_code=f"test_{retryability}",
+                retryability=retryability,
                 payload={},
             )
         )

@@ -50,15 +50,12 @@ API契約の正本はFastAPIのPydantic schema、DB変更の正本はAlembic mig
 | `admin/` | 管理機能 |
 | `agent/` | Q&A agent、planning、内部検索 |
 | `analysis/` | AI分析工程 |
-| `audit/` | `backend/app/audit`と監査イベントの実装契約 |
 | `collection/` | 記事取得・補完 |
 | `insights/` | briefingなどの集約結果 |
 | `news/` | ニュース表示契約 |
 | `observability/` | アプリケーションログ、CloudWatch、Logfireと処理結果メトリクス |
 | `pipeline/` | pipeline横断の型・命名・永続化契約 |
 | `platform/` | 複数bounded contextに関係する基盤変更 |
-
-`audit/`には監査機能の実装仕様だけを置く。コードレビューやセキュリティ監査の結果は置かない。
 
 ## Current Specifications
 
@@ -80,10 +77,6 @@ API契約の正本はFastAPIのPydantic schema、DB変更の正本はAlembic mig
 | Agent | [回答生成の開始期限・回答確定・未完了runの回収](./agent/answer-generation-deadline.md) | Draft |
 | Agent | [スレッド表示時の期限切れrunの回収](./agent/thread-open-deadline-recovery.md) | Implemented |
 | Analysis | [Stage 4 Assessment naming](./analysis/stage4-assessment-rename.md) | Implemented |
-| Audit | [Audit skip escape policy](./audit/audit-skip-escape-policy.md) | Partially implemented |
-| Audit | [Audit scope / dispatch / backfill](./audit/pipeline-events-audit-scope-dispatch-backfill.md) | Implemented |
-| Audit | [Audit stage SSoT](./audit/pipeline-events-audit-stage-ssot.md) | Implemented |
-| Audit | [Failure attribute projection](./audit/pipeline-events-failure-attribute-projection.md) | Implemented |
 | Collection | [Acquisition failure types](./collection/article-collection-acquisition-failure-types.md) | Implemented |
 | Collection | [External fetch error mapping](./collection/article-collection-external-fetch-error-mapping.md) | Implemented |
 | Collection | [Source Completion Profile](./collection/source-completion-profile.md) | Implemented |

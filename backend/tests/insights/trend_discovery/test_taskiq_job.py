@@ -6,7 +6,6 @@ import pytest
 from logfire.testing import CaptureLogfire
 from taskiq import InMemoryBroker
 
-from app.audit.domain.event import Stage
 from tests.logfire._span_helpers import pipeline_stage_attrs
 
 
@@ -66,5 +65,5 @@ async def test_stage_span_identifies_trend_discovery(capfire: CaptureLogfire):
     with patch.object(taskiq_job.TrendDiscoveryService, "create", new=AsyncMock()):
         await taskiq_job.run_trend_discovery(ctx=MagicMock())
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["stage"] == Stage.TREND_DISCOVERY.value
+    assert attrs["stage"] == "trend_discovery"
     assert attrs["op"] == "run_trend_discovery"

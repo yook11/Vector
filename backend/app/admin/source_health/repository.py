@@ -13,10 +13,9 @@ from datetime import datetime
 from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.audit.domain.event import EventType, Stage
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource
-from app.models.pipeline_event import PipelineEvent
+from app.models.pipeline_event import EventType, PipelineEvent, Stage
 
 # 指標対象の stage (stage1 即時保存 + stage2 補完保存)。
 _TARGET_STAGES: tuple[Stage, ...] = (Stage.ACQUISITION, Stage.COMPLETION)
