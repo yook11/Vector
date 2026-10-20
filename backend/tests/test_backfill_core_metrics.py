@@ -19,9 +19,8 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.backfill import service
-from app.backfill.targets import BackfillEventTarget, BackfillTarget
+from app.backfill.targets import BackfillEventTarget
 from app.collection.events import AnalyzableArticleCreated
-from app.collection.sources.source_name import SourceName
 from app.outbox.publishing.errors import PublishError
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
@@ -84,11 +83,6 @@ def _session_factory() -> MagicMock:
 def _target(target_id: int) -> BackfillEventTarget:
     """metric は payload の種類に依存しないため、全工程で同じ形の対象を使う。"""
     return BackfillEventTarget(
-        target=BackfillTarget(
-            target_id=target_id,
-            analyzable_article_id=target_id + 1000,
-            source_name=SourceName("VentureBeat"),
-        ),
         occurred_at=NOW,
         payload=AnalyzableArticleCreated(analyzable_article_id=target_id),
     )
@@ -130,8 +124,6 @@ async def _run(
         patch(
             "app.backfill.service.PipelineBacklog", return_value=backlog
         ) as backlog_cls,
-        patch("app.backfill.service.append_backfill_item_event", AsyncMock()),
-        patch("app.backfill.service.append_backfill_run_event", AsyncMock()),
     ):
         await case.entry(
             _session_factory(),
@@ -270,7 +262,7 @@ async def test_metric_attributes_do_not_leak_dynamic_target_values(
     capfire: CaptureLogfire,
     case: _MetricCase,
 ) -> None:
-    """metric attribute / dump 全体に target_id や source_name を混ぜない。"""
+    """metric attribute / dump 全体に target_id を混ぜない。"""
     distinctive_ids = [987654321, 876543210]
     await _run(
         case,
@@ -283,7 +275,6 @@ async def test_metric_attributes_do_not_leak_dynamic_target_values(
     dumped = json.dumps(metrics, default=str, ensure_ascii=False)
     for target_id in distinctive_ids:
         assert str(target_id) not in dumped
-    assert "VentureBeat" not in dumped
 
     expected_keys = {
         "vector.backfill.backlog": {"stage"},

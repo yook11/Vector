@@ -6,8 +6,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.collection.sources.source_name import SourceName
-
 
 class BasePipelineEventPayload(BaseModel):
     """全 payload variant の共通 field。"""
@@ -27,21 +25,6 @@ class DispatchPayload(BasePipelineEventPayload):
     cadence: Literal["high", "medium", "low", "all"] | None = None
     raw_source_name: str | None = None
     skip_reason: Literal["no_active_sources"] | None = None
-
-
-class BackfillPayload(BasePipelineEventPayload):
-    """Backfill stage payload。"""
-
-    kind: Literal["backfill"] = "backfill"
-    source_name: SourceName | None = None
-    backfill_stage: Literal["curate", "assess", "embed", "complete"]
-    run_id: str | None = None
-    target_kind: (
-        Literal["article", "curation", "analyzed_article", "incomplete_article"] | None
-    ) = None
-    target_id: int | None = None
-    # daily_max は budget exhausted event 専用の「停止の閾値」(B 級 config snapshot)。
-    daily_max: int | None = None
 
 
 class BriefingPayload(BasePipelineEventPayload):
@@ -73,6 +56,6 @@ class TrendDiscoveryPayload(BasePipelineEventPayload):
 
 
 PipelineEventPayload = Annotated[
-    DispatchPayload | BackfillPayload | BriefingPayload | TrendDiscoveryPayload,
+    DispatchPayload | BriefingPayload | TrendDiscoveryPayload,
     Field(discriminator="kind"),
 ]

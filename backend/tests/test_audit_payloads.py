@@ -6,7 +6,6 @@ field schema と payload field の所有権を検証する。
 from __future__ import annotations
 
 from app.audit.domain.payloads import (
-    BackfillPayload,
     BasePipelineEventPayload,
     BriefingPayload,
     DispatchPayload,
@@ -55,42 +54,6 @@ class TestDispatchPayloadAuditKeys:
             "selected_count",
             "rejected_count",
             "failed_count",
-        ):
-            assert not hasattr(restored, removed)
-
-
-class TestBackfillPayloadBackwardCompat:
-    """撤去した throughput field を含む旧 JSONB の読み戻し互換 (保証6)。"""
-
-    def test_backfill_legacy_count_payload_is_readable(self) -> None:
-        """撤去前 count field 入りの旧 payload を ``model_validate`` で読める。
-
-        rolling deploy 中に旧 worker が焼いた ``selected_count`` 等を含む JSONB を
-        新 schema が読み戻しても ``extra="ignore"`` で死なず、撤去 field を
-        instance に保持しないことを保証する。
-        """
-        restored = BackfillPayload.model_validate(
-            {
-                "kind": "backfill",
-                "backfill_stage": "embed",
-                "run_id": "run-legacy",
-                "selected_count": 50,
-                "granted_count": 10,
-                "enqueued_count": 9,
-                "failed_count": 1,
-                "limit": 50,
-                "daily_max": 1500,
-            }
-        )
-        assert restored.backfill_stage == "embed"
-        assert restored.run_id == "run-legacy"
-        assert restored.daily_max == 1500
-        for removed in (
-            "selected_count",
-            "granted_count",
-            "enqueued_count",
-            "failed_count",
-            "limit",
         ):
             assert not hasattr(restored, removed)
 

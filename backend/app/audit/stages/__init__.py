@@ -3,7 +3,6 @@
 各 stage の audit row 組み立て (payload shape の SSoT) を集約する。
 
 - ``dispatch`` — acquisition task fan-out
-- ``backfill`` — AI 分析系 backfill run / enqueue
 - ``briefing`` — 週次 LLM briefing
 
 各 *AuditRepository は ``app.audit.repository.PipelineEventRepository`` を

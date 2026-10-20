@@ -19,11 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import (
-    BackfillPayload,
-    BriefingPayload,
-    DispatchPayload,
-)
+from app.audit.domain.payloads import BriefingPayload, DispatchPayload
 from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
@@ -105,12 +101,12 @@ async def test_source_id_auto_filled_from_article_id(
 ) -> None:
     """article_id だけ与えると AnalyzableArticleRecord.source_id を逆引きして埋める。"""
     repo = PipelineEventRepository(db_session)
-    payload = BackfillPayload(backfill_stage="embed")
+    payload = BriefingPayload()
 
     await repo.append(
-        stage=Stage.BACKFILL_EMBED,
+        stage=Stage.BRIEFING,
         event_type=EventType.SUCCEEDED,
-        outcome_code="backfill_item_enqueued",
+        outcome_code="briefing_generation_completed",
         payload=payload,
         article_id=article_row.id,
     )
@@ -126,12 +122,12 @@ async def test_append_persists_retryability(
     db_session: AsyncSession, article_row: AnalyzableArticleRecord
 ) -> None:
     repo = PipelineEventRepository(db_session)
-    payload = BackfillPayload(backfill_stage="embed")
+    payload = BriefingPayload()
 
     await repo.append(
-        stage=Stage.BACKFILL_EMBED,
+        stage=Stage.BRIEFING,
         event_type=EventType.FAILED,
-        outcome_code="backfill_item_enqueue_failed",
+        outcome_code="briefing_generation_failed",
         payload=payload,
         article_id=article_row.id,
         retryability=Retryability.RETRYABLE,

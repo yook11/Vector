@@ -1,20 +1,12 @@
 """工程別に期限切れを整理し、未完了記事のイベントを再投入する。"""
 
-from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import uuid4
 
 import structlog
 
-from app.audit.domain.event import EventType
-from app.audit.stages.backfill import (
-    BackfillAuditRepository,
-    BackfillOutcomeCode,
-    BackfillStage,
-    BackfillTargetKind,
-)
-from app.backfill.audit import append_backfill_item_event, append_backfill_run_event
+from app.audit.domain.event import Stage
 from app.backfill.cleanup import (
     close_aged_out_completions,
     delete_aged_out_curations,
@@ -38,46 +30,17 @@ from app.outbox.publishing.publisher import (
     BatchPublishResult,
     EventEnvelope,
     EventPublisher,
-    PublishFailed,
     PublishSucceeded,
 )
 
 logger = structlog.get_logger(__name__)
 
 
-@asynccontextmanager
-async def _run(
-    session_factory: SessionFactory,
-    *,
-    backfill_stage: BackfillStage,
-    op: str,
-) -> AsyncIterator[str]:
-    """実行の失敗監査を残し、元の例外を呼び出し元へ返す。"""
-    run_id = str(uuid4())
-    with pipeline_stage_span(BackfillAuditRepository.stage_for(backfill_stage), op=op):
-        try:
-            yield run_id
-        except Exception as exc:
-            await append_backfill_run_event(
-                session_factory,
-                backfill_stage=backfill_stage,
-                run_id=run_id,
-                event_type=EventType.FAILED,
-                outcome_code=BackfillOutcomeCode.RUN_FAILED,
-                exc=exc,
-            )
-            raise
-
-
 async def _dispatch(
-    session_factory: SessionFactory,
     publisher: EventPublisher,
     targets: Sequence[BackfillEventTarget],
     *,
-    backfill_stage: BackfillStage,
     stage: str,
-    target_kind: BackfillTargetKind,
-    run_id: str,
 ) -> None:
     """受付結果を対象と照合し、部分失敗でも次のバッチを送信する。"""
     enqueued = 0
@@ -105,22 +68,6 @@ async def _dispatch(
         )
         record_dispatched(stage, successes)
         enqueued += successes
-        for target, result in zip(batch_targets, batch.results, strict=True):
-            failed = isinstance(result, PublishFailed)
-            await append_backfill_item_event(
-                session_factory,
-                backfill_stage=backfill_stage,
-                run_id=run_id,
-                target_kind=target_kind,
-                target=target.target,
-                event_type=EventType.FAILED if failed else EventType.SUCCEEDED,
-                outcome_code=(
-                    BackfillOutcomeCode.ITEM_ENQUEUE_FAILED
-                    if failed
-                    else BackfillOutcomeCode.ITEM_ENQUEUED
-                ),
-                exc=result.error if isinstance(result, PublishFailed) else None,
-            )
     logger.info(
         "backfill_completed", stage=stage, found=len(targets), requeued=enqueued
     )
@@ -137,11 +84,7 @@ async def backfill_curations(
     if not enabled:
         logger.info("backfill_curations_disabled")
         return
-    async with _run(
-        session_factory,
-        backfill_stage="curate",
-        op="backfill_curations",
-    ) as run_id:
+    with pipeline_stage_span(Stage.BACKFILL_CURATE, op="backfill_curations"):
         before, after = BackfillWindow().boundaries_at(now)
         cleaned = await delete_aged_out_curations(session_factory, created_before=after)
         record_aged_out("curation", action="deleted", count=cleaned)
@@ -157,15 +100,7 @@ async def backfill_curations(
                 limit=CURATIONS_LIMIT,
             )
         backlog_gauge.set(count, attributes={"stage": "curation"})
-        await _dispatch(
-            session_factory,
-            publisher,
-            targets,
-            backfill_stage="curate",
-            stage="curation",
-            target_kind="article",
-            run_id=run_id,
-        )
+        await _dispatch(publisher, targets, stage="curation")
 
 
 async def backfill_assessments(
@@ -179,11 +114,7 @@ async def backfill_assessments(
     if not enabled:
         logger.info("backfill_assessments_disabled")
         return
-    async with _run(
-        session_factory,
-        backfill_stage="assess",
-        op="backfill_assessments",
-    ) as run_id:
+    with pipeline_stage_span(Stage.BACKFILL_ASSESS, op="backfill_assessments"):
         before, after = BackfillWindow().boundaries_at(now)
         cleaned = await exclude_aged_out_assessments(
             session_factory, created_before=after
@@ -201,15 +132,7 @@ async def backfill_assessments(
                 limit=ASSESSMENTS_LIMIT,
             )
         backlog_gauge.set(count, attributes={"stage": "assessment"})
-        await _dispatch(
-            session_factory,
-            publisher,
-            targets,
-            backfill_stage="assess",
-            stage="assessment",
-            target_kind="curation",
-            run_id=run_id,
-        )
+        await _dispatch(publisher, targets, stage="assessment")
 
 
 async def backfill_embeddings(
@@ -223,11 +146,7 @@ async def backfill_embeddings(
     if not enabled:
         logger.info("backfill_embeddings_disabled")
         return
-    async with _run(
-        session_factory,
-        backfill_stage="embed",
-        op="backfill_embeddings",
-    ) as run_id:
+    with pipeline_stage_span(Stage.BACKFILL_EMBED, op="backfill_embeddings"):
         before, after = BackfillWindow().boundaries_at(now)
         cleaned = await exclude_aged_out_embeddings(
             session_factory, created_before=after
@@ -245,15 +164,7 @@ async def backfill_embeddings(
                 limit=EMBEDDINGS_LIMIT,
             )
         backlog_gauge.set(count, attributes={"stage": "embedding"})
-        await _dispatch(
-            session_factory,
-            publisher,
-            targets,
-            backfill_stage="embed",
-            stage="embedding",
-            target_kind="analyzed_article",
-            run_id=run_id,
-        )
+        await _dispatch(publisher, targets, stage="embedding")
 
 
 async def backfill_completions(
@@ -267,11 +178,8 @@ async def backfill_completions(
     if not enabled:
         logger.info("backfill_completions_disabled")
         return
-    async with _run(
-        session_factory,
-        backfill_stage="complete",
-        op="backfill_completions",
-    ) as run_id:
+    # 補完の救済には専用のstageが無いため、補完本体のstageで開く。
+    with pipeline_stage_span(Stage.COMPLETION, op="backfill_completions"):
         before, after = BackfillWindow().boundaries_at(now)
         cleaned = await close_aged_out_completions(
             session_factory, created_before=after
@@ -289,12 +197,4 @@ async def backfill_completions(
                 limit=COMPLETIONS_LIMIT,
             )
         backlog_gauge.set(count, attributes={"stage": "completion"})
-        await _dispatch(
-            session_factory,
-            publisher,
-            targets,
-            backfill_stage="complete",
-            stage="completion",
-            target_kind="incomplete_article",
-            run_id=run_id,
-        )
+        await _dispatch(publisher, targets, stage="completion")

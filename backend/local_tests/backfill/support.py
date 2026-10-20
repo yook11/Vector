@@ -1,11 +1,9 @@
-"""保存済み事実の準備、保存結果の読み取り、実接続終了の確認を行う。"""
+"""保存済み事実の準備と、実接続終了の確認を行う。"""
 
 # ruff: noqa: S101 — テスト専用の検証ヘルパー。
 
 import asyncio
-import json
 from datetime import UTC, datetime, timedelta
-from typing import Any, NamedTuple
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
 CREATED_AT = NOW - timedelta(hours=1)
@@ -13,14 +11,6 @@ CREATED_AT = NOW - timedelta(hours=1)
 AGED_CREATED_AT = NOW - timedelta(days=8)
 EXTRACTED_AT = CREATED_AT + timedelta(minutes=1)
 ANALYZED_AT = CREATED_AT + timedelta(minutes=2)
-
-
-class AuditEvent(NamedTuple):
-    stage: str
-    event_type: str
-    outcome_code: str
-    article_id: int | None
-    payload: dict[str, Any]
 
 
 async def seed_article(database, url, created_at=CREATED_AT):
@@ -71,25 +61,6 @@ async def seed_analysis(database, curation_id):
             curation_id,
             ANALYZED_AT,
         )
-
-
-async def read_audit_events(database):
-    """確定した監査を追加順に返す。"""
-    async with database.connect("vector") as connection:
-        rows = await connection.fetch(
-            "SELECT stage, event_type, outcome_code, article_id, payload "
-            "FROM pipeline_events ORDER BY id"
-        )
-    return [
-        AuditEvent(
-            row["stage"],
-            row["event_type"],
-            row["outcome_code"],
-            row["article_id"],
-            json.loads(row["payload"]),
-        )
-        for row in rows
-    ]
 
 
 async def assert_connections_closed(database, scope):

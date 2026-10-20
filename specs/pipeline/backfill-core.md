@@ -7,7 +7,7 @@
 ## Evidence
 
 - `app.backfill.repository.PipelineBacklog`：新経路のイベント対象抽出・件数観測・期限切れ整理の照会。旧 Taskiq Curation の対象取得は `app.queue.helpers.backlog`、管理画面の集計は `app.admin.pipeline_health.repository` が担う。
-- `app.backfill.targets`：監査主語と再投入する保存済み事実。
+- `app.backfill.targets`：再投入する保存済み事実。
 - `app.backfill.policy`：元記事の年齢窓と一回の処理上限。
 - 各consumerの共有イベント型と、既存`RoutedEventPublisher`・`SqsSender`。
 - 旧maintenanceテストと`tests/backfill/`の単体・DB統合テスト。
@@ -39,13 +39,13 @@ DBと送信クライアントの生成・終了、設定取得は呼び出し元
 
 対象ごと・再投入ごとに新しいUUIDをevent_idに使う。既存Outbox行の再送ではなく、DBに残る事実から受信契約に沿って再構成する。Outboxの検索・追加・状態更新は行わない。
 
-受付結果の件数・ID対応を確認してから監査に反映する。PublishFailedは項目別の失敗として記録し、後続バッチを送る。同一実行内の追加リトライはしない。publisherの契約違反や想定外例外は実行全体の失敗とする。
+受付結果の件数・ID対応を確認してから受付成功を数える。PublishFailedがあっても後続バッチを送る。同一実行内の追加リトライはしない。publisherの契約違反や想定外例外は実行全体の失敗とする。
 
-送信成功はSQS受付のみを意味し、DBに送信済み状態を持たせない。未完了なら次回も送る。送信監査はbest-effortとし、診断の障害で受付結果や後続送信を変えない。
+送信成功はSQS受付のみを意味し、DBに送信済み状態を持たせない。未完了なら次回も送る。
 
 ## Compatibility / Non-goals
 
-旧Taskiq Curationタスクの対象取得・件数観測は `app.queue.helpers.backlog` に残す。期間判定・整理・監査・metric・一回上限は新経路の共通部分を参照する。Curationの日次予算・stage hold・Taskiq投入・定期実行は残す。旧Assessment・EmbeddingのTaskiq backfillは撤去し、Lambdaからの再投入と共有cleanupを維持する。管理画面の件数・最古時刻の集計は `app.admin.pipeline_health.repository` が持ち、期間判定は共通部分を参照する。
+旧Taskiq Curationタスクの対象取得・件数観測は `app.queue.helpers.backlog` に残す。期間判定・整理・metric・一回上限は新経路の共通部分を参照する。Curationの日次予算・stage hold・Taskiq投入・定期実行は残す。旧Assessment・EmbeddingのTaskiq backfillは撤去し、Lambdaからの再投入と共有cleanupを維持する。管理画面の件数・最古時刻の集計は `app.admin.pipeline_health.repository` が持ち、期間判定は共通部分を参照する。
 
 Lambda入口、Scheduler、AWS権限・ネットワーク、デプロイ、旧経路の停止・撤去は後続スライスとする。DB schema・consumer・受信契約・新規dependencyは変更しない。後続Schedulerでは既存の30分間隔と工程別オフセットを引き継ぐ。
 

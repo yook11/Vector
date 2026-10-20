@@ -14,7 +14,6 @@ from local_tests.backfill.support import (
     ANALYZED_AT,
     CREATED_AT,
     EXTRACTED_AT,
-    read_audit_events,
     seed_analysis,
     seed_article,
     seed_curation,
@@ -48,11 +47,6 @@ async def test_curation_deletes_aged_out_article_and_delivers_saved_article(
         assert not await connection.fetchval(
             "SELECT EXISTS (SELECT FROM analyzable_articles WHERE id=$1)", aged_id
         )
-    audits = await read_audit_events(system_database)
-    assert [audit[:4] for audit in audits] == [
-        ("backfill_curate", "succeeded", "backfill_item_enqueued", article_id),
-    ]
-    assert audits[0].payload["target_id"] == article_id
 
 
 @pytest.mark.asyncio
@@ -89,11 +83,6 @@ async def test_assessment_excludes_aged_out_curation_and_delivers_saved_curation
     assert [tuple(row) for row in exclusions] == [
         (aged_curation_id, "backfill_assessment_aged_out")
     ]
-    audits = await read_audit_events(system_database)
-    assert [audit[:4] for audit in audits] == [
-        ("backfill_assess", "succeeded", "backfill_item_enqueued", article_id),
-    ]
-    assert audits[0].payload["target_id"] == curation_id
 
 
 @pytest.mark.asyncio
@@ -132,11 +121,6 @@ async def test_embedding_excludes_aged_out_analysis_and_delivers_saved_assessmen
     assert [tuple(row) for row in exclusions] == [
         (aged_analyzed_id, "backfill_embedding_aged_out")
     ]
-    audits = await read_audit_events(system_database)
-    assert [audit[:4] for audit in audits] == [
-        ("backfill_embed", "succeeded", "backfill_item_enqueued", article_id),
-    ]
-    assert audits[0].payload["target_id"] == analyzed_id
 
 
 @pytest.mark.asyncio
@@ -169,11 +153,6 @@ async def test_completion_closes_aged_out_row_and_delivers_saved_incomplete_arti
             "SELECT status, leased_until FROM incomplete_articles WHERE id=$1", aged_id
         )
     assert tuple(closed) == ("closed", None)
-    audits = await read_audit_events(system_database)
-    assert [audit[:4] for audit in audits] == [
-        ("completion", "succeeded", "backfill_item_enqueued", None),
-    ]
-    assert audits[0].payload["target_id"] == incomplete_id
 
 
 @pytest.mark.asyncio
