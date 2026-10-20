@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.curation.events import ArticleCuratedSignal
-from app.backfill.targets import BackfillEventTarget, BackfillTarget
+from app.backfill.targets import BackfillEventTarget
 from app.collection.article_acquisition.events import IncompleteArticleRecorded
 from app.collection.events import AnalyzableArticleCreated
 from app.models.analyzable_article_record import AnalyzableArticleRecord
@@ -22,7 +22,6 @@ from app.models.backfill_exclusion import (
 )
 from app.models.curation_noise import CurationNoise
 from app.models.incomplete_article import IncompleteArticle
-from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 
 
@@ -157,19 +156,16 @@ class PipelineBacklog:
         created_after: datetime,
         limit: int,
     ) -> list[BackfillEventTarget]:
-        """curationの再投入payloadと監査主語を同じ照会で取得する。"""
+        """curationの再投入payloadと発生時刻を取得する。"""
         stmt = (
             self._curation_pending(
                 select(
                     AnalyzableArticleRecord.id,
-                    AnalyzableArticleRecord.id,
-                    NewsSource.name,
                     AnalyzableArticleRecord.created_at,
                 ),
                 created_before=created_before,
                 created_after=created_after,
             )
-            .outerjoin(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
             .order_by(
                 AnalyzableArticleRecord.created_at.asc(),
                 AnalyzableArticleRecord.id.asc(),
@@ -179,11 +175,10 @@ class PipelineBacklog:
         rows = (await self._session.execute(stmt)).tuples().all()
         return [
             BackfillEventTarget(
-                target=BackfillTarget(target_id, article_id, source_name),
                 occurred_at=occurred_at,
-                payload=AnalyzableArticleCreated(analyzable_article_id=target_id),
+                payload=AnalyzableArticleCreated(analyzable_article_id=article_id),
             )
-            for target_id, article_id, source_name, occurred_at in rows
+            for article_id, occurred_at in rows
         ]
 
     async def lock_aged_out_curation(
@@ -213,19 +208,17 @@ class PipelineBacklog:
         created_after: datetime,
         limit: int,
     ) -> list[BackfillEventTarget]:
-        """assessmentの再投入payloadと監査主語を同じ照会で取得する。"""
+        """assessmentの再投入payloadと発生時刻を取得する。"""
         stmt = (
             self._assessment_pending(
                 select(
                     ArticleCuration.id,
                     AnalyzableArticleRecord.id,
-                    NewsSource.name,
                     ArticleCuration.extracted_at,
                 ),
                 created_before=created_before,
                 created_after=created_after,
             )
-            .outerjoin(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
             .order_by(
                 AnalyzableArticleRecord.created_at.asc(), ArticleCuration.id.asc()
             )
@@ -234,13 +227,12 @@ class PipelineBacklog:
         rows = (await self._session.execute(stmt)).tuples().all()
         return [
             BackfillEventTarget(
-                target=BackfillTarget(target_id, article_id, source_name),
                 occurred_at=occurred_at,
                 payload=ArticleCuratedSignal(
-                    analyzable_article_id=article_id, curation_id=target_id
+                    analyzable_article_id=article_id, curation_id=curation_id
                 ),
             )
-            for target_id, article_id, source_name, occurred_at in rows
+            for curation_id, article_id, occurred_at in rows
         ]
 
     async def lock_aged_out_assessment(
@@ -270,20 +262,17 @@ class PipelineBacklog:
         created_after: datetime,
         limit: int,
     ) -> list[BackfillEventTarget]:
-        """embeddingの再投入payloadと監査主語を同じ照会で取得する。"""
+        """embeddingの再投入payloadと発生時刻を取得する。"""
         stmt = (
             self._embedding_pending(
                 select(
                     AnalyzedArticleRecord.id,
-                    AnalyzableArticleRecord.id,
-                    NewsSource.name,
                     AnalyzedArticleRecord.analyzed_at,
                     AnalyzedArticleRecord.curation_id,
                 ),
                 created_before=created_before,
                 created_after=created_after,
             )
-            .outerjoin(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
             .order_by(
                 AnalyzableArticleRecord.created_at.asc(), AnalyzedArticleRecord.id.asc()
             )
@@ -292,13 +281,12 @@ class PipelineBacklog:
         rows = (await self._session.execute(stmt)).tuples().all()
         return [
             BackfillEventTarget(
-                target=BackfillTarget(target_id, article_id, source_name),
                 occurred_at=occurred_at,
                 payload=ArticleAssessedInScope(
-                    curation_id=curation_id, analyzed_article_id=target_id
+                    curation_id=curation_id, analyzed_article_id=analyzed_id
                 ),
             )
-            for target_id, article_id, source_name, occurred_at, curation_id in rows
+            for analyzed_id, occurred_at, curation_id in rows
         ]
 
     async def lock_aged_out_embedding(
@@ -328,13 +316,12 @@ class PipelineBacklog:
         created_after: datetime,
         limit: int,
     ) -> list[BackfillEventTarget]:
-        """補完の再投入payloadと監査主語を同じ照会で取得する。"""
+        """補完の再投入payloadと発生時刻を取得する。"""
         stmt = (
             self._completion_pending(
                 select(
                     IncompleteArticle.id,
                     IncompleteArticle.source_id,
-                    IncompleteArticle.source_name,
                     IncompleteArticle.created_at,
                 ),
                 created_before=created_before,
@@ -346,13 +333,12 @@ class PipelineBacklog:
         rows = (await self._session.execute(stmt)).tuples().all()
         return [
             BackfillEventTarget(
-                target=BackfillTarget(target_id, None, source_name),
                 occurred_at=occurred_at,
                 payload=IncompleteArticleRecorded(
-                    source_id=source_id, incomplete_article_id=target_id
+                    source_id=source_id, incomplete_article_id=incomplete_id
                 ),
             )
-            for target_id, source_id, source_name, occurred_at in rows
+            for incomplete_id, source_id, occurred_at in rows
         ]
 
     async def lock_aged_out_completion(

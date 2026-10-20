@@ -1,13 +1,10 @@
 """実DBを使って工程別の救済対象と再投入の振る舞いを確認する。"""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import func, select
 
-from app.audit.domain.event import Stage
-from app.audit.stages.backfill import BackfillAuditRepository
 from app.backfill import service
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.backfill_exclusion import (
@@ -18,7 +15,6 @@ from app.models.curation_noise import CurationNoise
 from app.models.incomplete_article import IncompleteArticle
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.outbox_event import OutboxEvent
-from app.models.pipeline_event import PipelineEvent
 from tests.backfill.helpers import RecordingPublisher, complete_target, seed_target
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
@@ -34,30 +30,6 @@ PAYLOAD_KEY = {
     "embedding": "analyzed_article_id",
     "completion": "incomplete_article_id",
 }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("stage", "entry"), CASES)
-async def test_requeued_target_audit_preserves_source_name(
-    db_session, session_factory, sample_source, sample_categories, stage, entry
-):
-    """DBから復元したソース名を文字列として再投入の監査へ保存する。"""
-    target = await seed_target(
-        db_session, sample_source, sample_categories[0], stage, NOW - timedelta(hours=1)
-    )
-
-    await entry(session_factory, RecordingPublisher(), enabled=True, now=NOW)
-
-    event = (
-        await db_session.execute(
-            select(PipelineEvent).where(
-                PipelineEvent.outcome_code == "backfill_item_enqueued"
-            )
-        )
-    ).scalar_one()
-    assert event.article_id == target.article_id
-    assert event.payload["target_id"] == target.target_id
-    assert event.payload["source_name"] == str(sample_source.name)
 
 
 @pytest.mark.asyncio
@@ -233,46 +205,11 @@ async def test_cleanup_commits_before_publishing(
             session_factory, FailingPublisher(), enabled=True, now=NOW
         )
     assert await db_session.get(AnalyzableArticleRecord, old.article_id) is None
-    failed = await db_session.scalar(
-        select(PipelineEvent).where(PipelineEvent.outcome_code == "backfill_run_failed")
-    )
-    assert failed is not None
 
 
 @pytest.mark.asyncio
-async def test_audit_failure_does_not_stop_sending(
-    db_session, session_factory, sample_source, sample_categories, monkeypatch
-):
-    """受付後の監査・診断が失敗しても次の対象へ進む。"""
-    from app.backfill import audit
-
-    for i in range(11):
-        await seed_target(
-            db_session,
-            sample_source,
-            sample_categories[0],
-            "curation",
-            NOW - timedelta(hours=1, minutes=i),
-        )
-    monkeypatch.setattr(
-        BackfillAuditRepository,
-        "append_item_event",
-        AsyncMock(side_effect=RuntimeError("audit failed")),
-    )
-    monkeypatch.setattr(
-        audit,
-        "record_audit_dropped",
-        lambda *args: (_ for _ in ()).throw(RuntimeError("metric failed")),
-    )
-    publisher = RecordingPublisher()
-    await service.backfill_curations(session_factory, publisher, enabled=True, now=NOW)
-    assert len(publisher.envelopes) == 11
-    assert await db_session.scalar(select(func.count()).select_from(PipelineEvent)) == 0
-
-
-@pytest.mark.asyncio
-async def test_database_failure_is_recorded_and_propagated(session_factory):
-    """実DBの接続障害を成功扱いせず、実行失敗を記録する。"""
+async def test_database_failure_is_propagated(session_factory):
+    """実DBの接続障害を成功扱いせず、呼び出し元へ伝える。"""
     from contextlib import asynccontextmanager
 
     calls = 0
@@ -293,10 +230,3 @@ async def test_database_failure_is_recorded_and_propagated(session_factory):
         await service.backfill_curations(
             unavailable_first, RecordingPublisher(), enabled=True, now=NOW
         )
-    async with session_factory() as session:
-        failure = await session.scalar(
-            select(PipelineEvent).where(
-                PipelineEvent.stage == Stage.BACKFILL_CURATE.value
-            )
-        )
-        assert failure.outcome_code == "backfill_run_failed"

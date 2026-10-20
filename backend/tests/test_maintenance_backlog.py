@@ -145,7 +145,9 @@ async def test_count_pending_curation_returns_true_count_without_limit(
     pending_ids = {article.id for article in pending}
     assert count == len(pending)
     assert len(targets) == 2
-    assert {item.target.target_id for item in targets}.issubset(pending_ids)
+    assert {item.payload.analyzable_article_id for item in targets}.issubset(
+        pending_ids
+    )
 
 
 # analyzable_article_ids_aged_out_curation (年齢削除対象 = 窓外の child-NULL)
