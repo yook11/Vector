@@ -8,10 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx2
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.audit.stages.briefing import BriefingOutcomeCode
 from app.insights.briefing.domain.briefing import (
     BriefingChapter,
     KeyArticle,
@@ -26,7 +24,6 @@ from app.insights.briefing.service import (
     WeeklyBriefingService,
 )
 from app.models.category import Category
-from app.models.pipeline_event import PipelineEvent
 from app.models.weekly_briefing import WeeklyBriefing
 from app.shared.revalidate import (
     FrontendRevalidateNotifier,
@@ -308,96 +305,3 @@ class TestNotifierIntegration:
         assert saved is not None
         assert saved.headline == "OK"
         assert saved.summary == "SUMMARY"
-
-
-class TestAuditIntegration:
-    """SUCCEEDED audit を briefing 行と同じ tx で書く検証。"""
-
-    @pytest.mark.asyncio
-    async def test_writes_succeeded_audit_alongside_briefing(
-        self,
-        db_session,
-        ai_category: Category,
-    ) -> None:
-        """成功時に briefing 行と SUCCEEDED audit 行が同時に観測される。
-
-        Service が write tx 内で audit を append し commit するため、SUCCEEDED 行は
-        briefing UPSERT と atomic (D5)。「briefing 行はあるが SUCCEEDED 無し」の
-        偽ギャップが構造的に発生しない。
-        """
-        service = WeeklyBriefingService(
-            _factory_for(db_session), _llm_mock(), NullRevalidateNotifier()
-        )
-        ready = _ready(ai_category)
-
-        await service.execute(ready)
-
-        rows = (
-            (
-                await db_session.execute(
-                    select(PipelineEvent).where(
-                        PipelineEvent.outcome_code
-                        == BriefingOutcomeCode.GENERATION_COMPLETED.value
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        assert len(rows) == 1
-        ev = rows[0]
-        assert ev.stage == "briefing"
-        assert ev.event_type == "succeeded"
-        assert ev.retryability is None
-        assert ev.payload["category_id"] == ai_category.id
-        assert ev.payload["category_slug"] == "ai"
-        assert ev.payload["article_count"] == 1
-        assert ev.payload["ai_model"] == "gemini-3.8-flash"
-
-    @pytest.mark.asyncio
-    async def test_does_not_write_succeeded_audit_on_race_loss(
-        self,
-        db_session,
-        ai_category: Category,
-    ) -> None:
-        """race 敗北時は SUCCEEDED audit を焼かない。
-
-        SUCCEEDED (BriefingOutcomeCode.GENERATION_COMPLETED) は勝者だけが書く設計。
-        敗者は save() が None を返した後に audit append をスキップするため、
-        DB 上の SUCCEEDED 行は 0 件でなければならない。
-        """
-        winner_row = WeeklyBriefing(
-            week_start_date=date(2026, 4, 20),
-            category_id=ai_category.id,
-            headline="winner-headline",
-            summary="winner-summary",
-            chapters=[],
-            key_articles=[],
-            watch_points=[],
-            model_name="gemini-3.8-flash",
-            input_article_count=1,
-        )
-        db_session.add(winner_row)
-        await db_session.commit()
-
-        service = WeeklyBriefingService(
-            _factory_for(db_session), _llm_mock(), NullRevalidateNotifier()
-        )
-        ready = _ready(ai_category)
-
-        outcome = await service.execute(ready)
-
-        assert isinstance(outcome, BriefingConflict)
-        rows = (
-            (
-                await db_session.execute(
-                    select(PipelineEvent).where(
-                        PipelineEvent.outcome_code
-                        == BriefingOutcomeCode.GENERATION_COMPLETED.value
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        assert len(rows) == 0

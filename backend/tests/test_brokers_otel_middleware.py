@@ -196,7 +196,7 @@ async def test_kiq_propagates_traceparent_via_labels(
 
 
 # capfire oracle: execute span が task body 内で current として読める
-# (= PipelineEventRepository._get_current_trace_id の直読みが trace_id を拾える前提)
+# (= pipeline_stage_span が execute span の子として開く前提)
 
 
 @pytest.mark.asyncio
@@ -207,7 +207,7 @@ async def test_execute_span_is_current_inside_task_body(
 
     既存 ``test_kiq_propagates_traceparent_via_labels`` は execute span が export
     されることしか見ておらず、「body 内で current として読める」は pin していない。
-    Repository の trace_id 直読みはこの性質に依存するため直接押さえる。oracle は
+    pipeline_stage_span の親子関係はこの性質に依存するため直接押さえる。oracle は
     capfire の execute span (body 内の値を test 側で再導出しない)。
 
     trace_id だけでは producer / parent span (同一 trace) の取り違えを区別できない

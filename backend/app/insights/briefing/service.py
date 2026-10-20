@@ -4,7 +4,7 @@
 LLM 呼出 → 永続化 → 通知だけを行う。LLM 呼出は 30-60s かかるため
 トランザクションの外で行い、書き込みだけを 1 トランザクションにまとめる。
 
-例外は捕まえずに伝播させ、taskiq の retry と失敗監査に委ねる。
+例外は捕まえずに伝播させ、taskiq の retry に委ねる。
 同時 INSERT の競合に負けた場合は読み戻さず ``BriefingConflict`` を返す。
 """
 
@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.audit.stages.briefing import BriefingAuditRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.repository import BriefingRepository
 
@@ -84,17 +83,6 @@ class WeeklyBriefingService:
                 model_name=self._llm.MODEL,
                 input_article_count=article_count,
             )
-            # audit は INSERT 勝者だけが焼く (saved is None = race 敗北は沈黙、
-            # 勝者プロセスが SUCCEEDED を 1 行付ける構造で完成行の重複を防ぐ)。
-            # 同 tx atomic で「briefing 行はあるが SUCCEEDED 無し」の偽ギャップ
-            # を構造的に排除する。
-            if saved is not None:
-                await BriefingAuditRepository(session).append_generation_completed(
-                    week_start=ready.week_start,
-                    category_id=ready.category_id,
-                    article_count=article_count,
-                    ai_model=self._llm.MODEL,
-                )
             await session.commit()
 
         if saved is None:

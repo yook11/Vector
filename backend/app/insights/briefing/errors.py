@@ -40,8 +40,8 @@ class BriefingLlmResponseInvalidError(BriefingError):
     """LLM 応答が briefing schema / article id 制約に合致しない。
 
     ``violations`` は「どの field のどの制約が壊れたか」(loc + 制約種別) の列挙。
-    str(exc) に焼き込まれ、audit の error_message からそのまま原因が読める。
-    LLM 出力の値そのものは含めない (untrusted 内容を audit / log へ流さない)。
+    str(exc) に焼き込まれ、例外のメッセージからそのまま原因が読める。
+    LLM 出力の値そのものは含めない (untrusted 内容を log へ流さない)。
     """
 
     CODE: ClassVar[str] = "briefing_generation_llm_response_contract_invalid"

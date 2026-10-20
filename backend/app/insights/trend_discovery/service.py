@@ -1,4 +1,4 @@
-"""トレンドの開始条件を確認し、集計・保存・監査・通知を順に行う。"""
+"""トレンドの開始条件を確認し、集計・保存・通知を順に行う。"""
 
 from __future__ import annotations
 
@@ -8,11 +8,6 @@ from datetime import UTC, date, datetime
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.audit.domain.event import EventType
-from app.audit.stages.trend_discovery import (
-    TrendDiscoveryOutcomeCode,
-    append_trend_discovery_run_event_best_effort,
-)
 from app.insights.trend_discovery.domain.ready import (
     ReadyForTrendDiscovery,
     TrendDiscoveryReadyBuildRejectionReason,
@@ -82,7 +77,7 @@ TrendDiscoveryOutcome = (
 
 
 class TrendDiscoveryService:
-    """トレンドの準備・集計・保存と、結果に応じた監査・通知を担う。"""
+    """トレンドの準備・集計・保存と、結果に応じた通知を担う。"""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -90,18 +85,7 @@ class TrendDiscoveryService:
     async def create(self, notifier: RevalidateNotifier) -> None:
         """直近の完了済み7日間のトレンドを作成する。"""
         weeks = TrendWeeks.latest(datetime.now(UTC))
-        try:
-            outcome = await self.execute(weeks)
-        except Exception as exc:
-            await append_trend_discovery_run_event_best_effort(
-                self._session_factory,
-                event_type=EventType.FAILED,
-                outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
-                window_start=weeks.week.start,
-                window_end=weeks.snapshot_date,
-                exc=exc,
-            )
-            raise
+        outcome = await self.execute(weeks)
 
         if isinstance(outcome, SkippedAlreadyGenerated):
             logger.info(
@@ -123,16 +107,6 @@ class TrendDiscoveryService:
                 category_count=outcome.completed_category_count,
             )
             return
-
-        await append_trend_discovery_run_event_best_effort(
-            self._session_factory,
-            event_type=EventType.SUCCEEDED,
-            outcome_code=TrendDiscoveryOutcomeCode.RUN_COMPLETED,
-            window_start=weeks.week.start,
-            window_end=outcome.snapshot_date,
-            source_analysis_count=outcome.analyzed_article_count,
-            completed_category_count=outcome.completed_category_count,
-        )
 
         logger.info(
             "trend_discovery_task_completed",

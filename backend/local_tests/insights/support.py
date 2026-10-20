@@ -148,27 +148,6 @@ async def weekly_briefings(database) -> list[dict]:
     ]
 
 
-async def insights_events(database) -> list[dict]:
-    """トレンドとブリーフィングの監査を記録した順に返す。payloadは値のある項目だけにする。"""
-    async with database.connect("vector") as connection:
-        rows = await connection.fetch(
-            "SELECT stage, event_type, outcome_code, retryability, error_class, "
-            "payload FROM pipeline_events "
-            "WHERE stage IN ('trend_discovery', 'briefing') ORDER BY id"
-        )
-    return [
-        {
-            **row,
-            "payload": {
-                key: value
-                for key, value in json.loads(row["payload"]).items()
-                if value is not None
-            },
-        }
-        for row in rows
-    ]
-
-
 @dataclass
 class RecordingNotifier:
     """frontendへのキャッシュ無効化の通知を記録する。"""

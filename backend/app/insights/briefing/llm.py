@@ -58,7 +58,7 @@ logger = structlog.get_logger(__name__)
 def _contract_violations(exc: ValidationError) -> list[str]:
     """ValidationError を「loc: 制約種別」の value-free な列挙へ写像する。
 
-    LLM 出力の値そのものは含めない (untrusted 内容を audit / log へ流さない)。
+    LLM 出力の値そのものは含めない (untrusted 内容を log へ流さない)。
     自前 model_validator 由来の value_error は msg を残す (重複 id /
     input_ids 外 id の整数列挙のみで構築されており value-free)。
     """

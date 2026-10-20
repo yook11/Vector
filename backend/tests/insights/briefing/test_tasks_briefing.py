@@ -16,7 +16,6 @@ from app.insights.briefing.domain.ready import (
     BriefingReadyBuildFacts,
     ReadyForBriefing,
 )
-from app.insights.briefing.errors import BriefingConfigurationError
 from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.service import GeneratedBriefing
 from app.queue.messages.briefing import BriefingTaskInput
@@ -25,11 +24,10 @@ from tests.logfire._span_helpers import pipeline_stage_attrs
 JST = ZoneInfo("Asia/Tokyo")
 
 
-def _ctx_with_session_factory(*, retries: int = 0, max_retries: int = 2) -> MagicMock:
-    """``ctx.message.labels`` を持つ taskiq Context モック。"""
+def _ctx_with_session_factory() -> MagicMock:
+    """session_factory と briefing generator を持つ taskiq Context モック。"""
     ctx = MagicMock()
     session = MagicMock()
-    session.commit = AsyncMock()
     session_ctx = MagicMock()
     session_ctx.__aenter__ = AsyncMock(return_value=session)
     session_ctx.__aexit__ = AsyncMock(return_value=None)
@@ -38,8 +36,6 @@ def _ctx_with_session_factory(*, retries: int = 0, max_retries: int = 2) -> Magi
     # generator は composition root が broker_briefing 起動時に state へ wire する。
     # task はそれを読んで service に DI するため、ctx.state に明示的に置く。
     ctx.state.briefing_generator = MagicMock()
-    # taskiq SimpleRetryMiddleware が書く label は "_retries" (0..max_retries-1)
-    ctx.message.labels = {"_retries": retries, "max_retries": max_retries}
     return ctx
 
 
@@ -78,13 +74,6 @@ def _patch_facts(facts: BriefingReadyBuildFacts | None):
     )
 
 
-def _patch_dispatch_audit_methods(audit_cls: MagicMock) -> None:
-    audit_cls.return_value.append_category_enqueued = AsyncMock()
-    audit_cls.return_value.append_category_enqueue_failed = AsyncMock()
-    audit_cls.return_value.append_dispatch_completed = AsyncMock()
-    audit_cls.return_value.append_dispatch_category_master_load_failed = AsyncMock()
-
-
 class TestSchedule:
     def test_dispatch_cron_matches_jst_monday_midnight(self) -> None:
         from app.queue.tasks import briefing
@@ -103,8 +92,8 @@ class TestSchedule:
 
 class TestDispatcher:
     @pytest.mark.asyncio
-    async def test_kiq_per_category_and_audits_success_rows(self) -> None:
-        """全カテゴリに対して subtask を kiq し、カテゴリ単位成功を焼く。"""
+    async def test_kiq_per_category(self) -> None:
+        """全カテゴリに対して subtask を kiq する。"""
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
@@ -122,9 +111,7 @@ class TestDispatcher:
                 "kiq",
                 new=AsyncMock(),
             ) as kiq,
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):
-            _patch_dispatch_audit_methods(audit_cls)
             await briefing.dispatch_weekly_briefings(ctx=ctx)
 
         assert kiq.await_count == 3
@@ -134,21 +121,9 @@ class TestDispatcher:
             assert inp.week_start == date(2026, 4, 20)
         assert {inp.category_id for inp in called_inputs} == {1, 2, 3}
 
-        append_enqueued = audit_cls.return_value.append_category_enqueued
-        assert append_enqueued.await_count == 3
-        assert [
-            call.kwargs["category_id"] for call in append_enqueued.await_args_list
-        ] == [1, 2, 3]
-        audit_cls.return_value.append_dispatch_completed.assert_awaited_once_with(
-            week_start=date(2026, 4, 20),
-            selected_category_count=3,
-            enqueued_category_count=3,
-            failed_category_count=0,
-        )
-
     @pytest.mark.asyncio
     async def test_continues_after_one_category_enqueue_failure(self) -> None:
-        """1カテゴリの .kiq() 失敗は焼いて続行し、dispatcher は raise しない。"""
+        """1カテゴリの .kiq() 失敗でも残りを kiq し、dispatcher は raise しない。"""
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
@@ -167,29 +142,16 @@ class TestDispatcher:
                 "kiq",
                 new=AsyncMock(side_effect=[None, boom, None]),
             ) as kiq,
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):
-            _patch_dispatch_audit_methods(audit_cls)
             await briefing.dispatch_weekly_briefings(ctx=ctx)
 
         assert kiq.await_count == 3
-        audit_cls.return_value.append_category_enqueue_failed.assert_awaited_once_with(
-            week_start=date(2026, 4, 20),
-            category_id=2,
-            exc=boom,
-        )
-        audit_cls.return_value.append_dispatch_completed.assert_awaited_once_with(
-            week_start=date(2026, 4, 20),
-            selected_category_count=3,
-            enqueued_category_count=2,
-            failed_category_count=1,
-        )
 
     @pytest.mark.asyncio
-    async def test_zero_categories_writes_completed_summary_with_zero_counts(
+    async def test_zero_categories_logs_completed_summary_with_zero_counts(
         self,
     ) -> None:
-        """カテゴリマスタ 0 件は専用 outcome ではなく 0 counts summary で表す。"""
+        """カテゴリマスタ 0 件は専用の結果ではなく、件数 0 の完了 log で表す。"""
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
@@ -207,59 +169,41 @@ class TestDispatcher:
                 "kiq",
                 new=AsyncMock(),
             ) as kiq,
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
+            capture_logs() as logs,
         ):
-            _patch_dispatch_audit_methods(audit_cls)
             await briefing.dispatch_weekly_briefings(ctx=ctx)
 
         kiq.assert_not_awaited()
-        audit_cls.return_value.append_dispatch_completed.assert_awaited_once_with(
-            week_start=date(2026, 4, 20),
-            selected_category_count=0,
-            enqueued_category_count=0,
-            failed_category_count=0,
-        )
+        completed = [e for e in logs if e["event"] == "briefing_dispatch_completed"]
+        assert [
+            (
+                e["week_start"],
+                e["selected_category_count"],
+                e["enqueued_category_count"],
+                e["failed_category_count"],
+            )
+            for e in completed
+        ] == [("2026-04-20", 0, 0, 0)]
 
     @pytest.mark.asyncio
-    async def test_writes_dispatch_load_failure_when_category_master_read_raises(
-        self,
-    ) -> None:
-        """カテゴリマスタ取得失敗は固定 outcome を焼いて re-raise する。"""
+    async def test_reraises_when_category_master_read_raises(self) -> None:
+        """カテゴリマスタ取得失敗は dispatcher 全体の失敗として raise する。"""
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
-        boom = RuntimeError("session factory boom")
-        normal_session = MagicMock()
-        normal_session.commit = AsyncMock()
-        normal_session_ctx = MagicMock()
-        normal_session_ctx.__aenter__ = AsyncMock(return_value=normal_session)
-        normal_session_ctx.__aexit__ = AsyncMock(return_value=None)
-        ctx.state.session_factory.side_effect = [
-            MagicMock(
-                __aenter__=AsyncMock(side_effect=boom),
-                __aexit__=AsyncMock(return_value=None),
-            ),
-            normal_session_ctx,
-        ]
+        ctx.state.session_factory.return_value = MagicMock(
+            __aenter__=AsyncMock(side_effect=RuntimeError("session factory boom")),
+            __aexit__=AsyncMock(return_value=None),
+        )
 
         with (
             patch(
                 "app.queue.tasks.briefing.now_in_jst",
                 return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
             ),
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
             pytest.raises(RuntimeError, match="session factory boom"),
         ):
-            _patch_dispatch_audit_methods(audit_cls)
             await briefing.dispatch_weekly_briefings(ctx=ctx)
-
-        append_failed = (
-            audit_cls.return_value.append_dispatch_category_master_load_failed
-        )
-        append_failed.assert_awaited_once()
-        kwargs = append_failed.await_args.kwargs
-        assert kwargs["week_start"] == date(2026, 4, 20)
-        assert kwargs["exc"] is boom
 
 
 class TestSubtask:
@@ -277,7 +221,6 @@ class TestSubtask:
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
             capture_logs() as logs,
         ):
             await briefing.generate_briefing_for_category(
@@ -286,16 +229,12 @@ class TestSubtask:
             )
 
         service.execute.assert_not_awaited()
-        # 既存 briefing skip は監査に焼かず log で観測する。
-        audit_cls.assert_not_called()
         assert [
             e for e in logs if e.get("event") == "briefing_subtask_skipped_existing"
         ]
 
     @pytest.mark.asyncio
-    async def test_records_input_empty_without_generating_when_no_articles(
-        self,
-    ) -> None:
+    async def test_skips_generation_when_no_articles(self) -> None:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
@@ -308,18 +247,13 @@ class TestSubtask:
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):
-            audit_cls.return_value.append_generation_input_empty = AsyncMock()
             await briefing.generate_briefing_for_category(
                 BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
                 ctx=ctx,
             )
 
         service.execute.assert_not_awaited()
-        audit_cls.return_value.append_generation_input_empty.assert_awaited_once_with(
-            week_start=date(2026, 4, 20), category_id=1
-        )
 
     @pytest.mark.asyncio
     async def test_invokes_service_with_ready_built_from_facts(self) -> None:
@@ -374,24 +308,21 @@ class TestSubtask:
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
             pytest.raises(RuntimeError, match="LLM down"),
         ):
-            audit_cls.return_value.append_unexpected_failure = AsyncMock()
             await briefing.generate_briefing_for_category(
                 BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
                 ctx=ctx,
             )
 
     @pytest.mark.asyncio
-    async def test_missing_category_is_recorded_as_unexpected_failure(self) -> None:
-        """dispatch 後にカテゴリが消えた場合は失敗として監査に焼き、retry に委ねる。"""
+    async def test_missing_category_raises_for_retry(self) -> None:
+        """dispatch 後にカテゴリが消えた場合は失敗として raise し、retry に委ねる。"""
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
         service = MagicMock()
         service.execute = AsyncMock()
-        service._llm.MODEL = "gemini-3.8-flash"
 
         with (
             _patch_facts(None),
@@ -399,76 +330,14 @@ class TestSubtask:
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
             pytest.raises(ValueError, match="Category not found"),
         ):
-            audit_cls.return_value.append_unexpected_failure = AsyncMock()
             await briefing.generate_briefing_for_category(
                 BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
                 ctx=ctx,
             )
 
         service.execute.assert_not_awaited()
-        kwargs = audit_cls.return_value.append_unexpected_failure.await_args.kwargs
-        assert (kwargs["week_start"], kwargs["category_id"]) == (date(2026, 4, 20), 1)
-
-
-class TestSubtaskFailureAudit:
-    """subtask の失敗監査経路。"""
-
-    @staticmethod
-    async def _run_with_exc(
-        exc: BaseException,
-        *,
-        retries: int,
-        max_retries: int,
-    ) -> tuple[MagicMock, MagicMock]:
-        """指定 exc + retry 軸で subtask を 1 回流し、audit cls の mock を返す。"""
-        from app.queue.tasks import briefing
-
-        ctx = _ctx_with_session_factory(retries=retries, max_retries=max_retries)
-        service = MagicMock()
-        service.execute = AsyncMock(side_effect=exc)
-        service._llm.MODEL = "gemini-3.8-flash"
-
-        with (
-            _patch_facts(_facts()),
-            patch(
-                "app.queue.tasks.briefing.WeeklyBriefingService",
-                return_value=service,
-            ),
-            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
-        ):
-            audit_cls.return_value.append_failure = AsyncMock()
-            with pytest.raises(type(exc)):
-                await briefing.generate_briefing_for_category(
-                    BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
-                    ctx=ctx,
-                )
-        return audit_cls, audit_cls.return_value.append_failure
-
-    @pytest.mark.asyncio
-    async def test_records_failure_then_reraises_middle_attempt(self) -> None:
-        exc = BriefingConfigurationError("GEMINI_API_KEY missing")
-        # 非最終試行: _retries=0 < max_retries-1=1 → retry_exhausted=None
-        _, append_failure = await self._run_with_exc(exc, retries=0, max_retries=2)
-
-        append_failure.assert_awaited_once_with(
-            week_start=date(2026, 4, 20),
-            category_id=1,
-            exc=exc,
-            retry_exhausted=None,
-            ai_model="gemini-3.8-flash",
-        )
-
-    @pytest.mark.asyncio
-    async def test_records_failure_with_retry_exhausted_on_last_attempt(self) -> None:
-        exc = BriefingConfigurationError("GEMINI_API_KEY missing")
-        # 最終試行: _retries=max_retries-1=1
-        _, append_failure = await self._run_with_exc(exc, retries=1, max_retries=2)
-
-        kwargs = append_failure.await_args.kwargs
-        assert kwargs["retry_exhausted"] is True
 
 
 class TestGenerateBriefingForCategoryStageSpan:

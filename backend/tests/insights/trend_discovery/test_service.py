@@ -632,18 +632,14 @@ def create_dependencies(monkeypatch):
             return datetime(2026, 4, 19, 15, 5, tzinfo=UTC).astimezone(tz)
 
     monkeypatch.setattr(service_module, "datetime", FixedDatetime)
-    audit = AsyncMock()
-    monkeypatch.setattr(
-        service_module, "append_trend_discovery_run_event_best_effort", audit
-    )
-    return TrendDiscoveryService(MagicMock()), AsyncMock(), audit
+    return TrendDiscoveryService(MagicMock()), AsyncMock()
 
 
 class TestCreate:
     @pytest.mark.asyncio
     async def test_selects_the_latest_completed_week(self, create_dependencies):
         """現在時刻からドメインが定義した週を実行へ渡す。"""
-        service, notifier, _ = create_dependencies
+        service, notifier = create_dependencies
         service.execute = AsyncMock(
             return_value=SkippedAlreadyGenerated(snapshot_date=SNAPSHOT_DATE)
         )
@@ -651,32 +647,9 @@ class TestCreate:
         service.execute.assert_awaited_once_with(_weeks())
 
     @pytest.mark.asyncio
-    async def test_records_completion_after_successful_generation(
-        self, create_dependencies
-    ):
-        """成功した週と集計件数を、監査の項目名 (window_*) のまま渡す。"""
-        from app.audit.domain.event import EventType
-        from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
-
-        service, notifier, audit = create_dependencies
-        service.execute = AsyncMock(
-            return_value=TrendDiscoveryCompleted(SNAPSHOT_DATE, 42, 3)
-        )
-        await service.create(notifier)
-        audit.assert_awaited_once_with(
-            service._session_factory,
-            event_type=EventType.SUCCEEDED,
-            outcome_code=TrendDiscoveryOutcomeCode.RUN_COMPLETED,
-            window_start=date(2026, 4, 13),
-            window_end=SNAPSHOT_DATE,
-            source_analysis_count=42,
-            completed_category_count=3,
-        )
-
-    @pytest.mark.asyncio
     async def test_notifies_after_successful_generation(self, create_dependencies):
         """保存が成功した場合だけトレンドの表示更新を通知する。"""
-        service, notifier, _ = create_dependencies
+        service, notifier = create_dependencies
         service.execute = AsyncMock(
             return_value=TrendDiscoveryCompleted(SNAPSHOT_DATE, 42, 3)
         )
@@ -684,51 +657,38 @@ class TestCreate:
         notifier.notify.assert_awaited_once_with(tags=("trends",))
 
     @pytest.mark.asyncio
-    async def test_existing_period_does_not_audit_or_notify(self, create_dependencies):
-        """生成済みで終了した場合は成功監査や表示更新を追加しない。"""
-        service, notifier, audit = create_dependencies
+    async def test_existing_period_does_not_notify(self, create_dependencies):
+        """生成済みで終了した場合は表示更新を通知しない。"""
+        service, notifier = create_dependencies
         service.execute = AsyncMock(return_value=SkippedAlreadyGenerated(SNAPSHOT_DATE))
         await service.create(notifier)
-        audit.assert_not_awaited()
         notifier.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_no_articles_does_not_audit_or_notify(self, create_dependencies):
-        """対象0件で終了した場合は成功監査や表示更新を追加しない。"""
-        service, notifier, audit = create_dependencies
+    async def test_no_articles_does_not_notify(self, create_dependencies):
+        """対象0件で終了した場合は表示更新を通知しない。"""
+        service, notifier = create_dependencies
         service.execute = AsyncMock(return_value=SkippedNoTargetArticles(SNAPSHOT_DATE))
         await service.create(notifier)
-        audit.assert_not_awaited()
         notifier.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_save_conflict_does_not_audit_or_notify(self, create_dependencies):
-        """保存競合の敗者は成功監査や表示更新を追加しない。"""
-        service, notifier, audit = create_dependencies
+    async def test_save_conflict_does_not_notify(self, create_dependencies):
+        """保存競合の敗者は表示更新を通知しない。"""
+        service, notifier = create_dependencies
         service.execute = AsyncMock(
             return_value=TrendDiscoveryConflict(SNAPSHOT_DATE, 42, 3)
         )
         await service.create(notifier)
-        audit.assert_not_awaited()
         notifier.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_execution_failure_is_audited_and_reraised(self, create_dependencies):
-        """準備・集計・保存を含むexecuteの失敗を監査して再送出する。"""
-        from app.audit.domain.event import EventType
-        from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
-
-        service, notifier, audit = create_dependencies
-        error = RuntimeError("execution failed")
-        service.execute = AsyncMock(side_effect=error)
+    async def test_execution_failure_is_reraised_without_notify(
+        self, create_dependencies
+    ):
+        """準備・集計・保存を含むexecuteの失敗を再送出し、表示更新を通知しない。"""
+        service, notifier = create_dependencies
+        service.execute = AsyncMock(side_effect=RuntimeError("execution failed"))
         with pytest.raises(RuntimeError, match="execution failed"):
             await service.create(notifier)
-        audit.assert_awaited_once_with(
-            service._session_factory,
-            event_type=EventType.FAILED,
-            outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
-            window_start=date(2026, 4, 13),
-            window_end=SNAPSHOT_DATE,
-            exc=error,
-        )
         notifier.notify.assert_not_awaited()
