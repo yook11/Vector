@@ -1,4 +1,4 @@
-"""Briefing error class の監査属性テスト。"""
+"""Briefing error class の失敗分類属性テスト。"""
 
 from __future__ import annotations
 

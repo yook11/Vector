@@ -1,4 +1,4 @@
-"""トレンド生成がvector_insightsで分析結果を集計し、snapshotと監査を保存する。"""
+"""トレンド生成がvector_insightsで分析結果を集計し、snapshotを保存する。"""
 
 from datetime import date, datetime
 
@@ -7,7 +7,6 @@ import pytest
 from local_tests.insights.support import (
     JST,
     embedding,
-    insights_events,
     seed_analyzed_article,
     seed_trends_snapshot,
     seeded_categories,
@@ -20,7 +19,7 @@ pytestmark = pytest.mark.asyncio
 async def test_trend_discovery_saves_snapshot_of_mentions_in_last_seven_days(
     system_database, trend_worker, notifier
 ):
-    """直近7日に5記事で挙がった語を集計し、snapshotと成功の監査を保存して通知する。"""
+    """直近7日に5記事で挙がった語を集計し、snapshotを保存して通知する。"""
     from app.insights.trend_discovery.taskiq_job import run_trend_discovery
 
     categories = await seeded_categories(system_database)
@@ -72,29 +71,13 @@ async def test_trend_discovery_saves_snapshot_of_mentions_in_last_seven_days(
             ],
         }
     ]
-    assert await insights_events(system_database) == [
-        {
-            "stage": "trend_discovery",
-            "event_type": "succeeded",
-            "outcome_code": "trend_discovery_run_completed",
-            "retryability": None,
-            "error_class": None,
-            "payload": {
-                "kind": "trend_discovery",
-                "window_start": "2026-09-20",
-                "window_end": "2026-09-27",
-                "source_analysis_count": 5,
-                "completed_category_count": len(categories),
-            },
-        }
-    ]
     assert notifier.tags == [("trends",)]
 
 
 async def test_trend_discovery_keeps_snapshot_already_saved_for_the_window(
     system_database, trend_worker, notifier
 ):
-    """同じ期間のsnapshotが保存済みなら、そのsnapshotを残して監査も通知もしない。"""
+    """同じ期間のsnapshotが保存済みなら、そのsnapshotを残して通知しない。"""
     from app.insights.trend_discovery.taskiq_job import run_trend_discovery
 
     category = (await seeded_categories(system_database))[0]
@@ -122,7 +105,6 @@ async def test_trend_discovery_keeps_snapshot_already_saved_for_the_window(
             "generated_at": datetime(2026, 9, 27, 0, 5, tzinfo=JST),
         }
     ]
-    assert await insights_events(system_database) == []
     assert notifier.tags == []
 
 

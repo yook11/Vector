@@ -98,13 +98,11 @@ async def briefing_worker(system_database, notifier, briefing_generator, monkeyp
     )
     engine, session_factory = await _worker_session_factory(system_database, "briefing")
     try:
-        # 初回の試行として扱い、失敗を再試行の対象に残す。
         yield SimpleNamespace(
             state=SimpleNamespace(
                 session_factory=session_factory,
                 briefing_generator=briefing_generator,
             ),
-            message=SimpleNamespace(labels={"_retries": 0, "max_retries": 2}),
         )
     finally:
         await engine.dispose()

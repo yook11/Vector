@@ -1,26 +1,8 @@
-"""監査 bounded context — pipeline_events 監査基盤の実装。
-
-詳細は ``docs/observability/pipeline-events-design.md`` 参照。
-
-per-stage semantic API は ``app.audit.stages`` に集約し、stage 固有の DTO /
-payload snapshot 規律を受け取って監査行へ写像する。
-"""
+"""pipeline_events の stage・event_type の語彙と、失敗分類の共有部品。"""
 
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import (
-    BasePipelineEventPayload,
-    BriefingPayload,
-    DispatchPayload,
-    PipelineEventPayload,
-)
-from app.audit.repository import PipelineEventRepository
 
 __all__ = [
-    "BasePipelineEventPayload",
-    "BriefingPayload",
-    "DispatchPayload",
     "EventType",
-    "PipelineEventPayload",
-    "PipelineEventRepository",
     "Stage",
 ]

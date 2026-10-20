@@ -2,7 +2,6 @@
 
 from datetime import UTC, datetime
 
-from app.audit.error_chain import extract_error_chain
 from app.collection.article_completion.errors import (
     ArticleBuildRejectedError,
     ArticleCompletionError,
@@ -45,11 +44,7 @@ def test_completion_error_preserves_extraction_exception_chain() -> None:
         assert error.cause is cause
         assert error.cause.__cause__ is original
         assert error.cause.__traceback__ is traceback
-        assert extract_error_chain(error) == [
-            "app.collection.article_completion.errors.ArticleCompletionError",
-            "app.collection.article_completion.html_extraction.HtmlExtractionError",
-            "builtins.ValueError",
-        ]
+        assert error.__cause__ is cause
 
 
 def test_build_rejected_error_keeps_domain_rejection() -> None:

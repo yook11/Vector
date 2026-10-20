@@ -6,7 +6,6 @@ telemetry を初期化し、structlog の処理チェーンに ``StructlogProces
 ``send_to_logfire="if-token-present"`` により logfire は完全 no-op (外部送信なし)。
 stdout の見た目は env 別 (dev=ConsoleRenderer / prod=JSONRenderer)。
 
-pipeline_events は監査 SSoT として残し、Logfire は追加の telemetry 層に徹する。
 token は ``app.config.settings`` 経由で渡す。httpx instrumentation は
 ``AsyncClient.send`` を global patch するため、本 bootstrap で一度だけ行う。
 system メトリクス (プロセス RSS / VM available) は OOM 予兆監視のため token 設定時

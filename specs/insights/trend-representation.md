@@ -127,7 +127,7 @@ CoMention
 - domain のカテゴリは `category_slug` / `category_name` のまま持ち、公開時に `Category` へ変換する。domain は API の schemas に依存しない (briefing と同じ)。
 - `Week` は日付の範囲と、クエリに使う公開日時の範囲 (`published_from` 以上 `published_before` 未満、UTC) を持つ。
 - `TrendsBundle` は名前を変えない。生成1回分の結果で、公開の `Trends` はこれに生成時刻と記事数を足したもの。
-- 保存側の名前 (DB の `window_end` / `source_analysis_count`、監査とログの `window_start` / `window_end` / `source_analysis_count`) は変えず、読み書きする箇所で対応づける。`window_end` は `snapshot_date`、`window_start` は `week.start` に当たり、監査の値も今と同じにする。
+- 保存側の名前 (DB の `window_end` / `source_analysis_count`、ログの `window_end` / `source_analysis_count`) は変えず、読み書きする箇所で対応づける。`window_end` は `snapshot_date` に当たる。
 
 ## 保存済みのスナップショット
 

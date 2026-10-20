@@ -6,21 +6,16 @@
 
 責務分離:
 - ``dispatch_weekly_briefings``: cron 駆動、subtask を kiq するだけの薄い gatekeeper。
-  カテゴリ単位の enqueue 監査と週 1 行の summary 監査を焼く。
 - ``generate_briefing_for_category``: 1 カテゴリ × 1 週の生成。Service に委譲。
-  失敗は監査に焼いた上で raise (taskiq の retry / failure tracking を維持)
+  失敗は raise して taskiq の retry に委ねる。
 - 開始条件は ``ReadyForBriefing.from_facts`` が判定する
 
 エラー方針 (``feedback_failure_visibility.md``):
-- subtask は監査に焼いた後 raise し、taskiq の retry を継続する。
-- dispatcher は 1 カテゴリの enqueue 失敗を監査して続行する。
-- 既存 briefing ありは監査に焼かず log で観測し、記事 0 件は REJECTED を焼いて
-  正常終了する。
+- dispatcher は 1 カテゴリの enqueue 失敗を log に残して続行する。
+- 既存 briefing あり・記事 0 件は log で観測して正常終了する。
 """
 
 from __future__ import annotations
-
-from datetime import date
 
 import structlog
 from sqlalchemy import select
@@ -29,13 +24,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
-from app.audit.metrics import record_audit_dropped
-from app.audit.stages.briefing import (
-    BriefingAuditRepository,
-    BriefingOutcomeCode,
-)
 from app.config import settings
-from app.db.errors import DatabaseError
 from app.insights.briefing.domain.briefing import (
     latest_completed_week_start,
     now_in_jst,
@@ -44,14 +33,12 @@ from app.insights.briefing.domain.ready import (
     BriefingReadyBuildRejectionReason,
     ReadyForBriefing,
 )
-from app.insights.briefing.errors import BriefingError
 from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.service import BriefingConflict, WeeklyBriefingService
 from app.logfire.stage_span import pipeline_stage_span
 from app.models.category import Category
 from app.queue.brokers import broker_briefing
 from app.queue.messages.briefing import BriefingTaskInput
-from app.queue.retry import is_last_attempt
 from app.queue.schedule import CRON_WEEKLY_BRIEFING
 from app.shared.revalidate import FrontendRevalidateNotifier
 
@@ -68,20 +55,12 @@ logger = structlog.get_logger(__name__)
 async def dispatch_weekly_briefings(ctx: Context = TaskiqDepends()) -> None:
     """JST 月曜 00:05、直近完了週の全カテゴリ briefing を subtask として kiq する。
 
-    カテゴリ取得失敗は全体失敗として re-raise する。カテゴリ単位 enqueue 失敗は
-    監査して続行し、最後に count summary を焼く。
+    カテゴリ取得失敗は全体失敗として raise する。カテゴリ単位 enqueue 失敗は
+    log に残して続行し、最後に件数を log に出す。
     """
     session_factory: async_sessionmaker[AsyncSession] = ctx.state.session_factory
     week_start = latest_completed_week_start(now_in_jst())
-    try:
-        categories = await _load_briefing_categories(session_factory)
-    except Exception as exc:
-        await _append_dispatch_category_master_load_failed_audit(
-            session_factory,
-            week_start=week_start,
-            exc=exc,
-        )
-        raise
+    categories = await _load_briefing_categories(session_factory)
 
     enqueued_count = 0
     failed_count = 0
@@ -92,12 +71,6 @@ async def dispatch_weekly_briefings(ctx: Context = TaskiqDepends()) -> None:
             )
         except Exception as exc:
             failed_count += 1
-            await _append_category_enqueue_failed_audit(
-                session_factory,
-                week_start=week_start,
-                category_id=category.id,
-                exc=exc,
-            )
             logger.warning(
                 "briefing_category_enqueue_failed",
                 week_start=week_start.isoformat(),
@@ -108,19 +81,7 @@ async def dispatch_weekly_briefings(ctx: Context = TaskiqDepends()) -> None:
             continue
 
         enqueued_count += 1
-        await _append_category_enqueued_audit(
-            session_factory,
-            week_start=week_start,
-            category_id=category.id,
-        )
 
-    await _append_dispatch_completed_audit(
-        session_factory,
-        week_start=week_start,
-        selected_category_count=len(categories),
-        enqueued_category_count=enqueued_count,
-        failed_category_count=failed_count,
-    )
     logger.info(
         "briefing_dispatch_completed",
         week_start=week_start.isoformat(),
@@ -139,112 +100,6 @@ async def _load_briefing_categories(
         return list(rows.scalars().all())
 
 
-async def _append_dispatch_completed_audit(
-    session_factory: async_sessionmaker[AsyncSession],
-    *,
-    week_start: date,
-    selected_category_count: int,
-    enqueued_category_count: int,
-    failed_category_count: int,
-) -> None:
-    try:
-        async with session_factory() as session:
-            await BriefingAuditRepository(session).append_dispatch_completed(
-                week_start=week_start,
-                selected_category_count=selected_category_count,
-                enqueued_category_count=enqueued_category_count,
-                failed_category_count=failed_category_count,
-            )
-            await session.commit()
-    except Exception as exc:
-        logger.info(
-            "briefing_dispatch_audit_dropped",
-            outcome_code=BriefingOutcomeCode.DISPATCH_COMPLETED.value,
-            week_start=week_start.isoformat(),
-            error_class=exception_fqn(exc),
-            error_message=str(exc) or None,
-        )
-        record_audit_dropped(BriefingAuditRepository.STAGE)
-
-
-async def _append_category_enqueued_audit(
-    session_factory: async_sessionmaker[AsyncSession],
-    *,
-    week_start: date,
-    category_id: int,
-) -> None:
-    try:
-        async with session_factory() as session:
-            await BriefingAuditRepository(session).append_category_enqueued(
-                week_start=week_start,
-                category_id=category_id,
-            )
-            await session.commit()
-    except Exception as exc:
-        logger.info(
-            "briefing_dispatch_audit_dropped",
-            outcome_code=BriefingOutcomeCode.CATEGORY_ENQUEUED.value,
-            week_start=week_start.isoformat(),
-            category_id=category_id,
-            error_class=exception_fqn(exc),
-            error_message=str(exc) or None,
-        )
-        record_audit_dropped(BriefingAuditRepository.STAGE)
-
-
-async def _append_category_enqueue_failed_audit(
-    session_factory: async_sessionmaker[AsyncSession],
-    *,
-    week_start: date,
-    category_id: int,
-    exc: BaseException,
-) -> None:
-    try:
-        async with session_factory() as session:
-            await BriefingAuditRepository(session).append_category_enqueue_failed(
-                week_start=week_start,
-                category_id=category_id,
-                exc=exc,
-            )
-            await session.commit()
-    except Exception as audit_exc:
-        logger.info(
-            "briefing_dispatch_audit_dropped",
-            outcome_code=BriefingOutcomeCode.CATEGORY_ENQUEUE_FAILED.value,
-            week_start=week_start.isoformat(),
-            category_id=category_id,
-            error_class=exception_fqn(audit_exc),
-            error_message=str(audit_exc) or None,
-        )
-        record_audit_dropped(BriefingAuditRepository.STAGE)
-
-
-async def _append_dispatch_category_master_load_failed_audit(
-    session_factory: async_sessionmaker[AsyncSession],
-    *,
-    week_start: date,
-    exc: BaseException,
-) -> None:
-    try:
-        async with session_factory() as session:
-            await BriefingAuditRepository(
-                session
-            ).append_dispatch_category_master_load_failed(
-                week_start=week_start,
-                exc=exc,
-            )
-            await session.commit()
-    except Exception as audit_exc:
-        logger.info(
-            "briefing_dispatch_audit_dropped",
-            outcome_code=BriefingOutcomeCode.DISPATCH_CATEGORY_MASTER_LOAD_FAILED.value,
-            week_start=week_start.isoformat(),
-            error_class=exception_fqn(audit_exc),
-            error_message=str(audit_exc) or None,
-        )
-        record_audit_dropped(BriefingAuditRepository.STAGE)
-
-
 @broker_briefing.task(
     task_name="generate_briefing_for_category",
     timeout=300,
@@ -255,7 +110,7 @@ async def generate_briefing_for_category(
     input_: BriefingTaskInput,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """1 カテゴリ × 1 週の briefing を生成する。失敗は監査して raise する。"""
+    """1 カテゴリ × 1 週の briefing を生成する。失敗は raise する。"""
     with pipeline_stage_span(Stage.BRIEFING, op="generate_briefing_for_category"):
         session_factory: async_sessionmaker[AsyncSession] = ctx.state.session_factory
         notifier = FrontendRevalidateNotifier.from_settings(settings)
@@ -264,70 +119,36 @@ async def generate_briefing_for_category(
         service = WeeklyBriefingService(
             session_factory, ctx.state.briefing_generator, notifier
         )
-        # 失敗は監査に焼いてから raise し、taskiq の retry/failure tracking を維持。
-        # is_last_attempt(ctx) で give-up timing を判定し、retry 上限到達時のみ
-        # payload.retry_exhausted=True を焼く。
-        try:
-            async with session_factory() as session:
-                facts = await BriefingRepository(session).load_ready_build_facts(
-                    week_start=input_.week_start, category_id=input_.category_id
-                )
-            build_result = ReadyForBriefing.from_facts(
-                week_start=input_.week_start,
-                category_id=input_.category_id,
-                facts=facts,
+        async with session_factory() as session:
+            facts = await BriefingRepository(session).load_ready_build_facts(
+                week_start=input_.week_start, category_id=input_.category_id
             )
-            if build_result is BriefingReadyBuildRejectionReason.ALREADY_GENERATED:
-                # 既存 briefing あり = benign な冪等 skip。監査に焼かず log で観測する。
-                logger.info(
-                    "briefing_subtask_skipped_existing",
-                    week_start=input_.week_start.isoformat(),
-                    category_id=input_.category_id,
-                )
-                return
-            if build_result is BriefingReadyBuildRejectionReason.NO_ARTICLES:
-                logger.info(
-                    "briefing_skip_no_articles",
-                    week_start=input_.week_start.isoformat(),
-                    category_id=input_.category_id,
-                )
-                async with session_factory() as session:
-                    await BriefingAuditRepository(
-                        session
-                    ).append_generation_input_empty(
-                        week_start=input_.week_start,
-                        category_id=input_.category_id,
-                    )
-                    await session.commit()
-                return
-            if build_result is BriefingReadyBuildRejectionReason.CATEGORY_MISSING:
-                # dispatch 後に削除された場合だけ起きるため、失敗として表に出す。
-                raise ValueError(f"Category not found: id={input_.category_id}")
-            outcome = await service.execute(build_result)
-        except Exception as exc:
-            async with session_factory() as session:
-                repo = BriefingAuditRepository(session)
-                retry_exhausted = True if is_last_attempt(ctx) else None
-                if isinstance(exc, (BriefingError, DatabaseError)):
-                    await repo.append_failure(
-                        week_start=input_.week_start,
-                        category_id=input_.category_id,
-                        exc=exc,
-                        retry_exhausted=retry_exhausted,
-                        ai_model=service._llm.MODEL,
-                    )
-                else:
-                    await repo.append_unexpected_failure(
-                        week_start=input_.week_start,
-                        category_id=input_.category_id,
-                        exc=exc,
-                        retry_exhausted=retry_exhausted,
-                        ai_model=service._llm.MODEL,
-                    )
-                await session.commit()
-            raise
+        build_result = ReadyForBriefing.from_facts(
+            week_start=input_.week_start,
+            category_id=input_.category_id,
+            facts=facts,
+        )
+        if build_result is BriefingReadyBuildRejectionReason.ALREADY_GENERATED:
+            # 既存 briefing あり = benign な冪等 skip。log で観測する。
+            logger.info(
+                "briefing_subtask_skipped_existing",
+                week_start=input_.week_start.isoformat(),
+                category_id=input_.category_id,
+            )
+            return
+        if build_result is BriefingReadyBuildRejectionReason.NO_ARTICLES:
+            logger.info(
+                "briefing_skip_no_articles",
+                week_start=input_.week_start.isoformat(),
+                category_id=input_.category_id,
+            )
+            return
+        if build_result is BriefingReadyBuildRejectionReason.CATEGORY_MISSING:
+            # dispatch 後に削除された場合だけ起きるため、失敗として表に出す。
+            raise ValueError(f"Category not found: id={input_.category_id}")
+        outcome = await service.execute(build_result)
         if isinstance(outcome, BriefingConflict):
-            # race 敗北は業務正常 (勝者が SUCCEEDED audit / revalidate を担う)。
+            # race 敗北は業務正常 (勝者が revalidate を担う)。
             logger.info(
                 "briefing_subtask_conflict",
                 week_start=outcome.week_start.isoformat(),

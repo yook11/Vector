@@ -155,7 +155,7 @@ async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
 
     domain VO の Field(max_length=MAX_KEY_ARTICLES_PER_BRIEFING) で巨大 briefing
     が DB に入る前に reject される (red-team F10 二次防衛)。violations に
-    "key_articles" を含む自己記述化メッセージが焼かれ、audit から直接読める。
+    "key_articles" を含む自己記述化メッセージが焼かれ、例外から直接読める。
     """
     oversized = {
         **_VALID_PAYLOAD,
