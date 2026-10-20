@@ -1,6 +1,6 @@
 """``app.logfire.stage_span.pipeline_stage_span`` helper の不変条件 (正本)。
 
-非 AI worker 工程の span 契約 — span_name 固定 / stage 属性が Stage の wire 値 /
+非 AI worker 工程の span 契約 — span_name 固定 / stage 属性は渡した文字列 /
 op と任意 ID の attribute / 持たない ID は載らない / 例外貫通 / PII 非含有 — を
 capfire の exported span を oracle に固定する。task 配線テストはこの helper の上に
 乗るため、helper 自体の契約はここを正本とする。
@@ -16,7 +16,6 @@ import asyncio
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.audit.domain.event import Stage
 from app.insights.briefing.errors import BriefingConfigurationError
 from app.logfire.stage_span import pipeline_stage_span
 from tests.logfire._span_helpers import (
@@ -39,11 +38,7 @@ _ALLOWED_DOMAIN_KEYS = {
     "op",
     "source_id",
     "article_id",
-    "failure_kind",
-    "code",
-    "retryability",
     "error_class",
-    "failure_action",
 }
 
 
@@ -52,21 +47,19 @@ _ALLOWED_DOMAIN_KEYS = {
 
 def test_span_name_is_pipeline_stage(capfire: CaptureLogfire) -> None:
     """span は ``pipeline_stage`` 名でちょうど 1 件出る (低 cardinality 固定)。"""
-    with pipeline_stage_span(Stage.TREND_DISCOVERY, op="run_trend_discovery"):
+    with pipeline_stage_span("trend_discovery", op="run_trend_discovery"):
         pass
     one_span_named(capfire, _SPAN_NAME)
 
 
-# 不変条件 2: stage 属性は Stage の wire 値 (enum object でなく str)
+# 不変条件 2: stage 属性は渡した文字列のまま載る
 
 
-def test_stage_attribute_is_enum_wire_value(capfire: CaptureLogfire) -> None:
-    """stage 属性は ``Stage.ACQUISITION.value`` = "acquisition" (DB CHECK wire 値)。"""
-    with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+def test_stage_attribute_is_passed_string(capfire: CaptureLogfire) -> None:
+    """stage 属性は呼び出し元が渡した文字列のまま載る。"""
+    with pipeline_stage_span("acquisition", op="acquire_source", source_id=1):
         pass
     attrs = pipeline_stage_attrs(capfire)
-    # stage は DB CHECK と一致する wire 値で載る (enum repr でない)。
-    assert attrs["stage"] == Stage.ACQUISITION.value
     assert attrs["stage"] == "acquisition"
 
 
@@ -75,7 +68,7 @@ def test_stage_attribute_is_enum_wire_value(capfire: CaptureLogfire) -> None:
 
 def test_source_scoped_attributes(capfire: CaptureLogfire) -> None:
     """acquisition 形 (source_id あり / article_id なし)。"""
-    with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=42):
+    with pipeline_stage_span("acquisition", op="acquire_source", source_id=42):
         pass
     attrs = pipeline_stage_attrs(capfire)
     assert attrs["op"] == "acquire_source"
@@ -88,7 +81,7 @@ def test_source_scoped_attributes(capfire: CaptureLogfire) -> None:
 
 def test_article_scoped_attributes(capfire: CaptureLogfire) -> None:
     """completion 形 (article_id あり / source_id なし)。"""
-    with pipeline_stage_span(Stage.COMPLETION, op="scrape_html_body", article_id=7):
+    with pipeline_stage_span("completion", op="scrape_html_body", article_id=7):
         pass
     attrs = pipeline_stage_attrs(capfire)
     assert attrs["op"] == "scrape_html_body"
@@ -102,19 +95,16 @@ def test_article_scoped_attributes(capfire: CaptureLogfire) -> None:
 @pytest.mark.parametrize(
     ("stage", "op"),
     [
-        (Stage.BRIEFING, "generate_briefing_for_category"),
-        (Stage.TREND_DISCOVERY, "run_trend_discovery"),
-        (Stage.BACKFILL_CURATE, "backfill_curations"),
-        (Stage.BACKFILL_ASSESS, "backfill_assessments"),
-        (Stage.BACKFILL_EMBED, "backfill_embeddings"),
+        ("briefing", "generate_briefing_for_category"),
+        ("trend_discovery", "run_trend_discovery"),
     ],
 )
-def test_run_scoped_attributes(capfire: CaptureLogfire, stage: Stage, op: str) -> None:
+def test_run_scoped_attributes(capfire: CaptureLogfire, stage: str, op: str) -> None:
     """ID を持たない run 単位工程は stage / op のみで、ID attribute は載らない。"""
     with pipeline_stage_span(stage, op=op):
         pass
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["stage"] == stage.value
+    assert attrs["stage"] == stage
     assert attrs["op"] == op
     assert "source_id" not in attrs
     assert "article_id" not in attrs
@@ -126,7 +116,7 @@ def test_run_scoped_attributes(capfire: CaptureLogfire, stage: Stage, op: str) -
 def test_exception_propagates_and_records_type(capfire: CaptureLogfire) -> None:
     """span 内 raise は貫通し、例外型が OTel exception event に乗る。"""
     with pytest.raises(ValueError, match="boom"):
-        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+        with pipeline_stage_span("acquisition", op="acquire_source", source_id=1):
             raise ValueError("boom")
     event = exception_event(one_span_named(capfire, _SPAN_NAME))
     assert event is not None and event["attributes"]["exception.type"] == "ValueError"
@@ -138,112 +128,78 @@ def test_exception_propagates_and_records_type(capfire: CaptureLogfire) -> None:
 def test_exception_escalates_level_to_error(capfire: CaptureLogfire) -> None:
     """span 内 raise で span の logfire level が error (17) になる。"""
     with pytest.raises(ValueError, match="boom"):
-        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+        with pipeline_stage_span("acquisition", op="acquire_source", source_id=1):
             raise ValueError("boom")
     span = one_span_named(capfire, _SPAN_NAME)
     assert span["attributes"]["logfire.level_num"] == _LEVEL_ERROR
 
 
-# 不変条件 7b: 貫通例外は failure projection 由来の失敗分類属性を span に焼く
+# 不変条件 7b: 貫通例外は例外型 (error_class) を span の属性に焼く
 
 
-def test_generic_exception_records_unknown_failure_attributes(
-    capfire: CaptureLogfire,
-) -> None:
-    """分類不能な貫通例外は catch-all projection の値が span に載る。"""
+def test_exception_records_error_class(capfire: CaptureLogfire) -> None:
+    """貫通例外の完全修飾の型名が span の ``error_class`` に載る。"""
     with pytest.raises(ValueError, match="boom"):
-        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+        with pipeline_stage_span("acquisition", op="acquire_source", source_id=1):
             raise ValueError("boom")
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "unknown"
-    assert attrs["code"] == "unexpected_error"
-    assert attrs["retryability"] == "unknown"
     assert attrs["error_class"] == "builtins.ValueError"
-    # drop_article でないため failure_action は載らない (条件付き属性)。
-    assert "failure_action" not in attrs
 
 
-def test_marker_exception_records_classified_failure_attributes(
+# 不変条件 7c: 協調キャンセルは失敗ではない (error_class を載せない)
+
+
+def test_cancellation_does_not_record_error_class(
     capfire: CaptureLogfire,
 ) -> None:
-    """marker 例外は project_failure の分類値 (unknown でない) が span に載る。"""
-    exc = BriefingConfigurationError("missing key")
-    with pytest.raises(BriefingConfigurationError):
-        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
-            raise exc
-    attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "configuration"
-    assert attrs["code"] == "briefing_generation_llm_configuration_invalid"
-    assert attrs["retryability"] == "non_retryable"
-    assert attrs["error_class"].endswith(".BriefingConfigurationError")
-
-
-# 不変条件 7c: 協調キャンセルは失敗ではない (失敗分類属性を載せない)
-
-
-def test_cancellation_does_not_record_failure_attributes(
-    capfire: CaptureLogfire,
-) -> None:
-    """CancelledError は ``except Exception`` を素通りし失敗分類属性を載せない。"""
+    """CancelledError は ``except Exception`` を素通りし error_class を載せない。"""
     with pytest.raises(asyncio.CancelledError):
-        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+        with pipeline_stage_span("acquisition", op="acquire_source", source_id=1):
             raise asyncio.CancelledError
     attrs = pipeline_stage_attrs(capfire)
-    assert "failure_kind" not in attrs
-    assert "code" not in attrs
     assert "error_class" not in attrs
-    assert "retryability" not in attrs
 
 
 # 不変条件 7d: 明示 record_failure (握り潰し経路) と no-override
 
 
-def test_record_failure_via_recorder_sets_classified_attributes(
+def test_record_failure_via_recorder_sets_error_class(
     capfire: CaptureLogfire,
 ) -> None:
-    """握り潰し経路: raise せず ``record_failure`` を呼ぶと分類属性が span に載る。"""
+    """握り潰し経路: raise せず ``record_failure`` を呼ぶと error_class が載る。"""
     exc = BriefingConfigurationError("missing key")
-    with pipeline_stage_span(
-        Stage.ACQUISITION, op="acquire_source", source_id=1
-    ) as stage:
+    with pipeline_stage_span("acquisition", op="acquire_source", source_id=1) as stage:
         stage.record_failure(exc)
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "configuration"
-    assert attrs["code"] == "briefing_generation_llm_configuration_invalid"
-    assert attrs["retryability"] == "non_retryable"
     assert attrs["error_class"].endswith(".BriefingConfigurationError")
 
 
 def test_record_failure_is_no_override(capfire: CaptureLogfire) -> None:
-    """record_failure は一度だけ焼く。二度目の例外では元の分類を上書きしない。"""
+    """record_failure は一度だけ焼き、二度目の例外で error_class を上書きしない。"""
     first = BriefingConfigurationError("missing key")
-    with pipeline_stage_span(
-        Stage.ACQUISITION, op="acquire_source", source_id=1
-    ) as stage:
+    with pipeline_stage_span("acquisition", op="acquire_source", source_id=1) as stage:
         stage.record_failure(first)
         stage.record_failure(ValueError("secondary"))
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "configuration"
     assert attrs["error_class"].endswith(".BriefingConfigurationError")
 
 
 def test_explicit_record_then_propagating_secondary_keeps_original(
     capfire: CaptureLogfire,
 ) -> None:
-    """明示記録後に別例外が貫通しても、backstop は元の分類を上書きしない。
+    """明示記録後に別例外が貫通しても、backstop は元の error_class を上書きしない。
 
-    acquire_source の二次例外 (handler/監査 DB ダウン) を模す: 先に業務例外を記録し、
-    後から別例外が span を貫通しても span の error_class は最初の業務例外のまま。
+    二次例外を模す: 先に業務例外を記録し、後から別例外が span を貫通しても
+    span の error_class は最初の業務例外のまま。
     """
     business = BriefingConfigurationError("missing key")
-    with pytest.raises(RuntimeError, match="audit down"):
+    with pytest.raises(RuntimeError, match="secondary failure"):
         with pipeline_stage_span(
-            Stage.ACQUISITION, op="acquire_source", source_id=1
+            "acquisition", op="acquire_source", source_id=1
         ) as stage:
             stage.record_failure(business)
-            raise RuntimeError("audit down")
+            raise RuntimeError("secondary failure")
     attrs = pipeline_stage_attrs(capfire)
-    assert attrs["failure_kind"] == "configuration"
     assert attrs["error_class"].endswith(".BriefingConfigurationError")
 
 
@@ -253,7 +209,7 @@ def test_explicit_record_then_propagating_secondary_keeps_original(
 def test_no_unexpected_attributes(capfire: CaptureLogfire) -> None:
     """source_id / article_id を両方渡しても、ドメイン attribute は許可キー集合内。"""
     with pipeline_stage_span(
-        Stage.COMPLETION, op="scrape_html_body", source_id=1, article_id=2
+        "completion", op="scrape_html_body", source_id=1, article_id=2
     ):
         pass
     keys = domain_attr_keys(pipeline_stage_attrs(capfire))
@@ -268,30 +224,7 @@ def test_no_unexpected_attributes_on_failure_path(capfire: CaptureLogfire) -> No
     機微文字列を含む例外でも、属性キーが許可集合内に留まることだけを固定する。
     """
     with pytest.raises(ValueError):
-        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+        with pipeline_stage_span("acquisition", op="acquire_source", source_id=1):
             raise ValueError("token=sk-secret https://internal/secret?q=1")
     keys = domain_attr_keys(pipeline_stage_attrs(capfire))
     assert keys <= _ALLOWED_DOMAIN_KEYS, f"unexpected attribute keys: {keys}"
-
-
-def test_span_omits_absent_failure_classification(capfire, monkeypatch) -> None:
-    """未設定の分類属性をspanへ補完せず、失敗コードを記録する。"""
-    from app.audit.failure_projection import FailureProjection
-    from app.logfire import failure_attrs
-
-    projection = FailureProjection(
-        failure_kind=None,
-        retryability=None,
-        failure_action=None,
-        code="ai_provider_transport_error",
-    )
-    monkeypatch.setattr(failure_attrs, "project_failure", lambda exc: projection)
-
-    with pytest.raises(RuntimeError):
-        with pipeline_stage_span(Stage.TREND_DISCOVERY, op="run_trend_discovery"):
-            raise RuntimeError("failed")
-
-    attrs = pipeline_stage_attrs(capfire)
-    assert "failure_kind" not in attrs
-    assert "retryability" not in attrs
-    assert attrs["code"] == "ai_provider_transport_error"

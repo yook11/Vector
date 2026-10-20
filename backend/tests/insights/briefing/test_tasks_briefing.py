@@ -10,7 +10,6 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.audit.domain.event import Stage
 from app.insights.briefing.domain.ready import (
     BriefingArticle,
     BriefingReadyBuildFacts,
@@ -371,5 +370,5 @@ class TestGenerateBriefingForCategoryStageSpan:
             )
 
         attrs = pipeline_stage_attrs(capfire)
-        assert attrs["stage"] == Stage.BRIEFING.value  # == "briefing"
+        assert attrs["stage"] == "briefing"
         assert attrs["op"] == "generate_briefing_for_category"

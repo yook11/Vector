@@ -23,7 +23,6 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, ValidationError
 
-from app.audit.domain.event import Stage
 from app.logfire.redaction import (
     ExceptionRedactingProcessor,
     _find_main_wrapper,
@@ -69,7 +68,7 @@ def _emit_worker_exception(capfire: CaptureLogfire, *, install: bool) -> Readabl
     if install:
         install_exception_redaction()
     with pytest.raises(RuntimeError):  # noqa: PT012
-        with pipeline_stage_span(Stage.CURATION, op="t"):
+        with pipeline_stage_span("curation", op="t"):
             raise RuntimeError(_MESSAGE)
     return _final_pipeline_span(capfire)
 
@@ -130,7 +129,7 @@ def test_worker_validation_error_input_redacted(capfire: CaptureLogfire) -> None
     """
     install_exception_redaction()
     with pytest.raises(ValidationError):  # noqa: PT012
-        with pipeline_stage_span(Stage.CURATION, op="t"):
+        with pipeline_stage_span("curation", op="t"):
             _IntModel(value=_PII)
     span = _final_pipeline_span(capfire)
 
@@ -190,7 +189,7 @@ async def test_fastapi_server_span_exception_redacted(
 
 def test_normal_span_not_mangled(capfire: CaptureLogfire) -> None:
     install_exception_redaction()
-    with pipeline_stage_span(Stage.CURATION, op="t", source_id=7):
+    with pipeline_stage_span("curation", op="t", source_id=7):
         pass
     span = _final_pipeline_span(capfire)
     assert _exception_event(span) is None

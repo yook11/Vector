@@ -132,7 +132,6 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 | `rejection_code` | ReadyBuildで確定した既存reasonの値。Assessmentの前提不成立は失敗ログへ記録し、再処理を要求しない判断は`message_disposition=completed`で別に示す。 |
 | `reason`, `field`, `record_index` | SQS・イベント入力不正の既存reason、宣言されたfield、0始まりのレコード位置。Assessmentの保存見送りでは固定値`reason=concurrent_write`、DeepSeek応答の打ち切りでは`reason=output_token_limit_reached`も許可する。正常終端の結果は`outcome`、前提不成立は`rejection_code`を使い、例外自由文には再利用しない。 |
 | `code`, `failure_reason` | 既存の例外から取得する。providerの詳細reasonや応答defectを汎用の失敗codeに潰さない。 |
-| `failure_kind`, `retryability` | DB障害など既存の非provider分類に値がある場合のみ記録する。providerの回復分類は廃止し、代替分類やunknownで埋めない。 |
 | `http_status`, `provider_code`, `finish_reason` | 既知SDKの対応属性から取得するstatus/code/終了理由。statusは100〜599の整数。codeは整数または128文字以内の英数字・`_` / `.` / `:` / `-`からなる識別子、終了理由はAssessmentでは§3.3.3の既知値だけを許可する。status/codeは形式が有効なら新しい値も残し、既存分類へ無理に対応付けない。形式外の値は省略し、説明文へ戻さない。 |
 | `error_class`, `error_message`, `frames` | `exc_info`から基底が抽出する外側の例外情報。DeepSeek cleanupでは`exc_info`を渡さず、`error_class`だけを例外型の完全修飾名から明示する。`frames`は`file` / `function` / `line`のみ。外側の原因文が短いcodeでも内側の診断を省略する理由にしない。 |
 | `causes` | 原因の構造化リスト。各要素は例外情報、取得済みの`code` / `failure_reason` / `http_status` / `provider_code` / `error_details`、子の`causes` / `exceptions`のみ。外側と同じ例外構造を使い、取得元を示す`relation`ラベルは付けない。各例外を同じ保護経路に通す。 |

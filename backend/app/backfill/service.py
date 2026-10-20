@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import structlog
 
-from app.audit.domain.event import Stage
 from app.backfill.cleanup import (
     close_aged_out_completions,
     delete_aged_out_curations,
@@ -24,7 +23,6 @@ from app.backfill.policy import (
 from app.backfill.repository import PipelineBacklog
 from app.backfill.targets import BackfillEventTarget
 from app.db.session import SessionFactory
-from app.logfire.stage_span import pipeline_stage_span
 from app.outbox.publishing.event_batch import MAX_BATCH_MESSAGES
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
@@ -84,23 +82,22 @@ async def backfill_curations(
     if not enabled:
         logger.info("backfill_curations_disabled")
         return
-    with pipeline_stage_span(Stage.BACKFILL_CURATE, op="backfill_curations"):
-        before, after = BackfillWindow().boundaries_at(now)
-        cleaned = await delete_aged_out_curations(session_factory, created_before=after)
-        record_aged_out("curation", action="deleted", count=cleaned)
-        async with session_factory() as session:
-            backlog = PipelineBacklog(session)
-            count = await backlog.count_articles_pending_curation(
-                created_before=before,
-                created_after=after,
-            )
-            targets = await backlog.curation_events_pending(
-                created_before=before,
-                created_after=after,
-                limit=CURATIONS_LIMIT,
-            )
-        backlog_gauge.set(count, attributes={"stage": "curation"})
-        await _dispatch(publisher, targets, stage="curation")
+    before, after = BackfillWindow().boundaries_at(now)
+    cleaned = await delete_aged_out_curations(session_factory, created_before=after)
+    record_aged_out("curation", action="deleted", count=cleaned)
+    async with session_factory() as session:
+        backlog = PipelineBacklog(session)
+        count = await backlog.count_articles_pending_curation(
+            created_before=before,
+            created_after=after,
+        )
+        targets = await backlog.curation_events_pending(
+            created_before=before,
+            created_after=after,
+            limit=CURATIONS_LIMIT,
+        )
+    backlog_gauge.set(count, attributes={"stage": "curation"})
+    await _dispatch(publisher, targets, stage="curation")
 
 
 async def backfill_assessments(
@@ -114,25 +111,22 @@ async def backfill_assessments(
     if not enabled:
         logger.info("backfill_assessments_disabled")
         return
-    with pipeline_stage_span(Stage.BACKFILL_ASSESS, op="backfill_assessments"):
-        before, after = BackfillWindow().boundaries_at(now)
-        cleaned = await exclude_aged_out_assessments(
-            session_factory, created_before=after
+    before, after = BackfillWindow().boundaries_at(now)
+    cleaned = await exclude_aged_out_assessments(session_factory, created_before=after)
+    record_aged_out("assessment", action="excluded", count=cleaned)
+    async with session_factory() as session:
+        backlog = PipelineBacklog(session)
+        count = await backlog.count_curations_pending_assessment(
+            created_before=before,
+            created_after=after,
         )
-        record_aged_out("assessment", action="excluded", count=cleaned)
-        async with session_factory() as session:
-            backlog = PipelineBacklog(session)
-            count = await backlog.count_curations_pending_assessment(
-                created_before=before,
-                created_after=after,
-            )
-            targets = await backlog.assessment_events_pending(
-                created_before=before,
-                created_after=after,
-                limit=ASSESSMENTS_LIMIT,
-            )
-        backlog_gauge.set(count, attributes={"stage": "assessment"})
-        await _dispatch(publisher, targets, stage="assessment")
+        targets = await backlog.assessment_events_pending(
+            created_before=before,
+            created_after=after,
+            limit=ASSESSMENTS_LIMIT,
+        )
+    backlog_gauge.set(count, attributes={"stage": "assessment"})
+    await _dispatch(publisher, targets, stage="assessment")
 
 
 async def backfill_embeddings(
@@ -146,25 +140,22 @@ async def backfill_embeddings(
     if not enabled:
         logger.info("backfill_embeddings_disabled")
         return
-    with pipeline_stage_span(Stage.BACKFILL_EMBED, op="backfill_embeddings"):
-        before, after = BackfillWindow().boundaries_at(now)
-        cleaned = await exclude_aged_out_embeddings(
-            session_factory, created_before=after
+    before, after = BackfillWindow().boundaries_at(now)
+    cleaned = await exclude_aged_out_embeddings(session_factory, created_before=after)
+    record_aged_out("embedding", action="excluded", count=cleaned)
+    async with session_factory() as session:
+        backlog = PipelineBacklog(session)
+        count = await backlog.count_analyzed_articles_pending_embedding(
+            created_before=before,
+            created_after=after,
         )
-        record_aged_out("embedding", action="excluded", count=cleaned)
-        async with session_factory() as session:
-            backlog = PipelineBacklog(session)
-            count = await backlog.count_analyzed_articles_pending_embedding(
-                created_before=before,
-                created_after=after,
-            )
-            targets = await backlog.embedding_events_pending(
-                created_before=before,
-                created_after=after,
-                limit=EMBEDDINGS_LIMIT,
-            )
-        backlog_gauge.set(count, attributes={"stage": "embedding"})
-        await _dispatch(publisher, targets, stage="embedding")
+        targets = await backlog.embedding_events_pending(
+            created_before=before,
+            created_after=after,
+            limit=EMBEDDINGS_LIMIT,
+        )
+    backlog_gauge.set(count, attributes={"stage": "embedding"})
+    await _dispatch(publisher, targets, stage="embedding")
 
 
 async def backfill_completions(
@@ -178,23 +169,19 @@ async def backfill_completions(
     if not enabled:
         logger.info("backfill_completions_disabled")
         return
-    # 補完の救済には専用のstageが無いため、補完本体のstageで開く。
-    with pipeline_stage_span(Stage.COMPLETION, op="backfill_completions"):
-        before, after = BackfillWindow().boundaries_at(now)
-        cleaned = await close_aged_out_completions(
-            session_factory, created_before=after
+    before, after = BackfillWindow().boundaries_at(now)
+    cleaned = await close_aged_out_completions(session_factory, created_before=after)
+    record_aged_out("completion", action="closed", count=cleaned)
+    async with session_factory() as session:
+        backlog = PipelineBacklog(session)
+        count = await backlog.count_incomplete_articles_pending_completion(
+            created_before=before,
+            created_after=after,
         )
-        record_aged_out("completion", action="closed", count=cleaned)
-        async with session_factory() as session:
-            backlog = PipelineBacklog(session)
-            count = await backlog.count_incomplete_articles_pending_completion(
-                created_before=before,
-                created_after=after,
-            )
-            targets = await backlog.completion_events_pending(
-                created_before=before,
-                created_after=after,
-                limit=COMPLETIONS_LIMIT,
-            )
-        backlog_gauge.set(count, attributes={"stage": "completion"})
-        await _dispatch(publisher, targets, stage="completion")
+        targets = await backlog.completion_events_pending(
+            created_before=before,
+            created_after=after,
+            limit=COMPLETIONS_LIMIT,
+        )
+    backlog_gauge.set(count, attributes={"stage": "completion"})
+    await _dispatch(publisher, targets, stage="completion")

@@ -2,7 +2,7 @@
 
 from httpx2 import AsyncClient
 
-from app.audit.domain.event import Stage
+from app.models.pipeline_event import Stage
 
 _HEALTH_URL = "/api/v1/admin/pipeline/health"
 

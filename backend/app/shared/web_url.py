@@ -24,7 +24,7 @@ _MAX_LENGTH = 2048
 
 
 class WebUrlInvalidReason(StrEnum):
-    """WebUrl 検証の失敗理由。値だけで原因が読めるよう監査に焼く粒度にする。"""
+    """WebUrl 検証の失敗理由。値だけで原因が読めるようログに載せる粒度にする。"""
 
     URL_NOT_A_STRING = "url_not_a_string"
     URL_EMPTY = "url_empty"
@@ -38,7 +38,7 @@ class WebUrlInvalidError(ValueError):
     ``ValueError`` サブクラスなので ``WebUrl`` の validator 内で raise すると
     pydantic が ``ValidationError`` にラップする (既存 ``WebUrl(x)`` 契約維持)。
     ``WebUrl.from_raw`` はラップせずにそのまま送出する。
-    URL 値などの input は載せず reason タグのみを監査へ流す (PII フリー)。
+    URL 値などの input は載せず reason タグのみをログへ流す (PII フリー)。
     """
 
     MESSAGE: ClassVar[str] = "value is not a valid web URL"

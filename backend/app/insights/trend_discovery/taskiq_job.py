@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from taskiq import AsyncBroker, AsyncTaskiqDecoratedTask, Context, TaskiqDepends
 
-from app.audit.domain.event import Stage
 from app.config import settings
 from app.insights.trend_discovery.service import TrendDiscoveryService
 from app.logfire.stage_span import pipeline_stage_span
@@ -14,7 +13,7 @@ from app.shared.revalidate import FrontendRevalidateNotifier
 
 async def run_trend_discovery(ctx: Context = TaskiqDepends()) -> None:
     """ワーカーのセッションと通知設定を使ってトレンドを生成する。"""
-    with pipeline_stage_span(Stage.TREND_DISCOVERY, op="run_trend_discovery"):
+    with pipeline_stage_span("trend_discovery", op="run_trend_discovery"):
         service = TrendDiscoveryService(ctx.state.session_factory)
         notifier = FrontendRevalidateNotifier.from_settings(settings)
         await service.create(notifier)

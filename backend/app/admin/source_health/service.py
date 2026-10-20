@@ -18,8 +18,8 @@ from app.admin.source_health.schemas import (
     SourceHealthItem,
     SourceHealthResponse,
 )
-from app.audit.domain.event import EventType
 from app.models.news_source import NewsSource
+from app.models.pipeline_event import EventType
 from app.shared.time import utc_now
 
 
