@@ -1,6 +1,6 @@
 """EmbeddingService の DB 統合テスト。
 
-正常系の永続化/audit、並行書き込み時の短絡、AIProviderError の ACL 変換、
+正常系の永続化、並行書き込み時の短絡、AIProviderError の ACL 変換、
 ``EmbeddingResponseInvalidError`` の透過を確認する。
 """
 
@@ -43,7 +43,6 @@ from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
-from app.models.pipeline_event import PipelineEvent
 
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -145,20 +144,6 @@ def _make_ready(
     )
 
 
-async def _fetch_audit(db_session: AsyncSession, article_id: int) -> PipelineEvent:
-    rows = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.article_id == article_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 1, f"expected exactly 1 audit row, got {len(rows)}"
-    return rows[0]
-
-
 @pytest.mark.asyncio
 async def test_execute_persists_embedding_on_success(
     db_session: AsyncSession,
@@ -167,7 +152,7 @@ async def test_execute_persists_embedding_on_success(
     sample_categories: list[Category],
     embedding_logger,
 ) -> None:
-    """ベクトルと成功監査の保存完了後にSAVEDを返す。"""
+    """ベクトルの保存完了後にSAVEDを返す。"""
     article = await _build_article(
         db_session, sample_source, url="https://example.com/embed-ok"
     )
@@ -192,14 +177,6 @@ async def test_execute_persists_embedding_on_success(
     assert refetched is not None
     assert refetched.embedding is not None
 
-    # 成功 audit が 1 行焼かれていること
-    ev = await _fetch_audit(db_session, article_id)
-    assert ev.event_type == "succeeded"
-    assert ev.outcome_code == "embedding_completed"
-    assert ev.retryability is None
-    assert ev.payload["ai_model"] == "cl-nagoya/ruri-v3-310m"
-    assert ev.payload["vector_dimension"] == EMBEDDING_DIMENSION
-
 
 # 保存前の行ロックで生成済みを確認した場合は上書きせず短絡する。
 
@@ -212,7 +189,7 @@ async def test_execute_shortcircuits_when_already_persisted(
     sample_categories: list[Category],
     embedding_logger,
 ) -> None:
-    """Ready構築後に保存されたベクトルを上書きせず、成功監査も重複させない。"""
+    """Ready構築後に保存されたベクトルを上書きしない。"""
     preexisting_vector = [0.4] * EMBEDDING_DIMENSION
     article = await _build_article(
         db_session, sample_source, url="https://example.com/concurrent"
@@ -253,18 +230,6 @@ async def test_execute_shortcircuits_when_already_persisted(
     raw = refetched.embedding
     values = raw.to_list() if hasattr(raw, "to_list") else list(raw)
     assert values[0] == pytest.approx(0.4, abs=1e-3)
-
-    # 敗者経路は audit を焼かない
-    rows = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.article_id == article_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 0
 
 
 @pytest.mark.asyncio
@@ -450,18 +415,17 @@ async def test_execute_fails_when_article_is_deleted_during_ai_call(
 
     db_session.expire_all()
     assert await db_session.get(AnalyzedArticleRecord, analyzed_article_id) is None
-    assert (await db_session.execute(select(PipelineEvent))).scalars().all() == []
 
 
 @pytest.mark.asyncio
-async def test_concurrent_services_commit_only_one_vector_and_success_audit(
+async def test_concurrent_services_commit_only_one_vector(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
     embedding_logger,
 ) -> None:
-    """同時にAI処理する2実行でも、保存と成功監査を1回に収める。"""
+    """同時にAI処理する2実行でも、保存を1回に収める。"""
     article = await _build_article(
         db_session, sample_source, url="https://example.com/two-embedding-services"
     )
@@ -500,11 +464,10 @@ async def test_concurrent_services_commit_only_one_vector_and_success_audit(
     assert values[0] == pytest.approx(0.2, abs=1e-3) or values[0] == pytest.approx(
         0.6, abs=1e-3
     )
-    assert (await _fetch_audit(db_session, article_id)).event_type == "succeeded"
 
 
 @pytest.mark.asyncio
-async def test_execute_propagates_lock_timeout_without_success_audit(
+async def test_execute_propagates_lock_timeout_and_saves_after_rollback(
     db_session: AsyncSession,
     test_database_url: str,
     sample_source: NewsSource,
@@ -538,14 +501,13 @@ async def test_execute_propagates_lock_timeout_without_success_audit(
                 logger=embedding_logger,
             )
         assert error.value.orig.sqlstate == "55P03"
-        assert (await db_session.execute(select(PipelineEvent))).scalars().all() == []
         await db_session.rollback()
-        await EmbeddingService(factory).execute(
+        result = await EmbeddingService(factory).execute(
             ready,
             _mock_embedder(),
             analyzable_article_id=article_id,
             logger=embedding_logger,
         )
-        assert (await _fetch_audit(db_session, article_id)).event_type == "succeeded"
+        assert result is EmbeddingCompletion.SAVED
     finally:
         await engine.dispose()

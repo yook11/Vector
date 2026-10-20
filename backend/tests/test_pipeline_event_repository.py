@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import (
+    BackfillPayload,
+    BriefingPayload,
     DispatchPayload,
-    EmbeddingPayload,
 )
 from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
@@ -69,16 +70,16 @@ async def test_append_inserts_row_with_payload_roundtrip(
 ) -> None:
     """失敗の payload を書き込むと、同じ値を JSONB から読み戻せる。"""
     repo = PipelineEventRepository(db_session)
-    payload = EmbeddingPayload(
-        ai_model="gemini-embedding-001",
+    payload = BriefingPayload(
+        ai_model="gemini-2.5-flash",
         error_message="upstream returned 503",
         error_chain=["httpx.HTTPStatusError"],
     )
 
     await repo.append(
-        stage=Stage.EMBEDDING,
+        stage=Stage.BRIEFING,
         event_type=EventType.FAILED,
-        outcome_code="embedding_failed",
+        outcome_code="briefing_generation_failed",
         payload=payload,
         source_id=source_row.id,
     )
@@ -87,12 +88,12 @@ async def test_append_inserts_row_with_payload_roundtrip(
     rows = (await db_session.execute(select(PipelineEvent))).scalars().all()
     assert len(rows) == 1
     row = rows[0]
-    assert row.stage == "embedding"
+    assert row.stage == "briefing"
     assert row.event_type == "failed"
-    assert row.outcome_code == "embedding_failed"
+    assert row.outcome_code == "briefing_generation_failed"
     assert row.source_id == source_row.id
-    assert row.payload["kind"] == "embedding"
-    assert row.payload["ai_model"] == "gemini-embedding-001"
+    assert row.payload["kind"] == "briefing"
+    assert row.payload["ai_model"] == "gemini-2.5-flash"
     assert row.payload["error_message"] == "upstream returned 503"
     assert row.payload["error_chain"] == ["httpx.HTTPStatusError"]
     assert row.retryability is None
@@ -104,12 +105,12 @@ async def test_source_id_auto_filled_from_article_id(
 ) -> None:
     """article_id だけ与えると AnalyzableArticleRecord.source_id を逆引きして埋める。"""
     repo = PipelineEventRepository(db_session)
-    payload = EmbeddingPayload(ai_model="gemini-embedding-001")
+    payload = BackfillPayload(backfill_stage="embed")
 
     await repo.append(
-        stage=Stage.EMBEDDING,
+        stage=Stage.BACKFILL_EMBED,
         event_type=EventType.SUCCEEDED,
-        outcome_code="embedded",
+        outcome_code="backfill_item_enqueued",
         payload=payload,
         article_id=article_row.id,
     )
@@ -125,12 +126,12 @@ async def test_append_persists_retryability(
     db_session: AsyncSession, article_row: AnalyzableArticleRecord
 ) -> None:
     repo = PipelineEventRepository(db_session)
-    payload = EmbeddingPayload(ai_model="gemini-embedding-001")
+    payload = BackfillPayload(backfill_stage="embed")
 
     await repo.append(
-        stage=Stage.EMBEDDING,
+        stage=Stage.BACKFILL_EMBED,
         event_type=EventType.FAILED,
-        outcome_code="ai_provider_transport_error",
+        outcome_code="backfill_item_enqueue_failed",
         payload=payload,
         article_id=article_row.id,
         retryability=Retryability.RETRYABLE,

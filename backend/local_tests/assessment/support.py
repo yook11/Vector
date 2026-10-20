@@ -89,7 +89,6 @@ def assessment_reply(*, category="ai", investor_take="投資判断", key_points=
 class StoredAssessment:
     in_scope: list[dict]
     out_of_scope: list[dict]
-    audits: list[dict]
     outbox: list[dict]
 
 
@@ -103,7 +102,7 @@ def _decode_rows(rows):
 
 
 async def fetch_stored_assessment(database, curation_id):
-    """実アプリ権限の別接続から、対象結果・監査・Outboxの確定済み内容を取得する。"""
+    """実アプリ権限の別接続から、対象結果・Outboxの確定済み内容を取得する。"""
     async with database.connect("vector_app") as connection:
         in_scope = await connection.fetch(
             "SELECT a.id, a.translated_title, a.summary, a.investor_take, "
@@ -117,21 +116,13 @@ async def fetch_stored_assessment(database, curation_id):
             "FROM out_of_scope_articles WHERE curation_id=$1 ORDER BY id",
             curation_id,
         )
-        audits = await connection.fetch(
-            "SELECT id, article_id, event_type, outcome_code, payload "
-            "FROM pipeline_events WHERE stage='assessment' "
-            "AND (payload->>'curation_id')::integer=$1 ORDER BY id",
-            curation_id,
-        )
         outbox = await connection.fetch(
             "SELECT event_id, event_type, schema_version, occurred_at, payload "
             "FROM outbox_events WHERE event_type='article.assessed_in_scope' "
             "AND (payload->>'curation_id')::integer=$1 ORDER BY event_id",
             curation_id,
         )
-    return StoredAssessment(
-        *map(_decode_rows, (in_scope, out_of_scope, audits, outbox))
-    )
+    return StoredAssessment(*map(_decode_rows, (in_scope, out_of_scope, outbox)))
 
 
 async def wait_for_blocked_connection(database, blocker_pid, invocations):

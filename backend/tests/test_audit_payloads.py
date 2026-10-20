@@ -6,31 +6,12 @@ field schema と payload field の所有権を検証する。
 from __future__ import annotations
 
 from app.audit.domain.payloads import (
-    AssessmentPayload,
     BackfillPayload,
     BasePipelineEventPayload,
     BriefingPayload,
-    CurationPayload,
     DispatchPayload,
-    EmbeddingPayload,
     TrendDiscoveryPayload,
 )
-
-
-class TestCurationPayloadReadyBuildFields:
-    """Ready build blocked / failed 用の curation payload field。"""
-
-    def test_ready_build_fields_can_be_set(self) -> None:
-        payload = CurationPayload(
-            target_article_id=123,
-            input_content_length=200_001,
-            max_content_length=200_000,
-        )
-        dumped = payload.model_dump(mode="json")
-
-        assert dumped["target_article_id"] == 123
-        assert dumped["input_content_length"] == 200_001
-        assert dumped["max_content_length"] == 200_000
 
 
 class TestDispatchPayloadAuditKeys:
@@ -150,12 +131,7 @@ class TestPayloadFieldOwnership:
     """top-level column にしない stage-local field の所有権を固定する。"""
 
     def test_failure_attributes_are_stage_payload_fields(self) -> None:
-        stage_payloads = (
-            CurationPayload,
-            AssessmentPayload,
-            EmbeddingPayload,
-            BriefingPayload,
-        )
+        stage_payloads = (BriefingPayload,)
         for payload_cls in stage_payloads:
             assert "failure_kind" in payload_cls.model_fields
             assert "failure_action" in payload_cls.model_fields
@@ -166,43 +142,3 @@ class TestPayloadFieldOwnership:
         assert "failure_action" not in DispatchPayload.model_fields
         assert "failure_kind" not in TrendDiscoveryPayload.model_fields
         assert "failure_action" not in TrendDiscoveryPayload.model_fields
-
-    def test_failure_reason_owned_by_cause_axis_payloads(self) -> None:
-        # 原因詳細 (provider reason 値) を焼くのは AI 分析 3 stage
-        # (curation / assessment / embedding) のみ。それ以外の stage は reason 軸を
-        # 持たないため failure_reason field を持たない。
-        cause_axis_payloads = (
-            CurationPayload,
-            AssessmentPayload,
-            EmbeddingPayload,
-        )
-        for payload_cls in cause_axis_payloads:
-            assert "failure_reason" in payload_cls.model_fields
-            # provider 由来でない失敗のため default は None。
-            assert payload_cls().failure_reason is None
-
-        payloads_without_failure_reason = (
-            BasePipelineEventPayload,
-            DispatchPayload,
-            BriefingPayload,
-            TrendDiscoveryPayload,
-        )
-        for payload_cls in payloads_without_failure_reason:
-            assert "failure_reason" not in payload_cls.model_fields
-
-    def test_injection_markers_present_owned_by_input_baking_payloads(self) -> None:
-        """``injection_markers_present`` は外部入力を焼く curation だけが持ち、
-        他 payload・base には載せない (普遍属性ではない)。
-        """
-        assert "injection_markers_present" in CurationPayload.model_fields
-
-        payloads_without_flag = (
-            BasePipelineEventPayload,
-            DispatchPayload,
-            AssessmentPayload,
-            EmbeddingPayload,
-            BriefingPayload,
-            TrendDiscoveryPayload,
-        )
-        for payload_cls in payloads_without_flag:
-            assert "injection_markers_present" not in payload_cls.model_fields

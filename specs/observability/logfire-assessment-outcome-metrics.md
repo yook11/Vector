@@ -8,8 +8,8 @@ AssessmentはSQS / LambdaのConsumerで実行する。旧Taskiqのtask・retry�
 
 | result | 計測境界 |
 |---|---|
-| `in_scope` | Serviceが対象内結果・成功監査・後続Outboxを同一transactionでcommitした後 |
-| `out_of_scope` | Serviceが対象外結果・成功監査を同一transactionでcommitした後 |
+| `in_scope` | Serviceが対象内結果・後続Outboxを同一transactionでcommitした後 |
+| `out_of_scope` | Serviceが対象外結果をcommitした後 |
 | `failed` | Consumerが処理例外を受け、失敗後処理を開始したとき |
 
 Consumerの失敗計測にはDB障害も含む。旧Taskiq専用の`infra_error`分類は使わない。
@@ -25,9 +25,9 @@ Logfire属性は`result`だけとし、記事ID・入力値・例外本文を載
 
 分母が0の窓は比率を計算しない。CloudWatchの既存失敗率alarmは維持し、旧Redis Streamの停止検知・観測alarmは撤去する。
 
-失敗監査の分類・秘匿・元例外の伝播は[Assessment Consumer仕様](../pipeline/assessment-consumer.md)に従う。
-失敗後処理では計測・監査・provider枯渇通知を独立して試み、通常の二次障害で元例外を置き換えない。
+失敗の分類・元例外の伝播は[Assessment Consumer仕様](../pipeline/assessment-consumer.md)に従う。
+失敗後処理では計測・provider枯渇通知を独立して試み、通常の二次障害で元例外を置き換えない。
 
 ## 検証
 
-結果と属性の契約は通常の単体テスト、保存と成功監査・Outboxの原子性はDBテスト、通知とカテゴリー初期化はローカルテストで確認する。
+結果と属性の契約は通常の単体テスト、保存とOutboxの原子性はDBテスト、通知とカテゴリー初期化はローカルテストで確認する。

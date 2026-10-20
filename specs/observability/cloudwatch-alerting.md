@@ -148,7 +148,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - 症状: AI provider の利用枠が尽き、以後の AI 処理が枠回復まで全て失敗する状態。一時的な rate limit とは区別する(翻訳層が既に区別済み)。
   - `AIProviderResponseError`(reason `insufficient_balance`) — 残高切れ。今の翻訳層は出さないが、監視には残す。アクション: 残高チャージ。
   - `AIProviderResponseError`(reason `quota_exhausted`) — Gemini の quota / daily 枠切れ。アクション: 枠リセット待ちか tier 引き上げの判断。
-- Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {insufficient_balance, quota_exhausted}、provider は gemini だけ(≤ 2 系列)。kind は provider error の `reason` をそのまま使う: audit の failure_reason と同一語彙になり、アラート後の調査を 1 つの文字列の grep で metric → 監査まで追える。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
+- Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {insufficient_balance, quota_exhausted}、provider は gemini だけ(≤ 2 系列)。kind は provider error の `reason` をそのまま使う。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
 - 条件: Sum >= 1、period 15min、1 evaluation period。`TreatMissingData = notBreaching`(平常時はデータポイントゼロが正常)。
 - 通知は ALARM のみとし、この alarm には ok_actions を付けない。metric は枯渇エラー発生時にしか存在せず、退避機構が再試行自体を止めるため、チャージしなくても alarm は OK へ戻る = OK 復帰は残高回復を意味しない。チャージ(provider 側での対応)を済ませたかは対応した本人が把握しており、復旧通知は誤解を招くだけ。未チャージのまま退避後の再試行が再び枯渇すれば OK→ALARM の遷移が再発し、リマインダーとして再通知される。
 - スコープは analysis 3 工程(curation / assessment / embedding)と agent(Q&A)の provider 呼び出しの両方。agent runtime は同じ翻訳層を再利用しているため語彙は共通。emit point は analysis 側 = 各 stage の failure handling 境界、agent 側 = runtime の分類確定境界(`classified_error` 確定点)+ internal query embedding の翻訳確定点(runtime を経由しない唯一の provider 呼び出し経路のため個別に emit する)。

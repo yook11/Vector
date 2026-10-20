@@ -30,8 +30,8 @@ class CategoryEnumDatabaseMismatchError(Exception):
     slug が DB に存在しない不変条件の破れ。
 
     domain marker(``AssessmentError`` 系)ではない。意図的に marker 階層の外に置き、
-    failure handler の marker 分岐に当たらず ``case _:``(想定外 = ``unexpected_error``)
-    に落とすことで「業務上の結果ではなく enum↔DB の不整合バグ」として扱う。
+    失敗の分類で想定外の例外として扱うことで「業務上の結果ではなく enum↔DB の不整合
+    バグ」として扱う。
     ``missing`` は DB に欠けている slug 集合(category slug = PII ではない)。
     """
 
@@ -111,8 +111,8 @@ class AssessmentRepository:
         in_scope = article.assessment_result
         category_id = await self._get_category_id_by_slug(in_scope.category.value)
         if category_id is None:
-            # enum↔DB の不整合 = 不変条件の破れ。marker でない例外を投げ failure
-            # handler の case _: (想定外) に落として unexpected_error として焼く。
+            # enum↔DB の不整合 = 不変条件の破れ。marker でない例外を投げ、失敗の
+            # 分類で想定外の例外として扱う。
             # 通常は起動時 assert_category_catalog_covers_enum が先に fail-fast する。
             raise CategoryEnumDatabaseMismatchError({in_scope.category.value})
 

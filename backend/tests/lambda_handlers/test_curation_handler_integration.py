@@ -22,7 +22,6 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
 from app.models.outbox_event import OutboxEvent
-from app.models.pipeline_event import PipelineEvent
 from tests.iam_fixtures import inject_test_db_signer
 from tests.lambda_handlers.test_curation_handler import valid_body
 
@@ -220,25 +219,6 @@ async def test_mixed_batch_matches_persistence_and_releases_resources(
         ids["signal"],
         ids["after"],
     }
-    audits = await rows(db_session, PipelineEvent)
-    assert len(audits) == 7
-    rejected = {
-        row.payload["target_article_id"]: row
-        for row in audits
-        if row.event_type == "rejected"
-    }
-    assert rejected[999_999].article_id is None
-    for target, reason in [
-        (999_999, CurationReadyBuildRejectionReason.ARTICLE_MISSING),
-        (ids["large"], CurationReadyBuildRejectionReason.CONTENT_TOO_LARGE),
-        (ids["invalid"], CurationReadyBuildRejectionReason.INPUT_INVALID),
-    ]:
-        assert rejected[target].outcome_code == reason.value
-        if target != 999_999:
-            assert rejected[target].article_id == target
-    assert [
-        (row.article_id, row.event_type) for row in audits if row.event_type == "failed"
-    ] == [(ids["failed"], "failed")]
     completions = {
         log["message_id"]: log
         for log in outputs
@@ -266,7 +246,6 @@ async def test_mixed_batch_matches_persistence_and_releases_resources(
     )
     assert again == {"batchItemFailures": []}
     assert len(runtime.requests) == 4
-    assert len(await rows(db_session, PipelineEvent)) == 7
     assert_closed(runtime, invocations=2)
     assert runtime.http_clients[0] is not runtime.http_clients[1]
     assert runtime.engines[0] is not runtime.engines[1]
@@ -289,11 +268,6 @@ async def test_outbox_failure_rolls_back_signal_and_continues_noise(
         assert await rows(db_session, ArticleCuration) == []
         assert await rows(db_session, OutboxEvent) == []
         assert len(await rows(db_session, CurationNoise)) == 1
-        audits = await rows(db_session, PipelineEvent)
-        assert {(row.article_id, row.event_type) for row in audits} == {
-            (signal_id, "failed"),
-            (noise_id, "succeeded"),
-        }
         assert len(await rows(db_session, AnalyzableArticleRecord)) == 2
         assert_closed(runtime)
     finally:
@@ -313,8 +287,6 @@ async def test_provider_content_refusal_is_retryable_at_lambda_without_article_d
     assert await db_session.get(AnalyzableArticleRecord, target) is not None
     assert await rows(db_session, ArticleCuration) == []
     assert await rows(db_session, OutboxEvent) == []
-    (audit,) = await rows(db_session, PipelineEvent)
-    assert (audit.event_type, audit.article_id) == ("failed", target)
     assert_closed(runtime)
 
 
@@ -332,5 +304,4 @@ async def test_cancellation_propagates_after_releasing_invocation_resources(
         )
     assert len(runtime.requests) == 1
     assert await rows(db_session, ArticleCuration) == []
-    assert await rows(db_session, PipelineEvent) == []
     assert_closed(runtime)

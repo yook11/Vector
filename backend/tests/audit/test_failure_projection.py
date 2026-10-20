@@ -60,16 +60,6 @@ def test_project_failure_prefers_marker_projection() -> None:
     )
 
 
-def test_project_marker_failure_classvar_marker_has_no_failure_reason() -> None:
-    """classvar 宣言 marker (briefing / completion / acquisition) は failure_reason
-    を持たない (None)。classvar fallback 経路は reason を焼かない。
-    """
-    projection = project_marker_failure(BriefingConfigurationError("missing key"))
-
-    assert projection is not None
-    assert projection.failure_reason is None
-
-
 def test_failure_projection_no_longer_carries_event_stage() -> None:
     """event stage は audit repository の責務で、projection は分類属性だけを運ぶ。"""
     assert "stage" not in {field.name for field in fields(FailureProjection)}

@@ -1,4 +1,4 @@
-"""実handlerが判定結果を監査・Outboxとともに確定することを確認する。"""
+"""実handlerが判定結果をOutboxとともに確定することを確認する。"""
 
 import pytest
 
@@ -11,10 +11,10 @@ from local_tests.curation.support import (
 
 
 @pytest.mark.asyncio
-async def test_signal_article_saves_curation_audit_and_outbox(
+async def test_signal_article_saves_curation_and_outbox(
     system_database, curation_runtime, gemini_response
 ):
-    """signalの結果・成功監査・Assessment向けOutboxを確定し、noiseは保存しない。"""
+    """signalの結果・Assessment向けOutboxを確定し、noiseは保存しない。"""
     target = await seed_article(
         system_database,
         "https://example.com/signal",
@@ -39,9 +39,6 @@ async def test_signal_article_saves_curation_audit_and_outbox(
         "summary": "データセンター向けの新型アクセラレーターを発表した。",
     }
     assert saved.noises == []
-    assert saved.audits == [
-        {"event_type": "succeeded", "outcome_code": "curated_signal"}
-    ]
     assert saved.outbox_payloads == [
         {
             "curation_id": curation["id"],
@@ -51,10 +48,10 @@ async def test_signal_article_saves_curation_audit_and_outbox(
 
 
 @pytest.mark.asyncio
-async def test_noise_article_saves_noise_and_audit_without_outbox(
+async def test_noise_article_saves_noise_without_outbox(
     system_database, curation_runtime, gemini_response
 ):
-    """noiseの結果と成功監査だけを確定し、Assessment向けOutboxを発行しない。"""
+    """noiseの結果だけを確定し、Assessment向けOutboxを発行しない。"""
     target = await seed_article(
         system_database,
         "https://example.com/noise",
@@ -77,8 +74,5 @@ async def test_noise_article_saves_noise_and_audit_without_outbox(
             "translated_title": "地元のパン屋が2号店を開店",
             "summary": "地元のパン屋が中心街に2号店を開いた。",
         }
-    ]
-    assert saved.audits == [
-        {"event_type": "succeeded", "outcome_code": "curated_noise"}
     ]
     assert saved.outbox_payloads == []

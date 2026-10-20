@@ -18,11 +18,11 @@ Status: 全スライスを実装し、本番で稼働中。旧Taskiq経路は202
 
 - [取得サービス](../../backend/app/collection/article_acquisition/service.py)と[本文補完サービス](../../backend/app/collection/article_completion/service.py): 記事の保存とOutbox記録を同じトランザクションで確定する。スライス5で両発行元を共通の`AnalyzableArticleCreated`へ接続した。
 - [ReadyForCuration](../../backend/app/analysis/curation/domain/ready.py): DB上の記事の存在、Signal／Noiseの保存済み状態、タイトル・本文の制約を判定する。本文の上限は収集の`ARTICLE_BODY_MAX_LENGTH`（200,000文字）で検証する。
-- [CurationService](../../backend/app/analysis/curation/service.py)と[Repository](../../backend/app/analysis/curation/repository.py): Signal／Noiseの保存、成功監査、Signal時のOutbox記録を所有する。Serviceは`CurationCompletion`で保存完了と保存競合を区別する（スライス2）。
+- [CurationService](../../backend/app/analysis/curation/service.py)と[Repository](../../backend/app/analysis/curation/repository.py): Signal／Noiseの保存とSignal時のOutbox記録を所有する。Serviceは`CurationCompletion`で保存完了と保存競合を区別する（スライス2）。
 - [Assessment仕様](./assessment-consumer.md)と[Embedding仕様](./embedding-consumer.md): 正常終了と失敗伝播、借用するAIクライアント、呼び出し単位の資源管理、SQS部分バッチ応答の参照元。
 - [Outbox送信契約](./outbox-sqs-message-contract.md)と[relay実行部](../../backend/app/lambda_handlers/outbox_relay/execution.py): 保存済みイベントの検証・配送と、単一イベント種別の配送入口を提供する。
 - [Curationタスク](../../backend/app/queue/tasks/curation.py)、[救済タスク](../../backend/app/queue/tasks/backfill.py)、[ECS設定](../../infra/aws/platform_ecs_services.tf): 旧Taskiq経路が残り、本番向け定義では3工程の救済が有効になる構成。
-- [既存Curation保存テスト](../../backend/tests/analysis/curation/test_curation_service_audit.py): Signalと対応Outboxの保存、Noise・保存競合時のイベント非作成、Outbox失敗時の原子性を検証している。
+- [既存Curation保存テスト](../../backend/tests/analysis/curation/test_service.py): Signalと対応Outboxの保存、Noise・保存競合時のイベント非作成、Outbox失敗時の原子性を検証している。
 
 既存コード・仕様は現状の証拠として扱う。移行後の方針は本仕様とユーザーの合意を優先する。AWSの現在の稼働状態は確認していない。
 
@@ -70,8 +70,8 @@ Schedulerはrelayを起動する。記事完成イベントの発行はDB保存�
 
 - Lambda入口は設定・秘密情報・DB・AIクライアントの準備、SQS構造とイベントの検証、Consumer呼び出し、応答、資源の終了を所有する。
 - `CurationConsumer`は検証済みイベントを受け、DBから事実を取得し、Readyを構築してServiceを実行する。Taskiq Context・Redis・SQSメッセージ形式には依存しない。
-- Ready構築に必要な事実は1回の照会で取得し、取得セッションを閉じてからAI処理へ進む。監査の記事情報はDBで確認した事実に基づき、イベント由来IDから存在を補完しない。
-- Serviceは既存のSignal／Noise判定・翻訳タイトル・要約の意味を維持し、結果・成功監査・必要なOutboxの確定を所有する。Consumerから後続イベントを再発行しない。
+- Ready構築に必要な事実は1回の照会で取得し、取得セッションを閉じてからAI処理へ進む。
+- Serviceは既存のSignal／Noise判定・翻訳タイトル・要約の意味を維持し、結果・必要なOutboxの確定を所有する。Consumerから後続イベントを再発行しない。
 - 新ConsumerからAssessmentのTaskiqタスクを投入しない。後続は確定したOutboxだけを入口にする。
 
 ## 全工程共通のReady拒否と受信完了
@@ -84,13 +84,12 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 | Assessment | 対象Curationの欠損、翻訳タイトル・要約のReady入力制約違反 | 対象内または対象外の判定が保存済み |
 | Embedding | 対象分析済み記事の欠損、埋め込み入力テキストのReady入力制約違反 | ベクトルが保存済み |
 
-- 各工程のReady側は、不変の`ReadyBuildRejected`値で拒否理由とDB由来記事IDを返す。`ReadyBuildBlockedError`と別の拒否結果を併存させず、ConsumerはReady側から受け取った同じ値を監査へ渡し、その値を持つ再試行しない失敗（`NoRetry*`）として返す。工程間で扱いを揃えるための汎用Consumerや共通基底クラスは要求しない。
-- 処理済みの理由もReady側の同じ拒否値で伝え、Consumerが既存の処理済みCompletionへ対応付ける。処理済みの監査・成功計測を追加しない。
+- 各工程のReady側は、不変の`ReadyBuildRejected`値で拒否理由とDB由来記事IDを返す。`ReadyBuildBlockedError`と別の拒否結果を併存させず、ConsumerはReady側から受け取った同じ値を持つ再試行しない失敗（`NoRetry*`）として返す。工程間で扱いを揃えるための汎用Consumerや共通基底クラスは要求しない。
+- 処理済みの理由もReady側の同じ拒否値で伝え、Consumerが既存の処理済みCompletionへ対応付ける。処理済みの成功計測を追加しない。
 - Readyモデル生成時の入力検証エラーだけを拒否へ対応付ける。Curationの本文上限超過は既存の`CONTENT_TOO_LARGE`、その他は`INPUT_INVALID`とし、入力制約やEmbeddingテキスト生成ルールを変えない。
-- 拒否監査は`REJECTED`と理由コードを記録し、本文・入力値・検証例外を保存しない。対象欠損では記事IDを補完せず、入力不正ではDB由来IDを使う。通常の監査障害は安全なログとaudit-dropped計測へ退避し、拒否を再配信に戻さない。
 - Lambda入口はこの結果のmessageIdを`batchItemFailures`へ含めない。SQS連携の成功応答によってメッセージを削除させ、ConsumerからSQSの削除APIを呼ばない。
-- Ready拒否ではAI・結果保存・成功監査・後続Outboxを実行しない。終了理由を記録し、分析成功や処理済みとは区別する。
-- Ready拒否を失敗応答にしないため、この理由での自動再配信・DLQ送りは行わない。既存の監査上のretryabilityから配送判断を導出しない。
+- Ready拒否ではAI・結果保存・後続Outboxを実行しない。終了理由を記録し、分析成功や処理済みとは区別する。
+- Ready拒否を失敗応答にしないため、この理由での自動再配信・DLQ送りは行わない。
 - 本ルールは対象の状態・内容からReadyを作れないと確定した場合に適用する。DB取得障害や想定外例外を一括してReady拒否へ変換しない。
 - Assessment／Embeddingの対象欠損はスライス1で理由付きの受信完了へ変更済み。
 
@@ -110,9 +109,8 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 | それ以外のAIの例外（未知のサブクラスを含む）、応答不正、期限切れ、想定外 | 再試行する |
 
 - 入力が原因と断定できない失敗（不正なリクエスト、出力の拒否・打ち切りなど）は、誤って捨てないよう再試行に任せる。人の対応が要る失敗（認証・権限・残高など）は、直したあとにDLQから再投入できるよう再試行に残す。
-- 3工程のServiceはAIの例外を工程の例外で包まずにそのまま伝える。どの工程の失敗かはConsumerと監査のstageで表す。
-- 分類関数は後処理の外で呼び、必ずどちらかを返す。Consumerは失敗の後処理（監査・計測・枯渇通知）のあとに判断をそのまま返し、後処理の通常の障害で判断を変えない。分類関数そのものが例外を出した場合は、その例外が伝播して再配信になる。
-- 失敗の監査には、工程がとった扱いを`failure_action`（`retry`／`no_retry`）として記録し、`retryability`は記録しない。監査上の分類から扱いを導出しない。
+- 3工程のServiceはAIの例外を工程の例外で包まずにそのまま伝える。どの工程の失敗かはConsumerとログのstageで表す。
+- 分類関数は後処理の外で呼び、必ずどちらかを返す。Consumerは失敗の後処理（計測・枯渇通知）のあとに判断をそのまま返し、後処理の通常の障害で判断を変えない。分類関数そのものが例外を出した場合は、その例外が伝播して再配信になる。
 - Lambda入口は、`Retry*`とConsumerから伝播した例外のmessageIdだけを`batchItemFailures`へ含め、どちらも元の例外をログへ渡す。3工程とも、例外によってConsumerから結果を受け取れなかった場合、`Retry*`を生成せず、`operation=consume`で呼び出し失敗を記録して再配信対象に追加する。`NoRetry*`の失敗はログに`code`と、AIの失敗なら`failure_reason`を残す。ConsumerからSQSの削除APIを呼ばない。
 - 受信完了にした記事は再投入しない。分析3工程のbackfillは定期起動しない（[工程別backfillのAWS構成](./backfill-aws.md)）。
 
@@ -122,9 +120,9 @@ Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類�
 
 | 結末 | 根拠 | AI・後続イベント |
 |---|---|---|
-| `SIGNAL` | Signal結果・成功監査・Outboxをcommitできた | `article.curated_signal`を記録済み |
-| `NOISE` | Noise結果・成功監査をcommitできた | 後続イベントなし |
-| `ALREADY_CURATED` | 開始時のSignal／Noise保存済み確認、または保存時の既存一意制約による競合スキップ | 開始時ならAIを呼ばず、追加の成功監査・Outboxなし |
+| `SIGNAL` | Signal結果・Outboxをcommitできた | `article.curated_signal`を記録済み |
+| `NOISE` | Noise結果をcommitできた | 後続イベントなし |
+| `ALREADY_CURATED` | 開始時のSignal／Noise保存済み確認、または保存時の既存一意制約による競合スキップ | 開始時ならAIを呼ばず、追加のOutboxなし |
 
 `SIGNAL`には保存したcuration_idを持たせる。IDまたはNoneだけの戻り値で、Noise保存・処理済み・失敗を混同しない。Repositoryの保存ID／競合時None／例外の契約は維持し、Serviceが正常終了型へ対応付ける。
 
@@ -134,10 +132,10 @@ Serviceの正常終了は`CurationCompletion`で表し、`kind`を次の3種類�
 
 - AI入力・応答、provider、DB、期限切れ、想定外例外を失敗として扱い、「全工程共通の、再試行しない失敗」の表で再試行するかを決める。既存のRecoverable／TerminalやTaskiqの再試行回数を新Consumerの制御に使わない。
 - AIによるコンテンツ拒否も例外として扱い、記事DELETEを実行しない。新Consumerは旧`CurationFailureHandler`へ委譲しない。
-- 失敗理由・元の原因を保持し、監査の分類と再配信の制御を分ける。監査上の分類からSQSの応答を導出しない。
-- 成功保存・成功監査・Outbox・commitの失敗は正常終了に変換しない。同じトランザクションの未確定結果はロールバックする。
-- 失敗監査を別のトランザクションで試み、必要なprovider枯渇通知などの後処理は既存Consumerの責務分担に揃える。旧メトリクスの区分・値の互換維持は要求しない。
-- 監査・ログ・終了処理の通常の二次障害で元例外を上書きしない。本文・秘密情報・SDK例外の自由文を配送診断へ追加しない。キャンセルやプロセス終了を正常終了にしない。
+- 失敗理由・元の原因を保持する。
+- 成功保存・Outbox・commitの失敗は正常終了に変換しない。同じトランザクションの未確定結果はロールバックする。
+- 必要なprovider枯渇通知などの後処理は既存Consumerの責務分担に揃える。旧メトリクスの区分・値の互換維持は要求しない。
+- ログ・終了処理の通常の二次障害で元例外を上書きしない。本文・秘密情報・SDK例外の自由文を配送診断へ追加しない。キャンセルやプロセス終了を正常終了にしない。
 - Lambda入口は個別イベント入力不正、`RetryCuration`、Consumerから伝播した例外のmessageIdだけを`batchItemFailures`へ返す。処理済みと`NoRetryCuration`のmessageIdは含めない。初期化やバッチ構造の不正はバッチ全体の失敗として伝播する。
 - 新経路に独自の再試行、stage hold、日次投入上限、Redis接続を追加しない。個別失敗の再配信と最終的なDLQ移動はSQS側の設定に任せる。
 

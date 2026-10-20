@@ -1,4 +1,4 @@
-"""AI Ready build blocked outcome_code の契約テスト。"""
+"""AI Ready build blocked の拒否コード(ログの rejection_code)の契約テスト。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from app.analysis.embedding.domain.ready import EmbeddingReadyBuildRejectionReas
         *[("embedding", member) for member in EmbeddingReadyBuildRejectionReason],
     ],
 )
-def test_ready_build_blocked_code_value_is_audit_outcome_code(
+def test_ready_build_blocked_code_value_follows_stage_namespace(
     stage: str,
     member: (
         CurationReadyBuildRejectionReason
@@ -25,4 +25,5 @@ def test_ready_build_blocked_code_value_is_audit_outcome_code(
         | EmbeddingReadyBuildRejectionReason
     ),
 ) -> None:
+    """拒否理由の値は ``{stage}_ready_build_blocked_{name}`` になる。"""
     assert member.value == f"{stage}_ready_build_blocked_{member.name.lower()}"

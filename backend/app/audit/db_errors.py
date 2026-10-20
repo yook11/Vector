@@ -1,9 +1,8 @@
 """DB 例外を監査ラベルに分類する pure helper。
 
 ``error_chain.py`` と同じ「session も I/O も持たない純粋関数」哲学のモジュール。
-分析トリオ 3 stage (curation / assessment / embedding) の audit repository が
-DB 例外を ``outcome_code`` / ``retryability`` / ``failure_kind`` へ投影するときに
-共通で使う。
+``failure_projection`` が DB 例外を ``outcome_code`` / ``retryability`` /
+``failure_kind`` へ投影するときに使う。
 
 背景: 各 stage の ``_code_of`` は元々 ``getattr(exc, "code", None)`` で code を
 読んでいたが、これは ``.code`` を持つ任意の例外を無条件に信用するため、SQLAlchemy

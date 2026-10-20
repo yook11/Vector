@@ -19,7 +19,7 @@ Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード�
 - [OutboxからSQSへの送信契約](./outbox-sqs-message-contract.md)：イベント形式と送信先。
 - [ArticleAssessedInScope](../../backend/app/analysis/assessment/events.py)：イベント種別・バージョン・payload。
 - 旧Taskiqタスクは廃止済み。現在の実行入口は`EmbeddingConsumer`で、処理期限は60秒。
-- [EmbeddingService](../../backend/app/analysis/embedding/service.py)：AI呼び出しと、ベクトル・成功監査の同一トランザクション保存。
+- [EmbeddingService](../../backend/app/analysis/embedding/service.py)：AI呼び出しと、ベクトルの保存。
 - [EmbeddingConsumer](../../backend/app/analysis/embedding/consumer.py)：検証済みpayloadの受信、開始状態の取得、60秒の業務処理、失敗後処理と例外伝播。
 - [EmbeddingRepository](../../backend/app/analysis/embedding/repository.py)：生成済み判定と、embeddingがNULLの場合だけ更新する保存処理。
 - [worker起動設定](../../backend/supervisord/analysis.conf)：embedding workerの最大同時実行数は1プロセスあたり10。
@@ -32,14 +32,14 @@ Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード�
 
 ## Invariants
 
-- 保存完了とは、ベクトルと成功監査のトランザクションをコミットできたことを指す。
+- 保存完了とは、ベクトルの保存をコミットできたことを指す。
 - 「例外なくreturnした」ことだけを根拠にSQSへ成功を返さない。
 - 開始時に生成済み、または別の実行が先に保存したことを確認できた場合は対応完了とする。
 - 開始時の対象欠損・Ready入力制約違反は、理由付き拒否として受信完了にする。Ready成立後の保存時の不存在も、失敗を記録したうえで受信完了にする。
 - 処理失敗は、curation-consumer.mdの「全工程共通の、再試行しない失敗」の表で再試行しないと決めたものだけを受信完了にし、それ以外はSQSへ返す。
 - consumer内部で再配信待ちのsleep、独自の段階的バックオフ、DLQへの直接送信をしない。
 - 冪等性の業務上の判定対象は`analyzed_article_id`であり、SQSメッセージIDやevent_idだけでTaskiqとの重複を判定しない。
-- 通知・ログ・監査の秘匿を維持し、メッセージ本文やSDK例外の自由文を無制限に記録しない。
+- 通知・ログの秘匿を維持し、メッセージ本文やSDK例外の自由文を無制限に記録しない。
 - 無料枠ゲートを再導入しない。
 
 ## 入力と責務
@@ -67,7 +67,7 @@ Status: Consumer配置・専用SSM登録済み、SQS受信有効化のコード�
     → article-embedding SQS
     → LambdaのSQS受信機構
     → EmbeddingConsumer
-    → Ready構築 → AI呼び出し → ベクトル・成功監査の保存
+    → Ready構築 → AI呼び出し → ベクトルの保存
 ```
 
 consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務処理を実行する。既存のReady・AI adapter・Service・Repositoryを再利用し、TaskiqのContext、retry label、brokerの起動処理をSQS入口へ持ち込まない。
@@ -103,7 +103,7 @@ _run_embeddingは再配信させるメッセージのIDを入力順に集め、r
 | embedding_message_completed | message_id、検証済みevent_id、analyzed_article_id、正常完了reason |
 | embedding_message_failed | message_id、例外の完全修飾型名。本文検証済みならevent_id・analyzed_article_idも付与 |
 
-本文・自由文・トレースバックはログに渡さない。入力不正は構造化ログのみとしDB監査は追加しない。Consumerの監査・計測・枯渇通知は入口で重複実行しない。
+本文・自由文・トレースバックはログに渡さない。入力不正は構造化ログのみとする。Consumerの計測・枯渇通知は入口で重複実行しない。
 
 初期の受信件数は後続のSQSトリガー設定で1件とし、ReportBatchItemFailuresを有効化する。Consumerの60秒制限は維持し、本番の受信件数を増やす際はLambda全体の時間配分を別途検討する。今回の実装ではLambda関数・Terraform・デプロイを変更しない。
 
@@ -111,7 +111,7 @@ _run_embeddingは再配信させるメッセージのIDを入力順に集め、r
 
 | 結果 | consumerの扱い | メッセージの扱い |
 |---|---|---|
-| ベクトルと成功監査のコミット完了 | 成功 | 対応完了として削除対象 |
+| ベクトルのコミット完了 | 成功 | 対応完了として削除対象 |
 | 開始時点ですでに生成済み | 想定内の終了 | 対応完了として削除対象 |
 | 他の実行が先に保存し、自分の更新が不要 | 生成済みを確認して想定内の終了 | 対応完了として削除対象 |
 | 開始時に対象記事が存在しない、またはReady入力制約違反 | Ready構築拒否の理由を記録 | 受信完了、失敗一覧へ含めない |
@@ -122,15 +122,15 @@ _run_embeddingは再配信させるメッセージのIDを入力順に集め、r
 
 SQSによるメッセージ削除はLambda連携の成功処理に任せる。consumerから個別の削除APIは呼ばない。
 
-失敗監査自体がDB障害で保存できない場合も成功にはしない。Lambdaの強制終了ではアプリケーションの失敗記録を実行できない可能性があるため、Lambda側の失敗観測も必要とする。
+Lambdaの強制終了ではアプリケーションの失敗記録を実行できない可能性があるため、Lambda側の失敗観測も必要とする。
 
 ### 保存時の状態確認
 
 共通の`EmbeddingService`はAI処理を終えた後に保存用トランザクションを開始し、記事IDで`SELECT ... FOR UPDATE`して保存対象をロックする。Repositoryの`lock_save_state()`は、存在と生成状態を`EmbeddingSaveState`の3状態として返す。
 
 - `ARTICLE_MISSING`：`EmbeddingAnalyzedArticleMissingError`を送出する。
-- `EMBEDDED`：`EmbeddingCompletion.ALREADY_EMBEDDED`を返し、成功監査は重複させない。
-- `UNEMBEDDED`：条件付きUPDATEと成功監査を同一トランザクションでコミットした後に`EmbeddingCompletion.SAVED`を返す。
+- `EMBEDDED`：`EmbeddingCompletion.ALREADY_EMBEDDED`を返す。
+- `UNEMBEDDED`：条件付きUPDATEをコミットした後に`EmbeddingCompletion.SAVED`を返す。
 
 行ロックはAI待機中には保持せず、保存時からトランザクション終了まで保持する。記事の削除が先に確定した場合は不存在となり、保存側が先にロックした場合は削除が待機する。ロック取得・更新・コミットの失敗は呼び出し元へ伝播する。ロックした未生成行の更新が0件になる矛盾も正常終了させない。
 
@@ -143,7 +143,7 @@ Serviceの失敗は`EmbeddingError.reason`（`EmbeddingFailureReason`）で表�
 | `ARTICLE_MISSING` | 保存対象の記事が存在しない | `embedding_analyzed_article_missing`／`target_missing`、追加再試行なし |
 | `RESPONSE_INVALID` | 埋め込み応答がベクトルの契約を満たさない | `embedding_response_invalid`／`ai_response_invalid`、既存上限まで再試行 |
 
-AIプロバイダーの失敗・DB障害・想定外例外は`EmbeddingError`に包まず伝播する。`code`はreasonから導出し、監査コードを二重管理しない。
+AIプロバイダーの失敗・DB障害・想定外例外は`EmbeddingError`に包まず伝播する。`code`はreasonから導出する。
 
 `task_errors.py`の変換を既存Taskiq境界で行い、Serviceの例外を`EmbeddingRecoverableError`／`EmbeddingTerminalError`に対応付ける。既存の監査コード・failure_kind・failure_reason・retryability・通知providerは維持する。互換例外のモジュール移動に伴い、新しく記録するerror_classの完全修飾名は変わり、error_chainにはService例外が加わる。過去の監査データは変更しない。
 
@@ -161,11 +161,9 @@ consumerでは両者を区別し、生成済みを確認できた場合だけ対
 
 1. `analyzed_article_id`で開始状態を一度取得し、取得できた元記事IDを保持する。イベントの`curation_id`との対応は発行元の保存・Outbox生成契約を信頼し、再照合しない。
 2. 取得用セッションを閉じ、`ReadyForEmbedding.from_facts()`で純粋に開始条件と入力を検証する。Taskiqの既存`try_advance_from()`もこの関数へ委譲し、成功時のtupleとhintの優先順位を維持する。拒否は例外にせず、Ready側の不変な`EmbeddingReadyBuildRejected`で返す。
-3. 開始時の不存在・入力不正では、同じ拒否値を監査へ渡して受信完了結果として返す。生成済みの拒否理由ならAI・成功監査・成功計測を行わず`ALREADY_EMBEDDED`で完了する。
+3. 開始時の不存在・入力不正では、同じ拒否値を受信完了結果として返す。生成済みの拒否理由ならAI・成功計測を行わず`ALREADY_EMBEDDED`で完了する。
 4. 未生成ならServiceを実行して`EmbeddingCompletion`をそのまま返す。保存時の競合・削除・コミット失敗の契約を維持する。
 5. 開始時からService完了までの通常の例外は、分類・後処理を経て再送出する。分類や後処理自体の予期しない二次障害でも元の例外を維持し、安全なログを試みる。外部キャンセルは通常の失敗として処理しない。
-
-元記事IDを取得できなかった場合は`article_id=NULL`として分析記事IDをpayloadに残す。開始時の不存在は`embedding_ready_build_blocked_analyzed_article_missing`のREJECTED監査とする。Ready入力不正はDB由来記事IDを使用し、イベントやhintで補完しない。実行失敗では取得済みの記事IDを使用し、監査不能でも既存のdrop計測・通知を試みて元の例外を伝播する。
 
 今回は既存Taskiqの入口や配置を移動せず、Consumer専用トレースの配線・Lambda起動関数・デプロイは後続に残す。
 
@@ -188,11 +186,9 @@ consumerでは両者を区別し、生成済みを確認できた場合だけ対
 分類関数とConsumer用ハンドラーを実装し、Consumer本体から開始時の取得・Ready構築・Service実行中の失敗を接続する。入力イベントの検証・SQS応答は入口部品へ接続し、Lambda起動関数の組み立ては後続とする。
 
 - `classify_embedding_failure(exc)`は副作用のない関数で、`RetryEmbedding`か`NoRetryEmbedding`を返す。枯渇通知・`outcome`は持たない。
-- 監査の失敗属性は監査の層が元の例外から作る。AIの例外はクラスのCODEとreason、Serviceの失敗はreasonから直接分類し、Taskiq用のRecoverable／Terminalには変換しない。DB例外は共有のDB分類を使う。想定外例外と通常のTimeoutErrorは`unexpected_error`／`unknown`とする。
-- 失敗の監査はretryabilityを記録せず、`failure_action`に`retry`／`no_retry`を記録する。provider失敗のfailure_kindはnullとし、CODE・reason・例外情報を保持する。
-- `EmbeddingConsumerFailureHandler.handle()`は判断（`RetryEmbedding`／`NoRetryEmbedding`）、元の例外、分析記事ID、記事ID、providerを受け取り、失敗件数の計測・失敗監査・必要な枯渇通知をそれぞれ試みる。計測結果はDB・provider障害も含め一律`failed`とする。戻り値はNoneで、処理全体の成功を示す値ではない。
-- 監査は元の例外のerror_class・error_chainを保持し、既存のpayload組み立てと秘匿処理を再利用する。枯渇通知は元の例外を既存の`ai_provider_exhausted`の判定に渡し、残高不足・利用枠枯渇のみを対象とする。通常の429は枯渇通知の対象外。
-- 後処理の通常の例外は捕捉し、処理名・記事ID・例外クラスだけを二次障害ログに記録する。例外本文やトレースバックは出さない。監査失敗時は既存の監査drop計測も試みる。ログ出力自体の失敗でも残りの後処理を継続する。
+- `EmbeddingConsumerFailureHandler.handle()`は元の例外とproviderを受け取り、失敗件数の計測・必要な枯渇通知をそれぞれ試みる。計測結果はDB・provider障害も含め一律`failed`とする。戻り値はNoneで、処理全体の成功を示す値ではない。
+- 枯渇通知は元の例外を既存の`ai_provider_exhausted`の判定に渡し、残高不足・利用枠枯渇のみを対象とする。通常の429は枯渇通知の対象外。
+- 後処理の通常の例外は捕捉し、処理名・記事ID・例外クラスだけを二次障害ログに記録する。例外本文やトレースバックは出さない。ログ出力自体の失敗でも残りの後処理を継続する。
 - 元の例外の再送出は後続のConsumerの責務であり、ハンドラー内では再送出も成功への変換も行わない。キャンセルやプロセス終了を通常の二次障害として抑止しない。
 
 既存Taskiqのハンドラーと起動配線は維持する。枯渇通知の対象判定だけを共有の純粋関数へ切り出し、既存通知の条件と出力を維持する。

@@ -26,7 +26,6 @@ from app.lambda_handlers.assessment.settings import (
     AssessmentNotificationSettings,
 )
 from app.models.outbox_event import OutboxEvent
-from app.models.pipeline_event import PipelineEvent
 from app.shared import revalidate
 from local_tests.assessment.support import assessment_reply, handler_module
 from local_tests.database_failure import cancel_statement
@@ -111,13 +110,13 @@ def assessment_runtime(
 
 @dataclass
 class DatabaseFailure:
-    pending_counts: list[tuple[int, int, int]] = field(default_factory=list)
+    pending_counts: list[tuple[int, int]] = field(default_factory=list)
     errors: list[DBAPIError] = field(default_factory=list)
 
 
 @pytest.fixture
 def database_error_before_commit(monkeypatch):
-    """実INSERTで結果・成功監査・Outboxを作った後、同じトランザクションをDBエラーにする。"""
+    """実INSERTで結果・Outboxを作った後、同じトランザクションをDBエラーにする。"""
     observation = DatabaseFailure()
     commit = AsyncSession.commit
 
@@ -125,30 +124,18 @@ def database_error_before_commit(monkeypatch):
         pending = list(session.new)
         event = next((row for row in pending if isinstance(row, OutboxEvent)), None)
         if event is not None:
-            audit = next(
-                (
-                    row
-                    for row in pending
-                    if isinstance(row, PipelineEvent)
-                    and row.stage == "assessment"
-                    and row.event_type == "succeeded"
-                ),
-                None,
-            )
             await session.flush()
-            # 分析ロールは監査・Outboxの本文を読めないため、追加した行を主キーで数える。
+            # 分析ロールはOutboxの本文を読めないため、追加した行を主キーで数える。
             counts = (
                 await session.execute(
                     text(
                         "SELECT "
                         "(SELECT count(*) FROM analyzed_articles "
                         "WHERE curation_id=:curation), "
-                        "(SELECT count(*) FROM pipeline_events WHERE id=:audit), "
                         "(SELECT count(*) FROM outbox_events WHERE event_id=:event)"
                     ),
                     {
                         "curation": event.payload["curation_id"],
-                        "audit": audit.id if audit is not None else None,
                         "event": event.event_id,
                     },
                 )

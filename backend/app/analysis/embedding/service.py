@@ -1,7 +1,7 @@
 """EmbeddingService — Stage 5 の AI 埋め込み生成と永続化境界。
 
 AI処理後に保存対象を行ロックし、記事不存在・生成済み・未生成を区別する。
-ベクトルと成功監査を同一トランザクションで保存する。
+ベクトルを保存してコミットする。
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.embedding.repository import EmbeddingRepository, EmbeddingSaveState
-from app.audit.stages.embedding import EmbeddingAuditRepository
 
 
 class EmbeddingCompletion(StrEnum):
@@ -46,7 +45,7 @@ class EmbeddingService:
         """Ready 型を入力に埋め込みベクトルを生成し永続化する。
 
         AI呼び出し後に行ロックを取得し、生成済みなら短絡、不存在なら失敗とする。
-        未生成の記事だけを更新し、成功監査と同時にコミットする。
+        未生成の記事だけを更新してコミットする。
 
         Returns:
             保存完了はSAVED、生成済みの確認による終了はALREADY_EMBEDDED。
@@ -75,12 +74,6 @@ class EmbeddingService:
             )
             if not saved:
                 raise RuntimeError("embedding_update_missing_after_row_lock")
-            # 業務 UPDATE + audit を同一 tx で commit
-            await EmbeddingAuditRepository(session).append_success(
-                analyzed_article_id=ready.analyzed_article_id,
-                article_id=analyzable_article_id,
-                embedder=embedder,
-            )
             await session.commit()
 
         logger.info(

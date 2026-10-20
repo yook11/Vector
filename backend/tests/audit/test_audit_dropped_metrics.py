@@ -1,6 +1,6 @@
 """``app.audit.metrics.record_audit_dropped`` の metric 記録 oracle。
 
-検証する性質 (兄弟 ``test_injection_signal_metrics.py`` と同形):
+検証する性質:
 - 1 回の記録で counter (``vector.audit.dropped``) が +1。
 - attribute は ``{"stage": <wire値>}`` 1 key 固定 (低 cardinality, I3)。
 - dump 全体に stage 以外の動的値 (ID 等) が混入しない (PII 非含有 oracle)。

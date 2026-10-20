@@ -26,7 +26,7 @@ from local_tests.backfill.support import (
 async def test_curation_deletes_aged_out_article_and_delivers_saved_article(
     system_database, delivery
 ):
-    """期限切れの未curation記事を削除して監査し、期間内の記事だけを配送する。"""
+    """期限切れの未curation記事を削除し、期間内の記事だけを配送する。"""
     aged_id = await seed_article(
         system_database, "https://example.com/curation-aged", AGED_CREATED_AT
     )
@@ -50,18 +50,16 @@ async def test_curation_deletes_aged_out_article_and_delivers_saved_article(
         )
     audits = await read_audit_events(system_database)
     assert [audit[:4] for audit in audits] == [
-        ("backfill_curate", "rejected", "backfill_curation_aged_out", None),
         ("backfill_curate", "succeeded", "backfill_item_enqueued", article_id),
     ]
-    assert audits[0].payload["target_article_id"] == aged_id
-    assert audits[1].payload["target_id"] == article_id
+    assert audits[0].payload["target_id"] == article_id
 
 
 @pytest.mark.asyncio
 async def test_assessment_excludes_aged_out_curation_and_delivers_saved_curation(
     system_database, delivery
 ):
-    """期限切れの未判定curationを除外して監査し、期間内のcurationだけを配送する。"""
+    """期限切れの未判定curationを除外し、期間内のcurationだけを配送する。"""
     aged_article_id = await seed_article(
         system_database, "https://example.com/assessment-aged", AGED_CREATED_AT
     )
@@ -93,23 +91,16 @@ async def test_assessment_excludes_aged_out_curation_and_delivers_saved_curation
     ]
     audits = await read_audit_events(system_database)
     assert [audit[:4] for audit in audits] == [
-        (
-            "backfill_assess",
-            "rejected",
-            "backfill_assessment_aged_out",
-            aged_article_id,
-        ),
         ("backfill_assess", "succeeded", "backfill_item_enqueued", article_id),
     ]
-    assert audits[0].payload["curation_id"] == aged_curation_id
-    assert audits[1].payload["target_id"] == curation_id
+    assert audits[0].payload["target_id"] == curation_id
 
 
 @pytest.mark.asyncio
 async def test_embedding_excludes_aged_out_analysis_and_delivers_saved_assessment(
     system_database, delivery
 ):
-    """期限切れのembedding未保存の分析結果を除外して監査し、期間内だけを配送する。"""
+    """期限切れのembedding未保存の分析結果を除外し、期間内だけを配送する。"""
     aged_article_id = await seed_article(
         system_database, "https://example.com/embedding-aged", AGED_CREATED_AT
     )
@@ -143,11 +134,9 @@ async def test_embedding_excludes_aged_out_analysis_and_delivers_saved_assessmen
     ]
     audits = await read_audit_events(system_database)
     assert [audit[:4] for audit in audits] == [
-        ("backfill_embed", "rejected", "backfill_embedding_aged_out", aged_article_id),
         ("backfill_embed", "succeeded", "backfill_item_enqueued", article_id),
     ]
-    assert audits[0].payload["analyzed_article_id"] == aged_analyzed_id
-    assert audits[1].payload["target_id"] == analyzed_id
+    assert audits[0].payload["target_id"] == analyzed_id
 
 
 @pytest.mark.asyncio

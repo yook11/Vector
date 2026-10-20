@@ -34,15 +34,15 @@ CurationのSignal結果＋article.curated_signalをOutboxに保存
 - 入力は`article.curated_signal`、schema versionは1、payloadは`curation_id`と`analyzable_article_id`。イベント全体の形式は既存のOutbox送信契約に従う。
 - Lambda入口は秘密情報・DB・AIクライアントの準備、SQSとイベントの検証、Consumer呼び出し、配送結果の応答、資源の終了を担う。
 - Consumerは`curation_id`によるDB状態取得、Ready構築、Service実行、エラーの分類・後処理を担う。Taskiq ContextやSQSの形式には依存しない。
-- Serviceは判定、保存時の状態確認、結果・成功監査・必要なOutboxのcommitを担う。
+- Serviceは判定、保存時の状態確認、結果・必要なOutboxのcommitを担う。
 - DeepSeekは通信設定、クライアントの生成・終了、判定処理を分ける。Assessorは準備済みクライアントを借用する。秘密情報の取得と資源の利用範囲はLambda呼び出し単位とし、通信timeoutは接続3秒・読み取り30秒・書き込み10秒・プール待ち3秒、SDK・HTTP内部再試行は0回とする。
 
 ## 正常終了とエラー
 
 | 結果 | 正常終了の根拠 | 後続イベント |
 |---|---|---|
-| `IN_SCOPE` | 対象内の判定結果・成功監査・Outboxをcommitできた | `article.assessed_in_scope`を記録 |
-| `OUT_OF_SCOPE` | 対象外の判定結果・成功監査をcommitできた | なし |
+| `IN_SCOPE` | 対象内の判定結果・Outboxをcommitできた | `article.assessed_in_scope`を記録 |
+| `OUT_OF_SCOPE` | 対象外の判定結果をcommitできた | なし |
 | `ALREADY_ASSESSED` | 開始時または保存時に判定済みと確認できた | 追加しない |
 
 Ready構築時にCuration不存在またはReady入力制約違反が確定した場合は、理由付きの`AssessmentReadyBuildRejected`を持つ`NoRetryAssessment`を返して受信完了とする。実行中の失敗は、curation-consumer.mdの「全工程共通の、再試行しない失敗」の表に従い、失敗を記録したうえで`NoRetryAssessment`か`RetryAssessment`を返す。正常終了の結果は永続化・処理済み確認の結末であり、AIが返す判定内容やReady拒否とは区別する。
@@ -67,9 +67,9 @@ Problem: 現在のServiceの`int / None`では、対象外の保存成功と処�
 
 - 既存の`AssessmentResult = InScope | OutOfScope`はAIの判定内容を表し、保存完了を保証しない。カテゴリー・投資見解・key pointsはこの判定内容に属する。
 - Serviceから返す正常終了は`AssessmentCompletion`として、`kind`で`IN_SCOPE`・`OUT_OF_SCOPE`・`ALREADY_ASSESSED`の3種類を表す。Serviceの正常終了に`None`やエラー値を含めない。
-- `IN_SCOPE`は今回の実行が対象内結果・成功監査・後続Outboxをcommitできた場合に返す。AIが対象内と判定しただけでは返さない。
-- `OUT_OF_SCOPE`は今回の実行が対象外結果・成功監査をcommitできた場合に返す。失敗・不存在・処理断念の代替結果にはしない。
-- `ALREADY_ASSESSED`はDB上で対象内または対象外の判定が確定済みと確認できた場合に返す。開始時に確認できた場合はAIを呼ばず、保存時に他の実行の完了を確認した場合は追加保存しない。どちらも成功監査・Outboxを追加しない。
+- `IN_SCOPE`は今回の実行が対象内結果・後続Outboxをcommitできた場合に返す。AIが対象内と判定しただけでは返さない。
+- `OUT_OF_SCOPE`は今回の実行が対象外結果をcommitできた場合に返す。失敗・不存在・処理断念の代替結果にはしない。
+- `ALREADY_ASSESSED`はDB上で対象内または対象外の判定が確定済みと確認できた場合に返す。開始時に確認できた場合はAIを呼ばず、保存時に他の実行の完了を確認した場合は追加保存しない。どちらもOutboxを追加しない。
 - Repositoryは既存の契約を維持し、保存成功時は保存した行のID、`ON CONFLICT DO NOTHING`による重複スキップ時と、反対側の判定が保存済みで排他トリガーが拒否した時は`None`を返す。保存・DB障害は例外で伝える。
 - ServiceはRepositoryの重複スキップを`ALREADY_ASSESSED`へ変換する。この結果名を返すための追加照会やロックは導入しない。対象内／対象外の同時保存は排他トリガーが拒否する。
 - 対象不存在や状態確認失敗は重複スキップと混同しない。一般的なUPDATEの更新件数0件を、そのままこのRepositoryの`None`と同じ意味には扱わない。
@@ -80,10 +80,10 @@ Problem: 現在のServiceの`int / None`では、対象外の保存成功と処�
 
 | 状況 | 期待する結末 |
 |---|---|
-| 対象内結果・成功監査・Outboxのcommit成功 | `IN_SCOPE` |
-| 対象外結果・成功監査のcommit成功 | `OUT_OF_SCOPE`、Outboxなし |
-| 保存時にRepositoryが重複スキップの`None`を返す | `ALREADY_ASSESSED`、追加の成功監査・Outboxなし |
-| AI判定後に保存・監査・Outbox記録・commitが失敗 | 例外、正常終了なし |
+| 対象内結果・Outboxのcommit成功 | `IN_SCOPE` |
+| 対象外結果のcommit成功 | `OUT_OF_SCOPE`、Outboxなし |
+| 保存時にRepositoryが重複スキップの`None`を返す | `ALREADY_ASSESSED`、追加のOutboxなし |
+| AI判定後に保存・Outbox記録・commitが失敗 | 例外、正常終了なし |
 | RepositoryがDB障害などの例外を送出 | 例外を伝播し、`ALREADY_ASSESSED`へ変換しない |
 
 開始時の判定済みによる`ALREADY_ASSESSED`は、以下のConsumerスライスで同じ正常終了契約へ接続済み。
@@ -127,16 +127,15 @@ Problem: 正常終了・失敗理由の契約を、Taskiqに依存しないイ�
 
 - `AssessmentConsumer(session_factory, assessor)`は借用したAssessorを使い、`consume(ArticleCuratedSignal) -> AssessmentCompletion`を提供する。クライアントの生成・終了は担当しない。
 - 業務処理の上限は60秒とする。既存の`curation_id`照会を1回だけ行い、取得したDB由来の記事IDを保持して読み取りセッションを閉じ、`ReadyForAssessment.from_facts`とServiceへ進む。イベントの記事IDは補完・照合に使わない。
-- 開始時の対象内／対象外判定済みは`ALREADY_ASSESSED`を返し、AI・保存・成功監査・Outbox・成功メトリクスを追加しない。Curation不存在は原因付きの`AssessmentCurationMissingError`とする。Ready検証失敗でも取得済みのDB由来IDを失敗監査へ渡し、未取得なら`article_id=None`とする。
-- `classify_assessment_failure`は副作用のない関数で、`RetryAssessment`か`NoRetryAssessment`を返す。監査の失敗属性は監査の層が元の例外から作る（providerはCODE・reason、応答不正は詳細codeと`ai_response_invalid`、不存在は`assessment_curation_missing`と`target_missing`、DBは共通DB投影、timeout・その他はunknown投影）。retryabilityは記録せず、`failure_action`に`retry`／`no_retry`を記録する。枯渇判定は共通関数を使う。
-- 新AssessmentConsumerではDB・プロバイダー・その他の失敗を一律`processing_outcome{result=failed}`として計測し、`infra_error`区分を使わない。失敗率には原因を問わず処理失敗を含め、詳細は監査の型・コードで識別する。記事収集側の計測契約は変更しない。
+- 開始時の対象内／対象外判定済みは`ALREADY_ASSESSED`を返し、AI・保存・Outbox・成功メトリクスを追加しない。Curation不存在は原因付きの`AssessmentCurationMissingError`とする。
+- `classify_assessment_failure`は副作用のない関数で、`RetryAssessment`か`NoRetryAssessment`を返す。枯渇判定は共通関数を使う。
+- 新AssessmentConsumerではDB・プロバイダー・その他の失敗を一律`processing_outcome{result=failed}`として計測し、`infra_error`区分を使わない。失敗率には原因を問わず処理失敗を含め、詳細はログの例外型・コードで識別する。記事収集側の計測契約は変更しない。
 - 失敗は元例外を持つ`RetryAssessment`／`NoRetryAssessment`として呼び出し元へ返す。ConsumerにTaskiq分類、hold、独自再試行は持ち込まない。
-- 失敗後処理は60秒の外で、処理メトリクス・別セッションでの失敗監査commit・必要なプロバイダー枯渇通知を順番に独立して試みる。監査失敗時はaudit droppedを計測する。通常の二次例外や診断ログ障害で元例外を置き換えず、後続の処理を継続する。外部キャンセルは抑止しない。
-- `AssessmentAuditRepository.append_classified_failure`はReadyを要求せず、分類を再計算せずに`FAILED`を記録する。既存の制限・マスキングを通したメッセージと原因チェーンを保存し、入力本文・AI生応答は収集しない。旧Taskiq用監査は維持する。
+- 失敗後処理は60秒の外で、処理メトリクス・必要なプロバイダー枯渇通知を順番に独立して試みる。通常の二次例外や診断ログ障害で元例外を置き換えず、後続の処理を継続する。外部キャンセルは抑止しない。
 
 Non-goals: Lambda・SQS・relay接続、DeepSeek通信設定とクライアント管理、一覧更新通知、Taskiq停止、デプロイは含めない。SQL・保存契約・schema・ロックは変更しない。対象内／対象外の同時保存の排他制御と保存時不存在の専用エラー化は後続スライスとする。
 
-Done: 正常終了、開始時判定、60秒制限、分類・監査・計測・通知、元例外の伝播が接続され、単体・実DB統合テストが成功すること。
+Done: 正常終了、開始時判定、60秒制限、分類・計測・通知、元例外の伝播が接続され、単体・実DB統合テストが成功すること。
 
 実装状況（2026-09-11）: Consumer・失敗分類・後処理・監査入口を実装済み。既存の非同期Ready入口は`from_facts`へ委譲し、Taskiqの開始判定は維持した。正常保存と開始時／保存時の重複、IDの根拠、1回の照会とAI前の接続返却、全10種のプロバイダー分類と全16種類の応答不正コード、取得・AI・保存のtimeout、キャンセル、保存・成功監査・Outbox・commitの失敗とロールバック、後処理の二次障害を検証した。
 
@@ -188,7 +187,7 @@ Done: 設定の読み取り範囲、Engine設定、資源の生成・終了順�
 
 - 対象外判定は正常終了であり、処理失敗によって対象外の判定結果を作らない。
 - 新規の対象内保存時だけ後続イベントを記録する。配送成功をAssessmentの正常終了条件には含めない。
-- 冪等性は`curation_id`単位で保証し、対象内と対象外が同時に確定しない。重複実行で結果・成功監査・Outboxを重複させない。AI呼び出しの一回性は保証しない。
+- 冪等性は`curation_id`単位で保証し、対象内と対象外が同時に確定しない。重複実行で結果・Outboxを重複させない。AI呼び出しの一回性は保証しない。
 - AI応答待ちにDBセッションや保存用ロックを保持しない。保存時の不存在はエラーとする。
 - 再試行する失敗と、Consumerが判断できずに伝播した例外をSQSへ失敗として返す。再試行しない失敗は記録したうえで受信完了とする。
 - 再配信・上限到達後のDLQ移動はSQSに任せる。Consumer内で再配信待ちのsleep、独自backoff、hold、DLQへの直接送信を行わない。
@@ -212,7 +211,7 @@ Done: 設定の読み取り範囲、Engine設定、資源の生成・終了順�
 
 - Curationイベントの配送からAssessmentの保存、対象内の場合のEmbeddingへの配送まで接続できる。
 - 3種類の正常終了、各エラーの失敗応答、処理中の削除、対象内／対象外を含む並行実行、commit失敗、timeout、後処理の二次障害を検証する。
-- 対象内結果・成功監査・Outboxの原子性と重複防止を検証する。
+- 対象内結果・Outboxの原子性と重複防止を検証する。
 - 有効化前に数値設定・移行・一覧更新通知の扱いを確定し、実装済みとAWS適用済みを分けて記録する。
 
 
