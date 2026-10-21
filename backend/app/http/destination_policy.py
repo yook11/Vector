@@ -73,13 +73,14 @@ class DestinationRejectedError(ApplicationError):
     def __init__(
         self, *, reason: DestinationRejectedReason, host: str, address: str
     ) -> None:
-        # 拒否したhostとIPは内部の宛先を示しうるため、説明文と診断情報へ入れない。
-        super().__init__(
-            "宛先が外部通信の方針で拒否されました", details={"reason": reason.value}
-        )
         self.reason = reason
         self.host = host
         self.address = address
+        # 拒否したhostとIPは内部の宛先を示しうるため、説明文と診断情報へ入れない。
+        super().__init__(
+            "宛先が外部通信の方針で拒否されました",
+            details={"reason": self.reason.value},
+        )
 
 
 class PublicIpAddress:

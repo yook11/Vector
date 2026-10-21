@@ -21,15 +21,15 @@ class HttpTransportError(HttpError):
     CODE: ClassVar[str] = "http_transport_error"
 
     def __init__(self, *, failure: HttpTransportFailure) -> None:
+        self.failure = failure
         super().__init__(
             "HTTP通信で応答を受け取れませんでした",
             details={
-                "stage": failure.stage.value,
-                "reason": failure.reason.value,
-                "proxy_status": failure.proxy_status,
+                "stage": self.failure.stage.value,
+                "reason": self.failure.reason.value,
+                "proxy_status": self.failure.proxy_status,
             },
         )
-        self.failure = failure
 
 
 class HttpResponseError(HttpError):
@@ -44,10 +44,11 @@ class HttpResponseError(HttpError):
         received_at: datetime,
         retry_after: str | None = None,
     ) -> None:
-        # 生のRetry-Afterは取得先が任意に書ける値のため、診断情報へ入れない。
-        super().__init__(
-            "HTTPの非成功応答を受け取りました", details={"status_code": status_code}
-        )
         self.status_code = status_code
         self.received_at = received_at
         self.retry_after = retry_after
+        # 生のRetry-Afterは取得先が任意に書ける値のため、診断情報へ入れない。
+        super().__init__(
+            "HTTPの非成功応答を受け取りました",
+            details={"status_code": self.status_code},
+        )

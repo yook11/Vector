@@ -10,6 +10,7 @@ from app.collection.retry_at import RetryAt
 from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
 from app.http.failure import HttpTransportFailureReason, HttpTransportStage
+from app.http.retry_prospect import is_resolvable_by_retry
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +29,8 @@ class NonRetryableFetchFailure:
     """今の要求では取得できず、再試行しても結果が変わらない失敗を表す。"""
 
     code: str
+    requires_investigation: bool = False
+    """取得先の拒否ではなく、環境側の問題か分類が確かでない。"""
 
 
 def _retry_at(exc: HttpResponseError, *, now: datetime) -> RetryAt | None:
@@ -74,13 +77,17 @@ def classify_external_fetch_failure(
 
     if isinstance(exc, HttpTransportError):
         failure = exc.failure
-        return RetryableFetchFailure(
-            code=exc.CODE,
-            requires_investigation=(
-                failure.stage is HttpTransportStage.UNKNOWN
-                or failure.reason is HttpTransportFailureReason.UNKNOWN
-                or failure.proxy_status in (407, 511)
-            ),
+        investigate = (
+            failure.stage is HttpTransportStage.UNKNOWN
+            or failure.reason is HttpTransportFailureReason.UNKNOWN
+            or failure.proxy_status in (407, 511)
+        )
+        if is_resolvable_by_retry(failure):
+            return RetryableFetchFailure(
+                code=exc.CODE, requires_investigation=investigate
+            )
+        return NonRetryableFetchFailure(
+            code=exc.CODE, requires_investigation=investigate
         )
 
     if isinstance(exc, DestinationRejectedError):

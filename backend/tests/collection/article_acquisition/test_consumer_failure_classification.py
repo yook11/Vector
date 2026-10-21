@@ -86,16 +86,6 @@ def _feeds(*errors: Exception) -> RssFeedErrors:
             id="transport_failure",
         ),
         pytest.param(
-            HttpTransportError(
-                failure=HttpTransportFailure(
-                    HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
-                )
-            ),
-            "http_transport_error",
-            True,
-            id="unclassified_transport_failure",
-        ),
-        pytest.param(
             _feeds(_read_error(), _response_error(429)),
             "rss_feed_errors",
             True,
@@ -141,6 +131,15 @@ def test_failure_that_may_change_or_is_not_understood_is_redelivered(
             ),
             "host_blocked",
             id="host_blocked",
+        ),
+        pytest.param(
+            HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
+                )
+            ),
+            "http_transport_error",
+            id="unclassified_transport_failure",
         ),
         pytest.param(_read_error(), "read_malformed_content", id="unreadable_response"),
         pytest.param(

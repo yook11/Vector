@@ -95,6 +95,18 @@ _NOW = _RECEIVED + timedelta(seconds=30)
             id="non_retryable_response",
         ),
         pytest.param(
+            HttpTransportError(
+                failure=HttpTransportFailure(
+                    Stage.CONNECT, Reason.PROXY, proxy_status=407
+                )
+            ),
+            NoRetryCompletion,
+            "http_transport_error",
+            None,
+            True,
+            id="non_retryable_transport_requiring_investigation",
+        ),
+        pytest.param(
             DestinationRejectedError(
                 reason=DestinationRejectedReason.NON_PUBLIC_IP_LITERAL,
                 host="10.0.0.1",

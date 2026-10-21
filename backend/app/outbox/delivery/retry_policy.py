@@ -8,6 +8,7 @@ from enum import StrEnum
 from math import isfinite
 
 from app.http.failure import HttpTransportFailureReason
+from app.http.retry_prospect import is_resolvable_by_retry
 from app.outbox.delivery.values import RetryDelay
 from app.outbox.publishing.errors import (
     PublishConfigurationError,
@@ -55,15 +56,6 @@ class NonRetryable:
 MAX_PUBLISH_ATTEMPTS = 5
 
 _RETRY_DELAYS = (30, 120, 600, 1800)
-_RETRY_TRANSPORT_REASONS = frozenset(
-    {
-        HttpTransportFailureReason.TIMEOUT,
-        HttpTransportFailureReason.DNS_RESOLUTION,
-        HttpTransportFailureReason.NETWORK_IO,
-        HttpTransportFailureReason.PROTOCOL_VIOLATION,
-        HttpTransportFailureReason.UNKNOWN,
-    }
-)
 _RETRY_SERVICE_REASONS = frozenset(
     {
         PublishServiceReason.THROTTLED,
@@ -75,11 +67,7 @@ _RETRY_SERVICE_REASONS = frozenset(
 def _is_retry_candidate(error: PublishError) -> bool:
     """回数を見ず、失敗の性質として再試行対象かを返す。"""
     if isinstance(error, PublishTransportError):
-        if error.failure.reason in _RETRY_TRANSPORT_REASONS:
-            return True
-        if error.failure.reason is HttpTransportFailureReason.PROXY:
-            return _is_retryable_proxy_status(error.failure.proxy_status)
-        return False
+        return is_resolvable_by_retry(error.failure)
     if isinstance(error, PublishServiceError):
         return error.reason in _RETRY_SERVICE_REASONS
     return False
@@ -88,11 +76,9 @@ def _is_retry_candidate(error: PublishError) -> bool:
 def _non_retryable_reason(error: PublishError) -> NonRetryableReason:
     """再試行対象でない失敗の性質から、停止理由を決める。"""
     if isinstance(error, PublishTransportError):
-        if error.failure.reason is HttpTransportFailureReason.TLS:
-            return NonRetryableReason.NON_RETRYABLE_FAILURE
-        if error.failure.reason is HttpTransportFailureReason.PROXY:
-            return NonRetryableReason.NON_RETRYABLE_FAILURE
-        return NonRetryableReason.UNEXPECTED_FAILURE
+        if error.failure.reason is HttpTransportFailureReason.UNKNOWN:
+            return NonRetryableReason.UNCLASSIFIED_FAILURE
+        return NonRetryableReason.NON_RETRYABLE_FAILURE
     if isinstance(error, PublishServiceError):
         if error.reason is PublishServiceReason.UNCLASSIFIED:
             return NonRetryableReason.UNCLASSIFIED_FAILURE
@@ -108,10 +94,6 @@ def _non_retryable_reason(error: PublishError) -> NonRetryableReason:
     ):
         return NonRetryableReason.NON_RETRYABLE_FAILURE
     return NonRetryableReason.UNEXPECTED_FAILURE
-
-
-def _is_retryable_proxy_status(status: int | None) -> bool:
-    return status is None or status == 429 or 500 <= status <= 599
 
 
 def _retry_delay(*, attempt_count: int, jitter: float) -> timedelta:
