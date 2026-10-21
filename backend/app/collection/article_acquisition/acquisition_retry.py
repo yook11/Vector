@@ -6,19 +6,9 @@ from app.aws.sqs.errors import (
     SqsServiceError,
     SqsServiceErrorReason,
 )
-from app.http.failure import HttpTransportFailureReason
+from app.http.retry_prospect import is_resolvable_by_retry
 
 MAX_ACQUISITION_SEND_ATTEMPTS = 3
-
-_TRANSIENT_TRANSPORT_REASONS = frozenset(
-    {
-        HttpTransportFailureReason.TIMEOUT,
-        HttpTransportFailureReason.DNS_RESOLUTION,
-        HttpTransportFailureReason.NETWORK_IO,
-        HttpTransportFailureReason.PROTOCOL_VIOLATION,
-        HttpTransportFailureReason.UNKNOWN,
-    }
-)
 
 
 def is_transient_send_failure(error: MessageSendError) -> bool:
@@ -28,10 +18,7 @@ def is_transient_send_failure(error: MessageSendError) -> bool:
             SqsServiceErrorReason.SERVICE_UNAVAILABLE,
         )
     if isinstance(error, MessageSendTransportError):
-        if error.failure.reason is HttpTransportFailureReason.PROXY:
-            status = error.failure.proxy_status
-            return status is None or status == 429 or 500 <= status <= 599
-        return error.failure.reason in _TRANSIENT_TRANSPORT_REASONS
+        return is_resolvable_by_retry(error.failure)
     return False
 
 

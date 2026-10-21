@@ -180,6 +180,27 @@ async def test_httpx_real_transport_classifies_tls_failure(
     assert classify_httpx(caught.value) == HttpTransportFailure(S.CONNECT, R.TLS)
 
 
+async def test_httpx_real_transport_classifies_certificate_verification_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """実際のhttpcore2とhttpx2のラップを通しても、証明書の検証の失敗をTLSと分ける。"""
+    monkeypatch.setattr("anyio.connect_tcp", AsyncMock(return_value=AsyncMock()))
+    monkeypatch.setattr(
+        "anyio.streams.tls.TLSStream.wrap",
+        AsyncMock(
+            side_effect=ssl.SSLCertVerificationError(1, "certificate verify failed")
+        ),
+    )
+    async with httpx2.AsyncHTTPTransport() as transport:
+        with pytest.raises(httpx2.ConnectError) as caught:
+            await transport.handle_async_request(
+                httpx2.Request("GET", "https://example.invalid")
+            )
+    assert classify_httpx(caught.value) == HttpTransportFailure(
+        S.CONNECT, R.CERTIFICATE_VERIFICATION
+    )
+
+
 def test_connection_cause_takes_precedence_over_unrelated_context() -> None:
     """明示的な原因があるときに別の処理で発生したcontextを採用しない。"""
     exc = httpx2.ConnectError("failed")
@@ -300,6 +321,36 @@ def test_botocore_ssl_failure_while_reading_response_is_potentially_delivered(
     failure = classify_botocore(caught.value)
     assert failure == HttpTransportFailure(S.UNKNOWN, R.TLS)
     assert failure.request_may_have_reached_server is True
+
+
+def test_botocore_classifies_certificate_verification_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """botocoreでラップされた証明書の検証の失敗を、接続段階の証明書の失敗とする。"""
+    certificate_error = ssl.SSLCertVerificationError(1, "certificate verify failed")
+    # urllib3は接続中のssl例外を自身のSSLErrorで包み直し、元の例外はcontextに残る。
+    urllib3_error = urllib3_errors.SSLError(certificate_error)
+    urllib3_error.__context__ = certificate_error
+    connection = Mock()
+    connection.urlopen.side_effect = urllib3_error
+    manager = Mock()
+    manager.connection_from_url.return_value = connection
+    request = AWSPreparedRequest(
+        method="POST",
+        url="https://example.invalid",
+        headers={},
+        body=b"{}",
+        stream_output=False,
+    )
+    with closing(URLLib3Session(proxies={})) as session:
+        monkeypatch.setattr(
+            session, "_get_connection_manager", Mock(return_value=manager)
+        )
+        with pytest.raises(botocore_errors.SSLError) as caught:
+            session.send(request)
+    assert classify_botocore(caught.value) == HttpTransportFailure(
+        S.CONNECT, R.CERTIFICATE_VERIFICATION
+    )
 
 
 def test_transport_value_does_not_carry_sdk_message_or_url() -> None:

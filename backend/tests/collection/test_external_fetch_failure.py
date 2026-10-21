@@ -72,19 +72,36 @@ def test_http_response_that_may_change_after_waiting(
     ("failure", "investigate"),
     [
         (HttpTransportFailure(Stage.RECEIVE, Reason.TIMEOUT), False),
-        (HttpTransportFailure(Stage.CONNECT, Reason.PROXY, proxy_status=403), False),
-        (HttpTransportFailure(Stage.CONNECT, Reason.PROXY, proxy_status=407), True),
+        (HttpTransportFailure(Stage.CONNECT, Reason.TLS), False),
         (HttpTransportFailure(Stage.CONNECT, Reason.PROXY, proxy_status=511), True),
         (HttpTransportFailure(Stage.UNKNOWN, Reason.NETWORK_IO), True),
+    ],
+)
+def test_transport_failure_resolvable_by_retry_may_change(
+    failure: HttpTransportFailure, investigate: bool
+) -> None:
+    """送り直せば解消しうる通信の失敗を再試行可能とし、ネットワークの認証の要求と段階が分からない失敗は調査対象にする。"""
+    exc = HttpTransportError(failure=failure)
+    assert classify_external_fetch_failure(exc, now=_NOW) == RetryableFetchFailure(
+        code="http_transport_error", requires_investigation=investigate
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure", "investigate"),
+    [
+        (HttpTransportFailure(Stage.CONNECT, Reason.CERTIFICATE_VERIFICATION), False),
+        (HttpTransportFailure(Stage.CONNECT, Reason.PROXY, proxy_status=403), False),
+        (HttpTransportFailure(Stage.CONNECT, Reason.PROXY, proxy_status=407), True),
         (HttpTransportFailure(Stage.CONNECT, Reason.UNKNOWN), True),
     ],
 )
-def test_transport_failure_is_not_read_as_origin_rejection(
+def test_transport_failure_not_resolvable_by_retry_cannot_fetch(
     failure: HttpTransportFailure, investigate: bool
 ) -> None:
-    """通信段階の失敗をプロキシの403も含めて取得先の拒否へ読み替えない。"""
+    """送り直しても解消しない通信の失敗を再試行不可とし、プロキシの認証と分類できない失敗は調査対象にする。"""
     exc = HttpTransportError(failure=failure)
-    assert classify_external_fetch_failure(exc, now=_NOW) == RetryableFetchFailure(
+    assert classify_external_fetch_failure(exc, now=_NOW) == NonRetryableFetchFailure(
         code="http_transport_error", requires_investigation=investigate
     )
 

@@ -8,6 +8,7 @@
 import re
 import socket
 import ssl
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -36,6 +37,9 @@ class HttpTransportFailureReason(StrEnum):
     TIMEOUT = "timeout"
     DNS_RESOLUTION = "dns_resolution"
     TLS = "tls"
+    """証明書の検証以外のTLSの失敗で、ハンドシェイク中の切断やTLSの版・暗号の不一致を含む。"""
+    CERTIFICATE_VERIFICATION = "certificate_verification"
+    """接続相手の証明書を検証できなかった(期限切れ・自己署名・名前の不一致など)。"""
     PROXY = "proxy"
     """proxy接続またはトンネル確立に失敗した。取得先の応答ではない。"""
     NETWORK_IO = "network_io"
@@ -70,20 +74,29 @@ class HttpTransportFailure:
 _PROXY_REFUSAL_STATUS = re.compile(r"^(\d{3})\b")
 
 
-def _connect_failure_reason(exc: httpx2.ConnectError) -> HttpTransportFailureReason:
-    """httpcore2による多段ラップの内側から接続失敗の原因を読む。"""
+def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """ライブラリが多段に包んだ例外を、循環があっても止まるように内側へたどる。"""
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, socket.gaierror):
-            return HttpTransportFailureReason.DNS_RESOLUTION
-        if isinstance(current, ssl.SSLError):
-            return HttpTransportFailureReason.TLS
+        yield current
         # httpcore2のraise from Noneでcauseが消えても元の原因はcontextに残る。
         current = (
             current.__cause__ if current.__cause__ is not None else current.__context__
         )
+
+
+def _connect_failure_reason(exc: httpx2.ConnectError) -> HttpTransportFailureReason:
+    """httpcore2による多段ラップの内側から接続失敗の原因を読む。"""
+    for current in _exception_chain(exc):
+        if isinstance(current, socket.gaierror):
+            return HttpTransportFailureReason.DNS_RESOLUTION
+        # 証明書の検証の失敗はSSLErrorのサブクラスなので、先に判定する。
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return HttpTransportFailureReason.CERTIFICATE_VERIFICATION
+        if isinstance(current, ssl.SSLError):
+            return HttpTransportFailureReason.TLS
     return HttpTransportFailureReason.NETWORK_IO
 
 
@@ -165,6 +178,15 @@ def classify_botocore(exc: Exception) -> HttpTransportFailure | None:
             HttpTransportStage.CONNECT, HttpTransportFailureReason.NETWORK_IO
         )
     if isinstance(exc, botocore_errors.SSLError):
+        if any(
+            isinstance(current, ssl.SSLCertVerificationError)
+            for current in _exception_chain(exc)
+        ):
+            # 証明書の検証は接続の確立中にだけ起きるため、段階を断定できる。
+            return HttpTransportFailure(
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
+            )
         # botocoreは応答読み取り中のSSLエラーも同じ型に包むため段階を断定しない。
         return HttpTransportFailure(
             HttpTransportStage.UNKNOWN, HttpTransportFailureReason.TLS

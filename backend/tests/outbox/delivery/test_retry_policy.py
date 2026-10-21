@@ -33,25 +33,30 @@ from app.outbox.publishing.errors import (
 )
 
 
-def transport(
-    reason=HttpTransportFailureReason.NETWORK_IO,
-    stage=HttpTransportStage.CONNECT,
-    status=None,
-):
+def transport(reason=HttpTransportFailureReason.NETWORK_IO):
     return PublishTransportError(
-        failure=HttpTransportFailure(stage, reason, proxy_status=status)
+        failure=HttpTransportFailure(HttpTransportStage.CONNECT, reason)
     )
 
 
-@pytest.mark.parametrize("reason", list(HttpTransportFailureReason))
-@pytest.mark.parametrize("stage", list(HttpTransportStage))
-def test_all_transport_reasons_and_delivery_uncertainty(reason, stage):
-    """発生段階と到達可能性は重複許容の配信方針を変えない。"""
-    result = decide_publish_retry(transport(reason, stage), attempt_count=1, jitter=0.5)
-    if reason is HttpTransportFailureReason.TLS:
-        assert result == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
-    else:
-        assert result == Retryable(RetryDelay(timedelta(seconds=30)))
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        (
+            HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
+            NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE),
+        ),
+        (
+            HttpTransportFailureReason.UNKNOWN,
+            NonRetryable(NonRetryableReason.UNCLASSIFIED_FAILURE),
+        ),
+    ],
+)
+def test_non_resolvable_transport_failure_stop_reason(reason, expected):
+    """証明書の検証の失敗は再試行しない失敗、分類できない通信の失敗は未分類の失敗として止める。"""
+    assert (
+        decide_publish_retry(transport(reason), attempt_count=1, jitter=0.5) == expected
+    )
 
 
 @pytest.mark.parametrize("reason", list(PublishServiceReason))
@@ -103,35 +108,6 @@ def test_unexpected_phases_stop_delivery(phase):
     )
 
 
-@pytest.mark.parametrize(
-    ("status", "retry"),
-    [
-        (None, True),
-        (429, True),
-        (499, False),
-        (500, True),
-        (599, True),
-        (600, False),
-        (200, False),
-        (400, False),
-        (403, False),
-        (407, False),
-    ],
-)
-def test_proxy_status_boundaries(status, retry):
-    """proxy拒否と一時的なproxy障害を区別する。"""
-    result = decide_publish_retry(
-        transport(HttpTransportFailureReason.PROXY, status=status),
-        attempt_count=1,
-        jitter=0.5,
-    )
-    assert result == (
-        Retryable(RetryDelay(timedelta(seconds=30)))
-        if retry
-        else NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
-    )
-
-
 @pytest.mark.parametrize(("attempt", "base"), [(1, 30), (2, 120), (3, 600), (4, 1800)])
 @pytest.mark.parametrize(("jitter", "percent"), [(0, 80), (0.5, 100), (1, 120)])
 def test_delay_schedule_and_jitter_endpoints(attempt, base, jitter, percent):
@@ -154,7 +130,7 @@ def test_retryable_failure_stops_at_fifth_attempt(attempt):
 @pytest.mark.parametrize(
     "error",
     [
-        transport(HttpTransportFailureReason.TLS),
+        transport(HttpTransportFailureReason.CERTIFICATE_VERIFICATION),
         PublishConfigurationError(
             reason=PublishConfigurationReason.MISSING_CREDENTIALS
         ),

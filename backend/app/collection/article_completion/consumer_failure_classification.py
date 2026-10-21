@@ -50,8 +50,12 @@ def classify_completion_failure(
                         retry_at=retry_at,
                         requires_investigation=investigate,
                     )
-                case NonRetryableFetchFailure(code=code):
-                    return NoRetryCompletion(cause=exc, code=code)
+                case NonRetryableFetchFailure(
+                    code=code, requires_investigation=investigate
+                ):
+                    return NoRetryCompletion(
+                        cause=exc, code=code, requires_investigation=investigate
+                    )
         case ArticleCompletionError(
             cause=ArticleBuildRejectedError()
             | RobotsDisallowedError()
