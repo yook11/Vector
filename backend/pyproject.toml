@@ -8,7 +8,8 @@ dependencies = [
     "awslambdaric>=4.0.2,<5; sys_platform == 'linux'",
     "bcrypt>=4.0,<6",
     # 外部通信のTLSは、httpx2既定のOSの証明書ストアではなくcertifiの一覧で検証する。
-    "certifi>=2026.6.17",
+    # 2026.10.19で、秘密鍵が漏れた中間認証局につながるemSignのルートを一覧から外した。
+    "certifi>=2026.10.19",
     "email-validator>=2.0,<3",
     "fastapi>=0.139.0,<1",
     "feedparser>=6.0,<7",
