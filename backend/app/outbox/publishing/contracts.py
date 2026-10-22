@@ -6,22 +6,12 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from app.analysis.assessment.events import AssessedEventInvalidError
-from app.analysis.curation.events import CuratedEventInvalidError
 from app.aws.sqs.errors import MessageSendError
-from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
-from app.collection.events import AnalyzableEventInvalidError
 from app.outbox.publishing.route import EventMessage, EventRouteMismatchError
+from app.shared.event_contract import EventInvalidError
 
 # 型注釈とisinstanceの両方に使うため、TypeAliasやtype文ではなくUnionTypeの値として持つ。
-PublishFailure = (
-    MessageSendError
-    | AnalyzableEventInvalidError
-    | IncompleteArticleEventInvalidError
-    | AssessedEventInvalidError
-    | CuratedEventInvalidError
-    | EventRouteMismatchError
-)
+PublishFailure = MessageSendError | EventInvalidError | EventRouteMismatchError
 
 
 @dataclass(frozen=True, slots=True)

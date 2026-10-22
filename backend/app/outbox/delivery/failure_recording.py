@@ -2,8 +2,6 @@
 
 import structlog
 
-from app.analysis.assessment.events import AssessedEventInvalidError
-from app.analysis.curation.events import CuratedEventInvalidError
 from app.audit.error_fields import exception_fqn
 from app.aws.sqs.errors import (
     MessageSendConfigurationError,
@@ -16,11 +14,10 @@ from app.aws.sqs.errors import (
 )
 from app.aws.sqs.outgoing_message import MessageBodyMismatchError
 from app.cloudwatch.emf import emit_metric
-from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
-from app.collection.events import AnalyzableEventInvalidError
 from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
 from app.outbox.publishing.contracts import PublishFailure
+from app.shared.event_contract import EventInvalidError
 
 logger = structlog.get_logger(__name__)
 CONFIGURATION_FAILURE_METRIC = "outbox_publish_configuration_failure"
@@ -75,13 +72,7 @@ def record_publish_failure(
         }
         if isinstance(error, MessageSendConfigurationError | SqsServiceError):
             fields["error_reason"] = error.reason.value
-        elif isinstance(
-            error,
-            AnalyzableEventInvalidError
-            | IncompleteArticleEventInvalidError
-            | AssessedEventInvalidError
-            | CuratedEventInvalidError,
-        ):
+        elif isinstance(error, EventInvalidError):
             fields["error_reason"] = error.invalid.reason.value
         elif isinstance(error, MessageBodyMismatchError):
             fields["error_message"] = _BODY_CHECKSUM_MISMATCH_MESSAGE

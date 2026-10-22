@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import ClassVar, Self
@@ -18,6 +17,14 @@ from pydantic import (
     field_validator,
 )
 from pydantic_core import PydanticCustomError
+
+from app.shared.event_contract import (
+    EventInvalid,
+    EventInvalidCode,
+    EventInvalidError,
+    EventInvalidIssue,
+    EventInvalidReason,
+)
 
 
 class AnalyzableArticleCreated(BaseModel):
@@ -89,10 +96,10 @@ class AnalyzableArticleCreatedEvent(BaseModel):
     @staticmethod
     def _event_invalid_from_validation_error(
         error: ValidationError,
-    ) -> AnalyzableEventInvalid:
+    ) -> EventInvalid:
         """外側の構造、種別、バージョン、payloadの順に分類し詳細を抽出する。"""
-        reasons: set[AnalyzableEventInvalidReason] = set()
-        issues: dict[AnalyzableEventInvalidIssue, None] = {}
+        reasons: set[EventInvalidReason] = set()
+        issues: dict[EventInvalidIssue, None] = {}
         known_paths = {
             tuple(field.value.split(".")): field
             for field in AnalyzableEventInvalidField
@@ -101,25 +108,25 @@ class AnalyzableArticleCreatedEvent(BaseModel):
             kind = detail["type"]
             location = detail["loc"]
             if kind == "unsupported_event_type":
-                reasons.add(AnalyzableEventInvalidReason.UNSUPPORTED_EVENT_TYPE)
-                code = AnalyzableEventInvalidCode.UNSUPPORTED_EVENT_TYPE
+                reasons.add(EventInvalidReason.UNSUPPORTED_EVENT_TYPE)
+                code = EventInvalidCode.UNSUPPORTED_EVENT_TYPE
             elif kind == "unsupported_schema_version":
-                reasons.add(AnalyzableEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION)
-                code = AnalyzableEventInvalidCode.UNSUPPORTED_SCHEMA_VERSION
+                reasons.add(EventInvalidReason.UNSUPPORTED_SCHEMA_VERSION)
+                code = EventInvalidCode.UNSUPPORTED_SCHEMA_VERSION
             else:
                 reasons.add(
-                    AnalyzableEventInvalidReason.INVALID_PAYLOAD
+                    EventInvalidReason.INVALID_PAYLOAD
                     if len(location) > 1 and location[0] == "payload"
-                    else AnalyzableEventInvalidReason.INVALID_ENVELOPE
+                    else EventInvalidReason.INVALID_ENVELOPE
                 )
                 if kind == "missing":
-                    code = AnalyzableEventInvalidCode.MISSING_REQUIRED_FIELD
+                    code = EventInvalidCode.MISSING_REQUIRED_FIELD
                 elif kind == "extra_forbidden":
-                    code = AnalyzableEventInvalidCode.UNKNOWN_FIELD
+                    code = EventInvalidCode.UNKNOWN_FIELD
                 elif kind.endswith("_type") or kind == "is_instance_of":
-                    code = AnalyzableEventInvalidCode.INVALID_TYPE
+                    code = EventInvalidCode.INVALID_TYPE
                 else:
-                    code = AnalyzableEventInvalidCode.INVALID_VALUE
+                    code = EventInvalidCode.INVALID_VALUE
             parent = (
                 AnalyzableEventInvalidField.PAYLOAD
                 if location and location[0] == "payload" and len(location) > 1
@@ -130,22 +137,11 @@ class AnalyzableArticleCreatedEvent(BaseModel):
                 if kind == "extra_forbidden"
                 else known_paths.get(location, parent)
             )
-            issues[AnalyzableEventInvalidIssue(field=field, code=code)] = None
-        return AnalyzableEventInvalid(
-            reason=next(
-                reason for reason in AnalyzableEventInvalidReason if reason in reasons
-            ),
+            issues[EventInvalidIssue(field=field, code=code)] = None
+        return EventInvalid(
+            reason=next(reason for reason in EventInvalidReason if reason in reasons),
             issues=tuple(issues),
         )
-
-
-class AnalyzableEventInvalidReason(StrEnum):
-    """入力値を含めずに共有できる、イベント契約違反の理由。"""
-
-    INVALID_ENVELOPE = "invalid_envelope"
-    UNSUPPORTED_EVENT_TYPE = "unsupported_event_type"
-    UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
-    INVALID_PAYLOAD = "invalid_payload"
 
 
 class AnalyzableEventInvalidField(StrEnum):
@@ -160,36 +156,5 @@ class AnalyzableEventInvalidField(StrEnum):
     ANALYZABLE_ARTICLE_ID = "payload.analyzable_article_id"
 
 
-class AnalyzableEventInvalidCode(StrEnum):
-    """入力値や検証ライブラリの自由文に依存しない違反コード。"""
-
-    MISSING_REQUIRED_FIELD = "missing_required_field"
-    INVALID_TYPE = "invalid_type"
-    INVALID_VALUE = "invalid_value"
-    UNKNOWN_FIELD = "unknown_field"
-    UNSUPPORTED_EVENT_TYPE = "unsupported_event_type"
-    UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
-
-
-@dataclass(frozen=True, slots=True)
-class AnalyzableEventInvalidIssue:
-    """入力の内容を保持しない、一項目の契約違反。"""
-
-    field: AnalyzableEventInvalidField
-    code: AnalyzableEventInvalidCode
-
-
-@dataclass(frozen=True, slots=True)
-class AnalyzableEventInvalid:
-    """優先する失敗理由と、重複のない安全な検証詳細。"""
-
-    reason: AnalyzableEventInvalidReason
-    issues: tuple[AnalyzableEventInvalidIssue, ...]
-
-
-class AnalyzableEventInvalidError(Exception):
+class AnalyzableEventInvalidError(EventInvalidError):
     """イベントの構築失敗を、安全な理由と検証詳細で伝える。"""
-
-    def __init__(self, invalid: AnalyzableEventInvalid) -> None:
-        super().__init__()
-        self.invalid = invalid

@@ -7,18 +7,18 @@ from sqlalchemy.exc import StatementError
 
 from app.log_policy.exceptions.application import convert_application_error
 from app.log_policy.exceptions.event_validation import (
-    EVENT_VALIDATION_ERRORS,
     convert_event_validation_exception,
 )
 from app.log_policy.exceptions.sql import convert_sql_exception, is_postgres_error
 from app.log_policy.exceptions.types import ConvertedException
 from app.log_policy.exceptions.validation import convert_validation_exception
 from app.shared.errors import ApplicationError
+from app.shared.event_contract import EventInvalidError
 
 
 def convert_exception(exc: BaseException) -> ConvertedException:
     """専用の保護が必要な例外を優先し、種類ごとの変換結果を返す。"""
-    if isinstance(exc, EVENT_VALIDATION_ERRORS):
+    if isinstance(exc, EventInvalidError):
         return convert_event_validation_exception(exc)
     if isinstance(exc, StatementError) or is_postgres_error(exc):
         return convert_sql_exception(exc)

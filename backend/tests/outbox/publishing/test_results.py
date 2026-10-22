@@ -6,26 +6,18 @@ from uuid import UUID
 import pytest
 
 from app.analysis.assessment.events import (
-    AssessedEventInvalid,
     AssessedEventInvalidError,
-    AssessedEventInvalidReason,
 )
 from app.analysis.curation.events import (
-    CuratedEventInvalid,
     CuratedEventInvalidError,
-    CuratedEventInvalidReason,
 )
 from app.aws.sqs.errors import MessageSendUnexpectedError
 from app.aws.sqs.outgoing_message import MessageTooLargeError
 from app.collection.article_acquisition.events import (
-    IncompleteArticleEventInvalid,
     IncompleteArticleEventInvalidError,
-    IncompleteArticleEventInvalidReason,
 )
 from app.collection.events import (
-    AnalyzableEventInvalid,
     AnalyzableEventInvalidError,
-    AnalyzableEventInvalidReason,
 )
 from app.db.errors import DatabaseUnexpectedError
 from app.outbox.publishing.contracts import (
@@ -34,6 +26,10 @@ from app.outbox.publishing.contracts import (
     PublishSucceeded,
 )
 from app.outbox.publishing.route import EventRouteMismatchError
+from app.shared.event_contract import (
+    EventInvalid,
+    EventInvalidReason,
+)
 
 
 def _send_failure():
@@ -57,24 +53,16 @@ def test_individual_result_rejects_non_uuid(event_id, failed):
     [
         MessageTooLargeError(),
         AnalyzableEventInvalidError(
-            AnalyzableEventInvalid(
-                reason=AnalyzableEventInvalidReason.INVALID_PAYLOAD, issues=()
-            )
+            EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
         IncompleteArticleEventInvalidError(
-            IncompleteArticleEventInvalid(
-                reason=IncompleteArticleEventInvalidReason.INVALID_PAYLOAD, issues=()
-            )
+            EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
         AssessedEventInvalidError(
-            AssessedEventInvalid(
-                reason=AssessedEventInvalidReason.INVALID_PAYLOAD, issues=()
-            )
+            EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
         CuratedEventInvalidError(
-            CuratedEventInvalid(
-                reason=CuratedEventInvalidReason.INVALID_PAYLOAD, issues=()
-            )
+            EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
         EventRouteMismatchError(),
     ],

@@ -2,10 +2,6 @@
 
 from collections.abc import Callable, Sequence
 
-from app.analysis.assessment.events import AssessedEventInvalidError
-from app.analysis.curation.events import CuratedEventInvalidError
-from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
-from app.collection.events import AnalyzableEventInvalidError
 from app.outbox.publishing.contracts import (
     EventEnvelope,
     PublishFailed,
@@ -16,6 +12,7 @@ from app.outbox.publishing.route import (
     EventMessage,
     EventRouteMismatchError,
 )
+from app.shared.event_contract import EventInvalidError
 
 
 def prepare_messages(
@@ -38,13 +35,7 @@ def prepare_messages(
                 or message.event_id != envelope.event_id
             ):
                 raise TypeError("message must preserve input event ID")
-        except (
-            AnalyzableEventInvalidError,
-            IncompleteArticleEventInvalidError,
-            AssessedEventInvalidError,
-            CuratedEventInvalidError,
-            EventRouteMismatchError,
-        ) as exc:
+        except (EventInvalidError, EventRouteMismatchError) as exc:
             failures.append(PublishFailed(envelope.event_id, exc))
         else:
             messages.append(message)

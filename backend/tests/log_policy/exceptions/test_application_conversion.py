@@ -36,6 +36,12 @@ from app.http.failure import (
     HttpTransportStage,
 )
 from app.log_policy.exceptions.conversion import convert_exception
+from app.shared.event_contract import (
+    EventInvalid,
+    EventInvalidCode,
+    EventInvalidIssue,
+    EventInvalidReason,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -60,17 +66,17 @@ def test_application_error_subclass_keeps_message_and_details() -> None:
 
 def test_analyzable_event_keeps_reason_and_issues() -> None:
     """分析可能イベントの診断を、順序と重複を変えず任意属性を含めない形式へ写す。"""
-    missing = collection.AnalyzableEventInvalidIssue(
+    missing = EventInvalidIssue(
         collection.AnalyzableEventInvalidField.ANALYZABLE_ARTICLE_ID,
-        collection.AnalyzableEventInvalidCode.MISSING_REQUIRED_FIELD,
+        EventInvalidCode.MISSING_REQUIRED_FIELD,
     )
-    unknown = collection.AnalyzableEventInvalidIssue(
+    unknown = EventInvalidIssue(
         collection.AnalyzableEventInvalidField.PAYLOAD,
-        collection.AnalyzableEventInvalidCode.UNKNOWN_FIELD,
+        EventInvalidCode.UNKNOWN_FIELD,
     )
     exc = collection.AnalyzableEventInvalidError(
-        collection.AnalyzableEventInvalid(
-            collection.AnalyzableEventInvalidReason.INVALID_PAYLOAD,
+        EventInvalid(
+            EventInvalidReason.INVALID_PAYLOAD,
             (missing, unknown, missing),
         )
     )
@@ -102,16 +108,16 @@ def test_analyzable_event_keeps_reason_and_issues() -> None:
 def test_incomplete_article_event_keeps_reason_and_issues() -> None:
     """未完成記事イベントの理由と各項目の違反をログの診断形式へ写す。"""
     exc = acquisition.IncompleteArticleEventInvalidError(
-        acquisition.IncompleteArticleEventInvalid(
-            acquisition.IncompleteArticleEventInvalidReason.INVALID_PAYLOAD,
+        EventInvalid(
+            EventInvalidReason.INVALID_PAYLOAD,
             (
-                acquisition.IncompleteArticleEventInvalidIssue(
+                EventInvalidIssue(
                     acquisition.IncompleteArticleEventInvalidField.SOURCE_ID,
-                    acquisition.IncompleteArticleEventInvalidCode.INVALID_TYPE,
+                    EventInvalidCode.INVALID_TYPE,
                 ),
-                acquisition.IncompleteArticleEventInvalidIssue(
+                EventInvalidIssue(
                     acquisition.IncompleteArticleEventInvalidField.INCOMPLETE_ARTICLE_ID,
-                    acquisition.IncompleteArticleEventInvalidCode.MISSING_REQUIRED_FIELD,
+                    EventInvalidCode.MISSING_REQUIRED_FIELD,
                 ),
             ),
         )
@@ -139,16 +145,16 @@ def test_incomplete_article_event_keeps_reason_and_issues() -> None:
 def test_curated_event_keeps_reason_and_issues() -> None:
     """整形済みイベントの理由と各項目の違反をログの診断形式へ写す。"""
     exc = curation.CuratedEventInvalidError(
-        curation.CuratedEventInvalid(
-            curation.CuratedEventInvalidReason.INVALID_PAYLOAD,
+        EventInvalid(
+            EventInvalidReason.INVALID_PAYLOAD,
             (
-                curation.CuratedEventInvalidIssue(
+                EventInvalidIssue(
                     curation.CuratedEventInvalidField.CURATION_ID,
-                    curation.CuratedEventInvalidCode.INVALID_VALUE,
+                    EventInvalidCode.INVALID_VALUE,
                 ),
-                curation.CuratedEventInvalidIssue(
+                EventInvalidIssue(
                     curation.CuratedEventInvalidField.ANALYZABLE_ARTICLE_ID,
-                    curation.CuratedEventInvalidCode.MISSING_REQUIRED_FIELD,
+                    EventInvalidCode.MISSING_REQUIRED_FIELD,
                 ),
             ),
         )
@@ -176,16 +182,16 @@ def test_curated_event_keeps_reason_and_issues() -> None:
 def test_assessed_event_keeps_reason_and_issues() -> None:
     """評価済みイベントの理由と各項目の違反をログの診断形式へ写す。"""
     exc = assessment.AssessedEventInvalidError(
-        assessment.AssessedEventInvalid(
-            assessment.AssessedEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION,
+        EventInvalid(
+            EventInvalidReason.UNSUPPORTED_SCHEMA_VERSION,
             (
-                assessment.AssessedEventInvalidIssue(
+                EventInvalidIssue(
                     assessment.AssessedEventInvalidField.SCHEMA_VERSION,
-                    assessment.AssessedEventInvalidCode.UNSUPPORTED_SCHEMA_VERSION,
+                    EventInvalidCode.UNSUPPORTED_SCHEMA_VERSION,
                 ),
-                assessment.AssessedEventInvalidIssue(
+                EventInvalidIssue(
                     assessment.AssessedEventInvalidField.ANALYZED_ARTICLE_ID,
-                    assessment.AssessedEventInvalidCode.MISSING_REQUIRED_FIELD,
+                    EventInvalidCode.MISSING_REQUIRED_FIELD,
                 ),
             ),
         )
@@ -252,11 +258,7 @@ def test_failed_diagnostic_access_does_not_stringify_exception() -> None:
         def __str__(self) -> str:
             pytest.fail("must not stringify the validation exception")
 
-    exc = BrokenError(
-        assessment.AssessedEventInvalid(
-            assessment.AssessedEventInvalidReason.INVALID_PAYLOAD, ()
-        )
-    )
+    exc = BrokenError(EventInvalid(EventInvalidReason.INVALID_PAYLOAD, ()))
     del exc.invalid
 
     result = convert_exception(exc)
@@ -271,8 +273,8 @@ def test_failed_diagnostic_access_does_not_stringify_exception() -> None:
 def test_invalid_issue_does_not_return_partial_diagnostics() -> None:
     """項目の変換に失敗した場合は、不完全な診断や元の説明文を出さない。"""
     exc = assessment.AssessedEventInvalidError(
-        assessment.AssessedEventInvalid(
-            assessment.AssessedEventInvalidReason.INVALID_PAYLOAD,
+        EventInvalid(
+            EventInvalidReason.INVALID_PAYLOAD,
             (object(),),
         )
     )

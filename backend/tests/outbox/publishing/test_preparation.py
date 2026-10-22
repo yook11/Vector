@@ -10,9 +10,7 @@ import pytest
 
 from app.analysis.assessment.events import AssessedEventInvalidError
 from app.collection.events import (
-    AnalyzableEventInvalid,
     AnalyzableEventInvalidError,
-    AnalyzableEventInvalidReason,
 )
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.contracts import EventEnvelope, PublishFailed
@@ -21,6 +19,10 @@ from app.outbox.publishing.route import (
     EventDeliveryRoute,
     EventMessage,
     EventRouteMismatchError,
+)
+from app.shared.event_contract import (
+    EventInvalid,
+    EventInvalidReason,
 )
 
 QUEUE_URL = "https://sqs.invalid/embedding"
@@ -128,9 +130,7 @@ def test_custom_route_preserves_messages_and_original_failure(envelope):
         for i in range(1, 4)
     ]
     error = AnalyzableEventInvalidError(
-        AnalyzableEventInvalid(
-            reason=AnalyzableEventInvalidReason.INVALID_PAYLOAD, issues=()
-        )
+        EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
     )
     expected = (
         EventMessage(events[1].event_id, "second body"),
