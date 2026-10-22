@@ -11,7 +11,7 @@ from app.collection.events import (
     AnalyzableEventInvalidError,
 )
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
-from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.publishing.contracts import EventEnvelope
 
 pytestmark = pytest.mark.unit
 

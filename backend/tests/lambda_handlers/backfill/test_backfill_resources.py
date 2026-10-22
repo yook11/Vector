@@ -84,23 +84,14 @@ async def test_rds_signer_uses_region_without_external_endpoint_settings(
 ):
     """署名器のSDK設定はリージョンを固定し、プロキシと外部endpoint設定を使わない。"""
     from app.lambda_handlers.backfill import resources
-    from app.outbox.publishing.analyzable_created import (
-        build_analyzable_created_message,
-    )
-    from app.outbox.publishing.route import EventDeliveryRoute
 
     stop = RuntimeError("stop before connection creation")
     client = Mock(side_effect=stop)
     monkeypatch.setattr(resources, "Session", lambda: Mock(create_client=client))
-    route = EventDeliveryRoute(
-        "article.analyzable_created", settings.sqs_article_curation_queue_url
-    )
     with pytest.raises(RuntimeError):
         async with resources.open_backfill_resources(
             settings,
             stage="curation",
-            route=route,
-            build_message=build_analyzable_created_message,
         ):
             pytest.fail("must not acquire resources")
     assert client.call_args.args == ("rds",)

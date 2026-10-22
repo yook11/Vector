@@ -1,6 +1,6 @@
 """backfill呼び出し単位で接続を所有し、元の失敗を保って解放する。"""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
@@ -12,16 +12,14 @@ from app.db.iam import build_iam_password_provider
 from app.db.session import SessionFactory, caller_managed_session_factory
 from app.lambda_handlers.backfill.failure_recorder import record_failure
 from app.lambda_handlers.backfill.settings import BackfillConnectionSettings
-from app.outbox.publishing.publisher import EventEnvelope, EventPublisher
-from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
-from app.outbox.publishing.routed_publisher import RoutedEventPublisher
-from app.outbox.sqs.publisher import SqsSender
+from app.outbox.publishing.contracts import MessageSender
+from app.outbox.sqs.sender import SqsSender
 
 
 @dataclass(frozen=True)
 class BackfillResources:
     session_factory: SessionFactory
-    publisher: EventPublisher
+    sender: MessageSender
 
 
 @asynccontextmanager
@@ -29,8 +27,6 @@ async def open_backfill_resources(
     settings: BackfillConnectionSettings,
     *,
     stage: BackfillStage,
-    route: EventDeliveryRoute,
-    build_message: Callable[[EventEnvelope], EventMessage],
 ) -> AsyncIterator[BackfillResources]:
     cleanup_errors: list[BaseException] = []
     async with AsyncExitStack() as stack:
@@ -73,9 +69,7 @@ async def open_backfill_resources(
             sender = SqsSender.from_session(
                 session=Session(), region=settings.aws_region
             )
-            resources = BackfillResources(
-                session_factory, RoutedEventPublisher(route, build_message, sender)
-            )
+            resources = BackfillResources(session_factory, sender)
         except BaseException as exc:
             record_failure(stage, phase, exc)
             raise

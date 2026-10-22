@@ -12,7 +12,7 @@ from app.aws.sqs.outgoing_message import (
     OutgoingSqsMessageBatch,
     SqsResponseInvalidError,
 )
-from app.outbox.publishing.publisher import (
+from app.outbox.publishing.contracts import (
     BatchPublishResult,
     PublishFailed,
     PublishSucceeded,

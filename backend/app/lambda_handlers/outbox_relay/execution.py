@@ -11,10 +11,9 @@ from app.db.session import caller_managed_session_factory
 from app.lambda_handlers.outbox_relay.settings import OutboxRelayConnectionSettings
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.relay import OutboxRelay
-from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.publishing.contracts import EventEnvelope
 from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
-from app.outbox.publishing.routed_publisher import RoutedEventPublisher
-from app.outbox.sqs.publisher import SqsSender
+from app.outbox.sqs.sender import SqsSender
 
 
 async def run_relay(
@@ -30,10 +29,13 @@ async def run_relay(
             session=Session(),
             region=settings.aws_region,
         )
-        publisher = RoutedEventPublisher(route, build_message, sender)
         failure_handler = OutboxDeliveryFailureHandler(session_factory)
         relay = OutboxRelay(
-            session_factory, publisher, failure_handler, event_type=route.event_type
+            session_factory,
+            sender,
+            failure_handler,
+            route=route,
+            build_message=build_message,
         )
         await relay.run_once()
         completed = True

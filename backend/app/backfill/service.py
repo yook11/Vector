@@ -1,6 +1,6 @@
 """工程別に期限切れを整理し、未完了記事のイベントを再投入する。"""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from uuid import uuid4
 
@@ -23,21 +23,26 @@ from app.backfill.policy import (
 from app.backfill.repository import PipelineBacklog
 from app.backfill.targets import BackfillEventTarget
 from app.db.session import SessionFactory
-from app.outbox.publishing.event_batch import MAX_BATCH_MESSAGES
-from app.outbox.publishing.publisher import (
+from app.outbox.publishing.contracts import (
     BatchPublishResult,
     EventEnvelope,
-    EventPublisher,
+    MessageSender,
     PublishSucceeded,
+    validate_send_results,
 )
+from app.outbox.publishing.event_batch import MAX_BATCH_MESSAGES
+from app.outbox.publishing.preparation import prepare_messages
+from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
 
 logger = structlog.get_logger(__name__)
 
 
 async def _dispatch(
-    publisher: EventPublisher,
+    sender: MessageSender,
     targets: Sequence[BackfillEventTarget],
     *,
+    route: EventDeliveryRoute,
+    build_message: Callable[[EventEnvelope], EventMessage],
     stage: str,
 ) -> None:
     """受付結果を対象と照合し、部分失敗でも次のバッチを送信する。"""
@@ -54,9 +59,21 @@ async def _dispatch(
             )
             for item in batch_targets
         )
-        batch = publisher.publish_batch(envelopes)
-        if not isinstance(batch, BatchPublishResult):
-            raise TypeError("publisher must return BatchPublishResult")
+        messages, conversion_failures = prepare_messages(
+            envelopes, route=route, build_message=build_message
+        )
+        if messages:
+            sent = sender.send_batch(queue_url=route.queue_url, messages=messages)
+            validate_send_results(sent, messages)
+            send_results = sent.results
+        else:
+            send_results = ()
+        results_by_id = {
+            result.event_id: result for result in (*conversion_failures, *send_results)
+        }
+        batch = BatchPublishResult(
+            tuple(results_by_id[envelope.event_id] for envelope in envelopes)
+        )
         if tuple(result.event_id for result in batch.results) != tuple(
             envelope.event_id for envelope in envelopes
         ):
@@ -73,8 +90,10 @@ async def _dispatch(
 
 async def backfill_curations(
     session_factory: SessionFactory,
-    publisher: EventPublisher,
+    sender: MessageSender,
     *,
+    route: EventDeliveryRoute,
+    build_message: Callable[[EventEnvelope], EventMessage],
     enabled: bool,
     now: datetime,
 ) -> None:
@@ -97,13 +116,17 @@ async def backfill_curations(
             limit=CURATIONS_LIMIT,
         )
     backlog_gauge.set(count, attributes={"stage": "curation"})
-    await _dispatch(publisher, targets, stage="curation")
+    await _dispatch(
+        sender, targets, route=route, build_message=build_message, stage="curation"
+    )
 
 
 async def backfill_assessments(
     session_factory: SessionFactory,
-    publisher: EventPublisher,
+    sender: MessageSender,
     *,
+    route: EventDeliveryRoute,
+    build_message: Callable[[EventEnvelope], EventMessage],
     enabled: bool,
     now: datetime,
 ) -> None:
@@ -126,13 +149,17 @@ async def backfill_assessments(
             limit=ASSESSMENTS_LIMIT,
         )
     backlog_gauge.set(count, attributes={"stage": "assessment"})
-    await _dispatch(publisher, targets, stage="assessment")
+    await _dispatch(
+        sender, targets, route=route, build_message=build_message, stage="assessment"
+    )
 
 
 async def backfill_embeddings(
     session_factory: SessionFactory,
-    publisher: EventPublisher,
+    sender: MessageSender,
     *,
+    route: EventDeliveryRoute,
+    build_message: Callable[[EventEnvelope], EventMessage],
     enabled: bool,
     now: datetime,
 ) -> None:
@@ -155,13 +182,17 @@ async def backfill_embeddings(
             limit=EMBEDDINGS_LIMIT,
         )
     backlog_gauge.set(count, attributes={"stage": "embedding"})
-    await _dispatch(publisher, targets, stage="embedding")
+    await _dispatch(
+        sender, targets, route=route, build_message=build_message, stage="embedding"
+    )
 
 
 async def backfill_completions(
     session_factory: SessionFactory,
-    publisher: EventPublisher,
+    sender: MessageSender,
     *,
+    route: EventDeliveryRoute,
+    build_message: Callable[[EventEnvelope], EventMessage],
     enabled: bool,
     now: datetime,
 ) -> None:
@@ -184,4 +215,6 @@ async def backfill_completions(
             limit=COMPLETIONS_LIMIT,
         )
     backlog_gauge.set(count, attributes={"stage": "completion"})
-    await _dispatch(publisher, targets, stage="completion")
+    await _dispatch(
+        sender, targets, route=route, build_message=build_message, stage="completion"
+    )

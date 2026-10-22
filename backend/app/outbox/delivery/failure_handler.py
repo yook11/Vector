@@ -15,7 +15,7 @@ from app.outbox.delivery.retry_policy import (
     Retryable,
     decide_publish_retry,
 )
-from app.outbox.publishing.publisher import PublishFailed
+from app.outbox.publishing.contracts import PublishFailed
 
 
 @dataclass(frozen=True, slots=True)

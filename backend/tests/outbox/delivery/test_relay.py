@@ -9,6 +9,7 @@ from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.relay import OutboxRelay
 from app.outbox.delivery.repository import OutboxDeliveryRepository
 from app.outbox.delivery.values import LeaseDuration
+from app.outbox.publishing.route import EventDeliveryRoute
 
 pytestmark = pytest.mark.asyncio
 
@@ -39,7 +40,8 @@ async def test_relay_passes_event_type_and_processing_limits(
         session_factory,
         Mock(),
         OutboxDeliveryFailureHandler(session_factory),
-        event_type="test.delivery",
+        route=EventDeliveryRoute("test.delivery", "https://sqs.invalid/test"),
+        build_message=Mock(),
     ).run_once()
     assert calls.mock_calls == [
         call.stop(event_type="test.delivery", limit=100),

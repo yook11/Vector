@@ -1,14 +1,28 @@
 """backfillテスト用の工程到達済みデータと受付記録。"""
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+from app.analysis.assessment.events import ArticleAssessedInScope
+from app.analysis.curation.events import ArticleCuratedSignal
+from app.collection.article_acquisition.events import IncompleteArticleRecorded
+from app.collection.events import AnalyzableArticleCreated
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.incomplete_article import IncompleteArticle
-from app.outbox.publishing.publisher import BatchPublishResult, PublishSucceeded
+from app.outbox.publishing.analyzable_created import build_analyzable_created_message
+from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.publishing.contracts import (
+    BatchPublishResult,
+    EventEnvelope,
+    PublishSucceeded,
+)
+from app.outbox.publishing.curated_signal import build_curated_signal_message
+from app.outbox.publishing.incomplete_recorded import build_incomplete_recorded_message
+from app.outbox.publishing.route import EventDeliveryRoute
 
 
 @dataclass(frozen=True)
@@ -103,19 +117,29 @@ async def complete_target(session, target, stage, category):
     await session.flush()
 
 
-class RecordingPublisher:
+class RecordingSender:
     def __init__(self):
         self.batches = []
 
-    def publish_batch(self, envelopes):
-        self.batches.append(tuple(envelopes))
+    def send_batch(self, *, queue_url, messages):
+        self.batches.append(tuple(messages))
         return BatchPublishResult(
-            tuple(PublishSucceeded(item.event_id) for item in envelopes)
+            tuple(PublishSucceeded(item.event_id) for item in messages)
         )
 
     @property
     def envelopes(self):
-        return [item for batch in self.batches for item in batch]
+        return [
+            EventEnvelope(
+                event_id=item.event_id,
+                event_type=(body := json.loads(item.body))["event_type"],
+                schema_version=body["schema_version"],
+                occurred_at=datetime.fromisoformat(body["occurred_at"]),
+                payload=body["payload"],
+            )
+            for batch in self.batches
+            for item in batch
+        ]
 
 
 async def target_exists(session, target, stage) -> bool:
@@ -123,3 +147,26 @@ async def target_exists(session, target, stage) -> bool:
     if stage == "completion":
         return await session.get(IncompleteArticle, target.target_id) is not None
     return await session.get(AnalyzableArticleRecord, target.article_id) is not None
+
+
+def delivery_arguments(stage):
+    """各工程の実際のイベント契約と本文生成関数をテストへ渡す。"""
+    event_type, builder = {
+        "curation": (
+            AnalyzableArticleCreated.EVENT_TYPE,
+            build_analyzable_created_message,
+        ),
+        "assessment": (ArticleCuratedSignal.EVENT_TYPE, build_curated_signal_message),
+        "embedding": (
+            ArticleAssessedInScope.EVENT_TYPE,
+            build_assessed_in_scope_message,
+        ),
+        "completion": (
+            IncompleteArticleRecorded.EVENT_TYPE,
+            build_incomplete_recorded_message,
+        ),
+    }[stage]
+    return {
+        "route": EventDeliveryRoute(event_type, f"https://sqs.invalid/{stage}"),
+        "build_message": builder,
+    }

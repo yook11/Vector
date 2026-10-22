@@ -3,7 +3,7 @@
 ## Problem / Evidence
 
 DBの未完了状態から救済するbackfill本体を、工程別Lambdaで一度実行できるようにする。
-既存consumerのIAM接続・単一接続pool・ログ、Outbox relayの配送定義とpublisher、本体の再投入契約を利用する。
+既存consumerのIAM接続・単一接続pool・ログ、Outbox relayの配送定義とSender、本体の再投入契約を利用する。
 
 ## Interface
 
@@ -17,13 +17,14 @@ IAM認証を必須とし、パスワード入りURLの拒否とproductionのTLS�
 
 ## Invariants
 
-- 呼び出しごとにRDS署名クライアント・engine・publisherを準備する。engineのpoolは1接続、overflowは0、接続・コマンド・pool待機は各5秒。
+- 呼び出しごとにRDS署名クライアント・engine・Senderを準備する。engineのpoolは1接続、overflowは0、接続・コマンド・pool待機は各5秒。
 - DB接続識別名は `vector-backfill-curation`・`vector-backfill-assessment`・`vector-backfill-embedding`・`vector-backfill-completion` とする。
 - session factoryは開閉だけを担い、記事単位のトランザクションはbackfill本体が所有する。
-- 工程別の既存イベント・本文builder・送信先をRoutedEventPublisherとSqsSenderへ渡す。SQSクライアントはSqsSenderが送信ごとに解放する。
+- BackfillResourcesはsession factoryとSenderを返し、入口が工程別の配送定義・本文builderとともに本体へ渡す。SQSクライアントはSqsSenderが送信ごとに解放する。
 - 正常・初期化失敗・本体失敗・キャンセル時も、取得済みengineとRDSクライアントを逆順に解放する。
 - 終了単独の失敗は実行失敗とする。先行した例外やキャンセルがある場合はそれを維持する。
 - 入口の失敗ログは工程・箇所・例外クラスだけを記録し、本文や設定値を含めない。ログ障害で元の例外を変更しない。
+- Sender生成失敗の診断phaseは既存の`publisher`を維持する。
 - 入口の追加リトライはなく、SQS SDKも既存の単一試行を維持する。項目別送信失敗と後続送信の扱いは本体へ委ねる。
 
 ## Non-goals / Done

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.outbox.delivery.repository import LeasedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.delivery.retry_policy import MAX_PUBLISH_ATTEMPTS
 from app.outbox.delivery.values import LeaseDuration
-from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.publishing.contracts import EventEnvelope
 from tests.outbox.helpers import (
     FUTURE,
     PAST,

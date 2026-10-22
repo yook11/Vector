@@ -31,7 +31,7 @@ from app.aws.sqs.outgoing_message import (
     MessageTooLargeError,
     SqsResponseInvalidError,
 )
-from app.outbox.publishing.publisher import (
+from app.outbox.publishing.contracts import (
     BatchPublishResult,
     PublishFailed,
     PublishSucceeded,
@@ -39,7 +39,7 @@ from app.outbox.publishing.publisher import (
 from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs import failure_handler as failure_handler_module
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
-from app.outbox.sqs.publisher import SqsSender
+from app.outbox.sqs.sender import SqsSender
 
 QUEUE_URL = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/article-embedding"
 

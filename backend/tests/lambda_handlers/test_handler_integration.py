@@ -1,3 +1,5 @@
+"""実DBと送信境界のモックでRelay入口の保存と資源解放を検証する。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.lambda_handlers.outbox_relay import handler
 from app.models.outbox_event import OutboxEvent
-from app.outbox.publishing.publisher import BatchPublishResult, PublishSucceeded
+from app.outbox.publishing.contracts import BatchPublishResult, PublishSucceeded
 from tests.iam_fixtures import inject_test_db_signer
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -32,23 +34,23 @@ def relay_environment(monkeypatch: pytest.MonkeyPatch, test_database_url: str) -
 
 
 @pytest.fixture
-def publisher(monkeypatch):
-    publisher = Mock()
-    publisher.publish_batch.side_effect = lambda envelopes: BatchPublishResult(
-        results=tuple(PublishSucceeded(e.event_id) for e in envelopes)
+def sender(monkeypatch):
+    sender = Mock()
+    sender.send_batch.side_effect = lambda *, queue_url, messages: BatchPublishResult(
+        results=tuple(PublishSucceeded(e.event_id) for e in messages)
     )
     monkeypatch.setattr(
         import_module("app.lambda_handlers.outbox_relay.execution"),
-        "RoutedEventPublisher",
-        Mock(return_value=publisher),
+        "SqsSender",
+        Mock(from_session=Mock(return_value=sender)),
     )
-    return publisher
+    return sender
 
 
 async def test_repeated_invocations_record_delivery_without_resending(
     relay_environment: str,
     session_factory: async_sessionmaker[AsyncSession],
-    publisher,
+    sender,
 ) -> None:
     """入口から配信を確定し、次回起動では配信済みイベントを再送しない。"""
     async with session_factory() as writer:
@@ -67,14 +69,16 @@ async def test_repeated_invocations_record_delivery_without_resending(
         saved = await reader.get(OutboxEvent, event_id)
         assert saved is not None
         assert saved.published_at is not None
-    publisher.publish_batch.assert_called_once()
-    assert [e.event_id for e in publisher.publish_batch.call_args.args[0]] == [event_id]
+    sender.send_batch.assert_called_once()
+    assert [e.event_id for e in sender.send_batch.call_args.kwargs["messages"]] == [
+        event_id
+    ]
 
 
 async def test_repeated_invocations_release_database_connections(
     relay_environment: str,
     session_factory: async_sessionmaker[AsyncSession],
-    publisher,
+    sender,
 ) -> None:
     """繰り返しの起動が終わった後、relayのDB接続を残さない。"""
     for _ in range(2):
@@ -100,7 +104,7 @@ async def test_repeated_invocations_release_database_connections(
 async def test_database_failure_propagates_and_next_invocation_can_connect(
     relay_environment: str,
     monkeypatch: pytest.MonkeyPatch,
-    publisher,
+    sender,
 ) -> None:
     """接続失敗を成功扱いせず、次の呼び出しで接続し直せる。"""
     missing_database = make_url(relay_environment).set(

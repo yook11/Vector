@@ -31,15 +31,15 @@ def execution_dependencies(monkeypatch):
     create_engine = Mock(return_value=engine)
     factory = Mock()
     create_factory = Mock(return_value=factory)
-    publisher = Mock()
-    create_publisher = Mock(return_value=publisher)
+    sender = Mock()
+    create_sender = Mock(return_value=sender)
     failure_handler = Mock()
     create_failure_handler = Mock(return_value=failure_handler)
     relay = Mock(run_once=AsyncMock(side_effect=lambda: trace.append("run_once")))
     create_relay = Mock(return_value=relay)
     monkeypatch.setattr(execution, "create_lambda_engine", create_engine)
     monkeypatch.setattr(execution, "caller_managed_session_factory", create_factory)
-    monkeypatch.setattr(execution, "SqsSender", Mock(from_session=create_publisher))
+    monkeypatch.setattr(execution, "SqsSender", Mock(from_session=create_sender))
     monkeypatch.setattr(
         execution, "OutboxDeliveryFailureHandler", create_failure_handler
     )
@@ -47,7 +47,7 @@ def execution_dependencies(monkeypatch):
     return SimpleNamespace(**locals())
 
 
-def test_passes_delivery_settings_to_publisher(execution_dependencies):
+def test_passes_delivery_settings_to_sender(execution_dependencies):
     """注入された配送定義とregionを送信・取得の組み立てに使う。"""
     asyncio.run(
         execution.run_relay(
@@ -56,15 +56,13 @@ def test_passes_delivery_settings_to_publisher(execution_dependencies):
             execution_dependencies.build_message,
         )
     )
-    execution_dependencies.create_publisher.assert_called_once()
-    kwargs = execution_dependencies.create_publisher.call_args.kwargs
+    execution_dependencies.create_sender.assert_called_once()
+    kwargs = execution_dependencies.create_sender.call_args.kwargs
     assert kwargs["region"] == execution_dependencies.settings.aws_region
     relay_call = execution_dependencies.create_relay.call_args
-    publisher = relay_call.args[1]
-    assert publisher._route is execution_dependencies.route
-    assert publisher._build_message is execution_dependencies.build_message
-    assert relay_call.kwargs["event_type"] == "test.event"
-    assert publisher._sender is execution_dependencies.publisher
+    assert relay_call.kwargs["route"] is execution_dependencies.route
+    assert relay_call.kwargs["build_message"] is execution_dependencies.build_message
+    assert relay_call.args[1] is execution_dependencies.sender
     assert kwargs["session"] is not None
 
 

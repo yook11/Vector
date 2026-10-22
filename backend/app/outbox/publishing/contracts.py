@@ -11,7 +11,7 @@ from app.analysis.curation.events import CuratedEventInvalidError
 from app.aws.sqs.errors import MessageSendError
 from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
 from app.collection.events import AnalyzableEventInvalidError
-from app.outbox.publishing.route import EventRouteMismatchError
+from app.outbox.publishing.route import EventMessage, EventRouteMismatchError
 
 # 型注釈とisinstanceの両方に使うため、TypeAliasやtype文ではなくUnionTypeの値として持つ。
 PublishFailure = (
@@ -76,7 +76,17 @@ class BatchPublishResult:
             raise TypeError("invalid publisher result type")
 
 
-class EventPublisher(Protocol):
-    def publish_batch(self, envelopes: Sequence[EventEnvelope]) -> BatchPublishResult:
-        """各イベントの受付結果を返し、呼び出し契約違反は送信前に拒否する。"""
-        ...
+class MessageSender(Protocol):
+    def send_batch(
+        self, *, queue_url: str, messages: Sequence[EventMessage]
+    ) -> BatchPublishResult: ...
+
+
+def validate_send_results(result: object, messages: Sequence[EventMessage]) -> None:
+    """辞書への統合で不正な対応を隠さないよう、送信対象と結果の順序まで照合する。"""
+    if not isinstance(result, BatchPublishResult):
+        raise TypeError("sender must return BatchPublishResult")
+    if tuple(item.event_id for item in result.results) != tuple(
+        message.event_id for message in messages
+    ):
+        raise ValueError("sender results must match input message order")

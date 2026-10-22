@@ -20,7 +20,7 @@ from app.collection.article_acquisition.events import IncompleteArticleEventInva
 from app.collection.events import AnalyzableEventInvalidError
 from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
-from app.outbox.publishing.publisher import PublishFailure
+from app.outbox.publishing.contracts import PublishFailure
 
 logger = structlog.get_logger(__name__)
 CONFIGURATION_FAILURE_METRIC = "outbox_publish_configuration_failure"

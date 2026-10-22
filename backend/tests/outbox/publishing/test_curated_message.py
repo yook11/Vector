@@ -11,8 +11,8 @@ from app.analysis.curation.events import (
     CuratedEventInvalidError,
 )
 from app.lambda_handlers.sqs.received_message import ReceivedMessage
+from app.outbox.publishing.contracts import EventEnvelope
 from app.outbox.publishing.curated_signal import build_curated_signal_message
-from app.outbox.publishing.publisher import EventEnvelope
 
 pytestmark = pytest.mark.unit
 

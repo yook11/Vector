@@ -10,7 +10,7 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
 )
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
-from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.publishing.contracts import EventEnvelope
 
 _handler_module = import_module("app.lambda_handlers.embedding.handler")
 

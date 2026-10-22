@@ -32,7 +32,7 @@ from app.outbox.delivery.failure_handler import (
 )
 from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
-from app.outbox.publishing.publisher import (
+from app.outbox.publishing.contracts import (
     EventEnvelope,
     PublishFailed,
     PublishFailure,
