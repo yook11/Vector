@@ -1,26 +1,10 @@
-"""取得依頼の送信失敗が一時的なものかを事実から判断し、試行回数と合わせて再送を決める。"""
+"""取得依頼の送信の失敗が送り直しで解消しうるかと試行回数から、送り直すかを決める。"""
 
-from app.aws.sqs.errors import (
-    MessageSendError,
-    MessageSendTransportError,
-    SqsServiceError,
-    SqsServiceErrorReason,
-)
-from app.http.retry_prospect import is_resolvable_by_retry
+from app.aws.sqs.errors import MessageSendError
+from app.aws.sqs.retry_prospect import is_resolvable_by_retry
 
 MAX_ACQUISITION_SEND_ATTEMPTS = 3
 
 
-def is_transient_send_failure(error: MessageSendError) -> bool:
-    if isinstance(error, SqsServiceError):
-        return error.reason in (
-            SqsServiceErrorReason.THROTTLED,
-            SqsServiceErrorReason.SERVICE_UNAVAILABLE,
-        )
-    if isinstance(error, MessageSendTransportError):
-        return is_resolvable_by_retry(error.failure)
-    return False
-
-
 def should_retry_acquisition_send(error: MessageSendError, *, attempt: int) -> bool:
-    return is_transient_send_failure(error) and attempt < MAX_ACQUISITION_SEND_ATTEMPTS
+    return is_resolvable_by_retry(error) and attempt < MAX_ACQUISITION_SEND_ATTEMPTS

@@ -12,6 +12,7 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
 )
 from app.analysis.curation.events import ArticleCuratedSignal, ArticleCuratedSignalEvent
+from app.aws.sqs.errors import MessageSendUnexpectedError
 from app.backfill import service
 from app.backfill.targets import BackfillEventTarget
 from app.collection.events import (
@@ -21,7 +22,6 @@ from app.collection.events import (
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.curated_signal import build_curated_signal_message
-from app.outbox.publishing.errors import PublishError
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
     PublishFailed,
@@ -83,7 +83,7 @@ async def test_dispatch_splits_batches_and_preserves_order():
 @pytest.mark.parametrize("failed_ids", [{2}, set(range(1, 24))], ids=["partial", "all"])
 async def test_failed_items_do_not_stop_later_batches(failed_ids):
     """受付失敗があっても、残りのバッチを一度ずつ送信する。"""
-    error = PublishError()
+    error = MessageSendUnexpectedError(exception_type="RuntimeError")
     publisher = Mock()
     publisher.publish_batch.side_effect = lambda items: BatchPublishResult(
         tuple(
@@ -157,7 +157,7 @@ async def test_reconstructed_event_is_accepted_by_consumer_contract(
         tuple(PublishSucceeded(message.event_id) for message in kwargs["messages"])
     )
     publisher = RoutedEventPublisher(
-        EventDeliveryRoute(payload.EVENT_TYPE, "queue-url", builder), sender
+        EventDeliveryRoute(payload.EVENT_TYPE, "queue-url"), builder, sender
     )
     await dispatch(
         publisher,

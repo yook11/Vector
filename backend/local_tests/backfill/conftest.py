@@ -93,9 +93,7 @@ def lifecycle(backfill_connection, monkeypatch):
         sqs_article_curation_queue_url="https://sqs.invalid/curation"
     )
     route = EventDeliveryRoute(
-        "article.analyzable_created",
-        settings.sqs_article_curation_queue_url,
-        build_analyzable_created_message,
+        "article.analyzable_created", settings.sqs_article_curation_queue_url
     )
     invocations = []
     sdk = resources.Session()
@@ -145,4 +143,9 @@ def lifecycle(backfill_connection, monkeypatch):
         scope.order.append("engine")
 
     monkeypatch.setattr(AsyncEngine, "dispose", observe_dispose)
-    return SimpleNamespace(settings=settings, route=route, invocations=invocations)
+    return SimpleNamespace(
+        settings=settings,
+        route=route,
+        build_message=build_analyzable_created_message,
+        invocations=invocations,
+    )

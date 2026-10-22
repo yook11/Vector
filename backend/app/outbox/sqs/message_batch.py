@@ -8,11 +8,6 @@ from app.aws.sqs.outgoing_message import (
     OutgoingSqsMessage,
     OutgoingSqsMessageBatch,
 )
-from app.outbox.publishing.error_mapping import publish_preparation_error_from_exception
-from app.outbox.publishing.errors import (
-    PublishEventInvalidError,
-    PublishEventInvalidReason,
-)
 from app.outbox.publishing.publisher import PublishFailed
 from app.outbox.publishing.route import EventMessage
 
@@ -42,22 +37,8 @@ class SqsMessageBatch:
         for message in inputs:
             try:
                 prepared[str(message.event_id)] = OutgoingSqsMessage(message.body)
-            except MessageTooLargeError:
-                failures.append(
-                    PublishFailed(
-                        message.event_id,
-                        PublishEventInvalidError(
-                            reason=PublishEventInvalidReason.MESSAGE_TOO_LARGE
-                        ),
-                    )
-                )
-            except Exception as exc:
-                failures.append(
-                    PublishFailed(
-                        message.event_id,
-                        publish_preparation_error_from_exception(exc),
-                    )
-                )
+            except MessageTooLargeError as exc:
+                failures.append(PublishFailed(message.event_id, exc))
             else:
                 sendable.append(message)
         object.__setattr__(self, "inputs", inputs)

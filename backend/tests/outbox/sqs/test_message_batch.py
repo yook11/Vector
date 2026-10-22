@@ -5,7 +5,7 @@ from uuid import UUID
 
 import pytest
 
-from app.outbox.publishing.errors import PublishEventInvalidReason
+from app.aws.sqs.outgoing_message import MessageTooLargeError
 from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs.message_batch import SqsMessageBatch
 
@@ -61,12 +61,12 @@ def test_combined_serialized_size_boundary(monkeypatch, extra):
 
 
 def test_oversized_message_is_excluded_without_losing_valid_message(monkeypatch):
-    """個別サイズ超過だけをイベント不正の失敗にし、送信可能な本文を残す。"""
+    """個別サイズ超過だけをサイズ超過の失敗にし、送信可能な本文を残す。"""
     monkeypatch.setattr("app.aws.sqs.outgoing_message.MAX_MESSAGE_BYTES", 2)
     batch = SqsMessageBatch([message(1, "long"), message(2)])
     assert [m.event_id for m in batch.sendable] == [UUID(int=2)]
-    assert [(f.event_id, f.error.reason) for f in batch.failures] == [
-        (UUID(int=1), PublishEventInvalidReason.MESSAGE_TOO_LARGE)
+    assert [(f.event_id, type(f.error)) for f in batch.failures] == [
+        (UUID(int=1), MessageTooLargeError)
     ]
 
 

@@ -12,6 +12,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.analysis.assessment.events import ArticleAssessedInScopeEvent
+from app.aws.sqs.errors import MessageSendTransportError
 from app.db.errors import DatabaseError
 from app.http.failure import (
     HttpTransportFailure,
@@ -20,11 +21,11 @@ from app.http.failure import (
 )
 from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from app.models.outbox_event import OutboxEvent
-from app.outbox.publishing.errors import PublishError, PublishTransportError
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
     EventEnvelope,
     PublishFailed,
+    PublishFailure,
     PublishSucceeded,
 )
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
@@ -78,10 +79,11 @@ async def test_mixed_results_preserve_success_retry_and_stop(
 ):
     """同じバッチの成功・再試行・停止をそれぞれ対応するイベントに保存する。"""
     successful, retryable, permanent = await seed_events(owner_sessions, count=3)
-    timeout = PublishTransportError(
+    timeout = MessageSendTransportError(
         failure=HttpTransportFailure(
             HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-        )
+        ),
+        exception_type="ReadTimeoutError",
     )
     publisher = Mock(
         publish_batch=Mock(
@@ -266,7 +268,7 @@ async def test_claim_fault_keeps_completed_stop_and_does_not_send(
     with pytest.raises(DatabaseError) as caught:
         await make_relay(sessions, publisher).run_once()
     assert caught.value.__cause__ is fault
-    assert not isinstance(caught.value, PublishError)
+    assert not isinstance(caught.value, PublishFailure)
     publisher.publish_batch.assert_not_called()
     saved_exhausted = await read_saved(owner_sessions, exhausted)
     assert saved_exhausted["delivery_stopped_at"] is not None

@@ -2,21 +2,25 @@
 
 import structlog
 
+from app.analysis.assessment.events import AssessedEventInvalidError
+from app.analysis.curation.events import CuratedEventInvalidError
 from app.audit.error_fields import exception_fqn
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendCredentialsError,
+    MessageSendTransportError,
+    MessageSendUnexpectedError,
+    SqsServiceError,
+    SqsServiceErrorReason,
+)
+from app.aws.sqs.outgoing_message import MessageBodyMismatchError
 from app.cloudwatch.emf import emit_metric
+from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
+from app.collection.events import AnalyzableEventInvalidError
 from app.outbox.delivery.repository import ClaimedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
-from app.outbox.publishing.errors import (
-    PublishConfigurationError,
-    PublishConfigurationReason,
-    PublishError,
-    PublishEventInvalidError,
-    PublishIntegrityError,
-    PublishServiceError,
-    PublishServiceReason,
-    PublishTransportError,
-    PublishUnexpectedError,
-)
+from app.outbox.publishing.publisher import PublishFailure
 
 logger = structlog.get_logger(__name__)
 CONFIGURATION_FAILURE_METRIC = "outbox_publish_configuration_failure"
@@ -26,19 +30,19 @@ _BODY_CHECKSUM_MISMATCH_MESSAGE = (
 )
 
 
-def requires_publish_configuration_fix(error: PublishError) -> bool:
+def requires_publish_configuration_fix(error: PublishFailure) -> bool:
     """設定修復が必要な停止だけ、メトリクスも書く。"""
-    if isinstance(error, PublishConfigurationError):
+    if isinstance(error, MessageSendConfigurationError):
         return error.reason in (
-            PublishConfigurationReason.MISSING_CREDENTIALS,
-            PublishConfigurationReason.INCOMPLETE_CREDENTIALS,
-            PublishConfigurationReason.MISSING_REGION,
+            MessageSendConfigurationReason.MISSING_CREDENTIALS,
+            MessageSendConfigurationReason.INCOMPLETE_CREDENTIALS,
+            MessageSendConfigurationReason.MISSING_REGION,
         )
-    if isinstance(error, PublishServiceError):
+    if isinstance(error, SqsServiceError):
         return error.reason in (
-            PublishServiceReason.AUTHENTICATION_FAILED,
-            PublishServiceReason.ACCESS_DENIED,
-            PublishServiceReason.DESTINATION_NOT_FOUND,
+            SqsServiceErrorReason.AUTHENTICATION_FAILED,
+            SqsServiceErrorReason.ACCESS_DENIED,
+            SqsServiceErrorReason.DESTINATION_NOT_FOUND,
         )
     return False
 
@@ -56,7 +60,7 @@ def _record_output_failure(exc: Exception) -> None:
 def record_publish_failure(
     *,
     event: ClaimedOutboxEvent,
-    error: PublishError,
+    error: PublishFailure,
     stop_reason: NonRetryableReason,
 ) -> None:
     """停止確定後に呼び、記録の通常失敗を配信処理へ戻さない。"""
@@ -66,31 +70,30 @@ def record_publish_failure(
             "event_id": str(event.event_id),
             "attempt_count": event.attempt_count,
             "stop_reason": stop_reason.value,
-            "error_code": error.CODE,
+            "error_class": exception_fqn(error),
             "requires_configuration_fix": requires_fix,
         }
-        if isinstance(
-            error,
-            PublishConfigurationError | PublishServiceError | PublishEventInvalidError,
-        ):
+        if isinstance(error, MessageSendConfigurationError | SqsServiceError):
             fields["error_reason"] = error.reason.value
-        elif isinstance(error, PublishIntegrityError):
-            fields.update(
-                error_reason=error.reason.value,
-                error_message=_BODY_CHECKSUM_MISMATCH_MESSAGE,
-            )
-        elif isinstance(error, PublishTransportError):
+        elif isinstance(
+            error,
+            AnalyzableEventInvalidError
+            | IncompleteArticleEventInvalidError
+            | AssessedEventInvalidError
+            | CuratedEventInvalidError,
+        ):
+            fields["error_reason"] = error.invalid.reason.value
+        elif isinstance(error, MessageBodyMismatchError):
+            fields["error_message"] = _BODY_CHECKSUM_MISMATCH_MESSAGE
+        elif isinstance(error, MessageSendTransportError):
             fields.update(
                 transport_stage=error.failure.stage.value,
                 transport_reason=error.failure.reason.value,
             )
-        elif isinstance(error, PublishUnexpectedError):
-            fields.update(
-                error_reason=error.reason,
-                phase=error.phase.value,
-                original_exception_type=error.original_exception_type,
-                classification_exception_type=error.classification_exception_type,
-            )
+        elif isinstance(
+            error, MessageSendCredentialsError | MessageSendUnexpectedError
+        ):
+            fields["exception_type"] = error.exception_type
         logger.info("outbox_delivery_stopped", **fields)
     except Exception as exc:
         _record_output_failure(exc)

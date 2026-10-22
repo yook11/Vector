@@ -53,13 +53,13 @@ def curation_handler(event: object, context: object) -> None:
     route = EventDeliveryRoute(
         event_type=AnalyzableArticleCreated.EVENT_TYPE,
         queue_url=settings.sqs_article_curation_queue_url,
-        build_message=build_analyzable_created_message,
     )
     asyncio.run(
         run_backfill(
             settings,
             stage="curation",
             route=route,
+            build_message=build_analyzable_created_message,
             operation=backfill_curations,
             now=now,
         )
@@ -75,13 +75,13 @@ def assessment_handler(event: object, context: object) -> None:
     route = EventDeliveryRoute(
         event_type=ArticleCuratedSignal.EVENT_TYPE,
         queue_url=settings.sqs_article_assessment_queue_url,
-        build_message=build_curated_signal_message,
     )
     asyncio.run(
         run_backfill(
             settings,
             stage="assessment",
             route=route,
+            build_message=build_curated_signal_message,
             operation=backfill_assessments,
             now=now,
         )
@@ -97,13 +97,13 @@ def embedding_handler(event: object, context: object) -> None:
     route = EventDeliveryRoute(
         event_type=ArticleAssessedInScope.EVENT_TYPE,
         queue_url=settings.sqs_article_embedding_queue_url,
-        build_message=build_assessed_in_scope_message,
     )
     asyncio.run(
         run_backfill(
             settings,
             stage="embedding",
             route=route,
+            build_message=build_assessed_in_scope_message,
             operation=backfill_embeddings,
             now=now,
         )
@@ -119,13 +119,13 @@ def completion_handler(event: object, context: object) -> None:
     route = EventDeliveryRoute(
         event_type=IncompleteArticleRecorded.EVENT_TYPE,
         queue_url=settings.sqs_article_completion_queue_url,
-        build_message=build_incomplete_recorded_message,
     )
     asyncio.run(
         run_backfill(
             settings,
             stage="completion",
             route=route,
+            build_message=build_incomplete_recorded_message,
             operation=backfill_completions,
             now=now,
         )

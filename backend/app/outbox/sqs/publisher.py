@@ -6,12 +6,12 @@ from uuid import UUID
 from botocore.client import BaseClient
 from botocore.session import Session
 
+from app.aws.sqs.errors import MessageSendError, to_message_send_error
 from app.aws.sqs.outgoing_message import (
     AcceptedSqsMessage,
     OutgoingSqsMessageBatch,
     SqsResponseInvalidError,
 )
-from app.outbox.publishing.errors import PublishError, PublishPhase
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
     PublishFailed,
@@ -19,10 +19,6 @@ from app.outbox.publishing.publisher import (
 )
 from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs.client import create_sqs_client
-from app.outbox.sqs.error_mapping import (
-    publish_cleanup_error_from_exception,
-    publish_error_from_exception,
-)
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.message_batch import SqsMessageBatch
 
@@ -30,7 +26,7 @@ from app.outbox.sqs.message_batch import SqsMessageBatch
 def failed_results(
     batch: SqsMessageBatch,
     *,
-    error: PublishError,
+    error: MessageSendError,
 ) -> dict[UUID, PublishFailed]:
     """指定された送信対象に、分類済みの失敗を結び付ける。"""
     return {
@@ -40,7 +36,7 @@ def failed_results(
 
 
 class SqsSender:
-    """生成済みメッセージを、資格情報を確定した単一試行で送信する。"""
+    """生成済みメッセージを、SDKの内部再試行のない単一試行で送信する。"""
 
     def __init__(
         self,
@@ -77,7 +73,7 @@ class SqsSender:
             try:
                 client = self._client_factory()
             except Exception as exc:
-                error = publish_error_from_exception(exc, phase=PublishPhase.INITIALIZE)
+                error = to_message_send_error(exc)
                 failures.extend(failed_results(batch, error=error).values())
             else:
                 try:
@@ -89,8 +85,7 @@ class SqsSender:
                         client.close()
                     except Exception as exc:
                         try:
-                            error = publish_cleanup_error_from_exception(exc)
-                            self._failure_handler.handle_cleanup_failure(error)
+                            self._failure_handler.handle_cleanup_failure(exc)
                         except Exception:  # noqa: S110 — 終了診断の障害で元の結果を変更しない。
                             pass
                 for outcome in sent_results.values():
@@ -120,27 +115,21 @@ class SqsSender:
                 QueueUrl=queue_url, Entries=outgoing.entries()
             )
         except Exception as exc:
-            error = publish_error_from_exception(exc, phase=PublishPhase.SEND)
-            return failed_results(batch, error=error)
+            return failed_results(batch, error=to_message_send_error(exc))
 
         try:
             sent = outgoing.verify(response)
-            results: dict[UUID, PublishSucceeded | PublishFailed] = {}
-            for message in batch.sendable:
-                outcome = sent[str(message.event_id)]
-                if isinstance(outcome, AcceptedSqsMessage):
-                    results[message.event_id] = PublishSucceeded(message.event_id)
-                else:
-                    results[message.event_id] = PublishFailed(
-                        message.event_id,
-                        publish_error_from_exception(outcome, phase=PublishPhase.SEND),
-                    )
-            return results
-        except Exception as exc:
-            if isinstance(exc, SqsResponseInvalidError):
-                self._failure_handler.handle_invalid_response(
-                    error=exc,
-                    event_ids=tuple(message.event_id for message in batch.sendable),
-                )
-            error = publish_error_from_exception(exc, phase=PublishPhase.SEND)
-            return failed_results(batch, error=error)
+        except SqsResponseInvalidError as exc:
+            self._failure_handler.handle_invalid_response(
+                error=exc,
+                event_ids=tuple(message.event_id for message in batch.sendable),
+            )
+            return failed_results(batch, error=exc)
+        results: dict[UUID, PublishSucceeded | PublishFailed] = {}
+        for message in batch.sendable:
+            outcome = sent[str(message.event_id)]
+            if isinstance(outcome, AcceptedSqsMessage):
+                results[message.event_id] = PublishSucceeded(message.event_id)
+            else:
+                results[message.event_id] = PublishFailed(message.event_id, outcome)
+        return results

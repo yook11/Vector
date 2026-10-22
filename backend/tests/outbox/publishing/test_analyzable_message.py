@@ -11,14 +11,13 @@ from app.collection.events import (
     AnalyzableEventInvalidError,
 )
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
-from app.outbox.publishing.errors import PublishEventInvalidError
 from app.outbox.publishing.publisher import EventEnvelope
 
 pytestmark = pytest.mark.unit
 
 
-def test_invalid_event_preserves_safe_validation_details():
-    """共有契約が拒否した入力を、同じ理由・詳細で入力を残さず送信エラーへ変換する。"""
+def test_invalid_event_raises_shared_contract_error_without_input():
+    """共有契約が拒否した入力は、契約と同じ構築失敗の例外のまま、原因の連鎖も入力値も持たずに送出する。"""
     envelope = EventEnvelope(
         event_id=UUID("10000000-0000-0000-0000-000000000002"),
         event_type="article.analyzable_created",
@@ -32,11 +31,10 @@ def test_invalid_event_preserves_safe_validation_details():
     with pytest.raises(AnalyzableEventInvalidError) as validation:
         AnalyzableArticleCreatedEvent.from_input(asdict(envelope))
 
-    with pytest.raises(PublishEventInvalidError) as caught:
+    with pytest.raises(AnalyzableEventInvalidError) as caught:
         build_analyzable_created_message(envelope)
 
-    assert caught.value.reason.value == validation.value.invalid.reason.value
-    assert caught.value.issues == validation.value.invalid.issues
+    assert caught.value.invalid == validation.value.invalid
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     diagnostics = str(caught.value) + repr(vars(caught.value))

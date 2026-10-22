@@ -1,4 +1,4 @@
-"""SQS通信の終了失敗と外部キャンセルの境界を検証する。"""
+"""送信先の設定不足、SQS通信の終了失敗、外部キャンセルの境界を検証する(クライアントはモック)。"""
 
 import asyncio
 import sys
@@ -8,7 +8,24 @@ from unittest.mock import Mock
 
 import pytest
 
+from app.aws.sqs.errors import MessageSendConfigurationError
 from app.aws.sqs.message_sender import open_sqs_message_sender
+
+
+@pytest.mark.asyncio
+async def test_blank_queue_url_fails_as_missing_queue_url_before_creating_client():
+    """送信先のキューURLが空なら、クライアントを作らずに「キューURLがない」設定の不足として失敗する。"""
+    client_factory = Mock()
+    with pytest.raises(MessageSendConfigurationError) as caught:
+        async with open_sqs_message_sender(
+            client_factory=client_factory, queue_url=" "
+        ):
+            pass
+    assert (caught.value.reason, caught.value.details) == (
+        "missing_queue_url",
+        {"reason": "missing_queue_url"},
+    )
+    client_factory.assert_not_called()
 
 
 @pytest.mark.asyncio

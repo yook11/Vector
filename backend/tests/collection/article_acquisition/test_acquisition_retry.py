@@ -1,42 +1,43 @@
-"""取得依頼の送信の失敗を送り直すかの判断。SQSへ送らず、分類後の例外を直接渡す。"""
+"""取得依頼の送信の失敗を送り直すかの判断。SQSへ送らず、変換後の失敗を直接渡す。"""
 
 from __future__ import annotations
 
 import pytest
 
-from app.aws.sqs.errors import MessageSendTransportError
+from app.aws.sqs.errors import MessageSendError, SqsServiceError, SqsServiceErrorReason
 from app.collection.article_acquisition.acquisition_retry import (
-    is_transient_send_failure,
-)
-from app.http.failure import (
-    HttpTransportFailure,
-    HttpTransportFailureReason,
-    HttpTransportStage,
+    should_retry_acquisition_send,
 )
 
 
 @pytest.mark.parametrize(
-    ("failure", "exception_type", "expected"),
+    ("error", "attempt", "expected"),
     [
         (
-            HttpTransportFailure(
-                HttpTransportStage.UNKNOWN, HttpTransportFailureReason.TLS
+            SqsServiceError(
+                reason=SqsServiceErrorReason.THROTTLED, service_code="RequestThrottled"
             ),
-            "SSLError",
+            2,
             True,
         ),
         (
-            HttpTransportFailure(
-                HttpTransportStage.UNKNOWN, HttpTransportFailureReason.UNKNOWN
+            SqsServiceError(
+                reason=SqsServiceErrorReason.THROTTLED, service_code="RequestThrottled"
             ),
-            "HTTPClientError",
+            3,
+            False,
+        ),
+        (
+            SqsServiceError(
+                reason=SqsServiceErrorReason.ACCESS_DENIED, service_code="AccessDenied"
+            ),
+            1,
             False,
         ),
     ],
 )
-def test_transport_failure_is_resent_only_when_retry_may_resolve_it(
-    failure: HttpTransportFailure, exception_type: str, expected: bool
+def test_resend_only_resolvable_failure_until_third_attempt(
+    error: MessageSendError, attempt: int, expected: bool
 ) -> None:
-    """通信の失敗は、証明書以外のTLSなら送り直し、分類できない失敗なら送り直さない。"""
-    error = MessageSendTransportError(failure=failure, exception_type=exception_type)
-    assert is_transient_send_failure(error) is expected
+    """送り直せば直りうる失敗は2回目の失敗までは送り直して3回目では諦め、直らない失敗は1回目でも送り直さない。"""
+    assert should_retry_acquisition_send(error, attempt=attempt) is expected

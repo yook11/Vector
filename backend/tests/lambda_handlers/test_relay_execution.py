@@ -23,7 +23,8 @@ def execution_dependencies(monkeypatch):
         db_iam_auth=False,
         aws_region="ap-northeast-1",
     )
-    route = EventDeliveryRoute("test.event", "https://sqs.invalid/test", Mock())
+    route = EventDeliveryRoute("test.event", "https://sqs.invalid/test")
+    build_message = Mock()
     trace = []
     engine = Mock(dispose=AsyncMock(side_effect=lambda: trace.append("disposed")))
     engine.connect.return_value = AsyncMock()
@@ -50,7 +51,9 @@ def test_passes_delivery_settings_to_publisher(execution_dependencies):
     """注入された配送定義とregionを送信・取得の組み立てに使う。"""
     asyncio.run(
         execution.run_relay(
-            execution_dependencies.settings, execution_dependencies.route
+            execution_dependencies.settings,
+            execution_dependencies.route,
+            execution_dependencies.build_message,
         )
     )
     execution_dependencies.create_publisher.assert_called_once()
@@ -59,6 +62,7 @@ def test_passes_delivery_settings_to_publisher(execution_dependencies):
     relay_call = execution_dependencies.create_relay.call_args
     publisher = relay_call.args[1]
     assert publisher._route is execution_dependencies.route
+    assert publisher._build_message is execution_dependencies.build_message
     assert relay_call.kwargs["event_type"] == "test.event"
     assert publisher._sender is execution_dependencies.publisher
     assert kwargs["session"] is not None
@@ -70,7 +74,9 @@ def test_shares_configured_database_with_relay_and_failure_handler(
     """DB設定から作ったsession factoryをrelayと失敗処理へ共有する。"""
     asyncio.run(
         execution.run_relay(
-            execution_dependencies.settings, execution_dependencies.route
+            execution_dependencies.settings,
+            execution_dependencies.route,
+            execution_dependencies.build_message,
         )
     )
     execution_dependencies.create_engine.assert_called_once_with(
@@ -94,7 +100,9 @@ def test_runs_once_and_completes_only_after_disposal(execution_dependencies):
     """relayを1回実行し、Engineの終了後に完了応答を返す。"""
     assert asyncio.run(
         execution.run_relay(
-            execution_dependencies.settings, execution_dependencies.route
+            execution_dependencies.settings,
+            execution_dependencies.route,
+            execution_dependencies.build_message,
         )
     ) == {"status": "completed"}
     execution_dependencies.relay.run_once.assert_awaited_once_with()
@@ -115,7 +123,9 @@ def test_failure_propagates_after_engine_disposal(execution_dependencies, phase)
     with pytest.raises(RuntimeError) as caught:
         asyncio.run(
             execution.run_relay(
-                execution_dependencies.settings, execution_dependencies.route
+                execution_dependencies.settings,
+                execution_dependencies.route,
+                execution_dependencies.build_message,
             )
         )
     assert caught.value is original
@@ -129,7 +139,9 @@ def test_disposal_failure_prevents_success_response(execution_dependencies):
     with pytest.raises(RuntimeError) as caught:
         asyncio.run(
             execution.run_relay(
-                execution_dependencies.settings, execution_dependencies.route
+                execution_dependencies.settings,
+                execution_dependencies.route,
+                execution_dependencies.build_message,
             )
         )
     assert caught.value is error
@@ -148,7 +160,9 @@ def test_disposal_failure_does_not_replace_run_failure(
     with pytest.raises(type(original)) as caught:
         asyncio.run(
             execution.run_relay(
-                execution_dependencies.settings, execution_dependencies.route
+                execution_dependencies.settings,
+                execution_dependencies.route,
+                execution_dependencies.build_message,
             )
         )
     assert caught.value is original

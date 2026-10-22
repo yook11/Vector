@@ -1,4 +1,4 @@
-"""設定修復のメトリクス条件と記録出力の境界を検証する。"""
+"""停止の記録の項目と設定修復のメトリクス条件、記録出力の境界を検証する(ログはstructlogで捕捉し、EMFは標準出力から読み、handlerとの合成は実DB)。"""
 
 import json
 import re
@@ -12,7 +12,43 @@ from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.exc import SQLAlchemyError
 from structlog.testing import capture_logs
 
+from app.analysis.assessment.events import (
+    AssessedEventInvalid,
+    AssessedEventInvalidError,
+    AssessedEventInvalidReason,
+)
+from app.analysis.curation.events import (
+    CuratedEventInvalid,
+    CuratedEventInvalidError,
+    CuratedEventInvalidReason,
+)
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendCredentialsError,
+    MessageSendTransportError,
+    MessageSendUnexpectedError,
+    SqsServiceError,
+    SqsServiceErrorReason,
+)
+from app.aws.sqs.outgoing_message import (
+    MessageBodyMismatchError,
+    MessageTooLargeError,
+    SqsResponseField,
+    SqsResponseInvalidError,
+    SqsResponseInvalidReason,
+)
 from app.cloudwatch.emf import PIPELINE_NAMESPACE
+from app.collection.article_acquisition.events import (
+    IncompleteArticleEventInvalid,
+    IncompleteArticleEventInvalidError,
+    IncompleteArticleEventInvalidReason,
+)
+from app.collection.events import (
+    AnalyzableEventInvalid,
+    AnalyzableEventInvalidError,
+    AnalyzableEventInvalidReason,
+)
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -27,88 +63,23 @@ from app.outbox.delivery.failure_handler import (
 )
 from app.outbox.delivery.repository import ClaimedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
-from app.outbox.publishing.errors import (
-    PublishConfigurationError,
-    PublishConfigurationReason,
-    PublishError,
-    PublishEventInvalidError,
-    PublishEventInvalidReason,
-    PublishIntegrityError,
-    PublishIntegrityReason,
-    PublishPhase,
-    PublishResponseInvalidError,
-    PublishServiceError,
-    PublishServiceReason,
-    PublishTransportError,
-    PublishUnexpectedError,
-)
 from app.outbox.publishing.publisher import PublishFailed
+from app.outbox.publishing.route import EventRouteMismatchError
 from tests.cloudwatch.records import emf_records
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
 
 PRIVATE = "PRIVATE_PAYLOAD_URL_CREDENTIAL"
 STOP_REASON = NonRetryableReason.NON_RETRYABLE_FAILURE
-CASES = [
-    *[
-        (
-            PublishConfigurationError(reason=reason),
-            reason
-            in {
-                PublishConfigurationReason.MISSING_CREDENTIALS,
-                PublishConfigurationReason.INCOMPLETE_CREDENTIALS,
-                PublishConfigurationReason.MISSING_REGION,
-            },
-        )
-        for reason in PublishConfigurationReason
-    ],
-    *[
-        (
-            PublishServiceError(
-                reason=reason,
-                service_error_code=PRIVATE,
-                status_code=403,
-                request_id=PRIVATE,
-            ),
-            reason
-            in {
-                PublishServiceReason.AUTHENTICATION_FAILED,
-                PublishServiceReason.ACCESS_DENIED,
-                PublishServiceReason.DESTINATION_NOT_FOUND,
-            },
-        )
-        for reason in PublishServiceReason
-    ],
-    *[
-        (PublishEventInvalidError(reason=reason), False)
-        for reason in PublishEventInvalidReason
-    ],
-    *[
-        (
-            PublishTransportError(
-                failure=HttpTransportFailure(HttpTransportStage.UNKNOWN, reason)
-            ),
-            False,
-        )
-        for reason in HttpTransportFailureReason
-    ],
-    *[
-        (
-            PublishUnexpectedError(
-                original_exception=RuntimeError(PRIVATE),
-                phase=phase,
-                classification_exception=ValueError(PRIVATE),
-            ),
-            False,
-        )
-        for phase in PublishPhase
-    ],
-    (PublishResponseInvalidError(), False),
-    (PublishError(), False),
-    (
-        PublishIntegrityError(reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH),
-        False,
-    ),
-]
+
+
+def _missing_credentials():
+    return MessageSendConfigurationError(
+        reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
+    )
+
+
+def _sqs_rejection(reason):
+    return SqsServiceError(reason=reason, service_code=PRIVATE)
 
 
 @pytest.fixture
@@ -125,53 +96,259 @@ def claimed():
     )
 
 
-@pytest.mark.parametrize(("error", "expected"), CASES)
-def test_all_reasons_log_stops_and_only_six_reasons_emit_metric(
-    error,
-    expected,
-    claimed,
-    capsys,
+@pytest.mark.parametrize(
+    ("error", "requires_fix", "fields"),
+    [
+        (
+            _missing_credentials(),
+            True,
+            {
+                "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
+                "error_reason": "missing_credentials",
+            },
+        ),
+        (
+            MessageSendConfigurationError(
+                reason=MessageSendConfigurationReason.INCOMPLETE_CREDENTIALS
+            ),
+            True,
+            {
+                "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
+                "error_reason": "incomplete_credentials",
+            },
+        ),
+        (
+            MessageSendConfigurationError(
+                reason=MessageSendConfigurationReason.MISSING_REGION
+            ),
+            True,
+            {
+                "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
+                "error_reason": "missing_region",
+            },
+        ),
+        (
+            MessageSendCredentialsError(exception_type="CredentialRetrievalError"),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.MessageSendCredentialsError",
+                "exception_type": "CredentialRetrievalError",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.AUTHENTICATION_FAILED),
+            True,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "authentication_failed",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.ACCESS_DENIED),
+            True,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "access_denied",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.DESTINATION_NOT_FOUND),
+            True,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "destination_not_found",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.THROTTLED),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "throttled",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.SERVICE_UNAVAILABLE),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "service_unavailable",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.REQUEST_REJECTED),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "request_rejected",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.SECURITY_REJECTED),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "security_rejected",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.REQUEST_EXPIRED),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "request_expired",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.ENCRYPTION_ERROR),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "encryption_error",
+            },
+        ),
+        (
+            _sqs_rejection(SqsServiceErrorReason.UNKNOWN),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.SqsServiceError",
+                "error_reason": "unknown",
+            },
+        ),
+        (
+            MessageSendTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.UNKNOWN, HttpTransportFailureReason.TLS
+                ),
+                exception_type="SSLError",
+            ),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.MessageSendTransportError",
+                "transport_stage": "unknown",
+                "transport_reason": "tls",
+            },
+        ),
+        (
+            MessageSendUnexpectedError(exception_type="ParamValidationError"),
+            False,
+            {
+                "error_class": "app.aws.sqs.errors.MessageSendUnexpectedError",
+                "exception_type": "ParamValidationError",
+            },
+        ),
+        (
+            MessageTooLargeError(),
+            False,
+            {"error_class": "app.aws.sqs.outgoing_message.MessageTooLargeError"},
+        ),
+        (
+            SqsResponseInvalidError(
+                reason=SqsResponseInvalidReason.MISSING,
+                field=SqsResponseField.MESSAGE_ID,
+            ),
+            False,
+            {"error_class": "app.aws.sqs.outgoing_message.SqsResponseInvalidError"},
+        ),
+        (
+            MessageBodyMismatchError(),
+            False,
+            {
+                "error_class": "app.aws.sqs.outgoing_message.MessageBodyMismatchError",
+                "error_message": (
+                    "送信した本文と、送信先が受け取った本文のチェックサムが一致しません。"
+                    "送信先には受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
+                ),
+            },
+        ),
+        (
+            AnalyzableEventInvalidError(
+                AnalyzableEventInvalid(
+                    reason=AnalyzableEventInvalidReason.INVALID_PAYLOAD, issues=()
+                )
+            ),
+            False,
+            {
+                "error_class": "app.collection.events.AnalyzableEventInvalidError",
+                "error_reason": "invalid_payload",
+            },
+        ),
+        (
+            IncompleteArticleEventInvalidError(
+                IncompleteArticleEventInvalid(
+                    reason=IncompleteArticleEventInvalidReason.INVALID_ENVELOPE,
+                    issues=(),
+                )
+            ),
+            False,
+            {
+                "error_class": (
+                    "app.collection.article_acquisition.events."
+                    "IncompleteArticleEventInvalidError"
+                ),
+                "error_reason": "invalid_envelope",
+            },
+        ),
+        (
+            AssessedEventInvalidError(
+                AssessedEventInvalid(
+                    reason=AssessedEventInvalidReason.UNSUPPORTED_EVENT_TYPE,
+                    issues=(),
+                )
+            ),
+            False,
+            {
+                "error_class": (
+                    "app.analysis.assessment.events.AssessedEventInvalidError"
+                ),
+                "error_reason": "unsupported_event_type",
+            },
+        ),
+        (
+            CuratedEventInvalidError(
+                CuratedEventInvalid(
+                    reason=CuratedEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION,
+                    issues=(),
+                )
+            ),
+            False,
+            {
+                "error_class": "app.analysis.curation.events.CuratedEventInvalidError",
+                "error_reason": "unsupported_schema_version",
+            },
+        ),
+        (
+            EventRouteMismatchError(),
+            False,
+            {"error_class": "app.outbox.publishing.route.EventRouteMismatchError"},
+        ),
+    ],
+)
+def test_stop_log_fields_and_metric_by_failure(
+    error, requires_fix, fields, claimed, capsys
 ):
-    """メトリクス対象だけ打点し、ログやEMFへ自由文と元例外を出さない。"""
+    """停止を失敗ごとに決まった項目で記録し、設定修復の6理由だけメトリクスを出し、SQSの生のコード・自由文・元例外は出さない。"""
     error.__cause__ = RuntimeError(PRIVATE)
-    assert recording.requires_publish_configuration_fix(error) is expected
+    assert recording.requires_publish_configuration_fix(error) is requires_fix
     with capture_logs() as logs:
         recording.record_publish_failure(
             event=claimed, error=error, stop_reason=STOP_REASON
         )
     records = emf_records(capsys.readouterr().out)
-    assert len(records) == int(expected)
-    assert len(logs) == 1
-    log = logs[0]
-    assert log["event"] == "outbox_delivery_stopped"
-    assert log["event_id"] == str(claimed.event_id)
-    assert log["attempt_count"] == claimed.attempt_count
-    assert log["stop_reason"] == STOP_REASON.value
-    assert log["error_code"] == error.CODE
-    assert log["requires_configuration_fix"] is expected
-    if isinstance(error, PublishTransportError):
-        assert log["transport_stage"] == error.failure.stage.value
-        assert log["transport_reason"] == error.failure.reason.value
-    elif isinstance(error, PublishResponseInvalidError):
-        assert "error_reason" not in log
-        assert "response_field" not in log
-        assert "original_exception_type" not in log
-    elif isinstance(error, PublishUnexpectedError):
-        assert log["phase"] == error.phase.value
-        assert log["original_exception_type"] == "builtins.RuntimeError"
-        assert log["classification_exception_type"] == "builtins.ValueError"
-    elif isinstance(
-        error,
-        (
-            PublishServiceError,
-            PublishConfigurationError,
-            PublishEventInvalidError,
-            PublishIntegrityError,
-        ),
-    ):
-        assert log["error_reason"] == error.reason.value
+    assert logs == [
+        {
+            "event": "outbox_delivery_stopped",
+            "log_level": "info",
+            "event_id": str(claimed.event_id),
+            "attempt_count": 1,
+            "stop_reason": "non_retryable_failure",
+            "requires_configuration_fix": requires_fix,
+            **fields,
+        }
+    ]
+    assert len(records) == int(requires_fix)
     assert PRIVATE not in json.dumps([logs, records])
-    if expected:
+    if requires_fix:
         record = records[0]
         assert record[recording.CONFIGURATION_FAILURE_METRIC] == 1
         directive = record["_aws"]["CloudWatchMetrics"][0]
@@ -190,10 +367,11 @@ def test_retry_exhaustion_alone_is_not_alarm_target(claimed, capsys):
     with capture_logs() as logs:
         recording.record_publish_failure(
             event=claimed,
-            error=PublishTransportError(
+            error=MessageSendTransportError(
                 failure=HttpTransportFailure(
                     HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-                )
+                ),
+                exception_type="ReadTimeoutError",
             ),
             stop_reason=NonRetryableReason.RETRY_EXHAUSTED,
         )
@@ -218,7 +396,7 @@ def test_output_failures_do_not_propagate_or_block_other_sink(
     monkeypatch.setattr(recording, "logger", logger)
     monkeypatch.setattr(recording, "emit_metric", metric)
     recording.record_publish_failure(
-        event=claimed, error=CASES[0][0], stop_reason=STOP_REASON
+        event=claimed, error=_missing_credentials(), stop_reason=STOP_REASON
     )
     logger.info.assert_called_once()
     metric.assert_called_once()
@@ -238,7 +416,7 @@ def test_base_exception_is_not_swallowed(sink, claimed, monkeypatch):
         monkeypatch.setattr(recording, "emit_metric", Mock(side_effect=failure))
     with pytest.raises(KeyboardInterrupt) as caught:
         recording.record_publish_failure(
-            event=claimed, error=CASES[0][0], stop_reason=STOP_REASON
+            event=claimed, error=_missing_credentials(), stop_reason=STOP_REASON
         )
     assert caught.value is failure
 
@@ -322,13 +500,14 @@ async def test_handler_composition_records_only_committed_stops(
 
     async def handle_failure():
         if failure_kind == "integrity":
-            error = PublishIntegrityError(
-                reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH
-            )
+            error = MessageBodyMismatchError()
         elif failure_kind == "response_invalid":
-            error = PublishResponseInvalidError()
+            error = SqsResponseInvalidError(
+                reason=SqsResponseInvalidReason.MISSING,
+                field=SqsResponseField.MESSAGE_ID,
+            )
         else:
-            error = CASES[0][0]
+            error = _missing_credentials()
         result = await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
             event=claimed, failure=PublishFailed(claimed.event_id, error)
         )
@@ -356,36 +535,15 @@ async def test_handler_composition_records_only_committed_stops(
     )
     if failure_kind == "integrity" and mode == "committed":
         stop = next(log for log in logs if log["event"] == "outbox_delivery_stopped")
-        assert stop["error_reason"] == "body_checksum_mismatch"
+        assert stop["error_class"] == (
+            "app.aws.sqs.outgoing_message.MessageBodyMismatchError"
+        )
         assert "自動再試行を停止しました" in stop["error_message"]
     if failure_kind == "response_invalid" and mode == "committed":
         stop = next(log for log in logs if log["event"] == "outbox_delivery_stopped")
         assert "error_reason" not in stop
         assert "response_field" not in stop
         assert not stop["requires_configuration_fix"]
-
-
-def test_integrity_failure_message_is_fixed_and_private_diagnostics_are_excluded(
-    claimed, capsys
-):
-    """本文不一致の説明は固定文とし、機密情報を記録しない。"""
-    error = PublishIntegrityError(reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH)
-    error.__cause__ = RuntimeError(PRIVATE)
-    error.MESSAGE = PRIVATE
-    with capture_logs() as logs:
-        recording.record_publish_failure(
-            event=claimed, error=error, stop_reason=STOP_REASON
-        )
-    assert capsys.readouterr().out == ""
-    assert not recording.requires_publish_configuration_fix(error)
-    assert len(logs) == 1
-    assert logs[0]["error_message"] == (
-        "送信した本文と、送信先が受け取った本文のチェックサムが一致しません。"
-        "送信先には受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
-    )
-    assert logs[0]["error_reason"] == "body_checksum_mismatch"
-    assert logs[0]["error_code"] == "publish_integrity_error"
-    assert PRIVATE not in json.dumps(logs)
 
 
 @pytest.mark.asyncio
@@ -416,7 +574,7 @@ async def test_handler_returns_committed_stop_despite_output_failure(
     monkeypatch.setattr(recording, "logger", logger)
     monkeypatch.setattr(recording, "emit_metric", metric)
     handler = OutboxDeliveryFailureHandler(session_factory, jitter=lambda: 0.5)
-    failure = PublishFailed(event_id, CASES[0][0])
+    failure = PublishFailed(event_id, _missing_credentials())
     assert await handler.handle(event=claimed, failure=failure) == DeliveryStopped(
         STOP_REASON
     )
