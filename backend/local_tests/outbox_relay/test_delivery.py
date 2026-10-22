@@ -107,11 +107,11 @@ async def test_conversion_failure_send_failure_and_success_keep_event_correspond
     assert (await read_saved(owner_sessions, successful))["published_at"] is not None
 
 
-async def test_invalid_sender_result_prevents_recording_conversion_failure(
+async def test_sender_result_for_unsent_event_does_not_overwrite_results(
     owner_sessions,
     relay_sessions,
 ):
-    """Senderが変換失敗したIDを返しても統合で上書きせず、全件のleaseを保持する。"""
+    """Senderが送っていないイベントのIDを返したら例外にし、送信前に停止した変換失敗を上書きせず、送ったイベントのleaseを保持する。"""
     invalid, good = await seed_events(owner_sessions, count=2)
     async with owner_sessions() as session:
         await session.execute(
@@ -127,11 +127,13 @@ async def test_invalid_sender_result_prevents_recording_conversion_failure(
     )
     with pytest.raises(ValueError, match="sender results must match"):
         await make_relay(relay_sessions, sender).run_once()
-    for event in (invalid, good):
-        saved = await read_saved(owner_sessions, event)
-        assert saved["published_at"] is None
-        assert saved["delivery_stopped_at"] is None
-        assert saved["lease_token"] is not None
+    invalid_saved = await read_saved(owner_sessions, invalid)
+    assert invalid_saved["published_at"] is None
+    assert invalid_saved["delivery_stopped_at"] is not None
+    good_saved = await read_saved(owner_sessions, good)
+    assert good_saved["published_at"] is None
+    assert good_saved["delivery_stopped_at"] is None
+    assert good_saved["lease_token"] is not None
 
 
 async def test_unexpected_conversion_error_keeps_leases_without_sending(

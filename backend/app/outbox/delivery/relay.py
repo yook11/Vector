@@ -10,14 +10,19 @@ from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.repository import LeasedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.delivery.values import LeaseDuration
 from app.outbox.publishing.contracts import (
-    BatchPublishResult,
     EventEnvelope,
     MessageSender,
+    PublishFailed,
     PublishSucceeded,
     validate_send_results,
 )
-from app.outbox.publishing.preparation import prepare_messages
-from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
+from app.outbox.publishing.preparation import build_sendable_message
+from app.outbox.publishing.route import (
+    EventDeliveryRoute,
+    EventMessage,
+    EventRouteMismatchError,
+)
+from app.shared.event_contract import EventInvalidError
 
 
 class OutboxRelay:
@@ -60,30 +65,33 @@ class OutboxRelay:
         if not leased_events:
             return
 
-        envelopes = tuple(leased_event.envelope for leased_event in leased_events)
+        sendable_messages: list[EventMessage] = []
+        for leased_event in leased_events:
+            envelope = leased_event.envelope
+            try:
+                sendable_messages.append(
+                    build_sendable_message(
+                        envelope, route=self._route, build_message=self._build_message
+                    )
+                )
+            except (EventRouteMismatchError, EventInvalidError) as error:
+                await self._failure_handler.handle(
+                    leased_event=leased_event,
+                    failure=PublishFailed(envelope.event_id, error),
+                )
+        if not sendable_messages:
+            return
 
-        messages, conversion_failures = prepare_messages(
-            envelopes, route=self._route, build_message=self._build_message
+        sent = self._sender.send_batch(
+            queue_url=self._route.queue_url, messages=tuple(sendable_messages)
         )
-
-        if messages:
-            sent = self._sender.send_batch(
-                queue_url=self._route.queue_url, messages=messages
-            )
-            validate_send_results(sent, messages)
-            send_results = sent.results
-        else:
-            send_results = ()
-
-        results_by_id = {
-            result.event_id: result for result in (*conversion_failures, *send_results)
+        validate_send_results(sent, sendable_messages)
+        leased_by_id = {
+            leased_event.envelope.event_id: leased_event
+            for leased_event in leased_events
         }
-        batch = BatchPublishResult(
-            tuple(results_by_id[envelope.event_id] for envelope in envelopes)
-        )
-
-        self._validate_result_correspondence(batch, leased_events)
-        for leased_event, result in zip(leased_events, batch.results, strict=True):
+        for result in sent.results:
+            leased_event = leased_by_id[result.event_id]
             if isinstance(result, PublishSucceeded):
                 await self._mark_published(leased_event)
             else:
@@ -101,14 +109,3 @@ class OutboxRelay:
                 await session.commit()
             else:
                 await session.rollback()
-
-    @staticmethod
-    def _validate_result_correspondence(
-        batch: BatchPublishResult, leased_events: list[LeasedOutboxEvent]
-    ) -> None:
-        """全件の対応を確認してから、最初の配信結果をDBへ適用する。"""
-        if len(batch.results) != len(leased_events):
-            raise ValueError("publisher result count must match leased events")
-        for leased_event, result in zip(leased_events, batch.results, strict=True):
-            if result.event_id != leased_event.envelope.event_id:
-                raise ValueError("publisher result IDs must match leased event order")

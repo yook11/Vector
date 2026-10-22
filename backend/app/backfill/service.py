@@ -24,17 +24,21 @@ from app.backfill.repository import PipelineBacklog
 from app.backfill.targets import BackfillEventTarget
 from app.db.session import SessionFactory
 from app.outbox.publishing.contracts import (
-    BatchPublishResult,
     EventEnvelope,
     MessageSender,
     PublishSucceeded,
     validate_send_results,
 )
-from app.outbox.publishing.event_batch import MAX_BATCH_MESSAGES
-from app.outbox.publishing.preparation import prepare_messages
-from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
+from app.outbox.publishing.preparation import build_sendable_message
+from app.outbox.publishing.route import (
+    EventDeliveryRoute,
+    EventMessage,
+    EventRouteMismatchError,
+)
+from app.shared.event_contract import EventInvalidError
 
 logger = structlog.get_logger(__name__)
+MAX_BATCH_MESSAGES = 10
 
 
 async def _dispatch(
@@ -59,28 +63,25 @@ async def _dispatch(
             )
             for item in batch_targets
         )
-        messages, conversion_failures = prepare_messages(
-            envelopes, route=route, build_message=build_message
-        )
+        messages: list[EventMessage] = []
+        for envelope in envelopes:
+            try:
+                messages.append(
+                    build_sendable_message(
+                        envelope, route=route, build_message=build_message
+                    )
+                )
+            except (EventRouteMismatchError, EventInvalidError):
+                continue
+        successes = 0
         if messages:
-            sent = sender.send_batch(queue_url=route.queue_url, messages=messages)
+            sent = sender.send_batch(
+                queue_url=route.queue_url, messages=tuple(messages)
+            )
             validate_send_results(sent, messages)
-            send_results = sent.results
-        else:
-            send_results = ()
-        results_by_id = {
-            result.event_id: result for result in (*conversion_failures, *send_results)
-        }
-        batch = BatchPublishResult(
-            tuple(results_by_id[envelope.event_id] for envelope in envelopes)
-        )
-        if tuple(result.event_id for result in batch.results) != tuple(
-            envelope.event_id for envelope in envelopes
-        ):
-            raise ValueError("publisher result IDs must match input message order")
-        successes = sum(
-            isinstance(result, PublishSucceeded) for result in batch.results
-        )
+            successes = sum(
+                isinstance(result, PublishSucceeded) for result in sent.results
+            )
         record_dispatched(stage, successes)
         enqueued += successes
     logger.info(
